@@ -66,7 +66,8 @@ type RagChunk = {
 
 const PRODUCTS_ROUTE = '/admin/products/rag';
 
-type ProductDetailsPageProps = {
+type ProductLineDetailsPageProps = {
+  /** URL segment is the legacy product line key (`ProdLineKey`). */
   params: Promise<{ productKey: string }>;
   searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
 };
@@ -161,16 +162,24 @@ function getHeroCopy(document: RagDocument, sourceRecord: RagSourceRecord) {
   );
 }
 
-export default async function RagProductDetailsPage({
+function getVariantProductKeys(metadata: JsonObject): string[] {
+  const raw = metadata.variant_product_keys;
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  return raw.filter((item): item is string => typeof item === 'string');
+}
+
+export default async function RagProductLineDetailsPage({
   params,
   searchParams,
-}: ProductDetailsPageProps) {
+}: ProductLineDetailsPageProps) {
   await connection();
 
-  const [{ productKey }, resolvedSearchParams] = await Promise.all([
-    params,
-    searchParams,
-  ]);
+  const [{ productKey: productLineKeyParam }, resolvedSearchParams] =
+    await Promise.all([params, searchParams]);
+  const productLineKey = decodeURIComponent(productLineKeyParam);
   const searchValue = readSearchParam(resolvedSearchParams.q);
   const requestedPage = Number.parseInt(
     readSearchParam(resolvedSearchParams.page, '1'),
@@ -188,8 +197,8 @@ export default async function RagProductDetailsPage({
       'id, source_schema, source_table, source_pk, source_locale, source_type, checksum, is_active, last_seen_at, metadata, created_at, updated_at',
     )
     .eq('source_schema', 'legacy')
-    .eq('source_table', 'products')
-    .eq('source_pk', productKey)
+    .eq('source_table', 'prod_line')
+    .eq('source_pk', productLineKey)
     .eq('source_locale', 'EN')
     .maybeSingle();
 
@@ -209,7 +218,7 @@ export default async function RagProductDetailsPage({
       'id, document_key, source_record_id, entity_id, document_kind, title, language_code, body_text, body_markdown, summary, token_count, metadata, created_at, updated_at',
     )
     .eq('source_record_id', sourceRecord.id)
-    .eq('document_kind', 'product_profile')
+    .eq('document_kind', 'product_line_profile')
     .eq('language_code', 'EN')
     .maybeSingle();
 
@@ -270,6 +279,7 @@ export default async function RagProductDetailsPage({
     : {};
   const documentMetadataFields = getVisibleFields(documentMetadata);
   const sourceMetadataFields = getVisibleFields(sourceMetadata);
+  const variantProductKeys = getVariantProductKeys(documentMetadata);
 
   return (
     <div className="flex flex-1 bg-slate-50">
@@ -279,7 +289,7 @@ export default async function RagProductDetailsPage({
             className="inline-flex items-center rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-50"
             href={backHref}
           >
-            Back to RAG products
+            Back to RAG catalog
           </Link>
         </div>
 
@@ -293,9 +303,10 @@ export default async function RagProductDetailsPage({
                 <span className="rounded-full bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700">
                   {document.document_kind}
                 </span>
-                {entity?.sku ? (
+                {variantProductKeys.length > 0 ? (
                   <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">
-                    SKU: {entity.sku}
+                    {variantProductKeys.length} size variant
+                    {variantProductKeys.length === 1 ? '' : 's'}
                   </span>
                 ) : null}
                 <span className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-slate-700 ring-1 ring-slate-200">
@@ -305,7 +316,7 @@ export default async function RagProductDetailsPage({
 
               <div>
                 <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-700">
-                  RAG product details
+                  RAG product line
                 </p>
                 <h1 className="mt-3 text-4xl font-semibold tracking-tight text-slate-950">
                   {document.title}
@@ -318,19 +329,20 @@ export default async function RagProductDetailsPage({
               <dl className="grid gap-4 pt-2 sm:grid-cols-2 xl:grid-cols-4">
                 <div className="rounded-2xl bg-slate-50 p-4">
                   <dt className="text-sm font-medium text-slate-500">
-                    Product key
+                    Product line key
                   </dt>
                   <dd className="mt-1 break-all text-sm text-slate-900">
-                    {entity?.product_key || sourceRecord.source_pk}
+                    {entity?.product_line_key ??
+                      getMetadataString(document.metadata, 'product_line_key') ??
+                      sourceRecord.source_pk}
                   </dd>
                 </div>
                 <div className="rounded-2xl bg-slate-50 p-4">
                   <dt className="text-sm font-medium text-slate-500">
-                    Product line
+                    Line ID
                   </dt>
                   <dd className="mt-1 text-sm text-slate-900">
-                    {entity?.product_line_key ??
-                      getMetadataString(document.metadata, 'product_line_key') ??
+                    {getMetadataString(document.metadata, 'prod_line_id') ??
                       'N/A'}
                   </dd>
                 </div>
@@ -351,6 +363,30 @@ export default async function RagProductDetailsPage({
                   </dd>
                 </div>
               </dl>
+
+              {variantProductKeys.length > 0 ? (
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <h3 className="text-sm font-semibold text-slate-900">
+                    Size variants (legacy catalog)
+                  </h3>
+                  <p className="mt-1 text-xs leading-5 text-slate-600">
+                    Each SKU/size maps to a `legacy.products` row. Open the legacy
+                    product page for full variant fields.
+                  </p>
+                  <ul className="mt-3 flex flex-wrap gap-2">
+                    {variantProductKeys.map((pk) => (
+                      <li key={pk}>
+                        <Link
+                          className="inline-flex rounded-full bg-white px-3 py-1 text-xs font-medium text-sky-800 ring-1 ring-slate-200 transition hover:bg-sky-50"
+                          href={`/admin/products/legacy/${encodeURIComponent(pk)}`}
+                        >
+                          {pk}
+                        </Link>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
             </div>
 
             <div className="flex flex-col gap-3">
@@ -380,9 +416,8 @@ export default async function RagProductDetailsPage({
               <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
                 <p className="font-medium text-slate-900">About this page</p>
                 <p className="mt-1">
-                  This page shows the transformed product profile exactly as it
-                  exists in the `rag` schema, including its source lineage,
-                  metadata, and generated chunks.
+                  One retrieval document per legacy product line. Size variants are
+                  listed in the body, with product keys in metadata for deep links.
                 </p>
               </div>
             </div>
@@ -560,7 +595,7 @@ export default async function RagProductDetailsPage({
                       Entity record
                     </h2>
                     <p className="mt-2 text-sm leading-6 text-slate-600">
-                      Canonical product identity from `rag.entity`.
+                      Canonical product line identity from `rag.entity`.
                     </p>
                   </div>
                   <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">

@@ -81,7 +81,11 @@ function buildProductsHref(query: string, page: number) {
   return queryString ? `${PRODUCTS_ROUTE}?${queryString}` : PRODUCTS_ROUTE;
 }
 
-function buildProductDetailHref(productKey: string, query: string, page: number) {
+function buildProductLineDetailHref(
+  productLineKey: string,
+  query: string,
+  page: number,
+) {
   const params = new URLSearchParams();
 
   if (query) {
@@ -93,7 +97,7 @@ function buildProductDetailHref(productKey: string, query: string, page: number)
   }
 
   const queryString = params.toString();
-  const detailPath = `${PRODUCTS_ROUTE}/${productKey}`;
+  const detailPath = `${PRODUCTS_ROUTE}/${encodeURIComponent(productLineKey)}`;
 
   return queryString ? `${detailPath}?${queryString}` : detailPath;
 }
@@ -122,10 +126,10 @@ function getMetadataValue(metadata: JsonObject | null | undefined, key: string) 
   return typeof value === 'string' && value.trim() ? value : null;
 }
 
-function getProductKey(result: RagSearchResult) {
+function getProductLineKey(result: RagSearchResult) {
   return (
-    result.entity?.product_key ||
-    getMetadataValue(result.document.metadata, 'product_key') ||
+    result.entity?.product_line_key ||
+    getMetadataValue(result.document.metadata, 'product_line_key') ||
     result.sourceRecord?.source_pk ||
     null
   );
@@ -177,12 +181,11 @@ export default async function RagProductsPage({
       const entitySearchResponse = await rag
         .from('entity')
         .select('id')
-        .eq('entity_type', 'product')
+        .eq('entity_type', 'product_line')
         .or(
           [
             `title.ilike.%${normalizedSearchValue}%`,
             `sku.ilike.%${normalizedSearchValue}%`,
-            `product_key.ilike.%${normalizedSearchValue}%`,
             `canonical_key.ilike.%${normalizedSearchValue}%`,
             `product_line_key.ilike.%${normalizedSearchValue}%`,
           ].join(','),
@@ -201,7 +204,7 @@ export default async function RagProductsPage({
     const documentQuery = rag
       .from('document')
       .select(documentSelection, { count: 'exact' })
-      .eq('document_kind', 'product_profile')
+      .eq('document_kind', 'product_line_profile')
       .eq('language_code', 'EN')
       .order('updated_at', { ascending: false })
       .range(rangeStart, rangeEnd);
@@ -309,15 +312,15 @@ export default async function RagProductsPage({
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <div className="flex flex-col gap-3">
             <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-700">
-              RAG Product Search
+              RAG product line search
             </p>
             <h1 className="text-4xl font-semibold tracking-tight text-slate-950">
-              Search products from your RAG schema
+              Browse product lines in your RAG schema
             </h1>
             <p className="max-w-3xl text-base leading-7 text-slate-600">
-              This view reads `rag.document`, `rag.entity`, and `rag.source_record`
-              so you can inspect the retrieval-ready product profile data after it
-              has been transformed from the legacy catalog.
+              Each document is one legacy product line (`product_line_profile`),
+              with size variants embedded in the body and `variant_product_keys` in
+              metadata.
             </p>
           </div>
 
@@ -330,14 +333,14 @@ export default async function RagProductsPage({
               className="h-12 flex-1 rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none ring-0 transition focus:border-sky-500"
               defaultValue={searchValue}
               name="q"
-              placeholder="Search by title, product key, SKU, document key, or body text"
+              placeholder="Search by title, line key, document key, or body text"
               type="search"
             />
             <button
               className="inline-flex h-12 items-center justify-center rounded-2xl bg-slate-950 px-6 text-sm font-semibold text-white transition hover:bg-slate-800"
               type="submit"
             >
-              Search RAG products
+              Search RAG lines
             </button>
             <Link
               className="inline-flex h-12 items-center justify-center rounded-2xl bg-white px-6 text-sm font-semibold text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50"
@@ -358,7 +361,7 @@ export default async function RagProductsPage({
           <div className="text-sm text-slate-600">
             {normalizedSearchValue
               ? `Showing ${results.length} of ${totalCount} matches for "${searchValue}".`
-              : `Showing ${results.length} of ${totalCount} RAG product documents.`}
+              : `Showing ${results.length} of ${totalCount} RAG product line documents.`}
           </div>
           <div className="text-sm text-slate-600">
             Page {safeCurrentPage} of {totalPages}
@@ -374,14 +377,18 @@ export default async function RagProductsPage({
         <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {!error && results.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-sm text-slate-600">
-              No RAG product documents matched that search.
+              No RAG product line documents matched that search.
             </div>
           ) : null}
 
           {results.map((result) => {
-            const productKey = getProductKey(result);
-            const detailHref = productKey
-              ? buildProductDetailHref(productKey, searchValue, safeCurrentPage)
+            const productLineKey = getProductLineKey(result);
+            const detailHref = productLineKey
+              ? buildProductLineDetailHref(
+                  productLineKey,
+                  searchValue,
+                  safeCurrentPage,
+                )
               : null;
 
             return (
@@ -404,17 +411,21 @@ export default async function RagProductsPage({
                 </div>
 
                 <h2 className="mt-4 text-xl font-semibold leading-8 text-slate-950">
-                  {result.document.title || 'Untitled RAG product'}
+                  {result.document.title || 'Untitled product line'}
                 </h2>
 
                 <dl className="mt-4 grid grid-cols-2 gap-3 text-sm text-slate-600">
                   <div>
-                    <dt className="font-medium text-slate-500">Product key</dt>
-                    <dd className="break-all">{productKey ?? 'N/A'}</dd>
+                    <dt className="font-medium text-slate-500">Product line key</dt>
+                    <dd className="break-all">{productLineKey ?? 'N/A'}</dd>
                   </div>
                   <div>
-                    <dt className="font-medium text-slate-500">Product line</dt>
-                    <dd>{result.entity?.product_line_key ?? 'N/A'}</dd>
+                    <dt className="font-medium text-slate-500">Variants</dt>
+                    <dd>
+                      {typeof result.document.metadata?.variant_count === 'number'
+                        ? String(result.document.metadata.variant_count)
+                        : 'N/A'}
+                    </dd>
                   </div>
                   <div>
                     <dt className="font-medium text-slate-500">Source type</dt>
@@ -435,11 +446,11 @@ export default async function RagProductsPage({
                     className="mt-4 inline-flex text-sm font-medium text-sky-700"
                     href={detailHref}
                   >
-                    View full RAG details
+                    View product line details
                   </Link>
                 ) : (
                   <div className="mt-4 text-sm text-slate-500">
-                    Missing product key for detail link.
+                    Missing product line key for detail link.
                   </div>
                 )}
               </article>

@@ -4,6 +4,7 @@ import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 type SearchProductChunksOptions = {
   query: string;
   limit?: number;
+  /** If set, only lines whose `variant_product_keys` metadata includes this `ProductsKey`. */
   productKey?: string;
   productLineKey?: string;
   model?: string;
@@ -49,6 +50,7 @@ function toVectorLiteral(embedding: number[]) {
   return `[${embedding.join(',')}]`;
 }
 
+/** Semantic search over `product_line_profile` chunks (one RAG document per legacy product line). */
 export async function searchProductChunks(
   options: SearchProductChunksOptions,
 ): Promise<RagSearchResult> {

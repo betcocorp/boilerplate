@@ -4,7 +4,7 @@ export default function Loading() {
       <main className="flex w-full flex-1 flex-col gap-8 px-6 py-10 sm:px-8">
         <div className="flex items-center">
           <div className="inline-flex items-center rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm ring-1 ring-slate-200">
-            Back to RAG products
+            Back to RAG catalog
           </div>
         </div>
 
@@ -15,14 +15,14 @@ export default function Loading() {
                 EN
               </span>
               <span className="rounded-full bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700">
-                product_profile
+                product_line_profile
               </span>
               <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">
                 SKU:
               </span>
             </div>
             <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-700">
-              RAG product details
+              RAG product line
             </p>
             <div className="h-10 w-2/3 animate-pulse rounded bg-slate-200" />
             <div className="h-5 w-full animate-pulse rounded bg-slate-100" />
@@ -33,9 +33,9 @@ export default function Loading() {
                 <div className="rounded-2xl bg-slate-50 p-4" key={index}>
                   <div className="text-sm font-medium text-slate-500">
                     {index === 0
-                      ? 'Product key'
+                      ? 'Product line key'
                       : index === 1
-                        ? 'Product line'
+                        ? 'Line ID'
                         : index === 2
                           ? 'Document key'
                           : 'Chunk count'}
