@@ -6,10 +6,13 @@ function ProductCardSkeleton({ index }: { index: number }) {
     >
       <div className="flex flex-wrap items-center gap-2">
         <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
-          Status:
+          EN
+        </span>
+        <span className="rounded-full bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700">
+          product_profile
         </span>
         <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">
-          OnWeb:
+          SKU:
         </span>
       </div>
 
@@ -17,21 +20,19 @@ function ProductCardSkeleton({ index }: { index: number }) {
 
       <div className="mt-4 grid grid-cols-2 gap-3">
         <div className="space-y-2">
-          <div className="text-sm font-medium text-slate-500">SKU</div>
+          <div className="text-sm font-medium text-slate-500">Product key</div>
           <div className="h-5 w-24 animate-pulse rounded bg-slate-200" />
         </div>
         <div className="space-y-2">
-          <div className="text-sm font-medium text-slate-500">Inventory ID</div>
+          <div className="text-sm font-medium text-slate-500">Product line</div>
           <div className="h-5 w-28 animate-pulse rounded bg-slate-200" />
         </div>
         <div className="space-y-2">
-          <div className="text-sm font-medium text-slate-500">
-            Years of service
-          </div>
+          <div className="text-sm font-medium text-slate-500">Source type</div>
           <div className="h-5 w-16 animate-pulse rounded bg-slate-200" />
         </div>
         <div className="space-y-2">
-          <div className="text-sm font-medium text-slate-500">MSRP</div>
+          <div className="text-sm font-medium text-slate-500">Active</div>
           <div className="h-5 w-20 animate-pulse rounded bg-slate-200" />
         </div>
       </div>
@@ -48,19 +49,18 @@ function ProductCardSkeleton({ index }: { index: number }) {
 export default function Loading() {
   return (
     <div className="flex flex-1 bg-slate-50">
-      <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-8 px-6 py-10 sm:px-8">
+      <main className="flex w-full flex-1 flex-col gap-8 px-6 py-10 sm:px-8">
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <div className="flex flex-col gap-3">
             <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-700">
-              Supabase Product Search
+              RAG Product Search
             </p>
             <h1 className="text-4xl font-semibold tracking-tight text-slate-950">
-              Search products from your generated schema
+              Search products from your RAG schema
             </h1>
             <p className="max-w-3xl text-base leading-7 text-slate-600">
-              This view is typed from `src/types/supabase.ts` and searches the
-              `products` table, then enriches results with matching
-              `products_descr` records.
+              This view reads retrieval-ready product profile documents from the
+              derived `rag` schema.
             </p>
           </div>
 
@@ -68,21 +68,21 @@ export default function Loading() {
             <input
               className="h-12 flex-1 rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-400 outline-none ring-0"
               disabled
-              placeholder="Search by title, SKU, product ID, or description"
+              placeholder="Search by title, product key, SKU, document key, or body text"
               type="search"
             />
             <button
-              className="inline-flex h-12 w-40 items-center justify-center rounded-2xl bg-slate-950 px-6 text-sm font-semibold text-white opacity-80"
+              className="inline-flex h-12 w-44 items-center justify-center rounded-2xl bg-slate-950 px-6 text-sm font-semibold text-white opacity-80"
               disabled
               type="button"
             >
-              Search products
+              Search RAG products
             </button>
           </div>
         </section>
 
         <section className="flex items-center justify-between">
-          <div className="text-sm text-slate-600">Loading products...</div>
+          <div className="text-sm text-slate-600">Loading RAG products...</div>
           <div className="text-sm text-slate-600">Page ...</div>
         </section>
 

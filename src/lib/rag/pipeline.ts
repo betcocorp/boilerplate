@@ -1,0 +1,435 @@
+import { syncDocumentChunkEmbeddings } from '~/lib/rag/embeddings';
+import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
+
+const DEFAULT_LANGUAGE_CODE = 'EN';
+const DEFAULT_BATCH_SIZE = 25;
+const DEFAULT_MAX_BATCHES = 4;
+const MAX_PROFILE_RUNS = 25;
+const MAX_CHUNK_RUNS = 25;
+const MAX_EMBEDDING_RUNS = 25;
+
+type JsonObject = Record<string, unknown>;
+
+type CountResponse = {
+  count: number;
+};
+
+export type RagGenerationStatus = {
+  env: {
+    openAiConfigured: boolean;
+    serviceRoleConfigured: boolean;
+    syncApiKeyConfigured: boolean;
+  };
+  warnings: string[];
+  counts: {
+    sourceRecords: number;
+    activeSourceRecords: number;
+    inactiveSourceRecords: number;
+    entities: number;
+    documents: number;
+    chunks: number;
+    embeddedChunks: number;
+    pendingChunks: number;
+  };
+  latest: {
+    sourceRecordUpdatedAt: string | null;
+    documentUpdatedAt: string | null;
+    chunkUpdatedAt: string | null;
+  };
+};
+
+export type RagPipelineIntent =
+  | 'sync-documents'
+  | 'sync-chunks'
+  | 'sync-embeddings'
+  | 'run-all';
+
+export type RagPipelineRunOptions = {
+  languageCode?: string;
+  batchSize?: number;
+  maxBatches?: number;
+};
+
+export type RagPipelineRunResult = {
+  intent: RagPipelineIntent;
+  languageCode: string;
+  profileSyncResult: JsonObject | null;
+  chunkSyncResult: JsonObject | null;
+  embeddingRuns: number;
+  embeddingResult: JsonObject | null;
+  status: RagGenerationStatus;
+};
+
+function getLanguageCode(languageCode?: string) {
+  return languageCode?.trim().toUpperCase() || DEFAULT_LANGUAGE_CODE;
+}
+
+function clampPositiveInteger(
+  value: number | undefined,
+  fallback: number,
+  max?: number,
+) {
+  if (!Number.isFinite(value) || !value || value < 1) {
+    return fallback;
+  }
+
+  const normalized = Math.floor(value);
+
+  return max ? Math.min(normalized, max) : normalized;
+}
+
+async function getCount(
+  tableName: string,
+  filters?: (query: ReturnType<ReturnType<typeof getSupabaseServiceRoleClient>['schema']>['from']) => ReturnType<ReturnType<typeof getSupabaseServiceRoleClient>['schema']>['from'],
+) {
+  const supabase = getSupabaseServiceRoleClient();
+  const rag = supabase.schema('rag');
+  const baseQuery = rag.from(tableName).select('id', { count: 'exact', head: true });
+  const query = filters ? filters(baseQuery) : baseQuery;
+  const { count, error } = await query;
+
+  if (error) {
+    throw new Error(`Failed to count ${tableName}: ${error.message}`);
+  }
+
+  return (count ?? 0) as CountResponse['count'];
+}
+
+async function safeCount(
+  tableName: string,
+  warnings: string[],
+  filters?: (query: ReturnType<ReturnType<typeof getSupabaseServiceRoleClient>['schema']>['from']) => ReturnType<ReturnType<typeof getSupabaseServiceRoleClient>['schema']>['from'],
+) {
+  try {
+    return await getCount(tableName, filters);
+  } catch (error) {
+    warnings.push(
+      error instanceof Error
+        ? error.message
+        : `Failed to count ${tableName}.`,
+    );
+
+    return 0;
+  }
+}
+
+async function getLatestUpdatedAt(tableName: string) {
+  const supabase = getSupabaseServiceRoleClient();
+  const rag = supabase.schema('rag');
+  const { data, error } = await rag
+    .from(tableName)
+    .select('updated_at')
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Failed to inspect ${tableName}: ${error.message}`);
+  }
+
+  if (!data || typeof data.updated_at !== 'string') {
+    return null;
+  }
+
+  return data.updated_at;
+}
+
+async function safeLatestUpdatedAt(tableName: string, warnings: string[]) {
+  try {
+    return await getLatestUpdatedAt(tableName);
+  } catch (error) {
+    warnings.push(
+      error instanceof Error
+        ? error.message
+        : `Failed to inspect ${tableName}.`,
+    );
+
+    return null;
+  }
+}
+
+function normalizeJsonObject(value: unknown) {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as JsonObject)
+    : null;
+}
+
+function readJsonNumber(
+  value: JsonObject | null,
+  key: string,
+): number | null {
+  const candidate = value?.[key];
+
+  return typeof candidate === 'number' && Number.isFinite(candidate)
+    ? candidate
+    : null;
+}
+
+function mergeChunkSyncResults(
+  accumulated: JsonObject | null,
+  next: JsonObject,
+  passCount: number,
+) {
+  const sumKeys = [
+    'documents_processed',
+    'active_documents_processed',
+    'inactive_documents_processed',
+    'chunks_upserted',
+    'stale_chunks_deleted',
+    'inactive_chunks_deleted',
+  ] as const;
+
+  const merged: JsonObject = {
+    ...(accumulated ?? {}),
+    ...next,
+    passes_run: passCount,
+  };
+
+  for (const key of sumKeys) {
+    merged[key] =
+      (readJsonNumber(accumulated, key) ?? 0) + (readJsonNumber(next, key) ?? 0);
+  }
+
+  return merged;
+}
+
+function mergeProfileSyncResults(
+  accumulated: JsonObject | null,
+  next: JsonObject,
+  passCount: number,
+) {
+  const sumKeys = [
+    'source_rows_processed',
+    'source_records_upserted',
+    'entities_upserted',
+    'documents_upserted',
+    'source_records_deactivated',
+  ] as const;
+
+  const merged: JsonObject = {
+    ...(accumulated ?? {}),
+    ...next,
+    passes_run: passCount,
+  };
+
+  for (const key of sumKeys) {
+    merged[key] =
+      (readJsonNumber(accumulated, key) ?? 0) + (readJsonNumber(next, key) ?? 0);
+  }
+
+  return merged;
+}
+
+export async function getRagGenerationStatus(): Promise<RagGenerationStatus> {
+  const warnings: string[] = [];
+  const [
+    sourceRecords,
+    activeSourceRecords,
+    inactiveSourceRecords,
+    entities,
+    documents,
+    chunks,
+    embeddedChunks,
+    pendingChunks,
+    sourceRecordUpdatedAt,
+    documentUpdatedAt,
+    chunkUpdatedAt,
+  ] = await Promise.all([
+    safeCount('source_record', warnings),
+    safeCount('source_record', warnings, (query) => query.eq('is_active', true)),
+    safeCount('source_record', warnings, (query) => query.eq('is_active', false)),
+    safeCount('entity', warnings),
+    safeCount('document', warnings),
+    safeCount('document_chunk', warnings),
+    safeCount('document_chunk', warnings, (query) =>
+      query.not('embedding', 'is', null),
+    ),
+    safeCount('document_chunk', warnings, (query) =>
+      query.is('embedding', null),
+    ),
+    safeLatestUpdatedAt('source_record', warnings),
+    safeLatestUpdatedAt('document', warnings),
+    safeLatestUpdatedAt('document_chunk', warnings),
+  ]);
+
+  return {
+    env: {
+      openAiConfigured: Boolean(process.env.OPENAI_API_KEY),
+      serviceRoleConfigured: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
+      syncApiKeyConfigured: Boolean(process.env.RAG_SYNC_API_KEY),
+    },
+    warnings: Array.from(new Set(warnings)),
+    counts: {
+      sourceRecords,
+      activeSourceRecords,
+      inactiveSourceRecords,
+      entities,
+      documents,
+      chunks,
+      embeddedChunks,
+      pendingChunks,
+    },
+    latest: {
+      sourceRecordUpdatedAt,
+      documentUpdatedAt,
+      chunkUpdatedAt,
+    },
+  };
+}
+
+async function syncLegacyProductProfiles(languageCode: string) {
+  const supabase = getSupabaseServiceRoleClient();
+  const { data, error } = await supabase
+    .schema('rag')
+    .rpc('sync_legacy_product_profiles', {
+      p_language_code: languageCode,
+    });
+
+  if (error) {
+    throw new Error(`Failed to sync RAG documents: ${error.message}`);
+  }
+
+  return normalizeJsonObject(data);
+}
+
+async function syncLegacyProductChunks(languageCode: string) {
+  const supabase = getSupabaseServiceRoleClient();
+  const { data, error } = await supabase
+    .schema('rag')
+    .rpc('sync_legacy_product_profile_chunks', {
+      p_language_code: languageCode,
+    });
+
+  if (error) {
+    throw new Error(`Failed to sync RAG chunks: ${error.message}`);
+  }
+
+  return normalizeJsonObject(data);
+}
+
+export async function runRagPipeline(
+  intent: RagPipelineIntent,
+  options: RagPipelineRunOptions = {},
+): Promise<RagPipelineRunResult> {
+  const languageCode = getLanguageCode(options.languageCode);
+  const batchSize = clampPositiveInteger(options.batchSize, DEFAULT_BATCH_SIZE);
+  const maxBatches = clampPositiveInteger(options.maxBatches, DEFAULT_MAX_BATCHES);
+
+  let profileSyncResult: JsonObject | null = null;
+  let chunkSyncResult: JsonObject | null = null;
+  let embeddingResult: JsonObject | null = null;
+  let profileRuns = 0;
+  let chunkRuns = 0;
+  let embeddingRuns = 0;
+
+  if (intent === 'sync-documents' || intent === 'run-all') {
+    if (intent === 'sync-documents') {
+      profileSyncResult = await syncLegacyProductProfiles(languageCode);
+    } else {
+      while (profileRuns < MAX_PROFILE_RUNS) {
+        const result = await syncLegacyProductProfiles(languageCode);
+
+        profileRuns += 1;
+        profileSyncResult = mergeProfileSyncResults(
+          profileSyncResult,
+          result,
+          profileRuns,
+        );
+
+        if (
+          (readJsonNumber(result, 'remaining_source_rows') ?? 0) === 0 &&
+          (readJsonNumber(result, 'remaining_deactivations') ?? 0) === 0
+        ) {
+          break;
+        }
+
+        if (
+          (readJsonNumber(result, 'source_rows_processed') ?? 0) === 0 &&
+          (readJsonNumber(result, 'source_records_deactivated') ?? 0) === 0
+        ) {
+          break;
+        }
+      }
+
+      const remainingSourceRows =
+        readJsonNumber(profileSyncResult, 'remaining_source_rows') ?? 0;
+      const remainingDeactivations =
+        readJsonNumber(profileSyncResult, 'remaining_deactivations') ?? 0;
+
+      if (remainingSourceRows > 0 || remainingDeactivations > 0) {
+        throw new Error(
+          `Document sync reached the safety cap after ${profileRuns} pass${
+            profileRuns === 1 ? '' : 'es'
+          } with ${remainingSourceRows} source row${
+            remainingSourceRows === 1 ? '' : 's'
+          } and ${remainingDeactivations} deactivation${
+            remainingDeactivations === 1 ? '' : 's'
+          } still pending. Run the document sync again before chunking.`,
+        );
+      }
+    }
+  }
+
+  if (intent === 'sync-chunks' || intent === 'run-all') {
+    if (intent === 'sync-chunks') {
+      chunkSyncResult = await syncLegacyProductChunks(languageCode);
+    } else {
+      while (chunkRuns < MAX_CHUNK_RUNS) {
+        const result = await syncLegacyProductChunks(languageCode);
+
+        chunkRuns += 1;
+        chunkSyncResult = mergeChunkSyncResults(chunkSyncResult, result, chunkRuns);
+
+        if (
+          (readJsonNumber(result, 'remaining_documents') ?? 0) === 0 ||
+          (readJsonNumber(result, 'documents_processed') ?? 0) === 0
+        ) {
+          break;
+        }
+      }
+
+      const remainingDocuments =
+        readJsonNumber(chunkSyncResult, 'remaining_documents') ?? 0;
+
+      if (remainingDocuments > 0) {
+        throw new Error(
+          `Chunk sync reached the safety cap after ${chunkRuns} pass${
+            chunkRuns === 1 ? '' : 'es'
+          } with ${remainingDocuments} document${
+            remainingDocuments === 1 ? '' : 's'
+          } still pending. Run the chunk step again before embeddings.`,
+        );
+      }
+    }
+  }
+
+  if (intent === 'sync-embeddings' || intent === 'run-all') {
+    while (embeddingRuns < MAX_EMBEDDING_RUNS) {
+      const result = await syncDocumentChunkEmbeddings({
+        batchSize,
+        maxBatches,
+      });
+
+      embeddingRuns += 1;
+      embeddingResult = result as unknown as JsonObject;
+
+      if (
+        intent === 'sync-embeddings' ||
+        result.remainingChunks === 0 ||
+        result.chunksEmbedded === 0
+      ) {
+        break;
+      }
+    }
+  }
+
+  return {
+    intent,
+    languageCode,
+    profileSyncResult,
+    chunkSyncResult,
+    embeddingRuns,
+    embeddingResult,
+    status: await getRagGenerationStatus(),
+  };
+}

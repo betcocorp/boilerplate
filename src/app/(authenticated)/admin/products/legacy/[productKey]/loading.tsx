@@ -1,7 +1,7 @@
 export default function Loading() {
   return (
     <div className="flex flex-1 bg-slate-50">
-      <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-8 px-6 py-10 sm:px-8">
+      <main className="flex w-full flex-1 flex-col gap-8 px-6 py-10 sm:px-8">
         <div className="flex items-center">
           <div className="inline-flex items-center rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm ring-1 ring-slate-200">
             Back to products

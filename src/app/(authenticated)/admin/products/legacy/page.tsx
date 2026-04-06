@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { connection } from 'next/server';
-import { getSupabaseServerClient } from '~/lib/supabase/server';
+import { getSupabaseServerClient } from '~/supabase/clients/server';
 import type { Tables } from '~/types/supabase.legacy';
 
 type ProductRow = Tables<{ schema: 'legacy' }, 'products'>;
@@ -73,10 +73,7 @@ function productCopy(
   );
 }
 
-function readSearchParam(
-  value: string | string[] | undefined,
-  fallback = '',
-) {
+function readSearchParam(value: string | string[] | undefined, fallback = '') {
   if (Array.isArray(value)) {
     return value[0] ?? fallback;
   }
@@ -143,8 +140,12 @@ export default async function ProductsPage({
   const resolvedSearchParams = await searchParams;
   const searchValue = readSearchParam(resolvedSearchParams.q);
   const normalizedSearchValue = normalizeSearchTerm(searchValue);
-  const requestedPage = Number.parseInt(readSearchParam(resolvedSearchParams.page, '1'), 10);
-  const currentPage = Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : 1;
+  const requestedPage = Number.parseInt(
+    readSearchParam(resolvedSearchParams.page, '1'),
+    10,
+  );
+  const currentPage =
+    Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : 1;
   const rangeStart = (currentPage - 1) * RESULT_LIMIT;
   const rangeEnd = rangeStart + RESULT_LIMIT - 1;
 
@@ -177,6 +178,8 @@ export default async function ProductsPage({
         )
       : await queryBuilder.order('Title', { ascending: true });
 
+    console.log(productResponse);
+
     if (productResponse.error) {
       throw productResponse.error;
     }
@@ -202,7 +205,10 @@ export default async function ProductsPage({
       }
 
       for (const description of descriptions ?? []) {
-        if (description.ProductsKey && !descriptionMap.has(description.ProductsKey)) {
+        if (
+          description.ProductsKey &&
+          !descriptionMap.has(description.ProductsKey)
+        ) {
           descriptionMap.set(description.ProductsKey, description);
         }
       }
@@ -210,11 +216,15 @@ export default async function ProductsPage({
 
     results = productRows.map((product) => ({
       product,
-      description: product.ProductsKey ? descriptionMap.get(product.ProductsKey) ?? null : null,
+      description: product.ProductsKey
+        ? (descriptionMap.get(product.ProductsKey) ?? null)
+        : null,
     }));
   } catch (loadError) {
     error =
-      loadError instanceof Error ? loadError.message : 'Unable to load products.';
+      loadError instanceof Error
+        ? loadError.message
+        : 'Unable to load products.';
   }
 
   const totalPages = Math.max(1, Math.ceil(totalCount / RESULT_LIMIT));
@@ -223,7 +233,7 @@ export default async function ProductsPage({
 
   return (
     <div className="flex flex-1 bg-slate-50">
-      <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-8 px-6 py-10 sm:px-8">
+      <main className="flex w-full flex-1 flex-col gap-8 px-6 py-10 sm:px-8">
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <div className="flex flex-col gap-3">
             <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-700">
@@ -233,9 +243,9 @@ export default async function ProductsPage({
               Search products from your generated schema
             </h1>
             <p className="max-w-3xl text-base leading-7 text-slate-600">
-              This view is typed from `src/types/supabase.legacy.ts` and searches
-              the `legacy.products` table, then enriches results with matching
-              `legacy.products_descr` records.
+              This view is typed from `src/types/supabase.legacy.ts` and
+              searches the `legacy.products` table, then enriches results with
+              matching `legacy.products_descr` records.
             </p>
           </div>
 
@@ -266,7 +276,9 @@ export default async function ProductsPage({
               ? `Showing ${results.length} of ${totalCount} matches for "${searchValue}".`
               : `Showing ${results.length} of ${totalCount} products.`}
           </div>
-          <div className="text-sm text-slate-600">Page {safeCurrentPage} of {totalPages}</div>
+          <div className="text-sm text-slate-600">
+            Page {safeCurrentPage} of {totalPages}
+          </div>
         </section>
 
         {error ? (
@@ -422,7 +434,10 @@ export default async function ProductsPage({
                   ? 'pointer-events-none bg-slate-100 text-slate-400'
                   : 'bg-white text-slate-700 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50'
               }`}
-              href={buildProductsHref(searchValue, Math.max(1, safeCurrentPage - 1))}
+              href={buildProductsHref(
+                searchValue,
+                Math.max(1, safeCurrentPage - 1),
+              )}
             >
               Previous
             </Link>

@@ -1,0 +1,225 @@
+import OpenAI from 'openai';
+
+import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
+
+const DEFAULT_EMBEDDING_MODEL = 'text-embedding-3-small';
+const EMBEDDING_DIMENSIONS = 1536;
+const DEFAULT_BATCH_SIZE = 25;
+const MAX_BATCH_SIZE = 100;
+const DEFAULT_MAX_BATCHES = 4;
+const MAX_BATCHES = 20;
+
+type PendingChunkRow = {
+  id: string;
+  chunk_key: string;
+  heading: string | null;
+  chunk_text: string;
+};
+
+type SyncDocumentChunkEmbeddingsOptions = {
+  batchSize?: number;
+  maxBatches?: number;
+  model?: string;
+};
+
+type SyncDocumentChunkEmbeddingsResult = {
+  model: string;
+  batchSize: number;
+  maxBatches: number;
+  batchesProcessed: number;
+  chunksEmbedded: number;
+  remainingChunks: number;
+};
+
+type CreateEmbeddingOptions = {
+  model?: string;
+};
+
+function getOpenAIClient() {
+  const apiKey = process.env.OPENAI_API_KEY;
+
+  if (!apiKey) {
+    throw new Error('OPENAI_API_KEY is not configured.');
+  }
+
+  return new OpenAI({ apiKey });
+}
+
+function getEmbeddingModel(model?: string) {
+  return model?.trim() || process.env.OPENAI_EMBEDDING_MODEL || DEFAULT_EMBEDDING_MODEL;
+}
+
+function clampPositiveInteger(
+  value: number | undefined,
+  fallback: number,
+  max: number,
+) {
+  if (!Number.isFinite(value) || !value || value < 1) {
+    return fallback;
+  }
+
+  return Math.min(Math.floor(value), max);
+}
+
+function buildEmbeddingInput(chunk: PendingChunkRow) {
+  const heading = chunk.heading?.trim();
+  const chunkText = chunk.chunk_text.trim();
+
+  if (!heading) {
+    return chunkText;
+  }
+
+  return `Heading: ${heading}\n\n${chunkText}`;
+}
+
+async function fetchPendingChunks(limit: number) {
+  const supabase = getSupabaseServiceRoleClient();
+  const { data, error } = await supabase
+    .schema('rag')
+    .from('document_chunk')
+    .select('id, chunk_key, heading, chunk_text')
+    .is('embedding', null)
+    .not('chunk_text', 'is', null)
+    .order('updated_at', { ascending: true })
+    .limit(limit);
+
+  if (error) {
+    throw new Error(`Failed to load pending document chunks: ${error.message}`);
+  }
+
+  return (data ?? []) as PendingChunkRow[];
+}
+
+async function countRemainingChunks() {
+  const supabase = getSupabaseServiceRoleClient();
+  const { count, error } = await supabase
+    .schema('rag')
+    .from('document_chunk')
+    .select('id', { count: 'exact', head: true })
+    .is('embedding', null);
+
+  if (error) {
+    throw new Error(
+      `Failed to count remaining document chunks: ${error.message}`,
+    );
+  }
+
+  return count ?? 0;
+}
+
+async function persistEmbeddings(
+  chunks: PendingChunkRow[],
+  embeddings: number[][],
+  model: string,
+) {
+  const supabase = getSupabaseServiceRoleClient();
+
+  for (const [index, chunk] of chunks.entries()) {
+    const embedding = embeddings[index];
+
+    if (!embedding || embedding.length !== EMBEDDING_DIMENSIONS) {
+      throw new Error(
+        `Embedding for chunk ${chunk.chunk_key} had ${embedding?.length ?? 0} dimensions; expected ${EMBEDDING_DIMENSIONS}.`,
+      );
+    }
+
+    const { error } = await supabase
+      .schema('rag')
+      .from('document_chunk')
+      .update({
+        embedding,
+        embedding_model: model,
+      })
+      .eq('id', chunk.id);
+
+    if (error) {
+      throw new Error(
+        `Failed to persist embedding for chunk ${chunk.chunk_key}: ${error.message}`,
+      );
+    }
+  }
+}
+
+export async function syncDocumentChunkEmbeddings(
+  options: SyncDocumentChunkEmbeddingsOptions = {},
+): Promise<SyncDocumentChunkEmbeddingsResult> {
+  const model = getEmbeddingModel(options.model);
+  const batchSize = clampPositiveInteger(
+    options.batchSize,
+    DEFAULT_BATCH_SIZE,
+    MAX_BATCH_SIZE,
+  );
+  const maxBatches = clampPositiveInteger(
+    options.maxBatches,
+    DEFAULT_MAX_BATCHES,
+    MAX_BATCHES,
+  );
+
+  const openai = getOpenAIClient();
+
+  let batchesProcessed = 0;
+  let chunksEmbedded = 0;
+
+  while (batchesProcessed < maxBatches) {
+    const chunks = await fetchPendingChunks(batchSize);
+
+    if (chunks.length === 0) {
+      break;
+    }
+
+    const response = await openai.embeddings.create({
+      model,
+      input: chunks.map(buildEmbeddingInput),
+    });
+
+    const embeddings = response.data.map((item) => item.embedding);
+
+    if (embeddings.length !== chunks.length) {
+      throw new Error(
+        `Expected ${chunks.length} embeddings from OpenAI but received ${embeddings.length}.`,
+      );
+    }
+
+    await persistEmbeddings(chunks, embeddings, model);
+
+    batchesProcessed += 1;
+    chunksEmbedded += chunks.length;
+
+    if (chunks.length < batchSize) {
+      break;
+    }
+  }
+
+  return {
+    model,
+    batchSize,
+    maxBatches,
+    batchesProcessed,
+    chunksEmbedded,
+    remainingChunks: await countRemainingChunks(),
+  };
+}
+
+export async function createEmbedding(
+  input: string,
+  options: CreateEmbeddingOptions = {},
+) {
+  const model = getEmbeddingModel(options.model);
+  const openai = getOpenAIClient();
+  const response = await openai.embeddings.create({
+    model,
+    input: input.trim(),
+  });
+  const embedding = response.data[0]?.embedding;
+
+  if (!embedding || embedding.length !== EMBEDDING_DIMENSIONS) {
+    throw new Error(
+      `Query embedding had ${embedding?.length ?? 0} dimensions; expected ${EMBEDDING_DIMENSIONS}.`,
+    );
+  }
+
+  return {
+    model,
+    embedding,
+  };
+}
