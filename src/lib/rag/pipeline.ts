@@ -78,13 +78,24 @@ function clampPositiveInteger(
   return max ? Math.min(normalized, max) : normalized;
 }
 
+function ragHeadIdCountQuery(
+  supabase: ReturnType<typeof getSupabaseServiceRoleClient>,
+  tableName: string,
+) {
+  return supabase
+    .schema('rag')
+    .from(tableName)
+    .select('id', { count: 'exact', head: true });
+}
+
+type RagHeadIdCountQuery = ReturnType<typeof ragHeadIdCountQuery>;
+
 async function getCount(
   tableName: string,
-  filters?: (query: ReturnType<ReturnType<typeof getSupabaseServiceRoleClient>['schema']>['from']) => ReturnType<ReturnType<typeof getSupabaseServiceRoleClient>['schema']>['from'],
+  filters?: (query: RagHeadIdCountQuery) => RagHeadIdCountQuery,
 ) {
   const supabase = getSupabaseServiceRoleClient();
-  const rag = supabase.schema('rag');
-  const baseQuery = rag.from(tableName).select('id', { count: 'exact', head: true });
+  const baseQuery = ragHeadIdCountQuery(supabase, tableName);
   const query = filters ? filters(baseQuery) : baseQuery;
   const { count, error } = await query;
 
@@ -98,7 +109,7 @@ async function getCount(
 async function safeCount(
   tableName: string,
   warnings: string[],
-  filters?: (query: ReturnType<ReturnType<typeof getSupabaseServiceRoleClient>['schema']>['from']) => ReturnType<ReturnType<typeof getSupabaseServiceRoleClient>['schema']>['from'],
+  filters?: (query: RagHeadIdCountQuery) => RagHeadIdCountQuery,
 ) {
   try {
     return await getCount(tableName, filters);
@@ -167,7 +178,7 @@ function readJsonNumber(
 
 function mergeChunkSyncResults(
   accumulated: JsonObject | null,
-  next: JsonObject,
+  next: JsonObject | null,
   passCount: number,
 ) {
   const sumKeys = [
@@ -181,7 +192,7 @@ function mergeChunkSyncResults(
 
   const merged: JsonObject = {
     ...(accumulated ?? {}),
-    ...next,
+    ...(next ?? {}),
     passes_run: passCount,
   };
 
@@ -195,7 +206,7 @@ function mergeChunkSyncResults(
 
 function mergeProfileSyncResults(
   accumulated: JsonObject | null,
-  next: JsonObject,
+  next: JsonObject | null,
   passCount: number,
 ) {
   const sumKeys = [
@@ -208,7 +219,7 @@ function mergeProfileSyncResults(
 
   const merged: JsonObject = {
     ...(accumulated ?? {}),
-    ...next,
+    ...(next ?? {}),
     passes_run: passCount,
   };
 

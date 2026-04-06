@@ -1,40 +1,36 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import {
-  CircleHelp,
-  FileBarChart2,
-  FileText,
-  FolderKanban,
-  Home,
+  Layers,
   LayoutDashboard,
+  Library,
+  MessageSquare,
   Search,
-  Settings,
   Sparkles,
-  Users,
+  Wand2,
 } from 'lucide-react';
 
 import { AdminAccountMenu } from '~/components/admin/AdminAccountMenu';
 import { Button } from '~/components/ui/button';
 
-const primaryNavItems = [
+const workspaceNavItems = [
   { label: 'Dashboard', href: '/admin', icon: LayoutDashboard },
-  { label: 'Lifecycle', href: '#', icon: FolderKanban },
-  { label: 'Analytics', href: '#', icon: FileBarChart2 },
-  { label: 'Projects', href: '#', icon: FileText },
-  { label: 'Team', href: '#', icon: Users },
+  { label: 'Bex', href: '/admin/bex', icon: MessageSquare },
 ];
 
-const documentNavItems = [
-  { label: 'Data Library', href: '/admin/products/legacy', icon: Home },
-  { label: 'Reports', href: '/admin/products/rag', icon: FileBarChart2 },
-  { label: 'Word Assistant', href: '/admin/products/rag/search', icon: Sparkles },
-  { label: 'More', href: '/admin/products/rag/generate', icon: FolderKanban },
-];
-
-const utilityNavItems = [
-  { label: 'Settings', href: '#', icon: Settings },
-  { label: 'Get Help', href: '#', icon: CircleHelp },
-  { label: 'Search', href: '/admin/products/rag/search', icon: Search },
+const productsNavItems = [
+  { label: 'Legacy products', href: '/admin/products/legacy', icon: Library },
+  { label: 'RAG products', href: '/admin/products/rag', icon: Layers },
+  {
+    label: 'RAG similarity search',
+    href: '/admin/products/rag/search',
+    icon: Search,
+  },
+  {
+    label: 'RAG generate',
+    href: '/admin/products/rag/generate',
+    icon: Wand2,
+  },
 ];
 
 type AdminLayoutProps = {
@@ -95,21 +91,11 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
           </Link>
 
           <div className="mt-8 space-y-6">
-            <Link
-              className="flex items-center gap-3 rounded-2xl px-3 py-2 text-sm font-medium text-sidebar-foreground/80 transition hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-              href="/admin"
-            >
-              <Home className="size-4" />
-              <span>Home</span>
-            </Link>
-
-            <NavSection items={primaryNavItems} />
-            <NavSection items={documentNavItems} title="Documents" />
+            <NavSection items={workspaceNavItems} title="Workspace" />
+            <NavSection items={productsNavItems} title="Products & RAG" />
           </div>
 
-          <div className="mt-auto space-y-6">
-            <NavSection items={utilityNavItems} />
-
+          <div className="mt-auto">
             <AdminAccountMenu />
           </div>
         </aside>

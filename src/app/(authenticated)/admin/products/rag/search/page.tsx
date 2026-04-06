@@ -32,9 +32,9 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
 
   const resolvedSearchParams = await searchParams;
   const query = readSearchParam(resolvedSearchParams.q);
-  const productKey = readSearchParam(resolvedSearchParams.productKey);
+  const variantProductKey = readSearchParam(resolvedSearchParams.productKey);
   const productLineKey = readSearchParam(resolvedSearchParams.productLineKey);
-  let similarityRange = [];
+  let similaritySummary = '';
   const requestedLimit = Number.parseInt(
     readSearchParam(resolvedSearchParams.limit, '8'),
     10,
@@ -52,17 +52,14 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
       result = await searchProductChunks({
         query,
         limit,
-        productKey: productKey || undefined,
+        productKey: variantProductKey || undefined,
         productLineKey: productLineKey || undefined,
       });
 
-      similarityRange = result?.matches.map((match) => match.similarity) ?? [];
-      const similaritySorted = similarityRange.sort((a, b) => a - b);
-
-      similarityRange = [
-        similaritySorted[similaritySorted.length - 1].toFixed(2),
-        similaritySorted[0].toFixed(2),
-      ];
+      if (result.matches.length > 0) {
+        const sims = result.matches.map((m) => m.similarity).sort((a, b) => a - b);
+        similaritySummary = `${(sims[sims.length - 1]! * 100).toFixed(1)}% – ${(sims[0]! * 100).toFixed(1)}%`;
+      }
     } catch (searchError) {
       error =
         searchError instanceof Error
@@ -80,12 +77,12 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
               RAG Similarity Search
             </p>
             <h1 className="text-4xl font-semibold tracking-tight text-slate-950">
-              Search the RAG product corpus semantically
+              Search the RAG product line corpus semantically
             </h1>
             <p className="max-w-3xl text-base leading-7 text-slate-600">
-              This page embeds your query with the same model used for
-              `rag.document_chunk` and retrieves the closest product-profile
-              chunks by cosine similarity.
+              Retrieval is one document per legacy product line. Chunks include
+              rolled-up size variants; filters can target a line or a specific
+              variant product key.
             </p>
           </div>
 
@@ -103,9 +100,9 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
             />
             <input
               className="h-12 rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none ring-0 transition focus:border-sky-500"
-              defaultValue={productKey}
+              defaultValue={variantProductKey}
               name="productKey"
-              placeholder="Optional product key"
+              placeholder="Optional variant product key"
               type="text"
             />
             <input
@@ -142,12 +139,13 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
           <>
             <section className="flex flex-wrap items-center justify-between gap-3">
               <div className="text-sm text-slate-600">
-                Showing {result.matches.length} matches using `{result.model}`.
-                Similarity range: {similarityRange.join(' - ')}.
+                Showing {result.matches.length} line-level matches using{' '}
+                <code className="rounded bg-slate-100 px-1">{result.model}</code>.
+                {similaritySummary ? ` Similarity range: ${similaritySummary}.` : ''}
               </div>
               <div className="text-sm text-slate-600">
                 {result.productKey
-                  ? `Filtered to product ${result.productKey}.`
+                  ? `Filtered to lines containing variant ${result.productKey}.`
                   : result.productLineKey
                     ? `Filtered to product line ${result.productLineKey}.`
                     : 'No metadata filter applied.'}
@@ -186,12 +184,10 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
                     </h2>
                     <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm text-slate-600">
                       <span>
-                        Product key: {match.product_key || match.source_pk}
+                        Product line:{' '}
+                        {match.product_line_key || match.source_pk || 'N/A'}
                       </span>
-                      <span>SKU: {match.sku || 'N/A'}</span>
-                      <span>
-                        Product line: {match.product_line_key || 'N/A'}
-                      </span>
+                      <span>Representative SKU: {match.sku || 'N/A'}</span>
                       <span>
                         Section path: {match.section_path?.join(' / ') || 'N/A'}
                       </span>
@@ -205,9 +201,9 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
                   <div className="mt-4 flex flex-wrap gap-3">
                     <Link
                       className="inline-flex rounded-full bg-slate-950 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-800"
-                      href={`/admin/products/rag/${match.product_key || match.source_pk}`}
+                      href={`/admin/products/rag/${encodeURIComponent(match.product_line_key || match.source_pk)}`}
                     >
-                      View RAG product
+                      View RAG product line
                     </Link>
                     <Link
                       className="inline-flex rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50"
@@ -223,8 +219,8 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
         ) : (
           <section className="rounded-3xl border border-dashed border-slate-300 bg-white p-8 text-sm leading-7 text-slate-600">
             Enter a natural-language query to test vector similarity against
-            your `rag.document_chunk` embeddings. Optional product and
-            product-line filters let you constrain retrieval when needed.
+            product line chunks. Optional filters: product line key, or a variant
+            `ProductsKey` to match lines that include that size/SKU row.
           </section>
         )}
       </main>
