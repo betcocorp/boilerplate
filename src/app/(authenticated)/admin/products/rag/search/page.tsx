@@ -34,6 +34,7 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
   const query = readSearchParam(resolvedSearchParams.q);
   const productKey = readSearchParam(resolvedSearchParams.productKey);
   const productLineKey = readSearchParam(resolvedSearchParams.productLineKey);
+  let similarityRange = [];
   const requestedLimit = Number.parseInt(
     readSearchParam(resolvedSearchParams.limit, '8'),
     10,
@@ -44,9 +45,7 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
       : 8;
 
   let error: string | null = null;
-  let result:
-    | Awaited<ReturnType<typeof searchProductChunks>>
-    | null = null;
+  let result: Awaited<ReturnType<typeof searchProductChunks>> | null = null;
 
   if (query.trim()) {
     try {
@@ -56,6 +55,14 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
         productKey: productKey || undefined,
         productLineKey: productLineKey || undefined,
       });
+
+      similarityRange = result?.matches.map((match) => match.similarity) ?? [];
+      const similaritySorted = similarityRange.sort((a, b) => a - b);
+
+      similarityRange = [
+        similaritySorted[similaritySorted.length - 1].toFixed(2),
+        similaritySorted[0].toFixed(2),
+      ];
     } catch (searchError) {
       error =
         searchError instanceof Error
@@ -136,6 +143,7 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
             <section className="flex flex-wrap items-center justify-between gap-3">
               <div className="text-sm text-slate-600">
                 Showing {result.matches.length} matches using `{result.model}`.
+                Similarity range: {similarityRange.join(' - ')}.
               </div>
               <div className="text-sm text-slate-600">
                 {result.productKey
@@ -177,10 +185,16 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
                       {match.document_title}
                     </h2>
                     <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm text-slate-600">
-                      <span>Product key: {match.product_key || match.source_pk}</span>
+                      <span>
+                        Product key: {match.product_key || match.source_pk}
+                      </span>
                       <span>SKU: {match.sku || 'N/A'}</span>
-                      <span>Product line: {match.product_line_key || 'N/A'}</span>
-                      <span>Section path: {match.section_path?.join(' / ') || 'N/A'}</span>
+                      <span>
+                        Product line: {match.product_line_key || 'N/A'}
+                      </span>
+                      <span>
+                        Section path: {match.section_path?.join(' / ') || 'N/A'}
+                      </span>
                     </div>
                   </div>
 
@@ -208,9 +222,9 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
           </>
         ) : (
           <section className="rounded-3xl border border-dashed border-slate-300 bg-white p-8 text-sm leading-7 text-slate-600">
-            Enter a natural-language query to test vector similarity against your
-            `rag.document_chunk` embeddings. Optional product and product-line
-            filters let you constrain retrieval when needed.
+            Enter a natural-language query to test vector similarity against
+            your `rag.document_chunk` embeddings. Optional product and
+            product-line filters let you constrain retrieval when needed.
           </section>
         )}
       </main>

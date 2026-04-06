@@ -13,7 +13,7 @@ import {
   Users,
 } from 'lucide-react';
 
-import { AdminAccountMenu } from '~/app/(authenticated)/admin/AdminAccountMenu';
+import { AdminAccountMenu } from '~/components/admin/AdminAccountMenu';
 import { Button } from '~/components/ui/button';
 
 const primaryNavItems = [

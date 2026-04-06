@@ -31,7 +31,7 @@ type ProductSearchResult = {
   description: ProductDescriptionListItem | null;
 };
 
-const PRODUCTS_ROUTE = '/admin/products';
+const PRODUCTS_ROUTE = '/admin/products/legacy';
 const RESULT_LIMIT = 24;
 const PAGE_LINK_WINDOW = 5;
 
@@ -113,7 +113,7 @@ function buildProductDetailHref(
   }
 
   const queryString = params.toString();
-  const detailPath = `${PRODUCTS_ROUTE}/${productKey}`;
+  const detailPath = `${PRODUCTS_ROUTE}/${encodeURIComponent(productKey)}`;
 
   return queryString ? `${detailPath}?${queryString}` : detailPath;
 }

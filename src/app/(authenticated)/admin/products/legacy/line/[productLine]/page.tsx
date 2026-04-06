@@ -4,11 +4,13 @@ import { connection } from 'next/server';
 import { getSupabaseServerClient } from '~/supabase/clients/server';
 import type { Tables } from '~/types/supabase.legacy';
 
-type ProductRow = Tables<{ schema: 'legacy' }, 'products'>;
-type ProductAttrRow = Tables<{ schema: 'legacy' }, 'products_attr'>;
-type ProductDescriptionRow = Tables<{ schema: 'legacy' }, 'products_descr'>;
+type ProductLineRow = Tables<{ schema: 'legacy' }, 'prod_line'>;
+type ProductLineAttrRow = Tables<{ schema: 'legacy' }, 'prod_line_attr'>;
 type ProductImageRow = Tables<{ schema: 'legacy' }, 'prod_images'>;
 type DocumentRow = Tables<{ schema: 'legacy' }, 'documents'>;
+type ProductDescriptionRow = Tables<{ schema: 'legacy' }, 'products_descr'>;
+type ProductRow = Tables<{ schema: 'legacy' }, 'products'>;
+type TechSpecDefinitionRow = Tables<{ schema: 'legacy' }, 'tech_spec_def'>;
 type ProductListItem = Pick<
   ProductRow,
   | 'ProductsKey'
@@ -25,59 +27,12 @@ type ProductListItem = Pick<
   | 'MetaDescription'
   | 'MetaKeyWords'
 >;
-type TechSpecDefinitionRow = Tables<{ schema: 'legacy' }, 'tech_spec_def'>;
 
 const PRODUCTS_ROUTE = '/admin/products/legacy';
 
-type ProductDetailsPageProps = {
-  params: Promise<{ productKey: string }>;
-  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+type ProductLineDetailsPageProps = {
+  params: Promise<{ productLine: string }>;
 };
-
-function readSearchParam(value: string | string[] | undefined, fallback = '') {
-  if (Array.isArray(value)) {
-    return value[0] ?? fallback;
-  }
-
-  return value ?? fallback;
-}
-
-function buildProductsHref(query: string, page: number) {
-  const params = new URLSearchParams();
-
-  if (query) {
-    params.set('q', query);
-  }
-
-  if (page > 1) {
-    params.set('page', String(page));
-  }
-
-  const queryString = params.toString();
-
-  return queryString ? `${PRODUCTS_ROUTE}?${queryString}` : PRODUCTS_ROUTE;
-}
-
-function buildProductDetailHref(
-  productKey: string,
-  query: string,
-  page: number,
-) {
-  const params = new URLSearchParams();
-
-  if (query) {
-    params.set('q', query);
-  }
-
-  if (page > 1) {
-    params.set('page', String(page));
-  }
-
-  const queryString = params.toString();
-  const detailPath = `${PRODUCTS_ROUTE}/${encodeURIComponent(productKey)}`;
-
-  return queryString ? `${detailPath}?${queryString}` : detailPath;
-}
 
 function humanizeFieldName(fieldName: string) {
   return fieldName
@@ -87,7 +42,7 @@ function humanizeFieldName(fieldName: string) {
     .trim();
 }
 
-function formatFieldValue(value: ProductRow[keyof ProductRow]) {
+function formatFieldValue(value: ProductLineRow[keyof ProductLineRow]) {
   if (typeof value === 'number') {
     return Number.isInteger(value) ? value.toString() : value.toFixed(2);
   }
@@ -108,7 +63,7 @@ function getUniqueStrings(values: Array<string | null | undefined>) {
 }
 
 function getAttrKeys(
-  attrs: Array<Pick<ProductAttrRow, 'AttrKey' | 'AttrTable'>>,
+  attrs: Array<Pick<ProductLineAttrRow, 'AttrKey' | 'AttrTable'>>,
   tableName: string,
 ) {
   return getUniqueStrings(
@@ -173,33 +128,14 @@ function dedupeByKey<T>(items: T[], getKey: (item: T) => string) {
   });
 }
 
-function getProductFacts(product: ProductRow) {
-  return Object.entries(product)
+function getProductLineFacts(line: ProductLineRow) {
+  return Object.entries(line)
     .filter(([, value]) => value != null && value !== '')
     .map(([key, value]) => ({
       key,
       label: humanizeFieldName(key),
-      value: formatFieldValue(value as ProductRow[keyof ProductRow]),
+      value: formatFieldValue(value as ProductLineRow[keyof ProductLineRow]),
     }));
-}
-
-function summarizeProduct(
-  product: ProductRow,
-  descriptions: ProductDescriptionRow[],
-) {
-  const englishDescription = descriptions.find(
-    (description) => description.LanguageCD === 'EN',
-  );
-
-  return (
-    englishDescription?.ShortDescr ||
-    product.Title ||
-    product.SLDescr ||
-    product.H1 ||
-    product.H2 ||
-    product.SKU ||
-    'Untitled product'
-  );
 }
 
 function summarizeProductListItem(
@@ -217,159 +153,60 @@ function summarizeProductListItem(
   );
 }
 
-export default async function ProductDetailsPage({
+function buildProductDetailHref(productKey: string) {
+  return `${PRODUCTS_ROUTE}/${encodeURIComponent(productKey)}`;
+}
+
+export default async function ProductLineDetailsPage({
   params,
-  searchParams,
-}: ProductDetailsPageProps) {
+}: ProductLineDetailsPageProps) {
   await connection();
 
-  const [{ productKey }, resolvedSearchParams] = await Promise.all([
-    params,
-    searchParams,
-  ]);
-  const searchValue = readSearchParam(resolvedSearchParams.q);
-  const requestedPage = Number.parseInt(
-    readSearchParam(resolvedSearchParams.page, '1'),
-    10,
-  );
-  const currentPage =
-    Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : 1;
+  const { productLine: productLineKey } = await params;
 
   const supabase = getSupabaseServerClient();
   const legacy = supabase.schema('legacy');
 
-  const [
-    productResponse,
-    descriptionsResponse,
-    directImagesResponse,
-    productAttrsResponse,
-  ] = await Promise.all([
-    legacy
-      .from('products')
-      .select('*')
-      .eq('ProductsKey', productKey)
-      .maybeSingle(),
-    legacy
-      .from('products_descr')
-      .select('*')
-      .eq('ProductsKey', productKey)
-      .order('LanguageCD', { ascending: true }),
-    legacy
-      .from('prod_images')
-      .select('*')
-      .eq('ProductsKey', productKey)
-      .order('Sequence', { ascending: true, nullsFirst: false }),
-    legacy
-      .from('products_attr')
-      .select('AttrKey, AttrTable')
-      .eq('ProductsKey', productKey),
-  ]);
+  const [productLineResponse, descriptionsResponse, productLineAttrsResponse] =
+    await Promise.all([
+      legacy
+        .from('prod_line')
+        .select('*')
+        .eq('ProdLineKey', productLineKey)
+        .order('ProdLineID', { ascending: true })
+        .limit(1),
+      legacy
+        .from('prod_line_descr')
+        .select('*')
+        .eq('ProdLineKey', productLineKey)
+        .order('LanguageCD', { ascending: true }),
+      legacy
+        .from('prod_line_attr')
+        .select('AttrKey, AttrTable, ProdLineKey')
+        .eq('ProdLineKey', productLineKey),
+    ]);
 
-  if (productResponse.error) {
-    throw new Error(productResponse.error.message);
-  }
-
-  if (!productResponse.data) {
-    notFound();
+  if (productLineResponse.error) {
+    throw new Error(productLineResponse.error.message);
   }
 
   if (descriptionsResponse.error) {
     throw new Error(descriptionsResponse.error.message);
   }
 
-  if (directImagesResponse.error) {
-    throw new Error(directImagesResponse.error.message);
-  }
-
-  if (productAttrsResponse.error) {
-    throw new Error(productAttrsResponse.error.message);
-  }
-
-  const product = productResponse.data;
-  const descriptions = descriptionsResponse.data ?? [];
-  const productAttrs = productAttrsResponse.data ?? [];
-  const productLineKeys = getAttrKeys(productAttrs, 'prodline');
-  const productClassKeys = getAttrKeys(productAttrs, 'prodclass');
-  const sizeCodeKeys = getAttrKeys(productAttrs, 'sizecode');
-  const productImageGroupKeys = getAttrKeys(productAttrs, 'prodimages');
-
-  const [
-    productLineResponse,
-    productLineDescriptionsResponse,
-    productLineAttrsResponse,
-    productClassesResponse,
-    sizeCodesResponse,
-    sizeCodeDescriptionsResponse,
-  ] = await Promise.all([
-    productLineKeys.length > 0
-      ? legacy
-          .from('prod_line')
-          .select('*')
-          .in('ProdLineKey', productLineKeys)
-          .order('ProdLineID', { ascending: true })
-      : Promise.resolve({ data: [], error: null }),
-    productLineKeys.length > 0
-      ? legacy
-          .from('prod_line_descr')
-          .select('*')
-          .in('ProdLineKey', productLineKeys)
-          .eq('LanguageCD', 'EN')
-      : Promise.resolve({ data: [], error: null }),
-    productLineKeys.length > 0
-      ? legacy
-          .from('prod_line_attr')
-          .select('AttrKey, AttrTable, ProdLineKey')
-          .in('ProdLineKey', productLineKeys)
-      : Promise.resolve({ data: [], error: null }),
-    productClassKeys.length > 0
-      ? legacy
-          .from('prod_class')
-          .select('*')
-          .in('ProdClassKey', productClassKeys)
-      : Promise.resolve({ data: [], error: null }),
-    sizeCodeKeys.length > 0
-      ? legacy.from('size_code').select('*').in('SizeCodeKey', sizeCodeKeys)
-      : Promise.resolve({ data: [], error: null }),
-    sizeCodeKeys.length > 0
-      ? legacy
-          .from('size_code_descr')
-          .select('*')
-          .in('SizeCodeKey', sizeCodeKeys)
-          .eq('LanguageCD', 'EN')
-      : Promise.resolve({ data: [], error: null }),
-  ]);
-
-  if (productLineResponse.error) {
-    throw new Error(productLineResponse.error.message);
-  }
-
-  if (productLineDescriptionsResponse.error) {
-    throw new Error(productLineDescriptionsResponse.error.message);
-  }
-
   if (productLineAttrsResponse.error) {
     throw new Error(productLineAttrsResponse.error.message);
   }
 
-  if (productClassesResponse.error) {
-    throw new Error(productClassesResponse.error.message);
-  }
-
-  if (sizeCodesResponse.error) {
-    throw new Error(sizeCodesResponse.error.message);
-  }
-
-  if (sizeCodeDescriptionsResponse.error) {
-    throw new Error(sizeCodeDescriptionsResponse.error.message);
-  }
-
   const productLine = productLineResponse.data?.[0] ?? null;
-  const productLineDescriptions = productLineDescriptionsResponse.data ?? [];
-  const productLineDescription = productLineDescriptions[0] ?? null;
+
+  if (!productLine) {
+    notFound();
+  }
+  const lineDescriptions = descriptionsResponse.data ?? [];
+  const englishDescription =
+    lineDescriptions.find((row) => row.LanguageCD === 'EN') ?? null;
   const productLineAttrs = productLineAttrsResponse.data ?? [];
-  const productClasses = productClassesResponse.data ?? [];
-  const sizeCodes = sizeCodesResponse.data ?? [];
-  const sizeCodeDescriptions = sizeCodeDescriptionsResponse.data ?? [];
 
   const featureKeys = getAttrKeys(productLineAttrs, 'featuresrch');
   const directionKeys = getAttrKeys(productLineAttrs, 'productdirectionofuse');
@@ -377,69 +214,56 @@ export default async function ProductDetailsPage({
   const videoKeys = getAttrKeys(productLineAttrs, 'videos');
   const techSpecKeys = getAttrKeys(productLineAttrs, 'techspec');
   const lineImageGroupKeys = getAttrKeys(productLineAttrs, 'prodimages');
-  const imageGroupKeys = getUniqueStrings([
-    ...productImageGroupKeys,
-    ...lineImageGroupKeys,
-  ]);
 
-  const [
-    featuresResponse,
-    directionsResponse,
-    documentsResponse,
-    videosResponse,
-    techSpecsResponse,
-    groupedImagesResponse,
-    availableInLinksResponse,
-  ] = await Promise.all([
-    featureKeys.length > 0
-      ? legacy
-          .from('feature_srch')
-          .select('*')
-          .in('FeatureSrchKey', featureKeys)
-          .order('SEQ', { ascending: true, nullsFirst: false })
-      : Promise.resolve({ data: [], error: null }),
-    directionKeys.length > 0
-      ? legacy
-          .from('product_direction_of_use')
-          .select('*')
-          .in('ProductDirectionOfUseKey', directionKeys)
-          .order('Sequence', { ascending: true, nullsFirst: false })
-      : Promise.resolve({ data: [], error: null }),
-    documentKeys.length > 0
-      ? legacy
-          .from('documents')
-          .select('*')
-          .in('DocumentsKey', documentKeys)
-          .order('Sequence', { ascending: true, nullsFirst: false })
-      : Promise.resolve({ data: [], error: null }),
-    videoKeys.length > 0
-      ? legacy
-          .from('videos')
-          .select('*')
-          .in('VideosKey', videoKeys)
-          .order('SortOrder', { ascending: true, nullsFirst: false })
-      : Promise.resolve({ data: [], error: null }),
-    techSpecKeys.length > 0
-      ? legacy
-          .from('tech_spec')
-          .select('*')
-          .in('TechSpecKey', techSpecKeys)
-          .order('SortOrder', { ascending: true, nullsFirst: false })
-      : Promise.resolve({ data: [], error: null }),
-    imageGroupKeys.length > 0
-      ? legacy
-          .from('prod_images')
-          .select('*')
-          .in('ProdImagesKey', imageGroupKeys)
-          .order('Sequence', { ascending: true, nullsFirst: false })
-      : Promise.resolve({ data: [], error: null }),
-    productLineKeys.length > 0
-      ? legacy
-          .from('products_attr')
-          .select('ProductsKey, AttrKey, AttrTable')
-          .in('AttrKey', productLineKeys)
-      : Promise.resolve({ data: [], error: null }),
-  ]);
+  const [featuresResponse, directionsResponse, documentsResponse, videosResponse, techSpecsResponse, groupedImagesResponse, productLinksResponse] =
+    await Promise.all([
+      featureKeys.length > 0
+        ? legacy
+            .from('feature_srch')
+            .select('*')
+            .in('FeatureSrchKey', featureKeys)
+            .order('SEQ', { ascending: true, nullsFirst: false })
+        : Promise.resolve({ data: [], error: null }),
+      directionKeys.length > 0
+        ? legacy
+            .from('product_direction_of_use')
+            .select('*')
+            .in('ProductDirectionOfUseKey', directionKeys)
+            .order('Sequence', { ascending: true, nullsFirst: false })
+        : Promise.resolve({ data: [], error: null }),
+      documentKeys.length > 0
+        ? legacy
+            .from('documents')
+            .select('*')
+            .in('DocumentsKey', documentKeys)
+            .order('Sequence', { ascending: true, nullsFirst: false })
+        : Promise.resolve({ data: [], error: null }),
+      videoKeys.length > 0
+        ? legacy
+            .from('videos')
+            .select('*')
+            .in('VideosKey', videoKeys)
+            .order('SortOrder', { ascending: true, nullsFirst: false })
+        : Promise.resolve({ data: [], error: null }),
+      techSpecKeys.length > 0
+        ? legacy
+            .from('tech_spec')
+            .select('*')
+            .in('TechSpecKey', techSpecKeys)
+            .order('SortOrder', { ascending: true, nullsFirst: false })
+        : Promise.resolve({ data: [], error: null }),
+      lineImageGroupKeys.length > 0
+        ? legacy
+            .from('prod_images')
+            .select('*')
+            .in('ProdImagesKey', lineImageGroupKeys)
+            .order('Sequence', { ascending: true, nullsFirst: false })
+        : Promise.resolve({ data: [], error: null }),
+      legacy
+        .from('products_attr')
+        .select('ProductsKey, AttrKey, AttrTable')
+        .eq('AttrKey', productLineKey),
+    ]);
 
   if (featuresResponse.error) {
     throw new Error(featuresResponse.error.message);
@@ -465,8 +289,8 @@ export default async function ProductDetailsPage({
     throw new Error(groupedImagesResponse.error.message);
   }
 
-  if (availableInLinksResponse.error) {
-    throw new Error(availableInLinksResponse.error.message);
+  if (productLinksResponse.error) {
+    throw new Error(productLinksResponse.error.message);
   }
 
   const techSpecDefKeys = getUniqueStrings(
@@ -485,10 +309,12 @@ export default async function ProductDetailsPage({
   }
 
   const variantKeys = getUniqueStrings(
-    (availableInLinksResponse.data ?? [])
-      .filter((link) => normalizeAttrTable(link.AttrTable) === 'prodline')
+    (productLinksResponse.data ?? [])
+      .filter(
+        (link) => normalizeAttrTable(link.AttrTable) === 'prodline',
+      )
       .map((link) => link.ProductsKey),
-  ).filter((key) => key !== productKey);
+  );
 
   const [variantsResponse, variantDescriptionsResponse] = await Promise.all([
     variantKeys.length > 0
@@ -517,15 +343,12 @@ export default async function ProductDetailsPage({
     throw new Error(variantDescriptionsResponse.error.message);
   }
 
-  const directImages = directImagesResponse.data ?? [];
   const groupedImages = groupedImagesResponse.data ?? [];
-  const images = dedupeByKey(
-    [...directImages, ...groupedImages],
-    (image) =>
-      image.ProdImagesKey ??
-      image.Filename ??
-      image.ImageLink ??
-      `${image.ImageName}-${image.Sequence}`,
+  const images = dedupeByKey(groupedImages, (image) =>
+    image.ProdImagesKey ??
+    image.Filename ??
+    image.ImageLink ??
+    `${image.ImageName}-${image.Sequence}`,
   );
   const features = featuresResponse.data ?? [];
   const directions = directionsResponse.data ?? [];
@@ -534,9 +357,6 @@ export default async function ProductDetailsPage({
   const techSpecs = techSpecsResponse.data ?? [];
   const techSpecDefinitions = techSpecDefinitionsResponse.data ?? [];
   const techSpecDefinitionMap = new Map<string, TechSpecDefinitionRow>();
-  const sizeCode = sizeCodes[0] ?? null;
-  const sizeCodeDescription = sizeCodeDescriptions[0] ?? null;
-  const productClass = productClasses[0] ?? null;
 
   for (const techSpecDefinition of techSpecDefinitions) {
     if (techSpecDefinition.TechSpecDefKey) {
@@ -558,7 +378,7 @@ export default async function ProductDetailsPage({
     }
   }
 
-  const availableInVariants = (variantsResponse.data ?? [])
+  const productsInLine = (variantsResponse.data ?? [])
     .map((variant) => ({
       product: variant,
       description: variant.ProductsKey
@@ -571,9 +391,21 @@ export default async function ProductDetailsPage({
       ),
     );
 
-  const title = summarizeProduct(product, descriptions);
-  const productFacts = getProductFacts(product);
-  const backHref = buildProductsHref(searchValue, currentPage);
+  const lineTitle =
+    englishDescription?.ShortDescr ||
+    productLine.Title ||
+    productLine.ProdLineDescr ||
+    productLine.ProdLineKey ||
+    'Product line';
+  const heroCopy =
+    englishDescription?.FullDescr ||
+    productLine.MetaDescription ||
+    productLine.H2 ||
+    productLine.H1 ||
+    productLine.Applications ||
+    'This page shows legacy product-line content from the `prod_line` schema.';
+
+  const lineFacts = getProductLineFacts(productLine);
   const primaryImage =
     images.find((image) =>
       (image.Filename ?? '').toLowerCase().includes('_main'),
@@ -582,23 +414,6 @@ export default async function ProductDetailsPage({
     images[0] ??
     null;
   const primaryImageHref = primaryImage ? buildImageHref(primaryImage) : null;
-  const lineTitle =
-    productLineDescription?.ShortDescr ||
-    productLine?.Title ||
-    productLine?.ProdLineDescr ||
-    null;
-  const primaryProdLineKey =
-    productLine?.ProdLineKey ?? productLineKeys[0] ?? null;
-  const heroCopy =
-    product.MetaDescription ||
-    product.H2 ||
-    product.H1 ||
-    descriptions.find((description) => description.LanguageCD === 'EN')
-      ?.FullDescr ||
-    productLineDescription?.FullDescr ||
-    productLine?.MetaDescription ||
-    product.SLDescr ||
-    'This page is rendered on the server and aggregates product and product-line content from the legacy schema.';
 
   return (
     <div className="flex flex-1 bg-slate-50">
@@ -606,7 +421,7 @@ export default async function ProductDetailsPage({
         <div className="flex items-center">
           <Link
             className="inline-flex items-center rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-50"
-            href={backHref}
+            href={PRODUCTS_ROUTE}
           >
             Back to products
           </Link>
@@ -615,104 +430,47 @@ export default async function ProductDetailsPage({
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <div className="grid gap-8 lg:grid-cols-[minmax(0,1.4fr)_minmax(280px,420px)]">
             <div className="flex flex-col gap-4">
-              <div className="flex flex-wrap items-center gap-2">
-                {product.Status ? (
-                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
-                    Status: {product.Status}
-                  </span>
-                ) : null}
-                {product.OnWeb ? (
-                  <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">
-                    OnWeb: {product.OnWeb}
-                  </span>
-                ) : null}
-                {product.SKU ? (
-                  <span className="rounded-full bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700">
-                    SKU: {product.SKU}
-                  </span>
-                ) : null}
-              </div>
-
               <div>
                 <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-700">
-                  Product details
+                  Product line
                 </p>
                 <h1 className="mt-3 text-4xl font-semibold tracking-tight text-slate-950">
-                  {title}
+                  {lineTitle}
                 </h1>
                 <p className="mt-3 max-w-3xl text-base leading-7 text-slate-600">
                   {heroCopy}
                 </p>
               </div>
 
-              <dl className="grid gap-4 pt-2 sm:grid-cols-2 xl:grid-cols-4">
+              <dl className="grid gap-4 pt-2 sm:grid-cols-2">
                 <div className="rounded-2xl bg-slate-50 p-4">
                   <dt className="text-sm font-medium text-slate-500">
-                    Inventory ID
-                  </dt>
-                  <dd className="mt-1 text-sm text-slate-900">
-                    {product.InvtID ?? 'N/A'}
-                  </dd>
-                </div>
-                <div className="rounded-2xl bg-slate-50 p-4">
-                  <dt className="text-sm font-medium text-slate-500">MSRP</dt>
-                  <dd className="mt-1 text-sm text-slate-900">
-                    {product.MSRP != null
-                      ? `$${product.MSRP.toFixed(2)}`
-                      : 'N/A'}
-                  </dd>
-                </div>
-                <div className="rounded-2xl bg-slate-50 p-4">
-                  <dt className="text-sm font-medium text-slate-500">
-                    Years of service
-                  </dt>
-                  <dd className="mt-1 text-sm text-slate-900">
-                    {product.YearsOfService ?? 'N/A'}
-                  </dd>
-                </div>
-                <div className="rounded-2xl bg-slate-50 p-4">
-                  <dt className="text-sm font-medium text-slate-500">
-                    Product line
+                    Prod line key
                   </dt>
                   <dd className="mt-1 break-all text-sm text-slate-900">
-                    {primaryProdLineKey ? (
-                      <Link
-                        className="font-medium text-sky-700 underline underline-offset-4 hover:text-sky-900"
-                        href={`${PRODUCTS_ROUTE}/line/${encodeURIComponent(primaryProdLineKey)}`}
-                      >
-                        {lineTitle ?? primaryProdLineKey}
-                      </Link>
-                    ) : (
-                      (lineTitle ?? 'N/A')
-                    )}
+                    {productLine.ProdLineKey ?? 'N/A'}
+                  </dd>
+                </div>
+                <div className="rounded-2xl bg-slate-50 p-4">
+                  <dt className="text-sm font-medium text-slate-500">
+                    Prod line ID
+                  </dt>
+                  <dd className="mt-1 break-all text-sm text-slate-900">
+                    {productLine.ProdLineID ?? 'N/A'}
                   </dd>
                 </div>
               </dl>
-
-              {productClass || sizeCodeDescription ? (
-                <div className="flex flex-wrap gap-3 pt-2">
-                  {productClass?.DSLProdClassDescr ? (
-                    <span className="rounded-full bg-white px-3 py-1 text-xs font-medium text-slate-700 ring-1 ring-slate-200">
-                      Class: {productClass.DSLProdClassDescr}
-                    </span>
-                  ) : null}
-                  {sizeCodeDescription?.SizeDescr || sizeCode?.D2Code ? (
-                    <span className="rounded-full bg-white px-3 py-1 text-xs font-medium text-slate-700 ring-1 ring-slate-200">
-                      Size: {sizeCodeDescription?.SizeDescr || sizeCode?.D2Code}
-                    </span>
-                  ) : null}
-                </div>
-              ) : null}
             </div>
 
             <div className="flex flex-col gap-3">
               <div className="overflow-hidden rounded-3xl border border-slate-200 bg-slate-50 shadow-sm">
                 {primaryImageHref ? (
-                  // Use a plain image tag here so the rendered asset URL matches the legacy site exactly.
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
                     alt={
-                      primaryImage?.ImageName || primaryImage?.Filename || title
+                      primaryImage?.ImageName ||
+                      primaryImage?.Filename ||
+                      lineTitle
                     }
                     className="aspect-square h-full w-full object-contain bg-white"
                     src={primaryImageHref}
@@ -722,21 +480,6 @@ export default async function ProductDetailsPage({
                     No primary image available
                   </div>
                 )}
-              </div>
-              <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
-                <p className="font-medium text-slate-900">
-                  Primary image comparison
-                </p>
-                <p className="mt-1">
-                  This uses the first grouped image, preferring files marked
-                  `_main`, so you can compare it against the legacy product
-                  page.
-                </p>
-                {primaryImage?.Filename ? (
-                  <p className="mt-2 break-all text-xs text-slate-500">
-                    {primaryImage.Filename}
-                  </p>
-                ) : null}
               </div>
             </div>
           </div>
@@ -748,20 +491,19 @@ export default async function ProductDetailsPage({
               <div className="flex items-center justify-between gap-4">
                 <div>
                   <h2 className="text-2xl font-semibold tracking-tight text-slate-950">
-                    Product record
+                    Product line record
                   </h2>
                   <p className="mt-2 text-sm leading-6 text-slate-600">
-                    Every non-empty field from the `products` row is listed here
-                    so the detail page reflects the full typed record.
+                    Every non-empty field from the `prod_line` row.
                   </p>
                 </div>
                 <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">
-                  {productFacts.length} fields
+                  {lineFacts.length} fields
                 </div>
               </div>
 
               <dl className="mt-6 grid gap-x-6 gap-y-5 sm:grid-cols-2">
-                {productFacts.map((field) => (
+                {lineFacts.map((field) => (
                   <div
                     className="rounded-2xl border border-slate-200 bg-slate-50 p-4"
                     key={field.key}
@@ -880,45 +622,37 @@ export default async function ProductDetailsPage({
 
             <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
               <h2 className="text-2xl font-semibold tracking-tight text-slate-950">
-                Available in
+                Products in this line
               </h2>
-              {availableInVariants.length === 0 ? (
+              {productsInLine.length === 0 ? (
                 <p className="mt-4 text-sm text-slate-600">
-                  No sibling variants were found for this product line.
+                  No linked products were found for this product line.
                 </p>
               ) : (
                 <div className="mt-6 grid gap-4 md:grid-cols-2">
-                  {availableInVariants.map(
-                    ({ product: variant, description }) => (
-                      <Link
-                        className="rounded-2xl border border-slate-200 bg-slate-50 p-4 transition hover:border-sky-300 hover:bg-white"
-                        href={buildProductDetailHref(
-                          variant.ProductsKey ?? '',
-                          searchValue,
-                          currentPage,
-                        )}
-                        key={
-                          variant.ProductsKey ?? variant.SKU ?? variant.Title
-                        }
-                      >
-                        <p className="text-base font-semibold text-slate-900">
-                          {summarizeProductListItem(variant, description)}
-                        </p>
-                        <dl className="mt-3 grid grid-cols-2 gap-3 text-sm text-slate-600">
-                          <div>
-                            <dt className="font-medium text-slate-500">SKU</dt>
-                            <dd>{variant.SKU ?? 'N/A'}</dd>
-                          </div>
-                          <div>
-                            <dt className="font-medium text-slate-500">
-                              Inventory ID
-                            </dt>
-                            <dd>{variant.InvtID ?? 'N/A'}</dd>
-                          </div>
-                        </dl>
-                      </Link>
-                    ),
-                  )}
+                  {productsInLine.map(({ product: variant, description }) => (
+                    <Link
+                      className="rounded-2xl border border-slate-200 bg-slate-50 p-4 transition hover:border-sky-300 hover:bg-white"
+                      href={buildProductDetailHref(variant.ProductsKey ?? '')}
+                      key={variant.ProductsKey ?? variant.SKU ?? variant.Title}
+                    >
+                      <p className="text-base font-semibold text-slate-900">
+                        {summarizeProductListItem(variant, description)}
+                      </p>
+                      <dl className="mt-3 grid grid-cols-2 gap-3 text-sm text-slate-600">
+                        <div>
+                          <dt className="font-medium text-slate-500">SKU</dt>
+                          <dd>{variant.SKU ?? 'N/A'}</dd>
+                        </div>
+                        <div>
+                          <dt className="font-medium text-slate-500">
+                            Inventory ID
+                          </dt>
+                          <dd>{variant.InvtID ?? 'N/A'}</dd>
+                        </div>
+                      </dl>
+                    </Link>
+                  ))}
                 </div>
               )}
             </section>
@@ -929,18 +663,19 @@ export default async function ProductDetailsPage({
               <h2 className="text-2xl font-semibold tracking-tight text-slate-950">
                 Descriptions
               </h2>
-              {descriptions.length === 0 ? (
+              {lineDescriptions.length === 0 ? (
                 <p className="mt-4 text-sm text-slate-600">
-                  No language-specific descriptions were found for this product.
+                  No language-specific descriptions were found for this product
+                  line.
                 </p>
               ) : (
                 <div className="mt-6 flex flex-col gap-4">
-                  {descriptions.map((description) => (
+                  {lineDescriptions.map((description) => (
                     <article
                       className="rounded-2xl border border-slate-200 bg-slate-50 p-4"
                       key={
-                        description.ProductsDescrKey ??
-                        `${description.LanguageCD}-${description.ProductsKey}`
+                        description.ProdLineDescrKey ??
+                        `${description.LanguageCD}-${description.ProdLineKey}`
                       }
                     >
                       <div className="flex items-center justify-between gap-3">
@@ -1062,7 +797,7 @@ export default async function ProductDetailsPage({
               </h2>
               {images.length === 0 ? (
                 <p className="mt-4 text-sm text-slate-600">
-                  No related product images were found.
+                  No related images were found for this product line.
                 </p>
               ) : (
                 <div className="mt-6 flex flex-col gap-4">

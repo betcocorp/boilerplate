@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { connection } from 'next/server';
 import moment from 'moment';
 
-import { GenerateControls } from '~/app/(authenticated)/admin/products/rag/generate/GenerateControls';
+import { GenerateControls } from '~/components/admin/GenerateControls';
 import { getRagGenerationStatus } from '~/lib/rag/pipeline';
 
 function formatTimestamp(value: string | null) {
