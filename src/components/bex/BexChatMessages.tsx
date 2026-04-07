@@ -245,41 +245,52 @@ export function BexChatMessages({
 
               <div
                 className={cn(
-                  'min-w-0 max-w-[min(100%,36rem)] rounded-3xl px-4 py-3 text-sm leading-relaxed shadow-sm ring-1 ring-border/60',
+                  'relative min-w-0 max-w-[min(100%,36rem)] overflow-hidden rounded-3xl px-4 py-3 text-sm leading-relaxed shadow-sm ring-1 ring-border/60',
                   isUser
                     ? 'bg-primary text-primary-foreground'
                     : 'bg-card text-card-foreground',
                 )}
               >
-                <div className="flex items-start justify-between gap-2">
-                  <span className="text-xs font-medium opacity-80">
-                    {isUser ? 'You' : 'Bex'}
-                  </span>
-                  <span
-                    className={cn(
-                      'shrink-0 text-xs opacity-70',
-                      isUser && 'text-primary-foreground/80',
-                    )}
-                  >
-                    {formatTime(m.createdAt)}
-                  </span>
-                </div>
-                <BexChatMessageBody content={m.content} isUser={isUser} />
-                {!isUser ? (
-                  <div className="mt-3 flex justify-end border-t border-border/40 pt-2">
-                    <Button
-                      aria-label="Copy message"
-                      className="h-8 rounded-xl text-xs"
-                      onClick={() => copyText(m.content)}
-                      size="sm"
-                      type="button"
-                      variant="ghost"
+                <div
+                  aria-hidden
+                  className={cn(
+                    'pointer-events-none absolute inset-0 rounded-[inherit]',
+                    isUser
+                      ? 'bg-[linear-gradient(45deg,rgb(0_0_0/0.18),transparent,rgb(255_255_255/0.14))]'
+                      : 'bg-[linear-gradient(45deg,rgb(0_0_0/0.025),transparent,rgb(255_255_255/0.4))]',
+                  )}
+                />
+                <div className="relative">
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="text-xs font-medium opacity-80">
+                      {isUser ? 'You' : 'Bex'}
+                    </span>
+                    <span
+                      className={cn(
+                        'shrink-0 text-xs opacity-70',
+                        isUser && 'text-primary-foreground/80',
+                      )}
                     >
-                      <Copy className="size-3.5" />
-                      Copy
-                    </Button>
+                      {formatTime(m.createdAt)}
+                    </span>
                   </div>
-                ) : null}
+                  <BexChatMessageBody content={m.content} isUser={isUser} />
+                  {!isUser ? (
+                    <div className="mt-3 flex justify-end border-t border-border/40 pt-2">
+                      <Button
+                        aria-label="Copy message"
+                        className="h-8 rounded-xl text-xs"
+                        onClick={() => copyText(m.content)}
+                        size="sm"
+                        type="button"
+                        variant="ghost"
+                      >
+                        <Copy className="size-3.5" />
+                        Copy
+                      </Button>
+                    </div>
+                  ) : null}
+                </div>
               </div>
             </div>
           );
