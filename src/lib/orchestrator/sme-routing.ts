@@ -1,6 +1,6 @@
 import type { SmeAgentId } from '~/lib/agents/sme/types';
 
-/** Feasibility / demo routing: keyword signals only (replace with LLM router later). */
+/** Feasibility / demo routing: keyword signals (replace with LLM router later). */
 const BATHROOM_SIGNALS = [
   'bathroom',
   'bath ',
@@ -19,7 +19,6 @@ const BATHROOM_SIGNALS = [
   'faucet',
   'rough-in',
   'rough in',
-  'drain',
   'p-trap',
   'wet wall',
   'enclosure',
@@ -29,6 +28,49 @@ const BATHROOM_SIGNALS = [
   'gpm',
   'master bath',
   'guest bath',
+  'restroom',
+  'urinal',
+  'stall ',
+];
+
+/** Dispenser / system dilution — narrower than “dilution ratio on a label” (product specialist). */
+const DILUTION_SIGNALS = [
+  'dispenser calibration',
+  'calibrate the dispenser',
+  'calibrate dispenser',
+  'metering tip',
+  'proportioner',
+  'proportioning',
+  'dilution control system',
+  'chemical management system',
+  'fastdraw',
+  'fast draw',
+  'injection tip',
+  'tip chart',
+  'dispenser setup',
+  'setup my dispenser',
+  'on-site mixing system',
+];
+
+/** Procedural floor maintenance (hand off from product facts). */
+const FLOOR_SIGNALS = [
+  'floor stripping',
+  'strip the floor',
+  'strip floors',
+  'strip and wax',
+  'strip wax',
+  'remove wax',
+  'burnish',
+  'burnishing',
+  'scrub and recoat',
+  'top scrub',
+  'recoat floor',
+  'floor finish procedure',
+  'applying floor finish',
+  'apply finish',
+  'multiple coats of finish',
+  'vct program',
+  'floor maintenance program',
 ];
 
 const PRODUCT_SIGNALS = [
@@ -56,6 +98,29 @@ const PRODUCT_SIGNALS = [
   'dimension',
   'upc',
   'item number',
+  'sds',
+  'msds',
+  'disinfect',
+  'sanitiz',
+  'epa registered',
+  'epa #',
+  'epa reg',
+  'cleaner',
+  'degreas',
+  'rtu',
+  'ready-to-use',
+  'ready to use',
+  'concentrate',
+  'dilution ratio',
+  'mix ratio',
+  'hazard',
+  'ppe',
+  'first aid',
+  'ingredient',
+  'betco',
+  'dwell time',
+  'kill claim',
+  'norinse',
 ];
 
 function countSignalHits(text: string, signals: string[]): number {
@@ -75,12 +140,16 @@ export type SmeRouteDecision = {
   agent: SmeAgentId | null;
   productScore: number;
   bathroomScore: number;
+  dilutionScore: number;
+  floorScore: number;
   rationale: string;
 };
 
+type ScoreKey = 'product' | 'bathroom' | 'dilution' | 'floor';
+
 /**
- * Picks Product vs Bathroom SME from free text. Returns `agent: null` when
- * scores tie at zero or tie with each other (orchestrator should ask for clarification).
+ * Picks an SME from free text. Returns `agent: null` when no signals fire.
+ * When the top score is tied, prefers: dilution > floor > bathroom > product.
  */
 export function routeUserMessageToSme(message: string): SmeRouteDecision {
   const trimmed = message.trim();
@@ -90,45 +159,70 @@ export function routeUserMessageToSme(message: string): SmeRouteDecision {
       agent: null,
       productScore: 0,
       bathroomScore: 0,
+      dilutionScore: 0,
+      floorScore: 0,
       rationale: 'Empty message; cannot route.',
     };
   }
 
   const bathroomScore = countSignalHits(trimmed, BATHROOM_SIGNALS);
   const productScore = countSignalHits(trimmed, PRODUCT_SIGNALS);
+  const dilutionScore = countSignalHits(trimmed, DILUTION_SIGNALS);
+  const floorScore = countSignalHits(trimmed, FLOOR_SIGNALS);
 
-  if (bathroomScore === 0 && productScore === 0) {
+  const scores: Record<ScoreKey, number> = {
+    product: productScore,
+    bathroom: bathroomScore,
+    dilution: dilutionScore,
+    floor: floorScore,
+  };
+
+  const entries = (Object.entries(scores) as [ScoreKey, number][]).filter(
+    ([, s]) => s > 0,
+  );
+
+  if (entries.length === 0) {
     return {
       agent: null,
       productScore,
       bathroomScore,
+      dilutionScore,
+      floorScore,
       rationale:
-        'No bathroom or product keywords matched. Mention fixtures/layout for Bathroom, or SKU/specs/model for Product.',
+        'No specialist keywords matched. Mention a Betco product or SDS topic, restroom care, dilution control hardware, or floor maintenance procedures.',
     };
   }
 
-  if (bathroomScore > productScore) {
-    return {
-      agent: 'bathroom',
-      productScore,
-      bathroomScore,
-      rationale: `Bathroom signals (${bathroomScore}) outranked product signals (${productScore}).`,
-    };
+  const max = Math.max(...entries.map(([, s]) => s));
+  const winners = entries.filter(([, s]) => s === max) as [ScoreKey, number][];
+
+  /** When scores tie, prefer system/procedure specialists over broad catalog routing. */
+  const tieBreakOrder: ScoreKey[] = [
+    'dilution',
+    'floor',
+    'bathroom',
+    'product',
+  ];
+
+  let agent: ScoreKey = winners[0]![0];
+  for (const key of tieBreakOrder) {
+    if (winners.some(([k]) => k === key)) {
+      agent = key;
+      break;
+    }
   }
 
-  if (productScore > bathroomScore) {
-    return {
-      agent: 'product',
-      productScore,
-      bathroomScore,
-      rationale: `Product signals (${productScore}) outranked bathroom signals (${bathroomScore}).`,
-    };
-  }
+  const rationale =
+    winners.length > 1
+      ? `Tie at ${max} hits between ${winners.map(([k]) => k).join(', ')}; chose **${agent}** by priority (${tieBreakOrder.join(' > ')}).`
+      : `${agent} signals (${max}) won (product ${productScore}, bathroom ${bathroomScore}, dilution ${dilutionScore}, floor ${floorScore}).`;
 
   return {
-    agent: null,
+    agent,
     productScore,
     bathroomScore,
-    rationale: `Tie (${bathroomScore} bathroom vs ${productScore} product signals); ask a more specific question.`,
+    dilutionScore,
+    floorScore,
+    rationale,
   };
 }

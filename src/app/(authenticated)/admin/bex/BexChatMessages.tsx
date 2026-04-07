@@ -1,7 +1,8 @@
 'use client';
 
 import { Bot, Copy, Sparkles, User } from 'lucide-react';
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
+import ReactMarkdown, { type Components } from 'react-markdown';
 
 import { Avatar, AvatarFallback } from '~/components/ui/avatar';
 import { Badge } from '~/components/ui/badge';
@@ -24,6 +25,116 @@ function formatTime(ts: number) {
     hour: 'numeric',
     minute: '2-digit',
   }).format(new Date(ts));
+}
+
+function markdownComponentsForBubble(isUser: boolean): Components {
+  const linkClass = cn(
+    'wrap-break-word underline underline-offset-2',
+    isUser ? 'text-primary-foreground/90' : 'text-primary',
+  );
+  const inlineCode = cn(
+    'rounded px-1 py-0.5 text-[0.85em] font-mono',
+    isUser ? 'bg-primary-foreground/15' : 'bg-muted',
+  );
+  const blockPre = cn(
+    'mt-2 overflow-x-auto rounded-xl p-3 text-xs leading-relaxed first:mt-0',
+    isUser ? 'bg-primary-foreground/10' : 'bg-muted',
+  );
+  const blockCodeText = isUser ? 'text-primary-foreground' : 'text-foreground';
+
+  return {
+    p: ({ children }) => (
+      <p className="mt-2 wrap-break-word first:mt-0">{children}</p>
+    ),
+    strong: ({ children }) => (
+      <strong className="font-semibold">{children}</strong>
+    ),
+    em: ({ children }) => <em className="italic">{children}</em>,
+    ul: ({ children }) => (
+      <ul className="mt-2 list-disc space-y-1 pl-5 first:mt-0">{children}</ul>
+    ),
+    ol: ({ children }) => (
+      <ol className="mt-2 list-decimal space-y-1 pl-5 first:mt-0">
+        {children}
+      </ol>
+    ),
+    li: ({ children }) => <li className="wrap-break-word">{children}</li>,
+    a: ({ href, children }) => (
+      <a
+        className={linkClass}
+        href={href}
+        rel="noopener noreferrer"
+        target="_blank"
+      >
+        {children}
+      </a>
+    ),
+    code: ({ className, children, ...props }) => {
+      const isBlock = Boolean(className?.includes('language-'));
+      if (isBlock) {
+        return (
+          <code
+            className={cn('font-mono text-xs', blockCodeText, className)}
+            {...props}
+          >
+            {children}
+          </code>
+        );
+      }
+      return (
+        <code className={inlineCode} {...props}>
+          {children}
+        </code>
+      );
+    },
+    pre: ({ children }) => <pre className={blockPre}>{children}</pre>,
+    blockquote: ({ children }) => (
+      <blockquote
+        className={cn(
+          'mt-2 border-l-2 pl-3 italic first:mt-0',
+          isUser ? 'border-primary-foreground/40' : 'border-border',
+        )}
+      >
+        {children}
+      </blockquote>
+    ),
+    h1: ({ children }) => (
+      <h1 className="mt-3 text-base font-semibold first:mt-0">{children}</h1>
+    ),
+    h2: ({ children }) => (
+      <h2 className="mt-2 text-sm font-semibold first:mt-0">{children}</h2>
+    ),
+    h3: ({ children }) => (
+      <h3 className="mt-2 text-sm font-medium first:mt-0">{children}</h3>
+    ),
+    hr: () => (
+      <hr
+        className={cn(
+          'my-3 border-0 border-t',
+          isUser ? 'border-primary-foreground/25' : 'border-border/60',
+        )}
+      />
+    ),
+  };
+}
+
+function BexChatMessageBody({
+  content,
+  isUser,
+}: {
+  content: string;
+  isUser: boolean;
+}) {
+  const components = useMemo(
+    () => markdownComponentsForBubble(isUser),
+    [isUser],
+  );
+
+  return (
+    <div className="mt-2">
+      <ReactMarkdown components={components}>{content}</ReactMarkdown>
+    </div>
+  );
 }
 
 export function BexChatMessages({
@@ -59,10 +170,10 @@ export function BexChatMessages({
           </h1>
           <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
             The orchestrator runs the <code className="text-xs">bex-chat</code>{' '}
-            workflow, routes to the <strong>Product</strong> or{' '}
-            <strong>Bathroom</strong> SME from your wording, and the reply shows
-            routing scores plus an acknowledgement from the selected SME (stubs for
-            now).
+            workflow, routes to the <strong>Product</strong> SME or{' '}
+            <strong>Bathroom specialist</strong> (restroom care) from your wording,
+            and the reply shows routing scores plus an acknowledgement from the
+            selected agent (stubs for now).
           </p>
           <Badge className="mt-4 rounded-full" variant="secondary">
             Admin · orchestrator · local chat history
@@ -153,9 +264,7 @@ export function BexChatMessages({
                     {formatTime(m.createdAt)}
                   </span>
                 </div>
-                <p className="mt-2 whitespace-pre-wrap break-words">
-                  {m.content}
-                </p>
+                <BexChatMessageBody content={m.content} isUser={isUser} />
                 {!isUser ? (
                   <div className="mt-3 flex justify-end border-t border-border/40 pt-2">
                     <Button

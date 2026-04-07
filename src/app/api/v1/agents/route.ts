@@ -9,16 +9,30 @@ const REGISTRY = [
   {
     id: 'product',
     path: '/api/v1/agents/product',
-    label: 'Product SME',
+    label: 'Betco Product Specialist',
     description:
-      'Product specifications, comparisons, and catalog-aligned guidance (stub).',
+      'Betco product facts, SDS (non-medical), compatibility, catalogs; handoffs to Dilution/Floor when needed (stub).',
+  },
+  {
+    id: 'dilution',
+    path: '/api/v1/agents/dilution',
+    label: 'Dilution Control Specialist',
+    description:
+      'Dispenser calibration, proportioners, metering tips, and setup from approved charts (stub).',
+  },
+  {
+    id: 'floor',
+    path: '/api/v1/agents/floor',
+    label: 'Floor Care Specialist',
+    description:
+      'Stripping, finishing, burnishing, and floor maintenance programs (stub).',
   },
   {
     id: 'bathroom',
     path: '/api/v1/agents/bathroom',
-    label: 'Bathroom SME',
+    label: 'Bathroom specialist',
     description:
-      'Bathroom layouts, fixtures, and project-scoping notes (stub).',
+      'Restroom cleaning, disinfection, odor control, floor care, and Betco product/procedure guidance (stub).',
   },
 ] as const;
 

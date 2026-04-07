@@ -1,4 +1,7 @@
-import type { OrchestrationRunResult } from '~/lib/orchestrator/run-orchestration';
+import {
+  bexOrchestrateOkResponseSchema,
+  type OrchestrationRunResult,
+} from '~/lib/orchestrator/orchestrator-schemas';
 
 export type BexOrchestrateResponse = { ok: true } & OrchestrationRunResult;
 
@@ -9,11 +12,12 @@ export function formatOrchestratorReply(payload: OrchestrationRunResult): string
   ];
 
   if (payload.routing) {
+    const r = payload.routing;
     lines.push(
       '**Orchestrator routing**',
-      `- **Decision:** \`${payload.routing.decision}\``,
-      `- **Scores:** product ${payload.routing.productScore} · bathroom ${payload.routing.bathroomScore}`,
-      `- **Rationale:** ${payload.routing.rationale}`,
+      `- **Decision:** \`${r.decision}\``,
+      `- **Scores:** product ${r.productScore} · bathroom ${r.bathroomScore} · dilution ${r.dilutionScore} · floor ${r.floorScore}`,
+      `- **Rationale:** ${r.rationale}`,
       '',
     );
   }
@@ -28,6 +32,22 @@ export function formatOrchestratorReply(payload: OrchestrationRunResult): string
       }
       lines.push('');
     }
+
+    if (payload.sme.sessionContextGuide.length > 0) {
+      lines.push('**Recommended session `context` keys**');
+      for (const line of payload.sme.sessionContextGuide) {
+        lines.push(`- ${line}`);
+      }
+      lines.push('');
+    }
+
+    lines.push(
+      '**SME system prompt**',
+      '```text',
+      payload.sme.systemPrompt,
+      '```',
+      '',
+    );
   }
 
   lines.push('**Steps**');
@@ -50,6 +70,8 @@ export function formatOrchestratorReply(payload: OrchestrationRunResult): string
               agent: payload.sme.agent,
               label: payload.sme.label,
               focusAreas: payload.sme.focusAreas,
+              sessionContextGuide: payload.sme.sessionContextGuide,
+              systemPrompt: payload.sme.systemPrompt,
               smeSteps: payload.sme.steps,
             }
           : undefined,
@@ -79,31 +101,23 @@ export async function callBexOrchestrate(options: {
     }),
   });
 
-  const data = (await res.json()) as
-    | BexOrchestrateResponse
-    | { error?: string };
+  const data: unknown = await res.json();
 
   if (!res.ok) {
-    throw new Error(
-      typeof data === 'object' && data && 'error' in data && data.error
-        ? String(data.error)
-        : `Orchestrator request failed (${res.status})`,
-    );
+    const err =
+      data &&
+      typeof data === 'object' &&
+      'error' in data &&
+      typeof (data as { error?: unknown }).error === 'string'
+        ? (data as { error: string }).error
+        : `Orchestrator request failed (${res.status})`;
+    throw new Error(err);
   }
 
-  if (
-    !('ok' in data) ||
-    !data.ok ||
-    !('workflow' in data) ||
-    !('steps' in data) ||
-    !('input' in data)
-  ) {
+  const parsed = bexOrchestrateOkResponseSchema.safeParse(data);
+  if (!parsed.success) {
     throw new Error('Unexpected response from orchestrator');
   }
 
-  return formatOrchestratorReply({
-    workflow: data.workflow,
-    input: data.input,
-    steps: data.steps,
-  });
+  return formatOrchestratorReply(parsed.data);
 }

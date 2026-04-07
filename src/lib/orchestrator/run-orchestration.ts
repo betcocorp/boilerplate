@@ -1,63 +1,34 @@
-import { runSmeAgent } from '~/lib/agents/sme/run-sme-agent';
-import type { SmeAgentId } from '~/lib/agents/sme/types';
+import {
+  BATHROOM_AGENT_CONTEXT_KEYS,
+  runSmeAgent,
+} from '~/lib/agents/sme/run-sme-agent';
 
 import { routeUserMessageToSme } from '~/lib/orchestrator/sme-routing';
+import { bexChatOrchestrationInputSchema } from '~/lib/orchestrator/orchestrator-schemas';
 
-export type OrchestratorStep =
-  | { id: string; status: 'completed'; note?: string }
-  | { id: string; status: 'pending'; note?: string };
+export type {
+  OrchestrationRouting,
+  OrchestrationRunResult,
+  OrchestrationSmePayload,
+  OrchestratorStep,
+} from './orchestrator-schemas';
 
-export type OrchestrationRouting = {
-  decision: SmeAgentId | 'ambiguous';
-  productScore: number;
-  bathroomScore: number;
-  rationale: string;
-};
-
-export type OrchestrationSmePayload = {
-  agent: SmeAgentId;
-  label: string;
-  acknowledgement: string;
-  focusAreas: string[];
-  steps: OrchestratorStep[];
-};
-
-export type OrchestrationRunResult = {
-  workflow: string;
-  input: unknown;
-  steps: OrchestratorStep[];
-  routing?: OrchestrationRouting;
-  sme?: OrchestrationSmePayload;
-};
-
-function extractChatMessage(input: unknown): string {
-  if (!input || typeof input !== 'object' || Array.isArray(input)) {
-    return '';
-  }
-
-  const msg = (input as Record<string, unknown>).message;
-
-  return typeof msg === 'string' ? msg.trim() : '';
-}
-
-function extractModel(input: unknown): string | undefined {
-  if (!input || typeof input !== 'object' || Array.isArray(input)) {
-    return undefined;
-  }
-
-  const model = (input as Record<string, unknown>).model;
-
-  return typeof model === 'string' ? model : undefined;
-}
+import type {
+  OrchestrationRouting,
+  OrchestrationRunResult,
+  OrchestratorStep,
+} from './orchestrator-schemas';
 
 function runBexChatOrchestration(input: unknown): OrchestrationRunResult {
-  const message = extractChatMessage(input);
+  const { message, model } = bexChatOrchestrationInputSchema.parse(input);
   const route = routeUserMessageToSme(message);
 
   const routing: OrchestrationRouting = {
     decision: route.agent ?? 'ambiguous',
     productScore: route.productScore,
     bathroomScore: route.bathroomScore,
+    dilutionScore: route.dilutionScore,
+    floorScore: route.floorScore,
     rationale: route.rationale,
   };
 
@@ -67,7 +38,7 @@ function runBexChatOrchestration(input: unknown): OrchestrationRunResult {
       status: 'completed',
       note: route.agent
         ? `Selected **${route.agent}** SME. ${route.rationale}`
-        : `No single SME selected. ${route.rationale}`,
+        : `Could not route to a specialist. ${route.rationale}`,
     },
   ];
 
@@ -76,7 +47,7 @@ function runBexChatOrchestration(input: unknown): OrchestrationRunResult {
       id: 'invoke-sme-agent',
       status: 'pending',
       note:
-        'Ask a clearer Product (SKU, specs, model) or Bathroom (vanity, shower, layout) question.',
+        'Ask a clearer question: Betco product / SDS, restroom care, dilution control hardware, or floor maintenance procedures.',
     });
 
     return {
@@ -91,16 +62,27 @@ function runBexChatOrchestration(input: unknown): OrchestrationRunResult {
     query: message,
     context: {
       source: 'bex-orchestrator',
-      model: extractModel(input),
+      ...(model !== undefined ? { model } : {}),
     },
   });
 
   const acknowledgement = [
     `${smeResult.label} **received your request** (orchestrator routed correctly).`,
-    `Stub pipeline only — next steps are RAG + LLM answer.`,
+    `Stub pipeline only — next steps are RAG + LLM answer with the SME system prompt and confidence gating.`,
+    smeResult.sessionContextGuide.length > 0
+      ? `**Session context (recommended):** ${(
+          smeResult.agent === 'bathroom'
+            ? BATHROOM_AGENT_CONTEXT_KEYS
+            : smeResult.sessionContextGuide.map((line) =>
+                line.replace(/^`([^`]+)`.*/, '$1'),
+              )
+        ).join(', ')} in \`context\` when calling the agent.`
+      : '',
     '',
     `**Your question:** ${message}`,
-  ].join('\n');
+  ]
+    .filter((line) => line !== '')
+    .join('\n');
 
   steps.push(
     {
@@ -124,13 +106,15 @@ function runBexChatOrchestration(input: unknown): OrchestrationRunResult {
       label: smeResult.label,
       acknowledgement,
       focusAreas: smeResult.focusAreas,
+      systemPrompt: smeResult.systemPrompt,
+      sessionContextGuide: smeResult.sessionContextGuide,
       steps: smeResult.steps,
     },
   };
 }
 
 /**
- * Orchestration entry: for `bex-chat`, routes to Product or Bathroom SME stubs
+ * Orchestration entry: for `bex-chat`, routes to Product, Bathroom, Dilution, or Floor specialist stubs
  * so you can validate end-to-end behavior before adding LLM/RAG.
  */
 export function runOrchestration(
