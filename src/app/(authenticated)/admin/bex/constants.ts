@@ -1,6 +1,6 @@
 export const BEX_SUGGESTIONS = [
-  'Summarize the differences between our floor cleaners and disinfectants.',
-  'What safety data should I include for a peroxide-based product page?',
-  'Draft a short FAQ for dilution ratios on concentrate SKUs.',
-  'List compliance checkpoints before publishing updated SDS copy.',
+  'Product: Compare model specs and dimensions for two SKUs in the same line.',
+  'Product: What warranty and compatibility notes belong on this catalog page?',
+  'Bathroom: We have a 5x8 guest bath — vanity and shower layout ideas?',
+  'Bathroom: Standard rough-in for toilet and vanity drain in a remodel?',
 ] as const;

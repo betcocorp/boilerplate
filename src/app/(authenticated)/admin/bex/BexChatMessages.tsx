@@ -58,10 +58,11 @@ export function BexChatMessages({
             Bex assistant
           </h1>
           <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-            Messages are sent to the server orchestrator
-            (`/api/bex/orchestrate`), which shares the same core as
-            `/api/v1/orchestrator`. Replies show the workflow run and step
-            status until you add LLM narration on top.
+            The orchestrator runs the <code className="text-xs">bex-chat</code>{' '}
+            workflow, routes to the <strong>Product</strong> or{' '}
+            <strong>Bathroom</strong> SME from your wording, and the reply shows
+            routing scores plus an acknowledgement from the selected SME (stubs for
+            now).
           </p>
           <Badge className="mt-4 rounded-full" variant="secondary">
             Admin · orchestrator · local chat history
