@@ -32,7 +32,6 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
 
   const resolvedSearchParams = await searchParams;
   const query = readSearchParam(resolvedSearchParams.q);
-  const variantProductKey = readSearchParam(resolvedSearchParams.productKey);
   const productLineKey = readSearchParam(resolvedSearchParams.productLineKey);
   let similaritySummary = '';
   const requestedLimit = Number.parseInt(
@@ -52,7 +51,6 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
       result = await searchProductChunks({
         query,
         limit,
-        productKey: variantProductKey || undefined,
         productLineKey: productLineKey || undefined,
       });
 
@@ -81,14 +79,13 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
             </h1>
             <p className="max-w-3xl text-base leading-7 text-slate-600">
               Retrieval is one document per legacy product line. Chunks include
-              rolled-up size variants; filters can target a line or a specific
-              variant product key.
+              rolled-up size variants; filters only target product line keys.
             </p>
           </div>
 
           <form
             action={SEARCH_ROUTE}
-            className="mt-8 grid gap-3 lg:grid-cols-[minmax(0,1.8fr)_minmax(180px,0.8fr)_minmax(180px,0.8fr)_120px_auto]"
+            className="mt-8 grid gap-3 lg:grid-cols-[minmax(0,1.8fr)_minmax(220px,0.8fr)_120px_auto]"
             method="get"
           >
             <input
@@ -97,13 +94,6 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
               name="q"
               placeholder="Ask something like: peroxide bathroom disinfectant"
               type="search"
-            />
-            <input
-              className="h-12 rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none ring-0 transition focus:border-sky-500"
-              defaultValue={variantProductKey}
-              name="productKey"
-              placeholder="Optional variant product key"
-              type="text"
             />
             <input
               className="h-12 rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none ring-0 transition focus:border-sky-500"
@@ -144,11 +134,9 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
                 {similaritySummary ? ` Similarity range: ${similaritySummary}.` : ''}
               </div>
               <div className="text-sm text-slate-600">
-                {result.productKey
-                  ? `Filtered to lines containing variant ${result.productKey}.`
-                  : result.productLineKey
-                    ? `Filtered to product line ${result.productLineKey}.`
-                    : 'No metadata filter applied.'}
+                {result.productLineKey
+                  ? `Filtered to product line ${result.productLineKey}.`
+                  : 'No metadata filter applied.'}
               </div>
             </section>
 
@@ -219,8 +207,7 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
         ) : (
           <section className="rounded-3xl border border-dashed border-slate-300 bg-white p-8 text-sm leading-7 text-slate-600">
             Enter a natural-language query to test vector similarity against
-            product line chunks. Optional filters: product line key, or a variant
-            `ProductsKey` to match lines that include that size/SKU row.
+            product line chunks. Optional filter: product line key.
           </section>
         )}
       </main>

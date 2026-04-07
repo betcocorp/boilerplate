@@ -9,7 +9,6 @@ export const maxDuration = 300;
 type RequestBody = {
   query?: unknown;
   limit?: unknown;
-  productKey?: unknown;
   productLineKey?: unknown;
   model?: unknown;
 };
@@ -54,7 +53,6 @@ export async function POST(request: Request) {
     const result = await searchProductChunks({
       query: typeof body.query === 'string' ? body.query : '',
       limit: toPositiveInteger(body.limit),
-      productKey: typeof body.productKey === 'string' ? body.productKey : undefined,
       productLineKey:
         typeof body.productLineKey === 'string'
           ? body.productLineKey
