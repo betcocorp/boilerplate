@@ -8,7 +8,7 @@ import { toast } from 'sonner';
 import {
   type GenerateActionState,
   runGenerateAction,
-} from '~/app/(authenticated)/admin/products/rag/generate/actions';
+} from '~/lib/rag/generate-actions';
 
 const initialGenerateActionState: GenerateActionState = {
   ok: false,

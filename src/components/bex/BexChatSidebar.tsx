@@ -18,7 +18,7 @@ import {
 import { Input } from '~/components/ui/input';
 import { cn } from '~/lib/utils';
 
-import type { Conversation } from './types';
+import type { Conversation } from '~/types/bex';
 
 type BexChatSidebarProps = {
   conversations: Conversation[];

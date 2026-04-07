@@ -1,4 +1,4 @@
-import type { Conversation } from './types';
+import type { Conversation } from '~/types/bex';
 
 const STORAGE_KEY = 'bex.admin.sessions.v1';
 
@@ -36,3 +36,4 @@ export function createConversation(): Conversation {
     messages: [],
   };
 }
+// bauer xr - ccm

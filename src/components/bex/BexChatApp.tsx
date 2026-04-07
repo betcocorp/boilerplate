@@ -6,14 +6,17 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button } from '~/components/ui/button';
 import { cn } from '~/lib/utils';
 
+import { BexChatComposer } from '~/components/bex/BexChatComposer';
+import { BexChatMessages } from '~/components/bex/BexChatMessages';
+import { BexChatSidebar } from '~/components/bex/BexChatSidebar';
+import { BEX_SUGGESTIONS } from '~/lib/bex/constants';
 import { callBexOrchestrate } from '~/lib/bex/orchestrator-client';
-import { BexChatComposer } from './BexChatComposer';
-import { BexChatMessages } from './BexChatMessages';
-import { BexChatSidebar } from './BexChatSidebar';
-
-import { BEX_SUGGESTIONS } from './constants';
-import { createConversation, loadSessions, saveSessions } from './sessions';
-import type { ChatMessage, Conversation } from './types';
+import {
+  createConversation,
+  loadSessions,
+  saveSessions,
+} from '~/lib/bex/sessions';
+import type { ChatMessage, Conversation } from '~/types/bex';
 
 export function BexChatApp() {
   const [hydrated, setHydrated] = useState(false);
@@ -250,7 +253,7 @@ export function BexChatApp() {
             isTyping={isTyping}
             messages={messages}
             onStartEmptyChat={handleNewChat}
-            onSuggestion={(text) => {
+            onSuggestion={(text: string) => {
               void sendUserText(text);
             }}
             showWelcome={showFullWelcome}

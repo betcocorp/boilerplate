@@ -9,8 +9,8 @@ import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
 import { cn } from '~/lib/utils';
 
-import { BEX_SUGGESTIONS } from './constants';
-import type { ChatMessage } from './types';
+import { BEX_SUGGESTIONS } from '~/lib/bex/constants';
+import type { ChatMessage } from '~/types/bex';
 
 type BexChatMessagesProps = {
   messages: ChatMessage[];
@@ -171,9 +171,9 @@ export function BexChatMessages({
           <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
             The orchestrator runs the <code className="text-xs">bex-chat</code>{' '}
             workflow, routes to the <strong>Product</strong> SME or{' '}
-            <strong>Bathroom specialist</strong> (restroom care) from your wording,
-            and the reply shows routing scores plus an acknowledgement from the
-            selected agent (stubs for now).
+            <strong>Bathroom specialist</strong> (restroom care) from your
+            wording, and the reply shows routing scores plus an acknowledgement
+            from the selected agent (stubs for now).
           </p>
           <Badge className="mt-4 rounded-full" variant="secondary">
             Admin · orchestrator · local chat history
