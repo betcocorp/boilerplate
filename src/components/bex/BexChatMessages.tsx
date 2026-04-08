@@ -275,7 +275,7 @@ export function BexChatMessages({
                     </span>
                   </div>
                   <BexChatMessageBody content={m.content} isUser={isUser} />
-                  {!isUser ? (
+                  {!isUser && (
                     <div className="mt-3 flex justify-end border-t border-border/40 pt-2">
                       <Button
                         aria-label="Copy message"
@@ -289,14 +289,14 @@ export function BexChatMessages({
                         Copy
                       </Button>
                     </div>
-                  ) : null}
+                  )}
                 </div>
               </div>
             </div>
           );
         })}
 
-        {isTyping ? (
+        {isTyping && (
           <div className="flex gap-3">
             <Avatar className="size-9 shrink-0">
               <AvatarFallback className="bg-muted text-muted-foreground">
@@ -311,7 +311,7 @@ export function BexChatMessages({
               </div>
             </div>
           </div>
-        ) : null}
+        )}
 
         <div ref={endRef} />
       </div>
