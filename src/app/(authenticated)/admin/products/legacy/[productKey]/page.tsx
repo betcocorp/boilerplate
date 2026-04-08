@@ -470,7 +470,10 @@ export default async function ProductDetailsPage({
   }
 
   const techSpecDefKeys = getUniqueStrings(
-    (techSpecsResponse.data ?? []).map((techSpec) => techSpec.TechSpecDefKey),
+    (techSpecsResponse.data ?? []).map(
+      (techSpec) =>
+        (techSpec as { TechSpecDefKey?: string | null }).TechSpecDefKey,
+    ),
   );
   const techSpecDefinitionsResponse =
     techSpecDefKeys.length > 0

@@ -7,8 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "types:supabase:legacy": "npx supabase gen types typescript --project-id wjccptcngczgqtsrvxyk --schema legacy > src/types/supabase.legacy.ts",
-    "types:supabase:rag": "npx supabase gen types typescript --project-id wjccptcngczgqtsrvxyk --schema rag > src/types/supabase.rag.ts"
+    "types:supabase:legacy": "npx supabase gen types typescript --project-id gbkobtatfsjibkxebvdw --schema legacy > src/types/supabase.legacy.ts",
+    "types:supabase:rag": "npx supabase gen types typescript --project-id gbkobtatfsjibkxebvdw --schema rag > src/types/supabase.rag.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.101.1",

@@ -6,10 +6,38 @@ import {
 export type BexOrchestrateResponse = { ok: true } & OrchestrationRunResult;
 
 export function formatOrchestratorReply(payload: OrchestrationRunResult): string {
-  const lines: string[] = [
-    `**Workflow:** ${payload.workflow}`,
-    '',
-  ];
+  if (payload.productSupport) {
+    const p = payload.productSupport;
+    const lines = [
+      p.answerText,
+      '',
+      `**Confidence:** ${p.confidence ?? 'n/a'}`,
+      `**Validator:** ${p.validation.approved ? 'approved' : 'not approved'}${p.validation.requires_human_review ? ' · human review' : ''}`,
+    ];
+
+    if (p.validation.issues.length > 0) {
+      lines.push('', '**Validator issues**');
+      for (const issue of p.validation.issues) {
+        lines.push(`- ${issue}`);
+      }
+    }
+
+    if (p.sources && p.sources.length > 0) {
+      lines.push('', '**Sources**');
+      for (const s of p.sources.slice(0, 12)) {
+        lines.push(`- \`${s.documentId}\` — ${s.title}`);
+      }
+    }
+
+    lines.push(
+      '',
+      `**Conversation:** \`${p.conversationId}\` · **Run:** \`${p.workflowRunId}\` · **Response:** \`${p.latestOpenaiResponseId}\``,
+    );
+
+    return lines.join('\n');
+  }
+
+  const lines: string[] = [`**Workflow:** ${payload.workflow}`, ''];
 
   if (payload.routing) {
     const r = payload.routing;
@@ -24,64 +52,13 @@ export function formatOrchestratorReply(payload: OrchestrationRunResult): string
 
   if (payload.sme) {
     lines.push(`### ${payload.sme.label}`, '', payload.sme.acknowledgement, '');
-
-    if (payload.sme.focusAreas.length > 0) {
-      lines.push('**SME focus (stub)**');
-      for (const area of payload.sme.focusAreas) {
-        lines.push(`- ${area}`);
-      }
-      lines.push('');
-    }
-
-    if (payload.sme.sessionContextGuide.length > 0) {
-      lines.push('**Recommended session `context` keys**');
-      for (const line of payload.sme.sessionContextGuide) {
-        lines.push(`- ${line}`);
-      }
-      lines.push('');
-    }
-
-    lines.push(
-      '**SME system prompt**',
-      '```text',
-      payload.sme.systemPrompt,
-      '```',
-      '',
-    );
   }
 
   lines.push('**Steps**');
-
   for (const step of payload.steps) {
-    const suffix =
-      'note' in step && step.note ? ` — ${step.note}` : '';
+    const suffix = 'note' in step && step.note ? ` — ${step.note}` : '';
     lines.push(`- **${step.id}** (${step.status})${suffix}`);
   }
-
-  lines.push(
-    '',
-    '```json',
-    JSON.stringify(
-      {
-        input: payload.input,
-        routing: payload.routing,
-        sme: payload.sme
-          ? {
-              agent: payload.sme.agent,
-              label: payload.sme.label,
-              focusAreas: payload.sme.focusAreas,
-              sessionContextGuide: payload.sme.sessionContextGuide,
-              systemPrompt: payload.sme.systemPrompt,
-              smeSteps: payload.sme.steps,
-            }
-          : undefined,
-        steps: payload.steps,
-      },
-      null,
-      2,
-    ),
-    '```',
-  );
 
   return lines.join('\n');
 }
@@ -90,6 +67,7 @@ export async function callBexOrchestrate(options: {
   message: string;
   model: string;
   workflow?: string;
+  conversationId?: string;
 }): Promise<string> {
   const res = await fetch('/api/v1/orchestrator', {
     method: 'POST',
@@ -98,6 +76,9 @@ export async function callBexOrchestrate(options: {
       message: options.message,
       model: options.model,
       workflow: options.workflow ?? 'bex-chat',
+      ...(options.conversationId
+        ? { conversationId: options.conversationId }
+        : {}),
     }),
   });
 
