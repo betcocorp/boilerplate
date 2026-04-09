@@ -292,13 +292,11 @@ async function getCachedOrNewEmbedding(
 }> {
   const startedAt = nowMs();
   const supabase = getSupabaseServiceRoleClient();
-  const rewriteStartedAt = nowMs();
-  const rewrittenQuery = await rewriteQueryWithOpenAI(query);
-  const queryRewriteMs = elapsedMs(rewriteStartedAt);
   const normalizedQueryString = query.trim().replace(/\s+/g, ' ');
   let cacheLookupMs = 0;
   let embeddingCreateMs = 0;
   let cachePersistMs = 0;
+  let queryRewriteMs = 0;
 
   const exactLookupStartedAt = nowMs();
   const { data: exactRows, error: exactLookupError } = await supabase
@@ -329,7 +327,6 @@ async function getCachedOrNewEmbedding(
       .schema('rag')
       .from('search_embedding')
       .update({
-        query_rewritten: rewrittenQuery,
         query_count: (exact.query_count ?? 0) + 1,
       })
       .eq('id', exact.id);
@@ -356,23 +353,37 @@ async function getCachedOrNewEmbedding(
     };
   }
 
-  const rewrittenLookupStartedAt = nowMs();
-  const { data: existingRow, error: existingError } = await supabase
-    .schema('rag')
-    .from('search_embedding')
-    .select(
-      'id, query_string, query_rewritten, embeddings, query_count, timing_sample_count, avg_total_search_ms, avg_query_embedding_ms, avg_query_rewrite_ms, avg_cache_lookup_ms, avg_embedding_create_ms, avg_cache_persist_ms, avg_similarity_search_ms',
-    )
-    .eq('query_rewritten', rewrittenQuery)
-    .is('deleted_at', null)
-    .maybeSingle();
-  cacheLookupMs += elapsedMs(rewrittenLookupStartedAt);
+  let rewrittenQuery = exact?.query_rewritten
+    ? normalizeRewrittenQuery(exact.query_rewritten)
+    : null;
+  let existing = exact;
 
-  if (existingError) {
-    throw new Error(`Failed to lookup cached query embedding: ${existingError.message}`);
+  if (!existing) {
+    const rewriteStartedAt = nowMs();
+    rewrittenQuery = await rewriteQueryWithOpenAI(query);
+    queryRewriteMs = elapsedMs(rewriteStartedAt);
+
+    const rewrittenLookupStartedAt = nowMs();
+    const { data: existingRow, error: existingError } = await supabase
+      .schema('rag')
+      .from('search_embedding')
+      .select(
+        'id, query_string, query_rewritten, embeddings, query_count, timing_sample_count, avg_total_search_ms, avg_query_embedding_ms, avg_query_rewrite_ms, avg_cache_lookup_ms, avg_embedding_create_ms, avg_cache_persist_ms, avg_similarity_search_ms',
+      )
+      .eq('query_rewritten', rewrittenQuery)
+      .is('deleted_at', null)
+      .maybeSingle();
+    cacheLookupMs += elapsedMs(rewrittenLookupStartedAt);
+
+    if (existingError) {
+      throw new Error(
+        `Failed to lookup cached query embedding: ${existingError.message}`,
+      );
+    }
+
+    existing = (existingRow ?? null) as SearchEmbeddingRow | null;
   }
 
-  const existing = (existingRow ?? null) as SearchEmbeddingRow | null;
   const cachedEmbedding = parseVectorEmbedding(existing?.embeddings ?? null);
 
   if (existing && cachedEmbedding) {
@@ -397,7 +408,7 @@ async function getCachedOrNewEmbedding(
       row: existing,
       embedding: cachedEmbedding,
       model: resolvedModel,
-      source: 'rewritten-cache-hit',
+      source: existing.id === exact?.id ? 'exact-cache-hit' : 'rewritten-cache-hit',
       timings: {
         queryEmbeddingMs: elapsedMs(startedAt),
         queryRewriteMs,
