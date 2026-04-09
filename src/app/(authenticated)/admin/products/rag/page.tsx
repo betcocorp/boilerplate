@@ -1,52 +1,13 @@
 import Link from 'next/link';
 import { connection } from 'next/server';
-import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
-type JsonObject = Record<string, unknown>;
+import { searchProductChunks } from '~/lib/rag/search';
 
-type RagDocument = {
-  id: string;
-  document_key: string;
-  source_record_id: string;
-  entity_id: string | null;
-  document_kind: string;
-  title: string;
-  language_code: string;
-  body_text: string;
-  summary: string | null;
-  token_count: number | null;
-  metadata: JsonObject | null;
-  updated_at: string;
+const SEARCH_ROUTE = '/admin/products/rag';
+
+type SearchPageProps = {
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
 };
-
-type RagEntity = {
-  id: string;
-  entity_type: string;
-  canonical_key: string;
-  title: string | null;
-  sku: string | null;
-  product_key: string | null;
-  product_line_key: string | null;
-  metadata: JsonObject | null;
-};
-
-type RagSourceRecord = {
-  id: string;
-  source_pk: string;
-  source_type: string;
-  source_locale: string;
-  is_active: boolean;
-};
-
-type RagSearchResult = {
-  document: RagDocument;
-  entity: RagEntity | null;
-  sourceRecord: RagSourceRecord | null;
-};
-
-const PRODUCTS_ROUTE = '/admin/products/rag';
-const RESULT_LIMIT = 24;
-const PAGE_LINK_WINDOW = 5;
 
 function readSearchParam(value: string | string[] | undefined, fallback = '') {
   if (Array.isArray(value)) {
@@ -56,255 +17,128 @@ function readSearchParam(value: string | string[] | undefined, fallback = '') {
   return value ?? fallback;
 }
 
-function normalizeSearchTerm(value: string) {
-  return value
-    .trim()
-    .replaceAll(',', ' ')
-    .replaceAll('%', '')
-    .replaceAll('(', '')
-    .replaceAll(')', '');
+function truncateText(value: string, maxLength = 320) {
+  const trimmed = value.trim();
+
+  if (trimmed.length <= maxLength) {
+    return trimmed;
+  }
+
+  return `${trimmed.slice(0, maxLength - 3)}...`;
 }
 
-function buildProductsHref(query: string, page: number) {
-  const params = new URLSearchParams();
-
-  if (query) {
-    params.set('q', query);
+function formatDurationMs(value: number) {
+  if (value >= 1000) {
+    return `${(value / 1000).toFixed(2)}s`;
   }
 
-  if (page > 1) {
-    params.set('page', String(page));
+  return `${Math.round(value)}ms`;
+}
+
+function formatEmbeddingSource(
+  value: 'exact-cache-hit' | 'rewritten-cache-hit' | 'new-embedding',
+) {
+  if (value === 'exact-cache-hit') {
+    return 'Exact cache hit';
   }
 
-  const queryString = params.toString();
+  if (value === 'rewritten-cache-hit') {
+    return 'Rewritten cache hit';
+  }
 
-  return queryString ? `${PRODUCTS_ROUTE}?${queryString}` : PRODUCTS_ROUTE;
+  return 'New embedding';
 }
 
 function buildProductLineDetailHref(
   productLineKey: string,
-  query: string,
-  page: number,
+  options: {
+    query: string;
+    productLineKey: string;
+    limit: number;
+    minSimilarity: string;
+  },
 ) {
   const params = new URLSearchParams();
 
-  if (query) {
-    params.set('q', query);
+  if (options.query) {
+    params.set('q', options.query);
   }
 
-  if (page > 1) {
-    params.set('page', String(page));
+  if (options.productLineKey) {
+    params.set('productLineKey', options.productLineKey);
+  }
+
+  if (options.limit > 0) {
+    params.set('limit', String(options.limit));
+  }
+
+  if (options.minSimilarity) {
+    params.set('minSimilarity', options.minSimilarity);
   }
 
   const queryString = params.toString();
-  const detailPath = `${PRODUCTS_ROUTE}/${encodeURIComponent(productLineKey)}`;
+  const detailPath = `${SEARCH_ROUTE}/${encodeURIComponent(productLineKey)}`;
 
   return queryString ? `${detailPath}?${queryString}` : detailPath;
 }
 
-function buildPagination(currentPage: number, totalPages: number) {
-  const halfWindow = Math.floor(PAGE_LINK_WINDOW / 2);
-  let start = Math.max(1, currentPage - halfWindow);
-  const end = Math.min(totalPages, start + PAGE_LINK_WINDOW - 1);
+function parseMinSimilarity(value: string | string[] | undefined) {
+  const raw = readSearchParam(value).trim();
 
-  start = Math.max(1, end - PAGE_LINK_WINDOW + 1);
-
-  return Array.from({ length: end - start + 1 }, (_, index) => start + index);
-}
-
-function isJsonObject(value: unknown): value is JsonObject {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function getMetadataValue(metadata: JsonObject | null | undefined, key: string) {
-  if (!metadata || !(key in metadata)) {
+  if (!raw) {
     return null;
   }
 
-  const value = metadata[key];
+  const parsed = Number.parseFloat(raw);
 
-  return typeof value === 'string' && value.trim() ? value : null;
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return null;
+  }
+
+  return parsed > 1 ? Math.min(parsed / 100, 1) : Math.min(parsed, 1);
 }
 
-function getProductLineKey(result: RagSearchResult) {
-  return (
-    result.entity?.product_line_key ||
-    getMetadataValue(result.document.metadata, 'product_line_key') ||
-    result.sourceRecord?.source_pk ||
-    null
-  );
-}
-
-function getSummary(result: RagSearchResult) {
-  const summary =
-    result.document.summary?.trim() ||
-    getMetadataValue(result.document.metadata, 'title') ||
-    result.document.body_text.trim();
-
-  return summary.length > 220 ? `${summary.slice(0, 217)}...` : summary;
-}
-
-type ProductsPageProps = {
-  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
-};
-
-export default async function RagProductsPage({
-  searchParams,
-}: ProductsPageProps) {
+export default async function RagSearchPage({ searchParams }: SearchPageProps) {
   await connection();
 
   const resolvedSearchParams = await searchParams;
-  const searchValue = readSearchParam(resolvedSearchParams.q);
-  const normalizedSearchValue = normalizeSearchTerm(searchValue);
-  const requestedPage = Number.parseInt(
-    readSearchParam(resolvedSearchParams.page, '1'),
+  const query = readSearchParam(resolvedSearchParams.q);
+  const productLineKey = readSearchParam(resolvedSearchParams.productLineKey);
+  const rawMinSimilarity = readSearchParam(resolvedSearchParams.minSimilarity);
+  const minSimilarity = parseMinSimilarity(resolvedSearchParams.minSimilarity);
+  let similaritySummary = '';
+  const requestedLimit = Number.parseInt(
+    readSearchParam(resolvedSearchParams.limit, '8'),
     10,
   );
-  const currentPage =
-    Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : 1;
-  const rangeStart = (currentPage - 1) * RESULT_LIMIT;
-  const rangeEnd = rangeStart + RESULT_LIMIT - 1;
+  const limit =
+    Number.isFinite(requestedLimit) && requestedLimit > 0
+      ? Math.min(requestedLimit, 20)
+      : 8;
 
-  const supabase = getSupabaseServiceRoleClient();
-  const rag = supabase.schema('rag');
-  const documentSelection =
-    'id, document_key, source_record_id, entity_id, document_kind, title, language_code, body_text, summary, token_count, metadata, updated_at';
-
-  let results: RagSearchResult[] = [];
   let error: string | null = null;
-  let totalCount = 0;
+  let result: Awaited<ReturnType<typeof searchProductChunks>> | null = null;
 
-  try {
-    let matchingEntityIds: string[] = [];
+  if (query.trim()) {
+    try {
+      result = await searchProductChunks({
+        query,
+        limit,
+        productLineKey: productLineKey || undefined,
+        minSimilarity: minSimilarity ?? undefined,
+      });
 
-    if (normalizedSearchValue) {
-      const entitySearchResponse = await rag
-        .from('entity')
-        .select('id')
-        .eq('entity_type', 'product_line')
-        .or(
-          [
-            `title.ilike.%${normalizedSearchValue}%`,
-            `sku.ilike.%${normalizedSearchValue}%`,
-            `canonical_key.ilike.%${normalizedSearchValue}%`,
-            `product_line_key.ilike.%${normalizedSearchValue}%`,
-          ].join(','),
-        )
-        .limit(250);
-
-      if (entitySearchResponse.error) {
-        throw entitySearchResponse.error;
+      if (result.matches.length > 0) {
+        const sims = result.matches.map((m) => m.similarity).sort((a, b) => a - b);
+        similaritySummary = `${(sims[sims.length - 1]! * 100).toFixed(1)}% – ${(sims[0]! * 100).toFixed(1)}%`;
       }
-
-      matchingEntityIds = (entitySearchResponse.data ?? [])
-        .map((row) => row.id)
-        .filter((value): value is string => Boolean(value));
+    } catch (searchError) {
+      error =
+        searchError instanceof Error
+          ? searchError.message
+          : 'Unable to run similarity search.';
     }
-
-    const documentQuery = rag
-      .from('document')
-      .select(documentSelection, { count: 'exact' })
-      .eq('document_kind', 'product_line_profile')
-      .eq('language_code', 'EN')
-      .order('updated_at', { ascending: false })
-      .range(rangeStart, rangeEnd);
-
-    const documentResponse = normalizedSearchValue
-      ? await documentQuery.or(
-          [
-            `title.ilike.%${normalizedSearchValue}%`,
-            `body_text.ilike.%${normalizedSearchValue}%`,
-            `document_key.ilike.%${normalizedSearchValue}%`,
-            ...(matchingEntityIds.length > 0
-              ? [`entity_id.in.(${matchingEntityIds.join(',')})`]
-              : []),
-          ].join(','),
-        )
-      : await documentQuery;
-
-    if (documentResponse.error) {
-      throw documentResponse.error;
-    }
-
-    const documents = ((documentResponse.data ?? []) as unknown[]).filter(
-      isJsonObject,
-    ) as unknown as RagDocument[];
-    totalCount = documentResponse.count ?? 0;
-
-    const entityIds = Array.from(
-      new Set(
-        documents
-          .map((document) => document.entity_id)
-          .filter((value): value is string => Boolean(value)),
-      ),
-    );
-    const sourceRecordIds = Array.from(
-      new Set(
-        documents
-          .map((document) => document.source_record_id)
-          .filter((value): value is string => Boolean(value)),
-      ),
-    );
-
-    const [entitiesResponse, sourceRecordsResponse] = await Promise.all([
-      entityIds.length > 0
-        ? rag
-            .from('entity')
-            .select(
-              'id, entity_type, canonical_key, title, sku, product_key, product_line_key, metadata',
-            )
-            .in('id', entityIds)
-        : Promise.resolve({ data: [], error: null }),
-      sourceRecordIds.length > 0
-        ? rag
-            .from('source_record')
-            .select('id, source_pk, source_type, source_locale, is_active')
-            .in('id', sourceRecordIds)
-        : Promise.resolve({ data: [], error: null }),
-    ]);
-
-    if (entitiesResponse.error) {
-      throw entitiesResponse.error;
-    }
-
-    if (sourceRecordsResponse.error) {
-      throw sourceRecordsResponse.error;
-    }
-
-    const entityMap = new Map<string, RagEntity>();
-    const sourceRecordMap = new Map<string, RagSourceRecord>();
-
-    for (const entity of (entitiesResponse.data ?? []) as unknown[]) {
-      if (isJsonObject(entity) && typeof entity.id === 'string') {
-        entityMap.set(entity.id, entity as unknown as RagEntity);
-      }
-    }
-
-    for (const sourceRecord of (sourceRecordsResponse.data ?? []) as unknown[]) {
-      if (isJsonObject(sourceRecord) && typeof sourceRecord.id === 'string') {
-        sourceRecordMap.set(
-          sourceRecord.id,
-          sourceRecord as unknown as RagSourceRecord,
-        );
-      }
-    }
-
-    results = documents.map((document) => ({
-      document,
-      entity: document.entity_id ? (entityMap.get(document.entity_id) ?? null) : null,
-      sourceRecord:
-        sourceRecordMap.get(document.source_record_id) ?? null,
-    }));
-  } catch (loadError) {
-    error =
-      loadError instanceof Error
-        ? loadError.message
-        : 'Unable to load RAG product documents.';
   }
-
-  const totalPages = Math.max(1, Math.ceil(totalCount / RESULT_LIMIT));
-  const safeCurrentPage = Math.min(currentPage, totalPages);
-  const paginationPages = buildPagination(safeCurrentPage, totalPages);
 
   return (
     <div className="flex flex-1 bg-slate-50">
@@ -312,60 +146,62 @@ export default async function RagProductsPage({
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <div className="flex flex-col gap-3">
             <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-700">
-              RAG product line search
+              RAG Similarity Search
             </p>
             <h1 className="text-4xl font-semibold tracking-tight text-slate-950">
-              Browse product lines in your RAG schema
+              Search the RAG product line corpus semantically
             </h1>
             <p className="max-w-3xl text-base leading-7 text-slate-600">
-              Each document is one legacy product line (`product_line_profile`),
-              with size variants embedded in the body and `variant_product_keys` in
-              metadata.
+              Retrieval is one document per legacy product line. Chunks include
+              rolled-up size variants; filters only target product line keys.
             </p>
           </div>
 
           <form
-            action={PRODUCTS_ROUTE}
-            className="mt-8 flex flex-col gap-3 sm:flex-row"
+            action={SEARCH_ROUTE}
+            className="mt-8 grid gap-3 lg:grid-cols-[minmax(0,1.6fr)_minmax(220px,0.8fr)_120px_160px_auto]"
             method="get"
           >
             <input
-              className="h-12 flex-1 rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none ring-0 transition focus:border-sky-500"
-              defaultValue={searchValue}
+              className="h-12 rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none ring-0 transition focus:border-sky-500"
+              defaultValue={query}
               name="q"
-              placeholder="Search by title, line key, document key, or body text"
+              placeholder="Ask something like: peroxide bathroom disinfectant"
               type="search"
+            />
+            <input
+              className="h-12 rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none ring-0 transition focus:border-sky-500"
+              defaultValue={productLineKey}
+              name="productLineKey"
+              placeholder="Optional product line key"
+              type="text"
+            />
+            <input
+              className="h-12 rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none ring-0 transition focus:border-sky-500"
+              defaultValue={String(limit)}
+              max="20"
+              min="1"
+              name="limit"
+              type="number"
+            />
+            <input
+              className="h-12 rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none ring-0 transition focus:border-sky-500"
+              defaultValue={rawMinSimilarity}
+              name="minSimilarity"
+              placeholder="0.65 or 65"
+              type="text"
             />
             <button
               className="inline-flex h-12 items-center justify-center rounded-2xl bg-slate-950 px-6 text-sm font-semibold text-white transition hover:bg-slate-800"
               type="submit"
             >
-              Search RAG lines
+              Run search
             </button>
-            <Link
-              className="inline-flex h-12 items-center justify-center rounded-2xl bg-white px-6 text-sm font-semibold text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50"
-              href="/admin/products/rag/search"
-            >
-              Semantic search
-            </Link>
-            <Link
-              className="inline-flex h-12 items-center justify-center rounded-2xl bg-white px-6 text-sm font-semibold text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50"
-              href="/admin/products/rag/generate"
-            >
-              Generate
-            </Link>
           </form>
-        </section>
-
-        <section className="flex items-center justify-between">
-          <div className="text-sm text-slate-600">
-            {normalizedSearchValue
-              ? `Showing ${results.length} of ${totalCount} matches for "${searchValue}".`
-              : `Showing ${results.length} of ${totalCount} RAG product line documents.`}
-          </div>
-          <div className="text-sm text-slate-600">
-            Page {safeCurrentPage} of {totalPages}
-          </div>
+          <p className="mt-3 text-sm text-slate-500">
+            Minimum similarity is optional. Enter a decimal like `0.65` or a whole
+            percent like `65`.
+          </p>
         </section>
 
         {error ? (
@@ -374,138 +210,161 @@ export default async function RagProductsPage({
           </section>
         ) : null}
 
-        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {!error && results.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-sm text-slate-600">
-              No RAG product line documents matched that search.
-            </div>
-          ) : null}
+        {result ? (
+          <>
+            <section className="flex flex-wrap items-center justify-between gap-3">
+              <div className="text-sm text-slate-600">
+                Showing {result.matches.length} line-level matches using{' '}
+                <code className="rounded bg-slate-100 px-1">{result.model}</code>.
+                {similaritySummary ? ` Similarity range: ${similaritySummary}.` : ''}
+              </div>
+              <div className="text-sm text-slate-600">
+                {result.productLineKey
+                  ? `Filtered to product line ${result.productLineKey}.`
+                  : 'No metadata filter applied.'}
+                {result.minSimilarity !== null
+                  ? ` Minimum similarity: ${(result.minSimilarity * 100).toFixed(1)}%.`
+                  : ' No similarity floor applied.'}
+              </div>
+            </section>
 
-          {results.map((result) => {
-            const productLineKey = getProductLineKey(result);
-            const detailHref = productLineKey
-              ? buildProductLineDetailHref(
-                  productLineKey,
-                  searchValue,
-                  safeCurrentPage,
-                )
-              : null;
-
-            return (
-              <article
-                className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:border-sky-300 hover:shadow-md"
-                key={result.document.id}
-              >
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
-                    {result.document.language_code}
-                  </span>
-                  <span className="rounded-full bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700">
-                    {result.document.document_kind}
-                  </span>
-                  {result.entity?.sku ? (
-                    <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">
-                      SKU: {result.entity.sku}
-                    </span>
-                  ) : null}
+            <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-lg font-semibold text-slate-950">
+                    Search timing
+                  </h2>
+                  <p className="mt-1 text-sm text-slate-600">
+                    This shows where time was spent preparing the query and running
+                    similarity search.
+                  </p>
                 </div>
+                <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">
+                  {formatEmbeddingSource(result.embeddingSource)}
+                </span>
+              </div>
 
-                <h2 className="mt-4 text-xl font-semibold leading-8 text-slate-950">
-                  {result.document.title || 'Untitled product line'}
-                </h2>
-
-                <dl className="mt-4 grid grid-cols-2 gap-3 text-sm text-slate-600">
-                  <div>
-                    <dt className="font-medium text-slate-500">Product line key</dt>
-                    <dd className="break-all">{productLineKey ?? 'N/A'}</dd>
-                  </div>
-                  <div>
-                    <dt className="font-medium text-slate-500">Variants</dt>
-                    <dd>
-                      {typeof result.document.metadata?.variant_count === 'number'
-                        ? String(result.document.metadata.variant_count)
-                        : 'N/A'}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="font-medium text-slate-500">Source type</dt>
-                    <dd>{result.sourceRecord?.source_type ?? 'N/A'}</dd>
-                  </div>
-                  <div>
-                    <dt className="font-medium text-slate-500">Active</dt>
-                    <dd>{result.sourceRecord?.is_active ? 'Yes' : 'No'}</dd>
-                  </div>
-                </dl>
-
-                <p className="mt-4 text-sm leading-6 text-slate-700">
-                  {getSummary(result)}
-                </p>
-
-                {detailHref ? (
-                  <Link
-                    className="mt-4 inline-flex text-sm font-medium text-sky-700"
-                    href={detailHref}
+              <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                {[
+                  ['Total search', formatDurationMs(result.timings.totalMs)],
+                  [
+                    'Query embedding total',
+                    formatDurationMs(result.timings.queryEmbeddingMs),
+                  ],
+                  [
+                    'Similarity search',
+                    formatDurationMs(result.timings.similaritySearchMs),
+                  ],
+                  [
+                    'Query rewrite',
+                    formatDurationMs(result.timings.queryRewriteMs),
+                  ],
+                  [
+                    'Cache lookup',
+                    formatDurationMs(result.timings.cacheLookupMs),
+                  ],
+                  [
+                    'Embedding creation',
+                    formatDurationMs(result.timings.embeddingCreateMs),
+                  ],
+                  [
+                    'Cache persist/update',
+                    formatDurationMs(result.timings.cachePersistMs),
+                  ],
+                ].map(([label, value]) => (
+                  <div
+                    className="rounded-2xl bg-slate-50 p-4"
+                    key={label}
                   >
-                    View product line details
-                  </Link>
-                ) : (
-                  <div className="mt-4 text-sm text-slate-500">
-                    Missing product line key for detail link.
+                    <p className="text-sm font-medium text-slate-500">{label}</p>
+                    <p className="mt-1 text-lg font-semibold text-slate-950">
+                      {value}
+                    </p>
                   </div>
-                )}
-              </article>
-            );
-          })}
-        </section>
+                ))}
+              </div>
+            </section>
 
-        {!error && totalPages > 1 ? (
-          <nav
-            aria-label="RAG product pagination"
-            className="flex flex-wrap items-center justify-center gap-2"
-          >
-            <Link
-              className={`rounded-xl px-4 py-2 text-sm font-medium ${
-                safeCurrentPage === 1
-                  ? 'pointer-events-none bg-slate-100 text-slate-400'
-                  : 'bg-white text-slate-700 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50'
-              }`}
-              href={buildProductsHref(
-                searchValue,
-                Math.max(1, safeCurrentPage - 1),
-              )}
-            >
-              Previous
-            </Link>
+            <section className="grid gap-4 lg:grid-cols-2">
+              {result.matches.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-sm text-slate-600 lg:col-span-2">
+                  No semantic matches were returned for that query. Try lowering the
+                  minimum similarity if the query is too strict.
+                </div>
+              ) : null}
 
-            {paginationPages.map((pageNumber) => (
-              <Link
-                className={`rounded-xl px-4 py-2 text-sm font-medium ${
-                  pageNumber === safeCurrentPage
-                    ? 'bg-slate-950 text-white'
-                    : 'bg-white text-slate-700 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50'
-                }`}
-                href={buildProductsHref(searchValue, pageNumber)}
-                key={pageNumber}
-              >
-                {pageNumber}
-              </Link>
-            ))}
+              {result.matches.map((match) => (
+                <article
+                  className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm"
+                  key={match.chunk_id}
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">
+                      Similarity: {(match.similarity * 100).toFixed(1)}%
+                    </span>
+                    <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
+                      Chunk {match.chunk_index}
+                    </span>
+                    {match.heading ? (
+                      <span className="rounded-full bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700">
+                        {match.heading}
+                      </span>
+                    ) : null}
+                  </div>
 
-            <Link
-              className={`rounded-xl px-4 py-2 text-sm font-medium ${
-                safeCurrentPage === totalPages
-                  ? 'pointer-events-none bg-slate-100 text-slate-400'
-                  : 'bg-white text-slate-700 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50'
-              }`}
-              href={buildProductsHref(
-                searchValue,
-                Math.min(totalPages, safeCurrentPage + 1),
-              )}
-            >
-              Next
-            </Link>
-          </nav>
-        ) : null}
+                  <div className="mt-4 flex flex-col gap-2">
+                    <h2 className="text-xl font-semibold text-slate-950">
+                      {match.document_title}
+                    </h2>
+                    <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm text-slate-600">
+                      <span>
+                        Product line:{' '}
+                        {match.product_line_key || match.source_pk || 'N/A'}
+                      </span>
+                      <span>Representative SKU: {match.sku || 'N/A'}</span>
+                      <span>
+                        Section path: {match.section_path?.join(' / ') || 'N/A'}
+                      </span>
+                    </div>
+                  </div>
+
+                  <p className="mt-4 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+                    {truncateText(match.chunk_text)}
+                  </p>
+
+                  <div className="mt-4 flex flex-wrap gap-3">
+                    <Link
+                      className="inline-flex rounded-full bg-slate-950 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-800"
+                      href={buildProductLineDetailHref(
+                        match.product_line_key || match.source_pk,
+                        {
+                          query,
+                          productLineKey,
+                          limit,
+                          minSimilarity: rawMinSimilarity,
+                        },
+                      )}
+                    >
+                      View RAG product line
+                    </Link>
+                    <Link
+                      className="inline-flex rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50"
+                      href="/admin/products/rag"
+                    >
+                      Back to RAG search
+                    </Link>
+                  </div>
+                </article>
+              ))}
+            </section>
+          </>
+        ) : (
+          <section className="rounded-3xl border border-dashed border-slate-300 bg-white p-8 text-sm leading-7 text-slate-600">
+            Enter a natural-language query to test vector similarity against
+            product line chunks. Optional filters: product line key and minimum
+            similarity.
+          </section>
+        )}
       </main>
     </div>
   );

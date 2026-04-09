@@ -26,13 +26,13 @@ export default async function RagGeneratePage() {
             className="inline-flex items-center rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-50"
             href="/admin/products/rag"
           >
-            Back to RAG products
+            Back to RAG search
           </Link>
           <Link
             className="inline-flex items-center rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-50"
-            href="/admin/products/rag/search"
+            href="/admin/products/rag"
           >
-            Open semantic search
+            Open RAG search
           </Link>
         </div>
 
@@ -181,7 +181,7 @@ export default async function RagGeneratePage() {
                 <li>Sync document batches from legacy into `rag.source_record`, `rag.entity`, and `rag.document` until remaining source rows reach zero.</li>
                 <li>Generate chunk batches from the retrieval-ready documents until remaining documents reach zero.</li>
                 <li>Run embeddings until pending chunk count reaches zero.</li>
-                <li>Open semantic search and validate the results.</li>
+                <li>Open RAG search and validate the results.</li>
               </ol>
             </section>
           </div>

@@ -87,7 +87,7 @@ export function AdminAccountMenu() {
             </Link>
           </DropdownMenuItem>
           <DropdownMenuItem asChild>
-            <Link href="/admin/products/rag/search">
+            <Link href="/admin/products/rag">
               <Search className="size-4" />
               Search
             </Link>

@@ -80,15 +80,33 @@ function readSearchParam(value: string | string[] | undefined, fallback = '') {
   return value ?? fallback;
 }
 
-function buildProductsHref(query: string, page: number) {
+function buildProductsHref(options: {
+  query: string;
+  productLineKey: string;
+  limit: string;
+  minSimilarity: string;
+  page: number;
+}) {
   const params = new URLSearchParams();
 
-  if (query) {
-    params.set('q', query);
+  if (options.query) {
+    params.set('q', options.query);
   }
 
-  if (page > 1) {
-    params.set('page', String(page));
+  if (options.productLineKey) {
+    params.set('productLineKey', options.productLineKey);
+  }
+
+  if (options.limit) {
+    params.set('limit', options.limit);
+  }
+
+  if (options.minSimilarity) {
+    params.set('minSimilarity', options.minSimilarity);
+  }
+
+  if (options.page > 1) {
+    params.set('page', String(options.page));
   }
 
   const queryString = params.toString();
@@ -181,6 +199,9 @@ export default async function RagProductLineDetailsPage({
     await Promise.all([params, searchParams]);
   const productLineKey = decodeURIComponent(productLineKeyParam);
   const searchValue = readSearchParam(resolvedSearchParams.q);
+  const searchProductLineKey = readSearchParam(resolvedSearchParams.productLineKey);
+  const limit = readSearchParam(resolvedSearchParams.limit);
+  const minSimilarity = readSearchParam(resolvedSearchParams.minSimilarity);
   const requestedPage = Number.parseInt(
     readSearchParam(resolvedSearchParams.page, '1'),
     10,
@@ -264,7 +285,13 @@ export default async function RagProductLineDetailsPage({
     : null;
   const chunks = (chunksResponse.data ?? []) as unknown as RagChunk[];
 
-  const backHref = buildProductsHref(searchValue, currentPage);
+  const backHref = buildProductsHref({
+    query: searchValue,
+    productLineKey: searchProductLineKey,
+    limit,
+    minSimilarity,
+    page: currentPage,
+  });
   const heroCopy = getHeroCopy(document, sourceRecord);
   const documentFields = getVisibleFields(document as unknown as Record<string, unknown>);
   const sourceFields = getVisibleFields(

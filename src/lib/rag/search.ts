@@ -20,6 +20,14 @@ type SearchEmbeddingRow = {
   query_rewritten: string | null;
   embeddings: string | number[] | null;
   query_count: number;
+  timing_sample_count: number;
+  avg_total_search_ms?: number | null;
+  avg_query_embedding_ms?: number | null;
+  avg_query_rewrite_ms?: number | null;
+  avg_cache_lookup_ms?: number | null;
+  avg_embedding_create_ms?: number | null;
+  avg_cache_persist_ms?: number | null;
+  avg_similarity_search_ms?: number | null;
 };
 
 export type RagSearchMatch = {
@@ -47,6 +55,16 @@ export type RagSearchResult = {
   limit: number;
   productLineKey: string | null;
   minSimilarity: number | null;
+  embeddingSource: 'exact-cache-hit' | 'rewritten-cache-hit' | 'new-embedding';
+  timings: {
+    totalMs: number;
+    queryEmbeddingMs: number;
+    queryRewriteMs: number;
+    cacheLookupMs: number;
+    embeddingCreateMs: number;
+    cachePersistMs: number;
+    similaritySearchMs: number;
+  };
   matches: RagSearchMatch[];
 };
 
@@ -70,6 +88,95 @@ function normalizeMinSimilarity(minSimilarity?: number) {
   }
 
   return Math.min(normalized, 1);
+}
+
+function nowMs() {
+  return performance.now();
+}
+
+function elapsedMs(startedAt: number) {
+  return Number((nowMs() - startedAt).toFixed(1));
+}
+
+function nextAverage(
+  currentAverage: number | null | undefined,
+  sampleCount: number,
+  nextValue: number,
+) {
+  if (!Number.isFinite(currentAverage) || sampleCount <= 0) {
+    return nextValue;
+  }
+
+  return Number(
+    (((currentAverage as number) * sampleCount + nextValue) / (sampleCount + 1)).toFixed(
+      3,
+    ),
+  );
+}
+
+async function persistSearchTimingAverages(
+  row: Pick<
+    SearchEmbeddingRow,
+    | 'id'
+    | 'timing_sample_count'
+    | 'avg_total_search_ms'
+    | 'avg_query_embedding_ms'
+    | 'avg_query_rewrite_ms'
+    | 'avg_cache_lookup_ms'
+    | 'avg_embedding_create_ms'
+    | 'avg_cache_persist_ms'
+    | 'avg_similarity_search_ms'
+  >,
+  timings: RagSearchResult['timings'],
+) {
+  const supabase = getSupabaseServiceRoleClient();
+  const sampleCount = row.timing_sample_count ?? 0;
+  const { error } = await supabase
+    .schema('rag')
+    .from('search_embedding')
+    .update({
+      timing_sample_count: sampleCount + 1,
+      avg_total_search_ms: nextAverage(
+        row.avg_total_search_ms,
+        sampleCount,
+        timings.totalMs,
+      ),
+      avg_query_embedding_ms: nextAverage(
+        row.avg_query_embedding_ms,
+        sampleCount,
+        timings.queryEmbeddingMs,
+      ),
+      avg_query_rewrite_ms: nextAverage(
+        row.avg_query_rewrite_ms,
+        sampleCount,
+        timings.queryRewriteMs,
+      ),
+      avg_cache_lookup_ms: nextAverage(
+        row.avg_cache_lookup_ms,
+        sampleCount,
+        timings.cacheLookupMs,
+      ),
+      avg_embedding_create_ms: nextAverage(
+        row.avg_embedding_create_ms,
+        sampleCount,
+        timings.embeddingCreateMs,
+      ),
+      avg_cache_persist_ms: nextAverage(
+        row.avg_cache_persist_ms,
+        sampleCount,
+        timings.cachePersistMs,
+      ),
+      avg_similarity_search_ms: nextAverage(
+        row.avg_similarity_search_ms,
+        sampleCount,
+        timings.similaritySearchMs,
+      ),
+    })
+    .eq('id', row.id);
+
+  if (error) {
+    throw new Error(`Failed to persist search timing averages: ${error.message}`);
+  }
 }
 
 function toVectorLiteral(embedding: number[]) {
@@ -159,19 +266,52 @@ function parseVectorEmbedding(value: string | number[] | null): number[] | null 
 async function getCachedOrNewEmbedding(
   query: string,
   model?: string,
-): Promise<{ embedding: number[]; model: string }> {
+): Promise<{
+  row: Pick<
+    SearchEmbeddingRow,
+    | 'id'
+    | 'timing_sample_count'
+    | 'avg_total_search_ms'
+    | 'avg_query_embedding_ms'
+    | 'avg_query_rewrite_ms'
+    | 'avg_cache_lookup_ms'
+    | 'avg_embedding_create_ms'
+    | 'avg_cache_persist_ms'
+    | 'avg_similarity_search_ms'
+  >;
+  embedding: number[];
+  model: string;
+  source: 'exact-cache-hit' | 'rewritten-cache-hit' | 'new-embedding';
+  timings: {
+    queryEmbeddingMs: number;
+    queryRewriteMs: number;
+    cacheLookupMs: number;
+    embeddingCreateMs: number;
+    cachePersistMs: number;
+  };
+}> {
+  const startedAt = nowMs();
   const supabase = getSupabaseServiceRoleClient();
+  const rewriteStartedAt = nowMs();
   const rewrittenQuery = await rewriteQueryWithOpenAI(query);
+  const queryRewriteMs = elapsedMs(rewriteStartedAt);
   const normalizedQueryString = query.trim().replace(/\s+/g, ' ');
+  let cacheLookupMs = 0;
+  let embeddingCreateMs = 0;
+  let cachePersistMs = 0;
 
+  const exactLookupStartedAt = nowMs();
   const { data: exactRows, error: exactLookupError } = await supabase
     .schema('rag')
     .from('search_embedding')
-    .select('id, query_string, query_rewritten, embeddings, query_count')
+    .select(
+      'id, query_string, query_rewritten, embeddings, query_count, timing_sample_count, avg_total_search_ms, avg_query_embedding_ms, avg_query_rewrite_ms, avg_cache_lookup_ms, avg_embedding_create_ms, avg_cache_persist_ms, avg_similarity_search_ms',
+    )
     .eq('query_string', normalizedQueryString)
     .is('deleted_at', null)
     .order('updated_at', { ascending: false })
     .limit(1);
+  cacheLookupMs += elapsedMs(exactLookupStartedAt);
 
   if (exactLookupError) {
     throw new Error(
@@ -184,6 +324,7 @@ async function getCachedOrNewEmbedding(
   const resolvedModel = getEmbeddingModelName(model);
 
   if (exact && exactEmbedding) {
+    const persistStartedAt = nowMs();
     const { error: updateError } = await supabase
       .schema('rag')
       .from('search_embedding')
@@ -192,6 +333,7 @@ async function getCachedOrNewEmbedding(
         query_count: (exact.query_count ?? 0) + 1,
       })
       .eq('id', exact.id);
+    cachePersistMs += elapsedMs(persistStartedAt);
 
     if (updateError) {
       throw new Error(
@@ -200,18 +342,31 @@ async function getCachedOrNewEmbedding(
     }
 
     return {
+      row: exact,
       embedding: exactEmbedding,
       model: resolvedModel,
+      source: 'exact-cache-hit',
+      timings: {
+        queryEmbeddingMs: elapsedMs(startedAt),
+        queryRewriteMs,
+        cacheLookupMs,
+        embeddingCreateMs,
+        cachePersistMs,
+      },
     };
   }
 
+  const rewrittenLookupStartedAt = nowMs();
   const { data: existingRow, error: existingError } = await supabase
     .schema('rag')
     .from('search_embedding')
-    .select('id, query_string, query_rewritten, embeddings, query_count')
+    .select(
+      'id, query_string, query_rewritten, embeddings, query_count, timing_sample_count, avg_total_search_ms, avg_query_embedding_ms, avg_query_rewrite_ms, avg_cache_lookup_ms, avg_embedding_create_ms, avg_cache_persist_ms, avg_similarity_search_ms',
+    )
     .eq('query_rewritten', rewrittenQuery)
     .is('deleted_at', null)
     .maybeSingle();
+  cacheLookupMs += elapsedMs(rewrittenLookupStartedAt);
 
   if (existingError) {
     throw new Error(`Failed to lookup cached query embedding: ${existingError.message}`);
@@ -221,6 +376,7 @@ async function getCachedOrNewEmbedding(
   const cachedEmbedding = parseVectorEmbedding(existing?.embeddings ?? null);
 
   if (existing && cachedEmbedding) {
+    const persistStartedAt = nowMs();
     const { error: updateError } = await supabase
       .schema('rag')
       .from('search_embedding')
@@ -229,6 +385,7 @@ async function getCachedOrNewEmbedding(
         query_count: (existing.query_count ?? 0) + 1,
       })
       .eq('id', existing.id);
+    cachePersistMs += elapsedMs(persistStartedAt);
 
     if (updateError) {
       throw new Error(
@@ -237,14 +394,26 @@ async function getCachedOrNewEmbedding(
     }
 
     return {
+      row: existing,
       embedding: cachedEmbedding,
       model: resolvedModel,
+      source: 'rewritten-cache-hit',
+      timings: {
+        queryEmbeddingMs: elapsedMs(startedAt),
+        queryRewriteMs,
+        cacheLookupMs,
+        embeddingCreateMs,
+        cachePersistMs,
+      },
     };
   }
 
+  const embeddingStartedAt = nowMs();
   const { embedding, model: createdModel } = await createEmbedding(query, { model });
+  embeddingCreateMs = elapsedMs(embeddingStartedAt);
 
   if (existing) {
+    const persistStartedAt = nowMs();
     const { error: updateError } = await supabase
       .schema('rag')
       .from('search_embedding')
@@ -255,6 +424,7 @@ async function getCachedOrNewEmbedding(
         query_count: (existing.query_count ?? 0) + 1,
       })
       .eq('id', existing.id);
+    cachePersistMs += elapsedMs(persistStartedAt);
 
     if (updateError) {
       throw new Error(
@@ -262,7 +432,8 @@ async function getCachedOrNewEmbedding(
       );
     }
   } else {
-    const { error: insertError } = await supabase
+    const persistStartedAt = nowMs();
+    const { data: insertedRow, error: insertError } = await supabase
       .schema('rag')
       .from('search_embedding')
       .insert({
@@ -270,7 +441,12 @@ async function getCachedOrNewEmbedding(
         query_rewritten: rewrittenQuery,
         embeddings: embedding,
         query_count: 1,
-      });
+      })
+      .select(
+        'id, timing_sample_count, avg_total_search_ms, avg_query_embedding_ms, avg_query_rewrite_ms, avg_cache_lookup_ms, avg_embedding_create_ms, avg_cache_persist_ms, avg_similarity_search_ms',
+      )
+      .single();
+    cachePersistMs += elapsedMs(persistStartedAt);
 
     if (insertError) {
       if ((insertError as { code?: string }).code === '23505') {
@@ -278,11 +454,34 @@ async function getCachedOrNewEmbedding(
       }
       throw new Error(`Failed to cache query embedding: ${insertError.message}`);
     }
+
+    return {
+      row: insertedRow as SearchEmbeddingRow,
+      embedding,
+      model: createdModel,
+      source: 'new-embedding',
+      timings: {
+        queryEmbeddingMs: elapsedMs(startedAt),
+        queryRewriteMs,
+        cacheLookupMs,
+        embeddingCreateMs,
+        cachePersistMs,
+      },
+    };
   }
 
   return {
+    row: existing,
     embedding,
     model: createdModel,
+    source: 'new-embedding',
+    timings: {
+      queryEmbeddingMs: elapsedMs(startedAt),
+      queryRewriteMs,
+      cacheLookupMs,
+      embeddingCreateMs,
+      cachePersistMs,
+    },
   };
 }
 
@@ -290,6 +489,7 @@ async function getCachedOrNewEmbedding(
 export async function searchProductChunks(
   options: SearchProductChunksOptions,
 ): Promise<RagSearchResult> {
+  const startedAt = nowMs();
   const query = options.query.trim();
 
   if (!query) {
@@ -300,12 +500,16 @@ export async function searchProductChunks(
   const productLineKey = options.productLineKey?.trim() || null;
   const minSimilarity = normalizeMinSimilarity(options.minSimilarity);
 
-  const { embedding, model } = await getCachedOrNewEmbedding(
-    query,
-    options.model,
-  );
+  const {
+    row,
+    embedding,
+    model,
+    source,
+    timings: embeddingTimings,
+  } = await getCachedOrNewEmbedding(query, options.model);
 
   const supabase = getSupabaseServiceRoleClient();
+  const similaritySearchStartedAt = nowMs();
   const { data, error } = await supabase
     .schema('rag')
     .rpc('match_product_chunks', {
@@ -314,9 +518,26 @@ export async function searchProductChunks(
       filter_product_key: null,
       filter_product_line_key: productLineKey,
     });
+  const similaritySearchMs = elapsedMs(similaritySearchStartedAt);
 
   if (error) {
     throw new Error(`Failed to run similarity search: ${error.message}`);
+  }
+
+  const timings = {
+    totalMs: elapsedMs(startedAt),
+    queryEmbeddingMs: embeddingTimings.queryEmbeddingMs,
+    queryRewriteMs: embeddingTimings.queryRewriteMs,
+    cacheLookupMs: embeddingTimings.cacheLookupMs,
+    embeddingCreateMs: embeddingTimings.embeddingCreateMs,
+    cachePersistMs: embeddingTimings.cachePersistMs,
+    similaritySearchMs,
+  };
+
+  try {
+    await persistSearchTimingAverages(row, timings);
+  } catch {
+    // Timing persistence is best-effort and should not block search results.
   }
 
   return {
@@ -325,6 +546,8 @@ export async function searchProductChunks(
     limit,
     productLineKey,
     minSimilarity,
+    embeddingSource: source,
+    timings,
     matches: ((data ?? []) as RagSearchMatch[])
       .map((match) => ({
         ...match,

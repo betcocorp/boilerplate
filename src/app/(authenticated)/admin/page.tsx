@@ -244,9 +244,8 @@ export default function AdminDashboardPage() {
                     {[
                       ['Bex chat', '/admin/bex'],
                       ['Legacy product browser', '/admin/products/legacy'],
-                      ['RAG product browser', '/admin/products/rag'],
+                      ['RAG search', '/admin/products/rag'],
                       ['RAG generation', '/admin/products/rag/generate'],
-                      ['Semantic search', '/admin/products/rag/search'],
                     ].map(([label, href]) => (
                       <Link
                         className="flex items-center justify-between rounded-2xl bg-background px-4 py-3 text-sm font-medium text-foreground transition hover:bg-accent"

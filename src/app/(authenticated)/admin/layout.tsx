@@ -20,12 +20,7 @@ const workspaceNavItems = [
 
 const productsNavItems = [
   { label: 'Legacy products', href: '/admin/products/legacy', icon: Library },
-  { label: 'RAG products', href: '/admin/products/rag', icon: Layers },
-  {
-    label: 'RAG similarity search',
-    href: '/admin/products/rag/search',
-    icon: Search,
-  },
+  { label: 'RAG search', href: '/admin/products/rag', icon: Layers },
   {
     label: 'RAG generate',
     href: '/admin/products/rag/generate',
@@ -114,7 +109,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
                 </div>
                 <div className="flex items-center gap-3">
                   <Button asChild size="sm" variant="outline">
-                    <Link href="/admin/products/rag/search">
+                    <Link href="/admin/products/rag">
                       <Search className="size-4" />
                       Search
                     </Link>
