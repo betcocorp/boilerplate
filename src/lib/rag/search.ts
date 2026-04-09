@@ -10,6 +10,7 @@ type SearchProductChunksOptions = {
   query: string;
   limit?: number;
   productLineKey?: string;
+  minSimilarity?: number;
   model?: string;
 };
 
@@ -45,6 +46,7 @@ export type RagSearchResult = {
   model: string;
   limit: number;
   productLineKey: string | null;
+  minSimilarity: number | null;
   matches: RagSearchMatch[];
 };
 
@@ -54,6 +56,20 @@ function clampLimit(limit?: number) {
   }
 
   return Math.min(Math.floor(limit), 20);
+}
+
+function normalizeMinSimilarity(minSimilarity?: number) {
+  if (!Number.isFinite(minSimilarity)) {
+    return null;
+  }
+
+  const normalized = minSimilarity! > 1 ? minSimilarity! / 100 : minSimilarity!;
+
+  if (!Number.isFinite(normalized) || normalized < 0) {
+    return null;
+  }
+
+  return Math.min(normalized, 1);
 }
 
 function toVectorLiteral(embedding: number[]) {
@@ -282,6 +298,7 @@ export async function searchProductChunks(
 
   const limit = clampLimit(options.limit);
   const productLineKey = options.productLineKey?.trim() || null;
+  const minSimilarity = normalizeMinSimilarity(options.minSimilarity);
 
   const { embedding, model } = await getCachedOrNewEmbedding(
     query,
@@ -307,9 +324,14 @@ export async function searchProductChunks(
     model,
     limit,
     productLineKey,
-    matches: ((data ?? []) as RagSearchMatch[]).map((match) => ({
-      ...match,
-      similarity: Number(match.similarity),
-    })),
+    minSimilarity,
+    matches: ((data ?? []) as RagSearchMatch[])
+      .map((match) => ({
+        ...match,
+        similarity: Number(match.similarity),
+      }))
+      .filter(
+        (match) => minSimilarity === null || match.similarity >= minSimilarity,
+      ),
   };
 }

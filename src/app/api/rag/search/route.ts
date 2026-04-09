@@ -10,6 +10,7 @@ type RequestBody = {
   query?: unknown;
   limit?: unknown;
   productLineKey?: unknown;
+  minSimilarity?: unknown;
   model?: unknown;
 };
 
@@ -19,6 +20,19 @@ function toPositiveInteger(value: unknown) {
   }
 
   return Math.floor(value);
+}
+
+function toSimilarityNumber(value: unknown) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string') {
+    const parsed = Number.parseFloat(value.trim());
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+
+  return undefined;
 }
 
 function isAuthorized(request: Request) {
@@ -57,6 +71,7 @@ export async function POST(request: Request) {
         typeof body.productLineKey === 'string'
           ? body.productLineKey
           : undefined,
+      minSimilarity: toSimilarityNumber(body.minSimilarity),
       model: typeof body.model === 'string' ? body.model : undefined,
     });
 

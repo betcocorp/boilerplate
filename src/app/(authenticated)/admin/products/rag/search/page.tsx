@@ -27,12 +27,30 @@ function truncateText(value: string, maxLength = 320) {
   return `${trimmed.slice(0, maxLength - 3)}...`;
 }
 
+function parseMinSimilarity(value: string | string[] | undefined) {
+  const raw = readSearchParam(value).trim();
+
+  if (!raw) {
+    return null;
+  }
+
+  const parsed = Number.parseFloat(raw);
+
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return null;
+  }
+
+  return parsed > 1 ? Math.min(parsed / 100, 1) : Math.min(parsed, 1);
+}
+
 export default async function RagSearchPage({ searchParams }: SearchPageProps) {
   await connection();
 
   const resolvedSearchParams = await searchParams;
   const query = readSearchParam(resolvedSearchParams.q);
   const productLineKey = readSearchParam(resolvedSearchParams.productLineKey);
+  const rawMinSimilarity = readSearchParam(resolvedSearchParams.minSimilarity);
+  const minSimilarity = parseMinSimilarity(resolvedSearchParams.minSimilarity);
   let similaritySummary = '';
   const requestedLimit = Number.parseInt(
     readSearchParam(resolvedSearchParams.limit, '8'),
@@ -52,6 +70,7 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
         query,
         limit,
         productLineKey: productLineKey || undefined,
+        minSimilarity: minSimilarity ?? undefined,
       });
 
       if (result.matches.length > 0) {
@@ -85,7 +104,7 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
 
           <form
             action={SEARCH_ROUTE}
-            className="mt-8 grid gap-3 lg:grid-cols-[minmax(0,1.8fr)_minmax(220px,0.8fr)_120px_auto]"
+            className="mt-8 grid gap-3 lg:grid-cols-[minmax(0,1.6fr)_minmax(220px,0.8fr)_120px_160px_auto]"
             method="get"
           >
             <input
@@ -110,6 +129,13 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
               name="limit"
               type="number"
             />
+            <input
+              className="h-12 rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none ring-0 transition focus:border-sky-500"
+              defaultValue={rawMinSimilarity}
+              name="minSimilarity"
+              placeholder="0.65 or 65"
+              type="text"
+            />
             <button
               className="inline-flex h-12 items-center justify-center rounded-2xl bg-slate-950 px-6 text-sm font-semibold text-white transition hover:bg-slate-800"
               type="submit"
@@ -117,6 +143,10 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
               Run search
             </button>
           </form>
+          <p className="mt-3 text-sm text-slate-500">
+            Minimum similarity is optional. Enter a decimal like `0.65` or a whole
+            percent like `65`.
+          </p>
         </section>
 
         {error ? (
@@ -137,13 +167,17 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
                 {result.productLineKey
                   ? `Filtered to product line ${result.productLineKey}.`
                   : 'No metadata filter applied.'}
+                {result.minSimilarity !== null
+                  ? ` Minimum similarity: ${(result.minSimilarity * 100).toFixed(1)}%.`
+                  : ' No similarity floor applied.'}
               </div>
             </section>
 
             <section className="grid gap-4">
               {result.matches.length === 0 ? (
                 <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-sm text-slate-600">
-                  No semantic matches were returned for that query.
+                  No semantic matches were returned for that query. Try lowering the
+                  minimum similarity if the query is too strict.
                 </div>
               ) : null}
 
@@ -207,7 +241,8 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
         ) : (
           <section className="rounded-3xl border border-dashed border-slate-300 bg-white p-8 text-sm leading-7 text-slate-600">
             Enter a natural-language query to test vector similarity against
-            product line chunks. Optional filter: product line key.
+            product line chunks. Optional filters: product line key and minimum
+            similarity.
           </section>
         )}
       </main>
