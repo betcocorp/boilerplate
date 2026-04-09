@@ -1,6 +1,8 @@
+import { Search } from 'lucide-react';
 import Link from 'next/link';
 import { connection } from 'next/server';
 
+import { RagSearchTimingPanel } from '~/components/admin/RagSearchTimingPanel';
 import { searchProductChunks } from '~/lib/rag/search';
 
 const SEARCH_ROUTE = '/admin/products/rag';
@@ -36,7 +38,12 @@ function formatDurationMs(value: number) {
 }
 
 function formatEmbeddingSource(
-  value: 'exact-cache-hit' | 'rewritten-cache-hit' | 'new-embedding',
+  value:
+    | 'exact-cache-hit'
+    | 'rewritten-cache-hit'
+    | 'approximate-query-hit'
+    | 'approximate-rewritten-hit'
+    | 'new-embedding',
 ) {
   if (value === 'exact-cache-hit') {
     return 'Exact cache hit';
@@ -44,6 +51,14 @@ function formatEmbeddingSource(
 
   if (value === 'rewritten-cache-hit') {
     return 'Rewritten cache hit';
+  }
+
+  if (value === 'approximate-query-hit') {
+    return 'Approximate query match';
+  }
+
+  if (value === 'approximate-rewritten-hit') {
+    return 'Approximate rewritten match';
   }
 
   return 'New embedding';
@@ -129,7 +144,9 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
       });
 
       if (result.matches.length > 0) {
-        const sims = result.matches.map((m) => m.similarity).sort((a, b) => a - b);
+        const sims = result.matches
+          .map((m) => m.similarity)
+          .sort((a, b) => a - b);
         similaritySummary = `${(sims[sims.length - 1]! * 100).toFixed(1)}% – ${(sims[0]! * 100).toFixed(1)}%`;
       }
     } catch (searchError) {
@@ -162,45 +179,61 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
             className="mt-8 grid gap-3 lg:grid-cols-[minmax(0,1.6fr)_minmax(220px,0.8fr)_120px_160px_auto]"
             method="get"
           >
-            <input
-              className="h-12 rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none ring-0 transition focus:border-sky-500"
-              defaultValue={query}
-              name="q"
-              placeholder="Ask something like: peroxide bathroom disinfectant"
-              type="search"
-            />
-            <input
-              className="h-12 rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none ring-0 transition focus:border-sky-500"
-              defaultValue={productLineKey}
-              name="productLineKey"
-              placeholder="Optional product line key"
-              type="text"
-            />
-            <input
-              className="h-12 rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none ring-0 transition focus:border-sky-500"
-              defaultValue={String(limit)}
-              max="20"
-              min="1"
-              name="limit"
-              type="number"
-            />
-            <input
-              className="h-12 rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none ring-0 transition focus:border-sky-500"
-              defaultValue={rawMinSimilarity}
-              name="minSimilarity"
-              placeholder="0.65 or 65"
-              type="text"
-            />
+            <label className="flex flex-col gap-2">
+              <span className="text-sm font-medium text-slate-700">Query</span>
+              <input
+                className="h-12 rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none ring-0 transition focus:border-sky-500"
+                defaultValue={query}
+                name="q"
+                placeholder="Ask something like: peroxide bathroom disinfectant"
+                type="search"
+              />
+            </label>
+            <label className="flex flex-col gap-2">
+              <span className="text-sm font-medium text-slate-700">
+                Product line key
+              </span>
+              <input
+                className="h-12 rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none ring-0 transition focus:border-sky-500"
+                defaultValue={productLineKey}
+                name="productLineKey"
+                placeholder="Optional product line key"
+                type="text"
+              />
+            </label>
+            <label className="flex flex-col gap-2">
+              <span className="text-sm font-medium text-slate-700">Limit</span>
+              <input
+                className="h-12 rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none ring-0 transition focus:border-sky-500"
+                defaultValue={String(limit)}
+                max="20"
+                min="1"
+                name="limit"
+                type="number"
+              />
+            </label>
+            <label className="flex flex-col gap-2">
+              <span className="text-sm font-medium text-slate-700">
+                Similarity threshold
+              </span>
+              <input
+                className="h-12 rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none ring-0 transition focus:border-sky-500"
+                defaultValue={rawMinSimilarity}
+                name="minSimilarity"
+                placeholder="0.65 or 65"
+                type="text"
+              />
+            </label>
             <button
-              className="inline-flex h-12 items-center justify-center rounded-2xl bg-slate-950 px-6 text-sm font-semibold text-white transition hover:bg-slate-800"
+              className="mt-auto inline-flex h-12 items-center justify-center rounded-2xl bg-slate-950 px-6 text-sm font-semibold text-white transition hover:bg-slate-800"
               type="submit"
             >
-              Run search
+              <Search className="size-4" />
             </button>
           </form>
           <p className="mt-3 text-sm text-slate-500">
-            Minimum similarity is optional. Enter a decimal like `0.65` or a whole
-            percent like `65`.
+            Minimum similarity is optional. Enter a decimal like `0.65` or a
+            whole percent like `65`.
           </p>
         </section>
 
@@ -215,8 +248,13 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
             <section className="flex flex-wrap items-center justify-between gap-3">
               <div className="text-sm text-slate-600">
                 Showing {result.matches.length} line-level matches using{' '}
-                <code className="rounded bg-slate-100 px-1">{result.model}</code>.
-                {similaritySummary ? ` Similarity range: ${similaritySummary}.` : ''}
+                <code className="rounded bg-slate-100 px-1">
+                  {result.model}
+                </code>
+                .
+                {similaritySummary
+                  ? ` Similarity range: ${similaritySummary}.`
+                  : ''}
               </div>
               <div className="text-sm text-slate-600">
                 {result.productLineKey
@@ -228,68 +266,39 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
               </div>
             </section>
 
-            <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <h2 className="text-lg font-semibold text-slate-950">
-                    Search timing
-                  </h2>
-                  <p className="mt-1 text-sm text-slate-600">
-                    This shows where time was spent preparing the query and running
-                    similarity search.
-                  </p>
-                </div>
-                <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">
-                  {formatEmbeddingSource(result.embeddingSource)}
-                </span>
-              </div>
-
-              <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-                {[
-                  ['Total search', formatDurationMs(result.timings.totalMs)],
-                  [
-                    'Query embedding total',
-                    formatDurationMs(result.timings.queryEmbeddingMs),
-                  ],
-                  [
-                    'Similarity search',
-                    formatDurationMs(result.timings.similaritySearchMs),
-                  ],
-                  [
-                    'Query rewrite',
-                    formatDurationMs(result.timings.queryRewriteMs),
-                  ],
-                  [
-                    'Cache lookup',
-                    formatDurationMs(result.timings.cacheLookupMs),
-                  ],
-                  [
-                    'Embedding creation',
-                    formatDurationMs(result.timings.embeddingCreateMs),
-                  ],
-                  [
-                    'Cache persist/update',
-                    formatDurationMs(result.timings.cachePersistMs),
-                  ],
-                ].map(([label, value]) => (
-                  <div
-                    className="rounded-2xl bg-slate-50 p-4"
-                    key={label}
-                  >
-                    <p className="text-sm font-medium text-slate-500">{label}</p>
-                    <p className="mt-1 text-lg font-semibold text-slate-950">
-                      {value}
-                    </p>
-                  </div>
-                ))}
-              </div>
-            </section>
+            <RagSearchTimingPanel
+              embeddingSourceLabel={formatEmbeddingSource(result.embeddingSource)}
+              timings={[
+                ['Total search', formatDurationMs(result.timings.totalMs)],
+                [
+                  'Query embedding total',
+                  formatDurationMs(result.timings.queryEmbeddingMs),
+                ],
+                [
+                  'Similarity search',
+                  formatDurationMs(result.timings.similaritySearchMs),
+                ],
+                ['Query rewrite', formatDurationMs(result.timings.queryRewriteMs)],
+                ['Cache lookup', formatDurationMs(result.timings.cacheLookupMs)],
+                [
+                  'Embedding creation',
+                  formatDurationMs(result.timings.embeddingCreateMs),
+                ],
+                [
+                  'Cache persist/update',
+                  formatDurationMs(result.timings.cachePersistMs),
+                ],
+              ].map(([label, value]) => ({
+                label,
+                value,
+              }))}
+            />
 
             <section className="grid gap-4 lg:grid-cols-2">
               {result.matches.length === 0 ? (
                 <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-sm text-slate-600 lg:col-span-2">
-                  No semantic matches were returned for that query. Try lowering the
-                  minimum similarity if the query is too strict.
+                  No semantic matches were returned for that query. Try lowering
+                  the minimum similarity if the query is too strict.
                 </div>
               ) : null}
 

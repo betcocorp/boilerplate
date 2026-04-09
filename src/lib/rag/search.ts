@@ -30,6 +30,11 @@ type SearchEmbeddingRow = {
   avg_similarity_search_ms?: number | null;
 };
 
+type ApproximateSearchEmbeddingRow = SearchEmbeddingRow & {
+  match_source: 'query_string' | 'query_rewritten';
+  matched_similarity: number;
+};
+
 export type RagSearchMatch = {
   chunk_id: string;
   chunk_key: string;
@@ -55,7 +60,12 @@ export type RagSearchResult = {
   limit: number;
   productLineKey: string | null;
   minSimilarity: number | null;
-  embeddingSource: 'exact-cache-hit' | 'rewritten-cache-hit' | 'new-embedding';
+  embeddingSource:
+    | 'exact-cache-hit'
+    | 'rewritten-cache-hit'
+    | 'approximate-query-hit'
+    | 'approximate-rewritten-hit'
+    | 'new-embedding';
   timings: {
     totalMs: number;
     queryEmbeddingMs: number;
@@ -191,6 +201,10 @@ function normalizeRewrittenQuery(query: string) {
   return query.trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
+function getApproximateQueryThreshold(query: string) {
+  return query.length < 12 ? 0.95 : 0.9;
+}
+
 function getOpenAIClient() {
   const apiKey = process.env.OPENAI_API_KEY;
 
@@ -281,7 +295,12 @@ async function getCachedOrNewEmbedding(
   >;
   embedding: number[];
   model: string;
-  source: 'exact-cache-hit' | 'rewritten-cache-hit' | 'new-embedding';
+  source:
+    | 'exact-cache-hit'
+    | 'rewritten-cache-hit'
+    | 'approximate-query-hit'
+    | 'approximate-rewritten-hit'
+    | 'new-embedding';
   timings: {
     queryEmbeddingMs: number;
     queryRewriteMs: number;
@@ -293,6 +312,7 @@ async function getCachedOrNewEmbedding(
   const startedAt = nowMs();
   const supabase = getSupabaseServiceRoleClient();
   const normalizedQueryString = query.trim().replace(/\s+/g, ' ');
+  const normalizedApproximateQuery = normalizeRewrittenQuery(query);
   let cacheLookupMs = 0;
   let embeddingCreateMs = 0;
   let cachePersistMs = 0;
@@ -343,6 +363,66 @@ async function getCachedOrNewEmbedding(
       embedding: exactEmbedding,
       model: resolvedModel,
       source: 'exact-cache-hit',
+      timings: {
+        queryEmbeddingMs: elapsedMs(startedAt),
+        queryRewriteMs,
+        cacheLookupMs,
+        embeddingCreateMs,
+        cachePersistMs,
+      },
+    };
+  }
+
+  const approximateLookupStartedAt = nowMs();
+  const { data: approximateRow, error: approximateError } = await supabase
+    .schema('rag')
+    .rpc('find_similar_search_embedding', {
+      p_query: normalizedApproximateQuery,
+      p_query_similarity_threshold: getApproximateQueryThreshold(
+        normalizedApproximateQuery,
+      ),
+      p_rewritten_similarity_threshold: 0.88,
+    });
+  cacheLookupMs += elapsedMs(approximateLookupStartedAt);
+
+  if (approximateError) {
+    throw new Error(
+      `Failed to lookup approximate cached query embedding: ${approximateError.message}`,
+    );
+  }
+
+  const approximate = (
+    Array.isArray(approximateRow)
+      ? (approximateRow[0] ?? null)
+      : (approximateRow ?? null)
+  ) as ApproximateSearchEmbeddingRow | null;
+  const approximateEmbedding = parseVectorEmbedding(approximate?.embeddings ?? null);
+
+  if (approximate && approximateEmbedding) {
+    const persistStartedAt = nowMs();
+    const { error: updateError } = await supabase
+      .schema('rag')
+      .from('search_embedding')
+      .update({
+        query_count: (approximate.query_count ?? 0) + 1,
+      })
+      .eq('id', approximate.id);
+    cachePersistMs += elapsedMs(persistStartedAt);
+
+    if (updateError) {
+      throw new Error(
+        `Failed to update approximate cached query embedding usage: ${updateError.message}`,
+      );
+    }
+
+    return {
+      row: approximate,
+      embedding: approximateEmbedding,
+      model: resolvedModel,
+      source:
+        approximate.match_source === 'query_string'
+          ? 'approximate-query-hit'
+          : 'approximate-rewritten-hit',
       timings: {
         queryEmbeddingMs: elapsedMs(startedAt),
         queryRewriteMs,
