@@ -21,6 +21,7 @@ export async function runBexChatTurn(input: {
   message: string;
   modelTag?: string;
   useValidator?: boolean;
+  agentMode?: 'orchestrator' | 'product' | 'bathroom' | 'dilution' | 'floor';
 }): Promise<BexChatTurnResult> {
   const traceId = newCorrelationId();
   const trimmed = input.message.trim();
@@ -57,6 +58,7 @@ export async function runBexChatTurn(input: {
     userMessage: trimmed,
     modelTag: input.modelTag,
     useValidator: input.useValidator ?? false,
+    agentMode: input.agentMode ?? 'orchestrator',
     previousOpenaiResponseId: conversation.latest_openai_response_id,
   });
 

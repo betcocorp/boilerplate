@@ -90,15 +90,25 @@ export async function runProductSupportWorkflow(input: {
   userMessage: string;
   modelTag?: string;
   useValidator?: boolean;
+  agentMode?: 'orchestrator' | 'product' | 'bathroom' | 'dilution' | 'floor';
   previousOpenaiResponseId?: string | null;
 }): Promise<ProductSupportFinalOutput> {
   const useValidator = input.useValidator ?? false;
+  const agentMode = input.agentMode ?? 'orchestrator';
   const route = routeUserMessageToSme(input.userMessage);
-  const routingDecision = route.agent ?? 'ambiguous';
+  const routingDecision =
+    agentMode === 'orchestrator'
+      ? (route.agent ?? 'ambiguous')
+      : agentMode;
+  const routingRationale =
+    agentMode === 'orchestrator'
+      ? route.rationale
+      : `Forced direct routing to ${agentMode} specialist by admin selection.`;
   const instructions = buildProductSupportInstructions({
+    mode: agentMode,
     routing: {
       decision: routingDecision,
-      rationale: route.rationale,
+      rationale: routingRationale,
       productScore: route.productScore,
       bathroomScore: route.bathroomScore,
       dilutionScore: route.dilutionScore,
@@ -153,7 +163,7 @@ export async function runProductSupportWorkflow(input: {
           dilution: route.dilutionScore,
           floor: route.floorScore,
         },
-        rationale: route.rationale,
+        rationale: routingRationale,
       },
     }),
     completed_at: new Date().toISOString(),
@@ -356,7 +366,7 @@ export async function runProductSupportWorkflow(input: {
         workflowRunId: run.id,
         routingHint: {
           decision: routingDecision,
-          rationale: route.rationale,
+          rationale: routingRationale,
         },
         validation: {
           approved: validation.approved,

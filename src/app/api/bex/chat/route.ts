@@ -37,6 +37,7 @@ export async function POST(request: Request) {
     route: 'POST /api/bex/chat',
     hasConversationId: Boolean(parsed.data.conversationId),
     useValidator: parsed.data.useValidator ?? false,
+    agentMode: parsed.data.agentMode ?? 'orchestrator',
   });
 
   try {
@@ -45,6 +46,7 @@ export async function POST(request: Request) {
       message: parsed.data.message,
       modelTag: parsed.data.model,
       useValidator: parsed.data.useValidator ?? false,
+      agentMode: parsed.data.agentMode ?? 'orchestrator',
     });
 
     return NextResponse.json({
