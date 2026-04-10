@@ -1,39 +1,50 @@
-import type { Conversation } from '~/types/bex';
+const UI_CACHE_KEY = 'bex.admin.ui.v2';
 
-const STORAGE_KEY = 'bex.admin.sessions.v1';
+export type BexUiCache = {
+  lastActiveConversationId: string | null;
+  model: string;
+};
 
-export function loadSessions(): Conversation[] {
+const defaultCache: BexUiCache = {
+  lastActiveConversationId: null,
+  model: 'preview',
+};
+
+export function loadUiCache(): BexUiCache {
   if (typeof window === 'undefined') {
-    return [];
+    return defaultCache;
   }
 
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(UI_CACHE_KEY);
     if (!raw) {
-      return [];
+      return defaultCache;
     }
 
     const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) {
-      return [];
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return defaultCache;
     }
 
-    return parsed as Conversation[];
+    const o = parsed as Record<string, unknown>;
+    const model =
+      typeof o.model === 'string' && o.model.trim() ? o.model.trim() : 'preview';
+    const lastActiveConversationId =
+      typeof o.lastActiveConversationId === 'string' &&
+      o.lastActiveConversationId.trim()
+        ? o.lastActiveConversationId.trim()
+        : null;
+
+    return { lastActiveConversationId, model };
   } catch {
-    return [];
+    return defaultCache;
   }
 }
 
-export function saveSessions(sessions: Conversation[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
-}
+export function saveUiCache(cache: BexUiCache) {
+  if (typeof window === 'undefined') {
+    return;
+  }
 
-export function createConversation(): Conversation {
-  return {
-    id: crypto.randomUUID(),
-    title: 'New conversation',
-    updatedAt: Date.now(),
-    messages: [],
-  };
+  localStorage.setItem(UI_CACHE_KEY, JSON.stringify(cache));
 }
-// bauer xr - ccm

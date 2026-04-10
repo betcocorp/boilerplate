@@ -60,7 +60,10 @@ export async function POST(request: Request) {
 
   if (parsed.mode === 'bex-chat') {
     try {
-      const result = runOrchestration(parsed.workflow, parsed.orchestrationInput);
+      const result = await runOrchestration(
+        parsed.workflow,
+        parsed.orchestrationInput,
+      );
 
       return NextResponse.json({ ok: true, ...result });
     } catch (error) {
@@ -72,7 +75,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const result = runOrchestration(parsed.workflow, parsed.orchestrationInput);
+    const result = await runOrchestration(parsed.workflow, parsed.orchestrationInput);
 
     return NextResponse.json({ ok: true, ...result });
   } catch (error) {

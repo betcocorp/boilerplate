@@ -1,8 +1,4 @@
-import {
-  BATHROOM_AGENT_CONTEXT_KEYS,
-  runSmeAgent,
-} from '~/lib/agents/sme/run-sme-agent';
-
+import { runBexChatTurn } from '~/lib/bex/run-chat-turn';
 import { routeUserMessageToSme } from '~/lib/orchestrator/sme-routing';
 import { bexChatOrchestrationInputSchema } from '~/lib/orchestrator/orchestrator-schemas';
 
@@ -19,8 +15,10 @@ import type {
   OrchestratorStep,
 } from './orchestrator-schemas';
 
-function runBexChatOrchestration(input: unknown): OrchestrationRunResult {
-  const { message, model } = bexChatOrchestrationInputSchema.parse(input);
+async function runBexChatOrchestration(input: unknown): Promise<OrchestrationRunResult> {
+  const { message, model, conversationId } =
+    bexChatOrchestrationInputSchema.parse(input);
+
   const route = routeUserMessageToSme(message);
 
   const routing: OrchestrationRouting = {
@@ -37,19 +35,17 @@ function runBexChatOrchestration(input: unknown): OrchestrationRunResult {
       id: 'route-to-sme',
       status: 'completed',
       note: route.agent
-        ? `Selected **${route.agent}** SME. ${route.rationale}`
-        : `Could not route to a specialist. ${route.rationale}`,
+        ? `Planner hint: **${route.agent}** SME. ${route.rationale}`
+        : `No strong SME signal. ${route.rationale}`,
     },
   ];
 
-  if (!route.agent) {
+  if (!message.trim()) {
     steps.push({
-      id: 'invoke-sme-agent',
+      id: 'product-support-workflow',
       status: 'pending',
-      note:
-        'Ask a clearer question: Betco product / SDS, restroom care, dilution control hardware, or floor maintenance procedures.',
+      note: 'Empty message.',
     });
-
     return {
       workflow: 'bex-chat',
       input,
@@ -58,69 +54,44 @@ function runBexChatOrchestration(input: unknown): OrchestrationRunResult {
     };
   }
 
-  const smeResult = runSmeAgent(route.agent, {
-    query: message,
-    context: {
-      source: 'bex-orchestrator',
-      ...(model !== undefined ? { model } : {}),
-    },
+  const outcome = await runBexChatTurn({
+    conversationId: conversationId ?? undefined,
+    message,
+    modelTag: model,
   });
 
-  const acknowledgement = [
-    `${smeResult.label} **received your request** (orchestrator routed correctly).`,
-    `Stub pipeline only — next steps are RAG + LLM answer with the SME system prompt and confidence gating.`,
-    smeResult.sessionContextGuide.length > 0
-      ? `**Session context (recommended):** ${(
-          smeResult.agent === 'bathroom'
-            ? BATHROOM_AGENT_CONTEXT_KEYS
-            : smeResult.sessionContextGuide.map((line) =>
-                line.replace(/^`([^`]+)`.*/, '$1'),
-              )
-        ).join(', ')} in \`context\` when calling the agent.`
-      : '',
-    '',
-    `**Your question:** ${message}`,
-  ]
-    .filter((line) => line !== '')
-    .join('\n');
-
-  steps.push(
-    {
-      id: 'invoke-sme-agent',
-      status: 'completed',
-      note: `Dispatched to ${smeResult.label} (\`/api/v1/agents/${route.agent}\`).`,
-    },
-    ...smeResult.steps.map((step) => ({
-      ...step,
-      id: `sme:${step.id}`,
-    })),
-  );
+  steps.push({
+    id: 'product-support-workflow',
+    status: 'completed',
+    note: `Responses API + tools + validator (run ${outcome.workflowRunId}).`,
+  });
 
   return {
     workflow: 'bex-chat',
     input,
     steps,
     routing,
-    sme: {
-      agent: smeResult.agent,
-      label: smeResult.label,
-      acknowledgement,
-      focusAreas: smeResult.focusAreas,
-      systemPrompt: smeResult.systemPrompt,
-      sessionContextGuide: smeResult.sessionContextGuide,
-      steps: smeResult.steps,
+    productSupport: {
+      answerText: outcome.answerText,
+      conversationId: outcome.conversationId,
+      workflowRunId: outcome.workflowRunId,
+      latestOpenaiResponseId: outcome.latestOpenaiResponseId,
+      traceId: outcome.traceId,
+      sources: outcome.sources,
+      confidence: outcome.confidence,
+      validation: outcome.validation,
+      routingDecision: outcome.routingDecision,
     },
   };
 }
 
 /**
- * Orchestration entry: for `bex-chat`, routes to Product, Bathroom, Dilution, or Floor specialist stubs
- * so you can validate end-to-end behavior before adding LLM/RAG.
+ * Orchestration entry: `bex-chat` runs the product-support Responses workflow with tools + validator.
  */
-export function runOrchestration(
+export async function runOrchestration(
   workflow: string | undefined,
   input: unknown,
-): OrchestrationRunResult {
+): Promise<OrchestrationRunResult> {
   const name =
     typeof workflow === 'string' && workflow.trim()
       ? workflow.trim()
@@ -138,7 +109,7 @@ export function runOrchestration(
       {
         id: 'plan',
         status: 'pending' as const,
-        note: 'Add retrieval, LLM, and side-effect steps here.',
+        note: 'Non-bex-chat workflows are not implemented.',
       },
     ],
   };

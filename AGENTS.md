@@ -37,7 +37,7 @@ Use this file together with the user’s rules. Prefer **running** `pnpm exec ts
 
 - **UI**: `~/components/bex/*` (`BexChatApp`, messages, sidebar, composer).
 - **Page**: `src/app/(authenticated)/admin/bex/page.tsx` imports `~/components/bex/BexChatApp` only.
-- **Client → API**: `~/lib/bex/orchestrator-client.ts` posts to `/api/v1/orchestrator`; validate success payloads with **`bexOrchestrateOkResponseSchema`** and pass the **full** result into formatters (include `routing` / `sme` when present).
+- **Client → API (Bex UI)**: `~/lib/bex/bex-api-client.ts` posts to **`/api/bex/chat`** and loads history from **`/api/bex/conversations`**. Legacy **`/api/v1/orchestrator`** still supports `bex-chat` and returns **`productSupport`**; validate with **`bexOrchestrateOkResponseSchema`**.
 - **Sessions**: `~/lib/bex/sessions.ts` + types in `~/types/bex.ts`.
 
 ## Orchestrator and SME agents

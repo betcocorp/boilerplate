@@ -50,12 +50,42 @@ export const orchestrationSmePayloadSchema = z.object({
 
 export type OrchestrationSmePayload = z.infer<typeof orchestrationSmePayloadSchema>;
 
+export const sourceRefSchema = z.object({
+  documentId: z.string(),
+  chunkId: z.string().optional(),
+  title: z.string(),
+  snippet: z.string(),
+  similarity: z.number().optional(),
+});
+
+export const validatorResultSchema = z.object({
+  approved: z.boolean(),
+  confidence: z.number(),
+  issues: z.array(z.string()),
+  requires_human_review: z.boolean(),
+});
+
+export const productSupportOutcomeSchema = z.object({
+  answerText: z.string(),
+  conversationId: z.string().uuid(),
+  workflowRunId: z.string().uuid(),
+  latestOpenaiResponseId: z.string(),
+  traceId: z.string().uuid(),
+  sources: z.array(sourceRefSchema).optional(),
+  confidence: z.number().optional(),
+  validation: validatorResultSchema,
+  routingDecision: z.string().optional(),
+});
+
+export type ProductSupportOutcome = z.infer<typeof productSupportOutcomeSchema>;
+
 export const orchestrationRunResultSchema = z.object({
   workflow: z.string().min(1).max(256),
   input: z.unknown(),
   steps: z.array(orchestratorStepSchema),
   routing: orchestrationRoutingSchema.optional(),
   sme: orchestrationSmePayloadSchema.optional(),
+  productSupport: productSupportOutcomeSchema.optional(),
 });
 
 export type OrchestrationRunResult = z.infer<typeof orchestrationRunResultSchema>;
@@ -76,9 +106,10 @@ export const bexChatOrchestrationInputSchema = z.preprocess(
     .object({
       message: z.unknown(),
       model: z.unknown(),
+      conversationId: z.unknown(),
     })
     .strip()
-    .transform(({ message, model }) => {
+    .transform(({ message, model, conversationId }) => {
       const m =
         typeof message === 'string'
           ? message.trim().slice(0, 16000)
@@ -87,7 +118,12 @@ export const bexChatOrchestrationInputSchema = z.preprocess(
         typeof model === 'string' && model.trim()
           ? model.trim().slice(0, 128)
           : undefined;
-      return { message: m, model: mod };
+      let conv: string | undefined;
+      if (typeof conversationId === 'string' && conversationId.trim()) {
+        const id = conversationId.trim();
+        conv = z.string().uuid().safeParse(id).success ? id : undefined;
+      }
+      return { message: m, model: mod, conversationId: conv };
     }),
 );
 
@@ -112,6 +148,15 @@ export const orchestratorBexChatPostBodySchema = z
           return 'preview';
         }
         return s.trim().slice(0, 128);
+      }),
+    conversationId: z
+      .union([z.string(), z.null(), z.undefined()])
+      .transform((s) => {
+        if (typeof s !== 'string' || !s.trim()) {
+          return undefined;
+        }
+        const id = s.trim();
+        return z.string().uuid().safeParse(id).success ? id : undefined;
       }),
     workflow: z
       .union([z.string(), z.null(), z.undefined()])
@@ -140,7 +185,11 @@ export type ParsedOrchestratorPostBody =
       ok: true;
       mode: 'bex-chat';
       workflow: string;
-      orchestrationInput: { message: string; model: string };
+      orchestrationInput: {
+        message: string;
+        model: string;
+        conversationId?: string;
+      };
     }
   | {
       ok: true;
@@ -167,12 +216,12 @@ export function parseOrchestratorPostBody(raw: unknown): ParsedOrchestratorPostB
         issues: parsed.error.issues,
       };
     }
-    const { message, model, workflow } = parsed.data;
+    const { message, model, workflow, conversationId } = parsed.data;
     return {
       ok: true,
       mode: 'bex-chat',
       workflow,
-      orchestrationInput: { message, model },
+      orchestrationInput: { message, model, conversationId },
     };
   }
 

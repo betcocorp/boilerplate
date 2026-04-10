@@ -1,7 +1,7 @@
 'use client';
 
-import { Bot, Copy, Sparkles, User } from 'lucide-react';
-import { useEffect, useMemo, useRef } from 'react';
+import { Bot, ChevronDown, ChevronRight, Copy, Sparkles, User } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 
 import { Avatar, AvatarFallback } from '~/components/ui/avatar';
@@ -118,6 +118,74 @@ function markdownComponentsForBubble(isUser: boolean): Components {
   };
 }
 
+function AssistantDetails({ messageId, meta }: { messageId: string; meta: NonNullable<ChatMessage['meta']> }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="mt-2 border-t border-border/40 pt-2 text-xs text-muted-foreground">
+      <button
+        className="flex items-center gap-1 font-medium text-foreground/80 hover:text-foreground"
+        onClick={() => setOpen((v) => !v)}
+        type="button"
+      >
+        {open ? (
+          <ChevronDown className="size-3.5" aria-hidden />
+        ) : (
+          <ChevronRight className="size-3.5" aria-hidden />
+        )}
+        Details
+      </button>
+      {open ? (
+        <div className="mt-2 space-y-2 rounded-xl bg-muted/50 p-3 text-left">
+          {meta.confidence !== undefined ? (
+            <p>
+              <span className="font-medium text-foreground">Confidence:</span>{' '}
+              {meta.confidence.toFixed(2)}
+            </p>
+          ) : null}
+          {meta.validation ? (
+            <p>
+              <span className="font-medium text-foreground">Validation:</span>{' '}
+              {meta.validation.approved ? 'approved' : 'not approved'}
+              {meta.validation.requiresHumanReview ? ' · human review' : ''}
+            </p>
+          ) : null}
+          {meta.validation?.issues && meta.validation.issues.length > 0 ? (
+            <div>
+              <span className="font-medium text-foreground">Issues</span>
+              <ul className="mt-1 list-disc space-y-0.5 pl-4">
+                {meta.validation.issues.map((issue) => (
+                  <li key={`${messageId}-${issue}`}>{issue}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          {meta.sources && meta.sources.length > 0 ? (
+            <div>
+              <span className="font-medium text-foreground">Sources</span>
+              <ul className="mt-1 space-y-1">
+                {meta.sources.slice(0, 8).map((s) => (
+                  <li className="wrap-break-word" key={`${messageId}-${s.documentId}`}>
+                    <span className="font-mono text-[0.7rem] opacity-80">
+                      {s.documentId.slice(0, 8)}…
+                    </span>{' '}
+                    {s.title}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          {meta.workflowRunId ? (
+            <p className="font-mono text-[0.65rem] opacity-70">
+              Run: {meta.workflowRunId}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function BexChatMessageBody({
   content,
   isUser,
@@ -169,14 +237,12 @@ export function BexChatMessages({
             Bex assistant
           </h1>
           <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-            The orchestrator runs the <code className="text-xs">bex-chat</code>{' '}
-            workflow, routes to the <strong>Product</strong> SME or{' '}
-            <strong>Bathroom specialist</strong> (restroom care) from your
-            wording, and the reply shows routing scores plus an acknowledgement
-            from the selected agent (stubs for now).
+            Bex runs the <code className="text-xs">product-support</code> workflow:
+            OpenAI Responses API with server-side tools over your RAG corpus, a
+            validator pass, and durable threads in Supabase.
           </p>
           <Badge className="mt-4 rounded-full" variant="secondary">
-            Admin · orchestrator · local chat history
+            Admin · Responses API · Supabase history
           </Badge>
           {onStartEmptyChat ? (
             <Button
@@ -275,6 +341,9 @@ export function BexChatMessages({
                     </span>
                   </div>
                   <BexChatMessageBody content={m.content} isUser={isUser} />
+                  {!isUser && m.meta ? (
+                    <AssistantDetails messageId={m.id} meta={m.meta} />
+                  ) : null}
                   {!isUser && (
                     <div className="mt-3 flex justify-end border-t border-border/40 pt-2">
                       <Button
