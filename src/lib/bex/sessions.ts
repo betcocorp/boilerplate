@@ -3,11 +3,15 @@ const UI_CACHE_KEY = 'bex.admin.ui.v2';
 export type BexUiCache = {
   lastActiveConversationId: string | null;
   model: string;
+  useValidator: boolean;
+  agentMode: 'orchestrator' | 'product' | 'bathroom' | 'dilution' | 'floor';
 };
 
 const defaultCache: BexUiCache = {
   lastActiveConversationId: null,
   model: 'preview',
+  useValidator: false,
+  agentMode: 'orchestrator',
 };
 
 export function loadUiCache(): BexUiCache {
@@ -34,8 +38,17 @@ export function loadUiCache(): BexUiCache {
       o.lastActiveConversationId.trim()
         ? o.lastActiveConversationId.trim()
         : null;
+    const useValidator = typeof o.useValidator === 'boolean' ? o.useValidator : false;
+    const agentMode =
+      o.agentMode === 'product' ||
+      o.agentMode === 'bathroom' ||
+      o.agentMode === 'dilution' ||
+      o.agentMode === 'floor' ||
+      o.agentMode === 'orchestrator'
+        ? o.agentMode
+        : 'orchestrator';
 
-    return { lastActiveConversationId, model };
+    return { lastActiveConversationId, model, useValidator, agentMode };
   } catch {
     return defaultCache;
   }

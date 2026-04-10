@@ -5,6 +5,10 @@ export const bexChatPostBodySchema = z
     conversationId: z.string().uuid().optional(),
     message: z.string().min(1).max(16_000),
     model: z.string().max(128).optional(),
+    useValidator: z.boolean().optional(),
+    agentMode: z
+      .enum(['orchestrator', 'product', 'bathroom', 'dilution', 'floor'])
+      .optional(),
   })
   .strip();
 

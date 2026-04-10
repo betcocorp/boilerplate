@@ -10,6 +10,8 @@ type BexChatComposerProps = {
   value: string;
   onChange: (value: string) => void;
   onSend: () => void;
+  useValidator: boolean;
+  onUseValidatorChange: (value: boolean) => void;
   disabled?: boolean;
   placeholder?: string;
 };
@@ -18,7 +20,9 @@ export function BexChatComposer({
   disabled,
   onChange,
   onSend,
+  onUseValidatorChange,
   placeholder = 'Message Bex…',
+  useValidator,
   value,
 }: BexChatComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -84,6 +88,16 @@ export function BexChatComposer({
               <span className="hidden sm:inline">Attach</span>
             </Button>
             <div className="flex items-center gap-2">
+              <label className="mr-1 inline-flex items-center gap-2 text-xs text-muted-foreground">
+                <input
+                  checked={useValidator}
+                  className="size-3.5 rounded border-border text-primary focus:ring-ring"
+                  disabled={disabled}
+                  onChange={(e) => onUseValidatorChange(e.target.checked)}
+                  type="checkbox"
+                />
+                Use validator
+              </label>
               <span className="hidden text-xs text-muted-foreground sm:inline">
                 Enter to send · Shift+Enter for newline
               </span>

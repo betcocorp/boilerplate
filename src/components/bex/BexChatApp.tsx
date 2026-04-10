@@ -35,6 +35,10 @@ export function BexChatApp() {
   const [isTyping, setIsTyping] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [model, setModel] = useState('preview');
+  const [useValidator, setUseValidator] = useState(false);
+  const [agentMode, setAgentMode] = useState<
+    'orchestrator' | 'product' | 'bathroom' | 'dilution' | 'floor'
+  >('orchestrator');
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const refreshConversation = useCallback(async (id: string) => {
@@ -57,6 +61,8 @@ export function BexChatApp() {
   useEffect(() => {
     const cache = loadUiCache();
     setModel(cache.model);
+    setUseValidator(cache.useValidator);
+    setAgentMode(cache.agentMode);
 
     void (async () => {
       try {
@@ -94,8 +100,10 @@ export function BexChatApp() {
     saveUiCache({
       lastActiveConversationId: activeId,
       model,
+      useValidator,
+      agentMode,
     });
-  }, [activeId, hydrated, model]);
+  }, [activeId, hydrated, model, useValidator, agentMode]);
 
   useEffect(() => {
     if (activeId === null) {
@@ -144,6 +152,8 @@ export function BexChatApp() {
           conversationId: convId,
           message: trimmed,
           model,
+          useValidator,
+          agentMode,
         });
 
         const detail = await apiFetchConversation(reply.conversationId);
@@ -175,7 +185,7 @@ export function BexChatApp() {
         setIsTyping(false);
       }
     },
-    [activeId, isTyping, model, refreshConversation],
+    [activeId, isTyping, model, refreshConversation, useValidator, agentMode],
   );
 
   const handleNewChat = useCallback(async () => {
@@ -313,11 +323,35 @@ export function BexChatApp() {
             </div>
 
             <div className="flex w-full items-center gap-2 sm:w-auto">
+              <label className="sr-only" htmlFor="bex-agent-mode">
+                Agent mode
+              </label>
+              <select
+                className="h-9 w-full min-w-40 rounded-2xl border border-border/60 bg-muted/40 px-3 text-sm outline-none transition focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 sm:w-auto"
+                id="bex-agent-mode"
+                onChange={(e) =>
+                  setAgentMode(
+                    e.target.value as
+                      | 'orchestrator'
+                      | 'product'
+                      | 'bathroom'
+                      | 'dilution'
+                      | 'floor',
+                  )
+                }
+                value={agentMode}
+              >
+                <option value="orchestrator">Route: orchestrator</option>
+                <option value="product">Route: direct product specialist</option>
+                <option value="bathroom">Route: direct bathroom specialist</option>
+                <option value="dilution">Route: direct dilution specialist</option>
+                <option value="floor">Route: direct floor specialist</option>
+              </select>
               <label className="sr-only" htmlFor="bex-model">
                 Model
               </label>
               <select
-                className="h-9 w-full min-w-[10rem] rounded-2xl border border-border/60 bg-muted/40 px-3 text-sm outline-none transition focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 sm:w-auto"
+                className="h-9 w-full min-w-40 rounded-2xl border border-border/60 bg-muted/40 px-3 text-sm outline-none transition focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 sm:w-auto"
                 id="bex-model"
                 onChange={(e) => setModel(e.target.value)}
                 value={model}
@@ -366,6 +400,8 @@ export function BexChatApp() {
               disabled={isTyping}
               onChange={setDraft}
               onSend={() => void sendUserText(draft)}
+              onUseValidatorChange={setUseValidator}
+              useValidator={useValidator}
               value={draft}
             />
           ) : null}

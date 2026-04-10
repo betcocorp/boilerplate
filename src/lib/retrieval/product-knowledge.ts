@@ -1,6 +1,9 @@
 import { searchProductChunks, type RagSearchMatch } from '~/lib/rag/search';
 
-import { selectCuratedMatches, trimSnippet } from '~/lib/retrieval/source-selection';
+import {
+  selectCuratedMatches,
+  trimSnippet,
+} from '~/lib/retrieval/source-selection';
 
 export type CuratedSource = {
   documentId: string;
