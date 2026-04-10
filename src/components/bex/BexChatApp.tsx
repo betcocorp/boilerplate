@@ -35,6 +35,7 @@ export function BexChatApp() {
   const [isTyping, setIsTyping] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [model, setModel] = useState('preview');
+  const [useValidator, setUseValidator] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const refreshConversation = useCallback(async (id: string) => {
@@ -57,6 +58,7 @@ export function BexChatApp() {
   useEffect(() => {
     const cache = loadUiCache();
     setModel(cache.model);
+    setUseValidator(cache.useValidator);
 
     void (async () => {
       try {
@@ -94,8 +96,9 @@ export function BexChatApp() {
     saveUiCache({
       lastActiveConversationId: activeId,
       model,
+      useValidator,
     });
-  }, [activeId, hydrated, model]);
+  }, [activeId, hydrated, model, useValidator]);
 
   useEffect(() => {
     if (activeId === null) {
@@ -144,6 +147,7 @@ export function BexChatApp() {
           conversationId: convId,
           message: trimmed,
           model,
+          useValidator,
         });
 
         const detail = await apiFetchConversation(reply.conversationId);
@@ -175,7 +179,7 @@ export function BexChatApp() {
         setIsTyping(false);
       }
     },
-    [activeId, isTyping, model, refreshConversation],
+    [activeId, isTyping, model, refreshConversation, useValidator],
   );
 
   const handleNewChat = useCallback(async () => {
@@ -366,6 +370,8 @@ export function BexChatApp() {
               disabled={isTyping}
               onChange={setDraft}
               onSend={() => void sendUserText(draft)}
+              onUseValidatorChange={setUseValidator}
+              useValidator={useValidator}
               value={draft}
             />
           ) : null}

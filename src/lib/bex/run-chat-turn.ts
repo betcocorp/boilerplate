@@ -20,6 +20,7 @@ export async function runBexChatTurn(input: {
   conversationId?: string | null;
   message: string;
   modelTag?: string;
+  useValidator?: boolean;
 }): Promise<BexChatTurnResult> {
   const traceId = newCorrelationId();
   const trimmed = input.message.trim();
@@ -55,6 +56,7 @@ export async function runBexChatTurn(input: {
     conversationId: conversation.id,
     userMessage: trimmed,
     modelTag: input.modelTag,
+    useValidator: input.useValidator ?? false,
     previousOpenaiResponseId: conversation.latest_openai_response_id,
   });
 

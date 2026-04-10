@@ -3,11 +3,13 @@ const UI_CACHE_KEY = 'bex.admin.ui.v2';
 export type BexUiCache = {
   lastActiveConversationId: string | null;
   model: string;
+  useValidator: boolean;
 };
 
 const defaultCache: BexUiCache = {
   lastActiveConversationId: null,
   model: 'preview',
+  useValidator: false,
 };
 
 export function loadUiCache(): BexUiCache {
@@ -34,8 +36,9 @@ export function loadUiCache(): BexUiCache {
       o.lastActiveConversationId.trim()
         ? o.lastActiveConversationId.trim()
         : null;
+    const useValidator = typeof o.useValidator === 'boolean' ? o.useValidator : false;
 
-    return { lastActiveConversationId, model };
+    return { lastActiveConversationId, model, useValidator };
   } catch {
     return defaultCache;
   }

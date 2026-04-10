@@ -144,6 +144,7 @@ export async function apiPostBexChat(options: {
   conversationId?: string | null;
   message: string;
   model: string;
+  useValidator?: boolean;
 }): Promise<BexChatResponse> {
   const res = await fetch('/api/bex/chat', {
     method: 'POST',
@@ -152,6 +153,7 @@ export async function apiPostBexChat(options: {
       conversationId: options.conversationId ?? undefined,
       message: options.message,
       model: options.model,
+      useValidator: options.useValidator,
     }),
   });
 

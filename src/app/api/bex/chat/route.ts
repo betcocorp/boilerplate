@@ -36,6 +36,7 @@ export async function POST(request: Request) {
     trace_id: traceId,
     route: 'POST /api/bex/chat',
     hasConversationId: Boolean(parsed.data.conversationId),
+    useValidator: parsed.data.useValidator ?? false,
   });
 
   try {
@@ -43,6 +44,7 @@ export async function POST(request: Request) {
       conversationId: parsed.data.conversationId,
       message: parsed.data.message,
       modelTag: parsed.data.model,
+      useValidator: parsed.data.useValidator ?? false,
     });
 
     return NextResponse.json({

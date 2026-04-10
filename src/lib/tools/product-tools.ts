@@ -1,10 +1,10 @@
-import { ragQueryForProductKnowledge } from '~/lib/retrieval/product-knowledge';
 import {
   retrieveApprovedUsage,
   retrieveCompatibility,
   retrieveSafetyConstraints,
   retrieveSurfacesLists,
 } from '~/lib/retrieval/product-guidance';
+import { ragQueryForProductKnowledge } from '~/lib/retrieval/product-knowledge';
 
 import {
   getApprovedUsageGuidanceInputSchema,
@@ -20,7 +20,9 @@ import {
 
 const ADAPTER_TAG = 'rag_corpus_transitional' as const;
 
-function sourcePayload(sources: Awaited<ReturnType<typeof ragQueryForProductKnowledge>>) {
+function sourcePayload(
+  sources: Awaited<ReturnType<typeof ragQueryForProductKnowledge>>,
+) {
   return sources.map((s) => ({
     documentId: s.documentId,
     chunkId: s.chunkId,
@@ -57,10 +59,18 @@ const ESCALATION_MAP: Record<string, { summary: string; steps: string[] }> = {
 
 function escalationForIssueType(raw: string) {
   const key = raw.trim().toLowerCase();
-  if (key.includes('safety') || key.includes('exposure') || key.includes('sds')) {
+  if (
+    key.includes('safety') ||
+    key.includes('exposure') ||
+    key.includes('sds')
+  ) {
     return ESCALATION_MAP.safety;
   }
-  if (key.includes('compat') || key.includes('surface') || key.includes('material')) {
+  if (
+    key.includes('compat') ||
+    key.includes('surface') ||
+    key.includes('material')
+  ) {
     return ESCALATION_MAP.compatibility;
   }
   return ESCALATION_MAP.default;
@@ -73,7 +83,9 @@ export async function executeProductTool(
   switch (name) {
     case 'search_product_docs': {
       const p = searchProductDocsInputSchema.parse(args);
-      const q = [p.productName, p.topic, p.surfaceType].filter(Boolean).join(' ');
+      const q = [p.productName, p.topic, p.surfaceType]
+        .filter(Boolean)
+        .join(' ');
       const sources = await ragQueryForProductKnowledge({ query: q, limit: 8 });
       return {
         ok: true,
@@ -130,7 +142,10 @@ export async function executeProductTool(
     }
     case 'list_allowed_surfaces': {
       const p = listAllowedSurfacesInputSchema.parse(args);
-      const sources = await retrieveSurfacesLists({ productId: p.productId, mode: 'allowed' });
+      const sources = await retrieveSurfacesLists({
+        productId: p.productId,
+        mode: 'allowed',
+      });
       return {
         ok: true,
         adapter: ADAPTER_TAG,
@@ -140,7 +155,10 @@ export async function executeProductTool(
     }
     case 'list_disallowed_uses': {
       const p = listDisallowedUsesInputSchema.parse(args);
-      const sources = await retrieveSurfacesLists({ productId: p.productId, mode: 'disallowed' });
+      const sources = await retrieveSurfacesLists({
+        productId: p.productId,
+        mode: 'disallowed',
+      });
       return {
         ok: true,
         adapter: ADAPTER_TAG,
