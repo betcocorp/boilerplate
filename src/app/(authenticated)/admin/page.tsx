@@ -245,6 +245,7 @@ export default function AdminDashboardPage() {
                       ['Bex chat', '/admin/bex'],
                       ['Legacy product browser', '/admin/products/legacy'],
                       ['RAG search', '/admin/products/rag'],
+                      ['SDS ingestion dashboard', '/admin/sds'],
                       ['RAG generation', '/admin/products/rag/generate'],
                     ].map(([label, href]) => (
                       <Link

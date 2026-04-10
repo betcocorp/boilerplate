@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import {
+  FileText,
   Layers,
   LayoutDashboard,
   Library,
@@ -20,7 +21,13 @@ const workspaceNavItems = [
 
 const productsNavItems = [
   { label: 'Legacy products', href: '/admin/products/legacy', icon: Library },
-  { label: 'RAG search', href: '/admin/products/rag', icon: Layers },
+  { label: 'RAG products', href: '/admin/products/rag', icon: Layers },
+  { label: 'SDS ingestion', href: '/admin/sds', icon: FileText },
+  {
+    label: 'RAG similarity search',
+    href: '/admin/products/rag',
+    icon: Search,
+  },
   {
     label: 'RAG generate',
     href: '/admin/products/rag/generate',
@@ -108,6 +115,12 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
                   </h2>
                 </div>
                 <div className="flex items-center gap-3">
+                  <Button asChild size="sm" variant="outline">
+                    <Link href="/admin/sds">
+                      <FileText className="size-4" />
+                      SDS
+                    </Link>
+                  </Button>
                   <Button asChild size="sm" variant="outline">
                     <Link href="/admin/products/rag">
                       <Search className="size-4" />
