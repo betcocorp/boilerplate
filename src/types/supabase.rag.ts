@@ -219,6 +219,13 @@ export type Database = {
       }
       search_embedding: {
         Row: {
+          avg_cache_lookup_ms: number
+          avg_cache_persist_ms: number
+          avg_embedding_create_ms: number
+          avg_query_embedding_ms: number
+          avg_query_rewrite_ms: number
+          avg_similarity_search_ms: number
+          avg_total_search_ms: number
           created_at: string
           deleted_at: string | null
           embeddings: string | null
@@ -226,9 +233,17 @@ export type Database = {
           query_count: number
           query_rewritten: string | null
           query_string: string
+          timing_sample_count: number
           updated_at: string | null
         }
         Insert: {
+          avg_cache_lookup_ms?: number
+          avg_cache_persist_ms?: number
+          avg_embedding_create_ms?: number
+          avg_query_embedding_ms?: number
+          avg_query_rewrite_ms?: number
+          avg_similarity_search_ms?: number
+          avg_total_search_ms?: number
           created_at?: string
           deleted_at?: string | null
           embeddings?: string | null
@@ -236,9 +251,17 @@ export type Database = {
           query_count?: number
           query_rewritten?: string | null
           query_string: string
+          timing_sample_count?: number
           updated_at?: string | null
         }
         Update: {
+          avg_cache_lookup_ms?: number
+          avg_cache_persist_ms?: number
+          avg_embedding_create_ms?: number
+          avg_query_embedding_ms?: number
+          avg_query_rewrite_ms?: number
+          avg_similarity_search_ms?: number
+          avg_total_search_ms?: number
           created_at?: string
           deleted_at?: string | null
           embeddings?: string | null
@@ -246,6 +269,7 @@ export type Database = {
           query_count?: number
           query_rewritten?: string | null
           query_string?: string
+          timing_sample_count?: number
           updated_at?: string | null
         }
         Relationships: []
@@ -339,6 +363,30 @@ export type Database = {
       }
     }
     Functions: {
+      find_similar_search_embedding: {
+        Args: {
+          p_query: string
+          p_query_similarity_threshold?: number
+          p_rewritten_similarity_threshold?: number
+        }
+        Returns: {
+          avg_cache_lookup_ms: number
+          avg_cache_persist_ms: number
+          avg_embedding_create_ms: number
+          avg_query_embedding_ms: number
+          avg_query_rewrite_ms: number
+          avg_similarity_search_ms: number
+          avg_total_search_ms: number
+          embeddings: string
+          id: number
+          match_source: string
+          matched_similarity: number
+          query_count: number
+          query_rewritten: string
+          query_string: string
+          timing_sample_count: number
+        }[]
+      }
       match_product_chunks: {
         Args: {
           filter_product_key?: string
