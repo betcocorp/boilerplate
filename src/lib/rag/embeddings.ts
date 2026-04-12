@@ -5,9 +5,7 @@ import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 const DEFAULT_EMBEDDING_MODEL = 'text-embedding-3-small';
 const EMBEDDING_DIMENSIONS = 1536;
 const DEFAULT_BATCH_SIZE = 25;
-const MAX_BATCH_SIZE = 100;
 const DEFAULT_MAX_BATCHES = 4;
-const MAX_BATCHES = 20;
 
 type PendingChunkRow = {
   id: string;
@@ -20,6 +18,7 @@ type SyncDocumentChunkEmbeddingsOptions = {
   batchSize?: number;
   maxBatches?: number;
   model?: string;
+  documentKind?: string;
 };
 
 type SyncDocumentChunkEmbeddingsResult = {
@@ -52,13 +51,12 @@ function getEmbeddingModel(model?: string) {
 function clampPositiveInteger(
   value: number | undefined,
   fallback: number,
-  max: number,
 ) {
   if (!Number.isFinite(value) || !value || value < 1) {
     return fallback;
   }
 
-  return Math.min(Math.floor(value), max);
+  return Math.floor(value);
 }
 
 function buildEmbeddingInput(chunk: PendingChunkRow) {
@@ -90,6 +88,39 @@ async function fetchPendingChunks(limit: number) {
   return (data ?? []) as PendingChunkRow[];
 }
 
+async function fetchPendingChunksByDocumentKind(
+  limit: number,
+  documentKind: string,
+) {
+  const supabase = getSupabaseServiceRoleClient();
+  const { data, error } = await supabase
+    .schema('rag')
+    .from('document_chunk')
+    .select('id, chunk_key, heading, chunk_text, document!inner(document_kind)')
+    .eq('document.document_kind', documentKind)
+    .is('embedding', null)
+    .not('chunk_text', 'is', null)
+    .order('updated_at', { ascending: true })
+    .limit(limit);
+
+  if (error) {
+    throw new Error(`Failed to load pending ${documentKind} chunks: ${error.message}`);
+  }
+
+  return ((data ?? []) as Array<
+    PendingChunkRow & {
+      document: {
+        document_kind: string;
+      };
+    }
+  >).map(({ id, chunk_key, heading, chunk_text }) => ({
+    id,
+    chunk_key,
+    heading,
+    chunk_text,
+  }));
+}
+
 async function countRemainingChunks() {
   const supabase = getSupabaseServiceRoleClient();
   const { count, error } = await supabase
@@ -101,6 +132,24 @@ async function countRemainingChunks() {
   if (error) {
     throw new Error(
       `Failed to count remaining document chunks: ${error.message}`,
+    );
+  }
+
+  return count ?? 0;
+}
+
+async function countRemainingChunksByDocumentKind(documentKind: string) {
+  const supabase = getSupabaseServiceRoleClient();
+  const { count, error } = await supabase
+    .schema('rag')
+    .from('document_chunk')
+    .select('id, document!inner(document_kind)', { count: 'exact', head: true })
+    .eq('document.document_kind', documentKind)
+    .is('embedding', null);
+
+  if (error) {
+    throw new Error(
+      `Failed to count remaining ${documentKind} document chunks: ${error.message}`,
     );
   }
 
@@ -144,16 +193,9 @@ export async function syncDocumentChunkEmbeddings(
   options: SyncDocumentChunkEmbeddingsOptions = {},
 ): Promise<SyncDocumentChunkEmbeddingsResult> {
   const model = getEmbeddingModel(options.model);
-  const batchSize = clampPositiveInteger(
-    options.batchSize,
-    DEFAULT_BATCH_SIZE,
-    MAX_BATCH_SIZE,
-  );
-  const maxBatches = clampPositiveInteger(
-    options.maxBatches,
-    DEFAULT_MAX_BATCHES,
-    MAX_BATCHES,
-  );
+  const documentKind = options.documentKind?.trim();
+  const batchSize = clampPositiveInteger(options.batchSize, DEFAULT_BATCH_SIZE);
+  const maxBatches = clampPositiveInteger(options.maxBatches, DEFAULT_MAX_BATCHES);
 
   const openai = getOpenAIClient();
 
@@ -161,7 +203,9 @@ export async function syncDocumentChunkEmbeddings(
   let chunksEmbedded = 0;
 
   while (batchesProcessed < maxBatches) {
-    const chunks = await fetchPendingChunks(batchSize);
+    const chunks = documentKind
+      ? await fetchPendingChunksByDocumentKind(batchSize, documentKind)
+      : await fetchPendingChunks(batchSize);
 
     if (chunks.length === 0) {
       break;
@@ -196,7 +240,9 @@ export async function syncDocumentChunkEmbeddings(
     maxBatches,
     batchesProcessed,
     chunksEmbedded,
-    remainingChunks: await countRemainingChunks(),
+    remainingChunks: documentKind
+      ? await countRemainingChunksByDocumentKind(documentKind)
+      : await countRemainingChunks(),
   };
 }
 

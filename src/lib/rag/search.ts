@@ -12,6 +12,7 @@ type SearchProductChunksOptions = {
   productLineKey?: string;
   minSimilarity?: number;
   model?: string;
+  scope?: 'all' | 'products' | 'sds';
 };
 
 type SearchEmbeddingRow = {
@@ -51,6 +52,7 @@ export type RagSearchMatch = {
   sku: string | null;
   product_line_key: string | null;
   source_pk: string;
+  document_kind: string;
   similarity: number;
 };
 
@@ -59,6 +61,7 @@ export type RagSearchResult = {
   model: string;
   limit: number;
   productLineKey: string | null;
+  scope: 'all' | 'products' | 'sds';
   minSimilarity: number | null;
   embeddingSource:
     | 'exact-cache-hit'
@@ -76,6 +79,11 @@ export type RagSearchResult = {
     similaritySearchMs: number;
   };
   matches: RagSearchMatch[];
+};
+
+
+type RagCorpusSearchMatch = Omit<RagSearchMatch, 'document_kind'> & {
+  document_kind: string | null;
 };
 
 function clampLimit(limit?: number) {
@@ -98,6 +106,18 @@ function normalizeMinSimilarity(minSimilarity?: number) {
   }
 
   return Math.min(normalized, 1);
+}
+
+function normalizeScope(scope?: string) {
+  if (scope === 'products' || scope === 'sds') {
+    return scope;
+  }
+
+  if (scope === 'all') {
+    return 'all' as const;
+  }
+
+  return 'products' as const;
 }
 
 function nowMs() {
@@ -589,6 +609,7 @@ export async function searchProductChunks(
 
   const limit = clampLimit(options.limit);
   const productLineKey = options.productLineKey?.trim() || null;
+  const scope = normalizeScope(options.scope);
   const minSimilarity = normalizeMinSimilarity(options.minSimilarity);
 
   const {
@@ -601,14 +622,20 @@ export async function searchProductChunks(
 
   const supabase = getSupabaseServiceRoleClient();
   const similaritySearchStartedAt = nowMs();
-  const { data, error } = await supabase
-    .schema('rag')
-    .rpc('match_product_chunks', {
-      query_embedding: toVectorLiteral(embedding),
-      match_count: limit,
-      filter_product_key: null,
-      filter_product_line_key: productLineKey,
-    });
+  const { data, error } =
+    scope === 'products'
+      ? await supabase.schema('rag').rpc('match_product_chunks', {
+          query_embedding: toVectorLiteral(embedding),
+          match_count: limit,
+          filter_product_key: null,
+          filter_product_line_key: productLineKey,
+        })
+      : await supabase.schema('rag').rpc('match_corpus_chunks', {
+          query_embedding: toVectorLiteral(embedding),
+          match_count: limit,
+          filter_product_line_key: productLineKey,
+          filter_scope: scope,
+        });
   const similaritySearchMs = elapsedMs(similaritySearchStartedAt);
 
   if (error) {
@@ -636,10 +663,21 @@ export async function searchProductChunks(
     model,
     limit,
     productLineKey,
+    scope,
     minSimilarity,
     embeddingSource: source,
     timings,
-    matches: ((data ?? []) as RagSearchMatch[])
+    matches: (
+      scope === 'products'
+        ? ((data ?? []) as RagSearchMatch[]).map((match) => ({
+            ...match,
+            document_kind: 'product_line_profile',
+          }))
+        : ((data ?? []) as RagCorpusSearchMatch[]).map((match) => ({
+            ...match,
+            document_kind: match.document_kind ?? 'unknown',
+          }))
+    )
       .map((match) => ({
         ...match,
         similarity: Number(match.similarity),
@@ -649,3 +687,4 @@ export async function searchProductChunks(
       ),
   };
 }
+

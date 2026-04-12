@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import {
+  ChevronRight,
   FileText,
   Layers,
   LayoutDashboard,
@@ -20,18 +21,24 @@ const workspaceNavItems = [
 ];
 
 const productsNavItems = [
-  { label: 'Legacy products', href: '/admin/products/legacy', icon: Library },
-  { label: 'RAG products', href: '/admin/products/rag', icon: Layers },
-  { label: 'SDS ingestion', href: '/admin/sds', icon: FileText },
   {
-    label: 'RAG similarity search',
-    href: '/admin/products/rag',
-    icon: Search,
+    label: 'Legacy',
+    icon: Library,
+    items: [{ label: 'Legacy products', href: '/admin/products/legacy' }],
   },
   {
-    label: 'RAG generate',
-    href: '/admin/products/rag/generate',
-    icon: Wand2,
+    label: 'Rag',
+    icon: Layers,
+    items: [
+      { label: 'RAG products', href: '/admin/products/rag' },
+      { label: 'RAG similarity search', href: '/admin/products/rag' },
+      { label: 'RAG generate', href: '/admin/products/rag/generate' },
+    ],
+  },
+  {
+    label: 'SDS',
+    icon: FileText,
+    items: [{ label: 'SDS ingestion', href: '/admin/sds' }],
   },
 ];
 
@@ -77,6 +84,56 @@ function NavSection({
   );
 }
 
+function NavGroupedSection({
+  groups,
+  title,
+}: {
+  groups: Array<{
+    label: string;
+    icon: typeof LayoutDashboard;
+    items: Array<{
+      label: string;
+      href: string;
+    }>;
+  }>;
+  title?: string;
+}) {
+  return (
+    <div className="space-y-2">
+      {title ? (
+        <p className="px-2 text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">
+          {title}
+        </p>
+      ) : null}
+      <nav className="space-y-1">
+        {groups.map((group) => {
+          const Icon = group.icon;
+          return (
+            <details className="group rounded-2xl" key={group.label}>
+              <summary className="flex cursor-pointer list-none items-center gap-3 rounded-2xl px-3 py-2 text-sm font-medium text-foreground/80 transition hover:bg-accent hover:text-foreground">
+                <Icon className="size-4" />
+                <span className="flex-1">{group.label}</span>
+                <ChevronRight className="size-4 transition group-open:rotate-90" />
+              </summary>
+              <div className="mt-1 space-y-1 pl-10">
+                {group.items.map((item) => (
+                  <Link
+                    className="block rounded-xl px-3 py-1.5 text-sm text-foreground/70 transition hover:bg-accent hover:text-foreground"
+                    href={item.href}
+                    key={item.label}
+                  >
+                    {item.label}
+                  </Link>
+                ))}
+              </div>
+            </details>
+          );
+        })}
+      </nav>
+    </div>
+  );
+}
+
 export default function AdminLayout({ children }: AdminLayoutProps) {
   return (
     <div className="h-screen overflow-hidden bg-muted/40">
@@ -94,7 +151,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
 
           <div className="mt-8 space-y-6">
             <NavSection items={workspaceNavItems} title="Workspace" />
-            <NavSection items={productsNavItems} title="Products & RAG" />
+            <NavGroupedSection groups={productsNavItems} title="Products & RAG" />
           </div>
 
           <div className="mt-auto">

@@ -21,9 +21,9 @@ export default async function AdminSdsPage() {
                 Initial SDS import into the RAG schema
               </h1>
               <p className="mt-4 text-base leading-7 text-slate-600">
-                This flow ingests local PDF paths into `rag.source_record`, `rag.document`,
-                and `rag.document_chunk` with `document_kind = &quot;sds&quot;`. It is
-                designed for first-pass loading while S3 webhook sync is still being built.
+                This flow ingests SDS PDFs from the `betco-sds` S3 bucket into
+                `rag.source_record`, `rag.document`, and `rag.document_chunk` with
+                `document_kind = &quot;sds&quot;`.
               </p>
             </div>
             <div className="flex items-center gap-3">

@@ -1,12 +1,18 @@
+import {
+  GetObjectCommand,
+  ListObjectsV2Command,
+  S3Client,
+} from '@aws-sdk/client-s3';
 import { createHash } from 'node:crypto';
-import { readdir, readFile } from 'node:fs/promises';
-import { basename, extname, relative, sep } from 'node:path';
+import { basename, extname } from 'node:path';
 
+import { syncDocumentChunkEmbeddings } from '~/lib/rag/embeddings';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 import {
   SDS_FILE_OVERRIDES,
-  SDS_ROOT_PATH_DEFAULT,
+  SDS_S3_BUCKET_DEFAULT,
+  SDS_S3_PREFIX_DEFAULT,
   type SdsSeedDocument,
 } from './manifest';
 
@@ -16,6 +22,7 @@ const SOURCE_TYPE = 's3_pdf';
 const DOCUMENT_KIND = 'sds';
 const DEFAULT_BATCH_SIZE = 2;
 const MAX_BATCH_SIZE = 10;
+const MAX_EMBEDDING_RUNS = 25;
 const MAX_CHARS_PER_CHUNK = 2200;
 const CHUNK_OVERLAP_CHARS = 250;
 const MAX_DASHBOARD_DOCUMENT_ROWS = 300;
@@ -24,7 +31,6 @@ type JsonObject = Record<string, unknown>;
 
 type SdsIngestionMetadata = {
   status?: string;
-  local_path?: string;
   s3_key?: string;
   title?: string;
   locale?: string;
@@ -56,12 +62,15 @@ type DocumentRow = {
   metadata: JsonObject | null;
 };
 
-type SdsDashboardDocumentStatus = 'missing' | 'registered' | 'ingested' | 'failed';
+type SdsDashboardDocumentStatus =
+  | 'missing'
+  | 'registered'
+  | 'ingested'
+  | 'failed';
 
 export type SdsDashboardDocument = {
   id: string;
   title: string;
-  localPath: string;
   s3Key: string;
   locale: string;
   status: SdsDashboardDocumentStatus;
@@ -81,11 +90,13 @@ export type SdsDashboardStatus = {
     ingested: number;
     failed: number;
     chunks: number;
+    embeddedChunks: number;
   };
   preview: {
     showing: number;
     hidden: number;
   };
+  warning: string | null;
   documents: SdsDashboardDocument[];
 };
 
@@ -93,7 +104,9 @@ export type SdsIngestionRunMode =
   | 'register-seed'
   | 'ingest-next'
   | 'ingest-all'
-  | 'retry-failed';
+  | 'retry-failed'
+  | 'embed-next'
+  | 'embed-all';
 
 export type SdsIngestionRunResult = {
   mode: SdsIngestionRunMode;
@@ -151,56 +164,114 @@ function inferTitle(fileNameWithoutExtension: string) {
   return normalized || fileNameWithoutExtension;
 }
 
-async function discoverPdfFiles(rootPath: string) {
-  const stack = [rootPath];
-  const files: string[] = [];
+function getS3Bucket() {
+  return process.env.AWS_S3_BUCKET_NAME?.trim() || SDS_S3_BUCKET_DEFAULT;
+}
 
-  while (stack.length > 0) {
-    const currentPath = stack.pop();
-    if (!currentPath) {
-      continue;
-    }
+function getS3Prefix() {
+  const prefix = process.env.SDS_S3_PREFIX?.trim() || SDS_S3_PREFIX_DEFAULT;
+  if (!prefix) {
+    return '';
+  }
+  return prefix.endsWith('/') ? prefix : `${prefix}/`;
+}
 
-    const entries = await readdir(currentPath, { withFileTypes: true });
+function getAwsCredentials() {
+  const accessKeyId =
+    process.env.AWS_ACCESS_READ_KEY_ID?.trim() ||
+    process.env.AWS_ACCESS_KEY_ID?.trim() ||
+    process.env.AWS_ACCESS_WRITE_KEY_ID?.trim();
+  const secretAccessKey =
+    process.env.AWS_SECRET_READ_ACCESS_KEY?.trim() ||
+    process.env.AWS_SECRET_ACCESS_KEY?.trim() ||
+    process.env.AWS_SECRET_WRITE_ACCESS_KEY?.trim();
 
-    for (const entry of entries) {
-      const entryPath = `${currentPath}${currentPath.endsWith(sep) ? '' : sep}${entry.name}`;
-
-      if (entry.isDirectory()) {
-        stack.push(entryPath);
-        continue;
-      }
-
-      if (entry.isFile() && extname(entry.name).toLowerCase() === '.pdf') {
-        files.push(entryPath);
-      }
-    }
+  if (!accessKeyId || !secretAccessKey) {
+    return undefined;
   }
 
-  files.sort((left, right) => left.localeCompare(right));
+  return { accessKeyId, secretAccessKey };
+}
 
-  return files;
+function getS3Client() {
+  const region =
+    process.env.SDS_S3_REGION?.trim() ||
+    process.env.AWS_REGION?.trim() ||
+    'us-east-1';
+  const credentials = getAwsCredentials();
+  return new S3Client({
+    region,
+    ...(credentials ? { credentials } : {}),
+  });
+}
+
+function keyToRelativePath(s3Key: string, prefix: string) {
+  if (prefix && s3Key.startsWith(prefix)) {
+    return s3Key.slice(prefix.length);
+  }
+  if (s3Key.startsWith('sds/')) {
+    return s3Key.slice('sds/'.length);
+  }
+  return s3Key;
+}
+
+async function listS3PdfKeys(client: S3Client, bucket: string, prefix: string) {
+  const keys: string[] = [];
+  let continuationToken: string | undefined;
+
+  do {
+    const page = await client.send(
+      new ListObjectsV2Command({
+        Bucket: bucket,
+        Prefix: prefix,
+        ContinuationToken: continuationToken,
+      }),
+    );
+
+    for (const item of page.Contents ?? []) {
+      const key = item.Key?.trim();
+      if (!key || key.endsWith('/')) {
+        continue;
+      }
+      if (extname(key).toLowerCase() === '.pdf') {
+        keys.push(key);
+      }
+    }
+
+    continuationToken = page.NextContinuationToken;
+  } while (continuationToken);
+
+  keys.sort((left, right) => left.localeCompare(right));
+  return keys;
 }
 
 async function discoverSdsSeedDocuments() {
-  const rootPath = process.env.SDS_ROOT_PATH?.trim() || SDS_ROOT_PATH_DEFAULT;
-  const discoveredPaths = await discoverPdfFiles(rootPath);
+  const bucket = getS3Bucket();
+  const prefix = getS3Prefix();
+  const client = getS3Client();
+  const discoveredKeys = await listS3PdfKeys(client, bucket, prefix);
 
-  return discoveredPaths.map((absolutePath) => {
-    const relativePath = normalizeRelativePath(relative(rootPath, absolutePath));
-    const fileName = basename(absolutePath);
-    const fileNameWithoutExtension = fileName.slice(0, -extname(fileName).length);
+  return discoveredKeys.map((s3Key) => {
+    const relativePath = normalizeRelativePath(
+      keyToRelativePath(s3Key, prefix),
+    );
+    const fileName = basename(s3Key);
+    const fileNameWithoutExtension = fileName.slice(
+      0,
+      -extname(fileName).length,
+    );
     const override = SDS_FILE_OVERRIDES[relativePath];
     const inferredTitle = inferTitle(fileNameWithoutExtension);
     const inferredProductCode = inferProductCode(fileNameWithoutExtension);
-    const locale = (override?.locale || inferLocale(relativePath)).toUpperCase();
+    const locale = (
+      override?.locale || inferLocale(relativePath)
+    ).toUpperCase();
 
     return {
-      id: createHash('sha1').update(relativePath).digest('hex').slice(0, 20),
+      id: createHash('sha1').update(s3Key).digest('hex').slice(0, 20),
       title: override?.title || inferredTitle,
-      localPath: absolutePath,
       productCode: override?.productCode || inferredProductCode,
-      s3Key: `sds/${relativePath}`,
+      s3Key,
       locale,
     } satisfies SdsSeedDocument;
   });
@@ -231,9 +302,7 @@ function toDocumentKey(seed: SdsSeedDocument) {
 }
 
 function toSourceUri(seed: SdsSeedDocument) {
-  const bucket = process.env.SDS_S3_BUCKET?.trim();
-
-  return `s3://${bucket || 'pending'}/${seed.s3Key}`;
+  return `s3://${getS3Bucket()}/${seed.s3Key}`;
 }
 
 function nowIso() {
@@ -303,10 +372,12 @@ function chunkText(text: string) {
   return chunks;
 }
 
-function buildSourceMetadata(seed: SdsSeedDocument, overrides: SdsIngestionMetadata) {
+function buildSourceMetadata(
+  seed: SdsSeedDocument,
+  overrides: SdsIngestionMetadata,
+) {
   return {
     ingestion: {
-      local_path: seed.localPath,
       s3_key: seed.s3Key,
       source_uri: toSourceUri(seed),
       title: seed.title,
@@ -325,7 +396,6 @@ async function parsePdf(buffer: Buffer) {
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
   const loadingTask = pdfjs.getDocument({
     data: new Uint8Array(buffer),
-    disableWorker: true,
   });
   const pdfDocument = await loadingTask.promise;
   const pageCount = pdfDocument.numPages;
@@ -367,7 +437,9 @@ async function getExistingSdsSourceRecords() {
   const { data, error } = await supabase
     .schema('rag')
     .from('source_record')
-    .select('id, source_pk, source_uri, checksum, metadata, last_seen_at, updated_at, is_active')
+    .select(
+      'id, source_pk, source_uri, checksum, metadata, last_seen_at, updated_at, is_active',
+    )
     .eq('source_schema', SOURCE_SCHEMA)
     .eq('source_table', SOURCE_TABLE)
     .eq('source_type', SOURCE_TYPE);
@@ -455,13 +527,16 @@ async function ensureSeedSourceRecord(seed: SdsSeedDocument) {
   return inserted.id;
 }
 
-async function upsertDocument(sourceRecordId: string, seed: SdsSeedDocument, bodyText: string) {
+async function upsertDocument(
+  sourceRecordId: string,
+  seed: SdsSeedDocument,
+  bodyText: string,
+) {
   const supabase = getSupabaseServiceRoleClient();
   const documentKey = toDocumentKey(seed);
   const metadata = {
     source: 'sds',
     s3_key: seed.s3Key,
-    local_path: seed.localPath,
     source_uri: toSourceUri(seed),
     product_code: seed.productCode,
   } as JsonObject;
@@ -532,7 +607,11 @@ async function upsertDocument(sourceRecordId: string, seed: SdsSeedDocument, bod
   return inserted.id;
 }
 
-async function replaceDocumentChunks(documentId: string, documentKey: string, bodyText: string) {
+async function replaceDocumentChunks(
+  documentId: string,
+  documentKey: string,
+  bodyText: string,
+) {
   const supabase = getSupabaseServiceRoleClient();
   const chunks = chunkText(bodyText);
   const { error: deleteError } = await supabase
@@ -614,7 +693,9 @@ async function markSourceRecord(
     .eq('id', sourceRecordId);
 
   if (error) {
-    throw new Error(`Failed to update source status for ${seed.id}: ${error.message}`);
+    throw new Error(
+      `Failed to update source status for ${seed.id}: ${error.message}`,
+    );
   }
 }
 
@@ -622,7 +703,18 @@ async function ingestSeedDocument(seed: SdsSeedDocument) {
   const sourceRecordId = await ensureSeedSourceRecord(seed);
 
   try {
-    const fileBuffer = await readFile(seed.localPath);
+    const s3Client = getS3Client();
+    const s3Object = await s3Client.send(
+      new GetObjectCommand({
+        Bucket: getS3Bucket(),
+        Key: seed.s3Key,
+      }),
+    );
+    const bytes = await s3Object.Body?.transformToByteArray();
+    if (!bytes) {
+      throw new Error(`S3 object body was empty for key ${seed.s3Key}.`);
+    }
+    const fileBuffer = Buffer.from(bytes);
     const checksum = computeChecksum(fileBuffer);
     const parsed = await parsePdf(fileBuffer);
     const documentId = await upsertDocument(sourceRecordId, seed, parsed.text);
@@ -673,7 +765,8 @@ function sortStatusRows(rows: SdsDashboardDocument[]) {
   };
 
   return [...rows].sort((left, right) => {
-    const weightDifference = statusWeight[left.status] - statusWeight[right.status];
+    const weightDifference =
+      statusWeight[left.status] - statusWeight[right.status];
     if (weightDifference !== 0) {
       return weightDifference;
     }
@@ -700,13 +793,136 @@ function toDashboardStatus(rows: SdsDashboardDocument[]): SdsDashboardStatus {
       ingested: rows.filter((row) => row.status === 'ingested').length,
       failed: rows.filter((row) => row.status === 'failed').length,
       chunks: rows.reduce((sum, row) => sum + row.chunkCount, 0),
+      embeddedChunks: 0,
     },
     preview: {
       showing: visibleRows.length,
       hidden: Math.max(0, rows.length - visibleRows.length),
     },
+    warning: null,
     documents: visibleRows,
   };
+}
+
+function toFallbackStatus(message: string): SdsDashboardStatus {
+  return {
+    totals: {
+      seeded: 0,
+      registered: 0,
+      ingested: 0,
+      failed: 0,
+      chunks: 0,
+      embeddedChunks: 0,
+    },
+    preview: {
+      showing: 0,
+      hidden: 0,
+    },
+    warning: message,
+    documents: [],
+  };
+}
+
+async function loadSdsChunkEmbeddingTotals() {
+  const supabase = getSupabaseServiceRoleClient();
+  const rag = supabase.schema('rag');
+
+  const [{ count: totalCount, error: totalError }, { count: embeddedCount, error: embeddedError }] =
+    await Promise.all([
+      rag
+        .from('document_chunk')
+        .select('id', { count: 'exact', head: true })
+        .like('chunk_key', 'sds:%'),
+      rag
+        .from('document_chunk')
+        .select('id', { count: 'exact', head: true })
+        .like('chunk_key', 'sds:%')
+        .not('embedding', 'is', null),
+    ]);
+
+  if (totalError) {
+    throw new Error(`Failed to count SDS chunks: ${totalError.message}`);
+  }
+
+  if (embeddedError) {
+    throw new Error(`Failed to count embedded SDS chunks: ${embeddedError.message}`);
+  }
+
+  return {
+    chunks: totalCount ?? 0,
+    embeddedChunks: embeddedCount ?? 0,
+  };
+}
+
+async function withSdsChunkEmbeddingTotals(
+  status: SdsDashboardStatus,
+): Promise<SdsDashboardStatus> {
+  try {
+    const totals = await loadSdsChunkEmbeddingTotals();
+    return {
+      ...status,
+      totals: {
+        ...status.totals,
+        chunks: totals.chunks,
+        embeddedChunks: totals.embeddedChunks,
+      },
+    };
+  } catch {
+    return status;
+  }
+}
+
+async function fallbackStatusFromExistingRecords(message: string) {
+  const [sourceRecords, documents] = await Promise.all([
+    getExistingSdsSourceRecords(),
+    loadSdsDocumentRows(),
+  ]);
+
+  if (sourceRecords.length === 0) {
+    return toFallbackStatus(message);
+  }
+
+  const documentBySourceRecordId = new Map(
+    documents.map((row) => [row.source_record_id, row]),
+  );
+
+  const rows: SdsDashboardDocument[] = sourceRecords.map((source) => {
+    const metadata = asSdsMetadata(source.metadata);
+    const document = documentBySourceRecordId.get(source.id) ?? null;
+    const metadataChunkCount = metadata?.chunk_count;
+    const chunkCount =
+      typeof metadataChunkCount === 'number' && Number.isFinite(metadataChunkCount)
+        ? metadataChunkCount
+        : 0;
+    const metadataStatus = metadata?.status ?? null;
+
+    let status: SdsDashboardDocumentStatus = 'registered';
+    if (metadataStatus === 'failed') {
+      status = 'failed';
+    } else if (metadataStatus === 'ingested' || (document && chunkCount > 0)) {
+      status = 'ingested';
+    }
+
+    return {
+      id: source.source_pk,
+      title: asString(metadata?.title) ?? document?.title ?? source.source_pk,
+      s3Key: asString(metadata?.s3_key) ?? '',
+      locale: asString(metadata?.locale)?.toUpperCase() ?? 'EN',
+      status,
+      sourceRecordId: source.id,
+      documentId: document?.id ?? null,
+      chunkCount,
+      checksum: source.checksum,
+      sourceUri: source.source_uri,
+      updatedAt: document?.updated_at ?? source.updated_at,
+      lastError: asString(metadata?.last_error) ?? null,
+    };
+  });
+
+  return withSdsChunkEmbeddingTotals({
+    ...toDashboardStatus(rows),
+    warning: message,
+  });
 }
 
 async function getSdsStatusRows(seedDocuments: SdsSeedDocument[]) {
@@ -722,11 +938,14 @@ async function getSdsStatusRows(seedDocuments: SdsSeedDocument[]) {
 
   return seedDocuments.map((seed) => {
     const source = sourceByPk.get(toSourcePk(seed)) ?? null;
-    const document = source ? (documentBySourceRecordId.get(source.id) ?? null) : null;
+    const document = source
+      ? (documentBySourceRecordId.get(source.id) ?? null)
+      : null;
     const metadata = asSdsMetadata(source?.metadata ?? null);
     const metadataChunkCount = metadata?.chunk_count;
     const chunkCount =
-      typeof metadataChunkCount === 'number' && Number.isFinite(metadataChunkCount)
+      typeof metadataChunkCount === 'number' &&
+      Number.isFinite(metadataChunkCount)
         ? metadataChunkCount
         : 0;
     const metadataStatus = metadata?.status ?? null;
@@ -743,7 +962,6 @@ async function getSdsStatusRows(seedDocuments: SdsSeedDocument[]) {
     return {
       id: seed.id,
       title: seed.title,
-      localPath: seed.localPath,
       s3Key: seed.s3Key,
       locale: seed.locale.toUpperCase(),
       status,
@@ -759,10 +977,20 @@ async function getSdsStatusRows(seedDocuments: SdsSeedDocument[]) {
 }
 
 export async function getSdsDashboardStatus(): Promise<SdsDashboardStatus> {
-  const seedDocuments = await discoverSdsSeedDocuments();
-  const rows = await getSdsStatusRows(seedDocuments);
-
-  return toDashboardStatus(rows);
+  try {
+    const seedDocuments = await discoverSdsSeedDocuments();
+    const rows = await getSdsStatusRows(seedDocuments);
+    return await withSdsChunkEmbeddingTotals(toDashboardStatus(rows));
+  } catch (error) {
+    const reason =
+      error instanceof Error ? error.message : 'Unknown S3 discovery failure.';
+    const message = `S3 discovery is unavailable right now (${reason}). Showing last known SDS records.`;
+    try {
+      return await fallbackStatusFromExistingRecords(message);
+    } catch {
+      return await withSdsChunkEmbeddingTotals(toFallbackStatus(message));
+    }
+  }
 }
 
 export async function runSdsIngestion(
@@ -774,10 +1002,10 @@ export async function runSdsIngestion(
   let processed = 0;
   let succeeded = 0;
   let failed = 0;
-  const seedDocuments = await discoverSdsSeedDocuments();
-  const seedById = new Map(seedDocuments.map((seed) => [seed.id, seed]));
+  let status: SdsDashboardStatus;
 
   if (mode === 'register-seed') {
+    const seedDocuments = await discoverSdsSeedDocuments();
     for (const seed of seedDocuments) {
       processed += 1;
       try {
@@ -787,11 +1015,42 @@ export async function runSdsIngestion(
         failed += 1;
         errors.push({
           id: seed.id,
-          message: error instanceof Error ? error.message : 'Registration failed.',
+          message:
+            error instanceof Error ? error.message : 'Registration failed.',
         });
       }
     }
+    status = await withSdsChunkEmbeddingTotals(
+      toDashboardStatus(await getSdsStatusRows(seedDocuments)),
+    );
+  } else if (mode === 'embed-next' || mode === 'embed-all') {
+    let runCount = 0;
+
+    while (runCount < MAX_EMBEDDING_RUNS) {
+      const embedResult = await syncDocumentChunkEmbeddings({
+        batchSize,
+        maxBatches: mode === 'embed-next' ? 1 : 20,
+        documentKind: DOCUMENT_KIND,
+      });
+
+      runCount += 1;
+      processed += embedResult.chunksEmbedded;
+      succeeded += embedResult.chunksEmbedded;
+
+      if (
+        mode === 'embed-next' ||
+        embedResult.remainingChunks === 0 ||
+        embedResult.chunksEmbedded === 0
+      ) {
+        break;
+      }
+    }
+    status = await fallbackStatusFromExistingRecords(
+      'S3 discovery was skipped for embedding-only SDS action.',
+    );
   } else {
+    const seedDocuments = await discoverSdsSeedDocuments();
+    const seedById = new Map(seedDocuments.map((seed) => [seed.id, seed]));
     const rows = await getSdsStatusRows(seedDocuments);
     let candidates = rows.filter((row) => row.status !== 'ingested');
 
@@ -821,6 +1080,9 @@ export async function runSdsIngestion(
         });
       }
     }
+    status = await withSdsChunkEmbeddingTotals(
+      toDashboardStatus(await getSdsStatusRows(seedDocuments)),
+    );
   }
 
   return {
@@ -831,6 +1093,6 @@ export async function runSdsIngestion(
     startedAt,
     finishedAt: nowIso(),
     errors,
-    status: toDashboardStatus(await getSdsStatusRows(seedDocuments)),
+    status,
   };
 }

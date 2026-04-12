@@ -40,6 +40,14 @@ function getActionMessage(mode: SdsIngestionRunMode, succeeded: number, failed: 
     return `Registered ${succeeded} discovered source record${succeeded === 1 ? '' : 's'}${failed > 0 ? `, ${failed} failed` : ''}.`;
   }
 
+  if (mode === 'embed-next') {
+    return `Embedded ${succeeded} SDS chunk${succeeded === 1 ? '' : 's'} in the next batch.`;
+  }
+
+  if (mode === 'embed-all') {
+    return `Embedded ${succeeded} pending SDS chunk${succeeded === 1 ? '' : 's'} across batched passes.`;
+  }
+
   if (mode === 'retry-failed') {
     return `Retried failed SDS files: ${succeeded} succeeded${failed > 0 ? `, ${failed} failed` : ''}.`;
   }

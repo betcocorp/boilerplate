@@ -1,17 +1,17 @@
 export type SdsSeedDocument = {
   id: string;
   title: string;
-  localPath: string;
   productCode: string | null;
   s3Key: string;
   locale: string;
 };
 
-export const SDS_ROOT_PATH_DEFAULT = 'H:\\SDS';
+export const SDS_S3_BUCKET_DEFAULT = 'betco-sds';
+export const SDS_S3_PREFIX_DEFAULT = '';
 
 /**
  * Optional per-file metadata overrides keyed by normalized relative path
- * (lowercase, forward slashes, rooted at SDS_ROOT_PATH_DEFAULT or SDS_ROOT_PATH).
+ * (lowercase, forward slashes, rooted at SDS_S3_PREFIX_DEFAULT or SDS_S3_PREFIX).
  */
 export const SDS_FILE_OVERRIDES: Record<
   string,

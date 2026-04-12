@@ -2,13 +2,39 @@ import { Search } from 'lucide-react';
 import Link from 'next/link';
 import { connection } from 'next/server';
 
+import { RagQueryAutocomplete } from '~/components/admin/RagQueryAutocomplete';
 import { RagSearchTimingPanel } from '~/components/admin/RagSearchTimingPanel';
 import { searchProductChunks } from '~/lib/rag/search';
+import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 const SEARCH_ROUTE = '/admin/products/rag';
+type SearchScope = 'all' | 'products' | 'sds';
 
 type SearchPageProps = {
   searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+};
+
+type PopularQueryRow = {
+  query_string: string | null;
+  query_count: number | null;
+};
+
+type PopularQueryClient = {
+  schema: (schemaName: 'rag') => {
+    from: (tableName: 'search_embedding') => {
+      select: (columns: 'query_string, query_count') => {
+        order: (
+          column: 'query_count',
+          options: { ascending: boolean },
+        ) => {
+          limit: (count: number) => Promise<{
+            data: PopularQueryRow[] | null;
+            error: { message: string } | null;
+          }>;
+        };
+      };
+    };
+  };
 };
 
 function readSearchParam(value: string | string[] | undefined, fallback = '') {
@@ -71,6 +97,7 @@ function buildProductLineDetailHref(
     productLineKey: string;
     limit: number;
     minSimilarity: string;
+    scope: SearchScope;
   },
 ) {
   const params = new URLSearchParams();
@@ -91,10 +118,59 @@ function buildProductLineDetailHref(
     params.set('minSimilarity', options.minSimilarity);
   }
 
+  if (options.scope !== 'all') {
+    params.set('scope', options.scope);
+  }
+
   const queryString = params.toString();
   const detailPath = `${SEARCH_ROUTE}/${encodeURIComponent(productLineKey)}`;
 
   return queryString ? `${detailPath}?${queryString}` : detailPath;
+}
+
+function parseScope(value: string | string[] | undefined): SearchScope {
+  const raw = readSearchParam(value).trim().toLowerCase();
+  if (raw === 'products' || raw === 'sds') {
+    return raw;
+  }
+
+  return 'all';
+}
+
+async function loadPopularQueries() {
+  const supabase =
+    getSupabaseServiceRoleClient() as unknown as PopularQueryClient;
+  const { data, error } = await supabase
+    .schema('rag')
+    .from('search_embedding')
+    .select('query_string, query_count')
+    .order('query_count', { ascending: false })
+    .limit(100);
+
+  if (error) {
+    return [];
+  }
+
+  const deduped = new Set<string>();
+
+  return ((data ?? []) as PopularQueryRow[])
+    .map((row) => ({
+      query: row.query_string?.trim() || '',
+      queryCount: row.query_count ?? 0,
+    }))
+    .filter((row) => {
+      if (!row.query) {
+        return false;
+      }
+
+      const key = row.query.toLowerCase();
+      if (deduped.has(key)) {
+        return false;
+      }
+
+      deduped.add(key);
+      return true;
+    });
 }
 
 function parseMinSimilarity(value: string | string[] | undefined) {
@@ -119,8 +195,10 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
   const resolvedSearchParams = await searchParams;
   const query = readSearchParam(resolvedSearchParams.q);
   const productLineKey = readSearchParam(resolvedSearchParams.productLineKey);
+  const scope = parseScope(resolvedSearchParams.scope);
   const rawMinSimilarity = readSearchParam(resolvedSearchParams.minSimilarity);
   const minSimilarity = parseMinSimilarity(resolvedSearchParams.minSimilarity);
+  const popularQueries = await loadPopularQueries();
   let similaritySummary = '';
   const requestedLimit = Number.parseInt(
     readSearchParam(resolvedSearchParams.limit, '8'),
@@ -140,6 +218,7 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
         query,
         limit,
         productLineKey: productLineKey || undefined,
+        scope,
         minSimilarity: minSimilarity ?? undefined,
       });
 
@@ -176,18 +255,29 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
 
           <form
             action={SEARCH_ROUTE}
-            className="mt-8 grid gap-3 lg:grid-cols-[minmax(0,1.6fr)_minmax(220px,0.8fr)_120px_160px_auto]"
+            className="mt-8 grid gap-3 lg:grid-cols-[minmax(0,1.4fr)_minmax(140px,0.5fr)_minmax(220px,0.8fr)_120px_160px_auto]"
             method="get"
           >
             <label className="flex flex-col gap-2">
               <span className="text-sm font-medium text-slate-700">Query</span>
-              <input
-                className="h-12 rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none ring-0 transition focus:border-sky-500"
+              <RagQueryAutocomplete
                 defaultValue={query}
+                options={popularQueries}
                 name="q"
                 placeholder="Ask something like: peroxide bathroom disinfectant"
-                type="search"
               />
+            </label>
+            <label className="flex flex-col gap-2">
+              <span className="text-sm font-medium text-slate-700">Scope</span>
+              <select
+                className="h-12 rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none ring-0 transition focus:border-sky-500"
+                defaultValue={scope}
+                name="scope"
+              >
+                <option value="all">All</option>
+                <option value="products">Products</option>
+                <option value="sds">SDS</option>
+              </select>
             </label>
             <label className="flex flex-col gap-2">
               <span className="text-sm font-medium text-slate-700">
@@ -252,11 +342,13 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
                   {result.model}
                 </code>
                 .
-                {similaritySummary
-                  ? ` Similarity range: ${similaritySummary}.`
-                  : ''}
               </div>
               <div className="text-sm text-slate-600">
+                {result.scope === 'all'
+                  ? 'Scope: all corpus docs.'
+                  : result.scope === 'products'
+                    ? 'Scope: products only.'
+                    : 'Scope: SDS only.'}{' '}
                 {result.productLineKey
                   ? `Filtered to product line ${result.productLineKey}.`
                   : 'No metadata filter applied.'}
@@ -267,7 +359,9 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
             </section>
 
             <RagSearchTimingPanel
-              embeddingSourceLabel={formatEmbeddingSource(result.embeddingSource)}
+              embeddingSourceLabel={formatEmbeddingSource(
+                result.embeddingSource,
+              )}
               timings={[
                 ['Total search', formatDurationMs(result.timings.totalMs)],
                 [
@@ -278,8 +372,14 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
                   'Similarity search',
                   formatDurationMs(result.timings.similaritySearchMs),
                 ],
-                ['Query rewrite', formatDurationMs(result.timings.queryRewriteMs)],
-                ['Cache lookup', formatDurationMs(result.timings.cacheLookupMs)],
+                [
+                  'Query rewrite',
+                  formatDurationMs(result.timings.queryRewriteMs),
+                ],
+                [
+                  'Cache lookup',
+                  formatDurationMs(result.timings.cacheLookupMs),
+                ],
                 [
                   'Embedding creation',
                   formatDurationMs(result.timings.embeddingCreateMs),
@@ -288,6 +388,7 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
                   'Cache persist/update',
                   formatDurationMs(result.timings.cachePersistMs),
                 ],
+                ['Similarity range', similaritySummary],
               ].map(([label, value]) => ({
                 label,
                 value,
@@ -313,6 +414,9 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
                     </span>
                     <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
                       Chunk {match.chunk_index}
+                    </span>
+                    <span className="rounded-full bg-violet-50 px-2.5 py-1 text-xs font-medium text-violet-700">
+                      {match.document_kind}
                     </span>
                     {match.heading ? (
                       <span className="rounded-full bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700">
@@ -342,26 +446,23 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
                   </p>
 
                   <div className="mt-4 flex flex-wrap gap-3">
-                    <Link
-                      className="inline-flex rounded-full bg-slate-950 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-800"
-                      href={buildProductLineDetailHref(
-                        match.product_line_key || match.source_pk,
-                        {
-                          query,
-                          productLineKey,
-                          limit,
-                          minSimilarity: rawMinSimilarity,
-                        },
-                      )}
-                    >
-                      View RAG product line
-                    </Link>
-                    <Link
-                      className="inline-flex rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50"
-                      href="/admin/products/rag"
-                    >
-                      Back to RAG search
-                    </Link>
+                    {match.document_kind === 'product_line_profile' ? (
+                      <Link
+                        className="inline-flex rounded-full bg-slate-950 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-800"
+                        href={buildProductLineDetailHref(
+                          match.product_line_key || match.source_pk,
+                          {
+                            query,
+                            productLineKey,
+                            limit,
+                            minSimilarity: rawMinSimilarity,
+                            scope,
+                          },
+                        )}
+                      >
+                        View RAG product line
+                      </Link>
+                    ) : null}
                   </div>
                 </article>
               ))}
