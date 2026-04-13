@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono, Source_Sans_3 } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "~/components/ui/sonner";
+import { SessionProvider } from "~/components/providers/SessionProvider";
 import { cn } from "~/lib/utils";
 
 const geistHeading = Geist({subsets:['latin'],variable:'--font-heading'});
@@ -34,8 +35,10 @@ export default function RootLayout({
       className={cn("h-full", "antialiased", geistSans.variable, geistMono.variable, "font-sans", sourceSans3.variable, geistHeading.variable)}
     >
       <body className="min-h-full flex flex-col">
-        {children}
-        <Toaster />
+        <SessionProvider>
+          {children}
+          <Toaster />
+        </SessionProvider>
       </body>
     </html>
   );
