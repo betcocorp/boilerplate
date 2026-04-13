@@ -1,14 +1,17 @@
 'use client';
 
-import Link from 'next/link';
-import { useSyncExternalStore } from 'react';
 import {
+  Bell,
   ChevronsUpDown,
-  CircleHelp,
+  CircleUserRound,
+  CreditCard,
+  EllipsisVertical,
   LogOut,
   Search,
-  Settings,
 } from 'lucide-react';
+import { signOut, useSession } from 'next-auth/react';
+import Link from 'next/link';
+import { forwardRef, useSyncExternalStore } from 'react';
 
 import { Avatar, AvatarFallback } from '~/components/ui/avatar';
 import {
@@ -16,58 +19,87 @@ import {
   DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '~/components/ui/dropdown-menu';
 
-function AccountTrigger() {
-  return (
-    <button
-      className="flex w-full items-center gap-3 rounded-3xl border border-sidebar-border bg-sidebar-accent/60 p-3 text-left transition hover:bg-sidebar-accent"
-      type="button"
-    >
-      <Avatar size="lg">
-        <AvatarFallback>CN</AvatarFallback>
-      </Avatar>
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium text-sidebar-foreground">CN</p>
-        <p className="truncate text-xs text-sidebar-foreground/70">
-          shadcnm@example.com
-        </p>
-      </div>
-      <ChevronsUpDown className="size-4 text-sidebar-foreground/70" />
-    </button>
-  );
+function getInitials(value: string | null | undefined) {
+  const raw = value?.trim();
+  if (!raw) {
+    return 'U';
+  }
+
+  const parts = raw.split(/\s+/).slice(0, 2);
+  return parts.map((part) => part[0]?.toUpperCase() || '').join('') || 'U';
 }
 
+type AccountTriggerProps = {
+  email: string | null | undefined;
+  name: string | null | undefined;
+} & React.ComponentPropsWithoutRef<'button'>;
+
+const AccountTrigger = forwardRef<HTMLButtonElement, AccountTriggerProps>(
+  ({ email, name, ...buttonProps }, ref) => {
+    return (
+      <button
+        className="flex w-full items-center gap-3 rounded-3xl border border-sidebar-border bg-sidebar-accent/60 p-3 text-left transition hover:bg-sidebar-accent"
+        ref={ref}
+        type="button"
+        {...buttonProps}
+      >
+        <Avatar size="lg">
+          <AvatarFallback>{getInitials(name)}</AvatarFallback>
+        </Avatar>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-medium text-sidebar-foreground">
+            {name || 'User'}
+          </p>
+          <p className="truncate text-xs text-sidebar-foreground/70">
+            {email || 'No email'}
+          </p>
+        </div>
+        <div className="flex items-center gap-1">
+          <ChevronsUpDown className="size-4 text-sidebar-foreground/70" />
+          <EllipsisVertical className="size-4 text-sidebar-foreground/70" />
+        </div>
+      </button>
+    );
+  },
+);
+
+AccountTrigger.displayName = 'AccountTrigger';
+
 export function AdminAccountMenu() {
+  const { data: session } = useSession();
   const mounted = useSyncExternalStore(
     () => () => {},
     () => true,
     () => false,
   );
+  const userName = session?.user?.name;
+  const userEmail = session?.user?.email;
 
   if (!mounted) {
-    return <AccountTrigger />;
+    return <AccountTrigger email={userEmail} name={userName} />;
   }
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <AccountTrigger />
+        <AccountTrigger email={userEmail} name={userName} />
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-64">
-        <DropdownMenuLabel>My Account</DropdownMenuLabel>
+      <DropdownMenuContent align="start" className="w-64" side="right">
         <DropdownMenuGroup>
           <div className="flex items-center gap-3 rounded-2xl px-3 py-2">
             <Avatar size="lg">
-              <AvatarFallback>CN</AvatarFallback>
+              <AvatarFallback>{getInitials(userName)}</AvatarFallback>
             </Avatar>
             <div className="min-w-0">
-              <p className="truncate text-sm font-medium text-foreground">CN</p>
+              <p className="truncate text-sm font-medium text-foreground">
+                {userName || 'User'}
+              </p>
               <p className="truncate text-xs text-muted-foreground">
-                shadcnm@example.com
+                {userEmail || 'No email'}
               </p>
             </div>
           </div>
@@ -76,14 +108,20 @@ export function AdminAccountMenu() {
         <DropdownMenuGroup>
           <DropdownMenuItem asChild>
             <Link href="#">
-              <Settings className="size-4" />
-              Settings
+              <CircleUserRound className="size-4" />
+              Account
             </Link>
           </DropdownMenuItem>
           <DropdownMenuItem asChild>
             <Link href="#">
-              <CircleHelp className="size-4" />
-              Get Help
+              <CreditCard className="size-4" />
+              Billing
+            </Link>
+          </DropdownMenuItem>
+          <DropdownMenuItem asChild>
+            <Link href="#">
+              <Bell className="size-4" />
+              Notifications
             </Link>
           </DropdownMenuItem>
           <DropdownMenuItem asChild>
@@ -94,7 +132,12 @@ export function AdminAccountMenu() {
           </DropdownMenuItem>
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
-        <DropdownMenuItem>
+        <DropdownMenuItem
+          onSelect={(event) => {
+            event.preventDefault();
+            void signOut({ callbackUrl: '/' });
+          }}
+        >
           <LogOut className="size-4" />
           Log out
         </DropdownMenuItem>
