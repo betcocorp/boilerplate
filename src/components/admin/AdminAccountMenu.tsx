@@ -2,7 +2,6 @@
 
 import {
   Bell,
-  ChevronsUpDown,
   CircleUserRound,
   CreditCard,
   EllipsisVertical,
@@ -34,12 +33,12 @@ function getInitials(value: string | null | undefined) {
 }
 
 type AccountTriggerProps = {
-  email: string | null | undefined;
-  name: string | null | undefined;
+  userEmail: string | null | undefined;
+  userName: string | null | undefined;
 } & React.ComponentPropsWithoutRef<'button'>;
 
 const AccountTrigger = forwardRef<HTMLButtonElement, AccountTriggerProps>(
-  ({ email, name, ...buttonProps }, ref) => {
+  ({ userEmail, userName, ...buttonProps }, ref) => {
     return (
       <button
         className="flex w-full items-center gap-3 rounded-3xl border border-sidebar-border bg-sidebar-accent/60 p-3 text-left transition hover:bg-sidebar-accent"
@@ -48,18 +47,17 @@ const AccountTrigger = forwardRef<HTMLButtonElement, AccountTriggerProps>(
         {...buttonProps}
       >
         <Avatar size="lg">
-          <AvatarFallback>{getInitials(name)}</AvatarFallback>
+          <AvatarFallback>{getInitials(userName)}</AvatarFallback>
         </Avatar>
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium text-sidebar-foreground">
-            {name || 'User'}
+            {userName || 'User'}
           </p>
           <p className="truncate text-xs text-sidebar-foreground/70">
-            {email || 'No email'}
+            {userEmail || 'No email'}
           </p>
         </div>
         <div className="flex items-center gap-1">
-          <ChevronsUpDown className="size-4 text-sidebar-foreground/70" />
           <EllipsisVertical className="size-4 text-sidebar-foreground/70" />
         </div>
       </button>
@@ -80,13 +78,13 @@ export function AdminAccountMenu() {
   const userEmail = session?.user?.email;
 
   if (!mounted) {
-    return <AccountTrigger email={userEmail} name={userName} />;
+    return <AccountTrigger userEmail={userEmail} userName={userName} />;
   }
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <AccountTrigger email={userEmail} name={userName} />
+        <AccountTrigger userEmail={userEmail} userName={userName} />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-64" side="right">
         <DropdownMenuGroup>

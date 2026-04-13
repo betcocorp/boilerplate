@@ -8,6 +8,13 @@ const MAX_PROFILE_RUNS = 25;
 const MAX_CHUNK_RUNS = 25;
 const MAX_EMBEDDING_RUNS = 25;
 
+type RagCountTableName =
+  | 'source_record'
+  | 'entity'
+  | 'document'
+  | 'document_chunk';
+type RagLatestTableName = 'source_record' | 'document' | 'document_chunk';
+
 type JsonObject = Record<string, unknown>;
 
 type CountResponse = {
@@ -80,7 +87,7 @@ function clampPositiveInteger(
 
 function ragHeadIdCountQuery(
   supabase: ReturnType<typeof getSupabaseServiceRoleClient>,
-  tableName: string,
+  tableName: RagCountTableName,
 ) {
   return supabase
     .schema('rag')
@@ -91,7 +98,7 @@ function ragHeadIdCountQuery(
 type RagHeadIdCountQuery = ReturnType<typeof ragHeadIdCountQuery>;
 
 async function getCount(
-  tableName: string,
+  tableName: RagCountTableName,
   filters?: (query: RagHeadIdCountQuery) => RagHeadIdCountQuery,
 ) {
   const supabase = getSupabaseServiceRoleClient();
@@ -107,7 +114,7 @@ async function getCount(
 }
 
 async function safeCount(
-  tableName: string,
+  tableName: RagCountTableName,
   warnings: string[],
   filters?: (query: RagHeadIdCountQuery) => RagHeadIdCountQuery,
 ) {
@@ -124,7 +131,7 @@ async function safeCount(
   }
 }
 
-async function getLatestUpdatedAt(tableName: string) {
+async function getLatestUpdatedAt(tableName: RagLatestTableName) {
   const supabase = getSupabaseServiceRoleClient();
   const rag = supabase.schema('rag');
   const { data, error } = await rag
@@ -145,7 +152,10 @@ async function getLatestUpdatedAt(tableName: string) {
   return data.updated_at;
 }
 
-async function safeLatestUpdatedAt(tableName: string, warnings: string[]) {
+async function safeLatestUpdatedAt(
+  tableName: RagLatestTableName,
+  warnings: string[],
+) {
   try {
     return await getLatestUpdatedAt(tableName);
   } catch (error) {
@@ -247,8 +257,16 @@ export async function getRagGenerationStatus(): Promise<RagGenerationStatus> {
     chunkUpdatedAt,
   ] = await Promise.all([
     safeCount('source_record', warnings),
-    safeCount('source_record', warnings, (query) => query.eq('is_active', true)),
-    safeCount('source_record', warnings, (query) => query.eq('is_active', false)),
+    safeCount(
+      'source_record',
+      warnings,
+      (query) => (query as typeof query & { eq: (column: string, value: unknown) => typeof query }).eq('is_active', true),
+    ),
+    safeCount(
+      'source_record',
+      warnings,
+      (query) => (query as typeof query & { eq: (column: string, value: unknown) => typeof query }).eq('is_active', false),
+    ),
     safeCount('entity', warnings),
     safeCount('document', warnings),
     safeCount('document_chunk', warnings),

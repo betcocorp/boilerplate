@@ -70,6 +70,10 @@ function buildEmbeddingInput(chunk: PendingChunkRow) {
   return `Heading: ${heading}\n\n${chunkText}`;
 }
 
+function toVectorLiteral(embedding: number[]) {
+  return `[${embedding.join(',')}]`;
+}
+
 async function fetchPendingChunks(limit: number) {
   const supabase = getSupabaseServiceRoleClient();
   const { data, error } = await supabase
@@ -176,7 +180,7 @@ async function persistEmbeddings(
       .schema('rag')
       .from('document_chunk')
       .update({
-        embedding,
+        embedding: toVectorLiteral(embedding),
         embedding_model: model,
       })
       .eq('id', chunk.id);

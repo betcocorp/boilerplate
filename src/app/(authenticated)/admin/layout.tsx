@@ -1,8 +1,4 @@
-import {
-  FileText,
-  Search,
-  Sparkles,
-} from 'lucide-react';
+import { FileText, Search, Sparkles } from 'lucide-react';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 
@@ -54,19 +50,19 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
                   <Button asChild size="sm" variant="outline">
                     <Link href="/admin/sds">
                       <FileText className="size-4" />
-                      SDS
+                      <span className="hidden md:block">SDS</span>
                     </Link>
                   </Button>
                   <Button asChild size="sm" variant="outline">
                     <Link href="/admin/products/rag">
                       <Search className="size-4" />
-                      Search
+                      <span className="hidden md:block">Search</span>
                     </Link>
                   </Button>
                   <Button asChild size="sm" variant="outline">
                     <Link href="/admin/products/rag/generate">
                       <Sparkles className="size-4" />
-                      Generate
+                      <span className="hidden md:block">Generate</span>
                     </Link>
                   </Button>
                 </div>

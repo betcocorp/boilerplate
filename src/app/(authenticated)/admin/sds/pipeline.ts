@@ -8,6 +8,7 @@ import { basename, extname } from 'node:path';
 
 import { syncDocumentChunkEmbeddings } from '~/lib/rag/embeddings';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
+import type { Json as RagJson } from '~/types/supabase.rag';
 
 import {
   SDS_FILE_OVERRIDES,
@@ -27,7 +28,7 @@ const MAX_CHARS_PER_CHUNK = 2200;
 const CHUNK_OVERLAP_CHARS = 250;
 const MAX_DASHBOARD_DOCUMENT_ROWS = 300;
 
-type JsonObject = Record<string, unknown>;
+type JsonObject = { [key: string]: RagJson | undefined };
 
 type SdsIngestionMetadata = {
   status?: string;

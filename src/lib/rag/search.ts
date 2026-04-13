@@ -537,6 +537,7 @@ async function getCachedOrNewEmbedding(
 
   const embeddingStartedAt = nowMs();
   const { embedding, model: createdModel } = await createEmbedding(query, { model });
+  const embeddingLiteral = toVectorLiteral(embedding);
   embeddingCreateMs = elapsedMs(embeddingStartedAt);
 
   if (existing) {
@@ -547,7 +548,7 @@ async function getCachedOrNewEmbedding(
       .update({
         query_string: normalizedQueryString,
         query_rewritten: rewrittenQuery,
-        embeddings: embedding,
+        embeddings: embeddingLiteral,
         query_count: (existing.query_count ?? 0) + 1,
       })
       .eq('id', existing.id);
@@ -566,7 +567,7 @@ async function getCachedOrNewEmbedding(
       .insert({
         query_string: normalizedQueryString,
         query_rewritten: rewrittenQuery,
-        embeddings: embedding,
+        embeddings: embeddingLiteral,
         query_count: 1,
       })
       .select(
@@ -638,19 +639,20 @@ export async function searchProductChunks(
   } = await getCachedOrNewEmbedding(query, options.model);
 
   const supabase = getSupabaseServiceRoleClient();
+  const rag = supabase.schema('rag');
   const similaritySearchStartedAt = nowMs();
   const { data, error } =
     scope === 'products'
-      ? await supabase.schema('rag').rpc('match_product_chunks', {
+      ? await rag.rpc('match_product_chunks', {
           query_embedding: toVectorLiteral(embedding),
           match_count: limit,
-          filter_product_key: null,
-          filter_product_line_key: productLineKey,
+          filter_product_key: undefined,
+          filter_product_line_key: productLineKey || undefined,
         })
-      : await supabase.schema('rag').rpc('match_corpus_chunks', {
+      : await (rag as any).rpc('match_corpus_chunks', {
           query_embedding: toVectorLiteral(embedding),
           match_count: limit,
-          filter_product_line_key: productLineKey,
+          filter_product_line_key: productLineKey || undefined,
           filter_scope: scope,
         });
   const similaritySearchMs = elapsedMs(similaritySearchStartedAt);

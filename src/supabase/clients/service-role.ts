@@ -1,6 +1,10 @@
 import { createClient } from "@supabase/supabase-js";
 
-import type { Database } from "~/types/supabase.public";
+import type { Database as LegacyDatabase } from "~/types/supabase.legacy";
+import type { Database as PublicDatabase } from "~/types/supabase.public";
+import type { Database as RagDatabase } from "~/types/supabase.rag";
+
+type ServiceRoleDatabase = PublicDatabase & LegacyDatabase & RagDatabase;
 
 export function getSupabaseServiceRoleClient() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -12,7 +16,7 @@ export function getSupabaseServiceRoleClient() {
     );
   }
 
-  return createClient<Database>(supabaseUrl, supabaseServiceRoleKey, {
+  return createClient<ServiceRoleDatabase>(supabaseUrl, supabaseServiceRoleKey, {
     auth: {
       persistSession: false,
       autoRefreshToken: false,
