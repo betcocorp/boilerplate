@@ -1,5 +1,3 @@
-import Link from 'next/link';
-import type { ReactNode } from 'react';
 import {
   ChevronRight,
   FileText,
@@ -9,8 +7,9 @@ import {
   MessageSquare,
   Search,
   Sparkles,
-  Wand2,
 } from 'lucide-react';
+import Link from 'next/link';
+import type { ReactNode } from 'react';
 
 import { AdminAccountMenu } from '~/components/admin/AdminAccountMenu';
 import { Button } from '~/components/ui/button';
@@ -22,18 +21,18 @@ const workspaceNavItems = [
 
 const productsNavItems = [
   {
-    label: 'Legacy',
+    label: 'Products',
     icon: Library,
-    items: [{ label: 'Legacy products', href: '/admin/products/legacy' }],
+    items: [
+      { label: 'RAG generate', href: '/admin/products/rag/generate' },
+      { label: 'RAG products', href: '/admin/products/rag' },
+      { label: 'Legacy products', href: '/admin/products/legacy' },
+    ],
   },
   {
     label: 'Rag',
     icon: Layers,
-    items: [
-      { label: 'RAG products', href: '/admin/products/rag' },
-      { label: 'RAG similarity search', href: '/admin/products/rag' },
-      { label: 'RAG generate', href: '/admin/products/rag/generate' },
-    ],
+    items: [{ label: 'RAG similarity search', href: '/admin/products/rag' }],
   },
   {
     label: 'SDS',
@@ -151,7 +150,10 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
 
           <div className="mt-8 space-y-6">
             <NavSection items={workspaceNavItems} title="Workspace" />
-            <NavGroupedSection groups={productsNavItems} title="Products & RAG" />
+            <NavGroupedSection
+              groups={productsNavItems}
+              title="Products & RAG"
+            />
           </div>
 
           <div className="mt-auto">

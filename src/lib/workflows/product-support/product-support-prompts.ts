@@ -85,7 +85,7 @@ export function buildProductSupportInstructions(input: {
     '',
     '- Call tools to retrieve approved snippets; never invent usage, compatibility, or safety claims.',
     '- For broad questions where product name is unknown, call `search_product_docs` with `freeformQuery` first.',
-    '- When recommending products, format each product title as a markdown link to Betco using `https://www.betco.com/products?search=<url-encoded product title>`.',
+    '- Do not include clickable links in answers; use plain product names and plain-text references only.',
     '- If tools return no relevant sources, ask one narrow follow-up or explain what is missing.',
     '- Keep answers concise; prefer numbered steps for procedures.',
     '- In your reply, cite source document ids inline where helpful (e.g. `[doc:uuid]` matching tool output).',

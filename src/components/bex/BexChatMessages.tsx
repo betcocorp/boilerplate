@@ -28,10 +28,6 @@ function formatTime(ts: number) {
 }
 
 function markdownComponentsForBubble(isUser: boolean): Components {
-  const linkClass = cn(
-    'wrap-break-word underline underline-offset-2',
-    isUser ? 'text-primary-foreground/90' : 'text-primary',
-  );
   const inlineCode = cn(
     'rounded px-1 py-0.5 text-[0.85em] font-mono',
     isUser ? 'bg-primary-foreground/15' : 'bg-muted',
@@ -59,15 +55,8 @@ function markdownComponentsForBubble(isUser: boolean): Components {
       </ol>
     ),
     li: ({ children }) => <li className="wrap-break-word">{children}</li>,
-    a: ({ href, children }) => (
-      <a
-        className={linkClass}
-        href={href}
-        rel="noopener noreferrer"
-        target="_blank"
-      >
-        {children}
-      </a>
+    a: ({ children }) => (
+      <span className="wrap-break-word underline underline-offset-2">{children}</span>
     ),
     code: ({ className, children, ...props }) => {
       const isBlock = Boolean(className?.includes('language-'));
