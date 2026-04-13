@@ -13,6 +13,7 @@ type SearchProductChunksOptions = {
   minSimilarity?: number;
   model?: string;
   scope?: 'all' | 'products' | 'sds';
+  languageCode?: string | null;
 };
 
 type SearchEmbeddingRow = {
@@ -62,6 +63,7 @@ export type RagSearchResult = {
   limit: number;
   productLineKey: string | null;
   scope: 'all' | 'products' | 'sds';
+  languageCode: string | null;
   minSimilarity: number | null;
   embeddingSource:
     | 'exact-cache-hit'
@@ -84,6 +86,11 @@ export type RagSearchResult = {
 
 type RagCorpusSearchMatch = Omit<RagSearchMatch, 'document_kind'> & {
   document_kind: string | null;
+};
+
+type DocumentLanguageRow = {
+  id: string;
+  language_code: string | null;
 };
 
 function clampLimit(limit?: number) {
@@ -118,6 +125,15 @@ function normalizeScope(scope?: string) {
   }
 
   return 'products' as const;
+}
+
+function normalizeLanguageCode(languageCode?: string | null) {
+  const normalized = languageCode?.trim().toUpperCase();
+  return normalized || 'EN';
+}
+
+function normalizeForDedupe(value: string) {
+  return value.trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
 function nowMs() {
@@ -611,6 +627,7 @@ export async function searchProductChunks(
   const productLineKey = options.productLineKey?.trim() || null;
   const scope = normalizeScope(options.scope);
   const minSimilarity = normalizeMinSimilarity(options.minSimilarity);
+  const languageCode = normalizeLanguageCode(options.languageCode);
 
   const {
     row,
@@ -658,33 +675,94 @@ export async function searchProductChunks(
     // Timing persistence is best-effort and should not block search results.
   }
 
+  const mappedMatches = (
+    scope === 'products'
+      ? ((data ?? []) as RagSearchMatch[]).map((match) => ({
+          ...match,
+          document_kind: 'product_line_profile',
+        }))
+      : ((data ?? []) as RagCorpusSearchMatch[]).map((match) => ({
+          ...match,
+          document_kind: match.document_kind ?? 'unknown',
+        }))
+  )
+    .map((match) => ({
+      ...match,
+      similarity: Number(match.similarity),
+    }))
+    .filter((match) => minSimilarity === null || match.similarity >= minSimilarity);
+
+  let languageFilteredMatches = mappedMatches;
+  if (languageCode) {
+    const documentIds = Array.from(
+      new Set(
+        mappedMatches
+          .map((match) => match.document_id)
+          .filter((value): value is string => Boolean(value)),
+      ),
+    );
+
+    if (documentIds.length > 0) {
+      const { data: documentRows, error: documentError } = await supabase
+        .schema('rag')
+        .from('document')
+        .select('id, language_code')
+        .in('id', documentIds);
+
+      if (documentError) {
+        throw new Error(
+          `Failed to enforce language filter for similarity search: ${documentError.message}`,
+        );
+      }
+
+      const languageByDocumentId = new Map<string, string | null>(
+        ((documentRows ?? []) as DocumentLanguageRow[]).map((row) => [
+          row.id,
+          row.language_code,
+        ]),
+      );
+
+      languageFilteredMatches = mappedMatches.filter((match) => {
+        const value = languageByDocumentId.get(match.document_id);
+        return typeof value === 'string' && value.toUpperCase() === languageCode;
+      });
+    }
+  }
+
+  const dedupedMatches: RagSearchMatch[] = [];
+  const seenSdsChunkKeys = new Set<string>();
+
+  for (const match of languageFilteredMatches) {
+    if (match.document_kind !== 'sds') {
+      dedupedMatches.push(match);
+      continue;
+    }
+
+    const sdsDuplicateKey = [
+      normalizeForDedupe(match.document_title),
+      String(match.chunk_index),
+      normalizeForDedupe(match.chunk_text).slice(0, 280),
+    ].join('|');
+
+    if (seenSdsChunkKeys.has(sdsDuplicateKey)) {
+      continue;
+    }
+
+    seenSdsChunkKeys.add(sdsDuplicateKey);
+    dedupedMatches.push(match);
+  }
+
   return {
     query,
     model,
     limit,
     productLineKey,
     scope,
+    languageCode,
     minSimilarity,
     embeddingSource: source,
     timings,
-    matches: (
-      scope === 'products'
-        ? ((data ?? []) as RagSearchMatch[]).map((match) => ({
-            ...match,
-            document_kind: 'product_line_profile',
-          }))
-        : ((data ?? []) as RagCorpusSearchMatch[]).map((match) => ({
-            ...match,
-            document_kind: match.document_kind ?? 'unknown',
-          }))
-    )
-      .map((match) => ({
-        ...match,
-        similarity: Number(match.similarity),
-      }))
-      .filter(
-        (match) => minSimilarity === null || match.similarity >= minSimilarity,
-      ),
+    matches: dedupedMatches,
   };
 }
 

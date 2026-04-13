@@ -248,8 +248,9 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
               Search the RAG product line corpus semantically
             </h1>
             <p className="max-w-3xl text-base leading-7 text-slate-600">
-              Retrieval is one document per legacy product line. Chunks include
-              rolled-up size variants; filters only target product line keys.
+              Retrieval is one document per legacy product line. Semantic search is
+              constrained to English (`EN`) documents only. Chunks include rolled-up
+              size variants; filters only target product line keys.
             </p>
           </div>
 
@@ -345,10 +346,10 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
               </div>
               <div className="text-sm text-slate-600">
                 {result.scope === 'all'
-                  ? 'Scope: all corpus docs.'
+                  ? 'Scope: all corpus docs (EN only).'
                   : result.scope === 'products'
-                    ? 'Scope: products only.'
-                    : 'Scope: SDS only.'}{' '}
+                    ? 'Scope: products only (EN only).'
+                    : 'Scope: SDS only (EN only).'}{' '}
                 {result.productLineKey
                   ? `Filtered to product line ${result.productLineKey}.`
                   : 'No metadata filter applied.'}

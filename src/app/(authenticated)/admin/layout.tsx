@@ -1,10 +1,5 @@
 import {
-  ChevronRight,
   FileText,
-  Layers,
-  LayoutDashboard,
-  Library,
-  MessageSquare,
   Search,
   Sparkles,
 } from 'lucide-react';
@@ -12,126 +7,12 @@ import Link from 'next/link';
 import type { ReactNode } from 'react';
 
 import { AdminAccountMenu } from '~/components/admin/AdminAccountMenu';
+import { AdminSidebarNav } from '~/components/admin/AdminSidebarNav';
 import { Button } from '~/components/ui/button';
-
-const workspaceNavItems = [
-  { label: 'Dashboard', href: '/admin', icon: LayoutDashboard },
-  { label: 'Bex', href: '/admin/bex', icon: MessageSquare },
-];
-
-const productsNavItems = [
-  {
-    label: 'Products',
-    icon: Library,
-    items: [
-      { label: 'RAG generate', href: '/admin/products/rag/generate' },
-      { label: 'RAG products', href: '/admin/products/rag' },
-      { label: 'Legacy products', href: '/admin/products/legacy' },
-    ],
-  },
-  {
-    label: 'Rag',
-    icon: Layers,
-    items: [{ label: 'RAG similarity search', href: '/admin/products/rag' }],
-  },
-  {
-    label: 'SDS',
-    icon: FileText,
-    items: [{ label: 'SDS ingestion', href: '/admin/sds' }],
-  },
-];
 
 type AdminLayoutProps = {
   children: ReactNode;
 };
-
-function NavSection({
-  items,
-  title,
-}: {
-  items: Array<{
-    label: string;
-    href: string;
-    icon: typeof LayoutDashboard;
-  }>;
-  title?: string;
-}) {
-  return (
-    <div className="space-y-2">
-      {title ? (
-        <p className="px-2 text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">
-          {title}
-        </p>
-      ) : null}
-      <nav className="space-y-1">
-        {items.map((item) => {
-          const Icon = item.icon;
-
-          return (
-            <Link
-              className="flex items-center gap-3 rounded-2xl px-3 py-2 text-sm font-medium text-foreground/80 transition hover:bg-accent hover:text-foreground"
-              href={item.href}
-              key={item.label}
-            >
-              <Icon className="size-4" />
-              <span>{item.label}</span>
-            </Link>
-          );
-        })}
-      </nav>
-    </div>
-  );
-}
-
-function NavGroupedSection({
-  groups,
-  title,
-}: {
-  groups: Array<{
-    label: string;
-    icon: typeof LayoutDashboard;
-    items: Array<{
-      label: string;
-      href: string;
-    }>;
-  }>;
-  title?: string;
-}) {
-  return (
-    <div className="space-y-2">
-      {title ? (
-        <p className="px-2 text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">
-          {title}
-        </p>
-      ) : null}
-      <nav className="space-y-1">
-        {groups.map((group) => {
-          const Icon = group.icon;
-          return (
-            <details className="group rounded-2xl" key={group.label}>
-              <summary className="flex cursor-pointer list-none items-center gap-3 rounded-2xl px-3 py-2 text-sm font-medium text-foreground/80 transition hover:bg-accent hover:text-foreground">
-                <Icon className="size-4" />
-                <span className="flex-1">{group.label}</span>
-                <ChevronRight className="size-4 transition group-open:rotate-90" />
-              </summary>
-              <div className="mt-1 space-y-1 pl-10">
-                {group.items.map((item) => (
-                  <Link
-                    className="block rounded-xl px-3 py-1.5 text-sm text-foreground/70 transition hover:bg-accent hover:text-foreground"
-                    href={item.href}
-                    key={item.label}
-                  >
-                    {item.label}
-                  </Link>
-                ))}
-              </div>
-            </details>
-          );
-        })}
-      </nav>
-    </div>
-  );
-}
 
 export default function AdminLayout({ children }: AdminLayoutProps) {
   return (
@@ -148,12 +29,8 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
             <span>Acme Inc.</span>
           </Link>
 
-          <div className="mt-8 space-y-6">
-            <NavSection items={workspaceNavItems} title="Workspace" />
-            <NavGroupedSection
-              groups={productsNavItems}
-              title="Products & RAG"
-            />
+          <div className="mt-8">
+            <AdminSidebarNav />
           </div>
 
           <div className="mt-auto">
