@@ -649,7 +649,22 @@ export async function searchProductChunks(
           filter_product_key: undefined,
           filter_product_line_key: productLineKey || undefined,
         })
-      : await (rag as any).rpc('match_corpus_chunks', {
+      : await (
+          rag as unknown as {
+            rpc: (
+              fn: 'match_corpus_chunks',
+              args: {
+                query_embedding: string;
+                match_count: number;
+                filter_product_line_key?: string;
+                filter_scope: 'all' | 'products' | 'sds';
+              },
+            ) => Promise<{
+              data: RagCorpusSearchMatch[] | null;
+              error: { message: string } | null;
+            }>;
+          }
+        ).rpc('match_corpus_chunks', {
           query_embedding: toVectorLiteral(embedding),
           match_count: limit,
           filter_product_line_key: productLineKey || undefined,

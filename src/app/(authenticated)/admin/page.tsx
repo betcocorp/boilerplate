@@ -32,6 +32,11 @@ import {
   TableRow,
 } from '~/components/ui/table';
 
+export const metadata = {
+  title: 'Admin Dashboard | Betco BEX',
+  description: 'Overview dashboard for Betco BEX admin operations and shortcuts.',
+};
+
 const metrics = [
   {
     title: 'Total Revenue',

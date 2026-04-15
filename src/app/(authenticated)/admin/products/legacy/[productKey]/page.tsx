@@ -4,6 +4,11 @@ import { connection } from 'next/server';
 import { getSupabaseServerClient } from '~/supabase/clients/server';
 import type { Tables } from '~/types/supabase.legacy';
 
+export const metadata = {
+  title: 'Legacy Product Details | Betco BEX',
+  description: 'Detailed legacy product record including metadata and related assets.',
+};
+
 type ProductRow = Tables<{ schema: 'legacy' }, 'products'>;
 type ProductAttrRow = Tables<{ schema: 'legacy' }, 'products_attr'>;
 type ProductDescriptionRow = Tables<{ schema: 'legacy' }, 'products_descr'>;

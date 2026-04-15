@@ -3,6 +3,11 @@ import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
+export const metadata = {
+  title: 'RAG Product Line Details | Betco BEX',
+  description: 'Inspect RAG document, source, entity, and chunk records for a product line.',
+};
+
 type JsonObject = Record<string, unknown>;
 
 type RagSourceRecord = {

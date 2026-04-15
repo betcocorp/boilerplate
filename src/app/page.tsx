@@ -5,6 +5,11 @@ import { redirect } from "next/navigation";
 import FormLogin from "~/components/auth/FormLogin";
 import { authOptions } from "~/lib/auth";
 
+export const metadata = {
+  title: "Sign In | Betco BEX",
+  description: "Sign in to access the Betco BEX admin workspace.",
+};
+
 type HomeProps = {
   searchParams: Promise<{
     next?: string;

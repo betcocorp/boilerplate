@@ -4,6 +4,11 @@ import { connection } from 'next/server';
 import { SdsControls } from './SdsControls';
 import { getSdsDashboardStatus } from './pipeline';
 
+export const metadata = {
+  title: 'SDS Ingestion | Betco BEX',
+  description: 'Ingest and monitor SDS documents in the RAG schema.',
+};
+
 export default async function AdminSdsPage() {
   await connection();
   const status = await getSdsDashboardStatus();

@@ -7,6 +7,11 @@ import { RagSearchTimingPanel } from '~/components/admin/RagSearchTimingPanel';
 import { searchProductChunks } from '~/lib/rag/search';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
+export const metadata = {
+  title: 'RAG Search | Betco BEX',
+  description: 'Semantic search across Betco RAG product and SDS content.',
+};
+
 const SEARCH_ROUTE = '/admin/products/rag';
 type SearchScope = 'all' | 'products' | 'sds';
 

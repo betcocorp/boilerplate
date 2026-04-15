@@ -5,6 +5,11 @@ import moment from 'moment';
 import { GenerateControls } from '~/components/admin/GenerateControls';
 import { getRagGenerationStatus } from '~/lib/rag/pipeline';
 
+export const metadata = {
+  title: 'RAG Pipeline Generate | Betco BEX',
+  description: 'Run and monitor RAG document sync, chunking, and embedding generation.',
+};
+
 function formatTimestamp(value: string | null) {
   if (!value) {
     return 'Not available';

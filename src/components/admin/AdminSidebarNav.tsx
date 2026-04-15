@@ -13,12 +13,14 @@ import { usePathname } from 'next/navigation';
 import { useMemo, useState } from 'react';
 
 type NavItem = {
+  type: 'link';
   label: string;
   href: string;
-  icon: typeof LayoutDashboard;
+  icon?: typeof LayoutDashboard;
 };
 
 type NavGroup = {
+  type: 'group';
   label: string;
   icon: typeof LayoutDashboard;
   items: Array<{
@@ -27,25 +29,51 @@ type NavGroup = {
   }>;
 };
 
-const workspaceNavItems: NavItem[] = [
-  { label: 'Dashboard', href: '/admin', icon: LayoutDashboard },
-  { label: 'Bex', href: '/admin/bex', icon: MessageSquare },
-  { label: 'RAG semantic search', href: '/admin/products/rag', icon: Search },
-];
+type NavEntry = NavItem | NavGroup;
 
-const productsNavItems: NavGroup[] = [
+type NavSectionModel = {
+  title: string;
+  items: NavEntry[];
+};
+
+const sidebarSections: NavSectionModel[] = [
   {
-    label: 'Products',
-    icon: Library,
+    title: 'Workspace',
     items: [
-      { label: 'RAG generate', href: '/admin/products/rag/generate' },
-      { label: 'Legacy products', href: '/admin/products/legacy' },
+      { type: 'link', label: 'Dashboard', href: '/admin', icon: LayoutDashboard },
+      {
+        type: 'group',
+        label: 'Bex',
+        icon: MessageSquare,
+        items: [{ label: 'Bex chat', href: '/admin/bex' }],
+      },
+      {
+        type: 'link',
+        label: 'RAG semantic search',
+        href: '/admin/products/rag',
+        icon: Search,
+      },
     ],
   },
   {
-    label: 'SDS',
-    icon: FileText,
-    items: [{ label: 'SDS ingestion', href: '/admin/sds' }],
+    title: 'Products & RAG',
+    items: [
+      {
+        type: 'group',
+        label: 'Products',
+        icon: Library,
+        items: [
+          { label: 'RAG generate', href: '/admin/products/rag/generate' },
+          { label: 'Legacy products', href: '/admin/products/legacy' },
+        ],
+      },
+      {
+        type: 'group',
+        label: 'SDS',
+        icon: FileText,
+        items: [{ label: 'SDS ingestion', href: '/admin/sds' }],
+      },
+    ],
   },
 ];
 
@@ -57,58 +85,19 @@ function isActivePath(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
-function NavSection({ items, title }: { items: NavItem[]; title?: string }) {
-  const pathname = usePathname();
-
-  return (
-    <div className="space-y-2">
-      {title ? (
-        <p className="px-2 text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">
-          {title}
-        </p>
-      ) : null}
-      <nav className="space-y-1">
-        {items.map((item) => {
-          const Icon = item.icon;
-          const active = isActivePath(pathname, item.href);
-
-          return (
-            <Link
-              className={`flex items-center gap-3 rounded-2xl px-3 py-2 text-sm font-medium transition ${
-                active
-                  ? 'bg-sidebar-accent text-sidebar-foreground'
-                  : 'text-foreground/80 hover:bg-accent hover:text-foreground'
-              }`}
-              href={item.href}
-              key={item.label}
-            >
-              <Icon className="size-4" />
-              <span>{item.label}</span>
-            </Link>
-          );
-        })}
-      </nav>
-    </div>
-  );
-}
-
-function NavGroupedSection({
-  groups,
-  title,
-}: {
-  groups: NavGroup[];
-  title?: string;
-}) {
+function NavSection({ items, title }: { items: NavEntry[]; title?: string }) {
   const pathname = usePathname();
   const activeGroupLabels = useMemo(() => {
     return new Set(
-      groups
-        .filter((group) =>
-          group.items.some((item) => isActivePath(pathname, item.href)),
+      items
+        .filter(
+          (entry): entry is NavGroup =>
+            entry.type === 'group' &&
+            entry.items.some((item) => isActivePath(pathname, item.href)),
         )
-        .map((group) => group.label),
+        .map((entry) => entry.label),
     );
-  }, [groups, pathname]);
+  }, [items, pathname]);
   const [manualOpen, setManualOpen] = useState<Record<string, boolean>>({});
 
   return (
@@ -119,13 +108,32 @@ function NavGroupedSection({
         </p>
       ) : null}
       <nav className="space-y-1">
-        {groups.map((group) => {
-          const Icon = group.icon;
-          const groupActive = activeGroupLabels.has(group.label);
-          const isOpen = groupActive || manualOpen[group.label] === true;
+        {items.map((entry) => {
+          if (entry.type === 'link') {
+            const Icon = entry.icon;
+            const active = isActivePath(pathname, entry.href);
+            return (
+              <Link
+                className={`flex items-center gap-3 rounded-2xl px-3 py-2 text-sm font-medium transition ${
+                  active
+                    ? 'bg-sidebar-accent text-sidebar-foreground'
+                    : 'text-foreground/80 hover:bg-accent hover:text-foreground'
+                }`}
+                href={entry.href}
+                key={entry.label}
+              >
+                {Icon ? <Icon className="size-4" /> : null}
+                <span>{entry.label}</span>
+              </Link>
+            );
+          }
+
+          const Icon = entry.icon;
+          const groupActive = activeGroupLabels.has(entry.label);
+          const isOpen = groupActive || manualOpen[entry.label] === true;
 
           return (
-            <div className="rounded-2xl" key={group.label}>
+            <div className="rounded-2xl" key={entry.label}>
               <button
                 className={`flex w-full items-center gap-3 rounded-2xl px-3 py-2 text-sm font-medium transition ${
                   groupActive
@@ -135,20 +143,20 @@ function NavGroupedSection({
                 onClick={() =>
                   setManualOpen((current) => ({
                     ...current,
-                    [group.label]: !isOpen,
+                    [entry.label]: !isOpen,
                   }))
                 }
                 type="button"
               >
                 <Icon className="size-4" />
-                <span className="flex-1 text-left">{group.label}</span>
+                <span className="flex-1 text-left">{entry.label}</span>
                 <ChevronRight
                   className={`size-4 transition ${isOpen ? 'rotate-90' : ''}`}
                 />
               </button>
               {isOpen ? (
                 <div className="mt-1 space-y-1 pl-10">
-                  {group.items.map((item) => {
+                  {entry.items.map((item) => {
                     const itemActive = isActivePath(pathname, item.href);
                     return (
                       <Link
@@ -177,8 +185,9 @@ function NavGroupedSection({
 export function AdminSidebarNav() {
   return (
     <div className="space-y-6">
-      <NavSection items={workspaceNavItems} title="Workspace" />
-      <NavGroupedSection groups={productsNavItems} title="Products & RAG" />
+      {sidebarSections.map((section) => (
+        <NavSection items={section.items} key={section.title} title={section.title} />
+      ))}
     </div>
   );
 }
