@@ -387,6 +387,33 @@ export type Database = {
           timing_sample_count: number
         }[]
       }
+      match_corpus_chunks: {
+        Args: {
+          filter_product_line_key?: string
+          filter_scope?: string
+          match_count?: number
+          query_embedding: string
+        }
+        Returns: {
+          chunk_id: string
+          chunk_index: number
+          chunk_key: string
+          chunk_text: string
+          document_id: string
+          document_key: string
+          document_kind: string
+          document_title: string
+          entity_id: string
+          heading: string
+          product_key: string
+          product_line_key: string
+          section_path: string[]
+          similarity: number
+          sku: string
+          source_pk: string
+          token_count: number
+        }[]
+      }
       match_product_chunks: {
         Args: {
           filter_product_key?: string

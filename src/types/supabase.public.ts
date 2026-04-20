@@ -174,6 +174,202 @@ export type Database = {
           },
         ]
       }
+      test_items: {
+        Row: {
+          created_at: string
+          expected_canonical_product: string | null
+          expected_reason_code: string | null
+          expected_result_type: string | null
+          expected_should_answer: boolean | null
+          id: string
+          input_payload: Json
+          metadata: Json
+          prompt: string
+          row_index: number
+          test_id: string
+        }
+        Insert: {
+          created_at?: string
+          expected_canonical_product?: string | null
+          expected_reason_code?: string | null
+          expected_result_type?: string | null
+          expected_should_answer?: boolean | null
+          id?: string
+          input_payload?: Json
+          metadata?: Json
+          prompt: string
+          row_index: number
+          test_id: string
+        }
+        Update: {
+          created_at?: string
+          expected_canonical_product?: string | null
+          expected_reason_code?: string | null
+          expected_result_type?: string | null
+          expected_should_answer?: boolean | null
+          id?: string
+          input_payload?: Json
+          metadata?: Json
+          prompt?: string
+          row_index?: number
+          test_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "test_items_test_id_fkey"
+            columns: ["test_id"]
+            isOneToOne: false
+            referencedRelation: "tests"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      test_result_items: {
+        Row: {
+          created_at: string
+          elapsed_ms: number
+          error_message: string | null
+          id: string
+          passed: boolean
+          response_payload: Json | null
+          response_text: string | null
+          row_index: number
+          status: string
+          test_item_id: string
+          test_result_id: string
+        }
+        Insert: {
+          created_at?: string
+          elapsed_ms: number
+          error_message?: string | null
+          id?: string
+          passed?: boolean
+          response_payload?: Json | null
+          response_text?: string | null
+          row_index: number
+          status?: string
+          test_item_id: string
+          test_result_id: string
+        }
+        Update: {
+          created_at?: string
+          elapsed_ms?: number
+          error_message?: string | null
+          id?: string
+          passed?: boolean
+          response_payload?: Json | null
+          response_text?: string | null
+          row_index?: number
+          status?: string
+          test_item_id?: string
+          test_result_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "test_result_items_test_item_id_fkey"
+            columns: ["test_item_id"]
+            isOneToOne: false
+            referencedRelation: "test_items"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "test_result_items_test_result_id_fkey"
+            columns: ["test_result_id"]
+            isOneToOne: false
+            referencedRelation: "test_results"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      test_results: {
+        Row: {
+          completed_at: string | null
+          created_at: string
+          elapsed_ms: number | null
+          failed_items: number
+          id: string
+          passed_items: number
+          started_at: string
+          status: string
+          summary: Json
+          test_id: string
+          total_items: number
+        }
+        Insert: {
+          completed_at?: string | null
+          created_at?: string
+          elapsed_ms?: number | null
+          failed_items?: number
+          id?: string
+          passed_items?: number
+          started_at?: string
+          status?: string
+          summary?: Json
+          test_id: string
+          total_items?: number
+        }
+        Update: {
+          completed_at?: string | null
+          created_at?: string
+          elapsed_ms?: number | null
+          failed_items?: number
+          id?: string
+          passed_items?: number
+          started_at?: string
+          status?: string
+          summary?: Json
+          test_id?: string
+          total_items?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "test_results_test_id_fkey"
+            columns: ["test_id"]
+            isOneToOne: false
+            referencedRelation: "tests"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tests: {
+        Row: {
+          id: string
+          metadata: Json
+          name: string
+          row_count: number
+          source_bucket: string
+          source_file_name: string
+          source_key: string
+          status: string
+          updated_at: string
+          uploaded_at: string
+        }
+        Insert: {
+          id?: string
+          metadata?: Json
+          name: string
+          row_count?: number
+          source_bucket: string
+          source_file_name: string
+          source_key: string
+          status?: string
+          updated_at?: string
+          uploaded_at?: string
+        }
+        Update: {
+          id?: string
+          metadata?: Json
+          name?: string
+          row_count?: number
+          source_bucket?: string
+          source_file_name?: string
+          source_key?: string
+          status?: string
+          updated_at?: string
+          uploaded_at?: string
+        }
+        Relationships: []
+      }
       workflow_runs: {
         Row: {
           confidence: number | null
