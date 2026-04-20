@@ -14,6 +14,13 @@ export type ChatMessage = {
   content: string;
   createdAt: number;
   workflowRunId?: string;
+  feedback?: {
+    rating: 'up' | 'down';
+    reasonCode?: string | null;
+    comment?: string | null;
+    createdAt?: number;
+    updatedAt?: number;
+  } | null;
   meta?: {
     model?: string;
     confidence?: number;

@@ -10,6 +10,13 @@ type ApiMsg = {
   content: unknown;
   plainText?: string | null;
   createdAt: string;
+  feedback?: {
+    rating?: 'up' | 'down';
+    reasonCode?: string | null;
+    comment?: string | null;
+    createdAt?: string;
+    updatedAt?: string;
+  } | null;
 };
 
 export function mapApiMessageToChatMessage(row: ApiMsg): ChatMessage {
@@ -68,6 +75,20 @@ export function mapApiMessageToChatMessage(row: ApiMsg): ChatMessage {
       content: text,
       createdAt: safeTime,
       workflowRunId: parsed.success ? parsed.data.workflowRunId : undefined,
+      feedback:
+        row.feedback && (row.feedback.rating === 'up' || row.feedback.rating === 'down')
+          ? {
+              rating: row.feedback.rating,
+              reasonCode: row.feedback.reasonCode ?? null,
+              comment: row.feedback.comment ?? null,
+              createdAt: row.feedback.createdAt
+                ? Date.parse(row.feedback.createdAt)
+                : undefined,
+              updatedAt: row.feedback.updatedAt
+                ? Date.parse(row.feedback.updatedAt)
+                : undefined,
+            }
+          : null,
       meta,
     };
   }

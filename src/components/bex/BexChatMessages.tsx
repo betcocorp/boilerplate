@@ -1,12 +1,39 @@
 'use client';
 
-import { Bot, ChevronDown, ChevronRight, Copy, Sparkles, User } from 'lucide-react';
+import {
+  Bot,
+  ChevronDown,
+  ChevronRight,
+  Copy,
+  Sparkles,
+  ThumbsDown,
+  ThumbsUp,
+  User,
+} from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 
 import { Avatar, AvatarFallback } from '~/components/ui/avatar';
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '~/components/ui/dialog';
+import { Label } from '~/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '~/components/ui/select';
+import { Separator } from '~/components/ui/separator';
+import { Textarea } from '~/components/ui/textarea';
 import { cn } from '~/lib/utils';
 
 import { BEX_SUGGESTIONS } from '~/lib/bex/constants';
@@ -18,7 +45,22 @@ type BexChatMessagesProps = {
   showWelcome: boolean;
   onSuggestion: (text: string) => void;
   onStartEmptyChat?: () => void;
+  feedbackSubmittingMessageId?: string | null;
+  onSubmitFeedback?: (input: {
+    messageId: string;
+    rating: 'up' | 'down';
+    reasonCode?: string;
+    comment?: string;
+  }) => Promise<void>;
 };
+
+const DOWNVOTE_REASON_OPTIONS = [
+  { id: 'wrong_facts', label: 'Wrong facts' },
+  { id: 'missing_context', label: 'Missing context' },
+  { id: 'unsafe_guidance', label: 'Unsafe guidance' },
+  { id: 'bad_tone', label: 'Bad tone' },
+  { id: 'other', label: 'Other' },
+];
 
 function formatTime(ts: number) {
   return new Intl.DateTimeFormat(undefined, {
@@ -56,7 +98,9 @@ function markdownComponentsForBubble(isUser: boolean): Components {
     ),
     li: ({ children }) => <li className="wrap-break-word">{children}</li>,
     a: ({ children }) => (
-      <span className="wrap-break-word underline underline-offset-2">{children}</span>
+      <span className="wrap-break-word underline underline-offset-2">
+        {children}
+      </span>
     ),
     code: ({ className, children, ...props }) => {
       const isBlock = Boolean(className?.includes('language-'));
@@ -107,15 +151,23 @@ function markdownComponentsForBubble(isUser: boolean): Components {
   };
 }
 
-function AssistantDetails({ messageId, meta }: { messageId: string; meta: NonNullable<ChatMessage['meta']> }) {
+function AssistantDetails({
+  messageId,
+  meta,
+}: {
+  messageId: string;
+  meta: NonNullable<ChatMessage['meta']>;
+}) {
   const [open, setOpen] = useState(false);
 
   return (
-    <div className="mt-2 border-t border-border/40 pt-2 text-xs text-muted-foreground">
-      <button
-        className="flex items-center gap-1 font-medium text-foreground/80 hover:text-foreground"
+    <div className="mt-2 text-xs text-muted-foreground">
+      <Separator className="mb-2 bg-border/40" />
+      <Button
+        className="h-auto gap-1 px-0 text-xs font-medium text-foreground/80 hover:text-foreground"
         onClick={() => setOpen((v) => !v)}
         type="button"
+        variant="ghost"
       >
         {open ? (
           <ChevronDown className="size-3.5" aria-hidden />
@@ -123,7 +175,7 @@ function AssistantDetails({ messageId, meta }: { messageId: string; meta: NonNul
           <ChevronRight className="size-3.5" aria-hidden />
         )}
         Details
-      </button>
+      </Button>
       {open ? (
         <div className="mt-2 space-y-2 rounded-xl bg-muted/50 p-3 text-left">
           {meta.confidence !== undefined ? (
@@ -154,7 +206,10 @@ function AssistantDetails({ messageId, meta }: { messageId: string; meta: NonNul
               <span className="font-medium text-foreground">Sources</span>
               <ul className="mt-1 space-y-1">
                 {meta.sources.slice(0, 8).map((s) => (
-                  <li className="wrap-break-word" key={`${messageId}-${s.documentId}`}>
+                  <li
+                    className="wrap-break-word"
+                    key={`${messageId}-${s.documentId}`}
+                  >
                     <span className="font-mono text-[0.7rem] opacity-80">
                       {s.documentId.slice(0, 8)}…
                     </span>{' '}
@@ -197,6 +252,8 @@ function BexChatMessageBody({
 export function BexChatMessages({
   isTyping,
   messages,
+  feedbackSubmittingMessageId,
+  onSubmitFeedback,
   onStartEmptyChat,
   onSuggestion,
   showWelcome,
@@ -226,9 +283,9 @@ export function BexChatMessages({
             Bex assistant
           </h1>
           <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-            Bex runs the <code className="text-xs">product-support</code> workflow:
-            OpenAI Responses API with server-side tools over your RAG corpus, a
-            validator pass, and durable threads in Supabase.
+            Bex runs the <code className="text-xs">product-support</code>{' '}
+            workflow: OpenAI Responses API with server-side tools over your RAG
+            corpus, a validator pass, and durable threads in Supabase.
           </p>
           <Badge className="mt-4 rounded-full" variant="secondary">
             Admin · Responses API · Supabase history
@@ -330,11 +387,23 @@ export function BexChatMessages({
                     </span>
                   </div>
                   <BexChatMessageBody content={m.content} isUser={isUser} />
+                  {!isUser ? (
+                    <div className="mt-3">
+                      <AssistantFeedbackActions
+                        feedback={m.feedback}
+                        isSubmitting={feedbackSubmittingMessageId === m.id}
+                        messageId={m.id}
+                        onSubmitFeedback={onSubmitFeedback}
+                      />
+                    </div>
+                  ) : null}
                   {!isUser && m.meta ? (
                     <AssistantDetails messageId={m.id} meta={m.meta} />
                   ) : null}
                   {!isUser && (
-                    <div className="mt-3 flex justify-end border-t border-border/40 pt-2">
+                    <div className="mt-3">
+                      <Separator className="mb-2 bg-border/40" />
+                      <div className="flex justify-end">
                       <Button
                         aria-label="Copy message"
                         className="h-8 rounded-xl text-xs"
@@ -346,6 +415,7 @@ export function BexChatMessages({
                         <Copy className="size-3.5" />
                         Copy
                       </Button>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -373,6 +443,159 @@ export function BexChatMessages({
 
         <div ref={endRef} />
       </div>
+    </div>
+  );
+}
+
+function AssistantFeedbackActions({
+  messageId,
+  feedback,
+  onSubmitFeedback,
+  isSubmitting,
+}: {
+  messageId: string;
+  feedback: ChatMessage['feedback'];
+  onSubmitFeedback?: BexChatMessagesProps['onSubmitFeedback'];
+  isSubmitting: boolean;
+}) {
+  const [showDownvoteDialog, setShowDownvoteDialog] = useState(false);
+  const [reasonCode, setReasonCode] = useState(
+    DOWNVOTE_REASON_OPTIONS[0]?.id || 'other',
+  );
+  const [comment, setComment] = useState('');
+
+  const submit = async (input: {
+    rating: 'up' | 'down';
+    reasonCode?: string;
+    comment?: string;
+  }) => {
+    if (!onSubmitFeedback) {
+      return;
+    }
+    await onSubmitFeedback({
+      messageId,
+      rating: input.rating,
+      reasonCode: input.reasonCode,
+      comment: input.comment,
+    });
+  };
+
+  return (
+    <div className="mr-auto flex flex-col gap-2">
+      <div className="flex items-center gap-1">
+        <Button
+          aria-label="Thumbs up"
+          className={cn(
+            'h-8 rounded-xl text-xs',
+            feedback?.rating === 'up' && 'bg-muted text-foreground',
+          )}
+          disabled={isSubmitting || !onSubmitFeedback}
+          onClick={() => void submit({ rating: 'up' })}
+          size="sm"
+          type="button"
+          variant="ghost"
+        >
+          <ThumbsUp className="size-3.5" />
+          Helpful
+        </Button>
+        <Button
+          aria-label="Thumbs down"
+          className={cn(
+            'h-8 rounded-xl text-xs',
+            feedback?.rating === 'down' && 'bg-muted text-foreground',
+          )}
+          disabled={isSubmitting || !onSubmitFeedback}
+          onClick={() => setShowDownvoteDialog(true)}
+          size="sm"
+          type="button"
+          variant="ghost"
+        >
+          <ThumbsDown className="size-3.5" />
+          Not helpful
+        </Button>
+      </div>
+      <Dialog
+        onOpenChange={(open) => {
+          setShowDownvoteDialog(open);
+        }}
+        open={showDownvoteDialog}
+      >
+        <DialogContent className="gap-4" showCloseButton={false}>
+          <form
+            className="flex flex-col gap-3"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void submit({
+                rating: 'down',
+                reasonCode,
+                comment: comment.trim() || undefined,
+              }).then(() => {
+                setShowDownvoteDialog(false);
+                setComment('');
+              });
+            }}
+          >
+            <DialogHeader>
+              <DialogTitle id={`feedback-dialog-title-${messageId}`}>
+                Why was this not helpful?
+              </DialogTitle>
+              <DialogDescription>
+                Share quick feedback to help improve assistant responses.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-1.5">
+              <Label htmlFor={`feedback-reason-${messageId}`}>Reason</Label>
+              <Select onValueChange={setReasonCode} value={reasonCode}>
+                <SelectTrigger
+                  className="w-full"
+                  id={`feedback-reason-${messageId}`}
+                >
+                  <SelectValue placeholder="Choose a reason" />
+                </SelectTrigger>
+                <SelectContent>
+                  {DOWNVOTE_REASON_OPTIONS.map((option) => (
+                    <SelectItem key={option.id} value={option.id}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor={`feedback-comment-${messageId}`}>
+                Optional details
+              </Label>
+              <Textarea
+                id={`feedback-comment-${messageId}`}
+                className="min-h-24"
+              onChange={(event) => setComment(event.target.value)}
+              placeholder="Optional details"
+              value={comment}
+              />
+            </div>
+            <DialogFooter>
+              <Button
+                className="h-8 rounded-lg px-3 text-xs"
+                onClick={() => setShowDownvoteDialog(false)}
+                size="sm"
+                type="button"
+                variant="ghost"
+              >
+                Cancel
+              </Button>
+              <Button
+                className="h-8 rounded-lg px-3 text-xs"
+                disabled={isSubmitting || !onSubmitFeedback}
+                size="sm"
+                type="submit"
+                variant="outline"
+              >
+                Send
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

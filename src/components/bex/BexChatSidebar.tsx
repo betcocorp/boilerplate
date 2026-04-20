@@ -122,13 +122,14 @@ export function BexChatSidebar({
                 )}
                 key={c.id}
               >
-                <button
-                  className="min-w-0 flex-1 px-3 py-2.5 text-left text-sm"
+                <Button
+                  className="h-auto min-w-0 flex-1 justify-start px-3 py-2.5 text-left text-sm"
                   onClick={() => {
                     onSelect(c.id);
                     onCloseMobile?.();
                   }}
                   type="button"
+                  variant="ghost"
                 >
                   <span className="line-clamp-2 font-medium text-foreground">
                     {c.title}
@@ -139,7 +140,7 @@ export function BexChatSidebar({
                       ? ` · ${c.messages.length} messages`
                       : ''}
                   </span>
-                </button>
+                </Button>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button

@@ -2,6 +2,8 @@ import Link from 'next/link';
 import { connection } from 'next/server';
 
 import { Button } from '~/components/ui/button';
+import { Input } from '~/components/ui/input';
+import { Label } from '~/components/ui/label';
 import {
   Table,
   TableBody,
@@ -78,25 +80,29 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <h2 className="text-lg font-semibold text-slate-900">Upload CSV dataset</h2>
           <form action={uploadTestCsvAction} className="mt-4 grid gap-4 sm:grid-cols-2">
-            <label className="flex flex-col gap-2 text-sm text-slate-700">
-              Test name
-              <input
-                className="rounded-xl border border-slate-200 px-3 py-2"
+            <div className="flex flex-col gap-2">
+              <Label className="text-sm text-slate-700" htmlFor="test-name-input">
+                Test name
+              </Label>
+              <Input
+                id="test-name-input"
                 name="name"
                 placeholder="Product catalog specialist set"
                 type="text"
               />
-            </label>
-            <label className="flex flex-col gap-2 text-sm text-slate-700">
-              CSV file
-              <input
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label className="text-sm text-slate-700" htmlFor="test-dataset-input">
+                CSV file
+              </Label>
+              <Input
                 accept=".csv,text/csv"
-                className="rounded-xl border border-slate-200 px-3 py-2"
+                id="test-dataset-input"
                 name="dataset"
                 required
                 type="file"
               />
-            </label>
+            </div>
             <div className="sm:col-span-2">
               <Button type="submit">Upload dataset</Button>
             </div>

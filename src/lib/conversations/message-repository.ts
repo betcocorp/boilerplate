@@ -39,6 +39,21 @@ export async function listMessagesForConversation(
   return data ?? [];
 }
 
+export async function getMessageById(messageId: string): Promise<AgentMessageRow | null> {
+  const supabase = getSupabaseServiceRoleClient();
+  const { data, error } = await supabase
+    .from('agent_messages')
+    .select()
+    .eq('id', messageId)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return data;
+}
+
 export function jsonContent(value: unknown): Json {
   return value as Json;
 }

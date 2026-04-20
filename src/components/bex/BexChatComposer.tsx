@@ -4,6 +4,9 @@ import { Paperclip, SendHorizontal } from 'lucide-react';
 import { useCallback, useRef } from 'react';
 
 import { Button } from '~/components/ui/button';
+import { Label } from '~/components/ui/label';
+import { Switch } from '~/components/ui/switch';
+import { Textarea } from '~/components/ui/textarea';
 import { cn } from '~/lib/utils';
 
 type BexChatComposerProps = {
@@ -54,9 +57,9 @@ export function BexChatComposer({
             'focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/20',
           )}
         >
-          <textarea
+          <Textarea
             aria-label="Message input"
-            className="max-h-[200px] min-h-[44px] w-full resize-none bg-transparent px-3 py-2 text-sm leading-relaxed text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-50"
+            className="max-h-[200px] min-h-[44px] w-full resize-none border-0 bg-transparent px-3 py-2 text-sm leading-relaxed text-foreground shadow-none ring-0 focus-visible:ring-0 disabled:opacity-50"
             disabled={disabled}
             onChange={(e) => {
               onChange(e.target.value);
@@ -88,16 +91,19 @@ export function BexChatComposer({
               <span className="hidden sm:inline">Attach</span>
             </Button>
             <div className="flex items-center gap-2">
-              <label className="mr-1 inline-flex items-center gap-2 text-xs text-muted-foreground">
-                <input
+              <Label
+                className="mr-1 inline-flex items-center gap-2 text-xs text-muted-foreground"
+                htmlFor="bex-use-validator"
+              >
+                <Switch
                   checked={useValidator}
-                  className="size-3.5 rounded border-border text-primary focus:ring-ring"
                   disabled={disabled}
-                  onChange={(e) => onUseValidatorChange(e.target.checked)}
-                  type="checkbox"
+                  id="bex-use-validator"
+                  onCheckedChange={onUseValidatorChange}
+                  size="sm"
                 />
                 Use validator
-              </label>
+              </Label>
               <span className="hidden text-xs text-muted-foreground sm:inline">
                 Enter to send · Shift+Enter for newline
               </span>

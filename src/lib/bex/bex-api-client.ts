@@ -63,6 +63,16 @@ const conversationDetailSchema = z.object({
       plainText: z.string().nullable().optional(),
       createdAt: z.string(),
       toolName: z.string().nullable().optional(),
+      feedback: z
+        .object({
+          rating: z.enum(['up', 'down']),
+          reasonCode: z.string().nullable().optional(),
+          comment: z.string().nullable().optional(),
+          createdAt: z.string().optional(),
+          updatedAt: z.string().optional(),
+        })
+        .nullable()
+        .optional(),
     }),
   ),
 });
@@ -132,6 +142,32 @@ export async function apiDeleteConversation(id: string): Promise<void> {
   const res = await fetch(`/api/bex/conversations/${id}`, { method: 'DELETE' });
   if (!res.ok) {
     const data: unknown = await res.json();
+    throw new Error(
+      typeof data === 'object' && data && 'error' in data
+        ? String((data as { error?: string }).error)
+        : `Request failed (${res.status})`,
+    );
+  }
+}
+
+export async function apiSubmitMessageFeedback(input: {
+  messageId: string;
+  rating: 'up' | 'down';
+  reasonCode?: string;
+  comment?: string;
+}): Promise<void> {
+  const res = await fetch(`/api/bex/messages/${input.messageId}/feedback`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      rating: input.rating,
+      reasonCode: input.reasonCode,
+      comment: input.comment,
+    }),
+  });
+
+  const data: unknown = await res.json();
+  if (!res.ok) {
     throw new Error(
       typeof data === 'object' && data && 'error' in data
         ? String((data as { error?: string }).error)
