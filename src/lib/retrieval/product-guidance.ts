@@ -1,4 +1,7 @@
-import { ragQueryForProductKnowledge, type CuratedSource } from '~/lib/retrieval/product-knowledge';
+import {
+  ragQueryForProductKnowledgeWithMeta,
+  type ProductKnowledgeQueryResult,
+} from '~/lib/retrieval/product-knowledge';
 
 function buildQuery(parts: Array<string | undefined>): string {
   return parts.filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
@@ -9,7 +12,7 @@ export async function retrieveApprovedUsage(input: {
   task: string;
   surfaceType: string;
   environment?: string;
-}): Promise<CuratedSource[]> {
+}): Promise<ProductKnowledgeQueryResult> {
   const q = buildQuery([
     input.productId,
     input.task,
@@ -17,24 +20,24 @@ export async function retrieveApprovedUsage(input: {
     input.environment,
     'approved use directions procedure',
   ]);
-  return ragQueryForProductKnowledge({ query: q, limit: 6 });
+  return ragQueryForProductKnowledgeWithMeta({ query: q, limit: 6 });
 }
 
 export async function retrieveSafetyConstraints(input: {
   productId: string;
-}): Promise<CuratedSource[]> {
+}): Promise<ProductKnowledgeQueryResult> {
   const q = buildQuery([
     input.productId,
     'safety hazards PPE SDS precautions first aid',
   ]);
-  return ragQueryForProductKnowledge({ query: q, limit: 6 });
+  return ragQueryForProductKnowledgeWithMeta({ query: q, limit: 6 });
 }
 
 export async function retrieveCompatibility(input: {
   productId: string;
   surfaceType: string;
   materialType?: string;
-}): Promise<CuratedSource[]> {
+}): Promise<ProductKnowledgeQueryResult> {
   const q = buildQuery([
     input.productId,
     'compatibility',
@@ -42,17 +45,17 @@ export async function retrieveCompatibility(input: {
     input.materialType,
     'safe for surfaces materials',
   ]);
-  return ragQueryForProductKnowledge({ query: q, limit: 6 });
+  return ragQueryForProductKnowledgeWithMeta({ query: q, limit: 6 });
 }
 
 export async function retrieveSurfacesLists(input: {
   productId: string;
   mode: 'allowed' | 'disallowed';
-}): Promise<CuratedSource[]> {
+}): Promise<ProductKnowledgeQueryResult> {
   const hint =
     input.mode === 'allowed'
       ? 'approved surfaces substrates compatible'
       : 'do not use prohibited surfaces incompatible';
   const q = buildQuery([input.productId, hint]);
-  return ragQueryForProductKnowledge({ query: q, limit: 6 });
+  return ragQueryForProductKnowledgeWithMeta({ query: q, limit: 6 });
 }

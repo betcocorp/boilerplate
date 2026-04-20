@@ -44,6 +44,12 @@ function formatDurationSeconds(value: number | null | undefined) {
   if (typeof value !== 'number') {
     return 'n/a';
   }
+  if (value >= 3_600_000) {
+    return `${(value / 3_600_000).toFixed(2)} hr`;
+  }
+  if (value >= 60_000) {
+    return `${(value / 60_000).toFixed(2)} min`;
+  }
   return `${(value / 1000).toFixed(2)} s`;
 }
 

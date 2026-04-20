@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
 
+import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
 import {
   Table,
@@ -14,6 +15,8 @@ import {
 import { AdminTestsActionToast } from '~/components/admin/tests/AdminTestsActionToast';
 import { RunAtAGlanceCharts } from '~/components/admin/tests/RunAtAGlanceCharts';
 import { RunExecutionProgress } from '~/components/admin/tests/RunExecutionProgress';
+import { listWorkflowRunsByIds } from '~/lib/conversations/workflow-repository';
+import { resolveResponsesModel } from '~/lib/openai/client';
 import {
   countResultItemsByResultId,
   getTestById,
@@ -68,6 +71,49 @@ function extractItemSimilarityScore(responsePayload: unknown) {
   }
 
   return Math.max(...similarities);
+}
+
+function extractWorkflowRunId(responsePayload: unknown) {
+  if (!responsePayload || typeof responsePayload !== 'object' || Array.isArray(responsePayload)) {
+    return null;
+  }
+
+  const candidate = (responsePayload as Record<string, unknown>).workflowRunId;
+  return typeof candidate === 'string' && candidate.trim() ? candidate : null;
+}
+
+function extractModelTag(userInput: unknown) {
+  if (!userInput || typeof userInput !== 'object' || Array.isArray(userInput)) {
+    return undefined;
+  }
+
+  const candidate = (userInput as Record<string, unknown>).modelTag;
+  return typeof candidate === 'string' ? candidate : undefined;
+}
+
+function extractTimingBreakdown(responsePayload: unknown) {
+  if (!responsePayload || typeof responsePayload !== 'object' || Array.isArray(responsePayload)) {
+    return null;
+  }
+
+  const candidate = (responsePayload as Record<string, unknown>).timingBreakdown;
+  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+    return null;
+  }
+
+  const timing = candidate as Record<string, unknown>;
+  const toolRounds = timing.toolRounds;
+  const cacheSource = timing.cacheSource;
+  const searchMs = timing.searchMs;
+  if (typeof toolRounds !== 'number') {
+    return null;
+  }
+
+  return {
+    toolRounds,
+    cacheSource: typeof cacheSource === 'string' ? cacheSource : null,
+    searchMs: typeof searchMs === 'number' ? searchMs : null,
+  };
 }
 
 type PageProps = {
@@ -156,6 +202,22 @@ export default async function AdminTestRunDetailsPage({ params, searchParams }: 
     { label: 'Max', value: similarityMax },
     { label: 'Avg', value: similarityAvg },
   ];
+  const slowOverTenSecondsCount = resultItems.filter((item) => item.elapsed_ms > 10_000).length;
+  const notPassedItemCount = resultItems.filter((item) => !item.passed).length;
+  const workflowRunIds = Array.from(
+    new Set(
+      resultItems
+        .map((item) => extractWorkflowRunId(item.response_payload))
+        .filter((value): value is string => Boolean(value)),
+    ),
+  );
+  const workflowRuns = await listWorkflowRunsByIds(workflowRunIds);
+  const modelByWorkflowRunId = new Map(
+    workflowRuns.map((workflowRun) => {
+      const modelTag = extractModelTag(workflowRun.user_input);
+      return [workflowRun.id, resolveResponsesModel(modelTag)] as const;
+    }),
+  );
 
   return (
     <div className="flex flex-1 bg-slate-50">
@@ -193,6 +255,7 @@ export default async function AdminTestRunDetailsPage({ params, searchParams }: 
 
         <RunExecutionProgress
           initialCompletedItems={initialCompletedItems}
+          initialElapsedMs={result.elapsed_ms ?? 0}
           initialStatus={result.status}
           initialTotalItems={initialTotalItems}
           runId={result.id}
@@ -223,9 +286,11 @@ export default async function AdminTestRunDetailsPage({ params, searchParams }: 
           elapsedTrendData={elapsedTrendData}
           failCount={failCount}
           initialStatus={result.status}
+          notPassedItemCount={notPassedItemCount}
           passCount={passCount}
           runId={result.id}
           similarityStatsData={similarityStatsData}
+          slowOverTenSecondsCount={slowOverTenSecondsCount}
           totalItems={result.total_items}
         />
 
@@ -239,6 +304,8 @@ export default async function AdminTestRunDetailsPage({ params, searchParams }: 
                 <TableHead>Passed</TableHead>
                 <TableHead>Elapsed</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead>Model</TableHead>
+                <TableHead>Timing breakdown</TableHead>
                 <TableHead>Message</TableHead>
                 <TableHead>History</TableHead>
               </TableRow>
@@ -246,7 +313,7 @@ export default async function AdminTestRunDetailsPage({ params, searchParams }: 
             <TableBody>
               {resultItems.length === 0 ? (
                 <TableRow>
-                  <TableCell className="text-slate-500" colSpan={7}>
+                  <TableCell className="text-slate-500" colSpan={9}>
                     No item-level results yet.
                   </TableCell>
                 </TableRow>
@@ -270,8 +337,30 @@ export default async function AdminTestRunDetailsPage({ params, searchParams }: 
                       </Link>
                     </TableCell>
                     <TableCell>{row.passed ? 'yes' : 'no'}</TableCell>
-                    <TableCell>{formatDurationSeconds(row.elapsed_ms)}</TableCell>
+                    <TableCell>
+                      <Badge variant={row.elapsed_ms > 10_000 ? 'destructive' : 'secondary'}>
+                        {formatDurationSeconds(row.elapsed_ms)}
+                      </Badge>
+                    </TableCell>
                     <TableCell>{row.status}</TableCell>
+                    <TableCell>
+                      {modelByWorkflowRunId.get(extractWorkflowRunId(row.response_payload) || '') ||
+                        'n/a'}
+                    </TableCell>
+                    <TableCell className="max-w-[220px] whitespace-normal text-xs text-slate-600">
+                      {(() => {
+                        const timing = extractTimingBreakdown(row.response_payload);
+                        if (!timing) {
+                          return 'n/a';
+                        }
+
+                        const searchMsLabel =
+                          typeof timing.searchMs === 'number'
+                            ? `${timing.searchMs.toFixed(1)} ms`
+                            : 'n/a';
+                        return `rounds: ${timing.toolRounds} | cache: ${timing.cacheSource || 'n/a'} | search: ${searchMsLabel}`;
+                      })()}
+                    </TableCell>
                     <TableCell className="max-w-[420px] whitespace-normal text-xs text-slate-600">
                       {row.error_message || row.response_text || 'n/a'}
                     </TableCell>

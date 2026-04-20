@@ -14,6 +14,21 @@ export type CuratedSource = {
   productKey: string | null;
 };
 
+export type ProductKnowledgeRetrievalSummary = {
+  cacheSource:
+    | 'exact-cache-hit'
+    | 'rewritten-cache-hit'
+    | 'approximate-query-hit'
+    | 'approximate-rewritten-hit'
+    | 'new-embedding';
+  searchMs: number;
+};
+
+export type ProductKnowledgeQueryResult = {
+  sources: CuratedSource[];
+  retrieval: ProductKnowledgeRetrievalSummary;
+};
+
 function toCurated(m: RagSearchMatch): CuratedSource {
   return {
     documentId: m.document_id,
@@ -30,6 +45,15 @@ export async function ragQueryForProductKnowledge(input: {
   limit?: number;
   productLineKey?: string | null;
 }): Promise<CuratedSource[]> {
+  const result = await ragQueryForProductKnowledgeWithMeta(input);
+  return result.sources;
+}
+
+export async function ragQueryForProductKnowledgeWithMeta(input: {
+  query: string;
+  limit?: number;
+  productLineKey?: string | null;
+}): Promise<ProductKnowledgeQueryResult> {
   const result = await searchProductChunks({
     query: input.query,
     limit: input.limit ?? 8,
@@ -40,5 +64,11 @@ export async function ragQueryForProductKnowledge(input: {
     limit: input.limit ?? 8,
   });
 
-  return curated.map(toCurated);
+  return {
+    sources: curated.map(toCurated),
+    retrieval: {
+      cacheSource: result.embeddingSource,
+      searchMs: result.timings.similaritySearchMs,
+    },
+  };
 }

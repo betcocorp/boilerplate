@@ -15,13 +15,17 @@ export function AdminTestsActionToast({ success, error }: AdminTestsActionToastP
 
   useEffect(() => {
     if (success) {
-      toast.success(success);
+      toast.success(success, {
+        id: `${pathname}:success:${success}`,
+      });
       router.replace(pathname);
       return;
     }
 
     if (error) {
-      toast.error(error);
+      toast.error(error, {
+        id: `${pathname}:error:${error}`,
+      });
       router.replace(pathname);
     }
   }, [error, pathname, router, success]);

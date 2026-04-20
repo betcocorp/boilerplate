@@ -84,6 +84,7 @@ export function buildProductSupportInstructions(input: {
     '## Tool and grounding rules',
     '',
     '- Call tools to retrieve approved snippets; never invent usage, compatibility, or safety claims.',
+    '- For competitor replacement requests, call `lookup_cross_reference` first using brand + competitor product name.',
     '- For broad questions where product name is unknown, call `search_product_docs` with `freeformQuery` first.',
     '- Do not include clickable links in answers; use plain product names and plain-text references only.',
     '- If tools return no relevant sources, ask one narrow follow-up or explain what is missing.',

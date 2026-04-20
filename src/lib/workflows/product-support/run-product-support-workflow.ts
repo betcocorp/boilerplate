@@ -84,6 +84,37 @@ function buildEvidenceSummary(sources: SourceRef[]): string {
     .slice(0, 14_000);
 }
 
+function extractRetrievalTiming(toolOutput: string) {
+  try {
+    const payload = JSON.parse(toolOutput) as {
+      retrieval?: { cacheSource?: unknown; searchMs?: unknown };
+    };
+    const retrieval = payload.retrieval;
+    if (!retrieval || typeof retrieval !== 'object' || Array.isArray(retrieval)) {
+      return null;
+    }
+
+    const cacheSource = retrieval.cacheSource;
+    const searchMs = retrieval.searchMs;
+    if (typeof cacheSource !== 'string' || typeof searchMs !== 'number') {
+      return null;
+    }
+
+    return { cacheSource, searchMs };
+  } catch {
+    return null;
+  }
+}
+
+function dominantCacheSource(cacheSourceCounts: Map<string, number>) {
+  if (cacheSourceCounts.size === 0) {
+    return null;
+  }
+
+  const sorted = [...cacheSourceCounts.entries()].sort((a, b) => b[1] - a[1]);
+  return sorted[0]?.[0] ?? null;
+}
+
 export async function runProductSupportWorkflow(input: {
   traceId: string;
   conversationId: string;
@@ -193,6 +224,9 @@ export async function runProductSupportWorkflow(input: {
 
   try {
     const toolTrace: ToolTraceEntry[] = [];
+    const cacheSourceCounts = new Map<string, number>();
+    let totalSearchMs = 0;
+    let retrievalSamples = 0;
 
     const agentResult = await runResponsesWithToolLoop({
       client,
@@ -210,6 +244,15 @@ export async function runProductSupportWorkflow(input: {
         logInfo('tool_called', { ...wfCtx, tool_name: name, call_id: callId });
 
         const out = await executeToolCall({ name, argumentsJson, callId });
+        const retrievalTiming = extractRetrievalTiming(out.output);
+        if (retrievalTiming) {
+          cacheSourceCounts.set(
+            retrievalTiming.cacheSource,
+            (cacheSourceCounts.get(retrievalTiming.cacheSource) ?? 0) + 1,
+          );
+          totalSearchMs += retrievalTiming.searchMs;
+          retrievalSamples += 1;
+        }
 
         await writeAuditLog(
           out.trace.ok ? 'tool_succeeded' : 'tool_failed',
@@ -221,6 +264,12 @@ export async function runProductSupportWorkflow(input: {
         return out;
       },
     });
+    const timingBreakdown = {
+      toolRounds: agentResult.responseIds.length,
+      cacheSource: dominantCacheSource(cacheSourceCounts),
+      searchMs:
+        retrievalSamples > 0 ? Number((totalSearchMs / retrievalSamples).toFixed(1)) : null,
+    };
 
     let draftAnswer = agentResult.assistantText;
     const sources = collectSourcesFromTrace(agentResult.toolTrace);
@@ -339,6 +388,7 @@ export async function runProductSupportWorkflow(input: {
       latestOpenaiResponseId: agentResult.finalResponseId,
       validation,
       routingDecision,
+      timingBreakdown,
     };
 
     await updateWorkflowRun(run.id, {
@@ -373,6 +423,7 @@ export async function runProductSupportWorkflow(input: {
           issues: validation.issues,
           requiresHumanReview: validation.requires_human_review,
         },
+        timingBreakdown,
         toolSummary: agentResult.toolTrace.map((t) => ({
           name: t.toolName,
           ok: t.ok,

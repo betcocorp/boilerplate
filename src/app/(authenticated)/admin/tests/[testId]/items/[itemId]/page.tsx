@@ -11,6 +11,8 @@ import {
   TableHeader,
   TableRow,
 } from '~/components/ui/table';
+import { listWorkflowRunsByIds } from '~/lib/conversations/workflow-repository';
+import { resolveResponsesModel } from '~/lib/openai/client';
 import {
   getTestById,
   getTestItemById,
@@ -41,6 +43,28 @@ function formatDurationSeconds(value: number | null | undefined) {
   return `${(value / 1000).toFixed(2)} s`;
 }
 
+function extractWorkflowRunId(responsePayload: unknown) {
+  if (
+    !responsePayload ||
+    typeof responsePayload !== 'object' ||
+    Array.isArray(responsePayload)
+  ) {
+    return null;
+  }
+
+  const candidate = (responsePayload as Record<string, unknown>).workflowRunId;
+  return typeof candidate === 'string' && candidate.trim() ? candidate : null;
+}
+
+function extractModelTag(userInput: unknown) {
+  if (!userInput || typeof userInput !== 'object' || Array.isArray(userInput)) {
+    return undefined;
+  }
+
+  const candidate = (userInput as Record<string, unknown>).modelTag;
+  return typeof candidate === 'string' ? candidate : undefined;
+}
+
 export default async function AdminTestItemHistoryPage({ params }: PageProps) {
   await connection();
   const { testId, itemId } = await params;
@@ -65,11 +89,33 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
       result,
       run: runById.get(result.test_result_id) || null,
     }))
-    .filter((row): row is { result: (typeof itemRunResults)[number]; run: (typeof runs)[number] } => !!row.run)
+    .filter(
+      (
+        row,
+      ): row is {
+        result: (typeof itemRunResults)[number];
+        run: (typeof runs)[number];
+      } => !!row.run,
+    )
     .sort(
       (a, b) =>
-        new Date(b.run.started_at).getTime() - new Date(a.run.started_at).getTime(),
+        new Date(b.run.started_at).getTime() -
+        new Date(a.run.started_at).getTime(),
     );
+  const workflowRunIds = Array.from(
+    new Set(
+      historyRows
+        .map(({ result }) => extractWorkflowRunId(result.response_payload))
+        .filter((value): value is string => Boolean(value)),
+    ),
+  );
+  const workflowRuns = await listWorkflowRunsByIds(workflowRunIds);
+  const modelByWorkflowRunId = new Map(
+    workflowRuns.map((workflowRun) => {
+      const modelTag = extractModelTag(workflowRun.user_input);
+      return [workflowRun.id, resolveResponsesModel(modelTag)] as const;
+    }),
+  );
 
   return (
     <div className="flex flex-1 bg-slate-50">
@@ -83,7 +129,9 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
               <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">
                 {test.name}
               </h1>
-              <p className="mt-3 text-sm text-slate-600">Row {item.row_index}</p>
+              <p className="mt-3 text-sm text-slate-600">
+                Row {item.row_index}
+              </p>
             </div>
             <div className="flex items-center gap-2">
               <Button asChild size="sm" variant="outline">
@@ -108,18 +156,16 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
             <TableHeader>
               <TableRow>
                 <TableHead>Run id</TableHead>
-                <TableHead>Run status</TableHead>
-                <TableHead>Started</TableHead>
-                <TableHead>Item status</TableHead>
                 <TableHead>Passed</TableHead>
                 <TableHead>Elapsed</TableHead>
+                <TableHead>Model</TableHead>
                 <TableHead>Message</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {historyRows.length === 0 ? (
                 <TableRow>
-                  <TableCell className="text-slate-500" colSpan={7}>
+                  <TableCell className="text-slate-500" colSpan={8}>
                     This item has no completed results yet.
                   </TableCell>
                 </TableRow>
@@ -134,11 +180,15 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
                         {run.id}
                       </Link>
                     </TableCell>
-                    <TableCell>{run.status}</TableCell>
-                    <TableCell>{formatDate(run.started_at)}</TableCell>
-                    <TableCell>{result.status}</TableCell>
                     <TableCell>{result.passed ? 'yes' : 'no'}</TableCell>
-                    <TableCell>{formatDurationSeconds(result.elapsed_ms)}</TableCell>
+                    <TableCell>
+                      {formatDurationSeconds(result.elapsed_ms)}
+                    </TableCell>
+                    <TableCell>
+                      {modelByWorkflowRunId.get(
+                        extractWorkflowRunId(result.response_payload) || '',
+                      ) || 'n/a'}
+                    </TableCell>
                     <TableCell className="max-w-[520px] whitespace-normal text-xs text-slate-600">
                       {result.error_message || result.response_text || 'n/a'}
                     </TableCell>

@@ -39,6 +39,12 @@ export const getEscalationPolicyInputSchema = z.object({
   issueType: z.string().min(1).max(256),
 });
 
+export const lookupCrossReferenceInputSchema = z.object({
+  brand: z.string().min(1).max(256),
+  productName: z.string().min(1).max(512),
+  maxResults: z.number().int().min(1).max(10).optional(),
+});
+
 export const PRODUCT_TOOL_NAMES = [
   'search_product_docs',
   'get_product_spec',
@@ -48,6 +54,7 @@ export const PRODUCT_TOOL_NAMES = [
   'list_allowed_surfaces',
   'list_disallowed_uses',
   'get_escalation_policy',
+  'lookup_cross_reference',
 ] as const;
 
 export type ProductToolName = (typeof PRODUCT_TOOL_NAMES)[number];

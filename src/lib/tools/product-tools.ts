@@ -4,7 +4,7 @@ import {
   retrieveSafetyConstraints,
   retrieveSurfacesLists,
 } from '~/lib/retrieval/product-guidance';
-import { ragQueryForProductKnowledge } from '~/lib/retrieval/product-knowledge';
+import { ragQueryForProductKnowledgeWithMeta } from '~/lib/retrieval/product-knowledge';
 
 import {
   getApprovedUsageGuidanceInputSchema,
@@ -14,11 +14,284 @@ import {
   getSafetyConstraintsInputSchema,
   listAllowedSurfacesInputSchema,
   listDisallowedUsesInputSchema,
+  lookupCrossReferenceInputSchema,
   searchProductDocsInputSchema,
   type ProductToolName,
 } from '~/lib/tools/tool-schemas';
+import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 const ADAPTER_TAG = 'rag_corpus_transitional' as const;
+const CROSS_REFERENCE_ADAPTER_TAG = 'legacy_cross_reference_v1' as const;
+
+type CrossReferenceRow = {
+  Competitor: string | null;
+  ProductDescr: string | null;
+  ProductKey: string | null;
+  ProductID: number | null;
+  BetcoProdID: number | null;
+  id: string | null;
+};
+
+type LegacyProductRow = {
+  ProductsKey: string | null;
+  Title: string | null;
+  SKU: string | null;
+  SLDescr: string | null;
+  InvtID: string | null;
+  Status: string | null;
+  OnWeb: string | null;
+};
+
+type LegacyProductDescrRow = {
+  ProductsKey: string | null;
+  ShortDescr: string | null;
+  FullDescr: string | null;
+};
+
+function normalizeLookupValue(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/#/g, ' number ')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function tokenizeLookupValue(value: string) {
+  const normalized = normalizeLookupValue(value);
+  if (!normalized) {
+    return [];
+  }
+
+  return normalized.split(' ').filter(Boolean);
+}
+
+function clampCrossReferenceLimit(value?: number) {
+  if (!Number.isFinite(value) || !value || value < 1) {
+    return 3;
+  }
+
+  return Math.min(Math.floor(value), 10);
+}
+
+function scoreCrossReferenceRow(
+  row: Pick<CrossReferenceRow, 'Competitor' | 'ProductDescr'>,
+  input: { brand: string; productName: string },
+) {
+  const normalizedBrand = normalizeLookupValue(input.brand);
+  const normalizedProduct = normalizeLookupValue(input.productName);
+  const rowBrand = normalizeLookupValue(row.Competitor ?? '');
+  const rowProduct = normalizeLookupValue(row.ProductDescr ?? '');
+
+  const brandExact = rowBrand === normalizedBrand;
+  const productExact = rowProduct === normalizedProduct;
+  const brandContains = Boolean(normalizedBrand) && rowBrand.includes(normalizedBrand);
+  const productContains =
+    Boolean(normalizedProduct) && rowProduct.includes(normalizedProduct);
+
+  const productInputTokens = new Set(tokenizeLookupValue(input.productName));
+  const productRowTokens = new Set(tokenizeLookupValue(row.ProductDescr ?? ''));
+  const sharedProductTokens = [...productInputTokens].filter((token) =>
+    productRowTokens.has(token),
+  ).length;
+  const productTokenScore =
+    productInputTokens.size === 0
+      ? 0
+      : sharedProductTokens / productInputTokens.size;
+
+  const brandScore = brandExact ? 1 : brandContains ? 0.9 : 0.2;
+  const productScore = productExact
+    ? 1
+    : productContains
+      ? 0.92
+      : Math.max(0.35, productTokenScore);
+  const confidence = Number((brandScore * 0.35 + productScore * 0.65).toFixed(3));
+  const matchType = brandExact && productExact ? 'exact' : productContains ? 'normalized' : 'fuzzy';
+
+  return {
+    matchType,
+    confidence,
+    brandExact,
+    productExact,
+    productTokenScore,
+  };
+}
+
+async function lookupCrossReference(input: {
+  brand: string;
+  productName: string;
+  maxResults?: number;
+}) {
+  const supabase = getSupabaseServiceRoleClient();
+  const legacy = supabase.schema('legacy');
+  const maxResults = clampCrossReferenceLimit(input.maxResults);
+  const normalizedBrand = normalizeLookupValue(input.brand);
+  const normalizedProduct = normalizeLookupValue(input.productName);
+
+  const { data: competitorRows, error: competitorError } = await legacy
+    .from('competitor')
+    .select('Competitor')
+    .ilike('Competitor', `%${input.brand.trim()}%`)
+    .limit(12);
+
+  if (competitorError) {
+    throw new Error(`Cross-reference competitor lookup failed: ${competitorError.message}`);
+  }
+
+  const brandCandidates = Array.from(
+    new Set(
+      (competitorRows ?? [])
+        .map((row) => row.Competitor?.trim() ?? '')
+        .filter(Boolean),
+    ),
+  );
+
+  const filterBrands = brandCandidates.length > 0 ? brandCandidates : [input.brand.trim()];
+
+  let query = legacy
+    .from('competitor_products')
+    .select('Competitor, ProductDescr, ProductKey, ProductID, BetcoProdID, id')
+    .in('Competitor', filterBrands)
+    .limit(250);
+
+  if (input.productName.trim()) {
+    query = query.ilike('ProductDescr', `%${input.productName.trim()}%`);
+  }
+
+  let { data: crossReferenceRows, error: crossReferenceError } = await query;
+
+  if (crossReferenceError) {
+    throw new Error(`Cross-reference lookup failed: ${crossReferenceError.message}`);
+  }
+
+  if ((crossReferenceRows ?? []).length === 0) {
+    const fallbackResponse = await legacy
+      .from('competitor_products')
+      .select('Competitor, ProductDescr, ProductKey, ProductID, BetcoProdID, id')
+      .in('Competitor', filterBrands)
+      .limit(250);
+
+    if (fallbackResponse.error) {
+      throw new Error(
+        `Cross-reference fallback lookup failed: ${fallbackResponse.error.message}`,
+      );
+    }
+
+    crossReferenceRows = fallbackResponse.data;
+  }
+
+  const rows = (crossReferenceRows ?? []) as CrossReferenceRow[];
+  const productKeys = Array.from(
+    new Set(rows.map((row) => row.ProductKey).filter((value): value is string => Boolean(value))),
+  );
+
+  const productByKey = new Map<string, LegacyProductRow>();
+  const productDescrByKey = new Map<string, LegacyProductDescrRow>();
+
+  if (productKeys.length > 0) {
+    const [productsResponse, productDescriptionsResponse] = await Promise.all([
+      legacy
+        .from('products')
+        .select('ProductsKey, Title, SKU, SLDescr, InvtID, Status, OnWeb')
+        .in('ProductsKey', productKeys),
+      legacy
+        .from('products_descr')
+        .select('ProductsKey, ShortDescr, FullDescr')
+        .in('ProductsKey', productKeys)
+        .eq('LanguageCD', 'EN'),
+    ]);
+
+    if (productsResponse.error) {
+      throw new Error(`Cross-reference product join failed: ${productsResponse.error.message}`);
+    }
+    if (productDescriptionsResponse.error) {
+      throw new Error(
+        `Cross-reference product description join failed: ${productDescriptionsResponse.error.message}`,
+      );
+    }
+
+    for (const row of (productsResponse.data ?? []) as LegacyProductRow[]) {
+      if (row.ProductsKey) {
+        productByKey.set(row.ProductsKey, row);
+      }
+    }
+
+    for (const row of (productDescriptionsResponse.data ?? []) as LegacyProductDescrRow[]) {
+      if (row.ProductsKey && !productDescrByKey.has(row.ProductsKey)) {
+        productDescrByKey.set(row.ProductsKey, row);
+      }
+    }
+  }
+
+  const ranked = rows
+    .map((row) => {
+      const score = scoreCrossReferenceRow(row, input);
+      const product = row.ProductKey ? productByKey.get(row.ProductKey) : undefined;
+      const productDescr = row.ProductKey ? productDescrByKey.get(row.ProductKey) : undefined;
+
+      return {
+        row,
+        score,
+        product,
+        productDescr,
+      };
+    })
+    .sort((a, b) => b.score.confidence - a.score.confidence);
+
+  const deduped = new Map<string, (typeof ranked)[number]>();
+  for (const candidate of ranked) {
+    const dedupeKey = [
+      candidate.row.Competitor ?? '',
+      candidate.row.ProductDescr ?? '',
+      candidate.row.ProductKey ?? '',
+      candidate.row.BetcoProdID ?? '',
+    ].join('|');
+
+    if (!deduped.has(dedupeKey)) {
+      deduped.set(dedupeKey, candidate);
+    }
+  }
+
+  const topMatches = [...deduped.values()].slice(0, maxResults).map((candidate) => ({
+    competitorBrand: candidate.row.Competitor,
+    competitorProductName: candidate.row.ProductDescr,
+    productKey: candidate.row.ProductKey,
+    competitorProductId: candidate.row.ProductID,
+    betcoProductId: candidate.row.BetcoProdID,
+    legacyRowId: candidate.row.id,
+    matchType: candidate.score.matchType,
+    confidence: candidate.score.confidence,
+    betcoProduct: candidate.product
+      ? {
+          title: candidate.product.Title,
+          sku: candidate.product.SKU,
+          shortLabel: candidate.product.SLDescr,
+          inventoryId: candidate.product.InvtID,
+          status: candidate.product.Status,
+          onWeb: candidate.product.OnWeb,
+          shortDescription: candidate.productDescr?.ShortDescr ?? null,
+          fullDescription: candidate.productDescr?.FullDescr ?? null,
+        }
+      : null,
+  }));
+
+  return {
+    ok: true,
+    adapter: CROSS_REFERENCE_ADAPTER_TAG,
+    input: {
+      brand: input.brand,
+      productName: input.productName,
+    },
+    normalizedInput: {
+      brand: normalizedBrand,
+      productName: normalizedProduct,
+    },
+    brandCandidates,
+    totalCandidates: rows.length,
+    matches: topMatches,
+  };
+}
 
 function sourcePayload(
   sources: Awaited<ReturnType<typeof ragQueryForProductKnowledge>>,
@@ -86,28 +359,30 @@ export async function executeProductTool(
       const q = [p.productName, p.topic, p.surfaceType]
         .filter(Boolean)
         .join(' ');
-      const sources = await ragQueryForProductKnowledge({ query: q, limit: 8 });
+      const result = await ragQueryForProductKnowledgeWithMeta({ query: q, limit: 8 });
       return {
         ok: true,
         adapter: ADAPTER_TAG,
         query: q,
-        sources: sourcePayload(sources),
+        sources: sourcePayload(result.sources),
+        retrieval: result.retrieval,
       };
     }
     case 'get_product_spec': {
       const p = getProductSpecInputSchema.parse(args);
       const q = `${p.productId} specifications technical datasheet performance`;
-      const sources = await ragQueryForProductKnowledge({ query: q, limit: 6 });
+      const result = await ragQueryForProductKnowledgeWithMeta({ query: q, limit: 6 });
       return {
         ok: true,
         adapter: ADAPTER_TAG,
         productId: p.productId,
-        sources: sourcePayload(sources),
+        sources: sourcePayload(result.sources),
+        retrieval: result.retrieval,
       };
     }
     case 'get_approved_usage_guidance': {
       const p = getApprovedUsageGuidanceInputSchema.parse(args);
-      const sources = await retrieveApprovedUsage(p);
+      const result = await retrieveApprovedUsage(p);
       return {
         ok: true,
         adapter: ADAPTER_TAG,
@@ -115,34 +390,37 @@ export async function executeProductTool(
         task: p.task,
         surfaceType: p.surfaceType,
         environment: p.environment ?? null,
-        sources: sourcePayload(sources),
+        sources: sourcePayload(result.sources),
+        retrieval: result.retrieval,
       };
     }
     case 'get_safety_constraints': {
       const p = getSafetyConstraintsInputSchema.parse(args);
-      const sources = await retrieveSafetyConstraints(p);
+      const result = await retrieveSafetyConstraints(p);
       return {
         ok: true,
         adapter: ADAPTER_TAG,
         productId: p.productId,
-        sources: sourcePayload(sources),
+        sources: sourcePayload(result.sources),
+        retrieval: result.retrieval,
       };
     }
     case 'get_compatibility_rules': {
       const p = getCompatibilityRulesInputSchema.parse(args);
-      const sources = await retrieveCompatibility(p);
+      const result = await retrieveCompatibility(p);
       return {
         ok: true,
         adapter: ADAPTER_TAG,
         productId: p.productId,
         surfaceType: p.surfaceType,
         materialType: p.materialType ?? null,
-        sources: sourcePayload(sources),
+        sources: sourcePayload(result.sources),
+        retrieval: result.retrieval,
       };
     }
     case 'list_allowed_surfaces': {
       const p = listAllowedSurfacesInputSchema.parse(args);
-      const sources = await retrieveSurfacesLists({
+      const result = await retrieveSurfacesLists({
         productId: p.productId,
         mode: 'allowed',
       });
@@ -150,12 +428,13 @@ export async function executeProductTool(
         ok: true,
         adapter: ADAPTER_TAG,
         productId: p.productId,
-        sources: sourcePayload(sources),
+        sources: sourcePayload(result.sources),
+        retrieval: result.retrieval,
       };
     }
     case 'list_disallowed_uses': {
       const p = listDisallowedUsesInputSchema.parse(args);
-      const sources = await retrieveSurfacesLists({
+      const result = await retrieveSurfacesLists({
         productId: p.productId,
         mode: 'disallowed',
       });
@@ -163,7 +442,8 @@ export async function executeProductTool(
         ok: true,
         adapter: ADAPTER_TAG,
         productId: p.productId,
-        sources: sourcePayload(sources),
+        sources: sourcePayload(result.sources),
+        retrieval: result.retrieval,
       };
     }
     case 'get_escalation_policy': {
@@ -175,6 +455,10 @@ export async function executeProductTool(
         issueType: p.issueType,
         policy,
       };
+    }
+    case 'lookup_cross_reference': {
+      const p = lookupCrossReferenceInputSchema.parse(args);
+      return lookupCrossReference(p);
     }
   }
 }

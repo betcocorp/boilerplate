@@ -1,5 +1,6 @@
 'use client';
 
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bar,
   BarChart,
@@ -9,12 +10,10 @@ import {
   LineChart,
   Pie,
   PieChart,
-  ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from 'recharts';
-import { useEffect, useMemo, useState } from 'react';
 
 type ElapsedTrendDatum = {
   label: string;
@@ -32,6 +31,8 @@ type RunAtAGlanceChartsProps = {
   totalItems: number;
   passCount: number;
   failCount: number;
+  slowOverTenSecondsCount: number;
+  notPassedItemCount: number;
   elapsedTrendData: ElapsedTrendDatum[];
   similarityStatsData: SimilarityStatDatum[];
 };
@@ -48,12 +49,59 @@ type RunStatusResponse = {
   notRunItems: number;
 };
 
+type ChartSize = {
+  width: number;
+  height: number;
+};
+
+function ChartFrame({
+  className,
+  children,
+}: {
+  className: string;
+  children: (size: ChartSize) => ReactNode;
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [size, setSize] = useState<ChartSize>({ width: 0, height: 0 });
+
+  useEffect(() => {
+    const element = containerRef.current;
+    if (!element) {
+      return;
+    }
+
+    const updateSize = () => {
+      const nextWidth = Math.max(0, Math.floor(element.clientWidth));
+      const nextHeight = Math.max(0, Math.floor(element.clientHeight));
+      setSize({ width: nextWidth, height: nextHeight });
+    };
+
+    updateSize();
+    const observer = new ResizeObserver(() => {
+      updateSize();
+    });
+    observer.observe(element);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
+
+  return (
+    <div className={className} ref={containerRef}>
+      {size.width > 0 && size.height > 0 ? children(size) : null}
+    </div>
+  );
+}
+
 export function RunAtAGlanceCharts({
   runId,
   initialStatus,
   totalItems,
   passCount,
   failCount,
+  slowOverTenSecondsCount,
+  notPassedItemCount,
   elapsedTrendData,
   similarityStatsData,
 }: RunAtAGlanceChartsProps) {
@@ -75,7 +123,8 @@ export function RunAtAGlanceCharts({
     const isTerminalStatus =
       liveStatus === 'completed' ||
       liveStatus === 'completed_with_failures' ||
-      liveStatus === 'failed';
+      liveStatus === 'failed' ||
+      liveStatus === 'cancelled';
     if (isTerminalStatus) {
       return;
     }
@@ -123,22 +172,48 @@ export function RunAtAGlanceCharts({
     ],
     [livePassCount, liveFailCount, liveNotRunCount],
   );
+  const slowFailSignalsData = useMemo(
+    () => [
+      {
+        label: '>10s elapsed',
+        count: slowOverTenSecondsCount,
+        fill: '#f59e0b',
+      },
+      { label: 'Did not pass', count: notPassedItemCount, fill: '#dc2626' },
+    ],
+    [slowOverTenSecondsCount, notPassedItemCount],
+  );
+  const slowFailSignalTotal = useMemo(
+    () => slowOverTenSecondsCount + notPassedItemCount,
+    [slowOverTenSecondsCount, notPassedItemCount],
+  );
 
   return (
     <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
       <h2 className="text-lg font-semibold text-slate-900">
         At-a-glance charts
       </h2>
-      <div className="mt-6 grid gap-6 lg:grid-cols-2">
-        <article className="rounded-2xl border border-slate-200 p-5 col-span-2">
+      <div className="mt-6 grid gap-6 lg:grid-cols-3">
+        <article className="col-span-3 min-w-0 rounded-2xl border border-slate-200 p-5">
           <h3 className="text-sm font-semibold text-slate-900">
             Elapsed by prompt order
           </h3>
-          <div className="mt-4 h-56">
-            <ResponsiveContainer height="100%" width="100%">
-              <LineChart data={elapsedTrendData}>
+          <ChartFrame className="mt-4 h-56 min-w-0">
+            {({ height, width }) => (
+              <LineChart data={elapsedTrendData} height={height} width={width}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="label" interval={0} tick={{ fontSize: 11 }} />
+                <XAxis
+                  dataKey="label"
+                  interval={0}
+                  tick={{ fontSize: 11 }}
+                  tickFormatter={(value, index) =>
+                    typeof index === 'number'
+                      ? index % 10 === 0
+                        ? `${index}`
+                        : ''
+                      : value
+                  }
+                />
                 <YAxis
                   tick={{ fontSize: 11 }}
                   tickFormatter={(value) => `${value}s`}
@@ -159,15 +234,17 @@ export function RunAtAGlanceCharts({
                   type="monotone"
                 />
               </LineChart>
-            </ResponsiveContainer>
-          </div>
+            )}
+          </ChartFrame>
         </article>
 
-        <article className="rounded-2xl border border-slate-200 p-5">
-          <h3 className="text-sm font-semibold text-slate-900">Pass vs fail vs not run</h3>
-          <div className="mt-4 h-56">
-            <ResponsiveContainer height="100%" width="100%">
-              <PieChart>
+        <article className="min-w-0 rounded-2xl border border-slate-200 p-5">
+          <h3 className="text-sm font-semibold text-slate-900">
+            Pass vs fail vs not run
+          </h3>
+          <ChartFrame className="mt-4 h-56 min-w-0">
+            {({ height, width }) => (
+              <PieChart height={height} width={width}>
                 <Pie
                   cx="50%"
                   cy="50%"
@@ -183,20 +260,50 @@ export function RunAtAGlanceCharts({
                 </Pie>
                 <Tooltip />
               </PieChart>
-            </ResponsiveContainer>
-          </div>
+            )}
+          </ChartFrame>
           <p className="mt-2 text-xs text-slate-500">
             Pass rate (completed items): {passRate.toFixed(1)}%
           </p>
         </article>
 
-        <article className="rounded-2xl border border-slate-200 p-5">
+        <article className="min-w-0 rounded-2xl border border-slate-200 p-5">
+          <h3 className="text-sm font-semibold text-slate-900">
+            Slow or not-passed signal counts
+          </h3>
+          <ChartFrame className="mt-4 h-56 min-w-0">
+            {({ height, width }) => (
+              <PieChart height={height} width={width}>
+                <Pie
+                  cx="50%"
+                  cy="50%"
+                  data={slowFailSignalsData}
+                  dataKey="count"
+                  innerRadius={50}
+                  nameKey="label"
+                  outerRadius={82}
+                >
+                  {slowFailSignalsData.map((entry) => (
+                    <Cell fill={entry.fill} key={entry.label} />
+                  ))}
+                </Pie>
+                <Tooltip />
+              </PieChart>
+            )}
+          </ChartFrame>
+          <p className="mt-2 text-xs text-slate-500">
+            Combined signal total: {slowFailSignalTotal} (counts may overlap by
+            item).
+          </p>
+        </article>
+
+        <article className="min-w-0 rounded-2xl border border-slate-200 p-5">
           <h3 className="text-sm font-semibold text-slate-900">
             Similarity stats
           </h3>
-          <div className="mt-4 h-56">
-            <ResponsiveContainer height="100%" width="100%">
-              <BarChart data={similarityStatsData}>
+          <ChartFrame className="mt-4 h-56 min-w-0">
+            {({ height, width }) => (
+              <BarChart data={similarityStatsData} height={height} width={width}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="label" interval={0} tick={{ fontSize: 11 }} />
                 <YAxis
@@ -214,8 +321,8 @@ export function RunAtAGlanceCharts({
                 />
                 <Bar dataKey="value" fill="#a855f7" radius={[8, 8, 0, 0]} />
               </BarChart>
-            </ResponsiveContainer>
-          </div>
+            )}
+          </ChartFrame>
         </article>
       </div>
     </section>
