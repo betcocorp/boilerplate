@@ -13,7 +13,11 @@ import {
   TableRow,
 } from '~/components/ui/table';
 import { AdminTestsActionToast } from '~/components/admin/tests/AdminTestsActionToast';
-import { listTestResultsByTestId, listTests } from '~/lib/tests/repository';
+import {
+  listResultItemsByResultId,
+  listTestResultsByTestId,
+  listTests,
+} from '~/lib/tests/repository';
 import { getSignedTestFileUrl } from '~/lib/tests/storage';
 
 import { deleteTestAction, runTestAction, uploadTestCsvAction } from './actions';
@@ -30,6 +34,38 @@ function formatDate(value: string) {
   }).format(new Date(value));
 }
 
+function extractItemSimilarityScore(responsePayload: unknown) {
+  if (
+    !responsePayload ||
+    typeof responsePayload !== 'object' ||
+    Array.isArray(responsePayload)
+  ) {
+    return null;
+  }
+
+  const payload = responsePayload as Record<string, unknown>;
+  const sources = payload.sources;
+  if (!Array.isArray(sources)) {
+    return null;
+  }
+
+  const similarities = sources
+    .map((source) => {
+      if (!source || typeof source !== 'object' || Array.isArray(source)) {
+        return null;
+      }
+      const value = (source as Record<string, unknown>).similarity;
+      return typeof value === 'number' ? value : null;
+    })
+    .filter((value): value is number => typeof value === 'number');
+
+  if (similarities.length === 0) {
+    return null;
+  }
+
+  return Math.max(...similarities);
+}
+
 type PageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 };
@@ -43,18 +79,40 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
   const tests = await listTests();
   const testRows = await Promise.all(
     tests.map(async (test) => {
-      const latestResults = await listTestResultsByTestId(test.id, 1);
-      const fileUrl =
+      const [latestResults, runsForSimilarity, fileUrl] = await Promise.all([
+        listTestResultsByTestId(test.id, 1),
+        listTestResultsByTestId(test.id, 20),
         test.source_bucket && test.source_key
-          ? await getSignedTestFileUrl({
+          ? getSignedTestFileUrl({
               bucket: test.source_bucket,
               key: test.source_key,
             }).catch(() => null)
+          : Promise.resolve(null),
+      ]);
+
+      const runItems = await Promise.all(
+        runsForSimilarity.map((run) => listResultItemsByResultId(run.id, 200)),
+      );
+      const similarityScores = runItems
+        .flat()
+        .map((item) => extractItemSimilarityScore(item.response_payload))
+        .filter((value): value is number => typeof value === 'number');
+      const similarityStats =
+        similarityScores.length > 0
+          ? {
+              min: Math.min(...similarityScores),
+              max: Math.max(...similarityScores),
+              avg:
+                similarityScores.reduce((sum, score) => sum + score, 0) /
+                similarityScores.length,
+            }
           : null;
+
       return {
         ...test,
         fileUrl,
         latestResult: latestResults[0] || null,
+        similarityStats,
       };
     }),
   );
@@ -121,6 +179,7 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
                 <TableHead>Rows</TableHead>
                 <TableHead>Uploaded</TableHead>
                 <TableHead>Latest run</TableHead>
+                <TableHead>Lowest/highest/avg similarity</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Actions</TableHead>
               </TableRow>
@@ -128,7 +187,7 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
             <TableBody>
               {testRows.length === 0 ? (
                 <TableRow>
-                  <TableCell className="text-slate-500" colSpan={6}>
+                  <TableCell className="text-slate-500" colSpan={7}>
                     No datasets uploaded yet.
                   </TableCell>
                 </TableRow>
@@ -161,6 +220,11 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
                       {test.latestResult
                         ? `${test.latestResult.passed_items}/${test.latestResult.total_items} passed`
                         : 'Never run'}
+                    </TableCell>
+                    <TableCell>
+                      {test.similarityStats
+                        ? `${(test.similarityStats.min * 100).toFixed(1)}%/${(test.similarityStats.max * 100).toFixed(1)}%/${(test.similarityStats.avg * 100).toFixed(1)}%`
+                        : 'n/a'}
                     </TableCell>
                     <TableCell>{test.status}</TableCell>
                     <TableCell>
