@@ -457,18 +457,19 @@ export async function lookupCrossReference(input: {
       confidence: candidate.score.confidence,
       productUrl: productLink.url,
       productUrlSource: productLink.source,
-      betcoProduct: candidate.product
-        ? {
-            title: candidate.product.Title,
-            sku: candidate.product.SKU,
-            shortLabel: candidate.product.SLDescr,
-            inventoryId: candidate.product.InvtID,
-            status: candidate.product.Status,
-            onWeb: candidate.product.OnWeb,
-            shortDescription: candidate.productDescr?.ShortDescr ?? null,
-            fullDescription: candidate.productDescr?.FullDescr ?? null,
-          }
-        : null,
+      betcoProduct:
+        candidate.product || candidate.productDescr
+          ? {
+              title: candidate.product?.Title ?? null,
+              sku: candidate.product?.SKU ?? null,
+              shortLabel: candidate.product?.SLDescr ?? null,
+              inventoryId: candidate.product?.InvtID ?? null,
+              status: candidate.product?.Status ?? null,
+              onWeb: candidate.product?.OnWeb ?? null,
+              shortDescription: candidate.productDescr?.ShortDescr ?? null,
+              fullDescription: candidate.productDescr?.FullDescr ?? null,
+            }
+          : null,
     };
   });
 

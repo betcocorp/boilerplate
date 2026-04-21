@@ -184,6 +184,7 @@ export default async function AdminTestRunDetailsPage({ params, searchParams }: 
   const elapsedTrendData = chronologicalItems.map((item, index) => ({
     label: `${index + 1}`,
     elapsedSeconds: Number((item.elapsed_ms / 1000).toFixed(2)),
+    resultItemId: item.id,
   }));
 
   const similarityScores = resultItems
@@ -294,7 +295,10 @@ export default async function AdminTestRunDetailsPage({ params, searchParams }: 
           totalItems={result.total_items}
         />
 
-        <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
+        <section
+          className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm"
+          id="item-level-results"
+        >
           <h2 className="text-lg font-semibold text-slate-900">Item-level results</h2>
           <Table>
             <TableHeader>
@@ -318,8 +322,8 @@ export default async function AdminTestRunDetailsPage({ params, searchParams }: 
                   </TableCell>
                 </TableRow>
               ) : (
-                resultItems.map((row) => (
-                  <TableRow key={row.id}>
+                chronologicalItems.map((row) => (
+                  <TableRow id={`run-item-result-${row.id}`} key={row.id}>
                     <TableCell>
                       <Link
                         className="text-sky-700 underline-offset-2 hover:underline"

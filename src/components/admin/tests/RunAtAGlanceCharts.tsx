@@ -1,6 +1,15 @@
 'use client';
 
-import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  type KeyboardEvent,
+  type MouseEvent,
+  type ReactNode,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import type { ActiveDotProps, DotItemDotProps } from 'recharts';
 import {
   Bar,
   BarChart,
@@ -15,9 +24,13 @@ import {
   YAxis,
 } from 'recharts';
 
+import { cn } from '~/lib/utils';
+
 type ElapsedTrendDatum = {
   label: string;
   elapsedSeconds: number;
+  /** Links chart point → `run-item-result-${id}` row on the run details page */
+  resultItemId?: string;
 };
 
 type SimilarityStatDatum = {
@@ -92,6 +105,87 @@ function ChartFrame({
       {size.width > 0 && size.height > 0 ? children(size) : null}
     </div>
   );
+}
+
+function scrollToRunItemRow(resultItemId: string) {
+  const el = document.getElementById(`run-item-result-${resultItemId}`);
+  el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+function ElapsedTrendDatumDotSvg(
+  dotProps: ActiveDotProps | DotItemDotProps,
+  variant: 'idle' | 'active',
+) {
+  const cx = dotProps.cx as number | undefined;
+  const cy = dotProps.cy as number | undefined;
+  const payload = dotProps.payload as ElapsedTrendDatum | undefined;
+  const id = payload?.resultItemId;
+
+  if (cx == null || cy == null || Number.isNaN(cx) || Number.isNaN(cy) || !id) {
+    return null;
+  }
+
+  const rawR = dotProps.r;
+  const r =
+    typeof rawR === 'number' && Number.isFinite(rawR)
+      ? rawR
+      : typeof rawR === 'string'
+        ? Number.parseFloat(rawR)
+        : 5;
+  const radius =
+    typeof r === 'number' && Number.isFinite(r) ? r : 5;
+
+  /* Larger invisible target so hover works before the visible dot appears */
+  const hitRadius = Math.max(radius + 10, 14);
+
+  const label = `Scroll to item ${payload?.label ?? ''} in Item-level results`;
+
+  const visibleOpacity =
+    variant === 'active'
+      ? 'opacity-100'
+      : 'opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100';
+
+  return (
+    <g
+      aria-label={label}
+      className={cn('group cursor-pointer outline-none')}
+      onClick={(event: MouseEvent<SVGGElement>) => {
+        event.stopPropagation();
+        scrollToRunItemRow(id);
+      }}
+      onKeyDown={(event: KeyboardEvent<SVGGElement>) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          scrollToRunItemRow(id);
+        }
+      }}
+      role="button"
+      tabIndex={0}
+    >
+      <circle cx={cx} cy={cy} fill="transparent" pointerEvents="auto" r={hitRadius} />
+      <circle
+        className={cn('stroke-white pointer-events-none', visibleOpacity)}
+        cx={cx}
+        cy={cy}
+        fill="#0ea5e9"
+        pointerEvents="none"
+        r={radius}
+        strokeWidth={1}
+      />
+    </g>
+  );
+}
+
+/** Normal points — Recharts passes {@link DotItemDotProps}. */
+function ElapsedTrendDatumDot(dotProps: DotItemDotProps) {
+  return ElapsedTrendDatumDotSvg(dotProps, 'idle');
+}
+
+/**
+ * Tooltip/active point — keep the marker visible so it does not flash hidden during chart hover.
+ */
+function ElapsedTrendActiveDatumDot(dotProps: ActiveDotProps) {
+  return ElapsedTrendDatumDotSvg(dotProps, 'active');
 }
 
 export function RunAtAGlanceCharts({
@@ -227,8 +321,9 @@ export function RunAtAGlanceCharts({
                   }}
                 />
                 <Line
+                  activeDot={ElapsedTrendActiveDatumDot}
                   dataKey="elapsedSeconds"
-                  dot={false}
+                  dot={ElapsedTrendDatumDot}
                   stroke="#0ea5e9"
                   strokeWidth={2}
                   type="monotone"
