@@ -149,6 +149,26 @@ type RuntimeToolOutput = {
   trace: ToolTraceEntry;
 };
 
+export type ProductSupportWorkflowEvent =
+  | {
+      type: 'status';
+      stage:
+        | 'routing_selected'
+        | 'agent_started'
+        | 'agent_completed'
+        | 'validation_started'
+        | 'validation_completed'
+        | 'workflow_completed';
+      detail?: string;
+    }
+  | {
+      type: 'tool';
+      phase: 'started' | 'completed';
+      name: string;
+      ok?: boolean;
+      callId?: string;
+    };
+
 function extractTopCrossReferenceMatch(toolTrace: ToolTraceEntry[]) {
   for (let i = toolTrace.length - 1; i >= 0; i -= 1) {
     const entry = toolTrace[i];
@@ -311,6 +331,8 @@ export async function runProductSupportWorkflow(input: {
   useValidator?: boolean;
   agentMode?: 'orchestrator' | 'product' | 'bathroom' | 'dilution' | 'floor';
   previousOpenaiResponseId?: string | null;
+  onEvent?: (event: ProductSupportWorkflowEvent) => void;
+  onAssistantDelta?: (delta: string) => void;
 }): Promise<ProductSupportFinalOutput> {
   const useValidator = input.useValidator ?? false;
   const agentMode = input.agentMode ?? 'orchestrator';
@@ -337,6 +359,11 @@ export async function runProductSupportWorkflow(input: {
 
   const model = resolveResponsesModel(input.modelTag);
   const client = getOpenAIClient();
+  input.onEvent?.({
+    type: 'status',
+    stage: 'routing_selected',
+    detail: routingDecision,
+  });
 
   const ctx = {
     traceId: input.traceId,
@@ -409,6 +436,7 @@ export async function runProductSupportWorkflow(input: {
     { step: 'agent', step_id: agentStep.id },
     { ...wfCtx, stepId: agentStep.id },
   );
+  input.onEvent?.({ type: 'status', stage: 'agent_started' });
 
   try {
     const toolTrace: ToolTraceEntry[] = [];
@@ -430,7 +458,14 @@ export async function runProductSupportWorkflow(input: {
             name: 'lookup_cross_reference',
           } as const)
         : 'auto',
+      onAssistantDelta: input.onAssistantDelta,
       executeTool: async ({ name, argumentsJson, callId }) => {
+        input.onEvent?.({
+          type: 'tool',
+          phase: 'started',
+          name,
+          callId,
+        });
         await writeAuditLog(
           'tool_called',
           { tool_name: name, call_id: callId },
@@ -462,9 +497,17 @@ export async function runProductSupportWorkflow(input: {
           output: out.output,
           trace: out.trace,
         });
+        input.onEvent?.({
+          type: 'tool',
+          phase: 'completed',
+          name,
+          ok: out.trace.ok,
+          callId,
+        });
         return out;
       },
     });
+    input.onEvent?.({ type: 'status', stage: 'agent_completed' });
     const timingBreakdown = {
       toolRounds: agentResult.responseIds.length,
       cacheSource: dominantCacheSource(cacheSourceCounts),
@@ -533,6 +576,7 @@ export async function runProductSupportWorkflow(input: {
       status: 'running',
       input: jsonContent({ modelTag: input.modelTag ?? 'preview' }),
     });
+    input.onEvent?.({ type: 'status', stage: 'validation_started' });
 
     // TODO: Remove this runtime toggle when validator behavior is fully tuned.
     let validation: ValidatorResult;
@@ -592,6 +636,11 @@ export async function runProductSupportWorkflow(input: {
               reason: 'temporary_test_bypass',
             },
       ),
+    });
+    input.onEvent?.({
+      type: 'status',
+      stage: 'validation_completed',
+      detail: validation.approved ? 'approved' : 'not_approved',
     });
 
     let finalText = draftAnswer;
@@ -688,6 +737,7 @@ export async function runProductSupportWorkflow(input: {
       wfCtx,
     );
     logInfo('workflow_completed', { ...wfCtx });
+    input.onEvent?.({ type: 'status', stage: 'workflow_completed' });
 
     return finalOutput;
   } catch (err) {
