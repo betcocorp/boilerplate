@@ -97,10 +97,15 @@ function markdownComponentsForBubble(isUser: boolean): Components {
       </ol>
     ),
     li: ({ children }) => <li className="wrap-break-word">{children}</li>,
-    a: ({ children }) => (
-      <span className="wrap-break-word underline underline-offset-2">
+    a: ({ href, children }) => (
+      <a
+        className="wrap-break-word underline underline-offset-2"
+        href={href}
+        rel="noopener noreferrer"
+        target="_blank"
+      >
         {children}
-      </span>
+      </a>
     ),
     code: ({ className, children, ...props }) => {
       const isBlock = Boolean(className?.includes('language-'));
@@ -162,7 +167,7 @@ function AssistantDetails({
 
   return (
     <div className="mt-2 text-xs text-muted-foreground">
-      <Separator className="mb-2 bg-border/40" />
+      <Separator className="mb-4 bg-border/40" />
       <Button
         className="h-auto gap-1 px-0 text-xs font-medium text-foreground/80 hover:text-foreground"
         onClick={() => setOpen((v) => !v)}
@@ -214,6 +219,24 @@ function AssistantDetails({
                       {s.documentId.slice(0, 8)}…
                     </span>{' '}
                     {s.title}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          {meta.toolSummary && meta.toolSummary.length > 0 ? (
+            <div>
+              <span className="font-medium text-foreground">Tool calls</span>
+              <ul className="mt-1 space-y-1">
+                {meta.toolSummary.map((tool, index) => (
+                  <li
+                    className="wrap-break-word"
+                    key={`${messageId}-${tool.name}-${index}`}
+                  >
+                    <span className="font-mono text-[0.7rem] opacity-80">
+                      {tool.ok ? 'ok' : 'failed'}
+                    </span>{' '}
+                    {tool.name}
                   </li>
                 ))}
               </ul>
@@ -404,17 +427,17 @@ export function BexChatMessages({
                     <div className="mt-3">
                       <Separator className="mb-2 bg-border/40" />
                       <div className="flex justify-end">
-                      <Button
-                        aria-label="Copy message"
-                        className="h-8 rounded-xl text-xs"
-                        onClick={() => copyText(m.content)}
-                        size="sm"
-                        type="button"
-                        variant="ghost"
-                      >
-                        <Copy className="size-3.5" />
-                        Copy
-                      </Button>
+                        <Button
+                          aria-label="Copy message"
+                          className="h-8 rounded-xl text-xs"
+                          onClick={() => copyText(m.content)}
+                          size="sm"
+                          type="button"
+                          variant="ghost"
+                        >
+                          <Copy className="size-3.5" />
+                          Copy
+                        </Button>
                       </div>
                     </div>
                   )}
@@ -568,9 +591,9 @@ function AssistantFeedbackActions({
               <Textarea
                 id={`feedback-comment-${messageId}`}
                 className="min-h-24"
-              onChange={(event) => setComment(event.target.value)}
-              placeholder="Optional details"
-              value={comment}
+                onChange={(event) => setComment(event.target.value)}
+                placeholder="Optional details"
+                value={comment}
               />
             </div>
             <DialogFooter>

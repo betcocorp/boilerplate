@@ -19,6 +19,35 @@ type ApiMsg = {
   } | null;
 };
 
+function extractToolSummary(content: unknown):
+  | Array<{ name: string; ok: boolean }>
+  | undefined {
+  if (!content || typeof content !== 'object') {
+    return undefined;
+  }
+
+  const candidate = (content as { toolSummary?: unknown }).toolSummary;
+  if (!Array.isArray(candidate)) {
+    return undefined;
+  }
+
+  const normalized = candidate
+    .map((item) => {
+      if (!item || typeof item !== 'object') {
+        return null;
+      }
+      const name = (item as { name?: unknown }).name;
+      const ok = (item as { ok?: unknown }).ok;
+      if (typeof name !== 'string' || typeof ok !== 'boolean') {
+        return null;
+      }
+      return { name, ok };
+    })
+    .filter((item): item is { name: string; ok: boolean } => Boolean(item));
+
+  return normalized.length > 0 ? normalized : undefined;
+}
+
 export function mapApiMessageToChatMessage(row: ApiMsg): ChatMessage {
   const createdAt = Date.parse(row.createdAt);
   const safeTime = Number.isFinite(createdAt) ? createdAt : Date.now();
@@ -57,6 +86,7 @@ export function mapApiMessageToChatMessage(row: ApiMsg): ChatMessage {
             model: parsed.data.model,
             confidence: parsed.data.confidence,
             sources: parsed.data.sources,
+            toolSummary: parsed.data.toolSummary,
             workflowRunId: parsed.data.workflowRunId,
             validation: parsed.data.validation
               ? {
@@ -67,7 +97,9 @@ export function mapApiMessageToChatMessage(row: ApiMsg): ChatMessage {
                 }
               : undefined,
           }
-        : undefined;
+        : {
+            toolSummary: extractToolSummary(row.content),
+          };
 
     return {
       id: row.id,

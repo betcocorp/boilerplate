@@ -25,6 +25,7 @@ export type ResponsesRuntimeOptions = {
   previousResponseId?: string | null;
   maxToolRounds?: number;
   temperature?: number;
+  toolChoice?: ResponseCreateParamsNonStreaming['tool_choice'];
   onRawResponse?: (response: Response) => void;
   executeTool: ExecuteToolFn;
 };
@@ -64,7 +65,7 @@ export async function runResponsesWithToolLoop(
       model: opts.model,
       instructions: opts.instructions,
       tools: opts.tools,
-      tool_choice: 'auto',
+      tool_choice: i === 0 ? (opts.toolChoice ?? 'auto') : 'auto',
       parallel_tool_calls: true,
       store: true,
       stream: false,

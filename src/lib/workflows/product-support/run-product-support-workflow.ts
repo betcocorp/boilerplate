@@ -115,6 +115,194 @@ function dominantCacheSource(cacheSourceCounts: Map<string, number>) {
   return sorted[0]?.[0] ?? null;
 }
 
+function shouldForceCrossReferenceLookup(userMessage: string) {
+  const text = userMessage.toLowerCase();
+  const hasCrossRefIntent =
+    text.includes('comparable') ||
+    text.includes('equivalent') ||
+    text.includes('cross reference') ||
+    text.includes('cross-reference') ||
+    text.includes('alternative');
+  const hasBetcoContext = text.includes('betco');
+  return hasCrossRefIntent && hasBetcoContext;
+}
+
+type CrossReferenceMatch = {
+  competitorBrand: string | null;
+  competitorProductName: string | null;
+  productKey: string | null;
+  confidence: number | null;
+  productUrl: string | null;
+  betcoProduct:
+    | {
+        title?: string | null;
+        sku?: string | null;
+      }
+    | null
+    | undefined;
+};
+
+type RuntimeToolOutput = {
+  toolName: string;
+  ok: boolean;
+  output: string;
+  trace: ToolTraceEntry;
+};
+
+function extractTopCrossReferenceMatch(toolTrace: ToolTraceEntry[]) {
+  for (let i = toolTrace.length - 1; i >= 0; i -= 1) {
+    const entry = toolTrace[i];
+    if (!entry || entry.toolName !== 'lookup_cross_reference' || !entry.ok) {
+      continue;
+    }
+
+    try {
+      const payload = JSON.parse(entry.outputPreview) as {
+        fallbackRecommended?: boolean;
+        matches?: CrossReferenceMatch[];
+      };
+
+      const top = Array.isArray(payload.matches) ? payload.matches[0] : null;
+      if (!top) {
+        continue;
+      }
+
+      return {
+        fallbackRecommended: Boolean(payload.fallbackRecommended),
+        match: top,
+      };
+    } catch {
+      // Ignore malformed tool output and continue scanning.
+    }
+  }
+
+  return null;
+}
+
+function extractTopCrossReferenceMatchFromToolOutputs(toolOutputs: RuntimeToolOutput[]) {
+  for (let i = toolOutputs.length - 1; i >= 0; i -= 1) {
+    const entry = toolOutputs[i];
+    if (!entry || entry.toolName !== 'lookup_cross_reference' || !entry.ok) {
+      continue;
+    }
+
+    try {
+      const payload = JSON.parse(entry.output) as {
+        fallbackRecommended?: boolean;
+        matches?: CrossReferenceMatch[];
+      };
+      const top = Array.isArray(payload.matches) ? payload.matches[0] : null;
+      if (!top) {
+        continue;
+      }
+      return {
+        fallbackRecommended: Boolean(payload.fallbackRecommended),
+        match: top,
+      };
+    } catch {
+      // Ignore malformed output and continue scanning.
+    }
+  }
+
+  return null;
+}
+
+function collectSourcesFromToolOutputs(toolOutputs: RuntimeToolOutput[]): SourceRef[] {
+  const map = new Map<string, SourceRef>();
+
+  for (const entry of toolOutputs) {
+    if (!entry.ok) {
+      continue;
+    }
+    try {
+      const payload = JSON.parse(entry.output) as {
+        sources?: Array<{
+          documentId?: string;
+          chunkId?: string;
+          title?: string;
+          snippet?: string;
+          confidence?: number;
+        }>;
+      };
+      for (const s of payload.sources ?? []) {
+        if (!s.documentId || !s.snippet) {
+          continue;
+        }
+        const key = `${s.documentId}:${s.chunkId ?? ''}`;
+        if (map.has(key)) {
+          continue;
+        }
+        map.set(key, {
+          documentId: s.documentId,
+          chunkId: s.chunkId,
+          title: s.title ?? s.documentId,
+          snippet: s.snippet.slice(0, 2000),
+          similarity: s.confidence,
+        });
+      }
+    } catch {
+      // Ignore malformed output and continue scanning.
+    }
+  }
+
+  return [...map.values()].slice(0, 16);
+}
+
+function buildCrossReferenceAnswer(match: CrossReferenceMatch) {
+  const title =
+    match.betcoProduct?.title?.trim() ||
+    match.productKey?.trim() ||
+    'Betco comparable product';
+  const link = match.productUrl?.trim();
+  const productLine = link ? `[${title}](${link})` : title;
+  const competitorLabel = [
+    match.competitorBrand?.trim(),
+    match.competitorProductName?.trim(),
+  ]
+    .filter(Boolean)
+    .join(' ');
+
+  return [
+    `Comparable Betco product: ${productLine}`,
+    '',
+    competitorLabel
+      ? `This is the direct cross-reference match for ${competitorLabel}.`
+      : 'This is the direct cross-reference match from the legacy mapping table.',
+    '',
+    'Want me to also include usage and safety guidance for this product?',
+  ].join('\n');
+}
+
+function hasToolCall(toolTrace: ToolTraceEntry[], toolName: string) {
+  return toolTrace.some((entry) => entry.toolName === toolName);
+}
+
+function buildCrossReferenceSearchArgs(input: {
+  userMessage: string;
+  crossReferenceMatch: CrossReferenceMatch;
+}) {
+  const productName =
+    input.crossReferenceMatch.betcoProduct?.title?.trim() ||
+    input.crossReferenceMatch.productKey?.trim() ||
+    'Betco product';
+
+  const competitorName = [
+    input.crossReferenceMatch.competitorBrand?.trim(),
+    input.crossReferenceMatch.competitorProductName?.trim(),
+  ]
+    .filter(Boolean)
+    .join(' ');
+
+  const topic = competitorName
+    ? `comparable to ${competitorName}; ${input.userMessage}`.slice(0, 512)
+    : input.userMessage.slice(0, 512);
+
+  return {
+    productName: productName.slice(0, 256),
+    topic,
+  };
+}
+
 export async function runProductSupportWorkflow(input: {
   traceId: string;
   conversationId: string;
@@ -224,6 +412,7 @@ export async function runProductSupportWorkflow(input: {
 
   try {
     const toolTrace: ToolTraceEntry[] = [];
+    const toolOutputLog: RuntimeToolOutput[] = [];
     const cacheSourceCounts = new Map<string, number>();
     let totalSearchMs = 0;
     let retrievalSamples = 0;
@@ -235,6 +424,12 @@ export async function runProductSupportWorkflow(input: {
       tools: productSupportTools,
       userMessage: input.userMessage,
       previousResponseId: input.previousOpenaiResponseId ?? null,
+      toolChoice: shouldForceCrossReferenceLookup(input.userMessage)
+        ? ({
+            type: 'function',
+            name: 'lookup_cross_reference',
+          } as const)
+        : 'auto',
       executeTool: async ({ name, argumentsJson, callId }) => {
         await writeAuditLog(
           'tool_called',
@@ -261,6 +456,12 @@ export async function runProductSupportWorkflow(input: {
         );
 
         toolTrace.push(out.trace);
+        toolOutputLog.push({
+          toolName: out.trace.toolName,
+          ok: out.trace.ok,
+          output: out.output,
+          trace: out.trace,
+        });
         return out;
       },
     });
@@ -271,8 +472,51 @@ export async function runProductSupportWorkflow(input: {
         retrievalSamples > 0 ? Number((totalSearchMs / retrievalSamples).toFixed(1)) : null,
     };
 
+    const resolvedToolTrace = [...agentResult.toolTrace];
+    const crossReferenceIntent = shouldForceCrossReferenceLookup(input.userMessage);
+    let crossReferenceResult =
+      extractTopCrossReferenceMatchFromToolOutputs(toolOutputLog) ??
+      extractTopCrossReferenceMatch(resolvedToolTrace);
+
+    if (
+      crossReferenceIntent &&
+      crossReferenceResult &&
+      !hasToolCall(resolvedToolTrace, 'search_product_docs')
+    ) {
+      const enforcedSearch = await executeToolCall({
+        name: 'search_product_docs',
+        argumentsJson: JSON.stringify(
+          buildCrossReferenceSearchArgs({
+            userMessage: input.userMessage,
+            crossReferenceMatch: crossReferenceResult.match,
+          }),
+        ),
+        callId: `forced-search-${Date.now()}`,
+      });
+      resolvedToolTrace.push(enforcedSearch.trace);
+      toolOutputLog.push({
+        toolName: enforcedSearch.trace.toolName,
+        ok: enforcedSearch.trace.ok,
+        output: enforcedSearch.output,
+        trace: enforcedSearch.trace,
+      });
+      crossReferenceResult =
+        extractTopCrossReferenceMatchFromToolOutputs(toolOutputLog) ??
+        extractTopCrossReferenceMatch(resolvedToolTrace);
+    }
+
     let draftAnswer = agentResult.assistantText;
-    const sources = collectSourcesFromTrace(agentResult.toolTrace);
+    const crossReferenceFinalAnswer =
+      crossReferenceResult &&
+      !crossReferenceResult.fallbackRecommended &&
+      Boolean(crossReferenceResult.match.productUrl)
+        ? buildCrossReferenceAnswer(crossReferenceResult.match)
+        : null;
+    if (crossReferenceFinalAnswer) {
+      draftAnswer = crossReferenceFinalAnswer;
+    }
+
+    const sources = collectSourcesFromToolOutputs(toolOutputLog);
     const evidenceSummary = buildEvidenceSummary(sources);
 
     await completeWorkflowStep(agentStep.id, {
@@ -352,6 +596,13 @@ export async function runProductSupportWorkflow(input: {
 
     let finalText = draftAnswer;
 
+    // Enforce deterministic cross-reference output format when available.
+    // This runs after validation/revision to prevent the model from drifting from the
+    // required "Comparable Betco product: [Name](URL)" response shape.
+    if (crossReferenceFinalAnswer) {
+      finalText = crossReferenceFinalAnswer;
+    }
+
     if (!validation.approved) {
       finalText = [
         'I could not fully verify this answer against the retrieved approved sources.',
@@ -424,7 +675,7 @@ export async function runProductSupportWorkflow(input: {
           requiresHumanReview: validation.requires_human_review,
         },
         timingBreakdown,
-        toolSummary: agentResult.toolTrace.map((t) => ({
+        toolSummary: resolvedToolTrace.map((t) => ({
           name: t.toolName,
           ok: t.ok,
         })),

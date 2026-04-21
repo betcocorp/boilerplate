@@ -40,12 +40,22 @@ type LegacyProductRow = {
   InvtID: string | null;
   Status: string | null;
   OnWeb: string | null;
+  User_Str_00: string | null;
+  User_Str_01: string | null;
+  User_Str_02: string | null;
+  User_Str_03: string | null;
+  User_Str_04: string | null;
+  User_Str_05: string | null;
 };
 
 type LegacyProductDescrRow = {
   ProductsKey: string | null;
   ShortDescr: string | null;
   FullDescr: string | null;
+  User_Str_00: string | null;
+  User_Str_01: string | null;
+  User_Str_02: string | null;
+  User_Str_03: string | null;
 };
 
 function normalizeLookupValue(value: string) {
@@ -73,6 +83,96 @@ function clampCrossReferenceLimit(value?: number) {
   }
 
   return Math.min(Math.floor(value), 10);
+}
+
+function normalizeLegacyUrlCandidate(value: string | null | undefined) {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  if (/^https?:\/\//i.test(trimmed)) {
+    return trimmed;
+  }
+  if (/^www\.betco\.com\//i.test(trimmed)) {
+    return `https://${trimmed}`;
+  }
+  if (/^\/products\//i.test(trimmed)) {
+    return `https://www.betco.com${trimmed}`;
+  }
+  if (/^products\//i.test(trimmed)) {
+    return `https://www.betco.com/${trimmed}`;
+  }
+
+  return null;
+}
+
+function toProductSlug(value: string | null | undefined) {
+  const normalized = (value ?? '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[™®]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+
+  return normalized || null;
+}
+
+function buildGuessedProductUrl(product: LegacyProductRow | undefined) {
+  if (!product) {
+    return null;
+  }
+
+  const slug = toProductSlug(product.Title || product.SLDescr || product.InvtID || product.SKU);
+  if (!slug) {
+    return null;
+  }
+
+  const idSegment = (product.InvtID || product.SKU || '')
+    .trim()
+    .replace(/\s+/g, '-')
+    .toLowerCase();
+
+  if (!idSegment) {
+    return `https://www.betco.com/products/${slug}`;
+  }
+
+  return `https://www.betco.com/products/${slug}/${idSegment}`;
+}
+
+function deriveCanonicalProductUrl(input: {
+  product: LegacyProductRow | undefined;
+  productDescr: LegacyProductDescrRow | undefined;
+}) {
+  const candidates = [
+    input.product?.OnWeb,
+    input.product?.User_Str_00,
+    input.product?.User_Str_01,
+    input.product?.User_Str_02,
+    input.product?.User_Str_03,
+    input.product?.User_Str_04,
+    input.product?.User_Str_05,
+    input.productDescr?.User_Str_00,
+    input.productDescr?.User_Str_01,
+    input.productDescr?.User_Str_02,
+    input.productDescr?.User_Str_03,
+  ];
+
+  for (const candidate of candidates) {
+    const normalized = normalizeLegacyUrlCandidate(candidate);
+    if (normalized) {
+      return { url: normalized, source: 'legacy' as const };
+    }
+  }
+
+  const guessed = buildGuessedProductUrl(input.product);
+  if (guessed) {
+    return { url: guessed, source: 'derived' as const };
+  }
+
+  return { url: null, source: 'none' as const };
 }
 
 function scoreCrossReferenceRow(
@@ -193,11 +293,15 @@ async function lookupCrossReference(input: {
     const [productsResponse, productDescriptionsResponse] = await Promise.all([
       legacy
         .from('products')
-        .select('ProductsKey, Title, SKU, SLDescr, InvtID, Status, OnWeb')
+        .select(
+          'ProductsKey, Title, SKU, SLDescr, InvtID, Status, OnWeb, User_Str_00, User_Str_01, User_Str_02, User_Str_03, User_Str_04, User_Str_05',
+        )
         .in('ProductsKey', productKeys),
       legacy
         .from('products_descr')
-        .select('ProductsKey, ShortDescr, FullDescr')
+        .select(
+          'ProductsKey, ShortDescr, FullDescr, User_Str_00, User_Str_01, User_Str_02, User_Str_03',
+        )
         .in('ProductsKey', productKeys)
         .eq('LanguageCD', 'EN'),
     ]);
@@ -253,28 +357,37 @@ async function lookupCrossReference(input: {
     }
   }
 
-  const topMatches = [...deduped.values()].slice(0, maxResults).map((candidate) => ({
-    competitorBrand: candidate.row.Competitor,
-    competitorProductName: candidate.row.ProductDescr,
-    productKey: candidate.row.ProductKey,
-    competitorProductId: candidate.row.ProductID,
-    betcoProductId: candidate.row.BetcoProdID,
-    legacyRowId: candidate.row.id,
-    matchType: candidate.score.matchType,
-    confidence: candidate.score.confidence,
-    betcoProduct: candidate.product
-      ? {
-          title: candidate.product.Title,
-          sku: candidate.product.SKU,
-          shortLabel: candidate.product.SLDescr,
-          inventoryId: candidate.product.InvtID,
-          status: candidate.product.Status,
-          onWeb: candidate.product.OnWeb,
-          shortDescription: candidate.productDescr?.ShortDescr ?? null,
-          fullDescription: candidate.productDescr?.FullDescr ?? null,
-        }
-      : null,
-  }));
+  const topMatches = [...deduped.values()].slice(0, maxResults).map((candidate) => {
+    const productLink = deriveCanonicalProductUrl({
+      product: candidate.product,
+      productDescr: candidate.productDescr,
+    });
+
+    return {
+      competitorBrand: candidate.row.Competitor,
+      competitorProductName: candidate.row.ProductDescr,
+      productKey: candidate.row.ProductKey,
+      competitorProductId: candidate.row.ProductID,
+      betcoProductId: candidate.row.BetcoProdID,
+      legacyRowId: candidate.row.id,
+      matchType: candidate.score.matchType,
+      confidence: candidate.score.confidence,
+      productUrl: productLink.url,
+      productUrlSource: productLink.source,
+      betcoProduct: candidate.product
+        ? {
+            title: candidate.product.Title,
+            sku: candidate.product.SKU,
+            shortLabel: candidate.product.SLDescr,
+            inventoryId: candidate.product.InvtID,
+            status: candidate.product.Status,
+            onWeb: candidate.product.OnWeb,
+            shortDescription: candidate.productDescr?.ShortDescr ?? null,
+            fullDescription: candidate.productDescr?.FullDescr ?? null,
+          }
+        : null,
+    };
+  });
 
   return {
     ok: true,
@@ -289,6 +402,7 @@ async function lookupCrossReference(input: {
     },
     brandCandidates,
     totalCandidates: rows.length,
+    fallbackRecommended: rows.length === 0 || (topMatches[0]?.confidence ?? 0) < 0.75,
     matches: topMatches,
   };
 }

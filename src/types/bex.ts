@@ -26,6 +26,10 @@ export type ChatMessage = {
     confidence?: number;
     workflowRunId?: string;
     sources?: ChatSourceRef[];
+    toolSummary?: Array<{
+      name: string;
+      ok: boolean;
+    }>;
     validation?: {
       approved: boolean;
       requiresHumanReview: boolean;
