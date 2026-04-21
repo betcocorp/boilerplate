@@ -45,7 +45,10 @@ const sidebarSections: NavSectionModel[] = [
         type: 'group',
         label: 'Bex',
         icon: MessageSquare,
-        items: [{ label: 'Bex chat', href: '/admin/bex' }],
+        items: [
+          { label: 'Bex chat', href: '/admin/bex' },
+          { label: 'Test runner', href: '/admin/tests' },
+        ],
       },
       {
         type: 'link',

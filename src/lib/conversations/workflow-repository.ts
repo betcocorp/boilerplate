@@ -111,6 +111,24 @@ export async function getWorkflowRunWithSteps(runId: string): Promise<{
   return { run, steps: steps ?? [] };
 }
 
+export async function listWorkflowRunsByIds(runIds: string[]): Promise<WorkflowRunRow[]> {
+  if (runIds.length === 0) {
+    return [];
+  }
+
+  const supabase = getSupabaseServiceRoleClient();
+  const { data, error } = await supabase
+    .from('workflow_runs')
+    .select()
+    .in('id', runIds);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return data ?? [];
+}
+
 export async function insertReviewTask(input: {
   workflowRunId: string;
   reason: string;

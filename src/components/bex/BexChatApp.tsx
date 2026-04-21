@@ -4,6 +4,14 @@ import { Menu, Sparkles } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { Button } from '~/components/ui/button';
+import { Label } from '~/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '~/components/ui/select';
 import { cn } from '~/lib/utils';
 
 import { BexChatComposer } from '~/components/bex/BexChatComposer';
@@ -15,6 +23,7 @@ import {
   apiFetchConversation,
   apiListConversations,
   apiPostBexChat,
+  apiSubmitMessageFeedback,
 } from '~/lib/bex/bex-api-client';
 import { mapApiMessageToChatMessage } from '~/lib/bex/map-api-messages';
 import { loadUiCache, saveUiCache } from '~/lib/bex/sessions';
@@ -40,6 +49,9 @@ export function BexChatApp() {
     'orchestrator' | 'product' | 'bathroom' | 'dilution' | 'floor'
   >('orchestrator');
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [feedbackSubmittingMessageId, setFeedbackSubmittingMessageId] = useState<string | null>(
+    null,
+  );
 
   const refreshConversation = useCallback(async (id: string) => {
     const detail = await apiFetchConversation(id);
@@ -235,6 +247,29 @@ export function BexChatApp() {
   );
 
   const showFullWelcome = activeId === null;
+  const handleSubmitFeedback = useCallback(
+    async (input: {
+      messageId: string;
+      rating: 'up' | 'down';
+      reasonCode?: string;
+      comment?: string;
+    }) => {
+      if (!activeId) {
+        return;
+      }
+      setFeedbackSubmittingMessageId(input.messageId);
+      setLoadError(null);
+      try {
+        await apiSubmitMessageFeedback(input);
+        await refreshConversation(activeId);
+      } catch (error) {
+        setLoadError(error instanceof Error ? error.message : 'Could not save feedback.');
+      } finally {
+        setFeedbackSubmittingMessageId(null);
+      }
+    },
+    [activeId, refreshConversation],
+  );
 
   const headerSubtitle = activeConversation
     ? `${activeConversation.messages.length ? 'Supabase-backed' : 'Empty thread'} · ${activeConversation.title === 'New conversation' ? 'new' : 'saved'}`
@@ -252,11 +287,13 @@ export function BexChatApp() {
         )}
       >
         {mobileSidebarOpen ? (
-          <button
+          <Button
             aria-label="Close conversation list"
-            className="absolute inset-0 z-30 bg-black/40 lg:hidden"
+            className="absolute inset-0 z-30 h-full w-full rounded-none bg-black/40 lg:hidden"
             onClick={() => setMobileSidebarOpen(false)}
+            size="sm"
             type="button"
+            variant="ghost"
           />
         ) : null}
 
@@ -323,15 +360,13 @@ export function BexChatApp() {
             </div>
 
             <div className="flex w-full items-center gap-2 sm:w-auto">
-              <label className="sr-only" htmlFor="bex-agent-mode">
+              <Label className="sr-only" htmlFor="bex-agent-mode">
                 Agent mode
-              </label>
-              <select
-                className="h-9 w-full min-w-40 rounded-2xl border border-border/60 bg-muted/40 px-3 text-sm outline-none transition focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 sm:w-auto"
-                id="bex-agent-mode"
-                onChange={(e) =>
+              </Label>
+              <Select
+                onValueChange={(value) =>
                   setAgentMode(
-                    e.target.value as
+                    value as
                       | 'orchestrator'
                       | 'product'
                       | 'bathroom'
@@ -341,32 +376,47 @@ export function BexChatApp() {
                 }
                 value={agentMode}
               >
-                <option value="orchestrator">Route: orchestrator</option>
-                <option value="product">Route: direct product specialist</option>
-                <option value="bathroom">Route: direct bathroom specialist</option>
-                <option value="dilution">Route: direct dilution specialist</option>
-                <option value="floor">Route: direct floor specialist</option>
-              </select>
-              <label className="sr-only" htmlFor="bex-model">
-                Model
-              </label>
-              <select
-                className="h-9 w-full min-w-40 rounded-2xl border border-border/60 bg-muted/40 px-3 text-sm outline-none transition focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 sm:w-auto"
-                id="bex-model"
-                onChange={(e) => setModel(e.target.value)}
-                value={model}
+                <SelectTrigger
+                  className="w-full min-w-40 bg-muted/40 sm:w-auto"
+                id="bex-agent-mode"
+                size="default"
               >
-                <option value="preview">Model: preview (env default)</option>
-                <option value="gpt-4o">gpt-4o</option>
-                <option value="gpt-4.1">gpt-4.1</option>
-                <option value="custom">custom (requires env)</option>
-              </select>
+                  <SelectValue placeholder="Agent mode" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="orchestrator">Route: orchestrator</SelectItem>
+                  <SelectItem value="product">Route: direct product specialist</SelectItem>
+                  <SelectItem value="bathroom">Route: direct bathroom specialist</SelectItem>
+                  <SelectItem value="dilution">Route: direct dilution specialist</SelectItem>
+                  <SelectItem value="floor">Route: direct floor specialist</SelectItem>
+                </SelectContent>
+              </Select>
+              <Label className="sr-only" htmlFor="bex-model">
+                Model
+              </Label>
+              <Select onValueChange={setModel} value={model}>
+                <SelectTrigger
+                  className="w-full min-w-40 bg-muted/40 sm:w-auto"
+                id="bex-model"
+                  size="default"
+                >
+                  <SelectValue placeholder="Model" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="preview">Model: preview (env default)</SelectItem>
+                  <SelectItem value="gpt-4o">gpt-4o</SelectItem>
+                  <SelectItem value="gpt-4.1">gpt-4.1</SelectItem>
+                  <SelectItem value="custom">custom (requires env)</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </header>
 
           <BexChatMessages
+            feedbackSubmittingMessageId={feedbackSubmittingMessageId}
             isTyping={isTyping}
             messages={messages}
+            onSubmitFeedback={handleSubmitFeedback}
             onStartEmptyChat={() => void handleNewChat()}
             onSuggestion={(t) => {
               void sendUserText(t);

@@ -5,6 +5,7 @@ import {
   deleteConversation,
   getConversationById,
 } from '~/lib/conversations/conversation-repository';
+import { listMessageFeedbackForConversation } from '~/lib/conversations/message-feedback-repository';
 import { listMessagesForConversation } from '~/lib/conversations/message-repository';
 
 export const runtime = 'nodejs';
@@ -25,7 +26,13 @@ export async function GET(request: Request, ctx: RouteParams) {
       return NextResponse.json({ error: 'Not found' }, { status: 404 });
     }
 
-    const messages = await listMessagesForConversation(id);
+    const [messages, feedbackRows] = await Promise.all([
+      listMessagesForConversation(id),
+      listMessageFeedbackForConversation(id),
+    ]);
+    const feedbackByMessageId = new Map(
+      feedbackRows.map((row) => [row.message_id, row]),
+    );
 
     return NextResponse.json({
       ok: true,
@@ -38,6 +45,15 @@ export async function GET(request: Request, ctx: RouteParams) {
         status: conversation.status,
       },
       messages: messages.map((m) => ({
+        feedback: feedbackByMessageId.has(m.id)
+          ? {
+              rating: feedbackByMessageId.get(m.id)?.rating,
+              reasonCode: feedbackByMessageId.get(m.id)?.reason_code,
+              comment: feedbackByMessageId.get(m.id)?.comment,
+              createdAt: feedbackByMessageId.get(m.id)?.created_at,
+              updatedAt: feedbackByMessageId.get(m.id)?.updated_at,
+            }
+          : null,
         id: m.id,
         role: m.role,
         content: m.content,

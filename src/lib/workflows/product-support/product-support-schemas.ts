@@ -27,6 +27,13 @@ export const productSupportFinalOutputSchema = z.object({
   latestOpenaiResponseId: z.string(),
   validation: validatorResultSchema,
   routingDecision: z.string().optional(),
+  timingBreakdown: z
+    .object({
+      toolRounds: z.number().int().nonnegative(),
+      cacheSource: z.string().nullable(),
+      searchMs: z.number().nullable(),
+    })
+    .optional(),
 });
 
 export type ProductSupportFinalOutput = z.infer<typeof productSupportFinalOutputSchema>;

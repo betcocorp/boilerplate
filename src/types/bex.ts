@@ -14,11 +14,22 @@ export type ChatMessage = {
   content: string;
   createdAt: number;
   workflowRunId?: string;
+  feedback?: {
+    rating: 'up' | 'down';
+    reasonCode?: string | null;
+    comment?: string | null;
+    createdAt?: number;
+    updatedAt?: number;
+  } | null;
   meta?: {
     model?: string;
     confidence?: number;
     workflowRunId?: string;
     sources?: ChatSourceRef[];
+    toolSummary?: Array<{
+      name: string;
+      ok: boolean;
+    }>;
     validation?: {
       approved: boolean;
       requiresHumanReview: boolean;

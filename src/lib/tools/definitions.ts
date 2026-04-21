@@ -126,4 +126,29 @@ export const productSupportTools: Tool[] = [
       required: ['issueType'],
     },
   },
+  {
+    type: 'function',
+    name: 'lookup_cross_reference',
+    strict: false,
+    description:
+      'Find Betco equivalent products from legacy cross-reference tables using a competitor brand and product name.',
+    parameters: {
+      type: 'object',
+      properties: {
+        brand: {
+          type: 'string',
+          description: 'Competitor brand, for example "Spartan".',
+        },
+        productName: {
+          type: 'string',
+          description: 'Competitor product name, for example "#1 Laundry Break".',
+        },
+        maxResults: {
+          type: 'number',
+          description: 'Optional max number of returned matches (default 3, max 10).',
+        },
+      },
+      required: ['brand', 'productName'],
+    },
+  },
 ];
