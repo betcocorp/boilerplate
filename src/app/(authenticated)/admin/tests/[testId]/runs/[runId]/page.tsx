@@ -73,6 +73,30 @@ function extractItemSimilarityScore(responsePayload: unknown) {
   return Math.max(...similarities);
 }
 
+function extractItemValidatorConfidence(responsePayload: unknown) {
+  if (!responsePayload || typeof responsePayload !== 'object' || Array.isArray(responsePayload)) {
+    return null;
+  }
+  const c = (responsePayload as Record<string, unknown>).confidence;
+  return typeof c === 'number' && Number.isFinite(c) ? c : null;
+}
+
+function formatItemSimilarityConfidenceLabel(responsePayload: unknown) {
+  const maxSimilarity = extractItemSimilarityScore(responsePayload);
+  const confidence = extractItemValidatorConfidence(responsePayload);
+  if (maxSimilarity == null && confidence == null) {
+    return 'n/a';
+  }
+  const parts: string[] = [];
+  if (maxSimilarity != null) {
+    parts.push(`${(maxSimilarity * 100).toFixed(1)}% sim`);
+  }
+  if (confidence != null) {
+    parts.push(`${confidence.toFixed(2)} conf`);
+  }
+  return parts.join(' · ');
+}
+
 function extractWorkflowRunId(responsePayload: unknown) {
   if (!responsePayload || typeof responsePayload !== 'object' || Array.isArray(responsePayload)) {
     return null;
@@ -306,6 +330,7 @@ export default async function AdminTestRunDetailsPage({ params, searchParams }: 
                 <TableHead>Row</TableHead>
                 <TableHead>Prompt</TableHead>
                 <TableHead>Passed</TableHead>
+                <TableHead>Similarity / confidence</TableHead>
                 <TableHead>Elapsed</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Model</TableHead>
@@ -317,7 +342,7 @@ export default async function AdminTestRunDetailsPage({ params, searchParams }: 
             <TableBody>
               {resultItems.length === 0 ? (
                 <TableRow>
-                  <TableCell className="text-slate-500" colSpan={9}>
+                  <TableCell className="text-slate-500" colSpan={10}>
                     No item-level results yet.
                   </TableCell>
                 </TableRow>
@@ -341,6 +366,9 @@ export default async function AdminTestRunDetailsPage({ params, searchParams }: 
                       </Link>
                     </TableCell>
                     <TableCell>{row.passed ? 'yes' : 'no'}</TableCell>
+                    <TableCell className="whitespace-nowrap font-mono text-xs text-slate-700">
+                      {formatItemSimilarityConfidenceLabel(row.response_payload)}
+                    </TableCell>
                     <TableCell>
                       <Badge variant={row.elapsed_ms > 10_000 ? 'destructive' : 'secondary'}>
                         {formatDurationSeconds(row.elapsed_ms)}
