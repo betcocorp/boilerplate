@@ -1,36 +1,19 @@
 import { z } from 'zod';
 
-const chatOkSchema = z.object({
-  ok: z.literal(true),
-  traceId: z.string(),
-  conversationId: z.string().uuid(),
-  assistant: z.object({
-    text: z.string(),
-    sources: z
-      .array(
-        z.object({
-          documentId: z.string(),
-          chunkId: z.string().optional(),
-          title: z.string(),
-          snippet: z.string(),
-          similarity: z.number().optional(),
-        }),
-      )
-      .optional(),
-    confidence: z.number().optional(),
-    workflowRunId: z.string().uuid(),
-    validation: z.object({
-      approved: z.boolean(),
-      confidence: z.number(),
-      issues: z.array(z.string()),
-      requires_human_review: z.boolean(),
-    }),
-    latestOpenaiResponseId: z.string(),
-    routingDecision: z.string().optional(),
-  }),
-});
-
-export type BexChatResponse = z.infer<typeof chatOkSchema>;
+export type BexChatStreamResponse = {
+  conversationId: string;
+  traceId: string;
+  assistantText: string;
+  workflowRunId?: string;
+  latestOpenaiResponseId?: string;
+  routingDecision?: string;
+  streamMetrics?: {
+    totalMs: number;
+    timeToFirstTokenMs: number | null;
+    deltaCount: number;
+    usedFallbackChunking: boolean;
+  };
+};
 
 const conversationListSchema = z.object({
   ok: z.literal(true),
@@ -176,16 +159,85 @@ export async function apiSubmitMessageFeedback(input: {
   }
 }
 
-export async function apiPostBexChat(options: {
+function extractStreamMeta(
+  data: unknown,
+): Omit<BexChatStreamResponse, 'assistantText'> | null {
+  if (!data || typeof data !== 'object') {
+    return null;
+  }
+
+  const candidate = data as {
+    traceId?: unknown;
+    conversationId?: unknown;
+    workflowRunId?: unknown;
+    latestOpenaiResponseId?: unknown;
+    routingDecision?: unknown;
+    streamMetrics?: unknown;
+  };
+
+  if (
+    typeof candidate.traceId !== 'string' ||
+    typeof candidate.conversationId !== 'string'
+  ) {
+    return null;
+  }
+
+  return {
+    traceId: candidate.traceId,
+    conversationId: candidate.conversationId,
+    workflowRunId:
+      typeof candidate.workflowRunId === 'string'
+        ? candidate.workflowRunId
+        : undefined,
+    latestOpenaiResponseId:
+      typeof candidate.latestOpenaiResponseId === 'string'
+        ? candidate.latestOpenaiResponseId
+        : undefined,
+    routingDecision:
+      typeof candidate.routingDecision === 'string'
+        ? candidate.routingDecision
+        : undefined,
+    streamMetrics:
+      candidate.streamMetrics &&
+      typeof candidate.streamMetrics === 'object' &&
+      typeof (candidate.streamMetrics as { totalMs?: unknown }).totalMs === 'number' &&
+      typeof (candidate.streamMetrics as { deltaCount?: unknown }).deltaCount === 'number' &&
+      typeof (candidate.streamMetrics as { usedFallbackChunking?: unknown }).usedFallbackChunking ===
+        'boolean'
+        ? {
+            totalMs: (candidate.streamMetrics as { totalMs: number }).totalMs,
+            timeToFirstTokenMs:
+              typeof
+                (candidate.streamMetrics as { timeToFirstTokenMs?: unknown })
+                  .timeToFirstTokenMs === 'number'
+                ? (candidate.streamMetrics as { timeToFirstTokenMs: number })
+                    .timeToFirstTokenMs
+                : null,
+            deltaCount: (candidate.streamMetrics as { deltaCount: number }).deltaCount,
+            usedFallbackChunking: (
+              candidate.streamMetrics as { usedFallbackChunking: boolean }
+            ).usedFallbackChunking,
+          }
+        : undefined,
+  };
+}
+
+export async function apiPostBexChatStream(options: {
   conversationId?: string | null;
   message: string;
   model: string;
   useValidator?: boolean;
   agentMode?: 'orchestrator' | 'product' | 'bathroom' | 'dilution' | 'floor';
-}): Promise<BexChatResponse> {
-  const res = await fetch('/api/bex/chat', {
+  onTextDelta?: (delta: string) => void;
+  onEvent?: (event: unknown) => void;
+}): Promise<BexChatStreamResponse> {
+  const rolloutCohort = process.env.NEXT_PUBLIC_BEX_STREAMING_ROLLOUT_COHORT?.trim();
+  const res = await fetch('/api/bex/chat/stream', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(rolloutCohort ? { 'x-bex-streaming-cohort': rolloutCohort } : {}),
+    },
     body: JSON.stringify({
       conversationId: options.conversationId ?? undefined,
       message: options.message,
@@ -195,20 +247,80 @@ export async function apiPostBexChat(options: {
     }),
   });
 
-  const data: unknown = await res.json();
-
   if (!res.ok) {
+    const data: unknown = await res.json().catch(() => null);
     throw new Error(
       typeof data === 'object' && data && 'error' in data
         ? String((data as { error?: string }).error)
-        : `Chat request failed (${res.status})`,
+        : `Chat stream request failed (${res.status})`,
     );
   }
 
-  const parsed = chatOkSchema.safeParse(data);
-  if (!parsed.success) {
-    throw new Error('Unexpected chat response shape');
+  if (!res.body) {
+    throw new Error('Streaming response did not include a body.');
   }
 
-  return parsed.data;
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let assistantText = '';
+  let meta: Omit<BexChatStreamResponse, 'assistantText'> | null = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('data:')) {
+        continue;
+      }
+
+      const payload = trimmed.slice(5).trim();
+      if (!payload || payload === '[DONE]') {
+        continue;
+      }
+
+      try {
+        const chunk = JSON.parse(payload) as {
+          type?: unknown;
+          delta?: unknown;
+          data?: unknown;
+        };
+
+        if (chunk.type === 'text-delta' && typeof chunk.delta === 'string') {
+          assistantText += chunk.delta;
+          options.onTextDelta?.(chunk.delta);
+        }
+
+        if (chunk.type === 'data-bex-meta') {
+          const parsedMeta = extractStreamMeta(chunk.data);
+          if (parsedMeta) {
+            meta = parsedMeta;
+          }
+        }
+
+        if (chunk.type === 'data-bex-event') {
+          options.onEvent?.(chunk.data);
+        }
+      } catch {
+        // Ignore malformed chunks to preserve stream resilience.
+      }
+    }
+  }
+
+  if (!meta) {
+    throw new Error('Streaming response missing conversation metadata.');
+  }
+
+  return {
+    ...meta,
+    assistantText,
+  };
 }

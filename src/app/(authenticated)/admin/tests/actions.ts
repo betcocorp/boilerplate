@@ -50,7 +50,9 @@ export async function uploadTestCsvAction(formData: FormData) {
   const testName = typeof nameValue === 'string' && nameValue.trim() ? nameValue.trim() : null;
 
   if (!(file instanceof File) || file.size === 0) {
-    redirect(encodeMessage(returnPath, 'error', 'Choose a CSV file before uploading.'));
+    redirect(
+      encodeMessage('/admin/tests', 'error', 'Choose a CSV file before uploading.'),
+    );
   }
 
   const fileBytes = new Uint8Array(await file.arrayBuffer());
@@ -61,7 +63,7 @@ export async function uploadTestCsvAction(formData: FormData) {
   if (parsedRows.length === 0) {
     redirect(
       encodeMessage(
-        returnPath,
+        '/admin/tests',
         'error',
         'No usable prompt rows were found in this CSV. Expected a `question` or `prompt` column.',
       ),
@@ -118,7 +120,7 @@ export async function uploadTestCsvAction(formData: FormData) {
   revalidatePath('/admin/tests');
   redirect(
     encodeMessage(
-      returnPath,
+      '/admin/tests',
       'success',
       `Uploaded ${file.name} and stored ${parsedRows.length} test prompts.`,
     ),

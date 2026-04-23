@@ -64,7 +64,7 @@ export function TestHistoricalTrendsCharts({ runs }: TestHistoricalTrendsChartsP
                   />
                   <Tooltip
                     formatter={(value) =>
-                      typeof value === 'number' ? `${value.toFixed(1)}%` : '—'
+                      typeof value === 'number' ? `${value.toFixed(1)}%` : `${value ?? ''}`
                     }
                     labelFormatter={(label) => `Run date: ${label}`}
                   />
@@ -93,7 +93,7 @@ export function TestHistoricalTrendsCharts({ runs }: TestHistoricalTrendsChartsP
                   <YAxis tick={{ fontSize: 11 }} tickFormatter={(value) => `${value}s`} />
                   <Tooltip
                     formatter={(value) =>
-                      typeof value === 'number' ? `${value.toFixed(2)} s` : '—'
+                      typeof value === 'number' ? `${value.toFixed(2)} s` : `${value ?? ''}`
                     }
                     labelFormatter={(label) => `Run date: ${label}`}
                   />

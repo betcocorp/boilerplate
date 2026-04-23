@@ -24,7 +24,8 @@ type UpsertMessageFeedbackInput = {
 export async function upsertMessageFeedback(
   input: UpsertMessageFeedbackInput,
 ): Promise<AgentMessageFeedbackRow> {
-  const supabase = getSupabaseServiceRoleClient();
+  // NOTE: this table exists in the database but is not yet included in generated Supabase types.
+  const supabase = getSupabaseServiceRoleClient() as any;
   const { data, error } = await supabase
     .from('agent_message_feedback')
     .upsert(
@@ -52,7 +53,8 @@ export async function upsertMessageFeedback(
 export async function listMessageFeedbackForConversation(
   conversationId: string,
 ): Promise<AgentMessageFeedbackRow[]> {
-  const supabase = getSupabaseServiceRoleClient();
+  // NOTE: this table exists in the database but is not yet included in generated Supabase types.
+  const supabase = getSupabaseServiceRoleClient() as any;
   const { data, error } = await supabase
     .from('agent_message_feedback')
     .select('*')

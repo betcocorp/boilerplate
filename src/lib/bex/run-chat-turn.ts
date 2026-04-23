@@ -9,7 +9,10 @@ import {
   jsonContent,
   listMessagesForConversation,
 } from '~/lib/conversations/message-repository';
-import { runProductSupportWorkflow } from '~/lib/workflows/product-support/run-product-support-workflow';
+import {
+  runProductSupportWorkflow,
+  type ProductSupportWorkflowEvent,
+} from '~/lib/workflows/product-support/run-product-support-workflow';
 
 export type BexChatTurnResult = Awaited<ReturnType<typeof runProductSupportWorkflow>> & {
   conversationId: string;
@@ -22,6 +25,8 @@ export async function runBexChatTurn(input: {
   modelTag?: string;
   useValidator?: boolean;
   agentMode?: 'orchestrator' | 'product' | 'bathroom' | 'dilution' | 'floor';
+  onWorkflowEvent?: (event: ProductSupportWorkflowEvent) => void;
+  onAssistantDelta?: (delta: string) => void;
 }): Promise<BexChatTurnResult> {
   const traceId = newCorrelationId();
   const trimmed = input.message.trim();
@@ -60,6 +65,8 @@ export async function runBexChatTurn(input: {
     useValidator: input.useValidator ?? false,
     agentMode: input.agentMode ?? 'orchestrator',
     previousOpenaiResponseId: conversation.latest_openai_response_id,
+    onEvent: input.onWorkflowEvent,
+    onAssistantDelta: input.onAssistantDelta,
   });
 
   return {
