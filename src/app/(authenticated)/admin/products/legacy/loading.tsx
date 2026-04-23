@@ -1,3 +1,6 @@
+import { Button } from '~/components/ui/button';
+import { Input } from '~/components/ui/input';
+
 function ProductCardSkeleton({ index }: { index: number }) {
   return (
     <article
@@ -65,19 +68,19 @@ export default function Loading() {
           </div>
 
           <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-            <input
-              className="h-12 flex-1 rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-400 outline-none ring-0"
+            <Input
+              className="h-12 flex-1 rounded-2xl px-4"
               disabled
               placeholder="Search by title, SKU, product ID, or description"
               type="search"
             />
-            <button
-              className="inline-flex h-12 w-40 items-center justify-center rounded-2xl bg-slate-950 px-6 text-sm font-semibold text-white opacity-80"
+            <Button
+              className="h-12 w-40 shrink-0 rounded-2xl px-6 font-semibold opacity-80"
               disabled
               type="button"
             >
               Search products
-            </button>
+            </Button>
           </div>
         </section>
 

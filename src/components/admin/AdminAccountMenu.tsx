@@ -21,6 +21,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '~/components/ui/dropdown-menu';
+import { Button } from '~/components/ui/button';
+import { cn } from '~/lib/utils';
 
 function getInitials(value: string | null | undefined) {
   const raw = value?.trim();
@@ -38,12 +40,16 @@ type AccountTriggerProps = {
 } & React.ComponentPropsWithoutRef<'button'>;
 
 const AccountTrigger = forwardRef<HTMLButtonElement, AccountTriggerProps>(
-  ({ userEmail, userName, ...buttonProps }, ref) => {
+  ({ userEmail, userName, className, ...buttonProps }, ref) => {
     return (
-      <button
-        className="flex w-full items-center gap-3 rounded-3xl border border-sidebar-border bg-sidebar-accent/60 p-3 text-left transition hover:bg-sidebar-accent"
+      <Button
+        className={cn(
+          'flex h-auto w-full items-center gap-3 rounded-3xl border border-sidebar-border bg-sidebar-accent/60 p-3 text-left transition hover:bg-sidebar-accent',
+          className,
+        )}
         ref={ref}
         type="button"
+        variant="ghost"
         {...buttonProps}
       >
         <Avatar size="lg">
@@ -60,7 +66,7 @@ const AccountTrigger = forwardRef<HTMLButtonElement, AccountTriggerProps>(
         <div className="flex items-center gap-1">
           <EllipsisVertical className="size-4 text-sidebar-foreground/70" />
         </div>
-      </button>
+      </Button>
     );
   },
 );

@@ -5,6 +5,10 @@ import moment from 'moment';
 import { useActionState, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
+import { Button } from '~/components/ui/button';
+import { Input } from '~/components/ui/input';
+import { Label } from '~/components/ui/label';
+
 import { runSdsAction, type SdsActionState } from './actions';
 import type { SdsDashboardStatus } from './pipeline';
 
@@ -172,19 +176,19 @@ export function SdsControls({
           parsing.
         </p>
 
-        <label className="mt-6 flex flex-col gap-2">
-          <span className="text-sm font-medium text-slate-700">Batch size</span>
-          <input
-            className="h-11 rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none ring-0 transition focus:border-sky-500"
+        <div className="mt-6 flex flex-col gap-2">
+          <Label className="text-sm font-medium text-slate-700">Batch size</Label>
+          <Input
+            className="h-11 rounded-2xl px-4"
             disabled={autoEmbedEnabled}
-            min="1"
+            min={1}
             onChange={(event) => setBatchSize(event.target.value)}
             type="number"
             value={effectiveBatchSize}
           />
-        </label>
-        <button
-          className="mt-3 inline-flex min-h-10 items-center justify-center rounded-2xl bg-sky-100 px-4 py-2 text-sm font-medium text-sky-900 transition hover:bg-sky-200"
+        </div>
+        <Button
+          className="mt-3 min-h-10 rounded-2xl bg-sky-100 px-4 py-2 font-medium text-sky-900 hover:bg-sky-200 dark:bg-sky-950/40 dark:text-sky-100 dark:hover:bg-sky-900/50"
           onClick={() =>
             setAutoEmbedEnabled((current) => {
               const next = !current;
@@ -200,6 +204,7 @@ export function SdsControls({
             })
           }
           type="button"
+          variant="ghost"
         >
           {autoEmbedEnabled ? (
             <span className="inline-flex items-center gap-2">
@@ -212,7 +217,7 @@ export function SdsControls({
           ) : (
             'Start auto-embed (500 every 2 min)'
           )}
-        </button>
+        </Button>
 
         <div className="mt-6 grid gap-3">
           {[
@@ -241,8 +246,8 @@ export function SdsControls({
                 type="hidden"
                 value={effectiveBatchSize}
               />
-              <button
-                className="inline-flex h-11 w-full items-center justify-center rounded-2xl bg-slate-950 px-4 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+              <Button
+                className="h-11 w-full rounded-2xl px-4 font-semibold"
                 disabled={pending}
                 type="submit"
               >
@@ -254,7 +259,7 @@ export function SdsControls({
                 ) : (
                   label
                 )}
-              </button>
+              </Button>
             </form>
           ))}
         </div>

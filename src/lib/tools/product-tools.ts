@@ -4,7 +4,10 @@ import {
   retrieveSafetyConstraints,
   retrieveSurfacesLists,
 } from '~/lib/retrieval/product-guidance';
-import { ragQueryForProductKnowledgeWithMeta } from '~/lib/retrieval/product-knowledge';
+import {
+  type CuratedSource,
+  ragQueryForProductKnowledgeWithMeta,
+} from '~/lib/retrieval/product-knowledge';
 
 import {
   getApprovedUsageGuidanceInputSchema,
@@ -407,9 +410,7 @@ async function lookupCrossReference(input: {
   };
 }
 
-function sourcePayload(
-  sources: Awaited<ReturnType<typeof ragQueryForProductKnowledge>>,
-) {
+function sourcePayload(sources: CuratedSource[]) {
   return sources.map((s) => ({
     documentId: s.documentId,
     chunkId: s.chunkId,

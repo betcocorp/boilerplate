@@ -2,7 +2,9 @@
 
 import { ChevronDown } from 'lucide-react';
 import { useState } from 'react';
-import { Badge } from '../ui/badge';
+
+import { Badge } from '~/components/ui/badge';
+import { Button } from '~/components/ui/button';
 
 type RagSearchTimingPanelProps = {
   embeddingSourceLabel: string;
@@ -20,10 +22,11 @@ export function RagSearchTimingPanel({
 
   return (
     <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-      <button
-        className="flex w-full items-start justify-between gap-3 text-left"
+      <Button
+        className="flex h-auto w-full items-start justify-between gap-3 p-0 font-normal hover:bg-transparent"
         onClick={() => setIsOpen((current) => !current)}
         type="button"
+        variant="ghost"
       >
         <div>
           <div className="flex items-center gap-3">
@@ -49,7 +52,7 @@ export function RagSearchTimingPanel({
             <ChevronDown className="size-4" />
           </span>
         </div>
-      </button>
+      </Button>
 
       <div
         className={`grid transition-[grid-template-rows,opacity] duration-300 ease-out ${

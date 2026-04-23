@@ -3,6 +3,9 @@
 import { useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
+import { Button } from '~/components/ui/button';
+import { Input } from '~/components/ui/input';
+
 type QueryOption = {
   query: string;
   queryCount: number;
@@ -40,9 +43,9 @@ export function RagQueryAutocomplete({
 
   return (
     <div className="relative">
-      <input
+      <Input
         autoComplete="off"
-        className="h-12 w-full rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none ring-0 transition focus:border-sky-500"
+        className="h-12 rounded-2xl border-border bg-background px-4"
         name={name}
         onBlur={() => {
           if (closeTimerRef.current !== null) {
@@ -73,8 +76,8 @@ export function RagQueryAutocomplete({
             <p className="px-2 py-2 text-xs text-slate-500">No matching queries.</p>
           ) : (
             filteredOptions.map((option) => (
-              <button
-                className="flex w-full items-center justify-between rounded-xl px-2 py-2 text-left text-sm text-slate-700 transition hover:bg-slate-100"
+              <Button
+                className="h-auto w-full justify-between rounded-xl px-2 py-2 font-normal text-slate-700 hover:bg-slate-100"
                 key={`${option.query}-${option.queryCount}`}
                 onMouseDown={(event) => {
                   // Keep focus on the input so blur doesn't collapse
@@ -108,12 +111,13 @@ export function RagQueryAutocomplete({
                   }
                 }}
                 type="button"
+                variant="ghost"
               >
                 <span className="truncate pr-3">{option.query}</span>
                 <span className="shrink-0 text-xs text-slate-500">
                   {option.queryCount}
                 </span>
-              </button>
+              </Button>
             ))
           )}
         </div>

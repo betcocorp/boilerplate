@@ -20,6 +20,31 @@ function parseExpectedShouldAnswer(value: string): boolean | null {
   return null;
 }
 
+/** Parses manual add form / combobox values (presets + CSV-style tokens). */
+export function parseExpectedShouldAnswerFromForm(value: string): boolean | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const lower = trimmed.toLowerCase();
+  if (
+    lower === 'na' ||
+    lower === 'n/a' ||
+    lower === 'no expectation (n/a)'
+  ) {
+    return null;
+  }
+  if (lower === 'should answer') {
+    return true;
+  }
+  if (lower === 'should decline') {
+    return false;
+  }
+
+  return parseExpectedShouldAnswer(trimmed);
+}
+
 export function parseTestCsvContent(content: string): ParsedCsvRow[] {
   const records = parse(content, {
     columns: true,

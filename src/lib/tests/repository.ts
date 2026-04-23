@@ -74,15 +74,65 @@ export async function getTestById(testId: string) {
   return assertNoError(result) as TestRecord;
 }
 
+const TEST_ITEMS_PAGE_SIZE = 1000;
+
+/** Fetches every row for the test (Supabase caps single queries at `max_rows`, often 1000). */
 export async function getTestItemsByTestId(testId: string) {
+  const supabase = getSupabaseServiceRoleClient();
+  const all: TestItemRecord[] = [];
+  let from = 0;
+
+  while (true) {
+    const result = await supabase
+      .from('test_items')
+      .select('*')
+      .eq('test_id', testId)
+      .order('row_index', { ascending: true })
+      .range(from, from + TEST_ITEMS_PAGE_SIZE - 1);
+
+    const page = (assertNoError(result) || []) as TestItemRecord[];
+    all.push(...page);
+    if (page.length < TEST_ITEMS_PAGE_SIZE) {
+      break;
+    }
+    from += TEST_ITEMS_PAGE_SIZE;
+  }
+
+  return all;
+}
+
+/**
+ * Lightweight fetch of columns used to build distinct “Add prompt” combobox options
+ * (avoids relying on the full table row shape in callers).
+ */
+export async function getTestItemSuggestionRows(testId: string) {
   const supabase = getSupabaseServiceRoleClient();
   const result = await supabase
     .from('test_items')
-    .select('*')
-    .eq('test_id', testId)
-    .order('row_index', { ascending: true });
+    .select(
+      'expected_result_type, expected_canonical_product, expected_reason_code, input_payload',
+    )
+    .eq('test_id', testId);
 
-  return (assertNoError(result) || []) as TestItemRecord[];
+  return (assertNoError(result) || []) as Pick<
+    TestItemRecord,
+    'expected_result_type' | 'expected_canonical_product' | 'expected_reason_code' | 'input_payload'
+  >[];
+}
+
+/** Largest `row_index` for the test, or `0` when there are no items. */
+export async function getMaxRowIndexForTest(testId: string): Promise<number> {
+  const supabase = getSupabaseServiceRoleClient();
+  const result = await supabase
+    .from('test_items')
+    .select('row_index')
+    .eq('test_id', testId)
+    .order('row_index', { ascending: false })
+    .limit(1);
+
+  const rows = assertNoError(result) || [];
+  const row = rows[0];
+  return typeof row?.row_index === 'number' ? row.row_index : 0;
 }
 
 export async function getTestItemById(testItemId: string) {
@@ -94,6 +144,31 @@ export async function getTestItemById(testItemId: string) {
     .single();
 
   return assertNoError(result) as TestItemRecord;
+}
+
+/**
+ * Deletes one prompt row scoped to `testId`. Cascades `test_result_items` per FK.
+ * Returns whether a row was removed (false if id did not belong to this test).
+ */
+export async function deleteTestItemForTest(testItemId: string, testId: string) {
+  const supabase = getSupabaseServiceRoleClient();
+  const result = await supabase
+    .from('test_items')
+    .delete()
+    .eq('id', testItemId)
+    .eq('test_id', testId)
+    .select('id');
+
+  const deleted = assertNoError(result) as { id: string }[] | null;
+  if (!deleted?.length) {
+    return false;
+  }
+
+  const test = await getTestById(testId);
+  await updateTestRecord(testId, {
+    row_count: Math.max(0, test.row_count - 1),
+  });
+  return true;
 }
 
 export async function createTestResult(values: NewTestResultRecord) {

@@ -2,23 +2,26 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
 
+import { AddTestItemDialog } from '~/components/admin/tests/AddTestItemDialog';
+import { AdminTestsActionToast } from '~/components/admin/tests/AdminTestsActionToast';
+import { TestPromptsSection } from '~/components/admin/tests/TestPromptsSection';
 import { Button } from '~/components/ui/button';
 import {
-  Table,
   TableBody,
   TableCell,
   TableHead,
   TableHeader,
   TableRow,
 } from '~/components/ui/table';
-import { AdminTestsActionToast } from '~/components/admin/tests/AdminTestsActionToast';
-import { TestHistoricalTrendsCharts } from '~/components/admin/tests/TestHistoricalTrendsCharts';
 import {
   getTestById,
+  getTestItemSuggestionRows,
   getTestItemsByTestId,
   listTestResultsByTestId,
 } from '~/lib/tests/repository';
+import { buildSuggestionListsFromTestItems } from '~/lib/tests/suggestion-lists';
 
+import { TestHistoricalTrendsCharts } from '~/components/admin/tests/TestHistoricalTrendsCharts';
 import { deleteTestRunAction, runTestAction } from '../actions';
 
 export const metadata = {
@@ -58,7 +61,10 @@ type PageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 };
 
-export default async function AdminTestDetailsPage({ params, searchParams }: PageProps) {
+export default async function AdminTestDetailsPage({
+  params,
+  searchParams,
+}: PageProps) {
   await connection();
   const { testId } = await params;
   const query = await searchParams;
@@ -72,9 +78,10 @@ export default async function AdminTestDetailsPage({ params, searchParams }: Pag
     notFound();
   }
 
-  const [items, results] = await Promise.all([
+  const [items, results, suggestionRows] = await Promise.all([
     getTestItemsByTestId(testId),
     listTestResultsByTestId(testId, 20),
+    getTestItemSuggestionRows(testId),
   ]);
   const trendRuns = [...results].reverse();
   const trendData = trendRuns.map((run) => ({
@@ -82,10 +89,13 @@ export default async function AdminTestDetailsPage({ params, searchParams }: Pag
       typeof run.elapsed_ms === 'number'
         ? Number((run.elapsed_ms / 1000).toFixed(2))
         : 0,
-    passRate: run.total_items > 0 ? (run.passed_items / run.total_items) * 100 : 0,
+    passRate:
+      run.total_items > 0 ? (run.passed_items / run.total_items) * 100 : 0,
     startedAtLabel: formatShortDate(run.started_at),
     status: run.status || 'unknown',
   }));
+
+  const suggestionLists = buildSuggestionListsFromTestItems(suggestionRows);
 
   return (
     <div className="flex flex-1 bg-slate-50">
@@ -104,12 +114,21 @@ export default async function AdminTestDetailsPage({ params, searchParams }: Pag
                 File: {test.source_file_name} ({test.row_count} prompts)
               </p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <AddTestItemDialog
+                returnPath={`/admin/tests/${test.id}`}
+                suggestionLists={suggestionLists}
+                testId={test.id}
+              />
               <Button asChild size="sm" variant="outline">
                 <Link href="/admin/tests">Back to tests</Link>
               </Button>
               <form action={runTestAction}>
-                <input name="returnPath" type="hidden" value={`/admin/tests/${test.id}`} />
+                <input
+                  name="returnPath"
+                  type="hidden"
+                  value={`/admin/tests/${test.id}`}
+                />
                 <input name="testId" type="hidden" value={test.id} />
                 <Button size="sm" type="submit">
                   Run dataset
@@ -119,115 +138,104 @@ export default async function AdminTestDetailsPage({ params, searchParams }: Pag
           </div>
         </section>
 
-        <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-          <h2 className="text-lg font-semibold text-slate-900">Recent runs</h2>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Run id</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Pass/fail</TableHead>
-                <TableHead>Elapsed</TableHead>
-                <TableHead>Started</TableHead>
-                <TableHead>Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {results.length === 0 ? (
-                <TableRow>
-                  <TableCell className="text-slate-500" colSpan={6}>
-                    No runs yet for this dataset.
-                  </TableCell>
-                </TableRow>
-              ) : (
-                results.map((result) => (
-                  <TableRow key={result.id}>
-                    <TableCell className="font-mono text-xs">
-                      <Link
-                        className="text-sky-700 underline-offset-2 hover:underline"
-                        href={`/admin/tests/${test.id}/runs/${result.id}`}
-                      >
-                        {result.id}
-                      </Link>
-                    </TableCell>
-                    <TableCell>{result.status}</TableCell>
-                    <TableCell>
-                      {result.passed_items}/{result.total_items} passed
-                    </TableCell>
-                    <TableCell>
-                      {formatDurationSeconds(result.elapsed_ms)}
-                    </TableCell>
-                    <TableCell>{formatDate(result.started_at)}</TableCell>
-                    <TableCell>
-                      <div className="flex flex-wrap gap-2">
-                        <Button asChild size="sm" variant="outline">
-                          <Link href={`/admin/tests/${test.id}/runs/${result.id}`}>
-                            View run
-                          </Link>
-                        </Button>
-                        <form action={deleteTestRunAction}>
-                          <input
-                            name="returnPath"
-                            type="hidden"
-                            value={`/admin/tests/${test.id}`}
-                          />
-                          <input name="testId" type="hidden" value={test.id} />
-                          <input name="runId" type="hidden" value={result.id} />
-                          <Button size="sm" type="submit" variant="destructive">
-                            Delete run
-                          </Button>
-                        </form>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </section>
-
         <TestHistoricalTrendsCharts runs={trendData} />
 
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-          <h2 className="text-lg font-semibold text-slate-900">
-            Test prompts ({items.length})
-          </h2>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Row</TableHead>
-                <TableHead>Prompt</TableHead>
-                <TableHead>Expected</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {items.slice(0, 100).map((item) => (
-                <TableRow key={item.id}>
-                  <TableCell>{item.row_index}</TableCell>
-                  <TableCell className="max-w-[480px] whitespace-normal">
-                    {item.prompt}
-                  </TableCell>
-                  <TableCell>
-                    {item.expected_should_answer === null
-                      ? 'n/a'
-                      : item.expected_should_answer
-                        ? 'should answer'
-                        : 'should decline'}
-                    {item.expected_result_type
-                      ? ` (${item.expected_result_type})`
-                      : ''}
-                  </TableCell>
+          <h2 className="text-lg font-semibold text-slate-900">Recent runs</h2>
+          <div className="relative mt-4 max-h-[min(48vh,32rem)] overflow-auto overscroll-contain rounded-2xl border border-slate-200">
+            <table className="w-full min-w-[640px] caption-bottom text-sm">
+              <TableHeader className="sticky top-0 z-10 bg-white shadow-[0_1px_0_0_rgb(226_232_240)] [&_tr]:border-b-0">
+                <TableRow>
+                  <TableHead>Run id</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Pass/fail</TableHead>
+                  <TableHead>Elapsed</TableHead>
+                  <TableHead>Started</TableHead>
+                  <TableHead>Actions</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-          {items.length > 100 ? (
-            <p className="mt-3 text-xs text-slate-500">
-              Showing first 100 prompts for performance.
-            </p>
-          ) : null}
+              </TableHeader>
+              <TableBody>
+                {results.length === 0 ? (
+                  <TableRow>
+                    <TableCell className="text-slate-500" colSpan={6}>
+                      No runs yet for this dataset.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  results.map((result) => (
+                    <TableRow key={result.id}>
+                      <TableCell className="font-mono text-xs">
+                        <Link
+                          className="text-sky-700 underline-offset-2 hover:underline"
+                          href={`/admin/tests/${test.id}/runs/${result.id}`}
+                        >
+                          {result.id}
+                        </Link>
+                      </TableCell>
+                      <TableCell>{result.status}</TableCell>
+                      <TableCell>
+                        {result.passed_items}/{result.total_items} passed
+                      </TableCell>
+                      <TableCell>
+                        {formatDurationSeconds(result.elapsed_ms)}
+                      </TableCell>
+                      <TableCell>{formatDate(result.started_at)}</TableCell>
+                      <TableCell>
+                        <div className="flex flex-wrap gap-2">
+                          <Button asChild size="sm" variant="outline">
+                            <Link
+                              href={`/admin/tests/${test.id}/runs/${result.id}`}
+                            >
+                              View run
+                            </Link>
+                          </Button>
+                          <form action={deleteTestRunAction}>
+                            <input
+                              name="returnPath"
+                              type="hidden"
+                              value={`/admin/tests/${test.id}`}
+                            />
+                            <input
+                              name="testId"
+                              type="hidden"
+                              value={test.id}
+                            />
+                            <input
+                              name="runId"
+                              type="hidden"
+                              value={result.id}
+                            />
+                            <Button
+                              size="sm"
+                              type="submit"
+                              variant="destructive"
+                            >
+                              Delete run
+                            </Button>
+                          </form>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </table>
+          </div>
         </section>
 
+        <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
+          <TestPromptsSection
+            items={items.map((item) => ({
+              id: item.id,
+              row_index: item.row_index,
+              prompt: item.prompt,
+              expected_should_answer: item.expected_should_answer,
+              expected_result_type: item.expected_result_type,
+            }))}
+            returnPath={`/admin/tests/${test.id}`}
+            testId={test.id}
+          />
+        </section>
       </main>
     </div>
   );

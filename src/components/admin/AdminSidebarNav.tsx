@@ -12,6 +12,9 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useMemo, useState } from 'react';
 
+import { Button } from '~/components/ui/button';
+import { cn } from '~/lib/utils';
+
 type NavItem = {
   type: 'link';
   label: string;
@@ -137,12 +140,13 @@ function NavSection({ items, title }: { items: NavEntry[]; title?: string }) {
 
           return (
             <div className="rounded-2xl" key={entry.label}>
-              <button
-                className={`flex w-full items-center gap-3 rounded-2xl px-3 py-2 text-sm font-medium transition ${
+              <Button
+                className={cn(
+                  'h-auto w-full justify-start rounded-2xl px-3 py-2 text-sm font-medium transition',
                   groupActive
-                    ? 'bg-sidebar-accent text-sidebar-foreground'
-                    : 'text-foreground/80 hover:bg-accent hover:text-foreground'
-                }`}
+                    ? 'bg-sidebar-accent text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground'
+                    : 'text-foreground/80 hover:bg-accent hover:text-foreground',
+                )}
                 onClick={() =>
                   setManualOpen((current) => ({
                     ...current,
@@ -150,13 +154,14 @@ function NavSection({ items, title }: { items: NavEntry[]; title?: string }) {
                   }))
                 }
                 type="button"
+                variant="ghost"
               >
                 <Icon className="size-4" />
                 <span className="flex-1 text-left">{entry.label}</span>
                 <ChevronRight
                   className={`size-4 transition ${isOpen ? 'rotate-90' : ''}`}
                 />
-              </button>
+              </Button>
               {isOpen ? (
                 <div className="mt-1 space-y-1 pl-10">
                   {entry.items.map((item) => {

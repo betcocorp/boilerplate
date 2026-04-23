@@ -1,3 +1,10 @@
+import { Search } from 'lucide-react';
+
+import { Button } from '~/components/ui/button';
+import { Input } from '~/components/ui/input';
+import { Label } from '~/components/ui/label';
+import { NativeSelect } from '~/components/ui/native-select';
+
 function ProductCardSkeleton({ index }: { index: number }) {
   return (
     <article
@@ -53,38 +60,62 @@ export default function Loading() {
             </p>
           </div>
 
-          <div className="mt-8 grid gap-3 lg:grid-cols-[minmax(0,1.6fr)_minmax(220px,0.8fr)_120px_160px_auto]">
-            <input
-              className="h-12 rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-400 outline-none ring-0"
-              disabled
-              placeholder="Ask something like: peroxide bathroom disinfectant"
-              type="search"
-            />
-            <input
-              className="h-12 rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-400 outline-none ring-0"
-              disabled
-              placeholder="Optional product line key"
-              type="text"
-            />
-            <input
-              className="h-12 rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-400 outline-none ring-0"
-              disabled
-              placeholder="8"
-              type="number"
-            />
-            <input
-              className="h-12 rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-400 outline-none ring-0"
-              disabled
-              placeholder="0.65 or 65"
-              type="text"
-            />
-            <button
-              className="inline-flex h-12 items-center justify-center rounded-2xl bg-slate-950 px-6 text-sm font-semibold text-white opacity-80"
+          <div className="mt-8 grid gap-3 lg:grid-cols-[minmax(0,1.4fr)_minmax(140px,0.5fr)_minmax(220px,0.8fr)_120px_160px_auto]">
+            <div className="flex flex-col gap-2">
+              <Label className="text-sm font-medium text-slate-700">Query</Label>
+              <Input
+                className="h-12 rounded-2xl px-4"
+                disabled
+                placeholder="Ask something like: peroxide bathroom disinfectant"
+                type="search"
+              />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label className="text-sm font-medium text-slate-700">Scope</Label>
+              <NativeSelect className="h-12 rounded-2xl px-4" disabled defaultValue="all">
+                <option value="all">All</option>
+                <option value="products">Products</option>
+                <option value="sds">SDS</option>
+              </NativeSelect>
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label className="text-sm font-medium text-slate-700">
+                Product line key
+              </Label>
+              <Input
+                className="h-12 rounded-2xl px-4"
+                disabled
+                placeholder="Optional product line key"
+                type="text"
+              />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label className="text-sm font-medium text-slate-700">Limit</Label>
+              <Input
+                className="h-12 rounded-2xl px-4"
+                disabled
+                placeholder="8"
+                type="number"
+              />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label className="text-sm font-medium text-slate-700">
+                Similarity threshold
+              </Label>
+              <Input
+                className="h-12 rounded-2xl px-4"
+                disabled
+                placeholder="0.65 or 65"
+                type="text"
+              />
+            </div>
+            <Button
+              className="mt-auto h-12 rounded-2xl px-6 font-semibold opacity-80"
               disabled
               type="button"
             >
-              Run search
-            </button>
+              <Search className="size-4" />
+            </Button>
           </div>
           <p className="mt-3 text-sm text-slate-500">
             Minimum similarity is optional. Enter a decimal like `0.65` or a whole

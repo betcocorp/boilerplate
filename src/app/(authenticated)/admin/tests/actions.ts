@@ -3,12 +3,20 @@
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 
-import { parseCsvColumnNames, parseTestCsvContent } from '~/lib/tests/csv';
+import {
+  parseCsvColumnNames,
+  parseExpectedShouldAnswerFromForm,
+  parseTestCsvContent,
+} from '~/lib/tests/csv';
+import { buildManualAddTestItemPayload } from '~/lib/tests/manual-add-payload';
 import {
   createTestRecord,
   createTestResult,
   deleteTestById,
+  deleteTestItemForTest,
   deleteTestResultById,
+  getMaxRowIndexForTest,
+  getTestById,
   getTestItemsByTestId,
   getTestResultById,
   insertTestItems,
@@ -36,12 +44,13 @@ function toUtf8Text(bytes: Uint8Array) {
 }
 
 export async function uploadTestCsvAction(formData: FormData) {
+  const returnPath = normalizeReturnPath(formData.get('returnPath'), '/admin/tests');
   const file = formData.get('dataset');
   const nameValue = formData.get('name');
   const testName = typeof nameValue === 'string' && nameValue.trim() ? nameValue.trim() : null;
 
   if (!(file instanceof File) || file.size === 0) {
-    redirect(encodeMessage('error', 'Choose a CSV file before uploading.'));
+    redirect(encodeMessage(returnPath, 'error', 'Choose a CSV file before uploading.'));
   }
 
   const fileBytes = new Uint8Array(await file.arrayBuffer());
@@ -52,6 +61,7 @@ export async function uploadTestCsvAction(formData: FormData) {
   if (parsedRows.length === 0) {
     redirect(
       encodeMessage(
+        returnPath,
         'error',
         'No usable prompt rows were found in this CSV. Expected a `question` or `prompt` column.',
       ),
@@ -108,8 +118,111 @@ export async function uploadTestCsvAction(formData: FormData) {
   revalidatePath('/admin/tests');
   redirect(
     encodeMessage(
+      returnPath,
       'success',
       `Uploaded ${file.name} and stored ${parsedRows.length} test prompts.`,
+    ),
+  );
+}
+
+export async function addTestItemAction(formData: FormData) {
+  const returnPath = normalizeReturnPath(
+    formData.get('returnPath'),
+    '/admin/tests',
+  );
+  const testId = formData.get('testId');
+  if (typeof testId !== 'string' || !testId.trim()) {
+    redirect(encodeMessage(returnPath, 'error', 'Missing test id.'));
+  }
+
+  const promptRaw = formData.get('prompt');
+  const prompt = typeof promptRaw === 'string' ? promptRaw.trim() : '';
+  if (!prompt) {
+    redirect(
+      encodeMessage(returnPath, 'error', 'Enter a prompt before adding a row.'),
+    );
+  }
+
+  let test;
+  try {
+    test = await getTestById(testId);
+  } catch {
+    redirect(encodeMessage(returnPath, 'error', 'Test not found.'));
+  }
+
+  const expectedModeRaw = formData.get('expectedShouldAnswer');
+  const expected_should_answer =
+    typeof expectedModeRaw === 'string'
+      ? parseExpectedShouldAnswerFromForm(expectedModeRaw)
+      : null;
+
+  const expectedResultTypeRaw = formData.get('expectedResultType');
+  const expected_result_type =
+    typeof expectedResultTypeRaw === 'string' && expectedResultTypeRaw.trim()
+      ? expectedResultTypeRaw.trim()
+      : null;
+
+  const expectedCanonicalRaw = formData.get('expectedCanonicalProduct');
+  const expected_canonical_product =
+    typeof expectedCanonicalRaw === 'string' && expectedCanonicalRaw.trim()
+      ? expectedCanonicalRaw.trim()
+      : null;
+
+  const expectedReasonRaw = formData.get('expectedReasonCode');
+  const expected_reason_code =
+    typeof expectedReasonRaw === 'string' && expectedReasonRaw.trim()
+      ? expectedReasonRaw.trim()
+      : null;
+
+  const productMentionRaw = formData.get('productMention');
+  const questionCategoryRaw = formData.get('questionCategory');
+  const sourceStyleRaw = formData.get('sourceStyle');
+
+  const { input_payload, metadata } = buildManualAddTestItemPayload({
+    prompt,
+    expected_should_answer,
+    productMention:
+      typeof productMentionRaw === 'string' && productMentionRaw.trim()
+        ? productMentionRaw.trim()
+        : null,
+    questionCategory:
+      typeof questionCategoryRaw === 'string' && questionCategoryRaw.trim()
+        ? questionCategoryRaw.trim()
+        : null,
+    sourceStyle:
+      typeof sourceStyleRaw === 'string' && sourceStyleRaw.trim()
+        ? sourceStyleRaw.trim()
+        : null,
+  });
+
+  const maxRow = await getMaxRowIndexForTest(testId);
+  const row_index = maxRow + 1;
+
+  await insertTestItems([
+    {
+      test_id: testId,
+      row_index,
+      prompt,
+      expected_should_answer,
+      expected_result_type,
+      expected_canonical_product,
+      expected_reason_code,
+      input_payload,
+      metadata,
+    },
+  ]);
+
+  await updateTestRecord(testId, {
+    row_count: test.row_count + 1,
+  });
+
+  revalidatePath('/admin/tests');
+  revalidatePath(`/admin/tests/${testId}`);
+  redirect(
+    encodeMessage(
+      returnPath,
+      'success',
+      `Added prompt row ${row_index}.`,
     ),
   );
 }
@@ -165,6 +278,35 @@ export async function deleteTestAction(formData: FormData) {
   await deleteTestById(testId);
   revalidatePath('/admin/tests');
   redirect(encodeMessage(returnPath, 'success', 'Test deleted.'));
+}
+
+export async function deleteTestItemAction(formData: FormData) {
+  const testId = formData.get('testId');
+  const testItemId = formData.get('testItemId');
+
+  if (typeof testId !== 'string' || !testId.trim()) {
+    redirect(encodeMessage('/admin/tests', 'error', 'Missing test id.'));
+  }
+
+  const returnPath = normalizeReturnPath(
+    formData.get('returnPath'),
+    `/admin/tests/${testId}`,
+  );
+
+  if (typeof testItemId !== 'string' || !testItemId.trim()) {
+    redirect(encodeMessage(returnPath, 'error', 'Missing prompt id.'));
+  }
+
+  const removed = await deleteTestItemForTest(testItemId, testId);
+  if (!removed) {
+    redirect(
+      encodeMessage(returnPath, 'error', 'That prompt was not found on this dataset.'),
+    );
+  }
+
+  revalidatePath('/admin/tests');
+  revalidatePath(`/admin/tests/${testId}`);
+  redirect(encodeMessage(returnPath, 'success', 'Prompt removed from dataset.'));
 }
 
 export async function deleteTestRunAction(formData: FormData) {

@@ -4,6 +4,10 @@ import { connection } from 'next/server';
 
 import { RagQueryAutocomplete } from '~/components/admin/RagQueryAutocomplete';
 import { RagSearchTimingPanel } from '~/components/admin/RagSearchTimingPanel';
+import { Button } from '~/components/ui/button';
+import { Input } from '~/components/ui/input';
+import { Label } from '~/components/ui/label';
+import { NativeSelect } from '~/components/ui/native-select';
 import { searchProductChunks } from '~/lib/rag/search';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
@@ -264,68 +268,68 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
             className="mt-8 grid gap-3 lg:grid-cols-[minmax(0,1.4fr)_minmax(140px,0.5fr)_minmax(220px,0.8fr)_120px_160px_auto]"
             method="get"
           >
-            <label className="flex flex-col gap-2">
-              <span className="text-sm font-medium text-slate-700">Query</span>
+            <div className="flex flex-col gap-2">
+              <Label className="text-sm font-medium text-slate-700">Query</Label>
               <RagQueryAutocomplete
                 defaultValue={query}
                 options={popularQueries}
                 name="q"
                 placeholder="Ask something like: peroxide bathroom disinfectant"
               />
-            </label>
-            <label className="flex flex-col gap-2">
-              <span className="text-sm font-medium text-slate-700">Scope</span>
-              <select
-                className="h-12 rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none ring-0 transition focus:border-sky-500"
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label className="text-sm font-medium text-slate-700">Scope</Label>
+              <NativeSelect
+                className="h-12 rounded-2xl px-4"
                 defaultValue={scope}
                 name="scope"
               >
                 <option value="all">All</option>
                 <option value="products">Products</option>
                 <option value="sds">SDS</option>
-              </select>
-            </label>
-            <label className="flex flex-col gap-2">
-              <span className="text-sm font-medium text-slate-700">
+              </NativeSelect>
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label className="text-sm font-medium text-slate-700">
                 Product line key
-              </span>
-              <input
-                className="h-12 rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none ring-0 transition focus:border-sky-500"
+              </Label>
+              <Input
+                className="h-12 rounded-2xl px-4"
                 defaultValue={productLineKey}
                 name="productLineKey"
                 placeholder="Optional product line key"
                 type="text"
               />
-            </label>
-            <label className="flex flex-col gap-2">
-              <span className="text-sm font-medium text-slate-700">Limit</span>
-              <input
-                className="h-12 rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none ring-0 transition focus:border-sky-500"
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label className="text-sm font-medium text-slate-700">Limit</Label>
+              <Input
+                className="h-12 rounded-2xl px-4"
                 defaultValue={String(limit)}
-                max="20"
-                min="1"
+                max={20}
+                min={1}
                 name="limit"
                 type="number"
               />
-            </label>
-            <label className="flex flex-col gap-2">
-              <span className="text-sm font-medium text-slate-700">
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label className="text-sm font-medium text-slate-700">
                 Similarity threshold
-              </span>
-              <input
-                className="h-12 rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none ring-0 transition focus:border-sky-500"
+              </Label>
+              <Input
+                className="h-12 rounded-2xl px-4"
                 defaultValue={rawMinSimilarity}
                 name="minSimilarity"
                 placeholder="0.65 or 65"
                 type="text"
               />
-            </label>
-            <button
-              className="mt-auto inline-flex h-12 items-center justify-center rounded-2xl bg-slate-950 px-6 text-sm font-semibold text-white transition hover:bg-slate-800"
+            </div>
+            <Button
+              className="mt-auto h-12 rounded-2xl px-6 font-semibold"
               type="submit"
             >
               <Search className="size-4" />
-            </button>
+            </Button>
           </form>
           <p className="mt-3 text-sm text-slate-500">
             Minimum similarity is optional. Enter a decimal like `0.65` or a

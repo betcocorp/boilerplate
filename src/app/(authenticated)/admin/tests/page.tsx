@@ -138,6 +138,7 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <h2 className="text-lg font-semibold text-slate-900">Upload CSV dataset</h2>
           <form action={uploadTestCsvAction} className="mt-4 grid gap-4 sm:grid-cols-2">
+            <input name="returnPath" type="hidden" value="/admin/tests" />
             <div className="flex flex-col gap-2">
               <Label className="text-sm text-slate-700" htmlFor="test-name-input">
                 Test name

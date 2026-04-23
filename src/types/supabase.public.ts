@@ -94,6 +94,64 @@ export type Database = {
           },
         ]
       }
+      agent_message_feedback: {
+        Row: {
+          comment: string | null
+          conversation_id: string
+          created_at: string
+          id: string
+          message_id: string
+          rating: string
+          reason_code: string | null
+          updated_at: string
+          workflow_run_id: string | null
+        }
+        Insert: {
+          comment?: string | null
+          conversation_id: string
+          created_at?: string
+          id?: string
+          message_id: string
+          rating: string
+          reason_code?: string | null
+          updated_at?: string
+          workflow_run_id?: string | null
+        }
+        Update: {
+          comment?: string | null
+          conversation_id?: string
+          created_at?: string
+          id?: string
+          message_id?: string
+          rating?: string
+          reason_code?: string | null
+          updated_at?: string
+          workflow_run_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "agent_message_feedback_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: false
+            referencedRelation: "agent_conversations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "agent_message_feedback_message_id_fkey"
+            columns: ["message_id"]
+            isOneToOne: false
+            referencedRelation: "agent_messages"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "agent_message_feedback_workflow_run_id_fkey"
+            columns: ["workflow_run_id"]
+            isOneToOne: false
+            referencedRelation: "workflow_runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       audit_logs: {
         Row: {
           conversation_id: string | null

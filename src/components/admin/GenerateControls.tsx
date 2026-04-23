@@ -5,6 +5,10 @@ import { Loader2 } from 'lucide-react';
 import moment from 'moment';
 import { toast } from 'sonner';
 
+import { Button } from '~/components/ui/button';
+import { Input } from '~/components/ui/input';
+import { Label } from '~/components/ui/label';
+
 import {
   type GenerateActionState,
   runGenerateAction,
@@ -44,24 +48,6 @@ function formatDuration(durationMs: number) {
   const seconds = totalSeconds % 60;
 
   return `${minutes}:${seconds.toString().padStart(2, '0')}`;
-}
-
-function ActionButton({
-  label,
-  disabled,
-}: {
-  label: string;
-  disabled: boolean;
-}) {
-  return (
-    <button
-      className="inline-flex h-12 items-center justify-center rounded-2xl bg-slate-950 px-6 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
-      disabled={disabled}
-      type="submit"
-    >
-      {label}
-    </button>
-  );
 }
 
 export function GenerateControls({
@@ -141,38 +127,38 @@ export function GenerateControls({
       </div>
 
       <div className="mt-8 grid gap-4 md:grid-cols-3">
-        <label className="flex flex-col gap-2">
-          <span className="text-sm font-medium text-slate-700">Language code</span>
-          <input
-            className="h-12 rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none ring-0 transition focus:border-sky-500"
+        <div className="flex flex-col gap-2">
+          <Label className="text-sm font-medium text-slate-700">Language code</Label>
+          <Input
+            className="h-12 rounded-2xl px-4"
             onChange={(event) => setLanguageCode(event.target.value.toUpperCase())}
             value={languageCode}
           />
-        </label>
-        <label className="flex flex-col gap-2">
-          <span className="text-sm font-medium text-slate-700">
+        </div>
+        <div className="flex flex-col gap-2">
+          <Label className="text-sm font-medium text-slate-700">
             Embedding batch size
-          </span>
-          <input
-            className="h-12 rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none ring-0 transition focus:border-sky-500"
-            min="1"
+          </Label>
+          <Input
+            className="h-12 rounded-2xl px-4"
+            min={1}
             onChange={(event) => setBatchSize(event.target.value)}
             type="number"
             value={batchSize}
           />
-        </label>
-        <label className="flex flex-col gap-2">
-          <span className="text-sm font-medium text-slate-700">
+        </div>
+        <div className="flex flex-col gap-2">
+          <Label className="text-sm font-medium text-slate-700">
             Max batches per embedding run
-          </span>
-          <input
-            className="h-12 rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none ring-0 transition focus:border-sky-500"
-            min="1"
+          </Label>
+          <Input
+            className="h-12 rounded-2xl px-4"
+            min={1}
             onChange={(event) => setMaxBatches(event.target.value)}
             type="number"
             value={maxBatches}
           />
-        </label>
+        </div>
       </div>
 
       <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -196,7 +182,14 @@ export function GenerateControls({
             <input name="languageCode" type="hidden" value={languageCode} />
             <input name="batchSize" type="hidden" value={batchSize} />
             <input name="maxBatches" type="hidden" value={maxBatches} />
-            <ActionButton disabled={pending} label={pending ? 'Working...' : label} />
+            <Button
+              className="h-12 rounded-2xl px-6 font-semibold"
+              disabled={pending}
+              type="submit"
+              variant="default"
+            >
+              {pending ? 'Working...' : label}
+            </Button>
           </form>
         ))}
       </div>

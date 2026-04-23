@@ -1,5 +1,9 @@
 import Link from 'next/link';
 import { connection } from 'next/server';
+
+import { Button } from '~/components/ui/button';
+import { Input } from '~/components/ui/input';
+
 import { getSupabaseServerClient } from '~/supabase/clients/server';
 import type { Tables } from '~/types/supabase.legacy';
 
@@ -259,19 +263,19 @@ export default async function ProductsPage({
             action={PRODUCTS_ROUTE}
             method="get"
           >
-            <input
-              className="h-12 flex-1 rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none ring-0 transition focus:border-sky-500"
+            <Input
+              className="h-12 flex-1 rounded-2xl px-4"
               type="search"
               name="q"
               defaultValue={searchValue}
               placeholder="Search by title, SKU, product ID, or description"
             />
-            <button
-              className="inline-flex h-12 items-center justify-center rounded-2xl bg-slate-950 px-6 text-sm font-semibold text-white transition hover:bg-slate-800"
+            <Button
+              className="h-12 shrink-0 rounded-2xl px-6 font-semibold"
               type="submit"
             >
               Search products
-            </button>
+            </Button>
           </form>
         </section>
 
