@@ -15,6 +15,7 @@ import {
 import { AdminTestsActionToast } from '~/components/admin/tests/AdminTestsActionToast';
 import { RunAtAGlanceCharts } from '~/components/admin/tests/RunAtAGlanceCharts';
 import { RunExecutionProgress } from '~/components/admin/tests/RunExecutionProgress';
+import { RunItemResultsCsvDownload } from '~/components/admin/tests/RunItemResultsCsvDownload';
 import { listWorkflowRunsByIds } from '~/lib/conversations/workflow-repository';
 import { resolveResponsesModel } from '~/lib/openai/client';
 import {
@@ -22,7 +23,7 @@ import {
   getTestById,
   getTestItemsByTestId,
   getTestResultById,
-  listResultItemsByResultId,
+  listAllResultItemsByResultId,
 } from '~/lib/tests/repository';
 import { deleteTestRunAction } from '../../../actions';
 
@@ -116,6 +117,19 @@ function extractTimingBreakdown(responsePayload: unknown) {
   };
 }
 
+function formatTimingBreakdownLabel(responsePayload: unknown): string {
+  const timing = extractTimingBreakdown(responsePayload);
+  if (!timing) {
+    return 'n/a';
+  }
+
+  const searchMsLabel =
+    typeof timing.searchMs === 'number'
+      ? `${timing.searchMs.toFixed(1)} ms`
+      : 'n/a';
+  return `rounds: ${timing.toolRounds} | cache: ${timing.cacheSource || 'n/a'} | search: ${searchMsLabel}`;
+}
+
 type PageProps = {
   params: Promise<{ testId: string; runId: string }>;
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -154,11 +168,13 @@ export default async function AdminTestRunDetailsPage({ params, searchParams }: 
     notFound();
   }
 
-  const [resultItems, testItems, completedFromRows] = await Promise.all([
-    listResultItemsByResultId(result.id, 200),
+  const [allResultItems, testItems, completedFromRows] = await Promise.all([
+    listAllResultItemsByResultId(result.id),
     getTestItemsByTestId(test.id),
     countResultItemsByResultId(result.id),
   ]);
+  const resultItems = allResultItems;
+  const displayResultItems = allResultItems.slice(0, 200);
   const progress = extractProgress(result.summary, result.total_items);
   const initialTotalItems = Math.max(progress.totalItems, result.total_items);
   const initialCompletedItemsRaw = Math.max(
@@ -218,6 +234,19 @@ export default async function AdminTestRunDetailsPage({ params, searchParams }: 
       return [workflowRun.id, resolveResponsesModel(modelTag)] as const;
     }),
   );
+
+  const itemLevelCsvRows = allResultItems.map((row) => ({
+    row_index: row.row_index,
+    prompt: promptByItemId.get(row.test_item_id) ?? '',
+    passed: row.passed,
+    elapsed_seconds: Number((row.elapsed_ms / 1000).toFixed(3)),
+    status: row.status,
+    model:
+      modelByWorkflowRunId.get(extractWorkflowRunId(row.response_payload) || '') ?? 'n/a',
+    timing_breakdown: formatTimingBreakdownLabel(row.response_payload),
+    message: row.error_message || row.response_text || 'n/a',
+    test_item_id: row.test_item_id,
+  }));
 
   return (
     <div className="flex flex-1 bg-slate-50">
@@ -295,7 +324,13 @@ export default async function AdminTestRunDetailsPage({ params, searchParams }: 
         />
 
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-          <h2 className="text-lg font-semibold text-slate-900">Item-level results</h2>
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-lg font-semibold text-slate-900">Item-level results</h2>
+            <RunItemResultsCsvDownload
+              fileBase={`${test.name}-run-${result.id}`}
+              rows={itemLevelCsvRows}
+            />
+          </div>
           <Table>
             <TableHeader>
               <TableRow>
@@ -311,14 +346,14 @@ export default async function AdminTestRunDetailsPage({ params, searchParams }: 
               </TableRow>
             </TableHeader>
             <TableBody>
-              {resultItems.length === 0 ? (
+              {displayResultItems.length === 0 ? (
                 <TableRow>
                   <TableCell className="text-slate-500" colSpan={9}>
                     No item-level results yet.
                   </TableCell>
                 </TableRow>
               ) : (
-                resultItems.map((row) => (
+                displayResultItems.map((row) => (
                   <TableRow key={row.id}>
                     <TableCell>
                       <Link
@@ -348,18 +383,7 @@ export default async function AdminTestRunDetailsPage({ params, searchParams }: 
                         'n/a'}
                     </TableCell>
                     <TableCell className="max-w-[220px] whitespace-normal text-xs text-slate-600">
-                      {(() => {
-                        const timing = extractTimingBreakdown(row.response_payload);
-                        if (!timing) {
-                          return 'n/a';
-                        }
-
-                        const searchMsLabel =
-                          typeof timing.searchMs === 'number'
-                            ? `${timing.searchMs.toFixed(1)} ms`
-                            : 'n/a';
-                        return `rounds: ${timing.toolRounds} | cache: ${timing.cacheSource || 'n/a'} | search: ${searchMsLabel}`;
-                      })()}
+                      {formatTimingBreakdownLabel(row.response_payload)}
                     </TableCell>
                     <TableCell className="max-w-[420px] whitespace-normal text-xs text-slate-600">
                       {row.error_message || row.response_text || 'n/a'}
@@ -377,7 +401,8 @@ export default async function AdminTestRunDetailsPage({ params, searchParams }: 
             </TableBody>
           </Table>
           <p className="mt-3 text-xs text-slate-500">
-            Showing up to 200 item results from {formatDate(result.created_at)}.
+            Showing {Math.min(200, allResultItems.length)} of {allResultItems.length} item-level
+            results from {formatDate(result.created_at)}.
           </p>
         </section>
       </main>

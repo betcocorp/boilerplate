@@ -250,6 +250,8 @@ export async function getTestResultById(testResultId: string) {
   return assertNoError(result) as TestResultRecord;
 }
 
+const RESULT_ITEMS_PAGE_SIZE = 500;
+
 export async function listResultItemsByResultId(testResultId: string, limit = 200) {
   const supabase = getSupabaseServiceRoleClient();
   const result = await supabase
@@ -260,6 +262,31 @@ export async function listResultItemsByResultId(testResultId: string, limit = 20
     .limit(limit);
 
   return (assertNoError(result) || []) as TestResultItemRecord[];
+}
+
+/** All rows for a run (Supabase default `max_rows` requires pagination beyond ~1000). */
+export async function listAllResultItemsByResultId(testResultId: string) {
+  const supabase = getSupabaseServiceRoleClient();
+  const all: TestResultItemRecord[] = [];
+  let from = 0;
+
+  while (true) {
+    const result = await supabase
+      .from('test_result_items')
+      .select('*')
+      .eq('test_result_id', testResultId)
+      .order('row_index', { ascending: true })
+      .range(from, from + RESULT_ITEMS_PAGE_SIZE - 1);
+
+    const page = (assertNoError(result) || []) as TestResultItemRecord[];
+    all.push(...page);
+    if (page.length < RESULT_ITEMS_PAGE_SIZE) {
+      break;
+    }
+    from += RESULT_ITEMS_PAGE_SIZE;
+  }
+
+  return all;
 }
 
 export async function listResultItemsByTestItemId(testItemId: string, limit = 500) {

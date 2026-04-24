@@ -257,72 +257,80 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
               Search the RAG product line corpus semantically
             </h1>
             <p className="max-w-3xl text-base leading-7 text-slate-600">
-              Retrieval is one document per legacy product line. Semantic search is
-              constrained to English (`EN`) documents only. Chunks include rolled-up
-              size variants; filters only target product line keys.
+              Retrieval is one document per legacy product line. Semantic search
+              is constrained to English (`EN`) documents only. Chunks include
+              rolled-up size variants; filters only target product line keys.
             </p>
           </div>
 
-          <form
-            action={SEARCH_ROUTE}
-            className="mt-8 grid gap-3 lg:grid-cols-[minmax(0,1.4fr)_minmax(140px,0.5fr)_minmax(220px,0.8fr)_120px_160px_auto]"
-            method="get"
-          >
-            <div className="flex flex-col gap-2">
-              <Label className="text-sm font-medium text-slate-700">Query</Label>
-              <RagQueryAutocomplete
-                defaultValue={query}
-                options={popularQueries}
-                name="q"
-                placeholder="Ask something like: peroxide bathroom disinfectant"
-              />
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label className="text-sm font-medium text-slate-700">Scope</Label>
-              <NativeSelect
-                className="h-12 rounded-2xl px-4"
-                defaultValue={scope}
-                name="scope"
-              >
-                <option value="all">All</option>
-                <option value="products">Products</option>
-                <option value="sds">SDS</option>
-              </NativeSelect>
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label className="text-sm font-medium text-slate-700">
-                Product line key
-              </Label>
-              <Input
-                className="h-12 rounded-2xl px-4"
-                defaultValue={productLineKey}
-                name="productLineKey"
-                placeholder="Optional product line key"
-                type="text"
-              />
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label className="text-sm font-medium text-slate-700">Limit</Label>
-              <Input
-                className="h-12 rounded-2xl px-4"
-                defaultValue={String(limit)}
-                max={20}
-                min={1}
-                name="limit"
-                type="number"
-              />
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label className="text-sm font-medium text-slate-700">
-                Similarity threshold
-              </Label>
-              <Input
-                className="h-12 rounded-2xl px-4"
-                defaultValue={rawMinSimilarity}
-                name="minSimilarity"
-                placeholder="0.65 or 65"
-                type="text"
-              />
+          <form action={SEARCH_ROUTE} className="mt-8 flex gap-2" method="get">
+            <div className="flex flex-col gap-4 flex-1">
+              <div className="grid grid-cols-2 gap-2">
+                <div className="flex flex-col gap-2">
+                  <Label className="text-sm font-medium text-slate-700">
+                    Query
+                  </Label>
+                  <RagQueryAutocomplete
+                    defaultValue={query}
+                    options={popularQueries}
+                    name="q"
+                    placeholder="Ask something like: peroxide bathroom disinfectant"
+                  />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label className="text-sm font-medium text-slate-700">
+                    Product line key
+                  </Label>
+                  <Input
+                    className="h-12 rounded-2xl px-4"
+                    defaultValue={productLineKey}
+                    name="productLineKey"
+                    placeholder="Optional product line key"
+                    type="text"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <div className="flex flex-col gap-2">
+                  <Label className="text-sm font-medium text-slate-700">
+                    Scope
+                  </Label>
+                  <NativeSelect
+                    className="h-12 rounded-2xl px-4"
+                    defaultValue={scope}
+                    name="scope"
+                  >
+                    <option value="all">All</option>
+                    <option value="products">Products</option>
+                    <option value="sds">SDS</option>
+                  </NativeSelect>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label className="text-sm font-medium text-slate-700">
+                    Limit
+                  </Label>
+                  <Input
+                    className="h-12 rounded-2xl px-4"
+                    defaultValue={String(limit)}
+                    max={20}
+                    min={1}
+                    name="limit"
+                    type="number"
+                  />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label className="text-sm font-medium text-slate-700">
+                    Similarity threshold
+                  </Label>
+                  <Input
+                    className="h-12 rounded-2xl px-4"
+                    defaultValue={rawMinSimilarity}
+                    name="minSimilarity"
+                    placeholder="0.65 or 65"
+                    type="text"
+                  />
+                </div>
+              </div>
             </div>
             <Button
               className="mt-auto h-12 rounded-2xl px-6 font-semibold"

@@ -25,6 +25,9 @@ type TestHistoricalTrendsChartsProps = {
   runs: TrendRun[];
 };
 
+/** Matches `h-56` — explicit px avoids ResponsiveContainer measuring `-1` in CSS grid. */
+const CHART_HEIGHT_PX = 224;
+
 const STATUS_COLORS = ['#16a34a', '#0ea5e9', '#f59e0b', '#ef4444', '#6366f1', '#64748b'];
 
 export function TestHistoricalTrendsCharts({ runs }: TestHistoricalTrendsChartsProps) {
@@ -46,14 +49,19 @@ export function TestHistoricalTrendsCharts({ runs }: TestHistoricalTrendsChartsP
       {runs.length === 0 ? (
         <p className="text-sm text-slate-500">Run the dataset to start seeing trend charts.</p>
       ) : (
-        <div className="grid gap-6 lg:grid-cols-3">
-          <article className="rounded-2xl border border-slate-200 p-5">
+        <div className="grid min-w-0 gap-6 lg:grid-cols-3">
+          <article className="min-w-0 rounded-2xl border border-slate-200 p-5">
             <h3 className="text-sm font-semibold text-slate-900">Pass rate trend</h3>
             <p className="mt-1 text-xs text-slate-500">
               Newest: {runs[runs.length - 1]?.passRate.toFixed(1)}%
             </p>
-            <div className="mt-4 h-56">
-              <ResponsiveContainer height="100%" width="100%">
+            <div className="mt-4 h-56 min-h-[224px] min-w-0 w-full">
+              <ResponsiveContainer
+                debounce={32}
+                height={CHART_HEIGHT_PX}
+                minWidth={0}
+                width="100%"
+              >
                 <LineChart data={runs}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} />
                   <XAxis dataKey="startedAtLabel" tick={{ fontSize: 11 }} />
@@ -80,13 +88,18 @@ export function TestHistoricalTrendsCharts({ runs }: TestHistoricalTrendsChartsP
             </div>
           </article>
 
-          <article className="rounded-2xl border border-slate-200 p-5">
+          <article className="min-w-0 rounded-2xl border border-slate-200 p-5">
             <h3 className="text-sm font-semibold text-slate-900">Runtime trend</h3>
             <p className="mt-1 text-xs text-slate-500">
               Newest: {runs[runs.length - 1]?.elapsedSeconds.toFixed(2)} s
             </p>
-            <div className="mt-4 h-56">
-              <ResponsiveContainer height="100%" width="100%">
+            <div className="mt-4 h-56 min-h-[224px] min-w-0 w-full">
+              <ResponsiveContainer
+                debounce={32}
+                height={CHART_HEIGHT_PX}
+                minWidth={0}
+                width="100%"
+              >
                 <LineChart data={runs}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} />
                   <XAxis dataKey="startedAtLabel" tick={{ fontSize: 11 }} />
@@ -109,10 +122,15 @@ export function TestHistoricalTrendsCharts({ runs }: TestHistoricalTrendsChartsP
             </div>
           </article>
 
-          <article className="rounded-2xl border border-slate-200 p-5">
+          <article className="min-w-0 rounded-2xl border border-slate-200 p-5">
             <h3 className="text-sm font-semibold text-slate-900">Run status mix</h3>
-            <div className="mt-4 h-56">
-              <ResponsiveContainer height="100%" width="100%">
+            <div className="mt-4 h-56 min-h-[224px] min-w-0 w-full">
+              <ResponsiveContainer
+                debounce={32}
+                height={CHART_HEIGHT_PX}
+                minWidth={0}
+                width="100%"
+              >
                 <PieChart>
                   <Pie
                     cx="50%"

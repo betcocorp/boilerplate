@@ -18,7 +18,6 @@ import {
   listTestResultsByTestId,
   listTests,
 } from '~/lib/tests/repository';
-import { getSignedTestFileUrl } from '~/lib/tests/storage';
 
 import { deleteTestAction, runTestAction, uploadTestCsvAction } from './actions';
 
@@ -79,15 +78,9 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
   const tests = await listTests();
   const testRows = await Promise.all(
     tests.map(async (test) => {
-      const [latestResults, runsForSimilarity, fileUrl] = await Promise.all([
+      const [latestResults, runsForSimilarity] = await Promise.all([
         listTestResultsByTestId(test.id, 1),
         listTestResultsByTestId(test.id, 20),
-        test.source_bucket && test.source_key
-          ? getSignedTestFileUrl({
-              bucket: test.source_bucket,
-              key: test.source_key,
-            }).catch(() => null)
-          : Promise.resolve(null),
       ]);
 
       const runItems = await Promise.all(
@@ -110,7 +103,6 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
 
       return {
         ...test,
-        fileUrl,
         latestResult: latestResults[0] || null,
         similarityStats,
       };
@@ -180,7 +172,7 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
                 <TableHead>Rows</TableHead>
                 <TableHead>Uploaded</TableHead>
                 <TableHead>Latest run</TableHead>
-                <TableHead>Lowest/highest/avg similarity</TableHead>
+                <TableHead>Low/High/Avg</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Actions</TableHead>
               </TableRow>
@@ -196,24 +188,13 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
                 testRows.map((test) => (
                   <TableRow key={test.id}>
                     <TableCell className="max-w-[240px] truncate font-medium">
-                      {test.fileUrl ? (
-                        <a
-                          className="text-sky-700 underline-offset-2 hover:underline"
-                          href={test.fileUrl}
-                          rel="noreferrer"
-                          target="_blank"
-                          title={test.source_file_name}
-                        >
-                          {test.name}
-                        </a>
-                      ) : (
-                        <span
-                          className="text-slate-500"
-                          title="Unable to generate file link"
-                        >
-                          {test.name}
-                        </span>
-                      )}
+                      <Link
+                        className="text-sky-700 underline-offset-2 hover:underline"
+                        href={`/admin/tests/${test.id}`}
+                        title={test.name}
+                      >
+                        {test.name}
+                      </Link>
                     </TableCell>
                     <TableCell>{test.row_count}</TableCell>
                     <TableCell>{formatDate(test.uploaded_at)}</TableCell>

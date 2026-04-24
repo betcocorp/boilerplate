@@ -225,12 +225,16 @@ export default async function AdminTestDetailsPage({
 
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <TestPromptsSection
+            datasetName={test.name}
             items={items.map((item) => ({
               id: item.id,
               row_index: item.row_index,
               prompt: item.prompt,
               expected_should_answer: item.expected_should_answer,
               expected_result_type: item.expected_result_type,
+              expected_canonical_product: item.expected_canonical_product,
+              expected_reason_code: item.expected_reason_code,
+              input_payload: item.input_payload,
             }))}
             returnPath={`/admin/tests/${test.id}`}
             testId={test.id}
