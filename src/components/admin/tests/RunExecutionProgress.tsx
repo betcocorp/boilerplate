@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '~/components/ui/button';
+import { formatDate, formatDurationSeconds } from '~/lib/utils/time';
 
 type RunExecutionProgressProps = {
   runId: string;
@@ -10,6 +11,12 @@ type RunExecutionProgressProps = {
   initialCompletedItems: number;
   initialTotalItems: number;
   initialElapsedMs: number;
+  stats: {
+    passCount: number;
+    failCount: number;
+    incompleteCount: number;
+    started_at: string;
+  };
 };
 
 type RunStatusResponse = {
@@ -37,6 +44,7 @@ export function RunExecutionProgress({
   initialCompletedItems,
   initialTotalItems,
   initialElapsedMs,
+  stats,
 }: RunExecutionProgressProps) {
   const router = useRouter();
   const [status, setStatus] = useState(initialStatus);
@@ -44,16 +52,22 @@ export function RunExecutionProgress({
   const [totalItems, setTotalItems] = useState(initialTotalItems);
   const [elapsedMs, setElapsedMs] = useState(initialElapsedMs);
   const [progressPercent, setProgressPercent] = useState(
-    initialTotalItems > 0 ? Number(((initialCompletedItems / initialTotalItems) * 100).toFixed(2)) : 0,
+    initialTotalItems > 0
+      ? Number(((initialCompletedItems / initialTotalItems) * 100).toFixed(2))
+      : 0,
   );
-  const [actionPending, setActionPending] = useState<null | 'pause' | 'resume' | 'cancel'>(null);
+  const [actionPending, setActionPending] = useState<
+    null | 'pause' | 'resume' | 'cancel'
+  >(null);
   const latestSnapshot = useRef({
     status: initialStatus,
     completedItems: initialCompletedItems,
     totalItems: initialTotalItems,
     elapsedMs: initialElapsedMs,
     progressPercent:
-      initialTotalItems > 0 ? Number(((initialCompletedItems / initialTotalItems) * 100).toFixed(2)) : 0,
+      initialTotalItems > 0
+        ? Number(((initialCompletedItems / initialTotalItems) * 100).toFixed(2))
+        : 0,
   });
 
   useEffect(() => {
@@ -86,7 +100,10 @@ export function RunExecutionProgress({
         }
 
         const data = (await response.json()) as RunStatusResponse;
-        const nextTotalItems = Math.max(latestSnapshot.current.totalItems, data.totalItems);
+        const nextTotalItems = Math.max(
+          latestSnapshot.current.totalItems,
+          data.totalItems,
+        );
         const nextCompletedItemsRaw = Math.max(
           latestSnapshot.current.completedItems,
           data.completedItems,
@@ -98,7 +115,10 @@ export function RunExecutionProgress({
         const nextProgressPercent =
           nextTotalItems > 0
             ? Number(((nextCompletedItems / nextTotalItems) * 100).toFixed(2))
-            : Math.max(latestSnapshot.current.progressPercent, data.progressPercent);
+            : Math.max(
+                latestSnapshot.current.progressPercent,
+                data.progressPercent,
+              );
         const nextElapsedMs = isTerminalStatus(data.status)
           ? data.elapsedMs
           : Math.max(latestSnapshot.current.elapsedMs, data.elapsedMs);
@@ -150,15 +170,10 @@ export function RunExecutionProgress({
     }
     return Math.min(100, Math.max(0, progressPercent));
   }, [progressPercent]);
-  const elapsedLabel = useMemo(() => {
-    if (elapsedMs >= 3_600_000) {
-      return `${(elapsedMs / 3_600_000).toFixed(2)} hr`;
-    }
-    if (elapsedMs >= 60_000) {
-      return `${(elapsedMs / 60_000).toFixed(2)} min`;
-    }
-    return `${(elapsedMs / 1000).toFixed(2)} s`;
-  }, [elapsedMs]);
+  const elapsedLabel = useMemo(
+    () => formatDurationSeconds(elapsedMs),
+    [elapsedMs],
+  );
   const canPause = status === 'running';
   const canResume = status === 'paused';
   const canCancel = !isTerminalStatus(status) && status !== 'cancelled';
@@ -197,7 +212,13 @@ export function RunExecutionProgress({
 
   return (
     <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-      <h2 className="text-lg font-semibold text-slate-900">Run progress</h2>
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold text-slate-900">Run progress</h2>
+        <p className="text-sm text-slate-600">
+          <span className="font-semibold text-slate-900">Started:</span>{' '}
+          {formatDate(stats.started_at)}
+        </p>
+      </div>
       <p className="mt-2 text-sm text-slate-600">
         Current prompt: {completedItems} of {totalItems} completed
       </p>
@@ -207,11 +228,18 @@ export function RunExecutionProgress({
           style={{ width: `${clampedPercent}%` }}
         />
       </div>
-      <div className="mt-2 grid grid-cols-3 items-center text-xs text-slate-500">
+      <div className="mt-2 grid grid-cols-4 items-center text-xs text-slate-500">
         <span>Status: {status}</span>
         <span className="text-center">Elapsed: {elapsedLabel}</span>
+        <span className="text-center">
+          <p>
+            <span>Pass/fail/incomplete:</span> {stats.passCount}/
+            {stats.failCount}/{stats.incompleteCount}
+          </p>
+        </span>
         <span className="text-right">{clampedPercent.toFixed(2)}%</span>
       </div>
+
       <div className="mt-4 flex flex-wrap items-center gap-2">
         <Button
           disabled={!canPause || actionPending !== null}

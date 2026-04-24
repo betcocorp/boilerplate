@@ -23,39 +23,18 @@ import {
 import { buildSuggestionListsFromTestItems } from '~/lib/tests/suggestion-lists';
 
 import { TestHistoricalTrendsCharts } from '~/components/admin/tests/TestHistoricalTrendsCharts';
+import {
+  formatDate,
+  formatDurationSeconds,
+  formatShortDate,
+} from '~/lib/utils/time';
+
 import { deleteTestRunAction, runTestAction } from '../actions';
 
 export const metadata = {
   title: 'Test Details | Betco BEX',
   description: 'Review test rows and historical run performance.',
 };
-
-function formatDate(value: string) {
-  return new Intl.DateTimeFormat('en-US', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(new Date(value));
-}
-
-function formatShortDate(value: string) {
-  return new Intl.DateTimeFormat('en-US', {
-    month: 'short',
-    day: 'numeric',
-  }).format(new Date(value));
-}
-
-function formatDurationSeconds(value: number | null | undefined) {
-  if (typeof value !== 'number') {
-    return 'n/a';
-  }
-  if (value >= 3_600_000) {
-    return `${(value / 3_600_000).toFixed(2)} hr`;
-  }
-  if (value >= 60_000) {
-    return `${(value / 60_000).toFixed(2)} min`;
-  }
-  return `${(value / 1000).toFixed(2)} s`;
-}
 
 function extractItemSimilarityScore(responsePayload: unknown) {
   if (

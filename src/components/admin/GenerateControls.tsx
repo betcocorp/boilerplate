@@ -13,6 +13,7 @@ import {
   type GenerateActionState,
   runGenerateAction,
 } from '~/lib/rag/generate-actions';
+import { formatDurationMmSs } from '~/lib/utils/time';
 
 const initialGenerateActionState: GenerateActionState = {
   ok: false,
@@ -40,14 +41,6 @@ type GenerateControlsProps = {
 
 function formatTimestamp(timestamp: number) {
   return `${moment.utc(timestamp).format('YYYY-MM-DD HH:mm:ss')} UTC`;
-}
-
-function formatDuration(durationMs: number) {
-  const totalSeconds = Math.max(0, Math.round(durationMs / 1000));
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-
-  return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 }
 
 export function GenerateControls({
@@ -199,7 +192,7 @@ export function GenerateControls({
           <Loader2 className="size-4 animate-spin" />
           <span>
             Running the selected pipeline action. This page will update when the
-            step completes. Elapsed: {formatDuration(currentElapsedMs)}
+            step completes. Elapsed: {formatDurationMmSs(currentElapsedMs)}
           </span>
         </div>
       ) : null}
@@ -230,7 +223,7 @@ export function GenerateControls({
               ) : null}
             </div>
             <div className="shrink-0 text-xs font-medium opacity-80">
-              {formatTimestamp(state.timestamp)} • {formatDuration(state.durationMs)}
+              {formatTimestamp(state.timestamp)} • {formatDurationMmSs(state.durationMs)}
             </div>
           </div>
         </section>
@@ -291,7 +284,7 @@ export function GenerateControls({
                 <div className="flex items-center justify-between gap-3">
                   <p className="text-sm font-medium">{item.title}</p>
                   <span className="text-xs opacity-70">
-                    {item.description} • {formatDuration(item.durationMs)}
+                    {item.description} • {formatDurationMmSs(item.durationMs)}
                   </span>
                 </div>
               </div>

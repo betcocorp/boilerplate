@@ -1,17 +1,23 @@
+import {
+  DEFAULT_BEX_CHAT_AGENT_MODE,
+  isBexChatAgentMode,
+  type BexChatAgentMode,
+} from '~/lib/agents/agent-registry';
+
 const UI_CACHE_KEY = 'bex.admin.ui.v2';
 
 export type BexUiCache = {
   lastActiveConversationId: string | null;
   model: string;
   useValidator: boolean;
-  agentMode: 'orchestrator' | 'product' | 'bathroom' | 'dilution' | 'floor';
+  agentMode: BexChatAgentMode;
 };
 
 const defaultCache: BexUiCache = {
   lastActiveConversationId: null,
   model: 'preview',
   useValidator: false,
-  agentMode: 'orchestrator',
+  agentMode: DEFAULT_BEX_CHAT_AGENT_MODE,
 };
 
 export function loadUiCache(): BexUiCache {
@@ -39,14 +45,9 @@ export function loadUiCache(): BexUiCache {
         ? o.lastActiveConversationId.trim()
         : null;
     const useValidator = typeof o.useValidator === 'boolean' ? o.useValidator : false;
-    const agentMode =
-      o.agentMode === 'product' ||
-      o.agentMode === 'bathroom' ||
-      o.agentMode === 'dilution' ||
-      o.agentMode === 'floor' ||
-      o.agentMode === 'orchestrator'
-        ? o.agentMode
-        : 'orchestrator';
+    const agentMode = isBexChatAgentMode(o.agentMode)
+      ? o.agentMode
+      : DEFAULT_BEX_CHAT_AGENT_MODE;
 
     return { lastActiveConversationId, model, useValidator, agentMode };
   } catch {

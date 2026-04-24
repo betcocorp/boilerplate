@@ -1,5 +1,9 @@
 import { newCorrelationId } from '~/lib/observability/correlation-id';
 import {
+  DEFAULT_BEX_CHAT_AGENT_MODE,
+  type BexChatAgentMode,
+} from '~/lib/agents/agent-registry';
+import {
   createConversation,
   getConversationById,
   updateConversation,
@@ -24,7 +28,7 @@ export async function runBexChatTurn(input: {
   message: string;
   modelTag?: string;
   useValidator?: boolean;
-  agentMode?: 'orchestrator' | 'product' | 'bathroom' | 'dilution' | 'floor';
+  agentMode?: BexChatAgentMode;
   onWorkflowEvent?: (event: ProductSupportWorkflowEvent) => void;
   onAssistantDelta?: (delta: string) => void;
 }): Promise<BexChatTurnResult> {
@@ -63,7 +67,7 @@ export async function runBexChatTurn(input: {
     userMessage: trimmed,
     modelTag: input.modelTag,
     useValidator: input.useValidator ?? false,
-    agentMode: input.agentMode ?? 'orchestrator',
+    agentMode: input.agentMode ?? DEFAULT_BEX_CHAT_AGENT_MODE,
     previousOpenaiResponseId: conversation.latest_openai_response_id,
     onEvent: input.onWorkflowEvent,
     onAssistantDelta: input.onAssistantDelta,

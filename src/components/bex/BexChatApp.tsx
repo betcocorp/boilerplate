@@ -18,6 +18,11 @@ import { BexChatComposer } from '~/components/bex/BexChatComposer';
 import { BexChatMessages } from '~/components/bex/BexChatMessages';
 import { BexChatSidebar } from '~/components/bex/BexChatSidebar';
 import {
+  DEFAULT_BEX_CHAT_AGENT_MODE,
+  isBexChatAgentMode,
+  type BexChatAgentMode,
+} from '~/lib/agents/agent-registry';
+import {
   apiCreateConversation,
   apiDeleteConversation,
   apiFetchConversation,
@@ -58,9 +63,9 @@ export function BexChatApp() {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [model, setModel] = useState('preview');
   const [useValidator, setUseValidator] = useState(false);
-  const [agentMode, setAgentMode] = useState<
-    'orchestrator' | 'product' | 'bathroom' | 'dilution' | 'floor'
-  >('orchestrator');
+  const [agentMode, setAgentMode] = useState<BexChatAgentMode>(
+    DEFAULT_BEX_CHAT_AGENT_MODE,
+  );
   const [loadError, setLoadError] = useState<string | null>(null);
   const [feedbackSubmittingMessageId, setFeedbackSubmittingMessageId] = useState<string | null>(
     null,
@@ -511,16 +516,11 @@ export function BexChatApp() {
                 Agent mode
               </Label>
               <Select
-                onValueChange={(value) =>
-                  setAgentMode(
-                    value as
-                      | 'orchestrator'
-                      | 'product'
-                      | 'bathroom'
-                      | 'dilution'
-                      | 'floor',
-                  )
-                }
+                onValueChange={(value) => {
+                  if (isBexChatAgentMode(value)) {
+                    setAgentMode(value);
+                  }
+                }}
                 value={agentMode}
               >
                 <SelectTrigger

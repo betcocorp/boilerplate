@@ -1,5 +1,9 @@
 import { writeAuditLog } from '~/lib/audit/audit-log';
 import type { ToolTraceEntry } from '~/lib/audit/trace';
+import {
+  DEFAULT_BEX_CHAT_AGENT_MODE,
+  type BexChatAgentMode,
+} from '~/lib/agents/agent-registry';
 import { updateConversation } from '~/lib/conversations/conversation-repository';
 import type { SourceRef } from '~/lib/conversations/conversation-schemas';
 import {
@@ -442,13 +446,13 @@ export async function runProductSupportWorkflow(input: {
   userMessage: string;
   modelTag?: string;
   useValidator?: boolean;
-  agentMode?: 'orchestrator' | 'product' | 'bathroom' | 'dilution' | 'floor';
+  agentMode?: BexChatAgentMode;
   previousOpenaiResponseId?: string | null;
   onEvent?: (event: ProductSupportWorkflowEvent) => void;
   onAssistantDelta?: (delta: string) => void;
 }): Promise<ProductSupportFinalOutput> {
   const useValidator = input.useValidator ?? false;
-  const agentMode = input.agentMode ?? 'orchestrator';
+  const agentMode = input.agentMode ?? DEFAULT_BEX_CHAT_AGENT_MODE;
   const route = routeUserMessageToSme(input.userMessage);
   const routingDecision =
     agentMode === 'orchestrator'

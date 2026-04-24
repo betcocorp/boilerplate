@@ -19,6 +19,7 @@ import {
   listResultItemsByTestItemId,
   listTestResultsByTestId,
 } from '~/lib/tests/repository';
+import { formatDate, formatDurationSeconds } from '~/lib/utils/time';
 
 export const metadata = {
   title: 'Item History | Betco BEX',
@@ -28,20 +29,6 @@ export const metadata = {
 type PageProps = {
   params: Promise<{ testId: string; itemId: string }>;
 };
-
-function formatDate(value: string) {
-  return new Intl.DateTimeFormat('en-US', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(new Date(value));
-}
-
-function formatDurationSeconds(value: number | null | undefined) {
-  if (typeof value !== 'number') {
-    return 'n/a';
-  }
-  return `${(value / 1000).toFixed(2)} s`;
-}
 
 function extractWorkflowRunId(responsePayload: unknown) {
   if (

@@ -1,6 +1,7 @@
 import { DILUTION_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/dilution-specialist/dilution-specialist-system-prompt';
 import { FLOOR_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/floor-specialist/floor-specialist-system-prompt';
 import { PRODUCT_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/product-specialist/product-specialist-system-prompt';
+import type { BexChatAgentMode } from '~/lib/agents/agent-registry';
 
 function routingHintBlock(input: {
   decision: string;
@@ -49,7 +50,7 @@ function systemPromptForDecision(decision: string) {
 }
 
 export function buildProductSupportInstructions(input: {
-  mode: 'orchestrator' | 'product' | 'bathroom' | 'dilution' | 'floor';
+  mode: BexChatAgentMode;
   routing: {
     decision: string;
     rationale: string;

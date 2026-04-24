@@ -9,6 +9,7 @@ import { Input } from '~/components/ui/input';
 import { Label } from '~/components/ui/label';
 import { NativeSelect } from '~/components/ui/native-select';
 import { searchProductChunks } from '~/lib/rag/search';
+import { formatDurationMs } from '~/lib/utils/time';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 export const metadata = {
@@ -62,14 +63,6 @@ function truncateText(value: string, maxLength = 320) {
   }
 
   return `${trimmed.slice(0, maxLength - 3)}...`;
-}
-
-function formatDurationMs(value: number) {
-  if (value >= 1000) {
-    return `${(value / 1000).toFixed(2)}s`;
-  }
-
-  return `${Math.round(value)}ms`;
 }
 
 function formatEmbeddingSource(

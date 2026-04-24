@@ -2,6 +2,10 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
 
+import { AdminTestsActionToast } from '~/components/admin/tests/AdminTestsActionToast';
+import { RunAtAGlanceCharts } from '~/components/admin/tests/RunAtAGlanceCharts';
+import { RunExecutionProgress } from '~/components/admin/tests/RunExecutionProgress';
+import { RunItemResultsCsvDownload } from '~/components/admin/tests/RunItemResultsCsvDownload';
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
 import {
@@ -12,10 +16,6 @@ import {
   TableHeader,
   TableRow,
 } from '~/components/ui/table';
-import { AdminTestsActionToast } from '~/components/admin/tests/AdminTestsActionToast';
-import { RunAtAGlanceCharts } from '~/components/admin/tests/RunAtAGlanceCharts';
-import { RunExecutionProgress } from '~/components/admin/tests/RunExecutionProgress';
-import { RunItemResultsCsvDownload } from '~/components/admin/tests/RunItemResultsCsvDownload';
 import { listWorkflowRunsByIds } from '~/lib/conversations/workflow-repository';
 import { resolveResponsesModel } from '~/lib/openai/client';
 import {
@@ -25,6 +25,8 @@ import {
   getTestResultById,
   listAllResultItemsByResultId,
 } from '~/lib/tests/repository';
+import { formatDate, formatDurationSeconds } from '~/lib/utils/time';
+
 import { deleteTestRunAction } from '../../../actions';
 
 export const metadata = {
@@ -32,22 +34,12 @@ export const metadata = {
   description: 'Inspect item-level outcomes for a specific test run.',
 };
 
-function formatDate(value: string) {
-  return new Intl.DateTimeFormat('en-US', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(new Date(value));
-}
-
-function formatDurationSeconds(value: number | null | undefined) {
-  if (typeof value !== 'number') {
-    return 'n/a';
-  }
-  return `${(value / 1000).toFixed(2)} s`;
-}
-
 function extractItemSimilarityScore(responsePayload: unknown) {
-  if (!responsePayload || typeof responsePayload !== 'object' || Array.isArray(responsePayload)) {
+  if (
+    !responsePayload ||
+    typeof responsePayload !== 'object' ||
+    Array.isArray(responsePayload)
+  ) {
     return null;
   }
 
@@ -75,7 +67,11 @@ function extractItemSimilarityScore(responsePayload: unknown) {
 }
 
 function extractItemValidatorConfidence(responsePayload: unknown) {
-  if (!responsePayload || typeof responsePayload !== 'object' || Array.isArray(responsePayload)) {
+  if (
+    !responsePayload ||
+    typeof responsePayload !== 'object' ||
+    Array.isArray(responsePayload)
+  ) {
     return null;
   }
   const c = (responsePayload as Record<string, unknown>).confidence;
@@ -90,16 +86,20 @@ function formatItemSimilarityConfidenceLabel(responsePayload: unknown) {
   }
   const parts: string[] = [];
   if (maxSimilarity != null) {
-    parts.push(`${(maxSimilarity * 100).toFixed(1)}% sim`);
+    parts.push(`${(maxSimilarity * 100).toFixed(1)}%`);
   }
   if (confidence != null) {
-    parts.push(`${confidence.toFixed(2)} conf`);
+    parts.push(`${confidence.toFixed(2)}`);
   }
-  return parts.join(' · ');
+  return parts.join(' / ');
 }
 
 function extractWorkflowRunId(responsePayload: unknown) {
-  if (!responsePayload || typeof responsePayload !== 'object' || Array.isArray(responsePayload)) {
+  if (
+    !responsePayload ||
+    typeof responsePayload !== 'object' ||
+    Array.isArray(responsePayload)
+  ) {
     return null;
   }
 
@@ -117,11 +117,16 @@ function extractModelTag(userInput: unknown) {
 }
 
 function extractTimingBreakdown(responsePayload: unknown) {
-  if (!responsePayload || typeof responsePayload !== 'object' || Array.isArray(responsePayload)) {
+  if (
+    !responsePayload ||
+    typeof responsePayload !== 'object' ||
+    Array.isArray(responsePayload)
+  ) {
     return null;
   }
 
-  const candidate = (responsePayload as Record<string, unknown>).timingBreakdown;
+  const candidate = (responsePayload as Record<string, unknown>)
+    .timingBreakdown;
   if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
     return null;
   }
@@ -176,7 +181,10 @@ function extractProgress(summary: unknown, totalItems: number) {
   };
 }
 
-export default async function AdminTestRunDetailsPage({ params, searchParams }: PageProps) {
+export default async function AdminTestRunDetailsPage({
+  params,
+  searchParams,
+}: PageProps) {
   await connection();
   const { testId, runId } = await params;
   const query = await searchParams;
@@ -210,10 +218,16 @@ export default async function AdminTestRunDetailsPage({ params, searchParams }: 
     initialTotalItems > 0
       ? Math.min(initialTotalItems, initialCompletedItemsRaw)
       : initialCompletedItemsRaw;
-  const promptByItemId = new Map(testItems.map((item) => [item.id, item.prompt]));
+  const promptByItemId = new Map(
+    testItems.map((item) => [item.id, item.prompt]),
+  );
   const passCount = result.passed_items ?? 0;
-  const failCount = result.failed_items ?? resultItems.filter((item) => !item.passed).length;
-  const incompleteCount = Math.max(0, result.total_items - passCount - failCount);
+  const failCount =
+    result.failed_items ?? resultItems.filter((item) => !item.passed).length;
+  const incompleteCount = Math.max(
+    0,
+    result.total_items - passCount - failCount,
+  );
 
   const chronologicalItems = [...resultItems].sort((a, b) => {
     if (a.created_at === b.created_at) {
@@ -236,14 +250,17 @@ export default async function AdminTestRunDetailsPage({ params, searchParams }: 
     similarityScores.length > 0 ? Math.max(...similarityScores) : 0;
   const similarityAvg =
     similarityScores.length > 0
-      ? similarityScores.reduce((sum, score) => sum + score, 0) / similarityScores.length
+      ? similarityScores.reduce((sum, score) => sum + score, 0) /
+        similarityScores.length
       : 0;
   const similarityStatsData = [
     { label: 'Min', value: similarityMin },
     { label: 'Max', value: similarityMax },
     { label: 'Avg', value: similarityAvg },
   ];
-  const slowOverTenSecondsCount = resultItems.filter((item) => item.elapsed_ms > 10_000).length;
+  const slowOverTenSecondsCount = resultItems.filter(
+    (item) => item.elapsed_ms > 10_000,
+  ).length;
   const notPassedItemCount = resultItems.filter((item) => !item.passed).length;
   const workflowRunIds = Array.from(
     new Set(
@@ -267,7 +284,9 @@ export default async function AdminTestRunDetailsPage({ params, searchParams }: 
     elapsed_seconds: Number((row.elapsed_ms / 1000).toFixed(3)),
     status: row.status,
     model:
-      modelByWorkflowRunId.get(extractWorkflowRunId(row.response_payload) || '') ?? 'n/a',
+      modelByWorkflowRunId.get(
+        extractWorkflowRunId(row.response_payload) || '',
+      ) ?? 'n/a',
     timing_breakdown: formatTimingBreakdownLabel(row.response_payload),
     message: row.error_message || row.response_text || 'n/a',
     test_item_id: row.test_item_id,
@@ -286,11 +305,17 @@ export default async function AdminTestRunDetailsPage({ params, searchParams }: 
               <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">
                 {test.name}
               </h1>
-              <p className="mt-3 font-mono text-xs text-slate-600">Run id: {result.id}</p>
+              <p className="mt-3 font-mono text-xs text-slate-600">
+                Run id: {result.id}
+              </p>
             </div>
             <div className="flex items-center gap-2">
               <form action={deleteTestRunAction}>
-                <input name="returnPath" type="hidden" value={`/admin/tests/${test.id}`} />
+                <input
+                  name="returnPath"
+                  type="hidden"
+                  value={`/admin/tests/${test.id}`}
+                />
                 <input name="testId" type="hidden" value={test.id} />
                 <input name="runId" type="hidden" value={result.id} />
                 <Button size="sm" type="submit" variant="destructive">
@@ -313,28 +338,13 @@ export default async function AdminTestRunDetailsPage({ params, searchParams }: 
           initialStatus={result.status}
           initialTotalItems={initialTotalItems}
           runId={result.id}
+          stats={{
+            passCount,
+            failCount,
+            incompleteCount,
+            started_at: result?.started_at ?? '',
+          }}
         />
-
-        <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-          <h2 className="text-lg font-semibold text-slate-900">Run summary</h2>
-          <div className="mt-4 grid gap-3 text-sm text-slate-700 sm:grid-cols-2 lg:grid-cols-4">
-            <p>
-              <span className="font-semibold text-slate-900">Status:</span> {result.status}
-            </p>
-            <p>
-              <span className="font-semibold text-slate-900">Pass/fail/incomplete:</span>{' '}
-              {passCount}/{failCount}/{incompleteCount}
-            </p>
-            <p>
-              <span className="font-semibold text-slate-900">Started:</span>{' '}
-              {formatDate(result.started_at)}
-            </p>
-            <p>
-              <span className="font-semibold text-slate-900">Elapsed:</span>{' '}
-              {formatDurationSeconds(result.elapsed_ms)}
-            </p>
-          </div>
-        </section>
 
         <RunAtAGlanceCharts
           elapsedTrendData={elapsedTrendData}
@@ -348,9 +358,14 @@ export default async function AdminTestRunDetailsPage({ params, searchParams }: 
           totalItems={result.total_items}
         />
 
-        <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm" id="item-level-results">
+        <section
+          className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm"
+          id="item-level-results"
+        >
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <h2 className="text-lg font-semibold text-slate-900">Item-level results</h2>
+            <h2 className="text-lg font-semibold text-slate-900">
+              Item-level results
+            </h2>
             <RunItemResultsCsvDownload
               fileBase={`${test.name}-run-${result.id}`}
               rows={itemLevelCsvRows}
@@ -362,7 +377,7 @@ export default async function AdminTestRunDetailsPage({ params, searchParams }: 
                 <TableHead>Row</TableHead>
                 <TableHead>Prompt</TableHead>
                 <TableHead>Passed</TableHead>
-                <TableHead>Similarity / confidence</TableHead>
+                <TableHead>Sim / conf</TableHead>
                 <TableHead>Elapsed</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Model</TableHead>
@@ -399,27 +414,38 @@ export default async function AdminTestRunDetailsPage({ params, searchParams }: 
                     </TableCell>
                     <TableCell>{row.passed ? 'yes' : 'no'}</TableCell>
                     <TableCell className="whitespace-nowrap font-mono text-xs text-slate-700">
-                      {formatItemSimilarityConfidenceLabel(row.response_payload)}
+                      <Badge variant="outline">
+                        {formatItemSimilarityConfidenceLabel(
+                          row.response_payload,
+                        )}
+                      </Badge>
                     </TableCell>
                     <TableCell>
-                      <Badge variant={row.elapsed_ms > 10_000 ? 'destructive' : 'secondary'}>
+                      <Badge
+                        variant={
+                          row.elapsed_ms > 10_000 ? 'destructive' : 'secondary'
+                        }
+                      >
                         {formatDurationSeconds(row.elapsed_ms)}
                       </Badge>
                     </TableCell>
                     <TableCell>{row.status}</TableCell>
                     <TableCell>
-                      {modelByWorkflowRunId.get(extractWorkflowRunId(row.response_payload) || '') ||
-                        'n/a'}
+                      {modelByWorkflowRunId.get(
+                        extractWorkflowRunId(row.response_payload) || '',
+                      ) || 'n/a'}
                     </TableCell>
                     <TableCell className="max-w-[220px] whitespace-normal text-xs text-slate-600">
                       {formatTimingBreakdownLabel(row.response_payload)}
                     </TableCell>
-                    <TableCell className="max-w-[420px] whitespace-normal text-xs text-slate-600">
+                    <TableCell className="max-w-[420px] whitespace-normal text-xs text-slate-600 line-clamp-2">
                       {row.error_message || row.response_text || 'n/a'}
                     </TableCell>
                     <TableCell>
                       <Button asChild size="sm" variant="outline">
-                        <Link href={`/admin/tests/${test.id}/items/${row.test_item_id}`}>
+                        <Link
+                          href={`/admin/tests/${test.id}/items/${row.test_item_id}`}
+                        >
                           View history
                         </Link>
                       </Button>
@@ -430,8 +456,9 @@ export default async function AdminTestRunDetailsPage({ params, searchParams }: 
             </TableBody>
           </Table>
           <p className="mt-3 text-xs text-slate-500">
-            Showing {Math.min(200, allResultItems.length)} of {allResultItems.length} item-level
-            results from {formatDate(result.created_at)}.
+            Showing {Math.min(200, allResultItems.length)} of{' '}
+            {allResultItems.length} item-level results from{' '}
+            {formatDate(result.created_at)}.
           </p>
         </section>
       </main>

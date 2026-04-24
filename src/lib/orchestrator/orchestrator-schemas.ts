@@ -1,13 +1,10 @@
 import { z } from 'zod';
+import { SME_AGENT_IDS, type SmeAgentId } from '~/lib/agents/agent-registry';
+
+export type { SmeAgentId };
 
 /** SME identifiers the orchestrator can route to or embed in results. */
-export const smeAgentIdSchema = z.enum([
-  'product',
-  'bathroom',
-  'dilution',
-  'floor',
-]);
-export type SmeAgentId = z.infer<typeof smeAgentIdSchema>;
+export const smeAgentIdSchema = z.enum(SME_AGENT_IDS);
 
 const stepId = z.string().min(1).max(256);
 const stepNote = z.string().max(8000).optional();

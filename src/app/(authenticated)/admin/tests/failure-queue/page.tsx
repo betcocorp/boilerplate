@@ -13,6 +13,7 @@ import {
   TableRow,
 } from '~/components/ui/table';
 import { listLatestFailedTestResultItemsPage } from '~/lib/tests/repository';
+import { formatDate, formatDurationSeconds } from '~/lib/utils/time';
 
 export const metadata = {
   title: 'Failure Queue | Betco BEX',
@@ -32,20 +33,6 @@ function readSearchParam(value: string | string[] | undefined, fallback = '') {
     return value[0] ?? fallback;
   }
   return value ?? fallback;
-}
-
-function formatDate(value: string) {
-  return new Intl.DateTimeFormat('en-US', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(new Date(value));
-}
-
-function formatDurationSeconds(value: number | null | undefined) {
-  if (typeof value !== 'number') {
-    return 'n/a';
-  }
-  return `${(value / 1000).toFixed(2)} s`;
 }
 
 function buildFailureQueueHref(query: string, page: number) {

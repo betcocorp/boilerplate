@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { BEX_CHAT_AGENT_MODES } from '~/lib/agents/agent-registry';
 
 export const bexChatPostBodySchema = z
   .object({
@@ -6,9 +7,7 @@ export const bexChatPostBodySchema = z
     message: z.string().min(1).max(16_000),
     model: z.string().max(128).optional(),
     useValidator: z.boolean().optional(),
-    agentMode: z
-      .enum(['orchestrator', 'product', 'bathroom', 'dilution', 'floor'])
-      .optional(),
+    agentMode: z.enum(BEX_CHAT_AGENT_MODES).optional(),
   })
   .strip();
 

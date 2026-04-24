@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { BexChatAgentMode } from '~/lib/agents/agent-registry';
 
 export type BexChatStreamResponse = {
   conversationId: string;
@@ -227,7 +228,7 @@ export async function apiPostBexChatStream(options: {
   message: string;
   model: string;
   useValidator?: boolean;
-  agentMode?: 'orchestrator' | 'product' | 'bathroom' | 'dilution' | 'floor';
+  agentMode?: BexChatAgentMode;
   onTextDelta?: (delta: string) => void;
   onEvent?: (event: unknown) => void;
 }): Promise<BexChatStreamResponse> {

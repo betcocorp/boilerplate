@@ -19,19 +19,14 @@ import {
   listTests,
 } from '~/lib/tests/repository';
 
+import { formatDate } from '~/lib/utils/time';
+
 import { deleteTestAction, runTestAction, uploadTestCsvAction } from './actions';
 
 export const metadata = {
   title: 'Test Runner | Betco BEX',
   description: 'Upload prompt datasets, run tests, and review performance metrics.',
 };
-
-function formatDate(value: string) {
-  return new Intl.DateTimeFormat('en-US', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(new Date(value));
-}
 
 function extractItemSimilarityScore(responsePayload: unknown) {
   if (

@@ -8,6 +8,7 @@ import { toast } from 'sonner';
 import { Button } from '~/components/ui/button';
 import { Input } from '~/components/ui/input';
 import { Label } from '~/components/ui/label';
+import { formatDurationMmSs } from '~/lib/utils/time';
 
 import { runSdsAction, type SdsActionState } from './actions';
 import type { SdsDashboardStatus } from './pipeline';
@@ -146,13 +147,6 @@ export function SdsControls({
             Date.parse(state.result.startedAt),
         )
       : null;
-  const formatDuration = (durationMs: number) => {
-    const totalSeconds = Math.max(0, Math.round(durationMs / 1000));
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = totalSeconds % 60;
-
-    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
-  };
   const autoElapsedMs =
     autoEmbedEnabled && autoEmbedStartedAt !== null
       ? Math.max(0, autoTimerNow - autoEmbedStartedAt)
@@ -211,7 +205,7 @@ export function SdsControls({
               {autoEmbedIsRunning ? (
                 <Loader2 className="size-4 animate-spin" />
               ) : null}
-              Stop auto-embed - elapsed {formatDuration(autoElapsedMs)} - runs{' '}
+              Stop auto-embed - elapsed {formatDurationMmSs(autoElapsedMs)} - runs{' '}
               {autoEmbedRuns}
             </span>
           ) : (
@@ -273,7 +267,7 @@ export function SdsControls({
                 : 'SDS action'}
             </p>
             <p className="mt-1">
-              Elapsed: {formatDuration(currentElapsedMs)}. Large batches can
+              Elapsed: {formatDurationMmSs(currentElapsedMs)}. Large batches can
               take several minutes while PDFs are parsed and chunked.
             </p>
           </div>
@@ -295,7 +289,7 @@ export function SdsControls({
                 Processed {state.result.processed} • Succeeded{' '}
                 {state.result.succeeded} • Failed {state.result.failed}
                 {lastRunDurationMs !== null
-                  ? ` • Duration ${formatDuration(lastRunDurationMs)}`
+                  ? ` • Duration ${formatDurationMmSs(lastRunDurationMs)}`
                   : ''}
               </p>
             ) : null}
