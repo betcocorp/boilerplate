@@ -248,6 +248,7 @@ export default function AdminDashboardPage() {
                   <div className="mt-4 grid gap-3">
                     {[
                       ['Bex chat', '/admin/bex'],
+                      ['Tools home', '/admin/tools'],
                       ['Legacy product browser', '/admin/products/legacy'],
                       ['RAG search', '/admin/products/rag'],
                       ['SDS ingestion dashboard', '/admin/sds'],

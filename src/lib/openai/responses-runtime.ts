@@ -27,6 +27,7 @@ export type ResponsesRuntimeOptions = {
   temperature?: number;
   toolChoice?: ResponseCreateParamsNonStreaming['tool_choice'];
   onRawResponse?: (response: Response) => void;
+  onAssistantDelta?: (delta: string) => void;
   executeTool: ExecuteToolFn;
 };
 
@@ -74,7 +75,22 @@ export async function runResponsesWithToolLoop(
       ...(chainPrev ? { previous_response_id: chainPrev } : {}),
     };
 
-    const response = await opts.client.responses.create(params);
+    let response: Response;
+    if (opts.onAssistantDelta) {
+      const stream = opts.client.responses.stream({
+        ...params,
+        stream: true,
+      } as any);
+      for await (const event of stream) {
+        if (event.type === 'response.output_text.delta') {
+          opts.onAssistantDelta(event.delta);
+        }
+      }
+      response = await stream.finalResponse();
+    } else {
+      response = await opts.client.responses.create(params);
+    }
+
     lastResponse = response;
     opts.onRawResponse?.(response);
     responseIds.push(response.id);

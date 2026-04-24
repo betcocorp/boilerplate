@@ -15,6 +15,7 @@ import {
 } from '~/components/ui/table';
 import {
   getTestById,
+  listResultItemsByResultId,
   getTestItemSuggestionRows,
   getTestItemsByTestId,
   listTestResultsByTestId,
@@ -56,6 +57,38 @@ function formatDurationSeconds(value: number | null | undefined) {
   return `${(value / 1000).toFixed(2)} s`;
 }
 
+function extractItemSimilarityScore(responsePayload: unknown) {
+  if (
+    !responsePayload ||
+    typeof responsePayload !== 'object' ||
+    Array.isArray(responsePayload)
+  ) {
+    return null;
+  }
+
+  const payload = responsePayload as Record<string, unknown>;
+  const sources = payload.sources;
+  if (!Array.isArray(sources)) {
+    return null;
+  }
+
+  const similarities = sources
+    .map((source) => {
+      if (!source || typeof source !== 'object' || Array.isArray(source)) {
+        return null;
+      }
+      const value = (source as Record<string, unknown>).similarity;
+      return typeof value === 'number' ? value : null;
+    })
+    .filter((value): value is number => typeof value === 'number');
+
+  if (similarities.length === 0) {
+    return null;
+  }
+
+  return Math.max(...similarities);
+}
+
 type PageProps = {
   params: Promise<{ testId: string }>;
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -84,7 +117,11 @@ export default async function AdminTestDetailsPage({
     getTestItemSuggestionRows(testId),
   ]);
   const trendRuns = [...results].reverse();
+  const trendRunItems = await Promise.all(
+    trendRuns.map((run) => listResultItemsByResultId(run.id, 200)),
+  );
   const trendData = trendRuns.map((run) => ({
+    avgSimilarity: null as number | null,
     elapsedSeconds:
       typeof run.elapsed_ms === 'number'
         ? Number((run.elapsed_ms / 1000).toFixed(2))
@@ -94,6 +131,16 @@ export default async function AdminTestDetailsPage({
     startedAtLabel: formatShortDate(run.started_at),
     status: run.status || 'unknown',
   }));
+  for (const [index, runItems] of trendRunItems.entries()) {
+    const itemScores = runItems
+      .map((item) => extractItemSimilarityScore(item.response_payload))
+      .filter((value): value is number => typeof value === 'number');
+
+    trendData[index]!.avgSimilarity =
+      itemScores.length > 0
+        ? itemScores.reduce((sum, value) => sum + value, 0) / itemScores.length
+        : null;
+  }
 
   const suggestionLists = buildSuggestionListsFromTestItems(suggestionRows);
 

@@ -1,7 +1,7 @@
 'use client';
 
 import { Menu, Sparkles } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { Button } from '~/components/ui/button';
 import { Label } from '~/components/ui/label';
@@ -22,17 +22,30 @@ import {
   apiDeleteConversation,
   apiFetchConversation,
   apiListConversations,
-  apiPostBexChat,
+  apiPostBexChatStream,
   apiSubmitMessageFeedback,
 } from '~/lib/bex/bex-api-client';
 import { mapApiMessageToChatMessage } from '~/lib/bex/map-api-messages';
 import { loadUiCache, saveUiCache } from '~/lib/bex/sessions';
 import { BEX_SUGGESTIONS } from '~/lib/bex/constants';
-import type { Conversation } from '~/types/bex';
+import type { ChatMessage, Conversation } from '~/types/bex';
+
+const STREAMING_ROLLOUT_COHORT =
+  process.env.NEXT_PUBLIC_BEX_STREAMING_ROLLOUT_COHORT ?? 'default';
 
 function toMillis(iso: string): number {
   const t = Date.parse(iso);
   return Number.isFinite(t) ? t : Date.now();
+}
+
+function makeOptimisticMessage(content: string): ChatMessage {
+  const now = Date.now();
+  return {
+    id: `local-user-${now}-${Math.random().toString(36).slice(2, 8)}`,
+    role: 'user',
+    content,
+    createdAt: now,
+  };
 }
 
 export function BexChatApp() {
@@ -51,6 +64,38 @@ export function BexChatApp() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [feedbackSubmittingMessageId, setFeedbackSubmittingMessageId] = useState<string | null>(
     null,
+  );
+  const [streamingAssistantText, setStreamingAssistantText] = useState('');
+  const [lastStreamMetrics, setLastStreamMetrics] = useState<{
+    totalMs: number;
+    timeToFirstTokenMs: number | null;
+    deltaCount: number;
+    usedFallbackChunking: boolean;
+  } | null>(null);
+  const streamDeltaBufferRef = useRef('');
+  const streamFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const flushStreamingDeltaBuffer = useCallback(() => {
+    const buffered = streamDeltaBufferRef.current;
+    streamDeltaBufferRef.current = '';
+    if (!buffered) {
+      return;
+    }
+    setStreamingAssistantText((prev) => prev + buffered);
+  }, []);
+
+  const queueStreamingDelta = useCallback(
+    (delta: string) => {
+      streamDeltaBufferRef.current += delta;
+      if (streamFlushTimerRef.current !== null) {
+        return;
+      }
+      streamFlushTimerRef.current = setTimeout(() => {
+        streamFlushTimerRef.current = null;
+        flushStreamingDeltaBuffer();
+      }, 32);
+    },
+    [flushStreamingDeltaBuffer],
   );
 
   const refreshConversation = useCallback(async (id: string) => {
@@ -132,6 +177,21 @@ export function BexChatApp() {
   );
 
   const messages = activeConversation?.messages ?? [];
+  const renderedMessages = useMemo<ChatMessage[]>(() => {
+    if (!isTyping || !streamingAssistantText.trim()) {
+      return messages;
+    }
+
+    return [
+      ...messages,
+      {
+        id: '__streaming_assistant__',
+        role: 'assistant',
+        content: streamingAssistantText,
+        createdAt: Date.now(),
+      },
+    ];
+  }, [isTyping, messages, streamingAssistantText]);
 
   const sendUserText = useCallback(
     async (text: string) => {
@@ -142,33 +202,83 @@ export function BexChatApp() {
 
       setIsTyping(true);
       setLoadError(null);
+      setStreamingAssistantText('');
+      setLastStreamMetrics(null);
+      streamDeltaBufferRef.current = '';
+      if (streamFlushTimerRef.current !== null) {
+        clearTimeout(streamFlushTimerRef.current);
+        streamFlushTimerRef.current = null;
+      }
 
+      const optimisticUserMessage = makeOptimisticMessage(trimmed);
+      const localConversationId = `local-conv-${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2, 8)}`;
       let convId = activeId;
+      let startedWithLocalConversation = false;
+
+      if (convId) {
+        setSessions((prev) =>
+          prev.map((conversation) =>
+            conversation.id === convId
+              ? {
+                  ...conversation,
+                  updatedAt: Date.now(),
+                  messages: [...conversation.messages, optimisticUserMessage],
+                }
+              : conversation,
+          ),
+        );
+      } else {
+        convId = localConversationId;
+        startedWithLocalConversation = true;
+        setSessions((prev) => [
+          {
+            id: localConversationId,
+            title: 'New conversation',
+            updatedAt: Date.now(),
+            messages: [optimisticUserMessage],
+          },
+          ...prev,
+        ]);
+        setActiveId(localConversationId);
+      }
 
       try {
-        if (!convId) {
-          convId = await apiCreateConversation();
-          setSessions((prev) => [
-            {
-              id: convId!,
-              title: 'New conversation',
-              updatedAt: Date.now(),
-              messages: [],
-            },
-            ...prev,
-          ]);
-          setActiveId(convId);
+        if (!convId || startedWithLocalConversation) {
+          const createdConversationId = await apiCreateConversation();
+          const previousConvId = convId;
+          convId = createdConversationId;
+          setSessions((prev) =>
+            prev.map((conversation) =>
+              conversation.id === previousConvId
+                ? {
+                    ...conversation,
+                    id: createdConversationId,
+                    updatedAt: Date.now(),
+                  }
+                : conversation,
+            ),
+          );
+          setActiveId(createdConversationId);
         }
 
-        const reply = await apiPostBexChat({
+        const reply = await apiPostBexChatStream({
           conversationId: convId,
           message: trimmed,
           model,
           useValidator,
           agentMode,
+          onTextDelta: (delta) => {
+            queueStreamingDelta(delta);
+          },
         });
 
         const detail = await apiFetchConversation(reply.conversationId);
+        flushStreamingDeltaBuffer();
+        if ('streamMetrics' in reply && reply.streamMetrics) {
+          setLastStreamMetrics(reply.streamMetrics);
+        }
         setActiveId(reply.conversationId);
         setSessions((prev) => {
           const others = prev.filter((c) => c.id !== detail.conversation.id);
@@ -187,17 +297,37 @@ export function BexChatApp() {
           err instanceof Error ? err.message : 'Chat request failed.';
         setLoadError(detail);
         if (convId) {
-          try {
-            await refreshConversation(convId);
-          } catch {
-            /* ignore */
+          if (convId.startsWith('local-conv-')) {
+            setSessions((prev) => prev.filter((conversation) => conversation.id !== convId));
+            setActiveId((prev) => (prev === convId ? null : prev));
+          } else {
+            try {
+              await refreshConversation(convId);
+            } catch {
+              /* ignore */
+            }
           }
         }
       } finally {
+        if (streamFlushTimerRef.current !== null) {
+          clearTimeout(streamFlushTimerRef.current);
+          streamFlushTimerRef.current = null;
+        }
+        streamDeltaBufferRef.current = '';
         setIsTyping(false);
+        setStreamingAssistantText('');
       }
     },
-    [activeId, isTyping, model, refreshConversation, useValidator, agentMode],
+    [
+      activeId,
+      agentMode,
+      flushStreamingDeltaBuffer,
+      isTyping,
+      model,
+      queueStreamingDelta,
+      refreshConversation,
+      useValidator,
+    ],
   );
 
   const handleNewChat = useCallback(async () => {
@@ -349,12 +479,29 @@ export function BexChatApp() {
                   {headerSubtitle}
                   {' · UI tag: '}
                   {model === 'preview' ? 'preview → BEX_RESPONSES_MODEL' : model}
+                  {' · transport: '}
+                  {`stream (${STREAMING_ROLLOUT_COHORT})`}
+                  {' · markdown: '}
+                  {'streamdown'}
                   {(() => {
                     const lastModel = [...(activeConversation?.messages ?? [])]
                       .reverse()
                       .find((m) => m.meta?.model)?.meta?.model;
                     return lastModel ? <> · last resolved: {lastModel}</> : null;
                   })()}
+                  {isTyping && streamingAssistantText ? (
+                    <> · streaming live</>
+                  ) : null}
+                  {!isTyping && lastStreamMetrics ? (
+                    <>
+                      {' '}
+                      · ttft:{' '}
+                      {lastStreamMetrics.timeToFirstTokenMs === null
+                        ? 'n/a'
+                        : `${lastStreamMetrics.timeToFirstTokenMs}ms`}{' '}
+                      · total: {lastStreamMetrics.totalMs}ms
+                    </>
+                  ) : null}
                 </p>
               </div>
             </div>
@@ -414,8 +561,8 @@ export function BexChatApp() {
 
           <BexChatMessages
             feedbackSubmittingMessageId={feedbackSubmittingMessageId}
-            isTyping={isTyping}
-            messages={messages}
+            isTyping={isTyping && streamingAssistantText.length === 0}
+            messages={renderedMessages}
             onSubmitFeedback={handleSubmitFeedback}
             onStartEmptyChat={() => void handleNewChat()}
             onSuggestion={(t) => {

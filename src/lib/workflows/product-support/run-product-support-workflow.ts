@@ -137,10 +137,85 @@ type CrossReferenceMatch = {
     | {
         title?: string | null;
         sku?: string | null;
+        shortLabel?: string | null;
+        shortDescription?: string | null;
+        inventoryId?: string | null;
       }
     | null
     | undefined;
 };
+
+function isProbablyUuid(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value.trim(),
+  );
+}
+
+/** First segment after `/products/` in a Betco URL, turned into title case words (e.g. symplicity-break → Symplicity Break). */
+function humanizeBetcoProductSlugFromUrl(url: string): string | null {
+  try {
+    const pathname = new URL(url).pathname;
+    const segments = pathname.split('/').filter(Boolean);
+    const idx = segments.indexOf('products');
+    const slug = idx >= 0 ? segments[idx + 1] : null;
+    if (!slug || !/^[a-z0-9-]+$/i.test(slug)) {
+      return null;
+    }
+    const words = slug.split('-').filter(Boolean);
+    if (words.length === 0) {
+      return null;
+    }
+    return words
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+      .join(' ');
+  } catch {
+    return null;
+  }
+}
+
+function trimOrEmpty(value: string | null | undefined) {
+  const t = value?.trim();
+  return t ? t : '';
+}
+
+function shortPlainText(value: string | null | undefined, maxLen: number) {
+  const t = trimOrEmpty(value);
+  if (!t) {
+    return '';
+  }
+  const line = t.split(/\n/)[0]?.trim() ?? '';
+  if (line.length <= maxLen) {
+    return line;
+  }
+  return `${line.slice(0, Math.max(0, maxLen - 1))}…`;
+}
+
+/** Prefer real product names over legacy keys; never show a UUID as the link label. */
+function resolveCrossReferenceComparableTitle(match: CrossReferenceMatch): string {
+  const bp = match.betcoProduct;
+  const fromDb =
+    trimOrEmpty(bp?.title) ||
+    trimOrEmpty(bp?.shortLabel) ||
+    shortPlainText(bp?.shortDescription, 120) ||
+    trimOrEmpty(bp?.sku) ||
+    trimOrEmpty(bp?.inventoryId);
+
+  if (fromDb) {
+    return fromDb;
+  }
+
+  const fromUrl = match.productUrl ? humanizeBetcoProductSlugFromUrl(match.productUrl) : null;
+  if (fromUrl) {
+    return fromUrl;
+  }
+
+  const pk = trimOrEmpty(match.productKey);
+  if (pk && !isProbablyUuid(pk)) {
+    return pk;
+  }
+
+  return 'Betco comparable product';
+}
 
 type RuntimeToolOutput = {
   toolName: string;
@@ -148,6 +223,26 @@ type RuntimeToolOutput = {
   output: string;
   trace: ToolTraceEntry;
 };
+
+export type ProductSupportWorkflowEvent =
+  | {
+      type: 'status';
+      stage:
+        | 'routing_selected'
+        | 'agent_started'
+        | 'agent_completed'
+        | 'validation_started'
+        | 'validation_completed'
+        | 'workflow_completed';
+      detail?: string;
+    }
+  | {
+      type: 'tool';
+      phase: 'started' | 'completed';
+      name: string;
+      ok?: boolean;
+      callId?: string;
+    };
 
 function extractTopCrossReferenceMatch(toolTrace: ToolTraceEntry[]) {
   for (let i = toolTrace.length - 1; i >= 0; i -= 1) {
@@ -248,11 +343,49 @@ function collectSourcesFromToolOutputs(toolOutputs: RuntimeToolOutput[]): Source
   return [...map.values()].slice(0, 16);
 }
 
-function buildCrossReferenceAnswer(match: CrossReferenceMatch) {
-  const title =
-    match.betcoProduct?.title?.trim() ||
-    match.productKey?.trim() ||
-    'Betco comparable product';
+function buildComparableBetcoProductMarkdownLine(match: CrossReferenceMatch): string | null {
+  const link = match.productUrl?.trim();
+  if (!link) {
+    return null;
+  }
+  const title = resolveCrossReferenceComparableTitle(match);
+  return `Comparable Betco product: [${title}](${link})`;
+}
+
+function assistantAlreadyStartsWithComparableLink(text: string): boolean {
+  const firstLine = text.trimStart().split('\n')[0]?.trim() ?? '';
+  return /^Comparable Betco product:\s*\[[^\]]+\]\([^)]+\)\s*$/.test(firstLine);
+}
+
+/**
+ * When cross-reference returns a URL, the first line must be the markdown comparable line.
+ * If the model also produced usage/safety text (after forced RAG), keep it below that line.
+ */
+function composeCrossReferenceUserFacingAnswer(input: {
+  match: CrossReferenceMatch;
+  assistantText: string;
+}): string {
+  const headline = buildComparableBetcoProductMarkdownLine(input.match);
+  const raw = input.assistantText.trim();
+
+  if (!headline) {
+    return raw;
+  }
+
+  if (!raw) {
+    return buildCrossReferenceAnswerShortOnly(input.match);
+  }
+
+  if (assistantAlreadyStartsWithComparableLink(raw)) {
+    return raw;
+  }
+
+  return `${headline}\n\n${raw}`;
+}
+
+/** Short reply when no enriched body is available (no RAG synthesis). */
+function buildCrossReferenceAnswerShortOnly(match: CrossReferenceMatch) {
+  const title = resolveCrossReferenceComparableTitle(match);
   const link = match.productUrl?.trim();
   const productLine = link ? `[${title}](${link})` : title;
   const competitorLabel = [
@@ -281,10 +414,10 @@ function buildCrossReferenceSearchArgs(input: {
   userMessage: string;
   crossReferenceMatch: CrossReferenceMatch;
 }) {
-  const productName =
-    input.crossReferenceMatch.betcoProduct?.title?.trim() ||
-    input.crossReferenceMatch.productKey?.trim() ||
-    'Betco product';
+  const productName = resolveCrossReferenceComparableTitle(input.crossReferenceMatch).slice(
+    0,
+    256,
+  );
 
   const competitorName = [
     input.crossReferenceMatch.competitorBrand?.trim(),
@@ -298,7 +431,7 @@ function buildCrossReferenceSearchArgs(input: {
     : input.userMessage.slice(0, 512);
 
   return {
-    productName: productName.slice(0, 256),
+    productName,
     topic,
   };
 }
@@ -311,6 +444,8 @@ export async function runProductSupportWorkflow(input: {
   useValidator?: boolean;
   agentMode?: 'orchestrator' | 'product' | 'bathroom' | 'dilution' | 'floor';
   previousOpenaiResponseId?: string | null;
+  onEvent?: (event: ProductSupportWorkflowEvent) => void;
+  onAssistantDelta?: (delta: string) => void;
 }): Promise<ProductSupportFinalOutput> {
   const useValidator = input.useValidator ?? false;
   const agentMode = input.agentMode ?? 'orchestrator';
@@ -337,6 +472,11 @@ export async function runProductSupportWorkflow(input: {
 
   const model = resolveResponsesModel(input.modelTag);
   const client = getOpenAIClient();
+  input.onEvent?.({
+    type: 'status',
+    stage: 'routing_selected',
+    detail: routingDecision,
+  });
 
   const ctx = {
     traceId: input.traceId,
@@ -409,6 +549,7 @@ export async function runProductSupportWorkflow(input: {
     { step: 'agent', step_id: agentStep.id },
     { ...wfCtx, stepId: agentStep.id },
   );
+  input.onEvent?.({ type: 'status', stage: 'agent_started' });
 
   try {
     const toolTrace: ToolTraceEntry[] = [];
@@ -430,7 +571,14 @@ export async function runProductSupportWorkflow(input: {
             name: 'lookup_cross_reference',
           } as const)
         : 'auto',
+      onAssistantDelta: input.onAssistantDelta,
       executeTool: async ({ name, argumentsJson, callId }) => {
+        input.onEvent?.({
+          type: 'tool',
+          phase: 'started',
+          name,
+          callId,
+        });
         await writeAuditLog(
           'tool_called',
           { tool_name: name, call_id: callId },
@@ -462,9 +610,17 @@ export async function runProductSupportWorkflow(input: {
           output: out.output,
           trace: out.trace,
         });
+        input.onEvent?.({
+          type: 'tool',
+          phase: 'completed',
+          name,
+          ok: out.trace.ok,
+          callId,
+        });
         return out;
       },
     });
+    input.onEvent?.({ type: 'status', stage: 'agent_completed' });
     const timingBreakdown = {
       toolRounds: agentResult.responseIds.length,
       cacheSource: dominantCacheSource(cacheSourceCounts),
@@ -506,14 +662,11 @@ export async function runProductSupportWorkflow(input: {
     }
 
     let draftAnswer = agentResult.assistantText;
-    const crossReferenceFinalAnswer =
-      crossReferenceResult &&
-      !crossReferenceResult.fallbackRecommended &&
-      Boolean(crossReferenceResult.match.productUrl)
-        ? buildCrossReferenceAnswer(crossReferenceResult.match)
-        : null;
-    if (crossReferenceFinalAnswer) {
-      draftAnswer = crossReferenceFinalAnswer;
+    if (crossReferenceResult?.match.productUrl?.trim()) {
+      draftAnswer = composeCrossReferenceUserFacingAnswer({
+        match: crossReferenceResult.match,
+        assistantText: agentResult.assistantText,
+      });
     }
 
     const sources = collectSourcesFromToolOutputs(toolOutputLog);
@@ -533,6 +686,7 @@ export async function runProductSupportWorkflow(input: {
       status: 'running',
       input: jsonContent({ modelTag: input.modelTag ?? 'preview' }),
     });
+    input.onEvent?.({ type: 'status', stage: 'validation_started' });
 
     // TODO: Remove this runtime toggle when validator behavior is fully tuned.
     let validation: ValidatorResult;
@@ -565,6 +719,12 @@ export async function runProductSupportWorkflow(input: {
       });
       if (revised.trim()) {
         draftAnswer = revised;
+        if (crossReferenceResult?.match.productUrl?.trim()) {
+          draftAnswer = composeCrossReferenceUserFacingAnswer({
+            match: crossReferenceResult.match,
+            assistantText: revised,
+          });
+        }
         validation = await runValidatorPass({
           draftAnswer,
           evidenceSummary,
@@ -593,15 +753,13 @@ export async function runProductSupportWorkflow(input: {
             },
       ),
     });
+    input.onEvent?.({
+      type: 'status',
+      stage: 'validation_completed',
+      detail: validation.approved ? 'approved' : 'not_approved',
+    });
 
     let finalText = draftAnswer;
-
-    // Enforce deterministic cross-reference output format when available.
-    // This runs after validation/revision to prevent the model from drifting from the
-    // required "Comparable Betco product: [Name](URL)" response shape.
-    if (crossReferenceFinalAnswer) {
-      finalText = crossReferenceFinalAnswer;
-    }
 
     if (!validation.approved) {
       finalText = [
@@ -688,6 +846,7 @@ export async function runProductSupportWorkflow(input: {
       wfCtx,
     );
     logInfo('workflow_completed', { ...wfCtx });
+    input.onEvent?.({ type: 'status', stage: 'workflow_completed' });
 
     return finalOutput;
   } catch (err) {

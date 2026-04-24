@@ -10,9 +10,9 @@ import {
   ThumbsUp,
   User,
 } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import ReactMarkdown, { type Components } from 'react-markdown';
+import { useEffect, useRef, useState } from 'react';
 
+import { BexStreamdown } from '~/components/bex/BexStreamdown';
 import { Avatar, AvatarFallback } from '~/components/ui/avatar';
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
@@ -69,93 +69,6 @@ function formatTime(ts: number) {
   }).format(new Date(ts));
 }
 
-function markdownComponentsForBubble(isUser: boolean): Components {
-  const inlineCode = cn(
-    'rounded px-1 py-0.5 text-[0.85em] font-mono',
-    isUser ? 'bg-primary-foreground/15' : 'bg-muted',
-  );
-  const blockPre = cn(
-    'mt-2 overflow-x-auto rounded-xl p-3 text-xs leading-relaxed first:mt-0',
-    isUser ? 'bg-primary-foreground/10' : 'bg-muted',
-  );
-  const blockCodeText = isUser ? 'text-primary-foreground' : 'text-foreground';
-
-  return {
-    p: ({ children }) => (
-      <p className="mt-2 wrap-break-word first:mt-0">{children}</p>
-    ),
-    strong: ({ children }) => (
-      <strong className="font-semibold">{children}</strong>
-    ),
-    em: ({ children }) => <em className="italic">{children}</em>,
-    ul: ({ children }) => (
-      <ul className="mt-2 list-disc space-y-1 pl-5 first:mt-0">{children}</ul>
-    ),
-    ol: ({ children }) => (
-      <ol className="mt-2 list-decimal space-y-1 pl-5 first:mt-0">
-        {children}
-      </ol>
-    ),
-    li: ({ children }) => <li className="wrap-break-word">{children}</li>,
-    a: ({ href, children }) => (
-      <a
-        className="wrap-break-word underline underline-offset-2"
-        href={href}
-        rel="noopener noreferrer"
-        target="_blank"
-      >
-        {children}
-      </a>
-    ),
-    code: ({ className, children, ...props }) => {
-      const isBlock = Boolean(className?.includes('language-'));
-      if (isBlock) {
-        return (
-          <code
-            className={cn('font-mono text-xs', blockCodeText, className)}
-            {...props}
-          >
-            {children}
-          </code>
-        );
-      }
-      return (
-        <code className={inlineCode} {...props}>
-          {children}
-        </code>
-      );
-    },
-    pre: ({ children }) => <pre className={blockPre}>{children}</pre>,
-    blockquote: ({ children }) => (
-      <blockquote
-        className={cn(
-          'mt-2 border-l-2 pl-3 italic first:mt-0',
-          isUser ? 'border-primary-foreground/40' : 'border-border',
-        )}
-      >
-        {children}
-      </blockquote>
-    ),
-    h1: ({ children }) => (
-      <h1 className="mt-3 text-base font-semibold first:mt-0">{children}</h1>
-    ),
-    h2: ({ children }) => (
-      <h2 className="mt-2 text-sm font-semibold first:mt-0">{children}</h2>
-    ),
-    h3: ({ children }) => (
-      <h3 className="mt-2 text-sm font-medium first:mt-0">{children}</h3>
-    ),
-    hr: () => (
-      <hr
-        className={cn(
-          'my-3 border-0 border-t',
-          isUser ? 'border-primary-foreground/25' : 'border-border/60',
-        )}
-      />
-    ),
-  };
-}
-
 function AssistantDetails({
   messageId,
   meta,
@@ -164,6 +77,12 @@ function AssistantDetails({
   meta: NonNullable<ChatMessage['meta']>;
 }) {
   const [open, setOpen] = useState(false);
+  const hasReasoning =
+    meta.confidence !== undefined ||
+    !!meta.validation ||
+    !!meta.toolSummary?.length ||
+    !!meta.workflowRunId;
+  const hasSources = !!meta.sources?.length;
 
   return (
     <div className="mt-2 text-xs text-muted-foreground">
@@ -180,72 +99,110 @@ function AssistantDetails({
           <ChevronRight className="size-3.5" aria-hidden />
         )}
         Details
+        {hasReasoning ? (
+          <Badge className="ml-1.5 rounded-full px-1.5 py-0 text-[0.62rem]" variant="secondary">
+            reasoning
+          </Badge>
+        ) : null}
+        {hasSources ? (
+          <Badge className="ml-1 rounded-full px-1.5 py-0 text-[0.62rem]" variant="secondary">
+            sources {meta.sources?.length}
+          </Badge>
+        ) : null}
       </Button>
       {open ? (
         <div className="mt-2 space-y-2 rounded-xl bg-muted/50 p-3 text-left">
-          {meta.confidence !== undefined ? (
-            <p>
-              <span className="font-medium text-foreground">Confidence:</span>{' '}
-              {meta.confidence.toFixed(2)}
-            </p>
-          ) : null}
-          {meta.validation ? (
-            <p>
-              <span className="font-medium text-foreground">Validation:</span>{' '}
-              {meta.validation.approved ? 'approved' : 'not approved'}
-              {meta.validation.requiresHumanReview ? ' · human review' : ''}
-            </p>
-          ) : null}
-          {meta.validation?.issues && meta.validation.issues.length > 0 ? (
-            <div>
-              <span className="font-medium text-foreground">Issues</span>
-              <ul className="mt-1 list-disc space-y-0.5 pl-4">
-                {meta.validation.issues.map((issue) => (
-                  <li key={`${messageId}-${issue}`}>{issue}</li>
-                ))}
-              </ul>
+          {hasReasoning ? (
+            <div className="space-y-2 rounded-lg border border-border/60 bg-background/70 p-2.5">
+              <p className="text-[0.65rem] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                Reasoning
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {meta.confidence !== undefined ? (
+                  <Badge className="rounded-full" variant="outline">
+                    confidence {meta.confidence.toFixed(2)}
+                  </Badge>
+                ) : null}
+                {meta.validation ? (
+                  <Badge
+                    className="rounded-full"
+                    variant={meta.validation.approved ? 'secondary' : 'destructive'}
+                  >
+                    {meta.validation.approved ? 'validated' : 'not approved'}
+                  </Badge>
+                ) : null}
+                {meta.validation?.requiresHumanReview ? (
+                  <Badge className="rounded-full" variant="outline">
+                    human review
+                  </Badge>
+                ) : null}
+              </div>
+              {meta.validation?.issues && meta.validation.issues.length > 0 ? (
+                <div>
+                  <p className="font-medium text-foreground">Validation issues</p>
+                  <ul className="mt-1 list-disc space-y-0.5 pl-4">
+                    {meta.validation.issues.map((issue) => (
+                      <li key={`${messageId}-${issue}`}>{issue}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              {meta.toolSummary && meta.toolSummary.length > 0 ? (
+                <div>
+                  <p className="font-medium text-foreground">Tool calls</p>
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {meta.toolSummary.map((tool, index) => (
+                      <Badge
+                        className="rounded-full font-mono text-[0.65rem]"
+                        key={`${messageId}-${tool.name}-${index}`}
+                        variant={tool.ok ? 'secondary' : 'destructive'}
+                      >
+                        {tool.name}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              {meta.workflowRunId ? (
+                <p className="font-mono text-[0.65rem] opacity-70">
+                  Run: {meta.workflowRunId}
+                </p>
+              ) : null}
             </div>
           ) : null}
           {meta.sources && meta.sources.length > 0 ? (
-            <div>
-              <span className="font-medium text-foreground">Sources</span>
-              <ul className="mt-1 space-y-1">
-                {meta.sources.slice(0, 8).map((s) => (
+            <div className="space-y-2 rounded-lg border border-border/60 bg-background/70 p-2.5">
+              <p className="text-[0.65rem] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                Sources
+              </p>
+              <ul className="space-y-2">
+                {meta.sources.slice(0, 6).map((s) => (
                   <li
-                    className="wrap-break-word"
-                    key={`${messageId}-${s.documentId}`}
+                    className="wrap-break-word rounded-md border border-border/60 bg-muted/30 p-2"
+                    key={`${messageId}-${s.documentId}-${s.chunkId ?? 'chunk'}`}
                   >
-                    <span className="font-mono text-[0.7rem] opacity-80">
-                      {s.documentId.slice(0, 8)}…
-                    </span>{' '}
-                    {s.title}
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="font-medium text-foreground">{s.title}</span>
+                      {typeof s.similarity === 'number' ? (
+                        <Badge className="rounded-full px-1.5 py-0 text-[0.62rem]" variant="outline">
+                          {(s.similarity * 100).toFixed(0)}%
+                        </Badge>
+                      ) : null}
+                    </div>
+                    <p className="mt-1 line-clamp-2 text-muted-foreground">{s.snippet}</p>
+                    <p className="mt-1 font-mono text-[0.65rem] opacity-70">
+                      {s.documentId}
+                      {s.chunkId ? ` · ${s.chunkId}` : ''}
+                    </p>
                   </li>
                 ))}
               </ul>
+              {meta.sources.length > 6 ? (
+                <p className="text-[0.7rem] opacity-70">
+                  +{meta.sources.length - 6} more source{meta.sources.length - 6 === 1 ? '' : 's'}
+                </p>
+              ) : null}
             </div>
-          ) : null}
-          {meta.toolSummary && meta.toolSummary.length > 0 ? (
-            <div>
-              <span className="font-medium text-foreground">Tool calls</span>
-              <ul className="mt-1 space-y-1">
-                {meta.toolSummary.map((tool, index) => (
-                  <li
-                    className="wrap-break-word"
-                    key={`${messageId}-${tool.name}-${index}`}
-                  >
-                    <span className="font-mono text-[0.7rem] opacity-80">
-                      {tool.ok ? 'ok' : 'failed'}
-                    </span>{' '}
-                    {tool.name}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
-          {meta.workflowRunId ? (
-            <p className="font-mono text-[0.65rem] opacity-70">
-              Run: {meta.workflowRunId}
-            </p>
           ) : null}
         </div>
       ) : null}
@@ -256,20 +213,13 @@ function AssistantDetails({
 function BexChatMessageBody({
   content,
   isUser,
+  isStreaming,
 }: {
   content: string;
   isUser: boolean;
+  isStreaming: boolean;
 }) {
-  const components = useMemo(
-    () => markdownComponentsForBubble(isUser),
-    [isUser],
-  );
-
-  return (
-    <div className="mt-2">
-      <ReactMarkdown components={components}>{content}</ReactMarkdown>
-    </div>
-  );
+  return <BexStreamdown content={content} isStreaming={isStreaming} isUser={isUser} />;
 }
 
 export function BexChatMessages({
@@ -350,8 +300,10 @@ export function BexChatMessages({
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6">
       <div className="mx-auto flex max-w-3xl flex-col gap-6">
-        {messages.map((m) => {
+        {messages.map((m, index) => {
           const isUser = m.role === 'user';
+          const isMostRecentMessage = index === messages.length - 1;
+          const isStreamingPlaceholder = m.id === '__streaming_assistant__';
 
           return (
             <div
@@ -409,8 +361,14 @@ export function BexChatMessages({
                       {formatTime(m.createdAt)}
                     </span>
                   </div>
-                  <BexChatMessageBody content={m.content} isUser={isUser} />
-                  {!isUser ? (
+                  <BexChatMessageBody
+                    content={m.content}
+                    isStreaming={
+                      !isUser && (isStreamingPlaceholder || (isTyping && isMostRecentMessage))
+                    }
+                    isUser={isUser}
+                  />
+                  {!isUser && !isStreamingPlaceholder ? (
                     <div className="mt-3">
                       <AssistantFeedbackActions
                         feedback={m.feedback}
@@ -420,10 +378,10 @@ export function BexChatMessages({
                       />
                     </div>
                   ) : null}
-                  {!isUser && m.meta ? (
+                  {!isUser && !isStreamingPlaceholder && m.meta ? (
                     <AssistantDetails messageId={m.id} meta={m.meta} />
                   ) : null}
-                  {!isUser && (
+                  {!isUser && !isStreamingPlaceholder && (
                     <div className="mt-3">
                       <Separator className="mb-2 bg-border/40" />
                       <div className="flex justify-end">

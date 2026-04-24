@@ -518,10 +518,37 @@ export type Database = {
       }
     }
     Views: {
-      [_ in never]: never
+      latest_failed_test_result_items: {
+        Row: {
+          created_at: string
+          elapsed_ms: number
+          error_message: string | null
+          id: string
+          item_row_index: number
+          passed: boolean
+          prompt: string
+          response_payload: Json | null
+          response_text: string | null
+          row_index: number
+          run_created_at: string
+          status: string
+          test_id: string
+          test_item_id: string
+          test_name: string
+          test_result_id: string
+        }
+        Relationships: []
+      }
     }
     Functions: {
-      [_ in never]: never
+      admin_latest_failures_count: {
+        Args: { p_search: string }
+        Returns: number
+      }
+      admin_latest_failures_page: {
+        Args: { p_limit: number; p_offset: number; p_search: string }
+        Returns: Database['public']['Views']['latest_failed_test_result_items']['Row'][]
+      }
     }
     Enums: {
       [_ in never]: never
