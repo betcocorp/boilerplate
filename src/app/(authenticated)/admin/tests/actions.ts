@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 
+import { SME_AGENT_IDS } from '~/lib/agents/agent-registry';
 import {
   parseCsvColumnNames,
   parseExpectedShouldAnswerFromForm,
@@ -43,15 +44,70 @@ function toUtf8Text(bytes: Uint8Array) {
   return new TextDecoder('utf-8').decode(bytes);
 }
 
+function parseIntendedAgentField(
+  value: FormDataEntryValue | null,
+): { ok: true; id: string | null } | { ok: false } {
+  if (typeof value !== 'string' || !value.trim()) {
+    return { ok: true, id: null };
+  }
+  const id = value.trim();
+  if (!(SME_AGENT_IDS as readonly string[]).includes(id)) {
+    return { ok: false };
+  }
+  return { ok: true, id };
+}
+
 export async function uploadTestCsvAction(formData: FormData) {
   const returnPath = normalizeReturnPath(formData.get('returnPath'), '/admin/tests');
   const file = formData.get('dataset');
   const nameValue = formData.get('name');
   const testName = typeof nameValue === 'string' && nameValue.trim() ? nameValue.trim() : null;
 
-  if (!(file instanceof File) || file.size === 0) {
+  const intendedParsed = parseIntendedAgentField(formData.get('intendedAgent'));
+  if (!intendedParsed.ok) {
     redirect(
-      encodeMessage('/admin/tests', 'error', 'Choose a CSV file before uploading.'),
+      encodeMessage(
+        '/admin/tests',
+        'error',
+        'Invalid intended agent. Choose an agent from the list or clear the field.',
+      ),
+    );
+  }
+  const intended_agent = intendedParsed.id;
+
+  const hasCsvFile = file instanceof File && file.size > 0;
+
+  if (!hasCsvFile) {
+    if (!testName) {
+      redirect(
+        encodeMessage(
+          '/admin/tests',
+          'error',
+          'Enter a test name to create an empty dataset, or attach a CSV file.',
+        ),
+      );
+    }
+
+    await createTestRecord({
+      name: testName,
+      source_file_name: '(no CSV)',
+      source_bucket: 'ad-hoc',
+      source_key: 'none',
+      row_count: 0,
+      status: 'ready',
+      intended_agent,
+      metadata: {},
+    });
+
+    revalidatePath('/admin/tests');
+    redirect(
+      encodeMessage(
+        '/admin/tests',
+        'success',
+        intended_agent
+          ? `Created empty test set "${testName}" (intended agent: ${intended_agent}). Add prompts on the detail page.`
+          : `Created empty test set "${testName}". Add prompts on the detail page.`,
+      ),
     );
   }
 
@@ -77,6 +133,7 @@ export async function uploadTestCsvAction(formData: FormData) {
     source_key: 'pending',
     row_count: 0,
     status: 'uploading',
+    intended_agent,
     metadata: {
       column_names: columnNames,
       content_type: file.type || 'text/csv',
@@ -109,6 +166,7 @@ export async function uploadTestCsvAction(formData: FormData) {
     source_key: uploaded.key,
     row_count: parsedRows.length,
     status: 'ready',
+    intended_agent,
     metadata: {
       column_names: columnNames,
       content_type: file.type || 'text/csv',

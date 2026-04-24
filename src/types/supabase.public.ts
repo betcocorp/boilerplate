@@ -392,6 +392,7 @@ export type Database = {
       tests: {
         Row: {
           id: string
+          intended_agent: string | null
           metadata: Json
           name: string
           row_count: number
@@ -404,6 +405,7 @@ export type Database = {
         }
         Insert: {
           id?: string
+          intended_agent?: string | null
           metadata?: Json
           name: string
           row_count?: number
@@ -416,6 +418,7 @@ export type Database = {
         }
         Update: {
           id?: string
+          intended_agent?: string | null
           metadata?: Json
           name?: string
           row_count?: number

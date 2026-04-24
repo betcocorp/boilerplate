@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { connection } from 'next/server';
 import {
   ChevronDown,
   ChevronLeft,
@@ -31,48 +32,61 @@ import {
   TableHeader,
   TableRow,
 } from '~/components/ui/table';
+import {
+  SimilarityFailRateTrendChart,
+  type SimilarityFailRateTrendPoint,
+} from '~/components/admin/SimilarityFailRateTrendChart';
+import {
+  getGlobalSimilarityFailRateTrend,
+  getGlobalTestCaseMetrics,
+} from '~/lib/tests/repository';
 
 export const metadata = {
   title: 'Admin Dashboard | Betco BEX',
   description: 'Overview dashboard for Betco BEX admin operations and shortcuts.',
 };
 
-const metrics = [
-  {
-    title: 'Total Revenue',
-    value: '$1,250.00',
-    delta: '+12.5%',
-    trend: 'up',
-    summary: 'Trending up this month',
-    detail: 'Visitors for the last 6 months',
-  },
-  {
-    title: 'New Customers',
-    value: '1,234',
-    delta: '-20%',
-    trend: 'down',
-    summary: 'Down 20% this period',
-    detail: 'Acquisition needs attention',
-  },
-  {
-    title: 'Active Accounts',
-    value: '45,678',
-    delta: '+12.5%',
-    trend: 'up',
-    summary: 'Strong user retention',
-    detail: 'Engagement exceed targets',
-  },
-  {
-    title: 'Growth Rate',
-    value: '4.5%',
-    delta: '+4.5%',
-    trend: 'up',
-    summary: 'Steady performance increase',
-    detail: 'Meets growth projections',
-  },
-];
+type MetricCardData = {
+  title: string;
+  value: string;
+  delta?: string;
+  trend?: 'up' | 'down';
+  summary: string;
+  detail: string;
+};
 
-const visitors = [42, 68, 34, 58, 78, 96, 62, 88, 52, 74, 110, 84];
+function buildMetrics(input: Awaited<ReturnType<typeof getGlobalTestCaseMetrics>>): MetricCardData[] {
+  return [
+    {
+      title: 'Avg Similarity (All Test Cases)',
+      value:
+        input.avgSimilarity === null ? 'n/a' : `${(input.avgSimilarity * 100).toFixed(1)}%`,
+      summary:
+        input.avgSimilarity === null
+          ? 'No similarity-bearing responses yet'
+          : 'Average source similarity across all completed test cases',
+      detail: `Based on ${input.similaritySampleSize.toLocaleString()} test case(s) with similarity data`,
+    },
+    {
+      title: 'Avg Elapsed Runtime (All Test Cases)',
+      value: `${(input.avgElapsedMs / 1000).toFixed(2)}s`,
+      summary: 'Mean elapsed runtime across all completed test cases',
+      detail: `Based on ${input.totalCases.toLocaleString()} completed test case(s)`,
+    },
+    {
+      title: 'Avg Pass Rate (All Test Cases)',
+      value: `${(input.passRate * 100).toFixed(1)}%`,
+      summary: 'Passed test cases divided by all completed test cases',
+      detail: `${input.passedCases.toLocaleString()} passed / ${input.totalCases.toLocaleString()} total`,
+    },
+    {
+      title: 'Avg Fail Rate (All Test Cases)',
+      value: `${(input.failRate * 100).toFixed(1)}%`,
+      summary: 'Failed test cases divided by all completed test cases',
+      detail: `${input.failedCases.toLocaleString()} failed / ${input.totalCases.toLocaleString()} total`,
+    },
+  ];
+}
 
 const outlineTabs = [
   { label: 'Outline', value: 'outline' },
@@ -101,7 +115,8 @@ function MetricCard({
   title,
   trend,
   value,
-}: (typeof metrics)[number]) {
+}: MetricCardData) {
+  const showTrend = trend && delta;
   const isUp = trend === 'up';
   const TrendIcon = isUp ? TrendingUp : TrendingDown;
 
@@ -111,17 +126,19 @@ function MetricCard({
         <CardDescription>{title}</CardDescription>
         <div className="flex items-center justify-between gap-3">
           <CardTitle className="text-3xl font-semibold">{value}</CardTitle>
-          <Badge
-            className={
-              isUp
-                ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-50'
-                : 'bg-rose-50 text-rose-700 hover:bg-rose-50'
-            }
-            variant="secondary"
-          >
-            <TrendIcon className="size-3.5" />
-            {delta}
-          </Badge>
+          {showTrend ? (
+            <Badge
+              className={
+                isUp
+                  ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-50'
+                  : 'bg-rose-50 text-rose-700 hover:bg-rose-50'
+              }
+              variant="secondary"
+            >
+              <TrendIcon className="size-3.5" />
+              {delta}
+            </Badge>
+          ) : null}
         </div>
       </CardHeader>
       <CardContent className="space-y-1 px-5 pt-0 text-sm">
@@ -132,38 +149,15 @@ function MetricCard({
   );
 }
 
-function VisitorsChart() {
-  const maxValue = Math.max(...visitors);
+export default async function AdminDashboardPage() {
+  await connection();
+  const [globalMetrics, similarityFailTrendRaw] = await Promise.all([
+    getGlobalTestCaseMetrics(),
+    getGlobalSimilarityFailRateTrend({ maxRuns: 30 }),
+  ]);
+  const similarityFailTrend: SimilarityFailRateTrendPoint[] = similarityFailTrendRaw;
+  const metrics = buildMetrics(globalMetrics);
 
-  return (
-    <div className="mt-8">
-      <div className="flex h-60 items-end gap-2">
-        {visitors.map((value, index) => (
-          <div
-            className="flex-1 rounded-t-2xl bg-primary/15"
-            key={index}
-            style={{ height: `${(value / maxValue) * 100}%` }}
-          >
-            <div
-              className="w-full rounded-t-2xl bg-primary/80"
-              style={{ height: `${Math.max((value / maxValue) * 100 - 18, 16)}%` }}
-            />
-          </div>
-        ))}
-      </div>
-      <div className="mt-4 flex justify-between text-xs text-muted-foreground">
-        <span>Jan</span>
-        <span>Feb</span>
-        <span>Mar</span>
-        <span>Apr</span>
-        <span>May</span>
-        <span>Jun</span>
-      </div>
-    </div>
-  );
-}
-
-export default function AdminDashboardPage() {
   return (
     <main className="min-w-0 p-4 sm:p-6">
       <div className="rounded-[2rem] border border-border/60 bg-background shadow-sm">
@@ -200,16 +194,20 @@ export default function AdminDashboardPage() {
             <Card className="rounded-3xl border border-border/60 shadow-none">
               <CardHeader className="flex flex-row items-start justify-between gap-4 px-5 pb-0">
                 <div>
-                  <CardTitle className="text-lg font-semibold">Total Visitors</CardTitle>
-                  <CardDescription>Total for the last 3 months</CardDescription>
+                  <CardTitle className="text-lg font-semibold">
+                    Similarity and fail-rate trend
+                  </CardTitle>
+                  <CardDescription>
+                    Per-run averages over the latest 30 test runs
+                  </CardDescription>
                 </div>
                 <Button className="rounded-2xl" size="sm" variant="outline">
-                  Last 3 months
+                  Last 30 runs
                   <ChevronDown className="size-4" />
                 </Button>
               </CardHeader>
               <CardContent className="px-5 pt-0">
-                <VisitorsChart />
+                <SimilarityFailRateTrendChart points={similarityFailTrend} />
               </CardContent>
             </Card>
 

@@ -13,6 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from '~/components/ui/table';
+import { V1_AGENT_REGISTRY } from '~/lib/agents/agent-registry';
 import {
   getTestById,
   listResultItemsByResultId,
@@ -138,6 +139,14 @@ export default async function AdminTestDetailsPage({
               </h1>
               <p className="mt-3 text-sm text-slate-600">
                 File: {test.source_file_name} ({test.row_count} prompts)
+                {test.intended_agent ? (
+                  <>
+                    <span className="mx-1 text-slate-400">·</span>
+                    Intended agent:{' '}
+                    {V1_AGENT_REGISTRY.find((a) => a.id === test.intended_agent)?.label ??
+                      test.intended_agent}
+                  </>
+                ) : null}
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">

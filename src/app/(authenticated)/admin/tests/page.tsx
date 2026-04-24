@@ -13,6 +13,8 @@ import {
   TableRow,
 } from '~/components/ui/table';
 import { AdminTestsActionToast } from '~/components/admin/tests/AdminTestsActionToast';
+import { TestIntendedAgentCombobox } from '~/components/admin/tests/TestIntendedAgentCombobox';
+import { V1_AGENT_REGISTRY } from '~/lib/agents/agent-registry';
 import {
   listResultItemsByResultId,
   listTestResultsByTestId,
@@ -63,6 +65,12 @@ function extractItemSimilarityScore(responsePayload: unknown) {
 type PageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 };
+
+const intendedAgentFormOptions = V1_AGENT_REGISTRY.map((agent) => ({
+  id: agent.id,
+  label: agent.label,
+  description: agent.description,
+}));
 
 export default async function AdminTestsPage({ searchParams }: PageProps) {
   await connection();
@@ -116,14 +124,20 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
             Upload prompt datasets and run evaluation sets
           </h1>
           <p className="mt-4 max-w-4xl text-base leading-7 text-slate-600">
-            Upload CSV test sets to S3 (`retool-360/bex`), persist rows into
-            `public.tests` and `public.test_items`, then run prompt sets and save
-            run metrics in `public.test_results`.
+            Create an empty test set and add prompts manually, or upload a CSV to S3
+            (`retool-360/bex`) and persist rows into `public.tests` and
+            `public.test_items`, then run prompt sets and save run metrics in
+            `public.test_results`.
           </p>
         </section>
 
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-          <h2 className="text-lg font-semibold text-slate-900">Upload CSV dataset</h2>
+          <h2 className="text-lg font-semibold text-slate-900">Create or upload test dataset</h2>
+          <p className="mt-2 text-sm text-slate-600">
+            CSV is optional. Without a file, a ready test set is created with no rows
+            (source <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">ad-hoc</code>); add
+            prompts from the detail page. With a CSV, rows are imported as before.
+          </p>
           <form action={uploadTestCsvAction} className="mt-4 grid gap-4 sm:grid-cols-2">
             <input name="returnPath" type="hidden" value="/admin/tests" />
             <div className="flex flex-col gap-2">
@@ -136,21 +150,24 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
                 placeholder="Product catalog specialist set"
                 type="text"
               />
+              <p className="text-xs text-slate-500">
+                Required when creating without a CSV; optional when uploading (defaults to the file
+                name).
+              </p>
             </div>
-            <div className="flex flex-col gap-2">
+            <TestIntendedAgentCombobox
+              agents={intendedAgentFormOptions}
+              id="test-intended-agent"
+              label="Intended agent"
+            />
+            <div className="flex flex-col gap-2 sm:col-span-2">
               <Label className="text-sm text-slate-700" htmlFor="test-dataset-input">
-                CSV file
+                CSV file <span className="font-normal text-slate-500">(optional)</span>
               </Label>
-              <Input
-                accept=".csv,text/csv"
-                id="test-dataset-input"
-                name="dataset"
-                required
-                type="file"
-              />
+              <Input accept=".csv,text/csv" id="test-dataset-input" name="dataset" type="file" />
             </div>
             <div className="sm:col-span-2">
-              <Button type="submit">Upload dataset</Button>
+              <Button type="submit">Create / upload dataset</Button>
             </div>
           </form>
         </section>
@@ -164,6 +181,7 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
             <TableHeader>
               <TableRow>
                 <TableHead>Name</TableHead>
+                <TableHead>Intended agent</TableHead>
                 <TableHead>Rows</TableHead>
                 <TableHead>Uploaded</TableHead>
                 <TableHead>Latest run</TableHead>
@@ -175,7 +193,7 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
             <TableBody>
               {testRows.length === 0 ? (
                 <TableRow>
-                  <TableCell className="text-slate-500" colSpan={7}>
+                  <TableCell className="text-slate-500" colSpan={8}>
                     No datasets uploaded yet.
                   </TableCell>
                 </TableRow>
@@ -190,6 +208,12 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
                       >
                         {test.name}
                       </Link>
+                    </TableCell>
+                    <TableCell className="max-w-[200px] text-sm text-slate-600">
+                      {test.intended_agent
+                        ? (V1_AGENT_REGISTRY.find((a) => a.id === test.intended_agent)?.label ??
+                          test.intended_agent)
+                        : '—'}
                     </TableCell>
                     <TableCell>{test.row_count}</TableCell>
                     <TableCell>{formatDate(test.uploaded_at)}</TableCell>

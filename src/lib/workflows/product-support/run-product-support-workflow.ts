@@ -131,6 +131,83 @@ function shouldForceCrossReferenceLookup(userMessage: string) {
   return hasCrossRefIntent && hasBetcoContext;
 }
 
+function isEarlyDeclineGateEnabled() {
+  return process.env.BEX_EARLY_DECLINE_GATE_ENABLED !== 'false';
+}
+
+type EarlyDeclineDecision = {
+  reason:
+    | 'chemical_mixing_or_safety'
+    | 'legal_or_compliance'
+    | 'storage_or_expiration'
+    | 'broad_recommendation_without_context';
+  text: string;
+};
+
+function classifyEarlyDecline(userMessage: string): EarlyDeclineDecision | null {
+  if (!isEarlyDeclineGateEnabled()) {
+    return null;
+  }
+
+  const text = userMessage.toLowerCase();
+  const asksChemicalMixing =
+    /(mix|mixing|combine|adding|add)\b/.test(text) &&
+    /(bleach|ammonia|acid|chlorine|cleaner|concentrate|chemical)/.test(text);
+  if (asksChemicalMixing) {
+    return {
+      reason: 'chemical_mixing_or_safety',
+      text: [
+        'I cannot advise on mixing chemicals from this prompt alone.',
+        '',
+        'For safety, follow the product label and SDS exactly and involve your EHS lead before any mixing decision.',
+      ].join('\n'),
+    };
+  }
+
+  if (/(legal|osha|compliant|compliance|regulation|regulatory)/.test(text)) {
+    return {
+      reason: 'legal_or_compliance',
+      text: [
+        'I cannot provide legal or regulatory determinations from this prompt alone.',
+        '',
+        'Please use your official compliance process and verify requirements against current OSHA/regional guidance and product SDS documentation.',
+      ].join('\n'),
+    };
+  }
+
+  if (
+    /(expired|expiration|expire|shelf life|still good after|past expiration|past expiry)/.test(
+      text,
+    )
+  ) {
+    return {
+      reason: 'storage_or_expiration',
+      text: [
+        'I cannot verify safety or efficacy for expired or long-stored product from this prompt alone.',
+        '',
+        'Please confirm lot/expiry details and follow the product label and SDS before use.',
+      ].join('\n'),
+    };
+  }
+
+  if (
+    /(what should i use|what do you recommend|what'?s the best|which .* should we use|best .* for)/.test(
+      text,
+    )
+  ) {
+    return {
+      reason: 'broad_recommendation_without_context',
+      text: [
+        'I cannot give a specific product recommendation from this prompt alone.',
+        '',
+        'Share your exact surface/material, soil type, application method, and any safety/compliance constraints, and I can provide a precise recommendation.',
+      ].join('\n'),
+    };
+  }
+
+  return null;
+}
+
 type CrossReferenceMatch = {
   competitorBrand: string | null;
   competitorProductName: string | null;
@@ -454,6 +531,7 @@ export async function runProductSupportWorkflow(input: {
   const useValidator = input.useValidator ?? false;
   const agentMode = input.agentMode ?? DEFAULT_BEX_CHAT_AGENT_MODE;
   const route = routeUserMessageToSme(input.userMessage);
+  const earlyDeclineDecision = classifyEarlyDecline(input.userMessage);
   const routingDecision =
     agentMode === 'orchestrator'
       ? (route.agent ?? 'ambiguous')
@@ -537,6 +615,112 @@ export async function runProductSupportWorkflow(input: {
     { step: 'orchestration_planner', step_id: plannerStep.id },
     { ...wfCtx, stepId: plannerStep.id },
   );
+
+  if (earlyDeclineDecision) {
+    const declineResponseId = `decline_gate:${run.id}`;
+    const finalText = earlyDeclineDecision.text;
+    const validation: ValidatorResult = {
+      approved: true,
+      confidence: 0.92,
+      issues: [],
+      requires_human_review: false,
+    };
+    const finalOutput: ProductSupportFinalOutput = {
+      answerText: finalText,
+      sources: [],
+      confidence: validation.confidence,
+      workflowRunId: run.id,
+      latestOpenaiResponseId: declineResponseId,
+      validation,
+      routingDecision,
+      timingBreakdown: {
+        toolRounds: 0,
+        cacheSource: null,
+        searchMs: null,
+      },
+    };
+
+    const policyGateStep = await insertWorkflowStep({
+      workflow_run_id: run.id,
+      step_name: 'early_decline_gate',
+      status: 'completed',
+      input: jsonContent({
+        reason: earlyDeclineDecision.reason,
+        message: input.userMessage,
+      }),
+      output: jsonContent({
+        applied: true,
+        reason: earlyDeclineDecision.reason,
+      }),
+      completed_at: new Date().toISOString(),
+    });
+
+    await writeAuditLog(
+      'step_completed',
+      {
+        step: 'early_decline_gate',
+        step_id: policyGateStep.id,
+        reason: earlyDeclineDecision.reason,
+      },
+      { ...wfCtx, stepId: policyGateStep.id },
+    );
+
+    await updateWorkflowRun(run.id, {
+      status: 'completed',
+      final_output: jsonContent(finalOutput),
+      confidence: validation.confidence,
+    });
+
+    await updateConversation(input.conversationId, {
+      latest_model: model,
+    });
+
+    await insertMessage({
+      conversation_id: input.conversationId,
+      role: 'assistant',
+      plain_text: finalText,
+      openai_response_id: null,
+      content: jsonContent({
+        kind: 'assistant_turn',
+        text: finalText,
+        model,
+        sources: [],
+        confidence: validation.confidence,
+        workflowRunId: run.id,
+        routingHint: {
+          decision: routingDecision,
+          rationale: `${routingRationale} Early decline gate applied: ${earlyDeclineDecision.reason}`,
+        },
+        validation: {
+          approved: validation.approved,
+          issues: validation.issues,
+          requiresHumanReview: validation.requires_human_review,
+        },
+        timingBreakdown: {
+          toolRounds: 0,
+          cacheSource: null,
+          searchMs: null,
+        },
+        toolSummary: [],
+      }),
+    });
+
+    await writeAuditLog(
+      'workflow_completed',
+      {
+        workflow_run_id: run.id,
+        early_decline_reason: earlyDeclineDecision.reason,
+      },
+      wfCtx,
+    );
+    logInfo('workflow_completed', {
+      ...wfCtx,
+      early_decline_reason: earlyDeclineDecision.reason,
+    });
+    input.onEvent?.({ type: 'status', stage: 'workflow_completed' });
+
+    return finalOutput;
+  }
 
   const agentStep = await insertWorkflowStep({
     workflow_run_id: run.id,

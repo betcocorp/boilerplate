@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS public.tests (
   source_file_name text NOT NULL,
   source_bucket text NOT NULL,
   source_key text NOT NULL,
+  intended_agent text,
   row_count integer NOT NULL DEFAULT 0,
   status text NOT NULL DEFAULT 'ready',
   uploaded_at timestamptz NOT NULL DEFAULT now(),

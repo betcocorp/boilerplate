@@ -3,10 +3,8 @@
 import {
   type KeyboardEvent,
   type MouseEvent,
-  type ReactNode,
   useEffect,
   useMemo,
-  useRef,
   useState,
 } from 'react';
 import type { ActiveDotProps, DotItemDotProps } from 'recharts';
@@ -19,11 +17,16 @@ import {
   LineChart,
   Pie,
   PieChart,
-  Tooltip,
   XAxis,
   YAxis,
 } from 'recharts';
 
+import {
+  ChartContainer,
+  type ChartConfig,
+  ChartTooltip,
+  ChartTooltipContent,
+} from '~/components/ui/chart';
 import { cn } from '~/lib/utils';
 
 type ElapsedTrendDatum = {
@@ -62,50 +65,11 @@ type RunStatusResponse = {
   notRunItems: number;
 };
 
-type ChartSize = {
-  width: number;
-  height: number;
-};
-
-function ChartFrame({
-  className,
-  children,
-}: {
-  className: string;
-  children: (size: ChartSize) => ReactNode;
-}) {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const [size, setSize] = useState<ChartSize>({ width: 0, height: 0 });
-
-  useEffect(() => {
-    const element = containerRef.current;
-    if (!element) {
-      return;
-    }
-
-    const updateSize = () => {
-      const nextWidth = Math.max(0, Math.floor(element.clientWidth));
-      const nextHeight = Math.max(0, Math.floor(element.clientHeight));
-      setSize({ width: nextWidth, height: nextHeight });
-    };
-
-    updateSize();
-    const observer = new ResizeObserver(() => {
-      updateSize();
-    });
-    observer.observe(element);
-
-    return () => {
-      observer.disconnect();
-    };
-  }, []);
-
-  return (
-    <div className={className} ref={containerRef}>
-      {size.width > 0 && size.height > 0 ? children(size) : null}
-    </div>
-  );
-}
+const chartConfig = {
+  elapsedSeconds: { label: 'Elapsed', color: '#0ea5e9' },
+  count: { label: 'Count', color: '#16a34a' },
+  value: { label: 'Similarity', color: '#a855f7' },
+} satisfies ChartConfig;
 
 function scrollToRunItemRow(resultItemId: string) {
   const el = document.getElementById(`run-item-result-${resultItemId}`);
@@ -132,8 +96,7 @@ function ElapsedTrendDatumDotSvg(
       : typeof rawR === 'string'
         ? Number.parseFloat(rawR)
         : 5;
-  const radius =
-    typeof r === 'number' && Number.isFinite(r) ? r : 5;
+  const radius = typeof r === 'number' && Number.isFinite(r) ? r : 5;
 
   /* Larger invisible target so hover works before the visible dot appears */
   const hitRadius = Math.max(radius + 10, 14);
@@ -162,7 +125,13 @@ function ElapsedTrendDatumDotSvg(
       role="button"
       tabIndex={0}
     >
-      <circle cx={cx} cy={cy} fill="transparent" pointerEvents="auto" r={hitRadius} />
+      <circle
+        cx={cx}
+        cy={cy}
+        fill="transparent"
+        pointerEvents="auto"
+        r={hitRadius}
+      />
       <circle
         className={cn('stroke-white pointer-events-none', visibleOpacity)}
         cx={cx}
@@ -292,71 +261,68 @@ export function RunAtAGlanceCharts({
           <h3 className="text-sm font-semibold text-slate-900">
             Elapsed by prompt order
           </h3>
-          <ChartFrame className="mt-4 h-56 min-w-0">
-            {({ height, width }) => (
-              <LineChart data={elapsedTrendData} height={height} width={width}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                <XAxis
-                  dataKey="label"
-                  interval={0}
-                  tick={{ fontSize: 11 }}
-                  tickFormatter={(value, index) =>
-                    typeof index === 'number'
-                      ? index % 10 === 0
-                        ? `${index}`
-                        : ''
-                      : value
-                  }
-                />
-                <YAxis
-                  tick={{ fontSize: 11 }}
-                  tickFormatter={(value) => `${value}s`}
-                />
-                <Tooltip
-                  formatter={(value) => {
-                    if (typeof value !== 'number') {
-                      return 'n/a';
+          <ChartContainer className="mt-4 h-56 min-w-0" config={chartConfig}>
+            <LineChart data={elapsedTrendData}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} />
+              <XAxis
+                dataKey="label"
+                interval={0}
+                tick={{ fontSize: 11 }}
+                tickFormatter={(value, index) =>
+                  typeof index === 'number'
+                    ? index % 10 === 0
+                      ? `${index}`
+                      : ''
+                    : value
+                }
+              />
+              <YAxis
+                tick={{ fontSize: 11 }}
+                tickFormatter={(value) => `${value}s`}
+              />
+              <ChartTooltip
+                content={
+                  <ChartTooltipContent
+                    formatter={(value) =>
+                      typeof value === 'number' ? `${value.toFixed(2)} s` : 'n/a'
                     }
-                    return `${value.toFixed(2)} s`;
-                  }}
-                />
-                <Line
-                  activeDot={ElapsedTrendActiveDatumDot}
-                  dataKey="elapsedSeconds"
-                  dot={ElapsedTrendDatumDot}
-                  stroke="#0ea5e9"
-                  strokeWidth={2}
-                  type="monotone"
-                />
-              </LineChart>
-            )}
-          </ChartFrame>
+                  />
+                }
+              />
+              <Line
+                activeDot={ElapsedTrendActiveDatumDot}
+                dataKey="elapsedSeconds"
+                dot={ElapsedTrendDatumDot}
+                stroke="var(--color-elapsedSeconds)"
+                strokeWidth={2}
+                type="monotone"
+              />
+            </LineChart>
+          </ChartContainer>
         </article>
 
         <article className="min-w-0 rounded-2xl border border-slate-200 p-5">
           <h3 className="text-sm font-semibold text-slate-900">
             Pass vs fail vs not run
           </h3>
-          <ChartFrame className="mt-4 h-56 min-w-0">
-            {({ height, width }) => (
-              <PieChart height={height} width={width}>
-                <Pie
-                  cx="50%"
-                  cy="50%"
-                  data={passFailData}
-                  dataKey="count"
-                  innerRadius={50}
-                  nameKey="label"
-                  outerRadius={82}
-                >
-                  {passFailData.map((entry) => (
-                    <Cell fill={entry.fill} key={entry.label} />
-                  ))}
-                </Pie>
-                <Tooltip />
-              </PieChart>
-            )}
-          </ChartFrame>
+          <ChartContainer className="mt-4 h-56 min-w-0" config={chartConfig}>
+            <PieChart>
+              <Pie
+                cx="50%"
+                cy="50%"
+                data={passFailData}
+                dataKey="count"
+                innerRadius={50}
+                nameKey="label"
+                outerRadius={82}
+              >
+                {passFailData.map((entry) => (
+                  <Cell fill={entry.fill} key={entry.label} />
+                ))}
+              </Pie>
+              <ChartTooltip content={<ChartTooltipContent />} />
+            </PieChart>
+          </ChartContainer>
           <p className="mt-2 text-xs text-slate-500">
             Pass rate (completed items): {passRate.toFixed(1)}%
           </p>
@@ -366,26 +332,24 @@ export function RunAtAGlanceCharts({
           <h3 className="text-sm font-semibold text-slate-900">
             Slow or not-passed signal counts
           </h3>
-          <ChartFrame className="mt-4 h-56 min-w-0">
-            {({ height, width }) => (
-              <PieChart height={height} width={width}>
-                <Pie
-                  cx="50%"
-                  cy="50%"
-                  data={slowFailSignalsData}
-                  dataKey="count"
-                  innerRadius={50}
-                  nameKey="label"
-                  outerRadius={82}
-                >
-                  {slowFailSignalsData.map((entry) => (
-                    <Cell fill={entry.fill} key={entry.label} />
-                  ))}
-                </Pie>
-                <Tooltip />
-              </PieChart>
-            )}
-          </ChartFrame>
+          <ChartContainer className="mt-4 h-56 min-w-0" config={chartConfig}>
+            <PieChart>
+              <Pie
+                cx="50%"
+                cy="50%"
+                data={slowFailSignalsData}
+                dataKey="count"
+                innerRadius={50}
+                nameKey="label"
+                outerRadius={82}
+              >
+                {slowFailSignalsData.map((entry) => (
+                  <Cell fill={entry.fill} key={entry.label} />
+                ))}
+              </Pie>
+              <ChartTooltip content={<ChartTooltipContent />} />
+            </PieChart>
+          </ChartContainer>
           <p className="mt-2 text-xs text-slate-500">
             Combined signal total: {slowFailSignalTotal} (counts may overlap by
             item).
@@ -396,28 +360,33 @@ export function RunAtAGlanceCharts({
           <h3 className="text-sm font-semibold text-slate-900">
             Similarity stats
           </h3>
-          <ChartFrame className="mt-4 h-56 min-w-0">
-            {({ height, width }) => (
-              <BarChart data={similarityStatsData} height={height} width={width}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="label" interval={0} tick={{ fontSize: 11 }} />
-                <YAxis
-                  domain={[0, 1]}
-                  tick={{ fontSize: 11 }}
-                  tickFormatter={(value) => `${(value * 100).toFixed(0)}%`}
-                />
-                <Tooltip
-                  formatter={(value) => {
-                    if (typeof value !== 'number') {
-                      return 'n/a';
+          <ChartContainer className="mt-4 h-56 min-w-0" config={chartConfig}>
+            <BarChart data={similarityStatsData}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} />
+              <XAxis dataKey="label" interval={0} tick={{ fontSize: 11 }} />
+              <YAxis
+                domain={[0, 1]}
+                tick={{ fontSize: 11 }}
+                tickFormatter={(value) => `${(value * 100).toFixed(0)}%`}
+              />
+              <ChartTooltip
+                content={
+                  <ChartTooltipContent
+                    formatter={(value) =>
+                      typeof value === 'number'
+                        ? `${(value * 100).toFixed(2)}%`
+                        : 'n/a'
                     }
-                    return `${(value * 100).toFixed(2)}%`;
-                  }}
-                />
-                <Bar dataKey="value" fill="#a855f7" radius={[8, 8, 0, 0]} />
-              </BarChart>
-            )}
-          </ChartFrame>
+                  />
+                }
+              />
+              <Bar
+                dataKey="value"
+                fill="var(--color-value)"
+                radius={[8, 8, 0, 0]}
+              />
+            </BarChart>
+          </ChartContainer>
         </article>
       </div>
     </section>

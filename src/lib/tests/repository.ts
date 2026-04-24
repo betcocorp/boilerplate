@@ -252,6 +252,41 @@ export async function getTestResultById(testResultId: string) {
 }
 
 const RESULT_ITEMS_PAGE_SIZE = 500;
+const TEST_CASE_METRICS_PAGE_SIZE = 1000;
+const TEST_RUNS_PAGE_SIZE = 500;
+const COMPLETED_TEST_RUN_STATUSES = ['completed', 'completed_with_failures'] as const;
+
+function extractItemSimilarityScore(responsePayload: unknown) {
+  if (
+    !responsePayload ||
+    typeof responsePayload !== 'object' ||
+    Array.isArray(responsePayload)
+  ) {
+    return null;
+  }
+
+  const payload = responsePayload as Record<string, unknown>;
+  const sources = payload.sources;
+  if (!Array.isArray(sources)) {
+    return null;
+  }
+
+  const similarities = sources
+    .map((source) => {
+      if (!source || typeof source !== 'object' || Array.isArray(source)) {
+        return null;
+      }
+      const value = (source as Record<string, unknown>).similarity;
+      return typeof value === 'number' ? value : null;
+    })
+    .filter((value): value is number => typeof value === 'number');
+
+  if (similarities.length === 0) {
+    return null;
+  }
+
+  return Math.max(...similarities);
+}
 
 export async function listResultItemsByResultId(testResultId: string, limit = 200) {
   const supabase = getSupabaseServiceRoleClient();
@@ -288,6 +323,192 @@ export async function listAllResultItemsByResultId(testResultId: string) {
   }
 
   return all;
+}
+
+export async function getGlobalTestCaseMetrics() {
+  const supabase = getSupabaseServiceRoleClient();
+  const completedRunIds: string[] = [];
+  let runsFrom = 0;
+
+  while (true) {
+    const runsResult = await supabase
+      .from('test_results')
+      .select('id')
+      .in('status', [...COMPLETED_TEST_RUN_STATUSES])
+      .order('created_at', { ascending: true })
+      .range(runsFrom, runsFrom + TEST_RUNS_PAGE_SIZE - 1);
+
+    const runsPage = (assertNoError(runsResult) || []) as Array<{ id: string }>;
+    completedRunIds.push(...runsPage.map((run) => run.id));
+
+    if (runsPage.length < TEST_RUNS_PAGE_SIZE) {
+      break;
+    }
+    runsFrom += TEST_RUNS_PAGE_SIZE;
+  }
+
+  if (completedRunIds.length === 0) {
+    return {
+      totalCases: 0,
+      passedCases: 0,
+      failedCases: 0,
+      passRate: 0,
+      failRate: 0,
+      avgElapsedMs: 0,
+      avgSimilarity: null,
+      similaritySampleSize: 0,
+    };
+  }
+
+  let from = 0;
+  let totalCases = 0;
+  let passedCases = 0;
+  let failedCases = 0;
+  let elapsedSumMs = 0;
+  let similaritySum = 0;
+  let similarityCount = 0;
+
+  while (true) {
+    const result = await supabase
+      .from('test_result_items')
+      .select('passed, elapsed_ms, response_payload, status, test_result_id')
+      .in('status', ['completed', 'failed'])
+      .in('test_result_id', completedRunIds)
+      .order('created_at', { ascending: true })
+      .range(from, from + TEST_CASE_METRICS_PAGE_SIZE - 1);
+
+    const page = (assertNoError(result) || []) as Array<{
+      passed: boolean;
+      elapsed_ms: number;
+      response_payload: unknown;
+      status: string;
+      test_result_id: string;
+    }>;
+
+    if (page.length === 0) {
+      break;
+    }
+
+    for (const item of page) {
+      totalCases += 1;
+      elapsedSumMs += Math.max(0, item.elapsed_ms || 0);
+      if (item.passed) {
+        passedCases += 1;
+      } else {
+        failedCases += 1;
+      }
+
+      const similarity = extractItemSimilarityScore(item.response_payload);
+      if (typeof similarity === 'number') {
+        similaritySum += similarity;
+        similarityCount += 1;
+      }
+    }
+
+    if (page.length < TEST_CASE_METRICS_PAGE_SIZE) {
+      break;
+    }
+    from += TEST_CASE_METRICS_PAGE_SIZE;
+  }
+
+  return {
+    totalCases,
+    passedCases,
+    failedCases,
+    passRate: totalCases > 0 ? passedCases / totalCases : 0,
+    failRate: totalCases > 0 ? failedCases / totalCases : 0,
+    avgElapsedMs: totalCases > 0 ? elapsedSumMs / totalCases : 0,
+    avgSimilarity: similarityCount > 0 ? similaritySum / similarityCount : null,
+    similaritySampleSize: similarityCount,
+  };
+}
+
+type RunSimilarityAccumulator = {
+  similaritySum: number;
+  similarityCount: number;
+};
+
+export async function getGlobalSimilarityFailRateTrend(options?: { maxRuns?: number }) {
+  const maxRuns = Math.min(Math.max(options?.maxRuns ?? 30, 2), 200);
+  const supabase = getSupabaseServiceRoleClient();
+
+  const runsResult = await supabase
+    .from('test_results')
+    .select('id, created_at, failed_items, total_items')
+    .in('status', [...COMPLETED_TEST_RUN_STATUSES])
+    .order('created_at', { ascending: false })
+    .limit(maxRuns);
+
+  const runs = (assertNoError(runsResult) || []) as Array<{
+    id: string;
+    created_at: string;
+    failed_items: number;
+    total_items: number;
+  }>;
+
+  if (runs.length === 0) {
+    return [];
+  }
+
+  const orderedRuns = [...runs].reverse();
+  const runIds = orderedRuns.map((run) => run.id);
+  const similarityByRunId = new Map<string, RunSimilarityAccumulator>(
+    runIds.map((id) => [id, { similaritySum: 0, similarityCount: 0 }]),
+  );
+
+  let from = 0;
+
+  while (true) {
+    const result = await supabase
+      .from('test_result_items')
+      .select('test_result_id, response_payload, status')
+      .in('status', ['completed', 'failed'])
+      .in('test_result_id', runIds)
+      .order('created_at', { ascending: true })
+      .range(from, from + TEST_CASE_METRICS_PAGE_SIZE - 1);
+
+    const page = (assertNoError(result) || []) as Array<{
+      test_result_id: string;
+      response_payload: unknown;
+      status: string;
+    }>;
+
+    if (page.length === 0) {
+      break;
+    }
+
+    for (const item of page) {
+      const accumulator = similarityByRunId.get(item.test_result_id);
+      if (!accumulator) {
+        continue;
+      }
+
+      const similarity = extractItemSimilarityScore(item.response_payload);
+      if (typeof similarity === 'number') {
+        accumulator.similaritySum += similarity;
+        accumulator.similarityCount += 1;
+      }
+    }
+
+    if (page.length < TEST_CASE_METRICS_PAGE_SIZE) {
+      break;
+    }
+    from += TEST_CASE_METRICS_PAGE_SIZE;
+  }
+
+  return orderedRuns.map((run, index) => {
+    const similarity = similarityByRunId.get(run.id);
+    return {
+      label: `Run ${index + 1}`,
+      runCreatedAt: run.created_at,
+      avgSimilarity:
+        similarity && similarity.similarityCount > 0
+          ? similarity.similaritySum / similarity.similarityCount
+          : null,
+      failRate: run.total_items > 0 ? run.failed_items / run.total_items : 0,
+      totalCases: run.total_items,
+    };
+  });
 }
 
 export async function listResultItemsByTestItemId(testItemId: string, limit = 500) {
