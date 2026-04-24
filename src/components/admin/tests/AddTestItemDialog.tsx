@@ -34,7 +34,7 @@ type AddTestItemDialogProps = {
   };
 };
 
-/** Aligns with common CSV / runner expectations (`evaluateResult`). */
+/** Aligns with common CSV / runner evaluation rules in `~/lib/tests/runner`. */
 const RESULT_TYPE_PRESETS = ['decline', 'none'] as const;
 
 /** Labels match `parseExpectedShouldAnswerFromForm` in `~/lib/tests/csv`. */

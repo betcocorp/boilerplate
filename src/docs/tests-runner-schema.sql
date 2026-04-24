@@ -67,6 +67,32 @@ CREATE INDEX IF NOT EXISTS idx_test_items_row_index ON public.test_items (test_i
 CREATE INDEX IF NOT EXISTS idx_test_results_test_id ON public.test_results (test_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_test_result_items_result_id ON public.test_result_items (test_result_id, row_index);
 
+-- One row per failing prompt (latest failure when a test set is run many times).
+CREATE OR REPLACE VIEW public.latest_failed_test_result_items AS
+SELECT DISTINCT ON (tri.test_item_id)
+  tri.id,
+  tri.test_result_id,
+  tri.test_item_id,
+  tri.row_index,
+  tri.passed,
+  tri.status,
+  tri.elapsed_ms,
+  tri.error_message,
+  tri.response_text,
+  tri.response_payload,
+  tri.created_at,
+  ti.prompt,
+  ti.test_id,
+  ti.row_index AS item_row_index,
+  t.name AS test_name,
+  tr.created_at AS run_created_at
+FROM public.test_result_items tri
+INNER JOIN public.test_items ti ON ti.id = tri.test_item_id
+INNER JOIN public.test_results tr ON tr.id = tri.test_result_id
+INNER JOIN public.tests t ON t.id = ti.test_id
+WHERE tri.passed = false
+ORDER BY tri.test_item_id, tri.created_at DESC;
+
 CREATE OR REPLACE FUNCTION public.set_updated_at()
 RETURNS trigger
 LANGUAGE plpgsql

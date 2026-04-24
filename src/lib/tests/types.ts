@@ -4,6 +4,7 @@ export type TestRecord = Tables<'tests'>;
 export type TestItemRecord = Tables<'test_items'>;
 export type TestResultRecord = Tables<'test_results'>;
 export type TestResultItemRecord = Tables<'test_result_items'>;
+export type LatestFailedTestResultItemView = Tables<'latest_failed_test_result_items'>;
 
 export type NewTestRecord = TablesInsert<'tests'>;
 export type NewTestItemRecord = TablesInsert<'test_items'>;

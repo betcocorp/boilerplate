@@ -51,6 +51,7 @@ const sidebarSections: NavSectionModel[] = [
         items: [
           { label: 'Bex chat', href: '/admin/bex' },
           { label: 'Test runner', href: '/admin/tests' },
+          { label: 'Failure Queue', href: '/admin/tests/failure-queue' },
         ],
       },
       {
@@ -87,9 +88,23 @@ const sidebarSections: NavSectionModel[] = [
   },
 ];
 
+const UUID_SEGMENT =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function isActivePath(pathname: string, href: string) {
   if (href === '/admin') {
     return pathname === '/admin';
+  }
+
+  if (href === '/admin/tests') {
+    if (pathname === '/admin/tests') {
+      return true;
+    }
+    const rest = pathname.startsWith('/admin/tests/')
+      ? pathname.slice('/admin/tests/'.length)
+      : '';
+    const firstSegment = rest.split('/')[0] ?? '';
+    return UUID_SEGMENT.test(firstSegment);
   }
 
   return pathname === href || pathname.startsWith(`${href}/`);

@@ -1,6 +1,7 @@
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 import type {
+  LatestFailedTestResultItemView,
   NewTestItemRecord,
   NewTestRecord,
   NewTestResultItemRecord,
@@ -305,4 +306,69 @@ export async function deleteTestResultById(testResultId: string) {
 
   const resultDelete = await supabase.from('test_results').delete().eq('id', testResultId);
   assertNoError(resultDelete);
+}
+
+const FAILURE_QUEUE_PAGE_SIZE_MAX = 100;
+const FAILURE_QUEUE_PAGE_DEFAULT = 25;
+
+function normalizeFailureQueueSearch(value: string) {
+  return value
+    .trim()
+    .replaceAll(',', ' ')
+    .replaceAll('%', '')
+    .slice(0, 200);
+}
+
+function rpcCountToNumber(value: unknown) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+}
+
+export async function listLatestFailedTestResultItemsPage(options: {
+  search: string;
+  page: number;
+  pageSize: number;
+}): Promise<{ rows: LatestFailedTestResultItemView[]; total: number }> {
+  const supabase = getSupabaseServiceRoleClient();
+  const normalized = normalizeFailureQueueSearch(options.search);
+  const pageSize = Math.min(
+    Math.max(1, options.pageSize || FAILURE_QUEUE_PAGE_DEFAULT),
+    FAILURE_QUEUE_PAGE_SIZE_MAX,
+  );
+  const page = Math.max(1, options.page);
+  const offset = (page - 1) * pageSize;
+
+  const [countRes, pageRes] = await Promise.all([
+    supabase.rpc('admin_latest_failures_count', { p_search: normalized }),
+    supabase.rpc('admin_latest_failures_page', {
+      p_search: normalized,
+      p_limit: pageSize,
+      p_offset: offset,
+    }),
+  ]);
+
+  if (countRes.error) {
+    throw new Error(countRes.error.message);
+  }
+  if (pageRes.error) {
+    throw new Error(pageRes.error.message);
+  }
+
+  const rawRows = pageRes.data;
+  const rows = Array.isArray(rawRows)
+    ? rawRows
+    : rawRows
+      ? [rawRows as LatestFailedTestResultItemView]
+      : [];
+
+  return {
+    rows,
+    total: rpcCountToNumber(countRes.data),
+  };
 }
