@@ -9,7 +9,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '~/components/ui/dialog';
-import { ScrollArea } from '~/components/ui/scroll-area';
 import { cn } from '~/lib/utils';
 
 import type { RagDocumentChunkApiResponse } from '~/lib/rag/document-chunk-types';
@@ -77,20 +76,20 @@ function RagDocumentChunkDetailBody({ data }: { data: RagDocumentChunkApiRespons
         </div>
         <div className="space-y-1">
           <p className="text-xs font-medium text-muted-foreground">Body (full text)</p>
-          <ScrollArea className="max-h-[min(40vh,320px)] rounded-lg border border-border/80 bg-muted/30">
-            <pre className="whitespace-pre-wrap p-3 font-mono text-[11px] leading-relaxed">
+          <div className="max-h-[min(40vh,320px)] overflow-auto rounded-lg border border-border/80 bg-muted/30">
+            <pre className="whitespace-pre-wrap wrap-break-word p-3 font-mono text-[11px] leading-relaxed">
               {doc.body_text}
             </pre>
-          </ScrollArea>
+          </div>
         </div>
         {doc.body_markdown ? (
           <div className="space-y-1">
             <p className="text-xs font-medium text-muted-foreground">Body (markdown)</p>
-            <ScrollArea className="max-h-[min(32vh,260px)] rounded-lg border border-border/80 bg-muted/30">
-              <pre className="whitespace-pre-wrap p-3 font-mono text-[11px] leading-relaxed">
+            <div className="max-h-[min(32vh,260px)] overflow-auto rounded-lg border border-border/80 bg-muted/30">
+              <pre className="whitespace-pre-wrap wrap-break-word p-3 font-mono text-[11px] leading-relaxed">
                 {doc.body_markdown}
               </pre>
-            </ScrollArea>
+            </div>
           </div>
         ) : null}
       </section>
@@ -136,11 +135,11 @@ function RagDocumentChunkDetailBody({ data }: { data: RagDocumentChunkApiRespons
           </div>
           <div className="space-y-1">
             <p className="text-xs font-medium text-muted-foreground">Chunk text</p>
-            <ScrollArea className="max-h-[min(36vh,280px)] rounded-lg border border-border/80 bg-muted/30">
-              <pre className="whitespace-pre-wrap p-3 font-mono text-[11px] leading-relaxed">
+            <div className="max-h-[min(36vh,280px)] overflow-auto rounded-lg border border-border/80 bg-muted/30">
+              <pre className="whitespace-pre-wrap wrap-break-word p-3 font-mono text-[11px] leading-relaxed">
                 {chunk.chunk_text}
               </pre>
-            </ScrollArea>
+            </div>
           </div>
         </section>
       ) : null}
@@ -238,8 +237,8 @@ export function RagDocumentChunkInspectDialog({
             Full RAG document and optional chunk row from the corpus.
           </DialogDescription>
         </DialogHeader>
-        <ScrollArea className="max-h-[min(78vh,760px)] pr-4">
-          <div className="pb-4">
+        <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain pr-2 [-webkit-overflow-scrolling:touch]">
+          <div className="pb-2 pt-2">
             {loading ? (
               <p className="text-sm text-muted-foreground">Loading…</p>
             ) : data ? (
@@ -248,7 +247,7 @@ export function RagDocumentChunkInspectDialog({
               <p className="text-sm text-muted-foreground">No data.</p>
             )}
           </div>
-        </ScrollArea>
+        </div>
       </DialogContent>
     </Dialog>
   );
