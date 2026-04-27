@@ -16,18 +16,21 @@ import {
 import { V1_AGENT_REGISTRY } from '~/lib/agents/agent-registry';
 import {
   getTestById,
-  getTestItemSuggestionRows,
   getTestItemsByTestId,
   listResultItemsByResultId,
   listTestResultsByTestId,
 } from '~/lib/tests/repository';
-import { buildSuggestionListsFromTestItems } from '~/lib/tests/suggestion-lists';
+import {
+  buildAgentFallbackSuggestionLists,
+  buildSuggestionListsFromTestItems,
+  mergeSuggestionLists,
+} from '~/lib/tests/suggestion-lists';
 
 import { TestHistoricalTrendsCharts } from '~/components/admin/tests/TestHistoricalTrendsCharts';
 import {
   formatDate,
   formatDurationSeconds,
-  formatShortDate,
+  formatRunChartAxisLabel,
 } from '~/lib/utils/time';
 
 import { deleteTestRunAction, runTestAction } from '../actions';
@@ -91,10 +94,9 @@ export default async function AdminTestDetailsPage({
     notFound();
   }
 
-  const [items, results, suggestionRows] = await Promise.all([
+  const [items, results] = await Promise.all([
     getTestItemsByTestId(testId),
     listTestResultsByTestId(testId, 20),
-    getTestItemSuggestionRows(testId),
   ]);
   const trendRuns = [...results].reverse();
   const trendRunItems = await Promise.all(
@@ -108,7 +110,7 @@ export default async function AdminTestDetailsPage({
         : 0,
     passRate:
       run.total_items > 0 ? (run.passed_items / run.total_items) * 100 : 0,
-    startedAtLabel: formatShortDate(run.started_at),
+    startedAtLabel: formatRunChartAxisLabel(run.started_at),
     status: run.status || 'unknown',
   }));
   for (const [index, runItems] of trendRunItems.entries()) {
@@ -135,7 +137,22 @@ export default async function AdminTestDetailsPage({
     });
   }
 
-  const suggestionLists = buildSuggestionListsFromTestItems(suggestionRows);
+  /** Same rows as the prompts table — avoids a second query getting out of sync or capped differently. */
+  const datasetSuggestionLists = buildSuggestionListsFromTestItems(
+    items.map((item) => ({
+      expected_result_type: item.expected_result_type,
+      expected_canonical_product: item.expected_canonical_product,
+      expected_reason_code: item.expected_reason_code,
+      input_payload: item.input_payload,
+    })),
+  );
+  const fallbackSuggestionLists = buildAgentFallbackSuggestionLists(
+    test.intended_agent,
+  );
+  const suggestionLists = mergeSuggestionLists(
+    datasetSuggestionLists,
+    fallbackSuggestionLists,
+  );
 
   return (
     <div className="flex flex-1 bg-slate-50">
@@ -197,30 +214,35 @@ export default async function AdminTestDetailsPage({
                   <TableHead>Run id</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Pass/fail</TableHead>
-                  <TableHead title="Total answer time: sum of each prompt’s elapsed time for this run">
-                    Elapsed
-                  </TableHead>
                   <TableHead title="Share of items marked passed for this run (same basis as the pass rate trend chart)">
                     Pass %
                   </TableHead>
                   <TableHead title="Mean max retrieval similarity across items with scores (same basis as the historical chart)">
                     Similarity
                   </TableHead>
-                  <TableHead>Started</TableHead>
-                  <TableHead>Completed</TableHead>
+                  <TableHead title="Total answer time: sum of each prompt’s elapsed time for this run">
+                    Elapsed
+                  </TableHead>
+                  <TableHead>Started / completed</TableHead>
                   <TableHead>Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {results.length === 0 ? (
                   <TableRow>
-                    <TableCell className="text-slate-500" colSpan={9}>
+                    <TableCell className="text-slate-500" colSpan={8}>
                       No runs yet for this dataset.
                     </TableCell>
                   </TableRow>
                 ) : (
                   results.map((result) => {
                     const metrics = metricsByRunId.get(result.id);
+                    const failedItems = Math.max(
+                      0,
+                      typeof result.failed_items === 'number'
+                        ? result.failed_items
+                        : result.total_items - result.passed_items,
+                    );
                     return (
                       <TableRow key={result.id}>
                         <TableCell className="font-mono text-xs">
@@ -233,10 +255,7 @@ export default async function AdminTestDetailsPage({
                         </TableCell>
                         <TableCell>{result.status}</TableCell>
                         <TableCell>
-                          {result.passed_items}/{result.total_items} passed
-                        </TableCell>
-                        <TableCell>
-                          {formatDurationSeconds(result.elapsed_ms)}
+                          {result.passed_items}/{failedItems}
                         </TableCell>
                         <TableCell className="whitespace-nowrap tabular-nums text-slate-700">
                           {typeof metrics?.passRatePercent === 'number'
@@ -248,11 +267,19 @@ export default async function AdminTestDetailsPage({
                             ? `${(metrics.avgSimilarity * 100).toFixed(1)}%`
                             : 'n/a'}
                         </TableCell>
-                        <TableCell>{formatDate(result.started_at)}</TableCell>
+                        <TableCell>
+                          {formatDurationSeconds(result.elapsed_ms)}
+                        </TableCell>
                         <TableCell className="text-slate-600">
-                          {result.completed_at
-                            ? formatDate(result.completed_at)
-                            : '—'}
+                          <div className="flex flex-col gap-1 text-xs leading-tight">
+                            <span>Start: {formatDate(result.started_at)}</span>
+                            <span>
+                              End:{' '}
+                              {result.completed_at
+                                ? formatDate(result.completed_at)
+                                : '—'}
+                            </span>
+                          </div>
                         </TableCell>
                         <TableCell>
                           <div className="flex flex-wrap gap-2">

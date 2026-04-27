@@ -32,6 +32,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '~/components/ui/select';
+import { RagDocumentChunkInspectButtons } from '~/components/rag/RagDocumentChunkInspect';
 import { Separator } from '~/components/ui/separator';
 import { Textarea } from '~/components/ui/textarea';
 import { cn } from '~/lib/utils';
@@ -190,10 +191,14 @@ function AssistantDetails({
                       ) : null}
                     </div>
                     <p className="mt-1 line-clamp-2 text-muted-foreground">{s.snippet}</p>
-                    <p className="mt-1 font-mono text-[0.65rem] opacity-70">
-                      {s.documentId}
-                      {s.chunkId ? ` · ${s.chunkId}` : ''}
-                    </p>
+                    <div className="mt-1 opacity-90">
+                      <RagDocumentChunkInspectButtons
+                        chunkId={s.chunkId ?? null}
+                        documentId={s.documentId}
+                        layout="inline"
+                        size="xs"
+                      />
+                    </div>
                   </li>
                 ))}
               </ul>

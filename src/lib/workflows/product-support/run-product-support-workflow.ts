@@ -27,6 +27,7 @@ import { executeToolCall } from '~/lib/tools/execute-tool-call';
 import { buildProductSupportInstructions } from '~/lib/workflows/product-support/product-support-prompts';
 import {
   type ProductSupportFinalOutput,
+  type RetrievedDocumentChunkRef,
   type ValidatorResult,
 } from '~/lib/workflows/product-support/product-support-schemas';
 import {
@@ -305,6 +306,14 @@ type RuntimeToolOutput = {
   trace: ToolTraceEntry;
 };
 
+type RetrievedSourceMeta = {
+  documentId: string;
+  chunkId: string | null;
+  title: string;
+  snippet: string;
+  documentKind: string | null;
+};
+
 export type ProductSupportWorkflowEvent =
   | {
       type: 'status';
@@ -422,6 +431,138 @@ function collectSourcesFromToolOutputs(toolOutputs: RuntimeToolOutput[]): Source
   }
 
   return [...map.values()].slice(0, 16);
+}
+
+/** Every semantic-search hit from tool outputs (deduped), using `rag.document` / `rag.document_chunk` ids. */
+function collectRetrievedDocumentChunksFromToolOutputs(
+  toolOutputs: RuntimeToolOutput[],
+): RetrievedDocumentChunkRef[] {
+  const map = new Map<string, RetrievedDocumentChunkRef>();
+
+  for (const entry of toolOutputs) {
+    if (!entry.ok) {
+      continue;
+    }
+    try {
+      const payload = JSON.parse(entry.output) as {
+        sources?: Array<{
+          documentId?: string;
+          chunkId?: string;
+        }>;
+      };
+      for (const s of payload.sources ?? []) {
+        if (!s.documentId) {
+          continue;
+        }
+        const chunkId =
+          typeof s.chunkId === 'string' && s.chunkId.trim() ? s.chunkId.trim() : null;
+        const key = `${s.documentId}:${chunkId ?? ''}`;
+        if (map.has(key)) {
+          continue;
+        }
+        map.set(key, {
+          document_id: s.documentId,
+          chunk_id: chunkId,
+        });
+      }
+    } catch {
+      // Ignore malformed output and continue scanning.
+    }
+  }
+
+  return [...map.values()];
+}
+
+function collectSourceMetaFromToolOutputs(
+  toolOutputs: RuntimeToolOutput[],
+): RetrievedSourceMeta[] {
+  const map = new Map<string, RetrievedSourceMeta>();
+
+  for (const entry of toolOutputs) {
+    if (!entry.ok) {
+      continue;
+    }
+    try {
+      const payload = JSON.parse(entry.output) as {
+        sources?: Array<{
+          documentId?: string;
+          chunkId?: string;
+          title?: string;
+          snippet?: string;
+          documentKind?: string;
+        }>;
+      };
+      for (const source of payload.sources ?? []) {
+        if (!source.documentId || !source.snippet) {
+          continue;
+        }
+        const chunkId =
+          typeof source.chunkId === 'string' && source.chunkId.trim()
+            ? source.chunkId.trim()
+            : null;
+        const key = `${source.documentId}:${chunkId ?? ''}`;
+        if (map.has(key)) {
+          continue;
+        }
+        map.set(key, {
+          documentId: source.documentId,
+          chunkId,
+          title: source.title ?? source.documentId,
+          snippet: source.snippet,
+          documentKind:
+            typeof source.documentKind === 'string' ? source.documentKind : null,
+        });
+      }
+    } catch {
+      // Ignore malformed output and continue scanning.
+    }
+  }
+
+  return [...map.values()];
+}
+
+function queryNeedsUsageAndSafetyCoverage(userMessage: string) {
+  const text = userMessage.toLowerCase();
+  return (
+    /\b(how do i use|how to use|how should i use|directions|procedure|application|dilution|safe|safety|hazard|ppe|precaution|first aid)\b/.test(
+      text,
+    ) || /\b(can i use|is it safe)\b/.test(text)
+  );
+}
+
+function hasUsageSignal(text: string) {
+  return /\b(use|usage|direction|procedure|application|dilution|mix ratio|instructions?)\b/.test(
+    text,
+  );
+}
+
+function hasSafetySignal(text: string) {
+  return /\b(sds|safety|hazard|ppe|first aid|precaution|warning|flammable|corrosive)\b/.test(
+    text,
+  );
+}
+
+function evaluateUsageSafetyCoverage(sources: RetrievedSourceMeta[]) {
+  let hasUsageEvidence = false;
+  let hasSafetyEvidence = false;
+
+  for (const source of sources) {
+    const docKind = source.documentKind?.toLowerCase() ?? '';
+    const sourceText = `${source.title} ${source.snippet}`.toLowerCase();
+
+    if (docKind === 'sds' || hasSafetySignal(sourceText)) {
+      hasSafetyEvidence = true;
+    }
+    if (docKind === 'product_line_profile' || hasUsageSignal(sourceText)) {
+      hasUsageEvidence = true;
+    }
+
+    if (hasUsageEvidence && hasSafetyEvidence) {
+      break;
+    }
+  }
+
+  return { hasUsageEvidence, hasSafetyEvidence };
 }
 
 function buildComparableBetcoProductMarkdownLine(match: CrossReferenceMatch): string | null {
@@ -628,6 +769,7 @@ export async function runProductSupportWorkflow(input: {
     const finalOutput: ProductSupportFinalOutput = {
       answerText: finalText,
       sources: [],
+      retrieved_document_chunks: [],
       confidence: validation.confidence,
       workflowRunId: run.id,
       latestOpenaiResponseId: declineResponseId,
@@ -858,6 +1000,13 @@ export async function runProductSupportWorkflow(input: {
     }
 
     const sources = collectSourcesFromToolOutputs(toolOutputLog);
+    const retrieved_document_chunks =
+      collectRetrievedDocumentChunksFromToolOutputs(toolOutputLog);
+    const sourceMeta = collectSourceMetaFromToolOutputs(toolOutputLog);
+    const usageSafetyCoverage = evaluateUsageSafetyCoverage(sourceMeta);
+    const needsUsageSafetyCoverage = queryNeedsUsageAndSafetyCoverage(
+      input.userMessage,
+    );
     const evidenceSummary = buildEvidenceSummary(sources);
 
     await completeWorkflowStep(agentStep.id, {
@@ -929,6 +1078,31 @@ export async function runProductSupportWorkflow(input: {
       }
     }
 
+    if (
+      needsUsageSafetyCoverage &&
+      (!usageSafetyCoverage.hasUsageEvidence ||
+        !usageSafetyCoverage.hasSafetyEvidence)
+    ) {
+      const missingEvidence: string[] = [];
+      if (!usageSafetyCoverage.hasUsageEvidence) {
+        missingEvidence.push('usage');
+      }
+      if (!usageSafetyCoverage.hasSafetyEvidence) {
+        missingEvidence.push('safety');
+      }
+      validation = {
+        ...validation,
+        approved: false,
+        confidence: Math.min(validation.confidence, 0.55),
+        issues: Array.from(
+          new Set([
+            ...validation.issues,
+            `insufficient_${missingEvidence.join('_and_')}_evidence`,
+          ]),
+        ),
+      };
+    }
+
     await completeWorkflowStep(validationStep.id, {
       status: 'completed',
       output: jsonContent(
@@ -950,15 +1124,32 @@ export async function runProductSupportWorkflow(input: {
     let finalText = draftAnswer;
 
     if (!validation.approved) {
-      finalText = [
-        'I could not fully verify this answer against the retrieved approved sources.',
-        '',
-        '**Next steps**',
-        '- Confirm the exact Betco product name or SKU.',
-        '- Specify the surface/material and environment.',
-        '',
-        'If this is safety-urgent, follow your facility protocol and SDS guidance.',
-      ].join('\n');
+      if (
+        needsUsageSafetyCoverage &&
+        (!usageSafetyCoverage.hasUsageEvidence ||
+          !usageSafetyCoverage.hasSafetyEvidence)
+      ) {
+        finalText = [
+          'I do not have enough retrieved evidence to provide a reliable usage and safety answer yet.',
+          '',
+          '**What I still need**',
+          '- Exact Betco product name or SKU.',
+          '- Surface/material and application method.',
+          '- Any relevant safety constraints for your environment.',
+          '',
+          'I can then return a grounded answer with both procedure and SDS-backed safety details.',
+        ].join('\n');
+      } else {
+        finalText = [
+          'I could not fully verify this answer against the retrieved approved sources.',
+          '',
+          '**Next steps**',
+          '- Confirm the exact Betco product name or SKU.',
+          '- Specify the surface/material and environment.',
+          '',
+          'If this is safety-urgent, follow your facility protocol and SDS guidance.',
+        ].join('\n');
+      }
 
       if (validation.requires_human_review) {
         await insertReviewTask({
@@ -980,6 +1171,7 @@ export async function runProductSupportWorkflow(input: {
     const finalOutput: ProductSupportFinalOutput = {
       answerText: finalText,
       sources,
+      retrieved_document_chunks,
       confidence: validation.confidence,
       workflowRunId: run.id,
       latestOpenaiResponseId: agentResult.finalResponseId,

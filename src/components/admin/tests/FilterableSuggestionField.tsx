@@ -1,7 +1,6 @@
 'use client';
 
-import { type ReactNode, useMemo, useState } from 'react';
-import { useCommandState } from 'cmdk';
+import { type ReactNode, useCallback, useMemo, useState } from 'react';
 
 import { Button } from '~/components/ui/button';
 import {
@@ -20,6 +19,9 @@ import {
 } from '~/components/ui/popover';
 import { cn } from '~/lib/utils';
 import { ChevronDownIcon, XIcon } from 'lucide-react';
+
+/** When the search box is empty, show this many distinct options so the list is useful without typing. */
+const INITIAL_VISIBLE_OPTIONS = 25;
 
 function mergeSuggestions(presets: readonly string[], fromRows: readonly string[]): string[] {
   const set = new Set<string>();
@@ -41,11 +43,12 @@ function mergeSuggestions(presets: readonly string[], fromRows: readonly string[
 function UseTypedValueItem({
   options,
   onUse,
+  search,
 }: {
   options: readonly string[];
   onUse: (text: string) => void;
+  search: string;
 }) {
-  const search = useCommandState((state) => state.search);
   const trimmed = search.trim();
   if (!trimmed) {
     return null;
@@ -59,6 +62,57 @@ function UseTypedValueItem({
     <CommandItem keywords={[trimmed, `use ${trimmed}`, 'custom']} onSelect={() => onUse(trimmed)} value={trimmed}>
       Use &quot;{trimmed}&quot;
     </CommandItem>
+  );
+}
+
+function SuggestionCommandItems({
+  options,
+  onPick,
+  search,
+}: {
+  options: readonly string[];
+  onPick: (value: string) => void;
+  search: string;
+}) {
+  const { displayed, totalMatched, isCapped } = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const matched = q
+      ? options.filter((o) => o.toLowerCase().includes(q))
+      : options;
+    if (!q && matched.length > INITIAL_VISIBLE_OPTIONS) {
+      return {
+        displayed: matched.slice(0, INITIAL_VISIBLE_OPTIONS),
+        totalMatched: matched.length,
+        isCapped: true,
+      };
+    }
+    return {
+      displayed: matched,
+      totalMatched: matched.length,
+      isCapped: false,
+    };
+  }, [options, search]);
+
+  return (
+    <>
+      {displayed.map((opt) => (
+        <CommandItem
+          key={opt}
+          onSelect={() => {
+            onPick(opt);
+          }}
+          value={opt}
+        >
+          {opt}
+        </CommandItem>
+      ))}
+      {!search.trim() && isCapped ? (
+        <p className="px-3 py-2 text-xs text-muted-foreground">
+          Showing the first {INITIAL_VISIBLE_OPTIONS} of {totalMatched} values. Type in the
+          box above to filter the rest.
+        </p>
+      ) : null}
+    </>
   );
 }
 
@@ -81,16 +135,24 @@ export function FilterableSuggestionField({
 }: FilterableSuggestionFieldProps) {
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState('');
+  const [listSearch, setListSearch] = useState('');
 
   const options = useMemo(
     () => mergeSuggestions(presetSuggestions, suggestionsFromDataset),
     [presetSuggestions, suggestionsFromDataset],
   );
 
+  const handleOpenChange = useCallback((nextOpen: boolean) => {
+    setOpen(nextOpen);
+    if (!nextOpen) {
+      setListSearch('');
+    }
+  }, []);
+
   return (
     <div className="grid gap-2">
       <Label htmlFor={id}>{label}</Label>
-      <Popover onOpenChange={setOpen} open={open}>
+      <Popover modal={false} onOpenChange={handleOpenChange} open={open}>
         <PopoverTrigger asChild>
           <Button
             aria-expanded={open}
@@ -109,13 +171,20 @@ export function FilterableSuggestionField({
         </PopoverTrigger>
         <PopoverContent
           align="start"
-          className="flex max-h-[min(22rem,calc(100vh-8rem))] w-[min(100vw-2rem,var(--radix-popover-trigger-width))] flex-col gap-0 overflow-hidden p-0"
+          className={cn(
+            'z-100 flex max-h-[min(22rem,calc(100vh-8rem))] w-[min(100vw-2rem,var(--radix-popover-trigger-width))] flex-col gap-0 overflow-hidden p-0',
+          )}
         >
           <Command
             className="flex min-h-0 flex-1 flex-col overflow-hidden size-auto! **:data-[slot=command-input-wrapper]:shrink-0"
             label="Filter options"
+            shouldFilter={false}
           >
-            <CommandInput placeholder="Filter or type a new value…" />
+            <CommandInput
+              onValueChange={setListSearch}
+              placeholder="Filter or type a new value…"
+              value={listSearch}
+            />
             <CommandList className="max-h-[min(18rem,calc(100vh-12rem))] min-h-0 flex-1 overflow-y-auto overscroll-contain scroll-py-1">
               <CommandEmpty>
                 <p className="px-3 py-2 text-center text-xs text-muted-foreground">
@@ -123,24 +192,21 @@ export function FilterableSuggestionField({
                 </p>
               </CommandEmpty>
               <CommandGroup>
-                {options.map((opt) => (
-                  <CommandItem
-                    key={opt}
-                    onSelect={() => {
-                      setValue(opt);
-                      setOpen(false);
-                    }}
-                    value={opt}
-                  >
-                    {opt}
-                  </CommandItem>
-                ))}
+                <SuggestionCommandItems
+                  options={options}
+                  onPick={(opt) => {
+                    setValue(opt);
+                    setOpen(false);
+                  }}
+                  search={listSearch}
+                />
                 <UseTypedValueItem
                   onUse={(text) => {
                     setValue(text);
                     setOpen(false);
                   }}
                   options={options}
+                  search={listSearch}
                 />
               </CommandGroup>
             </CommandList>

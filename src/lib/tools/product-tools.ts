@@ -34,6 +34,8 @@ function sourcePayload(
     title: s.title,
     snippet: s.snippet,
     confidence: s.similarity,
+    documentKind: s.documentKind,
+    productLineKey: s.productLineKey,
     freshness: null as null,
   }));
 }

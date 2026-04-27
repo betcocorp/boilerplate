@@ -22,6 +22,7 @@ import {
   getTestResultById,
   insertTestItems,
   updateTestRecord,
+  updateTestResult,
 } from '~/lib/tests/repository';
 import { uploadTestCsvToS3 } from '~/lib/tests/storage';
 
@@ -400,4 +401,51 @@ export async function deleteTestRunAction(formData: FormData) {
   revalidatePath(`/admin/tests/${testId}`);
   revalidatePath(`/admin/tests/${testId}/runs/${runId}`);
   redirect(encodeMessage(returnPath, 'success', 'Run deleted.'));
+}
+
+const TEST_RUN_NOTES_MAX_LENGTH = 32_000;
+
+export type UpdateTestRunNotesResult =
+  | { ok: true }
+  | { ok: false; error: string };
+
+export async function updateTestRunNotesAction(input: {
+  testId: string;
+  runId: string;
+  notes: string;
+}): Promise<UpdateTestRunNotesResult> {
+  const { testId, runId, notes } = input;
+
+  if (typeof testId !== 'string' || !testId.trim()) {
+    return { ok: false, error: 'Missing test id.' };
+  }
+  if (typeof runId !== 'string' || !runId.trim()) {
+    return { ok: false, error: 'Missing run id.' };
+  }
+  if (typeof notes !== 'string') {
+    return { ok: false, error: 'Invalid notes.' };
+  }
+
+  const trimmed = notes.trim();
+  if (trimmed.length > TEST_RUN_NOTES_MAX_LENGTH) {
+    return {
+      ok: false,
+      error: `Notes must be at most ${TEST_RUN_NOTES_MAX_LENGTH.toLocaleString()} characters.`,
+    };
+  }
+
+  const run = await getTestResultById(runId).catch(() => null);
+  if (!run || run.test_id !== testId) {
+    return { ok: false, error: 'Run not found for this dataset.' };
+  }
+
+  await updateTestResult(runId, {
+    notes: trimmed.length > 0 ? trimmed : null,
+  });
+
+  revalidatePath('/admin/tests');
+  revalidatePath(`/admin/tests/${testId}`);
+  revalidatePath(`/admin/tests/${testId}/runs/${runId}`);
+
+  return { ok: true };
 }

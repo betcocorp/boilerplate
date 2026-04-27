@@ -3,6 +3,12 @@ import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
 
 import { AdminTestsActionToast } from '~/components/admin/tests/AdminTestsActionToast';
+import { RetrievedChunksPreview } from '~/components/admin/tests/RetrievedChunksPreview';
+import {
+  TestRunNotesDisplay,
+  TestRunNotesProvider,
+  TestRunNotesToolbarButton,
+} from '~/components/admin/tests/TestRunNotesSection';
 import { RunAtAGlanceCharts } from '~/components/admin/tests/RunAtAGlanceCharts';
 import { RunExecutionProgress } from '~/components/admin/tests/RunExecutionProgress';
 import { RunItemResultsCsvDownload } from '~/components/admin/tests/RunItemResultsCsvDownload';
@@ -26,6 +32,7 @@ import {
   listAllResultItemsByResultId,
 } from '~/lib/tests/repository';
 import { formatDate, formatDurationSeconds } from '~/lib/utils/time';
+import type { RetrievedDocumentChunkRef } from '~/lib/workflows/product-support/product-support-schemas';
 
 import { deleteTestRunAction } from '../../../actions';
 
@@ -159,6 +166,72 @@ function formatTimingBreakdownLabel(responsePayload: unknown): string {
   return `${timing.toolRounds} | ${timing.cacheSource || 'n/a'} | ${searchMsLabel}`;
 }
 
+function parseRetrievedDocumentChunksArray(raw: unknown): RetrievedDocumentChunkRef[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const out: RetrievedDocumentChunkRef[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      continue;
+    }
+    const o = item as Record<string, unknown>;
+    const document_id = typeof o.document_id === 'string' ? o.document_id : '';
+    if (!document_id) {
+      continue;
+    }
+    const chunk_id = typeof o.chunk_id === 'string' ? o.chunk_id : null;
+    out.push({ document_id, chunk_id });
+  }
+  return out;
+}
+
+/** Prefer workflow `retrieved_document_chunks`; fall back to legacy `sources` (camelCase). */
+function extractRetrievedDocumentChunks(responsePayload: unknown): RetrievedDocumentChunkRef[] {
+  if (
+    !responsePayload ||
+    typeof responsePayload !== 'object' ||
+    Array.isArray(responsePayload)
+  ) {
+    return [];
+  }
+  const record = responsePayload as Record<string, unknown>;
+  const fromPayload = parseRetrievedDocumentChunksArray(record.retrieved_document_chunks);
+  if (fromPayload.length > 0) {
+    return fromPayload;
+  }
+
+  const sources = record.sources;
+  if (!Array.isArray(sources)) {
+    return [];
+  }
+
+  const map = new Map<string, RetrievedDocumentChunkRef>();
+  for (const item of sources) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      continue;
+    }
+    const s = item as Record<string, unknown>;
+    const document_id = typeof s.documentId === 'string' ? s.documentId : '';
+    if (!document_id) {
+      continue;
+    }
+    const chunk_id = typeof s.chunkId === 'string' ? s.chunkId : null;
+    const key = `${document_id}:${chunk_id ?? ''}`;
+    if (!map.has(key)) {
+      map.set(key, { document_id, chunk_id });
+    }
+  }
+  return [...map.values()];
+}
+
+function formatRetrievedChunksForCsv(chunks: RetrievedDocumentChunkRef[]): string {
+  if (chunks.length === 0) {
+    return '';
+  }
+  return chunks.map((c) => `${c.document_id}|${c.chunk_id ?? ''}`).join('; ');
+}
+
 type PageProps = {
   params: Promise<{ testId: string; runId: string }>;
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -289,6 +362,9 @@ export default async function AdminTestRunDetailsPage({
         extractWorkflowRunId(row.response_payload) || '',
       ) ?? 'n/a',
     timing_breakdown: formatTimingBreakdownLabel(row.response_payload),
+    retrieved_chunks: formatRetrievedChunksForCsv(
+      extractRetrievedDocumentChunks(row.response_payload),
+    ),
     message: row.error_message || row.response_text || 'n/a',
     test_item_id: row.test_item_id,
   }));
@@ -297,41 +373,49 @@ export default async function AdminTestRunDetailsPage({
     <div className="flex flex-1 bg-slate-50">
       <AdminTestsActionToast error={error} success={success} />
       <main className="flex w-full flex-1 flex-col gap-8 px-6 py-10 sm:px-8">
-        <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-700">
-                Run details
-              </p>
-              <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">
-                {test.name}
-              </h1>
-              <p className="mt-3 font-mono text-xs text-slate-600">
-                Run id: {result.id}
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <form action={deleteTestRunAction}>
-                <input
-                  name="returnPath"
-                  type="hidden"
-                  value={`/admin/tests/${test.id}`}
-                />
-                <input name="testId" type="hidden" value={test.id} />
-                <input name="runId" type="hidden" value={result.id} />
-                <Button size="sm" type="submit" variant="destructive">
-                  Delete run
+        <TestRunNotesProvider
+          initialNotes={result.notes}
+          runId={result.id}
+          testId={test.id}
+        >
+          <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-700">
+                  Run details
+                </p>
+                <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">
+                  {test.name}
+                </h1>
+                <TestRunNotesDisplay />
+                <p className="mt-3 font-mono text-xs text-slate-600">
+                  Run id: {result.id}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <form action={deleteTestRunAction}>
+                  <input
+                    name="returnPath"
+                    type="hidden"
+                    value={`/admin/tests/${test.id}`}
+                  />
+                  <input name="testId" type="hidden" value={test.id} />
+                  <input name="runId" type="hidden" value={result.id} />
+                  <Button size="sm" type="submit" variant="destructive">
+                    Delete run
+                  </Button>
+                </form>
+                <TestRunNotesToolbarButton />
+                <Button asChild size="sm" variant="outline">
+                  <Link href={`/admin/tests/${test.id}`}>Back to dataset</Link>
                 </Button>
-              </form>
-              <Button asChild size="sm" variant="outline">
-                <Link href={`/admin/tests/${test.id}`}>Back to dataset</Link>
-              </Button>
-              <Button asChild size="sm" variant="outline">
-                <Link href="/admin/tests">Back to tests</Link>
-              </Button>
+                <Button asChild size="sm" variant="outline">
+                  <Link href="/admin/tests">Back to tests</Link>
+                </Button>
+              </div>
             </div>
-          </div>
-        </section>
+          </section>
+        </TestRunNotesProvider>
 
         <RunExecutionProgress
           initialCompletedItems={initialCompletedItems}
@@ -382,6 +466,7 @@ export default async function AdminTestRunDetailsPage({
                 <TableHead>Elapsed</TableHead>
                 <TableHead>Model</TableHead>
                 <TableHead>Rounds | Cache | Elapsed</TableHead>
+                <TableHead>Retrieved chunks</TableHead>
                 <TableHead>Message</TableHead>
                 <TableHead>History</TableHead>
               </TableRow>
@@ -389,7 +474,7 @@ export default async function AdminTestRunDetailsPage({
             <TableBody>
               {displayResultItems.length === 0 ? (
                 <TableRow>
-                  <TableCell className="text-slate-500" colSpan={10}>
+                  <TableCell className="text-slate-500" colSpan={11}>
                     No item-level results yet.
                   </TableCell>
                 </TableRow>
@@ -449,6 +534,11 @@ export default async function AdminTestRunDetailsPage({
                     </TableCell>
                     <TableCell className="max-w-[220px] whitespace-normal text-xs text-slate-600">
                       {formatTimingBreakdownLabel(row.response_payload)}
+                    </TableCell>
+                    <TableCell className="max-w-[min(280px,100%)] align-top">
+                      <RetrievedChunksPreview
+                        chunks={extractRetrievedDocumentChunks(row.response_payload)}
+                      />
                     </TableCell>
                     <TableCell className="max-w-[420px] whitespace-normal text-xs text-slate-600 line-clamp-2">
                       {row.error_message || row.response_text || 'n/a'}

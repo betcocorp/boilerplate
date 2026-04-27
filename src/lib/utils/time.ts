@@ -16,6 +16,16 @@ export function formatShortDate(value: string): string {
   }).format(new Date(value));
 }
 
+/** Month, day, and time — for chart axes so multiple runs on the same day stay distinct. */
+export function formatRunChartAxisLabel(value: string): string {
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(new Date(value));
+}
+
 /** Elapsed time from milliseconds: `X.XX hr` / `X.XX min` / `X.XX s`, or `n/a`. */
 export function formatDurationSeconds(value: number | null | undefined): string {
   if (typeof value !== 'number') {

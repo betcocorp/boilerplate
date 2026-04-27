@@ -2,6 +2,7 @@ import { Search } from 'lucide-react';
 import Link from 'next/link';
 import { connection } from 'next/server';
 
+import { RagSearchMatchInspectBar } from '~/components/admin/rag/RagSearchMatchInspectBar';
 import { RagQueryAutocomplete } from '~/components/admin/RagQueryAutocomplete';
 import { RagSearchTimingPanel } from '~/components/admin/RagSearchTimingPanel';
 import { Button } from '~/components/ui/button';
@@ -455,6 +456,11 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
                   <p className="mt-4 whitespace-pre-wrap text-sm leading-6 text-slate-700">
                     {truncateText(match.chunk_text)}
                   </p>
+
+                  <RagSearchMatchInspectBar
+                    chunkId={match.chunk_id}
+                    documentId={match.document_id}
+                  />
 
                   <div className="mt-4 flex flex-wrap gap-3">
                     {match.document_kind === 'product_line_profile' ? (

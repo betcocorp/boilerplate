@@ -346,6 +346,7 @@ export type Database = {
           elapsed_ms: number | null
           failed_items: number
           id: string
+          notes: string | null
           passed_items: number
           started_at: string
           status: string
@@ -359,6 +360,7 @@ export type Database = {
           elapsed_ms?: number | null
           failed_items?: number
           id?: string
+          notes?: string | null
           passed_items?: number
           started_at?: string
           status?: string
@@ -372,6 +374,7 @@ export type Database = {
           elapsed_ms?: number | null
           failed_items?: number
           id?: string
+          notes?: string | null
           passed_items?: number
           started_at?: string
           status?: string

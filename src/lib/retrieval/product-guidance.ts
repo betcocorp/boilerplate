@@ -20,7 +20,11 @@ export async function retrieveApprovedUsage(input: {
     input.environment,
     'approved use directions procedure',
   ]);
-  return ragQueryForProductKnowledgeWithMeta({ query: q, limit: 6 });
+  return ragQueryForProductKnowledgeWithMeta({
+    query: q,
+    limit: 6,
+    skipProductLineResolution: true,
+  });
 }
 
 export async function retrieveSafetyConstraints(input: {
@@ -30,7 +34,11 @@ export async function retrieveSafetyConstraints(input: {
     input.productId,
     'safety hazards PPE SDS precautions first aid',
   ]);
-  return ragQueryForProductKnowledgeWithMeta({ query: q, limit: 6 });
+  return ragQueryForProductKnowledgeWithMeta({
+    query: q,
+    limit: 6,
+    skipProductLineResolution: true,
+  });
 }
 
 export async function retrieveCompatibility(input: {
@@ -45,7 +53,11 @@ export async function retrieveCompatibility(input: {
     input.materialType,
     'safe for surfaces materials',
   ]);
-  return ragQueryForProductKnowledgeWithMeta({ query: q, limit: 6 });
+  return ragQueryForProductKnowledgeWithMeta({
+    query: q,
+    limit: 6,
+    skipProductLineResolution: true,
+  });
 }
 
 export async function retrieveSurfacesLists(input: {
@@ -57,5 +69,9 @@ export async function retrieveSurfacesLists(input: {
       ? 'approved surfaces substrates compatible'
       : 'do not use prohibited surfaces incompatible';
   const q = buildQuery([input.productId, hint]);
-  return ragQueryForProductKnowledgeWithMeta({ query: q, limit: 6 });
+  return ragQueryForProductKnowledgeWithMeta({
+    query: q,
+    limit: 6,
+    skipProductLineResolution: true,
+  });
 }

@@ -108,17 +108,34 @@ export async function getTestItemsByTestId(testId: string) {
  */
 export async function getTestItemSuggestionRows(testId: string) {
   const supabase = getSupabaseServiceRoleClient();
-  const result = await supabase
-    .from('test_items')
-    .select(
-      'expected_result_type, expected_canonical_product, expected_reason_code, input_payload',
-    )
-    .eq('test_id', testId);
-
-  return (assertNoError(result) || []) as Pick<
+  const all: Pick<
     TestItemRecord,
     'expected_result_type' | 'expected_canonical_product' | 'expected_reason_code' | 'input_payload'
-  >[];
+  >[] = [];
+  let from = 0;
+
+  while (true) {
+    const result = await supabase
+      .from('test_items')
+      .select(
+        'expected_result_type, expected_canonical_product, expected_reason_code, input_payload',
+      )
+      .eq('test_id', testId)
+      .order('row_index', { ascending: true })
+      .range(from, from + TEST_ITEMS_PAGE_SIZE - 1);
+
+    const page = (assertNoError(result) || []) as Pick<
+      TestItemRecord,
+      'expected_result_type' | 'expected_canonical_product' | 'expected_reason_code' | 'input_payload'
+    >[];
+    all.push(...page);
+    if (page.length < TEST_ITEMS_PAGE_SIZE) {
+      break;
+    }
+    from += TEST_ITEMS_PAGE_SIZE;
+  }
+
+  return all;
 }
 
 /** Largest `row_index` for the test, or `0` when there are no items. */

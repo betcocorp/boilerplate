@@ -9,6 +9,14 @@ export const validatorResultSchema = z.object({
 
 export type ValidatorResult = z.infer<typeof validatorResultSchema>;
 
+/** Rows from `rag.document` / `rag.document_chunk` returned by semantic search (aggregated across tool calls). */
+export const retrievedDocumentChunkRefSchema = z.object({
+  document_id: z.string(),
+  chunk_id: z.string().nullable(),
+});
+
+export type RetrievedDocumentChunkRef = z.infer<typeof retrievedDocumentChunkRefSchema>;
+
 export const productSupportFinalOutputSchema = z.object({
   answerText: z.string(),
   sources: z
@@ -22,6 +30,8 @@ export const productSupportFinalOutputSchema = z.object({
       }),
     )
     .optional(),
+  /** Union of all chunks retrieved via semantic search in this turn (matches `document_chunk.id` / `document_id`). */
+  retrieved_document_chunks: z.array(retrievedDocumentChunkRefSchema).optional(),
   confidence: z.number().min(0).max(1).optional(),
   workflowRunId: z.string().uuid(),
   latestOpenaiResponseId: z.string(),

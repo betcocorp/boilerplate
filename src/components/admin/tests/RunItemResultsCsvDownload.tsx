@@ -13,6 +13,8 @@ export type RunResultCsvRow = {
   status: string;
   model: string;
   timing_breakdown: string;
+  /** Encoded semantic hits: `document_uuid|chunk_uuid` pairs joined by `; `. */
+  retrieved_chunks: string;
   message: string;
   test_item_id: string;
 };
@@ -52,6 +54,7 @@ export function RunItemResultsCsvDownload({
       'status',
       'model',
       'timing_breakdown',
+      'retrieved_chunks',
       'message',
       'test_item_id',
     ];
@@ -67,6 +70,7 @@ export function RunItemResultsCsvDownload({
           row.status,
           row.model,
           row.timing_breakdown,
+          row.retrieved_chunks,
           row.message,
           row.test_item_id,
         ]
