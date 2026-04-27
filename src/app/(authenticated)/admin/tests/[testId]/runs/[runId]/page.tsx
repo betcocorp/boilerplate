@@ -153,6 +153,35 @@ function extractTimingBreakdown(responsePayload: unknown) {
   };
 }
 
+/** Human-readable retrieval duration: always rounds **up** to the next whole unit. */
+function formatSearchMsRoundedUp(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) {
+    return '0 ms';
+  }
+
+  const HOUR_MS = 3_600_000;
+  const MIN_MS = 60_000;
+  const SEC_MS = 1_000;
+
+  if (ms >= HOUR_MS) {
+    return `${Math.ceil(ms / HOUR_MS)} h`;
+  }
+  if (ms >= MIN_MS) {
+    return `${Math.ceil(ms / MIN_MS)} min`;
+  }
+  if (ms >= SEC_MS) {
+    return `${Math.ceil(ms / SEC_MS)} s`;
+  }
+  return `${Math.ceil(ms)} ms`;
+}
+
+function formatExpectedShouldAnswerCell(value: boolean | null): string {
+  if (value === null) {
+    return 'Unset';
+  }
+  return value ? 'Yes' : 'No';
+}
+
 function formatTimingBreakdownLabel(responsePayload: unknown): string {
   const timing = extractTimingBreakdown(responsePayload);
   if (!timing) {
@@ -303,6 +332,9 @@ export default async function AdminTestRunDetailsPage({
   const promptByItemId = new Map(
     testItems.map((item) => [item.id, item.prompt]),
   );
+  const expectedShouldAnswerByItemId = new Map(
+    testItems.map((item) => [item.id, item.expected_should_answer]),
+  );
   const passCount = result.passed_items ?? 0;
   const failCount =
     result.failed_items ?? resultItems.filter((item) => !item.passed).length;
@@ -363,6 +395,13 @@ export default async function AdminTestRunDetailsPage({
   const itemLevelCsvRows = allResultItems.map((row) => ({
     row_index: row.row_index,
     prompt: promptByItemId.get(row.test_item_id) ?? '',
+    expected_should_answer: (() => {
+      const v = expectedShouldAnswerByItemId.get(row.test_item_id) ?? null;
+      if (v === null) {
+        return 'unset';
+      }
+      return v ? 'yes' : 'no';
+    })(),
     passed: row.passed,
     elapsed_seconds: Number((row.elapsed_ms / 1000).toFixed(3)),
     status: row.status,
@@ -470,6 +509,7 @@ export default async function AdminTestRunDetailsPage({
               <TableRow>
                 <TableHead>Row</TableHead>
                 <TableHead>Prompt</TableHead>
+                <TableHead className="whitespace-nowrap">Answer?</TableHead>
                 <TableHead>Passed</TableHead>
                 <TableHead>Sim / conf</TableHead>
                 <TableHead>Elapsed</TableHead>
@@ -485,12 +525,15 @@ export default async function AdminTestRunDetailsPage({
             <TableBody>
               {displayResultItems.length === 0 ? (
                 <TableRow>
-                  <TableCell className="text-slate-500" colSpan={11}>
+                  <TableCell className="text-slate-500" colSpan={12}>
                     No item-level results yet.
                   </TableCell>
                 </TableRow>
               ) : (
-                chronologicalItems.map((row) => (
+                chronologicalItems.map((row) => {
+                  const expectedShouldAnswer =
+                    expectedShouldAnswerByItemId.get(row.test_item_id) ?? null;
+                  return (
                   <TableRow id={`run-item-result-${row.id}`} key={row.id}>
                     <TableCell>
                       <Link
@@ -507,6 +550,24 @@ export default async function AdminTestRunDetailsPage({
                       >
                         {promptByItemId.get(row.test_item_id) || 'n/a'}
                       </Link>
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap">
+                      <Badge
+                        className={
+                          expectedShouldAnswer === true
+                            ? 'border-emerald-600/45 bg-emerald-600/12 text-emerald-900 dark:border-emerald-500/40 dark:bg-emerald-500/15 dark:text-emerald-50'
+                            : undefined
+                        }
+                        variant={
+                          expectedShouldAnswer === null
+                            ? 'secondary'
+                            : expectedShouldAnswer === true
+                              ? 'outline'
+                              : 'destructive'
+                        }
+                      >
+                        {formatExpectedShouldAnswerCell(expectedShouldAnswer)}
+                      </Badge>
                     </TableCell>
                     <TableCell>
                       <Badge
@@ -546,7 +607,7 @@ export default async function AdminTestRunDetailsPage({
                     <TableCell className="max-w-[220px] whitespace-normal text-xs text-slate-600">
                       {formatTimingBreakdownLabel(row.response_payload)}
                     </TableCell>
-                    <TableCell className="max-w-[min(280px,100%)] align-top">
+                    <TableCell className="min-w-0 max-w-[min(280px,100%)] align-top">
                       <RetrievedChunksPreview
                         chunks={extractRetrievedDocumentChunks(
                           row.response_payload,
@@ -566,7 +627,8 @@ export default async function AdminTestRunDetailsPage({
                       </Button>
                     </TableCell>
                   </TableRow>
-                ))
+                  );
+                })
               )}
             </TableBody>
           </Table>

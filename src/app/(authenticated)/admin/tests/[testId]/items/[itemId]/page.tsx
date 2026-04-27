@@ -52,6 +52,46 @@ function extractModelTag(userInput: unknown) {
   return typeof candidate === 'string' ? candidate : undefined;
 }
 
+function formatExpectedShouldAnswerLabel(value: boolean | null): string {
+  if (value === null) {
+    return 'Unset';
+  }
+  return value ? 'Yes' : 'No';
+}
+
+/**
+ * Top block matches the former single cell: `error_message || response_text || 'n/a'`.
+ * Below that, the stored assistant body (`response_text`) so failed rows show evaluation
+ * text first and the LLM answer underneath.
+ */
+function ItemHistoryMessageCell({
+  errorMessage,
+  responseText,
+}: {
+  errorMessage: string | null;
+  responseText: string | null;
+}) {
+  const assistant = responseText?.trim() ?? '';
+  const legacyLine = errorMessage?.trim() || assistant || 'n/a';
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div>
+        <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+          Message
+        </p>
+        <p className="mt-1 whitespace-pre-wrap text-slate-700">{legacyLine}</p>
+      </div>
+      <div>
+        <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+          Assistant response
+        </p>
+        <p className="mt-1 whitespace-pre-wrap text-slate-800">{assistant || '—'}</p>
+      </div>
+    </div>
+  );
+}
+
 export default async function AdminTestItemHistoryPage({ params }: PageProps) {
   await connection();
   const { testId, itemId } = await params;
@@ -129,9 +169,17 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
               </Button>
             </div>
           </div>
-          <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
-            <p className="font-semibold text-slate-900">Prompt</p>
-            <p className="mt-1 whitespace-pre-wrap">{item.prompt}</p>
+          <div className="mt-4 space-y-4 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+            <div>
+              <p className="font-semibold text-slate-900">Prompt</p>
+              <p className="mt-1 whitespace-pre-wrap">{item.prompt}</p>
+            </div>
+            <div className="border-t border-slate-200 pt-4">
+              <p className="font-semibold text-slate-900">Should answer</p>
+              <p className="mt-1 text-slate-800">
+                {formatExpectedShouldAnswerLabel(item.expected_should_answer)}
+              </p>
+            </div>
           </div>
         </section>
 
@@ -152,7 +200,7 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
             <TableBody>
               {historyRows.length === 0 ? (
                 <TableRow>
-                  <TableCell className="text-slate-500" colSpan={8}>
+                  <TableCell className="text-slate-500" colSpan={5}>
                     This item has no completed results yet.
                   </TableCell>
                 </TableRow>
@@ -177,7 +225,10 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
                       ) || 'n/a'}
                     </TableCell>
                     <TableCell className="max-w-[520px] whitespace-normal text-xs text-slate-600">
-                      {result.error_message || result.response_text || 'n/a'}
+                      <ItemHistoryMessageCell
+                        errorMessage={result.error_message}
+                        responseText={result.response_text}
+                      />
                     </TableCell>
                   </TableRow>
                 ))

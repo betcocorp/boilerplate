@@ -8,6 +8,7 @@ import { Button } from '~/components/ui/button';
 export type RunResultCsvRow = {
   row_index: number;
   prompt: string;
+  expected_should_answer: string;
   passed: boolean;
   elapsed_seconds: number;
   status: string;
@@ -49,6 +50,7 @@ export function RunItemResultsCsvDownload({
     const headers = [
       'row_index',
       'prompt',
+      'expected_should_answer',
       'passed',
       'elapsed_seconds',
       'status',
@@ -65,6 +67,7 @@ export function RunItemResultsCsvDownload({
         [
           String(row.row_index),
           row.prompt,
+          row.expected_should_answer,
           row.passed ? 'yes' : 'no',
           String(row.elapsed_seconds),
           row.status,

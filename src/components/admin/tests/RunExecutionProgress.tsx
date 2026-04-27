@@ -170,10 +170,27 @@ export function RunExecutionProgress({
     }
     return Math.min(100, Math.max(0, progressPercent));
   }, [progressPercent]);
+
+  /** Among items with a definitive pass/fail outcome (excludes incomplete). */
+  const runningPassPercentLabel = useMemo(() => {
+    const decided = stats.passCount + stats.failCount;
+    if (decided <= 0) {
+      return null;
+    }
+    return Number(((stats.passCount / decided) * 100).toFixed(1));
+  }, [stats.passCount, stats.failCount]);
   const elapsedLabel = useMemo(
     () => formatDurationSeconds(elapsedMs),
     [elapsedMs],
   );
+
+  /** Mean wall time per completed prompt so far (updates with poll while run is active). */
+  const avgPromptLabel = useMemo(() => {
+    if (completedItems <= 0) {
+      return 'n/a';
+    }
+    return formatDurationSeconds(elapsedMs / completedItems);
+  }, [elapsedMs, completedItems]);
   const canPause = status === 'running';
   const canResume = status === 'paused';
   const canCancel = !isTerminalStatus(status) && status !== 'cancelled';
@@ -230,14 +247,21 @@ export function RunExecutionProgress({
       </div>
       <div className="mt-2 grid grid-cols-4 items-center text-xs text-slate-500">
         <span>Status: {status}</span>
-        <span className="text-center">Elapsed: {elapsedLabel}</span>
+        <span className="text-center leading-snug">
+          <span className="block">
+            Elapsed / avg: {elapsedLabel} / {avgPromptLabel}
+          </span>
+        </span>
         <span className="text-center">
           <p>
-            <span>Pass/fail/incomplete:</span> {stats.passCount}/
-            {stats.failCount}/{stats.incompleteCount}
+            <span className="mr-2">Pass/fail/incomplete · Pass %:</span>{' '}
+            {stats.passCount}/{stats.failCount}/{stats.incompleteCount}
+            {runningPassPercentLabel != null ? (
+              <> · {runningPassPercentLabel}%</>
+            ) : null}
           </p>
         </span>
-        <span className="text-right">{clampedPercent.toFixed(2)}%</span>
+        <span className="text-right">{clampedPercent.toFixed(2)}% done</span>
       </div>
 
       <div className="mt-4 flex flex-wrap items-center gap-2">
