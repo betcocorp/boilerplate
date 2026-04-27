@@ -17,6 +17,52 @@ type EvaluationOutcome = {
   failureReason: string | null;
 };
 
+const UNABLE_TO_ASSIST_FAILURE_REASON =
+  'The assistant indicated it could not answer (e.g. no verified information, could not find a hazard, or cannot provide). Marked failed so you can review and investigate.';
+
+/**
+ * Declines, hedges, and “no answer” phrasing — treated as **failed** outcomes for visibility,
+ * even when row expectations would otherwise accept a short decline.
+ */
+function responseIndicatesUnableToAssistOrRefusal(responseText: string): boolean {
+  const t = responseText.trim().toLowerCase();
+  if (!t) {
+    return false;
+  }
+
+  const phrases = [
+    "can't provide",
+    'cannot provide',
+    'unable to provide',
+    'not able to provide',
+    "couldn't provide",
+    'could not provide',
+    "i can't",
+    'i cannot',
+    "can't find",
+    'cannot find',
+    'could not find',
+    "couldn't find",
+    'unable to find',
+    "don't have verified",
+    'do not have verified',
+    'verified first-aid',
+    'verified first aid',
+    'could not find specific',
+    "couldn't find specific",
+    'cannot find specific',
+    "can't find specific",
+    'insufficient information',
+    'not sufficient information',
+    "don't have that information",
+    'do not have that information',
+    'unable to locate',
+    'could not locate',
+  ];
+
+  return phrases.some((p) => t.includes(p));
+}
+
 /**
  * Same pass/fail rules as the historical boolean helper; adds `failureReason` for failed assertions.
  */
@@ -84,6 +130,25 @@ function evaluateTestOutcome(params: {
   };
 }
 
+function withUnableToAssistFailureOverride(
+  responseText: string,
+  outcome: EvaluationOutcome,
+): EvaluationOutcome {
+  const hasText = responseText.trim().length > 0;
+  if (!hasText || !outcome.passed) {
+    return outcome;
+  }
+
+  if (!responseIndicatesUnableToAssistOrRefusal(responseText)) {
+    return outcome;
+  }
+
+  return {
+    passed: false,
+    failureReason: UNABLE_TO_ASSIST_FAILURE_REASON,
+  };
+}
+
 export async function runSingleTestItem(
   testResultId: string,
   testItem: TestItemRecord,
@@ -101,11 +166,12 @@ export async function runSingleTestItem(
 
     const elapsedMs = Math.max(0, Date.now() - startedAt);
     const responseText = result.answerText || '';
-    const outcome = evaluateTestOutcome({
+    const baseOutcome = evaluateTestOutcome({
       item: testItem,
       hasError: false,
       responseText,
     });
+    const outcome = withUnableToAssistFailureOverride(responseText, baseOutcome);
 
     return {
       passed: outcome.passed,

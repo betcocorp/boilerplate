@@ -156,7 +156,7 @@ function formatTimingBreakdownLabel(responsePayload: unknown): string {
     typeof timing.searchMs === 'number'
       ? `${timing.searchMs.toFixed(1)} ms`
       : 'n/a';
-  return `rounds: ${timing.toolRounds} | cache: ${timing.cacheSource || 'n/a'} | search: ${searchMsLabel}`;
+  return `${timing.toolRounds} | ${timing.cacheSource || 'n/a'} | ${searchMsLabel}`;
 }
 
 type PageProps = {
@@ -239,6 +239,7 @@ export default async function AdminTestRunDetailsPage({
     label: `${index + 1}`,
     elapsedSeconds: Number((item.elapsed_ms / 1000).toFixed(2)),
     resultItemId: item.id,
+    passed: item.passed,
   }));
 
   const similarityScores = resultItems
@@ -379,9 +380,8 @@ export default async function AdminTestRunDetailsPage({
                 <TableHead>Passed</TableHead>
                 <TableHead>Sim / conf</TableHead>
                 <TableHead>Elapsed</TableHead>
-                <TableHead>Status</TableHead>
                 <TableHead>Model</TableHead>
-                <TableHead>Timing breakdown</TableHead>
+                <TableHead>Rounds | Cache | Elapsed</TableHead>
                 <TableHead>Message</TableHead>
                 <TableHead>History</TableHead>
               </TableRow>
@@ -412,7 +412,18 @@ export default async function AdminTestRunDetailsPage({
                         {promptByItemId.get(row.test_item_id) || 'n/a'}
                       </Link>
                     </TableCell>
-                    <TableCell>{row.passed ? 'yes' : 'no'}</TableCell>
+                    <TableCell>
+                      <Badge
+                        className={
+                          row.passed
+                            ? 'border-emerald-600/45 bg-emerald-600/12 text-emerald-900 dark:border-emerald-500/40 dark:bg-emerald-500/15 dark:text-emerald-50'
+                            : undefined
+                        }
+                        variant={row.passed ? 'outline' : 'destructive'}
+                      >
+                        {row.passed ? 'Yes' : 'No'}
+                      </Badge>
+                    </TableCell>
                     <TableCell className="whitespace-nowrap font-mono text-xs text-slate-700">
                       <Badge variant="outline">
                         {formatItemSimilarityConfidenceLabel(
@@ -429,11 +440,12 @@ export default async function AdminTestRunDetailsPage({
                         {formatDurationSeconds(row.elapsed_ms)}
                       </Badge>
                     </TableCell>
-                    <TableCell>{row.status}</TableCell>
                     <TableCell>
-                      {modelByWorkflowRunId.get(
-                        extractWorkflowRunId(row.response_payload) || '',
-                      ) || 'n/a'}
+                      <Badge variant="outline">
+                        {modelByWorkflowRunId.get(
+                          extractWorkflowRunId(row.response_payload) || '',
+                        ) || 'n/a'}
+                      </Badge>
                     </TableCell>
                     <TableCell className="max-w-[220px] whitespace-normal text-xs text-slate-600">
                       {formatTimingBreakdownLabel(row.response_payload)}
@@ -446,7 +458,7 @@ export default async function AdminTestRunDetailsPage({
                         <Link
                           href={`/admin/tests/${test.id}/items/${row.test_item_id}`}
                         >
-                          View history
+                          View
                         </Link>
                       </Button>
                     </TableCell>

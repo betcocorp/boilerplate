@@ -5,6 +5,7 @@ import {
   claimQueuedTestResultForExecution,
   countResultItemsByResultId,
   getTestResultById,
+  sumResultItemsElapsedMsByResultId,
   updateTestRecord,
   updateTestResult,
 } from '~/lib/tests/repository';
@@ -40,30 +41,6 @@ function isTerminalStatus(status: string) {
     status === 'failed' ||
     status === 'cancelled'
   );
-}
-
-function currentElapsedMs(run: {
-  status: string;
-  started_at: string;
-  elapsed_ms: number | null;
-  summary: unknown;
-}) {
-  const summary = readProgressFromSummary(run.summary);
-  const elapsedAccumulated = summary.elapsedAccumulatedMs ?? run.elapsed_ms ?? 0;
-
-  if (run.status === 'running' && summary.runningSince) {
-    const runningSinceMs = new Date(summary.runningSince).getTime();
-    if (Number.isFinite(runningSinceMs)) {
-      return Math.max(0, elapsedAccumulated + (Date.now() - runningSinceMs));
-    }
-  }
-
-  if (typeof run.elapsed_ms === 'number') {
-    return run.elapsed_ms;
-  }
-
-  const startedAtMs = new Date(run.started_at).getTime();
-  return Number.isFinite(startedAtMs) ? Math.max(0, Date.now() - startedAtMs) : 0;
 }
 
 export async function GET(
@@ -102,7 +79,7 @@ export async function GET(
     totalItems > 0
       ? Number(((completedItems / totalItems) * 100).toFixed(2))
       : summaryProgress.progressPercent ?? 0;
-  const elapsedMs = currentElapsedMs(run);
+  const elapsedMs = await sumResultItemsElapsedMsByResultId(run.id);
 
   return NextResponse.json({
     ok: true,
@@ -164,7 +141,7 @@ export async function PATCH(
   }
 
   const summary = readProgressFromSummary(run.summary);
-  const elapsedMs = currentElapsedMs(run);
+  const elapsedMs = await sumResultItemsElapsedMsByResultId(run.id);
 
   if (action === 'pause') {
     if (run.status !== 'running') {

@@ -537,6 +537,33 @@ export async function countResultItemsByResultId(testResultId: string) {
   return result.count ?? 0;
 }
 
+/** Sum of `elapsed_ms` across all result rows for the run (model time per prompt, not wall clock). */
+export async function sumResultItemsElapsedMsByResultId(testResultId: string) {
+  const supabase = getSupabaseServiceRoleClient();
+  let total = 0;
+  let from = 0;
+
+  while (true) {
+    const result = await supabase
+      .from('test_result_items')
+      .select('elapsed_ms')
+      .eq('test_result_id', testResultId)
+      .order('row_index', { ascending: true })
+      .range(from, from + RESULT_ITEMS_PAGE_SIZE - 1);
+
+    const rows = (assertNoError(result) || []) as Pick<TestResultItemRecord, 'elapsed_ms'>[];
+    for (const row of rows) {
+      total += typeof row.elapsed_ms === 'number' && Number.isFinite(row.elapsed_ms) ? row.elapsed_ms : 0;
+    }
+    if (rows.length < RESULT_ITEMS_PAGE_SIZE) {
+      break;
+    }
+    from += RESULT_ITEMS_PAGE_SIZE;
+  }
+
+  return total;
+}
+
 export async function deleteTestById(testId: string) {
   const supabase = getSupabaseServiceRoleClient();
   const result = await supabase.from('tests').delete().eq('id', testId);

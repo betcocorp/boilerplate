@@ -28,6 +28,86 @@ type PageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 };
 
+function suggestResolution(row: {
+  status: string | null;
+  elapsed_ms: number | null;
+  error_message: string | null;
+  response_text: string | null;
+  response_payload: unknown;
+}) {
+  const error = (row.error_message || '').toLowerCase();
+  const responseText = (row.response_text || '').toLowerCase();
+  const status = (row.status || '').toLowerCase();
+
+  const looksLikeRefusal =
+    responseText.includes("i can't") ||
+    responseText.includes("i cannot") ||
+    responseText.includes('unable to') ||
+    responseText.includes("can't verify") ||
+    responseText.includes('cannot verify') ||
+    responseText.includes("don't have access") ||
+    responseText.includes("i don't have access") ||
+    responseText.includes("i don't know") ||
+    responseText.includes("i can’t") ||
+    responseText.includes('cannot provide') ||
+    responseText.includes("can't provide") ||
+    responseText.includes('i am not able to') ||
+    responseText.includes('as an ai') ||
+    responseText.includes('i’m unable to') ||
+    responseText.includes("i'm unable to");
+
+  const looksLikeTimeout =
+    status.includes('timeout') ||
+    error.includes('timeout') ||
+    error.includes('timed out') ||
+    error.includes('deadline') ||
+    error.includes('cancelled') ||
+    error.includes('canceled') ||
+    error.includes('rate limit') ||
+    error.includes('429');
+
+  const looksLikeEvaluationMismatch =
+    error.includes('assert') ||
+    error.includes('expected') ||
+    error.includes('mismatch') ||
+    error.includes('validation') ||
+    error.includes('zod') ||
+    error.includes('schema');
+
+  const looksLikeGroundingGap =
+    responseText.includes("i couldn't find") ||
+    responseText.includes("i can't find") ||
+    responseText.includes('no relevant') ||
+    responseText.includes('no sources') ||
+    responseText.includes('not in the provided') ||
+    responseText.includes('not provided') ||
+    responseText.includes('no information') ||
+    responseText.includes('insufficient information');
+
+  // Heuristic ordering: pick the most actionable bucket first.
+  if (looksLikeTimeout) {
+    return 'Timeout / infra: retry run; check model latency + rate limits; consider lowering context or splitting prompt.';
+  }
+
+  if (looksLikeRefusal) {
+    return 'Refusal: tighten instructions + grounding; ensure allowed safe-completion; add required fields/checklist for hazard specifics.';
+  }
+
+  if (looksLikeGroundingGap) {
+    return 'Grounding gap: verify SDS/docs exist; adjust retrieval/source selection; expand query terms; ensure citations/sources are returned.';
+  }
+
+  if (looksLikeEvaluationMismatch) {
+    return 'Eval/expectation mismatch: inspect expected fields vs actual; update test expectations or adjust evaluator rules.';
+  }
+
+  if (row.response_payload) {
+    return 'Inspect payload: check tool output / retrieved sources; confirm response schema + required fields.';
+  }
+
+  return 'Open Item history + Run to inspect; determine if prompt, retrieval, or evaluator needs adjustment.';
+}
+
 function readSearchParam(value: string | string[] | undefined, fallback = '') {
   if (Array.isArray(value)) {
     return value[0] ?? fallback;
@@ -159,13 +239,14 @@ export default async function AdminFailureQueuePage({ searchParams }: PageProps)
                 <TableHead>Failed at</TableHead>
                 <TableHead>Latency</TableHead>
                 <TableHead>Error</TableHead>
+                <TableHead>Suggested resolution</TableHead>
                 <TableHead className="text-right">Links</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {!loadError && rows.length === 0 ? (
                 <TableRow>
-                  <TableCell className="text-slate-500" colSpan={6}>
+                  <TableCell className="text-slate-500" colSpan={7}>
                     No failed prompts match this search.
                   </TableCell>
                 </TableRow>
@@ -198,6 +279,9 @@ export default async function AdminFailureQueuePage({ searchParams }: PageProps)
                   </TableCell>
                   <TableCell className="max-w-xs align-top text-sm text-slate-600">
                     <span className="line-clamp-3">{row.error_message || '—'}</span>
+                  </TableCell>
+                  <TableCell className="max-w-sm align-top text-sm text-slate-600">
+                    <span className="line-clamp-3">{suggestResolution(row)}</span>
                   </TableCell>
                   <TableCell className="text-right align-top">
                     <div className="flex flex-col items-end gap-1 text-sm">

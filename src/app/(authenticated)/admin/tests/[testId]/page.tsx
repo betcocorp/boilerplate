@@ -16,9 +16,9 @@ import {
 import { V1_AGENT_REGISTRY } from '~/lib/agents/agent-registry';
 import {
   getTestById,
-  listResultItemsByResultId,
   getTestItemSuggestionRows,
   getTestItemsByTestId,
+  listResultItemsByResultId,
   listTestResultsByTestId,
 } from '~/lib/tests/repository';
 import { buildSuggestionListsFromTestItems } from '~/lib/tests/suggestion-lists';
@@ -122,6 +122,19 @@ export default async function AdminTestDetailsPage({
         : null;
   }
 
+  const metricsByRunId = new Map<
+    string,
+    { passRatePercent: number; avgSimilarity: number | null }
+  >();
+  for (let i = 0; i < trendRuns.length; i += 1) {
+    const run = trendRuns[i]!;
+    const row = trendData[i]!;
+    metricsByRunId.set(run.id, {
+      passRatePercent: row.passRate,
+      avgSimilarity: row.avgSimilarity,
+    });
+  }
+
   const suggestionLists = buildSuggestionListsFromTestItems(suggestionRows);
 
   return (
@@ -143,8 +156,8 @@ export default async function AdminTestDetailsPage({
                   <>
                     <span className="mx-1 text-slate-400">·</span>
                     Intended agent:{' '}
-                    {V1_AGENT_REGISTRY.find((a) => a.id === test.intended_agent)?.label ??
-                      test.intended_agent}
+                    {V1_AGENT_REGISTRY.find((a) => a.id === test.intended_agent)
+                      ?.label ?? test.intended_agent}
                   </>
                 ) : null}
               </p>
@@ -178,80 +191,107 @@ export default async function AdminTestDetailsPage({
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <h2 className="text-lg font-semibold text-slate-900">Recent runs</h2>
           <div className="relative mt-4 max-h-[min(48vh,32rem)] overflow-auto overscroll-contain rounded-2xl border border-slate-200">
-            <table className="w-full min-w-[640px] caption-bottom text-sm">
+            <table className="w-full min-w-[880px] caption-bottom text-sm">
               <TableHeader className="sticky top-0 z-10 bg-white shadow-[0_1px_0_0_rgb(226_232_240)] [&_tr]:border-b-0">
                 <TableRow>
                   <TableHead>Run id</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Pass/fail</TableHead>
-                  <TableHead>Elapsed</TableHead>
+                  <TableHead title="Total answer time: sum of each prompt’s elapsed time for this run">
+                    Elapsed
+                  </TableHead>
+                  <TableHead title="Share of items marked passed for this run (same basis as the pass rate trend chart)">
+                    Pass %
+                  </TableHead>
+                  <TableHead title="Mean max retrieval similarity across items with scores (same basis as the historical chart)">
+                    Similarity
+                  </TableHead>
                   <TableHead>Started</TableHead>
+                  <TableHead>Completed</TableHead>
                   <TableHead>Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {results.length === 0 ? (
                   <TableRow>
-                    <TableCell className="text-slate-500" colSpan={6}>
+                    <TableCell className="text-slate-500" colSpan={9}>
                       No runs yet for this dataset.
                     </TableCell>
                   </TableRow>
                 ) : (
-                  results.map((result) => (
-                    <TableRow key={result.id}>
-                      <TableCell className="font-mono text-xs">
-                        <Link
-                          className="text-sky-700 underline-offset-2 hover:underline"
-                          href={`/admin/tests/${test.id}/runs/${result.id}`}
-                        >
-                          {result.id}
-                        </Link>
-                      </TableCell>
-                      <TableCell>{result.status}</TableCell>
-                      <TableCell>
-                        {result.passed_items}/{result.total_items} passed
-                      </TableCell>
-                      <TableCell>
-                        {formatDurationSeconds(result.elapsed_ms)}
-                      </TableCell>
-                      <TableCell>{formatDate(result.started_at)}</TableCell>
-                      <TableCell>
-                        <div className="flex flex-wrap gap-2">
-                          <Button asChild size="sm" variant="outline">
-                            <Link
-                              href={`/admin/tests/${test.id}/runs/${result.id}`}
-                            >
-                              View run
-                            </Link>
-                          </Button>
-                          <form action={deleteTestRunAction}>
-                            <input
-                              name="returnPath"
-                              type="hidden"
-                              value={`/admin/tests/${test.id}`}
-                            />
-                            <input
-                              name="testId"
-                              type="hidden"
-                              value={test.id}
-                            />
-                            <input
-                              name="runId"
-                              type="hidden"
-                              value={result.id}
-                            />
-                            <Button
-                              size="sm"
-                              type="submit"
-                              variant="destructive"
-                            >
-                              Delete run
+                  results.map((result) => {
+                    const metrics = metricsByRunId.get(result.id);
+                    return (
+                      <TableRow key={result.id}>
+                        <TableCell className="font-mono text-xs">
+                          <Link
+                            className="text-sky-700 underline-offset-2 hover:underline"
+                            href={`/admin/tests/${test.id}/runs/${result.id}`}
+                          >
+                            {result.id}
+                          </Link>
+                        </TableCell>
+                        <TableCell>{result.status}</TableCell>
+                        <TableCell>
+                          {result.passed_items}/{result.total_items} passed
+                        </TableCell>
+                        <TableCell>
+                          {formatDurationSeconds(result.elapsed_ms)}
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap tabular-nums text-slate-700">
+                          {typeof metrics?.passRatePercent === 'number'
+                            ? `${metrics.passRatePercent.toFixed(1)}%`
+                            : '—'}
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap tabular-nums text-slate-700">
+                          {typeof metrics?.avgSimilarity === 'number'
+                            ? `${(metrics.avgSimilarity * 100).toFixed(1)}%`
+                            : 'n/a'}
+                        </TableCell>
+                        <TableCell>{formatDate(result.started_at)}</TableCell>
+                        <TableCell className="text-slate-600">
+                          {result.completed_at
+                            ? formatDate(result.completed_at)
+                            : '—'}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex flex-wrap gap-2">
+                            <Button asChild size="sm" variant="outline">
+                              <Link
+                                href={`/admin/tests/${test.id}/runs/${result.id}`}
+                              >
+                                View run
+                              </Link>
                             </Button>
-                          </form>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))
+                            <form action={deleteTestRunAction}>
+                              <input
+                                name="returnPath"
+                                type="hidden"
+                                value={`/admin/tests/${test.id}`}
+                              />
+                              <input
+                                name="testId"
+                                type="hidden"
+                                value={test.id}
+                              />
+                              <input
+                                name="runId"
+                                type="hidden"
+                                value={result.id}
+                              />
+                              <Button
+                                size="sm"
+                                type="submit"
+                                variant="destructive"
+                              >
+                                Delete run
+                              </Button>
+                            </form>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })
                 )}
               </TableBody>
             </table>

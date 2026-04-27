@@ -1,12 +1,6 @@
 'use client';
 
-import {
-  type KeyboardEvent,
-  type MouseEvent,
-  useEffect,
-  useMemo,
-  useState,
-} from 'react';
+import { type MouseEvent, useEffect, useMemo, useState } from 'react';
 import type { ActiveDotProps, DotItemDotProps } from 'recharts';
 import {
   Bar,
@@ -32,6 +26,8 @@ import { cn } from '~/lib/utils';
 type ElapsedTrendDatum = {
   label: string;
   elapsedSeconds: number;
+  /** When omitted, dot renders neutral (e.g. stale client data). */
+  passed?: boolean;
   /** Links chart point → `run-item-result-${id}` row on the run details page */
   resultItemId?: string;
 };
@@ -101,7 +97,11 @@ function ElapsedTrendDatumDotSvg(
   /* Larger invisible target so hover works before the visible dot appears */
   const hitRadius = Math.max(radius + 10, 14);
 
-  const label = `Scroll to item ${payload?.label ?? ''} in Item-level results`;
+  const outcome =
+    payload?.passed === true ? 'passed' : payload?.passed === false ? 'failed' : 'unknown';
+  const dotFill =
+    payload?.passed === true ? '#16a34a' : payload?.passed === false ? '#dc2626' : '#94a3b8';
+  const label = `Scroll to item ${payload?.label ?? ''} in Item-level results (${outcome})`;
 
   const visibleOpacity =
     variant === 'active'
@@ -109,34 +109,27 @@ function ElapsedTrendDatumDotSvg(
       : 'opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100';
 
   return (
-    <g
-      aria-label={label}
-      className={cn('group cursor-pointer outline-none')}
-      onClick={(event: MouseEvent<SVGGElement>) => {
-        event.stopPropagation();
-        scrollToRunItemRow(id);
-      }}
-      onKeyDown={(event: KeyboardEvent<SVGGElement>) => {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault();
-          scrollToRunItemRow(id);
-        }
-      }}
-      role="button"
-      tabIndex={0}
-    >
+    <g aria-label={label} className={cn('group outline-none')}>
       <circle
+        className={cn(id ? 'cursor-pointer' : undefined)}
         cx={cx}
         cy={cy}
         fill="transparent"
         pointerEvents="auto"
         r={hitRadius}
+        onClick={(event: MouseEvent<SVGCircleElement>) => {
+          if (!id) {
+            return;
+          }
+          event.stopPropagation();
+          scrollToRunItemRow(id);
+        }}
       />
       <circle
         className={cn('stroke-white pointer-events-none', visibleOpacity)}
         cx={cx}
         cy={cy}
-        fill="#0ea5e9"
+        fill={dotFill}
         pointerEvents="none"
         r={radius}
         strokeWidth={1}
@@ -256,56 +249,64 @@ export function RunAtAGlanceCharts({
       <h2 className="text-lg font-semibold text-slate-900">
         At-a-glance charts
       </h2>
-      <div className="mt-6 grid gap-6 lg:grid-cols-3">
-        <article className="col-span-3 min-w-0 rounded-2xl border border-slate-200 p-5">
+      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <article className="min-w-0 rounded-2xl border border-slate-200 p-5 lg:col-span-3">
           <h3 className="text-sm font-semibold text-slate-900">
             Elapsed by prompt order
           </h3>
-          <ChartContainer className="mt-4 h-56 min-w-0" config={chartConfig}>
-            <LineChart data={elapsedTrendData}>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} />
-              <XAxis
-                dataKey="label"
-                interval={0}
-                tick={{ fontSize: 11 }}
-                tickFormatter={(value, index) =>
-                  typeof index === 'number'
-                    ? index % 10 === 0
-                      ? `${index}`
-                      : ''
-                    : value
-                }
-              />
-              <YAxis
-                tick={{ fontSize: 11 }}
-                tickFormatter={(value) => `${value}s`}
-              />
-              <ChartTooltip
-                content={
-                  <ChartTooltipContent
-                    formatter={(value) =>
-                      typeof value === 'number' ? `${value.toFixed(2)} s` : 'n/a'
-                    }
-                  />
-                }
-              />
-              <Line
-                activeDot={ElapsedTrendActiveDatumDot}
-                dataKey="elapsedSeconds"
-                dot={ElapsedTrendDatumDot}
-                stroke="var(--color-elapsedSeconds)"
-                strokeWidth={2}
-                type="monotone"
-              />
-            </LineChart>
-          </ChartContainer>
+          {elapsedTrendData.length === 0 ? (
+            <p className="mt-4 text-sm text-slate-500">
+              No item timings yet for this run.
+            </p>
+          ) : (
+            <ChartContainer className="mt-4 h-56 w-full min-w-0" config={chartConfig}>
+              <LineChart data={elapsedTrendData}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <XAxis
+                  dataKey="label"
+                  interval={0}
+                  tick={{ fontSize: 11 }}
+                  tickFormatter={(value, index) =>
+                    typeof index === 'number'
+                      ? index % 10 === 0
+                        ? `${index}`
+                        : ''
+                      : value
+                  }
+                />
+                <YAxis
+                  tick={{ fontSize: 11 }}
+                  tickFormatter={(value) => `${value}s`}
+                />
+                <ChartTooltip
+                  content={
+                    <ChartTooltipContent
+                      formatter={(value) =>
+                        typeof value === 'number' && Number.isFinite(value)
+                          ? `${value.toFixed(2)} s`
+                          : 'n/a'
+                      }
+                    />
+                  }
+                />
+                <Line
+                  activeDot={ElapsedTrendActiveDatumDot}
+                  dataKey="elapsedSeconds"
+                  dot={ElapsedTrendDatumDot}
+                  stroke="var(--color-elapsedSeconds)"
+                  strokeWidth={2}
+                  type="monotone"
+                />
+              </LineChart>
+            </ChartContainer>
+          )}
         </article>
 
         <article className="min-w-0 rounded-2xl border border-slate-200 p-5">
           <h3 className="text-sm font-semibold text-slate-900">
             Pass vs fail vs not run
           </h3>
-          <ChartContainer className="mt-4 h-56 min-w-0" config={chartConfig}>
+          <ChartContainer className="mt-4 h-56 w-full min-w-0" config={chartConfig}>
             <PieChart>
               <Pie
                 cx="50%"
@@ -332,7 +333,7 @@ export function RunAtAGlanceCharts({
           <h3 className="text-sm font-semibold text-slate-900">
             Slow or not-passed signal counts
           </h3>
-          <ChartContainer className="mt-4 h-56 min-w-0" config={chartConfig}>
+          <ChartContainer className="mt-4 h-56 w-full min-w-0" config={chartConfig}>
             <PieChart>
               <Pie
                 cx="50%"
@@ -360,7 +361,7 @@ export function RunAtAGlanceCharts({
           <h3 className="text-sm font-semibold text-slate-900">
             Similarity stats
           </h3>
-          <ChartContainer className="mt-4 h-56 min-w-0" config={chartConfig}>
+          <ChartContainer className="mt-4 h-56 w-full min-w-0" config={chartConfig}>
             <BarChart data={similarityStatsData}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} />
               <XAxis dataKey="label" interval={0} tick={{ fontSize: 11 }} />

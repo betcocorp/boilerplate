@@ -69,6 +69,8 @@ export function BexStreamdown({
         '[&_ul]:my-2 [&_ul]:list-inside [&_ul]:list-disc [&_ul]:ps-4 [&_ul]:pe-1',
         '[&_ol]:my-2 [&_ol]:list-inside [&_ol]:list-decimal [&_ol]:ps-4 [&_ol]:pe-1',
         '[&_li]:my-1 [&_li]:leading-relaxed',
+        /* Streamed/LLM markdown often produces blank paragraphs inside <li>; hide those to avoid "1." on its own line. */
+        '[&_li>p]:my-0 [&_li>p]:leading-relaxed [&_li>p:empty]:hidden',
         '[&_ul_ul]:mt-1.5 [&_ul_ul]:ps-4 [&_ol_ol]:mt-1.5 [&_ol_ol]:ps-4',
         isUser
           ? '[&_code]:bg-primary-foreground/15 [&_pre]:bg-primary-foreground/10'

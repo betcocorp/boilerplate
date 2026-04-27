@@ -102,7 +102,7 @@ export function TestHistoricalTrendsCharts({
             <p className="mt-1 text-xs text-slate-500">
               Newest: {runs[runs.length - 1]?.passRate.toFixed(1)}%
             </p>
-            <ChartContainer className="mt-4 h-56 min-w-0" config={chartConfig}>
+            <ChartContainer className="mt-4 h-56 w-full min-w-0" config={chartConfig}>
               <LineChart data={runs}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="startedAtLabel" tick={{ fontSize: 11 }} />
@@ -142,7 +142,7 @@ export function TestHistoricalTrendsCharts({
                 ? formatElapsedDuration(runs[runs.length - 1].elapsedSeconds)
                 : 'n/a'}
             </p>
-            <ChartContainer className="mt-4 h-56 min-w-0" config={chartConfig}>
+            <ChartContainer className="mt-4 h-56 w-full min-w-0" config={chartConfig}>
               <LineChart data={runs}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="startedAtLabel" tick={{ fontSize: 11 }} />
@@ -179,7 +179,7 @@ export function TestHistoricalTrendsCharts({
             <h3 className="text-sm font-semibold text-slate-900">
               Run status mix
             </h3>
-            <ChartContainer className="mt-4 h-56 min-w-0" config={chartConfig}>
+            <ChartContainer className="mt-4 h-56 w-full min-w-0" config={chartConfig}>
               <PieChart>
                 <Pie
                   cx="50%"
@@ -213,7 +213,7 @@ export function TestHistoricalTrendsCharts({
                 ? `${(overallAvgSimilarity * 100).toFixed(1)}%`
                 : 'n/a'}
             </p>
-            <ChartContainer className="mt-4 h-56 min-w-0" config={chartConfig}>
+            <ChartContainer className="mt-4 h-56 w-full min-w-0" config={chartConfig}>
               <LineChart data={runs}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="startedAtLabel" tick={{ fontSize: 11 }} />

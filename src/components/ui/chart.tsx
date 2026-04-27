@@ -19,6 +19,9 @@ type ChartContextProps = {
 
 const ChartContext = React.createContext<ChartContextProps | null>(null);
 
+/** Recharts’ first pass uses -1×-1 before ResizeObserver; positive defaults avoid console noise on the client. */
+const RESPONSIVE_INITIAL_DIMENSION = { width: 800, height: 240 } as const;
+
 function useChart() {
   const context = React.useContext(ChartContext);
   if (!context) {
@@ -61,20 +64,34 @@ export function ChartContainer({
 }) {
   const uniqueId = React.useId().replaceAll(':', '');
   const chartId = `chart-${id || uniqueId}`;
+  const [chartsReady, setChartsReady] = React.useState(false);
+
+  React.useLayoutEffect(() => {
+    setChartsReady(true);
+  }, []);
 
   return (
     <ChartContext.Provider value={{ config }}>
       <div
         className={cn(
-          'flex min-w-0 items-center justify-center text-xs [&_.recharts-cartesian-axis-tick_text]:fill-muted-foreground [&_.recharts-cartesian-grid_line[stroke="#ccc"]]:stroke-border/50 [&_.recharts-curve.recharts-tooltip-cursor]:stroke-border [&_.recharts-dot[stroke="#fff"]]:stroke-transparent [&_.recharts-layer]:outline-none [&_.recharts-legend-item-text]:text-foreground [&_.recharts-polar-grid_[stroke="#ccc"]]:stroke-border/50 [&_.recharts-radial-bar-background-sector]:fill-muted [&_.recharts-reference-line_[stroke="#ccc"]]:stroke-border [&_.recharts-sector[stroke="#fff"]]:stroke-transparent [&_.recharts-sector]:outline-none',
+          'relative w-full min-w-0 text-xs [&_.recharts-cartesian-axis-tick_text]:fill-muted-foreground [&_.recharts-cartesian-grid_line[stroke="#ccc"]]:stroke-border/50 [&_.recharts-curve.recharts-tooltip-cursor]:stroke-border [&_.recharts-dot[stroke="#fff"]]:stroke-transparent [&_.recharts-layer]:outline-none [&_.recharts-legend-item-text]:text-foreground [&_.recharts-polar-grid_[stroke="#ccc"]]:stroke-border/50 [&_.recharts-radial-bar-background-sector]:fill-muted [&_.recharts-reference-line_[stroke="#ccc"]]:stroke-border [&_.recharts-sector[stroke="#fff"]]:stroke-transparent [&_.recharts-sector]:outline-none',
           className,
         )}
         data-chart={chartId}
       >
         <ChartStyle config={config} id={chartId} />
-        <RechartsPrimitive.ResponsiveContainer>
-          {children}
-        </RechartsPrimitive.ResponsiveContainer>
+        {chartsReady ? (
+          <RechartsPrimitive.ResponsiveContainer
+            height="100%"
+            initialDimension={RESPONSIVE_INITIAL_DIMENSION}
+            minWidth={0}
+            width="100%"
+          >
+            {children}
+          </RechartsPrimitive.ResponsiveContainer>
+        ) : (
+          <div aria-hidden className="h-full min-h-0 w-full" />
+        )}
       </div>
     </ChartContext.Provider>
   );

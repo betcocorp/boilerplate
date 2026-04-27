@@ -3,6 +3,7 @@ import {
   getTestItemsByTestId,
   getTestResultById,
   insertTestResultItems,
+  sumResultItemsElapsedMsByResultId,
   updateTestRecord,
   updateTestResult,
 } from './repository';
@@ -14,35 +15,6 @@ function asSummaryObject(value: unknown): Record<string, unknown> {
   }
 
   return value as Record<string, unknown>;
-}
-
-function readNumber(value: unknown, fallback = 0) {
-  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
-}
-
-function readString(value: unknown) {
-  return typeof value === 'string' && value.trim() ? value : null;
-}
-
-function readElapsedSummary(summary: Record<string, unknown>) {
-  return {
-    elapsedAccumulatedMs: readNumber(summary.elapsed_accumulated_ms, 0),
-    runningSince: readString(summary.running_since),
-  };
-}
-
-function elapsedForLiveRun(summary: Record<string, unknown>) {
-  const elapsed = readElapsedSummary(summary);
-  if (!elapsed.runningSince) {
-    return elapsed.elapsedAccumulatedMs;
-  }
-
-  const runningSinceMs = new Date(elapsed.runningSince).getTime();
-  if (!Number.isFinite(runningSinceMs)) {
-    return elapsed.elapsedAccumulatedMs;
-  }
-
-  return Math.max(0, elapsed.elapsedAccumulatedMs + (Date.now() - runningSinceMs));
 }
 
 function isTerminalRunStatus(status: string) {
@@ -71,10 +43,11 @@ export async function executeTestRun(testResultId: string) {
   const totalItems = items.length;
   const resumedProgressPercent =
     totalItems > 0 ? Number(((completedItems / totalItems) * 100).toFixed(2)) : 0;
-  const priorElapsed = readElapsedSummary(currentSummary).elapsedAccumulatedMs;
+  let itemElapsedSumMs = await sumResultItemsElapsedMsByResultId(testResult.id);
 
   await updateTestResult(testResult.id, {
     status: 'running',
+    elapsed_ms: itemElapsedSumMs,
     summary: {
       ...currentSummary,
       completed_items: completedItems,
@@ -82,7 +55,7 @@ export async function executeTestRun(testResultId: string) {
       progress_percent: resumedProgressPercent,
       runner_state: 'running',
       running_since: resumedAt,
-      elapsed_accumulated_ms: priorElapsed,
+      elapsed_accumulated_ms: itemElapsedSumMs,
     },
   });
 
@@ -94,14 +67,14 @@ export async function executeTestRun(testResultId: string) {
     const controlRun = await getTestResultById(testResult.id);
     if (controlRun.status === 'paused') {
       const controlSummary = asSummaryObject(controlRun.summary);
-      const pausedElapsedMs = elapsedForLiveRun(controlSummary);
+      itemElapsedSumMs = await sumResultItemsElapsedMsByResultId(testResult.id);
       await updateTestResult(testResult.id, {
-        elapsed_ms: pausedElapsedMs,
+        elapsed_ms: itemElapsedSumMs,
         summary: {
           ...controlSummary,
           runner_state: 'paused',
           running_since: null,
-          elapsed_accumulated_ms: pausedElapsedMs,
+          elapsed_accumulated_ms: itemElapsedSumMs,
         },
       });
       await updateTestRecord(testResult.test_id, {
@@ -112,15 +85,15 @@ export async function executeTestRun(testResultId: string) {
 
     if (controlRun.status === 'cancelled') {
       const controlSummary = asSummaryObject(controlRun.summary);
-      const cancelledElapsedMs = elapsedForLiveRun(controlSummary);
+      itemElapsedSumMs = await sumResultItemsElapsedMsByResultId(testResult.id);
       await updateTestResult(testResult.id, {
-        elapsed_ms: cancelledElapsedMs,
+        elapsed_ms: itemElapsedSumMs,
         completed_at: new Date().toISOString(),
         summary: {
           ...controlSummary,
           runner_state: 'cancelled',
           running_since: null,
-          elapsed_accumulated_ms: cancelledElapsedMs,
+          elapsed_accumulated_ms: itemElapsedSumMs,
         },
       });
       await updateTestRecord(testResult.test_id, {
@@ -140,6 +113,8 @@ export async function executeTestRun(testResultId: string) {
     const itemResult = await runSingleTestItem(testResult.id, item);
     await insertTestResultItems([itemResult.item]);
 
+    itemElapsedSumMs += itemResult.item.elapsed_ms;
+
     if (itemResult.passed) {
       passedItems += 1;
     } else {
@@ -151,12 +126,11 @@ export async function executeTestRun(testResultId: string) {
       items.length > 0 ? Number(((completedItems / items.length) * 100).toFixed(2)) : 0;
     const liveRun = await getTestResultById(testResult.id);
     currentSummary = asSummaryObject(liveRun.summary);
-    const liveElapsedMs = elapsedForLiveRun(currentSummary);
 
     await updateTestResult(testResult.id, {
       passed_items: passedItems,
       failed_items: failedItems,
-      elapsed_ms: liveElapsedMs,
+      elapsed_ms: itemElapsedSumMs,
       summary: {
         ...currentSummary,
         completed_items: completedItems,
@@ -164,7 +138,7 @@ export async function executeTestRun(testResultId: string) {
         progress_percent: progressPercent,
         pass_rate: items.length > 0 ? passedItems / items.length : 0,
         runner_state: 'running',
-        elapsed_accumulated_ms: liveElapsedMs,
+        elapsed_accumulated_ms: itemElapsedSumMs,
       },
     });
   }
@@ -172,13 +146,13 @@ export async function executeTestRun(testResultId: string) {
   completedItems = await countResultItemsByResultId(testResult.id);
   const finalRun = await getTestResultById(testResult.id);
   const finalSummary = asSummaryObject(finalRun.summary);
-  const elapsedMs = elapsedForLiveRun(finalSummary);
+  itemElapsedSumMs = await sumResultItemsElapsedMsByResultId(testResult.id);
 
   await updateTestResult(testResult.id, {
     status: failedItems > 0 ? 'completed_with_failures' : 'completed',
     passed_items: passedItems,
     failed_items: failedItems,
-    elapsed_ms: elapsedMs,
+    elapsed_ms: itemElapsedSumMs,
     completed_at: new Date().toISOString(),
     summary: {
       ...finalSummary,
@@ -188,7 +162,7 @@ export async function executeTestRun(testResultId: string) {
       pass_rate: items.length > 0 ? passedItems / items.length : 0,
       runner_state: 'completed',
       running_since: null,
-      elapsed_accumulated_ms: elapsedMs,
+      elapsed_accumulated_ms: itemElapsedSumMs,
     },
   });
 
