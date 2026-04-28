@@ -77,6 +77,11 @@ export async function getTestById(testId: string) {
 
 const TEST_ITEMS_PAGE_SIZE = 1000;
 
+export type TestItemSuggestionRow = Pick<
+  TestItemRecord,
+  'expected_result_type' | 'expected_canonical_product' | 'expected_reason_code' | 'input_payload'
+>;
+
 /** Fetches every row for the test (Supabase caps single queries at `max_rows`, often 1000). */
 export async function getTestItemsByTestId(testId: string) {
   const supabase = getSupabaseServiceRoleClient();
@@ -106,12 +111,9 @@ export async function getTestItemsByTestId(testId: string) {
  * Lightweight fetch of columns used to build distinct “Add prompt” combobox options
  * (avoids relying on the full table row shape in callers).
  */
-export async function getTestItemSuggestionRows(testId: string) {
+export async function getTestItemSuggestionRows(testId: string): Promise<TestItemSuggestionRow[]> {
   const supabase = getSupabaseServiceRoleClient();
-  const all: Pick<
-    TestItemRecord,
-    'expected_result_type' | 'expected_canonical_product' | 'expected_reason_code' | 'input_payload'
-  >[] = [];
+  const all: TestItemSuggestionRow[] = [];
   let from = 0;
 
   while (true) {
@@ -124,10 +126,7 @@ export async function getTestItemSuggestionRows(testId: string) {
       .order('row_index', { ascending: true })
       .range(from, from + TEST_ITEMS_PAGE_SIZE - 1);
 
-    const page = (assertNoError(result) || []) as Pick<
-      TestItemRecord,
-      'expected_result_type' | 'expected_canonical_product' | 'expected_reason_code' | 'input_payload'
-    >[];
+    const page = (assertNoError(result) || []) as TestItemSuggestionRow[];
     all.push(...page);
     if (page.length < TEST_ITEMS_PAGE_SIZE) {
       break;
@@ -136,6 +135,121 @@ export async function getTestItemSuggestionRows(testId: string) {
   }
 
   return all;
+}
+
+/**
+ * Distinct-value source rows from **all** tests (admin “Add prompt” comboboxes should not depend on which dataset is open).
+ */
+export async function getGlobalTestItemSuggestionRows(): Promise<TestItemSuggestionRow[]> {
+  const supabase = getSupabaseServiceRoleClient();
+  const all: TestItemSuggestionRow[] = [];
+  let from = 0;
+
+  while (true) {
+    const result = await supabase
+      .from('test_items')
+      .select(
+        'expected_result_type, expected_canonical_product, expected_reason_code, input_payload',
+      )
+      .order('id', { ascending: true })
+      .range(from, from + TEST_ITEMS_PAGE_SIZE - 1);
+
+    const page = (assertNoError(result) || []) as TestItemSuggestionRow[];
+    all.push(...page);
+    if (page.length < TEST_ITEMS_PAGE_SIZE) {
+      break;
+    }
+    from += TEST_ITEMS_PAGE_SIZE;
+  }
+
+  return all;
+}
+
+const LEGACY_PROD_LINE_PAGE_SIZE = 1000;
+
+export type LegacyProductLineSuggestionMeta = {
+  /** Sorted `ProdLineKey` values for merging into combobox option values (submitted form still uses key). */
+  keys: string[];
+  /** Human-facing name per key (from `ProdLineDescr`); duplicate names get `Name (ProdLineKey)` suffix. */
+  labelByKey: Record<string, string>;
+};
+
+function disambiguateProductLineLabels(labelByKey: Record<string, string>): Record<string, string> {
+  const byLabel = new Map<string, string[]>();
+  for (const [key, label] of Object.entries(labelByKey)) {
+    const list = byLabel.get(label);
+    if (list) {
+      list.push(key);
+    } else {
+      byLabel.set(label, [key]);
+    }
+  }
+
+  const out = { ...labelByKey };
+  for (const keys of byLabel.values()) {
+    if (keys.length <= 1) {
+      continue;
+    }
+    for (const key of keys) {
+      out[key] = `${labelByKey[key]} (${key})`;
+    }
+  }
+  return out;
+}
+
+/**
+ * Legacy product lines for admin test UI: stable keys plus display labels from `ProdLineDescr`.
+ */
+export async function getLegacyProductLineSuggestionMeta(): Promise<LegacyProductLineSuggestionMeta> {
+  const supabase = getSupabaseServiceRoleClient();
+  const legacy = supabase.schema('legacy');
+  /** First non-empty `ProdLineDescr` per key (pagination order is stable enough with dedupe). */
+  const firstDescrByKey = new Map<string, string | null>();
+  let from = 0;
+
+  while (true) {
+    const result = await legacy
+      .from('prod_line')
+      .select('ProdLineKey, ProdLineDescr')
+      .order('ProdLineKey', { ascending: true })
+      .range(from, from + LEGACY_PROD_LINE_PAGE_SIZE - 1);
+
+    const page = (assertNoError(result) || []) as {
+      ProdLineKey: string | null;
+      ProdLineDescr: string | null;
+    }[];
+
+    for (const row of page) {
+      const k = typeof row.ProdLineKey === 'string' ? row.ProdLineKey.trim() : '';
+      if (!k) {
+        continue;
+      }
+      const d =
+        typeof row.ProdLineDescr === 'string' && row.ProdLineDescr.trim()
+          ? row.ProdLineDescr.trim()
+          : null;
+      if (!firstDescrByKey.has(k)) {
+        firstDescrByKey.set(k, d);
+      } else if (d && firstDescrByKey.get(k) == null) {
+        firstDescrByKey.set(k, d);
+      }
+    }
+
+    if (page.length < LEGACY_PROD_LINE_PAGE_SIZE) {
+      break;
+    }
+    from += LEGACY_PROD_LINE_PAGE_SIZE;
+  }
+
+  const raw: Record<string, string> = {};
+  for (const [key, descr] of firstDescrByKey) {
+    raw[key] = descr ?? key;
+  }
+
+  const labelByKey = disambiguateProductLineLabels(raw);
+  const keys = Object.keys(labelByKey).sort((a, b) => a.localeCompare(b));
+
+  return { keys, labelByKey };
 }
 
 /** Largest `row_index` for the test, or `0` when there are no items. */

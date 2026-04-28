@@ -4,14 +4,14 @@ import { connection } from 'next/server';
 
 import { AdminTestsActionToast } from '~/components/admin/tests/AdminTestsActionToast';
 import { RetrievedChunksPreview } from '~/components/admin/tests/RetrievedChunksPreview';
+import { RunAtAGlanceCharts } from '~/components/admin/tests/RunAtAGlanceCharts';
+import { RunExecutionProgress } from '~/components/admin/tests/RunExecutionProgress';
+import { RunItemResultsCsvDownload } from '~/components/admin/tests/RunItemResultsCsvDownload';
 import {
   TestRunNotesDisplay,
   TestRunNotesProvider,
   TestRunNotesToolbarButton,
 } from '~/components/admin/tests/TestRunNotesSection';
-import { RunAtAGlanceCharts } from '~/components/admin/tests/RunAtAGlanceCharts';
-import { RunExecutionProgress } from '~/components/admin/tests/RunExecutionProgress';
-import { RunItemResultsCsvDownload } from '~/components/admin/tests/RunItemResultsCsvDownload';
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
 import {
@@ -159,14 +159,17 @@ function formatTimingBreakdownLabel(responsePayload: unknown): string {
     return 'n/a';
   }
 
+  /** Mean vector-search time per retrieval sample (`similaritySearchMs`), not wall-clock elapsed. */
   const searchMsLabel =
     typeof timing.searchMs === 'number'
-      ? `${timing.searchMs.toFixed(1)} ms`
+      ? `${timing.searchMs.toFixed(1)} ms avg`
       : 'n/a';
   return `${timing.toolRounds} | ${timing.cacheSource || 'n/a'} | ${searchMsLabel}`;
 }
 
-function parseRetrievedDocumentChunksArray(raw: unknown): RetrievedDocumentChunkRef[] {
+function parseRetrievedDocumentChunksArray(
+  raw: unknown,
+): RetrievedDocumentChunkRef[] {
   if (!Array.isArray(raw)) {
     return [];
   }
@@ -187,7 +190,9 @@ function parseRetrievedDocumentChunksArray(raw: unknown): RetrievedDocumentChunk
 }
 
 /** Prefer workflow `retrieved_document_chunks`; fall back to legacy `sources` (camelCase). */
-function extractRetrievedDocumentChunks(responsePayload: unknown): RetrievedDocumentChunkRef[] {
+function extractRetrievedDocumentChunks(
+  responsePayload: unknown,
+): RetrievedDocumentChunkRef[] {
   if (
     !responsePayload ||
     typeof responsePayload !== 'object' ||
@@ -196,7 +201,9 @@ function extractRetrievedDocumentChunks(responsePayload: unknown): RetrievedDocu
     return [];
   }
   const record = responsePayload as Record<string, unknown>;
-  const fromPayload = parseRetrievedDocumentChunksArray(record.retrieved_document_chunks);
+  const fromPayload = parseRetrievedDocumentChunksArray(
+    record.retrieved_document_chunks,
+  );
   if (fromPayload.length > 0) {
     return fromPayload;
   }
@@ -225,7 +232,9 @@ function extractRetrievedDocumentChunks(responsePayload: unknown): RetrievedDocu
   return [...map.values()];
 }
 
-function formatRetrievedChunksForCsv(chunks: RetrievedDocumentChunkRef[]): string {
+function formatRetrievedChunksForCsv(
+  chunks: RetrievedDocumentChunkRef[],
+): string {
   if (chunks.length === 0) {
     return '';
   }
@@ -465,7 +474,9 @@ export default async function AdminTestRunDetailsPage({
                 <TableHead>Sim / conf</TableHead>
                 <TableHead>Elapsed</TableHead>
                 <TableHead>Model</TableHead>
-                <TableHead>Rounds | Cache | Elapsed</TableHead>
+                <TableHead title="Average RAG vector-search time per retrieval sample from the workflow—not total runtime (see Elapsed column).">
+                  Rounds | Cache | Rag search
+                </TableHead>
                 <TableHead>Retrieved chunks</TableHead>
                 <TableHead>Message</TableHead>
                 <TableHead>History</TableHead>
@@ -537,7 +548,9 @@ export default async function AdminTestRunDetailsPage({
                     </TableCell>
                     <TableCell className="max-w-[min(280px,100%)] align-top">
                       <RetrievedChunksPreview
-                        chunks={extractRetrievedDocumentChunks(row.response_payload)}
+                        chunks={extractRetrievedDocumentChunks(
+                          row.response_payload,
+                        )}
                       />
                     </TableCell>
                     <TableCell className="max-w-[420px] whitespace-normal text-xs text-slate-600 line-clamp-2">

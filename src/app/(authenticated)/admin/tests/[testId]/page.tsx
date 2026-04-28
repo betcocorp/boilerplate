@@ -15,15 +15,16 @@ import {
 } from '~/components/ui/table';
 import { V1_AGENT_REGISTRY } from '~/lib/agents/agent-registry';
 import {
+  getGlobalTestItemSuggestionRows,
+  getLegacyProductLineSuggestionMeta,
   getTestById,
   getTestItemsByTestId,
   listResultItemsByResultId,
   listTestResultsByTestId,
 } from '~/lib/tests/repository';
 import {
-  buildAgentFallbackSuggestionLists,
   buildSuggestionListsFromTestItems,
-  mergeSuggestionLists,
+  distinctNonEmptyStrings,
 } from '~/lib/tests/suggestion-lists';
 
 import { TestHistoricalTrendsCharts } from '~/components/admin/tests/TestHistoricalTrendsCharts';
@@ -94,9 +95,11 @@ export default async function AdminTestDetailsPage({
     notFound();
   }
 
-  const [items, results] = await Promise.all([
+  const [items, results, globalSuggestionRows, legacyProductLines] = await Promise.all([
     getTestItemsByTestId(testId),
     listTestResultsByTestId(testId, 20),
+    getGlobalTestItemSuggestionRows(),
+    getLegacyProductLineSuggestionMeta(),
   ]);
   const trendRuns = [...results].reverse();
   const trendRunItems = await Promise.all(
@@ -137,22 +140,18 @@ export default async function AdminTestDetailsPage({
     });
   }
 
-  /** Same rows as the prompts table — avoids a second query getting out of sync or capped differently. */
-  const datasetSuggestionLists = buildSuggestionListsFromTestItems(
-    items.map((item) => ({
-      expected_result_type: item.expected_result_type,
-      expected_canonical_product: item.expected_canonical_product,
-      expected_reason_code: item.expected_reason_code,
-      input_payload: item.input_payload,
-    })),
-  );
-  const fallbackSuggestionLists = buildAgentFallbackSuggestionLists(
-    test.intended_agent,
-  );
-  const suggestionLists = mergeSuggestionLists(
-    datasetSuggestionLists,
-    fallbackSuggestionLists,
-  );
+  /**
+   * “Add prompt” comboboxes use values seen across **all** tests so the same options appear on every dataset page.
+   * Expected canonical product values are **`prod_line.ProdLineKey`**; labels in the UI come from **`ProdLineDescr`** (union with historical test strings).
+   */
+  const datasetSuggestions = buildSuggestionListsFromTestItems(globalSuggestionRows);
+  const suggestionLists = {
+    ...datasetSuggestions,
+    canonicalProducts: distinctNonEmptyStrings([
+      ...legacyProductLines.keys,
+      ...datasetSuggestions.canonicalProducts,
+    ]),
+  };
 
   return (
     <div className="flex flex-1 bg-slate-50">
@@ -181,6 +180,7 @@ export default async function AdminTestDetailsPage({
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <AddTestItemDialog
+                canonicalProductLabels={legacyProductLines.labelByKey}
                 returnPath={`/admin/tests/${test.id}`}
                 suggestionLists={suggestionLists}
                 testId={test.id}

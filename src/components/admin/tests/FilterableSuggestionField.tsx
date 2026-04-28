@@ -35,12 +35,10 @@ function UseTypedValueItem({
   filter,
   options,
   onUse,
-  search,
 }: {
   filter: string;
   options: readonly string[];
   onUse: (text: string) => void;
-  search: string;
 }) {
   const trimmed = filter.trim();
   if (!trimmed) {
@@ -58,57 +56,6 @@ function UseTypedValueItem({
   );
 }
 
-function SuggestionCommandItems({
-  options,
-  onPick,
-  search,
-}: {
-  options: readonly string[];
-  onPick: (value: string) => void;
-  search: string;
-}) {
-  const { displayed, totalMatched, isCapped } = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    const matched = q
-      ? options.filter((o) => o.toLowerCase().includes(q))
-      : options;
-    if (!q && matched.length > INITIAL_VISIBLE_OPTIONS) {
-      return {
-        displayed: matched.slice(0, INITIAL_VISIBLE_OPTIONS),
-        totalMatched: matched.length,
-        isCapped: true,
-      };
-    }
-    return {
-      displayed: matched,
-      totalMatched: matched.length,
-      isCapped: false,
-    };
-  }, [options, search]);
-
-  return (
-    <>
-      {displayed.map((opt) => (
-        <CommandItem
-          key={opt}
-          onSelect={() => {
-            onPick(opt);
-          }}
-          value={opt}
-        >
-          {opt}
-        </CommandItem>
-      ))}
-      {!search.trim() && isCapped ? (
-        <p className="px-3 py-2 text-xs text-muted-foreground">
-          Showing the first {INITIAL_VISIBLE_OPTIONS} of {totalMatched} values. Type in the
-          box above to filter the rest.
-        </p>
-      ) : null}
-    </>
-  );
-}
-
 export type FilterableSuggestionFieldProps = {
   id: string;
   name: string;
@@ -116,6 +63,8 @@ export type FilterableSuggestionFieldProps = {
   placeholder: string;
   suggestionsFromDataset: readonly string[];
   presetSuggestions?: readonly string[];
+  /** When set, dropdown and trigger show these strings instead of raw option values (submitted value stays the option key). */
+  optionLabels?: Record<string, string>;
 };
 
 export function FilterableSuggestionField({
@@ -125,23 +74,38 @@ export function FilterableSuggestionField({
   placeholder,
   suggestionsFromDataset,
   presetSuggestions = [],
+  optionLabels,
 }: FilterableSuggestionFieldProps) {
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState('');
   const [search, setSearch] = useState('');
 
-  const options = useMemo(
-    () => mergeSuggestions(presetSuggestions, suggestionsFromDataset),
-    [presetSuggestions, suggestionsFromDataset],
-  );
+  const options = useMemo(() => {
+    const merged = mergeSuggestions(presetSuggestions, suggestionsFromDataset);
+    const lookup = optionLabels ?? {};
+    const hasLabels = Object.keys(lookup).length > 0;
+    if (!hasLabels) {
+      return merged;
+    }
+    const displayFor = (v: string) => lookup[v] ?? v;
+    return [...merged].sort((a, b) =>
+      displayFor(a).localeCompare(displayFor(b), undefined, { sensitivity: 'base' }),
+    );
+  }, [presetSuggestions, suggestionsFromDataset, optionLabels]);
 
   const visibleOptions = useMemo(() => {
+    const displayFor = (v: string) => optionLabels?.[v] ?? v;
     const q = search.trim().toLowerCase();
     if (!q) {
       return options.slice(0, INITIAL_VISIBLE_COUNT);
     }
-    return options.filter((opt) => opt.toLowerCase().includes(q));
-  }, [options, search]);
+    return options.filter((opt) => {
+      const label = displayFor(opt);
+      return (
+        opt.toLowerCase().includes(q) || label.toLowerCase().includes(q)
+      );
+    });
+  }, [options, search, optionLabels]);
 
   const hasMoreThanInitial = options.length > INITIAL_VISIBLE_COUNT;
   const isFiltering = search.trim().length > 0;
@@ -168,9 +132,6 @@ export function FilterableSuggestionField({
               !value && 'text-muted-foreground',
             )}
             id={id}
-            onFocus={() => {
-              setOpen(true);
-            }}
             onKeyDown={(event) => {
               if (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ') {
                 event.preventDefault();
@@ -181,7 +142,9 @@ export function FilterableSuggestionField({
             type="button"
             variant="outline"
           >
-            <span className="line-clamp-3">{value || placeholder}</span>
+            <span className="line-clamp-3">
+              {value ? optionLabels?.[value] ?? value : placeholder}
+            </span>
             <ChevronDownIcon className="size-4 shrink-0 opacity-50" />
           </Button>
         </PopoverTrigger>
@@ -211,18 +174,22 @@ export function FilterableSuggestionField({
                 </p>
               ) : null}
               <CommandGroup>
-                {visibleOptions.map((opt) => (
-                  <CommandItem
-                    key={opt}
-                    onSelect={() => {
-                      setValue(opt);
-                      setOpen(false);
-                    }}
-                    value={opt}
-                  >
-                    {opt}
-                  </CommandItem>
-                ))}
+                {visibleOptions.map((opt) => {
+                  const shown = optionLabels?.[opt] ?? opt;
+                  return (
+                    <CommandItem
+                      key={opt}
+                      keywords={[opt, shown]}
+                      onSelect={() => {
+                        setValue(opt);
+                        setOpen(false);
+                      }}
+                      value={opt}
+                    >
+                      {shown}
+                    </CommandItem>
+                  );
+                })}
                 <UseTypedValueItem
                   filter={search}
                   onUse={(text) => {
@@ -230,7 +197,6 @@ export function FilterableSuggestionField({
                     setOpen(false);
                   }}
                   options={options}
-                  search={listSearch}
                 />
               </CommandGroup>
               {!isFiltering && hasMoreThanInitial ? (

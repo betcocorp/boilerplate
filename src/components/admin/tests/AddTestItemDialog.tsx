@@ -23,7 +23,9 @@ type AddTestItemDialogProps = {
   testId: string;
   /** Where to redirect after adding (typically this dataset page). */
   returnPath: string;
-  /** Distinct values from all `test_items` in this test (combobox suggestions). */
+  /** `ProdLineKey` → display name (`ProdLineDescr`) for canonical product suggestions. */
+  canonicalProductLabels: Record<string, string>;
+  /** Combobox option values: mix of global test history and (for canonical) legacy product line keys. */
   suggestionLists: {
     resultTypes: string[];
     canonicalProducts: string[];
@@ -47,6 +49,7 @@ const EXPECTED_BEHAVIOR_PRESETS = [
 export function AddTestItemDialog({
   testId,
   returnPath,
+  canonicalProductLabels,
   suggestionLists,
 }: AddTestItemDialogProps) {
   const [structuredOpen, setStructuredOpen] = useState(false);
@@ -114,12 +117,13 @@ export function AddTestItemDialog({
               <>
                 Expected canonical product{' '}
                 <span className="font-normal text-muted-foreground">
-                  (optional)
+                  (product line · optional)
                 </span>
               </>
             }
             name="expectedCanonicalProduct"
-            placeholder="Choose from dataset or type SKU / product key"
+            optionLabels={canonicalProductLabels}
+            placeholder="Choose a product line or type a catalog key"
             suggestionsFromDataset={suggestionLists.canonicalProducts}
           />
 
