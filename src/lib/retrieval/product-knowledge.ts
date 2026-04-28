@@ -1,6 +1,10 @@
 import { searchProductChunks, type RagSearchMatch } from '~/lib/rag/search';
 
 import {
+  assembleDocumentBodies,
+  type AssembledDocumentBody,
+} from '~/lib/retrieval/document-assembly';
+import {
   resolveProductLineFromMatches,
   type ProductLineResolutionResult,
 } from '~/lib/retrieval/product-line-resolution';
@@ -9,11 +13,42 @@ import {
   trimSnippet,
 } from '~/lib/retrieval/source-selection';
 
+/**
+ * The new RAG strategy returns at most this many sources, where each source is a
+ * full document (assembled from every one of its chunks) rather than a single
+ * fragmented chunk. The matches behind each source come from different parent
+ * documents to maximize topical coverage.
+ */
+const DEFAULT_UNIQUE_DOCUMENT_LIMIT = 3;
+
+/**
+ * The first-pass similarity search needs to return enough candidates that we have
+ * a fighting chance of producing N unique-document matches.
+ */
+const SIMILARITY_CANDIDATE_FETCH_LIMIT = 20;
+
 export type CuratedSource = {
   documentId: string;
+  /** Identifier of the chunk that produced the top similarity match for this document. */
   chunkId: string;
   title: string;
+  /**
+   * Short preview text derived from the matched chunk. Safe for storage / UI display
+   * (capped under the SourceRef snippet length budget).
+   */
   snippet: string;
+  /**
+   * Full document body, assembled from every chunk of the parent document and
+   * passed to the LLM as grounding context. May be truncated if the document is
+   * extremely large; in that case `documentBodyTruncated` is true.
+   */
+  documentBody: string;
+  documentBodyChars: number;
+  documentBodyChunkCount: number;
+  documentBodyTruncated: boolean;
+  documentBodyTokenEstimate: number | null;
+  /** Untruncated text of the matched chunk, for traceability and debugging. */
+  matchedChunkText: string;
   similarity: number;
   documentKind: string;
   productLineKey: string | null;
@@ -47,17 +82,54 @@ export type ProductKnowledgeQueryResult = {
   retrieval: ProductKnowledgeRetrievalSummary;
 };
 
-function toCurated(m: RagSearchMatch): CuratedSource {
+function buildCuratedSource(
+  match: RagSearchMatch,
+  body: AssembledDocumentBody | undefined,
+): CuratedSource {
+  const fallbackBody = match.chunk_text;
+  const documentBody = body && body.body.length > 0 ? body.body : fallbackBody;
+
   return {
-    documentId: m.document_id,
-    chunkId: m.chunk_id,
-    title: m.document_title || m.heading || m.document_key,
-    snippet: trimSnippet(m.chunk_text, 900),
-    similarity: m.similarity,
-    documentKind: m.document_kind,
-    productLineKey: m.product_line_key,
-    productKey: m.product_key,
+    documentId: match.document_id,
+    chunkId: match.chunk_id,
+    title: match.document_title || match.heading || match.document_key,
+    snippet: trimSnippet(match.chunk_text, 900),
+    documentBody,
+    documentBodyChars: documentBody.length,
+    documentBodyChunkCount: body?.chunkCount ?? (fallbackBody ? 1 : 0),
+    documentBodyTruncated: body?.truncated ?? false,
+    documentBodyTokenEstimate: body?.estimatedTokens ?? null,
+    matchedChunkText: match.chunk_text,
+    similarity: match.similarity,
+    documentKind: match.document_kind,
+    productLineKey: match.product_line_key,
+    productKey: match.product_key,
   };
+}
+
+async function curateUniqueDocumentSources(
+  matches: RagSearchMatch[],
+  options: {
+    limit: number;
+    requiredDocumentKinds?: string[];
+  },
+): Promise<CuratedSource[]> {
+  const selected = selectCuratedMatches(matches, {
+    limit: options.limit,
+    maxPerDocument: 1,
+    requiredDocumentKinds: options.requiredDocumentKinds,
+  });
+
+  if (selected.length === 0) {
+    return [];
+  }
+
+  const documentIds = selected.map((match) => match.document_id);
+  const bodies = await assembleDocumentBodies(documentIds);
+
+  return selected.map((match) =>
+    buildCuratedSource(match, bodies.get(match.document_id)),
+  );
 }
 
 export async function ragQueryForProductKnowledge(input: {
@@ -72,30 +144,33 @@ export async function ragQueryForProductKnowledge(input: {
 
 export async function ragQueryForProductKnowledgeWithMeta(input: {
   query: string;
+  /**
+   * Maximum number of unique-document sources to return. Each source represents
+   * a full document, not a single chunk. Defaults to 3.
+   */
   limit?: number;
   productLineKey?: string | null;
   /** When true, skip candidate resolution (caller already anchored the query, e.g. by product id). */
   skipProductLineResolution?: boolean;
 }): Promise<ProductKnowledgeQueryResult> {
-  const limit = input.limit ?? 8;
+  const limit = input.limit ?? DEFAULT_UNIQUE_DOCUMENT_LIMIT;
   const explicitKey = input.productLineKey?.trim() || null;
 
   if (explicitKey) {
     const result = await searchProductChunks({
       query: input.query,
-      limit,
+      limit: SIMILARITY_CANDIDATE_FETCH_LIMIT,
       productLineKey: explicitKey,
       scope: 'all',
     });
 
-    const curated = selectCuratedMatches(result.matches, {
+    const curated = await curateUniqueDocumentSources(result.matches, {
       limit,
       requiredDocumentKinds: ['product_line_profile', 'sds'],
-      maxPerDocument: 2,
     });
 
     return {
-      sources: curated.map(toCurated),
+      sources: curated,
       retrieval: {
         strategy: 'explicit_product_line',
         cacheSource: result.embeddingSource,
@@ -117,17 +192,16 @@ export async function ragQueryForProductKnowledgeWithMeta(input: {
   if (input.skipProductLineResolution) {
     const result = await searchProductChunks({
       query: input.query,
-      limit,
+      limit: SIMILARITY_CANDIDATE_FETCH_LIMIT,
       scope: 'products',
     });
 
-    const curated = selectCuratedMatches(result.matches, {
+    const curated = await curateUniqueDocumentSources(result.matches, {
       limit,
-      maxPerDocument: 2,
     });
 
     return {
-      sources: curated.map(toCurated),
+      sources: curated,
       retrieval: {
         strategy: 'broad_resolution_disabled',
         cacheSource: result.embeddingSource,
@@ -146,23 +220,21 @@ export async function ragQueryForProductKnowledgeWithMeta(input: {
     };
   }
 
-  const probeLimit = Math.min(20, Math.max(limit * 2, 12));
   const broadResult = await searchProductChunks({
     query: input.query,
-    limit: probeLimit,
+    limit: SIMILARITY_CANDIDATE_FETCH_LIMIT,
     scope: 'all',
   });
 
   const resolution = resolveProductLineFromMatches(broadResult.matches);
-  const broadCurated = selectCuratedMatches(broadResult.matches, {
+  const broadCurated = await curateUniqueDocumentSources(broadResult.matches, {
     limit,
     requiredDocumentKinds: ['product_line_profile', 'sds'],
-    maxPerDocument: 2,
   });
 
   if (resolution.lockedProductLineKey == null) {
     return {
-      sources: broadCurated.map(toCurated),
+      sources: broadCurated,
       retrieval: {
         strategy: 'broad_only',
         cacheSource: broadResult.embeddingSource,
@@ -177,17 +249,15 @@ export async function ragQueryForProductKnowledgeWithMeta(input: {
     };
   }
 
-  const anchoredLimit = Math.min(24, Math.max(limit * 3, 12));
   const anchoredResult = await searchProductChunks({
     query: input.query,
-    limit: anchoredLimit,
+    limit: SIMILARITY_CANDIDATE_FETCH_LIMIT,
     productLineKey: resolution.lockedProductLineKey,
     scope: 'all',
   });
-  const anchoredCurated = selectCuratedMatches(anchoredResult.matches, {
+  const anchoredCurated = await curateUniqueDocumentSources(anchoredResult.matches, {
     limit,
     requiredDocumentKinds: ['product_line_profile', 'sds'],
-    maxPerDocument: 2,
   });
 
   const minimumAnchoredEvidence = Math.max(2, Math.ceil(limit / 2));
@@ -196,9 +266,7 @@ export async function ragQueryForProductKnowledgeWithMeta(input: {
     (anchoredCurated.length < minimumAnchoredEvidence &&
       broadCurated.length > anchoredCurated.length);
 
-  const finalCurated: RagSearchMatch[] = shouldUseBroadFallback
-    ? broadCurated
-    : anchoredCurated;
+  const finalCurated = shouldUseBroadFallback ? broadCurated : anchoredCurated;
   const strategy = shouldUseBroadFallback
     ? 'anchored_with_broad_fallback'
     : 'anchored_only';
@@ -206,7 +274,7 @@ export async function ragQueryForProductKnowledgeWithMeta(input: {
     broadResult.timings.similaritySearchMs + anchoredResult.timings.similaritySearchMs;
 
   return {
-    sources: finalCurated.map(toCurated),
+    sources: finalCurated,
     retrieval: {
       strategy,
       cacheSource: anchoredResult.embeddingSource,

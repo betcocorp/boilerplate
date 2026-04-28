@@ -79,14 +79,45 @@ function collectSourcesFromTrace(toolTrace: ToolTraceEntry[]): SourceRef[] {
   return [...map.values()].slice(0, 16);
 }
 
-function buildEvidenceSummary(sources: SourceRef[]): string {
+const VALIDATOR_EVIDENCE_CHAR_BUDGET = 60_000;
+const VALIDATOR_PER_DOCUMENT_CHAR_BUDGET = 24_000;
+
+/**
+ * The validator now sees the full document body for each source (capped per
+ * document) so it can verify claims against the entire approved document
+ * rather than a single fragmented chunk.
+ */
+function buildEvidenceSummary(sources: RetrievedSourceMeta[]): string {
   if (sources.length === 0) {
-    return '(no retrieved snippets)';
+    return '(no retrieved documents)';
   }
-  return sources
-    .map((s) => `[${s.documentId}] ${s.title}\n${s.snippet}`)
-    .join('\n\n---\n\n')
-    .slice(0, 14_000);
+
+  const segments: string[] = [];
+  let total = 0;
+
+  for (const source of sources) {
+    const body =
+      (source.documentBody && source.documentBody.length > 0
+        ? source.documentBody
+        : source.snippet) ?? '';
+    const trimmed = body.slice(0, VALIDATOR_PER_DOCUMENT_CHAR_BUDGET);
+    const truncatedSuffix =
+      body.length > trimmed.length ? '\n…(truncated for evidence summary)' : '';
+    const block = `[${source.documentId}] ${source.title}\n${trimmed}${truncatedSuffix}`;
+
+    if (total + block.length > VALIDATOR_EVIDENCE_CHAR_BUDGET) {
+      const remaining = Math.max(0, VALIDATOR_EVIDENCE_CHAR_BUDGET - total);
+      if (remaining > 0) {
+        segments.push(`${block.slice(0, remaining - 1)}…`);
+      }
+      break;
+    }
+
+    segments.push(block);
+    total += block.length + 5; // separator allowance
+  }
+
+  return segments.join('\n\n---\n\n');
 }
 
 function extractRetrievalTiming(toolOutput: string) {
@@ -311,6 +342,7 @@ type RetrievedSourceMeta = {
   chunkId: string | null;
   title: string;
   snippet: string;
+  documentBody: string;
   documentKind: string | null;
 };
 
@@ -489,6 +521,7 @@ function collectSourceMetaFromToolOutputs(
           chunkId?: string;
           title?: string;
           snippet?: string;
+          documentBody?: string;
           documentKind?: string;
         }>;
       };
@@ -500,15 +533,37 @@ function collectSourceMetaFromToolOutputs(
           typeof source.chunkId === 'string' && source.chunkId.trim()
             ? source.chunkId.trim()
             : null;
-        const key = `${source.documentId}:${chunkId ?? ''}`;
-        if (map.has(key)) {
+        // Sources are now per-document (chunks deduped at retrieval time), so dedupe by documentId only
+        // to avoid duplicating the same large body across tool calls.
+        const key = source.documentId;
+        const existing = map.get(key);
+        const documentBody =
+          typeof source.documentBody === 'string' && source.documentBody.length > 0
+            ? source.documentBody
+            : source.snippet;
+
+        if (existing) {
+          // Prefer the entry that carries the larger document body (full text vs snippet).
+          if (documentBody.length > existing.documentBody.length) {
+            map.set(key, {
+              ...existing,
+              chunkId: existing.chunkId ?? chunkId,
+              snippet: source.snippet,
+              documentBody,
+              documentKind:
+                existing.documentKind ??
+                (typeof source.documentKind === 'string' ? source.documentKind : null),
+            });
+          }
           continue;
         }
+
         map.set(key, {
           documentId: source.documentId,
           chunkId,
           title: source.title ?? source.documentId,
           snippet: source.snippet,
+          documentBody,
           documentKind:
             typeof source.documentKind === 'string' ? source.documentKind : null,
         });
@@ -1007,7 +1062,7 @@ export async function runProductSupportWorkflow(input: {
     const needsUsageSafetyCoverage = queryNeedsUsageAndSafetyCoverage(
       input.userMessage,
     );
-    const evidenceSummary = buildEvidenceSummary(sources);
+    const evidenceSummary = buildEvidenceSummary(sourceMeta);
 
     await completeWorkflowStep(agentStep.id, {
       status: 'completed',
