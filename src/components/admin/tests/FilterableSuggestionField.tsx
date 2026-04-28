@@ -1,16 +1,8 @@
 'use client';
 
-import { type ReactNode, useCallback, useMemo, useState } from 'react';
-
+import { type ReactNode, useMemo, useState } from 'react';
 import { Button } from '~/components/ui/button';
-import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from '~/components/ui/command';
+import { Command, CommandGroup, CommandInput, CommandItem, CommandList } from '~/components/ui/command';
 import { Label } from '~/components/ui/label';
 import {
   Popover,
@@ -20,8 +12,7 @@ import {
 import { cn } from '~/lib/utils';
 import { ChevronDownIcon, XIcon } from 'lucide-react';
 
-/** When the search box is empty, show this many distinct options so the list is useful without typing. */
-const INITIAL_VISIBLE_OPTIONS = 25;
+const INITIAL_VISIBLE_COUNT = 25;
 
 function mergeSuggestions(presets: readonly string[], fromRows: readonly string[]): string[] {
   const set = new Set<string>();
@@ -41,15 +32,17 @@ function mergeSuggestions(presets: readonly string[], fromRows: readonly string[
 }
 
 function UseTypedValueItem({
+  filter,
   options,
   onUse,
   search,
 }: {
+  filter: string;
   options: readonly string[];
   onUse: (text: string) => void;
   search: string;
 }) {
-  const trimmed = search.trim();
+  const trimmed = filter.trim();
   if (!trimmed) {
     return null;
   }
@@ -135,24 +128,38 @@ export function FilterableSuggestionField({
 }: FilterableSuggestionFieldProps) {
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState('');
-  const [listSearch, setListSearch] = useState('');
+  const [search, setSearch] = useState('');
 
   const options = useMemo(
     () => mergeSuggestions(presetSuggestions, suggestionsFromDataset),
     [presetSuggestions, suggestionsFromDataset],
   );
 
-  const handleOpenChange = useCallback((nextOpen: boolean) => {
-    setOpen(nextOpen);
-    if (!nextOpen) {
-      setListSearch('');
+  const visibleOptions = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) {
+      return options.slice(0, INITIAL_VISIBLE_COUNT);
     }
-  }, []);
+    return options.filter((opt) => opt.toLowerCase().includes(q));
+  }, [options, search]);
+
+  const hasMoreThanInitial = options.length > INITIAL_VISIBLE_COUNT;
+  const isFiltering = search.trim().length > 0;
+  const showFilterEmpty = isFiltering && visibleOptions.length === 0;
 
   return (
     <div className="grid gap-2">
       <Label htmlFor={id}>{label}</Label>
-      <Popover modal={false} onOpenChange={handleOpenChange} open={open}>
+      <Popover
+        modal={false}
+        onOpenChange={(nextOpen) => {
+          setOpen(nextOpen);
+          if (nextOpen) {
+            setSearch('');
+          }
+        }}
+        open={open}
+      >
         <PopoverTrigger asChild>
           <Button
             aria-expanded={open}
@@ -161,6 +168,15 @@ export function FilterableSuggestionField({
               !value && 'text-muted-foreground',
             )}
             id={id}
+            onFocus={() => {
+              setOpen(true);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                setOpen(true);
+              }
+            }}
             role="combobox"
             type="button"
             variant="outline"
@@ -171,9 +187,7 @@ export function FilterableSuggestionField({
         </PopoverTrigger>
         <PopoverContent
           align="start"
-          className={cn(
-            'z-100 flex max-h-[min(22rem,calc(100vh-8rem))] w-[min(100vw-2rem,var(--radix-popover-trigger-width))] flex-col gap-0 overflow-hidden p-0',
-          )}
+          className="z-100 flex max-h-[min(22rem,calc(100vh-8rem))] w-[min(100vw-2rem,var(--radix-popover-trigger-width))] flex-col gap-0 overflow-hidden p-0"
         >
           <Command
             className="flex min-h-0 flex-1 flex-col overflow-hidden size-auto! **:data-[slot=command-input-wrapper]:shrink-0"
@@ -181,26 +195,36 @@ export function FilterableSuggestionField({
             shouldFilter={false}
           >
             <CommandInput
-              onValueChange={setListSearch}
+              onValueChange={setSearch}
               placeholder="Filter or type a new value…"
-              value={listSearch}
+              value={search}
             />
             <CommandList className="max-h-[min(18rem,calc(100vh-12rem))] min-h-0 flex-1 overflow-y-auto overscroll-contain scroll-py-1">
-              <CommandEmpty>
+              {options.length === 0 ? (
                 <p className="px-3 py-2 text-center text-xs text-muted-foreground">
-                  No suggestions match. Type above, then choose &quot;Use …&quot; when it appears.
+                  No saved values in this test yet. Type below, then choose &quot;Use …&quot; to set a custom value.
                 </p>
-              </CommandEmpty>
+              ) : null}
+              {options.length > 0 && showFilterEmpty ? (
+                <p className="px-3 py-2 text-center text-xs text-muted-foreground">
+                  No suggestions match that filter. Choose &quot;Use …&quot; below to keep your text.
+                </p>
+              ) : null}
               <CommandGroup>
-                <SuggestionCommandItems
-                  options={options}
-                  onPick={(opt) => {
-                    setValue(opt);
-                    setOpen(false);
-                  }}
-                  search={listSearch}
-                />
+                {visibleOptions.map((opt) => (
+                  <CommandItem
+                    key={opt}
+                    onSelect={() => {
+                      setValue(opt);
+                      setOpen(false);
+                    }}
+                    value={opt}
+                  >
+                    {opt}
+                  </CommandItem>
+                ))}
                 <UseTypedValueItem
+                  filter={search}
                   onUse={(text) => {
                     setValue(text);
                     setOpen(false);
@@ -209,6 +233,11 @@ export function FilterableSuggestionField({
                   search={listSearch}
                 />
               </CommandGroup>
+              {!isFiltering && hasMoreThanInitial ? (
+                <p className="border-t border-border/60 px-3 py-2 text-center text-xs text-muted-foreground">
+                  Showing {INITIAL_VISIBLE_COUNT} of {options.length}. Type to search all values.
+                </p>
+              ) : null}
             </CommandList>
           </Command>
         </PopoverContent>
