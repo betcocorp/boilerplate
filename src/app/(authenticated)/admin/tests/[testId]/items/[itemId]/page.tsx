@@ -2,6 +2,8 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
 
+import { ItemAtAGlanceCharts } from '~/components/admin/tests/ItemAtAGlanceCharts';
+import { ResultItemMessageCell } from '~/components/admin/tests/ResultItemMessageCell';
 import { Button } from '~/components/ui/button';
 import {
   TableBody,
@@ -18,7 +20,7 @@ import {
   listResultItemsByTestItemId,
   listTestResultsByTestId,
 } from '~/lib/tests/repository';
-import { formatDurationSeconds } from '~/lib/utils/time';
+import { formatDurationSeconds, formatRunChartAxisLabel } from '~/lib/utils/time';
 
 export const metadata = {
   title: 'Item History | Betco BEX',
@@ -127,40 +129,6 @@ function formatExpectedShouldAnswerLabel(value: boolean | null): string {
   return value ? 'Yes' : 'No';
 }
 
-/**
- * Top block matches the former single cell: `error_message || response_text || 'n/a'`.
- * Below that, the stored assistant body (`response_text`) so failed rows show evaluation
- * text first and the LLM answer underneath.
- */
-function ItemHistoryMessageCell({
-  errorMessage,
-  responseText,
-}: {
-  errorMessage: string | null;
-  responseText: string | null;
-}) {
-  const assistant = responseText?.trim() ?? '';
-  const legacyLine = errorMessage?.trim() || assistant || 'n/a';
-
-  return (
-    <div className="flex flex-col gap-2">
-      <div>
-        <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-          Message
-        </p>
-        <p className="mt-1 whitespace-pre-wrap text-slate-700">{legacyLine}</p>
-      </div>
-      <div>
-        <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-          Assistant response
-        </p>
-        <p className="mt-1 whitespace-pre-wrap text-slate-800">
-          {assistant || '—'}
-        </p>
-      </div>
-    </div>
-  );
-}
 
 export default async function AdminTestItemHistoryPage({ params }: PageProps) {
   await connection();
@@ -214,6 +182,114 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
     }),
   );
 
+  /* Aggregates + trend data for the at-a-glance charts. Only `completed` /
+     `failed` statuses count as a real attempt at the prompt — queued/cancelled
+     rows would otherwise distort pass-rate denominators and pull trend lines
+     to zero. Trend arrays are built newest-first (matching `historyRows`) and
+     reversed below so the charts render oldest → newest left to right. */
+  let aggregatedRunCount = 0;
+  let aggregatedPassCount = 0;
+  let aggregatedFailCount = 0;
+  let similarityMinSum = 0;
+  let similarityMaxSum = 0;
+  let similarityAvgSum = 0;
+  let similaritySampleSize = 0;
+  let ragSearchSumMs = 0;
+  let ragSearchSampleSize = 0;
+  let promptElapsedSumMs = 0;
+  let promptElapsedSampleSize = 0;
+  const similarityTrendNewestFirst: Array<{
+    label: string;
+    runId: string;
+    min: number | null;
+    max: number | null;
+    avg: number | null;
+  }> = [];
+  const elapsedTrendNewestFirst: Array<{
+    label: string;
+    runId: string;
+    ragSeconds: number | null;
+    promptSeconds: number | null;
+  }> = [];
+
+  for (const { result, run } of historyRows) {
+    if (result.status !== 'completed' && result.status !== 'failed') {
+      continue;
+    }
+    aggregatedRunCount += 1;
+    if (result.passed) {
+      aggregatedPassCount += 1;
+    } else {
+      aggregatedFailCount += 1;
+    }
+
+    const similarityStats = extractSimilarityStats(result.response_payload);
+    if (similarityStats) {
+      similarityMinSum += similarityStats.min;
+      similarityMaxSum += similarityStats.max;
+      similarityAvgSum += similarityStats.avg;
+      similaritySampleSize += 1;
+    }
+
+    const ragSearchMs = extractRagSearchMs(result.response_payload);
+    if (typeof ragSearchMs === 'number') {
+      ragSearchSumMs += ragSearchMs;
+      ragSearchSampleSize += 1;
+    }
+
+    const promptElapsedMs =
+      typeof result.elapsed_ms === 'number' && Number.isFinite(result.elapsed_ms)
+        ? result.elapsed_ms
+        : null;
+    if (promptElapsedMs !== null) {
+      promptElapsedSumMs += promptElapsedMs;
+      promptElapsedSampleSize += 1;
+    }
+
+    const axisLabel = run.started_at
+      ? formatRunChartAxisLabel(run.started_at)
+      : run.id.slice(0, 8);
+
+    similarityTrendNewestFirst.push({
+      label: axisLabel,
+      runId: run.id,
+      min: similarityStats?.min ?? null,
+      max: similarityStats?.max ?? null,
+      avg: similarityStats?.avg ?? null,
+    });
+    elapsedTrendNewestFirst.push({
+      label: axisLabel,
+      runId: run.id,
+      ragSeconds:
+        typeof ragSearchMs === 'number'
+          ? Number((ragSearchMs / 1000).toFixed(3))
+          : null,
+      promptSeconds:
+        promptElapsedMs !== null
+          ? Number((promptElapsedMs / 1000).toFixed(3))
+          : null,
+    });
+  }
+
+  const similarityTrend = [...similarityTrendNewestFirst].reverse();
+  const elapsedTrend = [...elapsedTrendNewestFirst].reverse();
+
+  const similarityAverages =
+    similaritySampleSize > 0
+      ? {
+          avgMin: similarityMinSum / similaritySampleSize,
+          avgMax: similarityMaxSum / similaritySampleSize,
+          avgAvg: similarityAvgSum / similaritySampleSize,
+          sampleSize: similaritySampleSize,
+        }
+      : null;
+  const avgRagSearchMs =
+    ragSearchSampleSize > 0 ? ragSearchSumMs / ragSearchSampleSize : null;
+  const avgPromptElapsedMs =
+    promptElapsedSampleSize > 0
+      ? promptElapsedSumMs / promptElapsedSampleSize
+      : null;
+
   return (
     <div className="flex flex-1 bg-slate-50">
       <main className="flex w-full flex-1 flex-col gap-8 px-6 py-10 sm:px-8">
@@ -252,6 +328,19 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
             </div>
           </div>
         </section>
+
+        <ItemAtAGlanceCharts
+          avgPromptElapsedMs={avgPromptElapsedMs}
+          avgRagSearchMs={avgRagSearchMs}
+          elapsedTrend={elapsedTrend}
+          failCount={aggregatedFailCount}
+          passCount={aggregatedPassCount}
+          promptSampleSize={promptElapsedSampleSize}
+          ragSampleSize={ragSearchSampleSize}
+          runCount={aggregatedRunCount}
+          similarityAverages={similarityAverages}
+          similarityTrend={similarityTrend}
+        />
 
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <h2 className="text-lg font-semibold text-slate-900">
@@ -330,7 +419,7 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
                           ) || 'n/a'}
                         </TableCell>
                         <TableCell className="max-w-[520px] whitespace-normal text-xs text-slate-600">
-                          <ItemHistoryMessageCell
+                          <ResultItemMessageCell
                             errorMessage={result.error_message}
                             responseText={result.response_text}
                           />

@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
 
 import { AdminTestsActionToast } from '~/components/admin/tests/AdminTestsActionToast';
+import { ResultItemMessageCell } from '~/components/admin/tests/ResultItemMessageCell';
 import { RetrievedChunksPreview } from '~/components/admin/tests/RetrievedChunksPreview';
 import { RunAtAGlanceCharts } from '~/components/admin/tests/RunAtAGlanceCharts';
 import { RunExecutionProgress } from '~/components/admin/tests/RunExecutionProgress';
@@ -14,6 +15,14 @@ import {
 } from '~/components/admin/tests/TestRunNotesSection';
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '~/components/ui/dialog';
 import {
   TableBody,
   TableCell,
@@ -152,28 +161,6 @@ function extractTimingBreakdown(responsePayload: unknown) {
   };
 }
 
-/** Human-readable retrieval duration: always rounds **up** to the next whole unit. */
-function formatSearchMsRoundedUp(ms: number): string {
-  if (!Number.isFinite(ms) || ms <= 0) {
-    return '0 ms';
-  }
-
-  const HOUR_MS = 3_600_000;
-  const MIN_MS = 60_000;
-  const SEC_MS = 1_000;
-
-  if (ms >= HOUR_MS) {
-    return `${Math.ceil(ms / HOUR_MS)} h`;
-  }
-  if (ms >= MIN_MS) {
-    return `${Math.ceil(ms / MIN_MS)} min`;
-  }
-  if (ms >= SEC_MS) {
-    return `${Math.ceil(ms / SEC_MS)} s`;
-  }
-  return `${Math.ceil(ms)} ms`;
-}
-
 function formatExpectedShouldAnswerCell(value: boolean | null): string {
   if (value === null) {
     return 'Unset';
@@ -187,7 +174,7 @@ function formatTimingBreakdownLabel(responsePayload: unknown): string {
     return 'n/a';
   }
 
-  /** Mean vector-search time per retrieval sample (`similaritySearchMs`), not wall-clock elapsed. */
+  /** Mean vector-search time per retrieval sample, not wall-clock elapsed. */
   const searchMsLabel =
     typeof timing.searchMs === 'number'
       ? `${timing.searchMs.toFixed(1)} ms avg`
@@ -512,10 +499,7 @@ export default async function AdminTestRunDetailsPage({
                 <TableHead>Sim / conf</TableHead>
                 <TableHead>Elapsed</TableHead>
                 <TableHead>Model</TableHead>
-                <TableHead title="Average RAG vector-search time per retrieval sample from the workflow—not total runtime (see Elapsed column).">
-                  Rounds | Cache | Rag search
-                </TableHead>
-                <TableHead>Retrieved chunks</TableHead>
+                <TableHead>Rounds | Cache | Elapsed</TableHead>
                 <TableHead>Message</TableHead>
                 <TableHead>History</TableHead>
               </TableRow>
@@ -607,24 +591,42 @@ export default async function AdminTestRunDetailsPage({
                       <TableCell className="max-w-[220px] whitespace-normal text-xs text-slate-600">
                         {formatTimingBreakdownLabel(row.response_payload)}
                       </TableCell>
-                      <TableCell className="min-w-0 max-w-[min(280px,100%)] align-top">
-                        <RetrievedChunksPreview
-                          chunks={extractRetrievedDocumentChunks(
-                            row.response_payload,
-                          )}
+                      <TableCell className="max-w-[420px] whitespace-normal text-xs text-slate-600">
+                        <ResultItemMessageCell
+                          errorMessage={row.error_message}
+                          responseText={row.response_text}
                         />
                       </TableCell>
-                      <TableCell className="max-w-[420px] whitespace-normal text-xs text-slate-600 line-clamp-2">
-                        {row.error_message || row.response_text || 'n/a'}
-                      </TableCell>
                       <TableCell>
-                        <Button asChild size="sm" variant="outline">
-                          <Link
-                            href={`/admin/tests/${test.id}/items/${row.test_item_id}`}
-                          >
-                            View
-                          </Link>
-                        </Button>
+                        <div className="flex items-center gap-2">
+                          <Dialog>
+                            <DialogTrigger asChild>
+                              <Button variant="outline">Docs</Button>
+                            </DialogTrigger>
+                            <DialogContent>
+                              <DialogHeader>
+                                <DialogTitle>Document chunks</DialogTitle>
+                                <DialogDescription>
+                                  Chunks retrieved from rag search.
+                                </DialogDescription>
+                              </DialogHeader>
+                              <div className="-mx-4 no-scrollbar max-h-[50vh] overflow-y-auto px-4">
+                                <RetrievedChunksPreview
+                                  chunks={extractRetrievedDocumentChunks(
+                                    row.response_payload,
+                                  )}
+                                />
+                              </div>
+                            </DialogContent>
+                          </Dialog>
+                          <Button asChild size="sm" variant="outline">
+                            <Link
+                              href={`/admin/tests/${test.id}/items/${row.test_item_id}`}
+                            >
+                              View
+                            </Link>
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   );
