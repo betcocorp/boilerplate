@@ -9,7 +9,7 @@ export const productSupportTools: Tool[] = [
     name: 'search_product_docs',
     strict: false,
     description:
-      'Search Betco product documentation (RAG). Use for general product + topic questions; returns short snippets with source ids — not full documents.',
+      'Search Betco product documentation (RAG). Use for general product + topic questions. Returns up to 3 sources where each source is a full approved document (read `documentBody`, not just `snippet`).',
     parameters: {
       type: 'object',
       properties: {
@@ -42,7 +42,7 @@ export const productSupportTools: Tool[] = [
     name: 'get_approved_usage_guidance',
     strict: false,
     description:
-      'Retrieve approved usage / procedure snippets for a product on a given task and surface.',
+      'Retrieve approved usage / procedure documentation for a product on a given task and surface. Returns up to 3 full approved documents in `sources[].documentBody`.',
     parameters: {
       type: 'object',
       properties: {
@@ -59,7 +59,7 @@ export const productSupportTools: Tool[] = [
     name: 'get_safety_constraints',
     strict: false,
     description:
-      'Retrieve safety / SDS-oriented snippets (PPE, hazards, precautions).',
+      'Retrieve safety / SDS-oriented documentation (PPE, hazards, precautions). Returns up to 3 full approved documents in `sources[].documentBody`.',
     parameters: {
       type: 'object',
       properties: {

@@ -4,10 +4,7 @@ import {
   retrieveSafetyConstraints,
   retrieveSurfacesLists,
 } from '~/lib/retrieval/product-guidance';
-import {
-  type CuratedSource,
-  ragQueryForProductKnowledgeWithMeta,
-} from '~/lib/retrieval/product-knowledge';
+import { ragQueryForProductKnowledgeWithMeta } from '~/lib/retrieval/product-knowledge';
 
 import {
   getApprovedUsageGuidanceInputSchema,
@@ -23,8 +20,13 @@ import {
 } from '~/lib/tools/tool-schemas';
 import { lookupCrossReference } from '~/lib/tools/cross-reference-lookup';
 
-const ADAPTER_TAG = 'rag_corpus_transitional' as const;
+const ADAPTER_TAG = 'rag_corpus_full_document' as const;
 
+/**
+ * Each "source" is a full document (assembled from all its chunks). The model is
+ * expected to read `documentBody` for grounding and use `snippet` only as a
+ * preview / citation hint.
+ */
 function sourcePayload(
   sources: Awaited<ReturnType<typeof ragQueryForProductKnowledgeWithMeta>>['sources'],
 ) {
@@ -33,6 +35,12 @@ function sourcePayload(
     chunkId: s.chunkId,
     title: s.title,
     snippet: s.snippet,
+    documentBody: s.documentBody,
+    documentBodyChars: s.documentBodyChars,
+    documentBodyChunkCount: s.documentBodyChunkCount,
+    documentBodyTruncated: s.documentBodyTruncated,
+    documentBodyTokenEstimate: s.documentBodyTokenEstimate,
+    matchedChunkText: s.matchedChunkText,
     confidence: s.similarity,
     documentKind: s.documentKind,
     productLineKey: s.productLineKey,
@@ -93,7 +101,7 @@ export async function executeProductTool(
       const q = [p.productName, p.topic, p.surfaceType]
         .filter(Boolean)
         .join(' ');
-      const result = await ragQueryForProductKnowledgeWithMeta({ query: q, limit: 8 });
+      const result = await ragQueryForProductKnowledgeWithMeta({ query: q });
       return {
         ok: true,
         adapter: ADAPTER_TAG,
@@ -105,7 +113,7 @@ export async function executeProductTool(
     case 'get_product_spec': {
       const p = getProductSpecInputSchema.parse(args);
       const q = `${p.productId} specifications technical datasheet performance`;
-      const result = await ragQueryForProductKnowledgeWithMeta({ query: q, limit: 6 });
+      const result = await ragQueryForProductKnowledgeWithMeta({ query: q });
       return {
         ok: true,
         adapter: ADAPTER_TAG,

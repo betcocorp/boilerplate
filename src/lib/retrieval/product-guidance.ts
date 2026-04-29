@@ -22,7 +22,6 @@ export async function retrieveApprovedUsage(input: {
   ]);
   return ragQueryForProductKnowledgeWithMeta({
     query: q,
-    limit: 6,
     skipProductLineResolution: true,
   });
 }
@@ -36,7 +35,6 @@ export async function retrieveSafetyConstraints(input: {
   ]);
   return ragQueryForProductKnowledgeWithMeta({
     query: q,
-    limit: 6,
     skipProductLineResolution: true,
   });
 }
@@ -55,7 +53,6 @@ export async function retrieveCompatibility(input: {
   ]);
   return ragQueryForProductKnowledgeWithMeta({
     query: q,
-    limit: 6,
     skipProductLineResolution: true,
   });
 }
@@ -71,7 +68,6 @@ export async function retrieveSurfacesLists(input: {
   const q = buildQuery([input.productId, hint]);
   return ragQueryForProductKnowledgeWithMeta({
     query: q,
-    limit: 6,
     skipProductLineResolution: true,
   });
 }

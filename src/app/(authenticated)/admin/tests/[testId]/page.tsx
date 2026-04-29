@@ -1,3 +1,4 @@
+import { TrashIcon, TrendingDown, TrendingUp } from 'lucide-react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
@@ -15,11 +16,15 @@ import {
 } from '~/components/ui/table';
 import { V1_AGENT_REGISTRY } from '~/lib/agents/agent-registry';
 import {
+  buildPromptAggregations,
+  extractItemMaxSimilarity,
+} from '~/lib/tests/prompt-aggregations';
+import {
   getGlobalTestItemSuggestionRows,
   getLegacyProductLineSuggestionMeta,
   getTestById,
   getTestItemsByTestId,
-  listResultItemsByResultId,
+  listAllResultItemsByResultIds,
   listTestResultsByTestId,
 } from '~/lib/tests/repository';
 import {
@@ -41,36 +46,63 @@ export const metadata = {
   description: 'Review test rows and historical run performance.',
 };
 
-function extractItemSimilarityScore(responsePayload: unknown) {
+/**
+ * Compares a metric to the previous (older) run and renders a green up arrow +
+ * positive delta when the value rose, a red down arrow + negative delta when it
+ * fell, or nothing when there is no prior value to compare against (or when it's
+ * unchanged). `formatDelta` receives the absolute delta and returns the unit'd
+ * label (e.g. "1.2%", "30 s").
+ */
+function RunTrendIndicator({
+  current,
+  previous,
+  label,
+  formatDelta,
+}: {
+  current: number | null | undefined;
+  previous: number | null | undefined;
+  label: string;
+  formatDelta: (absoluteDelta: number) => string;
+}) {
   if (
-    !responsePayload ||
-    typeof responsePayload !== 'object' ||
-    Array.isArray(responsePayload)
+    typeof current !== 'number' ||
+    !Number.isFinite(current) ||
+    typeof previous !== 'number' ||
+    !Number.isFinite(previous) ||
+    current === previous
   ) {
     return null;
   }
 
-  const payload = responsePayload as Record<string, unknown>;
-  const sources = payload.sources;
-  if (!Array.isArray(sources)) {
-    return null;
-  }
+  const delta = current - previous;
+  const isUp = delta > 0;
+  const Icon = isUp ? TrendingUp : TrendingDown;
+  const colorClass = isUp ? 'text-emerald-600' : 'text-red-600';
+  const direction = isUp ? 'higher' : 'lower';
+  const sign = isUp ? '+' : '−';
+  const deltaLabel = `${sign}${formatDelta(Math.abs(delta))}`;
 
-  const similarities = sources
-    .map((source) => {
-      if (!source || typeof source !== 'object' || Array.isArray(source)) {
-        return null;
-      }
-      const value = (source as Record<string, unknown>).similarity;
-      return typeof value === 'number' ? value : null;
-    })
-    .filter((value): value is number => typeof value === 'number');
+  return (
+    <span
+      aria-label={`${label} ${direction} than previous run by ${deltaLabel}`}
+      className={`inline-flex items-center gap-0.5 align-middle text-xs font-medium ${colorClass}`}
+    >
+      {deltaLabel}
+      <Icon aria-hidden className="h-3.5 w-3.5" />
+    </span>
+  );
+}
 
-  if (similarities.length === 0) {
-    return null;
-  }
+function formatPercentDelta(absoluteDelta: number) {
+  return `${absoluteDelta.toFixed(1)}%`;
+}
 
-  return Math.max(...similarities);
+function formatSimilarityDelta(absoluteDelta: number) {
+  return `${(absoluteDelta * 100).toFixed(1)}%`;
+}
+
+function formatElapsedDelta(absoluteDelta: number) {
+  return formatDurationSeconds(absoluteDelta);
 }
 
 type PageProps = {
@@ -102,30 +134,41 @@ export default async function AdminTestDetailsPage({
     getLegacyProductLineSuggestionMeta(),
   ]);
   const trendRuns = [...results].reverse();
-  const trendRunItems = await Promise.all(
-    trendRuns.map((run) => listResultItemsByResultId(run.id, 200)),
+  /** One IN-query for every result item across every recent run feeds both the trend chart and the per-prompt aggregation. */
+  const allRecentResultItems = await listAllResultItemsByResultIds(
+    trendRuns.map((run) => run.id),
   );
-  const trendData = trendRuns.map((run) => ({
-    avgSimilarity: null as number | null,
-    elapsedSeconds:
-      typeof run.elapsed_ms === 'number'
-        ? Number((run.elapsed_ms / 1000).toFixed(2))
-        : 0,
-    passRate:
-      run.total_items > 0 ? (run.passed_items / run.total_items) * 100 : 0,
-    startedAtLabel: formatRunChartAxisLabel(run.started_at),
-    status: run.status || 'unknown',
-  }));
-  for (const [index, runItems] of trendRunItems.entries()) {
-    const itemScores = runItems
-      .map((item) => extractItemSimilarityScore(item.response_payload))
-      .filter((value): value is number => typeof value === 'number');
+  const resultItemsByRunId = new Map<string, typeof allRecentResultItems>();
+  for (const item of allRecentResultItems) {
+    const list = resultItemsByRunId.get(item.test_result_id);
+    if (list) {
+      list.push(item);
+    } else {
+      resultItemsByRunId.set(item.test_result_id, [item]);
+    }
+  }
 
-    trendData[index]!.avgSimilarity =
+  const trendData = trendRuns.map((run) => {
+    const runItems = resultItemsByRunId.get(run.id) ?? [];
+    const itemScores = runItems
+      .map((item) => extractItemMaxSimilarity(item.response_payload))
+      .filter((value): value is number => typeof value === 'number');
+    const avgSimilarity =
       itemScores.length > 0
         ? itemScores.reduce((sum, value) => sum + value, 0) / itemScores.length
         : null;
-  }
+    return {
+      avgSimilarity,
+      elapsedSeconds:
+        typeof run.elapsed_ms === 'number'
+          ? Number((run.elapsed_ms / 1000).toFixed(2))
+          : 0,
+      passRate:
+        run.total_items > 0 ? (run.passed_items / run.total_items) * 100 : 0,
+      startedAtLabel: formatRunChartAxisLabel(run.started_at),
+      status: run.status || 'unknown',
+    };
+  });
 
   const metricsByRunId = new Map<
     string,
@@ -140,8 +183,43 @@ export default async function AdminTestDetailsPage({
     });
   }
 
+  const runsById = new Map(trendRuns.map((run) => [run.id, run]));
+  const promptAggregations = buildPromptAggregations(
+    allRecentResultItems,
+    runsById,
+  );
+  const aggregationsForClient: Record<
+    string,
+    {
+      runCount: number;
+      passCount: number;
+      failCount: number;
+      passRatePercent: number | null;
+      avgSimilarity: number | null;
+      avgElapsedMs: number | null;
+      latestRun: {
+        runId: string;
+        passed: boolean;
+      } | null;
+    }
+  > = {};
+  for (const [itemId, stats] of promptAggregations) {
+    aggregationsForClient[itemId] = {
+      runCount: stats.runCount,
+      passCount: stats.passCount,
+      failCount: stats.failCount,
+      passRatePercent: stats.passRatePercent,
+      avgSimilarity: stats.avgSimilarity,
+      avgElapsedMs: stats.avgElapsedMs,
+      latestRun: stats.latestRun
+        ? { runId: stats.latestRun.runId, passed: stats.latestRun.passed }
+        : null,
+    };
+  }
+  const aggregatedRunCount = trendRuns.length;
+
   /**
-   * “Add prompt” comboboxes use values seen across **all** tests so the same options appear on every dataset page.
+   * "Add prompt" comboboxes use values seen across **all** tests so the same options appear on every dataset page.
    * Expected canonical product values are **`prod_line.ProdLineKey`**; labels in the UI come from **`ProdLineDescr`** (union with historical test strings).
    */
   const datasetSuggestions = buildSuggestionListsFromTestItems(globalSuggestionRows);
@@ -220,7 +298,7 @@ export default async function AdminTestDetailsPage({
                   <TableHead title="Mean max retrieval similarity across items with scores (same basis as the historical chart)">
                     Similarity
                   </TableHead>
-                  <TableHead title="Total answer time: sum of each prompt’s elapsed time for this run">
+                  <TableHead title="Total answer time: sum of each prompt's elapsed time for this run">
                     Elapsed
                   </TableHead>
                   <TableHead>Started / completed</TableHead>
@@ -235,8 +313,12 @@ export default async function AdminTestDetailsPage({
                     </TableCell>
                   </TableRow>
                 ) : (
-                  results.map((result) => {
+                  results.map((result, index) => {
                     const metrics = metricsByRunId.get(result.id);
+                    const previousResult = results[index + 1] ?? null;
+                    const previousMetrics = previousResult
+                      ? metricsByRunId.get(previousResult.id)
+                      : undefined;
                     const failedItems = Math.max(
                       0,
                       typeof result.failed_items === 'number'
@@ -258,17 +340,47 @@ export default async function AdminTestDetailsPage({
                           {result.passed_items}/{failedItems}
                         </TableCell>
                         <TableCell className="whitespace-nowrap tabular-nums text-slate-700">
-                          {typeof metrics?.passRatePercent === 'number'
-                            ? `${metrics.passRatePercent.toFixed(1)}%`
-                            : '—'}
+                          <span className="inline-flex items-center gap-2">
+                            <span>
+                              {typeof metrics?.passRatePercent === 'number'
+                                ? `${metrics.passRatePercent.toFixed(1)}%`
+                                : '—'}
+                            </span>
+                            <RunTrendIndicator
+                              current={metrics?.passRatePercent}
+                              formatDelta={formatPercentDelta}
+                              label="Pass %"
+                              previous={previousMetrics?.passRatePercent}
+                            />
+                          </span>
                         </TableCell>
                         <TableCell className="whitespace-nowrap tabular-nums text-slate-700">
-                          {typeof metrics?.avgSimilarity === 'number'
-                            ? `${(metrics.avgSimilarity * 100).toFixed(1)}%`
-                            : 'n/a'}
+                          <span className="inline-flex items-center gap-2">
+                            <span>
+                              {typeof metrics?.avgSimilarity === 'number'
+                                ? `${(metrics.avgSimilarity * 100).toFixed(1)}%`
+                                : 'n/a'}
+                            </span>
+                            <RunTrendIndicator
+                              current={metrics?.avgSimilarity}
+                              formatDelta={formatSimilarityDelta}
+                              label="Similarity"
+                              previous={previousMetrics?.avgSimilarity}
+                            />
+                          </span>
                         </TableCell>
-                        <TableCell>
-                          {formatDurationSeconds(result.elapsed_ms)}
+                        <TableCell className="whitespace-nowrap">
+                          <span className="inline-flex items-center gap-2">
+                            <span>
+                              {formatDurationSeconds(result.elapsed_ms)}
+                            </span>
+                            <RunTrendIndicator
+                              current={result.elapsed_ms}
+                              formatDelta={formatElapsedDelta}
+                              label="Elapsed"
+                              previous={previousResult?.elapsed_ms}
+                            />
+                          </span>
                         </TableCell>
                         <TableCell className="text-slate-600">
                           <div className="flex flex-col gap-1 text-xs leading-tight">
@@ -287,7 +399,7 @@ export default async function AdminTestDetailsPage({
                               <Link
                                 href={`/admin/tests/${test.id}/runs/${result.id}`}
                               >
-                                View run
+                                View
                               </Link>
                             </Button>
                             <form action={deleteTestRunAction}>
@@ -311,7 +423,7 @@ export default async function AdminTestDetailsPage({
                                 type="submit"
                                 variant="destructive"
                               >
-                                Delete run
+                                <TrashIcon />
                               </Button>
                             </form>
                           </div>
@@ -327,6 +439,8 @@ export default async function AdminTestDetailsPage({
 
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <TestPromptsSection
+            aggregatedRunCount={aggregatedRunCount}
+            aggregationsByItemId={aggregationsForClient}
             datasetName={test.name}
             items={items.map((item) => ({
               id: item.id,

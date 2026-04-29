@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
 
 import { AdminTestsActionToast } from '~/components/admin/tests/AdminTestsActionToast';
+import { ResultItemMessageCell } from '~/components/admin/tests/ResultItemMessageCell';
 import { RetrievedChunksPreview } from '~/components/admin/tests/RetrievedChunksPreview';
 import { RunAtAGlanceCharts } from '~/components/admin/tests/RunAtAGlanceCharts';
 import { RunExecutionProgress } from '~/components/admin/tests/RunExecutionProgress';
@@ -15,7 +16,14 @@ import {
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
 import {
-  Table,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '~/components/ui/dialog';
+import {
   TableBody,
   TableCell,
   TableHead,
@@ -153,13 +161,20 @@ function extractTimingBreakdown(responsePayload: unknown) {
   };
 }
 
+function formatExpectedShouldAnswerCell(value: boolean | null): string {
+  if (value === null) {
+    return 'Unset';
+  }
+  return value ? 'Yes' : 'No';
+}
+
 function formatTimingBreakdownLabel(responsePayload: unknown): string {
   const timing = extractTimingBreakdown(responsePayload);
   if (!timing) {
     return 'n/a';
   }
 
-  /** Mean vector-search time per retrieval sample (`similaritySearchMs`), not wall-clock elapsed. */
+  /** Mean vector-search time per retrieval sample, not wall-clock elapsed. */
   const searchMsLabel =
     typeof timing.searchMs === 'number'
       ? `${timing.searchMs.toFixed(1)} ms avg`
@@ -303,6 +318,9 @@ export default async function AdminTestRunDetailsPage({
   const promptByItemId = new Map(
     testItems.map((item) => [item.id, item.prompt]),
   );
+  const expectedShouldAnswerByItemId = new Map(
+    testItems.map((item) => [item.id, item.expected_should_answer]),
+  );
   const passCount = result.passed_items ?? 0;
   const failCount =
     result.failed_items ?? resultItems.filter((item) => !item.passed).length;
@@ -360,23 +378,31 @@ export default async function AdminTestRunDetailsPage({
     }),
   );
 
-  const itemLevelCsvRows = allResultItems.map((row) => ({
-    row_index: row.row_index,
-    prompt: promptByItemId.get(row.test_item_id) ?? '',
-    passed: row.passed,
-    elapsed_seconds: Number((row.elapsed_ms / 1000).toFixed(3)),
-    status: row.status,
-    model:
-      modelByWorkflowRunId.get(
-        extractWorkflowRunId(row.response_payload) || '',
-      ) ?? 'n/a',
-    timing_breakdown: formatTimingBreakdownLabel(row.response_payload),
-    retrieved_chunks: formatRetrievedChunksForCsv(
-      extractRetrievedDocumentChunks(row.response_payload),
-    ),
-    message: row.error_message || row.response_text || 'n/a',
-    test_item_id: row.test_item_id,
-  }));
+  const itemLevelCsvRows = chronologicalItems.map((row) => {
+    const expectedRaw = expectedShouldAnswerByItemId.get(row.test_item_id);
+    const expectedForCell: boolean | null =
+      expectedRaw === undefined ? null : expectedRaw;
+
+    return {
+      row_index: row.row_index,
+      prompt: promptByItemId.get(row.test_item_id) ?? '',
+      expected_answer: formatExpectedShouldAnswerCell(expectedForCell),
+      passed: row.passed ? 'Yes' : 'No',
+      sim_conf: formatItemSimilarityConfidenceLabel(row.response_payload),
+      elapsed: formatDurationSeconds(row.elapsed_ms),
+      model:
+        modelByWorkflowRunId.get(
+          extractWorkflowRunId(row.response_payload) || '',
+        ) ?? 'n/a',
+      rounds_cache_search: formatTimingBreakdownLabel(row.response_payload),
+      message: row.error_message || row.response_text || 'n/a',
+      item_detail_path: `/admin/tests/${test.id}/items/${row.test_item_id}`,
+      retrieved_chunks: formatRetrievedChunksForCsv(
+        extractRetrievedDocumentChunks(row.response_payload),
+      ),
+      test_item_id: row.test_item_id,
+    };
+  });
 
   return (
     <div className="flex flex-1 bg-slate-50">
@@ -402,6 +428,10 @@ export default async function AdminTestRunDetailsPage({
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
+                <Button asChild size="sm" variant="outline">
+                  <Link href={`/admin/tests/${test.id}`}>Back to test</Link>
+                </Button>
+                <TestRunNotesToolbarButton />
                 <form action={deleteTestRunAction}>
                   <input
                     name="returnPath"
@@ -414,13 +444,6 @@ export default async function AdminTestRunDetailsPage({
                     Delete run
                   </Button>
                 </form>
-                <TestRunNotesToolbarButton />
-                <Button asChild size="sm" variant="outline">
-                  <Link href={`/admin/tests/${test.id}`}>Back to dataset</Link>
-                </Button>
-                <Button asChild size="sm" variant="outline">
-                  <Link href="/admin/tests">Back to tests</Link>
-                </Button>
               </div>
             </div>
           </section>
@@ -465,19 +488,18 @@ export default async function AdminTestRunDetailsPage({
               rows={itemLevelCsvRows}
             />
           </div>
-          <Table>
-            <TableHeader>
+          <div className="relative max-h-[min(70vh,48rem)] overflow-auto overscroll-contain rounded-2xl border border-slate-200">
+          <table className="w-full min-w-[1280px] caption-bottom text-sm">
+            <TableHeader className="sticky top-0 z-10 bg-white shadow-[0_1px_0_0_rgb(226_232_240)] [&_tr]:border-b-0">
               <TableRow>
                 <TableHead>Row</TableHead>
                 <TableHead>Prompt</TableHead>
+                <TableHead className="whitespace-nowrap">Answer?</TableHead>
                 <TableHead>Passed</TableHead>
                 <TableHead>Sim / conf</TableHead>
                 <TableHead>Elapsed</TableHead>
                 <TableHead>Model</TableHead>
-                <TableHead title="Average RAG vector-search time per retrieval sample from the workflow—not total runtime (see Elapsed column).">
-                  Rounds | Cache | Rag search
-                </TableHead>
-                <TableHead>Retrieved chunks</TableHead>
+                <TableHead>Rounds | Cache | Elapsed</TableHead>
                 <TableHead>Message</TableHead>
                 <TableHead>History</TableHead>
               </TableRow>
@@ -485,91 +507,134 @@ export default async function AdminTestRunDetailsPage({
             <TableBody>
               {displayResultItems.length === 0 ? (
                 <TableRow>
-                  <TableCell className="text-slate-500" colSpan={11}>
+                  <TableCell className="text-slate-500" colSpan={10}>
                     No item-level results yet.
                   </TableCell>
                 </TableRow>
               ) : (
-                chronologicalItems.map((row) => (
-                  <TableRow id={`run-item-result-${row.id}`} key={row.id}>
-                    <TableCell>
-                      <Link
-                        className="text-sky-700 underline-offset-2 hover:underline"
-                        href={`/admin/tests/${test.id}/items/${row.test_item_id}`}
-                      >
-                        {row.row_index}
-                      </Link>
-                    </TableCell>
-                    <TableCell className="max-w-[420px] whitespace-normal text-xs text-slate-700">
-                      <Link
-                        className="text-sky-700 underline-offset-2 hover:underline"
-                        href={`/admin/tests/${test.id}/items/${row.test_item_id}`}
-                      >
-                        {promptByItemId.get(row.test_item_id) || 'n/a'}
-                      </Link>
-                    </TableCell>
-                    <TableCell>
-                      <Badge
-                        className={
-                          row.passed
-                            ? 'border-emerald-600/45 bg-emerald-600/12 text-emerald-900 dark:border-emerald-500/40 dark:bg-emerald-500/15 dark:text-emerald-50'
-                            : undefined
-                        }
-                        variant={row.passed ? 'outline' : 'destructive'}
-                      >
-                        {row.passed ? 'Yes' : 'No'}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="whitespace-nowrap font-mono text-xs text-slate-700">
-                      <Badge variant="outline">
-                        {formatItemSimilarityConfidenceLabel(
-                          row.response_payload,
-                        )}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <Badge
-                        variant={
-                          row.elapsed_ms > 10_000 ? 'destructive' : 'secondary'
-                        }
-                      >
-                        {formatDurationSeconds(row.elapsed_ms)}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="outline">
-                        {modelByWorkflowRunId.get(
-                          extractWorkflowRunId(row.response_payload) || '',
-                        ) || 'n/a'}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="max-w-[220px] whitespace-normal text-xs text-slate-600">
-                      {formatTimingBreakdownLabel(row.response_payload)}
-                    </TableCell>
-                    <TableCell className="max-w-[min(280px,100%)] align-top">
-                      <RetrievedChunksPreview
-                        chunks={extractRetrievedDocumentChunks(
-                          row.response_payload,
-                        )}
-                      />
-                    </TableCell>
-                    <TableCell className="max-w-[420px] whitespace-normal text-xs text-slate-600 line-clamp-2">
-                      {row.error_message || row.response_text || 'n/a'}
-                    </TableCell>
-                    <TableCell>
-                      <Button asChild size="sm" variant="outline">
+                chronologicalItems.map((row) => {
+                  const expectedShouldAnswer =
+                    expectedShouldAnswerByItemId.get(row.test_item_id) ?? null;
+                  return (
+                    <TableRow id={`run-item-result-${row.id}`} key={row.id}>
+                      <TableCell>
                         <Link
+                          className="text-sky-700 underline-offset-2 hover:underline"
                           href={`/admin/tests/${test.id}/items/${row.test_item_id}`}
                         >
-                          View
+                          {row.row_index}
                         </Link>
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))
+                      </TableCell>
+                      <TableCell className="max-w-[420px] whitespace-normal text-xs text-slate-700">
+                        <Link
+                          className="text-sky-700 underline-offset-2 hover:underline"
+                          href={`/admin/tests/${test.id}/items/${row.test_item_id}`}
+                        >
+                          {promptByItemId.get(row.test_item_id) || 'n/a'}
+                        </Link>
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap">
+                        <Badge
+                          className={
+                            expectedShouldAnswer === true
+                              ? 'border-emerald-600/45 bg-emerald-600/12 text-emerald-900 dark:border-emerald-500/40 dark:bg-emerald-500/15 dark:text-emerald-50'
+                              : undefined
+                          }
+                          variant={
+                            expectedShouldAnswer === null
+                              ? 'secondary'
+                              : expectedShouldAnswer === true
+                                ? 'outline'
+                                : 'destructive'
+                          }
+                        >
+                          {formatExpectedShouldAnswerCell(expectedShouldAnswer)}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Badge
+                          className={
+                            row.passed
+                              ? 'border-emerald-600/45 bg-emerald-600/12 text-emerald-900 dark:border-emerald-500/40 dark:bg-emerald-500/15 dark:text-emerald-50'
+                              : undefined
+                          }
+                          variant={row.passed ? 'outline' : 'destructive'}
+                        >
+                          {row.passed ? 'Yes' : 'No'}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap font-mono text-xs text-slate-700">
+                        <Badge variant="outline">
+                          {formatItemSimilarityConfidenceLabel(
+                            row.response_payload,
+                          )}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Badge
+                          variant={
+                            row.elapsed_ms > 10_000
+                              ? 'destructive'
+                              : 'secondary'
+                          }
+                        >
+                          {formatDurationSeconds(row.elapsed_ms)}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline">
+                          {modelByWorkflowRunId.get(
+                            extractWorkflowRunId(row.response_payload) || '',
+                          ) || 'n/a'}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="max-w-[220px] whitespace-normal text-xs text-slate-600">
+                        {formatTimingBreakdownLabel(row.response_payload)}
+                      </TableCell>
+                      <TableCell className="max-w-[420px] whitespace-normal text-xs text-slate-600">
+                        <ResultItemMessageCell
+                          errorMessage={row.error_message}
+                          responseText={row.response_text}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <Dialog>
+                            <DialogTrigger asChild>
+                              <Button variant="outline">Docs</Button>
+                            </DialogTrigger>
+                            <DialogContent>
+                              <DialogHeader>
+                                <DialogTitle>Document chunks</DialogTitle>
+                                <DialogDescription>
+                                  Chunks retrieved from rag search.
+                                </DialogDescription>
+                              </DialogHeader>
+                              <div className="-mx-4 no-scrollbar max-h-[50vh] overflow-y-auto px-4">
+                                <RetrievedChunksPreview
+                                  chunks={extractRetrievedDocumentChunks(
+                                    row.response_payload,
+                                  )}
+                                />
+                              </div>
+                            </DialogContent>
+                          </Dialog>
+                          <Button asChild size="sm" variant="outline">
+                            <Link
+                              href={`/admin/tests/${test.id}/items/${row.test_item_id}`}
+                            >
+                              View
+                            </Link>
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })
               )}
             </TableBody>
-          </Table>
+          </table>
+          </div>
           <p className="mt-3 text-xs text-slate-500">
             Showing {Math.min(200, allResultItems.length)} of{' '}
             {allResultItems.length} item-level results from{' '}

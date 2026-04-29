@@ -5,17 +5,29 @@ import { useCallback } from 'react';
 
 import { Button } from '~/components/ui/button';
 
+/**
+ * Item-level run export: columns match the “Item-level results” table on the run page
+ * (row order, labels, and formatted values).
+ */
 export type RunResultCsvRow = {
   row_index: number;
   prompt: string;
-  passed: boolean;
-  elapsed_seconds: number;
-  status: string;
+  /** Table “Answer?” — `Unset` / `Yes` / `No`. */
+  expected_answer: string;
+  /** Table “Passed” — `Yes` / `No`. */
+  passed: string;
+  /** Table “Sim / conf”. */
+  sim_conf: string;
+  /** Table “Elapsed” — e.g. `24.94 s` (same as `formatDurationSeconds`). */
+  elapsed: string;
   model: string;
-  timing_breakdown: string;
-  /** Encoded semantic hits: `document_uuid|chunk_uuid` pairs joined by `; `. */
-  retrieved_chunks: string;
+  /** Table “Rounds | Cache | …” workflow timing string. */
+  rounds_cache_search: string;
   message: string;
+  /** Table “History” View link path. */
+  item_detail_path: string;
+  /** Encoded semantic hits: `document_id|chunk_id` pairs joined by `; ` (Docs dialog). */
+  retrieved_chunks: string;
   test_item_id: string;
 };
 
@@ -49,13 +61,15 @@ export function RunItemResultsCsvDownload({
     const headers = [
       'row_index',
       'prompt',
+      'expected_answer',
       'passed',
-      'elapsed_seconds',
-      'status',
+      'sim_conf',
+      'elapsed',
       'model',
-      'timing_breakdown',
-      'retrieved_chunks',
+      'rounds_cache_search',
       'message',
+      'item_detail_path',
+      'retrieved_chunks',
       'test_item_id',
     ];
 
@@ -65,13 +79,15 @@ export function RunItemResultsCsvDownload({
         [
           String(row.row_index),
           row.prompt,
-          row.passed ? 'yes' : 'no',
-          String(row.elapsed_seconds),
-          row.status,
+          row.expected_answer,
+          row.passed,
+          row.sim_conf,
+          row.elapsed,
           row.model,
-          row.timing_breakdown,
-          row.retrieved_chunks,
+          row.rounds_cache_search,
           row.message,
+          row.item_detail_path,
+          row.retrieved_chunks,
           row.test_item_id,
         ]
           .map(escapeCsvCell)

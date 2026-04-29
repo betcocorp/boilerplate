@@ -139,6 +139,55 @@ export function TestHistoricalTrendsCharts({
 
           <article className="min-w-0 rounded-2xl border border-slate-200 p-5">
             <h3 className="text-sm font-semibold text-slate-900">
+              Average similarity trend
+            </h3>
+            <p className="mt-1 text-xs text-slate-500">
+              Avg over all runs:{' '}
+              {typeof overallAvgSimilarity === 'number'
+                ? `${(overallAvgSimilarity * 100).toFixed(1)}%`
+                : 'n/a'}
+            </p>
+            <ChartContainer
+              className="mt-4 h-56 w-full min-w-0"
+              config={chartConfig}
+            >
+              <LineChart data={runs}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="startedAtLabel" tick={{ fontSize: 11 }} />
+                <YAxis
+                  domain={[0, 1]}
+                  tick={{ fontSize: 11 }}
+                  tickFormatter={(value) =>
+                    typeof value === 'number'
+                      ? `${(value * 100).toFixed(0)}%`
+                      : `${value ?? ''}`
+                  }
+                />
+                <ChartTooltip
+                  content={
+                    <ChartTooltipContent
+                      labelFormatter={(label) => `Run date: ${label}`}
+                      formatter={(value) =>
+                        typeof value === 'number'
+                          ? `${(value * 100).toFixed(1)}%`
+                          : 'n/a'
+                      }
+                    />
+                  }
+                />
+                <Line
+                  dataKey="avgSimilarity"
+                  dot={false}
+                  stroke="var(--color-avgSimilarity)"
+                  strokeWidth={2}
+                  type="monotone"
+                />
+              </LineChart>
+            </ChartContainer>
+          </article>
+
+          <article className="min-w-0 rounded-2xl border border-slate-200 p-5">
+            <h3 className="text-sm font-semibold text-slate-900">
               Runtime trend
             </h3>
             <p className="mt-1 text-xs text-slate-500">
@@ -213,55 +262,6 @@ export function TestHistoricalTrendsCharts({
                 <ChartTooltip content={<ChartTooltipContent />} />
                 <ChartLegend content={<ChartLegendContent />} />
               </PieChart>
-            </ChartContainer>
-          </article>
-
-          <article className="min-w-0 rounded-2xl border border-slate-200 p-5">
-            <h3 className="text-sm font-semibold text-slate-900">
-              Average similarity trend
-            </h3>
-            <p className="mt-1 text-xs text-slate-500">
-              Avg over all runs:{' '}
-              {typeof overallAvgSimilarity === 'number'
-                ? `${(overallAvgSimilarity * 100).toFixed(1)}%`
-                : 'n/a'}
-            </p>
-            <ChartContainer
-              className="mt-4 h-56 w-full min-w-0"
-              config={chartConfig}
-            >
-              <LineChart data={runs}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="startedAtLabel" tick={{ fontSize: 11 }} />
-                <YAxis
-                  domain={[0, 1]}
-                  tick={{ fontSize: 11 }}
-                  tickFormatter={(value) =>
-                    typeof value === 'number'
-                      ? `${(value * 100).toFixed(0)}%`
-                      : `${value ?? ''}`
-                  }
-                />
-                <ChartTooltip
-                  content={
-                    <ChartTooltipContent
-                      labelFormatter={(label) => `Run date: ${label}`}
-                      formatter={(value) =>
-                        typeof value === 'number'
-                          ? `${(value * 100).toFixed(1)}%`
-                          : 'n/a'
-                      }
-                    />
-                  }
-                />
-                <Line
-                  dataKey="avgSimilarity"
-                  dot={false}
-                  stroke="var(--color-avgSimilarity)"
-                  strokeWidth={2}
-                  type="monotone"
-                />
-              </LineChart>
             </ChartContainer>
           </article>
         </div>

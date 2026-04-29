@@ -64,6 +64,54 @@ function responseIndicatesUnableToAssistOrRefusal(responseText: string): boolean
 }
 
 /**
+ * True when the assistant is clearly declining, hedging, or refusing to confirm — beyond only
+ * "can't"/"cannot" (e.g. "don't have verified information", "unable to verify").
+ */
+function responseIndicatesDeclineStyleAnswer(responseText: string): boolean {
+  const t = responseText.trim().toLowerCase();
+  if (!t) {
+    return false;
+  }
+
+  const indicators = [
+    "can't",
+    'cannot',
+    "don't have verified",
+    'do not have verified',
+    'no verified information',
+    "don't have that information",
+    'do not have that information',
+    'insufficient information',
+    'not sufficient information',
+    'unable to verify',
+    'unable to confirm',
+    'unable to provide',
+    'unable to locate',
+    'could not verify',
+    "couldn't verify",
+    'could not find',
+    "couldn't find",
+    'cannot find',
+    "can't find",
+    'unable to find',
+    'not able to verify',
+    'cannot determine',
+    "can't determine",
+  ];
+
+  return indicators.some((p) => t.includes(p));
+}
+
+/** Rows configured for decline-style expectations should not be failed by the "unable to assist" visibility override. */
+function expectsDeclineStyleOutcome(item: TestItemRecord): boolean {
+  if (shouldExpectAnswer(item) !== false) {
+    return false;
+  }
+  const expectedResultType = (item.expected_result_type || '').trim().toLowerCase();
+  return expectedResultType === 'decline' || expectedResultType === 'none';
+}
+
+/**
  * Same pass/fail rules as the historical boolean helper; adds `failureReason` for failed assertions.
  */
 function evaluateTestOutcome(params: {
@@ -105,14 +153,12 @@ function evaluateTestOutcome(params: {
     }
 
     if (expectedResultType === 'decline' || expectedResultType === 'none') {
-      const lowered = params.responseText.toLowerCase();
-      const declined = lowered.includes("can't") || lowered.includes('cannot');
-      if (declined) {
+      if (responseIndicatesDeclineStyleAnswer(params.responseText)) {
         return { passed: true, failureReason: null };
       }
       return {
         passed: false,
-        failureReason: `This row expects a decline-style answer (expected_result_type "${expectedResultType}") containing "can't" or "cannot"; the response did not include those phrases.`,
+        failureReason: `This row expects a decline-style answer (expected_result_type "${expectedResultType}") — e.g. inability to verify, no verified information, or phrasing with "can't"/"cannot"; the response did not match decline-style criteria.`,
       };
     }
 
@@ -133,9 +179,14 @@ function evaluateTestOutcome(params: {
 function withUnableToAssistFailureOverride(
   responseText: string,
   outcome: EvaluationOutcome,
+  item: TestItemRecord,
 ): EvaluationOutcome {
   const hasText = responseText.trim().length > 0;
   if (!hasText || !outcome.passed) {
+    return outcome;
+  }
+
+  if (expectsDeclineStyleOutcome(item)) {
     return outcome;
   }
 
@@ -171,7 +222,11 @@ export async function runSingleTestItem(
       hasError: false,
       responseText,
     });
-    const outcome = withUnableToAssistFailureOverride(responseText, baseOutcome);
+    const outcome = withUnableToAssistFailureOverride(
+      responseText,
+      baseOutcome,
+      testItem,
+    );
 
     return {
       passed: outcome.passed,
