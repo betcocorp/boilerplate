@@ -14,9 +14,7 @@ export function RetrievedChunksPreview({
   }
 
   return (
-    <div
-      className="max-h-[100px] min-w-0 max-w-[min(280px,100%)] w-full overflow-x-hidden overflow-y-auto overscroll-y-contain font-mono text-[10px] leading-snug text-slate-700"
-    >
+    <div className="max-h-[50vh] min-w-0 w-full overflow-x-hidden overflow-y-auto overscroll-y-contain font-mono text-[10px] leading-snug text-slate-700">
       <div className="min-w-0 space-y-2 pr-0.5">
         {chunks.map((c, i) => (
           <div

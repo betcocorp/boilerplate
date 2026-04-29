@@ -18,7 +18,7 @@ import {
   listResultItemsByTestItemId,
   listTestResultsByTestId,
 } from '~/lib/tests/repository';
-import { formatDate, formatDurationSeconds } from '~/lib/utils/time';
+import { formatDurationSeconds } from '~/lib/utils/time';
 
 export const metadata = {
   title: 'Item History | Betco BEX',
@@ -154,7 +154,9 @@ function ItemHistoryMessageCell({
         <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
           Assistant response
         </p>
-        <p className="mt-1 whitespace-pre-wrap text-slate-800">{assistant || '—'}</p>
+        <p className="mt-1 whitespace-pre-wrap text-slate-800">
+          {assistant || '—'}
+        </p>
       </div>
     </div>
   );
@@ -259,7 +261,7 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
           <table className="w-full min-w-[1200px] caption-bottom text-sm">
             <TableHeader className="sticky top-0 z-10 bg-white shadow-[0_1px_0_0_rgb(226_232_240)] [&_tr]:border-b-0">
               <TableRow>
-                <TableHead>Run id</TableHead>
+                <TableHead>Run</TableHead>
                 <TableHead>Passed</TableHead>
                 <TableHead
                   className="whitespace-nowrap"
