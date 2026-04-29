@@ -40,7 +40,19 @@ import {
   listAllResultItemsByResultId,
 } from '~/lib/tests/repository';
 import { formatDate, formatDurationSeconds } from '~/lib/utils/time';
-import type { RetrievedDocumentChunkRef } from '~/lib/workflows/product-support/product-support-schemas';
+import {
+  formatExpectedShouldAnswerLabel as formatExpectedShouldAnswerCell,
+  formatItemSimilarityConfidenceLabel,
+  formatRetrievedChunksForCsv,
+  formatTimingBreakdownLabel,
+} from '~/lib/tests/format';
+import {
+  extractItemSimilarityScore,
+  extractModelTag,
+  extractProgress,
+  extractRetrievedDocumentChunks,
+  extractWorkflowRunId,
+} from '~/lib/tests/response-payload';
 
 import { deleteTestRunAction } from '../../../actions';
 
@@ -49,234 +61,10 @@ export const metadata = {
   description: 'Inspect item-level outcomes for a specific test run.',
 };
 
-function extractItemSimilarityScore(responsePayload: unknown) {
-  if (
-    !responsePayload ||
-    typeof responsePayload !== 'object' ||
-    Array.isArray(responsePayload)
-  ) {
-    return null;
-  }
-
-  const payload = responsePayload as Record<string, unknown>;
-  const sources = payload.sources;
-  if (!Array.isArray(sources)) {
-    return null;
-  }
-
-  const similarities = sources
-    .map((source) => {
-      if (!source || typeof source !== 'object' || Array.isArray(source)) {
-        return null;
-      }
-      const value = (source as Record<string, unknown>).similarity;
-      return typeof value === 'number' ? value : null;
-    })
-    .filter((value): value is number => typeof value === 'number');
-
-  if (similarities.length === 0) {
-    return null;
-  }
-
-  return Math.max(...similarities);
-}
-
-function extractItemValidatorConfidence(responsePayload: unknown) {
-  if (
-    !responsePayload ||
-    typeof responsePayload !== 'object' ||
-    Array.isArray(responsePayload)
-  ) {
-    return null;
-  }
-  const c = (responsePayload as Record<string, unknown>).confidence;
-  return typeof c === 'number' && Number.isFinite(c) ? c : null;
-}
-
-function formatItemSimilarityConfidenceLabel(responsePayload: unknown) {
-  const maxSimilarity = extractItemSimilarityScore(responsePayload);
-  const confidence = extractItemValidatorConfidence(responsePayload);
-  if (maxSimilarity == null && confidence == null) {
-    return 'n/a';
-  }
-  const parts: string[] = [];
-  if (maxSimilarity != null) {
-    parts.push(`${(maxSimilarity * 100).toFixed(1)}%`);
-  }
-  if (confidence != null) {
-    parts.push(`${confidence.toFixed(2)}`);
-  }
-  return parts.join(' / ');
-}
-
-function extractWorkflowRunId(responsePayload: unknown) {
-  if (
-    !responsePayload ||
-    typeof responsePayload !== 'object' ||
-    Array.isArray(responsePayload)
-  ) {
-    return null;
-  }
-
-  const candidate = (responsePayload as Record<string, unknown>).workflowRunId;
-  return typeof candidate === 'string' && candidate.trim() ? candidate : null;
-}
-
-function extractModelTag(userInput: unknown) {
-  if (!userInput || typeof userInput !== 'object' || Array.isArray(userInput)) {
-    return undefined;
-  }
-
-  const candidate = (userInput as Record<string, unknown>).modelTag;
-  return typeof candidate === 'string' ? candidate : undefined;
-}
-
-function extractTimingBreakdown(responsePayload: unknown) {
-  if (
-    !responsePayload ||
-    typeof responsePayload !== 'object' ||
-    Array.isArray(responsePayload)
-  ) {
-    return null;
-  }
-
-  const candidate = (responsePayload as Record<string, unknown>)
-    .timingBreakdown;
-  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
-    return null;
-  }
-
-  const timing = candidate as Record<string, unknown>;
-  const toolRounds = timing.toolRounds;
-  const cacheSource = timing.cacheSource;
-  const searchMs = timing.searchMs;
-  if (typeof toolRounds !== 'number') {
-    return null;
-  }
-
-  return {
-    toolRounds,
-    cacheSource: typeof cacheSource === 'string' ? cacheSource : null,
-    searchMs: typeof searchMs === 'number' ? searchMs : null,
-  };
-}
-
-function formatExpectedShouldAnswerCell(value: boolean | null): string {
-  if (value === null) {
-    return 'Unset';
-  }
-  return value ? 'Yes' : 'No';
-}
-
-function formatTimingBreakdownLabel(responsePayload: unknown): string {
-  const timing = extractTimingBreakdown(responsePayload);
-  if (!timing) {
-    return 'n/a';
-  }
-
-  /** Mean vector-search time per retrieval sample, not wall-clock elapsed. */
-  const searchMsLabel =
-    typeof timing.searchMs === 'number'
-      ? `${timing.searchMs.toFixed(1)} ms avg`
-      : 'n/a';
-  return `${timing.toolRounds} | ${timing.cacheSource || 'n/a'} | ${searchMsLabel}`;
-}
-
-function parseRetrievedDocumentChunksArray(
-  raw: unknown,
-): RetrievedDocumentChunkRef[] {
-  if (!Array.isArray(raw)) {
-    return [];
-  }
-  const out: RetrievedDocumentChunkRef[] = [];
-  for (const item of raw) {
-    if (!item || typeof item !== 'object' || Array.isArray(item)) {
-      continue;
-    }
-    const o = item as Record<string, unknown>;
-    const document_id = typeof o.document_id === 'string' ? o.document_id : '';
-    if (!document_id) {
-      continue;
-    }
-    const chunk_id = typeof o.chunk_id === 'string' ? o.chunk_id : null;
-    out.push({ document_id, chunk_id });
-  }
-  return out;
-}
-
-/** Prefer workflow `retrieved_document_chunks`; fall back to legacy `sources` (camelCase). */
-function extractRetrievedDocumentChunks(
-  responsePayload: unknown,
-): RetrievedDocumentChunkRef[] {
-  if (
-    !responsePayload ||
-    typeof responsePayload !== 'object' ||
-    Array.isArray(responsePayload)
-  ) {
-    return [];
-  }
-  const record = responsePayload as Record<string, unknown>;
-  const fromPayload = parseRetrievedDocumentChunksArray(
-    record.retrieved_document_chunks,
-  );
-  if (fromPayload.length > 0) {
-    return fromPayload;
-  }
-
-  const sources = record.sources;
-  if (!Array.isArray(sources)) {
-    return [];
-  }
-
-  const map = new Map<string, RetrievedDocumentChunkRef>();
-  for (const item of sources) {
-    if (!item || typeof item !== 'object' || Array.isArray(item)) {
-      continue;
-    }
-    const s = item as Record<string, unknown>;
-    const document_id = typeof s.documentId === 'string' ? s.documentId : '';
-    if (!document_id) {
-      continue;
-    }
-    const chunk_id = typeof s.chunkId === 'string' ? s.chunkId : null;
-    const key = `${document_id}:${chunk_id ?? ''}`;
-    if (!map.has(key)) {
-      map.set(key, { document_id, chunk_id });
-    }
-  }
-  return [...map.values()];
-}
-
-function formatRetrievedChunksForCsv(
-  chunks: RetrievedDocumentChunkRef[],
-): string {
-  if (chunks.length === 0) {
-    return '';
-  }
-  return chunks.map((c) => `${c.document_id}|${c.chunk_id ?? ''}`).join('; ');
-}
-
 type PageProps = {
   params: Promise<{ testId: string; runId: string }>;
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 };
-
-function extractProgress(summary: unknown, totalItems: number) {
-  if (!summary || typeof summary !== 'object' || Array.isArray(summary)) {
-    return {
-      completedItems: 0,
-      totalItems,
-    };
-  }
-
-  const data = summary as Record<string, unknown>;
-  return {
-    completedItems:
-      typeof data.completed_items === 'number' ? data.completed_items : 0,
-    totalItems:
-      typeof data.total_items === 'number' ? data.total_items : totalItems,
-  };
-}
 
 export default async function AdminTestRunDetailsPage({
   params,

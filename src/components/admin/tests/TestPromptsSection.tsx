@@ -18,6 +18,13 @@ import {
   TableRow,
 } from '~/components/ui/table';
 import { formatDurationSeconds } from '~/lib/utils/time';
+import {
+  formatElapsed,
+  formatPercent,
+  formatShouldAnswerExport,
+  formatSimilarityPercent,
+} from '~/lib/tests/format';
+import { escapeCsvCell, sanitizeCsvFilename } from '~/lib/utils/csv';
 import type { Json } from '~/types/supabase.public';
 
 export type TestPromptRow = {
@@ -45,23 +52,6 @@ export type TestPromptAggregation = {
   } | null;
 };
 
-function escapeCsvCell(value: string): string {
-  if (/[",\r\n]/.test(value)) {
-    return `"${value.replace(/"/g, '""')}"`;
-  }
-  return value;
-}
-
-function formatShouldAnswerExport(value: boolean | null): string {
-  if (value === true) {
-    return 'yes';
-  }
-  if (value === false) {
-    return 'no';
-  }
-  return '';
-}
-
 function payloadString(payload: Json, key: string): string {
   if (
     payload === null ||
@@ -72,11 +62,6 @@ function payloadString(payload: Json, key: string): string {
   }
   const raw = (payload as Record<string, unknown>)[key];
   return typeof raw === 'string' ? raw : '';
-}
-
-function sanitizeCsvFilename(name: string): string {
-  const trimmed = name.trim() || 'test-prompts';
-  return trimmed.replace(/[/\\?%*:|"<>]/g, '-').slice(0, 80);
 }
 
 function expectedSummary(item: TestPromptRow): string {
@@ -120,24 +105,6 @@ type TestPromptsSectionProps = {
   /** Total number of recent runs the aggregations were computed over (drives column tooltips). */
   aggregatedRunCount: number;
 };
-
-function formatPercent(value: number | null | undefined): string {
-  return typeof value === 'number' && Number.isFinite(value)
-    ? `${value.toFixed(1)}%`
-    : '—';
-}
-
-function formatSimilarityPercent(value: number | null | undefined): string {
-  return typeof value === 'number' && Number.isFinite(value)
-    ? `${(value * 100).toFixed(1)}%`
-    : '—';
-}
-
-function formatElapsed(value: number | null | undefined): string {
-  return typeof value === 'number' && Number.isFinite(value)
-    ? formatDurationSeconds(value)
-    : '—';
-}
 
 export function TestPromptsSection({
   items,

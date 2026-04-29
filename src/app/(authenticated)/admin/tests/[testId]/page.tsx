@@ -38,6 +38,10 @@ import {
   formatDurationSeconds,
   formatRunChartAxisLabel,
 } from '~/lib/utils/time';
+import {
+  formatPercentDelta,
+  formatSimilarityDelta,
+} from '~/lib/tests/format';
 
 import { deleteTestRunAction, runTestAction } from '../actions';
 
@@ -91,14 +95,6 @@ function RunTrendIndicator({
       <Icon aria-hidden className="h-3.5 w-3.5" />
     </span>
   );
-}
-
-function formatPercentDelta(absoluteDelta: number) {
-  return `${absoluteDelta.toFixed(1)}%`;
-}
-
-function formatSimilarityDelta(absoluteDelta: number) {
-  return `${(absoluteDelta * 100).toFixed(1)}%`;
 }
 
 function formatElapsedDelta(absoluteDelta: number) {

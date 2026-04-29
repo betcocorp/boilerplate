@@ -2,6 +2,8 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
 
+import { AiSuggestionCards } from '~/components/admin/tests/AiSuggestionCards';
+import { ItemAIReviewButton } from '~/components/admin/tests/ItemAIReviewButton';
 import { ItemAtAGlanceCharts } from '~/components/admin/tests/ItemAtAGlanceCharts';
 import { ResultItemMessageCell } from '~/components/admin/tests/ResultItemMessageCell';
 import { Button } from '~/components/ui/button';
@@ -12,15 +14,29 @@ import {
   TableHeader,
   TableRow,
 } from '~/components/ui/table';
+import { listAiSuggestions } from '~/lib/ai-suggestions/repository';
 import { listWorkflowRunsByIds } from '~/lib/conversations/workflow-repository';
 import { resolveResponsesModel } from '~/lib/openai/client';
+import {
+  formatExpectedShouldAnswerLabel,
+  formatSimilarityValue,
+} from '~/lib/tests/format';
 import {
   getTestById,
   getTestItemById,
   listResultItemsByTestItemId,
   listTestResultsByTestId,
 } from '~/lib/tests/repository';
-import { formatDurationSeconds, formatRunChartAxisLabel } from '~/lib/utils/time';
+import {
+  extractModelTag,
+  extractRagSearchMs,
+  extractSimilarityStats,
+  extractWorkflowRunId,
+} from '~/lib/tests/response-payload';
+import {
+  formatDurationSeconds,
+  formatRunChartAxisLabel,
+} from '~/lib/utils/time';
 
 export const metadata = {
   title: 'Item History | Betco BEX',
@@ -30,105 +46,6 @@ export const metadata = {
 type PageProps = {
   params: Promise<{ testId: string; itemId: string }>;
 };
-
-function extractWorkflowRunId(responsePayload: unknown) {
-  if (
-    !responsePayload ||
-    typeof responsePayload !== 'object' ||
-    Array.isArray(responsePayload)
-  ) {
-    return null;
-  }
-
-  const candidate = (responsePayload as Record<string, unknown>).workflowRunId;
-  return typeof candidate === 'string' && candidate.trim() ? candidate : null;
-}
-
-function extractModelTag(userInput: unknown) {
-  if (!userInput || typeof userInput !== 'object' || Array.isArray(userInput)) {
-    return undefined;
-  }
-
-  const candidate = (userInput as Record<string, unknown>).modelTag;
-  return typeof candidate === 'string' ? candidate : undefined;
-}
-
-/**
- * Pulls every per-source `similarity` value off the response payload's `sources`
- * array and reduces it to {min, max, avg}. Returns null when nothing usable was
- * recorded (e.g. early-decline runs or older payload shapes).
- */
-function extractSimilarityStats(
-  responsePayload: unknown,
-): { min: number; max: number; avg: number } | null {
-  if (
-    !responsePayload ||
-    typeof responsePayload !== 'object' ||
-    Array.isArray(responsePayload)
-  ) {
-    return null;
-  }
-
-  const sources = (responsePayload as Record<string, unknown>).sources;
-  if (!Array.isArray(sources)) {
-    return null;
-  }
-
-  const similarities = sources
-    .map((source) => {
-      if (!source || typeof source !== 'object' || Array.isArray(source)) {
-        return null;
-      }
-      const value = (source as Record<string, unknown>).similarity;
-      return typeof value === 'number' && Number.isFinite(value) ? value : null;
-    })
-    .filter((value): value is number => typeof value === 'number');
-
-  if (similarities.length === 0) {
-    return null;
-  }
-
-  const min = Math.min(...similarities);
-  const max = Math.max(...similarities);
-  const avg =
-    similarities.reduce((sum, value) => sum + value, 0) / similarities.length;
-  return { min, max, avg };
-}
-
-/** Pulls `timingBreakdown.searchMs` if recorded. */
-function extractRagSearchMs(responsePayload: unknown): number | null {
-  if (
-    !responsePayload ||
-    typeof responsePayload !== 'object' ||
-    Array.isArray(responsePayload)
-  ) {
-    return null;
-  }
-
-  const timing = (responsePayload as Record<string, unknown>).timingBreakdown;
-  if (!timing || typeof timing !== 'object' || Array.isArray(timing)) {
-    return null;
-  }
-
-  const searchMs = (timing as Record<string, unknown>).searchMs;
-  return typeof searchMs === 'number' && Number.isFinite(searchMs)
-    ? searchMs
-    : null;
-}
-
-function formatSimilarityValue(value: number | null | undefined): string {
-  return typeof value === 'number' && Number.isFinite(value)
-    ? `${(value * 100).toFixed(1)}%`
-    : 'n/a';
-}
-
-function formatExpectedShouldAnswerLabel(value: boolean | null): string {
-  if (value === null) {
-    return 'Unset';
-  }
-  return value ? 'Yes' : 'No';
-}
-
 
 export default async function AdminTestItemHistoryPage({ params }: PageProps) {
   await connection();
@@ -143,9 +60,10 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
     notFound();
   }
 
-  const [runs, itemRunResults] = await Promise.all([
+  const [runs, itemRunResults, existingSuggestions] = await Promise.all([
     listTestResultsByTestId(test.id, 200),
     listResultItemsByTestItemId(item.id, 500),
+    listAiSuggestions('item', item.id).catch(() => []),
   ]);
 
   const runById = new Map(runs.map((run) => [run.id, run]));
@@ -238,7 +156,8 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
     }
 
     const promptElapsedMs =
-      typeof result.elapsed_ms === 'number' && Number.isFinite(result.elapsed_ms)
+      typeof result.elapsed_ms === 'number' &&
+      Number.isFinite(result.elapsed_ms)
         ? result.elapsed_ms
         : null;
     if (promptElapsedMs !== null) {
@@ -290,6 +209,28 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
       ? promptElapsedSumMs / promptElapsedSampleSize
       : null;
 
+  const aiPayload = {
+    itemId: item.id,
+    testName: test.name,
+    prompt: item.prompt,
+    expectedShouldAnswer: item.expected_should_answer,
+    historyRows: historyRows.map(({ result }) => {
+      const similarityStats = extractSimilarityStats(result.response_payload);
+      const ragSearchMs = extractRagSearchMs(result.response_payload);
+      return {
+        passed: result.passed ?? false,
+        status: result.status ?? '',
+        errorMessage: result.error_message ?? null,
+        responseText: result.response_text ?? null,
+        elapsedMs: result.elapsed_ms ?? null,
+        similarityMin: similarityStats?.min ?? null,
+        similarityMax: similarityStats?.max ?? null,
+        similarityAvg: similarityStats?.avg ?? null,
+        ragSearchMs: ragSearchMs ?? null,
+      };
+    }),
+  };
+
   return (
     <div className="flex flex-1 bg-slate-50">
       <main className="flex w-full flex-1 flex-col gap-8 px-6 py-10 sm:px-8">
@@ -313,20 +254,26 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
               <Button asChild size="sm" variant="outline">
                 <Link href="/admin/tests">Back to tests</Link>
               </Button>
+              <ItemAIReviewButton payload={aiPayload} />
             </div>
           </div>
-          <div className="mt-4 space-y-4 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+          <div className="mt-4 grid grid-cols-2 gap-4 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
             <div>
               <p className="font-semibold text-slate-900">Prompt</p>
               <p className="mt-1 whitespace-pre-wrap">{item.prompt}</p>
             </div>
-            <div className="border-t border-slate-200 pt-4">
+            <div className="shrink-0 border-l border-slate-200 pl-4 text-right">
               <p className="font-semibold text-slate-900">Should answer</p>
               <p className="mt-1 text-slate-800">
                 {formatExpectedShouldAnswerLabel(item.expected_should_answer)}
               </p>
             </div>
           </div>
+
+          <AiSuggestionCards
+            generatedAt={existingSuggestions[0]?.created_at ?? null}
+            suggestions={existingSuggestions}
+          />
         </section>
 
         <ItemAtAGlanceCharts

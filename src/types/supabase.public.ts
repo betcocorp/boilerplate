@@ -53,47 +53,6 @@ export type Database = {
         }
         Relationships: []
       }
-      agent_messages: {
-        Row: {
-          content: Json
-          conversation_id: string
-          created_at: string
-          id: string
-          openai_response_id: string | null
-          plain_text: string | null
-          role: string
-          tool_name: string | null
-        }
-        Insert: {
-          content?: Json
-          conversation_id: string
-          created_at?: string
-          id?: string
-          openai_response_id?: string | null
-          plain_text?: string | null
-          role: string
-          tool_name?: string | null
-        }
-        Update: {
-          content?: Json
-          conversation_id?: string
-          created_at?: string
-          id?: string
-          openai_response_id?: string | null
-          plain_text?: string | null
-          role?: string
-          tool_name?: string | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "agent_messages_conversation_id_fkey"
-            columns: ["conversation_id"]
-            isOneToOne: false
-            referencedRelation: "agent_conversations"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
       agent_message_feedback: {
         Row: {
           comment: string | null
@@ -151,6 +110,80 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      agent_messages: {
+        Row: {
+          content: Json
+          conversation_id: string
+          created_at: string
+          id: string
+          openai_response_id: string | null
+          plain_text: string | null
+          role: string
+          tool_name: string | null
+        }
+        Insert: {
+          content?: Json
+          conversation_id: string
+          created_at?: string
+          id?: string
+          openai_response_id?: string | null
+          plain_text?: string | null
+          role: string
+          tool_name?: string | null
+        }
+        Update: {
+          content?: Json
+          conversation_id?: string
+          created_at?: string
+          id?: string
+          openai_response_id?: string | null
+          plain_text?: string | null
+          role?: string
+          tool_name?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "agent_messages_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: false
+            referencedRelation: "agent_conversations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      ai_suggestions: {
+        Row: {
+          content: string
+          created_at: string
+          entity_id: string
+          entity_type: string
+          id: string
+          model: string | null
+          sort_order: number
+          title: string
+        }
+        Insert: {
+          content: string
+          created_at?: string
+          entity_id: string
+          entity_type: string
+          id?: string
+          model?: string | null
+          sort_order?: number
+          title: string
+        }
+        Update: {
+          content?: string
+          created_at?: string
+          entity_id?: string
+          entity_type?: string
+          id?: string
+          model?: string | null
+          sort_order?: number
+          title?: string
+        }
+        Relationships: []
       }
       audit_logs: {
         Row: {
@@ -526,24 +559,46 @@ export type Database = {
     Views: {
       latest_failed_test_result_items: {
         Row: {
-          created_at: string
-          elapsed_ms: number
+          created_at: string | null
+          elapsed_ms: number | null
           error_message: string | null
-          id: string
-          item_row_index: number
-          passed: boolean
-          prompt: string
+          id: string | null
+          item_row_index: number | null
+          passed: boolean | null
+          prompt: string | null
           response_payload: Json | null
           response_text: string | null
-          row_index: number
-          run_created_at: string
-          status: string
-          test_id: string
-          test_item_id: string
-          test_name: string
-          test_result_id: string
+          row_index: number | null
+          run_created_at: string | null
+          status: string | null
+          test_id: string | null
+          test_item_id: string | null
+          test_name: string | null
+          test_result_id: string | null
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "test_items_test_id_fkey"
+            columns: ["test_id"]
+            isOneToOne: false
+            referencedRelation: "tests"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "test_result_items_test_item_id_fkey"
+            columns: ["test_item_id"]
+            isOneToOne: false
+            referencedRelation: "test_items"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "test_result_items_test_result_id_fkey"
+            columns: ["test_result_id"]
+            isOneToOne: false
+            referencedRelation: "test_results"
+            referencedColumns: ["id"]
+          },
+        ]
       }
     }
     Functions: {
@@ -553,7 +608,30 @@ export type Database = {
       }
       admin_latest_failures_page: {
         Args: { p_limit: number; p_offset: number; p_search: string }
-        Returns: Database['public']['Views']['latest_failed_test_result_items']['Row'][]
+        Returns: {
+          created_at: string | null
+          elapsed_ms: number | null
+          error_message: string | null
+          id: string | null
+          item_row_index: number | null
+          passed: boolean | null
+          prompt: string | null
+          response_payload: Json | null
+          response_text: string | null
+          row_index: number | null
+          run_created_at: string | null
+          status: string | null
+          test_id: string | null
+          test_item_id: string | null
+          test_name: string | null
+          test_result_id: string | null
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "latest_failed_test_result_items"
+          isOneToOne: false
+          isSetofReturn: true
+        }
       }
     }
     Enums: {

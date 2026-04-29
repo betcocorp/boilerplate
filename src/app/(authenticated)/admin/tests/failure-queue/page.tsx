@@ -5,15 +5,16 @@ import { Button } from '~/components/ui/button';
 import { Input } from '~/components/ui/input';
 import { Label } from '~/components/ui/label';
 import {
-  Table,
   TableBody,
   TableCell,
   TableHead,
   TableHeader,
   TableRow,
 } from '~/components/ui/table';
+import { suggestResolution } from '~/lib/tests/failure-queue';
 import { listLatestFailedTestResultItemsPage } from '~/lib/tests/repository';
 import { formatDurationSeconds } from '~/lib/utils/time';
+import { readSearchParam } from '~/lib/utils/params';
 
 export const metadata = {
   title: 'Failure Queue | Betco BEX',
@@ -27,93 +28,6 @@ const PAGE_LINK_WINDOW = 5;
 type PageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 };
-
-function suggestResolution(row: {
-  status: string | null;
-  elapsed_ms: number | null;
-  error_message: string | null;
-  response_text: string | null;
-  response_payload: unknown;
-}) {
-  const error = (row.error_message || '').toLowerCase();
-  const responseText = (row.response_text || '').toLowerCase();
-  const status = (row.status || '').toLowerCase();
-
-  const looksLikeRefusal =
-    responseText.includes("i can't") ||
-    responseText.includes('i cannot') ||
-    responseText.includes('unable to') ||
-    responseText.includes("can't verify") ||
-    responseText.includes('cannot verify') ||
-    responseText.includes("don't have access") ||
-    responseText.includes("i don't have access") ||
-    responseText.includes("i don't know") ||
-    responseText.includes('i can’t') ||
-    responseText.includes('cannot provide') ||
-    responseText.includes("can't provide") ||
-    responseText.includes('i am not able to') ||
-    responseText.includes('as an ai') ||
-    responseText.includes('i’m unable to') ||
-    responseText.includes("i'm unable to");
-
-  const looksLikeTimeout =
-    status.includes('timeout') ||
-    error.includes('timeout') ||
-    error.includes('timed out') ||
-    error.includes('deadline') ||
-    error.includes('cancelled') ||
-    error.includes('canceled') ||
-    error.includes('rate limit') ||
-    error.includes('429');
-
-  const looksLikeEvaluationMismatch =
-    error.includes('assert') ||
-    error.includes('expected') ||
-    error.includes('mismatch') ||
-    error.includes('validation') ||
-    error.includes('zod') ||
-    error.includes('schema');
-
-  const looksLikeGroundingGap =
-    responseText.includes("i couldn't find") ||
-    responseText.includes("i can't find") ||
-    responseText.includes('no relevant') ||
-    responseText.includes('no sources') ||
-    responseText.includes('not in the provided') ||
-    responseText.includes('not provided') ||
-    responseText.includes('no information') ||
-    responseText.includes('insufficient information');
-
-  // Heuristic ordering: pick the most actionable bucket first.
-  if (looksLikeTimeout) {
-    return 'Timeout / infra: retry run; check model latency + rate limits; consider lowering context or splitting prompt.';
-  }
-
-  if (looksLikeRefusal) {
-    return 'Refusal: tighten instructions + grounding; ensure allowed safe-completion; add required fields/checklist for hazard specifics.';
-  }
-
-  if (looksLikeGroundingGap) {
-    return 'Grounding gap: verify SDS/docs exist; adjust retrieval/source selection; expand query terms; ensure citations/sources are returned.';
-  }
-
-  if (looksLikeEvaluationMismatch) {
-    return 'Eval/expectation mismatch: inspect expected fields vs actual; update test expectations or adjust evaluator rules.';
-  }
-
-  if (row.response_payload) {
-    return 'Inspect payload: check tool output / retrieved sources; confirm response schema + required fields.';
-  }
-
-  return 'Open Item history + Run to inspect; determine if prompt, retrieval, or evaluator needs adjustment.';
-}
-
-function readSearchParam(value: string | string[] | undefined, fallback = '') {
-  if (Array.isArray(value)) {
-    return value[0] ?? fallback;
-  }
-  return value ?? fallback;
-}
 
 function buildFailureQueueHref(query: string, page: number) {
   const params = new URLSearchParams();
@@ -249,78 +163,80 @@ export default async function AdminFailureQueuePage({
             </span>
           </div>
 
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Test</TableHead>
-                <TableHead>Prompt</TableHead>
-                <TableHead>Latency</TableHead>
-                <TableHead>Error</TableHead>
-                <TableHead>Suggested resolution</TableHead>
-                <TableHead className="text-right">Links</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {!loadError && rows.length === 0 ? (
+          <div className="max-h-[min(72vh,52rem)] overflow-auto overscroll-contain rounded-xl border border-slate-100">
+            <table className="w-full caption-bottom text-sm">
+              <TableHeader className="sticky top-0 z-10 bg-white shadow-[0_1px_0_0_rgb(226,232,240)] [&_tr]:border-b-0">
                 <TableRow>
-                  <TableCell className="text-slate-500" colSpan={7}>
-                    No failed prompts match this search.
-                  </TableCell>
+                  <TableHead>Test</TableHead>
+                  <TableHead>Prompt</TableHead>
+                  <TableHead>Latency</TableHead>
+                  <TableHead>Error</TableHead>
+                  <TableHead>Suggested resolution</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
-              ) : null}
-              {rows.map((row) => (
-                <TableRow key={row.id}>
-                  <TableCell className="max-w-[180px] align-top">
-                    <Link
-                      className="font-medium text-sky-700 underline-offset-2 hover:underline"
-                      href={`/admin/tests/${row.test_id}`}
-                    >
-                      <span className="line-clamp-2">{row.test_name}</span>
-                    </Link>
-                  </TableCell>
-                  <TableCell className="max-w-md align-top text-sm text-slate-800">
-                    <div className="flex flex-col gap-1.5">
-                      <span className="line-clamp-3">{row.prompt}</span>
-                      {row.response_text?.trim() ? (
-                        <p className="line-clamp-4 text-xs leading-relaxed text-muted-foreground">
-                          {row.response_text}
-                        </p>
-                      ) : null}
-                    </div>
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap align-top text-sm text-slate-600">
-                    {formatDurationSeconds(row.elapsed_ms)}
-                  </TableCell>
-                  <TableCell className="max-w-xs align-top text-sm text-slate-600">
-                    <span className="line-clamp-3">
-                      {row.error_message || '—'}
-                    </span>
-                  </TableCell>
-                  <TableCell className="max-w-sm align-top text-sm text-slate-600">
-                    <span className="line-clamp-3">
-                      {suggestResolution(row)}
-                    </span>
-                  </TableCell>
-                  <TableCell className="text-right align-top">
-                    <div className="flex flex-col items-end gap-1 text-sm">
+              </TableHeader>
+              <TableBody>
+                {!loadError && rows.length === 0 ? (
+                  <TableRow>
+                    <TableCell className="text-slate-500" colSpan={7}>
+                      No failed prompts match this search.
+                    </TableCell>
+                  </TableRow>
+                ) : null}
+                {rows.map((row) => (
+                  <TableRow key={row.id}>
+                    <TableCell className="max-w-[180px] align-top">
                       <Link
-                        className="text-sky-700 underline-offset-2 hover:underline"
-                        href={`/admin/tests/${row.test_id}/items/${row.test_item_id}`}
+                        className="font-medium text-sky-700 underline-offset-2 hover:underline"
+                        href={`/admin/tests/${row.test_id}`}
                       >
-                        Item history
+                        <span className="line-clamp-2">{row.test_name}</span>
                       </Link>
-                      <Link
-                        className="text-sky-700 underline-offset-2 hover:underline"
-                        href={`/admin/tests/${row.test_id}/runs/${row.test_result_id}`}
-                      >
-                        Run
-                      </Link>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+                    </TableCell>
+                    <TableCell className="max-w-md align-top text-sm text-slate-800">
+                      <div className="flex flex-col gap-1.5">
+                        <span className="line-clamp-3">{row.prompt}</span>
+                        {row.response_text?.trim() ? (
+                          <p className="line-clamp-4 text-xs leading-relaxed text-muted-foreground">
+                            {row.response_text}
+                          </p>
+                        ) : null}
+                      </div>
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap align-top text-sm text-slate-600">
+                      {formatDurationSeconds(row.elapsed_ms)}
+                    </TableCell>
+                    <TableCell className="max-w-xs align-top text-sm text-slate-600">
+                      <span className="line-clamp-3">
+                        {row.error_message || '—'}
+                      </span>
+                    </TableCell>
+                    <TableCell className="max-w-sm align-top text-sm text-slate-600">
+                      <span className="line-clamp-3">
+                        {suggestResolution(row)}
+                      </span>
+                    </TableCell>
+                    <TableCell className="text-right align-top">
+                      <div className="flex flex-col items-end gap-1 text-sm">
+                        <Link
+                          className="text-sky-700 underline-offset-2 hover:underline"
+                          href={`/admin/tests/${row.test_id}/items/${row.test_item_id}`}
+                        >
+                          Item history
+                        </Link>
+                        <Link
+                          className="text-sky-700 underline-offset-2 hover:underline"
+                          href={`/admin/tests/${row.test_id}/runs/${row.test_result_id}`}
+                        >
+                          Run
+                        </Link>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </table>
+          </div>
 
           {!loadError && totalPages > 1 ? (
             <nav
