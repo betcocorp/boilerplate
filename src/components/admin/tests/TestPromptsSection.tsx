@@ -160,7 +160,8 @@ export function TestPromptsSection({
 
   /** Header checkbox state — based on currently visible (filtered) rows. */
   const visibleSelectedCount = useMemo(
-    () => filtered.reduce((sum, row) => sum + (selectedIds.has(row.id) ? 1 : 0), 0),
+    () =>
+      filtered.reduce((sum, row) => sum + (selectedIds.has(row.id) ? 1 : 0), 0),
     [filtered, selectedIds],
   );
   const allVisibleSelected =
@@ -337,16 +338,14 @@ export function TestPromptsSection({
                         : false
                   }
                   disabled={filtered.length === 0}
-                  onCheckedChange={(value) =>
-                    toggleAllVisible(value === true)
-                  }
+                  onCheckedChange={(value) => toggleAllVisible(value === true)}
                 />
               </TableHead>
               <TableHead>Row</TableHead>
               <TableHead>Prompt</TableHead>
               <TableHead>Expected</TableHead>
               <TableHead title="Number of recent runs that included this prompt (and the passed/failed counts).">
-                Pass/fail
+                Pass/Total
               </TableHead>
               <TableHead
                 className="whitespace-nowrap"
@@ -392,7 +391,10 @@ export function TestPromptsSection({
                 const stats = aggregationsByItemId[item.id];
                 const hasHistory = !!stats && stats.runCount > 0;
                 return (
-                  <TableRow key={item.id} data-state={isSelected ? 'selected' : undefined}>
+                  <TableRow
+                    key={item.id}
+                    data-state={isSelected ? 'selected' : undefined}
+                  >
                     <TableCell>
                       <Checkbox
                         aria-label={`Select prompt row ${item.row_index}`}
@@ -417,10 +419,7 @@ export function TestPromptsSection({
                     >
                       {hasHistory ? (
                         <span>
-                          {stats!.passCount}/{stats!.failCount}
-                          <span className="ml-1 text-xs text-slate-400">
-                            of {stats!.runCount}
-                          </span>
+                          {stats!.passCount}/{stats!.runCount}
                         </span>
                       ) : (
                         '—'

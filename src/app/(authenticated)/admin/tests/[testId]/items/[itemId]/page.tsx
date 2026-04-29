@@ -258,103 +258,89 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
             Historical outcomes ({historyRows.length})
           </h2>
           <div className="relative mt-4 max-h-[min(70vh,48rem)] overflow-auto overscroll-contain rounded-2xl border border-slate-200">
-          <table className="w-full min-w-[1200px] caption-bottom text-sm">
-            <TableHeader className="sticky top-0 z-10 bg-white shadow-[0_1px_0_0_rgb(226_232_240)] [&_tr]:border-b-0">
-              <TableRow>
-                <TableHead>Run</TableHead>
-                <TableHead>Passed</TableHead>
-                <TableHead
-                  className="whitespace-nowrap"
-                  title="Lowest per-source similarity recorded for this item run"
-                >
-                  Sim min
-                </TableHead>
-                <TableHead
-                  className="whitespace-nowrap"
-                  title="Highest per-source similarity recorded for this item run"
-                >
-                  Sim max
-                </TableHead>
-                <TableHead
-                  className="whitespace-nowrap"
-                  title="Average per-source similarity for this item run"
-                >
-                  Sim avg
-                </TableHead>
-                <TableHead
-                  className="whitespace-nowrap"
-                  title="Time spent in similarity search for this prompt"
-                >
-                  RAG search elapsed
-                </TableHead>
-                <TableHead
-                  className="whitespace-nowrap"
-                  title="Total wall-clock time the prompt took end-to-end"
-                >
-                  Total prompt elapsed
-                </TableHead>
-                <TableHead>Model</TableHead>
-                <TableHead>Message</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {historyRows.length === 0 ? (
+            <table className="w-full min-w-[1200px] caption-bottom text-sm">
+              <TableHeader className="sticky top-0 z-10 bg-white shadow-[0_1px_0_0_rgb(226_232_240)] [&_tr]:border-b-0">
                 <TableRow>
-                  <TableCell className="text-slate-500" colSpan={9}>
-                    This item has no completed results yet.
-                  </TableCell>
+                  <TableHead>Run</TableHead>
+                  <TableHead>Passed</TableHead>
+                  <TableHead
+                    className="whitespace-nowrap"
+                    title="Per-source similarity min / max / avg for this item run"
+                  >
+                    Sim min/max/avg
+                  </TableHead>
+                  <TableHead
+                    className="whitespace-nowrap"
+                    title="Total rag search time"
+                  >
+                    RAG
+                  </TableHead>
+                  <TableHead
+                    className="whitespace-nowrap"
+                    title="Total time prompt took end-to-end"
+                  >
+                    Prompt
+                  </TableHead>
+                  <TableHead>Model</TableHead>
+                  <TableHead>Message</TableHead>
                 </TableRow>
-              ) : (
-                historyRows.map(({ result, run }) => {
-                  const similarityStats = extractSimilarityStats(
-                    result.response_payload,
-                  );
-                  const ragSearchMs = extractRagSearchMs(result.response_payload);
-                  return (
-                    <TableRow key={result.id}>
-                      <TableCell className="font-mono text-xs">
-                        <Link
-                          className="text-sky-700 underline-offset-2 hover:underline"
-                          href={`/admin/tests/${test.id}/runs/${run.id}`}
-                        >
-                          {run.id}
-                        </Link>
-                      </TableCell>
-                      <TableCell>{result.passed ? 'yes' : 'no'}</TableCell>
-                      <TableCell className="whitespace-nowrap tabular-nums text-slate-700">
-                        {formatSimilarityValue(similarityStats?.min)}
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap tabular-nums text-slate-700">
-                        {formatSimilarityValue(similarityStats?.max)}
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap tabular-nums text-slate-700">
-                        {formatSimilarityValue(similarityStats?.avg)}
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap tabular-nums text-slate-700">
-                        {ragSearchMs === null
-                          ? 'n/a'
-                          : formatDurationSeconds(ragSearchMs)}
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap tabular-nums text-slate-700">
-                        {formatDurationSeconds(result.elapsed_ms)}
-                      </TableCell>
-                      <TableCell>
-                        {modelByWorkflowRunId.get(
-                          extractWorkflowRunId(result.response_payload) || '',
-                        ) || 'n/a'}
-                      </TableCell>
-                      <TableCell className="max-w-[520px] whitespace-normal text-xs text-slate-600">
-                        <ItemHistoryMessageCell
-                          errorMessage={result.error_message}
-                          responseText={result.response_text}
-                        />
-                      </TableCell>
-                    </TableRow>
-                  );
-                })
-              )}
-            </TableBody>
-          </table>
+              </TableHeader>
+              <TableBody>
+                {historyRows.length === 0 ? (
+                  <TableRow>
+                    <TableCell className="text-slate-500" colSpan={9}>
+                      This item has no completed results yet.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  historyRows.map(({ result, run }) => {
+                    const similarityStats = extractSimilarityStats(
+                      result.response_payload,
+                    );
+                    const ragSearchMs = extractRagSearchMs(
+                      result.response_payload,
+                    );
+                    return (
+                      <TableRow key={result.id}>
+                        <TableCell className="font-mono text-xs">
+                          <Link
+                            className="text-sky-700 underline-offset-2 hover:underline"
+                            href={`/admin/tests/${test.id}/runs/${run.id}`}
+                          >
+                            View run
+                          </Link>
+                        </TableCell>
+                        <TableCell>{result.passed ? 'yes' : 'no'}</TableCell>
+                        <TableCell className="whitespace-nowrap tabular-nums text-slate-700">
+                          {formatSimilarityValue(similarityStats?.min)}/
+                          {formatSimilarityValue(similarityStats?.max)}/
+                          {formatSimilarityValue(similarityStats?.avg)}
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap tabular-nums text-slate-700">
+                          {ragSearchMs === null
+                            ? 'n/a'
+                            : formatDurationSeconds(ragSearchMs)}
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap tabular-nums text-slate-700">
+                          {formatDurationSeconds(result.elapsed_ms)}
+                        </TableCell>
+                        <TableCell>
+                          {modelByWorkflowRunId.get(
+                            extractWorkflowRunId(result.response_payload) || '',
+                          ) || 'n/a'}
+                        </TableCell>
+                        <TableCell className="max-w-[520px] whitespace-normal text-xs text-slate-600">
+                          <ItemHistoryMessageCell
+                            errorMessage={result.error_message}
+                            responseText={result.response_text}
+                          />
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })
+                )}
+              </TableBody>
+            </table>
           </div>
         </section>
       </main>

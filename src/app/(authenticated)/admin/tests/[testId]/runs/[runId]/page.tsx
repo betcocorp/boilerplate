@@ -391,30 +391,31 @@ export default async function AdminTestRunDetailsPage({
     }),
   );
 
-  const itemLevelCsvRows = allResultItems.map((row) => ({
-    row_index: row.row_index,
-    prompt: promptByItemId.get(row.test_item_id) ?? '',
-    expected_should_answer: (() => {
-      const v = expectedShouldAnswerByItemId.get(row.test_item_id) ?? null;
-      if (v === null) {
-        return 'unset';
-      }
-      return v ? 'yes' : 'no';
-    })(),
-    passed: row.passed,
-    elapsed_seconds: Number((row.elapsed_ms / 1000).toFixed(3)),
-    status: row.status,
-    model:
-      modelByWorkflowRunId.get(
-        extractWorkflowRunId(row.response_payload) || '',
-      ) ?? 'n/a',
-    timing_breakdown: formatTimingBreakdownLabel(row.response_payload),
-    retrieved_chunks: formatRetrievedChunksForCsv(
-      extractRetrievedDocumentChunks(row.response_payload),
-    ),
-    message: row.error_message || row.response_text || 'n/a',
-    test_item_id: row.test_item_id,
-  }));
+  const itemLevelCsvRows = chronologicalItems.map((row) => {
+    const expectedRaw = expectedShouldAnswerByItemId.get(row.test_item_id);
+    const expectedForCell: boolean | null =
+      expectedRaw === undefined ? null : expectedRaw;
+
+    return {
+      row_index: row.row_index,
+      prompt: promptByItemId.get(row.test_item_id) ?? '',
+      expected_answer: formatExpectedShouldAnswerCell(expectedForCell),
+      passed: row.passed ? 'Yes' : 'No',
+      sim_conf: formatItemSimilarityConfidenceLabel(row.response_payload),
+      elapsed: formatDurationSeconds(row.elapsed_ms),
+      model:
+        modelByWorkflowRunId.get(
+          extractWorkflowRunId(row.response_payload) || '',
+        ) ?? 'n/a',
+      rounds_cache_search: formatTimingBreakdownLabel(row.response_payload),
+      message: row.error_message || row.response_text || 'n/a',
+      item_detail_path: `/admin/tests/${test.id}/items/${row.test_item_id}`,
+      retrieved_chunks: formatRetrievedChunksForCsv(
+        extractRetrievedDocumentChunks(row.response_payload),
+      ),
+      test_item_id: row.test_item_id,
+    };
+  });
 
   return (
     <div className="flex flex-1 bg-slate-50">
@@ -522,7 +523,7 @@ export default async function AdminTestRunDetailsPage({
             <TableBody>
               {displayResultItems.length === 0 ? (
                 <TableRow>
-                  <TableCell className="text-slate-500" colSpan={12}>
+                  <TableCell className="text-slate-500" colSpan={10}>
                     No item-level results yet.
                   </TableCell>
                 </TableRow>
