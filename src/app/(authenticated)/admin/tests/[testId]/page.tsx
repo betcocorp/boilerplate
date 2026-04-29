@@ -1,4 +1,4 @@
-import { TrendingDown, TrendingUp } from 'lucide-react';
+import { TrashIcon, TrendingDown, TrendingUp } from 'lucide-react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
@@ -371,7 +371,9 @@ export default async function AdminTestDetailsPage({
                         </TableCell>
                         <TableCell className="whitespace-nowrap">
                           <span className="inline-flex items-center gap-2">
-                            <span>{formatDurationSeconds(result.elapsed_ms)}</span>
+                            <span>
+                              {formatDurationSeconds(result.elapsed_ms)}
+                            </span>
                             <RunTrendIndicator
                               current={result.elapsed_ms}
                               formatDelta={formatElapsedDelta}
@@ -397,7 +399,7 @@ export default async function AdminTestDetailsPage({
                               <Link
                                 href={`/admin/tests/${test.id}/runs/${result.id}`}
                               >
-                                View run
+                                View
                               </Link>
                             </Button>
                             <form action={deleteTestRunAction}>
@@ -421,7 +423,7 @@ export default async function AdminTestDetailsPage({
                                 type="submit"
                                 variant="destructive"
                               >
-                                Delete run
+                                <TrashIcon />
                               </Button>
                             </form>
                           </div>
