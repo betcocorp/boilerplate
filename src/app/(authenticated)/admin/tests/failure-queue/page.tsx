@@ -13,7 +13,7 @@ import {
   TableRow,
 } from '~/components/ui/table';
 import { listLatestFailedTestResultItemsPage } from '~/lib/tests/repository';
-import { formatDate, formatDurationSeconds } from '~/lib/utils/time';
+import { formatDurationSeconds } from '~/lib/utils/time';
 
 export const metadata = {
   title: 'Failure Queue | Betco BEX',
@@ -41,14 +41,14 @@ function suggestResolution(row: {
 
   const looksLikeRefusal =
     responseText.includes("i can't") ||
-    responseText.includes("i cannot") ||
+    responseText.includes('i cannot') ||
     responseText.includes('unable to') ||
     responseText.includes("can't verify") ||
     responseText.includes('cannot verify') ||
     responseText.includes("don't have access") ||
     responseText.includes("i don't have access") ||
     responseText.includes("i don't know") ||
-    responseText.includes("i can’t") ||
+    responseText.includes('i can’t') ||
     responseText.includes('cannot provide') ||
     responseText.includes("can't provide") ||
     responseText.includes('i am not able to') ||
@@ -127,7 +127,9 @@ function buildFailureQueueHref(query: string, page: number) {
   return qs ? `${ROUTE}?${qs}` : ROUTE;
 }
 
-export default async function AdminFailureQueuePage({ searchParams }: PageProps) {
+export default async function AdminFailureQueuePage({
+  searchParams,
+}: PageProps) {
   await connection();
   const params = await searchParams;
   const query = readSearchParam(params.q);
@@ -136,7 +138,9 @@ export default async function AdminFailureQueuePage({ searchParams }: PageProps)
     Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : 1;
 
   let loadError: string | null = null;
-  let rows: Awaited<ReturnType<typeof listLatestFailedTestResultItemsPage>>['rows'] = [];
+  let rows: Awaited<
+    ReturnType<typeof listLatestFailedTestResultItemsPage>
+  >['rows'] = [];
   let total = 0;
 
   try {
@@ -167,8 +171,14 @@ export default async function AdminFailureQueuePage({ searchParams }: PageProps)
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const safeCurrentPage = Math.min(currentPage, totalPages);
-  const paginationStart = Math.max(1, safeCurrentPage - Math.floor(PAGE_LINK_WINDOW / 2));
-  const paginationEnd = Math.min(totalPages, paginationStart + PAGE_LINK_WINDOW - 1);
+  const paginationStart = Math.max(
+    1,
+    safeCurrentPage - Math.floor(PAGE_LINK_WINDOW / 2),
+  );
+  const paginationEnd = Math.min(
+    totalPages,
+    paginationStart + PAGE_LINK_WINDOW - 1,
+  );
   const adjustedStart = Math.max(1, paginationEnd - PAGE_LINK_WINDOW + 1);
   const paginationPages = Array.from(
     { length: Math.max(0, paginationEnd - adjustedStart + 1) },
@@ -186,15 +196,23 @@ export default async function AdminFailureQueuePage({ searchParams }: PageProps)
             Failure queue
           </h1>
           <p className="mt-4 max-w-3xl text-base leading-7 text-slate-600">
-            Each row is the most recent failing result for a prompt. Re-running the same test set
-            does not duplicate prompts here; only the latest failure is shown.
+            Each row is the most recent failing result for a prompt. Re-running
+            the same test set does not duplicate prompts here; only the latest
+            failure is shown.
           </p>
         </section>
 
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-          <form action={ROUTE} className="flex flex-col gap-4 sm:flex-row sm:items-end" method="get">
+          <form
+            action={ROUTE}
+            className="flex flex-col gap-4 sm:flex-row sm:items-end"
+            method="get"
+          >
             <div className="flex min-w-0 flex-1 flex-col gap-2">
-              <Label className="text-sm text-slate-700" htmlFor="failure-queue-search">
+              <Label
+                className="text-sm text-slate-700"
+                htmlFor="failure-queue-search"
+              >
                 Search
               </Label>
               <Input
@@ -236,7 +254,6 @@ export default async function AdminFailureQueuePage({ searchParams }: PageProps)
               <TableRow>
                 <TableHead>Test</TableHead>
                 <TableHead>Prompt</TableHead>
-                <TableHead>Failed at</TableHead>
                 <TableHead>Latency</TableHead>
                 <TableHead>Error</TableHead>
                 <TableHead>Suggested resolution</TableHead>
@@ -272,16 +289,17 @@ export default async function AdminFailureQueuePage({ searchParams }: PageProps)
                     </div>
                   </TableCell>
                   <TableCell className="whitespace-nowrap align-top text-sm text-slate-600">
-                    {formatDate(row.created_at)}
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap align-top text-sm text-slate-600">
                     {formatDurationSeconds(row.elapsed_ms)}
                   </TableCell>
                   <TableCell className="max-w-xs align-top text-sm text-slate-600">
-                    <span className="line-clamp-3">{row.error_message || '—'}</span>
+                    <span className="line-clamp-3">
+                      {row.error_message || '—'}
+                    </span>
                   </TableCell>
                   <TableCell className="max-w-sm align-top text-sm text-slate-600">
-                    <span className="line-clamp-3">{suggestResolution(row)}</span>
+                    <span className="line-clamp-3">
+                      {suggestResolution(row)}
+                    </span>
                   </TableCell>
                   <TableCell className="text-right align-top">
                     <div className="flex flex-col items-end gap-1 text-sm">
@@ -315,7 +333,10 @@ export default async function AdminFailureQueuePage({ searchParams }: PageProps)
                     ? 'pointer-events-none bg-slate-100 text-slate-400'
                     : 'bg-white text-slate-700 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50'
                 }`}
-                href={buildFailureQueueHref(query, Math.max(1, safeCurrentPage - 1))}
+                href={buildFailureQueueHref(
+                  query,
+                  Math.max(1, safeCurrentPage - 1),
+                )}
               >
                 Previous
               </Link>
