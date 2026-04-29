@@ -1,10 +1,14 @@
 'use client';
 
 import { Download } from 'lucide-react';
+import Link from 'next/link';
 import { useCallback, useMemo, useState } from 'react';
 
+import { CreateTestFromPromptsDialog } from '~/components/admin/tests/CreateTestFromPromptsDialog';
 import { DeleteTestPromptDialog } from '~/components/admin/tests/DeleteTestPromptDialog';
+import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
+import { Checkbox } from '~/components/ui/checkbox';
 import { Input } from '~/components/ui/input';
 import {
   TableBody,
@@ -13,6 +17,7 @@ import {
   TableHeader,
   TableRow,
 } from '~/components/ui/table';
+import { formatDurationSeconds } from '~/lib/utils/time';
 import type { Json } from '~/types/supabase.public';
 
 export type TestPromptRow = {
@@ -24,6 +29,20 @@ export type TestPromptRow = {
   expected_canonical_product: string | null;
   expected_reason_code: string | null;
   input_payload: Json;
+};
+
+/** Aggregated history for a single `test_item` across the recent runs surfaced on this page. */
+export type TestPromptAggregation = {
+  runCount: number;
+  passCount: number;
+  failCount: number;
+  passRatePercent: number | null;
+  avgSimilarity: number | null;
+  avgElapsedMs: number | null;
+  latestRun: {
+    runId: string;
+    passed: boolean;
+  } | null;
 };
 
 function escapeCsvCell(value: string): string {
@@ -96,15 +115,40 @@ type TestPromptsSectionProps = {
   testId: string;
   /** Used for the downloaded CSV filename. */
   datasetName: string;
+  /** Per-prompt aggregation keyed by `test_item.id`. Items without history are simply absent. */
+  aggregationsByItemId: Record<string, TestPromptAggregation>;
+  /** Total number of recent runs the aggregations were computed over (drives column tooltips). */
+  aggregatedRunCount: number;
 };
+
+function formatPercent(value: number | null | undefined): string {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? `${value.toFixed(1)}%`
+    : '—';
+}
+
+function formatSimilarityPercent(value: number | null | undefined): string {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? `${(value * 100).toFixed(1)}%`
+    : '—';
+}
+
+function formatElapsed(value: number | null | undefined): string {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? formatDurationSeconds(value)
+    : '—';
+}
 
 export function TestPromptsSection({
   items,
   returnPath,
   testId,
   datasetName,
+  aggregationsByItemId,
+  aggregatedRunCount,
 }: TestPromptsSectionProps) {
   const [query, setQuery] = useState('');
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
 
   const filtered = useMemo(
     () => items.filter((item) => rowMatchesQuery(item, query)),
@@ -113,6 +157,58 @@ export function TestPromptsSection({
 
   const total = items.length;
   const showing = filtered.length;
+
+  /** Header checkbox state — based on currently visible (filtered) rows. */
+  const visibleSelectedCount = useMemo(
+    () => filtered.reduce((sum, row) => sum + (selectedIds.has(row.id) ? 1 : 0), 0),
+    [filtered, selectedIds],
+  );
+  const allVisibleSelected =
+    filtered.length > 0 && visibleSelectedCount === filtered.length;
+  const someVisibleSelected =
+    visibleSelectedCount > 0 && visibleSelectedCount < filtered.length;
+
+  const orderedSelectedIds = useMemo(
+    () =>
+      [...items]
+        .sort((a, b) => a.row_index - b.row_index)
+        .filter((item) => selectedIds.has(item.id))
+        .map((item) => item.id),
+    [items, selectedIds],
+  );
+
+  const toggleRow = useCallback((id: string, checked: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) {
+        next.add(id);
+      } else {
+        next.delete(id);
+      }
+      return next;
+    });
+  }, []);
+
+  const toggleAllVisible = useCallback(
+    (checked: boolean) => {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        for (const row of filtered) {
+          if (checked) {
+            next.add(row.id);
+          } else {
+            next.delete(row.id);
+          }
+        }
+        return next;
+      });
+    },
+    [filtered],
+  );
+
+  const clearSelection = useCallback(() => {
+    setSelectedIds(new Set());
+  }, []);
 
   const downloadCsv = useCallback(() => {
     if (items.length === 0) {
@@ -172,8 +268,20 @@ export function TestPromptsSection({
               Showing {showing} of {total} matching &ldquo;{query.trim()}&rdquo;
             </p>
           ) : null}
+          {selectedIds.size > 0 ? (
+            <p className="mt-1 text-sm text-slate-500">
+              {selectedIds.size} selected ·{' '}
+              <button
+                className="text-sky-700 underline-offset-2 hover:underline"
+                onClick={clearSelection}
+                type="button"
+              >
+                Clear selection
+              </button>
+            </p>
+          ) : null}
         </div>
-        <div className="flex w-full items-center gap-2 lg:max-w-xl lg:flex-[0_1_36rem]">
+        <div className="flex w-full items-center gap-2 lg:max-w-2xl lg:flex-[0_1_44rem]">
           <Input
             autoComplete="off"
             className="min-w-0 flex-1 rounded-2xl"
@@ -182,6 +290,12 @@ export function TestPromptsSection({
             placeholder="Filter by prompt text, row number, or expected…"
             type="search"
             value={query}
+          />
+          <CreateTestFromPromptsDialog
+            returnPath={returnPath}
+            selectedTestItemIds={orderedSelectedIds}
+            sourceTestId={testId}
+            sourceTestName={datasetName}
           />
           <Button
             aria-label="Download all test prompts as CSV"
@@ -197,13 +311,67 @@ export function TestPromptsSection({
         </div>
       </div>
 
+      {aggregatedRunCount > 0 ? (
+        <p className="mt-2 text-xs text-slate-500">
+          Historical metrics aggregate up to the last {aggregatedRunCount} run
+          {aggregatedRunCount === 1 ? '' : 's'} for this dataset.
+        </p>
+      ) : null}
+
       <div className="relative mt-4 max-h-[min(48vh,32rem)] overflow-auto overscroll-contain rounded-2xl border border-slate-200">
-        <table className="w-full min-w-[56rem] caption-bottom text-sm">
+        <table className="w-full min-w-6xl caption-bottom text-sm">
           <TableHeader className="sticky top-0 z-10 bg-white shadow-[0_1px_0_0_rgb(226_232_240)] [&_tr]:border-b-0">
             <TableRow>
+              <TableHead className="w-[1%] whitespace-nowrap">
+                <Checkbox
+                  aria-label={
+                    allVisibleSelected
+                      ? 'Deselect all visible prompts'
+                      : 'Select all visible prompts'
+                  }
+                  checked={
+                    allVisibleSelected
+                      ? true
+                      : someVisibleSelected
+                        ? 'indeterminate'
+                        : false
+                  }
+                  disabled={filtered.length === 0}
+                  onCheckedChange={(value) =>
+                    toggleAllVisible(value === true)
+                  }
+                />
+              </TableHead>
               <TableHead>Row</TableHead>
               <TableHead>Prompt</TableHead>
               <TableHead>Expected</TableHead>
+              <TableHead title="Number of recent runs that included this prompt (and the passed/failed counts).">
+                Pass/fail
+              </TableHead>
+              <TableHead
+                className="whitespace-nowrap"
+                title="Share of recent runs in which this prompt passed."
+              >
+                Pass %
+              </TableHead>
+              <TableHead
+                className="whitespace-nowrap"
+                title="Average of the max per-source retrieval similarity across recent runs (same basis as the trend chart)."
+              >
+                Sim avg
+              </TableHead>
+              <TableHead
+                className="whitespace-nowrap"
+                title="Mean wall-clock prompt elapsed time across recent runs."
+              >
+                Avg elapsed
+              </TableHead>
+              <TableHead
+                className="whitespace-nowrap"
+                title="Pass/fail outcome from the most recent run that included this prompt."
+              >
+                Last run
+              </TableHead>
               <TableHead className="w-[1%] whitespace-nowrap">
                 Actions
               </TableHead>
@@ -212,31 +380,97 @@ export function TestPromptsSection({
           <TableBody>
             {filtered.length === 0 ? (
               <TableRow>
-                <TableCell className="text-slate-500" colSpan={4}>
+                <TableCell className="text-slate-500" colSpan={10}>
                   {total === 0
                     ? 'No prompts in this dataset yet.'
                     : 'No prompts match your search.'}
                 </TableCell>
               </TableRow>
             ) : (
-              filtered.map((item) => (
-                <TableRow key={item.id}>
-                  <TableCell>{item.row_index}</TableCell>
-                  <TableCell className="max-w-[480px] whitespace-normal">
-                    {item.prompt}
-                  </TableCell>
-                  <TableCell>{expectedSummary(item)}</TableCell>
-                  <TableCell>
-                    <DeleteTestPromptDialog
-                      promptPreview={item.prompt}
-                      returnPath={returnPath}
-                      rowIndex={item.row_index}
-                      testId={testId}
-                      testItemId={item.id}
-                    />
-                  </TableCell>
-                </TableRow>
-              ))
+              filtered.map((item) => {
+                const isSelected = selectedIds.has(item.id);
+                const stats = aggregationsByItemId[item.id];
+                const hasHistory = !!stats && stats.runCount > 0;
+                return (
+                  <TableRow key={item.id} data-state={isSelected ? 'selected' : undefined}>
+                    <TableCell>
+                      <Checkbox
+                        aria-label={`Select prompt row ${item.row_index}`}
+                        checked={isSelected}
+                        onCheckedChange={(value) =>
+                          toggleRow(item.id, value === true)
+                        }
+                      />
+                    </TableCell>
+                    <TableCell>{item.row_index}</TableCell>
+                    <TableCell className="max-w-[420px] whitespace-normal">
+                      {item.prompt}
+                    </TableCell>
+                    <TableCell>{expectedSummary(item)}</TableCell>
+                    <TableCell
+                      className="whitespace-nowrap tabular-nums text-slate-700"
+                      title={
+                        hasHistory
+                          ? `${stats!.runCount} run${stats!.runCount === 1 ? '' : 's'} aggregated`
+                          : 'No historical runs yet for this prompt.'
+                      }
+                    >
+                      {hasHistory ? (
+                        <span>
+                          {stats!.passCount}/{stats!.failCount}
+                          <span className="ml-1 text-xs text-slate-400">
+                            of {stats!.runCount}
+                          </span>
+                        </span>
+                      ) : (
+                        '—'
+                      )}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap tabular-nums text-slate-700">
+                      {formatPercent(stats?.passRatePercent ?? null)}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap tabular-nums text-slate-700">
+                      {formatSimilarityPercent(stats?.avgSimilarity ?? null)}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap tabular-nums text-slate-700">
+                      {formatElapsed(stats?.avgElapsedMs ?? null)}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap">
+                      {stats?.latestRun ? (
+                        <Link
+                          className="inline-block"
+                          href={`/admin/tests/${testId}/runs/${stats.latestRun.runId}#item-level-results`}
+                          title={`View run ${stats.latestRun.runId}`}
+                        >
+                          <Badge
+                            className={
+                              stats.latestRun.passed
+                                ? 'border-emerald-600/45 bg-emerald-600/12 text-emerald-900 hover:bg-emerald-600/20 dark:border-emerald-500/40 dark:bg-emerald-500/15 dark:text-emerald-50'
+                                : undefined
+                            }
+                            variant={
+                              stats.latestRun.passed ? 'outline' : 'destructive'
+                            }
+                          >
+                            {stats.latestRun.passed ? 'Pass' : 'Fail'}
+                          </Badge>
+                        </Link>
+                      ) : (
+                        <span className="text-slate-400">—</span>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <DeleteTestPromptDialog
+                        promptPreview={item.prompt}
+                        returnPath={returnPath}
+                        rowIndex={item.row_index}
+                        testId={testId}
+                        testItemId={item.id}
+                      />
+                    </TableCell>
+                  </TableRow>
+                );
+              })
             )}
           </TableBody>
         </table>

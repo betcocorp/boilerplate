@@ -4,7 +4,6 @@ import { connection } from 'next/server';
 
 import { Button } from '~/components/ui/button';
 import {
-  Table,
   TableBody,
   TableCell,
   TableHead,
@@ -50,6 +49,75 @@ function extractModelTag(userInput: unknown) {
 
   const candidate = (userInput as Record<string, unknown>).modelTag;
   return typeof candidate === 'string' ? candidate : undefined;
+}
+
+/**
+ * Pulls every per-source `similarity` value off the response payload's `sources`
+ * array and reduces it to {min, max, avg}. Returns null when nothing usable was
+ * recorded (e.g. early-decline runs or older payload shapes).
+ */
+function extractSimilarityStats(
+  responsePayload: unknown,
+): { min: number; max: number; avg: number } | null {
+  if (
+    !responsePayload ||
+    typeof responsePayload !== 'object' ||
+    Array.isArray(responsePayload)
+  ) {
+    return null;
+  }
+
+  const sources = (responsePayload as Record<string, unknown>).sources;
+  if (!Array.isArray(sources)) {
+    return null;
+  }
+
+  const similarities = sources
+    .map((source) => {
+      if (!source || typeof source !== 'object' || Array.isArray(source)) {
+        return null;
+      }
+      const value = (source as Record<string, unknown>).similarity;
+      return typeof value === 'number' && Number.isFinite(value) ? value : null;
+    })
+    .filter((value): value is number => typeof value === 'number');
+
+  if (similarities.length === 0) {
+    return null;
+  }
+
+  const min = Math.min(...similarities);
+  const max = Math.max(...similarities);
+  const avg =
+    similarities.reduce((sum, value) => sum + value, 0) / similarities.length;
+  return { min, max, avg };
+}
+
+/** Pulls `timingBreakdown.searchMs` if recorded. */
+function extractRagSearchMs(responsePayload: unknown): number | null {
+  if (
+    !responsePayload ||
+    typeof responsePayload !== 'object' ||
+    Array.isArray(responsePayload)
+  ) {
+    return null;
+  }
+
+  const timing = (responsePayload as Record<string, unknown>).timingBreakdown;
+  if (!timing || typeof timing !== 'object' || Array.isArray(timing)) {
+    return null;
+  }
+
+  const searchMs = (timing as Record<string, unknown>).searchMs;
+  return typeof searchMs === 'number' && Number.isFinite(searchMs)
+    ? searchMs
+    : null;
+}
+
+function formatSimilarityValue(value: number | null | undefined): string {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? `${(value * 100).toFixed(1)}%`
+    : 'n/a';
 }
 
 function formatExpectedShouldAnswerLabel(value: boolean | null): string {
@@ -187,12 +255,42 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
           <h2 className="text-lg font-semibold text-slate-900">
             Historical outcomes ({historyRows.length})
           </h2>
-          <Table>
-            <TableHeader>
+          <div className="relative mt-4 max-h-[min(70vh,48rem)] overflow-auto overscroll-contain rounded-2xl border border-slate-200">
+          <table className="w-full min-w-[1200px] caption-bottom text-sm">
+            <TableHeader className="sticky top-0 z-10 bg-white shadow-[0_1px_0_0_rgb(226_232_240)] [&_tr]:border-b-0">
               <TableRow>
                 <TableHead>Run id</TableHead>
                 <TableHead>Passed</TableHead>
-                <TableHead>Elapsed</TableHead>
+                <TableHead
+                  className="whitespace-nowrap"
+                  title="Lowest per-source similarity recorded for this item run"
+                >
+                  Sim min
+                </TableHead>
+                <TableHead
+                  className="whitespace-nowrap"
+                  title="Highest per-source similarity recorded for this item run"
+                >
+                  Sim max
+                </TableHead>
+                <TableHead
+                  className="whitespace-nowrap"
+                  title="Average per-source similarity for this item run"
+                >
+                  Sim avg
+                </TableHead>
+                <TableHead
+                  className="whitespace-nowrap"
+                  title="Time spent in similarity search for this prompt"
+                >
+                  RAG search elapsed
+                </TableHead>
+                <TableHead
+                  className="whitespace-nowrap"
+                  title="Total wall-clock time the prompt took end-to-end"
+                >
+                  Total prompt elapsed
+                </TableHead>
                 <TableHead>Model</TableHead>
                 <TableHead>Message</TableHead>
               </TableRow>
@@ -200,41 +298,62 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
             <TableBody>
               {historyRows.length === 0 ? (
                 <TableRow>
-                  <TableCell className="text-slate-500" colSpan={5}>
+                  <TableCell className="text-slate-500" colSpan={9}>
                     This item has no completed results yet.
                   </TableCell>
                 </TableRow>
               ) : (
-                historyRows.map(({ result, run }) => (
-                  <TableRow key={result.id}>
-                    <TableCell className="font-mono text-xs">
-                      <Link
-                        className="text-sky-700 underline-offset-2 hover:underline"
-                        href={`/admin/tests/${test.id}/runs/${run.id}`}
-                      >
-                        {run.id}
-                      </Link>
-                    </TableCell>
-                    <TableCell>{result.passed ? 'yes' : 'no'}</TableCell>
-                    <TableCell>
-                      {formatDurationSeconds(result.elapsed_ms)}
-                    </TableCell>
-                    <TableCell>
-                      {modelByWorkflowRunId.get(
-                        extractWorkflowRunId(result.response_payload) || '',
-                      ) || 'n/a'}
-                    </TableCell>
-                    <TableCell className="max-w-[520px] whitespace-normal text-xs text-slate-600">
-                      <ItemHistoryMessageCell
-                        errorMessage={result.error_message}
-                        responseText={result.response_text}
-                      />
-                    </TableCell>
-                  </TableRow>
-                ))
+                historyRows.map(({ result, run }) => {
+                  const similarityStats = extractSimilarityStats(
+                    result.response_payload,
+                  );
+                  const ragSearchMs = extractRagSearchMs(result.response_payload);
+                  return (
+                    <TableRow key={result.id}>
+                      <TableCell className="font-mono text-xs">
+                        <Link
+                          className="text-sky-700 underline-offset-2 hover:underline"
+                          href={`/admin/tests/${test.id}/runs/${run.id}`}
+                        >
+                          {run.id}
+                        </Link>
+                      </TableCell>
+                      <TableCell>{result.passed ? 'yes' : 'no'}</TableCell>
+                      <TableCell className="whitespace-nowrap tabular-nums text-slate-700">
+                        {formatSimilarityValue(similarityStats?.min)}
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap tabular-nums text-slate-700">
+                        {formatSimilarityValue(similarityStats?.max)}
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap tabular-nums text-slate-700">
+                        {formatSimilarityValue(similarityStats?.avg)}
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap tabular-nums text-slate-700">
+                        {ragSearchMs === null
+                          ? 'n/a'
+                          : formatDurationSeconds(ragSearchMs)}
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap tabular-nums text-slate-700">
+                        {formatDurationSeconds(result.elapsed_ms)}
+                      </TableCell>
+                      <TableCell>
+                        {modelByWorkflowRunId.get(
+                          extractWorkflowRunId(result.response_payload) || '',
+                        ) || 'n/a'}
+                      </TableCell>
+                      <TableCell className="max-w-[520px] whitespace-normal text-xs text-slate-600">
+                        <ItemHistoryMessageCell
+                          errorMessage={result.error_message}
+                          responseText={result.response_text}
+                        />
+                      </TableCell>
+                    </TableRow>
+                  );
+                })
               )}
             </TableBody>
-          </Table>
+          </table>
+          </div>
         </section>
       </main>
     </div>

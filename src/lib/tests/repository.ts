@@ -431,6 +431,39 @@ export async function listResultItemsByResultId(testResultId: string, limit = 20
   return (assertNoError(result) || []) as TestResultItemRecord[];
 }
 
+/**
+ * Single-query fetch of every `test_result_items` row across multiple runs.
+ * Used to build per-prompt aggregations on the dataset detail page (avoids
+ * issuing one query per run).
+ */
+export async function listAllResultItemsByResultIds(testResultIds: string[]) {
+  if (testResultIds.length === 0) {
+    return [] as TestResultItemRecord[];
+  }
+
+  const supabase = getSupabaseServiceRoleClient();
+  const all: TestResultItemRecord[] = [];
+  let from = 0;
+
+  while (true) {
+    const result = await supabase
+      .from('test_result_items')
+      .select('*')
+      .in('test_result_id', testResultIds)
+      .order('created_at', { ascending: true })
+      .range(from, from + RESULT_ITEMS_PAGE_SIZE - 1);
+
+    const page = (assertNoError(result) || []) as TestResultItemRecord[];
+    all.push(...page);
+    if (page.length < RESULT_ITEMS_PAGE_SIZE) {
+      break;
+    }
+    from += RESULT_ITEMS_PAGE_SIZE;
+  }
+
+  return all;
+}
+
 /** All rows for a run (Supabase default `max_rows` requires pagination beyond ~1000). */
 export async function listAllResultItemsByResultId(testResultId: string) {
   const supabase = getSupabaseServiceRoleClient();

@@ -15,7 +15,6 @@ import {
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
 import {
-  Table,
   TableBody,
   TableCell,
   TableHead,
@@ -441,6 +440,10 @@ export default async function AdminTestRunDetailsPage({
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
+                <Button asChild size="sm" variant="outline">
+                  <Link href={`/admin/tests/${test.id}`}>Back to test</Link>
+                </Button>
+                <TestRunNotesToolbarButton />
                 <form action={deleteTestRunAction}>
                   <input
                     name="returnPath"
@@ -453,13 +456,6 @@ export default async function AdminTestRunDetailsPage({
                     Delete run
                   </Button>
                 </form>
-                <TestRunNotesToolbarButton />
-                <Button asChild size="sm" variant="outline">
-                  <Link href={`/admin/tests/${test.id}`}>Back to dataset</Link>
-                </Button>
-                <Button asChild size="sm" variant="outline">
-                  <Link href="/admin/tests">Back to tests</Link>
-                </Button>
               </div>
             </div>
           </section>
@@ -504,8 +500,9 @@ export default async function AdminTestRunDetailsPage({
               rows={itemLevelCsvRows}
             />
           </div>
-          <Table>
-            <TableHeader>
+          <div className="relative max-h-[min(70vh,48rem)] overflow-auto overscroll-contain rounded-2xl border border-slate-200">
+          <table className="w-full min-w-[1280px] caption-bottom text-sm">
+            <TableHeader className="sticky top-0 z-10 bg-white shadow-[0_1px_0_0_rgb(226_232_240)] [&_tr]:border-b-0">
               <TableRow>
                 <TableHead>Row</TableHead>
                 <TableHead>Prompt</TableHead>
@@ -534,104 +531,107 @@ export default async function AdminTestRunDetailsPage({
                   const expectedShouldAnswer =
                     expectedShouldAnswerByItemId.get(row.test_item_id) ?? null;
                   return (
-                  <TableRow id={`run-item-result-${row.id}`} key={row.id}>
-                    <TableCell>
-                      <Link
-                        className="text-sky-700 underline-offset-2 hover:underline"
-                        href={`/admin/tests/${test.id}/items/${row.test_item_id}`}
-                      >
-                        {row.row_index}
-                      </Link>
-                    </TableCell>
-                    <TableCell className="max-w-[420px] whitespace-normal text-xs text-slate-700">
-                      <Link
-                        className="text-sky-700 underline-offset-2 hover:underline"
-                        href={`/admin/tests/${test.id}/items/${row.test_item_id}`}
-                      >
-                        {promptByItemId.get(row.test_item_id) || 'n/a'}
-                      </Link>
-                    </TableCell>
-                    <TableCell className="whitespace-nowrap">
-                      <Badge
-                        className={
-                          expectedShouldAnswer === true
-                            ? 'border-emerald-600/45 bg-emerald-600/12 text-emerald-900 dark:border-emerald-500/40 dark:bg-emerald-500/15 dark:text-emerald-50'
-                            : undefined
-                        }
-                        variant={
-                          expectedShouldAnswer === null
-                            ? 'secondary'
-                            : expectedShouldAnswer === true
-                              ? 'outline'
-                              : 'destructive'
-                        }
-                      >
-                        {formatExpectedShouldAnswerCell(expectedShouldAnswer)}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <Badge
-                        className={
-                          row.passed
-                            ? 'border-emerald-600/45 bg-emerald-600/12 text-emerald-900 dark:border-emerald-500/40 dark:bg-emerald-500/15 dark:text-emerald-50'
-                            : undefined
-                        }
-                        variant={row.passed ? 'outline' : 'destructive'}
-                      >
-                        {row.passed ? 'Yes' : 'No'}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="whitespace-nowrap font-mono text-xs text-slate-700">
-                      <Badge variant="outline">
-                        {formatItemSimilarityConfidenceLabel(
-                          row.response_payload,
-                        )}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <Badge
-                        variant={
-                          row.elapsed_ms > 10_000 ? 'destructive' : 'secondary'
-                        }
-                      >
-                        {formatDurationSeconds(row.elapsed_ms)}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="outline">
-                        {modelByWorkflowRunId.get(
-                          extractWorkflowRunId(row.response_payload) || '',
-                        ) || 'n/a'}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="max-w-[220px] whitespace-normal text-xs text-slate-600">
-                      {formatTimingBreakdownLabel(row.response_payload)}
-                    </TableCell>
-                    <TableCell className="min-w-0 max-w-[min(280px,100%)] align-top">
-                      <RetrievedChunksPreview
-                        chunks={extractRetrievedDocumentChunks(
-                          row.response_payload,
-                        )}
-                      />
-                    </TableCell>
-                    <TableCell className="max-w-[420px] whitespace-normal text-xs text-slate-600 line-clamp-2">
-                      {row.error_message || row.response_text || 'n/a'}
-                    </TableCell>
-                    <TableCell>
-                      <Button asChild size="sm" variant="outline">
+                    <TableRow id={`run-item-result-${row.id}`} key={row.id}>
+                      <TableCell>
                         <Link
+                          className="text-sky-700 underline-offset-2 hover:underline"
                           href={`/admin/tests/${test.id}/items/${row.test_item_id}`}
                         >
-                          View
+                          {row.row_index}
                         </Link>
-                      </Button>
-                    </TableCell>
-                  </TableRow>
+                      </TableCell>
+                      <TableCell className="max-w-[420px] whitespace-normal text-xs text-slate-700">
+                        <Link
+                          className="text-sky-700 underline-offset-2 hover:underline"
+                          href={`/admin/tests/${test.id}/items/${row.test_item_id}`}
+                        >
+                          {promptByItemId.get(row.test_item_id) || 'n/a'}
+                        </Link>
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap">
+                        <Badge
+                          className={
+                            expectedShouldAnswer === true
+                              ? 'border-emerald-600/45 bg-emerald-600/12 text-emerald-900 dark:border-emerald-500/40 dark:bg-emerald-500/15 dark:text-emerald-50'
+                              : undefined
+                          }
+                          variant={
+                            expectedShouldAnswer === null
+                              ? 'secondary'
+                              : expectedShouldAnswer === true
+                                ? 'outline'
+                                : 'destructive'
+                          }
+                        >
+                          {formatExpectedShouldAnswerCell(expectedShouldAnswer)}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Badge
+                          className={
+                            row.passed
+                              ? 'border-emerald-600/45 bg-emerald-600/12 text-emerald-900 dark:border-emerald-500/40 dark:bg-emerald-500/15 dark:text-emerald-50'
+                              : undefined
+                          }
+                          variant={row.passed ? 'outline' : 'destructive'}
+                        >
+                          {row.passed ? 'Yes' : 'No'}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap font-mono text-xs text-slate-700">
+                        <Badge variant="outline">
+                          {formatItemSimilarityConfidenceLabel(
+                            row.response_payload,
+                          )}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Badge
+                          variant={
+                            row.elapsed_ms > 10_000
+                              ? 'destructive'
+                              : 'secondary'
+                          }
+                        >
+                          {formatDurationSeconds(row.elapsed_ms)}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline">
+                          {modelByWorkflowRunId.get(
+                            extractWorkflowRunId(row.response_payload) || '',
+                          ) || 'n/a'}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="max-w-[220px] whitespace-normal text-xs text-slate-600">
+                        {formatTimingBreakdownLabel(row.response_payload)}
+                      </TableCell>
+                      <TableCell className="min-w-0 max-w-[min(280px,100%)] align-top">
+                        <RetrievedChunksPreview
+                          chunks={extractRetrievedDocumentChunks(
+                            row.response_payload,
+                          )}
+                        />
+                      </TableCell>
+                      <TableCell className="max-w-[420px] whitespace-normal text-xs text-slate-600 line-clamp-2">
+                        {row.error_message || row.response_text || 'n/a'}
+                      </TableCell>
+                      <TableCell>
+                        <Button asChild size="sm" variant="outline">
+                          <Link
+                            href={`/admin/tests/${test.id}/items/${row.test_item_id}`}
+                          >
+                            View
+                          </Link>
+                        </Button>
+                      </TableCell>
+                    </TableRow>
                   );
                 })
               )}
             </TableBody>
-          </Table>
+          </table>
+          </div>
           <p className="mt-3 text-xs text-slate-500">
             Showing {Math.min(200, allResultItems.length)} of{' '}
             {allResultItems.length} item-level results from{' '}

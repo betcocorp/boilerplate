@@ -329,6 +329,131 @@ export async function runTestAction(formData: FormData) {
   );
 }
 
+export async function createTestFromPromptsAction(formData: FormData) {
+  const sourceTestIdRaw = formData.get('sourceTestId');
+  const sourceTestId =
+    typeof sourceTestIdRaw === 'string' && sourceTestIdRaw.trim()
+      ? sourceTestIdRaw.trim()
+      : null;
+  const sourceReturnPath = sourceTestId
+    ? `/admin/tests/${sourceTestId}`
+    : '/admin/tests';
+  const returnPath = normalizeReturnPath(
+    formData.get('returnPath'),
+    sourceReturnPath,
+  );
+
+  if (!sourceTestId) {
+    redirect(encodeMessage(returnPath, 'error', 'Missing source test id.'));
+  }
+
+  const nameRaw = formData.get('name');
+  const name = typeof nameRaw === 'string' ? nameRaw.trim() : '';
+  if (!name) {
+    redirect(
+      encodeMessage(returnPath, 'error', 'Enter a name for the new test set.'),
+    );
+  }
+
+  const intendedParsed = parseIntendedAgentField(formData.get('intendedAgent'));
+  if (!intendedParsed.ok) {
+    redirect(
+      encodeMessage(
+        returnPath,
+        'error',
+        'Invalid intended agent. Choose an agent from the list or clear the field.',
+      ),
+    );
+  }
+  const intended_agent = intendedParsed.id;
+
+  const rawIds = formData.getAll('testItemId');
+  const selectedIds = Array.from(
+    new Set(
+      rawIds
+        .map((value) => (typeof value === 'string' ? value.trim() : ''))
+        .filter((value) => value.length > 0),
+    ),
+  );
+
+  if (selectedIds.length === 0) {
+    redirect(
+      encodeMessage(
+        returnPath,
+        'error',
+        'Select at least one prompt to copy into the new test.',
+      ),
+    );
+  }
+
+  let sourceTest;
+  try {
+    sourceTest = await getTestById(sourceTestId);
+  } catch {
+    redirect(encodeMessage(returnPath, 'error', 'Source test not found.'));
+  }
+
+  const sourceItems = await getTestItemsByTestId(sourceTestId);
+  const sourceItemsById = new Map(sourceItems.map((item) => [item.id, item]));
+  const orderedSelections = selectedIds
+    .map((id) => sourceItemsById.get(id))
+    .filter((item): item is (typeof sourceItems)[number] => Boolean(item));
+
+  if (orderedSelections.length === 0) {
+    redirect(
+      encodeMessage(
+        returnPath,
+        'error',
+        'None of the selected prompts belong to this dataset.',
+      ),
+    );
+  }
+
+  const newTest = await createTestRecord({
+    name,
+    source_file_name: `(derived from ${sourceTest.name})`,
+    source_bucket: 'derived',
+    source_key: sourceTestId,
+    row_count: 0,
+    status: 'ready',
+    intended_agent,
+    metadata: {
+      derived_from_test_id: sourceTestId,
+      derived_from_test_name: sourceTest.name,
+      derived_item_count: orderedSelections.length,
+    },
+  });
+
+  const newItems = orderedSelections.map((item, index) => ({
+    test_id: newTest.id,
+    row_index: index + 1,
+    prompt: item.prompt,
+    expected_should_answer: item.expected_should_answer,
+    expected_result_type: item.expected_result_type,
+    expected_canonical_product: item.expected_canonical_product,
+    expected_reason_code: item.expected_reason_code,
+    input_payload: item.input_payload,
+    metadata: item.metadata,
+  }));
+
+  await insertTestItems(newItems);
+  await updateTestRecord(newTest.id, {
+    row_count: newItems.length,
+  });
+
+  revalidatePath('/admin/tests');
+  revalidatePath(`/admin/tests/${sourceTestId}`);
+  redirect(
+    encodeMessage(
+      `/admin/tests/${newTest.id}`,
+      'success',
+      `Created "${name}" with ${newItems.length} prompt${
+        newItems.length === 1 ? '' : 's'
+      } from ${sourceTest.name}.`,
+    ),
+  );
+}
+
 export async function deleteTestAction(formData: FormData) {
   const returnPath = normalizeReturnPath(formData.get('returnPath'), '/admin/tests');
   const testId = formData.get('testId');
