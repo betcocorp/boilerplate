@@ -1,5 +1,3 @@
-import Link from 'next/link';
-import { connection } from 'next/server';
 import {
   ChevronDown,
   ChevronLeft,
@@ -11,7 +9,13 @@ import {
   TrendingDown,
   TrendingUp,
 } from 'lucide-react';
+import Link from 'next/link';
+import { connection } from 'next/server';
 
+import {
+  SimilarityFailRateTrendChart,
+  type SimilarityFailRateTrendPoint,
+} from '~/components/admin/SimilarityFailRateTrendChart';
 import { Avatar, AvatarFallback, AvatarGroup } from '~/components/ui/avatar';
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
@@ -23,7 +27,6 @@ import {
   CardTitle,
 } from '~/components/ui/card';
 import { Separator } from '~/components/ui/separator';
-import { Tabs, TabsList, TabsTrigger } from '~/components/ui/tabs';
 import {
   Table,
   TableBody,
@@ -32,10 +35,7 @@ import {
   TableHeader,
   TableRow,
 } from '~/components/ui/table';
-import {
-  SimilarityFailRateTrendChart,
-  type SimilarityFailRateTrendPoint,
-} from '~/components/admin/SimilarityFailRateTrendChart';
+import { Tabs, TabsList, TabsTrigger } from '~/components/ui/tabs';
 import {
   getGlobalSimilarityFailRateTrend,
   getGlobalTestCaseMetrics,
@@ -43,7 +43,8 @@ import {
 
 export const metadata = {
   title: 'Admin Dashboard | Betco BEX',
-  description: 'Overview dashboard for Betco BEX admin operations and shortcuts.',
+  description:
+    'Overview dashboard for Betco BEX admin operations and shortcuts.',
 };
 
 type MetricCardData = {
@@ -55,12 +56,16 @@ type MetricCardData = {
   detail: string;
 };
 
-function buildMetrics(input: Awaited<ReturnType<typeof getGlobalTestCaseMetrics>>): MetricCardData[] {
+function buildMetrics(
+  input: Awaited<ReturnType<typeof getGlobalTestCaseMetrics>>,
+): MetricCardData[] {
   return [
     {
-      title: 'Avg Similarity (All Test Cases)',
+      title: 'Avg Similarity',
       value:
-        input.avgSimilarity === null ? 'n/a' : `${(input.avgSimilarity * 100).toFixed(1)}%`,
+        input.avgSimilarity === null
+          ? 'n/a'
+          : `${(input.avgSimilarity * 100).toFixed(1)}%`,
       summary:
         input.avgSimilarity === null
           ? 'No similarity-bearing responses yet'
@@ -68,19 +73,19 @@ function buildMetrics(input: Awaited<ReturnType<typeof getGlobalTestCaseMetrics>
       detail: `Based on ${input.similaritySampleSize.toLocaleString()} test case(s) with similarity data`,
     },
     {
-      title: 'Avg Elapsed Runtime (All Test Cases)',
+      title: 'Avg Elapsed Runtime',
       value: `${(input.avgElapsedMs / 1000).toFixed(2)}s`,
       summary: 'Mean elapsed runtime across all completed test cases',
       detail: `Based on ${input.totalCases.toLocaleString()} completed test case(s)`,
     },
     {
-      title: 'Avg Pass Rate (All Test Cases)',
+      title: 'Avg Pass Rate',
       value: `${(input.passRate * 100).toFixed(1)}%`,
       summary: 'Passed test cases divided by all completed test cases',
       detail: `${input.passedCases.toLocaleString()} passed / ${input.totalCases.toLocaleString()} total`,
     },
     {
-      title: 'Avg Fail Rate (All Test Cases)',
+      title: 'Avg Fail Rate',
       value: `${(input.failRate * 100).toFixed(1)}%`,
       summary: 'Failed test cases divided by all completed test cases',
       detail: `${input.failedCases.toLocaleString()} failed / ${input.totalCases.toLocaleString()} total`,
@@ -102,10 +107,25 @@ const rows = [
   ['Technical approach', 'Narrative', 'Done', 'Jamik Tashpulatov'],
   ['Design', 'Narrative', 'In Process', 'Jamik Tashpulatov'],
   ['Capabilities', 'Narrative', 'In Process', 'Jamik Tashpulatov'],
-  ['Integration with existing systems', 'Narrative', 'In Process', 'Jamik Tashpulatov'],
+  [
+    'Integration with existing systems',
+    'Narrative',
+    'In Process',
+    'Jamik Tashpulatov',
+  ],
   ['Innovation and Advantages', 'Narrative', 'Done', 'Assign reviewer'],
-  ['Overview of EMR\'s Innovative Solutions', 'Technical content', 'Done', 'Assign reviewer'],
-  ['Advanced Algorithms and Machine Learning', 'Narrative', 'Done', 'Assign reviewer'],
+  [
+    "Overview of EMR's Innovative Solutions",
+    'Technical content',
+    'Done',
+    'Assign reviewer',
+  ],
+  [
+    'Advanced Algorithms and Machine Learning',
+    'Narrative',
+    'Done',
+    'Assign reviewer',
+  ],
 ];
 
 function MetricCard({
@@ -155,7 +175,8 @@ export default async function AdminDashboardPage() {
     getGlobalTestCaseMetrics(),
     getGlobalSimilarityFailRateTrend({ maxRuns: 30 }),
   ]);
-  const similarityFailTrend: SimilarityFailRateTrendPoint[] = similarityFailTrendRaw;
+  const similarityFailTrend: SimilarityFailRateTrendPoint[] =
+    similarityFailTrendRaw;
   const metrics = buildMetrics(globalMetrics);
 
   return (
@@ -164,7 +185,9 @@ export default async function AdminDashboardPage() {
         <div className="flex items-center justify-between gap-4 px-6 py-5 sm:px-8">
           <div>
             <p className="text-sm text-muted-foreground">Dashboard</p>
-            <h1 className="mt-1 text-3xl font-semibold tracking-tight">Documents</h1>
+            <h1 className="mt-1 text-3xl font-semibold tracking-tight">
+              Documents
+            </h1>
           </div>
           <div className="flex items-center gap-3">
             <AvatarGroup>

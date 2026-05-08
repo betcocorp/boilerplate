@@ -1,6 +1,8 @@
 import Link from 'next/link';
 import { connection } from 'next/server';
 
+import { AdminTestsActionToast } from '~/components/admin/tests/AdminTestsActionToast';
+import { TestIntendedAgentCombobox } from '~/components/admin/tests/TestIntendedAgentCombobox';
 import { Button } from '~/components/ui/button';
 import { Input } from '~/components/ui/input';
 import { Label } from '~/components/ui/label';
@@ -12,8 +14,6 @@ import {
   TableHeader,
   TableRow,
 } from '~/components/ui/table';
-import { AdminTestsActionToast } from '~/components/admin/tests/AdminTestsActionToast';
-import { TestIntendedAgentCombobox } from '~/components/admin/tests/TestIntendedAgentCombobox';
 import { V1_AGENT_REGISTRY } from '~/lib/agents/agent-registry';
 import {
   listResultItemsByResultId,
@@ -21,13 +21,16 @@ import {
   listTests,
 } from '~/lib/tests/repository';
 
-import { formatDate } from '~/lib/utils/time';
-
-import { deleteTestAction, runTestAction, uploadTestCsvAction } from './actions';
+import {
+  deleteTestAction,
+  runTestAction,
+  uploadTestCsvAction,
+} from './actions';
 
 export const metadata = {
   title: 'Test Runner | Betco BEX',
-  description: 'Upload prompt datasets, run tests, and review performance metrics.',
+  description:
+    'Upload prompt datasets, run tests, and review performance metrics.',
 };
 
 function extractItemSimilarityScore(responsePayload: unknown) {
@@ -124,24 +127,36 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
             Upload prompt datasets and run evaluation sets
           </h1>
           <p className="mt-4 max-w-4xl text-base leading-7 text-slate-600">
-            Create an empty test set and add prompts manually, or upload a CSV to S3
-            (`retool-360/bex`) and persist rows into `public.tests` and
+            Create an empty test set and add prompts manually, or upload a CSV
+            to S3 (`retool-360/bex`) and persist rows into `public.tests` and
             `public.test_items`, then run prompt sets and save run metrics in
             `public.test_results`.
           </p>
         </section>
 
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-          <h2 className="text-lg font-semibold text-slate-900">Create or upload test dataset</h2>
+          <h2 className="text-lg font-semibold text-slate-900">
+            Create or upload test dataset
+          </h2>
           <p className="mt-2 text-sm text-slate-600">
-            CSV is optional. Without a file, a ready test set is created with no rows
-            (source <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">ad-hoc</code>); add
-            prompts from the detail page. With a CSV, rows are imported as before.
+            CSV is optional. Without a file, a ready test set is created with no
+            rows (source{' '}
+            <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">
+              ad-hoc
+            </code>
+            ); add prompts from the detail page. With a CSV, rows are imported
+            as before.
           </p>
-          <form action={uploadTestCsvAction} className="mt-4 grid gap-4 sm:grid-cols-2">
+          <form
+            action={uploadTestCsvAction}
+            className="mt-4 grid gap-4 sm:grid-cols-2"
+          >
             <input name="returnPath" type="hidden" value="/admin/tests" />
             <div className="flex flex-col gap-2">
-              <Label className="text-sm text-slate-700" htmlFor="test-name-input">
+              <Label
+                className="text-sm text-slate-700"
+                htmlFor="test-name-input"
+              >
                 Test name
               </Label>
               <Input
@@ -151,8 +166,8 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
                 type="text"
               />
               <p className="text-xs text-slate-500">
-                Required when creating without a CSV; optional when uploading (defaults to the file
-                name).
+                Required when creating without a CSV; optional when uploading
+                (defaults to the file name).
               </p>
             </div>
             <TestIntendedAgentCombobox
@@ -161,10 +176,19 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
               label="Intended agent"
             />
             <div className="flex flex-col gap-2 sm:col-span-2">
-              <Label className="text-sm text-slate-700" htmlFor="test-dataset-input">
-                CSV file <span className="font-normal text-slate-500">(optional)</span>
+              <Label
+                className="text-sm text-slate-700"
+                htmlFor="test-dataset-input"
+              >
+                CSV file{' '}
+                <span className="font-normal text-slate-500">(optional)</span>
               </Label>
-              <Input accept=".csv,text/csv" id="test-dataset-input" name="dataset" type="file" />
+              <Input
+                accept=".csv,text/csv"
+                id="test-dataset-input"
+                name="dataset"
+                type="file"
+              />
             </div>
             <div className="sm:col-span-2">
               <Button type="submit">Create / upload dataset</Button>
@@ -174,8 +198,12 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
 
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-slate-900">Uploaded tests</h2>
-            <span className="text-sm text-slate-600">{testRows.length} datasets</span>
+            <h2 className="text-lg font-semibold text-slate-900">
+              Uploaded tests
+            </h2>
+            <span className="text-sm text-slate-600">
+              {testRows.length} datasets
+            </span>
           </div>
           <Table>
             <TableHeader>
@@ -183,7 +211,6 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
                 <TableHead>Name</TableHead>
                 <TableHead>Intended agent</TableHead>
                 <TableHead>Rows</TableHead>
-                <TableHead>Uploaded</TableHead>
                 <TableHead>Latest run</TableHead>
                 <TableHead>Low/High/Avg</TableHead>
                 <TableHead>Status</TableHead>
@@ -211,12 +238,12 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
                     </TableCell>
                     <TableCell className="max-w-[200px] text-sm text-slate-600">
                       {test.intended_agent
-                        ? (V1_AGENT_REGISTRY.find((a) => a.id === test.intended_agent)?.label ??
-                          test.intended_agent)
+                        ? (V1_AGENT_REGISTRY.find(
+                            (a) => a.id === test.intended_agent,
+                          )?.label ?? test.intended_agent)
                         : '—'}
                     </TableCell>
                     <TableCell>{test.row_count}</TableCell>
-                    <TableCell>{formatDate(test.uploaded_at)}</TableCell>
                     <TableCell>
                       {test.latestResult
                         ? `${test.latestResult.passed_items}/${test.latestResult.total_items} passed`
@@ -234,14 +261,22 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
                           <Link href={`/admin/tests/${test.id}`}>View</Link>
                         </Button>
                         <form action={runTestAction}>
-                          <input name="returnPath" type="hidden" value="/admin/tests" />
+                          <input
+                            name="returnPath"
+                            type="hidden"
+                            value="/admin/tests"
+                          />
                           <input name="testId" type="hidden" value={test.id} />
                           <Button size="sm" type="submit" variant="outline">
                             Run
                           </Button>
                         </form>
                         <form action={deleteTestAction}>
-                          <input name="returnPath" type="hidden" value="/admin/tests" />
+                          <input
+                            name="returnPath"
+                            type="hidden"
+                            value="/admin/tests"
+                          />
                           <input name="testId" type="hidden" value={test.id} />
                           <Button size="sm" type="submit" variant="destructive">
                             Delete
