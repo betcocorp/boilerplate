@@ -20,6 +20,7 @@ import {
   ChartTooltip,
   ChartTooltipContent,
 } from '~/components/ui/chart';
+import { formatSimilarityValue } from '~/lib/tests/format';
 import { formatDurationSeconds } from '~/lib/utils/time';
 
 export type SimilarityTrendPoint = {
@@ -73,12 +74,6 @@ const chartConfig = {
   ragSeconds: { label: 'RAG search', color: '#0ea5e9' },
   promptSeconds: { label: 'Total prompt', color: '#a855f7' },
 } satisfies ChartConfig;
-
-function formatPercentValue(value: unknown): string {
-  return typeof value === 'number' && Number.isFinite(value)
-    ? `${(value * 100).toFixed(1)}%`
-    : 'n/a';
-}
 
 function formatSecondsValue(value: unknown): string {
   return typeof value === 'number' && Number.isFinite(value)
@@ -214,7 +209,7 @@ export function ItemAtAGlanceCharts({
                     content={
                       <ChartTooltipContent
                         labelFormatter={(label) => `Run: ${label}`}
-                        formatter={formatPercentValue}
+                        formatter={(value) => formatSimilarityValue(typeof value === 'number' ? value : null)}
                       />
                     }
                   />

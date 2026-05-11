@@ -16,6 +16,13 @@ export type BexChatStreamResponse = {
   };
 };
 
+function extractApiError(data: unknown, fallback: string): string {
+  if (typeof data === 'object' && data && 'error' in data) {
+    return String((data as { error?: string }).error);
+  }
+  return fallback;
+}
+
 const conversationListSchema = z.object({
   ok: z.literal(true),
   conversations: z.array(
@@ -67,14 +74,7 @@ export async function apiListConversations(): Promise<
   const res = await fetch('/api/bex/conversations', { method: 'GET' });
   const data: unknown = await res.json();
   if (!res.ok) {
-    throw new Error(
-      data &&
-        typeof data === 'object' &&
-        'error' in data &&
-        typeof (data as { error?: unknown }).error === 'string'
-        ? (data as { error: string }).error
-        : `Request failed (${res.status})`,
-    );
+    throw new Error(extractApiError(data, `Request failed (${res.status})`));
   }
   const parsed = conversationListSchema.safeParse(data);
   if (!parsed.success) {
@@ -87,11 +87,7 @@ export async function apiCreateConversation(): Promise<string> {
   const res = await fetch('/api/bex/conversations', { method: 'POST' });
   const data: unknown = await res.json();
   if (!res.ok) {
-    throw new Error(
-      typeof data === 'object' && data && 'error' in data
-        ? String((data as { error?: string }).error)
-        : `Request failed (${res.status})`,
-    );
+    throw new Error(extractApiError(data, `Request failed (${res.status})`));
   }
   const parsed = z
     .object({
@@ -109,11 +105,7 @@ export async function apiFetchConversation(id: string) {
   const res = await fetch(`/api/bex/conversations/${id}`, { method: 'GET' });
   const data: unknown = await res.json();
   if (!res.ok) {
-    throw new Error(
-      typeof data === 'object' && data && 'error' in data
-        ? String((data as { error?: string }).error)
-        : `Request failed (${res.status})`,
-    );
+    throw new Error(extractApiError(data, `Request failed (${res.status})`));
   }
   const parsed = conversationDetailSchema.safeParse(data);
   if (!parsed.success) {
@@ -126,11 +118,7 @@ export async function apiDeleteConversation(id: string): Promise<void> {
   const res = await fetch(`/api/bex/conversations/${id}`, { method: 'DELETE' });
   if (!res.ok) {
     const data: unknown = await res.json();
-    throw new Error(
-      typeof data === 'object' && data && 'error' in data
-        ? String((data as { error?: string }).error)
-        : `Request failed (${res.status})`,
-    );
+    throw new Error(extractApiError(data, `Request failed (${res.status})`));
   }
 }
 
@@ -152,11 +140,7 @@ export async function apiSubmitMessageFeedback(input: {
 
   const data: unknown = await res.json();
   if (!res.ok) {
-    throw new Error(
-      typeof data === 'object' && data && 'error' in data
-        ? String((data as { error?: string }).error)
-        : `Request failed (${res.status})`,
-    );
+    throw new Error(extractApiError(data, `Request failed (${res.status})`));
   }
 }
 
@@ -250,11 +234,7 @@ export async function apiPostBexChatStream(options: {
 
   if (!res.ok) {
     const data: unknown = await res.json().catch(() => null);
-    throw new Error(
-      typeof data === 'object' && data && 'error' in data
-        ? String((data as { error?: string }).error)
-        : `Chat stream request failed (${res.status})`,
-    );
+    throw new Error(extractApiError(data, `Chat stream request failed (${res.status})`));
   }
 
   if (!res.body) {

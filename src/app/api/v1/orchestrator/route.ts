@@ -15,17 +15,13 @@ function asObject(body: unknown): Record<string, unknown> {
   return body as Record<string, unknown>;
 }
 
-function isBearerAuthorized(request: Request) {
-  return isV1BearerAuthorized(request);
-}
-
 function hasNonEmptyMessage(body: unknown) {
   const message = asObject(body).message;
   return typeof message === 'string' && message.trim().length > 0;
 }
 
 function canInvoke(request: Request, body: unknown) {
-  if (isBearerAuthorized(request)) {
+  if (isV1BearerAuthorized(request)) {
     return true;
   }
 
@@ -56,22 +52,6 @@ export async function POST(request: Request) {
       { error: parsed.error, issues: parsed.issues },
       { status: 400 },
     );
-  }
-
-  if (parsed.mode === 'bex-chat') {
-    try {
-      const result = await runOrchestration(
-        parsed.workflow,
-        parsed.orchestrationInput,
-      );
-
-      return NextResponse.json({ ok: true, ...result });
-    } catch (error) {
-      const msg =
-        error instanceof Error ? error.message : 'Orchestration failed.';
-
-      return NextResponse.json({ error: msg }, { status: 500 });
-    }
   }
 
   try {

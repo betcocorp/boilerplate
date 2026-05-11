@@ -1,15 +1,9 @@
+import { assertSupabaseNoError as assertNoError } from '~/lib/utils';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 import type { Tables, TablesInsert } from '~/types/supabase.public';
 
 export type AiSuggestionRecord = Tables<'ai_suggestions'>;
 export type NewAiSuggestionRecord = TablesInsert<'ai_suggestions'>;
-
-function assertNoError<T>(payload: { data: T; error: { message: string } | null }) {
-  if (payload.error) {
-    throw new Error(payload.error.message);
-  }
-  return payload.data;
-}
 
 export async function listAiSuggestions(
   entityType: string,

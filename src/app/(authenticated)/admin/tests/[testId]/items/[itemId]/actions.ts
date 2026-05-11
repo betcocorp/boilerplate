@@ -1,5 +1,6 @@
 'use server';
 
+import { getErrorMessage } from '~/lib/utils';
 import { replaceAiSuggestions } from '~/lib/ai-suggestions/repository';
 import { getOpenAIClient } from '~/lib/openai/client';
 
@@ -155,7 +156,7 @@ Provide the top 3 specific, actionable recommendations to make this test item re
     }
   } catch (err) {
     throw new Error(
-      `AI returned an unexpected format — ${err instanceof Error ? err.message : String(err)}. Please try again.`,
+      `AI returned an unexpected format — ${getErrorMessage(err)}. Please try again.`,
     );
   }
 

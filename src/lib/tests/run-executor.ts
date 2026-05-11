@@ -8,6 +8,7 @@ import {
   updateTestResult,
 } from './repository';
 import { runSingleTestItem } from './runner';
+import { isTerminalRunStatus } from './types';
 
 function asSummaryObject(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -15,15 +16,6 @@ function asSummaryObject(value: unknown): Record<string, unknown> {
   }
 
   return value as Record<string, unknown>;
-}
-
-function isTerminalRunStatus(status: string) {
-  return (
-    status === 'completed' ||
-    status === 'completed_with_failures' ||
-    status === 'failed' ||
-    status === 'cancelled'
-  );
 }
 
 export async function executeTestRun(testResultId: string) {

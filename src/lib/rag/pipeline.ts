@@ -1,4 +1,5 @@
 import { syncDocumentChunkEmbeddings } from '~/lib/rag/embeddings';
+import { clampPositiveInteger } from '~/lib/utils/params';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 const DEFAULT_LANGUAGE_CODE = 'EN';
@@ -69,20 +70,6 @@ export type RagPipelineRunResult = {
 
 function getLanguageCode(languageCode?: string) {
   return languageCode?.trim().toUpperCase() || DEFAULT_LANGUAGE_CODE;
-}
-
-function clampPositiveInteger(
-  value: number | undefined,
-  fallback: number,
-  max?: number,
-) {
-  if (!Number.isFinite(value) || !value || value < 1) {
-    return fallback;
-  }
-
-  const normalized = Math.floor(value);
-
-  return max ? Math.min(normalized, max) : normalized;
 }
 
 function ragHeadIdCountQuery(
@@ -186,20 +173,12 @@ function readJsonNumber(
     : null;
 }
 
-function mergeChunkSyncResults(
+function mergeSyncResults(
   accumulated: JsonObject | null,
   next: JsonObject | null,
   passCount: number,
+  sumKeys: readonly string[],
 ) {
-  const sumKeys = [
-    'documents_processed',
-    'active_documents_processed',
-    'inactive_documents_processed',
-    'chunks_upserted',
-    'stale_chunks_deleted',
-    'inactive_chunks_deleted',
-  ] as const;
-
   const merged: JsonObject = {
     ...(accumulated ?? {}),
     ...(next ?? {}),
@@ -214,31 +193,33 @@ function mergeChunkSyncResults(
   return merged;
 }
 
+function mergeChunkSyncResults(
+  accumulated: JsonObject | null,
+  next: JsonObject | null,
+  passCount: number,
+) {
+  return mergeSyncResults(accumulated, next, passCount, [
+    'documents_processed',
+    'active_documents_processed',
+    'inactive_documents_processed',
+    'chunks_upserted',
+    'stale_chunks_deleted',
+    'inactive_chunks_deleted',
+  ]);
+}
+
 function mergeProfileSyncResults(
   accumulated: JsonObject | null,
   next: JsonObject | null,
   passCount: number,
 ) {
-  const sumKeys = [
+  return mergeSyncResults(accumulated, next, passCount, [
     'source_rows_processed',
     'source_records_upserted',
     'entities_upserted',
     'documents_upserted',
     'source_records_deactivated',
-  ] as const;
-
-  const merged: JsonObject = {
-    ...(accumulated ?? {}),
-    ...(next ?? {}),
-    passes_run: passCount,
-  };
-
-  for (const key of sumKeys) {
-    merged[key] =
-      (readJsonNumber(accumulated, key) ?? 0) + (readJsonNumber(next, key) ?? 0);
-  }
-
-  return merged;
+  ]);
 }
 
 export async function getRagGenerationStatus(): Promise<RagGenerationStatus> {

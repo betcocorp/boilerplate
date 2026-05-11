@@ -9,6 +9,7 @@ import {
   updateTestRecord,
   updateTestResult,
 } from '~/lib/tests/repository';
+import { isTerminalRunStatus } from '~/lib/tests/types';
 
 function readProgressFromSummary(summary: unknown) {
   if (!summary || typeof summary !== 'object' || Array.isArray(summary)) {
@@ -32,15 +33,6 @@ function readProgressFromSummary(summary: unknown) {
       typeof data.elapsed_accumulated_ms === 'number' ? data.elapsed_accumulated_ms : null,
     runningSince: typeof data.running_since === 'string' ? data.running_since : null,
   };
-}
-
-function isTerminalStatus(status: string) {
-  return (
-    status === 'completed' ||
-    status === 'completed_with_failures' ||
-    status === 'failed' ||
-    status === 'cancelled'
-  );
 }
 
 export async function GET(
@@ -106,12 +98,7 @@ export async function POST(
     return NextResponse.json({ error: 'Run not found' }, { status: 404 });
   }
 
-  if (
-    run.status === 'completed' ||
-    run.status === 'completed_with_failures' ||
-    run.status === 'failed' ||
-    run.status === 'cancelled'
-  ) {
+  if (isTerminalRunStatus(run.status)) {
     return NextResponse.json({ ok: true, state: 'already_finished' });
   }
 
@@ -185,7 +172,7 @@ export async function PATCH(
   }
 
   if (action === 'cancel') {
-    if (isTerminalStatus(run.status)) {
+    if (isTerminalRunStatus(run.status)) {
       return NextResponse.json({ ok: true, state: 'already_finished' });
     }
 

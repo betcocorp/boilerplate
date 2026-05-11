@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { toast } from 'sonner';
 
+import { getErrorMessage } from '~/lib/utils';
 import type { AnalyzeTestItemPayload } from '~/app/(authenticated)/admin/tests/[testId]/items/[itemId]/actions';
 import { analyzeTestItem } from '~/app/(authenticated)/admin/tests/[testId]/items/[itemId]/actions';
 import { Button } from '~/components/ui/button';
@@ -25,7 +26,7 @@ export function ItemAIReviewButton({ payload }: ItemAIReviewButtonProps) {
       router.refresh();
     } catch (err) {
       const message =
-        err instanceof Error ? err.message : 'AI analysis failed.';
+        getErrorMessage(err, 'AI analysis failed.');
       toast.error(message);
     } finally {
       setLoading(false);

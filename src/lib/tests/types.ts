@@ -1,5 +1,18 @@
 import type { Tables, TablesInsert } from '~/types/supabase.public';
 
+export const TERMINAL_RUN_STATUSES = [
+  'completed',
+  'completed_with_failures',
+  'failed',
+  'cancelled',
+] as const;
+
+export type TerminalRunStatus = (typeof TERMINAL_RUN_STATUSES)[number];
+
+export function isTerminalRunStatus(status: string): boolean {
+  return (TERMINAL_RUN_STATUSES as readonly string[]).includes(status);
+}
+
 export type TestRecord = Tables<'tests'>;
 export type TestItemRecord = Tables<'test_items'>;
 export type TestResultRecord = Tables<'test_results'>;

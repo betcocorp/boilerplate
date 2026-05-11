@@ -1,8 +1,8 @@
-import OpenAI from 'openai';
-
+import { getOpenAIClient } from '~/lib/openai/client';
+import { clampPositiveInteger } from '~/lib/utils/params';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
-const DEFAULT_EMBEDDING_MODEL = 'text-embedding-3-small';
+export const DEFAULT_EMBEDDING_MODEL = 'text-embedding-3-small';
 const EMBEDDING_DIMENSIONS = 1536;
 const DEFAULT_BATCH_SIZE = 25;
 const DEFAULT_MAX_BATCHES = 4;
@@ -34,29 +34,8 @@ type CreateEmbeddingOptions = {
   model?: string;
 };
 
-function getOpenAIClient() {
-  const apiKey = process.env.OPENAI_API_KEY;
-
-  if (!apiKey) {
-    throw new Error('OPENAI_API_KEY is not configured.');
-  }
-
-  return new OpenAI({ apiKey });
-}
-
 function getEmbeddingModel(model?: string) {
   return model?.trim() || process.env.OPENAI_EMBEDDING_MODEL || DEFAULT_EMBEDDING_MODEL;
-}
-
-function clampPositiveInteger(
-  value: number | undefined,
-  fallback: number,
-) {
-  if (!Number.isFinite(value) || !value || value < 1) {
-    return fallback;
-  }
-
-  return Math.floor(value);
 }
 
 function buildEmbeddingInput(chunk: PendingChunkRow) {

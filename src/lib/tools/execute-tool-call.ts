@@ -1,3 +1,4 @@
+import { getErrorMessage } from '~/lib/utils';
 import { PRODUCT_TOOL_NAMES, type ProductToolName } from '~/lib/tools/tool-schemas';
 import { executeProductTool } from '~/lib/tools/product-tools';
 
@@ -57,7 +58,7 @@ export async function executeToolCall(input: {
       },
     };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = getErrorMessage(err);
     const out = JSON.stringify({ ok: false, error: message });
 
     return {

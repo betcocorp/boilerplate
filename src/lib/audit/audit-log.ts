@@ -1,3 +1,4 @@
+import { getErrorMessage } from '~/lib/utils';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 import type { Json } from '~/types/supabase.public';
@@ -40,7 +41,7 @@ export async function writeAuditLog(
         level: 'error',
         event: 'audit_log_write_failed',
         eventType,
-        message: err instanceof Error ? err.message : String(err),
+        message: getErrorMessage(err),
       }),
     );
   }

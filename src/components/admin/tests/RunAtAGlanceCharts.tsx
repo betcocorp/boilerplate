@@ -22,6 +22,7 @@ import {
   ChartTooltipContent,
 } from '~/components/ui/chart';
 import { cn } from '~/lib/utils';
+import { isTerminalRunStatus } from '~/lib/tests/types';
 
 type ElapsedTrendDatum = {
   label: string;
@@ -176,12 +177,7 @@ export function RunAtAGlanceCharts({
   }, [initialStatus, totalItems, passCount, failCount]);
 
   useEffect(() => {
-    const isTerminalStatus =
-      liveStatus === 'completed' ||
-      liveStatus === 'completed_with_failures' ||
-      liveStatus === 'failed' ||
-      liveStatus === 'cancelled';
-    if (isTerminalStatus) {
+    if (isTerminalRunStatus(liveStatus)) {
       return;
     }
 

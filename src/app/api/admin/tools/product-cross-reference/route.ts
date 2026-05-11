@@ -1,3 +1,4 @@
+import { getErrorMessage } from '~/lib/utils';
 import { getServerSession } from 'next-auth';
 import { NextResponse } from 'next/server';
 
@@ -21,7 +22,7 @@ export async function POST(request: Request) {
     const result = await lookupCrossReference(parsed.data);
     return NextResponse.json(result);
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Cross-reference lookup failed';
+    const message = getErrorMessage(err, 'Cross-reference lookup failed');
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

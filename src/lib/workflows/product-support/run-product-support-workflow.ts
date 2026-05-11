@@ -1,3 +1,4 @@
+import { getErrorMessage } from '~/lib/utils';
 import { writeAuditLog } from '~/lib/audit/audit-log';
 import type { ToolTraceEntry } from '~/lib/audit/trace';
 import {
@@ -34,50 +35,6 @@ import {
   runRevisionPass,
   runValidatorPass,
 } from '~/lib/workflows/product-support/validator';
-
-function collectSourcesFromTrace(toolTrace: ToolTraceEntry[]): SourceRef[] {
-  const map = new Map<string, SourceRef>();
-
-  for (const t of toolTrace) {
-    if (!t.ok) {
-      continue;
-    }
-    try {
-      const j = JSON.parse(t.outputPreview) as {
-        sources?: Array<{
-          documentId?: string;
-          chunkId?: string;
-          title?: string;
-          snippet?: string;
-          confidence?: number;
-        }>;
-      };
-      if (!j.sources) {
-        continue;
-      }
-      for (const s of j.sources) {
-        if (!s.documentId || !s.snippet) {
-          continue;
-        }
-        const key = `${s.documentId}:${s.chunkId ?? ''}`;
-        if (map.has(key)) {
-          continue;
-        }
-        map.set(key, {
-          documentId: s.documentId,
-          chunkId: s.chunkId,
-          title: s.title ?? s.documentId,
-          snippet: s.snippet.slice(0, 2000),
-          similarity: s.confidence,
-        });
-      }
-    } catch {
-      /* ignore */
-    }
-  }
-
-  return [...map.values()].slice(0, 16);
-}
 
 const VALIDATOR_EVIDENCE_CHAR_BUDGET = 60_000;
 const VALIDATOR_PER_DOCUMENT_CHAR_BUDGET = 24_000;
@@ -1285,7 +1242,7 @@ export async function runProductSupportWorkflow(input: {
 
     return finalOutput;
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = getErrorMessage(err);
     logError('workflow_failed', { ...wfCtx, message });
 
     await completeWorkflowStep(agentStep.id, {

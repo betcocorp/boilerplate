@@ -1,4 +1,5 @@
 import type { RagSearchMatch } from '~/lib/rag/search';
+import { normalizeForDedupe } from '~/lib/utils';
 
 const DEFAULT_MIN_SIMILARITY = 0.2;
 
@@ -10,15 +11,11 @@ export function trimSnippet(text: string, maxLen: number): string {
   return `${t.slice(0, Math.max(0, maxLen - 1))}…`;
 }
 
-function normalizeForDedup(value: string) {
-  return value.trim().replace(/\s+/g, ' ').toLowerCase();
-}
-
 function nearDuplicateKey(match: RagSearchMatch) {
   return [
-    normalizeForDedup(match.document_title || ''),
+    normalizeForDedupe(match.document_title || ''),
     String(match.chunk_index),
-    normalizeForDedup(match.chunk_text).slice(0, 220),
+    normalizeForDedupe(match.chunk_text).slice(0, 220),
   ].join('|');
 }
 

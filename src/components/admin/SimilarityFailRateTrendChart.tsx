@@ -8,6 +8,7 @@ import {
   ChartTooltip,
   ChartTooltipContent,
 } from '~/components/ui/chart';
+import { formatSimilarityPercent } from '~/lib/tests/format';
 
 export type SimilarityFailRateTrendPoint = {
   label: string;
@@ -58,9 +59,7 @@ export function SimilarityFailRateTrendChart({
                   }
                   return `Run: ${label} · ${new Date(point.runCreatedAt).toLocaleDateString()}`;
                 }}
-                formatter={(value) =>
-                  typeof value === 'number' ? `${(value * 100).toFixed(1)}%` : `${value ?? ''}`
-                }
+                formatter={(value) => formatSimilarityPercent(typeof value === 'number' ? value : null)}
               />
             }
           />

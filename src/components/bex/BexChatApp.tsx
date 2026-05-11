@@ -12,7 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '~/components/ui/select';
-import { cn } from '~/lib/utils';
+import { cn, getErrorMessage } from '~/lib/utils';
 
 import { BexChatComposer } from '~/components/bex/BexChatComposer';
 import { BexChatMessages } from '~/components/bex/BexChatMessages';
@@ -299,7 +299,7 @@ export function BexChatApp() {
         });
       } catch (err) {
         const detail =
-          err instanceof Error ? err.message : 'Chat request failed.';
+          getErrorMessage(err, 'Chat request failed.');
         setLoadError(detail);
         if (convId) {
           if (convId.startsWith('local-conv-')) {

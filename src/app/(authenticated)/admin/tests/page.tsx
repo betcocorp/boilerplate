@@ -20,6 +20,7 @@ import {
   listTestResultsByTestId,
   listTests,
 } from '~/lib/tests/repository';
+import { extractItemSimilarityScore } from '~/lib/tests/response-payload';
 
 import {
   deleteTestAction,
@@ -32,38 +33,6 @@ export const metadata = {
   description:
     'Upload prompt datasets, run tests, and review performance metrics.',
 };
-
-function extractItemSimilarityScore(responsePayload: unknown) {
-  if (
-    !responsePayload ||
-    typeof responsePayload !== 'object' ||
-    Array.isArray(responsePayload)
-  ) {
-    return null;
-  }
-
-  const payload = responsePayload as Record<string, unknown>;
-  const sources = payload.sources;
-  if (!Array.isArray(sources)) {
-    return null;
-  }
-
-  const similarities = sources
-    .map((source) => {
-      if (!source || typeof source !== 'object' || Array.isArray(source)) {
-        return null;
-      }
-      const value = (source as Record<string, unknown>).similarity;
-      return typeof value === 'number' ? value : null;
-    })
-    .filter((value): value is number => typeof value === 'number');
-
-  if (similarities.length === 0) {
-    return null;
-  }
-
-  return Math.max(...similarities);
-}
 
 type PageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;

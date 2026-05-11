@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 
+import { isRagSyncAuthorized } from "~/lib/api/rag-api-auth";
 import { syncDocumentChunkEmbeddings } from "~/lib/rag/embeddings";
+import { toPositiveInteger } from "~/lib/utils/params";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,31 +14,8 @@ type RequestBody = {
   model?: unknown;
 };
 
-function toPositiveInteger(value: unknown) {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 1) {
-    return undefined;
-  }
-
-  return Math.floor(value);
-}
-
-function isAuthorized(request: Request) {
-  const configuredKey = process.env.RAG_SYNC_API_KEY;
-
-  if (!configuredKey) {
-    return process.env.NODE_ENV !== "production";
-  }
-
-  const authorizationHeader = request.headers.get("authorization");
-  const bearerToken = authorizationHeader?.startsWith("Bearer ")
-    ? authorizationHeader.slice("Bearer ".length)
-    : null;
-
-  return bearerToken === configuredKey;
-}
-
 export async function POST(request: Request) {
-  if (!isAuthorized(request)) {
+  if (!isRagSyncAuthorized(request)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

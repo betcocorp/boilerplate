@@ -23,12 +23,8 @@ const openai = createOpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-export function resolveAiSdkModelId(modelTag: string | undefined): string {
-  return resolveResponsesModel(modelTag);
-}
-
 export function resolveAiSdkLanguageModel(modelTag: string | undefined) {
-  return openai(resolveAiSdkModelId(modelTag));
+  return openai(resolveResponsesModel(modelTag));
 }
 
 export function extractTextFromAiSdkParts(parts: unknown): string {

@@ -1,5 +1,7 @@
+import { assertSupabaseNoError as assertNoError } from '~/lib/utils';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
+import { extractItemSimilarityScore } from './response-payload';
 import type {
   LatestFailedTestResultItemView,
   NewTestItemRecord,
@@ -12,11 +14,21 @@ import type {
   TestResultRecord,
 } from './types';
 
-function assertNoError<T>(payload: { data: T; error: { message: string } | null }) {
-  if (payload.error) {
-    throw new Error(payload.error.message);
+async function fetchAllPages<T>(
+  pageSize: number,
+  fetcher: (from: number, to: number) => PromiseLike<T[]>,
+): Promise<T[]> {
+  const all: T[] = [];
+  let from = 0;
+  while (true) {
+    const page = await fetcher(from, from + pageSize - 1);
+    all.push(...page);
+    if (page.length < pageSize) {
+      break;
+    }
+    from += pageSize;
   }
-  return payload.data;
+  return all;
 }
 
 export async function createTestRecord(values: NewTestRecord) {
@@ -85,26 +97,15 @@ export type TestItemSuggestionRow = Pick<
 /** Fetches every row for the test (Supabase caps single queries at `max_rows`, often 1000). */
 export async function getTestItemsByTestId(testId: string) {
   const supabase = getSupabaseServiceRoleClient();
-  const all: TestItemRecord[] = [];
-  let from = 0;
-
-  while (true) {
-    const result = await supabase
+  return fetchAllPages<TestItemRecord>(TEST_ITEMS_PAGE_SIZE, (from, to) =>
+    supabase
       .from('test_items')
       .select('*')
       .eq('test_id', testId)
       .order('row_index', { ascending: true })
-      .range(from, from + TEST_ITEMS_PAGE_SIZE - 1);
-
-    const page = (assertNoError(result) || []) as TestItemRecord[];
-    all.push(...page);
-    if (page.length < TEST_ITEMS_PAGE_SIZE) {
-      break;
-    }
-    from += TEST_ITEMS_PAGE_SIZE;
-  }
-
-  return all;
+      .range(from, to)
+      .then((r) => (assertNoError(r) || []) as TestItemRecord[]),
+  );
 }
 
 /**
@@ -113,28 +114,17 @@ export async function getTestItemsByTestId(testId: string) {
  */
 export async function getTestItemSuggestionRows(testId: string): Promise<TestItemSuggestionRow[]> {
   const supabase = getSupabaseServiceRoleClient();
-  const all: TestItemSuggestionRow[] = [];
-  let from = 0;
-
-  while (true) {
-    const result = await supabase
+  return fetchAllPages<TestItemSuggestionRow>(TEST_ITEMS_PAGE_SIZE, (from, to) =>
+    supabase
       .from('test_items')
       .select(
         'expected_result_type, expected_canonical_product, expected_reason_code, input_payload',
       )
       .eq('test_id', testId)
       .order('row_index', { ascending: true })
-      .range(from, from + TEST_ITEMS_PAGE_SIZE - 1);
-
-    const page = (assertNoError(result) || []) as TestItemSuggestionRow[];
-    all.push(...page);
-    if (page.length < TEST_ITEMS_PAGE_SIZE) {
-      break;
-    }
-    from += TEST_ITEMS_PAGE_SIZE;
-  }
-
-  return all;
+      .range(from, to)
+      .then((r) => (assertNoError(r) || []) as TestItemSuggestionRow[]),
+  );
 }
 
 /**
@@ -142,27 +132,16 @@ export async function getTestItemSuggestionRows(testId: string): Promise<TestIte
  */
 export async function getGlobalTestItemSuggestionRows(): Promise<TestItemSuggestionRow[]> {
   const supabase = getSupabaseServiceRoleClient();
-  const all: TestItemSuggestionRow[] = [];
-  let from = 0;
-
-  while (true) {
-    const result = await supabase
+  return fetchAllPages<TestItemSuggestionRow>(TEST_ITEMS_PAGE_SIZE, (from, to) =>
+    supabase
       .from('test_items')
       .select(
         'expected_result_type, expected_canonical_product, expected_reason_code, input_payload',
       )
       .order('id', { ascending: true })
-      .range(from, from + TEST_ITEMS_PAGE_SIZE - 1);
-
-    const page = (assertNoError(result) || []) as TestItemSuggestionRow[];
-    all.push(...page);
-    if (page.length < TEST_ITEMS_PAGE_SIZE) {
-      break;
-    }
-    from += TEST_ITEMS_PAGE_SIZE;
-  }
-
-  return all;
+      .range(from, to)
+      .then((r) => (assertNoError(r) || []) as TestItemSuggestionRow[]),
+  );
 }
 
 const LEGACY_PROD_LINE_PAGE_SIZE = 1000;
@@ -387,38 +366,6 @@ const TEST_CASE_METRICS_PAGE_SIZE = 1000;
 const TEST_RUNS_PAGE_SIZE = 500;
 const COMPLETED_TEST_RUN_STATUSES = ['completed', 'completed_with_failures'] as const;
 
-function extractItemSimilarityScore(responsePayload: unknown) {
-  if (
-    !responsePayload ||
-    typeof responsePayload !== 'object' ||
-    Array.isArray(responsePayload)
-  ) {
-    return null;
-  }
-
-  const payload = responsePayload as Record<string, unknown>;
-  const sources = payload.sources;
-  if (!Array.isArray(sources)) {
-    return null;
-  }
-
-  const similarities = sources
-    .map((source) => {
-      if (!source || typeof source !== 'object' || Array.isArray(source)) {
-        return null;
-      }
-      const value = (source as Record<string, unknown>).similarity;
-      return typeof value === 'number' ? value : null;
-    })
-    .filter((value): value is number => typeof value === 'number');
-
-  if (similarities.length === 0) {
-    return null;
-  }
-
-  return Math.max(...similarities);
-}
-
 export async function listResultItemsByResultId(testResultId: string, limit = 200) {
   const supabase = getSupabaseServiceRoleClient();
   const result = await supabase
@@ -442,74 +389,43 @@ export async function listAllResultItemsByResultIds(testResultIds: string[]) {
   }
 
   const supabase = getSupabaseServiceRoleClient();
-  const all: TestResultItemRecord[] = [];
-  let from = 0;
-
-  while (true) {
-    const result = await supabase
+  return fetchAllPages<TestResultItemRecord>(RESULT_ITEMS_PAGE_SIZE, (from, to) =>
+    supabase
       .from('test_result_items')
       .select('*')
       .in('test_result_id', testResultIds)
       .order('created_at', { ascending: true })
-      .range(from, from + RESULT_ITEMS_PAGE_SIZE - 1);
-
-    const page = (assertNoError(result) || []) as TestResultItemRecord[];
-    all.push(...page);
-    if (page.length < RESULT_ITEMS_PAGE_SIZE) {
-      break;
-    }
-    from += RESULT_ITEMS_PAGE_SIZE;
-  }
-
-  return all;
+      .range(from, to)
+      .then((r) => (assertNoError(r) || []) as TestResultItemRecord[]),
+  );
 }
 
 /** All rows for a run (Supabase default `max_rows` requires pagination beyond ~1000). */
 export async function listAllResultItemsByResultId(testResultId: string) {
   const supabase = getSupabaseServiceRoleClient();
-  const all: TestResultItemRecord[] = [];
-  let from = 0;
-
-  while (true) {
-    const result = await supabase
+  return fetchAllPages<TestResultItemRecord>(RESULT_ITEMS_PAGE_SIZE, (from, to) =>
+    supabase
       .from('test_result_items')
       .select('*')
       .eq('test_result_id', testResultId)
       .order('row_index', { ascending: true })
-      .range(from, from + RESULT_ITEMS_PAGE_SIZE - 1);
-
-    const page = (assertNoError(result) || []) as TestResultItemRecord[];
-    all.push(...page);
-    if (page.length < RESULT_ITEMS_PAGE_SIZE) {
-      break;
-    }
-    from += RESULT_ITEMS_PAGE_SIZE;
-  }
-
-  return all;
+      .range(from, to)
+      .then((r) => (assertNoError(r) || []) as TestResultItemRecord[]),
+  );
 }
 
 export async function getGlobalTestCaseMetrics() {
   const supabase = getSupabaseServiceRoleClient();
-  const completedRunIds: string[] = [];
-  let runsFrom = 0;
-
-  while (true) {
-    const runsResult = await supabase
+  const completedRunRows = await fetchAllPages<{ id: string }>(TEST_RUNS_PAGE_SIZE, (from, to) =>
+    supabase
       .from('test_results')
       .select('id')
       .in('status', [...COMPLETED_TEST_RUN_STATUSES])
       .order('created_at', { ascending: true })
-      .range(runsFrom, runsFrom + TEST_RUNS_PAGE_SIZE - 1);
-
-    const runsPage = (assertNoError(runsResult) || []) as Array<{ id: string }>;
-    completedRunIds.push(...runsPage.map((run) => run.id));
-
-    if (runsPage.length < TEST_RUNS_PAGE_SIZE) {
-      break;
-    }
-    runsFrom += TEST_RUNS_PAGE_SIZE;
-  }
+      .range(from, to)
+      .then((r) => (assertNoError(r) || []) as Array<{ id: string }>),
+  );
+  const completedRunIds = completedRunRows.map((run) => run.id);
 
   if (completedRunIds.length === 0) {
     return {

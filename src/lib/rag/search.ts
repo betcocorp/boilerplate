@@ -1,10 +1,11 @@
-import OpenAI from 'openai';
-
-import { createEmbedding } from '~/lib/rag/embeddings';
+import { createEmbedding, DEFAULT_EMBEDDING_MODEL } from '~/lib/rag/embeddings';
+import { getOpenAIClient } from '~/lib/openai/client';
+import { normalizeForDedupe } from '~/lib/utils';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
-
-const DEFAULT_EMBEDDING_MODEL = 'text-embedding-3-small';
 const DEFAULT_REWRITE_MODEL = 'gpt-4.1-mini';
+const APPROX_QUERY_THRESHOLD_SHORT = 0.95;
+const APPROX_QUERY_THRESHOLD_LONG = 0.9;
+const APPROX_REWRITTEN_SIMILARITY_THRESHOLD = 0.88;
 
 type SearchProductChunksOptions = {
   query: string;
@@ -132,10 +133,6 @@ function normalizeLanguageCode(languageCode?: string | null) {
   return normalized || 'EN';
 }
 
-function normalizeForDedupe(value: string) {
-  return value.trim().replace(/\s+/g, ' ').toLowerCase();
-}
-
 function nowMs() {
   return performance.now();
 }
@@ -238,17 +235,7 @@ function normalizeRewrittenQuery(query: string) {
 }
 
 function getApproximateQueryThreshold(query: string) {
-  return query.length < 12 ? 0.95 : 0.9;
-}
-
-function getOpenAIClient() {
-  const apiKey = process.env.OPENAI_API_KEY;
-
-  if (!apiKey) {
-    throw new Error('OPENAI_API_KEY is not configured.');
-  }
-
-  return new OpenAI({ apiKey });
+  return query.length < 12 ? APPROX_QUERY_THRESHOLD_SHORT : APPROX_QUERY_THRESHOLD_LONG;
 }
 
 async function rewriteQueryWithOpenAI(query: string) {
@@ -417,7 +404,7 @@ async function getCachedOrNewEmbedding(
       p_query_similarity_threshold: getApproximateQueryThreshold(
         normalizedApproximateQuery,
       ),
-      p_rewritten_similarity_threshold: 0.88,
+      p_rewritten_similarity_threshold: APPROX_REWRITTEN_SIMILARITY_THRESHOLD,
     });
   cacheLookupMs += elapsedMs(approximateLookupStartedAt);
 
