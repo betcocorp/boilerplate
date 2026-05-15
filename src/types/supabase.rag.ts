@@ -88,7 +88,9 @@ export type Database = {
           created_at: string
           document_id: string
           embedding: string | null
+          embedding_large: unknown
           embedding_model: string | null
+          embedding_model_large: string | null
           heading: string | null
           id: string
           metadata: Json
@@ -104,7 +106,9 @@ export type Database = {
           created_at?: string
           document_id: string
           embedding?: string | null
+          embedding_large?: unknown
           embedding_model?: string | null
+          embedding_model_large?: string | null
           heading?: string | null
           id?: string
           metadata?: Json
@@ -120,7 +124,9 @@ export type Database = {
           created_at?: string
           document_id?: string
           embedding?: string | null
+          embedding_large?: unknown
           embedding_model?: string | null
+          embedding_model_large?: string | null
           heading?: string | null
           id?: string
           metadata?: Json
@@ -229,6 +235,7 @@ export type Database = {
           created_at: string
           deleted_at: string | null
           embeddings: string | null
+          embeddings_large: unknown
           id: number
           query_count: number
           query_rewritten: string | null
@@ -247,6 +254,7 @@ export type Database = {
           created_at?: string
           deleted_at?: string | null
           embeddings?: string | null
+          embeddings_large?: unknown
           id?: number
           query_count?: number
           query_rewritten?: string | null
@@ -265,6 +273,7 @@ export type Database = {
           created_at?: string
           deleted_at?: string | null
           embeddings?: string | null
+          embeddings_large?: unknown
           id?: number
           query_count?: number
           query_rewritten?: string | null
@@ -377,7 +386,7 @@ export type Database = {
           avg_query_rewrite_ms: number
           avg_similarity_search_ms: number
           avg_total_search_ms: number
-          embeddings: string
+          embeddings_large: unknown
           id: number
           match_source: string
           matched_similarity: number
@@ -392,7 +401,7 @@ export type Database = {
           filter_product_line_key?: string
           filter_scope?: string
           match_count?: number
-          query_embedding: string
+          query_embedding: unknown
         }
         Returns: {
           chunk_id: string
@@ -419,7 +428,33 @@ export type Database = {
           filter_product_key?: string
           filter_product_line_key?: string
           match_count?: number
-          query_embedding: string
+          query_embedding: unknown
+        }
+        Returns: {
+          chunk_id: string
+          chunk_index: number
+          chunk_key: string
+          chunk_text: string
+          document_id: string
+          document_key: string
+          document_title: string
+          entity_id: string
+          heading: string
+          product_key: string
+          product_line_key: string
+          section_path: string[]
+          similarity: number
+          sku: string
+          source_pk: string
+          token_count: number
+        }[]
+      }
+      match_product_chunks_v2: {
+        Args: {
+          filter_product_key?: string
+          filter_product_line_key?: string
+          match_count?: number
+          query_embedding: unknown
         }
         Returns: {
           chunk_id: string
