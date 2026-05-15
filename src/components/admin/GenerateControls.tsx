@@ -43,10 +43,7 @@ function formatTimestamp(timestamp: number) {
   return `${moment.utc(timestamp).format('YYYY-MM-DD HH:mm:ss')} UTC`;
 }
 
-const AUTO_REPEAT_INTENTS = [
-  'sync-embeddings',
-  'sync-embeddings-large',
-] as const;
+const AUTO_REPEAT_INTENTS = ['sync-embeddings'] as const;
 type AutoRepeatIntent = (typeof AUTO_REPEAT_INTENTS)[number];
 
 function isAutoRepeatIntent(
@@ -56,13 +53,10 @@ function isAutoRepeatIntent(
 }
 
 function pendingCountForIntent(
-  intent: AutoRepeatIntent,
+  _intent: AutoRepeatIntent,
   result: GenerateActionState['result'],
 ): number {
-  if (!result) return 0;
-  return intent === 'sync-embeddings'
-    ? (result.status.counts.pendingChunks ?? 0)
-    : (result.status.counts.pendingLargeChunks ?? 0);
+  return result?.status.counts.pendingChunks ?? 0;
 }
 
 export function GenerateControls({
@@ -83,8 +77,7 @@ export function GenerateControls({
     null,
   );
   const [autoRunNextAt, setAutoRunNextAt] = useState<number | null>(null);
-  const embedSmallFormRef = useRef<HTMLFormElement>(null);
-  const embedLargeFormRef = useRef<HTMLFormElement>(null);
+  const embedFormRef = useRef<HTMLFormElement>(null);
 
   useEffect(() => {
     if (state.timestamp === 0) {
@@ -139,11 +132,7 @@ export function GenerateControls({
 
     const delay = Math.max(0, autoRunNextAt - Date.now());
     const timer = window.setTimeout(() => {
-      const ref =
-        autoRunIntent === 'sync-embeddings'
-          ? embedSmallFormRef
-          : embedLargeFormRef;
-      ref.current?.requestSubmit();
+        embedFormRef.current?.requestSubmit();
     }, delay);
 
     return () => {
@@ -159,9 +148,6 @@ export function GenerateControls({
   const profileSyncResult = formatJson(state.result?.profileSyncResult ?? null);
   const chunkSyncResult = formatJson(state.result?.chunkSyncResult ?? null);
   const embeddingResult = formatJson(state.result?.embeddingResult ?? null);
-  const embeddingLargeResult = formatJson(
-    state.result?.embeddingLargeResult ?? null,
-  );
 
   return (
     <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
@@ -223,21 +209,14 @@ export function GenerateControls({
         {[
           ['sync-documents', 'Sync document batch'],
           ['sync-chunks', 'Generate next batch'],
-          ['sync-embeddings', 'Embed small'],
-          ['sync-embeddings-large', 'Embed large'],
+          ['sync-embeddings', 'Embed'],
           ['run-all', 'Run full'],
         ].map(([intent, label]) => (
           <form
             action={formAction}
             className="flex"
             key={intent}
-            ref={
-              intent === 'sync-embeddings'
-                ? embedSmallFormRef
-                : intent === 'sync-embeddings-large'
-                  ? embedLargeFormRef
-                  : undefined
-            }
+            ref={intent === 'sync-embeddings' ? embedFormRef : undefined}
             onSubmit={() => {
               // Cancel scheduled auto-run when the user manually triggers any action.
               setAutoRunIntent(null);
@@ -336,7 +315,7 @@ export function GenerateControls({
       ) : null}
 
       {state.result ? (
-        <div className="mt-8 grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
+        <div className="mt-8 grid gap-4 lg:grid-cols-3">
           <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
             <h3 className="text-sm font-semibold text-slate-950">
               Document sync result
@@ -359,14 +338,6 @@ export function GenerateControls({
             </h3>
             <pre className="mt-3 wrap-break-word whitespace-pre-wrap text-xs leading-5 text-slate-700">
               {embeddingResult || 'Not run in the last action.'}
-            </pre>
-          </section>
-          <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-            <h3 className="text-sm font-semibold text-slate-950">
-              Large embedding result
-            </h3>
-            <pre className="mt-3 wrap-break-word whitespace-pre-wrap text-xs leading-5 text-slate-700">
-              {embeddingLargeResult || 'Not run in the last action.'}
             </pre>
           </section>
         </div>

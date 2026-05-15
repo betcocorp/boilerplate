@@ -1,4 +1,4 @@
-import { createEmbedding, DEFAULT_EMBEDDING_MODEL } from '~/lib/rag/embeddings';
+import { createEmbedding, EMBEDDING_MODEL } from '~/lib/rag/embeddings';
 import { getOpenAIClient } from '~/lib/openai/client';
 import { normalizeForDedupe } from '~/lib/utils';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
@@ -21,7 +21,7 @@ type SearchEmbeddingRow = {
   id: number;
   query_string: string;
   query_rewritten: string | null;
-  embeddings: string | number[] | null;
+  embeddings_large: string | number[] | null;
   query_count: number;
   timing_sample_count: number;
   avg_total_search_ms?: number | null;
@@ -227,7 +227,7 @@ function toVectorLiteral(embedding: number[]) {
 }
 
 function getEmbeddingModelName(model?: string) {
-  return model?.trim() || process.env.OPENAI_EMBEDDING_MODEL || DEFAULT_EMBEDDING_MODEL;
+  return model?.trim() || EMBEDDING_MODEL;
 }
 
 function normalizeRewrittenQuery(query: string) {
@@ -346,7 +346,7 @@ async function getCachedOrNewEmbedding(
     .schema('rag')
     .from('search_embedding')
     .select(
-      'id, query_string, query_rewritten, embeddings, query_count, timing_sample_count, avg_total_search_ms, avg_query_embedding_ms, avg_query_rewrite_ms, avg_cache_lookup_ms, avg_embedding_create_ms, avg_cache_persist_ms, avg_similarity_search_ms',
+      'id, query_string, query_rewritten, embeddings_large, query_count, timing_sample_count, avg_total_search_ms, avg_query_embedding_ms, avg_query_rewrite_ms, avg_cache_lookup_ms, avg_embedding_create_ms, avg_cache_persist_ms, avg_similarity_search_ms',
     )
     .eq('query_string', normalizedQueryString)
     .is('deleted_at', null)
@@ -360,8 +360,8 @@ async function getCachedOrNewEmbedding(
     );
   }
 
-  const exact = ((exactRows ?? [])[0] ?? null) as SearchEmbeddingRow | null;
-  const exactEmbedding = parseVectorEmbedding(exact?.embeddings ?? null);
+  const exact = ((exactRows ?? [])[0] ?? null) as unknown as SearchEmbeddingRow | null;
+  const exactEmbedding = parseVectorEmbedding(exact?.embeddings_large ?? null);
   const resolvedModel = getEmbeddingModelName(model);
 
   if (exact && exactEmbedding) {
@@ -418,8 +418,8 @@ async function getCachedOrNewEmbedding(
     Array.isArray(approximateRow)
       ? (approximateRow[0] ?? null)
       : (approximateRow ?? null)
-  ) as ApproximateSearchEmbeddingRow | null;
-  const approximateEmbedding = parseVectorEmbedding(approximate?.embeddings ?? null);
+  ) as unknown as ApproximateSearchEmbeddingRow | null;
+  const approximateEmbedding = parseVectorEmbedding(approximate?.embeddings_large ?? null);
 
   if (approximate && approximateEmbedding) {
     const persistStartedAt = nowMs();
@@ -471,7 +471,7 @@ async function getCachedOrNewEmbedding(
       .schema('rag')
       .from('search_embedding')
       .select(
-        'id, query_string, query_rewritten, embeddings, query_count, timing_sample_count, avg_total_search_ms, avg_query_embedding_ms, avg_query_rewrite_ms, avg_cache_lookup_ms, avg_embedding_create_ms, avg_cache_persist_ms, avg_similarity_search_ms',
+        'id, query_string, query_rewritten, embeddings_large, query_count, timing_sample_count, avg_total_search_ms, avg_query_embedding_ms, avg_query_rewrite_ms, avg_cache_lookup_ms, avg_embedding_create_ms, avg_cache_persist_ms, avg_similarity_search_ms',
       )
       .eq('query_rewritten', rewrittenQuery)
       .is('deleted_at', null)
@@ -487,7 +487,7 @@ async function getCachedOrNewEmbedding(
     existing = (existingRow ?? null) as SearchEmbeddingRow | null;
   }
 
-  const cachedEmbedding = parseVectorEmbedding(existing?.embeddings ?? null);
+  const cachedEmbedding = parseVectorEmbedding(existing?.embeddings_large ?? null);
 
   if (existing && cachedEmbedding) {
     const persistStartedAt = nowMs();
@@ -535,7 +535,7 @@ async function getCachedOrNewEmbedding(
       .update({
         query_string: normalizedQueryString,
         query_rewritten: rewrittenQuery,
-        embeddings: embeddingLiteral,
+        embeddings_large: embeddingLiteral,
         query_count: (existing.query_count ?? 0) + 1,
       })
       .eq('id', existing.id);
@@ -554,7 +554,7 @@ async function getCachedOrNewEmbedding(
       .insert({
         query_string: normalizedQueryString,
         query_rewritten: rewrittenQuery,
-        embeddings: embeddingLiteral,
+        embeddings_large: embeddingLiteral,
         query_count: 1,
       })
       .select(

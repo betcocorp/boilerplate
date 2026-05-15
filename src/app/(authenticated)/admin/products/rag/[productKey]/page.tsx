@@ -63,7 +63,7 @@ type RagChunk = {
   heading: string | null;
   chunk_text: string;
   token_count: number | null;
-  embedding_model: string | null;
+  embedding_model_large: string | null;
   metadata: JsonObject | null;
   created_at: string;
   updated_at: string;
@@ -271,7 +271,7 @@ export default async function RagProductLineDetailsPage({
     rag
       .from('document_chunk')
       .select(
-        'id, chunk_key, chunk_index, section_path, heading, chunk_text, token_count, embedding_model, metadata, created_at, updated_at',
+        'id, chunk_key, chunk_index, section_path, heading, chunk_text, token_count, embedding_model_large, metadata, created_at, updated_at',
       )
       .eq('document_id', document.id)
       .order('chunk_index', { ascending: true }),
@@ -550,9 +550,9 @@ export default async function RagProductLineDetailsPage({
                             {chunk.heading}
                           </span>
                         ) : null}
-                        {chunk.embedding_model ? (
+                        {chunk.embedding_model_large ? (
                           <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">
-                            {chunk.embedding_model}
+                            {chunk.embedding_model_large}
                           </span>
                         ) : (
                           <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700">

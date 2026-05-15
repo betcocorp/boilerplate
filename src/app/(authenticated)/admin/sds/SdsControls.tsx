@@ -21,7 +21,7 @@ const initialState: SdsActionState = {
   result: null,
 };
 
-const AUTO_REPEAT_MODES = ['embed-next', 'embed-next-large'] as const;
+const AUTO_REPEAT_MODES = ['embed-next'] as const;
 type AutoRepeatMode = (typeof AUTO_REPEAT_MODES)[number];
 
 function isAutoRepeatMode(value: string | undefined): value is AutoRepeatMode {
@@ -29,12 +29,10 @@ function isAutoRepeatMode(value: string | undefined): value is AutoRepeatMode {
 }
 
 function pendingCountForMode(
-  mode: AutoRepeatMode,
+  _mode: AutoRepeatMode,
   status: SdsDashboardStatus,
 ): number {
-  return mode === 'embed-next'
-    ? (status.totals.pendingChunks ?? 0)
-    : (status.totals.pendingLargeChunks ?? 0);
+  return status.totals.pendingChunks ?? 0;
 }
 
 function statusClasses(status: string) {
@@ -70,8 +68,7 @@ export function SdsControls({
   const [timerNow, setTimerNow] = useState(() => Date.now());
   const [autoRunMode, setAutoRunMode] = useState<AutoRepeatMode | null>(null);
   const [autoRunNextAt, setAutoRunNextAt] = useState<number | null>(null);
-  const embedSmallFormRef = useRef<HTMLFormElement>(null);
-  const embedLargeFormRef = useRef<HTMLFormElement>(null);
+  const embedFormRef = useRef<HTMLFormElement>(null);
 
   const activeStatus = state.result?.status ?? initialStatus;
 
@@ -80,10 +77,8 @@ export function SdsControls({
     'ingest-next': 'Ingest next batch',
     'ingest-all': 'Ingest all pending',
     'retry-failed': 'Retry failed files',
-    'embed-next': 'Embed next (small)',
-    'embed-all': 'Embed all (small)',
-    'embed-next-large': 'Embed next (large)',
-    'embed-all-large': 'Embed all (large)',
+    'embed-next': 'Embed next batch',
+    'embed-all': 'Embed all pending',
   };
 
   useEffect(() => {
@@ -138,8 +133,7 @@ export function SdsControls({
 
     const delay = Math.max(0, autoRunNextAt - Date.now());
     const timer = window.setTimeout(() => {
-      const ref = autoRunMode === 'embed-next' ? embedSmallFormRef : embedLargeFormRef;
-      ref.current?.requestSubmit();
+      embedFormRef.current?.requestSubmit();
     }, delay);
 
     return () => {
@@ -165,10 +159,8 @@ export function SdsControls({
     ['ingest-next', 'Ingest next batch'],
     ['ingest-all', 'Ingest all pending'],
     ['retry-failed', 'Retry failed files'],
-    ['embed-next', 'Embed next (small)'],
-    ['embed-all', 'Embed all (small)'],
-    ['embed-next-large', 'Embed next (large)'],
-    ['embed-all-large', 'Embed all (large)'],
+    ['embed-next', 'Embed next batch'],
+    ['embed-all', 'Embed all pending'],
   ];
 
   return (
@@ -204,13 +196,7 @@ export function SdsControls({
               action={formAction}
               className="flex"
               key={mode}
-              ref={
-                mode === 'embed-next'
-                  ? embedSmallFormRef
-                  : mode === 'embed-next-large'
-                    ? embedLargeFormRef
-                    : undefined
-              }
+              ref={mode === 'embed-next' ? embedFormRef : undefined}
               onSubmit={() => {
                 // Cancel scheduled auto-run when the user manually triggers any action.
                 setAutoRunMode(null);
@@ -326,7 +312,7 @@ export function SdsControls({
             {activeStatus.warning}
           </div>
         ) : null}
-        <div className="grid gap-4 md:grid-cols-3 xl:grid-cols-6">
+        <div className="grid gap-4 md:grid-cols-3 xl:grid-cols-5">
           <article className="rounded-2xl bg-slate-50 p-4">
             <p className="text-xs font-medium uppercase text-slate-500">Seeded</p>
             <p className="mt-1 text-2xl font-semibold text-slate-950">
@@ -353,24 +339,13 @@ export function SdsControls({
           </article>
           <article className="rounded-2xl bg-slate-50 p-4">
             <p className="text-xs font-medium uppercase text-slate-500">
-              Embeds (small)
+              Embedded
             </p>
             <p className="mt-1 text-2xl font-semibold text-slate-950">
               {activeStatus.totals.embeddedChunks}
             </p>
             <p className="mt-1 text-xs text-slate-500">
               {activeStatus.totals.pendingChunks} pending
-            </p>
-          </article>
-          <article className="rounded-2xl bg-slate-50 p-4">
-            <p className="text-xs font-medium uppercase text-slate-500">
-              Embeds (large)
-            </p>
-            <p className="mt-1 text-2xl font-semibold text-slate-950">
-              {activeStatus.totals.embeddedLargeChunks}
-            </p>
-            <p className="mt-1 text-xs text-slate-500">
-              {activeStatus.totals.pendingLargeChunks} pending
             </p>
           </article>
         </div>

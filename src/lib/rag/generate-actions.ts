@@ -28,8 +28,6 @@ export type GenerateActionState = {
     chunkSyncResult: Record<string, unknown> | null;
     embeddingRuns: number;
     embeddingResult: Record<string, unknown> | null;
-    embeddingLargeRuns: number;
-    embeddingLargeResult: Record<string, unknown> | null;
     status: RagGenerationStatus;
   } | null;
 };
@@ -59,12 +57,6 @@ function getMessage(intent: RagPipelineIntent, embeddingRuns: number) {
 
   if (intent === 'sync-chunks') {
     return 'Generated or refreshed the next RAG chunk batch.';
-  }
-
-  if (intent === 'sync-embeddings-large') {
-    return embeddingRuns > 0
-      ? `Ran ${embeddingRuns} large-embedding batch pass${embeddingRuns === 1 ? '' : 'es'} (text-embedding-3-large).`
-      : 'No pending chunks required large embedding.';
   }
 
   return embeddingRuns > 0
@@ -114,10 +106,7 @@ export async function runGenerateAction(
 
     const nextState: GenerateActionState = {
       ok: true,
-      message: getMessage(
-        result.intent,
-        result.intent === 'sync-embeddings-large' ? result.embeddingLargeRuns : result.embeddingRuns,
-      ),
+      message: getMessage(result.intent, result.embeddingRuns),
       error: null,
       timestamp: Date.now(),
       durationMs: Date.now() - startedAt,
@@ -128,8 +117,6 @@ export async function runGenerateAction(
         chunkSyncResult: result.chunkSyncResult,
         embeddingRuns: result.embeddingRuns,
         embeddingResult: result.embeddingResult,
-        embeddingLargeRuns: result.embeddingLargeRuns,
-        embeddingLargeResult: result.embeddingLargeResult,
         status: result.status,
       },
     };

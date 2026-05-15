@@ -4,9 +4,10 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3';
 import { createHash } from 'node:crypto';
-import { basename, extname } from 'node:path';
+import { basename, extname, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
-import { syncDocumentChunkEmbeddings, syncDocumentChunkEmbeddingsLarge } from '~/lib/rag/embeddings';
+import { syncDocumentChunkEmbeddings } from '~/lib/rag/embeddings';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 import type { Json as RagJson } from '~/types/supabase.rag';
 
@@ -93,8 +94,6 @@ export type SdsDashboardStatus = {
     chunks: number;
     embeddedChunks: number;
     pendingChunks: number;
-    embeddedLargeChunks: number;
-    pendingLargeChunks: number;
   };
   preview: {
     showing: number;
@@ -110,9 +109,7 @@ export type SdsIngestionRunMode =
   | 'ingest-all'
   | 'retry-failed'
   | 'embed-next'
-  | 'embed-all'
-  | 'embed-next-large'
-  | 'embed-all-large';
+  | 'embed-all';
 
 export type SdsIngestionRunResult = {
   mode: SdsIngestionRunMode;
@@ -400,8 +397,12 @@ function computeChecksum(buffer: Buffer) {
 
 async function parsePdf(buffer: Buffer) {
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const standardFontDataUrl = pathToFileURL(
+    join(process.cwd(), 'node_modules/pdfjs-dist/standard_fonts/'),
+  ).href;
   const loadingTask = pdfjs.getDocument({
     data: new Uint8Array(buffer),
+    standardFontDataUrl,
   });
   const pdfDocument = await loadingTask.promise;
   const pageCount = pdfDocument.numPages;
@@ -801,8 +802,6 @@ function toDashboardStatus(rows: SdsDashboardDocument[]): SdsDashboardStatus {
       chunks: rows.reduce((sum, row) => sum + row.chunkCount, 0),
       embeddedChunks: 0,
       pendingChunks: 0,
-      embeddedLargeChunks: 0,
-      pendingLargeChunks: 0,
     },
     preview: {
       showing: visibleRows.length,
@@ -823,8 +822,6 @@ function toFallbackStatus(message: string): SdsDashboardStatus {
       chunks: 0,
       embeddedChunks: 0,
       pendingChunks: 0,
-      embeddedLargeChunks: 0,
-      pendingLargeChunks: 0,
     },
     preview: {
       showing: 0,
@@ -839,8 +836,6 @@ type SdsChunkCounts = {
   chunks: number;
   embeddedChunks: number;
   pendingChunks: number;
-  embeddedLargeChunks: number;
-  pendingLargeChunks: number;
 };
 
 async function loadSdsChunkEmbeddingTotals(): Promise<SdsChunkCounts> {
@@ -850,17 +845,11 @@ async function loadSdsChunkEmbeddingTotals(): Promise<SdsChunkCounts> {
   const [
     { count: totalCount, error: totalError },
     { count: embeddedCount, error: embeddedError },
-    { count: embeddedLargeCount, error: embeddedLargeError },
   ] = await Promise.all([
     rag
       .from('document_chunk')
       .select('id', { count: 'exact', head: true })
       .like('chunk_key', 'sds:%'),
-    rag
-      .from('document_chunk')
-      .select('id', { count: 'exact', head: true })
-      .like('chunk_key', 'sds:%')
-      .not('embedding', 'is', null),
     (rag.from('document_chunk') as unknown as {
       select(cols: string, opts: { count: 'exact'; head: true }): {
         like(col: string, val: string): {
@@ -881,20 +870,13 @@ async function loadSdsChunkEmbeddingTotals(): Promise<SdsChunkCounts> {
     throw new Error(`Failed to count embedded SDS chunks: ${embeddedError.message}`);
   }
 
-  if (embeddedLargeError) {
-    throw new Error(`Failed to count large-embedded SDS chunks: ${embeddedLargeError.message}`);
-  }
-
   const total = totalCount ?? 0;
   const embedded = embeddedCount ?? 0;
-  const embeddedLarge = embeddedLargeCount ?? 0;
 
   return {
     chunks: total,
     embeddedChunks: embedded,
     pendingChunks: total - embedded,
-    embeddedLargeChunks: embeddedLarge,
-    pendingLargeChunks: total - embeddedLarge,
   };
 }
 
@@ -910,8 +892,6 @@ async function withSdsChunkEmbeddingTotals(
         chunks: totals.chunks,
         embeddedChunks: totals.embeddedChunks,
         pendingChunks: totals.pendingChunks,
-        embeddedLargeChunks: totals.embeddedLargeChunks,
-        pendingLargeChunks: totals.pendingLargeChunks,
       },
     };
   } catch {
@@ -1086,31 +1066,6 @@ export async function runSdsIngestion(
 
       if (
         mode === 'embed-next' ||
-        embedResult.remainingChunks === 0 ||
-        embedResult.chunksEmbedded === 0
-      ) {
-        break;
-      }
-    }
-    status = await fallbackStatusFromExistingRecords(
-      'S3 discovery was skipped for embedding-only SDS action.',
-    );
-  } else if (mode === 'embed-next-large' || mode === 'embed-all-large') {
-    let runCount = 0;
-
-    while (runCount < MAX_EMBEDDING_RUNS) {
-      const embedResult = await syncDocumentChunkEmbeddingsLarge({
-        batchSize,
-        maxBatches: mode === 'embed-next-large' ? 1 : 20,
-        documentKind: DOCUMENT_KIND,
-      });
-
-      runCount += 1;
-      processed += embedResult.chunksEmbedded;
-      succeeded += embedResult.chunksEmbedded;
-
-      if (
-        mode === 'embed-next-large' ||
         embedResult.remainingChunks === 0 ||
         embedResult.chunksEmbedded === 0
       ) {
