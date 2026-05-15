@@ -6,7 +6,7 @@ import {
 import { createHash } from 'node:crypto';
 import { basename, extname } from 'node:path';
 
-import { syncDocumentChunkEmbeddings } from '~/lib/rag/embeddings';
+import { syncDocumentChunkEmbeddings, syncDocumentChunkEmbeddingsLarge } from '~/lib/rag/embeddings';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 import type { Json as RagJson } from '~/types/supabase.rag';
 
@@ -92,6 +92,9 @@ export type SdsDashboardStatus = {
     failed: number;
     chunks: number;
     embeddedChunks: number;
+    pendingChunks: number;
+    embeddedLargeChunks: number;
+    pendingLargeChunks: number;
   };
   preview: {
     showing: number;
@@ -107,7 +110,9 @@ export type SdsIngestionRunMode =
   | 'ingest-all'
   | 'retry-failed'
   | 'embed-next'
-  | 'embed-all';
+  | 'embed-all'
+  | 'embed-next-large'
+  | 'embed-all-large';
 
 export type SdsIngestionRunResult = {
   mode: SdsIngestionRunMode;
@@ -795,6 +800,9 @@ function toDashboardStatus(rows: SdsDashboardDocument[]): SdsDashboardStatus {
       failed: rows.filter((row) => row.status === 'failed').length,
       chunks: rows.reduce((sum, row) => sum + row.chunkCount, 0),
       embeddedChunks: 0,
+      pendingChunks: 0,
+      embeddedLargeChunks: 0,
+      pendingLargeChunks: 0,
     },
     preview: {
       showing: visibleRows.length,
@@ -814,6 +822,9 @@ function toFallbackStatus(message: string): SdsDashboardStatus {
       failed: 0,
       chunks: 0,
       embeddedChunks: 0,
+      pendingChunks: 0,
+      embeddedLargeChunks: 0,
+      pendingLargeChunks: 0,
     },
     preview: {
       showing: 0,
@@ -824,22 +835,43 @@ function toFallbackStatus(message: string): SdsDashboardStatus {
   };
 }
 
-async function loadSdsChunkEmbeddingTotals() {
+type SdsChunkCounts = {
+  chunks: number;
+  embeddedChunks: number;
+  pendingChunks: number;
+  embeddedLargeChunks: number;
+  pendingLargeChunks: number;
+};
+
+async function loadSdsChunkEmbeddingTotals(): Promise<SdsChunkCounts> {
   const supabase = getSupabaseServiceRoleClient();
   const rag = supabase.schema('rag');
 
-  const [{ count: totalCount, error: totalError }, { count: embeddedCount, error: embeddedError }] =
-    await Promise.all([
-      rag
-        .from('document_chunk')
-        .select('id', { count: 'exact', head: true })
-        .like('chunk_key', 'sds:%'),
-      rag
-        .from('document_chunk')
-        .select('id', { count: 'exact', head: true })
-        .like('chunk_key', 'sds:%')
-        .not('embedding', 'is', null),
-    ]);
+  const [
+    { count: totalCount, error: totalError },
+    { count: embeddedCount, error: embeddedError },
+    { count: embeddedLargeCount, error: embeddedLargeError },
+  ] = await Promise.all([
+    rag
+      .from('document_chunk')
+      .select('id', { count: 'exact', head: true })
+      .like('chunk_key', 'sds:%'),
+    rag
+      .from('document_chunk')
+      .select('id', { count: 'exact', head: true })
+      .like('chunk_key', 'sds:%')
+      .not('embedding', 'is', null),
+    (rag.from('document_chunk') as unknown as {
+      select(cols: string, opts: { count: 'exact'; head: true }): {
+        like(col: string, val: string): {
+          not(col: string, op: string, val: null): Promise<{ count: number | null; error: { message: string } | null }>;
+        };
+      };
+    })
+      .select('id', { count: 'exact', head: true })
+      .like('chunk_key', 'sds:%')
+      .not('embedding_large', 'is', null),
+  ]);
 
   if (totalError) {
     throw new Error(`Failed to count SDS chunks: ${totalError.message}`);
@@ -849,9 +881,20 @@ async function loadSdsChunkEmbeddingTotals() {
     throw new Error(`Failed to count embedded SDS chunks: ${embeddedError.message}`);
   }
 
+  if (embeddedLargeError) {
+    throw new Error(`Failed to count large-embedded SDS chunks: ${embeddedLargeError.message}`);
+  }
+
+  const total = totalCount ?? 0;
+  const embedded = embeddedCount ?? 0;
+  const embeddedLarge = embeddedLargeCount ?? 0;
+
   return {
-    chunks: totalCount ?? 0,
-    embeddedChunks: embeddedCount ?? 0,
+    chunks: total,
+    embeddedChunks: embedded,
+    pendingChunks: total - embedded,
+    embeddedLargeChunks: embeddedLarge,
+    pendingLargeChunks: total - embeddedLarge,
   };
 }
 
@@ -866,6 +909,9 @@ async function withSdsChunkEmbeddingTotals(
         ...status.totals,
         chunks: totals.chunks,
         embeddedChunks: totals.embeddedChunks,
+        pendingChunks: totals.pendingChunks,
+        embeddedLargeChunks: totals.embeddedLargeChunks,
+        pendingLargeChunks: totals.pendingLargeChunks,
       },
     };
   } catch {
@@ -1040,6 +1086,31 @@ export async function runSdsIngestion(
 
       if (
         mode === 'embed-next' ||
+        embedResult.remainingChunks === 0 ||
+        embedResult.chunksEmbedded === 0
+      ) {
+        break;
+      }
+    }
+    status = await fallbackStatusFromExistingRecords(
+      'S3 discovery was skipped for embedding-only SDS action.',
+    );
+  } else if (mode === 'embed-next-large' || mode === 'embed-all-large') {
+    let runCount = 0;
+
+    while (runCount < MAX_EMBEDDING_RUNS) {
+      const embedResult = await syncDocumentChunkEmbeddingsLarge({
+        batchSize,
+        maxBatches: mode === 'embed-next-large' ? 1 : 20,
+        documentKind: DOCUMENT_KIND,
+      });
+
+      runCount += 1;
+      processed += embedResult.chunksEmbedded;
+      succeeded += embedResult.chunksEmbedded;
+
+      if (
+        mode === 'embed-next-large' ||
         embedResult.remainingChunks === 0 ||
         embedResult.chunksEmbedded === 0
       ) {

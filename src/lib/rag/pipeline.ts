@@ -1,4 +1,5 @@
-import { syncDocumentChunkEmbeddings } from '~/lib/rag/embeddings';
+import { syncDocumentChunkEmbeddings, syncDocumentChunkEmbeddingsLarge } from '~/lib/rag/embeddings';
+import { withRetry } from '~/lib/utils';
 import { clampPositiveInteger } from '~/lib/utils/params';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
@@ -38,6 +39,8 @@ export type RagGenerationStatus = {
     chunks: number;
     embeddedChunks: number;
     pendingChunks: number;
+    embeddedLargeChunks: number;
+    pendingLargeChunks: number;
   };
   latest: {
     sourceRecordUpdatedAt: string | null;
@@ -50,6 +53,7 @@ export type RagPipelineIntent =
   | 'sync-documents'
   | 'sync-chunks'
   | 'sync-embeddings'
+  | 'sync-embeddings-large'
   | 'run-all';
 
 export type RagPipelineRunOptions = {
@@ -65,6 +69,8 @@ export type RagPipelineRunResult = {
   chunkSyncResult: JsonObject | null;
   embeddingRuns: number;
   embeddingResult: JsonObject | null;
+  embeddingLargeRuns: number;
+  embeddingLargeResult: JsonObject | null;
   status: RagGenerationStatus;
 };
 
@@ -233,6 +239,8 @@ export async function getRagGenerationStatus(): Promise<RagGenerationStatus> {
     chunks,
     embeddedChunks,
     pendingChunks,
+    embeddedLargeChunks,
+    pendingLargeChunks,
     sourceRecordUpdatedAt,
     documentUpdatedAt,
     chunkUpdatedAt,
@@ -257,6 +265,14 @@ export async function getRagGenerationStatus(): Promise<RagGenerationStatus> {
     safeCount('document_chunk', warnings, (query) =>
       query.is('embedding', null),
     ),
+    safeCount('document_chunk', warnings, (query) =>
+      (query as typeof query & { not(col: string, op: string, val: null): typeof query })
+        .not('embedding_large', 'is', null),
+    ),
+    safeCount('document_chunk', warnings, (query) =>
+      (query as typeof query & { is(col: string, val: null): typeof query })
+        .is('embedding_large', null),
+    ),
     safeLatestUpdatedAt('source_record', warnings),
     safeLatestUpdatedAt('document', warnings),
     safeLatestUpdatedAt('document_chunk', warnings),
@@ -278,6 +294,8 @@ export async function getRagGenerationStatus(): Promise<RagGenerationStatus> {
       chunks,
       embeddedChunks,
       pendingChunks,
+      embeddedLargeChunks,
+      pendingLargeChunks,
     },
     latest: {
       sourceRecordUpdatedAt,
@@ -289,11 +307,11 @@ export async function getRagGenerationStatus(): Promise<RagGenerationStatus> {
 
 async function syncLegacyProductProfiles(languageCode: string) {
   const supabase = getSupabaseServiceRoleClient();
-  const { data, error } = await supabase
-    .schema('rag')
-    .rpc('sync_legacy_product_profiles', {
-      p_language_code: languageCode,
-    });
+  const { data, error } = await withRetry(() =>
+    supabase
+      .schema('rag')
+      .rpc('sync_legacy_product_profiles', { p_language_code: languageCode }),
+  );
 
   if (error) {
     throw new Error(`Failed to sync RAG documents: ${error.message}`);
@@ -304,11 +322,11 @@ async function syncLegacyProductProfiles(languageCode: string) {
 
 async function syncLegacyProductChunks(languageCode: string) {
   const supabase = getSupabaseServiceRoleClient();
-  const { data, error } = await supabase
-    .schema('rag')
-    .rpc('sync_legacy_product_profile_chunks', {
-      p_language_code: languageCode,
-    });
+  const { data, error } = await withRetry(() =>
+    supabase
+      .schema('rag')
+      .rpc('sync_legacy_product_profile_chunks', { p_language_code: languageCode }),
+  );
 
   if (error) {
     throw new Error(`Failed to sync RAG chunks: ${error.message}`);
@@ -328,9 +346,11 @@ export async function runRagPipeline(
   let profileSyncResult: JsonObject | null = null;
   let chunkSyncResult: JsonObject | null = null;
   let embeddingResult: JsonObject | null = null;
+  let embeddingLargeResult: JsonObject | null = null;
   let profileRuns = 0;
   let chunkRuns = 0;
   let embeddingRuns = 0;
+  let embeddingLargeRuns = 0;
 
   if (intent === 'sync-documents' || intent === 'run-all') {
     if (intent === 'sync-documents') {
@@ -433,6 +453,22 @@ export async function runRagPipeline(
     }
   }
 
+  if (intent === 'sync-embeddings-large') {
+    while (embeddingLargeRuns < MAX_EMBEDDING_RUNS) {
+      const result = await syncDocumentChunkEmbeddingsLarge({
+        batchSize,
+        maxBatches,
+      });
+
+      embeddingLargeRuns += 1;
+      embeddingLargeResult = result as unknown as JsonObject;
+
+      if (result.remainingChunks === 0 || result.chunksEmbedded === 0) {
+        break;
+      }
+    }
+  }
+
   return {
     intent,
     languageCode,
@@ -440,6 +476,8 @@ export async function runRagPipeline(
     chunkSyncResult,
     embeddingRuns,
     embeddingResult,
+    embeddingLargeRuns,
+    embeddingLargeResult,
     status: await getRagGenerationStatus(),
   };
 }

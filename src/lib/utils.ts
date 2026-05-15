@@ -19,6 +19,33 @@ export function getErrorMessage(err: unknown, fallback?: string): string {
 }
 
 /**
+ * Retries an async operation up to `attempts` times with exponential back-off.
+ * Every failure below the attempt cap is swallowed; the last failure propagates.
+ */
+export async function withRetry<T>(
+  fn: () => PromiseLike<T>,
+  options: { attempts?: number; initialDelayMs?: number } = {},
+): Promise<T> {
+  const { attempts = 3, initialDelayMs = 1500 } = options;
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastError = err;
+      if (attempt < attempts) {
+        await new Promise<void>((resolve) =>
+          setTimeout(resolve, initialDelayMs * 2 ** (attempt - 1)),
+        );
+      }
+    }
+  }
+
+  throw lastError;
+}
+
+/**
  * Asserts that a Supabase query result has no error, throwing if one is present.
  * Returns the `data` field on success.
  */

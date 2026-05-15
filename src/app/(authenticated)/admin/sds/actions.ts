@@ -41,11 +41,19 @@ function getActionMessage(mode: SdsIngestionRunMode, succeeded: number, failed: 
   }
 
   if (mode === 'embed-next') {
-    return `Embedded ${succeeded} SDS chunk${succeeded === 1 ? '' : 's'} in the next batch.`;
+    return `Embedded ${succeeded} SDS chunk${succeeded === 1 ? '' : 's'} (small) in the next batch.`;
   }
 
   if (mode === 'embed-all') {
-    return `Embedded ${succeeded} pending SDS chunk${succeeded === 1 ? '' : 's'} across batched passes.`;
+    return `Embedded ${succeeded} pending SDS chunk${succeeded === 1 ? '' : 's'} (small) across batched passes.`;
+  }
+
+  if (mode === 'embed-next-large') {
+    return `Embedded ${succeeded} SDS chunk${succeeded === 1 ? '' : 's'} (large) in the next batch.`;
+  }
+
+  if (mode === 'embed-all-large') {
+    return `Embedded ${succeeded} pending SDS chunk${succeeded === 1 ? '' : 's'} (large) across batched passes.`;
   }
 
   if (mode === 'retry-failed') {
