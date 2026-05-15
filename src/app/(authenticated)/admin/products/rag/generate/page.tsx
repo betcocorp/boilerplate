@@ -5,6 +5,8 @@ import moment from 'moment';
 import { GenerateControls } from '~/components/admin/GenerateControls';
 import { getRagGenerationStatus } from '~/lib/rag/pipeline';
 
+export const maxDuration = 300;
+
 export const metadata = {
   title: 'RAG Pipeline Generate | Betco BEX',
   description: 'Run and monitor RAG document sync, chunking, and embedding generation.',
@@ -57,7 +59,7 @@ export default async function RagGeneratePage() {
           </div>
         </section>
 
-        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
           <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <p className="text-sm font-medium text-slate-500">Source records</p>
             <p className="mt-2 text-3xl font-semibold text-slate-950">
@@ -87,12 +89,21 @@ export default async function RagGeneratePage() {
             </p>
           </article>
           <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <p className="text-sm font-medium text-slate-500">Embeddings</p>
+            <p className="text-sm font-medium text-slate-500">Embeddings (small)</p>
             <p className="mt-2 text-3xl font-semibold text-slate-950">
               {status.counts.embeddedChunks}
             </p>
             <p className="mt-2 text-sm text-slate-600">
               {status.counts.pendingChunks} pending chunks remain
+            </p>
+          </article>
+          <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <p className="text-sm font-medium text-slate-500">Embeddings (large)</p>
+            <p className="mt-2 text-3xl font-semibold text-slate-950">
+              {status.counts.embeddedLargeChunks}
+            </p>
+            <p className="mt-2 text-sm text-slate-600">
+              {status.counts.pendingLargeChunks} pending chunks remain
             </p>
           </article>
         </section>

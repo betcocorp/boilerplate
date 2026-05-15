@@ -11,7 +11,7 @@ import { Label } from '~/components/ui/label';
 import { formatDurationMmSs } from '~/lib/utils/time';
 
 import { runSdsAction, type SdsActionState } from './actions';
-import type { SdsDashboardStatus } from './pipeline';
+import type { SdsDashboardStatus, SdsIngestionRunMode } from './pipeline';
 
 const initialState: SdsActionState = {
   ok: false,
@@ -20,6 +20,22 @@ const initialState: SdsActionState = {
   timestamp: 0,
   result: null,
 };
+
+const AUTO_REPEAT_MODES = ['embed-next', 'embed-next-large'] as const;
+type AutoRepeatMode = (typeof AUTO_REPEAT_MODES)[number];
+
+function isAutoRepeatMode(value: string | undefined): value is AutoRepeatMode {
+  return AUTO_REPEAT_MODES.includes(value as AutoRepeatMode);
+}
+
+function pendingCountForMode(
+  mode: AutoRepeatMode,
+  status: SdsDashboardStatus,
+): number {
+  return mode === 'embed-next'
+    ? (status.totals.pendingChunks ?? 0)
+    : (status.totals.pendingLargeChunks ?? 0);
+}
 
 function statusClasses(status: string) {
   if (status === 'ingested') {
@@ -47,30 +63,27 @@ export function SdsControls({
 }: {
   initialStatus: SdsDashboardStatus;
 }) {
-  const [state, formAction, pending] = useActionState(
-    runSdsAction,
-    initialState,
-  );
+  const [state, formAction, pending] = useActionState(runSdsAction, initialState);
   const [batchSize, setBatchSize] = useState('2');
-  const [autoEmbedEnabled, setAutoEmbedEnabled] = useState(false);
-  const [autoEmbedStartedAt, setAutoEmbedStartedAt] = useState<number | null>(
-    null,
-  );
-  const [autoEmbedRuns, setAutoEmbedRuns] = useState(0);
-  const [activeMode, setActiveMode] = useState<string | null>(null);
+  const [activeMode, setActiveMode] = useState<SdsIngestionRunMode | null>(null);
   const [actionStartedAt, setActionStartedAt] = useState<number | null>(null);
   const [timerNow, setTimerNow] = useState(() => Date.now());
-  const [autoTimerNow, setAutoTimerNow] = useState(() => Date.now());
-  const autoEmbedFormRef = useRef<HTMLFormElement | null>(null);
+  const [autoRunMode, setAutoRunMode] = useState<AutoRepeatMode | null>(null);
+  const [autoRunNextAt, setAutoRunNextAt] = useState<number | null>(null);
+  const embedSmallFormRef = useRef<HTMLFormElement>(null);
+  const embedLargeFormRef = useRef<HTMLFormElement>(null);
+
   const activeStatus = state.result?.status ?? initialStatus;
-  const effectiveBatchSize = autoEmbedEnabled ? '200' : batchSize;
-  const actionLabels: Record<string, string> = {
+
+  const actionLabels: Record<SdsIngestionRunMode, string> = {
     'register-seed': 'Register discovered PDFs',
     'ingest-next': 'Ingest next batch',
     'ingest-all': 'Ingest all pending',
     'retry-failed': 'Retry failed files',
-    'embed-next': 'Embed next chunk batch',
-    'embed-all': 'Embed all pending chunks',
+    'embed-next': 'Embed next (small)',
+    'embed-all': 'Embed all (small)',
+    'embed-next-large': 'Embed next (large)',
+    'embed-all-large': 'Embed all (large)',
   };
 
   useEffect(() => {
@@ -83,18 +96,28 @@ export function SdsControls({
       .format('YYYY-MM-DD HH:mm:ss')} UTC.`;
 
     if (state.ok) {
-      toast.success(state.message || 'SDS ingestion action completed.', {
-        description,
-      });
+      toast.success(state.message || 'SDS ingestion action completed.', { description });
     } else {
-      toast.error(state.error || 'SDS ingestion action failed.', {
-        description,
-      });
+      toast.error(state.error || 'SDS ingestion action failed.', { description });
     }
+
+    // Schedule next auto-run pass when an embedding action succeeds with work remaining.
+    const completedMode = state.result?.mode;
+    if (state.ok && isAutoRepeatMode(completedMode) && state.result?.status) {
+      const remaining = pendingCountForMode(completedMode, state.result.status);
+      if (remaining > 0) {
+        setAutoRunMode(completedMode);
+        setAutoRunNextAt(Date.now());
+        return;
+      }
+    }
+    setAutoRunMode(null);
+    setAutoRunNextAt(null);
   }, [state]);
 
+  // Tick every second while an action is running to update the elapsed timer.
   useEffect(() => {
-    if (!pending || actionStartedAt === null) {
+    if (!pending) {
       return;
     }
 
@@ -105,54 +128,48 @@ export function SdsControls({
     return () => {
       window.clearInterval(interval);
     };
-  }, [actionStartedAt, pending]);
+  }, [pending]);
 
+  // Fire the next auto-run pass immediately when triggered.
   useEffect(() => {
-    if (!autoEmbedEnabled) {
+    if (autoRunNextAt === null || autoRunMode === null || pending) {
       return;
     }
 
-    const clock = window.setInterval(() => {
-      setAutoTimerNow(Date.now());
-    }, 1000);
-
-    const interval = window.setInterval(() => {
-      if (pending || !autoEmbedFormRef.current) {
-        return;
-      }
-
-      const startedAt = Date.now();
-      setActiveMode('embed-next');
-      setActionStartedAt(startedAt);
-      setTimerNow(startedAt);
-      setAutoEmbedRuns((current) => current + 1);
-      autoEmbedFormRef.current.requestSubmit();
-    }, 120000);
+    const delay = Math.max(0, autoRunNextAt - Date.now());
+    const timer = window.setTimeout(() => {
+      const ref = autoRunMode === 'embed-next' ? embedSmallFormRef : embedLargeFormRef;
+      ref.current?.requestSubmit();
+    }, delay);
 
     return () => {
-      window.clearInterval(clock);
-      window.clearInterval(interval);
+      window.clearTimeout(timer);
     };
-  }, [autoEmbedEnabled, pending]);
+  }, [autoRunNextAt, autoRunMode, pending]);
 
   const currentElapsedMs =
     pending && actionStartedAt !== null
       ? Math.max(0, timerNow - actionStartedAt)
       : 0;
+
   const lastRunDurationMs =
     state.result?.startedAt && state.result?.finishedAt
       ? Math.max(
           0,
-          Date.parse(state.result.finishedAt) -
-            Date.parse(state.result.startedAt),
+          Date.parse(state.result.finishedAt) - Date.parse(state.result.startedAt),
         )
       : null;
-  const autoElapsedMs =
-    autoEmbedEnabled && autoEmbedStartedAt !== null
-      ? Math.max(0, autoTimerNow - autoEmbedStartedAt)
-      : 0;
-  const autoEmbedIsRunning =
-    autoEmbedEnabled && pending && activeMode === 'embed-next';
+
+  const buttons: [SdsIngestionRunMode, string][] = [
+    ['register-seed', 'Register discovered PDFs'],
+    ['ingest-next', 'Ingest next batch'],
+    ['ingest-all', 'Ingest all pending'],
+    ['retry-failed', 'Retry failed files'],
+    ['embed-next', 'Embed next (small)'],
+    ['embed-all', 'Embed all (small)'],
+    ['embed-next-large', 'Embed next (large)'],
+    ['embed-all-large', 'Embed all (large)'],
+  ];
 
   return (
     <div className="grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1.9fr)]">
@@ -174,60 +191,30 @@ export function SdsControls({
           <Label className="text-sm font-medium text-slate-700">Batch size</Label>
           <Input
             className="h-11 rounded-2xl px-4"
-            disabled={autoEmbedEnabled}
             min={1}
             onChange={(event) => setBatchSize(event.target.value)}
             type="number"
-            value={effectiveBatchSize}
+            value={batchSize}
           />
         </div>
-        <Button
-          className="mt-3 min-h-10 rounded-2xl bg-sky-100 px-4 py-2 font-medium text-sky-900 hover:bg-sky-200 dark:bg-sky-950/40 dark:text-sky-100 dark:hover:bg-sky-900/50"
-          onClick={() =>
-            setAutoEmbedEnabled((current) => {
-              const next = !current;
-              if (next) {
-                const now = Date.now();
-                setAutoEmbedStartedAt(now);
-                setAutoTimerNow(now);
-                setAutoEmbedRuns(0);
-              } else {
-                setAutoEmbedStartedAt(null);
-              }
-              return next;
-            })
-          }
-          type="button"
-          variant="ghost"
-        >
-          {autoEmbedEnabled ? (
-            <span className="inline-flex items-center gap-2">
-              {autoEmbedIsRunning ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : null}
-              Stop auto-embed - elapsed {formatDurationMmSs(autoElapsedMs)} - runs{' '}
-              {autoEmbedRuns}
-            </span>
-          ) : (
-            'Start auto-embed (500 every 2 min)'
-          )}
-        </Button>
 
         <div className="mt-6 grid gap-3">
-          {[
-            ['register-seed', 'Register discovered PDFs'],
-            ['ingest-next', 'Ingest next batch'],
-            ['ingest-all', 'Ingest all pending'],
-            ['retry-failed', 'Retry failed files'],
-            ['embed-next', 'Embed next chunk batch'],
-            ['embed-all', 'Embed all pending chunks'],
-          ].map(([mode, label]) => (
+          {buttons.map(([mode, label]) => (
             <form
               action={formAction}
               className="flex"
               key={mode}
-              ref={mode === 'embed-next' ? autoEmbedFormRef : undefined}
+              ref={
+                mode === 'embed-next'
+                  ? embedSmallFormRef
+                  : mode === 'embed-next-large'
+                    ? embedLargeFormRef
+                    : undefined
+              }
               onSubmit={() => {
+                // Cancel scheduled auto-run when the user manually triggers any action.
+                setAutoRunMode(null);
+                setAutoRunNextAt(null);
                 const startedAt = Date.now();
                 setActiveMode(mode);
                 setActionStartedAt(startedAt);
@@ -235,11 +222,7 @@ export function SdsControls({
               }}
             >
               <input name="mode" type="hidden" value={mode} />
-              <input
-                name="batchSize"
-                type="hidden"
-                value={effectiveBatchSize}
-              />
+              <input name="batchSize" type="hidden" value={batchSize} />
               <Button
                 className="h-11 w-full rounded-2xl px-4 font-semibold"
                 disabled={pending}
@@ -259,17 +242,47 @@ export function SdsControls({
         </div>
 
         {pending ? (
-          <div className="mt-6 rounded-2xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-900">
-            <p className="font-semibold">
-              Running:{' '}
-              {activeMode
-                ? (actionLabels[activeMode] ?? activeMode)
-                : 'SDS action'}
-            </p>
-            <p className="mt-1">
-              Elapsed: {formatDurationMmSs(currentElapsedMs)}. Large batches can
-              take several minutes while PDFs are parsed and chunked.
-            </p>
+          <div className="mt-6 flex items-center justify-between gap-3 rounded-2xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-900">
+            <div className="flex items-center gap-3">
+              <Loader2 className="size-4 animate-spin" />
+              <div>
+                <p className="font-semibold">
+                  {activeMode ? (actionLabels[activeMode] ?? activeMode) : 'SDS action'}
+                </p>
+                <p className="mt-0.5">
+                  Elapsed: {formatDurationMmSs(currentElapsedMs)}
+                </p>
+              </div>
+            </div>
+            {autoRunMode !== null ? (
+              <button
+                className="rounded-xl bg-sky-100 px-3 py-1.5 text-xs font-semibold text-sky-900 hover:bg-sky-200"
+                onClick={() => {
+                  setAutoRunMode(null);
+                  setAutoRunNextAt(null);
+                }}
+                type="button"
+              >
+                Stop auto
+              </button>
+            ) : null}
+          </div>
+        ) : autoRunMode !== null ? (
+          <div className="mt-6 flex items-center justify-between gap-3 rounded-2xl border border-violet-200 bg-violet-50 p-4 text-sm text-violet-800">
+            <div className="flex items-center gap-3">
+              <Loader2 className="size-4 animate-spin" />
+              <span>Auto-embed active &mdash; queuing next pass&hellip;</span>
+            </div>
+            <button
+              className="rounded-xl bg-violet-100 px-3 py-1.5 text-xs font-semibold text-violet-800 hover:bg-violet-200"
+              onClick={() => {
+                setAutoRunMode(null);
+                setAutoRunNextAt(null);
+              }}
+              type="button"
+            >
+              Stop
+            </button>
           </div>
         ) : null}
 
@@ -313,48 +326,52 @@ export function SdsControls({
             {activeStatus.warning}
           </div>
         ) : null}
-        <div className="grid gap-4 md:grid-cols-5">
+        <div className="grid gap-4 md:grid-cols-3 xl:grid-cols-6">
           <article className="rounded-2xl bg-slate-50 p-4">
-            <p className="text-xs font-medium uppercase text-slate-500">
-              Seeded
-            </p>
+            <p className="text-xs font-medium uppercase text-slate-500">Seeded</p>
             <p className="mt-1 text-2xl font-semibold text-slate-950">
               {activeStatus.totals.seeded}
             </p>
           </article>
           <article className="rounded-2xl bg-slate-50 p-4">
-            <p className="text-xs font-medium uppercase text-slate-500">
-              Registered
-            </p>
+            <p className="text-xs font-medium uppercase text-slate-500">Registered</p>
             <p className="mt-1 text-2xl font-semibold text-slate-950">
               {activeStatus.totals.registered}
             </p>
           </article>
           <article className="rounded-2xl bg-slate-50 p-4">
-            <p className="text-xs font-medium uppercase text-slate-500">
-              Ingested
-            </p>
+            <p className="text-xs font-medium uppercase text-slate-500">Ingested</p>
             <p className="mt-1 text-2xl font-semibold text-slate-950">
               {activeStatus.totals.ingested}
             </p>
           </article>
           <article className="rounded-2xl bg-slate-50 p-4">
-            <p className="text-xs font-medium uppercase text-slate-500">
-              Failed
-            </p>
+            <p className="text-xs font-medium uppercase text-slate-500">Failed</p>
             <p className="mt-1 text-2xl font-semibold text-slate-950">
               {activeStatus.totals.failed}
             </p>
           </article>
           <article className="rounded-2xl bg-slate-50 p-4">
             <p className="text-xs font-medium uppercase text-slate-500">
-              Chunks
+              Embeds (small)
             </p>
             <p className="mt-1 text-2xl font-semibold text-slate-950">
-              {activeStatus.totals.embeddedChunks} /{' '}
-              {activeStatus.totals.chunks}
+              {activeStatus.totals.embeddedChunks}
             </p>
-            <p className="mt-1 text-xs text-slate-500">Embedded / total</p>
+            <p className="mt-1 text-xs text-slate-500">
+              {activeStatus.totals.pendingChunks} pending
+            </p>
+          </article>
+          <article className="rounded-2xl bg-slate-50 p-4">
+            <p className="text-xs font-medium uppercase text-slate-500">
+              Embeds (large)
+            </p>
+            <p className="mt-1 text-2xl font-semibold text-slate-950">
+              {activeStatus.totals.embeddedLargeChunks}
+            </p>
+            <p className="mt-1 text-xs text-slate-500">
+              {activeStatus.totals.pendingLargeChunks} pending
+            </p>
           </article>
         </div>
 
@@ -386,9 +403,7 @@ export function SdsControls({
                       {row.s3Key}
                     </p>
                     {row.lastError ? (
-                      <p className="mt-2 text-xs text-rose-700">
-                        {row.lastError}
-                      </p>
+                      <p className="mt-2 text-xs text-rose-700">{row.lastError}</p>
                     ) : null}
                   </td>
                   <td className="px-4 py-3 align-top">
