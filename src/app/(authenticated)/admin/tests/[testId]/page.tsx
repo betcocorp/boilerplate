@@ -1,4 +1,5 @@
 import { TrashIcon, TrendingDown, TrendingUp } from 'lucide-react';
+import { Badge } from '~/components/ui/badge';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
@@ -20,11 +21,16 @@ import {
   extractItemMaxSimilarity,
 } from '~/lib/tests/prompt-aggregations';
 import {
+  extractSearchRunEmbeddingSource,
+  extractSearchRunMaxSimilarity,
+} from '~/lib/tests/response-payload';
+import {
   getGlobalTestItemSuggestionRows,
   getLegacyProductLineSuggestionMeta,
   getTestById,
   getTestItemsByTestId,
   listAllResultItemsByResultIds,
+  listSearchResultsByTestId,
   listTestResultsByTestId,
 } from '~/lib/tests/repository';
 import {
@@ -43,7 +49,12 @@ import {
   formatSimilarityDelta,
 } from '~/lib/tests/format';
 
-import { deleteTestRunAction, runTestAction } from '../actions';
+import {
+  deleteSearchRunAction,
+  deleteTestRunAction,
+  runSearchEvalAction,
+  runTestAction,
+} from '../actions';
 
 export const metadata = {
   title: 'Test Details | Betco BEX',
@@ -123,17 +134,19 @@ export default async function AdminTestDetailsPage({
     notFound();
   }
 
-  const [items, results, globalSuggestionRows, legacyProductLines] = await Promise.all([
+  const [items, results, searchResults, globalSuggestionRows, legacyProductLines] = await Promise.all([
     getTestItemsByTestId(testId),
     listTestResultsByTestId(testId, 20),
+    listSearchResultsByTestId(testId, 10),
     getGlobalTestItemSuggestionRows(),
     getLegacyProductLineSuggestionMeta(),
   ]);
   const trendRuns = [...results].reverse();
   /** One IN-query for every result item across every recent run feeds both the trend chart and the per-prompt aggregation. */
-  const allRecentResultItems = await listAllResultItemsByResultIds(
-    trendRuns.map((run) => run.id),
-  );
+  const [allRecentResultItems, searchRunItems] = await Promise.all([
+    listAllResultItemsByResultIds(trendRuns.map((run) => run.id)),
+    listAllResultItemsByResultIds(searchResults.map((run) => run.id)),
+  ]);
   const resultItemsByRunId = new Map<string, typeof allRecentResultItems>();
   for (const item of allRecentResultItems) {
     const list = resultItemsByRunId.get(item.test_result_id);
@@ -214,6 +227,47 @@ export default async function AdminTestDetailsPage({
   }
   const aggregatedRunCount = trendRuns.length;
 
+  const searchItemsByRunId = new Map<string, typeof searchRunItems>();
+  for (const item of searchRunItems) {
+    const list = searchItemsByRunId.get(item.test_result_id);
+    if (list) {
+      list.push(item);
+    } else {
+      searchItemsByRunId.set(item.test_result_id, [item]);
+    }
+  }
+  const searchRunStatsByRunId = new Map<
+    string,
+    {
+      avgMaxSim: number | null;
+      minMaxSim: number | null;
+      maxMaxSim: number | null;
+      embeddingSources: string[];
+    }
+  >();
+  for (const run of searchResults) {
+    const runItems = searchItemsByRunId.get(run.id) ?? [];
+    const maxSims = runItems
+      .map((item) => extractSearchRunMaxSimilarity(item.response_payload))
+      .filter((v): v is number => v !== null);
+    const sources = Array.from(
+      new Set(
+        runItems
+          .map((item) => extractSearchRunEmbeddingSource(item.response_payload))
+          .filter((v): v is string => v !== null),
+      ),
+    );
+    searchRunStatsByRunId.set(run.id, {
+      avgMaxSim:
+        maxSims.length > 0
+          ? maxSims.reduce((s, v) => s + v, 0) / maxSims.length
+          : null,
+      minMaxSim: maxSims.length > 0 ? Math.min(...maxSims) : null,
+      maxMaxSim: maxSims.length > 0 ? Math.max(...maxSims) : null,
+      embeddingSources: sources,
+    });
+  }
+
   /**
    * "Add prompt" comboboxes use values seen across **all** tests so the same options appear on every dataset page.
    * Expected canonical product values are **`prod_line.ProdLineKey`**; labels in the UI come from **`ProdLineDescr`** (union with historical test strings).
@@ -262,6 +316,12 @@ export default async function AdminTestDetailsPage({
               <Button asChild size="sm" variant="outline">
                 <Link href="/admin/tests">Back to tests</Link>
               </Button>
+              <form action={runSearchEvalAction}>
+                <input name="testId" type="hidden" value={test.id} />
+                <Button size="sm" type="submit" variant="outline">
+                  Run search eval
+                </Button>
+              </form>
               <form action={runTestAction}>
                 <input
                   name="returnPath"
@@ -419,6 +479,137 @@ export default async function AdminTestDetailsPage({
                                 type="submit"
                                 variant="destructive"
                               >
+                                <TrashIcon />
+                              </Button>
+                            </form>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })
+                )}
+              </TableBody>
+            </table>
+          </div>
+        </section>
+
+        <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
+          <h2 className="text-lg font-semibold text-slate-900">Search eval runs</h2>
+          <div className="relative mt-4 max-h-[min(40vh,26rem)] overflow-auto overscroll-contain rounded-2xl border border-slate-200">
+            <table className="w-full min-w-[860px] caption-bottom text-sm">
+              <TableHeader className="sticky top-0 z-10 bg-white shadow-[0_1px_0_0_rgb(226_232_240)] [&_tr]:border-b-0">
+                <TableRow>
+                  <TableHead>Run id</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead title="Prompts with ≥1 match / total. Zero-result prompts are the primary failure signal.">
+                    Match rate
+                  </TableHead>
+                  <TableHead title="Average of each prompt's highest similarity score — the primary quality signal when tuning retrieval.">
+                    Avg max sim
+                  </TableHead>
+                  <TableHead title="Lowest and highest per-prompt max-similarity. A wide gap means some prompts retrieve well and others don't.">
+                    Sim range (min – max)
+                  </TableHead>
+                  <TableHead title="Embedding source used. Comparing runs is most meaningful when this is the same.">
+                    Embedding
+                  </TableHead>
+                  <TableHead>Elapsed</TableHead>
+                  <TableHead>Started</TableHead>
+                  <TableHead>Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {searchResults.length === 0 ? (
+                  <TableRow>
+                    <TableCell className="text-slate-500" colSpan={9}>
+                      No search eval runs yet. Click &ldquo;Run search eval&rdquo; above.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  searchResults.map((run) => {
+                    const stats = searchRunStatsByRunId.get(run.id);
+                    const zeroResults = Math.max(0, run.total_items - run.passed_items);
+                    const matchRatePct =
+                      run.total_items > 0
+                        ? (run.passed_items / run.total_items) * 100
+                        : null;
+                    return (
+                      <TableRow key={run.id}>
+                        <TableCell className="font-mono text-xs">
+                          <Link
+                            className="text-sky-700 underline-offset-2 hover:underline"
+                            href={`/admin/tests/${test.id}/search-runs/${run.id}`}
+                          >
+                            {run.id.slice(0, 8)}…
+                          </Link>
+                        </TableCell>
+                        <TableCell>{run.status}</TableCell>
+                        <TableCell className="tabular-nums">
+                          <div className="flex flex-col gap-0.5">
+                            <span className="font-medium text-slate-800">
+                              {matchRatePct !== null
+                                ? `${matchRatePct.toFixed(0)}%`
+                                : '—'}
+                              <span className="ml-1.5 text-xs font-normal text-slate-500">
+                                ({run.passed_items}/{run.total_items})
+                              </span>
+                            </span>
+                            {zeroResults > 0 ? (
+                              <Badge className="w-fit" variant="destructive">
+                                {zeroResults} zero-result{zeroResults !== 1 ? 's' : ''}
+                              </Badge>
+                            ) : run.total_items > 0 ? (
+                              <span className="text-xs text-emerald-700">all matched</span>
+                            ) : null}
+                          </div>
+                        </TableCell>
+                        <TableCell className="tabular-nums text-slate-800">
+                          {stats?.avgMaxSim != null
+                            ? `${(stats.avgMaxSim * 100).toFixed(1)}%`
+                            : '—'}
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap tabular-nums text-slate-700">
+                          {stats?.minMaxSim != null && stats?.maxMaxSim != null ? (
+                            <>
+                              <span className="text-slate-500">
+                                {(stats.minMaxSim * 100).toFixed(1)}%
+                              </span>
+                              <span className="mx-1 text-slate-400">–</span>
+                              <span className="font-medium">
+                                {(stats.maxMaxSim * 100).toFixed(1)}%
+                              </span>
+                            </>
+                          ) : (
+                            '—'
+                          )}
+                        </TableCell>
+                        <TableCell className="text-xs text-slate-600">
+                          {stats?.embeddingSources.length
+                            ? stats.embeddingSources.join(', ')
+                            : '—'}
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap text-xs text-slate-600">
+                          {formatDurationSeconds(run.elapsed_ms)}
+                        </TableCell>
+                        <TableCell className="text-xs text-slate-600">
+                          {formatDate(run.started_at)}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex flex-wrap gap-2">
+                            <Button asChild size="sm" variant="outline">
+                              <Link href={`/admin/tests/${test.id}/search-runs/${run.id}`}>
+                                View
+                              </Link>
+                            </Button>
+                            <form action={deleteSearchRunAction}>
+                              <input
+                                name="returnPath"
+                                type="hidden"
+                                value={`/admin/tests/${test.id}`}
+                              />
+                              <input name="testId" type="hidden" value={test.id} />
+                              <input name="runId" type="hidden" value={run.id} />
+                              <Button size="sm" type="submit" variant="destructive">
                                 <TrashIcon />
                               </Button>
                             </form>

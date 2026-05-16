@@ -57,7 +57,7 @@ export function RunExecutionProgress({
       : 0,
   );
   const [actionPending, setActionPending] = useState<
-    null | 'pause' | 'resume' | 'cancel'
+    null | 'pause' | 'resume' | 'cancel' | 'restart'
   >(null);
   const latestSnapshot = useRef({
     status: initialStatus,
@@ -191,11 +191,12 @@ export function RunExecutionProgress({
     }
     return formatDurationSeconds(elapsedMs / completedItems);
   }, [elapsedMs, completedItems]);
-  const canPause = status === 'running';
+  const canPause = status === 'running' && completedItems > 0;
   const canResume = status === 'paused';
   const canCancel = !isTerminalStatus(status) && status !== 'cancelled';
+  const isStalled = status === 'running' && completedItems === 0 && totalItems > 0;
 
-  const handleRunAction = async (action: 'pause' | 'resume' | 'cancel') => {
+  const handleRunAction = async (action: 'pause' | 'resume' | 'cancel' | 'restart') => {
     setActionPending(action);
     try {
       const response = await fetch(`/api/admin/tests/runs/${runId}`, {
@@ -218,6 +219,9 @@ export function RunExecutionProgress({
       }
       if (payload.state === 'cancelled') {
         setStatus('cancelled');
+      }
+      if (payload.state === 'restarted' || payload.state === 'queued_for_restart') {
+        setStatus('running');
       }
       router.refresh();
     } catch {
@@ -265,6 +269,18 @@ export function RunExecutionProgress({
       </div>
 
       <div className="mt-4 flex flex-wrap items-center gap-2">
+        {isStalled && (
+          <Button
+            disabled={actionPending !== null}
+            onClick={() => {
+              void handleRunAction('restart');
+            }}
+            size="sm"
+            variant="outline"
+          >
+            Restart stalled run
+          </Button>
+        )}
         <Button
           disabled={!canPause || actionPending !== null}
           onClick={() => {

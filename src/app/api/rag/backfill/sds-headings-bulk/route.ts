@@ -16,7 +16,7 @@ export async function POST(request: Request) {
 
   const { data, error } = await supabase
     .schema('rag')
-    .rpc('enrich_sds_section_headings_batch', { p_batch_size: 5000 });
+    .rpc('run_bulk_sds_heading_backfill');
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });

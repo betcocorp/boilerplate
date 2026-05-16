@@ -381,6 +381,7 @@ export type Database = {
           id: string
           notes: string | null
           passed_items: number
+          run_mode: string
           started_at: string
           status: string
           summary: Json
@@ -395,6 +396,7 @@ export type Database = {
           id?: string
           notes?: string | null
           passed_items?: number
+          run_mode?: string
           started_at?: string
           status?: string
           summary?: Json
@@ -409,6 +411,7 @@ export type Database = {
           id?: string
           notes?: string | null
           passed_items?: number
+          run_mode?: string
           started_at?: string
           status?: string
           summary?: Json

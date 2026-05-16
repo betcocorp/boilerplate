@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 
+import { executeSearchRun } from '~/lib/tests/search-run-executor';
 import { executeTestRun } from '~/lib/tests/run-executor';
 import {
   claimQueuedTestResultForExecution,
@@ -105,7 +106,11 @@ export async function POST(
   if (run.status === 'queued') {
     const claimed = await claimQueuedTestResultForExecution(run.id);
     if (claimed) {
-      void executeTestRun(run.id);
+      if (run.run_mode === 'search') {
+        void executeSearchRun(run.id);
+      } else {
+        void executeTestRun(run.id);
+      }
       return NextResponse.json({ ok: true, state: 'started' });
     }
     return NextResponse.json({ ok: true, state: 'already_running' });
@@ -166,9 +171,52 @@ export async function PATCH(
       },
     });
     await updateTestRecord(run.test_id, { status: 'running' });
-    void executeTestRun(run.id);
+    if (run.run_mode === 'search') {
+      void executeSearchRun(run.id);
+    } else {
+      void executeTestRun(run.id);
+    }
 
     return NextResponse.json({ ok: true, state: 'resumed' });
+  }
+
+  if (action === 'restart') {
+    if (run.status !== 'running') {
+      return NextResponse.json({ error: 'Only stalled running runs can be restarted.' }, { status: 409 });
+    }
+
+    const completedFromRows = await countResultItemsByResultId(run.id);
+    if (completedFromRows > 0 || (run.passed_items ?? 0) > 0 || (run.failed_items ?? 0) > 0) {
+      return NextResponse.json(
+        { error: 'Run has already processed items; use cancel then create a new run.' },
+        { status: 409 },
+      );
+    }
+
+    const currentSummary =
+      run.summary && typeof run.summary === 'object' && !Array.isArray(run.summary)
+        ? (run.summary as Record<string, unknown>)
+        : {};
+
+    await updateTestResult(run.id, {
+      status: 'queued',
+      passed_items: 0,
+      failed_items: 0,
+      elapsed_ms: 0,
+      summary: { ...currentSummary, runner_state: 'queued', completed_items: 0 },
+    });
+    await updateTestRecord(run.test_id, { status: 'ready' });
+
+    const claimed = await claimQueuedTestResultForExecution(run.id);
+    if (claimed) {
+      if (run.run_mode === 'search') {
+        void executeSearchRun(run.id);
+      } else {
+        void executeTestRun(run.id);
+      }
+      return NextResponse.json({ ok: true, state: 'restarted' });
+    }
+    return NextResponse.json({ ok: true, state: 'queued_for_restart' });
   }
 
   if (action === 'cancel') {

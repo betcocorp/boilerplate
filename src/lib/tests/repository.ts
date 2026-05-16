@@ -344,6 +344,20 @@ export async function listTestResultsByTestId(testId: string, limit = 10) {
     .from('test_results')
     .select('*')
     .eq('test_id', testId)
+    .eq('run_mode', 'full')
+    .order('created_at', { ascending: false })
+    .limit(limit);
+
+  return (assertNoError(result) || []) as TestResultRecord[];
+}
+
+export async function listSearchResultsByTestId(testId: string, limit = 10) {
+  const supabase = getSupabaseServiceRoleClient();
+  const result = await supabase
+    .from('test_results')
+    .select('*')
+    .eq('test_id', testId)
+    .eq('run_mode', 'search')
     .order('created_at', { ascending: false })
     .limit(limit);
 

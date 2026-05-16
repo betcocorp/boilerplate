@@ -216,6 +216,77 @@ export function extractRetrievedDocumentChunks(
   return [...map.values()];
 }
 
+export type SearchRunMatch = {
+  chunk_id: string;
+  chunk_key: string;
+  chunk_index: number;
+  heading: string | null;
+  chunk_text: string;
+  document_id: string;
+  document_key: string;
+  document_title: string;
+  document_kind: string;
+  product_key: string | null;
+  product_line_key: string | null;
+  similarity: number;
+};
+
+/** Extracts the top-N matches from a search eval run's response_payload. */
+export function extractSearchRunMatches(responsePayload: unknown): SearchRunMatch[] {
+  if (!responsePayload || typeof responsePayload !== 'object' || Array.isArray(responsePayload)) {
+    return [];
+  }
+
+  const raw = (responsePayload as Record<string, unknown>).matches;
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  return raw
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+    .map((item) => ({
+      chunk_id: typeof item.chunk_id === 'string' ? item.chunk_id : '',
+      chunk_key: typeof item.chunk_key === 'string' ? item.chunk_key : '',
+      chunk_index: typeof item.chunk_index === 'number' ? item.chunk_index : 0,
+      heading: typeof item.heading === 'string' ? item.heading : null,
+      chunk_text: typeof item.chunk_text === 'string' ? item.chunk_text : '',
+      document_id: typeof item.document_id === 'string' ? item.document_id : '',
+      document_key: typeof item.document_key === 'string' ? item.document_key : '',
+      document_title: typeof item.document_title === 'string' ? item.document_title : '',
+      document_kind: typeof item.document_kind === 'string' ? item.document_kind : '',
+      product_key: typeof item.product_key === 'string' ? item.product_key : null,
+      product_line_key: typeof item.product_line_key === 'string' ? item.product_line_key : null,
+      similarity: typeof item.similarity === 'number' ? item.similarity : 0,
+    }));
+}
+
+/** Returns the top similarity score from a search eval payload, or null. */
+export function extractSearchRunMaxSimilarity(responsePayload: unknown): number | null {
+  const matches = extractSearchRunMatches(responsePayload);
+  if (matches.length === 0) return null;
+  return Math.max(...matches.map((m) => m.similarity));
+}
+
+/** Returns the embedding source label from a search eval payload. */
+export function extractSearchRunEmbeddingSource(responsePayload: unknown): string | null {
+  if (!responsePayload || typeof responsePayload !== 'object' || Array.isArray(responsePayload)) {
+    return null;
+  }
+  const src = (responsePayload as Record<string, unknown>).embeddingSource;
+  return typeof src === 'string' ? src : null;
+}
+
+/** Returns the search timing from a search eval payload (totalMs). */
+export function extractSearchRunTotalMs(responsePayload: unknown): number | null {
+  if (!responsePayload || typeof responsePayload !== 'object' || Array.isArray(responsePayload)) {
+    return null;
+  }
+  const timings = (responsePayload as Record<string, unknown>).timings;
+  if (!timings || typeof timings !== 'object' || Array.isArray(timings)) return null;
+  const ms = (timings as Record<string, unknown>).totalMs;
+  return typeof ms === 'number' ? ms : null;
+}
+
 /** Extracts completed/total progress from a run summary object. */
 export function extractProgress(
   summary: unknown,

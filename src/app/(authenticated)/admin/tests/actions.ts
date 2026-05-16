@@ -302,6 +302,7 @@ export async function runTestAction(formData: FormData) {
   const testResult = await createTestResult({
     test_id: testId,
     status: 'queued',
+    run_mode: 'full',
     total_items: items.length,
     passed_items: 0,
     failed_items: 0,
@@ -327,6 +328,74 @@ export async function runTestAction(formData: FormData) {
       `Run started for ${items.length} prompts.`,
     ),
   );
+}
+
+export async function runSearchEvalAction(formData: FormData) {
+  const testId = formData.get('testId');
+  if (typeof testId !== 'string' || !testId.trim()) {
+    redirect(encodeMessage('/admin/tests', 'error', 'Missing test id.'));
+  }
+
+  const items = await getTestItemsByTestId(testId);
+  if (items.length === 0) {
+    redirect(encodeMessage(`/admin/tests/${testId}`, 'error', 'This test has no items to run.'));
+  }
+
+  const testResult = await createTestResult({
+    test_id: testId,
+    status: 'queued',
+    run_mode: 'search',
+    total_items: items.length,
+    passed_items: 0,
+    failed_items: 0,
+    started_at: new Date().toISOString(),
+    summary: {
+      completed_items: 0,
+      total_items: items.length,
+      progress_percent: 0,
+      runner_state: 'queued',
+    },
+  });
+
+  revalidatePath('/admin/tests');
+  revalidatePath(`/admin/tests/${testId}`);
+  redirect(
+    encodeMessage(
+      `/admin/tests/${testId}/search-runs/${testResult.id}`,
+      'success',
+      `Search eval started for ${items.length} prompts.`,
+    ),
+  );
+}
+
+export async function deleteSearchRunAction(formData: FormData) {
+  const testId = formData.get('testId');
+  const runId = formData.get('runId');
+
+  if (typeof testId !== 'string' || !testId.trim()) {
+    redirect(encodeMessage('/admin/tests', 'error', 'Missing test id.'));
+  }
+
+  const returnPath = normalizeReturnPath(
+    formData.get('returnPath'),
+    `/admin/tests/${testId}`,
+  );
+
+  if (typeof runId !== 'string' || !runId.trim()) {
+    redirect(encodeMessage(returnPath, 'error', 'Missing run id.'));
+  }
+
+  const run = await getTestResultById(runId).catch(() => null);
+  if (!run || run.test_id !== testId) {
+    redirect(encodeMessage(returnPath, 'error', 'Run not found for this dataset.'));
+  }
+
+  await deleteTestResultById(runId);
+  await updateTestRecord(testId, { status: 'ready' });
+
+  revalidatePath('/admin/tests');
+  revalidatePath(`/admin/tests/${testId}`);
+  redirect(encodeMessage(returnPath, 'success', 'Search eval run deleted.'));
 }
 
 export async function createTestFromPromptsAction(formData: FormData) {
