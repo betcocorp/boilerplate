@@ -147,6 +147,14 @@ export default async function AdminTestRunDetailsPage({
     { label: 'Max', value: similarityMax },
     { label: 'Avg', value: similarityAvg },
   ];
+  const similarityBuckets = {
+    high: similarityScores.filter((s) => s >= similarityAvg).length,
+    mid: similarityScores.filter((s) => s >= similarityMin && s < similarityAvg).length,
+    low: similarityScores.filter((s) => s < similarityMin).length,
+    avgThreshold: similarityAvg,
+    minThreshold: similarityMin,
+    maxThreshold: similarityMax,
+  };
   const slowOverTenSecondsCount = resultItems.filter(
     (item) => item.elapsed_ms > 10_000,
   ).length;
@@ -258,6 +266,7 @@ export default async function AdminTestRunDetailsPage({
           notPassedItemCount={notPassedItemCount}
           passCount={passCount}
           runId={result.id}
+          similarityBuckets={similarityBuckets}
           similarityStatsData={similarityStatsData}
           slowOverTenSecondsCount={slowOverTenSecondsCount}
           totalItems={result.total_items}

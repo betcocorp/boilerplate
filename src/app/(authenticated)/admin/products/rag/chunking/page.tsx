@@ -1,0 +1,123 @@
+import Link from 'next/link';
+import { connection } from 'next/server';
+
+import { BoostRulesCard } from '~/components/admin/rag/BoostRulesCard';
+import { ChunkingConfigCard } from '~/components/admin/rag/ChunkingConfigCard';
+import { DomainMetadataCard } from '~/components/admin/rag/DomainMetadataCard';
+import { getChunkTokenStats, listEnrichmentDocuments } from '~/lib/rag/corpus-stats';
+
+export const maxDuration = 300;
+
+export const metadata = {
+  title: 'RAG Corpus Quality | Betco BEX',
+  description: 'Configure chunking strategy, domain metadata, and similarity boost rules.',
+};
+
+type PageProps = {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+};
+
+const PAGE_SIZE = 25;
+
+export default async function RagChunkingPage({ searchParams }: PageProps) {
+  await connection();
+
+  const params = await searchParams;
+  const page = Math.max(1, parseInt(String(params.page ?? '1'), 10) || 1);
+
+  const [chunkStats, { documents, total }] = await Promise.all([
+    getChunkTokenStats(),
+    listEnrichmentDocuments(page, PAGE_SIZE),
+  ]);
+
+  return (
+    <div className="flex flex-1 bg-slate-50">
+      <main className="flex w-full flex-1 flex-col gap-8 px-6 py-10 sm:px-8">
+        {/* Nav breadcrumbs */}
+        <div className="flex flex-wrap items-center gap-3">
+          <Link
+            className="inline-flex items-center rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-50"
+            href="/admin/products/rag/generate"
+          >
+            Back to RAG generate
+          </Link>
+          <Link
+            className="inline-flex items-center rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-50"
+            href="/admin/products/rag"
+          >
+            Open RAG search
+          </Link>
+        </div>
+
+        {/* Header */}
+        <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
+          <div className="flex flex-col gap-3">
+            <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-700">
+              RAG corpus quality
+            </p>
+            <h1 className="text-4xl font-semibold tracking-tight text-slate-950">
+              Corpus quality improvements
+            </h1>
+            <p className="max-w-3xl text-base leading-7 text-slate-600">
+              Four targeted improvements to raise average similarity from the current ~54% baseline.
+              Chunking config and boost rules generate migration SQL to apply.{' '}
+              <strong>Domain metadata enrichment</strong> writes to the database immediately.
+            </p>
+          </div>
+
+          <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {[
+              {
+                label: 'Semantic chunking',
+                status: 'Pending migration',
+                color: 'amber',
+              },
+              {
+                label: 'Token budget + overlap',
+                status: 'Pending migration',
+                color: 'amber',
+              },
+              {
+                label: 'Domain metadata fields',
+                status: 'Active — live',
+                color: 'emerald',
+              },
+              {
+                label: 'Similarity boost rules',
+                status: 'Pending migration',
+                color: 'amber',
+              },
+            ].map(({ label, status, color }) => (
+              <div className="rounded-2xl bg-slate-50 px-4 py-3" key={label}>
+                <p className="text-xs font-medium text-slate-700">{label}</p>
+                <span
+                  className={`mt-1.5 inline-block rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                    color === 'emerald'
+                      ? 'bg-emerald-50 text-emerald-700'
+                      : 'bg-amber-50 text-amber-700'
+                  }`}
+                >
+                  {status}
+                </span>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* Card 1: Chunking config + token budget */}
+        <ChunkingConfigCard chunkStats={chunkStats} />
+
+        {/* Card 2: Domain metadata enrichment */}
+        <DomainMetadataCard
+          documents={documents}
+          page={page}
+          pageSize={PAGE_SIZE}
+          total={total}
+        />
+
+        {/* Card 3: Boost rules */}
+        <BoostRulesCard />
+      </main>
+    </div>
+  );
+}

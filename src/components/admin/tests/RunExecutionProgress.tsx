@@ -157,7 +157,7 @@ export function RunExecutionProgress({
     void poll();
     const intervalId = window.setInterval(() => {
       void poll();
-    }, 2000);
+    }, 10000);
 
     return () => {
       window.clearInterval(intervalId);

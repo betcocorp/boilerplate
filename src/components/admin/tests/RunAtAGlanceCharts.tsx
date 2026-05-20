@@ -38,6 +38,15 @@ type SimilarityStatDatum = {
   value: number;
 };
 
+type SimilarityBuckets = {
+  high: number;
+  mid: number;
+  low: number;
+  avgThreshold: number;
+  minThreshold: number;
+  maxThreshold: number;
+};
+
 type RunAtAGlanceChartsProps = {
   runId: string;
   initialStatus: string;
@@ -48,6 +57,7 @@ type RunAtAGlanceChartsProps = {
   notPassedItemCount: number;
   elapsedTrendData: ElapsedTrendDatum[];
   similarityStatsData: SimilarityStatDatum[];
+  similarityBuckets: SimilarityBuckets;
 };
 
 type RunStatusResponse = {
@@ -161,6 +171,7 @@ export function RunAtAGlanceCharts({
   notPassedItemCount,
   elapsedTrendData,
   similarityStatsData,
+  similarityBuckets,
 }: RunAtAGlanceChartsProps) {
   const [liveStatus, setLiveStatus] = useState(initialStatus);
   const [livePassCount, setLivePassCount] = useState(passCount);
@@ -204,7 +215,7 @@ export function RunAtAGlanceCharts({
     void poll();
     const intervalId = window.setInterval(() => {
       void poll();
-    }, 2000);
+    }, 10000);
 
     return () => {
       window.clearInterval(intervalId);
@@ -384,6 +395,23 @@ export function RunAtAGlanceCharts({
               />
             </BarChart>
           </ChartContainer>
+          <dl className="mt-2 flex gap-4 text-xs text-slate-500">
+            <div className="flex items-center gap-1">
+              <span className="inline-block size-2 rounded-full bg-violet-500" />
+              <dt>High ({(similarityBuckets.avgThreshold * 100).toFixed(0)}%–{(similarityBuckets.maxThreshold * 100).toFixed(0)}%)</dt>
+              <dd className="font-medium text-slate-700">{similarityBuckets.high}</dd>
+            </div>
+            <div className="flex items-center gap-1">
+              <span className="inline-block size-2 rounded-full bg-violet-300" />
+              <dt>Mid ({(similarityBuckets.minThreshold * 100).toFixed(0)}%–{(similarityBuckets.avgThreshold * 100).toFixed(0)}%)</dt>
+              <dd className="font-medium text-slate-700">{similarityBuckets.mid}</dd>
+            </div>
+            <div className="flex items-center gap-1">
+              <span className="inline-block size-2 rounded-full bg-slate-300" />
+              <dt>Low (0%–{(similarityBuckets.minThreshold * 100).toFixed(0)}%)</dt>
+              <dd className="font-medium text-slate-700">{similarityBuckets.low}</dd>
+            </div>
+          </dl>
         </article>
       </div>
     </section>

@@ -4,9 +4,9 @@ import { CartesianGrid, Line, LineChart, XAxis, YAxis } from 'recharts';
 
 import {
   ChartContainer,
-  type ChartConfig,
   ChartTooltip,
   ChartTooltipContent,
+  type ChartConfig,
 } from '~/components/ui/chart';
 import { formatSimilarityPercent } from '~/lib/tests/format';
 
@@ -37,13 +37,23 @@ export function SimilarityFailRateTrendChart({
   return (
     <div className="mt-8">
       <ChartContainer className="h-60 w-full" config={chartConfig}>
-        <LineChart data={points} margin={{ top: 8, right: 12, left: 4, bottom: 8 }}>
+        <LineChart
+          data={points}
+          margin={{ top: 8, right: 12, left: 4, bottom: 8 }}
+        >
           <CartesianGrid vertical={false} />
-          <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} />
+          <XAxis
+            dataKey="label"
+            tickLine={false}
+            axisLine={false}
+            tickMargin={8}
+          />
           <YAxis
             domain={[0, 1]}
             tickFormatter={(value) =>
-              typeof value === 'number' ? `${(value * 100).toFixed(0)}%` : `${value ?? ''}`
+              typeof value === 'number'
+                ? `${(value * 100).toFixed(0)}%`
+                : `${value ?? ''}`
             }
             tickLine={false}
             axisLine={false}
@@ -59,7 +69,11 @@ export function SimilarityFailRateTrendChart({
                   }
                   return `Run: ${label} · ${new Date(point.runCreatedAt).toLocaleDateString()}`;
                 }}
-                formatter={(value) => formatSimilarityPercent(typeof value === 'number' ? value : null)}
+                formatter={(value) =>
+                  formatSimilarityPercent(
+                    typeof value === 'number' ? value : null,
+                  )
+                }
               />
             }
           />
@@ -81,8 +95,8 @@ export function SimilarityFailRateTrendChart({
         </LineChart>
       </ChartContainer>
       <p className="mt-3 text-xs text-muted-foreground">
-        Tracks monthly averages; includes {points.reduce((sum, p) => sum + p.totalCases, 0)} test
-        cases in range.
+        Tracks monthly averages; includes{' '}
+        {points.reduce((sum, p) => sum + p.totalCases, 0)} test cases in range.
       </p>
     </div>
   );
