@@ -1,14 +1,14 @@
 'use client';
 
 import { Loader2 } from 'lucide-react';
-import moment from 'moment';
+import { useRouter } from 'next/navigation';
 import { useActionState, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '~/components/ui/button';
 import { Input } from '~/components/ui/input';
 import { Label } from '~/components/ui/label';
-import { formatDurationMmSs } from '~/lib/utils/time';
+import { formatDurationMmSs, formatEasternTimestamp } from '~/lib/utils/time';
 
 import { runSdsAction, type SdsActionState } from './actions';
 import type { SdsDashboardStatus, SdsIngestionRunMode } from './pipeline';
@@ -53,7 +53,7 @@ function formatIso(value: string | null) {
     return 'N/A';
   }
 
-  return `${moment.utc(value).format('YYYY-MM-DD HH:mm:ss')} UTC`;
+  return formatEasternTimestamp(value);
 }
 
 export function SdsControls({
@@ -61,6 +61,7 @@ export function SdsControls({
 }: {
   initialStatus: SdsDashboardStatus;
 }) {
+  const router = useRouter();
   const [state, formAction, pending] = useActionState(runSdsAction, initialState);
   const [batchSize, setBatchSize] = useState('2');
   const [activeMode, setActiveMode] = useState<SdsIngestionRunMode | null>(null);
@@ -71,6 +72,13 @@ export function SdsControls({
   const embedFormRef = useRef<HTMLFormElement>(null);
 
   const activeStatus = state.result?.status ?? initialStatus;
+
+  // Refresh server-fetched stats every 2.5 min while ingestion is running
+  useEffect(() => {
+    if (!pending && autoRunMode === null) return;
+    const interval = window.setInterval(() => router.refresh(), 150_000);
+    return () => window.clearInterval(interval);
+  }, [pending, autoRunMode, router]);
 
   const actionLabels: Record<SdsIngestionRunMode, string> = {
     'register-seed': 'Register discovered PDFs',
@@ -86,9 +94,7 @@ export function SdsControls({
       return;
     }
 
-    const description = `Completed at ${moment
-      .utc(state.timestamp)
-      .format('YYYY-MM-DD HH:mm:ss')} UTC.`;
+    const description = `Completed at ${formatEasternTimestamp(state.timestamp)}.`;
 
     if (state.ok) {
       toast.success(state.message || 'SDS ingestion action completed.', { description });

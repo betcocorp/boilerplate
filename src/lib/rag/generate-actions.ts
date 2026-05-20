@@ -1,7 +1,8 @@
 'use server';
 
-import moment from 'moment';
 import { revalidatePath } from 'next/cache';
+
+import { formatEasternTimestamp } from '~/lib/utils/time';
 
 import {
   runRagPipeline,
@@ -77,9 +78,7 @@ function buildHistoryEntry(state: {
     title: state.ok
       ? state.message || 'Pipeline action completed.'
       : state.error || 'Pipeline action failed.',
-    description: `Completed at ${moment
-      .utc(state.timestamp)
-      .format('YYYY-MM-DD HH:mm:ss')} UTC.`,
+    description: `Completed at ${formatEasternTimestamp(state.timestamp)}.`,
     durationMs: state.durationMs,
   };
 }

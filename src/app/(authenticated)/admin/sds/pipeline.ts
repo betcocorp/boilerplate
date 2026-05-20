@@ -25,8 +25,6 @@ const DOCUMENT_KIND = 'sds';
 const DEFAULT_BATCH_SIZE = 2;
 const MAX_BATCH_SIZE = 10;
 const MAX_EMBEDDING_RUNS = 25;
-const MAX_CHARS_PER_CHUNK = 2200;
-const CHUNK_OVERLAP_CHARS = 250;
 const MAX_DASHBOARD_DOCUMENT_ROWS = 300;
 
 type JsonObject = { [key: string]: RagJson | undefined };
@@ -337,44 +335,6 @@ function summarize(text: string) {
   return `${text.slice(0, 277).trim()}...`;
 }
 
-function chunkText(text: string) {
-  if (!text.trim()) {
-    return [];
-  }
-
-  const chunks: string[] = [];
-  let cursor = 0;
-
-  while (cursor < text.length) {
-    const end = Math.min(text.length, cursor + MAX_CHARS_PER_CHUNK);
-    let chunk = text.slice(cursor, end);
-
-    if (end < text.length) {
-      const splitAt = Math.max(
-        chunk.lastIndexOf('\n\n'),
-        chunk.lastIndexOf('. '),
-        chunk.lastIndexOf(' '),
-      );
-      if (splitAt > Math.floor(MAX_CHARS_PER_CHUNK * 0.6)) {
-        chunk = chunk.slice(0, splitAt + 1);
-      }
-    }
-
-    const normalizedChunk = chunk.trim();
-    if (normalizedChunk) {
-      chunks.push(normalizedChunk);
-    }
-
-    if (end >= text.length) {
-      break;
-    }
-
-    cursor = Math.max(end - CHUNK_OVERLAP_CHARS, cursor + 1);
-  }
-
-  return chunks;
-}
-
 function buildSourceMetadata(
   seed: SdsSeedDocument,
   overrides: SdsIngestionMetadata,
@@ -614,57 +574,6 @@ async function upsertDocument(
   return inserted.id;
 }
 
-async function replaceDocumentChunks(
-  documentId: string,
-  documentKey: string,
-  bodyText: string,
-) {
-  const supabase = getSupabaseServiceRoleClient();
-  const chunks = chunkText(bodyText);
-  const { error: deleteError } = await supabase
-    .schema('rag')
-    .from('document_chunk')
-    .delete()
-    .eq('document_id', documentId);
-
-  if (deleteError) {
-    throw new Error(
-      `Failed to clear existing chunks for ${documentKey}: ${deleteError.message}`,
-    );
-  }
-
-  if (chunks.length === 0) {
-    return 0;
-  }
-
-  const { error: insertError } = await supabase
-    .schema('rag')
-    .from('document_chunk')
-    .insert(
-      chunks.map((chunk, index) => ({
-        document_id: documentId,
-        chunk_index: index,
-        chunk_key: `${documentKey}#${index}`,
-        chunk_text: chunk,
-        heading: index === 0 ? 'SDS content' : null,
-        section_path: ['body'],
-        metadata: {
-          source: 'sds',
-          strategy: 'char-window',
-          max_chars: MAX_CHARS_PER_CHUNK,
-          overlap_chars: CHUNK_OVERLAP_CHARS,
-        },
-      })),
-    );
-
-  if (insertError) {
-    throw new Error(
-      `Failed to insert chunks for ${documentKey}: ${insertError.message}`,
-    );
-  }
-
-  return chunks.length;
-}
 
 async function markSourceRecord(
   sourceRecordId: string,
@@ -724,17 +633,12 @@ async function ingestSeedDocument(seed: SdsSeedDocument) {
     const fileBuffer = Buffer.from(bytes);
     const checksum = computeChecksum(fileBuffer);
     const parsed = await parsePdf(fileBuffer);
-    const documentId = await upsertDocument(sourceRecordId, seed, parsed.text);
-    const chunkCount = await replaceDocumentChunks(
-      documentId,
-      toDocumentKey(seed),
-      parsed.text,
-    );
+    await upsertDocument(sourceRecordId, seed, parsed.text);
 
     await markSourceRecord(sourceRecordId, seed, {
       status: 'ingested',
       checksum,
-      chunkCount,
+      chunkCount: 0,
       lastError: null,
     });
   } catch (error) {

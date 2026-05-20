@@ -2,6 +2,36 @@
  * Shared date / duration formatting used across admin UI.
  */
 
+function easternParts(value: number | string) {
+  const date = new Date(value);
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+}
+
+function getPart(parts: Intl.DateTimeFormatPart[], type: string) {
+  return parts.find((p) => p.type === type)?.value ?? '';
+}
+
+/** `YYYY-MM-DD HH:mm:ss ET` in Eastern Time (handles EST/EDT). */
+export function formatEasternTimestamp(value: number | string): string {
+  const p = easternParts(value);
+  return `${getPart(p, 'year')}-${getPart(p, 'month')}-${getPart(p, 'day')} ${getPart(p, 'hour')}:${getPart(p, 'minute')}:${getPart(p, 'second')} ET`;
+}
+
+/** `HH:mm:ss ET` in Eastern Time (handles EST/EDT). */
+export function formatEasternTime(value: number | string): string {
+  const p = easternParts(value);
+  return `${getPart(p, 'hour')}:${getPart(p, 'minute')}:${getPart(p, 'second')} ET`;
+}
+
 export function formatDate(value: string): string {
   return new Intl.DateTimeFormat('en-US', {
     dateStyle: 'medium',

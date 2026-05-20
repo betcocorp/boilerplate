@@ -129,6 +129,12 @@ export default async function AdminTestRunDetailsPage({
     resultItemId: item.id,
     passed: item.passed,
   }));
+  const similarityTrendData = chronologicalItems.map((item, index) => ({
+    label: `${index + 1}`,
+    similarity: extractItemSimilarityScore(item.response_payload) ?? null,
+    resultItemId: item.id,
+    passed: item.passed,
+  }));
 
   const similarityScores = resultItems
     .map((item) => extractItemSimilarityScore(item.response_payload))
@@ -268,6 +274,7 @@ export default async function AdminTestRunDetailsPage({
           runId={result.id}
           similarityBuckets={similarityBuckets}
           similarityStatsData={similarityStatsData}
+          similarityTrendData={similarityTrendData}
           slowOverTenSecondsCount={slowOverTenSecondsCount}
           totalItems={result.total_items}
         />

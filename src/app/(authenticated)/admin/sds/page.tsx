@@ -1,6 +1,9 @@
 import Link from 'next/link';
 import { connection } from 'next/server';
 
+import { SdsSyncControls } from '~/components/admin/SdsSyncControls';
+import { getSdsSyncStatus } from '~/lib/rag/sds-sync-actions';
+
 import { SdsControls } from './SdsControls';
 import { getSdsDashboardStatus } from './pipeline';
 
@@ -11,7 +14,10 @@ export const metadata = {
 
 export default async function AdminSdsPage() {
   await connection();
-  const status = await getSdsDashboardStatus();
+  const [status, syncStatus] = await Promise.all([
+    getSdsDashboardStatus(),
+    getSdsSyncStatus(),
+  ]);
 
   return (
     <div className="flex flex-1 bg-slate-50">
@@ -47,6 +53,8 @@ export default async function AdminSdsPage() {
             </div>
           </div>
         </section>
+
+        <SdsSyncControls initialPending={syncStatus.totalSdsDocs} languageCode="EN" />
 
         <SdsControls initialStatus={status} />
       </main>

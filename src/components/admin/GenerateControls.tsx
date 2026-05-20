@@ -1,7 +1,6 @@
 'use client';
 
 import { Loader2 } from 'lucide-react';
-import moment from 'moment';
 import { useActionState, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
@@ -13,7 +12,7 @@ import {
   type GenerateActionState,
   runGenerateAction,
 } from '~/lib/rag/generate-actions';
-import { formatDurationMmSs } from '~/lib/utils/time';
+import { formatDurationMmSs, formatEasternTimestamp } from '~/lib/utils/time';
 
 const initialGenerateActionState: GenerateActionState = {
   ok: false,
@@ -40,7 +39,7 @@ type GenerateControlsProps = {
 };
 
 function formatTimestamp(timestamp: number) {
-  return `${moment.utc(timestamp).format('YYYY-MM-DD HH:mm:ss')} UTC`;
+  return formatEasternTimestamp(timestamp);
 }
 
 const AUTO_REPEAT_INTENTS = ['sync-embeddings'] as const;

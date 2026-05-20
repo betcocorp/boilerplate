@@ -1,9 +1,9 @@
 import Link from 'next/link';
 import { connection } from 'next/server';
-import moment from 'moment';
 
 import { GenerateControls } from '~/components/admin/GenerateControls';
 import { getRagGenerationStatus } from '~/lib/rag/pipeline';
+import { formatEasternTimestamp } from '~/lib/utils/time';
 
 export const maxDuration = 300;
 
@@ -17,7 +17,7 @@ function formatTimestamp(value: string | null) {
     return 'Not available';
   }
 
-  return `${moment.utc(value).format('YYYY-MM-DD HH:mm:ss')} UTC`;
+  return formatEasternTimestamp(value);
 }
 
 export default async function RagGeneratePage() {

@@ -33,6 +33,14 @@ type ElapsedTrendDatum = {
   resultItemId?: string;
 };
 
+type SimilarityTrendDatum = {
+  label: string;
+  /** null when the item has no similarity score */
+  similarity: number | null;
+  passed?: boolean;
+  resultItemId?: string;
+};
+
 type SimilarityStatDatum = {
   label: string;
   value: number;
@@ -56,6 +64,7 @@ type RunAtAGlanceChartsProps = {
   slowOverTenSecondsCount: number;
   notPassedItemCount: number;
   elapsedTrendData: ElapsedTrendDatum[];
+  similarityTrendData: SimilarityTrendDatum[];
   similarityStatsData: SimilarityStatDatum[];
   similarityBuckets: SimilarityBuckets;
 };
@@ -74,6 +83,7 @@ type RunStatusResponse = {
 
 const chartConfig = {
   elapsedSeconds: { label: 'Elapsed', color: '#0ea5e9' },
+  similarity: { label: 'Similarity', color: '#a855f7' },
   count: { label: 'Count', color: '#16a34a' },
   value: { label: 'Similarity', color: '#a855f7' },
 } satisfies ChartConfig;
@@ -170,6 +180,7 @@ export function RunAtAGlanceCharts({
   slowOverTenSecondsCount,
   notPassedItemCount,
   elapsedTrendData,
+  similarityTrendData,
   similarityStatsData,
   similarityBuckets,
 }: RunAtAGlanceChartsProps) {
@@ -301,6 +312,60 @@ export function RunAtAGlanceCharts({
                   dataKey="elapsedSeconds"
                   dot={ElapsedTrendDatumDot}
                   stroke="var(--color-elapsedSeconds)"
+                  strokeWidth={2}
+                  type="monotone"
+                />
+              </LineChart>
+            </ChartContainer>
+          )}
+        </article>
+
+        <article className="min-w-0 rounded-2xl border border-slate-200 p-5 lg:col-span-3">
+          <h3 className="text-sm font-semibold text-slate-900">
+            Similarity by prompt order
+          </h3>
+          {similarityTrendData.length === 0 ? (
+            <p className="mt-4 text-sm text-slate-500">
+              No similarity scores yet for this run.
+            </p>
+          ) : (
+            <ChartContainer className="mt-4 h-56 w-full min-w-0" config={chartConfig}>
+              <LineChart data={similarityTrendData}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <XAxis
+                  dataKey="label"
+                  interval={0}
+                  tick={{ fontSize: 11 }}
+                  tickFormatter={(value, index) =>
+                    typeof index === 'number'
+                      ? index % 10 === 0
+                        ? `${index}`
+                        : ''
+                      : value
+                  }
+                />
+                <YAxis
+                  domain={[0, 1]}
+                  tick={{ fontSize: 11 }}
+                  tickFormatter={(value) => `${(value * 100).toFixed(0)}%`}
+                />
+                <ChartTooltip
+                  content={
+                    <ChartTooltipContent
+                      formatter={(value) =>
+                        typeof value === 'number' && Number.isFinite(value)
+                          ? `${(value * 100).toFixed(2)}%`
+                          : 'n/a'
+                      }
+                    />
+                  }
+                />
+                <Line
+                  activeDot={ElapsedTrendActiveDatumDot}
+                  connectNulls={false}
+                  dataKey="similarity"
+                  dot={ElapsedTrendDatumDot}
+                  stroke="var(--color-similarity)"
                   strokeWidth={2}
                   type="monotone"
                 />
