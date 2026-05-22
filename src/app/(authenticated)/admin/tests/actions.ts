@@ -341,6 +341,10 @@ export async function runSearchEvalAction(formData: FormData) {
     redirect(encodeMessage(`/admin/tests/${testId}`, 'error', 'This test has no items to run.'));
   }
 
+  const useHybrid = formData.get('useHybrid') === 'on';
+  const useReranker = formData.get('useReranker') === 'on';
+  const useMultiIntent = formData.get('useMultiIntent') === 'on';
+
   const testResult = await createTestResult({
     test_id: testId,
     status: 'queued',
@@ -349,6 +353,7 @@ export async function runSearchEvalAction(formData: FormData) {
     passed_items: 0,
     failed_items: 0,
     started_at: new Date().toISOString(),
+    run_options: { useHybrid, useReranker, useMultiIntent },
     summary: {
       completed_items: 0,
       total_items: items.length,

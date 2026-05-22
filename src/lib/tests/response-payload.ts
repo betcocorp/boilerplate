@@ -276,6 +276,15 @@ export function extractSearchRunEmbeddingSource(responsePayload: unknown): strin
   return typeof src === 'string' ? src : null;
 }
 
+/** Returns the passReason string recorded by the search executor, or null. */
+export function extractSearchRunPassReason(responsePayload: unknown): string | null {
+  if (!responsePayload || typeof responsePayload !== 'object' || Array.isArray(responsePayload)) {
+    return null;
+  }
+  const reason = (responsePayload as Record<string, unknown>).passReason;
+  return typeof reason === 'string' ? reason : null;
+}
+
 /** Returns the search timing from a search eval payload (totalMs). */
 export function extractSearchRunTotalMs(responsePayload: unknown): number | null {
   if (!responsePayload || typeof responsePayload !== 'object' || Array.isArray(responsePayload)) {

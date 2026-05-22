@@ -1,4 +1,8 @@
 import { searchProductChunks, type RagSearchMatch } from '~/lib/rag/search';
+import {
+  buildEntityContextBlock,
+  fetchEntityContexts,
+} from '~/lib/rag/entity-context';
 
 import {
   assembleDocumentBodies,
@@ -51,6 +55,7 @@ export type CuratedSource = {
   matchedChunkText: string;
   similarity: number;
   documentKind: string;
+  entityId: string | null;
   productLineKey: string | null;
   productKey: string | null;
 };
@@ -79,6 +84,7 @@ export type ProductKnowledgeRetrievalSummary = {
 
 export type ProductKnowledgeQueryResult = {
   sources: CuratedSource[];
+  entityContextBlock: string | null;
   retrieval: ProductKnowledgeRetrievalSummary;
 };
 
@@ -102,6 +108,7 @@ function buildCuratedSource(
     matchedChunkText: match.chunk_text,
     similarity: match.similarity,
     documentKind: match.document_kind,
+    entityId: match.entity_id,
     productLineKey: match.product_line_key,
     productKey: match.product_key,
   };
@@ -132,6 +139,12 @@ async function curateUniqueDocumentSources(
   );
 }
 
+async function entityContextBlockForSources(sources: CuratedSource[]): Promise<string | null> {
+  const entityIds = sources.map((s) => s.entityId).filter((id): id is string => id != null);
+  const map = await fetchEntityContexts(entityIds);
+  return buildEntityContextBlock(map);
+}
+
 export async function ragQueryForProductKnowledge(input: {
   query: string;
   limit?: number;
@@ -152,15 +165,19 @@ export async function ragQueryForProductKnowledgeWithMeta(input: {
   productLineKey?: string | null;
   /** When true, skip candidate resolution (caller already anchored the query, e.g. by product id). */
   skipProductLineResolution?: boolean;
+  /** Restrict retrieval to chunks belonging to a specific GHS section. Null = no filter. */
+  sectionType?: string | null;
 }): Promise<ProductKnowledgeQueryResult> {
   const limit = input.limit ?? DEFAULT_UNIQUE_DOCUMENT_LIMIT;
   const explicitKey = input.productLineKey?.trim() || null;
+  const sectionType = input.sectionType?.trim() || null;
 
   if (explicitKey) {
     const result = await searchProductChunks({
       query: input.query,
       limit: SIMILARITY_CANDIDATE_FETCH_LIMIT,
       productLineKey: explicitKey,
+      sectionType: sectionType ?? undefined,
       scope: 'all',
     });
 
@@ -171,6 +188,7 @@ export async function ragQueryForProductKnowledgeWithMeta(input: {
 
     return {
       sources: curated,
+      entityContextBlock: await entityContextBlockForSources(curated),
       retrieval: {
         strategy: 'explicit_product_line',
         cacheSource: result.embeddingSource,
@@ -193,6 +211,7 @@ export async function ragQueryForProductKnowledgeWithMeta(input: {
     const result = await searchProductChunks({
       query: input.query,
       limit: SIMILARITY_CANDIDATE_FETCH_LIMIT,
+      sectionType: sectionType ?? undefined,
       scope: 'products',
     });
 
@@ -202,6 +221,7 @@ export async function ragQueryForProductKnowledgeWithMeta(input: {
 
     return {
       sources: curated,
+      entityContextBlock: await entityContextBlockForSources(curated),
       retrieval: {
         strategy: 'broad_resolution_disabled',
         cacheSource: result.embeddingSource,
@@ -223,6 +243,7 @@ export async function ragQueryForProductKnowledgeWithMeta(input: {
   const broadResult = await searchProductChunks({
     query: input.query,
     limit: SIMILARITY_CANDIDATE_FETCH_LIMIT,
+    sectionType: sectionType ?? undefined,
     scope: 'all',
   });
 
@@ -235,6 +256,7 @@ export async function ragQueryForProductKnowledgeWithMeta(input: {
   if (resolution.lockedProductLineKey == null) {
     return {
       sources: broadCurated,
+      entityContextBlock: await entityContextBlockForSources(broadCurated),
       retrieval: {
         strategy: 'broad_only',
         cacheSource: broadResult.embeddingSource,
@@ -253,6 +275,7 @@ export async function ragQueryForProductKnowledgeWithMeta(input: {
     query: input.query,
     limit: SIMILARITY_CANDIDATE_FETCH_LIMIT,
     productLineKey: resolution.lockedProductLineKey,
+    sectionType: sectionType ?? undefined,
     scope: 'all',
   });
   const anchoredCurated = await curateUniqueDocumentSources(anchoredResult.matches, {
@@ -275,6 +298,7 @@ export async function ragQueryForProductKnowledgeWithMeta(input: {
 
   return {
     sources: finalCurated,
+    entityContextBlock: await entityContextBlockForSources(finalCurated),
     retrieval: {
       strategy,
       cacheSource: anchoredResult.embeddingSource,

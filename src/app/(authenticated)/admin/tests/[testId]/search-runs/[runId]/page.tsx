@@ -27,6 +27,7 @@ import {
   extractSearchRunEmbeddingSource,
   extractSearchRunMatches,
   extractSearchRunMaxSimilarity,
+  extractSearchRunPassReason,
   extractSearchRunTotalMs,
 } from '~/lib/tests/response-payload';
 
@@ -87,6 +88,60 @@ export default async function AdminSearchRunDetailsPage({
   const passCount = result.passed_items ?? 0;
   const failCount = result.failed_items ?? allResultItems.filter((item) => !item.passed).length;
   const incompleteCount = Math.max(0, result.total_items - passCount - failCount);
+
+  type ItemCategory = 'negative' | 'unconstrained' | 'product_only' | 'section_only' | 'both_constraints';
+  function categorizeItem(item: (typeof testItems)[number]): ItemCategory {
+    if (item.expected_should_answer === false) return 'negative';
+    const hasProduct = typeof item.expected_canonical_product === 'string' && item.expected_canonical_product.trim() !== '';
+    const hasSection = typeof item.expected_result_type === 'string' && item.expected_result_type.trim() !== '';
+    if (hasProduct && hasSection) return 'both_constraints';
+    if (hasProduct) return 'product_only';
+    if (hasSection) return 'section_only';
+    return 'unconstrained';
+  }
+
+  const categoryMeta: Record<ItemCategory, { label: string; description: string }> = {
+    negative: { label: 'Negative / OOD', description: 'Out-of-domain queries that should return no relevant match' },
+    unconstrained: { label: 'Unconstrained', description: 'Any match is a pass — no product or section constraint' },
+    product_only: { label: 'Product match', description: 'Must match expected product line' },
+    section_only: { label: 'Section match', description: 'Must match expected document section type' },
+    both_constraints: { label: 'Product + section', description: 'Must satisfy both product line and section type in the same chunk' },
+  };
+
+  const categoryItemIds = new Map<ItemCategory, Set<string>>();
+  for (const category of Object.keys(categoryMeta) as ItemCategory[]) {
+    categoryItemIds.set(category, new Set());
+  }
+  for (const item of testItems) {
+    categoryItemIds.get(categorizeItem(item))!.add(item.id);
+  }
+
+  const resultByItemId = new Map(allResultItems.map((r) => [r.test_item_id, r]));
+
+  const categoryStats = (Object.keys(categoryMeta) as ItemCategory[]).map((cat) => {
+    const ids = categoryItemIds.get(cat)!;
+    let total = 0;
+    let passed = 0;
+    let simSum = 0;
+    let simCount = 0;
+    for (const id of ids) {
+      const r = resultByItemId.get(id);
+      if (!r) continue;
+      total += 1;
+      if (r.passed) passed += 1;
+      const sim = extractSearchRunMaxSimilarity(r.response_payload);
+      if (sim !== null) { simSum += sim; simCount += 1; }
+    }
+    return {
+      category: cat,
+      label: categoryMeta[cat].label,
+      description: categoryMeta[cat].description,
+      total,
+      passed,
+      passRate: total > 0 ? passed / total : null,
+      avgSim: simCount > 0 ? simSum / simCount : null,
+    };
+  }).filter((s) => s.total > 0);
 
   const chronologicalItems = [...allResultItems].sort((a, b) => {
     if (a.created_at === b.created_at) return a.row_index - b.row_index;
@@ -160,6 +215,52 @@ export default async function AdminSearchRunDetailsPage({
           }}
         />
 
+        {categoryStats.length > 0 ? (
+          <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
+            <h2 className="mb-1 text-lg font-semibold text-slate-900">
+              Gold eval by category
+            </h2>
+            <p className="mb-4 text-sm text-slate-500">
+              Strategy: <span className="font-medium text-slate-700">{result.retrieval_strategy ?? 'vector'}</span>
+            </p>
+            <div className="overflow-auto rounded-2xl border border-slate-200">
+              <table className="w-full caption-bottom text-sm">
+                <thead className="border-b border-slate-200 bg-slate-50 text-left">
+                  <tr>
+                    <th className="px-4 py-2.5 font-semibold text-slate-700">Category</th>
+                    <th className="px-4 py-2.5 text-right font-semibold text-slate-700" title="Total items in this category">N</th>
+                    <th className="px-4 py-2.5 text-right font-semibold text-slate-700">Passed</th>
+                    <th className="px-4 py-2.5 text-right font-semibold text-slate-700">Pass %</th>
+                    <th className="px-4 py-2.5 text-right font-semibold text-slate-700" title="Average of per-item max similarity scores">Avg sim</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {categoryStats.map((s) => (
+                    <tr key={s.category}>
+                      <td className="px-4 py-2.5">
+                        <span className="font-medium text-slate-800">{s.label}</span>
+                        <span className="ml-2 text-xs text-slate-400">{s.description}</span>
+                      </td>
+                      <td className="px-4 py-2.5 text-right tabular-nums text-slate-600">{s.total}</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums text-slate-600">{s.passed}</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums">
+                        {s.passRate !== null ? (
+                          <span className={s.passRate >= 0.8 ? 'font-semibold text-emerald-700' : s.passRate >= 0.6 ? 'text-amber-700' : 'font-semibold text-red-700'}>
+                            {(s.passRate * 100).toFixed(0)}%
+                          </span>
+                        ) : '—'}
+                      </td>
+                      <td className="px-4 py-2.5 text-right tabular-nums text-slate-600">
+                        {s.avgSim !== null ? `${(s.avgSim * 100).toFixed(1)}%` : '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        ) : null}
+
         <section
           className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm"
           id="search-results"
@@ -175,6 +276,9 @@ export default async function AdminSearchRunDetailsPage({
                   <TableHead>Prompt</TableHead>
                   <TableHead title="Whether this prompt is expected to be answered (from test item metadata)">
                     Should answer?
+                  </TableHead>
+                  <TableHead title="Whether this item passed the gold eval criteria (product line, section type, negative test threshold)">
+                    Pass?
                   </TableHead>
                   <TableHead title="Query sent to vector search after rewrite">
                     Query used
@@ -193,7 +297,7 @@ export default async function AdminSearchRunDetailsPage({
               <TableBody>
                 {chronologicalItems.length === 0 ? (
                   <TableRow>
-                    <TableCell className="text-slate-500" colSpan={9}>
+                    <TableCell className="text-slate-500" colSpan={10}>
                       No results yet — run is still in progress.
                     </TableCell>
                   </TableRow>
@@ -217,6 +321,7 @@ export default async function AdminSearchRunDetailsPage({
                     const isRewritten = Boolean(queryRewritten);
 
                     const shouldAnswer = shouldAnswerByItemId.get(row.test_item_id);
+                    const passReason = extractSearchRunPassReason(row.response_payload);
                     return (
                       <TableRow key={row.id}>
                         <TableCell className="tabular-nums">
@@ -241,6 +346,15 @@ export default async function AdminSearchRunDetailsPage({
                             }
                           >
                             {formatExpectedShouldAnswerLabel(shouldAnswer ?? null)}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap">
+                          <Badge
+                            className={row.passed ? 'border-emerald-600/45 bg-emerald-600/12 text-emerald-900' : undefined}
+                            title={passReason ?? undefined}
+                            variant={row.passed ? 'outline' : 'destructive'}
+                          >
+                            {row.passed ? 'pass' : 'fail'}
                           </Badge>
                         </TableCell>
                         <TableCell className="max-w-[280px] whitespace-normal text-xs">

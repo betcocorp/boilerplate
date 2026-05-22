@@ -12,6 +12,8 @@ export async function retrieveApprovedUsage(input: {
   task: string;
   surfaceType: string;
   environment?: string;
+  productLineKey?: string | null;
+  sectionType?: string | null;
 }): Promise<ProductKnowledgeQueryResult> {
   const q = buildQuery([
     input.productId,
@@ -22,12 +24,16 @@ export async function retrieveApprovedUsage(input: {
   ]);
   return ragQueryForProductKnowledgeWithMeta({
     query: q,
-    skipProductLineResolution: true,
+    productLineKey: input.productLineKey,
+    skipProductLineResolution: !input.productLineKey,
+    sectionType: input.sectionType,
   });
 }
 
 export async function retrieveSafetyConstraints(input: {
   productId: string;
+  productLineKey?: string | null;
+  sectionType?: string | null;
 }): Promise<ProductKnowledgeQueryResult> {
   const q = buildQuery([
     input.productId,
@@ -35,7 +41,9 @@ export async function retrieveSafetyConstraints(input: {
   ]);
   return ragQueryForProductKnowledgeWithMeta({
     query: q,
-    skipProductLineResolution: true,
+    productLineKey: input.productLineKey,
+    skipProductLineResolution: !input.productLineKey,
+    sectionType: input.sectionType,
   });
 }
 
@@ -43,6 +51,8 @@ export async function retrieveCompatibility(input: {
   productId: string;
   surfaceType: string;
   materialType?: string;
+  productLineKey?: string | null;
+  sectionType?: string | null;
 }): Promise<ProductKnowledgeQueryResult> {
   const q = buildQuery([
     input.productId,
@@ -53,13 +63,17 @@ export async function retrieveCompatibility(input: {
   ]);
   return ragQueryForProductKnowledgeWithMeta({
     query: q,
-    skipProductLineResolution: true,
+    productLineKey: input.productLineKey,
+    skipProductLineResolution: !input.productLineKey,
+    sectionType: input.sectionType,
   });
 }
 
 export async function retrieveSurfacesLists(input: {
   productId: string;
   mode: 'allowed' | 'disallowed';
+  productLineKey?: string | null;
+  sectionType?: string | null;
 }): Promise<ProductKnowledgeQueryResult> {
   const hint =
     input.mode === 'allowed'
@@ -68,6 +82,8 @@ export async function retrieveSurfacesLists(input: {
   const q = buildQuery([input.productId, hint]);
   return ragQueryForProductKnowledgeWithMeta({
     query: q,
-    skipProductLineResolution: true,
+    productLineKey: input.productLineKey,
+    skipProductLineResolution: !input.productLineKey,
+    sectionType: input.sectionType,
   });
 }

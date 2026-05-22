@@ -1,0 +1,37 @@
+name: Eval gate
+
+on:
+  pull_request:
+    paths:
+      - 'bex2.0/src/lib/rag/**'
+      - 'bex2.0/src/lib/tools/**'
+      - 'bex2.0/src/lib/agents/**'
+      - 'bex2.0/src/lib/tests/**'
+
+jobs:
+  eval-gate:
+    name: Similarity floor check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: bex2.0/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+        working-directory: bex2.0
+
+      - name: Check eval gate
+        run: pnpm exec tsx scripts/run-eval-gate.ts
+        working-directory: bex2.0
+        env:
+          BEX_GATE_BASE_URL: ${{ secrets.BEX_GATE_BASE_URL }}
+          BEX_GATE_RUN_ID: ${{ secrets.BEX_GATE_LATEST_RUN_ID }}

@@ -1,4 +1,5 @@
 import { createEmbedding, EMBEDDING_MODEL } from '~/lib/rag/embeddings';
+import { rerankChunks } from '~/lib/rag/rerank';
 import { getOpenAIClient } from '~/lib/openai/client';
 import { normalizeForDedupe } from '~/lib/utils';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
@@ -11,10 +12,13 @@ type SearchProductChunksOptions = {
   query: string;
   limit?: number;
   productLineKey?: string;
+  sectionType?: string;
   minSimilarity?: number;
   model?: string;
   scope?: 'all' | 'products' | 'sds';
-  languageCode?: string | null;
+  useHybrid?: boolean;
+  useReranker?: boolean;
+  useMultiIntent?: boolean;
 };
 
 type SearchEmbeddingRow = {
@@ -45,6 +49,7 @@ export type RagSearchMatch = {
   heading: string | null;
   chunk_text: string;
   section_path: string[] | null;
+  section_type: string | null;
   token_count: number | null;
   document_id: string;
   document_key: string;
@@ -63,9 +68,10 @@ export type RagSearchResult = {
   model: string;
   limit: number;
   productLineKey: string | null;
+  sectionType: string | null;
   scope: 'all' | 'products' | 'sds';
-  languageCode: string | null;
   minSimilarity: number | null;
+  retrieval_strategy: 'vector' | 'hybrid' | 'vector+reranked' | 'hybrid+reranked';
   embeddingSource:
     | 'exact-cache-hit'
     | 'rewritten-cache-hit'
@@ -80,6 +86,7 @@ export type RagSearchResult = {
     embeddingCreateMs: number;
     cachePersistMs: number;
     similaritySearchMs: number;
+    rerankMs: number;
   };
   matches: RagSearchMatch[];
 };
@@ -87,11 +94,6 @@ export type RagSearchResult = {
 
 type RagCorpusSearchMatch = Omit<RagSearchMatch, 'document_kind'> & {
   document_kind: string | null;
-};
-
-type DocumentLanguageRow = {
-  id: string;
-  language_code: string | null;
 };
 
 function clampLimit(limit?: number) {
@@ -126,11 +128,6 @@ function normalizeScope(scope?: string) {
   }
 
   return 'products' as const;
-}
-
-function normalizeLanguageCode(languageCode?: string | null) {
-  const normalized = languageCode?.trim().toUpperCase();
-  return normalized || 'EN';
 }
 
 function nowMs() {
@@ -256,7 +253,15 @@ async function rewriteQueryWithOpenAI(query: string) {
         {
           role: 'system',
           content:
-            'Rewrite user search queries into concise product-line retrieval queries. Keep original intent, preserve key nouns and modifiers, and output only a single plain-text query.',
+            'You rewrite search queries for Betco, a commercial cleaning products company. ' +
+            'Rules: preserve all product names, SKUs, and chemical names exactly. ' +
+            'Expand abbreviations: RTU → ready to use, VCT → vinyl composition tile, LVT → luxury vinyl tile, ' +
+            'SDS → safety data sheet, GHS → globally harmonized system, EPA → EPA registered, ' +
+            'RTU → ready to use, HCS → hazard communication standard. ' +
+            'Add domain synonyms where they clarify intent: "use on" → application surface, ' +
+            '"safe for" → compatible surfaces, "mix ratio" / "dilution" → dilution ratio concentrate. ' +
+            'Strip conversational filler: "how do I", "can you tell me", "what is the". ' +
+            'Output exactly one plain-text retrieval query under 20 words — no explanation, no trailing punctuation.',
         },
         {
           role: 'user',
@@ -274,6 +279,48 @@ async function rewriteQueryWithOpenAI(query: string) {
     return normalizeRewrittenQuery(rewritten);
   } catch {
     return normalizedInput;
+  }
+}
+
+async function expandQueryIntents(query: string): Promise<string[]> {
+  const normalized = query.trim();
+  if (!normalized) return [normalized];
+
+  const openai = getOpenAIClient();
+  try {
+    const response = await openai.chat.completions.create({
+      model: process.env.OPENAI_QUERY_REWRITE_MODEL || DEFAULT_REWRITE_MODEL,
+      temperature: 0,
+      max_completion_tokens: 200,
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You decompose user questions about Betco commercial cleaning products into focused retrieval sub-queries. ' +
+            'If the input contains 2–3 distinct questions or intents, split it into that many self-contained sub-queries. ' +
+            'If it is a single intent, return it as a one-element array unchanged. ' +
+            'Respond with a JSON array of strings only — no markdown, no explanation. ' +
+            'Preserve product names, SKUs, and technical terms exactly. ' +
+            'Example input: "what is the dilution for Green Earth and is it safe on VCT floors?" ' +
+            'Example output: ["Green Earth dilution ratio concentrate", "Green Earth VCT vinyl tile floor application safety"]',
+        },
+        { role: 'user', content: normalized },
+      ],
+    });
+
+    const content = response.choices[0]?.message?.content?.trim();
+    if (!content) return [normalized];
+
+    const parsed = JSON.parse(content) as unknown;
+    if (!Array.isArray(parsed) || parsed.length === 0) return [normalized];
+
+    const queries = (parsed as unknown[])
+      .map((q) => (typeof q === 'string' ? q.trim() : ''))
+      .filter((q) => q.length > 0);
+
+    return queries.length > 0 ? queries : [normalized];
+  } catch {
+    return [normalized];
   }
 }
 
@@ -307,6 +354,7 @@ async function getCachedOrNewEmbedding(
   row: Pick<
     SearchEmbeddingRow,
     | 'id'
+    | 'query_rewritten'
     | 'timing_sample_count'
     | 'avg_total_search_ms'
     | 'avg_query_embedding_ms'
@@ -600,6 +648,77 @@ async function getCachedOrNewEmbedding(
   };
 }
 
+type HybridRpcClient = {
+  rpc: (
+    fn: 'match_product_chunks_hybrid' | 'match_corpus_chunks_hybrid',
+    args: Record<string, unknown>,
+  ) => Promise<{ data: RagCorpusSearchMatch[] | null; error: { message: string } | null }>;
+};
+
+type MatchRpcOpts = {
+  scope: 'all' | 'products' | 'sds';
+  useHybrid: boolean;
+  rpcLimit: number;
+  productLineKey: string | null;
+  sectionType: string | null;
+};
+
+async function callMatchRpc(
+  embedding: number[],
+  hybridQueryText: string,
+  opts: MatchRpcOpts,
+): Promise<RagCorpusSearchMatch[]> {
+  const supabase = getSupabaseServiceRoleClient();
+  const rag = supabase.schema('rag');
+
+  type CorpusRpcClient = {
+    rpc: (
+      fn: 'match_corpus_chunks' | 'match_corpus_chunks_hybrid',
+      args: {
+        query_embedding: string;
+        query_text?: string;
+        match_count: number;
+        filter_product_line_key?: string;
+        filter_scope: 'all' | 'products' | 'sds';
+        filter_section_type?: string;
+      },
+    ) => Promise<{ data: RagCorpusSearchMatch[] | null; error: { message: string } | null }>;
+  };
+
+  const { data, error } =
+    opts.scope === 'products'
+      ? opts.useHybrid
+        ? await (rag as unknown as HybridRpcClient).rpc('match_product_chunks_hybrid', {
+            query_embedding: toVectorLiteral(embedding),
+            query_text: hybridQueryText,
+            match_count: opts.rpcLimit,
+            filter_product_key: undefined,
+            filter_product_line_key: opts.productLineKey || undefined,
+            filter_section_type: opts.sectionType || undefined,
+          })
+        : await rag.rpc('match_product_chunks', {
+            query_embedding: toVectorLiteral(embedding),
+            match_count: opts.rpcLimit,
+            filter_product_key: undefined,
+            filter_product_line_key: opts.productLineKey || undefined,
+            filter_section_type: opts.sectionType || undefined,
+          })
+      : await (rag as unknown as CorpusRpcClient).rpc(
+          opts.useHybrid ? 'match_corpus_chunks_hybrid' : 'match_corpus_chunks',
+          {
+            query_embedding: toVectorLiteral(embedding),
+            ...(opts.useHybrid ? { query_text: hybridQueryText } : {}),
+            match_count: opts.rpcLimit,
+            filter_product_line_key: opts.productLineKey || undefined,
+            filter_scope: opts.scope,
+            filter_section_type: opts.sectionType || undefined,
+          },
+        );
+
+  if (error) throw new Error(`Failed to run similarity search: ${error.message}`);
+  return (data ?? []) as RagCorpusSearchMatch[];
+}
+
 /** Semantic search over `product_line_profile` chunks (one RAG document per legacy product line). */
 export async function searchProductChunks(
   options: SearchProductChunksOptions,
@@ -613,9 +732,15 @@ export async function searchProductChunks(
 
   const limit = clampLimit(options.limit);
   const productLineKey = options.productLineKey?.trim() || null;
+  const sectionType = options.sectionType?.trim() || null;
   const scope = normalizeScope(options.scope);
   const minSimilarity = normalizeMinSimilarity(options.minSimilarity);
-  const languageCode = normalizeLanguageCode(options.languageCode);
+  const useHybrid = options.useHybrid ?? false;
+  const useReranker = options.useReranker ?? process.env.ENABLE_RERANKER === 'true';
+  const useMultiIntent = options.useMultiIntent ?? false;
+  // Fetch extra candidates when reranking so the reranker has a larger pool to
+  // reorder before we slice down to the requested limit.
+  const rpcLimit = useReranker ? Math.min(limit * 5, 50) : limit;
 
   const {
     row,
@@ -625,52 +750,97 @@ export async function searchProductChunks(
     timings: embeddingTimings,
   } = await getCachedOrNewEmbedding(query, options.model);
 
-  const supabase = getSupabaseServiceRoleClient();
-  const rag = supabase.schema('rag');
-  const similaritySearchStartedAt = nowMs();
-  const { data, error } =
-    scope === 'products'
-      ? await rag.rpc('match_product_chunks', {
-          query_embedding: toVectorLiteral(embedding),
-          match_count: limit,
-          filter_product_key: undefined,
-          filter_product_line_key: productLineKey || undefined,
-        })
-      : await (
-          rag as unknown as {
-            rpc: (
-              fn: 'match_corpus_chunks',
-              args: {
-                query_embedding: string;
-                match_count: number;
-                filter_product_line_key?: string;
-                filter_scope: 'all' | 'products' | 'sds';
-              },
-            ) => Promise<{
-              data: RagCorpusSearchMatch[] | null;
-              error: { message: string } | null;
-            }>;
-          }
-        ).rpc('match_corpus_chunks', {
-          query_embedding: toVectorLiteral(embedding),
-          match_count: limit,
-          filter_product_line_key: productLineKey || undefined,
-          filter_scope: scope,
-        });
-  const similaritySearchMs = elapsedMs(similaritySearchStartedAt);
+  // For hybrid search, prefer the rewritten query as BM25 text — it has
+  // cleaner lexemes than the raw user input.
+  const hybridQueryText = row?.query_rewritten ?? query;
 
-  if (error) {
-    throw new Error(`Failed to run similarity search: ${error.message}`);
+  const rpcOpts: MatchRpcOpts = { scope, useHybrid, rpcLimit, productLineKey, sectionType };
+  const similaritySearchStartedAt = nowMs();
+
+  let rawMatches: RagCorpusSearchMatch[];
+
+  if (useMultiIntent) {
+    const intents = await expandQueryIntents(query);
+    if (intents.length > 1) {
+      const subResults = await Promise.all(
+        intents.map(async (subQuery) => {
+          const subEmb = await getCachedOrNewEmbedding(subQuery, options.model);
+          const subHybridText = subEmb.row?.query_rewritten ?? subQuery;
+          return callMatchRpc(subEmb.embedding, subHybridText, rpcOpts);
+        }),
+      );
+      // Merge: dedup by chunk_id keeping the highest similarity score across sub-queries
+      const byChunkId = new Map<string, RagCorpusSearchMatch>();
+      for (const results of subResults) {
+        for (const match of results) {
+          const existing = byChunkId.get(match.chunk_id);
+          if (!existing || (match.similarity as number) > (existing.similarity as number)) {
+            byChunkId.set(match.chunk_id, match);
+          }
+        }
+      }
+      rawMatches = Array.from(byChunkId.values())
+        .sort((a, b) => (b.similarity as number) - (a.similarity as number))
+        .slice(0, rpcLimit);
+    } else {
+      rawMatches = await callMatchRpc(embedding, hybridQueryText, rpcOpts);
+    }
+  } else {
+    rawMatches = await callMatchRpc(embedding, hybridQueryText, rpcOpts);
   }
 
+  const similaritySearchMs = elapsedMs(similaritySearchStartedAt);
+
+  // Map RPC results to typed matches (no minSimilarity filter yet — applied after
+  // optional reranking so the reranker always sees the full candidate set).
+  const mappedMatches = (
+    scope === 'products'
+      ? (rawMatches as RagSearchMatch[]).map((match) => ({
+          ...match,
+          document_kind: 'product_line_profile',
+        }))
+      : rawMatches.map((match) => ({
+          ...match,
+          document_kind: match.document_kind ?? 'unknown',
+        }))
+  ).map((match) => ({
+    ...match,
+    similarity: Number(match.similarity),
+  }));
+
+  // Rerank phase — reorders the candidate pool by cross-encoder relevance then
+  // slices to `limit`. Falls back to cosine order if the API is unavailable.
+  let rerankMs = 0;
+  let rankedMatches = mappedMatches;
+
+  if (useReranker && mappedMatches.length > 0) {
+    const rerankStartedAt = nowMs();
+    const reranked = await rerankChunks(query, mappedMatches).catch(() => null);
+    rerankMs = elapsedMs(rerankStartedAt);
+
+    if (reranked && reranked.length > 0) {
+      const scoreMap = new Map(reranked.map((r) => [r.chunk_id, r.relevance_score]));
+      rankedMatches = [...mappedMatches]
+        .sort((a, b) => (scoreMap.get(b.chunk_id) ?? 0) - (scoreMap.get(a.chunk_id) ?? 0))
+        .slice(0, limit);
+    } else {
+      rankedMatches = mappedMatches.slice(0, limit);
+    }
+  }
+
+  const filteredMatches = rankedMatches.filter(
+    (match) => minSimilarity === null || match.similarity >= minSimilarity,
+  );
+
   const timings = {
-    totalMs: elapsedMs(startedAt),
+    totalMs: elapsedMs(startedAt) + rerankMs,
     queryEmbeddingMs: embeddingTimings.queryEmbeddingMs,
     queryRewriteMs: embeddingTimings.queryRewriteMs,
     cacheLookupMs: embeddingTimings.cacheLookupMs,
     embeddingCreateMs: embeddingTimings.embeddingCreateMs,
     cachePersistMs: embeddingTimings.cachePersistMs,
     similaritySearchMs,
+    rerankMs,
   };
 
   try {
@@ -679,64 +849,10 @@ export async function searchProductChunks(
     // Timing persistence is best-effort and should not block search results.
   }
 
-  const mappedMatches = (
-    scope === 'products'
-      ? ((data ?? []) as RagSearchMatch[]).map((match) => ({
-          ...match,
-          document_kind: 'product_line_profile',
-        }))
-      : ((data ?? []) as RagCorpusSearchMatch[]).map((match) => ({
-          ...match,
-          document_kind: match.document_kind ?? 'unknown',
-        }))
-  )
-    .map((match) => ({
-      ...match,
-      similarity: Number(match.similarity),
-    }))
-    .filter((match) => minSimilarity === null || match.similarity >= minSimilarity);
-
-  let languageFilteredMatches = mappedMatches;
-  if (languageCode) {
-    const documentIds = Array.from(
-      new Set(
-        mappedMatches
-          .map((match) => match.document_id)
-          .filter((value): value is string => Boolean(value)),
-      ),
-    );
-
-    if (documentIds.length > 0) {
-      const { data: documentRows, error: documentError } = await supabase
-        .schema('rag')
-        .from('document')
-        .select('id, language_code')
-        .in('id', documentIds);
-
-      if (documentError) {
-        throw new Error(
-          `Failed to enforce language filter for similarity search: ${documentError.message}`,
-        );
-      }
-
-      const languageByDocumentId = new Map<string, string | null>(
-        ((documentRows ?? []) as DocumentLanguageRow[]).map((row) => [
-          row.id,
-          row.language_code,
-        ]),
-      );
-
-      languageFilteredMatches = mappedMatches.filter((match) => {
-        const value = languageByDocumentId.get(match.document_id);
-        return typeof value === 'string' && value.toUpperCase() === languageCode;
-      });
-    }
-  }
-
   const dedupedMatches: RagSearchMatch[] = [];
   const seenSdsChunkKeys = new Set<string>();
 
-  for (const match of languageFilteredMatches) {
+  for (const match of filteredMatches) {
     if (match.document_kind !== 'sds') {
       dedupedMatches.push(match);
       continue;
@@ -761,9 +877,15 @@ export async function searchProductChunks(
     model,
     limit,
     productLineKey,
+    sectionType,
     scope,
-    languageCode,
     minSimilarity,
+    retrieval_strategy: (
+      useHybrid && useReranker ? 'hybrid+reranked'
+      : useHybrid             ? 'hybrid'
+      : useReranker           ? 'vector+reranked'
+      :                         'vector'
+    ) as 'vector' | 'hybrid' | 'vector+reranked' | 'hybrid+reranked',
     embeddingSource: source,
     timings,
     matches: dedupedMatches,

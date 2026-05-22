@@ -1,6 +1,8 @@
-import { searchProductChunks } from '~/lib/rag/search';
+import { searchProductChunks, type RagSearchMatch } from '~/lib/rag/search';
 
 import {
+  computeAvgSimilarityForResult,
+  countPassedAndFailedByResultId,
   countResultItemsByResultId,
   getTestItemsByTestId,
   getTestResultById,
@@ -9,7 +11,43 @@ import {
   updateTestRecord,
   updateTestResult,
 } from './repository';
-import { isTerminalRunStatus } from './types';
+import { isTerminalRunStatus, type TestItemRecord } from './types';
+
+/** Similarity floor below which a match is not considered relevant for negative-test evaluation. */
+const NEGATIVE_SIMILARITY_CAP = 0.45;
+
+/**
+ * Gold eval pass/fail logic:
+ * - Negative test (expected_should_answer = false): pass if no match exceeds the similarity cap.
+ * - Positive test with expected_canonical_product and/or expected_result_type: pass if at least
+ *   one match satisfies BOTH constraints in the same chunk.
+ * - Positive test with no constraints: pass if any result was returned.
+ */
+function evaluateSearchPass(matches: RagSearchMatch[], item: TestItemRecord): boolean {
+  if (item.expected_should_answer === false) {
+    return !matches.some((m) => m.similarity >= NEGATIVE_SIMILARITY_CAP);
+  }
+
+  const expectedKey =
+    typeof item.expected_canonical_product === 'string' && item.expected_canonical_product.trim()
+      ? item.expected_canonical_product.trim().toLowerCase()
+      : null;
+
+  const expectedSection =
+    typeof item.expected_result_type === 'string' && item.expected_result_type.trim()
+      ? item.expected_result_type.trim()
+      : null;
+
+  if (!expectedKey && !expectedSection) {
+    return matches.length > 0;
+  }
+
+  return matches.some((m) => {
+    const keyMatch = !expectedKey || (m.product_line_key?.toLowerCase() ?? '') === expectedKey;
+    const sectionMatch = !expectedSection || m.section_type === expectedSection;
+    return keyMatch && sectionMatch;
+  });
+}
 
 function asSummaryObject(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -48,6 +86,16 @@ export async function executeSearchRun(testResultId: string) {
       elapsed_accumulated_ms: itemElapsedSumMs,
     },
   });
+
+  const runOpts = (testResult.run_options as Record<string, unknown>) ?? {};
+  const useHybrid = runOpts['useHybrid'] === true;
+  const useReranker = runOpts['useReranker'] === true;
+  const useMultiIntent = runOpts['useMultiIntent'] === true;
+  const runRetrievalStrategy =
+    useHybrid && useReranker ? 'hybrid+reranked'
+    : useHybrid              ? 'hybrid'
+    : useReranker            ? 'vector+reranked'
+    :                          'vector';
 
   await updateTestRecord(testResult.test_id, { status: 'running' });
 
@@ -102,17 +150,25 @@ export async function executeSearchRun(testResultId: string) {
         query: item.prompt,
         scope: 'all',
         limit: 10,
+        useHybrid,
+        useReranker,
+        useMultiIntent,
       });
 
-      passed = result.matches.length > 0;
+      passed = evaluateSearchPass(result.matches, item);
       responsePayload = {
         matches: result.matches,
         embeddingSource: result.embeddingSource,
+        retrieval_strategy: result.retrieval_strategy,
+        rerankMs: result.timings.rerankMs,
         timings: result.timings,
         query: result.query,
         queryRewritten: result.query !== item.prompt.trim() ? result.query : null,
         model: result.model,
         matchCount: result.matches.length,
+        passReason: passed
+          ? (item.expected_should_answer === false ? 'no_relevant_match_above_cap' : 'constraint_satisfied')
+          : (item.expected_should_answer === false ? 'unexpected_relevant_match' : 'constraint_not_satisfied'),
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Search failed.';
@@ -159,14 +215,18 @@ export async function executeSearchRun(testResultId: string) {
   const finalRun = await getTestResultById(testResult.id);
   const finalSummary = asSummaryObject(finalRun.summary);
   const completedCount = await countResultItemsByResultId(testResult.id);
+  const { passed: passedCount, failed: failedCount } = await countPassedAndFailedByResultId(testResult.id);
   itemElapsedSumMs = await sumResultItemsElapsedMsByResultId(testResult.id);
+  const avgSimilarity = await computeAvgSimilarityForResult(testResult.id);
 
   await updateTestResult(testResult.id, {
     status: 'completed',
-    passed_items: completedCount,
-    failed_items: 0,
+    passed_items: passedCount,
+    failed_items: failedCount,
     elapsed_ms: itemElapsedSumMs,
     completed_at: new Date().toISOString(),
+    avg_similarity: avgSimilarity,
+    retrieval_strategy: runRetrievalStrategy,
     summary: {
       ...finalSummary,
       completed_items: completedCount,

@@ -5,6 +5,11 @@ import {
   retrieveSurfacesLists,
 } from '~/lib/retrieval/product-guidance';
 import { ragQueryForProductKnowledgeWithMeta } from '~/lib/retrieval/product-knowledge';
+import { resolveProductLineKeyByName } from '~/lib/rag/entity-context';
+import {
+  inferSectionTypeFromQuery,
+  inferSectionTypeFromToolName,
+} from '~/lib/rag/section-type-inference';
 
 import {
   getApprovedUsageGuidanceInputSchema,
@@ -101,11 +106,20 @@ export async function executeProductTool(
       const q = [p.productName, p.topic, p.surfaceType]
         .filter(Boolean)
         .join(' ');
-      const result = await ragQueryForProductKnowledgeWithMeta({ query: q });
+      const [productLineKey, sectionType] = await Promise.all([
+        resolveProductLineKeyByName(p.productName),
+        Promise.resolve(inferSectionTypeFromQuery(q)),
+      ]);
+      const result = await ragQueryForProductKnowledgeWithMeta({
+        query: q,
+        productLineKey,
+        sectionType,
+      });
       return {
         ok: true,
         adapter: ADAPTER_TAG,
         query: q,
+        entityContextBlock: result.entityContextBlock,
         sources: sourcePayload(result.sources),
         retrieval: result.retrieval,
       };
@@ -113,18 +127,26 @@ export async function executeProductTool(
     case 'get_product_spec': {
       const p = getProductSpecInputSchema.parse(args);
       const q = `${p.productId} specifications technical datasheet performance`;
-      const result = await ragQueryForProductKnowledgeWithMeta({ query: q });
+      const productLineKey = await resolveProductLineKeyByName(p.productId);
+      const result = await ragQueryForProductKnowledgeWithMeta({
+        query: q,
+        productLineKey,
+        sectionType: null,
+      });
       return {
         ok: true,
         adapter: ADAPTER_TAG,
         productId: p.productId,
+        entityContextBlock: result.entityContextBlock,
         sources: sourcePayload(result.sources),
         retrieval: result.retrieval,
       };
     }
     case 'get_approved_usage_guidance': {
       const p = getApprovedUsageGuidanceInputSchema.parse(args);
-      const result = await retrieveApprovedUsage(p);
+      const productLineKey = await resolveProductLineKeyByName(p.productId);
+      const sectionType = inferSectionTypeFromToolName('get_approved_usage_guidance');
+      const result = await retrieveApprovedUsage({ ...p, productLineKey, sectionType });
       return {
         ok: true,
         adapter: ADAPTER_TAG,
@@ -132,58 +154,79 @@ export async function executeProductTool(
         task: p.task,
         surfaceType: p.surfaceType,
         environment: p.environment ?? null,
+        entityContextBlock: result.entityContextBlock,
         sources: sourcePayload(result.sources),
         retrieval: result.retrieval,
       };
     }
     case 'get_safety_constraints': {
       const p = getSafetyConstraintsInputSchema.parse(args);
-      const result = await retrieveSafetyConstraints(p);
+      const [productLineKey, sectionType] = await Promise.all([
+        resolveProductLineKeyByName(p.productId),
+        Promise.resolve(
+          inferSectionTypeFromQuery(`${p.productId} safety hazards PPE SDS precautions first aid`),
+        ),
+      ]);
+      const result = await retrieveSafetyConstraints({ ...p, productLineKey, sectionType });
       return {
         ok: true,
         adapter: ADAPTER_TAG,
         productId: p.productId,
+        entityContextBlock: result.entityContextBlock,
         sources: sourcePayload(result.sources),
         retrieval: result.retrieval,
       };
     }
     case 'get_compatibility_rules': {
       const p = getCompatibilityRulesInputSchema.parse(args);
-      const result = await retrieveCompatibility(p);
+      const productLineKey = await resolveProductLineKeyByName(p.productId);
+      const sectionType = inferSectionTypeFromToolName('get_compatibility_rules');
+      const result = await retrieveCompatibility({ ...p, productLineKey, sectionType });
       return {
         ok: true,
         adapter: ADAPTER_TAG,
         productId: p.productId,
         surfaceType: p.surfaceType,
         materialType: p.materialType ?? null,
+        entityContextBlock: result.entityContextBlock,
         sources: sourcePayload(result.sources),
         retrieval: result.retrieval,
       };
     }
     case 'list_allowed_surfaces': {
       const p = listAllowedSurfacesInputSchema.parse(args);
+      const productLineKey = await resolveProductLineKeyByName(p.productId);
+      const sectionType = inferSectionTypeFromToolName('list_allowed_surfaces');
       const result = await retrieveSurfacesLists({
         productId: p.productId,
         mode: 'allowed',
+        productLineKey,
+        sectionType,
       });
       return {
         ok: true,
         adapter: ADAPTER_TAG,
         productId: p.productId,
+        entityContextBlock: result.entityContextBlock,
         sources: sourcePayload(result.sources),
         retrieval: result.retrieval,
       };
     }
     case 'list_disallowed_uses': {
       const p = listDisallowedUsesInputSchema.parse(args);
+      const productLineKey = await resolveProductLineKeyByName(p.productId);
+      const sectionType = inferSectionTypeFromToolName('list_disallowed_uses');
       const result = await retrieveSurfacesLists({
         productId: p.productId,
         mode: 'disallowed',
+        productLineKey,
+        sectionType,
       });
       return {
         ok: true,
         adapter: ADAPTER_TAG,
         productId: p.productId,
+        entityContextBlock: result.entityContextBlock,
         sources: sourcePayload(result.sources),
         retrieval: result.retrieval,
       };

@@ -374,6 +374,8 @@ export type Database = {
       }
       test_results: {
         Row: {
+          avg_confidence: number | null
+          avg_similarity: number | null
           completed_at: string | null
           created_at: string
           elapsed_ms: number | null
@@ -381,7 +383,9 @@ export type Database = {
           id: string
           notes: string | null
           passed_items: number
+          retrieval_strategy: string | null
           run_mode: string
+          run_options: Json
           started_at: string
           status: string
           summary: Json
@@ -389,6 +393,8 @@ export type Database = {
           total_items: number
         }
         Insert: {
+          avg_confidence?: number | null
+          avg_similarity?: number | null
           completed_at?: string | null
           created_at?: string
           elapsed_ms?: number | null
@@ -396,7 +402,9 @@ export type Database = {
           id?: string
           notes?: string | null
           passed_items?: number
+          retrieval_strategy?: string | null
           run_mode?: string
+          run_options?: Json
           started_at?: string
           status?: string
           summary?: Json
@@ -404,6 +412,8 @@ export type Database = {
           total_items?: number
         }
         Update: {
+          avg_confidence?: number | null
+          avg_similarity?: number | null
           completed_at?: string | null
           created_at?: string
           elapsed_ms?: number | null
@@ -411,7 +421,9 @@ export type Database = {
           id?: string
           notes?: string | null
           passed_items?: number
+          retrieval_strategy?: string | null
           run_mode?: string
+          run_options?: Json
           started_at?: string
           status?: string
           summary?: Json
@@ -430,41 +442,50 @@ export type Database = {
       }
       tests: {
         Row: {
+          confidence_floor: number
           id: string
           intended_agent: string | null
           metadata: Json
           name: string
           row_count: number
+          similarity_floor: number
           source_bucket: string
           source_file_name: string
           source_key: string
           status: string
+          suite_version: string
           updated_at: string
           uploaded_at: string
         }
         Insert: {
+          confidence_floor?: number
           id?: string
           intended_agent?: string | null
           metadata?: Json
           name: string
           row_count?: number
+          similarity_floor?: number
           source_bucket: string
           source_file_name: string
           source_key: string
           status?: string
+          suite_version?: string
           updated_at?: string
           uploaded_at?: string
         }
         Update: {
+          confidence_floor?: number
           id?: string
           intended_agent?: string | null
           metadata?: Json
           name?: string
           row_count?: number
+          similarity_floor?: number
           source_bucket?: string
           source_file_name?: string
           source_key?: string
           status?: string
+          suite_version?: string
           updated_at?: string
           uploaded_at?: string
         }

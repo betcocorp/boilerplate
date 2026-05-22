@@ -1,7 +1,10 @@
 import { assertSupabaseNoError as assertNoError } from '~/lib/utils';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
-import { extractItemSimilarityScore } from './response-payload';
+import {
+  extractItemSimilarityScore,
+  extractSearchRunMaxSimilarity,
+} from './response-payload';
 import type {
   LatestFailedTestResultItemView,
   NewTestItemRecord,
@@ -631,6 +634,29 @@ export async function countResultItemsByResultId(testResultId: string) {
   return result.count ?? 0;
 }
 
+/** Returns the count of passed=true and passed=false rows for a result. */
+export async function countPassedAndFailedByResultId(
+  testResultId: string,
+): Promise<{ passed: number; failed: number }> {
+  const supabase = getSupabaseServiceRoleClient();
+  const [passedResult, failedResult] = await Promise.all([
+    supabase
+      .from('test_result_items')
+      .select('*', { count: 'exact', head: true })
+      .eq('test_result_id', testResultId)
+      .eq('passed', true),
+    supabase
+      .from('test_result_items')
+      .select('*', { count: 'exact', head: true })
+      .eq('test_result_id', testResultId)
+      .eq('passed', false),
+  ]);
+  return {
+    passed: passedResult.count ?? 0,
+    failed: failedResult.count ?? 0,
+  };
+}
+
 /** Sum of `elapsed_ms` across all result rows for the run (model time per prompt, not wall clock). */
 export async function sumResultItemsElapsedMsByResultId(testResultId: string) {
   const supabase = getSupabaseServiceRoleClient();
@@ -656,6 +682,45 @@ export async function sumResultItemsElapsedMsByResultId(testResultId: string) {
   }
 
   return total;
+}
+
+/**
+ * Averages the per-item max similarity across all completed result rows for a run.
+ * Works for both search runs (matches[].similarity) and full agent runs (sources[].similarity).
+ */
+export async function computeAvgSimilarityForResult(testResultId: string): Promise<number | null> {
+  const supabase = getSupabaseServiceRoleClient();
+  let sum = 0;
+  let count = 0;
+  let from = 0;
+
+  while (true) {
+    const result = await supabase
+      .from('test_result_items')
+      .select('response_payload')
+      .eq('test_result_id', testResultId)
+      .in('status', ['completed', 'failed'])
+      .range(from, from + RESULT_ITEMS_PAGE_SIZE - 1);
+
+    const rows = (assertNoError(result) || []) as Pick<TestResultItemRecord, 'response_payload'>[];
+
+    for (const row of rows) {
+      const score =
+        extractSearchRunMaxSimilarity(row.response_payload) ??
+        extractItemSimilarityScore(row.response_payload);
+      if (typeof score === 'number') {
+        sum += score;
+        count += 1;
+      }
+    }
+
+    if (rows.length < RESULT_ITEMS_PAGE_SIZE) {
+      break;
+    }
+    from += RESULT_ITEMS_PAGE_SIZE;
+  }
+
+  return count > 0 ? sum / count : null;
 }
 
 export async function deleteTestById(testId: string) {

@@ -6,6 +6,7 @@ import { connection } from 'next/server';
 
 import { AddTestItemDialog } from '~/components/admin/tests/AddTestItemDialog';
 import { AdminTestsActionToast } from '~/components/admin/tests/AdminTestsActionToast';
+import { RunSearchEvalDialog } from '~/components/admin/tests/RunSearchEvalDialog';
 import { TestPromptsSection } from '~/components/admin/tests/TestPromptsSection';
 import { Button } from '~/components/ui/button';
 import {
@@ -52,7 +53,6 @@ import {
 import {
   deleteSearchRunAction,
   deleteTestRunAction,
-  runSearchEvalAction,
   runTestAction,
 } from '../actions';
 
@@ -316,12 +316,7 @@ export default async function AdminTestDetailsPage({
               <Button asChild size="sm" variant="outline">
                 <Link href="/admin/tests">Back to tests</Link>
               </Button>
-              <form action={runSearchEvalAction}>
-                <input name="testId" type="hidden" value={test.id} />
-                <Button size="sm" type="submit" variant="outline">
-                  Run search eval
-                </Button>
-              </form>
+              <RunSearchEvalDialog testId={test.id} />
               <form action={runTestAction}>
                 <input
                   name="returnPath"
@@ -501,8 +496,8 @@ export default async function AdminTestDetailsPage({
                 <TableRow>
                   <TableHead>Run id</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead title="Prompts with ≥1 match / total. Zero-result prompts are the primary failure signal.">
-                    Match rate
+                  <TableHead title="Gold eval pass rate — items that satisfy expected_should_answer, expected_canonical_product, and expected_result_type constraints. For unconstrained items, pass = any match returned.">
+                    Gold pass %
                   </TableHead>
                   <TableHead title="Average of each prompt's highest similarity score — the primary quality signal when tuning retrieval.">
                     Avg max sim
@@ -513,6 +508,9 @@ export default async function AdminTestDetailsPage({
                   <TableHead title="Embedding source used. Comparing runs is most meaningful when this is the same.">
                     Embedding
                   </TableHead>
+                  <TableHead title="Retrieval strategy used for this run (vector, hybrid, reranked).">
+                    Strategy
+                  </TableHead>
                   <TableHead>Elapsed</TableHead>
                   <TableHead>Started</TableHead>
                   <TableHead>Actions</TableHead>
@@ -521,15 +519,17 @@ export default async function AdminTestDetailsPage({
               <TableBody>
                 {searchResults.length === 0 ? (
                   <TableRow>
-                    <TableCell className="text-slate-500" colSpan={9}>
+                    <TableCell className="text-slate-500" colSpan={10}>
                       No search eval runs yet. Click &ldquo;Run search eval&rdquo; above.
                     </TableCell>
                   </TableRow>
                 ) : (
                   searchResults.map((run) => {
                     const stats = searchRunStatsByRunId.get(run.id);
-                    const zeroResults = Math.max(0, run.total_items - run.passed_items);
-                    const matchRatePct =
+                    const failedItems = typeof run.failed_items === 'number' && run.failed_items > 0
+                      ? run.failed_items
+                      : Math.max(0, run.total_items - run.passed_items);
+                    const goldPassPct =
                       run.total_items > 0
                         ? (run.passed_items / run.total_items) * 100
                         : null;
@@ -547,19 +547,19 @@ export default async function AdminTestDetailsPage({
                         <TableCell className="tabular-nums">
                           <div className="flex flex-col gap-0.5">
                             <span className="font-medium text-slate-800">
-                              {matchRatePct !== null
-                                ? `${matchRatePct.toFixed(0)}%`
+                              {goldPassPct !== null
+                                ? `${goldPassPct.toFixed(0)}%`
                                 : '—'}
                               <span className="ml-1.5 text-xs font-normal text-slate-500">
                                 ({run.passed_items}/{run.total_items})
                               </span>
                             </span>
-                            {zeroResults > 0 ? (
+                            {failedItems > 0 ? (
                               <Badge className="w-fit" variant="destructive">
-                                {zeroResults} zero-result{zeroResults !== 1 ? 's' : ''}
+                                {failedItems} failed
                               </Badge>
                             ) : run.total_items > 0 ? (
-                              <span className="text-xs text-emerald-700">all matched</span>
+                              <span className="text-xs text-emerald-700">all passed</span>
                             ) : null}
                           </div>
                         </TableCell>
@@ -587,6 +587,9 @@ export default async function AdminTestDetailsPage({
                           {stats?.embeddingSources.length
                             ? stats.embeddingSources.join(', ')
                             : '—'}
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap text-xs text-slate-600">
+                          {run.retrieval_strategy ?? 'vector'}
                         </TableCell>
                         <TableCell className="whitespace-nowrap text-xs text-slate-600">
                           {formatDurationSeconds(run.elapsed_ms)}
