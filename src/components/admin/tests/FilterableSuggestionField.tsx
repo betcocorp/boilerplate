@@ -65,6 +65,8 @@ export type FilterableSuggestionFieldProps = {
   presetSuggestions?: readonly string[];
   /** When set, dropdown and trigger show these strings instead of raw option values (submitted value stays the option key). */
   optionLabels?: Record<string, string>;
+  /** Pre-selected value (e.g. when editing an existing row). */
+  initialValue?: string;
 };
 
 export function FilterableSuggestionField({
@@ -75,9 +77,10 @@ export function FilterableSuggestionField({
   suggestionsFromDataset,
   presetSuggestions = [],
   optionLabels,
+  initialValue = '',
 }: FilterableSuggestionFieldProps) {
   const [open, setOpen] = useState(false);
-  const [value, setValue] = useState('');
+  const [value, setValue] = useState(initialValue);
   const [search, setSearch] = useState('');
 
   const options = useMemo(() => {

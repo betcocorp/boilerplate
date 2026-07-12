@@ -69,6 +69,10 @@ export async function runBexChatTurn(input: {
     useValidator: input.useValidator ?? false,
     agentMode: input.agentMode ?? DEFAULT_BEX_CHAT_AGENT_MODE,
     previousOpenaiResponseId: conversation.latest_openai_response_id,
+    priorMessages: priorMessages.map((message) => ({
+      role: message.role === 'assistant' ? ('assistant' as const) : ('user' as const),
+      content: message.plain_text ?? '',
+    })),
     onEvent: input.onWorkflowEvent,
     onAssistantDelta: input.onAssistantDelta,
   });

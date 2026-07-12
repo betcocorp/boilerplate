@@ -285,6 +285,28 @@ export async function deleteTestItemForTest(testItemId: string, testId: string) 
   return true;
 }
 
+/**
+ * Updates one prompt row scoped to `testId` (so a stray id from another dataset
+ * cannot be edited). Returns the updated record, or `null` if the id did not
+ * belong to this test.
+ */
+export async function updateTestItemForTest(
+  testItemId: string,
+  testId: string,
+  values: Partial<NewTestItemRecord>,
+) {
+  const supabase = getSupabaseServiceRoleClient();
+  const result = await supabase
+    .from('test_items')
+    .update(values)
+    .eq('id', testItemId)
+    .eq('test_id', testId)
+    .select('*');
+
+  const updated = assertNoError(result) as TestItemRecord[] | null;
+  return updated?.[0] ?? null;
+}
+
 export async function createTestResult(values: NewTestResultRecord) {
   const supabase = getSupabaseServiceRoleClient();
   const result = await supabase

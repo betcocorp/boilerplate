@@ -6,6 +6,8 @@ import { useCallback, useMemo, useState } from 'react';
 
 import { CreateTestFromPromptsDialog } from '~/components/admin/tests/CreateTestFromPromptsDialog';
 import { DeleteTestPromptDialog } from '~/components/admin/tests/DeleteTestPromptDialog';
+import { EditTestItemDialog } from '~/components/admin/tests/EditTestItemDialog';
+import type { TestItemSuggestionLists } from '~/components/admin/tests/TestItemFields';
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
 import { Checkbox } from '~/components/ui/checkbox';
@@ -104,6 +106,10 @@ type TestPromptsSectionProps = {
   aggregationsByItemId: Record<string, TestPromptAggregation>;
   /** Total number of recent runs the aggregations were computed over (drives column tooltips). */
   aggregatedRunCount: number;
+  /** `ProdLineKey` → display name for the edit dialog's canonical product field. */
+  canonicalProductLabels: Record<string, string>;
+  /** Combobox suggestion values shared with the add/edit prompt dialogs. */
+  suggestionLists: TestItemSuggestionLists;
 };
 
 export function TestPromptsSection({
@@ -113,6 +119,8 @@ export function TestPromptsSection({
   datasetName,
   aggregationsByItemId,
   aggregatedRunCount,
+  canonicalProductLabels,
+  suggestionLists,
 }: TestPromptsSectionProps) {
   const [query, setQuery] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
@@ -426,13 +434,31 @@ export function TestPromptsSection({
                       )}
                     </TableCell>
                     <TableCell>
-                      <DeleteTestPromptDialog
-                        promptPreview={item.prompt}
-                        returnPath={returnPath}
-                        rowIndex={item.row_index}
-                        testId={testId}
-                        testItemId={item.id}
-                      />
+                      <div className="flex items-center gap-2">
+                        <EditTestItemDialog
+                          canonicalProductLabels={canonicalProductLabels}
+                          expectedCanonicalProduct={
+                            item.expected_canonical_product
+                          }
+                          expectedReasonCode={item.expected_reason_code}
+                          expectedResultType={item.expected_result_type}
+                          expectedShouldAnswer={item.expected_should_answer}
+                          inputPayload={item.input_payload}
+                          prompt={item.prompt}
+                          returnPath={returnPath}
+                          rowIndex={item.row_index}
+                          suggestionLists={suggestionLists}
+                          testId={testId}
+                          testItemId={item.id}
+                        />
+                        <DeleteTestPromptDialog
+                          promptPreview={item.prompt}
+                          returnPath={returnPath}
+                          rowIndex={item.row_index}
+                          testId={testId}
+                          testItemId={item.id}
+                        />
+                      </div>
                     </TableCell>
                   </TableRow>
                 );

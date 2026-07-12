@@ -1,5 +1,6 @@
 'use client';
 
+import { TrashIcon } from 'lucide-react';
 import { useState } from 'react';
 
 import { deleteTestItemAction } from '~/app/(authenticated)/admin/tests/actions';
@@ -41,12 +42,13 @@ export function DeleteTestPromptDialog({
   return (
     <Dialog onOpenChange={setOpen} open={open}>
       <Button
+        aria-label={`Delete prompt row ${rowIndex}`}
         onClick={() => setOpen(true)}
-        size="sm"
+        size="icon"
         type="button"
         variant="destructive"
       >
-        Delete
+        <TrashIcon className="size-4" />
       </Button>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>

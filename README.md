@@ -5,8 +5,8 @@ Next.js admin app for Betco RAG tooling and the **Bex** product-support assistan
 ## Quick start
 
 ```bash
-npm install
-npm run dev
+pnpm install
+pnpm dev
 ```
 
 Open [http://localhost:3000/admin/bex](http://localhost:3000/admin/bex).
@@ -31,17 +31,17 @@ Apply SQL under `src/supabase/migrations` in your Supabase project (including `2
 
 Regenerate types when possible:
 
-- `npm run types:supabase:legacy`
-- `npm run types:supabase:rag`
+- `pnpm run types:supabase:legacy`
+- `pnpm run types:supabase:rag`
 
 `src/types/supabase.public.ts` includes the new **public** agent tables; `rag` / `legacy` are described loosely so `.schema('rag')` and RPCs type-check until you regenerate.
 
 ## Architecture (Bex)
 
-1. **UI** (`BexChatApp`) calls **`POST /api/bex/chat`** with optional `conversationId`, `message`, and `model`.
+1. **UI** (`BexChatApp`) calls **`POST /api/bex/chat/stream`** (via `apiPostBexChatStream()`) with optional `conversationId`, `message`, and `model`. The streaming route uses the **Vercel AI SDK** (`createUIMessageStream`) and is gated by the `BEX_AI_SDK_STREAMING_*` flags. The old `POST /api/bex/chat` is **deprecated and returns HTTP 410**.
 2. **`runBexChatTurn`** persists the user message, then **`runProductSupportWorkflow`**:
    - Keyword **orchestrator hint** from `routeUserMessageToSme` (planner context only).
-   - **Responses API** loop with **function tools** (`src/lib/tools/definitions.ts`) executed only on the server (`execute-tool-call.ts` → `product-tools.ts`).
+   - **Generation runtime**: by default the **OpenAI Responses API** loop (`src/lib/openai/responses-runtime.ts`); when `BEX_AI_SDK_GENERATION_ENABLED=true`, the **Vercel AI SDK** `streamText` loop (`src/lib/bex/ai-sdk-runtime.ts`) runs instead — same result shape, tools, and streaming, but replays conversation history (`priorMessages`) rather than `previous_response_id` chaining. Both use the same **function tools** (`src/lib/tools/definitions.ts`) executed on the server (`execute-tool-call.ts` → `product-tools.ts`).
    - Tools wrap **`searchProductChunks`** and related retrieval (`src/lib/retrieval/*`) — transitional **RAG corpus** adapter, not a single mega-tool.
    - **Validator** pass (`validator.ts`) with structured JSON output; failed answers get a safe fallback + optional **review task**.
 3. **Persistence**: `latest_openai_response_id` on `agent_conversations` chains turns via `previous_response_id`; developer instructions are resent each turn.
@@ -53,14 +53,15 @@ Legacy **`POST /api/v1/orchestrator`** still accepts `bex-chat` and now runs the
 
 | Method | Path | Notes |
 |--------|------|--------|
-| POST | `/api/bex/chat` | Main chat; same auth pattern as v1 orchestrator for POST (bearer or non-empty message in dev). |
+| POST | `/api/bex/chat/stream` | Main chat (AI SDK streaming); same auth pattern as v1 orchestrator for POST (bearer or non-empty message in dev). Gated by `BEX_AI_SDK_STREAMING_ENABLED`. |
+| POST | `/api/bex/chat` | **Deprecated** — returns HTTP 410. Use `/api/bex/chat/stream`. |
 | GET/POST | `/api/bex/conversations` | List / create conversations. |
 | GET/DELETE | `/api/bex/conversations/[id]` | Load or delete thread + messages. |
 | GET | `/api/bex/workflow-runs/[id]` | Run, steps, audit rows. |
 
 ## Tests
 
-`src/lib/openai/response-item-parsing.test.ts` targets pure parsers. Install **Vitest** (`npm i -D vitest`) and run `npx vitest` (see `vitest.config.ts`). Test files are excluded from `next build` typecheck via `tsconfig.json`.
+`src/lib/openai/response-item-parsing.test.ts` targets pure parsers; route contracts are covered under `src/app/api/bex/chat/**/route.test.ts`. **Vitest** is already a dev dependency — run `pnpm exec vitest` (see `vitest.config.ts`). Test files are excluded from `next build` typecheck via `tsconfig.json`.
 
 ## Follow-ups
 

@@ -21,6 +21,7 @@ import {
 import { logError, logInfo } from '~/lib/observability/logger';
 import { getOpenAIClient, resolveResponsesModel } from '~/lib/openai/client';
 import { runResponsesWithToolLoop } from '~/lib/openai/responses-runtime';
+import { runAiSdkWithToolLoop } from '~/lib/bex/ai-sdk-runtime';
 import { routeUserMessageToSme } from '~/lib/orchestrator/sme-routing';
 import { productSupportTools } from '~/lib/tools/definitions';
 import { executeToolCall } from '~/lib/tools/execute-tool-call';
@@ -678,10 +679,12 @@ export async function runProductSupportWorkflow(input: {
   useValidator?: boolean;
   agentMode?: BexChatAgentMode;
   previousOpenaiResponseId?: string | null;
+  priorMessages?: Array<{ role: 'user' | 'assistant'; content: string }>;
   onEvent?: (event: ProductSupportWorkflowEvent) => void;
   onAssistantDelta?: (delta: string) => void;
 }): Promise<ProductSupportFinalOutput> {
   const useValidator = input.useValidator ?? false;
+  const useAiSdkGeneration = process.env.BEX_AI_SDK_GENERATION_ENABLED === 'true';
   const agentMode = input.agentMode ?? DEFAULT_BEX_CHAT_AGENT_MODE;
   const route = routeUserMessageToSme(input.userMessage);
   const earlyDeclineDecision = classifyEarlyDecline(input.userMessage);
@@ -900,68 +903,93 @@ export async function runProductSupportWorkflow(input: {
     let totalSearchMs = 0;
     let retrievalSamples = 0;
 
-    const agentResult = await runResponsesWithToolLoop({
-      client,
-      model,
-      instructions,
-      tools: productSupportTools,
-      userMessage: input.userMessage,
-      previousResponseId: input.previousOpenaiResponseId ?? null,
-      toolChoice: shouldForceCrossReferenceLookup(input.userMessage)
-        ? ({
-            type: 'function',
-            name: 'lookup_cross_reference',
-          } as const)
-        : 'auto',
-      onAssistantDelta: input.onAssistantDelta,
-      executeTool: async ({ name, argumentsJson, callId }) => {
-        input.onEvent?.({
-          type: 'tool',
-          phase: 'started',
-          name,
-          callId,
-        });
-        await writeAuditLog(
-          'tool_called',
-          { tool_name: name, call_id: callId },
-          { ...wfCtx, toolName: name },
+    const executeTool = async ({
+      name,
+      argumentsJson,
+      callId,
+    }: {
+      name: string;
+      argumentsJson: string;
+      callId: string;
+    }) => {
+      input.onEvent?.({
+        type: 'tool',
+        phase: 'started',
+        name,
+        callId,
+      });
+      await writeAuditLog(
+        'tool_called',
+        { tool_name: name, call_id: callId },
+        { ...wfCtx, toolName: name },
+      );
+      logInfo('tool_called', { ...wfCtx, tool_name: name, call_id: callId });
+
+      const out = await executeToolCall({ name, argumentsJson, callId });
+      const retrievalTiming = extractRetrievalTiming(out.output);
+      if (retrievalTiming) {
+        cacheSourceCounts.set(
+          retrievalTiming.cacheSource,
+          (cacheSourceCounts.get(retrievalTiming.cacheSource) ?? 0) + 1,
         );
-        logInfo('tool_called', { ...wfCtx, tool_name: name, call_id: callId });
+        totalSearchMs += retrievalTiming.searchMs;
+        retrievalSamples += 1;
+      }
 
-        const out = await executeToolCall({ name, argumentsJson, callId });
-        const retrievalTiming = extractRetrievalTiming(out.output);
-        if (retrievalTiming) {
-          cacheSourceCounts.set(
-            retrievalTiming.cacheSource,
-            (cacheSourceCounts.get(retrievalTiming.cacheSource) ?? 0) + 1,
-          );
-          totalSearchMs += retrievalTiming.searchMs;
-          retrievalSamples += 1;
-        }
+      await writeAuditLog(
+        out.trace.ok ? 'tool_succeeded' : 'tool_failed',
+        { tool_name: name, call_id: callId },
+        { ...wfCtx, toolName: name },
+      );
 
-        await writeAuditLog(
-          out.trace.ok ? 'tool_succeeded' : 'tool_failed',
-          { tool_name: name, call_id: callId },
-          { ...wfCtx, toolName: name },
-        );
+      toolTrace.push(out.trace);
+      toolOutputLog.push({
+        toolName: out.trace.toolName,
+        ok: out.trace.ok,
+        output: out.output,
+        trace: out.trace,
+      });
+      input.onEvent?.({
+        type: 'tool',
+        phase: 'completed',
+        name,
+        ok: out.trace.ok,
+        callId,
+      });
+      return out;
+    };
 
-        toolTrace.push(out.trace);
-        toolOutputLog.push({
-          toolName: out.trace.toolName,
-          ok: out.trace.ok,
-          output: out.output,
-          trace: out.trace,
+    const toolChoice = shouldForceCrossReferenceLookup(input.userMessage)
+      ? ({ type: 'function', name: 'lookup_cross_reference' } as const)
+      : ('auto' as const);
+
+    // Generation runtime: AI SDK (`streamText`) when BEX_AI_SDK_GENERATION_ENABLED, else the
+    // OpenAI Responses tool loop. Both return the same { assistantText, finalResponseId,
+    // toolTrace, responseIds } shape consumed below.
+    const agentResult = useAiSdkGeneration
+      ? await runAiSdkWithToolLoop({
+          modelTag: input.modelTag,
+          instructions,
+          history: input.priorMessages ?? [],
+          userMessage: input.userMessage,
+          toolChoice,
+          onAssistantDelta: input.onAssistantDelta,
+          executeTool,
+        })
+      : await runResponsesWithToolLoop({
+          client,
+          model,
+          instructions,
+          tools: productSupportTools,
+          userMessage: input.userMessage,
+          previousResponseId: input.previousOpenaiResponseId ?? null,
+          toolChoice,
+          onAssistantDelta: input.onAssistantDelta,
+          executeTool,
         });
-        input.onEvent?.({
-          type: 'tool',
-          phase: 'completed',
-          name,
-          ok: out.trace.ok,
-          callId,
-        });
-        return out;
-      },
-    });
+
+    // AI SDK has no OpenAI response id; use a synthetic marker so the persisted chain stays populated.
+    const finalResponseId = agentResult.finalResponseId ?? `ai_sdk:${run.id}`;
     input.onEvent?.({ type: 'status', stage: 'agent_completed' });
     const timingBreakdown = {
       toolRounds: agentResult.responseIds.length,
@@ -1186,7 +1214,7 @@ export async function runProductSupportWorkflow(input: {
       retrieved_document_chunks,
       confidence: validation.confidence,
       workflowRunId: run.id,
-      latestOpenaiResponseId: agentResult.finalResponseId,
+      latestOpenaiResponseId: finalResponseId,
       validation,
       routingDecision,
       timingBreakdown,
@@ -1199,7 +1227,7 @@ export async function runProductSupportWorkflow(input: {
     });
 
     await updateConversation(input.conversationId, {
-      latest_openai_response_id: agentResult.finalResponseId,
+      latest_openai_response_id: finalResponseId,
       latest_model: model,
     });
 
@@ -1207,7 +1235,7 @@ export async function runProductSupportWorkflow(input: {
       conversation_id: input.conversationId,
       role: 'assistant',
       plain_text: finalText,
-      openai_response_id: agentResult.finalResponseId,
+      openai_response_id: finalResponseId,
       content: jsonContent({
         kind: 'assistant_turn',
         text: finalText,

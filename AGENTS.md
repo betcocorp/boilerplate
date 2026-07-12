@@ -37,7 +37,7 @@ Use this file together with the user’s rules. Prefer **running** `pnpm exec ts
 
 - **UI**: `~/components/bex/*` (`BexChatApp`, messages, sidebar, composer).
 - **Page**: `src/app/(authenticated)/admin/bex/page.tsx` imports `~/components/bex/BexChatApp` only.
-- **Client → API (Bex UI)**: `~/lib/bex/bex-api-client.ts` posts to **`/api/bex/chat`** and loads history from **`/api/bex/conversations`**. Legacy **`/api/v1/orchestrator`** still supports `bex-chat` and returns **`productSupport`**; validate with **`bexOrchestrateOkResponseSchema`**.
+- **Client → API (Bex UI)**: `~/lib/bex/bex-api-client.ts` posts via `apiPostBexChatStream()` to **`/api/bex/chat/stream`** (AI SDK streaming, gated by `BEX_AI_SDK_STREAMING_*`) and loads history from **`/api/bex/conversations`**. The old **`/api/bex/chat`** is **deprecated (HTTP 410)**. Legacy **`/api/v1/orchestrator`** still supports `bex-chat` and returns **`productSupport`**; validate with **`bexOrchestrateOkResponseSchema`**.
 - **Sessions**: `~/lib/bex/sessions.ts` + types in `~/types/bex.ts`.
 
 ## Orchestrator and SME agents
@@ -49,6 +49,8 @@ Use this file together with the user’s rules. Prefer **running** `pnpm exec ts
 - **Auth**: `~/lib/api/v1-bearer-auth.ts` (`V1_ORCHESTRATOR_API_KEY`); orchestrator also allows unauthenticated **chat-style** calls when `message` is a non-empty string (browser path).
 
 When changing API shapes, update **Zod schemas first**, then types/implementations, then clients.
+
+- **Generation runtime**: `runProductSupportWorkflow` selects between the OpenAI **Responses** loop (`~/lib/openai/responses-runtime.ts`, default) and the **AI SDK** `streamText` loop (`~/lib/bex/ai-sdk-runtime.ts`) via `BEX_AI_SDK_GENERATION_ENABLED`. Both share the extracted `executeTool` closure and produce `{ assistantText, finalResponseId, toolTrace, responseIds }`. The AI SDK path replays `priorMessages` (stateless) and sets a synthetic `ai_sdk:<runId>` in place of `latest_openai_response_id`.
 
 ## RAG / admin products
 

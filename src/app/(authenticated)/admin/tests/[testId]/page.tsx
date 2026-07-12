@@ -631,6 +631,7 @@ export default async function AdminTestDetailsPage({
           <TestPromptsSection
             aggregatedRunCount={aggregatedRunCount}
             aggregationsByItemId={aggregationsForClient}
+            canonicalProductLabels={legacyProductLines.labelByKey}
             datasetName={test.name}
             items={items.map((item) => ({
               id: item.id,
@@ -643,6 +644,7 @@ export default async function AdminTestDetailsPage({
               input_payload: item.input_payload,
             }))}
             returnPath={`/admin/tests/${test.id}`}
+            suggestionLists={suggestionLists}
             testId={test.id}
           />
         </section>

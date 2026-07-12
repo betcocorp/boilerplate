@@ -9,7 +9,10 @@ import {
   parseExpectedShouldAnswerFromForm,
   parseTestCsvContent,
 } from '~/lib/tests/csv';
-import { buildManualAddTestItemPayload } from '~/lib/tests/manual-add-payload';
+import {
+  buildEditedTestItemPayload,
+  buildManualAddTestItemPayload,
+} from '~/lib/tests/manual-add-payload';
 import {
   createTestRecord,
   createTestResult,
@@ -18,9 +21,11 @@ import {
   deleteTestResultById,
   getMaxRowIndexForTest,
   getTestById,
+  getTestItemById,
   getTestItemsByTestId,
   getTestResultById,
   insertTestItems,
+  updateTestItemForTest,
   updateTestRecord,
   updateTestResult,
 } from '~/lib/tests/repository';
@@ -284,6 +289,117 @@ export async function addTestItemAction(formData: FormData) {
       returnPath,
       'success',
       `Added prompt row ${row_index}.`,
+    ),
+  );
+}
+
+export async function updateTestItemAction(formData: FormData) {
+  const testIdRaw = formData.get('testId');
+  const testId =
+    typeof testIdRaw === 'string' && testIdRaw.trim() ? testIdRaw.trim() : '';
+  const returnPath = normalizeReturnPath(
+    formData.get('returnPath'),
+    testId ? `/admin/tests/${testId}` : '/admin/tests',
+  );
+  if (!testId) {
+    redirect(encodeMessage(returnPath, 'error', 'Missing test id.'));
+  }
+
+  const testItemIdRaw = formData.get('testItemId');
+  const testItemId =
+    typeof testItemIdRaw === 'string' && testItemIdRaw.trim()
+      ? testItemIdRaw.trim()
+      : '';
+  if (!testItemId) {
+    redirect(encodeMessage(returnPath, 'error', 'Missing prompt id.'));
+  }
+
+  const promptRaw = formData.get('prompt');
+  const prompt = typeof promptRaw === 'string' ? promptRaw.trim() : '';
+  if (!prompt) {
+    redirect(
+      encodeMessage(returnPath, 'error', 'Enter a prompt before saving.'),
+    );
+  }
+
+  const existing = await getTestItemById(testItemId).catch(() => null);
+  if (!existing || existing.test_id !== testId) {
+    redirect(
+      encodeMessage(returnPath, 'error', 'That prompt was not found on this dataset.'),
+    );
+  }
+
+  const expectedModeRaw = formData.get('expectedShouldAnswer');
+  const expected_should_answer =
+    typeof expectedModeRaw === 'string'
+      ? parseExpectedShouldAnswerFromForm(expectedModeRaw)
+      : null;
+
+  const expectedResultTypeRaw = formData.get('expectedResultType');
+  const expected_result_type =
+    typeof expectedResultTypeRaw === 'string' && expectedResultTypeRaw.trim()
+      ? expectedResultTypeRaw.trim()
+      : null;
+
+  const expectedCanonicalRaw = formData.get('expectedCanonicalProduct');
+  const expected_canonical_product =
+    typeof expectedCanonicalRaw === 'string' && expectedCanonicalRaw.trim()
+      ? expectedCanonicalRaw.trim()
+      : null;
+
+  const expectedReasonRaw = formData.get('expectedReasonCode');
+  const expected_reason_code =
+    typeof expectedReasonRaw === 'string' && expectedReasonRaw.trim()
+      ? expectedReasonRaw.trim()
+      : null;
+
+  const productMentionRaw = formData.get('productMention');
+  const questionCategoryRaw = formData.get('questionCategory');
+  const sourceStyleRaw = formData.get('sourceStyle');
+
+  const { input_payload, metadata } = buildEditedTestItemPayload({
+    prompt,
+    expected_should_answer,
+    productMention:
+      typeof productMentionRaw === 'string' && productMentionRaw.trim()
+        ? productMentionRaw.trim()
+        : null,
+    questionCategory:
+      typeof questionCategoryRaw === 'string' && questionCategoryRaw.trim()
+        ? questionCategoryRaw.trim()
+        : null,
+    sourceStyle:
+      typeof sourceStyleRaw === 'string' && sourceStyleRaw.trim()
+        ? sourceStyleRaw.trim()
+        : null,
+    existingInputPayload: existing.input_payload,
+    existingMetadata: existing.metadata,
+  });
+
+  const updated = await updateTestItemForTest(testItemId, testId, {
+    prompt,
+    expected_should_answer,
+    expected_result_type,
+    expected_canonical_product,
+    expected_reason_code,
+    input_payload,
+    metadata,
+  });
+
+  if (!updated) {
+    redirect(
+      encodeMessage(returnPath, 'error', 'That prompt was not found on this dataset.'),
+    );
+  }
+
+  revalidatePath('/admin/tests');
+  revalidatePath(`/admin/tests/${testId}`);
+  revalidatePath(`/admin/tests/${testId}/items/${testItemId}`);
+  redirect(
+    encodeMessage(
+      returnPath,
+      'success',
+      `Updated prompt row ${existing.row_index}.`,
     ),
   );
 }
