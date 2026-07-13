@@ -276,6 +276,7 @@ export type Database = {
           input_payload: Json
           metadata: Json
           prompt: string
+          prompt_category: string | null
           row_index: number
           test_id: string
         }
@@ -289,6 +290,7 @@ export type Database = {
           input_payload?: Json
           metadata?: Json
           prompt: string
+          prompt_category?: string | null
           row_index: number
           test_id: string
         }
@@ -302,6 +304,7 @@ export type Database = {
           input_payload?: Json
           metadata?: Json
           prompt?: string
+          prompt_category?: string | null
           row_index?: number
           test_id?: string
         }
@@ -590,6 +593,7 @@ export type Database = {
           item_row_index: number | null
           passed: boolean | null
           prompt: string | null
+          prompt_category: string | null
           response_payload: Json | null
           response_text: string | null
           row_index: number | null
@@ -640,6 +644,7 @@ export type Database = {
           item_row_index: number | null
           passed: boolean | null
           prompt: string | null
+          prompt_category: string | null
           response_payload: Json | null
           response_text: string | null
           row_index: number | null
@@ -657,6 +662,7 @@ export type Database = {
           isSetofReturn: true
         }
       }
+      classify_prompt_category: { Args: { p_prompt: string }; Returns: string }
     }
     Enums: {
       [_ in never]: never
