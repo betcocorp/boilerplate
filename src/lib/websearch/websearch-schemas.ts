@@ -28,6 +28,7 @@ export const webSearchMetricsSchema = z.object({
   latencyMs: z.number(),
   resultCount: z.number(),
   estimatedCostUsd: z.number(),
+  cached: z.boolean(),
 });
 export type WebSearchMetrics = z.infer<typeof webSearchMetricsSchema>;
 

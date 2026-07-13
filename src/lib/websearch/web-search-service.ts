@@ -1,3 +1,8 @@
+import {
+  WebSearchCache,
+  defaultCacheTtlMs,
+  webSearchCacheKey,
+} from '~/lib/websearch/cache';
 import { MockWebSearchProvider } from '~/lib/websearch/mock-provider';
 import { TavilyProvider } from '~/lib/websearch/tavily-provider';
 import type { WebSearchProvider } from '~/lib/websearch/types';
@@ -37,11 +42,16 @@ export function createProviderFromEnv(): WebSearchProvider {
  * Generic web-search core: run a provider search, validate + normalize to the Bex-owned
  * shape, and attach timing/cost metrics. Intent-specific tools consume this, not the provider.
  */
+/** Process-wide cache shared across requests; TTL from WEBSEARCH_CACHE_TTL_MS (default 10 min). */
+const sharedCache = new WebSearchCache(defaultCacheTtlMs());
+
 export class WebSearchService {
   private readonly provider: WebSearchProvider;
+  private readonly cache: WebSearchCache;
 
-  constructor(provider?: WebSearchProvider) {
+  constructor(provider?: WebSearchProvider, cache?: WebSearchCache) {
     this.provider = provider ?? createProviderFromEnv();
+    this.cache = cache ?? sharedCache;
   }
 
   get providerName(): string {
@@ -50,6 +60,21 @@ export class WebSearchService {
 
   async search(request: WebSearchRequest): Promise<WebSearchResponse> {
     const startedAt = Date.now();
+    const cacheKey = webSearchCacheKey(this.provider.name, request);
+
+    const hit = this.cache.get(cacheKey);
+    if (hit) {
+      return {
+        ...hit,
+        metrics: {
+          ...hit.metrics,
+          cached: true,
+          estimatedCostUsd: 0,
+          latencyMs: Date.now() - startedAt,
+        },
+      };
+    }
+
     const raw = await this.provider.search(request);
 
     const parsed = webSearchResultSchema.array().safeParse(raw.results);
@@ -61,7 +86,7 @@ export class WebSearchService {
     }
 
     const results = parsed.data.slice(0, request.maxResults ?? 5);
-    return {
+    const response: WebSearchResponse = {
       query: request.query,
       provider: this.provider.name,
       answer: raw.answer ?? null,
@@ -70,7 +95,10 @@ export class WebSearchService {
         latencyMs: Date.now() - startedAt,
         resultCount: results.length,
         estimatedCostUsd: estimateCost(this.provider.name, request),
+        cached: false,
       },
     };
+    this.cache.set(cacheKey, response);
+    return response;
   }
 }

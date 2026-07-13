@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { WebSearchCache } from '~/lib/websearch/cache';
 import { MockWebSearchProvider } from '~/lib/websearch/mock-provider';
 import { TavilyProvider } from '~/lib/websearch/tavily-provider';
-import type { WebSearchProvider } from '~/lib/websearch/types';
+import type { ProviderSearchResult, WebSearchProvider } from '~/lib/websearch/types';
 import { WebSearchError } from '~/lib/websearch/types';
 import {
   WebSearchService,
@@ -13,9 +14,11 @@ import {
   type WebSearchResult,
 } from '~/lib/websearch/websearch-schemas';
 
+const freshCache = () => new WebSearchCache(60_000);
+
 describe('WebSearchService', () => {
   it('normalizes provider results into the Bex-owned shape with metrics (happy path)', async () => {
-    const service = new WebSearchService(new MockWebSearchProvider());
+    const service = new WebSearchService(new MockWebSearchProvider(), freshCache());
     const result = await service.search({ query: 'BNC-15' });
 
     expect(service.providerName).toBe('mock');
@@ -32,12 +35,50 @@ describe('WebSearchService', () => {
     );
     expect(result.metrics.resultCount).toBe(result.results.length);
     expect(result.metrics.estimatedCostUsd).toBe(0);
+    expect(result.metrics.cached).toBe(false);
   });
 
   it('respects maxResults', async () => {
-    const service = new WebSearchService(new MockWebSearchProvider());
+    const service = new WebSearchService(new MockWebSearchProvider(), freshCache());
     const result = await service.search({ query: 'anything', maxResults: 1 });
     expect(result.results).toHaveLength(1);
+  });
+
+  it('serves a repeated identical query from cache (WEB-4)', async () => {
+    let calls = 0;
+    const counting: WebSearchProvider = {
+      name: 'mock',
+      search: async (): Promise<ProviderSearchResult> => {
+        calls += 1;
+        return {
+          answer: 'cached-answer',
+          results: [{ title: 't', url: 'https://example.com/a', snippet: 's', score: 1 }],
+        };
+      },
+      extract: async () => [],
+    };
+    const service = new WebSearchService(counting, freshCache());
+
+    const first = await service.search({ query: 'triforce' });
+    const second = await service.search({ query: 'triforce' });
+
+    expect(calls).toBe(1);
+    expect(first.metrics.cached).toBe(false);
+    expect(second.metrics.cached).toBe(true);
+    expect(second.metrics.estimatedCostUsd).toBe(0);
+    expect(second.results).toEqual(first.results);
+  });
+
+  it('expires cache entries past the TTL', () => {
+    const cache = new WebSearchCache(-1);
+    cache.set('k', {
+      query: 'x',
+      provider: 'mock',
+      answer: null,
+      results: [],
+      metrics: { latencyMs: 1, resultCount: 0, estimatedCostUsd: 0, cached: false },
+    });
+    expect(cache.get('k')).toBeNull();
   });
 
   it('throws a structured WebSearchError on a malformed provider response', async () => {
@@ -49,7 +90,7 @@ describe('WebSearchService', () => {
       }),
       extract: async () => [],
     };
-    const service = new WebSearchService(malformed);
+    const service = new WebSearchService(malformed, freshCache());
 
     await expect(service.search({ query: 'x' })).rejects.toBeInstanceOf(WebSearchError);
     await expect(service.search({ query: 'x' })).rejects.toMatchObject({

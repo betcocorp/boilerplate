@@ -152,6 +152,11 @@ export function WebSearchTester() {
             <Badge className="rounded-full" variant="outline">
               ~${response.metrics.estimatedCostUsd.toFixed(3)}
             </Badge>
+            {response.metrics.cached ? (
+              <Badge className="rounded-full" variant="secondary">
+                cached
+              </Badge>
+            ) : null}
           </div>
 
           {response.answer ? (
