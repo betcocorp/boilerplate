@@ -597,6 +597,26 @@ function assistantAlreadyStartsWithComparableLink(text: string): boolean {
  * When cross-reference returns a URL, the first line must be the markdown comparable line.
  * If the model also produced usage/safety text (after forced RAG), keep it below that line.
  */
+/**
+ * Decline/refusal markers. When the model declines (e.g. the recommendations agent's
+ * sub-threshold "contact a Betco sales representative" reply, or the product agent's
+ * low-confidence line), we must NOT staple a "Comparable Betco product" headline on top —
+ * that produced the contradictory BNC-15 output (a wrong-chemistry product link above a decline).
+ */
+const DECLINE_ANSWER_MARKERS = [
+  "don't have enough information",
+  'do not have enough information',
+  "don't have enough verified information",
+  'do not have enough verified information',
+  'contact a betco sales representative',
+  'contact a sales representative',
+];
+
+export function isDeclineAnswer(text: string): boolean {
+  const lower = text.toLowerCase();
+  return DECLINE_ANSWER_MARKERS.some((marker) => lower.includes(marker));
+}
+
 function composeCrossReferenceUserFacingAnswer(input: {
   match: CrossReferenceMatch;
   assistantText: string;
@@ -605,6 +625,11 @@ function composeCrossReferenceUserFacingAnswer(input: {
   const raw = input.assistantText.trim();
 
   if (!headline) {
+    return raw;
+  }
+
+  // A declined answer stands on its own — never prepend a comparable-product headline.
+  if (isDeclineAnswer(raw)) {
     return raw;
   }
 
@@ -692,10 +717,12 @@ export async function runProductSupportWorkflow(input: {
     agentMode === 'orchestrator'
       ? (route.agent ?? 'ambiguous')
       : agentMode;
-  // REC-4: the validator runs by default on the competitive-recommendation path
-  // (no silent bypass); every other route keeps the opt-in default.
+  // REC-4: the competitive-recommendation path ALWAYS runs the validator — no silent bypass,
+  // even when the client toggle sends useValidator:false. Every other route keeps the opt-in default.
   const useValidator =
-    input.useValidator ?? routingDecision === 'recommendations';
+    routingDecision === 'recommendations'
+      ? true
+      : (input.useValidator ?? false);
   const routingRationale =
     agentMode === 'orchestrator'
       ? route.rationale
