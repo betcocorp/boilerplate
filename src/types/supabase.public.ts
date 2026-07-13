@@ -227,6 +227,60 @@ export type Database = {
           },
         ]
       }
+      cross_reference_override: {
+        Row: {
+          betco_product_key: string | null
+          betco_product_line_id: string | null
+          betco_product_url: string | null
+          betco_title: string
+          chemistry_class: string | null
+          competitor_brand: string
+          competitor_epa_reg: string | null
+          competitor_product: string
+          confidence: number
+          created_at: string
+          created_by: string | null
+          id: string
+          is_active: boolean
+          rationale: string | null
+          updated_at: string
+        }
+        Insert: {
+          betco_product_key?: string | null
+          betco_product_line_id?: string | null
+          betco_product_url?: string | null
+          betco_title: string
+          chemistry_class?: string | null
+          competitor_brand: string
+          competitor_epa_reg?: string | null
+          competitor_product: string
+          confidence?: number
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          is_active?: boolean
+          rationale?: string | null
+          updated_at?: string
+        }
+        Update: {
+          betco_product_key?: string | null
+          betco_product_line_id?: string | null
+          betco_product_url?: string | null
+          betco_title?: string
+          chemistry_class?: string | null
+          competitor_brand?: string
+          competitor_epa_reg?: string | null
+          competitor_product?: string
+          confidence?: number
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          is_active?: boolean
+          rationale?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
       review_tasks: {
         Row: {
           created_at: string

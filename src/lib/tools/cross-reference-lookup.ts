@@ -213,6 +213,100 @@ function scoreCrossReferenceRow(
   };
 }
 
+const CROSS_REFERENCE_OVERRIDE_ADAPTER_TAG = 'cross_reference_override_v1' as const;
+
+/**
+ * Consult the curated `public.cross_reference_override` table (REC-3 / B0-76) BEFORE the legacy
+ * mapping. These are human-curated equivalences (e.g. Spartan BNC-15 → Betco Triforce — same
+ * third-party formula / EPA registrant 6836) that the legacy MSSQL mirror doesn't carry and that
+ * semantic search can't derive. Returns a match in the same shape as the legacy path, or null.
+ */
+async function lookupCrossReferenceOverride(
+  supabase: ReturnType<typeof getSupabaseServiceRoleClient>,
+  input: { brand: string; productName: string },
+) {
+  const brand = normalizeLookupValue(input.brand);
+  const product = normalizeLookupValue(input.productName);
+  if (!product) {
+    return null;
+  }
+
+  const { data: rows, error } = await supabase
+    .schema('public')
+    .from('cross_reference_override')
+    .select('*')
+    .eq('is_active', true);
+  if (error || !rows || rows.length === 0) {
+    return null;
+  }
+
+  const hit = rows.find((row) => {
+    const rowBrand = normalizeLookupValue(row.competitor_brand ?? '');
+    const rowProduct = normalizeLookupValue(row.competitor_product ?? '');
+    const productMatch =
+      Boolean(rowProduct) &&
+      (rowProduct === product ||
+        product.includes(rowProduct) ||
+        rowProduct.includes(product));
+    const brandMatch =
+      !brand || !rowBrand || rowBrand === brand || rowBrand.includes(brand) || brand.includes(rowBrand);
+    return productMatch && brandMatch;
+  });
+  if (!hit) {
+    return null;
+  }
+
+  // Enrich from the legacy product (title/SKU/URL) when the override references one.
+  let product_row: LegacyProductRow | undefined;
+  let product_descr: LegacyProductDescrRow | undefined;
+  if (hit.betco_product_key) {
+    const legacy = supabase.schema('legacy');
+    const [{ data: prod }, { data: descr }] = await Promise.all([
+      legacy
+        .from('products')
+        .select(
+          'ProductsKey, Title, SKU, SLDescr, InvtID, Status, OnWeb, User_Str_00, User_Str_01, User_Str_02, User_Str_03, User_Str_04, User_Str_05',
+        )
+        .eq('ProductsKey', hit.betco_product_key)
+        .limit(1),
+      legacy
+        .from('products_descr')
+        .select('ProductsKey, ShortDescr, FullDescr, User_Str_00, User_Str_01, User_Str_02, User_Str_03')
+        .eq('ProductsKey', hit.betco_product_key)
+        .limit(1),
+    ]);
+    product_row = (prod?.[0] as LegacyProductRow | undefined) ?? undefined;
+    product_descr = (descr?.[0] as LegacyProductDescrRow | undefined) ?? undefined;
+  }
+
+  const link = hit.betco_product_url?.trim()
+    ? { url: hit.betco_product_url.trim(), source: 'override' as const }
+    : deriveCanonicalProductUrl({ product: product_row, productDescr: product_descr });
+
+  return {
+    competitorBrand: hit.competitor_brand,
+    competitorProductName: hit.competitor_product,
+    productKey: hit.betco_product_key,
+    competitorProductId: null as number | null,
+    betcoProductId: null as number | null,
+    legacyRowId: hit.id,
+    matchType: 'override' as const,
+    confidence: Number(hit.confidence),
+    productUrl: link.url,
+    productUrlSource: link.source,
+    betcoProduct: {
+      title: product_row?.Title ?? product_row?.SLDescr ?? hit.betco_title,
+      sku: product_row?.SKU ?? null,
+      shortLabel: product_row?.SLDescr ?? null,
+      inventoryId: product_row?.InvtID ?? null,
+      status: product_row?.Status ?? null,
+      onWeb: product_row?.OnWeb ?? null,
+      shortDescription: product_descr?.ShortDescr ?? hit.rationale ?? null,
+      fullDescription: product_descr?.FullDescr ?? null,
+    },
+  };
+}
+
 /** Same pipeline as `lookup_cross_reference` in product tools — shared by admin tester and agents. */
 export async function lookupCrossReference(input: {
   brand: string;
@@ -226,6 +320,21 @@ export async function lookupCrossReference(input: {
   const normalizedProduct = normalizeLookupValue(input.productName);
 
   const brandTrimmed = input.brand.trim();
+
+  // Curated overrides win over the legacy mapping — authoritative, no fallback needed.
+  const overrideMatch = await lookupCrossReferenceOverride(supabase, input);
+  if (overrideMatch) {
+    return {
+      ok: true as const,
+      adapter: CROSS_REFERENCE_OVERRIDE_ADAPTER_TAG,
+      input: { brand: input.brand, productName: input.productName },
+      normalizedInput: { brand: normalizedBrand, productName: normalizedProduct },
+      brandCandidates: [overrideMatch.competitorBrand].filter(Boolean),
+      totalCandidates: 1,
+      fallbackRecommended: false,
+      matches: [overrideMatch],
+    };
+  }
 
   const { data: competitorRows, error: competitorError } = await legacy
     .from('competitor')
