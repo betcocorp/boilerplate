@@ -1121,13 +1121,25 @@ export async function runProductSupportWorkflow(input: {
     });
 
     if (useValidator && !validation.approved && validation.issues.length > 0) {
-      const revised = await runRevisionPass({
-        draftAnswer,
-        validatorIssues: validation.issues,
-        evidenceSummary,
-        modelTag: input.modelTag,
-      });
-      if (revised.trim()) {
+      const revised = (
+        await runRevisionPass({
+          draftAnswer,
+          validatorIssues: validation.issues,
+          evidenceSummary,
+          modelTag: input.modelTag,
+        })
+      ).trim();
+      // The revision pass is told to refuse / ask for docs when it can't ground the flagged
+      // claims. Never let such a refusal OVERWRITE a substantive answer the user already saw —
+      // keep the draft and flag it for review instead. This matters most for recommendations,
+      // whose helpful usage/safety detail often isn't in the retrieved marketing profile.
+      const revisionRefused =
+        !revised ||
+        isDeclineAnswer(revised) ||
+        /cannot (revise|fix|provide|answer)|no evidence has been provided|supply approved documentation/i.test(
+          revised,
+        );
+      if (revised && !revisionRefused) {
         draftAnswer = revised;
         if (crossReferenceResult?.match.productUrl?.trim()) {
           draftAnswer = composeCrossReferenceUserFacingAnswer({
@@ -1147,6 +1159,13 @@ export async function runProductSupportWorkflow(input: {
             ...wfCtx,
             stepId: validationStep.id,
           },
+        );
+      } else {
+        validation = { ...validation, requires_human_review: true };
+        await writeAuditLog(
+          'revision_skipped_refusal',
+          { issues: validation.issues },
+          { ...wfCtx, stepId: validationStep.id },
         );
       }
     }
