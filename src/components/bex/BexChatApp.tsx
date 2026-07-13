@@ -1,6 +1,6 @@
 'use client';
 
-import { Menu, Sparkles } from 'lucide-react';
+import { Check, Copy, Download, Info, Menu, Sparkles } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { Button } from '~/components/ui/button';
@@ -12,6 +12,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from '~/components/ui/select';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '~/components/ui/popover';
 import { cn, getErrorMessage } from '~/lib/utils';
 
 import { BexChatComposer } from '~/components/bex/BexChatComposer';
@@ -57,6 +62,7 @@ export function BexChatApp() {
   const [hydrated, setHydrated] = useState(false);
   const [sessions, setSessions] = useState<Conversation[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [idCopied, setIdCopied] = useState(false);
   const [sidebarFilter, setSidebarFilter] = useState('');
   const [draft, setDraft] = useState('');
   const [isTyping, setIsTyping] = useState(false);
@@ -410,6 +416,67 @@ export function BexChatApp() {
     ? `${activeConversation.messages.length ? 'Supabase-backed' : 'Empty thread'} · ${activeConversation.title === 'New conversation' ? 'new' : 'saved'}`
     : 'Select or start a conversation';
 
+  // B0-61: the thread's unique id, shown once the conversation is saved (not the "New conversation" placeholder).
+  const conversationId =
+    activeConversation && activeConversation.title !== 'New conversation'
+      ? activeConversation.id
+      : null;
+
+  const copyConversationId = async () => {
+    if (!conversationId) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(conversationId);
+      setIdCopied(true);
+      setTimeout(() => setIdCopied(false), 1200);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  // B0-59: export the active thread as a structured JSON file (every message + assistant metadata).
+  const canDownloadConversation = Boolean(
+    activeConversation && activeConversation.messages.length > 0,
+  );
+
+  const downloadConversationJson = () => {
+    if (!activeConversation) {
+      return;
+    }
+    const payload = {
+      id: activeConversation.id,
+      title: activeConversation.title,
+      updatedAt: new Date(activeConversation.updatedAt).toISOString(),
+      exportedAt: new Date().toISOString(),
+      messageCount: activeConversation.messages.length,
+      messages: activeConversation.messages.map((m) => ({
+        id: m.id,
+        role: m.role,
+        createdAt: new Date(m.createdAt).toISOString(),
+        content: m.content,
+        workflowRunId: m.workflowRunId ?? m.meta?.workflowRunId ?? null,
+        model: m.meta?.model ?? null,
+        confidence: m.meta?.confidence ?? null,
+        sources: m.meta?.sources ?? null,
+        toolSummary: m.meta?.toolSummary ?? null,
+        validation: m.meta?.validation ?? null,
+        feedback: m.feedback ?? null,
+      })),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: 'application/json',
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `bex-conversation-${activeConversation.id}.json`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <main className="box-border flex min-h-0 h-full flex-1 flex-col p-4 sm:p-6">
       {loadError ? (
@@ -480,38 +547,81 @@ export function BexChatApp() {
                 <h1 className="truncate text-sm font-semibold text-foreground sm:text-base">
                   {activeConversation?.title ?? 'Bex'}
                 </h1>
-                <p className="truncate text-xs text-muted-foreground">
-                  {headerSubtitle}
-                  {' · UI tag: '}
-                  {model === 'preview' ? 'preview → BEX_RESPONSES_MODEL' : model}
-                  {' · transport: '}
-                  {`stream (${STREAMING_ROLLOUT_COHORT})`}
-                  {' · markdown: '}
-                  {'streamdown'}
-                  {(() => {
-                    const lastModel = [...(activeConversation?.messages ?? [])]
-                      .reverse()
-                      .find((m) => m.meta?.model)?.meta?.model;
-                    return lastModel ? <> · last resolved: {lastModel}</> : null;
-                  })()}
-                  {isTyping && streamingAssistantText ? (
-                    <> · streaming live</>
-                  ) : null}
-                  {!isTyping && lastStreamMetrics ? (
-                    <>
-                      {' '}
-                      · ttft:{' '}
-                      {lastStreamMetrics.timeToFirstTokenMs === null
-                        ? 'n/a'
-                        : `${lastStreamMetrics.timeToFirstTokenMs}ms`}{' '}
-                      · total: {lastStreamMetrics.totalMs}ms
-                    </>
-                  ) : null}
-                </p>
+                {conversationId ? (
+                  <button
+                    className="mt-0.5 flex min-w-0 max-w-full items-center gap-1 font-mono text-[0.65rem] text-muted-foreground/80 hover:text-foreground"
+                    onClick={() => void copyConversationId()}
+                    title="Copy conversation ID"
+                    type="button"
+                  >
+                    {idCopied ? (
+                      <Check className="size-3 shrink-0" aria-hidden />
+                    ) : (
+                      <Copy className="size-3 shrink-0" aria-hidden />
+                    )}
+                    <span className="truncate">{conversationId}</span>
+                  </button>
+                ) : null}
               </div>
             </div>
 
             <div className="flex w-full items-center gap-2 sm:w-auto">
+              <Button
+                aria-label="Download conversation as JSON"
+                className="rounded-2xl"
+                disabled={!canDownloadConversation}
+                onClick={downloadConversationJson}
+                size="icon-sm"
+                title="Download conversation (JSON)"
+                type="button"
+                variant="outline"
+              >
+                <Download className="size-4" />
+              </Button>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button
+                    aria-label="Conversation details"
+                    className="rounded-2xl"
+                    size="icon-sm"
+                    title="Conversation details"
+                    type="button"
+                    variant="outline"
+                  >
+                    <Info className="size-4" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent align="end" className="w-80 text-xs leading-relaxed">
+                  <p className="text-muted-foreground">
+                    {headerSubtitle}
+                    {' · UI tag: '}
+                    {model === 'preview' ? 'preview → BEX_RESPONSES_MODEL' : model}
+                    {' · transport: '}
+                    {`stream (${STREAMING_ROLLOUT_COHORT})`}
+                    {' · markdown: '}
+                    {'streamdown'}
+                    {(() => {
+                      const lastModel = [...(activeConversation?.messages ?? [])]
+                        .reverse()
+                        .find((m) => m.meta?.model)?.meta?.model;
+                      return lastModel ? <> · last resolved: {lastModel}</> : null;
+                    })()}
+                    {isTyping && streamingAssistantText ? (
+                      <> · streaming live</>
+                    ) : null}
+                    {!isTyping && lastStreamMetrics ? (
+                      <>
+                        {' '}
+                        · ttft:{' '}
+                        {lastStreamMetrics.timeToFirstTokenMs === null
+                          ? 'n/a'
+                          : `${lastStreamMetrics.timeToFirstTokenMs}ms`}{' '}
+                        · total: {lastStreamMetrics.totalMs}ms
+                      </>
+                    ) : null}
+                  </p>
+                </PopoverContent>
+              </Popover>
               <Label className="sr-only" htmlFor="bex-agent-mode">
                 Agent mode
               </Label>

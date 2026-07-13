@@ -1013,3 +1013,16 @@ Use this section as the quick operational reference now that migration is comple
   - `/api/bex/chat` should return `410`
   - `/api/bex/chat/stream` should return `200` and include `text-delta`
 
+---
+
+## AISDK-5 Decision Record — `useChat` adoption (2026-07-12)
+
+**Decision: do NOT adopt `useChat` / `DefaultChatTransport` now. Stay on the custom fetch transport.**
+
+Rationale:
+- The custom client (`apiPostBexChatStream` in `src/lib/bex/bex-api-client.ts`) plus `BexChatApp`'s own state already work and own concerns `useChat` does not model well — conversation **sidebar/session lifecycle**, hydration via `apiFetchConversation`, and the per-message **feedback** workflow.
+- The stream route emits **custom data parts** (`data-bex-event`, `data-bex-meta`) that the current client already parses for status/tool events and metadata. Adopting `useChat` would mean re-expressing that mapping and re-homing message-state ownership, risking regressions in hydration and feedback for low functional gain.
+- Message state today is not the pain point; transport + generation were. Those are addressed by the streaming route (done) and AISDK-1 (done, flag-gated).
+
+Revisit if/when message-state management becomes painful (optimistic updates, richer multi-part streaming UIs) — and reevaluate **together with AISDK-3**, since AI Elements' `Conversation`/`Message` pair naturally with `useChat`. Until then, the custom transport stays.
+

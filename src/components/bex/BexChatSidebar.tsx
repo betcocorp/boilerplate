@@ -43,6 +43,13 @@ function formatRelative(updatedAt: number) {
   return `${days}d ago`;
 }
 
+function formatClock(updatedAt: number) {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(new Date(updatedAt));
+}
+
 export function BexChatSidebar({
   activeId,
   className,
@@ -113,6 +120,11 @@ export function BexChatSidebar({
         ) : (
           filtered.map((c) => {
             const isActive = c.id === activeId;
+            const lastPreview = c.messages.length
+              ? (c.messages[c.messages.length - 1]?.content ?? '')
+                  .trim()
+                  .replace(/\s+/g, ' ')
+              : '';
 
             return (
               <div
@@ -131,14 +143,21 @@ export function BexChatSidebar({
                   type="button"
                   variant="ghost"
                 >
-                  <span className="line-clamp-2 font-medium text-foreground">
-                    {c.title}
-                  </span>
-                  <span className="mt-0.5 block text-xs text-muted-foreground">
-                    {formatRelative(c.updatedAt)}
-                    {c.messages.length > 0
-                      ? ` · ${c.messages.length} messages`
-                      : ''}
+                  <span className="flex w-full min-w-0 flex-col items-start gap-0.5">
+                    <span className="block w-full text-xs text-muted-foreground">
+                      {formatClock(c.updatedAt)} · {formatRelative(c.updatedAt)}
+                      {c.messages.length > 0
+                        ? ` · ${c.messages.length} msg`
+                        : ''}
+                    </span>
+                    <span className="line-clamp-4 w-full font-medium text-foreground">
+                      {c.title}
+                    </span>
+                    {lastPreview ? (
+                      <span className="line-clamp-1 w-full text-xs text-muted-foreground">
+                        {lastPreview}
+                      </span>
+                    ) : null}
                   </span>
                 </Button>
                 <DropdownMenu>

@@ -37,8 +37,18 @@ import { Separator } from '~/components/ui/separator';
 import { Textarea } from '~/components/ui/textarea';
 import { cn } from '~/lib/utils';
 
+import {
+  Conversation,
+  ConversationContent,
+  ConversationScrollButton,
+} from '~/components/ai-elements/conversation';
+import { Message, MessageContent } from '~/components/ai-elements/message';
 import { BEX_SUGGESTIONS } from '~/lib/bex/constants';
 import type { ChatMessage } from '~/types/bex';
+
+// AISDK-3: gate the AI Elements rendering variant. Default off — the existing
+// custom bubble UI is unchanged until this flag is flipped and visually QA'd.
+const USE_AI_ELEMENTS = process.env.NEXT_PUBLIC_BEX_AI_ELEMENTS_UI === 'true';
 
 type BexChatMessagesProps = {
   messages: ChatMessage[];
@@ -227,6 +237,101 @@ function BexChatMessageBody({
   return <BexStreamdown content={content} isStreaming={isStreaming} isUser={isUser} />;
 }
 
+// AISDK-3: AI Elements rendering variant (Conversation + Message/MessageContent).
+// Reuses the existing markdown body, feedback, details, and copy — only the scroll
+// container and bubble shell come from AI Elements. Selected via USE_AI_ELEMENTS.
+function BexAiElementsMessages({
+  messages,
+  isTyping,
+  feedbackSubmittingMessageId,
+  onSubmitFeedback,
+}: Pick<
+  BexChatMessagesProps,
+  'messages' | 'isTyping' | 'feedbackSubmittingMessageId' | 'onSubmitFeedback'
+>) {
+  async function copyText(content: string) {
+    try {
+      await navigator.clipboard.writeText(content);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  return (
+    <Conversation>
+      <ConversationContent>
+        <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
+          {messages.map((m, index) => {
+            const isUser = m.role === 'user';
+            const isMostRecentMessage = index === messages.length - 1;
+            const isStreamingPlaceholder = m.id === '__streaming_assistant__';
+
+            return (
+              <Message from={m.role} key={m.id}>
+                <MessageContent>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-medium opacity-80">
+                      {isUser ? 'You' : 'Bex'}
+                    </span>
+                    <span className="shrink-0 text-xs opacity-70">
+                      {formatTime(m.createdAt)}
+                    </span>
+                  </div>
+                  <BexChatMessageBody
+                    content={m.content}
+                    isStreaming={
+                      !isUser && (isStreamingPlaceholder || (isTyping && isMostRecentMessage))
+                    }
+                    isUser={isUser}
+                  />
+                  {!isUser && !isStreamingPlaceholder ? (
+                    <AssistantFeedbackActions
+                      feedback={m.feedback}
+                      isSubmitting={feedbackSubmittingMessageId === m.id}
+                      messageId={m.id}
+                      onSubmitFeedback={onSubmitFeedback}
+                    />
+                  ) : null}
+                  {!isUser && !isStreamingPlaceholder && m.meta ? (
+                    <AssistantDetails messageId={m.id} meta={m.meta} />
+                  ) : null}
+                  {!isUser && !isStreamingPlaceholder ? (
+                    <div className="flex justify-end">
+                      <Button
+                        aria-label="Copy message"
+                        className="h-8 rounded-xl text-xs"
+                        onClick={() => copyText(m.content)}
+                        size="sm"
+                        type="button"
+                        variant="ghost"
+                      >
+                        <Copy className="size-3.5" />
+                        Copy
+                      </Button>
+                    </div>
+                  ) : null}
+                </MessageContent>
+              </Message>
+            );
+          })}
+          {isTyping ? (
+            <Message from="assistant">
+              <MessageContent>
+                <div className="flex gap-1.5" aria-label="Bex is typing">
+                  <span className="size-2 animate-bounce rounded-full bg-muted-foreground/50 [animation-delay:-0.2s]" />
+                  <span className="size-2 animate-bounce rounded-full bg-muted-foreground/50 [animation-delay:-0.1s]" />
+                  <span className="size-2 animate-bounce rounded-full bg-muted-foreground/50" />
+                </div>
+              </MessageContent>
+            </Message>
+          ) : null}
+        </div>
+      </ConversationContent>
+      <ConversationScrollButton />
+    </Conversation>
+  );
+}
+
 export function BexChatMessages({
   isTyping,
   messages,
@@ -299,6 +404,17 @@ export function BexChatMessages({
           </div>
         </div>
       </div>
+    );
+  }
+
+  if (USE_AI_ELEMENTS) {
+    return (
+      <BexAiElementsMessages
+        feedbackSubmittingMessageId={feedbackSubmittingMessageId}
+        isTyping={isTyping}
+        messages={messages}
+        onSubmitFeedback={onSubmitFeedback}
+      />
     );
   }
 
