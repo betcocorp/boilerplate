@@ -1080,7 +1080,24 @@ export async function runProductSupportWorkflow(input: {
     const needsUsageSafetyCoverage = queryNeedsUsageAndSafetyCoverage(
       input.userMessage,
     );
-    const evidenceSummary = buildEvidenceSummary(sourceMeta);
+    let evidenceSummary = buildEvidenceSummary(sourceMeta);
+    // A competitive recommendation is grounded by its cross-reference match, not by RAG chunks.
+    // Feed that match to the validator as evidence so it doesn't reject the recommendation as
+    // "unsupported" (a curated/legacy cross-reference IS the support for the equivalence claim).
+    if (routingDecision === 'recommendations' && crossReferenceResult) {
+      const m = crossReferenceResult.match;
+      const competitorLabel = [m.competitorBrand, m.competitorProductName]
+        .filter(Boolean)
+        .join(' ');
+      const xref = [
+        `Cross-reference match (confidence ${m.confidence}):`,
+        `competitor "${competitorLabel}" maps to Betco "${m.betcoProduct?.title ?? ''}"${
+          m.betcoProduct?.sku ? ` (SKU ${m.betcoProduct.sku})` : ''
+        }.`,
+        'This curated/legacy cross-reference is authoritative evidence that the recommended Betco product is the correct equivalent for the competitor product.',
+      ].join(' ');
+      evidenceSummary = evidenceSummary ? `${xref}\n\n${evidenceSummary}` : xref;
+    }
 
     await completeWorkflowStep(agentStep.id, {
       status: 'completed',
@@ -1136,7 +1153,7 @@ export async function runProductSupportWorkflow(input: {
       const revisionRefused =
         !revised ||
         isDeclineAnswer(revised) ||
-        /cannot (revise|fix|provide|answer)|no evidence has been provided|supply approved documentation/i.test(
+        /clarification needed|could not (fully )?verify|cannot (revise|fix|provide|answer)|no( supporting)? evidence (was |has been )?provided|no( supporting)? evidence (is |was )?available|please (supply|provide) (approved )?(documentation|references|evidence)|supply (approved )?documentation/i.test(
           revised,
         );
       if (revised && !revisionRefused) {
