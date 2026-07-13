@@ -30,6 +30,7 @@ export const orchestrationRoutingSchema = z.object({
   bathroomScore: z.number().finite().int().nonnegative(),
   dilutionScore: z.number().finite().int().nonnegative(),
   floorScore: z.number().finite().int().nonnegative(),
+  recommendationScore: z.number().finite().int().nonnegative(),
   rationale: z.string().max(8000),
 });
 

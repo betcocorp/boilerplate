@@ -123,6 +123,35 @@ const PRODUCT_SIGNALS = [
   'norinse',
 ];
 
+/**
+ * Competitor → Betco cross-reference / equivalent-recommendation intent. Fires on
+ * language about matching or replacing a *competitor* product with a Betco one — the
+ * signal that should route to the Recommendations specialist rather than the general
+ * product catalog. Kept capability/phrase-based (no hardcoded competitor SKUs).
+ */
+const RECOMMENDATION_SIGNALS = [
+  'cross-reference',
+  'cross reference',
+  'crossreference',
+  'competitor',
+  'competitive analysis',
+  'competitive',
+  'equivalent',
+  'equivalent to',
+  'betco equivalent',
+  'betco version',
+  'betco alternative',
+  'alternative to',
+  'replacement for',
+  'switch from',
+  'convert from',
+  'comparable',
+  'what betco product',
+  'which betco product',
+  'recommend',
+  'recommendation',
+];
+
 function countSignalHits(text: string, signals: string[]): number {
   const lower = text.toLowerCase();
   let hits = 0;
@@ -142,14 +171,16 @@ export type SmeRouteDecision = {
   bathroomScore: number;
   dilutionScore: number;
   floorScore: number;
+  recommendationScore: number;
   rationale: string;
 };
 
-type ScoreKey = 'product' | 'bathroom' | 'dilution' | 'floor';
+type ScoreKey = 'product' | 'bathroom' | 'dilution' | 'floor' | 'recommendations';
 
 /**
  * Picks an SME from free text. Returns `agent: null` when no signals fire.
- * When the top score is tied, prefers: dilution > floor > bathroom > product.
+ * When the top score is tied, prefers: dilution > floor > bathroom > recommendations > product
+ * (procedure/system specialists win first; recommendations beats the broad product catch-all).
  */
 export function routeUserMessageToSme(message: string): SmeRouteDecision {
   const trimmed = message.trim();
@@ -161,6 +192,7 @@ export function routeUserMessageToSme(message: string): SmeRouteDecision {
       bathroomScore: 0,
       dilutionScore: 0,
       floorScore: 0,
+      recommendationScore: 0,
       rationale: 'Empty message; cannot route.',
     };
   }
@@ -169,12 +201,14 @@ export function routeUserMessageToSme(message: string): SmeRouteDecision {
   const productScore = countSignalHits(trimmed, PRODUCT_SIGNALS);
   const dilutionScore = countSignalHits(trimmed, DILUTION_SIGNALS);
   const floorScore = countSignalHits(trimmed, FLOOR_SIGNALS);
+  const recommendationScore = countSignalHits(trimmed, RECOMMENDATION_SIGNALS);
 
   const scores: Record<ScoreKey, number> = {
     product: productScore,
     bathroom: bathroomScore,
     dilution: dilutionScore,
     floor: floorScore,
+    recommendations: recommendationScore,
   };
 
   const entries = (Object.entries(scores) as [ScoreKey, number][]).filter(
@@ -188,19 +222,21 @@ export function routeUserMessageToSme(message: string): SmeRouteDecision {
       bathroomScore,
       dilutionScore,
       floorScore,
+      recommendationScore,
       rationale:
-        'No specialist keywords matched. Mention a Betco product or SDS topic, restroom care, dilution control hardware, or floor maintenance procedures.',
+        'No specialist keywords matched. Mention a Betco product or SDS topic, restroom care, dilution control hardware, floor maintenance procedures, or a competitor product to cross-reference.',
     };
   }
 
   const max = Math.max(...entries.map(([, s]) => s));
   const winners = entries.filter(([, s]) => s === max) as [ScoreKey, number][];
 
-  /** When scores tie, prefer system/procedure specialists over broad catalog routing. */
+  /** When scores tie, prefer system/procedure specialists, then cross-reference, over broad catalog routing. */
   const tieBreakOrder: ScoreKey[] = [
     'dilution',
     'floor',
     'bathroom',
+    'recommendations',
     'product',
   ];
 
@@ -215,7 +251,7 @@ export function routeUserMessageToSme(message: string): SmeRouteDecision {
   const rationale =
     winners.length > 1
       ? `Tie at ${max} hits between ${winners.map(([k]) => k).join(', ')}; chose **${agent}** by priority (${tieBreakOrder.join(' > ')}).`
-      : `${agent} signals (${max}) won (product ${productScore}, bathroom ${bathroomScore}, dilution ${dilutionScore}, floor ${floorScore}).`;
+      : `${agent} signals (${max}) won (product ${productScore}, bathroom ${bathroomScore}, dilution ${dilutionScore}, floor ${floorScore}, recommendations ${recommendationScore}).`;
 
   return {
     agent,
@@ -223,6 +259,7 @@ export function routeUserMessageToSme(message: string): SmeRouteDecision {
     bathroomScore,
     dilutionScore,
     floorScore,
+    recommendationScore,
     rationale,
   };
 }

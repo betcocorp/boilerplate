@@ -79,6 +79,8 @@ Regenerate when the remote schema changes (requires CLI auth):
 - **Errors**: API routes return structured JSON (`error`, optional `issues` for Zod).
 - **Comments**: Short and only where non-obvious; do not delete unrelated comments.
 - **Markdown docs**: Do not add or expand repo markdown unless the user asks (this file is an exception as the user requested it).
+- **Update jira**: Always use atlassian connector and update any tasks you work on 
+- **Answer & Grounding**: Always use code to ground your answers and decisions, DO NOT rely solely on JIRA.
 
 ## Quick checks before handoff
 

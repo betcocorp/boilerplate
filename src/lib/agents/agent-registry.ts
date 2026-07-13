@@ -1,4 +1,10 @@
-export const SME_AGENT_IDS = ['product', 'bathroom', 'dilution', 'floor'] as const;
+export const SME_AGENT_IDS = [
+  'product',
+  'bathroom',
+  'dilution',
+  'floor',
+  'recommendations',
+] as const;
 export type SmeAgentId = (typeof SME_AGENT_IDS)[number];
 
 export const BEX_CHAT_AGENT_MODES = ['orchestrator', ...SME_AGENT_IDS] as const;
@@ -34,6 +40,13 @@ export const V1_AGENT_REGISTRY = [
     label: 'Bathroom specialist',
     description:
       'Restroom cleaning, disinfection, odor control, floor care, and Betco product/procedure guidance (stub).',
+  },
+  {
+    id: 'recommendations',
+    path: '/api/v1/agents/recommendations',
+    label: 'Product Recommendations Specialist',
+    description:
+      'Recommends the Betco equivalent for a competitor product using the cross-reference lookup and (when available) the web-search-grounded recommendation engine; answers only above a confidence threshold, otherwise defers to a Betco sales representative (stub).',
   },
 ] as const satisfies ReadonlyArray<{
   id: SmeAgentId;

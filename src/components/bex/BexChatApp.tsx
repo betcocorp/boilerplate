@@ -6,17 +6,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '~/components/ui/button';
 import { Label } from '~/components/ui/label';
 import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '~/components/ui/popover';
+import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from '~/components/ui/select';
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from '~/components/ui/popover';
 import { cn, getErrorMessage } from '~/lib/utils';
 
 import { BexChatComposer } from '~/components/bex/BexChatComposer';
@@ -35,9 +35,9 @@ import {
   apiPostBexChatStream,
   apiSubmitMessageFeedback,
 } from '~/lib/bex/bex-api-client';
+import { BEX_SUGGESTIONS } from '~/lib/bex/constants';
 import { mapApiMessageToChatMessage } from '~/lib/bex/map-api-messages';
 import { loadUiCache, saveUiCache } from '~/lib/bex/sessions';
-import { BEX_SUGGESTIONS } from '~/lib/bex/constants';
 import type { ChatMessage, Conversation } from '~/types/bex';
 
 const STREAMING_ROLLOUT_COHORT =
@@ -73,9 +73,8 @@ export function BexChatApp() {
     DEFAULT_BEX_CHAT_AGENT_MODE,
   );
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [feedbackSubmittingMessageId, setFeedbackSubmittingMessageId] = useState<string | null>(
-    null,
-  );
+  const [feedbackSubmittingMessageId, setFeedbackSubmittingMessageId] =
+    useState<string | null>(null);
   const [streamingAssistantText, setStreamingAssistantText] = useState('');
   const [lastStreamMetrics, setLastStreamMetrics] = useState<{
     totalMs: number;
@@ -84,7 +83,9 @@ export function BexChatApp() {
     usedFallbackChunking: boolean;
   } | null>(null);
   const streamDeltaBufferRef = useRef('');
-  const streamFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const streamFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
 
   const flushStreamingDeltaBuffer = useCallback(() => {
     const buffered = streamDeltaBufferRef.current;
@@ -147,14 +148,16 @@ export function BexChatApp() {
         const pick =
           preferred && mapped.some((c) => c.id === preferred)
             ? preferred
-            : mapped[0]?.id ?? null;
+            : (mapped[0]?.id ?? null);
         setActiveId(pick);
 
         if (pick) {
           await refreshConversation(pick);
         }
       } catch (e) {
-        setLoadError(e instanceof Error ? e.message : 'Failed to load conversations.');
+        setLoadError(
+          e instanceof Error ? e.message : 'Failed to load conversations.',
+        );
       } finally {
         setHydrated(true);
       }
@@ -304,12 +307,13 @@ export function BexChatApp() {
           ];
         });
       } catch (err) {
-        const detail =
-          getErrorMessage(err, 'Chat request failed.');
+        const detail = getErrorMessage(err, 'Chat request failed.');
         setLoadError(detail);
         if (convId) {
           if (convId.startsWith('local-conv-')) {
-            setSessions((prev) => prev.filter((conversation) => conversation.id !== convId));
+            setSessions((prev) =>
+              prev.filter((conversation) => conversation.id !== convId),
+            );
             setActiveId((prev) => (prev === convId ? null : prev));
           } else {
             try {
@@ -404,7 +408,9 @@ export function BexChatApp() {
         await apiSubmitMessageFeedback(input);
         await refreshConversation(activeId);
       } catch (error) {
-        setLoadError(error instanceof Error ? error.message : 'Could not save feedback.');
+        setLoadError(
+          error instanceof Error ? error.message : 'Could not save feedback.',
+        );
       } finally {
         setFeedbackSubmittingMessageId(null);
       }
@@ -591,20 +597,29 @@ export function BexChatApp() {
                     <Info className="size-4" />
                   </Button>
                 </PopoverTrigger>
-                <PopoverContent align="end" className="w-80 text-xs leading-relaxed">
+                <PopoverContent
+                  align="end"
+                  className="w-80 text-xs leading-relaxed"
+                >
                   <p className="text-muted-foreground">
                     {headerSubtitle}
                     {' · UI tag: '}
-                    {model === 'preview' ? 'preview → BEX_RESPONSES_MODEL' : model}
+                    {model === 'preview'
+                      ? 'preview → BEX_RESPONSES_MODEL'
+                      : model}
                     {' · transport: '}
                     {`stream (${STREAMING_ROLLOUT_COHORT})`}
                     {' · markdown: '}
                     {'streamdown'}
                     {(() => {
-                      const lastModel = [...(activeConversation?.messages ?? [])]
+                      const lastModel = [
+                        ...(activeConversation?.messages ?? []),
+                      ]
                         .reverse()
                         .find((m) => m.meta?.model)?.meta?.model;
-                      return lastModel ? <> · last resolved: {lastModel}</> : null;
+                      return lastModel ? (
+                        <> · last resolved: {lastModel}</>
+                      ) : null;
                     })()}
                     {isTyping && streamingAssistantText ? (
                       <> · streaming live</>
@@ -635,17 +650,18 @@ export function BexChatApp() {
               >
                 <SelectTrigger
                   className="w-full min-w-40 bg-muted/40 sm:w-auto"
-                id="bex-agent-mode"
-                size="default"
-              >
+                  id="bex-agent-mode"
+                  size="default"
+                >
                   <SelectValue placeholder="Agent mode" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="orchestrator">Route: orchestrator</SelectItem>
-                  <SelectItem value="product">Route: direct product specialist</SelectItem>
-                  <SelectItem value="bathroom">Route: direct bathroom specialist</SelectItem>
-                  <SelectItem value="dilution">Route: direct dilution specialist</SelectItem>
-                  <SelectItem value="floor">Route: direct floor specialist</SelectItem>
+                  <SelectItem value="orchestrator">Orchestrator</SelectItem>
+                  <SelectItem value="product">Product</SelectItem>
+                  <SelectItem value="bathroom">Bathroom</SelectItem>
+                  <SelectItem value="dilution">Dilution</SelectItem>
+                  <SelectItem value="floor">Floor</SelectItem>
+                  <SelectItem value="recommendations">Recommendations</SelectItem>
                 </SelectContent>
               </Select>
               <Label className="sr-only" htmlFor="bex-model">
@@ -654,13 +670,15 @@ export function BexChatApp() {
               <Select onValueChange={setModel} value={model}>
                 <SelectTrigger
                   className="w-full min-w-40 bg-muted/40 sm:w-auto"
-                id="bex-model"
+                  id="bex-model"
                   size="default"
                 >
                   <SelectValue placeholder="Model" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="preview">Model: preview (env default)</SelectItem>
+                  <SelectItem value="preview">
+                    Model: preview (env default)
+                  </SelectItem>
                   <SelectItem value="gpt-4o">gpt-4o</SelectItem>
                   <SelectItem value="gpt-4.1">gpt-4.1</SelectItem>
                   <SelectItem value="custom">custom (requires env)</SelectItem>

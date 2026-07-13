@@ -44,7 +44,7 @@ export function formatOrchestratorReply(payload: OrchestrationRunResult): string
     lines.push(
       '**Orchestrator routing**',
       `- **Decision:** \`${r.decision}\``,
-      `- **Scores:** product ${r.productScore} · bathroom ${r.bathroomScore} · dilution ${r.dilutionScore} · floor ${r.floorScore}`,
+      `- **Scores:** product ${r.productScore} · bathroom ${r.bathroomScore} · dilution ${r.dilutionScore} · floor ${r.floorScore} · recommendations ${r.recommendationScore}`,
       `- **Rationale:** ${r.rationale}`,
       '',
     );

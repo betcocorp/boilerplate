@@ -1,6 +1,7 @@
 import { DILUTION_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/dilution-specialist/dilution-specialist-system-prompt';
 import { FLOOR_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/floor-specialist/floor-specialist-system-prompt';
 import { PRODUCT_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/product-specialist/product-specialist-system-prompt';
+import { RECOMMENDATIONS_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/recommendations-specialist/recommendations-specialist-system-prompt';
 import type { BexChatAgentMode } from '~/lib/agents/agent-registry';
 
 function routingHintBlock(input: {
@@ -46,6 +47,9 @@ function systemPromptForDecision(decision: string) {
   if (decision === 'floor') {
     return FLOOR_SPECIALIST_SYSTEM_PROMPT;
   }
+  if (decision === 'recommendations') {
+    return RECOMMENDATIONS_SPECIALIST_SYSTEM_PROMPT;
+  }
   return PRODUCT_SPECIALIST_SYSTEM_PROMPT;
 }
 
@@ -58,9 +62,10 @@ export function buildProductSupportInstructions(input: {
     bathroomScore: number;
     dilutionScore: number;
     floorScore: number;
+    recommendationScore: number;
   };
 }): string {
-  const scores = `product ${input.routing.productScore} · bathroom ${input.routing.bathroomScore} · dilution ${input.routing.dilutionScore} · floor ${input.routing.floorScore}`;
+  const scores = `product ${input.routing.productScore} · bathroom ${input.routing.bathroomScore} · dilution ${input.routing.dilutionScore} · floor ${input.routing.floorScore} · recommendations ${input.routing.recommendationScore}`;
   const activePrompt = systemPromptForDecision(input.routing.decision);
   const modeLine =
     input.mode === 'orchestrator'

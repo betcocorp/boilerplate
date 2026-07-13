@@ -23,6 +23,7 @@ import { getOpenAIClient, resolveResponsesModel } from '~/lib/openai/client';
 import { runResponsesWithToolLoop } from '~/lib/openai/responses-runtime';
 import { runAiSdkWithToolLoop } from '~/lib/bex/ai-sdk-runtime';
 import { routeUserMessageToSme } from '~/lib/orchestrator/sme-routing';
+import { evaluateRecommendationGate } from '~/lib/recommendations/recommendation-gate';
 import { productSupportTools } from '~/lib/tools/definitions';
 import { executeToolCall } from '~/lib/tools/execute-tool-call';
 
@@ -683,7 +684,6 @@ export async function runProductSupportWorkflow(input: {
   onEvent?: (event: ProductSupportWorkflowEvent) => void;
   onAssistantDelta?: (delta: string) => void;
 }): Promise<ProductSupportFinalOutput> {
-  const useValidator = input.useValidator ?? false;
   const useAiSdkGeneration = process.env.BEX_AI_SDK_GENERATION_ENABLED === 'true';
   const agentMode = input.agentMode ?? DEFAULT_BEX_CHAT_AGENT_MODE;
   const route = routeUserMessageToSme(input.userMessage);
@@ -692,6 +692,10 @@ export async function runProductSupportWorkflow(input: {
     agentMode === 'orchestrator'
       ? (route.agent ?? 'ambiguous')
       : agentMode;
+  // REC-4: the validator runs by default on the competitive-recommendation path
+  // (no silent bypass); every other route keeps the opt-in default.
+  const useValidator =
+    input.useValidator ?? routingDecision === 'recommendations';
   const routingRationale =
     agentMode === 'orchestrator'
       ? route.rationale
@@ -705,6 +709,7 @@ export async function runProductSupportWorkflow(input: {
       bathroomScore: route.bathroomScore,
       dilutionScore: route.dilutionScore,
       floorScore: route.floorScore,
+      recommendationScore: route.recommendationScore,
     },
   });
 
@@ -759,6 +764,7 @@ export async function runProductSupportWorkflow(input: {
           bathroom: route.bathroomScore,
           dilution: route.dilutionScore,
           floor: route.floorScore,
+          recommendations: route.recommendationScore,
         },
         rationale: routingRationale,
       },
@@ -1141,6 +1147,36 @@ export async function runProductSupportWorkflow(input: {
           ]),
         ),
       };
+    }
+
+    // REC-4: on the competitive-recommendation route, calibrate confidence to retrieval
+    // strength (top-hit similarity < 60% cannot exceed 0.75) and enforce chemistry-class
+    // consistency once REC-1 grounding + REC-2/3 structured fields are wired (dormant until then).
+    if (routingDecision === 'recommendations') {
+      const topSimilarity = sources.reduce(
+        (max, s) =>
+          typeof s.similarity === 'number' && s.similarity > max
+            ? s.similarity
+            : max,
+        0,
+      );
+      const gate = evaluateRecommendationGate({
+        baseConfidence: validation.confidence,
+        topSimilarity: sources.length > 0 ? topSimilarity : null,
+      });
+      validation = {
+        ...validation,
+        approved: validation.approved && gate.approved,
+        confidence: Math.min(validation.confidence, gate.confidence),
+        issues: Array.from(new Set([...validation.issues, ...gate.issues])),
+        requires_human_review:
+          validation.requires_human_review || gate.requires_human_review,
+      };
+      await writeAuditLog(
+        'recommendation_gate_applied',
+        { ...gate, topSimilarity },
+        { ...wfCtx, stepId: validationStep.id },
+      );
     }
 
     await completeWorkflowStep(validationStep.id, {

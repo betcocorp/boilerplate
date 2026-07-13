@@ -27,6 +27,7 @@ async function runBexChatOrchestration(input: unknown): Promise<OrchestrationRun
     bathroomScore: route.bathroomScore,
     dilutionScore: route.dilutionScore,
     floorScore: route.floorScore,
+    recommendationScore: route.recommendationScore,
     rationale: route.rationale,
   };
 

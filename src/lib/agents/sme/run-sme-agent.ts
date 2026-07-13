@@ -1,6 +1,7 @@
 import { DILUTION_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/dilution-specialist/dilution-specialist-system-prompt';
 import { FLOOR_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/floor-specialist/floor-specialist-system-prompt';
 import { PRODUCT_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/product-specialist/product-specialist-system-prompt';
+import { RECOMMENDATIONS_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/recommendations-specialist/recommendations-specialist-system-prompt';
 
 import type { SmeAgentId, SmeAgentInvokeBody, SmeAgentRunResult } from './types';
 
@@ -107,6 +108,22 @@ const AGENTS: Record<SmeAgentId, AgentMeta> = {
       '`facilityType` — e.g. school, healthcare, hospitality, industrial, office (session memory).',
       '`primarySurfaces` — e.g. porcelain, stainless, stone, resilient flooring, partitions.',
       '`issueOrTask` — e.g. daily clean, deep clean, descale, disinfect, odor, urine scale.',
+    ],
+  },
+  recommendations: {
+    label: 'Product Recommendations Specialist',
+    summary:
+      'Recommends the Betco equivalent for a competitor product via the cross-reference lookup and (when available) the web-search-grounded recommendation engine; answers only above 0.80 confidence, otherwise defers to a Betco sales representative.',
+    focusAreas: [
+      'Competitor product → Betco equivalent cross-reference (many-to-many; may offer more than one match)',
+      'Fallback to capability-based search when no cross-reference row exists',
+      'Confidence gating at 0.80 with a graceful decline to a sales representative',
+      'Grounded only: never invent product names, SKUs, EPA numbers, dilution, or claims',
+    ],
+    systemPrompt: RECOMMENDATIONS_SPECIALIST_SYSTEM_PROMPT,
+    sessionContextGuide: [
+      '`competitorBrand` — competitor company/brand (optional but strongly preferred; missing lowers confidence).',
+      '`competitorProduct` — competitor product name or SKU the user wants a Betco equivalent for.',
     ],
   },
 };
@@ -218,6 +235,9 @@ export function runSmeAgent(
           }
           if (agentId === 'floor') {
             return 'Wire floor-care SOPs, finish/stripper bulletins, and procedural RAG scoped to maintenance programs.';
+          }
+          if (agentId === 'recommendations') {
+            return 'Wire `lookup_cross_reference` first, then the web-search-grounded recommendation engine (Jira B0-77) and RAG fallback; enforce the 0.80 confidence gate before naming a product.';
           }
           return 'Wire RAG / internal APIs scoped to this SME.';
         })(),
