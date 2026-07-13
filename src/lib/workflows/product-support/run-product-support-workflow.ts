@@ -717,12 +717,13 @@ export async function runProductSupportWorkflow(input: {
     agentMode === 'orchestrator'
       ? (route.agent ?? 'ambiguous')
       : agentMode;
-  // REC-4: the competitive-recommendation path ALWAYS runs the validator — no silent bypass,
-  // even when the client toggle sends useValidator:false. Every other route keeps the opt-in default.
-  const useValidator =
-    routingDecision === 'recommendations'
-      ? true
-      : (input.useValidator ?? false);
+  // REC-4: the claims-validator requires RAG evidence for every assertion, which a competitive
+  // recommendation (grounded by its cross-reference match, not by retrieved chunks) can't satisfy —
+  // forcing it on made the validator reject the recommendation as "unsupported" and the not-approved
+  // fallback overwrote it with "I could not fully verify…". Chemistry-consistency + confidence
+  // calibration for recommendations is instead enforced by evaluateRecommendationGate (below), which
+  // runs regardless of this flag. So the validator stays opt-in on every route.
+  const useValidator = input.useValidator ?? false;
   const routingRationale =
     agentMode === 'orchestrator'
       ? route.rationale
