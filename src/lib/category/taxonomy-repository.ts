@@ -32,13 +32,12 @@ export type CategoryProduct = {
 
 /**
  * Which taxonomy generation to serve. The table holds two segregated sources:
- *   - `metakeywords` — v1 derived from `legacy.prod_line.MetaKeyWords` (has product links today).
- *   - `betco_site`   — exact `betco.com/products` "Select Product Type" tree (B0-33), authoritative
- *                      but not yet product-linked (blocked on the B0-34 relink).
- * Defaults to the linked v1 so `resolveCategory` + `getProductsForCategory` stay coherent; flip to
- * `betco_site` via `BEX_TAXONOMY_SOURCE` once the authoritative relink lands.
+ *   - `metakeywords` — v1 derived from `legacy.prod_line.MetaKeyWords`.
+ *   - `betco_site`   — exact `betco.com/products` "Select Product Type" tree (B0-33), product-linked
+ *                      by the B0-34 site scrape.
+ * Set `BEX_TAXONOMY_SOURCE` to pick the active generation (default `betco_site`).
  */
-const ACTIVE_TAXONOMY_SOURCE = process.env.BEX_TAXONOMY_SOURCE?.trim() || 'metakeywords';
+const ACTIVE_TAXONOMY_SOURCE = process.env.BEX_TAXONOMY_SOURCE?.trim() || 'betco_site';
 
 type LooseRow = Record<string, unknown>;
 type LooseChain = {
