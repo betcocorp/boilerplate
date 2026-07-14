@@ -1,9 +1,11 @@
+import { CheckCircle2, CircleDashed } from 'lucide-react';
 import Link from 'next/link';
 import { connection } from 'next/server';
 
 import { Button } from '~/components/ui/button';
 import { Input } from '~/components/ui/input';
 
+import { fetchIngestedProductLineCodes } from '~/lib/rag/corpus-ingestion';
 import { getSupabaseServerClient } from '~/supabase/clients/server';
 import type { Tables } from '~/types/supabase.legacy';
 
@@ -25,6 +27,7 @@ type ProductListItem = Pick<
   | 'OnWeb'
   | 'MSRP'
   | 'YearsOfService'
+  | 'DSLProdLn'
   | 'H1'
   | 'H2'
   | 'MetaDescription'
@@ -161,7 +164,7 @@ export default async function ProductsPage({
   const supabase = getSupabaseServerClient();
   const legacy = supabase.schema('legacy');
   const productSelection =
-    'ProductsKey, Title, SLDescr, SKU, InvtID, Status, OnWeb, MSRP, YearsOfService, H1, H2, MetaDescription, MetaKeyWords';
+    'ProductsKey, Title, SLDescr, SKU, InvtID, Status, OnWeb, MSRP, YearsOfService, DSLProdLn, H1, H2, MetaDescription, MetaKeyWords';
 
   let results: ProductSearchResult[] = [];
   let error: string | null = null;
@@ -236,6 +239,19 @@ export default async function ProductsPage({
         : 'Unable to load products.';
   }
 
+  // B0-100: mark which products are ingested into the retrieval corpus (product-line grain).
+  let ingestedProductLines = new Set<string>();
+  if (!error && results.length > 0) {
+    try {
+      ingestedProductLines = await fetchIngestedProductLineCodes(
+        results.map(({ product }) => product.DSLProdLn ?? '').filter(Boolean),
+      );
+    } catch {
+      // Non-fatal: fall back to showing "unknown" (no badge) rather than breaking the list.
+      ingestedProductLines = new Set<string>();
+    }
+  }
+
   const totalPages = Math.max(1, Math.ceil(totalCount / RESULT_LIMIT));
   const safeCurrentPage = Math.min(currentPage, totalPages);
   const paginationPages = buildPagination(safeCurrentPage, totalPages);
@@ -306,6 +322,26 @@ export default async function ProductsPage({
           {results.map(({ product, description }) => {
             const title = summarizeProduct(product, description);
             const body = productCopy(product, description);
+            const isIngested = product.DSLProdLn
+              ? ingestedProductLines.has(product.DSLProdLn)
+              : false;
+            const syncBadge = isIngested ? (
+              <span
+                className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700"
+                title="This product's line has been ingested into the document corpus"
+              >
+                <CheckCircle2 className="size-3.5" aria-hidden />
+                In corpus
+              </span>
+            ) : (
+              <span
+                className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-500"
+                title="This product's line has not been ingested into the document corpus"
+              >
+                <CircleDashed className="size-3.5" aria-hidden />
+                Not ingested
+              </span>
+            );
             const detailHref = product.ProductsKey
               ? buildProductDetailHref(
                   product.ProductsKey,
@@ -325,6 +361,7 @@ export default async function ProductsPage({
                     href={detailHref}
                   >
                     <div className="flex flex-wrap items-center gap-2">
+                      {syncBadge}
                       {product.Status ? (
                         <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
                           Status: {product.Status}
@@ -379,6 +416,7 @@ export default async function ProductsPage({
                 ) : (
                   <>
                     <div className="flex flex-wrap items-center gap-2">
+                      {syncBadge}
                       {product.Status ? (
                         <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
                           Status: {product.Status}

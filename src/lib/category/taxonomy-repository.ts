@@ -30,6 +30,16 @@ export type CategoryProduct = {
   onWeb: string | null;
 };
 
+/**
+ * Which taxonomy generation to serve. The table holds two segregated sources:
+ *   - `metakeywords` — v1 derived from `legacy.prod_line.MetaKeyWords` (has product links today).
+ *   - `betco_site`   — exact `betco.com/products` "Select Product Type" tree (B0-33), authoritative
+ *                      but not yet product-linked (blocked on the B0-34 relink).
+ * Defaults to the linked v1 so `resolveCategory` + `getProductsForCategory` stay coherent; flip to
+ * `betco_site` via `BEX_TAXONOMY_SOURCE` once the authoritative relink lands.
+ */
+const ACTIVE_TAXONOMY_SOURCE = process.env.BEX_TAXONOMY_SOURCE?.trim() || 'metakeywords';
+
 type LooseRow = Record<string, unknown>;
 type LooseChain = {
   select: (cols: string) => LooseChain;
@@ -51,9 +61,9 @@ function asStringArray(value: unknown): string[] {
 
 export async function loadTaxonomyNodes(): Promise<TaxonomyNode[]> {
   try {
-    const { data, error } = await from('public', 'product_category').select(
-      'key, name, parent_key, path, aliases',
-    );
+    const { data, error } = await from('public', 'product_category')
+      .select('key, name, parent_key, path, aliases')
+      .eq('source', ACTIVE_TAXONOMY_SOURCE);
     if (error || !data) return [];
     return data.map((r) => ({
       key: String(r.key),

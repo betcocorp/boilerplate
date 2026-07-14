@@ -1,5 +1,6 @@
 import { GitCompareArrows } from 'lucide-react';
 
+import { CrossReferenceMappingsTable } from '~/components/admin/CrossReferenceMappingsTable';
 import { ProductCrossReferenceTester } from '~/components/admin/ProductCrossReferenceTester';
 
 export const metadata = {
@@ -8,7 +9,22 @@ export const metadata = {
     'Test lookup_cross_reference against legacy competitor mapping (same logic as Bex agents).',
 };
 
-export default async function ProductCrossReferenceTesterPage() {
+function readParam(value: string | string[] | undefined) {
+  return Array.isArray(value) ? (value[0] ?? '') : (value ?? '');
+}
+
+type PageProps = {
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+};
+
+export default async function ProductCrossReferenceTesterPage({
+  searchParams,
+}: PageProps) {
+  const resolved = await searchParams;
+  const search = readParam(resolved.xrefQ).trim();
+  const parsedPage = Number.parseInt(readParam(resolved.xrefPage) || '1', 10);
+  const page = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 1;
+
   return (
     <main className="min-w-0 p-4 sm:p-6">
       <div className="rounded-[2rem] border border-border/60 bg-background p-6 shadow-sm sm:p-8">
@@ -35,6 +51,10 @@ export default async function ProductCrossReferenceTesterPage() {
         <div className="mt-8">
           <ProductCrossReferenceTester />
         </div>
+      </div>
+
+      <div className="mt-6">
+        <CrossReferenceMappingsTable search={search} page={page} />
       </div>
     </main>
   );
