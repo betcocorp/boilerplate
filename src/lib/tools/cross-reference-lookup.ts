@@ -294,6 +294,11 @@ async function lookupCrossReferenceOverride(
     confidence: Number(hit.confidence),
     productUrl: link.url,
     productUrlSource: link.source,
+    // Curated analysis facts (drive the competitive analysis for recommendations).
+    competitorEpaReg: hit.competitor_epa_reg ?? null,
+    chemistryClass: hit.chemistry_class ?? null,
+    rationale: hit.rationale ?? null,
+    betcoProductLineId: hit.betco_product_line_id ?? null,
     betcoProduct: {
       title: product_row?.Title ?? product_row?.SLDescr ?? hit.betco_title,
       sku: product_row?.SKU ?? null,
@@ -598,4 +603,66 @@ export async function lookupCrossReference(input: {
     fallbackRecommended: rows.length === 0 || (topMatches[0]?.confidence ?? 0) < 0.75,
     matches: topMatches,
   };
+}
+
+export type RecommendationAlternative = { name: string; productLineId: string | null };
+
+/**
+ * Extra facts for a curated cross-reference recommendation: the recommended product's EPA
+ * registration and up to two OTHER web-available Betco disinfectants of the same chemistry class
+ * (for the "other options" section). Reads the rag corpus via the service client (PostgREST).
+ */
+export async function fetchRecommendationContext(input: {
+  chemistryClass: string | null;
+  betcoProductLineId: string | null;
+}): Promise<{ betcoEpaRegistration: string | null; alternatives: RecommendationAlternative[] }> {
+  const supabase = getSupabaseServiceRoleClient();
+  // Cast to a loose builder: chemistry_class/product_application/epa_registration may post-date
+  // the generated rag types, and jsonb-path filters aren't in the typed surface.
+  type LooseBuilder = {
+    select: (cols: string) => LooseBuilder;
+    filter: (column: string, operator: string, value: unknown) => LooseBuilder;
+    contains: (column: string, value: Record<string, unknown>) => LooseBuilder;
+    limit: (
+      count: number,
+    ) => Promise<{ data: Record<string, unknown>[] | null; error: unknown }>;
+  };
+  const rag = supabase.schema('rag').from('document') as unknown as LooseBuilder;
+
+  let betcoEpaRegistration: string | null = null;
+  if (input.betcoProductLineId) {
+    const { data } = await rag
+      .select('epa_registration, metadata')
+      .filter('document_kind', 'eq', 'product_line_profile')
+      .filter('metadata->>prod_line_id', 'eq', input.betcoProductLineId)
+      .limit(1);
+    betcoEpaRegistration = (data?.[0]?.epa_registration as string | null) ?? null;
+  }
+
+  const alternatives: RecommendationAlternative[] = [];
+  if (input.chemistryClass) {
+    const { data } = await rag
+      .select('title, body_text, metadata')
+      .filter('document_kind', 'eq', 'product_line_profile')
+      .filter('chemistry_class', 'eq', input.chemistryClass)
+      .filter('product_application', 'eq', 'disinfectant')
+      .contains('metadata', { has_web_available_variant: true })
+      .limit(8);
+    const seen = new Set<string>();
+    for (const row of (data ?? []) as Array<{
+      title: string | null;
+      body_text: string | null;
+      metadata: Record<string, unknown> | null;
+    }>) {
+      const pli = (row.metadata?.prod_line_id as string | undefined) ?? null;
+      if (pli && input.betcoProductLineId && pli === input.betcoProductLineId) continue;
+      const match = /Product line:\s*([^\n<]+)/i.exec(row.body_text ?? '');
+      const name = (match?.[1] ?? row.title ?? '').trim();
+      if (!name || seen.has(name.toLowerCase())) continue;
+      seen.add(name.toLowerCase());
+      alternatives.push({ name, productLineId: pli });
+      if (alternatives.length >= 2) break;
+    }
+  }
+  return { betcoEpaRegistration, alternatives };
 }

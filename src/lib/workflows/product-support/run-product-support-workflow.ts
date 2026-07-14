@@ -24,7 +24,11 @@ import { runResponsesWithToolLoop } from '~/lib/openai/responses-runtime';
 import { runAiSdkWithToolLoop } from '~/lib/bex/ai-sdk-runtime';
 import { routeUserMessageToSme } from '~/lib/orchestrator/sme-routing';
 import { evaluateRecommendationGate } from '~/lib/recommendations/recommendation-gate';
-import { lookupCrossReference } from '~/lib/tools/cross-reference-lookup';
+import {
+  lookupCrossReference,
+  fetchRecommendationContext,
+} from '~/lib/tools/cross-reference-lookup';
+import { buildCompetitiveRecommendationAnswer } from '~/lib/recommendations/recommendation-answer';
 import { productSupportTools } from '~/lib/tools/definitions';
 import { executeToolCall } from '~/lib/tools/execute-tool-call';
 
@@ -216,6 +220,11 @@ type CrossReferenceMatch = {
       }
     | null
     | undefined;
+  // Curated-override analysis facts (present only on override matches).
+  competitorEpaReg?: string | null;
+  chemistryClass?: string | null;
+  rationale?: string | null;
+  betcoProductLineId?: string | null;
 };
 
 function isProbablyUuid(value: string) {
@@ -1088,11 +1097,36 @@ export async function runProductSupportWorkflow(input: {
     }
 
     let draftAnswer = agentResult.assistantText;
-    if (overrideFromSafetyNet && crossReferenceResult) {
-      // The curated override is authoritative and the model recommended the wrong product (or
-      // none) — replace its draft with the cross-reference recommendation. Uses the short form so
-      // it also works when the Betco product has no web URL (e.g. Triforce, OnWeb=0).
-      draftAnswer = buildCrossReferenceAnswerShortOnly(crossReferenceResult.match);
+    // A curated-override match (carries analysis facts) is authoritative on the recommendations
+    // route — build a full competitive analysis from those facts + retrieved context, replacing
+    // whatever product the model may have drafted. Works even with no web URL (Triforce, OnWeb=0).
+    const isOverrideMatch =
+      routingDecision === 'recommendations' &&
+      !!crossReferenceResult &&
+      (overrideFromSafetyNet ||
+        !!crossReferenceResult.match.rationale ||
+        !!crossReferenceResult.match.competitorEpaReg);
+    if (isOverrideMatch && crossReferenceResult) {
+      const m = crossReferenceResult.match;
+      const ctx = await fetchRecommendationContext({
+        chemistryClass: m.chemistryClass ?? null,
+        betcoProductLineId: m.betcoProductLineId ?? null,
+      });
+      const recommendedTitle = (m.betcoProduct?.title ?? '')
+        .replace(/\s*\([^)]*\b(gal|bottle|case|oz|ct|pack|drum|pail|fastdraw|liter|l)\b[^)]*\)\s*$/i, '')
+        .trim();
+      draftAnswer = buildCompetitiveRecommendationAnswer({
+        competitorLabel: [m.competitorBrand, m.competitorProductName]
+          .filter(Boolean)
+          .join(' '),
+        recommendedTitle: recommendedTitle || 'the recommended Betco product',
+        recommendedUrl: m.productUrl,
+        chemistryClass: m.chemistryClass ?? null,
+        competitorEpa: m.competitorEpaReg ?? null,
+        betcoEpa: ctx.betcoEpaRegistration,
+        rationale: m.rationale ?? null,
+        alternatives: ctx.alternatives,
+      });
     } else if (crossReferenceResult?.match.productUrl?.trim()) {
       draftAnswer = composeCrossReferenceUserFacingAnswer({
         match: crossReferenceResult.match,
