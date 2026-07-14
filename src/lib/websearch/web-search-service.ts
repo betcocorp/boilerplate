@@ -3,7 +3,16 @@ import {
   defaultCacheTtlMs,
   webSearchCacheKey,
 } from '~/lib/websearch/cache';
+import {
+  WebSearchGuardrails,
+  loadGuardrailPolicyFromEnv,
+} from '~/lib/websearch/guardrails';
 import { MockWebSearchProvider } from '~/lib/websearch/mock-provider';
+import {
+  applySourceTrustPolicy,
+  loadSourceTrustPolicyFromEnv,
+  type SourceTrustPolicy,
+} from '~/lib/websearch/source-trust';
 import { TavilyProvider } from '~/lib/websearch/tavily-provider';
 import type { WebSearchProvider } from '~/lib/websearch/types';
 import { WebSearchError } from '~/lib/websearch/types';
@@ -44,14 +53,24 @@ export function createProviderFromEnv(): WebSearchProvider {
  */
 /** Process-wide cache shared across requests; TTL from WEBSEARCH_CACHE_TTL_MS (default 10 min). */
 const sharedCache = new WebSearchCache(defaultCacheTtlMs());
+/** Process-wide rate-limit + cost budget (WEB-5) shared across requests. */
+const sharedGuardrails = new WebSearchGuardrails(loadGuardrailPolicyFromEnv());
 
 export class WebSearchService {
   private readonly provider: WebSearchProvider;
   private readonly cache: WebSearchCache;
+  private readonly guardrails: WebSearchGuardrails;
+  private readonly trustPolicy: SourceTrustPolicy;
 
-  constructor(provider?: WebSearchProvider, cache?: WebSearchCache) {
+  constructor(
+    provider?: WebSearchProvider,
+    cache?: WebSearchCache,
+    opts?: { guardrails?: WebSearchGuardrails; trustPolicy?: SourceTrustPolicy },
+  ) {
     this.provider = provider ?? createProviderFromEnv();
     this.cache = cache ?? sharedCache;
+    this.guardrails = opts?.guardrails ?? sharedGuardrails;
+    this.trustPolicy = opts?.trustPolicy ?? loadSourceTrustPolicyFromEnv();
   }
 
   get providerName(): string {
@@ -75,6 +94,10 @@ export class WebSearchService {
       };
     }
 
+    // WEB-5: enforce rate limit + cost budget BEFORE the provider is billed (cache hits are free).
+    const estimatedCostUsd = estimateCost(this.provider.name, request);
+    this.guardrails.reserve(estimatedCostUsd);
+
     const raw = await this.provider.search(request);
 
     const parsed = webSearchResultSchema.array().safeParse(raw.results);
@@ -85,7 +108,10 @@ export class WebSearchService {
       );
     }
 
-    const results = parsed.data.slice(0, request.maxResults ?? 5);
+    // WEB-2: tag by source-trust tier, drop blocked domains, and rank authoritative sources first,
+    // BEFORE trimming to maxResults (so exclusions don't silently shrink the trusted set).
+    const ranked = applySourceTrustPolicy(parsed.data, this.trustPolicy).results;
+    const results = ranked.slice(0, request.maxResults ?? 5);
     const response: WebSearchResponse = {
       query: request.query,
       provider: this.provider.name,
@@ -94,7 +120,7 @@ export class WebSearchService {
       metrics: {
         latencyMs: Date.now() - startedAt,
         resultCount: results.length,
-        estimatedCostUsd: estimateCost(this.provider.name, request),
+        estimatedCostUsd,
         cached: false,
       },
     };

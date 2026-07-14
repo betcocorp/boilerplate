@@ -191,9 +191,19 @@ export function WebSearchTester() {
                       <span className="truncate">{result.title || result.url}</span>
                       <ExternalLink className="size-3.5 shrink-0 opacity-60" />
                     </a>
-                    <Badge className="shrink-0 rounded-full text-[0.62rem]" variant="outline">
-                      {result.score.toFixed(2)}
-                    </Badge>
+                    <div className="flex shrink-0 items-center gap-1">
+                      {result.trustTier ? (
+                        <Badge
+                          className="rounded-full text-[0.62rem]"
+                          variant={result.trustTier === 'authoritative' ? 'default' : 'secondary'}
+                        >
+                          {result.trustTier}
+                        </Badge>
+                      ) : null}
+                      <Badge className="rounded-full text-[0.62rem]" variant="outline">
+                        {result.score.toFixed(2)}
+                      </Badge>
+                    </div>
                   </div>
                   <p className="mt-1 line-clamp-3 text-sm text-muted-foreground">
                     {result.snippet}

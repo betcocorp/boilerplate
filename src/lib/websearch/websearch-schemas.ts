@@ -21,6 +21,9 @@ export const webSearchResultSchema = z.object({
   rawContent: z.string().optional(),
   score: z.number(),
   publishedAt: z.string().optional(),
+  /** WEB-2: source-trust tier + normalized domain (attached by the service, not the provider). */
+  trustTier: z.enum(['authoritative', 'standard', 'low']).optional(),
+  sourceDomain: z.string().optional(),
 });
 export type WebSearchResult = z.infer<typeof webSearchResultSchema>;
 
