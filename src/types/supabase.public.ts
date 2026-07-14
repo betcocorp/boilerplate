@@ -185,6 +185,191 @@ export type Database = {
         }
         Relationships: []
       }
+      api_app: {
+        Row: {
+          created_at: string
+          environment: Database["public"]["Enums"]["api_environment"]
+          id: string
+          is_active: boolean
+          name: string
+          project_id: string
+          rate_limit_per_minute: number | null
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          environment?: Database["public"]["Enums"]["api_environment"]
+          id?: string
+          is_active?: boolean
+          name: string
+          project_id: string
+          rate_limit_per_minute?: number | null
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          environment?: Database["public"]["Enums"]["api_environment"]
+          id?: string
+          is_active?: boolean
+          name?: string
+          project_id?: string
+          rate_limit_per_minute?: number | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "api_app_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "api_project"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      api_key: {
+        Row: {
+          app_id: string
+          created_at: string
+          expires_at: string | null
+          id: string
+          label: string | null
+          last_used_at: string | null
+          prefix: string
+          revoked_at: string | null
+          token_hash: string
+        }
+        Insert: {
+          app_id: string
+          created_at?: string
+          expires_at?: string | null
+          id?: string
+          label?: string | null
+          last_used_at?: string | null
+          prefix: string
+          revoked_at?: string | null
+          token_hash: string
+        }
+        Update: {
+          app_id?: string
+          created_at?: string
+          expires_at?: string | null
+          id?: string
+          label?: string | null
+          last_used_at?: string | null
+          prefix?: string
+          revoked_at?: string | null
+          token_hash?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "api_key_app_id_fkey"
+            columns: ["app_id"]
+            isOneToOne: false
+            referencedRelation: "api_app"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      api_project: {
+        Row: {
+          contact_email: string | null
+          created_at: string
+          description: string | null
+          id: string
+          is_active: boolean
+          name: string
+          updated_at: string
+        }
+        Insert: {
+          contact_email?: string | null
+          created_at?: string
+          description?: string | null
+          id?: string
+          is_active?: boolean
+          name: string
+          updated_at?: string
+        }
+        Update: {
+          contact_email?: string | null
+          created_at?: string
+          description?: string | null
+          id?: string
+          is_active?: boolean
+          name?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      api_request_log: {
+        Row: {
+          app_id: string | null
+          completion_tokens: number | null
+          created_at: string
+          error: string | null
+          id: string
+          key_id: string | null
+          latency_ms: number | null
+          method: string
+          path: string
+          project_id: string | null
+          prompt_tokens: number | null
+          status: number
+          total_tokens: number | null
+        }
+        Insert: {
+          app_id?: string | null
+          completion_tokens?: number | null
+          created_at?: string
+          error?: string | null
+          id?: string
+          key_id?: string | null
+          latency_ms?: number | null
+          method: string
+          path: string
+          project_id?: string | null
+          prompt_tokens?: number | null
+          status: number
+          total_tokens?: number | null
+        }
+        Update: {
+          app_id?: string | null
+          completion_tokens?: number | null
+          created_at?: string
+          error?: string | null
+          id?: string
+          key_id?: string | null
+          latency_ms?: number | null
+          method?: string
+          path?: string
+          project_id?: string | null
+          prompt_tokens?: number | null
+          status?: number
+          total_tokens?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "api_request_log_app_id_fkey"
+            columns: ["app_id"]
+            isOneToOne: false
+            referencedRelation: "api_app"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "api_request_log_key_id_fkey"
+            columns: ["key_id"]
+            isOneToOne: false
+            referencedRelation: "api_key"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "api_request_log_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "api_project"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       audit_logs: {
         Row: {
           conversation_id: string | null
@@ -719,7 +904,7 @@ export type Database = {
       classify_prompt_category: { Args: { p_prompt: string }; Returns: string }
     }
     Enums: {
-      [_ in never]: never
+      api_environment: "production" | "staging" | "development"
     }
     CompositeTypes: {
       [_ in never]: never
