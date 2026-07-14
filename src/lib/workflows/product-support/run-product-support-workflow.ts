@@ -24,6 +24,7 @@ import { runResponsesWithToolLoop } from '~/lib/openai/responses-runtime';
 import { runAiSdkWithToolLoop } from '~/lib/bex/ai-sdk-runtime';
 import { routeUserMessageToSme } from '~/lib/orchestrator/sme-routing';
 import { evaluateRecommendationGate } from '~/lib/recommendations/recommendation-gate';
+import { lookupCrossReference } from '~/lib/tools/cross-reference-lookup';
 import { productSupportTools } from '~/lib/tools/definitions';
 import { executeToolCall } from '~/lib/tools/execute-tool-call';
 
@@ -1038,6 +1039,26 @@ export async function runProductSupportWorkflow(input: {
       extractTopCrossReferenceMatchFromToolOutputs(toolOutputLog) ??
       extractTopCrossReferenceMatch(resolvedToolTrace);
 
+    // Deterministic override safety-net: don't depend on the model to call lookup_cross_reference
+    // with the competitor's exact name. On the recommendations route, if no cross-reference surfaced,
+    // consult the curated override directly with the raw user message — the lenient matcher finds the
+    // competitor mention inside it — so a curated equivalence (e.g. BNC-15 → Triforce) always wins.
+    let overrideFromSafetyNet = false;
+    if (routingDecision === 'recommendations' && !crossReferenceResult) {
+      const forced = await lookupCrossReference({
+        brand: input.userMessage,
+        productName: input.userMessage,
+      });
+      const top = forced.matches?.[0];
+      if (top && !forced.fallbackRecommended) {
+        crossReferenceResult = {
+          fallbackRecommended: false,
+          match: top as unknown as CrossReferenceMatch,
+        };
+        overrideFromSafetyNet = true;
+      }
+    }
+
     if (
       crossReferenceIntent &&
       crossReferenceResult &&
@@ -1062,11 +1083,17 @@ export async function runProductSupportWorkflow(input: {
       });
       crossReferenceResult =
         extractTopCrossReferenceMatchFromToolOutputs(toolOutputLog) ??
-        extractTopCrossReferenceMatch(resolvedToolTrace);
+        extractTopCrossReferenceMatch(resolvedToolTrace) ??
+        crossReferenceResult;
     }
 
     let draftAnswer = agentResult.assistantText;
-    if (crossReferenceResult?.match.productUrl?.trim()) {
+    if (overrideFromSafetyNet && crossReferenceResult) {
+      // The curated override is authoritative and the model recommended the wrong product (or
+      // none) — replace its draft with the cross-reference recommendation. Uses the short form so
+      // it also works when the Betco product has no web URL (e.g. Triforce, OnWeb=0).
+      draftAnswer = buildCrossReferenceAnswerShortOnly(crossReferenceResult.match);
+    } else if (crossReferenceResult?.match.productUrl?.trim()) {
       draftAnswer = composeCrossReferenceUserFacingAnswer({
         match: crossReferenceResult.match,
         assistantText: agentResult.assistantText,
