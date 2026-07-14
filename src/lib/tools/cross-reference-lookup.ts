@@ -2,7 +2,7 @@ import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 const CROSS_REFERENCE_ADAPTER_TAG = 'legacy_cross_reference_v1' as const;
 
-type CrossReferenceRow = {
+export type CrossReferenceRow = {
   Competitor: string | null;
   ProductDescr: string | null;
   ProductKey: string | null;
@@ -11,7 +11,7 @@ type CrossReferenceRow = {
   id: string | null;
 };
 
-type LegacyProductRow = {
+export type LegacyProductRow = {
   ProductsKey: string | null;
   Title: string | null;
   SKU: string | null;
@@ -27,7 +27,7 @@ type LegacyProductRow = {
   User_Str_05: string | null;
 };
 
-type LegacyProductDescrRow = {
+export type LegacyProductDescrRow = {
   ProductsKey: string | null;
   ShortDescr: string | null;
   FullDescr: string | null;
@@ -137,7 +137,7 @@ function buildGuessedProductUrl(product: LegacyProductRow | undefined) {
   return `https://www.betco.com/products/${slug}/${idSegment}`;
 }
 
-function deriveCanonicalProductUrl(input: {
+export function deriveCanonicalProductUrl(input: {
   product: LegacyProductRow | undefined;
   productDescr: LegacyProductDescrRow | undefined;
 }) {
