@@ -37,7 +37,7 @@ Use this file together with the user’s rules. Prefer **running** `pnpm exec ts
 
 - **UI**: `~/components/bex/*` (`BexChatApp`, messages, sidebar, composer).
 - **Page**: `src/app/(authenticated)/admin/bex/page.tsx` imports `~/components/bex/BexChatApp` only.
-- **Client → API (Bex UI)**: `~/lib/bex/bex-api-client.ts` posts via `apiPostBexChatStream()` to **`/api/bex/chat/stream`** (AI SDK streaming, gated by `BEX_AI_SDK_STREAMING_*`) and loads history from **`/api/bex/conversations`**. The old **`/api/bex/chat`** is **deprecated (HTTP 410)**. Legacy **`/api/v1/orchestrator`** still supports `bex-chat` and returns **`productSupport`**; validate with **`bexOrchestrateOkResponseSchema`**.
+- **Client → API (Bex UI)**: `~/lib/bex/bex-api-client.ts` posts via `apiPostBexChatStream()` to **`/api/bex/chat/stream`** (AI SDK streaming, gated by `BEX_AI_SDK_STREAMING_*`) and loads history from **`/api/bex/conversations`**. The old **`/api/bex/chat`** is **deprecated (HTTP 410)**. **`/api/v1/orchestrator`** still supports the `bex-chat` workflow and returns **`productSupport`** — now **token-authenticated, server-to-server only** (the browser path is gone; the bex UI uses `/api/bex/*`); validate with **`bexOrchestrateOkResponseSchema`**.
 - **Sessions**: `~/lib/bex/sessions.ts` + types in `~/types/bex.ts`.
 
 ## Orchestrator and SME agents
@@ -46,7 +46,7 @@ Use this file together with the user’s rules. Prefer **running** `pnpm exec ts
 - **Contracts (Zod + inferred types)**: `~/lib/orchestrator/orchestrator-schemas.ts` — steps, routing, SME payload, run result, `parseOrchestratorPostBody`, `bexChatOrchestrationInputSchema`, `bexOrchestrateOkResponseSchema`.
 - **SME HTTP + run schemas**: `~/lib/agents/sme/sme-schemas.ts`; runner `run-sme-agent.ts`; route factory `agent-route.ts`.
 - **SME IDs** (registry + schema) include **`product`**, **`bathroom`**, **`dilution`**, **`floor`** — keep enum, registry (`/api/v1/agents`), and routing scores in sync when adding an agent.
-- **Auth**: `~/lib/api/v1-bearer-auth.ts` (`V1_ORCHESTRATOR_API_KEY`); orchestrator also allows unauthenticated **chat-style** calls when `message` is a non-empty string (browser path).
+- **Auth (`/api/v1/*` — machine callers)**: every `/api/v1/*` route (orchestrator + all SME agents + agents registry) requires a per-client token via `authenticateApiToken` / `unauthorizedResponse` (`~/lib/api/client-auth`), verified against the `api_project` → `api_app` → `api_key` registry with a chain check (token not revoked/expired → app active → project active) and a uniform 401. Tokens are `Authorization: Bearer bex_<env>_…` (see `~/lib/api/api-tokens`). There is **no** shared key, no `NODE_ENV` allow-all, and no anonymous "non-empty message" bypass — all deleted. Local dev uses the seeded "Local Dev" token. Bex UI routes (`/api/bex/*`) instead use the NextAuth session (`hasBexSession`, `~/lib/api/bex-api-auth`).
 
 When changing API shapes, update **Zod schemas first**, then types/implementations, then clients.
 

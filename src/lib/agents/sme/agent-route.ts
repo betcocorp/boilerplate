@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 
-import { isV1BearerAuthorized } from '~/lib/api/v1-bearer-auth';
+import { authenticateApiToken, unauthorizedResponse } from '~/lib/api/client-auth';
 
 import { runSmeAgent } from './run-sme-agent';
 import {
@@ -11,8 +11,9 @@ import type { SmeAgentId } from './types';
 
 export function createSmeAgentPostHandler(agentId: SmeAgentId) {
   return async function POST(request: Request) {
-    if (!isV1BearerAuthorized(request)) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const auth = await authenticateApiToken(request);
+    if (!auth.ok) {
+      return unauthorizedResponse();
     }
 
     let raw: unknown = {};
