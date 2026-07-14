@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 
-import { canReadBexConversations } from '~/lib/api/bex-api-auth';
+import { hasBexSession } from '~/lib/api/bex-api-auth';
 import {
   createConversation,
   listConversations,
@@ -9,8 +9,8 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(request: Request) {
-  if (!canReadBexConversations(request)) {
+export async function GET() {
+  if (!(await hasBexSession())) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -33,8 +33,8 @@ export async function GET(request: Request) {
   }
 }
 
-export async function POST(request: Request) {
-  if (!canReadBexConversations(request)) {
+export async function POST() {
+  if (!(await hasBexSession())) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 

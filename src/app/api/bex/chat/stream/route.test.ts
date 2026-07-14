@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { POST } from '~/app/api/bex/chat/stream/route';
-import { canPostBexChat } from '~/lib/api/bex-api-auth';
+import { hasBexSession } from '~/lib/api/bex-api-auth';
 import { runBexChatTurn } from '~/lib/bex/run-chat-turn';
 
 vi.mock('~/lib/api/bex-api-auth', () => ({
-  canPostBexChat: vi.fn(),
+  hasBexSession: vi.fn(),
 }));
 
 vi.mock('~/lib/bex/run-chat-turn', () => ({
@@ -52,7 +52,7 @@ async function readResponseBody(response: Response): Promise<string> {
 describe('POST /api/bex/chat/stream', () => {
   beforeEach(() => {
     process.env.BEX_AI_SDK_STREAMING_ENABLED = 'true';
-    vi.mocked(canPostBexChat).mockReset();
+    vi.mocked(hasBexSession).mockReset();
     vi.mocked(runBexChatTurn).mockReset();
   });
 
@@ -62,7 +62,7 @@ describe('POST /api/bex/chat/stream', () => {
 
   it('returns 404 when streaming is disabled', async () => {
     process.env.BEX_AI_SDK_STREAMING_ENABLED = 'false';
-    vi.mocked(canPostBexChat).mockReturnValue(true);
+    vi.mocked(hasBexSession).mockResolvedValue(true);
 
     const response = await POST(makeRequest({ message: 'Hi there' }));
 
@@ -70,7 +70,7 @@ describe('POST /api/bex/chat/stream', () => {
   });
 
   it('returns 401 when auth fails', async () => {
-    vi.mocked(canPostBexChat).mockReturnValue(false);
+    vi.mocked(hasBexSession).mockResolvedValue(false);
 
     const response = await POST(makeRequest({ message: 'Hi there' }));
 
@@ -78,7 +78,7 @@ describe('POST /api/bex/chat/stream', () => {
   });
 
   it('returns 400 when request body is invalid', async () => {
-    vi.mocked(canPostBexChat).mockReturnValue(true);
+    vi.mocked(hasBexSession).mockResolvedValue(true);
 
     const response = await POST(makeRequest({}));
 
@@ -86,7 +86,7 @@ describe('POST /api/bex/chat/stream', () => {
   });
 
   it('returns a UI message stream response when valid', async () => {
-    vi.mocked(canPostBexChat).mockReturnValue(true);
+    vi.mocked(hasBexSession).mockResolvedValue(true);
     vi.mocked(runBexChatTurn).mockResolvedValue({
       traceId: 'trace-test-1',
       conversationId: '7ad779f1-2af3-4a82-ae68-bf1372f6cd99',

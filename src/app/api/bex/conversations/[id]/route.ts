@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 
-import { canReadBexConversations } from '~/lib/api/bex-api-auth';
+import { hasBexSession } from '~/lib/api/bex-api-auth';
 import {
   deleteConversation,
   getConversationById,
@@ -13,8 +13,8 @@ export const dynamic = 'force-dynamic';
 
 type RouteParams = { params: Promise<{ id: string }> };
 
-export async function GET(request: Request, ctx: RouteParams) {
-  if (!canReadBexConversations(request)) {
+export async function GET(_request: Request, ctx: RouteParams) {
+  if (!(await hasBexSession())) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -69,8 +69,8 @@ export async function GET(request: Request, ctx: RouteParams) {
   }
 }
 
-export async function DELETE(request: Request, ctx: RouteParams) {
-  if (!canReadBexConversations(request)) {
+export async function DELETE(_request: Request, ctx: RouteParams) {
+  if (!(await hasBexSession())) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 

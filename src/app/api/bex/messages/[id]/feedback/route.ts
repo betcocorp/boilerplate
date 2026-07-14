@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
-import { canReadBexConversations } from '~/lib/api/bex-api-auth';
+import { hasBexSession } from '~/lib/api/bex-api-auth';
 import { upsertMessageFeedback } from '~/lib/conversations/message-feedback-repository';
 import { getMessageById } from '~/lib/conversations/message-repository';
 
@@ -27,7 +27,7 @@ const feedbackBodySchema = z
 type RouteParams = { params: Promise<{ id: string }> };
 
 export async function POST(request: Request, ctx: RouteParams) {
-  if (!canReadBexConversations(request)) {
+  if (!(await hasBexSession())) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
