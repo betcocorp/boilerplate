@@ -466,6 +466,72 @@ export type Database = {
         }
         Relationships: []
       }
+      product_category: {
+        Row: {
+          aliases: string[]
+          created_at: string
+          depth: number
+          key: string
+          name: string
+          parent_key: string | null
+          path: string[]
+          source: string
+          source_value: string | null
+          updated_at: string
+        }
+        Insert: {
+          aliases?: string[]
+          created_at?: string
+          depth?: number
+          key: string
+          name: string
+          parent_key?: string | null
+          path?: string[]
+          source?: string
+          source_value?: string | null
+          updated_at?: string
+        }
+        Update: {
+          aliases?: string[]
+          created_at?: string
+          depth?: number
+          key?: string
+          name?: string
+          parent_key?: string | null
+          path?: string[]
+          source?: string
+          source_value?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      product_category_link: {
+        Row: {
+          category_key: string
+          confidence: number
+          created_at: string
+          prod_line_id: string | null
+          prod_line_key: string
+          source: string
+        }
+        Insert: {
+          category_key: string
+          confidence?: number
+          created_at?: string
+          prod_line_id?: string | null
+          prod_line_key: string
+          source?: string
+        }
+        Update: {
+          category_key?: string
+          confidence?: number
+          created_at?: string
+          prod_line_id?: string | null
+          prod_line_key?: string
+          source?: string
+        }
+        Relationships: []
+      }
       review_tasks: {
         Row: {
           created_at: string
@@ -730,6 +796,36 @@ export type Database = {
           suite_version?: string
           updated_at?: string
           uploaded_at?: string
+        }
+        Relationships: []
+      }
+      web_search_cache: {
+        Row: {
+          cache_key: string
+          created_at: string
+          expires_at: string
+          hit_count: number
+          provider: string
+          query: string
+          response: Json
+        }
+        Insert: {
+          cache_key: string
+          created_at?: string
+          expires_at: string
+          hit_count?: number
+          provider: string
+          query: string
+          response: Json
+        }
+        Update: {
+          cache_key?: string
+          created_at?: string
+          expires_at?: string
+          hit_count?: number
+          provider?: string
+          query?: string
+          response?: Json
         }
         Relationships: []
       }
@@ -1031,6 +1127,8 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      api_environment: ["production", "staging", "development"],
+    },
   },
 } as const
