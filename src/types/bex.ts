@@ -6,6 +6,9 @@ export type ChatSourceRef = {
   title: string;
   snippet: string;
   similarity?: number;
+  /** WEB-6: external (web) sources render as clickable links in the Sources panel. */
+  kind?: 'internal' | 'external';
+  url?: string;
 };
 
 export type ChatMessage = {

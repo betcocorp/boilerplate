@@ -5,6 +5,7 @@ import {
   ChevronDown,
   ChevronRight,
   Copy,
+  ExternalLink,
   Sparkles,
   ThumbsDown,
   ThumbsUp,
@@ -187,30 +188,54 @@ function AssistantDetails({
                 Sources
               </p>
               <ul className="space-y-2">
-                {meta.sources.slice(0, 6).map((s) => (
-                  <li
-                    className="wrap-break-word rounded-md border border-border/60 bg-muted/30 p-2"
-                    key={`${messageId}-${s.documentId}-${s.chunkId ?? 'chunk'}`}
-                  >
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="font-medium text-foreground">{s.title}</span>
-                      {typeof s.similarity === 'number' ? (
-                        <Badge className="rounded-full px-1.5 py-0 text-[0.62rem]" variant="outline">
-                          {(s.similarity * 100).toFixed(0)}%
-                        </Badge>
+                {meta.sources.slice(0, 6).map((s) => {
+                  const isExternal = s.kind === 'external' || !!s.url;
+                  return (
+                    <li
+                      className="wrap-break-word rounded-md border border-border/60 bg-muted/30 p-2"
+                      key={`${messageId}-${s.url ?? s.documentId}-${s.chunkId ?? 'chunk'}`}
+                    >
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {isExternal && s.url ? (
+                          <a
+                            className="flex min-w-0 items-center gap-1 font-medium text-foreground hover:underline"
+                            href={s.url}
+                            rel="noreferrer"
+                            target="_blank"
+                          >
+                            <span className="wrap-break-word">{s.title}</span>
+                            <ExternalLink className="size-3 shrink-0 opacity-60" />
+                          </a>
+                        ) : (
+                          <span className="font-medium text-foreground">{s.title}</span>
+                        )}
+                        {isExternal ? (
+                          <Badge className="rounded-full px-1.5 py-0 text-[0.62rem]" variant="secondary">
+                            web
+                          </Badge>
+                        ) : null}
+                        {typeof s.similarity === 'number' ? (
+                          <Badge className="rounded-full px-1.5 py-0 text-[0.62rem]" variant="outline">
+                            {(s.similarity * 100).toFixed(0)}%
+                          </Badge>
+                        ) : null}
+                      </div>
+                      {s.snippet ? (
+                        <p className="mt-1 line-clamp-2 text-muted-foreground">{s.snippet}</p>
                       ) : null}
-                    </div>
-                    <p className="mt-1 line-clamp-2 text-muted-foreground">{s.snippet}</p>
-                    <div className="mt-1 opacity-90">
-                      <RagDocumentChunkInspectButtons
-                        chunkId={s.chunkId ?? null}
-                        documentId={s.documentId}
-                        layout="inline"
-                        size="xs"
-                      />
-                    </div>
-                  </li>
-                ))}
+                      {!isExternal ? (
+                        <div className="mt-1 opacity-90">
+                          <RagDocumentChunkInspectButtons
+                            chunkId={s.chunkId ?? null}
+                            documentId={s.documentId}
+                            layout="inline"
+                            size="xs"
+                          />
+                        </div>
+                      ) : null}
+                    </li>
+                  );
+                })}
               </ul>
               {meta.sources.length > 6 ? (
                 <p className="text-[0.7rem] opacity-70">

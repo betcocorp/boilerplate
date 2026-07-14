@@ -19,6 +19,9 @@ export const sourceRefSchema = z.object({
   title: z.string(),
   snippet: z.string().max(2000),
   similarity: z.number().optional(),
+  /** WEB-6: external (web) sources — kind 'external' + a clickable URL render in the Sources panel. */
+  kind: z.enum(['internal', 'external']).optional(),
+  url: z.string().url().optional(),
 });
 
 export type SourceRef = z.infer<typeof sourceRefSchema>;
