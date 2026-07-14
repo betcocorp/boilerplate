@@ -13,6 +13,8 @@ export type ValidatorResult = z.infer<typeof validatorResultSchema>;
 export const retrievedDocumentChunkRefSchema = z.object({
   document_id: z.string(),
   chunk_id: z.string().nullable(),
+  document_kind: z.string().nullable().optional(),
+  document_title: z.string().nullable().optional(),
 });
 
 export type RetrievedDocumentChunkRef = z.infer<typeof retrievedDocumentChunkRefSchema>;

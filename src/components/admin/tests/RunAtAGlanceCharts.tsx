@@ -16,13 +16,13 @@ import {
 } from 'recharts';
 
 import {
-  ChartContainer,
   type ChartConfig,
+  ChartContainer,
   ChartTooltip,
   ChartTooltipContent,
 } from '~/components/ui/chart';
-import { cn } from '~/lib/utils';
 import { isTerminalRunStatus } from '~/lib/tests/types';
+import { cn } from '~/lib/utils';
 
 type ElapsedTrendDatum = {
   label: string;
@@ -119,9 +119,17 @@ function ElapsedTrendDatumDotSvg(
   const hitRadius = Math.max(radius + 10, 14);
 
   const outcome =
-    payload?.passed === true ? 'passed' : payload?.passed === false ? 'failed' : 'unknown';
+    payload?.passed === true
+      ? 'passed'
+      : payload?.passed === false
+        ? 'failed'
+        : 'unknown';
   const dotFill =
-    payload?.passed === true ? '#16a34a' : payload?.passed === false ? '#dc2626' : '#94a3b8';
+    payload?.passed === true
+      ? '#16a34a'
+      : payload?.passed === false
+        ? '#dc2626'
+        : '#94a3b8';
   const label = `Scroll to item ${payload?.label ?? ''} in Item-level results (${outcome})`;
 
   const visibleOpacity =
@@ -246,6 +254,23 @@ export function RunAtAGlanceCharts({
     ],
     [livePassCount, liveFailCount, liveNotRunCount],
   );
+  const similarityCoverageData = useMemo(() => {
+    const withScore = similarityTrendData.filter(
+      (d) => d.similarity !== null,
+    ).length;
+    const withoutScore = similarityTrendData.length - withScore;
+    return [
+      { label: 'Had similarity', count: withScore, fill: '#a855f7' },
+      { label: 'No similarity', count: withoutScore, fill: '#cbd5e1' },
+    ];
+  }, [similarityTrendData]);
+  const similarityCoverageRate = useMemo(() => {
+    if (similarityTrendData.length === 0) return 0;
+    return (
+      (similarityCoverageData[0]!.count / similarityTrendData.length) * 100
+    );
+  }, [similarityTrendData, similarityCoverageData]);
+
   const slowFailSignalsData = useMemo(
     () => [
       {
@@ -267,17 +292,20 @@ export function RunAtAGlanceCharts({
       <h2 className="text-lg font-semibold text-slate-900">
         At-a-glance charts
       </h2>
-      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <article className="min-w-0 rounded-2xl border border-slate-200 p-5 lg:col-span-3">
+      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-4">
+        <article className="min-w-0 rounded-2xl border border-slate-200 p-5 col-span-4">
           <h3 className="text-sm font-semibold text-slate-900">
-            Elapsed by prompt order
+            Elapsed by prompt order (seconds)
           </h3>
           {elapsedTrendData.length === 0 ? (
             <p className="mt-4 text-sm text-slate-500">
               No item timings yet for this run.
             </p>
           ) : (
-            <ChartContainer className="mt-4 h-56 w-full min-w-0" config={chartConfig}>
+            <ChartContainer
+              className="mt-4 h-56 w-full min-w-0"
+              config={chartConfig}
+            >
               <LineChart data={elapsedTrendData}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
                 <XAxis
@@ -320,7 +348,7 @@ export function RunAtAGlanceCharts({
           )}
         </article>
 
-        <article className="min-w-0 rounded-2xl border border-slate-200 p-5 lg:col-span-3">
+        <article className="min-w-0 rounded-2xl border border-slate-200 p-5 col-span-4">
           <h3 className="text-sm font-semibold text-slate-900">
             Similarity by prompt order
           </h3>
@@ -329,7 +357,10 @@ export function RunAtAGlanceCharts({
               No similarity scores yet for this run.
             </p>
           ) : (
-            <ChartContainer className="mt-4 h-56 w-full min-w-0" config={chartConfig}>
+            <ChartContainer
+              className="mt-4 h-56 w-full min-w-0"
+              config={chartConfig}
+            >
               <LineChart data={similarityTrendData}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
                 <XAxis
@@ -374,11 +405,14 @@ export function RunAtAGlanceCharts({
           )}
         </article>
 
-        <article className="min-w-0 rounded-2xl border border-slate-200 p-5">
+        <article className="min-w-0 rounded-2xl border border-slate-200 p-5 col-span-4 lg:col-span-2">
           <h3 className="text-sm font-semibold text-slate-900">
             Pass vs fail vs not run
           </h3>
-          <ChartContainer className="mt-4 h-56 w-full min-w-0" config={chartConfig}>
+          <ChartContainer
+            className="mt-4 h-56 w-full min-w-0"
+            config={chartConfig}
+          >
             <PieChart>
               <Pie
                 cx="50%"
@@ -401,11 +435,46 @@ export function RunAtAGlanceCharts({
           </p>
         </article>
 
-        <article className="min-w-0 rounded-2xl border border-slate-200 p-5">
+        <article className="min-w-0 rounded-2xl border border-slate-200 p-5 col-span-4 lg:col-span-2">
+          <h3 className="text-sm font-semibold text-slate-900">
+            Similarity coverage
+          </h3>
+          <ChartContainer
+            className="mt-4 h-56 w-full min-w-0"
+            config={chartConfig}
+          >
+            <PieChart>
+              <Pie
+                cx="50%"
+                cy="50%"
+                data={similarityCoverageData}
+                dataKey="count"
+                innerRadius={50}
+                nameKey="label"
+                outerRadius={82}
+              >
+                {similarityCoverageData.map((entry) => (
+                  <Cell fill={entry.fill} key={entry.label} />
+                ))}
+              </Pie>
+              <ChartTooltip content={<ChartTooltipContent />} />
+            </PieChart>
+          </ChartContainer>
+          <p className="mt-2 text-xs text-slate-500">
+            {similarityCoverageData[0]!.count} of {similarityTrendData.length}{' '}
+            items returned a similarity score (
+            {similarityCoverageRate.toFixed(1)}%).
+          </p>
+        </article>
+
+        <article className="min-w-0 rounded-2xl border border-slate-200 p-5 col-span-4 lg:col-span-2">
           <h3 className="text-sm font-semibold text-slate-900">
             Slow or not-passed signal counts
           </h3>
-          <ChartContainer className="mt-4 h-56 w-full min-w-0" config={chartConfig}>
+          <ChartContainer
+            className="mt-4 h-56 w-full min-w-0"
+            config={chartConfig}
+          >
             <PieChart>
               <Pie
                 cx="50%"
@@ -429,11 +498,14 @@ export function RunAtAGlanceCharts({
           </p>
         </article>
 
-        <article className="min-w-0 rounded-2xl border border-slate-200 p-5">
+        <article className="min-w-0 rounded-2xl border border-slate-200 p-5 col-span-4 lg:col-span-2">
           <h3 className="text-sm font-semibold text-slate-900">
             Similarity stats
           </h3>
-          <ChartContainer className="mt-4 h-56 w-full min-w-0" config={chartConfig}>
+          <ChartContainer
+            className="mt-4 h-56 w-full min-w-0"
+            config={chartConfig}
+          >
             <BarChart data={similarityStatsData}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} />
               <XAxis dataKey="label" interval={0} tick={{ fontSize: 11 }} />
@@ -463,18 +535,32 @@ export function RunAtAGlanceCharts({
           <dl className="mt-2 flex gap-4 text-xs text-slate-500">
             <div className="flex items-center gap-1">
               <span className="inline-block size-2 rounded-full bg-violet-500" />
-              <dt>High ({(similarityBuckets.avgThreshold * 100).toFixed(0)}%–{(similarityBuckets.maxThreshold * 100).toFixed(0)}%)</dt>
-              <dd className="font-medium text-slate-700">{similarityBuckets.high}</dd>
+              <dt>
+                High ({(similarityBuckets.avgThreshold * 100).toFixed(0)}%–
+                {(similarityBuckets.maxThreshold * 100).toFixed(0)}%)
+              </dt>
+              <dd className="font-medium text-slate-700">
+                {similarityBuckets.high}
+              </dd>
             </div>
             <div className="flex items-center gap-1">
               <span className="inline-block size-2 rounded-full bg-violet-300" />
-              <dt>Mid ({(similarityBuckets.minThreshold * 100).toFixed(0)}%–{(similarityBuckets.avgThreshold * 100).toFixed(0)}%)</dt>
-              <dd className="font-medium text-slate-700">{similarityBuckets.mid}</dd>
+              <dt>
+                Mid ({(similarityBuckets.minThreshold * 100).toFixed(0)}%–
+                {(similarityBuckets.avgThreshold * 100).toFixed(0)}%)
+              </dt>
+              <dd className="font-medium text-slate-700">
+                {similarityBuckets.mid}
+              </dd>
             </div>
             <div className="flex items-center gap-1">
               <span className="inline-block size-2 rounded-full bg-slate-300" />
-              <dt>Low (0%–{(similarityBuckets.minThreshold * 100).toFixed(0)}%)</dt>
-              <dd className="font-medium text-slate-700">{similarityBuckets.low}</dd>
+              <dt>
+                Low (0%–{(similarityBuckets.minThreshold * 100).toFixed(0)}%)
+              </dt>
+              <dd className="font-medium text-slate-700">
+                {similarityBuckets.low}
+              </dd>
             </div>
           </dl>
         </article>

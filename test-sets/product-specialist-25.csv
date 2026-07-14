@@ -1,0 +1,26 @@
+question,should_answer,expected_result_type,canonical_product,reason_code,product_mention,question_category,source_style
+What is the primary use for Betco's All Purpose Cleaner Concentrate and what surfaces can it be used on?,true,answer,All Purpose Cleaner Concentrate,product_info,yes,product_info,direct
+What organisms does the Broad Spectrum Disinfectant Cleaner kill and what is its EPA registration?,true,answer,Broad Spectrum Disinfectant Cleaner,product_info,yes,product_info,technical
+What makes the Non-Butyl Citrus Cleaner/Degreaser a greener alternative to standard degreasers?,true,answer,Non-Butyl Citrus Cleaner/Degreaser,product_info,yes,product_info,conversational
+What Betco product would you recommend for daily glass and mirror cleaning in a commercial office building?,true,answer,Ammoniated Glass and Surface Cleaner,product_info,no,product_info,conversational
+What active ingredient provides the disinfecting action in the 1 Minute Disinfectant?,true,answer,1 Minute Disinfectant,product_info,yes,product_info,technical
+Does Betco have a hospital-grade disinfectant product — and if so what is it called?,true,answer,,product_info,no,product_info,technical
+What industries or settings is the Heavy Duty Foaming Degreaser designed for?,true,answer,Heavy Duty Foaming Degreaser,product_info,yes,product_info,direct
+What certifications does the Green Earth All Purpose product carry?,true,answer,Green Earth All Purpose,product_info,yes,product_info,technical
+What Betco disinfectant product is most appropriate for a healthcare environment with short required contact times?,true,answer,,product_info,no,product_info,technical
+Is the All Purpose Cleaner Concentrate safe for septic systems?,true,answer,All Purpose Cleaner Concentrate,product_info,yes,product_info,technical
+What PPE does the SDS for the Concentrated Heavy Duty Cleaner/Degreaser require during normal use?,true,answer,Concentrated Heavy Duty Cleaner/Degreaser,sds_ppe,yes,sds_safety,technical
+What GHS hazard classifications appear on the SDS for the Citrus Cleaner and Degreaser?,true,answer,Citrus Cleaner and Degreaser,sds_hazard,yes,sds_safety,technical
+What first aid procedures does the SDS recommend if the 5 Minute Alkaline Disinfectant contacts eyes?,true,answer,5 Minute Alkaline Disinfectant,sds_safety,yes,sds_safety,technical
+Does the Neutral Disinfectant Cleaner SDS list any incompatible chemicals that should not be mixed with it?,true,answer,Neutral Disinfectant Cleaner,sds_safety,yes,sds_safety,technical
+What is the key difference between the 1 Minute Disinfectant and the 5 Minute Alkaline Disinfectant in terms of application?,true,answer,1 Minute Disinfectant,comparison,yes,comparison,direct
+Is the Peroxide Disinfectant Cleaner or the 5 Minute Alkaline Disinfectant better suited for a hospital environment?,true,answer,Peroxide Disinfectant Cleaner,comparison,yes,comparison,technical
+How does the Green Earth Glass & Surface Cleaner compare to the Ammoniated Glass and Surface Cleaner?,true,answer,Green Earth Glass and Surface Cleaner,comparison,yes,comparison,direct
+When would a facility manager choose the Heavy Duty Cleaner/Degreaser over the All Purpose Cleaner Concentrate?,true,answer,Heavy Duty Cleaner/Degreaser,comparison,yes,comparison,conversational
+Is the Neutral Disinfectant Cleaner safe to mop on waxed floors without stripping the finish?,true,answer,Neutral Disinfectant Cleaner,compatibility,yes,compatibility,technical
+Can the Concentrated Heavy Duty Cleaner/Degreaser be safely used through a pressure washer?,true,answer,Concentrated Heavy Duty Cleaner/Degreaser,compatibility,yes,compatibility,technical
+Is the All Purpose Cleaner Concentrate food-contact safe at the labeled dilution?,true,answer,All Purpose Cleaner Concentrate,compatibility,yes,compatibility,technical
+What sizes does the 1 Minute Disinfectant come in?,true,answer,1 Minute Disinfectant,packaging,yes,packaging,direct
+What packaging formats is the Heavy Duty Cleaner/Degreaser available in?,true,answer,Heavy Duty Cleaner/Degreaser,packaging,yes,packaging,direct
+How do I fix the brakes on my 2019 Ford F-150?,false,decline,,out_of_scope_nontopical,no,out_of_scope,conversational
+What are the best practices for investing in cryptocurrency?,false,decline,,out_of_scope_nontopical,no,out_of_scope,direct

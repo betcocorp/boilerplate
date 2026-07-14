@@ -320,6 +320,21 @@ async function syncLegacyProductChunks(languageCode: string) {
   return normalizeJsonObject(data);
 }
 
+async function syncSdsChunks(languageCode: string) {
+  const supabase = getSupabaseServiceRoleClient();
+  const { data, error } = await withRetry(() =>
+    supabase
+      .schema('rag')
+      .rpc('sync_sds_chunks', { p_language_code: languageCode }),
+  );
+
+  if (error) {
+    throw new Error(`Failed to sync SDS chunks: ${error.message}`);
+  }
+
+  return normalizeJsonObject(data);
+}
+
 export async function runRagPipeline(
   intent: RagPipelineIntent,
   options: RagPipelineRunOptions = {},
@@ -385,13 +400,23 @@ export async function runRagPipeline(
 
   if (intent === 'sync-chunks' || intent === 'run-all') {
     if (intent === 'sync-chunks') {
-      chunkSyncResult = await syncLegacyProductChunks(languageCode);
+      const plpResult = await syncLegacyProductChunks(languageCode);
+      const sdsResult = await syncSdsChunks(languageCode);
+      chunkRuns = 1;
+      chunkSyncResult = mergeChunkSyncResults(
+        mergeChunkSyncResults(null, plpResult, 1),
+        sdsResult,
+        1,
+      );
     } else {
-      while (chunkRuns < MAX_CHUNK_RUNS) {
+      // PLP loop — drain product_line_profile chunks
+      let plpRuns = 0;
+      let plpSyncResult: JsonObject | null = null;
+      while (plpRuns < MAX_CHUNK_RUNS) {
         const result = await syncLegacyProductChunks(languageCode);
 
-        chunkRuns += 1;
-        chunkSyncResult = mergeChunkSyncResults(chunkSyncResult, result, chunkRuns);
+        plpRuns += 1;
+        plpSyncResult = mergeChunkSyncResults(plpSyncResult, result, plpRuns);
 
         if (
           (readJsonNumber(result, 'remaining_documents') ?? 0) === 0 ||
@@ -401,16 +426,37 @@ export async function runRagPipeline(
         }
       }
 
-      const remainingDocuments =
-        readJsonNumber(chunkSyncResult, 'remaining_documents') ?? 0;
+      // SDS loop — drain SDS chunks
+      let sdsRuns = 0;
+      let sdsSyncResult: JsonObject | null = null;
+      while (sdsRuns < MAX_CHUNK_RUNS) {
+        const result = await syncSdsChunks(languageCode);
 
-      if (remainingDocuments > 0) {
+        sdsRuns += 1;
+        sdsSyncResult = mergeChunkSyncResults(sdsSyncResult, result, sdsRuns);
+
+        if (
+          (readJsonNumber(result, 'remaining_documents') ?? 0) === 0 ||
+          (readJsonNumber(result, 'documents_processed') ?? 0) === 0
+        ) {
+          break;
+        }
+      }
+
+      chunkRuns = Math.max(plpRuns, sdsRuns);
+      chunkSyncResult = mergeChunkSyncResults(plpSyncResult, sdsSyncResult, chunkRuns);
+
+      const remainingPlp = readJsonNumber(plpSyncResult, 'remaining_documents') ?? 0;
+      const remainingSds = readJsonNumber(sdsSyncResult, 'remaining_documents') ?? 0;
+      const totalRemaining = remainingPlp + remainingSds;
+
+      if (totalRemaining > 0) {
         throw new Error(
           `Chunk sync reached the safety cap after ${chunkRuns} pass${
             chunkRuns === 1 ? '' : 'es'
-          } with ${remainingDocuments} document${
-            remainingDocuments === 1 ? '' : 's'
-          } still pending. Run the chunk step again before embeddings.`,
+          } with ${totalRemaining} document${
+            totalRemaining === 1 ? '' : 's'
+          } still pending (${remainingPlp} PLP, ${remainingSds} SDS). Run the chunk step again before embeddings.`,
         );
       }
     }

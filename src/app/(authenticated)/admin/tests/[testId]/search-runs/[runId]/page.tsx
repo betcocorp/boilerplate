@@ -210,6 +210,7 @@ export default async function AdminSearchRunDetailsPage({
           stats={{
             passCount,
             failCount,
+            erroredCount: 0,
             incompleteCount,
             started_at: result.started_at ?? '',
           }}

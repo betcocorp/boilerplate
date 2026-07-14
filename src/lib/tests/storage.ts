@@ -5,14 +5,8 @@ const TEST_BUCKET = 'retool-360';
 const TEST_PREFIX = 'bex';
 
 function getAwsCredentials() {
-  const accessKeyId =
-    process.env.AWS_ACCESS_WRITE_KEY_ID?.trim() ||
-    process.env.AWS_ACCESS_READ_KEY_ID?.trim() ||
-    process.env.AWS_ACCESS_KEY_ID?.trim();
-  const secretAccessKey =
-    process.env.AWS_SECRET_WRITE_ACCESS_KEY?.trim() ||
-    process.env.AWS_SECRET_READ_ACCESS_KEY?.trim() ||
-    process.env.AWS_SECRET_ACCESS_KEY?.trim();
+  const accessKeyId = process.env.AWS_360_WRITE_ACCESS_KEY_ID?.trim();
+  const secretAccessKey = process.env.AWS_360_WRITE_SECRET_ACCESS_KEY?.trim();
 
   if (!accessKeyId || !secretAccessKey) {
     return undefined;
@@ -22,10 +16,7 @@ function getAwsCredentials() {
 }
 
 function getS3Client() {
-  const region =
-    process.env.SDS_S3_REGION?.trim() ||
-    process.env.AWS_REGION?.trim() ||
-    'us-east-2';
+  const region = process.env.AWS_360_REGION?.trim() || 'us-east-1';
   const credentials = getAwsCredentials();
 
   return new S3Client({
@@ -63,7 +54,7 @@ export async function uploadTestCsvToS3(params: {
         ? error.message
         : 'Unknown S3 upload credentials failure.';
     throw new Error(
-      `Unable to upload test CSV to s3://${TEST_BUCKET}/${key}. Configure AWS credentials (AWS_ACCESS_WRITE_KEY_ID/AWS_SECRET_WRITE_ACCESS_KEY or AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY). Original error: ${message}`,
+      `Unable to upload test CSV to s3://${TEST_BUCKET}/${key}. Configure AWS credentials (AWS_360_WRITE_ACCESS_KEY_ID / AWS_360_WRITE_SECRET_ACCESS_KEY). Original error: ${message}`,
     );
   }
 

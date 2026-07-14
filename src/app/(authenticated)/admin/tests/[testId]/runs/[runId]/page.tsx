@@ -7,6 +7,7 @@ import { ResultItemMessageCell } from '~/components/admin/tests/ResultItemMessag
 import { RetrievedChunksPreview } from '~/components/admin/tests/RetrievedChunksPreview';
 import { RunAtAGlanceCharts } from '~/components/admin/tests/RunAtAGlanceCharts';
 import { RunExecutionProgress } from '~/components/admin/tests/RunExecutionProgress';
+import { RunInsightsPanel } from '~/components/admin/tests/RunInsightsPanel';
 import { RunItemResultsCsvDownload } from '~/components/admin/tests/RunItemResultsCsvDownload';
 import {
   TestRunNotesDisplay,
@@ -33,26 +34,27 @@ import {
 import { listWorkflowRunsByIds } from '~/lib/conversations/workflow-repository';
 import { resolveResponsesModel } from '~/lib/openai/client';
 import {
-  countResultItemsByResultId,
-  getTestById,
-  getTestItemsByTestId,
-  getTestResultById,
-  listAllResultItemsByResultId,
-} from '~/lib/tests/repository';
-import { formatDate, formatDurationSeconds } from '~/lib/utils/time';
-import {
   formatExpectedShouldAnswerLabel as formatExpectedShouldAnswerCell,
   formatItemSimilarityConfidenceLabel,
   formatRetrievedChunksForCsv,
   formatTimingBreakdownLabel,
 } from '~/lib/tests/format';
 import {
+  countResultItemsByResultId,
+  getTestById,
+  getTestItemsByTestId,
+  getTestResultById,
+  listAllResultItemsByResultId,
+} from '~/lib/tests/repository';
+import {
   extractItemSimilarityScore,
   extractModelTag,
   extractProgress,
   extractRetrievedDocumentChunks,
+  extractRoutingDecision,
   extractWorkflowRunId,
 } from '~/lib/tests/response-payload';
+import { formatDate, formatDurationSeconds } from '~/lib/utils/time';
 
 import { deleteTestRunAction } from '../../../actions';
 
@@ -75,6 +77,13 @@ export default async function AdminTestRunDetailsPage({
   const query = await searchParams;
   const success = typeof query.success === 'string' ? query.success : null;
   const error = typeof query.error === 'string' ? query.error : null;
+  const filterParam = typeof query.filter === 'string' ? query.filter : 'all';
+  const activeFilter: 'all' | 'passed' | 'failed' =
+    filterParam === 'passed'
+      ? 'passed'
+      : filterParam === 'failed'
+        ? 'failed'
+        : 'all';
 
   const [test, result] = await Promise.all([
     getTestById(testId).catch(() => null),
@@ -116,6 +125,11 @@ export default async function AdminTestRunDetailsPage({
     0,
     result.total_items - passCount - failCount,
   );
+  const erroredCount = resultItems.filter((item) => {
+    if (item.status === 'failed') return true;
+    const p = item.response_payload;
+    return p !== null && typeof p === 'object' && !Array.isArray(p) && 'error' in p;
+  }).length;
 
   const chronologicalItems = [...resultItems].sort((a, b) => {
     if (a.created_at === b.created_at) {
@@ -155,7 +169,8 @@ export default async function AdminTestRunDetailsPage({
   ];
   const similarityBuckets = {
     high: similarityScores.filter((s) => s >= similarityAvg).length,
-    mid: similarityScores.filter((s) => s >= similarityMin && s < similarityAvg).length,
+    mid: similarityScores.filter((s) => s >= similarityMin && s < similarityAvg)
+      .length,
     low: similarityScores.filter((s) => s < similarityMin).length,
     avgThreshold: similarityAvg,
     minThreshold: similarityMin,
@@ -196,6 +211,7 @@ export default async function AdminTestRunDetailsPage({
         modelByWorkflowRunId.get(
           extractWorkflowRunId(row.response_payload) || '',
         ) ?? 'n/a',
+      agent: extractRoutingDecision(row.response_payload) ?? 'n/a',
       rounds_cache_search: formatTimingBreakdownLabel(row.response_payload),
       message: row.error_message || row.response_text || 'n/a',
       item_detail_path: `/admin/tests/${test.id}/items/${row.test_item_id}`,
@@ -260,6 +276,7 @@ export default async function AdminTestRunDetailsPage({
           stats={{
             passCount,
             failCount,
+            erroredCount,
             incompleteCount,
             started_at: result?.started_at ?? '',
           }}
@@ -279,170 +296,270 @@ export default async function AdminTestRunDetailsPage({
           totalItems={result.total_items}
         />
 
+        <RunInsightsPanel runId={result.id} />
+
         <section
           className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm"
           id="item-level-results"
         >
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <h2 className="text-lg font-semibold text-slate-900">
-              Item-level results
-            </h2>
-            <RunItemResultsCsvDownload
-              fileBase={`${test.name}-run-${result.id}`}
-              rows={itemLevelCsvRows}
-            />
+            <div className="flex flex-wrap items-center gap-3">
+              <h2 className="text-lg font-semibold text-slate-900">
+                Item-level results
+              </h2>
+            </div>
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1">
+                {(
+                  [
+                    {
+                      value: 'all',
+                      label: 'All',
+                      count: chronologicalItems.length,
+                    },
+                    {
+                      value: 'passed',
+                      label: 'Passed',
+                      count: chronologicalItems.filter((r) => r.passed).length,
+                    },
+                    {
+                      value: 'failed',
+                      label: 'Failed',
+                      count: chronologicalItems.filter((r) => !r.passed).length,
+                    },
+                  ] as const
+                ).map(({ value, label, count }) => (
+                  <Link
+                    key={value}
+                    href={`?filter=${value}#item-level-results`}
+                    className={`rounded-md px-3 py-1 text-sm font-medium transition-colors ${
+                      activeFilter === value
+                        ? 'bg-white text-slate-900 shadow-sm'
+                        : 'text-slate-500 hover:text-slate-700'
+                    }`}
+                  >
+                    {label}
+                    <span
+                      className={`ml-1.5 rounded-full px-1.5 py-0.5 text-xs ${
+                        activeFilter === value
+                          ? value === 'failed'
+                            ? 'bg-red-100 text-red-700'
+                            : value === 'passed'
+                              ? 'bg-emerald-100 text-emerald-700'
+                              : 'bg-slate-100 text-slate-600'
+                          : 'bg-slate-200 text-slate-500'
+                      }`}
+                    >
+                      {count}
+                    </span>
+                  </Link>
+                ))}
+              </div>
+              <RunItemResultsCsvDownload
+                fileBase={`${test.name}-run-${result.id}`}
+                rows={itemLevelCsvRows}
+              />
+            </div>
           </div>
           <div className="relative max-h-[min(70vh,48rem)] overflow-auto overscroll-contain rounded-2xl border border-slate-200">
-          <table className="w-full min-w-[1280px] caption-bottom text-sm">
-            <TableHeader className="sticky top-0 z-10 bg-white shadow-[0_1px_0_0_rgb(226_232_240)] [&_tr]:border-b-0">
-              <TableRow>
-                <TableHead>Row</TableHead>
-                <TableHead>Prompt</TableHead>
-                <TableHead className="whitespace-nowrap">Answer?</TableHead>
-                <TableHead>Passed</TableHead>
-                <TableHead>Sim / conf</TableHead>
-                <TableHead>Elapsed</TableHead>
-                <TableHead>Model</TableHead>
-                <TableHead>Rounds | Cache | Elapsed</TableHead>
-                <TableHead>Message</TableHead>
-                <TableHead>History</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {displayResultItems.length === 0 ? (
+            <table className="w-full min-w-[1280px] caption-bottom text-sm">
+              <TableHeader className="sticky top-0 z-10 bg-white shadow-[0_1px_0_0_rgb(226_232_240)] [&_tr]:border-b-0">
                 <TableRow>
-                  <TableCell className="text-slate-500" colSpan={10}>
-                    No item-level results yet.
-                  </TableCell>
+                  <TableHead>Row</TableHead>
+                  <TableHead>Prompt</TableHead>
+                  <TableHead className="whitespace-nowrap">Answer?</TableHead>
+                  <TableHead>Passed</TableHead>
+                  <TableHead>Sim / conf</TableHead>
+                  <TableHead>Elapsed</TableHead>
+                  <TableHead>Model</TableHead>
+                  <TableHead>Agent</TableHead>
+                  <TableHead>Rounds | Cache | Elapsed</TableHead>
+                  <TableHead>Message</TableHead>
+                  <TableHead>History</TableHead>
                 </TableRow>
-              ) : (
-                chronologicalItems.map((row) => {
-                  const expectedShouldAnswer =
-                    expectedShouldAnswerByItemId.get(row.test_item_id) ?? null;
-                  return (
-                    <TableRow id={`run-item-result-${row.id}`} key={row.id}>
-                      <TableCell>
-                        <Link
-                          className="text-sky-700 underline-offset-2 hover:underline"
-                          href={`/admin/tests/${test.id}/items/${row.test_item_id}`}
-                        >
-                          {row.row_index}
-                        </Link>
-                      </TableCell>
-                      <TableCell className="max-w-[420px] whitespace-normal text-xs text-slate-700">
-                        <Link
-                          className="text-sky-700 underline-offset-2 hover:underline"
-                          href={`/admin/tests/${test.id}/items/${row.test_item_id}`}
-                        >
-                          {promptByItemId.get(row.test_item_id) || 'n/a'}
-                        </Link>
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap">
-                        <Badge
-                          className={
-                            expectedShouldAnswer === true
-                              ? 'border-emerald-600/45 bg-emerald-600/12 text-emerald-900 dark:border-emerald-500/40 dark:bg-emerald-500/15 dark:text-emerald-50'
-                              : undefined
-                          }
-                          variant={
-                            expectedShouldAnswer === null
-                              ? 'secondary'
-                              : expectedShouldAnswer === true
-                                ? 'outline'
-                                : 'destructive'
-                          }
-                        >
-                          {formatExpectedShouldAnswerCell(expectedShouldAnswer)}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <Badge
-                          className={
-                            row.passed
-                              ? 'border-emerald-600/45 bg-emerald-600/12 text-emerald-900 dark:border-emerald-500/40 dark:bg-emerald-500/15 dark:text-emerald-50'
-                              : undefined
-                          }
-                          variant={row.passed ? 'outline' : 'destructive'}
-                        >
-                          {row.passed ? 'Yes' : 'No'}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap font-mono text-xs text-slate-700">
-                        <Badge variant="outline">
-                          {formatItemSimilarityConfidenceLabel(
-                            row.response_payload,
-                          )}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <Badge
-                          variant={
-                            row.elapsed_ms > 10_000
-                              ? 'destructive'
-                              : 'secondary'
-                          }
-                        >
-                          {formatDurationSeconds(row.elapsed_ms)}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="outline">
-                          {modelByWorkflowRunId.get(
-                            extractWorkflowRunId(row.response_payload) || '',
-                          ) || 'n/a'}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="max-w-[220px] whitespace-normal text-xs text-slate-600">
-                        {formatTimingBreakdownLabel(row.response_payload)}
-                      </TableCell>
-                      <TableCell className="max-w-[420px] whitespace-normal text-xs text-slate-600">
-                        <ResultItemMessageCell
-                          errorMessage={row.error_message}
-                          responseText={row.response_text}
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          <Dialog>
-                            <DialogTrigger asChild>
-                              <Button variant="outline">Docs</Button>
-                            </DialogTrigger>
-                            <DialogContent>
-                              <DialogHeader>
-                                <DialogTitle>Document chunks</DialogTitle>
-                                <DialogDescription>
-                                  Chunks retrieved from rag search.
-                                </DialogDescription>
-                              </DialogHeader>
-                              <div className="-mx-4 no-scrollbar max-h-[50vh] overflow-y-auto px-4">
-                                <RetrievedChunksPreview
-                                  chunks={extractRetrievedDocumentChunks(
-                                    row.response_payload,
-                                  )}
-                                />
-                              </div>
-                            </DialogContent>
-                          </Dialog>
-                          <Button asChild size="sm" variant="outline">
+              </TableHeader>
+              <TableBody>
+                {displayResultItems.length === 0 ? (
+                  <TableRow>
+                    <TableCell className="text-slate-500" colSpan={11}>
+                      No item-level results yet.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  chronologicalItems
+                    .filter((row) =>
+                      activeFilter === 'passed'
+                        ? row.passed
+                        : activeFilter === 'failed'
+                          ? !row.passed
+                          : true,
+                    )
+                    .map((row) => {
+                      const expectedShouldAnswer =
+                        expectedShouldAnswerByItemId.get(row.test_item_id) ??
+                        null;
+                      return (
+                        <TableRow id={`run-item-result-${row.id}`} key={row.id}>
+                          <TableCell>
                             <Link
+                              className="text-sky-700 underline-offset-2 hover:underline"
                               href={`/admin/tests/${test.id}/items/${row.test_item_id}`}
                             >
-                              View
+                              {row.row_index}
                             </Link>
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })
-              )}
-            </TableBody>
-          </table>
+                          </TableCell>
+                          <TableCell className="max-w-[420px] whitespace-normal text-xs text-slate-700">
+                            <Link
+                              className="text-sky-700 underline-offset-2 hover:underline"
+                              href={`/admin/tests/${test.id}/items/${row.test_item_id}`}
+                            >
+                              {promptByItemId.get(row.test_item_id) || 'n/a'}
+                            </Link>
+                          </TableCell>
+                          <TableCell className="whitespace-nowrap">
+                            <Badge
+                              className={
+                                expectedShouldAnswer === true
+                                  ? 'border-emerald-600/45 bg-emerald-600/12 text-emerald-900 dark:border-emerald-500/40 dark:bg-emerald-500/15 dark:text-emerald-50'
+                                  : undefined
+                              }
+                              variant={
+                                expectedShouldAnswer === null
+                                  ? 'secondary'
+                                  : expectedShouldAnswer === true
+                                    ? 'outline'
+                                    : 'destructive'
+                              }
+                            >
+                              {formatExpectedShouldAnswerCell(
+                                expectedShouldAnswer,
+                              )}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <Badge
+                              className={
+                                row.passed
+                                  ? 'border-emerald-600/45 bg-emerald-600/12 text-emerald-900 dark:border-emerald-500/40 dark:bg-emerald-500/15 dark:text-emerald-50'
+                                  : undefined
+                              }
+                              variant={row.passed ? 'outline' : 'destructive'}
+                            >
+                              {row.passed ? 'Yes' : 'No'}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="whitespace-nowrap font-mono text-xs text-slate-700">
+                            <Badge variant="outline">
+                              {formatItemSimilarityConfidenceLabel(
+                                row.response_payload,
+                              )}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <Badge
+                              variant={
+                                row.elapsed_ms > 10_000
+                                  ? 'destructive'
+                                  : 'secondary'
+                              }
+                            >
+                              {formatDurationSeconds(row.elapsed_ms)}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="outline">
+                              {modelByWorkflowRunId.get(
+                                extractWorkflowRunId(row.response_payload) ||
+                                  '',
+                              ) || 'n/a'}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="whitespace-nowrap">
+                            {(() => {
+                              const agent = extractRoutingDecision(row.response_payload);
+                              if (!agent) return <span className="text-xs text-slate-400">—</span>;
+                              const colorClass =
+                                agent === 'product'
+                                  ? 'border-sky-600/45 bg-sky-600/12 text-sky-900'
+                                  : agent === 'bathroom'
+                                    ? 'border-purple-600/45 bg-purple-600/12 text-purple-900'
+                                    : agent === 'dilution'
+                                      ? 'border-amber-600/45 bg-amber-600/12 text-amber-900'
+                                      : agent === 'floor'
+                                        ? 'border-emerald-600/45 bg-emerald-600/12 text-emerald-900'
+                                        : '';
+                              return (
+                                <Badge className={colorClass} variant="outline">
+                                  {agent}
+                                </Badge>
+                              );
+                            })()}
+                          </TableCell>
+                          <TableCell className="max-w-[220px] whitespace-normal text-xs text-slate-600">
+                            {formatTimingBreakdownLabel(row.response_payload)}
+                          </TableCell>
+                          <TableCell className="max-w-[420px] whitespace-normal text-xs text-slate-600">
+                            <ResultItemMessageCell
+                              errorMessage={row.error_message}
+                              responseText={row.response_text}
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-2">
+                              <Dialog>
+                                <DialogTrigger asChild>
+                                  <Button variant="outline">Docs</Button>
+                                </DialogTrigger>
+                                <DialogContent>
+                                  <DialogHeader>
+                                    <DialogTitle>Document chunks</DialogTitle>
+                                    <DialogDescription>
+                                      Chunks retrieved from rag search.
+                                    </DialogDescription>
+                                  </DialogHeader>
+                                  <div className="-mx-4 no-scrollbar max-h-[50vh] overflow-y-auto px-4">
+                                    <RetrievedChunksPreview
+                                      chunks={extractRetrievedDocumentChunks(
+                                        row.response_payload,
+                                      )}
+                                    />
+                                  </div>
+                                </DialogContent>
+                              </Dialog>
+                              <Button asChild size="sm" variant="outline">
+                                <Link
+                                  href={`/admin/tests/${test.id}/items/${row.test_item_id}`}
+                                >
+                                  View
+                                </Link>
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })
+                )}
+              </TableBody>
+            </table>
           </div>
           <p className="mt-3 text-xs text-slate-500">
-            Showing {Math.min(200, allResultItems.length)} of{' '}
-            {allResultItems.length} item-level results from{' '}
-            {formatDate(result.created_at)}.
+            {activeFilter === 'all' ? (
+              <>
+                Showing {Math.min(200, allResultItems.length)} of{' '}
+                {allResultItems.length} item-level results from{' '}
+                {formatDate(result.created_at)}.
+              </>
+            ) : (
+              <>
+                Showing{' '}
+                {
+                  chronologicalItems.filter((r) =>
+                    activeFilter === 'passed' ? r.passed : !r.passed,
+                  ).length
+                }{' '}
+                {activeFilter} results out of {allResultItems.length} total.
+              </>
+            )}
           </p>
         </section>
       </main>

@@ -9,18 +9,25 @@ export const productSupportTools: Tool[] = [
     name: 'search_product_docs',
     strict: false,
     description:
-      'Search Betco product documentation (RAG). Use for general product + topic questions. Returns up to 3 sources where each source is a full approved document (read `documentBody`, not just `snippet`).',
+      'Search Betco product documentation (RAG). Use for general product + topic questions. Returns up to 3 sources where each source is a full approved document (read `documentBody`, not just `snippet`). Pass `freeformQuery` (and leave `productName` empty) when the product name is unknown.',
     parameters: {
       type: 'object',
       properties: {
-        productName: { type: 'string' },
-        topic: { type: 'string' },
+        productName: {
+          type: 'string',
+          description: 'Specific Betco product name when known (e.g. "Green Earth All Purpose"). Leave empty when using freeformQuery.',
+        },
+        topic: { type: 'string', description: 'Topic or question type (e.g. "dilution", "kill claims", "PPE").' },
         surfaceType: {
           type: 'string',
           description: 'Optional surface context.',
         },
+        freeformQuery: {
+          type: 'string',
+          description: 'Use instead of productName for broad searches where the product is not yet known (e.g. "best product for removing mineral scale from toilet bowls").',
+        },
       },
-      required: ['productName', 'topic'],
+      required: ['topic'],
     },
   },
   {
@@ -124,6 +131,49 @@ export const productSupportTools: Tool[] = [
         issueType: { type: 'string' },
       },
       required: ['issueType'],
+    },
+  },
+  {
+    type: 'function',
+    name: 'get_products_in_category',
+    strict: false,
+    description:
+      'Return Betco product lines that belong to a given website category (e.g. "Floor Care", "Disinfectants", "Odor Management"). Use this for filter-style questions like "what floor care products do you have?" or "show me all disinfectants". Pass the exact or approximate category name; set categoryLevel to narrow to prod_type, sub_prod_type, sub_child_prod_type, or prod_class.',
+    parameters: {
+      type: 'object',
+      properties: {
+        categoryName: {
+          type: 'string',
+          description: 'Category name to search for (e.g. "Floor Care", "Deodorizers", "Glass", "Air Care").',
+        },
+        categoryLevel: {
+          type: 'string',
+          enum: ['prod_type', 'sub_prod_type', 'sub_child_prod_type', 'prod_class', 'any'],
+          description: 'Which level of the category hierarchy to match against. Defaults to "any".',
+        },
+        maxResults: {
+          type: 'number',
+          description: 'Max products to return (default 20, max 50).',
+        },
+      },
+      required: ['categoryName'],
+    },
+  },
+  {
+    type: 'function',
+    name: 'get_product_category',
+    strict: false,
+    description:
+      'Return the website category (prod_type → sub_prod_type → sub_child_prod_type) for a specific Betco product. Use when the user asks what category a product falls under, or to find related products in the same category.',
+    parameters: {
+      type: 'object',
+      properties: {
+        productId: {
+          type: 'string',
+          description: 'Betco product name (e.g. "AF315") or product code (e.g. "315").',
+        },
+      },
+      required: ['productId'],
     },
   },
   {

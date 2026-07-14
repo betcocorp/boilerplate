@@ -179,6 +179,7 @@ export async function ragQueryForProductKnowledgeWithMeta(input: {
       productLineKey: explicitKey,
       sectionType: sectionType ?? undefined,
       scope: 'all',
+      useHybrid: true,
     });
 
     const curated = await curateUniqueDocumentSources(result.matches, {
@@ -213,6 +214,7 @@ export async function ragQueryForProductKnowledgeWithMeta(input: {
       limit: SIMILARITY_CANDIDATE_FETCH_LIMIT,
       sectionType: sectionType ?? undefined,
       scope: 'products',
+      useHybrid: true,
     });
 
     const curated = await curateUniqueDocumentSources(result.matches, {
@@ -245,6 +247,7 @@ export async function ragQueryForProductKnowledgeWithMeta(input: {
     limit: SIMILARITY_CANDIDATE_FETCH_LIMIT,
     sectionType: sectionType ?? undefined,
     scope: 'all',
+    useHybrid: true,
   });
 
   const resolution = resolveProductLineFromMatches(broadResult.matches);
@@ -277,6 +280,7 @@ export async function ragQueryForProductKnowledgeWithMeta(input: {
     productLineKey: resolution.lockedProductLineKey,
     sectionType: sectionType ?? undefined,
     scope: 'all',
+    useHybrid: true,
   });
   const anchoredCurated = await curateUniqueDocumentSources(anchoredResult.matches, {
     limit,

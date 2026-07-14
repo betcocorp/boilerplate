@@ -44,6 +44,7 @@ function responseIndicatesUnableToAssistOrRefusal(responseText: string): boolean
     'could not find',
     "couldn't find",
     'unable to find',
+    'unable to retrieve',
     "don't have verified",
     'do not have verified',
     'verified first-aid',
@@ -58,6 +59,46 @@ function responseIndicatesUnableToAssistOrRefusal(responseText: string): boolean
     'do not have that information',
     'unable to locate',
     'could not locate',
+    // Clarification-seeking responses — the model is asking for more info instead of answering.
+    // For expected_should_answer=true items these are failures, not passes.
+    'need a bit more detail',
+    'need more detail',
+    'need more specific',
+    'need more information to',
+    'do not have enough retrieved',
+    'not have enough retrieved',
+    'what i still need',
+    'what i need to answer',
+    'currently unable to retrieve',
+    // Tool failure / technical issue patterns — model acknowledged it could not retrieve docs
+    'i encountered a technical issue',
+    'encountered a technical issue',
+    "i'm unable to provide a verified answer",
+    'i am unable to provide a verified answer',
+    'unable to provide a verified answer',
+    "i'm unable to respond with an answer",
+    'i am unable to respond with an answer',
+    'unable to respond with an answer',
+    'unable to respond with a verified',
+    // Canonical normalized decline phrase used across all agents
+    "i don't have the information needed",
+    'i do not have the information needed',
+    "don't have the information needed",
+    'do not have the information needed',
+    // Scope gate phrase — agent rejected an in-scope question by treating it as out-of-scope
+    "i'm not able to help with that topic",
+    'i am not able to help with that topic',
+    'not able to help with that topic',
+    // Guessing / speculation patterns — agent speculated instead of declining
+    'experiencing difficulty retrieving',
+    'difficulty retrieving',
+    'betco typically offers',
+    'betco typically provides',
+    'would you like me to attempt another search',
+    'would you like to attempt another search',
+    'i can try again to find',
+    'you may consult with a betco',
+    'consult with a betco sales representative',
   ];
 
   return phrases.some((p) => t.includes(p));
@@ -97,6 +138,34 @@ function responseIndicatesDeclineStyleAnswer(responseText: string): boolean {
     'not able to verify',
     'cannot determine',
     "can't determine",
+    'outside the scope',
+    'outside of the scope',
+    "i'm sorry, but that topic",
+    'that topic is outside',
+    // Soft redirects — model refuses to answer and points elsewhere
+    'you might want to consult',
+    'i recommend consulting',
+    'i would recommend consulting',
+    'you may want to consult',
+    'i suggest consulting',
+    'recommend reaching out to',
+    'i focus on providing information about betco',
+    "i'm here to provide information and support related to betco",
+    // Tool failure acknowledgements
+    'i encountered a technical issue',
+    'encountered a technical issue',
+    'unable to provide a verified answer',
+    'unable to respond with an answer',
+    'unable to respond with a verified',
+    // Canonical normalized decline phrase used across all agents
+    "i don't have the information needed",
+    'i do not have the information needed',
+    "don't have the information needed",
+    'do not have the information needed',
+    // Scope gate phrase
+    "i'm not able to help with that topic",
+    'i am not able to help with that topic',
+    'not able to help with that topic',
   ];
 
   return indicators.some((p) => t.includes(p));
@@ -152,20 +221,22 @@ function evaluateTestOutcome(params: {
       return { passed: true, failureReason: null };
     }
 
+    // A proper decline is always a pass for negative tests, regardless of expected_result_type.
+    if (responseIndicatesDeclineStyleAnswer(params.responseText)) {
+      return { passed: true, failureReason: null };
+    }
+
     if (expectedResultType === 'decline' || expectedResultType === 'none') {
-      if (responseIndicatesDeclineStyleAnswer(params.responseText)) {
-        return { passed: true, failureReason: null };
-      }
       return {
         passed: false,
-        failureReason: `This row expects a decline-style answer (expected_result_type "${expectedResultType}") — e.g. inability to verify, no verified information, or phrasing with "can't"/"cannot"; the response did not match decline-style criteria.`,
+        failureReason: `This row expects a decline-style answer (expected_result_type "${expectedResultType}") — e.g. inability to verify, no verified information, or phrasing with "can't"/"cannot" or "outside the scope"; the response did not match decline-style criteria.`,
       };
     }
 
     return {
       passed: false,
       failureReason:
-        'This row expects no assistant answer (expected_should_answer = false) but the model returned a non-empty response.',
+        'This row expects no assistant answer (expected_should_answer = false) but the model returned a non-empty response without a recognizable decline.',
     };
   }
 

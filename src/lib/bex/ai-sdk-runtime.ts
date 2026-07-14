@@ -23,7 +23,10 @@ export type AiSdkHistoryMessage = {
 };
 
 /** Responses-style tool choice (what the workflow already computes), mapped to the AI SDK shape internally. */
-export type ResponsesToolChoice = 'auto' | { type: 'function'; name: string };
+export type ResponsesToolChoice =
+  | 'auto'
+  | 'required'
+  | { type: 'function'; name: string };
 
 export type AiSdkRuntimeOptions = {
   modelTag?: string;
@@ -86,6 +89,9 @@ function buildAiSdkTools(executeTool: ExecuteToolFn, toolTrace: ToolTraceEntry[]
 function mapToolChoice(toolChoice: ResponsesToolChoice | undefined): ToolChoice<ToolSet> {
   if (toolChoice && typeof toolChoice === 'object' && toolChoice.type === 'function') {
     return { type: 'tool', toolName: toolChoice.name };
+  }
+  if (toolChoice === 'required') {
+    return 'required';
   }
   return 'auto';
 }

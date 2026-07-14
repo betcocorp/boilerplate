@@ -1,10 +1,16 @@
 import { NextResponse } from 'next/server';
 
+// Allow up to 5 minutes — sequential search evals over large gold sets
+// can take 60–120 s, which exceeds the default Vercel function timeout.
+export const maxDuration = 300;
+
 import { executeSearchRun } from '~/lib/tests/search-run-executor';
 import { executeTestRun } from '~/lib/tests/run-executor';
 import {
   claimQueuedTestResultForExecution,
+  countPassedAndFailedByResultId,
   countResultItemsByResultId,
+  deleteErroredResultItems,
   getTestResultById,
   sumResultItemsElapsedMsByResultId,
   updateTestRecord,
@@ -107,9 +113,9 @@ export async function POST(
     const claimed = await claimQueuedTestResultForExecution(run.id);
     if (claimed) {
       if (run.run_mode === 'search') {
-        void executeSearchRun(run.id);
+        await executeSearchRun(run.id);
       } else {
-        void executeTestRun(run.id);
+        await executeTestRun(run.id);
       }
       return NextResponse.json({ ok: true, state: 'started' });
     }
@@ -172,9 +178,9 @@ export async function PATCH(
     });
     await updateTestRecord(run.test_id, { status: 'running' });
     if (run.run_mode === 'search') {
-      void executeSearchRun(run.id);
+      await executeSearchRun(run.id);
     } else {
-      void executeTestRun(run.id);
+      await executeTestRun(run.id);
     }
 
     return NextResponse.json({ ok: true, state: 'resumed' });
@@ -210,13 +216,58 @@ export async function PATCH(
     const claimed = await claimQueuedTestResultForExecution(run.id);
     if (claimed) {
       if (run.run_mode === 'search') {
-        void executeSearchRun(run.id);
+        await executeSearchRun(run.id);
       } else {
-        void executeTestRun(run.id);
+        await executeTestRun(run.id);
       }
       return NextResponse.json({ ok: true, state: 'restarted' });
     }
     return NextResponse.json({ ok: true, state: 'queued_for_restart' });
+  }
+
+  if (action === 'retry_failed') {
+    if (run.status === 'running' || run.status === 'queued') {
+      return NextResponse.json(
+        { error: 'Cannot retry while run is actively running or queued. Pause or cancel first.' },
+        { status: 409 },
+      );
+    }
+
+    const deleted = await deleteErroredResultItems(run.id);
+    if (deleted === 0) {
+      return NextResponse.json({ ok: true, state: 'no_errored_items' });
+    }
+
+    const { passed: newPassed, failed: newFailed } = await countPassedAndFailedByResultId(run.id);
+    const currentSummary =
+      run.summary && typeof run.summary === 'object' && !Array.isArray(run.summary)
+        ? (run.summary as Record<string, unknown>)
+        : {};
+
+    await updateTestResult(run.id, {
+      status: 'queued',
+      passed_items: newPassed,
+      failed_items: newFailed,
+      completed_at: null,
+      summary: {
+        ...currentSummary,
+        runner_state: 'queued',
+        completed_items: newPassed + newFailed,
+        running_since: null,
+      },
+    });
+    await updateTestRecord(run.test_id, { status: 'ready' });
+
+    const claimed = await claimQueuedTestResultForExecution(run.id);
+    if (claimed) {
+      if (run.run_mode === 'search') {
+        await executeSearchRun(run.id);
+      } else {
+        await executeTestRun(run.id);
+      }
+      return NextResponse.json({ ok: true, state: 'retrying_failed' });
+    }
+    return NextResponse.json({ ok: true, state: 'queued_for_retry' });
   }
 
   if (action === 'cancel') {

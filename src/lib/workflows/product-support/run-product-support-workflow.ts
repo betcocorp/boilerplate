@@ -152,22 +152,14 @@ function classifyEarlyDecline(userMessage: string): EarlyDeclineDecision | null 
   if (asksChemicalMixing) {
     return {
       reason: 'chemical_mixing_or_safety',
-      text: [
-        'I cannot advise on mixing chemicals from this prompt alone.',
-        '',
-        'For safety, follow the product label and SDS exactly and involve your EHS lead before any mixing decision.',
-      ].join('\n'),
+      text: "I'm not able to advise on chemical mixing. Follow the product label and SDS, and involve your EHS lead.",
     };
   }
 
   if (/(legal|osha|compliant|compliance|regulation|regulatory)/.test(text)) {
     return {
       reason: 'legal_or_compliance',
-      text: [
-        'I cannot provide legal or regulatory determinations from this prompt alone.',
-        '',
-        'Please use your official compliance process and verify requirements against current OSHA/regional guidance and product SDS documentation.',
-      ].join('\n'),
+      text: "I'm not able to provide legal or compliance guidance. Please use your official compliance process.",
     };
   }
 
@@ -178,26 +170,18 @@ function classifyEarlyDecline(userMessage: string): EarlyDeclineDecision | null 
   ) {
     return {
       reason: 'storage_or_expiration',
-      text: [
-        'I cannot verify safety or efficacy for expired or long-stored product from this prompt alone.',
-        '',
-        'Please confirm lot/expiry details and follow the product label and SDS before use.',
-      ].join('\n'),
+      text: "I'm not able to verify safety for expired or stored products. Follow the product label and SDS before use.",
     };
   }
 
   if (
-    /(what should i use|what do you recommend|what'?s the best|which .* should we use|best .* for)/.test(
+    /(what should i use|what do you recommend|what'?s the best|which .* should we use)/.test(
       text,
     )
   ) {
     return {
       reason: 'broad_recommendation_without_context',
-      text: [
-        'I cannot give a specific product recommendation from this prompt alone.',
-        '',
-        'Share your exact surface/material, soil type, application method, and any safety/compliance constraints, and I can provide a precise recommendation.',
-      ].join('\n'),
+      text: "I need more details to make a specific recommendation. Please share your surface, soil type, and application method.",
     };
   }
 
@@ -449,6 +433,8 @@ function collectRetrievedDocumentChunksFromToolOutputs(
         sources?: Array<{
           documentId?: string;
           chunkId?: string;
+          documentKind?: string;
+          title?: string;
         }>;
       };
       for (const s of payload.sources ?? []) {
@@ -464,6 +450,8 @@ function collectRetrievedDocumentChunksFromToolOutputs(
         map.set(key, {
           document_id: s.documentId,
           chunk_id: chunkId,
+          document_kind: typeof s.documentKind === 'string' ? s.documentKind : null,
+          document_title: typeof s.title === 'string' ? s.title : null,
         });
       }
     } catch {
@@ -1005,7 +993,7 @@ export async function runProductSupportWorkflow(input: {
 
     const toolChoice = shouldForceCrossReferenceLookup(input.userMessage)
       ? ({ type: 'function', name: 'lookup_cross_reference' } as const)
-      : ('auto' as const);
+      : ('required' as const);
 
     // Generation runtime: AI SDK (`streamText`) when BEX_AI_SDK_GENERATION_ENABLED, else the
     // OpenAI Responses tool loop. Both return the same { assistantText, finalResponseId,

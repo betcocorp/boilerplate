@@ -4,6 +4,8 @@ import { CartesianGrid, Line, LineChart, XAxis, YAxis } from 'recharts';
 
 import {
   ChartContainer,
+  ChartLegend,
+  ChartLegendContent,
   ChartTooltip,
   ChartTooltipContent,
   type ChartConfig,
@@ -77,6 +79,7 @@ export function SimilarityFailRateTrendChart({
               />
             }
           />
+          <ChartLegend content={<ChartLegendContent />} />
           <Line
             type="monotone"
             dataKey="avgSimilarity"

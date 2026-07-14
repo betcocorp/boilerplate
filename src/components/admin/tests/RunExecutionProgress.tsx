@@ -14,6 +14,7 @@ type RunExecutionProgressProps = {
   stats: {
     passCount: number;
     failCount: number;
+    erroredCount: number;
     incompleteCount: number;
     started_at: string;
   };
@@ -57,7 +58,7 @@ export function RunExecutionProgress({
       : 0,
   );
   const [actionPending, setActionPending] = useState<
-    null | 'pause' | 'resume' | 'cancel' | 'restart'
+    null | 'pause' | 'resume' | 'cancel' | 'restart' | 'retry_failed'
   >(null);
   const latestSnapshot = useRef({
     status: initialStatus,
@@ -195,8 +196,10 @@ export function RunExecutionProgress({
   const canResume = status === 'paused';
   const canCancel = !isTerminalStatus(status) && status !== 'cancelled';
   const isStalled = status === 'running' && completedItems === 0 && totalItems > 0;
+  const isActivelyRunning = status === 'running' || status === 'queued';
+  const canRetryFailed = !isActivelyRunning && stats.erroredCount > 0;
 
-  const handleRunAction = async (action: 'pause' | 'resume' | 'cancel' | 'restart') => {
+  const handleRunAction = async (action: 'pause' | 'resume' | 'cancel' | 'restart' | 'retry_failed') => {
     setActionPending(action);
     try {
       const response = await fetch(`/api/admin/tests/runs/${runId}`, {
@@ -221,6 +224,9 @@ export function RunExecutionProgress({
         setStatus('cancelled');
       }
       if (payload.state === 'restarted' || payload.state === 'queued_for_restart') {
+        setStatus('running');
+      }
+      if (payload.state === 'retrying_failed' || payload.state === 'queued_for_retry') {
         setStatus('running');
       }
       router.refresh();
@@ -279,6 +285,18 @@ export function RunExecutionProgress({
             variant="outline"
           >
             Restart stalled run
+          </Button>
+        )}
+        {canRetryFailed && (
+          <Button
+            disabled={actionPending !== null}
+            onClick={() => {
+              void handleRunAction('retry_failed');
+            }}
+            size="sm"
+            variant="outline"
+          >
+            {actionPending === 'retry_failed' ? 'Retrying…' : `Retry failed (${stats.erroredCount})`}
           </Button>
         )}
         <Button

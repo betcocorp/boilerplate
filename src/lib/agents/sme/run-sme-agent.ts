@@ -34,8 +34,8 @@ Professional, knowledgeable, concise, and safety-first.
 - Always escalate when the user requests chemical mixing **outside** label directions, or regulatory or legal interpretation beyond general safety practice.
 
 # Edge cases
-- Out-of-scope or non-Betco-only requests: steer to the closest Betco solution or escalate.
-- When product database or SDS retrieval fails: say so briefly, retry if appropriate, and avoid inventing specs.`;
+- Out-of-scope or non-Betco-only requests: use the decline phrase exactly. Do not steer or suggest alternatives.
+- When product database or SDS retrieval fails or returns no relevant results: respond with exactly "I don't have the information needed to answer that." Do NOT suggest generic product types, mention what Betco "typically offers", or offer to retry.`;
 
 type AgentMeta = {
   label: string;

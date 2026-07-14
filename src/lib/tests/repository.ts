@@ -679,6 +679,64 @@ export async function countPassedAndFailedByResultId(
   };
 }
 
+/**
+ * Returns the set of test_item_ids that already have a result record for this run.
+ * Used by executors to skip already-processed items, enabling correct resume and retry behaviour
+ * when result records may have gaps (e.g. after deleting errored items for a retry).
+ */
+export async function getExistingResultItemIds(testResultId: string): Promise<Set<string>> {
+  const supabase = getSupabaseServiceRoleClient();
+  const ids = new Set<string>();
+  let from = 0;
+  while (true) {
+    const result = await supabase
+      .from('test_result_items')
+      .select('test_item_id')
+      .eq('test_result_id', testResultId)
+      .range(from, from + RESULT_ITEMS_PAGE_SIZE - 1);
+    if (result.error) throw new Error(result.error.message);
+    for (const row of result.data ?? []) {
+      ids.add(row.test_item_id);
+    }
+    if (!result.data || result.data.length < RESULT_ITEMS_PAGE_SIZE) break;
+    from += RESULT_ITEMS_PAGE_SIZE;
+  }
+  return ids;
+}
+
+/**
+ * Deletes result items that represent execution errors (not evaluation failures):
+ *   - status='failed'  — test executor catch block (e.g. TypeError: fetch failed)
+ *   - response_payload.error present — search executor catch block
+ * Returns the number of rows deleted.
+ */
+export async function deleteErroredResultItems(testResultId: string): Promise<number> {
+  const supabase = getSupabaseServiceRoleClient();
+  const result = await supabase
+    .from('test_result_items')
+    .select('id, status, response_payload')
+    .eq('test_result_id', testResultId);
+  if (result.error) throw new Error(result.error.message);
+
+  const erroredIds = (result.data ?? [])
+    .filter((item) => {
+      if (item.status === 'failed') return true;
+      const p = item.response_payload;
+      return p !== null && typeof p === 'object' && !Array.isArray(p) && 'error' in p;
+    })
+    .map((item) => item.id);
+
+  if (erroredIds.length === 0) return 0;
+
+  const del = await supabase
+    .from('test_result_items')
+    .delete()
+    .in('id', erroredIds)
+    .select('id');
+  if (del.error) throw new Error(del.error.message);
+  return (del.data ?? []).length;
+}
+
 /** Sum of `elapsed_ms` across all result rows for the run (model time per prompt, not wall clock). */
 export async function sumResultItemsElapsedMsByResultId(testResultId: string) {
   const supabase = getSupabaseServiceRoleClient();
@@ -827,4 +885,20 @@ export async function listLatestFailedTestResultItemsPage(options: {
     rows,
     total: rpcCountToNumber(countRes.data),
   };
+}
+
+/** Fetches all latest-failed items (up to 500) for the grouped-by-category view. */
+export async function listAllLatestFailedItemsForGroupedView(
+  search: string,
+): Promise<LatestFailedTestResultItemView[]> {
+  const supabase = getSupabaseServiceRoleClient();
+  const normalized = normalizeFailureQueueSearch(search);
+  const result = await supabase.rpc('admin_latest_failures_page', {
+    p_search: normalized,
+    p_limit: 500,
+    p_offset: 0,
+  });
+  if (result.error) throw new Error(result.error.message);
+  const data = result.data;
+  return Array.isArray(data) ? (data as LatestFailedTestResultItemView[]) : [];
 }

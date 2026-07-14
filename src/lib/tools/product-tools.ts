@@ -15,7 +15,9 @@ import {
   getApprovedUsageGuidanceInputSchema,
   getCompatibilityRulesInputSchema,
   getEscalationPolicyInputSchema,
+  getProductCategoryInputSchema,
   getProductSpecInputSchema,
+  getProductsInCategoryInputSchema,
   getSafetyConstraintsInputSchema,
   listAllowedSurfacesInputSchema,
   listDisallowedUsesInputSchema,
@@ -24,6 +26,7 @@ import {
   type ProductToolName,
 } from '~/lib/tools/tool-schemas';
 import { lookupCrossReference } from '~/lib/tools/cross-reference-lookup';
+import { getProductCategory, getProductsInCategory } from '~/lib/tools/category-lookup';
 
 const ADAPTER_TAG = 'rag_corpus_full_document' as const;
 
@@ -103,11 +106,10 @@ export async function executeProductTool(
   switch (name) {
     case 'search_product_docs': {
       const p = searchProductDocsInputSchema.parse(args);
-      const q = [p.productName, p.topic, p.surfaceType]
-        .filter(Boolean)
-        .join(' ');
+      const q = (p.freeformQuery?.trim() || [p.productName, p.topic, p.surfaceType].filter(Boolean).join(' ')).trim();
+      const resolvedProductName = p.freeformQuery?.trim() ? '' : (p.productName || '');
       const [productLineKey, sectionType] = await Promise.all([
-        resolveProductLineKeyByName(p.productName),
+        resolveProductLineKeyByName(resolvedProductName),
         Promise.resolve(inferSectionTypeFromQuery(q)),
       ]);
       const result = await ragQueryForProductKnowledgeWithMeta({
@@ -244,6 +246,14 @@ export async function executeProductTool(
     case 'lookup_cross_reference': {
       const p = lookupCrossReferenceInputSchema.parse(args);
       return lookupCrossReference(p);
+    }
+    case 'get_products_in_category': {
+      const p = getProductsInCategoryInputSchema.parse(args);
+      return getProductsInCategory(p);
+    }
+    case 'get_product_category': {
+      const p = getProductCategoryInputSchema.parse(args);
+      return getProductCategory(p);
     }
   }
 }

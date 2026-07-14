@@ -1,5 +1,5 @@
 import {
-  countResultItemsByResultId,
+  getExistingResultItemIds,
   getTestItemsByTestId,
   getTestResultById,
   insertTestResultItems,
@@ -26,11 +26,14 @@ export async function executeTestRun(testResultId: string) {
   }
 
   const items = await getTestItemsByTestId(testResult.test_id);
+  // Use per-item existence check rather than an index offset so that retry (which
+  // deletes only errored rows) and normal resume both work correctly when there
+  // are gaps in the result set.
+  const existingItemIds = await getExistingResultItemIds(testResult.id);
   let currentSummary = asSummaryObject(testResult.summary);
-  const completedFromRows = await countResultItemsByResultId(testResult.id);
   let passedItems = Math.max(0, testResult.passed_items ?? 0);
   let failedItems = Math.max(0, testResult.failed_items ?? 0);
-  let completedItems = Math.max(completedFromRows, passedItems + failedItems);
+  let completedItems = existingItemIds.size;
   const resumedAt = new Date().toISOString();
   const totalItems = items.length;
   const resumedProgressPercent =
@@ -55,7 +58,12 @@ export async function executeTestRun(testResultId: string) {
     status: 'running',
   });
 
-  for (let index = completedItems; index < items.length; index += 1) {
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+
+    // Skip items that already have a result — handles both normal resume and retry.
+    if (existingItemIds.has(item.id)) continue;
+
     const controlRun = await getTestResultById(testResult.id);
     if (controlRun.status === 'paused') {
       const controlSummary = asSummaryObject(controlRun.summary);
@@ -101,9 +109,9 @@ export async function executeTestRun(testResultId: string) {
       return;
     }
 
-    const item = items[index];
     const itemResult = await runSingleTestItem(testResult.id, item);
     await insertTestResultItems([itemResult.item]);
+    existingItemIds.add(item.id);
 
     itemElapsedSumMs += itemResult.item.elapsed_ms;
 
@@ -113,7 +121,7 @@ export async function executeTestRun(testResultId: string) {
       failedItems += 1;
     }
 
-    completedItems = index + 1;
+    completedItems = existingItemIds.size;
     const progressPercent =
       items.length > 0 ? Number(((completedItems / items.length) * 100).toFixed(2)) : 0;
     const liveRun = await getTestResultById(testResult.id);
@@ -135,7 +143,7 @@ export async function executeTestRun(testResultId: string) {
     });
   }
 
-  completedItems = await countResultItemsByResultId(testResult.id);
+  completedItems = existingItemIds.size;
   const finalRun = await getTestResultById(testResult.id);
   const finalSummary = asSummaryObject(finalRun.summary);
   itemElapsedSumMs = await sumResultItemsElapsedMsByResultId(testResult.id);

@@ -178,14 +178,8 @@ function getS3Prefix() {
 }
 
 function getAwsCredentials() {
-  const accessKeyId =
-    process.env.AWS_ACCESS_READ_KEY_ID?.trim() ||
-    process.env.AWS_ACCESS_KEY_ID?.trim() ||
-    process.env.AWS_ACCESS_WRITE_KEY_ID?.trim();
-  const secretAccessKey =
-    process.env.AWS_SECRET_READ_ACCESS_KEY?.trim() ||
-    process.env.AWS_SECRET_ACCESS_KEY?.trim() ||
-    process.env.AWS_SECRET_WRITE_ACCESS_KEY?.trim();
+  const accessKeyId = process.env.AWS_SDS_READ_ACCESS_KEY_ID?.trim();
+  const secretAccessKey = process.env.AWS_SDS_READ_SECRET_ACCESS_KEY?.trim();
 
   if (!accessKeyId || !secretAccessKey) {
     return undefined;
@@ -195,10 +189,7 @@ function getAwsCredentials() {
 }
 
 function getS3Client() {
-  const region =
-    process.env.SDS_S3_REGION?.trim() ||
-    process.env.AWS_REGION?.trim() ||
-    'us-east-1';
+  const region = process.env.AWS_SDS_REGION?.trim() || 'us-east-2';
   const credentials = getAwsCredentials();
   return new S3Client({
     region,

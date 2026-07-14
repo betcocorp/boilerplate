@@ -168,7 +168,9 @@ function parseRetrievedDocumentChunksArray(
       continue;
     }
     const chunk_id = typeof o.chunk_id === 'string' ? o.chunk_id : null;
-    out.push({ document_id, chunk_id });
+    const document_kind = typeof o.document_kind === 'string' ? o.document_kind : null;
+    const document_title = typeof o.document_title === 'string' ? o.document_title : null;
+    out.push({ document_id, chunk_id, document_kind, document_title });
   }
   return out;
 }
@@ -294,6 +296,23 @@ export function extractSearchRunTotalMs(responsePayload: unknown): number | null
   if (!timings || typeof timings !== 'object' || Array.isArray(timings)) return null;
   const ms = (timings as Record<string, unknown>).totalMs;
   return typeof ms === 'number' ? ms : null;
+}
+
+/**
+ * Extracts the `routingDecision` string from a product-support response payload.
+ * Returns null when absent or not a non-empty string.
+ */
+export function extractRoutingDecision(responsePayload: unknown): string | null {
+  if (
+    !responsePayload ||
+    typeof responsePayload !== 'object' ||
+    Array.isArray(responsePayload)
+  ) {
+    return null;
+  }
+
+  const candidate = (responsePayload as Record<string, unknown>).routingDecision;
+  return typeof candidate === 'string' && candidate.trim() ? candidate.trim() : null;
 }
 
 /** Extracts completed/total progress from a run summary object. */

@@ -133,6 +133,14 @@ export function TestPromptsSection({
   const total = items.length;
   const showing = filtered.length;
 
+  const { promptsWithSimilarity, promptsInAggregations } = useMemo(() => {
+    const aggs = Object.values(aggregationsByItemId);
+    return {
+      promptsInAggregations: aggs.length,
+      promptsWithSimilarity: aggs.filter((a) => a.avgSimilarity !== null).length,
+    };
+  }, [aggregationsByItemId]);
+
   /** Header checkbox state — based on currently visible (filtered) rows. */
   const visibleSelectedCount = useMemo(
     () =>
@@ -291,6 +299,16 @@ export function TestPromptsSection({
         <p className="mt-2 text-xs text-slate-500">
           Historical metrics aggregate up to the last {aggregatedRunCount} run
           {aggregatedRunCount === 1 ? '' : 's'} for this dataset.
+          {promptsInAggregations > 0 ? (
+            <>
+              {' '}
+              Similarity scores available for{' '}
+              <span className="font-medium text-slate-700">
+                {promptsWithSimilarity} of {promptsInAggregations}
+              </span>{' '}
+              prompts that have run.
+            </>
+          ) : null}
         </p>
       ) : null}
 

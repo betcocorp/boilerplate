@@ -3,7 +3,7 @@ import { searchProductChunks, type RagSearchMatch } from '~/lib/rag/search';
 import {
   computeAvgSimilarityForResult,
   countPassedAndFailedByResultId,
-  countResultItemsByResultId,
+  getExistingResultItemIds,
   getTestItemsByTestId,
   getTestResultById,
   insertTestResultItems,
@@ -64,9 +64,9 @@ export async function executeSearchRun(testResultId: string) {
   }
 
   const items = await getTestItemsByTestId(testResult.test_id);
+  const existingItemIds = await getExistingResultItemIds(testResult.id);
   let currentSummary = asSummaryObject(testResult.summary);
-  const completedFromRows = await countResultItemsByResultId(testResult.id);
-  let completedItems = Math.max(completedFromRows, 0);
+  let completedItems = existingItemIds.size;
   const totalItems = items.length;
   const resumedAt = new Date().toISOString();
   const resumedProgressPercent =
@@ -99,7 +99,11 @@ export async function executeSearchRun(testResultId: string) {
 
   await updateTestRecord(testResult.test_id, { status: 'running' });
 
-  for (let index = completedItems; index < items.length; index += 1) {
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index]!;
+
+    if (existingItemIds.has(item.id)) continue;
+
     const controlRun = await getTestResultById(testResult.id);
 
     if (controlRun.status === 'paused') {
@@ -140,7 +144,6 @@ export async function executeSearchRun(testResultId: string) {
       return;
     }
 
-    const item = items[index]!;
     const startedAt = Date.now();
     let responsePayload: Record<string, unknown>;
     let passed = false;
@@ -178,7 +181,6 @@ export async function executeSearchRun(testResultId: string) {
 
     const elapsedMs = Math.max(0, Date.now() - startedAt);
     itemElapsedSumMs += elapsedMs;
-    completedItems = index + 1;
 
     await insertTestResultItems([
       {
@@ -194,6 +196,8 @@ export async function executeSearchRun(testResultId: string) {
       },
     ]);
 
+    existingItemIds.add(item.id);
+    completedItems = existingItemIds.size;
     const progressPercent =
       items.length > 0 ? Number(((completedItems / items.length) * 100).toFixed(2)) : 0;
     const liveRun = await getTestResultById(testResult.id);
@@ -214,7 +218,7 @@ export async function executeSearchRun(testResultId: string) {
 
   const finalRun = await getTestResultById(testResult.id);
   const finalSummary = asSummaryObject(finalRun.summary);
-  const completedCount = await countResultItemsByResultId(testResult.id);
+  const completedCount = existingItemIds.size;
   const { passed: passedCount, failed: failedCount } = await countPassedAndFailedByResultId(testResult.id);
   itemElapsedSumMs = await sumResultItemsElapsedMsByResultId(testResult.id);
   const avgSimilarity = await computeAvgSimilarityForResult(testResult.id);

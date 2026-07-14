@@ -73,11 +73,14 @@ function RunTrendIndicator({
   previous,
   label,
   formatDelta,
+  invertColors = false,
 }: {
   current: number | null | undefined;
   previous: number | null | undefined;
   label: string;
   formatDelta: (absoluteDelta: number) => string;
+  /** When true, lower values are green and higher values are red (e.g. elapsed time). */
+  invertColors?: boolean;
 }) {
   if (
     typeof current !== 'number' ||
@@ -91,8 +94,9 @@ function RunTrendIndicator({
 
   const delta = current - previous;
   const isUp = delta > 0;
+  const isGood = invertColors ? !isUp : isUp;
   const Icon = isUp ? TrendingUp : TrendingDown;
-  const colorClass = isUp ? 'text-emerald-600' : 'text-red-600';
+  const colorClass = isGood ? 'text-emerald-600' : 'text-red-600';
   const direction = isUp ? 'higher' : 'lower';
   const sign = isUp ? '+' : '−';
   const deltaLabel = `${sign}${formatDelta(Math.abs(delta))}`;
@@ -428,6 +432,7 @@ export default async function AdminTestDetailsPage({
                             <RunTrendIndicator
                               current={result.elapsed_ms}
                               formatDelta={formatElapsedDelta}
+                              invertColors
                               label="Elapsed"
                               previous={previousResult?.elapsed_ms}
                             />
