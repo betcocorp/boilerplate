@@ -1,4 +1,4 @@
-import { ArrowRight, FileText, GitCompareArrows, Search } from 'lucide-react';
+import { ArrowRight, FileText, GitCompareArrows, Globe, Search } from 'lucide-react';
 import Link from 'next/link';
 
 import {
@@ -21,6 +21,13 @@ const tools = [
       'Test competitor brand and product lookups against legacy tables—the same pipeline as lookup_cross_reference.',
     href: '/admin/tools/product-cross-reference',
     icon: GitCompareArrows,
+  },
+  {
+    title: 'Web search',
+    description:
+      'Run external web searches through the provider abstraction—source-trust tiers, cost/rate guardrails, and caching, the same WebSearchService agents use.',
+    href: '/admin/tools/web-search',
+    icon: Globe,
   },
   {
     title: 'RAG semantic search',
