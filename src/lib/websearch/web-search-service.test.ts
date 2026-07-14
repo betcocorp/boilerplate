@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { WebSearchCache } from '~/lib/websearch/cache';
+import { WebSearchCache, webSearchCacheKey } from '~/lib/websearch/cache';
+import type { WebSearchDurableCache } from '~/lib/websearch/db-cache';
 import { MockWebSearchProvider } from '~/lib/websearch/mock-provider';
 import { TavilyProvider } from '~/lib/websearch/tavily-provider';
 import type { ProviderSearchResult, WebSearchProvider } from '~/lib/websearch/types';
@@ -11,10 +12,23 @@ import {
 } from '~/lib/websearch/web-search-service';
 import {
   webSearchRequestSchema,
+  type WebSearchResponse,
   type WebSearchResult,
 } from '~/lib/websearch/websearch-schemas';
 
 const freshCache = () => new WebSearchCache(60_000);
+
+/** In-memory stand-in for the durable DB cache, so layering is testable without a database. */
+function stubDbCache() {
+  const store = new Map<string, WebSearchResponse>();
+  return {
+    store,
+    get: vi.fn(async (key: string) => store.get(key) ?? null),
+    set: vi.fn(async (key: string, value: WebSearchResponse) => {
+      store.set(key, value);
+    }),
+  } satisfies WebSearchDurableCache & { store: Map<string, WebSearchResponse> };
+}
 
 describe('WebSearchService', () => {
   it('normalizes provider results into the Bex-owned shape with metrics (happy path)', async () => {
@@ -136,5 +150,56 @@ describe('webSearchRequestSchema', () => {
     expect(
       webSearchRequestSchema.safeParse({ query: 'ok', depth: 'advanced' }).success,
     ).toBe(true);
+  });
+});
+
+describe('WebSearchService durable (DB) cache layer', () => {
+  it('serves a memory-miss from the DB cache without calling the provider', async () => {
+    let calls = 0;
+    const provider: WebSearchProvider = {
+      name: 'mock',
+      search: async (): Promise<ProviderSearchResult> => {
+        calls += 1;
+        return { answer: 'from-provider', results: [] };
+      },
+      extract: async () => [],
+    };
+    const db = stubDbCache();
+    const request = { query: 'triforce' };
+    db.store.set(webSearchCacheKey('mock', request), {
+      query: 'triforce',
+      provider: 'mock',
+      answer: 'from-db',
+      results: [],
+      metrics: { latencyMs: 5, resultCount: 0, estimatedCostUsd: 0.016, cached: false },
+    });
+
+    const service = new WebSearchService(provider, freshCache(), { dbCache: db });
+    const result = await service.search(request);
+
+    expect(result.answer).toBe('from-db');
+    expect(result.metrics.cached).toBe(true);
+    expect(result.metrics.estimatedCostUsd).toBe(0);
+    expect(calls).toBe(0); // provider not billed
+    expect(db.get).toHaveBeenCalledOnce();
+  });
+
+  it('write-through: a provider miss populates the DB cache', async () => {
+    const provider: WebSearchProvider = {
+      name: 'mock',
+      search: async (): Promise<ProviderSearchResult> => ({
+        answer: 'fresh',
+        results: [{ title: 't', url: 'https://example.com/a', snippet: 's', score: 1 }],
+      }),
+      extract: async () => [],
+    };
+    const db = stubDbCache();
+    const service = new WebSearchService(provider, freshCache(), { dbCache: db });
+
+    const result = await service.search({ query: 'zep degreaser' });
+
+    expect(result.metrics.cached).toBe(false);
+    expect(db.set).toHaveBeenCalledOnce();
+    expect(db.store.size).toBe(1);
   });
 });
