@@ -46,6 +46,14 @@ export const productSupportFinalOutputSchema = z.object({
       searchMs: z.number().nullable(),
     })
     .optional(),
+  /** B0-117 — LLM token usage from the agent tool loop, for per-request cost attribution. */
+  usage: z
+    .object({
+      promptTokens: z.number(),
+      completionTokens: z.number(),
+      totalTokens: z.number(),
+    })
+    .optional(),
 });
 
 export type ProductSupportFinalOutput = z.infer<typeof productSupportFinalOutputSchema>;

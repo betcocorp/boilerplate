@@ -31,12 +31,20 @@ export type ResponsesRuntimeOptions = {
   executeTool: ExecuteToolFn;
 };
 
+/** LLM token usage summed across every model call in a run (B0-117 cost attribution). */
+export type LlmTokenUsage = {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+};
+
 export type ResponsesRuntimeResult = {
   lastResponse: Response;
   finalResponseId: string;
   assistantText: string;
   toolTrace: ToolTraceEntry[];
   responseIds: string[];
+  usage: LlmTokenUsage;
 };
 
 export async function runResponsesWithToolLoop(
@@ -50,6 +58,12 @@ export async function runResponsesWithToolLoop(
   let toolOutputs: ResponseInputItem[] | null = null;
 
   let lastResponse: Response | null = null;
+  const usage: LlmTokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+  const accumulateUsage = (response: Response) => {
+    usage.promptTokens += response.usage?.input_tokens ?? 0;
+    usage.completionTokens += response.usage?.output_tokens ?? 0;
+    usage.totalTokens += response.usage?.total_tokens ?? 0;
+  };
 
   for (let i = 0; i < maxRounds; i += 1) {
     const input: ResponseInputItem[] =
@@ -80,7 +94,7 @@ export async function runResponsesWithToolLoop(
       const stream = opts.client.responses.stream({
         ...params,
         stream: true,
-      } as any);
+      } as Parameters<typeof opts.client.responses.stream>[0]);
       for await (const event of stream) {
         if (event.type === 'response.output_text.delta') {
           opts.onAssistantDelta(event.delta);
@@ -92,6 +106,7 @@ export async function runResponsesWithToolLoop(
     }
 
     lastResponse = response;
+    accumulateUsage(response);
     opts.onRawResponse?.(response);
     responseIds.push(response.id);
     chainPrev = response.id;
@@ -106,6 +121,7 @@ export async function runResponsesWithToolLoop(
         assistantText: extractAssistantText(response),
         toolTrace,
         responseIds,
+        usage,
       };
     }
 
@@ -137,5 +153,6 @@ export async function runResponsesWithToolLoop(
     assistantText: extractAssistantText(lastResponse),
     toolTrace,
     responseIds,
+    usage,
   };
 }

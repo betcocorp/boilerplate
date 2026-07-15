@@ -8,7 +8,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
 
-export const POST = withApiV1(async (request) => {
+export const POST = withApiV1(async (request, { recordUsage }) => {
   let body: unknown = {};
   try {
     body = await request.json();
@@ -27,6 +27,11 @@ export const POST = withApiV1(async (request) => {
 
   try {
     const result = await runOrchestration(parsed.workflow, parsed.orchestrationInput);
+
+    // B0-117 — attribute LLM token usage to this request's api_request_log row.
+    if (result.productSupport?.usage) {
+      recordUsage(result.productSupport.usage);
+    }
 
     return NextResponse.json({ ok: true, ...result });
   } catch (error) {

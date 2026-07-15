@@ -82,6 +82,7 @@ async function runBexChatOrchestration(input: unknown): Promise<OrchestrationRun
       confidence: outcome.confidence,
       validation: outcome.validation,
       routingDecision: outcome.routingDecision,
+      usage: outcome.usage,
     },
   };
 }

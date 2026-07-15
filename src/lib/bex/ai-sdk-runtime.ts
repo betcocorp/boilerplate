@@ -46,7 +46,7 @@ export type AiSdkRuntimeOptions = {
  */
 export type AiSdkRuntimeResult = Pick<
   ResponsesRuntimeResult,
-  'assistantText' | 'toolTrace' | 'responseIds'
+  'assistantText' | 'toolTrace' | 'responseIds' | 'usage'
 > & {
   finalResponseId: null;
 };
@@ -134,12 +134,24 @@ export async function runAiSdkWithToolLoop(opts: AiSdkRuntimeOptions): Promise<A
     opts.onAssistantDelta?.(delta);
   }
 
-  const [assistantText, steps] = await Promise.all([result.text, result.steps]);
+  const [assistantText, steps, totalUsage] = await Promise.all([
+    result.text,
+    result.steps,
+    result.totalUsage,
+  ]);
+
+  const promptTokens = totalUsage.inputTokens ?? 0;
+  const completionTokens = totalUsage.outputTokens ?? 0;
 
   return {
     assistantText,
     finalResponseId: null,
     toolTrace,
     responseIds: steps.map((_step, index) => `ai_sdk_step_${index}`),
+    usage: {
+      promptTokens,
+      completionTokens,
+      totalTokens: totalUsage.totalTokens ?? promptTokens + completionTokens,
+    },
   };
 }

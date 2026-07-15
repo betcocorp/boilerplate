@@ -1367,6 +1367,7 @@ export async function runProductSupportWorkflow(input: {
       validation,
       routingDecision,
       timingBreakdown,
+      usage: agentResult.usage,
     };
 
     await updateWorkflowRun(run.id, {
