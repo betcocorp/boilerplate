@@ -65,6 +65,12 @@ export const findProductsByCategoryInputSchema = z.object({
   maxResults: z.number().int().min(1).max(50).optional(),
 });
 
+export const recommendCrossReferenceInputSchema = z.object({
+  competitorProduct: z.string().min(1).max(512),
+  competitorBrand: z.string().max(256).optional(),
+  maxResults: z.number().int().min(1).max(10).optional(),
+});
+
 export const PRODUCT_TOOL_NAMES = [
   'search_product_docs',
   'get_product_spec',
@@ -78,6 +84,7 @@ export const PRODUCT_TOOL_NAMES = [
   'get_products_in_category',
   'get_product_category',
   'find_products_by_category',
+  'recommend_cross_reference',
 ] as const;
 
 export type ProductToolName = (typeof PRODUCT_TOOL_NAMES)[number];

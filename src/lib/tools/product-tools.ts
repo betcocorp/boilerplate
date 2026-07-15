@@ -23,12 +23,14 @@ import {
   listAllowedSurfacesInputSchema,
   listDisallowedUsesInputSchema,
   lookupCrossReferenceInputSchema,
+  recommendCrossReferenceInputSchema,
   searchProductDocsInputSchema,
   type ProductToolName,
 } from '~/lib/tools/tool-schemas';
 import { lookupCrossReference } from '~/lib/tools/cross-reference-lookup';
 import { getProductCategory, getProductsInCategory } from '~/lib/tools/category-lookup';
 import { routeCategoryQuery } from '~/lib/category/category-router';
+import { runCrossReferenceRecommendation } from '~/lib/recommendations/persist-recommendation';
 
 const ADAPTER_TAG = 'rag_corpus_full_document' as const;
 
@@ -256,6 +258,25 @@ export async function executeProductTool(
     case 'get_product_category': {
       const p = getProductCategoryInputSchema.parse(args);
       return getProductCategory(p);
+    }
+    case 'recommend_cross_reference': {
+      const p = recommendCrossReferenceInputSchema.parse(args);
+      const result = await runCrossReferenceRecommendation({
+        competitorProduct: p.competitorProduct,
+        competitorBrand: p.competitorBrand ?? null,
+      });
+      return {
+        ok: true,
+        adapter: 'cross_reference_recommendation_v1',
+        source: result.source,
+        answered: result.answered,
+        overallConfidence: result.overallConfidence,
+        thresholdUsed: result.thresholdUsed,
+        declineReason: result.declineReason,
+        candidates: result.candidates.slice(0, p.maxResults ?? 5),
+        evidence: result.evidence,
+        recommendationId: result.recommendationId,
+      };
     }
     case 'find_products_by_category': {
       const p = findProductsByCategoryInputSchema.parse(args);
