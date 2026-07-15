@@ -12,6 +12,7 @@ import {
 } from '~/lib/rag/section-type-inference';
 
 import {
+  findProductsByCategoryInputSchema,
   getApprovedUsageGuidanceInputSchema,
   getCompatibilityRulesInputSchema,
   getEscalationPolicyInputSchema,
@@ -27,6 +28,7 @@ import {
 } from '~/lib/tools/tool-schemas';
 import { lookupCrossReference } from '~/lib/tools/cross-reference-lookup';
 import { getProductCategory, getProductsInCategory } from '~/lib/tools/category-lookup';
+import { routeCategoryQuery } from '~/lib/category/category-router';
 
 const ADAPTER_TAG = 'rag_corpus_full_document' as const;
 
@@ -254,6 +256,35 @@ export async function executeProductTool(
     case 'get_product_category': {
       const p = getProductCategoryInputSchema.parse(args);
       return getProductCategory(p);
+    }
+    case 'find_products_by_category': {
+      const p = findProductsByCategoryInputSchema.parse(args);
+      const route = await routeCategoryQuery(p.query);
+      if (route.path === 'semantic') {
+        return {
+          ok: true,
+          adapter: 'category_router_v1',
+          path: 'semantic',
+          reason: route.reason,
+          confidence: route.confidence,
+          topCandidate: route.topCandidate,
+          hint: 'No confident category match — use search_product_docs for this query.',
+          latencyMs: route.latencyMs,
+        };
+      }
+      const max = Math.min(p.maxResults ?? 25, 50);
+      return {
+        ok: true,
+        adapter: 'category_router_v1',
+        path: 'category',
+        confidence: route.confidence,
+        matchType: route.matchType,
+        node: route.node,
+        productCount: route.productCount,
+        products: route.products.slice(0, max),
+        candidates: route.candidates,
+        latencyMs: route.latencyMs,
+      };
     }
   }
 }

@@ -178,6 +178,28 @@ export const productSupportTools: Tool[] = [
   },
   {
     type: 'function',
+    name: 'find_products_by_category',
+    strict: false,
+    description:
+      "Deterministically map a category query (e.g. \"floor strippers\", \"glass cleaner\", \"disinfectants\", \"hand soap\") to Betco's website product taxonomy and return the actual web products in that category — SKU, title, and canonical betco.com URL — with NO semantic search. Prefer this for filter-style questions like \"what floor strippers do you have?\" or \"show me all disinfectants\". If the query does not confidently match a category, the tool returns path:\"semantic\"; in that case fall back to search_product_docs.",
+    parameters: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description:
+            'Category or product-type phrase, e.g. "floor strippers", "glass cleaner", "warewashing detergents".',
+        },
+        maxResults: {
+          type: 'number',
+          description: 'Max products to return (default 25, max 50).',
+        },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    type: 'function',
     name: 'lookup_cross_reference',
     strict: false,
     description:

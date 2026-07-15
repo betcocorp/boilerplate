@@ -60,6 +60,11 @@ export const getProductCategoryInputSchema = z.object({
   productId: z.string().min(1).max(256),
 });
 
+export const findProductsByCategoryInputSchema = z.object({
+  query: z.string().min(1).max(256),
+  maxResults: z.number().int().min(1).max(50).optional(),
+});
+
 export const PRODUCT_TOOL_NAMES = [
   'search_product_docs',
   'get_product_spec',
@@ -72,6 +77,7 @@ export const PRODUCT_TOOL_NAMES = [
   'lookup_cross_reference',
   'get_products_in_category',
   'get_product_category',
+  'find_products_by_category',
 ] as const;
 
 export type ProductToolName = (typeof PRODUCT_TOOL_NAMES)[number];
