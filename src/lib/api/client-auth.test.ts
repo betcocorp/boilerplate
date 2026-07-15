@@ -46,7 +46,6 @@ const ACTIVE_APP = {
   project_id: 'proj-1',
   environment: 'development',
   is_active: true,
-  rate_limit_per_minute: null,
 };
 const ACTIVE_PROJECT = { id: 'proj-1', is_active: true };
 
@@ -148,7 +147,6 @@ describe('authenticateApiToken — chain enforcement', () => {
         appId: 'app-1',
         projectId: 'proj-1',
         environment: 'development',
-        rateLimitPerMinute: null,
       },
     });
   });

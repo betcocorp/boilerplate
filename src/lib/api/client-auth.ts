@@ -30,7 +30,6 @@ export interface ApiAuthContext {
   appId: string;
   projectId: string;
   environment: ApiEnvironment;
-  rateLimitPerMinute: number | null;
 }
 
 /** Best-effort project/app/token identity for logging a failed-but-resolvable attempt. */
@@ -98,7 +97,7 @@ export async function authenticateApiToken(
 
   const { data: app, error: appError } = await supabase
     .from('api_app')
-    .select('id, project_id, environment, is_active, rate_limit_per_minute')
+    .select('id, project_id, environment, is_active')
     .eq('id', key.app_id)
     .maybeSingle();
 
@@ -145,7 +144,6 @@ export async function authenticateApiToken(
       appId: app.id,
       projectId: project.id,
       environment: app.environment,
-      rateLimitPerMinute: app.rate_limit_per_minute,
     },
   };
 }

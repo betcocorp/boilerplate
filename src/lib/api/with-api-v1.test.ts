@@ -40,7 +40,6 @@ const ACTIVE = {
     appId: 'a',
     projectId: 'p',
     environment: 'production' as const,
-    rateLimitPerMinute: null,
   },
 };
 
