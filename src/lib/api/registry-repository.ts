@@ -267,6 +267,44 @@ export async function setProjectActive(id: string, isActive: boolean): Promise<v
   if (error) throw new Error(error.message);
 }
 
+export async function updateApp(
+  id: string,
+  input: { name: string; environment: ApiEnvironment; rateLimitPerMinute: number | null },
+): Promise<void> {
+  const supabase = getSupabaseServiceRoleClient();
+  const { error } = await supabase
+    .from('api_app')
+    .update({
+      name: input.name,
+      environment: input.environment,
+      rate_limit_per_minute: input.rateLimitPerMinute,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', id);
+  if (error) throw new Error(error.message);
+}
+
+/** App kill switch — is_active off disables every token in the app (chain check). */
+export async function setAppActive(id: string, isActive: boolean): Promise<void> {
+  const supabase = getSupabaseServiceRoleClient();
+  const { error } = await supabase
+    .from('api_app')
+    .update({ is_active: isActive, updated_at: new Date().toISOString() })
+    .eq('id', id);
+  if (error) throw new Error(error.message);
+}
+
+/** Revoke a single token; effective on its next request. Other tokens on the app are unaffected. */
+export async function revokeToken(keyId: string): Promise<void> {
+  const supabase = getSupabaseServiceRoleClient();
+  const { error } = await supabase
+    .from('api_key')
+    .update({ revoked_at: new Date().toISOString() })
+    .eq('id', keyId)
+    .is('revoked_at', null);
+  if (error) throw new Error(error.message);
+}
+
 export type MintedToken = { token: string; key: ApiKeyRow };
 
 /** Issue a new token for an app. Returns the plaintext ONCE; only the hash + prefix are stored. */

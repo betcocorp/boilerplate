@@ -7,8 +7,12 @@ import { API_ENVIRONMENTS } from '~/lib/api/api-tokens';
 import {
   createApp,
   createProject,
+  getApp,
   mintToken,
+  revokeToken,
+  setAppActive,
   setProjectActive,
+  updateApp,
   updateProject,
 } from '~/lib/api/registry-repository';
 
@@ -187,5 +191,116 @@ export async function addAppAction(_prev: AddAppState, formData: FormData): Prom
     return { ok: true, appId: app.id, appName: app.name, environment: parsed.data.environment, token, prefix };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : 'Failed to add app.' };
+  }
+}
+
+// --- B0-118: app detail actions -----------------------------------------------------------------
+
+const rateLimitField = z
+  .union([z.literal(''), z.coerce.number().int().positive('Rate limit must be a positive integer.')])
+  .transform((v) => (v === '' ? null : v));
+
+const updateAppSchema = z.object({
+  projectId: z.string().uuid(),
+  appId: z.string().uuid(),
+  name: z.string().trim().min(1, 'App name is required.').max(200),
+  environment: z.enum(API_ENVIRONMENTS),
+  rateLimitPerMinute: rateLimitField,
+});
+
+export async function updateAppAction(
+  _prev: SimpleActionState,
+  formData: FormData,
+): Promise<SimpleActionState> {
+  const parsed = updateAppSchema.safeParse({
+    projectId: formData.get('projectId') ?? '',
+    appId: formData.get('appId') ?? '',
+    name: formData.get('name') ?? '',
+    environment: formData.get('environment') ?? '',
+    rateLimitPerMinute: (formData.get('rateLimitPerMinute') as string | null) ?? '',
+  });
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? 'Invalid form data.' };
+  try {
+    await updateApp(parsed.data.appId, {
+      name: parsed.data.name,
+      environment: parsed.data.environment,
+      rateLimitPerMinute: parsed.data.rateLimitPerMinute,
+    });
+    revalidatePath(`${PROJECTS_PATH}/${parsed.data.projectId}/apps/${parsed.data.appId}`);
+    revalidatePath(`${PROJECTS_PATH}/${parsed.data.projectId}`);
+    return { ok: true, error: null };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : 'Failed to update app.' };
+  }
+}
+
+export async function setAppActiveAction(
+  _prev: SimpleActionState,
+  formData: FormData,
+): Promise<SimpleActionState> {
+  const projectId = String(formData.get('projectId') ?? '');
+  const appId = String(formData.get('appId') ?? '');
+  const isActive = String(formData.get('isActive') ?? '') === 'true';
+  if (!appId) return { ok: false, error: 'Missing app id.' };
+  try {
+    await setAppActive(appId, isActive);
+    revalidatePath(`${PROJECTS_PATH}/${projectId}/apps/${appId}`);
+    revalidatePath(`${PROJECTS_PATH}/${projectId}`);
+    return { ok: true, error: null };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : 'Failed to toggle app.' };
+  }
+}
+
+export type IssueTokenState =
+  | { ok: true; token: string; prefix: string; label: string | null }
+  | { ok: false; error: string }
+  | null;
+
+const issueTokenSchema = z.object({
+  projectId: z.string().uuid(),
+  appId: z.string().uuid(),
+  tokenLabel: z.string().trim().max(200).optional(),
+});
+
+export async function issueTokenAction(
+  _prev: IssueTokenState,
+  formData: FormData,
+): Promise<IssueTokenState> {
+  const parsed = issueTokenSchema.safeParse({
+    projectId: formData.get('projectId') ?? '',
+    appId: formData.get('appId') ?? '',
+    tokenLabel: (formData.get('tokenLabel') as string | null) ?? undefined,
+  });
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? 'Invalid form data.' };
+  try {
+    const app = await getApp(parsed.data.appId);
+    if (!app) return { ok: false, error: 'App not found.' };
+    const minted = await mintToken({
+      appId: app.id,
+      environment: app.environment,
+      label: parsed.data.tokenLabel || null,
+    });
+    revalidatePath(`${PROJECTS_PATH}/${parsed.data.projectId}/apps/${parsed.data.appId}`);
+    return { ok: true, token: minted.token, prefix: minted.key.prefix, label: minted.key.label };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : 'Failed to issue token.' };
+  }
+}
+
+export async function revokeTokenAction(
+  _prev: SimpleActionState,
+  formData: FormData,
+): Promise<SimpleActionState> {
+  const projectId = String(formData.get('projectId') ?? '');
+  const appId = String(formData.get('appId') ?? '');
+  const keyId = String(formData.get('keyId') ?? '');
+  if (!keyId) return { ok: false, error: 'Missing token id.' };
+  try {
+    await revokeToken(keyId);
+    revalidatePath(`${PROJECTS_PATH}/${projectId}/apps/${appId}`);
+    return { ok: true, error: null };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : 'Failed to revoke token.' };
   }
 }
