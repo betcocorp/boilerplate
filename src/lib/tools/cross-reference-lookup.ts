@@ -1,3 +1,4 @@
+import { normalizeLookupValue, tokenizeLookupValue } from '~/lib/text/normalization';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 const CROSS_REFERENCE_ADAPTER_TAG = 'legacy_cross_reference_v1' as const;
@@ -36,25 +37,6 @@ export type LegacyProductDescrRow = {
   User_Str_02: string | null;
   User_Str_03: string | null;
 };
-
-function normalizeLookupValue(value: string) {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/#/g, ' number ')
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function tokenizeLookupValue(value: string) {
-  const normalized = normalizeLookupValue(value);
-  if (!normalized) {
-    return [];
-  }
-
-  return normalized.split(' ').filter(Boolean);
-}
 
 function clampCrossReferenceLimit(value?: number) {
   if (!Number.isFinite(value) || !value || value < 1) {
