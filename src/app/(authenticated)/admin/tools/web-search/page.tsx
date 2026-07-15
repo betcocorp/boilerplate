@@ -1,6 +1,8 @@
 import { Globe } from 'lucide-react';
 
+import { WebSearchCacheTable } from '~/components/admin/web-search/WebSearchCacheTable';
 import { WebSearchTester } from '~/components/admin/web-search/WebSearchTester';
+import { listWebSearchCacheEntries } from '~/lib/websearch/db-cache';
 
 export const metadata = {
   title: 'Web search tester | Betco BEX Admin',
@@ -8,9 +10,13 @@ export const metadata = {
     'Exercise the generic WebSearchService (Tavily by default) by hand before wiring it into agent flows.',
 };
 
-export default function WebSearchTesterPage() {
+export const dynamic = 'force-dynamic';
+
+export default async function WebSearchTesterPage() {
+  const cacheEntries = await listWebSearchCacheEntries(100);
+
   return (
-    <main className="min-w-0 p-4 sm:p-6">
+    <main className="min-w-0 space-y-6 p-4 sm:p-6">
       <div className="rounded-[2rem] border border-border/60 bg-background p-6 shadow-sm sm:p-8">
         <div className="flex flex-wrap items-start gap-3">
           <div className="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary">
@@ -35,6 +41,8 @@ export default function WebSearchTesterPage() {
           <WebSearchTester />
         </div>
       </div>
+
+      <WebSearchCacheTable entries={cacheEntries} />
     </main>
   );
 }
