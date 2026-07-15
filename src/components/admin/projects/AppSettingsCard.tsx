@@ -12,7 +12,6 @@ import {
 } from '~/components/ui/card';
 import { Input } from '~/components/ui/input';
 import { Label } from '~/components/ui/label';
-import { NativeSelect } from '~/components/ui/native-select';
 import {
   setAppActiveAction,
   updateAppAction,
@@ -23,7 +22,6 @@ type AppSettings = {
   id: string;
   projectId: string;
   name: string;
-  environment: string;
   rateLimitPerMinute: number | null;
   isActive: boolean;
 };
@@ -48,18 +46,10 @@ export function AppSettingsCard({ app }: { app: AppSettings }) {
         <form action={edit} className="space-y-4">
           <input type="hidden" name="projectId" value={app.projectId} />
           <input type="hidden" name="appId" value={app.id} />
-          <div className="grid gap-4 sm:grid-cols-3">
+          <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label htmlFor="name">Name</Label>
               <Input id="name" name="name" defaultValue={app.name} />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="environment">Environment</Label>
-              <NativeSelect id="environment" name="environment" defaultValue={app.environment}>
-                <option value="production">production</option>
-                <option value="staging">staging</option>
-                <option value="development">development</option>
-              </NativeSelect>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="rateLimitPerMinute">Rate limit / min</Label>

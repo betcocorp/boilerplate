@@ -16,7 +16,6 @@ import {
 } from '~/components/ui/dialog';
 import { Input } from '~/components/ui/input';
 import { Label } from '~/components/ui/label';
-import { NativeSelect } from '~/components/ui/native-select';
 import { addAppAction, type AddAppState } from '~/lib/api/registry-actions';
 
 export function AddAppDialog({ projectId }: { projectId: string }) {
@@ -46,7 +45,7 @@ export function AddAppDialog({ projectId }: { projectId: string }) {
               <DialogTitle>App “{state.appName}” created</DialogTitle>
               <DialogDescription>
                 {revealed
-                  ? `First token issued for the ${state.environment} app.`
+                  ? 'First token issued for the app.'
                   : 'No token was issued — you can create one from the app detail page.'}
               </DialogDescription>
             </DialogHeader>
@@ -60,20 +59,12 @@ export function AddAppDialog({ projectId }: { projectId: string }) {
             <input type="hidden" name="projectId" value={projectId} />
             <DialogHeader>
               <DialogTitle>Add app</DialogTitle>
-              <DialogDescription>A runtime surface of this project, tied to an environment.</DialogDescription>
+              <DialogDescription>A runtime surface of this project (e.g. Web, Mobile, CI).</DialogDescription>
             </DialogHeader>
             <div className="space-y-4 py-4">
               <div className="space-y-1.5">
                 <Label htmlFor="appName">App name</Label>
                 <Input id="appName" name="appName" placeholder="e.g. Web" />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="environment">Environment</Label>
-                <NativeSelect id="environment" name="environment" defaultValue="production">
-                  <option value="production">production</option>
-                  <option value="staging">staging</option>
-                  <option value="development">development</option>
-                </NativeSelect>
               </div>
               <label className="flex items-center gap-2 text-sm">
                 <input

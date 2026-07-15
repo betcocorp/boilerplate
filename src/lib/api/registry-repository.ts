@@ -1,7 +1,4 @@
-import {
-  generateApiToken,
-  type ApiEnvironment,
-} from '~/lib/api/api-tokens';
+import { generateApiToken } from '~/lib/api/api-tokens';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 /**
@@ -25,7 +22,6 @@ export type ApiApp = {
   id: string;
   projectId: string;
   name: string;
-  environment: ApiEnvironment;
   isActive: boolean;
   rateLimitPerMinute: number | null;
   createdAt: string;
@@ -46,7 +42,6 @@ export type ApiKeyRow = {
 export type AppSummary = {
   id: string;
   name: string;
-  environment: ApiEnvironment;
   isActive: boolean;
   tokenCount: number;
   activeTokenCount: number;
@@ -69,7 +64,6 @@ type AppRowDb = {
   id: string;
   project_id: string;
   name: string;
-  environment: ApiEnvironment;
   is_active: boolean;
   rate_limit_per_minute: number | null;
   created_at: string;
@@ -101,7 +95,6 @@ const mapApp = (r: AppRowDb): ApiApp => ({
   id: r.id,
   projectId: r.project_id,
   name: r.name,
-  environment: r.environment,
   isActive: r.is_active,
   rateLimitPerMinute: r.rate_limit_per_minute,
   createdAt: r.created_at,
@@ -154,7 +147,6 @@ export async function listProjectsWithApps(): Promise<ProjectWithApps[]> {
     const summary: AppSummary = {
       id: a.id,
       name: a.name,
-      environment: a.environment,
       isActive: a.is_active,
       tokenCount: appKeys.length,
       activeTokenCount: appKeys.filter((k) => isTokenActive({ revokedAt: k.revoked_at, expiresAt: k.expires_at })).length,
@@ -222,7 +214,6 @@ export async function createProject(input: {
 export async function createApp(input: {
   projectId: string;
   name: string;
-  environment: ApiEnvironment;
   rateLimitPerMinute?: number | null;
 }): Promise<ApiApp> {
   const supabase = getSupabaseServiceRoleClient();
@@ -231,7 +222,6 @@ export async function createApp(input: {
     .insert({
       project_id: input.projectId,
       name: input.name,
-      environment: input.environment,
       rate_limit_per_minute: input.rateLimitPerMinute ?? null,
     })
     .select('*')
@@ -269,14 +259,13 @@ export async function setProjectActive(id: string, isActive: boolean): Promise<v
 
 export async function updateApp(
   id: string,
-  input: { name: string; environment: ApiEnvironment; rateLimitPerMinute: number | null },
+  input: { name: string; rateLimitPerMinute: number | null },
 ): Promise<void> {
   const supabase = getSupabaseServiceRoleClient();
   const { error } = await supabase
     .from('api_app')
     .update({
       name: input.name,
-      environment: input.environment,
       rate_limit_per_minute: input.rateLimitPerMinute,
       updated_at: new Date().toISOString(),
     })
@@ -310,12 +299,11 @@ export type MintedToken = { token: string; key: ApiKeyRow };
 /** Issue a new token for an app. Returns the plaintext ONCE; only the hash + prefix are stored. */
 export async function mintToken(input: {
   appId: string;
-  environment: ApiEnvironment;
   label?: string | null;
   expiresAt?: string | null;
 }): Promise<MintedToken> {
   const supabase = getSupabaseServiceRoleClient();
-  const generated = generateApiToken(input.environment);
+  const generated = generateApiToken();
   const { data, error } = await supabase
     .from('api_key')
     .insert({

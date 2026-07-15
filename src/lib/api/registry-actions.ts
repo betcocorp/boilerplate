@@ -3,7 +3,6 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
-import { API_ENVIRONMENTS } from '~/lib/api/api-tokens';
 import {
   createApp,
   createProject,
@@ -29,7 +28,6 @@ const wizardSchema = z.object({
   description: z.string().trim().max(2000).optional(),
   contactEmail: z.union([z.string().trim().email('Enter a valid email.'), z.literal('')]).optional(),
   appName: z.string().trim().min(1, 'App name is required.').max(200),
-  environment: z.enum(API_ENVIRONMENTS),
   tokenLabel: z.string().trim().max(200).optional(),
 });
 
@@ -42,7 +40,6 @@ export type CreateProjectWizardState =
       appId: string;
       projectName: string;
       appName: string;
-      environment: string;
     }
   | { ok: false; error: string }
   | null;
@@ -56,26 +53,21 @@ export async function createProjectWizardAction(
     description: (formData.get('description') as string | null) ?? undefined,
     contactEmail: (formData.get('contactEmail') as string | null) ?? undefined,
     appName: formData.get('appName') ?? '',
-    environment: formData.get('environment') ?? '',
     tokenLabel: (formData.get('tokenLabel') as string | null) ?? undefined,
   });
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? 'Invalid form data.' };
   }
 
-  const { projectName, description, contactEmail, appName, environment, tokenLabel } = parsed.data;
+  const { projectName, description, contactEmail, appName, tokenLabel } = parsed.data;
   try {
     const project = await createProject({
       name: projectName,
       description: description || null,
       contactEmail: contactEmail || null,
     });
-    const app = await createApp({ projectId: project.id, name: appName, environment });
-    const minted = await mintToken({
-      appId: app.id,
-      environment,
-      label: tokenLabel || 'Initial token',
-    });
+    const app = await createApp({ projectId: project.id, name: appName });
+    const minted = await mintToken({ appId: app.id, label: tokenLabel || 'Initial token' });
 
     revalidatePath(PROJECTS_PATH);
     return {
@@ -86,7 +78,6 @@ export async function createProjectWizardAction(
       appId: app.id,
       projectName: project.name,
       appName: app.name,
-      environment,
     };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : 'Failed to create project.' };
@@ -149,13 +140,12 @@ export async function setProjectActiveAction(
 const addAppSchema = z.object({
   projectId: z.string().uuid(),
   appName: z.string().trim().min(1, 'App name is required.').max(200),
-  environment: z.enum(API_ENVIRONMENTS),
   issueToken: z.boolean(),
   tokenLabel: z.string().trim().max(200).optional(),
 });
 
 export type AddAppState =
-  | { ok: true; appId: string; appName: string; environment: string; token: string | null; prefix: string | null }
+  | { ok: true; appId: string; appName: string; token: string | null; prefix: string | null }
   | { ok: false; error: string }
   | null;
 
@@ -163,32 +153,23 @@ export async function addAppAction(_prev: AddAppState, formData: FormData): Prom
   const parsed = addAppSchema.safeParse({
     projectId: formData.get('projectId') ?? '',
     appName: formData.get('appName') ?? '',
-    environment: formData.get('environment') ?? '',
     issueToken: formData.get('issueToken') === 'on' || formData.get('issueToken') === 'true',
     tokenLabel: (formData.get('tokenLabel') as string | null) ?? undefined,
   });
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? 'Invalid form data.' };
 
   try {
-    const app = await createApp({
-      projectId: parsed.data.projectId,
-      name: parsed.data.appName,
-      environment: parsed.data.environment,
-    });
+    const app = await createApp({ projectId: parsed.data.projectId, name: parsed.data.appName });
     let token: string | null = null;
     let prefix: string | null = null;
     if (parsed.data.issueToken) {
-      const minted = await mintToken({
-        appId: app.id,
-        environment: parsed.data.environment,
-        label: parsed.data.tokenLabel || 'Initial token',
-      });
+      const minted = await mintToken({ appId: app.id, label: parsed.data.tokenLabel || 'Initial token' });
       token = minted.token;
       prefix = minted.key.prefix;
     }
     revalidatePath(`${PROJECTS_PATH}/${parsed.data.projectId}`);
     revalidatePath(PROJECTS_PATH);
-    return { ok: true, appId: app.id, appName: app.name, environment: parsed.data.environment, token, prefix };
+    return { ok: true, appId: app.id, appName: app.name, token, prefix };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : 'Failed to add app.' };
   }
@@ -204,7 +185,6 @@ const updateAppSchema = z.object({
   projectId: z.string().uuid(),
   appId: z.string().uuid(),
   name: z.string().trim().min(1, 'App name is required.').max(200),
-  environment: z.enum(API_ENVIRONMENTS),
   rateLimitPerMinute: rateLimitField,
 });
 
@@ -216,14 +196,12 @@ export async function updateAppAction(
     projectId: formData.get('projectId') ?? '',
     appId: formData.get('appId') ?? '',
     name: formData.get('name') ?? '',
-    environment: formData.get('environment') ?? '',
     rateLimitPerMinute: (formData.get('rateLimitPerMinute') as string | null) ?? '',
   });
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? 'Invalid form data.' };
   try {
     await updateApp(parsed.data.appId, {
       name: parsed.data.name,
-      environment: parsed.data.environment,
       rateLimitPerMinute: parsed.data.rateLimitPerMinute,
     });
     revalidatePath(`${PROJECTS_PATH}/${parsed.data.projectId}/apps/${parsed.data.appId}`);
@@ -276,11 +254,7 @@ export async function issueTokenAction(
   try {
     const app = await getApp(parsed.data.appId);
     if (!app) return { ok: false, error: 'App not found.' };
-    const minted = await mintToken({
-      appId: app.id,
-      environment: app.environment,
-      label: parsed.data.tokenLabel || null,
-    });
+    const minted = await mintToken({ appId: app.id, label: parsed.data.tokenLabel || null });
     revalidatePath(`${PROJECTS_PATH}/${parsed.data.projectId}/apps/${parsed.data.appId}`);
     return { ok: true, token: minted.token, prefix: minted.key.prefix, label: minted.key.label };
   } catch (err) {

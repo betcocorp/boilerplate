@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { connection } from 'next/server';
 
 import { CreateProjectWizard } from '~/components/admin/projects/CreateProjectWizard';
-import { ActiveBadge, EnvBadge, formatDate, formatLastUsed } from '~/components/admin/projects/ui';
+import { ActiveBadge, formatDate, formatLastUsed } from '~/components/admin/projects/ui';
 import { Card, CardContent, CardHeader, CardTitle } from '~/components/ui/card';
 import {
   Table,
@@ -77,7 +77,6 @@ export default async function ApiProjectsPage() {
                       <TableHeader>
                         <TableRow className="border-border/60 hover:bg-transparent">
                           <TableHead>App</TableHead>
-                          <TableHead>Environment</TableHead>
                           <TableHead>Status</TableHead>
                           <TableHead>Tokens</TableHead>
                           <TableHead>Last used</TableHead>
@@ -93,9 +92,6 @@ export default async function ApiProjectsPage() {
                               >
                                 {app.name}
                               </Link>
-                            </TableCell>
-                            <TableCell>
-                              <EnvBadge environment={app.environment} />
                             </TableCell>
                             <TableCell>
                               <ActiveBadge active={app.isActive} />

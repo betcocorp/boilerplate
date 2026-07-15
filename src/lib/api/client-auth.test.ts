@@ -44,7 +44,6 @@ const ACTIVE_KEY = { id: 'key-1', app_id: 'app-1', revoked_at: null, expires_at:
 const ACTIVE_APP = {
   id: 'app-1',
   project_id: 'proj-1',
-  environment: 'development',
   is_active: true,
 };
 const ACTIVE_PROJECT = { id: 'proj-1', is_active: true };
@@ -146,7 +145,6 @@ describe('authenticateApiToken — chain enforcement', () => {
         keyId: 'key-1',
         appId: 'app-1',
         projectId: 'proj-1',
-        environment: 'development',
       },
     });
   });

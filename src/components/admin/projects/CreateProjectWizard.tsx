@@ -16,7 +16,6 @@ import {
 } from '~/components/ui/dialog';
 import { Input } from '~/components/ui/input';
 import { Label } from '~/components/ui/label';
-import { NativeSelect } from '~/components/ui/native-select';
 import { Textarea } from '~/components/ui/textarea';
 import {
   createProjectWizardAction,
@@ -34,7 +33,6 @@ export function CreateProjectWizard() {
     description: '',
     contactEmail: '',
     appName: '',
-    environment: 'production',
     tokenLabel: '',
   });
   const [state, formAction, pending] = useActionState<CreateProjectWizardState, FormData>(
@@ -67,7 +65,6 @@ export function CreateProjectWizard() {
       description: '',
       contactEmail: '',
       appName: '',
-      environment: 'production',
       tokenLabel: '',
     });
   }
@@ -86,8 +83,7 @@ export function CreateProjectWizard() {
             <DialogHeader>
               <DialogTitle>Token for {state.appName}</DialogTitle>
               <DialogDescription>
-                {state.projectName} → {state.appName} ({state.environment}) is created. Here is its
-                first token.
+                {state.projectName} → {state.appName} is created. Here is its first token.
               </DialogDescription>
             </DialogHeader>
             <TokenReveal token={state.token} label={state.prefix} />
@@ -151,19 +147,9 @@ export function CreateProjectWizard() {
                     value={values.appName}
                     onChange={(e) => set('appName')(e.target.value)}
                   />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="environment">Environment</Label>
-                  <NativeSelect
-                    id="environment"
-                    name="environment"
-                    value={values.environment}
-                    onChange={(e) => set('environment')(e.target.value)}
-                  >
-                    <option value="production">production</option>
-                    <option value="staging">staging</option>
-                    <option value="development">development</option>
-                  </NativeSelect>
+                  <p className="text-xs text-muted-foreground">
+                    A runtime surface of this project (e.g. Web, Mobile, CI).
+                  </p>
                 </div>
               </div>
 
@@ -179,7 +165,7 @@ export function CreateProjectWizard() {
                     onChange={(e) => set('tokenLabel')(e.target.value)}
                   />
                   <p className="text-xs text-muted-foreground">
-                    The token will use the app&apos;s {values.environment} prefix and is shown once.
+                    The full token is shown once, right after you create the project.
                   </p>
                 </div>
               </div>

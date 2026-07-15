@@ -39,7 +39,6 @@ const ACTIVE = {
     keyId: 'k',
     appId: 'a',
     projectId: 'p',
-    environment: 'production' as const,
   },
 };
 

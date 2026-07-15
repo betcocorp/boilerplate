@@ -5,7 +5,7 @@ import { connection } from 'next/server';
 
 import { AppSettingsCard } from '~/components/admin/projects/AppSettingsCard';
 import { AppTokens, type TokenView } from '~/components/admin/projects/AppTokens';
-import { ActiveBadge, EnvBadge } from '~/components/admin/projects/ui';
+import { ActiveBadge } from '~/components/admin/projects/ui';
 import { Card, CardContent, CardHeader, CardTitle } from '~/components/ui/card';
 import { getApp, getProject, getTokensForApp, type ApiKeyRow } from '~/lib/api/registry-repository';
 
@@ -47,7 +47,6 @@ export default async function AppDetailPage({ params }: PageProps) {
         </Link>
         <div className="mt-1 flex flex-wrap items-center gap-3">
           <h1 className="text-3xl font-semibold tracking-tight">{app.name}</h1>
-          <EnvBadge environment={app.environment} />
           <ActiveBadge active={app.isActive} />
         </div>
       </div>
@@ -57,7 +56,6 @@ export default async function AppDetailPage({ params }: PageProps) {
           id: app.id,
           projectId: app.projectId,
           name: app.name,
-          environment: app.environment,
           rateLimitPerMinute: app.rateLimitPerMinute,
           isActive: app.isActive,
         }}

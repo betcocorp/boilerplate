@@ -5,7 +5,7 @@ import { connection } from 'next/server';
 
 import { AddAppDialog } from '~/components/admin/projects/AddAppDialog';
 import { ProjectSettingsCard } from '~/components/admin/projects/ProjectSettingsCard';
-import { ActiveBadge, EnvBadge, formatLastUsed } from '~/components/admin/projects/ui';
+import { ActiveBadge, formatLastUsed } from '~/components/admin/projects/ui';
 import {
   Card,
   CardContent,
@@ -63,7 +63,6 @@ export default async function ProjectDetailPage({ params }: PageProps) {
                 <TableHeader>
                   <TableRow className="border-border/60 hover:bg-transparent">
                     <TableHead>App</TableHead>
-                    <TableHead>Environment</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Tokens</TableHead>
                     <TableHead>Last used</TableHead>
@@ -80,9 +79,6 @@ export default async function ProjectDetailPage({ params }: PageProps) {
                         >
                           {app.name}
                         </Link>
-                      </TableCell>
-                      <TableCell>
-                        <EnvBadge environment={app.environment} />
                       </TableCell>
                       <TableCell>
                         <ActiveBadge active={app.isActive} />
