@@ -1,5 +1,18 @@
 /** Pure formatters for the API-security admin pages (no JSX — unit-testable). */
 
+export function formatInt(n: number): string {
+  return n.toLocaleString('en-US');
+}
+
+export function formatPercent(fraction: number): string {
+  return `${(fraction * 100).toFixed(1)}%`;
+}
+
+export function formatMs(ms: number | null): string {
+  if (ms == null) return '—';
+  return ms >= 1000 ? `${(ms / 1000).toFixed(2)}s` : `${Math.round(ms)}ms`;
+}
+
 export function formatDate(value: string | null): string {
   if (!value) return '—';
   const d = new Date(value);

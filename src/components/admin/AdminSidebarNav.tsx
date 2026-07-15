@@ -44,7 +44,12 @@ const sidebarSections: NavSectionModel[] = [
   {
     title: 'Workspace',
     items: [
-      { type: 'link', label: 'Dashboard', href: '/admin', icon: LayoutDashboard },
+      {
+        type: 'link',
+        label: 'Dashboard',
+        href: '/admin',
+        icon: LayoutDashboard,
+      },
       {
         type: 'group',
         label: 'Bex',
@@ -61,7 +66,10 @@ const sidebarSections: NavSectionModel[] = [
         icon: Search,
         items: [
           { label: 'Tools home', href: '/admin/tools' },
-          { label: 'Product cross-reference', href: '/admin/tools/product-cross-reference' },
+          {
+            label: 'Product cross-reference',
+            href: '/admin/tools/product-cross-reference',
+          },
           { label: 'Web Search', href: '/admin/tools/web-search' },
           { label: 'RAG semantic search', href: '/admin/products/rag' },
         ],
@@ -69,7 +77,7 @@ const sidebarSections: NavSectionModel[] = [
     ],
   },
   {
-    title: 'Products & RAG',
+    title: 'Document Corpus',
     items: [
       {
         type: 'group',
@@ -87,6 +95,12 @@ const sidebarSections: NavSectionModel[] = [
         icon: FileText,
         items: [{ label: 'SDS ingestion', href: '/admin/sds' }],
       },
+      {
+        type: 'group',
+        label: 'Markdown',
+        icon: FileText,
+        items: [{ label: 'Markdown ingestion', href: '/admin/knowledge' }],
+      },
     ],
   },
   {
@@ -96,7 +110,10 @@ const sidebarSections: NavSectionModel[] = [
         type: 'group',
         label: 'API access',
         icon: KeyRound,
-        items: [{ label: 'Projects', href: '/admin/projects' }],
+        items: [
+          { label: 'Projects', href: '/admin/projects' },
+          { label: 'Analytics', href: '/admin/projects/analytics' },
+        ],
       },
     ],
   },
@@ -227,7 +244,11 @@ export function AdminSidebarNav() {
   return (
     <div className="space-y-6">
       {sidebarSections.map((section) => (
-        <NavSection items={section.items} key={section.title} title={section.title} />
+        <NavSection
+          items={section.items}
+          key={section.title}
+          title={section.title}
+        />
       ))}
     </div>
   );
