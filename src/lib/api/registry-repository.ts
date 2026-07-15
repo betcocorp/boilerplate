@@ -240,6 +240,33 @@ export async function createApp(input: {
   return mapApp(data as AppRowDb);
 }
 
+export async function updateProject(
+  id: string,
+  input: { name: string; description?: string | null; contactEmail?: string | null },
+): Promise<void> {
+  const supabase = getSupabaseServiceRoleClient();
+  const { error } = await supabase
+    .from('api_project')
+    .update({
+      name: input.name,
+      description: input.description ?? null,
+      contact_email: input.contactEmail ?? null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', id);
+  if (error) throw new Error(error.message);
+}
+
+/** Project kill switch — is_active off disables every app + token underneath (chain check). */
+export async function setProjectActive(id: string, isActive: boolean): Promise<void> {
+  const supabase = getSupabaseServiceRoleClient();
+  const { error } = await supabase
+    .from('api_project')
+    .update({ is_active: isActive, updated_at: new Date().toISOString() })
+    .eq('id', id);
+  if (error) throw new Error(error.message);
+}
+
 export type MintedToken = { token: string; key: ApiKeyRow };
 
 /** Issue a new token for an app. Returns the plaintext ONCE; only the hash + prefix are stored. */
