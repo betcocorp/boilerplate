@@ -129,6 +129,24 @@ function escalationForIssueType(raw: string) {
   return ESCALATION_MAP.default;
 }
 
+/**
+ * B0-201: derive curation knobs from query intent. Single-product deep-dives get more facets
+ * of one line; comparisons surface several distinct lines. Undefined fields = pipeline defaults.
+ */
+function classifyRetrievalIntent(
+  query: string,
+  productName?: string,
+): { limit?: number; maxPerDocument?: number; requiredDocumentKinds?: string[] } {
+  const q = query.toLowerCase();
+  if (/\bvs\.?\b|\bversus\b|\bcompare\b|\bdifference between\b/.test(q)) {
+    return { limit: 5, maxPerDocument: 1, requiredDocumentKinds: ['product_line_profile'] };
+  }
+  if (productName && productName.trim()) {
+    return { limit: 4, maxPerDocument: 2 };
+  }
+  return {};
+}
+
 export async function executeProductTool(
   name: ProductToolName,
   args: unknown,
@@ -142,10 +160,14 @@ export async function executeProductTool(
         resolveProductLineKeyByName(resolvedProductName),
         Promise.resolve(inferSectionTypeFromQuery(q)),
       ]);
+      const intent = classifyRetrievalIntent(q, resolvedProductName);
       const result = await ragQueryForProductKnowledgeWithMeta({
         query: q,
         productLineKey,
         sectionType,
+        limit: intent.limit,
+        maxPerDocument: intent.maxPerDocument,
+        requiredDocumentKinds: intent.requiredDocumentKinds,
       });
       return {
         ok: true,

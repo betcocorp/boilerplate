@@ -133,11 +133,12 @@ async function curateUniqueDocumentSources(
   options: {
     limit: number;
     requiredDocumentKinds?: string[];
+    maxPerDocument?: number;
   },
 ): Promise<CuratedSource[]> {
   const selected = selectCuratedMatches(matches, {
     limit: options.limit,
-    maxPerDocument: 1,
+    maxPerDocument: options.maxPerDocument ?? 1,
     requiredDocumentKinds: options.requiredDocumentKinds,
   });
 
@@ -208,10 +209,17 @@ async function runProductKnowledgeQuery(input: {
   skipProductLineResolution?: boolean;
   /** Restrict retrieval to chunks belonging to a specific GHS section. Null = no filter. */
   sectionType?: string | null;
+  /** Diversity cap per parent document (default 1). Raise for single-product depth. */
+  maxPerDocument?: number;
+  /** Override which document kinds are guaranteed a slot. Default: profile + sds + knowledge. */
+  requiredDocumentKinds?: string[];
 }): Promise<ProductKnowledgeQueryBase> {
   const limit = input.limit ?? DEFAULT_UNIQUE_DOCUMENT_LIMIT;
   const explicitKey = input.productLineKey?.trim() || null;
   const sectionType = input.sectionType?.trim() || null;
+  const maxPerDocument = input.maxPerDocument;
+  const requiredDocumentKinds =
+    input.requiredDocumentKinds ?? ['product_line_profile', 'sds', 'knowledge'];
 
   if (explicitKey) {
     const result = await searchProductChunks({
@@ -225,7 +233,8 @@ async function runProductKnowledgeQuery(input: {
 
     const curated = await curateUniqueDocumentSources(result.matches, {
       limit,
-      requiredDocumentKinds: ['product_line_profile', 'sds', 'knowledge'],
+      requiredDocumentKinds,
+      maxPerDocument,
     });
 
     return {
@@ -260,6 +269,7 @@ async function runProductKnowledgeQuery(input: {
 
     const curated = await curateUniqueDocumentSources(result.matches, {
       limit,
+      maxPerDocument,
     });
 
     return {
