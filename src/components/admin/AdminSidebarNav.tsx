@@ -3,6 +3,7 @@
 import {
   ChevronRight,
   FileText,
+  KeyRound,
   LayoutDashboard,
   Library,
   MessageSquare,
@@ -85,6 +86,17 @@ const sidebarSections: NavSectionModel[] = [
         label: 'SDS',
         icon: FileText,
         items: [{ label: 'SDS ingestion', href: '/admin/sds' }],
+      },
+    ],
+  },
+  {
+    title: 'API Security',
+    items: [
+      {
+        type: 'group',
+        label: 'API access',
+        icon: KeyRound,
+        items: [{ label: 'Projects', href: '/admin/projects' }],
       },
     ],
   },
