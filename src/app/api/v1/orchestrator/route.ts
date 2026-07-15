@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 
-import { authenticateApiToken, unauthorizedResponse } from '~/lib/api/client-auth';
+import { withApiV1 } from '~/lib/api/with-api-v1';
 import { parseOrchestratorPostBody } from '~/lib/orchestrator/orchestrator-schemas';
 import { runOrchestration } from '~/lib/orchestrator/run-orchestration';
 
@@ -8,12 +8,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
 
-export async function POST(request: Request) {
-  const auth = await authenticateApiToken(request);
-  if (!auth.ok) {
-    return unauthorizedResponse();
-  }
-
+export const POST = withApiV1(async (request) => {
   let body: unknown = {};
   try {
     body = await request.json();
@@ -40,4 +35,4 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ error: message }, { status: 500 });
   }
-}
+});
