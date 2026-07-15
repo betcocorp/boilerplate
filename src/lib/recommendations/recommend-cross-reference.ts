@@ -5,7 +5,14 @@ import {
 import {
   gateRecommendation,
   scoreRecommendation,
+  XREF_DECLINE_COPY,
 } from '~/lib/recommendations/confidence-scoring';
+import {
+  evaluateValidatorGate,
+  filterGroundedCandidates,
+  scanUnsupportedSafetyClaims,
+} from '~/lib/recommendations/recommendation-guardrails';
+import type { RecommendationStatus } from '~/lib/recommendations/recommendation-schemas';
 import { lookupCrossReference } from '~/lib/tools/cross-reference-lookup';
 import {
   enrichCompetitorSpec,
@@ -14,6 +21,8 @@ import {
 } from '~/lib/websearch/enrich-competitor-spec';
 import { WebSearchService } from '~/lib/websearch/web-search-service';
 import type { WebSearchResponse } from '~/lib/websearch/websearch-schemas';
+import { runValidatorPass } from '~/lib/workflows/product-support/validator';
+import type { ValidatorResult } from '~/lib/workflows/product-support/product-support-schemas';
 
 /**
  * B0-85 — the cross-reference recommendation entry point.
@@ -43,6 +52,8 @@ export type RecommendationCandidateOut = {
 export type RecommendCrossReferenceResult = {
   source: 'legacy' | 'web';
   answered: boolean;
+  /** Persistence status: 'answered' | 'declined' (below gate) | 'pending' (validator forced review). */
+  status: RecommendationStatus;
   overallConfidence: number;
   thresholdUsed: number;
   candidates: RecommendationCandidateOut[];
@@ -66,6 +77,12 @@ export type RecommendCrossReferenceDeps = {
   fetchWeb: (query: string) => Promise<WebSearchResponse>;
   enrich: (input: EnrichCompetitorSpecInput) => Promise<EnrichedCompetitorSpec>;
   retrieve: (input: { spec: EnrichedCompetitorSpec; limit?: number }) => Promise<BetcoCandidate[]>;
+  /** B0-91 grounding post-filter: drop candidates whose Betco key is not a real legacy row. */
+  filterGrounded: (
+    candidates: BetcoCandidate[],
+  ) => Promise<{ grounded: BetcoCandidate[]; dropped: BetcoCandidate[] }>;
+  /** B0-91 validator pass over the drafted recommendation before it is surfaced. */
+  validate: (input: { draftAnswer: string; evidenceSummary: string }) => Promise<ValidatorResult>;
 };
 
 const defaultDeps: RecommendCrossReferenceDeps = {
@@ -73,6 +90,8 @@ const defaultDeps: RecommendCrossReferenceDeps = {
   fetchWeb: (query) => new WebSearchService().search({ query }),
   enrich: (input) => enrichCompetitorSpec(input),
   retrieve: (input) => retrieveBetcoCandidates(input),
+  filterGrounded: (candidates) => filterGroundedCandidates(candidates),
+  validate: (input) => runValidatorPass(input),
 };
 
 type LegacyMatch = {
@@ -138,6 +157,7 @@ export async function recommendCrossReference(
     return {
       source: 'legacy',
       answered: true,
+      status: 'answered',
       overallConfidence: legacyMatches[0]?.confidence ?? 0,
       thresholdUsed: LEGACY_MATCH_THRESHOLD,
       candidates: mapLegacyMatches(legacyMatches),
@@ -161,22 +181,94 @@ export async function recommendCrossReference(
   const sources = web.results.map((r) => ({ url: r.url, title: r.title }));
 
   const spec = await deps.enrich({ text, sources });
-  const candidates = await deps.retrieve({ spec });
-  const score = scoreRecommendation({ candidates, spec, brandKnown: brand.length > 0 });
+  const retrieved = await deps.retrieve({ spec });
+
+  // B0-91 grounding enforcement: keep only candidates that resolve to a real legacy product row, so
+  // a fabricated SKU/URL can never inflate the score or reach the user. Score the survivors only.
+  const { grounded, dropped } = await deps.filterGrounded(retrieved);
+  const score = scoreRecommendation({ candidates: grounded, spec, brandKnown: brand.length > 0 });
   const gate = gateRecommendation({ overallConfidence: score.overallConfidence });
+
+  let answered = gate.answered;
+  let status: RecommendationStatus = gate.answered ? 'answered' : 'declined';
+  let declineReason = gate.declineReason;
+  let validation: Record<string, unknown> | null = null;
+
+  // B0-91 validator pass — only when the engine would otherwise answer. Safety scan + validator
+  // verdict decide whether the drafted answer is surfaced or forced into human review ('pending').
+  if (gate.answered) {
+    const betcoEvidence = grounded.map((c) => c.evidence).filter(Boolean).join('\n\n');
+    const draft = composeDraftAnswer(input, grounded);
+    const evidenceSummary = composeEvidenceSummary(spec, sources, betcoEvidence);
+    const unsupportedClaims = scanUnsupportedSafetyClaims({ draft, evidence: betcoEvidence });
+    const validator = await deps.validate({ draftAnswer: draft, evidenceSummary });
+    const verdict = evaluateValidatorGate({ validator, unsupportedClaims });
+    validation = {
+      approved: validator.approved,
+      confidence: validator.confidence,
+      requiresHumanReview: validator.requires_human_review,
+      issues: validator.issues,
+      unsupportedClaims,
+      gatePassed: verdict.pass,
+      reasons: verdict.reasons,
+    };
+    if (!verdict.pass) {
+      answered = false;
+      status = 'pending'; // route to human review rather than surface an unvalidated answer
+      declineReason = XREF_DECLINE_COPY;
+    }
+  }
 
   return {
     source: 'web',
-    answered: gate.answered,
+    answered,
+    status,
     overallConfidence: score.overallConfidence,
     thresholdUsed: gate.thresholdUsed,
-    candidates: mapWebCandidates(candidates),
+    candidates: mapWebCandidates(grounded),
     evidence: {
       source: 'web',
       spec,
       score: score.components,
       sources: web.results.map((r) => ({ url: r.url, title: r.title, score: r.score })),
+      droppedCandidates: dropped.length,
+      validation,
     },
-    declineReason: gate.declineReason,
+    declineReason,
   };
+}
+
+/** Compose the conservative draft the validator + safety scan inspect. Asserts no PPE/dilution specifics. */
+function composeDraftAnswer(
+  input: RecommendCrossReferenceInput,
+  candidates: BetcoCandidate[],
+): string {
+  const target = [input.competitorBrand, input.competitorProduct].filter(Boolean).join(' ');
+  const lines = candidates.map(
+    (c, i) => `${i + 1}. ${c.title}${c.betcoProductKey ? ` (${c.betcoProductKey})` : ''}`,
+  );
+  return [
+    `Recommended Betco equivalent(s) for ${target || input.competitorProduct}:`,
+    ...lines,
+    'Each recommendation is a semantic match to the retrieved Betco product documents.',
+  ].join('\n');
+}
+
+/** Evidence the validator scores the draft against: the enriched spec + Betco doc excerpts + sources. */
+function composeEvidenceSummary(
+  spec: EnrichedCompetitorSpec,
+  sources: Array<{ url: string; title?: string }>,
+  betcoEvidence: string,
+): string {
+  return [
+    `Competitor spec (from web): ${JSON.stringify({
+      chemistryClass: spec.chemistryClass,
+      productCategory: spec.productCategory,
+      primaryUse: spec.primaryUse,
+      formFactor: spec.formFactor,
+      keyClaims: spec.keyClaims,
+    })}`,
+    `Sources: ${sources.map((s) => s.url).join(', ') || 'none'}`,
+    `Retrieved Betco documents:\n${betcoEvidence || 'none'}`,
+  ].join('\n\n');
 }

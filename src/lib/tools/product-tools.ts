@@ -270,6 +270,7 @@ export async function executeProductTool(
         adapter: 'cross_reference_recommendation_v1',
         source: result.source,
         answered: result.answered,
+        status: result.status,
         overallConfidence: result.overallConfidence,
         thresholdUsed: result.thresholdUsed,
         declineReason: result.declineReason,

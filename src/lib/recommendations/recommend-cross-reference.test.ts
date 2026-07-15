@@ -61,10 +61,19 @@ const legacyMiss = {
   matches: [],
 } as unknown as Awaited<ReturnType<RecommendCrossReferenceDeps['lookupInternal']>>;
 
+const APPROVED_VALIDATOR = {
+  approved: true,
+  confidence: 1,
+  issues: [] as string[],
+  requires_human_review: false,
+};
+
 const webVia = (candidates: BetcoCandidate[]): Omit<RecommendCrossReferenceDeps, 'lookupInternal'> => ({
   fetchWeb: (query) => new WebSearchService(new MockWebSearchProvider()).search({ query }),
   enrich: async () => SPEC,
   retrieve: async () => candidates,
+  filterGrounded: async (cands) => ({ grounded: cands, dropped: [] }),
+  validate: async () => APPROVED_VALIDATOR,
 });
 
 describe('recommendCrossReference (B0-85)', () => {
@@ -77,11 +86,14 @@ describe('recommendCrossReference (B0-85)', () => {
         fetchWeb: async () => { webCalled = true; throw new Error('should not fetch web'); },
         enrich: async () => SPEC,
         retrieve: async () => [],
+        filterGrounded: async (cands) => ({ grounded: cands, dropped: [] }),
+        validate: async () => APPROVED_VALIDATOR,
       },
     );
     expect(webCalled).toBe(false);
     expect(result.source).toBe('legacy');
     expect(result.answered).toBe(true);
+    expect(result.status).toBe('answered');
     expect(result.candidates[0]).toMatchObject({ betcoTitle: 'Triforce', betcoProductKey: '333B5-00', rank: 1 });
     expect(result.overallConfidence).toBe(0.92);
   });
@@ -109,5 +121,60 @@ describe('recommendCrossReference (B0-85)', () => {
     expect(result.overallConfidence).toBeLessThan(0.8);
     expect(result.declineReason).toBeTruthy();
     expect(result.candidates).toHaveLength(1); // decline still carries the (weak) candidates
+  });
+
+  it('B0-91: drops ungrounded candidates so a fabricated match cannot inflate confidence', async () => {
+    // Two strong candidates, but grounding resolves only 'A' to a real legacy row.
+    const result = await recommendCrossReference(
+      { competitorProduct: 'Cleaner X', competitorBrand: 'Acme' },
+      {
+        lookupInternal: async () => legacyMiss,
+        ...webVia([candidate(0.95, 'A'), candidate(0.9, 'GHOST')]),
+        filterGrounded: async (cands) => ({
+          grounded: cands.filter((c) => c.betcoProductKey === 'A'),
+          dropped: cands.filter((c) => c.betcoProductKey !== 'A'),
+        }),
+      },
+    );
+    expect(result.candidates.map((c) => c.betcoProductKey)).toEqual(['A']);
+    expect(result.evidence.droppedCandidates).toBe(1);
+  });
+
+  it('B0-91: a validator that requires human review forces status=pending and declines', async () => {
+    let validated = false;
+    const result = await recommendCrossReference(
+      { competitorProduct: 'Cleaner X', competitorBrand: 'Acme' },
+      {
+        lookupInternal: async () => legacyMiss,
+        ...webVia([candidate(0.95, 'A'), candidate(0.92, 'B')]),
+        validate: async () => {
+          validated = true;
+          return { approved: true, confidence: 0.9, issues: [], requires_human_review: true };
+        },
+      },
+    );
+    expect(validated).toBe(true);
+    expect(result.answered).toBe(false);
+    expect(result.status).toBe('pending');
+    expect(result.declineReason).toBeTruthy();
+    const validation = result.evidence.validation as { reasons: string[] };
+    expect(validation.reasons).toContain('requires_human_review');
+  });
+
+  it('B0-91: skips the validator entirely when the confidence gate already declines', async () => {
+    let validated = false;
+    const result = await recommendCrossReference(
+      { competitorProduct: 'Obscure Product' }, // no brand → penalty → sub-threshold
+      {
+        lookupInternal: async () => legacyMiss,
+        ...webVia([candidate(0.4, 'A')]),
+        validate: async () => {
+          validated = true;
+          return APPROVED_VALIDATOR;
+        },
+      },
+    );
+    expect(validated).toBe(false);
+    expect(result.status).toBe('declined');
   });
 });

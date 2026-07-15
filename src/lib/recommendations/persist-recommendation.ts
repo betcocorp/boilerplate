@@ -34,7 +34,7 @@ export function mapResultToRecommendationInput(
       productName: input.competitorProduct,
       traceId: ctx.traceId,
     },
-    status: result.answered ? 'answered' : 'declined',
+    status: result.status,
     overallConfidence: result.overallConfidence,
     thresholdUsed: result.thresholdUsed,
     answerGiven: result.answered,

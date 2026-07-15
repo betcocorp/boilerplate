@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { getOpenAIClient, resolveResponsesModel } from '~/lib/openai/client';
 import { extractAssistantText } from '~/lib/openai/response-item-parsing';
+import { wrapUntrustedWebEvidence } from '~/lib/recommendations/recommendation-guardrails';
 import {
   competitorSpecSchema,
   extractCompetitorSpec,
@@ -169,7 +170,11 @@ async function defaultRunLlm(input: EnrichCompetitorSpecInput): Promise<LlmCompe
       input: [
         {
           role: 'user',
-          content: JSON.stringify({ content: input.text, sources: input.sources ?? [] }),
+          // B0-91: web content is untrusted — fence + instruction-guard it before the model reads it.
+          content: JSON.stringify({
+            content: wrapUntrustedWebEvidence(input.text),
+            sources: input.sources ?? [],
+          }),
           type: 'message',
         },
       ],

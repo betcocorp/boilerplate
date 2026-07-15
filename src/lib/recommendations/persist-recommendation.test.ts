@@ -11,6 +11,7 @@ import type { RecommendationWithCandidates } from '~/lib/recommendations/recomme
 const answered: RecommendCrossReferenceResult = {
   source: 'web',
   answered: true,
+  status: 'answered',
   overallConfidence: 0.86,
   thresholdUsed: 0.8,
   candidates: [
@@ -23,6 +24,7 @@ const answered: RecommendCrossReferenceResult = {
 const declined: RecommendCrossReferenceResult = {
   ...answered,
   answered: false,
+  status: 'declined',
   overallConfidence: 0.6,
   declineReason: 'Not confident enough — contact a rep.',
   candidates: [],
@@ -91,6 +93,8 @@ describe('runCrossReferenceRecommendation (B0-89)', () => {
           fetchWeb: async () => { throw new Error('no web'); },
           enrich: async () => { throw new Error('no enrich'); },
           retrieve: async () => [],
+          filterGrounded: async (cands) => ({ grounded: cands, dropped: [] }),
+          validate: async () => ({ approved: true, confidence: 1, issues: [], requires_human_review: false }),
         },
         persist: { createRecommendation: async () => { throw new Error('db down'); } },
       },
