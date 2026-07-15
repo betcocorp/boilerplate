@@ -28,6 +28,8 @@ export interface ApiAuthContext {
   keyId: string;
   appId: string;
   projectId: string;
+  /** Per-app rate limit (requests/minute); null = unlimited (B0-119). */
+  rateLimitPerMinute: number | null;
 }
 
 /** Best-effort project/app/token identity for logging a failed-but-resolvable attempt. */
@@ -95,7 +97,7 @@ export async function authenticateApiToken(
 
   const { data: app, error: appError } = await supabase
     .from('api_app')
-    .select('id, project_id, is_active')
+    .select('id, project_id, is_active, rate_limit_per_minute')
     .eq('id', key.app_id)
     .maybeSingle();
 
@@ -141,6 +143,7 @@ export async function authenticateApiToken(
       keyId: key.id,
       appId: app.id,
       projectId: project.id,
+      rateLimitPerMinute: app.rate_limit_per_minute,
     },
   };
 }

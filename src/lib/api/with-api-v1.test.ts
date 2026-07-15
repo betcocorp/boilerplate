@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { authenticateApiToken } from '~/lib/api/client-auth';
+import { countAppRequestsInWindow } from '~/lib/api/rate-limit';
 import { touchApiKeyLastUsed, writeApiRequestLog } from '~/lib/api/request-log';
 import { withApiV1 } from '~/lib/api/with-api-v1';
 
@@ -25,6 +26,11 @@ vi.mock('~/lib/api/request-log', () => ({
   touchApiKeyLastUsed: vi.fn(async () => {}),
 }));
 
+vi.mock('~/lib/api/rate-limit', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('~/lib/api/rate-limit')>();
+  return { ...actual, countAppRequestsInWindow: vi.fn(async () => 0) };
+});
+
 async function drainAfter() {
   for (const cb of afterCallbacks) await cb();
 }
@@ -39,6 +45,7 @@ const ACTIVE = {
     keyId: 'k',
     appId: 'a',
     projectId: 'p',
+    rateLimitPerMinute: null,
   },
 };
 
@@ -83,6 +90,39 @@ describe('withApiV1', () => {
     expect(writeApiRequestLog).toHaveBeenCalledWith(
       expect.objectContaining({ usage: { totalTokens: 42 } }),
     );
+  });
+
+  it('B0-119: returns 429 + Retry-After and logs it when the app is over its rate limit', async () => {
+    vi.mocked(authenticateApiToken).mockResolvedValue({
+      ok: true,
+      context: { keyId: 'k', appId: 'a', projectId: 'p', rateLimitPerMinute: 5 },
+    });
+    vi.mocked(countAppRequestsInWindow).mockResolvedValue(5);
+    let handlerCalled = false;
+    const route = withApiV1(async () => {
+      handlerCalled = true;
+      return new Response('ok', { status: 200 });
+    });
+
+    const res = await route(req());
+    expect(res.status).toBe(429);
+    expect(res.headers.get('retry-after')).toBeTruthy();
+    expect(handlerCalled).toBe(false);
+    await drainAfter();
+    expect(writeApiRequestLog).toHaveBeenCalledWith(
+      expect.objectContaining({ appId: 'a', status: 429, error: 'rate_limited' }),
+    );
+  });
+
+  it('B0-119: an app under its limit is allowed through', async () => {
+    vi.mocked(authenticateApiToken).mockResolvedValue({
+      ok: true,
+      context: { keyId: 'k', appId: 'a', projectId: 'p', rateLimitPerMinute: 5 },
+    });
+    vi.mocked(countAppRequestsInWindow).mockResolvedValue(4);
+    const route = withApiV1(async () => new Response('ok', { status: 200 }));
+    const res = await route(req());
+    expect(res.status).toBe(200);
   });
 
   it('does NOT log an unattributable failure (no orphan rows)', async () => {

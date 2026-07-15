@@ -6,6 +6,11 @@ import {
   type ApiAuthContext,
 } from '~/lib/api/client-auth';
 import {
+  countAppRequestsInWindow,
+  evaluateRateLimit,
+  rateLimitedResponse,
+} from '~/lib/api/rate-limit';
+import {
   touchApiKeyLastUsed,
   writeApiRequestLog,
   type ApiTokenUsage,
@@ -62,7 +67,7 @@ export function withApiV1(handler: ApiV1Handler) {
       return response;
     }
 
-    const { keyId, appId, projectId } = auth.context;
+    const { keyId, appId, projectId, rateLimitPerMinute } = auth.context;
     let usage: ApiTokenUsage | null = null;
 
     const finalize = (status: number, error: string | null) => {
@@ -83,6 +88,17 @@ export function withApiV1(handler: ApiV1Handler) {
         ]);
       });
     };
+
+    // B0-119 — per-app rate limit. Unlimited apps skip the count entirely (no added latency).
+    if (rateLimitPerMinute != null && rateLimitPerMinute > 0) {
+      const recentCount = await countAppRequestsInWindow(appId);
+      const decision = evaluateRateLimit({ limitPerMinute: rateLimitPerMinute, recentCount });
+      if (decision.limited) {
+        const response = rateLimitedResponse(decision.retryAfterSeconds);
+        finalize(response.status, 'rate_limited');
+        return response;
+      }
+    }
 
     let response: Response;
     try {
