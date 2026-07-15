@@ -514,7 +514,7 @@ function asString(v: unknown) {
 
 async function loadState() {
   const supabase = getSupabaseServiceRoleClient();
-  const [{ data: sources }, { data: docs }] = await Promise.all([
+  const [{ data: sources }, { data: docs }, { data: chunkDocs }] = await Promise.all([
     supabase
       .schema('rag')
       .from('source_record')
@@ -523,8 +523,21 @@ async function loadState() {
       .eq('source_table', SOURCE_TABLE)
       .eq('source_type', SOURCE_TYPE),
     supabase.schema('rag').from('document').select('id, source_record_id, updated_at').eq('document_kind', DOCUMENT_KIND),
+    // Real per-document chunk counts so "ingested" reflects actual chunks, not the
+    // source's mutable metadata.ingestion.status (which register-seed resets). The
+    // knowledge corpus is well under the 1000-row default cap; only the per-row chunk
+    // count column would undercount past that, never the ingested/registered status.
+    supabase.schema('rag').from('document_chunk').select('document_id').like('chunk_key', 'knowledge:%'),
   ]);
-  return { sources: (sources ?? []) as SourceRow[], docs: (docs ?? []) as DocRow[] };
+  const chunkCountByDoc = new Map<string, number>();
+  for (const row of (chunkDocs ?? []) as { document_id: string | null }[]) {
+    if (row.document_id) chunkCountByDoc.set(row.document_id, (chunkCountByDoc.get(row.document_id) ?? 0) + 1);
+  }
+  return {
+    sources: (sources ?? []) as SourceRow[],
+    docs: (docs ?? []) as DocRow[],
+    chunkCountByDoc,
+  };
 }
 
 async function loadChunkTotals() {
@@ -550,12 +563,14 @@ function buildDocumentRow(
   seed: KnowledgeSeedDocument,
   source: SourceRow | null,
   doc: DocRow | null,
+  chunkCount: number,
 ): KnowledgeDashboardDocument {
   const ingestion = asIngestion(source?.metadata ?? null);
-  const chunkCount = typeof ingestion?.chunk_count === 'number' ? (ingestion.chunk_count as number) : 0;
   const metaStatus = asString(ingestion?.status);
   let status: KnowledgeDocumentStatus = 'missing';
   if (metaStatus === 'failed') status = 'failed';
+  // A linked document with chunks means ingest succeeded — even if a later
+  // register-seed reset the source's mutable metadata status back to 'registered'.
   else if (metaStatus === 'ingested' || (doc && chunkCount > 0)) status = 'ingested';
   else if (source) status = 'registered';
   return {
@@ -601,13 +616,14 @@ async function withChunkTotals(status: KnowledgeDashboardStatus): Promise<Knowle
 }
 
 async function statusRows(seeds: KnowledgeSeedDocument[]) {
-  const { sources, docs } = await loadState();
+  const { sources, docs, chunkCountByDoc } = await loadState();
   const sourceByPk = new Map(sources.map((s) => [s.source_pk, s]));
   const docBySource = new Map(docs.map((d) => [d.source_record_id, d]));
   return seeds.map((seed) => {
     const source = sourceByPk.get(toSourcePk(seed)) ?? null;
     const doc = source ? (docBySource.get(source.id) ?? null) : null;
-    return buildDocumentRow(seed, source, doc);
+    const chunkCount = doc ? (chunkCountByDoc.get(doc.id) ?? 0) : 0;
+    return buildDocumentRow(seed, source, doc, chunkCount);
   });
 }
 
