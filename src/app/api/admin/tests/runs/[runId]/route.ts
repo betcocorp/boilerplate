@@ -1,9 +1,11 @@
+import { getServerSession } from 'next-auth';
 import { NextResponse } from 'next/server';
 
 // Allow up to 5 minutes — sequential search evals over large gold sets
 // can take 60–120 s, which exceeds the default Vercel function timeout.
 export const maxDuration = 300;
 
+import { authOptions } from '~/lib/auth';
 import { executeSearchRun } from '~/lib/tests/search-run-executor';
 import { executeTestRun } from '~/lib/tests/run-executor';
 import {
@@ -46,6 +48,11 @@ export async function GET(
   _request: Request,
   context: { params: Promise<{ runId: string }> },
 ) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   const { runId } = await context.params;
   const run = await getTestResultById(runId).catch(() => null);
 
@@ -98,6 +105,11 @@ export async function POST(
   _request: Request,
   context: { params: Promise<{ runId: string }> },
 ) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   const { runId } = await context.params;
   const run = await getTestResultById(runId).catch(() => null);
 
@@ -129,6 +141,11 @@ export async function PATCH(
   request: Request,
   context: { params: Promise<{ runId: string }> },
 ) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   const { runId } = await context.params;
   const body = (await request.json().catch(() => ({}))) as { action?: unknown };
   const action = typeof body.action === 'string' ? body.action : '';
