@@ -1,3 +1,4 @@
+import { writeAuditLog } from '~/lib/audit/audit-log';
 import { newCorrelationId } from '~/lib/observability/correlation-id';
 import { createRecommendation } from '~/lib/recommendations/repository';
 import type { CreateRecommendationInput } from '~/lib/recommendations/recommendation-schemas';
@@ -91,11 +92,14 @@ export async function persistRecommendation(
 export type RunCrossReferenceRecommendationDeps = {
   recommend?: RecommendCrossReferenceDeps;
   persist?: PersistRecommendationDeps;
+  /** B0-92 — record per-recommendation web-search cost/outcome. Best-effort (never blocks). */
+  audit?: (eventType: string, payload: Record<string, unknown>, ctx: { traceId: string }) => Promise<void>;
 };
 
 /**
  * Production entry point: compute the recommendation (B0-85) and persist the outcome (B0-89) on
- * every call. Persistence never blocks the returned result.
+ * every call. Persistence never blocks the returned result. Also records a per-recommendation cost
+ * audit entry (B0-92) with the web-search spend/telemetry.
  */
 export async function runCrossReferenceRecommendation(
   input: RecommendCrossReferenceInput,
@@ -105,5 +109,24 @@ export async function runCrossReferenceRecommendation(
   const traceId = ctx.traceId ?? newCorrelationId();
   const result = await recommendCrossReference(input, deps.recommend);
   const recommendationId = await persistRecommendation(input, result, { ...ctx, traceId }, deps.persist);
+
+  const audit = deps.audit ?? ((eventType, payload, auditCtx) => writeAuditLog(eventType, payload, auditCtx));
+  const webSearch = (result.evidence as { webSearch?: Record<string, unknown> }).webSearch ?? null;
+  await audit(
+    'cross_reference_recommendation',
+    {
+      competitor_product: input.competitorProduct,
+      competitor_brand: input.competitorBrand ?? null,
+      source: result.source,
+      status: result.status,
+      answered: result.answered,
+      overall_confidence: result.overallConfidence,
+      threshold_used: result.thresholdUsed,
+      recommendation_id: recommendationId,
+      web_search: webSearch,
+    },
+    { traceId },
+  );
+
   return { ...result, recommendationId };
 }

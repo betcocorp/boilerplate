@@ -4,6 +4,7 @@ import {
 } from '~/lib/recommendations/candidate-retrieval';
 import {
   gateRecommendation,
+  resolveXrefThreshold,
   scoreRecommendation,
   XREF_DECLINE_COPY,
 } from '~/lib/recommendations/confidence-scoring';
@@ -12,6 +13,10 @@ import {
   filterGroundedCandidates,
   scanUnsupportedSafetyClaims,
 } from '~/lib/recommendations/recommendation-guardrails';
+import {
+  runRecommendationWebSearch,
+  type RecommendationSearchResult,
+} from '~/lib/recommendations/recommendation-web-search';
 import type { RecommendationStatus } from '~/lib/recommendations/recommendation-schemas';
 import { lookupCrossReference } from '~/lib/tools/cross-reference-lookup';
 import {
@@ -19,8 +24,6 @@ import {
   type EnrichCompetitorSpecInput,
   type EnrichedCompetitorSpec,
 } from '~/lib/websearch/enrich-competitor-spec';
-import { WebSearchService } from '~/lib/websearch/web-search-service';
-import type { WebSearchResponse } from '~/lib/websearch/websearch-schemas';
 import { runValidatorPass } from '~/lib/workflows/product-support/validator';
 import type { ValidatorResult } from '~/lib/workflows/product-support/product-support-schemas';
 
@@ -74,7 +77,8 @@ export type RecommendCrossReferenceDeps = {
     productName: string;
     maxResults?: number;
   }) => Promise<LegacyLookupResult>;
-  fetchWeb: (query: string) => Promise<WebSearchResponse>;
+  /** B0-92 budgeted web search: capped searches, escalation, domain allowlist, cost/rate guards. */
+  searchWeb: (input: { brand: string; product: string }) => Promise<RecommendationSearchResult>;
   enrich: (input: EnrichCompetitorSpecInput) => Promise<EnrichedCompetitorSpec>;
   retrieve: (input: { spec: EnrichedCompetitorSpec; limit?: number }) => Promise<BetcoCandidate[]>;
   /** B0-91 grounding post-filter: drop candidates whose Betco key is not a real legacy row. */
@@ -87,7 +91,7 @@ export type RecommendCrossReferenceDeps = {
 
 const defaultDeps: RecommendCrossReferenceDeps = {
   lookupInternal: (input) => lookupCrossReference(input),
-  fetchWeb: (query) => new WebSearchService().search({ query }),
+  searchWeb: (input) => runRecommendationWebSearch(input),
   enrich: (input) => enrichCompetitorSpec(input),
   retrieve: (input) => retrieveBetcoCandidates(input),
   filterGrounded: (candidates) => filterGroundedCandidates(candidates),
@@ -170,10 +174,30 @@ export async function recommendCrossReference(
     };
   }
 
-  // Step 2 — web-grounded path.
-  const web = await deps.fetchWeb(
-    [brand, input.competitorProduct, 'disinfectant OR cleaner product specifications'].filter(Boolean).join(' '),
-  );
+  // Step 2 — web-grounded path (B0-92 budgeted search: capped, escalating, cost/rate-guarded).
+  const search = await deps.searchWeb({ brand, product: input.competitorProduct });
+  const webSearch = {
+    searchesUsed: search.searchesUsed,
+    estimatedCostUsd: search.estimatedCostUsd,
+    escalated: search.escalated,
+    budgetExceeded: search.budgetExceeded,
+  };
+
+  // No evidence (budget short-circuit or search failure) → decline; never fabricate without grounding.
+  if (!search.response) {
+    return {
+      source: 'web',
+      answered: false,
+      status: 'declined',
+      overallConfidence: 0,
+      thresholdUsed: resolveXrefThreshold(),
+      candidates: [],
+      evidence: { source: 'web', webSearch },
+      declineReason: XREF_DECLINE_COPY,
+    };
+  }
+
+  const web = search.response;
   const text = web.results
     .map((r) => r.rawContent ?? r.snippet ?? '')
     .filter(Boolean)
@@ -233,6 +257,7 @@ export async function recommendCrossReference(
       sources: web.results.map((r) => ({ url: r.url, title: r.title, score: r.score })),
       droppedCandidates: dropped.length,
       validation,
+      webSearch,
     },
     declineReason,
   };

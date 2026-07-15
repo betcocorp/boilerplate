@@ -90,17 +90,48 @@ describe('runCrossReferenceRecommendation (B0-89)', () => {
       {
         recommend: {
           lookupInternal: async () => legacyConfident,
-          fetchWeb: async () => { throw new Error('no web'); },
+          searchWeb: async () => { throw new Error('no web'); },
           enrich: async () => { throw new Error('no enrich'); },
           retrieve: async () => [],
           filterGrounded: async (cands) => ({ grounded: cands, dropped: [] }),
           validate: async () => ({ approved: true, confidence: 1, issues: [], requires_human_review: false }),
         },
         persist: { createRecommendation: async () => { throw new Error('db down'); } },
+        audit: async () => {},
       },
     );
     expect(out.source).toBe('legacy');
     expect(out.answered).toBe(true);
     expect(out.recommendationId).toBeNull(); // persistence failed but the call still returned
+  });
+
+  it('records a per-recommendation cost audit entry (B0-92)', async () => {
+    const legacyConfident = {
+      ok: true,
+      fallbackRecommended: false,
+      normalizedInput: {},
+      totalCandidates: 1,
+      matches: [{ productKey: 'PK', betcoProduct: { title: 'T' }, confidence: 0.9, matchType: 'exact' }],
+    } as never;
+    const events: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+    await runCrossReferenceRecommendation(
+      input,
+      { traceId: 't' },
+      {
+        recommend: {
+          lookupInternal: async () => legacyConfident,
+          searchWeb: async () => { throw new Error('no web'); },
+          enrich: async () => { throw new Error('no enrich'); },
+          retrieve: async () => [],
+          filterGrounded: async (cands) => ({ grounded: cands, dropped: [] }),
+          validate: async () => ({ approved: true, confidence: 1, issues: [], requires_human_review: false }),
+        },
+        persist: { createRecommendation: async () => ({ id: 'rec-9' }) as unknown as RecommendationWithCandidates },
+        audit: async (eventType, payload) => { events.push({ eventType, payload }); },
+      },
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0].eventType).toBe('cross_reference_recommendation');
+    expect(events[0].payload).toMatchObject({ recommendation_id: 'rec-9', source: 'legacy', status: 'answered' });
   });
 });

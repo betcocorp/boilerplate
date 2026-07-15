@@ -68,8 +68,16 @@ const APPROVED_VALIDATOR = {
   requires_human_review: false,
 };
 
+const webSearchOk = async () => ({
+  response: await new WebSearchService(new MockWebSearchProvider()).search({ query: 'competitor spec' }),
+  searchesUsed: 1,
+  estimatedCostUsd: 0,
+  budgetExceeded: false,
+  escalated: false,
+});
+
 const webVia = (candidates: BetcoCandidate[]): Omit<RecommendCrossReferenceDeps, 'lookupInternal'> => ({
-  fetchWeb: (query) => new WebSearchService(new MockWebSearchProvider()).search({ query }),
+  searchWeb: webSearchOk,
   enrich: async () => SPEC,
   retrieve: async () => candidates,
   filterGrounded: async (cands) => ({ grounded: cands, dropped: [] }),
@@ -83,7 +91,7 @@ describe('recommendCrossReference (B0-85)', () => {
       { competitorProduct: 'BNC-15', competitorBrand: 'Spartan' },
       {
         lookupInternal: async () => legacyConfident,
-        fetchWeb: async () => { webCalled = true; throw new Error('should not fetch web'); },
+        searchWeb: async () => { webCalled = true; throw new Error('should not search web'); },
         enrich: async () => SPEC,
         retrieve: async () => [],
         filterGrounded: async (cands) => ({ grounded: cands, dropped: [] }),
@@ -176,5 +184,30 @@ describe('recommendCrossReference (B0-85)', () => {
     );
     expect(validated).toBe(false);
     expect(result.status).toBe('declined');
+  });
+
+  it('B0-92: declines with no candidates when the web-search budget is exceeded', async () => {
+    const result = await recommendCrossReference(
+      { competitorProduct: 'Cleaner X', competitorBrand: 'Acme' },
+      {
+        lookupInternal: async () => legacyMiss,
+        searchWeb: async () => ({
+          response: null,
+          searchesUsed: 0,
+          estimatedCostUsd: 0,
+          budgetExceeded: true,
+          escalated: false,
+        }),
+        enrich: async () => SPEC,
+        retrieve: async () => [candidate(0.95, 'A')], // would clear the gate, but never reached
+        filterGrounded: async (cands) => ({ grounded: cands, dropped: [] }),
+        validate: async () => APPROVED_VALIDATOR,
+      },
+    );
+    expect(result.source).toBe('web');
+    expect(result.answered).toBe(false);
+    expect(result.status).toBe('declined');
+    expect(result.candidates).toEqual([]);
+    expect((result.evidence.webSearch as { budgetExceeded: boolean }).budgetExceeded).toBe(true);
   });
 });
