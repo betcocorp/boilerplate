@@ -346,6 +346,129 @@ export type Database = {
           },
         ]
       }
+      product_efficacy: {
+        Row: {
+          claim_type: string | null
+          confidence: number
+          contact_time_seconds: number | null
+          dilution_oz_per_gal: number | null
+          entity_id: string
+          epa_registration: string | null
+          id: string
+          organism: string
+          product_key: string | null
+          source_page: number | null
+          source_record_id: string | null
+          updated_at: string
+        }
+        Insert: {
+          claim_type?: string | null
+          confidence?: number
+          contact_time_seconds?: number | null
+          dilution_oz_per_gal?: number | null
+          entity_id: string
+          epa_registration?: string | null
+          id?: string
+          organism: string
+          product_key?: string | null
+          source_page?: number | null
+          source_record_id?: string | null
+          updated_at?: string
+        }
+        Update: {
+          claim_type?: string | null
+          confidence?: number
+          contact_time_seconds?: number | null
+          dilution_oz_per_gal?: number | null
+          entity_id?: string
+          epa_registration?: string | null
+          id?: string
+          organism?: string
+          product_key?: string | null
+          source_page?: number | null
+          source_record_id?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_efficacy_entity_id_fkey"
+            columns: ["entity_id"]
+            isOneToOne: false
+            referencedRelation: "entity"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_efficacy_source_record_id_fkey"
+            columns: ["source_record_id"]
+            isOneToOne: false
+            referencedRelation: "source_record"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      product_line_fact: {
+        Row: {
+          chemistry_class: string | null
+          confidence: number
+          contact_time_seconds: number | null
+          coverage_sq_ft: number | null
+          dilution_display: string | null
+          dilution_oz_per_gal: number | null
+          entity_id: string
+          epa_registration: string | null
+          id: string
+          product_application: string | null
+          product_key: string | null
+          source_record_id: string | null
+          updated_at: string
+        }
+        Insert: {
+          chemistry_class?: string | null
+          confidence?: number
+          contact_time_seconds?: number | null
+          coverage_sq_ft?: number | null
+          dilution_display?: string | null
+          dilution_oz_per_gal?: number | null
+          entity_id: string
+          epa_registration?: string | null
+          id?: string
+          product_application?: string | null
+          product_key?: string | null
+          source_record_id?: string | null
+          updated_at?: string
+        }
+        Update: {
+          chemistry_class?: string | null
+          confidence?: number
+          contact_time_seconds?: number | null
+          coverage_sq_ft?: number | null
+          dilution_display?: string | null
+          dilution_oz_per_gal?: number | null
+          entity_id?: string
+          epa_registration?: string | null
+          id?: string
+          product_application?: string | null
+          product_key?: string | null
+          source_record_id?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_line_fact_entity_id_fkey"
+            columns: ["entity_id"]
+            isOneToOne: false
+            referencedRelation: "entity"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_line_fact_source_record_id_fkey"
+            columns: ["source_record_id"]
+            isOneToOne: false
+            referencedRelation: "source_record"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       search_embedding: {
         Row: {
           avg_cache_lookup_ms: number

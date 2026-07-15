@@ -65,7 +65,7 @@ This is the highest-value change and it's now pinpointed: add a **structured-fac
 
 ## 4. Recommended sequence (code-anchored)
 
-1. **Ingest the 56 md files** as a new `knowledge` `document_kind` with product-line-resolved metadata; add it to `requiredDocumentKinds` (or a `retrieveKnowledge` helper in `product-guidance.ts`). *Highest ROI, unblocked, fills the corpus's missing content category.*
+1. **Ingest the 56 md files** as a new `knowledge` `document_kind` with product-line-resolved metadata; add it to `requiredDocumentKinds` (or a `retrieveKnowledge` helper in `product-guidance.ts`). *Highest ROI, unblocked, fills the corpus's missing content category.* Admin ingest flow (S3 `retool-360/v1-markdown-files`, modeled on the SDS pipeline) is designed in **`BEX-2.0-Markdown-Ingest-Admin-Panel-Design.md`**; the fact-join is in **`BEX-2.0-Structured-Fact-Join-Design.md`**.
 2. **Product alias/synonym table** → resolve "Squeaky®", "Game Time®", "pH7Q" to `product_line_key`; feeds the resolver and lets `search_product_docs`/tools anchor by name.
 3. **Structured-fact join** → new fetch keyed on `entity_id`/`product_line_key`, merged into `CuratedSource`; back it with the existing (currently near-empty) `rag.document` fact columns and a future `product_efficacy` table. *This is the actual reconciliation fix.*
 4. **Intent-driven curation** → let the SME tool pass `limit`/`maxPerDocument`/`requiredDocumentKinds`; add explicit multi-entity handling for comparisons.
@@ -80,3 +80,47 @@ This is the highest-value change and it's now pinpointed: add a **structured-fac
 ## 5. Security finding (carried from v2 — still open)
 
 Row-Level Security is disabled on 43 tables, including `agent_conversations`, `agent_messages`, `audit_logs`, and the entire `rag` corpus — anyone with the anon key can read/modify every row. Code confirms server paths run through the Supabase **service role** (`getSupabaseServiceRoleClient()`), so enabling RLS won't break them, but policies must be added before enabling. This is roadmap goal #4 and is live in production. Full `ALTER … ENABLE ROW LEVEL SECURITY` + starter-policy script available on request.
+
+---
+
+## 6. Reconciliation with the existing RAG docs
+
+Three prior docs live in `src/docs/`: `rag-specification.md` (end-state design), `rag-execution-plan.md` (May 2026 roadmap), and `rag-data-relationships.md` (source→RAG data map). They remain useful, but they predate the current `dev` code and the live DB and have drifted. This section reconciles them so the six docs read as one set.
+
+### 6.1 Terminology map (their term → live term)
+
+| Prior docs | Live schema / code |
+|---|---|
+| `rag.chunk` | **`rag.document_chunk`** |
+| `document_kind` = `'product'` / `'tds'` | **`'product_line_profile'`** (no `'tds'` exists) |
+| "embeddings_large column implies model version" | correct — `embedding_large` (halfvec 3072) is the **only** populated vector; the old `embedding` column is dead |
+| "RRF fusion" (spec §5.1) | hybrid via `match_*_chunks_hybrid` RPCs (confirm fusion method in RPC body) |
+
+### 6.2 Stale figures (snapshots disagree with each other and with live)
+
+| Metric | data-relationships | execution-plan (May) | **Live (July, measured)** |
+|---|---|---|---|
+| `rag.document` | 4,248 | 3,157 SDS + 1,703 profiles | **4,661** (2,958 SDS + 1,703 profiles) |
+| chunks | 49,532 | 35,080–40,238 | **26,825** (100% on `embedding_large`) |
+| SDS entity-link | 2,973 / 4,248 (70%) | 2,119 / 3,157 (67%) | **2,119 / 2,958 SDS**; 3,822 / 4,661 all docs |
+
+The corpus **shrank** (further SP/FR purge + re-chunk) since those docs — treat all three prior snapshots as historical; this assessment's numbers are current.
+
+### 6.3 Status drift — execution-plan phases already shipped in code
+
+The May plan lists these as "Not done"/"Queued"; the code says otherwise:
+
+- **1.1 entity enrichment** — *partially done*: `entity.metadata` now has `dilution_code` (155 lines), `coverage_sq_ft` (145), descriptions (~550).
+- **1.3 `section_type`** — *done*: `document_chunk.section_type` exists with the GHS categories.
+- **2.1 entity-scoped search** — *done*: `match_product_chunks(_hybrid)` take `filter_product_line_key`; `search.ts` passes it.
+- **2.2 section-type filtering** — *done*: `sectionType` plumbed through `search.ts` → `product-knowledge.ts` → tools (`inferSectionTypeFrom*`).
+- **2.3 entity hydration** — *done*: `entity-context.ts` (`fetchEntityContexts`/`buildEntityContextBlock`) **is** the spec §5.5 / plan §2.3 "structured product block."
+- **4.1 ingestion pipeline** — *no longer fully deferred*: the SDS admin pipeline (`admin/sds/pipeline.ts`) exists; the markdown-ingest design extends that pattern.
+
+### 6.4 How my three docs relate (no duplication)
+
+- **This assessment** supersedes the prior snapshots as the current, code+DB-grounded state; keep the spec as the *aspirational* end-state reference.
+- **`BEX-2.0-Structured-Fact-Join-Design.md`** *evolves* spec §3.4/§5.5 and plan §1.1/§2.3: it takes their loose `entity.metadata` enrichment and promotes it to **typed, cited** tables (`product_line_fact`) plus a **`product_efficacy`** model the prior docs don't cover at all.
+- **`BEX-2.0-Markdown-Ingest-Admin-Panel-Design.md`** *realizes* plan Phase 4.1 for a new `knowledge` source, modeled on the shipped SDS pipeline.
+
+**Recommendation:** refresh the `Current State Snapshot` table in `rag-execution-plan.md` and the counts in `rag-data-relationships.md` from the live figures in §6.2, and rename `rag.chunk` → `rag.document_chunk` in the spec. I can patch those in place on request.
