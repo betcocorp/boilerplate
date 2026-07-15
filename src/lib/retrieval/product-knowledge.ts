@@ -184,7 +184,7 @@ export async function ragQueryForProductKnowledgeWithMeta(input: {
 
     const curated = await curateUniqueDocumentSources(result.matches, {
       limit,
-      requiredDocumentKinds: ['product_line_profile', 'sds'],
+      requiredDocumentKinds: ['product_line_profile', 'sds', 'knowledge'],
     });
 
     return {
@@ -253,7 +253,7 @@ export async function ragQueryForProductKnowledgeWithMeta(input: {
   const resolution = resolveProductLineFromMatches(broadResult.matches);
   const broadCurated = await curateUniqueDocumentSources(broadResult.matches, {
     limit,
-    requiredDocumentKinds: ['product_line_profile', 'sds'],
+    requiredDocumentKinds: ['product_line_profile', 'sds', 'knowledge'],
   });
 
   if (resolution.lockedProductLineKey == null) {
@@ -284,7 +284,7 @@ export async function ragQueryForProductKnowledgeWithMeta(input: {
   });
   const anchoredCurated = await curateUniqueDocumentSources(anchoredResult.matches, {
     limit,
-    requiredDocumentKinds: ['product_line_profile', 'sds'],
+    requiredDocumentKinds: ['product_line_profile', 'sds', 'knowledge'],
   });
 
   const minimumAnchoredEvidence = Math.max(2, Math.ceil(limit / 2));
