@@ -97,18 +97,23 @@ function getS3Prefix() {
 }
 
 function getAwsCredentials() {
+  // Prefer the documented AWS_360_* keys, then fall back to the generic read
+  // keys actually configured in .env.local (AWS_ACCESS_READ_KEY_ID /
+  // AWS_SECRET_READ_ACCESS_KEY) — the same retool-360 read credentials.
   const accessKeyId =
     process.env.AWS_360_READ_ACCESS_KEY_ID?.trim() ||
-    process.env.AWS_360_WRITE_ACCESS_KEY_ID?.trim();
+    process.env.AWS_360_WRITE_ACCESS_KEY_ID?.trim() ||
+    process.env.AWS_ACCESS_READ_KEY_ID?.trim();
   const secretAccessKey =
     process.env.AWS_360_READ_SECRET_ACCESS_KEY?.trim() ||
-    process.env.AWS_360_WRITE_SECRET_ACCESS_KEY?.trim();
+    process.env.AWS_360_WRITE_SECRET_ACCESS_KEY?.trim() ||
+    process.env.AWS_SECRET_READ_ACCESS_KEY?.trim();
   if (!accessKeyId || !secretAccessKey) return undefined;
   return { accessKeyId, secretAccessKey };
 }
 
 function getS3Client() {
-  const region = process.env.AWS_360_REGION?.trim() || 'us-east-1';
+  const region = process.env.AWS_360_REGION?.trim() || process.env.AWS_REGION?.trim() || 'us-east-1';
   const credentials = getAwsCredentials();
   return new S3Client({ region, ...(credentials ? { credentials } : {}) });
 }
@@ -613,7 +618,10 @@ export async function getKnowledgeDashboardStatus(): Promise<KnowledgeDashboardS
   } catch (error) {
     const reason = error instanceof Error ? error.message : 'Unknown S3 discovery failure.';
     return await withChunkTotals(
-      toDashboard([], `S3 discovery unavailable (${reason}). Configure AWS_360_READ_* for reads on retool-360.`),
+      toDashboard(
+        [],
+        `S3 discovery unavailable (${reason}). Configure AWS_360_READ_* (or AWS_ACCESS_READ_KEY_ID / AWS_SECRET_READ_ACCESS_KEY) for reads on retool-360.`,
+      ),
     );
   }
 }
