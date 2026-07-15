@@ -14,17 +14,118 @@ export type Database = {
   }
   rag: {
     Tables: {
+      cross_reference_recommendation_candidates: {
+        Row: {
+          betco_prod_id: string | null
+          betco_product_key: string | null
+          betco_title: string | null
+          candidate_confidence: number | null
+          created_at: string
+          id: string
+          rank: number | null
+          rationale: string | null
+          recommendation_id: string
+          source: Json
+        }
+        Insert: {
+          betco_prod_id?: string | null
+          betco_product_key?: string | null
+          betco_title?: string | null
+          candidate_confidence?: number | null
+          created_at?: string
+          id?: string
+          rank?: number | null
+          rationale?: string | null
+          recommendation_id: string
+          source?: Json
+        }
+        Update: {
+          betco_prod_id?: string | null
+          betco_product_key?: string | null
+          betco_title?: string | null
+          candidate_confidence?: number | null
+          created_at?: string
+          id?: string
+          rank?: number | null
+          rationale?: string | null
+          recommendation_id?: string
+          source?: Json
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cross_reference_recommendation_candidate_recommendation_id_fkey"
+            columns: ["recommendation_id"]
+            isOneToOne: false
+            referencedRelation: "cross_reference_recommendations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      cross_reference_recommendations: {
+        Row: {
+          answer_given: boolean
+          competitor_brand: string | null
+          competitor_product: string
+          created_at: string
+          created_by: string | null
+          decline_reason: string | null
+          evidence: Json
+          id: string
+          normalized_input: Json
+          overall_confidence: number | null
+          status: string
+          threshold_used: number | null
+          updated_at: string
+        }
+        Insert: {
+          answer_given?: boolean
+          competitor_brand?: string | null
+          competitor_product: string
+          created_at?: string
+          created_by?: string | null
+          decline_reason?: string | null
+          evidence?: Json
+          id?: string
+          normalized_input?: Json
+          overall_confidence?: number | null
+          status?: string
+          threshold_used?: number | null
+          updated_at?: string
+        }
+        Update: {
+          answer_given?: boolean
+          competitor_brand?: string | null
+          competitor_product?: string
+          created_at?: string
+          created_by?: string | null
+          decline_reason?: string | null
+          evidence?: Json
+          id?: string
+          normalized_input?: Json
+          overall_confidence?: number | null
+          status?: string
+          threshold_used?: number | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
       document: {
         Row: {
           body_markdown: string | null
           body_text: string
+          chemistry_class: string | null
+          contact_time_seconds: number | null
           created_at: string
+          dilution_oz_per_gal: number | null
           document_key: string
           document_kind: string
           entity_id: string | null
+          epa_registrant: string | null
+          epa_registration: string | null
           id: string
           language_code: string
           metadata: Json
+          product_application: string | null
           source_record_id: string
           summary: string | null
           title: string
@@ -34,13 +135,19 @@ export type Database = {
         Insert: {
           body_markdown?: string | null
           body_text: string
+          chemistry_class?: string | null
+          contact_time_seconds?: number | null
           created_at?: string
+          dilution_oz_per_gal?: number | null
           document_key: string
           document_kind: string
           entity_id?: string | null
+          epa_registrant?: string | null
+          epa_registration?: string | null
           id?: string
           language_code?: string
           metadata?: Json
+          product_application?: string | null
           source_record_id: string
           summary?: string | null
           title: string
@@ -50,13 +157,19 @@ export type Database = {
         Update: {
           body_markdown?: string | null
           body_text?: string
+          chemistry_class?: string | null
+          contact_time_seconds?: number | null
           created_at?: string
+          dilution_oz_per_gal?: number | null
           document_key?: string
           document_kind?: string
           entity_id?: string | null
+          epa_registrant?: string | null
+          epa_registration?: string | null
           id?: string
           language_code?: string
           metadata?: Json
+          product_application?: string | null
           source_record_id?: string
           summary?: string | null
           title?: string
