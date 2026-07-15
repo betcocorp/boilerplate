@@ -5,6 +5,7 @@ import {
   retrieveSurfacesLists,
 } from '~/lib/retrieval/product-guidance';
 import { ragQueryForProductKnowledgeWithMeta } from '~/lib/retrieval/product-knowledge';
+import { fetchFactsForProductLineKey } from '~/lib/retrieval/product-facts';
 import { resolveProductLineKeyByName } from '~/lib/rag/entity-context';
 import {
   inferSectionTypeFromQuery,
@@ -15,6 +16,7 @@ import {
   findProductsByCategoryInputSchema,
   getApprovedUsageGuidanceInputSchema,
   getCompatibilityRulesInputSchema,
+  getEfficacyDataInputSchema,
   getEscalationPolicyInputSchema,
   getProductCategoryInputSchema,
   getProductSpecInputSchema,
@@ -330,6 +332,33 @@ export async function executeProductTool(
         products: route.products.slice(0, max),
         candidates: route.candidates,
         latencyMs: route.latencyMs,
+      };
+    }
+    case 'get_efficacy_data': {
+      const p = getEfficacyDataInputSchema.parse(args);
+      const productLineKey = await resolveProductLineKeyByName(p.productId);
+      const facts = productLineKey
+        ? await fetchFactsForProductLineKey(productLineKey, p.organism)
+        : null;
+
+      if (!facts) {
+        return {
+          ok: true,
+          adapter: 'structured_facts_v1',
+          productId: p.productId,
+          organism: p.organism ?? null,
+          facts: null,
+          note: 'No verified dilution/efficacy data on file for this product. Do not estimate or infer a value — tell the user the data is not verified.',
+        };
+      }
+
+      return {
+        ok: true,
+        adapter: 'structured_facts_v1',
+        productId: p.productId,
+        productLineKey,
+        organism: p.organism ?? null,
+        facts,
       };
     }
   }

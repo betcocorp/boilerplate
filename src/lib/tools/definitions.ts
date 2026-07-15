@@ -248,4 +248,25 @@ export const productSupportTools: Tool[] = [
       required: ['competitorProduct'],
     },
   },
+  {
+    type: 'function',
+    name: 'get_efficacy_data',
+    strict: false,
+    description:
+      'Return VERIFIED structured facts for a product from the fact tables — dilution (oz/gal), contact/dwell time, EPA registration, and per-organism kill claims. This does NOT run prose/semantic retrieval. Use it for dilution ratio questions and any efficacy / "what does it kill" / kill-claim / contact-time question. Returns `facts` with the structured values, or `facts: null` plus a `note` when there is no verified data on file — in that case do NOT estimate or infer a value; tell the user the data is not verified.',
+    parameters: {
+      type: 'object',
+      properties: {
+        productId: {
+          type: 'string',
+          description: 'Betco product or product-line name/id (e.g. "pH7Q", "4020").',
+        },
+        organism: {
+          type: 'string',
+          description: 'Optional organism/pathogen to filter kill claims, e.g. "Norovirus".',
+        },
+      },
+      required: ['productId'],
+    },
+  },
 ];

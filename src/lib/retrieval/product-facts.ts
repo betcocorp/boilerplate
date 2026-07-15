@@ -103,6 +103,36 @@ export async function fetchProductLineFacts(
   return map;
 }
 
+/**
+ * Fact-only lookup for a single product line resolved by product_line_key.
+ * Returns null when the line can't be resolved or has no verified facts.
+ * `organism` optionally filters the efficacy rows (case-insensitive contains).
+ */
+export async function fetchFactsForProductLineKey(
+  productLineKey: string,
+  organism?: string,
+): Promise<ProductLineFacts | null> {
+  const rag = getSupabaseServiceRoleClient().schema('rag');
+  const { data: entity } = await rag
+    .from('entity')
+    .select('id')
+    .eq('entity_type', 'product_line')
+    .eq('product_line_key', productLineKey)
+    .limit(1)
+    .maybeSingle();
+
+  if (!entity?.id) return null;
+
+  const facts = (await fetchProductLineFacts([entity.id])).get(entity.id);
+  if (!facts || !hasAnyScalar(facts)) return null;
+
+  const needle = organism?.trim().toLowerCase();
+  if (needle) {
+    return { ...facts, efficacy: facts.efficacy.filter((e) => e.organism.toLowerCase().includes(needle)) };
+  }
+  return facts;
+}
+
 function hasAnyScalar(f: ProductLineFacts): boolean {
   return (
     f.dilutionDisplay != null ||
