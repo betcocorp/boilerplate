@@ -40,9 +40,9 @@ const ADAPTER_TAG = 'rag_corpus_full_document' as const;
  * preview / citation hint.
  */
 function sourcePayload(
-  sources: Awaited<ReturnType<typeof ragQueryForProductKnowledgeWithMeta>>['sources'],
+  result: Awaited<ReturnType<typeof ragQueryForProductKnowledgeWithMeta>>,
 ) {
-  return sources.map((s) => ({
+  const docs = result.sources.map((s) => ({
     documentId: s.documentId,
     chunkId: s.chunkId,
     title: s.title,
@@ -58,6 +58,30 @@ function sourcePayload(
     productLineKey: s.productLineKey,
     freshness: null as null,
   }));
+
+  // B0-196: surface structured facts as a first-class grounded source so both the
+  // model and the validator's evidence summary (built from sources[].documentBody)
+  // treat verified dilution/efficacy values as citable evidence.
+  if (result.factsBlock) {
+    docs.unshift({
+      documentId: 'verified-facts',
+      chunkId: 'verified-facts',
+      title: 'Verified Product Facts (structured)',
+      snippet: result.factsBlock.slice(0, 900),
+      documentBody: result.factsBlock,
+      documentBodyChars: result.factsBlock.length,
+      documentBodyChunkCount: 1,
+      documentBodyTruncated: false,
+      documentBodyTokenEstimate: null,
+      matchedChunkText: result.factsBlock,
+      confidence: 1,
+      documentKind: 'facts',
+      productLineKey: null,
+      freshness: null as null,
+    });
+  }
+
+  return docs;
 }
 
 const ESCALATION_MAP: Record<string, { summary: string; steps: string[] }> = {
@@ -126,7 +150,7 @@ export async function executeProductTool(
         adapter: ADAPTER_TAG,
         query: q,
         entityContextBlock: result.entityContextBlock,
-        sources: sourcePayload(result.sources),
+        sources: sourcePayload(result),
         retrieval: result.retrieval,
       };
     }
@@ -144,7 +168,7 @@ export async function executeProductTool(
         adapter: ADAPTER_TAG,
         productId: p.productId,
         entityContextBlock: result.entityContextBlock,
-        sources: sourcePayload(result.sources),
+        sources: sourcePayload(result),
         retrieval: result.retrieval,
       };
     }
@@ -161,7 +185,7 @@ export async function executeProductTool(
         surfaceType: p.surfaceType,
         environment: p.environment ?? null,
         entityContextBlock: result.entityContextBlock,
-        sources: sourcePayload(result.sources),
+        sources: sourcePayload(result),
         retrieval: result.retrieval,
       };
     }
@@ -179,7 +203,7 @@ export async function executeProductTool(
         adapter: ADAPTER_TAG,
         productId: p.productId,
         entityContextBlock: result.entityContextBlock,
-        sources: sourcePayload(result.sources),
+        sources: sourcePayload(result),
         retrieval: result.retrieval,
       };
     }
@@ -195,7 +219,7 @@ export async function executeProductTool(
         surfaceType: p.surfaceType,
         materialType: p.materialType ?? null,
         entityContextBlock: result.entityContextBlock,
-        sources: sourcePayload(result.sources),
+        sources: sourcePayload(result),
         retrieval: result.retrieval,
       };
     }
@@ -214,7 +238,7 @@ export async function executeProductTool(
         adapter: ADAPTER_TAG,
         productId: p.productId,
         entityContextBlock: result.entityContextBlock,
-        sources: sourcePayload(result.sources),
+        sources: sourcePayload(result),
         retrieval: result.retrieval,
       };
     }
@@ -233,7 +257,7 @@ export async function executeProductTool(
         adapter: ADAPTER_TAG,
         productId: p.productId,
         entityContextBlock: result.entityContextBlock,
-        sources: sourcePayload(result.sources),
+        sources: sourcePayload(result),
         retrieval: result.retrieval,
       };
     }
