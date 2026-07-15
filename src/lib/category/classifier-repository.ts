@@ -10,12 +10,21 @@ import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
  */
 
 export const CLASSIFIER_LINK_SOURCE = 'classifier';
+/** Sources the delta sync must never overwrite or delete. */
+export const HUMAN_CURATED_LINK_SOURCE = 'human_curated';
+export const SITE_SCRAPE_LINK_SOURCE = 'betco_site_scrape';
 
 export type ClassifierLink = {
   prodLineKey: string;
   prodLineId: string | null;
   categoryKey: string;
   confidence: number;
+};
+
+export type ExistingCategoryLink = {
+  categoryKey: string;
+  prodLineKey: string;
+  source: string;
 };
 
 export type ProdLineClassifierInput = {
@@ -61,6 +70,48 @@ export async function upsertClassifierLink(link: ClassifierLink): Promise<void> 
       { onConflict: 'category_key,prod_line_key' },
     );
 
+  if (error) throw new Error(error.message);
+}
+
+/** Load the existing category links (with source) for a set of prod-line keys. */
+export async function loadCategoryLinks(prodLineKeys: string[]): Promise<ExistingCategoryLink[]> {
+  if (prodLineKeys.length === 0) return [];
+  const supabase = getSupabaseServiceRoleClient();
+  const { data, error } = await supabase
+    .schema('public')
+    .from('product_category_link')
+    .select('category_key, prod_line_key, source')
+    .in('prod_line_key', prodLineKeys);
+  if (error) throw new Error(error.message);
+  return (data ?? []).map((r) => ({
+    categoryKey: String((r as LooseRow).category_key),
+    prodLineKey: String((r as LooseRow).prod_line_key),
+    source: String((r as LooseRow).source ?? ''),
+  }));
+}
+
+/** Distinct prod-line keys that currently have a classifier-sourced link (the refresh delta). */
+export async function loadClassifierProdLineKeys(): Promise<string[]> {
+  const supabase = getSupabaseServiceRoleClient();
+  const { data, error } = await supabase
+    .schema('public')
+    .from('product_category_link')
+    .select('prod_line_key')
+    .eq('source', CLASSIFIER_LINK_SOURCE);
+  if (error) throw new Error(error.message);
+  return [...new Set((data ?? []).map((r) => String((r as LooseRow).prod_line_key)))];
+}
+
+/** Delete a link only if it is classifier-sourced — never removes authoritative/human-curated links. */
+export async function deleteClassifierLink(categoryKey: string, prodLineKey: string): Promise<void> {
+  const supabase = getSupabaseServiceRoleClient();
+  const { error } = await supabase
+    .schema('public')
+    .from('product_category_link')
+    .delete()
+    .eq('category_key', categoryKey)
+    .eq('prod_line_key', prodLineKey)
+    .eq('source', CLASSIFIER_LINK_SOURCE);
   if (error) throw new Error(error.message);
 }
 
