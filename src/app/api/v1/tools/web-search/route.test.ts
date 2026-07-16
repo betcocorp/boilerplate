@@ -22,7 +22,6 @@ function authOk() {
       keyId: 'key-1',
       appId: 'app-1',
       projectId: 'project-1',
-      environment: 'test',
       rateLimitPerMinute: null,
     },
   } as never);
