@@ -73,6 +73,14 @@ export const productSupportOutcomeSchema = z.object({
   confidence: z.number().optional(),
   validation: validatorResultSchema,
   routingDecision: z.string().optional(),
+  /** B0-117 — LLM token usage for per-request cost attribution in api_request_log. */
+  usage: z
+    .object({
+      promptTokens: z.number(),
+      completionTokens: z.number(),
+      totalTokens: z.number(),
+    })
+    .optional(),
 });
 
 export type ProductSupportOutcome = z.infer<typeof productSupportOutcomeSchema>;

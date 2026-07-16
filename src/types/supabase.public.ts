@@ -188,7 +188,6 @@ export type Database = {
       api_app: {
         Row: {
           created_at: string
-          environment: Database["public"]["Enums"]["api_environment"]
           id: string
           is_active: boolean
           name: string
@@ -198,7 +197,6 @@ export type Database = {
         }
         Insert: {
           created_at?: string
-          environment?: Database["public"]["Enums"]["api_environment"]
           id?: string
           is_active?: boolean
           name: string
@@ -208,7 +206,6 @@ export type Database = {
         }
         Update: {
           created_at?: string
-          environment?: Database["public"]["Enums"]["api_environment"]
           id?: string
           is_active?: boolean
           name?: string
@@ -1000,7 +997,7 @@ export type Database = {
       classify_prompt_category: { Args: { p_prompt: string }; Returns: string }
     }
     Enums: {
-      api_environment: "production" | "staging" | "development"
+      [_ in never]: never
     }
     CompositeTypes: {
       [_ in never]: never
@@ -1127,8 +1124,6 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {
-      api_environment: ["production", "staging", "development"],
-    },
+    Enums: {},
   },
 } as const

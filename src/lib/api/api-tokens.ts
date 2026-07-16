@@ -3,30 +3,15 @@ import { createHash, randomBytes } from 'node:crypto';
 /**
  * API token primitives for `/api/v1/*` client authentication.
  *
- * A token is `bex_{env}_{secret}` where the secret is 32 random bytes
- * (base64url). Only the SHA-256 hash is ever persisted; the full token is
- * shown to the operator exactly once at creation. The short `prefix` is stored
- * alongside the hash so a token can be identified in the admin UI without
- * exposing the secret.
+ * A token is `bex_{secret}` where the secret is 32 random bytes (base64url). Only the SHA-256 hash
+ * is ever persisted; the full token is shown to the operator exactly once at creation. The short
+ * `prefix` is stored alongside the hash so a token can be identified in the admin UI without
+ * exposing the secret. (Environment was removed — it was never a bex-side boundary; any valid token
+ * authenticates regardless of the consumer's environment.)
  */
 
-export const API_ENVIRONMENTS = [
-  'production',
-  'staging',
-  'development',
-] as const;
-
-export type ApiEnvironment = (typeof API_ENVIRONMENTS)[number];
-
-/** Short, human-facing segment embedded in the token and its prefix. */
-const ENVIRONMENT_SEGMENT: Record<ApiEnvironment, string> = {
-  production: 'prod',
-  staging: 'stg',
-  development: 'dev',
-};
-
 const SECRET_BYTES = 32;
-/** Characters of the full token retained for display (`bex_prod_a1b2`). */
+/** Characters of the full token retained for display (`bex_a1b2c3d4e`). */
 const PREFIX_LENGTH = 13;
 
 export interface GeneratedApiToken {
@@ -38,13 +23,9 @@ export interface GeneratedApiToken {
   prefix: string;
 }
 
-export function environmentSegment(environment: ApiEnvironment): string {
-  return ENVIRONMENT_SEGMENT[environment];
-}
-
-export function generateApiToken(environment: ApiEnvironment): GeneratedApiToken {
+export function generateApiToken(): GeneratedApiToken {
   const secret = randomBytes(SECRET_BYTES).toString('base64url');
-  const token = `bex_${ENVIRONMENT_SEGMENT[environment]}_${secret}`;
+  const token = `bex_${secret}`;
 
   return {
     token,
@@ -57,7 +38,8 @@ export function hashApiToken(token: string): string {
   return createHash('sha256').update(token, 'utf8').digest('hex');
 }
 
-const TOKEN_PATTERN = /^bex_(prod|stg|dev)_[A-Za-z0-9_-]{16,}$/;
+// Accepts current `bex_<secret>` tokens and legacy `bex_<env>_<secret>` tokens (underscores allowed).
+const TOKEN_PATTERN = /^bex_[A-Za-z0-9_-]{16,}$/;
 
 /** Cheap shape check to reject obvious non-tokens before hashing/DB lookup. */
 export function looksLikeApiToken(value: string): boolean {

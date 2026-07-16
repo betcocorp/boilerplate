@@ -1,0 +1,26 @@
+question,should_answer,question_category,source_style,product_mention,notes
+"What is the correct step-by-step process to clean and disinfect a restroom?",yes,restroom-procedure,howto,,restroom-cleaning-process-and-frequency
+"How often should high-traffic restrooms be cleaned versus low-traffic ones?",yes,restroom-procedure,faq,,restroom-cleaning-process-and-frequency
+"How do I remove soap scum from a shower?",yes,restroom-procedure,howto,,remove-soap-scum-from-shower
+"How can I restore corroded restroom fixtures?",yes,restroom-procedure,howto,,restore-corroded-restroom-fixtures
+"What PPE should staff wear when disinfecting a restroom?",yes,safety-ppe,howto,,safety-and-ppe
+"What are common restroom cleaning mistakes to avoid?",yes,restroom-procedure,troubleshooting,,common-cleaning-mistakes
+"How do probiotic cleaners help control restroom odors?",yes,odor-control,faq,,betco-probiotic-solutions
+"Why is my floor finish not stripping off the way it should?",yes,floor-care,troubleshooting,,floor-stripping-troubleshooting
+"Is short dwell time or wrong dilution the cause when a stripper won't cut the finish?",yes,floor-care,troubleshooting,,floor-stripping-troubleshooting
+"How long should VCT finish dry between coats?",yes,floor-care,howto,,vct-finish-dry-time-between-coats
+"How many coats of finish should I apply to a new VCT floor?",yes,floor-care,howto,,floor-finish-coats-guide
+"When can I open a freshly finished VCT floor to foot traffic?",yes,floor-care,faq,,vct-finish-open-to-traffic-timing
+"How do I prep a brand-new VCT floor before applying finish?",yes,floor-care,howto,,new-vct-floor-prep-guide
+"What is the top scrub and recoat procedure for a VCT floor?",yes,floor-care,howto,,vat-top-scrub-recoat-full-procedure
+"How do I tell the difference between VCT and VAT flooring?",yes,floor-care,faq,,vct-vs-vat-identification-guide
+"What causes mastic bleed-back on a VCT floor and how do I fix it?",yes,floor-care,troubleshooting,,vct-mastic-bleed-back-guide
+"Does the solids percentage of a floor finish determine how many coats I need?",yes,floor-care,faq,,should-solids-drive-floor-finish-selection
+"What products should I avoid using on a wood gym floor?",yes,floor-care,faq,,Wood_Gym_Floor_FAQ_Guide
+"Why does my wood gym floor look amber or pumpkin-colored?",yes,floor-care,troubleshooting,,Gym_Floor_Amber_Color_Explanation
+"When should a wood gym floor be recoated versus fully sanded?",yes,floor-care,faq,,Recoat_vs_Sanding_Gym_Floor_Guidelines
+"What are the re-entry guidelines after coating a gym floor?",yes,floor-care,howto,,Gym_Floor_Reentry_Guidelines
+"How do I properly burnish wood floor coatings?",yes,floor-care,howto,,Burnishing_Wood_Floor_Coatings_Tech_Bulletin
+"For a wood gym floor, should I use Squeaky or Game Time?",yes,product-comparison,faq,"Squeaky, Game Time",comparison-entity-resolution
+"How do I reset the password on my email account?",no,out-of-scope,,,scope-gate-should-decline
+"What is the capital of France?",no,out-of-scope,,,scope-gate-should-decline

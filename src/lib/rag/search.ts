@@ -688,13 +688,16 @@ async function callMatchRpc(
   const { data, error } =
     opts.scope === 'products'
       ? opts.useHybrid
-        ? await (rag as unknown as HybridRpcClient).rpc('match_product_chunks_hybrid', {
+        ? // Send every filter key explicitly (null, not undefined) so PostgREST resolves to the
+          // section-aware overload. supabase-js strips undefined keys, which left the arg set
+          // matching BOTH `match_product_chunks_hybrid` overloads (42725 "function is not unique").
+          await (rag as unknown as HybridRpcClient).rpc('match_product_chunks_hybrid', {
             query_embedding: toVectorLiteral(embedding),
             query_text: hybridQueryText,
             match_count: opts.rpcLimit,
-            filter_product_key: undefined,
-            filter_product_line_key: opts.productLineKey || undefined,
-            filter_section_type: opts.sectionType || undefined,
+            filter_product_key: null,
+            filter_product_line_key: opts.productLineKey || null,
+            filter_section_type: opts.sectionType || null,
           })
         : await rag.rpc('match_product_chunks', {
             query_embedding: toVectorLiteral(embedding),

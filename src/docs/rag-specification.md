@@ -1,6 +1,8 @@
 # BEX RAG System — Technical Specification
 
 > **Purpose:** Define the end-state architecture, data model, and operational behavior of the BEX retrieval-augmented generation system. This document is the authoritative reference for what the system should look like when complete.
+>
+> **Updated 2026-07-15 (live reconciliation — see `BEX-2.0-Corpus-Assessment-and-Reconciliation-Strategy.md` §6).** Naming/values reconciled to the live schema: the chunk table is `rag.document_chunk` (renamed throughout this doc); live `document_kind` values are `sds`, `product_line_profile`, and `knowledge` (there is no `tds`/`product`); the live vector column is `embeddings_large` (halfvec 3072) — the old 1536 `embedding` column is dead. Live counts: 4,661 documents, 26,825 chunks. Structured facts now live in `rag.product_line_fact` / `rag.product_efficacy`; name→line resolution via `rag.product_alias`.
 
 ---
 
@@ -31,7 +33,7 @@ BEX is an AI assistant for commercial cleaning professionals. The RAG layer is r
 | Entity link coverage | 100% of ingestable SDS docs | `rag.document.entity_id IS NULL` count |
 | Avg similarity score | ≥ 0.78 | `test_results.avg_similarity` |
 | P95 query latency | < 800 ms | `timings.totalMs` in search result |
-| Chunk token coverage | 100% | `rag.chunk.token_count IS NULL` count |
+| Chunk token coverage | 100% | `rag.document_chunk.token_count IS NULL` count |
 | Stale content age | < 90 days | last ingestion timestamp vs current date |
 
 ---
@@ -68,7 +70,7 @@ rag.entity
 ```
 rag.document
 ├── id                  UUID PK
-├── document_kind       'sds' | 'product' | 'tds'
+├── document_kind       'sds' | 'product_line_profile' | 'knowledge'
 ├── entity_id           → rag.entity.id  (required for sds/product)
 ├── document_key        unique string key
 ├── source_url          canonical URL to the source PDF or page
@@ -86,7 +88,7 @@ rag.document
 ### 3.3 Chunk Model
 
 ```
-rag.chunk
+rag.document_chunk
 ├── id                   UUID PK
 ├── document_id          → rag.document.id
 ├── product_line_key     UUID  (→ rag.entity.product_line_key, denormalized for query perf)
@@ -162,7 +164,7 @@ Entity linking  (run on every new/updated document)
   │  - If still unlinked: create entity record if product line data exists
   │
   ▼
-rag.chunk  (upsert by chunk_key)
+rag.document_chunk  (upsert by chunk_key)
   │  - Classify section_type from heading/section_path
   │  - Set has_dilution_info, has_hazard_info, has_first_aid flags
   │  - Compute token_count

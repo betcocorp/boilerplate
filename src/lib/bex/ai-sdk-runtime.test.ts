@@ -53,6 +53,12 @@ describe('runAiSdkWithToolLoop', () => {
     expect(result.assistantText).toBe('Hello, world!');
     expect(result.finalResponseId).toBeNull();
     expect(result.responseIds.length).toBeGreaterThanOrEqual(1);
+    // B0-117 — usage is surfaced on the result (numeric fields; the mock reports zeros).
+    expect(result.usage).toEqual({
+      promptTokens: expect.any(Number),
+      completionTokens: expect.any(Number),
+      totalTokens: expect.any(Number),
+    });
   });
 
   it('runs the tool loop: executes the forced tool, then streams the final answer', async () => {
@@ -114,5 +120,7 @@ describe('runAiSdkWithToolLoop', () => {
     expect(result.assistantText).toBe('Triforce (#333)');
     expect(result.toolTrace).toHaveLength(1);
     expect(result.responseIds.length).toBeGreaterThanOrEqual(2);
+    // B0-117 — usage is surfaced on the result (numeric total).
+    expect(typeof result.usage.totalTokens).toBe('number');
   });
 });

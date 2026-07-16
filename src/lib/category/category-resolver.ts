@@ -10,6 +10,11 @@
  * Resilient", "Warewash-Machine Products") + product↔line links, ahead of a betco.com scrape.
  */
 
+import {
+  normalizeLookupValue as normalize,
+  tokenizeLookupValue as tokenize,
+} from '~/lib/text/normalization';
+
 export type TaxonomyNode = {
   key: string;
   name: string;
@@ -43,21 +48,6 @@ const CONFIDENCE = {
 
 const DEFAULT_MIN_CONFIDENCE = 0.34;
 const CONTAINMENT_MIN_LEN = 3;
-
-function normalize(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/#/g, ' number ')
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function tokenize(value: string): string[] {
-  const n = normalize(value);
-  return n ? n.split(' ').filter(Boolean) : [];
-}
 
 function jaccard(a: Set<string>, b: Set<string>): number {
   if (a.size === 0 || b.size === 0) return 0;

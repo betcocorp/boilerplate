@@ -2,7 +2,7 @@ import { createUIMessageStream, createUIMessageStreamResponse } from 'ai';
 import { NextResponse } from 'next/server';
 
 import { runBexChatTurn } from '~/lib/bex/run-chat-turn';
-import { canPostBexChat } from '~/lib/api/bex-api-auth';
+import { hasBexSession } from '~/lib/api/bex-api-auth';
 import { bexChatPostBodySchema } from '~/lib/conversations/conversation-schemas';
 import { newCorrelationId } from '~/lib/observability/correlation-id';
 import { logInfo } from '~/lib/observability/logger';
@@ -56,15 +56,15 @@ export async function POST(request: Request) {
     );
   }
 
+  if (!(await hasBexSession())) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   let body: unknown = {};
   try {
     body = await request.json();
   } catch {
     body = {};
-  }
-
-  if (!canPostBexChat(request, body)) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   const parsed = bexChatPostBodySchema.safeParse(body);

@@ -14,17 +14,118 @@ export type Database = {
   }
   rag: {
     Tables: {
+      cross_reference_recommendation_candidates: {
+        Row: {
+          betco_prod_id: string | null
+          betco_product_key: string | null
+          betco_title: string | null
+          candidate_confidence: number | null
+          created_at: string
+          id: string
+          rank: number | null
+          rationale: string | null
+          recommendation_id: string
+          source: Json
+        }
+        Insert: {
+          betco_prod_id?: string | null
+          betco_product_key?: string | null
+          betco_title?: string | null
+          candidate_confidence?: number | null
+          created_at?: string
+          id?: string
+          rank?: number | null
+          rationale?: string | null
+          recommendation_id: string
+          source?: Json
+        }
+        Update: {
+          betco_prod_id?: string | null
+          betco_product_key?: string | null
+          betco_title?: string | null
+          candidate_confidence?: number | null
+          created_at?: string
+          id?: string
+          rank?: number | null
+          rationale?: string | null
+          recommendation_id?: string
+          source?: Json
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cross_reference_recommendation_candidate_recommendation_id_fkey"
+            columns: ["recommendation_id"]
+            isOneToOne: false
+            referencedRelation: "cross_reference_recommendations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      cross_reference_recommendations: {
+        Row: {
+          answer_given: boolean
+          competitor_brand: string | null
+          competitor_product: string
+          created_at: string
+          created_by: string | null
+          decline_reason: string | null
+          evidence: Json
+          id: string
+          normalized_input: Json
+          overall_confidence: number | null
+          status: string
+          threshold_used: number | null
+          updated_at: string
+        }
+        Insert: {
+          answer_given?: boolean
+          competitor_brand?: string | null
+          competitor_product: string
+          created_at?: string
+          created_by?: string | null
+          decline_reason?: string | null
+          evidence?: Json
+          id?: string
+          normalized_input?: Json
+          overall_confidence?: number | null
+          status?: string
+          threshold_used?: number | null
+          updated_at?: string
+        }
+        Update: {
+          answer_given?: boolean
+          competitor_brand?: string | null
+          competitor_product?: string
+          created_at?: string
+          created_by?: string | null
+          decline_reason?: string | null
+          evidence?: Json
+          id?: string
+          normalized_input?: Json
+          overall_confidence?: number | null
+          status?: string
+          threshold_used?: number | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
       document: {
         Row: {
           body_markdown: string | null
           body_text: string
+          chemistry_class: string | null
+          contact_time_seconds: number | null
           created_at: string
+          dilution_oz_per_gal: number | null
           document_key: string
           document_kind: string
           entity_id: string | null
+          epa_registrant: string | null
+          epa_registration: string | null
           id: string
           language_code: string
           metadata: Json
+          product_application: string | null
           source_record_id: string
           summary: string | null
           title: string
@@ -34,13 +135,19 @@ export type Database = {
         Insert: {
           body_markdown?: string | null
           body_text: string
+          chemistry_class?: string | null
+          contact_time_seconds?: number | null
           created_at?: string
+          dilution_oz_per_gal?: number | null
           document_key: string
           document_kind: string
           entity_id?: string | null
+          epa_registrant?: string | null
+          epa_registration?: string | null
           id?: string
           language_code?: string
           metadata?: Json
+          product_application?: string | null
           source_record_id: string
           summary?: string | null
           title: string
@@ -50,13 +157,19 @@ export type Database = {
         Update: {
           body_markdown?: string | null
           body_text?: string
+          chemistry_class?: string | null
+          contact_time_seconds?: number | null
           created_at?: string
+          dilution_oz_per_gal?: number | null
           document_key?: string
           document_kind?: string
           entity_id?: string | null
+          epa_registrant?: string | null
+          epa_registration?: string | null
           id?: string
           language_code?: string
           metadata?: Json
+          product_application?: string | null
           source_record_id?: string
           summary?: string | null
           title?: string
@@ -229,6 +342,129 @@ export type Database = {
             columns: ["to_entity_id"]
             isOneToOne: false
             referencedRelation: "entity"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      product_efficacy: {
+        Row: {
+          claim_type: string | null
+          confidence: number
+          contact_time_seconds: number | null
+          dilution_oz_per_gal: number | null
+          entity_id: string
+          epa_registration: string | null
+          id: string
+          organism: string
+          product_key: string | null
+          source_page: number | null
+          source_record_id: string | null
+          updated_at: string
+        }
+        Insert: {
+          claim_type?: string | null
+          confidence?: number
+          contact_time_seconds?: number | null
+          dilution_oz_per_gal?: number | null
+          entity_id: string
+          epa_registration?: string | null
+          id?: string
+          organism: string
+          product_key?: string | null
+          source_page?: number | null
+          source_record_id?: string | null
+          updated_at?: string
+        }
+        Update: {
+          claim_type?: string | null
+          confidence?: number
+          contact_time_seconds?: number | null
+          dilution_oz_per_gal?: number | null
+          entity_id?: string
+          epa_registration?: string | null
+          id?: string
+          organism?: string
+          product_key?: string | null
+          source_page?: number | null
+          source_record_id?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_efficacy_entity_id_fkey"
+            columns: ["entity_id"]
+            isOneToOne: false
+            referencedRelation: "entity"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_efficacy_source_record_id_fkey"
+            columns: ["source_record_id"]
+            isOneToOne: false
+            referencedRelation: "source_record"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      product_line_fact: {
+        Row: {
+          chemistry_class: string | null
+          confidence: number
+          contact_time_seconds: number | null
+          coverage_sq_ft: number | null
+          dilution_display: string | null
+          dilution_oz_per_gal: number | null
+          entity_id: string
+          epa_registration: string | null
+          id: string
+          product_application: string | null
+          product_key: string | null
+          source_record_id: string | null
+          updated_at: string
+        }
+        Insert: {
+          chemistry_class?: string | null
+          confidence?: number
+          contact_time_seconds?: number | null
+          coverage_sq_ft?: number | null
+          dilution_display?: string | null
+          dilution_oz_per_gal?: number | null
+          entity_id: string
+          epa_registration?: string | null
+          id?: string
+          product_application?: string | null
+          product_key?: string | null
+          source_record_id?: string | null
+          updated_at?: string
+        }
+        Update: {
+          chemistry_class?: string | null
+          confidence?: number
+          contact_time_seconds?: number | null
+          coverage_sq_ft?: number | null
+          dilution_display?: string | null
+          dilution_oz_per_gal?: number | null
+          entity_id?: string
+          epa_registration?: string | null
+          id?: string
+          product_application?: string | null
+          product_key?: string | null
+          source_record_id?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_line_fact_entity_id_fkey"
+            columns: ["entity_id"]
+            isOneToOne: false
+            referencedRelation: "entity"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_line_fact_source_record_id_fkey"
+            columns: ["source_record_id"]
+            isOneToOne: false
+            referencedRelation: "source_record"
             referencedColumns: ["id"]
           },
         ]

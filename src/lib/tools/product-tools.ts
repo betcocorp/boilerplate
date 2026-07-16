@@ -5,6 +5,7 @@ import {
   retrieveSurfacesLists,
 } from '~/lib/retrieval/product-guidance';
 import { ragQueryForProductKnowledgeWithMeta } from '~/lib/retrieval/product-knowledge';
+import { fetchFactsForProductLineKey } from '~/lib/retrieval/product-facts';
 import { resolveProductLineKeyByName } from '~/lib/rag/entity-context';
 import {
   inferSectionTypeFromQuery,
@@ -12,8 +13,10 @@ import {
 } from '~/lib/rag/section-type-inference';
 
 import {
+  findProductsByCategoryInputSchema,
   getApprovedUsageGuidanceInputSchema,
   getCompatibilityRulesInputSchema,
+  getEfficacyDataInputSchema,
   getEscalationPolicyInputSchema,
   getProductCategoryInputSchema,
   getProductSpecInputSchema,
@@ -22,11 +25,14 @@ import {
   listAllowedSurfacesInputSchema,
   listDisallowedUsesInputSchema,
   lookupCrossReferenceInputSchema,
+  recommendCrossReferenceInputSchema,
   searchProductDocsInputSchema,
   type ProductToolName,
 } from '~/lib/tools/tool-schemas';
 import { lookupCrossReference } from '~/lib/tools/cross-reference-lookup';
 import { getProductCategory, getProductsInCategory } from '~/lib/tools/category-lookup';
+import { routeCategoryQuery } from '~/lib/category/category-router';
+import { runCrossReferenceRecommendation } from '~/lib/recommendations/persist-recommendation';
 
 const ADAPTER_TAG = 'rag_corpus_full_document' as const;
 
@@ -36,9 +42,9 @@ const ADAPTER_TAG = 'rag_corpus_full_document' as const;
  * preview / citation hint.
  */
 function sourcePayload(
-  sources: Awaited<ReturnType<typeof ragQueryForProductKnowledgeWithMeta>>['sources'],
+  result: Awaited<ReturnType<typeof ragQueryForProductKnowledgeWithMeta>>,
 ) {
-  return sources.map((s) => ({
+  const docs = result.sources.map((s) => ({
     documentId: s.documentId,
     chunkId: s.chunkId,
     title: s.title,
@@ -54,6 +60,30 @@ function sourcePayload(
     productLineKey: s.productLineKey,
     freshness: null as null,
   }));
+
+  // B0-196: surface structured facts as a first-class grounded source so both the
+  // model and the validator's evidence summary (built from sources[].documentBody)
+  // treat verified dilution/efficacy values as citable evidence.
+  if (result.factsBlock) {
+    docs.unshift({
+      documentId: 'verified-facts',
+      chunkId: 'verified-facts',
+      title: 'Verified Product Facts (structured)',
+      snippet: result.factsBlock.slice(0, 900),
+      documentBody: result.factsBlock,
+      documentBodyChars: result.factsBlock.length,
+      documentBodyChunkCount: 1,
+      documentBodyTruncated: false,
+      documentBodyTokenEstimate: null,
+      matchedChunkText: result.factsBlock,
+      confidence: 1,
+      documentKind: 'facts',
+      productLineKey: null,
+      freshness: null as null,
+    });
+  }
+
+  return docs;
 }
 
 const ESCALATION_MAP: Record<string, { summary: string; steps: string[] }> = {
@@ -99,6 +129,24 @@ function escalationForIssueType(raw: string) {
   return ESCALATION_MAP.default;
 }
 
+/**
+ * B0-201: derive curation knobs from query intent. Single-product deep-dives get more facets
+ * of one line; comparisons surface several distinct lines. Undefined fields = pipeline defaults.
+ */
+function classifyRetrievalIntent(
+  query: string,
+  productName?: string,
+): { limit?: number; maxPerDocument?: number; requiredDocumentKinds?: string[] } {
+  const q = query.toLowerCase();
+  if (/\bvs\.?\b|\bversus\b|\bcompare\b|\bdifference between\b/.test(q)) {
+    return { limit: 5, maxPerDocument: 1, requiredDocumentKinds: ['product_line_profile'] };
+  }
+  if (productName && productName.trim()) {
+    return { limit: 4, maxPerDocument: 2 };
+  }
+  return {};
+}
+
 export async function executeProductTool(
   name: ProductToolName,
   args: unknown,
@@ -112,17 +160,21 @@ export async function executeProductTool(
         resolveProductLineKeyByName(resolvedProductName),
         Promise.resolve(inferSectionTypeFromQuery(q)),
       ]);
+      const intent = classifyRetrievalIntent(q, resolvedProductName);
       const result = await ragQueryForProductKnowledgeWithMeta({
         query: q,
         productLineKey,
         sectionType,
+        limit: intent.limit,
+        maxPerDocument: intent.maxPerDocument,
+        requiredDocumentKinds: intent.requiredDocumentKinds,
       });
       return {
         ok: true,
         adapter: ADAPTER_TAG,
         query: q,
         entityContextBlock: result.entityContextBlock,
-        sources: sourcePayload(result.sources),
+        sources: sourcePayload(result),
         retrieval: result.retrieval,
       };
     }
@@ -140,7 +192,7 @@ export async function executeProductTool(
         adapter: ADAPTER_TAG,
         productId: p.productId,
         entityContextBlock: result.entityContextBlock,
-        sources: sourcePayload(result.sources),
+        sources: sourcePayload(result),
         retrieval: result.retrieval,
       };
     }
@@ -157,7 +209,7 @@ export async function executeProductTool(
         surfaceType: p.surfaceType,
         environment: p.environment ?? null,
         entityContextBlock: result.entityContextBlock,
-        sources: sourcePayload(result.sources),
+        sources: sourcePayload(result),
         retrieval: result.retrieval,
       };
     }
@@ -175,7 +227,7 @@ export async function executeProductTool(
         adapter: ADAPTER_TAG,
         productId: p.productId,
         entityContextBlock: result.entityContextBlock,
-        sources: sourcePayload(result.sources),
+        sources: sourcePayload(result),
         retrieval: result.retrieval,
       };
     }
@@ -191,7 +243,7 @@ export async function executeProductTool(
         surfaceType: p.surfaceType,
         materialType: p.materialType ?? null,
         entityContextBlock: result.entityContextBlock,
-        sources: sourcePayload(result.sources),
+        sources: sourcePayload(result),
         retrieval: result.retrieval,
       };
     }
@@ -210,7 +262,7 @@ export async function executeProductTool(
         adapter: ADAPTER_TAG,
         productId: p.productId,
         entityContextBlock: result.entityContextBlock,
-        sources: sourcePayload(result.sources),
+        sources: sourcePayload(result),
         retrieval: result.retrieval,
       };
     }
@@ -229,7 +281,7 @@ export async function executeProductTool(
         adapter: ADAPTER_TAG,
         productId: p.productId,
         entityContextBlock: result.entityContextBlock,
-        sources: sourcePayload(result.sources),
+        sources: sourcePayload(result),
         retrieval: result.retrieval,
       };
     }
@@ -254,6 +306,82 @@ export async function executeProductTool(
     case 'get_product_category': {
       const p = getProductCategoryInputSchema.parse(args);
       return getProductCategory(p);
+    }
+    case 'recommend_cross_reference': {
+      const p = recommendCrossReferenceInputSchema.parse(args);
+      const result = await runCrossReferenceRecommendation({
+        competitorProduct: p.competitorProduct,
+        competitorBrand: p.competitorBrand ?? null,
+      });
+      return {
+        ok: true,
+        adapter: 'cross_reference_recommendation_v1',
+        source: result.source,
+        answered: result.answered,
+        status: result.status,
+        overallConfidence: result.overallConfidence,
+        thresholdUsed: result.thresholdUsed,
+        declineReason: result.declineReason,
+        candidates: result.candidates.slice(0, p.maxResults ?? 5),
+        evidence: result.evidence,
+        recommendationId: result.recommendationId,
+      };
+    }
+    case 'find_products_by_category': {
+      const p = findProductsByCategoryInputSchema.parse(args);
+      const route = await routeCategoryQuery(p.query);
+      if (route.path === 'semantic') {
+        return {
+          ok: true,
+          adapter: 'category_router_v1',
+          path: 'semantic',
+          reason: route.reason,
+          confidence: route.confidence,
+          topCandidate: route.topCandidate,
+          hint: 'No confident category match — use search_product_docs for this query.',
+          latencyMs: route.latencyMs,
+        };
+      }
+      const max = Math.min(p.maxResults ?? 25, 50);
+      return {
+        ok: true,
+        adapter: 'category_router_v1',
+        path: 'category',
+        confidence: route.confidence,
+        matchType: route.matchType,
+        node: route.node,
+        productCount: route.productCount,
+        products: route.products.slice(0, max),
+        candidates: route.candidates,
+        latencyMs: route.latencyMs,
+      };
+    }
+    case 'get_efficacy_data': {
+      const p = getEfficacyDataInputSchema.parse(args);
+      const productLineKey = await resolveProductLineKeyByName(p.productId);
+      const facts = productLineKey
+        ? await fetchFactsForProductLineKey(productLineKey, p.organism)
+        : null;
+
+      if (!facts) {
+        return {
+          ok: true,
+          adapter: 'structured_facts_v1',
+          productId: p.productId,
+          organism: p.organism ?? null,
+          facts: null,
+          note: 'No verified dilution/efficacy data on file for this product. Do not estimate or infer a value — tell the user the data is not verified.',
+        };
+      }
+
+      return {
+        ok: true,
+        adapter: 'structured_facts_v1',
+        productId: p.productId,
+        productLineKey,
+        organism: p.organism ?? null,
+        facts,
+      };
     }
   }
 }

@@ -16,6 +16,11 @@ import {
   selectCuratedMatches,
   trimSnippet,
 } from '~/lib/retrieval/source-selection';
+import {
+  buildFactsBlock,
+  fetchProductLineFacts,
+  type ProductLineFacts,
+} from '~/lib/retrieval/product-facts';
 
 /**
  * The new RAG strategy returns at most this many sources, where each source is a
@@ -85,8 +90,17 @@ export type ProductKnowledgeRetrievalSummary = {
 export type ProductKnowledgeQueryResult = {
   sources: CuratedSource[];
   entityContextBlock: string | null;
+  /** Structured product facts (dilution/efficacy) keyed by entity id. */
+  facts: Map<string, ProductLineFacts>;
+  /** Rendered, grounding-ready facts block (null when no entity has facts). */
+  factsBlock: string | null;
   retrieval: ProductKnowledgeRetrievalSummary;
 };
+
+type ProductKnowledgeQueryBase = Omit<
+  ProductKnowledgeQueryResult,
+  'facts' | 'factsBlock'
+>;
 
 function buildCuratedSource(
   match: RagSearchMatch,
@@ -119,11 +133,12 @@ async function curateUniqueDocumentSources(
   options: {
     limit: number;
     requiredDocumentKinds?: string[];
+    maxPerDocument?: number;
   },
 ): Promise<CuratedSource[]> {
   const selected = selectCuratedMatches(matches, {
     limit: options.limit,
-    maxPerDocument: 1,
+    maxPerDocument: options.maxPerDocument ?? 1,
     requiredDocumentKinds: options.requiredDocumentKinds,
   });
 
@@ -145,6 +160,33 @@ async function entityContextBlockForSources(sources: CuratedSource[]): Promise<s
   return buildEntityContextBlock(map);
 }
 
+async function factsForSources(
+  sources: CuratedSource[],
+): Promise<{ facts: Map<string, ProductLineFacts>; factsBlock: string | null }> {
+  const entityIds = sources
+    .map((s) => s.entityId)
+    .filter((id): id is string => id != null);
+  const facts = await fetchProductLineFacts(entityIds);
+  const titles = new Map(
+    sources
+      .filter((s) => s.entityId != null)
+      .map((s) => [s.entityId as string, s.title] as const),
+  );
+  return { facts, factsBlock: buildFactsBlock(facts, titles) };
+}
+
+/**
+ * Public entry: run the curated document query, then enrich the result with
+ * structured product facts (dilution/efficacy) joined on the resolved entities.
+ */
+export async function ragQueryForProductKnowledgeWithMeta(
+  input: Parameters<typeof runProductKnowledgeQuery>[0],
+): Promise<ProductKnowledgeQueryResult> {
+  const base = await runProductKnowledgeQuery(input);
+  const { facts, factsBlock } = await factsForSources(base.sources);
+  return { ...base, facts, factsBlock };
+}
+
 export async function ragQueryForProductKnowledge(input: {
   query: string;
   limit?: number;
@@ -155,7 +197,7 @@ export async function ragQueryForProductKnowledge(input: {
   return result.sources;
 }
 
-export async function ragQueryForProductKnowledgeWithMeta(input: {
+async function runProductKnowledgeQuery(input: {
   query: string;
   /**
    * Maximum number of unique-document sources to return. Each source represents
@@ -167,10 +209,17 @@ export async function ragQueryForProductKnowledgeWithMeta(input: {
   skipProductLineResolution?: boolean;
   /** Restrict retrieval to chunks belonging to a specific GHS section. Null = no filter. */
   sectionType?: string | null;
-}): Promise<ProductKnowledgeQueryResult> {
+  /** Diversity cap per parent document (default 1). Raise for single-product depth. */
+  maxPerDocument?: number;
+  /** Override which document kinds are guaranteed a slot. Default: profile + sds + knowledge. */
+  requiredDocumentKinds?: string[];
+}): Promise<ProductKnowledgeQueryBase> {
   const limit = input.limit ?? DEFAULT_UNIQUE_DOCUMENT_LIMIT;
   const explicitKey = input.productLineKey?.trim() || null;
   const sectionType = input.sectionType?.trim() || null;
+  const maxPerDocument = input.maxPerDocument;
+  const requiredDocumentKinds =
+    input.requiredDocumentKinds ?? ['product_line_profile', 'sds', 'knowledge'];
 
   if (explicitKey) {
     const result = await searchProductChunks({
@@ -184,7 +233,8 @@ export async function ragQueryForProductKnowledgeWithMeta(input: {
 
     const curated = await curateUniqueDocumentSources(result.matches, {
       limit,
-      requiredDocumentKinds: ['product_line_profile', 'sds'],
+      requiredDocumentKinds,
+      maxPerDocument,
     });
 
     return {
@@ -219,6 +269,7 @@ export async function ragQueryForProductKnowledgeWithMeta(input: {
 
     const curated = await curateUniqueDocumentSources(result.matches, {
       limit,
+      maxPerDocument,
     });
 
     return {
@@ -253,7 +304,7 @@ export async function ragQueryForProductKnowledgeWithMeta(input: {
   const resolution = resolveProductLineFromMatches(broadResult.matches);
   const broadCurated = await curateUniqueDocumentSources(broadResult.matches, {
     limit,
-    requiredDocumentKinds: ['product_line_profile', 'sds'],
+    requiredDocumentKinds: ['product_line_profile', 'sds', 'knowledge'],
   });
 
   if (resolution.lockedProductLineKey == null) {
@@ -284,7 +335,7 @@ export async function ragQueryForProductKnowledgeWithMeta(input: {
   });
   const anchoredCurated = await curateUniqueDocumentSources(anchoredResult.matches, {
     limit,
-    requiredDocumentKinds: ['product_line_profile', 'sds'],
+    requiredDocumentKinds: ['product_line_profile', 'sds', 'knowledge'],
   });
 
   const minimumAnchoredEvidence = Math.max(2, Math.ceil(limit / 2));

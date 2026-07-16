@@ -79,3 +79,68 @@ export class WebSearchDbCache implements WebSearchDurableCache {
 
 /** Process-wide durable cache; used when WEBSEARCH_DB_CACHE_ENABLED=true. */
 export const sharedDbCache = new WebSearchDbCache();
+
+export type WebSearchCacheEntry = {
+  cacheKey: string;
+  query: string;
+  provider: string;
+  hitCount: number;
+  resultCount: number | null;
+  createdAt: string;
+  expiresAt: string;
+  expired: boolean;
+};
+
+type CacheListRow = {
+  cache_key: string;
+  query: string;
+  provider: string;
+  hit_count: number | null;
+  response: unknown;
+  created_at: string;
+  expires_at: string;
+};
+
+/** Newest cached web-search entries, for the admin cache table (B0-109). Best-effort. */
+export async function listWebSearchCacheEntries(limit = 100): Promise<WebSearchCacheEntry[]> {
+  try {
+    const supabase = getSupabaseServiceRoleClient() as unknown as {
+      from: (table: string) => {
+        select: (cols: string) => {
+          order: (
+            col: string,
+            opts: { ascending: boolean },
+          ) => {
+            limit: (
+              count: number,
+            ) => Promise<{ data: CacheListRow[] | null; error: unknown }>;
+          };
+        };
+      };
+    };
+    const { data, error } = await supabase
+      .from('web_search_cache')
+      .select('cache_key, query, provider, hit_count, response, created_at, expires_at')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (error || !data) {
+      return [];
+    }
+    const now = Date.now();
+    return data.map((row) => {
+      const parsed = webSearchResponseSchema.safeParse(row.response);
+      return {
+        cacheKey: row.cache_key,
+        query: row.query,
+        provider: row.provider,
+        hitCount: typeof row.hit_count === 'number' ? row.hit_count : 0,
+        resultCount: parsed.success ? parsed.data.results.length : null,
+        createdAt: row.created_at,
+        expiresAt: row.expires_at,
+        expired: new Date(row.expires_at).getTime() <= now,
+      };
+    });
+  } catch {
+    return [];
+  }
+}

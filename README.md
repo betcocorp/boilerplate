@@ -22,8 +22,7 @@ Open [http://localhost:3000/admin/bex](http://localhost:3000/admin/bex).
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL. |
 | `SUPABASE_SERVICE_ROLE_KEY` | Service role (server-only) for RAG + agent tables. |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Anon key for server client where used. |
-| `V1_ORCHESTRATOR_API_KEY` | Bearer secret for `/api/v1/*` and stricter read auth in production. |
-| `BEX_RELAX_CONVERSATION_READ` | If `true`, allows unauthenticated GETs for conversation APIs (trusted admin only). |
+| `API_TOKEN` (per client) | `/api/v1/*` uses per-client tokens from the project/app/token registry (`Authorization: Bearer bex_<env>_…`); no shared key. Local dev uses the seeded "Local Dev" token in `.env.local`. |
 
 ## Database migrations
 

@@ -1,6 +1,8 @@
 # RAG / SDS / Legacy Data Relationships
 
 > **Data freshness** — SDS PDFs sourced from AWS (~Feb–Mar 2026 dump). Legacy product data snapshot taken January 2026. Neither source is live-synchronized; both are point-in-time.
+>
+> **Updated 2026-07-15 (live reconciliation — see `BEX-2.0-Corpus-Assessment-and-Reconciliation-Strategy.md` §6).** Live counts: `rag.document` 4,661 (2,958 sds + 1,703 product_line_profile); `rag.document_chunk` 26,825 (all on `embeddings_large`); entity-link ~82% overall. The `rag.chunk` name below is now `rag.document_chunk`.
 
 ---
 
@@ -55,11 +57,11 @@ rag.entity  (1,703 rows — entity_type = 'product_line')
         ▲                         ▲
         │ entity_id               │ product_line_key
         │                         │
-rag.document  (4,248 SDS + product docs)
+rag.document  (4,661 — 2,958 sds + 1,703 product_line_profile)
 ┌────────────────────────────────────────────────────────┐
 │ id                    UUID PK                          │
-│ document_kind         'sds' | 'product'                │
-│ entity_id             → rag.entity.id  (70% populated) │
+│ document_kind         'sds' | 'product_line_profile'   │
+│ entity_id             → rag.entity.id  (~82% populated)│
 │ metadata->>'product_code'  e.g. "4020", "248SP"        │
 │ metadata->>'title'                                     │
 │ metadata->>'source_url'    full PDF URL                │
@@ -67,7 +69,7 @@ rag.document  (4,248 SDS + product docs)
         │
         │ document_id  (1:many)
         ▼
-rag.chunk  (49,532 rows — all embedded)
+rag.document_chunk  (26,825 rows — all embedded on embeddings_large)
 ┌────────────────────────────────────────────────────────┐
 │ id                    UUID PK                          │
 │ document_id           → rag.document.id                │
@@ -85,11 +87,11 @@ rag.chunk  (49,532 rows — all embedded)
 
 ### 1 — SDS chunk → product entity (search-time)
 ```
-rag.chunk.document_id
+rag.document_chunk.document_id
   → rag.document.entity_id
     → rag.entity.id
 ```
-Status: **70% of SDS documents linked** (2,973 / 4,248) after two-pass backfill.
+Status: **~82% of documents linked** (3,822 / 4,661); SDS-specific 2,119 / 2,958. (May-2026 snapshot reported 2,973 / 4,248.)
 
 ### 2 — SDS document → legacy product line (enrichment)
 ```
@@ -145,6 +147,6 @@ Only 5 Spanish SDS documents (81 chunks, 0.16% of corpus) exist — English is e
 | SDS PDFs (AWS) | ~Feb–Mar 2026 | Formulation changes, GHS updates not reflected |
 | Legacy product data | January 2026 | New products, discontinued SKUs, dilution changes |
 | RAG entity table | Derived from legacy Jan 2026 | Same staleness as legacy |
-| RAG embeddings | Current (all 49,532 chunks embedded) | Accurate to SDS snapshot |
+| RAG embeddings | Current (all 26,825 chunks embedded on `embeddings_large`) | Accurate to SDS snapshot |
 
 **Not synchronized** — no live pipeline between AWS/legacy CMS and the RAG database. All data is point-in-time.

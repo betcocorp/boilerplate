@@ -1,7 +1,9 @@
+import { getServerSession } from 'next-auth';
 import { NextResponse } from 'next/server';
 
 export const maxDuration = 60;
 
+import { authOptions } from '~/lib/auth';
 import { getOpenAIClient } from '~/lib/openai/client';
 import {
   getTestItemsByTestId,
@@ -102,6 +104,11 @@ export async function POST(
   _request: Request,
   context: { params: Promise<{ runId: string }> },
 ) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   const { runId } = await context.params;
 
   const run = await getTestResultById(runId).catch(() => null);

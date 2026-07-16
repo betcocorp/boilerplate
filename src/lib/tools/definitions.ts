@@ -178,6 +178,28 @@ export const productSupportTools: Tool[] = [
   },
   {
     type: 'function',
+    name: 'find_products_by_category',
+    strict: false,
+    description:
+      "Deterministically map a category query (e.g. \"floor strippers\", \"glass cleaner\", \"disinfectants\", \"hand soap\") to Betco's website product taxonomy and return the actual web products in that category — SKU, title, and canonical betco.com URL — with NO semantic search. Prefer this for filter-style questions like \"what floor strippers do you have?\" or \"show me all disinfectants\". If the query does not confidently match a category, the tool returns path:\"semantic\"; in that case fall back to search_product_docs.",
+    parameters: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description:
+            'Category or product-type phrase, e.g. "floor strippers", "glass cleaner", "warewashing detergents".',
+        },
+        maxResults: {
+          type: 'number',
+          description: 'Max products to return (default 25, max 50).',
+        },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    type: 'function',
     name: 'lookup_cross_reference',
     strict: false,
     description:
@@ -199,6 +221,52 @@ export const productSupportTools: Tool[] = [
         },
       },
       required: ['brand', 'productName'],
+    },
+  },
+  {
+    type: 'function',
+    name: 'recommend_cross_reference',
+    strict: false,
+    description:
+      "Web-grounded fallback for competitor cross-reference. Given a competitor product (and optional brand) that `lookup_cross_reference` could NOT confidently match, this researches it via web search, extracts its spec, and recommends the closest Betco equivalent product(s) with an overall confidence and evidence. Call this ONLY after `lookup_cross_reference` returns no match or `fallbackRecommended: true`. It returns `answered` or a decline — if declined, relay the decline reason verbatim and do NOT invent a product, SKU, or claim.",
+    parameters: {
+      type: 'object',
+      properties: {
+        competitorProduct: {
+          type: 'string',
+          description: 'Competitor product name (required), e.g. "BNC-15".',
+        },
+        competitorBrand: {
+          type: 'string',
+          description: 'Competitor brand/company if known (optional but improves confidence), e.g. "Spartan".',
+        },
+        maxResults: {
+          type: 'number',
+          description: 'Max Betco candidates to return (default 5, max 10).',
+        },
+      },
+      required: ['competitorProduct'],
+    },
+  },
+  {
+    type: 'function',
+    name: 'get_efficacy_data',
+    strict: false,
+    description:
+      'Return VERIFIED structured facts for a product from the fact tables — dilution (oz/gal), contact/dwell time, EPA registration, and per-organism kill claims. This does NOT run prose/semantic retrieval. Use it for dilution ratio questions and any efficacy / "what does it kill" / kill-claim / contact-time question. Returns `facts` with the structured values, or `facts: null` plus a `note` when there is no verified data on file — in that case do NOT estimate or infer a value; tell the user the data is not verified.',
+    parameters: {
+      type: 'object',
+      properties: {
+        productId: {
+          type: 'string',
+          description: 'Betco product or product-line name/id (e.g. "pH7Q", "4020").',
+        },
+        organism: {
+          type: 'string',
+          description: 'Optional organism/pathogen to filter kill claims, e.g. "Norovirus".',
+        },
+      },
+      required: ['productId'],
     },
   },
 ];

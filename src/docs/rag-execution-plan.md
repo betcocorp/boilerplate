@@ -7,28 +7,23 @@
 
 ## Current State Snapshot
 
-> Last updated: May 2026. Spanish (SP) and French (FR) SDS documents purged. Canadian (CAN) retained.
-> B1xxx product series deferred — searchable by text but not entity-linked (separate brand, data not yet available).
-> Phase 4 (ingestion pipeline) deferred — no automated AWS sync path currently available.
+> **Updated 2026-07-15 (live reconciliation — see `BEX-2.0-Corpus-Assessment-and-Reconciliation-Strategy.md` §6).** Figures below are measured from the live Supabase project and supersede the May 2026 snapshot. SP/FR SDS purged; CAN retained. B1xxx deferred (separate brand). Phase 4 is partially unblocked — SDS and markdown-knowledge admin ingest panels now exist.
 
-| Area | Status |
+| Area | Status (2026-07-15) |
 |---|---|
-| SDS documents in corpus | 3,157 (after SP/FR purge) |
-| SDS chunks in corpus | 35,080 (after SP/FR purge) |
-| Product line profile docs | 1,703 docs / 5,158 chunks |
-| Chunks embedded | 40,238 / 40,238 (100%) — `text-embedding-3-large` |
+| Documents in corpus | 4,661 — `sds` 2,958 + `product_line_profile` 1,703 |
+| Chunks in corpus | 26,825 — all embedded on `embedding_large` (text-embedding-3-large / 3072) |
+| Old `embedding` (1536) column | Dead (0 / 26,825) — slated for drop (B0-203) |
 | Token counts | 100% populated |
-| SDS section headings | Backfill run; coverage TBD |
-| Entity link on SDS docs | 2,119 / 3,157 (67%) |
-| Non-English SDS purged | SP (554 docs) + FR (537 docs) = 1,091 removed |
-| Hybrid search | Implemented (`match_corpus_chunks_hybrid`) |
-| Reranker | Implemented (Cohere rerank-v3.5, feature-flagged) |
-| Query rewriter | Implemented (Betco domain prompt, gpt-4.1-mini) |
-| Multi-intent fan-out | Implemented, not yet evaluated |
-| Entity metadata enrichment | Not done (DilutionCode, coverage, description) |
-| `section_type` on chunks | Not done |
-| Context assembly (entity hydration) | Not done |
-| Eval test set | Framework in place; no gold set yet |
+| Entity link | SDS 2,119 / 2,958; all docs 3,822 / 4,661 (~82%) |
+| `section_type` on chunks | ✅ Done (GHS categories) |
+| Hybrid search / reranker / query rewriter / multi-intent | ✅ Implemented |
+| Entity metadata enrichment | Partial — `dilution_code` 155, `coverage_sq_ft` 145, descriptions ~550 |
+| Context assembly (entity hydration) | ✅ Done (`entity-context.ts`) |
+| Structured facts | ✅ `rag.product_line_fact` (dilution/coverage backfilled) + `rag.product_efficacy` (empty until efficacy docs) |
+| Product alias resolution | ✅ `rag.product_alias` (2,985 unambiguous aliases) |
+| Knowledge (markdown) corpus | Ingest path built (`document_kind='knowledge'`); load pending S3 read creds |
+| Eval harness | Populated (12 tests / 2,788 items); knowledge + dilution eval fixtures added |
 
 ---
 
@@ -234,12 +229,12 @@ Add a visible staleness indicator in the admin RAG UI:
 
 | Phase | Focus | Status | Blocks |
 |---|---|---|---|
-| **0** | Corpus cleanup + heading verification | 🔄 In progress | Phase 2.1 entity scoping |
-| **1** | Entity enrichment + section_type classification | ⏳ Next | Phase 2.2–2.3 |
-| **2** | Entity-scoped search + context hydration | ⏳ Queued | Phase 3 meaningful eval |
-| **3** | Gold eval set + A/B measurement | ⏳ Queued | — |
-| **4** | Incremental ingestion + staleness monitoring | ⚠️ Deferred | No AWS sync path available |
-| **5** | Hardening | ⚠️ Deferred | After Phase 3 |
+| **0** | Corpus cleanup + heading verification | ✅ Done | — |
+| **1** | Entity enrichment + section_type classification | ✅ section_type done; enrichment partial | — |
+| **2** | Entity-scoped search + context hydration | ✅ Shipped (search scope, section filter, `entity-context.ts` hydration) | — |
+| **3** | Gold eval set + A/B measurement | 🔄 Harness populated; knowledge + dilution eval fixtures added | — |
+| **4** | Incremental ingestion + staleness monitoring | 🔄 Partial — SDS + markdown-knowledge admin ingest panels exist | Full AWS sync still manual |
+| **5** | Hardening | 🔄 Started — RLS enabled on 43 tables (B0-202) | Per-user thread ownership pending |
 
 ---
 

@@ -14,28 +14,26 @@ function requestWithAuth(headerValue?: string): Request {
 }
 
 describe('generateApiToken', () => {
-  it('formats the token with the environment segment', () => {
-    expect(generateApiToken('production').token).toMatch(/^bex_prod_/);
-    expect(generateApiToken('staging').token).toMatch(/^bex_stg_/);
-    expect(generateApiToken('development').token).toMatch(/^bex_dev_/);
+  it('formats the token with the bex_ prefix (no environment segment)', () => {
+    expect(generateApiToken().token).toMatch(/^bex_[A-Za-z0-9_-]+$/);
   });
 
   it('stores a hash that matches sha256 of the full token, never the token itself', () => {
-    const { token, tokenHash } = generateApiToken('production');
+    const { token, tokenHash } = generateApiToken();
     expect(tokenHash).toBe(hashApiToken(token));
     expect(tokenHash).not.toContain(token);
     expect(tokenHash).toMatch(/^[a-f0-9]{64}$/);
   });
 
   it('exposes a prefix that is a leading slice of the token', () => {
-    const { token, prefix } = generateApiToken('production');
+    const { token, prefix } = generateApiToken();
     expect(token.startsWith(prefix)).toBe(true);
-    expect(prefix.startsWith('bex_prod_')).toBe(true);
+    expect(prefix.startsWith('bex_')).toBe(true);
   });
 
   it('produces a unique secret each call', () => {
-    const a = generateApiToken('production');
-    const b = generateApiToken('production');
+    const a = generateApiToken();
+    const b = generateApiToken();
     expect(a.token).not.toBe(b.token);
     expect(a.tokenHash).not.toBe(b.tokenHash);
   });
@@ -43,21 +41,21 @@ describe('generateApiToken', () => {
 
 describe('hashApiToken', () => {
   it('is deterministic', () => {
-    expect(hashApiToken('bex_prod_abc')).toBe(hashApiToken('bex_prod_abc'));
+    expect(hashApiToken('bex_abc')).toBe(hashApiToken('bex_abc'));
   });
 });
 
 describe('looksLikeApiToken', () => {
-  it('accepts well-formed tokens', () => {
-    expect(looksLikeApiToken(generateApiToken('production').token)).toBe(true);
-    expect(looksLikeApiToken(generateApiToken('development').token)).toBe(true);
+  it('accepts well-formed tokens (current and legacy env-prefixed)', () => {
+    expect(looksLikeApiToken(generateApiToken().token)).toBe(true);
+    // Legacy bex_<env>_<secret> tokens minted before env removal still pass the shape check.
+    expect(looksLikeApiToken('bex_prod_aaaaaaaaaaaaaaaa')).toBe(true);
   });
 
   it('rejects garbage, wrong scheme, and truncated tokens', () => {
     expect(looksLikeApiToken('')).toBe(false);
     expect(looksLikeApiToken('not-a-token')).toBe(false);
-    expect(looksLikeApiToken('bex_prod_short')).toBe(false);
-    expect(looksLikeApiToken('bex_qa_aaaaaaaaaaaaaaaa')).toBe(false);
+    expect(looksLikeApiToken('bex_short')).toBe(false);
     expect(looksLikeApiToken('sk_live_aaaaaaaaaaaaaaaa')).toBe(false);
   });
 });

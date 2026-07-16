@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 
-import { isV1BearerAuthorized } from '~/lib/api/v1-bearer-auth';
+import { withApiV1 } from '~/lib/api/with-api-v1';
 import { parseOrchestratorPostBody } from '~/lib/orchestrator/orchestrator-schemas';
 import { runOrchestration } from '~/lib/orchestrator/run-orchestration';
 
@@ -8,41 +8,12 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
 
-function asObject(body: unknown): Record<string, unknown> {
-  if (!body || typeof body !== 'object' || Array.isArray(body)) {
-    return {};
-  }
-  return body as Record<string, unknown>;
-}
-
-function hasNonEmptyMessage(body: unknown) {
-  const message = asObject(body).message;
-  return typeof message === 'string' && message.trim().length > 0;
-}
-
-function canInvoke(request: Request, body: unknown) {
-  if (isV1BearerAuthorized(request)) {
-    return true;
-  }
-
-  if (hasNonEmptyMessage(body)) {
-    return true;
-  }
-
-  return false;
-}
-
-export async function POST(request: Request) {
+export const POST = withApiV1(async (request, { recordUsage }) => {
   let body: unknown = {};
-
   try {
     body = await request.json();
   } catch {
     body = {};
-  }
-
-  if (!canInvoke(request, body)) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   const parsed = parseOrchestratorPostBody(body);
@@ -57,6 +28,11 @@ export async function POST(request: Request) {
   try {
     const result = await runOrchestration(parsed.workflow, parsed.orchestrationInput);
 
+    // B0-117 — attribute LLM token usage to this request's api_request_log row.
+    if (result.productSupport?.usage) {
+      recordUsage(result.productSupport.usage);
+    }
+
     return NextResponse.json({ ok: true, ...result });
   } catch (error) {
     const message =
@@ -64,4 +40,4 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ error: message }, { status: 500 });
   }
-}
+});

@@ -44,7 +44,6 @@ const ACTIVE_KEY = { id: 'key-1', app_id: 'app-1', revoked_at: null, expires_at:
 const ACTIVE_APP = {
   id: 'app-1',
   project_id: 'proj-1',
-  environment: 'development',
   is_active: true,
   rate_limit_per_minute: null,
 };
@@ -80,7 +79,11 @@ describe('authenticateApiToken — chain enforcement', () => {
       api_key: { data: { ...ACTIVE_KEY, revoked_at: '2026-01-01T00:00:00Z' }, error: null },
     });
     const result = await authenticateApiToken(request(VALID_TOKEN));
-    expect(result).toEqual({ ok: false, reason: 'revoked' });
+    expect(result).toEqual({
+      ok: false,
+      reason: 'revoked',
+      attribution: { keyId: 'key-1', appId: 'app-1', projectId: null },
+    });
   });
 
   it('fails when the key is expired', async () => {
@@ -88,7 +91,11 @@ describe('authenticateApiToken — chain enforcement', () => {
       api_key: { data: { ...ACTIVE_KEY, expires_at: '2000-01-01T00:00:00Z' }, error: null },
     });
     const result = await authenticateApiToken(request(VALID_TOKEN));
-    expect(result).toEqual({ ok: false, reason: 'expired' });
+    expect(result).toEqual({
+      ok: false,
+      reason: 'expired',
+      attribution: { keyId: 'key-1', appId: 'app-1', projectId: null },
+    });
   });
 
   it('fails when the app is deactivated', async () => {
@@ -97,7 +104,11 @@ describe('authenticateApiToken — chain enforcement', () => {
       api_app: { data: { ...ACTIVE_APP, is_active: false }, error: null },
     });
     const result = await authenticateApiToken(request(VALID_TOKEN));
-    expect(result).toEqual({ ok: false, reason: 'app_inactive' });
+    expect(result).toEqual({
+      ok: false,
+      reason: 'app_inactive',
+      attribution: { keyId: 'key-1', appId: 'app-1', projectId: 'proj-1' },
+    });
   });
 
   it('fails when the project is deactivated', async () => {
@@ -107,7 +118,11 @@ describe('authenticateApiToken — chain enforcement', () => {
       api_project: { data: { ...ACTIVE_PROJECT, is_active: false }, error: null },
     });
     const result = await authenticateApiToken(request(VALID_TOKEN));
-    expect(result).toEqual({ ok: false, reason: 'project_inactive' });
+    expect(result).toEqual({
+      ok: false,
+      reason: 'project_inactive',
+      attribution: { keyId: 'key-1', appId: 'app-1', projectId: 'proj-1' },
+    });
   });
 
   it('fails closed when a lookup errors', async () => {
@@ -131,7 +146,6 @@ describe('authenticateApiToken — chain enforcement', () => {
         keyId: 'key-1',
         appId: 'app-1',
         projectId: 'proj-1',
-        environment: 'development',
         rateLimitPerMinute: null,
       },
     });

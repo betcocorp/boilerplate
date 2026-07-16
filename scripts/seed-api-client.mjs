@@ -43,7 +43,7 @@ const supabase = createClient(supabaseUrl, serviceRoleKey, {
 const PREFIX_LENGTH = 13;
 function generateDevToken() {
   const secret = randomBytes(32).toString('base64url');
-  const token = `bex_dev_${secret}`;
+  const token = `bex_${secret}`;
   const tokenHash = createHash('sha256').update(token, 'utf8').digest('hex');
   return { token, tokenHash, prefix: token.slice(0, PREFIX_LENGTH) };
 }
@@ -79,14 +79,13 @@ async function findOrCreateApp(projectId) {
     .select('id')
     .eq('project_id', projectId)
     .eq('name', APP_NAME)
-    .eq('environment', 'development')
     .maybeSingle();
   if (findErr) throw findErr;
   if (existing) return existing.id;
 
   const { data, error } = await supabase
     .from('api_app')
-    .insert({ project_id: projectId, name: APP_NAME, environment: 'development' })
+    .insert({ project_id: projectId, name: APP_NAME })
     .select('id')
     .single();
   if (error) throw error;
@@ -106,7 +105,7 @@ async function main() {
   });
   if (error) throw error;
 
-  console.log('\n✅ Seeded Local Dev API token (development environment).\n');
+  console.log('\n✅ Seeded Local Dev API token.\n');
   console.log('   Send it as:  Authorization: Bearer <token>\n');
   console.log('   Token (shown once):\n');
   console.log(`   ${token}\n`);

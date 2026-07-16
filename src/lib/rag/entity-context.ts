@@ -77,9 +77,18 @@ export async function fetchEntityContexts(
   return map;
 }
 
+/** Normalize a product name to match rag.product_alias.alias_norm (B0-200). */
+function normalizeAlias(value: string): string {
+  return value
+    .replace(/[®™]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 /**
  * Resolve a free-text product name or prod_line_id to a product_line_key UUID.
- * Tries prod_line_id exact match first, then title ILIKE.
+ * Order: exact alias match (rag.product_alias), then prod_line_id exact, then title ILIKE.
  * Returns null if no unique match is found (ambiguous or unknown name).
  */
 export async function resolveProductLineKeyByName(name: string): Promise<string | null> {
@@ -89,6 +98,37 @@ export async function resolveProductLineKeyByName(name: string): Promise<string 
   }
 
   const supabase = getSupabaseServiceRoleClient();
+
+  // B0-200: exact alias match first — deterministic, seeded only with unambiguous aliases.
+  try {
+    const aliasClient = supabase.schema('rag') as unknown as {
+      from: (table: 'product_alias') => {
+        select: (columns: string) => {
+          eq: (
+            column: string,
+            value: string,
+          ) => {
+            limit: (
+              n: number,
+            ) => Promise<{
+              data: Array<{ product_line_key: string | null }> | null;
+              error: unknown;
+            }>;
+          };
+        };
+      };
+    };
+    const { data: aliasRows } = await aliasClient
+      .from('product_alias')
+      .select('product_line_key')
+      .eq('alias_norm', normalizeAlias(trimmed))
+      .limit(1);
+    if (aliasRows && aliasRows[0]?.product_line_key) {
+      return aliasRows[0].product_line_key;
+    }
+  } catch {
+    // Alias table unavailable — fall through to legacy resolution.
+  }
 
   // Try exact prod_line_id match (e.g. "4020")
   if (/^\d+$/.test(trimmed)) {

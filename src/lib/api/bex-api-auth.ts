@@ -1,40 +1,16 @@
-import { isV1BearerAuthorized } from '~/lib/api/v1-bearer-auth';
+import { getServerSession } from 'next-auth';
+
+import { authOptions } from '~/lib/auth';
 
 /**
- * Browser chat POST matches orchestrator: bearer OR non-empty message body.
- * Reads (conversation list / detail) are stricter in production when a V1 key is set;
- * set BEX_RELAX_CONVERSATION_READ=true for trusted admin deployments that cannot send a bearer from the browser.
+ * Auth for the bex UI's own API routes (`/api/bex/*`).
+ *
+ * These are browser-only surfaces for signed-in bex admins, so they authenticate with the existing
+ * NextAuth session (Entra ID + Duo), verified server-side in each route handler. There is no
+ * machine/bearer path and no anonymous "non-empty message" bypass here — server-to-server callers
+ * use `/api/v1/*` with a client token instead (see `~/lib/api/client-auth`).
  */
-export function canPostBexChat(request: Request, body: unknown): boolean {
-  if (isV1BearerAuthorized(request)) {
-    return true;
-  }
-
-  if (
-    body &&
-    typeof body === 'object' &&
-    !Array.isArray(body) &&
-    typeof (body as { message?: unknown }).message === 'string' &&
-    (body as { message: string }).message.trim().length > 0
-  ) {
-    return true;
-  }
-
-  return false;
-}
-
-export function canReadBexConversations(request: Request): boolean {
-  if (isV1BearerAuthorized(request)) {
-    return true;
-  }
-
-  if (process.env.BEX_RELAX_CONVERSATION_READ === 'true') {
-    return true;
-  }
-
-  if (!process.env.V1_ORCHESTRATOR_API_KEY) {
-    return true;
-  }
-
-  return process.env.NODE_ENV !== 'production';
+export async function hasBexSession(): Promise<boolean> {
+  const session = await getServerSession(authOptions);
+  return Boolean(session?.user);
 }
