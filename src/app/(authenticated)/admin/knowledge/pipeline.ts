@@ -209,7 +209,7 @@ type KnowledgeChunk = {
   text: string;
 };
 
-function chunkMarkdown(body: string): KnowledgeChunk[] {
+export function chunkMarkdown(body: string): KnowledgeChunk[] {
   const lines = body.split('\n');
   const sections: Array<{ heading: string | null; path: string[]; lines: string[] }> = [];
   const headingStack: Array<{ level: number; text: string }> = [];
@@ -241,12 +241,26 @@ function chunkMarkdown(body: string): KnowledgeChunk[] {
 
   const chunks: KnowledgeChunk[] = [];
   let index = 0;
+  // A heading with no body of its own (e.g. a section header immediately followed
+  // by a sub-heading, or FAQ "Q:" lines whose answer is a sibling heading) must
+  // never become a content-less chunk — that would embed on the heading alone and
+  // rank for a query while returning nothing. Carry such bare headings forward and
+  // fold them into the next content-bearing section; drop any left dangling at EOF.
+  let carriedHeadings: string[] = [];
   for (const section of sections) {
-    const text = section.lines.join('\n').trim();
-    if (!text && !section.heading) continue;
+    const body = section.lines.join('\n').trim();
+    if (!body) {
+      if (section.heading) carriedHeadings.push(section.heading);
+      continue;
+    }
+
+    const foldPrefix = carriedHeadings.length ? `${carriedHeadings.join('\n')}\n` : '';
+    const heading = section.heading ?? carriedHeadings[carriedHeadings.length - 1] ?? null;
+    carriedHeadings = [];
+    const text = `${foldPrefix}${body}`;
 
     if (text.length <= CHUNK_CHAR_BUDGET) {
-      chunks.push({ index: index++, heading: section.heading, sectionPath: section.path, text });
+      chunks.push({ index: index++, heading, sectionPath: section.path, text });
       continue;
     }
     // Oversized section: split by blank-line paragraphs into <= budget windows.
@@ -254,13 +268,13 @@ function chunkMarkdown(body: string): KnowledgeChunk[] {
     let buf = '';
     for (const para of paras) {
       if (buf && buf.length + para.length + 2 > CHUNK_CHAR_BUDGET) {
-        chunks.push({ index: index++, heading: section.heading, sectionPath: section.path, text: buf.trim() });
+        chunks.push({ index: index++, heading, sectionPath: section.path, text: buf.trim() });
         buf = '';
       }
       buf = buf ? `${buf}\n\n${para}` : para;
     }
     if (buf.trim()) {
-      chunks.push({ index: index++, heading: section.heading, sectionPath: section.path, text: buf.trim() });
+      chunks.push({ index: index++, heading, sectionPath: section.path, text: buf.trim() });
     }
   }
   return chunks;

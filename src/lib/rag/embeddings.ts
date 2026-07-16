@@ -66,8 +66,10 @@ async function fetchPendingChunks(limit: number): Promise<PendingChunkRow[]> {
       select(cols: string): {
         is(col: string, val: null): {
           not(col: string, op: string, val: null): {
-            order(col: string, opts: { ascending: boolean }): {
-              limit(n: number): Promise<{ data: PendingChunkRow[] | null; error: { message: string } | null }>;
+            neq(col: string, val: string): {
+              order(col: string, opts: { ascending: boolean }): {
+                limit(n: number): Promise<{ data: PendingChunkRow[] | null; error: { message: string } | null }>;
+              };
             };
           };
         };
@@ -77,6 +79,9 @@ async function fetchPendingChunks(limit: number): Promise<PendingChunkRow[]> {
     .select('id, chunk_key, heading, chunk_text')
     .is('embedding_large', null)
     .not('chunk_text', 'is', null)
+    // Empty-string chunk_text is not NULL but has no content to embed; skip it so a
+    // chunk never embeds on its heading alone (see buildEmbeddingInput).
+    .neq('chunk_text', '')
     .order('updated_at', { ascending: true })
     .limit(limit);
 
@@ -98,11 +103,13 @@ async function fetchPendingChunksByDocumentKind(
         eq(col: string, val: string): {
           is(col: string, val: null): {
             not(col: string, op: string, val: null): {
-              order(col: string, opts: { ascending: boolean }): {
-                limit(n: number): Promise<{
-                  data: (PendingChunkRow & { document: { document_kind: string } })[] | null;
-                  error: { message: string } | null;
-                }>;
+              neq(col: string, val: string): {
+                order(col: string, opts: { ascending: boolean }): {
+                  limit(n: number): Promise<{
+                    data: (PendingChunkRow & { document: { document_kind: string } })[] | null;
+                    error: { message: string } | null;
+                  }>;
+                };
               };
             };
           };
@@ -114,6 +121,8 @@ async function fetchPendingChunksByDocumentKind(
     .eq('document.document_kind', documentKind)
     .is('embedding_large', null)
     .not('chunk_text', 'is', null)
+    // Empty-string chunk_text is not NULL but has no content to embed; skip it.
+    .neq('chunk_text', '')
     .order('updated_at', { ascending: true })
     .limit(limit);
 
