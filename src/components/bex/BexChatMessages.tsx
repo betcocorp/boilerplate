@@ -34,6 +34,7 @@ import {
   SelectValue,
 } from '~/components/ui/select';
 import { RagDocumentChunkInspectButtons } from '~/components/rag/RagDocumentChunkInspect';
+import { isRagRowId } from '~/lib/rag/document-chunk-types';
 import { Separator } from '~/components/ui/separator';
 import { Textarea } from '~/components/ui/textarea';
 import { cn } from '~/lib/utils';
@@ -190,6 +191,10 @@ function AssistantDetails({
               <ul className="space-y-2">
                 {meta.sources.slice(0, 6).map((s) => {
                   const isExternal = s.kind === 'external' || !!s.url;
+                  // Synthetic sources (e.g. structured "Verified Product Facts") have no
+                  // rag.document row to inspect — the facts are the snippet itself, so
+                  // show it in full and skip the DB-backed inspect buttons.
+                  const isFacts = !isExternal && !isRagRowId(s.documentId);
                   return (
                     <li
                       className="wrap-break-word rounded-md border border-border/60 bg-muted/30 p-2"
@@ -221,9 +226,16 @@ function AssistantDetails({
                         ) : null}
                       </div>
                       {s.snippet ? (
-                        <p className="mt-1 line-clamp-2 text-muted-foreground">{s.snippet}</p>
+                        <p
+                          className={cn(
+                            'mt-1 text-muted-foreground',
+                            isFacts ? 'whitespace-pre-wrap' : 'line-clamp-2',
+                          )}
+                        >
+                          {s.snippet}
+                        </p>
                       ) : null}
-                      {!isExternal ? (
+                      {!isExternal && !isFacts ? (
                         <div className="mt-1 opacity-90">
                           <RagDocumentChunkInspectButtons
                             chunkId={s.chunkId ?? null}

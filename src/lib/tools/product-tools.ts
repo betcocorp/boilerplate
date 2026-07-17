@@ -5,7 +5,8 @@ import {
   retrieveSurfacesLists,
 } from '~/lib/retrieval/product-guidance';
 import { ragQueryForProductKnowledgeWithMeta } from '~/lib/retrieval/product-knowledge';
-import { fetchFactsForProductLineKey } from '~/lib/retrieval/product-facts';
+import { buildFactsBlock, fetchFactsForProductLineKey } from '~/lib/retrieval/product-facts';
+import { VERIFIED_FACTS_SOURCE_ID } from '~/lib/rag/document-chunk-types';
 import { resolveProductLineKeyByName } from '~/lib/rag/entity-context';
 import {
   inferSectionTypeFromQuery,
@@ -66,8 +67,8 @@ function sourcePayload(
   // treat verified dilution/efficacy values as citable evidence.
   if (result.factsBlock) {
     docs.unshift({
-      documentId: 'verified-facts',
-      chunkId: 'verified-facts',
+      documentId: VERIFIED_FACTS_SOURCE_ID,
+      chunkId: VERIFIED_FACTS_SOURCE_ID,
       title: 'Verified Product Facts (structured)',
       snippet: result.factsBlock.slice(0, 900),
       documentBody: result.factsBlock,
@@ -374,6 +375,16 @@ export async function executeProductTool(
         };
       }
 
+      // B0-196: surface the verified facts as a first-class grounded source so the
+      // validator's evidence summary (built from sources[].documentBody) can cite the
+      // kill claim. Without this, an efficacy-only answer carries zero evidence and the
+      // validator rejects the draft (confidence 0, human review). Mirrors the synthetic
+      // `verified-facts` source that sourcePayload() adds for the semantic-search tools.
+      const factsBlock = buildFactsBlock(
+        new Map([[facts.entityId, facts]]),
+        new Map([[facts.entityId, p.productId]]),
+      );
+
       return {
         ok: true,
         adapter: 'structured_facts_v1',
@@ -381,6 +392,19 @@ export async function executeProductTool(
         productLineKey,
         organism: p.organism ?? null,
         facts,
+        sources: factsBlock
+          ? [
+              {
+                documentId: VERIFIED_FACTS_SOURCE_ID,
+                chunkId: VERIFIED_FACTS_SOURCE_ID,
+                title: 'Verified Product Facts (structured)',
+                snippet: factsBlock.slice(0, 900),
+                documentBody: factsBlock,
+                documentKind: 'facts',
+                confidence: 1,
+              },
+            ]
+          : [],
       };
     }
   }
