@@ -3,6 +3,7 @@ import { Globe, Terminal } from 'lucide-react';
 import { WebSearchApiTester } from '~/components/admin/web-search/WebSearchApiTester';
 import { WebSearchCacheTable } from '~/components/admin/web-search/WebSearchCacheTable';
 import { WebSearchTester } from '~/components/admin/web-search/WebSearchTester';
+import { defaultCacheTtlMs } from '~/lib/websearch/cache';
 import { listWebSearchCacheEntries } from '~/lib/websearch/db-cache';
 
 export const metadata = {
@@ -15,6 +16,7 @@ export const dynamic = 'force-dynamic';
 
 export default async function WebSearchTesterPage() {
   const cacheEntries = await listWebSearchCacheEntries(100);
+  const cacheTtlMs = defaultCacheTtlMs();
 
   return (
     <main className="min-w-0 space-y-6 p-4 sm:p-6">
@@ -68,7 +70,7 @@ export default async function WebSearchTesterPage() {
         </div>
       </div>
 
-      <WebSearchCacheTable entries={cacheEntries} />
+      <WebSearchCacheTable entries={cacheEntries} ttlMs={cacheTtlMs} />
     </main>
   );
 }

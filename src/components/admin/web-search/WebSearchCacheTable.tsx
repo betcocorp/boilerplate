@@ -15,7 +15,33 @@ function fmtDateTime(iso: string): string {
   });
 }
 
-export function WebSearchCacheTable({ entries }: { entries: WebSearchCacheEntry[] }) {
+/** Humanize a duration in ms into the largest whole-ish unit, e.g. 600000 → "10 minutes". */
+function fmtDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) {
+    return 'no time';
+  }
+  const units: Array<[label: string, size: number]> = [
+    ['day', 86_400_000],
+    ['hour', 3_600_000],
+    ['minute', 60_000],
+    ['second', 1_000],
+  ];
+  for (const [label, size] of units) {
+    if (ms >= size) {
+      const value = Math.round((ms / size) * 10) / 10;
+      return `${value} ${label}${value === 1 ? '' : 's'}`;
+    }
+  }
+  return `${ms} ms`;
+}
+
+export function WebSearchCacheTable({
+  entries,
+  ttlMs,
+}: {
+  entries: WebSearchCacheEntry[];
+  ttlMs: number;
+}) {
   const activeCount = entries.filter((e) => !e.expired).length;
 
   return (
@@ -31,8 +57,10 @@ export function WebSearchCacheTable({ entries }: { entries: WebSearchCacheEntry[
           </h2>
           <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
             Entries in <code className="rounded bg-muted px-1.5 py-0.5 text-xs">web_search_cache</code>.
-            A repeated identical query is served from here instead of re-billing the provider, until
-            it expires. Showing the {entries.length} most recent ({activeCount} still active).
+            A repeated identical query is served from here instead of re-billing the provider for{' '}
+            <span className="font-medium text-foreground">{fmtDuration(ttlMs)}</span> (the cache
+            duration), after which it expires. Showing the {entries.length} most recent ({activeCount}{' '}
+            still active).
           </p>
         </div>
       </div>
