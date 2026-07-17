@@ -200,9 +200,7 @@ export type Database = {
           chunk_text: string
           created_at: string
           document_id: string
-          embedding: string | null
           embedding_large: unknown
-          embedding_model: string | null
           embedding_model_large: string | null
           heading: string | null
           id: string
@@ -219,9 +217,7 @@ export type Database = {
           chunk_text: string
           created_at?: string
           document_id: string
-          embedding?: string | null
           embedding_large?: unknown
-          embedding_model?: string | null
           embedding_model_large?: string | null
           heading?: string | null
           id?: string
@@ -238,9 +234,7 @@ export type Database = {
           chunk_text?: string
           created_at?: string
           document_id?: string
-          embedding?: string | null
           embedding_large?: unknown
-          embedding_model?: string | null
           embedding_model_large?: string | null
           heading?: string | null
           id?: string
@@ -340,6 +334,47 @@ export type Database = {
           {
             foreignKeyName: "entity_link_to_entity_id_fkey"
             columns: ["to_entity_id"]
+            isOneToOne: false
+            referencedRelation: "entity"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      product_alias: {
+        Row: {
+          alias: string
+          alias_norm: string
+          confidence: number
+          created_at: string
+          entity_id: string | null
+          id: string
+          product_line_key: string
+          source: string
+        }
+        Insert: {
+          alias: string
+          alias_norm: string
+          confidence?: number
+          created_at?: string
+          entity_id?: string | null
+          id?: string
+          product_line_key: string
+          source?: string
+        }
+        Update: {
+          alias?: string
+          alias_norm?: string
+          confidence?: number
+          created_at?: string
+          entity_id?: string | null
+          id?: string
+          product_line_key?: string
+          source?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_alias_entity_id_fkey"
+            columns: ["entity_id"]
             isOneToOne: false
             referencedRelation: "entity"
             referencedColumns: ["id"]
