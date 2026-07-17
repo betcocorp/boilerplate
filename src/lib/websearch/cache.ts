@@ -51,5 +51,6 @@ export class WebSearchCache {
 
 export function defaultCacheTtlMs(): number {
   const raw = Number(process.env.WEBSEARCH_CACHE_TTL_MS);
-  return Number.isFinite(raw) && raw > 0 ? raw : 600_000;
+  // Default 30 days; override with WEBSEARCH_CACHE_TTL_MS (ms).
+  return Number.isFinite(raw) && raw > 0 ? raw : 2_592_000_000;
 }

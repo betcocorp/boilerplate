@@ -55,7 +55,7 @@ export function createProviderFromEnv(): WebSearchProvider {
  * Generic web-search core: run a provider search, validate + normalize to the Bex-owned
  * shape, and attach timing/cost metrics. Intent-specific tools consume this, not the provider.
  */
-/** Process-wide cache shared across requests; TTL from WEBSEARCH_CACHE_TTL_MS (default 10 min). */
+/** Process-wide cache shared across requests; TTL from WEBSEARCH_CACHE_TTL_MS (default 30 days). */
 const sharedCache = new WebSearchCache(defaultCacheTtlMs());
 /** Process-wide rate-limit + cost budget (WEB-5) shared across requests. */
 const sharedGuardrails = new WebSearchGuardrails(loadGuardrailPolicyFromEnv());
