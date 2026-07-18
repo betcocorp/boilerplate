@@ -89,6 +89,8 @@ export type WebSearchCacheEntry = {
   createdAt: string;
   expiresAt: string;
   expired: boolean;
+  /** Full cached response, if it still parses; null when the stored JSON is invalid. */
+  response: WebSearchResponse | null;
 };
 
 type CacheListRow = {
@@ -138,6 +140,7 @@ export async function listWebSearchCacheEntries(limit = 100): Promise<WebSearchC
         createdAt: row.created_at,
         expiresAt: row.expires_at,
         expired: new Date(row.expires_at).getTime() <= now,
+        response: parsed.success ? parsed.data : null,
       };
     });
   } catch {
