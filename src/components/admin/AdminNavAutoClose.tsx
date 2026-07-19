@@ -13,8 +13,10 @@ export function AdminNavAutoClose({ children }: { children: ReactNode }) {
   const { isMobile, setOpenMobile } = useSidebar();
 
   return (
+    // `contents` so this wrapper adds no box of its own — the sidebar groups stay flush with the
+    // rail (important so icons center correctly when collapsed). Click still bubbles here.
     <div
-      className="px-3 py-2"
+      className="contents"
       onClick={(event) => {
         if (isMobile && (event.target as HTMLElement).closest('a')) {
           setOpenMobile(false);

@@ -44,7 +44,7 @@ const AccountTrigger = forwardRef<HTMLButtonElement, AccountTriggerProps>(
     return (
       <Button
         className={cn(
-          'flex h-auto w-full items-center gap-3 rounded-3xl border border-sidebar-border bg-sidebar-accent/60 p-3 text-left transition hover:bg-sidebar-accent',
+          'flex h-auto w-full items-center gap-3 rounded-3xl border border-sidebar-border bg-sidebar-accent/60 p-3 text-left transition hover:bg-sidebar-accent group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-0 group-data-[collapsible=icon]:rounded-2xl group-data-[collapsible=icon]:p-1.5',
           className,
         )}
         ref={ref}
@@ -55,7 +55,7 @@ const AccountTrigger = forwardRef<HTMLButtonElement, AccountTriggerProps>(
         <Avatar size="lg">
           <AvatarFallback>{getInitials(userName)}</AvatarFallback>
         </Avatar>
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 group-data-[collapsible=icon]:hidden">
           <p className="truncate text-sm font-medium text-sidebar-foreground">
             {userName || 'User'}
           </p>
@@ -63,7 +63,7 @@ const AccountTrigger = forwardRef<HTMLButtonElement, AccountTriggerProps>(
             {userEmail || 'No email'}
           </p>
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 group-data-[collapsible=icon]:hidden">
           <EllipsisVertical className="size-4 text-sidebar-foreground/70" />
         </div>
       </Button>

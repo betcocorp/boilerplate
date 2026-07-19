@@ -11,9 +11,19 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 
-import { Button } from '~/components/ui/button';
+import {
+  SidebarGroup,
+  SidebarGroupLabel,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
+  useSidebar,
+} from '~/components/ui/sidebar';
 import { cn } from '~/lib/utils';
 
 type NavItem = {
@@ -141,115 +151,95 @@ function isActivePath(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
-function NavSection({ items, title }: { items: NavEntry[]; title?: string }) {
+/**
+ * A collapsible nav group. When the sidebar is collapsed to the icon rail, only the group icon
+ * shows (with a hover tooltip); clicking it expands the rail and opens the group so its links
+ * become reachable. The active group stays open and can't be manually collapsed.
+ */
+function NavGroupItem({ entry }: { entry: NavGroup }) {
   const pathname = usePathname();
-  const activeGroupLabels = useMemo(() => {
-    return new Set(
-      items
-        .filter(
-          (entry): entry is NavGroup =>
-            entry.type === 'group' &&
-            entry.items.some((item) => isActivePath(pathname, item.href)),
-        )
-        .map((entry) => entry.label),
-    );
-  }, [items, pathname]);
-  const [manualOpen, setManualOpen] = useState<Record<string, boolean>>({});
+  const { state, isMobile, setOpen } = useSidebar();
+  const [manualOpen, setManualOpen] = useState(false);
+
+  const Icon = entry.icon;
+  const groupActive = entry.items.some((item) => isActivePath(pathname, item.href));
+  const isOpen = groupActive || manualOpen;
+  const collapsed = state === 'collapsed' && !isMobile;
 
   return (
-    <div className="space-y-2">
-      {title ? (
-        <p className="px-2 text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">
-          {title}
-        </p>
+    <SidebarMenuItem>
+      <SidebarMenuButton
+        isActive={groupActive}
+        onClick={() => {
+          if (collapsed) {
+            setOpen(true);
+            setManualOpen(true);
+          } else {
+            setManualOpen(!isOpen);
+          }
+        }}
+        tooltip={entry.label}
+      >
+        <Icon />
+        <span>{entry.label}</span>
+        <ChevronRight
+          className={cn('ml-auto transition-transform', isOpen && 'rotate-90')}
+        />
+      </SidebarMenuButton>
+      {isOpen ? (
+        <SidebarMenuSub>
+          {entry.items.map((item) => (
+            <SidebarMenuSubItem key={item.href}>
+              <SidebarMenuSubButton
+                asChild
+                isActive={isActivePath(pathname, item.href)}
+              >
+                <Link href={item.href}>{item.label}</Link>
+              </SidebarMenuSubButton>
+            </SidebarMenuSubItem>
+          ))}
+        </SidebarMenuSub>
       ) : null}
-      <nav className="space-y-1">
-        {items.map((entry) => {
+    </SidebarMenuItem>
+  );
+}
+
+function NavSection({ section }: { section: NavSectionModel }) {
+  const pathname = usePathname();
+
+  return (
+    <SidebarGroup>
+      <SidebarGroupLabel>{section.title}</SidebarGroupLabel>
+      <SidebarMenu>
+        {section.items.map((entry) => {
           if (entry.type === 'link') {
             const Icon = entry.icon;
             const active = isActivePath(pathname, entry.href);
             return (
-              <Link
-                className={`flex items-center gap-3 rounded-2xl px-3 py-2 text-sm font-medium transition ${
-                  active
-                    ? 'bg-sidebar-accent text-sidebar-foreground'
-                    : 'text-foreground/80 hover:bg-accent hover:text-foreground'
-                }`}
-                href={entry.href}
-                key={entry.label}
-              >
-                {Icon ? <Icon className="size-4" /> : null}
-                <span>{entry.label}</span>
-              </Link>
+              <SidebarMenuItem key={entry.label}>
+                <SidebarMenuButton asChild isActive={active} tooltip={entry.label}>
+                  <Link href={entry.href}>
+                    {Icon ? <Icon /> : null}
+                    <span>{entry.label}</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
             );
           }
 
-          const Icon = entry.icon;
-          const groupActive = activeGroupLabels.has(entry.label);
-          const isOpen = groupActive || manualOpen[entry.label] === true;
-
-          return (
-            <div className="rounded-2xl" key={entry.label}>
-              <Button
-                className={cn(
-                  'h-auto w-full justify-start rounded-2xl px-3 py-2 text-sm font-medium transition',
-                  groupActive
-                    ? 'bg-sidebar-accent text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground'
-                    : 'text-foreground/80 hover:bg-accent hover:text-foreground',
-                )}
-                onClick={() =>
-                  setManualOpen((current) => ({
-                    ...current,
-                    [entry.label]: !isOpen,
-                  }))
-                }
-                type="button"
-                variant="ghost"
-              >
-                <Icon className="size-4" />
-                <span className="flex-1 text-left">{entry.label}</span>
-                <ChevronRight
-                  className={`size-4 transition ${isOpen ? 'rotate-90' : ''}`}
-                />
-              </Button>
-              {isOpen ? (
-                <div className="mt-1 space-y-1 pl-10">
-                  {entry.items.map((item) => {
-                    const itemActive = isActivePath(pathname, item.href);
-                    return (
-                      <Link
-                        className={`block rounded-xl px-3 py-1.5 text-sm transition ${
-                          itemActive
-                            ? 'bg-sidebar-accent text-sidebar-foreground'
-                            : 'text-foreground/70 hover:bg-accent hover:text-foreground'
-                        }`}
-                        href={item.href}
-                        key={item.label}
-                      >
-                        {item.label}
-                      </Link>
-                    );
-                  })}
-                </div>
-              ) : null}
-            </div>
-          );
+          return <NavGroupItem entry={entry} key={entry.label} />;
         })}
-      </nav>
-    </div>
+      </SidebarMenu>
+    </SidebarGroup>
   );
 }
 
 export function AdminSidebarNav() {
   return (
-    <div className="space-y-6">
+    <>
       {sidebarSections.map((section) => (
-        <NavSection
-          items={section.items}
-          key={section.title}
-          title={section.title}
-        />
+        <NavSection key={section.title} section={section} />
       ))}
-    </div>
+    </>
   );
 }
