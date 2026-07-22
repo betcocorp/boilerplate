@@ -1075,32 +1075,6 @@ export type Database = {
               token_count: number
             }[]
           }
-      match_product_chunks_v2: {
-        Args: {
-          filter_product_key?: string
-          filter_product_line_key?: string
-          match_count?: number
-          query_embedding: unknown
-        }
-        Returns: {
-          chunk_id: string
-          chunk_index: number
-          chunk_key: string
-          chunk_text: string
-          document_id: string
-          document_key: string
-          document_title: string
-          entity_id: string
-          heading: string
-          product_key: string
-          product_line_key: string
-          section_path: string[]
-          similarity: number
-          sku: string
-          source_pk: string
-          token_count: number
-        }[]
-      }
       run_bulk_sds_heading_backfill: { Args: never; Returns: Json }
       sync_efficacy_chunks: {
         Args: {
