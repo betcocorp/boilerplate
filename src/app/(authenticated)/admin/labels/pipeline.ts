@@ -3,7 +3,7 @@ import {
   ListObjectsV2Command,
   S3Client,
 } from '@aws-sdk/client-s3';
-import { createHash } from 'node:crypto';
+import yaml from 'js-yaml';
 import { basename, extname } from 'node:path';
 
 import { syncDocumentChunkEmbeddings } from '~/lib/rag/embeddings';
@@ -11,34 +11,35 @@ import {
   chunkMarkdown,
   estimateTokens,
   markdownToPlainText,
-  MARKDOWN_CHUNK_CHAR_BUDGET,
   summarize,
 } from '~/lib/rag/markdown-chunking';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 import type { Json as RagJson } from '~/types/supabase.rag';
 
 import {
-  KNOWLEDGE_FILE_OVERRIDES,
-  KNOWLEDGE_FOLDER_SPECIALIST,
-  KNOWLEDGE_S3_BUCKET_DEFAULT,
-  KNOWLEDGE_S3_PREFIX_DEFAULT,
-  type KnowledgeDocType,
-  type KnowledgeSeedDocument,
-  type KnowledgeSpecialist,
+  LABEL_FILE_OVERRIDES,
+  LABEL_FOLDER_BRAND,
+  LABEL_S3_BUCKET_DEFAULT,
+  LABEL_S3_PREFIX_DEFAULT,
+  type LabelBrand,
+  type LabelSeedDocument,
 } from './manifest';
 
-const SOURCE_SCHEMA = 'knowledge';
-const SOURCE_TABLE = 'file';
-const SOURCE_TYPE = 's3_markdown';
-const DOCUMENT_KIND = 'knowledge';
-const DEFAULT_BATCH_SIZE = 5;
-const MAX_BATCH_SIZE = 25;
+// Matches the identity already established by the Path B entity/fact bootstrap
+// (label-md/_rag_import) — this pipeline extends those rows rather than
+// creating a parallel keying scheme.
+const SOURCE_SCHEMA = 'label_md';
+const SOURCE_TYPE = 'label';
+const SOURCE_LOCALE = 'en';
+const DOCUMENT_KIND = 'label';
+const DEFAULT_BATCH_SIZE = 25;
+const MAX_BATCH_SIZE = 100;
 const MAX_EMBEDDING_RUNS = 25;
-const MAX_DASHBOARD_DOCUMENT_ROWS = 300;
+const MAX_DASHBOARD_DOCUMENT_ROWS = 900;
 
 type JsonObject = { [key: string]: RagJson | undefined };
 
-export type KnowledgeIngestionRunMode =
+export type LabelIngestionRunMode =
   | 'register-seed'
   | 'ingest-next'
   | 'ingest-all'
@@ -46,15 +47,15 @@ export type KnowledgeIngestionRunMode =
   | 'embed-next'
   | 'embed-all';
 
-type KnowledgeDocumentStatus = 'missing' | 'registered' | 'ingested' | 'failed';
+type LabelDocumentStatus = 'missing' | 'registered' | 'ingested' | 'failed';
 
-export type KnowledgeDashboardDocument = {
+export type LabelDashboardDocument = {
   id: string;
   title: string;
-  specialist: KnowledgeSpecialist;
-  docType: KnowledgeDocType;
+  brand: LabelBrand;
+  sku: string | null;
   s3Key: string;
-  status: KnowledgeDocumentStatus;
+  status: LabelDocumentStatus;
   sourceRecordId: string | null;
   documentId: string | null;
   chunkCount: number;
@@ -62,7 +63,7 @@ export type KnowledgeDashboardDocument = {
   lastError: string | null;
 };
 
-export type KnowledgeDashboardStatus = {
+export type LabelDashboardStatus = {
   totals: {
     seeded: number;
     registered: number;
@@ -71,41 +72,38 @@ export type KnowledgeDashboardStatus = {
     chunks: number;
     embeddedChunks: number;
     pendingChunks: number;
+    linkedToEntity: number;
   };
   preview: { showing: number; hidden: number };
   warning: string | null;
-  documents: KnowledgeDashboardDocument[];
+  documents: LabelDashboardDocument[];
 };
 
-export type KnowledgeIngestionRunResult = {
-  mode: KnowledgeIngestionRunMode;
+export type LabelIngestionRunResult = {
+  mode: LabelIngestionRunMode;
   processed: number;
   succeeded: number;
   failed: number;
   startedAt: string;
   finishedAt: string;
   errors: Array<{ id: string; message: string }>;
-  status: KnowledgeDashboardStatus;
+  status: LabelDashboardStatus;
 };
 
 // --------------------------------------------------------------------------
-// S3 (retool-360, us-east-1). Read creds prefer AWS_360_READ_*, fall back to
-// AWS_360_WRITE_* (the keys lib/tests/storage.ts already uses for uploads).
+// S3 (retool-360, us-east-1) — same bucket/creds as the knowledge panel.
 // --------------------------------------------------------------------------
 function getS3Bucket() {
-  return process.env.KNOWLEDGE_S3_BUCKET?.trim() || KNOWLEDGE_S3_BUCKET_DEFAULT;
+  return process.env.LABEL_S3_BUCKET?.trim() || LABEL_S3_BUCKET_DEFAULT;
 }
 
 function getS3Prefix() {
-  const prefix = process.env.KNOWLEDGE_S3_PREFIX?.trim() || KNOWLEDGE_S3_PREFIX_DEFAULT;
+  const prefix = process.env.LABEL_S3_PREFIX?.trim() || LABEL_S3_PREFIX_DEFAULT;
   if (!prefix) return '';
   return prefix.endsWith('/') ? prefix : `${prefix}/`;
 }
 
 function getAwsCredentials() {
-  // Prefer the documented AWS_360_* keys, then fall back to the generic read
-  // keys actually configured in .env.local (AWS_ACCESS_READ_KEY_ID /
-  // AWS_SECRET_READ_ACCESS_KEY) — the same retool-360 read credentials.
   const accessKeyId =
     process.env.AWS_360_READ_ACCESS_KEY_ID?.trim() ||
     process.env.AWS_360_WRITE_ACCESS_KEY_ID?.trim() ||
@@ -143,81 +141,115 @@ async function listS3MarkdownKeys(client: S3Client, bucket: string, prefix: stri
 }
 
 // --------------------------------------------------------------------------
-// Metadata inference
+// Metadata inference (cheap, filename-only — full accuracy comes from
+// frontmatter read at ingest time, same pattern as the knowledge panel).
 // --------------------------------------------------------------------------
-function normalizeRelativePath(value: string) {
-  return value.replaceAll('\\', '/').toLowerCase();
-}
-
 function keyToRelativePath(s3Key: string, prefix: string) {
   return prefix && s3Key.startsWith(prefix) ? s3Key.slice(prefix.length) : s3Key;
 }
 
-function inferSpecialist(relativePath: string): KnowledgeSpecialist {
-  const topFolder = relativePath.split('/')[0] ?? '';
-  return KNOWLEDGE_FOLDER_SPECIALIST[topFolder] ?? 'general';
+function inferBrand(relativePath: string): LabelBrand | null {
+  const topFolder = relativePath.split('/')[0]?.toLowerCase() ?? '';
+  return LABEL_FOLDER_BRAND[topFolder] ?? null;
 }
 
-function inferDocType(fileName: string): KnowledgeDocType {
-  const f = fileName.toLowerCase();
-  if (f.includes('troubleshoot') || f.includes('complaint')) return 'troubleshooting';
-  if (f.includes('faq')) return 'faq';
-  if (f.includes('glossary')) return 'glossary';
-  if (f.includes('workbook') || f.includes('_full')) return 'workbook';
-  if (f.includes('how') || f.includes('guide') || f.includes('procedure') || f.includes('video'))
-    return 'howto';
-  return 'general';
+/** File stems follow "<sku>_<slug>.md" (e.g. "07512_kling.md"). */
+function inferSkuAndTitle(fileNameWithoutExt: string): { sku: string | null; title: string } {
+  const match = fileNameWithoutExt.match(/^([A-Za-z0-9]+)_(.+)$/);
+  if (!match) return { sku: null, title: inferTitleFromSlug(fileNameWithoutExt) };
+  return { sku: match[1], title: inferTitleFromSlug(match[2]) };
 }
 
-function inferTitle(fileNameWithoutExt: string) {
-  const normalized = fileNameWithoutExt
+function inferTitleFromSlug(slug: string) {
+  const normalized = slug
     .replaceAll('_', ' ')
     .replaceAll('-', ' ')
     .replace(/\s{2,}/g, ' ')
     .trim();
-  return normalized || fileNameWithoutExt;
+  return normalized || slug;
 }
 
-function stripFrontmatter(raw: string): { body: string; frontTitle: string | null } {
-  const match = raw.match(/^---\n([\s\S]*?)\n---\n?/);
-  if (!match) return { body: raw, frontTitle: null };
-  const titleMatch = match[1].match(/^title:\s*(.+)$/m);
-  const frontTitle = titleMatch ? titleMatch[1].trim().replace(/^["']|["']$/g, '') : null;
-  return { body: raw.slice(match[0].length), frontTitle };
+type LabelFrontmatter = {
+  sku?: string;
+  brand?: string;
+  product?: string;
+  sub_name?: string;
+  epa_reg_no?: string | null;
+  din_no?: string | null;
+  sds_number?: string | null;
+  needs_review?: boolean;
+  extraction_method?: string;
+};
+
+function parseLabelMd(raw: string): { fm: LabelFrontmatter; body: string } {
+  const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
+  if (!match) throw new Error('No YAML frontmatter block found.');
+  const fm = (yaml.load(match[1]) ?? {}) as LabelFrontmatter;
+  return { fm, body: match[2] ?? '' };
+}
+
+/**
+ * Strips the leading "# Title" line and lead paragraph, replacing them with a
+ * synthesized identity block (Product/Brand/SKU/EPA reg/DIN) so the Overview
+ * chunk is self-contained without duplicating the H1 verbatim.
+ */
+function buildDocumentBody(fm: LabelFrontmatter, rawBody: string): string {
+  const lines = rawBody.split(/\r?\n/);
+  const idx = lines.findIndex((l) => l.startsWith('# '));
+  const rest = idx === -1 ? lines : lines.slice(idx + 1);
+
+  const identity = [
+    `Product: ${fm.product ?? 'Unknown product'}${fm.sub_name ? ` — ${fm.sub_name}` : ''}`,
+    `Brand: ${fm.brand ?? 'Unknown'}`,
+    fm.sku ? `SKU: ${fm.sku}` : null,
+    fm.epa_reg_no ? `EPA Reg. No.: ${fm.epa_reg_no}` : null,
+    fm.din_no ? `DIN: ${fm.din_no}` : null,
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  return `${identity}\n\n${rest.join('\n').trim()}`.trim();
 }
 
 // --------------------------------------------------------------------------
 // Seed discovery
 // --------------------------------------------------------------------------
-async function discoverKnowledgeSeedDocuments(): Promise<KnowledgeSeedDocument[]> {
+async function discoverLabelSeedDocuments(): Promise<LabelSeedDocument[]> {
   const bucket = getS3Bucket();
   const prefix = getS3Prefix();
   const client = getS3Client();
   const keys = await listS3MarkdownKeys(client, bucket, prefix);
 
-  return keys.map((s3Key) => {
-    const relativePath = normalizeRelativePath(keyToRelativePath(s3Key, prefix));
+  const seeds: LabelSeedDocument[] = [];
+  for (const s3Key of keys) {
+    const relativePath = keyToRelativePath(s3Key, prefix);
+    const brand = inferBrand(relativePath);
+    if (!brand) continue; // unrecognized top-level folder — skip rather than mis-key
+
     const fileName = basename(s3Key);
     const fileNameWithoutExt = fileName.slice(0, -extname(fileName).length);
-    const override = KNOWLEDGE_FILE_OVERRIDES[relativePath];
-    return {
-      id: createHash('sha1').update(s3Key).digest('hex').slice(0, 20),
-      title: override?.title || inferTitle(fileNameWithoutExt),
-      specialist: override?.specialist || inferSpecialist(relativePath),
-      docType: override?.docType || inferDocType(fileName),
-      productLineKey: override?.productLineKey ?? null,
+    const { sku, title } = inferSkuAndTitle(fileNameWithoutExt);
+    const override = LABEL_FILE_OVERRIDES[relativePath.toLowerCase()];
+
+    seeds.push({
+      id: fileNameWithoutExt,
+      title: override?.title || title,
+      brand: override?.brand || brand,
+      sku: override?.sku ?? sku,
       s3Key,
-    } satisfies KnowledgeSeedDocument;
-  });
+      labelMdPath: relativePath,
+    });
+  }
+  return seeds;
 }
 
-function toSourcePk(seed: KnowledgeSeedDocument) {
+function toSourcePk(seed: LabelSeedDocument) {
   return seed.id;
 }
-function toDocumentKey(seed: KnowledgeSeedDocument) {
-  return `knowledge:${seed.id}`;
+function toDocumentKey(seed: LabelSeedDocument, brand: LabelBrand) {
+  return `label_md:${brand}:${seed.id}:en`;
 }
-function toSourceUri(seed: KnowledgeSeedDocument) {
+function toSourceUri(seed: LabelSeedDocument) {
   return `s3://${getS3Bucket()}/${seed.s3Key}`;
 }
 function nowIso() {
@@ -228,15 +260,15 @@ function clampBatchSize(batchSize?: number) {
   return Math.min(Math.floor(batchSize), MAX_BATCH_SIZE);
 }
 
-function buildSourceMetadata(seed: KnowledgeSeedDocument, overrides: JsonObject): JsonObject {
+function buildSourceMetadata(seed: LabelSeedDocument, overrides: JsonObject): JsonObject {
   return {
     ingestion: {
       s3_key: seed.s3Key,
       source_uri: toSourceUri(seed),
       title: seed.title,
-      specialist: seed.specialist,
-      doc_type: seed.docType,
-      product_line_key: seed.productLineKey,
+      brand: seed.brand,
+      sku: seed.sku,
+      label_md_path: seed.labelMdPath,
       ...overrides,
     },
   };
@@ -245,7 +277,7 @@ function buildSourceMetadata(seed: KnowledgeSeedDocument, overrides: JsonObject)
 // --------------------------------------------------------------------------
 // DB writes (service role — bypasses RLS)
 // --------------------------------------------------------------------------
-async function ensureSeedSourceRecord(seed: KnowledgeSeedDocument) {
+async function ensureSeedSourceRecord(seed: LabelSeedDocument) {
   const supabase = getSupabaseServiceRoleClient();
   const sourcePk = toSourcePk(seed);
   const timestamp = nowIso();
@@ -254,11 +286,10 @@ async function ensureSeedSourceRecord(seed: KnowledgeSeedDocument) {
   const { data: existing } = await supabase
     .schema('rag')
     .from('source_record')
-    .select('id')
+    .select('id, source_table')
     .eq('source_schema', SOURCE_SCHEMA)
-    .eq('source_table', SOURCE_TABLE)
-    .eq('source_type', SOURCE_TYPE)
     .eq('source_pk', sourcePk)
+    .eq('source_locale', SOURCE_LOCALE)
     .maybeSingle();
 
   if (existing?.id) {
@@ -268,7 +299,7 @@ async function ensureSeedSourceRecord(seed: KnowledgeSeedDocument) {
       .update({ is_active: true, source_uri: toSourceUri(seed), metadata, last_seen_at: timestamp })
       .eq('id', existing.id);
     if (error) throw new Error(`Failed to update source record ${sourcePk}: ${error.message}`);
-    return existing.id;
+    return { id: existing.id, sourceTable: existing.source_table as LabelBrand };
   }
 
   const { data: inserted, error } = await supabase
@@ -276,37 +307,59 @@ async function ensureSeedSourceRecord(seed: KnowledgeSeedDocument) {
     .from('source_record')
     .insert({
       source_schema: SOURCE_SCHEMA,
-      source_table: SOURCE_TABLE,
+      source_table: seed.brand,
       source_type: SOURCE_TYPE,
       source_pk: sourcePk,
-      source_locale: 'EN',
+      source_locale: SOURCE_LOCALE,
       source_uri: toSourceUri(seed),
       is_active: true,
       metadata,
       last_seen_at: timestamp,
     })
-    .select('id')
+    .select('id, source_table')
     .single();
   if (error || !inserted?.id) throw new Error(`Failed to insert source record ${sourcePk}: ${error?.message ?? 'unknown'}`);
-  return inserted.id;
+  return { id: inserted.id, sourceTable: inserted.source_table as LabelBrand };
+}
+
+async function findEntityId(labelMdPath: string): Promise<string | null> {
+  const supabase = getSupabaseServiceRoleClient();
+  const { data, error } = await supabase
+    .schema('rag')
+    .from('entity')
+    .select('id')
+    .eq('entity_type', 'product')
+    .filter('metadata->>label_md_path', 'eq', labelMdPath)
+    .maybeSingle();
+  if (error) return null;
+  return data?.id ?? null;
 }
 
 async function upsertDocument(
   sourceRecordId: string,
-  seed: KnowledgeSeedDocument,
+  entityId: string | null,
+  documentKey: string,
+  seed: LabelSeedDocument,
+  fm: LabelFrontmatter,
   rawMarkdown: string,
-  plainText: string,
+  bodyText: string,
 ) {
   const supabase = getSupabaseServiceRoleClient();
-  const documentKey = toDocumentKey(seed);
   const metadata: JsonObject = {
-    source: 'knowledge',
+    source: 'label_md',
     s3_key: seed.s3Key,
     source_uri: toSourceUri(seed),
-    specialist: seed.specialist,
-    doc_type: seed.docType,
-    product_line_key: seed.productLineKey,
+    brand: fm.brand ?? seed.brand,
+    sku: fm.sku ?? seed.sku,
+    label_md_path: seed.labelMdPath,
+    epa_reg_no: fm.epa_reg_no ?? null,
+    din_no: fm.din_no ?? null,
+    sds_number: fm.sds_number ?? null,
+    needs_review: fm.needs_review ?? null,
+    extraction_method: fm.extraction_method ?? null,
   };
+
+  const title = `${fm.product ?? seed.title}${fm.sub_name ? ` — ${fm.sub_name}` : ''}`;
 
   const { data: existing } = await supabase
     .schema('rag')
@@ -317,12 +370,12 @@ async function upsertDocument(
 
   const payload = {
     source_record_id: sourceRecordId,
-    entity_id: null as string | null,
-    title: seed.title,
+    entity_id: entityId,
+    title,
     language_code: 'EN',
-    body_text: plainText,
+    body_text: bodyText,
     body_markdown: rawMarkdown,
-    summary: summarize(plainText),
+    summary: summarize(bodyText),
     document_kind: DOCUMENT_KIND,
     metadata,
   };
@@ -343,9 +396,14 @@ async function upsertDocument(
   return inserted.id;
 }
 
-async function replaceDocumentChunks(documentId: string, seed: KnowledgeSeedDocument, chunks: KnowledgeChunk[]) {
+async function replaceDocumentChunks(
+  documentId: string,
+  documentKey: string,
+  fm: LabelFrontmatter,
+  seed: LabelSeedDocument,
+  chunks: ReturnType<typeof chunkMarkdown>,
+) {
   const supabase = getSupabaseServiceRoleClient();
-  // Clear prior chunks for idempotent re-ingest, then insert fresh.
   const { error: delError } = await supabase
     .schema('rag')
     .from('document_chunk')
@@ -356,14 +414,14 @@ async function replaceDocumentChunks(documentId: string, seed: KnowledgeSeedDocu
   if (chunks.length === 0) return 0;
 
   const rows = chunks.map((c) => ({
-    chunk_key: `knowledge:${seed.id}:${c.index}`,
+    chunk_key: `${documentKey}:${c.index}`,
     document_id: documentId,
     chunk_index: c.index,
     section_path: c.sectionPath,
     heading: c.heading,
     chunk_text: c.text,
     token_count: estimateTokens(c.text),
-    metadata: { specialist: seed.specialist, doc_type: seed.docType } as JsonObject,
+    metadata: { brand: fm.brand ?? seed.brand, sku: fm.sku ?? seed.sku } as JsonObject,
   }));
 
   const { error } = await supabase.schema('rag').from('document_chunk').insert(rows);
@@ -373,7 +431,7 @@ async function replaceDocumentChunks(documentId: string, seed: KnowledgeSeedDocu
 
 async function markSourceRecord(
   sourceRecordId: string,
-  seed: KnowledgeSeedDocument,
+  seed: LabelSeedDocument,
   params: { status: 'registered' | 'ingested' | 'failed'; chunkCount?: number; lastError?: string | null },
 ) {
   const supabase = getSupabaseServiceRoleClient();
@@ -396,21 +454,28 @@ async function markSourceRecord(
   if (error) throw new Error(`Failed to update source status for ${seed.id}: ${error.message}`);
 }
 
-async function ingestSeedDocument(seed: KnowledgeSeedDocument) {
-  const sourceRecordId = await ensureSeedSourceRecord(seed);
+async function ingestSeedDocument(seed: LabelSeedDocument) {
+  const { id: sourceRecordId, sourceTable } = await ensureSeedSourceRecord(seed);
   try {
     const s3 = getS3Client();
     const obj = await s3.send(new GetObjectCommand({ Bucket: getS3Bucket(), Key: seed.s3Key }));
     const raw = await obj.Body?.transformToString('utf-8');
     if (!raw) throw new Error(`S3 object body was empty for key ${seed.s3Key}.`);
 
-    const { body, frontTitle } = stripFrontmatter(raw);
-    const effectiveSeed = frontTitle ? { ...seed, title: frontTitle } : seed;
-    const plain = markdownToPlainText(body);
-    const documentId = await upsertDocument(sourceRecordId, effectiveSeed, body, plain);
-    const chunkCount = await replaceDocumentChunks(documentId, effectiveSeed, chunkMarkdown(body));
+    const { fm, body } = parseLabelMd(raw);
+    const documentKey = toDocumentKey(seed, sourceTable);
+    // body_markdown keeps the true, unmodified source (post-frontmatter) for
+    // display. Chunking and the plain-text search field both derive from the
+    // identity-enriched version (H1 replaced by a Product/Brand/SKU block) so
+    // the Overview chunk is self-contained without duplicating the H1 verbatim.
+    const bodyForChunking = buildDocumentBody(fm, body);
+    const plainText = markdownToPlainText(bodyForChunking);
+    const entityId = await findEntityId(seed.labelMdPath);
 
-    await markSourceRecord(sourceRecordId, effectiveSeed, { status: 'ingested', chunkCount, lastError: null });
+    const documentId = await upsertDocument(sourceRecordId, entityId, documentKey, seed, fm, body, plainText);
+    const chunkCount = await replaceDocumentChunks(documentId, documentKey, fm, seed, chunkMarkdown(bodyForChunking));
+
+    await markSourceRecord(sourceRecordId, seed, { status: 'ingested', chunkCount, lastError: null });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unexpected ingestion failure.';
     await markSourceRecord(sourceRecordId, seed, { status: 'failed', lastError: message });
@@ -422,7 +487,7 @@ async function ingestSeedDocument(seed: KnowledgeSeedDocument) {
 // Status dashboard
 // --------------------------------------------------------------------------
 type SourceRow = { id: string; source_pk: string; metadata: JsonObject | null; updated_at: string };
-type DocRow = { id: string; source_record_id: string; updated_at: string };
+type DocRow = { id: string; source_record_id: string; entity_id: string | null; updated_at: string };
 
 function asIngestion(metadata: JsonObject | null) {
   const ing = metadata && typeof metadata === 'object' ? (metadata as JsonObject).ingestion : null;
@@ -440,14 +505,13 @@ async function loadState() {
       .from('source_record')
       .select('id, source_pk, metadata, updated_at')
       .eq('source_schema', SOURCE_SCHEMA)
-      .eq('source_table', SOURCE_TABLE)
       .eq('source_type', SOURCE_TYPE),
-    supabase.schema('rag').from('document').select('id, source_record_id, updated_at').eq('document_kind', DOCUMENT_KIND),
-    // Real per-document chunk counts so "ingested" reflects actual chunks, not the
-    // source's mutable metadata.ingestion.status (which register-seed resets). The
-    // knowledge corpus is well under the 1000-row default cap; only the per-row chunk
-    // count column would undercount past that, never the ingested/registered status.
-    supabase.schema('rag').from('document_chunk').select('document_id').like('chunk_key', 'knowledge:%'),
+    supabase
+      .schema('rag')
+      .from('document')
+      .select('id, source_record_id, entity_id, updated_at')
+      .eq('document_kind', DOCUMENT_KIND),
+    supabase.schema('rag').from('document_chunk').select('document_id').like('chunk_key', 'label_md:%'),
   ]);
   const chunkCountByDoc = new Map<string, number>();
   for (const row of (chunkDocs ?? []) as { document_id: string | null }[]) {
@@ -464,14 +528,14 @@ async function loadChunkTotals() {
   const supabase = getSupabaseServiceRoleClient();
   const rag = supabase.schema('rag');
   const [{ count: total }, { count: embedded }] = await Promise.all([
-    rag.from('document_chunk').select('id', { count: 'exact', head: true }).like('chunk_key', 'knowledge:%'),
+    rag.from('document_chunk').select('id', { count: 'exact', head: true }).like('chunk_key', 'label_md:%'),
     (rag.from('document_chunk') as unknown as {
       select(c: string, o: { count: 'exact'; head: true }): {
         like(col: string, val: string): { not(col: string, op: string, val: null): Promise<{ count: number | null }> };
       };
     })
       .select('id', { count: 'exact', head: true })
-      .like('chunk_key', 'knowledge:%')
+      .like('chunk_key', 'label_md:%')
       .not('embedding_large', 'is', null),
   ]);
   const chunks = total ?? 0;
@@ -480,24 +544,22 @@ async function loadChunkTotals() {
 }
 
 function buildDocumentRow(
-  seed: KnowledgeSeedDocument,
+  seed: LabelSeedDocument,
   source: SourceRow | null,
   doc: DocRow | null,
   chunkCount: number,
-): KnowledgeDashboardDocument {
+): LabelDashboardDocument {
   const ingestion = asIngestion(source?.metadata ?? null);
   const metaStatus = asString(ingestion?.status);
-  let status: KnowledgeDocumentStatus = 'missing';
+  let status: LabelDocumentStatus = 'missing';
   if (metaStatus === 'failed') status = 'failed';
-  // A linked document with chunks means ingest succeeded — even if a later
-  // register-seed reset the source's mutable metadata status back to 'registered'.
   else if (metaStatus === 'ingested' || (doc && chunkCount > 0)) status = 'ingested';
   else if (source) status = 'registered';
   return {
     id: seed.id,
     title: seed.title,
-    specialist: seed.specialist,
-    docType: seed.docType,
+    brand: seed.brand,
+    sku: seed.sku,
     s3Key: seed.s3Key,
     status,
     sourceRecordId: source?.id ?? null,
@@ -508,7 +570,11 @@ function buildDocumentRow(
   };
 }
 
-function toDashboard(rows: KnowledgeDashboardDocument[], warning: string | null): KnowledgeDashboardStatus {
+function toDashboard(
+  rows: LabelDashboardDocument[],
+  linkedToEntity: number,
+  warning: string | null,
+): LabelDashboardStatus {
   const visible = rows.slice(0, MAX_DASHBOARD_DOCUMENT_ROWS);
   return {
     totals: {
@@ -519,6 +585,7 @@ function toDashboard(rows: KnowledgeDashboardDocument[], warning: string | null)
       chunks: 0,
       embeddedChunks: 0,
       pendingChunks: 0,
+      linkedToEntity,
     },
     preview: { showing: visible.length, hidden: Math.max(0, rows.length - visible.length) },
     warning,
@@ -526,7 +593,7 @@ function toDashboard(rows: KnowledgeDashboardDocument[], warning: string | null)
   };
 }
 
-async function withChunkTotals(status: KnowledgeDashboardStatus): Promise<KnowledgeDashboardStatus> {
+async function withChunkTotals(status: LabelDashboardStatus): Promise<LabelDashboardStatus> {
   try {
     const totals = await loadChunkTotals();
     return { ...status, totals: { ...status.totals, ...totals } };
@@ -535,27 +602,31 @@ async function withChunkTotals(status: KnowledgeDashboardStatus): Promise<Knowle
   }
 }
 
-async function statusRows(seeds: KnowledgeSeedDocument[]) {
+async function statusRows(seeds: LabelSeedDocument[]) {
   const { sources, docs, chunkCountByDoc } = await loadState();
   const sourceByPk = new Map(sources.map((s) => [s.source_pk, s]));
   const docBySource = new Map(docs.map((d) => [d.source_record_id, d]));
-  return seeds.map((seed) => {
+  const rows = seeds.map((seed) => {
     const source = sourceByPk.get(toSourcePk(seed)) ?? null;
     const doc = source ? (docBySource.get(source.id) ?? null) : null;
     const chunkCount = doc ? (chunkCountByDoc.get(doc.id) ?? 0) : 0;
     return buildDocumentRow(seed, source, doc, chunkCount);
   });
+  const linkedToEntity = docs.filter((d) => d.entity_id != null).length;
+  return { rows, linkedToEntity };
 }
 
-export async function getKnowledgeDashboardStatus(): Promise<KnowledgeDashboardStatus> {
+export async function getLabelDashboardStatus(): Promise<LabelDashboardStatus> {
   try {
-    const seeds = await discoverKnowledgeSeedDocuments();
-    return await withChunkTotals(toDashboard(await statusRows(seeds), null));
+    const seeds = await discoverLabelSeedDocuments();
+    const { rows, linkedToEntity } = await statusRows(seeds);
+    return await withChunkTotals(toDashboard(rows, linkedToEntity, null));
   } catch (error) {
     const reason = error instanceof Error ? error.message : 'Unknown S3 discovery failure.';
     return await withChunkTotals(
       toDashboard(
         [],
+        0,
         `S3 discovery unavailable (${reason}). Configure AWS_360_READ_* (or AWS_ACCESS_READ_KEY_ID / AWS_SECRET_READ_ACCESS_KEY) for reads on retool-360.`,
       ),
     );
@@ -565,16 +636,16 @@ export async function getKnowledgeDashboardStatus(): Promise<KnowledgeDashboardS
 // --------------------------------------------------------------------------
 // Run modes
 // --------------------------------------------------------------------------
-export async function runKnowledgeIngestion(
-  mode: KnowledgeIngestionRunMode,
+export async function runLabelIngestion(
+  mode: LabelIngestionRunMode,
   batchSize?: number,
-): Promise<KnowledgeIngestionRunResult> {
+): Promise<LabelIngestionRunResult> {
   const startedAt = nowIso();
-  const errors: KnowledgeIngestionRunResult['errors'] = [];
+  const errors: LabelIngestionRunResult['errors'] = [];
   let processed = 0;
   let succeeded = 0;
   let failed = 0;
-  let status: KnowledgeDashboardStatus;
+  let status: LabelDashboardStatus;
 
   if (mode === 'embed-next' || mode === 'embed-all') {
     let runCount = 0;
@@ -589,9 +660,11 @@ export async function runKnowledgeIngestion(
       succeeded += res.chunksEmbedded;
       if (mode === 'embed-next' || res.remainingChunks === 0 || res.chunksEmbedded === 0) break;
     }
-    status = await withChunkTotals(toDashboard(await statusRows(await discoverKnowledgeSeedDocuments()), null));
+    const seeds = await discoverLabelSeedDocuments();
+    const { rows, linkedToEntity } = await statusRows(seeds);
+    status = await withChunkTotals(toDashboard(rows, linkedToEntity, null));
   } else if (mode === 'register-seed') {
-    const seeds = await discoverKnowledgeSeedDocuments();
+    const seeds = await discoverLabelSeedDocuments();
     for (const seed of seeds) {
       processed += 1;
       try {
@@ -602,11 +675,12 @@ export async function runKnowledgeIngestion(
         errors.push({ id: seed.id, message: error instanceof Error ? error.message : 'Registration failed.' });
       }
     }
-    status = await withChunkTotals(toDashboard(await statusRows(seeds), null));
+    const { rows, linkedToEntity } = await statusRows(seeds);
+    status = await withChunkTotals(toDashboard(rows, linkedToEntity, null));
   } else {
-    const seeds = await discoverKnowledgeSeedDocuments();
+    const seeds = await discoverLabelSeedDocuments();
     const seedById = new Map(seeds.map((s) => [s.id, s]));
-    const rows = await statusRows(seeds);
+    const { rows } = await statusRows(seeds);
     let candidates = rows.filter((r) => r.status !== 'ingested');
     if (mode === 'retry-failed') candidates = rows.filter((r) => r.status === 'failed');
     if (mode === 'ingest-next') candidates = candidates.slice(0, clampBatchSize(batchSize));
@@ -623,7 +697,8 @@ export async function runKnowledgeIngestion(
         errors.push({ id: seed.id, message: error instanceof Error ? error.message : 'Ingestion failed.' });
       }
     }
-    status = await withChunkTotals(toDashboard(await statusRows(seeds), null));
+    const { rows: finalRows, linkedToEntity } = await statusRows(seeds);
+    status = await withChunkTotals(toDashboard(finalRows, linkedToEntity, null));
   }
 
   return { mode, processed, succeeded, failed, startedAt, finishedAt: nowIso(), errors, status };

@@ -109,7 +109,10 @@ const sidebarSections: NavSectionModel[] = [
         type: 'group',
         label: 'Markdown',
         icon: FileText,
-        items: [{ label: 'Markdown ingestion', href: '/admin/knowledge' }],
+        items: [
+          { label: 'Markdown ingestion', href: '/admin/knowledge' },
+          { label: 'Product label ingestion', href: '/admin/labels' },
+        ],
       },
     ],
   },

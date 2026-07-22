@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { chunkMarkdown } from './pipeline';
+import { chunkMarkdown } from '~/lib/rag/markdown-chunking';
 
 describe('chunkMarkdown', () => {
   it('never emits a chunk with empty text', () => {

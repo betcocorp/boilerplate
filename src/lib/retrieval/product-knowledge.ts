@@ -219,7 +219,7 @@ async function runProductKnowledgeQuery(input: {
   const sectionType = input.sectionType?.trim() || null;
   const maxPerDocument = input.maxPerDocument;
   const requiredDocumentKinds =
-    input.requiredDocumentKinds ?? ['product_line_profile', 'sds', 'knowledge'];
+    input.requiredDocumentKinds ?? ['product_line_profile', 'sds', 'knowledge', 'label'];
 
   if (explicitKey) {
     const result = await searchProductChunks({
@@ -304,7 +304,7 @@ async function runProductKnowledgeQuery(input: {
   const resolution = resolveProductLineFromMatches(broadResult.matches);
   const broadCurated = await curateUniqueDocumentSources(broadResult.matches, {
     limit,
-    requiredDocumentKinds: ['product_line_profile', 'sds', 'knowledge'],
+    requiredDocumentKinds: ['product_line_profile', 'sds', 'knowledge', 'label'],
   });
 
   if (resolution.lockedProductLineKey == null) {
@@ -335,7 +335,7 @@ async function runProductKnowledgeQuery(input: {
   });
   const anchoredCurated = await curateUniqueDocumentSources(anchoredResult.matches, {
     limit,
-    requiredDocumentKinds: ['product_line_profile', 'sds', 'knowledge'],
+    requiredDocumentKinds: ['product_line_profile', 'sds', 'knowledge', 'label'],
   });
 
   const minimumAnchoredEvidence = Math.max(2, Math.ceil(limit / 2));
