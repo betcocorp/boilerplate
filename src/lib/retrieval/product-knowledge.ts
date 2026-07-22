@@ -36,6 +36,15 @@ const DEFAULT_UNIQUE_DOCUMENT_LIMIT = 3;
  */
 const SIMILARITY_CANDIDATE_FETCH_LIMIT = 20;
 
+/**
+ * Enable cross-encoder reranking (rag/rerank.ts) on the product-support retrieval path (B0-280).
+ * On by default; set BEX_PRODUCT_SUPPORT_RERANKER=false to disable without a redeploy. If the
+ * reranker endpoint is unavailable, searchProductChunks falls back to cosine order automatically,
+ * so enabling this is safe even before the cross-encoder is provisioned.
+ */
+const PRODUCT_SUPPORT_RERANK_ENABLED =
+  process.env.BEX_PRODUCT_SUPPORT_RERANKER !== 'false';
+
 export type CuratedSource = {
   documentId: string;
   /** Identifier of the chunk that produced the top similarity match for this document. */
@@ -229,6 +238,7 @@ async function runProductKnowledgeQuery(input: {
       sectionType: sectionType ?? undefined,
       scope: 'all',
       useHybrid: true,
+      useReranker: PRODUCT_SUPPORT_RERANK_ENABLED,
     });
 
     const curated = await curateUniqueDocumentSources(result.matches, {
@@ -265,6 +275,7 @@ async function runProductKnowledgeQuery(input: {
       sectionType: sectionType ?? undefined,
       scope: 'products',
       useHybrid: true,
+      useReranker: PRODUCT_SUPPORT_RERANK_ENABLED,
     });
 
     const curated = await curateUniqueDocumentSources(result.matches, {
@@ -299,6 +310,7 @@ async function runProductKnowledgeQuery(input: {
     sectionType: sectionType ?? undefined,
     scope: 'all',
     useHybrid: true,
+    useReranker: PRODUCT_SUPPORT_RERANK_ENABLED,
   });
 
   const resolution = resolveProductLineFromMatches(broadResult.matches);
@@ -332,6 +344,7 @@ async function runProductKnowledgeQuery(input: {
     sectionType: sectionType ?? undefined,
     scope: 'all',
     useHybrid: true,
+    useReranker: PRODUCT_SUPPORT_RERANK_ENABLED,
   });
   const anchoredCurated = await curateUniqueDocumentSources(anchoredResult.matches, {
     limit,
