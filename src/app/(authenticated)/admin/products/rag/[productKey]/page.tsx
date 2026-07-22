@@ -406,8 +406,8 @@ export default async function RagProductLineDetailsPage({
                     product page for full variant fields.
                   </p>
                   <ul className="mt-3 flex flex-wrap gap-2">
-                    {variantProductKeys.map((pk) => (
-                      <li key={pk}>
+                    {variantProductKeys.map((pk, index) => (
+                      <li key={`${index}-${pk}`}>
                         <Link
                           className="inline-flex rounded-full bg-white px-3 py-1 text-xs font-medium text-sky-800 ring-1 ring-slate-200 transition hover:bg-sky-50"
                           href={`/admin/products/legacy/${encodeURIComponent(pk)}`}
