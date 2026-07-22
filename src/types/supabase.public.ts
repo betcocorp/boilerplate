@@ -463,6 +463,39 @@ export type Database = {
         }
         Relationships: []
       }
+      orphan_ignore: {
+        Row: {
+          check_key: string
+          created_at: string
+          created_by: string | null
+          id: string
+          is_active: boolean
+          reason: string | null
+          ref_id: string
+          updated_at: string
+        }
+        Insert: {
+          check_key: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          is_active?: boolean
+          reason?: string | null
+          ref_id: string
+          updated_at?: string
+        }
+        Update: {
+          check_key?: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          is_active?: boolean
+          reason?: string | null
+          ref_id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       product_category: {
         Row: {
           aliases: string[]
@@ -960,6 +993,40 @@ export type Database = {
           },
         ]
       }
+      orphan_checks_v: {
+        Row: {
+          check_key: string | null
+          data_type: string | null
+          detail: Json | null
+          ref_id: string | null
+          ref_label: string | null
+        }
+        Relationships: []
+      }
+      orphan_queue_v: {
+        Row: {
+          check_key: string | null
+          data_type: string | null
+          detail: Json | null
+          ignore_reason: string | null
+          ignored: boolean | null
+          ignored_at: string | null
+          ignored_by: string | null
+          ref_id: string | null
+          ref_label: string | null
+        }
+        Relationships: []
+      }
+      orphan_queue_summary_v: {
+        Row: {
+          active: number | null
+          check_key: string | null
+          data_type: string | null
+          ignored: number | null
+          total: number | null
+        }
+        Relationships: []
+      }
     }
     Functions: {
       admin_latest_failures_count: {
@@ -995,6 +1062,25 @@ export type Database = {
         }
       }
       classify_prompt_category: { Args: { p_prompt: string }; Returns: string }
+      set_orphan_ignore: {
+        Args: {
+          p_check_key: string
+          p_created_by?: string | null
+          p_is_active?: boolean
+          p_reason?: string | null
+          p_ref_id: string
+        }
+        Returns: {
+          check_key: string
+          created_at: string
+          created_by: string | null
+          id: string
+          is_active: boolean
+          reason: string | null
+          ref_id: string
+          updated_at: string
+        }
+      }
     }
     Enums: {
       [_ in never]: never

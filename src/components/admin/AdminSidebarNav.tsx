@@ -97,6 +97,7 @@ const sidebarSections: NavSectionModel[] = [
           { label: 'RAG generate', href: '/admin/products/rag/generate' },
           { label: 'RAG corpus quality', href: '/admin/products/rag/chunking' },
           { label: 'Legacy products', href: '/admin/products/legacy' },
+          { label: 'Orphan Monitor', href: '/admin/products/orphans' },
         ],
       },
       {
