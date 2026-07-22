@@ -415,6 +415,16 @@ export async function runTestAction(formData: FormData) {
     redirect(encodeMessage(`/admin/tests/${testId}`, 'error', 'This test has no items to run.'));
   }
 
+  // Model the run against a specific chat model. Tags map to concrete models in
+  // resolveResponsesModel(); 'preview' is the configured default.
+  const ALLOWED_MODEL_TAGS = ['preview', 'gpt-4o', 'gpt-4.1'] as const;
+  const rawModelTag = formData.get('modelTag');
+  const modelTag =
+    typeof rawModelTag === 'string' &&
+    (ALLOWED_MODEL_TAGS as readonly string[]).includes(rawModelTag)
+      ? rawModelTag
+      : 'preview';
+
   const testResult = await createTestResult({
     test_id: testId,
     status: 'queued',
@@ -423,6 +433,7 @@ export async function runTestAction(formData: FormData) {
     passed_items: 0,
     failed_items: 0,
     started_at: new Date().toISOString(),
+    run_options: { modelTag },
     summary: {
       completed_items: 0,
       total_items: items.length,

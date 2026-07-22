@@ -21,6 +21,22 @@ const UNABLE_TO_ASSIST_FAILURE_REASON =
   'The assistant indicated it could not answer (e.g. no verified information, could not find a hazard, or cannot provide). Marked failed so you can review and investigate.';
 
 /**
+ * Decline patterns that are robust to intervening words the fixed phrase list misses.
+ * Kept deliberately tight (the "lack of information/data" family) so genuine answers that merely
+ * cite a label are not flagged. These catch e.g. "I don't have **the** verified information on the
+ * required wet contact time" — which the substring list slips because of the inserted "the".
+ */
+const DECLINE_REGEXES: RegExp[] = [
+  // "(do not|don't|does not|doesn't|no longer) have [the/any/enough/sufficient/access to …]
+  //  [verified/specific/reliable/confirmed/detailed/that/this …] information|data|details|answer|documentation"
+  /\b(?:do not|don't|does not|doesn't|did not|didn't|no longer)\s+have\s+(?:the\s+|any\s+|enough\s+|sufficient\s+|access to\s+|specific\s+|verified\s+|reliable\s+|confirmed\s+|detailed\s+|that\s+|this\s+|required\s+|necessary\s+)*(?:information|data|details|answer|documentation)\b/,
+  // "no (verified|reliable|confirmed|specific) information|data" (lack statement, not a citation)
+  /\bno\s+(?:verified|reliable|confirmed|specific)\s+(?:information|data)\b/,
+  // Canonical normalized decline: "I('m| am)? (unable|not able) to (provide|verify|confirm|locate|answer) …"
+  /\b(?:unable|not able)\s+to\s+(?:provide|verify|confirm|locate|find|answer|retrieve)\b/,
+];
+
+/**
  * Declines, hedges, and “no answer” phrasing — treated as **failed** outcomes for visibility,
  * even when row expectations would otherwise accept a short decline.
  */
@@ -101,7 +117,7 @@ function responseIndicatesUnableToAssistOrRefusal(responseText: string): boolean
     'consult with a betco sales representative',
   ];
 
-  return phrases.some((p) => t.includes(p));
+  return phrases.some((p) => t.includes(p)) || DECLINE_REGEXES.some((r) => r.test(t));
 }
 
 /**
@@ -168,7 +184,7 @@ function responseIndicatesDeclineStyleAnswer(responseText: string): boolean {
     'not able to help with that topic',
   ];
 
-  return indicators.some((p) => t.includes(p));
+  return indicators.some((p) => t.includes(p)) || DECLINE_REGEXES.some((r) => r.test(t));
 }
 
 /** Rows configured for decline-style expectations should not be failed by the "unable to assist" visibility override. */
@@ -271,9 +287,24 @@ function withUnableToAssistFailureOverride(
   };
 }
 
+/**
+ * Full pass/fail decision for a single chat test item: applies the expectation rules and the
+ * "unable to assist" decline override. Exported so the grading behavior can be unit-tested
+ * independently of the live workflow.
+ */
+export function gradeChatTestResponse(params: {
+  item: TestItemRecord;
+  hasError: boolean;
+  responseText: string;
+}): EvaluationOutcome {
+  const base = evaluateTestOutcome(params);
+  return withUnableToAssistFailureOverride(params.responseText, base, params.item);
+}
+
 export async function runSingleTestItem(
   testResultId: string,
   testItem: TestItemRecord,
+  options?: { modelTag?: string },
 ): Promise<RunSingleItemResult> {
   const startedAt = Date.now();
 
@@ -282,22 +313,18 @@ export async function runSingleTestItem(
     const result = await runBexChatTurn({
       conversationId: null,
       message: testItem.prompt,
+      modelTag: options?.modelTag,
       useValidator: false,
       agentMode: 'orchestrator',
     });
 
     const elapsedMs = Math.max(0, Date.now() - startedAt);
     const responseText = result.answerText || '';
-    const baseOutcome = evaluateTestOutcome({
+    const outcome = gradeChatTestResponse({
       item: testItem,
       hasError: false,
       responseText,
     });
-    const outcome = withUnableToAssistFailureOverride(
-      responseText,
-      baseOutcome,
-      testItem,
-    );
 
     return {
       passed: outcome.passed,

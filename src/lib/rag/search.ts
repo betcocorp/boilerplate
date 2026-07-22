@@ -8,6 +8,23 @@ const APPROX_QUERY_THRESHOLD_SHORT = 0.95;
 const APPROX_QUERY_THRESHOLD_LONG = 0.9;
 const APPROX_REWRITTEN_SIMILARITY_THRESHOLD = 0.88;
 
+/**
+ * Search scope. `all | products | sds` map to the RPC's native `filter_scope`. `knowledge` and
+ * `label` are additional `document_kind`s that the corpus RPC does not yet filter on natively
+ * (see the reconciliation-required migration note), so they are resolved as `filter_scope: 'all'`
+ * plus an application-layer `document_kind` filter over the returned rows.
+ */
+export type SearchScope = 'all' | 'products' | 'sds' | 'knowledge' | 'label';
+
+/** Scopes handled natively by the RPC's `filter_scope` argument. */
+type RpcScope = 'all' | 'products' | 'sds';
+
+/** Scopes resolved by an application-layer document_kind filter over `filter_scope: 'all'`. */
+const APP_KIND_SCOPES: Record<'knowledge' | 'label', string> = {
+  knowledge: 'knowledge',
+  label: 'label',
+};
+
 type SearchProductChunksOptions = {
   query: string;
   limit?: number;
@@ -15,7 +32,7 @@ type SearchProductChunksOptions = {
   sectionType?: string;
   minSimilarity?: number;
   model?: string;
-  scope?: 'all' | 'products' | 'sds';
+  scope?: SearchScope;
   useHybrid?: boolean;
   useReranker?: boolean;
   useMultiIntent?: boolean;
@@ -69,7 +86,7 @@ export type RagSearchResult = {
   limit: number;
   productLineKey: string | null;
   sectionType: string | null;
-  scope: 'all' | 'products' | 'sds';
+  scope: SearchScope;
   minSimilarity: number | null;
   retrieval_strategy: 'vector' | 'hybrid' | 'vector+reranked' | 'hybrid+reranked';
   embeddingSource:
@@ -118,7 +135,7 @@ function normalizeMinSimilarity(minSimilarity?: number) {
   return Math.min(normalized, 1);
 }
 
-function normalizeScope(scope?: string) {
+function normalizeScope(scope?: string): RpcScope {
   if (scope === 'products' || scope === 'sds') {
     return scope;
   }
@@ -128,6 +145,28 @@ function normalizeScope(scope?: string) {
   }
 
   return 'products' as const;
+}
+
+/**
+ * Resolves a requested scope into: the value echoed back on the result, the RPC-native
+ * `filter_scope` to send, and an optional application-layer `document_kind` filter.
+ *
+ * `knowledge`/`label` are not yet supported by the corpus RPC's `filter_scope` (the live function
+ * body clamps unknown scopes to `all`), so they are served as `filter_scope: 'all'` + a
+ * post-retrieval `document_kind` filter. Once the reconciliation-required migration pushes these
+ * kinds into the RPC, `rpcScope` can pass them through directly and the app-layer filter dropped.
+ */
+function resolveSearchScope(scope?: string): {
+  requested: SearchScope;
+  rpcScope: RpcScope;
+  documentKindFilter: string | null;
+} {
+  const raw = (scope ?? '').trim().toLowerCase();
+  if (raw === 'knowledge' || raw === 'label') {
+    return { requested: raw, rpcScope: 'all', documentKindFilter: APP_KIND_SCOPES[raw] };
+  }
+  const rpcScope = normalizeScope(raw);
+  return { requested: rpcScope, rpcScope, documentKindFilter: null };
 }
 
 function nowMs() {
@@ -736,14 +775,23 @@ export async function searchProductChunks(
   const limit = clampLimit(options.limit);
   const productLineKey = options.productLineKey?.trim() || null;
   const sectionType = options.sectionType?.trim() || null;
-  const scope = normalizeScope(options.scope);
+  const {
+    requested: requestedScope,
+    rpcScope: scope,
+    documentKindFilter,
+  } = resolveSearchScope(options.scope);
   const minSimilarity = normalizeMinSimilarity(options.minSimilarity);
   const useHybrid = options.useHybrid ?? false;
   const useReranker = options.useReranker ?? process.env.ENABLE_RERANKER === 'true';
   const useMultiIntent = options.useMultiIntent ?? false;
   // Fetch extra candidates when reranking so the reranker has a larger pool to
-  // reorder before we slice down to the requested limit.
-  const rpcLimit = useReranker ? Math.min(limit * 5, 50) : limit;
+  // reorder before we slice down to the requested limit. When an app-layer document_kind
+  // filter is active (knowledge/label), over-fetch so enough matching-kind rows survive.
+  const rpcLimit = documentKindFilter
+    ? Math.min(Math.max(limit * 10, 100), 200)
+    : useReranker
+      ? Math.min(limit * 5, 50)
+      : limit;
 
   const {
     row,
@@ -811,29 +859,36 @@ export async function searchProductChunks(
     similarity: Number(match.similarity),
   }));
 
+  // App-layer scope: keep only the requested document_kind (knowledge/label) before ranking.
+  const kindFilteredMatches = documentKindFilter
+    ? mappedMatches.filter((match) => match.document_kind === documentKindFilter)
+    : mappedMatches;
+
   // Rerank phase — reorders the candidate pool by cross-encoder relevance then
   // slices to `limit`. Falls back to cosine order if the API is unavailable.
   let rerankMs = 0;
-  let rankedMatches = mappedMatches;
+  let rankedMatches = kindFilteredMatches;
 
-  if (useReranker && mappedMatches.length > 0) {
+  if (useReranker && kindFilteredMatches.length > 0) {
     const rerankStartedAt = nowMs();
-    const reranked = await rerankChunks(query, mappedMatches).catch(() => null);
+    const reranked = await rerankChunks(query, kindFilteredMatches).catch(() => null);
     rerankMs = elapsedMs(rerankStartedAt);
 
     if (reranked && reranked.length > 0) {
       const scoreMap = new Map(reranked.map((r) => [r.chunk_id, r.relevance_score]));
-      rankedMatches = [...mappedMatches]
+      rankedMatches = [...kindFilteredMatches]
         .sort((a, b) => (scoreMap.get(b.chunk_id) ?? 0) - (scoreMap.get(a.chunk_id) ?? 0))
         .slice(0, limit);
     } else {
-      rankedMatches = mappedMatches.slice(0, limit);
+      rankedMatches = kindFilteredMatches.slice(0, limit);
     }
   }
 
-  const filteredMatches = rankedMatches.filter(
-    (match) => minSimilarity === null || match.similarity >= minSimilarity,
-  );
+  const filteredMatches = rankedMatches
+    .filter((match) => minSimilarity === null || match.similarity >= minSimilarity)
+    // Over-fetch for the app-layer kind filter means the non-rerank path can still hold more
+    // than `limit` rows here; trim to the requested count (no-op for the native scopes).
+    .slice(0, limit);
 
   const timings = {
     totalMs: elapsedMs(startedAt) + rerankMs,
@@ -881,7 +936,7 @@ export async function searchProductChunks(
     limit,
     productLineKey,
     sectionType,
-    scope,
+    scope: requestedScope,
     minSimilarity,
     retrieval_strategy: (
       useHybrid && useReranker ? 'hybrid+reranked'

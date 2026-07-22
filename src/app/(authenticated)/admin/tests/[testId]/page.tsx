@@ -9,6 +9,7 @@ import { AdminTestsActionToast } from '~/components/admin/tests/AdminTestsAction
 import { RunSearchEvalDialog } from '~/components/admin/tests/RunSearchEvalDialog';
 import { TestPromptsSection } from '~/components/admin/tests/TestPromptsSection';
 import { Button } from '~/components/ui/button';
+import { NativeSelect } from '~/components/ui/native-select';
 import {
   TableBody,
   TableCell,
@@ -321,13 +322,23 @@ export default async function AdminTestDetailsPage({
                 <Link href="/admin/tests">Back to tests</Link>
               </Button>
               <RunSearchEvalDialog testId={test.id} />
-              <form action={runTestAction}>
+              <form action={runTestAction} className="flex items-center gap-2">
                 <input
                   name="returnPath"
                   type="hidden"
                   value={`/admin/tests/${test.id}`}
                 />
                 <input name="testId" type="hidden" value={test.id} />
+                <NativeSelect
+                  aria-label="Chat model for this run"
+                  className="h-9 w-36"
+                  defaultValue="preview"
+                  name="modelTag"
+                >
+                  <option value="preview">Model: preview</option>
+                  <option value="gpt-4o">Model: gpt-4o</option>
+                  <option value="gpt-4.1">Model: gpt-4.1</option>
+                </NativeSelect>
                 <Button size="sm" type="submit">
                   Run dataset
                 </Button>

@@ -26,6 +26,11 @@ export async function executeTestRun(testResultId: string) {
   }
 
   const items = await getTestItemsByTestId(testResult.test_id);
+  const runOptions = asSummaryObject(testResult.run_options);
+  const modelTag =
+    typeof runOptions.modelTag === 'string' && runOptions.modelTag.trim()
+      ? runOptions.modelTag.trim()
+      : undefined;
   // Use per-item existence check rather than an index offset so that retry (which
   // deletes only errored rows) and normal resume both work correctly when there
   // are gaps in the result set.
@@ -109,7 +114,7 @@ export async function executeTestRun(testResultId: string) {
       return;
     }
 
-    const itemResult = await runSingleTestItem(testResult.id, item);
+    const itemResult = await runSingleTestItem(testResult.id, item, { modelTag });
     await insertTestResultItems([itemResult.item]);
     existingItemIds.add(item.id);
 
