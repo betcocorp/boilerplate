@@ -335,6 +335,19 @@ async function syncSdsChunks(languageCode: string) {
   return normalizeJsonObject(data);
 }
 
+async function syncEfficacyChunks(languageCode: string) {
+  const supabase = getSupabaseServiceRoleClient();
+  const { data, error } = await withRetry(() =>
+    supabase.schema('rag').rpc('sync_efficacy_chunks', { p_language_code: languageCode }),
+  );
+
+  if (error) {
+    throw new Error(`Failed to sync efficacy chunks: ${error.message}`);
+  }
+
+  return normalizeJsonObject(data);
+}
+
 export async function runRagPipeline(
   intent: RagPipelineIntent,
   options: RagPipelineRunOptions = {},
@@ -402,10 +415,15 @@ export async function runRagPipeline(
     if (intent === 'sync-chunks') {
       const plpResult = await syncLegacyProductChunks(languageCode);
       const sdsResult = await syncSdsChunks(languageCode);
+      const efficacyResult = await syncEfficacyChunks(languageCode);
       chunkRuns = 1;
       chunkSyncResult = mergeChunkSyncResults(
-        mergeChunkSyncResults(null, plpResult, 1),
-        sdsResult,
+        mergeChunkSyncResults(
+          mergeChunkSyncResults(null, plpResult, 1),
+          sdsResult,
+          1,
+        ),
+        efficacyResult,
         1,
       );
     } else {
@@ -443,12 +461,39 @@ export async function runRagPipeline(
         }
       }
 
-      chunkRuns = Math.max(plpRuns, sdsRuns);
-      chunkSyncResult = mergeChunkSyncResults(plpSyncResult, sdsSyncResult, chunkRuns);
+      // Efficacy loop — drain efficacy chunks
+      let efficacyRuns = 0;
+      let efficacySyncResult: JsonObject | null = null;
+      while (efficacyRuns < MAX_CHUNK_RUNS) {
+        const result = await syncEfficacyChunks(languageCode);
+
+        efficacyRuns += 1;
+        efficacySyncResult = mergeChunkSyncResults(
+          efficacySyncResult,
+          result,
+          efficacyRuns,
+        );
+
+        if (
+          (readJsonNumber(result, 'remaining_documents') ?? 0) === 0 ||
+          (readJsonNumber(result, 'documents_processed') ?? 0) === 0
+        ) {
+          break;
+        }
+      }
+
+      chunkRuns = Math.max(plpRuns, sdsRuns, efficacyRuns);
+      chunkSyncResult = mergeChunkSyncResults(
+        mergeChunkSyncResults(plpSyncResult, sdsSyncResult, chunkRuns),
+        efficacySyncResult,
+        chunkRuns,
+      );
 
       const remainingPlp = readJsonNumber(plpSyncResult, 'remaining_documents') ?? 0;
       const remainingSds = readJsonNumber(sdsSyncResult, 'remaining_documents') ?? 0;
-      const totalRemaining = remainingPlp + remainingSds;
+      const remainingEfficacy =
+        readJsonNumber(efficacySyncResult, 'remaining_documents') ?? 0;
+      const totalRemaining = remainingPlp + remainingSds + remainingEfficacy;
 
       if (totalRemaining > 0) {
         throw new Error(
@@ -456,7 +501,7 @@ export async function runRagPipeline(
             chunkRuns === 1 ? '' : 'es'
           } with ${totalRemaining} document${
             totalRemaining === 1 ? '' : 's'
-          } still pending (${remainingPlp} PLP, ${remainingSds} SDS). Run the chunk step again before embeddings.`,
+          } still pending (${remainingPlp} PLP, ${remainingSds} SDS, ${remainingEfficacy} efficacy). Run the chunk step again before embeddings.`,
         );
       }
     }

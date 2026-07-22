@@ -253,7 +253,7 @@ export const productSupportTools: Tool[] = [
     name: 'get_efficacy_data',
     strict: false,
     description:
-      'Return VERIFIED structured facts for a product from the fact tables — dilution (oz/gal), contact/dwell time, EPA registration, and per-organism kill claims. This does NOT run prose/semantic retrieval. Use it for dilution ratio questions and any efficacy / "what does it kill" / kill-claim / contact-time question. Returns `facts` with the structured values, or `facts: null` plus a `note` when there is no verified data on file — in that case do NOT estimate or infer a value; tell the user the data is not verified.',
+      'Return VERIFIED structured facts for a product from the fact tables — dilution (oz/gal), contact/dwell time, EPA registration, and per-organism kill claims — plus, when available, the authoritative lab-report citation (formula, version, lab, Project #, and the raw PDF\'s S3 source) from the efficacy document corpus. This does NOT run prose/semantic retrieval. Use it for dilution ratio questions and any efficacy / "what does it kill" / kill-claim / contact-time question. Returns `facts` and/or `labReport` with the verified values — cite the lab report`s source document id (see `sources`) per the standard `[doc:uuid]` convention when present, citing the specific version that generated the numbers even if a newer formula reuses that data. Returns `facts: null` (and `labReport: null`) plus a `note` only when NEITHER is on file — in that case do NOT estimate or infer a value; tell the user the data is not verified.',
     parameters: {
       type: 'object',
       properties: {

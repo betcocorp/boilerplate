@@ -273,6 +273,7 @@ export default async function AdminDashboardPage() {
                       ['Legacy product browser', '/admin/products/legacy'],
                       ['RAG search', '/admin/products/rag'],
                       ['SDS ingestion dashboard', '/admin/sds'],
+                      ['Efficacy ingestion dashboard', '/admin/efficacy'],
                       ['RAG generation', '/admin/products/rag/generate'],
                     ].map(([label, href]) => (
                       <Link

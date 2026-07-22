@@ -6,6 +6,10 @@ import {
 } from '~/lib/retrieval/product-guidance';
 import { ragQueryForProductKnowledgeWithMeta } from '~/lib/retrieval/product-knowledge';
 import { buildFactsBlock, fetchFactsForProductLineKey } from '~/lib/retrieval/product-facts';
+import {
+  fetchCurrentEfficacyLabReport,
+  renderEfficacyLabReportCitation,
+} from '~/lib/retrieval/efficacy-lab-report';
 import { VERIFIED_FACTS_SOURCE_ID } from '~/lib/rag/document-chunk-types';
 import { resolveProductLineKeyByName } from '~/lib/rag/entity-context';
 import {
@@ -360,11 +364,14 @@ export async function executeProductTool(
     case 'get_efficacy_data': {
       const p = getEfficacyDataInputSchema.parse(args);
       const productLineKey = await resolveProductLineKeyByName(p.productId);
-      const facts = productLineKey
-        ? await fetchFactsForProductLineKey(productLineKey, p.organism)
-        : null;
+      const [facts, labReport] = productLineKey
+        ? await Promise.all([
+            fetchFactsForProductLineKey(productLineKey, p.organism),
+            fetchCurrentEfficacyLabReport(productLineKey, p.organism),
+          ])
+        : [null, null];
 
-      if (!facts) {
+      if (!facts && !labReport) {
         return {
           ok: true,
           adapter: 'structured_facts_v1',
@@ -380,19 +387,21 @@ export async function executeProductTool(
       // kill claim. Without this, an efficacy-only answer carries zero evidence and the
       // validator rejects the draft (confidence 0, human review). Mirrors the synthetic
       // `verified-facts` source that sourcePayload() adds for the semantic-search tools.
-      const factsBlock = buildFactsBlock(
-        new Map([[facts.entityId, facts]]),
-        new Map([[facts.entityId, p.productId]]),
-      );
+      const factsBlock = facts
+        ? buildFactsBlock(
+            new Map([[facts.entityId, facts]]),
+            new Map([[facts.entityId, p.productId]]),
+          )
+        : null;
 
-      return {
-        ok: true,
-        adapter: 'structured_facts_v1',
-        productId: p.productId,
-        productLineKey,
-        organism: p.organism ?? null,
-        facts,
-        sources: factsBlock
+      // B0-237/238: the lab-report corpus (document_kind='efficacy') is a real, citable
+      // rag.document — use its actual id/title so the model can cite `[doc:uuid]` per the
+      // standard convention (product-support-prompts.ts), with the lab + Project # +
+      // S3 source baked into documentBody for a regulatorily defensible citation.
+      const labReportBlock = labReport ? renderEfficacyLabReportCitation(labReport) : null;
+
+      const sources = [
+        ...(factsBlock
           ? [
               {
                 documentId: VERIFIED_FACTS_SOURCE_ID,
@@ -404,7 +413,31 @@ export async function executeProductTool(
                 confidence: 1,
               },
             ]
-          : [],
+          : []),
+        ...(labReport && labReportBlock
+          ? [
+              {
+                documentId: labReport.documentId,
+                chunkId: labReport.documentId,
+                title: labReport.title,
+                snippet: labReportBlock.slice(0, 900),
+                documentBody: labReportBlock,
+                documentKind: 'efficacy',
+                confidence: 1,
+              },
+            ]
+          : []),
+      ];
+
+      return {
+        ok: true,
+        adapter: 'structured_facts_v1',
+        productId: p.productId,
+        productLineKey,
+        organism: p.organism ?? null,
+        facts,
+        labReport,
+        sources,
       };
     }
   }

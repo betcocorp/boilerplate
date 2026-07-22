@@ -82,6 +82,12 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
                   </Link>
                 </Button>
                 <Button asChild size="sm" variant="outline">
+                  <Link href="/admin/efficacy">
+                    <FileText className="size-4" />
+                    <span className="hidden md:block">Efficacy</span>
+                  </Link>
+                </Button>
+                <Button asChild size="sm" variant="outline">
                   <Link href="/admin/products/rag">
                     <Search className="size-4" />
                     <span className="hidden md:block">Search</span>

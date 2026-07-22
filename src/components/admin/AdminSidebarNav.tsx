@@ -108,6 +108,12 @@ const sidebarSections: NavSectionModel[] = [
       },
       {
         type: 'group',
+        label: 'Efficacy',
+        icon: FileText,
+        items: [{ label: 'Efficacy ingestion', href: '/admin/efficacy' }],
+      },
+      {
+        type: 'group',
         label: 'Markdown',
         icon: FileText,
         items: [

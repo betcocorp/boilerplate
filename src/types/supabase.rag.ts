@@ -114,20 +114,26 @@ export type Database = {
           body_markdown: string | null
           body_text: string
           chemistry_class: string | null
+          cites_data_from_document_id: string | null
           contact_time_seconds: number | null
           created_at: string
           dilution_oz_per_gal: number | null
           document_key: string
           document_kind: string
           entity_id: string | null
+          epa_distributor_number: string | null
           epa_registrant: string | null
+          epa_registrant_role: string | null
           epa_registration: string | null
           id: string
+          is_current: boolean
           language_code: string
+          lifecycle_status: string
           metadata: Json
           product_application: string | null
           source_record_id: string
           summary: string | null
+          superseded_by_document_id: string | null
           title: string
           token_count: number | null
           updated_at: string
@@ -136,20 +142,26 @@ export type Database = {
           body_markdown?: string | null
           body_text: string
           chemistry_class?: string | null
+          cites_data_from_document_id?: string | null
           contact_time_seconds?: number | null
           created_at?: string
           dilution_oz_per_gal?: number | null
           document_key: string
           document_kind: string
           entity_id?: string | null
+          epa_distributor_number?: string | null
           epa_registrant?: string | null
+          epa_registrant_role?: string | null
           epa_registration?: string | null
           id?: string
+          is_current?: boolean
           language_code?: string
+          lifecycle_status?: string
           metadata?: Json
           product_application?: string | null
           source_record_id: string
           summary?: string | null
+          superseded_by_document_id?: string | null
           title: string
           token_count?: number | null
           updated_at?: string
@@ -158,25 +170,45 @@ export type Database = {
           body_markdown?: string | null
           body_text?: string
           chemistry_class?: string | null
+          cites_data_from_document_id?: string | null
           contact_time_seconds?: number | null
           created_at?: string
           dilution_oz_per_gal?: number | null
           document_key?: string
           document_kind?: string
           entity_id?: string | null
+          epa_distributor_number?: string | null
           epa_registrant?: string | null
+          epa_registrant_role?: string | null
           epa_registration?: string | null
           id?: string
+          is_current?: boolean
           language_code?: string
+          lifecycle_status?: string
           metadata?: Json
           product_application?: string | null
           source_record_id?: string
           summary?: string | null
+          superseded_by_document_id?: string | null
           title?: string
           token_count?: number | null
           updated_at?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "document_cites_data_from_document_id_fkey"
+            columns: ["cites_data_from_document_id"]
+            isOneToOne: false
+            referencedRelation: "document"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "document_cites_data_from_document_id_fkey"
+            columns: ["cites_data_from_document_id"]
+            isOneToOne: false
+            referencedRelation: "suspect_sds_documents"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "document_entity_id_fkey"
             columns: ["entity_id"]
@@ -189,6 +221,20 @@ export type Database = {
             columns: ["source_record_id"]
             isOneToOne: false
             referencedRelation: "source_record"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "document_superseded_by_document_id_fkey"
+            columns: ["superseded_by_document_id"]
+            isOneToOne: false
+            referencedRelation: "document"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "document_superseded_by_document_id_fkey"
+            columns: ["superseded_by_document_id"]
+            isOneToOne: false
+            referencedRelation: "suspect_sds_documents"
             referencedColumns: ["id"]
           },
         ]
@@ -261,6 +307,66 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      efficacy_formula_alias: {
+        Row: {
+          base_formula_code: string
+          created_at: string
+          mca_formula_code: string
+          notes: string | null
+        }
+        Insert: {
+          base_formula_code: string
+          created_at?: string
+          mca_formula_code: string
+          notes?: string | null
+        }
+        Update: {
+          base_formula_code?: string
+          created_at?: string
+          mca_formula_code?: string
+          notes?: string | null
+        }
+        Relationships: []
+      }
+      efficacy_formula_product: {
+        Row: {
+          created_at: string
+          effective_at: string
+          formula_code: string
+          id: string
+          is_active: boolean
+          notes: string | null
+          product_line_key: string | null
+          registrant_role: string
+          sku: string | null
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          effective_at?: string
+          formula_code: string
+          id?: string
+          is_active?: boolean
+          notes?: string | null
+          product_line_key?: string | null
+          registrant_role?: string
+          sku?: string | null
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          effective_at?: string
+          formula_code?: string
+          id?: string
+          is_active?: boolean
+          notes?: string | null
+          product_line_key?: string | null
+          registrant_role?: string
+          sku?: string | null
+          updated_at?: string
+        }
+        Relationships: []
       }
       entity: {
         Row: {
@@ -685,6 +791,22 @@ export type Database = {
           token_count: number
         }[]
       }
+      chunk_efficacy_document_text: {
+        Args: {
+          p_body_markdown: string
+          p_max_chars?: number
+          p_overlap_chars?: number
+          p_title?: string
+        }
+        Returns: {
+          chunk_index: number
+          chunk_text: string
+          heading: string
+          section_path: string[]
+          section_type: string
+          token_count: number
+        }[]
+      }
       chunk_sds_document_text:
         | {
             Args: {
@@ -742,6 +864,43 @@ export type Database = {
           query_string: string
           timing_sample_count: number
         }[]
+      }
+      get_current_efficacy_for_product: {
+        Args: { p_product_line_key: string }
+        Returns: {
+          body_markdown: string | null
+          body_text: string
+          chemistry_class: string | null
+          cites_data_from_document_id: string | null
+          contact_time_seconds: number | null
+          created_at: string
+          dilution_oz_per_gal: number | null
+          document_key: string
+          document_kind: string
+          entity_id: string | null
+          epa_distributor_number: string | null
+          epa_registrant: string | null
+          epa_registrant_role: string | null
+          epa_registration: string | null
+          id: string
+          is_current: boolean
+          language_code: string
+          lifecycle_status: string
+          metadata: Json
+          product_application: string | null
+          source_record_id: string
+          summary: string | null
+          superseded_by_document_id: string | null
+          title: string
+          token_count: number | null
+          updated_at: string
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "document"
+          isOneToOne: false
+          isSetofReturn: true
+        }
       }
       match_corpus_chunks: {
         Args: {
@@ -943,6 +1102,14 @@ export type Database = {
         }[]
       }
       run_bulk_sds_heading_backfill: { Args: never; Returns: Json }
+      sync_efficacy_chunks: {
+        Args: {
+          p_language_code?: string
+          p_max_chars?: number
+          p_overlap_chars?: number
+        }
+        Returns: Json
+      }
       sync_legacy_product_profile_chunks: {
         Args: { p_language_code?: string }
         Returns: Json

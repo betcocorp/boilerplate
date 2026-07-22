@@ -140,6 +140,55 @@ Only 5 Spanish SDS documents (81 chunks, 0.16% of corpus) exist — English is e
 
 ---
 
+## Efficacy corpus — formula ↔ product crosswalk (B0-231/232/233, added 2026-07-22)
+
+```
+rag.efficacy_formula_product  (new, empty until B0-232 backfills real data)
+┌────────────────────────────────────────────────────────┐
+│ id                    UUID PK                          │
+│ formula_code          text, e.g. "M000795" (M000xxx)   │
+│ product_line_key      text → rag.entity.product_line_key│
+│ sku                   text (nullable — SKU-level link) │
+│ registrant_role       'primary' | 'sub'                │
+│ is_active             boolean                          │
+└────────────────────────────────────────────────────────┘
+        ▲ formula_code                    ▲ product_line_key
+        │                                  │
+rag.document (document_kind='efficacy')    rag.entity (entity_type='product_line')
+  metadata->>'formula_code'                same key as SDS/product_line_profile docs
+  is_current, lifecycle_status
+  (active | never_activated | unused | superseded)
+  superseded_by_document_id, cites_data_from_document_id
+        │ document_id (1:many)
+        ▼
+rag.document_chunk (section_type ∈ bactericidal_efficacy |
+  virucidal_activity | fungistatic | organism_contact_time)
+```
+
+### 4 — Product → current efficacy lab report (answer-time)
+```
+rag.entity.product_line_key
+  = rag.efficacy_formula_product.product_line_key  (is_active = true)
+    → formula_code
+      = rag.document.metadata->>'formula_code'  (document_kind='efficacy',
+                                                   is_current=true, lifecycle_status='active')
+```
+Exposed via `rag.get_current_efficacy_for_product(product_line_key)` and, with citation
+(lab, Project #, S3 source) and a sub-registrant fallback (B0-234), via
+`fetchCurrentEfficacyLabReport()` in `src/lib/retrieval/efficacy-lab-report.ts`.
+
+Status: **crosswalk table + document-model + RPC/search wiring are all live; the table
+itself is empty** — B0-223 (Master Efficacy Version Data parse) and B0-232 (SKU mapping
+backfill) are the still-blocked data-entry steps that populate it.
+
+Distinct from `rag.product_efficacy` (pre-existing, B0-185/196): that table holds
+structured per-organism kill-claim facts with no `formula_code`/lab/version/citation
+concept. It remains a secondary/fallback grounding source; this crosswalk + the
+`efficacy` document kind is the citable, regulatorily-defensible primary source once
+populated.
+
+---
+
 ## Data staleness risks
 
 | Source | Snapshot date | Risk |

@@ -9,15 +9,16 @@ const APPROX_QUERY_THRESHOLD_LONG = 0.9;
 const APPROX_REWRITTEN_SIMILARITY_THRESHOLD = 0.88;
 
 /**
- * Search scope. `all | products | sds` map to the RPC's native `filter_scope`. `knowledge` and
- * `label` are additional `document_kind`s that the corpus RPC does not yet filter on natively
- * (see the reconciliation-required migration note), so they are resolved as `filter_scope: 'all'`
+ * Search scope. `all | products | sds | efficacy` map to the RPC's native `filter_scope`
+ * (B0-230 added `efficacy`, mirroring `sds`). `knowledge` and `label` are additional
+ * `document_kind`s that the corpus RPC does not yet filter on natively (see the
+ * reconciliation-required migration note), so they are resolved as `filter_scope: 'all'`
  * plus an application-layer `document_kind` filter over the returned rows.
  */
-export type SearchScope = 'all' | 'products' | 'sds' | 'knowledge' | 'label';
+export type SearchScope = 'all' | 'products' | 'sds' | 'efficacy' | 'knowledge' | 'label';
 
 /** Scopes handled natively by the RPC's `filter_scope` argument. */
-type RpcScope = 'all' | 'products' | 'sds';
+type RpcScope = 'all' | 'products' | 'sds' | 'efficacy';
 
 /** Scopes resolved by an application-layer document_kind filter over `filter_scope: 'all'`. */
 const APP_KIND_SCOPES: Record<'knowledge' | 'label', string> = {
@@ -136,7 +137,7 @@ function normalizeMinSimilarity(minSimilarity?: number) {
 }
 
 function normalizeScope(scope?: string): RpcScope {
-  if (scope === 'products' || scope === 'sds') {
+  if (scope === 'products' || scope === 'sds' || scope === 'efficacy') {
     return scope;
   }
 
@@ -695,7 +696,7 @@ type HybridRpcClient = {
 };
 
 type MatchRpcOpts = {
-  scope: 'all' | 'products' | 'sds';
+  scope: 'all' | 'products' | 'sds' | 'efficacy';
   useHybrid: boolean;
   rpcLimit: number;
   productLineKey: string | null;
@@ -718,7 +719,7 @@ async function callMatchRpc(
         query_text?: string;
         match_count: number;
         filter_product_line_key?: string;
-        filter_scope: 'all' | 'products' | 'sds';
+        filter_scope: 'all' | 'products' | 'sds' | 'efficacy';
         filter_section_type?: string;
       },
     ) => Promise<{ data: RagCorpusSearchMatch[] | null; error: { message: string } | null }>;
