@@ -40,6 +40,7 @@ export default async function OrphanDataTypePage({ params, searchParams }: PageP
       </div>
 
       <OrphanQueueTable
+        dataType={dataType}
         rows={rows}
         total={total}
         page={page}

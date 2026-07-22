@@ -62,6 +62,21 @@ export const acknowledgeOrphanInputSchema = z.object({
 });
 export type AcknowledgeOrphanInput = z.infer<typeof acknowledgeOrphanInputSchema>;
 
+export const orphanRecordInputSchema = z.object({
+  dataType: orphanDataTypeSchema,
+  refId: z.string().min(1),
+});
+export type OrphanRecordInput = z.infer<typeof orphanRecordInputSchema>;
+
+export interface OrphanRecordResult {
+  dataType: OrphanDataType;
+  refId: string;
+  /** Fully-qualified source table the record was read from, e.g. `rag.document`. */
+  table: string;
+  /** The full underlying row, or null if it no longer exists. */
+  record: Record<string, unknown> | null;
+}
+
 /** Human-friendly labels for the UI. */
 export const ORPHAN_DATA_TYPE_LABELS: Record<OrphanDataType, string> = {
   products: 'Products',

@@ -6,10 +6,13 @@ import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 import {
   acknowledgeOrphanInputSchema,
   orphanQueueRowSchema,
+  orphanRecordInputSchema,
   orphanSummaryRowSchema,
   type AcknowledgeOrphanInput,
   type OrphanDataType,
   type OrphanQueueRow,
+  type OrphanRecordInput,
+  type OrphanRecordResult,
   type OrphanSummaryRow,
 } from '~/types/orphans';
 
@@ -80,6 +83,50 @@ export async function getOrphanQueue(query: OrphanQueueQuery): Promise<OrphanQue
     page,
     pageSize,
   };
+}
+
+/**
+ * The `rag`-schema table each orphan data type resolves to. Every one of these
+ * tables is keyed by an `id` column, which is what `orphan_queue_v.ref_id` holds.
+ */
+const ORPHAN_RECORD_TABLE: Record<OrphanDataType, string> = {
+  products: 'entity',
+  product_lines: 'entity',
+  labels: 'document',
+  sds: 'document',
+  documents: 'document',
+  source_records: 'source_record',
+  efficacy: 'product_efficacy',
+};
+
+/** Loosely-typed query builder — `table` is dynamic, so we bypass the generated relation union. */
+type LooseSelect = {
+  select: (columns: string) => {
+    eq: (col: string, val: string) => {
+      maybeSingle: () => Promise<{
+        data: Record<string, unknown> | null;
+        error: { message: string } | null;
+      }>;
+    };
+  };
+};
+
+/** Fetch the full underlying record behind an orphan queue row (drives the "view document" dialog). */
+export async function getOrphanRecord(input: OrphanRecordInput): Promise<OrphanRecordResult> {
+  const { dataType, refId } = orphanRecordInputSchema.parse(input);
+  const table = ORPHAN_RECORD_TABLE[dataType];
+
+  const supabase = getSupabaseServiceRoleClient();
+  const { data, error } = await (
+    supabase.schema('rag').from(table as never) as unknown as LooseSelect
+  )
+    .select('*')
+    .eq('id', refId)
+    .maybeSingle();
+
+  if (error) throw new Error(`getOrphanRecord failed: ${error.message}`);
+
+  return { dataType, refId, table: `rag.${table}`, record: data };
 }
 
 /** Acknowledge (ignore) or un-acknowledge an orphaned record. */

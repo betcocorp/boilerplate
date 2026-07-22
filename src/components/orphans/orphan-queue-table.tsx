@@ -16,10 +16,12 @@ import {
   TableHeader,
   TableRow,
 } from '~/components/ui/table';
+import { OrphanRecordDialog } from '~/components/orphans/orphan-record-dialog';
 import { acknowledgeOrphan } from '~/lib/orphans/orphan-queue-actions';
-import { ORPHAN_CHECK_LABELS, type OrphanQueueRow } from '~/types/orphans';
+import { ORPHAN_CHECK_LABELS, type OrphanDataType, type OrphanQueueRow } from '~/types/orphans';
 
 interface Props {
+  dataType: OrphanDataType;
   rows: OrphanQueueRow[];
   total: number;
   page: number;
@@ -32,7 +34,15 @@ interface Props {
  * Client table for a single data type's orphan queue. Search, an "include
  * acknowledged" toggle, pagination, and the acknowledge / restore action per row.
  */
-export function OrphanQueueTable({ rows, total, page, pageSize, includeIgnored, search }: Props) {
+export function OrphanQueueTable({
+  dataType,
+  rows,
+  total,
+  page,
+  pageSize,
+  includeIgnored,
+  search,
+}: Props) {
   const router = useRouter();
   const params = useSearchParams();
   const [pending, startTransition] = useTransition();
@@ -131,7 +141,11 @@ export function OrphanQueueTable({ rows, total, page, pageSize, includeIgnored, 
                 <TableRow key={`${row.check_key}:${row.ref_id}`} className={row.ignored ? 'opacity-60' : ''}>
                   <TableCell>
                     <div className="font-medium">{row.ref_label ?? '(untitled)'}</div>
-                    <div className="font-mono text-xs text-muted-foreground">{row.ref_id}</div>
+                    <OrphanRecordDialog
+                      dataType={dataType}
+                      refId={row.ref_id}
+                      label={row.ref_label}
+                    />
                   </TableCell>
                   <TableCell className="text-muted-foreground">
                     {ORPHAN_CHECK_LABELS[row.check_key]}
