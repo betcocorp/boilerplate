@@ -1,7 +1,9 @@
 <!-- BEGIN:nextjs-agent-rules -->
+
 # This is NOT the Next.js you know
 
 This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` before writing any code. Heed deprecation notices.
+
 <!-- END:nextjs-agent-rules -->
 
 # bex-2.0 — agent instructions
@@ -22,16 +24,16 @@ Use this file together with the user’s rules. Prefer **running** `pnpm exec ts
 
 ## Directory layout (intended patterns)
 
-| Area | Location | Notes |
-|------|----------|--------|
-| Routes | `src/app/**` | Keep **route files thin** (`page.tsx`, `layout.tsx`, `loading.tsx`). No large feature UI inlined here. |
-| Feature UI | `src/components/<feature>/` | e.g. Bex: `components/bex/*`. Admin widgets: `components/admin/*`. |
-| Domain logic | `src/lib/<domain>/` | e.g. `lib/bex/`, `lib/rag/`, `lib/orchestrator/`, `lib/agents/`. |
-| Shared types | `src/types/` | e.g. `types/bex.ts`, generated `types/supabase.*.ts`. |
-| API handlers | `src/app/api/**/route.ts` | Orchestration, agents, RAG helpers. |
-| Server Actions | Prefer **`src/lib/**`** with `'use server'` | e.g. `lib/rag/generate-actions.ts` — do **not** put actions only under `app/` if components need to import them; avoids `~/app/(authenticated)/...` from `components/`. |
-| SME / prompts | `src/lib/agents/**` | Specialists (product, bathroom, dilution, floor), `run-sme-agent`, `sme-schemas`. |
-| Eval / training assets | `src/lib/training/**` | JSON + expectation helpers; treat as data, not UI. |
+| Area                   | Location                                    | Notes                                                                                                                                                                   |
+| ---------------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Routes                 | `src/app/**`                                | Keep **route files thin** (`page.tsx`, `layout.tsx`, `loading.tsx`). No large feature UI inlined here.                                                                  |
+| Feature UI             | `src/components/<feature>/`                 | e.g. Bex: `components/bex/*`. Admin widgets: `components/admin/*`.                                                                                                      |
+| Domain logic           | `src/lib/<domain>/`                         | e.g. `lib/bex/`, `lib/rag/`, `lib/orchestrator/`, `lib/agents/`.                                                                                                        |
+| Shared types           | `src/types/`                                | e.g. `types/bex.ts`, generated `types/supabase.*.ts`.                                                                                                                   |
+| API handlers           | `src/app/api/**/route.ts`                   | Orchestration, agents, RAG helpers.                                                                                                                                     |
+| Server Actions         | Prefer **`src/lib/**`** with `'use server'` | e.g. `lib/rag/generate-actions.ts` — do **not** put actions only under `app/` if components need to import them; avoids `~/app/(authenticated)/...` from `components/`. |
+| SME / prompts          | `src/lib/agents/**`                         | Specialists (product, bathroom, dilution, floor), `run-sme-agent`, `sme-schemas`.                                                                                       |
+| Eval / training assets | `src/lib/training/**`                       | JSON + expectation helpers; treat as data, not UI.                                                                                                                      |
 
 ## Bex (admin chat)
 
@@ -79,8 +81,9 @@ Regenerate when the remote schema changes (requires CLI auth):
 - **Errors**: API routes return structured JSON (`error`, optional `issues` for Zod).
 - **Comments**: Short and only where non-obvious; do not delete unrelated comments.
 - **Markdown docs**: Do not add or expand repo markdown unless the user asks (this file is an exception as the user requested it).
-- **Update jira**: Always use atlassian connector and update any tasks you work on 
+- **Update jira**: Always use atlassian connector and update any tasks you work on
 - **Answer & Grounding**: Always use code to ground your answers and decisions, DO NOT rely solely on JIRA.
+- **Upon completion of any work**: Always ensure you include in ending summary a set of steps to test what was changed.
 
 ## Quick checks before handoff
 
