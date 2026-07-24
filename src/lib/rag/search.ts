@@ -724,6 +724,7 @@ async function callMatchRpc(
         filter_product_line_key?: string;
         filter_scope: 'all' | 'products' | 'sds' | 'efficacy';
         filter_section_type?: string;
+        filter_product_key?: string;
       },
     ) => Promise<{ data: RagCorpusSearchMatch[] | null; error: { message: string } | null }>;
   };
@@ -761,6 +762,7 @@ async function callMatchRpc(
             filter_product_line_key: opts.productLineKey || undefined,
             filter_scope: opts.scope,
             filter_section_type: opts.sectionType || undefined,
+            filter_product_key: opts.productKey || undefined,
           },
         );
 
