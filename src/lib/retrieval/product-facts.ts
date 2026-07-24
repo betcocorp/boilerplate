@@ -20,6 +20,8 @@ export type ProductLineFacts = {
   coverageSqFt: number | null;
   chemistryClass: string | null;
   productApplication: string | null;
+  /** Confidence for productApplication specifically (B0-263) -- classifier-derived, never 1.0. Null when productApplication is null. */
+  productApplicationConfidence: number | null;
   epaRegistration: string | null;
   contactTimeSeconds: number | null;
   efficacy: ProductEfficacyFact[];
@@ -40,7 +42,7 @@ export async function fetchProductLineFacts(
     rag
       .from('product_line_fact')
       .select(
-        'entity_id, dilution_oz_per_gal, dilution_display, coverage_sq_ft, chemistry_class, product_application, epa_registration, contact_time_seconds',
+        'entity_id, dilution_oz_per_gal, dilution_display, coverage_sq_ft, chemistry_class, product_application, product_application_confidence, epa_registration, contact_time_seconds',
       )
       .in('entity_id', unique)
       .is('product_key', null),
@@ -77,6 +79,7 @@ export async function fetchProductLineFacts(
       coverageSqFt: row.coverage_sq_ft,
       chemistryClass: row.chemistry_class,
       productApplication: row.product_application,
+      productApplicationConfidence: row.product_application_confidence,
       epaRegistration: row.epa_registration,
       contactTimeSeconds: row.contact_time_seconds,
       efficacy: efficacyByEntity.get(row.entity_id) ?? [],
@@ -93,6 +96,7 @@ export async function fetchProductLineFacts(
         coverageSqFt: null,
         chemistryClass: null,
         productApplication: null,
+        productApplicationConfidence: null,
         epaRegistration: null,
         contactTimeSeconds: null,
         efficacy,
@@ -155,7 +159,16 @@ function renderFacts(name: string, f: ProductLineFacts): string | null {
   }
   if (f.coverageSqFt != null) lines.push(`- **Coverage:** ${f.coverageSqFt.toLocaleString()} sq ft/gal`);
   if (f.chemistryClass) lines.push(`- **Chemistry:** ${f.chemistryClass}`);
-  if (f.productApplication) lines.push(`- **Application:** ${f.productApplication}`);
+  if (f.productApplication) {
+    // B0-263: application is classifier-derived (confidence < 1.0), never a stamped
+    // fact like dilution/EPA reg -- render it as unverified so it isn't treated as
+    // equally authoritative.
+    const confidenceNote =
+      f.productApplicationConfidence != null
+        ? ` (classified, confidence ${f.productApplicationConfidence}, unverified)`
+        : ' (classified, unverified)';
+    lines.push(`- **Application:** ${f.productApplication}${confidenceNote}`);
+  }
   if (f.epaRegistration) lines.push(`- **EPA reg:** ${f.epaRegistration}`);
   if (f.contactTimeSeconds != null) lines.push(`- **Contact time:** ${f.contactTimeSeconds}s`);
 

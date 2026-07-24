@@ -559,6 +559,8 @@ export type Database = {
           epa_registration: string | null
           id: string
           product_application: string | null
+          product_application_confidence: number | null
+          product_application_source: string | null
           product_key: string | null
           source_record_id: string | null
           updated_at: string
@@ -574,6 +576,8 @@ export type Database = {
           epa_registration?: string | null
           id?: string
           product_application?: string | null
+          product_application_confidence?: number | null
+          product_application_source?: string | null
           product_key?: string | null
           source_record_id?: string | null
           updated_at?: string
@@ -589,6 +593,8 @@ export type Database = {
           epa_registration?: string | null
           id?: string
           product_application?: string | null
+          product_application_confidence?: number | null
+          product_application_source?: string | null
           product_key?: string | null
           source_record_id?: string | null
           updated_at?: string
