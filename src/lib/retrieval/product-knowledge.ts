@@ -91,6 +91,8 @@ export type ProductKnowledgeRetrievalSummary = {
   initialSearchMs: number;
   anchoredSearchMs: number | null;
   usedBroadFallback: boolean;
+  /** True when an explicit product-key-scoped search returned no evidence and was retried at the line level (B0-250). */
+  usedProductKeyFallback: boolean;
   broadCuratedCount: number;
   anchoredCuratedCount: number;
   productLineResolution?: ProductLineResolutionResult;
@@ -200,6 +202,7 @@ export async function ragQueryForProductKnowledge(input: {
   query: string;
   limit?: number;
   productLineKey?: string | null;
+  productKey?: string | null;
   skipProductLineResolution?: boolean;
 }): Promise<CuratedSource[]> {
   const result = await ragQueryForProductKnowledgeWithMeta(input);
@@ -214,6 +217,8 @@ async function runProductKnowledgeQuery(input: {
    */
   limit?: number;
   productLineKey?: string | null;
+  /** Resolved product-tier key (B0-248 SKU/InvtID alias), if the caller anchored to a specific product. */
+  productKey?: string | null;
   /** When true, skip candidate resolution (caller already anchored the query, e.g. by product id). */
   skipProductLineResolution?: boolean;
   /** Restrict retrieval to chunks belonging to a specific GHS section. Null = no filter. */
@@ -225,6 +230,7 @@ async function runProductKnowledgeQuery(input: {
 }): Promise<ProductKnowledgeQueryBase> {
   const limit = input.limit ?? DEFAULT_UNIQUE_DOCUMENT_LIMIT;
   const explicitKey = input.productLineKey?.trim() || null;
+  const explicitProductKey = input.productKey?.trim() || null;
   const sectionType = input.sectionType?.trim() || null;
   const maxPerDocument = input.maxPerDocument;
   const requiredDocumentKinds =
@@ -235,17 +241,40 @@ async function runProductKnowledgeQuery(input: {
       query: input.query,
       limit: SIMILARITY_CANDIDATE_FETCH_LIMIT,
       productLineKey: explicitKey,
+      productKey: explicitProductKey ?? undefined,
       sectionType: sectionType ?? undefined,
       scope: 'all',
       useHybrid: true,
       useReranker: PRODUCT_SUPPORT_RERANK_ENABLED,
     });
 
-    const curated = await curateUniqueDocumentSources(result.matches, {
+    let curated = await curateUniqueDocumentSources(result.matches, {
       limit,
       requiredDocumentKinds,
       maxPerDocument,
     });
+
+    // B0-250: thin coverage at the product tier -- fall back to the line-scoped search
+    // rather than surfacing nothing (there is no product-tier chunked content yet, so this
+    // mainly guards against a resolved product_key that doesn't validate as a variant).
+    let usedProductKeyFallback = false;
+    if (curated.length === 0 && explicitProductKey) {
+      const lineResult = await searchProductChunks({
+        query: input.query,
+        limit: SIMILARITY_CANDIDATE_FETCH_LIMIT,
+        productLineKey: explicitKey,
+        sectionType: sectionType ?? undefined,
+        scope: 'all',
+        useHybrid: true,
+        useReranker: PRODUCT_SUPPORT_RERANK_ENABLED,
+      });
+      curated = await curateUniqueDocumentSources(lineResult.matches, {
+        limit,
+        requiredDocumentKinds,
+        maxPerDocument,
+      });
+      usedProductKeyFallback = true;
+    }
 
     return {
       sources: curated,
@@ -257,6 +286,7 @@ async function runProductKnowledgeQuery(input: {
         initialSearchMs: result.timings.similaritySearchMs,
         anchoredSearchMs: result.timings.similaritySearchMs,
         usedBroadFallback: false,
+        usedProductKeyFallback,
         broadCuratedCount: curated.length,
         anchoredCuratedCount: curated.length,
         productLineResolution: {
@@ -272,6 +302,7 @@ async function runProductKnowledgeQuery(input: {
     const result = await searchProductChunks({
       query: input.query,
       limit: SIMILARITY_CANDIDATE_FETCH_LIMIT,
+      productKey: explicitProductKey ?? undefined,
       sectionType: sectionType ?? undefined,
       scope: 'products',
       useHybrid: true,
@@ -293,6 +324,7 @@ async function runProductKnowledgeQuery(input: {
         initialSearchMs: result.timings.similaritySearchMs,
         anchoredSearchMs: null,
         usedBroadFallback: false,
+        usedProductKeyFallback: false,
         broadCuratedCount: curated.length,
         anchoredCuratedCount: 0,
         productLineResolution: {
@@ -330,6 +362,7 @@ async function runProductKnowledgeQuery(input: {
         initialSearchMs: broadResult.timings.similaritySearchMs,
         anchoredSearchMs: null,
         usedBroadFallback: false,
+        usedProductKeyFallback: false,
         broadCuratedCount: broadCurated.length,
         anchoredCuratedCount: 0,
         productLineResolution: resolution,
@@ -374,6 +407,7 @@ async function runProductKnowledgeQuery(input: {
       initialSearchMs: broadResult.timings.similaritySearchMs,
       anchoredSearchMs: anchoredResult.timings.similaritySearchMs,
       usedBroadFallback: shouldUseBroadFallback,
+      usedProductKeyFallback: false,
       broadCuratedCount: broadCurated.length,
       anchoredCuratedCount: anchoredCurated.length,
       productLineResolution: resolution,

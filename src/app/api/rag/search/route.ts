@@ -12,6 +12,7 @@ type RequestBody = {
   query?: unknown;
   limit?: unknown;
   productLineKey?: unknown;
+  productKey?: unknown;
   minSimilarity?: unknown;
   model?: unknown;
 };
@@ -50,6 +51,8 @@ export async function POST(request: Request) {
         typeof body.productLineKey === 'string'
           ? body.productLineKey
           : undefined,
+      productKey:
+        typeof body.productKey === 'string' ? body.productKey : undefined,
       minSimilarity: toSimilarityNumber(body.minSimilarity),
       model: typeof body.model === 'string' ? body.model : undefined,
     });

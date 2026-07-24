@@ -87,14 +87,17 @@ function normalizeAlias(value: string): string {
 }
 
 /**
- * Resolve a free-text product name or prod_line_id to a product_line_key UUID.
+ * Resolve a free-text product name or prod_line_id to a product_line_key UUID and,
+ * where the matched alias points at a SKU-level entity (B0-248), a product_key UUID.
  * Order: exact alias match (rag.product_alias), then prod_line_id exact, then title ILIKE.
- * Returns null if no unique match is found (ambiguous or unknown name).
+ * Returns nulls if no unique match is found (ambiguous or unknown name).
  */
-export async function resolveProductLineKeyByName(name: string): Promise<string | null> {
+export async function resolveProductEntityByName(
+  name: string,
+): Promise<{ productLineKey: string | null; productKey: string | null }> {
   const trimmed = name.trim();
   if (!trimmed) {
-    return null;
+    return { productLineKey: null, productKey: null };
   }
 
   const supabase = getSupabaseServiceRoleClient();
@@ -111,7 +114,7 @@ export async function resolveProductLineKeyByName(name: string): Promise<string 
             limit: (
               n: number,
             ) => Promise<{
-              data: Array<{ product_line_key: string | null }> | null;
+              data: Array<{ product_line_key: string | null; entity_id: string | null }> | null;
               error: unknown;
             }>;
           };
@@ -120,11 +123,26 @@ export async function resolveProductLineKeyByName(name: string): Promise<string 
     };
     const { data: aliasRows } = await aliasClient
       .from('product_alias')
-      .select('product_line_key')
+      .select('product_line_key, entity_id')
       .eq('alias_norm', normalizeAlias(trimmed))
       .limit(1);
     if (aliasRows && aliasRows[0]?.product_line_key) {
-      return aliasRows[0].product_line_key;
+      let productKey: string | null = null;
+
+      if (aliasRows[0].entity_id) {
+        // B0-248: alias may point at a product_line- or product-tier entity row.
+        const { data: entityRows } = await supabase
+          .schema('rag')
+          .from('entity')
+          .select('entity_type, product_key')
+          .eq('id', aliasRows[0].entity_id)
+          .limit(1);
+        if (entityRows && entityRows[0]?.entity_type === 'product') {
+          productKey = entityRows[0].product_key;
+        }
+      }
+
+      return { productLineKey: aliasRows[0].product_line_key, productKey };
     }
   } catch {
     // Alias table unavailable — fall through to legacy resolution.
@@ -141,7 +159,7 @@ export async function resolveProductLineKeyByName(name: string): Promise<string 
       .limit(2);
 
     if (data && data.length === 1 && data[0].product_line_key) {
-      return data[0].product_line_key;
+      return { productLineKey: data[0].product_line_key, productKey: null };
     }
   }
 
@@ -155,10 +173,19 @@ export async function resolveProductLineKeyByName(name: string): Promise<string 
     .limit(2);
 
   if (data && data.length === 1 && data[0].product_line_key) {
-    return data[0].product_line_key;
+    return { productLineKey: data[0].product_line_key, productKey: null };
   }
 
-  return null;
+  return { productLineKey: null, productKey: null };
+}
+
+/**
+ * Resolve a free-text product name or prod_line_id to a product_line_key UUID.
+ * Order: exact alias match (rag.product_alias), then prod_line_id exact, then title ILIKE.
+ * Returns null if no unique match is found (ambiguous or unknown name).
+ */
+export async function resolveProductLineKeyByName(name: string): Promise<string | null> {
+  return (await resolveProductEntityByName(name)).productLineKey;
 }
 
 /**

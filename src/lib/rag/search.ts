@@ -30,6 +30,7 @@ type SearchProductChunksOptions = {
   query: string;
   limit?: number;
   productLineKey?: string;
+  productKey?: string;
   sectionType?: string;
   minSimilarity?: number;
   model?: string;
@@ -86,6 +87,7 @@ export type RagSearchResult = {
   model: string;
   limit: number;
   productLineKey: string | null;
+  productKey: string | null;
   sectionType: string | null;
   scope: SearchScope;
   minSimilarity: number | null;
@@ -690,7 +692,7 @@ async function getCachedOrNewEmbedding(
 
 type HybridRpcClient = {
   rpc: (
-    fn: 'match_product_chunks_hybrid' | 'match_corpus_chunks_hybrid',
+    fn: 'match_product_chunks_hybrid' | 'match_corpus_chunks_hybrid' | 'match_product_chunks',
     args: Record<string, unknown>,
   ) => Promise<{ data: RagCorpusSearchMatch[] | null; error: { message: string } | null }>;
 };
@@ -700,6 +702,7 @@ type MatchRpcOpts = {
   useHybrid: boolean;
   rpcLimit: number;
   productLineKey: string | null;
+  productKey: string | null;
   sectionType: string | null;
 };
 
@@ -735,16 +738,19 @@ async function callMatchRpc(
             query_embedding: toVectorLiteral(embedding),
             query_text: hybridQueryText,
             match_count: opts.rpcLimit,
-            filter_product_key: null,
+            filter_product_key: opts.productKey || null,
             filter_product_line_key: opts.productLineKey || null,
             filter_section_type: opts.sectionType || null,
           })
-        : await rag.rpc('match_product_chunks', {
+        : // Same null-not-undefined trick as the hybrid branch above: match_product_chunks also
+          // has two live overloads (with/without filter_section_type), and supabase-js strips
+          // undefined keys, which left the arg set ambiguous between them (42725).
+          await (rag as unknown as HybridRpcClient).rpc('match_product_chunks', {
             query_embedding: toVectorLiteral(embedding),
             match_count: opts.rpcLimit,
-            filter_product_key: undefined,
-            filter_product_line_key: opts.productLineKey || undefined,
-            filter_section_type: opts.sectionType || undefined,
+            filter_product_key: opts.productKey || null,
+            filter_product_line_key: opts.productLineKey || null,
+            filter_section_type: opts.sectionType || null,
           })
       : await (rag as unknown as CorpusRpcClient).rpc(
           opts.useHybrid ? 'match_corpus_chunks_hybrid' : 'match_corpus_chunks',
@@ -775,6 +781,7 @@ export async function searchProductChunks(
 
   const limit = clampLimit(options.limit);
   const productLineKey = options.productLineKey?.trim() || null;
+  const productKey = options.productKey?.trim() || null;
   const sectionType = options.sectionType?.trim() || null;
   const {
     requested: requestedScope,
@@ -806,7 +813,14 @@ export async function searchProductChunks(
   // cleaner lexemes than the raw user input.
   const hybridQueryText = row?.query_rewritten ?? query;
 
-  const rpcOpts: MatchRpcOpts = { scope, useHybrid, rpcLimit, productLineKey, sectionType };
+  const rpcOpts: MatchRpcOpts = {
+    scope,
+    useHybrid,
+    rpcLimit,
+    productLineKey,
+    productKey,
+    sectionType,
+  };
   const similaritySearchStartedAt = nowMs();
 
   let rawMatches: RagCorpusSearchMatch[];
@@ -936,6 +950,7 @@ export async function searchProductChunks(
     model,
     limit,
     productLineKey,
+    productKey,
     sectionType,
     scope: requestedScope,
     minSimilarity,

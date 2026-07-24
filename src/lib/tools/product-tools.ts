@@ -11,7 +11,7 @@ import {
   renderEfficacyLabReportCitation,
 } from '~/lib/retrieval/efficacy-lab-report';
 import { VERIFIED_FACTS_SOURCE_ID } from '~/lib/rag/document-chunk-types';
-import { resolveProductLineKeyByName } from '~/lib/rag/entity-context';
+import { resolveProductEntityByName } from '~/lib/rag/entity-context';
 import {
   inferSectionTypeFromQuery,
   inferSectionTypeFromToolName,
@@ -63,6 +63,7 @@ function sourcePayload(
     confidence: s.similarity,
     documentKind: s.documentKind,
     productLineKey: s.productLineKey,
+    productKey: s.productKey,
     freshness: null as null,
   }));
 
@@ -84,6 +85,7 @@ function sourcePayload(
       confidence: 1,
       documentKind: 'facts',
       productLineKey: null,
+      productKey: null,
       freshness: null as null,
     });
   }
@@ -161,14 +163,15 @@ export async function executeProductTool(
       const p = searchProductDocsInputSchema.parse(args);
       const q = (p.freeformQuery?.trim() || [p.productName, p.topic, p.surfaceType].filter(Boolean).join(' ')).trim();
       const resolvedProductName = p.freeformQuery?.trim() ? '' : (p.productName || '');
-      const [productLineKey, sectionType] = await Promise.all([
-        resolveProductLineKeyByName(resolvedProductName),
+      const [{ productLineKey, productKey }, sectionType] = await Promise.all([
+        resolveProductEntityByName(resolvedProductName),
         Promise.resolve(inferSectionTypeFromQuery(q)),
       ]);
       const intent = classifyRetrievalIntent(q, resolvedProductName);
       const result = await ragQueryForProductKnowledgeWithMeta({
         query: q,
         productLineKey,
+        productKey,
         sectionType,
         limit: intent.limit,
         maxPerDocument: intent.maxPerDocument,
@@ -186,10 +189,11 @@ export async function executeProductTool(
     case 'get_product_spec': {
       const p = getProductSpecInputSchema.parse(args);
       const q = `${p.productId} specifications technical datasheet performance`;
-      const productLineKey = await resolveProductLineKeyByName(p.productId);
+      const { productLineKey, productKey } = await resolveProductEntityByName(p.productId);
       const result = await ragQueryForProductKnowledgeWithMeta({
         query: q,
         productLineKey,
+        productKey,
         sectionType: null,
       });
       return {
@@ -203,9 +207,9 @@ export async function executeProductTool(
     }
     case 'get_approved_usage_guidance': {
       const p = getApprovedUsageGuidanceInputSchema.parse(args);
-      const productLineKey = await resolveProductLineKeyByName(p.productId);
+      const { productLineKey, productKey } = await resolveProductEntityByName(p.productId);
       const sectionType = inferSectionTypeFromToolName('get_approved_usage_guidance');
-      const result = await retrieveApprovedUsage({ ...p, productLineKey, sectionType });
+      const result = await retrieveApprovedUsage({ ...p, productLineKey, productKey, sectionType });
       return {
         ok: true,
         adapter: ADAPTER_TAG,
@@ -220,13 +224,13 @@ export async function executeProductTool(
     }
     case 'get_safety_constraints': {
       const p = getSafetyConstraintsInputSchema.parse(args);
-      const [productLineKey, sectionType] = await Promise.all([
-        resolveProductLineKeyByName(p.productId),
+      const [{ productLineKey, productKey }, sectionType] = await Promise.all([
+        resolveProductEntityByName(p.productId),
         Promise.resolve(
           inferSectionTypeFromQuery(`${p.productId} safety hazards PPE SDS precautions first aid`),
         ),
       ]);
-      const result = await retrieveSafetyConstraints({ ...p, productLineKey, sectionType });
+      const result = await retrieveSafetyConstraints({ ...p, productLineKey, productKey, sectionType });
       return {
         ok: true,
         adapter: ADAPTER_TAG,
@@ -238,9 +242,9 @@ export async function executeProductTool(
     }
     case 'get_compatibility_rules': {
       const p = getCompatibilityRulesInputSchema.parse(args);
-      const productLineKey = await resolveProductLineKeyByName(p.productId);
+      const { productLineKey, productKey } = await resolveProductEntityByName(p.productId);
       const sectionType = inferSectionTypeFromToolName('get_compatibility_rules');
-      const result = await retrieveCompatibility({ ...p, productLineKey, sectionType });
+      const result = await retrieveCompatibility({ ...p, productLineKey, productKey, sectionType });
       return {
         ok: true,
         adapter: ADAPTER_TAG,
@@ -254,12 +258,13 @@ export async function executeProductTool(
     }
     case 'list_allowed_surfaces': {
       const p = listAllowedSurfacesInputSchema.parse(args);
-      const productLineKey = await resolveProductLineKeyByName(p.productId);
+      const { productLineKey, productKey } = await resolveProductEntityByName(p.productId);
       const sectionType = inferSectionTypeFromToolName('list_allowed_surfaces');
       const result = await retrieveSurfacesLists({
         productId: p.productId,
         mode: 'allowed',
         productLineKey,
+        productKey,
         sectionType,
       });
       return {
@@ -273,12 +278,13 @@ export async function executeProductTool(
     }
     case 'list_disallowed_uses': {
       const p = listDisallowedUsesInputSchema.parse(args);
-      const productLineKey = await resolveProductLineKeyByName(p.productId);
+      const { productLineKey, productKey } = await resolveProductEntityByName(p.productId);
       const sectionType = inferSectionTypeFromToolName('list_disallowed_uses');
       const result = await retrieveSurfacesLists({
         productId: p.productId,
         mode: 'disallowed',
         productLineKey,
+        productKey,
         sectionType,
       });
       return {
@@ -363,7 +369,8 @@ export async function executeProductTool(
     }
     case 'get_efficacy_data': {
       const p = getEfficacyDataInputSchema.parse(args);
-      const productLineKey = await resolveProductLineKeyByName(p.productId);
+      // Out of scope for B0-250: fact/efficacy lookups key on product_line_key only.
+      const { productLineKey } = await resolveProductEntityByName(p.productId);
       const [facts, labReport] = productLineKey
         ? await Promise.all([
             fetchFactsForProductLineKey(productLineKey, p.organism),
