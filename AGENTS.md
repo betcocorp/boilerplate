@@ -58,6 +58,9 @@ When changing API shapes, update **Zod schemas first**, then types/implementatio
 
 - Pipeline and status: `~/lib/rag/pipeline.ts`, search: `~/lib/rag/search.ts`, embeddings: `~/lib/rag/embeddings.ts`.
 - **Generate** UI uses `~/lib/rag/generate-actions.ts` (server actions + `revalidatePath` for `/admin/products/rag/*`).
+- **Label ingestion** (B0-256/B0-258): `rag.label` and `rag.label_chunk` tables store product labels. `~/lib/label/convert-label-to-markdown.ts` (B0-260) is a reusable, Bex-agnostic converter utility that transforms HTML/PDF labels to structured markdown with active ingredients, dilution, EPA/DIN, and photo metadata.
+- **Reranking** (B0-280): After RRF fusion, `~/lib/rag/search.ts` applies Cohere reranking (via `rerankChunks`) to boost relevance; over-fetches (limit × 5) to give reranker a larger candidate pool.
+- **Corpus scoping** (B0-283): `rag.document.corpus_scope` column (`betco_us|betco_ca|betco_uaca|other`) filters SDS/label documents by policy (Betco finished-goods, EN+CAN only); `rag.out_of_scope_documents` view identifies documents to purge.
 - Admin pages under `app/(authenticated)/admin/products/**` should stay presentation-focused; reuse `~/components/admin/*` when a block grows.
 
 ## Styling and UI

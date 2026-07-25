@@ -131,6 +131,9 @@ export type Database = {
           lifecycle_status: string
           metadata: Json
           product_application: string | null
+          profile_summary: string | null
+          project_number: string | null
+          source_lab: string | null
           source_record_id: string
           summary: string | null
           superseded_by_document_id: string | null
@@ -159,6 +162,9 @@ export type Database = {
           lifecycle_status?: string
           metadata?: Json
           product_application?: string | null
+          profile_summary?: string | null
+          project_number?: string | null
+          source_lab?: string | null
           source_record_id: string
           summary?: string | null
           superseded_by_document_id?: string | null
@@ -187,6 +193,9 @@ export type Database = {
           lifecycle_status?: string
           metadata?: Json
           product_application?: string | null
+          profile_summary?: string | null
+          project_number?: string | null
+          source_lab?: string | null
           source_record_id?: string
           summary?: string | null
           superseded_by_document_id?: string | null
@@ -743,6 +752,38 @@ export type Database = {
           source_type: string | null
           title: string | null
         }
+        Insert: {
+          body_text?: never
+          document_key?: never
+          entity_key?: string | null
+          entity_type?: never
+          language_code?: never
+          metadata?: never
+          product_key?: never
+          product_line_key?: string | null
+          sku?: never
+          source_pk?: string | null
+          source_schema?: never
+          source_table?: never
+          source_type?: never
+          title?: never
+        }
+        Update: {
+          body_text?: never
+          document_key?: never
+          entity_key?: string | null
+          entity_type?: never
+          language_code?: never
+          metadata?: never
+          product_key?: never
+          product_line_key?: string | null
+          sku?: never
+          source_pk?: string | null
+          source_schema?: never
+          source_table?: never
+          source_type?: never
+          title?: never
+        }
         Relationships: []
       }
       legacy_product_profile_source: {
@@ -760,6 +801,36 @@ export type Database = {
           source_table: string | null
           source_type: string | null
           title: string | null
+        }
+        Insert: {
+          body_text?: never
+          document_key?: never
+          entity_key?: string | null
+          entity_type?: never
+          language_code?: never
+          metadata?: never
+          product_line_key?: never
+          sku?: string | null
+          source_pk?: string | null
+          source_schema?: never
+          source_table?: never
+          source_type?: never
+          title?: never
+        }
+        Update: {
+          body_text?: never
+          document_key?: never
+          entity_key?: string | null
+          entity_type?: never
+          language_code?: never
+          metadata?: never
+          product_line_key?: never
+          sku?: string | null
+          source_pk?: string | null
+          source_schema?: never
+          source_table?: never
+          source_type?: never
+          title?: never
         }
         Relationships: []
       }
@@ -787,7 +858,7 @@ export type Database = {
           p_body_text: string
           p_max_chars?: number
           p_overlap_chars?: number
-          p_title?: string
+          p_title: string
         }
         Returns: {
           chunk_index: number
@@ -804,49 +875,30 @@ export type Database = {
           p_overlap_chars?: number
           p_title?: string
         }
+        Returns: Json
+      }
+      chunk_sds_document_text: {
+        Args: {
+          p_body_text: string
+          p_max_chars?: number
+          p_overlap_chars?: number
+          p_title?: string
+        }
+        Returns: Json
+      }
+      compute_chunk_pairwise_similarity: {
+        Args: { p_chunk_ids: string[] }
         Returns: {
-          chunk_index: number
-          chunk_text: string
-          heading: string
-          section_path: string[]
-          section_type: string
-          token_count: number
+          chunk_id_a: string
+          chunk_id_b: string
+          cosine_similarity: number
         }[]
       }
-      chunk_sds_document_text:
-        | {
-            Args: {
-              p_body_text: string
-              p_max_chars?: number
-              p_overlap_chars?: number
-            }
-            Returns: {
-              chunk_index: number
-              chunk_text: string
-              heading: string
-              section_path: string[]
-              token_count: number
-            }[]
-          }
-        | {
-            Args: {
-              p_body_text: string
-              p_max_chars?: number
-              p_overlap_chars?: number
-              p_title?: string
-            }
-            Returns: {
-              chunk_index: number
-              chunk_text: string
-              heading: string
-              section_path: string[]
-              token_count: number
-            }[]
-          }
       enrich_sds_section_headings_batch: {
         Args: { p_batch_size?: number }
         Returns: Json
       }
+      estimate_chunk_tokens: { Args: { p_text: string }; Returns: number }
       find_similar_search_embedding: {
         Args: {
           p_query: string
@@ -894,6 +946,7 @@ export type Database = {
           lifecycle_status: string
           metadata: Json
           product_application: string | null
+          profile_summary: string | null
           source_record_id: string
           summary: string | null
           superseded_by_document_id: string | null
@@ -910,6 +963,7 @@ export type Database = {
       }
       match_corpus_chunks: {
         Args: {
+          filter_product_key?: string
           filter_product_line_key?: string
           filter_scope?: string
           filter_section_type?: string
@@ -939,6 +993,7 @@ export type Database = {
       }
       match_corpus_chunks_hybrid: {
         Args: {
+          filter_product_key?: string
           filter_product_line_key?: string
           filter_scope?: string
           filter_section_type?: string
@@ -967,120 +1022,65 @@ export type Database = {
           token_count: number
         }[]
       }
-      match_product_chunks:
-        | {
-            Args: {
-              filter_product_key?: string
-              filter_product_line_key?: string
-              match_count?: number
-              query_embedding: unknown
-            }
-            Returns: {
-              chunk_id: string
-              chunk_index: number
-              chunk_key: string
-              chunk_text: string
-              document_id: string
-              document_key: string
-              document_title: string
-              entity_id: string
-              heading: string
-              product_key: string
-              product_line_key: string
-              section_path: string[]
-              similarity: number
-              sku: string
-              source_pk: string
-              token_count: number
-            }[]
-          }
-        | {
-            Args: {
-              filter_product_key?: string
-              filter_product_line_key?: string
-              filter_section_type?: string
-              match_count?: number
-              query_embedding: unknown
-            }
-            Returns: {
-              chunk_id: string
-              chunk_index: number
-              chunk_key: string
-              chunk_text: string
-              document_id: string
-              document_key: string
-              document_kind: string
-              document_title: string
-              entity_id: string
-              heading: string
-              product_key: string
-              product_line_key: string
-              section_path: string[]
-              section_type: string
-              similarity: number
-              sku: string
-              source_pk: string
-              token_count: number
-            }[]
-          }
-      match_product_chunks_hybrid:
-        | {
-            Args: {
-              filter_product_key?: string
-              filter_product_line_key?: string
-              match_count?: number
-              query_embedding: unknown
-              query_text: string
-            }
-            Returns: {
-              chunk_id: string
-              chunk_index: number
-              chunk_key: string
-              chunk_text: string
-              document_id: string
-              document_key: string
-              document_title: string
-              entity_id: string
-              heading: string
-              product_key: string
-              product_line_key: string
-              section_path: string[]
-              similarity: number
-              sku: string
-              source_pk: string
-              token_count: number
-            }[]
-          }
-        | {
-            Args: {
-              filter_product_key?: string
-              filter_product_line_key?: string
-              filter_section_type?: string
-              match_count?: number
-              query_embedding: unknown
-              query_text: string
-            }
-            Returns: {
-              chunk_id: string
-              chunk_index: number
-              chunk_key: string
-              chunk_text: string
-              document_id: string
-              document_key: string
-              document_kind: string
-              document_title: string
-              entity_id: string
-              heading: string
-              product_key: string
-              product_line_key: string
-              section_path: string[]
-              section_type: string
-              similarity: number
-              sku: string
-              source_pk: string
-              token_count: number
-            }[]
-          }
+      match_product_chunks: {
+        Args: {
+          filter_product_key?: string
+          filter_product_line_key?: string
+          filter_section_type?: string
+          match_count?: number
+          query_embedding: unknown
+        }
+        Returns: {
+          chunk_id: string
+          chunk_index: number
+          chunk_key: string
+          chunk_text: string
+          document_id: string
+          document_key: string
+          document_kind: string
+          document_title: string
+          entity_id: string
+          heading: string
+          product_key: string
+          product_line_key: string
+          section_path: string[]
+          section_type: string
+          similarity: number
+          sku: string
+          source_pk: string
+          token_count: number
+        }[]
+      }
+      match_product_chunks_hybrid: {
+        Args: {
+          filter_product_key?: string
+          filter_product_line_key?: string
+          filter_section_type?: string
+          match_count?: number
+          query_embedding: unknown
+          query_text: string
+        }
+        Returns: {
+          chunk_id: string
+          chunk_index: number
+          chunk_key: string
+          chunk_text: string
+          document_id: string
+          document_key: string
+          document_kind: string
+          document_title: string
+          entity_id: string
+          heading: string
+          product_key: string
+          product_line_key: string
+          section_path: string[]
+          section_type: string
+          similarity: number
+          sku: string
+          source_pk: string
+          token_count: number
+        }[]
+      }
       run_bulk_sds_heading_backfill: { Args: never; Returns: Json }
       sync_efficacy_chunks: {
         Args: {

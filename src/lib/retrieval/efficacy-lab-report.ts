@@ -33,6 +33,8 @@ type EfficacyDocumentRow = {
   is_current: boolean;
   cites_data_from_document_id: string | null;
   metadata: Record<string, unknown> | null;
+  source_lab: string | null;
+  project_number: string | null;
   summary: string | null;
   body_text: string | null;
 };
@@ -105,7 +107,7 @@ async function fetchCurrentEfficacyDocuments(
     p_product_line_key: productLineKey,
   });
   if (error || !data) return [];
-  return data as EfficacyDocumentRow[];
+  return (data as unknown as EfficacyDocumentRow[]);
 }
 
 async function buildCitation(
@@ -142,8 +144,8 @@ async function buildCitation(
     documentId: doc.id,
     formulaCode: readMetadataString(metadata, 'formula_code'),
     version: readMetadataString(metadata, 'version'),
-    lab: readMetadataString(metadata, 'third_party_lab') ?? readMetadataString(metadata, 'lab'),
-    projectNumber: readMetadataString(metadata, 'project_number'),
+    lab: doc.source_lab ?? readMetadataString(metadata, 'third_party_lab') ?? readMetadataString(metadata, 'lab'),
+    projectNumber: doc.project_number ?? readMetadataString(metadata, 'project_number'),
     isCurrent: doc.is_current,
     citesDataFromDocumentId: doc.cites_data_from_document_id,
     sourceUri: sourceRecord?.source_uri ?? null,

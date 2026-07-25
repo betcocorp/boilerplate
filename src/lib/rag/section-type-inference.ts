@@ -22,7 +22,7 @@ const QUERY_PATTERNS: Array<{ pattern: RegExp; sectionType: string }> = [
     sectionType: 'bactericidal_efficacy',
   },
   {
-    pattern: /\b(contact time|dwell time|kill time|log reduction|percent reduction|% reduction|epa kill claim|efficacy (claim|data|test|report))\b/i,
+    pattern: /\b(contact time|dwell time|kill time|log reduction|percent reduction|% reduction|epa kill claim|efficacy (claim|data|test|report)|dilution ratio|oz.{0,3}gal|mL?.{0,3}L|ppm|parts per million|dilution|prepare|mix|concentrate|rtU|ready to use|undiluted)\b/i,
     sectionType: 'organism_contact_time',
   },
   // Section 4 — First Aid
