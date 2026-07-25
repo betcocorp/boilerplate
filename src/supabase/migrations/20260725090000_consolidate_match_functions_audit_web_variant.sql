@@ -14,10 +14,12 @@
 -- ============================================================
 
 -- Step 1: Drop unwanted overloads of match_product_chunks and match_product_chunks_hybrid
--- These functions had older parameter signatures that caused ambiguity; drop them first
--- before running the consolidation audit.
+-- Diagnostic found 2 overloads each:
+-- - match_product_chunks: 5-param (newer, with filter_section_type) vs 4-param (older, without)
+-- - match_product_chunks_hybrid: 6-param (newer, with filter_section_type) vs 5-param (older, without)
+-- Keep the ones WITH filter_section_type (5 and 6 params), drop the ones WITHOUT.
 
--- Drop 4-arg overload of match_product_chunks (older signature without filter_product_line_key)
+-- Drop 4-param overload of match_product_chunks (missing filter_section_type)
 DROP FUNCTION IF EXISTS rag.match_product_chunks(
   extensions.halfvec,
   integer,
@@ -25,7 +27,7 @@ DROP FUNCTION IF EXISTS rag.match_product_chunks(
   text
 ) CASCADE;
 
--- Drop 5-arg overload of match_product_chunks_hybrid (older signature)
+-- Drop 5-param overload of match_product_chunks_hybrid (missing filter_section_type)
 DROP FUNCTION IF EXISTS rag.match_product_chunks_hybrid(
   extensions.halfvec,
   text,
