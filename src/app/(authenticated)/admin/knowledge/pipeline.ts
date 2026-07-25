@@ -12,6 +12,7 @@ import {
   estimateTokens,
   markdownToPlainText,
   summarize,
+  type MarkdownChunk,
 } from '~/lib/rag/markdown-chunking';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 import type { Json as RagJson } from '~/types/supabase.rag';
@@ -342,7 +343,7 @@ async function upsertDocument(
   return inserted.id;
 }
 
-async function replaceDocumentChunks(documentId: string, seed: KnowledgeSeedDocument, chunks: KnowledgeChunk[]) {
+async function replaceDocumentChunks(documentId: string, seed: KnowledgeSeedDocument, chunks: MarkdownChunk[]) {
   const supabase = getSupabaseServiceRoleClient();
   // Clear prior chunks for idempotent re-ingest, then insert fresh.
   const { error: delError } = await supabase
