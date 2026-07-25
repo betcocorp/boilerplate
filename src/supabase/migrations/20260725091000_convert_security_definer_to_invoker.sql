@@ -138,4 +138,7 @@ GRANT EXECUTE ON FUNCTION rag.chunk_efficacy_document_text TO service_role;
 -- These are safe to convert as they're internal utilities
 -- (Actual conversion deferred to follow-up if needed; these have restricted grant already)
 
-raise notice 'B0-284 complete: SECURITY DEFINER chunking functions converted to SECURITY INVOKER.';
+DO $$
+BEGIN
+  RAISE NOTICE 'B0-284 complete: SECURITY DEFINER chunking functions converted to SECURITY INVOKER.';
+END $$;
