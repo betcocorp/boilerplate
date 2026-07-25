@@ -15,9 +15,7 @@
       "Bash(grep -E \"\\\\.ts$\")",
       "Bash(npm info *)",
       "Bash(npm list *)",
-      "Bash(pnpm lint *)",
-      "Bash(awk '{print $NF}')",
-      "Bash(grep -v \"DO \\\\$\\\\$\")"
+      "Bash(pnpm lint *)"
     ]
   }
 }
