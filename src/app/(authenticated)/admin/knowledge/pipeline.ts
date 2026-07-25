@@ -11,7 +11,6 @@ import {
   chunkMarkdown,
   estimateTokens,
   markdownToPlainText,
-  MARKDOWN_CHUNK_CHAR_BUDGET,
   summarize,
 } from '~/lib/rag/markdown-chunking';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';

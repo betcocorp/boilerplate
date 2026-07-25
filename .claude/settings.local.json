@@ -7,7 +7,15 @@
       "mcp__supabase__apply_migration",
       "Bash(netstat -ano)",
       "Bash(node scripts/run-rag-pipeline.mjs token-counts)",
-      "Bash(node scripts/run-rag-pipeline.mjs sds-headings)"
+      "Bash(node scripts/run-rag-pipeline.mjs sds-headings)",
+      "Bash(grep -rli \"backfill\" . --include=\"*.ts\" --include=\"*.sql\" --include=\"*.md\" -not -path \"*/node_modules/*\")",
+      "Bash(awk '/      products: \\\\{/{f=1} f&&/Row: \\\\{/{r=1} r&&f{print NR\": \"$0} f&&/Relationships/{exit}' src/types/supabase.legacy.ts)",
+      "Bash(psql postgresql://postgres:postgres@localhost:54321/postgres -f /private/tmp/claude-501/-Users-thomasbird-projects-client-betco-apps-bex-combined-bex2-0/7762bb97-38da-415c-851e-5a6b0266972b/scratchpad/schema_query.sql)",
+      "Bash(npm ls *)",
+      "Bash(grep -E \"\\\\.ts$\")",
+      "Bash(npm info *)",
+      "Bash(npm list *)",
+      "Bash(pnpm lint *)"
     ]
   }
 }

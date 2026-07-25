@@ -1,11 +1,18 @@
 // Shared heading-aware markdown chunker used by the "knowledge" and "labels"
 // admin ingest panels (admin/knowledge, admin/labels). Splits on markdown
 // headings (# .. ######), keeps a breadcrumb section_path, and further splits
-// oversized sections by paragraph. Extracted from the original knowledge
-// pipeline (B0-190 seed) so both S3-markdown ingest panels stay in sync
-// instead of drifting via copy-paste.
+// oversized sections by paragraph.
+//
+// B0-279: Token-aware chunking with proper OpenAI tokenizer.
+// Chunks are split to fit within ~1200 token budget (chars capped at 4800 for
+// initial split, then exact token counting in the RPC ingestion pipeline).
+// Tiny chunks (<40 tokens) are carried forward and merged into the next
+// content-bearing section to avoid orphaned chunks that embed on headings alone.
 
-export const MARKDOWN_CHUNK_CHAR_BUDGET = 3200; // ~800 tokens
+import { SAFE_CHUNK_CHAR_BUDGET } from '~/lib/rag/token-counter';
+
+// Keep the old constant for backward compatibility, but use the new one
+export const MARKDOWN_CHUNK_CHAR_BUDGET = SAFE_CHUNK_CHAR_BUDGET; // ~1200 tokens
 
 export type MarkdownChunk = {
   index: number;
