@@ -21,6 +21,16 @@ export type LabelSeedDocument = {
   s3Key: string;
   /** "<brand-folder>/<file>.md", matches rag.entity.metadata->>label_md_path */
   labelMdPath: string;
+  /**
+   * B0-259: S3 ETag from the LIST call (free — no extra GetObject round-trip), used as a
+   * cheap "did the underlying master change" marker. Compared against
+   * rag.source_record.checksum to decide whether an already-`ingested` file needs
+   * re-ingesting. Null if the listing didn't return one (shouldn't happen for
+   * non-multipart uploads, but degrade to "unknown" rather than crash).
+   */
+  etag: string | null;
+  /** B0-259: S3 LastModified from the LIST call, surfaced for dashboard visibility only (not used for change detection — ETag is authoritative). */
+  lastModifiedIso: string | null;
 };
 
 export const LABEL_S3_BUCKET_DEFAULT = 'retool-360';

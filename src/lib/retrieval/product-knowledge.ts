@@ -3,10 +3,13 @@ import {
   buildEntityContextBlock,
   fetchEntityContexts,
 } from '~/lib/rag/entity-context';
+import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 import {
   assembleDocumentBodies,
+  fetchDocumentSourceRefs,
   type AssembledDocumentBody,
+  type DocumentSourceRef,
 } from '~/lib/retrieval/document-assembly';
 import {
   resolveProductLineFromMatches,
@@ -72,6 +75,9 @@ export type CuratedSource = {
   entityId: string | null;
   productLineKey: string | null;
   productKey: string | null;
+  /** B0-257: source-document provenance for citing label/SDS PDFs by their raw S3 location. */
+  s3Key: string | null;
+  sourceUri: string | null;
 };
 
 export type ProductKnowledgeRetrievalSummary = {
@@ -116,6 +122,7 @@ type ProductKnowledgeQueryBase = Omit<
 function buildCuratedSource(
   match: RagSearchMatch,
   body: AssembledDocumentBody | undefined,
+  sourceRef: DocumentSourceRef | undefined,
 ): CuratedSource {
   const fallbackBody = match.chunk_text;
   const documentBody = body && body.body.length > 0 ? body.body : fallbackBody;
@@ -136,7 +143,53 @@ function buildCuratedSource(
     entityId: match.entity_id,
     productLineKey: match.product_line_key,
     productKey: match.product_key,
+    s3Key: sourceRef?.s3Key ?? null,
+    sourceUri: sourceRef?.sourceUri ?? null,
   };
+}
+
+/**
+ * B0-257 (discontinued-product filter): entities whose `metadata->>'status'` is
+ * 'discontinued' are excluded from default (semantic) retrieval. Scoped to entity
+ * status only (not e.g. legacy.products."Status", which uses unrelated AC/IN/0 codes
+ * with no documented discontinued mapping -- verified live, see B0-246 notes) and only
+ * to entities that actually carry the value (most are null/'UNKNOWN', left untouched).
+ * Applied once here so every retrieval call site (search_product_docs, get_product_spec,
+ * get_approved_usage_guidance, etc.) benefits without touching the match_corpus_chunks*
+ * SQL RPCs, which have several call-site overloads across migrations -- an app-layer
+ * filter is the lower-risk change for this ticket's scope.
+ */
+export async function fetchDiscontinuedEntityIds(entityIds: string[]): Promise<Set<string>> {
+  const unique = [...new Set(entityIds.filter(Boolean))];
+  if (unique.length === 0) {
+    return new Set();
+  }
+
+  const rag = getSupabaseServiceRoleClient().schema('rag');
+  const { data, error } = await rag
+    .from('entity')
+    .select('id')
+    .in('id', unique)
+    .filter('metadata->>status', 'eq', 'discontinued');
+
+  if (error || !data) {
+    // Degrade to "no filter" rather than block retrieval on a status-lookup failure.
+    return new Set();
+  }
+
+  return new Set(data.map((row) => row.id));
+}
+
+async function excludeDiscontinuedMatches(matches: RagSearchMatch[]): Promise<RagSearchMatch[]> {
+  const entityIds = matches.map((m) => m.entity_id).filter((id): id is string => id != null);
+  if (entityIds.length === 0) {
+    return matches;
+  }
+  const discontinued = await fetchDiscontinuedEntityIds(entityIds);
+  if (discontinued.size === 0) {
+    return matches;
+  }
+  return matches.filter((m) => !m.entity_id || !discontinued.has(m.entity_id));
 }
 
 async function curateUniqueDocumentSources(
@@ -147,7 +200,9 @@ async function curateUniqueDocumentSources(
     maxPerDocument?: number;
   },
 ): Promise<CuratedSource[]> {
-  const selected = selectCuratedMatches(matches, {
+  const eligibleMatches = await excludeDiscontinuedMatches(matches);
+
+  const selected = selectCuratedMatches(eligibleMatches, {
     limit: options.limit,
     maxPerDocument: options.maxPerDocument ?? 1,
     requiredDocumentKinds: options.requiredDocumentKinds,
@@ -158,10 +213,13 @@ async function curateUniqueDocumentSources(
   }
 
   const documentIds = selected.map((match) => match.document_id);
-  const bodies = await assembleDocumentBodies(documentIds);
+  const [bodies, sourceRefs] = await Promise.all([
+    assembleDocumentBodies(documentIds),
+    fetchDocumentSourceRefs(documentIds),
+  ]);
 
   return selected.map((match) =>
-    buildCuratedSource(match, bodies.get(match.document_id)),
+    buildCuratedSource(match, bodies.get(match.document_id), sourceRefs.get(match.document_id)),
   );
 }
 
@@ -184,6 +242,66 @@ async function factsForSources(
       .map((s) => [s.entityId as string, s.title] as const),
   );
   return { facts, factsBlock: buildFactsBlock(facts, titles) };
+}
+
+/**
+ * B0-259 conflict-reconciliation policy (source-of-truth precedence), applied wherever
+ * multiple document kinds could answer the same question. This is deliberately encoded
+ * as *retrieval-slot ordering* (below), not a prose guideline, so it's actually enforced:
+ *
+ *   1. `label`   — the EPA-registered/GHS product label. Source of truth for directions-
+ *                  for-use, dilution/contact-time claims, hazard statements, and first-aid
+ *                  instructions. The printed label is the legally operative document and
+ *                  must win over marketing copy or a stale corpus profile when they disagree.
+ *   2. `sds`     — safety/hazard/first-aid/PPE/composition detail not on the label itself.
+ *   3. `product_line_profile` / `knowledge` — general usage guidance, marketing/catalog
+ *                  copy. Authoritative for descriptive, non-regulated content (features,
+ *                  positioning) ONLY -- never for dilution ratios, EPA claims, or hazard/
+ *                  first-aid instructions.
+ *   4. `efficacy` / `rag.product_line_fact` + `rag.product_efficacy` (structured facts,
+ *                  see product-facts.ts) — authoritative for the exact numeric dilution /
+ *                  contact-time / kill-claim VALUES specifically (get_efficacy_data tool);
+ *                  used alongside, not instead of, the label's citation.
+ *
+ * `selectCuratedMatches()` (source-selection.ts) grants one guaranteed retrieval slot per
+ * entry in `requiredDocumentKinds`, in array order, before falling back to plain similarity
+ * ranking -- so putting `label` first for claim-type queries is what actually makes the
+ * label outrank a competing marketing/profile chunk when both are candidates.
+ */
+const DEFAULT_REQUIRED_DOCUMENT_KINDS = ['product_line_profile', 'sds', 'knowledge', 'label'];
+const LABEL_FIRST_REQUIRED_DOCUMENT_KINDS = ['label', 'sds', 'product_line_profile', 'knowledge'];
+
+/** GHS/efficacy section types that represent label-governed claim content (see product-facts.ts / section-type-inference.ts for the full taxonomy). */
+const CLAIM_LIKE_SECTION_TYPES = new Set([
+  'organism_contact_time',
+  'virucidal_activity',
+  'fungistatic',
+  'bactericidal_efficacy',
+  'first_aid',
+  'hazard',
+  'handling_storage',
+  'regulatory',
+  'exposure_ppe',
+]);
+
+/**
+ * Free-text signal for "this question is about a claim the label governs" -- broader than
+ * `inferSectionTypeFromQuery` (which only fires on narrow GHS-section phrasing) so a plain
+ * "what's the dilution ratio" or "is this EPA registered" question still gets the label-first
+ * ordering even though it doesn't match a specific GHS section pattern.
+ */
+const CLAIM_LIKE_QUERY_PATTERN =
+  /\b(dilut|oz\.?\s*\/?\s*gal|ounces? per gallon|mix ratio|ready.?to.?use|\bRTU\b|epa\s*reg|contact time|dwell time|kill\b|efficacy|hazard|first aid|corrosive|flammable|ppe|directions for use)\b/i;
+
+function isClaimLikeQuery(query: string): boolean {
+  return CLAIM_LIKE_QUERY_PATTERN.test(query);
+}
+
+function resolveRequiredDocumentKinds(query: string, sectionType: string | null): string[] {
+  if (isClaimLikeQuery(query) || (sectionType && CLAIM_LIKE_SECTION_TYPES.has(sectionType))) {
+    return LABEL_FIRST_REQUIRED_DOCUMENT_KINDS;
+  }
+  return DEFAULT_REQUIRED_DOCUMENT_KINDS;
 }
 
 /**
@@ -234,7 +352,7 @@ async function runProductKnowledgeQuery(input: {
   const sectionType = input.sectionType?.trim() || null;
   const maxPerDocument = input.maxPerDocument;
   const requiredDocumentKinds =
-    input.requiredDocumentKinds ?? ['product_line_profile', 'sds', 'knowledge', 'label'];
+    input.requiredDocumentKinds ?? resolveRequiredDocumentKinds(input.query, sectionType);
 
   if (explicitKey) {
     const result = await searchProductChunks({
@@ -312,6 +430,7 @@ async function runProductKnowledgeQuery(input: {
     const curated = await curateUniqueDocumentSources(result.matches, {
       limit,
       maxPerDocument,
+      requiredDocumentKinds: resolveRequiredDocumentKinds(input.query, sectionType),
     });
 
     return {
@@ -346,9 +465,10 @@ async function runProductKnowledgeQuery(input: {
   });
 
   const resolution = resolveProductLineFromMatches(broadResult.matches);
+  const requiredDocumentKindsForQuery = resolveRequiredDocumentKinds(input.query, sectionType);
   const broadCurated = await curateUniqueDocumentSources(broadResult.matches, {
     limit,
-    requiredDocumentKinds: ['product_line_profile', 'sds', 'knowledge', 'label'],
+    requiredDocumentKinds: requiredDocumentKindsForQuery,
   });
 
   if (resolution.lockedProductLineKey == null) {
@@ -381,7 +501,7 @@ async function runProductKnowledgeQuery(input: {
   });
   const anchoredCurated = await curateUniqueDocumentSources(anchoredResult.matches, {
     limit,
-    requiredDocumentKinds: ['product_line_profile', 'sds', 'knowledge', 'label'],
+    requiredDocumentKinds: requiredDocumentKindsForQuery,
   });
 
   const minimumAnchoredEvidence = Math.max(2, Math.ceil(limit / 2));

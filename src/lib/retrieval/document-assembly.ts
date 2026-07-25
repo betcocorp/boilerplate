@@ -24,6 +24,59 @@ export type AssembledDocumentBody = {
   estimatedTokens: number | null;
 };
 
+/** Provenance pointer for a `rag.document` row, used to cite the exact source PDF/markdown (B0-257). */
+export type DocumentSourceRef = {
+  documentId: string;
+  /** `metadata->>'s3_key'`, e.g. "labels/betco/67804_touch-up.md". */
+  s3Key: string | null;
+  /** `metadata->>'source_uri'`, e.g. "s3://retool-360/labels/betco/67804_touch-up.md". */
+  sourceUri: string | null;
+};
+
+function readMetadataString(metadata: unknown, key: string): string | null {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+    return null;
+  }
+  const value = (metadata as Record<string, unknown>)[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+/**
+ * Fetch `s3_key` / `source_uri` provenance for a set of document ids (label/SDS/etc.
+ * documents carry these in `metadata`). Degrades to an empty map on error so citation
+ * enrichment never blocks retrieval.
+ */
+export async function fetchDocumentSourceRefs(
+  documentIds: string[],
+): Promise<Map<string, DocumentSourceRef>> {
+  const result = new Map<string, DocumentSourceRef>();
+  const uniqueIds = Array.from(new Set(documentIds.filter(Boolean)));
+  if (uniqueIds.length === 0) {
+    return result;
+  }
+
+  const supabase = getSupabaseServiceRoleClient();
+  const { data, error } = await supabase
+    .schema('rag')
+    .from('document')
+    .select('id, metadata')
+    .in('id', uniqueIds);
+
+  if (error || !data) {
+    return result;
+  }
+
+  for (const row of data as Array<{ id: string; metadata: unknown }>) {
+    result.set(row.id, {
+      documentId: row.id,
+      s3Key: readMetadataString(row.metadata, 's3_key'),
+      sourceUri: readMetadataString(row.metadata, 'source_uri'),
+    });
+  }
+
+  return result;
+}
+
 /**
  * Loads every chunk for the supplied documentIds (ordered by chunk_index) and
  * stitches them back into a single document body string per documentId.

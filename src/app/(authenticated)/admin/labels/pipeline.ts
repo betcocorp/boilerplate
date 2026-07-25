@@ -37,6 +37,24 @@ const MAX_BATCH_SIZE = 100;
 const MAX_EMBEDDING_RUNS = 25;
 const MAX_DASHBOARD_DOCUMENT_ROWS = 900;
 
+// B0-259 — recurring label sync: the master corpus has no printed "source_year" marker
+// and no extractor-version field existed anywhere in this pipeline before this ticket
+// (verified live against rag.document.metadata for a sample of label docs). Change
+// detection instead uses two markers:
+//   1. S3 ETag (free from the LIST call, see listS3MarkdownKeys) as the "did the file on
+//      S3 change" signal, stored in rag.source_record.checksum.
+//   2. LABEL_EXTRACTOR_VERSION (bump this when the parsing/chunking logic below changes)
+//      stamped into rag.document.metadata.extractor_ver -- lets a future code change force
+//      re-processing of already-ingested, byte-identical files.
+const LABEL_EXTRACTOR_VERSION = '1';
+
+/** S3 ETags for non-multipart uploads are quoted MD5 hex; normalize for comparison only. */
+function normalizeEtag(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const trimmed = value.trim().replace(/^"|"$/g, '');
+  return trimmed || null;
+}
+
 type JsonObject = { [key: string]: RagJson | undefined };
 
 export type LabelIngestionRunMode =
@@ -61,6 +79,10 @@ export type LabelDashboardDocument = {
   chunkCount: number;
   updatedAt: string | null;
   lastError: string | null;
+  /** B0-259: true when the S3 ETag no longer matches the checksum captured at last ingest -- the master changed and this row needs re-sync even though status is still "ingested". */
+  needsResync: boolean;
+  /** B0-259: true when the label frontmatter's `needs_review` flag is set (low-confidence extraction). */
+  needsReview: boolean;
 };
 
 export type LabelDashboardStatus = {
@@ -73,6 +95,10 @@ export type LabelDashboardStatus = {
     embeddedChunks: number;
     pendingChunks: number;
     linkedToEntity: number;
+    /** B0-259: ingested docs whose S3 master changed since last ingest (needsResync=true). */
+    changed: number;
+    /** B0-259: docs flagged needs_review in their label frontmatter. */
+    needsReview: number;
   };
   preview: { showing: number; hidden: number };
   warning: string | null;
@@ -122,8 +148,14 @@ function getS3Client() {
   return new S3Client({ region, ...(credentials ? { credentials } : {}) });
 }
 
-async function listS3MarkdownKeys(client: S3Client, bucket: string, prefix: string) {
-  const keys: string[] = [];
+type S3MarkdownListing = { key: string; etag: string | null; lastModifiedIso: string | null };
+
+async function listS3MarkdownKeys(
+  client: S3Client,
+  bucket: string,
+  prefix: string,
+): Promise<S3MarkdownListing[]> {
+  const items: S3MarkdownListing[] = [];
   let continuationToken: string | undefined;
   do {
     const page = await client.send(
@@ -132,12 +164,18 @@ async function listS3MarkdownKeys(client: S3Client, bucket: string, prefix: stri
     for (const item of page.Contents ?? []) {
       const key = item.Key?.trim();
       if (!key || key.endsWith('/')) continue;
-      if (extname(key).toLowerCase() === '.md') keys.push(key);
+      if (extname(key).toLowerCase() === '.md') {
+        items.push({
+          key,
+          etag: normalizeEtag(item.ETag),
+          lastModifiedIso: item.LastModified ? item.LastModified.toISOString() : null,
+        });
+      }
     }
     continuationToken = page.NextContinuationToken;
   } while (continuationToken);
-  keys.sort((a, b) => a.localeCompare(b));
-  return keys;
+  items.sort((a, b) => a.key.localeCompare(b.key));
+  return items;
 }
 
 // --------------------------------------------------------------------------
@@ -218,10 +256,10 @@ async function discoverLabelSeedDocuments(): Promise<LabelSeedDocument[]> {
   const bucket = getS3Bucket();
   const prefix = getS3Prefix();
   const client = getS3Client();
-  const keys = await listS3MarkdownKeys(client, bucket, prefix);
+  const listing = await listS3MarkdownKeys(client, bucket, prefix);
 
   const seeds: LabelSeedDocument[] = [];
-  for (const s3Key of keys) {
+  for (const { key: s3Key, etag, lastModifiedIso } of listing) {
     const relativePath = keyToRelativePath(s3Key, prefix);
     const brand = inferBrand(relativePath);
     if (!brand) continue; // unrecognized top-level folder — skip rather than mis-key
@@ -238,6 +276,8 @@ async function discoverLabelSeedDocuments(): Promise<LabelSeedDocument[]> {
       sku: override?.sku ?? sku,
       s3Key,
       labelMdPath: relativePath,
+      etag,
+      lastModifiedIso,
     });
   }
   return seeds;
@@ -357,6 +397,10 @@ async function upsertDocument(
     sds_number: fm.sds_number ?? null,
     needs_review: fm.needs_review ?? null,
     extraction_method: fm.extraction_method ?? null,
+    // B0-259: stamp the extractor version that produced this row. Bump
+    // LABEL_EXTRACTOR_VERSION when parsing/chunking logic changes so a future sync run
+    // can detect "extractor changed" even for a byte-identical S3 file.
+    extractor_ver: LABEL_EXTRACTOR_VERSION,
   };
 
   const title = `${fm.product ?? seed.title}${fm.sub_name ? ` — ${fm.sub_name}` : ''}`;
@@ -447,6 +491,10 @@ async function markSourceRecord(
         last_attempt_at: timestamp,
         last_error: params.lastError ?? null,
       }),
+      // B0-259: persist the S3 ETag as the change-detection baseline for the NEXT sync
+      // run's needsResync comparison (see buildDocumentRow). Only stamped on a
+      // successful ingest -- a failed run keeps the last-known-good checksum.
+      ...(params.status === 'ingested' ? { checksum: seed.etag } : {}),
       last_seen_at: timestamp,
       is_active: true,
     })
@@ -486,8 +534,24 @@ async function ingestSeedDocument(seed: LabelSeedDocument) {
 // --------------------------------------------------------------------------
 // Status dashboard
 // --------------------------------------------------------------------------
-type SourceRow = { id: string; source_pk: string; metadata: JsonObject | null; updated_at: string };
-type DocRow = { id: string; source_record_id: string; entity_id: string | null; updated_at: string };
+type SourceRow = {
+  id: string;
+  source_pk: string;
+  metadata: JsonObject | null;
+  updated_at: string;
+  checksum: string | null;
+};
+type DocRow = {
+  id: string;
+  source_record_id: string;
+  entity_id: string | null;
+  updated_at: string;
+  metadata: JsonObject | null;
+};
+
+function isNeedsReview(metadata: JsonObject | null): boolean {
+  return metadata != null && typeof metadata === 'object' && (metadata as JsonObject).needs_review === true;
+}
 
 function asIngestion(metadata: JsonObject | null) {
   const ing = metadata && typeof metadata === 'object' ? (metadata as JsonObject).ingestion : null;
@@ -503,13 +567,13 @@ async function loadState() {
     supabase
       .schema('rag')
       .from('source_record')
-      .select('id, source_pk, metadata, updated_at')
+      .select('id, source_pk, metadata, updated_at, checksum')
       .eq('source_schema', SOURCE_SCHEMA)
       .eq('source_type', SOURCE_TYPE),
     supabase
       .schema('rag')
       .from('document')
-      .select('id, source_record_id, entity_id, updated_at')
+      .select('id, source_record_id, entity_id, updated_at, metadata')
       .eq('document_kind', DOCUMENT_KIND),
     supabase.schema('rag').from('document_chunk').select('document_id').like('chunk_key', 'label_md:%'),
   ]);
@@ -555,6 +619,17 @@ function buildDocumentRow(
   if (metaStatus === 'failed') status = 'failed';
   else if (metaStatus === 'ingested' || (doc && chunkCount > 0)) status = 'ingested';
   else if (source) status = 'registered';
+
+  // B0-259: only meaningful once ingested (nothing to "re-sync" for a row that's never
+  // been ingested) and only when we have BOTH a captured baseline checksum and a current
+  // S3 etag to compare -- a null baseline means this row predates checksum tracking, so
+  // treat it as up to date rather than forcing a mass re-ingest on first deploy of this
+  // feature (the next real content change will establish the first real diff).
+  const storedChecksum = normalizeEtag(source?.checksum ?? null);
+  const currentEtag = normalizeEtag(seed.etag);
+  const needsResync =
+    status === 'ingested' && storedChecksum != null && currentEtag != null && storedChecksum !== currentEtag;
+
   return {
     id: seed.id,
     title: seed.title,
@@ -567,6 +642,8 @@ function buildDocumentRow(
     chunkCount,
     updatedAt: doc?.updated_at ?? source?.updated_at ?? null,
     lastError: asString(ingestion?.last_error),
+    needsResync,
+    needsReview: isNeedsReview(doc?.metadata ?? null),
   };
 }
 
@@ -576,6 +653,27 @@ function toDashboard(
   warning: string | null,
 ): LabelDashboardStatus {
   const visible = rows.slice(0, MAX_DASHBOARD_DOCUMENT_ROWS);
+  const changed = rows.filter((r) => r.needsResync).length;
+  const needsReview = rows.filter((r) => r.needsReview).length;
+
+  // B0-259 alerting (work item 3): the dashboard `warning` banner is the existing,
+  // established alert surface for this pipeline (already used for "S3 discovery
+  // unavailable" above) -- reused here rather than inventing a new notification
+  // channel. A human visiting /admin/labels sees it immediately; see
+  // maybeSendLabelSyncAlert() for the optional, explicitly-opt-in Sentry push alert.
+  const alertParts: string[] = [];
+  if (changed > 0) {
+    alertParts.push(
+      `${changed} label${changed === 1 ? '' : 's'} changed on S3 since last ingest — run "Ingest all pending" to re-sync.`,
+    );
+  }
+  if (needsReview > 0) {
+    alertParts.push(
+      `${needsReview} label${needsReview === 1 ? '' : 's'} flagged needs_review (low-confidence extraction) — spot-check before relying on them for regulated claims.`,
+    );
+  }
+  const combinedWarning = [warning, alertParts.join(' ') || null].filter(Boolean).join(' ') || null;
+
   return {
     totals: {
       seeded: rows.length,
@@ -586,9 +684,11 @@ function toDashboard(
       embeddedChunks: 0,
       pendingChunks: 0,
       linkedToEntity,
+      changed,
+      needsReview,
     },
     preview: { showing: visible.length, hidden: Math.max(0, rows.length - visible.length) },
-    warning,
+    warning: combinedWarning,
     documents: visible,
   };
 }
@@ -681,7 +781,9 @@ export async function runLabelIngestion(
     const seeds = await discoverLabelSeedDocuments();
     const seedById = new Map(seeds.map((s) => [s.id, s]));
     const { rows } = await statusRows(seeds);
-    let candidates = rows.filter((r) => r.status !== 'ingested');
+    // B0-259: "not yet ingested" OR "ingested but the S3 master changed since" -- this is
+    // what makes ingest-next/ingest-all a genuine re-sync rather than a one-time backfill.
+    let candidates = rows.filter((r) => r.status !== 'ingested' || r.needsResync);
     if (mode === 'retry-failed') candidates = rows.filter((r) => r.status === 'failed');
     if (mode === 'ingest-next') candidates = candidates.slice(0, clampBatchSize(batchSize));
 
@@ -701,5 +803,41 @@ export async function runLabelIngestion(
     status = await withChunkTotals(toDashboard(finalRows, linkedToEntity, null));
   }
 
+  await maybeSendLabelSyncAlert(status, mode);
+
   return { mode, processed, succeeded, failed, startedAt, finishedAt: nowIso(), errors, status };
+}
+
+// --------------------------------------------------------------------------
+// B0-259 alerting (work item 3), part 2: optional push alert via Sentry.
+//
+// This is a NEW usage pattern for this codebase -- Sentry is otherwise only used via
+// its Next.js auto-instrumentation (unhandled exceptions / request errors, see
+// sentry.server.config.ts, src/instrumentation.ts), never via a manual
+// `captureMessage` for a business-logic condition. It's gated behind an explicit env
+// var so it can't start firing in production as a side effect of this change, and so
+// whoever enables it can first confirm a Sentry alert rule exists for these messages
+// (this repo does not manage Sentry alert-routing/Slack/email config, which lives in
+// the Sentry project settings). The dashboard `warning` banner above is the primary,
+// always-on alert surface and does not require this.
+// --------------------------------------------------------------------------
+function isLabelSyncSentryAlertEnabled() {
+  return process.env.LABEL_SYNC_SENTRY_ALERTS === 'true';
+}
+
+async function maybeSendLabelSyncAlert(status: LabelDashboardStatus, mode: LabelIngestionRunMode) {
+  if (!isLabelSyncSentryAlertEnabled()) return;
+  const { changed, needsReview, failed } = status.totals;
+  if (changed === 0 && needsReview === 0 && failed === 0) return;
+
+  try {
+    const Sentry = await import('@sentry/nextjs');
+    Sentry.captureMessage('label_sync_alert', {
+      level: 'warning',
+      tags: { pipeline: 'label_ingestion', mode },
+      extra: { changed, needsReview, failed, seeded: status.totals.seeded },
+    });
+  } catch {
+    // Alerting is best-effort — never fail the sync run because the alert couldn't send.
+  }
 }

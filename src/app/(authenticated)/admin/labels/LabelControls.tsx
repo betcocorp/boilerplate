@@ -92,6 +92,9 @@ export function LabelControls({ initialStatus }: { initialStatus: LabelDashboard
           `rag.document_chunk`, and embed to fill vectors. Documents are
           linked to `rag.entity` (SKU-based Path B bootstrap) when a match
           exists. Retry re-runs files that failed on S3 access or parsing.
+          &quot;Ingest next/all&quot; also re-syncs any already-ingested file
+          whose S3 master changed since its last ingest (detected via S3
+          ETag) — safe to re-run on a recurring cadence.
         </p>
 
         <div className="mt-6 flex flex-col gap-2">
@@ -182,6 +185,8 @@ export function LabelControls({ initialStatus }: { initialStatus: LabelDashboard
             ['Ingested', activeStatus.totals.ingested],
             ['Failed', activeStatus.totals.failed],
             ['Linked to entity', activeStatus.totals.linkedToEntity],
+            ['Changed since ingest', activeStatus.totals.changed],
+            ['Needs review', activeStatus.totals.needsReview],
           ].map(([label, value]) => (
             <article className="rounded-2xl bg-slate-50 p-4" key={label}>
               <p className="text-xs font-medium uppercase text-slate-500">{label}</p>
@@ -224,9 +229,21 @@ export function LabelControls({ initialStatus }: { initialStatus: LabelDashboard
                   <td className="px-4 py-3 align-top text-slate-700">{row.brand}</td>
                   <td className="px-4 py-3 align-top font-mono text-xs text-slate-700">{row.sku ?? '—'}</td>
                   <td className="px-4 py-3 align-top">
-                    <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${statusClasses(row.status)}`}>
-                      {row.status}
-                    </span>
+                    <div className="flex flex-wrap gap-1.5">
+                      <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${statusClasses(row.status)}`}>
+                        {row.status}
+                      </span>
+                      {row.needsResync ? (
+                        <span className="inline-flex rounded-full bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700">
+                          changed on S3
+                        </span>
+                      ) : null}
+                      {row.needsReview ? (
+                        <span className="inline-flex rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700">
+                          needs review
+                        </span>
+                      ) : null}
+                    </div>
                   </td>
                   <td className="px-4 py-3 align-top text-slate-700">{row.chunkCount}</td>
                   <td className="px-4 py-3 align-top text-slate-700">{formatIso(row.updatedAt)}</td>

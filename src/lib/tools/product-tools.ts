@@ -64,6 +64,10 @@ function sourcePayload(
     documentKind: s.documentKind,
     productLineKey: s.productLineKey,
     productKey: s.productKey,
+    // B0-257: raw S3 location of the source PDF/markdown, so label/SDS-derived answers
+    // (directions, hazards, first aid, dilution) can cite the exact source document.
+    s3Key: s.s3Key,
+    sourceUri: s.sourceUri,
     freshness: null as null,
   }));
 
@@ -86,6 +90,8 @@ function sourcePayload(
       documentKind: 'facts',
       productLineKey: null,
       productKey: null,
+      s3Key: null,
+      sourceUri: null,
       freshness: null as null,
     });
   }

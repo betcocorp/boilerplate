@@ -39,6 +39,7 @@ import {
   type ValidatorResult,
 } from '~/lib/workflows/product-support/product-support-schemas';
 import {
+  evaluateRegulatedClaimGrounding,
   runRevisionPass,
   runValidatorPass,
 } from '~/lib/workflows/product-support/validator';
@@ -67,7 +68,13 @@ function buildEvidenceSummary(sources: RetrievedSourceMeta[]): string {
     const trimmed = body.slice(0, VALIDATOR_PER_DOCUMENT_CHAR_BUDGET);
     const truncatedSuffix =
       body.length > trimmed.length ? '\n…(truncated for evidence summary)' : '';
-    const block = `[${source.documentId}] ${source.title}\n${trimmed}${truncatedSuffix}`;
+    // B0-257: surface the raw source location alongside the doc id/title so the validator
+    // (and any human reviewing a raised review task) can trace a regulated claim back to
+    // the exact label/SDS file it was quoted from.
+    const sourceLine = source.s3Key || source.sourceUri
+      ? ` (source: ${source.sourceUri ?? source.s3Key})`
+      : '';
+    const block = `[${source.documentId}] ${source.title}${sourceLine}\n${trimmed}${truncatedSuffix}`;
 
     if (total + block.length > VALIDATOR_EVIDENCE_CHAR_BUDGET) {
       const remaining = Math.max(0, VALIDATOR_EVIDENCE_CHAR_BUDGET - total);
@@ -297,6 +304,9 @@ type RetrievedSourceMeta = {
   snippet: string;
   documentBody: string;
   documentKind: string | null;
+  /** B0-257: source PDF/markdown S3 location, carried through for regulated-claim citation. */
+  s3Key: string | null;
+  sourceUri: string | null;
 };
 
 export type ProductSupportWorkflowEvent =
@@ -392,6 +402,8 @@ function collectSourcesFromToolOutputs(toolOutputs: RuntimeToolOutput[]): Source
           title?: string;
           snippet?: string;
           confidence?: number;
+          s3Key?: string | null;
+          sourceUri?: string | null;
         }>;
       };
       for (const s of payload.sources ?? []) {
@@ -408,6 +420,10 @@ function collectSourcesFromToolOutputs(toolOutputs: RuntimeToolOutput[]): Source
           title: s.title ?? s.documentId,
           snippet: s.snippet.slice(0, 2000),
           similarity: s.confidence,
+          // B0-257: thread the source PDF/markdown's S3 location through to the persisted
+          // citation object so label/SDS-derived directions/hazards/first-aid answers carry it.
+          s3Key: s.s3Key ?? undefined,
+          sourceUri: s.sourceUri ?? undefined,
         });
       }
     } catch {
@@ -480,6 +496,8 @@ function collectSourceMetaFromToolOutputs(
           snippet?: string;
           documentBody?: string;
           documentKind?: string;
+          s3Key?: string | null;
+          sourceUri?: string | null;
         }>;
       };
       for (const source of payload.sources ?? []) {
@@ -498,6 +516,9 @@ function collectSourceMetaFromToolOutputs(
           typeof source.documentBody === 'string' && source.documentBody.length > 0
             ? source.documentBody
             : source.snippet;
+        const s3Key = typeof source.s3Key === 'string' && source.s3Key.trim() ? source.s3Key : null;
+        const sourceUri =
+          typeof source.sourceUri === 'string' && source.sourceUri.trim() ? source.sourceUri : null;
 
         if (existing) {
           // Prefer the entry that carries the larger document body (full text vs snippet).
@@ -510,6 +531,8 @@ function collectSourceMetaFromToolOutputs(
               documentKind:
                 existing.documentKind ??
                 (typeof source.documentKind === 'string' ? source.documentKind : null),
+              s3Key: existing.s3Key ?? s3Key,
+              sourceUri: existing.sourceUri ?? sourceUri,
             });
           }
           continue;
@@ -523,6 +546,8 @@ function collectSourceMetaFromToolOutputs(
           documentBody,
           documentKind:
             typeof source.documentKind === 'string' ? source.documentKind : null,
+          s3Key,
+          sourceUri,
         });
       }
     } catch {
@@ -1262,6 +1287,46 @@ export async function runProductSupportWorkflow(input: {
       };
     }
 
+    // B0-257: regulated-claim guardrail -- runs unconditionally (independent of the
+    // `useValidator` opt-in toggle above, which only gates the LLM semantic-judge pass).
+    // EPA registration, dilution/contact-time, hazard, and first-aid claims must be
+    // traceable to an exact quote in a retrieved source; anything that fails is a hard
+    // rejection, never a soft warning, per the org's regulated-data rule.
+    const regulatedClaimGrounding = evaluateRegulatedClaimGrounding({
+      draftAnswer,
+      sources: sourceMeta.map((s) => ({
+        documentId: s.documentId,
+        title: s.title,
+        documentBody: s.documentBody,
+      })),
+    });
+
+    if (regulatedClaimGrounding.ungroundedCategories.length > 0) {
+      validation = {
+        ...validation,
+        approved: false,
+        confidence: Math.min(validation.confidence, 0.4),
+        issues: Array.from(
+          new Set([
+            ...validation.issues,
+            ...regulatedClaimGrounding.ungroundedCategories.map(
+              (c) => `regulated_claim_unverified:${c}`,
+            ),
+          ]),
+        ),
+        requires_human_review: true,
+      };
+      await writeAuditLog(
+        'regulated_claim_guardrail_rejected',
+        {
+          categoriesDetected: regulatedClaimGrounding.categoriesDetected,
+          ungroundedCategories: regulatedClaimGrounding.ungroundedCategories,
+          ungroundedDetails: regulatedClaimGrounding.ungroundedDetails,
+        },
+        { ...wfCtx, stepId: validationStep.id },
+      );
+    }
+
     // REC-4: on the competitive-recommendation route, calibrate confidence to retrieval
     // strength (top-hit similarity < 60% cannot exceed 0.75) and enforce chemistry-class
     // consistency once REC-1 grounding + REC-2/3 structured fields are wired (dormant until then).
@@ -1311,9 +1376,29 @@ export async function runProductSupportWorkflow(input: {
     });
 
     let finalText = draftAnswer;
+    const hasUngroundedRegulatedClaim = regulatedClaimGrounding.ungroundedCategories.length > 0;
 
     if (!validation.approved) {
-      if (
+      if (hasUngroundedRegulatedClaim) {
+        // B0-257: dedicated fallback for the regulated-claim guardrail -- distinct from the
+        // generic "could not verify" message so it's clear the specific blocker is a missing
+        // exact citation for a regulated value/statement, not general low retrieval coverage.
+        const categoryLabels: Record<string, string> = {
+          epa_registration: 'EPA registration number',
+          dilution_ratio: 'dilution ratio',
+          contact_time: 'contact/dwell time',
+          hazard: 'hazard statement',
+          first_aid: 'first-aid instruction',
+        };
+        const flagged = regulatedClaimGrounding.ungroundedCategories
+          .map((c) => categoryLabels[c] ?? c)
+          .join(', ');
+        finalText = [
+          `I can't verify the ${flagged} in this answer against an exact quote from a retrieved label or SDS, so I won't state it.`,
+          '',
+          'Please consult the product label or SDS directly for the exact regulated value, or contact Betco Product Support / EHS to confirm.',
+        ].join('\n');
+      } else if (
         needsUsageSafetyCoverage &&
         (!usageSafetyCoverage.hasUsageEvidence ||
           !usageSafetyCoverage.hasSafetyEvidence)
@@ -1343,10 +1428,13 @@ export async function runProductSupportWorkflow(input: {
       if (validation.requires_human_review) {
         await insertReviewTask({
           workflowRunId: run.id,
-          reason: 'validator_rejected',
+          reason: hasUngroundedRegulatedClaim ? 'regulated_claim_unverified' : 'validator_rejected',
           payload: jsonContent({
             issues: validation.issues,
             draft: draftAnswer,
+            ...(hasUngroundedRegulatedClaim
+              ? { ungroundedRegulatedClaims: regulatedClaimGrounding.ungroundedDetails }
+              : {}),
           }),
         });
         await writeAuditLog(
