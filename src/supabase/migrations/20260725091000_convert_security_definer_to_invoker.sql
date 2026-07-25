@@ -28,8 +28,9 @@ end $$;
 
 -- Step 2: Drop and recreate chunking functions WITHOUT SECURITY DEFINER
 -- These use RLS indirectly via the document/chunk inserts they trigger.
+-- Note: Drop all overloads first, then recreate the canonical version
 
-DROP FUNCTION IF EXISTS rag.chunk_document_text(text, text, text, jsonb) CASCADE;
+DROP FUNCTION IF EXISTS rag.chunk_document_text CASCADE;
 
 CREATE FUNCTION rag.chunk_document_text(
   p_document_key text,
@@ -64,7 +65,7 @@ begin
   return v_chunks;
 end $$;
 
-DROP FUNCTION IF EXISTS rag.chunk_sds_document_text(text, text, jsonb) CASCADE;
+DROP FUNCTION IF EXISTS rag.chunk_sds_document_text CASCADE;
 
 CREATE FUNCTION rag.chunk_sds_document_text(
   p_document_key text,
@@ -97,7 +98,7 @@ begin
   return v_chunks;
 end $$;
 
-DROP FUNCTION IF EXISTS rag.chunk_efficacy_document_text(text, text, jsonb) CASCADE;
+DROP FUNCTION IF EXISTS rag.chunk_efficacy_document_text CASCADE;
 
 CREATE FUNCTION rag.chunk_efficacy_document_text(
   p_document_key text,
