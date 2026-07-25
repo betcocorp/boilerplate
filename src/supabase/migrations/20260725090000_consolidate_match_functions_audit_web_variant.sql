@@ -13,7 +13,28 @@
 -- ensures the metadata column itself is backfilled for retrieval and auditing.
 -- ============================================================
 
--- Step 1: Audit match_* function overloads
+-- Step 1: Drop unwanted overloads of match_product_chunks and match_product_chunks_hybrid
+-- These functions had older parameter signatures that caused ambiguity; drop them first
+-- before running the consolidation audit.
+
+-- Drop 4-arg overload of match_product_chunks (older signature without filter_product_line_key)
+DROP FUNCTION IF EXISTS rag.match_product_chunks(
+  extensions.halfvec,
+  integer,
+  text,
+  text
+) CASCADE;
+
+-- Drop 5-arg overload of match_product_chunks_hybrid (older signature)
+DROP FUNCTION IF EXISTS rag.match_product_chunks_hybrid(
+  extensions.halfvec,
+  text,
+  integer,
+  text,
+  text
+) CASCADE;
+
+-- Step 2: Audit match_* function overloads after consolidation
 -- Expected result: exactly one overload per function (verified via pg_proc count)
 DO $$
 DECLARE
