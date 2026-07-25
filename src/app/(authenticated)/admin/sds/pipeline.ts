@@ -17,6 +17,7 @@ import {
   SDS_S3_PREFIX_DEFAULT,
   type SdsSeedDocument,
 } from './manifest';
+import { evaluateSdsContentLanguage, evaluateSdsPolicy } from './policy';
 
 export type SdsDashboardDocument = S3IngestionDashboardDocument;
 export type SdsDashboardStatus = S3IngestionDashboardStatus;
@@ -137,7 +138,9 @@ async function listS3PdfKeys(client: S3Client, bucket: string, prefix: string) {
   return keys;
 }
 
-async function discoverSdsSeedDocuments(): Promise<SdsSeedDocument[]> {
+async function discoverAllSdsCandidates(): Promise<
+  Array<{ seed: SdsSeedDocument; relativePath: string }>
+> {
   const bucket = getS3Bucket();
   const prefix = getS3Prefix();
   const client = getS3Client();
@@ -160,13 +163,55 @@ async function discoverSdsSeedDocuments(): Promise<SdsSeedDocument[]> {
     ).toUpperCase();
 
     return {
-      id: createHash('sha1').update(s3Key).digest('hex').slice(0, 20),
-      title: override?.title || inferredTitle,
-      productCode: override?.productCode || inferredProductCode,
-      s3Key,
-      locale,
-    } satisfies SdsSeedDocument;
+      seed: {
+        id: createHash('sha1').update(s3Key).digest('hex').slice(0, 20),
+        title: override?.title || inferredTitle,
+        productCode: override?.productCode || inferredProductCode,
+        s3Key,
+        locale,
+      } satisfies SdsSeedDocument,
+      relativePath,
+    };
   });
+}
+
+/**
+ * B0-243: only returns in-policy docs (see `./policy.ts`). This is a fast filename/
+ * folder-path pre-filter -- it does NOT read file content, so it can under-catch
+ * ES/FR docs filed without an obvious folder/suffix language marker (confirmed live;
+ * see policy.ts module docs). `parseSdsFile` below runs the authoritative
+ * content-based check once a file is actually downloaded and parsed.
+ */
+async function discoverSdsSeedDocuments(): Promise<SdsSeedDocument[]> {
+  const candidates = await discoverAllSdsCandidates();
+  return candidates
+    .filter(({ seed, relativePath }) => evaluateSdsPolicy(relativePath, seed.locale).inScope)
+    .map(({ seed }) => seed);
+}
+
+export type SdsDiscoveryReport = {
+  totalDiscovered: number;
+  inScope: number;
+  excludedByReason: Record<string, number>;
+};
+
+/** Read-only diagnostic: how discovery classified every S3 PDF key, and why. */
+export async function getSdsDiscoveryReport(): Promise<SdsDiscoveryReport> {
+  const candidates = await discoverAllSdsCandidates();
+  const excludedByReason: Record<string, number> = {};
+  let inScope = 0;
+
+  for (const { seed, relativePath } of candidates) {
+    const decision = evaluateSdsPolicy(relativePath, seed.locale);
+    if (decision.inScope) {
+      inScope += 1;
+    } else {
+      const key = `${decision.reason}:${decision.matched}`;
+      excludedByReason[key] = (excludedByReason[key] ?? 0) + 1;
+    }
+  }
+
+  return { totalDiscovered: candidates.length, inScope, excludedByReason };
 }
 
 function normalizePdfText(rawText: string) {
@@ -222,9 +267,18 @@ async function parsePdf(buffer: Buffer) {
   };
 }
 
-async function parseSdsFile(buffer: Buffer) {
+async function parseSdsFile(buffer: Buffer, seed: SdsSeedDocument) {
   const parsed = await parsePdf(buffer);
-  return { bodyText: parsed.text, bodyMarkdown: null };
+  const languageCheck = evaluateSdsContentLanguage(parsed.text, seed.locale);
+  return {
+    bodyText: parsed.text,
+    bodyMarkdown: null,
+    extraMetadata: {
+      language_detected: languageCheck.detectedLocale,
+      language_detection_code: languageCheck.francCode,
+      language_policy_mismatch: languageCheck.mismatch,
+    },
+  };
 }
 
 const sdsPipeline = createS3IngestionPipeline<SdsSeedDocument>({

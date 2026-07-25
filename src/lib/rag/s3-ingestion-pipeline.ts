@@ -31,6 +31,8 @@ export type S3IngestionSeedDocument = {
 export type S3IngestionParsedFile = {
   bodyText: string;
   bodyMarkdown: string | null;
+  /** Optional parse-time-derived fields merged into document.metadata (e.g. B0-243's content-language check). */
+  extraMetadata?: Record<string, unknown>;
 };
 
 export type S3IngestionPipelineConfig<TSeed extends S3IngestionSeedDocument> = {
@@ -317,6 +319,7 @@ export function createS3IngestionPipeline<TSeed extends S3IngestionSeedDocument>
       s3_key: seed.s3Key,
       source_uri: toSourceUri(seed),
       ...(config.buildDocumentMetadata?.(seed) ?? {}),
+      ...(parsed.extraMetadata ?? {}),
     } as JsonObject;
 
     const { data: existing, error: existingError } = await supabase
