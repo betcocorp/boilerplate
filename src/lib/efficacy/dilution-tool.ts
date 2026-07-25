@@ -110,12 +110,12 @@ export async function getDilutionRatio(
     const factData = await fetchProductLineFact(product_line_key);
 
     // Return data if found
-    if (factData?.dilution_oz_per_gal !== null) {
+    if (factData && factData.dilution_oz_per_gal !== null) {
       const baseDilution = factData.dilution_oz_per_gal;
 
       // Convert to requested unit
       let finalRatio = baseDilution;
-      let finalUnit = dilution_unit;
+      const finalUnit = dilution_unit;
 
       if (dilution_unit === 'ml_per_liter' && baseDilution > 0) {
         // oz_per_gallon → ml_per_liter: multiply by ~29.5 (ml/oz) / 3.78 (L/gal) ≈ 7.8
