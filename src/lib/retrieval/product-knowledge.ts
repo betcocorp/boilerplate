@@ -24,6 +24,7 @@ import {
   fetchProductLineFacts,
   type ProductLineFacts,
 } from '~/lib/retrieval/product-facts';
+import { suppressNearDuplicateMatches } from '~/lib/retrieval/near-duplicate-suppression';
 
 /**
  * The new RAG strategy returns at most this many sources, where each source is a
@@ -201,8 +202,13 @@ async function curateUniqueDocumentSources(
   },
 ): Promise<CuratedSource[]> {
   const eligibleMatches = await excludeDiscontinuedMatches(matches);
+  // B0-257 (scope addition): retrieval backstop -- suppress lower-authority
+  // near-duplicate chunks (same product + section_type, high cosine similarity)
+  // before the top-N/diversity pass below, so e.g. a marketing blurb doesn't
+  // edge out the SDS's version of the same hazard/first-aid content.
+  const deduplicatedMatches = await suppressNearDuplicateMatches(eligibleMatches);
 
-  const selected = selectCuratedMatches(eligibleMatches, {
+  const selected = selectCuratedMatches(deduplicatedMatches, {
     limit: options.limit,
     maxPerDocument: options.maxPerDocument ?? 1,
     requiredDocumentKinds: options.requiredDocumentKinds,
