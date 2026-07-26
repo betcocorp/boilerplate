@@ -1,0 +1,195 @@
+import Link from 'next/link';
+
+import { Badge } from '~/components/ui/badge';
+import { Button } from '~/components/ui/button';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '~/components/ui/card';
+import { Input } from '~/components/ui/input';
+import { Label } from '~/components/ui/label';
+import { NativeSelect } from '~/components/ui/native-select';
+import { RecommendationRowPanel } from '~/components/admin/RecommendationRowPanel';
+import type {
+  RecommendationStatus,
+  RecommendationWithCandidates,
+} from '~/lib/recommendations/recommendation-schemas';
+
+/**
+ * B0-95 — human review queue for `recommend_cross_reference` output, mirrors the failure-queue
+ * triage page's layout (filters → status counts → list → pagination).
+ */
+
+const ROUTE = '/admin/tools/cross-reference/recommendations';
+const PAGE_LINK_WINDOW = 5;
+
+const STATUS_OPTIONS: Array<{ value: RecommendationStatus; label: string }> = [
+  { value: 'pending', label: 'Pending' },
+  { value: 'answered', label: 'Answered' },
+  { value: 'declined', label: 'Declined' },
+  { value: 'verified', label: 'Verified' },
+  { value: 'rejected', label: 'Rejected' },
+];
+
+const STATUS_BADGE_VARIANT: Record<
+  RecommendationStatus,
+  'default' | 'secondary' | 'destructive' | 'outline'
+> = {
+  pending: 'outline',
+  answered: 'secondary',
+  declined: 'outline',
+  verified: 'default',
+  rejected: 'destructive',
+};
+
+function buildHref(status: string, minConfidence: string, page: number) {
+  const params = new URLSearchParams();
+  if (status) params.set('status', status);
+  if (minConfidence) params.set('minConfidence', minConfidence);
+  if (page > 1) params.set('page', String(page));
+  const qs = params.toString();
+  return qs ? `${ROUTE}?${qs}` : ROUTE;
+}
+
+function buildPagination(currentPage: number, totalPages: number) {
+  const half = Math.floor(PAGE_LINK_WINDOW / 2);
+  const end = Math.min(totalPages, Math.max(currentPage + half, PAGE_LINK_WINDOW));
+  const start = Math.max(1, end - PAGE_LINK_WINDOW + 1);
+  return Array.from({ length: Math.max(0, end - start + 1) }, (_, i) => start + i);
+}
+
+export function RecommendationsQueue({
+  loadError,
+  items,
+  page,
+  pageSize,
+  total,
+  statusCounts,
+  currentStatus,
+  currentMinConfidence,
+}: {
+  loadError: string | null;
+  items: RecommendationWithCandidates[];
+  page: number;
+  pageSize: number;
+  total: number;
+  statusCounts: Record<RecommendationStatus, number> | null;
+  currentStatus?: RecommendationStatus;
+  currentMinConfidence?: number;
+}) {
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const paginationPages = buildPagination(page, totalPages);
+  const statusValue = currentStatus ?? '';
+  const minConfidenceValue = currentMinConfidence != null ? String(currentMinConfidence) : '';
+  const hasFilters = Boolean(currentStatus) || currentMinConfidence != null;
+
+  return (
+    <div className="space-y-6">
+      <Card className="rounded-3xl border border-border/60 shadow-none">
+        <CardContent className="pt-6">
+          <form action={ROUTE} method="get" className="flex flex-wrap items-end gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="rec-status">Status</Label>
+              <NativeSelect id="rec-status" name="status" defaultValue={statusValue} className="w-40">
+                <option value="">All statuses</option>
+                {STATUS_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </NativeSelect>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="rec-min-confidence">Min confidence</Label>
+              <Input
+                id="rec-min-confidence"
+                name="minConfidence"
+                type="number"
+                min={0}
+                max={1}
+                step={0.05}
+                defaultValue={minConfidenceValue}
+                placeholder="e.g. 0.8"
+                className="w-32"
+              />
+            </div>
+            <Button type="submit">Apply</Button>
+            {hasFilters ? (
+              <Button asChild type="button" variant="ghost">
+                <Link href={ROUTE}>Clear</Link>
+              </Button>
+            ) : null}
+            <div className="ml-auto flex flex-wrap gap-2">
+              {STATUS_OPTIONS.map((opt) => (
+                <Badge key={opt.value} variant={STATUS_BADGE_VARIANT[opt.value]}>
+                  {opt.label}: {statusCounts?.[opt.value] ?? 0}
+                </Badge>
+              ))}
+            </div>
+          </form>
+        </CardContent>
+      </Card>
+
+      {loadError ? (
+        <div className="rounded-2xl border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
+          {loadError}
+        </div>
+      ) : (
+        <Card className="rounded-3xl border border-border/60 shadow-none">
+          <CardHeader className="flex flex-row items-center justify-between">
+            <div>
+              <CardTitle>Recommendations</CardTitle>
+              <CardDescription>Newest first · {total.toLocaleString()} total</CardDescription>
+            </div>
+            <span className="text-sm text-muted-foreground">
+              Page {page} of {totalPages}
+            </span>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {items.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No recommendations match this filter.</p>
+            ) : (
+              items.map((rec) => <RecommendationRowPanel key={rec.id} recommendation={rec} />)
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {!loadError && totalPages > 1 ? (
+        <nav
+          aria-label="Recommendations pagination"
+          className="flex flex-wrap items-center justify-center gap-2"
+        >
+          <Button
+            asChild
+            variant="outline"
+            size="sm"
+            className={page === 1 ? 'pointer-events-none opacity-50' : undefined}
+          >
+            <Link href={buildHref(statusValue, minConfidenceValue, Math.max(1, page - 1))}>
+              Previous
+            </Link>
+          </Button>
+          {paginationPages.map((p) => (
+            <Button key={p} asChild size="sm" variant={p === page ? 'default' : 'outline'}>
+              <Link href={buildHref(statusValue, minConfidenceValue, p)}>{p}</Link>
+            </Button>
+          ))}
+          <Button
+            asChild
+            variant="outline"
+            size="sm"
+            className={page === totalPages ? 'pointer-events-none opacity-50' : undefined}
+          >
+            <Link href={buildHref(statusValue, minConfidenceValue, Math.min(totalPages, page + 1))}>
+              Next
+            </Link>
+          </Button>
+        </nav>
+      ) : null}
+    </div>
+  );
+}

@@ -98,3 +98,14 @@ export const listRecommendationsInputSchema = z.object({
   pageSize: z.number().int().min(1).max(200).default(50),
 });
 export type ListRecommendationsInput = z.infer<typeof listRecommendationsInputSchema>;
+
+/** B0-95 — reviewer edit of a single candidate row (e.g. correcting the chosen Betco product). */
+export const updateRecommendationCandidateInputSchema = z.object({
+  betcoProductKey: z.string().min(1).nullable().optional(),
+  betcoProdId: z.string().min(1).nullable().optional(),
+  betcoTitle: z.string().min(1).nullable().optional(),
+  rationale: z.string().nullable().optional(),
+});
+export type UpdateRecommendationCandidateInput = z.infer<
+  typeof updateRecommendationCandidateInputSchema
+>;
