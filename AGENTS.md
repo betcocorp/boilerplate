@@ -93,3 +93,13 @@ pnpm lint
 ```
 
 Fix any new diagnostics in files you touched.
+
+- **Recommendations / cross-reference changes:** if you touch the recommendations prompt
+  (`recommendations-specialist-system-prompt.ts`), `sme-routing.ts` recommendation signals,
+  `scoreRecommendation`/`gateRecommendation`, or `XREF_RECOMMENDATION_MIN_CONFIDENCE`, also run the
+  recommendations regression suite and the `/admin/tests` "Recommendation Golden Set — Cross-Reference
+  1:1 (B0-99)" harness run before merging (see `src/docs/cross-reference-recommendations.md`):
+
+  ```bash
+  pnpm exec vitest run src/lib/recommendations
+  ```
