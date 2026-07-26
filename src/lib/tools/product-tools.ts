@@ -59,6 +59,10 @@ function sourcePayload(
     documentBodyChunkCount: s.documentBodyChunkCount,
     documentBodyTruncated: s.documentBodyTruncated,
     documentBodyTokenEstimate: s.documentBodyTokenEstimate,
+    // B0-13: full list of chunk ids assembled into documentBody, so a retrieval can be
+    // audited after the fact (e.g. confirming a specific label section reached the model
+    // vs. was dropped by the per-document truncation cap in assembleDocumentBodies()).
+    documentBodyChunkIds: s.documentBodyChunkIds,
     matchedChunkText: s.matchedChunkText,
     confidence: s.similarity,
     documentKind: s.documentKind,
@@ -85,6 +89,7 @@ function sourcePayload(
       documentBodyChunkCount: 1,
       documentBodyTruncated: false,
       documentBodyTokenEstimate: null,
+      documentBodyChunkIds: [VERIFIED_FACTS_SOURCE_ID],
       matchedChunkText: result.factsBlock,
       confidence: 1,
       documentKind: 'facts',

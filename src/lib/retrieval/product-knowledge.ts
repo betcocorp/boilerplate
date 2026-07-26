@@ -69,6 +69,12 @@ export type CuratedSource = {
   documentBodyChunkCount: number;
   documentBodyTruncated: boolean;
   documentBodyTokenEstimate: number | null;
+  /**
+   * B0-13: ordered `rag.document_chunk.id`s actually stitched into `documentBody`, so a
+   * retrieval can be audited after the fact for exactly which chunks reached the model.
+   * Falls back to the single matched chunk id when full-document assembly wasn't available.
+   */
+  documentBodyChunkIds: string[];
   /** Untruncated text of the matched chunk, for traceability and debugging. */
   matchedChunkText: string;
   similarity: number;
@@ -138,6 +144,7 @@ function buildCuratedSource(
     documentBodyChunkCount: body?.chunkCount ?? (fallbackBody ? 1 : 0),
     documentBodyTruncated: body?.truncated ?? false,
     documentBodyTokenEstimate: body?.estimatedTokens ?? null,
+    documentBodyChunkIds: body?.chunkIds ?? (fallbackBody ? [match.chunk_id] : []),
     matchedChunkText: match.chunk_text,
     similarity: match.similarity,
     documentKind: match.document_kind,

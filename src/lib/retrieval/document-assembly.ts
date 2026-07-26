@@ -22,6 +22,13 @@ export type AssembledDocumentBody = {
   totalChars: number;
   truncated: boolean;
   estimatedTokens: number | null;
+  /**
+   * B0-13: ordered `rag.document_chunk.id`s actually stitched into `body` (including a
+   * partially-included final chunk when `truncated`), so a response can be audited after the
+   * fact for exactly which chunks reached the model -- e.g. confirming whether a specific
+   * section (like a label's "Directions for Use") was retrieved or dropped by truncation.
+   */
+  chunkIds: string[];
 };
 
 /** Provenance pointer for a `rag.document` row, used to cite the exact source PDF/markdown (B0-257). */
@@ -133,11 +140,13 @@ export async function assembleDocumentBodies(
         totalChars: 0,
         truncated: false,
         estimatedTokens: null,
+        chunkIds: [],
       });
       continue;
     }
 
     const segments: string[] = [];
+    const chunkIds: string[] = [];
     let assembled = '';
     let truncated = false;
     let tokenSum = 0;
@@ -162,6 +171,7 @@ export async function assembleDocumentBodies(
       if (candidate.length <= maxChars) {
         assembled = candidate;
         segments.push(segment);
+        chunkIds.push(chunk.id);
         continue;
       }
 
@@ -171,6 +181,7 @@ export async function assembleDocumentBodies(
         if (sliced.length > 0) {
           assembled = `${assembled}${separator}${sliced}…`;
           segments.push(`${sliced}…`);
+          chunkIds.push(chunk.id);
         }
       }
       truncated = true;
@@ -184,6 +195,7 @@ export async function assembleDocumentBodies(
       totalChars: assembled.length,
       truncated,
       estimatedTokens: hasAnyTokenCount ? tokenSum : null,
+      chunkIds,
     });
   }
 
