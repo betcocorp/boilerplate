@@ -214,7 +214,7 @@ export function RecommendationRowPanel({
     startTransition(async () => {
       try {
         await verifyRecommendation(recommendation.id, { chosenCandidateId });
-        toast.success('Recommendation verified');
+        toast.success('Recommendation verified and promoted to the fast-path mapping');
         router.refresh();
       } catch (err) {
         toast.error(getErrorMessage(err, 'Failed to verify recommendation'));
@@ -304,7 +304,8 @@ export function RecommendationRowPanel({
             <div>
               <p className="text-sm font-medium text-foreground">Candidates</p>
               <p className="mb-2 text-xs text-muted-foreground">
-                Select the correct Betco match, then Verify to approve it (or Reject with a reason).
+                Select the correct Betco match, then Verify to promote it into the fast-path
+                cross-reference override table.
               </p>
               {recommendation.candidates.length === 0 ? (
                 <p className="text-sm text-muted-foreground">No candidates were retrieved.</p>

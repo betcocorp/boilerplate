@@ -4,6 +4,7 @@ import { RecommendationsQueue } from '~/components/admin/RecommendationsQueue';
 import { recommendationStatusSchema } from '~/lib/recommendations/recommendation-schemas';
 import {
   countRecommendationsByStatus,
+  getRecommendationMetrics,
   listRecommendationsWithCandidates,
 } from '~/lib/recommendations/repository';
 import { readSearchParam } from '~/lib/utils/params';
@@ -11,7 +12,7 @@ import { readSearchParam } from '~/lib/utils/params';
 export const metadata = {
   title: 'Cross-reference recommendations | Betco BEX Admin',
   description:
-    'Review, verify, reject, or correct web-grounded cross-reference recommendations.',
+    'Review, verify, and correct web-grounded cross-reference recommendations before they are promoted to the fast-path mapping.',
 };
 
 const PAGE_SIZE = 20;
@@ -38,11 +39,13 @@ export default async function CrossReferenceRecommendationsPage({ searchParams }
   let loadError: string | null = null;
   let listResult: Awaited<ReturnType<typeof listRecommendationsWithCandidates>> | null = null;
   let statusCounts: Awaited<ReturnType<typeof countRecommendationsByStatus>> | null = null;
+  let metrics: Awaited<ReturnType<typeof getRecommendationMetrics>> | null = null;
 
   try {
-    [listResult, statusCounts] = await Promise.all([
+    [listResult, statusCounts, metrics] = await Promise.all([
       listRecommendationsWithCandidates({ status, minConfidence, page, pageSize: PAGE_SIZE }),
       countRecommendationsByStatus(),
+      getRecommendationMetrics(),
     ]);
   } catch (error) {
     loadError =
@@ -64,7 +67,12 @@ export default async function CrossReferenceRecommendationsPage({ searchParams }
             <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
               Human-in-the-loop review of{' '}
               <code className="rounded bg-muted px-1.5 py-0.5 text-xs">recommend_cross_reference</code>{' '}
-              output — verify, reject with a reason, or correct the chosen Betco candidate.
+              output. Verifying a recommendation promotes its chosen candidate into{' '}
+              <code className="rounded bg-muted px-1.5 py-0.5 text-xs">cross_reference_override</code>
+              , the fast-path table{' '}
+              <code className="rounded bg-muted px-1.5 py-0.5 text-xs">lookup_cross_reference</code>{' '}
+              consults first — so the same competitor product resolves instantly next time, with no
+              repeat web search.
             </p>
           </div>
         </div>
@@ -76,6 +84,7 @@ export default async function CrossReferenceRecommendationsPage({ searchParams }
           currentStatus={status}
           items={listResult?.items ?? []}
           loadError={loadError}
+          metrics={metrics}
           page={listResult?.page ?? page}
           pageSize={listResult?.pageSize ?? PAGE_SIZE}
           statusCounts={statusCounts}

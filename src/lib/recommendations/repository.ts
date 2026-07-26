@@ -86,6 +86,8 @@ function ragCountTable(table: string) {
   return sb.schema('rag').from(table).select('id', { count: 'exact', head: true });
 }
 
+const round3 = (n: number): number => Math.round(n * 1000) / 1000;
+
 function asJson(value: unknown): Json {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Json) : {};
 }
@@ -356,4 +358,75 @@ export async function updateRecommendationCandidate(
     throw new Error(`updateRecommendationCandidate failed: ${res.error?.message ?? 'no row'}`);
   }
   return fromCandidateRow(res.data);
+}
+
+export type RecommendationMetrics = {
+  total: number;
+  byStatus: Record<RecommendationStatus, number>;
+  answeredCount: number;
+  answerRate: number;
+  declinedCount: number;
+  declineRate: number;
+  avgConfidence: number | null;
+  verifiedCount: number;
+  rejectedCount: number;
+  /** verified / (verified + rejected); null when nothing has been reviewed yet. */
+  verificationAccuracy: number | null;
+};
+
+/**
+ * B0-96 — engine performance metrics for the admin review queue. Reads the full status/confidence/
+ * answer_given projection once and aggregates client-side (row volume is admin-scale, not
+ * user-facing traffic, so a single unfiltered read is the simplest correct implementation).
+ */
+export async function getRecommendationMetrics(): Promise<RecommendationMetrics> {
+  const query = ragTable('cross_reference_recommendations').select(
+    'status, overall_confidence, answer_given',
+  ) as unknown as LooseChain;
+  const res = await query;
+  if (res.error) throw new Error(`getRecommendationMetrics failed: ${res.error.message}`);
+  const rows = res.data ?? [];
+
+  const byStatus: Record<RecommendationStatus, number> = {
+    pending: 0,
+    answered: 0,
+    declined: 0,
+    verified: 0,
+    rejected: 0,
+  };
+  let answeredCount = 0;
+  let declinedCount = 0;
+  let confidenceSum = 0;
+  let confidenceCount = 0;
+
+  for (const row of rows) {
+    const status = row.status as RecommendationStatus;
+    if (status in byStatus) byStatus[status] += 1;
+    if (row.answer_given) answeredCount += 1;
+    else declinedCount += 1;
+    const confidence = numOrNull(row.overall_confidence);
+    if (confidence != null) {
+      confidenceSum += confidence;
+      confidenceCount += 1;
+    }
+  }
+
+  const total = rows.length;
+  const verifiedCount = byStatus.verified;
+  const rejectedCount = byStatus.rejected;
+  const verificationDenominator = verifiedCount + rejectedCount;
+
+  return {
+    total,
+    byStatus,
+    answeredCount,
+    answerRate: total > 0 ? round3(answeredCount / total) : 0,
+    declinedCount,
+    declineRate: total > 0 ? round3(declinedCount / total) : 0,
+    avgConfidence: confidenceCount > 0 ? round3(confidenceSum / confidenceCount) : null,
+    verifiedCount,
+    rejectedCount,
+    verificationAccuracy:
+      verificationDenominator > 0 ? round3(verifiedCount / verificationDenominator) : null,
+  };
 }

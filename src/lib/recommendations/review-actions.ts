@@ -6,16 +6,21 @@ import { revalidatePath } from 'next/cache';
 import { authOptions } from '~/lib/auth';
 import { writeAuditLog } from '~/lib/audit/audit-log';
 import { newCorrelationId } from '~/lib/observability/correlation-id';
+import { promoteRecommendationToOverride } from '~/lib/recommendations/promote-recommendation';
 import {
+  getRecommendation,
   updateRecommendationCandidate,
   updateRecommendationStatus,
 } from '~/lib/recommendations/repository';
 import type { UpdateRecommendationCandidateInput } from '~/lib/recommendations/recommendation-schemas';
 
 /**
- * B0-95 — reviewer actions for the cross-reference recommendation queue
+ * B0-95/B0-96 — reviewer actions for the cross-reference recommendation queue
  * (`/admin/tools/cross-reference/recommendations`). Every action writes an audit-log entry
- * (`public.audit_logs` via `writeAuditLog`, the existing pattern — no new audit table).
+ * (`public.audit_logs` via `writeAuditLog`, the existing pattern — no new audit table). Approving
+ * (`verifyRecommendation`) additionally promotes the chosen candidate into
+ * `public.cross_reference_override`, the fast-path surface `lookupCrossReference()` already
+ * consults first, so the very next identical lookup skips web search entirely.
  */
 
 const REVIEW_QUEUE_PATH = '/admin/tools/cross-reference/recommendations';
@@ -42,6 +47,27 @@ export async function verifyRecommendation(
     { recommendation_id: recommendationId, verifier, note: input.note ?? null },
     { traceId },
   );
+
+  const withCandidates = await getRecommendation(recommendationId);
+  if (withCandidates) {
+    const promotion = await promoteRecommendationToOverride(
+      withCandidates,
+      input.chosenCandidateId ?? null,
+      verifier,
+    );
+    await writeAuditLog(
+      'cross_reference_recommendation_promoted',
+      {
+        recommendation_id: recommendationId,
+        verifier,
+        promoted: promotion.promoted,
+        override_id: promotion.promoted ? promotion.overrideId : null,
+        mode: promotion.promoted ? promotion.mode : null,
+        reason: promotion.promoted ? null : promotion.reason,
+      },
+      { traceId },
+    );
+  }
 
   revalidatePath(REVIEW_QUEUE_PATH);
 }

@@ -13,6 +13,7 @@ import { Input } from '~/components/ui/input';
 import { Label } from '~/components/ui/label';
 import { NativeSelect } from '~/components/ui/native-select';
 import { RecommendationRowPanel } from '~/components/admin/RecommendationRowPanel';
+import type { RecommendationMetrics } from '~/lib/recommendations/repository';
 import type {
   RecommendationStatus,
   RecommendationWithCandidates,
@@ -20,7 +21,9 @@ import type {
 
 /**
  * B0-95 — human review queue for `recommend_cross_reference` output, mirrors the failure-queue
- * triage page's layout (filters → status counts → list → pagination).
+ * triage page's layout (filters → status counts → list → pagination). B0-96 adds the "Engine
+ * performance" metrics strip and wires `RecommendationRowPanel`'s Verify action to promote into
+ * the fast-path override.
  */
 
 const ROUTE = '/admin/tools/cross-reference/recommendations';
@@ -61,6 +64,20 @@ function buildPagination(currentPage: number, totalPages: number) {
   return Array.from({ length: Math.max(0, end - start + 1) }, (_, i) => start + i);
 }
 
+function formatPercent(value: number | null) {
+  return value == null ? '—' : `${(value * 100).toFixed(1)}%`;
+}
+
+function MetricTile({ label, value, hint }: { label: string; value: string; hint?: string }) {
+  return (
+    <div className="rounded-2xl border border-border/60 bg-muted/30 p-3">
+      <dt className="text-xs font-medium text-muted-foreground">{label}</dt>
+      <dd className="mt-1 text-lg font-semibold text-foreground">{value}</dd>
+      {hint ? <p className="mt-0.5 text-[11px] text-muted-foreground">{hint}</p> : null}
+    </div>
+  );
+}
+
 export function RecommendationsQueue({
   loadError,
   items,
@@ -68,6 +85,7 @@ export function RecommendationsQueue({
   pageSize,
   total,
   statusCounts,
+  metrics,
   currentStatus,
   currentMinConfidence,
 }: {
@@ -77,6 +95,7 @@ export function RecommendationsQueue({
   pageSize: number;
   total: number;
   statusCounts: Record<RecommendationStatus, number> | null;
+  metrics: RecommendationMetrics | null;
   currentStatus?: RecommendationStatus;
   currentMinConfidence?: number;
 }) {
@@ -88,6 +107,32 @@ export function RecommendationsQueue({
 
   return (
     <div className="space-y-6">
+      {metrics ? (
+        <Card className="rounded-3xl border border-border/60 shadow-none">
+          <CardHeader>
+            <CardTitle>Engine performance</CardTitle>
+            <CardDescription>Aggregates across every recommendation ever generated.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <dl className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
+              <MetricTile label="Total" value={metrics.total.toLocaleString()} />
+              <MetricTile label="Answer rate" value={formatPercent(metrics.answerRate)} />
+              <MetricTile label="Decline rate" value={formatPercent(metrics.declineRate)} />
+              <MetricTile label="Avg confidence" value={formatPercent(metrics.avgConfidence)} />
+              <MetricTile
+                label="Verification accuracy"
+                value={formatPercent(metrics.verificationAccuracy)}
+                hint={`${metrics.verifiedCount} verified · ${metrics.rejectedCount} rejected`}
+              />
+              <MetricTile
+                label="Pending review"
+                value={(statusCounts?.pending ?? 0).toLocaleString()}
+              />
+            </dl>
+          </CardContent>
+        </Card>
+      ) : null}
+
       <Card className="rounded-3xl border border-border/60 shadow-none">
         <CardContent className="pt-6">
           <form action={ROUTE} method="get" className="flex flex-wrap items-end gap-4">
