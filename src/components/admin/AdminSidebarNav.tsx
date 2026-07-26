@@ -80,6 +80,10 @@ const sidebarSections: NavSectionModel[] = [
             label: 'Product cross-reference',
             href: '/admin/tools/product-cross-reference',
           },
+          {
+            label: 'Cross-reference recommendations',
+            href: '/admin/tools/cross-reference/recommendations',
+          },
           { label: 'Web Search', href: '/admin/tools/web-search' },
           { label: 'RAG semantic search', href: '/admin/products/rag' },
         ],
