@@ -368,12 +368,21 @@ async function runProductKnowledgeQuery(input: {
     input.requiredDocumentKinds ?? resolveRequiredDocumentKinds(input.query, sectionType);
 
   if (explicitKey) {
+    // B0-272 follow-up: `filter_section_type` is a hard SQL-level filter against
+    // `rag.document_chunk.section_type`, which only ever carries fine-grained GHS
+    // values (e.g. `organism_contact_time`) on SDS chunks -- label/knowledge chunks
+    // are always the coarse `label`/`knowledge` bucket. Threading the inferred
+    // section type into a `scope: 'all'` search silently zeroed out every label/
+    // knowledge chunk whenever the query matched one of the SDS-oriented patterns
+    // in `inferSectionTypeFromQuery` (e.g. "contact time", "dilution", "how to
+    // store" -- all common label phrasing too), which is exactly what broke the
+    // B0-272 prose fallback in practice. Do not filter scope:'all' searches by
+    // section type; let curation/reranking do the narrowing instead.
     const result = await searchProductChunks({
       query: input.query,
       limit: SIMILARITY_CANDIDATE_FETCH_LIMIT,
       productLineKey: explicitKey,
       productKey: explicitProductKey ?? undefined,
-      sectionType: sectionType ?? undefined,
       scope: 'all',
       useHybrid: true,
       useReranker: PRODUCT_SUPPORT_RERANK_ENABLED,
@@ -394,7 +403,6 @@ async function runProductKnowledgeQuery(input: {
         query: input.query,
         limit: SIMILARITY_CANDIDATE_FETCH_LIMIT,
         productLineKey: explicitKey,
-        sectionType: sectionType ?? undefined,
         scope: 'all',
         useHybrid: true,
         useReranker: PRODUCT_SUPPORT_RERANK_ENABLED,
@@ -471,7 +479,6 @@ async function runProductKnowledgeQuery(input: {
   const broadResult = await searchProductChunks({
     query: input.query,
     limit: SIMILARITY_CANDIDATE_FETCH_LIMIT,
-    sectionType: sectionType ?? undefined,
     scope: 'all',
     useHybrid: true,
     useReranker: PRODUCT_SUPPORT_RERANK_ENABLED,
@@ -507,7 +514,6 @@ async function runProductKnowledgeQuery(input: {
     query: input.query,
     limit: SIMILARITY_CANDIDATE_FETCH_LIMIT,
     productLineKey: resolution.lockedProductLineKey,
-    sectionType: sectionType ?? undefined,
     scope: 'all',
     useHybrid: true,
     useReranker: PRODUCT_SUPPORT_RERANK_ENABLED,
