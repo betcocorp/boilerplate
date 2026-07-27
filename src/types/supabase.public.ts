@@ -719,6 +719,8 @@ export type Database = {
           elapsed_ms: number | null
           failed_items: number
           id: string
+          insights: Json | null
+          insights_generated_at: string | null
           notes: string | null
           passed_items: number
           retrieval_strategy: string | null
@@ -738,6 +740,8 @@ export type Database = {
           elapsed_ms?: number | null
           failed_items?: number
           id?: string
+          insights?: Json | null
+          insights_generated_at?: string | null
           notes?: string | null
           passed_items?: number
           retrieval_strategy?: string | null
@@ -757,6 +761,8 @@ export type Database = {
           elapsed_ms?: number | null
           failed_items?: number
           id?: string
+          insights?: Json | null
+          insights_generated_at?: string | null
           notes?: string | null
           passed_items?: number
           retrieval_strategy?: string | null

@@ -7,7 +7,10 @@ import { ResultItemMessageCell } from '~/components/admin/tests/ResultItemMessag
 import { RetrievedChunksPreview } from '~/components/admin/tests/RetrievedChunksPreview';
 import { RunAtAGlanceCharts } from '~/components/admin/tests/RunAtAGlanceCharts';
 import { RunExecutionProgress } from '~/components/admin/tests/RunExecutionProgress';
-import { RunInsightsPanel } from '~/components/admin/tests/RunInsightsPanel';
+import {
+  RunInsightsPanel,
+  type Insight,
+} from '~/components/admin/tests/RunInsightsPanel';
 import { RunItemResultsCsvDownload } from '~/components/admin/tests/RunItemResultsCsvDownload';
 import {
   TestRunNotesDisplay,
@@ -296,7 +299,15 @@ export default async function AdminTestRunDetailsPage({
           totalItems={result.total_items}
         />
 
-        <RunInsightsPanel runId={result.id} />
+        <RunInsightsPanel
+          initialGeneratedAt={result.insights_generated_at}
+          initialInsights={
+            Array.isArray(result.insights)
+              ? (result.insights as unknown as Insight[])
+              : null
+          }
+          runId={result.id}
+        />
 
         <section
           className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm"

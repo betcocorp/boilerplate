@@ -17,7 +17,22 @@
       "Bash(npm list *)",
       "Bash(pnpm lint *)",
       "Bash(awk '{print $NF}')",
-      "Bash(grep -v \"DO \\\\$\\\\$\")"
+      "Bash(grep -v \"DO \\\\$\\\\$\")",
+      "Bash(git restore *)",
+      "Bash(git reset *)",
+      "Bash(xargs ls -la)",
+      "Bash(pnpm vercel *)",
+      "Read(//Users/thomasbird/.claude/skills/**)",
+      "Read(//Users/thomasbird/.claude/**)",
+      "Bash(tee /tmp/tsc_out.txt)",
+      "Bash(pnpm -v)",
+      "Bash(node_modules/.bin/tsc --version)",
+      "Bash(pnpm install *)",
+      "Bash(node *)",
+      "Bash(git merge *)",
+      "Bash(git worktree *)",
+      "Bash(git branch *)",
+      "Bash(env)"
     ]
   }
 }

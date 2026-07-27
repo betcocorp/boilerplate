@@ -332,6 +332,17 @@ export async function updateTestResult(
   return assertNoError(result) as TestResultRecord;
 }
 
+/** Persists the "Analyze this run" AI insights so they survive page reloads. */
+export async function saveTestResultInsights(
+  resultId: string,
+  insights: NewTestResultRecord['insights'],
+) {
+  return updateTestResult(resultId, {
+    insights,
+    insights_generated_at: new Date().toISOString(),
+  });
+}
+
 export async function claimQueuedTestResultForExecution(resultId: string) {
   const supabase = getSupabaseServiceRoleClient();
   const result = await supabase

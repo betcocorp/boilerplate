@@ -9,6 +9,7 @@ import {
   getTestItemsByTestId,
   getTestResultById,
   listAllResultItemsByResultId,
+  saveTestResultInsights,
 } from '~/lib/tests/repository';
 import { extractItemSimilarityScore } from '~/lib/tests/response-payload';
 
@@ -184,5 +185,34 @@ export async function POST(
     return NextResponse.json({ error: 'Unexpected analysis response shape.' }, { status: 500 });
   }
 
-  return NextResponse.json({ ok: true, insights: data.insights });
+  const saved = await saveTestResultInsights(run.id, data.insights);
+
+  return NextResponse.json({
+    ok: true,
+    insights: data.insights,
+    generatedAt: saved.insights_generated_at,
+  });
+}
+
+export async function GET(
+  _request: Request,
+  context: { params: Promise<{ runId: string }> },
+) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  const { runId } = await context.params;
+
+  const run = await getTestResultById(runId).catch(() => null);
+  if (!run) {
+    return NextResponse.json({ error: 'Run not found' }, { status: 404 });
+  }
+
+  return NextResponse.json({
+    ok: true,
+    insights: Array.isArray(run.insights) ? run.insights : null,
+    generatedAt: run.insights_generated_at,
+  });
 }
