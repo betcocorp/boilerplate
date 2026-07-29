@@ -16,6 +16,7 @@ function readJsonNumber(value: JsonObject | null, key: string): number | null {
 
 export type EfficacySyncStatus = {
   totalEfficacyDocs: number;
+  pendingChunkDocs: number;
   totalChunks: number;
   embeddedChunks: number;
 };
@@ -27,6 +28,7 @@ export async function getEfficacySyncStatus(): Promise<EfficacySyncStatus> {
     { count: totalEfficacyDocs },
     { count: totalChunks },
     { count: embeddedChunks },
+    { data: chunkedDocumentRows },
   ] = await Promise.all([
     supabase
       .schema('rag')
@@ -36,16 +38,31 @@ export async function getEfficacySyncStatus(): Promise<EfficacySyncStatus> {
     supabase
       .schema('rag')
       .from('document_chunk')
-      .select('id', { count: 'exact', head: true }) as unknown as Promise<{ count: number | null }>,
+      .select('id', { count: 'exact', head: true })
+      .like('chunk_key', 'efficacy:%') as unknown as Promise<{ count: number | null }>,
     supabase
       .schema('rag')
       .from('document_chunk')
       .select('id', { count: 'exact', head: true })
+      .like('chunk_key', 'efficacy:%')
       .not('embedding_large', 'is', null) as unknown as Promise<{ count: number | null }>,
+    // sync_efficacy_chunks only chunks documents with zero existing chunks, so the
+    // "pending" count for the chunking step is total docs minus distinct docs already
+    // chunked — not the raw document count (which is what totalEfficacyDocs reflects).
+    supabase
+      .schema('rag')
+      .from('document_chunk')
+      .select('document_id')
+      .like('chunk_key', 'efficacy:%') as unknown as Promise<{ data: Array<{ document_id: string }> | null }>,
   ]);
+
+  const chunkedDocumentCount = new Set(
+    (chunkedDocumentRows ?? []).map((row) => row.document_id),
+  ).size;
 
   return {
     totalEfficacyDocs: totalEfficacyDocs ?? 0,
+    pendingChunkDocs: Math.max(0, (totalEfficacyDocs ?? 0) - chunkedDocumentCount),
     totalChunks: totalChunks ?? 0,
     embeddedChunks: embeddedChunks ?? 0,
   };
@@ -78,8 +95,8 @@ function buildHistoryEntry(
     id: state.timestamp,
     ok: state.ok,
     title: state.ok
-      ? (state.message ?? 'Efficacy sync completed.')
-      : (state.error ?? 'Efficacy sync failed.'),
+      ? (state.message ?? 'Efficacy chunking completed.')
+      : (state.error ?? 'Efficacy chunking failed.'),
     description: `Completed at ${formatEasternTimestamp(state.timestamp)}.`,
     durationMs: state.durationMs,
   };
@@ -125,8 +142,8 @@ export async function runEfficacySyncAction(
     revalidatePath('/admin/efficacy');
 
     const message = hasMore
-      ? `Batch done — ${docsProcessed} doc${docsProcessed === 1 ? '' : 's'}, ${chunksUpserted} chunk${chunksUpserted === 1 ? '' : 's'}. ${remaining.toLocaleString()} remaining.`
-      : `Sync complete. ${docsProcessed} doc${docsProcessed === 1 ? '' : 's'} in final batch, ${totalChunks.toLocaleString()} total chunks generated this session.`;
+      ? `Batch done — ${docsProcessed} doc${docsProcessed === 1 ? '' : 's'} chunked, ${chunksUpserted} chunk${chunksUpserted === 1 ? '' : 's'}. ${remaining.toLocaleString()} remaining.`
+      : `Chunking complete. ${docsProcessed} doc${docsProcessed === 1 ? '' : 's'} in final batch, ${totalChunks.toLocaleString()} total chunks generated this session.`;
 
     const nextState: EfficacySyncActionState = {
       ok: true,

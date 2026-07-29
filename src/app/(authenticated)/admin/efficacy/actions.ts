@@ -40,20 +40,12 @@ function getActionMessage(mode: EfficacyIngestionRunMode, succeeded: number, fai
     return `Registered ${succeeded} discovered source record${succeeded === 1 ? '' : 's'}${failed > 0 ? `, ${failed} failed` : ''}.`;
   }
 
-  if (mode === 'embed-next') {
-    return `Embedded ${succeeded} efficacy chunk${succeeded === 1 ? '' : 's'} in the next batch.`;
-  }
-
   if (mode === 'embed-all') {
     return `Embedded ${succeeded} pending efficacy chunk${succeeded === 1 ? '' : 's'} across batched passes.`;
   }
 
   if (mode === 'retry-failed') {
     return `Retried failed efficacy files: ${succeeded} succeeded${failed > 0 ? `, ${failed} failed` : ''}.`;
-  }
-
-  if (mode === 'ingest-next') {
-    return `Ingested the next efficacy batch: ${succeeded} succeeded${failed > 0 ? `, ${failed} failed` : ''}.`;
   }
 
   return `Ingested all pending efficacy files: ${succeeded} succeeded${failed > 0 ? `, ${failed} failed` : ''}.`;

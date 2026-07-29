@@ -1,10 +1,9 @@
 import Link from 'next/link';
 import { connection } from 'next/server';
 
-import { EfficacySyncControls } from '~/components/admin/EfficacySyncControls';
 import { getEfficacySyncStatus } from '~/lib/rag/efficacy-sync-actions';
 
-import { EfficacyControls } from './EfficacyControls';
+import { EfficacyIngestionPanel } from './EfficacyIngestionPanel';
 import { getEfficacyDashboardStatus } from './pipeline';
 
 export const metadata = {
@@ -58,9 +57,7 @@ export default async function AdminEfficacyPage() {
           </div>
         </section>
 
-        <EfficacySyncControls initialPending={syncStatus.totalEfficacyDocs} languageCode="EN" />
-
-        <EfficacyControls initialStatus={status} />
+        <EfficacyIngestionPanel initialStatus={status} initialSyncStatus={syncStatus} />
       </main>
     </div>
   );

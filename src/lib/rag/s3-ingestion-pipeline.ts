@@ -793,7 +793,7 @@ export function createS3IngestionPipeline<TSeed extends S3IngestionSeedDocument>
         }
       }
       status = await fallbackStatusFromExistingRecords(
-        `S3 discovery was skipped for embedding-only ${sourceLabel} action.`,
+        `Embedding only touches chunks already in the database, so this table wasn't refreshed from S3 — run Register or Ingest to pick up any new ${sourceLabel} files.`,
       );
     } else {
       const seedDocuments = await config.discoverSeedDocuments();
