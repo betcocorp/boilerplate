@@ -81,4 +81,34 @@ describe('gradeChatTestResponse', () => {
 
     expect(outcome.passed).toBe(true);
   });
+
+  describe('B0-300 follow-up — canonical "no confident equivalent" decline copy', () => {
+    // Both are the exact response texts from the B0-97 "No-Equivalent Probes" eval run that
+    // prompted this fix: XREF_DECLINE_COPY (product/cross-reference agent) matched none of the
+    // existing keyword/regex patterns and was failing a negative row despite being a correct decline.
+    const xrefDeclineCopyResponse =
+      "I couldn't confidently identify a Betco equivalent for this product. A Betco sales representative can help identify the right match — please reach out to your rep.";
+    const recommendationsDeclineCopyResponse =
+      "I'm sorry, but I don't have enough information to provide that answer. Please contact a Betco sales representative directly.";
+
+    it('passes a negative row when the product agent returns XREF_DECLINE_COPY verbatim', () => {
+      const outcome = gradeChatTestResponse({
+        item: item({ expected_should_answer: false, expected_result_type: 'decline' }),
+        hasError: false,
+        responseText: xrefDeclineCopyResponse,
+      });
+
+      expect(outcome.passed).toBe(true);
+    });
+
+    it('passes a negative row when the recommendations agent returns its canonical decline copy verbatim', () => {
+      const outcome = gradeChatTestResponse({
+        item: item({ expected_should_answer: false, expected_result_type: 'decline' }),
+        hasError: false,
+        responseText: recommendationsDeclineCopyResponse,
+      });
+
+      expect(outcome.passed).toBe(true);
+    });
+  });
 });

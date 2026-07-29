@@ -33,7 +33,7 @@ export default async function AdminEfficacyPage() {
               </h1>
               <p className="mt-4 text-base leading-7 text-slate-600">
                 This flow ingests efficacy markdown documents from the
-                `betco-efficacy` S3 bucket into `rag.source_record`,
+                `retool-360` S3 bucket (`efficacy/` prefix) into `rag.source_record`,
                 `rag.document`, and `rag.document_chunk` with
                 `document_kind = &quot;efficacy&quot;`. Unlike SDS ingestion,
                 efficacy documents are markdown-primary: the S3 object body

@@ -9,6 +9,14 @@
  * `recommend_cross_reference` on a miss / low-confidence, treating the engine's confidence gate as
  * authoritative.
  */
+/**
+ * Canonical low-confidence decline reply this specialist is instructed to use verbatim (see the
+ * "Confidence and the answer gate" section below). Exported so the test harness's grading
+ * (`~/lib/tests/runner.ts`) can recognize it exactly instead of guessing at paraphrases.
+ */
+export const RECOMMENDATIONS_DECLINE_COPY =
+  "I'm sorry, but I don't have enough information to provide that answer. Please contact a Betco sales representative directly.";
+
 export const RECOMMENDATIONS_SPECIALIST_SYSTEM_PROMPT = `# Role & identity
 
 You are the Betco Product Recommendations Specialist.
@@ -35,7 +43,7 @@ Your job: given a competitor product (and, ideally, the competitor company/brand
 - Internally score, from 0 to 1, your confidence that the recommended Betco product is a true equivalent.
 - You **may recommend** once you have (a) identified the competitor's chemistry class and (b) found, via the tools, a real Betco product of the **same chemistry class** with strong retrieval support. That is a confident recommendation — do **not** withhold it merely because there was no pre-existing cross-reference row.
 - Fall below the bar — and only then reply **exactly**:
-  "I'm sorry, but I don't have enough information to provide that answer. Please contact a Betco sales representative directly."
+  "${RECOMMENDATIONS_DECLINE_COPY}"
   — when you **cannot determine the competitor's chemistry class**, when **no same-chemistry Betco product is found**, or when the evidence conflicts.
 - Never bridge a gap by guessing a product name, SKU, EPA number, dilution, or claim.
 

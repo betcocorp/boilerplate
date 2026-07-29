@@ -21,6 +21,8 @@ export type RunResultCsvRow = {
   /** Table “Elapsed” — e.g. `24.94 s` (same as `formatDurationSeconds`). */
   elapsed: string;
   model: string;
+  /** Table “Agent” — routed SME agent (product/bathroom/dilution/floor), or “n/a”. */
+  agent: string;
   /** Table “Rounds | Cache | …” workflow timing string. */
   rounds_cache_search: string;
   message: string;
@@ -66,6 +68,7 @@ export function RunItemResultsCsvDownload({
       'sim_conf',
       'elapsed',
       'model',
+      'agent',
       'rounds_cache_search',
       'message',
       'item_detail_path',
@@ -84,6 +87,7 @@ export function RunItemResultsCsvDownload({
           row.sim_conf,
           row.elapsed,
           row.model,
+          row.agent,
           row.rounds_cache_search,
           row.message,
           row.item_detail_path,

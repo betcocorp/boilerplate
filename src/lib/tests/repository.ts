@@ -5,6 +5,7 @@ import {
   extractItemSimilarityScore,
   extractSearchRunMaxSimilarity,
 } from './response-payload';
+import { COMPLETED_RUN_STATUSES } from './types';
 import type {
   LatestFailedTestResultItemView,
   NewTestItemRecord,
@@ -414,7 +415,7 @@ export async function getTestResultById(testResultId: string) {
 const RESULT_ITEMS_PAGE_SIZE = 500;
 const TEST_CASE_METRICS_PAGE_SIZE = 1000;
 const TEST_RUNS_PAGE_SIZE = 500;
-const COMPLETED_TEST_RUN_STATUSES = ['completed', 'completed_with_failures'] as const;
+const COMPLETED_TEST_RUN_STATUSES = COMPLETED_RUN_STATUSES;
 
 export async function listResultItemsByResultId(testResultId: string, limit = 200) {
   const supabase = getSupabaseServiceRoleClient();

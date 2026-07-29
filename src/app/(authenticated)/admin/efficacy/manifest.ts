@@ -5,7 +5,9 @@ export type EfficacySeedDocument = {
   locale: string;
 };
 
-export const EFFICACY_S3_BUCKET_DEFAULT = 'betco-efficacy';
+// Efficacy source files live in the same shared bucket as Knowledge/Labels
+// (retool-360), under the 'efficacy/' prefix below — not a separate bucket.
+export const EFFICACY_S3_BUCKET_DEFAULT = 'retool-360';
 export const EFFICACY_S3_PREFIX_DEFAULT = 'efficacy/';
 
 /**

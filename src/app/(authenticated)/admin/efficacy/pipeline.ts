@@ -73,12 +73,17 @@ function getS3Prefix() {
 }
 
 function getAwsCredentials() {
+  // Efficacy source files live in the same retool-360 bucket as Knowledge/Labels
+  // (see admin/knowledge/pipeline.ts) — prefer the documented AWS_360_* read
+  // keys, falling back to the write keys, same as those other pipelines.
   const accessKeyId =
     process.env.AWS_EFFICACY_READ_ACCESS_KEY_ID?.trim() ||
-    process.env.AWS_SDS_READ_ACCESS_KEY_ID?.trim();
+    process.env.AWS_360_READ_ACCESS_KEY_ID?.trim() ||
+    process.env.AWS_360_WRITE_ACCESS_KEY_ID?.trim();
   const secretAccessKey =
     process.env.AWS_EFFICACY_READ_SECRET_ACCESS_KEY?.trim() ||
-    process.env.AWS_SDS_READ_SECRET_ACCESS_KEY?.trim();
+    process.env.AWS_360_READ_SECRET_ACCESS_KEY?.trim() ||
+    process.env.AWS_360_WRITE_SECRET_ACCESS_KEY?.trim();
 
   if (!accessKeyId || !secretAccessKey) {
     return undefined;
@@ -90,8 +95,8 @@ function getAwsCredentials() {
 function getS3Client() {
   const region =
     process.env.AWS_EFFICACY_REGION?.trim() ||
-    process.env.AWS_SDS_REGION?.trim() ||
-    'us-east-2';
+    process.env.AWS_360_REGION?.trim() ||
+    'us-east-1';
   const credentials = getAwsCredentials();
   return new S3Client({
     region,

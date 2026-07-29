@@ -122,7 +122,7 @@ function dominantCacheSource(cacheSourceCounts: Map<string, number>) {
   return sorted[0]?.[0] ?? null;
 }
 
-function shouldForceCrossReferenceLookup(userMessage: string) {
+export function shouldForceCrossReferenceLookup(userMessage: string) {
   const text = userMessage.toLowerCase();
   const hasCrossRefIntent =
     text.includes('comparable') ||
@@ -138,7 +138,7 @@ function isEarlyDeclineGateEnabled() {
   return process.env.BEX_EARLY_DECLINE_GATE_ENABLED !== 'false';
 }
 
-type EarlyDeclineDecision = {
+export type EarlyDeclineDecision = {
   reason:
     | 'chemical_mixing_or_safety'
     | 'legal_or_compliance'
@@ -147,7 +147,7 @@ type EarlyDeclineDecision = {
   text: string;
 };
 
-function classifyEarlyDecline(userMessage: string): EarlyDeclineDecision | null {
+export function classifyEarlyDecline(userMessage: string): EarlyDeclineDecision | null {
   if (!isEarlyDeclineGateEnabled()) {
     return null;
   }
@@ -184,7 +184,12 @@ function classifyEarlyDecline(userMessage: string): EarlyDeclineDecision | null 
   if (
     /(what should i use|what do you recommend|what'?s the best|which .* should we use)/.test(
       text,
-    )
+    ) &&
+    // B0-300: a message that already names a competitor product and asks for a
+    // Betco cross-reference (e.g. "...alternative to X. What do you recommend?")
+    // isn't a broad, context-free request — let it reach the cross-reference /
+    // recommendations flow that knows how to answer (or correctly decline) it.
+    !shouldForceCrossReferenceLookup(userMessage)
   ) {
     return {
       reason: 'broad_recommendation_without_context',

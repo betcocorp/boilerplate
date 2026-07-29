@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { RECOMMENDATIONS_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/recommendations-specialist/recommendations-specialist-system-prompt';
+import {
+  RECOMMENDATIONS_DECLINE_COPY,
+  RECOMMENDATIONS_SPECIALIST_SYSTEM_PROMPT,
+} from '~/lib/agents/recommendations-specialist/recommendations-specialist-system-prompt';
 import { PRODUCT_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/product-specialist/product-specialist-system-prompt';
 import { buildProductSupportInstructions } from '~/lib/workflows/product-support/product-support-prompts';
 
@@ -46,9 +49,7 @@ describe('buildProductSupportInstructions — recommendations routing (B0-98)', 
     // The prompt embedded verbatim in the built instructions must carry the exact decline phrase
     // the recommendations specialist is required to use below the 0.80 confidence gate — this is
     // what `isDeclineAnswer` (run-product-support-workflow.ts) pattern-matches against.
-    expect(instructions).toContain(
-      "I'm sorry, but I don't have enough information to provide that answer. Please contact a Betco sales representative directly.",
-    );
+    expect(instructions).toContain(RECOMMENDATIONS_DECLINE_COPY);
   });
 
   it('falls back to the product specialist prompt for an unrecognized/ambiguous decision', () => {

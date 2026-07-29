@@ -1,10 +1,6 @@
 import {
   ChevronDown,
-  ChevronLeft,
   ChevronRight,
-  ChevronsLeft,
-  ChevronsRight,
-  Ellipsis,
   Plus,
   TrendingDown,
   TrendingUp,
@@ -27,14 +23,6 @@ import {
   CardTitle,
 } from '~/components/ui/card';
 import { Separator } from '~/components/ui/separator';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '~/components/ui/table';
 import { Tabs, TabsList, TabsTrigger } from '~/components/ui/tabs';
 import {
   getGlobalSimilarityFailRateTrend,
@@ -289,92 +277,6 @@ export default async function AdminDashboardPage() {
                 </div>
               </CardContent>
             </Card>
-          </section>
-
-          <section className="rounded-3xl border border-border/60 bg-card shadow-none">
-            <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-5">
-              <div className="flex items-center gap-2">
-                <Button className="rounded-2xl" size="sm" variant="outline">
-                  Customize Columns
-                </Button>
-                <Button className="rounded-2xl" size="sm" variant="outline">
-                  Columns
-                  <ChevronDown className="size-4" />
-                </Button>
-              </div>
-              <Button className="rounded-2xl" size="sm">
-                <Plus className="size-4" />
-                Add Section
-              </Button>
-            </div>
-
-            <Table>
-              <TableHeader>
-                <TableRow className="border-border/60 hover:bg-transparent">
-                  <TableHead>Header</TableHead>
-                  <TableHead>Section Type</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Reviewer</TableHead>
-                  <TableHead className="w-12" />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {rows.map(([header, type, status, reviewer]) => (
-                  <TableRow className="border-border/60" key={header}>
-                    <TableCell className="font-medium">{header}</TableCell>
-                    <TableCell>{type}</TableCell>
-                    <TableCell>
-                      <Badge
-                        className={
-                          status === 'Done'
-                            ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-50'
-                            : 'bg-amber-50 text-amber-700 hover:bg-amber-50'
-                        }
-                        variant="secondary"
-                      >
-                        {status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>{reviewer}</TableCell>
-                    <TableCell>
-                      <Button size="icon-sm" variant="ghost">
-                        <Ellipsis className="size-4" />
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-
-            <div className="flex flex-wrap items-center justify-between gap-4 px-5 py-5 text-sm text-muted-foreground">
-              <p>0 of 68 row(s) selected.</p>
-              <div className="flex items-center gap-6">
-                <div className="flex items-center gap-2">
-                  <span>Rows per page</span>
-                  <Button className="rounded-2xl" size="sm" variant="outline">
-                    10
-                    <ChevronDown className="size-4" />
-                  </Button>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span>Page 1 of 7</span>
-                  <div className="flex items-center gap-1">
-                    <Button size="icon-sm" variant="outline">
-                      <ChevronsLeft className="size-4" />
-                    </Button>
-                    <Button size="icon-sm" variant="outline">
-                      <ChevronLeft className="size-4" />
-                    </Button>
-                    <Button size="icon-sm" variant="outline">
-                      <ChevronRight className="size-4" />
-                    </Button>
-                    <Button size="icon-sm" variant="outline">
-                      <ChevronsRight className="size-4" />
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            </div>
           </section>
         </div>
       </div>

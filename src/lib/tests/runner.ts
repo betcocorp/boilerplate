@@ -1,6 +1,20 @@
 import { runBexChatTurn } from '~/lib/bex/run-chat-turn';
+import { RECOMMENDATIONS_DECLINE_COPY } from '~/lib/agents/recommendations-specialist/recommendations-specialist-system-prompt';
+import { XREF_DECLINE_COPY } from '~/lib/recommendations/confidence-scoring';
 
 import type { NewTestResultItemRecord, TestItemRecord } from './types';
+
+/**
+ * The app's own canonical "no confident equivalent" decline strings (B0-300 follow-up). Checked
+ * verbatim before falling back to the keyword/regex heuristics below, since those are guesses at
+ * paraphrasing this exact, deterministic copy and can miss it (e.g. XREF_DECLINE_COPY matched none
+ * of the existing patterns).
+ */
+const CANONICAL_DECLINE_COPY = [RECOMMENDATIONS_DECLINE_COPY, XREF_DECLINE_COPY];
+
+function matchesCanonicalDeclineCopy(responseText: string): boolean {
+  return CANONICAL_DECLINE_COPY.some((copy) => responseText.includes(copy));
+}
 
 type RunSingleItemResult = {
   item: NewTestResultItemRecord;
@@ -128,6 +142,10 @@ function responseIndicatesDeclineStyleAnswer(responseText: string): boolean {
   const t = responseText.trim().toLowerCase();
   if (!t) {
     return false;
+  }
+
+  if (matchesCanonicalDeclineCopy(responseText)) {
+    return true;
   }
 
   const indicators = [

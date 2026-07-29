@@ -8,6 +8,10 @@ import { RetrievedChunksPreview } from '~/components/admin/tests/RetrievedChunks
 import { RunAtAGlanceCharts } from '~/components/admin/tests/RunAtAGlanceCharts';
 import { RunExecutionProgress } from '~/components/admin/tests/RunExecutionProgress';
 import {
+  RunFullExportDownload,
+  type RunExportItem,
+} from '~/components/admin/tests/RunFullExportDownload';
+import {
   RunInsightsPanel,
   type Insight,
 } from '~/components/admin/tests/RunInsightsPanel';
@@ -51,12 +55,15 @@ import {
 } from '~/lib/tests/repository';
 import {
   extractItemSimilarityScore,
+  extractItemValidatorConfidence,
   extractModelTag,
   extractProgress,
   extractRetrievedDocumentChunks,
   extractRoutingDecision,
+  extractTimingBreakdown,
   extractWorkflowRunId,
 } from '~/lib/tests/response-payload';
+import { isCompletedRunStatus } from '~/lib/tests/types';
 import { formatDate, formatDurationSeconds } from '~/lib/utils/time';
 
 import { deleteTestRunAction } from '../../../actions';
@@ -225,6 +232,52 @@ export default async function AdminTestRunDetailsPage({
     };
   });
 
+  const isCompleted = isCompletedRunStatus(result.status);
+  const fullExportData = isCompleted
+    ? {
+        run: {
+          id: result.id,
+          test_id: test.id,
+          test_name: test.name,
+          status: result.status,
+          started_at: result.started_at,
+          created_at: result.created_at,
+          elapsed_ms: result.elapsed_ms,
+          total_items: result.total_items,
+          passed_items: passCount,
+          failed_items: failCount,
+          notes: result.notes,
+        },
+        items: chronologicalItems.map((row): RunExportItem => {
+          const modelTag = modelByWorkflowRunId.get(
+            extractWorkflowRunId(row.response_payload) || '',
+          );
+          return {
+            row_index: row.row_index,
+            test_item_id: row.test_item_id,
+            prompt: promptByItemId.get(row.test_item_id) ?? '',
+            expected_should_answer:
+              expectedShouldAnswerByItemId.get(row.test_item_id) ?? null,
+            passed: row.passed,
+            status: row.status,
+            similarity: extractItemSimilarityScore(row.response_payload),
+            confidence: extractItemValidatorConfidence(row.response_payload),
+            elapsed_ms: row.elapsed_ms,
+            model: modelTag ?? null,
+            agent: extractRoutingDecision(row.response_payload),
+            response_text: row.response_text,
+            error_message: row.error_message,
+            timing: extractTimingBreakdown(row.response_payload),
+            retrieved_document_chunks: extractRetrievedDocumentChunks(
+              row.response_payload,
+            ),
+            response_payload: row.response_payload,
+            created_at: row.created_at,
+          };
+        }),
+      }
+    : null;
+
   return (
     <div className="flex flex-1 bg-slate-50">
       <AdminTestsActionToast error={error} success={success} />
@@ -253,6 +306,12 @@ export default async function AdminTestRunDetailsPage({
                   <Link href={`/admin/tests/${test.id}`}>Back to test</Link>
                 </Button>
                 <TestRunNotesToolbarButton />
+                {fullExportData ? (
+                  <RunFullExportDownload
+                    data={fullExportData}
+                    fileBase={`${test.name}-run-${result.id}-full-export`}
+                  />
+                ) : null}
                 <form action={deleteTestRunAction}>
                   <input
                     name="returnPath"
