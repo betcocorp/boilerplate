@@ -16,10 +16,10 @@ export const metadata = {
 
 const tools = [
   {
-    title: 'Product cross-reference',
+    title: 'Cross-reference',
     description:
-      'Test competitor brand and product lookups against legacy tables—the same pipeline as lookup_cross_reference.',
-    href: '/admin/tools/product-cross-reference',
+      'Test competitor → Betco lookups against legacy tables, browse the 1:1 mappings, and review web-grounded recommendations before promotion—the pipeline behind lookup_cross_reference and recommend_cross_reference.',
+    href: '/admin/tools/cross-reference',
     icon: GitCompareArrows,
   },
   {

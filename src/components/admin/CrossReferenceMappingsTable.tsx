@@ -19,7 +19,7 @@ import {
 } from '~/components/ui/table';
 import { fetchCrossReferenceMappings } from '~/lib/tools/cross-reference-mappings';
 
-const ROUTE = '/admin/tools/product-cross-reference';
+const ROUTE = '/admin/tools/cross-reference/lookup';
 const SEARCH_PARAM = 'xrefQ';
 const PAGE_PARAM = 'xrefPage';
 const PAGE_LINK_WINDOW = 5;
