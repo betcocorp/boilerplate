@@ -1184,6 +1184,9 @@ export async function runProductSupportWorkflow(input: {
       output: jsonContent({
         responseIds: agentResult.responseIds,
         toolCalls: agentResult.toolTrace.length,
+        // Full per-call trace (B0-331) so the observability timeline can render
+        // arguments/output previews, ok flags and durations without a migration.
+        toolTrace: agentResult.toolTrace,
       }),
     });
 
