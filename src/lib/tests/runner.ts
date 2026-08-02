@@ -325,6 +325,7 @@ export async function runSingleTestItem(
   options?: { modelTag?: string },
 ): Promise<RunSingleItemResult> {
   const startedAt = Date.now();
+  let firstDeltaAt: number | null = null;
 
   try {
     // Use the same path as BEX chat so test runs reflect real workflow behavior.
@@ -334,9 +335,13 @@ export async function runSingleTestItem(
       modelTag: options?.modelTag,
       useValidator: false,
       agentMode: 'orchestrator',
+      onAssistantDelta: () => {
+        if (firstDeltaAt === null) firstDeltaAt = Date.now();
+      },
     });
 
     const elapsedMs = Math.max(0, Date.now() - startedAt);
+    const ttftMs = firstDeltaAt !== null ? Math.max(0, firstDeltaAt - startedAt) : null;
     const responseText = result.answerText || '';
     const outcome = gradeChatTestResponse({
       item: testItem,
@@ -351,6 +356,7 @@ export async function runSingleTestItem(
         test_item_id: testItem.id,
         row_index: testItem.row_index,
         elapsed_ms: elapsedMs,
+        ttft_ms: ttftMs,
         status: 'completed',
         passed: outcome.passed,
         error_message: outcome.passed ? null : outcome.failureReason,
@@ -369,6 +375,7 @@ export async function runSingleTestItem(
         test_item_id: testItem.id,
         row_index: testItem.row_index,
         elapsed_ms: elapsedMs,
+        ttft_ms: firstDeltaAt !== null ? Math.max(0, firstDeltaAt - startedAt) : null,
         status: 'failed',
         passed: false,
         error_message: message,

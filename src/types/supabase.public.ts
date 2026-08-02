@@ -666,6 +666,7 @@ export type Database = {
           status: string
           test_item_id: string
           test_result_id: string
+          ttft_ms: number | null
         }
         Insert: {
           created_at?: string
@@ -679,6 +680,7 @@ export type Database = {
           status?: string
           test_item_id: string
           test_result_id: string
+          ttft_ms?: number | null
         }
         Update: {
           created_at?: string
@@ -692,6 +694,7 @@ export type Database = {
           status?: string
           test_item_id?: string
           test_result_id?: string
+          ttft_ms?: number | null
         }
         Relationships: [
           {

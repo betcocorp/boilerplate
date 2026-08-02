@@ -18,6 +18,8 @@ import {
 import {
   type ChartConfig,
   ChartContainer,
+  ChartLegend,
+  ChartLegendContent,
   ChartTooltip,
   ChartTooltipContent,
 } from '~/components/ui/chart';
@@ -27,6 +29,8 @@ import { cn } from '~/lib/utils';
 type ElapsedTrendDatum = {
   label: string;
   elapsedSeconds: number;
+  /** Seconds to first streamed token/chunk; null for legacy rows or no observed delta. */
+  ttftSeconds: number | null;
   /** When omitted, dot renders neutral (e.g. stale client data). */
   passed?: boolean;
   /** Links chart point → `run-item-result-${id}` row on the run details page */
@@ -83,6 +87,7 @@ type RunStatusResponse = {
 
 const chartConfig = {
   elapsedSeconds: { label: 'Elapsed', color: '#0ea5e9' },
+  ttftSeconds: { label: 'Time to first token', color: '#f59e0b' },
   similarity: { label: 'Similarity', color: '#a855f7' },
   count: { label: 'Count', color: '#16a34a' },
   value: { label: 'Similarity', color: '#a855f7' },
@@ -335,6 +340,7 @@ export function RunAtAGlanceCharts({
                     />
                   }
                 />
+                <ChartLegend content={<ChartLegendContent />} />
                 <Line
                   activeDot={ElapsedTrendActiveDatumDot}
                   dataKey="elapsedSeconds"
@@ -342,6 +348,15 @@ export function RunAtAGlanceCharts({
                   stroke="var(--color-elapsedSeconds)"
                   strokeWidth={2}
                   type="monotone"
+                />
+                <Line
+                  dataKey="ttftSeconds"
+                  stroke="var(--color-ttftSeconds)"
+                  strokeWidth={2}
+                  type="monotone"
+                  dot={false}
+                  connectNulls
+                  activeDot={{ r: 4 }}
                 />
               </LineChart>
             </ChartContainer>

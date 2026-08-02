@@ -128,6 +128,7 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
     runId: string;
     ragSeconds: number | null;
     promptSeconds: number | null;
+    ttftSeconds: number | null;
   }> = [];
 
   for (const { result, run } of historyRows) {
@@ -165,6 +166,11 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
       promptElapsedSampleSize += 1;
     }
 
+    const ttftMs =
+      typeof result.ttft_ms === 'number' && Number.isFinite(result.ttft_ms)
+        ? result.ttft_ms
+        : null;
+
     const axisLabel = run.started_at
       ? formatRunChartAxisLabel(run.started_at)
       : run.id.slice(0, 8);
@@ -187,6 +193,8 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
         promptElapsedMs !== null
           ? Number((promptElapsedMs / 1000).toFixed(3))
           : null,
+      ttftSeconds:
+        ttftMs !== null ? Number((ttftMs / 1000).toFixed(3)) : null,
     });
   }
 

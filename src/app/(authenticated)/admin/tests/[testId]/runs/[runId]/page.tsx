@@ -150,6 +150,10 @@ export default async function AdminTestRunDetailsPage({
   const elapsedTrendData = chronologicalItems.map((item, index) => ({
     label: `${index + 1}`,
     elapsedSeconds: Number((item.elapsed_ms / 1000).toFixed(2)),
+    ttftSeconds:
+      typeof item.ttft_ms === 'number' && Number.isFinite(item.ttft_ms)
+        ? Number((item.ttft_ms / 1000).toFixed(2))
+        : null,
     resultItemId: item.id,
     passed: item.passed,
   }));
