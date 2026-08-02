@@ -1,0 +1,582 @@
+/**
+ * B0-332 — per-run trace timeline assembly (epic B0-330).
+ *
+ * `buildRunTimeline` is PURE: it takes already-fetched `workflow_runs`,
+ * `workflow_steps` and `audit_logs` rows and returns an ordered
+ * `TimelineEvent[]`. No I/O, no clock reads, so it is fully unit-testable
+ * against fixture rows (see `timeline.test.ts`).
+ *
+ * Everything here is grounded in
+ * `~/lib/workflows/product-support/run-product-support-workflow.ts`, which is the
+ * only writer of these rows today. Step names it emits: `orchestration_planner`,
+ * `early_decline_gate`, `openai_responses_agent`, `validator`.
+ */
+
+import { toolTraceSchema } from '~/lib/audit/trace';
+import type { ToolTraceEntry } from '~/lib/audit/trace';
+import type {
+  WorkflowRunRow,
+  WorkflowStepRow,
+} from '~/lib/conversations/workflow-repository';
+import type {
+  AuditLogRow,
+  ConfidenceGateKind,
+  TimelineEvent,
+  TimelineEventStatus,
+} from '~/types/observability';
+
+/**
+ * Confidence ceiling the workflow applies when a usage/safety question lacks
+ * usage or safety evidence (run-product-support-workflow.ts: `Math.min(validation.confidence, 0.55)`).
+ * This gate writes NO audit log, so we synthesize its event — see `inferUsageSafetyCoverageGate`.
+ */
+export const USAGE_SAFETY_COVERAGE_CONFIDENCE_CAP = 0.55;
+
+/** B0-257 regulated-claim guardrail clamp (`Math.min(validation.confidence, 0.4)`). */
+export const REGULATED_CLAIM_CONFIDENCE_CAP = 0.4;
+
+/**
+ * Happy-path step order. `early_decline_gate` is deliberately absent: it is an
+ * alternative terminal branch, not a stage every run passes through, so it is
+ * never projected as "not reached".
+ */
+const CANONICAL_STEP_SEQUENCE = [
+  'orchestration_planner',
+  'openai_responses_agent',
+  'validator',
+] as const;
+
+const STEP_LABELS: Record<string, string> = {
+  orchestration_planner: 'Orchestration planner (routing)',
+  early_decline_gate: 'Early decline gate',
+  openai_responses_agent: 'Agent generation (tool loop)',
+  validator: 'Validator',
+};
+
+const GATE_LABELS: Record<ConfidenceGateKind, string> = {
+  early_decline_gate: 'Early decline gate applied',
+  validator_bypass: 'Validator bypassed (heuristic confidence)',
+  llm_validator: 'LLM validator self-report',
+  usage_safety_coverage_cap: `Usage/safety coverage cap (${USAGE_SAFETY_COVERAGE_CONFIDENCE_CAP})`,
+  regulated_claim_guardrail: `Regulated-claim guardrail clamp (${REGULATED_CLAIM_CONFIDENCE_CAP})`,
+  recommendation_gate: 'Recommendation gate calibration',
+};
+
+/* -------------------------------------------------------------------------- *
+ * Small JSON readers (audit payloads and step input/output are `Json` columns)
+ * -------------------------------------------------------------------------- */
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function readString(record: Record<string, unknown> | null, key: string): string | null {
+  const value = record?.[key];
+  return typeof value === 'string' && value.trim() ? value : null;
+}
+
+function readNumber(record: Record<string, unknown> | null, key: string): number | null {
+  const value = record?.[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function readBoolean(record: Record<string, unknown> | null, key: string): boolean | null {
+  const value = record?.[key];
+  return typeof value === 'boolean' ? value : null;
+}
+
+function readStringArray(record: Record<string, unknown> | null, key: string): string[] {
+  const value = record?.[key];
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((item): item is string => typeof item === 'string');
+}
+
+function diffMs(from: string | null, to: string | null): number | undefined {
+  if (!from || !to) {
+    return undefined;
+  }
+  const start = Date.parse(from);
+  const end = Date.parse(to);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    return undefined;
+  }
+  const delta = end - start;
+  return delta >= 0 ? delta : undefined;
+}
+
+function mapStepStatus(rawStatus: string): TimelineEventStatus {
+  if (rawStatus === 'failed') {
+    return 'failed';
+  }
+  if (rawStatus === 'completed') {
+    return 'ok';
+  }
+  return 'running';
+}
+
+/** Anything longer than this in a step `detail` is the agent's tool trace, surfaced separately. */
+function buildStepDetail(step: WorkflowStepRow): Record<string, unknown> {
+  const output = asRecord(step.output);
+  if (!output || !('toolTrace' in output)) {
+    return { input: step.input, output: step.output, error: step.error };
+  }
+
+  // Tool calls get their own timeline events, so keep only the count here.
+  const { toolTrace, ...rest } = output;
+  return {
+    input: step.input,
+    output: {
+      ...rest,
+      toolTraceCount: Array.isArray(toolTrace) ? toolTrace.length : 0,
+    },
+    error: step.error,
+  };
+}
+
+/* -------------------------------------------------------------------------- *
+ * Tool calls
+ * -------------------------------------------------------------------------- */
+
+type ToolCallAuditTiming = { calledAt: string | null; settledAt: string | null };
+
+/**
+ * `tool_called` / `tool_succeeded` / `tool_failed` audit rows carry `call_id`,
+ * which is the only way to recover real timestamps for a `toolTrace` entry
+ * (the trace itself stores only a duration).
+ */
+function indexToolCallTimings(auditLogs: AuditLogRow[]): Map<string, ToolCallAuditTiming> {
+  const timings = new Map<string, ToolCallAuditTiming>();
+
+  for (const log of auditLogs) {
+    const payload = asRecord(log.payload);
+    const callId = readString(payload, 'call_id');
+    if (!callId) {
+      continue;
+    }
+
+    const existing = timings.get(callId) ?? { calledAt: null, settledAt: null };
+    if (log.event_type === 'tool_called') {
+      existing.calledAt = existing.calledAt ?? log.created_at;
+    } else if (log.event_type === 'tool_succeeded' || log.event_type === 'tool_failed') {
+      existing.settledAt = log.created_at;
+    }
+    timings.set(callId, existing);
+  }
+
+  return timings;
+}
+
+/**
+ * Reads the agent step's persisted `output.toolTrace` (added by B0-331). Legacy
+ * rows only persisted `{ responseIds, toolCalls }`; those degrade to no
+ * tool-call events rather than throwing.
+ */
+function readToolTrace(step: WorkflowStepRow): ToolTraceEntry[] {
+  const output = asRecord(step.output);
+  if (!output || !('toolTrace' in output)) {
+    return [];
+  }
+  const parsed = toolTraceSchema.safeParse(output.toolTrace);
+  return parsed.success ? parsed.data : [];
+}
+
+/* -------------------------------------------------------------------------- *
+ * Timeline assembly
+ * -------------------------------------------------------------------------- */
+
+type PendingEvent = { event: TimelineEvent; at: string };
+
+export function buildRunTimeline(
+  run: WorkflowRunRow,
+  steps: WorkflowStepRow[],
+  auditLogs: AuditLogRow[],
+): TimelineEvent[] {
+  const pending: PendingEvent[] = [];
+  const push = (event: TimelineEvent) => pending.push({ event, at: event.at });
+
+  const orderedSteps = [...steps].sort(
+    (a, b) => Date.parse(a.started_at) - Date.parse(b.started_at),
+  );
+  const orderedLogs = [...auditLogs].sort(
+    (a, b) => Date.parse(a.created_at) - Date.parse(b.created_at),
+  );
+  const toolCallTimings = indexToolCallTimings(orderedLogs);
+  const logsByType = (eventType: string) =>
+    orderedLogs.filter((log) => log.event_type === eventType);
+
+  /* --- run start -------------------------------------------------------- *
+   * NOTE: the workflow writes its `workflow_started` audit row with a null
+   * workflow_run_id (the run doesn't exist yet), so `listAuditLogsForRun` never
+   * returns it. The start marker is therefore anchored on `run.created_at`.
+   */
+  const startedLog = logsByType('workflow_started')[0];
+  push({
+    kind: 'lifecycle',
+    phase: 'workflow_started',
+    id: startedLog ? `audit:${startedLog.id}` : `run:${run.id}:started`,
+    label: `Workflow started — ${run.workflow_name}`,
+    at: startedLog?.created_at ?? run.created_at,
+    status: 'ok',
+    detail: {
+      workflowName: run.workflow_name,
+      conversationId: run.conversation_id,
+      userInput: run.user_input,
+      ...(startedLog ? { auditPayload: startedLog.payload } : {}),
+    },
+  });
+
+  /* --- steps + their tool calls ----------------------------------------- */
+  for (const step of orderedSteps) {
+    push({
+      kind: 'step',
+      id: `step:${step.id}`,
+      stepId: step.id,
+      stepName: step.step_name,
+      rawStatus: step.status,
+      label: STEP_LABELS[step.step_name] ?? step.step_name,
+      at: step.started_at,
+      startedAt: step.started_at,
+      completedAt: step.completed_at,
+      durationMs: diffMs(step.started_at, step.completed_at),
+      status: mapStepStatus(step.status),
+      detail: buildStepDetail(step),
+      error: step.error,
+    });
+
+    for (const [index, entry] of readToolTrace(step).entries()) {
+      const timing = toolCallTimings.get(entry.callId);
+      push({
+        kind: 'tool_call',
+        id: `tool:${step.id}:${entry.callId}:${index}`,
+        stepId: step.id,
+        toolName: entry.toolName,
+        callId: entry.callId,
+        argumentsPreview: entry.argumentsPreview,
+        outputPreview: entry.outputPreview,
+        ok: entry.ok,
+        label: `Tool: ${entry.toolName}`,
+        // Forced tool calls (e.g. the cross-reference safety-net search) bypass
+        // writeAuditLog, so fall back to the step's own start time.
+        at: timing?.calledAt ?? step.started_at,
+        durationMs: entry.durationMs ?? diffMs(timing?.calledAt ?? null, timing?.settledAt ?? null),
+        status: entry.ok ? 'ok' : 'failed',
+        detail: {
+          argumentsPreview: entry.argumentsPreview,
+          outputPreview: entry.outputPreview,
+          ok: entry.ok,
+        },
+      });
+    }
+  }
+
+  /* --- gate 1: early decline -------------------------------------------- */
+  const earlyDeclineStep = orderedSteps.find(
+    (step) => step.step_name === 'early_decline_gate',
+  );
+  if (earlyDeclineStep) {
+    const output = asRecord(earlyDeclineStep.output);
+    const input = asRecord(earlyDeclineStep.input);
+    const reason = readString(output, 'reason') ?? readString(input, 'reason');
+    push({
+      kind: 'confidence_gate',
+      gate: 'early_decline_gate',
+      id: `gate:early_decline:${earlyDeclineStep.id}`,
+      label: GATE_LABELS.early_decline_gate,
+      at: earlyDeclineStep.completed_at ?? earlyDeclineStep.started_at,
+      status: 'ok',
+      confidenceBefore: null,
+      confidenceAfter: run.confidence,
+      cap: null,
+      approved: true,
+      requiresHumanReview: false,
+      issues: reason ? [reason] : [],
+      detail: { reason, stepOutput: earlyDeclineStep.output },
+    });
+  }
+
+  /* --- gates 2 & 3: validator self-report / bypass heuristic ------------- */
+  const validatorStep = orderedSteps.find((step) => step.step_name === 'validator');
+  const validationLogs = logsByType('validation_completed');
+
+  for (const [index, log] of validationLogs.entries()) {
+    const payload = asRecord(log.payload);
+    const issues = readStringArray(payload, 'issues');
+    const bypassed = issues.includes('validator_bypassed_for_testing');
+    const pass = readString(payload, 'pass');
+    const gate: ConfidenceGateKind = bypassed ? 'validator_bypass' : 'llm_validator';
+    const approved = readBoolean(payload, 'approved');
+    push({
+      kind: 'confidence_gate',
+      gate,
+      id: `gate:${gate}:${log.id}`,
+      label: pass ? `${GATE_LABELS[gate]} (${pass} pass)` : GATE_LABELS[gate],
+      at: log.created_at,
+      status: approved === false ? 'failed' : 'ok',
+      // The first validator pass is the entry point for confidence; nothing precedes it.
+      confidenceBefore: index === 0 ? null : readNumber(asRecord(validationLogs[index - 1]?.payload), 'confidence'),
+      confidenceAfter: readNumber(payload, 'confidence'),
+      cap: null,
+      approved,
+      requiresHumanReview: readBoolean(payload, 'requires_human_review') === true,
+      issues,
+      detail: { auditPayload: log.payload },
+    });
+  }
+
+  /* --- gate 4: usage/safety coverage cap (INFERRED, no audit event) ------ */
+  const inferredCap = inferUsageSafetyCoverageGate({
+    validatorStep,
+    validationLogs,
+  });
+  if (inferredCap) {
+    push(inferredCap);
+  }
+
+  /* --- gate 5: regulated-claim guardrail -------------------------------- */
+  for (const log of logsByType('regulated_claim_guardrail_rejected')) {
+    const payload = asRecord(log.payload);
+    const ungrounded = readStringArray(payload, 'ungroundedCategories');
+    push({
+      kind: 'confidence_gate',
+      gate: 'regulated_claim_guardrail',
+      id: `gate:regulated_claim_guardrail:${log.id}`,
+      label: GATE_LABELS.regulated_claim_guardrail,
+      at: log.created_at,
+      status: 'failed',
+      confidenceBefore: null,
+      confidenceAfter: null,
+      cap: REGULATED_CLAIM_CONFIDENCE_CAP,
+      approved: false,
+      requiresHumanReview: true,
+      issues: ungrounded.map((category) => `regulated_claim_unverified:${category}`),
+      detail: { auditPayload: log.payload },
+    });
+  }
+
+  /* --- gate 6: recommendation-gate calibration -------------------------- */
+  for (const log of logsByType('recommendation_gate_applied')) {
+    const payload = asRecord(log.payload);
+    push({
+      kind: 'confidence_gate',
+      gate: 'recommendation_gate',
+      id: `gate:recommendation_gate:${log.id}`,
+      label: GATE_LABELS.recommendation_gate,
+      at: log.created_at,
+      status: readBoolean(payload, 'approved') === false ? 'failed' : 'ok',
+      confidenceBefore: null,
+      confidenceAfter: readNumber(payload, 'confidence'),
+      cap: null,
+      approved: readBoolean(payload, 'approved'),
+      requiresHumanReview: readBoolean(payload, 'requires_human_review') === true,
+      issues: readStringArray(payload, 'issues'),
+      detail: { auditPayload: log.payload, topSimilarity: readNumber(payload, 'topSimilarity') },
+    });
+  }
+
+  /* --- revision refusal + human review ---------------------------------- */
+  for (const log of logsByType('revision_skipped_refusal')) {
+    push({
+      kind: 'audit',
+      eventType: log.event_type,
+      id: `audit:${log.id}`,
+      label: 'Revision pass skipped (model refused to re-ground)',
+      at: log.created_at,
+      status: 'failed',
+      detail: { auditPayload: log.payload },
+    });
+  }
+
+  for (const log of logsByType('review_requested')) {
+    const payload = asRecord(log.payload);
+    push({
+      kind: 'review',
+      id: `review:${log.id}`,
+      label: 'Human review requested',
+      at: log.created_at,
+      status: 'failed',
+      reason: readString(payload, 'reason'),
+      issues: readStringArray(payload, 'issues'),
+      detail: { auditPayload: log.payload },
+    });
+  }
+
+  /* --- not-reached projection for failed runs ---------------------------- */
+  for (const notReached of projectNotReachedSteps(run, orderedSteps)) {
+    push(notReached);
+  }
+
+  /* --- run finish -------------------------------------------------------- */
+  const completedLog = logsByType('workflow_completed')[0];
+  const failedLog = logsByType('workflow_failed')[0];
+  if (failedLog || run.status === 'failed') {
+    push({
+      kind: 'lifecycle',
+      phase: 'workflow_failed',
+      id: failedLog ? `audit:${failedLog.id}` : `run:${run.id}:failed`,
+      label: 'Workflow failed',
+      at: failedLog?.created_at ?? run.updated_at,
+      status: 'failed',
+      detail: {
+        finalOutput: run.final_output,
+        ...(failedLog ? { auditPayload: failedLog.payload } : {}),
+      },
+    });
+  } else if (completedLog || run.status === 'completed') {
+    push({
+      kind: 'lifecycle',
+      phase: 'workflow_completed',
+      id: completedLog ? `audit:${completedLog.id}` : `run:${run.id}:completed`,
+      label: 'Workflow completed',
+      at: completedLog?.created_at ?? run.updated_at,
+      status: 'ok',
+      durationMs: diffMs(run.created_at, run.updated_at) ?? undefined,
+      detail: {
+        confidence: run.confidence,
+        finalOutput: run.final_output,
+        ...(completedLog ? { auditPayload: completedLog.payload } : {}),
+      },
+    });
+  }
+
+  // Chronological. `Array.prototype.sort` is stable, so events sharing a
+  // timestamp keep the construction order above (steps → gates → lifecycle),
+  // which is the order the workflow actually executes them in.
+  return pending
+    .map((item, index) => ({ ...item, index }))
+    .sort((a, b) => {
+      const delta = Date.parse(a.at) - Date.parse(b.at);
+      if (delta !== 0 && Number.isFinite(delta)) {
+        return delta;
+      }
+      return a.index - b.index;
+    })
+    .map((item) => item.event);
+}
+
+/**
+ * The usage/safety-coverage cap (0.55) is the one confidence gate with NO
+ * dedicated audit event: the workflow mutates `validation` in place between the
+ * `validation_completed` audit write and `completeWorkflowStep(validationStep)`.
+ *
+ * We therefore synthesize it by diffing the validator pass as logged against the
+ * validator step's persisted output: an `insufficient_*_evidence` issue that
+ * appears only in the final output is the cap's fingerprint. The resulting event
+ * is flagged `inferred: true`.
+ */
+function inferUsageSafetyCoverageGate(input: {
+  validatorStep: WorkflowStepRow | undefined;
+  validationLogs: AuditLogRow[];
+}): TimelineEvent | null {
+  const { validatorStep, validationLogs } = input;
+  if (!validatorStep) {
+    return null;
+  }
+
+  const finalOutput = asRecord(validatorStep.output);
+  const finalIssues = readStringArray(finalOutput, 'issues');
+  const insufficientIssues = finalIssues.filter((issue) =>
+    /^insufficient_[a-z_]*evidence$/.test(issue),
+  );
+  if (insufficientIssues.length === 0) {
+    return null;
+  }
+
+  // Use the LAST logged validator pass: after a revision the second pass is the
+  // state the cap actually clamped.
+  const baseLog = validationLogs.length > 0 ? validationLogs[validationLogs.length - 1] : null;
+  const basePayload = asRecord(baseLog?.payload ?? null);
+  const baseIssues = readStringArray(basePayload, 'issues');
+  const newIssues = insufficientIssues.filter((issue) => !baseIssues.includes(issue));
+  if (newIssues.length === 0) {
+    return null;
+  }
+
+  const confidenceBefore = readNumber(basePayload, 'confidence');
+  const confidenceAfter =
+    confidenceBefore === null
+      ? USAGE_SAFETY_COVERAGE_CONFIDENCE_CAP
+      : Math.min(confidenceBefore, USAGE_SAFETY_COVERAGE_CONFIDENCE_CAP);
+
+  const missingEvidence = newIssues
+    .flatMap((issue) => issue.replace(/^insufficient_/, '').replace(/_evidence$/, '').split('_and_'))
+    .filter((token) => token === 'usage' || token === 'safety');
+
+  return {
+    kind: 'confidence_gate',
+    gate: 'usage_safety_coverage_cap',
+    id: `gate:usage_safety_coverage_cap:${validatorStep.id}`,
+    label: GATE_LABELS.usage_safety_coverage_cap,
+    at: baseLog?.created_at ?? validatorStep.completed_at ?? validatorStep.started_at,
+    status: 'failed',
+    confidenceBefore,
+    confidenceAfter,
+    cap: USAGE_SAFETY_COVERAGE_CONFIDENCE_CAP,
+    approved: false,
+    requiresHumanReview: readBoolean(finalOutput, 'requires_human_review') === true,
+    issues: newIssues,
+    inferred: true,
+    detail: {
+      inferredFrom: 'diff of logged validator pass vs. persisted validator step output',
+      note: 'This gate writes no audit log entry; the event is inferred.',
+      missingEvidence: [...new Set(missingEvidence)],
+      loggedValidatorIssues: baseIssues,
+      finalValidatorIssues: finalIssues,
+    },
+  };
+}
+
+/**
+ * After a failure, the remaining canonical steps have no `workflow_steps` row at
+ * all (the workflow throws before inserting them). Emit them as `not_reached`
+ * placeholders so the UI can grey them out instead of silently ending the trace.
+ */
+function projectNotReachedSteps(
+  run: WorkflowRunRow,
+  orderedSteps: WorkflowStepRow[],
+): TimelineEvent[] {
+  if (run.status !== 'failed') {
+    return [];
+  }
+
+  const failingStep =
+    orderedSteps.find((step) => step.status === 'failed') ??
+    orderedSteps[orderedSteps.length - 1];
+  if (!failingStep) {
+    return [];
+  }
+
+  const boundary = CANONICAL_STEP_SEQUENCE.indexOf(
+    failingStep.step_name as (typeof CANONICAL_STEP_SEQUENCE)[number],
+  );
+  if (boundary < 0) {
+    return [];
+  }
+
+  const present = new Set(orderedSteps.map((step) => step.step_name));
+  const at = failingStep.completed_at ?? run.updated_at;
+
+  return CANONICAL_STEP_SEQUENCE.slice(boundary + 1)
+    .filter((stepName) => !present.has(stepName))
+    .map((stepName) => ({
+      kind: 'step' as const,
+      id: `step:${run.id}:not_reached:${stepName}`,
+      stepId: null,
+      stepName,
+      rawStatus: null,
+      label: STEP_LABELS[stepName] ?? stepName,
+      at,
+      startedAt: null,
+      completedAt: null,
+      status: 'not_reached' as const,
+      error: null,
+      detail: {
+        note: `Not reached — the run failed at "${failingStep.step_name}".`,
+        failedAtStepName: failingStep.step_name,
+      },
+    }));
+}
