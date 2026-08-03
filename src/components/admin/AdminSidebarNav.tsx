@@ -68,6 +68,7 @@ const sidebarSections: NavSectionModel[] = [
           { label: 'Bex chat', href: '/admin/bex' },
           { label: 'Test runner', href: '/admin/tests' },
           { label: 'Failure Queue', href: '/admin/tests/failure-queue' },
+          { label: 'Prompt observability', href: '/admin/observability' },
         ],
       },
       {

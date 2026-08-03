@@ -38,6 +38,7 @@ import {
   TableHeader,
   TableRow,
 } from '~/components/ui/table';
+import { getAgentBadgeClassName } from '~/lib/bex/agent-badge';
 import { listWorkflowRunsByIds } from '~/lib/conversations/workflow-repository';
 import { resolveResponsesModel } from '~/lib/openai/client';
 import {
@@ -552,16 +553,7 @@ export default async function AdminTestRunDetailsPage({
                             {(() => {
                               const agent = extractRoutingDecision(row.response_payload);
                               if (!agent) return <span className="text-xs text-slate-400">—</span>;
-                              const colorClass =
-                                agent === 'product'
-                                  ? 'border-sky-600/45 bg-sky-600/12 text-sky-900'
-                                  : agent === 'bathroom'
-                                    ? 'border-purple-600/45 bg-purple-600/12 text-purple-900'
-                                    : agent === 'dilution'
-                                      ? 'border-amber-600/45 bg-amber-600/12 text-amber-900'
-                                      : agent === 'floor'
-                                        ? 'border-emerald-600/45 bg-emerald-600/12 text-emerald-900'
-                                        : '';
+                              const colorClass = getAgentBadgeClassName(agent);
                               return (
                                 <Badge className={colorClass} variant="outline">
                                   {agent}
