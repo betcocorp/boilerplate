@@ -11,6 +11,7 @@ import {
   ThumbsUp,
   User,
 } from 'lucide-react';
+import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 
 import { BexStreamdown } from '~/components/bex/BexStreamdown';
@@ -178,7 +179,13 @@ function AssistantDetails({
               ) : null}
               {meta.workflowRunId ? (
                 <p className="font-mono text-[0.65rem] opacity-70">
-                  Run: {meta.workflowRunId}
+                  Run:{' '}
+                  <Link
+                    className="underline decoration-muted-foreground/60 underline-offset-2 transition hover:text-foreground hover:decoration-foreground"
+                    href={`/admin/observability/${meta.workflowRunId}`}
+                  >
+                    {meta.workflowRunId}
+                  </Link>
                 </p>
               ) : null}
             </div>
