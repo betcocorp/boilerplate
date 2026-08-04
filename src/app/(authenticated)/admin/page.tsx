@@ -24,6 +24,7 @@ import {
 } from '~/components/ui/card';
 import { Separator } from '~/components/ui/separator';
 import { Tabs, TabsList, TabsTrigger } from '~/components/ui/tabs';
+import { formatCompactInt } from '~/lib/tests/format';
 import {
   getGlobalSimilarityFailRateTrend,
   getGlobalTestCaseMetrics,
@@ -58,25 +59,25 @@ function buildMetrics(
         input.avgSimilarity === null
           ? 'No similarity-bearing responses yet'
           : 'Average source similarity across all completed test cases',
-      detail: `Based on ${input.similaritySampleSize.toLocaleString()} test case(s) with similarity data`,
+      detail: `Based on ${formatCompactInt(input.similaritySampleSize)} test case(s) with similarity data`,
     },
     {
       title: 'Avg Elapsed Runtime',
       value: `${(input.avgElapsedMs / 1000).toFixed(2)}s`,
       summary: 'Mean elapsed runtime across all completed test cases',
-      detail: `Based on ${input.totalCases.toLocaleString()} completed test case(s)`,
+      detail: `Based on ${formatCompactInt(input.totalCases)} completed test case(s)`,
     },
     {
       title: 'Avg Pass Rate',
       value: `${(input.passRate * 100).toFixed(1)}%`,
       summary: 'Passed test cases divided by all completed test cases',
-      detail: `${input.passedCases.toLocaleString()} passed / ${input.totalCases.toLocaleString()} total`,
+      detail: `${formatCompactInt(input.passedCases)} passed / ${formatCompactInt(input.totalCases)} total`,
     },
     {
       title: 'Avg Fail Rate',
       value: `${(input.failRate * 100).toFixed(1)}%`,
       summary: 'Failed test cases divided by all completed test cases',
-      detail: `${input.failedCases.toLocaleString()} failed / ${input.totalCases.toLocaleString()} total`,
+      detail: `${formatCompactInt(input.failedCases)} failed / ${formatCompactInt(input.totalCases)} total`,
     },
   ];
 }
