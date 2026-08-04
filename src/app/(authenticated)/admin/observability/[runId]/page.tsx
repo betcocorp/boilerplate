@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
 
+import { RunPromptInsightsPanel } from '~/components/admin/observability/RunPromptInsightsPanel';
 import { RunTraceTimeline } from '~/components/admin/observability/RunTraceTimeline';
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
@@ -154,6 +155,9 @@ export default async function AdminRunTracePage({ params }: PageProps) {
             {loadError}
           </section>
         ) : null}
+
+        {/* AI analysis — on-demand, so it renders as soon as the run resolves. */}
+        {trace ? <RunPromptInsightsPanel runId={runId} /> : null}
 
         {/* Timeline */}
         {trace ? (
