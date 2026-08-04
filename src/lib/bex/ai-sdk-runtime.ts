@@ -3,13 +3,18 @@ import {
   stepCountIs,
   streamText,
   tool,
+  type LanguageModelUsage,
   type ModelMessage,
   type ToolChoice,
   type ToolSet,
 } from 'ai';
 
 import { resolveAiSdkLanguageModel } from '~/lib/bex/ai-sdk-adapters';
-import type { ExecuteToolFn, ResponsesRuntimeResult } from '~/lib/openai/responses-runtime';
+import type {
+  ExecuteToolFn,
+  LlmTokenUsage,
+  ResponsesRuntimeResult,
+} from '~/lib/openai/responses-runtime';
 import { productSupportTools } from '~/lib/tools/definitions';
 import type { ToolTraceEntry } from '~/lib/audit/trace';
 
@@ -34,6 +39,8 @@ export type AiSdkRuntimeOptions = {
   history: AiSdkHistoryMessage[];
   userMessage: string;
   toolChoice?: ResponsesToolChoice;
+  /** B0-324 — see `ResponsesRuntimeOptions.promptCacheKey`; forwarded as the OpenAI `promptCacheKey`. */
+  promptCacheKey?: string;
   maxToolRounds?: number;
   onAssistantDelta?: (delta: string) => void;
   executeTool: ExecuteToolFn;
@@ -46,7 +53,7 @@ export type AiSdkRuntimeOptions = {
  */
 export type AiSdkRuntimeResult = Pick<
   ResponsesRuntimeResult,
-  'assistantText' | 'toolTrace' | 'responseIds' | 'usage'
+  'assistantText' | 'toolTrace' | 'responseIds' | 'usage' | 'usageByCall'
 > & {
   finalResponseId: null;
 };
@@ -86,6 +93,15 @@ function buildAiSdkTools(executeTool: ExecuteToolFn, toolTrace: ToolTraceEntry[]
   return tools;
 }
 
+/**
+ * B0-324 — cached (prompt-cache read) input tokens for one model call. Providers report this on
+ * `inputTokenDetails.cacheReadTokens`; `cachedInputTokens` is the deprecated alias some providers
+ * still populate. Mock/unsupported models report neither, hence the 0 fallback.
+ */
+function readCachedInputTokens(usage: LanguageModelUsage): number {
+  return usage.inputTokenDetails?.cacheReadTokens ?? usage.cachedInputTokens ?? 0;
+}
+
 function mapToolChoice(toolChoice: ResponsesToolChoice | undefined): ToolChoice<ToolSet> {
   if (toolChoice && typeof toolChoice === 'object' && toolChoice.type === 'function') {
     return { type: 'tool', toolName: toolChoice.name };
@@ -123,6 +139,11 @@ export async function runAiSdkWithToolLoop(opts: AiSdkRuntimeOptions): Promise<A
     system: opts.instructions,
     messages,
     tools,
+    // B0-324 — pin every step of the loop to the same prompt cache pool so the stable
+    // system + tool-schema prefix is read from cache on the 2nd+ step.
+    ...(opts.promptCacheKey
+      ? { providerOptions: { openai: { promptCacheKey: opts.promptCacheKey } } }
+      : {}),
     stopWhen: stepCountIs(opts.maxToolRounds ?? 16),
     prepareStep: ({ stepNumber }) => ({
       toolChoice: stepNumber === 0 ? forcedToolChoice : 'auto',
@@ -142,6 +163,18 @@ export async function runAiSdkWithToolLoop(opts: AiSdkRuntimeOptions): Promise<A
 
   const promptTokens = totalUsage.inputTokens ?? 0;
   const completionTokens = totalUsage.outputTokens ?? 0;
+  // B0-324 — per-step usage makes prompt-cache reuse across the tool loop verifiable. The AI SDK
+  // reports cache reads on `inputTokenDetails.cacheReadTokens` (`cachedInputTokens` is deprecated).
+  const usageByCall: LlmTokenUsage[] = steps.map((step): LlmTokenUsage => {
+    const stepPromptTokens = step.usage.inputTokens ?? 0;
+    const stepCompletionTokens = step.usage.outputTokens ?? 0;
+    return {
+      promptTokens: stepPromptTokens,
+      completionTokens: stepCompletionTokens,
+      totalTokens: step.usage.totalTokens ?? stepPromptTokens + stepCompletionTokens,
+      cachedPromptTokens: readCachedInputTokens(step.usage),
+    };
+  });
 
   return {
     assistantText,
@@ -152,6 +185,10 @@ export async function runAiSdkWithToolLoop(opts: AiSdkRuntimeOptions): Promise<A
       promptTokens,
       completionTokens,
       totalTokens: totalUsage.totalTokens ?? promptTokens + completionTokens,
+      cachedPromptTokens:
+        readCachedInputTokens(totalUsage) ||
+        usageByCall.reduce((sum, call) => sum + call.cachedPromptTokens, 0),
     },
+    usageByCall,
   };
 }

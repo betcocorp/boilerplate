@@ -5,7 +5,10 @@ import {
   RECOMMENDATIONS_SPECIALIST_SYSTEM_PROMPT,
 } from '~/lib/agents/recommendations-specialist/recommendations-specialist-system-prompt';
 import { PRODUCT_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/product-specialist/product-specialist-system-prompt';
-import { buildProductSupportInstructions } from '~/lib/workflows/product-support/product-support-prompts';
+import {
+  buildProductSupportInstructions,
+  buildProductSupportPromptCacheKey,
+} from '~/lib/workflows/product-support/product-support-prompts';
 
 const baseRouting = {
   rationale: 'test rationale',
@@ -79,5 +82,62 @@ describe('buildProductSupportInstructions — recommendations routing (B0-98)', 
     expect(instructions).toContain(
       'Scores: product 0 · bathroom 0 · dilution 0 · floor 0 · recommendations 2',
     );
+  });
+});
+
+describe('buildProductSupportInstructions — prompt-cache stable prefix (B0-324)', () => {
+  const build = (routing: Partial<typeof baseRouting> & { decision: string }) =>
+    buildProductSupportInstructions({
+      mode: 'orchestrator',
+      routing: { ...baseRouting, ...routing },
+    });
+
+  it('keeps the volatile routing hint at the very end, after the specialist policy and tool rules', () => {
+    const instructions = build({ decision: 'product', rationale: 'product signals (2) won' });
+
+    expect(instructions).toContain('## Orchestrator hint (non-authoritative)');
+    expect(instructions.indexOf('## Orchestrator hint (non-authoritative)')).toBeGreaterThan(
+      instructions.indexOf(PRODUCT_SPECIALIST_SYSTEM_PROMPT),
+    );
+    expect(instructions.indexOf('## Orchestrator hint (non-authoritative)')).toBeGreaterThan(
+      instructions.indexOf('## Tool and grounding rules'),
+    );
+    // Nothing may follow the hint block — it is the tail of the prompt.
+    expect(instructions.trimEnd()).toMatch(
+      /do not treat this routing as evidence\.$/,
+    );
+  });
+
+  it('two turns on the same route share a byte-identical prefix up to the routing hint', () => {
+    const first = build({ decision: 'product', rationale: 'first message rationale', productScore: 2 });
+    const second = build({ decision: 'product', rationale: 'second message rationale', productScore: 7 });
+
+    const marker = '## Orchestrator hint (non-authoritative)';
+    const firstPrefix = first.slice(0, first.indexOf(marker));
+    const secondPrefix = second.slice(0, second.indexOf(marker));
+
+    expect(firstPrefix).toBe(secondPrefix);
+    // The shared prefix must stay large enough to clear OpenAI's ~1024-token cache floor.
+    expect(firstPrefix.length).toBeGreaterThan(6000);
+  });
+
+  it('keys the prompt cache by mode + routing decision only (never per message or per run)', () => {
+    const key = buildProductSupportPromptCacheKey({
+      mode: 'orchestrator',
+      decision: 'product',
+    });
+
+    expect(key).toBe('bex-product-support:orchestrator:product');
+    // Same route ⇒ same key, so consecutive turns share one cache pool.
+    expect(
+      buildProductSupportPromptCacheKey({ mode: 'orchestrator', decision: 'product' }),
+    ).toBe(key);
+    // A different specialist policy is a different prefix, so it must not share the pool.
+    expect(
+      buildProductSupportPromptCacheKey({ mode: 'orchestrator', decision: 'recommendations' }),
+    ).not.toBe(key);
+    expect(
+      buildProductSupportPromptCacheKey({ mode: 'recommendations', decision: 'recommendations' }),
+    ).not.toBe(key);
   });
 });

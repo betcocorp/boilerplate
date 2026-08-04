@@ -52,6 +52,11 @@ export const productSupportFinalOutputSchema = z.object({
       promptTokens: z.number(),
       completionTokens: z.number(),
       totalTokens: z.number(),
+      /**
+       * B0-324 — prompt tokens served from the provider's automatic prompt cache. Optional so
+       * historical `workflow_run.final_output` payloads written before B0-324 still parse.
+       */
+      cachedPromptTokens: z.number().optional(),
     })
     .optional(),
 });

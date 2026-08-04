@@ -67,6 +67,19 @@ function systemPromptForDecision(decision: string) {
   return PRODUCT_SPECIALIST_SYSTEM_PROMPT;
 }
 
+/**
+ * B0-324 — cache key for the stable instruction prefix built below. It must vary with everything
+ * that changes that prefix (mode + routing decision, which selects the specialist policy) and with
+ * nothing else — no run id, timestamp, or user text — so every model call in a tool loop, and every
+ * later turn on the same route, routes to the same OpenAI prompt-cache pool.
+ */
+export function buildProductSupportPromptCacheKey(input: {
+  mode: BexChatAgentMode;
+  decision: string;
+}): string {
+  return `bex-product-support:${input.mode}:${input.decision}`;
+}
+
 export function buildProductSupportInstructions(input: {
   mode: BexChatAgentMode;
   routing: {
@@ -86,16 +99,15 @@ export function buildProductSupportInstructions(input: {
       ? 'Routing mode: orchestrator (auto-select specialist by intent).'
       : `Routing mode: direct \`${input.mode}\` specialist (forced by admin selection).`;
 
+  // B0-324 — prompt-cache layout: everything above the trailing routing hint is byte-identical for a
+  // given (mode, routing decision), so OpenAI's automatic prompt caching can reuse it as a stable
+  // prefix across every model call in the tool loop AND across turns/conversations. The per-message
+  // routing hint (decision + scores + rationale) is the only volatile part, so it goes LAST — moving
+  // it above the specialist policy would bust the cached prefix on every request.
   return [
     'You are Bex product support. Follow the specialist policy below.',
     '',
     modeLine,
-    '',
-    routingHintBlock({
-      decision: input.routing.decision,
-      rationale: input.routing.rationale,
-      scores,
-    }),
     '',
     '---',
     '',
@@ -142,6 +154,14 @@ export function buildProductSupportInstructions(input: {
     '- If tools return no relevant sources, encounter an error, fail to retrieve documentation, or the question is about a product or topic Betco does not cover: respond with exactly "I don\'t have the information needed to answer that." Do NOT speculate, invent product details, answer from general knowledge, or add product-specific explanations or reasons. Use only this exact response — do not rephrase or extend it.',
     '- Keep answers concise; synthesize across the full document bodies and prefer numbered steps for procedures. Do not paste large blocks of retrieved text verbatim.',
     '- In your reply, cite source document ids inline where helpful (e.g. `[doc:uuid]` matching tool output).',
+    '',
+    '---',
+    '',
+    routingHintBlock({
+      decision: input.routing.decision,
+      rationale: input.routing.rationale,
+      scores,
+    }),
   ].join('\n');
 }
 

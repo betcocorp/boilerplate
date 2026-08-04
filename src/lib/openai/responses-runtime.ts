@@ -26,6 +26,14 @@ export type ResponsesRuntimeOptions = {
   maxToolRounds?: number;
   temperature?: number;
   toolChoice?: ResponseCreateParamsNonStreaming['tool_choice'];
+  /**
+   * B0-324 — `prompt_cache_key` routes every request sharing the same stable prefix
+   * (instructions + tool schemas) to the same cache pool. Without it, identical prompts are
+   * load-balanced across machines and OpenAI's automatic prompt caching mostly misses; with it,
+   * the 2nd+ call in a tool loop reads the prefix from cache. Must be identical for all calls
+   * that share a prefix, and must NOT contain per-request values (run id, timestamp, user text).
+   */
+  promptCacheKey?: string;
   onRawResponse?: (response: Response) => void;
   onAssistantDelta?: (delta: string) => void;
   executeTool: ExecuteToolFn;
@@ -36,6 +44,12 @@ export type LlmTokenUsage = {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+  /**
+   * B0-324 — prompt tokens the provider served from its automatic prompt cache
+   * (`usage.input_tokens_details.cached_tokens`). Non-zero on the 2nd+ model call of a
+   * multi-round tool loop means the stable prefix (instructions + tool schemas) is being reused.
+   */
+  cachedPromptTokens: number;
 };
 
 export type ResponsesRuntimeResult = {
@@ -45,6 +59,8 @@ export type ResponsesRuntimeResult = {
   toolTrace: ToolTraceEntry[];
   responseIds: string[];
   usage: LlmTokenUsage;
+  /** B0-324 — per-model-call usage, in call order, so prompt-cache reuse per round is verifiable. */
+  usageByCall: LlmTokenUsage[];
 };
 
 export async function runResponsesWithToolLoop(
@@ -58,11 +74,25 @@ export async function runResponsesWithToolLoop(
   let toolOutputs: ResponseInputItem[] | null = null;
 
   let lastResponse: Response | null = null;
-  const usage: LlmTokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+  const usage: LlmTokenUsage = {
+    promptTokens: 0,
+    completionTokens: 0,
+    totalTokens: 0,
+    cachedPromptTokens: 0,
+  };
+  const usageByCall: LlmTokenUsage[] = [];
   const accumulateUsage = (response: Response) => {
-    usage.promptTokens += response.usage?.input_tokens ?? 0;
-    usage.completionTokens += response.usage?.output_tokens ?? 0;
-    usage.totalTokens += response.usage?.total_tokens ?? 0;
+    const call: LlmTokenUsage = {
+      promptTokens: response.usage?.input_tokens ?? 0,
+      completionTokens: response.usage?.output_tokens ?? 0,
+      totalTokens: response.usage?.total_tokens ?? 0,
+      cachedPromptTokens: response.usage?.input_tokens_details?.cached_tokens ?? 0,
+    };
+    usageByCall.push(call);
+    usage.promptTokens += call.promptTokens;
+    usage.completionTokens += call.completionTokens;
+    usage.totalTokens += call.totalTokens;
+    usage.cachedPromptTokens += call.cachedPromptTokens;
   };
 
   for (let i = 0; i < maxRounds; i += 1) {
@@ -86,6 +116,7 @@ export async function runResponsesWithToolLoop(
       stream: false,
       temperature: opts.temperature ?? 0.2,
       input,
+      ...(opts.promptCacheKey ? { prompt_cache_key: opts.promptCacheKey } : {}),
       ...(chainPrev ? { previous_response_id: chainPrev } : {}),
     };
 
@@ -122,6 +153,7 @@ export async function runResponsesWithToolLoop(
         toolTrace,
         responseIds,
         usage,
+        usageByCall,
       };
     }
 
@@ -154,5 +186,6 @@ export async function runResponsesWithToolLoop(
     toolTrace,
     responseIds,
     usage,
+    usageByCall,
   };
 }

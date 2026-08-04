@@ -32,7 +32,10 @@ import { buildCompetitiveRecommendationAnswer } from '~/lib/recommendations/reco
 import { productSupportTools } from '~/lib/tools/definitions';
 import { executeToolCall } from '~/lib/tools/execute-tool-call';
 
-import { buildProductSupportInstructions } from '~/lib/workflows/product-support/product-support-prompts';
+import {
+  buildProductSupportInstructions,
+  buildProductSupportPromptCacheKey,
+} from '~/lib/workflows/product-support/product-support-prompts';
 import {
   type ProductSupportFinalOutput,
   type RetrievedDocumentChunkRef,
@@ -768,6 +771,12 @@ export async function runProductSupportWorkflow(input: {
       recommendationScore: route.recommendationScore,
     },
   });
+  // B0-324 — same prefix ⇒ same cache pool, for every model call in this turn and every later turn
+  // routed the same way.
+  const promptCacheKey = buildProductSupportPromptCacheKey({
+    mode: agentMode,
+    decision: routingDecision,
+  });
 
   const model = resolveResponsesModel(input.modelTag);
   const client = getOpenAIClient();
@@ -1035,6 +1044,7 @@ export async function runProductSupportWorkflow(input: {
           history: input.priorMessages ?? [],
           userMessage: input.userMessage,
           toolChoice,
+          promptCacheKey,
           onAssistantDelta: input.onAssistantDelta,
           executeTool,
         })
@@ -1046,6 +1056,7 @@ export async function runProductSupportWorkflow(input: {
           userMessage: input.userMessage,
           previousResponseId: input.previousOpenaiResponseId ?? null,
           toolChoice,
+          promptCacheKey,
           onAssistantDelta: input.onAssistantDelta,
           executeTool,
         });
@@ -1187,6 +1198,11 @@ export async function runProductSupportWorkflow(input: {
         // Full per-call trace (B0-331) so the observability timeline can render
         // arguments/output previews, ok flags and durations without a migration.
         toolTrace: agentResult.toolTrace,
+        // B0-324 — token usage for the turn plus the per-model-call breakdown, so prompt-cache
+        // reuse across the multi-round tool loop is verifiable from the persisted step alone
+        // (`cachedPromptTokens` should be non-zero from the 2nd call onward).
+        usage: agentResult.usage,
+        usageByCall: agentResult.usageByCall,
       }),
     });
 
@@ -1511,7 +1527,14 @@ export async function runProductSupportWorkflow(input: {
       { workflow_run_id: run.id },
       wfCtx,
     );
-    logInfo('workflow_completed', { ...wfCtx });
+    // B0-324 — prompt-cache visibility per turn: `cachedPromptTokens` vs `promptTokens` across the
+    // model calls in the tool loop (0 cached on a multi-round turn means the prefix isn't being reused).
+    logInfo('workflow_completed', {
+      ...wfCtx,
+      model_calls: agentResult.usageByCall.length,
+      prompt_tokens: agentResult.usage.promptTokens,
+      cached_prompt_tokens: agentResult.usage.cachedPromptTokens,
+    });
     input.onEvent?.({ type: 'status', stage: 'workflow_completed' });
 
     return finalOutput;
