@@ -434,7 +434,9 @@ describe('B0-329: latency ceiling / circuit breaker', () => {
       FAST_POLICY,
     );
     expect(result.source).toBe('legacy');
-    expect(result.status).toBe('pending'); // weak match → human review, never surfaced as an answer
+    // Declined, NOT pending: a cut-short run must not enter the human-review queue, which is
+    // reserved for prompts that ran as far as they could. Candidates are still carried as evidence.
+    expect(result.status).toBe('declined');
     expect(result.answered).toBe(false);
     expect(result.declineReason).toBe(XREF_DECLINE_COPY);
     expect(result.candidates.map((c) => c.betcoProductKey)).toEqual(['111A1-00']);
@@ -491,7 +493,7 @@ describe('B0-329: latency ceiling / circuit breaker', () => {
       },
       FAST_POLICY,
     );
-    expect(result.status).toBe('pending');
+    expect(result.status).toBe('declined');
     const timeout = result.evidence.timeout as { timedOut: boolean; reason: string; message: string };
     expect(timeout).toMatchObject({ timedOut: false, reason: 'step_failure' });
     expect(timeout.message).toContain('enrichment provider exploded');

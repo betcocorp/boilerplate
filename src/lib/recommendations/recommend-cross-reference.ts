@@ -543,9 +543,14 @@ async function runWebGroundedPath(ctx: WebGroundedPathContext): Promise<Recommen
  *
  * Fallback order: the legacy lookup's matches when it produced any — they are always sub-threshold
  * here, because a confident legacy match returns from step 1 long before this point — otherwise a
- * plain decline. Weak legacy matches are carried as candidates and routed to human review
- * (`status: 'pending'`) with `XREF_DECLINE_COPY` shown, exactly as a sub-threshold web result behaves;
- * a degraded, unvalidated equivalence for an EPA-registered product is never surfaced as an answer.
+ * plain decline. Either way the status is `'declined'` with `XREF_DECLINE_COPY` shown; a degraded,
+ * unvalidated equivalence for an EPA-registered product is never surfaced as an answer.
+ *
+ * Never `'pending'`: that status means the prompt ran as far as it could and the human-in-the-loop
+ * phase has legitimately engaged (see the validator gate in `runWebGroundedPath`). A latency-ceiling
+ * trip is the opposite — the run was cut short — so sending it to human review would pollute the
+ * queue with merely-slow runs and misstate why they are there. Weak legacy matches are still carried
+ * as candidates so a human debugging the run can see what step 1 did find.
  */
 function latencyCeilingFallback(args: {
   error: unknown;
@@ -589,7 +594,11 @@ function latencyCeilingFallback(args: {
   return {
     source: hasLegacy ? 'legacy' : 'web',
     answered: false,
-    status: hasLegacy ? 'pending' : 'declined',
+    // Always 'declined', never 'pending'. 'pending' means the prompt ran as far as it could and the
+    // human-in-the-loop phase has legitimately engaged; a latency-ceiling trip is the opposite — the
+    // run was cut short. Routing timeouts into the HITL queue would both pollute it with merely-slow
+    // runs and misstate why they are there. Legacy matches are still carried as evidence.
+    status: 'declined',
     overallConfidence: hasLegacy ? (legacyMatches[0]?.confidence ?? 0) : 0,
     thresholdUsed: hasLegacy ? LEGACY_MATCH_THRESHOLD : resolveXrefThreshold(),
     candidates: hasLegacy ? mapLegacyMatches(legacyMatches) : [],
