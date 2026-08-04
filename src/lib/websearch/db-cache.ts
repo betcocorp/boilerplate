@@ -17,7 +17,7 @@ export interface WebSearchDurableCache {
   set(key: string, value: WebSearchResponse, ttlMs: number): Promise<void>;
 }
 
-type CacheRow = { response: unknown; expires_at: string };
+type CacheRow = { response: unknown; expires_at: string; hit_count: number | null };
 type LooseTable = {
   select: (cols: string) => LooseTable;
   eq: (column: string, value: unknown) => LooseTable;
@@ -28,6 +28,9 @@ type LooseTable = {
     row: Record<string, unknown>,
     opts: { onConflict: string },
   ) => Promise<{ error: unknown }>;
+  update: (row: Record<string, unknown>) => {
+    eq: (column: string, value: unknown) => Promise<{ error: unknown }>;
+  };
 };
 
 function cacheTable(): LooseTable {
@@ -42,7 +45,7 @@ export class WebSearchDbCache implements WebSearchDurableCache {
   async get(key: string): Promise<WebSearchResponse | null> {
     try {
       const { data, error } = await cacheTable()
-        .select('response, expires_at')
+        .select('response, expires_at, hit_count')
         .eq('cache_key', key)
         .gt('expires_at', new Date().toISOString())
         .limit(1)
@@ -51,9 +54,30 @@ export class WebSearchDbCache implements WebSearchDurableCache {
         return null;
       }
       const parsed = webSearchResponseSchema.safeParse(data.response);
-      return parsed.success ? parsed.data : null;
+      if (!parsed.success) {
+        return null;
+      }
+      // B0-326: record the hit. Nothing incremented `hit_count` before, so every row sat at 0 and
+      // the cache hit rate was unmeasurable — which is most of why the cache looked "unused".
+      await this.recordHit(key, data.hit_count);
+      return parsed.data;
     } catch {
       return null;
+    }
+  }
+
+  /**
+   * Best-effort hit counter. Read-modify-write rather than an atomic `hit_count + 1` because the
+   * JS client cannot express a column-relative update without an RPC; a lost increment under
+   * concurrency only under-counts an observability metric, it never affects what is served.
+   */
+  private async recordHit(key: string, current: number | null): Promise<void> {
+    try {
+      await cacheTable()
+        .update({ hit_count: (typeof current === 'number' ? current : 0) + 1 })
+        .eq('cache_key', key);
+    } catch {
+      // never let telemetry break a cache hit
     }
   }
 

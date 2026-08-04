@@ -184,6 +184,76 @@ describe('WebSearchService durable (DB) cache layer', () => {
     expect(db.get).toHaveBeenCalledOnce();
   });
 
+  it('serves a basic request from a stored advanced response without re-billing (B0-326)', async () => {
+    let calls = 0;
+    const provider: WebSearchProvider = {
+      name: 'mock',
+      search: async (): Promise<ProviderSearchResult> => {
+        calls += 1;
+        return { answer: 'from-provider', results: [] };
+      },
+      extract: async () => [],
+    };
+    const db = stubDbCache();
+    // Only the advanced entry exists (the escalating pass wrote it).
+    db.store.set(webSearchCacheKey('mock', { query: 'zorbex klenz 9000', depth: 'advanced' }), {
+      query: 'zorbex klenz 9000',
+      provider: 'mock',
+      answer: 'from-advanced',
+      results: [],
+      metrics: { latencyMs: 5, resultCount: 0, estimatedCostUsd: 0.016, cached: false },
+    });
+
+    const service = new WebSearchService(provider, freshCache(), { dbCache: db });
+    const result = await service.search({ query: 'Zorbex Klenz-9000', depth: 'basic' });
+
+    expect(result.answer).toBe('from-advanced');
+    expect(result.metrics.cached).toBe(true);
+    expect(calls).toBe(0); // provider not billed for the basic pass
+  });
+
+  it('does NOT serve an advanced request from a stored basic response (B0-326)', async () => {
+    let calls = 0;
+    const provider: WebSearchProvider = {
+      name: 'mock',
+      search: async (): Promise<ProviderSearchResult> => {
+        calls += 1;
+        return { answer: 'from-provider', results: [] };
+      },
+      extract: async () => [],
+    };
+    const db = stubDbCache();
+    db.store.set(webSearchCacheKey('mock', { query: 'q', depth: 'basic' }), {
+      query: 'q',
+      provider: 'mock',
+      answer: 'from-basic',
+      results: [],
+      metrics: { latencyMs: 5, resultCount: 0, estimatedCostUsd: 0.008, cached: false },
+    });
+
+    const service = new WebSearchService(provider, freshCache(), { dbCache: db });
+    const result = await service.search({ query: 'q', depth: 'advanced' });
+
+    expect(result.answer).toBe('from-provider');
+    expect(calls).toBe(1); // deeper evidence must not be downgraded to a cached basic pass
+  });
+
+  it('write-through uses the exact depth key, never the fallback (B0-326)', async () => {
+    const provider: WebSearchProvider = {
+      name: 'mock',
+      search: async (): Promise<ProviderSearchResult> => ({ answer: 'fresh', results: [] }),
+      extract: async () => [],
+    };
+    const db = stubDbCache();
+    const service = new WebSearchService(provider, freshCache(), { dbCache: db });
+
+    await service.search({ query: 'q', depth: 'basic' });
+
+    expect([...db.store.keys()]).toEqual([
+      webSearchCacheKey('mock', { query: 'q', depth: 'basic' }),
+    ]);
+  });
+
   it('write-through: a provider miss populates the DB cache', async () => {
     const provider: WebSearchProvider = {
       name: 'mock',
