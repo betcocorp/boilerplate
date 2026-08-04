@@ -1073,6 +1073,15 @@ export async function runProductSupportWorkflow(input: {
 
     const resolvedToolTrace = [...agentResult.toolTrace];
     const crossReferenceIntent = shouldForceCrossReferenceLookup(input.userMessage);
+    /**
+     * B0-339 — the cross-reference post-processing below must not hinge on the routing label alone.
+     * A cross-reference request phrased without "equivalent" ("Which Betco product replaces X?")
+     * can still land on the `product` route, and gating on `routingDecision` meant the curated
+     * override was looked up, matched, and then silently ignored. Explicit cross-reference intent
+     * is treated as equivalent to the recommendations route so the override always wins.
+     */
+    const useCrossReferencePostProcessing =
+      routingDecision === 'recommendations' || crossReferenceIntent;
     let crossReferenceResult =
       extractTopCrossReferenceMatchFromToolOutputs(toolOutputLog) ??
       extractTopCrossReferenceMatch(resolvedToolTrace);
@@ -1082,7 +1091,7 @@ export async function runProductSupportWorkflow(input: {
     // consult the curated override directly with the raw user message — the lenient matcher finds the
     // competitor mention inside it — so a curated equivalence (e.g. BNC-15 → Triforce) always wins.
     let overrideFromSafetyNet = false;
-    if (routingDecision === 'recommendations' && !crossReferenceResult) {
+    if (useCrossReferencePostProcessing && !crossReferenceResult) {
       const forced = await lookupCrossReference({
         brand: input.userMessage,
         productName: input.userMessage,
@@ -1130,7 +1139,7 @@ export async function runProductSupportWorkflow(input: {
     // route — build a full competitive analysis from those facts + retrieved context, replacing
     // whatever product the model may have drafted. Works even with no web URL (Triforce, OnWeb=0).
     const isOverrideMatch =
-      routingDecision === 'recommendations' &&
+      useCrossReferencePostProcessing &&
       !!crossReferenceResult &&
       (overrideFromSafetyNet ||
         !!crossReferenceResult.match.rationale ||
@@ -1175,7 +1184,7 @@ export async function runProductSupportWorkflow(input: {
     // A competitive recommendation is grounded by its cross-reference match, not by RAG chunks.
     // Feed that match to the validator as evidence so it doesn't reject the recommendation as
     // "unsupported" (a curated/legacy cross-reference IS the support for the equivalence claim).
-    if (routingDecision === 'recommendations' && crossReferenceResult) {
+    if (useCrossReferencePostProcessing && crossReferenceResult) {
       const m = crossReferenceResult.match;
       const competitorLabel = [m.competitorBrand, m.competitorProductName]
         .filter(Boolean)
@@ -1354,7 +1363,13 @@ export async function runProductSupportWorkflow(input: {
     // REC-4: on the competitive-recommendation route, calibrate confidence to retrieval
     // strength (top-hit similarity < 60% cannot exceed 0.75) and enforce chemistry-class
     // consistency once REC-1 grounding + REC-2/3 structured fields are wired (dormant until then).
-    if (routingDecision === 'recommendations') {
+    //
+    // B0-339 widened this past `routingDecision` alongside the branches above. Keeping it on the
+    // label alone would have left the same question reporting a higher confidence when it happened
+    // to route `product` than when it routed `recommendations` — and this gate only ever tightens
+    // confidence, so the conservative direction for an equivalence claim about an EPA-registered
+    // product is to apply it whenever the cross-reference post-processing ran.
+    if (useCrossReferencePostProcessing) {
       const topSimilarity = sources.reduce(
         (max, s) =>
           typeof s.similarity === 'number' && s.similarity > max

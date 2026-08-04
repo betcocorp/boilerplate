@@ -150,6 +150,60 @@ const RECOMMENDATION_SIGNALS = [
   'which betco product',
   'recommend',
   'recommendation',
+  // B0-339: substitution verbs that were missing, so "Which Betco product replaces X?" and
+  // "We currently use X — what should we switch to?" scored 0 here and lost to the generic
+  // 'product'/'betco' PRODUCT_SIGNALS. Deliberately no bare 'replace': PRODUCT_SIGNALS already
+  // carries 'replacement', and substring matching would double-count it.
+  'replaces',
+  'to replace',
+  'can replace',
+  'switch to',
+  'swap out',
+  'swap to',
+  'instead of',
+  // Matches "we currently use" and "I currently use" without double-counting either.
+  'currently use',
+];
+
+/**
+ * B0-339 — signals that mean competitor→Betco cross-reference and essentially nothing else.
+ *
+ * `PRODUCT_SIGNALS` contains the generic tokens 'product' and 'betco', which appear in almost every
+ * cross-reference phrasing, so a literal "Cross-reference X to a Betco product" scored product 2 /
+ * recommendations 1 and routed to `product`. The existing tie-break could not help, because product
+ * never tied — it won outright. Measured on live `audit_logs`: 270 of the 414 runs that called
+ * `lookup_cross_reference` (65%) were labeled `product`, which skipped the recommendations-only
+ * post-processing (curated-override safety net, competitive-answer builder, validator evidence
+ * injection) — so a real competitor with a curated override could be declined on the label alone.
+ *
+ * A decisive hit wins outright rather than by count. Kept to unambiguous phrases: the generic
+ * 'recommend', bare 'competitive', and 'what/which betco product' are deliberately NOT decisive,
+ * since those routinely appear in plain catalog questions.
+ *
+ * Removing 'product'/'betco' from `PRODUCT_SIGNALS` was the other option and was rejected: they are
+ * that route's catch-all, and dropping them would strand ordinary product questions at `agent: null`.
+ */
+const DECISIVE_RECOMMENDATION_SIGNALS = [
+  'cross-reference',
+  'cross reference',
+  'crossreference',
+  'competitor',
+  'competitive analysis',
+  'betco equivalent',
+  'betco version',
+  'betco alternative',
+  'equivalent to',
+  'alternative to',
+  'replacement for',
+  'comparable',
+  'switch from',
+  'switch to',
+  'convert from',
+  'swap out',
+  'swap to',
+  'replaces',
+  'to replace',
+  'can replace',
 ];
 
 function countSignalHits(text: string, signals: string[]): number {
@@ -163,6 +217,12 @@ function countSignalHits(text: string, signals: string[]): number {
   }
 
   return hits;
+}
+
+/** B0-339 — true when the message carries unambiguous competitor→Betco cross-reference intent. */
+export function hasDecisiveRecommendationSignal(message: string): boolean {
+  const lower = message.toLowerCase();
+  return DECISIVE_RECOMMENDATION_SIGNALS.some((signal) => lower.includes(signal));
 }
 
 export type SmeRouteDecision = {
@@ -225,6 +285,21 @@ export function routeUserMessageToSme(message: string): SmeRouteDecision {
       recommendationScore,
       rationale:
         'No specialist keywords matched. Mention a Betco product or SDS topic, restroom care, dilution control hardware, floor maintenance procedures, or a competitor product to cross-reference.',
+    };
+  }
+
+  // B0-339: an unambiguous cross-reference phrase wins outright, before any counting. Counting
+  // cannot resolve this on its own — the generic 'product'/'betco' PRODUCT_SIGNALS out-hit the
+  // single cross-reference phrase, so `product` won without ever tying.
+  if (recommendationScore > 0 && hasDecisiveRecommendationSignal(trimmed)) {
+    return {
+      agent: 'recommendations',
+      productScore,
+      bathroomScore,
+      dilutionScore,
+      floorScore,
+      recommendationScore,
+      rationale: `Decisive cross-reference signal; chose **recommendations** outright (product ${productScore}, bathroom ${bathroomScore}, dilution ${dilutionScore}, floor ${floorScore}, recommendations ${recommendationScore}).`,
     };
   }
 
