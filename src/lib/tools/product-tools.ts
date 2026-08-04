@@ -34,7 +34,7 @@ import {
   searchProductDocsInputSchema,
   type ProductToolName,
 } from '~/lib/tools/tool-schemas';
-import { lookupCrossReference } from '~/lib/tools/cross-reference-lookup';
+import { lookupCrossReferenceDeduped } from '~/lib/recommendations/legacy-lookup-cache';
 import { getProductCategory, getProductsInCategory } from '~/lib/tools/category-lookup';
 import { routeCategoryQuery } from '~/lib/category/category-router';
 import { runCrossReferenceRecommendation } from '~/lib/recommendations/persist-recommendation';
@@ -319,7 +319,9 @@ export async function executeProductTool(
     }
     case 'lookup_cross_reference': {
       const p = lookupCrossReferenceInputSchema.parse(args);
-      return lookupCrossReference(p);
+      // B0-322: shares its result with `recommend_cross_reference`'s step 1 when the model calls both
+      // with the same brand/product in one turn (see legacy-lookup-cache for the TTL scoping).
+      return lookupCrossReferenceDeduped(p);
     }
     case 'get_products_in_category': {
       const p = getProductsInCategoryInputSchema.parse(args);
