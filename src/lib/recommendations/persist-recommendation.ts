@@ -111,7 +111,14 @@ export async function runCrossReferenceRecommendation(
   const recommendationId = await persistRecommendation(input, result, { ...ctx, traceId }, deps.persist);
 
   const audit = deps.audit ?? ((eventType, payload, auditCtx) => writeAuditLog(eventType, payload, auditCtx));
-  const webSearch = (result.evidence as { webSearch?: Record<string, unknown> }).webSearch ?? null;
+  const evidence = result.evidence as {
+    webSearch?: Record<string, unknown>;
+    timingBreakdown?: Record<string, unknown>;
+  };
+  const webSearch = evidence.webSearch ?? null;
+  // B0-323 — mirror the per-sub-step latency onto the audit entry so the tool call's 2.8s–13.2s
+  // spread is attributable from the audit log as well as from `recommendation.evidence`.
+  const timingBreakdown = evidence.timingBreakdown ?? null;
   await audit(
     'cross_reference_recommendation',
     {
@@ -124,6 +131,7 @@ export async function runCrossReferenceRecommendation(
       threshold_used: result.thresholdUsed,
       recommendation_id: recommendationId,
       web_search: webSearch,
+      timing_breakdown: timingBreakdown,
     },
     { traceId },
   );
