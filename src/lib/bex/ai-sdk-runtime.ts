@@ -3,6 +3,8 @@ import {
   stepCountIs,
   streamText,
   tool,
+  wrapLanguageModel,
+  type LanguageModelMiddleware,
   type LanguageModelUsage,
   type ModelMessage,
   type ToolChoice,
@@ -15,7 +17,14 @@ import type {
   LlmTokenUsage,
   ResponsesRuntimeResult,
 } from '~/lib/openai/responses-runtime';
+import {
+  classifyTransportError,
+  retryTransportFaults,
+  type TransportRetryTuning,
+} from '~/lib/openai/transport-retry';
+import { logError } from '~/lib/observability/logger';
 import { productSupportTools } from '~/lib/tools/definitions';
+import { getErrorMessage } from '~/lib/utils';
 import type { ToolTraceEntry } from '~/lib/audit/trace';
 
 /**
@@ -42,6 +51,11 @@ export type AiSdkRuntimeOptions = {
   /** B0-324 — see `ResponsesRuntimeOptions.promptCacheKey`; forwarded as the OpenAI `promptCacheKey`. */
   promptCacheKey?: string;
   maxToolRounds?: number;
+  /**
+   * B0-370 — tuning for the bounded transport retry around each model request. Defaults are fine in
+   * production; tests inject `sleep`/`random` to keep the suite fast and deterministic.
+   */
+  retry?: TransportRetryTuning;
   onAssistantDelta?: (delta: string) => void;
   executeTool: ExecuteToolFn;
 };
@@ -102,6 +116,100 @@ function readCachedInputTokens(usage: LanguageModelUsage): number {
   return usage.inputTokenDetails?.cacheReadTokens ?? usage.cachedInputTokens ?? 0;
 }
 
+/** The `{ stream, request, response, ... }` object a provider's `doStream` resolves to. */
+type ModelStreamResult = Awaited<ReturnType<NonNullable<LanguageModelMiddleware['wrapStream']>>>;
+type ModelStreamChunk =
+  ModelStreamResult['stream'] extends ReadableStream<infer Chunk> ? Chunk : never;
+
+/**
+ * B0-370 — pulls the first chunk before handing the stream to `streamText`, then replays it at the
+ * head of an equivalent stream.
+ *
+ * This is what makes the retry boundary exact. A transport fault can surface either while the
+ * request is being made (`doStream` rejects) or after headers but before the first token (the
+ * stream errors / emits an `error` part). Peeking converts the second case into a rejection *while
+ * nothing has been forwarded to `streamText` yet*, so the retry is still pre-emission. Once the
+ * first chunk is handed over, this function is out of the picture and no retry can happen.
+ */
+async function startModelStreamOrThrow(result: ModelStreamResult): Promise<ModelStreamResult> {
+  const reader = result.stream.getReader();
+
+  let first: ReadableStreamReadResult<ModelStreamChunk>;
+  try {
+    first = await reader.read();
+  } catch (err) {
+    reader.releaseLock();
+    throw err;
+  }
+
+  // A provider can report a mid-stream fault as an `error` part rather than by rejecting. When that
+  // is the very first thing on the stream, nothing is emitted yet, so a transport fault there is
+  // still safely retryable — rethrow it so the retry wrapper decides.
+  if (
+    !first.done &&
+    first.value.type === 'error' &&
+    classifyTransportError(first.value.error).retryable
+  ) {
+    void reader.cancel().catch(() => undefined);
+    throw first.value.error;
+  }
+
+  const stream = new ReadableStream<ModelStreamChunk>({
+    start(controller) {
+      if (first.done) {
+        controller.close();
+        return;
+      }
+      controller.enqueue(first.value);
+    },
+    async pull(controller) {
+      try {
+        const next = await reader.read();
+        if (next.done) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(next.value);
+      } catch (err) {
+        controller.error(err);
+      }
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
+
+  return { ...result, stream };
+}
+
+/**
+ * B0-370 — retry boundary: **one model request (`doStream`) inside the tool loop.**
+ *
+ * Why this cannot duplicate a tool call: `streamText` executes tools in its own step machinery,
+ * *after* a step's model stream has yielded the tool-call parts. Middleware sits strictly below
+ * that — it only re-issues the HTTP request for the current step. A retried request re-sends the
+ * identical prepared prompt (`params`), which already contains the tool results of every completed
+ * step as plain messages, and our `execute` closures are never re-invoked. Because this runtime is
+ * stateless (history is replayed rather than chained through `previous_response_id`), there is also
+ * no server-side response chain that a replay could desynchronise.
+ *
+ * Retrying the whole `streamText` call instead would re-run every tool from step 0 — which is
+ * exactly the duplication the ticket warns about, and why the boundary is here.
+ */
+function createTransportRetryMiddleware(
+  tuning: TransportRetryTuning | undefined,
+): LanguageModelMiddleware {
+  return {
+    specificationVersion: 'v3',
+    wrapStream: async ({ doStream }) =>
+      retryTransportFaults(async () => startModelStreamOrThrow(await doStream()), {
+        runtime: 'ai_sdk',
+        label: 'streamText.doStream',
+        ...tuning,
+      }),
+  };
+}
+
 function mapToolChoice(toolChoice: ResponsesToolChoice | undefined): ToolChoice<ToolSet> {
   if (toolChoice && typeof toolChoice === 'object' && toolChoice.type === 'function') {
     return { type: 'tool', toolName: toolChoice.name };
@@ -134,11 +242,28 @@ export async function runAiSdkWithToolLoop(opts: AiSdkRuntimeOptions): Promise<A
 
   // Match the Responses runtime: force the tool choice on the first step only, then 'auto'.
   const forcedToolChoice = mapToolChoice(opts.toolChoice);
+  /**
+   * B0-370 — `streamText` does not reject with the provider's error: it reports the error through
+   * `onError` and then fails its result promises with the opaque
+   * `AI_NoOutputGeneratedError: No output generated. Check the stream for errors.` (with no `cause`).
+   * Capturing it here is what lets the real fault — including the retry-able wording from an
+   * exhausted `UpstreamTransportError` — reach the workflow instead of that placeholder.
+   */
+  let capturedStreamError: unknown;
   const result = streamText({
-    model: resolveAiSdkLanguageModel(opts.modelTag),
+    model: wrapLanguageModel({
+      model: resolveAiSdkLanguageModel(opts.modelTag),
+      middleware: createTransportRetryMiddleware(opts.retry),
+    }),
     system: opts.instructions,
     messages,
     tools,
+    /**
+     * B0-370 — the middleware above owns the retry policy. The AI SDK's own default is 2 retries
+     * per model request, which would stack multiplicatively with ours (3 × 3 = 9 upstream
+     * attempts) and uses unjittered exponential backoff from a 2s base.
+     */
+    maxRetries: 0,
     // B0-324 — pin every step of the loop to the same prompt cache pool so the stable
     // system + tool-schema prefix is read from cache on the 2nd+ step.
     ...(opts.promptCacheKey
@@ -148,18 +273,31 @@ export async function runAiSdkWithToolLoop(opts: AiSdkRuntimeOptions): Promise<A
     prepareStep: ({ stepNumber }) => ({
       toolChoice: stepNumber === 0 ? forcedToolChoice : 'auto',
     }),
+    onError: ({ error }) => {
+      capturedStreamError = error;
+      // Replaces the AI SDK's default console.error so the fault stays in the structured log.
+      logError('ai_sdk_stream_error', { message: getErrorMessage(error) });
+    },
   });
 
-  // Always drain the stream so the result promises resolve; forward deltas when a sink is provided.
-  for await (const delta of result.textStream) {
-    opts.onAssistantDelta?.(delta);
-  }
+  let assistantText: string;
+  let steps: Awaited<typeof result.steps>;
+  let totalUsage: LanguageModelUsage;
+  try {
+    // Always drain the stream so the result promises resolve; forward deltas when a sink is provided.
+    for await (const delta of result.textStream) {
+      opts.onAssistantDelta?.(delta);
+    }
 
-  const [assistantText, steps, totalUsage] = await Promise.all([
-    result.text,
-    result.steps,
-    result.totalUsage,
-  ]);
+    [assistantText, steps, totalUsage] = await Promise.all([
+      result.text,
+      result.steps,
+      result.totalUsage,
+    ]);
+  } catch (err) {
+    // Prefer the captured provider error over `NoOutputGeneratedError` (see `capturedStreamError`).
+    throw capturedStreamError ?? err;
+  }
 
   const promptTokens = totalUsage.inputTokens ?? 0;
   const completionTokens = totalUsage.outputTokens ?? 0;

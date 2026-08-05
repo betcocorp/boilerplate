@@ -7,6 +7,10 @@ import type {
 import type { ResponseInputItem } from 'openai/resources/responses/responses';
 
 import { extractAssistantText, extractFunctionCalls } from '~/lib/openai/response-item-parsing';
+import {
+  retryTransportFaults,
+  type TransportRetryTuning,
+} from '~/lib/openai/transport-retry';
 import type { ToolTraceEntry } from '~/lib/audit/trace';
 
 export type ExecuteToolFn = (input: {
@@ -34,6 +38,11 @@ export type ResponsesRuntimeOptions = {
    * that share a prefix, and must NOT contain per-request values (run id, timestamp, user text).
    */
   promptCacheKey?: string;
+  /**
+   * B0-370 — tuning for the bounded transport retry around each model request. Defaults are fine in
+   * production; tests inject `sleep`/`random` to keep the suite fast and deterministic.
+   */
+  retry?: TransportRetryTuning;
   onRawResponse?: (response: Response) => void;
   onAssistantDelta?: (delta: string) => void;
   executeTool: ExecuteToolFn;
@@ -120,21 +129,59 @@ export async function runResponsesWithToolLoop(
       ...(chainPrev ? { previous_response_id: chainPrev } : {}),
     };
 
-    let response: Response;
-    if (opts.onAssistantDelta) {
-      const stream = opts.client.responses.stream({
-        ...params,
-        stream: true,
-      } as Parameters<typeof opts.client.responses.stream>[0]);
-      for await (const event of stream) {
-        if (event.type === 'response.output_text.delta') {
-          opts.onAssistantDelta(event.delta);
+    /**
+     * B0-370 — retry boundary: **the model request only, within a single loop iteration.**
+     *
+     * Why this cannot duplicate a tool call, even though this path is stateful:
+     * 1. `params` is built above, never mutated, and replayed identically — `previous_response_id`
+     *    included.
+     *    A failed attempt never returned a response, so `chainPrev` is still the same id — the
+     *    replay resumes from exactly the server-side state the failed attempt targeted, so the
+     *    provider does not re-run anything on its side either.
+     * 2. Tools for round `i` run strictly *after* this await resolves. At retry time no tool of
+     *    this round has executed, and earlier rounds are never re-entered (the loop only moves
+     *    forward), so no tool side effect exists to repeat.
+     * 3. Every piece of accumulated state (`accumulateUsage`, `responseIds.push`, `chainPrev`,
+     *    `toolOutputs`) is mutated only after success, so a retry cannot double-count usage or
+     *    push a duplicate response id.
+     *
+     * `maxRetries: 0` disables the OpenAI SDK's own default of 2 retries per request. Without it
+     * the two policies would stack multiplicatively (3 × 3 = 9 upstream attempts); this keeps the
+     * bound at `attempts` and puts the jitter under our control.
+     */
+    let deltaEmittedThisAttempt = false;
+    const response: Response = await retryTransportFaults(
+      async () => {
+        deltaEmittedThisAttempt = false;
+        if (opts.onAssistantDelta) {
+          const stream = opts.client.responses.stream(
+            {
+              ...params,
+              stream: true,
+            } as Parameters<typeof opts.client.responses.stream>[0],
+            { maxRetries: 0 },
+          );
+          for await (const event of stream) {
+            if (event.type === 'response.output_text.delta') {
+              deltaEmittedThisAttempt = true;
+              opts.onAssistantDelta(event.delta);
+            }
+          }
+          return await stream.finalResponse();
         }
-      }
-      response = await stream.finalResponse();
-    } else {
-      response = await opts.client.responses.create(params);
-    }
+        return await opts.client.responses.create(params, { maxRetries: 0 });
+      },
+      {
+        runtime: 'responses',
+        label: `responses.${opts.onAssistantDelta ? 'stream' : 'create'} round ${i + 1}`,
+        // A replay would re-stream text the user has already seen (the delta sink is write-only —
+        // there is no way to retract it), so a fault after the first visible token fails cleanly
+        // instead of retrying. Transport faults land at connection time, before any token, which
+        // is where all ten production failures occurred.
+        canRetry: () => !deltaEmittedThisAttempt,
+        ...opts.retry,
+      },
+    );
 
     lastResponse = response;
     accumulateUsage(response);
