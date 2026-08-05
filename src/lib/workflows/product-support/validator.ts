@@ -112,11 +112,40 @@ export type RegulatedClaimGroundingResult = {
   ungroundedDetails: Array<{ category: RegulatedClaimCategory; snippet: string }>;
 };
 
-/** Lowercase, collapse whitespace, strip trailing punctuation/markdown emphasis -- comparison-only, never used to alter displayed text. */
+/**
+ * Lowercase, collapse whitespace, strip trailing punctuation/markdown emphasis -- comparison-only,
+ * never used to alter displayed text.
+ *
+ * B0-366: also strips Markdown *structure* (leading list markers, heading `#`, leading/trailing `:`)
+ * so a source line the model re-rendered as a bullet or heading still compares equal to the plain
+ * source text. This is purely mechanical presentation stripping applied symmetrically to both the
+ * claim and the source -- no regulated value (ratio, ppm, %, contact time, CAS, EPA reg no.) is
+ * altered, rounded, or converted by it.
+ */
 function normalizeForGroundingCompare(value: string): string {
   return value
     .toLowerCase()
     .replace(/[*_`]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^(?:#{1,6}\s*)+/, '')
+    .replace(/^(?:[-–—•>+]\s+|\d{1,2}[.)]\s+)+/, '')
+    .replace(/^:+\s*/, '')
+    .replace(/\s*:+$/, '')
+    .trim();
+}
+
+/**
+ * Sentence-level (prose) comparison normalizer for the hazard / first-aid categories.
+ * On top of the structural stripping above it treats `:` between words as a separator, so a
+ * label field the model re-punctuated ("Signal word: Danger" vs "Signal word Danger") still
+ * compares equal. Applied to BOTH sides. Regulated *values* are never compared through this
+ * path -- EPA reg numbers, ratios and contact times go through `normalizeUnitToken`, which
+ * keeps their punctuation intact.
+ */
+function normalizeSentenceForGroundingCompare(value: string): string {
+  return normalizeForGroundingCompare(value)
+    .replace(/\s*:\s*/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -144,18 +173,67 @@ function splitIntoSentences(text: string): string[] {
 }
 
 const EPA_REG_TOKEN_PATTERN = /\bepa\b[^\n]{0,50}?(\d{1,6}-\d{1,6}(?:-\d{1,6})?)/gi;
+/** Inherently dilution-shaped values -- extracted wherever they appear. */
 const DILUTION_TOKEN_PATTERNS = [
   /\d+(?:\.\d+)?\s*(?:fl\.?\s*)?oz\.?s?\s*(?:\/|per)\s*gal(?:lon)?s?\b/gi,
   /\b\d{1,3}\s*:\s*\d{1,5}\b/g,
-  /\b\d+(?:\.\d+)?\s*%/g,
 ];
+/**
+ * B0-366: a bare percentage is only a dilution/concentration claim when dilution context sits
+ * next to it. Mirrors the CONTACT_TIME_CONTEXT_PATTERN gate, but windowed so an efficacy figure
+ * ("effective on 100% of tested surfaces") elsewhere in the same answer is not swept in. A
+ * percentage that IS presented as a dilution/concentration is still extracted and compared
+ * verbatim.
+ */
+const DILUTION_PERCENT_TOKEN_PATTERN = /\b\d+(?:\.\d+)?\s*%/g;
+const DILUTION_PERCENT_CONTEXT_PATTERN =
+  /\b(dilut\w*|concentrat\w*|solution|mix(?:\w*)?|ratio|per gal(?:lon)?s?|oz\s*(?:\/|per)\s*gal|by volume|v\s*\/\s*v|ready[-\s]?to[-\s]?use|rtu|use at|at a rate of|strength)\b/i;
+const DILUTION_PERCENT_CONTEXT_WINDOW = 60;
 const CONTACT_TIME_TOKEN_PATTERN =
   /\b\d+(?:\.\d+)?\s*(?:seconds?|secs?|minutes?|mins?)\b/gi;
 const CONTACT_TIME_CONTEXT_PATTERN = /\b(contact|dwell|kill time|wet time|remain wet)\b/i;
+/**
+ * B0-366: bare `warning` / `caution` / `ppe` are NOT standalone hazard triggers any more --
+ * generic safety boilerplate ("wear appropriate PPE", "follow all label warnings") is not a
+ * quotable regulated claim. They only count when a GHS token sits in the same sentence (e.g.
+ * "Signal word: CAUTION", "Warning: H314"), which is a real transcribed label value.
+ */
 const HAZARD_SENTENCE_PATTERN =
-  /\b(hazard|corrosive|flammable|combustible|causes? (severe )?(skin|eye) (burns?|damage|irritation)|\bdanger\b|\bwarning\b|\bcaution\b|ppe|personal protective)\b/i;
+  /\b(hazard|corrosive|flammable|combustible|causes? (severe )?(skin|eye) (burns?|damage|irritation)|\bdanger\b)\b/i;
+const HAZARD_QUALIFIED_TRIGGER_PATTERN = /\b(warning|caution|ppe|personal protective)\b/i;
+const GHS_CONTEXT_PATTERN =
+  /\b(signal word|ghs|pictogram|hazard statements?|precautionary statements?|h[23]\d{2}|p\d{3})\b/i;
 const FIRST_AID_SENTENCE_PATTERN =
   /\bfirst aid\b|\bif swallowed\b|\bif inhaled\b|\bif in eyes\b|\bif on skin\b|\bpoison control\b/i;
+
+/**
+ * B0-366: sentences that announce or label content rather than assert it -- Markdown headings
+ * ("**First aid measures:**"), label field scaffolding with no value, and the model's own framing
+ * ("The hazard warnings for X are as follows:"). A heading carries no assertion to verify, and a
+ * framing sentence can never be a verbatim source quote, so requiring one is a false positive by
+ * construction. Detection of the actual claim sentences that follow is unaffected.
+ */
+const ANNOUNCEMENT_FRAMING_PATTERN =
+  /\b(as follows|are listed below|is listed below|here (?:are|is) the)\b/i;
+
+function isNonClaimScaffolding(sentence: string): boolean {
+  const base = sentence
+    .toLowerCase()
+    .replace(/[*_`]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^(?:#{1,6}\s*)+/, '')
+    .replace(/^(?:[-–—•>+]\s+|\d{1,2}[.)]\s+)+/, '')
+    .trim();
+
+  if (!/[a-z]/.test(base)) return true;
+  // Ends with a colon => heading / announcement, or a label field with an empty value.
+  if (/:[\s.]*$/.test(base)) return true;
+  // No alphabetic content after the last colon => "signal word: 2)" style scaffolding.
+  const lastColon = base.lastIndexOf(':');
+  if (lastColon >= 0 && !/[a-z]/.test(base.slice(lastColon + 1))) return true;
+  return ANNOUNCEMENT_FRAMING_PATTERN.test(base);
+}
 
 function extractRegexTokens(text: string, pattern: RegExp): string[] {
   const matches = text.match(pattern);
@@ -172,7 +250,20 @@ function extractEpaRegTokens(text: string): string[] {
 }
 
 function extractDilutionTokens(text: string): string[] {
-  return DILUTION_TOKEN_PATTERNS.flatMap((pattern) => extractRegexTokens(text, pattern));
+  const tokens = DILUTION_TOKEN_PATTERNS.flatMap((pattern) =>
+    extractRegexTokens(text, pattern),
+  );
+  for (const match of text.matchAll(DILUTION_PERCENT_TOKEN_PATTERN)) {
+    const start = match.index ?? 0;
+    const window = text.slice(
+      Math.max(0, start - DILUTION_PERCENT_CONTEXT_WINDOW),
+      start + match[0].length + DILUTION_PERCENT_CONTEXT_WINDOW,
+    );
+    if (DILUTION_PERCENT_CONTEXT_PATTERN.test(window)) {
+      tokens.push(match[0].trim());
+    }
+  }
+  return tokens;
 }
 
 function extractContactTimeTokens(text: string): string[] {
@@ -182,9 +273,29 @@ function extractContactTimeTokens(text: string): string[] {
   return extractRegexTokens(text, CONTACT_TIME_TOKEN_PATTERN);
 }
 
-/** Hazard/first-aid claims are prose, not single values -- the "token" to verify is the whole sentence. */
-function extractSentenceClaims(text: string, pattern: RegExp): string[] {
-  return splitIntoSentences(text).filter((sentence) => pattern.test(sentence));
+/**
+ * Hazard/first-aid claims are prose, not single values -- the "token" to verify is the whole
+ * sentence. B0-366: headings / label scaffolding / framing sentences are skipped, since they
+ * assert nothing that could be verified against a source.
+ */
+function extractSentenceClaims(
+  text: string,
+  isClaimTrigger: (sentence: string) => boolean,
+): string[] {
+  return splitIntoSentences(text).filter(
+    (sentence) => isClaimTrigger(sentence) && !isNonClaimScaffolding(sentence),
+  );
+}
+
+function isHazardClaimSentence(sentence: string): boolean {
+  if (HAZARD_SENTENCE_PATTERN.test(sentence)) return true;
+  return (
+    HAZARD_QUALIFIED_TRIGGER_PATTERN.test(sentence) && GHS_CONTEXT_PATTERN.test(sentence)
+  );
+}
+
+function isFirstAidClaimSentence(sentence: string): boolean {
+  return FIRST_AID_SENTENCE_PATTERN.test(sentence);
 }
 
 function isTokenGrounded(token: string, normalizedSources: string[]): boolean {
@@ -194,7 +305,7 @@ function isTokenGrounded(token: string, normalizedSources: string[]): boolean {
 }
 
 function isSentenceGrounded(sentence: string, normalizedSources: string[]): boolean {
-  const normalized = normalizeForGroundingCompare(sentence);
+  const normalized = normalizeSentenceForGroundingCompare(sentence);
   if (!normalized) return false;
   return normalizedSources.some((body) => body.includes(normalized));
 }
@@ -210,8 +321,10 @@ export function evaluateRegulatedClaimGrounding(input: {
   draftAnswer: string;
   sources: RegulatedClaimSource[];
 }): RegulatedClaimGroundingResult {
+  // Same normalization is applied to the claim sentence and the source text, so the comparison
+  // stays symmetric (B0-366).
   const normalizedSourceBodiesPlain = input.sources.map((s) =>
-    normalizeForGroundingCompare(s.documentBody),
+    normalizeSentenceForGroundingCompare(s.documentBody),
   );
   const normalizedSourceBodiesUnit = input.sources.map((s) =>
     normalizeUnitToken(s.documentBody),
@@ -263,11 +376,11 @@ export function evaluateRegulatedClaimGrounding(input: {
   checkTokenCategory('contact_time', extractContactTimeTokens(input.draftAnswer));
   checkSentenceCategory(
     'hazard',
-    extractSentenceClaims(input.draftAnswer, HAZARD_SENTENCE_PATTERN),
+    extractSentenceClaims(input.draftAnswer, isHazardClaimSentence),
   );
   checkSentenceCategory(
     'first_aid',
-    extractSentenceClaims(input.draftAnswer, FIRST_AID_SENTENCE_PATTERN),
+    extractSentenceClaims(input.draftAnswer, isFirstAidClaimSentence),
   );
 
   return {
