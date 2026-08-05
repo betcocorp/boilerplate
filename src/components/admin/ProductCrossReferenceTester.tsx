@@ -21,6 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '~/components/ui/select';
+import { Skeleton } from '~/components/ui/skeleton';
 import { lookupCrossReferenceInputSchema } from '~/lib/tools/tool-schemas';
 
 type MatchRow = {
@@ -102,6 +103,63 @@ const STATUS_STYLES: Record<RecommendationOk['status'], string> = {
   rejected: 'text-amber-600 dark:text-amber-500',
   pending: 'text-sky-600 dark:text-sky-500',
 };
+
+/** One match/candidate row: title + meta, secondary line, URL line. */
+function MatchRowSkeleton() {
+  return (
+    <li className="rounded-2xl border border-border/60 bg-muted/30 p-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <Skeleton className="h-5 w-2/5 rounded-md" />
+        <Skeleton className="h-4 w-28 rounded-md" />
+      </div>
+      <Skeleton className="mt-2 h-4 w-3/5 rounded-md" />
+      <Skeleton className="mt-3 h-4 w-1/2 rounded-md" />
+      <Skeleton className="mt-3 h-3 w-40 rounded-md" />
+    </li>
+  );
+}
+
+/** Stand-in for the whole "Results" card while the legacy lookup is in flight. */
+function LookupResultsSkeleton() {
+  return (
+    <Card
+      aria-live="polite"
+      className="rounded-3xl border border-border/60 shadow-none"
+      role="status"
+    >
+      <CardHeader>
+        <Skeleton className="h-6 w-28 rounded-md" />
+        <Skeleton className="h-4 w-4/5 rounded-md" />
+        <span className="sr-only">Looking up cross-references…</span>
+      </CardHeader>
+      <CardContent>
+        <ul className="space-y-4">
+          {Array.from({ length: 3 }, (_, index) => (
+            <MatchRowSkeleton key={index} />
+          ))}
+        </ul>
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Status line + candidate rows while the web-grounded engine is running. */
+function RecommendationSkeleton() {
+  return (
+    <div aria-live="polite" className="space-y-4" role="status">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <Skeleton className="h-5 w-24 rounded-md" />
+        <Skeleton className="h-4 w-64 rounded-md" />
+      </div>
+      <ul className="space-y-3">
+        {Array.from({ length: 2 }, (_, index) => (
+          <MatchRowSkeleton key={index} />
+        ))}
+      </ul>
+      <span className="sr-only">Generating recommendation…</span>
+    </div>
+  );
+}
 
 export function ProductCrossReferenceTester() {
   const [brand, setBrand] = useState('');
@@ -274,7 +332,9 @@ export function ProductCrossReferenceTester() {
         </CardContent>
       </Card>
 
-      {result ? (
+      {loading ? <LookupResultsSkeleton /> : null}
+
+      {!loading && result ? (
         <Card className="rounded-3xl border border-border/60 shadow-none">
           <CardHeader>
             <CardTitle>Results</CardTitle>
@@ -366,7 +426,9 @@ export function ProductCrossReferenceTester() {
               </Alert>
             ) : null}
 
-            {recommendation ? (
+            {recLoading ? <RecommendationSkeleton /> : null}
+
+            {!recLoading && recommendation ? (
               <div className="space-y-4">
                 <div className="flex flex-wrap items-baseline justify-between gap-2">
                   <span className={`text-sm font-medium capitalize ${STATUS_STYLES[recommendation.status]}`}>

@@ -4,6 +4,7 @@ import { Loader2, Sparkles } from 'lucide-react';
 import { useState } from 'react';
 
 import { Button } from '~/components/ui/button';
+import { Skeleton } from '~/components/ui/skeleton';
 
 /**
  * Prompt-level sibling of `~/components/admin/tests/RunInsightsPanel`, for the
@@ -41,6 +42,36 @@ const IMPACT_STYLES: Record<string, string> = {
 type Props = {
   runId: string;
 };
+
+/** Content-shaped stand-in for the insight cards while analysis runs. */
+function InsightsSkeleton() {
+  return (
+    <div aria-live="polite" role="status">
+      <span className="sr-only">Analyzing this run…</span>
+      <ol className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+        {Array.from({ length: 3 }, (_, index) => (
+          <li
+            className="flex gap-4 rounded-2xl border border-slate-100 bg-slate-50 p-5"
+            key={index}
+          >
+            <Skeleton className="h-8 w-8 shrink-0 rounded-full" />
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <Skeleton className="h-5 w-20 rounded-full" />
+                <Skeleton className="h-5 w-24 rounded-full" />
+                <Skeleton className="h-5 w-28 rounded-md" />
+              </div>
+              <div className="mt-2 space-y-1.5">
+                <Skeleton className="h-4 w-full rounded-md" />
+                <Skeleton className="h-4 w-4/5 rounded-md" />
+              </div>
+            </div>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
 
 export function RunPromptInsightsPanel({ runId }: Props) {
   const [insights, setInsights] = useState<PromptInsight[] | null>(null);
@@ -120,7 +151,9 @@ export function RunPromptInsightsPanel({ runId }: Props) {
         </div>
       ) : null}
 
-      {insights && insights.length > 0 ? (
+      {loading ? <InsightsSkeleton /> : null}
+
+      {!loading && insights && insights.length > 0 ? (
         <ol className="mt-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {insights.map((insight) => (
             <li
@@ -151,7 +184,7 @@ export function RunPromptInsightsPanel({ runId }: Props) {
             </li>
           ))}
         </ol>
-      ) : insights && insights.length === 0 ? (
+      ) : !loading && insights && insights.length === 0 ? (
         <p className="mt-6 text-sm text-slate-500">No insights generated.</p>
       ) : null}
     </section>
