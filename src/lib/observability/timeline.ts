@@ -26,9 +26,12 @@ import type {
 } from '~/types/observability';
 
 /**
- * Confidence ceiling the workflow applies when a usage/safety question lacks
- * usage or safety evidence (run-product-support-workflow.ts: `Math.min(validation.confidence, 0.55)`).
- * This gate writes NO audit log, so we synthesize its event — see `inferUsageSafetyCoverageGate`.
+ * Confidence ceiling the workflow applies when a usage/safety question lacks usage
+ * or safety evidence. Mirrors `USAGE_SAFETY_COVERAGE_CONFIDENCE_CAP` in
+ * `~/lib/workflows/product-support/run-product-support-workflow.ts` (duplicated so this
+ * module stays pure) — change both together. Since B0-367 the workflow writes a
+ * `usage_safety_coverage_cap_applied` row; older runs are still reconstructed by
+ * `inferUsageSafetyCoverageGate`.
  */
 export const USAGE_SAFETY_COVERAGE_CONFIDENCE_CAP = 0.55;
 
@@ -350,13 +353,24 @@ export function buildRunTimeline(
     });
   }
 
-  /* --- gate 4: usage/safety coverage cap (INFERRED, no audit event) ------ */
-  const inferredCap = inferUsageSafetyCoverageGate({
-    validatorStep,
-    validationLogs,
-  });
-  if (inferredCap) {
-    push(inferredCap);
+  /* --- gate 4: usage/safety coverage cap --------------------------------- *
+   * B0-367 added a real `usage_safety_coverage_cap_applied` audit row. Prefer it;
+   * fall back to the inference only for runs that predate it (which must keep
+   * rendering, with the "inferred" badge).
+   */
+  const coverageCapLogs = logsByType('usage_safety_coverage_cap_applied');
+  if (coverageCapLogs.length > 0) {
+    for (const log of coverageCapLogs) {
+      push(buildUsageSafetyCoverageGateFromLog(log, validatorStep));
+    }
+  } else {
+    const inferredCap = inferUsageSafetyCoverageGate({
+      validatorStep,
+      validationLogs,
+    });
+    if (inferredCap) {
+      push(inferredCap);
+    }
   }
 
   /* --- gate 5: regulated-claim guardrail -------------------------------- */
@@ -481,9 +495,48 @@ export function buildRunTimeline(
 }
 
 /**
- * The usage/safety-coverage cap (0.55) is the one confidence gate with NO
- * dedicated audit event: the workflow mutates `validation` in place between the
- * `validation_completed` audit write and `completeWorkflowStep(validationStep)`.
+ * B0-367 — the usage/safety-coverage cap as logged by the workflow. Payload:
+ * `{ missingEvidence, confidenceBefore, confidenceAfter, cap, issues,
+ * requires_human_review }`. Not `inferred`: this is a real row.
+ */
+function buildUsageSafetyCoverageGateFromLog(
+  log: AuditLogRow,
+  validatorStep: WorkflowStepRow | undefined,
+): TimelineEvent {
+  const payload = asRecord(log.payload);
+  const confidenceBefore = readNumber(payload, 'confidenceBefore');
+  const cap = readNumber(payload, 'cap') ?? USAGE_SAFETY_COVERAGE_CONFIDENCE_CAP;
+  const confidenceAfter =
+    readNumber(payload, 'confidenceAfter') ??
+    (confidenceBefore === null ? cap : Math.min(confidenceBefore, cap));
+
+  return {
+    kind: 'confidence_gate',
+    gate: 'usage_safety_coverage_cap',
+    id: `gate:usage_safety_coverage_cap:${log.id}`,
+    label: GATE_LABELS.usage_safety_coverage_cap,
+    at: log.created_at,
+    status: 'failed',
+    confidenceBefore,
+    confidenceAfter,
+    cap,
+    approved: false,
+    requiresHumanReview: readBoolean(payload, 'requires_human_review') === true,
+    issues: readStringArray(payload, 'issues'),
+    detail: {
+      auditPayload: log.payload,
+      missingEvidence: readStringArray(payload, 'missingEvidence'),
+      // Kept for continuity with the inferred path, which read the step output.
+      finalValidatorIssues: readStringArray(asRecord(validatorStep?.output ?? null), 'issues'),
+    },
+  };
+}
+
+/**
+ * Historical runs only (pre-B0-367). The usage/safety-coverage cap (0.55) used to be
+ * the one confidence gate with NO dedicated audit event: the workflow mutates
+ * `validation` in place between the `validation_completed` audit write and
+ * `completeWorkflowStep(validationStep)`.
  *
  * We therefore synthesize it by diffing the validator pass as logged against the
  * validator step's persisted output: an `insufficient_*_evidence` issue that

@@ -663,6 +663,14 @@ function hasSafetySignal(text: string) {
 const USAGE_SAFETY_COVERAGE_BODY_SCAN_MAX_CHARS = 4_000;
 
 /**
+ * Confidence ceiling applied when a usage/safety question lacks usage or safety
+ * evidence. Mirrored (deliberately, to keep the pure timeline module free of this
+ * module's OpenAI/Supabase imports) by `USAGE_SAFETY_COVERAGE_CONFIDENCE_CAP` in
+ * `~/lib/observability/timeline.ts` — change both together.
+ */
+const USAGE_SAFETY_COVERAGE_CONFIDENCE_CAP = 0.55;
+
+/**
  * B0-365 — the coverage gate used to scan only `title` + `snippet`, while the tool
  * contract ("read documentBody, not just snippet") and the agent both answer from
  * `documentBody`. Safety/usage text sitting in the retrieved body was therefore
@@ -1404,17 +1412,33 @@ export async function runProductSupportWorkflow(input: {
       if (!usageSafetyCoverage.hasSafetyEvidence) {
         missingEvidence.push('safety');
       }
+      const coverageIssue = `insufficient_${missingEvidence.join('_and_')}_evidence`;
+      const confidenceBeforeCap = validation.confidence;
       validation = {
         ...validation,
         approved: false,
-        confidence: Math.min(validation.confidence, 0.55),
-        issues: Array.from(
-          new Set([
-            ...validation.issues,
-            `insufficient_${missingEvidence.join('_and_')}_evidence`,
-          ]),
+        confidence: Math.min(
+          validation.confidence,
+          USAGE_SAFETY_COVERAGE_CONFIDENCE_CAP,
         ),
+        issues: Array.from(new Set([...validation.issues, coverageIssue])),
       };
+      // B0-367: this was the only confidence gate with no audit row, which forced
+      // the run-trace timeline to reverse-engineer it by diffing the logged
+      // validator pass against the persisted validator step output.
+      await writeAuditLog(
+        'usage_safety_coverage_cap_applied',
+        {
+          missingEvidence,
+          confidenceBefore: confidenceBeforeCap,
+          confidenceAfter: validation.confidence,
+          cap: USAGE_SAFETY_COVERAGE_CONFIDENCE_CAP,
+          issues: [coverageIssue],
+          approved: false,
+          requires_human_review: validation.requires_human_review,
+        },
+        { ...wfCtx, stepId: validationStep.id },
+      );
     }
 
     // B0-257: regulated-claim guardrail -- runs unconditionally (independent of the

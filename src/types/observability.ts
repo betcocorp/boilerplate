@@ -40,7 +40,11 @@ export type ConfidenceGateKind =
   | 'validator_bypass'
   /** The LLM validator's own approved/confidence/issues self-report (`validation_completed`). */
   | 'llm_validator'
-  /** Usage + safety evidence coverage cap at 0.55. Has NO dedicated audit event — always `inferred`. */
+  /**
+   * Usage + safety evidence coverage cap at 0.55. Logged as
+   * `usage_safety_coverage_cap_applied` since B0-367; runs predating that row are
+   * reconstructed from the validator step output and flagged `inferred`.
+   */
   | 'usage_safety_coverage_cap'
   /** B0-257 regulated-claim guardrail; hard clamp to 0.4 + forced human review. */
   | 'regulated_claim_guardrail'
@@ -60,9 +64,9 @@ type TimelineEventBase = {
   /** Free-form payload for inline expansion in the UI (raw step/audit JSON). */
   detail: Record<string, unknown>;
   /**
-   * True when the event was synthesized rather than read from a log row — today
-   * only the usage/safety-coverage cap, which the workflow applies without
-   * writing an audit entry. UI should label these "inferred, no direct log entry".
+   * True when the event was synthesized rather than read from a log row — since
+   * B0-367 only historical usage/safety-coverage caps, which were applied without
+   * an audit entry. UI should label these "inferred, no direct log entry".
    */
   inferred?: boolean;
 };

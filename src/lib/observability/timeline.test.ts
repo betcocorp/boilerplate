@@ -358,8 +358,8 @@ describe('buildRunTimeline — failed run', () => {
 });
 
 /* -------------------------------------------------------------------------- *
- * Scenario 4 — recommendations-routed run (LLM validator + inferred 0.55 cap +
- * recommendation gate + human review)
+ * Scenario 4 — recommendations-routed run (LLM validator + 0.55 cap INFERRED the
+ * historical, pre-B0-367 way + recommendation gate + human review)
  * -------------------------------------------------------------------------- */
 
 describe('buildRunTimeline — recommendations-routed run', () => {
@@ -539,5 +539,124 @@ describe('buildRunTimeline — recommendations-routed run', () => {
       issues: ['insufficient_usage_and_safety_evidence'],
       status: 'failed',
     });
+  });
+});
+
+/* -------------------------------------------------------------------------- *
+ * Scenario 5 — B0-367: the usage/safety coverage cap now writes a real audit row
+ * -------------------------------------------------------------------------- */
+
+function coverageCapRunFixture() {
+  const run = makeRun({
+    confidence: 0.55,
+    updated_at: at(140),
+    final_output: { routingDecision: 'product', confidence: 0.55 },
+    user_input: { message: 'How do I use Betco Fight Bac safely?', modelTag: 'preview' },
+  });
+  const stepRows: WorkflowStepRow[] = [
+    plannerStep,
+    makeStep({
+      id: 'step-agent',
+      step_name: 'openai_responses_agent',
+      started_at: at(20),
+      completed_at: at(70),
+      output: { responseIds: ['resp_1'], toolCalls: 0, toolTrace: [] },
+    }),
+    makeStep({
+      id: 'step-validator',
+      step_name: 'validator',
+      started_at: at(80),
+      completed_at: at(130),
+      output: {
+        approved: false,
+        confidence: 0.55,
+        issues: ['insufficient_safety_evidence'],
+        requires_human_review: true,
+      },
+    }),
+  ];
+  const logs: AuditLogRow[] = [
+    makeLog({
+      id: 'log-validation',
+      event_type: 'validation_completed',
+      created_at: at(90),
+      payload: { approved: true, confidence: 0.82, issues: [], requires_human_review: false },
+    }),
+    makeLog({
+      id: 'log-coverage-cap',
+      event_type: 'usage_safety_coverage_cap_applied',
+      created_at: at(100),
+      payload: {
+        missingEvidence: ['safety'],
+        confidenceBefore: 0.82,
+        confidenceAfter: 0.55,
+        cap: 0.55,
+        issues: ['insufficient_safety_evidence'],
+        approved: false,
+        requires_human_review: true,
+      },
+    }),
+    makeLog({ id: 'log-completed', event_type: 'workflow_completed', created_at: at(140), payload: { workflow_run_id: RUN_ID } }),
+  ];
+  return { run, stepRows, logs };
+}
+
+describe('buildRunTimeline — usage/safety coverage cap with a real audit row (B0-367)', () => {
+  const { run, stepRows, logs } = coverageCapRunFixture();
+  const timeline = buildRunTimeline(run, stepRows, logs);
+
+  it('renders the cap from the audit row, without the inferred badge', () => {
+    const caps = gates(timeline).filter(
+      (event) => event.gate === 'usage_safety_coverage_cap',
+    );
+    expect(caps).toHaveLength(1);
+    expect(caps[0]).toMatchObject({
+      id: 'gate:usage_safety_coverage_cap:log-coverage-cap',
+      at: at(100),
+      cap: USAGE_SAFETY_COVERAGE_CONFIDENCE_CAP,
+      confidenceBefore: 0.82,
+      confidenceAfter: 0.55,
+      approved: false,
+      requiresHumanReview: true,
+      issues: ['insufficient_safety_evidence'],
+      status: 'failed',
+    });
+    expect(caps[0]?.inferred).toBeUndefined();
+    expect(caps[0]?.detail.missingEvidence).toEqual(['safety']);
+  });
+
+  it('does not also emit the inferred event for the same run', () => {
+    expect(timeline.filter((event) => event.inferred === true)).toHaveLength(0);
+  });
+
+  it('agrees with the inference on confidenceBefore/After for the same run shape', () => {
+    // Same rows minus the new audit row = the historical path.
+    const inferredTimeline = buildRunTimeline(
+      run,
+      stepRows,
+      logs.filter((log) => log.event_type !== 'usage_safety_coverage_cap_applied'),
+    );
+    const inferredCap = gates(inferredTimeline).find(
+      (event) => event.gate === 'usage_safety_coverage_cap',
+    );
+    expect(inferredCap).toMatchObject({
+      inferred: true,
+      confidenceBefore: 0.82,
+      confidenceAfter: 0.55,
+      issues: ['insufficient_safety_evidence'],
+    });
+  });
+
+  it('still renders the inferred event (with its badge) for historical runs', () => {
+    const historical = buildRunTimeline(
+      run,
+      stepRows,
+      logs.filter((log) => log.event_type !== 'usage_safety_coverage_cap_applied'),
+    );
+    const cap = gates(historical).find(
+      (event) => event.gate === 'usage_safety_coverage_cap',
+    );
+    expect(cap?.inferred).toBe(true);
+    expect(cap?.detail.note).toContain('inferred');
   });
 });
