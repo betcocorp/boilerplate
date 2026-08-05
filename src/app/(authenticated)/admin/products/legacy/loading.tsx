@@ -1,52 +1,6 @@
+import { CardGridSkeleton } from '~/components/admin/skeletons';
 import { Button } from '~/components/ui/button';
 import { Input } from '~/components/ui/input';
-
-function ProductCardSkeleton({ index }: { index: number }) {
-  return (
-    <article
-      className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
-      key={index}
-    >
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
-          Status:
-        </span>
-        <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">
-          OnWeb:
-        </span>
-      </div>
-
-      <div className="mt-4 h-8 w-3/4 animate-pulse rounded bg-slate-200" />
-
-      <div className="mt-4 grid grid-cols-2 gap-3">
-        <div className="space-y-2">
-          <div className="text-sm font-medium text-slate-500">SKU</div>
-          <div className="h-5 w-24 animate-pulse rounded bg-slate-200" />
-        </div>
-        <div className="space-y-2">
-          <div className="text-sm font-medium text-slate-500">Inventory ID</div>
-          <div className="h-5 w-28 animate-pulse rounded bg-slate-200" />
-        </div>
-        <div className="space-y-2">
-          <div className="text-sm font-medium text-slate-500">
-            Years of service
-          </div>
-          <div className="h-5 w-16 animate-pulse rounded bg-slate-200" />
-        </div>
-        <div className="space-y-2">
-          <div className="text-sm font-medium text-slate-500">MSRP</div>
-          <div className="h-5 w-20 animate-pulse rounded bg-slate-200" />
-        </div>
-      </div>
-
-      <div className="mt-4 space-y-2">
-        <div className="h-4 w-full animate-pulse rounded bg-slate-100" />
-        <div className="h-4 w-full animate-pulse rounded bg-slate-100" />
-        <div className="h-4 w-2/3 animate-pulse rounded bg-slate-100" />
-      </div>
-    </article>
-  );
-}
 
 export default function Loading() {
   return (
@@ -89,11 +43,13 @@ export default function Loading() {
           <div className="text-sm text-slate-600">Page ...</div>
         </section>
 
-        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {Array.from({ length: 6 }, (_, index) => (
-            <ProductCardSkeleton index={index} key={index} />
-          ))}
-        </section>
+        <CardGridSkeleton
+          badges={2}
+          columnsClassName="md:grid-cols-2 xl:grid-cols-3"
+          count={6}
+          lines={3}
+          metaFields={4}
+        />
       </main>
     </div>
   );

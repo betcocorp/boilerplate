@@ -1,3 +1,5 @@
+import { Skeleton } from '~/components/ui/skeleton';
+
 export default function Loading() {
   return (
     <div className="flex flex-1 bg-slate-50">
@@ -24,9 +26,9 @@ export default function Loading() {
             <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-700">
               RAG product line
             </p>
-            <div className="h-10 w-2/3 animate-pulse rounded bg-slate-200" />
-            <div className="h-5 w-full animate-pulse rounded bg-slate-100" />
-            <div className="h-5 w-5/6 animate-pulse rounded bg-slate-100" />
+            <Skeleton className="h-10 w-2/3 rounded-md" />
+            <Skeleton className="h-5 w-full rounded-md" />
+            <Skeleton className="h-5 w-5/6 rounded-md" />
 
             <div className="grid gap-4 pt-2 sm:grid-cols-2 xl:grid-cols-4">
               {Array.from({ length: 4 }, (_, index) => (
@@ -40,7 +42,7 @@ export default function Loading() {
                           ? 'Document key'
                           : 'Chunk count'}
                   </div>
-                  <div className="mt-3 h-5 w-3/4 animate-pulse rounded bg-slate-100" />
+                  <Skeleton className="mt-3 h-5 w-3/4 rounded-md" />
                 </div>
               ))}
             </div>
@@ -74,10 +76,10 @@ export default function Loading() {
                       className="rounded-2xl border border-slate-200 bg-slate-50 p-4"
                       key={index}
                     >
-                      <div className="h-5 w-40 animate-pulse rounded bg-slate-200" />
-                      <div className="mt-4 h-4 w-full animate-pulse rounded bg-slate-100" />
-                      <div className="mt-2 h-4 w-5/6 animate-pulse rounded bg-slate-100" />
-                      <div className="mt-2 h-4 w-4/6 animate-pulse rounded bg-slate-100" />
+                      <Skeleton className="h-5 w-40 rounded-md" />
+                      <Skeleton className="mt-4 h-4 w-full rounded-md" />
+                      <Skeleton className="mt-2 h-4 w-5/6 rounded-md" />
+                      <Skeleton className="mt-2 h-4 w-4/6 rounded-md" />
                     </div>
                   ))}
                 </div>
@@ -104,9 +106,9 @@ export default function Loading() {
                       className="rounded-2xl border border-slate-200 bg-slate-50 p-4"
                       key={cardIndex}
                     >
-                      <div className="h-5 w-32 animate-pulse rounded bg-slate-200" />
-                      <div className="mt-4 h-4 w-full animate-pulse rounded bg-slate-100" />
-                      <div className="mt-2 h-4 w-3/4 animate-pulse rounded bg-slate-100" />
+                      <Skeleton className="h-5 w-32 rounded-md" />
+                      <Skeleton className="mt-4 h-4 w-full rounded-md" />
+                      <Skeleton className="mt-2 h-4 w-3/4 rounded-md" />
                     </div>
                   ))}
                 </div>

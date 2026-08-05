@@ -1,3 +1,5 @@
+import { Skeleton } from '~/components/ui/skeleton';
+
 export default function Loading() {
   return (
     <div className="flex flex-1 bg-slate-50">
@@ -24,9 +26,9 @@ export default function Loading() {
             <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-700">
               Product details
             </p>
-            <div className="h-10 w-2/3 animate-pulse rounded bg-slate-200" />
-            <div className="h-5 w-full animate-pulse rounded bg-slate-100" />
-            <div className="h-5 w-5/6 animate-pulse rounded bg-slate-100" />
+            <Skeleton className="h-10 w-2/3 rounded-md" />
+            <Skeleton className="h-5 w-full rounded-md" />
+            <Skeleton className="h-5 w-5/6 rounded-md" />
 
             <div className="grid gap-4 pt-2 sm:grid-cols-2 xl:grid-cols-4">
               {Array.from({ length: 4 }, (_, index) => (
@@ -43,7 +45,7 @@ export default function Loading() {
                           ? 'Years of service'
                           : 'Product key'}
                   </div>
-                  <div className="mt-3 h-5 w-3/4 animate-pulse rounded bg-slate-100" />
+                  <Skeleton className="mt-3 h-5 w-3/4 rounded-md" />
                 </div>
               ))}
             </div>
@@ -76,8 +78,8 @@ export default function Loading() {
                   <div className="text-sm font-medium text-slate-500">
                     Field {index + 1}
                   </div>
-                  <div className="mt-3 h-5 w-full animate-pulse rounded bg-slate-100" />
-                  <div className="mt-2 h-5 w-2/3 animate-pulse rounded bg-slate-100" />
+                  <Skeleton className="mt-3 h-5 w-full rounded-md" />
+                  <Skeleton className="mt-2 h-5 w-2/3 rounded-md" />
                 </div>
               ))}
             </div>
@@ -99,13 +101,13 @@ export default function Loading() {
                       key={cardIndex}
                     >
                       <div className="flex items-center justify-between gap-3">
-                        <div className="h-5 w-40 animate-pulse rounded bg-slate-200" />
+                        <Skeleton className="h-5 w-40 rounded-md" />
                         <div className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-slate-700 ring-1 ring-slate-200">
                           {sectionIndex === 0 ? 'Language' : 'Sequence'}
                         </div>
                       </div>
-                      <div className="mt-4 h-4 w-full animate-pulse rounded bg-slate-100" />
-                      <div className="mt-2 h-4 w-5/6 animate-pulse rounded bg-slate-100" />
+                      <Skeleton className="mt-4 h-4 w-full rounded-md" />
+                      <Skeleton className="mt-2 h-4 w-5/6 rounded-md" />
                     </div>
                   ))}
                 </div>
