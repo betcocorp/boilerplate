@@ -142,15 +142,24 @@ function buildStepDetail(step: WorkflowStepRow): Record<string, unknown> {
  * Tool calls
  * -------------------------------------------------------------------------- */
 
-type ToolCallAuditTiming = { calledAt: string | null; settledAt: string | null };
+type ToolCallAuditFacts = {
+  calledAt: string | null;
+  settledAt: string | null;
+  /** B0-363 — `tool_failed.payload.error_message`; null on successes / pre-B0-363 rows. */
+  errorMessage: string | null;
+  /** B0-363 — `tool_failed.payload.arguments_preview` (bounded at write time). */
+  argumentsPreview: string | null;
+};
 
 /**
  * `tool_called` / `tool_succeeded` / `tool_failed` audit rows carry `call_id`,
  * which is the only way to recover real timestamps for a `toolTrace` entry
- * (the trace itself stores only a duration).
+ * (the trace itself stores only a duration). B0-363 added the failure cause to
+ * `tool_failed`, so the same index also carries the error message and the bounded
+ * arguments preview.
  */
-function indexToolCallTimings(auditLogs: AuditLogRow[]): Map<string, ToolCallAuditTiming> {
-  const timings = new Map<string, ToolCallAuditTiming>();
+function indexToolCallAuditFacts(auditLogs: AuditLogRow[]): Map<string, ToolCallAuditFacts> {
+  const facts = new Map<string, ToolCallAuditFacts>();
 
   for (const log of auditLogs) {
     const payload = asRecord(log.payload);
@@ -159,16 +168,22 @@ function indexToolCallTimings(auditLogs: AuditLogRow[]): Map<string, ToolCallAud
       continue;
     }
 
-    const existing = timings.get(callId) ?? { calledAt: null, settledAt: null };
+    const existing =
+      facts.get(callId) ??
+      { calledAt: null, settledAt: null, errorMessage: null, argumentsPreview: null };
     if (log.event_type === 'tool_called') {
       existing.calledAt = existing.calledAt ?? log.created_at;
     } else if (log.event_type === 'tool_succeeded' || log.event_type === 'tool_failed') {
       existing.settledAt = log.created_at;
     }
-    timings.set(callId, existing);
+    if (log.event_type === 'tool_failed') {
+      existing.errorMessage = readString(payload, 'error_message');
+      existing.argumentsPreview = readString(payload, 'arguments_preview');
+    }
+    facts.set(callId, existing);
   }
 
-  return timings;
+  return facts;
 }
 
 /**
@@ -205,7 +220,7 @@ export function buildRunTimeline(
   const orderedLogs = [...auditLogs].sort(
     (a, b) => Date.parse(a.created_at) - Date.parse(b.created_at),
   );
-  const toolCallTimings = indexToolCallTimings(orderedLogs);
+  const toolCallFacts = indexToolCallAuditFacts(orderedLogs);
   const logsByType = (eventType: string) =>
     orderedLogs.filter((log) => log.event_type === eventType);
 
@@ -249,7 +264,7 @@ export function buildRunTimeline(
     });
 
     for (const [index, entry] of readToolTrace(step).entries()) {
-      const timing = toolCallTimings.get(entry.callId);
+      const facts = toolCallFacts.get(entry.callId);
       push({
         kind: 'tool_call',
         id: `tool:${step.id}:${entry.callId}:${index}`,
@@ -259,16 +274,23 @@ export function buildRunTimeline(
         argumentsPreview: entry.argumentsPreview,
         outputPreview: entry.outputPreview,
         ok: entry.ok,
+        // B0-363 — diagnostics persisted on the `tool_failed` audit row.
+        errorMessage: facts?.errorMessage ?? null,
+        auditArgumentsPreview: facts?.argumentsPreview ?? null,
         label: `Tool: ${entry.toolName}`,
         // Forced tool calls (e.g. the cross-reference safety-net search) bypass
         // writeAuditLog, so fall back to the step's own start time.
-        at: timing?.calledAt ?? step.started_at,
-        durationMs: entry.durationMs ?? diffMs(timing?.calledAt ?? null, timing?.settledAt ?? null),
+        at: facts?.calledAt ?? step.started_at,
+        durationMs: entry.durationMs ?? diffMs(facts?.calledAt ?? null, facts?.settledAt ?? null),
         status: entry.ok ? 'ok' : 'failed',
         detail: {
           argumentsPreview: entry.argumentsPreview,
           outputPreview: entry.outputPreview,
           ok: entry.ok,
+          ...(facts?.errorMessage ? { errorMessage: facts.errorMessage } : {}),
+          ...(facts?.argumentsPreview
+            ? { auditArgumentsPreview: facts.argumentsPreview }
+            : {}),
         },
       });
     }

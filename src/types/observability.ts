@@ -97,6 +97,17 @@ export type ToolCallTimelineEvent = TimelineEventBase & {
   ok: boolean;
   /** The `workflow_steps` row the tool call was made from. */
   stepId: string | null;
+  /**
+   * B0-363 — failure cause as persisted on the `tool_failed` audit row
+   * (`payload.error_message`). Null for successful calls and for failures logged
+   * before B0-363 landed.
+   */
+  errorMessage: string | null;
+  /**
+   * B0-363 — bounded arguments preview from the `tool_failed` audit row
+   * (`payload.arguments_preview`, 512 chars). Null for successes / pre-B0-363 rows.
+   */
+  auditArgumentsPreview: string | null;
 };
 
 /** A confidence-affecting gate decision. */

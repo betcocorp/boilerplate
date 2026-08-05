@@ -115,7 +115,14 @@ function TimelineEventRow({
 }) {
   const isNotReached = event.status === 'not_reached';
   const isFailed = event.status === 'failed';
-  const stepError = event.kind === 'step' ? readErrorMessage(event.error) : null;
+  // B0-363 — a failed tool call now carries its cause on the `tool_failed` audit
+  // row, so it can be red-flagged inline exactly like a failed step.
+  const inlineError =
+    event.kind === 'step'
+      ? readErrorMessage(event.error)
+      : event.kind === 'tool_call'
+        ? event.errorMessage
+        : null;
 
   return (
     <li className="relative pl-12">
@@ -214,9 +221,9 @@ function TimelineEventRow({
 
                 {/* Red-flagged failure surfaces its error at the point of failure,
                     without needing to expand the row. */}
-                {stepError ? (
+                {inlineError ? (
                   <span className="block break-words text-xs font-medium text-destructive">
-                    {stepError}
+                    {inlineError}
                   </span>
                 ) : null}
 
@@ -237,6 +244,26 @@ function TimelineEventRow({
             <div className="min-w-0 space-y-3 border-t border-slate-100 px-4 py-3">
               {event.kind === 'tool_call' ? (
                 <ToolCallDetail event={event} />
+              ) : null}
+
+              {/* B0-363 — failure diagnostics persisted on the `tool_failed` audit
+                  row. Present only for runs logged after B0-363 landed. */}
+              {event.kind === 'tool_call' &&
+              (event.errorMessage || event.auditArgumentsPreview) ? (
+                <div className="min-w-0 space-y-2">
+                  <p className="text-[0.65rem] font-semibold uppercase tracking-[0.12em] text-destructive">
+                    Failure detail (tool_failed audit row)
+                  </p>
+                  {event.errorMessage ? (
+                    <TraceJsonBlock label="Error message" value={event.errorMessage} />
+                  ) : null}
+                  {event.auditArgumentsPreview ? (
+                    <TraceJsonBlock
+                      label="Arguments preview (audit, 512 chars)"
+                      value={event.auditArgumentsPreview}
+                    />
+                  ) : null}
+                </div>
               ) : null}
 
               {event.kind === 'confidence_gate' ? (

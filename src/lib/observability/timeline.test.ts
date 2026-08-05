@@ -405,7 +405,18 @@ describe('buildRunTimeline — recommendations-routed run', () => {
     makeLog({ id: 'log-xref-called', event_type: 'tool_called', created_at: at(30), payload: { tool_name: 'lookup_cross_reference', call_id: 'call-xref' } }),
     makeLog({ id: 'log-xref-ok', event_type: 'tool_succeeded', created_at: at(40), payload: { tool_name: 'lookup_cross_reference', call_id: 'call-xref' } }),
     makeLog({ id: 'log-search-called', event_type: 'tool_called', created_at: at(50), payload: { tool_name: 'search_product_docs', call_id: 'call-search' } }),
-    makeLog({ id: 'log-search-failed', event_type: 'tool_failed', created_at: at(60), payload: { tool_name: 'search_product_docs', call_id: 'call-search' } }),
+    makeLog({
+      id: 'log-search-failed',
+      event_type: 'tool_failed',
+      created_at: at(60),
+      // B0-363 — the failure cause is now persisted on the audit row itself.
+      payload: {
+        tool_name: 'search_product_docs',
+        call_id: 'call-search',
+        error_message: 'embedding request failed: 429 rate limited',
+        arguments_preview: '{"query":"BNC-15 equivalent usage"}',
+      },
+    }),
     makeLog({
       id: 'log-validation',
       event_type: 'validation_completed',
@@ -435,6 +446,45 @@ describe('buildRunTimeline — recommendations-routed run', () => {
       ['Tool: lookup_cross_reference', 'ok', at(30)],
       ['Tool: search_product_docs', 'failed', at(50)],
     ]);
+  });
+
+  it('B0-363: carries the tool_failed error message + arguments preview into the tool-call detail', () => {
+    const failed = timeline.find(
+      (event) => event.kind === 'tool_call' && event.status === 'failed',
+    );
+    expect(failed).toMatchObject({
+      kind: 'tool_call',
+      callId: 'call-search',
+      errorMessage: 'embedding request failed: 429 rate limited',
+      auditArgumentsPreview: '{"query":"BNC-15 equivalent usage"}',
+    });
+    expect(failed?.detail).toMatchObject({
+      errorMessage: 'embedding request failed: 429 rate limited',
+      auditArgumentsPreview: '{"query":"BNC-15 equivalent usage"}',
+    });
+  });
+
+  it('B0-363: leaves successful tool calls without audit failure fields', () => {
+    const ok = timeline.find((event) => event.kind === 'tool_call' && event.status === 'ok');
+    expect(ok).toMatchObject({ errorMessage: null, auditArgumentsPreview: null });
+    expect(ok?.detail).not.toHaveProperty('errorMessage');
+    expect(ok?.detail).not.toHaveProperty('auditArgumentsPreview');
+  });
+
+  it('B0-363: degrades to null for historical tool_failed rows with no error_message', () => {
+    const legacyLogs = logs.map((log) =>
+      log.id === 'log-search-failed'
+        ? {
+            ...log,
+            payload: { tool_name: 'search_product_docs', call_id: 'call-search' },
+          }
+        : log,
+    );
+    const legacy = buildRunTimeline(run, stepRows, legacyLogs);
+    const failed = legacy.find(
+      (event) => event.kind === 'tool_call' && event.status === 'failed',
+    );
+    expect(failed).toMatchObject({ errorMessage: null, auditArgumentsPreview: null });
   });
 
   it('surfaces every confidence-affecting gate separately and in order', () => {

@@ -51,6 +51,73 @@ const VALIDATOR_EVIDENCE_CHAR_BUDGET = 60_000;
 const VALIDATOR_PER_DOCUMENT_CHAR_BUDGET = 24_000;
 
 /**
+ * B0-363 — bounds for the diagnostic fields added to `tool_failed` audit rows.
+ * `audit_logs.payload` is scanned in bulk by the observability dashboards, so the
+ * failure cause is stored bounded rather than whole; the full (already truncated)
+ * previews still live on the agent step's persisted `toolTrace` (B0-331).
+ */
+const TOOL_FAILURE_ERROR_MESSAGE_MAX_CHARS = 1_024;
+const TOOL_FAILURE_ARGUMENTS_PREVIEW_MAX_CHARS = 512;
+
+function truncateForAudit(value: string, maxChars: number): string {
+  return value.length <= maxChars ? value : `${value.slice(0, maxChars)}…[truncated]`;
+}
+
+/**
+ * B0-363 — `executeToolCall` serializes every failure as `{"ok":false,"error":"…"}`
+ * into `trace.outputPreview`. A Zod `.parse` rejection on the tool arguments and a
+ * downstream retrieval/embedding throw both land there — exactly the pair that was
+ * previously indistinguishable from the audit row alone. Pull the message back out;
+ * fall back to the raw preview when it is not that shape.
+ */
+export function extractToolFailureMessage(outputPreview: string): string | null {
+  const trimmed = outputPreview.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const error = (parsed as Record<string, unknown>).error;
+      if (typeof error === 'string' && error.trim()) {
+        return truncateForAudit(error.trim(), TOOL_FAILURE_ERROR_MESSAGE_MAX_CHARS);
+      }
+    }
+  } catch {
+    // Not JSON (or truncated mid-object) — fall through to the raw preview.
+  }
+
+  return truncateForAudit(trimmed, TOOL_FAILURE_ERROR_MESSAGE_MAX_CHARS);
+}
+
+/**
+ * B0-363 — payload for the `tool_succeeded` / `tool_failed` audit row.
+ *
+ * Success rows are deliberately UNCHANGED: the arguments are already persisted on
+ * the agent step's `toolTrace`, so duplicating them per successful call would bloat
+ * `audit_logs` for no diagnostic gain. Failure rows carry the error message plus a
+ * bounded arguments preview, which is what makes a failure root-causable without
+ * the toolTrace (absent on every run predating its 2026-08-03 rollout).
+ */
+export function buildToolCallAuditPayload(
+  trace: Pick<ToolTraceEntry, 'toolName' | 'callId' | 'ok' | 'outputPreview' | 'argumentsPreview'>,
+): Record<string, unknown> {
+  const base = { tool_name: trace.toolName, call_id: trace.callId };
+  if (trace.ok) {
+    return base;
+  }
+  return {
+    ...base,
+    error_message: extractToolFailureMessage(trace.outputPreview),
+    arguments_preview: truncateForAudit(
+      trace.argumentsPreview,
+      TOOL_FAILURE_ARGUMENTS_PREVIEW_MAX_CHARS,
+    ),
+  };
+}
+
+/**
  * The validator now sees the full document body for each source (capped per
  * document) so it can verify claims against the entire approved document
  * rather than a single fragmented chunk.
@@ -1009,7 +1076,9 @@ export async function runProductSupportWorkflow(input: {
 
       await writeAuditLog(
         out.trace.ok ? 'tool_succeeded' : 'tool_failed',
-        { tool_name: name, call_id: callId },
+        // B0-363: failures also carry `error_message` + a bounded `arguments_preview`
+        // so the cause is recoverable from the audit row alone.
+        buildToolCallAuditPayload(out.trace),
         { ...wfCtx, toolName: name },
       );
 
