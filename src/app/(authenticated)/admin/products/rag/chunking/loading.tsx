@@ -87,7 +87,14 @@ export default function Loading() {
         {/* Domain metadata enrichment */}
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <CardHeadingSkeleton titleWidth="w-72" />
-          <TableSkeleton className="mt-6" columns={6} rows={8} />
+          {/* Rows hold h-8 inputs, so the cells match that height rather than the default. */}
+          <TableSkeleton
+            cellClassName="h-8"
+            className="mt-6"
+            columns={6}
+            headerClassName="bg-slate-50 py-2.5"
+            rows={8}
+          />
           <div className="mt-4 flex items-center justify-between">
             <Skeleton className="h-4 w-52 rounded-md" />
             <div className="flex gap-2">
@@ -100,7 +107,13 @@ export default function Loading() {
         {/* Similarity boost rules */}
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <CardHeadingSkeleton titleWidth="w-64" />
-          <TableSkeleton className="mt-6" columns={4} rows={4} />
+          <TableSkeleton
+            cellClassName="h-8"
+            className="mt-6"
+            columns={4}
+            headerClassName="bg-slate-50 py-2.5"
+            rows={4}
+          />
           <Skeleton className="mt-6 h-5 w-48 rounded-md" />
         </section>
       </main>

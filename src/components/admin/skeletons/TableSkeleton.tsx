@@ -12,6 +12,8 @@ const DEFAULT_COLUMN_WIDTHS = [
 ] as const;
 
 export type TableSkeletonProps = {
+  /** Merged onto every body cell bar — raise it (e.g. `h-8`) for tables whose rows hold inputs. */
+  cellClassName?: string;
   /** Merged onto the bordered table container. */
   className?: string;
   /** Number of columns per row. */
@@ -20,16 +22,20 @@ export type TableSkeletonProps = {
   columnWidths?: readonly string[];
   /** Render the header row. Default `true`. */
   header?: boolean;
+  /** Merged onto the header row wrapper. */
+  headerClassName?: string;
   /** Number of body rows. Default `5`. */
   rows?: number;
 };
 
 /** Header row + N body rows, for test runner / failure queue / cross-reference tables. */
 export function TableSkeleton({
+  cellClassName,
   className,
   columns,
   columnWidths = DEFAULT_COLUMN_WIDTHS,
   header = true,
+  headerClassName,
   rows = 5,
 }: TableSkeletonProps) {
   const widthAt = (index: number) =>
@@ -43,7 +49,12 @@ export function TableSkeleton({
       )}
     >
       {header ? (
-        <div className="flex items-center gap-4 border-b border-slate-200 px-4 py-3">
+        <div
+          className={cn(
+            'flex items-center gap-4 border-b border-slate-200 px-4 py-3',
+            headerClassName,
+          )}
+        >
           {Array.from({ length: columns }, (_, index) => (
             <div className="min-w-0 flex-1" key={index}>
               <Skeleton className={cn('h-3.5 rounded-md', widthAt(index))} />
@@ -61,6 +72,7 @@ export function TableSkeleton({
                   className={cn(
                     'h-4 rounded-md',
                     widthAt(columnIndex + rowIndex),
+                    cellClassName,
                   )}
                 />
               </div>
