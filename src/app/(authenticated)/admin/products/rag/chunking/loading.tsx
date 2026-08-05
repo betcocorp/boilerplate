@@ -1,43 +1,20 @@
+import { PageHeaderSkeleton, TableSkeleton } from '~/components/admin/skeletons';
+import { Skeleton } from '~/components/ui/skeleton';
+
+/** Eyebrow + title on the left and a status pill on the right — not the page-header shape. */
 function CardHeadingSkeleton({ titleWidth }: { titleWidth: string }) {
   return (
     <>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <div className="h-5 w-32 animate-pulse rounded bg-slate-100" />
-          <div className={`mt-1 h-8 animate-pulse rounded bg-slate-200 ${titleWidth}`} />
+          <Skeleton className="h-5 w-32 rounded-md" />
+          <Skeleton className={`mt-1 h-8 rounded-md ${titleWidth}`} />
         </div>
-        <div className="h-7 w-40 animate-pulse rounded-full bg-slate-100" />
+        <Skeleton className="h-7 w-40 rounded-full" />
       </div>
-      <div className="mt-3 h-4 w-full animate-pulse rounded bg-slate-100" />
-      <div className="mt-2 h-4 w-4/5 animate-pulse rounded bg-slate-100" />
+      <Skeleton className="mt-3 h-4 w-full rounded-md" />
+      <Skeleton className="mt-2 h-4 w-4/5 rounded-md" />
     </>
-  );
-}
-
-function TableSkeleton({ columns, rows }: { columns: number; rows: number }) {
-  return (
-    <div className="mt-6 overflow-x-auto rounded-2xl border border-slate-200">
-      <div className="flex gap-4 bg-slate-50 px-4 py-2.5">
-        {Array.from({ length: columns }, (_, index) => (
-          <div
-            className="h-4 flex-1 animate-pulse rounded bg-slate-200"
-            key={index}
-          />
-        ))}
-      </div>
-      <div className="divide-y divide-slate-100">
-        {Array.from({ length: rows }, (_, rowIndex) => (
-          <div className="flex gap-4 px-4 py-3" key={rowIndex}>
-            {Array.from({ length: columns }, (_, index) => (
-              <div
-                className="h-8 flex-1 animate-pulse rounded bg-slate-100"
-                key={index}
-              />
-            ))}
-          </div>
-        ))}
-      </div>
-    </div>
   );
 }
 
@@ -46,29 +23,20 @@ export default function Loading() {
     <div className="flex flex-1 bg-slate-50">
       <main className="flex w-full flex-1 flex-col gap-8 px-6 py-10 sm:px-8">
         <div className="flex flex-wrap items-center gap-3">
-          <div className="h-9 w-44 animate-pulse rounded-full bg-white ring-1 ring-slate-200" />
-          <div className="h-9 w-40 animate-pulse rounded-full bg-white ring-1 ring-slate-200" />
+          <Skeleton className="h-9 w-44 rounded-full" />
+          <Skeleton className="h-9 w-40 rounded-full" />
         </div>
 
-        <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-          <div className="flex flex-col gap-3">
-            <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-700">
-              RAG corpus quality
-            </p>
-            <div className="h-10 w-2/3 animate-pulse rounded bg-slate-200" />
-            <div className="h-5 w-full animate-pulse rounded bg-slate-100" />
-            <div className="h-5 w-5/6 animate-pulse rounded bg-slate-100" />
-          </div>
-
+        <PageHeaderSkeleton>
           <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
             {Array.from({ length: 4 }, (_, index) => (
               <div className="rounded-2xl bg-slate-50 px-4 py-3" key={index}>
-                <div className="h-4 w-28 animate-pulse rounded bg-slate-200" />
-                <div className="mt-1.5 h-5 w-32 animate-pulse rounded-full bg-slate-100" />
+                <Skeleton className="h-4 w-28 rounded-md" />
+                <Skeleton className="mt-1.5 h-5 w-32 rounded-full" />
               </div>
             ))}
           </div>
-        </section>
+        </PageHeaderSkeleton>
 
         {/* Chunking strategy and token budget */}
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
@@ -77,54 +45,54 @@ export default function Loading() {
           <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
             {Array.from({ length: 4 }, (_, index) => (
               <div className="rounded-2xl bg-slate-50 px-4 py-3" key={index}>
-                <div className="h-4 w-24 animate-pulse rounded bg-slate-200" />
-                <div className="mt-1 h-7 w-20 animate-pulse rounded bg-slate-100" />
+                <Skeleton className="h-4 w-24 rounded-md" />
+                <Skeleton className="mt-1 h-7 w-20 rounded-md" />
               </div>
             ))}
           </div>
 
           <div className="mt-6">
-            <div className="mb-3 h-5 w-48 animate-pulse rounded bg-slate-200" />
+            <Skeleton className="mb-3 h-5 w-48 rounded-md" />
             <div className="grid grid-cols-5 gap-3">
               {Array.from({ length: 5 }, (_, index) => (
                 <div className="flex flex-col gap-1" key={index}>
-                  <div className="h-4 w-full animate-pulse rounded bg-slate-100" />
-                  <div className="h-2 w-full animate-pulse rounded-full bg-slate-100" />
-                  <div className="ml-auto h-3 w-8 animate-pulse rounded bg-slate-100" />
+                  <Skeleton className="h-4 w-full rounded-md" />
+                  <Skeleton className="h-2 w-full rounded-full" />
+                  <Skeleton className="ml-auto h-3 w-8 rounded-md" />
                 </div>
               ))}
             </div>
-            <div className="mt-2 h-4 w-2/3 animate-pulse rounded bg-slate-100" />
+            <Skeleton className="mt-2 h-4 w-2/3 rounded-md" />
           </div>
 
           <div className="mt-8 border-t border-slate-100 pt-6">
-            <div className="mb-4 h-5 w-44 animate-pulse rounded bg-slate-200" />
+            <Skeleton className="mb-4 h-5 w-44 rounded-md" />
             <div className="flex flex-wrap gap-4">
               <div className="flex flex-col gap-1.5">
-                <div className="h-4 w-16 animate-pulse rounded bg-slate-100" />
-                <div className="h-10 w-56 animate-pulse rounded-xl border border-slate-200 bg-white" />
+                <Skeleton className="h-4 w-16 rounded-md" />
+                <Skeleton className="h-10 w-56 rounded-xl" />
               </div>
               {Array.from({ length: 3 }, (_, index) => (
                 <div className="flex flex-col gap-1.5" key={index}>
-                  <div className="h-4 w-20 animate-pulse rounded bg-slate-100" />
-                  <div className="h-10 w-28 animate-pulse rounded-xl border border-slate-200 bg-white" />
+                  <Skeleton className="h-4 w-20 rounded-md" />
+                  <Skeleton className="h-10 w-28 rounded-xl" />
                 </div>
               ))}
             </div>
           </div>
 
-          <div className="mt-6 h-5 w-40 animate-pulse rounded bg-slate-100" />
+          <Skeleton className="mt-6 h-5 w-40 rounded-md" />
         </section>
 
         {/* Domain metadata enrichment */}
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <CardHeadingSkeleton titleWidth="w-72" />
-          <TableSkeleton columns={6} rows={8} />
+          <TableSkeleton className="mt-6" columns={6} rows={8} />
           <div className="mt-4 flex items-center justify-between">
-            <div className="h-4 w-52 animate-pulse rounded bg-slate-100" />
+            <Skeleton className="h-4 w-52 rounded-md" />
             <div className="flex gap-2">
-              <div className="h-7 w-14 animate-pulse rounded-xl bg-slate-100" />
-              <div className="h-7 w-14 animate-pulse rounded-xl bg-slate-100" />
+              <Skeleton className="h-7 w-14 rounded-xl" />
+              <Skeleton className="h-7 w-14 rounded-xl" />
             </div>
           </div>
         </section>
@@ -132,8 +100,8 @@ export default function Loading() {
         {/* Similarity boost rules */}
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <CardHeadingSkeleton titleWidth="w-64" />
-          <TableSkeleton columns={4} rows={4} />
-          <div className="mt-6 h-5 w-48 animate-pulse rounded bg-slate-100" />
+          <TableSkeleton className="mt-6" columns={4} rows={4} />
+          <Skeleton className="mt-6 h-5 w-48 rounded-md" />
         </section>
       </main>
     </div>
