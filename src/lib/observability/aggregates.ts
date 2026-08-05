@@ -18,6 +18,10 @@
  * `supabase.rpc(...)` reader) rather than growing the page budget here.
  */
 
+import {
+  DEFAULT_STALE_AFTER_MS,
+  isStalled,
+} from '~/lib/observability/stalled-run-sweeper';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 import type {
@@ -316,6 +320,21 @@ function buildLatencyByStep(steps: StepScanRow[]): LatencyByStepDatum[] {
     .sort((a, b) => b.avgDurationMs - a.avgDurationMs || a.stepName.localeCompare(b.stepName));
 }
 
+/**
+ * B0-371 — runs still `running` past the sweeper's staleness threshold, i.e. orphaned
+ * records with no terminal row. Folded from the rows already scanned above, so this
+ * costs no extra query.
+ *
+ * `created_at` is Postgres `now()` and this comparison uses the Node clock, so it goes
+ * through `isStalled`, which clamps the age at 0. A genuinely in-flight run therefore
+ * can never be counted here, and no row is ever dropped for having a negative age.
+ */
+function countOrphanedRuns(runs: RunScanRow[], nowMs: number): number {
+  return runs.filter(
+    (run) => run.status === 'running' && isStalled(run.created_at, nowMs, DEFAULT_STALE_AFTER_MS),
+  ).length;
+}
+
 function buildFailureRateByDay(
   runs: RunScanRow[],
   window: AggregateWindow,
@@ -386,6 +405,7 @@ export async function getAggregateDashboardData(
         ? roundTo(confidences.reduce((sum, value) => sum + value, 0) / confidences.length, 4)
         : null,
     humanReviewCount,
+    orphanedRuns: countOrphanedRuns(runs, Date.now()),
     routingDistribution: buildRoutingDistribution(runs),
     confidenceBuckets: buildConfidenceBuckets(runs),
     latencyByStep: buildLatencyByStep(steps),

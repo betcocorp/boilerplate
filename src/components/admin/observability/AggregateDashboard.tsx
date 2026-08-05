@@ -76,16 +76,46 @@ function StatTile({
   label,
   value,
   hint,
+  tone = 'default',
 }: {
   label: string;
   value: string;
   hint?: string;
+  /** `warning` marks a number that should normally be zero (B0-371 orphaned runs). */
+  tone?: 'default' | 'warning';
 }) {
+  const warn = tone === 'warning';
   return (
-    <div className="min-w-0 rounded-2xl border border-slate-200 p-5">
-      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</p>
-      <p className="mt-2 text-2xl font-semibold tabular-nums text-slate-950">{value}</p>
-      {hint ? <p className="mt-1 text-xs text-slate-500">{hint}</p> : null}
+    <div
+      className={
+        warn
+          ? 'min-w-0 rounded-2xl border border-amber-300 bg-amber-50 p-5'
+          : 'min-w-0 rounded-2xl border border-slate-200 p-5'
+      }
+    >
+      <p
+        className={
+          warn
+            ? 'text-xs font-medium uppercase tracking-wide text-amber-700'
+            : 'text-xs font-medium uppercase tracking-wide text-slate-500'
+        }
+      >
+        {label}
+      </p>
+      <p
+        className={
+          warn
+            ? 'mt-2 text-2xl font-semibold tabular-nums text-amber-900'
+            : 'mt-2 text-2xl font-semibold tabular-nums text-slate-950'
+        }
+      >
+        {value}
+      </p>
+      {hint ? (
+        <p className={warn ? 'mt-1 text-xs text-amber-700' : 'mt-1 text-xs text-slate-500'}>
+          {hint}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -147,7 +177,7 @@ export function AggregateDashboard({ data }: { data: AggregateDashboardData }) {
       </div>
 
       {/* Headline numbers */}
-      <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-6">
         <StatTile label="Total runs" value={String(data.totalRuns)} />
         <StatTile
           hint={
@@ -174,6 +204,16 @@ export function AggregateDashboard({ data }: { data: AggregateDashboardData }) {
           hint="Distinct runs with an open review task"
           label="Human review"
           value={String(data.humanReviewCount)}
+        />
+        <StatTile
+          hint={
+            data.orphanedRuns > 0
+              ? 'Stuck in "running" > 2h with no terminal row — awaiting the sweeper'
+              : 'No runs stuck in "running" past the 2h threshold'
+          }
+          label="Orphaned"
+          tone={data.orphanedRuns > 0 ? 'warning' : 'default'}
+          value={String(data.orphanedRuns)}
         />
       </div>
 

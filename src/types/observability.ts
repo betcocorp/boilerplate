@@ -185,6 +185,13 @@ export type AggregateDashboardData = {
   failedRuns: number;
   avgConfidence: number | null;
   humanReviewCount: number;
+  /**
+   * B0-371 — runs still in `running` whose age exceeds the sweeper's staleness
+   * threshold (`DEFAULT_STALE_AFTER_MS`). These are orphaned records left by process
+   * death, awaiting the sweeper; a non-zero value that does not clear means the
+   * sweeper is not running.
+   */
+  orphanedRuns: number;
   routingDistribution: RoutingDistributionDatum[];
   confidenceBuckets: ConfidenceBucketDatum[];
   latencyByStep: LatencyByStepDatum[];
