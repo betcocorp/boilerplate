@@ -3,7 +3,16 @@ import { z } from 'zod';
 export const validatorResultSchema = z.object({
   approved: z.boolean(),
   confidence: z.number().min(0).max(1),
+  /**
+   * B0-369 — UNSUPPORTED findings only (including partial support). Confirmations belong in
+   * `supported_claims`; anything in here is treated as a defect and is fed to the revision pass.
+   */
   issues: z.array(z.string()),
+  /**
+   * B0-369 — claims the validator positively verified. Trace/diagnostic only: never fed to the
+   * revision pass. Optional so `workflow_run.final_output` payloads written before B0-369 parse.
+   */
+  supported_claims: z.array(z.string()).optional(),
   requires_human_review: z.boolean(),
 });
 

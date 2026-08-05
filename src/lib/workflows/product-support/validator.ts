@@ -7,17 +7,68 @@ import {
 } from '~/lib/workflows/product-support/product-support-schemas';
 import { VALIDATOR_SYSTEM_PROMPT } from '~/lib/workflows/product-support/product-support-prompts';
 
+// B0-369: `issues` is an UNSUPPORTED-findings-only channel -- it feeds the revision pass, so a
+// confirmation in there asks the revision model to repair a claim that verified fine. Positive
+// confirmations go in `supported_claims`, which is trace-only.
 const VALIDATION_JSON_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   properties: {
     approved: { type: 'boolean' },
     confidence: { type: 'number' },
-    issues: { type: 'array', items: { type: 'string' } },
+    issues: {
+      type: 'array',
+      description:
+        'Problems only: claims that are unsupported, only partially supported, contradicted, or unsafe. Never include confirmations of supported claims.',
+      items: { type: 'string' },
+    },
+    supported_claims: {
+      type: 'array',
+      description:
+        'Claims that ARE fully supported by the evidence. Confirmations belong here, never in issues.',
+      items: { type: 'string' },
+    },
     requires_human_review: { type: 'boolean' },
   },
-  required: ['approved', 'confidence', 'issues', 'requires_human_review'],
+  required: [
+    'approved',
+    'confidence',
+    'issues',
+    'supported_claims',
+    'requires_human_review',
+  ],
 } as const;
+
+/**
+ * B0-369 — belt-and-braces filter for models that still narrate confirmations into `issues`.
+ * A string is only reclassified when it reads as a plain confirmation AND carries no negation,
+ * partial-support or shortfall marker, so genuine findings ("... is not supported", "only
+ * partially supported: evidence confirms SARS-CoV-2 but not all viruses", "No evidence provided
+ * to support any claims in the draft") are always kept as issues.
+ */
+const SUPPORT_CONFIRMATION_PATTERN =
+  /\b(?:is|are|was|were)\s+(?:fully\s+|clearly\s+|directly\s+|explicitly\s+|well[-\s]|adequately\s+)?(?:supported|substantiated|corroborated|verified|confirmed|backed)\b/i;
+const SUPPORT_SHORTFALL_PATTERN =
+  /\b(?:not|no|never|none|non|partial|partially|partly|only|somewhat|weakly|insufficient|insufficiently|inadequate|lack|lacks|lacking|missing|absent|unsupported|unverified|unclear|ambiguous|cannot|can't|fail|fails|failed|contradict|contradicts|contradicted|contradictory|but|however|except|beyond|although|though|unless|assum\w*|off-label|prohibited)\b/i;
+
+/** Splits validator `issues` into genuine findings and (dropped-from-issues) confirmations. */
+export function partitionValidatorIssues(issues: string[]): {
+  issues: string[];
+  supportedClaims: string[];
+} {
+  const genuine: string[] = [];
+  const supported: string[] = [];
+  for (const issue of issues) {
+    const isConfirmation =
+      SUPPORT_CONFIRMATION_PATTERN.test(issue) && !SUPPORT_SHORTFALL_PATTERN.test(issue);
+    if (isConfirmation) {
+      supported.push(issue);
+    } else {
+      genuine.push(issue);
+    }
+  }
+  return { issues: genuine, supportedClaims: supported };
+}
 
 export async function runValidatorPass(input: {
   draftAnswer: string;
@@ -60,7 +111,17 @@ export async function runValidatorPass(input: {
   try {
     const text = extractAssistantText(res);
     const parsed = JSON.parse(text) as unknown;
-    return validatorResultSchema.parse(parsed);
+    const result = validatorResultSchema.parse(parsed);
+    // B0-369: keep `issues` to genuine findings even if the model narrates a confirmation there.
+    const partitioned = partitionValidatorIssues(result.issues);
+    return {
+      ...result,
+      issues: partitioned.issues,
+      supported_claims: [
+        ...(result.supported_claims ?? []),
+        ...partitioned.supportedClaims,
+      ],
+    };
   } catch {
     return {
       approved: false,

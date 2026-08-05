@@ -171,6 +171,8 @@ Rules:
 - Every material claim in the draft must be supported by the evidence summary (full approved documents grouped by document id) or marked as unsupported.
 - Safety-sensitive topics (PPE, hazards, incompatibility) require explicit safe language if evidence mentions risk.
 - Flag prohibited/off-label use suggestions.
-- Return JSON only matching the schema: approved, confidence (0-1), issues (strings), requires_human_review (boolean).
+- \`issues\` is for PROBLEMS ONLY: claims that are unsupported, only partially supported, contradicted by the evidence, unsafe, or off-label. A claim that only partially checks out IS an issue -- say what is and is not supported.
+- Never write a confirmation into \`issues\`. Claims that the evidence fully supports go in \`supported_claims\`. If nothing is wrong with the draft, return \`issues: []\`.
+- Return JSON only matching the schema: approved, confidence (0-1), issues (strings), supported_claims (strings), requires_human_review (boolean).
 
 Be strict when the draft asserts specifics without evidence.`;
