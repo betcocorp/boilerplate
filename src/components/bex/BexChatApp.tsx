@@ -73,6 +73,8 @@ export function BexChatApp() {
     DEFAULT_BEX_CHAT_AGENT_MODE,
   );
   const [loadError, setLoadError] = useState<string | null>(null);
+  // B0-345: id of the conversation whose history fetch is currently in flight (null = none).
+  const [historyLoadingId, setHistoryLoadingId] = useState<string | null>(null);
   const [feedbackSubmittingMessageId, setFeedbackSubmittingMessageId] =
     useState<string | null>(null);
   const [streamingAssistantText, setStreamingAssistantText] = useState('');
@@ -126,6 +128,21 @@ export function BexChatApp() {
       }),
     );
   }, []);
+
+  // B0-345: switching threads swaps the title immediately, so flag the fetch and let the
+  // message pane show placeholders instead of the previous thread's transcript.
+  const selectConversation = useCallback(
+    async (id: string) => {
+      setActiveId(id);
+      setHistoryLoadingId(id);
+      try {
+        await refreshConversation(id);
+      } finally {
+        setHistoryLoadingId((prev) => (prev === id ? null : prev));
+      }
+    },
+    [refreshConversation],
+  );
 
   useEffect(() => {
     const cache = loadUiCache();
@@ -391,7 +408,11 @@ export function BexChatApp() {
     [activeId, refreshConversation],
   );
 
-  const showFullWelcome = activeId === null;
+  // B0-345: while the initial list/history fetch is running we hold the chat frame and show
+  // placeholders; the welcome screen is an "empty after load" state, not a loading state.
+  const isLoadingHistory =
+    !hydrated || (historyLoadingId !== null && historyLoadingId === activeId);
+  const showFullWelcome = hydrated && activeId === null;
   const handleSubmitFeedback = useCallback(
     async (input: {
       messageId: string;
@@ -518,13 +539,13 @@ export function BexChatApp() {
             className="h-full min-h-0"
             conversations={sessions}
             filter={sidebarFilter}
+            isLoading={!hydrated}
             onCloseMobile={() => setMobileSidebarOpen(false)}
             onDelete={handleDelete}
             onFilterChange={setSidebarFilter}
             onNewChat={() => void handleNewChat()}
             onSelect={(id) => {
-              setActiveId(id);
-              void refreshConversation(id);
+              void selectConversation(id);
             }}
           />
         </div>
@@ -689,6 +710,7 @@ export function BexChatApp() {
 
           <BexChatMessages
             feedbackSubmittingMessageId={feedbackSubmittingMessageId}
+            isLoadingHistory={isLoadingHistory}
             isTyping={isTyping && streamingAssistantText.length === 0}
             messages={renderedMessages}
             onSubmitFeedback={handleSubmitFeedback}
@@ -699,7 +721,10 @@ export function BexChatApp() {
             showWelcome={showFullWelcome}
           />
 
-          {!showFullWelcome && messages.length === 0 && !isTyping ? (
+          {!showFullWelcome &&
+          !isLoadingHistory &&
+          messages.length === 0 &&
+          !isTyping ? (
             <div className="border-t border-border/40 px-4 py-3 sm:px-6">
               <p className="mb-2 text-xs font-medium uppercase tracking-[0.15em] text-muted-foreground">
                 Suggested prompts

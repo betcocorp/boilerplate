@@ -8,6 +8,7 @@ import {
   Trash2,
 } from 'lucide-react';
 
+import { BexSidebarRowsSkeleton } from '~/components/bex/BexChatSkeleton';
 import { Button } from '~/components/ui/button';
 import {
   DropdownMenu,
@@ -30,6 +31,8 @@ type BexChatSidebarProps = {
   onDelete: (id: string) => void;
   onCloseMobile?: () => void;
   className?: string;
+  /** B0-345: conversation list still loading — show skeleton rows, not the empty state. */
+  isLoading?: boolean;
 };
 
 function formatRelative(updatedAt: number) {
@@ -55,6 +58,7 @@ export function BexChatSidebar({
   className,
   conversations,
   filter,
+  isLoading = false,
   onCloseMobile,
   onDelete,
   onFilterChange,
@@ -111,7 +115,9 @@ export function BexChatSidebar({
       </div>
 
       <div className="min-h-0 flex-1 space-y-1 overflow-y-auto px-2 pb-3">
-        {filtered.length === 0 ? (
+        {isLoading ? (
+          <BexSidebarRowsSkeleton />
+        ) : filtered.length === 0 ? (
           <p className="px-2 py-6 text-center text-sm text-muted-foreground">
             {conversations.length === 0
               ? 'No conversations yet. Start one from the welcome screen.'

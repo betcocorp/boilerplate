@@ -14,6 +14,7 @@ import {
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 
+import { BexMessagesSkeleton } from '~/components/bex/BexChatSkeleton';
 import { BexStreamdown } from '~/components/bex/BexStreamdown';
 import { Avatar, AvatarFallback } from '~/components/ui/avatar';
 import { Badge } from '~/components/ui/badge';
@@ -57,6 +58,8 @@ type BexChatMessagesProps = {
   messages: ChatMessage[];
   isTyping: boolean;
   showWelcome: boolean;
+  /** B0-345: history for the selected conversation is in flight — render placeholders. */
+  isLoadingHistory?: boolean;
   onSuggestion: (text: string) => void;
   onStartEmptyChat?: () => void;
   feedbackSubmittingMessageId?: string | null;
@@ -377,6 +380,7 @@ function BexAiElementsMessages({
 }
 
 export function BexChatMessages({
+  isLoadingHistory = false,
   isTyping,
   messages,
   feedbackSubmittingMessageId,
@@ -397,6 +401,12 @@ export function BexChatMessages({
     } catch {
       /* ignore */
     }
+  }
+
+  // B0-345: takes precedence over the welcome/transcript branches so a conversation switch
+  // never paints the outgoing thread's messages under the incoming thread's title.
+  if (isLoadingHistory) {
+    return <BexMessagesSkeleton />;
   }
 
   if (showWelcome && messages.length === 0) {
