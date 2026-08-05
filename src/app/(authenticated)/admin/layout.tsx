@@ -1,4 +1,4 @@
-import { FileText, Search, Sparkles } from 'lucide-react';
+import { FileText, Rocket, Search, Sparkles } from 'lucide-react';
 import { cookies } from 'next/headers';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
@@ -41,10 +41,10 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
               href="/admin"
             >
               <div className="flex size-8 shrink-0 items-center justify-center rounded-2xl bg-sidebar-primary text-sidebar-primary-foreground">
-                <Sparkles className="size-4" />
+                <Rocket className="size-4" />
               </div>
               <span className="group-data-[collapsible=icon]:hidden">
-                Bex AI Ecosystem
+                Bex Mission Control
               </span>
             </Link>
           </SidebarHeader>
