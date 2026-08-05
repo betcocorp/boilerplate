@@ -654,13 +654,41 @@ function hasSafetySignal(text: string) {
   );
 }
 
-function evaluateUsageSafetyCoverage(sources: RetrievedSourceMeta[]) {
+/**
+ * B0-365 — per-source cap on how much `documentBody` the coverage scan reads.
+ * `hasUsageSignal` / `hasSafetySignal` are simple alternation patterns, but a full
+ * approved document body can be tens of KB; usage directions and safety statements
+ * appear early in Betco labels/SDS, so the first few KB is where the signal is.
+ */
+const USAGE_SAFETY_COVERAGE_BODY_SCAN_MAX_CHARS = 4_000;
+
+/**
+ * B0-365 — the coverage gate used to scan only `title` + `snippet`, while the tool
+ * contract ("read documentBody, not just snippet") and the agent both answer from
+ * `documentBody`. Safety/usage text sitting in the retrieved body was therefore
+ * invisible here and clamped well-grounded answers to 0.55. The body is now scanned
+ * too, truncated per source to bound regex cost.
+ *
+ * Exported for unit testing (see `usage-safety-coverage.test.ts`).
+ */
+export function evaluateUsageSafetyCoverage(
+  sources: Pick<
+    RetrievedSourceMeta,
+    'title' | 'snippet' | 'documentBody' | 'documentKind'
+  >[],
+) {
   let hasUsageEvidence = false;
   let hasSafetyEvidence = false;
 
   for (const source of sources) {
     const docKind = source.documentKind?.toLowerCase() ?? '';
-    const sourceText = `${source.title} ${source.snippet}`.toLowerCase();
+    const sourceText = [
+      source.title,
+      source.snippet,
+      (source.documentBody ?? '').slice(0, USAGE_SAFETY_COVERAGE_BODY_SCAN_MAX_CHARS),
+    ]
+      .join(' ')
+      .toLowerCase();
 
     if (docKind === 'sds' || hasSafetySignal(sourceText)) {
       hasSafetyEvidence = true;
