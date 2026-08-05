@@ -1,6 +1,23 @@
 import type { Tool } from 'openai/resources/responses/responses';
 
 /**
+ * B0-364: on the product-fact tools the `productId` parameter is really a product NAME
+ * (it is resolved by name, never used as a database id). Models naturally send
+ * `productName` instead — the spelling the prose uses — so both keys are accepted and
+ * normalized to `productId` by the Zod schemas in `~/lib/tools/tool-schemas`.
+ */
+const PRODUCT_REF_PARAM = {
+  type: 'string',
+  description:
+    'Betco product or product-line NAME or code (e.g. "pH7Q", "AF315", "4020"). Resolved by name — this is not a database id. Equivalent to `productName`.',
+} as const;
+
+const PRODUCT_NAME_ALIAS_PARAM = {
+  type: 'string',
+  description: 'Alias for `productId` — pass the product name here or there, not both.',
+} as const;
+
+/**
  * OpenAI Responses function tools — parameters are JSON Schema objects (strict mode off for flexibility).
  */
 export const productSupportTools: Tool[] = [
@@ -9,7 +26,7 @@ export const productSupportTools: Tool[] = [
     name: 'search_product_docs',
     strict: false,
     description:
-      'Search Betco product documentation (RAG). Use for general product + topic questions. Returns up to 3 sources where each source is a full approved document (read `documentBody`, not just `snippet`). Pass `freeformQuery` (and leave `productName` empty) when the product name is unknown.',
+      'Search Betco product documentation (RAG). Use for general product + topic questions. Returns up to 3 sources where each source is a full approved document (read `documentBody`, not just `snippet`). Provide `topic` or `freeformQuery` — pass `freeformQuery` alone (and leave `productName` empty) when the product name is unknown.',
     parameters: {
       type: 'object',
       properties: {
@@ -17,17 +34,23 @@ export const productSupportTools: Tool[] = [
           type: 'string',
           description: 'Specific Betco product name when known (e.g. "Green Earth All Purpose"). Leave empty when using freeformQuery.',
         },
-        topic: { type: 'string', description: 'Topic or question type (e.g. "dilution", "kill claims", "PPE").' },
+        topic: {
+          type: 'string',
+          description:
+            'Topic or question type (e.g. "dilution", "kill claims", "PPE"). Optional when `freeformQuery` is provided.',
+        },
         surfaceType: {
           type: 'string',
           description: 'Optional surface context.',
         },
         freeformQuery: {
           type: 'string',
-          description: 'Use instead of productName for broad searches where the product is not yet known (e.g. "best product for removing mineral scale from toilet bowls").',
+          description: 'Use instead of productName + topic for broad searches where the product is not yet known (e.g. "best product for removing mineral scale from toilet bowls").',
         },
       },
-      required: ['topic'],
+      // B0-362: `topic` is NOT required — the model is told to call this with `freeformQuery`
+      // alone. At least one of freeformQuery / topic / productName / surfaceType must be set.
+      required: [],
     },
   },
   {
@@ -35,13 +58,14 @@ export const productSupportTools: Tool[] = [
     name: 'get_product_spec',
     strict: false,
     description:
-      'Retrieve spec-oriented excerpts for a product id or product key string.',
+      'Retrieve spec-oriented excerpts for a Betco product, identified by product NAME or code (e.g. "pH7Q", "AF315"). Pass it as `productId` or `productName` — both keys are accepted.',
     parameters: {
       type: 'object',
       properties: {
-        productId: { type: 'string' },
+        productId: PRODUCT_REF_PARAM,
+        productName: PRODUCT_NAME_ALIAS_PARAM,
       },
-      required: ['productId'],
+      required: [],
     },
   },
   {
@@ -49,16 +73,17 @@ export const productSupportTools: Tool[] = [
     name: 'get_approved_usage_guidance',
     strict: false,
     description:
-      'Retrieve approved usage / procedure documentation for a product on a given task and surface. Returns up to 3 full approved documents in `sources[].documentBody`.',
+      'Retrieve approved usage / procedure documentation for a product (by NAME, as `productId` or `productName`) on a given task and surface. Returns up to 3 full approved documents in `sources[].documentBody`.',
     parameters: {
       type: 'object',
       properties: {
-        productId: { type: 'string' },
+        productId: PRODUCT_REF_PARAM,
+        productName: PRODUCT_NAME_ALIAS_PARAM,
         task: { type: 'string' },
         surfaceType: { type: 'string' },
         environment: { type: 'string' },
       },
-      required: ['productId', 'task', 'surfaceType'],
+      required: ['task', 'surfaceType'],
     },
   },
   {
@@ -66,13 +91,14 @@ export const productSupportTools: Tool[] = [
     name: 'get_safety_constraints',
     strict: false,
     description:
-      'Retrieve safety / SDS-oriented documentation (PPE, hazards, precautions). Returns up to 3 full approved documents in `sources[].documentBody`.',
+      'Retrieve safety / SDS-oriented documentation (PPE, hazards, precautions) for a product identified by NAME. Pass it as `productId` or `productName` — both keys are accepted. Returns up to 3 full approved documents in `sources[].documentBody`.',
     parameters: {
       type: 'object',
       properties: {
-        productId: { type: 'string' },
+        productId: PRODUCT_REF_PARAM,
+        productName: PRODUCT_NAME_ALIAS_PARAM,
       },
-      required: ['productId'],
+      required: [],
     },
   },
   {
@@ -80,15 +106,16 @@ export const productSupportTools: Tool[] = [
     name: 'get_compatibility_rules',
     strict: false,
     description:
-      'Retrieve compatibility guidance for product + surface (+ optional material).',
+      'Retrieve compatibility guidance for product (by NAME, as `productId` or `productName`) + surface (+ optional material).',
     parameters: {
       type: 'object',
       properties: {
-        productId: { type: 'string' },
+        productId: PRODUCT_REF_PARAM,
+        productName: PRODUCT_NAME_ALIAS_PARAM,
         surfaceType: { type: 'string' },
         materialType: { type: 'string' },
       },
-      required: ['productId', 'surfaceType'],
+      required: ['surfaceType'],
     },
   },
   {
@@ -96,13 +123,14 @@ export const productSupportTools: Tool[] = [
     name: 'list_allowed_surfaces',
     strict: false,
     description:
-      'Find documentation excerpts that describe allowed / compatible surfaces.',
+      'Find documentation excerpts that describe allowed / compatible surfaces for a product identified by NAME. Pass it as `productId` or `productName` — both keys are accepted.',
     parameters: {
       type: 'object',
       properties: {
-        productId: { type: 'string' },
+        productId: PRODUCT_REF_PARAM,
+        productName: PRODUCT_NAME_ALIAS_PARAM,
       },
-      required: ['productId'],
+      required: [],
     },
   },
   {
@@ -110,13 +138,14 @@ export const productSupportTools: Tool[] = [
     name: 'list_disallowed_uses',
     strict: false,
     description:
-      'Find documentation excerpts about prohibited uses, incompatibility, or warnings.',
+      'Find documentation excerpts about prohibited uses, incompatibility, or warnings for a product identified by NAME. Pass it as `productId` or `productName` — both keys are accepted.',
     parameters: {
       type: 'object',
       properties: {
-        productId: { type: 'string' },
+        productId: PRODUCT_REF_PARAM,
+        productName: PRODUCT_NAME_ALIAS_PARAM,
       },
-      required: ['productId'],
+      required: [],
     },
   },
   {
@@ -257,16 +286,14 @@ export const productSupportTools: Tool[] = [
     parameters: {
       type: 'object',
       properties: {
-        productId: {
-          type: 'string',
-          description: 'Betco product or product-line name/id (e.g. "pH7Q", "4020").',
-        },
+        productId: PRODUCT_REF_PARAM,
+        productName: PRODUCT_NAME_ALIAS_PARAM,
         organism: {
           type: 'string',
           description: 'Optional organism/pathogen to filter kill claims, e.g. "Norovirus".',
         },
       },
-      required: ['productId'],
+      required: [],
     },
   },
 ];
