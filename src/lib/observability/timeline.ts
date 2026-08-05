@@ -65,6 +65,18 @@ const GATE_LABELS: Record<ConfidenceGateKind, string> = {
   recommendation_gate: 'Recommendation gate calibration',
 };
 
+/**
+ * B0-368 — human-readable headline per `review_requested.payload.reason`. Keyed by
+ * the closed set in `~/lib/workflows/product-support/run-product-support-workflow.ts`
+ * (`REVIEW_REQUEST_REASONS`); an unknown reason falls back to the raw string rather
+ * than being dropped.
+ */
+const REVIEW_REASON_LABELS: Record<string, string> = {
+  regulated_claim_unverified: 'regulated claim unverified',
+  revision_refused: 'revision pass refused to re-ground',
+  validator_rejected: 'validator rejected the answer',
+};
+
 /* -------------------------------------------------------------------------- *
  * Small JSON readers (audit payloads and step input/output are `Json` columns)
  * -------------------------------------------------------------------------- */
@@ -429,13 +441,18 @@ export function buildRunTimeline(
 
   for (const log of logsByType('review_requested')) {
     const payload = asRecord(log.payload);
+    const reason = readString(payload, 'reason');
     push({
       kind: 'review',
       id: `review:${log.id}`,
-      label: 'Human review requested',
+      // B0-368 — the triage discriminator IS the headline. Rows written before
+      // B0-368 have no reason and keep the bare label.
+      label: reason
+        ? `Human review requested — ${REVIEW_REASON_LABELS[reason] ?? reason}`
+        : 'Human review requested',
       at: log.created_at,
       status: 'failed',
-      reason: readString(payload, 'reason'),
+      reason,
       issues: readStringArray(payload, 'issues'),
       detail: { auditPayload: log.payload },
     });

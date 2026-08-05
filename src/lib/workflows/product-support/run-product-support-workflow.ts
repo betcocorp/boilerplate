@@ -713,6 +713,45 @@ export function evaluateUsageSafetyCoverage(
   return { hasUsageEvidence, hasSafetyEvidence };
 }
 
+/**
+ * B0-368 — closed set of human-review discriminators. All 219 historical
+ * `review_requested` audit rows had `reason: null`, so a reviewer opening a trace
+ * got a red item with no headline.
+ *
+ * The vocabulary is the one the `review_tasks` table already uses
+ * (`regulated_claim_unverified` × 208, `validator_rejected` × 12), extended with
+ * `revision_refused` for the `revision_skipped_refusal` path — a second spelling for
+ * the same states would have split every existing triage query.
+ */
+export const REVIEW_REQUEST_REASONS = [
+  /** The B0-257 regulated-claim guardrail could not verify a regulated value. */
+  'regulated_claim_unverified',
+  /** The revision pass refused to re-ground the flagged claims (`revision_skipped_refusal`). */
+  'revision_refused',
+  /** The validator disapproved and nothing more specific applies. */
+  'validator_rejected',
+] as const;
+
+export type ReviewRequestReason = (typeof REVIEW_REQUEST_REASONS)[number];
+
+/**
+ * Most specific cause wins: the guardrail is a hard regulated-data rejection, a
+ * refused revision is a distinct model behaviour, and everything else is the generic
+ * validator rejection.
+ */
+export function resolveReviewRequestReason(input: {
+  hasUngroundedRegulatedClaim: boolean;
+  revisionPassRefused: boolean;
+}): ReviewRequestReason {
+  if (input.hasUngroundedRegulatedClaim) {
+    return 'regulated_claim_unverified';
+  }
+  if (input.revisionPassRefused) {
+    return 'revision_refused';
+  }
+  return 'validator_rejected';
+}
+
 function buildComparableBetcoProductMarkdownLine(match: CrossReferenceMatch): string | null {
   const link = match.productUrl?.trim();
   if (!link) {
@@ -1328,6 +1367,9 @@ export async function runProductSupportWorkflow(input: {
     });
     input.onEvent?.({ type: 'status', stage: 'validation_started' });
 
+    // B0-368 — set when the revision pass refused to re-ground, so the eventual
+    // human-review escalation is distinguishable from a plain validator rejection.
+    let revisionPassRefused = false;
     // TODO: Remove this runtime toggle when validator behavior is fully tuned.
     let validation: ValidatorResult;
     if (useValidator) {
@@ -1391,6 +1433,7 @@ export async function runProductSupportWorkflow(input: {
           },
         );
       } else {
+        revisionPassRefused = true;
         validation = { ...validation, requires_human_review: true };
         await writeAuditLog(
           'revision_skipped_refusal',
@@ -1586,9 +1629,15 @@ export async function runProductSupportWorkflow(input: {
       }
 
       if (validation.requires_human_review) {
+        // B0-368 — one discriminator for both the review_tasks row and the audit
+        // row, so a reviewer opening a trace sees WHY without reading `issues`.
+        const reviewReason = resolveReviewRequestReason({
+          hasUngroundedRegulatedClaim,
+          revisionPassRefused,
+        });
         await insertReviewTask({
           workflowRunId: run.id,
-          reason: hasUngroundedRegulatedClaim ? 'regulated_claim_unverified' : 'validator_rejected',
+          reason: reviewReason,
           payload: jsonContent({
             issues: validation.issues,
             draft: draftAnswer,
@@ -1599,7 +1648,7 @@ export async function runProductSupportWorkflow(input: {
         });
         await writeAuditLog(
           'review_requested',
-          { issues: validation.issues },
+          { reason: reviewReason, issues: validation.issues },
           wfCtx,
         );
       }

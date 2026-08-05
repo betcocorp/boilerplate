@@ -540,6 +540,38 @@ describe('buildRunTimeline — recommendations-routed run', () => {
       status: 'failed',
     });
   });
+
+  it('B0-368: a historical review_requested row with no reason still renders the bare headline', () => {
+    const review = timeline.find((event) => event.kind === 'review');
+    expect(review).toMatchObject({ reason: null, label: 'Human review requested' });
+  });
+
+  it('B0-368: promotes the reason discriminator into the review headline', () => {
+    const cases: [string, string][] = [
+      ['regulated_claim_unverified', 'Human review requested — regulated claim unverified'],
+      ['revision_refused', 'Human review requested — revision pass refused to re-ground'],
+      ['validator_rejected', 'Human review requested — validator rejected the answer'],
+      // An unknown reason is shown raw rather than dropped.
+      ['some_future_reason', 'Human review requested — some_future_reason'],
+    ];
+
+    for (const [reason, expectedLabel] of cases) {
+      const withReason = buildRunTimeline(
+        run,
+        stepRows,
+        logs.map((log) =>
+          log.event_type === 'review_requested'
+            ? { ...log, payload: { reason, issues: ['insufficient_safety_evidence'] } }
+            : log,
+        ),
+      );
+      expect(withReason.find((event) => event.kind === 'review')).toMatchObject({
+        reason,
+        label: expectedLabel,
+        status: 'failed',
+      });
+    }
+  });
 });
 
 /* -------------------------------------------------------------------------- *
