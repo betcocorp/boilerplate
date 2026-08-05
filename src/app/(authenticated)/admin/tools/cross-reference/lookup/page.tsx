@@ -1,3 +1,5 @@
+import { Suspense } from 'react';
+
 import { CrossReferenceMappingsTable } from '~/components/admin/CrossReferenceMappingsTable';
 import { ProductCrossReferenceTester } from '~/components/admin/ProductCrossReferenceTester';
 import {
@@ -7,6 +9,8 @@ import {
   CardHeader,
   CardTitle,
 } from '~/components/ui/card';
+
+import { MappingsTableCardSkeleton } from '../CrossReferenceSkeletons';
 
 export const metadata = {
   title: 'Cross-reference · Lookup & mappings | Betco BEX Admin',
@@ -44,7 +48,11 @@ export default async function CrossReferenceLookupPage({ searchParams }: PagePro
         </CardContent>
       </Card>
 
-      <CrossReferenceMappingsTable page={page} search={search} />
+      {/* Keyed on the query params: without a changing key React keeps the resolved
+          children mounted and no fallback renders on a search/pagination round-trip. */}
+      <Suspense fallback={<MappingsTableCardSkeleton />} key={`${search}|${page}`}>
+        <CrossReferenceMappingsTable page={page} search={search} />
+      </Suspense>
     </div>
   );
 }
