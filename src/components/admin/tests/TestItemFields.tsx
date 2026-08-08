@@ -5,6 +5,7 @@ import { useState } from 'react';
 
 import { FilterableSuggestionField } from '~/components/admin/tests/FilterableSuggestionField';
 import { Button } from '~/components/ui/button';
+import { Input } from '~/components/ui/input';
 import { Label } from '~/components/ui/label';
 import { Textarea } from '~/components/ui/textarea';
 import { cn } from '~/lib/utils';
@@ -35,6 +36,8 @@ export type TestItemFieldsInitialValues = {
   expectedResultType?: string;
   expectedCanonicalProduct?: string;
   expectedReasonCode?: string;
+  priority?: string;
+  idealResponse?: string;
   productMention?: string;
   questionCategory?: string;
   sourceStyle?: string;
@@ -141,6 +144,41 @@ export function TestItemFields({
         placeholder="Choose from dataset or type a reason code"
         suggestionsFromDataset={suggestionLists.reasonCodes}
       />
+
+      <div className="grid gap-2">
+        <Label htmlFor={`${idPrefix}-priority`}>
+          Priority{' '}
+          <span className="font-normal text-muted-foreground">(optional)</span>
+        </Label>
+        <Input
+          defaultValue={initialValues?.priority}
+          id={`${idPrefix}-priority`}
+          inputMode="numeric"
+          max={32767}
+          min={-32768}
+          name="priority"
+          placeholder="e.g. 1"
+          step={1}
+          type="number"
+        />
+        <p className="text-xs text-muted-foreground">
+          Whole number rank — lower = more important. Leave blank for none.
+        </p>
+      </div>
+
+      <div className="grid gap-2">
+        <Label htmlFor={`${idPrefix}-ideal-response`}>
+          Ideal response{' '}
+          <span className="font-normal text-muted-foreground">(optional)</span>
+        </Label>
+        <Textarea
+          defaultValue={initialValues?.idealResponse}
+          id={`${idPrefix}-ideal-response`}
+          name="idealResponse"
+          placeholder="Gold-standard answer to compare against…"
+          rows={4}
+        />
+      </div>
 
       <div className="rounded-2xl border border-slate-200 bg-slate-50/80">
         <Button

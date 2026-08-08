@@ -12,6 +12,8 @@ import { Button } from '~/components/ui/button';
 export type RunResultCsvRow = {
   row_index: number;
   prompt: string;
+  /** Formatted item priority (lower = more important); empty when unset. */
+  priority: string;
   /** Table “Answer?” — `Unset` / `Yes` / `No`. */
   expected_answer: string;
   /** Table “Passed” — `Yes` / `No`. */
@@ -26,6 +28,8 @@ export type RunResultCsvRow = {
   /** Table “Rounds | Cache | …” workflow timing string. */
   rounds_cache_search: string;
   message: string;
+  /** Gold-standard answer for this item; empty when unset. */
+  ideal_response: string;
   /** Table “History” View link path. */
   item_detail_path: string;
   /** Encoded semantic hits: `document_id|chunk_id` pairs joined by `; ` (Docs dialog). */
@@ -63,6 +67,7 @@ export function RunItemResultsCsvDownload({
     const headers = [
       'row_index',
       'prompt',
+      'priority',
       'expected_answer',
       'passed',
       'sim_conf',
@@ -71,6 +76,7 @@ export function RunItemResultsCsvDownload({
       'agent',
       'rounds_cache_search',
       'message',
+      'ideal_response',
       'item_detail_path',
       'retrieved_chunks',
       'test_item_id',
@@ -82,6 +88,7 @@ export function RunItemResultsCsvDownload({
         [
           String(row.row_index),
           row.prompt,
+          row.priority,
           row.expected_answer,
           row.passed,
           row.sim_conf,
@@ -90,6 +97,7 @@ export function RunItemResultsCsvDownload({
           row.agent,
           row.rounds_cache_search,
           row.message,
+          row.ideal_response,
           row.item_detail_path,
           row.retrieved_chunks,
           row.test_item_id,

@@ -129,6 +129,12 @@ export default async function AdminTestRunDetailsPage({
   const expectedShouldAnswerByItemId = new Map(
     testItems.map((item) => [item.id, item.expected_should_answer]),
   );
+  const priorityByItemId = new Map(
+    testItems.map((item) => [item.id, item.priority]),
+  );
+  const idealResponseByItemId = new Map(
+    testItems.map((item) => [item.id, item.ideal_response]),
+  );
   const passCount = result.passed_items ?? 0;
   const failCount =
     result.failed_items ?? resultItems.filter((item) => !item.passed).length;
@@ -215,9 +221,12 @@ export default async function AdminTestRunDetailsPage({
     const expectedForCell: boolean | null =
       expectedRaw === undefined ? null : expectedRaw;
 
+    const priority = priorityByItemId.get(row.test_item_id) ?? null;
+
     return {
       row_index: row.row_index,
       prompt: promptByItemId.get(row.test_item_id) ?? '',
+      priority: priority === null ? '' : String(priority),
       expected_answer: formatExpectedShouldAnswerCell(expectedForCell),
       passed: row.passed ? 'Yes' : 'No',
       sim_conf: formatItemSimilarityConfidenceLabel(row.response_payload),
@@ -229,6 +238,7 @@ export default async function AdminTestRunDetailsPage({
       agent: extractRoutingDecision(row.response_payload) ?? 'n/a',
       rounds_cache_search: formatTimingBreakdownLabel(row.response_payload),
       message: row.error_message || row.response_text || 'n/a',
+      ideal_response: idealResponseByItemId.get(row.test_item_id) ?? '',
       item_detail_path: `/admin/tests/${test.id}/items/${row.test_item_id}`,
       retrieved_chunks: formatRetrievedChunksForCsv(
         extractRetrievedDocumentChunks(row.response_payload),
@@ -261,6 +271,7 @@ export default async function AdminTestRunDetailsPage({
             row_index: row.row_index,
             test_item_id: row.test_item_id,
             prompt: promptByItemId.get(row.test_item_id) ?? '',
+            priority: priorityByItemId.get(row.test_item_id) ?? null,
             expected_should_answer:
               expectedShouldAnswerByItemId.get(row.test_item_id) ?? null,
             passed: row.passed,
@@ -272,6 +283,8 @@ export default async function AdminTestRunDetailsPage({
             agent: extractRoutingDecision(row.response_payload),
             response_text: row.response_text,
             error_message: row.error_message,
+            ideal_response:
+              idealResponseByItemId.get(row.test_item_id) ?? null,
             timing: extractTimingBreakdown(row.response_payload),
             retrieved_document_chunks: extractRetrievedDocumentChunks(
               row.response_payload,
@@ -473,6 +486,8 @@ export default async function AdminTestRunDetailsPage({
                       const expectedShouldAnswer =
                         expectedShouldAnswerByItemId.get(row.test_item_id) ??
                         null;
+                      const itemPriority =
+                        priorityByItemId.get(row.test_item_id) ?? null;
                       return (
                         <TableRow id={`run-item-result-${row.id}`} key={row.id}>
                           <TableCell>
@@ -484,6 +499,15 @@ export default async function AdminTestRunDetailsPage({
                             </Link>
                           </TableCell>
                           <TableCell className="max-w-[420px] whitespace-normal text-xs text-slate-700">
+                            {itemPriority !== null ? (
+                              <Badge
+                                className="mr-1.5 align-middle text-slate-500"
+                                title={`Priority ${itemPriority} — lower = more important`}
+                                variant="secondary"
+                              >
+                                P{itemPriority}
+                              </Badge>
+                            ) : null}
                             <Link
                               className="text-sky-700 underline-offset-2 hover:underline"
                               href={`/admin/tests/${test.id}/items/${row.test_item_id}`}

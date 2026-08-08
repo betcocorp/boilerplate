@@ -31,6 +31,8 @@ type EditTestItemDialogProps = {
   expectedResultType: string | null;
   expectedCanonicalProduct: string | null;
   expectedReasonCode: string | null;
+  priority: number | null;
+  idealResponse: string | null;
   inputPayload: Json;
   /** `ProdLineKey` → display name (`ProdLineDescr`) for canonical product suggestions. */
   canonicalProductLabels: Record<string, string>;
@@ -71,6 +73,8 @@ export function EditTestItemDialog({
   expectedResultType,
   expectedCanonicalProduct,
   expectedReasonCode,
+  priority,
+  idealResponse,
   inputPayload,
   canonicalProductLabels,
   suggestionLists,
@@ -114,6 +118,8 @@ export function EditTestItemDialog({
                 expectedResultType: expectedResultType ?? '',
                 expectedCanonicalProduct: expectedCanonicalProduct ?? '',
                 expectedReasonCode: expectedReasonCode ?? '',
+                priority: priority === null ? '' : String(priority),
+                idealResponse: idealResponse ?? '',
                 productMention: payloadString(inputPayload, 'product_mention'),
                 questionCategory: payloadString(inputPayload, 'question_category'),
                 sourceStyle: payloadString(inputPayload, 'source_style'),

@@ -15,6 +15,8 @@ export type RunExportItem = {
   row_index: number;
   test_item_id: string;
   prompt: string;
+  /** Item priority rank (lower = more important); null when unset. */
+  priority: number | null;
   expected_should_answer: boolean | null;
   passed: boolean;
   status: string;
@@ -25,6 +27,8 @@ export type RunExportItem = {
   agent: string | null;
   response_text: string | null;
   error_message: string | null;
+  /** Gold-standard answer for this item; null when unset. */
+  ideal_response: string | null;
   timing: {
     toolRounds: number;
     cacheSource: string | null;

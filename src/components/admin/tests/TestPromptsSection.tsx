@@ -19,7 +19,6 @@ import {
   TableHeader,
   TableRow,
 } from '~/components/ui/table';
-import { formatDurationSeconds } from '~/lib/utils/time';
 import {
   formatElapsed,
   formatPercent,
@@ -37,6 +36,8 @@ export type TestPromptRow = {
   expected_result_type: string | null;
   expected_canonical_product: string | null;
   expected_reason_code: string | null;
+  priority: number | null;
+  ideal_response: string | null;
   input_payload: Json;
 };
 
@@ -399,6 +400,15 @@ export function TestPromptsSection({
                     </TableCell>
                     <TableCell>{item.row_index}</TableCell>
                     <TableCell className="max-w-[420px] whitespace-normal">
+                      {item.priority !== null ? (
+                        <Badge
+                          className="mr-2 align-middle text-slate-500"
+                          title={`Priority ${item.priority} — lower = more important`}
+                          variant="secondary"
+                        >
+                          P{item.priority}
+                        </Badge>
+                      ) : null}
                       {item.prompt}
                     </TableCell>
                     <TableCell>{expectedSummary(item)}</TableCell>
@@ -461,7 +471,9 @@ export function TestPromptsSection({
                           expectedReasonCode={item.expected_reason_code}
                           expectedResultType={item.expected_result_type}
                           expectedShouldAnswer={item.expected_should_answer}
+                          idealResponse={item.ideal_response}
                           inputPayload={item.input_payload}
+                          priority={item.priority}
                           prompt={item.prompt}
                           returnPath={returnPath}
                           rowIndex={item.row_index}

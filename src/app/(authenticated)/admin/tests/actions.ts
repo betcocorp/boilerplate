@@ -7,6 +7,7 @@ import { SME_AGENT_IDS } from '~/lib/agents/agent-registry';
 import {
   parseCsvColumnNames,
   parseExpectedShouldAnswerFromForm,
+  parsePriority,
   parseTestCsvContent,
 } from '~/lib/tests/csv';
 import {
@@ -162,6 +163,8 @@ export async function uploadTestCsvAction(formData: FormData) {
     expected_result_type: row.expectedResultType,
     expected_canonical_product: row.expectedCanonicalProduct,
     expected_reason_code: row.expectedReasonCode,
+    priority: row.priority,
+    ideal_response: row.idealResponse,
     input_payload: row.inputPayload,
     metadata: row.metadata,
   }));
@@ -240,6 +243,16 @@ export async function addTestItemAction(formData: FormData) {
       ? expectedReasonRaw.trim()
       : null;
 
+  const priorityRaw = formData.get('priority');
+  const priority =
+    typeof priorityRaw === 'string' ? parsePriority(priorityRaw) : null;
+
+  const idealResponseRaw = formData.get('idealResponse');
+  const ideal_response =
+    typeof idealResponseRaw === 'string' && idealResponseRaw.trim()
+      ? idealResponseRaw.trim()
+      : null;
+
   const productMentionRaw = formData.get('productMention');
   const questionCategoryRaw = formData.get('questionCategory');
   const sourceStyleRaw = formData.get('sourceStyle');
@@ -273,6 +286,8 @@ export async function addTestItemAction(formData: FormData) {
       expected_result_type,
       expected_canonical_product,
       expected_reason_code,
+      priority,
+      ideal_response,
       input_payload,
       metadata,
     },
@@ -353,6 +368,17 @@ export async function updateTestItemAction(formData: FormData) {
       ? expectedReasonRaw.trim()
       : null;
 
+  // Cleared inputs resolve to null so an edit can clear the stored values.
+  const priorityRaw = formData.get('priority');
+  const priority =
+    typeof priorityRaw === 'string' ? parsePriority(priorityRaw) : null;
+
+  const idealResponseRaw = formData.get('idealResponse');
+  const ideal_response =
+    typeof idealResponseRaw === 'string' && idealResponseRaw.trim()
+      ? idealResponseRaw.trim()
+      : null;
+
   const productMentionRaw = formData.get('productMention');
   const questionCategoryRaw = formData.get('questionCategory');
   const sourceStyleRaw = formData.get('sourceStyle');
@@ -382,6 +408,8 @@ export async function updateTestItemAction(formData: FormData) {
     expected_result_type,
     expected_canonical_product,
     expected_reason_code,
+    priority,
+    ideal_response,
     input_payload,
     metadata,
   });
@@ -633,6 +661,8 @@ export async function createTestFromPromptsAction(formData: FormData) {
     expected_result_type: item.expected_result_type,
     expected_canonical_product: item.expected_canonical_product,
     expected_reason_code: item.expected_reason_code,
+    priority: item.priority,
+    ideal_response: item.ideal_response,
     input_payload: item.input_payload,
     metadata: item.metadata,
   }));

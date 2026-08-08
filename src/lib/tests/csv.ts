@@ -45,6 +45,25 @@ export function parseExpectedShouldAnswerFromForm(value: string): boolean | null
   return parseExpectedShouldAnswer(trimmed);
 }
 
+/**
+ * Parses a priority value (CSV cell or form input) into an int2-safe integer.
+ * Blank, non-numeric, decimal, or out-of-range (−32768..32767) values → null.
+ */
+export function parsePriority(value: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (!/^[+-]?\d+$/.test(trimmed)) {
+    return null;
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  if (!Number.isInteger(parsed) || parsed < -32768 || parsed > 32767) {
+    return null;
+  }
+  return parsed;
+}
+
 export function parseTestCsvContent(content: string): ParsedCsvRow[] {
   const records = parse(content, {
     columns: true,
@@ -72,6 +91,8 @@ export function parseTestCsvContent(content: string): ParsedCsvRow[] {
       const expectedCanonicalProduct =
         asTrimmedString(record.canonical_product) || null;
       const expectedReasonCode = asTrimmedString(record.reason_code) || null;
+      const priority = parsePriority(asTrimmedString(record.priority));
+      const idealResponse = asTrimmedString(record.ideal_response) || null;
 
       const inputPayload: Record<string, string> = {};
       const metadata: Record<string, string> = {};
@@ -91,7 +112,9 @@ export function parseTestCsvContent(content: string): ParsedCsvRow[] {
           normalizedKey === 'should_answer' ||
           normalizedKey === 'expected_result_type' ||
           normalizedKey === 'canonical_product' ||
-          normalizedKey === 'reason_code'
+          normalizedKey === 'reason_code' ||
+          normalizedKey === 'priority' ||
+          normalizedKey === 'ideal_response'
         ) {
           continue;
         }
@@ -115,6 +138,8 @@ export function parseTestCsvContent(content: string): ParsedCsvRow[] {
         expectedResultType,
         expectedCanonicalProduct,
         expectedReasonCode,
+        priority,
+        idealResponse,
         inputPayload,
         metadata,
       } satisfies ParsedCsvRow;

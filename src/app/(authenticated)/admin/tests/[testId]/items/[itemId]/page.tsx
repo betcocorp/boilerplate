@@ -275,6 +275,24 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
               <p className="mt-1 text-slate-800">
                 {formatExpectedShouldAnswerLabel(item.expected_should_answer)}
               </p>
+              <p className="mt-3 font-semibold text-slate-900">Priority</p>
+              <p className="mt-1 text-slate-800">
+                {item.priority === null ? (
+                  <span className="text-slate-400">—</span>
+                ) : (
+                  item.priority
+                )}
+              </p>
+            </div>
+            <div className="col-span-2 border-t border-slate-200 pt-4">
+              <p className="font-semibold text-slate-900">Ideal response</p>
+              {item.ideal_response ? (
+                <p className="mt-1 whitespace-pre-wrap">
+                  {item.ideal_response}
+                </p>
+              ) : (
+                <p className="mt-1 text-slate-400">—</p>
+              )}
             </div>
           </div>
 

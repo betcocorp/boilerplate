@@ -51,6 +51,18 @@ export const TEST_TEMPLATE_COLUMNS: TestTemplateColumn[] = [
     help: 'Why-tag describing what the question probes (e.g. dilution, sds_safety). Labelling/reference only.',
   },
   {
+    name: 'priority',
+    required: false,
+    example: 'Optional integer rank, e.g. 1 (lower = more important)',
+    help: 'Optional whole-number priority stored on the row. Invalid or non-integer values are ignored on import.',
+  },
+  {
+    name: 'ideal_response',
+    required: false,
+    example: 'The ideal gold-standard answer for this prompt, in full sentences',
+    help: 'The ideal/expected answer text for this prompt, stored for reviewer reference.',
+  },
+  {
     name: 'product_mention',
     required: false,
     example:

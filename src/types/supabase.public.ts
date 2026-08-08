@@ -608,8 +608,10 @@ export type Database = {
           expected_result_type: string | null
           expected_should_answer: boolean | null
           id: string
+          ideal_response: string | null
           input_payload: Json
           metadata: Json
+          priority: number | null
           prompt: string
           prompt_category: string | null
           row_index: number
@@ -622,8 +624,10 @@ export type Database = {
           expected_result_type?: string | null
           expected_should_answer?: boolean | null
           id?: string
+          ideal_response?: string | null
           input_payload?: Json
           metadata?: Json
+          priority?: number | null
           prompt: string
           prompt_category?: string | null
           row_index: number
@@ -636,8 +640,10 @@ export type Database = {
           expected_result_type?: string | null
           expected_should_answer?: boolean | null
           id?: string
+          ideal_response?: string | null
           input_payload?: Json
           metadata?: Json
+          priority?: number | null
           prompt?: string
           prompt_category?: string | null
           row_index?: number
