@@ -3,8 +3,10 @@
 import { Loader2, Sparkles } from 'lucide-react';
 import { useState } from 'react';
 
+import { useRunInsights } from '~/components/admin/observability/run-insights-context';
 import { Button } from '~/components/ui/button';
 import { Skeleton } from '~/components/ui/skeleton';
+import type { PromptInsight } from '~/lib/observability/prompt-insights';
 
 /**
  * Prompt-level sibling of `~/components/admin/tests/RunInsightsPanel`, for the
@@ -14,16 +16,12 @@ import { Skeleton } from '~/components/ui/skeleton';
  *
  * Results are not persisted (`workflow_runs` has no insights column and the
  * observability repository is read-only), so there is no initial state to
- * hydrate — analysis is on demand.
+ * hydrate — analysis is on demand. The generated result is kept in
+ * `RunInsightsProvider` rather than local state so the JSON export button can
+ * include it.
  */
 
-export type PromptInsight = {
-  rank: number;
-  title: string;
-  description: string;
-  category: 'prompt' | 'routing' | 'tools' | 'grounding' | 'confidence';
-  impact: 'high' | 'medium' | 'low';
-};
+export type { PromptInsight };
 
 const CATEGORY_STYLES: Record<string, string> = {
   prompt: 'bg-rose-100 text-rose-800',
@@ -74,8 +72,7 @@ function InsightsSkeleton() {
 }
 
 export function RunPromptInsightsPanel({ runId }: Props) {
-  const [insights, setInsights] = useState<PromptInsight[] | null>(null);
-  const [generatedAt, setGeneratedAt] = useState<string | null>(null);
+  const { insights, generatedAt, setResult } = useRunInsights();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -95,8 +92,7 @@ export function RunPromptInsightsPanel({ runId }: Props) {
       if (!res.ok || !data.ok) {
         setError(data.error ?? 'Analysis failed.');
       } else {
-        setInsights(data.insights ?? []);
-        setGeneratedAt(data.generatedAt ?? null);
+        setResult(data.insights ?? [], data.generatedAt ?? null);
       }
     } catch {
       setError('Network error. Please try again.');
