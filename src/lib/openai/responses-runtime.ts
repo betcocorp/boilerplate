@@ -28,6 +28,41 @@ export type ExecuteToolFn = (input: {
   trace: ToolTraceEntry;
 }>;
 
+/**
+ * B0-436 — evidence retrieved BEFORE the first model call (speculative retrieval), handed to that
+ * call so it can be the *answering* call instead of a round spent selecting the one obvious tool.
+ *
+ * It is appended to round 1's `input` as its own message item, deliberately NOT merged into
+ * `instructions` and NOT reflected in `promptCacheKey`: those two form the stable cache prefix
+ * (see `promptCacheKey` below) and a per-request value in either collapses prompt caching.
+ */
+export type PreloadedEvidence = {
+  /** Where the evidence came from, e.g. `search_product_docs (pre-fetched)`. */
+  label: string;
+  /** The tool payload exactly as the model would have received it from a real tool call. */
+  text: string;
+};
+
+/**
+ * Renders `PreloadedEvidence` as the single message item both runtimes inject. Shared so the
+ * Responses and AI SDK paths present byte-identical evidence to the model.
+ *
+ * The wording matters: the product-support system prompt hard-requires a retrieval call before
+ * answering, so this block states plainly that the retrieval already ran (and what to do when it is
+ * not enough) — otherwise the model reads "you have not retrieved yet" and burns the round anyway.
+ */
+export function formatPreloadedEvidence(evidence: PreloadedEvidence): string {
+  return [
+    '## Retrieved evidence (pre-fetched)',
+    '',
+    `A retrieval tool was already run on your behalf for this message: \`${evidence.label}\`.`,
+    'This IS the mandatory retrieval call — treat the result below exactly as if you had called the tool yourself, and cite from it.',
+    'If it does not contain what you need, call the appropriate tool(s) now before answering.',
+    '',
+    evidence.text,
+  ].join('\n');
+}
+
 export type ResponsesRuntimeOptions = {
   client: OpenAI;
   model: string;
@@ -47,6 +82,11 @@ export type ResponsesRuntimeOptions = {
    * that share a prefix, and must NOT contain per-request values (run id, timestamp, user text).
    */
   promptCacheKey?: string;
+  /**
+   * B0-436 — speculatively retrieved evidence for round 1 only. Later rounds send `toolOutputs`, so
+   * injecting it again would duplicate it inside the `previous_response_id` chain.
+   */
+  preloadedEvidence?: PreloadedEvidence;
   /**
    * B0-370 — tuning for the bounded transport retry around each model request. Defaults are fine in
    * production; tests inject `sleep`/`random` to keep the suite fast and deterministic.
@@ -136,6 +176,18 @@ export async function runResponsesWithToolLoop(
           content: opts.userMessage,
           type: 'message',
         },
+        // B0-436 — a plain message item, not a `function_call_output`: there is no matching
+        // `function_call` in the chain for a speculative run, so a function output item would be
+        // rejected by the Responses API.
+        ...(opts.preloadedEvidence
+          ? [
+              {
+                role: 'user' as const,
+                content: formatPreloadedEvidence(opts.preloadedEvidence),
+                type: 'message' as const,
+              },
+            ]
+          : []),
       ];
 
     const params: ResponseCreateParamsNonStreaming = {

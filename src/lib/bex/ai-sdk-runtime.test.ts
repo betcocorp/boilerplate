@@ -418,3 +418,120 @@ describe('runAiSdkWithToolLoop — bounded transport retry (B0-370)', () => {
     expect(deltas).toEqual(['Recovered answer']);
   });
 });
+describe('runAiSdkWithToolLoop — preloaded evidence (B0-436)', () => {
+  it('appends the evidence as the last message of the prompt, after the user message', async () => {
+    const prompts: unknown[] = [];
+    modelRef.current = new MockLanguageModelV3({
+      doStream: async ({ prompt }) => {
+        prompts.push(prompt);
+        return {
+          stream: simulateReadableStream({
+            chunks: [
+              { type: 'text-start', id: '0' },
+              { type: 'text-delta', id: '0', delta: '2 oz per gallon.' },
+              { type: 'text-end', id: '0' },
+              {
+                type: 'finish',
+                finishReason: 'stop',
+                usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+              },
+            ] as const,
+          }),
+        };
+      },
+    });
+
+    const result = await runAiSdkWithToolLoop({
+      instructions: 'You are Bex.',
+      history: [{ role: 'user', content: 'earlier turn' }],
+      userMessage: 'dilution for Green Earth?',
+      preloadedEvidence: {
+        label: 'search_product_docs({"freeformQuery":"dilution for Green Earth?"})',
+        text: '{"ok":true,"sources":[{"documentId":"doc-1"}]}',
+      },
+      executeTool: noopExecuteTool,
+    });
+
+    expect(result.assistantText).toBe('2 oz per gallon.');
+
+    const messages = prompts[0] as Array<{ role: string; content: unknown }>;
+    const last = messages.at(-1);
+    const secondToLast = messages.at(-2);
+    expect(secondToLast?.role).toBe('user');
+    expect(JSON.stringify(secondToLast?.content)).toContain('dilution for Green Earth?');
+    expect(last?.role).toBe('user');
+    expect(JSON.stringify(last?.content)).toContain('## Retrieved evidence (pre-fetched)');
+    expect(JSON.stringify(last?.content)).toContain('doc-1');
+    // The stable, cacheable prefix must not carry the per-request evidence.
+    const system = messages.find((message) => message.role === 'system');
+    expect(JSON.stringify(system?.content ?? '')).not.toContain('Retrieved evidence');
+  });
+});
+
+describe('runAiSdkWithToolLoop — model vs persisted tool output (B0-437)', () => {
+  it('feeds `modelOutput` back into the next step, not the full persisted output', async () => {
+    const prompts: unknown[] = [];
+    let call = 0;
+    modelRef.current = new MockLanguageModelV3({
+      doStream: async ({ prompt }) => {
+        prompts.push(prompt);
+        call += 1;
+        if (call === 1) {
+          return {
+            stream: simulateReadableStream({
+              chunks: [
+                {
+                  type: 'tool-call',
+                  toolCallId: 't1',
+                  toolName: 'search_product_docs',
+                  input: JSON.stringify({ freeformQuery: 'pH7Q first aid' }),
+                },
+                {
+                  type: 'finish',
+                  finishReason: 'tool-calls',
+                  usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+                },
+              ] as const,
+            }),
+          };
+        }
+        return {
+          stream: simulateReadableStream({
+            chunks: [
+              { type: 'text-start', id: '0' },
+              { type: 'text-delta', id: '0', delta: 'Rinse cautiously with water.' },
+              { type: 'text-end', id: '0' },
+              {
+                type: 'finish',
+                finishReason: 'stop',
+                usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+              },
+            ] as const,
+          }),
+        };
+      },
+    });
+
+    await runAiSdkWithToolLoop({
+      instructions: 'You are Bex.',
+      history: [],
+      userMessage: 'pH7Q first aid',
+      executeTool: async ({ name }) => ({
+        output: '{"sources":[{"snippet":"...","documentBody":"FULL BODY"}]}',
+        modelOutput: '{"sources":[{"documentBody":"SLIM"}]}',
+        trace: {
+          toolName: name,
+          callId: 't1',
+          argumentsPreview: '',
+          outputPreview: '',
+          ok: true,
+          durationMs: 0,
+        } as ToolTraceEntry,
+      }),
+    });
+
+    const step2 = JSON.stringify(prompts[1]);
+    expect(step2).toContain('SLIM');
+    expect(step2).not.toContain('FULL BODY');
+  });
+});
