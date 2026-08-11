@@ -67,6 +67,23 @@ describe('runAiSdkWithToolLoop', () => {
     });
   });
 
+  /** B0-429 — TTFT is measured on every run, including callers that consume no deltas. */
+  it('feeds the measurement-only observer with no caller sink attached', async () => {
+    modelRef.current = textOnlyModel(['Hello', ', ', 'world!']);
+    const observed: string[] = [];
+
+    const result = await runAiSdkWithToolLoop({
+      instructions: 'You are Bex.',
+      history: [],
+      userMessage: 'hi',
+      observeAssistantDelta: (delta) => observed.push(delta),
+      executeTool: noopExecuteTool,
+    });
+
+    expect(observed).toEqual(['Hello', ', ', 'world!']);
+    expect(result.assistantText).toBe('Hello, world!');
+  });
+
   it('runs the tool loop: executes the forced tool, then streams the final answer', async () => {
     let call = 0;
     modelRef.current = new MockLanguageModelV3({

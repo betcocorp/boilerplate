@@ -401,4 +401,79 @@ describe('runResponsesWithToolLoop — streaming retry safety (B0-370)', () => {
     expect(isUpstreamTransportError(error)).toBe(true);
     expect((error as Error).message).toBe(UPSTREAM_RETRY_USER_MESSAGE);
   });
+
+  /**
+   * B0-429 — a measurement-only observer (TTFT) must make the runtime stream without inheriting the
+   * retry restriction that a caller-visible sink carries.
+   */
+  it('streams for a measurement-only observer even when no caller consumes deltas', async () => {
+    const { client, stream } = streamingClient([
+      { deltas: ['Use ', '2 oz'], response: { id: 'resp_1', output: [] } },
+    ]);
+
+    const observed: string[] = [];
+    const result = await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1',
+      instructions: 'stable prefix',
+      tools: [],
+      userMessage: 'hello',
+      retry: testRetry,
+      observeAssistantDelta: (delta) => observed.push(delta),
+      executeTool: async ({ name }) => ({ output: '{}', trace: trace(name) }),
+    });
+
+    expect(stream).toHaveBeenCalledTimes(1);
+    expect(observed).toEqual(['Use ', '2 oz']);
+    expect(result.finalResponseId).toBe('resp_1');
+  });
+
+  it('still retries after an observed-but-invisible token, since nobody saw it', async () => {
+    const { client, stream } = streamingClient([
+      { deltas: ['Partial answer'], throws: fetchFailed() },
+      { deltas: ['Full answer'], response: { id: 'resp_1', output: [] } },
+    ]);
+
+    const observed: string[] = [];
+    const result = await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1',
+      instructions: 'stable prefix',
+      tools: [],
+      userMessage: 'hello',
+      retry: testRetry,
+      observeAssistantDelta: (delta) => observed.push(delta),
+      executeTool: async ({ name }) => ({ output: '{}', trace: trace(name) }),
+    });
+
+    // No caller-visible sink ⇒ the replay duplicates nothing, so resilience is unchanged for
+    // non-streaming callers such as `/api/v1/orchestrator`.
+    expect(stream).toHaveBeenCalledTimes(2);
+    expect(observed).toEqual(['Partial answer', 'Full answer']);
+    expect(result.finalResponseId).toBe('resp_1');
+  });
+
+  it('feeds both sinks when a caller consumes deltas and TTFT is being measured', async () => {
+    const { client } = streamingClient([
+      { deltas: ['Use ', '2 oz'], response: { id: 'resp_1', output: [] } },
+    ]);
+
+    const deltas: string[] = [];
+    const observed: string[] = [];
+    await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1',
+      instructions: 'stable prefix',
+      tools: [],
+      userMessage: 'hello',
+      retry: testRetry,
+      onAssistantDelta: (delta) => deltas.push(delta),
+      observeAssistantDelta: (delta) => observed.push(delta),
+      executeTool: async ({ name }) => ({ output: '{}', trace: trace(name) }),
+    });
+
+    // Each token reaches the caller exactly once — the observer is not a second forwarding path.
+    expect(deltas).toEqual(['Use ', '2 oz']);
+    expect(observed).toEqual(['Use ', '2 oz']);
+  });
 });

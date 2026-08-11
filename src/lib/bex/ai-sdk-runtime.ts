@@ -57,6 +57,12 @@ export type AiSdkRuntimeOptions = {
    */
   retry?: TransportRetryTuning;
   onAssistantDelta?: (delta: string) => void;
+  /**
+   * B0-429 — measurement-only token observer (TTFT), mirroring `ResponsesRuntimeOptions`. This
+   * runtime always streams and always drains `textStream`, so observing costs nothing here; the
+   * option exists so the workflow can record TTFT identically on both runtimes.
+   */
+  observeAssistantDelta?: (delta: string) => void;
   executeTool: ExecuteToolFn;
 };
 
@@ -287,6 +293,7 @@ export async function runAiSdkWithToolLoop(opts: AiSdkRuntimeOptions): Promise<A
     // Always drain the stream so the result promises resolve; forward deltas when a sink is provided.
     for await (const delta of result.textStream) {
       opts.onAssistantDelta?.(delta);
+      opts.observeAssistantDelta?.(delta);
     }
 
     [assistantText, steps, totalUsage] = await Promise.all([

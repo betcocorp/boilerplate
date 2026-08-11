@@ -54,10 +54,11 @@ export const productSupportFinalOutputSchema = z.object({
       cacheSource: z.string().nullable(),
       searchMs: z.number().nullable(),
       /**
-       * B0-428 — time to first streamed assistant token, measured from workflow start (the same
-       * anchor as the run's duration on `/admin/observability`). Null when the caller passed no
-       * `onAssistantDelta` (nothing streamed) or the run declined before generation. Optional so
-       * `workflow_run.final_output` payloads written before B0-428 still parse.
+       * B0-428 / B0-429 — time to first assistant token, measured from workflow start (the same
+       * anchor as the run's duration on `/admin/observability`). Recorded on every run: the first
+       * streamed model token, or on the early-decline path the moment the decline text was produced
+       * (no model call happens there). Null only when the run failed before any token existed.
+       * Optional so `workflow_run.final_output` payloads written before B0-428 still parse.
        */
       ttftMs: z.number().nullable().optional(),
     })

@@ -924,26 +924,25 @@ export async function runProductSupportWorkflow(input: {
   const client = getOpenAIClient();
 
   /**
-   * B0-428 — time to first streamed assistant token, surfaced as the "Stream" column on
+   * B0-428 / B0-429 — time to first assistant token, surfaced as the "Stream" column on
    * `/admin/observability`. Anchored here rather than at the HTTP boundary so it shares the run's
-   * duration anchor (`workflow_runs.created_at`) and the two numbers stay comparable. The delta
-   * sink stays `undefined` when the caller supplied none, so a non-streaming caller is not silently
-   * switched into the streaming Responses path.
+   * duration anchor (`workflow_runs.created_at`) and the two numbers stay comparable.
+   *
+   * Recorded on EVERY run, not only those whose caller wants deltas: the observer below is passed to
+   * the generation runtime unconditionally (`observeAssistantDelta`), which is measurement-only and
+   * therefore leaves both delta forwarding and the runtime's retry window untouched.
    */
   const workflowStartedAtMs = Date.now();
-  let firstAssistantDeltaAtMs: number | null = null;
-  const onAssistantDelta = input.onAssistantDelta
-    ? (delta: string) => {
-        if (firstAssistantDeltaAtMs === null) {
-          firstAssistantDeltaAtMs = Date.now();
-        }
-        input.onAssistantDelta?.(delta);
-      }
-    : undefined;
+  let firstAssistantTokenAtMs: number | null = null;
+  const observeAssistantDelta = () => {
+    if (firstAssistantTokenAtMs === null) {
+      firstAssistantTokenAtMs = Date.now();
+    }
+  };
   const ttftMs = (): number | null =>
-    firstAssistantDeltaAtMs === null
+    firstAssistantTokenAtMs === null
       ? null
-      : Math.max(0, firstAssistantDeltaAtMs - workflowStartedAtMs);
+      : Math.max(0, firstAssistantTokenAtMs - workflowStartedAtMs);
   input.onEvent?.({
     type: 'status',
     stage: 'routing_selected',
@@ -1029,8 +1028,12 @@ export async function runProductSupportWorkflow(input: {
         toolRounds: 0,
         cacheSource: null,
         searchMs: null,
-        // Declined before generation: nothing was streamed, so there is no TTFT.
-        ttftMs: null,
+        /**
+         * B0-429 — no model call happens on this path, so there is no streamed token to time.
+         * The decline text IS the first assistant output the caller receives, so its elapsed time
+         * is the honest TTFT here, and the metric stays populated for policy-declined runs.
+         */
+        ttftMs: Math.max(0, Date.now() - workflowStartedAtMs),
       },
     };
 
@@ -1213,7 +1216,8 @@ export async function runProductSupportWorkflow(input: {
           userMessage: input.userMessage,
           toolChoice,
           promptCacheKey,
-          onAssistantDelta,
+          onAssistantDelta: input.onAssistantDelta,
+          observeAssistantDelta,
           executeTool,
         })
       : await runResponsesWithToolLoop({
@@ -1225,7 +1229,8 @@ export async function runProductSupportWorkflow(input: {
           previousResponseId: input.previousOpenaiResponseId ?? null,
           toolChoice,
           promptCacheKey,
-          onAssistantDelta,
+          onAssistantDelta: input.onAssistantDelta,
+          observeAssistantDelta,
           executeTool,
         });
 

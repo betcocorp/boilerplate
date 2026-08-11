@@ -44,7 +44,18 @@ export type ResponsesRuntimeOptions = {
    */
   retry?: TransportRetryTuning;
   onRawResponse?: (response: Response) => void;
+  /**
+   * Caller-visible token sink: whatever is written here has been shown to someone and cannot be
+   * retracted, which is why an emission to it closes the retry window (see `canRetry` below).
+   */
   onAssistantDelta?: (delta: string) => void;
+  /**
+   * B0-429 — measurement-only token observer (TTFT). Like `onAssistantDelta` its presence makes
+   * this runtime stream, so the first token is observable on *every* run rather than only on runs
+   * whose caller wants deltas. Unlike it, an emission here does NOT close the retry window: nothing
+   * was shown to anyone, so a replay cannot duplicate visible text.
+   */
+  observeAssistantDelta?: (delta: string) => void;
   executeTool: ExecuteToolFn;
 };
 
@@ -78,6 +89,9 @@ export async function runResponsesWithToolLoop(
   const maxRounds = opts.maxToolRounds ?? 16;
   const toolTrace: ToolTraceEntry[] = [];
   const responseIds: string[] = [];
+
+  // B0-429 — either sink needs token events, so either one selects the streaming transport.
+  const wantsTokenEvents = Boolean(opts.onAssistantDelta || opts.observeAssistantDelta);
 
   let chainPrev: string | undefined = opts.previousResponseId?.trim() || undefined;
   let toolOutputs: ResponseInputItem[] | null = null;
@@ -149,11 +163,11 @@ export async function runResponsesWithToolLoop(
      * the two policies would stack multiplicatively (3 × 3 = 9 upstream attempts); this keeps the
      * bound at `attempts` and puts the jitter under our control.
      */
-    let deltaEmittedThisAttempt = false;
+    let visibleDeltaEmittedThisAttempt = false;
     const response: Response = await retryTransportFaults(
       async () => {
-        deltaEmittedThisAttempt = false;
-        if (opts.onAssistantDelta) {
+        visibleDeltaEmittedThisAttempt = false;
+        if (wantsTokenEvents) {
           const stream = opts.client.responses.stream(
             {
               ...params,
@@ -163,8 +177,11 @@ export async function runResponsesWithToolLoop(
           );
           for await (const event of stream) {
             if (event.type === 'response.output_text.delta') {
-              deltaEmittedThisAttempt = true;
-              opts.onAssistantDelta(event.delta);
+              if (opts.onAssistantDelta) {
+                visibleDeltaEmittedThisAttempt = true;
+                opts.onAssistantDelta(event.delta);
+              }
+              opts.observeAssistantDelta?.(event.delta);
             }
           }
           return await stream.finalResponse();
@@ -173,12 +190,16 @@ export async function runResponsesWithToolLoop(
       },
       {
         runtime: 'responses',
-        label: `responses.${opts.onAssistantDelta ? 'stream' : 'create'} round ${i + 1}`,
+        label: `responses.${wantsTokenEvents ? 'stream' : 'create'} round ${i + 1}`,
         // A replay would re-stream text the user has already seen (the delta sink is write-only —
         // there is no way to retract it), so a fault after the first visible token fails cleanly
         // instead of retrying. Transport faults land at connection time, before any token, which
         // is where all ten production failures occurred.
-        canRetry: () => !deltaEmittedThisAttempt,
+        //
+        // B0-429 — gated on *visible* deltas only. A measurement-only observer (TTFT) streams
+        // without showing anyone anything, so it must not narrow this window for callers that
+        // consume no deltas.
+        canRetry: () => !visibleDeltaEmittedThisAttempt,
         ...opts.retry,
       },
     );

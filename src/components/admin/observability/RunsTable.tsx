@@ -240,8 +240,8 @@ export function RunsTable({ route, rows, hasMore, page, filters }: RunsTableProp
                 <TableHead>Agent</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Confidence</TableHead>
-                {/* B0-428 — time to first streamed token, next to total duration. */}
-                <TableHead title="Time to first streamed assistant token, from workflow start">
+                {/* B0-428 / B0-429 — time to first token, next to total duration. */}
+                <TableHead title="Time to first assistant token, measured from workflow start. Policy-declined runs report the time their decline text was produced (no model call happens).">
                   Stream
                 </TableHead>
                 <TableHead>Duration</TableHead>
