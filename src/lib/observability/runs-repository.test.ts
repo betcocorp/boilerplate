@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { isRunIdSearchTerm, readTtftMs } from '~/lib/observability/runs-repository';
+import {
+  isRunIdSearchTerm,
+  readRunSource,
+  readTtftMs,
+} from '~/lib/observability/runs-repository';
 
 /**
  * B0-428 — `final_output` is untyped `Json` written by three different code paths (completed,
@@ -40,6 +44,31 @@ describe('readTtftMs', () => {
     expect(readTtftMs({ timingBreakdown: { ttftMs: '1840' } })).toBeNull();
     expect(readTtftMs({ timingBreakdown: { ttftMs: Number.NaN } })).toBeNull();
     expect(readTtftMs({ timingBreakdown: { ttftMs: -5 } })).toBeNull();
+  });
+});
+
+/**
+ * B0-416 — `workflow_runs.source` is stored text. The CHECK constraint only covers rows written
+ * after the migration, and pre-migration runs are legitimately NULL, so the reader has to report
+ * unknown as unknown rather than defaulting a run into a source it was never known to have.
+ */
+describe('readRunSource', () => {
+  it('accepts every stored source value', () => {
+    expect(readRunSource('harness')).toBe('harness');
+    expect(readRunSource('bex_chat')).toBe('bex_chat');
+    expect(readRunSource('orchestrator_api')).toBe('orchestrator_api');
+  });
+
+  it('returns null for the pre-instrumentation cohort', () => {
+    expect(readRunSource(null)).toBeNull();
+  });
+
+  it('returns null rather than guessing for values outside the enum', () => {
+    // 'live' was the old derived label; it was never a stored value.
+    expect(readRunSource('live')).toBeNull();
+    expect(readRunSource('')).toBeNull();
+    expect(readRunSource('HARNESS')).toBeNull();
+    expect(readRunSource(' harness')).toBeNull();
   });
 });
 

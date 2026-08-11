@@ -332,6 +332,7 @@ export async function runSingleTestItem(
     const result = await runBexChatTurn({
       conversationId: null,
       message: testItem.prompt,
+      source: 'harness',
       modelTag: options?.modelTag,
       useValidator: false,
       agentMode: 'orchestrator',
@@ -362,6 +363,9 @@ export async function runSingleTestItem(
         error_message: outcome.passed ? null : outcome.failureReason,
         response_text: responseText,
         response_payload: JSON.parse(JSON.stringify(result)),
+        // B0-416 — real FK alongside the payload copy, so the trace stays reachable from the
+        // graded item (and vice versa) without parsing JSON.
+        workflow_run_id: result.workflowRunId,
       },
     };
   } catch (error) {

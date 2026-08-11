@@ -58,6 +58,9 @@ async function runBexChatOrchestration(input: unknown): Promise<OrchestrationRun
   const outcome = await runBexChatTurn({
     conversationId: conversationId ?? undefined,
     message,
+    // B0-416 — this path is only reachable through the token-authenticated
+    // `/api/v1/orchestrator` route (server-to-server); the browser uses `/api/bex/*`.
+    source: 'orchestrator_api',
     modelTag: model,
   });
 

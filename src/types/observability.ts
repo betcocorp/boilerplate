@@ -90,17 +90,38 @@ export type StepTimelineEvent = TimelineEventBase & {
   error: Json | null;
 };
 
-/** One entry from the agent step's persisted `output.toolTrace` (B0-331). */
+/**
+ * One entry from the agent step's persisted `output.toolTrace` (B0-331), or — for
+ * runs predating that field — an event `reconstructed` from the `tool_called` /
+ * `tool_succeeded` / `tool_failed` audit rows (B0-417).
+ */
 export type ToolCallTimelineEvent = TimelineEventBase & {
   kind: 'tool_call';
   toolName: string;
   callId: string;
-  /** Truncated at write time (2000 / 4000 chars) by `~/lib/audit/trace`. */
-  argumentsPreview: string;
-  outputPreview: string;
-  ok: boolean;
+  /**
+   * Truncated at write time (2000 / 4000 chars) by `~/lib/audit/trace`.
+   * **Null on `reconstructed` events**: the previews only ever existed in
+   * `toolTrace` and were never written to `audit_logs`, so they are unrecoverable
+   * for pre-B0-331 runs. UI must render an explicit "not captured for this run"
+   * state rather than an empty block.
+   */
+  argumentsPreview: string | null;
+  outputPreview: string | null;
+  /**
+   * Null only on `reconstructed` events whose call never settled — a `tool_called`
+   * audit row with no matching `tool_succeeded`/`tool_failed` row (process death
+   * mid-call). Treat as unknown, NOT as a failure, so failure rates stay honest.
+   */
+  ok: boolean | null;
   /** The `workflow_steps` row the tool call was made from. */
   stepId: string | null;
+  /**
+   * B0-417 — true when the event was rebuilt from `audit_logs` because the step
+   * carried no `output.toolTrace`. Name, timestamps, duration and ok/failed are
+   * real (read from the audit rows); the previews are not recoverable.
+   */
+  reconstructed?: true;
   /**
    * B0-363 — failure cause as persisted on the `tool_failed` audit row
    * (`payload.error_message`). Null for successful calls and for failures logged
@@ -154,8 +175,20 @@ export type TimelineEvent =
  * Run list
  * ------------------------------------------------------------------------- */
 
-/** Derived (not a stored column): whether the run came from the golden-set harness. */
-export type RunSource = 'live' | 'harness';
+/**
+ * B0-416 — the stored `workflow_runs.source` values (CHECK-constrained in the database),
+ * stamped at execution time by the entry point that started the run. No longer derived by
+ * scanning `test_result_items`, which lost the answer whenever a test run was deleted.
+ */
+export type RunSource = 'harness' | 'bex_chat' | 'orchestrator_api';
+
+/**
+ * B0-416 — what the observability source filter can ask for: one stored value, or the
+ * `source IS NULL` cohort. Those runs predate the column and are permanently unattributable
+ * (`workflow_name` is uniformly `product-support`, `user_input` is `{message, modelTag}` for
+ * every entry point), so they are reported as unknown rather than assumed to be chat.
+ */
+export type RunSourceFilter = RunSource | 'unknown';
 
 export type WorkflowRunListRow = {
   id: string;
@@ -164,7 +197,8 @@ export type WorkflowRunListRow = {
   status: string;
   confidence: number | null;
   routingDecision: string | null;
-  source: RunSource;
+  /** Null for pre-B0-416 runs no harness item points at — unknown, not "live". */
+  source: RunSource | null;
   createdAt: string;
   updatedAt: string;
   durationMs: number | null;
@@ -185,7 +219,7 @@ export type ListWorkflowRunsFilters = {
   routingDecision?: string;
   confidenceMin?: number;
   confidenceMax?: number;
-  source?: RunSource;
+  source?: RunSourceFilter;
   /**
    * B0-431 — free-text run search, applied server-side so it spans the whole
    * window rather than the current page. A full UUID matches the run id
