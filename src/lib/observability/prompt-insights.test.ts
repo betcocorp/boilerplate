@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest';
 
 import {
   buildPromptAnalysisPayload,
+  buildPromptInsightSystemPrompt,
   describeTimelineEvent,
   normalizePromptInsights,
+  PROMPT_INSIGHT_SYSTEM_PROMPT,
   promptInsightsResponseSchema,
+  type PromptGradingContext,
   type PromptInsight,
   type WorkflowRunTrace,
 } from '~/lib/observability/prompt-insights';
@@ -128,6 +131,84 @@ describe('buildPromptAnalysisPayload', () => {
   it('includes an empty-trace marker when nothing is describable', () => {
     const payload = buildPromptAnalysisPayload(trace({ timeline: [] }));
     expect(payload).toContain('No trace events recorded.');
+  });
+});
+
+/**
+ * B0-420 — grading context is optional and additive. These cases pin the two properties that
+ * matter: a live chat run must produce byte-identical output to before, and a failed item with no
+ * recorded ideal response must not be told to analyse a divergence from something it cannot see
+ * (`ideal_response` is NULL for all 3,212 test items today, so that is the *common* path).
+ */
+function grading(
+  overrides: Partial<PromptGradingContext> = {},
+): PromptGradingContext {
+  return {
+    passed: false,
+    expectedShouldAnswer: true,
+    idealResponse: null,
+    similarity: 0.42,
+    ...overrides,
+  };
+}
+
+describe('grading-aware prompt insights (B0-420)', () => {
+  it('leaves the system prompt untouched without grading context', () => {
+    expect(buildPromptInsightSystemPrompt()).toBe(PROMPT_INSIGHT_SYSTEM_PROMPT);
+    expect(buildPromptInsightSystemPrompt(null)).toBe(PROMPT_INSIGHT_SYSTEM_PROMPT);
+  });
+
+  it('tells a passing run not to manufacture a failure', () => {
+    const prompt = buildPromptInsightSystemPrompt(grading({ passed: true }));
+
+    expect(prompt).toContain(PROMPT_INSIGHT_SYSTEM_PROMPT);
+    expect(prompt).toContain('PASSED');
+    expect(prompt).toContain('Do not manufacture a failure');
+  });
+
+  it('ranks fixes by the divergence when a failed item has an ideal response', () => {
+    const prompt = buildPromptInsightSystemPrompt(
+      grading({ idealResponse: 'Recommend Betco Fight Bac RTU at 1:64.' }),
+    );
+
+    expect(prompt).toContain('FAILED');
+    expect(prompt).toContain('diverged');
+    expect(prompt).not.toContain('NO reference answer');
+  });
+
+  it('forbids inventing a divergence when no ideal response was recorded', () => {
+    const prompt = buildPromptInsightSystemPrompt(grading({ idealResponse: null }));
+
+    expect(prompt).toContain('NO reference answer');
+    expect(prompt).toContain('do not claim the answer diverged');
+  });
+
+  it('omits the grading section entirely from an ungraded payload', () => {
+    const payload = buildPromptAnalysisPayload(trace({}));
+
+    expect(payload).not.toContain('Harness grading');
+    expect(payload).toBe(buildPromptAnalysisPayload(trace({}), null));
+  });
+
+  it('reports a null ideal response as absent rather than printing null', () => {
+    const payload = buildPromptAnalysisPayload(trace({}), grading());
+
+    expect(payload).toContain('Harness grading');
+    expect(payload).toContain('FAILED');
+    expect(payload).not.toContain('null');
+  });
+
+  it('keeps an unset expected-should-answer distinct from false', () => {
+    const unset = buildPromptAnalysisPayload(
+      trace({}),
+      grading({ expectedShouldAnswer: null }),
+    );
+    const explicitlyFalse = buildPromptAnalysisPayload(
+      trace({}),
+      grading({ expectedShouldAnswer: false }),
+    );
+
+    expect(unset).not.toBe(explicitlyFalse);
   });
 });
 
