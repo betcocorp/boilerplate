@@ -47,6 +47,13 @@ export type RunsTableFilters = {
   confidenceMax: string;
   /** `''` | `'live'` | `'harness'`. */
   source: string;
+  /**
+   * B0-431 — normalized prompt/run-id search term. Lives in this form rather than
+   * beside the table heading on purpose: the list is server-paginated, so a control
+   * that looked like it filtered the visible rows would quietly miss matches on
+   * later pages.
+   */
+  search: string;
 };
 
 type RunsTableProps = {
@@ -63,6 +70,7 @@ export function buildObservabilityHref(
   page: number,
 ): string {
   const params = new URLSearchParams();
+  if (filters.search) params.set('q', filters.search);
   if (filters.from) params.set('from', filters.from);
   if (filters.to) params.set('to', filters.to);
   if (filters.status) params.set('status', filters.status);
@@ -103,6 +111,22 @@ export function RunsTable({ route, rows, hasMore, page, filters }: RunsTableProp
           className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4"
           method="get"
         >
+          {/* Full width and first: the highest-intent control, and it has to read as
+              part of the server-side filter set rather than as a filter over the
+              rows currently on screen. */}
+          <div className="flex min-w-0 flex-col gap-2 sm:col-span-2 lg:col-span-4">
+            <Label className="text-sm text-slate-700" htmlFor="observability-search">
+              Search
+            </Label>
+            <Input
+              defaultValue={filters.search}
+              id="observability-search"
+              name="q"
+              placeholder="Words from the prompt, or paste a run ID"
+              type="search"
+            />
+          </div>
+
           <div className="flex min-w-0 flex-col gap-2">
             <Label className="text-sm text-slate-700" htmlFor="observability-from">
               From (UTC)
@@ -213,8 +237,11 @@ export function RunsTable({ route, rows, hasMore, page, filters }: RunsTableProp
           </div>
         </form>
         <p className="mt-4 text-xs text-slate-500">
-          Defaults to the last 7 days. Applying a confidence bound excludes runs
-          that never recorded a confidence (in-flight or failed runs).
+          Defaults to the last 7 days. Search matches the prompt text across the whole
+          selected window, not just the runs on this page. A run ID is looked up on its
+          own and ignores the date range, so an older run still resolves. Applying a
+          confidence bound excludes runs that never recorded a confidence (in-flight or
+          failed runs).
         </p>
       </section>
 
@@ -253,7 +280,9 @@ export function RunsTable({ route, rows, hasMore, page, filters }: RunsTableProp
               {rows.length === 0 ? (
                 <TableRow>
                   <TableCell className="text-slate-500" colSpan={9}>
-                    No workflow runs match these filters.
+                    {filters.search
+                      ? `No workflow runs match “${filters.search}” with these filters.`
+                      : 'No workflow runs match these filters.'}
                   </TableCell>
                 </TableRow>
               ) : null}

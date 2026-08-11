@@ -32,6 +32,8 @@ const RUN_STATUSES = new Set(['running', 'completed', 'failed']);
 /** `routingDecisionSchema` values: an SME agent id, or the planner's `ambiguous`. */
 const ROUTING_DECISIONS = new Set<string>([...SME_AGENT_IDS, 'ambiguous']);
 const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+/** B0-431 — bound on the `q` term so a pathological URL can't build a huge LIKE pattern. */
+const SEARCH_MAX_CHARS = 200;
 
 type PageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -46,6 +48,26 @@ function readDay(value: string, fallback: string): string {
   return DAY_PATTERN.test(value) && Number.isFinite(Date.parse(`${value}T00:00:00.000Z`))
     ? value
     : fallback;
+}
+
+/**
+ * B0-431 — strips the characters that carry meaning inside a PostgREST filter
+ * expression, so a search term stays a search term. Mirrors the normalization on
+ * `/admin/products/legacy`. `%` and `*` both go because PostgREST accepts either as
+ * the `ilike` wildcard, and one of them alone would match every run. `_` is left
+ * alone deliberately: it is only a single-character wildcard, so it still matches
+ * itself — stripping it would break searches for prompts containing underscores.
+ */
+function normalizeSearchTerm(value: string): string {
+  return value
+    .trim()
+    .slice(0, SEARCH_MAX_CHARS)
+    .replaceAll(',', ' ')
+    .replaceAll('%', '')
+    .replaceAll('*', '')
+    .replaceAll('(', '')
+    .replaceAll(')', '')
+    .trim();
 }
 
 /** Confidence bounds are 0–1; anything else is treated as "not filtered". */
@@ -81,6 +103,8 @@ export default async function AdminObservabilityPage({ searchParams }: PageProps
   const confidenceMin = readConfidence(readSearchParam(params.confidenceMin).trim());
   const confidenceMax = readConfidence(readSearchParam(params.confidenceMax).trim());
 
+  const search = normalizeSearchTerm(readSearchParam(params.q));
+
   const sourceParam = readSearchParam(params.source).trim();
   const source: RunSource | undefined =
     sourceParam === 'live' || sourceParam === 'harness' ? sourceParam : undefined;
@@ -99,6 +123,7 @@ export default async function AdminObservabilityPage({ searchParams }: PageProps
     confidenceMin: confidenceMin.raw,
     confidenceMax: confidenceMax.raw,
     source: source ?? '',
+    search,
   };
 
   let loadError: string | null = null;
@@ -116,6 +141,7 @@ export default async function AdminObservabilityPage({ searchParams }: PageProps
         confidenceMin: confidenceMin.parsed,
         confidenceMax: confidenceMax.parsed,
         source,
+        search: search || undefined,
         limit: PAGE_SIZE,
         offset: (page - 1) * PAGE_SIZE,
       }),

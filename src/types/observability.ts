@@ -186,6 +186,13 @@ export type ListWorkflowRunsFilters = {
   confidenceMin?: number;
   confidenceMax?: number;
   source?: RunSource;
+  /**
+   * B0-431 — free-text run search, applied server-side so it spans the whole
+   * window rather than the current page. A full UUID matches the run id
+   * exactly; anything else is a case-insensitive substring match on the prompt
+   * (`user_input->>message`). Callers pass an already-normalized term.
+   */
+  search?: string;
   limit?: number;
   offset?: number;
 };

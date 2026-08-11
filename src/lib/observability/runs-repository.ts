@@ -46,6 +46,19 @@ const HARNESS_WINDOW_PADDING_MS = 60 * 60 * 1000;
 const HARNESS_SCAN_PAGE_SIZE = 1000;
 const HARNESS_SCAN_MAX_PAGES = 25;
 
+const RUN_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * B0-431 — a search term shaped like a `workflow_runs.id` is an id lookup rather than prompt
+ * text, so pasting a run id out of a log line or a trace URL finds that exact run. Exported for
+ * unit tests: getting this wrong fails silently, as an id search would fall through to a text
+ * match on the prompt and return nothing.
+ */
+export function isRunIdSearchTerm(term: string): boolean {
+  return RUN_ID_PATTERN.test(term);
+}
+
 function clampLimit(limit: number | undefined): number {
   if (typeof limit !== 'number' || !Number.isFinite(limit)) {
     return DEFAULT_LIMIT;
@@ -242,10 +255,15 @@ export async function listWorkflowRuns(
     .select()
     .order('created_at', { ascending: false });
 
-  if (filters.from) {
+  // B0-431 — a run id names exactly one run, so the date window must not hide it. Without
+  // this, pasting an id from an older alert returns nothing while the filter bar still shows
+  // the default 7-day range, which reads as "that run does not exist".
+  const isRunIdLookup = filters.search ? isRunIdSearchTerm(filters.search) : false;
+
+  if (filters.from && !isRunIdLookup) {
     query = query.gte('created_at', filters.from);
   }
-  if (filters.to) {
+  if (filters.to && !isRunIdLookup) {
     query = query.lte('created_at', filters.to);
   }
   if (filters.status) {
@@ -262,6 +280,14 @@ export async function listWorkflowRuns(
   }
   if (typeof filters.confidenceMax === 'number') {
     query = query.lte('confidence', filters.confidenceMax);
+  }
+  // B0-431 — narrow by run id when the term is one, otherwise by prompt text. Like the
+  // routing filter above this is an unindexed JSON-path predicate, accepted for the same
+  // reasons (bounded window, low-QPS admin tool).
+  if (filters.search) {
+    query = isRunIdLookup
+      ? query.eq('id', filters.search)
+      : query.ilike('user_input->>message', `%${filters.search}%`);
   }
 
   if (harnessIndex) {

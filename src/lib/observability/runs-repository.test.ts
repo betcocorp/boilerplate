@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { readTtftMs } from '~/lib/observability/runs-repository';
+import { isRunIdSearchTerm, readTtftMs } from '~/lib/observability/runs-repository';
 
 /**
  * B0-428 — `final_output` is untyped `Json` written by three different code paths (completed,
@@ -40,5 +40,37 @@ describe('readTtftMs', () => {
     expect(readTtftMs({ timingBreakdown: { ttftMs: '1840' } })).toBeNull();
     expect(readTtftMs({ timingBreakdown: { ttftMs: Number.NaN } })).toBeNull();
     expect(readTtftMs({ timingBreakdown: { ttftMs: -5 } })).toBeNull();
+  });
+});
+
+/**
+ * B0-431 — decides whether the observability search box does an id lookup or a prompt-text
+ * match. A false negative here is silent: the id would be matched against prompt text and the
+ * screen would report "no runs" for a run that exists.
+ */
+describe('isRunIdSearchTerm', () => {
+  it('accepts a workflow run id in either case', () => {
+    expect(isRunIdSearchTerm('0f9c1a2b-3d4e-5f60-8a9b-1c2d3e4f5a6b')).toBe(true);
+    expect(isRunIdSearchTerm('0F9C1A2B-3D4E-5F60-8A9B-1C2D3E4F5A6B')).toBe(true);
+  });
+
+  it('treats ordinary prompt text as a text search', () => {
+    expect(isRunIdSearchTerm('how do I dilute Green Earth')).toBe(false);
+    expect(isRunIdSearchTerm('')).toBe(false);
+    expect(isRunIdSearchTerm('1234')).toBe(false);
+  });
+
+  it('rejects near-misses rather than running an id lookup that cannot match', () => {
+    // Wrong group lengths, non-hex characters, and surrounding text.
+    expect(isRunIdSearchTerm('0f9c1a2b-3d4e-5f60-8a9b-1c2d3e4f5a6')).toBe(false);
+    expect(isRunIdSearchTerm('0f9c1a2b3d4e5f608a9b1c2d3e4f5a6b')).toBe(false);
+    expect(isRunIdSearchTerm('zzzzzzzz-3d4e-5f60-8a9b-1c2d3e4f5a6b')).toBe(false);
+    expect(isRunIdSearchTerm('run 0f9c1a2b-3d4e-5f60-8a9b-1c2d3e4f5a6b')).toBe(false);
+  });
+
+  it('is stateless across calls', () => {
+    const id = '0f9c1a2b-3d4e-5f60-8a9b-1c2d3e4f5a6b';
+    expect(isRunIdSearchTerm(id)).toBe(true);
+    expect(isRunIdSearchTerm(id)).toBe(true);
   });
 });
