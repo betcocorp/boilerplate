@@ -168,6 +168,13 @@ export type WorkflowRunListRow = {
   createdAt: string;
   updatedAt: string;
   durationMs: number | null;
+  /**
+   * B0-428 — time to first streamed assistant token ("Stream" column). Read from
+   * `final_output.timingBreakdown.ttftMs`, falling back to the harness's own
+   * `test_result_items.ttft_ms`. Null when nothing was streamed (no `onAssistantDelta` caller, an
+   * early decline) or the run predates the instrumentation.
+   */
+  ttftMs: number | null;
   userMessagePreview: string | null;
 };
 

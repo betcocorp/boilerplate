@@ -240,6 +240,10 @@ export function RunsTable({ route, rows, hasMore, page, filters }: RunsTableProp
                 <TableHead>Agent</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Confidence</TableHead>
+                {/* B0-428 — time to first streamed token, next to total duration. */}
+                <TableHead title="Time to first streamed assistant token, from workflow start">
+                  Stream
+                </TableHead>
                 <TableHead>Duration</TableHead>
                 <TableHead>Prompt</TableHead>
                 <TableHead className="text-right">Trace</TableHead>
@@ -248,7 +252,7 @@ export function RunsTable({ route, rows, hasMore, page, filters }: RunsTableProp
             <TableBody>
               {rows.length === 0 ? (
                 <TableRow>
-                  <TableCell className="text-slate-500" colSpan={8}>
+                  <TableCell className="text-slate-500" colSpan={9}>
                     No workflow runs match these filters.
                   </TableCell>
                 </TableRow>
@@ -297,6 +301,9 @@ export function RunsTable({ route, rows, hasMore, page, filters }: RunsTableProp
                     </TableCell>
                     <TableCell className="whitespace-nowrap align-top tabular-nums text-slate-700">
                       {confidenceLabel(run.confidence)}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap align-top tabular-nums text-slate-600">
+                      {formatDurationSeconds(run.ttftMs)}
                     </TableCell>
                     <TableCell className="whitespace-nowrap align-top text-slate-600">
                       {formatDurationSeconds(run.durationMs)}

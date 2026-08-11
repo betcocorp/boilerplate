@@ -95,6 +95,23 @@ function readUserMessagePreview(userInput: unknown): string | null {
     : trimmed;
 }
 
+/**
+ * B0-428 — `final_output.timingBreakdown.ttftMs`, the workflow-recorded time to first streamed
+ * assistant token. Exported for unit tests: `final_output` is untyped `Json`, and every historical
+ * run predating B0-428 lands in one of the null branches.
+ */
+export function readTtftMs(finalOutput: unknown): number | null {
+  if (!finalOutput || typeof finalOutput !== 'object' || Array.isArray(finalOutput)) {
+    return null;
+  }
+  const timing = (finalOutput as Record<string, unknown>).timingBreakdown;
+  if (!timing || typeof timing !== 'object' || Array.isArray(timing)) {
+    return null;
+  }
+  const value = (timing as Record<string, unknown>).ttftMs;
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
 function durationMsBetween(createdAt: string, updatedAt: string): number | null {
   const start = Date.parse(createdAt);
   const end = Date.parse(updatedAt);
@@ -105,7 +122,11 @@ function durationMsBetween(createdAt: string, updatedAt: string): number | null 
   return delta >= 0 ? delta : null;
 }
 
-function toListRow(row: WorkflowRunRow, source: RunSource): WorkflowRunListRow {
+function toListRow(
+  row: WorkflowRunRow,
+  source: RunSource,
+  harnessTtftMs: number | null,
+): WorkflowRunListRow {
   return {
     id: row.id,
     conversationId: row.conversation_id,
@@ -117,27 +138,32 @@ function toListRow(row: WorkflowRunRow, source: RunSource): WorkflowRunListRow {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     durationMs: durationMsBetween(row.created_at, row.updated_at),
+    // Prefer the run's own measurement; the harness's `ttft_ms` covers runs recorded before
+    // B0-428 instrumented the workflow.
+    ttftMs: readTtftMs(row.final_output) ?? harnessTtftMs,
     userMessagePreview: readUserMessagePreview(row.user_input),
   };
 }
 
 /**
- * Run "source" is DERIVED, not stored: a run whose id appears in a
- * `test_result_items.response_payload.workflowRunId` came from the golden-set
- * test harness, which drives the same `runProductSupportWorkflow` path as chat.
+ * Harness runs indexed by workflow run id, with the test runner's own `ttft_ms` for each (null when
+ * that item recorded no streamed delta). Built in one scan so run-source tagging and the "Stream"
+ * column fallback (B0-428) share it.
  */
-export async function listHarnessWorkflowRunIds(
+type HarnessRunIndex = Map<string, number | null>;
+
+async function indexHarnessWorkflowRuns(
   from: string,
   to: string,
-): Promise<Set<string>> {
+): Promise<HarnessRunIndex> {
   const supabase = getSupabaseServiceRoleClient();
-  const ids = new Set<string>();
+  const index: HarnessRunIndex = new Map();
 
   for (let page = 0; page < HARNESS_SCAN_MAX_PAGES; page += 1) {
     const start = page * HARNESS_SCAN_PAGE_SIZE;
     const { data, error } = await supabase
       .from('test_result_items')
-      .select('response_payload')
+      .select('response_payload, ttft_ms')
       .gte('created_at', from)
       .lte('created_at', to)
       .range(start, start + HARNESS_SCAN_PAGE_SIZE - 1);
@@ -150,7 +176,12 @@ export async function listHarnessWorkflowRunIds(
     for (const row of rows) {
       const runId = extractWorkflowRunId(row.response_payload);
       if (runId) {
-        ids.add(runId);
+        index.set(
+          runId,
+          typeof row.ttft_ms === 'number' && Number.isFinite(row.ttft_ms) && row.ttft_ms >= 0
+            ? row.ttft_ms
+            : null,
+        );
       }
     }
 
@@ -159,7 +190,19 @@ export async function listHarnessWorkflowRunIds(
     }
   }
 
-  return ids;
+  return index;
+}
+
+/**
+ * Run "source" is DERIVED, not stored: a run whose id appears in a
+ * `test_result_items.response_payload.workflowRunId` came from the golden-set
+ * test harness, which drives the same `runProductSupportWorkflow` path as chat.
+ */
+export async function listHarnessWorkflowRunIds(
+  from: string,
+  to: string,
+): Promise<Set<string>> {
+  return new Set((await indexHarnessWorkflowRuns(from, to)).keys());
 }
 
 /**
@@ -182,13 +225,13 @@ export async function listWorkflowRuns(
   // Only needed up front when the caller filters BY source; otherwise the set is
   // derived after the fact (over the returned page's actual date range) purely
   // for tagging.
-  let harnessIds: Set<string> | null = null;
+  let harnessIndex: HarnessRunIndex | null = null;
   if (filters.source) {
     const to = filters.to ?? new Date().toISOString();
     const from =
       filters.from ??
       new Date(Date.parse(to) - DEFAULT_LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString();
-    harnessIds = await listHarnessWorkflowRunIds(
+    harnessIndex = await indexHarnessWorkflowRuns(
       shiftIso(from, -HARNESS_WINDOW_PADDING_MS),
       shiftIso(to, HARNESS_WINDOW_PADDING_MS),
     );
@@ -221,8 +264,8 @@ export async function listWorkflowRuns(
     query = query.lte('confidence', filters.confidenceMax);
   }
 
-  if (harnessIds) {
-    const ids = [...harnessIds];
+  if (harnessIndex) {
+    const ids = [...harnessIndex.keys()];
     if (filters.source === 'harness') {
       if (ids.length === 0) {
         return { rows: [], hasMore: false };
@@ -243,18 +286,22 @@ export async function listWorkflowRuns(
   const hasMore = fetched.length > limit;
   const page = hasMore ? fetched.slice(0, limit) : fetched;
 
-  if (!harnessIds && page.length > 0) {
+  if (!harnessIndex && page.length > 0) {
     const timestamps = page.map((row) => Date.parse(row.created_at)).filter(Number.isFinite);
     const min = Math.min(...timestamps);
     const max = Math.max(...timestamps);
-    harnessIds = await listHarnessWorkflowRunIds(
+    harnessIndex = await indexHarnessWorkflowRuns(
       new Date(min - HARNESS_WINDOW_PADDING_MS).toISOString(),
       new Date(max + HARNESS_WINDOW_PADDING_MS).toISOString(),
     );
   }
 
   const rows = page.map((row) =>
-    toListRow(row, harnessIds?.has(row.id) ? 'harness' : 'live'),
+    toListRow(
+      row,
+      harnessIndex?.has(row.id) ? 'harness' : 'live',
+      harnessIndex?.get(row.id) ?? null,
+    ),
   );
 
   return { rows, hasMore };

@@ -53,6 +53,13 @@ export const productSupportFinalOutputSchema = z.object({
       toolRounds: z.number().int().nonnegative(),
       cacheSource: z.string().nullable(),
       searchMs: z.number().nullable(),
+      /**
+       * B0-428 — time to first streamed assistant token, measured from workflow start (the same
+       * anchor as the run's duration on `/admin/observability`). Null when the caller passed no
+       * `onAssistantDelta` (nothing streamed) or the run declined before generation. Optional so
+       * `workflow_run.final_output` payloads written before B0-428 still parse.
+       */
+      ttftMs: z.number().nullable().optional(),
     })
     .optional(),
   /** B0-117 — LLM token usage from the agent tool loop, for per-request cost attribution. */

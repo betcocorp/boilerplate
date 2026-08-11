@@ -922,6 +922,28 @@ export async function runProductSupportWorkflow(input: {
 
   const model = resolveResponsesModel(input.modelTag);
   const client = getOpenAIClient();
+
+  /**
+   * B0-428 — time to first streamed assistant token, surfaced as the "Stream" column on
+   * `/admin/observability`. Anchored here rather than at the HTTP boundary so it shares the run's
+   * duration anchor (`workflow_runs.created_at`) and the two numbers stay comparable. The delta
+   * sink stays `undefined` when the caller supplied none, so a non-streaming caller is not silently
+   * switched into the streaming Responses path.
+   */
+  const workflowStartedAtMs = Date.now();
+  let firstAssistantDeltaAtMs: number | null = null;
+  const onAssistantDelta = input.onAssistantDelta
+    ? (delta: string) => {
+        if (firstAssistantDeltaAtMs === null) {
+          firstAssistantDeltaAtMs = Date.now();
+        }
+        input.onAssistantDelta?.(delta);
+      }
+    : undefined;
+  const ttftMs = (): number | null =>
+    firstAssistantDeltaAtMs === null
+      ? null
+      : Math.max(0, firstAssistantDeltaAtMs - workflowStartedAtMs);
   input.onEvent?.({
     type: 'status',
     stage: 'routing_selected',
@@ -1007,6 +1029,8 @@ export async function runProductSupportWorkflow(input: {
         toolRounds: 0,
         cacheSource: null,
         searchMs: null,
+        // Declined before generation: nothing was streamed, so there is no TTFT.
+        ttftMs: null,
       },
     };
 
@@ -1189,7 +1213,7 @@ export async function runProductSupportWorkflow(input: {
           userMessage: input.userMessage,
           toolChoice,
           promptCacheKey,
-          onAssistantDelta: input.onAssistantDelta,
+          onAssistantDelta,
           executeTool,
         })
       : await runResponsesWithToolLoop({
@@ -1201,7 +1225,7 @@ export async function runProductSupportWorkflow(input: {
           previousResponseId: input.previousOpenaiResponseId ?? null,
           toolChoice,
           promptCacheKey,
-          onAssistantDelta: input.onAssistantDelta,
+          onAssistantDelta,
           executeTool,
         });
 
@@ -1213,6 +1237,7 @@ export async function runProductSupportWorkflow(input: {
       cacheSource: dominantCacheSource(cacheSourceCounts),
       searchMs:
         retrievalSamples > 0 ? Number((totalSearchMs / retrievalSamples).toFixed(1)) : null,
+      ttftMs: ttftMs(),
     };
 
     const resolvedToolTrace = [...agentResult.toolTrace];
@@ -1734,7 +1759,9 @@ export async function runProductSupportWorkflow(input: {
 
     await updateWorkflowRun(run.id, {
       status: 'failed',
-      final_output: jsonContent({ error: message }),
+      // B0-428 — a run that streamed some text before dying still has a meaningful TTFT; keep the
+      // same `timingBreakdown.ttftMs` shape the completed path writes so the reader stays uniform.
+      final_output: jsonContent({ error: message, timingBreakdown: { ttftMs: ttftMs() } }),
     });
 
     await writeAuditLog('workflow_failed', { message }, wfCtx);
