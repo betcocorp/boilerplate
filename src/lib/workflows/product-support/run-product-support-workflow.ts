@@ -47,6 +47,7 @@ import {
   runValidatorPass,
 } from '~/lib/workflows/product-support/validator';
 
+
 const VALIDATOR_EVIDENCE_CHAR_BUDGET = 60_000;
 const VALIDATOR_PER_DOCUMENT_CHAR_BUDGET = 24_000;
 
@@ -870,6 +871,39 @@ function buildCrossReferenceSearchArgs(input: {
   };
 }
 
+/**
+ * B0-386 — `error.reason` written on a step that was still `running` but is not the step the
+ * throw came from, so a trace reader can tell "this is where it broke" from "this never got to
+ * run". Steps must never be left `running` once the workflow returns or throws.
+ */
+export const ABANDONED_WORKFLOW_STEP_REASON = 'abandoned_after_workflow_failure';
+
+/**
+ * B0-386 — fail the steps that were still open when the workflow threw.
+ *
+ * The failure handler used to mark the agent step `failed` unconditionally, which flipped an
+ * already-completed agent step back to `failed` and nulled its persisted `toolTrace`, while the
+ * step that actually threw (usually `validator`) was left `running` forever. Only steps still
+ * open are touched here, and the most recently opened one — the step the throw came from — gets
+ * the error message.
+ */
+export async function failOpenWorkflowSteps(
+  openStepIds: readonly string[],
+  message: string,
+): Promise<void> {
+  const mostRecentFirst = [...openStepIds].reverse();
+  for (const [index, stepId] of mostRecentFirst.entries()) {
+    await completeWorkflowStep(stepId, {
+      status: 'failed',
+      error: jsonContent(
+        index === 0
+          ? { message }
+          : { message, reason: ABANDONED_WORKFLOW_STEP_REASON },
+      ),
+    });
+  }
+}
+
 export async function runProductSupportWorkflow(input: {
   traceId: string;
   conversationId: string;
@@ -978,6 +1012,23 @@ export async function runProductSupportWorkflow(input: {
   });
 
   const wfCtx = { ...ctx, workflowRunId: run.id };
+
+  /**
+   * B0-386 — ids of steps inserted `running` and not yet completed, oldest first. Every step
+   * opened below must be registered here and unregistered on completion so the failure handler
+   * can blame the step that was actually open (see `failOpenWorkflowSteps`). Steps inserted
+   * already-`completed` (`orchestration_planner`, `early_decline_gate`) are never open.
+   */
+  const openStepIds: string[] = [];
+  const markStepOpen = (stepId: string) => {
+    openStepIds.push(stepId);
+  };
+  const markStepClosed = (stepId: string) => {
+    const index = openStepIds.indexOf(stepId);
+    if (index >= 0) {
+      openStepIds.splice(index, 1);
+    }
+  };
 
   const plannerStep = await insertWorkflowStep({
     workflow_run_id: run.id,
@@ -1128,6 +1179,7 @@ export async function runProductSupportWorkflow(input: {
       hasPreviousResponse: Boolean(input.previousOpenaiResponseId),
     }),
   });
+  markStepOpen(agentStep.id);
 
   await writeAuditLog(
     'openai_response_requested',
@@ -1388,6 +1440,7 @@ export async function runProductSupportWorkflow(input: {
         usageByCall: agentResult.usageByCall,
       }),
     });
+    markStepClosed(agentStep.id);
 
     const validationStep = await insertWorkflowStep({
       workflow_run_id: run.id,
@@ -1395,6 +1448,7 @@ export async function runProductSupportWorkflow(input: {
       status: 'running',
       input: jsonContent({ modelTag: input.modelTag ?? 'preview' }),
     });
+    markStepOpen(validationStep.id);
     input.onEvent?.({ type: 'status', stage: 'validation_started' });
 
     // B0-368 — set when the revision pass refused to re-ground, so the eventual
@@ -1602,6 +1656,7 @@ export async function runProductSupportWorkflow(input: {
             },
       ),
     });
+    markStepClosed(validationStep.id);
     input.onEvent?.({
       type: 'status',
       stage: 'validation_completed',
@@ -1757,10 +1812,9 @@ export async function runProductSupportWorkflow(input: {
     const message = getErrorMessage(err);
     logError('workflow_failed', { ...wfCtx, message });
 
-    await completeWorkflowStep(agentStep.id, {
-      status: 'failed',
-      error: jsonContent({ message }),
-    });
+    // B0-386 — blame the step that was actually open (and leave completed steps, with their
+    // persisted tool trace, alone) rather than rewriting the agent step every time.
+    await failOpenWorkflowSteps(openStepIds, message);
 
     await updateWorkflowRun(run.id, {
       status: 'failed',
