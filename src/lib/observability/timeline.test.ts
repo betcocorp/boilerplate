@@ -14,6 +14,7 @@ import type {
   ConfidenceGateTimelineEvent,
   StepTimelineEvent,
   TimelineEvent,
+  ToolCallTimelineEvent,
 } from '~/types/observability';
 
 /* -------------------------------------------------------------------------- *
@@ -98,6 +99,12 @@ function gates(timeline: TimelineEvent[]): ConfidenceGateTimelineEvent[] {
 
 function steps(timeline: TimelineEvent[]): StepTimelineEvent[] {
   return timeline.filter((event): event is StepTimelineEvent => event.kind === 'step');
+}
+
+function toolCalls(timeline: TimelineEvent[]): ToolCallTimelineEvent[] {
+  return timeline.filter(
+    (event): event is ToolCallTimelineEvent => event.kind === 'tool_call',
+  );
 }
 
 /* -------------------------------------------------------------------------- *
@@ -222,15 +229,36 @@ describe('buildRunTimeline — normal run', () => {
     expect(gates(timeline)[0]?.inferred).toBeUndefined();
   });
 
-  it('omits tool-call events for legacy agent rows with no persisted toolTrace', () => {
+  it('leaves a fully traced tool call unreconstructed, with both previews intact', () => {
+    const toolCall = toolCalls(timeline)[0];
+    expect(toolCall?.reconstructed).toBeUndefined();
+    expect(toolCall?.argumentsPreview).toBe('{"productName":"pH7Q Dual"}');
+    expect(toolCall?.outputPreview).toBe('{"sources":[]}');
+  });
+
+  it('B0-417: reconstructs the tool call for a legacy agent row with no persisted toolTrace', () => {
     const legacySteps = stepRows.map((step) =>
       step.id === 'step-agent'
         ? { ...step, output: { responseIds: ['resp_1'], toolCalls: 1 } }
         : step,
     );
     const legacyTimeline = buildRunTimeline(run, legacySteps, logs);
-    expect(legacyTimeline.some((event) => event.kind === 'tool_call')).toBe(false);
     expect(steps(legacyTimeline)).toHaveLength(3);
+    expect(toolCalls(legacyTimeline)).toHaveLength(1);
+    expect(toolCalls(legacyTimeline)[0]).toMatchObject({
+      kind: 'tool_call',
+      toolName: 'search_product_docs',
+      callId: 'call-1',
+      stepId: 'step-agent',
+      reconstructed: true,
+      ok: true,
+      status: 'ok',
+      // Real timestamps from the audit rows: called at +30ms, succeeded at +45ms.
+      at: at(30),
+      durationMs: 15,
+      argumentsPreview: null,
+      outputPreview: null,
+    });
   });
 });
 
@@ -690,5 +718,191 @@ describe('buildRunTimeline — usage/safety coverage cap with a real audit row (
     );
     expect(cap?.inferred).toBe(true);
     expect(cap?.detail.note).toContain('inferred');
+  });
+});
+
+/* -------------------------------------------------------------------------- *
+ * Scenario 6 — B0-417: tool-call events reconstructed from audit_logs for runs
+ * whose agent step predates `output.toolTrace` (only ~3% of rows have it).
+ * -------------------------------------------------------------------------- */
+
+describe('buildRunTimeline — tool calls reconstructed from audit_logs (B0-417)', () => {
+  /** Legacy agent step: the pre-B0-331 `{ responseIds, toolCalls }` shape. */
+  const legacyAgentStep = makeStep({
+    id: 'step-agent',
+    step_name: 'openai_responses_agent',
+    started_at: at(20),
+    completed_at: at(70),
+    output: { responseIds: ['resp_1'], toolCalls: 2 },
+  });
+
+  const legacyStepRows: WorkflowStepRow[] = [plannerStep, legacyAgentStep];
+
+  const toolLogs: AuditLogRow[] = [
+    makeLog({ id: 'l1', event_type: 'tool_called', created_at: at(30), payload: { tool_name: 'search_product_docs', call_id: 'call-a', step_id: null } }),
+    makeLog({ id: 'l2', event_type: 'tool_succeeded', created_at: at(38), payload: { tool_name: 'search_product_docs', call_id: 'call-a', step_id: null } }),
+    makeLog({ id: 'l3', event_type: 'tool_called', created_at: at(40), payload: { tool_name: 'get_efficacy_data', call_id: 'call-b', step_id: null } }),
+    makeLog({ id: 'l4', event_type: 'tool_failed', created_at: at(52), payload: { tool_name: 'get_efficacy_data', call_id: 'call-b', step_id: null } }),
+  ];
+
+  const run = makeRun({ updated_at: at(90) });
+  const timeline = buildRunTimeline(run, legacyStepRows, toolLogs);
+
+  it('recovers name, real timestamps, duration and ok/failed for every call', () => {
+    expect(
+      toolCalls(timeline).map((event) => [
+        event.toolName,
+        event.at,
+        event.durationMs,
+        event.ok,
+        event.status,
+      ]),
+    ).toEqual([
+      ['search_product_docs', at(30), 8, true, 'ok'],
+      ['get_efficacy_data', at(40), 12, false, 'failed'],
+    ]);
+  });
+
+  it('flags them reconstructed and nulls both previews rather than faking empties', () => {
+    for (const event of toolCalls(timeline)) {
+      expect(event.reconstructed).toBe(true);
+      expect(event.argumentsPreview).toBeNull();
+      expect(event.outputPreview).toBeNull();
+      expect(event.detail.note).toContain('not captured for this run');
+    }
+  });
+
+  it('attributes them to the tool-loop step and interleaves them inside it', () => {
+    expect(toolCalls(timeline).every((event) => event.stepId === 'step-agent')).toBe(true);
+    // planner, agent, tool a, tool b — the calls sit inside the agent step.
+    expect(kinds(timeline)).toEqual([
+      'lifecycle',
+      'step',
+      'step',
+      'tool_call',
+      'tool_call',
+      'lifecycle',
+    ]);
+  });
+
+  it('emits nothing when both the toolTrace AND the audit rows are absent', () => {
+    const bare = buildRunTimeline(
+      run,
+      legacyStepRows,
+      toolLogs.filter((log) => !log.event_type.startsWith('tool_')),
+    );
+    expect(toolCalls(bare)).toHaveLength(0);
+    expect(steps(bare)).toHaveLength(2);
+  });
+
+  it('does not reconstruct anything for a step that has its own toolTrace', () => {
+    const tracedRows = legacyStepRows.map((step) =>
+      step.id === 'step-agent'
+        ? {
+            ...step,
+            output: {
+              responseIds: ['resp_1'],
+              toolCalls: 2,
+              toolTrace: [
+                toolTraceEntry({ toolName: 'search_product_docs', callId: 'call-a' }),
+                toolTraceEntry({ toolName: 'get_efficacy_data', callId: 'call-b', ok: false }),
+              ],
+            },
+          }
+        : step,
+    );
+    const traced = buildRunTimeline(run, tracedRows, toolLogs);
+
+    // Two events, not four: the audit rows are deduped against the trace by call_id.
+    expect(toolCalls(traced)).toHaveLength(2);
+    for (const event of toolCalls(traced)) {
+      expect(event.reconstructed).toBeUndefined();
+      expect(typeof event.argumentsPreview).toBe('string');
+      expect(typeof event.outputPreview).toBe('string');
+    }
+  });
+
+  it('reports an unsettled call as outcome-unknown, never as a failure', () => {
+    const unsettled = buildRunTimeline(
+      run,
+      legacyStepRows,
+      // Drop the `tool_failed` row: the call was issued but never settled.
+      toolLogs.filter((log) => log.id !== 'l4'),
+    );
+    const call = toolCalls(unsettled).find((event) => event.callId === 'call-b');
+    expect(call).toMatchObject({ ok: null, status: 'running' });
+    expect(call?.durationMs).toBeUndefined();
+    expect(call?.detail.unsettled).toContain('No tool_succeeded / tool_failed row');
+  });
+
+  it('prefers an explicit payload step_id over the tool-loop fallback', () => {
+    const extraStep = makeStep({
+      id: 'step-other',
+      step_name: 'validator',
+      started_at: at(75),
+      completed_at: at(80),
+    });
+    const withStepId = toolLogs.map((log) =>
+      log.id === 'l1' || log.id === 'l2'
+        ? { ...log, payload: { ...(log.payload as object), step_id: 'step-other' } }
+        : log,
+    );
+    const attributed = buildRunTimeline(
+      run,
+      [...legacyStepRows, extraStep],
+      withStepId,
+    );
+    const byCall = new Map(toolCalls(attributed).map((event) => [event.callId, event.stepId]));
+    expect(byCall.get('call-a')).toBe('step-other');
+    expect(byCall.get('call-b')).toBe('step-agent');
+  });
+
+  it('still surfaces calls that have no tool-loop step to attribute them to', () => {
+    // Planner only — the agent step row is missing entirely.
+    const orphaned = buildRunTimeline(run, [plannerStep], toolLogs);
+    expect(toolCalls(orphaned)).toHaveLength(2);
+    for (const event of toolCalls(orphaned)) {
+      expect(event.stepId).toBeNull();
+      expect(event.reconstructed).toBe(true);
+      expect(event.detail.unattributed).toContain('could not be attributed');
+    }
+  });
+
+  it('falls back to the step start time for a forced call with no tool_called row', () => {
+    const forcedOnly = buildRunTimeline(
+      run,
+      legacyStepRows,
+      // Only the settle row exists, as for tool calls that bypass writeAuditLog.
+      [makeLog({ id: 'l9', event_type: 'tool_succeeded', created_at: at(55), payload: { tool_name: 'lookup_cross_reference', call_id: 'call-forced' } })],
+    );
+    expect(toolCalls(forcedOnly)[0]).toMatchObject({
+      toolName: 'lookup_cross_reference',
+      stepId: 'step-agent',
+      at: at(20), // legacyAgentStep.started_at
+      ok: true,
+    });
+    expect(toolCalls(forcedOnly)[0]?.durationMs).toBeUndefined();
+  });
+
+  it('carries B0-363 failure diagnostics through the reconstructed path when present', () => {
+    const withDiagnostics = toolLogs.map((log) =>
+      log.id === 'l4'
+        ? {
+            ...log,
+            payload: {
+              tool_name: 'get_efficacy_data',
+              call_id: 'call-b',
+              error_message: 'no efficacy rows for EPA reg 1839-86',
+              arguments_preview: '{"productName":"pH7Q Dual"}',
+            },
+          }
+        : log,
+    );
+    const diagnosed = buildRunTimeline(run, legacyStepRows, withDiagnostics);
+    expect(toolCalls(diagnosed).find((event) => event.callId === 'call-b')).toMatchObject({
+      reconstructed: true,
+      errorMessage: 'no efficacy rows for EPA reg 1839-86',
+      auditArgumentsPreview: '{"productName":"pH7Q Dual"}',
+    });
   });
 });

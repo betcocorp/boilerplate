@@ -160,6 +160,24 @@ function buildStepDetail(step: WorkflowStepRow): Record<string, unknown> {
 type ToolCallAuditFacts = {
   calledAt: string | null;
   settledAt: string | null;
+  /**
+   * B0-417 — `payload.tool_name`, written on all three tool_* rows by
+   * `writeAuditLog`'s audit context. This is what makes a legacy run's tool calls
+   * nameable without a `toolTrace`.
+   */
+  toolName: string | null;
+  /**
+   * B0-417 — `true` after `tool_succeeded`, `false` after `tool_failed`, `null`
+   * while the call is unsettled (a `tool_called` row with no matching outcome row).
+   * Unsettled must NOT read as failed.
+   */
+  ok: boolean | null;
+  /**
+   * B0-417 — `payload.step_id`. In practice always null for tool_* rows: the tool
+   * loop's audit context (`wfCtx` in `run-product-support-workflow.ts`) never sets
+   * `stepId`. Read anyway so attribution is exact if that writer is ever fixed.
+   */
+  stepId: string | null;
   /** B0-363 — `tool_failed.payload.error_message`; null on successes / pre-B0-363 rows. */
   errorMessage: string | null;
   /** B0-363 — `tool_failed.payload.arguments_preview` (bounded at write time). */
@@ -171,7 +189,13 @@ type ToolCallAuditFacts = {
  * which is the only way to recover real timestamps for a `toolTrace` entry
  * (the trace itself stores only a duration). B0-363 added the failure cause to
  * `tool_failed`, so the same index also carries the error message and the bounded
- * arguments preview.
+ * arguments preview. B0-417 additionally recovers `tool_name` and the ok/failed
+ * outcome, which is everything needed to rebuild a tool-call event for a run whose
+ * agent step predates `toolTrace`.
+ *
+ * `call_id` only ever appears on those three event types, so no other audit row can
+ * leak into this index. Insertion order therefore follows the chronologically
+ * sorted logs, i.e. real call order.
  */
 function indexToolCallAuditFacts(auditLogs: AuditLogRow[]): Map<string, ToolCallAuditFacts> {
   const facts = new Map<string, ToolCallAuditFacts>();
@@ -185,11 +209,23 @@ function indexToolCallAuditFacts(auditLogs: AuditLogRow[]): Map<string, ToolCall
 
     const existing =
       facts.get(callId) ??
-      { calledAt: null, settledAt: null, errorMessage: null, argumentsPreview: null };
+      {
+        calledAt: null,
+        settledAt: null,
+        toolName: null,
+        ok: null,
+        stepId: null,
+        errorMessage: null,
+        argumentsPreview: null,
+      };
+    // Any of the three rows can supply the name / owning step; first non-null wins.
+    existing.toolName = existing.toolName ?? readString(payload, 'tool_name');
+    existing.stepId = existing.stepId ?? readString(payload, 'step_id');
     if (log.event_type === 'tool_called') {
       existing.calledAt = existing.calledAt ?? log.created_at;
     } else if (log.event_type === 'tool_succeeded' || log.event_type === 'tool_failed') {
       existing.settledAt = log.created_at;
+      existing.ok = log.event_type === 'tool_succeeded';
     }
     if (log.event_type === 'tool_failed') {
       existing.errorMessage = readString(payload, 'error_message');
@@ -199,6 +235,157 @@ function indexToolCallAuditFacts(auditLogs: AuditLogRow[]): Map<string, ToolCall
   }
 
   return facts;
+}
+
+/* -------------------------------------------------------------------------- *
+ * B0-417 — tool-call reconstruction for runs with no persisted `toolTrace`
+ * -------------------------------------------------------------------------- */
+
+/**
+ * The only step that runs a tool loop today: `executeTool` in
+ * `~/lib/workflows/product-support/run-product-support-workflow.ts` is called
+ * exclusively from the `openai_responses_agent` step. Reconstructed calls are
+ * attributed here when the audit row carries no usable `step_id`.
+ *
+ * Attribution deliberately does NOT use `started_at`/`completed_at` containment:
+ * `workflow_steps.started_at` is Postgres `now()` while `completed_at` comes from
+ * the Node clock, so step windows are skewed by up to several seconds and ~23% of
+ * real in-loop calls fall outside them.
+ */
+const TOOL_LOOP_STEP_NAME = 'openai_responses_agent';
+
+type ReconstructedToolCall = ToolCallAuditFacts & { callId: string };
+
+/**
+ * Audit-derived tool calls that are NOT already covered by a `toolTrace`.
+ *
+ * `tracedCallIds` is collected across every step, so a run that persisted its trace
+ * reconstructs nothing at all and is left byte-for-byte unchanged.
+ */
+function collectReconstructableToolCalls(
+  toolCallFacts: Map<string, ToolCallAuditFacts>,
+  tracedCallIds: ReadonlySet<string>,
+): ReconstructedToolCall[] {
+  const calls: ReconstructedToolCall[] = [];
+  for (const [callId, facts] of toolCallFacts) {
+    if (!tracedCallIds.has(callId)) {
+      calls.push({ callId, ...facts });
+    }
+  }
+  return calls;
+}
+
+/**
+ * Assign each reconstructable call to the step it was made from. Every call is
+ * placed exactly once: never dropped, never duplicated. Calls with no host step to
+ * hang off (a run whose agent step row is missing entirely) come back as
+ * `unattributed` and are still rendered, with a null `stepId`.
+ */
+function attributeReconstructedToolCalls(
+  calls: ReconstructedToolCall[],
+  candidateSteps: WorkflowStepRow[],
+): { byStepId: Map<string, ReconstructedToolCall[]>; unattributed: ReconstructedToolCall[] } {
+  const byStepId = new Map<string, ReconstructedToolCall[]>();
+  const unattributed: ReconstructedToolCall[] = [];
+
+  const candidatesById = new Map(candidateSteps.map((step) => [step.id, step]));
+  // Ordered by `started_at` already (callers pass `orderedSteps`-derived lists).
+  const toolLoopSteps = candidateSteps.filter(
+    (step) => step.step_name === TOOL_LOOP_STEP_NAME,
+  );
+
+  const assign = (stepId: string, call: ReconstructedToolCall) => {
+    const bucket = byStepId.get(stepId);
+    if (bucket) {
+      bucket.push(call);
+    } else {
+      byStepId.set(stepId, [call]);
+    }
+  };
+
+  for (const call of calls) {
+    // 1. An explicit, resolvable `step_id` on the audit row always wins.
+    if (call.stepId && candidatesById.has(call.stepId)) {
+      assign(call.stepId, call);
+      continue;
+    }
+
+    // 2. Otherwise the tool-loop step. With more than one (never observed), pick the
+    //    last one that had already started when the call was made.
+    if (toolLoopSteps.length > 0) {
+      const calledAt = call.calledAt;
+      const startedFirst = calledAt
+        ? [...toolLoopSteps]
+            .reverse()
+            .find((step) => Date.parse(step.started_at) <= Date.parse(calledAt))
+        : undefined;
+      assign((startedFirst ?? toolLoopSteps[0]).id, call);
+      continue;
+    }
+
+    // 3. Nothing to attribute it to — surface it rather than dropping it.
+    unattributed.push(call);
+  }
+
+  return { byStepId, unattributed };
+}
+
+/** Shared "the previews are gone" explanation, so UI and export read identically. */
+const RECONSTRUCTED_PREVIEW_NOTE =
+  'Arguments and output previews were not captured for this run. They only ever existed on the agent step\'s persisted toolTrace (added by B0-331); audit_logs never carried them.';
+
+/**
+ * Build the timeline event for one audit-reconstructed tool call. Name, timing,
+ * duration and outcome are real; the previews are explicitly null.
+ */
+function buildReconstructedToolCallEvent(input: {
+  call: ReconstructedToolCall;
+  index: number;
+  stepId: string | null;
+  /** Anchor for calls whose `tool_called` row is missing (mirrors the traced path). */
+  fallbackAt: string;
+}): TimelineEvent {
+  const { call, index, stepId, fallbackAt } = input;
+  const toolName = call.toolName ?? 'unknown_tool';
+  const status: TimelineEventStatus =
+    call.ok === true ? 'ok' : call.ok === false ? 'failed' : 'running';
+
+  return {
+    kind: 'tool_call',
+    id: `tool:audit:${stepId ?? 'unattributed'}:${call.callId}:${index}`,
+    stepId,
+    toolName,
+    callId: call.callId,
+    // Unrecoverable by design — the renderer shows "not captured for this run".
+    argumentsPreview: null,
+    outputPreview: null,
+    ok: call.ok,
+    errorMessage: call.errorMessage,
+    auditArgumentsPreview: call.argumentsPreview,
+    label: `Tool: ${toolName}`,
+    at: call.calledAt ?? fallbackAt,
+    durationMs: diffMs(call.calledAt, call.settledAt),
+    status,
+    reconstructed: true,
+    detail: {
+      reconstructedFrom: 'audit_logs tool_called / tool_succeeded / tool_failed rows',
+      note: RECONSTRUCTED_PREVIEW_NOTE,
+      ok: call.ok,
+      calledAt: call.calledAt,
+      settledAt: call.settledAt,
+      ...(call.ok === null
+        ? { unsettled: 'No tool_succeeded / tool_failed row was written for this call.' }
+        : {}),
+      ...(stepId === null
+        ? {
+            unattributed:
+              'No tool-loop step row exists for this run, so the call could not be attributed to a step.',
+          }
+        : {}),
+      ...(call.errorMessage ? { errorMessage: call.errorMessage } : {}),
+      ...(call.argumentsPreview ? { auditArgumentsPreview: call.argumentsPreview } : {}),
+    },
+  };
 }
 
 /**
@@ -239,6 +426,33 @@ export function buildRunTimeline(
   const logsByType = (eventType: string) =>
     orderedLogs.filter((log) => log.event_type === eventType);
 
+  /* --- B0-417: tool-call reconstruction for pre-`toolTrace` runs ---------- *
+   * Only ~3% of `openai_responses_agent` rows carry `output.toolTrace`; the rest
+   * used to render zero tool calls, silently. Rebuild those from the audit rows.
+   * Steps that DO have a trace keep the authoritative path below untouched, and
+   * their call ids are excluded here so nothing is ever emitted twice.
+   */
+  const tracesByStepId = new Map(
+    orderedSteps.map((step) => [step.id, readToolTrace(step)] as const),
+  );
+  const tracedCallIds = new Set<string>();
+  const untracedSteps: WorkflowStepRow[] = [];
+  for (const step of orderedSteps) {
+    const trace = tracesByStepId.get(step.id) ?? [];
+    if (trace.length > 0) {
+      for (const entry of trace) {
+        tracedCallIds.add(entry.callId);
+      }
+    } else {
+      untracedSteps.push(step);
+    }
+  }
+  const { byStepId: reconstructedByStepId, unattributed: unattributedToolCalls } =
+    attributeReconstructedToolCalls(
+      collectReconstructableToolCalls(toolCallFacts, tracedCallIds),
+      untracedSteps,
+    );
+
   /* --- run start -------------------------------------------------------- *
    * NOTE: the workflow writes its `workflow_started` audit row with a null
    * workflow_run_id (the run doesn't exist yet), so `listAuditLogsForRun` never
@@ -278,7 +492,22 @@ export function buildRunTimeline(
       error: step.error,
     });
 
-    for (const [index, entry] of readToolTrace(step).entries()) {
+    // B0-417 — a step has EITHER its authoritative trace or reconstructed events,
+    // never both: `tracedCallIds` excluded these call ids from reconstruction.
+    for (const [index, call] of (reconstructedByStepId.get(step.id) ?? []).entries()) {
+      push(
+        buildReconstructedToolCallEvent({
+          call,
+          index,
+          stepId: step.id,
+          // Forced tool calls (e.g. the cross-reference safety-net search) bypass
+          // writeAuditLog's `tool_called`, so fall back to the step's own start time.
+          fallbackAt: step.started_at,
+        }),
+      );
+    }
+
+    for (const [index, entry] of (tracesByStepId.get(step.id) ?? []).entries()) {
       const facts = toolCallFacts.get(entry.callId);
       push({
         kind: 'tool_call',
@@ -309,6 +538,22 @@ export function buildRunTimeline(
         },
       });
     }
+  }
+
+  /* --- B0-417: reconstructed calls with no host step --------------------- *
+   * Never observed in practice (every run with tool audit rows has an agent step),
+   * but a run whose step row is missing must still show its tool calls rather than
+   * losing them.
+   */
+  for (const [index, call] of unattributedToolCalls.entries()) {
+    push(
+      buildReconstructedToolCallEvent({
+        call,
+        index,
+        stepId: null,
+        fallbackAt: run.created_at,
+      }),
+    );
   }
 
   /* --- gate 1: early decline -------------------------------------------- */

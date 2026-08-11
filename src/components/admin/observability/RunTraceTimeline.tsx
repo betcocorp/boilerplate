@@ -197,6 +197,16 @@ function TimelineEventRow({
                       inferred, no direct log entry
                     </Badge>
                   ) : null}
+                  {/* B0-417 — mirrors the `inferred` badge above: this tool call was
+                      rebuilt from audit rows because the run predates `toolTrace`. */}
+                  {event.kind === 'tool_call' && event.reconstructed ? (
+                    <Badge
+                      className="rounded-full border-amber-500/50 bg-amber-500/10 text-[0.62rem] text-amber-800"
+                      variant="outline"
+                    >
+                      reconstructed, previews not captured
+                    </Badge>
+                  ) : null}
                   {event.kind === 'confidence_gate' && event.requiresHumanReview ? (
                     <Badge className="rounded-full text-[0.62rem]" variant="outline">
                       human review

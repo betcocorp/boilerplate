@@ -108,12 +108,23 @@ function fmtDuration(durationMs: number | undefined): string {
 
 export function describeTimelineEvent(event: TimelineEvent): string | null {
   switch (event.kind) {
-    case 'tool_call':
+    // B0-417 — `ok === null` is a reconstructed call that never settled: unknown,
+    // not failed. Null previews were never captured for the run; say so rather than
+    // reporting "(none)", which the model would read as an empty argument set.
+    case 'tool_call': {
+      const outcome = event.ok === null ? 'OUTCOME UNKNOWN' : event.ok ? 'ok' : 'FAILED';
+      const preview = (value: string | null) =>
+        value === null
+          ? '(not captured for this run)'
+          : clip(value, PREVIEW_MAX_CHARS) || '(none)';
       return [
-        `- TOOL ${event.toolName} — ${event.ok ? 'ok' : 'FAILED'} in ${fmtDuration(event.durationMs)}`,
-        `    args: ${clip(event.argumentsPreview, PREVIEW_MAX_CHARS) || '(none)'}`,
-        `    output: ${clip(event.outputPreview, PREVIEW_MAX_CHARS) || '(none)'}`,
+        `- TOOL ${event.toolName} — ${outcome} in ${fmtDuration(event.durationMs)}${
+          event.reconstructed ? ' (reconstructed from audit rows)' : ''
+        }`,
+        `    args: ${preview(event.argumentsPreview)}`,
+        `    output: ${preview(event.outputPreview)}`,
       ].join('\n');
+    }
 
     case 'confidence_gate':
       return [
@@ -166,7 +177,9 @@ export function buildPromptAnalysisPayload(trace: WorkflowRunTrace): string {
     (event): event is Extract<TimelineEvent, { kind: 'tool_call' }> =>
       event.kind === 'tool_call',
   );
-  const failedToolCalls = toolCalls.filter((event) => !event.ok);
+  // B0-417 — strictly `false`: an unsettled reconstructed call has `ok === null`
+  // and must not be counted as a failure.
+  const failedToolCalls = toolCalls.filter((event) => event.ok === false);
 
   const toolNameCounts = new Map<string, number>();
   for (const call of toolCalls) {
