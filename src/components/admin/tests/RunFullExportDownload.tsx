@@ -29,6 +29,11 @@ export type RunExportItem = {
   error_message: string | null;
   /** Gold-standard answer for this item; null when unset. */
   ideal_response: string | null;
+  /** Golden-set expectations, verbatim as authored; null when unset. */
+  expected_concepts: string | null;
+  minimum_concepts: string | null;
+  expected_sources: string | null;
+  should_cite: boolean | null;
   timing: {
     toolRounds: number;
     cacheSource: string | null;

@@ -38,6 +38,10 @@ export type TestPromptRow = {
   expected_reason_code: string | null;
   priority: number | null;
   ideal_response: string | null;
+  expected_concepts: string | null;
+  minimum_concepts: string | null;
+  expected_sources: string | null;
+  should_cite: boolean | null;
   input_payload: Json;
 };
 
@@ -94,7 +98,58 @@ function rowMatchesQuery(item: TestPromptRow, raw: string): boolean {
   if (expectedSummary(item).toLowerCase().includes(q)) {
     return true;
   }
-  return false;
+  // Concept/source expectations are the main reason to hunt for a row (e.g. "13 oz/gal").
+  return [
+    item.expected_concepts,
+    item.minimum_concepts,
+    item.expected_sources,
+  ].some((value) => (value ?? '').toLowerCase().includes(q));
+}
+
+/**
+ * Compact read-only view of the golden-set expectation fields. Values are rendered
+ * verbatim (clamped, with the full text in `title`) — never reformatted, since they
+ * carry regulated figures such as oz/gal, mL/L, ppm, and contact times.
+ */
+function ConceptExpectationsCell({ item }: { item: TestPromptRow }) {
+  const concepts = item.minimum_concepts || item.expected_concepts;
+  const hasAny = Boolean(concepts || item.expected_sources || item.should_cite !== null);
+
+  if (!hasAny) {
+    return <span className="text-slate-400">—</span>;
+  }
+
+  return (
+    <div className="flex flex-col gap-1">
+      {concepts ? (
+        <span className="line-clamp-2 whitespace-normal" title={concepts}>
+          {item.minimum_concepts ? 'Min: ' : 'Expected: '}
+          {concepts}
+        </span>
+      ) : null}
+      {item.expected_sources ? (
+        <span
+          className="line-clamp-2 whitespace-normal text-slate-500"
+          title={item.expected_sources}
+        >
+          Sources: {item.expected_sources}
+        </span>
+      ) : null}
+      {item.should_cite !== null ? (
+        <Badge
+          className="w-fit text-slate-500"
+          title={
+            item.should_cite
+              ? 'This row expects the answer to cite sources.'
+              : 'This row expects the answer not to cite sources.'
+          }
+          variant="secondary"
+        >
+          {item.should_cite ? 'Must cite' : 'No cite'}
+        </Badge>
+      ) : null}
+    </div>
+  );
 }
 
 type TestPromptsSectionProps = {
@@ -201,15 +256,22 @@ export function TestPromptsSection({
     }
 
     const sorted = [...items].sort((a, b) => a.row_index - b.row_index);
+    // Column order matches TEST_TEMPLATE_COLUMNS so a download can be re-uploaded as-is.
     const headers = [
       'question',
       'should_answer',
       'expected_result_type',
       'canonical_product',
       'reason_code',
+      'priority',
+      'ideal_response',
       'product_mention',
       'question_category',
       'source_style',
+      'expected_concepts',
+      'minimum_concepts',
+      'expected_sources',
+      'should_cite',
     ];
 
     const lines = [
@@ -221,9 +283,15 @@ export function TestPromptsSection({
           item.expected_result_type ?? '',
           item.expected_canonical_product ?? '',
           item.expected_reason_code ?? '',
+          item.priority === null ? '' : String(item.priority),
+          item.ideal_response ?? '',
           payloadString(item.input_payload, 'product_mention'),
           payloadString(item.input_payload, 'question_category'),
           payloadString(item.input_payload, 'source_style'),
+          item.expected_concepts ?? '',
+          item.minimum_concepts ?? '',
+          item.expected_sources ?? '',
+          formatShouldAnswerExport(item.should_cite),
         ]
           .map(escapeCsvCell)
           .join(','),
@@ -338,6 +406,9 @@ export function TestPromptsSection({
               <TableHead>Row</TableHead>
               <TableHead>Prompt</TableHead>
               <TableHead>Expected</TableHead>
+              <TableHead title="Concept, source, and citation expectations for this prompt (minimum concepts, expected sources, should_cite).">
+                Concepts / sources
+              </TableHead>
               <TableHead title="Number of recent runs that included this prompt (and the passed/failed counts).">
                 Pass/Total
               </TableHead>
@@ -373,7 +444,7 @@ export function TestPromptsSection({
           <TableBody>
             {filtered.length === 0 ? (
               <TableRow>
-                <TableCell className="text-slate-500" colSpan={10}>
+                <TableCell className="text-slate-500" colSpan={11}>
                   {total === 0
                     ? 'No prompts in this dataset yet.'
                     : 'No prompts match your search.'}
@@ -412,6 +483,9 @@ export function TestPromptsSection({
                       {item.prompt}
                     </TableCell>
                     <TableCell>{expectedSummary(item)}</TableCell>
+                    <TableCell className="max-w-65 align-top text-xs text-slate-600">
+                      <ConceptExpectationsCell item={item} />
+                    </TableCell>
                     <TableCell
                       className="whitespace-nowrap tabular-nums text-slate-700"
                       title={
@@ -468,15 +542,19 @@ export function TestPromptsSection({
                           expectedCanonicalProduct={
                             item.expected_canonical_product
                           }
+                          expectedConcepts={item.expected_concepts}
                           expectedReasonCode={item.expected_reason_code}
                           expectedResultType={item.expected_result_type}
                           expectedShouldAnswer={item.expected_should_answer}
+                          expectedSources={item.expected_sources}
                           idealResponse={item.ideal_response}
                           inputPayload={item.input_payload}
+                          minimumConcepts={item.minimum_concepts}
                           priority={item.priority}
                           prompt={item.prompt}
                           returnPath={returnPath}
                           rowIndex={item.row_index}
+                          shouldCite={item.should_cite}
                           suggestionLists={suggestionLists}
                           testId={testId}
                           testItemId={item.id}

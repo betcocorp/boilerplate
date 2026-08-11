@@ -8,6 +8,7 @@ import {
   parseCsvColumnNames,
   parseExpectedShouldAnswerFromForm,
   parsePriority,
+  parseShouldCiteFromForm,
   parseTestCsvContent,
 } from '~/lib/tests/csv';
 import {
@@ -49,6 +50,29 @@ function encodeMessage(path: string, kind: 'success' | 'error', text: string) {
 
 function toUtf8Text(bytes: Uint8Array) {
   return new TextDecoder('utf-8').decode(bytes);
+}
+
+/** Trimmed form string, or null when absent/blank — a cleared input clears the stored value. */
+function optionalFormText(formData: FormData, name: string): string | null {
+  const raw = formData.get(name);
+  return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
+}
+
+/**
+ * The golden-set expectation fields shared by the add and edit prompt dialogs
+ * (same names as the CSV columns in `~/lib/tests/template`).
+ */
+function readConceptExpectationFields(formData: FormData) {
+  const shouldCiteRaw = formData.get('shouldCite');
+  return {
+    expected_concepts: optionalFormText(formData, 'expectedConcepts'),
+    minimum_concepts: optionalFormText(formData, 'minimumConcepts'),
+    expected_sources: optionalFormText(formData, 'expectedSources'),
+    should_cite:
+      typeof shouldCiteRaw === 'string'
+        ? parseShouldCiteFromForm(shouldCiteRaw)
+        : null,
+  };
 }
 
 function parseIntendedAgentField(
@@ -165,6 +189,10 @@ export async function uploadTestCsvAction(formData: FormData) {
     expected_reason_code: row.expectedReasonCode,
     priority: row.priority,
     ideal_response: row.idealResponse,
+    expected_concepts: row.expectedConcepts,
+    minimum_concepts: row.minimumConcepts,
+    expected_sources: row.expectedSources,
+    should_cite: row.shouldCite,
     input_payload: row.inputPayload,
     metadata: row.metadata,
   }));
@@ -253,6 +281,8 @@ export async function addTestItemAction(formData: FormData) {
       ? idealResponseRaw.trim()
       : null;
 
+  const conceptExpectations = readConceptExpectationFields(formData);
+
   const productMentionRaw = formData.get('productMention');
   const questionCategoryRaw = formData.get('questionCategory');
   const sourceStyleRaw = formData.get('sourceStyle');
@@ -288,6 +318,7 @@ export async function addTestItemAction(formData: FormData) {
       expected_reason_code,
       priority,
       ideal_response,
+      ...conceptExpectations,
       input_payload,
       metadata,
     },
@@ -379,6 +410,8 @@ export async function updateTestItemAction(formData: FormData) {
       ? idealResponseRaw.trim()
       : null;
 
+  const conceptExpectations = readConceptExpectationFields(formData);
+
   const productMentionRaw = formData.get('productMention');
   const questionCategoryRaw = formData.get('questionCategory');
   const sourceStyleRaw = formData.get('sourceStyle');
@@ -410,6 +443,7 @@ export async function updateTestItemAction(formData: FormData) {
     expected_reason_code,
     priority,
     ideal_response,
+    ...conceptExpectations,
     input_payload,
     metadata,
   });
@@ -663,6 +697,10 @@ export async function createTestFromPromptsAction(formData: FormData) {
     expected_reason_code: item.expected_reason_code,
     priority: item.priority,
     ideal_response: item.ideal_response,
+    expected_concepts: item.expected_concepts,
+    minimum_concepts: item.minimum_concepts,
+    expected_sources: item.expected_sources,
+    should_cite: item.should_cite,
     input_payload: item.input_payload,
     metadata: item.metadata,
   }));

@@ -294,6 +294,43 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
                 <p className="mt-1 text-slate-400">—</p>
               )}
             </div>
+            {/* Rendered verbatim — these carry regulated figures (oz/gal, mL/L, ppm, contact times). */}
+            <div className="border-t border-slate-200 pt-4">
+              <p className="font-semibold text-slate-900">Expected concepts</p>
+              {item.expected_concepts ? (
+                <p className="mt-1 whitespace-pre-wrap">
+                  {item.expected_concepts}
+                </p>
+              ) : (
+                <p className="mt-1 text-slate-400">—</p>
+              )}
+            </div>
+            <div className="border-t border-slate-200 pt-4">
+              <p className="font-semibold text-slate-900">Minimum concepts</p>
+              {item.minimum_concepts ? (
+                <p className="mt-1 whitespace-pre-wrap">
+                  {item.minimum_concepts}
+                </p>
+              ) : (
+                <p className="mt-1 text-slate-400">—</p>
+              )}
+            </div>
+            <div className="border-t border-slate-200 pt-4">
+              <p className="font-semibold text-slate-900">Expected sources</p>
+              {item.expected_sources ? (
+                <p className="mt-1 whitespace-pre-wrap">
+                  {item.expected_sources}
+                </p>
+              ) : (
+                <p className="mt-1 text-slate-400">—</p>
+              )}
+            </div>
+            <div className="border-t border-slate-200 pt-4">
+              <p className="font-semibold text-slate-900">Should cite sources</p>
+              <p className="mt-1 text-slate-800">
+                {formatExpectedShouldAnswerLabel(item.should_cite)}
+              </p>
+            </div>
           </div>
 
           <AiSuggestionCards

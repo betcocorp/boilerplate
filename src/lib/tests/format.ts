@@ -46,8 +46,9 @@ export function formatExpectedShouldAnswerLabel(
 }
 
 /**
- * Formats a `boolean | null` expected-answer flag for CSV export.
- * Returns lowercase "yes" / "no" / "" (empty for unset).
+ * Formats a `boolean | null` expectation flag (`should_answer`, `should_cite`) for CSV
+ * export. Returns lowercase "yes" / "no" / "" (empty for unset) — the same vocabulary the
+ * importer in `~/lib/tests/csv` accepts, so exports re-import unchanged.
  */
 export function formatShouldAnswerExport(value: boolean | null): string {
   if (value === true) return 'yes';

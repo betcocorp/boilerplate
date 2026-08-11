@@ -49,6 +49,15 @@ function parseShouldAnswer(value) {
   return null;
 }
 
+/** Mirrors parsePriority in src/lib/tests/csv.ts — int2 range, integers only. */
+function parsePriority(value) {
+  const v = asTrimmedString(value);
+  if (!/^[+-]?\d+$/.test(v)) return null;
+  const parsed = Number.parseInt(v, 10);
+  if (parsed < -32768 || parsed > 32767) return null;
+  return parsed;
+}
+
 const csvContent = readFileSync(csvPath, 'utf-8');
 const records = parse(csvContent, {
   columns: true,
@@ -57,9 +66,12 @@ const records = parse(csvContent, {
   trim: true,
 });
 
+// Keep in sync with TYPED_CSV_COLUMNS in src/lib/tests/csv.ts.
 const PRIMARY_COLS = new Set([
   'question', 'prompt', 'test_prompt',
   'should_answer', 'expected_result_type', 'canonical_product', 'reason_code',
+  'priority', 'ideal_response',
+  'expected_concepts', 'minimum_concepts', 'expected_sources', 'should_cite',
 ]);
 const PAYLOAD_COLS = new Set(['product_mention', 'question_category', 'source_style']);
 
@@ -88,6 +100,13 @@ const rows = records
       expected_result_type: asTrimmedString(record.expected_result_type) || null,
       expected_canonical_product: asTrimmedString(record.canonical_product) || null,
       expected_reason_code: asTrimmedString(record.reason_code) || null,
+      priority: parsePriority(record.priority),
+      ideal_response: asTrimmedString(record.ideal_response) || null,
+      // Stored verbatim — never split or reformatted (oz/gal, mL/L, ppm, contact times).
+      expected_concepts: asTrimmedString(record.expected_concepts) || null,
+      minimum_concepts: asTrimmedString(record.minimum_concepts) || null,
+      expected_sources: asTrimmedString(record.expected_sources) || null,
+      should_cite: parseShouldAnswer(record.should_cite),
       input_payload: inputPayload,
       metadata,
     };

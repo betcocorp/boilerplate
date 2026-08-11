@@ -33,6 +33,10 @@ type EditTestItemDialogProps = {
   expectedReasonCode: string | null;
   priority: number | null;
   idealResponse: string | null;
+  expectedConcepts: string | null;
+  minimumConcepts: string | null;
+  expectedSources: string | null;
+  shouldCite: boolean | null;
   inputPayload: Json;
   /** `ProdLineKey` → display name (`ProdLineDescr`) for canonical product suggestions. */
   canonicalProductLabels: Record<string, string>;
@@ -63,6 +67,17 @@ function expectedBehaviorLabel(value: boolean | null): string {
   return '';
 }
 
+/** Maps stored `should_cite` to the CSV-style preset the update action parses. */
+function shouldCiteLabel(value: boolean | null): string {
+  if (value === true) {
+    return 'yes';
+  }
+  if (value === false) {
+    return 'no';
+  }
+  return '';
+}
+
 export function EditTestItemDialog({
   testId,
   returnPath,
@@ -75,6 +90,10 @@ export function EditTestItemDialog({
   expectedReasonCode,
   priority,
   idealResponse,
+  expectedConcepts,
+  minimumConcepts,
+  expectedSources,
+  shouldCite,
   inputPayload,
   canonicalProductLabels,
   suggestionLists,
@@ -120,6 +139,10 @@ export function EditTestItemDialog({
                 expectedReasonCode: expectedReasonCode ?? '',
                 priority: priority === null ? '' : String(priority),
                 idealResponse: idealResponse ?? '',
+                expectedConcepts: expectedConcepts ?? '',
+                minimumConcepts: minimumConcepts ?? '',
+                expectedSources: expectedSources ?? '',
+                shouldCite: shouldCiteLabel(shouldCite),
                 productMention: payloadString(inputPayload, 'product_mention'),
                 questionCategory: payloadString(inputPayload, 'question_category'),
                 sourceStyle: payloadString(inputPayload, 'source_style'),

@@ -606,15 +606,19 @@ export type Database = {
           expected_canonical_product: string | null
           expected_reason_code: string | null
           expected_result_type: string | null
+          expected_concepts: string | null
           expected_should_answer: boolean | null
+          expected_sources: string | null
           id: string
           ideal_response: string | null
           input_payload: Json
           metadata: Json
+          minimum_concepts: string | null
           priority: number | null
           prompt: string
           prompt_category: string | null
           row_index: number
+          should_cite: boolean | null
           test_id: string
         }
         Insert: {
@@ -622,15 +626,19 @@ export type Database = {
           expected_canonical_product?: string | null
           expected_reason_code?: string | null
           expected_result_type?: string | null
+          expected_concepts?: string | null
           expected_should_answer?: boolean | null
+          expected_sources?: string | null
           id?: string
           ideal_response?: string | null
           input_payload?: Json
           metadata?: Json
+          minimum_concepts?: string | null
           priority?: number | null
           prompt: string
           prompt_category?: string | null
           row_index: number
+          should_cite?: boolean | null
           test_id: string
         }
         Update: {
@@ -638,15 +646,19 @@ export type Database = {
           expected_canonical_product?: string | null
           expected_reason_code?: string | null
           expected_result_type?: string | null
+          expected_concepts?: string | null
           expected_should_answer?: boolean | null
+          expected_sources?: string | null
           id?: string
           ideal_response?: string | null
           input_payload?: Json
           metadata?: Json
+          minimum_concepts?: string | null
           priority?: number | null
           prompt?: string
           prompt_category?: string | null
           row_index?: number
+          should_cite?: boolean | null
           test_id?: string
         }
         Relationships: [

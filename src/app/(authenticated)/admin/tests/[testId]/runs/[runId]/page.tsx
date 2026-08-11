@@ -45,6 +45,7 @@ import {
   formatExpectedShouldAnswerLabel as formatExpectedShouldAnswerCell,
   formatItemSimilarityConfidenceLabel,
   formatRetrievedChunksForCsv,
+  formatShouldAnswerExport,
   formatTimingBreakdownLabel,
 } from '~/lib/tests/format';
 import {
@@ -135,6 +136,18 @@ export default async function AdminTestRunDetailsPage({
   const idealResponseByItemId = new Map(
     testItems.map((item) => [item.id, item.ideal_response]),
   );
+  /** Golden-set concept/source/citation expectations, keyed by test item id. */
+  const conceptExpectationsByItemId = new Map(
+    testItems.map((item) => [
+      item.id,
+      {
+        expected_concepts: item.expected_concepts,
+        minimum_concepts: item.minimum_concepts,
+        expected_sources: item.expected_sources,
+        should_cite: item.should_cite,
+      },
+    ]),
+  );
   const passCount = result.passed_items ?? 0;
   const failCount =
     result.failed_items ?? resultItems.filter((item) => !item.passed).length;
@@ -222,6 +235,7 @@ export default async function AdminTestRunDetailsPage({
       expectedRaw === undefined ? null : expectedRaw;
 
     const priority = priorityByItemId.get(row.test_item_id) ?? null;
+    const expectations = conceptExpectationsByItemId.get(row.test_item_id);
 
     return {
       row_index: row.row_index,
@@ -239,6 +253,10 @@ export default async function AdminTestRunDetailsPage({
       rounds_cache_search: formatTimingBreakdownLabel(row.response_payload),
       message: row.error_message || row.response_text || 'n/a',
       ideal_response: idealResponseByItemId.get(row.test_item_id) ?? '',
+      expected_concepts: expectations?.expected_concepts ?? '',
+      minimum_concepts: expectations?.minimum_concepts ?? '',
+      expected_sources: expectations?.expected_sources ?? '',
+      should_cite: formatShouldAnswerExport(expectations?.should_cite ?? null),
       item_detail_path: `/admin/tests/${test.id}/items/${row.test_item_id}`,
       retrieved_chunks: formatRetrievedChunksForCsv(
         extractRetrievedDocumentChunks(row.response_payload),
@@ -285,6 +303,18 @@ export default async function AdminTestRunDetailsPage({
             error_message: row.error_message,
             ideal_response:
               idealResponseByItemId.get(row.test_item_id) ?? null,
+            expected_concepts:
+              conceptExpectationsByItemId.get(row.test_item_id)
+                ?.expected_concepts ?? null,
+            minimum_concepts:
+              conceptExpectationsByItemId.get(row.test_item_id)
+                ?.minimum_concepts ?? null,
+            expected_sources:
+              conceptExpectationsByItemId.get(row.test_item_id)
+                ?.expected_sources ?? null,
+            should_cite:
+              conceptExpectationsByItemId.get(row.test_item_id)?.should_cite ??
+              null,
             timing: extractTimingBreakdown(row.response_payload),
             retrieved_document_chunks: extractRetrievedDocumentChunks(
               row.response_payload,

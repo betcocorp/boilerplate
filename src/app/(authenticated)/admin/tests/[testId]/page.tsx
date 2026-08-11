@@ -659,6 +659,10 @@ export default async function AdminTestDetailsPage({
               expected_reason_code: item.expected_reason_code,
               priority: item.priority,
               ideal_response: item.ideal_response,
+              expected_concepts: item.expected_concepts,
+              minimum_concepts: item.minimum_concepts,
+              expected_sources: item.expected_sources,
+              should_cite: item.should_cite,
               input_payload: item.input_payload,
             }))}
             returnPath={`/admin/tests/${test.id}`}

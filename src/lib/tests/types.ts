@@ -40,6 +40,10 @@ export type ParsedCsvRow = {
   expectedReasonCode: string | null;
   priority: number | null;
   idealResponse: string | null;
+  expectedConcepts: string | null;
+  minimumConcepts: string | null;
+  expectedSources: string | null;
+  shouldCite: boolean | null;
   inputPayload: Record<string, string>;
   metadata: Record<string, string>;
 };

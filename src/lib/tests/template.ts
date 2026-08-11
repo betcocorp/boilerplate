@@ -82,6 +82,32 @@ export const TEST_TEMPLATE_COLUMNS: TestTemplateColumn[] = [
     example: 'How the question was authored — e.g. real_user_pattern',
     help: 'How the question was authored (e.g. real_user_pattern). Stored with the row for context.',
   },
+  {
+    name: 'expected_concepts',
+    required: false,
+    example:
+      'Key concepts the ideal answer should contain, as a single string — e.g. 13 oz/gal or 100 mL/L; 1:10 with water',
+    help: 'Key concepts a complete answer should contain, as one string. Stored verbatim — dilution ratios, ppm, and contact times are never reformatted.',
+  },
+  {
+    name: 'minimum_concepts',
+    required: false,
+    example: 'Minimum concepts required for a passing answer, as a single string — e.g. 13 oz/gal',
+    help: 'The subset of expected_concepts a reviewer must see to pass the row, as one string. Stored verbatim.',
+  },
+  {
+    name: 'expected_sources',
+    required: false,
+    example:
+      'Comma-separated sources the answer should draw from — e.g. Ax-It Plus TDS, Selector Guide Section 1',
+    help: 'Sources the answer should be grounded in, comma-separated. Stored as typed for reviewer reference.',
+  },
+  {
+    name: 'should_cite',
+    required: false,
+    example: 'Should the answer cite sources? yes/no (stored true/false)',
+    help: 'Whether the answer is expected to cite its sources. yes/true/1 or no/false/0; leave blank for no expectation.',
+  },
 ];
 
 export const TEST_TEMPLATE_FILENAME = 'bex-test-set-template.csv';

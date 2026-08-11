@@ -30,6 +30,12 @@ export type RunResultCsvRow = {
   message: string;
   /** Gold-standard answer for this item; empty when unset. */
   ideal_response: string;
+  /** Golden-set expectations, verbatim as authored; empty when unset. */
+  expected_concepts: string;
+  minimum_concepts: string;
+  expected_sources: string;
+  /** `yes` / `no` / empty when unset. */
+  should_cite: string;
   /** Table “History” View link path. */
   item_detail_path: string;
   /** Encoded semantic hits: `document_id|chunk_id` pairs joined by `; ` (Docs dialog). */
@@ -77,6 +83,10 @@ export function RunItemResultsCsvDownload({
       'rounds_cache_search',
       'message',
       'ideal_response',
+      'expected_concepts',
+      'minimum_concepts',
+      'expected_sources',
+      'should_cite',
       'item_detail_path',
       'retrieved_chunks',
       'test_item_id',
@@ -98,6 +108,10 @@ export function RunItemResultsCsvDownload({
           row.rounds_cache_search,
           row.message,
           row.ideal_response,
+          row.expected_concepts,
+          row.minimum_concepts,
+          row.expected_sources,
+          row.should_cite,
           row.item_detail_path,
           row.retrieved_chunks,
           row.test_item_id,
