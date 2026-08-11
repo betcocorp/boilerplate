@@ -51,8 +51,28 @@ function extractChunkRefsFromPreview(outputPreview: string): RetrievedDocumentCh
   return refs;
 }
 
+/**
+ * B0-417 — `argumentsPreview` / `outputPreview` are null on reconstructed events:
+ * they only ever existed on the agent step's `toolTrace` and were never written to
+ * `audit_logs`, so they are unrecoverable for pre-B0-331 runs. Render that as an
+ * explicit statement rather than an empty code block, which would read as "the tool
+ * was called with nothing" / "the tool returned nothing".
+ */
+function NotCapturedBlock({ label }: { label: string }) {
+  return (
+    <div className="min-w-0 space-y-1">
+      <p className="text-[0.65rem] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+        {label}
+      </p>
+      <p className="rounded-lg border border-dashed border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-900">
+        Not captured for this run.
+      </p>
+    </div>
+  );
+}
+
 export function ToolCallDetail({ event }: { event: ToolCallTimelineEvent }) {
-  const chunks = extractChunkRefsFromPreview(event.outputPreview);
+  const chunks = extractChunkRefsFromPreview(event.outputPreview ?? '');
 
   return (
     <div className="min-w-0 space-y-3">
@@ -60,8 +80,12 @@ export function ToolCallDetail({ event }: { event: ToolCallTimelineEvent }) {
         <Badge className="rounded-full font-mono text-[0.65rem]" variant="outline">
           {event.toolName}
         </Badge>
-        <Badge className="rounded-full" variant={event.ok ? 'secondary' : 'destructive'}>
-          {event.ok ? 'ok' : 'failed'}
+        {/* `ok === null` is an unsettled reconstructed call — unknown, not failed. */}
+        <Badge
+          className="rounded-full"
+          variant={event.ok === null ? 'outline' : event.ok ? 'secondary' : 'destructive'}
+        >
+          {event.ok === null ? 'outcome unknown' : event.ok ? 'ok' : 'failed'}
         </Badge>
         {typeof event.durationMs === 'number' ? (
           <Badge className="rounded-full tabular-nums" variant="outline">
@@ -73,12 +97,30 @@ export function ToolCallDetail({ event }: { event: ToolCallTimelineEvent }) {
         </span>
       </div>
 
-      <TraceJsonBlock label="Arguments" value={event.argumentsPreview} />
-      <TraceJsonBlock label="Output" value={event.outputPreview} />
-      <p className="text-[0.65rem] text-muted-foreground">
-        Previews are captured truncated at write time (2,000 chars for arguments,
-        4,000 for output).
-      </p>
+      {event.argumentsPreview === null ? (
+        <NotCapturedBlock label="Arguments" />
+      ) : (
+        <TraceJsonBlock label="Arguments" value={event.argumentsPreview} />
+      )}
+      {event.outputPreview === null ? (
+        <NotCapturedBlock label="Output" />
+      ) : (
+        <TraceJsonBlock label="Output" value={event.outputPreview} />
+      )}
+      {event.reconstructed ? (
+        <p className="text-[0.65rem] text-muted-foreground">
+          Rebuilt from this run&apos;s <code className="font-mono">tool_called</code> /{' '}
+          <code className="font-mono">tool_succeeded</code> /{' '}
+          <code className="font-mono">tool_failed</code> audit rows. The tool name,
+          timestamps, duration and outcome are recorded; the argument and output
+          previews were never written for this run.
+        </p>
+      ) : (
+        <p className="text-[0.65rem] text-muted-foreground">
+          Previews are captured truncated at write time (2,000 chars for arguments,
+          4,000 for output).
+        </p>
+      )}
 
       {chunks.length > 0 ? (
         <div className="min-w-0 space-y-1">

@@ -74,7 +74,9 @@ export async function GET(
       auditLogCount: auditLogs.length,
       timelineEventCount: timeline.length,
       toolCallCount: toolCalls.length,
-      failedToolCallCount: toolCalls.filter((event) => !event.ok).length,
+      // B0-417 — strictly `false`: a reconstructed call that never settled has
+      // `ok === null` (outcome unknown) and is not a failure.
+      failedToolCallCount: toolCalls.filter((event) => event.ok === false).length,
     },
     run,
     steps,
