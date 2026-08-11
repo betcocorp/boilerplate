@@ -1339,11 +1339,57 @@ export type Database = {
         }
       }
       classify_prompt_category: { Args: { p_prompt: string }; Returns: string }
+      delete_permission_group_with_resources: {
+        Args: {
+          p_actor_email: string
+          p_actor_name: string
+          p_actor_user_id: string
+          p_group_id: string
+          p_trace_id: string
+        }
+        Returns: {
+          deleted_selector: string
+          group_removed: boolean
+          members_removed: number
+          permissions_removed: number
+        }[]
+      }
       get_user_permission_bundle: {
         Args: { p_user_id: string }
         Returns: {
           row_kind: string
           selector: string
+        }[]
+      }
+      merge_permission_groups: {
+        Args: {
+          p_actor_email: string
+          p_actor_name: string
+          p_actor_user_id: string
+          p_delete_source: boolean
+          p_source_group_id: string
+          p_target_group_id: string
+          p_trace_id: string
+        }
+        Returns: {
+          deleted_source: boolean
+          permissions_merged: number
+          prior_source_permission_count: number
+          prior_source_user_count: number
+          prior_target_permission_count: number
+          prior_target_user_count: number
+          source_selector: string
+          target_selector: string
+          users_merged: number
+        }[]
+      }
+      preview_permission_group_merge: {
+        Args: { p_source_group_id: string; p_target_group_id: string }
+        Returns: {
+          permissions_to_add: number
+          source_selector: string
+          target_selector: string
+          users_to_add: number
         }[]
       }
       set_orphan_ignore: {
