@@ -2,13 +2,17 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
 
+import { RunAnswerPanel } from '~/components/admin/observability/RunAnswerPanel';
 import { RunInsightsProvider } from '~/components/admin/observability/run-insights-context';
+import { RunPayloadSummary } from '~/components/admin/observability/RunPayloadSummary';
 import { RunPromptInsightsPanel } from '~/components/admin/observability/RunPromptInsightsPanel';
+import { RunRetrievedChunksPanel } from '~/components/admin/observability/RunRetrievedChunksPanel';
 import { RunTraceExportButton } from '~/components/admin/observability/RunTraceExportButton';
 import { RunTraceTimeline } from '~/components/admin/observability/RunTraceTimeline';
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
 import { getAgentBadgeClassName } from '~/lib/bex/agent-badge';
+import { readRunPayloadView } from '~/lib/observability/run-payload';
 import { getWorkflowRunTrace } from '~/lib/observability/runs-repository';
 import { formatDurationSeconds, formatEasternTimestamp } from '~/lib/utils/time';
 
@@ -75,6 +79,9 @@ export default async function AdminRunTracePage({ params }: PageProps) {
   const routingDecision = readStringField(run?.final_output, 'routingDecision');
   const userMessage = readStringField(run?.user_input, 'message');
   const totalDurationMs = run ? durationMsBetween(run.created_at, run.updated_at) : null;
+  // B0-418 — the run's own payload (answer, chunks, similarity, timing, validation,
+  // usage). Tolerates a null `final_output` and error-only payloads.
+  const payload = readRunPayloadView(run?.final_output, run?.user_input);
 
   return (
     <RunInsightsProvider>
@@ -144,7 +151,9 @@ export default async function AdminRunTracePage({ params }: PageProps) {
                   </div>
                 </dl>
 
-                <div className="mt-6 rounded-2xl border border-slate-100 bg-slate-50/70 p-4">
+                <RunPayloadSummary payload={payload} />
+
+                <div className="mt-4 rounded-2xl border border-slate-100 bg-slate-50/70 p-4">
                   <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
                     User message
                   </p>
@@ -162,6 +171,11 @@ export default async function AdminRunTracePage({ params }: PageProps) {
             </section>
           ) : null}
 
+          {/* Answer — read the thing being evaluated before anything else. */}
+          {trace ? (
+            <RunAnswerPanel answerText={payload.answerText} error={payload.error} />
+          ) : null}
+
           {/* AI analysis — on-demand, so it renders as soon as the run resolves. */}
           {trace ? <RunPromptInsightsPanel runId={runId} /> : null}
 
@@ -177,6 +191,9 @@ export default async function AdminRunTracePage({ params }: PageProps) {
               <RunTraceTimeline events={trace.timeline} />
             </section>
           ) : null}
+
+          {/* Retrieved chunks — collapsed by default; the bulkiest section on the page. */}
+          {trace ? <RunRetrievedChunksPanel chunks={payload.chunks} /> : null}
         </main>
       </div>
     </RunInsightsProvider>
