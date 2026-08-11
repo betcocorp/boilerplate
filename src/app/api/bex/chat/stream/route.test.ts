@@ -16,6 +16,13 @@ vi.mock('~/lib/observability/logger', () => ({
   logInfo: vi.fn(),
 }));
 
+// The route's permission gate (B0-408) is covered by `src/lib/permissions/require-permission.test.ts`;
+// here it stands in as a pass-through so these tests stay about the streaming handler itself. It
+// cannot run for real outside a request scope (it reads the session from `headers()`).
+vi.mock('~/lib/permissions/route-gate', () => ({
+  gateRoute: vi.fn().mockResolvedValue(null),
+}));
+
 vi.mock('~/lib/observability/correlation-id', () => ({
   newCorrelationId: () => 'trace-test-1',
 }));

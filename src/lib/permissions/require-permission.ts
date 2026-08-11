@@ -1,6 +1,16 @@
 /**
  * Server-side permission checks for API routes.
  * Validates from Redis when configured; falls back to the permissions repository when Redis is not set up.
+ *
+ * Every verdict is recorded (structured log, plus a de-duplicated `audit_logs` row on denials) and
+ * gated by `BEX_PERMISSIONS_ENFORCED` (B0-408). While the flag is off (shadow mode) an authorization
+ * failure is turned into an allow with `shadowAllowed: true` — callers keep working exactly as they
+ * do today, and `errorResponse` is only ever set when enforcement is on.
+ *
+ * The one thing shadow mode does **not** relax is *authentication*: no NextAuth session still yields
+ * 401. That is orthogonal to this epic (it is already today's behaviour on every caller here), and
+ * shadowing it would risk opening an anonymous hole in any route that gated on `requirePermission`
+ * alone.
  */
 
 import { getServerSession } from 'next-auth';
@@ -8,6 +18,11 @@ import { NextResponse } from 'next/server';
 
 import { authOptions } from '~/lib/auth';
 import { getUserOrDefault } from '~/lib/cookies-server';
+import {
+  isPermissionsEnforced,
+  recordPermissionVerdict,
+  type PermissionVerdictReason,
+} from '~/lib/permissions/enforcement';
 import {
   getCachedPermissions,
   setCachedPermissions,
@@ -29,6 +44,59 @@ export interface PermissionResult {
   userId?: string;
   permissions?: string[];
   errorResponse?: NextResponse;
+  /** Set when shadow mode (`BEX_PERMISSIONS_ENFORCED` off) turned a denial into an allow. */
+  shadowAllowed?: boolean;
+}
+
+/** Optional context so verdict logs can name the route they guarded. */
+export interface PermissionCheckOptions {
+  /** e.g. `GET /api/bex/conversations` — recorded on the verdict. */
+  route?: string;
+}
+
+/**
+ * Records the verdict and applies the flag: allow as-is, shadow-allow a denial, or deny for real.
+ * Shared by `requirePermission` and `requireAnyPermission`.
+ */
+async function resolveVerdict(params: {
+  selector: string | string[];
+  allowed: boolean;
+  reason: PermissionVerdictReason;
+  route?: string;
+  userId?: string;
+  email?: string | null;
+  permissions?: string[];
+  denyStatus?: number;
+  denyError?: string;
+}): Promise<PermissionResult> {
+  const { selector, allowed, reason, route, userId, email, permissions } =
+    params;
+
+  await recordPermissionVerdict({
+    surface: 'api',
+    selector,
+    allowed,
+    reason,
+    route,
+    userId,
+    email,
+  });
+
+  if (allowed) return { allowed: true, userId, permissions };
+
+  if (!isPermissionsEnforced()) {
+    return { allowed: true, shadowAllowed: true, userId, permissions };
+  }
+
+  return {
+    allowed: false,
+    userId,
+    permissions,
+    errorResponse: NextResponse.json(
+      { error: params.denyError ?? 'Forbidden' },
+      { status: params.denyStatus ?? 403 },
+    ),
+  };
 }
 
 /**
@@ -38,9 +106,11 @@ export interface PermissionResult {
  */
 export async function requirePermission(
   requiredPermission: string,
+  options: PermissionCheckOptions = {},
 ): Promise<PermissionResult> {
+  const { route } = options;
   const session = await getServerSession(authOptions);
-  if (!session?.user?.email) {
+  if (!session?.user) {
     return {
       allowed: false,
       errorResponse: NextResponse.json(
@@ -49,6 +119,9 @@ export async function requirePermission(
       ),
     };
   }
+  // A session without an email is authenticated but unidentifiable — an authorization problem, so
+  // it goes through the flag rather than 401-ing (which would be a change from today's behaviour).
+  const email = session.user.email ?? null;
 
   const user = await getUserOrDefault();
   const userId =
@@ -56,13 +129,14 @@ export async function requirePermission(
       ? (user as { USER_ID: string }).USER_ID
       : null;
   if (!userId) {
-    return {
+    return resolveVerdict({
+      selector: requiredPermission,
       allowed: false,
-      errorResponse: NextResponse.json(
-        { error: 'User not found' },
-        { status: 403 },
-      ),
-    };
+      reason: 'user-not-found',
+      route,
+      email,
+      denyError: 'User not found',
+    });
   }
 
   let permissions: string[] | null = await getCachedPermissions(userId);
@@ -82,26 +156,28 @@ export async function requirePermission(
     }
   }
   if (!permissions || permissions.length === 0) {
-    return {
+    return resolveVerdict({
+      selector: requiredPermission,
       allowed: false,
+      reason: 'permissions-unavailable',
+      route,
       userId,
+      email,
       permissions: [],
-      errorResponse: NextResponse.json(
-        { error: 'Permissions not available; try signing in again' },
-        { status: 403 },
-      ),
-    };
+      denyError: 'Permissions not available; try signing in again',
+    });
   }
 
   const allowed = matchesPermission(requiredPermission, permissions);
-  return {
+  return resolveVerdict({
+    selector: requiredPermission,
     allowed,
+    reason: allowed ? 'granted' : 'missing-permission',
+    route,
     userId,
+    email,
     permissions,
-    errorResponse: allowed
-      ? undefined
-      : NextResponse.json({ error: 'Forbidden' }, { status: 403 }),
-  };
+  });
 }
 
 /**
@@ -109,9 +185,11 @@ export async function requirePermission(
  */
 export async function requireAnyPermission(
   requiredPermissions: string[],
+  options: PermissionCheckOptions = {},
 ): Promise<PermissionResult> {
+  const { route } = options;
   const session = await getServerSession(authOptions);
-  if (!session?.user?.email) {
+  if (!session?.user) {
     return {
       allowed: false,
       errorResponse: NextResponse.json(
@@ -120,6 +198,9 @@ export async function requireAnyPermission(
       ),
     };
   }
+  // A session without an email is authenticated but unidentifiable — an authorization problem, so
+  // it goes through the flag rather than 401-ing (which would be a change from today's behaviour).
+  const email = session.user.email ?? null;
 
   const user = await getUserOrDefault();
   const userId =
@@ -127,13 +208,14 @@ export async function requireAnyPermission(
       ? (user as { USER_ID: string }).USER_ID
       : null;
   if (!userId) {
-    return {
+    return resolveVerdict({
+      selector: requiredPermissions,
       allowed: false,
-      errorResponse: NextResponse.json(
-        { error: 'User not found' },
-        { status: 403 },
-      ),
-    };
+      reason: 'user-not-found',
+      route,
+      email,
+      denyError: 'User not found',
+    });
   }
 
   let permissions: string[] | null = await getCachedPermissions(userId);
@@ -153,26 +235,28 @@ export async function requireAnyPermission(
     }
   }
   if (!permissions || permissions.length === 0) {
-    return {
+    return resolveVerdict({
+      selector: requiredPermissions,
       allowed: false,
+      reason: 'permissions-unavailable',
+      route,
       userId,
+      email,
       permissions: [],
-      errorResponse: NextResponse.json(
-        { error: 'Permissions not available; try signing in again' },
-        { status: 403 },
-      ),
-    };
+      denyError: 'Permissions not available; try signing in again',
+    });
   }
 
   const allowed = requiredPermissions.some((p) =>
     matchesPermission(p, permissions),
   );
-  return {
+  return resolveVerdict({
+    selector: requiredPermissions,
     allowed,
+    reason: allowed ? 'granted' : 'missing-permission',
+    route,
     userId,
+    email,
     permissions,
-    errorResponse: allowed
-      ? undefined
-      : NextResponse.json({ error: 'Forbidden' }, { status: 403 }),
-  };
+  });
 }

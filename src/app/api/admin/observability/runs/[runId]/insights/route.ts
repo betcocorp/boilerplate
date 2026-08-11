@@ -4,6 +4,8 @@ import { NextResponse } from 'next/server';
 export const maxDuration = 60;
 
 import { authOptions } from '~/lib/auth';
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { gateRoute } from '~/lib/permissions/route-gate';
 import {
   buildPromptAnalysisPayload,
   normalizePromptInsights,
@@ -29,6 +31,12 @@ export async function POST(
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
+
+  const denied = await gateRoute(
+    PERMISSIONS.NAVIGATION_SIDEBAR_OBSERVABILITY,
+    'POST /api/admin/observability/runs/[runId]/insights',
+  );
+  if (denied) return denied;
 
   const { runId } = await context.params;
 

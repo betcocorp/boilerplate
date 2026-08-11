@@ -5,6 +5,8 @@ import {
   createConversation,
   listConversations,
 } from '~/lib/conversations/conversation-repository';
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { gateRoute } from '~/lib/permissions/route-gate';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -13,6 +15,12 @@ export async function GET() {
   if (!(await hasBexSession())) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
+
+  const denied = await gateRoute(
+    PERMISSIONS.BEX_CHAT_USE,
+    'GET /api/bex/conversations',
+  );
+  if (denied) return denied;
 
   try {
     const rows = await listConversations(80);
@@ -37,6 +45,12 @@ export async function POST() {
   if (!(await hasBexSession())) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
+
+  const denied = await gateRoute(
+    PERMISSIONS.BEX_CHAT_USE,
+    'POST /api/bex/conversations',
+  );
+  if (denied) return denied;
 
   try {
     const row = await createConversation();
