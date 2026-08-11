@@ -134,12 +134,13 @@ export async function acknowledgeOrphan(input: AcknowledgeOrphanInput): Promise<
   const { checkKey, refId, reason, isActive } = acknowledgeOrphanInputSchema.parse(input);
 
   const supabase = getSupabaseServiceRoleClient();
-  // created_by: wire to the session user once per-user auth is available.
+  // created_by: wire to the session user once per-user auth is available. Omitted rather than
+  // passed as null — the generated Args type no longer admits null, and both params carry
+  // `DEFAULT NULL::text` in the function, so leaving the key out stores the same NULL.
   const { error } = await supabase.rpc('set_orphan_ignore', {
     p_check_key: checkKey,
     p_ref_id: refId,
-    p_reason: reason ?? null,
-    p_created_by: null,
+    p_reason: reason ?? undefined,
     p_is_active: isActive,
   });
 
