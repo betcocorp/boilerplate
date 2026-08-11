@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
 
 import { HarnessVerdictBand } from '~/components/admin/observability/HarnessVerdictBand';
+import { PromptHistoryStrip } from '~/components/admin/observability/PromptHistoryStrip';
 import { RunAnswerPanel } from '~/components/admin/observability/RunAnswerPanel';
 import { RunInsightsProvider } from '~/components/admin/observability/run-insights-context';
 import { RunPayloadSummary } from '~/components/admin/observability/RunPayloadSummary';
@@ -14,6 +15,10 @@ import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
 import { getAgentBadgeClassName } from '~/lib/bex/agent-badge';
 import { getHarnessContextForRun } from '~/lib/observability/harness-linkage';
+import {
+  EMPTY_PROMPT_HISTORY,
+  getPromptHistoryForItem,
+} from '~/lib/observability/prompt-history';
 import { readRunPayloadView } from '~/lib/observability/run-payload';
 import { getWorkflowRunTrace } from '~/lib/observability/runs-repository';
 import {
@@ -99,6 +104,15 @@ export default async function AdminRunTracePage({ params }: PageProps) {
   // B0-418 — the run's own payload (answer, chunks, similarity, timing, validation,
   // usage). Tolerates a null `final_output` and error-only payloads.
   const payload = readRunPayloadView(run?.final_output, run?.user_input);
+  /**
+   * B0-421 — where this cell sits in its column: the prompt's recent pass/fail outcomes. Necessarily
+   * sequential, since the prompt's identity only exists once the harness lookup has resolved, and
+   * skipped entirely for runs that belong to no grid. `getPromptHistoryForItem` is bounded (a
+   * 10-row window plus two count-only queries) and never throws.
+   */
+  const promptHistory = harness
+    ? await getPromptHistoryForItem(harness.testItemId)
+    : EMPTY_PROMPT_HISTORY;
 
   return (
     <RunInsightsProvider>
@@ -213,6 +227,18 @@ export default async function AdminRunTracePage({ params }: PageProps) {
             <HarnessVerdictBand
               answerText={payload.answerText}
               context={harness}
+            />
+          ) : null}
+
+          {/* B0-421 — lateral navigation along the column: does this prompt always fail? Renders
+              itself as null when the prompt has no recorded outcomes. */}
+          {harness ? (
+            <PromptHistoryStrip
+              currentResultItemId={harness.resultItemId}
+              history={promptHistory}
+              rowIndex={harness.rowIndex}
+              testId={harness.testId}
+              testItemId={harness.testItemId}
             />
           ) : null}
 
