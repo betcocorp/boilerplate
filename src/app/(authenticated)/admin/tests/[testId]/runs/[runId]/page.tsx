@@ -4,7 +4,6 @@ import { connection } from 'next/server';
 
 import { AdminTestsActionToast } from '~/components/admin/tests/AdminTestsActionToast';
 import { ResultItemMessageCell } from '~/components/admin/tests/ResultItemMessageCell';
-import { RetrievedChunksPreview } from '~/components/admin/tests/RetrievedChunksPreview';
 import { RunAtAGlanceCharts } from '~/components/admin/tests/RunAtAGlanceCharts';
 import { RunExecutionProgress } from '~/components/admin/tests/RunExecutionProgress';
 import {
@@ -23,14 +22,6 @@ import {
 } from '~/components/admin/tests/TestRunNotesSection';
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from '~/components/ui/dialog';
 import {
   TableBody,
   TableCell,
@@ -214,11 +205,27 @@ export default async function AdminTestRunDetailsPage({
     (item) => item.elapsed_ms > 10_000,
   ).length;
   const notPassedItemCount = resultItems.filter((item) => !item.passed).length;
+  /**
+   * B0-419 — the run each execution produced. Prefer the real `workflow_run_id` column (B0-416,
+   * backfilled) over re-extracting it from `response_payload`; the payload read stays only as a
+   * fallback for any row the backfill could not reach. Null is expected and common: search-eval
+   * rows have their own page, error rows never produced a run, and deleting a workflow run nulls
+   * this via `ON DELETE SET NULL`.
+   */
+  const workflowRunIdByResultItemId = new Map(
+    resultItems.map(
+      (item) =>
+        [
+          item.id,
+          item.workflow_run_id ?? extractWorkflowRunId(item.response_payload),
+        ] as const,
+    ),
+  );
   const workflowRunIds = Array.from(
     new Set(
-      resultItems
-        .map((item) => extractWorkflowRunId(item.response_payload))
-        .filter((value): value is string => Boolean(value)),
+      Array.from(workflowRunIdByResultItemId.values()).filter(
+        (value): value is string => Boolean(value),
+      ),
     ),
   );
   const workflowRuns = await listWorkflowRunsByIds(workflowRunIds);
@@ -247,7 +254,7 @@ export default async function AdminTestRunDetailsPage({
       elapsed: formatDurationSeconds(row.elapsed_ms),
       model:
         modelByWorkflowRunId.get(
-          extractWorkflowRunId(row.response_payload) || '',
+          workflowRunIdByResultItemId.get(row.id) || '',
         ) ?? 'n/a',
       agent: extractRoutingDecision(row.response_payload) ?? 'n/a',
       rounds_cache_search: formatTimingBreakdownLabel(row.response_payload),
@@ -283,7 +290,7 @@ export default async function AdminTestRunDetailsPage({
         },
         items: chronologicalItems.map((row): RunExportItem => {
           const modelTag = modelByWorkflowRunId.get(
-            extractWorkflowRunId(row.response_payload) || '',
+            workflowRunIdByResultItemId.get(row.id) || '',
           );
           return {
             row_index: row.row_index,
@@ -493,7 +500,7 @@ export default async function AdminTestRunDetailsPage({
                   <TableHead>Agent</TableHead>
                   <TableHead>Rounds | Cache | Elapsed</TableHead>
                   <TableHead>Message</TableHead>
-                  <TableHead>History</TableHead>
+                  <TableHead>Trace</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -518,12 +525,19 @@ export default async function AdminTestRunDetailsPage({
                         null;
                       const itemPriority =
                         priorityByItemId.get(row.test_item_id) ?? null;
+                      const rowWorkflowRunId =
+                        workflowRunIdByResultItemId.get(row.id) ?? null;
+                      const itemHistoryHref = `/admin/tests/${test.id}/items/${row.test_item_id}`;
                       return (
                         <TableRow id={`run-item-result-${row.id}`} key={row.id}>
+                          {/* Row index and prompt are the *column* axis: this prompt over time.
+                              They stay on item history — only the Trace column drills into this
+                              single execution. */}
                           <TableCell>
                             <Link
                               className="text-sky-700 underline-offset-2 hover:underline"
-                              href={`/admin/tests/${test.id}/items/${row.test_item_id}`}
+                              href={itemHistoryHref}
+                              title="This prompt's outcomes across every run"
                             >
                               {row.row_index}
                             </Link>
@@ -540,7 +554,8 @@ export default async function AdminTestRunDetailsPage({
                             ) : null}
                             <Link
                               className="text-sky-700 underline-offset-2 hover:underline"
-                              href={`/admin/tests/${test.id}/items/${row.test_item_id}`}
+                              href={itemHistoryHref}
+                              title="This prompt's outcomes across every run"
                             >
                               {promptByItemId.get(row.test_item_id) || 'n/a'}
                             </Link>
@@ -598,8 +613,7 @@ export default async function AdminTestRunDetailsPage({
                           <TableCell>
                             <Badge variant="outline">
                               {modelByWorkflowRunId.get(
-                                extractWorkflowRunId(row.response_payload) ||
-                                  '',
+                                rowWorkflowRunId || '',
                               ) || 'n/a'}
                             </Badge>
                           </TableCell>
@@ -624,36 +638,27 @@ export default async function AdminTestRunDetailsPage({
                               responseText={row.response_text}
                             />
                           </TableCell>
+                          {/* B0-419 — this cell is the *cell* axis: this one execution. The
+                              retired "Docs" dialog is no longer needed, since B0-418 renders the
+                              retrieved chunks on the trace itself. When no workflow run was
+                              recorded, fall back to item history rather than 404 on a null id. */}
                           <TableCell>
-                            <div className="flex items-center gap-2">
-                              <Dialog>
-                                <DialogTrigger asChild>
-                                  <Button variant="outline">Docs</Button>
-                                </DialogTrigger>
-                                <DialogContent>
-                                  <DialogHeader>
-                                    <DialogTitle>Document chunks</DialogTitle>
-                                    <DialogDescription>
-                                      Chunks retrieved from rag search.
-                                    </DialogDescription>
-                                  </DialogHeader>
-                                  <div className="-mx-4 no-scrollbar max-h-[50vh] overflow-y-auto px-4">
-                                    <RetrievedChunksPreview
-                                      chunks={extractRetrievedDocumentChunks(
-                                        row.response_payload,
-                                      )}
-                                    />
-                                  </div>
-                                </DialogContent>
-                              </Dialog>
-                              <Button asChild size="sm" variant="outline">
-                                <Link
-                                  href={`/admin/tests/${test.id}/items/${row.test_item_id}`}
-                                >
-                                  View
-                                </Link>
-                              </Button>
-                            </div>
+                            <Button asChild size="sm" variant="outline">
+                              <Link
+                                href={
+                                  rowWorkflowRunId
+                                    ? `/admin/observability/${rowWorkflowRunId}`
+                                    : itemHistoryHref
+                                }
+                                title={
+                                  rowWorkflowRunId
+                                    ? 'Full trace for this execution'
+                                    : 'No workflow run was recorded for this execution — showing this prompt’s history instead'
+                                }
+                              >
+                                View
+                              </Link>
+                            </Button>
                           </TableCell>
                         </TableRow>
                       );
