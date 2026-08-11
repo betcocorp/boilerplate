@@ -77,12 +77,18 @@ function StatTile({
   value,
   hint,
   tone = 'default',
+  compact = false,
 }: {
   label: string;
   value: string;
   hint?: string;
   /** `warning` marks a number that should normally be zero (B0-371 orphaned runs). */
   tone?: 'default' | 'warning';
+  /**
+   * Steps the value down a size so a two-number reading (B0-430's `TTFT / elapsed`) stays on
+   * one line in a tile sized for a single number.
+   */
+  compact?: boolean;
 }) {
   const warn = tone === 'warning';
   return (
@@ -103,11 +109,11 @@ function StatTile({
         {label}
       </p>
       <p
-        className={
-          warn
-            ? 'mt-2 text-2xl font-semibold tabular-nums text-amber-900'
-            : 'mt-2 text-2xl font-semibold tabular-nums text-slate-950'
-        }
+        className={[
+          'mt-2 font-semibold tabular-nums',
+          compact ? 'whitespace-nowrap text-lg' : 'text-2xl',
+          warn ? 'text-amber-900' : 'text-slate-950',
+        ].join(' ')}
       >
         {value}
       </p>
@@ -176,8 +182,8 @@ export function AggregateDashboard({ data }: { data: AggregateDashboardData }) {
         </p>
       </div>
 
-      {/* Headline numbers */}
-      <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-6">
+      {/* Headline numbers — one equal-width row at lg (7 tiles since B0-430). */}
+      <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-7">
         <StatTile label="Total runs" value={String(data.totalRuns)} />
         <StatTile
           hint={
@@ -214,6 +220,18 @@ export function AggregateDashboard({ data }: { data: AggregateDashboardData }) {
           label="Orphaned"
           tone={data.orphanedRuns > 0 ? 'warning' : 'default'}
           value={String(data.orphanedRuns)}
+        />
+        {/*
+          B0-430 — run-level latency headline in a single tile, reading in the same order as the
+          runs table's "Stream" then "Duration" columns.
+        */}
+        <StatTile
+          compact
+          hint={`TTFT over ${data.ttftSampleSize} run${data.ttftSampleSize === 1 ? '' : 's'} that recorded a first token · elapsed over ${data.durationSampleSize} finished run${data.durationSampleSize === 1 ? '' : 's'}`}
+          label="Avg TTFT / elapsed"
+          value={`${data.avgTtftMs === null ? 'n/a' : formatMs(data.avgTtftMs)} / ${
+            data.avgDurationMs === null ? 'n/a' : formatMs(data.avgDurationMs)
+          }`}
         />
       </div>
 

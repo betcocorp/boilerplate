@@ -221,6 +221,21 @@ export type AggregateDashboardData = {
    * sweeper is not running.
    */
   orphanedRuns: number;
+  /**
+   * B0-430 — mean time to first assistant token across runs in the window, using the same
+   * source precedence as the runs table's "Stream" column (`ttftMs` above). Null when no run
+   * in the window recorded a first token; `ttftSampleSize` says how many did, so a partial
+   * window (runs predating the B0-428/B0-429 instrumentation) is visible rather than silent.
+   */
+  avgTtftMs: number | null;
+  ttftSampleSize: number;
+  /**
+   * B0-430 — mean wall-clock run duration (`updated_at - created_at`) over runs that have
+   * *finished*. Runs still `running` are excluded: their `updated_at` is the last progress
+   * write, not an end time. `durationSampleSize` is that finished-run count.
+   */
+  avgDurationMs: number | null;
+  durationSampleSize: number;
   routingDistribution: RoutingDistributionDatum[];
   confidenceBuckets: ConfidenceBucketDatum[];
   latencyByStep: LatencyByStepDatum[];

@@ -19,6 +19,10 @@
  */
 
 import {
+  type HarnessRunIndex,
+  indexHarnessWorkflowRuns,
+} from '~/lib/observability/runs-repository';
+import {
   DEFAULT_STALE_AFTER_MS,
   isStalled,
 } from '~/lib/observability/stalled-run-sweeper';
@@ -58,6 +62,12 @@ const CONFIDENCE_MID_MIN = 0.5;
 /** Bucket label for runs whose `final_output` carries no `routingDecision`. */
 const UNROUTED_LABEL = 'unrouted';
 
+/**
+ * B0-430 — `workflow_runs.status` values for which `updated_at` is a real end time. A run still
+ * `running` is excluded from the elapsed average; see `buildAvgDurationMs`.
+ */
+const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed']);
+
 export type AggregateWindow = {
   /** ISO timestamp, inclusive. */
   from: string;
@@ -72,6 +82,8 @@ type RunScanRow = {
   created_at: string;
   updated_at: string;
   routing_decision: string | null;
+  /** B0-430 — `->>` yields text, so this is parsed by `parseTtftMs` rather than used directly. */
+  ttft_ms: string | null;
 };
 
 type StepScanRow = {
@@ -117,10 +129,12 @@ async function scanWorkflowRuns(window: AggregateWindow): Promise<RunScanRow[]> 
   for (let page = 0; page < MAX_SCAN_PAGES; page += 1) {
     const start = page * SCAN_PAGE_SIZE;
     // `final_output` also holds the answer text and retrieved chunks, so pull
-    // only the routing decision out of it rather than the whole JSON blob.
+    // only the routing decision and TTFT out of it rather than the whole JSON blob.
     const { data, error } = await supabase
       .from('workflow_runs')
-      .select('id,status,confidence,created_at,updated_at,routing_decision:final_output->>routingDecision')
+      .select(
+        'id,status,confidence,created_at,updated_at,routing_decision:final_output->>routingDecision,ttft_ms:final_output->timingBreakdown->>ttftMs',
+      )
       .gte('created_at', window.from)
       .lte('created_at', window.to)
       .order('created_at', { ascending: true })
@@ -320,6 +334,75 @@ function buildLatencyByStep(steps: StepScanRow[]): LatencyByStepDatum[] {
     .sort((a, b) => b.avgDurationMs - a.avgDurationMs || a.stepName.localeCompare(b.stepName));
 }
 
+/** A mean plus the number of runs it was taken over, so a thin sample is never hidden. */
+type MeanMsDatum = { mean: number | null; sampleSize: number };
+
+function meanMs(values: number[]): MeanMsDatum {
+  if (values.length === 0) {
+    return { mean: null, sampleSize: 0 };
+  }
+  const total = values.reduce((sum, value) => sum + value, 0);
+  return { mean: Math.round(total / values.length), sampleSize: values.length };
+}
+
+/** `final_output->timingBreakdown->>ttftMs` arrives as text; mirrors `readTtftMs`'s guards. */
+function parseTtftMs(raw: string | null): number | null {
+  if (raw === null) {
+    return null;
+  }
+  const parsed = Number.parseFloat(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+/**
+ * B0-430 — mean time to first assistant token over the window.
+ *
+ * Resolves each run exactly as the runs table's "Stream" column does (`toListRow` in
+ * `~/lib/observability/runs-repository.ts`): the run's own `timingBreakdown.ttftMs` first, then
+ * the harness's `test_result_items.ttft_ms`. The fallback is load-bearing, not cosmetic — most
+ * runs predating the B0-429 instrumentation only have the harness value, so dropping it would
+ * make this tile disagree with the column directly beneath it.
+ */
+function buildAvgTtftMs(runs: RunScanRow[], harnessTtft: HarnessRunIndex): MeanMsDatum {
+  const values: number[] = [];
+
+  for (const run of runs) {
+    const ttft = parseTtftMs(run.ttft_ms) ?? harnessTtft.get(run.id) ?? null;
+    if (ttft !== null) {
+      values.push(ttft);
+    }
+  }
+
+  return meanMs(values);
+}
+
+/**
+ * B0-430 — mean wall-clock run duration, over finished runs only.
+ *
+ * `updated_at` is an end time only once a run has stopped: while it is `running` that column is
+ * the last progress write, and for an orphaned run (see `countOrphanedRuns`) it can be hours or
+ * days stale. Averaging those in would drag the number around for reasons that have nothing to do
+ * with how long runs actually take, so in-flight runs are left out instead of counted as fast.
+ */
+function buildAvgDurationMs(runs: RunScanRow[]): MeanMsDatum {
+  const values: number[] = [];
+
+  for (const run of runs) {
+    if (!TERMINAL_RUN_STATUSES.has(run.status)) {
+      continue;
+    }
+    const started = Date.parse(run.created_at);
+    const ended = Date.parse(run.updated_at);
+    // Same guard as `durationMsBetween`: drop unparseable or inverted spans.
+    if (!Number.isFinite(started) || !Number.isFinite(ended) || ended < started) {
+      continue;
+    }
+    values.push(ended - started);
+  }
+
+  return meanMs(values);
+}
+
 /**
  * B0-371 — runs still `running` past the sweeper's staleness threshold, i.e. orphaned
  * records with no terminal row. Folded from the rows already scanned above, so this
@@ -385,10 +468,18 @@ export async function getAggregateDashboardData(
   const runs = await scanWorkflowRuns(window);
   const runIds = new Set(runs.map((run) => run.id));
 
-  const [steps, humanReviewCount] = await Promise.all([
+  const [steps, humanReviewCount, harnessTtft] = await Promise.all([
     scanWorkflowSteps(window, runIds),
     countHumanReviewRuns(window, runIds),
+    // Padded like the other child scans: a harness item is written after the run it belongs to.
+    indexHarnessWorkflowRuns(
+      shiftIso(window.from, -CHILD_WINDOW_PADDING_MS),
+      shiftIso(window.to, CHILD_WINDOW_PADDING_MS),
+    ),
   ]);
+
+  const avgTtft = buildAvgTtftMs(runs, harnessTtft);
+  const avgDuration = buildAvgDurationMs(runs);
 
   const confidences = runs
     .map((run) => run.confidence)
@@ -406,6 +497,10 @@ export async function getAggregateDashboardData(
         : null,
     humanReviewCount,
     orphanedRuns: countOrphanedRuns(runs, Date.now()),
+    avgTtftMs: avgTtft.mean,
+    ttftSampleSize: avgTtft.sampleSize,
+    avgDurationMs: avgDuration.mean,
+    durationSampleSize: avgDuration.sampleSize,
     routingDistribution: buildRoutingDistribution(runs),
     confidenceBuckets: buildConfidenceBuckets(runs),
     latencyByStep: buildLatencyByStep(steps),

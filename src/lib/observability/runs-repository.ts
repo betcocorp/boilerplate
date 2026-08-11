@@ -163,9 +163,14 @@ function toListRow(
  * that item recorded no streamed delta). Built in one scan so run-source tagging and the "Stream"
  * column fallback (B0-428) share it.
  */
-type HarnessRunIndex = Map<string, number | null>;
+export type HarnessRunIndex = Map<string, number | null>;
 
-async function indexHarnessWorkflowRuns(
+/**
+ * Exported for `~/lib/observability/aggregates.ts` (B0-430), so the dashboard's average-TTFT tile
+ * resolves each run's TTFT through exactly the same precedence as the "Stream" column here.
+ * Callers pad the window themselves — see `HARNESS_WINDOW_PADDING_MS`.
+ */
+export async function indexHarnessWorkflowRuns(
   from: string,
   to: string,
 ): Promise<HarnessRunIndex> {
