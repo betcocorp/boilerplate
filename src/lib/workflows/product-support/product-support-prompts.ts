@@ -56,20 +56,48 @@ When retrieval returns no relevant results, fails, or you cannot find specific B
 - Use only this exact phrase — nothing before it, nothing after it.
 `;
 
+/**
+ * B0-392 — the five specialist policies this workflow can run, as ids.
+ *
+ * `SPECIALIST_SYSTEM_PROMPTS` is keyed by this type, so a new specialist cannot be added to the
+ * routing enum without also giving it a prompt (or failing to compile).
+ */
+export const EFFECTIVE_PROMPT_IDS = [
+  'bathroom',
+  'dilution',
+  'floor',
+  'product',
+  'recommendations',
+] as const;
+
+export type EffectivePromptId = (typeof EFFECTIVE_PROMPT_IDS)[number];
+
+const SPECIALIST_SYSTEM_PROMPTS: Record<EffectivePromptId, string> = {
+  bathroom: BATHROOM_SPECIALIST_SYSTEM_PROMPT,
+  dilution: DILUTION_SPECIALIST_SYSTEM_PROMPT,
+  floor: FLOOR_SPECIALIST_SYSTEM_PROMPT,
+  product: PRODUCT_SPECIALIST_SYSTEM_PROMPT,
+  recommendations: RECOMMENDATIONS_SPECIALIST_SYSTEM_PROMPT,
+};
+
+/**
+ * B0-392 — which specialist policy a routing decision ACTUALLY selects.
+ *
+ * `routingDecision` is `'ambiguous'` whenever `routeUserMessageToSme` returned no agent (empty
+ * message, or zero keyword hits), and every unknown decision falls through to the PRODUCT policy.
+ * So "ambiguous" never means "no agent policy was applied" — it means "product specialist, by
+ * default". This is the single source of that mapping: `systemPromptForDecision` (which picks the
+ * prompt) and `computePromptVersion` (which stamps its hash) both derive from it, so the label the
+ * UI shows cannot drift from the prompt that ran.
+ */
+export function effectivePromptIdForDecision(decision: string): EffectivePromptId {
+  return (EFFECTIVE_PROMPT_IDS as readonly string[]).includes(decision)
+    ? (decision as EffectivePromptId)
+    : 'product';
+}
+
 function systemPromptForDecision(decision: string) {
-  if (decision === 'bathroom') {
-    return BATHROOM_SPECIALIST_SYSTEM_PROMPT;
-  }
-  if (decision === 'dilution') {
-    return DILUTION_SPECIALIST_SYSTEM_PROMPT;
-  }
-  if (decision === 'floor') {
-    return FLOOR_SPECIALIST_SYSTEM_PROMPT;
-  }
-  if (decision === 'recommendations') {
-    return RECOMMENDATIONS_SPECIALIST_SYSTEM_PROMPT;
-  }
-  return PRODUCT_SPECIALIST_SYSTEM_PROMPT;
+  return SPECIALIST_SYSTEM_PROMPTS[effectivePromptIdForDecision(decision)];
 }
 
 /**

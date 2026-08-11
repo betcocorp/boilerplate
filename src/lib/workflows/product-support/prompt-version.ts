@@ -7,9 +7,11 @@ import { RECOMMENDATIONS_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/recommend
 import { productSupportTools } from '~/lib/tools/definitions';
 import {
   BATHROOM_SPECIALIST_SYSTEM_PROMPT,
+  effectivePromptIdForDecision,
   PRODUCT_SUPPORT_PREAMBLE,
   PRODUCT_SUPPORT_SHARED_INSTRUCTIONS,
   VALIDATOR_SYSTEM_PROMPT,
+  type EffectivePromptId,
 } from '~/lib/workflows/product-support/product-support-prompts';
 
 /**
@@ -51,13 +53,14 @@ const FIELD_SEPARATOR = '\u001f';
 /** Default number of hex characters used for the display/short form of a hash. */
 export const SHORT_HASH_LENGTH = 6;
 
-/** The five specialist policies the product-support workflow can run. */
-export type SpecialistPromptId =
-  | 'bathroom'
-  | 'dilution'
-  | 'floor'
-  | 'product'
-  | 'recommendations';
+/**
+ * The five specialist policies the product-support workflow can run.
+ *
+ * B0-392 — an alias of `EffectivePromptId`: the id that selects the prompt and the id that stamps
+ * its hash are the same value from the same mapping, so `effectivePromptId` and `promptVersion`
+ * cannot disagree about which policy ran.
+ */
+export type SpecialistPromptId = EffectivePromptId;
 
 /** Specialist policy texts, injectable so the hashing properties are testable without editing source. */
 export type SpecialistPromptTexts = Record<SpecialistPromptId, string>;
@@ -86,19 +89,13 @@ const SPECIALIST_PROMPT_IDS: readonly SpecialistPromptId[] = [
 ];
 
 /**
- * Mirrors the module-local `systemPromptForDecision` fallthrough in `product-support-prompts.ts`:
- * anything that is not a known specialist (including `'ambiguous'` and an empty decision) runs the
- * PRODUCT policy, so it must hash to the product specialist's `promptVersion`.
- * (B0-392 will expose this mapping publicly as `effectivePromptId`; kept private here so the two
- * tickets do not collide on a name.)
+ * B0-392 — was a private mirror of the `systemPromptForDecision` fallthrough; now the SAME function
+ * that picks the prompt (`effectivePromptIdForDecision` in `product-support-prompts.ts`). Anything
+ * that is not a known specialist (including `'ambiguous'` and an empty decision) runs the PRODUCT
+ * policy, so it hashes to the product specialist's `promptVersion` — and a change to that
+ * fallthrough can no longer move the prompt without moving the stamp.
  */
-function specialistIdForDecision(decision: string): SpecialistPromptId {
-  if (decision === 'bathroom') return 'bathroom';
-  if (decision === 'dilution') return 'dilution';
-  if (decision === 'floor') return 'floor';
-  if (decision === 'recommendations') return 'recommendations';
-  return 'product';
-}
+const specialistIdForDecision = effectivePromptIdForDecision;
 
 /**
  * Deterministic JSON: object keys are sorted (recursively), so key ORDER in the source never

@@ -54,6 +54,12 @@ const STEP_LABELS: Record<string, string> = {
   early_decline_gate: 'Early decline gate',
   openai_responses_agent: 'Agent generation (tool loop)',
   validator: 'Validator',
+  /**
+   * B0-389 — the revision pass got its own step (its own prompt, model and output). Like
+   * `early_decline_gate` it is deliberately absent from `CANONICAL_STEP_SEQUENCE`: it only runs when
+   * the validator disapproves, so it must never be projected as "not reached".
+   */
+  revision: 'Revision pass',
 };
 
 const GATE_LABELS: Record<ConfidenceGateKind, string> = {
@@ -132,6 +138,21 @@ function mapStepStatus(rawStatus: string): TimelineEventStatus {
     return 'ok';
   }
   return 'running';
+}
+
+/**
+ * B0-389 — a step that was inserted but never called a model persists `{ skipped: true, reason }`
+ * (today: the validator on the `useValidator === false` path). Say so in the label, so a bypassed
+ * validator is never read as one that ran.
+ */
+function buildStepLabel(step: WorkflowStepRow): string {
+  const base = STEP_LABELS[step.step_name] ?? step.step_name;
+  const output = asRecord(step.output);
+  if (readBoolean(output, 'skipped') !== true) {
+    return base;
+  }
+  const reason = readString(output, 'reason');
+  return reason ? `${base} — skipped (${reason})` : `${base} — skipped`;
 }
 
 /** Anything longer than this in a step `detail` is the agent's tool trace, surfaced separately. */
@@ -359,6 +380,12 @@ function buildReconstructedToolCallEvent(input: {
     // Unrecoverable by design — the renderer shows "not captured for this run".
     argumentsPreview: null,
     outputPreview: null,
+    // B0-390 fields, all unknown on a reconstructed call: `audit_logs` never carried the
+    // origin, and with no preview persisted there is nothing that could have been cut.
+    // Null (not false) so the UI says "unknown" rather than asserting "not truncated".
+    origin: null,
+    argumentsTruncated: null,
+    outputTruncated: null,
     ok: call.ok,
     errorMessage: call.errorMessage,
     auditArgumentsPreview: call.argumentsPreview,
@@ -482,7 +509,7 @@ export function buildRunTimeline(
       stepId: step.id,
       stepName: step.step_name,
       rawStatus: step.status,
-      label: STEP_LABELS[step.step_name] ?? step.step_name,
+      label: buildStepLabel(step),
       at: step.started_at,
       startedAt: step.started_at,
       completedAt: step.completed_at,
@@ -521,6 +548,10 @@ export function buildRunTimeline(
         // B0-363 — diagnostics persisted on the `tool_failed` audit row.
         errorMessage: facts?.errorMessage ?? null,
         auditArgumentsPreview: facts?.argumentsPreview ?? null,
+        // B0-390 — attribution + truncation flags; null on rows written before they existed.
+        origin: entry.origin ?? null,
+        argumentsTruncated: entry.argumentsTruncated ?? null,
+        outputTruncated: entry.outputTruncated ?? null,
         label: `Tool: ${entry.toolName}`,
         // Forced tool calls (e.g. the cross-reference safety-net search) bypass
         // writeAuditLog, so fall back to the step's own start time.
@@ -531,6 +562,13 @@ export function buildRunTimeline(
           argumentsPreview: entry.argumentsPreview,
           outputPreview: entry.outputPreview,
           ok: entry.ok,
+          ...(entry.origin ? { origin: entry.origin } : {}),
+          ...(entry.argumentsTruncated === undefined
+            ? {}
+            : { argumentsTruncated: entry.argumentsTruncated }),
+          ...(entry.outputTruncated === undefined
+            ? {}
+            : { outputTruncated: entry.outputTruncated }),
           ...(facts?.errorMessage ? { errorMessage: facts.errorMessage } : {}),
           ...(facts?.argumentsPreview
             ? { auditArgumentsPreview: facts.argumentsPreview }

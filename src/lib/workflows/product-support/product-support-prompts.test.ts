@@ -8,7 +8,13 @@ import { PRODUCT_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/product-specialis
 import {
   buildProductSupportInstructions,
   buildProductSupportPromptCacheKey,
+  EFFECTIVE_PROMPT_IDS,
+  effectivePromptIdForDecision,
 } from '~/lib/workflows/product-support/product-support-prompts';
+import {
+  computePromptVersion,
+  PRODUCT_SUPPORT_SPECIALIST_PROMPTS as SPECIALIST_PROMPT_TEXTS,
+} from '~/lib/workflows/product-support/prompt-version';
 
 const baseRouting = {
   rationale: 'test rationale',
@@ -139,5 +145,38 @@ describe('buildProductSupportInstructions — prompt-cache stable prefix (B0-324
     expect(
       buildProductSupportPromptCacheKey({ mode: 'recommendations', decision: 'recommendations' }),
     ).not.toBe(key);
+  });
+});
+
+describe('effectivePromptIdForDecision (B0-392)', () => {
+  it('maps each specialist decision to its own prompt id', () => {
+    for (const id of EFFECTIVE_PROMPT_IDS) {
+      expect(effectivePromptIdForDecision(id)).toBe(id);
+    }
+  });
+
+  it('resolves the ambiguous fallthrough to the product specialist', () => {
+    // `routeUserMessageToSme` returns no agent for an empty or zero-signal message, the workflow
+    // labels that `ambiguous`, and prompt assembly then falls through to the PRODUCT policy. The
+    // label says "ambiguous"; the prompt that ran is the product specialist's.
+    expect(effectivePromptIdForDecision('ambiguous')).toBe('product');
+    expect(effectivePromptIdForDecision('')).toBe('product');
+    expect(effectivePromptIdForDecision('not-a-specialist')).toBe('product');
+  });
+
+  it('is the same mapping the assembled instructions and the prompt-version stamp use', () => {
+    for (const decision of ['ambiguous', 'bathroom', 'floor', 'not-a-specialist']) {
+      const effective = effectivePromptIdForDecision(decision);
+
+      // The assembled prompt for the decision equals the assembled prompt for its effective id…
+      expect(
+        buildProductSupportInstructions({
+          mode: 'orchestrator',
+          routing: { ...baseRouting, decision },
+        }).includes(SPECIALIST_PROMPT_TEXTS[effective]),
+      ).toBe(true);
+      // …and so does the hash stamped alongside it.
+      expect(computePromptVersion(decision)).toBe(computePromptVersion(effective));
+    }
   });
 });

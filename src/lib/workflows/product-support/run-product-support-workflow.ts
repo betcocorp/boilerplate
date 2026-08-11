@@ -1,6 +1,6 @@
 import { getErrorMessage } from '~/lib/utils';
 import { createAuditLogQueue } from '~/lib/audit/audit-log-queue';
-import type { ToolTraceEntry } from '~/lib/audit/trace';
+import type { ToolCallOrigin, ToolTraceEntry } from '~/lib/audit/trace';
 import {
   DEFAULT_BEX_CHAT_AGENT_MODE,
   type BexChatAgentMode,
@@ -22,19 +22,33 @@ import { logError, logInfo } from '~/lib/observability/logger';
 import { getOpenAIClient, resolveResponsesModel } from '~/lib/openai/client';
 import { runResponsesWithToolLoop } from '~/lib/openai/responses-runtime';
 import { runAiSdkWithToolLoop } from '~/lib/bex/ai-sdk-runtime';
-import { routeUserMessageToSme } from '~/lib/orchestrator/sme-routing';
-import { evaluateRecommendationGate } from '~/lib/recommendations/recommendation-gate';
+import {
+  routeUserMessageToSme,
+  SME_ROUTE_MIN_HITS_TO_ROUTE,
+  SME_ROUTE_TIE_BREAK_ORDER,
+} from '~/lib/orchestrator/sme-routing';
+import {
+  CATEGORY_MISMATCH_CONFIDENCE_CAP,
+  evaluateRecommendationGate,
+  LOW_SIMILARITY_CONFIDENCE_CAP,
+  LOW_SIMILARITY_THRESHOLD,
+  MISSING_BRAND_CONFIDENCE_CAP,
+} from '~/lib/recommendations/recommendation-gate';
 import {
   lookupCrossReference,
   fetchRecommendationContext,
 } from '~/lib/tools/cross-reference-lookup';
 import { buildCompetitiveRecommendationAnswer } from '~/lib/recommendations/recommendation-answer';
 import { productSupportToolsForRoute } from '~/lib/tools/definitions';
-import { executeToolCall } from '~/lib/tools/execute-tool-call';
+import { buildToolTraceEntry, executeToolCall } from '~/lib/tools/execute-tool-call';
+
+import type { Json } from '~/types/supabase.public';
 
 import {
   buildProductSupportInstructions,
   buildProductSupportPromptCacheKey,
+  effectivePromptIdForDecision,
+  VALIDATOR_SYSTEM_PROMPT,
 } from '~/lib/workflows/product-support/product-support-prompts';
 import {
   buildPreloadedEvidence,
@@ -43,12 +57,24 @@ import {
   runSpeculativeRetrieval,
 } from '~/lib/workflows/product-support/speculative-retrieval';
 import {
+  gateRecordSchema,
+  promptRecordSchema,
+  type AnswerProvenance,
+  type GateRecord,
+  type PromptRecord,
   type ProductSupportFinalOutput,
   type RetrievedDocumentChunkRef,
   type ValidatorResult,
 } from '~/lib/workflows/product-support/product-support-schemas';
 import {
+  computePromptVersion,
+  PROMPT_BUNDLE_VERSION,
+} from '~/lib/workflows/product-support/prompt-version';
+import {
   evaluateRegulatedClaimGrounding,
+  resolveRevisionModel,
+  resolveValidatorModel,
+  REVISION_SYSTEM_PROMPT,
   runRevisionPass,
   runValidatorPass,
 } from '~/lib/workflows/product-support/validator';
@@ -216,12 +242,22 @@ function isEarlyDeclineGateEnabled() {
   return process.env.BEX_EARLY_DECLINE_GATE_ENABLED !== 'false';
 }
 
+/** Closed set of early-decline reasons, in the order `classifyEarlyDecline` tests them. */
+export const EARLY_DECLINE_REASONS = [
+  'chemical_mixing_or_safety',
+  'legal_or_compliance',
+  'storage_or_expiration',
+  'broad_recommendation_without_context',
+] as const;
+
+/**
+ * Confidence reported for a policy decline. Fixed text, no retrieval, no model call — high by
+ * construction, and recorded as the applied threshold on the `early_decline_gate` gate record.
+ */
+export const EARLY_DECLINE_CONFIDENCE = 0.92;
+
 export type EarlyDeclineDecision = {
-  reason:
-    | 'chemical_mixing_or_safety'
-    | 'legal_or_compliance'
-    | 'storage_or_expiration'
-    | 'broad_recommendation_without_context';
+  reason: (typeof EARLY_DECLINE_REASONS)[number];
   text: string;
 };
 
@@ -879,6 +915,40 @@ function buildCrossReferenceSearchArgs(input: {
 }
 
 /**
+ * B0-389 — the `{ prompt }` fragment for a step's `input`, spread in at INSERT time: all three
+ * prompts are known before their step row exists, so nothing needs to update `input` later.
+ *
+ * `parse` rather than `safeParse` — the record is constructed here from local values, so a shape
+ * mismatch is a bug in this file, not untrusted data.
+ */
+export function recordPrompt(record: PromptRecord): { prompt: PromptRecord } {
+  return { prompt: promptRecordSchema.parse(record) };
+}
+
+/**
+ * B0-391 — the `{ gates }` fragment for a step's `output`.
+ *
+ * Returns `{}` for an empty list, so a gate that did NOT run is ABSENT from the persisted row
+ * rather than present-and-empty (an empty array reads as "evaluated, nothing to say", which is a
+ * different claim). `parse`, like `recordPrompt`: these records are built from local values, so a
+ * shape mismatch is a bug in this file.
+ */
+export function recordGates(records: readonly GateRecord[]): { gates?: GateRecord[] } {
+  if (records.length === 0) {
+    return {};
+  }
+  return { gates: records.map((record) => gateRecordSchema.parse(record)) };
+}
+
+/**
+ * B0-389 — the single spelling for "the validator pass did not run". The bypassed path used to say
+ * `reason: 'temporary_test_bypass'` on the step while putting `validator_bypassed_for_testing` in
+ * `validation.issues`, so the same state had two names. The issues token is load-bearing (the
+ * observability timeline's `validator_bypass` gate keys off it), so it is the one that survives.
+ */
+export const VALIDATOR_BYPASS_REASON = 'validator_bypassed_for_testing';
+
+/**
  * B0-386 — `error.reason` written on a step that was still `running` but is not the step the
  * throw came from, so a trace reader can tell "this is where it broke" from "this never got to
  * run". Steps must never be left `running` once the workflow returns or throws.
@@ -897,9 +967,18 @@ export const ABANDONED_WORKFLOW_STEP_REASON = 'abandoned_after_workflow_failure'
 export async function failOpenWorkflowSteps(
   openStepIds: readonly string[],
   message: string,
+  /**
+   * B0-390 — output to write on a still-open step as it is failed, keyed by step id. Used to keep
+   * the partial tool trace of a run that threw mid-generation, which is exactly the run worth
+   * inspecting. Only ever ADDS an output to a step that is still open (and therefore has none):
+   * B0-386's rule holds — a step that already completed is not in `openStepIds`, and any step with
+   * no entry here has the `output` key omitted from its patch rather than nulled.
+   */
+  partialOutputByStepId: ReadonlyMap<string, Json> = new Map(),
 ): Promise<void> {
   const mostRecentFirst = [...openStepIds].reverse();
   for (const [index, stepId] of mostRecentFirst.entries()) {
+    const partialOutput = partialOutputByStepId.get(stepId);
     await completeWorkflowStep(stepId, {
       status: 'failed',
       error: jsonContent(
@@ -907,6 +986,7 @@ export async function failOpenWorkflowSteps(
           ? { message }
           : { message, reason: ABANDONED_WORKFLOW_STEP_REASON },
       ),
+      ...(partialOutput !== undefined ? { output: partialOutput } : {}),
     });
   }
 }
@@ -932,6 +1012,8 @@ export async function runProductSupportWorkflow(input: {
   const useAiSdkGeneration = process.env.BEX_AI_SDK_GENERATION_ENABLED === 'true';
   const agentMode = input.agentMode ?? DEFAULT_BEX_CHAT_AGENT_MODE;
   const route = routeUserMessageToSme(input.userMessage);
+  // B0-389 — read once so the flag recorded as run config is the same value the gate below used.
+  const earlyDeclineGateEnabled = isEarlyDeclineGateEnabled();
   const earlyDeclineDecision = classifyEarlyDecline(input.userMessage);
   const routingDecision =
     agentMode === 'orchestrator'
@@ -974,8 +1056,60 @@ export async function runProductSupportWorkflow(input: {
    */
   const routeTools = productSupportToolsForRoute(routingDecision);
 
+  /**
+   * B0-392 — the specialist policy that ACTUALLY ran, which is not always `routingDecision`:
+   * `'ambiguous'` (and any unknown decision) falls through to the product specialist, so a UI
+   * showing only "ambiguous" implies no agent policy was applied, which is false. Derived from the
+   * same function `buildProductSupportInstructions` used to pick the prompt above.
+   */
+  const effectivePromptId = effectivePromptIdForDecision(routingDecision);
+  /** B0-393/B0-388 — stamps for the prompt that ran; keyed off the same decision as the prompt. */
+  const promptVersion = computePromptVersion(routingDecision);
+
+  /**
+   * B0-391 — the keyword-routing gate: five scores, the phrases behind them, and which branch
+   * decided. In `orchestrator` mode the verdict IS the branch taken (`no_signal` is the state the
+   * workflow relabels `ambiguous`); in a forced direct mode the scores were computed but did not
+   * decide, and saying so is the point of recording the gate at all.
+   */
+  const keywordRoutingGate: GateRecord = {
+    gate: 'keyword_routing',
+    inputs: {
+      agentMode,
+      scores: {
+        product: route.productScore,
+        bathroom: route.bathroomScore,
+        dilution: route.dilutionScore,
+        floor: route.floorScore,
+        recommendations: route.recommendationScore,
+      },
+      // B0-392 — the counts are not comparable across categories (the lists overlap internally),
+      // so the phrases are what make a score reviewable.
+      matchedPhrases: route.matchedPhrases,
+      decisiveRecommendationPhrases: route.decisiveRecommendationPhrases,
+      routedAgent: route.agent,
+      decisionPath: route.decisionPath,
+      tiedCategories: route.tiedCategories,
+      rationale: route.rationale,
+    },
+    thresholds: {
+      minHitsToRoute: SME_ROUTE_MIN_HITS_TO_ROUTE,
+      tieBreakOrder: [...SME_ROUTE_TIE_BREAK_ORDER],
+      decisiveRecommendationSignalWinsOutright: true,
+    },
+    verdict: agentMode === 'orchestrator' ? route.decisionPath : 'overridden_by_direct_mode',
+    effect:
+      agentMode === 'orchestrator'
+        ? route.agent
+          ? `Routed to the ${route.agent} specialist; ran the ${effectivePromptId} prompt.`
+          : `No keyword signal fired, so routingDecision is "ambiguous" — the ${effectivePromptId} specialist prompt ran by fallthrough, while the model was told "No specialist keywords matched".`
+        : `Admin forced direct \`${agentMode}\` routing, so the keyword scores did not decide; ran the ${effectivePromptId} prompt.`,
+  };
+
   const model = resolveResponsesModel(input.modelTag);
   const client = getOpenAIClient();
+  /** B0-389 — which generation runtime the agent prompt ran on; same flag that picks the branch. */
+  const agentRuntime: PromptRecord['runtime'] = useAiSdkGeneration ? 'ai-sdk' : 'responses';
 
   /**
    * B0-428 / B0-429 — time to first assistant token, surfaced as the "Stream" column on
@@ -1072,10 +1206,24 @@ export async function runProductSupportWorkflow(input: {
     workflow_run_id: run.id,
     step_name: 'orchestration_planner',
     status: 'completed',
-    input: jsonContent({ message: input.userMessage }),
+    input: jsonContent({
+      message: input.userMessage,
+      /**
+       * B0-389 — run config lives on the planner step because it is the ONE step every run has,
+       * including a decline-gate run that never reaches the agent step. `earlyDeclineGateEnabled`
+       * is what explains whether the decline gate even had a chance to fire, so a trace with no
+       * decline is only interpretable next to it.
+       */
+      runConfig: { earlyDeclineGateEnabled },
+    }),
     output: jsonContent({
       routing: {
         decision: routingDecision,
+        /**
+         * B0-392 — the prompt `decision` actually selected. `decision: 'ambiguous'` means the
+         * product specialist ran by fallthrough, not that no policy applied.
+         */
+        effectivePromptId,
         scores: {
           product: route.productScore,
           bathroom: route.bathroomScore,
@@ -1085,6 +1233,8 @@ export async function runProductSupportWorkflow(input: {
         },
         rationale: routingRationale,
       },
+      // B0-391 — the same routing decision as a structured gate record (phrases + thresholds).
+      ...recordGates([keywordRoutingGate]),
     }),
     completed_at: new Date().toISOString(),
   });
@@ -1100,7 +1250,7 @@ export async function runProductSupportWorkflow(input: {
     const finalText = earlyDeclineDecision.text;
     const validation: ValidatorResult = {
       approved: true,
-      confidence: 0.92,
+      confidence: EARLY_DECLINE_CONFIDENCE,
       issues: [],
       requires_human_review: false,
     };
@@ -1113,6 +1263,16 @@ export async function runProductSupportWorkflow(input: {
       latestOpenaiResponseId: declineResponseId,
       validation,
       routingDecision,
+      /**
+       * B0-391 — the decline gate wrote this text; no model call happened on this path.
+       * B0-393 — the prompt stamps are still recorded: the specialist prompt this run WOULD have
+       * used is what makes a declined run comparable with the answered runs beside it.
+       */
+      answerProvenance: 'decline_gate',
+      promptVersion,
+      promptBundleVersion: PROMPT_BUNDLE_VERSION,
+      priorMessageCount: input.priorMessages?.length ?? 0,
+      previousResponseId: input.previousOpenaiResponseId ?? null,
       timingBreakdown: {
         toolRounds: 0,
         cacheSource: null,
@@ -1137,6 +1297,29 @@ export async function runProductSupportWorkflow(input: {
       output: jsonContent({
         applied: true,
         reason: earlyDeclineDecision.reason,
+        /**
+         * B0-391 — recorded only on this step, which exists only when the gate FIRED. A run whose
+         * message did not match any decline rule has no `early_decline_gate` step and therefore no
+         * record; whether the gate was even eligible is the planner step's
+         * `runConfig.earlyDeclineGateEnabled`.
+         */
+        ...recordGates([
+          {
+            gate: 'early_decline_gate',
+            inputs: {
+              reason: earlyDeclineDecision.reason,
+              message: input.userMessage,
+              crossReferenceIntent: shouldForceCrossReferenceLookup(input.userMessage),
+            },
+            thresholds: {
+              gateEnabled: earlyDeclineGateEnabled,
+              reasons: [...EARLY_DECLINE_REASONS],
+              declineConfidence: EARLY_DECLINE_CONFIDENCE,
+            },
+            verdict: 'declined',
+            effect: `Short-circuited before any model call or retrieval (${earlyDeclineDecision.reason}); the canned decline text was returned with confidence ${EARLY_DECLINE_CONFIDENCE}.`,
+          },
+        ]),
       }),
       completed_at: new Date().toISOString(),
     });
@@ -1216,6 +1399,19 @@ export async function runProductSupportWorkflow(input: {
     return finalOutput;
   }
 
+  /**
+   * B0-390 — the run's RESOLVED tool trace, declared out here for two reasons:
+   *
+   * 1. the agent step used to persist `agentResult.toolTrace`, which never contains the
+   *    force-injected cross-reference search (that was pushed onto a separate local copy), so the
+   *    forced call executed but was never persisted;
+   * 2. the catch block needs to reach it, to keep the calls that completed before a throw.
+   *
+   * Every tool call in the run lands here exactly once, in execution order: model-chosen calls via
+   * `executeTool`, plus the workflow's own forced/safety-net calls.
+   */
+  const resolvedToolTrace: ToolTraceEntry[] = [];
+
   const agentStep = await insertWorkflowStep({
     workflow_run_id: run.id,
     step_name: 'openai_responses_agent',
@@ -1223,6 +1419,19 @@ export async function runProductSupportWorkflow(input: {
     input: jsonContent({
       model,
       hasPreviousResponse: Boolean(input.previousOpenaiResponseId),
+      /**
+       * B0-389 — captured here, ABOVE the `useAiSdkGeneration` fork below, so both generation
+       * runtimes inherit the same record. `runtime` is derived from the very flag that picks the
+       * branch: the same prompt on a different runtime is a different experiment, because the two
+       * runtimes assemble the model input differently (replayed `priorMessages` vs. a server-side
+       * `previous_response_id` chain).
+       */
+      ...recordPrompt({
+        stage: 'openai_responses_agent',
+        instructions,
+        model,
+        runtime: agentRuntime,
+      }),
     }),
   });
   markStepOpen(agentStep.id);
@@ -1235,11 +1444,25 @@ export async function runProductSupportWorkflow(input: {
   input.onEvent?.({ type: 'status', stage: 'agent_started' });
 
   try {
-    const toolTrace: ToolTraceEntry[] = [];
     const toolOutputLog: RuntimeToolOutput[] = [];
     const cacheSourceCounts = new Map<string, number>();
     let totalSearchMs = 0;
     let retrievalSamples = 0;
+
+    /**
+     * B0-390 — `tool_choice` is pinned on the FIRST model round only (both runtimes send `auto`
+     * afterwards), so the first executed call of the pinned tool is the one the model had no say
+     * in; a later call of the same tool was its own choice.
+     *
+     * B0-436 — the actual `toolChoice` is resolved further down, once speculative retrieval has
+     * run (a usable speculative hit downgrades it to `auto`). Pinning to a named function only ever
+     * happens on the cross-reference path, so the pinned name is derived from that condition here —
+     * it must be in scope before `executeTool` is defined below.
+     */
+    const forcedToolChoiceName = shouldForceCrossReferenceLookup(input.userMessage)
+      ? 'lookup_cross_reference'
+      : null;
+    let forcedToolChoiceConsumed = false;
 
     const executeTool = async ({
       name,
@@ -1279,7 +1502,19 @@ export async function runProductSupportWorkflow(input: {
       // an in-flight run's trace stays about as fresh as it was when the write blocked the call.
       audit.flushDetached();
 
-      const out = await executeToolCall({ name, argumentsJson, callId });
+      /**
+       * B0-390 + B0-436 — a speculative retrieval runs before the first model call, so the model
+       * demonstrably did not choose it: it is workflow-injected. Leaving it `model_chosen` would be
+       * exactly the mis-attribution this attribution exists to prevent. It also cannot consume the
+       * `tool_choice` pin, which applies to the first MODEL round.
+       */
+      let origin: ToolCallOrigin = speculative ? 'workflow_injected' : 'model_chosen';
+      if (!speculative && forcedToolChoiceName === name && !forcedToolChoiceConsumed) {
+        origin = 'tool_choice_forced';
+        forcedToolChoiceConsumed = true;
+      }
+
+      const out = await executeToolCall({ name, argumentsJson, callId, origin });
       // B0-436 — the marker travels on the persisted trace as well as the audit row, so an
       // `/admin/observability` timeline shows which retrieval the model did not ask for.
       const trace: ToolTraceEntry = speculative
@@ -1309,7 +1544,9 @@ export async function runProductSupportWorkflow(input: {
         { ...wfCtx, toolName: name },
       );
 
-      toolTrace.push(trace);
+      // B0-390 — the resolved trace is the single array every call lands in; B0-436's speculative
+      // marker rides on the entry pushed here.
+      resolvedToolTrace.push(trace);
       toolOutputLog.push({
         toolName: trace.toolName,
         ok: trace.ok,
@@ -1411,6 +1648,20 @@ export async function runProductSupportWorkflow(input: {
           executeTool: executeToolForGeneration,
         });
 
+    /**
+     * B0-390 — reconcile the workflow's trace with what the runtime reported. Both normally hold the
+     * SAME entries for model-chosen calls (the shared `executeTool` closure records each call on the
+     * workflow side as the runtime records it on its own), so this is a no-op in practice — but the
+     * persisted trace must never end up smaller than the runtime's own report, whatever a runtime
+     * does internally. Runs before the safety-net / force-injected pushes below, so execution order
+     * is preserved.
+     */
+    for (const entry of agentResult.toolTrace) {
+      if (!resolvedToolTrace.some((recorded) => recorded.callId === entry.callId)) {
+        resolvedToolTrace.push(entry);
+      }
+    }
+
     // B0-436 — one self-describing row per run so `/admin/observability` can tell a speculative
     // retrieval from a model-requested one, and see whether the model's own call reused it.
     audit.enqueue(
@@ -1438,15 +1689,11 @@ export async function runProductSupportWorkflow(input: {
     };
 
     /**
-     * B0-436 — the speculative call never passed through the generation runtime, so it is absent from
-     * `agentResult.toolTrace`. Prepend it (it ran first) so the persisted trace and every consumer of
-     * it account for every retrieval that actually happened.
+     * B0-436 + B0-390 — the speculative retrieval executes through `executeTool`, so it is already
+     * in `resolvedToolTrace` (in execution order, first), and the reconciliation loop above has
+     * folded in anything the generation runtime reported separately. B0-436's own prepend onto
+     * `agentResult.toolTrace` is therefore unnecessary here and would double-count the call.
      */
-    const agentToolTrace = speculation.result
-      ? [speculation.result.trace, ...agentResult.toolTrace]
-      : agentResult.toolTrace;
-
-    const resolvedToolTrace = [...agentToolTrace];
     const crossReferenceIntent = forcedCrossReference;
     /**
      * B0-339 — the cross-reference post-processing below must not hinge on the routing label alone.
@@ -1467,10 +1714,30 @@ export async function runProductSupportWorkflow(input: {
     // competitor mention inside it — so a curated equivalence (e.g. BNC-15 → Triforce) always wins.
     let overrideFromSafetyNet = false;
     if (useCrossReferencePostProcessing && !crossReferenceResult) {
-      const forced = await lookupCrossReference({
+      const safetyNetArgs = {
         brand: input.userMessage,
         productName: input.userMessage,
-      });
+      };
+      const safetyNetStartedAtMs = Date.now();
+      const forced = await lookupCrossReference(safetyNetArgs);
+      /**
+       * B0-390 — this lookup bypasses `executeToolCall` entirely, so until now it produced no trace
+       * entry at all: the run showed a cross-reference match that no recorded tool call could
+       * explain. Recorded with the same previews and truncation flags as a real tool call, and
+       * attributed so it is never read as a call the model chose. Logged whether or not it matched —
+       * a lookup that found nothing is exactly what a reader needs to see.
+       */
+      resolvedToolTrace.push(
+        buildToolTraceEntry({
+          toolName: 'lookup_cross_reference',
+          callId: `safety-net-xref-${safetyNetStartedAtMs}`,
+          argumentsJson: JSON.stringify(safetyNetArgs),
+          output: JSON.stringify(forced),
+          ok: true,
+          durationMs: Date.now() - safetyNetStartedAtMs,
+          origin: 'safety_net_override',
+        }),
+      );
       const top = forced.matches?.[0];
       if (top && !forced.fallbackRecommended) {
         crossReferenceResult = {
@@ -1495,6 +1762,8 @@ export async function runProductSupportWorkflow(input: {
           }),
         ),
         callId: `forced-search-${Date.now()}`,
+        // B0-390 — executed by the workflow, not chosen by the model.
+        origin: 'workflow_injected',
       });
       resolvedToolTrace.push(enforcedSearch.trace);
       toolOutputLog.push({
@@ -1510,6 +1779,13 @@ export async function runProductSupportWorkflow(input: {
     }
 
     let draftAnswer = agentResult.assistantText;
+    /**
+     * B0-391 — the single mutable answer-provenance cursor. Several branches below overwrite the
+     * answer, so the rule is LAST WRITER THAT ACTUALLY CHANGED THE TEXT WINS: whatever survives here
+     * must describe what the user really saw, not the first branch that touched the draft. A
+     * composition that returns the text unchanged deliberately does NOT claim provenance.
+     */
+    let answerProvenance: AnswerProvenance = 'model_generated';
     // A curated-override match (carries analysis facts) is authoritative on the recommendations
     // route — build a full competitive analysis from those facts + retrieved context, replacing
     // whatever product the model may have drafted. Works even with no web URL (Triforce, OnWeb=0).
@@ -1540,11 +1816,18 @@ export async function runProductSupportWorkflow(input: {
         rationale: m.rationale ?? null,
         alternatives: ctx.alternatives,
       });
+      // B0-391 — code-composed template; the model's draft was discarded wholesale.
+      answerProvenance = 'template_override';
     } else if (crossReferenceResult?.match.productUrl?.trim()) {
       draftAnswer = composeCrossReferenceUserFacingAnswer({
         match: crossReferenceResult.match,
         assistantText: agentResult.assistantText,
       });
+      // The composer is a no-op on a declined answer, or one that already leads with the comparable
+      // link — claiming composition there would overstate what the workflow did to the text.
+      if (draftAnswer.trim() !== agentResult.assistantText.trim()) {
+        answerProvenance = 'cross_reference_composed';
+      }
     }
 
     const sources = collectSourcesFromToolOutputs(toolOutputLog);
@@ -1578,11 +1861,24 @@ export async function runProductSupportWorkflow(input: {
       status: 'completed',
       output: jsonContent({
         responseIds: agentResult.responseIds,
-        toolCalls: agentToolTrace.length,
-        // Full per-call trace (B0-331) so the observability timeline can render
-        // arguments/output previews, ok flags and durations without a migration.
-        // B0-436 — includes the speculative retrieval, flagged `speculative: true`.
-        toolTrace: agentToolTrace,
+        /**
+         * B0-390 — kept for back-compat (the observability timeline spreads it into the step detail
+         * as `toolCalls`, and it is asserted by the B0-386 failure-attribution test), but it now
+         * counts the RESOLVED trace. It used to count `agentResult.toolTrace`, which excluded the
+         * workflow's forced/injected calls and therefore disagreed with the trace beside it.
+         */
+        toolCalls: resolvedToolTrace.length,
+        /**
+         * Full per-call trace (B0-331) so the observability timeline can render
+         * arguments/output previews, ok flags and durations without a migration.
+         *
+         * B0-390 — the RESOLVED trace: the force-injected cross-reference search and the
+         * safety-net lookup used to execute without ever being persisted.
+         *
+         * B0-436 — the speculative retrieval is in here too (it runs through `executeTool`),
+         * flagged `speculative: true`.
+         */
+        toolTrace: resolvedToolTrace,
         // B0-324 — token usage for the turn plus the per-model-call breakdown, so prompt-cache
         // reuse across the multi-round tool loop is verifiable from the persisted step alone
         // (`cachedPromptTokens` should be non-zero from the 2nd call onward).
@@ -1596,7 +1892,23 @@ export async function runProductSupportWorkflow(input: {
       workflow_run_id: run.id,
       step_name: 'validator',
       status: 'running',
-      input: jsonContent({ modelTag: input.modelTag ?? 'preview' }),
+      input: jsonContent({
+        modelTag: input.modelTag ?? 'preview',
+        /**
+         * B0-389 — recorded only when the pass actually calls a model. On the bypassed path
+         * (`useValidator === false`, the test runner's default) there is no model call, and a prompt
+         * record there would make a step that never ran look like it had. The bypass is instead
+         * declared in the step's output (`skipped` + `VALIDATOR_BYPASS_REASON`).
+         */
+        ...(useValidator
+          ? recordPrompt({
+              stage: 'validator',
+              instructions: VALIDATOR_SYSTEM_PROMPT,
+              model: resolveValidatorModel(input.modelTag),
+              runtime: 'responses',
+            })
+          : {}),
+      }),
     });
     markStepOpen(validationStep.id);
     input.onEvent?.({ type: 'status', stage: 'validation_started' });
@@ -1616,7 +1928,7 @@ export async function runProductSupportWorkflow(input: {
       validation = {
         approved: true,
         confidence: sources.length > 0 ? 0.9 : 0.6,
-        issues: ['validator_bypassed_for_testing'],
+        issues: [VALIDATOR_BYPASS_REASON],
         requires_human_review: false,
       };
     }
@@ -1627,6 +1939,28 @@ export async function runProductSupportWorkflow(input: {
     });
 
     if (useValidator && !validation.approved && validation.issues.length > 0) {
+      /**
+       * B0-389 — the revision pass is its own model call, with its own prompt, model and output, so
+       * it gets its own step. Filing it under the validator step (as it was) made a rewritten answer
+       * look like the validator had produced it.
+       */
+      const revisionStep = await insertWorkflowStep({
+        workflow_run_id: run.id,
+        step_name: 'revision',
+        status: 'running',
+        input: jsonContent({
+          modelTag: input.modelTag ?? 'preview',
+          validatorIssues: validation.issues,
+          ...recordPrompt({
+            stage: 'revision',
+            instructions: REVISION_SYSTEM_PROMPT,
+            model: resolveRevisionModel(input.modelTag),
+            runtime: 'responses',
+          }),
+        }),
+      });
+      markStepOpen(revisionStep.id);
+
       const revised = (
         await runRevisionPass({
           draftAnswer,
@@ -1645,13 +1979,37 @@ export async function runProductSupportWorkflow(input: {
         /clarification needed|could not (fully )?verify|cannot (revise|fix|provide|answer)|no( supporting)? evidence (was |has been )?provided|no( supporting)? evidence (is |was )?available|please (supply|provide) (approved )?(documentation|references|evidence)|supply (approved )?documentation/i.test(
           revised,
         );
+
+      /**
+       * B0-389 — closed before the (optional) second validator pass, which is a VALIDATOR call and
+       * stays on the validator step. The output says what the revision produced and whether it was
+       * taken: a refusal deliberately keeps the original draft, so `outcome` records that the answer
+       * the user saw is still the draft.
+       */
+      await completeWorkflowStep(revisionStep.id, {
+        status: 'completed',
+        output: jsonContent({
+          refused: revisionRefused,
+          outcome: revisionRefused ? 'refused_draft_retained' : 'draft_replaced',
+          revisedAnswer: revised,
+        }),
+      });
+      markStepClosed(revisionStep.id);
+
       if (revised && !revisionRefused) {
         draftAnswer = revised;
+        // B0-391 — the revision model wrote this text, replacing whatever the earlier branches had.
+        answerProvenance = 'revision_pass';
         if (crossReferenceResult?.match.productUrl?.trim()) {
           draftAnswer = composeCrossReferenceUserFacingAnswer({
             match: crossReferenceResult.match,
             assistantText: revised,
           });
+          // Last writer that changed the text wins: the composer prepends the comparable-product
+          // headline on top of the revised body, so the composition is what the user saw.
+          if (draftAnswer.trim() !== revised.trim()) {
+            answerProvenance = 'cross_reference_composed';
+          }
         }
         validation = await runValidatorPass({
           draftAnswer,
@@ -1672,10 +2030,31 @@ export async function runProductSupportWorkflow(input: {
         audit.enqueue(
           'revision_skipped_refusal',
           { issues: validation.issues },
-          { ...wfCtx, stepId: validationStep.id },
+          // B0-389 — re-attributed from the validator step to the revision step that refused.
+          { ...wfCtx, stepId: revisionStep.id },
         );
       }
     }
+
+    /**
+     * B0-391 — deterministic gate records for this step, in evaluation order. Only the gates that
+     * actually ran are pushed, so a gate that never applied is ABSENT from the persisted row rather
+     * than recorded as having passed.
+     */
+    const validatorStepGates: GateRecord[] = [];
+    /** Shared by both usage/safety branches: the thresholds the gate really applies. */
+    const usageSafetyThresholds = {
+      confidenceCap: USAGE_SAFETY_COVERAGE_CONFIDENCE_CAP,
+      bodyScanMaxChars: USAGE_SAFETY_COVERAGE_BODY_SCAN_MAX_CHARS,
+      requiresUsageEvidence: true,
+      requiresSafetyEvidence: true,
+    };
+    const usageSafetyInputs = {
+      queryNeedsUsageAndSafetyCoverage: needsUsageSafetyCoverage,
+      hasUsageEvidence: usageSafetyCoverage.hasUsageEvidence,
+      hasSafetyEvidence: usageSafetyCoverage.hasSafetyEvidence,
+      retrievedSourceCount: sourceMeta.length,
+    };
 
     if (
       needsUsageSafetyCoverage &&
@@ -1716,6 +2095,23 @@ export async function runProductSupportWorkflow(input: {
         },
         { ...wfCtx, stepId: validationStep.id },
       );
+      validatorStepGates.push({
+        gate: 'usage_safety_coverage',
+        inputs: { ...usageSafetyInputs, missingEvidence },
+        thresholds: usageSafetyThresholds,
+        verdict: 'capped',
+        effect: `approved forced to false, issue "${coverageIssue}" added, confidence ${confidenceBeforeCap} → ${validation.confidence}. The usage/safety fallback copy replaces the draft unless the regulated-claim guardrail also rejected, whose copy wins; see answerProvenance for what the user saw.`,
+      });
+    } else if (needsUsageSafetyCoverage) {
+      // The gate RAN and found both kinds of evidence — a real verdict, not a skipped gate.
+      validatorStepGates.push({
+        gate: 'usage_safety_coverage',
+        inputs: { ...usageSafetyInputs, missingEvidence: [] },
+        thresholds: usageSafetyThresholds,
+        verdict: 'passed',
+        effect:
+          'Usage and safety evidence were both retrieved; no confidence cap and no fallback copy.',
+      });
     }
 
     // B0-257: regulated-claim guardrail -- runs unconditionally (independent of the
@@ -1775,10 +2171,12 @@ export async function runProductSupportWorkflow(input: {
             : max,
         0,
       );
-      const gate = evaluateRecommendationGate({
+      const gateInput = {
         baseConfidence: validation.confidence,
         topSimilarity: sources.length > 0 ? topSimilarity : null,
-      });
+      };
+      const gate = evaluateRecommendationGate(gateInput);
+      const confidenceBeforeGate = validation.confidence;
       validation = {
         ...validation,
         approved: validation.approved && gate.approved,
@@ -1792,19 +2190,68 @@ export async function runProductSupportWorkflow(input: {
         { ...gate, topSimilarity },
         { ...wfCtx, stepId: validationStep.id },
       );
+      /**
+       * B0-391 — the same calibration as a structured record. The audit row above is kept: it is
+       * the ONLY record for every run predating this step, and the timeline still reads it.
+       *
+       * `inputs` lists exactly what the call site passes. `evaluateRecommendationGate` also accepts
+       * `competitorChemistryClass`, `recommendedChemistryClass` and `brandKnown`, but this workflow
+       * passes none of them, so the category-mismatch and missing-brand caps cannot fire here —
+       * recording them as if they had been evaluated would be a false claim.
+       */
+      validatorStepGates.push({
+        gate: 'recommendation_confidence',
+        inputs: {
+          ...gateInput,
+          retrievedSourceCount: sources.length,
+          unwiredInputs: [
+            'competitorChemistryClass',
+            'recommendedChemistryClass',
+            'brandKnown',
+          ],
+          trigger:
+            routingDecision === 'recommendations'
+              ? 'recommendations_route'
+              : 'cross_reference_intent',
+          gateIssues: gate.issues,
+        },
+        // Read from the module's exported constants, never re-typed here, so a threshold change
+        // cannot silently desync from what the record claims was applied.
+        thresholds: {
+          lowSimilarityThreshold: LOW_SIMILARITY_THRESHOLD,
+          lowSimilarityConfidenceCap: LOW_SIMILARITY_CONFIDENCE_CAP,
+          missingBrandConfidenceCap: MISSING_BRAND_CONFIDENCE_CAP,
+          categoryMismatchConfidenceCap: CATEGORY_MISMATCH_CONFIDENCE_CAP,
+        },
+        verdict: validation.confidence < confidenceBeforeGate ? 'capped' : 'passed',
+        effect:
+          validation.confidence < confidenceBeforeGate
+            ? `Confidence ${confidenceBeforeGate} → ${validation.confidence}${
+                gate.issues.length > 0 ? `; issues added: ${gate.issues.join(' | ')}` : ''
+              }.`
+            : `No change; confidence stayed at ${validation.confidence}.`,
+      });
     }
 
     await completeWorkflowStep(validationStep.id, {
       status: 'completed',
-      output: jsonContent(
-        useValidator
-          ? validation
+      output: jsonContent({
+        ...validation,
+        ...(useValidator
+          ? {}
           : {
-              ...validation,
+              // B0-389 — one unambiguous marker for a step that never called a model, using the
+              // same token `validation.issues` already carries (see VALIDATOR_BYPASS_REASON).
               skipped: true,
-              reason: 'temporary_test_bypass',
-            },
-      ),
+              reason: VALIDATOR_BYPASS_REASON,
+            }),
+        /**
+         * B0-391 — the deterministic gates that mutated `validation` on this step. Both run after
+         * the validator pass (or its bypass), so they belong on this row; the key is absent when
+         * neither gate ran.
+         */
+        ...recordGates(validatorStepGates),
+      }),
     });
     markStepClosed(validationStep.id);
     input.onEvent?.({
@@ -1836,6 +2283,17 @@ export async function runProductSupportWorkflow(input: {
           '',
           'Please consult the product label or SDS directly for the exact regulated value, or contact Betco Product Support / EHS to confirm.',
         ].join('\n');
+        /**
+         * B0-391 — recorded as `validator_fallback`. The regulated-claim guardrail is a
+         * validation-time rejection that replaces the answer with canned copy, exactly like the
+         * generic fallback below; it differs only in wording. It is NOT a new provenance value:
+         * the specific cause is already unambiguous elsewhere on the run (the
+         * `regulated_claim_guardrail_rejected` audit row, the `regulated_claim_unverified:*`
+         * validation issues, and the `regulated_claim_unverified` review task), so minting an
+         * eighth enum member would add a second spelling for "the answer was withheld at
+         * validation" without adding information.
+         */
+        answerProvenance = 'validator_fallback';
       } else if (
         needsUsageSafetyCoverage &&
         (!usageSafetyCoverage.hasUsageEvidence ||
@@ -1851,6 +2309,7 @@ export async function runProductSupportWorkflow(input: {
           '',
           'I can then return a grounded answer with both procedure and SDS-backed safety details.',
         ].join('\n');
+        answerProvenance = 'usage_safety_fallback';
       } else {
         finalText = [
           'I could not fully verify this answer against the retrieved approved sources.',
@@ -1861,6 +2320,7 @@ export async function runProductSupportWorkflow(input: {
           '',
           'If this is safety-urgent, follow your facility protocol and SDS guidance.',
         ].join('\n');
+        answerProvenance = 'validator_fallback';
       }
 
       if (validation.requires_human_review) {
@@ -1900,6 +2360,17 @@ export async function runProductSupportWorkflow(input: {
       routingDecision,
       timingBreakdown,
       usage: agentResult.usage,
+      // B0-391 — which branch wrote the text the user saw (see the cursor above).
+      answerProvenance,
+      // B0-393 — stamps of the prompt that ran and of the whole prompt+tool bundle.
+      promptVersion,
+      promptBundleVersion: PROMPT_BUNDLE_VERSION,
+      /**
+       * B0-388 — chat context: the captured `instructions` are not the whole model input, so a
+       * panel showing only them would imply the model saw less than it did.
+       */
+      priorMessageCount: input.priorMessages?.length ?? 0,
+      previousResponseId: input.previousOpenaiResponseId ?? null,
     };
 
     audit.enqueue('workflow_completed', { workflow_run_id: run.id }, wfCtx);
@@ -1968,9 +2439,27 @@ export async function runProductSupportWorkflow(input: {
     const message = getErrorMessage(err);
     logError('workflow_failed', { ...wfCtx, message });
 
+    /**
+     * B0-390 — a run that died mid-generation is the one most worth inspecting, so the calls that
+     * did complete are written onto the agent step as it is failed. Only when the agent step is
+     * still OPEN: once it has completed it already holds the full resolved trace, and B0-386's rule
+     * is that a completed step is never rewritten (never re-failed, never nulled).
+     */
+    const partialStepOutputs = new Map<string, Json>();
+    if (openStepIds.includes(agentStep.id) && resolvedToolTrace.length > 0) {
+      partialStepOutputs.set(
+        agentStep.id,
+        jsonContent({
+          partial: true,
+          toolCalls: resolvedToolTrace.length,
+          toolTrace: resolvedToolTrace,
+        }),
+      );
+    }
+
     // B0-386 — blame the step that was actually open (and leave completed steps, with their
     // persisted tool trace, alone) rather than rewriting the agent step every time.
-    await failOpenWorkflowSteps(openStepIds, message);
+    await failOpenWorkflowSteps(openStepIds, message, partialStepOutputs);
 
     await updateWorkflowRun(run.id, {
       status: 'failed',
