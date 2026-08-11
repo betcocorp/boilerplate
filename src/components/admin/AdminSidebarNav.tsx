@@ -11,12 +11,18 @@ import {
 } from '~/lib/permissions/permissions-server';
 
 /**
- * The ten admin surfaces the sidebar can gate. Derived from the permission catalog so the nav and
- * `public.permission` stay in sync — every `navigation.sidebar.*` selector is evaluated here.
+ * The admin surfaces the sidebar can gate. Derived from the permission catalog so the nav and
+ * `public.permission` stay in sync — every `navigation.sidebar.*` selector is evaluated here, plus
+ * `admin.card.permissions`, which gates the Access control → Permissions link (B0-410) and is the one
+ * nav selector that does not carry the `navigation.sidebar.` prefix. Without it that link would stay
+ * visible even under enforcement, since only selectors in this list can end up in `denied`.
  */
-const NAV_SELECTORS: string[] = Object.values(PERMISSIONS).filter((selector) =>
-  selector.startsWith('navigation.sidebar.'),
-);
+const NAV_SELECTORS: string[] = [
+  ...Object.values(PERMISSIONS).filter((selector) =>
+    selector.startsWith('navigation.sidebar.'),
+  ),
+  PERMISSIONS.ADMIN_CARD_PERMISSIONS,
+];
 
 /**
  * Server half of the admin sidebar (B0-408): resolves the effective user's permissions once per

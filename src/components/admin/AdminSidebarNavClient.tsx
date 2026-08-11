@@ -8,6 +8,7 @@ import {
   Library,
   MessageSquare,
   Search,
+  ShieldCheck,
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
@@ -216,6 +217,18 @@ const sidebarSections: NavSectionModel[] = [
             label: 'Analytics',
             href: '/admin/projects/analytics',
             permission: PERMISSIONS.NAVIGATION_SIDEBAR_PROJECTS,
+          },
+        ],
+      },
+      {
+        type: 'group',
+        label: 'Access control',
+        icon: ShieldCheck,
+        items: [
+          {
+            label: 'Permissions',
+            href: '/admin/permissions',
+            permission: PERMISSIONS.ADMIN_CARD_PERMISSIONS,
           },
         ],
       },
