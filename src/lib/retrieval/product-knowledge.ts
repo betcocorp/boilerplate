@@ -42,9 +42,13 @@ const SIMILARITY_CANDIDATE_FETCH_LIMIT = 20;
 
 /**
  * Enable cross-encoder reranking (rag/rerank.ts) on the product-support retrieval path (B0-280).
- * On by default; set BEX_PRODUCT_SUPPORT_RERANKER=false to disable without a redeploy. If the
- * reranker endpoint is unavailable, searchProductChunks falls back to cosine order automatically,
- * so enabling this is safe even before the cross-encoder is provisioned.
+ * On by default; set BEX_PRODUCT_SUPPORT_RERANKER=false to disable without a redeploy.
+ *
+ * This is only a *request*, not a guarantee: B0-440 made `searchProductChunks` gate the actual
+ * cost of reranking (the 5x candidate over-fetch, the rerank call, the `+reranked` strategy
+ * label) on `isRerankerConfigured()` — i.e. on COHERE_API_KEY being present. With the key unset
+ * this flag is inert and every search below behaves exactly as if reranking were off, so it stays
+ * safe to leave on before the cross-encoder is provisioned.
  */
 const PRODUCT_SUPPORT_RERANK_ENABLED =
   process.env.BEX_PRODUCT_SUPPORT_RERANKER !== 'false';
@@ -100,8 +104,34 @@ export type ProductKnowledgeRetrievalSummary = {
     | 'broad_only'
     | 'anchored_only'
     | 'anchored_with_broad_fallback';
+  /**
+   * Total time spent *inside* similarity searches: the sum of `similaritySearchMs` across every
+   * search this call actually performed.
+   *
+   * B0-438 deliberately KEEPS these semantics rather than redefining them as wall clock. This
+   * value propagates to `timingBreakdown.searchMs` (run-product-support-workflow.ts) and from
+   * there into the golden-set harness and `/admin/observability`, and it is the metric B0-434 /
+   * B0-435 state their acceptance criteria in ("p95 `searchMs` under 1s", "p50 at concurrency 1
+   * within 2x of concurrency 0"). Redefining it mid-epic would make the epic's own before/after
+   * measurements meaningless. The searches themselves are still sequential, so a sum remains an
+   * honest measure of search cost.
+   *
+   * One correctness fix: it now also counts the B0-250 product-key fallback search, which the
+   * previous sum silently omitted. That can only ever have under-reported.
+   *
+   * For "how long did the whole retrieval phase take", use `retrievalPhaseMs`.
+   */
   searchMs: number;
+  /**
+   * B0-438 -- elapsed wall clock of the entire retrieval phase: query embedding, both searches,
+   * candidate selection and document-body hydration. Strictly greater than `searchMs`, and the
+   * number to watch when judging whether the B0-438 restructure actually helped, since the
+   * overlapping/skipped work it removes lives outside the similarity searches.
+   */
+  retrievalPhaseMs: number;
+  /** Per-search `similaritySearchMs` of the broad/initial pass. Meaning unchanged by B0-438. */
   initialSearchMs: number;
+  /** Per-search `similaritySearchMs` of the anchored pass; null when no anchored search ran. */
   anchoredSearchMs: number | null;
   usedBroadFallback: boolean;
   /** True when an explicit product-key-scoped search returned no evidence and was retried at the line level (B0-250). */
@@ -121,10 +151,21 @@ export type ProductKnowledgeQueryResult = {
   retrieval: ProductKnowledgeRetrievalSummary;
 };
 
+/**
+ * What `runProductKnowledgeQuery` produces. B0-438: `entityContextBlock` is deliberately NOT
+ * part of it -- entity context and structured facts are independent enrichments of the final
+ * curated sources, so `ragQueryForProductKnowledgeWithMeta` runs both concurrently instead of
+ * having each of the four retrieval paths await entity context inline before returning.
+ */
 type ProductKnowledgeQueryBase = Omit<
   ProductKnowledgeQueryResult,
-  'facts' | 'factsBlock'
+  'facts' | 'factsBlock' | 'entityContextBlock'
 >;
+
+/** Wall-clock stopwatch for the retrieval phase -- see `searchMs` on the summary above (B0-438). */
+function retrievalElapsedMs(startedAt: number): number {
+  return Number((performance.now() - startedAt).toFixed(1));
+}
 
 function buildCuratedSource(
   match: RagSearchMatch,
@@ -200,14 +241,26 @@ async function excludeDiscontinuedMatches(matches: RagSearchMatch[]): Promise<Ra
   return matches.filter((m) => !m.entity_id || !discontinued.has(m.entity_id));
 }
 
-async function curateUniqueDocumentSources(
+type CurationOptions = {
+  limit: number;
+  requiredDocumentKinds?: string[];
+  maxPerDocument?: number;
+};
+
+/**
+ * Selection half of curation: discontinued filter (B0-257) -> near-duplicate suppression
+ * (B0-257 scope addition) -> the B0-259 slot-ordered top-N/diversity pass.
+ *
+ * Split out from hydration for B0-438. `curateUniqueDocumentSources` returns exactly one
+ * `CuratedSource` per selected match, so `curated.length === selected.length` always -- which
+ * means the broad-vs-anchored fallback decision (which compares only the two lengths) can be
+ * made from the selected matches, and the *losing* pass never has to pay for full document-body
+ * assembly. Selection order and membership are unchanged.
+ */
+async function selectCuratedSourceMatches(
   matches: RagSearchMatch[],
-  options: {
-    limit: number;
-    requiredDocumentKinds?: string[];
-    maxPerDocument?: number;
-  },
-): Promise<CuratedSource[]> {
+  options: CurationOptions,
+): Promise<RagSearchMatch[]> {
   const eligibleMatches = await excludeDiscontinuedMatches(matches);
   // B0-257 (scope addition): retrieval backstop -- suppress lower-authority
   // near-duplicate chunks (same product + section_type, high cosine similarity)
@@ -215,12 +268,19 @@ async function curateUniqueDocumentSources(
   // edge out the SDS's version of the same hazard/first-aid content.
   const deduplicatedMatches = await suppressNearDuplicateMatches(eligibleMatches);
 
-  const selected = selectCuratedMatches(deduplicatedMatches, {
+  return selectCuratedMatches(deduplicatedMatches, {
     limit: options.limit,
     maxPerDocument: options.maxPerDocument ?? 1,
     requiredDocumentKinds: options.requiredDocumentKinds,
   });
+}
 
+/**
+ * Hydration half of curation: assemble the full document body and source provenance for each
+ * already-selected match. This is the expensive half (full document text for every selected
+ * document), so B0-438 runs it once, on the winning pass only.
+ */
+async function hydrateCuratedSources(selected: RagSearchMatch[]): Promise<CuratedSource[]> {
   if (selected.length === 0) {
     return [];
   }
@@ -234,6 +294,13 @@ async function curateUniqueDocumentSources(
   return selected.map((match) =>
     buildCuratedSource(match, bodies.get(match.document_id), sourceRefs.get(match.document_id)),
   );
+}
+
+async function curateUniqueDocumentSources(
+  matches: RagSearchMatch[],
+  options: CurationOptions,
+): Promise<CuratedSource[]> {
+  return hydrateCuratedSources(await selectCuratedSourceMatches(matches, options));
 }
 
 async function entityContextBlockForSources(sources: CuratedSource[]): Promise<string | null> {
@@ -325,8 +392,16 @@ export async function ragQueryForProductKnowledgeWithMeta(
   input: Parameters<typeof runProductKnowledgeQuery>[0],
 ): Promise<ProductKnowledgeQueryResult> {
   const base = await runProductKnowledgeQuery(input);
-  const { facts, factsBlock } = await factsForSources(base.sources);
-  return { ...base, facts, factsBlock };
+  // B0-438: entity context and structured facts depend only on the final curated sources and
+  // not on each other, so they run concurrently. Doing it here rather than inside
+  // `runProductKnowledgeQuery` applies the same parallelisation to all four retrieval paths.
+  // Rejection behaviour is unchanged: either enrichment failing still fails the whole call, as
+  // it did when both were awaited in sequence.
+  const [entityContextBlock, { facts, factsBlock }] = await Promise.all([
+    entityContextBlockForSources(base.sources),
+    factsForSources(base.sources),
+  ]);
+  return { ...base, entityContextBlock, facts, factsBlock };
 }
 
 export async function ragQueryForProductKnowledge(input: {
@@ -359,6 +434,7 @@ async function runProductKnowledgeQuery(input: {
   /** Override which document kinds are guaranteed a slot. Default: profile + sds + knowledge. */
   requiredDocumentKinds?: string[];
 }): Promise<ProductKnowledgeQueryBase> {
+  const retrievalStartedAt = performance.now();
   const limit = input.limit ?? DEFAULT_UNIQUE_DOCUMENT_LIMIT;
   const explicitKey = input.productLineKey?.trim() || null;
   const explicitProductKey = input.productKey?.trim() || null;
@@ -398,6 +474,9 @@ async function runProductKnowledgeQuery(input: {
     // rather than surfacing nothing (there is no product-tier chunked content yet, so this
     // mainly guards against a resolved product_key that doesn't validate as a variant).
     let usedProductKeyFallback = false;
+    // Every similarity search performed on this path, so `searchMs` below counts the B0-250
+    // fallback search too instead of silently under-reporting it.
+    let searchMsTotal = result.timings.similaritySearchMs;
     if (curated.length === 0 && explicitProductKey) {
       const lineResult = await searchProductChunks({
         query: input.query,
@@ -407,6 +486,7 @@ async function runProductKnowledgeQuery(input: {
         useHybrid: true,
         useReranker: PRODUCT_SUPPORT_RERANK_ENABLED,
       });
+      searchMsTotal += lineResult.timings.similaritySearchMs;
       curated = await curateUniqueDocumentSources(lineResult.matches, {
         limit,
         requiredDocumentKinds,
@@ -417,11 +497,11 @@ async function runProductKnowledgeQuery(input: {
 
     return {
       sources: curated,
-      entityContextBlock: await entityContextBlockForSources(curated),
       retrieval: {
         strategy: 'explicit_product_line',
         cacheSource: result.embeddingSource,
-        searchMs: result.timings.similaritySearchMs,
+        searchMs: searchMsTotal,
+        retrievalPhaseMs: retrievalElapsedMs(retrievalStartedAt),
         initialSearchMs: result.timings.similaritySearchMs,
         anchoredSearchMs: result.timings.similaritySearchMs,
         usedBroadFallback: false,
@@ -456,11 +536,11 @@ async function runProductKnowledgeQuery(input: {
 
     return {
       sources: curated,
-      entityContextBlock: await entityContextBlockForSources(curated),
       retrieval: {
         strategy: 'broad_resolution_disabled',
         cacheSource: result.embeddingSource,
         searchMs: result.timings.similaritySearchMs,
+        retrievalPhaseMs: retrievalElapsedMs(retrievalStartedAt),
         initialSearchMs: result.timings.similaritySearchMs,
         anchoredSearchMs: null,
         usedBroadFallback: false,
@@ -486,19 +566,24 @@ async function runProductKnowledgeQuery(input: {
 
   const resolution = resolveProductLineFromMatches(broadResult.matches);
   const requiredDocumentKindsForQuery = resolveRequiredDocumentKinds(input.query, sectionType);
-  const broadCurated = await curateUniqueDocumentSources(broadResult.matches, {
+
+  // B0-438: start broad candidate selection now, but do not await it yet. The anchored search
+  // needs only `resolution` (derived from the broad *matches*), so the two are independent and
+  // overlap below instead of stacking two full round-trip chains on the critical path.
+  const broadSelectedPromise = selectCuratedSourceMatches(broadResult.matches, {
     limit,
     requiredDocumentKinds: requiredDocumentKindsForQuery,
   });
 
   if (resolution.lockedProductLineKey == null) {
+    const broadCurated = await hydrateCuratedSources(await broadSelectedPromise);
     return {
       sources: broadCurated,
-      entityContextBlock: await entityContextBlockForSources(broadCurated),
       retrieval: {
         strategy: 'broad_only',
         cacheSource: broadResult.embeddingSource,
         searchMs: broadResult.timings.similaritySearchMs,
+        retrievalPhaseMs: retrievalElapsedMs(retrievalStartedAt),
         initialSearchMs: broadResult.timings.similaritySearchMs,
         anchoredSearchMs: null,
         usedBroadFallback: false,
@@ -510,45 +595,55 @@ async function runProductKnowledgeQuery(input: {
     };
   }
 
-  const anchoredResult = await searchProductChunks({
-    query: input.query,
-    limit: SIMILARITY_CANDIDATE_FETCH_LIMIT,
-    productLineKey: resolution.lockedProductLineKey,
-    scope: 'all',
-    useHybrid: true,
-    useReranker: PRODUCT_SUPPORT_RERANK_ENABLED,
-  });
-  const anchoredCurated = await curateUniqueDocumentSources(anchoredResult.matches, {
+  const [broadSelected, anchoredResult] = await Promise.all([
+    broadSelectedPromise,
+    searchProductChunks({
+      query: input.query,
+      limit: SIMILARITY_CANDIDATE_FETCH_LIMIT,
+      productLineKey: resolution.lockedProductLineKey,
+      scope: 'all',
+      useHybrid: true,
+      useReranker: PRODUCT_SUPPORT_RERANK_ENABLED,
+    }),
+  ]);
+
+  const anchoredSelected = await selectCuratedSourceMatches(anchoredResult.matches, {
     limit,
     requiredDocumentKinds: requiredDocumentKindsForQuery,
   });
 
+  // Unchanged fallback policy, evaluated on the selected-match counts instead of the hydrated
+  // sources. Identical by construction: hydration emits exactly one source per selected match
+  // (B0-438), so `selected.length === curated.length` for both passes.
   const minimumAnchoredEvidence = Math.max(2, Math.ceil(limit / 2));
   const shouldUseBroadFallback =
-    anchoredCurated.length === 0 ||
-    (anchoredCurated.length < minimumAnchoredEvidence &&
-      broadCurated.length > anchoredCurated.length);
+    anchoredSelected.length === 0 ||
+    (anchoredSelected.length < minimumAnchoredEvidence &&
+      broadSelected.length > anchoredSelected.length);
 
-  const finalCurated = shouldUseBroadFallback ? broadCurated : anchoredCurated;
+  // B0-438: only the winning pass is hydrated. Assembling full document bodies for the pass
+  // that is about to be discarded was the single largest piece of provably wasted retrieval work.
+  const finalCurated = await hydrateCuratedSources(
+    shouldUseBroadFallback ? broadSelected : anchoredSelected,
+  );
   const strategy = shouldUseBroadFallback
     ? 'anchored_with_broad_fallback'
     : 'anchored_only';
-  const totalSearchMs =
-    broadResult.timings.similaritySearchMs + anchoredResult.timings.similaritySearchMs;
 
   return {
     sources: finalCurated,
-    entityContextBlock: await entityContextBlockForSources(finalCurated),
     retrieval: {
       strategy,
       cacheSource: anchoredResult.embeddingSource,
-      searchMs: totalSearchMs,
+      searchMs:
+        broadResult.timings.similaritySearchMs + anchoredResult.timings.similaritySearchMs,
+      retrievalPhaseMs: retrievalElapsedMs(retrievalStartedAt),
       initialSearchMs: broadResult.timings.similaritySearchMs,
       anchoredSearchMs: anchoredResult.timings.similaritySearchMs,
       usedBroadFallback: shouldUseBroadFallback,
       usedProductKeyFallback: false,
-      broadCuratedCount: broadCurated.length,
-      anchoredCuratedCount: anchoredCurated.length,
+      broadCuratedCount: broadSelected.length,
+      anchoredCuratedCount: anchoredSelected.length,
       productLineResolution: resolution,
     },
   };
