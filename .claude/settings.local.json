@@ -44,7 +44,11 @@
       "Bash(python3 *)",
       "Read(//Users/thomasbird/projects/client/betco/apps/bex-combined/**)",
       "Bash(git -C /Users/thomasbird/projects/client/betco/apps/bex-combined rev-parse --show-toplevel)",
-      "Bash(curl -sS --max-time 30 \"https://www.betco.com/productlist.html\" -o plist.html)"
+      "Bash(curl -sS --max-time 30 \"https://www.betco.com/productlist.html\" -o plist.html)",
+      "Bash(grep -A6 \"admin/efficacy/EfficacyIngestionPanel.tsx$\")",
+      "Bash(grep -A6 \"api/v1/tools/efficacy/route.ts$\")",
+      "Bash(npx tsx -e ' *)",
+      "mcp__claude_ai_Atlassian__getJiraIssueTypeMetaWithFields"
     ]
   }
 }
