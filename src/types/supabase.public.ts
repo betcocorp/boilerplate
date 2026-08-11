@@ -367,6 +367,72 @@ export type Database = {
           },
         ]
       }
+      app_user: {
+        Row: {
+          betco_company_id: string | null
+          created_at: string
+          deleted_at: string | null
+          department: string | null
+          division: string | null
+          edit_all: boolean
+          email: string | null
+          first_name: string | null
+          has_user_switcher: boolean
+          is_active: boolean
+          is_salesperson: boolean
+          last_name: string | null
+          name: string | null
+          phone: string | null
+          title: string | null
+          updated_at: string
+          user_id: string
+          user_name: string | null
+          user_security_role: string | null
+        }
+        Insert: {
+          betco_company_id?: string | null
+          created_at?: string
+          deleted_at?: string | null
+          department?: string | null
+          division?: string | null
+          edit_all?: boolean
+          email?: string | null
+          first_name?: string | null
+          has_user_switcher?: boolean
+          is_active?: boolean
+          is_salesperson?: boolean
+          last_name?: string | null
+          name?: string | null
+          phone?: string | null
+          title?: string | null
+          updated_at?: string
+          user_id: string
+          user_name?: string | null
+          user_security_role?: string | null
+        }
+        Update: {
+          betco_company_id?: string | null
+          created_at?: string
+          deleted_at?: string | null
+          department?: string | null
+          division?: string | null
+          edit_all?: boolean
+          email?: string | null
+          first_name?: string | null
+          has_user_switcher?: boolean
+          is_active?: boolean
+          is_salesperson?: boolean
+          last_name?: string | null
+          name?: string | null
+          phone?: string | null
+          title?: string | null
+          updated_at?: string
+          user_id?: string
+          user_name?: string | null
+          user_security_role?: string | null
+        }
+        Relationships: []
+      }
       audit_logs: {
         Row: {
           conversation_id: string | null
@@ -463,6 +529,87 @@ export type Database = {
         }
         Relationships: []
       }
+      golden_dataset: {
+        Row: {
+          category: string | null
+          created_at: string
+          expected_agent: string | null
+          expected_references: Json | null
+          id: number
+          ideal_response: string | null
+          Priority: number
+          question: string | null
+          should_answer: boolean | null
+          should_cite: boolean | null
+        }
+        Insert: {
+          category?: string | null
+          created_at?: string
+          expected_agent?: string | null
+          expected_references?: Json | null
+          id?: number
+          ideal_response?: string | null
+          Priority: number
+          question?: string | null
+          should_answer?: boolean | null
+          should_cite?: boolean | null
+        }
+        Update: {
+          category?: string | null
+          created_at?: string
+          expected_agent?: string | null
+          expected_references?: Json | null
+          id?: number
+          ideal_response?: string | null
+          Priority?: number
+          question?: string | null
+          should_answer?: boolean | null
+          should_cite?: boolean | null
+        }
+        Relationships: []
+      }
+      group_permission: {
+        Row: {
+          created_at: string
+          deleted_at: string | null
+          group_permission_id: string
+          permission_group_id: string
+          permission_id: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          deleted_at?: string | null
+          group_permission_id: string
+          permission_group_id: string
+          permission_id: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          deleted_at?: string | null
+          group_permission_id?: string
+          permission_group_id?: string
+          permission_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "group_permission_permission_group_id_fkey"
+            columns: ["permission_group_id"]
+            isOneToOne: false
+            referencedRelation: "permission_group"
+            referencedColumns: ["permission_group_id"]
+          },
+          {
+            foreignKeyName: "group_permission_permission_id_fkey"
+            columns: ["permission_id"]
+            isOneToOne: false
+            referencedRelation: "permission"
+            referencedColumns: ["permission_id"]
+          },
+        ]
+      }
       orphan_ignore: {
         Row: {
           check_key: string
@@ -492,6 +639,66 @@ export type Database = {
           is_active?: boolean
           reason?: string | null
           ref_id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      permission: {
+        Row: {
+          created_at: string
+          deleted_at: string | null
+          description: string | null
+          permission_id: string
+          selector: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          deleted_at?: string | null
+          description?: string | null
+          permission_id: string
+          selector: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          deleted_at?: string | null
+          description?: string | null
+          permission_id?: string
+          selector?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      permission_group: {
+        Row: {
+          created_at: string
+          deleted_at: string | null
+          description: string | null
+          end_at: string | null
+          permission_group_id: string
+          selector: string
+          start_at: string | null
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          deleted_at?: string | null
+          description?: string | null
+          end_at?: string | null
+          permission_group_id: string
+          selector: string
+          start_at?: string | null
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          deleted_at?: string | null
+          description?: string | null
+          end_at?: string | null
+          permission_group_id?: string
+          selector?: string
+          start_at?: string | null
           updated_at?: string
         }
         Relationships: []
@@ -604,9 +811,9 @@ export type Database = {
         Row: {
           created_at: string
           expected_canonical_product: string | null
+          expected_concepts: string | null
           expected_reason_code: string | null
           expected_result_type: string | null
-          expected_concepts: string | null
           expected_should_answer: boolean | null
           expected_sources: string | null
           id: string
@@ -624,9 +831,9 @@ export type Database = {
         Insert: {
           created_at?: string
           expected_canonical_product?: string | null
+          expected_concepts?: string | null
           expected_reason_code?: string | null
           expected_result_type?: string | null
-          expected_concepts?: string | null
           expected_should_answer?: boolean | null
           expected_sources?: string | null
           id?: string
@@ -644,9 +851,9 @@ export type Database = {
         Update: {
           created_at?: string
           expected_canonical_product?: string | null
+          expected_concepts?: string | null
           expected_reason_code?: string | null
           expected_result_type?: string | null
-          expected_concepts?: string | null
           expected_should_answer?: boolean | null
           expected_sources?: string | null
           id?: string
@@ -673,11 +880,13 @@ export type Database = {
       }
       test_result_items: {
         Row: {
+          answer_provenance: string | null
           created_at: string
           elapsed_ms: number
           error_message: string | null
           id: string
           passed: boolean
+          prompt_version: string | null
           response_payload: Json | null
           response_text: string | null
           row_index: number
@@ -685,13 +894,16 @@ export type Database = {
           test_item_id: string
           test_result_id: string
           ttft_ms: number | null
+          workflow_run_id: string | null
         }
         Insert: {
+          answer_provenance?: string | null
           created_at?: string
           elapsed_ms: number
           error_message?: string | null
           id?: string
           passed?: boolean
+          prompt_version?: string | null
           response_payload?: Json | null
           response_text?: string | null
           row_index: number
@@ -699,13 +911,16 @@ export type Database = {
           test_item_id: string
           test_result_id: string
           ttft_ms?: number | null
+          workflow_run_id?: string | null
         }
         Update: {
+          answer_provenance?: string | null
           created_at?: string
           elapsed_ms?: number
           error_message?: string | null
           id?: string
           passed?: boolean
+          prompt_version?: string | null
           response_payload?: Json | null
           response_text?: string | null
           row_index?: number
@@ -713,6 +928,7 @@ export type Database = {
           test_item_id?: string
           test_result_id?: string
           ttft_ms?: number | null
+          workflow_run_id?: string | null
         }
         Relationships: [
           {
@@ -727,6 +943,13 @@ export type Database = {
             columns: ["test_result_id"]
             isOneToOne: false
             referencedRelation: "test_results"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "test_result_items_workflow_run_id_fkey"
+            columns: ["workflow_run_id"]
+            isOneToOne: false
+            referencedRelation: "workflow_runs"
             referencedColumns: ["id"]
           },
         ]
@@ -856,6 +1079,36 @@ export type Database = {
         }
         Relationships: []
       }
+      user_group_permission: {
+        Row: {
+          created_at: string
+          deleted_at: string | null
+          entity_id: string
+          entity_type: string
+          updated_at: string
+          user_group_permission_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          deleted_at?: string | null
+          entity_id: string
+          entity_type: string
+          updated_at?: string
+          user_group_permission_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          deleted_at?: string | null
+          entity_id?: string
+          entity_type?: string
+          updated_at?: string
+          user_group_permission_id?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       web_search_cache: {
         Row: {
           cache_key: string
@@ -893,6 +1146,7 @@ export type Database = {
           created_at: string
           final_output: Json | null
           id: string
+          source: string | null
           status: string
           updated_at: string
           user_input: Json
@@ -904,6 +1158,7 @@ export type Database = {
           created_at?: string
           final_output?: Json | null
           id?: string
+          source?: string | null
           status: string
           updated_at?: string
           user_input?: Json
@@ -915,6 +1170,7 @@ export type Database = {
           created_at?: string
           final_output?: Json | null
           id?: string
+          source?: string | null
           status?: string
           updated_at?: string
           user_input?: Json
@@ -1030,6 +1286,16 @@ export type Database = {
         }
         Relationships: []
       }
+      orphan_queue_summary_v: {
+        Row: {
+          active: number | null
+          check_key: string | null
+          data_type: string | null
+          ignored: number | null
+          total: number | null
+        }
+        Relationships: []
+      }
       orphan_queue_v: {
         Row: {
           check_key: string | null
@@ -1041,16 +1307,6 @@ export type Database = {
           ignored_by: string | null
           ref_id: string | null
           ref_label: string | null
-        }
-        Relationships: []
-      }
-      orphan_queue_summary_v: {
-        Row: {
-          active: number | null
-          check_key: string | null
-          data_type: string | null
-          ignored: number | null
-          total: number | null
         }
         Relationships: []
       }
@@ -1089,12 +1345,65 @@ export type Database = {
         }
       }
       classify_prompt_category: { Args: { p_prompt: string }; Returns: string }
+      delete_permission_group_with_resources: {
+        Args: {
+          p_actor_email: string
+          p_actor_name: string
+          p_actor_user_id: string
+          p_group_id: string
+          p_trace_id: string
+        }
+        Returns: {
+          deleted_selector: string
+          group_removed: boolean
+          members_removed: number
+          permissions_removed: number
+        }[]
+      }
+      get_user_permission_bundle: {
+        Args: { p_user_id: string }
+        Returns: {
+          row_kind: string
+          selector: string
+        }[]
+      }
+      merge_permission_groups: {
+        Args: {
+          p_actor_email: string
+          p_actor_name: string
+          p_actor_user_id: string
+          p_delete_source: boolean
+          p_source_group_id: string
+          p_target_group_id: string
+          p_trace_id: string
+        }
+        Returns: {
+          deleted_source: boolean
+          permissions_merged: number
+          prior_source_permission_count: number
+          prior_source_user_count: number
+          prior_target_permission_count: number
+          prior_target_user_count: number
+          source_selector: string
+          target_selector: string
+          users_merged: number
+        }[]
+      }
+      preview_permission_group_merge: {
+        Args: { p_source_group_id: string; p_target_group_id: string }
+        Returns: {
+          permissions_to_add: number
+          source_selector: string
+          target_selector: string
+          users_to_add: number
+        }[]
+      }
       set_orphan_ignore: {
         Args: {
           p_check_key: string
-          p_created_by?: string | null
+          p_created_by?: string
           p_is_active?: boolean
-          p_reason?: string | null
+          p_reason?: string
           p_ref_id: string
         }
         Returns: {
@@ -1106,6 +1415,12 @@ export type Database = {
           reason: string | null
           ref_id: string
           updated_at: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "orphan_ignore"
+          isOneToOne: true
+          isSetofReturn: false
         }
       }
     }

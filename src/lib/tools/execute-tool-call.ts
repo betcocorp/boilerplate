@@ -1,5 +1,6 @@
 import { getErrorMessage } from '~/lib/utils';
 import { PRODUCT_TOOL_NAMES, type ProductToolName } from '~/lib/tools/tool-schemas';
+import { buildModelToolPayload } from '~/lib/tools/model-tool-payload';
 import { executeProductTool } from '~/lib/tools/product-tools';
 
 import type { ToolCallOrigin, ToolTraceEntry } from '~/lib/audit/trace';
@@ -17,10 +18,26 @@ export const TOOL_ARGUMENTS_PREVIEW_MAX_CHARS = 1_800;
 export const TOOL_OUTPUT_PREVIEW_MAX_CHARS = 4_000;
 
 /**
+ * B0-437 — `output` is the authoritative payload: it is what gets persisted and what the validator
+ * and the regulated-claim guardrail read. `modelOutput`, when present, is a slimmer projection of the
+ * same data that goes to the model instead (see `~/lib/tools/model-tool-payload`). Consumers that
+ * need the full evidence must use `output`; only the generation runtimes use `modelOutput`.
+ */
+export type ExecutedToolCall = {
+  output: string;
+  modelOutput?: string;
+  trace: ToolTraceEntry;
+};
+
+/**
  * B0-390 — single construction site for a trace entry, so `argumentsTruncated` / `outputTruncated`
  * can never drift from the slice that produced the preview. Values are sliced, never reformatted:
  * a dilution ratio, EPA registration number, ppm or contact time inside a preview is exactly the
  * text the tool returned (possibly cut, in which case the flag says so).
+ *
+ * B0-437 — the preview always describes the FULL payload (the audit record of what was retrieved),
+ * never the slimmed model-facing variant; `modelOutputChars` records that variant's size so the
+ * model-vs-persisted split stays verifiable from the trace alone.
  */
 export function buildToolTraceEntry(input: {
   toolName: string;
@@ -30,6 +47,7 @@ export function buildToolTraceEntry(input: {
   ok: boolean;
   durationMs: number;
   origin?: ToolCallOrigin;
+  modelOutputChars?: number;
 }): ToolTraceEntry {
   const argumentsJson = input.argumentsJson || '';
   const argumentsTruncated = argumentsJson.length > TOOL_ARGUMENTS_PREVIEW_MAX_CHARS;
@@ -45,6 +63,9 @@ export function buildToolTraceEntry(input: {
     ...(input.origin ? { origin: input.origin } : {}),
     argumentsTruncated,
     outputTruncated,
+    ...(input.modelOutputChars !== undefined
+      ? { modelOutputChars: input.modelOutputChars }
+      : {}),
   };
 }
 
@@ -54,7 +75,7 @@ export async function executeToolCall(input: {
   callId: string;
   /** B0-390 — why this call happened; defaults to a model-chosen call. */
   origin?: ToolCallOrigin;
-}): Promise<{ output: string; trace: ToolTraceEntry }> {
+}): Promise<ExecutedToolCall> {
   const started = Date.now();
   let args: unknown;
 
@@ -64,7 +85,7 @@ export async function executeToolCall(input: {
     args = {};
   }
 
-  const traceFor = (output: string, ok: boolean) =>
+  const traceFor = (output: string, ok: boolean, modelOutputChars?: number) =>
     buildToolTraceEntry({
       toolName: input.name,
       callId: input.callId,
@@ -73,6 +94,7 @@ export async function executeToolCall(input: {
       ok,
       durationMs: Date.now() - started,
       origin: input.origin ?? 'model_chosen',
+      modelOutputChars,
     });
 
   try {
@@ -87,7 +109,17 @@ export async function executeToolCall(input: {
     const payload = await executeProductTool(input.name, args);
     const out = JSON.stringify(payload);
 
-    return { output: out, trace: traceFor(out, true) };
+    // B0-437 — only carry a model variant when it is actually smaller; an equal-size variant would
+    // just be a second copy of the same string.
+    const modelPayload = buildModelToolPayload(payload);
+    const modelOut = modelPayload ? JSON.stringify(modelPayload) : null;
+    const useModelOut = modelOut !== null && modelOut.length < out.length;
+
+    return {
+      output: out,
+      ...(useModelOut ? { modelOutput: modelOut } : {}),
+      trace: traceFor(out, true, useModelOut ? modelOut.length : undefined),
+    };
   } catch (err) {
     const message = getErrorMessage(err);
     const out = JSON.stringify({ ok: false, error: message });

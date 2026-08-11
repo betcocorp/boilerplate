@@ -182,6 +182,91 @@ describe('runResponsesWithToolLoop — prompt caching telemetry (B0-324)', () =>
   });
 });
 
+describe('runResponsesWithToolLoop — preloaded evidence (B0-436)', () => {
+  const evidence = {
+    label: 'search_product_docs({"freeformQuery":"dilution for Green Earth?"})',
+    text: '{"ok":true,"sources":[{"documentId":"doc-1"}]}',
+  };
+
+  it('appends the evidence as its own message item after the user message, round 1 only', async () => {
+    const { client, create } = stubClient([
+      {
+        id: 'resp_1',
+        output: [
+          {
+            type: 'function_call',
+            call_id: 'call_1',
+            name: 'get_efficacy_data',
+            arguments: '{"productId":"Green Earth"}',
+          },
+        ],
+      },
+      { id: 'resp_2', output: [], output_text: '2 oz per gallon.' },
+    ]);
+
+    await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1',
+      instructions: 'stable prefix',
+      tools: [],
+      userMessage: 'dilution for Green Earth?',
+      promptCacheKey: 'bex-product-support:orchestrator:product',
+      preloadedEvidence: evidence,
+      executeTool: async ({ name }) => ({ output: '{}', trace: trace(name) }),
+    });
+
+    const calls = create.mock.calls as unknown as Array<[Record<string, unknown>]>;
+    const round1 = calls[0]?.[0].input as Array<Record<string, unknown>>;
+
+    expect(round1).toHaveLength(2);
+    expect(round1[0]).toMatchObject({ role: 'user', content: 'dilution for Green Earth?' });
+    // A normal message item — NOT a `function_call_output`, which would be invalid with no
+    // matching `function_call` in the chain.
+    expect(round1[1]?.type).toBe('message');
+    expect(String(round1[1]?.content)).toContain('## Retrieved evidence (pre-fetched)');
+    expect(String(round1[1]?.content)).toContain(evidence.text);
+    // Round 2 carries tool outputs only; re-injecting the evidence would duplicate it in the chain.
+    const round2 = calls[1]?.[0].input as Array<Record<string, unknown>>;
+    expect(round2.every((item) => item.type === 'function_call_output')).toBe(true);
+  });
+
+  it('keeps the evidence out of the cacheable prefix (instructions + prompt_cache_key)', async () => {
+    const { client, create } = stubClient([{ id: 'resp_1', output: [], output_text: 'hi' }]);
+
+    await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1',
+      instructions: 'stable prefix',
+      tools: [],
+      userMessage: 'dilution for Green Earth?',
+      promptCacheKey: 'bex-product-support:orchestrator:product',
+      preloadedEvidence: evidence,
+      executeTool: async ({ name }) => ({ output: '{}', trace: trace(name) }),
+    });
+
+    const params = (create.mock.calls as unknown as Array<[Record<string, unknown>]>)[0]?.[0];
+    expect(params?.instructions).toBe('stable prefix');
+    expect(params?.prompt_cache_key).toBe('bex-product-support:orchestrator:product');
+  });
+
+  it('sends the user message alone when no evidence was preloaded', async () => {
+    const { client, create } = stubClient([{ id: 'resp_1', output: [], output_text: 'hi' }]);
+
+    await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1',
+      instructions: 'stable prefix',
+      tools: [],
+      userMessage: 'hello',
+      executeTool: async ({ name }) => ({ output: '{}', trace: trace(name) }),
+    });
+
+    const input = (create.mock.calls as unknown as Array<[Record<string, unknown>]>)[0]?.[0]
+      .input as Array<Record<string, unknown>>;
+    expect(input).toHaveLength(1);
+  });
+});
+
 describe('runResponsesWithToolLoop — bounded transport retry (B0-370)', () => {
   it('retries a network fault and succeeds', async () => {
     const { client, create } = scriptedClient([
@@ -475,5 +560,71 @@ describe('runResponsesWithToolLoop — streaming retry safety (B0-370)', () => {
     // Each token reaches the caller exactly once — the observer is not a second forwarding path.
     expect(deltas).toEqual(['Use ', '2 oz']);
     expect(observed).toEqual(['Use ', '2 oz']);
+  });
+});
+
+describe('runResponsesWithToolLoop — model vs persisted tool output (B0-437)', () => {
+  it('sends `modelOutput` to the model when the tool provides one', async () => {
+    const { client, create } = stubClient([
+      {
+        id: 'resp_1',
+        output: [
+          {
+            type: 'function_call',
+            call_id: 'call_1',
+            name: 'search_product_docs',
+            arguments: '{"freeformQuery":"pH7Q first aid"}',
+          },
+        ],
+      },
+      { id: 'resp_2', output: [], output_text: 'Rinse cautiously with water.' },
+    ]);
+
+    await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1',
+      instructions: 'stable prefix',
+      tools: [],
+      userMessage: 'pH7Q first aid',
+      executeTool: async ({ name }) => ({
+        output: '{"sources":[{"snippet":"...","documentBody":"FULL BODY"}]}',
+        modelOutput: '{"sources":[{"documentBody":"SLIM"}]}',
+        trace: trace(name),
+      }),
+    });
+
+    const round2 = (create.mock.calls as unknown as Array<[Record<string, unknown>]>)[1]?.[0]
+      .input as Array<Record<string, unknown>>;
+    expect(round2[0]?.output).toBe('{"sources":[{"documentBody":"SLIM"}]}');
+  });
+
+  it('falls back to `output` when the tool provides no model variant', async () => {
+    const { client, create } = stubClient([
+      {
+        id: 'resp_1',
+        output: [
+          {
+            type: 'function_call',
+            call_id: 'call_1',
+            name: 'get_escalation_policy',
+            arguments: '{"issueType":"safety"}',
+          },
+        ],
+      },
+      { id: 'resp_2', output: [], output_text: 'Escalate to EHS.' },
+    ]);
+
+    await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1',
+      instructions: 'stable prefix',
+      tools: [],
+      userMessage: 'who do I escalate to?',
+      executeTool: async ({ name }) => ({ output: '{"policy":"x"}', trace: trace(name) }),
+    });
+
+    const round2 = (create.mock.calls as unknown as Array<[Record<string, unknown>]>)[1]?.[0]
+      .input as Array<Record<string, unknown>>;
+    expect(round2[0]?.output).toBe('{"policy":"x"}');
   });
 });

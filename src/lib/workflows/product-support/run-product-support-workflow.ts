@@ -39,7 +39,7 @@ import {
   fetchRecommendationContext,
 } from '~/lib/tools/cross-reference-lookup';
 import { buildCompetitiveRecommendationAnswer } from '~/lib/recommendations/recommendation-answer';
-import { productSupportTools } from '~/lib/tools/definitions';
+import { productSupportToolsForRoute } from '~/lib/tools/definitions';
 import { buildToolTraceEntry, executeToolCall } from '~/lib/tools/execute-tool-call';
 
 import type { Json } from '~/types/supabase.public';
@@ -50,6 +50,12 @@ import {
   effectivePromptIdForDecision,
   VALIDATOR_SYSTEM_PROMPT,
 } from '~/lib/workflows/product-support/product-support-prompts';
+import {
+  buildPreloadedEvidence,
+  buildSpeculativeCallId,
+  createSpeculativeReuseExecutor,
+  runSpeculativeRetrieval,
+} from '~/lib/workflows/product-support/speculative-retrieval';
 import {
   gateRecordSchema,
   promptRecordSchema,
@@ -1035,6 +1041,13 @@ export async function runProductSupportWorkflow(input: {
     mode: agentMode,
     decision: routingDecision,
   });
+  /**
+   * B0-437 — route-scoped tool schemas (all 14 serialize to ~2,785 tokens and used to go out on every
+   * call). Keyed on the same `routingDecision` as `promptCacheKey` and `instructions`, so the whole
+   * cacheable prefix — instructions + tool schemas — stays byte-identical for every call that shares
+   * the key, both within this tool loop and across later turns routed the same way.
+   */
+  const routeTools = productSupportToolsForRoute(routingDecision);
 
   /**
    * B0-392 — the specialist policy that ACTUALLY ran, which is not always `routingDecision`:
@@ -1403,25 +1416,32 @@ export async function runProductSupportWorkflow(input: {
     let totalSearchMs = 0;
     let retrievalSamples = 0;
 
-    const toolChoice = shouldForceCrossReferenceLookup(input.userMessage)
-      ? ({ type: 'function', name: 'lookup_cross_reference' } as const)
-      : ('required' as const);
     /**
      * B0-390 — `tool_choice` is pinned on the FIRST model round only (both runtimes send `auto`
      * afterwards), so the first executed call of the pinned tool is the one the model had no say
      * in; a later call of the same tool was its own choice.
+     *
+     * B0-436 — the actual `toolChoice` is resolved further down, once speculative retrieval has
+     * run (a usable speculative hit downgrades it to `auto`). Pinning to a named function only ever
+     * happens on the cross-reference path, so the pinned name is derived from that condition here —
+     * it must be in scope before `executeTool` is defined below.
      */
-    const forcedToolChoiceName = typeof toolChoice === 'object' ? toolChoice.name : null;
+    const forcedToolChoiceName = shouldForceCrossReferenceLookup(input.userMessage)
+      ? 'lookup_cross_reference'
+      : null;
     let forcedToolChoiceConsumed = false;
 
     const executeTool = async ({
       name,
       argumentsJson,
       callId,
+      speculative,
     }: {
       name: string;
       argumentsJson: string;
       callId: string;
+      /** B0-436 — this call was fired before the first model call, not requested by the model. */
+      speculative?: boolean;
     }) => {
       input.onEvent?.({
         type: 'tool',
@@ -1431,18 +1451,38 @@ export async function runProductSupportWorkflow(input: {
       });
       await writeAuditLog(
         'tool_called',
-        { tool_name: name, call_id: callId },
+        {
+          tool_name: name,
+          call_id: callId,
+          ...(speculative ? { speculative: true } : {}),
+        },
         { ...wfCtx, toolName: name },
       );
-      logInfo('tool_called', { ...wfCtx, tool_name: name, call_id: callId });
+      logInfo('tool_called', {
+        ...wfCtx,
+        tool_name: name,
+        call_id: callId,
+        ...(speculative ? { speculative: true } : {}),
+      });
 
-      let origin: ToolCallOrigin = 'model_chosen';
-      if (forcedToolChoiceName === name && !forcedToolChoiceConsumed) {
+      /**
+       * B0-390 + B0-436 — a speculative retrieval runs before the first model call, so the model
+       * demonstrably did not choose it: it is workflow-injected. Leaving it `model_chosen` would be
+       * exactly the mis-attribution this attribution exists to prevent. It also cannot consume the
+       * `tool_choice` pin, which applies to the first MODEL round.
+       */
+      let origin: ToolCallOrigin = speculative ? 'workflow_injected' : 'model_chosen';
+      if (!speculative && forcedToolChoiceName === name && !forcedToolChoiceConsumed) {
         origin = 'tool_choice_forced';
         forcedToolChoiceConsumed = true;
       }
 
       const out = await executeToolCall({ name, argumentsJson, callId, origin });
+      // B0-436 — the marker travels on the persisted trace as well as the audit row, so an
+      // `/admin/observability` timeline shows which retrieval the model did not ask for.
+      const trace: ToolTraceEntry = speculative
+        ? { ...out.trace, speculative: true }
+        : out.trace;
       const retrievalTiming = extractRetrievalTiming(out.output);
       if (retrievalTiming) {
         cacheSourceCounts.set(
@@ -1454,29 +1494,80 @@ export async function runProductSupportWorkflow(input: {
       }
 
       await writeAuditLog(
-        out.trace.ok ? 'tool_succeeded' : 'tool_failed',
+        trace.ok ? 'tool_succeeded' : 'tool_failed',
         // B0-363: failures also carry `error_message` + a bounded `arguments_preview`
         // so the cause is recoverable from the audit row alone.
-        buildToolCallAuditPayload(out.trace),
+        {
+          ...buildToolCallAuditPayload(trace),
+          ...(speculative ? { speculative: true } : {}),
+        },
         { ...wfCtx, toolName: name },
       );
 
-      resolvedToolTrace.push(out.trace);
+      // B0-390 — the resolved trace is the single array every call lands in; B0-436's speculative
+      // marker rides on the entry pushed here.
+      resolvedToolTrace.push(trace);
       toolOutputLog.push({
-        toolName: out.trace.toolName,
-        ok: out.trace.ok,
+        toolName: trace.toolName,
+        ok: trace.ok,
         output: out.output,
-        trace: out.trace,
+        trace,
       });
       input.onEvent?.({
         type: 'tool',
         phase: 'completed',
         name,
-        ok: out.trace.ok,
+        ok: trace.ok,
         callId,
       });
-      return out;
+      return { ...out, trace };
     };
+
+    const forcedCrossReference = shouldForceCrossReferenceLookup(input.userMessage);
+
+    /**
+     * B0-436 — speculative retrieval. Runs the obvious `search_product_docs` call ourselves so the
+     * first model call can be the answering call. Placed after the early-decline gate (which returns
+     * long before here) so no run ever pays for a search whose result is discarded.
+     */
+    const speculation = await runSpeculativeRetrieval({
+      userMessage: input.userMessage,
+      routingDecision,
+      forcedCrossReference,
+      callId: buildSpeculativeCallId(run.id),
+      execute: executeTool,
+    });
+    // A failed speculative search is no evidence at all: keep `tool_choice: 'required'` so the model
+    // still has to retrieve before answering, and never present the error payload as evidence.
+    const usableSpeculation =
+      speculation.result && speculation.result.trace.ok ? speculation.result : null;
+
+    let speculativeReuseCount = 0;
+    const executeToolForGeneration = createSpeculativeReuseExecutor({
+      speculative: usableSpeculation,
+      userMessage: input.userMessage,
+      execute: executeTool,
+      onReuse: () => {
+        speculativeReuseCount += 1;
+      },
+    });
+
+    const toolChoice = forcedCrossReference
+      ? ({ type: 'function', name: 'lookup_cross_reference' } as const)
+      : usableSpeculation
+        ? // Round 1 already holds retrieved evidence, so forcing another tool call would re-create
+          // the wasted round this ticket removes.
+          ('auto' as const)
+        : ('required' as const);
+
+    const preloadedEvidence = usableSpeculation
+      ? buildPreloadedEvidence({
+          userMessage: input.userMessage,
+          // B0-437 — the model gets the slimmed variant when the tool produced one; the FULL
+          // payload is what `toolOutputLog` (validator + regulated-claim guardrail) already holds.
+          output: usableSpeculation.modelOutput ?? usableSpeculation.output,
+        })
+      : undefined;
 
     // Generation runtime: AI SDK (`streamText`) when BEX_AI_SDK_GENERATION_ENABLED, else the
     // OpenAI Responses tool loop. Both return the same { assistantText, finalResponseId,
@@ -1487,24 +1578,27 @@ export async function runProductSupportWorkflow(input: {
           instructions,
           history: input.priorMessages ?? [],
           userMessage: input.userMessage,
+          tools: routeTools,
           toolChoice,
           promptCacheKey,
+          preloadedEvidence,
           onAssistantDelta: input.onAssistantDelta,
           observeAssistantDelta,
-          executeTool,
+          executeTool: executeToolForGeneration,
         })
       : await runResponsesWithToolLoop({
           client,
           model,
           instructions,
-          tools: productSupportTools,
+          tools: routeTools,
           userMessage: input.userMessage,
           previousResponseId: input.previousOpenaiResponseId ?? null,
           toolChoice,
           promptCacheKey,
+          preloadedEvidence,
           onAssistantDelta: input.onAssistantDelta,
           observeAssistantDelta,
-          executeTool,
+          executeTool: executeToolForGeneration,
         });
 
     /**
@@ -1521,6 +1615,21 @@ export async function runProductSupportWorkflow(input: {
       }
     }
 
+    // B0-436 — one self-describing row per run so `/admin/observability` can tell a speculative
+    // retrieval from a model-requested one, and see whether the model's own call reused it.
+    await writeAuditLog(
+      'speculative_retrieval',
+      {
+        executed: speculation.result !== null,
+        skipped_reason: speculation.skippedReason,
+        ok: speculation.result?.trace.ok ?? null,
+        used_as_evidence: usableSpeculation !== null,
+        reuse_count: speculativeReuseCount,
+        tool_choice_round_1: typeof toolChoice === 'string' ? toolChoice : toolChoice.name,
+      },
+      { ...wfCtx, stepId: agentStep.id, toolName: 'search_product_docs' },
+    );
+
     // AI SDK has no OpenAI response id; use a synthetic marker so the persisted chain stays populated.
     const finalResponseId = agentResult.finalResponseId ?? `ai_sdk:${run.id}`;
     input.onEvent?.({ type: 'status', stage: 'agent_completed' });
@@ -1532,7 +1641,13 @@ export async function runProductSupportWorkflow(input: {
       ttftMs: ttftMs(),
     };
 
-    const crossReferenceIntent = shouldForceCrossReferenceLookup(input.userMessage);
+    /**
+     * B0-436 + B0-390 — the speculative retrieval executes through `executeTool`, so it is already
+     * in `resolvedToolTrace` (in execution order, first), and the reconciliation loop above has
+     * folded in anything the generation runtime reported separately. B0-436's own prepend onto
+     * `agentResult.toolTrace` is therefore unnecessary here and would double-count the call.
+     */
+    const crossReferenceIntent = forcedCrossReference;
     /**
      * B0-339 — the cross-reference post-processing below must not hinge on the routing label alone.
      * A cross-reference request phrased without "equivalent" ("Which Betco product replaces X?")
@@ -1712,6 +1827,9 @@ export async function runProductSupportWorkflow(input: {
          *
          * B0-390 — the RESOLVED trace: the force-injected cross-reference search and the
          * safety-net lookup used to execute without ever being persisted.
+         *
+         * B0-436 — the speculative retrieval is in here too (it runs through `executeTool`),
+         * flagged `speculative: true`.
          */
         toolTrace: resolvedToolTrace,
         // B0-324 — token usage for the turn plus the per-model-call breakdown, so prompt-cache

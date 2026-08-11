@@ -114,6 +114,11 @@ export const PRODUCT_SUPPORT_SHARED_INSTRUCTIONS = [
   '',
   'Default tool for product and procedure questions: `search_product_docs`.',
   '',
+  // B0-436 — speculative retrieval fires `search_product_docs` before the first model call and hands
+  // the result over as a `## Retrieved evidence (pre-fetched)` message. Without this line the model
+  // reads the rule above as unsatisfied and burns a whole round re-running the same search.
+  'A `## Retrieved evidence (pre-fetched)` block in the conversation IS a completed retrieval call and satisfies the requirement above — ground your answer in it and cite from it. Call more tools only when it does not contain what the question needs.',
+  '',
   '---',
   '',
   '## Scope gate',

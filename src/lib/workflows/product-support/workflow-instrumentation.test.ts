@@ -564,9 +564,17 @@ describe('tool trace persistence (B0-390)', () => {
   it('attributes ordinary calls to the model when nothing is pinned', async () => {
     await run();
 
+    // B0-436 — the speculative retrieval runs before the first model call, so an unpinned run has
+    // two entries: the workflow's own speculative call, then the model's.
     const trace = persistedToolTrace();
-    expect(trace).toHaveLength(1);
-    expect(trace[0]?.origin).toBe('model_chosen');
+    const speculative = trace.filter((entry) => entry.speculative);
+    const modelChosen = trace.filter((entry) => !entry.speculative);
+
+    expect(speculative).toHaveLength(1);
+    // The model demonstrably did not choose a call fired before it ever ran.
+    expect(speculative[0]?.origin).toBe('workflow_injected');
+    expect(modelChosen).toHaveLength(1);
+    expect(modelChosen[0]?.origin).toBe('model_chosen');
   });
 
   it('flags a truncated arguments/output preview and transcribes it unchanged', async () => {
@@ -590,7 +598,8 @@ describe('tool trace persistence (B0-390)', () => {
 
     await run();
 
-    const entry = persistedToolTrace()[0];
+    // Selected by callId, not index: B0-436's speculative retrieval occupies index 0.
+    const entry = persistedToolTrace().find((e) => e.callId === 'call_long');
     expect(entry?.argumentsTruncated).toBe(true);
     expect(entry?.outputTruncated).toBe(true);
     expect(entry?.argumentsPreview).toHaveLength(TOOL_ARGUMENTS_PREVIEW_MAX_CHARS);
@@ -652,15 +661,16 @@ describe('tool trace persistence (B0-390)', () => {
     expect(agentStep.error).toEqual({ message: 'generation exploded' });
     const output = stepOutput('openai_responses_agent');
     expect(output.partial).toBe(true);
-    expect(output.toolCalls).toBe(1);
+    // B0-436 — the speculative retrieval completed too, so both calls are kept.
     const trace = persistedToolTrace();
-    expect(trace).toHaveLength(1);
-    expect(trace[0]?.callId).toBe('call_before_throw');
-    expect(trace[0]?.argumentsPreview).toContain('floor wax');
+    expect(output.toolCalls).toBe(trace.length);
+    const thrownCall = trace.find((entry) => entry.callId === 'call_before_throw');
+    expect(thrownCall).toBeDefined();
+    expect(thrownCall?.argumentsPreview).toContain('floor wax');
     expect(steps().filter((step) => step.status === 'running')).toEqual([]);
   });
 
-  it('leaves the agent step output alone when the run throws before any tool call', async () => {
+  it('keeps the speculative call when the run throws before the model requests anything', async () => {
     runResponsesWithToolLoopMock.mockImplementation(async () => {
       throw new Error('model unavailable');
     });
@@ -669,7 +679,16 @@ describe('tool trace persistence (B0-390)', () => {
 
     const agentStep = stepNamed('openai_responses_agent');
     expect(agentStep.status).toBe('failed');
-    expect(agentStep.output).toBeNull();
+    // B0-436 changed what "before any tool call" means: the speculative retrieval has already run
+    // and succeeded by this point, and a completed call is exactly what B0-390 exists to preserve.
+    // (The "never write an output that was not supplied" invariant is covered by B0-386's
+    // `workflow-failure-attribution.test.ts`.)
+    const output = stepOutput('openai_responses_agent');
+    expect(output.partial).toBe(true);
+    const trace = persistedToolTrace();
+    expect(trace).toHaveLength(1);
+    expect(trace[0]?.speculative).toBe(true);
+    expect(trace[0]?.origin).toBe('workflow_injected');
   });
 });
 

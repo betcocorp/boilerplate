@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * B0-386 — the workflow failure handler used to `completeWorkflowStep(agentStep.id, {status:
@@ -179,6 +179,14 @@ function seedStep(overrides: Row = {}): Row {
 beforeEach(() => {
   fake = createFakeSupabase();
   runValidatorPassMock.mockReset();
+  // B0-436 — these tests are about failure ATTRIBUTION, not retrieval. Speculative retrieval would
+  // add a second (real, and here failing) `search_product_docs` call to every run's tool trace; it
+  // has its own coverage in `speculative-retrieval.test.ts`.
+  vi.stubEnv('BEX_SPECULATIVE_RETRIEVAL', 'false');
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe('completeWorkflowStep patch building (B0-386)', () => {
