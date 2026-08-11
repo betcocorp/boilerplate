@@ -17,7 +17,11 @@ import { getAggregateDashboardData } from '~/lib/observability/aggregates';
 import { listWorkflowRuns } from '~/lib/observability/runs-repository';
 import { readSearchParam } from '~/lib/utils/params';
 
-import type { AggregateDashboardData, RunSource, WorkflowRunListRow } from '~/types/observability';
+import type {
+  AggregateDashboardData,
+  RunSourceFilter,
+  WorkflowRunListRow,
+} from '~/types/observability';
 
 export const metadata = {
   title: 'Prompt observability | Betco BEX',
@@ -29,6 +33,11 @@ const PAGE_SIZE = 50;
 /** Inclusive default window: today plus the previous 6 UTC days. */
 const DEFAULT_WINDOW_DAYS = 7;
 const RUN_STATUSES = new Set(['running', 'completed', 'failed']);
+/**
+ * B0-416 — accepted `source` values: the stored `workflow_runs.source` enum plus `unknown`
+ * for the pre-instrumentation NULL cohort. Mirrors `RunSourceFilter`.
+ */
+const RUN_SOURCE_FILTERS = new Set(['harness', 'bex_chat', 'orchestrator_api', 'unknown']);
 /** `routingDecisionSchema` values: an SME agent id, or the planner's `ambiguous`. */
 const ROUTING_DECISIONS = new Set<string>([...SME_AGENT_IDS, 'ambiguous']);
 const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -106,8 +115,9 @@ export default async function AdminObservabilityPage({ searchParams }: PageProps
   const search = normalizeSearchTerm(readSearchParam(params.q));
 
   const sourceParam = readSearchParam(params.source).trim();
-  const source: RunSource | undefined =
-    sourceParam === 'live' || sourceParam === 'harness' ? sourceParam : undefined;
+  const source: RunSourceFilter | undefined = RUN_SOURCE_FILTERS.has(sourceParam)
+    ? (sourceParam as RunSourceFilter)
+    : undefined;
 
   const requestedPage = Number.parseInt(readSearchParam(params.page, '1'), 10);
   const page = Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : 1;
@@ -172,8 +182,9 @@ export default async function AdminObservabilityPage({ searchParams }: PageProps
           <p className="mt-4 max-w-3xl text-base leading-7 text-slate-600">
             Every product-support workflow run, whichever entry point produced it —
             the Bex chat UI, the <code>/api/v1/orchestrator</code> API, or the
-            golden-set test harness. Harness runs are tagged so they can be
-            included or excluded. Select a run to open its trace.
+            golden-set test harness. Each run records its own entry point, so it can
+            be included or excluded; runs from before that was recorded show as
+            unknown. Select a run to open its trace.
           </p>
         </section>
 

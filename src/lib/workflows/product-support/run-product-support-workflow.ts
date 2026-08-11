@@ -47,6 +47,7 @@ import {
   runValidatorPass,
 } from '~/lib/workflows/product-support/validator';
 
+import type { RunSource } from '~/types/observability';
 
 const VALIDATOR_EVIDENCE_CHAR_BUDGET = 60_000;
 const VALIDATOR_PER_DOCUMENT_CHAR_BUDGET = 24_000;
@@ -908,6 +909,12 @@ export async function runProductSupportWorkflow(input: {
   traceId: string;
   conversationId: string;
   userMessage: string;
+  /**
+   * B0-416 — entry point that started this run, persisted on `workflow_runs.source`. Required
+   * (not defaulted) so a new caller cannot silently inherit another caller's provenance: the
+   * column is the only record of where a run came from, and `/admin/observability` filters on it.
+   */
+  source: RunSource;
   modelTag?: string;
   useValidator?: boolean;
   agentMode?: BexChatAgentMode;
@@ -1005,6 +1012,10 @@ export async function runProductSupportWorkflow(input: {
     conversation_id: input.conversationId,
     workflow_name: 'product-support',
     status: 'running',
+    // B0-416 — stamped on the insert, not patched afterwards: a second UPDATE would leave a
+    // window in which the run exists with no provenance, and would be skipped entirely on the
+    // failure paths that never reach a completion write.
+    source: input.source,
     user_input: jsonContent({
       message: input.userMessage,
       modelTag: input.modelTag ?? 'preview',

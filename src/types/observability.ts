@@ -175,8 +175,20 @@ export type TimelineEvent =
  * Run list
  * ------------------------------------------------------------------------- */
 
-/** Derived (not a stored column): whether the run came from the golden-set harness. */
-export type RunSource = 'live' | 'harness';
+/**
+ * B0-416 — the stored `workflow_runs.source` values (CHECK-constrained in the database),
+ * stamped at execution time by the entry point that started the run. No longer derived by
+ * scanning `test_result_items`, which lost the answer whenever a test run was deleted.
+ */
+export type RunSource = 'harness' | 'bex_chat' | 'orchestrator_api';
+
+/**
+ * B0-416 — what the observability source filter can ask for: one stored value, or the
+ * `source IS NULL` cohort. Those runs predate the column and are permanently unattributable
+ * (`workflow_name` is uniformly `product-support`, `user_input` is `{message, modelTag}` for
+ * every entry point), so they are reported as unknown rather than assumed to be chat.
+ */
+export type RunSourceFilter = RunSource | 'unknown';
 
 export type WorkflowRunListRow = {
   id: string;
@@ -185,7 +197,8 @@ export type WorkflowRunListRow = {
   status: string;
   confidence: number | null;
   routingDecision: string | null;
-  source: RunSource;
+  /** Null for pre-B0-416 runs no harness item points at — unknown, not "live". */
+  source: RunSource | null;
   createdAt: string;
   updatedAt: string;
   durationMs: number | null;
@@ -206,7 +219,7 @@ export type ListWorkflowRunsFilters = {
   routingDecision?: string;
   confidenceMin?: number;
   confidenceMax?: number;
-  source?: RunSource;
+  source?: RunSourceFilter;
   /**
    * B0-431 — free-text run search, applied server-side so it spans the whole
    * window rather than the current page. A full UUID matches the run id

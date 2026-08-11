@@ -685,6 +685,7 @@ export type Database = {
           test_item_id: string
           test_result_id: string
           ttft_ms: number | null
+          workflow_run_id: string | null
         }
         Insert: {
           created_at?: string
@@ -699,6 +700,7 @@ export type Database = {
           test_item_id: string
           test_result_id: string
           ttft_ms?: number | null
+          workflow_run_id?: string | null
         }
         Update: {
           created_at?: string
@@ -713,6 +715,7 @@ export type Database = {
           test_item_id?: string
           test_result_id?: string
           ttft_ms?: number | null
+          workflow_run_id?: string | null
         }
         Relationships: [
           {
@@ -727,6 +730,13 @@ export type Database = {
             columns: ["test_result_id"]
             isOneToOne: false
             referencedRelation: "test_results"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "test_result_items_workflow_run_id_fkey"
+            columns: ["workflow_run_id"]
+            isOneToOne: false
+            referencedRelation: "workflow_runs"
             referencedColumns: ["id"]
           },
         ]
@@ -893,6 +903,7 @@ export type Database = {
           created_at: string
           final_output: Json | null
           id: string
+          source: string | null
           status: string
           updated_at: string
           user_input: Json
@@ -904,6 +915,7 @@ export type Database = {
           created_at?: string
           final_output?: Json | null
           id?: string
+          source?: string | null
           status: string
           updated_at?: string
           user_input?: Json
@@ -915,6 +927,7 @@ export type Database = {
           created_at?: string
           final_output?: Json | null
           id?: string
+          source?: string | null
           status?: string
           updated_at?: string
           user_input?: Json

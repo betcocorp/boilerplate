@@ -36,6 +36,42 @@ const RUN_STATUSES = ['running', 'completed', 'failed'] as const;
  */
 const ROUTING_FILTER_OPTIONS = [...SME_AGENT_IDS, 'ambiguous'] as const;
 
+/**
+ * B0-416 — the stored `workflow_runs.source` values plus the `unknown` (NULL) cohort, with the
+ * label and badge styling used for each. `unknown` is runs recorded before the column existed
+ * that no harness item points at: their entry point is not recoverable from anything on the row,
+ * so they are labelled unknown rather than assumed to be chat traffic.
+ */
+const RUN_SOURCE_OPTIONS = [
+  { value: 'bex_chat', label: 'Bex chat' },
+  { value: 'orchestrator_api', label: 'Orchestrator API' },
+  { value: 'harness', label: 'Test harness' },
+  { value: 'unknown', label: 'Unknown (pre-instrumentation)' },
+] as const;
+
+const RUN_SOURCE_BADGES: Record<
+  string,
+  { label: string; className: string }
+> = {
+  harness: {
+    label: 'Test harness',
+    className: 'border-indigo-600/45 bg-indigo-600/12 text-indigo-900',
+  },
+  bex_chat: {
+    label: 'Bex chat',
+    className: 'border-slate-500/40 bg-slate-500/10 text-slate-700',
+  },
+  orchestrator_api: {
+    label: 'Orchestrator API',
+    className: 'border-cyan-600/45 bg-cyan-600/12 text-cyan-900',
+  },
+};
+
+const UNKNOWN_RUN_SOURCE_BADGE = {
+  label: 'Unknown',
+  className: 'border-slate-300 bg-slate-100 text-slate-500',
+} as const;
+
 export type RunsTableFilters = {
   /** `YYYY-MM-DD` (UTC), as typed into the date inputs. */
   from: string;
@@ -45,7 +81,7 @@ export type RunsTableFilters = {
   routingDecision: string;
   confidenceMin: string;
   confidenceMax: string;
-  /** `''` | `'live'` | `'harness'`. */
+  /** `''` (all) or one of `RUN_SOURCE_OPTIONS` — a stored `RunSource`, or `'unknown'`. */
   source: string;
   /**
    * B0-431 — normalized prompt/run-id search term. Lives in this form rather than
@@ -224,8 +260,11 @@ export function RunsTable({ route, rows, hasMore, page, filters }: RunsTableProp
               name="source"
             >
               <option value="">All sources</option>
-              <option value="live">Live</option>
-              <option value="harness">Test harness</option>
+              {RUN_SOURCE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
             </NativeSelect>
           </div>
 
@@ -300,16 +339,24 @@ export function RunsTable({ route, rows, hasMore, page, filters }: RunsTableProp
                       </Link>
                     </TableCell>
                     <TableCell className="align-top">
-                      <Badge
-                        className={
-                          run.source === 'harness'
-                            ? 'border-indigo-600/45 bg-indigo-600/12 text-indigo-900'
-                            : 'border-slate-500/40 bg-slate-500/10 text-slate-700'
-                        }
-                        variant="outline"
-                      >
-                        {run.source === 'harness' ? 'Test harness' : 'Live'}
-                      </Badge>
+                      {(() => {
+                        const badge = run.source
+                          ? RUN_SOURCE_BADGES[run.source] ?? UNKNOWN_RUN_SOURCE_BADGE
+                          : UNKNOWN_RUN_SOURCE_BADGE;
+                        return (
+                          <Badge
+                            className={badge.className}
+                            title={
+                              run.source
+                                ? undefined
+                                : 'Recorded before run provenance was stored (B0-416); the entry point is not recoverable.'
+                            }
+                            variant="outline"
+                          >
+                            {badge.label}
+                          </Badge>
+                        );
+                      })()}
                     </TableCell>
                     <TableCell className="align-top">
                       {run.routingDecision ? (

@@ -109,6 +109,7 @@ export async function POST(request: Request) {
           const result = await runBexChatTurn({
             conversationId: parsed.data.conversationId,
             message: parsed.data.message,
+            source: 'bex_chat',
             modelTag: parsed.data.model,
             useValidator: parsed.data.useValidator ?? false,
             agentMode: parsed.data.agentMode ?? 'orchestrator',
