@@ -14,6 +14,21 @@ function documentText(c: RerankableChunk): string {
   return c.heading ? `${c.heading}\n\n${c.chunk_text}` : c.chunk_text;
 }
 
+/** Sole definition of "the reranker is provisioned". Read at call time, never cached at import. */
+function rerankApiKey(): string | null {
+  return process.env.COHERE_API_KEY || null;
+}
+
+/**
+ * Whether cross-encoder reranking can actually run in this environment (B0-440).
+ * Callers must gate the *cost* of reranking on this — over-fetching a larger candidate
+ * pool, and labelling a retrieval `+reranked` — not just on their own feature flag,
+ * because `rerankChunks` returns null immediately when Cohere is unprovisioned.
+ */
+export function isRerankerConfigured(): boolean {
+  return rerankApiKey() !== null;
+}
+
 /**
  * Calls the Cohere rerank API to re-order `candidates` by relevance to `query`.
  * Returns an ordered array of `{ chunk_id, relevance_score }` on success,
@@ -26,7 +41,7 @@ export async function rerankChunks(
 ): Promise<{ chunk_id: string; relevance_score: number }[] | null> {
   if (candidates.length === 0) return [];
 
-  const apiKey = process.env.COHERE_API_KEY;
+  const apiKey = rerankApiKey();
   if (!apiKey) return null;
 
   const model = process.env.COHERE_RERANK_MODEL ?? 'rerank-v3.5';

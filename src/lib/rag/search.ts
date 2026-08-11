@@ -1,5 +1,5 @@
 import { createEmbedding, EMBEDDING_MODEL } from '~/lib/rag/embeddings';
-import { rerankChunks } from '~/lib/rag/rerank';
+import { isRerankerConfigured, rerankChunks } from '~/lib/rag/rerank';
 import { getOpenAIClient } from '~/lib/openai/client';
 import { normalizeForDedupe } from '~/lib/utils';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
@@ -170,6 +170,37 @@ function resolveSearchScope(scope?: string): {
   }
   const rpcScope = normalizeScope(raw);
   return { requested: rpcScope, rpcScope, documentKindFilter: null };
+}
+
+/**
+ * B0-440: single resolved rerank decision, shared by the three things that used to disagree —
+ * the candidate over-fetch, whether the rerank phase runs, and the reported
+ * `retrieval_strategy`.
+ *
+ * A caller can *request* reranking (`useReranker`), but the request only takes effect when
+ * Cohere is provisioned. `rerankChunks` returns null immediately when `COHERE_API_KEY` is
+ * absent, so a requested-but-unprovisioned reranker used to buy a 5x over-fetch (50 full
+ * chunk rows instead of 20, each carrying `chunk_text`) and a `hybrid+reranked` label for
+ * work that never happened. When the reranker is inactive this path now behaves exactly as
+ * if `useReranker: false` had been passed.
+ *
+ * The `documentKindFilter` over-fetch is unrelated to reranking — it exists so enough rows of
+ * the requested app-layer `document_kind` (knowledge/label) survive the post-RPC filter — so
+ * it takes precedence regardless of the rerank decision.
+ */
+export function resolveRerankPlan(input: {
+  requestedReranker: boolean;
+  limit: number;
+  documentKindFilter: string | null;
+}): { rerankerActive: boolean; rpcLimit: number } {
+  const rerankerActive = input.requestedReranker && isRerankerConfigured();
+  const rpcLimit = input.documentKindFilter
+    ? Math.min(Math.max(input.limit * 10, 100), 200)
+    : rerankerActive
+      ? Math.min(input.limit * 5, 50)
+      : input.limit;
+
+  return { rerankerActive, rpcLimit };
 }
 
 function nowMs() {
@@ -797,11 +828,13 @@ export async function searchProductChunks(
   // Fetch extra candidates when reranking so the reranker has a larger pool to
   // reorder before we slice down to the requested limit. When an app-layer document_kind
   // filter is active (knowledge/label), over-fetch so enough matching-kind rows survive.
-  const rpcLimit = documentKindFilter
-    ? Math.min(Math.max(limit * 10, 100), 200)
-    : useReranker
-      ? Math.min(limit * 5, 50)
-      : limit;
+  // `rerankerActive` (not the requested `useReranker`) gates the over-fetch, the rerank
+  // phase, and the strategy label — see resolveRerankPlan (B0-440).
+  const { rerankerActive, rpcLimit } = resolveRerankPlan({
+    requestedReranker: useReranker,
+    limit,
+    documentKindFilter,
+  });
 
   const {
     row,
@@ -886,7 +919,7 @@ export async function searchProductChunks(
   let rerankMs = 0;
   let rankedMatches = kindFilteredMatches;
 
-  if (useReranker && kindFilteredMatches.length > 0) {
+  if (rerankerActive && kindFilteredMatches.length > 0) {
     const rerankStartedAt = nowMs();
     const reranked = await rerankChunks(query, kindFilteredMatches).catch(() => null);
     rerankMs = elapsedMs(rerankStartedAt);
@@ -956,11 +989,13 @@ export async function searchProductChunks(
     sectionType,
     scope: requestedScope,
     minSimilarity,
+    // B0-440: reports what actually ran. Reranking that was requested but not provisioned
+    // is no longer labelled `+reranked` in the observability data.
     retrieval_strategy: (
-      useHybrid && useReranker ? 'hybrid+reranked'
-      : useHybrid             ? 'hybrid'
-      : useReranker           ? 'vector+reranked'
-      :                         'vector'
+      useHybrid && rerankerActive ? 'hybrid+reranked'
+      : useHybrid                 ? 'hybrid'
+      : rerankerActive            ? 'vector+reranked'
+      :                             'vector'
     ) as 'vector' | 'hybrid' | 'vector+reranked' | 'hybrid+reranked',
     embeddingSource: source,
     timings,
