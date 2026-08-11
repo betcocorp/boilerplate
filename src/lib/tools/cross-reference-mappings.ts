@@ -18,7 +18,23 @@ export type CrossReferenceMappingRow = {
   betcoSku: string | null;
   betcoInventoryId: string | null;
   betcoProductLineId: string | null;
+  /** Legacy `competitor_products.timestamp` — a naive wall-clock stamp, kept as the raw string. */
+  updatedAt: string | null;
 };
+
+/**
+ * Render the legacy mapping stamp as `YYYY-MM-DD HH:MM`, or `—` when absent/unparseable.
+ *
+ * Deliberately string-only: the source column is `timestamp without time zone`, a naive legacy
+ * wall-clock value with no offset to convert *from*. Running it through `Date`/`toLocaleString`/
+ * `Intl` would reinterpret it in the server's timezone and can shift it across a day boundary, so
+ * we read the parts straight off the stored string and show exactly what is stored.
+ */
+export function formatMappingTimestamp(value: string | null | undefined): string {
+  // `YYYY-MM-DD` then `T` or a space, then `HH:MM`; optional `:SS` and fractional seconds ignored.
+  const match = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})/.exec((value ?? '').trim());
+  return match ? `${match[1]} ${match[2]}` : '—';
+}
 
 export type CrossReferenceMappingsPage = {
   rows: CrossReferenceMappingRow[];
@@ -81,7 +97,7 @@ export async function fetchCrossReferenceMappings(input: {
 
   let query = legacy
     .from('competitor_products')
-    .select('id, Competitor, ProductDescr, ProductKey, ProductID', { count: 'exact' });
+    .select('id, Competitor, ProductDescr, ProductKey, ProductID, timestamp', { count: 'exact' });
 
   if (search) {
     const orParts = [`ProductDescr.ilike.%${search}%`];
@@ -169,6 +185,7 @@ export async function fetchCrossReferenceMappings(input: {
       betcoSku: product?.sku ?? null,
       betcoInventoryId: product?.invtId ?? null,
       betcoProductLineId: product?.prodLine ?? null,
+      updatedAt: row.timestamp ?? null,
     };
   });
 

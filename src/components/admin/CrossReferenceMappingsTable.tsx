@@ -17,7 +17,10 @@ import {
   TableHeader,
   TableRow,
 } from '~/components/ui/table';
-import { fetchCrossReferenceMappings } from '~/lib/tools/cross-reference-mappings';
+import {
+  fetchCrossReferenceMappings,
+  formatMappingTimestamp,
+} from '~/lib/tools/cross-reference-mappings';
 
 const ROUTE = '/admin/tools/cross-reference/lookup';
 const SEARCH_PARAM = 'xrefQ';
@@ -119,12 +122,13 @@ export async function CrossReferenceMappingsTable({
                   <TableHead>Betco product</TableHead>
                   <TableHead>SKU</TableHead>
                   <TableHead>Line</TableHead>
+                  <TableHead>Last updated</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {rows.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={5} className="text-center text-muted-foreground">
+                    <TableCell colSpan={6} className="text-center text-muted-foreground">
                       No matchings found.
                     </TableCell>
                   </TableRow>
@@ -147,6 +151,9 @@ export async function CrossReferenceMappingsTable({
                       </TableCell>
                       <TableCell className="font-mono text-xs text-muted-foreground">
                         {row.betcoProductLineId ?? '—'}
+                      </TableCell>
+                      <TableCell className="font-mono text-xs text-muted-foreground whitespace-nowrap">
+                        {formatMappingTimestamp(row.updatedAt)}
                       </TableCell>
                     </TableRow>
                   ))

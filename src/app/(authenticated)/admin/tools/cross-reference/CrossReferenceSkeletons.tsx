@@ -85,8 +85,8 @@ export function MappingsTableCardSkeleton() {
 
         <TableSkeleton
           className="border-border/60 bg-transparent"
-          columnWidths={['w-28', 'w-44', 'w-40', 'w-20', 'w-16']}
-          columns={5}
+          columnWidths={['w-28', 'w-44', 'w-40', 'w-20', 'w-16', 'w-28']}
+          columns={6}
           rows={CROSS_REFERENCE_MAPPINGS_PAGE_SIZE}
         />
 
