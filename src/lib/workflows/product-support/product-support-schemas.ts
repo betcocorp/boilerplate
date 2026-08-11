@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { toolTraceSchema } from '~/lib/audit/trace';
+
 export const validatorResultSchema = z.object({
   approved: z.boolean(),
   confidence: z.number().min(0).max(1),
@@ -27,6 +29,128 @@ export const retrievedDocumentChunkRefSchema = z.object({
 });
 
 export type RetrievedDocumentChunkRef = z.infer<typeof retrievedDocumentChunkRefSchema>;
+
+/**
+ * B0-388 — where the answer text the user actually saw came from. The workflow can replace or
+ * recompose the model's draft on several paths, and without this the observability panel cannot
+ * tell "the model wrote this" from "a deterministic branch wrote this".
+ *
+ * - `model_generated` — the agent loop's own text, unaltered.
+ * - `template_override` — a fixed template replaced the draft.
+ * - `cross_reference_composed` — `composeCrossReferenceUserFacingAnswer` wrapped the draft.
+ * - `decline_gate` — the early-decline gate produced the text; no model call happened.
+ * - `usage_safety_fallback` — the usage/safety coverage gate forced fallback copy.
+ * - `validator_fallback` — the validator's disapproval forced fallback copy.
+ * - `revision_pass` — the second (revision) model pass produced the final text.
+ */
+export const answerProvenanceSchema = z.enum([
+  'model_generated',
+  'template_override',
+  'cross_reference_composed',
+  'decline_gate',
+  'usage_safety_fallback',
+  'validator_fallback',
+  'revision_pass',
+]);
+
+export type AnswerProvenance = z.infer<typeof answerProvenanceSchema>;
+
+/**
+ * B0-388 — the three LLM boundaries in the product-support workflow. Names match the
+ * `workflow_steps.step_name` values the workflow already writes (`openai_responses_agent`,
+ * `validator`); `revision` is the second validator-driven pass, which has no step row yet.
+ */
+export const promptStageSchema = z.enum([
+  'openai_responses_agent',
+  'validator',
+  'revision',
+]);
+
+export type PromptStage = z.infer<typeof promptStageSchema>;
+
+/**
+ * B0-388 — exactly what was sent to a model at one boundary, for the reasoning-observability
+ * panel. `instructions` is the resolved system/instructions text (not a hash) so a reviewer can
+ * read what actually ran; `runtime` distinguishes the OpenAI Responses loop from the AI SDK
+ * `streamText` loop, which build their model input differently.
+ */
+export const promptRecordSchema = z.object({
+  stage: promptStageSchema,
+  instructions: z.string(),
+  model: z.string(),
+  runtime: z.enum(['responses', 'ai-sdk']),
+});
+
+export type PromptRecord = z.infer<typeof promptRecordSchema>;
+
+/**
+ * B0-388 — the deterministic (non-LLM) rule nodes that can change a run's outcome.
+ *
+ * - `keyword_routing` — `routeUserMessageToSme` keyword scores (`orchestration_planner` step).
+ * - `early_decline_gate` — `classifyEarlyDecline`; short-circuits before any model call.
+ * - `usage_safety_coverage` — `evaluateUsageSafetyCoverage`; caps confidence when usage or
+ *   safety evidence is missing.
+ * - `recommendation_confidence` — `evaluateRecommendationGate`, the REC-4 calibration applied
+ *   whenever cross-reference post-processing ran (similarity/brand/chemistry confidence caps).
+ *   Distinct from `gateRecommendation`/`XREF_RECOMMENDATION_MIN_CONFIDENCE` in `~/lib/recommendations`.
+ */
+export const gateIdSchema = z.enum([
+  'keyword_routing',
+  'early_decline_gate',
+  'usage_safety_coverage',
+  'recommendation_confidence',
+]);
+
+export type GateId = z.infer<typeof gateIdSchema>;
+
+/**
+ * B0-388 — one deterministic gate evaluation. The four gates read different signals (keyword
+ * scores, a decline reason, usage/safety evidence booleans, a confidence number), so `inputs`
+ * and `thresholds` are open string-keyed records rather than a per-gate union — but still
+ * `unknown`-valued, so consumers must narrow instead of dotting into `any`.
+ *
+ * `verdict` is a short machine-readable outcome label (e.g. `applied`, `not_applied`, `capped`,
+ * `declined`); `effect` says in one line what changed as a result (or that nothing did).
+ */
+export const gateRecordSchema = z.object({
+  gate: gateIdSchema,
+  inputs: z.record(z.string(), z.unknown()),
+  thresholds: z.record(z.string(), z.unknown()),
+  verdict: z.string().max(256),
+  effect: z.string().max(2000),
+});
+
+export type GateRecord = z.infer<typeof gateRecordSchema>;
+
+/**
+ * B0-388 — the reasoning-observability additions to `workflow_steps.input`. Passthrough because
+ * every step already writes its own step-specific keys (`model`, `message`, `reason`, …) which
+ * must survive a round-trip through this schema untouched.
+ */
+export const productSupportStepInputSchema = z
+  .object({
+    prompt: promptRecordSchema.optional(),
+    gate: gateRecordSchema.optional(),
+  })
+  .loose();
+
+export type ProductSupportStepInput = z.infer<typeof productSupportStepInputSchema>;
+
+/**
+ * B0-388 — the reasoning-observability additions to `workflow_steps.output`. `toolTrace` reuses
+ * the canonical `toolTraceEntrySchema` from `~/lib/audit/trace` (the same schema
+ * `~/lib/observability/timeline.ts` already parses these rows with) — deliberately not
+ * redeclared here, so B0-390's forced-call attribution and truncation flag land in one place.
+ * Passthrough for the same reason as the step-input schema.
+ */
+export const productSupportStepOutputSchema = z
+  .object({
+    toolTrace: toolTraceSchema.optional(),
+    gate: gateRecordSchema.optional(),
+  })
+  .loose();
+
+export type ProductSupportStepOutput = z.infer<typeof productSupportStepOutputSchema>;
 
 export const productSupportFinalOutputSchema = z.object({
   answerText: z.string(),
@@ -76,6 +200,29 @@ export const productSupportFinalOutputSchema = z.object({
       cachedPromptTokens: z.number().optional(),
     })
     .optional(),
+  /**
+   * B0-388 — hash of the specialist prompt that actually ran, so a run can be tied back to the
+   * exact prompt text. Optional so `workflow_run.final_output` payloads written before B0-388
+   * still parse.
+   */
+  promptVersion: z.string().optional(),
+  /**
+   * B0-388 — hash of all prompt constants plus the tool definitions in force for the run. Moves
+   * independently of `promptVersion`: a tool-schema edit changes the bundle without changing the
+   * specialist prompt. Optional for the same historical-payload reason.
+   */
+  promptBundleVersion: z.string().optional(),
+  /** B0-388 — which branch produced `answerText`. Optional for historical payloads. */
+  answerProvenance: answerProvenanceSchema.optional(),
+  /**
+   * B0-388 — chat context the panel needs to avoid overclaiming completeness: in a chat turn the
+   * captured `instructions` are NOT the whole model input. Prior conversation turns are replayed
+   * (AI SDK runtime) or carried server-side by `previousResponseId` (Responses runtime), so a
+   * panel showing only the instructions would imply the model saw less than it did.
+   * Optional for historical payloads; `previousResponseId` is null on the first turn of a chat.
+   */
+  priorMessageCount: z.number().int().nonnegative().optional(),
+  previousResponseId: z.string().nullable().optional(),
 });
 
 export type ProductSupportFinalOutput = z.infer<typeof productSupportFinalOutputSchema>;

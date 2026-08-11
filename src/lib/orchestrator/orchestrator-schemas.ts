@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { SME_AGENT_IDS, type SmeAgentId } from '~/lib/agents/agent-registry';
+import { answerProvenanceSchema } from '~/lib/workflows/product-support/product-support-schemas';
 
 export type { SmeAgentId };
 
@@ -81,6 +82,17 @@ export const productSupportOutcomeSchema = z.object({
       totalTokens: z.number(),
     })
     .optional(),
+  /**
+   * B0-388 — reasoning-observability provenance carried out of the workflow. `run-orchestration`
+   * cherry-picks fields into `productSupport`, so these must be declared here (and threaded there)
+   * or they are silently dropped before the response ever reaches an API caller. All optional so
+   * existing callers and stored responses keep validating.
+   */
+  promptVersion: z.string().optional(),
+  promptBundleVersion: z.string().optional(),
+  answerProvenance: answerProvenanceSchema.optional(),
+  priorMessageCount: z.number().int().nonnegative().optional(),
+  previousResponseId: z.string().nullable().optional(),
 });
 
 export type ProductSupportOutcome = z.infer<typeof productSupportOutcomeSchema>;
