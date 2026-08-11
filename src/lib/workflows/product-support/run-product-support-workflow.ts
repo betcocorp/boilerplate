@@ -1,5 +1,5 @@
 import { getErrorMessage } from '~/lib/utils';
-import { writeAuditLog } from '~/lib/audit/audit-log';
+import { createAuditLogQueue } from '~/lib/audit/audit-log-queue';
 import type { ToolCallOrigin, ToolTraceEntry } from '~/lib/audit/trace';
 import {
   DEFAULT_BEX_CHAT_AGENT_MODE,
@@ -1136,11 +1136,25 @@ export async function runProductSupportWorkflow(input: {
     model,
   };
 
-  await writeAuditLog(
+  /**
+   * B0-439 — audit rows are recorded (with their own `created_at`) and written in batches that
+   * overlap awaits this run already pays for, instead of costing a 45-90ms round trip each, inline.
+   * `settle()` is awaited on every exit path, so no write is left to a background task the
+   * serverless runtime may kill. Row count, payloads, event types and order are unchanged.
+   */
+  const audit = createAuditLogQueue();
+
+  audit.enqueue(
     'workflow_started',
     { workflow: 'product-support', routing: routingDecision },
+    // Deliberately unchanged: this row still carries a null `workflow_run_id` (the run does not
+    // exist yet), so `listAuditLogsForRun` still never returns it and the run trace still anchors
+    // its start marker on `workflow_runs.created_at`.
     { ...ctx, workflowRunId: null },
   );
+  // Written concurrently with the run insert below: the row lands even if that insert throws, as it
+  // did when this was an awaited write, and costs nothing because the insert is awaited anyway.
+  audit.flushDetached();
 
   logInfo('workflow_started', {
     ...ctx,
@@ -1214,7 +1228,7 @@ export async function runProductSupportWorkflow(input: {
     completed_at: new Date().toISOString(),
   });
 
-  await writeAuditLog(
+  audit.enqueue(
     'step_started',
     { step: 'orchestration_planner', step_id: plannerStep.id },
     { ...wfCtx, stepId: plannerStep.id },
@@ -1299,7 +1313,7 @@ export async function runProductSupportWorkflow(input: {
       completed_at: new Date().toISOString(),
     });
 
-    await writeAuditLog(
+    audit.enqueue(
       'step_completed',
       {
         step: 'early_decline_gate',
@@ -1309,47 +1323,7 @@ export async function runProductSupportWorkflow(input: {
       { ...wfCtx, stepId: policyGateStep.id },
     );
 
-    await updateWorkflowRun(run.id, {
-      status: 'completed',
-      final_output: jsonContent(finalOutput),
-      confidence: validation.confidence,
-    });
-
-    await updateConversation(input.conversationId, {
-      latest_model: model,
-    });
-
-    await insertMessage({
-      conversation_id: input.conversationId,
-      role: 'assistant',
-      plain_text: finalText,
-      openai_response_id: null,
-      content: jsonContent({
-        kind: 'assistant_turn',
-        text: finalText,
-        model,
-        sources: [],
-        confidence: validation.confidence,
-        workflowRunId: run.id,
-        routingHint: {
-          decision: routingDecision,
-          rationale: `${routingRationale} Early decline gate applied: ${earlyDeclineDecision.reason}`,
-        },
-        validation: {
-          approved: validation.approved,
-          issues: validation.issues,
-          requiresHumanReview: validation.requires_human_review,
-        },
-        timingBreakdown: {
-          toolRounds: 0,
-          cacheSource: null,
-          searchMs: null,
-        },
-        toolSummary: [],
-      }),
-    });
-
-    await writeAuditLog(
+    audit.enqueue(
       'workflow_completed',
       {
         workflow_run_id: run.id,
@@ -1357,6 +1331,54 @@ export async function runProductSupportWorkflow(input: {
       },
       wfCtx,
     );
+
+    /**
+     * B0-439 — the terminal writes hit three unrelated tables with no read dependency between them,
+     * so they are issued together and awaited before returning. Still awaited, deliberately: a
+     * detached terminal write can be killed once the response finishes, which would leave the run
+     * `running` for the stalled-run sweeper to reap.
+     */
+    await Promise.all([
+      updateWorkflowRun(run.id, {
+        status: 'completed',
+        final_output: jsonContent(finalOutput),
+        confidence: validation.confidence,
+      }),
+      updateConversation(input.conversationId, {
+        latest_model: model,
+      }),
+      insertMessage({
+        conversation_id: input.conversationId,
+        role: 'assistant',
+        plain_text: finalText,
+        openai_response_id: null,
+        content: jsonContent({
+          kind: 'assistant_turn',
+          text: finalText,
+          model,
+          sources: [],
+          confidence: validation.confidence,
+          workflowRunId: run.id,
+          routingHint: {
+            decision: routingDecision,
+            rationale: `${routingRationale} Early decline gate applied: ${earlyDeclineDecision.reason}`,
+          },
+          validation: {
+            approved: validation.approved,
+            issues: validation.issues,
+            requiresHumanReview: validation.requires_human_review,
+          },
+          timingBreakdown: {
+            toolRounds: 0,
+            cacheSource: null,
+            searchMs: null,
+          },
+          toolSummary: [],
+        }),
+      }),
+      audit.settle(),
+    ]);
+
     logInfo('workflow_completed', {
       ...wfCtx,
       early_decline_reason: earlyDeclineDecision.reason,
@@ -1403,7 +1425,7 @@ export async function runProductSupportWorkflow(input: {
   });
   markStepOpen(agentStep.id);
 
-  await writeAuditLog(
+  audit.enqueue(
     'openai_response_requested',
     { step: 'agent', step_id: agentStep.id },
     { ...wfCtx, stepId: agentStep.id },
@@ -1449,7 +1471,7 @@ export async function runProductSupportWorkflow(input: {
         name,
         callId,
       });
-      await writeAuditLog(
+      audit.enqueue(
         'tool_called',
         {
           tool_name: name,
@@ -1464,6 +1486,10 @@ export async function runProductSupportWorkflow(input: {
         call_id: callId,
         ...(speculative ? { speculative: true } : {}),
       });
+
+      // B0-439 — this row (and the previous call's outcome row) is written while the tool runs, so
+      // an in-flight run's trace stays about as fresh as it was when the write blocked the call.
+      audit.flushDetached();
 
       /**
        * B0-390 + B0-436 — a speculative retrieval runs before the first model call, so the model
@@ -1493,7 +1519,10 @@ export async function runProductSupportWorkflow(input: {
         retrievalSamples += 1;
       }
 
-      await writeAuditLog(
+      // B0-439 — enqueued, not awaited: the `tool_called` / settle pair used to add two round trips
+      // to EVERY tool call, including the speculative one that now runs before the first model call.
+      // Both rows keep their own `created_at`, which is what the timeline diffs for tool duration.
+      audit.enqueue(
         trace.ok ? 'tool_succeeded' : 'tool_failed',
         // B0-363: failures also carry `error_message` + a bounded `arguments_preview`
         // so the cause is recoverable from the audit row alone.
@@ -1524,6 +1553,9 @@ export async function runProductSupportWorkflow(input: {
     };
 
     const forcedCrossReference = shouldForceCrossReferenceLookup(input.userMessage);
+
+    // B0-439 — the rows recorded so far go out DURING the retrieval below, not before it.
+    audit.flushDetached();
 
     /**
      * B0-436 — speculative retrieval. Runs the obvious `search_product_docs` call ourselves so the
@@ -1568,6 +1600,10 @@ export async function runProductSupportWorkflow(input: {
           output: usableSpeculation.modelOutput ?? usableSpeculation.output,
         })
       : undefined;
+
+    // B0-439 — the speculative call's rows go out DURING the model call, not before it: nothing
+    // between here and the first token waits on `audit_logs` any more.
+    audit.flushDetached();
 
     // Generation runtime: AI SDK (`streamText`) when BEX_AI_SDK_GENERATION_ENABLED, else the
     // OpenAI Responses tool loop. Both return the same { assistantText, finalResponseId,
@@ -1617,7 +1653,7 @@ export async function runProductSupportWorkflow(input: {
 
     // B0-436 — one self-describing row per run so `/admin/observability` can tell a speculative
     // retrieval from a model-requested one, and see whether the model's own call reused it.
-    await writeAuditLog(
+    audit.enqueue(
       'speculative_retrieval',
       {
         executed: speculation.result !== null,
@@ -1886,7 +1922,7 @@ export async function runProductSupportWorkflow(input: {
       };
     }
 
-    await writeAuditLog('validation_completed', validation, {
+    audit.enqueue('validation_completed', validation, {
       ...wfCtx,
       stepId: validationStep.id,
     });
@@ -1969,7 +2005,7 @@ export async function runProductSupportWorkflow(input: {
           evidenceSummary,
           modelTag: input.modelTag,
         });
-        await writeAuditLog(
+        audit.enqueue(
           'validation_completed',
           { pass: 'second', ...validation },
           {
@@ -1980,7 +2016,7 @@ export async function runProductSupportWorkflow(input: {
       } else {
         revisionPassRefused = true;
         validation = { ...validation, requires_human_review: true };
-        await writeAuditLog(
+        audit.enqueue(
           'revision_skipped_refusal',
           { issues: validation.issues },
           // B0-389 — re-attributed from the validator step to the revision step that refused.
@@ -2035,7 +2071,7 @@ export async function runProductSupportWorkflow(input: {
       // B0-367: this was the only confidence gate with no audit row, which forced
       // the run-trace timeline to reverse-engineer it by diffing the logged
       // validator pass against the persisted validator step output.
-      await writeAuditLog(
+      audit.enqueue(
         'usage_safety_coverage_cap_applied',
         {
           missingEvidence,
@@ -2096,7 +2132,7 @@ export async function runProductSupportWorkflow(input: {
         ),
         requires_human_review: true,
       };
-      await writeAuditLog(
+      audit.enqueue(
         'regulated_claim_guardrail_rejected',
         {
           categoriesDetected: regulatedClaimGrounding.categoriesDetected,
@@ -2138,7 +2174,7 @@ export async function runProductSupportWorkflow(input: {
         requires_human_review:
           validation.requires_human_review || gate.requires_human_review,
       };
-      await writeAuditLog(
+      audit.enqueue(
         'recommendation_gate_applied',
         { ...gate, topSimilarity },
         { ...wfCtx, stepId: validationStep.id },
@@ -2294,7 +2330,7 @@ export async function runProductSupportWorkflow(input: {
               : {}),
           }),
         });
-        await writeAuditLog(
+        audit.enqueue(
           'review_requested',
           { reason: reviewReason, issues: validation.issues },
           wfCtx,
@@ -2326,51 +2362,57 @@ export async function runProductSupportWorkflow(input: {
       previousResponseId: input.previousOpenaiResponseId ?? null,
     };
 
-    await updateWorkflowRun(run.id, {
-      status: 'completed',
-      final_output: jsonContent(finalOutput),
-      confidence: validation.confidence,
-    });
+    audit.enqueue('workflow_completed', { workflow_run_id: run.id }, wfCtx);
 
-    await updateConversation(input.conversationId, {
-      latest_openai_response_id: finalResponseId,
-      latest_model: model,
-    });
-
-    await insertMessage({
-      conversation_id: input.conversationId,
-      role: 'assistant',
-      plain_text: finalText,
-      openai_response_id: finalResponseId,
-      content: jsonContent({
-        kind: 'assistant_turn',
-        text: finalText,
-        model,
-        sources,
+    /**
+     * B0-439 — three unrelated tables plus the audit flush, none of which reads another's result, so
+     * they are issued together instead of one after the other. They are still AWAITED before this
+     * function returns: on Vercel Fluid Compute a promise that has not settled when the response
+     * finishes can be killed, and a lost terminal write would leave `workflow_runs.status = 'running'`
+     * for `stalled-run-sweeper` to reap hours later. The answer text has already been streamed to the
+     * caller by this point, so this cost is off TTFT either way.
+     */
+    await Promise.all([
+      updateWorkflowRun(run.id, {
+        status: 'completed',
+        final_output: jsonContent(finalOutput),
         confidence: validation.confidence,
-        workflowRunId: run.id,
-        routingHint: {
-          decision: routingDecision,
-          rationale: routingRationale,
-        },
-        validation: {
-          approved: validation.approved,
-          issues: validation.issues,
-          requiresHumanReview: validation.requires_human_review,
-        },
-        timingBreakdown,
-        toolSummary: resolvedToolTrace.map((t) => ({
-          name: t.toolName,
-          ok: t.ok,
-        })),
       }),
-    });
+      updateConversation(input.conversationId, {
+        latest_openai_response_id: finalResponseId,
+        latest_model: model,
+      }),
+      insertMessage({
+        conversation_id: input.conversationId,
+        role: 'assistant',
+        plain_text: finalText,
+        openai_response_id: finalResponseId,
+        content: jsonContent({
+          kind: 'assistant_turn',
+          text: finalText,
+          model,
+          sources,
+          confidence: validation.confidence,
+          workflowRunId: run.id,
+          routingHint: {
+            decision: routingDecision,
+            rationale: routingRationale,
+          },
+          validation: {
+            approved: validation.approved,
+            issues: validation.issues,
+            requiresHumanReview: validation.requires_human_review,
+          },
+          timingBreakdown,
+          toolSummary: resolvedToolTrace.map((t) => ({
+            name: t.toolName,
+            ok: t.ok,
+          })),
+        }),
+      }),
+      audit.settle(),
+    ]);
 
-    await writeAuditLog(
-      'workflow_completed',
-      { workflow_run_id: run.id },
-      wfCtx,
-    );
     // B0-324 — prompt-cache visibility per turn: `cachedPromptTokens` vs `promptTokens` across the
     // model calls in the tool loop (0 cached on a multi-round turn means the prefix isn't being reused).
     logInfo('workflow_completed', {
@@ -2415,7 +2457,11 @@ export async function runProductSupportWorkflow(input: {
       final_output: jsonContent({ error: message, timingBreakdown: { ttftMs: ttftMs() } }),
     });
 
-    await writeAuditLog('workflow_failed', { message }, wfCtx);
+    audit.enqueue('workflow_failed', { message }, wfCtx);
+    // B0-439 — everything recorded up to the throw (plus this row) is written before the failure
+    // leaves this function, so a failed run's trace is as complete as it was when each row was
+    // written inline.
+    await audit.settle();
 
     throw err;
   }
