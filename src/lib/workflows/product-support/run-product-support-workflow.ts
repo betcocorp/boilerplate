@@ -29,7 +29,7 @@ import {
   fetchRecommendationContext,
 } from '~/lib/tools/cross-reference-lookup';
 import { buildCompetitiveRecommendationAnswer } from '~/lib/recommendations/recommendation-answer';
-import { productSupportTools } from '~/lib/tools/definitions';
+import { productSupportToolsForRoute } from '~/lib/tools/definitions';
 import { executeToolCall } from '~/lib/tools/execute-tool-call';
 
 import {
@@ -954,6 +954,14 @@ export async function runProductSupportWorkflow(input: {
     decision: routingDecision,
   });
 
+  /**
+   * B0-437 — route-scoped tool schemas (all 14 serialize to ~2,785 tokens and used to go out on every
+   * call). Keyed on the same `routingDecision` as `promptCacheKey` and `instructions`, so the whole
+   * cacheable prefix — instructions + tool schemas — stays byte-identical for every call that shares
+   * the key, both within this tool loop and across later turns routed the same way.
+   */
+  const routeTools = productSupportToolsForRoute(routingDecision);
+
   const model = resolveResponsesModel(input.modelTag);
   const client = getOpenAIClient();
 
@@ -1266,6 +1274,7 @@ export async function runProductSupportWorkflow(input: {
           instructions,
           history: input.priorMessages ?? [],
           userMessage: input.userMessage,
+          tools: routeTools,
           toolChoice,
           promptCacheKey,
           onAssistantDelta: input.onAssistantDelta,
@@ -1276,7 +1285,7 @@ export async function runProductSupportWorkflow(input: {
           client,
           model,
           instructions,
-          tools: productSupportTools,
+          tools: routeTools,
           userMessage: input.userMessage,
           previousResponseId: input.previousOpenaiResponseId ?? null,
           toolChoice,

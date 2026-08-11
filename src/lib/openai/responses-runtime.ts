@@ -17,7 +17,16 @@ export type ExecuteToolFn = (input: {
   name: string;
   argumentsJson: string;
   callId: string;
-}) => Promise<{ output: string; trace: ToolTraceEntry }>;
+}) => Promise<{
+  output: string;
+  /**
+   * B0-437 — slimmer projection of `output` for the model only (see `~/lib/tools/model-tool-payload`).
+   * The runtime sends `modelOutput ?? output` to the model; the caller persists the full `output`, so
+   * the validator and the regulated-claim guardrail keep seeing the complete evidence.
+   */
+  modelOutput?: string;
+  trace: ToolTraceEntry;
+}>;
 
 export type ResponsesRuntimeOptions = {
   client: OpenAI;
@@ -236,7 +245,8 @@ export async function runResponsesWithToolLoop(
       outputs.push({
         type: 'function_call_output',
         call_id: call.call_id,
-        output: executed.output,
+        // B0-437 — the model gets the slimmed variant when the tool produced one.
+        output: executed.modelOutput ?? executed.output,
       });
     }
 

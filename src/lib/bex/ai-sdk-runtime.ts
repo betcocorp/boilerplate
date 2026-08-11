@@ -26,6 +26,7 @@ import { logError } from '~/lib/observability/logger';
 import { productSupportTools } from '~/lib/tools/definitions';
 import { getErrorMessage } from '~/lib/utils';
 import type { ToolTraceEntry } from '~/lib/audit/trace';
+import type { Tool } from 'openai/resources/responses/responses';
 
 /**
  * A prior conversation turn replayed to the model. The AI SDK is stateless, so
@@ -48,6 +49,11 @@ export type AiSdkRuntimeOptions = {
   history: AiSdkHistoryMessage[];
   userMessage: string;
   toolChoice?: ResponsesToolChoice;
+  /**
+   * B0-437 — tool schemas to expose, so the caller can send a route-scoped subset instead of all 14.
+   * Defaults to the full `productSupportTools`.
+   */
+  tools?: Tool[];
   /** B0-324 — see `ResponsesRuntimeOptions.promptCacheKey`; forwarded as the OpenAI `promptCacheKey`. */
   promptCacheKey?: string;
   maxToolRounds?: number;
@@ -83,10 +89,14 @@ export type AiSdkRuntimeResult = Pick<
  * reusing the existing `executeTool` boundary (`executeToolCall` → `executeProductTool`). Each tool's
  * trace is pushed into `toolTrace` to mirror `runResponsesWithToolLoop`.
  */
-function buildAiSdkTools(executeTool: ExecuteToolFn, toolTrace: ToolTraceEntry[]): ToolSet {
+function buildAiSdkTools(
+  executeTool: ExecuteToolFn,
+  toolTrace: ToolTraceEntry[],
+  definitions: Tool[],
+): ToolSet {
   const tools: ToolSet = {};
 
-  for (const definition of productSupportTools) {
+  for (const definition of definitions) {
     if (definition.type !== 'function') {
       continue;
     }
@@ -105,7 +115,9 @@ function buildAiSdkTools(executeTool: ExecuteToolFn, toolTrace: ToolTraceEntry[]
           callId: toolCallId,
         });
         toolTrace.push(executed.trace);
-        return executed.output;
+        // B0-437 — the model gets the slimmed variant when the tool produced one; the caller's
+        // closure has already logged the full payload for the validator / guardrail.
+        return executed.modelOutput ?? executed.output;
       },
     });
   }
@@ -233,7 +245,7 @@ function mapToolChoice(toolChoice: ResponsesToolChoice | undefined): ToolChoice<
  */
 export async function runAiSdkWithToolLoop(opts: AiSdkRuntimeOptions): Promise<AiSdkRuntimeResult> {
   const toolTrace: ToolTraceEntry[] = [];
-  const tools = buildAiSdkTools(opts.executeTool, toolTrace);
+  const tools = buildAiSdkTools(opts.executeTool, toolTrace, opts.tools ?? productSupportTools);
 
   const messages: ModelMessage[] = [
     ...opts.history

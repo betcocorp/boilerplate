@@ -1,5 +1,7 @@
 import type { Tool } from 'openai/resources/responses/responses';
 
+import type { ProductToolName } from '~/lib/tools/tool-schemas';
+
 /**
  * B0-364: on the product-fact tools the `productId` parameter is really a product NAME
  * (it is resolved by name, never used as a database id). Models naturally send
@@ -297,3 +299,81 @@ export const productSupportTools: Tool[] = [
     },
   },
 ];
+
+/* -------------------------------------------------------------------------- *
+ * B0-437 — route-scoped tool sets
+ * -------------------------------------------------------------------------- *
+ * The 14 definitions above serialize to ~11,140 chars (~2,785 tokens) and were sent on every model
+ * call regardless of which specialist route the message landed on. This is the ONE place the
+ * route → tool mapping lives.
+ *
+ * Inclusion rule (conservative by design — a tool missing when the model wants it is a hard failure,
+ * while an extra schema only costs tokens):
+ *   1. `PRODUCT_SUPPORT_SHARED_INSTRUCTIONS` names it, so every route can legitimately ask for it:
+ *      `search_product_docs`, `get_efficacy_data`, `lookup_cross_reference`,
+ *      `recommend_cross_reference`.
+ *   2. It is a generic per-product retrieval tool, which the shared rules cover with
+ *      "`search_product_docs` (or another retrieval tool)".
+ *   3. The route's own specialist policy names it, or production traces show that route invoking it.
+ *
+ * `product` and `ambiguous` deliberately keep the FULL set: `ambiguous` is the routing catch-all and
+ * `product` is the fallthrough specialist (together 92% of production runs), and 12 of the 14 tools
+ * have been invoked on them in the last 30 days. Keeping their prefix whole also keeps it large, which
+ * is what the B0-324 prompt cache reads back — pruning the dominant route would trade cached tokens
+ * for uncached ones.
+ *
+ * Any route NOT listed here falls back to the full set.
+ */
+
+/** Rule 1 + rule 2: usable from any route. */
+const BASE_ROUTE_TOOL_NAMES: readonly ProductToolName[] = [
+  'search_product_docs',
+  'get_efficacy_data',
+  'lookup_cross_reference',
+  'recommend_cross_reference',
+  'get_product_spec',
+  'get_approved_usage_guidance',
+  'get_safety_constraints',
+  'get_compatibility_rules',
+  'list_allowed_surfaces',
+  'list_disallowed_uses',
+  'get_escalation_policy',
+];
+
+/** Website-taxonomy navigation — only meaningful for "what products do you have" style questions. */
+const CATEGORY_ROUTE_TOOL_NAMES: readonly ProductToolName[] = [
+  'get_products_in_category',
+  'get_product_category',
+  'find_products_by_category',
+];
+
+const ROUTE_TOOL_NAMES: Record<string, readonly ProductToolName[]> = {
+  // Catalog/filter questions land here too ("what floor strippers do you have?"), so both the
+  // bathroom and floor routes keep the category tools — production traces show both using them.
+  bathroom: [...BASE_ROUTE_TOOL_NAMES, ...CATEGORY_ROUTE_TOOL_NAMES],
+  floor: [...BASE_ROUTE_TOOL_NAMES, ...CATEGORY_ROUTE_TOOL_NAMES],
+  // Dilution is always about a NAMED product's ratio/dispenser setup, never about browsing a
+  // category; no dilution-route run has called a category tool.
+  dilution: BASE_ROUTE_TOOL_NAMES,
+  // The recommendations policy is cross-reference-first and has only ever used
+  // lookup_cross_reference / recommend_cross_reference / search_product_docs.
+  recommendations: BASE_ROUTE_TOOL_NAMES,
+};
+
+/**
+ * Tool schemas for one resolved route, in the same order as `productSupportTools` (order is part of
+ * the cached prefix, and of the B0-393 `promptBundleVersion` hash input).
+ *
+ * The result is a pure function of the route, so every call sharing a `promptCacheKey`
+ * (`bex-product-support:<mode>:<decision>`) also shares a byte-identical tool set.
+ */
+export function productSupportToolsForRoute(route: string): Tool[] {
+  const allowed = ROUTE_TOOL_NAMES[route];
+  if (!allowed) {
+    return productSupportTools;
+  }
+  const allowedSet = new Set<string>(allowed);
+  return productSupportTools.filter(
+    (tool) => tool.type === 'function' && allowedSet.has(tool.name),
+  );
+}
