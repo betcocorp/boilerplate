@@ -18,6 +18,7 @@
  * figures (oz/gal, ppm, contact times) that must not be reformatted.
  */
 
+import { BexStreamdown } from '~/components/bex/BexStreamdown';
 import { Badge } from '~/components/ui/badge';
 import { formatExpectedShouldAnswerLabel, formatSimilarityValue } from '~/lib/tests/format';
 import { formatDurationSeconds } from '~/lib/utils/time';
@@ -109,9 +110,15 @@ export function HarnessVerdictBand({
             Answer (this run)
           </p>
           {answer ? (
-            <p className="mt-1.5 whitespace-pre-wrap break-words text-sm text-slate-800">
-              {answer}
-            </p>
+            // Markdown, matching the standalone answer panel and Bex chat — the agent writes
+            // bullets and bold, and this pane is the only place the answer appears on a
+            // harness run, so rendering it raw would show literal "-" and "**".
+            <BexStreamdown
+              className="mt-1.5 text-sm text-slate-800"
+              content={answer}
+              isStreaming={false}
+              isUser={false}
+            />
           ) : errorMessage ? (
             <p className="mt-1.5 whitespace-pre-wrap break-words font-mono text-xs text-destructive">
               {errorMessage}

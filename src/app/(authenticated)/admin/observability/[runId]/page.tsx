@@ -248,8 +248,11 @@ export default async function AdminRunTracePage({ params }: PageProps) {
             </section>
           ) : null}
 
-          {/* Answer — read the thing being evaluated before anything else. */}
-          {trace ? (
+          {/* Answer — read the thing being evaluated before anything else.
+              On a harness run the verdict band above already shows the answer, beside the
+              ideal response it is being judged against, so this panel would render the same
+              text a second time. Live and orphan runs have no band and keep it. */}
+          {trace && !harness ? (
             <RunAnswerPanel answerText={payload.answerText} error={payload.error} />
           ) : null}
 
