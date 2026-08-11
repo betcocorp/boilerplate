@@ -107,7 +107,12 @@ export async function fetchCrossReferenceMappings(input: {
     query = query.or(orParts.join(','));
   }
 
+  // Most recently touched legacy rows first. `timestamp` is heavily tied — 1954 rows share only
+  // 619 distinct stamps, and one bulk-import group covers 201 rows — so ProductDescr breaks ties
+  // to keep offset pagination stable: without a deterministic tiebreaker Postgres may order a tie
+  // group differently per request, and rows would repeat or vanish while paging through it.
   const { data: mappingRows, count, error } = await query
+    .order('timestamp', { ascending: false, nullsFirst: false })
     .order('ProductDescr', { ascending: true })
     .range(rangeStart, rangeEnd);
 

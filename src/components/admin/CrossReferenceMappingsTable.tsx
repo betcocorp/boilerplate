@@ -75,7 +75,8 @@ export async function CrossReferenceMappingsTable({
         <CardDescription>
           The complete competitor → Betco 1:1 matchings from the legacy tool (
           <code className="rounded bg-muted px-1.5 py-0.5 text-xs">legacy.competitor_products</code>
-          ) — the ground truth behind the B0-99 recommendation eval set.
+          ) — the ground truth behind the B0-99 recommendation eval set. Most recently updated
+          first.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
