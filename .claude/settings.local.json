@@ -147,7 +147,9 @@
       "Bash(curl -s -o /dev/null -w \" :3000 -> HTTP %{http_code}\\\\n\" --max-time 5 http://localhost:3000/)",
       "Bash(grep -nA6 \"export function buildRunTimeline\")",
       "Bash(grep -nA6 \"export function buildRunTimeline\" src/lib/observability/timeline.ts)",
-      "Bash(git diff *)"
+      "Bash(git diff *)",
+      "Bash(git -C /Users/thomasbird/projects/client/betco/apps/bex-combined/bex2.0-b0401 status --short)",
+      "Bash(./node_modules/.bin/eslint src/components/admin/observability/ToolCallDetail.tsx)"
     ]
   }
 }
