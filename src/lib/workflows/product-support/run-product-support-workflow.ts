@@ -22,8 +22,18 @@ import { logError, logInfo } from '~/lib/observability/logger';
 import { getOpenAIClient, resolveResponsesModel } from '~/lib/openai/client';
 import { runResponsesWithToolLoop } from '~/lib/openai/responses-runtime';
 import { runAiSdkWithToolLoop } from '~/lib/bex/ai-sdk-runtime';
-import { routeUserMessageToSme } from '~/lib/orchestrator/sme-routing';
-import { evaluateRecommendationGate } from '~/lib/recommendations/recommendation-gate';
+import {
+  routeUserMessageToSme,
+  SME_ROUTE_MIN_HITS_TO_ROUTE,
+  SME_ROUTE_TIE_BREAK_ORDER,
+} from '~/lib/orchestrator/sme-routing';
+import {
+  CATEGORY_MISMATCH_CONFIDENCE_CAP,
+  evaluateRecommendationGate,
+  LOW_SIMILARITY_CONFIDENCE_CAP,
+  LOW_SIMILARITY_THRESHOLD,
+  MISSING_BRAND_CONFIDENCE_CAP,
+} from '~/lib/recommendations/recommendation-gate';
 import {
   lookupCrossReference,
   fetchRecommendationContext,
@@ -37,15 +47,23 @@ import type { Json } from '~/types/supabase.public';
 import {
   buildProductSupportInstructions,
   buildProductSupportPromptCacheKey,
+  effectivePromptIdForDecision,
   VALIDATOR_SYSTEM_PROMPT,
 } from '~/lib/workflows/product-support/product-support-prompts';
 import {
+  gateRecordSchema,
   promptRecordSchema,
+  type AnswerProvenance,
+  type GateRecord,
   type PromptRecord,
   type ProductSupportFinalOutput,
   type RetrievedDocumentChunkRef,
   type ValidatorResult,
 } from '~/lib/workflows/product-support/product-support-schemas';
+import {
+  computePromptVersion,
+  PROMPT_BUNDLE_VERSION,
+} from '~/lib/workflows/product-support/prompt-version';
 import {
   evaluateRegulatedClaimGrounding,
   resolveRevisionModel,
@@ -217,12 +235,22 @@ function isEarlyDeclineGateEnabled() {
   return process.env.BEX_EARLY_DECLINE_GATE_ENABLED !== 'false';
 }
 
+/** Closed set of early-decline reasons, in the order `classifyEarlyDecline` tests them. */
+export const EARLY_DECLINE_REASONS = [
+  'chemical_mixing_or_safety',
+  'legal_or_compliance',
+  'storage_or_expiration',
+  'broad_recommendation_without_context',
+] as const;
+
+/**
+ * Confidence reported for a policy decline. Fixed text, no retrieval, no model call — high by
+ * construction, and recorded as the applied threshold on the `early_decline_gate` gate record.
+ */
+export const EARLY_DECLINE_CONFIDENCE = 0.92;
+
 export type EarlyDeclineDecision = {
-  reason:
-    | 'chemical_mixing_or_safety'
-    | 'legal_or_compliance'
-    | 'storage_or_expiration'
-    | 'broad_recommendation_without_context';
+  reason: (typeof EARLY_DECLINE_REASONS)[number];
   text: string;
 };
 
@@ -891,6 +919,21 @@ export function recordPrompt(record: PromptRecord): { prompt: PromptRecord } {
 }
 
 /**
+ * B0-391 — the `{ gates }` fragment for a step's `output`.
+ *
+ * Returns `{}` for an empty list, so a gate that did NOT run is ABSENT from the persisted row
+ * rather than present-and-empty (an empty array reads as "evaluated, nothing to say", which is a
+ * different claim). `parse`, like `recordPrompt`: these records are built from local values, so a
+ * shape mismatch is a bug in this file.
+ */
+export function recordGates(records: readonly GateRecord[]): { gates?: GateRecord[] } {
+  if (records.length === 0) {
+    return {};
+  }
+  return { gates: records.map((record) => gateRecordSchema.parse(record)) };
+}
+
+/**
  * B0-389 — the single spelling for "the validator pass did not run". The bypassed path used to say
  * `reason: 'temporary_test_bypass'` on the step while putting `validator_bypassed_for_testing` in
  * `validation.issues`, so the same state had two names. The issues token is load-bearing (the
@@ -993,6 +1036,56 @@ export async function runProductSupportWorkflow(input: {
     decision: routingDecision,
   });
 
+  /**
+   * B0-392 — the specialist policy that ACTUALLY ran, which is not always `routingDecision`:
+   * `'ambiguous'` (and any unknown decision) falls through to the product specialist, so a UI
+   * showing only "ambiguous" implies no agent policy was applied, which is false. Derived from the
+   * same function `buildProductSupportInstructions` used to pick the prompt above.
+   */
+  const effectivePromptId = effectivePromptIdForDecision(routingDecision);
+  /** B0-393/B0-388 — stamps for the prompt that ran; keyed off the same decision as the prompt. */
+  const promptVersion = computePromptVersion(routingDecision);
+
+  /**
+   * B0-391 — the keyword-routing gate: five scores, the phrases behind them, and which branch
+   * decided. In `orchestrator` mode the verdict IS the branch taken (`no_signal` is the state the
+   * workflow relabels `ambiguous`); in a forced direct mode the scores were computed but did not
+   * decide, and saying so is the point of recording the gate at all.
+   */
+  const keywordRoutingGate: GateRecord = {
+    gate: 'keyword_routing',
+    inputs: {
+      agentMode,
+      scores: {
+        product: route.productScore,
+        bathroom: route.bathroomScore,
+        dilution: route.dilutionScore,
+        floor: route.floorScore,
+        recommendations: route.recommendationScore,
+      },
+      // B0-392 — the counts are not comparable across categories (the lists overlap internally),
+      // so the phrases are what make a score reviewable.
+      matchedPhrases: route.matchedPhrases,
+      decisiveRecommendationPhrases: route.decisiveRecommendationPhrases,
+      routedAgent: route.agent,
+      decisionPath: route.decisionPath,
+      tiedCategories: route.tiedCategories,
+      rationale: route.rationale,
+    },
+    thresholds: {
+      minHitsToRoute: SME_ROUTE_MIN_HITS_TO_ROUTE,
+      tieBreakOrder: [...SME_ROUTE_TIE_BREAK_ORDER],
+      decisiveRecommendationSignalWinsOutright: true,
+    },
+    verdict: agentMode === 'orchestrator' ? route.decisionPath : 'overridden_by_direct_mode',
+    effect:
+      agentMode === 'orchestrator'
+        ? route.agent
+          ? `Routed to the ${route.agent} specialist; ran the ${effectivePromptId} prompt.`
+          : `No keyword signal fired, so routingDecision is "ambiguous" — the ${effectivePromptId} specialist prompt ran by fallthrough, while the model was told "No specialist keywords matched".`
+        : `Admin forced direct \`${agentMode}\` routing, so the keyword scores did not decide; ran the ${effectivePromptId} prompt.`,
+  };
+
   const model = resolveResponsesModel(input.modelTag);
   const client = getOpenAIClient();
   /** B0-389 — which generation runtime the agent prompt ran on; same flag that picks the branch. */
@@ -1088,6 +1181,11 @@ export async function runProductSupportWorkflow(input: {
     output: jsonContent({
       routing: {
         decision: routingDecision,
+        /**
+         * B0-392 — the prompt `decision` actually selected. `decision: 'ambiguous'` means the
+         * product specialist ran by fallthrough, not that no policy applied.
+         */
+        effectivePromptId,
         scores: {
           product: route.productScore,
           bathroom: route.bathroomScore,
@@ -1097,6 +1195,8 @@ export async function runProductSupportWorkflow(input: {
         },
         rationale: routingRationale,
       },
+      // B0-391 — the same routing decision as a structured gate record (phrases + thresholds).
+      ...recordGates([keywordRoutingGate]),
     }),
     completed_at: new Date().toISOString(),
   });
@@ -1112,7 +1212,7 @@ export async function runProductSupportWorkflow(input: {
     const finalText = earlyDeclineDecision.text;
     const validation: ValidatorResult = {
       approved: true,
-      confidence: 0.92,
+      confidence: EARLY_DECLINE_CONFIDENCE,
       issues: [],
       requires_human_review: false,
     };
@@ -1125,6 +1225,16 @@ export async function runProductSupportWorkflow(input: {
       latestOpenaiResponseId: declineResponseId,
       validation,
       routingDecision,
+      /**
+       * B0-391 — the decline gate wrote this text; no model call happened on this path.
+       * B0-393 — the prompt stamps are still recorded: the specialist prompt this run WOULD have
+       * used is what makes a declined run comparable with the answered runs beside it.
+       */
+      answerProvenance: 'decline_gate',
+      promptVersion,
+      promptBundleVersion: PROMPT_BUNDLE_VERSION,
+      priorMessageCount: input.priorMessages?.length ?? 0,
+      previousResponseId: input.previousOpenaiResponseId ?? null,
       timingBreakdown: {
         toolRounds: 0,
         cacheSource: null,
@@ -1149,6 +1259,29 @@ export async function runProductSupportWorkflow(input: {
       output: jsonContent({
         applied: true,
         reason: earlyDeclineDecision.reason,
+        /**
+         * B0-391 — recorded only on this step, which exists only when the gate FIRED. A run whose
+         * message did not match any decline rule has no `early_decline_gate` step and therefore no
+         * record; whether the gate was even eligible is the planner step's
+         * `runConfig.earlyDeclineGateEnabled`.
+         */
+        ...recordGates([
+          {
+            gate: 'early_decline_gate',
+            inputs: {
+              reason: earlyDeclineDecision.reason,
+              message: input.userMessage,
+              crossReferenceIntent: shouldForceCrossReferenceLookup(input.userMessage),
+            },
+            thresholds: {
+              gateEnabled: earlyDeclineGateEnabled,
+              reasons: [...EARLY_DECLINE_REASONS],
+              declineConfidence: EARLY_DECLINE_CONFIDENCE,
+            },
+            verdict: 'declined',
+            effect: `Short-circuited before any model call or retrieval (${earlyDeclineDecision.reason}); the canned decline text was returned with confidence ${EARLY_DECLINE_CONFIDENCE}.`,
+          },
+        ]),
       }),
       completed_at: new Date().toISOString(),
     });
@@ -1484,6 +1617,13 @@ export async function runProductSupportWorkflow(input: {
     }
 
     let draftAnswer = agentResult.assistantText;
+    /**
+     * B0-391 — the single mutable answer-provenance cursor. Several branches below overwrite the
+     * answer, so the rule is LAST WRITER THAT ACTUALLY CHANGED THE TEXT WINS: whatever survives here
+     * must describe what the user really saw, not the first branch that touched the draft. A
+     * composition that returns the text unchanged deliberately does NOT claim provenance.
+     */
+    let answerProvenance: AnswerProvenance = 'model_generated';
     // A curated-override match (carries analysis facts) is authoritative on the recommendations
     // route — build a full competitive analysis from those facts + retrieved context, replacing
     // whatever product the model may have drafted. Works even with no web URL (Triforce, OnWeb=0).
@@ -1514,11 +1654,18 @@ export async function runProductSupportWorkflow(input: {
         rationale: m.rationale ?? null,
         alternatives: ctx.alternatives,
       });
+      // B0-391 — code-composed template; the model's draft was discarded wholesale.
+      answerProvenance = 'template_override';
     } else if (crossReferenceResult?.match.productUrl?.trim()) {
       draftAnswer = composeCrossReferenceUserFacingAnswer({
         match: crossReferenceResult.match,
         assistantText: agentResult.assistantText,
       });
+      // The composer is a no-op on a declined answer, or one that already leads with the comparable
+      // link — claiming composition there would overstate what the workflow did to the text.
+      if (draftAnswer.trim() !== agentResult.assistantText.trim()) {
+        answerProvenance = 'cross_reference_composed';
+      }
     }
 
     const sources = collectSourcesFromToolOutputs(toolOutputLog);
@@ -1686,11 +1833,18 @@ export async function runProductSupportWorkflow(input: {
 
       if (revised && !revisionRefused) {
         draftAnswer = revised;
+        // B0-391 — the revision model wrote this text, replacing whatever the earlier branches had.
+        answerProvenance = 'revision_pass';
         if (crossReferenceResult?.match.productUrl?.trim()) {
           draftAnswer = composeCrossReferenceUserFacingAnswer({
             match: crossReferenceResult.match,
             assistantText: revised,
           });
+          // Last writer that changed the text wins: the composer prepends the comparable-product
+          // headline on top of the revised body, so the composition is what the user saw.
+          if (draftAnswer.trim() !== revised.trim()) {
+            answerProvenance = 'cross_reference_composed';
+          }
         }
         validation = await runValidatorPass({
           draftAnswer,
@@ -1716,6 +1870,26 @@ export async function runProductSupportWorkflow(input: {
         );
       }
     }
+
+    /**
+     * B0-391 — deterministic gate records for this step, in evaluation order. Only the gates that
+     * actually ran are pushed, so a gate that never applied is ABSENT from the persisted row rather
+     * than recorded as having passed.
+     */
+    const validatorStepGates: GateRecord[] = [];
+    /** Shared by both usage/safety branches: the thresholds the gate really applies. */
+    const usageSafetyThresholds = {
+      confidenceCap: USAGE_SAFETY_COVERAGE_CONFIDENCE_CAP,
+      bodyScanMaxChars: USAGE_SAFETY_COVERAGE_BODY_SCAN_MAX_CHARS,
+      requiresUsageEvidence: true,
+      requiresSafetyEvidence: true,
+    };
+    const usageSafetyInputs = {
+      queryNeedsUsageAndSafetyCoverage: needsUsageSafetyCoverage,
+      hasUsageEvidence: usageSafetyCoverage.hasUsageEvidence,
+      hasSafetyEvidence: usageSafetyCoverage.hasSafetyEvidence,
+      retrievedSourceCount: sourceMeta.length,
+    };
 
     if (
       needsUsageSafetyCoverage &&
@@ -1756,6 +1930,23 @@ export async function runProductSupportWorkflow(input: {
         },
         { ...wfCtx, stepId: validationStep.id },
       );
+      validatorStepGates.push({
+        gate: 'usage_safety_coverage',
+        inputs: { ...usageSafetyInputs, missingEvidence },
+        thresholds: usageSafetyThresholds,
+        verdict: 'capped',
+        effect: `approved forced to false, issue "${coverageIssue}" added, confidence ${confidenceBeforeCap} → ${validation.confidence}. The usage/safety fallback copy replaces the draft unless the regulated-claim guardrail also rejected, whose copy wins; see answerProvenance for what the user saw.`,
+      });
+    } else if (needsUsageSafetyCoverage) {
+      // The gate RAN and found both kinds of evidence — a real verdict, not a skipped gate.
+      validatorStepGates.push({
+        gate: 'usage_safety_coverage',
+        inputs: { ...usageSafetyInputs, missingEvidence: [] },
+        thresholds: usageSafetyThresholds,
+        verdict: 'passed',
+        effect:
+          'Usage and safety evidence were both retrieved; no confidence cap and no fallback copy.',
+      });
     }
 
     // B0-257: regulated-claim guardrail -- runs unconditionally (independent of the
@@ -1815,10 +2006,12 @@ export async function runProductSupportWorkflow(input: {
             : max,
         0,
       );
-      const gate = evaluateRecommendationGate({
+      const gateInput = {
         baseConfidence: validation.confidence,
         topSimilarity: sources.length > 0 ? topSimilarity : null,
-      });
+      };
+      const gate = evaluateRecommendationGate(gateInput);
+      const confidenceBeforeGate = validation.confidence;
       validation = {
         ...validation,
         approved: validation.approved && gate.approved,
@@ -1832,21 +2025,68 @@ export async function runProductSupportWorkflow(input: {
         { ...gate, topSimilarity },
         { ...wfCtx, stepId: validationStep.id },
       );
+      /**
+       * B0-391 — the same calibration as a structured record. The audit row above is kept: it is
+       * the ONLY record for every run predating this step, and the timeline still reads it.
+       *
+       * `inputs` lists exactly what the call site passes. `evaluateRecommendationGate` also accepts
+       * `competitorChemistryClass`, `recommendedChemistryClass` and `brandKnown`, but this workflow
+       * passes none of them, so the category-mismatch and missing-brand caps cannot fire here —
+       * recording them as if they had been evaluated would be a false claim.
+       */
+      validatorStepGates.push({
+        gate: 'recommendation_confidence',
+        inputs: {
+          ...gateInput,
+          retrievedSourceCount: sources.length,
+          unwiredInputs: [
+            'competitorChemistryClass',
+            'recommendedChemistryClass',
+            'brandKnown',
+          ],
+          trigger:
+            routingDecision === 'recommendations'
+              ? 'recommendations_route'
+              : 'cross_reference_intent',
+          gateIssues: gate.issues,
+        },
+        // Read from the module's exported constants, never re-typed here, so a threshold change
+        // cannot silently desync from what the record claims was applied.
+        thresholds: {
+          lowSimilarityThreshold: LOW_SIMILARITY_THRESHOLD,
+          lowSimilarityConfidenceCap: LOW_SIMILARITY_CONFIDENCE_CAP,
+          missingBrandConfidenceCap: MISSING_BRAND_CONFIDENCE_CAP,
+          categoryMismatchConfidenceCap: CATEGORY_MISMATCH_CONFIDENCE_CAP,
+        },
+        verdict: validation.confidence < confidenceBeforeGate ? 'capped' : 'passed',
+        effect:
+          validation.confidence < confidenceBeforeGate
+            ? `Confidence ${confidenceBeforeGate} → ${validation.confidence}${
+                gate.issues.length > 0 ? `; issues added: ${gate.issues.join(' | ')}` : ''
+              }.`
+            : `No change; confidence stayed at ${validation.confidence}.`,
+      });
     }
 
     await completeWorkflowStep(validationStep.id, {
       status: 'completed',
-      output: jsonContent(
-        useValidator
-          ? validation
+      output: jsonContent({
+        ...validation,
+        ...(useValidator
+          ? {}
           : {
-              ...validation,
               // B0-389 — one unambiguous marker for a step that never called a model, using the
               // same token `validation.issues` already carries (see VALIDATOR_BYPASS_REASON).
               skipped: true,
               reason: VALIDATOR_BYPASS_REASON,
-            },
-      ),
+            }),
+        /**
+         * B0-391 — the deterministic gates that mutated `validation` on this step. Both run after
+         * the validator pass (or its bypass), so they belong on this row; the key is absent when
+         * neither gate ran.
+         */
+        ...recordGates(validatorStepGates),
+      }),
     });
     markStepClosed(validationStep.id);
     input.onEvent?.({
@@ -1878,6 +2118,17 @@ export async function runProductSupportWorkflow(input: {
           '',
           'Please consult the product label or SDS directly for the exact regulated value, or contact Betco Product Support / EHS to confirm.',
         ].join('\n');
+        /**
+         * B0-391 — recorded as `validator_fallback`. The regulated-claim guardrail is a
+         * validation-time rejection that replaces the answer with canned copy, exactly like the
+         * generic fallback below; it differs only in wording. It is NOT a new provenance value:
+         * the specific cause is already unambiguous elsewhere on the run (the
+         * `regulated_claim_guardrail_rejected` audit row, the `regulated_claim_unverified:*`
+         * validation issues, and the `regulated_claim_unverified` review task), so minting an
+         * eighth enum member would add a second spelling for "the answer was withheld at
+         * validation" without adding information.
+         */
+        answerProvenance = 'validator_fallback';
       } else if (
         needsUsageSafetyCoverage &&
         (!usageSafetyCoverage.hasUsageEvidence ||
@@ -1893,6 +2144,7 @@ export async function runProductSupportWorkflow(input: {
           '',
           'I can then return a grounded answer with both procedure and SDS-backed safety details.',
         ].join('\n');
+        answerProvenance = 'usage_safety_fallback';
       } else {
         finalText = [
           'I could not fully verify this answer against the retrieved approved sources.',
@@ -1903,6 +2155,7 @@ export async function runProductSupportWorkflow(input: {
           '',
           'If this is safety-urgent, follow your facility protocol and SDS guidance.',
         ].join('\n');
+        answerProvenance = 'validator_fallback';
       }
 
       if (validation.requires_human_review) {
@@ -1942,6 +2195,17 @@ export async function runProductSupportWorkflow(input: {
       routingDecision,
       timingBreakdown,
       usage: agentResult.usage,
+      // B0-391 — which branch wrote the text the user saw (see the cursor above).
+      answerProvenance,
+      // B0-393 — stamps of the prompt that ran and of the whole prompt+tool bundle.
+      promptVersion,
+      promptBundleVersion: PROMPT_BUNDLE_VERSION,
+      /**
+       * B0-388 — chat context: the captured `instructions` are not the whole model input, so a
+       * panel showing only them would imply the model saw less than it did.
+       */
+      priorMessageCount: input.priorMessages?.length ?? 0,
+      previousResponseId: input.previousOpenaiResponseId ?? null,
     };
 
     await updateWorkflowRun(run.id, {

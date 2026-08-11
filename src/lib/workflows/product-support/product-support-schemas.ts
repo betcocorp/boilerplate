@@ -147,10 +147,31 @@ export const productSupportStepOutputSchema = z
   .object({
     toolTrace: toolTraceSchema.optional(),
     gate: gateRecordSchema.optional(),
+    /**
+     * B0-391 — the gate records a step row accumulated, in evaluation order. An array because one
+     * row can own more than one gate: `usage_safety_coverage` and `recommendation_confidence` both
+     * mutate `validation` at the `validator` step, so the single `gate` key above could only ever
+     * have held one of them. The workflow writes `gates`; `gate` stays valid for a single-record
+     * writer, and `readStepGateRecords` reads either spelling.
+     */
+    gates: z.array(gateRecordSchema).optional(),
   })
   .loose();
 
 export type ProductSupportStepOutput = z.infer<typeof productSupportStepOutputSchema>;
+
+/**
+ * B0-391 — every gate record on a persisted step row, whichever key it was written under.
+ * Tolerant by design: an unparseable payload yields `[]` rather than throwing, because these rows
+ * are read by observability surfaces that must still render a malformed historical run.
+ */
+export function readStepGateRecords(stepOutput: unknown): GateRecord[] {
+  const parsed = productSupportStepOutputSchema.safeParse(stepOutput);
+  if (!parsed.success) {
+    return [];
+  }
+  return [...(parsed.data.gates ?? []), ...(parsed.data.gate ? [parsed.data.gate] : [])];
+}
 
 export const productSupportFinalOutputSchema = z.object({
   answerText: z.string(),

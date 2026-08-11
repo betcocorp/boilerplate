@@ -133,9 +133,27 @@ import {
   productSupportStepInputSchema,
   productSupportStepOutputSchema,
   promptRecordSchema,
+  readStepGateRecords,
+  type GateId,
+  type GateRecord,
 } from '~/lib/workflows/product-support/product-support-schemas';
+import {
+  SME_ROUTE_MIN_HITS_TO_ROUTE,
+  SME_ROUTE_TIE_BREAK_ORDER,
+} from '~/lib/orchestrator/sme-routing';
+import {
+  CATEGORY_MISMATCH_CONFIDENCE_CAP,
+  LOW_SIMILARITY_CONFIDENCE_CAP,
+  LOW_SIMILARITY_THRESHOLD,
+  MISSING_BRAND_CONFIDENCE_CAP,
+} from '~/lib/recommendations/recommendation-gate';
+import {
+  computePromptVersion,
+  PROMPT_BUNDLE_VERSION,
+} from '~/lib/workflows/product-support/prompt-version';
 import { REVISION_SYSTEM_PROMPT } from '~/lib/workflows/product-support/validator';
 import {
+  EARLY_DECLINE_CONFIDENCE,
   runProductSupportWorkflow,
   VALIDATOR_BYPASS_REASON,
 } from '~/lib/workflows/product-support/run-product-support-workflow';
@@ -652,5 +670,364 @@ describe('tool trace persistence (B0-390)', () => {
     const agentStep = stepNamed('openai_responses_agent');
     expect(agentStep.status).toBe('failed');
     expect(agentStep.output).toBeNull();
+  });
+});
+
+/* -------------------------------------------------------------------------- *
+ * B0-391 / B0-392 — deterministic gate records + answer provenance
+ * -------------------------------------------------------------------------- */
+
+/** Every gate record persisted anywhere on the run, keyed by gate id. */
+function gateRecordsFor(gate: GateId): GateRecord[] {
+  return steps()
+    .flatMap((step) => readStepGateRecords(step.output))
+    .filter((record) => record.gate === gate);
+}
+
+function singleGateRecord(gate: GateId): GateRecord {
+  const records = gateRecordsFor(gate);
+  expect(records, `expected exactly one "${gate}" record`).toHaveLength(1);
+  return records[0]!;
+}
+
+/** A cross-reference run whose curated override replaces the model's draft wholesale. */
+function arrangeOverrideRun() {
+  runResponsesWithToolLoopMock.mockImplementation(
+    generationCalling([
+      {
+        name: 'lookup_cross_reference',
+        argumentsJson: JSON.stringify({ brand: 'BNC', productName: 'BNC-15' }),
+        callId: 'call_xref',
+      },
+    ]),
+  );
+  executeProductToolMock.mockImplementation(async (name: string) =>
+    name === 'lookup_cross_reference'
+      ? { matches: [], fallbackRecommended: true }
+      : {
+          sources: [
+            {
+              documentId: 'doc-1',
+              chunkId: 'chunk-1',
+              title: 'Triforce label',
+              snippet: 'Use 2 oz per gallon.',
+              documentBody: 'Use 2 oz per gallon.',
+            },
+          ],
+        },
+  );
+  lookupCrossReferenceMock.mockResolvedValue({
+    fallbackRecommended: false,
+    matches: [
+      {
+        competitorBrand: 'BNC',
+        competitorProductName: 'BNC-15',
+        productKey: 'triforce',
+        confidence: 0.9,
+        productUrl: 'https://www.betco.com/products/triforce',
+        betcoProduct: { title: 'Triforce', sku: '1234' },
+        rationale: 'curated equivalence',
+      },
+    ],
+  });
+}
+
+describe('keyword routing gate (B0-391 / B0-392)', () => {
+  it('records the scores, the matched phrases behind them, and the tie-break policy', async () => {
+    await run({ userMessage: XREF_MESSAGE });
+
+    const record = singleGateRecord('keyword_routing');
+    expect(record.verdict).toBe('decisive_recommendation_signal');
+    expect(record.inputs.routedAgent).toBe('recommendations');
+    expect(record.inputs.scores).toMatchObject({ recommendations: expect.any(Number) });
+    // The phrases, not just the counts: "recommendations 2" is meaningless without them.
+    expect((record.inputs.matchedPhrases as Record<string, string[]>).recommendations).toContain(
+      'equivalent to',
+    );
+    expect(record.inputs.decisiveRecommendationPhrases).toContain('equivalent to');
+    expect(record.thresholds).toEqual({
+      minHitsToRoute: SME_ROUTE_MIN_HITS_TO_ROUTE,
+      tieBreakOrder: [...SME_ROUTE_TIE_BREAK_ORDER],
+      decisiveRecommendationSignalWinsOutright: true,
+    });
+  });
+
+  it('says the product specialist ran when a zero-signal message routes "ambiguous"', async () => {
+    await run({ userMessage: 'Hello there, how is the weather today?' });
+
+    const routing = stepOutput('orchestration_planner').routing as Record<string, unknown>;
+    expect(routing.decision).toBe('ambiguous');
+    // B0-392's point: "ambiguous" does not mean "no agent policy was applied".
+    expect(routing.effectivePromptId).toBe('product');
+
+    const record = singleGateRecord('keyword_routing');
+    expect(record.verdict).toBe('no_signal');
+    expect(record.inputs.routedAgent).toBeNull();
+    expect(record.effect).toContain('product');
+  });
+
+  it('says the keyword scores did not decide when an admin forces a direct mode', async () => {
+    await run({ userMessage: USAGE_MESSAGE, agentMode: 'floor' });
+
+    const record = singleGateRecord('keyword_routing');
+    expect(record.verdict).toBe('overridden_by_direct_mode');
+    expect(record.inputs.agentMode).toBe('floor');
+    expect((stepOutput('orchestration_planner').routing as Record<string, unknown>).effectivePromptId).toBe(
+      'floor',
+    );
+  });
+
+  it('keeps the B0-389 run config on the planner step alongside the new record', async () => {
+    await run();
+    expect(stepInput('orchestration_planner').runConfig).toEqual({
+      earlyDeclineGateEnabled: true,
+    });
+    expect(gateRecordsFor('keyword_routing')).toHaveLength(1);
+  });
+});
+
+describe('early decline gate record (B0-391)', () => {
+  it('records the reason and the applied thresholds on the gate step', async () => {
+    await run({ userMessage: 'Can I mix bleach with this Betco cleaner?' });
+
+    const record = singleGateRecord('early_decline_gate');
+    expect(record.verdict).toBe('declined');
+    expect(record.inputs.reason).toBe('chemical_mixing_or_safety');
+    expect(record.thresholds).toMatchObject({
+      gateEnabled: true,
+      declineConfidence: EARLY_DECLINE_CONFIDENCE,
+    });
+  });
+
+  it('is absent — not recorded as passing — on a run the gate did not decline', async () => {
+    await run();
+    expect(gateRecordsFor('early_decline_gate')).toEqual([]);
+  });
+});
+
+describe('usage/safety coverage gate record (B0-391)', () => {
+  it('records the cap it applied when safety evidence is missing', async () => {
+    executeProductToolMock.mockResolvedValue({
+      sources: [
+        {
+          documentId: 'doc-1',
+          chunkId: 'chunk-1',
+          title: 'pH7Q Dual label',
+          snippet: 'Usage: apply to the floor with a mop.',
+          documentBody: 'Usage: apply to the floor with a mop.',
+        },
+      ],
+    });
+
+    const out = await run();
+
+    const record = singleGateRecord('usage_safety_coverage');
+    expect(record.verdict).toBe('capped');
+    expect(record.inputs).toMatchObject({
+      hasUsageEvidence: true,
+      hasSafetyEvidence: false,
+      missingEvidence: ['safety'],
+    });
+    expect(record.thresholds).toMatchObject({ confidenceCap: 0.55 });
+    // The threshold recorded is the one the run actually applied.
+    expect(out.confidence).toBeLessThanOrEqual(0.55);
+    expect(out.validation.issues).toContain('insufficient_safety_evidence');
+  });
+
+  it('records a passing verdict when the query needs coverage and both kinds were found', async () => {
+    await run();
+
+    const record = singleGateRecord('usage_safety_coverage');
+    expect(record.verdict).toBe('passed');
+    expect(record.inputs).toMatchObject({
+      hasUsageEvidence: true,
+      hasSafetyEvidence: true,
+      missingEvidence: [],
+    });
+  });
+
+  it('is absent when the question does not ask about usage or safety at all', async () => {
+    await run({ userMessage: 'What is the EPA reg number for Betco Fight Bac RTU?' });
+    expect(gateRecordsFor('usage_safety_coverage')).toEqual([]);
+  });
+});
+
+describe('recommendation confidence gate record (B0-391)', () => {
+  it('promotes the calibration to a structured record citing the module thresholds', async () => {
+    arrangeOverrideRun();
+
+    await run({ userMessage: XREF_MESSAGE });
+
+    const record = singleGateRecord('recommendation_confidence');
+    expect(record.thresholds).toEqual({
+      lowSimilarityThreshold: LOW_SIMILARITY_THRESHOLD,
+      lowSimilarityConfidenceCap: LOW_SIMILARITY_CONFIDENCE_CAP,
+      missingBrandConfidenceCap: MISSING_BRAND_CONFIDENCE_CAP,
+      categoryMismatchConfidenceCap: CATEGORY_MISMATCH_CONFIDENCE_CAP,
+    });
+    expect(record.inputs).toMatchObject({ trigger: 'recommendations_route' });
+    // The chemistry/brand inputs this workflow never passes are declared as unwired rather than
+    // reported as evaluated.
+    expect(record.inputs.unwiredInputs).toEqual([
+      'competitorChemistryClass',
+      'recommendedChemistryClass',
+      'brandKnown',
+    ]);
+  });
+
+  it('is absent on a run with no cross-reference post-processing', async () => {
+    await run();
+    expect(gateRecordsFor('recommendation_confidence')).toEqual([]);
+  });
+});
+
+describe('answer provenance (B0-391)', () => {
+  it('reports a plain model answer as model_generated', async () => {
+    const out = await run();
+    expect(out.answerProvenance).toBe('model_generated');
+    expect(out.answerText).toBe('Dilute per the label instructions.');
+  });
+
+  it('reports the recommendations override as template_override', async () => {
+    arrangeOverrideRun();
+
+    const out = await run({ userMessage: XREF_MESSAGE });
+
+    expect(out.answerProvenance).toBe('template_override');
+    expect(out.answerText).not.toBe('Dilute per the label instructions.');
+  });
+
+  it('reports the early decline gate as decline_gate', async () => {
+    const out = await run({ userMessage: 'Can I mix bleach with this Betco cleaner?' });
+    expect(out.answerProvenance).toBe('decline_gate');
+  });
+
+  it('reports the usage/safety fallback copy as usage_safety_fallback', async () => {
+    executeProductToolMock.mockResolvedValue({
+      sources: [
+        {
+          documentId: 'doc-1',
+          chunkId: 'chunk-1',
+          title: 'pH7Q Dual label',
+          snippet: 'Usage: apply to the floor with a mop.',
+          documentBody: 'Usage: apply to the floor with a mop.',
+        },
+      ],
+    });
+
+    const out = await run();
+
+    expect(out.answerProvenance).toBe('usage_safety_fallback');
+    expect(out.answerText).toContain('do not have enough retrieved evidence');
+  });
+
+  it('reports the generic validator fallback as validator_fallback', async () => {
+    runValidatorPassMock.mockResolvedValue({
+      approved: false,
+      confidence: 0.3,
+      issues: ['dilution claim unsupported'],
+      requires_human_review: true,
+    });
+    runRevisionPassMock.mockResolvedValue('Clarification needed: please supply approved documentation.');
+
+    const out = await run({ userMessage: 'What is the EPA reg number for Betco Fight Bac RTU?', useValidator: true });
+
+    expect(out.answerProvenance).toBe('validator_fallback');
+    expect(out.answerText).toContain('could not fully verify');
+  });
+
+  it('reports a cross-reference headline stapled onto the model draft as cross_reference_composed', async () => {
+    runResponsesWithToolLoopMock.mockImplementation(
+      generationCalling([
+        {
+          name: 'lookup_cross_reference',
+          argumentsJson: JSON.stringify({ brand: 'BNC', productName: 'BNC-15' }),
+          callId: 'call_xref',
+        },
+      ]),
+    );
+    // A legacy match with a URL but no curated analysis facts: composed, not template-overridden.
+    executeProductToolMock.mockImplementation(async (name: string) =>
+      name === 'lookup_cross_reference'
+        ? {
+            fallbackRecommended: false,
+            matches: [
+              {
+                competitorBrand: 'BNC',
+                competitorProductName: 'BNC-15',
+                productKey: 'triforce',
+                confidence: 0.9,
+                productUrl: 'https://www.betco.com/products/triforce',
+                betcoProduct: { title: 'Triforce', sku: '1234' },
+              },
+            ],
+          }
+        : { sources: [] },
+    );
+
+    const out = await run({ userMessage: XREF_MESSAGE });
+
+    expect(out.answerProvenance).toBe('cross_reference_composed');
+    expect(out.answerText.split('\n')[0]).toContain('Comparable Betco product:');
+  });
+
+  it('does not claim composition when the composer left the model text unchanged', async () => {
+    runResponsesWithToolLoopMock.mockImplementation(
+      generationCalling(
+        [
+          {
+            name: 'lookup_cross_reference',
+            argumentsJson: JSON.stringify({ brand: 'BNC', productName: 'BNC-15' }),
+            callId: 'call_xref',
+          },
+        ],
+        // A decline stands on its own — the composer returns it untouched.
+        { assistantText: "I don't have enough information to answer that." },
+      ),
+    );
+    executeProductToolMock.mockImplementation(async (name: string) =>
+      name === 'lookup_cross_reference'
+        ? {
+            fallbackRecommended: false,
+            matches: [
+              {
+                competitorBrand: 'BNC',
+                competitorProductName: 'BNC-15',
+                productKey: 'triforce',
+                confidence: 0.9,
+                productUrl: 'https://www.betco.com/products/triforce',
+                betcoProduct: { title: 'Triforce', sku: '1234' },
+              },
+            ],
+          }
+        : { sources: [] },
+    );
+
+    const out = await run({ userMessage: XREF_MESSAGE });
+
+    expect(out.answerProvenance).toBe('model_generated');
+  });
+});
+
+describe('prompt identity on the final output (B0-393 wiring)', () => {
+  it('stamps the prompt version, bundle version and chat context on an answered run', async () => {
+    const out = await run({
+      priorMessages: [{ role: 'user', content: 'earlier question' }],
+      previousOpenaiResponseId: 'resp_prev',
+    });
+
+    expect(out.promptVersion).toBe(computePromptVersion(out.routingDecision ?? ''));
+    expect(out.promptBundleVersion).toBe(PROMPT_BUNDLE_VERSION);
+    expect(out.priorMessageCount).toBe(1);
+    expect(out.previousResponseId).toBe('resp_prev');
+  });
+
+  it('stamps them on the early-decline path too, which never calls a model', async () => {
+    const out = await run({ userMessage: 'Can I mix bleach with this Betco cleaner?' });
+
+    expect(out.promptVersion).toBe(computePromptVersion(out.routingDecision ?? ''));
+    expect(out.promptBundleVersion).toBe(PROMPT_BUNDLE_VERSION);
+    expect(out.priorMessageCount).toBe(0);
+    expect(out.previousResponseId).toBeNull();
   });
 });

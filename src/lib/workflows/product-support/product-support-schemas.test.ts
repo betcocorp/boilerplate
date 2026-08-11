@@ -7,6 +7,7 @@ import {
   productSupportStepInputSchema,
   productSupportStepOutputSchema,
   promptRecordSchema,
+  readStepGateRecords,
 } from '~/lib/workflows/product-support/product-support-schemas';
 
 /** A `workflow_run.final_output` payload as written before B0-388 existed. */
@@ -201,5 +202,44 @@ describe('persisted workflow-step payload schemas', () => {
     expect(parsed.success).toBe(true);
     expect(parsed.success && parsed.data.prompt?.stage).toBe('openai_responses_agent');
     expect(parsed.success && parsed.data.model).toBe('gpt-5');
+  });
+});
+
+describe('step gate records (B0-391)', () => {
+  const usageSafety = {
+    gate: 'usage_safety_coverage' as const,
+    inputs: { hasUsageEvidence: true, hasSafetyEvidence: false },
+    thresholds: { confidenceCap: 0.55 },
+    verdict: 'capped',
+    effect: 'Confidence capped at 0.55.',
+  };
+  const recommendation = {
+    gate: 'recommendation_confidence' as const,
+    inputs: { baseConfidence: 0.9, topSimilarity: 0.5 },
+    thresholds: { lowSimilarityThreshold: 0.6 },
+    verdict: 'capped',
+    effect: 'Confidence 0.9 → 0.75.',
+  };
+
+  it('carries several records on one step row, in evaluation order', () => {
+    const parsed = productSupportStepOutputSchema.safeParse({
+      approved: false,
+      gates: [usageSafety, recommendation],
+    });
+
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.gates?.map((record) => record.gate)).toEqual([
+      'usage_safety_coverage',
+      'recommendation_confidence',
+    ]);
+  });
+
+  it('reads either spelling, and yields nothing for a row with no gates', () => {
+    expect(readStepGateRecords({ gates: [usageSafety, recommendation] })).toHaveLength(2);
+    expect(readStepGateRecords({ gate: usageSafety })).toEqual([usageSafety]);
+    expect(readStepGateRecords({ responseIds: ['resp_1'] })).toEqual([]);
+    expect(readStepGateRecords(null)).toEqual([]);
+    // Malformed rows degrade to "no records" rather than throwing at a read site.
+    expect(readStepGateRecords({ gates: [{ gate: 'not-a-gate' }] })).toEqual([]);
   });
 });
