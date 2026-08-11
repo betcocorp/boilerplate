@@ -9,6 +9,7 @@
  * Nothing here performs I/O; these are pure type declarations.
  */
 
+import type { ToolCallOrigin } from '~/lib/audit/trace';
 import type { Json, Tables } from '~/types/supabase.public';
 
 export type AuditLogRow = Tables<'audit_logs'>;
@@ -112,6 +113,19 @@ export type ToolCallTimelineEvent = TimelineEventBase & {
    * (`payload.arguments_preview`, 512 chars). Null for successes / pre-B0-363 rows.
    */
   auditArgumentsPreview: string | null;
+  /**
+   * B0-390 — why the call happened (model-chosen, pinned by `tool_choice`, injected by the
+   * workflow, or the cross-reference safety net). Null on rows written before B0-390, where it is
+   * unknown rather than model-chosen.
+   */
+  origin: ToolCallOrigin | null;
+  /**
+   * B0-390 — whether the persisted preview was cut at write time. Regulated values (dilution
+   * ratios, EPA registration numbers, ppm, contact times) live in these payloads, so a reader must
+   * be able to tell a cut-off value from a complete one. Null = unknown (pre-B0-390 row).
+   */
+  argumentsTruncated: boolean | null;
+  outputTruncated: boolean | null;
 };
 
 /** A confidence-affecting gate decision. */

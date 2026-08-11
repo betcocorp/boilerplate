@@ -70,15 +70,25 @@ export function partitionValidatorIssues(issues: string[]): {
   return { issues: genuine, supportedClaims: supported };
 }
 
+/**
+ * B0-389 — the model the validator pass actually calls. Exported so the workflow can record it on
+ * the validator step's prompt record without duplicating (and eventually contradicting) the
+ * `BEX_VALIDATOR_MODEL` override resolution.
+ */
+export function resolveValidatorModel(modelTag?: string): string {
+  return (
+    process.env.BEX_VALIDATOR_MODEL?.trim() ||
+    resolveResponsesModel(modelTag ?? 'preview')
+  );
+}
+
 export async function runValidatorPass(input: {
   draftAnswer: string;
   evidenceSummary: string;
   modelTag?: string;
 }): Promise<ValidatorResult> {
   const client = getOpenAIClient();
-  const model =
-    process.env.BEX_VALIDATOR_MODEL?.trim() ||
-    resolveResponsesModel(input.modelTag ?? 'preview');
+  const model = resolveValidatorModel(input.modelTag);
 
   const payload = {
     draft: input.draftAnswer,
@@ -451,6 +461,21 @@ export function evaluateRegulatedClaimGrounding(input: {
   };
 }
 
+/**
+ * B0-389 — the revision pass's own instructions, lifted out of the call so the workflow can record
+ * exactly what the revision model was told on its `revision` step. Text unchanged.
+ */
+export const REVISION_SYSTEM_PROMPT = [
+  'Revise the draft answer to fix validator issues.',
+  'Do not add new factual claims beyond the evidence summary.',
+  'If you cannot fix safely, reply with a short clarification request only.',
+].join('\n');
+
+/** B0-389 — the model the revision pass calls (no dedicated env override, unlike the validator). */
+export function resolveRevisionModel(modelTag?: string): string {
+  return resolveResponsesModel(modelTag ?? 'preview');
+}
+
 export async function runRevisionPass(input: {
   draftAnswer: string;
   validatorIssues: string[];
@@ -458,15 +483,11 @@ export async function runRevisionPass(input: {
   modelTag?: string;
 }): Promise<string> {
   const client = getOpenAIClient();
-  const model = resolveResponsesModel(input.modelTag ?? 'preview');
+  const model = resolveRevisionModel(input.modelTag);
 
   const res = await client.responses.create({
     model,
-    instructions: [
-      'Revise the draft answer to fix validator issues.',
-      'Do not add new factual claims beyond the evidence summary.',
-      'If you cannot fix safely, reply with a short clarification request only.',
-    ].join('\n'),
+    instructions: REVISION_SYSTEM_PROMPT,
     input: [
       {
         role: 'user',

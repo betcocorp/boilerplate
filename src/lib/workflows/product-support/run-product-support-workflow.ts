@@ -1,6 +1,6 @@
 import { getErrorMessage } from '~/lib/utils';
 import { writeAuditLog } from '~/lib/audit/audit-log';
-import type { ToolTraceEntry } from '~/lib/audit/trace';
+import type { ToolCallOrigin, ToolTraceEntry } from '~/lib/audit/trace';
 import {
   DEFAULT_BEX_CHAT_AGENT_MODE,
   type BexChatAgentMode,
@@ -30,19 +30,27 @@ import {
 } from '~/lib/tools/cross-reference-lookup';
 import { buildCompetitiveRecommendationAnswer } from '~/lib/recommendations/recommendation-answer';
 import { productSupportTools } from '~/lib/tools/definitions';
-import { executeToolCall } from '~/lib/tools/execute-tool-call';
+import { buildToolTraceEntry, executeToolCall } from '~/lib/tools/execute-tool-call';
+
+import type { Json } from '~/types/supabase.public';
 
 import {
   buildProductSupportInstructions,
   buildProductSupportPromptCacheKey,
+  VALIDATOR_SYSTEM_PROMPT,
 } from '~/lib/workflows/product-support/product-support-prompts';
 import {
+  promptRecordSchema,
+  type PromptRecord,
   type ProductSupportFinalOutput,
   type RetrievedDocumentChunkRef,
   type ValidatorResult,
 } from '~/lib/workflows/product-support/product-support-schemas';
 import {
   evaluateRegulatedClaimGrounding,
+  resolveRevisionModel,
+  resolveValidatorModel,
+  REVISION_SYSTEM_PROMPT,
   runRevisionPass,
   runValidatorPass,
 } from '~/lib/workflows/product-support/validator';
@@ -872,6 +880,25 @@ function buildCrossReferenceSearchArgs(input: {
 }
 
 /**
+ * B0-389 — the `{ prompt }` fragment for a step's `input`, spread in at INSERT time: all three
+ * prompts are known before their step row exists, so nothing needs to update `input` later.
+ *
+ * `parse` rather than `safeParse` — the record is constructed here from local values, so a shape
+ * mismatch is a bug in this file, not untrusted data.
+ */
+export function recordPrompt(record: PromptRecord): { prompt: PromptRecord } {
+  return { prompt: promptRecordSchema.parse(record) };
+}
+
+/**
+ * B0-389 — the single spelling for "the validator pass did not run". The bypassed path used to say
+ * `reason: 'temporary_test_bypass'` on the step while putting `validator_bypassed_for_testing` in
+ * `validation.issues`, so the same state had two names. The issues token is load-bearing (the
+ * observability timeline's `validator_bypass` gate keys off it), so it is the one that survives.
+ */
+export const VALIDATOR_BYPASS_REASON = 'validator_bypassed_for_testing';
+
+/**
  * B0-386 — `error.reason` written on a step that was still `running` but is not the step the
  * throw came from, so a trace reader can tell "this is where it broke" from "this never got to
  * run". Steps must never be left `running` once the workflow returns or throws.
@@ -890,9 +917,18 @@ export const ABANDONED_WORKFLOW_STEP_REASON = 'abandoned_after_workflow_failure'
 export async function failOpenWorkflowSteps(
   openStepIds: readonly string[],
   message: string,
+  /**
+   * B0-390 — output to write on a still-open step as it is failed, keyed by step id. Used to keep
+   * the partial tool trace of a run that threw mid-generation, which is exactly the run worth
+   * inspecting. Only ever ADDS an output to a step that is still open (and therefore has none):
+   * B0-386's rule holds — a step that already completed is not in `openStepIds`, and any step with
+   * no entry here has the `output` key omitted from its patch rather than nulled.
+   */
+  partialOutputByStepId: ReadonlyMap<string, Json> = new Map(),
 ): Promise<void> {
   const mostRecentFirst = [...openStepIds].reverse();
   for (const [index, stepId] of mostRecentFirst.entries()) {
+    const partialOutput = partialOutputByStepId.get(stepId);
     await completeWorkflowStep(stepId, {
       status: 'failed',
       error: jsonContent(
@@ -900,6 +936,7 @@ export async function failOpenWorkflowSteps(
           ? { message }
           : { message, reason: ABANDONED_WORKFLOW_STEP_REASON },
       ),
+      ...(partialOutput !== undefined ? { output: partialOutput } : {}),
     });
   }
 }
@@ -919,6 +956,8 @@ export async function runProductSupportWorkflow(input: {
   const useAiSdkGeneration = process.env.BEX_AI_SDK_GENERATION_ENABLED === 'true';
   const agentMode = input.agentMode ?? DEFAULT_BEX_CHAT_AGENT_MODE;
   const route = routeUserMessageToSme(input.userMessage);
+  // B0-389 — read once so the flag recorded as run config is the same value the gate below used.
+  const earlyDeclineGateEnabled = isEarlyDeclineGateEnabled();
   const earlyDeclineDecision = classifyEarlyDecline(input.userMessage);
   const routingDecision =
     agentMode === 'orchestrator'
@@ -956,6 +995,8 @@ export async function runProductSupportWorkflow(input: {
 
   const model = resolveResponsesModel(input.modelTag);
   const client = getOpenAIClient();
+  /** B0-389 — which generation runtime the agent prompt ran on; same flag that picks the branch. */
+  const agentRuntime: PromptRecord['runtime'] = useAiSdkGeneration ? 'ai-sdk' : 'responses';
 
   /**
    * B0-428 / B0-429 — time to first assistant token, surfaced as the "Stream" column on
@@ -1034,7 +1075,16 @@ export async function runProductSupportWorkflow(input: {
     workflow_run_id: run.id,
     step_name: 'orchestration_planner',
     status: 'completed',
-    input: jsonContent({ message: input.userMessage }),
+    input: jsonContent({
+      message: input.userMessage,
+      /**
+       * B0-389 — run config lives on the planner step because it is the ONE step every run has,
+       * including a decline-gate run that never reaches the agent step. `earlyDeclineGateEnabled`
+       * is what explains whether the decline gate even had a chance to fire, so a trace with no
+       * decline is only interpretable next to it.
+       */
+      runConfig: { earlyDeclineGateEnabled },
+    }),
     output: jsonContent({
       routing: {
         decision: routingDecision,
@@ -1170,6 +1220,19 @@ export async function runProductSupportWorkflow(input: {
     return finalOutput;
   }
 
+  /**
+   * B0-390 — the run's RESOLVED tool trace, declared out here for two reasons:
+   *
+   * 1. the agent step used to persist `agentResult.toolTrace`, which never contains the
+   *    force-injected cross-reference search (that was pushed onto a separate local copy), so the
+   *    forced call executed but was never persisted;
+   * 2. the catch block needs to reach it, to keep the calls that completed before a throw.
+   *
+   * Every tool call in the run lands here exactly once, in execution order: model-chosen calls via
+   * `executeTool`, plus the workflow's own forced/safety-net calls.
+   */
+  const resolvedToolTrace: ToolTraceEntry[] = [];
+
   const agentStep = await insertWorkflowStep({
     workflow_run_id: run.id,
     step_name: 'openai_responses_agent',
@@ -1177,6 +1240,19 @@ export async function runProductSupportWorkflow(input: {
     input: jsonContent({
       model,
       hasPreviousResponse: Boolean(input.previousOpenaiResponseId),
+      /**
+       * B0-389 — captured here, ABOVE the `useAiSdkGeneration` fork below, so both generation
+       * runtimes inherit the same record. `runtime` is derived from the very flag that picks the
+       * branch: the same prompt on a different runtime is a different experiment, because the two
+       * runtimes assemble the model input differently (replayed `priorMessages` vs. a server-side
+       * `previous_response_id` chain).
+       */
+      ...recordPrompt({
+        stage: 'openai_responses_agent',
+        instructions,
+        model,
+        runtime: agentRuntime,
+      }),
     }),
   });
   markStepOpen(agentStep.id);
@@ -1189,11 +1265,21 @@ export async function runProductSupportWorkflow(input: {
   input.onEvent?.({ type: 'status', stage: 'agent_started' });
 
   try {
-    const toolTrace: ToolTraceEntry[] = [];
     const toolOutputLog: RuntimeToolOutput[] = [];
     const cacheSourceCounts = new Map<string, number>();
     let totalSearchMs = 0;
     let retrievalSamples = 0;
+
+    const toolChoice = shouldForceCrossReferenceLookup(input.userMessage)
+      ? ({ type: 'function', name: 'lookup_cross_reference' } as const)
+      : ('required' as const);
+    /**
+     * B0-390 — `tool_choice` is pinned on the FIRST model round only (both runtimes send `auto`
+     * afterwards), so the first executed call of the pinned tool is the one the model had no say
+     * in; a later call of the same tool was its own choice.
+     */
+    const forcedToolChoiceName = typeof toolChoice === 'object' ? toolChoice.name : null;
+    let forcedToolChoiceConsumed = false;
 
     const executeTool = async ({
       name,
@@ -1217,7 +1303,13 @@ export async function runProductSupportWorkflow(input: {
       );
       logInfo('tool_called', { ...wfCtx, tool_name: name, call_id: callId });
 
-      const out = await executeToolCall({ name, argumentsJson, callId });
+      let origin: ToolCallOrigin = 'model_chosen';
+      if (forcedToolChoiceName === name && !forcedToolChoiceConsumed) {
+        origin = 'tool_choice_forced';
+        forcedToolChoiceConsumed = true;
+      }
+
+      const out = await executeToolCall({ name, argumentsJson, callId, origin });
       const retrievalTiming = extractRetrievalTiming(out.output);
       if (retrievalTiming) {
         cacheSourceCounts.set(
@@ -1236,7 +1328,7 @@ export async function runProductSupportWorkflow(input: {
         { ...wfCtx, toolName: name },
       );
 
-      toolTrace.push(out.trace);
+      resolvedToolTrace.push(out.trace);
       toolOutputLog.push({
         toolName: out.trace.toolName,
         ok: out.trace.ok,
@@ -1252,10 +1344,6 @@ export async function runProductSupportWorkflow(input: {
       });
       return out;
     };
-
-    const toolChoice = shouldForceCrossReferenceLookup(input.userMessage)
-      ? ({ type: 'function', name: 'lookup_cross_reference' } as const)
-      : ('required' as const);
 
     // Generation runtime: AI SDK (`streamText`) when BEX_AI_SDK_GENERATION_ENABLED, else the
     // OpenAI Responses tool loop. Both return the same { assistantText, finalResponseId,
@@ -1286,6 +1374,20 @@ export async function runProductSupportWorkflow(input: {
           executeTool,
         });
 
+    /**
+     * B0-390 — reconcile the workflow's trace with what the runtime reported. Both normally hold the
+     * SAME entries for model-chosen calls (the shared `executeTool` closure records each call on the
+     * workflow side as the runtime records it on its own), so this is a no-op in practice — but the
+     * persisted trace must never end up smaller than the runtime's own report, whatever a runtime
+     * does internally. Runs before the safety-net / force-injected pushes below, so execution order
+     * is preserved.
+     */
+    for (const entry of agentResult.toolTrace) {
+      if (!resolvedToolTrace.some((recorded) => recorded.callId === entry.callId)) {
+        resolvedToolTrace.push(entry);
+      }
+    }
+
     // AI SDK has no OpenAI response id; use a synthetic marker so the persisted chain stays populated.
     const finalResponseId = agentResult.finalResponseId ?? `ai_sdk:${run.id}`;
     input.onEvent?.({ type: 'status', stage: 'agent_completed' });
@@ -1297,7 +1399,6 @@ export async function runProductSupportWorkflow(input: {
       ttftMs: ttftMs(),
     };
 
-    const resolvedToolTrace = [...agentResult.toolTrace];
     const crossReferenceIntent = shouldForceCrossReferenceLookup(input.userMessage);
     /**
      * B0-339 — the cross-reference post-processing below must not hinge on the routing label alone.
@@ -1318,10 +1419,30 @@ export async function runProductSupportWorkflow(input: {
     // competitor mention inside it — so a curated equivalence (e.g. BNC-15 → Triforce) always wins.
     let overrideFromSafetyNet = false;
     if (useCrossReferencePostProcessing && !crossReferenceResult) {
-      const forced = await lookupCrossReference({
+      const safetyNetArgs = {
         brand: input.userMessage,
         productName: input.userMessage,
-      });
+      };
+      const safetyNetStartedAtMs = Date.now();
+      const forced = await lookupCrossReference(safetyNetArgs);
+      /**
+       * B0-390 — this lookup bypasses `executeToolCall` entirely, so until now it produced no trace
+       * entry at all: the run showed a cross-reference match that no recorded tool call could
+       * explain. Recorded with the same previews and truncation flags as a real tool call, and
+       * attributed so it is never read as a call the model chose. Logged whether or not it matched —
+       * a lookup that found nothing is exactly what a reader needs to see.
+       */
+      resolvedToolTrace.push(
+        buildToolTraceEntry({
+          toolName: 'lookup_cross_reference',
+          callId: `safety-net-xref-${safetyNetStartedAtMs}`,
+          argumentsJson: JSON.stringify(safetyNetArgs),
+          output: JSON.stringify(forced),
+          ok: true,
+          durationMs: Date.now() - safetyNetStartedAtMs,
+          origin: 'safety_net_override',
+        }),
+      );
       const top = forced.matches?.[0];
       if (top && !forced.fallbackRecommended) {
         crossReferenceResult = {
@@ -1346,6 +1467,8 @@ export async function runProductSupportWorkflow(input: {
           }),
         ),
         callId: `forced-search-${Date.now()}`,
+        // B0-390 — executed by the workflow, not chosen by the model.
+        origin: 'workflow_injected',
       });
       resolvedToolTrace.push(enforcedSearch.trace);
       toolOutputLog.push({
@@ -1429,10 +1552,21 @@ export async function runProductSupportWorkflow(input: {
       status: 'completed',
       output: jsonContent({
         responseIds: agentResult.responseIds,
-        toolCalls: agentResult.toolTrace.length,
-        // Full per-call trace (B0-331) so the observability timeline can render
-        // arguments/output previews, ok flags and durations without a migration.
-        toolTrace: agentResult.toolTrace,
+        /**
+         * B0-390 — kept for back-compat (the observability timeline spreads it into the step detail
+         * as `toolCalls`, and it is asserted by the B0-386 failure-attribution test), but it now
+         * counts the RESOLVED trace. It used to count `agentResult.toolTrace`, which excluded the
+         * workflow's forced/injected calls and therefore disagreed with the trace beside it.
+         */
+        toolCalls: resolvedToolTrace.length,
+        /**
+         * Full per-call trace (B0-331) so the observability timeline can render
+         * arguments/output previews, ok flags and durations without a migration.
+         *
+         * B0-390 — the RESOLVED trace: the force-injected cross-reference search and the
+         * safety-net lookup used to execute without ever being persisted.
+         */
+        toolTrace: resolvedToolTrace,
         // B0-324 — token usage for the turn plus the per-model-call breakdown, so prompt-cache
         // reuse across the multi-round tool loop is verifiable from the persisted step alone
         // (`cachedPromptTokens` should be non-zero from the 2nd call onward).
@@ -1446,7 +1580,23 @@ export async function runProductSupportWorkflow(input: {
       workflow_run_id: run.id,
       step_name: 'validator',
       status: 'running',
-      input: jsonContent({ modelTag: input.modelTag ?? 'preview' }),
+      input: jsonContent({
+        modelTag: input.modelTag ?? 'preview',
+        /**
+         * B0-389 — recorded only when the pass actually calls a model. On the bypassed path
+         * (`useValidator === false`, the test runner's default) there is no model call, and a prompt
+         * record there would make a step that never ran look like it had. The bypass is instead
+         * declared in the step's output (`skipped` + `VALIDATOR_BYPASS_REASON`).
+         */
+        ...(useValidator
+          ? recordPrompt({
+              stage: 'validator',
+              instructions: VALIDATOR_SYSTEM_PROMPT,
+              model: resolveValidatorModel(input.modelTag),
+              runtime: 'responses',
+            })
+          : {}),
+      }),
     });
     markStepOpen(validationStep.id);
     input.onEvent?.({ type: 'status', stage: 'validation_started' });
@@ -1466,7 +1616,7 @@ export async function runProductSupportWorkflow(input: {
       validation = {
         approved: true,
         confidence: sources.length > 0 ? 0.9 : 0.6,
-        issues: ['validator_bypassed_for_testing'],
+        issues: [VALIDATOR_BYPASS_REASON],
         requires_human_review: false,
       };
     }
@@ -1477,6 +1627,28 @@ export async function runProductSupportWorkflow(input: {
     });
 
     if (useValidator && !validation.approved && validation.issues.length > 0) {
+      /**
+       * B0-389 — the revision pass is its own model call, with its own prompt, model and output, so
+       * it gets its own step. Filing it under the validator step (as it was) made a rewritten answer
+       * look like the validator had produced it.
+       */
+      const revisionStep = await insertWorkflowStep({
+        workflow_run_id: run.id,
+        step_name: 'revision',
+        status: 'running',
+        input: jsonContent({
+          modelTag: input.modelTag ?? 'preview',
+          validatorIssues: validation.issues,
+          ...recordPrompt({
+            stage: 'revision',
+            instructions: REVISION_SYSTEM_PROMPT,
+            model: resolveRevisionModel(input.modelTag),
+            runtime: 'responses',
+          }),
+        }),
+      });
+      markStepOpen(revisionStep.id);
+
       const revised = (
         await runRevisionPass({
           draftAnswer,
@@ -1495,6 +1667,23 @@ export async function runProductSupportWorkflow(input: {
         /clarification needed|could not (fully )?verify|cannot (revise|fix|provide|answer)|no( supporting)? evidence (was |has been )?provided|no( supporting)? evidence (is |was )?available|please (supply|provide) (approved )?(documentation|references|evidence)|supply (approved )?documentation/i.test(
           revised,
         );
+
+      /**
+       * B0-389 — closed before the (optional) second validator pass, which is a VALIDATOR call and
+       * stays on the validator step. The output says what the revision produced and whether it was
+       * taken: a refusal deliberately keeps the original draft, so `outcome` records that the answer
+       * the user saw is still the draft.
+       */
+      await completeWorkflowStep(revisionStep.id, {
+        status: 'completed',
+        output: jsonContent({
+          refused: revisionRefused,
+          outcome: revisionRefused ? 'refused_draft_retained' : 'draft_replaced',
+          revisedAnswer: revised,
+        }),
+      });
+      markStepClosed(revisionStep.id);
+
       if (revised && !revisionRefused) {
         draftAnswer = revised;
         if (crossReferenceResult?.match.productUrl?.trim()) {
@@ -1522,7 +1711,8 @@ export async function runProductSupportWorkflow(input: {
         await writeAuditLog(
           'revision_skipped_refusal',
           { issues: validation.issues },
-          { ...wfCtx, stepId: validationStep.id },
+          // B0-389 — re-attributed from the validator step to the revision step that refused.
+          { ...wfCtx, stepId: revisionStep.id },
         );
       }
     }
@@ -1651,8 +1841,10 @@ export async function runProductSupportWorkflow(input: {
           ? validation
           : {
               ...validation,
+              // B0-389 — one unambiguous marker for a step that never called a model, using the
+              // same token `validation.issues` already carries (see VALIDATOR_BYPASS_REASON).
               skipped: true,
-              reason: 'temporary_test_bypass',
+              reason: VALIDATOR_BYPASS_REASON,
             },
       ),
     });
@@ -1812,9 +2004,27 @@ export async function runProductSupportWorkflow(input: {
     const message = getErrorMessage(err);
     logError('workflow_failed', { ...wfCtx, message });
 
+    /**
+     * B0-390 — a run that died mid-generation is the one most worth inspecting, so the calls that
+     * did complete are written onto the agent step as it is failed. Only when the agent step is
+     * still OPEN: once it has completed it already holds the full resolved trace, and B0-386's rule
+     * is that a completed step is never rewritten (never re-failed, never nulled).
+     */
+    const partialStepOutputs = new Map<string, Json>();
+    if (openStepIds.includes(agentStep.id) && resolvedToolTrace.length > 0) {
+      partialStepOutputs.set(
+        agentStep.id,
+        jsonContent({
+          partial: true,
+          toolCalls: resolvedToolTrace.length,
+          toolTrace: resolvedToolTrace,
+        }),
+      );
+    }
+
     // B0-386 — blame the step that was actually open (and leave completed steps, with their
     // persisted tool trace, alone) rather than rewriting the agent step every time.
-    await failOpenWorkflowSteps(openStepIds, message);
+    await failOpenWorkflowSteps(openStepIds, message, partialStepOutputs);
 
     await updateWorkflowRun(run.id, {
       status: 'failed',
