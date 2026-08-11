@@ -149,7 +149,15 @@
       "Bash(grep -nA6 \"export function buildRunTimeline\" src/lib/observability/timeline.ts)",
       "Bash(git diff *)",
       "Bash(git -C /Users/thomasbird/projects/client/betco/apps/bex-combined/bex2.0-b0401 status --short)",
-      "Bash(./node_modules/.bin/eslint src/components/admin/observability/ToolCallDetail.tsx)"
+      "Bash(./node_modules/.bin/eslint src/components/admin/observability/ToolCallDetail.tsx)",
+      "Bash(timeout 120 npx --yes tsx@4 --version)",
+      "Bash(awk '{print $9}')",
+      "Bash(grep -o '[0-9]*$')",
+      "Bash(npx --yes tsx@4 --version)",
+      "Bash(PORT=3411 pnpm dev *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:3411/api/me)",
+      "Bash(npx --yes tsx@4 scripts/b0412-permission-audit.ts)",
+      "Bash(curl -s -b /private/tmp/claude-501/-Users-thomasbird-projects-client-betco-apps-bex-combined-bex2-0/b4097934-05c7-482e-b517-3aa6793c5aef/scratchpad/tom.jar -c /private/tmp/claude-501/-Users-thomasbird-projects-client-betco-apps-bex-combined-bex2-0/b4097934-05c7-482e-b517-3aa6793c5aef/scratchpad/tom.jar http://localhost:3411/api/me)"
     ]
   }
 }
