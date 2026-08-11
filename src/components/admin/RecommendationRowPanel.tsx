@@ -1,6 +1,6 @@
 'use client';
 
-import { ChevronDown, Loader2 } from 'lucide-react';
+import { ChevronDown, Loader2, Plus } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 import { toast } from 'sonner';
@@ -26,6 +26,7 @@ import { Input } from '~/components/ui/input';
 import { Label } from '~/components/ui/label';
 import { Textarea } from '~/components/ui/textarea';
 import {
+  addRecommendationCandidate,
   editRecommendationCandidate,
   rejectRecommendation,
   verifyRecommendation,
@@ -193,6 +194,119 @@ function CandidateCard({
   );
 }
 
+/**
+ * B0-433 — reviewer-authored candidate for a recommendation the engine returned nothing usable for.
+ * Betco title and product key are both required because promotion into the fast-path override table
+ * needs both; letting either through would just produce another candidate that cannot be approved.
+ */
+function AddCandidateForm({
+  recommendationId,
+  onAdded,
+  disabled,
+}: {
+  recommendationId: string;
+  onAdded: (candidateId: string) => void;
+  disabled: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [betcoTitle, setBetcoTitle] = useState('');
+  const [betcoProductKey, setBetcoProductKey] = useState('');
+  const [rationale, setRationale] = useState('');
+  const [isPending, startTransition] = useTransition();
+  const router = useRouter();
+
+  const canSubmit = betcoTitle.trim().length > 0 && betcoProductKey.trim().length > 0;
+
+  function submit() {
+    if (!canSubmit) {
+      toast.error('A Betco title and product key are both required.');
+      return;
+    }
+    startTransition(async () => {
+      try {
+        const created = await addRecommendationCandidate(recommendationId, {
+          betcoTitle: betcoTitle.trim(),
+          betcoProductKey: betcoProductKey.trim(),
+          rationale: rationale.trim() || null,
+        });
+        toast.success('Candidate added');
+        onAdded(created.id);
+        setBetcoTitle('');
+        setBetcoProductKey('');
+        setRationale('');
+        setOpen(false);
+        router.refresh();
+      } catch (err) {
+        toast.error(getErrorMessage(err, 'Failed to add candidate'));
+      }
+    });
+  }
+
+  if (!open) {
+    return (
+      <Button
+        className="mt-2"
+        disabled={disabled}
+        onClick={() => setOpen(true)}
+        size="sm"
+        type="button"
+        variant="outline"
+      >
+        <Plus className="mr-2 size-3.5" />
+        Add a candidate
+      </Button>
+    );
+  }
+
+  return (
+    <div className="mt-2 space-y-2 rounded-2xl border border-dashed border-border p-4">
+      <p className="text-sm font-medium text-foreground">Add a candidate</p>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <div className="space-y-1">
+          <Label htmlFor={`add-title-${recommendationId}`}>Betco title *</Label>
+          <Input
+            id={`add-title-${recommendationId}`}
+            onChange={(e) => setBetcoTitle(e.target.value)}
+            placeholder="e.g. Green Earth Peroxide Cleaner"
+            value={betcoTitle}
+          />
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor={`add-key-${recommendationId}`}>Betco product key *</Label>
+          <Input
+            id={`add-key-${recommendationId}`}
+            onChange={(e) => setBetcoProductKey(e.target.value)}
+            placeholder="e.g. 3355"
+            value={betcoProductKey}
+          />
+        </div>
+      </div>
+      <div className="space-y-1">
+        <Label htmlFor={`add-rationale-${recommendationId}`}>Rationale</Label>
+        <Textarea
+          id={`add-rationale-${recommendationId}`}
+          onChange={(e) => setRationale(e.target.value)}
+          placeholder="Why this Betco product is the right cross-reference."
+          value={rationale}
+        />
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Both starred fields are required — the fast-path override table needs a title and a product
+        key, so a candidate missing either cannot be approved.
+      </p>
+      <div className="flex gap-2">
+        <Button disabled={isPending || !canSubmit} onClick={submit} size="sm" type="button">
+          {isPending ? <Loader2 className="mr-2 size-3.5 animate-spin" /> : null}
+          Add candidate
+        </Button>
+        <Button onClick={() => setOpen(false)} size="sm" type="button" variant="ghost">
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 export function RecommendationRowPanel({
   recommendation,
 }: {
@@ -210,14 +324,41 @@ export function RecommendationRowPanel({
   const isDecided = recommendation.status === 'verified' || recommendation.status === 'rejected';
   const verification = readVerification(recommendation.evidence);
 
+  /**
+   * B0-433 — the same preconditions `promoteRecommendationToOverride` enforces server-side, checked
+   * up front so the reviewer sees what is missing instead of approving into a silent no-op.
+   */
+  const chosenCandidate = recommendation.candidates.find((c) => c.id === chosenCandidateId) ?? null;
+  const blockingReason: string | null = !chosenCandidate
+    ? recommendation.candidates.length === 0
+      ? 'No candidate to approve — add one below first.'
+      : 'Select a candidate to approve.'
+    : !chosenCandidate.betcoProductKey?.trim()
+      ? 'The selected candidate has no Betco product key. Add it with "Edit chosen candidate" before approving.'
+      : !chosenCandidate.betcoTitle?.trim()
+        ? 'The selected candidate has no Betco title. Add it with "Edit chosen candidate" before approving.'
+        : !recommendation.competitorBrand?.trim()
+          ? 'This recommendation has no competitor brand recorded, which the fast-path mapping requires.'
+          : null;
+
   function handleVerify() {
     startTransition(async () => {
       try {
-        await verifyRecommendation(recommendation.id, { chosenCandidateId });
-        toast.success('Recommendation verified and promoted to the fast-path mapping');
+        const result = await verifyRecommendation(recommendation.id, { chosenCandidateId });
+        // B0-433 — approving and promoting can disagree; report what actually happened rather
+        // than always claiming the fast-path mapping is live.
+        if (result.promoted) {
+          toast.success(
+            result.mode === 'updated'
+              ? 'Approved — existing fast-path mapping updated'
+              : 'Approved and promoted to the fast-path mapping',
+          );
+        } else {
+          toast.warning(`Approved, but not promoted: ${result.reason}`);
+        }
         router.refresh();
       } catch (err) {
-        toast.error(getErrorMessage(err, 'Failed to verify recommendation'));
+        toast.error(getErrorMessage(err, 'Failed to approve recommendation'));
       }
     });
   }
@@ -304,11 +445,13 @@ export function RecommendationRowPanel({
             <div>
               <p className="text-sm font-medium text-foreground">Candidates</p>
               <p className="mb-2 text-xs text-muted-foreground">
-                Select the correct Betco match, then Verify to promote it into the fast-path
+                Select the correct Betco match, then Approve to promote it into the fast-path
                 cross-reference override table.
               </p>
               {recommendation.candidates.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No candidates were retrieved.</p>
+                <p className="text-sm text-muted-foreground">
+                  No candidates were retrieved. Add one below to approve this recommendation.
+                </p>
               ) : (
                 <ul className="space-y-3">
                   {recommendation.candidates.map((c) => (
@@ -322,6 +465,13 @@ export function RecommendationRowPanel({
                   ))}
                 </ul>
               )}
+              {!isDecided ? (
+                <AddCandidateForm
+                  disabled={isPending}
+                  onAdded={setChosenCandidateId}
+                  recommendationId={recommendation.id}
+                />
+              ) : null}
             </div>
 
             <div className="rounded-2xl border border-border/60 p-4">
@@ -356,44 +506,53 @@ export function RecommendationRowPanel({
             </div>
 
             {!isDecided ? (
-              <div className="flex flex-wrap gap-2">
-                <Button disabled={isPending || !chosenCandidateId} onClick={handleVerify} type="button">
-                  {isPending ? <Loader2 className="mr-2 size-4 animate-spin" /> : null}
-                  Verify / approve
-                </Button>
+              <div className="space-y-2">
+                {blockingReason ? (
+                  <p className="text-xs text-amber-700 dark:text-amber-400">{blockingReason}</p>
+                ) : null}
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    disabled={isPending || blockingReason !== null}
+                    onClick={handleVerify}
+                    type="button"
+                  >
+                    {isPending ? <Loader2 className="mr-2 size-4 animate-spin" /> : null}
+                    Approve
+                  </Button>
 
-                <Dialog onOpenChange={setRejectOpen} open={rejectOpen}>
-                  <DialogTrigger asChild>
-                    <Button disabled={isPending} type="button" variant="outline">
-                      Reject
-                    </Button>
-                  </DialogTrigger>
-                  <DialogContent>
-                    <DialogHeader>
-                      <DialogTitle>Reject recommendation</DialogTitle>
-                      <DialogDescription>
-                        Explain why this recommendation is wrong. This is recorded on the
-                        recommendation and in the audit log.
-                      </DialogDescription>
-                    </DialogHeader>
-                    <Textarea
-                      onChange={(e) => setRejectReason(e.target.value)}
-                      placeholder="e.g. Wrong chemistry class — this is a degreaser, not a disinfectant."
-                      value={rejectReason}
-                    />
-                    <DialogFooter>
-                      <DialogClose asChild>
-                        <Button type="button" variant="ghost">
-                          Cancel
-                        </Button>
-                      </DialogClose>
-                      <Button disabled={isPending} onClick={handleReject} type="button" variant="destructive">
-                        {isPending ? <Loader2 className="mr-2 size-4 animate-spin" /> : null}
-                        Confirm reject
+                  <Dialog onOpenChange={setRejectOpen} open={rejectOpen}>
+                    <DialogTrigger asChild>
+                      <Button disabled={isPending} type="button" variant="outline">
+                        Reject
                       </Button>
-                    </DialogFooter>
-                  </DialogContent>
-                </Dialog>
+                    </DialogTrigger>
+                    <DialogContent>
+                      <DialogHeader>
+                        <DialogTitle>Reject recommendation</DialogTitle>
+                        <DialogDescription>
+                          Explain why this recommendation is wrong. This is recorded on the
+                          recommendation and in the audit log.
+                        </DialogDescription>
+                      </DialogHeader>
+                      <Textarea
+                        onChange={(e) => setRejectReason(e.target.value)}
+                        placeholder="e.g. Wrong chemistry class — this is a degreaser, not a disinfectant."
+                        value={rejectReason}
+                      />
+                      <DialogFooter>
+                        <DialogClose asChild>
+                          <Button type="button" variant="ghost">
+                            Cancel
+                          </Button>
+                        </DialogClose>
+                        <Button disabled={isPending} onClick={handleReject} type="button" variant="destructive">
+                          {isPending ? <Loader2 className="mr-2 size-4 animate-spin" /> : null}
+                          Confirm reject
+                        </Button>
+                      </DialogFooter>
+                    </DialogContent>
+                  </Dialog>
+                </div>
               </div>
             ) : (
               <p className="text-xs text-muted-foreground">

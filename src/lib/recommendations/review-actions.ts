@@ -8,11 +8,16 @@ import { writeAuditLog } from '~/lib/audit/audit-log';
 import { newCorrelationId } from '~/lib/observability/correlation-id';
 import { promoteRecommendationToOverride } from '~/lib/recommendations/promote-recommendation';
 import {
+  createRecommendationCandidate,
   getRecommendation,
   updateRecommendationCandidate,
   updateRecommendationStatus,
 } from '~/lib/recommendations/repository';
-import type { UpdateRecommendationCandidateInput } from '~/lib/recommendations/recommendation-schemas';
+import type {
+  AddRecommendationCandidateInput,
+  RecommendationCandidate,
+  UpdateRecommendationCandidateInput,
+} from '~/lib/recommendations/recommendation-schemas';
 
 /**
  * B0-95/B0-96 — reviewer actions for the cross-reference recommendation queue
@@ -30,10 +35,20 @@ async function currentReviewer(): Promise<string> {
   return session?.user?.email ?? 'admin';
 }
 
+/**
+ * B0-433 — the outcome the reviewer actually needs to see. Approving marks the recommendation
+ * `verified` and *attempts* promotion; those can disagree (a candidate missing a Betco product key
+ * cannot be promoted). Previously this returned void and the UI always claimed success, so a failed
+ * promotion was visible only in the audit log.
+ */
+export type VerifyRecommendationResult =
+  | { promoted: true; overrideId: string; mode: 'inserted' | 'updated' }
+  | { promoted: false; reason: string };
+
 export async function verifyRecommendation(
   recommendationId: string,
   input: { note?: string | null; chosenCandidateId?: string | null } = {},
-): Promise<void> {
+): Promise<VerifyRecommendationResult> {
   const verifier = await currentReviewer();
   const traceId = newCorrelationId();
 
@@ -49,27 +64,34 @@ export async function verifyRecommendation(
   );
 
   const withCandidates = await getRecommendation(recommendationId);
-  if (withCandidates) {
-    const promotion = await promoteRecommendationToOverride(
-      withCandidates,
-      input.chosenCandidateId ?? null,
-      verifier,
-    );
-    await writeAuditLog(
-      'cross_reference_recommendation_promoted',
-      {
-        recommendation_id: recommendationId,
-        verifier,
-        promoted: promotion.promoted,
-        override_id: promotion.promoted ? promotion.overrideId : null,
-        mode: promotion.promoted ? promotion.mode : null,
-        reason: promotion.promoted ? null : promotion.reason,
-      },
-      { traceId },
-    );
+  if (!withCandidates) {
+    revalidatePath(REVIEW_QUEUE_PATH);
+    return { promoted: false, reason: 'Recommendation could not be reloaded after verification.' };
   }
 
+  const promotion = await promoteRecommendationToOverride(
+    withCandidates,
+    input.chosenCandidateId ?? null,
+    verifier,
+  );
+  await writeAuditLog(
+    'cross_reference_recommendation_promoted',
+    {
+      recommendation_id: recommendationId,
+      verifier,
+      promoted: promotion.promoted,
+      override_id: promotion.promoted ? promotion.overrideId : null,
+      mode: promotion.promoted ? promotion.mode : null,
+      reason: promotion.promoted ? null : promotion.reason,
+    },
+    { traceId },
+  );
+
   revalidatePath(REVIEW_QUEUE_PATH);
+
+  return promotion.promoted
+    ? { promoted: true, overrideId: promotion.overrideId, mode: promotion.mode }
+    : { promoted: false, reason: promotion.reason };
 }
 
 export async function rejectRecommendation(
@@ -96,6 +118,34 @@ export async function rejectRecommendation(
   );
 
   revalidatePath(REVIEW_QUEUE_PATH);
+}
+
+/**
+ * B0-433 — add a candidate the engine never produced, so a recommendation with no usable candidate
+ * can still be reviewed and approved rather than only rejected.
+ */
+export async function addRecommendationCandidate(
+  recommendationId: string,
+  input: AddRecommendationCandidateInput,
+): Promise<RecommendationCandidate> {
+  const verifier = await currentReviewer();
+  const traceId = newCorrelationId();
+
+  const candidate = await createRecommendationCandidate(recommendationId, input, verifier);
+  await writeAuditLog(
+    'cross_reference_recommendation_candidate_added',
+    {
+      recommendation_id: recommendationId,
+      candidate_id: candidate.id,
+      verifier,
+      betco_product_key: candidate.betcoProductKey,
+      betco_title: candidate.betcoTitle,
+    },
+    { traceId },
+  );
+
+  revalidatePath(REVIEW_QUEUE_PATH);
+  return candidate;
 }
 
 export async function editRecommendationCandidate(

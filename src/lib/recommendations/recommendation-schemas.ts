@@ -99,6 +99,23 @@ export const listRecommendationsInputSchema = z.object({
 });
 export type ListRecommendationsInput = z.infer<typeof listRecommendationsInputSchema>;
 
+/**
+ * B0-433 — reviewer-authored candidate, for recommendations the engine returned nothing usable for.
+ *
+ * Title and product key are both REQUIRED, unlike the engine's own `createCandidateInputSchema`:
+ * `promoteRecommendationToOverride` refuses to promote a candidate missing either, so accepting a
+ * partial candidate here would just recreate the un-approvable state this exists to fix.
+ */
+export const addRecommendationCandidateInputSchema = z.object({
+  betcoTitle: z.string().trim().min(1, 'A Betco product title is required.'),
+  betcoProductKey: z.string().trim().min(1, 'A Betco product key is required.'),
+  betcoProdId: z.string().trim().min(1).nullable().optional(),
+  rationale: z.string().trim().min(1).nullable().optional(),
+});
+export type AddRecommendationCandidateInput = z.infer<
+  typeof addRecommendationCandidateInputSchema
+>;
+
 /** B0-95 — reviewer edit of a single candidate row (e.g. correcting the chosen Betco product). */
 export const updateRecommendationCandidateInputSchema = z.object({
   betcoProductKey: z.string().min(1).nullable().optional(),

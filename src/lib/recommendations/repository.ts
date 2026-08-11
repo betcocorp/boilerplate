@@ -1,6 +1,7 @@
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 import {
+  addRecommendationCandidateInputSchema,
   createRecommendationInputSchema,
   listRecommendationsInputSchema,
   recommendationCandidateSchema,
@@ -8,6 +9,7 @@ import {
   recommendationWithCandidatesSchema,
   updateRecommendationCandidateInputSchema,
   updateRecommendationStatusInputSchema,
+  type AddRecommendationCandidateInput,
   type CreateRecommendationInput,
   type ListRecommendationsInput,
   type Recommendation,
@@ -335,6 +337,50 @@ export async function updateRecommendationStatus(
     throw new Error(`updateRecommendationStatus failed: ${res.error?.message ?? 'no row'}`);
   }
   return fromRecommendationRow(res.data);
+}
+
+/**
+ * B0-433 — append a reviewer-authored candidate to an existing recommendation.
+ *
+ * The engine writes its candidates up front via `createRecommendation`; this is the only path that
+ * adds one afterwards, so a recommendation the engine returned nothing usable for can still be
+ * approved. Ranked last (max existing rank + 1) so the engine's own ordering is preserved, and
+ * tagged `source.origin = 'human_review'` to keep engine-generated and human-authored candidates
+ * distinguishable in the metrics.
+ */
+export async function createRecommendationCandidate(
+  recommendationId: string,
+  rawInput: AddRecommendationCandidateInput,
+  createdBy?: string | null,
+): Promise<RecommendationCandidate> {
+  const input = addRecommendationCandidateInputSchema.parse(rawInput);
+
+  const existing = await getRecommendation(recommendationId);
+  if (!existing) {
+    throw new Error(`createRecommendationCandidate: recommendation ${recommendationId} not found`);
+  }
+  const nextRank =
+    existing.candidates.reduce((max, c) => Math.max(max, c.rank ?? 0), 0) + 1;
+
+  const res = await ragTable('cross_reference_recommendation_candidates')
+    .insert({
+      recommendation_id: recommendationId,
+      betco_product_key: input.betcoProductKey,
+      betco_prod_id: input.betcoProdId ?? null,
+      betco_title: input.betcoTitle,
+      // Human-entered, so not a model score. Left null rather than faked at 1.0, which would
+      // distort the avg-confidence metric on the queue's "Engine performance" strip.
+      candidate_confidence: null,
+      rank: nextRank,
+      rationale: input.rationale ?? null,
+      source: { origin: 'human_review', addedBy: createdBy ?? null },
+    })
+    .select('*')
+    .single();
+  if (res.error || !res.data) {
+    throw new Error(`createRecommendationCandidate failed: ${res.error?.message ?? 'no row'}`);
+  }
+  return fromCandidateRow(res.data);
 }
 
 /** B0-95 — reviewer correction of a single candidate (e.g. swapping in the right Betco product/SKU). */
