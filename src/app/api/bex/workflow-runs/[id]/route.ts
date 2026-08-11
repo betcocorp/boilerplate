@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 
-import { hasBexSession } from '~/lib/api/bex-api-auth';
+import { hasBexSessionOrServiceToken } from '~/lib/api/bex-api-auth';
 import {
   getWorkflowRunWithSteps,
   listAuditLogsForRun,
@@ -11,8 +11,9 @@ export const dynamic = 'force-dynamic';
 
 type RouteParams = { params: Promise<{ id: string }> };
 
-export async function GET(_request: Request, ctx: RouteParams) {
-  if (!(await hasBexSession())) {
+export async function GET(request: Request, ctx: RouteParams) {
+  // Signed-in bex admin (browser) or a valid client token (server-to-server) — nothing else.
+  if (!(await hasBexSessionOrServiceToken(request))) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
