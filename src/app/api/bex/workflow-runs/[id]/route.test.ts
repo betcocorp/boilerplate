@@ -1,8 +1,10 @@
 import { getServerSession } from 'next-auth';
+import { NextResponse } from 'next/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { GET } from '~/app/api/bex/workflow-runs/[id]/route';
 import { authenticateApiToken } from '~/lib/api/client-auth';
+import { gateRoute } from '~/lib/permissions/route-gate';
 import {
   getWorkflowRunWithSteps,
   listAuditLogsForRun,
@@ -23,6 +25,12 @@ vi.mock('~/lib/api/client-auth', () => ({
 vi.mock('~/lib/conversations/workflow-repository', () => ({
   getWorkflowRunWithSteps: vi.fn(),
   listAuditLogsForRun: vi.fn(),
+}));
+
+// Mocked so the permission outcome is explicit here rather than a function of
+// BEX_PERMISSIONS_ENFORCED and a live Supabase/Redis lookup.
+vi.mock('~/lib/permissions/route-gate', () => ({
+  gateRoute: vi.fn(),
 }));
 
 const RUN_ID = 'f9dc4fb8-a4ce-4b81-8ce8-f4f7f9f16dea';
@@ -72,7 +80,10 @@ describe('GET /api/bex/workflow-runs/[id]', () => {
     vi.mocked(authenticateApiToken).mockReset();
     vi.mocked(getWorkflowRunWithSteps).mockReset();
     vi.mocked(listAuditLogsForRun).mockReset();
+    vi.mocked(gateRoute).mockReset();
 
+    // Default: the permission check allows.
+    vi.mocked(gateRoute).mockResolvedValue(null);
     vi.mocked(getWorkflowRunWithSteps).mockResolvedValue(RUN_BUNDLE);
     vi.mocked(listAuditLogsForRun).mockResolvedValue([] as unknown as AuditLogs);
     // Default: no credential resolves.
@@ -107,6 +118,34 @@ describe('GET /api/bex/workflow-runs/[id]', () => {
     expect(response.status).toBe(200);
     expect(body).toMatchObject({ ok: true, run: { id: RUN_ID } });
     expect(authenticateApiToken).toHaveBeenCalledTimes(1);
+  });
+
+  // B0-408 gated this route on a user permission, but a service token has no NextAuth user, so
+  // running the gate on the machine path would 401 it — even in shadow mode, which deliberately
+  // does not relax authentication. The token's own chain check is its authorization.
+  it('does not apply the user permission gate to a service bearer', async () => {
+    tokenAccepted();
+
+    const response = await GET(
+      makeRequest({ authorization: 'Bearer bex_service_token_value_1234567890' }),
+      routeContext(),
+    );
+
+    expect(response.status).toBe(200);
+    expect(gateRoute).not.toHaveBeenCalled();
+  });
+
+  it('applies the user permission gate to a browser session', async () => {
+    signedIn();
+    vi.mocked(gateRoute).mockResolvedValue(
+      NextResponse.json({ error: 'Forbidden' }, { status: 403 }),
+    );
+
+    const response = await GET(makeRequest(), routeContext());
+
+    expect(response.status).toBe(403);
+    expect(gateRoute).toHaveBeenCalledTimes(1);
+    expect(getWorkflowRunWithSteps).not.toHaveBeenCalled();
   });
 
   it('returns 401 with no session and no bearer', async () => {

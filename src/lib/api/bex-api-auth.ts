@@ -27,10 +27,22 @@ export async function hasBexSession(): Promise<boolean> {
 export async function hasBexSessionOrServiceToken(
   request: Request,
 ): Promise<boolean> {
+  return (await resolveBexActor(request)) !== null;
+}
+
+/** Which credential let the request through, or `null` if neither did. */
+export type BexActor = 'session' | 'service' | null;
+
+/**
+ * Same check as `hasBexSessionOrServiceToken`, but reports *who* authenticated. Callers that apply
+ * per-user authorization (B0-408 permission gates) need the distinction: a service token carries no
+ * NextAuth user, so a user-permission check can only ever fail for it.
+ */
+export async function resolveBexActor(request: Request): Promise<BexActor> {
   if (await hasBexSession()) {
-    return true;
+    return 'session';
   }
 
   const auth = await authenticateApiToken(request);
-  return auth.ok;
+  return auth.ok ? 'service' : null;
 }
