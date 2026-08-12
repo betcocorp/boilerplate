@@ -21,6 +21,7 @@ export type Database = {
           latest_model: string | null
           latest_openai_response_id: string | null
           openai_conversation_id: string | null
+          source: string
           status: string
           title: string
           updated_at: string
@@ -33,6 +34,7 @@ export type Database = {
           latest_model?: string | null
           latest_openai_response_id?: string | null
           openai_conversation_id?: string | null
+          source?: string
           status?: string
           title?: string
           updated_at?: string
@@ -45,6 +47,7 @@ export type Database = {
           latest_model?: string | null
           latest_openai_response_id?: string | null
           openai_conversation_id?: string | null
+          source?: string
           status?: string
           title?: string
           updated_at?: string

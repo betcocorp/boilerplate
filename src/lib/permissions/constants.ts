@@ -32,6 +32,8 @@ export const PERMISSIONS = {
   BEX_CHAT_USE: 'bex.chat.use',
   /** Bex chat: choose the agent mode. */
   BEX_AGENT_MODE_SELECT: 'bex.agent_mode.select',
+  /** Bex chat: view every user's conversations (it-admin only). */
+  BEX_CHAT_VIEW_ALL: 'bex.chat.view-all',
 } as const;
 
 export type PermissionId =
