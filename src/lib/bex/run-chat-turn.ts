@@ -37,6 +37,17 @@ export async function runBexChatTurn(input: {
   modelTag?: string;
   useValidator?: boolean;
   agentMode?: BexChatAgentMode;
+  /**
+   * Who owns the conversation this turn creates, if any. Chat routes resolve
+   * `resolveConversationOwnerUserId()` and pass `{ kind: 'user', userId }` when it resolves, or omit
+   * `owner` entirely when it doesn't (falls back to the DB default: user_id null, source 'chat').
+   * The test runner (B0-450) always passes `{ kind: 'system' }` so eval-harness conversations are
+   * explicitly source='test_run', never attributed to whoever kicked off the run.
+   *
+   * Only consulted when no `conversationId` is supplied — continuing turns never re-stamp an
+   * existing conversation.
+   */
+  owner?: { kind: 'user'; userId: string } | { kind: 'system' };
   onWorkflowEvent?: (event: ProductSupportWorkflowEvent) => void;
   onAssistantDelta?: (delta: string) => void;
 }): Promise<BexChatTurnResult> {
@@ -49,7 +60,13 @@ export async function runBexChatTurn(input: {
       : null;
 
   if (!conversation) {
-    conversation = await createConversation();
+    conversation = await createConversation(
+      input.owner?.kind === 'user'
+        ? { user_id: input.owner.userId }
+        : input.owner?.kind === 'system'
+          ? { user_id: null, source: 'test_run' }
+          : undefined,
+    );
   }
 
   const priorMessages = await listMessagesForConversation(conversation.id);
