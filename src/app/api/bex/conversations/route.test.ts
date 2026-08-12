@@ -33,8 +33,8 @@ vi.mock('~/lib/permissions/route-gate', () => ({
   gateRoute: vi.fn(),
 }));
 
-function makeRequest(method: 'GET' | 'POST' = 'GET') {
-  return new Request('http://localhost/api/bex/conversations', { method });
+function makeRequest(method: 'GET' | 'POST' = 'GET', search = '') {
+  return new Request(`http://localhost/api/bex/conversations${search}`, { method });
 }
 
 describe('/api/bex/conversations', () => {
@@ -73,7 +73,7 @@ describe('/api/bex/conversations', () => {
       expect(response.status).toBe(401);
     });
 
-    it('scopes the list to the caller for a non-view-all user', async () => {
+    it('scopes the list to the caller for a non-view-all user and marks owner:null, isOwner:true', async () => {
       vi.mocked(getBexActor).mockResolvedValue({
         kind: 'user',
         userId: 'user-1',
@@ -96,17 +96,58 @@ describe('/api/bex/conversations', () => {
       expect(listConversationsForUser).toHaveBeenCalledWith('user-1', 80);
       expect(listAllConversations).not.toHaveBeenCalled();
       expect(body.conversations).toHaveLength(1);
+      expect(body.conversations[0]).toMatchObject({
+        owner: null,
+        source: 'chat',
+        isOwner: true,
+      });
     });
 
-    it('returns the full list for a view-all user', async () => {
+    it('ignores source/userFilter query params for a non-view-all user', async () => {
+      vi.mocked(getBexActor).mockResolvedValue({
+        kind: 'user',
+        userId: 'user-1',
+        canViewAll: false,
+      });
+
+      const response = await GET(
+        makeRequest('GET', '?source=test_run&userFilter=someone-else'),
+      );
+
+      expect(response.status).toBe(200);
+      expect(listConversationsForUser).toHaveBeenCalledWith('user-1', 80);
+      expect(listAllConversations).not.toHaveBeenCalled();
+    });
+
+    it('returns the full list for a view-all user with owner attribution', async () => {
       vi.mocked(getBexActor).mockResolvedValue({
         kind: 'user',
         userId: 'admin-1',
         canViewAll: true,
       });
       vi.mocked(listAllConversations).mockResolvedValue([
-        { id: 'conv-1', title: 'A', updated_at: '2026-08-11T00:00:00.000Z', status: 'active', latest_model: null } as never,
-        { id: 'conv-2', title: 'B', updated_at: '2026-08-11T00:00:00.000Z', status: 'active', latest_model: null } as never,
+        {
+          id: 'conv-1',
+          title: 'A',
+          updated_at: '2026-08-11T00:00:00.000Z',
+          status: 'active',
+          latest_model: null,
+          user_id: 'user-1',
+          source: 'chat',
+          ownerName: 'User One',
+          ownerEmail: 'user1@betco.com',
+        } as never,
+        {
+          id: 'conv-2',
+          title: 'B',
+          updated_at: '2026-08-11T00:00:00.000Z',
+          status: 'active',
+          latest_model: null,
+          user_id: null,
+          source: 'test_run',
+          ownerName: null,
+          ownerEmail: null,
+        } as never,
       ]);
 
       const response = await GET(makeRequest());
@@ -116,6 +157,48 @@ describe('/api/bex/conversations', () => {
       expect(listAllConversations).toHaveBeenCalledWith({ limit: 80 });
       expect(listConversationsForUser).not.toHaveBeenCalled();
       expect(body.conversations).toHaveLength(2);
+      expect(body.conversations[0]).toMatchObject({
+        owner: { name: 'User One', email: 'user1@betco.com', userId: 'user-1' },
+        source: 'chat',
+        isOwner: false,
+      });
+      expect(body.conversations[1]).toMatchObject({
+        owner: 'admin',
+        source: 'test_run',
+        isOwner: false,
+      });
+    });
+
+    it('passes source and userFilter query params through for a view-all user', async () => {
+      vi.mocked(getBexActor).mockResolvedValue({
+        kind: 'user',
+        userId: 'admin-1',
+        canViewAll: true,
+      });
+
+      const response = await GET(
+        makeRequest('GET', '?source=chat&userFilter=user-9'),
+      );
+
+      expect(response.status).toBe(200);
+      expect(listAllConversations).toHaveBeenCalledWith({
+        limit: 80,
+        source: 'chat',
+        userFilter: 'user-9',
+      });
+    });
+
+    it('ignores an invalid source query value', async () => {
+      vi.mocked(getBexActor).mockResolvedValue({
+        kind: 'user',
+        userId: 'admin-1',
+        canViewAll: true,
+      });
+
+      const response = await GET(makeRequest('GET', '?source=bogus'));
+
+      expect(response.status).toBe(200);
+      expect(listAllConversations).toHaveBeenCalledWith({ limit: 80 });
     });
 
     it('leaves the service-bearer path unaffected by ownership scoping', async () => {

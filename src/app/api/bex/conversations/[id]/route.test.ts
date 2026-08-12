@@ -7,6 +7,7 @@ import { writeAuditLog } from '~/lib/audit/audit-log';
 import {
   deleteConversation,
   getConversationById,
+  getConversationOwnerInfo,
 } from '~/lib/conversations/conversation-repository';
 import { listMessageFeedbackForConversation } from '~/lib/conversations/message-feedback-repository';
 import { listMessagesForConversation } from '~/lib/conversations/message-repository';
@@ -23,6 +24,7 @@ vi.mock('~/lib/api/bex-actor', () => ({
 vi.mock('~/lib/conversations/conversation-repository', () => ({
   deleteConversation: vi.fn(),
   getConversationById: vi.fn(),
+  getConversationOwnerInfo: vi.fn(),
 }));
 
 vi.mock('~/lib/conversations/message-feedback-repository', () => ({
@@ -60,6 +62,7 @@ function conversation(overrides: Record<string, unknown> = {}) {
     latest_model: null,
     status: 'active',
     user_id: 'user-1',
+    source: 'chat',
     ...overrides,
   } as never;
 }
@@ -69,6 +72,7 @@ describe('/api/bex/conversations/[id]', () => {
     vi.mocked(hasBexSession).mockReset();
     vi.mocked(getBexActor).mockReset();
     vi.mocked(getConversationById).mockReset();
+    vi.mocked(getConversationOwnerInfo).mockReset();
     vi.mocked(deleteConversation).mockReset();
     vi.mocked(listMessagesForConversation).mockReset();
     vi.mocked(listMessageFeedbackForConversation).mockReset();
@@ -81,6 +85,10 @@ describe('/api/bex/conversations/[id]', () => {
     vi.mocked(listMessageFeedbackForConversation).mockResolvedValue([]);
     vi.mocked(writeAuditLog).mockResolvedValue(undefined);
     vi.mocked(deleteConversation).mockResolvedValue(undefined);
+    vi.mocked(getConversationOwnerInfo).mockResolvedValue({
+      ownerName: 'Owner One',
+      ownerEmail: 'owner1@betco.com',
+    });
   });
 
   describe('GET', () => {
@@ -128,18 +136,57 @@ describe('/api/bex/conversations/[id]', () => {
       vi.mocked(getConversationById).mockResolvedValue(conversation({ user_id: 'user-1' }));
 
       const response = await GET(makeRequest(), routeContext());
+      const body = await response.json();
 
       expect(response.status).toBe(200);
       expect(writeAuditLog).not.toHaveBeenCalled();
+      expect(body.conversation.isOwner).toBe(true);
+      expect(body.conversation.owner).toEqual({
+        name: 'Owner One',
+        email: 'owner1@betco.com',
+        userId: 'user-1',
+      });
     });
 
-    it('allows a view-all admin to read any conversation', async () => {
+    it('allows a view-all admin to read any conversation and marks isOwner false', async () => {
       vi.mocked(getBexActor).mockResolvedValue({ kind: 'user', userId: 'admin-1', canViewAll: true });
       vi.mocked(getConversationById).mockResolvedValue(conversation({ user_id: 'user-1' }));
 
       const response = await GET(makeRequest(), routeContext());
+      const body = await response.json();
 
       expect(response.status).toBe(200);
+      expect(body.conversation.isOwner).toBe(false);
+      expect(body.conversation.source).toBe('chat');
+    });
+
+    it('reports owner "admin" for a test_run conversation and skips the owner-join lookup', async () => {
+      vi.mocked(getBexActor).mockResolvedValue({ kind: 'user', userId: 'admin-1', canViewAll: true });
+      vi.mocked(getConversationById).mockResolvedValue(
+        conversation({ user_id: null, source: 'test_run' }),
+      );
+
+      const response = await GET(makeRequest(), routeContext());
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.conversation.owner).toBe('admin');
+      expect(body.conversation.source).toBe('test_run');
+      expect(getConversationOwnerInfo).not.toHaveBeenCalled();
+    });
+
+    it('reports owner null for a legacy unattributed chat conversation', async () => {
+      vi.mocked(getBexActor).mockResolvedValue({ kind: 'user', userId: 'admin-1', canViewAll: true });
+      vi.mocked(getConversationById).mockResolvedValue(
+        conversation({ user_id: null, source: 'chat' }),
+      );
+
+      const response = await GET(makeRequest(), routeContext());
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.conversation.owner).toBeNull();
+      expect(getConversationOwnerInfo).not.toHaveBeenCalled();
     });
 
     it('allows a service bearer to read any conversation', async () => {

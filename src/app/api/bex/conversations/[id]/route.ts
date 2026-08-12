@@ -3,9 +3,11 @@ import { NextResponse } from 'next/server';
 import { getBexActor, type BexActor } from '~/lib/api/bex-actor';
 import { hasBexSession } from '~/lib/api/bex-api-auth';
 import { writeAuditLog } from '~/lib/audit/audit-log';
+import { resolveConversationOwnerAttribution } from '~/lib/conversations/conversation-owner-view';
 import {
   deleteConversation,
   getConversationById,
+  getConversationOwnerInfo,
 } from '~/lib/conversations/conversation-repository';
 import { listMessageFeedbackForConversation } from '~/lib/conversations/message-feedback-repository';
 import { listMessagesForConversation } from '~/lib/conversations/message-repository';
@@ -79,6 +81,21 @@ export async function GET(request: Request, ctx: RouteParams) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
+    // B0-451 — owner join is only needed for a real (non-test-run) conversation that has a
+    // user_id; skip the lookup otherwise rather than querying app_user for nothing.
+    const ownerInfo =
+      conversation.source !== 'test_run' && conversation.user_id
+        ? await getConversationOwnerInfo(conversation.user_id)
+        : { ownerName: null, ownerEmail: null };
+    const attribution = resolveConversationOwnerAttribution(
+      {
+        source: conversation.source,
+        user_id: conversation.user_id,
+        ...ownerInfo,
+      },
+      actor,
+    );
+
     const [messages, feedbackRows] = await Promise.all([
       listMessagesForConversation(id),
       listMessageFeedbackForConversation(id),
@@ -96,6 +113,9 @@ export async function GET(request: Request, ctx: RouteParams) {
         latestOpenaiResponseId: conversation.latest_openai_response_id,
         latestModel: conversation.latest_model,
         status: conversation.status,
+        owner: attribution.owner,
+        source: attribution.source,
+        isOwner: attribution.isOwner,
       },
       messages: messages.map((m) => ({
         feedback: feedbackByMessageId.has(m.id)

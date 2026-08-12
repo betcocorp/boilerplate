@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
+import { z } from 'zod';
 
 import { getBexActor } from '~/lib/api/bex-actor';
 import { hasBexSession } from '~/lib/api/bex-api-auth';
+import { resolveConversationOwnerAttribution } from '~/lib/conversations/conversation-owner-view';
 import { resolveConversationOwnerUserId } from '~/lib/conversations/conversation-owner';
 import {
   createConversation,
@@ -13,6 +15,16 @@ import { gateRoute } from '~/lib/permissions/route-gate';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+/**
+ * B0-451 — `source`/`userFilter` are honored only on the view-all-or-service branch of GET below;
+ * an invalid value here is treated as "not supplied" rather than a 400, since these are optional
+ * narrowing filters, not required input.
+ */
+const conversationsQuerySchema = z.object({
+  source: z.enum(['chat', 'test_run']).optional(),
+  userFilter: z.string().trim().min(1).optional(),
+});
 
 export async function GET(request: Request) {
   if (!(await hasBexSession())) {
@@ -33,19 +45,56 @@ export async function GET(request: Request) {
   }
 
   try {
-    const rows =
-      actor.kind === 'user' && !actor.canViewAll
-        ? await listConversationsForUser(actor.userId, 80)
-        : await listAllConversations({ limit: 80 });
+    // B0-451 — a non-view-all user's own list is always their own `source = 'chat'` rows: owner is
+    // by construction `null` ("me") and `isOwner` is always true, so there is no need to run the
+    // owner-join query for these rows.
+    if (actor.kind === 'user' && !actor.canViewAll) {
+      const rows = await listConversationsForUser(actor.userId, 80);
+      return NextResponse.json({
+        ok: true,
+        conversations: rows.map((c) => ({
+          id: c.id,
+          title: c.title,
+          updatedAt: c.updated_at,
+          status: c.status,
+          latestModel: c.latest_model,
+          owner: null,
+          source: 'chat' as const,
+          isOwner: true,
+        })),
+      });
+    }
+
+    // B0-451 — `source`/`userFilter` only apply here (view-all admin or service caller); a
+    // non-admin's request never reaches this branch, so a client-supplied query param can never
+    // widen their visibility.
+    const url = new URL(request.url);
+    const parsedQuery = conversationsQuerySchema.safeParse({
+      source: url.searchParams.get('source') ?? undefined,
+      userFilter: url.searchParams.get('userFilter') ?? undefined,
+    });
+    const query = parsedQuery.success ? parsedQuery.data : {};
+
+    const rows = await listAllConversations({
+      limit: 80,
+      ...(query.source ? { source: query.source } : {}),
+      ...(query.userFilter ? { userFilter: query.userFilter } : {}),
+    });
     return NextResponse.json({
       ok: true,
-      conversations: rows.map((c) => ({
-        id: c.id,
-        title: c.title,
-        updatedAt: c.updated_at,
-        status: c.status,
-        latestModel: c.latest_model,
-      })),
+      conversations: rows.map((c) => {
+        const attribution = resolveConversationOwnerAttribution(c, actor);
+        return {
+          id: c.id,
+          title: c.title,
+          updatedAt: c.updated_at,
+          status: c.status,
+          latestModel: c.latest_model,
+          owner: attribution.owner,
+          source: attribution.source,
+          isOwner: attribution.isOwner,
+        };
+      }),
     });
   } catch (error) {
     const message =

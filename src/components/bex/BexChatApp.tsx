@@ -38,6 +38,8 @@ import {
 import { BEX_SUGGESTIONS } from '~/lib/bex/constants';
 import { mapApiMessageToChatMessage } from '~/lib/bex/map-api-messages';
 import { loadUiCache, saveUiCache } from '~/lib/bex/sessions';
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { usePermissionsStore } from '~/lib/stores/permissions';
 import type { ChatMessage, Conversation } from '~/types/bex';
 
 const STREAMING_ROLLOUT_COHORT =
@@ -64,6 +66,10 @@ export function BexChatApp() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [idCopied, setIdCopied] = useState(false);
   const [sidebarFilter, setSidebarFilter] = useState('');
+  // B0-451 — admin-only sidebar filters (source/user); ignored server-side for a non-admin caller
+  // regardless of what's sent, so it's harmless to always include them in the list request.
+  const [showTestRuns, setShowTestRuns] = useState(false);
+  const [userFilterId, setUserFilterId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -112,6 +118,19 @@ export function BexChatApp() {
     [flushStreamingDeltaBuffer],
   );
 
+  // B0-451 — usePermissionsStore has no existing client-side consumer; BexChatApp is the first,
+  // and it owns the load() call (mirroring how it already owns sessions/activeId state) rather than
+  // having BexChatSidebar import the store itself, so the sidebar stays a plain props-in component.
+  const permissionsLoaded = usePermissionsStore((s) => s.loaded);
+  const hasPermission = usePermissionsStore((s) => s.hasPermission);
+  const isAdminChrome = hasPermission(PERMISSIONS.BEX_CHAT_VIEW_ALL);
+
+  useEffect(() => {
+    if (!permissionsLoaded) {
+      void usePermissionsStore.getState().load();
+    }
+  }, [permissionsLoaded]);
+
   const refreshConversation = useCallback(async (id: string) => {
     const detail = await apiFetchConversation(id);
     setSessions((prev) =>
@@ -124,10 +143,22 @@ export function BexChatApp() {
           title: detail.conversation.title,
           updatedAt: toMillis(detail.conversation.updatedAt),
           messages: detail.messages.map(mapApiMessageToChatMessage),
+          owner: detail.conversation.owner,
+          source: detail.conversation.source,
+          isOwner: detail.conversation.isOwner,
         };
       }),
     );
   }, []);
+
+  const fetchConversationList = useCallback(
+    (filters: { showTestRuns: boolean; userFilter: string | null }) =>
+      apiListConversations({
+        source: filters.showTestRuns ? undefined : 'chat',
+        userFilter: filters.userFilter ?? undefined,
+      }),
+    [],
+  );
 
   // B0-345: switching threads swaps the title immediately, so flag the fetch and let the
   // message pane show placeholders instead of the previous thread's transcript.
@@ -149,15 +180,23 @@ export function BexChatApp() {
     setModel(cache.model);
     setUseValidator(cache.useValidator);
     setAgentMode(cache.agentMode);
+    setShowTestRuns(cache.showTestRuns);
+    setUserFilterId(cache.userFilter);
 
     void (async () => {
       try {
-        const list = await apiListConversations();
+        const list = await fetchConversationList({
+          showTestRuns: cache.showTestRuns,
+          userFilter: cache.userFilter,
+        });
         const mapped: Conversation[] = list.map((row) => ({
           id: row.id,
           title: row.title,
           updatedAt: toMillis(row.updatedAt),
           messages: [],
+          owner: row.owner,
+          source: row.source,
+          isOwner: row.isOwner,
         }));
         setSessions(mapped);
 
@@ -179,7 +218,7 @@ export function BexChatApp() {
         setHydrated(true);
       }
     })();
-  }, [refreshConversation]);
+  }, [fetchConversationList, refreshConversation]);
 
   useEffect(() => {
     if (!hydrated) {
@@ -190,8 +229,53 @@ export function BexChatApp() {
       model,
       useValidator,
       agentMode,
+      showTestRuns,
+      userFilter: userFilterId,
     });
-  }, [activeId, hydrated, model, useValidator, agentMode]);
+  }, [activeId, hydrated, model, useValidator, agentMode, showTestRuns, userFilterId]);
+
+  // B0-451 — re-fetches the list under new filters and updates the sidebar; does not touch
+  // messages for the active conversation (a filter change never implies the active thread's
+  // transcript changed) — if the active conversation drops out of the new filtered list, the
+  // existing "activeId not in sessions" effect below reassigns it.
+  const applyConversationFilters = useCallback(
+    async (filters: { showTestRuns: boolean; userFilter: string | null }) => {
+      try {
+        const list = await fetchConversationList(filters);
+        const mapped: Conversation[] = list.map((row) => ({
+          id: row.id,
+          title: row.title,
+          updatedAt: toMillis(row.updatedAt),
+          messages: [],
+          owner: row.owner,
+          source: row.source,
+          isOwner: row.isOwner,
+        }));
+        setSessions(mapped);
+      } catch (e) {
+        setLoadError(
+          e instanceof Error ? e.message : 'Failed to load conversations.',
+        );
+      }
+    },
+    [fetchConversationList],
+  );
+
+  const handleShowTestRunsChange = useCallback(
+    (value: boolean) => {
+      setShowTestRuns(value);
+      void applyConversationFilters({ showTestRuns: value, userFilter: userFilterId });
+    },
+    [applyConversationFilters, userFilterId],
+  );
+
+  const handleUserFilterChange = useCallback(
+    (value: string | null) => {
+      setUserFilterId(value);
+      void applyConversationFilters({ showTestRuns, userFilter: value });
+    },
+    [applyConversationFilters, showTestRuns],
+  );
 
   useEffect(() => {
     if (activeId === null) {
@@ -269,6 +353,9 @@ export function BexChatApp() {
             title: 'New conversation',
             updatedAt: Date.now(),
             messages: [optimisticUserMessage],
+            owner: null,
+            source: 'chat',
+            isOwner: true,
           },
           ...prev,
         ]);
@@ -319,6 +406,9 @@ export function BexChatApp() {
               title: detail.conversation.title,
               updatedAt: toMillis(detail.conversation.updatedAt),
               messages: detail.messages.map(mapApiMessageToChatMessage),
+              owner: detail.conversation.owner,
+              source: detail.conversation.source,
+              isOwner: detail.conversation.isOwner,
             },
             ...others,
           ];
@@ -374,6 +464,9 @@ export function BexChatApp() {
           title: 'New conversation',
           updatedAt: Date.now(),
           messages: [],
+          owner: null,
+          source: 'chat',
+          isOwner: true,
         },
         ...prev.filter((s) => s.id !== id),
       ]);
@@ -387,7 +480,10 @@ export function BexChatApp() {
     async (id: string) => {
       try {
         await apiDeleteConversation(id);
-        const list = await apiListConversations();
+        const list = await fetchConversationList({
+          showTestRuns,
+          userFilter: userFilterId,
+        });
         const nextActive = activeId === id ? (list[0]?.id ?? null) : activeId;
         setActiveId(nextActive);
         setSessions(
@@ -396,6 +492,9 @@ export function BexChatApp() {
             title: row.title,
             updatedAt: toMillis(row.updatedAt),
             messages: [],
+            owner: row.owner,
+            source: row.source,
+            isOwner: row.isOwner,
           })),
         );
         if (nextActive) {
@@ -405,7 +504,7 @@ export function BexChatApp() {
         setLoadError(e instanceof Error ? e.message : 'Delete failed.');
       }
     },
-    [activeId, refreshConversation],
+    [activeId, fetchConversationList, refreshConversation, showTestRuns, userFilterId],
   );
 
   // B0-345: while the initial list/history fetch is running we hold the chat frame and show
@@ -539,6 +638,7 @@ export function BexChatApp() {
             className="h-full min-h-0"
             conversations={sessions}
             filter={sidebarFilter}
+            isAdminChrome={isAdminChrome}
             isLoading={!hydrated}
             onCloseMobile={() => setMobileSidebarOpen(false)}
             onDelete={handleDelete}
@@ -547,6 +647,10 @@ export function BexChatApp() {
             onSelect={(id) => {
               void selectConversation(id);
             }}
+            onShowTestRunsChange={handleShowTestRunsChange}
+            onUserFilterChange={handleUserFilterChange}
+            showTestRuns={showTestRuns}
+            userFilter={userFilterId}
           />
         </div>
 
@@ -745,9 +849,18 @@ export function BexChatApp() {
             </div>
           ) : null}
 
+          {/* B0-451 — an admin viewing someone else's thread (isOwner: false); a non-admin can
+              never even load a foreign conversation (403 from B0-449), so this only ever
+              triggers for a view-all admin — no extra permission check needed here. */}
+          {!showFullWelcome && activeConversation?.isOwner === false ? (
+            <p className="border-t border-border/40 px-4 py-2 text-center text-xs text-muted-foreground sm:px-6">
+              Read-only — you&apos;re viewing another user&apos;s conversation. Sending is disabled.
+            </p>
+          ) : null}
+
           {!showFullWelcome ? (
             <BexChatComposer
-              disabled={isTyping}
+              disabled={isTyping || activeConversation?.isOwner === false}
               onChange={setDraft}
               onSend={() => void sendUserText(draft)}
               onUseValidatorChange={setUseValidator}

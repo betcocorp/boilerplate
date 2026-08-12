@@ -135,6 +135,31 @@ export async function listAllConversations(options?: {
   });
 }
 
+/**
+ * B0-451 — single-row owner-join for `GET /api/bex/conversations/[id]`. Mirrors the fallback
+ * chain `listAllConversations` already uses (`user_name` first, then `name`) but for one user id
+ * rather than a batch, since the detail route only ever needs one.
+ */
+export async function getConversationOwnerInfo(
+  userId: string,
+): Promise<{ ownerName: string | null; ownerEmail: string | null }> {
+  const supabase = getSupabaseServiceRoleClient();
+  const { data, error } = await supabase
+    .from('app_user')
+    .select('user_name, name, email')
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return {
+    ownerName: data?.user_name ?? data?.name ?? null,
+    ownerEmail: data?.email ?? null,
+  };
+}
+
 export async function updateConversation(
   id: string,
   patch: TablesUpdate<'agent_conversations'>,
