@@ -157,7 +157,16 @@
       "Bash(PORT=3411 pnpm dev *)",
       "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:3411/api/me)",
       "Bash(npx --yes tsx@4 scripts/b0412-permission-audit.ts)",
-      "Bash(curl -s -b /private/tmp/claude-501/-Users-thomasbird-projects-client-betco-apps-bex-combined-bex2-0/b4097934-05c7-482e-b517-3aa6793c5aef/scratchpad/tom.jar -c /private/tmp/claude-501/-Users-thomasbird-projects-client-betco-apps-bex-combined-bex2-0/b4097934-05c7-482e-b517-3aa6793c5aef/scratchpad/tom.jar http://localhost:3411/api/me)"
+      "Bash(curl -s -b /private/tmp/claude-501/-Users-thomasbird-projects-client-betco-apps-bex-combined-bex2-0/b4097934-05c7-482e-b517-3aa6793c5aef/scratchpad/tom.jar -c /private/tmp/claude-501/-Users-thomasbird-projects-client-betco-apps-bex-combined-bex2-0/b4097934-05c7-482e-b517-3aa6793c5aef/scratchpad/tom.jar http://localhost:3411/api/me)",
+      "Bash(git --version)",
+      "Bash(git merge-tree *)",
+      "Read(//tmp/**)",
+      "Bash(grep -v '^\\\\s*$')",
+      "Bash(awk '/^\\\\/Users/{f=$0} /error/{print f}' /tmp/lint_after.txt)",
+      "Bash(ln -s /Users/thomasbird/projects/client/betco/apps/bex-combined/bex2.0/node_modules node_modules)",
+      "Bash(cp /Users/thomasbird/projects/client/betco/apps/bex-combined/bex2.0/.env* /tmp/dev-premerge/)",
+      "Bash(npx tsx *)",
+      "Bash(echo \"tsc exit=$?\")"
     ]
   }
 }
