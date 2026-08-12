@@ -7,6 +7,7 @@ import {
   XREF_DECLINE_COPY,
   computeSpecCompleteness,
   gateRecommendation,
+  isConfidenceGatingDisabled,
   resolveXrefThreshold,
   scoreRecommendation,
 } from '~/lib/recommendations/confidence-scoring';
@@ -103,6 +104,32 @@ describe('computeSpecCompleteness (B0-88)', () => {
     });
     expect(half).toBeLessThan(1);
     expect(half).toBeGreaterThan(0);
+  });
+});
+
+describe('BEX_DISABLE_CONFIDENCE_GATING kill-switch (B0-452)', () => {
+  const prev = process.env.BEX_DISABLE_CONFIDENCE_GATING;
+  afterEach(() => {
+    if (prev === undefined) delete process.env.BEX_DISABLE_CONFIDENCE_GATING;
+    else process.env.BEX_DISABLE_CONFIDENCE_GATING = prev;
+  });
+
+  it('is off unless the env var is exactly "true"', () => {
+    delete process.env.BEX_DISABLE_CONFIDENCE_GATING;
+    expect(isConfidenceGatingDisabled()).toBe(false);
+    process.env.BEX_DISABLE_CONFIDENCE_GATING = 'false';
+    expect(isConfidenceGatingDisabled()).toBe(false);
+    process.env.BEX_DISABLE_CONFIDENCE_GATING = 'true';
+    expect(isConfidenceGatingDisabled()).toBe(true);
+  });
+
+  it('answers below the threshold once the kill-switch is on, and still reports thresholdUsed', () => {
+    process.env.BEX_DISABLE_CONFIDENCE_GATING = 'true';
+    expect(gateRecommendation({ overallConfidence: 0.1, thresholdOverride: 0.8 })).toEqual({
+      answered: true,
+      thresholdUsed: 0.8,
+      declineReason: null,
+    });
   });
 });
 

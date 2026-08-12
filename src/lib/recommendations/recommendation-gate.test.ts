@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   checkCategoryConsistency,
@@ -71,5 +71,44 @@ describe('evaluateRecommendationGate (REC-4)', () => {
     expect(result.approved).toBe(true);
     expect(result.confidence).toBe(0.7);
     expect(result.issues).toEqual([]);
+  });
+
+  describe('BEX_DISABLE_CONFIDENCE_GATING kill-switch (B0-452)', () => {
+    const prev = process.env.BEX_DISABLE_CONFIDENCE_GATING;
+    afterEach(() => {
+      if (prev === undefined) delete process.env.BEX_DISABLE_CONFIDENCE_GATING;
+      else process.env.BEX_DISABLE_CONFIDENCE_GATING = prev;
+    });
+
+    it('skips the low-similarity and missing-brand confidence caps', () => {
+      process.env.BEX_DISABLE_CONFIDENCE_GATING = 'true';
+      const lowSimilarity = evaluateRecommendationGate({
+        baseConfidence: 0.9,
+        topSimilarity: 0.58,
+        competitorChemistryClass: 'quat',
+        recommendedChemistryClass: 'quat',
+      });
+      expect(lowSimilarity.confidence).toBe(0.9);
+
+      const missingBrand = evaluateRecommendationGate({
+        baseConfidence: 0.95,
+        topSimilarity: 0.9,
+        brandKnown: false,
+      });
+      expect(missingBrand.confidence).toBe(0.95);
+    });
+
+    it('still rejects a chemistry-class mismatch — that is a correctness check, not a confidence threshold', () => {
+      process.env.BEX_DISABLE_CONFIDENCE_GATING = 'true';
+      const result = evaluateRecommendationGate({
+        baseConfidence: 0.9,
+        topSimilarity: 0.62,
+        competitorChemistryClass: 'quat',
+        recommendedChemistryClass: 'peroxide',
+      });
+      expect(result.approved).toBe(false);
+      expect(result.requires_human_review).toBe(true);
+      expect(result.confidence).toBeLessThanOrEqual(0.2);
+    });
   });
 });

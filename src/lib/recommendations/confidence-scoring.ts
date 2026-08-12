@@ -95,6 +95,20 @@ export function resolveXrefThreshold(override?: number | null): number {
   return Number.isFinite(env) ? env : DEFAULT_XREF_MIN_CONFIDENCE;
 }
 
+/**
+ * B0-452 — temporary master kill-switch for every numeric confidence threshold/cap in the
+ * recommendation and product-support answer pipeline (this gate, the validator confidence
+ * floor, and the REC-4 similarity/brand confidence caps). The current threshold values are
+ * unproven placeholders (see `src/docs/cross-reference-recommendations.md`) and are suppressing
+ * correct answers; flip `BEX_DISABLE_CONFIDENCE_GATING` back off once real thresholds are
+ * calibrated. Does NOT affect correctness/safety checks that are not confidence thresholds:
+ * regulated-claim grounding, category-mismatch rejection, evidence/candidate grounding, and
+ * validator-not-approved / requires-human-review / unsupported-safety-claim all keep running.
+ */
+export function isConfidenceGatingDisabled(): boolean {
+  return process.env.BEX_DISABLE_CONFIDENCE_GATING === 'true';
+}
+
 export type RecommendationGate = {
   answered: boolean;
   thresholdUsed: number;
@@ -106,6 +120,9 @@ export function gateRecommendation(input: {
   thresholdOverride?: number | null;
 }): RecommendationGate {
   const thresholdUsed = resolveXrefThreshold(input.thresholdOverride);
+  if (isConfidenceGatingDisabled()) {
+    return { answered: true, thresholdUsed, declineReason: null };
+  }
   const answered = input.overallConfidence >= thresholdUsed;
   return { answered, thresholdUsed, declineReason: answered ? null : XREF_DECLINE_COPY };
 }

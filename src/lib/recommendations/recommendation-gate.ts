@@ -1,4 +1,5 @@
 import type { CompetitorSpec } from '~/lib/websearch/extract-competitor-spec';
+import { isConfidenceGatingDisabled } from '~/lib/recommendations/confidence-scoring';
 
 /**
  * REC-4 — Category-consistency gate + confidence calibrated to retrieval strength.
@@ -68,6 +69,13 @@ export function checkCategoryConsistency(
   };
 }
 
+/**
+ * B0-452: the two confidence *caps* below (low-similarity, missing-brand) are skipped while
+ * `BEX_DISABLE_CONFIDENCE_GATING` is set — both are unproven placeholder thresholds. The
+ * category-consistency check is left out of the switch: it rejects a recommendation whose
+ * chemistry class actually disagrees with the competitor's, which is a correctness check, not
+ * a confidence-calibration guess, so it always runs.
+ */
 export function evaluateRecommendationGate(
   input: RecommendationGateInput,
 ): RecommendationGateResult {
@@ -87,7 +95,10 @@ export function evaluateRecommendationGate(
     issues.push(category.issue);
   }
 
+  const gatingDisabled = isConfidenceGatingDisabled();
+
   if (
+    !gatingDisabled &&
     typeof input.topSimilarity === 'number' &&
     input.topSimilarity < LOW_SIMILARITY_THRESHOLD &&
     confidence > LOW_SIMILARITY_CONFIDENCE_CAP
@@ -100,7 +111,7 @@ export function evaluateRecommendationGate(
     );
   }
 
-  if (input.brandKnown === false && confidence > MISSING_BRAND_CONFIDENCE_CAP) {
+  if (!gatingDisabled && input.brandKnown === false && confidence > MISSING_BRAND_CONFIDENCE_CAP) {
     confidence = MISSING_BRAND_CONFIDENCE_CAP;
     issues.push(
       'Competitor brand was not provided; matched conservatively with a lower confidence ceiling.',

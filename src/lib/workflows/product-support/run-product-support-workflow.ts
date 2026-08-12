@@ -34,6 +34,7 @@ import {
   LOW_SIMILARITY_THRESHOLD,
   MISSING_BRAND_CONFIDENCE_CAP,
 } from '~/lib/recommendations/recommendation-gate';
+import { isConfidenceGatingDisabled } from '~/lib/recommendations/confidence-scoring';
 import {
   lookupCrossReference,
   fetchRecommendationContext,
@@ -2059,7 +2060,8 @@ export async function runProductSupportWorkflow(input: {
     if (
       needsUsageSafetyCoverage &&
       (!usageSafetyCoverage.hasUsageEvidence ||
-        !usageSafetyCoverage.hasSafetyEvidence)
+        !usageSafetyCoverage.hasSafetyEvidence) &&
+      !isConfidenceGatingDisabled()
     ) {
       const missingEvidence: string[] = [];
       if (!usageSafetyCoverage.hasUsageEvidence) {
@@ -2101,6 +2103,28 @@ export async function runProductSupportWorkflow(input: {
         thresholds: usageSafetyThresholds,
         verdict: 'capped',
         effect: `approved forced to false, issue "${coverageIssue}" added, confidence ${confidenceBeforeCap} → ${validation.confidence}. The usage/safety fallback copy replaces the draft unless the regulated-claim guardrail also rejected, whose copy wins; see answerProvenance for what the user saw.`,
+      });
+    } else if (
+      needsUsageSafetyCoverage &&
+      (!usageSafetyCoverage.hasUsageEvidence ||
+        !usageSafetyCoverage.hasSafetyEvidence)
+    ) {
+      // B0-452: coverage is missing, but BEX_DISABLE_CONFIDENCE_GATING is set — this cap
+      // is an unproven placeholder threshold, so it's bypassed rather than suppressing the
+      // draft answer. Recorded as bypassed (not silently dropped) for audit continuity.
+      validatorStepGates.push({
+        gate: 'usage_safety_coverage',
+        inputs: {
+          ...usageSafetyInputs,
+          missingEvidence: [
+            ...(!usageSafetyCoverage.hasUsageEvidence ? ['usage'] : []),
+            ...(!usageSafetyCoverage.hasSafetyEvidence ? ['safety'] : []),
+          ],
+        },
+        thresholds: usageSafetyThresholds,
+        verdict: 'bypassed',
+        effect:
+          'BEX_DISABLE_CONFIDENCE_GATING is set: coverage was insufficient but the confidence cap and approval override were skipped.',
       });
     } else if (needsUsageSafetyCoverage) {
       // The gate RAN and found both kinds of evidence — a real verdict, not a skipped gate.
