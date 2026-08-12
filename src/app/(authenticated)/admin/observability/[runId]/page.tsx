@@ -2,6 +2,8 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
 
+import { HarnessVerdictBand } from '~/components/admin/observability/HarnessVerdictBand';
+import { PromptHistoryStrip } from '~/components/admin/observability/PromptHistoryStrip';
 import { RunAnswerPanel } from '~/components/admin/observability/RunAnswerPanel';
 import { RunInsightsProvider } from '~/components/admin/observability/run-insights-context';
 import { RunPayloadSummary } from '~/components/admin/observability/RunPayloadSummary';
@@ -12,9 +14,18 @@ import { RunTraceTimeline } from '~/components/admin/observability/RunTraceTimel
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
 import { getAgentBadgeClassName } from '~/lib/bex/agent-badge';
+import { getHarnessContextForRun } from '~/lib/observability/harness-linkage';
+import {
+  EMPTY_PROMPT_HISTORY,
+  getPromptHistoryForItem,
+} from '~/lib/observability/prompt-history';
 import { readRunPayloadView } from '~/lib/observability/run-payload';
 import { getWorkflowRunTrace } from '~/lib/observability/runs-repository';
-import { formatDurationSeconds, formatEasternTimestamp } from '~/lib/utils/time';
+import {
+  formatDurationSeconds,
+  formatEasternTimestamp,
+  formatShortDate,
+} from '~/lib/utils/time';
 
 export const metadata = {
   title: 'Run Trace | Betco BEX',
@@ -60,9 +71,20 @@ export default async function AdminRunTracePage({ params }: PageProps) {
 
   let trace: Awaited<ReturnType<typeof getWorkflowRunTrace>> = null;
   let loadError: string | null = null;
+  /**
+   * B0-419 — the harness execution this run belongs to, or null for a live Bex chat run, a direct
+   * orchestrator call, or a run whose test data was deleted. Resolved alongside the trace;
+   * `getHarnessContextForRun` never throws, so it can never become this page's `loadError`.
+   */
+  let harness: Awaited<ReturnType<typeof getHarnessContextForRun>> = null;
 
   try {
-    trace = await getWorkflowRunTrace(runId);
+    const [traceResult, harnessResult] = await Promise.all([
+      getWorkflowRunTrace(runId),
+      getHarnessContextForRun(runId),
+    ]);
+    trace = traceResult;
+    harness = harnessResult;
   } catch (error) {
     loadError =
       error instanceof Error
@@ -82,6 +104,15 @@ export default async function AdminRunTracePage({ params }: PageProps) {
   // B0-418 — the run's own payload (answer, chunks, similarity, timing, validation,
   // usage). Tolerates a null `final_output` and error-only payloads.
   const payload = readRunPayloadView(run?.final_output, run?.user_input);
+  /**
+   * B0-421 — where this cell sits in its column: the prompt's recent pass/fail outcomes. Necessarily
+   * sequential, since the prompt's identity only exists once the harness lookup has resolved, and
+   * skipped entirely for runs that belong to no grid. `getPromptHistoryForItem` is bounded (a
+   * 10-row window plus two count-only queries) and never throws.
+   */
+  const promptHistory = harness
+    ? await getPromptHistoryForItem(harness.testItemId)
+    : EMPTY_PROMPT_HISTORY;
 
   return (
     <RunInsightsProvider>
@@ -101,6 +132,31 @@ export default async function AdminRunTracePage({ params }: PageProps) {
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 {trace ? <RunTraceExportButton runId={runId} /> : null}
+                {/* B0-419 — navigate up both axes of the grid this cell sits in: the run it was
+                    part of, and the prompt's history across runs. Harness runs only. */}
+                {harness ? (
+                  <>
+                    <Button asChild size="sm" variant="outline">
+                      <Link
+                        href={`/admin/tests/${harness.testId}/runs/${harness.testResultId}#item-level-results`}
+                        title="Back to every prompt in this test run"
+                      >
+                        ↑ Run{' '}
+                        {harness.runStartedAt
+                          ? formatShortDate(harness.runStartedAt)
+                          : 'results'}
+                      </Link>
+                    </Button>
+                    <Button asChild size="sm" variant="outline">
+                      <Link
+                        href={`/admin/tests/${harness.testId}/items/${harness.testItemId}`}
+                        title="This prompt's outcomes across every run"
+                      >
+                        ↑ Prompt #{harness.rowIndex} history
+                      </Link>
+                    </Button>
+                  </>
+                ) : null}
                 <Button asChild size="sm" variant="outline">
                   <Link href="/admin/observability">All runs</Link>
                 </Button>
@@ -165,14 +221,38 @@ export default async function AdminRunTracePage({ params }: PageProps) {
             ) : null}
           </section>
 
+          {/* Harness verdict — additional context when this run came from /admin/tests, absent
+              entirely otherwise. */}
+          {harness ? (
+            <HarnessVerdictBand
+              answerText={payload.answerText}
+              context={harness}
+            />
+          ) : null}
+
+          {/* B0-421 — lateral navigation along the column: does this prompt always fail? Renders
+              itself as null when the prompt has no recorded outcomes. */}
+          {harness ? (
+            <PromptHistoryStrip
+              currentResultItemId={harness.resultItemId}
+              history={promptHistory}
+              rowIndex={harness.rowIndex}
+              testId={harness.testId}
+              testItemId={harness.testItemId}
+            />
+          ) : null}
+
           {loadError ? (
             <section className="rounded-3xl border border-destructive/30 bg-destructive/5 p-6 text-sm text-destructive">
               {loadError}
             </section>
           ) : null}
 
-          {/* Answer — read the thing being evaluated before anything else. */}
-          {trace ? (
+          {/* Answer — read the thing being evaluated before anything else.
+              On a harness run the verdict band above already shows the answer, beside the
+              ideal response it is being judged against, so this panel would render the same
+              text a second time. Live and orphan runs have no band and keep it. */}
+          {trace && !harness ? (
             <RunAnswerPanel answerText={payload.answerText} error={payload.error} />
           ) : null}
 

@@ -6,8 +6,14 @@
  * run's pass/fail spread. Kept here rather than in the route so the payload
  * builder is unit-testable and the route stays thin.
  *
- * Read-only by design: the observability repository never writes and
- * `workflow_runs` has no insights column, so nothing here persists.
+ * B0-420 gives the analysis two things it never had:
+ *  - **grading context** — when the run resolves to a harness execution
+ *    (`~/lib/observability/harness-linkage`), the model also sees whether the item
+ *    passed, what was expected of it, and the ideal response. Purely additive: a
+ *    live Bex chat run sends nothing extra and produces exactly what it did before.
+ *  - **persistence** — a completed run is immutable, so re-billing a model call on
+ *    every panel open bought nothing. Insights are stored in `ai_suggestions` under
+ *    `entity_type = 'workflow_run'`; this module owns the row encoding.
  */
 
 import { z } from 'zod';
@@ -18,6 +24,19 @@ import type { TimelineEvent } from '~/types/observability';
 export type WorkflowRunTrace = NonNullable<
   Awaited<ReturnType<typeof getWorkflowRunTrace>>
 >;
+
+/**
+ * The harness expectations for the run being analysed, narrowed from
+ * `HarnessRunContext`. Absent (`null`/`undefined`) for a live run — never
+ * synthesised, because a fabricated verdict is worse than no verdict.
+ */
+export type PromptGradingContext = {
+  passed: boolean;
+  expectedShouldAnswer: boolean | null;
+  /** `test_items.ideal_response`, currently null for every row in the database. */
+  idealResponse: string | null;
+  similarity: number | null;
+};
 
 export const PROMPT_INSIGHT_SYSTEM_PROMPT = `You are a prompt engineer reviewing the execution trace of a SINGLE prompt through Betco's product-support agent workflow.
 
@@ -51,6 +70,39 @@ Respond ONLY with valid JSON matching this exact schema:
 
 category must be one of: prompt, routing, tools, grounding, confidence
 impact must be one of: high, medium, low`;
+
+/**
+ * Grading-aware clauses appended to `PROMPT_INSIGHT_SYSTEM_PROMPT` (B0-420).
+ *
+ * Three distinct situations, because collapsing them produces a dishonest prompt:
+ *  - **failed with an ideal response** — there is a target, so rank fixes by the
+ *    divergence from it. This is the branch the ticket is really about, and it is
+ *    dormant today: `test_items.ideal_response` is null for all 3,212 rows.
+ *  - **failed with no ideal response** — say so plainly and redirect the model to the
+ *    signals that do exist. Never hand it "compare against: null" or ask it to explain
+ *    a divergence from nothing; it would invent the missing half.
+ *  - **passed** — the analysis must not manufacture a failure to have something to say.
+ */
+function gradingClause(grading: PromptGradingContext): string {
+  if (grading.passed) {
+    return `\n\nGRADING CONTEXT: this run is one item of an automated test run, and it PASSED. Do not manufacture a failure. Rank your recommendations by what would make this pass more robust and less luck-dependent on a future run — stronger grounding, fewer wasted or unsettled tool calls, a confidence score better supported by the evidence. If the trace genuinely shows nothing to improve, say so in the lowest-ranked recommendation rather than inventing a problem.`;
+  }
+
+  if (grading.idealResponse) {
+    return `\n\nGRADING CONTEXT: this run is one item of an automated test run, and it FAILED. The expected answer is given to you under "## Ideal response". Your first task is to explain concretely how the answer produced diverged from it — what it got wrong, omitted, or added — and then rank all 3 recommendations by how much each would close that specific gap. Cite the divergence, not a generic quality concern. Do not treat wording differences as failures: the ideal response is prose guidance, not a string to match.`;
+  }
+
+  return `\n\nGRADING CONTEXT: this run is one item of an automated test run, and it FAILED. No ideal response was recorded for this prompt, so you have NO reference answer — do not guess at what the expected answer said, and do not claim the answer diverged from something you cannot see. Diagnose the failure from the evidence you do have: the recorded expectation of whether the agent should have answered at all, the retrieval similarity, the validator verdict, and the trace. Rank your recommendations by how likely each is to flip this item to a pass.`;
+}
+
+/** System prompt for one analysis, with the grading clause when the run was graded. */
+export function buildPromptInsightSystemPrompt(
+  grading?: PromptGradingContext | null,
+): string {
+  return grading
+    ? `${PROMPT_INSIGHT_SYSTEM_PROMPT}${gradingClause(grading)}`
+    : PROMPT_INSIGHT_SYSTEM_PROMPT;
+}
 
 export const promptInsightSchema = z.object({
   rank: z.number().int(),
@@ -161,8 +213,49 @@ export function describeTimelineEvent(event: TimelineEvent): string | null {
   }
 }
 
-/** The user-role content sent alongside `PROMPT_INSIGHT_SYSTEM_PROMPT`. */
-export function buildPromptAnalysisPayload(trace: WorkflowRunTrace): string {
+const IDEAL_RESPONSE_MAX_CHARS = 1500;
+
+/**
+ * The graded half of the payload. Rendered only when the run resolved to a harness
+ * execution, so a live run's payload is byte-for-byte what it was before B0-420.
+ *
+ * A null `idealResponse` is stated as absent rather than printed as `null`, and the
+ * section is not emitted at all without grading context.
+ */
+function describeGradingContext(grading: PromptGradingContext): string {
+  const expectation =
+    grading.expectedShouldAnswer === null
+      ? 'not recorded'
+      : grading.expectedShouldAnswer
+        ? 'yes — the agent was expected to answer this'
+        : 'no — the agent was expected to decline or refuse this';
+
+  const header = `\n\n## Harness grading
+Verdict: ${grading.passed ? 'PASSED' : 'FAILED'}
+Expected the agent to answer: ${expectation}
+Retrieval similarity: ${grading.similarity !== null ? grading.similarity.toFixed(3) : 'none recorded (retrieval may not have run)'}`;
+
+  if (!grading.idealResponse) {
+    return `${header}
+Ideal response: none recorded for this prompt — there is no reference answer to compare against.`;
+  }
+
+  return `${header}
+
+## Ideal response
+${clip(grading.idealResponse, IDEAL_RESPONSE_MAX_CHARS)}`;
+}
+
+/**
+ * The user-role content sent alongside `buildPromptInsightSystemPrompt(grading)`.
+ *
+ * `grading` is optional and additive (B0-420): omit it and the payload is identical to
+ * the pre-B0-420 one, which is what live Bex chat and direct orchestrator runs get.
+ */
+export function buildPromptAnalysisPayload(
+  trace: WorkflowRunTrace,
+  grading?: PromptGradingContext | null,
+): string {
   const { run, timeline } = trace;
 
   const userMessage = readString(run.user_input, 'message');
@@ -214,7 +307,9 @@ ${userMessage ?? '(none recorded)'}
 ${answerText ? clip(answerText, ANSWER_MAX_CHARS) : '(no answer text recorded)'}
 
 ## Trace (${eventLines.length} events, chronological)
-${eventLines.length > 0 ? eventLines.join('\n') : 'No trace events recorded.'}`;
+${eventLines.length > 0 ? eventLines.join('\n') : 'No trace events recorded.'}${
+    grading ? describeGradingContext(grading) : ''
+  }`;
 }
 
 /**
@@ -225,4 +320,125 @@ export function normalizePromptInsights(insights: PromptInsight[]): PromptInsigh
   return insights
     .slice(0, PROMPT_INSIGHT_COUNT)
     .map((insight, index) => ({ ...insight, rank: index + 1 }));
+}
+
+/* -------------------------------------------------------------------------- */
+/* Persistence (B0-420)                                                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * `ai_suggestions.entity_type` for trace insights, alongside the existing `'item'`
+ * scope written by `/admin/tests/[testId]/items/[itemId]`. `entity_id` is the
+ * `workflow_runs.id`.
+ */
+export const PROMPT_INSIGHT_ENTITY_TYPE = 'workflow_run';
+
+/** The model these insights are generated with; stored on the row for provenance. */
+export const PROMPT_INSIGHT_MODEL = 'gpt-4.1-mini';
+
+/**
+ * `ai_suggestions` has columns for the title, the body and the ordering, but not for
+ * an insight's category or impact — that table is generic and serves the item scope
+ * too. Those two, plus the grading-context flag, ride in `metadata`.
+ */
+const storedInsightMetadataSchema = z.object({
+  gradingContext: z.boolean().optional(),
+  category: promptInsightSchema.shape.category,
+  impact: promptInsightSchema.shape.impact,
+});
+
+/** Structural shape of an `ai_suggestions` row; `AiSuggestionRecord` satisfies it. */
+export type StoredPromptInsightRow = {
+  title: string;
+  content: string;
+  sort_order: number;
+  created_at: string;
+  metadata: unknown;
+};
+
+export type StoredPromptInsights = {
+  insights: PromptInsight[] | null;
+  /** Newest row's `created_at`; the set is inserted in one statement. */
+  generatedAt: string | null;
+  /**
+   * Whether the stored set was generated WITH harness grading context. `false` for a
+   * trace-only set and for any legacy row that predates the flag — which is what makes
+   * "regenerate once grading context becomes available" decidable.
+   */
+  gradingContext: boolean;
+};
+
+/** Encodes a generated set into `replaceAiSuggestions` input. */
+export function toStoredPromptInsights(
+  insights: PromptInsight[],
+  options: { gradingContext: boolean },
+): Array<{
+  title: string;
+  content: string;
+  model: string;
+  metadata: { gradingContext: boolean; category: string; impact: string };
+}> {
+  return insights.map((insight) => ({
+    title: insight.title,
+    content: insight.description,
+    model: PROMPT_INSIGHT_MODEL,
+    metadata: {
+      gradingContext: options.gradingContext,
+      category: insight.category,
+      impact: insight.impact,
+    },
+  }));
+}
+
+/**
+ * Decodes stored rows back into insights.
+ *
+ * Rows whose metadata does not carry a valid category/impact are dropped rather than
+ * defaulted — labelling an insight with a category the model never chose would be a
+ * fabrication, and the caller degrades to "not analysed yet", which is honest and
+ * costs one button press. `rank` is re-derived from position so the UI always renders
+ * 1-2-3 even if `sort_order` was written oddly.
+ */
+export function parseStoredPromptInsights(
+  rows: StoredPromptInsightRow[],
+): StoredPromptInsights {
+  if (rows.length === 0) {
+    return { insights: null, generatedAt: null, gradingContext: false };
+  }
+
+  const ordered = [...rows].sort((a, b) => a.sort_order - b.sort_order);
+
+  const decoded: PromptInsight[] = [];
+  let gradingContext = false;
+
+  for (const row of ordered) {
+    const meta = storedInsightMetadataSchema.safeParse(row.metadata);
+    if (!meta.success) {
+      continue;
+    }
+    if (meta.data.gradingContext === true) {
+      gradingContext = true;
+    }
+    decoded.push({
+      rank: decoded.length + 1,
+      title: row.title,
+      description: row.content,
+      category: meta.data.category,
+      impact: meta.data.impact,
+    });
+  }
+
+  if (decoded.length === 0) {
+    return { insights: null, generatedAt: null, gradingContext: false };
+  }
+
+  const generatedAt = ordered.reduce<string | null>(
+    (newest, row) =>
+      typeof row.created_at === 'string' && (newest === null || row.created_at > newest)
+        ? row.created_at
+        : newest,
+    null,
+  );
+
+  return { insights: decoded, generatedAt, gradingContext };
 }

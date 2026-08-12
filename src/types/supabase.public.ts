@@ -159,6 +159,7 @@ export type Database = {
           entity_id: string
           entity_type: string
           id: string
+          metadata: Json
           model: string | null
           sort_order: number
           title: string
@@ -169,6 +170,7 @@ export type Database = {
           entity_id: string
           entity_type: string
           id?: string
+          metadata?: Json
           model?: string | null
           sort_order?: number
           title: string
@@ -179,6 +181,7 @@ export type Database = {
           entity_id?: string
           entity_type?: string
           id?: string
+          metadata?: Json
           model?: string | null
           sort_order?: number
           title?: string
