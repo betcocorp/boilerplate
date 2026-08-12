@@ -15,8 +15,29 @@ type HomeProps = {
   searchParams: Promise<{
     next?: string;
     callbackUrl?: string;
+    error?: string;
   }>;
 };
+
+/**
+ * Sign-in rejections raised by the `signIn` callback in `~/lib/auth` (B0-406), plus NextAuth's own
+ * `AccessDenied`. Only reachable when `BEX_PERMISSIONS_ENFORCED=true` — in shadow mode the callback
+ * lets everyone through.
+ */
+const SIGN_IN_ERROR_MESSAGES: Record<string, string> = {
+  UserNotFound:
+    "That account isn't set up for Bex yet. Ask an administrator to add you, then try again.",
+  AccountInactive:
+    "Your Bex account is inactive. Ask an administrator to reactivate it, then try again.",
+  NoIdentity:
+    "Your identity provider didn't return an email address, so we can't match you to a Bex account.",
+  AccessDenied: "We couldn't verify your Bex account. Please try again.",
+};
+
+function signInErrorMessage(error: string | undefined): string | undefined {
+  if (!error) return undefined;
+  return SIGN_IN_ERROR_MESSAGES[error] ?? SIGN_IN_ERROR_MESSAGES.AccessDenied;
+}
 
 export default async function Home({ searchParams }: HomeProps) {
   const session = await getServerSession(authOptions);
@@ -29,7 +50,7 @@ export default async function Home({ searchParams }: HomeProps) {
 
   return (
     <Suspense fallback={<LoginFormSkeleton />}>
-      <FormLogin />
+      <FormLogin errorMessage={signInErrorMessage(params.error)} />
     </Suspense>
   );
 }

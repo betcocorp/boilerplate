@@ -2,6 +2,8 @@ import { getServerSession } from 'next-auth';
 import { NextResponse } from 'next/server';
 
 import { authOptions } from '~/lib/auth';
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { gateRoute } from '~/lib/permissions/route-gate';
 import {
   computeAvgSimilarityForResult,
   getTestById,
@@ -17,6 +19,12 @@ export async function GET(
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
+
+  const denied = await gateRoute(
+    PERMISSIONS.NAVIGATION_SIDEBAR_TESTS,
+    'GET /api/admin/tests/runs/[runId]/gate',
+  );
+  if (denied) return denied;
 
   const { runId } = await context.params;
   const run = await getTestResultById(runId).catch(() => null);

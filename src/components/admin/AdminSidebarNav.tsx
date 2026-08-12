@@ -1,256 +1,67 @@
-'use client';
-
+import { AdminSidebarNavClient } from '~/components/admin/AdminSidebarNavClient';
+import { getUserOrDefault } from '~/lib/cookies-server';
+import { PERMISSIONS } from '~/lib/permissions/constants';
 import {
-  ChevronRight,
-  FileText,
-  KeyRound,
-  LayoutDashboard,
-  Library,
-  MessageSquare,
-  Search,
-} from 'lucide-react';
-import Link from 'next/link';
-import { usePathname } from 'next/navigation';
-import { useState } from 'react';
-
+  isPermissionsEnforced,
+  recordPermissionVerdict,
+} from '~/lib/permissions/enforcement';
 import {
-  SidebarGroup,
-  SidebarGroupLabel,
-  SidebarMenu,
-  SidebarMenuButton,
-  SidebarMenuItem,
-  SidebarMenuSub,
-  SidebarMenuSubButton,
-  SidebarMenuSubItem,
-  useSidebar,
-} from '~/components/ui/sidebar';
-import { cn } from '~/lib/utils';
-
-type NavItem = {
-  type: 'link';
-  label: string;
-  href: string;
-  icon?: typeof LayoutDashboard;
-};
-
-type NavGroup = {
-  type: 'group';
-  label: string;
-  icon: typeof LayoutDashboard;
-  items: Array<{
-    label: string;
-    href: string;
-  }>;
-};
-
-type NavEntry = NavItem | NavGroup;
-
-type NavSectionModel = {
-  title: string;
-  items: NavEntry[];
-};
-
-const sidebarSections: NavSectionModel[] = [
-  {
-    title: 'Workspace',
-    items: [
-      {
-        type: 'link',
-        label: 'Dashboard',
-        href: '/admin',
-        icon: LayoutDashboard,
-      },
-      {
-        type: 'group',
-        label: 'Bex',
-        icon: MessageSquare,
-        items: [
-          { label: 'Bex chat', href: '/admin/bex' },
-          { label: 'Test runner', href: '/admin/tests' },
-          { label: 'Failure Queue', href: '/admin/tests/failure-queue' },
-          { label: 'Prompt observability', href: '/admin/observability' },
-        ],
-      },
-      {
-        type: 'group',
-        label: 'Tools',
-        icon: Search,
-        items: [
-          { label: 'Tools home', href: '/admin/tools' },
-          {
-            label: 'Cross-reference',
-            href: '/admin/tools/cross-reference',
-          },
-          { label: 'Web Search', href: '/admin/tools/web-search' },
-          { label: 'RAG semantic search', href: '/admin/products/rag' },
-        ],
-      },
-    ],
-  },
-  {
-    title: 'Document Corpus',
-    items: [
-      {
-        type: 'group',
-        label: 'Products',
-        icon: Library,
-        items: [
-          { label: 'RAG generate', href: '/admin/products/rag/generate' },
-          { label: 'RAG corpus quality', href: '/admin/products/rag/chunking' },
-          { label: 'Legacy products', href: '/admin/products/legacy' },
-          { label: 'Orphan Monitor', href: '/admin/products/orphans' },
-        ],
-      },
-      {
-        type: 'group',
-        label: 'SDS',
-        icon: FileText,
-        items: [{ label: 'SDS ingestion', href: '/admin/sds' }],
-      },
-      {
-        type: 'group',
-        label: 'Efficacy',
-        icon: FileText,
-        items: [{ label: 'Efficacy ingestion', href: '/admin/efficacy' }],
-      },
-      {
-        type: 'group',
-        label: 'Markdown',
-        icon: FileText,
-        items: [
-          { label: 'Markdown ingestion', href: '/admin/knowledge' },
-          { label: 'Product label ingestion', href: '/admin/labels' },
-        ],
-      },
-    ],
-  },
-  {
-    title: 'API Security',
-    items: [
-      {
-        type: 'group',
-        label: 'API access',
-        icon: KeyRound,
-        items: [
-          { label: 'Projects', href: '/admin/projects' },
-          { label: 'Analytics', href: '/admin/projects/analytics' },
-        ],
-      },
-    ],
-  },
-];
-
-const UUID_SEGMENT =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function isActivePath(pathname: string, href: string) {
-  if (href === '/admin') {
-    return pathname === '/admin';
-  }
-
-  if (href === '/admin/tests') {
-    if (pathname === '/admin/tests') {
-      return true;
-    }
-    const rest = pathname.startsWith('/admin/tests/')
-      ? pathname.slice('/admin/tests/'.length)
-      : '';
-    const firstSegment = rest.split('/')[0] ?? '';
-    return UUID_SEGMENT.test(firstSegment);
-  }
-
-  return pathname === href || pathname.startsWith(`${href}/`);
-}
+  getCurrentUserPermissions,
+  hasPermission,
+} from '~/lib/permissions/permissions-server';
 
 /**
- * A collapsible nav group. When the sidebar is collapsed to the icon rail, only the group icon
- * shows (with a hover tooltip); clicking it expands the rail and opens the group so its links
- * become reachable. The active group stays open and can't be manually collapsed.
+ * The admin surfaces the sidebar can gate. Derived from the permission catalog so the nav and
+ * `public.permission` stay in sync — every `navigation.sidebar.*` selector is evaluated here, plus
+ * `admin.card.permissions`, which gates the Access control → Permissions link (B0-410) and is the one
+ * nav selector that does not carry the `navigation.sidebar.` prefix. Without it that link would stay
+ * visible even under enforcement, since only selectors in this list can end up in `denied`.
  */
-function NavGroupItem({ entry }: { entry: NavGroup }) {
-  const pathname = usePathname();
-  const { state, isMobile, setOpen } = useSidebar();
-  const [manualOpen, setManualOpen] = useState(false);
+const NAV_SELECTORS: string[] = [
+  ...Object.values(PERMISSIONS).filter((selector) =>
+    selector.startsWith('navigation.sidebar.'),
+  ),
+  PERMISSIONS.ADMIN_CARD_PERMISSIONS,
+];
 
-  const Icon = entry.icon;
-  const groupActive = entry.items.some((item) => isActivePath(pathname, item.href));
-  const isOpen = groupActive || manualOpen;
-  const collapsed = state === 'collapsed' && !isMobile;
-
-  return (
-    <SidebarMenuItem>
-      <SidebarMenuButton
-        isActive={groupActive}
-        onClick={() => {
-          if (collapsed) {
-            setOpen(true);
-            setManualOpen(true);
-          } else {
-            setManualOpen(!isOpen);
-          }
-        }}
-        tooltip={entry.label}
-      >
-        <Icon />
-        <span>{entry.label}</span>
-        <ChevronRight
-          className={cn('ml-auto transition-transform', isOpen && 'rotate-90')}
-        />
-      </SidebarMenuButton>
-      {isOpen ? (
-        <SidebarMenuSub>
-          {entry.items.map((item) => (
-            <SidebarMenuSubItem key={item.href}>
-              <SidebarMenuSubButton
-                asChild
-                isActive={isActivePath(pathname, item.href)}
-              >
-                <Link href={item.href}>{item.label}</Link>
-              </SidebarMenuSubButton>
-            </SidebarMenuSubItem>
-          ))}
-        </SidebarMenuSub>
-      ) : null}
-    </SidebarMenuItem>
+/**
+ * Server half of the admin sidebar (B0-408): resolves the effective user's permissions once per
+ * render, records one aggregated verdict for the nav surface, and hands the client component the
+ * selectors to hide.
+ *
+ * While `BEX_PERMISSIONS_ENFORCED` is off nothing is hidden — that is the point of shadow mode. The
+ * verdict log still tells us exactly which surfaces would vanish once the flag flips.
+ */
+export async function AdminSidebarNav() {
+  const [permissions, user] = await Promise.all([
+    getCurrentUserPermissions(),
+    getUserOrDefault(),
+  ]);
+  const denied = NAV_SELECTORS.filter(
+    (selector) => !hasPermission(permissions, selector),
   );
-}
+  const allowed = denied.length === 0;
 
-function NavSection({ section }: { section: NavSectionModel }) {
-  const pathname = usePathname();
+  // One record for the whole surface rather than ten — the sidebar renders on every admin
+  // navigation, and the denied set is the signal we care about.
+  await recordPermissionVerdict({
+    surface: 'nav',
+    selector: allowed ? NAV_SELECTORS : denied,
+    allowed,
+    reason: allowed
+      ? 'granted'
+      : permissions.length === 0
+        ? 'permissions-unavailable'
+        : 'missing-permission',
+    route: 'AdminSidebarNav',
+    userId: user?.USER_ID ?? null,
+    email: user?.EMAIL ?? null,
+    detail: { grantedSelectorCount: NAV_SELECTORS.length - denied.length },
+  });
 
   return (
-    <SidebarGroup>
-      <SidebarGroupLabel>{section.title}</SidebarGroupLabel>
-      <SidebarMenu>
-        {section.items.map((entry) => {
-          if (entry.type === 'link') {
-            const Icon = entry.icon;
-            const active = isActivePath(pathname, entry.href);
-            return (
-              <SidebarMenuItem key={entry.label}>
-                <SidebarMenuButton asChild isActive={active} tooltip={entry.label}>
-                  <Link href={entry.href}>
-                    {Icon ? <Icon /> : null}
-                    <span>{entry.label}</span>
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            );
-          }
-
-          return <NavGroupItem entry={entry} key={entry.label} />;
-        })}
-      </SidebarMenu>
-    </SidebarGroup>
-  );
-}
-
-export function AdminSidebarNav() {
-  return (
-    <>
-      {sidebarSections.map((section) => (
-        <NavSection key={section.title} section={section} />
-      ))}
-    </>
+    <AdminSidebarNavClient
+      hiddenSelectors={isPermissionsEnforced() ? denied : []}
+    />
   );
 }

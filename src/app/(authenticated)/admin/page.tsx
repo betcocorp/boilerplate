@@ -1,7 +1,9 @@
 import {
+  ArrowRight,
   ChevronDown,
   ChevronRight,
   Plus,
+  ShieldCheck,
   TrendingDown,
   TrendingUp,
 } from 'lucide-react';
@@ -12,6 +14,7 @@ import {
   SimilarityFailRateTrendChart,
   type SimilarityFailRateTrendPoint,
 } from '~/components/admin/SimilarityFailRateTrendChart';
+import PermissionChecker from '~/components/permissions/PermissionChecker';
 import { Avatar, AvatarFallback, AvatarGroup } from '~/components/ui/avatar';
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
@@ -24,6 +27,7 @@ import {
 } from '~/components/ui/card';
 import { Separator } from '~/components/ui/separator';
 import { Tabs, TabsList, TabsTrigger } from '~/components/ui/tabs';
+import { PERMISSIONS } from '~/lib/permissions/constants';
 import { formatCompactInt } from '~/lib/tests/format';
 import {
   getGlobalSimilarityFailRateTrend,
@@ -202,6 +206,39 @@ export default async function AdminDashboardPage() {
             ))}
           </section>
 
+          {/*
+            Gated by `admin.card.permissions` (B0-410). While `BEX_PERMISSIONS_ENFORCED` is off,
+            `PermissionChecker` records the verdict and still renders — the card is visible to every
+            admin today and only disappears for users missing the selector once the flag flips.
+          */}
+          <PermissionChecker
+            permission={PERMISSIONS.ADMIN_CARD_PERMISSIONS}
+            route="/admin permissions card"
+          >
+            <section>
+              <Link href="/admin/permissions">
+                <Card className="rounded-3xl border border-border/60 shadow-none transition hover:bg-accent/40">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2 text-lg">
+                      <ShieldCheck className="size-5 text-primary" />
+                      Permissions
+                    </CardTitle>
+                    <CardDescription>
+                      Administer users, permission groups, and permission
+                      selectors — who holds what, directly or through a group.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="inline-flex items-center gap-1 text-sm font-medium text-primary">
+                      Open
+                      <ArrowRight className="size-4" />
+                    </div>
+                  </CardContent>
+                </Card>
+              </Link>
+            </section>
+          </PermissionChecker>
+
           <section className="grid gap-4 xl:grid-cols-[minmax(0,1.4fr)_minmax(320px,1fr)]">
             <Card className="rounded-3xl border border-border/60 shadow-none">
               <CardHeader className="flex flex-row items-start justify-between gap-4 px-5 pb-0">
@@ -264,6 +301,7 @@ export default async function AdminDashboardPage() {
                       ['SDS ingestion dashboard', '/admin/sds'],
                       ['Efficacy ingestion dashboard', '/admin/efficacy'],
                       ['RAG generation', '/admin/products/rag/generate'],
+                      ['Users, groups & permissions', '/admin/permissions'],
                     ].map(([label, href]) => (
                       <Link
                         className="flex items-center justify-between rounded-2xl bg-background px-4 py-3 text-sm font-medium text-foreground transition hover:bg-accent"

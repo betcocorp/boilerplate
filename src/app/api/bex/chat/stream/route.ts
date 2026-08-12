@@ -6,6 +6,8 @@ import { hasBexSession } from '~/lib/api/bex-api-auth';
 import { bexChatPostBodySchema } from '~/lib/conversations/conversation-schemas';
 import { newCorrelationId } from '~/lib/observability/correlation-id';
 import { logInfo } from '~/lib/observability/logger';
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { gateRoute } from '~/lib/permissions/route-gate';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -59,6 +61,12 @@ export async function POST(request: Request) {
   if (!(await hasBexSession())) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
+
+  const denied = await gateRoute(
+    PERMISSIONS.BEX_CHAT_USE,
+    'POST /api/bex/chat/stream',
+  );
+  if (denied) return denied;
 
   let body: unknown = {};
   try {

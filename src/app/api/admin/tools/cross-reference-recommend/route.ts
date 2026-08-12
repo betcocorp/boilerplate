@@ -3,6 +3,8 @@ import { NextResponse } from 'next/server';
 
 import { authOptions } from '~/lib/auth';
 import { newCorrelationId } from '~/lib/observability/correlation-id';
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { gateRoute } from '~/lib/permissions/route-gate';
 import { runCrossReferenceRecommendation } from '~/lib/recommendations/persist-recommendation';
 import { recommendCrossReferenceInputSchema } from '~/lib/tools/tool-schemas';
 import { getErrorMessage } from '~/lib/utils';
@@ -19,6 +21,12 @@ export async function POST(request: Request) {
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
+
+  const denied = await gateRoute(
+    PERMISSIONS.NAVIGATION_SIDEBAR_TOOLS,
+    'POST /api/admin/tools/cross-reference-recommend',
+  );
+  if (denied) return denied;
 
   const raw = await request.json().catch(() => null);
   const parsed = recommendCrossReferenceInputSchema.safeParse(raw);

@@ -5,6 +5,8 @@ import {
   getWorkflowRunWithSteps,
   listAuditLogsForRun,
 } from '~/lib/conversations/workflow-repository';
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { gateRoute } from '~/lib/permissions/route-gate';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -16,6 +18,12 @@ export async function GET(request: Request, ctx: RouteParams) {
   if (!(await hasBexSessionOrServiceToken(request))) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
+
+  const denied = await gateRoute(
+    PERMISSIONS.BEX_CHAT_USE,
+    'GET /api/bex/workflow-runs/[id]',
+  );
+  if (denied) return denied;
 
   const { id } = await ctx.params;
 

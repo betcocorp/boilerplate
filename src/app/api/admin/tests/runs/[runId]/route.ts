@@ -6,6 +6,8 @@ import { NextResponse } from 'next/server';
 export const maxDuration = 300;
 
 import { authOptions } from '~/lib/auth';
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { gateRoute } from '~/lib/permissions/route-gate';
 import { executeSearchRun } from '~/lib/tests/search-run-executor';
 import { executeTestRun } from '~/lib/tests/run-executor';
 import {
@@ -52,6 +54,12 @@ export async function GET(
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
+
+  const denied = await gateRoute(
+    PERMISSIONS.NAVIGATION_SIDEBAR_TESTS,
+    'GET /api/admin/tests/runs/[runId]',
+  );
+  if (denied) return denied;
 
   const { runId } = await context.params;
   const run = await getTestResultById(runId).catch(() => null);
@@ -110,6 +118,12 @@ export async function POST(
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
+  const denied = await gateRoute(
+    PERMISSIONS.NAVIGATION_SIDEBAR_TESTS,
+    'POST /api/admin/tests/runs/[runId]',
+  );
+  if (denied) return denied;
+
   const { runId } = await context.params;
   const run = await getTestResultById(runId).catch(() => null);
 
@@ -145,6 +159,12 @@ export async function PATCH(
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
+
+  const denied = await gateRoute(
+    PERMISSIONS.NAVIGATION_SIDEBAR_TESTS,
+    'PATCH /api/admin/tests/runs/[runId]',
+  );
+  if (denied) return denied;
 
   const { runId } = await context.params;
   const body = (await request.json().catch(() => ({}))) as { action?: unknown };

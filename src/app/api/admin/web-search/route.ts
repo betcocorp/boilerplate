@@ -4,6 +4,8 @@ import { NextResponse } from 'next/server';
 import { authOptions } from '~/lib/auth';
 import { writeAuditLog } from '~/lib/audit/audit-log';
 import { newCorrelationId } from '~/lib/observability/correlation-id';
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { gateRoute } from '~/lib/permissions/route-gate';
 import { WebSearchService } from '~/lib/websearch/web-search-service';
 import { WebSearchError } from '~/lib/websearch/types';
 import { webSearchRequestSchema } from '~/lib/websearch/websearch-schemas';
@@ -16,6 +18,12 @@ export async function POST(request: Request) {
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
+
+  const denied = await gateRoute(
+    PERMISSIONS.NAVIGATION_SIDEBAR_TOOLS,
+    'POST /api/admin/web-search',
+  );
+  if (denied) return denied;
 
   const raw = await request.json().catch(() => null);
   const parsed = webSearchRequestSchema.safeParse(raw);

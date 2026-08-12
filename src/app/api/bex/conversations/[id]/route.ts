@@ -7,6 +7,8 @@ import {
 } from '~/lib/conversations/conversation-repository';
 import { listMessageFeedbackForConversation } from '~/lib/conversations/message-feedback-repository';
 import { listMessagesForConversation } from '~/lib/conversations/message-repository';
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { gateRoute } from '~/lib/permissions/route-gate';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -17,6 +19,12 @@ export async function GET(_request: Request, ctx: RouteParams) {
   if (!(await hasBexSession())) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
+
+  const denied = await gateRoute(
+    PERMISSIONS.BEX_CHAT_USE,
+    'GET /api/bex/conversations/[id]',
+  );
+  if (denied) return denied;
 
   const { id } = await ctx.params;
 
@@ -73,6 +81,12 @@ export async function DELETE(_request: Request, ctx: RouteParams) {
   if (!(await hasBexSession())) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
+
+  const denied = await gateRoute(
+    PERMISSIONS.BEX_CHAT_USE,
+    'DELETE /api/bex/conversations/[id]',
+  );
+  if (denied) return denied;
 
   const { id } = await ctx.params;
 

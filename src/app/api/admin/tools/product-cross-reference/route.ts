@@ -3,6 +3,8 @@ import { getServerSession } from 'next-auth';
 import { NextResponse } from 'next/server';
 
 import { authOptions } from '~/lib/auth';
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { gateRoute } from '~/lib/permissions/route-gate';
 import { lookupCrossReference } from '~/lib/tools/cross-reference-lookup';
 import { lookupCrossReferenceInputSchema } from '~/lib/tools/tool-schemas';
 
@@ -11,6 +13,12 @@ export async function POST(request: Request) {
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
+
+  const denied = await gateRoute(
+    PERMISSIONS.NAVIGATION_SIDEBAR_TOOLS,
+    'POST /api/admin/tools/product-cross-reference',
+  );
+  if (denied) return denied;
 
   const raw = await request.json().catch(() => null);
   const parsed = lookupCrossReferenceInputSchema.safeParse(raw);
