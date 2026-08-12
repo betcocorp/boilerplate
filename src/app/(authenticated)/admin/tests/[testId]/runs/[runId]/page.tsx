@@ -15,6 +15,7 @@ import {
   type Insight,
 } from '~/components/admin/tests/RunInsightsPanel';
 import { RunItemResultsCsvDownload } from '~/components/admin/tests/RunItemResultsCsvDownload';
+import { RunReportButton } from '~/components/admin/tests/RunReportButton';
 import {
   TestRunNotesDisplay,
   TestRunNotesProvider,
@@ -361,6 +362,12 @@ export default async function AdminTestRunDetailsPage({
                   <Link href={`/admin/tests/${test.id}`}>Back to test</Link>
                 </Button>
                 <TestRunNotesToolbarButton />
+                <RunReportButton
+                  enabled={isCompletedRunStatus(result.status)}
+                  hasExistingReport={Boolean(result.report_markdown)}
+                  runId={result.id}
+                  testId={test.id}
+                />
                 {fullExportData ? (
                   <RunFullExportDownload
                     data={fullExportData}

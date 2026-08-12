@@ -1,6 +1,6 @@
 {
   "name": "bex-2.0",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -33,6 +33,7 @@
     "csv-parse": "^6.2.1",
     "embla-carousel-react": "^8.6.0",
     "franc-min": "^6.2.0",
+    "html2pdf.js": "^0.14.0",
     "js-yaml": "^4.1.0",
     "lucide-react": "^1.7.0",
     "moment": "^2.30.1",

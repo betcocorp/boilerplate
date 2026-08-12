@@ -348,6 +348,32 @@ export async function saveTestResultInsights(
   });
 }
 
+/** Reads back the "Generate report" checkpointed progress/state for a run (B0-453). */
+export async function getReportState(resultId: string) {
+  const result = await getTestResultById(resultId);
+  return result.report_state;
+}
+
+/** Persists checkpointed "Generate report" progress so scoring can resume across requests. */
+export async function saveReportState(
+  resultId: string,
+  reportState: NewTestResultRecord['report_state'],
+) {
+  return updateTestResult(resultId, { report_state: reportState });
+}
+
+/** Persists the final rendered Markdown eval report once every case has been scored. */
+export async function saveReportMarkdown(
+  resultId: string,
+  markdown: string,
+  generatedAt: string,
+) {
+  return updateTestResult(resultId, {
+    report_markdown: markdown,
+    report_generated_at: generatedAt,
+  });
+}
+
 export async function claimQueuedTestResultForExecution(resultId: string) {
   const supabase = getSupabaseServiceRoleClient();
   const result = await supabase

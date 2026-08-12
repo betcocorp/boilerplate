@@ -1,0 +1,318 @@
+import type { TestRecord, TestResultRecord } from '~/lib/tests/types';
+
+import type { EvaluatedCase, RateBlock, ReportMetrics } from './metrics';
+import type { CaseScore, ReportSynthesis } from './schemas';
+
+/**
+ * Renders the "agent-evaluation" methodology's two Word documents (executive summary + detailed
+ * page-by-page report) as a single combined Markdown document (B0-453) — exec scorecard/tables/
+ * Top-3/assessment first, full case-by-case detail below. Every number here comes from
+ * `ReportMetrics` (never re-derived), so the summary and the detail can never disagree.
+ */
+
+export type CaseHarnessAside = {
+  passed: boolean | null;
+  status: string | null;
+  similarity: number | null;
+};
+
+export type CaseRenderDetail = {
+  id: string;
+  question: string;
+  tier: string;
+  priorityRaw: number | null;
+  category: string;
+  idealResponse: string | null;
+  expectedConcepts: string | null;
+  minimumConcepts: string | null;
+  expectedSources: string | null;
+  expectedShouldAnswer: boolean | null;
+  actual: string;
+  score: CaseScore;
+  latencySeconds: number | null;
+  harness: CaseHarnessAside | null;
+};
+
+function mdCell(value: string | null | undefined): string {
+  if (!value) return '—';
+  return value.replace(/\r?\n/g, ' ').replace(/\|/g, '\\|').trim() || '—';
+}
+
+function mdBlock(value: string | null | undefined): string {
+  const trimmed = (value ?? '').trim();
+  return trimmed.length > 0 ? trimmed : '_(none noted)_';
+}
+
+function formatExpected(c: CaseRenderDetail): string {
+  const parts: string[] = [];
+  if (c.idealResponse) parts.push(c.idealResponse.trim());
+  if (c.expectedConcepts) parts.push(`**Expected concepts:** ${c.expectedConcepts.trim()}`);
+  if (c.minimumConcepts) parts.push(`**Minimum concepts:** ${c.minimumConcepts.trim()}`);
+  if (c.expectedSources) parts.push(`**Expected sources:** ${c.expectedSources.trim()}`);
+  if (c.expectedShouldAnswer != null) {
+    parts.push(`**Should answer:** ${c.expectedShouldAnswer ? 'Yes' : 'No'}`);
+  }
+  return parts.length > 0 ? parts.join('\n\n') : '_(no expected answer recorded)_';
+}
+
+function latBandLabel(seconds: number, thresholds: { good: number; slow: number }): string {
+  if (seconds <= thresholds.good) return 'good';
+  if (seconds > thresholds.slow) return 'slow';
+  return 'acceptable';
+}
+
+function rateRow(name: string, block: RateBlock): string {
+  return `| ${mdCell(name)} | ${block.n} | ${block.avg ?? '—'} | ${block.grade} | ${block.passPct}% | ${block.partialPct}% | ${block.failPct}% |`;
+}
+
+function bulletList(items: string[]): string {
+  if (items.length === 0) return '- _(none noted)_';
+  return items.map((item) => `- ${item}`).join('\n');
+}
+
+function pseudocodeBlock(lines: string[]): string {
+  const body = lines.length > 0 ? lines.join('\n') : '(no pseudocode provided)';
+  return '```\n' + body + '\n```';
+}
+
+function tierRank(label: string): number {
+  const match = /tier\s*(\d+)/i.exec(label);
+  return match ? Number(match[1]) : 99;
+}
+
+/** Tier 1 first, then 2+, "Unspecified" last; stable by original order within a tier. */
+export function orderCasesByTier<T extends { tier: string }>(cases: T[]): T[] {
+  return cases
+    .map((c, index) => [c, index] as const)
+    .sort((a, b) => tierRank(a[0].tier) - tierRank(b[0].tier) || a[1] - b[1])
+    .map(([c]) => c);
+}
+
+export function renderReportMarkdown(params: {
+  test: TestRecord;
+  run: TestResultRecord;
+  metrics: ReportMetrics;
+  cases: CaseRenderDetail[];
+  synthesis: ReportSynthesis;
+  generatedAt: string;
+}): string {
+  const { test, run, metrics: m, synthesis, generatedAt } = params;
+  const orderedCases = orderCasesByTier(params.cases);
+  const byId = new Map(m.perCase.map((c) => [c.id, c]));
+  const lines: string[] = [];
+
+  const push = (s: string) => lines.push(s);
+  const blank = () => lines.push('');
+
+  // --- Header ---
+  push(`# ${test.name} — Agent Evaluation Report`);
+  const subtitleParts = [
+    test.intended_agent ? `${test.intended_agent} workflow` : null,
+    `${m.evaluated} question${m.evaluated === 1 ? '' : 's'} evaluated` +
+      (m.uteCount ? ` (+${m.uteCount} unable to evaluate)` : ''),
+    `Run ${run.id}`,
+    `Generated ${new Date(generatedAt).toLocaleString()}`,
+  ].filter(Boolean);
+  push(subtitleParts.join('  •  '));
+  blank();
+
+  // --- Executive scorecard ---
+  push('## Executive scorecard');
+  blank();
+  push('| Overall score | Overall grade | Pass rate | Questions evaluated |');
+  push('|---|---|---|---|');
+  push(
+    `| ${m.overall.avg ?? '—'} / 100 | ${m.overall.grade} | ${m.overall.passPct}% (${m.overall.pass} of ${m.evaluated}) | ${m.evaluated}${m.uteCount ? ` (+${m.uteCount} N/A)` : ''} |`,
+  );
+  blank();
+
+  // --- Tier performance ---
+  push('## Performance by tier');
+  blank();
+  push('| Tier | N | Avg | Grade | Pass | Partial | Fail |');
+  push('|---|---|---|---|---|---|---|');
+  for (const [tier, block] of m.tiers) push(rateRow(tier, block));
+  blank();
+
+  // --- Category performance ---
+  push('## Performance by category');
+  blank();
+  push('| Category | N | Avg | Grade | Pass | Partial | Fail |');
+  push('|---|---|---|---|---|---|---|');
+  for (const [category, block] of m.categories) push(rateRow(category, block));
+  blank();
+  push(
+    `_Strongest: ${m.strongestCategory ?? '—'} · Weakest: ${m.weakestCategory ?? '—'}_`,
+  );
+  blank();
+
+  // --- Responsiveness ---
+  if (m.latency) {
+    const lat = m.latency;
+    push('## Responsiveness (reported separately — not part of the grade)');
+    blank();
+    push(
+      `Average response time: **${lat.avg} s** (range ${lat.min}–${lat.max} s, median ${lat.median} s, n=${lat.n}).`,
+    );
+    push(
+      `Bands (good ≤ ${lat.thresholds.good} s · acceptable ≤ ${lat.thresholds.slow} s · slow > ${lat.thresholds.slow} s): **${lat.bands.good} good, ${lat.bands.acceptable} acceptable, ${lat.bands.slow} slow**.`,
+    );
+    push(`Slowest: ${lat.slowest.map((s) => `${s.id} (${s.seconds} s)`).join(', ')}.`);
+    blank();
+  }
+
+  // --- Top 3 recommendations ---
+  push('## Top 3 recommended agent improvements');
+  blank();
+  push(
+    '_Ranked by frequency, severity, business impact, effect on Tier 1 and weak categories, and whether the issue is systemic._',
+  );
+  blank();
+  for (const rec of synthesis.top3) {
+    push(`### Priority #${rec.priority}: ${rec.what}`);
+    blank();
+    if (rec.whyFirst) push(`**Why first:** ${rec.whyFirst}`);
+    if (rec.evidence) push(`**Evidence:** ${rec.evidence}`);
+    if (rec.affected) push(`**Affected:** ${rec.affected}`);
+    if (rec.change) push(`**Recommended change:** ${rec.change}`);
+    blank();
+    push('**Change pseudocode:**');
+    blank();
+    push(pseudocodeBlock(rec.changePseudocode));
+    blank();
+    if (rec.impact) push(`**Expected impact:** ${rec.impact}`);
+    blank();
+  }
+
+  // --- Executive assessment ---
+  push('## Executive assessment');
+  blank();
+  push(`**Overall grade:** ${m.overall.grade} (${m.overall.avg ?? '—'}/100). Reflects calculated performance; not adjusted.`);
+  push(
+    `**Strongest areas:** ${(synthesis.exec.strongestAreas.length ? synthesis.exec.strongestAreas : synthesis.strengths).slice(0, 3).join('  •  ') || '—'}`,
+  );
+  push(
+    `**Areas needing improvement:** ${(synthesis.exec.improvementAreas.length ? synthesis.exec.improvementAreas : synthesis.weaknesses).slice(0, 3).join('  •  ') || '—'}`,
+  );
+  push(
+    `**Most significant failure pattern:** ${synthesis.exec.mostSignificantFailure || synthesis.failurePatterns[0] || '—'}`,
+  );
+  if (synthesis.exec.majorRisk) push(`**Major risk:** ${synthesis.exec.majorRisk}`);
+  if (synthesis.exec.readiness) push(`**Readiness for broader testing:** ${synthesis.exec.readiness}`);
+  blank();
+
+  // --- Methodology note ---
+  push('## Methodology & scoring');
+  blank();
+  push(
+    'Cases were matched to this run\'s own test items by ID, not row position. Each response was scored on a weighted 0–100 scale: Accuracy 40%, Completeness 30%, Relevance 20%, Clarity 10%. Grades: A 90–100, B 80–89, C 70–79, D 60–69, F below 60. Result: Pass ≥ 80, Partial Pass 60–79, Fail below 60. The golden dataset (ideal response, expected concepts/sources) is the source of truth; responses were judged on substantive correctness, not wording. Cases that could not be judged are marked "Unable to Evaluate" and excluded from every average, grade, count, and rate.',
+  );
+  blank();
+
+  // --- Results at a glance ---
+  push('## Results at a glance');
+  blank();
+  push('| ID | Question | Tier | Score | Grade | Result |');
+  push('|---|---|---|---|---|---|');
+  for (const c of orderedCases) {
+    if (c.score.unableToEvaluate) {
+      push(`| ${mdCell(c.id)} | ${mdCell(c.question)} | ${mdCell(c.tier)} | — | — | Unable to Evaluate |`);
+      continue;
+    }
+    const evaluated = byId.get(c.id) as EvaluatedCase | undefined;
+    if (!evaluated) continue;
+    push(
+      `| ${mdCell(c.id)} | ${mdCell(c.question)} | ${mdCell(c.tier)} | ${evaluated.overall} | ${evaluated.grade} | ${evaluated.status} |`,
+    );
+  }
+  blank();
+
+  // --- Detailed case-by-case ---
+  push('## Detailed results — case by case');
+  blank();
+  for (const c of orderedCases) {
+    push(`### ${c.id} — ${c.question}`);
+    blank();
+    push(`**Tier / Priority:** ${c.tier}${c.priorityRaw != null ? ` (${c.priorityRaw})` : ''}`);
+    push(`**Category:** ${c.category}`);
+    blank();
+
+    if (c.score.unableToEvaluate) {
+      push('**Status:** Unable to Evaluate _(excluded from all scores and rates)_');
+      push(`**Reason:** ${c.score.uteReason ?? 'unspecified'}`);
+      blank();
+      push(`**Expected answer / behavior:**\n\n${formatExpected(c)}`);
+      blank();
+      push(`**Agent's actual response:**\n\n${mdBlock(c.actual)}`);
+      blank();
+      continue;
+    }
+
+    const evaluated = byId.get(c.id) as EvaluatedCase | undefined;
+    if (evaluated) {
+      push('| Accuracy | Completeness | Relevance | Clarity | Overall | Grade | Result |');
+      push('|---|---|---|---|---|---|---|');
+      push(
+        `| ${evaluated.accuracy} | ${evaluated.completeness} | ${evaluated.relevance} | ${evaluated.clarity} | ${evaluated.overall}/100 | ${evaluated.grade} | ${evaluated.status} |`,
+      );
+      blank();
+    }
+
+    if (c.latencySeconds != null && m.latency) {
+      const band = latBandLabel(c.latencySeconds, m.latency.thresholds);
+      push(`**Response time:** ${c.latencySeconds} s (${band}) — _reported separately; not part of the grade_`);
+      blank();
+    }
+
+    if (c.harness) {
+      const bits = [
+        c.harness.passed != null ? `harness result: ${c.harness.passed ? 'passed' : 'failed'}` : null,
+        c.harness.similarity != null ? `similarity ${c.harness.similarity.toFixed(2)}` : null,
+      ].filter(Boolean);
+      if (bits.length > 0) {
+        push(`_Harness signal (aside, not part of this grade): ${bits.join(', ')}._`);
+        blank();
+      }
+    }
+
+    push(`**Expected answer / behavior:**\n\n${formatExpected(c)}`);
+    blank();
+    push(`**Agent's actual response:**\n\n${mdBlock(c.actual)}`);
+    blank();
+    push(`**Explanation of the grade:** ${mdBlock(c.score.explanation)}`);
+    push(`**Important information missed:** ${mdBlock(c.score.missed)}`);
+    push(`**Incorrect, misleading, or unsupported information:** ${mdBlock(c.score.incorrect)}`);
+    push(`**Recommended improvement:** ${mdBlock(c.score.improvement)}`);
+    blank();
+  }
+
+  // --- Aggregate findings ---
+  push('## Aggregate findings');
+  blank();
+  push(
+    `- Total questions evaluated: ${m.evaluated}${m.uteCount ? ` (plus ${m.uteCount} unable to evaluate; ${m.totalCases} total)` : ''}`,
+  );
+  push(`- Average score: ${m.overall.avg ?? '—'} / 100`);
+  push(`- Overall letter grade: ${m.overall.grade}`);
+  push(`- Pass: ${m.overall.pass} of ${m.evaluated} (${m.overall.passPct}%)`);
+  push(`- Partial Pass: ${m.overall.partial} of ${m.evaluated} (${m.overall.partialPct}%)`);
+  push(`- Fail: ${m.overall.fail} of ${m.evaluated} (${m.overall.failPct}%)`);
+  push(`- Highest scoring: ${m.highest.map((h) => `${h.id} (${h.overall})`).join(', ') || '—'}`);
+  push(`- Lowest scoring: ${m.lowest.map((h) => `${h.id} (${h.overall})`).join(', ') || '—'}`);
+  blank();
+
+  push('### Most common failure patterns');
+  blank();
+  push(bulletList(synthesis.failurePatterns));
+  blank();
+  push('### Key strengths');
+  blank();
+  push(bulletList(synthesis.strengths));
+  blank();
+  push('### Recurring weaknesses');
+  blank();
+  push(bulletList(synthesis.weaknesses));
+  blank();
+
+  return lines.join('\n');
+}
