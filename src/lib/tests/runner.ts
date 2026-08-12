@@ -336,6 +336,8 @@ export async function runSingleTestItem(
       modelTag: options?.modelTag,
       useValidator: false,
       agentMode: 'orchestrator',
+      // B0-450: eval-harness conversations are never attributed to whoever kicked off the run.
+      owner: { kind: 'system' },
       onAssistantDelta: () => {
         if (firstDeltaAt === null) firstDeltaAt = Date.now();
       },
