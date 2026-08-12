@@ -23,10 +23,14 @@ const EXPECTED_BEHAVIOR_PRESETS = [
 /** Values match the `should_cite` CSV cell / `parseShouldCiteFromForm` in `~/lib/tests/csv`. */
 const SHOULD_CITE_PRESETS = ['yes', 'no'] as const;
 
+/** Common origins for a test prompt — distinct from `sourceStyle` (how it was authored). */
+const SOURCE_PRESETS = ['bex', 'email', 'contact-us'] as const;
+
 export type TestItemSuggestionLists = {
   resultTypes: string[];
   canonicalProducts: string[];
   reasonCodes: string[];
+  sources: string[];
   productMentions: string[];
   questionCategories: string[];
   sourceStyles: string[];
@@ -39,6 +43,7 @@ export type TestItemFieldsInitialValues = {
   expectedResultType?: string;
   expectedCanonicalProduct?: string;
   expectedReasonCode?: string;
+  source?: string;
   priority?: string;
   idealResponse?: string;
   expectedConcepts?: string;
@@ -152,6 +157,28 @@ export function TestItemFields({
         placeholder="Choose from dataset or type a reason code"
         suggestionsFromDataset={suggestionLists.reasonCodes}
       />
+
+      <FilterableSuggestionField
+        id={`${idPrefix}-source`}
+        initialValue={initialValues?.source}
+        label={
+          <>
+            Source{' '}
+            <span className="font-normal text-muted-foreground">
+              (optional)
+            </span>
+          </>
+        }
+        name="source"
+        placeholder="Choose or type where this prompt came from"
+        presetSuggestions={SOURCE_PRESETS}
+        suggestionsFromDataset={suggestionLists.sources}
+      />
+      <p className="text-xs text-muted-foreground">
+        Where the prompt originated — e.g. email, bex, contact-us. Different
+        from Source style below, which describes how the question was
+        authored.
+      </p>
 
       <div className="grid gap-2">
         <Label htmlFor={`${idPrefix}-priority`}>

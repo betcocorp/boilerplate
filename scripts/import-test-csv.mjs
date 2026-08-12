@@ -70,7 +70,7 @@ const records = parse(csvContent, {
 const PRIMARY_COLS = new Set([
   'question', 'prompt', 'test_prompt',
   'should_answer', 'expected_result_type', 'canonical_product', 'reason_code',
-  'priority', 'ideal_response',
+  'source', 'priority', 'ideal_response',
   'expected_concepts', 'minimum_concepts', 'expected_sources', 'should_cite',
 ]);
 const PAYLOAD_COLS = new Set(['product_mention', 'question_category', 'source_style']);
@@ -100,6 +100,7 @@ const rows = records
       expected_result_type: asTrimmedString(record.expected_result_type) || null,
       expected_canonical_product: asTrimmedString(record.canonical_product) || null,
       expected_reason_code: asTrimmedString(record.reason_code) || null,
+      source: asTrimmedString(record.source) || null,
       priority: parsePriority(record.priority),
       ideal_response: asTrimmedString(record.ideal_response) || null,
       // Stored verbatim — never split or reformatted (oz/gal, mL/L, ppm, contact times).

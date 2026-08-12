@@ -95,7 +95,11 @@ const TEST_ITEMS_PAGE_SIZE = 1000;
 
 export type TestItemSuggestionRow = Pick<
   TestItemRecord,
-  'expected_result_type' | 'expected_canonical_product' | 'expected_reason_code' | 'input_payload'
+  | 'expected_result_type'
+  | 'expected_canonical_product'
+  | 'expected_reason_code'
+  | 'source'
+  | 'input_payload'
 >;
 
 /** Fetches every row for the test (Supabase caps single queries at `max_rows`, often 1000). */
@@ -122,7 +126,7 @@ export async function getTestItemSuggestionRows(testId: string): Promise<TestIte
     supabase
       .from('test_items')
       .select(
-        'expected_result_type, expected_canonical_product, expected_reason_code, input_payload',
+        'expected_result_type, expected_canonical_product, expected_reason_code, source, input_payload',
       )
       .eq('test_id', testId)
       .order('row_index', { ascending: true })
@@ -140,7 +144,7 @@ export async function getGlobalTestItemSuggestionRows(): Promise<TestItemSuggest
     supabase
       .from('test_items')
       .select(
-        'expected_result_type, expected_canonical_product, expected_reason_code, input_payload',
+        'expected_result_type, expected_canonical_product, expected_reason_code, source, input_payload',
       )
       .order('id', { ascending: true })
       .range(from, to)

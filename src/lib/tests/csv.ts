@@ -83,6 +83,7 @@ const TYPED_CSV_COLUMNS = new Set([
   'expected_result_type',
   'canonical_product',
   'reason_code',
+  'source',
   'priority',
   'ideal_response',
   'expected_concepts',
@@ -125,6 +126,7 @@ export function parseTestCsvContent(content: string): ParsedCsvRow[] {
       const expectedCanonicalProduct =
         asTrimmedString(record.canonical_product) || null;
       const expectedReasonCode = asTrimmedString(record.reason_code) || null;
+      const source = asTrimmedString(record.source) || null;
       const priority = parsePriority(asTrimmedString(record.priority));
       const idealResponse = asTrimmedString(record.ideal_response) || null;
       // Concept/source expectations are stored verbatim (never split or normalized) so
@@ -164,6 +166,7 @@ export function parseTestCsvContent(content: string): ParsedCsvRow[] {
         expectedResultType,
         expectedCanonicalProduct,
         expectedReasonCode,
+        source,
         priority,
         idealResponse,
         expectedConcepts,

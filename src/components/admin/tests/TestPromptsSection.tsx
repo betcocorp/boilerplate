@@ -36,6 +36,7 @@ export type TestPromptRow = {
   expected_result_type: string | null;
   expected_canonical_product: string | null;
   expected_reason_code: string | null;
+  source: string | null;
   priority: number | null;
   ideal_response: string | null;
   expected_concepts: string | null;
@@ -263,6 +264,7 @@ export function TestPromptsSection({
       'expected_result_type',
       'canonical_product',
       'reason_code',
+      'source',
       'priority',
       'ideal_response',
       'product_mention',
@@ -283,6 +285,7 @@ export function TestPromptsSection({
           item.expected_result_type ?? '',
           item.expected_canonical_product ?? '',
           item.expected_reason_code ?? '',
+          item.source ?? '',
           item.priority === null ? '' : String(item.priority),
           item.ideal_response ?? '',
           payloadString(item.input_payload, 'product_mention'),
@@ -555,6 +558,7 @@ export function TestPromptsSection({
                           returnPath={returnPath}
                           rowIndex={item.row_index}
                           shouldCite={item.should_cite}
+                          source={item.source}
                           suggestionLists={suggestionLists}
                           testId={testId}
                           testItemId={item.id}

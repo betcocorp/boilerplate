@@ -38,6 +38,7 @@ export type ParsedCsvRow = {
   expectedResultType: string | null;
   expectedCanonicalProduct: string | null;
   expectedReasonCode: string | null;
+  source: string | null;
   priority: number | null;
   idealResponse: string | null;
   expectedConcepts: string | null;

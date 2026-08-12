@@ -832,6 +832,7 @@ export type Database = {
           prompt_category: string | null
           row_index: number
           should_cite: boolean | null
+          source: string | null
           test_id: string
         }
         Insert: {
@@ -852,6 +853,7 @@ export type Database = {
           prompt_category?: string | null
           row_index: number
           should_cite?: boolean | null
+          source?: string | null
           test_id: string
         }
         Update: {
@@ -872,6 +874,7 @@ export type Database = {
           prompt_category?: string | null
           row_index?: number
           should_cite?: boolean | null
+          source?: string | null
           test_id?: string
         }
         Relationships: [

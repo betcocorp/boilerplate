@@ -8,6 +8,7 @@ export type TestItemSuggestionSource = Pick<
   | 'expected_result_type'
   | 'expected_canonical_product'
   | 'expected_reason_code'
+  | 'source'
   | 'input_payload'
 >;
 
@@ -52,6 +53,7 @@ export function buildSuggestionListsFromTestItems(rows: TestItemSuggestionSource
   const resultTypes: string[] = [];
   const canonicalProducts: string[] = [];
   const reasonCodes: string[] = [];
+  const sources: string[] = [];
   const productMentions: string[] = [];
   const questionCategories: string[] = [];
   const sourceStyles: string[] = [];
@@ -60,6 +62,7 @@ export function buildSuggestionListsFromTestItems(rows: TestItemSuggestionSource
     resultTypes.push(row.expected_result_type ?? '');
     canonicalProducts.push(row.expected_canonical_product ?? '');
     reasonCodes.push(row.expected_reason_code ?? '');
+    sources.push(row.source ?? '');
 
     const pm = inputPayloadFieldFirst(row.input_payload, [
       'product_mention',
@@ -85,6 +88,7 @@ export function buildSuggestionListsFromTestItems(rows: TestItemSuggestionSource
     resultTypes: distinctNonEmptyStrings(resultTypes),
     canonicalProducts: distinctNonEmptyStrings(canonicalProducts),
     reasonCodes: distinctNonEmptyStrings(reasonCodes),
+    sources: distinctNonEmptyStrings(sources),
     productMentions: distinctNonEmptyStrings(productMentions),
     questionCategories: distinctNonEmptyStrings(questionCategories),
     sourceStyles: distinctNonEmptyStrings(sourceStyles),

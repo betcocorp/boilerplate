@@ -31,6 +31,7 @@ type EditTestItemDialogProps = {
   expectedResultType: string | null;
   expectedCanonicalProduct: string | null;
   expectedReasonCode: string | null;
+  source: string | null;
   priority: number | null;
   idealResponse: string | null;
   expectedConcepts: string | null;
@@ -88,6 +89,7 @@ export function EditTestItemDialog({
   expectedResultType,
   expectedCanonicalProduct,
   expectedReasonCode,
+  source,
   priority,
   idealResponse,
   expectedConcepts,
@@ -137,6 +139,7 @@ export function EditTestItemDialog({
                 expectedResultType: expectedResultType ?? '',
                 expectedCanonicalProduct: expectedCanonicalProduct ?? '',
                 expectedReasonCode: expectedReasonCode ?? '',
+                source: source ?? '',
                 priority: priority === null ? '' : String(priority),
                 idealResponse: idealResponse ?? '',
                 expectedConcepts: expectedConcepts ?? '',

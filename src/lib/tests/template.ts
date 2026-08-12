@@ -51,6 +51,12 @@ export const TEST_TEMPLATE_COLUMNS: TestTemplateColumn[] = [
     help: 'Why-tag describing what the question probes (e.g. dilution, sds_safety). Labelling/reference only.',
   },
   {
+    name: 'source',
+    required: false,
+    example: 'Where this prompt came from — e.g. email, bex, contact-us',
+    help: 'Free-text origin of the prompt (e.g. email, bex, contact-us). Labelling/reference only — not used by the pass/fail grader.',
+  },
+  {
     name: 'priority',
     required: false,
     example: 'Optional integer rank, e.g. 1 (lower = more important)',

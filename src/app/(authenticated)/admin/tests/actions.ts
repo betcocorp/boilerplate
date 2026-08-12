@@ -187,6 +187,7 @@ export async function uploadTestCsvAction(formData: FormData) {
     expected_result_type: row.expectedResultType,
     expected_canonical_product: row.expectedCanonicalProduct,
     expected_reason_code: row.expectedReasonCode,
+    source: row.source,
     priority: row.priority,
     ideal_response: row.idealResponse,
     expected_concepts: row.expectedConcepts,
@@ -271,6 +272,10 @@ export async function addTestItemAction(formData: FormData) {
       ? expectedReasonRaw.trim()
       : null;
 
+  const sourceRaw = formData.get('source');
+  const source =
+    typeof sourceRaw === 'string' && sourceRaw.trim() ? sourceRaw.trim() : null;
+
   const priorityRaw = formData.get('priority');
   const priority =
     typeof priorityRaw === 'string' ? parsePriority(priorityRaw) : null;
@@ -316,6 +321,7 @@ export async function addTestItemAction(formData: FormData) {
       expected_result_type,
       expected_canonical_product,
       expected_reason_code,
+      source,
       priority,
       ideal_response,
       ...conceptExpectations,
@@ -399,6 +405,10 @@ export async function updateTestItemAction(formData: FormData) {
       ? expectedReasonRaw.trim()
       : null;
 
+  const sourceRaw = formData.get('source');
+  const source =
+    typeof sourceRaw === 'string' && sourceRaw.trim() ? sourceRaw.trim() : null;
+
   // Cleared inputs resolve to null so an edit can clear the stored values.
   const priorityRaw = formData.get('priority');
   const priority =
@@ -441,6 +451,7 @@ export async function updateTestItemAction(formData: FormData) {
     expected_result_type,
     expected_canonical_product,
     expected_reason_code,
+    source,
     priority,
     ideal_response,
     ...conceptExpectations,
@@ -695,6 +706,7 @@ export async function createTestFromPromptsAction(formData: FormData) {
     expected_result_type: item.expected_result_type,
     expected_canonical_product: item.expected_canonical_product,
     expected_reason_code: item.expected_reason_code,
+    source: item.source,
     priority: item.priority,
     ideal_response: item.ideal_response,
     expected_concepts: item.expected_concepts,
