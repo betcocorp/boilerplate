@@ -114,20 +114,29 @@ export type Database = {
           body_markdown: string | null
           body_text: string
           chemistry_class: string | null
+          cites_data_from_document_id: string | null
           contact_time_seconds: number | null
           created_at: string
           dilution_oz_per_gal: number | null
           document_key: string
           document_kind: string
           entity_id: string | null
+          epa_distributor_number: string | null
           epa_registrant: string | null
+          epa_registrant_role: string | null
           epa_registration: string | null
           id: string
+          is_current: boolean
           language_code: string
+          lifecycle_status: string
           metadata: Json
           product_application: string | null
+          profile_summary: string | null
+          project_number: string | null
+          source_lab: string | null
           source_record_id: string
           summary: string | null
+          superseded_by_document_id: string | null
           title: string
           token_count: number | null
           updated_at: string
@@ -136,20 +145,29 @@ export type Database = {
           body_markdown?: string | null
           body_text: string
           chemistry_class?: string | null
+          cites_data_from_document_id?: string | null
           contact_time_seconds?: number | null
           created_at?: string
           dilution_oz_per_gal?: number | null
           document_key: string
           document_kind: string
           entity_id?: string | null
+          epa_distributor_number?: string | null
           epa_registrant?: string | null
+          epa_registrant_role?: string | null
           epa_registration?: string | null
           id?: string
+          is_current?: boolean
           language_code?: string
+          lifecycle_status?: string
           metadata?: Json
           product_application?: string | null
+          profile_summary?: string | null
+          project_number?: string | null
+          source_lab?: string | null
           source_record_id: string
           summary?: string | null
+          superseded_by_document_id?: string | null
           title: string
           token_count?: number | null
           updated_at?: string
@@ -158,25 +176,48 @@ export type Database = {
           body_markdown?: string | null
           body_text?: string
           chemistry_class?: string | null
+          cites_data_from_document_id?: string | null
           contact_time_seconds?: number | null
           created_at?: string
           dilution_oz_per_gal?: number | null
           document_key?: string
           document_kind?: string
           entity_id?: string | null
+          epa_distributor_number?: string | null
           epa_registrant?: string | null
+          epa_registrant_role?: string | null
           epa_registration?: string | null
           id?: string
+          is_current?: boolean
           language_code?: string
+          lifecycle_status?: string
           metadata?: Json
           product_application?: string | null
+          profile_summary?: string | null
+          project_number?: string | null
+          source_lab?: string | null
           source_record_id?: string
           summary?: string | null
+          superseded_by_document_id?: string | null
           title?: string
           token_count?: number | null
           updated_at?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "document_cites_data_from_document_id_fkey"
+            columns: ["cites_data_from_document_id"]
+            isOneToOne: false
+            referencedRelation: "document"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "document_cites_data_from_document_id_fkey"
+            columns: ["cites_data_from_document_id"]
+            isOneToOne: false
+            referencedRelation: "suspect_sds_documents"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "document_entity_id_fkey"
             columns: ["entity_id"]
@@ -191,6 +232,20 @@ export type Database = {
             referencedRelation: "source_record"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "document_superseded_by_document_id_fkey"
+            columns: ["superseded_by_document_id"]
+            isOneToOne: false
+            referencedRelation: "document"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "document_superseded_by_document_id_fkey"
+            columns: ["superseded_by_document_id"]
+            isOneToOne: false
+            referencedRelation: "suspect_sds_documents"
+            referencedColumns: ["id"]
+          },
         ]
       }
       document_chunk: {
@@ -200,9 +255,7 @@ export type Database = {
           chunk_text: string
           created_at: string
           document_id: string
-          embedding: string | null
           embedding_large: unknown
-          embedding_model: string | null
           embedding_model_large: string | null
           heading: string | null
           id: string
@@ -219,9 +272,7 @@ export type Database = {
           chunk_text: string
           created_at?: string
           document_id: string
-          embedding?: string | null
           embedding_large?: unknown
-          embedding_model?: string | null
           embedding_model_large?: string | null
           heading?: string | null
           id?: string
@@ -238,9 +289,7 @@ export type Database = {
           chunk_text?: string
           created_at?: string
           document_id?: string
-          embedding?: string | null
           embedding_large?: unknown
-          embedding_model?: string | null
           embedding_model_large?: string | null
           heading?: string | null
           id?: string
@@ -267,6 +316,66 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      efficacy_formula_alias: {
+        Row: {
+          base_formula_code: string
+          created_at: string
+          mca_formula_code: string
+          notes: string | null
+        }
+        Insert: {
+          base_formula_code: string
+          created_at?: string
+          mca_formula_code: string
+          notes?: string | null
+        }
+        Update: {
+          base_formula_code?: string
+          created_at?: string
+          mca_formula_code?: string
+          notes?: string | null
+        }
+        Relationships: []
+      }
+      efficacy_formula_product: {
+        Row: {
+          created_at: string
+          effective_at: string
+          formula_code: string
+          id: string
+          is_active: boolean
+          notes: string | null
+          product_line_key: string | null
+          registrant_role: string
+          sku: string | null
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          effective_at?: string
+          formula_code: string
+          id?: string
+          is_active?: boolean
+          notes?: string | null
+          product_line_key?: string | null
+          registrant_role?: string
+          sku?: string | null
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          effective_at?: string
+          formula_code?: string
+          id?: string
+          is_active?: boolean
+          notes?: string | null
+          product_line_key?: string | null
+          registrant_role?: string
+          sku?: string | null
+          updated_at?: string
+        }
+        Relationships: []
       }
       entity: {
         Row: {
@@ -346,6 +455,47 @@ export type Database = {
           },
         ]
       }
+      product_alias: {
+        Row: {
+          alias: string
+          alias_norm: string
+          confidence: number
+          created_at: string
+          entity_id: string | null
+          id: string
+          product_line_key: string
+          source: string
+        }
+        Insert: {
+          alias: string
+          alias_norm: string
+          confidence?: number
+          created_at?: string
+          entity_id?: string | null
+          id?: string
+          product_line_key: string
+          source?: string
+        }
+        Update: {
+          alias?: string
+          alias_norm?: string
+          confidence?: number
+          created_at?: string
+          entity_id?: string | null
+          id?: string
+          product_line_key?: string
+          source?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_alias_entity_id_fkey"
+            columns: ["entity_id"]
+            isOneToOne: false
+            referencedRelation: "entity"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       product_efficacy: {
         Row: {
           claim_type: string | null
@@ -418,6 +568,8 @@ export type Database = {
           epa_registration: string | null
           id: string
           product_application: string | null
+          product_application_confidence: number | null
+          product_application_source: string | null
           product_key: string | null
           source_record_id: string | null
           updated_at: string
@@ -433,6 +585,8 @@ export type Database = {
           epa_registration?: string | null
           id?: string
           product_application?: string | null
+          product_application_confidence?: number | null
+          product_application_source?: string | null
           product_key?: string | null
           source_record_id?: string | null
           updated_at?: string
@@ -448,6 +602,8 @@ export type Database = {
           epa_registration?: string | null
           id?: string
           product_application?: string | null
+          product_application_confidence?: number | null
+          product_application_source?: string | null
           product_key?: string | null
           source_record_id?: string | null
           updated_at?: string
@@ -596,6 +752,38 @@ export type Database = {
           source_type: string | null
           title: string | null
         }
+        Insert: {
+          body_text?: never
+          document_key?: never
+          entity_key?: string | null
+          entity_type?: never
+          language_code?: never
+          metadata?: never
+          product_key?: never
+          product_line_key?: string | null
+          sku?: never
+          source_pk?: string | null
+          source_schema?: never
+          source_table?: never
+          source_type?: never
+          title?: never
+        }
+        Update: {
+          body_text?: never
+          document_key?: never
+          entity_key?: string | null
+          entity_type?: never
+          language_code?: never
+          metadata?: never
+          product_key?: never
+          product_line_key?: string | null
+          sku?: never
+          source_pk?: string | null
+          source_schema?: never
+          source_table?: never
+          source_type?: never
+          title?: never
+        }
         Relationships: []
       }
       legacy_product_profile_source: {
@@ -613,6 +801,36 @@ export type Database = {
           source_table: string | null
           source_type: string | null
           title: string | null
+        }
+        Insert: {
+          body_text?: never
+          document_key?: never
+          entity_key?: string | null
+          entity_type?: never
+          language_code?: never
+          metadata?: never
+          product_line_key?: never
+          sku?: string | null
+          source_pk?: string | null
+          source_schema?: never
+          source_table?: never
+          source_type?: never
+          title?: never
+        }
+        Update: {
+          body_text?: never
+          document_key?: never
+          entity_key?: string | null
+          entity_type?: never
+          language_code?: never
+          metadata?: never
+          product_line_key?: never
+          sku?: string | null
+          source_pk?: string | null
+          source_schema?: never
+          source_table?: never
+          source_type?: never
+          title?: never
         }
         Relationships: []
       }
@@ -640,7 +858,7 @@ export type Database = {
           p_body_text: string
           p_max_chars?: number
           p_overlap_chars?: number
-          p_title?: string
+          p_title: string
         }
         Returns: {
           chunk_index: number
@@ -650,40 +868,37 @@ export type Database = {
           token_count: number
         }[]
       }
-      chunk_sds_document_text:
-        | {
-            Args: {
-              p_body_text: string
-              p_max_chars?: number
-              p_overlap_chars?: number
-            }
-            Returns: {
-              chunk_index: number
-              chunk_text: string
-              heading: string
-              section_path: string[]
-              token_count: number
-            }[]
-          }
-        | {
-            Args: {
-              p_body_text: string
-              p_max_chars?: number
-              p_overlap_chars?: number
-              p_title?: string
-            }
-            Returns: {
-              chunk_index: number
-              chunk_text: string
-              heading: string
-              section_path: string[]
-              token_count: number
-            }[]
-          }
+      chunk_efficacy_document_text: {
+        Args: {
+          p_body_markdown: string
+          p_max_chars?: number
+          p_overlap_chars?: number
+          p_title?: string
+        }
+        Returns: Json
+      }
+      chunk_sds_document_text: {
+        Args: {
+          p_body_text: string
+          p_max_chars?: number
+          p_overlap_chars?: number
+          p_title?: string
+        }
+        Returns: Json
+      }
+      compute_chunk_pairwise_similarity: {
+        Args: { p_chunk_ids: string[] }
+        Returns: {
+          chunk_id_a: string
+          chunk_id_b: string
+          cosine_similarity: number
+        }[]
+      }
       enrich_sds_section_headings_batch: {
         Args: { p_batch_size?: number }
         Returns: Json
       }
+      estimate_chunk_tokens: { Args: { p_text: string }; Returns: number }
       find_similar_search_embedding: {
         Args: {
           p_query: string
@@ -708,8 +923,47 @@ export type Database = {
           timing_sample_count: number
         }[]
       }
+      get_current_efficacy_for_product: {
+        Args: { p_product_line_key: string }
+        Returns: {
+          body_markdown: string | null
+          body_text: string
+          chemistry_class: string | null
+          cites_data_from_document_id: string | null
+          contact_time_seconds: number | null
+          created_at: string
+          dilution_oz_per_gal: number | null
+          document_key: string
+          document_kind: string
+          entity_id: string | null
+          epa_distributor_number: string | null
+          epa_registrant: string | null
+          epa_registrant_role: string | null
+          epa_registration: string | null
+          id: string
+          is_current: boolean
+          language_code: string
+          lifecycle_status: string
+          metadata: Json
+          product_application: string | null
+          profile_summary: string | null
+          source_record_id: string
+          summary: string | null
+          superseded_by_document_id: string | null
+          title: string
+          token_count: number | null
+          updated_at: string
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "document"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
       match_corpus_chunks: {
         Args: {
+          filter_product_key?: string
           filter_product_line_key?: string
           filter_scope?: string
           filter_section_type?: string
@@ -739,6 +993,7 @@ export type Database = {
       }
       match_corpus_chunks_hybrid: {
         Args: {
+          filter_product_key?: string
           filter_product_line_key?: string
           filter_scope?: string
           filter_section_type?: string
@@ -767,124 +1022,11 @@ export type Database = {
           token_count: number
         }[]
       }
-      match_product_chunks:
-        | {
-            Args: {
-              filter_product_key?: string
-              filter_product_line_key?: string
-              match_count?: number
-              query_embedding: unknown
-            }
-            Returns: {
-              chunk_id: string
-              chunk_index: number
-              chunk_key: string
-              chunk_text: string
-              document_id: string
-              document_key: string
-              document_title: string
-              entity_id: string
-              heading: string
-              product_key: string
-              product_line_key: string
-              section_path: string[]
-              similarity: number
-              sku: string
-              source_pk: string
-              token_count: number
-            }[]
-          }
-        | {
-            Args: {
-              filter_product_key?: string
-              filter_product_line_key?: string
-              filter_section_type?: string
-              match_count?: number
-              query_embedding: unknown
-            }
-            Returns: {
-              chunk_id: string
-              chunk_index: number
-              chunk_key: string
-              chunk_text: string
-              document_id: string
-              document_key: string
-              document_kind: string
-              document_title: string
-              entity_id: string
-              heading: string
-              product_key: string
-              product_line_key: string
-              section_path: string[]
-              section_type: string
-              similarity: number
-              sku: string
-              source_pk: string
-              token_count: number
-            }[]
-          }
-      match_product_chunks_hybrid:
-        | {
-            Args: {
-              filter_product_key?: string
-              filter_product_line_key?: string
-              match_count?: number
-              query_embedding: unknown
-              query_text: string
-            }
-            Returns: {
-              chunk_id: string
-              chunk_index: number
-              chunk_key: string
-              chunk_text: string
-              document_id: string
-              document_key: string
-              document_title: string
-              entity_id: string
-              heading: string
-              product_key: string
-              product_line_key: string
-              section_path: string[]
-              similarity: number
-              sku: string
-              source_pk: string
-              token_count: number
-            }[]
-          }
-        | {
-            Args: {
-              filter_product_key?: string
-              filter_product_line_key?: string
-              filter_section_type?: string
-              match_count?: number
-              query_embedding: unknown
-              query_text: string
-            }
-            Returns: {
-              chunk_id: string
-              chunk_index: number
-              chunk_key: string
-              chunk_text: string
-              document_id: string
-              document_key: string
-              document_kind: string
-              document_title: string
-              entity_id: string
-              heading: string
-              product_key: string
-              product_line_key: string
-              section_path: string[]
-              section_type: string
-              similarity: number
-              sku: string
-              source_pk: string
-              token_count: number
-            }[]
-          }
-      match_product_chunks_v2: {
+      match_product_chunks: {
         Args: {
           filter_product_key?: string
           filter_product_line_key?: string
+          filter_section_type?: string
           match_count?: number
           query_embedding: unknown
         }
@@ -895,12 +1037,44 @@ export type Database = {
           chunk_text: string
           document_id: string
           document_key: string
+          document_kind: string
           document_title: string
           entity_id: string
           heading: string
           product_key: string
           product_line_key: string
           section_path: string[]
+          section_type: string
+          similarity: number
+          sku: string
+          source_pk: string
+          token_count: number
+        }[]
+      }
+      match_product_chunks_hybrid: {
+        Args: {
+          filter_product_key?: string
+          filter_product_line_key?: string
+          filter_section_type?: string
+          match_count?: number
+          query_embedding: unknown
+          query_text: string
+        }
+        Returns: {
+          chunk_id: string
+          chunk_index: number
+          chunk_key: string
+          chunk_text: string
+          document_id: string
+          document_key: string
+          document_kind: string
+          document_title: string
+          entity_id: string
+          heading: string
+          product_key: string
+          product_line_key: string
+          section_path: string[]
+          section_type: string
           similarity: number
           sku: string
           source_pk: string
@@ -908,6 +1082,14 @@ export type Database = {
         }[]
       }
       run_bulk_sds_heading_backfill: { Args: never; Returns: Json }
+      sync_efficacy_chunks: {
+        Args: {
+          p_language_code?: string
+          p_max_chars?: number
+          p_overlap_chars?: number
+        }
+        Returns: Json
+      }
       sync_legacy_product_profile_chunks: {
         Args: { p_language_code?: string }
         Returns: Json

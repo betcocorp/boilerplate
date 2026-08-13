@@ -2,10 +2,11 @@ import { getServerSession } from 'next-auth';
 import { NextResponse } from 'next/server';
 
 import { authOptions } from '~/lib/auth';
-import type {
-  RagDocumentChunkApiChunk,
-  RagDocumentChunkApiDocument,
-  RagDocumentChunkApiResponse,
+import {
+  isRagRowId,
+  type RagDocumentChunkApiChunk,
+  type RagDocumentChunkApiDocument,
+  type RagDocumentChunkApiResponse,
 } from '~/lib/rag/document-chunk-types';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
@@ -31,6 +32,16 @@ export async function GET(request: Request) {
       { error: 'Missing required query parameter: documentId' },
       { status: 400 },
     );
+  }
+
+  // Synthetic sources (e.g. the structured "Verified Product Facts" source) are not
+  // rag.document rows. Guard the uuid columns so a non-uuid id returns a clean 404
+  // instead of a raw Postgres "invalid input syntax for type uuid" error.
+  if (!isRagRowId(documentId)) {
+    return NextResponse.json({ error: 'Document not found' }, { status: 404 });
+  }
+  if (chunkId && !isRagRowId(chunkId)) {
+    return NextResponse.json({ error: 'Chunk not found' }, { status: 404 });
   }
 
   const supabase = getSupabaseServiceRoleClient();

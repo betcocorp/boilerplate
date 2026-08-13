@@ -45,6 +45,28 @@ function PopoverAnchor({
   return <PopoverPrimitive.Anchor data-slot="popover-anchor" {...props} />
 }
 
+/**
+ * B0-359 — spread onto `PopoverContent` when the popover renders inside a modal `Dialog`
+ * and its own content needs to scroll (e.g. a long `CommandList`).
+ *
+ * Radix `DialogOverlay` wraps itself in `RemoveScroll` with `DialogContent` as its only
+ * shard. `react-remove-scroll` then listens for `wheel`/`touchmove` on `document` in the
+ * BUBBLE phase and `preventDefault()`s any event whose target is in neither the overlay
+ * nor a shard. `PopoverContent` is portaled to `document.body`, so it is in neither —
+ * every wheel over the popover is cancelled and the content cannot scroll at all.
+ *
+ * Because that listener is bubble-phase, stopping propagation here means it never runs.
+ * Scroll chaining to the page behind must be handled by the scroll container itself
+ * (`overscroll-contain`), since `RemoveScroll` no longer intercepts the event.
+ *
+ * Opt-in rather than baked into `PopoverContent`: popovers that don't scroll their own
+ * content should keep the default behaviour.
+ */
+const popoverScrollInDialogProps = {
+  onTouchMove: (event: React.TouchEvent) => event.stopPropagation(),
+  onWheel: (event: React.WheelEvent) => event.stopPropagation(),
+} as const
+
 function PopoverHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
@@ -86,4 +108,5 @@ export {
   PopoverHeader,
   PopoverTitle,
   PopoverTrigger,
+  popoverScrollInDialogProps,
 }

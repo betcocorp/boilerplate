@@ -1,7 +1,6 @@
 import Link from 'next/link';
 import { connection } from 'next/server';
 
-import { SdsSyncControls } from '~/components/admin/SdsSyncControls';
 import { getSdsSyncStatus } from '~/lib/rag/sds-sync-actions';
 
 import { SdsControls } from './SdsControls';
@@ -54,9 +53,7 @@ export default async function AdminSdsPage() {
           </div>
         </section>
 
-        <SdsSyncControls initialPending={syncStatus.totalSdsDocs} languageCode="EN" />
-
-        <SdsControls initialStatus={status} />
+        <SdsControls initialStatus={status} initialSyncStatus={syncStatus} />
       </main>
     </div>
   );

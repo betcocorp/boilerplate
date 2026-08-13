@@ -23,6 +23,20 @@ function extractApiError(data: unknown, fallback: string): string {
   return fallback;
 }
 
+// B0-451 — the admin sidebar's owner attribution. `userId` on the `{name, email}` case is a
+// deliberate addition beyond the ticket's literal `{name, email}` shape: it is the value the
+// "filter by user" control sends back as `?userFilter=`, and there is no other field to use.
+const conversationOwnerSchema = z
+  .union([
+    z.object({
+      name: z.string(),
+      email: z.string().nullable(),
+      userId: z.string(),
+    }),
+    z.literal('admin'),
+  ])
+  .nullable();
+
 const conversationListSchema = z.object({
   ok: z.literal(true),
   conversations: z.array(
@@ -32,6 +46,9 @@ const conversationListSchema = z.object({
       updatedAt: z.string(),
       status: z.string(),
       latestModel: z.string().nullable().optional(),
+      owner: conversationOwnerSchema,
+      source: z.enum(['chat', 'test_run']),
+      isOwner: z.boolean(),
     }),
   ),
 });
@@ -45,6 +62,9 @@ const conversationDetailSchema = z.object({
     latestOpenaiResponseId: z.string().nullable().optional(),
     latestModel: z.string().nullable().optional(),
     status: z.string(),
+    owner: conversationOwnerSchema,
+    source: z.enum(['chat', 'test_run']),
+    isOwner: z.boolean(),
   }),
   messages: z.array(
     z.object({
@@ -68,10 +88,23 @@ const conversationDetailSchema = z.object({
   ),
 });
 
-export async function apiListConversations(): Promise<
-  z.infer<typeof conversationListSchema>['conversations']
-> {
-  const res = await fetch('/api/bex/conversations', { method: 'GET' });
+export async function apiListConversations(options?: {
+  /** B0-451 — omitted entirely means unscoped by source (both `chat` and `test_run`). */
+  source?: 'chat' | 'test_run';
+  /** B0-451 — a conversation owner's `userId`, as surfaced on the `owner` field of a list row. */
+  userFilter?: string;
+}): Promise<z.infer<typeof conversationListSchema>['conversations']> {
+  const params = new URLSearchParams();
+  if (options?.source) {
+    params.set('source', options.source);
+  }
+  if (options?.userFilter) {
+    params.set('userFilter', options.userFilter);
+  }
+  const qs = params.toString();
+  const res = await fetch(`/api/bex/conversations${qs ? `?${qs}` : ''}`, {
+    method: 'GET',
+  });
   const data: unknown = await res.json();
   if (!res.ok) {
     throw new Error(extractApiError(data, `Request failed (${res.status})`));

@@ -46,8 +46,9 @@ export function formatExpectedShouldAnswerLabel(
 }
 
 /**
- * Formats a `boolean | null` expected-answer flag for CSV export.
- * Returns lowercase "yes" / "no" / "" (empty for unset).
+ * Formats a `boolean | null` expectation flag (`should_answer`, `should_cite`) for CSV
+ * export. Returns lowercase "yes" / "no" / "" (empty for unset) — the same vocabulary the
+ * importer in `~/lib/tests/csv` accepts, so exports re-import unchanged.
  */
 export function formatShouldAnswerExport(value: boolean | null): string {
   if (value === true) return 'yes';
@@ -119,4 +120,12 @@ export function formatPercentDelta(absoluteDelta: number): string {
 /** Formats an absolute similarity delta (0–1 fraction) as a percent string for trend displays. */
 export function formatSimilarityDelta(absoluteDelta: number): string {
   return `${(absoluteDelta * 100).toFixed(1)}%`;
+}
+
+/** Formats an integer, abbreviating to a "k" suffix once it reaches 4+ digits, e.g. 1040 -> "1k", 1055 -> "1.1k", 1256 -> "1.3k". */
+export function formatCompactInt(value: number): string {
+  if (!Number.isFinite(value)) return String(value);
+  if (Math.abs(value) < 1000) return value.toLocaleString();
+  const compact = (Math.round((value / 1000) * 10) / 10).toFixed(1);
+  return `${compact.endsWith('.0') ? compact.slice(0, -2) : compact}k`;
 }

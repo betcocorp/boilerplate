@@ -11,8 +11,10 @@ import {
   ThumbsUp,
   User,
 } from 'lucide-react';
+import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 
+import { BexMessagesSkeleton } from '~/components/bex/BexChatSkeleton';
 import { BexStreamdown } from '~/components/bex/BexStreamdown';
 import { Avatar, AvatarFallback } from '~/components/ui/avatar';
 import { Badge } from '~/components/ui/badge';
@@ -34,6 +36,7 @@ import {
   SelectValue,
 } from '~/components/ui/select';
 import { RagDocumentChunkInspectButtons } from '~/components/rag/RagDocumentChunkInspect';
+import { isRagRowId } from '~/lib/rag/document-chunk-types';
 import { Separator } from '~/components/ui/separator';
 import { Textarea } from '~/components/ui/textarea';
 import { cn } from '~/lib/utils';
@@ -55,6 +58,8 @@ type BexChatMessagesProps = {
   messages: ChatMessage[];
   isTyping: boolean;
   showWelcome: boolean;
+  /** B0-345: history for the selected conversation is in flight — render placeholders. */
+  isLoadingHistory?: boolean;
   onSuggestion: (text: string) => void;
   onStartEmptyChat?: () => void;
   feedbackSubmittingMessageId?: string | null;
@@ -177,7 +182,13 @@ function AssistantDetails({
               ) : null}
               {meta.workflowRunId ? (
                 <p className="font-mono text-[0.65rem] opacity-70">
-                  Run: {meta.workflowRunId}
+                  Run:{' '}
+                  <Link
+                    className="underline decoration-muted-foreground/60 underline-offset-2 transition hover:text-foreground hover:decoration-foreground"
+                    href={`/admin/observability/${meta.workflowRunId}`}
+                  >
+                    {meta.workflowRunId}
+                  </Link>
                 </p>
               ) : null}
             </div>
@@ -190,6 +201,10 @@ function AssistantDetails({
               <ul className="space-y-2">
                 {meta.sources.slice(0, 6).map((s) => {
                   const isExternal = s.kind === 'external' || !!s.url;
+                  // Synthetic sources (e.g. structured "Verified Product Facts") have no
+                  // rag.document row to inspect — the facts are the snippet itself, so
+                  // show it in full and skip the DB-backed inspect buttons.
+                  const isFacts = !isExternal && !isRagRowId(s.documentId);
                   return (
                     <li
                       className="wrap-break-word rounded-md border border-border/60 bg-muted/30 p-2"
@@ -221,9 +236,16 @@ function AssistantDetails({
                         ) : null}
                       </div>
                       {s.snippet ? (
-                        <p className="mt-1 line-clamp-2 text-muted-foreground">{s.snippet}</p>
+                        <p
+                          className={cn(
+                            'mt-1 text-muted-foreground',
+                            isFacts ? 'whitespace-pre-wrap' : 'line-clamp-2',
+                          )}
+                        >
+                          {s.snippet}
+                        </p>
                       ) : null}
-                      {!isExternal ? (
+                      {!isExternal && !isFacts ? (
                         <div className="mt-1 opacity-90">
                           <RagDocumentChunkInspectButtons
                             chunkId={s.chunkId ?? null}
@@ -358,6 +380,7 @@ function BexAiElementsMessages({
 }
 
 export function BexChatMessages({
+  isLoadingHistory = false,
   isTyping,
   messages,
   feedbackSubmittingMessageId,
@@ -378,6 +401,12 @@ export function BexChatMessages({
     } catch {
       /* ignore */
     }
+  }
+
+  // B0-345: takes precedence over the welcome/transcript branches so a conversation switch
+  // never paints the outgoing thread's messages under the incoming thread's title.
+  if (isLoadingHistory) {
+    return <BexMessagesSkeleton />;
   }
 
   if (showWelcome && messages.length === 0) {

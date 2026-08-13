@@ -1,46 +1,10 @@
 import { Search } from 'lucide-react';
 
+import { CardGridSkeleton } from '~/components/admin/skeletons';
 import { Button } from '~/components/ui/button';
 import { Input } from '~/components/ui/input';
 import { Label } from '~/components/ui/label';
 import { NativeSelect } from '~/components/ui/native-select';
-
-function ProductCardSkeleton({ index }: { index: number }) {
-  return (
-    <article
-      className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm"
-      key={index}
-    >
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="h-6 w-28 animate-pulse rounded-full bg-emerald-100" />
-        <div className="h-6 w-20 animate-pulse rounded-full bg-slate-100" />
-        <div className="h-6 w-24 animate-pulse rounded-full bg-sky-100" />
-      </div>
-
-      <div className="mt-4 h-8 w-3/4 animate-pulse rounded bg-slate-200" />
-
-      <div className="mt-4 flex flex-col gap-2">
-        <div className="h-5 w-2/3 animate-pulse rounded bg-slate-200" />
-        <div className="flex flex-wrap gap-x-6 gap-y-2">
-          <div className="h-4 w-32 animate-pulse rounded bg-slate-100" />
-          <div className="h-4 w-36 animate-pulse rounded bg-slate-100" />
-          <div className="h-4 w-40 animate-pulse rounded bg-slate-100" />
-        </div>
-      </div>
-
-      <div className="mt-4 space-y-2">
-        <div className="h-4 w-full animate-pulse rounded bg-slate-100" />
-        <div className="h-4 w-full animate-pulse rounded bg-slate-100" />
-        <div className="h-4 w-2/3 animate-pulse rounded bg-slate-100" />
-      </div>
-
-      <div className="mt-4 flex flex-wrap gap-3">
-        <div className="h-10 w-40 animate-pulse rounded-full bg-slate-900/15" />
-        <div className="h-10 w-36 animate-pulse rounded-full bg-slate-200" />
-      </div>
-    </article>
-  );
-}
 
 export default function Loading() {
   return (
@@ -128,11 +92,16 @@ export default function Loading() {
           <div className="text-sm text-slate-600">Preparing similarity range...</div>
         </section>
 
-        <section className="grid gap-4 lg:grid-cols-2">
-          {Array.from({ length: 6 }, (_, index) => (
-            <ProductCardSkeleton index={index} key={index} />
-          ))}
-        </section>
+        <CardGridSkeleton
+          actions={2}
+          badges={3}
+          cardClassName="rounded-3xl p-6"
+          columnsClassName="lg:grid-cols-2"
+          count={6}
+          lines={3}
+          metaTags={3}
+          subtitle
+        />
       </main>
     </div>
   );

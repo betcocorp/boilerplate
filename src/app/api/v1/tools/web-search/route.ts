@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 
-import { authenticateApiToken, unauthorizedResponse } from '~/lib/api/client-auth';
+import { withApiV1 } from '~/lib/api/with-api-v1';
 import { writeAuditLog } from '~/lib/audit/audit-log';
 import { newCorrelationId } from '~/lib/observability/correlation-id';
 import { WebSearchService } from '~/lib/websearch/web-search-service';
@@ -18,13 +18,12 @@ export const dynamic = 'force-dynamic';
  * (server-to-server) instead of a NextAuth session. All provider logic,
  * caching, source-trust ranking, and rate-limit/cost guardrails live in
  * {@link WebSearchService} — the route only authenticates, validates, and maps errors.
+ *
+ * Auth, per-app rate limiting, and `api_request_log` logging are handled by
+ * `withApiV1`; the `writeAuditLog` call below is a separate, tool-specific audit
+ * trail (query/provider/cost/result_count) and is not replaced by it.
  */
-export async function POST(request: Request) {
-  const auth = await authenticateApiToken(request);
-  if (!auth.ok) {
-    return unauthorizedResponse();
-  }
-
+export const POST = withApiV1(async (request, ctx) => {
   const raw = await request.json().catch(() => null);
   const parsed = webSearchRequestSchema.safeParse(raw);
   if (!parsed.success) {
@@ -43,9 +42,9 @@ export async function POST(request: Request) {
       'web_search',
       {
         source: 'v1_tool',
-        project_id: auth.context.projectId,
-        app_id: auth.context.appId,
-        key_id: auth.context.keyId,
+        project_id: ctx.auth.projectId,
+        app_id: ctx.auth.appId,
+        key_id: ctx.auth.keyId,
         query: parsed.data.query,
         provider: result.provider,
         depth: parsed.data.depth ?? 'basic',
@@ -69,4 +68,4 @@ export async function POST(request: Request) {
       { status: 500 },
     );
   }
-}
+});

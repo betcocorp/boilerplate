@@ -16,6 +16,7 @@ function readJsonNumber(value: JsonObject | null, key: string): number | null {
 
 export type SdsSyncStatus = {
   totalSdsDocs: number;
+  pendingChunkDocs: number;
   totalChunks: number;
   embeddedChunks: number;
 };
@@ -27,6 +28,7 @@ export async function getSdsSyncStatus(): Promise<SdsSyncStatus> {
     { count: totalSdsDocs },
     { count: totalChunks },
     { count: embeddedChunks },
+    { data: chunkedDocumentRows },
   ] = await Promise.all([
     supabase
       .schema('rag')
@@ -36,16 +38,31 @@ export async function getSdsSyncStatus(): Promise<SdsSyncStatus> {
     supabase
       .schema('rag')
       .from('document_chunk')
-      .select('id', { count: 'exact', head: true }) as unknown as Promise<{ count: number | null }>,
+      .select('id', { count: 'exact', head: true })
+      .like('chunk_key', 'sds:%') as unknown as Promise<{ count: number | null }>,
     supabase
       .schema('rag')
       .from('document_chunk')
       .select('id', { count: 'exact', head: true })
+      .like('chunk_key', 'sds:%')
       .not('embedding_large', 'is', null) as unknown as Promise<{ count: number | null }>,
+    // sync_sds_chunks only chunks documents with zero existing chunks, so the
+    // "pending" count for the chunking step is total docs minus distinct docs
+    // already chunked — not the raw document count (totalSdsDocs).
+    supabase
+      .schema('rag')
+      .from('document_chunk')
+      .select('document_id')
+      .like('chunk_key', 'sds:%') as unknown as Promise<{ data: Array<{ document_id: string }> | null }>,
   ]);
+
+  const chunkedDocumentCount = new Set(
+    (chunkedDocumentRows ?? []).map((row) => row.document_id),
+  ).size;
 
   return {
     totalSdsDocs: totalSdsDocs ?? 0,
+    pendingChunkDocs: Math.max(0, (totalSdsDocs ?? 0) - chunkedDocumentCount),
     totalChunks: totalChunks ?? 0,
     embeddedChunks: embeddedChunks ?? 0,
   };

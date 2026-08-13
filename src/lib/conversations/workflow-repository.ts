@@ -55,6 +55,13 @@ export async function insertWorkflowStep(
   return data;
 }
 
+/**
+ * B0-386 — the update is built from the keys the caller actually supplied. This used to write
+ * `output: patch.output ?? null` and `error: patch.error ?? null` unconditionally, so a
+ * status-only completion (the product-support failure handler) erased an already-persisted
+ * tool trace. Passing an explicit `null` still clears a column deliberately; omitting the key
+ * leaves it untouched.
+ */
 export async function completeWorkflowStep(
   id: string,
   patch: {
@@ -64,15 +71,18 @@ export async function completeWorkflowStep(
   },
 ): Promise<void> {
   const supabase = getSupabaseServiceRoleClient();
-  const { error } = await supabase
-    .from('workflow_steps')
-    .update({
-      status: patch.status,
-      output: patch.output ?? null,
-      error: patch.error ?? null,
-      completed_at: new Date().toISOString(),
-    })
-    .eq('id', id);
+  const update: TablesUpdate<'workflow_steps'> = {
+    status: patch.status,
+    completed_at: new Date().toISOString(),
+  };
+  if (patch.output !== undefined) {
+    update.output = patch.output;
+  }
+  if (patch.error !== undefined) {
+    update.error = patch.error;
+  }
+
+  const { error } = await supabase.from('workflow_steps').update(update).eq('id', id);
 
   if (error) {
     throw new Error(error.message);

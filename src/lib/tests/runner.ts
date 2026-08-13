@@ -1,6 +1,20 @@
 import { runBexChatTurn } from '~/lib/bex/run-chat-turn';
+import { RECOMMENDATIONS_DECLINE_COPY } from '~/lib/agents/recommendations-specialist/recommendations-specialist-system-prompt';
+import { XREF_DECLINE_COPY } from '~/lib/recommendations/confidence-scoring';
 
 import type { NewTestResultItemRecord, TestItemRecord } from './types';
+
+/**
+ * The app's own canonical "no confident equivalent" decline strings (B0-300 follow-up). Checked
+ * verbatim before falling back to the keyword/regex heuristics below, since those are guesses at
+ * paraphrasing this exact, deterministic copy and can miss it (e.g. XREF_DECLINE_COPY matched none
+ * of the existing patterns).
+ */
+const CANONICAL_DECLINE_COPY = [RECOMMENDATIONS_DECLINE_COPY, XREF_DECLINE_COPY];
+
+function matchesCanonicalDeclineCopy(responseText: string): boolean {
+  return CANONICAL_DECLINE_COPY.some((copy) => responseText.includes(copy));
+}
 
 type RunSingleItemResult = {
   item: NewTestResultItemRecord;
@@ -19,6 +33,22 @@ type EvaluationOutcome = {
 
 const UNABLE_TO_ASSIST_FAILURE_REASON =
   'The assistant indicated it could not answer (e.g. no verified information, could not find a hazard, or cannot provide). Marked failed so you can review and investigate.';
+
+/**
+ * Decline patterns that are robust to intervening words the fixed phrase list misses.
+ * Kept deliberately tight (the "lack of information/data" family) so genuine answers that merely
+ * cite a label are not flagged. These catch e.g. "I don't have **the** verified information on the
+ * required wet contact time" — which the substring list slips because of the inserted "the".
+ */
+const DECLINE_REGEXES: RegExp[] = [
+  // "(do not|don't|does not|doesn't|no longer) have [the/any/enough/sufficient/access to …]
+  //  [verified/specific/reliable/confirmed/detailed/that/this …] information|data|details|answer|documentation"
+  /\b(?:do not|don't|does not|doesn't|did not|didn't|no longer)\s+have\s+(?:the\s+|any\s+|enough\s+|sufficient\s+|access to\s+|specific\s+|verified\s+|reliable\s+|confirmed\s+|detailed\s+|that\s+|this\s+|required\s+|necessary\s+)*(?:information|data|details|answer|documentation)\b/,
+  // "no (verified|reliable|confirmed|specific) information|data" (lack statement, not a citation)
+  /\bno\s+(?:verified|reliable|confirmed|specific)\s+(?:information|data)\b/,
+  // Canonical normalized decline: "I('m| am)? (unable|not able) to (provide|verify|confirm|locate|answer) …"
+  /\b(?:unable|not able)\s+to\s+(?:provide|verify|confirm|locate|find|answer|retrieve)\b/,
+];
 
 /**
  * Declines, hedges, and “no answer” phrasing — treated as **failed** outcomes for visibility,
@@ -101,7 +131,7 @@ function responseIndicatesUnableToAssistOrRefusal(responseText: string): boolean
     'consult with a betco sales representative',
   ];
 
-  return phrases.some((p) => t.includes(p));
+  return phrases.some((p) => t.includes(p)) || DECLINE_REGEXES.some((r) => r.test(t));
 }
 
 /**
@@ -112,6 +142,10 @@ function responseIndicatesDeclineStyleAnswer(responseText: string): boolean {
   const t = responseText.trim().toLowerCase();
   if (!t) {
     return false;
+  }
+
+  if (matchesCanonicalDeclineCopy(responseText)) {
+    return true;
   }
 
   const indicators = [
@@ -168,7 +202,7 @@ function responseIndicatesDeclineStyleAnswer(responseText: string): boolean {
     'not able to help with that topic',
   ];
 
-  return indicators.some((p) => t.includes(p));
+  return indicators.some((p) => t.includes(p)) || DECLINE_REGEXES.some((r) => r.test(t));
 }
 
 /** Rows configured for decline-style expectations should not be failed by the "unable to assist" visibility override. */
@@ -271,33 +305,52 @@ function withUnableToAssistFailureOverride(
   };
 }
 
+/**
+ * Full pass/fail decision for a single chat test item: applies the expectation rules and the
+ * "unable to assist" decline override. Exported so the grading behavior can be unit-tested
+ * independently of the live workflow.
+ */
+export function gradeChatTestResponse(params: {
+  item: TestItemRecord;
+  hasError: boolean;
+  responseText: string;
+}): EvaluationOutcome {
+  const base = evaluateTestOutcome(params);
+  return withUnableToAssistFailureOverride(params.responseText, base, params.item);
+}
+
 export async function runSingleTestItem(
   testResultId: string,
   testItem: TestItemRecord,
+  options?: { modelTag?: string },
 ): Promise<RunSingleItemResult> {
   const startedAt = Date.now();
+  let firstDeltaAt: number | null = null;
 
   try {
     // Use the same path as BEX chat so test runs reflect real workflow behavior.
     const result = await runBexChatTurn({
       conversationId: null,
       message: testItem.prompt,
+      source: 'harness',
+      modelTag: options?.modelTag,
       useValidator: false,
       agentMode: 'orchestrator',
+      // B0-450: eval-harness conversations are never attributed to whoever kicked off the run.
+      owner: { kind: 'system' },
+      onAssistantDelta: () => {
+        if (firstDeltaAt === null) firstDeltaAt = Date.now();
+      },
     });
 
     const elapsedMs = Math.max(0, Date.now() - startedAt);
+    const ttftMs = firstDeltaAt !== null ? Math.max(0, firstDeltaAt - startedAt) : null;
     const responseText = result.answerText || '';
-    const baseOutcome = evaluateTestOutcome({
+    const outcome = gradeChatTestResponse({
       item: testItem,
       hasError: false,
       responseText,
     });
-    const outcome = withUnableToAssistFailureOverride(
-      responseText,
-      baseOutcome,
-      testItem,
-    );
 
     return {
       passed: outcome.passed,
@@ -306,11 +359,15 @@ export async function runSingleTestItem(
         test_item_id: testItem.id,
         row_index: testItem.row_index,
         elapsed_ms: elapsedMs,
+        ttft_ms: ttftMs,
         status: 'completed',
         passed: outcome.passed,
         error_message: outcome.passed ? null : outcome.failureReason,
         response_text: responseText,
         response_payload: JSON.parse(JSON.stringify(result)),
+        // B0-416 — real FK alongside the payload copy, so the trace stays reachable from the
+        // graded item (and vice versa) without parsing JSON.
+        workflow_run_id: result.workflowRunId,
       },
     };
   } catch (error) {
@@ -324,6 +381,7 @@ export async function runSingleTestItem(
         test_item_id: testItem.id,
         row_index: testItem.row_index,
         elapsed_ms: elapsedMs,
+        ttft_ms: firstDeltaAt !== null ? Math.max(0, firstDeltaAt - startedAt) : null,
         status: 'failed',
         passed: false,
         error_message: message,

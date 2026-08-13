@@ -22,7 +22,67 @@ export type AssembledDocumentBody = {
   totalChars: number;
   truncated: boolean;
   estimatedTokens: number | null;
+  /**
+   * B0-13: ordered `rag.document_chunk.id`s actually stitched into `body` (including a
+   * partially-included final chunk when `truncated`), so a response can be audited after the
+   * fact for exactly which chunks reached the model -- e.g. confirming whether a specific
+   * section (like a label's "Directions for Use") was retrieved or dropped by truncation.
+   */
+  chunkIds: string[];
 };
+
+/** Provenance pointer for a `rag.document` row, used to cite the exact source PDF/markdown (B0-257). */
+export type DocumentSourceRef = {
+  documentId: string;
+  /** `metadata->>'s3_key'`, e.g. "labels/betco/67804_touch-up.md". */
+  s3Key: string | null;
+  /** `metadata->>'source_uri'`, e.g. "s3://retool-360/labels/betco/67804_touch-up.md". */
+  sourceUri: string | null;
+};
+
+function readMetadataString(metadata: unknown, key: string): string | null {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+    return null;
+  }
+  const value = (metadata as Record<string, unknown>)[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+/**
+ * Fetch `s3_key` / `source_uri` provenance for a set of document ids (label/SDS/etc.
+ * documents carry these in `metadata`). Degrades to an empty map on error so citation
+ * enrichment never blocks retrieval.
+ */
+export async function fetchDocumentSourceRefs(
+  documentIds: string[],
+): Promise<Map<string, DocumentSourceRef>> {
+  const result = new Map<string, DocumentSourceRef>();
+  const uniqueIds = Array.from(new Set(documentIds.filter(Boolean)));
+  if (uniqueIds.length === 0) {
+    return result;
+  }
+
+  const supabase = getSupabaseServiceRoleClient();
+  const { data, error } = await supabase
+    .schema('rag')
+    .from('document')
+    .select('id, metadata')
+    .in('id', uniqueIds);
+
+  if (error || !data) {
+    return result;
+  }
+
+  for (const row of data as Array<{ id: string; metadata: unknown }>) {
+    result.set(row.id, {
+      documentId: row.id,
+      s3Key: readMetadataString(row.metadata, 's3_key'),
+      sourceUri: readMetadataString(row.metadata, 'source_uri'),
+    });
+  }
+
+  return result;
+}
 
 /**
  * Loads every chunk for the supplied documentIds (ordered by chunk_index) and
@@ -80,11 +140,13 @@ export async function assembleDocumentBodies(
         totalChars: 0,
         truncated: false,
         estimatedTokens: null,
+        chunkIds: [],
       });
       continue;
     }
 
     const segments: string[] = [];
+    const chunkIds: string[] = [];
     let assembled = '';
     let truncated = false;
     let tokenSum = 0;
@@ -109,6 +171,7 @@ export async function assembleDocumentBodies(
       if (candidate.length <= maxChars) {
         assembled = candidate;
         segments.push(segment);
+        chunkIds.push(chunk.id);
         continue;
       }
 
@@ -118,6 +181,7 @@ export async function assembleDocumentBodies(
         if (sliced.length > 0) {
           assembled = `${assembled}${separator}${sliced}…`;
           segments.push(`${sliced}…`);
+          chunkIds.push(chunk.id);
         }
       }
       truncated = true;
@@ -131,6 +195,7 @@ export async function assembleDocumentBodies(
       totalChars: assembled.length,
       truncated,
       estimatedTokens: hasAnyTokenCount ? tokenSum : null,
+      chunkIds,
     });
   }
 

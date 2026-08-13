@@ -7,6 +7,7 @@ import {
   toRecommendationInsertRow,
 } from '~/lib/recommendations/repository';
 import {
+  addRecommendationCandidateInputSchema,
   createRecommendationInputSchema,
   updateRecommendationStatusInputSchema,
 } from '~/lib/recommendations/recommendation-schemas';
@@ -97,5 +98,61 @@ describe('recommendation repository mappers (B0-83)', () => {
   it('validates the status-update input enum', () => {
     expect(updateRecommendationStatusInputSchema.safeParse({ status: 'verified', verifier: 'tb' }).success).toBe(true);
     expect(updateRecommendationStatusInputSchema.safeParse({ status: 'nope' }).success).toBe(false);
+  });
+});
+
+/**
+ * B0-433 — a reviewer-added candidate exists to make an un-approvable recommendation approvable,
+ * so the schema has to guarantee the two fields `promoteRecommendationToOverride` requires. Every
+ * one of the 220 candidates the engine had written was missing `betcoProductKey`, which is exactly
+ * how the queue ended up unable to promote anything.
+ */
+describe('addRecommendationCandidateInputSchema (B0-433)', () => {
+  it('accepts a candidate carrying both fields promotion requires', () => {
+    const parsed = addRecommendationCandidateInputSchema.parse({
+      betcoTitle: 'Green Earth Peroxide Cleaner',
+      betcoProductKey: '3355',
+      rationale: 'Same peroxide chemistry and dilution class.',
+    });
+    expect(parsed.betcoTitle).toBe('Green Earth Peroxide Cleaner');
+    expect(parsed.betcoProductKey).toBe('3355');
+  });
+
+  it('trims surrounding whitespace so a padded key still promotes', () => {
+    const parsed = addRecommendationCandidateInputSchema.parse({
+      betcoTitle: '  Green Earth Peroxide Cleaner  ',
+      betcoProductKey: '  3355  ',
+    });
+    expect(parsed.betcoTitle).toBe('Green Earth Peroxide Cleaner');
+    expect(parsed.betcoProductKey).toBe('3355');
+  });
+
+  it('rejects a missing or blank product key', () => {
+    expect(() =>
+      addRecommendationCandidateInputSchema.parse({ betcoTitle: 'Green Earth' }),
+    ).toThrow();
+    expect(() =>
+      addRecommendationCandidateInputSchema.parse({
+        betcoTitle: 'Green Earth',
+        betcoProductKey: '   ',
+      }),
+    ).toThrow();
+  });
+
+  it('rejects a missing or blank title', () => {
+    expect(() =>
+      addRecommendationCandidateInputSchema.parse({ betcoProductKey: '3355' }),
+    ).toThrow();
+    expect(() =>
+      addRecommendationCandidateInputSchema.parse({ betcoTitle: '  ', betcoProductKey: '3355' }),
+    ).toThrow();
+  });
+
+  it('treats rationale as optional', () => {
+    const parsed = addRecommendationCandidateInputSchema.parse({
+      betcoTitle: 'Green Earth',
+      betcoProductKey: '3355',
+    });
+    expect(parsed.rationale).toBeUndefined();
   });
 });

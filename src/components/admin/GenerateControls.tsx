@@ -1,6 +1,6 @@
 'use client';
 
-import { Loader2 } from 'lucide-react';
+import { Loader2, PlayCircle } from 'lucide-react';
 import { useActionState, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
@@ -42,6 +42,14 @@ function formatTimestamp(timestamp: number) {
   return formatEasternTimestamp(timestamp);
 }
 
+function StepNumber({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-sky-100 text-sm font-semibold text-sky-700">
+      {children}
+    </span>
+  );
+}
+
 const AUTO_REPEAT_INTENTS = ['sync-embeddings'] as const;
 type AutoRepeatIntent = (typeof AUTO_REPEAT_INTENTS)[number];
 
@@ -70,6 +78,7 @@ export function GenerateControls({
   const [languageCode, setLanguageCode] = useState(defaultLanguageCode);
   const [batchSize, setBatchSize] = useState(String(defaultBatchSize));
   const [maxBatches, setMaxBatches] = useState(String(defaultMaxBatches));
+  const [activeIntent, setActiveIntent] = useState<string | null>(null);
   const [actionStartedAt, setActionStartedAt] = useState<number | null>(null);
   const [timerNow, setTimerNow] = useState(() => Date.now());
   const [autoRunIntent, setAutoRunIntent] = useState<AutoRepeatIntent | null>(
@@ -131,7 +140,7 @@ export function GenerateControls({
 
     const delay = Math.max(0, autoRunNextAt - Date.now());
     const timer = window.setTimeout(() => {
-        embedFormRef.current?.requestSubmit();
+      embedFormRef.current?.requestSubmit();
     }, delay);
 
     return () => {
@@ -148,33 +157,77 @@ export function GenerateControls({
   const chunkSyncResult = formatJson(state.result?.chunkSyncResult ?? null);
   const embeddingResult = formatJson(state.result?.embeddingResult ?? null);
 
+  function handleSubmitIntent(intent: string) {
+    // Cancel scheduled auto-run when the user manually triggers any action.
+    setAutoRunIntent(null);
+    setAutoRunNextAt(null);
+    const startedAt = Date.now();
+    setActiveIntent(intent);
+    setActionStartedAt(startedAt);
+    setTimerNow(startedAt);
+  }
+
+  const stages: Array<{
+    intent: string;
+    step: number;
+    title: string;
+    button: string;
+    working: string;
+    description: string;
+  }> = [
+    {
+      intent: 'sync-documents',
+      step: 1,
+      title: 'Sync documents',
+      button: 'Sync document batch',
+      working: 'Syncing…',
+      description:
+        "Copies the next batch of product records out of the legacy database into Bex's search tables. Run it again until the source-record count stops rising.",
+    },
+    {
+      intent: 'sync-chunks',
+      step: 2,
+      title: 'Generate chunks',
+      button: 'Generate chunk batch',
+      working: 'Generating…',
+      description:
+        'Splits the synced documents into smaller, labeled sections so the right passage can be found later. Run it again until no documents are pending.',
+    },
+    {
+      intent: 'sync-embeddings',
+      step: 3,
+      title: 'Embed chunks',
+      button: 'Embed pending',
+      working: 'Embedding…',
+      description:
+        'Turns each chunk into a vector so Bex can find it by meaning, not just exact keywords. Keeps running automatically until every pending chunk has one.',
+    },
+  ];
+
   return (
     <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
       <div className="flex flex-col gap-3">
         <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-700">
-          Pipeline Controls
+          Ingestion pipeline
         </p>
         <h2 className="text-2xl font-semibold tracking-tight text-slate-950">
           Run and monitor RAG generation
         </h2>
         <p className="max-w-3xl text-sm leading-6 text-slate-600">
-          Use the buttons below to sync the next document batch, generate the
-          next chunk batch, or run embeddings. The full pipeline action runs all
-          stages in order and keeps document sync, chunking, and embedding in
-          bounded batches until it finishes or hits the safety cap.
+          The one-click way is <span className="font-medium">Run full pipeline</span> —
+          it syncs documents, generates chunks, and embeds them in order, draining each
+          stage until the corpus is retrieval-ready. The numbered steps below let you run
+          a single stage at a time when you need finer control.
         </p>
       </div>
 
+      {/* Config */}
       <div className="mt-8 grid gap-4 md:grid-cols-3">
         <div className="flex flex-col gap-2">
-          <Label className="text-sm font-medium text-slate-700">
-            Language code
-          </Label>
+          <Label className="text-sm font-medium text-slate-700">Language code</Label>
           <Input
             className="h-12 rounded-2xl px-4"
-            onChange={(event) =>
-              setLanguageCode(event.target.value.toUpperCase())
-            }
+            onChange={(event) => setLanguageCode(event.target.value.toUpperCase())}
             value={languageCode}
           />
         </div>
@@ -204,40 +257,82 @@ export function GenerateControls({
         </div>
       </div>
 
-      <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-        {[
-          ['sync-documents', 'Sync document batch'],
-          ['sync-chunks', 'Generate next batch'],
-          ['sync-embeddings', 'Embed'],
-          ['run-all', 'Run full'],
-        ].map(([intent, label]) => (
+      {/* Primary — Run full pipeline */}
+      <div className="mt-8 rounded-2xl border border-sky-200 bg-sky-50/60 p-5">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h3 className="text-lg font-semibold text-slate-950">Run full pipeline</h3>
+            <p className="mt-1 text-sm text-slate-600">
+              Runs all three stages in order and keeps going in bounded batches until
+              everything is done or it hits the safety cap.
+            </p>
+          </div>
           <form
             action={formAction}
-            className="flex"
-            key={intent}
-            ref={intent === 'sync-embeddings' ? embedFormRef : undefined}
-            onSubmit={() => {
-              // Cancel scheduled auto-run when the user manually triggers any action.
-              setAutoRunIntent(null);
-              setAutoRunNextAt(null);
-              const startedAt = Date.now();
-              setActionStartedAt(startedAt);
-              setTimerNow(startedAt);
-            }}
+            onSubmit={() => handleSubmitIntent('run-all')}
           >
-            <input name="intent" type="hidden" value={intent} />
+            <input name="intent" type="hidden" value="run-all" />
             <input name="languageCode" type="hidden" value={languageCode} />
             <input name="batchSize" type="hidden" value={batchSize} />
             <input name="maxBatches" type="hidden" value={maxBatches} />
             <Button
-              className="h-12 rounded-2xl px-6 font-semibold"
+              className="h-12 gap-2 rounded-2xl px-6 font-semibold"
               disabled={pending}
               type="submit"
-              variant="default"
             >
-              {pending ? 'Working...' : label}
+              {pending && activeIntent === 'run-all' ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" />
+                  Running…
+                </>
+              ) : (
+                <>
+                  <PlayCircle className="size-4" />
+                  Run full pipeline
+                </>
+              )}
             </Button>
           </form>
+        </div>
+      </div>
+
+      {/* Numbered stages */}
+      <div className="mt-6 grid grid-cols-1 gap-6 md:grid-cols-3">
+        {stages.map((stage) => (
+          <div className="flex flex-col items-center gap-3 py-2" key={stage.intent}>
+            <div className="flex flex-col items-center gap-1">
+              <StepNumber>{stage.step}</StepNumber>
+              <h3 className="text-lg font-semibold text-slate-950">{stage.title}</h3>
+            </div>
+            <p className="text-center text-sm leading-6 text-slate-600">
+              {stage.description}
+            </p>
+            <form
+              action={formAction}
+              ref={stage.intent === 'sync-embeddings' ? embedFormRef : undefined}
+              onSubmit={() => handleSubmitIntent(stage.intent)}
+            >
+              <input name="intent" type="hidden" value={stage.intent} />
+              <input name="languageCode" type="hidden" value={languageCode} />
+              <input name="batchSize" type="hidden" value={batchSize} />
+              <input name="maxBatches" type="hidden" value={maxBatches} />
+              <Button
+                className="h-11 rounded-2xl px-5 font-semibold"
+                disabled={pending}
+                type="submit"
+                variant="outline"
+              >
+                {pending && activeIntent === stage.intent ? (
+                  <>
+                    <Loader2 className="mr-2 size-4 animate-spin" />
+                    {stage.working}
+                  </>
+                ) : (
+                  stage.button
+                )}
+              </Button>
+            </form>
+          </div>
         ))}
       </div>
 

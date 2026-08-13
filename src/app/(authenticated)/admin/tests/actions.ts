@@ -7,6 +7,8 @@ import { SME_AGENT_IDS } from '~/lib/agents/agent-registry';
 import {
   parseCsvColumnNames,
   parseExpectedShouldAnswerFromForm,
+  parsePriority,
+  parseShouldCiteFromForm,
   parseTestCsvContent,
 } from '~/lib/tests/csv';
 import {
@@ -48,6 +50,29 @@ function encodeMessage(path: string, kind: 'success' | 'error', text: string) {
 
 function toUtf8Text(bytes: Uint8Array) {
   return new TextDecoder('utf-8').decode(bytes);
+}
+
+/** Trimmed form string, or null when absent/blank — a cleared input clears the stored value. */
+function optionalFormText(formData: FormData, name: string): string | null {
+  const raw = formData.get(name);
+  return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
+}
+
+/**
+ * The golden-set expectation fields shared by the add and edit prompt dialogs
+ * (same names as the CSV columns in `~/lib/tests/template`).
+ */
+function readConceptExpectationFields(formData: FormData) {
+  const shouldCiteRaw = formData.get('shouldCite');
+  return {
+    expected_concepts: optionalFormText(formData, 'expectedConcepts'),
+    minimum_concepts: optionalFormText(formData, 'minimumConcepts'),
+    expected_sources: optionalFormText(formData, 'expectedSources'),
+    should_cite:
+      typeof shouldCiteRaw === 'string'
+        ? parseShouldCiteFromForm(shouldCiteRaw)
+        : null,
+  };
 }
 
 function parseIntendedAgentField(
@@ -162,6 +187,13 @@ export async function uploadTestCsvAction(formData: FormData) {
     expected_result_type: row.expectedResultType,
     expected_canonical_product: row.expectedCanonicalProduct,
     expected_reason_code: row.expectedReasonCode,
+    source: row.source,
+    priority: row.priority,
+    ideal_response: row.idealResponse,
+    expected_concepts: row.expectedConcepts,
+    minimum_concepts: row.minimumConcepts,
+    expected_sources: row.expectedSources,
+    should_cite: row.shouldCite,
     input_payload: row.inputPayload,
     metadata: row.metadata,
   }));
@@ -240,6 +272,22 @@ export async function addTestItemAction(formData: FormData) {
       ? expectedReasonRaw.trim()
       : null;
 
+  const sourceRaw = formData.get('source');
+  const source =
+    typeof sourceRaw === 'string' && sourceRaw.trim() ? sourceRaw.trim() : null;
+
+  const priorityRaw = formData.get('priority');
+  const priority =
+    typeof priorityRaw === 'string' ? parsePriority(priorityRaw) : null;
+
+  const idealResponseRaw = formData.get('idealResponse');
+  const ideal_response =
+    typeof idealResponseRaw === 'string' && idealResponseRaw.trim()
+      ? idealResponseRaw.trim()
+      : null;
+
+  const conceptExpectations = readConceptExpectationFields(formData);
+
   const productMentionRaw = formData.get('productMention');
   const questionCategoryRaw = formData.get('questionCategory');
   const sourceStyleRaw = formData.get('sourceStyle');
@@ -273,6 +321,10 @@ export async function addTestItemAction(formData: FormData) {
       expected_result_type,
       expected_canonical_product,
       expected_reason_code,
+      source,
+      priority,
+      ideal_response,
+      ...conceptExpectations,
       input_payload,
       metadata,
     },
@@ -353,6 +405,23 @@ export async function updateTestItemAction(formData: FormData) {
       ? expectedReasonRaw.trim()
       : null;
 
+  const sourceRaw = formData.get('source');
+  const source =
+    typeof sourceRaw === 'string' && sourceRaw.trim() ? sourceRaw.trim() : null;
+
+  // Cleared inputs resolve to null so an edit can clear the stored values.
+  const priorityRaw = formData.get('priority');
+  const priority =
+    typeof priorityRaw === 'string' ? parsePriority(priorityRaw) : null;
+
+  const idealResponseRaw = formData.get('idealResponse');
+  const ideal_response =
+    typeof idealResponseRaw === 'string' && idealResponseRaw.trim()
+      ? idealResponseRaw.trim()
+      : null;
+
+  const conceptExpectations = readConceptExpectationFields(formData);
+
   const productMentionRaw = formData.get('productMention');
   const questionCategoryRaw = formData.get('questionCategory');
   const sourceStyleRaw = formData.get('sourceStyle');
@@ -382,6 +451,10 @@ export async function updateTestItemAction(formData: FormData) {
     expected_result_type,
     expected_canonical_product,
     expected_reason_code,
+    source,
+    priority,
+    ideal_response,
+    ...conceptExpectations,
     input_payload,
     metadata,
   });
@@ -415,6 +488,16 @@ export async function runTestAction(formData: FormData) {
     redirect(encodeMessage(`/admin/tests/${testId}`, 'error', 'This test has no items to run.'));
   }
 
+  // Model the run against a specific chat model. Tags map to concrete models in
+  // resolveResponsesModel(); 'preview' is the configured default.
+  const ALLOWED_MODEL_TAGS = ['preview', 'gpt-4o', 'gpt-4.1'] as const;
+  const rawModelTag = formData.get('modelTag');
+  const modelTag =
+    typeof rawModelTag === 'string' &&
+    (ALLOWED_MODEL_TAGS as readonly string[]).includes(rawModelTag)
+      ? rawModelTag
+      : 'preview';
+
   const testResult = await createTestResult({
     test_id: testId,
     status: 'queued',
@@ -423,6 +506,7 @@ export async function runTestAction(formData: FormData) {
     passed_items: 0,
     failed_items: 0,
     started_at: new Date().toISOString(),
+    run_options: { modelTag },
     summary: {
       completed_items: 0,
       total_items: items.length,
@@ -622,6 +706,13 @@ export async function createTestFromPromptsAction(formData: FormData) {
     expected_result_type: item.expected_result_type,
     expected_canonical_product: item.expected_canonical_product,
     expected_reason_code: item.expected_reason_code,
+    source: item.source,
+    priority: item.priority,
+    ideal_response: item.ideal_response,
+    expected_concepts: item.expected_concepts,
+    minimum_concepts: item.minimum_concepts,
+    expected_sources: item.expected_sources,
+    should_cite: item.should_cite,
     input_payload: item.input_payload,
     metadata: item.metadata,
   }));

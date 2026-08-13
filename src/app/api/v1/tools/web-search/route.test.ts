@@ -1,10 +1,29 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+// `withApiV1` schedules logging via `after()` — collect callbacks so tests can
+// drain them instead of relying on a real Next.js request context.
+const { afterCallbacks } = vi.hoisted(() => ({
+  afterCallbacks: [] as Array<() => unknown>,
+}));
+
+vi.mock('next/server', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('next/server')>();
+  return { ...actual, after: (cb: () => unknown) => afterCallbacks.push(cb) };
+});
+
 vi.mock('~/lib/api/client-auth', () => ({
   authenticateApiToken: vi.fn(),
   unauthorizedResponse: () =>
     new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 }),
 }));
+vi.mock('~/lib/api/request-log', () => ({
+  writeApiRequestLog: vi.fn(async () => {}),
+  touchApiKeyLastUsed: vi.fn(async () => {}),
+}));
+vi.mock('~/lib/api/rate-limit', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('~/lib/api/rate-limit')>();
+  return { ...actual, countAppRequestsInWindow: vi.fn(async () => 0) };
+});
 vi.mock('~/lib/audit/audit-log', () => ({
   writeAuditLog: vi.fn().mockResolvedValue(undefined),
 }));
@@ -40,6 +59,7 @@ function makeRequest(body: unknown): Request {
 
 describe('POST /api/v1/tools/web-search', () => {
   beforeEach(() => {
+    afterCallbacks.length = 0;
     vi.clearAllMocks();
     process.env.WEBSEARCH_PROVIDER = 'mock';
   });

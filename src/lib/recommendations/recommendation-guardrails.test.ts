@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   detectInjectionAttempt,
@@ -159,5 +159,40 @@ describe('validator gate (B0-91)', () => {
     const r = evaluateValidatorGate({ validator: validator({}), unsupportedClaims: ['dilution: 1:64'] });
     expect(r.pass).toBe(false);
     expect(r.reasons.some((x) => x.startsWith('unsupported_safety_claim'))).toBe(true);
+  });
+
+  describe('BEX_DISABLE_CONFIDENCE_GATING kill-switch (B0-452)', () => {
+    const prev = process.env.BEX_DISABLE_CONFIDENCE_GATING;
+    afterEach(() => {
+      if (prev === undefined) delete process.env.BEX_DISABLE_CONFIDENCE_GATING;
+      else process.env.BEX_DISABLE_CONFIDENCE_GATING = prev;
+    });
+
+    it('skips only the confidence-floor check, not the other guardrails', () => {
+      process.env.BEX_DISABLE_CONFIDENCE_GATING = 'true';
+
+      const belowFloor = evaluateValidatorGate({
+        validator: validator({ confidence: 0.2 }),
+        minConfidence: 0.6,
+      });
+      expect(belowFloor.pass).toBe(true);
+
+      const notApproved = evaluateValidatorGate({ validator: validator({ approved: false }) });
+      expect(notApproved.pass).toBe(false);
+      expect(notApproved.reasons).toContain('validator_not_approved');
+
+      const humanReview = evaluateValidatorGate({
+        validator: validator({ requires_human_review: true }),
+      });
+      expect(humanReview.pass).toBe(false);
+      expect(humanReview.reasons).toContain('requires_human_review');
+
+      const unsupportedClaim = evaluateValidatorGate({
+        validator: validator({}),
+        unsupportedClaims: ['dilution: 1:64'],
+      });
+      expect(unsupportedClaim.pass).toBe(false);
+      expect(unsupportedClaim.reasons.some((x) => x.startsWith('unsupported_safety_claim'))).toBe(true);
+    });
   });
 });

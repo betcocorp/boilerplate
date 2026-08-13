@@ -11,6 +11,8 @@ export type ProductEfficacyFact = {
   dilutionOzPerGal: number | null;
   contactTimeSeconds: number | null;
   epaRegistration: string | null;
+  /** B0-257: row-level confidence from rag.product_efficacy.confidence (default 1.0 = verified/source-of-record). */
+  confidence: number | null;
 };
 
 export type ProductLineFacts = {
@@ -20,8 +22,17 @@ export type ProductLineFacts = {
   coverageSqFt: number | null;
   chemistryClass: string | null;
   productApplication: string | null;
+  /** Confidence for productApplication specifically (B0-263) -- classifier-derived, never 1.0. Null when productApplication is null. */
+  productApplicationConfidence: number | null;
   epaRegistration: string | null;
   contactTimeSeconds: number | null;
+  /**
+   * B0-257: row-level confidence from rag.product_line_fact.confidence, covering the
+   * dilution/coverage/chemistry/EPA-reg/contact-time columns above (default 1.0 =
+   * verified/source-of-record; product_application has its own separate confidence
+   * field since it's classifier-derived, not a stamped fact -- see B0-263 above).
+   */
+  confidence: number;
   efficacy: ProductEfficacyFact[];
 };
 
@@ -40,14 +51,14 @@ export async function fetchProductLineFacts(
     rag
       .from('product_line_fact')
       .select(
-        'entity_id, dilution_oz_per_gal, dilution_display, coverage_sq_ft, chemistry_class, product_application, epa_registration, contact_time_seconds',
+        'entity_id, dilution_oz_per_gal, dilution_display, coverage_sq_ft, chemistry_class, product_application, product_application_confidence, epa_registration, contact_time_seconds, confidence',
       )
       .in('entity_id', unique)
       .is('product_key', null),
     rag
       .from('product_efficacy')
       .select(
-        'entity_id, organism, claim_type, dilution_oz_per_gal, contact_time_seconds, epa_registration',
+        'entity_id, organism, claim_type, dilution_oz_per_gal, contact_time_seconds, epa_registration, confidence',
       )
       .in('entity_id', unique),
   ]);
@@ -65,6 +76,7 @@ export async function fetchProductLineFacts(
       dilutionOzPerGal: row.dilution_oz_per_gal,
       contactTimeSeconds: row.contact_time_seconds,
       epaRegistration: row.epa_registration,
+      confidence: row.confidence,
     });
     efficacyByEntity.set(row.entity_id, list);
   }
@@ -77,8 +89,10 @@ export async function fetchProductLineFacts(
       coverageSqFt: row.coverage_sq_ft,
       chemistryClass: row.chemistry_class,
       productApplication: row.product_application,
+      productApplicationConfidence: row.product_application_confidence,
       epaRegistration: row.epa_registration,
       contactTimeSeconds: row.contact_time_seconds,
+      confidence: row.confidence,
       efficacy: efficacyByEntity.get(row.entity_id) ?? [],
     });
   }
@@ -93,8 +107,13 @@ export async function fetchProductLineFacts(
         coverageSqFt: null,
         chemistryClass: null,
         productApplication: null,
+        productApplicationConfidence: null,
         epaRegistration: null,
         contactTimeSeconds: null,
+        // No product_line_fact row for this entity -- confidence defaults to the same
+        // 1.0 baseline the column itself defaults to, since there's no lower-confidence
+        // signal without a row.
+        confidence: 1,
         efficacy,
       });
     }
@@ -146,18 +165,35 @@ function hasAnyScalar(f: ProductLineFacts): boolean {
   );
 }
 
+/** B0-257: row confidence < 1.0 means the value is not a clean stamped fact -- surface it so an answer doesn't overstate certainty. */
+function confidenceCaveat(confidence: number | null): string {
+  return confidence != null && confidence < 1 ? ` (confidence ${confidence})` : '';
+}
+
 function renderFacts(name: string, f: ProductLineFacts): string | null {
   const lines: string[] = [`### ${name}`];
+  const lineConfidenceNote = confidenceCaveat(f.confidence);
 
   if (f.dilutionDisplay || f.dilutionOzPerGal != null) {
     const oz = f.dilutionOzPerGal != null ? ` (${f.dilutionOzPerGal} oz/gal)` : '';
-    lines.push(`- **Dilution:** ${f.dilutionDisplay ?? `${f.dilutionOzPerGal} oz/gal`}${f.dilutionDisplay && oz ? oz : ''}`);
+    lines.push(
+      `- **Dilution:** ${f.dilutionDisplay ?? `${f.dilutionOzPerGal} oz/gal`}${f.dilutionDisplay && oz ? oz : ''}${lineConfidenceNote}`,
+    );
   }
-  if (f.coverageSqFt != null) lines.push(`- **Coverage:** ${f.coverageSqFt.toLocaleString()} sq ft/gal`);
-  if (f.chemistryClass) lines.push(`- **Chemistry:** ${f.chemistryClass}`);
-  if (f.productApplication) lines.push(`- **Application:** ${f.productApplication}`);
-  if (f.epaRegistration) lines.push(`- **EPA reg:** ${f.epaRegistration}`);
-  if (f.contactTimeSeconds != null) lines.push(`- **Contact time:** ${f.contactTimeSeconds}s`);
+  if (f.coverageSqFt != null) lines.push(`- **Coverage:** ${f.coverageSqFt.toLocaleString()} sq ft/gal${lineConfidenceNote}`);
+  if (f.chemistryClass) lines.push(`- **Chemistry:** ${f.chemistryClass}${lineConfidenceNote}`);
+  if (f.productApplication) {
+    // B0-263: application is classifier-derived (confidence < 1.0), never a stamped
+    // fact like dilution/EPA reg -- render it as unverified so it isn't treated as
+    // equally authoritative.
+    const confidenceNote =
+      f.productApplicationConfidence != null
+        ? ` (classified, confidence ${f.productApplicationConfidence}, unverified)`
+        : ' (classified, unverified)';
+    lines.push(`- **Application:** ${f.productApplication}${confidenceNote}`);
+  }
+  if (f.epaRegistration) lines.push(`- **EPA reg:** ${f.epaRegistration}${lineConfidenceNote}`);
+  if (f.contactTimeSeconds != null) lines.push(`- **Contact time:** ${f.contactTimeSeconds}s${lineConfidenceNote}`);
 
   if (f.efficacy.length > 0) {
     lines.push('- **Efficacy (verified kill claims):**');
@@ -168,7 +204,9 @@ function renderFacts(name: string, f: ProductLineFacts): string | null {
         e.contactTimeSeconds != null ? `${e.contactTimeSeconds}s contact` : null,
         e.epaRegistration ? `EPA ${e.epaRegistration}` : null,
       ].filter(Boolean);
-      lines.push(`  - ${e.organism}${parts.length ? ` — ${parts.join(', ')}` : ''}`);
+      lines.push(
+        `  - ${e.organism}${parts.length ? ` — ${parts.join(', ')}` : ''}${confidenceCaveat(e.confidence)}`,
+      );
     }
   }
 

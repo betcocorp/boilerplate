@@ -5,6 +5,7 @@ import {
   extractItemSimilarityScore,
   extractSearchRunMaxSimilarity,
 } from './response-payload';
+import { COMPLETED_RUN_STATUSES } from './types';
 import type {
   LatestFailedTestResultItemView,
   NewTestItemRecord,
@@ -94,7 +95,11 @@ const TEST_ITEMS_PAGE_SIZE = 1000;
 
 export type TestItemSuggestionRow = Pick<
   TestItemRecord,
-  'expected_result_type' | 'expected_canonical_product' | 'expected_reason_code' | 'input_payload'
+  | 'expected_result_type'
+  | 'expected_canonical_product'
+  | 'expected_reason_code'
+  | 'source'
+  | 'input_payload'
 >;
 
 /** Fetches every row for the test (Supabase caps single queries at `max_rows`, often 1000). */
@@ -121,7 +126,7 @@ export async function getTestItemSuggestionRows(testId: string): Promise<TestIte
     supabase
       .from('test_items')
       .select(
-        'expected_result_type, expected_canonical_product, expected_reason_code, input_payload',
+        'expected_result_type, expected_canonical_product, expected_reason_code, source, input_payload',
       )
       .eq('test_id', testId)
       .order('row_index', { ascending: true })
@@ -139,7 +144,7 @@ export async function getGlobalTestItemSuggestionRows(): Promise<TestItemSuggest
     supabase
       .from('test_items')
       .select(
-        'expected_result_type, expected_canonical_product, expected_reason_code, input_payload',
+        'expected_result_type, expected_canonical_product, expected_reason_code, source, input_payload',
       )
       .order('id', { ascending: true })
       .range(from, to)
@@ -332,6 +337,43 @@ export async function updateTestResult(
   return assertNoError(result) as TestResultRecord;
 }
 
+/** Persists the "Analyze this run" AI insights so they survive page reloads. */
+export async function saveTestResultInsights(
+  resultId: string,
+  insights: NewTestResultRecord['insights'],
+) {
+  return updateTestResult(resultId, {
+    insights,
+    insights_generated_at: new Date().toISOString(),
+  });
+}
+
+/** Reads back the "Generate report" checkpointed progress/state for a run (B0-453). */
+export async function getReportState(resultId: string) {
+  const result = await getTestResultById(resultId);
+  return result.report_state;
+}
+
+/** Persists checkpointed "Generate report" progress so scoring can resume across requests. */
+export async function saveReportState(
+  resultId: string,
+  reportState: NewTestResultRecord['report_state'],
+) {
+  return updateTestResult(resultId, { report_state: reportState });
+}
+
+/** Persists the final rendered Markdown eval report once every case has been scored. */
+export async function saveReportMarkdown(
+  resultId: string,
+  markdown: string,
+  generatedAt: string,
+) {
+  return updateTestResult(resultId, {
+    report: markdown,
+    report_generated_at: generatedAt,
+  });
+}
+
 export async function claimQueuedTestResultForExecution(resultId: string) {
   const supabase = getSupabaseServiceRoleClient();
   const result = await supabase
@@ -403,7 +445,7 @@ export async function getTestResultById(testResultId: string) {
 const RESULT_ITEMS_PAGE_SIZE = 500;
 const TEST_CASE_METRICS_PAGE_SIZE = 1000;
 const TEST_RUNS_PAGE_SIZE = 500;
-const COMPLETED_TEST_RUN_STATUSES = ['completed', 'completed_with_failures'] as const;
+const COMPLETED_TEST_RUN_STATUSES = COMPLETED_RUN_STATUSES;
 
 export async function listResultItemsByResultId(testResultId: string, limit = 200) {
   const supabase = getSupabaseServiceRoleClient();

@@ -19,7 +19,7 @@ export const metadata = {
 };
 
 const SEARCH_ROUTE = '/admin/products/rag';
-type SearchScope = 'all' | 'products' | 'sds';
+type SearchScope = 'all' | 'products' | 'sds' | 'knowledge' | 'label';
 
 type SearchPageProps = {
   searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
@@ -133,11 +133,26 @@ function buildProductLineDetailHref(
 
 function parseScope(value: string | string[] | undefined): SearchScope {
   const raw = readSearchParam(value).trim().toLowerCase();
-  if (raw === 'products' || raw === 'sds') {
+  if (
+    raw === 'products' ||
+    raw === 'sds' ||
+    raw === 'knowledge' ||
+    raw === 'label'
+  ) {
     return raw;
   }
 
   return 'all';
+}
+
+/**
+ * Retrieval mode. Defaults to `hybrid` so short/alphanumeric tokens (SKUs, product codes like
+ * "ph7q") are matched lexically via BM25 — pure vector search embeds such tokens to near-noise
+ * and returns arbitrary neighbours. Explicit `retrieval=vector` opts back into vector-only.
+ */
+function parseUseHybrid(value: string | string[] | undefined): boolean {
+  const raw = readSearchParam(value).trim().toLowerCase();
+  return raw !== 'vector';
 }
 
 async function loadPopularQueries() {
@@ -199,6 +214,7 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
   const query = readSearchParam(resolvedSearchParams.q);
   const productLineKey = readSearchParam(resolvedSearchParams.productLineKey);
   const scope = parseScope(resolvedSearchParams.scope);
+  const useHybrid = parseUseHybrid(resolvedSearchParams.retrieval);
   const rawMinSimilarity = readSearchParam(resolvedSearchParams.minSimilarity);
   const minSimilarity = parseMinSimilarity(resolvedSearchParams.minSimilarity);
   const popularQueries = await loadPopularQueries();
@@ -222,6 +238,7 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
         limit,
         productLineKey: productLineKey || undefined,
         scope,
+        useHybrid,
         minSimilarity: minSimilarity ?? undefined,
       });
 
@@ -284,7 +301,7 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
                   />
                 </div>
               </div>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-4 gap-2">
                 <div className="flex flex-col gap-2">
                   <Label className="text-sm font-medium text-slate-700">
                     Scope
@@ -297,6 +314,21 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
                     <option value="all">All</option>
                     <option value="products">Products</option>
                     <option value="sds">SDS</option>
+                    <option value="knowledge">Knowledge (markdown)</option>
+                    <option value="label">Labels</option>
+                  </NativeSelect>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label className="text-sm font-medium text-slate-700">
+                    Retrieval
+                  </Label>
+                  <NativeSelect
+                    className="h-12 rounded-2xl px-4"
+                    defaultValue={useHybrid ? 'hybrid' : 'vector'}
+                    name="retrieval"
+                  >
+                    <option value="hybrid">Hybrid (vector + keyword)</option>
+                    <option value="vector">Vector only</option>
                   </NativeSelect>
                 </div>
                 <div className="flex flex-col gap-2">
@@ -360,7 +392,11 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
                   ? 'Scope: all corpus docs (EN only).'
                   : result.scope === 'products'
                     ? 'Scope: products only (EN only).'
-                    : 'Scope: SDS only (EN only).'}{' '}
+                    : result.scope === 'sds'
+                      ? 'Scope: SDS only (EN only).'
+                      : result.scope === 'knowledge'
+                        ? 'Scope: knowledge/markdown only (EN only).'
+                        : 'Scope: labels only (EN only).'}{' '}
                 {result.productLineKey
                   ? `Filtered to product line ${result.productLineKey}.`
                   : 'No metadata filter applied.'}

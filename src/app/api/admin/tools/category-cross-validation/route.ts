@@ -3,6 +3,8 @@ import { NextResponse } from 'next/server';
 
 import { generateCrossValidationReport } from '~/lib/category/cross-validation-report';
 import { authOptions } from '~/lib/auth';
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { gateRoute } from '~/lib/permissions/route-gate';
 import { getErrorMessage } from '~/lib/utils';
 
 export const runtime = 'nodejs';
@@ -18,6 +20,13 @@ export async function GET() {
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
+
+  const denied = await gateRoute(
+    PERMISSIONS.NAVIGATION_SIDEBAR_TOOLS,
+    'GET /api/admin/tools/category-cross-validation',
+  );
+  if (denied) return denied;
+
   try {
     const report = await generateCrossValidationReport();
     return NextResponse.json({ ok: true, report });

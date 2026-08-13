@@ -13,6 +13,13 @@ export function isTerminalRunStatus(status: string): boolean {
   return (TERMINAL_RUN_STATUSES as readonly string[]).includes(status);
 }
 
+/** Runs that finished executing all items (as opposed to still running, failed to run, or cancelled). */
+export const COMPLETED_RUN_STATUSES = ['completed', 'completed_with_failures'] as const;
+
+export function isCompletedRunStatus(status: string): boolean {
+  return (COMPLETED_RUN_STATUSES as readonly string[]).includes(status);
+}
+
 export type TestRecord = Tables<'tests'>;
 export type TestItemRecord = Tables<'test_items'>;
 export type TestResultRecord = Tables<'test_results'>;
@@ -31,6 +38,13 @@ export type ParsedCsvRow = {
   expectedResultType: string | null;
   expectedCanonicalProduct: string | null;
   expectedReasonCode: string | null;
+  source: string | null;
+  priority: number | null;
+  idealResponse: string | null;
+  expectedConcepts: string | null;
+  minimumConcepts: string | null;
+  expectedSources: string | null;
+  shouldCite: boolean | null;
   inputPayload: Record<string, string>;
   metadata: Record<string, string>;
 };

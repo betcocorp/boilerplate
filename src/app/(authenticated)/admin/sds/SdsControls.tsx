@@ -1,19 +1,26 @@
 'use client';
 
-import { Loader2 } from 'lucide-react';
+import { CheckCircle2, Loader2, PlayCircle, StopCircle } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useActionState, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '~/components/ui/button';
-import { Input } from '~/components/ui/input';
-import { Label } from '~/components/ui/label';
-import { formatDurationMmSs, formatEasternTimestamp } from '~/lib/utils/time';
+import {
+  runSdsSyncAction,
+  type SdsSyncActionState,
+  type SdsSyncStatus,
+} from '~/lib/rag/sds-sync-actions';
+import {
+  formatDurationMmSs,
+  formatEasternTime,
+  formatEasternTimestamp,
+} from '~/lib/utils/time';
 
 import { runSdsAction, type SdsActionState } from './actions';
-import type { SdsDashboardStatus, SdsIngestionRunMode } from './pipeline';
+import type { SdsDashboardStatus } from './pipeline';
 
-const initialState: SdsActionState = {
+const ingestionInitialState: SdsActionState = {
   ok: false,
   message: null,
   error: null,
@@ -21,18 +28,26 @@ const initialState: SdsActionState = {
   result: null,
 };
 
-const AUTO_REPEAT_MODES = ['embed-next'] as const;
-type AutoRepeatMode = (typeof AUTO_REPEAT_MODES)[number];
+const syncInitialState: SdsSyncActionState = {
+  ok: false,
+  message: null,
+  error: null,
+  timestamp: 0,
+  durationMs: 0,
+  hasMore: true,
+  remaining: 0,
+  totalProcessedThisSession: 0,
+  totalChunksThisSession: 0,
+  history: [],
+  result: null,
+};
 
-function isAutoRepeatMode(value: string | undefined): value is AutoRepeatMode {
-  return AUTO_REPEAT_MODES.includes(value as AutoRepeatMode);
-}
-
-function pendingCountForMode(
-  _mode: AutoRepeatMode,
-  status: SdsDashboardStatus,
-): number {
-  return status.totals.pendingChunks ?? 0;
+function StepNumber({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-sky-100 text-sm font-semibold text-sky-700">
+      {children}
+    </span>
+  );
 }
 
 function statusClasses(status: string) {
@@ -52,232 +67,483 @@ function formatIso(value: string | null) {
   if (!value) {
     return 'N/A';
   }
-
   return formatEasternTimestamp(value);
 }
 
-export function SdsControls({
-  initialStatus,
-}: {
+type Props = {
   initialStatus: SdsDashboardStatus;
-}) {
-  const router = useRouter();
-  const [state, formAction, pending] = useActionState(runSdsAction, initialState);
-  const [batchSize, setBatchSize] = useState('2');
-  const [activeMode, setActiveMode] = useState<SdsIngestionRunMode | null>(null);
-  const [actionStartedAt, setActionStartedAt] = useState<number | null>(null);
-  const [timerNow, setTimerNow] = useState(() => Date.now());
-  const [autoRunMode, setAutoRunMode] = useState<AutoRepeatMode | null>(null);
-  const [autoRunNextAt, setAutoRunNextAt] = useState<number | null>(null);
-  const embedFormRef = useRef<HTMLFormElement>(null);
+  initialSyncStatus: SdsSyncStatus;
+};
 
+export function SdsControls({ initialStatus, initialSyncStatus }: Props) {
+  const router = useRouter();
+
+  // Register / Ingest / Retry / Embed share one action — all but Embed run to
+  // completion in a single click; Embed auto-continues below if work remains.
+  const [state, formAction, pending] = useActionState(
+    runSdsAction,
+    ingestionInitialState,
+  );
+  const [activeMode, setActiveMode] = useState<string | null>(null);
+  const [autoEmbedding, setAutoEmbedding] = useState(false);
+  const [autoEmbedNextAt, setAutoEmbedNextAt] = useState<number | null>(null);
+  const embedFormRef = useRef<HTMLFormElement>(null);
   const activeStatus = state.result?.status ?? initialStatus;
 
-  // Refresh server-fetched stats every 2.5 min while ingestion is running
-  useEffect(() => {
-    if (!pending && autoRunMode === null) return;
-    const interval = window.setInterval(() => router.refresh(), 150_000);
-    return () => window.clearInterval(interval);
-  }, [pending, autoRunMode, router]);
+  // Chunk sync (step 3) has its own batched, drain-to-empty contract — kept separate.
+  const [syncState, syncFormAction, syncPending] = useActionState(
+    runSdsSyncAction,
+    syncInitialState,
+  );
+  const [autoChunking, setAutoChunking] = useState(false);
+  const [autoChunkNextAt, setAutoChunkNextAt] = useState<number | null>(null);
+  const [chunkStartedAt, setChunkStartedAt] = useState<number | null>(null);
+  const [timerNow, setTimerNow] = useState(() => Date.now());
+  const chunkFormRef = useRef<HTMLFormElement>(null);
 
-  const actionLabels: Record<SdsIngestionRunMode, string> = {
-    'register-seed': 'Register discovered PDFs',
-    'ingest-next': 'Ingest next batch',
-    'ingest-all': 'Ingest all pending',
-    'retry-failed': 'Retry failed files',
-    'embed-next': 'Embed next batch',
-    'embed-all': 'Embed all pending',
-  };
-
-  useEffect(() => {
-    if (state.timestamp === 0) {
-      return;
-    }
-
-    const description = `Completed at ${formatEasternTimestamp(state.timestamp)}.`;
-
-    if (state.ok) {
-      toast.success(state.message || 'SDS ingestion action completed.', { description });
-    } else {
-      toast.error(state.error || 'SDS ingestion action failed.', { description });
-    }
-
-    // Schedule next auto-run pass when an embedding action succeeds with work remaining.
-    const completedMode = state.result?.mode;
-    if (state.ok && isAutoRepeatMode(completedMode) && state.result?.status) {
-      const remaining = pendingCountForMode(completedMode, state.result.status);
-      if (remaining > 0) {
-        setAutoRunMode(completedMode);
-        setAutoRunNextAt(Date.now());
-        return;
-      }
-    }
-    setAutoRunMode(null);
-    setAutoRunNextAt(null);
-  }, [state]);
-
-  // Tick every second while an action is running to update the elapsed timer.
-  useEffect(() => {
-    if (!pending) {
-      return;
-    }
-
-    const interval = window.setInterval(() => {
-      setTimerNow(Date.now());
-    }, 1000);
-
-    return () => {
-      window.clearInterval(interval);
-    };
-  }, [pending]);
-
-  // Fire the next auto-run pass immediately when triggered.
-  useEffect(() => {
-    if (autoRunNextAt === null || autoRunMode === null || pending) {
-      return;
-    }
-
-    const delay = Math.max(0, autoRunNextAt - Date.now());
-    const timer = window.setTimeout(() => {
-      embedFormRef.current?.requestSubmit();
-    }, delay);
-
-    return () => {
-      window.clearTimeout(timer);
-    };
-  }, [autoRunNextAt, autoRunMode, pending]);
-
-  const currentElapsedMs =
-    pending && actionStartedAt !== null
-      ? Math.max(0, timerNow - actionStartedAt)
+  const chunkTotalKnown =
+    syncState.timestamp > 0
+      ? syncState.totalProcessedThisSession + syncState.remaining
+      : initialSyncStatus.pendingChunkDocs;
+  const chunkProcessed = syncState.totalProcessedThisSession;
+  const chunkProgressPct =
+    chunkTotalKnown > 0
+      ? Math.min(100, Math.round((chunkProcessed / chunkTotalKnown) * 100))
+      : 0;
+  const chunkIsDone =
+    syncState.timestamp > 0 && !syncState.hasMore && syncState.ok;
+  const chunkElapsedMs =
+    syncPending && chunkStartedAt !== null
+      ? Math.max(0, timerNow - chunkStartedAt)
       : 0;
 
-  const lastRunDurationMs =
-    state.result?.startedAt && state.result?.finishedAt
-      ? Math.max(
-          0,
-          Date.parse(state.result.finishedAt) - Date.parse(state.result.startedAt),
+  const embedProgressPct =
+    activeStatus.totals.chunks > 0
+      ? Math.min(
+          100,
+          Math.round(
+            (activeStatus.totals.embeddedChunks / activeStatus.totals.chunks) *
+              100,
+          ),
         )
-      : null;
+      : 0;
+  const embedIsDone =
+    activeStatus.totals.chunks > 0 && activeStatus.totals.pendingChunks === 0;
 
-  const buttons: [SdsIngestionRunMode, string][] = [
-    ['register-seed', 'Register discovered PDFs'],
-    ['ingest-next', 'Ingest next batch'],
-    ['ingest-all', 'Ingest all pending'],
-    ['retry-failed', 'Retry failed files'],
-    ['embed-next', 'Embed next batch'],
-    ['embed-all', 'Embed all pending'],
-  ];
+  // Toast + auto-continue for register/ingest/retry/embed results.
+  useEffect(() => {
+    if (state.timestamp === 0) return;
+
+    const description = `Completed at ${formatEasternTimestamp(state.timestamp)}.`;
+    if (state.ok) {
+      toast.success(state.message || 'SDS ingestion action completed.', {
+        description,
+      });
+    } else {
+      toast.error(state.error || 'SDS ingestion action failed.', {
+        description,
+      });
+      setAutoEmbedding(false);
+      setAutoEmbedNextAt(null);
+      return;
+    }
+
+    if (
+      state.result?.mode === 'embed-all' &&
+      state.result.status.totals.pendingChunks > 0
+    ) {
+      setAutoEmbedding(true);
+      setAutoEmbedNextAt(Date.now());
+    } else {
+      setAutoEmbedding(false);
+      setAutoEmbedNextAt(null);
+    }
+  }, [state]);
+
+  // Toast for chunk sync results.
+  useEffect(() => {
+    if (syncState.timestamp === 0) return;
+
+    if (syncState.ok) {
+      if (syncState.hasMore && autoChunking) {
+        setAutoChunkNextAt(Date.now());
+      } else if (!syncState.hasMore) {
+        setAutoChunking(false);
+        setAutoChunkNextAt(null);
+        toast.success('Chunking complete', {
+          description: `${syncState.totalProcessedThisSession.toLocaleString()} documents chunked. Embed (step 4) will pick up the new chunks.`,
+        });
+      }
+    } else {
+      setAutoChunking(false);
+      setAutoChunkNextAt(null);
+      toast.error(syncState.error ?? 'SDS chunking failed.');
+    }
+  }, [syncState]);
+
+  // Elapsed timer while the chunk step is running.
+  useEffect(() => {
+    if (!syncPending) return;
+    const interval = window.setInterval(() => setTimerNow(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, [syncPending]);
+
+  // Refresh server-fetched stats periodically while anything is running.
+  useEffect(() => {
+    if (!pending && !syncPending && !autoEmbedding && !autoChunking) return;
+    const interval = window.setInterval(() => router.refresh(), 150_000);
+    return () => window.clearInterval(interval);
+  }, [pending, syncPending, autoEmbedding, autoChunking, router]);
+
+  // Fire the next embed pass when auto-embedding.
+  useEffect(() => {
+    if (autoEmbedNextAt === null || !autoEmbedding || pending) return;
+    const delay = Math.max(0, autoEmbedNextAt - Date.now());
+    const timer = window.setTimeout(
+      () => embedFormRef.current?.requestSubmit(),
+      delay,
+    );
+    return () => window.clearTimeout(timer);
+  }, [autoEmbedNextAt, autoEmbedding, pending]);
+
+  // Fire the next chunk batch when auto-chunking.
+  useEffect(() => {
+    if (autoChunkNextAt === null || !autoChunking || syncPending) return;
+    const delay = Math.max(0, autoChunkNextAt - Date.now());
+    const timer = window.setTimeout(
+      () => chunkFormRef.current?.requestSubmit(),
+      delay,
+    );
+    return () => window.clearTimeout(timer);
+  }, [autoChunkNextAt, autoChunking, syncPending]);
+
+  function startChunking() {
+    setAutoChunking(true);
+    setAutoChunkNextAt(null);
+    setChunkStartedAt(Date.now());
+    setTimerNow(Date.now());
+    chunkFormRef.current?.requestSubmit();
+  }
+
+  function stopChunking() {
+    setAutoChunking(false);
+    setAutoChunkNextAt(null);
+  }
+
+  function stopEmbedding() {
+    setAutoEmbedding(false);
+    setAutoEmbedNextAt(null);
+  }
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1.9fr)]">
-      <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+    <div className="flex flex-col gap-6">
+      <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
         <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-700">
-          Ingestion controls
+          Ingestion pipeline
         </p>
         <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
-          Seed and process SDS PDFs
+          Get SDS PDFs from S3 into Bex
         </h2>
-        <p className="mt-3 text-sm leading-6 text-slate-600">
-          Discover and register S3 PDFs first, then ingest into `rag.document`
-          and `rag.document_chunk`. Use embedding actions to fill vectors for
-          SDS chunks, and retry for files that fail due to object access or
-          parsing.
+        <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-600">
+          Four steps, run in order. Each one only processes what the previous
+          step left behind, so it's safe to run a step again — it just won't
+          find any new work to do.
         </p>
 
-        <div className="mt-6 flex flex-col gap-2">
-          <Label className="text-sm font-medium text-slate-700">Batch size</Label>
-          <Input
-            className="h-11 rounded-2xl px-4"
-            min={1}
-            onChange={(event) => setBatchSize(event.target.value)}
-            type="number"
-            value={batchSize}
-          />
-        </div>
-
-        <div className="mt-6 grid gap-3">
-          {buttons.map(([mode, label]) => (
-            <form
-              action={formAction}
-              className="flex"
-              key={mode}
-              ref={mode === 'embed-next' ? embedFormRef : undefined}
-              onSubmit={() => {
-                // Cancel scheduled auto-run when the user manually triggers any action.
-                setAutoRunMode(null);
-                setAutoRunNextAt(null);
-                const startedAt = Date.now();
-                setActiveMode(mode);
-                setActionStartedAt(startedAt);
-                setTimerNow(startedAt);
-              }}
-            >
-              <input name="mode" type="hidden" value={mode} />
-              <input name="batchSize" type="hidden" value={batchSize} />
+        <div className="mt-8 grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-4">
+          {/* Step 1 — Register */}
+          <div className="flex flex-col gap-3 py-6 items-center">
+            <div className="flex flex-col items-center">
+              <StepNumber>1</StepNumber>
+              <h3 className="text-lg font-semibold text-slate-950">
+                Register discovered PDFs
+              </h3>
+              <p className="text-xs text-slate-500">
+                {activeStatus.totals.registered.toLocaleString()} /{' '}
+                {activeStatus.totals.seeded.toLocaleString()} files registered
+              </p>
+            </div>
+            <p className="text-sm leading-6 text-slate-600 text-center">
+              Scans the S3 SDS bucket for PDFs Bex doesn&apos;t already know
+              about and creates a record for each new one. Files that are already
+              registered are skipped, so this is safe to run anytime.
+            </p>
+            <form action={formAction} onSubmit={() => setActiveMode('register-seed')}>
+              <input name="mode" type="hidden" value="register-seed" />
               <Button
-                className="h-11 w-full rounded-2xl px-4 font-semibold"
+                className="h-11 rounded-2xl px-5 font-semibold"
                 disabled={pending}
                 type="submit"
               >
-                {pending ? (
+                {pending && activeMode === 'register-seed' ? (
                   <>
                     <Loader2 className="mr-2 size-4 animate-spin" />
-                    Working...
+                    Registering...
                   </>
                 ) : (
-                  label
+                  'Register new files'
                 )}
               </Button>
             </form>
-          ))}
-        </div>
+          </div>
 
-        {pending ? (
-          <div className="mt-6 flex items-center justify-between gap-3 rounded-2xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-900">
-            <div className="flex items-center gap-3">
-              <Loader2 className="size-4 animate-spin" />
-              <div>
-                <p className="font-semibold">
-                  {activeMode ? (actionLabels[activeMode] ?? activeMode) : 'SDS action'}
-                </p>
-                <p className="mt-0.5">
-                  Elapsed: {formatDurationMmSs(currentElapsedMs)}
-                </p>
+          {/* Step 2 — Ingest */}
+          <div className="flex flex-col gap-3 py-6 items-center">
+            <div className="flex flex-col items-center">
+              <StepNumber>2</StepNumber>
+              <h3 className="text-lg font-semibold text-slate-950">
+                Ingest registered PDFs
+              </h3>
+              <p className="text-xs text-slate-500 text-center">
+                {activeStatus.totals.ingested.toLocaleString()} /{' '}
+                {activeStatus.totals.registered.toLocaleString()} ingested
+                {activeStatus.totals.failed > 0 ? (
+                  <span className="text-rose-600">
+                    {' '}
+                    · {activeStatus.totals.failed.toLocaleString()} failed
+                  </span>
+                ) : null}
+              </p>
+            </div>
+            <p className="text-sm leading-6 text-slate-600 text-center">
+              Downloads every registered PDF, extracts its text, and saves it as
+              a document Bex can look up (`rag.document`). A document has to be
+              ingested before it can be chunked in step 3.
+            </p>
+            <div className="flex flex-wrap justify-center gap-3">
+              <form action={formAction} onSubmit={() => setActiveMode('ingest-all')}>
+                <input name="mode" type="hidden" value="ingest-all" />
+                <Button
+                  className="h-11 rounded-2xl px-5 font-semibold"
+                  disabled={pending}
+                  type="submit"
+                >
+                  {pending && activeMode === 'ingest-all' ? (
+                    <>
+                      <Loader2 className="mr-2 size-4 animate-spin" />
+                      Ingesting...
+                    </>
+                  ) : (
+                    'Ingest all pending'
+                  )}
+                </Button>
+              </form>
+              {activeStatus.totals.failed > 0 ? (
+                <form action={formAction} onSubmit={() => setActiveMode('retry-failed')}>
+                  <input name="mode" type="hidden" value="retry-failed" />
+                  <Button
+                    className="h-11 rounded-2xl px-5 font-semibold"
+                    disabled={pending}
+                    type="submit"
+                    variant="outline"
+                  >
+                    {pending && activeMode === 'retry-failed' ? (
+                      <>
+                        <Loader2 className="mr-2 size-4 animate-spin" />
+                        Retrying...
+                      </>
+                    ) : (
+                      `Retry ${activeStatus.totals.failed.toLocaleString()} failed file${activeStatus.totals.failed === 1 ? '' : 's'}`
+                    )}
+                  </Button>
+                </form>
+              ) : null}
+            </div>
+          </div>
+
+          {/* Step 3 — Chunk */}
+          <div className="flex flex-col gap-3 py-6 items-center">
+            <div className="flex flex-col items-center">
+              <StepNumber>3</StepNumber>
+              <h3 className="text-lg font-semibold text-slate-950">
+                Chunk ingested documents
+              </h3>
+              <div className="flex justify-between text-xs text-slate-600 text-center">
+                <span>
+                  {chunkIsDone
+                    ? 'Chunking complete'
+                    : chunkProcessed > 0
+                      ? `${chunkProcessed.toLocaleString()} of ~${chunkTotalKnown.toLocaleString()} documents chunked`
+                      : `~${initialSyncStatus.pendingChunkDocs.toLocaleString()} documents pending chunking`}
+                </span>
+                <span className="text-slate-400">
+                  &nbsp;{chunkProgressPct}%
+                </span>
               </div>
             </div>
-            {autoRunMode !== null ? (
-              <button
-                className="rounded-xl bg-sky-100 px-3 py-1.5 text-xs font-semibold text-sky-900 hover:bg-sky-200"
-                onClick={() => {
-                  setAutoRunMode(null);
-                  setAutoRunNextAt(null);
-                }}
-                type="button"
+            <p className="text-sm leading-6 text-slate-600 text-center">
+              Splits each ingested SDS into smaller, labeled sections — hazards,
+              first-aid, handling, and so on — so the right passage can be found
+              later. Only processes documents that don&apos;t have sections yet,
+              so already-chunked documents are left alone. Runs in batches of 100
+              documents; use Start to work through all of them automatically.
+            </p>
+
+            <div className="h-2.5 w-full overflow-hidden rounded-full bg-slate-100">
+              <div
+                className={`h-full rounded-full transition-all duration-500 ${
+                  chunkIsDone ? 'bg-emerald-500' : 'bg-sky-500'
+                }`}
+                style={{ width: `${chunkIsDone ? 100 : chunkProgressPct}%` }}
+              />
+            </div>
+
+            <form action={syncFormAction} className="hidden" ref={chunkFormRef}>
+              <input name="languageCode" type="hidden" value="EN" />
+            </form>
+
+            <div className="flex flex-wrap items-center gap-3">
+              {chunkIsDone ? (
+                <div className="flex items-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-2.5 text-sm font-semibold text-emerald-700">
+                  <CheckCircle2 className="size-4" />
+                  All documents chunked
+                </div>
+              ) : !autoChunking && !syncPending ? (
+                <Button
+                  className="h-11 gap-2 rounded-2xl px-5 font-semibold"
+                  onClick={startChunking}
+                  type="button"
+                >
+                  <PlayCircle className="size-4" />
+                  {syncState.timestamp > 0
+                    ? 'Resume chunking'
+                    : 'Start chunking'}
+                </Button>
+              ) : (
+                <Button
+                  className="h-11 gap-2 rounded-2xl px-5 font-semibold"
+                  onClick={stopChunking}
+                  type="button"
+                  variant="outline"
+                >
+                  <StopCircle className="size-4" />
+                  Stop after this batch
+                </Button>
+              )}
+
+              {(syncPending || (autoChunking && !syncPending)) && (
+                <div className="flex items-center gap-2 text-sm text-slate-600">
+                  <Loader2 className="size-4 animate-spin" />
+                  {syncPending
+                    ? `Batch running — ${formatDurationMmSs(chunkElapsedMs)}`
+                    : 'Queuing next batch…'}
+                </div>
+              )}
+            </div>
+
+            {syncState.timestamp > 0 ? (
+              <div
+                className={`rounded-2xl border p-3 text-sm ${
+                  syncState.ok
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                    : 'border-rose-200 bg-rose-50 text-rose-800'
+                }`}
               >
-                Stop auto
-              </button>
+                <span className="shrink-0 text-xs opacity-70">
+                  {formatEasternTime(syncState.timestamp)} •{' '}
+                  {formatDurationMmSs(syncState.durationMs)}
+                </span>
+                <div className="flex flex-col items-center justify-between gap-3">
+                  <p>{syncState.ok ? syncState.message : syncState.error}</p>
+                </div>
+              </div>
             ) : null}
           </div>
-        ) : autoRunMode !== null ? (
-          <div className="mt-6 flex items-center justify-between gap-3 rounded-2xl border border-violet-200 bg-violet-50 p-4 text-sm text-violet-800">
-            <div className="flex items-center gap-3">
-              <Loader2 className="size-4 animate-spin" />
-              <span>Auto-embed active &mdash; queuing next pass&hellip;</span>
-            </div>
-            <button
-              className="rounded-xl bg-violet-100 px-3 py-1.5 text-xs font-semibold text-violet-800 hover:bg-violet-200"
-              onClick={() => {
-                setAutoRunMode(null);
-                setAutoRunNextAt(null);
-              }}
-              type="button"
-            >
-              Stop
-            </button>
-          </div>
-        ) : null}
 
+          {/* Step 4 — Embed */}
+          <div className="flex flex-col gap-3 py-6 items-center">
+            <div className="flex flex-col items-center">
+              <StepNumber>4</StepNumber>
+              <h3 className="text-lg font-semibold text-slate-950">
+                Embed chunks
+              </h3>
+              <div className="mb-1.5 flex items-center justify-between text-xs text-slate-600">
+                <span>
+                  {embedIsDone
+                    ? 'All chunks embedded'
+                    : `${activeStatus.totals.embeddedChunks.toLocaleString()} / ${activeStatus.totals.chunks.toLocaleString()} chunks embedded`}
+                </span>
+                <span className="text-slate-400">
+                  &nbsp;{embedProgressPct}%
+                </span>
+              </div>
+            </div>
+            <p className="text-sm leading-6 text-slate-600 text-center">
+              Turns each chunk&apos;s text into a vector so Bex can find it by
+              meaning, not just exact keywords. Keeps running automatically — in
+              batches behind the scenes — until every chunk has one.
+            </p>
+
+            <div className="h-2.5 w-full overflow-hidden rounded-full bg-slate-100">
+              <div
+                className={`h-full rounded-full transition-all duration-500 ${
+                  embedIsDone ? 'bg-emerald-500' : 'bg-sky-500'
+                }`}
+                style={{ width: `${embedIsDone ? 100 : embedProgressPct}%` }}
+              />
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              {embedIsDone ? (
+                <div className="flex items-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-2.5 text-sm font-semibold text-emerald-700">
+                  <CheckCircle2 className="size-4" />
+                  All chunks embedded
+                </div>
+              ) : (
+                <form
+                  action={formAction}
+                  onSubmit={() => setActiveMode('embed-all')}
+                  ref={embedFormRef}
+                >
+                  <input name="mode" type="hidden" value="embed-all" />
+                  <Button
+                    className="h-11 gap-2 rounded-2xl px-5 font-semibold"
+                    disabled={pending}
+                    type="submit"
+                  >
+                    {pending && activeMode === 'embed-all' ? (
+                      <>
+                        <Loader2 className="mr-2 size-4 animate-spin" />
+                        Embedding...
+                      </>
+                    ) : (
+                      <>
+                        <PlayCircle className="size-4" />
+                        Embed all pending
+                      </>
+                    )}
+                  </Button>
+                </form>
+              )}
+
+              {autoEmbedding ? (
+                <Button
+                  className="h-11 gap-2 rounded-2xl px-5 font-semibold"
+                  onClick={stopEmbedding}
+                  type="button"
+                  variant="outline"
+                >
+                  <StopCircle className="size-4" />
+                  Stop after this batch
+                </Button>
+              ) : null}
+
+              {pending && activeMode === 'embed-all' ? (
+                <div className="flex items-center gap-2 text-sm text-slate-600">
+                  <Loader2 className="size-4 animate-spin" />
+                  Working...
+                </div>
+              ) : autoEmbedding && !pending ? (
+                <div className="flex items-center gap-2 text-sm text-slate-600">
+                  <Loader2 className="size-4 animate-spin" />
+                  Queuing next batch…
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+
+        {/* Last register/ingest/retry/embed result */}
         {state.timestamp > 0 ? (
           <div
             className={`mt-6 rounded-2xl border p-4 text-sm ${
@@ -289,15 +555,6 @@ export function SdsControls({
             <p className="font-semibold">
               {state.ok ? state.message : state.error || 'Action failed.'}
             </p>
-            {state.result ? (
-              <p className="mt-2 text-xs">
-                Processed {state.result.processed} • Succeeded{' '}
-                {state.result.succeeded} • Failed {state.result.failed}
-                {lastRunDurationMs !== null
-                  ? ` • Duration ${formatDurationMmSs(lastRunDurationMs)}`
-                  : ''}
-              </p>
-            ) : null}
             {state.result?.errors.length ? (
               <div className="mt-3 flex flex-col gap-2">
                 {state.result.errors.map((item) => (
@@ -313,12 +570,17 @@ export function SdsControls({
       </section>
 
       <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+        <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-700">
+          Documents
+        </p>
+
         {activeStatus.warning ? (
-          <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          <div className="mt-4 rounded-2xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-900">
             {activeStatus.warning}
           </div>
         ) : null}
-        <div className="grid gap-4 md:grid-cols-3 xl:grid-cols-5">
+
+        <div className="mt-4 grid gap-4 md:grid-cols-3 xl:grid-cols-5">
           <article className="rounded-2xl bg-slate-50 p-4">
             <p className="text-xs font-medium uppercase text-slate-500">Seeded</p>
             <p className="mt-1 text-2xl font-semibold text-slate-950">
@@ -344,9 +606,7 @@ export function SdsControls({
             </p>
           </article>
           <article className="rounded-2xl bg-slate-50 p-4">
-            <p className="text-xs font-medium uppercase text-slate-500">
-              Embedded
-            </p>
+            <p className="text-xs font-medium uppercase text-slate-500">Embedded</p>
             <p className="mt-1 text-2xl font-semibold text-slate-950">
               {activeStatus.totals.embeddedChunks}
             </p>
@@ -359,8 +619,8 @@ export function SdsControls({
         {activeStatus.preview.hidden > 0 ? (
           <p className="mt-4 text-xs text-slate-500">
             Showing {activeStatus.preview.showing} rows.{' '}
-            {activeStatus.preview.hidden} additional SDS documents are hidden
-            from this table preview.
+            {activeStatus.preview.hidden} additional SDS documents are hidden from
+            this table preview.
           </p>
         ) : null}
 
@@ -380,9 +640,7 @@ export function SdsControls({
                 <tr className="border-t border-slate-100" key={row.id}>
                   <td className="px-4 py-3 align-top">
                     <p className="font-medium text-slate-900">{row.title}</p>
-                    <p className="mt-1 font-mono text-xs text-slate-500">
-                      {row.s3Key}
-                    </p>
+                    <p className="mt-1 font-mono text-xs text-slate-500">{row.s3Key}</p>
                     {row.lastError ? (
                       <p className="mt-2 text-xs text-rose-700">{row.lastError}</p>
                     ) : null}
@@ -394,15 +652,9 @@ export function SdsControls({
                       {row.status}
                     </span>
                   </td>
-                  <td className="px-4 py-3 align-top text-slate-700">
-                    {row.locale}
-                  </td>
-                  <td className="px-4 py-3 align-top text-slate-700">
-                    {row.chunkCount}
-                  </td>
-                  <td className="px-4 py-3 align-top text-slate-700">
-                    {formatIso(row.updatedAt)}
-                  </td>
+                  <td className="px-4 py-3 align-top text-slate-700">{row.locale}</td>
+                  <td className="px-4 py-3 align-top text-slate-700">{row.chunkCount}</td>
+                  <td className="px-4 py-3 align-top text-slate-700">{formatIso(row.updatedAt)}</td>
                 </tr>
               ))}
             </tbody>

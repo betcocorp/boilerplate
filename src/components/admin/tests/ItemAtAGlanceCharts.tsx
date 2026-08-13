@@ -40,6 +40,8 @@ export type ElapsedTrendPoint = {
   ragSeconds: number | null;
   /** Seconds (null when the run did not record an elapsed value). */
   promptSeconds: number | null;
+  /** Seconds to first streamed token/chunk; null for legacy rows or no observed delta. */
+  ttftSeconds: number | null;
 };
 
 type ItemAtAGlanceChartsProps = {
@@ -73,6 +75,7 @@ const chartConfig = {
   avg: { label: 'Avg', color: '#a855f7' },
   ragSeconds: { label: 'RAG search', color: '#0ea5e9' },
   promptSeconds: { label: 'Total prompt', color: '#a855f7' },
+  ttftSeconds: { label: 'Time to first token', color: '#f59e0b' },
 } satisfies ChartConfig;
 
 function formatSecondsValue(value: unknown): string {
@@ -120,7 +123,8 @@ export function ItemAtAGlanceCharts({
       elapsedTrend.some(
         (point) =>
           typeof point.ragSeconds === 'number' ||
-          typeof point.promptSeconds === 'number',
+          typeof point.promptSeconds === 'number' ||
+          typeof point.ttftSeconds === 'number',
       ),
     [elapsedTrend],
   );
@@ -302,6 +306,14 @@ export function ItemAtAGlanceCharts({
                     dataKey="promptSeconds"
                     dot={false}
                     stroke="var(--color-promptSeconds)"
+                    strokeWidth={2}
+                    type="monotone"
+                  />
+                  <Line
+                    connectNulls
+                    dataKey="ttftSeconds"
+                    dot={false}
+                    stroke="var(--color-ttftSeconds)"
                     strokeWidth={2}
                     type="monotone"
                   />

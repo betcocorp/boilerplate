@@ -2,10 +2,16 @@ import { createUIMessageStream, createUIMessageStreamResponse } from 'ai';
 import { NextResponse } from 'next/server';
 
 import { runBexChatTurn } from '~/lib/bex/run-chat-turn';
+import { getBexActor } from '~/lib/api/bex-actor';
 import { hasBexSession } from '~/lib/api/bex-api-auth';
+import { writeAuditLog } from '~/lib/audit/audit-log';
+import { resolveConversationOwnerUserId } from '~/lib/conversations/conversation-owner';
+import { getConversationById } from '~/lib/conversations/conversation-repository';
 import { bexChatPostBodySchema } from '~/lib/conversations/conversation-schemas';
 import { newCorrelationId } from '~/lib/observability/correlation-id';
 import { logInfo } from '~/lib/observability/logger';
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { gateRoute } from '~/lib/permissions/route-gate';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -60,6 +66,17 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
+  const denied = await gateRoute(
+    PERMISSIONS.BEX_CHAT_USE,
+    'POST /api/bex/chat/stream',
+  );
+  if (denied) return denied;
+
+  const actor = await getBexActor(request);
+  if (!actor) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   let body: unknown = {};
   try {
     body = await request.json();
@@ -74,6 +91,41 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
+
+  // B0-449 — a supplied conversationId must belong to this actor (owner, view-all, or service)
+  // before spending a model call on it. A conversationId that does not resolve to any row is not a
+  // privacy question (nothing exists to leak) and is left to `runBexChatTurn`, which starts a fresh
+  // conversation exactly as it does today when no conversationId is supplied.
+  if (parsed.data.conversationId) {
+    const existing = await getConversationById(parsed.data.conversationId);
+    if (existing) {
+      const allowed =
+        actor.kind === 'service' ||
+        actor.canViewAll ||
+        (actor.kind === 'user' && existing.user_id === actor.userId);
+      if (!allowed) {
+        await writeAuditLog(
+          'bex.conversation.access_denied',
+          {
+            conversationId: parsed.data.conversationId,
+            requestedByUserId: actor.kind === 'user' ? actor.userId : null,
+            route: 'POST /api/bex/chat/stream',
+          },
+          { traceId: newCorrelationId() },
+        );
+        return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+      }
+    }
+  }
+
+  // B0-449 — ownership stamping for a brand-new conversation always uses the true authenticated
+  // owner (ignoring act-as), never the scoping `actor` above; a service caller gets no owner.
+  // Only relevant when no conversationId was supplied — continuing turns never re-stamp an existing
+  // conversation (see `runBexChatTurn`'s `owner` param doc).
+  const ownerUserId =
+    !parsed.data.conversationId && actor.kind === 'user'
+      ? await resolveConversationOwnerUserId()
+      : null;
 
   const traceId = newCorrelationId();
   logInfo('request_received', {
@@ -109,9 +161,11 @@ export async function POST(request: Request) {
           const result = await runBexChatTurn({
             conversationId: parsed.data.conversationId,
             message: parsed.data.message,
+            source: 'bex_chat',
             modelTag: parsed.data.model,
             useValidator: parsed.data.useValidator ?? false,
             agentMode: parsed.data.agentMode ?? 'orchestrator',
+            owner: ownerUserId ? { kind: 'user', userId: ownerUserId } : undefined,
             onWorkflowEvent: (event) => {
               writer.write({
                 type: 'data-bex-event',

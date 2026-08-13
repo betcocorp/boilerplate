@@ -6,6 +6,25 @@
  * Ordered from most specific to least to avoid false matches on overlapping terms.
  */
 const QUERY_PATTERNS: Array<{ pattern: RegExp; sectionType: string }> = [
+  // B0-237 — efficacy (kill-claim) lab-report section types. Organism-class patterns
+  // are checked before the generic contact-time/log-reduction catch-all so a query
+  // naming a virus/fungus class doesn't fall through to the unclassified bucket.
+  {
+    pattern: /\b(virucidal|antiviral efficacy|kills?\b.{0,30}\b(virus(es)?|influenza|flu|norovirus|coronavirus|covid-?19|rhinovirus|rotavirus))\b/i,
+    sectionType: 'virucidal_activity',
+  },
+  {
+    pattern: /\b(fungicidal|fungistatic|antifungal efficacy|kills?\b.{0,30}\b(mold|mildew|fungus|fungi|candida))\b/i,
+    sectionType: 'fungistatic',
+  },
+  {
+    pattern: /\b(bactericidal|germicidal|antibacterial efficacy|disinfectant efficacy|kills?\b.{0,30}\b(bacteria|germs?|staph(ylococcus)?|salmonella|e\.?\s?coli|pseudomonas|listeria))\b/i,
+    sectionType: 'bactericidal_efficacy',
+  },
+  {
+    pattern: /\b(contact time|dwell time|kill time|log reduction|percent reduction|% reduction|epa kill claim|efficacy (claim|data|test|report)|dilution ratio|oz.{0,3}gal|mL?.{0,3}L|ppm|parts per million|dilution|prepare|mix|concentrate|rtU|ready to use|undiluted)\b/i,
+    sectionType: 'organism_contact_time',
+  },
   // Section 4 — First Aid
   {
     pattern: /\b(first aid|if swallowed|if ingested|if inhaled|if in eyes|skin contact|eye contact)\b/i,

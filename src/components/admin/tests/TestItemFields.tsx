@@ -5,6 +5,7 @@ import { useState } from 'react';
 
 import { FilterableSuggestionField } from '~/components/admin/tests/FilterableSuggestionField';
 import { Button } from '~/components/ui/button';
+import { Input } from '~/components/ui/input';
 import { Label } from '~/components/ui/label';
 import { Textarea } from '~/components/ui/textarea';
 import { cn } from '~/lib/utils';
@@ -19,10 +20,17 @@ const EXPECTED_BEHAVIOR_PRESETS = [
   'Should decline',
 ] as const;
 
+/** Values match the `should_cite` CSV cell / `parseShouldCiteFromForm` in `~/lib/tests/csv`. */
+const SHOULD_CITE_PRESETS = ['yes', 'no'] as const;
+
+/** Common origins for a test prompt — distinct from `sourceStyle` (how it was authored). */
+const SOURCE_PRESETS = ['bex', 'email', 'contact-us'] as const;
+
 export type TestItemSuggestionLists = {
   resultTypes: string[];
   canonicalProducts: string[];
   reasonCodes: string[];
+  sources: string[];
   productMentions: string[];
   questionCategories: string[];
   sourceStyles: string[];
@@ -35,6 +43,14 @@ export type TestItemFieldsInitialValues = {
   expectedResultType?: string;
   expectedCanonicalProduct?: string;
   expectedReasonCode?: string;
+  source?: string;
+  priority?: string;
+  idealResponse?: string;
+  expectedConcepts?: string;
+  minimumConcepts?: string;
+  expectedSources?: string;
+  /** `'yes'` / `'no'` / `''` — matches the CSV cell vocabulary. */
+  shouldCite?: string;
   productMention?: string;
   questionCategory?: string;
   sourceStyle?: string;
@@ -140,6 +156,131 @@ export function TestItemFields({
         name="expectedReasonCode"
         placeholder="Choose from dataset or type a reason code"
         suggestionsFromDataset={suggestionLists.reasonCodes}
+      />
+
+      <FilterableSuggestionField
+        id={`${idPrefix}-source`}
+        initialValue={initialValues?.source}
+        label={
+          <>
+            Source{' '}
+            <span className="font-normal text-muted-foreground">
+              (optional)
+            </span>
+          </>
+        }
+        name="source"
+        placeholder="Choose or type where this prompt came from"
+        presetSuggestions={SOURCE_PRESETS}
+        suggestionsFromDataset={suggestionLists.sources}
+      />
+      <p className="text-xs text-muted-foreground">
+        Where the prompt originated — e.g. email, bex, contact-us. Different
+        from Source style below, which describes how the question was
+        authored.
+      </p>
+
+      <div className="grid gap-2">
+        <Label htmlFor={`${idPrefix}-priority`}>
+          Priority{' '}
+          <span className="font-normal text-muted-foreground">(optional)</span>
+        </Label>
+        <Input
+          defaultValue={initialValues?.priority}
+          id={`${idPrefix}-priority`}
+          inputMode="numeric"
+          max={32767}
+          min={-32768}
+          name="priority"
+          placeholder="e.g. 1"
+          step={1}
+          type="number"
+        />
+        <p className="text-xs text-muted-foreground">
+          Whole number rank — lower = more important. Leave blank for none.
+        </p>
+      </div>
+
+      <div className="grid gap-2">
+        <Label htmlFor={`${idPrefix}-ideal-response`}>
+          Ideal response{' '}
+          <span className="font-normal text-muted-foreground">(optional)</span>
+        </Label>
+        <Textarea
+          defaultValue={initialValues?.idealResponse}
+          id={`${idPrefix}-ideal-response`}
+          name="idealResponse"
+          placeholder="Gold-standard answer to compare against…"
+          rows={4}
+        />
+      </div>
+
+      <div className="grid gap-2">
+        <Label htmlFor={`${idPrefix}-expected-concepts`}>
+          Expected concepts{' '}
+          <span className="font-normal text-muted-foreground">(optional)</span>
+        </Label>
+        <Textarea
+          defaultValue={initialValues?.expectedConcepts}
+          id={`${idPrefix}-expected-concepts`}
+          name="expectedConcepts"
+          placeholder="e.g. 13 oz/gal or 100 mL/L; 1:10 with water"
+          rows={3}
+        />
+        <p className="text-xs text-muted-foreground">
+          Key concepts a complete answer should contain. Stored exactly as typed
+          — dilution ratios, ppm, and contact times are never reformatted.
+        </p>
+      </div>
+
+      <div className="grid gap-2">
+        <Label htmlFor={`${idPrefix}-minimum-concepts`}>
+          Minimum concepts{' '}
+          <span className="font-normal text-muted-foreground">(optional)</span>
+        </Label>
+        <Textarea
+          defaultValue={initialValues?.minimumConcepts}
+          id={`${idPrefix}-minimum-concepts`}
+          name="minimumConcepts"
+          placeholder="e.g. 13 oz/gal"
+          rows={2}
+        />
+        <p className="text-xs text-muted-foreground">
+          The subset of the above a reviewer must see for this row to pass.
+        </p>
+      </div>
+
+      <div className="grid gap-2">
+        <Label htmlFor={`${idPrefix}-expected-sources`}>
+          Expected sources{' '}
+          <span className="font-normal text-muted-foreground">(optional)</span>
+        </Label>
+        <Input
+          defaultValue={initialValues?.expectedSources}
+          id={`${idPrefix}-expected-sources`}
+          name="expectedSources"
+          placeholder="e.g. Ax-It Plus TDS, Selector Guide Section 1"
+        />
+        <p className="text-xs text-muted-foreground">
+          Comma-separated sources the answer should be grounded in.
+        </p>
+      </div>
+
+      <FilterableSuggestionField
+        id={`${idPrefix}-should-cite`}
+        initialValue={initialValues?.shouldCite}
+        label={
+          <>
+            Should cite sources{' '}
+            <span className="font-normal text-muted-foreground">
+              (optional)
+            </span>
+          </>
+        }
+        name="shouldCite"
+        placeholder="Choose yes or no"
+        presetSuggestions={SHOULD_CITE_PRESETS}
+        suggestionsFromDataset={[]}
       />
 
       <div className="rounded-2xl border border-slate-200 bg-slate-50/80">

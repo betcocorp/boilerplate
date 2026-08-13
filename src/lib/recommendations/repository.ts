@@ -1,17 +1,22 @@
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 import {
+  addRecommendationCandidateInputSchema,
   createRecommendationInputSchema,
   listRecommendationsInputSchema,
   recommendationCandidateSchema,
   recommendationSchema,
   recommendationWithCandidatesSchema,
+  updateRecommendationCandidateInputSchema,
   updateRecommendationStatusInputSchema,
+  type AddRecommendationCandidateInput,
   type CreateRecommendationInput,
   type ListRecommendationsInput,
   type Recommendation,
   type RecommendationCandidate,
+  type RecommendationStatus,
   type RecommendationWithCandidates,
+  type UpdateRecommendationCandidateInput,
   type UpdateRecommendationStatusInput,
 } from '~/lib/recommendations/recommendation-schemas';
 
@@ -65,6 +70,25 @@ type LooseChain = {
   order: (c: string, o: { ascending: boolean }) => LooseChain;
   range: (from: number, to: number) => LooseChain;
 } & PromiseLike<{ data: LooseRow[] | null; error: { message: string } | null }>;
+
+type LooseCountChain = {
+  eq: (c: string, v: unknown) => LooseCountChain;
+  gte: (c: string, v: unknown) => LooseCountChain;
+} & PromiseLike<{ count: number | null; error: { message: string } | null }>;
+
+/** `select(cols, { count: 'exact', head: true })` accessor for cheap row counts (rag schema). */
+function ragCountTable(table: string) {
+  const sb = getSupabaseServiceRoleClient() as unknown as {
+    schema: (s: string) => {
+      from: (t: string) => {
+        select: (cols: string, opts: { count: 'exact'; head: true }) => LooseCountChain;
+      };
+    };
+  };
+  return sb.schema('rag').from(table).select('id', { count: 'exact', head: true });
+}
+
+const round3 = (n: number): number => Math.round(n * 1000) / 1000;
 
 function asJson(value: unknown): Json {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Json) : {};
@@ -191,20 +215,97 @@ export async function getRecommendation(id: string): Promise<RecommendationWithC
   });
 }
 
+/** Row count for the recommendations table, honoring the same status/minConfidence filters as `listRecommendations`. */
+export async function countRecommendations(
+  filter: { status?: RecommendationStatus; minConfidence?: number } = {},
+): Promise<number> {
+  let query = ragCountTable('cross_reference_recommendations');
+  if (filter.status) query = query.eq('status', filter.status);
+  if (filter.minConfidence != null) query = query.gte('overall_confidence', filter.minConfidence);
+  const res = await query;
+  if (res.error) throw new Error(`countRecommendations failed: ${res.error.message}`);
+  return res.count ?? 0;
+}
+
+/** Per-status counts across the whole table (unfiltered) — powers the "pending" badge on the review queue. */
+export async function countRecommendationsByStatus(): Promise<Record<RecommendationStatus, number>> {
+  const statuses: RecommendationStatus[] = ['pending', 'answered', 'declined', 'verified', 'rejected'];
+  const counts = await Promise.all(statuses.map((status) => countRecommendations({ status })));
+  return statuses.reduce(
+    (acc, status, i) => {
+      acc[status] = counts[i] ?? 0;
+      return acc;
+    },
+    {} as Record<RecommendationStatus, number>,
+  );
+}
+
 export async function listRecommendations(
   rawInput: ListRecommendationsInput = { page: 1, pageSize: 50 },
-): Promise<{ items: Recommendation[]; page: number; pageSize: number }> {
+): Promise<{ items: Recommendation[]; page: number; pageSize: number; total: number }> {
   const input = listRecommendationsInputSchema.parse(rawInput);
   let query = ragTable('cross_reference_recommendations').select('*') as unknown as LooseChain;
   if (input.status) query = query.eq('status', input.status);
   if (input.minConfidence != null) query = query.gte('overall_confidence', input.minConfidence);
   const from = (input.page - 1) * input.pageSize;
-  const res = await query.order('created_at', { ascending: false }).range(from, from + input.pageSize - 1);
+  const [res, total] = await Promise.all([
+    query.order('created_at', { ascending: false }).range(from, from + input.pageSize - 1),
+    countRecommendations({ status: input.status, minConfidence: input.minConfidence }),
+  ]);
   if (res.error) throw new Error(`listRecommendations failed: ${res.error.message}`);
   return {
     items: (res.data ?? []).map(fromRecommendationRow),
     page: input.page,
     pageSize: input.pageSize,
+    total,
+  };
+}
+
+/**
+ * B0-95 — the review queue's list query: same page of recommendations as `listRecommendations`,
+ * with each row's candidates attached in one follow-up query (avoids N+1 per row on the admin page).
+ */
+export async function listRecommendationsWithCandidates(
+  rawInput: ListRecommendationsInput = { page: 1, pageSize: 50 },
+): Promise<{
+  items: RecommendationWithCandidates[];
+  page: number;
+  pageSize: number;
+  total: number;
+}> {
+  const { items, page, pageSize, total } = await listRecommendations(rawInput);
+  if (items.length === 0) {
+    return { items: [], page, pageSize, total };
+  }
+
+  const supabase = getSupabaseServiceRoleClient();
+  const ids = items.map((r) => r.id);
+  const { data, error } = await supabase
+    .schema('rag')
+    .from('cross_reference_recommendation_candidates')
+    .select('*')
+    .in('recommendation_id', ids)
+    .order('rank', { ascending: true });
+  if (error) throw new Error(`listRecommendationsWithCandidates failed: ${error.message}`);
+
+  const candidatesByRecommendation = new Map<string, RecommendationCandidate[]>();
+  for (const row of data ?? []) {
+    const candidate = fromCandidateRow(row as unknown as LooseRow);
+    const list = candidatesByRecommendation.get(candidate.recommendationId) ?? [];
+    list.push(candidate);
+    candidatesByRecommendation.set(candidate.recommendationId, list);
+  }
+
+  return {
+    items: items.map((rec) =>
+      recommendationWithCandidatesSchema.parse({
+        ...rec,
+        candidates: candidatesByRecommendation.get(rec.id) ?? [],
+      }),
+    ),
+    page,
+    pageSize,
+    total,
   };
 }
 
@@ -236,4 +337,142 @@ export async function updateRecommendationStatus(
     throw new Error(`updateRecommendationStatus failed: ${res.error?.message ?? 'no row'}`);
   }
   return fromRecommendationRow(res.data);
+}
+
+/**
+ * B0-433 — append a reviewer-authored candidate to an existing recommendation.
+ *
+ * The engine writes its candidates up front via `createRecommendation`; this is the only path that
+ * adds one afterwards, so a recommendation the engine returned nothing usable for can still be
+ * approved. Ranked last (max existing rank + 1) so the engine's own ordering is preserved, and
+ * tagged `source.origin = 'human_review'` to keep engine-generated and human-authored candidates
+ * distinguishable in the metrics.
+ */
+export async function createRecommendationCandidate(
+  recommendationId: string,
+  rawInput: AddRecommendationCandidateInput,
+  createdBy?: string | null,
+): Promise<RecommendationCandidate> {
+  const input = addRecommendationCandidateInputSchema.parse(rawInput);
+
+  const existing = await getRecommendation(recommendationId);
+  if (!existing) {
+    throw new Error(`createRecommendationCandidate: recommendation ${recommendationId} not found`);
+  }
+  const nextRank =
+    existing.candidates.reduce((max, c) => Math.max(max, c.rank ?? 0), 0) + 1;
+
+  const res = await ragTable('cross_reference_recommendation_candidates')
+    .insert({
+      recommendation_id: recommendationId,
+      betco_product_key: input.betcoProductKey,
+      betco_prod_id: input.betcoProdId ?? null,
+      betco_title: input.betcoTitle,
+      // Human-entered, so not a model score. Left null rather than faked at 1.0, which would
+      // distort the avg-confidence metric on the queue's "Engine performance" strip.
+      candidate_confidence: null,
+      rank: nextRank,
+      rationale: input.rationale ?? null,
+      source: { origin: 'human_review', addedBy: createdBy ?? null },
+    })
+    .select('*')
+    .single();
+  if (res.error || !res.data) {
+    throw new Error(`createRecommendationCandidate failed: ${res.error?.message ?? 'no row'}`);
+  }
+  return fromCandidateRow(res.data);
+}
+
+/** B0-95 — reviewer correction of a single candidate (e.g. swapping in the right Betco product/SKU). */
+export async function updateRecommendationCandidate(
+  id: string,
+  rawInput: UpdateRecommendationCandidateInput,
+): Promise<RecommendationCandidate> {
+  const input = updateRecommendationCandidateInputSchema.parse(rawInput);
+  const patch: LooseRow = {};
+  if (input.betcoProductKey !== undefined) patch.betco_product_key = input.betcoProductKey;
+  if (input.betcoProdId !== undefined) patch.betco_prod_id = input.betcoProdId;
+  if (input.betcoTitle !== undefined) patch.betco_title = input.betcoTitle;
+  if (input.rationale !== undefined) patch.rationale = input.rationale;
+
+  const res = await ragTable('cross_reference_recommendation_candidates')
+    .update(patch)
+    .eq('id', id)
+    .select('*')
+    .single();
+  if (res.error || !res.data) {
+    throw new Error(`updateRecommendationCandidate failed: ${res.error?.message ?? 'no row'}`);
+  }
+  return fromCandidateRow(res.data);
+}
+
+export type RecommendationMetrics = {
+  total: number;
+  byStatus: Record<RecommendationStatus, number>;
+  answeredCount: number;
+  answerRate: number;
+  declinedCount: number;
+  declineRate: number;
+  avgConfidence: number | null;
+  verifiedCount: number;
+  rejectedCount: number;
+  /** verified / (verified + rejected); null when nothing has been reviewed yet. */
+  verificationAccuracy: number | null;
+};
+
+/**
+ * B0-96 — engine performance metrics for the admin review queue. Reads the full status/confidence/
+ * answer_given projection once and aggregates client-side (row volume is admin-scale, not
+ * user-facing traffic, so a single unfiltered read is the simplest correct implementation).
+ */
+export async function getRecommendationMetrics(): Promise<RecommendationMetrics> {
+  const query = ragTable('cross_reference_recommendations').select(
+    'status, overall_confidence, answer_given',
+  ) as unknown as LooseChain;
+  const res = await query;
+  if (res.error) throw new Error(`getRecommendationMetrics failed: ${res.error.message}`);
+  const rows = res.data ?? [];
+
+  const byStatus: Record<RecommendationStatus, number> = {
+    pending: 0,
+    answered: 0,
+    declined: 0,
+    verified: 0,
+    rejected: 0,
+  };
+  let answeredCount = 0;
+  let declinedCount = 0;
+  let confidenceSum = 0;
+  let confidenceCount = 0;
+
+  for (const row of rows) {
+    const status = row.status as RecommendationStatus;
+    if (status in byStatus) byStatus[status] += 1;
+    if (row.answer_given) answeredCount += 1;
+    else declinedCount += 1;
+    const confidence = numOrNull(row.overall_confidence);
+    if (confidence != null) {
+      confidenceSum += confidence;
+      confidenceCount += 1;
+    }
+  }
+
+  const total = rows.length;
+  const verifiedCount = byStatus.verified;
+  const rejectedCount = byStatus.rejected;
+  const verificationDenominator = verifiedCount + rejectedCount;
+
+  return {
+    total,
+    byStatus,
+    answeredCount,
+    answerRate: total > 0 ? round3(answeredCount / total) : 0,
+    declinedCount,
+    declineRate: total > 0 ? round3(declinedCount / total) : 0,
+    avgConfidence: confidenceCount > 0 ? round3(confidenceSum / confidenceCount) : null,
+    verifiedCount,
+    rejectedCount,
+    verificationAccuracy:
+      verificationDenominator > 0 ? round3(verifiedCount / verificationDenominator) : null,
+  };
 }

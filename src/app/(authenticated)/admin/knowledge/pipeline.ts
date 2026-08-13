@@ -7,6 +7,13 @@ import { createHash } from 'node:crypto';
 import { basename, extname } from 'node:path';
 
 import { syncDocumentChunkEmbeddings } from '~/lib/rag/embeddings';
+import {
+  chunkMarkdown,
+  estimateTokens,
+  markdownToPlainText,
+  summarize,
+  type MarkdownChunk,
+} from '~/lib/rag/markdown-chunking';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 import type { Json as RagJson } from '~/types/supabase.rag';
 
@@ -28,7 +35,6 @@ const DEFAULT_BATCH_SIZE = 5;
 const MAX_BATCH_SIZE = 25;
 const MAX_EMBEDDING_RUNS = 25;
 const MAX_DASHBOARD_DOCUMENT_ROWS = 300;
-const CHUNK_CHAR_BUDGET = 3200; // ~800 tokens
 
 type JsonObject = { [key: string]: RagJson | undefined };
 
@@ -178,106 +184,6 @@ function stripFrontmatter(raw: string): { body: string; frontTitle: string | nul
   const titleMatch = match[1].match(/^title:\s*(.+)$/m);
   const frontTitle = titleMatch ? titleMatch[1].trim().replace(/^["']|["']$/g, '') : null;
   return { body: raw.slice(match[0].length), frontTitle };
-}
-
-function markdownToPlainText(md: string) {
-  return md
-    .replace(/```[\s\S]*?```/g, ' ')
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
-    .replace(/[#>*_`~-]+/g, ' ')
-    .replace(/\s{2,}/g, ' ')
-    .trim();
-}
-
-function summarize(text: string) {
-  return text.length <= 280 ? text : `${text.slice(0, 277).trim()}...`;
-}
-
-function estimateTokens(text: string) {
-  return Math.max(1, Math.ceil(text.length / 4));
-}
-
-// --------------------------------------------------------------------------
-// Heading-aware chunking (B0-190 seed). Splits on markdown headings, keeps a
-// breadcrumb section_path, and further splits oversized sections by paragraph.
-// --------------------------------------------------------------------------
-type KnowledgeChunk = {
-  index: number;
-  heading: string | null;
-  sectionPath: string[];
-  text: string;
-};
-
-export function chunkMarkdown(body: string): KnowledgeChunk[] {
-  const lines = body.split('\n');
-  const sections: Array<{ heading: string | null; path: string[]; lines: string[] }> = [];
-  const headingStack: Array<{ level: number; text: string }> = [];
-  let current: { heading: string | null; path: string[]; lines: string[] } = {
-    heading: null,
-    path: [],
-    lines: [],
-  };
-
-  const pushCurrent = () => {
-    if (current.lines.join('').trim().length > 0 || current.heading) sections.push(current);
-  };
-
-  for (const line of lines) {
-    const h = line.match(/^(#{1,6})\s+(.*)$/);
-    if (h) {
-      pushCurrent();
-      const level = h[1].length;
-      const text = h[2].trim();
-      while (headingStack.length && headingStack[headingStack.length - 1].level >= level)
-        headingStack.pop();
-      headingStack.push({ level, text });
-      current = { heading: text, path: headingStack.map((x) => x.text), lines: [] };
-    } else {
-      current.lines.push(line);
-    }
-  }
-  pushCurrent();
-
-  const chunks: KnowledgeChunk[] = [];
-  let index = 0;
-  // A heading with no body of its own (e.g. a section header immediately followed
-  // by a sub-heading, or FAQ "Q:" lines whose answer is a sibling heading) must
-  // never become a content-less chunk — that would embed on the heading alone and
-  // rank for a query while returning nothing. Carry such bare headings forward and
-  // fold them into the next content-bearing section; drop any left dangling at EOF.
-  let carriedHeadings: string[] = [];
-  for (const section of sections) {
-    const body = section.lines.join('\n').trim();
-    if (!body) {
-      if (section.heading) carriedHeadings.push(section.heading);
-      continue;
-    }
-
-    const foldPrefix = carriedHeadings.length ? `${carriedHeadings.join('\n')}\n` : '';
-    const heading = section.heading ?? carriedHeadings[carriedHeadings.length - 1] ?? null;
-    carriedHeadings = [];
-    const text = `${foldPrefix}${body}`;
-
-    if (text.length <= CHUNK_CHAR_BUDGET) {
-      chunks.push({ index: index++, heading, sectionPath: section.path, text });
-      continue;
-    }
-    // Oversized section: split by blank-line paragraphs into <= budget windows.
-    const paras = text.split(/\n{2,}/);
-    let buf = '';
-    for (const para of paras) {
-      if (buf && buf.length + para.length + 2 > CHUNK_CHAR_BUDGET) {
-        chunks.push({ index: index++, heading, sectionPath: section.path, text: buf.trim() });
-        buf = '';
-      }
-      buf = buf ? `${buf}\n\n${para}` : para;
-    }
-    if (buf.trim()) {
-      chunks.push({ index: index++, heading, sectionPath: section.path, text: buf.trim() });
-    }
-  }
-  return chunks;
 }
 
 // --------------------------------------------------------------------------
@@ -437,7 +343,7 @@ async function upsertDocument(
   return inserted.id;
 }
 
-async function replaceDocumentChunks(documentId: string, seed: KnowledgeSeedDocument, chunks: KnowledgeChunk[]) {
+async function replaceDocumentChunks(documentId: string, seed: KnowledgeSeedDocument, chunks: MarkdownChunk[]) {
   const supabase = getSupabaseServiceRoleClient();
   // Clear prior chunks for idempotent re-ingest, then insert fresh.
   const { error: delError } = await supabase

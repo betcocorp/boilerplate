@@ -6,7 +6,8 @@ function asTrimmedString(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function parseExpectedShouldAnswer(value: string): boolean | null {
+/** Shared yes/no CSV cell parsing for `should_answer` and `should_cite`. */
+function parseBooleanCell(value: string): boolean | null {
   const normalized = value.trim().toLowerCase();
   if (!normalized) {
     return null;
@@ -18,6 +19,15 @@ function parseExpectedShouldAnswer(value: string): boolean | null {
     return false;
   }
   return null;
+}
+
+function parseExpectedShouldAnswer(value: string): boolean | null {
+  return parseBooleanCell(value);
+}
+
+/** Parses the `should_cite` form field / CSV cell. Blank or unrecognized → no expectation. */
+export function parseShouldCiteFromForm(value: string): boolean | null {
+  return parseBooleanCell(value);
 }
 
 /** Parses manual add form / combobox values (presets + CSV-style tokens). */
@@ -44,6 +54,50 @@ export function parseExpectedShouldAnswerFromForm(value: string): boolean | null
 
   return parseExpectedShouldAnswer(trimmed);
 }
+
+/**
+ * Parses a priority value (CSV cell or form input) into an int2-safe integer.
+ * Blank, non-numeric, decimal, or out-of-range (−32768..32767) values → null.
+ */
+export function parsePriority(value: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (!/^[+-]?\d+$/.test(trimmed)) {
+    return null;
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  if (!Number.isInteger(parsed) || parsed < -32768 || parsed > 32767) {
+    return null;
+  }
+  return parsed;
+}
+
+/** CSV columns read into typed `test_items` columns — kept out of the `metadata` catch-all. */
+const TYPED_CSV_COLUMNS = new Set([
+  'question',
+  'prompt',
+  'test_prompt',
+  'should_answer',
+  'expected_result_type',
+  'canonical_product',
+  'reason_code',
+  'source',
+  'priority',
+  'ideal_response',
+  'expected_concepts',
+  'minimum_concepts',
+  'expected_sources',
+  'should_cite',
+]);
+
+/** CSV columns routed into `input_payload` rather than `metadata`. */
+const INPUT_PAYLOAD_CSV_COLUMNS = new Set([
+  'product_mention',
+  'question_category',
+  'source_style',
+]);
 
 export function parseTestCsvContent(content: string): ParsedCsvRow[] {
   const records = parse(content, {
@@ -72,6 +126,15 @@ export function parseTestCsvContent(content: string): ParsedCsvRow[] {
       const expectedCanonicalProduct =
         asTrimmedString(record.canonical_product) || null;
       const expectedReasonCode = asTrimmedString(record.reason_code) || null;
+      const source = asTrimmedString(record.source) || null;
+      const priority = parsePriority(asTrimmedString(record.priority));
+      const idealResponse = asTrimmedString(record.ideal_response) || null;
+      // Concept/source expectations are stored verbatim (never split or normalized) so
+      // regulated values — oz/gal, mL/L, ppm, contact times — survive the round trip.
+      const expectedConcepts = asTrimmedString(record.expected_concepts) || null;
+      const minimumConcepts = asTrimmedString(record.minimum_concepts) || null;
+      const expectedSources = asTrimmedString(record.expected_sources) || null;
+      const shouldCite = parseBooleanCell(asTrimmedString(record.should_cite));
 
       const inputPayload: Record<string, string> = {};
       const metadata: Record<string, string> = {};
@@ -84,23 +147,11 @@ export function parseTestCsvContent(content: string): ParsedCsvRow[] {
           continue;
         }
 
-        if (
-          normalizedKey === 'question' ||
-          normalizedKey === 'prompt' ||
-          normalizedKey === 'test_prompt' ||
-          normalizedKey === 'should_answer' ||
-          normalizedKey === 'expected_result_type' ||
-          normalizedKey === 'canonical_product' ||
-          normalizedKey === 'reason_code'
-        ) {
+        if (TYPED_CSV_COLUMNS.has(normalizedKey)) {
           continue;
         }
 
-        if (
-          normalizedKey === 'product_mention' ||
-          normalizedKey === 'question_category' ||
-          normalizedKey === 'source_style'
-        ) {
+        if (INPUT_PAYLOAD_CSV_COLUMNS.has(normalizedKey)) {
           inputPayload[normalizedKey] = normalizedValue;
           continue;
         }
@@ -115,6 +166,13 @@ export function parseTestCsvContent(content: string): ParsedCsvRow[] {
         expectedResultType,
         expectedCanonicalProduct,
         expectedReasonCode,
+        source,
+        priority,
+        idealResponse,
+        expectedConcepts,
+        minimumConcepts,
+        expectedSources,
+        shouldCite,
         inputPayload,
         metadata,
       } satisfies ParsedCsvRow;

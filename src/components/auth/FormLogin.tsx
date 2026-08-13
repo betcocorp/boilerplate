@@ -1,12 +1,18 @@
 "use client";
 
-import { Fingerprint } from "lucide-react";
+import { AlertTriangle, Fingerprint } from "lucide-react";
 import { signIn } from "next-auth/react";
 import { useSearchParams } from "next/navigation";
 
+import { Alert, AlertDescription } from "~/components/ui/alert";
 import { Button } from "~/components/ui/button";
 
-export default function FormLogin() {
+/** `errorMessage` is resolved server-side from `?error=` in `src/app/page.tsx`. */
+export default function FormLogin({
+  errorMessage,
+}: {
+  errorMessage?: string;
+}) {
   const searchParams = useSearchParams();
   const callbackUrl =
     searchParams.get("next") || searchParams.get("callbackUrl") || "/admin";
@@ -22,6 +28,12 @@ export default function FormLogin() {
         <p className="mt-2 text-sm text-muted-foreground">
           Sign in to continue to the admin workspace.
         </p>
+        {errorMessage ? (
+          <Alert className="mt-6" variant="destructive">
+            <AlertTriangle />
+            <AlertDescription>{errorMessage}</AlertDescription>
+          </Alert>
+        ) : null}
         <Button className="mt-6 w-full gap-2" onClick={handleSignIn}>
           <Fingerprint className="size-4" />
           Continue with Duo

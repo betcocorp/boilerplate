@@ -1,5 +1,20 @@
 import type { Json } from '~/types/supabase.rag';
 
+/**
+ * Synthetic source id used for the structured "Verified Product Facts" source (B0-196).
+ * It is NOT a real `rag.document` row — the facts block is carried inline in the source
+ * snippet, so it must never be looked up by uuid in the document-chunk inspect route.
+ */
+export const VERIFIED_FACTS_SOURCE_ID = 'verified-facts';
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** rag.document / rag.document_chunk ids are uuids; synthetic sources (e.g. verified-facts) are not. */
+export function isRagRowId(id: string | null | undefined): boolean {
+  return !!id && UUID_RE.test(id);
+}
+
 export type RagDocumentChunkApiDocument = {
   id: string;
   title: string;

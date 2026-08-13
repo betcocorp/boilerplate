@@ -13,6 +13,7 @@ export async function retrieveApprovedUsage(input: {
   surfaceType: string;
   environment?: string;
   productLineKey?: string | null;
+  productKey?: string | null;
   sectionType?: string | null;
 }): Promise<ProductKnowledgeQueryResult> {
   const q = buildQuery([
@@ -25,6 +26,7 @@ export async function retrieveApprovedUsage(input: {
   return ragQueryForProductKnowledgeWithMeta({
     query: q,
     productLineKey: input.productLineKey,
+    productKey: input.productKey,
     skipProductLineResolution: !input.productLineKey,
     sectionType: input.sectionType,
   });
@@ -33,6 +35,7 @@ export async function retrieveApprovedUsage(input: {
 export async function retrieveSafetyConstraints(input: {
   productId: string;
   productLineKey?: string | null;
+  productKey?: string | null;
   sectionType?: string | null;
 }): Promise<ProductKnowledgeQueryResult> {
   const q = buildQuery([
@@ -42,6 +45,7 @@ export async function retrieveSafetyConstraints(input: {
   return ragQueryForProductKnowledgeWithMeta({
     query: q,
     productLineKey: input.productLineKey,
+    productKey: input.productKey,
     skipProductLineResolution: !input.productLineKey,
     sectionType: input.sectionType,
   });
@@ -52,6 +56,7 @@ export async function retrieveCompatibility(input: {
   surfaceType: string;
   materialType?: string;
   productLineKey?: string | null;
+  productKey?: string | null;
   sectionType?: string | null;
 }): Promise<ProductKnowledgeQueryResult> {
   const q = buildQuery([
@@ -64,6 +69,7 @@ export async function retrieveCompatibility(input: {
   return ragQueryForProductKnowledgeWithMeta({
     query: q,
     productLineKey: input.productLineKey,
+    productKey: input.productKey,
     skipProductLineResolution: !input.productLineKey,
     sectionType: input.sectionType,
   });
@@ -73,6 +79,7 @@ export async function retrieveSurfacesLists(input: {
   productId: string;
   mode: 'allowed' | 'disallowed';
   productLineKey?: string | null;
+  productKey?: string | null;
   sectionType?: string | null;
 }): Promise<ProductKnowledgeQueryResult> {
   const hint =
@@ -83,6 +90,7 @@ export async function retrieveSurfacesLists(input: {
   return ragQueryForProductKnowledgeWithMeta({
     query: q,
     productLineKey: input.productLineKey,
+    productKey: input.productKey,
     skipProductLineResolution: !input.productLineKey,
     sectionType: input.sectionType,
   });

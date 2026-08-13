@@ -17,9 +17,12 @@ import {
   TableHeader,
   TableRow,
 } from '~/components/ui/table';
-import { fetchCrossReferenceMappings } from '~/lib/tools/cross-reference-mappings';
+import {
+  fetchCrossReferenceMappings,
+  formatMappingTimestamp,
+} from '~/lib/tools/cross-reference-mappings';
 
-const ROUTE = '/admin/tools/product-cross-reference';
+const ROUTE = '/admin/tools/cross-reference/lookup';
 const SEARCH_PARAM = 'xrefQ';
 const PAGE_PARAM = 'xrefPage';
 const PAGE_LINK_WINDOW = 5;
@@ -72,7 +75,8 @@ export async function CrossReferenceMappingsTable({
         <CardDescription>
           The complete competitor → Betco 1:1 matchings from the legacy tool (
           <code className="rounded bg-muted px-1.5 py-0.5 text-xs">legacy.competitor_products</code>
-          ) — the ground truth behind the B0-99 recommendation eval set.
+          ) — the ground truth behind the B0-99 recommendation eval set. Most recently updated
+          first.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -119,12 +123,13 @@ export async function CrossReferenceMappingsTable({
                   <TableHead>Betco product</TableHead>
                   <TableHead>SKU</TableHead>
                   <TableHead>Line</TableHead>
+                  <TableHead>Last updated</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {rows.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={5} className="text-center text-muted-foreground">
+                    <TableCell colSpan={6} className="text-center text-muted-foreground">
                       No matchings found.
                     </TableCell>
                   </TableRow>
@@ -147,6 +152,9 @@ export async function CrossReferenceMappingsTable({
                       </TableCell>
                       <TableCell className="font-mono text-xs text-muted-foreground">
                         {row.betcoProductLineId ?? '—'}
+                      </TableCell>
+                      <TableCell className="font-mono text-xs text-muted-foreground whitespace-nowrap">
+                        {formatMappingTimestamp(row.updatedAt)}
                       </TableCell>
                     </TableRow>
                   ))

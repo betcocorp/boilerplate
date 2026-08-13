@@ -1,0 +1,51 @@
+-- =====================================================================================
+-- FOLLOW-UP (comment-only — this file intentionally executes NOTHING):
+--
+-- Add `knowledge` and `label` as native corpus scopes so the RAG search RPCs filter on
+-- document_kind server-side instead of the application-layer fallback currently used in
+-- src/lib/rag/search.ts (resolveSearchScope → filter_scope:'all' + post-retrieval kind filter).
+--
+-- WHY THIS IS NOT AN EXECUTABLE `create or replace` HERE:
+-- The live rag.match_corpus_chunks / match_corpus_chunks_hybrid bodies have drifted from the
+-- checked-in migrations (e.g. the live signatures include `filter_section_type` and return
+-- `section_type`, per src/types/supabase.rag.ts, which the 20260411223000 migration lacks).
+-- Blindly recreating from a stale file would revert live tuning. Per the same convention used
+-- in 20260713030000_rec_add_product_attribute_columns.sql, dump the live body first:
+--
+--   select pg_get_functiondef('rag.match_corpus_chunks(extensions.vector,integer,text,text,text)'::regprocedure);
+--   select pg_get_functiondef('rag.match_corpus_chunks_hybrid(extensions.halfvec,text,integer,text,text,text)'::regprocedure);
+--
+-- Then, in BOTH function bodies, make two edits:
+--
+-- 1) Widen the resolved_scope clamp to accept the new values:
+--      case
+--        when lower(trim(coalesce(filter_scope, 'all')))
+--             in ('all', 'products', 'sds', 'knowledge', 'label')
+--          then lower(trim(coalesce(filter_scope, 'all')))
+--        else 'all'
+--      end as resolved_scope
+--    (Optionally add candidate-limit branches for the new scopes; falling into the existing
+--     `else` branch is acceptable.)
+--
+-- 2) Extend the document_kind predicate:
+--      and (
+--        p.resolved_scope = 'all'
+--        or (p.resolved_scope = 'products'
+--            and d.document_kind = 'product_line_profile'
+--            and d.metadata @> '{"has_web_available_variant": true}'::jsonb)
+--        or (p.resolved_scope = 'sds'       and d.document_kind = 'sds')
+--        or (p.resolved_scope = 'knowledge' and d.document_kind = 'knowledge')
+--        or (p.resolved_scope = 'label'     and d.document_kind = 'label')
+--      )
+--
+-- Re-grant execute to service_role and update the function comment, keeping every other line of
+-- the live body byte-for-byte.
+--
+-- AFTER APPLYING:
+--   - In src/lib/rag/search.ts, resolveSearchScope() can return `rpcScope: 'knowledge' | 'label'`
+--     directly and drop the app-layer document_kind filter + the over-fetch rpcLimit boost.
+--   - Regenerate types: pnpm run types:supabase:rag
+--
+-- Until this is applied, `knowledge`/`label` scopes still work correctly via the app-layer filter;
+-- this migration only makes them server-side-efficient (no over-fetch).
+-- =====================================================================================

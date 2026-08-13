@@ -1,11 +1,9 @@
 import {
+  ArrowRight,
   ChevronDown,
-  ChevronLeft,
   ChevronRight,
-  ChevronsLeft,
-  ChevronsRight,
-  Ellipsis,
   Plus,
+  ShieldCheck,
   TrendingDown,
   TrendingUp,
 } from 'lucide-react';
@@ -16,6 +14,7 @@ import {
   SimilarityFailRateTrendChart,
   type SimilarityFailRateTrendPoint,
 } from '~/components/admin/SimilarityFailRateTrendChart';
+import PermissionChecker from '~/components/permissions/PermissionChecker';
 import { Avatar, AvatarFallback, AvatarGroup } from '~/components/ui/avatar';
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
@@ -27,15 +26,9 @@ import {
   CardTitle,
 } from '~/components/ui/card';
 import { Separator } from '~/components/ui/separator';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '~/components/ui/table';
 import { Tabs, TabsList, TabsTrigger } from '~/components/ui/tabs';
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { formatCompactInt } from '~/lib/tests/format';
 import {
   getGlobalSimilarityFailRateTrend,
   getGlobalTestCaseMetrics,
@@ -70,25 +63,25 @@ function buildMetrics(
         input.avgSimilarity === null
           ? 'No similarity-bearing responses yet'
           : 'Average source similarity across all completed test cases',
-      detail: `Based on ${input.similaritySampleSize.toLocaleString()} test case(s) with similarity data`,
+      detail: `Based on ${formatCompactInt(input.similaritySampleSize)} test case(s) with similarity data`,
     },
     {
       title: 'Avg Elapsed Runtime',
       value: `${(input.avgElapsedMs / 1000).toFixed(2)}s`,
       summary: 'Mean elapsed runtime across all completed test cases',
-      detail: `Based on ${input.totalCases.toLocaleString()} completed test case(s)`,
+      detail: `Based on ${formatCompactInt(input.totalCases)} completed test case(s)`,
     },
     {
       title: 'Avg Pass Rate',
       value: `${(input.passRate * 100).toFixed(1)}%`,
       summary: 'Passed test cases divided by all completed test cases',
-      detail: `${input.passedCases.toLocaleString()} passed / ${input.totalCases.toLocaleString()} total`,
+      detail: `${formatCompactInt(input.passedCases)} passed / ${formatCompactInt(input.totalCases)} total`,
     },
     {
       title: 'Avg Fail Rate',
       value: `${(input.failRate * 100).toFixed(1)}%`,
       summary: 'Failed test cases divided by all completed test cases',
-      detail: `${input.failedCases.toLocaleString()} failed / ${input.totalCases.toLocaleString()} total`,
+      detail: `${formatCompactInt(input.failedCases)} failed / ${formatCompactInt(input.totalCases)} total`,
     },
   ];
 }
@@ -213,6 +206,39 @@ export default async function AdminDashboardPage() {
             ))}
           </section>
 
+          {/*
+            Gated by `admin.card.permissions` (B0-410). While `BEX_PERMISSIONS_ENFORCED` is off,
+            `PermissionChecker` records the verdict and still renders — the card is visible to every
+            admin today and only disappears for users missing the selector once the flag flips.
+          */}
+          <PermissionChecker
+            permission={PERMISSIONS.ADMIN_CARD_PERMISSIONS}
+            route="/admin permissions card"
+          >
+            <section>
+              <Link href="/admin/permissions">
+                <Card className="rounded-3xl border border-border/60 shadow-none transition hover:bg-accent/40">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2 text-lg">
+                      <ShieldCheck className="size-5 text-primary" />
+                      Permissions
+                    </CardTitle>
+                    <CardDescription>
+                      Administer users, permission groups, and permission
+                      selectors — who holds what, directly or through a group.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="inline-flex items-center gap-1 text-sm font-medium text-primary">
+                      Open
+                      <ArrowRight className="size-4" />
+                    </div>
+                  </CardContent>
+                </Card>
+              </Link>
+            </section>
+          </PermissionChecker>
+
           <section className="grid gap-4 xl:grid-cols-[minmax(0,1.4fr)_minmax(320px,1fr)]">
             <Card className="rounded-3xl border border-border/60 shadow-none">
               <CardHeader className="flex flex-row items-start justify-between gap-4 px-5 pb-0">
@@ -273,7 +299,9 @@ export default async function AdminDashboardPage() {
                       ['Legacy product browser', '/admin/products/legacy'],
                       ['RAG search', '/admin/products/rag'],
                       ['SDS ingestion dashboard', '/admin/sds'],
+                      ['Efficacy ingestion dashboard', '/admin/efficacy'],
                       ['RAG generation', '/admin/products/rag/generate'],
+                      ['Users, groups & permissions', '/admin/permissions'],
                     ].map(([label, href]) => (
                       <Link
                         className="flex items-center justify-between rounded-2xl bg-background px-4 py-3 text-sm font-medium text-foreground transition hover:bg-accent"
@@ -288,92 +316,6 @@ export default async function AdminDashboardPage() {
                 </div>
               </CardContent>
             </Card>
-          </section>
-
-          <section className="rounded-3xl border border-border/60 bg-card shadow-none">
-            <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-5">
-              <div className="flex items-center gap-2">
-                <Button className="rounded-2xl" size="sm" variant="outline">
-                  Customize Columns
-                </Button>
-                <Button className="rounded-2xl" size="sm" variant="outline">
-                  Columns
-                  <ChevronDown className="size-4" />
-                </Button>
-              </div>
-              <Button className="rounded-2xl" size="sm">
-                <Plus className="size-4" />
-                Add Section
-              </Button>
-            </div>
-
-            <Table>
-              <TableHeader>
-                <TableRow className="border-border/60 hover:bg-transparent">
-                  <TableHead>Header</TableHead>
-                  <TableHead>Section Type</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Reviewer</TableHead>
-                  <TableHead className="w-12" />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {rows.map(([header, type, status, reviewer]) => (
-                  <TableRow className="border-border/60" key={header}>
-                    <TableCell className="font-medium">{header}</TableCell>
-                    <TableCell>{type}</TableCell>
-                    <TableCell>
-                      <Badge
-                        className={
-                          status === 'Done'
-                            ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-50'
-                            : 'bg-amber-50 text-amber-700 hover:bg-amber-50'
-                        }
-                        variant="secondary"
-                      >
-                        {status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>{reviewer}</TableCell>
-                    <TableCell>
-                      <Button size="icon-sm" variant="ghost">
-                        <Ellipsis className="size-4" />
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-
-            <div className="flex flex-wrap items-center justify-between gap-4 px-5 py-5 text-sm text-muted-foreground">
-              <p>0 of 68 row(s) selected.</p>
-              <div className="flex items-center gap-6">
-                <div className="flex items-center gap-2">
-                  <span>Rows per page</span>
-                  <Button className="rounded-2xl" size="sm" variant="outline">
-                    10
-                    <ChevronDown className="size-4" />
-                  </Button>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span>Page 1 of 7</span>
-                  <div className="flex items-center gap-1">
-                    <Button size="icon-sm" variant="outline">
-                      <ChevronsLeft className="size-4" />
-                    </Button>
-                    <Button size="icon-sm" variant="outline">
-                      <ChevronLeft className="size-4" />
-                    </Button>
-                    <Button size="icon-sm" variant="outline">
-                      <ChevronRight className="size-4" />
-                    </Button>
-                    <Button size="icon-sm" variant="outline">
-                      <ChevronsRight className="size-4" />
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            </div>
           </section>
         </div>
       </div>

@@ -1,5 +1,5 @@
 import { createEmbedding, EMBEDDING_MODEL } from '~/lib/rag/embeddings';
-import { rerankChunks } from '~/lib/rag/rerank';
+import { isRerankerConfigured, rerankChunks } from '~/lib/rag/rerank';
 import { getOpenAIClient } from '~/lib/openai/client';
 import { normalizeForDedupe } from '~/lib/utils';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
@@ -8,14 +8,33 @@ const APPROX_QUERY_THRESHOLD_SHORT = 0.95;
 const APPROX_QUERY_THRESHOLD_LONG = 0.9;
 const APPROX_REWRITTEN_SIMILARITY_THRESHOLD = 0.88;
 
+/**
+ * Search scope. `all | products | sds | efficacy` map to the RPC's native `filter_scope`
+ * (B0-230 added `efficacy`, mirroring `sds`). `knowledge` and `label` are additional
+ * `document_kind`s that the corpus RPC does not yet filter on natively (see the
+ * reconciliation-required migration note), so they are resolved as `filter_scope: 'all'`
+ * plus an application-layer `document_kind` filter over the returned rows.
+ */
+export type SearchScope = 'all' | 'products' | 'sds' | 'efficacy' | 'knowledge' | 'label';
+
+/** Scopes handled natively by the RPC's `filter_scope` argument. */
+type RpcScope = 'all' | 'products' | 'sds' | 'efficacy';
+
+/** Scopes resolved by an application-layer document_kind filter over `filter_scope: 'all'`. */
+const APP_KIND_SCOPES: Record<'knowledge' | 'label', string> = {
+  knowledge: 'knowledge',
+  label: 'label',
+};
+
 type SearchProductChunksOptions = {
   query: string;
   limit?: number;
   productLineKey?: string;
+  productKey?: string;
   sectionType?: string;
   minSimilarity?: number;
   model?: string;
-  scope?: 'all' | 'products' | 'sds';
+  scope?: SearchScope;
   useHybrid?: boolean;
   useReranker?: boolean;
   useMultiIntent?: boolean;
@@ -68,8 +87,9 @@ export type RagSearchResult = {
   model: string;
   limit: number;
   productLineKey: string | null;
+  productKey: string | null;
   sectionType: string | null;
-  scope: 'all' | 'products' | 'sds';
+  scope: SearchScope;
   minSimilarity: number | null;
   retrieval_strategy: 'vector' | 'hybrid' | 'vector+reranked' | 'hybrid+reranked';
   embeddingSource:
@@ -118,8 +138,8 @@ function normalizeMinSimilarity(minSimilarity?: number) {
   return Math.min(normalized, 1);
 }
 
-function normalizeScope(scope?: string) {
-  if (scope === 'products' || scope === 'sds') {
+function normalizeScope(scope?: string): RpcScope {
+  if (scope === 'products' || scope === 'sds' || scope === 'efficacy') {
     return scope;
   }
 
@@ -128,6 +148,59 @@ function normalizeScope(scope?: string) {
   }
 
   return 'products' as const;
+}
+
+/**
+ * Resolves a requested scope into: the value echoed back on the result, the RPC-native
+ * `filter_scope` to send, and an optional application-layer `document_kind` filter.
+ *
+ * `knowledge`/`label` are not yet supported by the corpus RPC's `filter_scope` (the live function
+ * body clamps unknown scopes to `all`), so they are served as `filter_scope: 'all'` + a
+ * post-retrieval `document_kind` filter. Once the reconciliation-required migration pushes these
+ * kinds into the RPC, `rpcScope` can pass them through directly and the app-layer filter dropped.
+ */
+function resolveSearchScope(scope?: string): {
+  requested: SearchScope;
+  rpcScope: RpcScope;
+  documentKindFilter: string | null;
+} {
+  const raw = (scope ?? '').trim().toLowerCase();
+  if (raw === 'knowledge' || raw === 'label') {
+    return { requested: raw, rpcScope: 'all', documentKindFilter: APP_KIND_SCOPES[raw] };
+  }
+  const rpcScope = normalizeScope(raw);
+  return { requested: rpcScope, rpcScope, documentKindFilter: null };
+}
+
+/**
+ * B0-440: single resolved rerank decision, shared by the three things that used to disagree —
+ * the candidate over-fetch, whether the rerank phase runs, and the reported
+ * `retrieval_strategy`.
+ *
+ * A caller can *request* reranking (`useReranker`), but the request only takes effect when
+ * Cohere is provisioned. `rerankChunks` returns null immediately when `COHERE_API_KEY` is
+ * absent, so a requested-but-unprovisioned reranker used to buy a 5x over-fetch (50 full
+ * chunk rows instead of 20, each carrying `chunk_text`) and a `hybrid+reranked` label for
+ * work that never happened. When the reranker is inactive this path now behaves exactly as
+ * if `useReranker: false` had been passed.
+ *
+ * The `documentKindFilter` over-fetch is unrelated to reranking — it exists so enough rows of
+ * the requested app-layer `document_kind` (knowledge/label) survive the post-RPC filter — so
+ * it takes precedence regardless of the rerank decision.
+ */
+export function resolveRerankPlan(input: {
+  requestedReranker: boolean;
+  limit: number;
+  documentKindFilter: string | null;
+}): { rerankerActive: boolean; rpcLimit: number } {
+  const rerankerActive = input.requestedReranker && isRerankerConfigured();
+  const rpcLimit = input.documentKindFilter
+    ? Math.min(Math.max(input.limit * 10, 100), 200)
+    : rerankerActive
+      ? Math.min(input.limit * 5, 50)
+      : input.limit;
+
+  return { rerankerActive, rpcLimit };
 }
 
 function nowMs() {
@@ -650,16 +723,17 @@ async function getCachedOrNewEmbedding(
 
 type HybridRpcClient = {
   rpc: (
-    fn: 'match_product_chunks_hybrid' | 'match_corpus_chunks_hybrid',
+    fn: 'match_product_chunks_hybrid' | 'match_corpus_chunks_hybrid' | 'match_product_chunks',
     args: Record<string, unknown>,
   ) => Promise<{ data: RagCorpusSearchMatch[] | null; error: { message: string } | null }>;
 };
 
 type MatchRpcOpts = {
-  scope: 'all' | 'products' | 'sds';
+  scope: 'all' | 'products' | 'sds' | 'efficacy';
   useHybrid: boolean;
   rpcLimit: number;
   productLineKey: string | null;
+  productKey: string | null;
   sectionType: string | null;
 };
 
@@ -679,8 +753,9 @@ async function callMatchRpc(
         query_text?: string;
         match_count: number;
         filter_product_line_key?: string;
-        filter_scope: 'all' | 'products' | 'sds';
+        filter_scope: 'all' | 'products' | 'sds' | 'efficacy';
         filter_section_type?: string;
+        filter_product_key?: string;
       },
     ) => Promise<{ data: RagCorpusSearchMatch[] | null; error: { message: string } | null }>;
   };
@@ -695,16 +770,19 @@ async function callMatchRpc(
             query_embedding: toVectorLiteral(embedding),
             query_text: hybridQueryText,
             match_count: opts.rpcLimit,
-            filter_product_key: null,
+            filter_product_key: opts.productKey || null,
             filter_product_line_key: opts.productLineKey || null,
             filter_section_type: opts.sectionType || null,
           })
-        : await rag.rpc('match_product_chunks', {
+        : // Same null-not-undefined trick as the hybrid branch above: match_product_chunks also
+          // has two live overloads (with/without filter_section_type), and supabase-js strips
+          // undefined keys, which left the arg set ambiguous between them (42725).
+          await (rag as unknown as HybridRpcClient).rpc('match_product_chunks', {
             query_embedding: toVectorLiteral(embedding),
             match_count: opts.rpcLimit,
-            filter_product_key: undefined,
-            filter_product_line_key: opts.productLineKey || undefined,
-            filter_section_type: opts.sectionType || undefined,
+            filter_product_key: opts.productKey || null,
+            filter_product_line_key: opts.productLineKey || null,
+            filter_section_type: opts.sectionType || null,
           })
       : await (rag as unknown as CorpusRpcClient).rpc(
           opts.useHybrid ? 'match_corpus_chunks_hybrid' : 'match_corpus_chunks',
@@ -715,6 +793,7 @@ async function callMatchRpc(
             filter_product_line_key: opts.productLineKey || undefined,
             filter_scope: opts.scope,
             filter_section_type: opts.sectionType || undefined,
+            filter_product_key: opts.productKey || undefined,
           },
         );
 
@@ -735,15 +814,27 @@ export async function searchProductChunks(
 
   const limit = clampLimit(options.limit);
   const productLineKey = options.productLineKey?.trim() || null;
+  const productKey = options.productKey?.trim() || null;
   const sectionType = options.sectionType?.trim() || null;
-  const scope = normalizeScope(options.scope);
+  const {
+    requested: requestedScope,
+    rpcScope: scope,
+    documentKindFilter,
+  } = resolveSearchScope(options.scope);
   const minSimilarity = normalizeMinSimilarity(options.minSimilarity);
   const useHybrid = options.useHybrid ?? false;
   const useReranker = options.useReranker ?? process.env.ENABLE_RERANKER === 'true';
   const useMultiIntent = options.useMultiIntent ?? false;
   // Fetch extra candidates when reranking so the reranker has a larger pool to
-  // reorder before we slice down to the requested limit.
-  const rpcLimit = useReranker ? Math.min(limit * 5, 50) : limit;
+  // reorder before we slice down to the requested limit. When an app-layer document_kind
+  // filter is active (knowledge/label), over-fetch so enough matching-kind rows survive.
+  // `rerankerActive` (not the requested `useReranker`) gates the over-fetch, the rerank
+  // phase, and the strategy label — see resolveRerankPlan (B0-440).
+  const { rerankerActive, rpcLimit } = resolveRerankPlan({
+    requestedReranker: useReranker,
+    limit,
+    documentKindFilter,
+  });
 
   const {
     row,
@@ -757,7 +848,14 @@ export async function searchProductChunks(
   // cleaner lexemes than the raw user input.
   const hybridQueryText = row?.query_rewritten ?? query;
 
-  const rpcOpts: MatchRpcOpts = { scope, useHybrid, rpcLimit, productLineKey, sectionType };
+  const rpcOpts: MatchRpcOpts = {
+    scope,
+    useHybrid,
+    rpcLimit,
+    productLineKey,
+    productKey,
+    sectionType,
+  };
   const similaritySearchStartedAt = nowMs();
 
   let rawMatches: RagCorpusSearchMatch[];
@@ -811,29 +909,36 @@ export async function searchProductChunks(
     similarity: Number(match.similarity),
   }));
 
+  // App-layer scope: keep only the requested document_kind (knowledge/label) before ranking.
+  const kindFilteredMatches = documentKindFilter
+    ? mappedMatches.filter((match) => match.document_kind === documentKindFilter)
+    : mappedMatches;
+
   // Rerank phase — reorders the candidate pool by cross-encoder relevance then
   // slices to `limit`. Falls back to cosine order if the API is unavailable.
   let rerankMs = 0;
-  let rankedMatches = mappedMatches;
+  let rankedMatches = kindFilteredMatches;
 
-  if (useReranker && mappedMatches.length > 0) {
+  if (rerankerActive && kindFilteredMatches.length > 0) {
     const rerankStartedAt = nowMs();
-    const reranked = await rerankChunks(query, mappedMatches).catch(() => null);
+    const reranked = await rerankChunks(query, kindFilteredMatches).catch(() => null);
     rerankMs = elapsedMs(rerankStartedAt);
 
     if (reranked && reranked.length > 0) {
       const scoreMap = new Map(reranked.map((r) => [r.chunk_id, r.relevance_score]));
-      rankedMatches = [...mappedMatches]
+      rankedMatches = [...kindFilteredMatches]
         .sort((a, b) => (scoreMap.get(b.chunk_id) ?? 0) - (scoreMap.get(a.chunk_id) ?? 0))
         .slice(0, limit);
     } else {
-      rankedMatches = mappedMatches.slice(0, limit);
+      rankedMatches = kindFilteredMatches.slice(0, limit);
     }
   }
 
-  const filteredMatches = rankedMatches.filter(
-    (match) => minSimilarity === null || match.similarity >= minSimilarity,
-  );
+  const filteredMatches = rankedMatches
+    .filter((match) => minSimilarity === null || match.similarity >= minSimilarity)
+    // Over-fetch for the app-layer kind filter means the non-rerank path can still hold more
+    // than `limit` rows here; trim to the requested count (no-op for the native scopes).
+    .slice(0, limit);
 
   const timings = {
     totalMs: elapsedMs(startedAt) + rerankMs,
@@ -880,14 +985,17 @@ export async function searchProductChunks(
     model,
     limit,
     productLineKey,
+    productKey,
     sectionType,
-    scope,
+    scope: requestedScope,
     minSimilarity,
+    // B0-440: reports what actually ran. Reranking that was requested but not provisioned
+    // is no longer labelled `+reranked` in the observability data.
     retrieval_strategy: (
-      useHybrid && useReranker ? 'hybrid+reranked'
-      : useHybrid             ? 'hybrid'
-      : useReranker           ? 'vector+reranked'
-      :                         'vector'
+      useHybrid && rerankerActive ? 'hybrid+reranked'
+      : useHybrid                 ? 'hybrid'
+      : rerankerActive            ? 'vector+reranked'
+      :                             'vector'
     ) as 'vector' | 'hybrid' | 'vector+reranked' | 'hybrid+reranked',
     embeddingSource: source,
     timings,

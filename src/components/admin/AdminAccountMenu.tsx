@@ -1,12 +1,10 @@
 'use client';
 
 import {
-  Bell,
-  CircleUserRound,
-  CreditCard,
   EllipsisVertical,
+  KeyRound,
   LogOut,
-  Search,
+  ShieldCheck,
 } from 'lucide-react';
 import { signOut, useSession } from 'next-auth/react';
 import Link from 'next/link';
@@ -19,9 +17,13 @@ import {
   DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '~/components/ui/dropdown-menu';
 import { Button } from '~/components/ui/button';
+import { PERMISSIONS } from '~/lib/permissions/constants';
 import { cn } from '~/lib/utils';
 
 function getInitials(value: string | null | undefined) {
@@ -44,7 +46,7 @@ const AccountTrigger = forwardRef<HTMLButtonElement, AccountTriggerProps>(
     return (
       <Button
         className={cn(
-          'flex h-auto w-full items-center gap-3 rounded-3xl border border-sidebar-border bg-sidebar-accent/60 p-3 text-left transition hover:bg-sidebar-accent',
+          'flex h-auto w-full items-center gap-3 rounded-3xl border border-sidebar-border bg-sidebar-accent/60 p-3 text-left transition hover:bg-sidebar-accent group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-0 group-data-[collapsible=icon]:rounded-2xl group-data-[collapsible=icon]:p-1.5',
           className,
         )}
         ref={ref}
@@ -55,7 +57,7 @@ const AccountTrigger = forwardRef<HTMLButtonElement, AccountTriggerProps>(
         <Avatar size="lg">
           <AvatarFallback>{getInitials(userName)}</AvatarFallback>
         </Avatar>
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 group-data-[collapsible=icon]:hidden">
           <p className="truncate text-sm font-medium text-sidebar-foreground">
             {userName || 'User'}
           </p>
@@ -63,7 +65,7 @@ const AccountTrigger = forwardRef<HTMLButtonElement, AccountTriggerProps>(
             {userEmail || 'No email'}
           </p>
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 group-data-[collapsible=icon]:hidden">
           <EllipsisVertical className="size-4 text-sidebar-foreground/70" />
         </div>
       </Button>
@@ -73,7 +75,11 @@ const AccountTrigger = forwardRef<HTMLButtonElement, AccountTriggerProps>(
 
 AccountTrigger.displayName = 'AccountTrigger';
 
-export function AdminAccountMenu() {
+export function AdminAccountMenu({
+  hiddenSelectors = [],
+}: {
+  hiddenSelectors?: string[];
+}) {
   const { data: session } = useSession();
   const mounted = useSyncExternalStore(
     () => () => {},
@@ -110,30 +116,30 @@ export function AdminAccountMenu() {
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
         <DropdownMenuGroup>
-          <DropdownMenuItem asChild>
-            <Link href="#">
-              <CircleUserRound className="size-4" />
-              Account
-            </Link>
-          </DropdownMenuItem>
-          <DropdownMenuItem asChild>
-            <Link href="#">
-              <CreditCard className="size-4" />
-              Billing
-            </Link>
-          </DropdownMenuItem>
-          <DropdownMenuItem asChild>
-            <Link href="#">
-              <Bell className="size-4" />
-              Notifications
-            </Link>
-          </DropdownMenuItem>
-          <DropdownMenuItem asChild>
-            <Link href="/admin/products/rag">
-              <Search className="size-4" />
-              Search
-            </Link>
-          </DropdownMenuItem>
+          {!hiddenSelectors.includes(PERMISSIONS.NAVIGATION_SIDEBAR_PROJECTS) ? (
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <KeyRound className="size-4" />
+                API access
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                <DropdownMenuItem asChild>
+                  <Link href="/admin/projects">Projects</Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link href="/admin/projects/analytics">Analytics</Link>
+                </DropdownMenuItem>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          ) : null}
+          {!hiddenSelectors.includes(PERMISSIONS.ADMIN_CARD_PERMISSIONS) ? (
+            <DropdownMenuItem asChild>
+              <Link href="/admin/permissions">
+                <ShieldCheck className="size-4" />
+                Access control
+              </Link>
+            </DropdownMenuItem>
+          ) : null}
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
         <DropdownMenuItem

@@ -4,11 +4,18 @@ import { connection } from 'next/server';
 
 import { AdminTestsActionToast } from '~/components/admin/tests/AdminTestsActionToast';
 import { ResultItemMessageCell } from '~/components/admin/tests/ResultItemMessageCell';
-import { RetrievedChunksPreview } from '~/components/admin/tests/RetrievedChunksPreview';
 import { RunAtAGlanceCharts } from '~/components/admin/tests/RunAtAGlanceCharts';
 import { RunExecutionProgress } from '~/components/admin/tests/RunExecutionProgress';
-import { RunInsightsPanel } from '~/components/admin/tests/RunInsightsPanel';
+import {
+  RunFullExportDownload,
+  type RunExportItem,
+} from '~/components/admin/tests/RunFullExportDownload';
+import {
+  RunInsightsPanel,
+  type Insight,
+} from '~/components/admin/tests/RunInsightsPanel';
 import { RunItemResultsCsvDownload } from '~/components/admin/tests/RunItemResultsCsvDownload';
+import { RunReportButton } from '~/components/admin/tests/RunReportButton';
 import {
   TestRunNotesDisplay,
   TestRunNotesProvider,
@@ -17,26 +24,20 @@ import {
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from '~/components/ui/dialog';
-import {
   TableBody,
   TableCell,
   TableHead,
   TableHeader,
   TableRow,
 } from '~/components/ui/table';
+import { getAgentBadgeClassName } from '~/lib/bex/agent-badge';
 import { listWorkflowRunsByIds } from '~/lib/conversations/workflow-repository';
 import { resolveResponsesModel } from '~/lib/openai/client';
 import {
   formatExpectedShouldAnswerLabel as formatExpectedShouldAnswerCell,
   formatItemSimilarityConfidenceLabel,
   formatRetrievedChunksForCsv,
+  formatShouldAnswerExport,
   formatTimingBreakdownLabel,
 } from '~/lib/tests/format';
 import {
@@ -48,12 +49,15 @@ import {
 } from '~/lib/tests/repository';
 import {
   extractItemSimilarityScore,
+  extractItemValidatorConfidence,
   extractModelTag,
   extractProgress,
   extractRetrievedDocumentChunks,
   extractRoutingDecision,
+  extractTimingBreakdown,
   extractWorkflowRunId,
 } from '~/lib/tests/response-payload';
+import { isCompletedRunStatus } from '~/lib/tests/types';
 import { formatDate, formatDurationSeconds } from '~/lib/utils/time';
 
 import { deleteTestRunAction } from '../../../actions';
@@ -118,6 +122,24 @@ export default async function AdminTestRunDetailsPage({
   const expectedShouldAnswerByItemId = new Map(
     testItems.map((item) => [item.id, item.expected_should_answer]),
   );
+  const priorityByItemId = new Map(
+    testItems.map((item) => [item.id, item.priority]),
+  );
+  const idealResponseByItemId = new Map(
+    testItems.map((item) => [item.id, item.ideal_response]),
+  );
+  /** Golden-set concept/source/citation expectations, keyed by test item id. */
+  const conceptExpectationsByItemId = new Map(
+    testItems.map((item) => [
+      item.id,
+      {
+        expected_concepts: item.expected_concepts,
+        minimum_concepts: item.minimum_concepts,
+        expected_sources: item.expected_sources,
+        should_cite: item.should_cite,
+      },
+    ]),
+  );
   const passCount = result.passed_items ?? 0;
   const failCount =
     result.failed_items ?? resultItems.filter((item) => !item.passed).length;
@@ -128,7 +150,9 @@ export default async function AdminTestRunDetailsPage({
   const erroredCount = resultItems.filter((item) => {
     if (item.status === 'failed') return true;
     const p = item.response_payload;
-    return p !== null && typeof p === 'object' && !Array.isArray(p) && 'error' in p;
+    return (
+      p !== null && typeof p === 'object' && !Array.isArray(p) && 'error' in p
+    );
   }).length;
 
   const chronologicalItems = [...resultItems].sort((a, b) => {
@@ -140,6 +164,10 @@ export default async function AdminTestRunDetailsPage({
   const elapsedTrendData = chronologicalItems.map((item, index) => ({
     label: `${index + 1}`,
     elapsedSeconds: Number((item.elapsed_ms / 1000).toFixed(2)),
+    ttftSeconds:
+      typeof item.ttft_ms === 'number' && Number.isFinite(item.ttft_ms)
+        ? Number((item.ttft_ms / 1000).toFixed(2))
+        : null,
     resultItemId: item.id,
     passed: item.passed,
   }));
@@ -180,11 +208,27 @@ export default async function AdminTestRunDetailsPage({
     (item) => item.elapsed_ms > 10_000,
   ).length;
   const notPassedItemCount = resultItems.filter((item) => !item.passed).length;
+  /**
+   * B0-419 — the run each execution produced. Prefer the real `workflow_run_id` column (B0-416,
+   * backfilled) over re-extracting it from `response_payload`; the payload read stays only as a
+   * fallback for any row the backfill could not reach. Null is expected and common: search-eval
+   * rows have their own page, error rows never produced a run, and deleting a workflow run nulls
+   * this via `ON DELETE SET NULL`.
+   */
+  const workflowRunIdByResultItemId = new Map(
+    resultItems.map(
+      (item) =>
+        [
+          item.id,
+          item.workflow_run_id ?? extractWorkflowRunId(item.response_payload),
+        ] as const,
+    ),
+  );
   const workflowRunIds = Array.from(
     new Set(
-      resultItems
-        .map((item) => extractWorkflowRunId(item.response_payload))
-        .filter((value): value is string => Boolean(value)),
+      Array.from(workflowRunIdByResultItemId.values()).filter(
+        (value): value is string => Boolean(value),
+      ),
     ),
   );
   const workflowRuns = await listWorkflowRunsByIds(workflowRunIds);
@@ -200,20 +244,29 @@ export default async function AdminTestRunDetailsPage({
     const expectedForCell: boolean | null =
       expectedRaw === undefined ? null : expectedRaw;
 
+    const priority = priorityByItemId.get(row.test_item_id) ?? null;
+    const expectations = conceptExpectationsByItemId.get(row.test_item_id);
+
     return {
       row_index: row.row_index,
       prompt: promptByItemId.get(row.test_item_id) ?? '',
+      priority: priority === null ? '' : String(priority),
       expected_answer: formatExpectedShouldAnswerCell(expectedForCell),
       passed: row.passed ? 'Yes' : 'No',
       sim_conf: formatItemSimilarityConfidenceLabel(row.response_payload),
       elapsed: formatDurationSeconds(row.elapsed_ms),
       model:
         modelByWorkflowRunId.get(
-          extractWorkflowRunId(row.response_payload) || '',
+          workflowRunIdByResultItemId.get(row.id) || '',
         ) ?? 'n/a',
       agent: extractRoutingDecision(row.response_payload) ?? 'n/a',
       rounds_cache_search: formatTimingBreakdownLabel(row.response_payload),
       message: row.error_message || row.response_text || 'n/a',
+      ideal_response: idealResponseByItemId.get(row.test_item_id) ?? '',
+      expected_concepts: expectations?.expected_concepts ?? '',
+      minimum_concepts: expectations?.minimum_concepts ?? '',
+      expected_sources: expectations?.expected_sources ?? '',
+      should_cite: formatShouldAnswerExport(expectations?.should_cite ?? null),
       item_detail_path: `/admin/tests/${test.id}/items/${row.test_item_id}`,
       retrieved_chunks: formatRetrievedChunksForCsv(
         extractRetrievedDocumentChunks(row.response_payload),
@@ -221,6 +274,66 @@ export default async function AdminTestRunDetailsPage({
       test_item_id: row.test_item_id,
     };
   });
+
+  const isCompleted = isCompletedRunStatus(result.status);
+  const fullExportData = isCompleted
+    ? {
+        run: {
+          id: result.id,
+          test_id: test.id,
+          test_name: test.name,
+          status: result.status,
+          started_at: result.started_at,
+          created_at: result.created_at,
+          elapsed_ms: result.elapsed_ms,
+          total_items: result.total_items,
+          passed_items: passCount,
+          failed_items: failCount,
+          notes: result.notes,
+        },
+        items: chronologicalItems.map((row): RunExportItem => {
+          const modelTag = modelByWorkflowRunId.get(
+            workflowRunIdByResultItemId.get(row.id) || '',
+          );
+          return {
+            row_index: row.row_index,
+            test_item_id: row.test_item_id,
+            prompt: promptByItemId.get(row.test_item_id) ?? '',
+            priority: priorityByItemId.get(row.test_item_id) ?? null,
+            expected_should_answer:
+              expectedShouldAnswerByItemId.get(row.test_item_id) ?? null,
+            passed: row.passed,
+            status: row.status,
+            similarity: extractItemSimilarityScore(row.response_payload),
+            confidence: extractItemValidatorConfidence(row.response_payload),
+            elapsed_ms: row.elapsed_ms,
+            model: modelTag ?? null,
+            agent: extractRoutingDecision(row.response_payload),
+            response_text: row.response_text,
+            error_message: row.error_message,
+            ideal_response: idealResponseByItemId.get(row.test_item_id) ?? null,
+            expected_concepts:
+              conceptExpectationsByItemId.get(row.test_item_id)
+                ?.expected_concepts ?? null,
+            minimum_concepts:
+              conceptExpectationsByItemId.get(row.test_item_id)
+                ?.minimum_concepts ?? null,
+            expected_sources:
+              conceptExpectationsByItemId.get(row.test_item_id)
+                ?.expected_sources ?? null,
+            should_cite:
+              conceptExpectationsByItemId.get(row.test_item_id)?.should_cite ??
+              null,
+            timing: extractTimingBreakdown(row.response_payload),
+            retrieved_document_chunks: extractRetrievedDocumentChunks(
+              row.response_payload,
+            ),
+            response_payload: row.response_payload,
+            created_at: row.created_at,
+          };
+        }),
+      }
+    : null;
 
   return (
     <div className="flex flex-1 bg-slate-50">
@@ -232,7 +345,7 @@ export default async function AdminTestRunDetailsPage({
           testId={test.id}
         >
           <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-            <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="flex flex-wrap items-center justify-between gap-4">
               <div>
                 <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-700">
                   Run details
@@ -250,6 +363,18 @@ export default async function AdminTestRunDetailsPage({
                   <Link href={`/admin/tests/${test.id}`}>Back to test</Link>
                 </Button>
                 <TestRunNotesToolbarButton />
+                <RunReportButton
+                  enabled={isCompletedRunStatus(result.status)}
+                  hasExistingReport={Boolean(result.report)}
+                  runId={result.id}
+                  testId={test.id}
+                />
+                {fullExportData ? (
+                  <RunFullExportDownload
+                    data={fullExportData}
+                    fileBase={`${test.name}-run-${result.id}-full-export`}
+                  />
+                ) : null}
                 <form action={deleteTestRunAction}>
                   <input
                     name="returnPath"
@@ -296,7 +421,15 @@ export default async function AdminTestRunDetailsPage({
           totalItems={result.total_items}
         />
 
-        <RunInsightsPanel runId={result.id} />
+        <RunInsightsPanel
+          initialGeneratedAt={result.insights_generated_at}
+          initialInsights={
+            Array.isArray(result.insights)
+              ? (result.insights as unknown as Insight[])
+              : null
+          }
+          runId={result.id}
+        />
 
         <section
           className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm"
@@ -375,7 +508,7 @@ export default async function AdminTestRunDetailsPage({
                   <TableHead>Agent</TableHead>
                   <TableHead>Rounds | Cache | Elapsed</TableHead>
                   <TableHead>Message</TableHead>
-                  <TableHead>History</TableHead>
+                  <TableHead>Trace</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -398,20 +531,39 @@ export default async function AdminTestRunDetailsPage({
                       const expectedShouldAnswer =
                         expectedShouldAnswerByItemId.get(row.test_item_id) ??
                         null;
+                      const itemPriority =
+                        priorityByItemId.get(row.test_item_id) ?? null;
+                      const rowWorkflowRunId =
+                        workflowRunIdByResultItemId.get(row.id) ?? null;
+                      const itemHistoryHref = `/admin/tests/${test.id}/items/${row.test_item_id}`;
                       return (
                         <TableRow id={`run-item-result-${row.id}`} key={row.id}>
+                          {/* Row index and prompt are the *column* axis: this prompt over time.
+                              They stay on item history — only the Trace column drills into this
+                              single execution. */}
                           <TableCell>
                             <Link
                               className="text-sky-700 underline-offset-2 hover:underline"
-                              href={`/admin/tests/${test.id}/items/${row.test_item_id}`}
+                              href={itemHistoryHref}
+                              title="This prompt's outcomes across every run"
                             >
                               {row.row_index}
                             </Link>
                           </TableCell>
                           <TableCell className="max-w-[420px] whitespace-normal text-xs text-slate-700">
+                            {itemPriority !== null ? (
+                              <Badge
+                                className="mr-1.5 align-middle text-slate-500"
+                                title={`Priority ${itemPriority} — lower = more important`}
+                                variant="secondary"
+                              >
+                                P{itemPriority}
+                              </Badge>
+                            ) : null}
                             <Link
                               className="text-sky-700 underline-offset-2 hover:underline"
-                              href={`/admin/tests/${test.id}/items/${row.test_item_id}`}
+                              href={itemHistoryHref}
+                              title="This prompt's outcomes across every run"
                             >
                               {promptByItemId.get(row.test_item_id) || 'n/a'}
                             </Link>
@@ -469,25 +621,22 @@ export default async function AdminTestRunDetailsPage({
                           <TableCell>
                             <Badge variant="outline">
                               {modelByWorkflowRunId.get(
-                                extractWorkflowRunId(row.response_payload) ||
-                                  '',
+                                rowWorkflowRunId || '',
                               ) || 'n/a'}
                             </Badge>
                           </TableCell>
                           <TableCell className="whitespace-nowrap">
                             {(() => {
-                              const agent = extractRoutingDecision(row.response_payload);
-                              if (!agent) return <span className="text-xs text-slate-400">—</span>;
-                              const colorClass =
-                                agent === 'product'
-                                  ? 'border-sky-600/45 bg-sky-600/12 text-sky-900'
-                                  : agent === 'bathroom'
-                                    ? 'border-purple-600/45 bg-purple-600/12 text-purple-900'
-                                    : agent === 'dilution'
-                                      ? 'border-amber-600/45 bg-amber-600/12 text-amber-900'
-                                      : agent === 'floor'
-                                        ? 'border-emerald-600/45 bg-emerald-600/12 text-emerald-900'
-                                        : '';
+                              const agent = extractRoutingDecision(
+                                row.response_payload,
+                              );
+                              if (!agent)
+                                return (
+                                  <span className="text-xs text-slate-400">
+                                    —
+                                  </span>
+                                );
+                              const colorClass = getAgentBadgeClassName(agent);
                               return (
                                 <Badge className={colorClass} variant="outline">
                                   {agent}
@@ -504,36 +653,27 @@ export default async function AdminTestRunDetailsPage({
                               responseText={row.response_text}
                             />
                           </TableCell>
+                          {/* B0-419 — this cell is the *cell* axis: this one execution. The
+                              retired "Docs" dialog is no longer needed, since B0-418 renders the
+                              retrieved chunks on the trace itself. When no workflow run was
+                              recorded, fall back to item history rather than 404 on a null id. */}
                           <TableCell>
-                            <div className="flex items-center gap-2">
-                              <Dialog>
-                                <DialogTrigger asChild>
-                                  <Button variant="outline">Docs</Button>
-                                </DialogTrigger>
-                                <DialogContent>
-                                  <DialogHeader>
-                                    <DialogTitle>Document chunks</DialogTitle>
-                                    <DialogDescription>
-                                      Chunks retrieved from rag search.
-                                    </DialogDescription>
-                                  </DialogHeader>
-                                  <div className="-mx-4 no-scrollbar max-h-[50vh] overflow-y-auto px-4">
-                                    <RetrievedChunksPreview
-                                      chunks={extractRetrievedDocumentChunks(
-                                        row.response_payload,
-                                      )}
-                                    />
-                                  </div>
-                                </DialogContent>
-                              </Dialog>
-                              <Button asChild size="sm" variant="outline">
-                                <Link
-                                  href={`/admin/tests/${test.id}/items/${row.test_item_id}`}
-                                >
-                                  View
-                                </Link>
-                              </Button>
-                            </div>
+                            <Button asChild size="sm" variant="outline">
+                              <Link
+                                href={
+                                  rowWorkflowRunId
+                                    ? `/admin/observability/${rowWorkflowRunId}`
+                                    : itemHistoryHref
+                                }
+                                title={
+                                  rowWorkflowRunId
+                                    ? 'Full trace for this execution'
+                                    : 'No workflow run was recorded for this execution — showing this prompt’s history instead'
+                                }
+                              >
+                                View
+                              </Link>
+                            </Button>
                           </TableCell>
                         </TableRow>
                       );

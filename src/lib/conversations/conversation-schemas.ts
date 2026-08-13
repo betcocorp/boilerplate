@@ -22,6 +22,9 @@ export const sourceRefSchema = z.object({
   /** WEB-6: external (web) sources — kind 'external' + a clickable URL render in the Sources panel. */
   kind: z.enum(['internal', 'external']).optional(),
   url: z.string().url().optional(),
+  /** B0-257: raw S3 location of the source document (label/SDS PDF or markdown), for regulated-claim citation. */
+  s3Key: z.string().optional(),
+  sourceUri: z.string().optional(),
 });
 
 export type SourceRef = z.infer<typeof sourceRefSchema>;

@@ -1,7 +1,7 @@
 import {
   WebSearchCache,
   defaultCacheTtlMs,
-  webSearchCacheKey,
+  webSearchCacheReadKeys,
 } from '~/lib/websearch/cache';
 import {
   sharedDbCache,
@@ -55,7 +55,7 @@ export function createProviderFromEnv(): WebSearchProvider {
  * Generic web-search core: run a provider search, validate + normalize to the Bex-owned
  * shape, and attach timing/cost metrics. Intent-specific tools consume this, not the provider.
  */
-/** Process-wide cache shared across requests; TTL from WEBSEARCH_CACHE_TTL_MS (default 10 min). */
+/** Process-wide cache shared across requests; TTL from WEBSEARCH_CACHE_TTL_MS (default 30 days). */
 const sharedCache = new WebSearchCache(defaultCacheTtlMs());
 /** Process-wide rate-limit + cost budget (WEB-5) shared across requests. */
 const sharedGuardrails = new WebSearchGuardrails(loadGuardrailPolicyFromEnv());
@@ -98,36 +98,43 @@ export class WebSearchService {
 
   async search(request: WebSearchRequest): Promise<WebSearchResponse> {
     const startedAt = Date.now();
-    const cacheKey = webSearchCacheKey(this.provider.name, request);
+    // Exact key first, then depth-compatible fallbacks (B0-326); writes always use the exact key.
+    const readKeys = webSearchCacheReadKeys(this.provider.name, request);
+    const cacheKey = readKeys[0];
 
     // 1. In-memory cache (fastest, process-local).
-    const hit = this.cache.get(cacheKey);
-    if (hit) {
-      return {
-        ...hit,
-        metrics: {
-          ...hit.metrics,
-          cached: true,
-          estimatedCostUsd: 0,
-          latencyMs: Date.now() - startedAt,
-        },
-      };
-    }
-
-    // 2. Durable DB cache (shared across instances, survives restarts). Promote hits to memory.
-    if (this.dbCache) {
-      const dbHit = await this.dbCache.get(cacheKey);
-      if (dbHit) {
-        this.cache.set(cacheKey, dbHit);
+    for (const key of readKeys) {
+      const hit = this.cache.get(key);
+      if (hit) {
         return {
-          ...dbHit,
+          ...hit,
           metrics: {
-            ...dbHit.metrics,
+            ...hit.metrics,
             cached: true,
             estimatedCostUsd: 0,
             latencyMs: Date.now() - startedAt,
           },
         };
+      }
+    }
+
+    // 2. Durable DB cache (shared across instances, survives restarts). Promote hits to memory
+    //    under the key they were found at, so the fallback resolves in-process next time.
+    if (this.dbCache) {
+      for (const key of readKeys) {
+        const dbHit = await this.dbCache.get(key);
+        if (dbHit) {
+          this.cache.set(key, dbHit);
+          return {
+            ...dbHit,
+            metrics: {
+              ...dbHit.metrics,
+              cached: true,
+              estimatedCostUsd: 0,
+              latencyMs: Date.now() - startedAt,
+            },
+          };
+        }
       }
     }
 

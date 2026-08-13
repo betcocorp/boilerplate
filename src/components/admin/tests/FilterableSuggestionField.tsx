@@ -1,18 +1,29 @@
 'use client';
 
-import { type ReactNode, useMemo, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '~/components/ui/button';
 import { Command, CommandGroup, CommandInput, CommandItem, CommandList } from '~/components/ui/command';
 import { Label } from '~/components/ui/label';
 import {
   Popover,
   PopoverContent,
+  popoverScrollInDialogProps,
   PopoverTrigger,
 } from '~/components/ui/popover';
 import { cn } from '~/lib/utils';
-import { ChevronDownIcon, XIcon } from 'lucide-react';
+import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, XIcon } from 'lucide-react';
 
-const INITIAL_VISIBLE_COUNT = 25;
+/**
+ * B0-360 — options per page.
+ *
+ * These lists are far larger than they look: ~1,700 legacy product lines behind "Expected
+ * canonical product", ~100 each for reason code and question category. The list previously
+ * showed only the first 25 with no way to reach the rest by browsing, so any value you
+ * couldn't already name was undiscoverable. Paging (rather than an unbounded list) keeps
+ * cmdk rendering ~50 items instead of ~1,700, and (rather than a "show more" button) keeps
+ * the click count to reach the tail bounded.
+ */
+const PAGE_SIZE = 50;
 
 function mergeSuggestions(presets: readonly string[], fromRows: readonly string[]): string[] {
   const set = new Set<string>();
@@ -82,6 +93,8 @@ export function FilterableSuggestionField({
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState(initialValue);
   const [search, setSearch] = useState('');
+  const [page, setPage] = useState(0);
+  const listRef = useRef<HTMLDivElement>(null);
 
   const options = useMemo(() => {
     const merged = mergeSuggestions(presetSuggestions, suggestionsFromDataset);
@@ -96,23 +109,37 @@ export function FilterableSuggestionField({
     );
   }, [presetSuggestions, suggestionsFromDataset, optionLabels]);
 
-  const visibleOptions = useMemo(() => {
+  /** Everything matching the current filter — the set the pager walks. */
+  const matchingOptions = useMemo(() => {
     const displayFor = (v: string) => optionLabels?.[v] ?? v;
     const q = search.trim().toLowerCase();
     if (!q) {
-      return options.slice(0, INITIAL_VISIBLE_COUNT);
+      return options;
     }
     return options.filter((opt) => {
       const label = displayFor(opt);
-      return (
-        opt.toLowerCase().includes(q) || label.toLowerCase().includes(q)
-      );
+      return opt.toLowerCase().includes(q) || label.toLowerCase().includes(q);
     });
   }, [options, search, optionLabels]);
 
-  const hasMoreThanInitial = options.length > INITIAL_VISIBLE_COUNT;
+  const pageCount = Math.max(1, Math.ceil(matchingOptions.length / PAGE_SIZE));
+  // Filtering shrinks the match set, so a page index from a previous filter can fall out of range.
+  const currentPage = Math.min(page, pageCount - 1);
+  const pageStart = currentPage * PAGE_SIZE;
+  const visibleOptions = matchingOptions.slice(pageStart, pageStart + PAGE_SIZE);
+
   const isFiltering = search.trim().length > 0;
-  const showFilterEmpty = isFiltering && visibleOptions.length === 0;
+  const showFilterEmpty = isFiltering && matchingOptions.length === 0;
+
+  // A new page starts at its first option, not wherever the previous page was scrolled to.
+  useEffect(() => {
+    listRef.current?.scrollTo({ top: 0 });
+  }, [currentPage, search]);
+
+  const resetPaging = () => {
+    setPage(0);
+    setSearch('');
+  };
 
   return (
     <div className="grid gap-2">
@@ -122,7 +149,7 @@ export function FilterableSuggestionField({
         onOpenChange={(nextOpen) => {
           setOpen(nextOpen);
           if (nextOpen) {
-            setSearch('');
+            resetPaging();
           }
         }}
         open={open}
@@ -154,6 +181,9 @@ export function FilterableSuggestionField({
         <PopoverContent
           align="start"
           className="z-100 flex max-h-[min(22rem,calc(100vh-8rem))] w-[min(100vw-2rem,var(--radix-popover-trigger-width))] flex-col gap-0 overflow-hidden p-0"
+          // B0-359: these fields live in the Add/Edit prompt dialogs, whose scroll lock
+          // would otherwise cancel every wheel event over the option list.
+          {...popoverScrollInDialogProps}
         >
           <Command
             className="flex min-h-0 flex-1 flex-col overflow-hidden size-auto! **:data-[slot=command-input-wrapper]:shrink-0"
@@ -161,11 +191,17 @@ export function FilterableSuggestionField({
             shouldFilter={false}
           >
             <CommandInput
-              onValueChange={setSearch}
+              onValueChange={(next) => {
+                setSearch(next);
+                setPage(0);
+              }}
               placeholder="Filter or type a new value…"
               value={search}
             />
-            <CommandList className="max-h-[min(18rem,calc(100vh-12rem))] min-h-0 flex-1 overflow-y-auto overscroll-contain scroll-py-1">
+            <CommandList
+              className="max-h-[min(18rem,calc(100vh-12rem))] min-h-0 flex-1 overflow-y-auto overscroll-contain scroll-py-1"
+              ref={listRef}
+            >
               {options.length === 0 ? (
                 <p className="px-3 py-2 text-center text-xs text-muted-foreground">
                   No saved values in this test yet. Type below, then choose &quot;Use …&quot; to set a custom value.
@@ -202,12 +238,54 @@ export function FilterableSuggestionField({
                   options={options}
                 />
               </CommandGroup>
-              {!isFiltering && hasMoreThanInitial ? (
-                <p className="border-t border-border/60 px-3 py-2 text-center text-xs text-muted-foreground">
-                  Showing {INITIAL_VISIBLE_COUNT} of {options.length}. Type to search all values.
-                </p>
-              ) : null}
             </CommandList>
+            {/*
+              B0-360 — pager lives OUTSIDE CommandList so its buttons are not cmdk items and
+              never steal arrow-key navigation or the Enter key from the option list.
+            */}
+            {matchingOptions.length > 0 ? (
+              <div className="flex shrink-0 items-center justify-between gap-2 border-t border-border/60 px-3 py-2">
+                <p aria-live="polite" className="text-xs text-muted-foreground">
+                  {pageCount > 1 ? (
+                    <>
+                      {pageStart + 1}–{pageStart + visibleOptions.length} of{' '}
+                      {matchingOptions.length}
+                      {isFiltering ? ' matching' : ''} · page {currentPage + 1}/{pageCount}
+                    </>
+                  ) : (
+                    <>
+                      {matchingOptions.length}{' '}
+                      {matchingOptions.length === 1 ? 'option' : 'options'}
+                      {isFiltering ? ' matching' : ''}
+                    </>
+                  )}
+                </p>
+                {pageCount > 1 ? (
+                  <div className="flex shrink-0 items-center gap-1">
+                    <Button
+                      aria-label="Previous page of options"
+                      disabled={currentPage === 0}
+                      onClick={() => setPage((p) => Math.max(0, p - 1))}
+                      size="icon-sm"
+                      type="button"
+                      variant="ghost"
+                    >
+                      <ChevronLeftIcon className="size-4" />
+                    </Button>
+                    <Button
+                      aria-label="Next page of options"
+                      disabled={currentPage >= pageCount - 1}
+                      onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
+                      size="icon-sm"
+                      type="button"
+                      variant="ghost"
+                    >
+                      <ChevronRightIcon className="size-4" />
+                    </Button>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </Command>
         </PopoverContent>
       </Popover>

@@ -41,9 +41,26 @@ export type ChatMessage = {
   };
 };
 
+/**
+ * B0-451 — admin sidebar owner attribution. `'admin'` for test-runner conversations (never a real
+ * user, per B0-450); `null` for a legacy/unresolved `source: 'chat'` row with no owner ("Unattributed");
+ * otherwise the resolved user. `userId` is included so the "filter by user" control has a value to
+ * send back as `?userFilter=`.
+ */
+export type ConversationOwner =
+  | { name: string; email: string | null; userId: string }
+  | 'admin'
+  | null;
+
+export type ConversationSource = 'chat' | 'test_run';
+
 export type Conversation = {
   id: string;
   title: string;
   updatedAt: number;
   messages: ChatMessage[];
+  owner: ConversationOwner;
+  source: ConversationSource;
+  /** Strict ownership (actor is the real user_id owner), independent of view-all/service access. */
+  isOwner: boolean;
 };

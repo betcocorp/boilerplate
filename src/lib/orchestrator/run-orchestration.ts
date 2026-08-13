@@ -58,6 +58,9 @@ async function runBexChatOrchestration(input: unknown): Promise<OrchestrationRun
   const outcome = await runBexChatTurn({
     conversationId: conversationId ?? undefined,
     message,
+    // B0-416 — this path is only reachable through the token-authenticated
+    // `/api/v1/orchestrator` route (server-to-server); the browser uses `/api/bex/*`.
+    source: 'orchestrator_api',
     modelTag: model,
   });
 
@@ -83,6 +86,13 @@ async function runBexChatOrchestration(input: unknown): Promise<OrchestrationRun
       validation: outcome.validation,
       routingDecision: outcome.routingDecision,
       usage: outcome.usage,
+      // B0-388 — this object is a cherry-pick, not a spread: anything added to
+      // `ProductSupportFinalOutput` must be listed here or it never reaches API callers.
+      promptVersion: outcome.promptVersion,
+      promptBundleVersion: outcome.promptBundleVersion,
+      answerProvenance: outcome.answerProvenance,
+      priorMessageCount: outcome.priorMessageCount,
+      previousResponseId: outcome.previousResponseId,
     },
   };
 }

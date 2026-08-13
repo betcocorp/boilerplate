@@ -4,8 +4,9 @@ import { Loader2, Sparkles } from 'lucide-react';
 import { useState } from 'react';
 
 import { Button } from '~/components/ui/button';
+import { Skeleton } from '~/components/ui/skeleton';
 
-type Insight = {
+export type Insight = {
   rank: number;
   title: string;
   description: string;
@@ -26,10 +27,51 @@ const IMPACT_STYLES: Record<string, string> = {
   low: 'border-slate-200 bg-slate-100 text-slate-600',
 };
 
-type Props = { runId: string };
+type Props = {
+  runId: string;
+  initialInsights?: Insight[] | null;
+  initialGeneratedAt?: string | null;
+};
 
-export function RunInsightsPanel({ runId }: Props) {
-  const [insights, setInsights] = useState<Insight[] | null>(null);
+/** Content-shaped stand-in for the insight cards while analysis runs. */
+function InsightsSkeleton() {
+  return (
+    <div aria-live="polite" role="status">
+      <span className="sr-only">Analyzing this run…</span>
+      <ol className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+        {Array.from({ length: 3 }, (_, index) => (
+          <li
+            className="flex gap-4 rounded-2xl border border-slate-100 bg-slate-50 p-5"
+            key={index}
+          >
+            <Skeleton className="h-8 w-8 shrink-0 rounded-full" />
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <Skeleton className="h-5 w-20 rounded-full" />
+                <Skeleton className="h-5 w-24 rounded-full" />
+                <Skeleton className="h-5 w-28 rounded-md" />
+              </div>
+              <div className="mt-2 space-y-1.5">
+                <Skeleton className="h-4 w-full rounded-md" />
+                <Skeleton className="h-4 w-4/5 rounded-md" />
+              </div>
+            </div>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+export function RunInsightsPanel({
+  runId,
+  initialInsights = null,
+  initialGeneratedAt = null,
+}: Props) {
+  const [insights, setInsights] = useState<Insight[] | null>(initialInsights);
+  const [generatedAt, setGeneratedAt] = useState<string | null>(
+    initialGeneratedAt,
+  );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -44,11 +86,13 @@ export function RunInsightsPanel({ runId }: Props) {
         ok?: boolean;
         error?: string;
         insights?: Insight[];
+        generatedAt?: string | null;
       };
       if (!res.ok || !data.ok) {
         setError(data.error ?? 'Analysis failed.');
       } else {
         setInsights(data.insights ?? []);
+        setGeneratedAt(data.generatedAt ?? null);
       }
     } catch {
       setError('Network error. Please try again.');
@@ -68,8 +112,14 @@ export function RunInsightsPanel({ runId }: Props) {
             Run insights
           </h2>
           <p className="mt-1 text-sm text-slate-500">
-            Top 3 recommendations to improve similarity and pass rate for this run.
+            Top 3 recommendations to improve similarity and pass rate for this
+            run.
           </p>
+          {generatedAt ? (
+            <p className="mt-1 text-xs text-slate-400">
+              Last analyzed {new Date(generatedAt).toLocaleString()}
+            </p>
+          ) : null}
         </div>
         <Button
           disabled={loading}
@@ -97,8 +147,10 @@ export function RunInsightsPanel({ runId }: Props) {
         </div>
       ) : null}
 
-      {insights && insights.length > 0 ? (
-        <ol className="mt-6 flex flex-col gap-4">
+      {loading ? <InsightsSkeleton /> : null}
+
+      {!loading && insights && insights.length > 0 ? (
+        <ol className="mt-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {insights.map((insight) => (
             <li
               className="flex gap-4 rounded-2xl border border-slate-100 bg-slate-50 p-5"
@@ -109,7 +161,6 @@ export function RunInsightsPanel({ runId }: Props) {
               </span>
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
-                  <p className="font-semibold text-slate-900">{insight.title}</p>
                   <span
                     className={`rounded-full px-2.5 py-0.5 text-xs font-medium capitalize ${CATEGORY_STYLES[insight.category] ?? 'bg-slate-100 text-slate-700'}`}
                   >
@@ -120,6 +171,9 @@ export function RunInsightsPanel({ runId }: Props) {
                   >
                     {insight.impact} impact
                   </span>
+                  <p className="font-semibold text-slate-900">
+                    {insight.title}
+                  </p>
                 </div>
                 <p className="mt-1.5 text-sm leading-relaxed text-slate-600">
                   {insight.description}
@@ -128,7 +182,7 @@ export function RunInsightsPanel({ runId }: Props) {
             </li>
           ))}
         </ol>
-      ) : insights && insights.length === 0 ? (
+      ) : !loading && insights && insights.length === 0 ? (
         <p className="mt-6 text-sm text-slate-500">No insights generated.</p>
       ) : null}
     </section>

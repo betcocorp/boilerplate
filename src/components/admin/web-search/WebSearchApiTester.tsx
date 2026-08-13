@@ -14,6 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '~/components/ui/select';
+import { WebSearchResultsSkeleton } from '~/components/admin/web-search/WebSearchResultsSkeleton';
 import { apiWebSearchV1Tool } from '~/lib/websearch/websearch-api-client';
 import { getErrorMessage } from '~/lib/utils';
 import type {
@@ -136,11 +137,7 @@ export function WebSearchApiTester() {
         </p>
       ) : null}
 
-      {loading ? (
-        <p className="rounded-xl border border-border/60 bg-muted/30 p-4 text-sm text-muted-foreground">
-          Calling endpoint…
-        </p>
-      ) : null}
+      {loading ? <WebSearchResultsSkeleton /> : null}
 
       {!loading && response ? (
         <div className="space-y-3">

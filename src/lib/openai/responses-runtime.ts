@@ -7,13 +7,61 @@ import type {
 import type { ResponseInputItem } from 'openai/resources/responses/responses';
 
 import { extractAssistantText, extractFunctionCalls } from '~/lib/openai/response-item-parsing';
+import {
+  retryTransportFaults,
+  type TransportRetryTuning,
+} from '~/lib/openai/transport-retry';
 import type { ToolTraceEntry } from '~/lib/audit/trace';
 
 export type ExecuteToolFn = (input: {
   name: string;
   argumentsJson: string;
   callId: string;
-}) => Promise<{ output: string; trace: ToolTraceEntry }>;
+}) => Promise<{
+  output: string;
+  /**
+   * B0-437 — slimmer projection of `output` for the model only (see `~/lib/tools/model-tool-payload`).
+   * The runtime sends `modelOutput ?? output` to the model; the caller persists the full `output`, so
+   * the validator and the regulated-claim guardrail keep seeing the complete evidence.
+   */
+  modelOutput?: string;
+  trace: ToolTraceEntry;
+}>;
+
+/**
+ * B0-436 — evidence retrieved BEFORE the first model call (speculative retrieval), handed to that
+ * call so it can be the *answering* call instead of a round spent selecting the one obvious tool.
+ *
+ * It is appended to round 1's `input` as its own message item, deliberately NOT merged into
+ * `instructions` and NOT reflected in `promptCacheKey`: those two form the stable cache prefix
+ * (see `promptCacheKey` below) and a per-request value in either collapses prompt caching.
+ */
+export type PreloadedEvidence = {
+  /** Where the evidence came from, e.g. `search_product_docs (pre-fetched)`. */
+  label: string;
+  /** The tool payload exactly as the model would have received it from a real tool call. */
+  text: string;
+};
+
+/**
+ * Renders `PreloadedEvidence` as the single message item both runtimes inject. Shared so the
+ * Responses and AI SDK paths present byte-identical evidence to the model.
+ *
+ * The wording matters: the product-support system prompt hard-requires a retrieval call before
+ * answering, so this block states plainly that the retrieval already ran (and what to do when it is
+ * not enough) — otherwise the model reads "you have not retrieved yet" and burns the round anyway.
+ */
+export function formatPreloadedEvidence(evidence: PreloadedEvidence): string {
+  return [
+    '## Retrieved evidence (pre-fetched)',
+    '',
+    `A retrieval tool was already run on your behalf for this message: \`${evidence.label}\`.`,
+    'This IS the mandatory retrieval call — treat the result below exactly as if you had called the tool yourself, and cite from it.',
+    'If it does not contain what you need, call the appropriate tool(s) now before answering.',
+    '',
+    evidence.text,
+  ].join('\n');
+}
 
 export type ResponsesRuntimeOptions = {
   client: OpenAI;
@@ -26,8 +74,37 @@ export type ResponsesRuntimeOptions = {
   maxToolRounds?: number;
   temperature?: number;
   toolChoice?: ResponseCreateParamsNonStreaming['tool_choice'];
+  /**
+   * B0-324 — `prompt_cache_key` routes every request sharing the same stable prefix
+   * (instructions + tool schemas) to the same cache pool. Without it, identical prompts are
+   * load-balanced across machines and OpenAI's automatic prompt caching mostly misses; with it,
+   * the 2nd+ call in a tool loop reads the prefix from cache. Must be identical for all calls
+   * that share a prefix, and must NOT contain per-request values (run id, timestamp, user text).
+   */
+  promptCacheKey?: string;
+  /**
+   * B0-436 — speculatively retrieved evidence for round 1 only. Later rounds send `toolOutputs`, so
+   * injecting it again would duplicate it inside the `previous_response_id` chain.
+   */
+  preloadedEvidence?: PreloadedEvidence;
+  /**
+   * B0-370 — tuning for the bounded transport retry around each model request. Defaults are fine in
+   * production; tests inject `sleep`/`random` to keep the suite fast and deterministic.
+   */
+  retry?: TransportRetryTuning;
   onRawResponse?: (response: Response) => void;
+  /**
+   * Caller-visible token sink: whatever is written here has been shown to someone and cannot be
+   * retracted, which is why an emission to it closes the retry window (see `canRetry` below).
+   */
   onAssistantDelta?: (delta: string) => void;
+  /**
+   * B0-429 — measurement-only token observer (TTFT). Like `onAssistantDelta` its presence makes
+   * this runtime stream, so the first token is observable on *every* run rather than only on runs
+   * whose caller wants deltas. Unlike it, an emission here does NOT close the retry window: nothing
+   * was shown to anyone, so a replay cannot duplicate visible text.
+   */
+  observeAssistantDelta?: (delta: string) => void;
   executeTool: ExecuteToolFn;
 };
 
@@ -36,6 +113,12 @@ export type LlmTokenUsage = {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+  /**
+   * B0-324 — prompt tokens the provider served from its automatic prompt cache
+   * (`usage.input_tokens_details.cached_tokens`). Non-zero on the 2nd+ model call of a
+   * multi-round tool loop means the stable prefix (instructions + tool schemas) is being reused.
+   */
+  cachedPromptTokens: number;
 };
 
 export type ResponsesRuntimeResult = {
@@ -45,6 +128,8 @@ export type ResponsesRuntimeResult = {
   toolTrace: ToolTraceEntry[];
   responseIds: string[];
   usage: LlmTokenUsage;
+  /** B0-324 — per-model-call usage, in call order, so prompt-cache reuse per round is verifiable. */
+  usageByCall: LlmTokenUsage[];
 };
 
 export async function runResponsesWithToolLoop(
@@ -54,15 +139,32 @@ export async function runResponsesWithToolLoop(
   const toolTrace: ToolTraceEntry[] = [];
   const responseIds: string[] = [];
 
+  // B0-429 — either sink needs token events, so either one selects the streaming transport.
+  const wantsTokenEvents = Boolean(opts.onAssistantDelta || opts.observeAssistantDelta);
+
   let chainPrev: string | undefined = opts.previousResponseId?.trim() || undefined;
   let toolOutputs: ResponseInputItem[] | null = null;
 
   let lastResponse: Response | null = null;
-  const usage: LlmTokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+  const usage: LlmTokenUsage = {
+    promptTokens: 0,
+    completionTokens: 0,
+    totalTokens: 0,
+    cachedPromptTokens: 0,
+  };
+  const usageByCall: LlmTokenUsage[] = [];
   const accumulateUsage = (response: Response) => {
-    usage.promptTokens += response.usage?.input_tokens ?? 0;
-    usage.completionTokens += response.usage?.output_tokens ?? 0;
-    usage.totalTokens += response.usage?.total_tokens ?? 0;
+    const call: LlmTokenUsage = {
+      promptTokens: response.usage?.input_tokens ?? 0,
+      completionTokens: response.usage?.output_tokens ?? 0,
+      totalTokens: response.usage?.total_tokens ?? 0,
+      cachedPromptTokens: response.usage?.input_tokens_details?.cached_tokens ?? 0,
+    };
+    usageByCall.push(call);
+    usage.promptTokens += call.promptTokens;
+    usage.completionTokens += call.completionTokens;
+    usage.totalTokens += call.totalTokens;
+    usage.cachedPromptTokens += call.cachedPromptTokens;
   };
 
   for (let i = 0; i < maxRounds; i += 1) {
@@ -74,6 +176,18 @@ export async function runResponsesWithToolLoop(
           content: opts.userMessage,
           type: 'message',
         },
+        // B0-436 — a plain message item, not a `function_call_output`: there is no matching
+        // `function_call` in the chain for a speculative run, so a function output item would be
+        // rejected by the Responses API.
+        ...(opts.preloadedEvidence
+          ? [
+              {
+                role: 'user' as const,
+                content: formatPreloadedEvidence(opts.preloadedEvidence),
+                type: 'message' as const,
+              },
+            ]
+          : []),
       ];
 
     const params: ResponseCreateParamsNonStreaming = {
@@ -86,24 +200,70 @@ export async function runResponsesWithToolLoop(
       stream: false,
       temperature: opts.temperature ?? 0.2,
       input,
+      ...(opts.promptCacheKey ? { prompt_cache_key: opts.promptCacheKey } : {}),
       ...(chainPrev ? { previous_response_id: chainPrev } : {}),
     };
 
-    let response: Response;
-    if (opts.onAssistantDelta) {
-      const stream = opts.client.responses.stream({
-        ...params,
-        stream: true,
-      } as Parameters<typeof opts.client.responses.stream>[0]);
-      for await (const event of stream) {
-        if (event.type === 'response.output_text.delta') {
-          opts.onAssistantDelta(event.delta);
+    /**
+     * B0-370 — retry boundary: **the model request only, within a single loop iteration.**
+     *
+     * Why this cannot duplicate a tool call, even though this path is stateful:
+     * 1. `params` is built above, never mutated, and replayed identically — `previous_response_id`
+     *    included.
+     *    A failed attempt never returned a response, so `chainPrev` is still the same id — the
+     *    replay resumes from exactly the server-side state the failed attempt targeted, so the
+     *    provider does not re-run anything on its side either.
+     * 2. Tools for round `i` run strictly *after* this await resolves. At retry time no tool of
+     *    this round has executed, and earlier rounds are never re-entered (the loop only moves
+     *    forward), so no tool side effect exists to repeat.
+     * 3. Every piece of accumulated state (`accumulateUsage`, `responseIds.push`, `chainPrev`,
+     *    `toolOutputs`) is mutated only after success, so a retry cannot double-count usage or
+     *    push a duplicate response id.
+     *
+     * `maxRetries: 0` disables the OpenAI SDK's own default of 2 retries per request. Without it
+     * the two policies would stack multiplicatively (3 × 3 = 9 upstream attempts); this keeps the
+     * bound at `attempts` and puts the jitter under our control.
+     */
+    let visibleDeltaEmittedThisAttempt = false;
+    const response: Response = await retryTransportFaults(
+      async () => {
+        visibleDeltaEmittedThisAttempt = false;
+        if (wantsTokenEvents) {
+          const stream = opts.client.responses.stream(
+            {
+              ...params,
+              stream: true,
+            } as Parameters<typeof opts.client.responses.stream>[0],
+            { maxRetries: 0 },
+          );
+          for await (const event of stream) {
+            if (event.type === 'response.output_text.delta') {
+              if (opts.onAssistantDelta) {
+                visibleDeltaEmittedThisAttempt = true;
+                opts.onAssistantDelta(event.delta);
+              }
+              opts.observeAssistantDelta?.(event.delta);
+            }
+          }
+          return await stream.finalResponse();
         }
-      }
-      response = await stream.finalResponse();
-    } else {
-      response = await opts.client.responses.create(params);
-    }
+        return await opts.client.responses.create(params, { maxRetries: 0 });
+      },
+      {
+        runtime: 'responses',
+        label: `responses.${wantsTokenEvents ? 'stream' : 'create'} round ${i + 1}`,
+        // A replay would re-stream text the user has already seen (the delta sink is write-only —
+        // there is no way to retract it), so a fault after the first visible token fails cleanly
+        // instead of retrying. Transport faults land at connection time, before any token, which
+        // is where all ten production failures occurred.
+        //
+        // B0-429 — gated on *visible* deltas only. A measurement-only observer (TTFT) streams
+        // without showing anyone anything, so it must not narrow this window for callers that
+        // consume no deltas.
+        canRetry: () => !visibleDeltaEmittedThisAttempt,
+        ...opts.retry,
+      },
+    );
 
     lastResponse = response;
     accumulateUsage(response);
@@ -122,6 +282,7 @@ export async function runResponsesWithToolLoop(
         toolTrace,
         responseIds,
         usage,
+        usageByCall,
       };
     }
 
@@ -136,7 +297,8 @@ export async function runResponsesWithToolLoop(
       outputs.push({
         type: 'function_call_output',
         call_id: call.call_id,
-        output: executed.output,
+        // B0-437 — the model gets the slimmed variant when the tool produced one.
+        output: executed.modelOutput ?? executed.output,
       });
     }
 
@@ -154,5 +316,6 @@ export async function runResponsesWithToolLoop(
     toolTrace,
     responseIds,
     usage,
+    usageByCall,
   };
 }

@@ -85,11 +85,26 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
         new Date(b.run.started_at).getTime() -
         new Date(a.run.started_at).getTime(),
     );
+  /**
+   * B0-419 — prefer the real `workflow_run_id` column (B0-416) over re-extracting it from
+   * `response_payload`, which stays only as a fallback for rows the backfill could not reach.
+   * Drives both the Model lookup and the per-row Trace link.
+   */
+  const workflowRunIdByResultItemId = new Map(
+    historyRows.map(
+      ({ result }) =>
+        [
+          result.id,
+          result.workflow_run_id ??
+            extractWorkflowRunId(result.response_payload),
+        ] as const,
+    ),
+  );
   const workflowRunIds = Array.from(
     new Set(
-      historyRows
-        .map(({ result }) => extractWorkflowRunId(result.response_payload))
-        .filter((value): value is string => Boolean(value)),
+      Array.from(workflowRunIdByResultItemId.values()).filter(
+        (value): value is string => Boolean(value),
+      ),
     ),
   );
   const workflowRuns = await listWorkflowRunsByIds(workflowRunIds);
@@ -128,6 +143,7 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
     runId: string;
     ragSeconds: number | null;
     promptSeconds: number | null;
+    ttftSeconds: number | null;
   }> = [];
 
   for (const { result, run } of historyRows) {
@@ -165,6 +181,11 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
       promptElapsedSampleSize += 1;
     }
 
+    const ttftMs =
+      typeof result.ttft_ms === 'number' && Number.isFinite(result.ttft_ms)
+        ? result.ttft_ms
+        : null;
+
     const axisLabel = run.started_at
       ? formatRunChartAxisLabel(run.started_at)
       : run.id.slice(0, 8);
@@ -187,6 +208,8 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
         promptElapsedMs !== null
           ? Number((promptElapsedMs / 1000).toFixed(3))
           : null,
+      ttftSeconds:
+        ttftMs !== null ? Number((ttftMs / 1000).toFixed(3)) : null,
     });
   }
 
@@ -267,6 +290,61 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
               <p className="mt-1 text-slate-800">
                 {formatExpectedShouldAnswerLabel(item.expected_should_answer)}
               </p>
+              <p className="mt-3 font-semibold text-slate-900">Priority</p>
+              <p className="mt-1 text-slate-800">
+                {item.priority === null ? (
+                  <span className="text-slate-400">—</span>
+                ) : (
+                  item.priority
+                )}
+              </p>
+            </div>
+            <div className="col-span-2 border-t border-slate-200 pt-4">
+              <p className="font-semibold text-slate-900">Ideal response</p>
+              {item.ideal_response ? (
+                <p className="mt-1 whitespace-pre-wrap">
+                  {item.ideal_response}
+                </p>
+              ) : (
+                <p className="mt-1 text-slate-400">—</p>
+              )}
+            </div>
+            {/* Rendered verbatim — these carry regulated figures (oz/gal, mL/L, ppm, contact times). */}
+            <div className="border-t border-slate-200 pt-4">
+              <p className="font-semibold text-slate-900">Expected concepts</p>
+              {item.expected_concepts ? (
+                <p className="mt-1 whitespace-pre-wrap">
+                  {item.expected_concepts}
+                </p>
+              ) : (
+                <p className="mt-1 text-slate-400">—</p>
+              )}
+            </div>
+            <div className="border-t border-slate-200 pt-4">
+              <p className="font-semibold text-slate-900">Minimum concepts</p>
+              {item.minimum_concepts ? (
+                <p className="mt-1 whitespace-pre-wrap">
+                  {item.minimum_concepts}
+                </p>
+              ) : (
+                <p className="mt-1 text-slate-400">—</p>
+              )}
+            </div>
+            <div className="border-t border-slate-200 pt-4">
+              <p className="font-semibold text-slate-900">Expected sources</p>
+              {item.expected_sources ? (
+                <p className="mt-1 whitespace-pre-wrap">
+                  {item.expected_sources}
+                </p>
+              ) : (
+                <p className="mt-1 text-slate-400">—</p>
+              )}
+            </div>
+            <div className="border-t border-slate-200 pt-4">
+              <p className="font-semibold text-slate-900">Should cite sources</p>
+              <p className="mt-1 text-slate-800">
+                {formatExpectedShouldAnswerLabel(item.should_cite)}
+              </p>
             </div>
           </div>
 
@@ -336,15 +414,34 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
                     const ragSearchMs = extractRagSearchMs(
                       result.response_payload,
                     );
+                    const rowWorkflowRunId =
+                      workflowRunIdByResultItemId.get(result.id) ?? null;
                     return (
                       <TableRow key={result.id}>
-                        <TableCell className="font-mono text-xs">
+                        {/* B0-419 — "View run" is the run axis (every prompt in that run);
+                            "Trace" is this one execution. When no workflow run was recorded the
+                            Trace affordance is omitted entirely: this page *is* the fallback, so a
+                            self-link would be a no-op. */}
+                        <TableCell className="whitespace-nowrap font-mono text-xs">
                           <Link
                             className="text-sky-700 underline-offset-2 hover:underline"
                             href={`/admin/tests/${test.id}/runs/${run.id}`}
+                            title="Every prompt in this test run"
                           >
                             View run
                           </Link>
+                          {rowWorkflowRunId ? (
+                            <>
+                              <span className="mx-1.5 text-slate-300">·</span>
+                              <Link
+                                className="text-sky-700 underline-offset-2 hover:underline"
+                                href={`/admin/observability/${rowWorkflowRunId}`}
+                                title="Full trace for this execution"
+                              >
+                                Trace
+                              </Link>
+                            </>
+                          ) : null}
                         </TableCell>
                         <TableCell>{result.passed ? 'yes' : 'no'}</TableCell>
                         <TableCell className="whitespace-nowrap tabular-nums text-slate-700">
@@ -361,9 +458,8 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
                           {formatDurationSeconds(result.elapsed_ms)}
                         </TableCell>
                         <TableCell>
-                          {modelByWorkflowRunId.get(
-                            extractWorkflowRunId(result.response_payload) || '',
-                          ) || 'n/a'}
+                          {modelByWorkflowRunId.get(rowWorkflowRunId || '') ||
+                            'n/a'}
                         </TableCell>
                         <TableCell className="max-w-[520px] whitespace-normal text-xs text-slate-600">
                           <ResultItemMessageCell

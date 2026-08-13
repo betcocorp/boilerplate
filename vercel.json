@@ -1,0 +1,9 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "crons": [
+    {
+      "path": "/api/v1/observability/sweep-stalled-runs",
+      "schedule": "0 * * * *"
+    }
+  ]
+}

@@ -1,17 +1,15 @@
 'use client';
 
-import { Loader2 } from 'lucide-react';
+import { CheckCircle2, Loader2, PlayCircle, StopCircle } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { useActionState, useEffect, useState } from 'react';
+import { useActionState, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '~/components/ui/button';
-import { Input } from '~/components/ui/input';
-import { Label } from '~/components/ui/label';
-import { formatDurationMmSs, formatEasternTimestamp } from '~/lib/utils/time';
+import { formatEasternTimestamp } from '~/lib/utils/time';
 
 import { runKnowledgeAction, type KnowledgeActionState } from './actions';
-import type { KnowledgeDashboardStatus, KnowledgeIngestionRunMode } from './pipeline';
+import type { KnowledgeDashboardStatus } from './pipeline';
 
 const initialState: KnowledgeActionState = {
   ok: false,
@@ -21,14 +19,13 @@ const initialState: KnowledgeActionState = {
   result: null,
 };
 
-const BUTTONS: [KnowledgeIngestionRunMode, string][] = [
-  ['register-seed', 'Register discovered files'],
-  ['ingest-next', 'Ingest next batch'],
-  ['ingest-all', 'Ingest all pending'],
-  ['retry-failed', 'Retry failed files'],
-  ['embed-next', 'Embed next batch'],
-  ['embed-all', 'Embed all pending'],
-];
+function StepNumber({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-sky-100 text-sm font-semibold text-sky-700">
+      {children}
+    </span>
+  );
+}
 
 function statusClasses(status: string) {
   if (status === 'ingested') return 'bg-emerald-50 text-emerald-700';
@@ -44,99 +41,244 @@ function formatIso(value: string | null) {
 export function KnowledgeControls({ initialStatus }: { initialStatus: KnowledgeDashboardStatus }) {
   const router = useRouter();
   const [state, formAction, pending] = useActionState(runKnowledgeAction, initialState);
-  const [batchSize, setBatchSize] = useState('5');
-  const [activeMode, setActiveMode] = useState<KnowledgeIngestionRunMode | null>(null);
-  const [startedAt, setStartedAt] = useState<number | null>(null);
-  const [now, setNow] = useState(() => Date.now());
+  const [activeMode, setActiveMode] = useState<string | null>(null);
+  const [autoEmbedding, setAutoEmbedding] = useState(false);
+  const [autoEmbedNextAt, setAutoEmbedNextAt] = useState<number | null>(null);
+  const embedFormRef = useRef<HTMLFormElement>(null);
 
   const activeStatus = state.result?.status ?? initialStatus;
 
-  useEffect(() => {
-    if (!pending) return;
-    const interval = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(interval);
-  }, [pending]);
+  const embedProgressPct =
+    activeStatus.totals.chunks > 0
+      ? Math.min(
+          100,
+          Math.round((activeStatus.totals.embeddedChunks / activeStatus.totals.chunks) * 100),
+        )
+      : 0;
+  const embedIsDone =
+    activeStatus.totals.chunks > 0 && activeStatus.totals.pendingChunks === 0;
 
-  useEffect(() => {
-    if (!pending && activeMode) {
-      const refresh = window.setTimeout(() => router.refresh(), 250);
-      return () => window.clearTimeout(refresh);
-    }
-  }, [pending, activeMode, router]);
-
+  // Toast + auto-continue embedding while chunks remain.
   useEffect(() => {
     if (state.timestamp === 0) return;
+
     const description = `Completed at ${formatEasternTimestamp(state.timestamp)}.`;
-    if (state.ok) toast.success(state.message ?? 'Action completed.', { description });
-    else toast.error(state.error ?? 'Action failed.', { description });
+    if (state.ok) {
+      toast.success(state.message ?? 'Action completed.', { description });
+    } else {
+      toast.error(state.error ?? 'Action failed.', { description });
+      setAutoEmbedding(false);
+      setAutoEmbedNextAt(null);
+      return;
+    }
+
+    if (state.result?.mode === 'embed-all' && state.result.status.totals.pendingChunks > 0) {
+      setAutoEmbedding(true);
+      setAutoEmbedNextAt(Date.now());
+    } else {
+      setAutoEmbedding(false);
+      setAutoEmbedNextAt(null);
+    }
   }, [state]);
 
-  const elapsedMs = pending && startedAt !== null ? Math.max(0, now - startedAt) : 0;
-  const lastRunMs =
-    state.result?.startedAt && state.result?.finishedAt
-      ? Math.max(0, Date.parse(state.result.finishedAt) - Date.parse(state.result.startedAt))
-      : null;
+  // Refresh server-fetched stats periodically while work is running.
+  useEffect(() => {
+    if (!pending && !autoEmbedding) return;
+    const interval = window.setInterval(() => router.refresh(), 150_000);
+    return () => window.clearInterval(interval);
+  }, [pending, autoEmbedding, router]);
+
+  // Fire the next embed pass when auto-embedding.
+  useEffect(() => {
+    if (autoEmbedNextAt === null || !autoEmbedding || pending) return;
+    const delay = Math.max(0, autoEmbedNextAt - Date.now());
+    const timer = window.setTimeout(() => embedFormRef.current?.requestSubmit(), delay);
+    return () => window.clearTimeout(timer);
+  }, [autoEmbedNextAt, autoEmbedding, pending]);
+
+  function stopEmbedding() {
+    setAutoEmbedding(false);
+    setAutoEmbedNextAt(null);
+  }
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1.9fr)]">
-      <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+    <div className="flex flex-col gap-6">
+      <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
         <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-700">
-          Ingestion controls
+          Ingestion pipeline
         </p>
         <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
-          Seed and process markdown knowledge
+          Get knowledge markdown from S3 into Bex
         </h2>
-        <p className="mt-3 text-sm leading-6 text-slate-600">
-          Register discovered `.md` files first, then ingest (parse + heading-aware
-          chunk) into `rag.document` / `rag.document_chunk`, and embed to fill
-          vectors. Retry re-runs files that failed on S3 access or parsing.
+        <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-600">
+          Three steps, run in order. Each one only processes what the previous step
+          left behind, so it&apos;s safe to run a step again — it just won&apos;t find
+          any new work to do.
         </p>
 
-        <div className="mt-6 flex flex-col gap-2">
-          <Label className="text-sm font-medium text-slate-700">Batch size</Label>
-          <Input
-            className="h-11 rounded-2xl px-4"
-            min={1}
-            onChange={(event) => setBatchSize(event.target.value)}
-            type="number"
-            value={batchSize}
-          />
-        </div>
-
-        <div className="mt-6 grid gap-3">
-          {BUTTONS.map(([mode, label]) => (
-            <form
-              action={formAction}
-              className="flex"
-              key={mode}
-              onSubmit={() => {
-                setActiveMode(mode);
-                setStartedAt(Date.now());
-                setNow(Date.now());
-              }}
-            >
-              <input name="mode" type="hidden" value={mode} />
-              <input name="batchSize" type="hidden" value={batchSize} />
-              <Button className="h-11 w-full rounded-2xl px-4 font-semibold" disabled={pending} type="submit">
-                {pending && activeMode === mode ? (
+        <div className="mt-8 grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
+          {/* Step 1 — Register */}
+          <div className="flex flex-col items-center gap-3 py-6">
+            <div className="flex flex-col items-center gap-1">
+              <StepNumber>1</StepNumber>
+              <h3 className="text-lg font-semibold text-slate-950">Register discovered files</h3>
+              <p className="text-xs text-slate-500">
+                {activeStatus.totals.registered.toLocaleString()} /{' '}
+                {activeStatus.totals.seeded.toLocaleString()} files registered
+              </p>
+            </div>
+            <p className="text-center text-sm leading-6 text-slate-600">
+              Scans the S3 knowledge folder for `.md` files Bex doesn&apos;t already
+              know about and creates a record for each new one. Files that are already
+              registered are skipped, so this is safe to run anytime.
+            </p>
+            <form action={formAction} onSubmit={() => setActiveMode('register-seed')}>
+              <input name="mode" type="hidden" value="register-seed" />
+              <Button className="h-11 rounded-2xl px-5 font-semibold" disabled={pending} type="submit">
+                {pending && activeMode === 'register-seed' ? (
                   <>
                     <Loader2 className="mr-2 size-4 animate-spin" />
-                    Working…
+                    Registering…
                   </>
                 ) : (
-                  label
+                  'Register new files'
                 )}
               </Button>
             </form>
-          ))}
-        </div>
-
-        {pending ? (
-          <div className="mt-6 flex items-center gap-3 rounded-2xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-900">
-            <Loader2 className="size-4 animate-spin" />
-            <span>Elapsed: {formatDurationMmSs(elapsedMs)}</span>
           </div>
-        ) : null}
+
+          {/* Step 2 — Ingest */}
+          <div className="flex flex-col items-center gap-3 py-6">
+            <div className="flex flex-col items-center gap-1">
+              <StepNumber>2</StepNumber>
+              <h3 className="text-lg font-semibold text-slate-950">Ingest registered files</h3>
+              <p className="text-center text-xs text-slate-500">
+                {activeStatus.totals.ingested.toLocaleString()} /{' '}
+                {activeStatus.totals.registered.toLocaleString()} ingested
+                {activeStatus.totals.failed > 0 ? (
+                  <span className="text-rose-600">
+                    {' '}· {activeStatus.totals.failed.toLocaleString()} failed
+                  </span>
+                ) : null}
+              </p>
+            </div>
+            <p className="text-center text-sm leading-6 text-slate-600">
+              Downloads every registered file, reads it, and saves it as a searchable
+              document — splitting it into heading-aware sections as it goes. A file has
+              to be ingested before its sections can be embedded in step 3.
+            </p>
+            <div className="flex flex-wrap justify-center gap-3">
+              <form action={formAction} onSubmit={() => setActiveMode('ingest-all')}>
+                <input name="mode" type="hidden" value="ingest-all" />
+                <Button className="h-11 rounded-2xl px-5 font-semibold" disabled={pending} type="submit">
+                  {pending && activeMode === 'ingest-all' ? (
+                    <>
+                      <Loader2 className="mr-2 size-4 animate-spin" />
+                      Ingesting…
+                    </>
+                  ) : (
+                    'Ingest all pending'
+                  )}
+                </Button>
+              </form>
+              {activeStatus.totals.failed > 0 ? (
+                <form action={formAction} onSubmit={() => setActiveMode('retry-failed')}>
+                  <input name="mode" type="hidden" value="retry-failed" />
+                  <Button
+                    className="h-11 rounded-2xl px-5 font-semibold"
+                    disabled={pending}
+                    type="submit"
+                    variant="outline"
+                  >
+                    {pending && activeMode === 'retry-failed' ? (
+                      <>
+                        <Loader2 className="mr-2 size-4 animate-spin" />
+                        Retrying…
+                      </>
+                    ) : (
+                      `Retry ${activeStatus.totals.failed.toLocaleString()} failed file${activeStatus.totals.failed === 1 ? '' : 's'}`
+                    )}
+                  </Button>
+                </form>
+              ) : null}
+            </div>
+          </div>
+
+          {/* Step 3 — Embed */}
+          <div className="flex flex-col items-center gap-3 py-6">
+            <div className="flex flex-col items-center gap-1">
+              <StepNumber>3</StepNumber>
+              <h3 className="text-lg font-semibold text-slate-950">Embed chunks</h3>
+              <div className="flex items-center gap-2 text-xs text-slate-600">
+                <span>
+                  {embedIsDone
+                    ? 'All chunks embedded'
+                    : `${activeStatus.totals.embeddedChunks.toLocaleString()} / ${activeStatus.totals.chunks.toLocaleString()} chunks embedded`}
+                </span>
+                <span className="text-slate-400">{embedProgressPct}%</span>
+              </div>
+            </div>
+            <p className="text-center text-sm leading-6 text-slate-600">
+              Turns each chunk&apos;s text into a vector so Bex can find it by meaning,
+              not just exact keywords. Keeps running automatically — in batches behind
+              the scenes — until every chunk has one.
+            </p>
+
+            <div className="h-2.5 w-full overflow-hidden rounded-full bg-slate-100">
+              <div
+                className={`h-full rounded-full transition-all duration-500 ${
+                  embedIsDone ? 'bg-emerald-500' : 'bg-sky-500'
+                }`}
+                style={{ width: `${embedIsDone ? 100 : embedProgressPct}%` }}
+              />
+            </div>
+
+            <div className="flex flex-wrap items-center justify-center gap-3">
+              {embedIsDone ? (
+                <div className="flex items-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-2.5 text-sm font-semibold text-emerald-700">
+                  <CheckCircle2 className="size-4" />
+                  All chunks embedded
+                </div>
+              ) : (
+                <form action={formAction} onSubmit={() => setActiveMode('embed-all')} ref={embedFormRef}>
+                  <input name="mode" type="hidden" value="embed-all" />
+                  <Button className="h-11 gap-2 rounded-2xl px-5 font-semibold" disabled={pending} type="submit">
+                    {pending && activeMode === 'embed-all' ? (
+                      <>
+                        <Loader2 className="mr-2 size-4 animate-spin" />
+                        Embedding…
+                      </>
+                    ) : (
+                      <>
+                        <PlayCircle className="size-4" />
+                        Embed all pending
+                      </>
+                    )}
+                  </Button>
+                </form>
+              )}
+
+              {autoEmbedding ? (
+                <Button
+                  className="h-11 gap-2 rounded-2xl px-5 font-semibold"
+                  onClick={stopEmbedding}
+                  type="button"
+                  variant="outline"
+                >
+                  <StopCircle className="size-4" />
+                  Stop after this batch
+                </Button>
+              ) : null}
+
+              {autoEmbedding && !pending ? (
+                <div className="flex items-center gap-2 text-sm text-slate-600">
+                  <Loader2 className="size-4 animate-spin" />
+                  Queuing next batch…
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
 
         {state.timestamp > 0 ? (
           <div
@@ -147,13 +289,6 @@ export function KnowledgeControls({ initialStatus }: { initialStatus: KnowledgeD
             }`}
           >
             <p className="font-semibold">{state.ok ? state.message : state.error ?? 'Action failed.'}</p>
-            {state.result ? (
-              <p className="mt-2 text-xs">
-                Processed {state.result.processed} • Succeeded {state.result.succeeded} • Failed{' '}
-                {state.result.failed}
-                {lastRunMs !== null ? ` • Duration ${formatDurationMmSs(lastRunMs)}` : ''}
-              </p>
-            ) : null}
             {state.result?.errors.length ? (
               <div className="mt-3 flex flex-col gap-2">
                 {state.result.errors.map((item) => (
@@ -168,12 +303,15 @@ export function KnowledgeControls({ initialStatus }: { initialStatus: KnowledgeD
       </section>
 
       <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+        <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-700">Documents</p>
+
         {activeStatus.warning ? (
-          <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          <div className="mt-4 rounded-2xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-900">
             {activeStatus.warning}
           </div>
         ) : null}
-        <div className="grid gap-4 md:grid-cols-3 xl:grid-cols-5">
+
+        <div className="mt-4 grid gap-4 md:grid-cols-3 xl:grid-cols-5">
           {[
             ['Seeded', activeStatus.totals.seeded],
             ['Registered', activeStatus.totals.registered],

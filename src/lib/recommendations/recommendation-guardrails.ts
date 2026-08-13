@@ -1,4 +1,5 @@
 import type { ValidatorResult } from '~/lib/workflows/product-support/product-support-schemas';
+import { isConfidenceGatingDisabled } from '~/lib/recommendations/confidence-scoring';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 /**
@@ -249,6 +250,10 @@ export type ValidatorGateResult = { pass: boolean; reasons: string[] };
 /**
  * Decide whether a validated draft may be surfaced. Any of: not approved, requires human review,
  * confidence below the floor, or an unsupported safety claim → gate fails (force human review).
+ *
+ * B0-452: the confidence-floor check alone is skipped while `BEX_DISABLE_CONFIDENCE_GATING` is
+ * set — it's the piece backed by an unproven placeholder threshold. The other checks are
+ * correctness/safety signals, not tunable confidence thresholds, and always run.
  */
 export function evaluateValidatorGate(input: {
   validator: ValidatorResult;
@@ -259,7 +264,9 @@ export function evaluateValidatorGate(input: {
   const reasons: string[] = [];
   if (!input.validator.approved) reasons.push('validator_not_approved');
   if (input.validator.requires_human_review) reasons.push('requires_human_review');
-  if (input.validator.confidence < min) reasons.push(`validator_confidence_below_${min}`);
+  if (!isConfidenceGatingDisabled() && input.validator.confidence < min) {
+    reasons.push(`validator_confidence_below_${min}`);
+  }
   for (const claim of input.unsupportedClaims ?? []) {
     reasons.push(`unsupported_safety_claim:${claim}`);
   }

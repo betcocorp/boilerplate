@@ -18,6 +18,8 @@ import {
   type ProductSupportWorkflowEvent,
 } from '~/lib/workflows/product-support/run-product-support-workflow';
 
+import type { RunSource } from '~/types/observability';
+
 export type BexChatTurnResult = Awaited<ReturnType<typeof runProductSupportWorkflow>> & {
   conversationId: string;
   traceId: string;
@@ -26,9 +28,26 @@ export type BexChatTurnResult = Awaited<ReturnType<typeof runProductSupportWorkf
 export async function runBexChatTurn(input: {
   conversationId?: string | null;
   message: string;
+  /**
+   * B0-416 — which entry point is driving this turn (`'harness'` for the golden-set runner,
+   * `'bex_chat'` for `/api/bex/chat/stream`, `'orchestrator_api'` for `/api/v1/orchestrator`).
+   * Passed straight through to `workflow_runs.source`; required so every caller has to say.
+   */
+  source: RunSource;
   modelTag?: string;
   useValidator?: boolean;
   agentMode?: BexChatAgentMode;
+  /**
+   * Who owns the conversation this turn creates, if any. Chat routes resolve
+   * `resolveConversationOwnerUserId()` and pass `{ kind: 'user', userId }` when it resolves, or omit
+   * `owner` entirely when it doesn't (falls back to the DB default: user_id null, source 'chat').
+   * The test runner (B0-450) always passes `{ kind: 'system' }` so eval-harness conversations are
+   * explicitly source='test_run', never attributed to whoever kicked off the run.
+   *
+   * Only consulted when no `conversationId` is supplied — continuing turns never re-stamp an
+   * existing conversation.
+   */
+  owner?: { kind: 'user'; userId: string } | { kind: 'system' };
   onWorkflowEvent?: (event: ProductSupportWorkflowEvent) => void;
   onAssistantDelta?: (delta: string) => void;
 }): Promise<BexChatTurnResult> {
@@ -41,7 +60,13 @@ export async function runBexChatTurn(input: {
       : null;
 
   if (!conversation) {
-    conversation = await createConversation();
+    conversation = await createConversation(
+      input.owner?.kind === 'user'
+        ? { user_id: input.owner.userId }
+        : input.owner?.kind === 'system'
+          ? { user_id: null, source: 'test_run' }
+          : undefined,
+    );
   }
 
   const priorMessages = await listMessagesForConversation(conversation.id);
@@ -65,6 +90,7 @@ export async function runBexChatTurn(input: {
     traceId,
     conversationId: conversation.id,
     userMessage: trimmed,
+    source: input.source,
     modelTag: input.modelTag,
     useValidator: input.useValidator ?? false,
     agentMode: input.agentMode ?? DEFAULT_BEX_CHAT_AGENT_MODE,
