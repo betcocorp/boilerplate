@@ -8,11 +8,8 @@
 
 import Link from 'next/link';
 
+import { RunsFilters } from '~/components/admin/observability/RunsFilters';
 import { Badge } from '~/components/ui/badge';
-import { Button } from '~/components/ui/button';
-import { Input } from '~/components/ui/input';
-import { Label } from '~/components/ui/label';
-import { NativeSelect } from '~/components/ui/native-select';
 import {
   TableBody,
   TableCell,
@@ -20,34 +17,10 @@ import {
   TableHeader,
   TableRow,
 } from '~/components/ui/table';
-import { SME_AGENT_IDS } from '~/lib/agents/agent-registry';
 import { getAgentBadgeClassName } from '~/lib/bex/agent-badge';
 import { formatDurationSeconds, formatEasternTimestamp } from '~/lib/utils/time';
 
 import type { WorkflowRunListRow } from '~/types/observability';
-
-/** `workflow_runs.status` values written by `run-product-support-workflow.ts`. */
-const RUN_STATUSES = ['running', 'completed', 'failed'] as const;
-
-/**
- * Filterable `final_output->>routingDecision` values. Mirrors
- * `routingDecisionSchema` in `~/lib/orchestrator/orchestrator-schemas.ts`:
- * an SME agent id, or `ambiguous` when the planner could not commit.
- */
-const ROUTING_FILTER_OPTIONS = [...SME_AGENT_IDS, 'ambiguous'] as const;
-
-/**
- * B0-416 — the stored `workflow_runs.source` values plus the `unknown` (NULL) cohort, with the
- * label and badge styling used for each. `unknown` is runs recorded before the column existed
- * that no harness item points at: their entry point is not recoverable from anything on the row,
- * so they are labelled unknown rather than assumed to be chat traffic.
- */
-const RUN_SOURCE_OPTIONS = [
-  { value: 'bex_chat', label: 'Bex chat' },
-  { value: 'orchestrator_api', label: 'Orchestrator API' },
-  { value: 'harness', label: 'Test harness' },
-  { value: 'unknown', label: 'Unknown (pre-instrumentation)' },
-] as const;
 
 const RUN_SOURCE_BADGES: Record<
   string,
@@ -139,150 +112,7 @@ function confidenceLabel(confidence: number | null): string {
 export function RunsTable({ route, rows, hasMore, page, filters }: RunsTableProps) {
   return (
     <>
-      {/* Filters */}
-      <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-        <h2 className="text-lg font-semibold text-slate-900">Filters</h2>
-        <form
-          action={route}
-          className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4"
-          method="get"
-        >
-          {/* Full width and first: the highest-intent control, and it has to read as
-              part of the server-side filter set rather than as a filter over the
-              rows currently on screen. */}
-          <div className="flex min-w-0 flex-col gap-2 sm:col-span-2 lg:col-span-4">
-            <Label className="text-sm text-slate-700" htmlFor="observability-search">
-              Search
-            </Label>
-            <Input
-              defaultValue={filters.search}
-              id="observability-search"
-              name="q"
-              placeholder="Words from the prompt, or paste a run ID"
-              type="search"
-            />
-          </div>
-
-          <div className="flex min-w-0 flex-col gap-2">
-            <Label className="text-sm text-slate-700" htmlFor="observability-from">
-              From (UTC)
-            </Label>
-            <Input
-              defaultValue={filters.from}
-              id="observability-from"
-              name="from"
-              type="date"
-            />
-          </div>
-
-          <div className="flex min-w-0 flex-col gap-2">
-            <Label className="text-sm text-slate-700" htmlFor="observability-to">
-              To (UTC)
-            </Label>
-            <Input defaultValue={filters.to} id="observability-to" name="to" type="date" />
-          </div>
-
-          <div className="flex min-w-0 flex-col gap-2">
-            <Label className="text-sm text-slate-700" htmlFor="observability-status">
-              Status
-            </Label>
-            <NativeSelect
-              defaultValue={filters.status}
-              id="observability-status"
-              name="status"
-            >
-              <option value="">All statuses</option>
-              {RUN_STATUSES.map((status) => (
-                <option key={status} value={status}>
-                  {status}
-                </option>
-              ))}
-            </NativeSelect>
-          </div>
-
-          <div className="flex min-w-0 flex-col gap-2">
-            <Label className="text-sm text-slate-700" htmlFor="observability-agent">
-              Agent / routing
-            </Label>
-            <NativeSelect
-              defaultValue={filters.routingDecision}
-              id="observability-agent"
-              name="agent"
-            >
-              <option value="">All agents</option>
-              {ROUTING_FILTER_OPTIONS.map((agent) => (
-                <option key={agent} value={agent}>
-                  {agent}
-                </option>
-              ))}
-            </NativeSelect>
-          </div>
-
-          <div className="flex min-w-0 flex-col gap-2">
-            <Label className="text-sm text-slate-700" htmlFor="observability-confidence-min">
-              Confidence min (0–1)
-            </Label>
-            <Input
-              defaultValue={filters.confidenceMin}
-              id="observability-confidence-min"
-              max="1"
-              min="0"
-              name="confidenceMin"
-              placeholder="0"
-              step="0.05"
-              type="number"
-            />
-          </div>
-
-          <div className="flex min-w-0 flex-col gap-2">
-            <Label className="text-sm text-slate-700" htmlFor="observability-confidence-max">
-              Confidence max (0–1)
-            </Label>
-            <Input
-              defaultValue={filters.confidenceMax}
-              id="observability-confidence-max"
-              max="1"
-              min="0"
-              name="confidenceMax"
-              placeholder="1"
-              step="0.05"
-              type="number"
-            />
-          </div>
-
-          <div className="flex min-w-0 flex-col gap-2">
-            <Label className="text-sm text-slate-700" htmlFor="observability-source">
-              Source
-            </Label>
-            <NativeSelect
-              defaultValue={filters.source}
-              id="observability-source"
-              name="source"
-            >
-              <option value="">All sources</option>
-              {RUN_SOURCE_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </NativeSelect>
-          </div>
-
-          <div className="flex items-end gap-2">
-            <Button type="submit">Apply filters</Button>
-            <Button asChild type="button" variant="outline">
-              <Link href={route}>Reset</Link>
-            </Button>
-          </div>
-        </form>
-        <p className="mt-4 text-xs text-slate-500">
-          Defaults to the last 7 days. Search matches the prompt text across the whole
-          selected window, not just the runs on this page. A run ID is looked up on its
-          own and ignores the date range, so an older run still resolves. Applying a
-          confidence bound excludes runs that never recorded a confidence (in-flight or
-          failed runs).
-        </p>
-      </section>
+      <RunsFilters filters={filters} route={route} />
 
       {/* Runs */}
       <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
