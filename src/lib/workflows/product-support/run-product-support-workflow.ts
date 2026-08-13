@@ -35,6 +35,9 @@ import {
   MISSING_BRAND_CONFIDENCE_CAP,
 } from '~/lib/recommendations/recommendation-gate';
 import { isConfidenceGatingDisabled } from '~/lib/recommendations/confidence-scoring';
+import { extractCompetitorProduct } from '~/lib/recommendations/extract-competitor-product';
+import { runCrossReferenceRecommendation } from '~/lib/recommendations/persist-recommendation';
+import { buildWebFallbackAnswer } from '~/lib/recommendations/web-fallback-answer';
 import {
   lookupCrossReference,
   fetchRecommendationContext,
@@ -1754,6 +1757,40 @@ export async function runProductSupportWorkflow(input: {
       }
     }
 
+    // B0-183 — deterministic web-search fallback. When neither the model's forced lookup_cross_reference
+    // nor the curated-override safety-net surfaced a match on the recommendations route, this is a genuine
+    // "no 1-1 match" case. Don't depend on the model to voluntarily call recommend_cross_reference: run the
+    // budgeted web-grounded engine directly (identify competitor → web search → semantic Betco match →
+    // confidence gate). Every outcome (answered/declined/pending) is persisted for HITL 1-1 review inside
+    // runCrossReferenceRecommendation.
+    let webFallback: Awaited<ReturnType<typeof runCrossReferenceRecommendation>> | null = null;
+    let webFallbackCompetitorLabel = '';
+    if (routingDecision === 'recommendations' && !crossReferenceResult) {
+      const competitor = await extractCompetitorProduct(input.userMessage);
+      if (competitor.product.trim()) {
+        webFallbackCompetitorLabel = [competitor.brand, competitor.product]
+          .filter(Boolean)
+          .join(' ')
+          .trim();
+        webFallback = await runCrossReferenceRecommendation(
+          { competitorProduct: competitor.product, competitorBrand: competitor.brand },
+          { traceId: run.id },
+        );
+        audit.enqueue(
+          'recommendation_web_fallback',
+          {
+            competitor_label: webFallbackCompetitorLabel,
+            source: webFallback.source,
+            status: webFallback.status,
+            answered: webFallback.answered,
+            overall_confidence: webFallback.overallConfidence,
+            recommendation_id: webFallback.recommendationId,
+          },
+          wfCtx,
+        );
+      }
+    }
+
     if (
       crossReferenceIntent &&
       crossReferenceResult &&
@@ -1834,6 +1871,14 @@ export async function runProductSupportWorkflow(input: {
       if (draftAnswer.trim() !== agentResult.assistantText.trim()) {
         answerProvenance = 'cross_reference_composed';
       }
+    } else if (webFallback) {
+      // B0-183 — surface the web-grounded fallback outcome. An answered result is authoritative on the
+      // recommendations route (it already passed the engine's grounding + validator gate); a declined /
+      // pending result becomes a decline the user sees and is already queued for human 1-1 review.
+      draftAnswer = buildWebFallbackAnswer({
+        result: webFallback,
+        competitorLabel: webFallbackCompetitorLabel,
+      }).answerText;
     }
 
     const sources = collectSourcesFromToolOutputs(toolOutputLog);
@@ -1859,6 +1904,17 @@ export async function runProductSupportWorkflow(input: {
           m.betcoProduct?.sku ? ` (SKU ${m.betcoProduct.sku})` : ''
         }.`,
         'This curated/legacy cross-reference is authoritative evidence that the recommended Betco product is the correct equivalent for the competitor product.',
+      ].join(' ');
+      evidenceSummary = evidenceSummary ? `${xref}\n\n${evidenceSummary}` : xref;
+    }
+    // B0-183 — same for a web-grounded fallback recommendation, so the (opt-in) validator doesn't
+    // reject an already-gated web answer as "unsupported" for lack of RAG chunks.
+    if (routingDecision === 'recommendations' && webFallback?.answered) {
+      const top = webFallback.candidates[0];
+      const xref = [
+        `Web-grounded cross-reference (confidence ${webFallback.overallConfidence.toFixed(2)}):`,
+        `competitor "${webFallbackCompetitorLabel}" maps to Betco "${top?.betcoTitle ?? ''}".`,
+        "This web-grounded recommendation already passed the recommendation engine's grounding and validator gate; it is the support for the equivalence claim.",
       ].join(' ');
       evidenceSummary = evidenceSummary ? `${xref}\n\n${evidenceSummary}` : xref;
     }
