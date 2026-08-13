@@ -40,7 +40,9 @@ function AddFormCard({
   title: string;
 }) {
   return (
-    <Card className="mb-4 gap-0 rounded-3xl border border-border/60 py-4 shadow-none">
+    <Card
+      className={`mb-4 gap-0 rounded-3xl border border-border/60 py-4 shadow-none ${open ? 'h-full' : ''}`}
+    >
       <Collapsible onOpenChange={onOpenChange} open={open}>
         <CollapsibleTrigger className="w-full text-left">
           <CardHeader className="gap-0 py-0">

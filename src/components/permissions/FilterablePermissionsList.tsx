@@ -87,7 +87,9 @@ function GroupRowWithPermissions({ group }: { group: PermissionGroup }) {
               ) : permissions?.length ? (
                 <ul className="space-y-1 py-1 text-sm text-muted-foreground">
                   {permissions.map((permission) => (
-                    <li key={permission.PERMISSION_ID}>{permission.SELECTOR}</li>
+                    <li key={permission.PERMISSION_ID}>
+                      {permission.SELECTOR}
+                    </li>
                   ))}
                 </ul>
               ) : permissions ? (

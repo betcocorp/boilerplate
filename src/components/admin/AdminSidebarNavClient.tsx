@@ -77,22 +77,18 @@ const sidebarSections: NavSectionModel[] = [
           {
             label: 'Bex chat',
             href: '/admin/bex',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_BEX,
           },
           {
             label: 'Test runner',
             href: '/admin/tests',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_TESTS,
           },
           {
             label: 'Failure Queue',
             href: '/admin/tests/failure-queue',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_TESTS,
           },
           {
             label: 'Prompt observability',
             href: '/admin/observability',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_OBSERVABILITY,
           },
         ],
       },
@@ -104,22 +100,18 @@ const sidebarSections: NavSectionModel[] = [
           {
             label: 'Tools home',
             href: '/admin/tools',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_TOOLS,
           },
           {
             label: 'Cross-reference',
             href: '/admin/tools/cross-reference',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_TOOLS,
           },
           {
             label: 'Web Search',
             href: '/admin/tools/web-search',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_TOOLS,
           },
           {
             label: 'RAG semantic search',
             href: '/admin/products/rag',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_PRODUCTS,
           },
         ],
       },
@@ -213,7 +205,9 @@ function visibleSections(hiddenSelectors: string[]): NavSectionModel[] {
       ...section,
       items: section.items.flatMap<NavEntry>((entry) => {
         if (entry.type === 'link') {
-          return entry.permission && hidden.has(entry.permission) ? [] : [entry];
+          return entry.permission && hidden.has(entry.permission)
+            ? []
+            : [entry];
         }
         const items = entry.items.filter(
           (item) => !(item.permission && hidden.has(item.permission)),
@@ -257,7 +251,9 @@ function NavGroupItem({ entry }: { entry: NavGroup }) {
   const [manualOpen, setManualOpen] = useState(false);
 
   const Icon = entry.icon;
-  const groupActive = entry.items.some((item) => isActivePath(pathname, item.href));
+  const groupActive = entry.items.some((item) =>
+    isActivePath(pathname, item.href),
+  );
   const isOpen = groupActive || manualOpen;
   const collapsed = state === 'collapsed' && !isMobile;
 
@@ -312,7 +308,11 @@ function NavSection({ section }: { section: NavSectionModel }) {
             const active = isActivePath(pathname, entry.href);
             return (
               <SidebarMenuItem key={entry.label}>
-                <SidebarMenuButton asChild isActive={active} tooltip={entry.label}>
+                <SidebarMenuButton
+                  asChild
+                  isActive={active}
+                  tooltip={entry.label}
+                >
                   <Link href={entry.href}>
                     {Icon ? <Icon /> : null}
                     <span>{entry.label}</span>

@@ -188,7 +188,12 @@
       "Read(//Users/thomasbird/**)",
       "Read(//private/var/folders/**)",
       "Bash(echo \"TSC_EXIT:$?\")",
-      "Bash(echo \"LINT_EXIT:$?\")"
+      "Bash(echo \"LINT_EXIT:$?\")",
+      "Bash(gh auth *)",
+      "Bash(gh run *)",
+      "Bash(echo \"diffcode:$?\")",
+      "Bash(ln -s \"/Users/thomasbird/projects/client/betco/apps/bex-combined/bex2.0/node_modules\" node_modules)",
+      "Bash(git hash-object *)"
     ]
   }
 }

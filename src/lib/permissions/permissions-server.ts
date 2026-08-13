@@ -87,7 +87,7 @@ export async function getCurrentUserPermissionGroups(): Promise<string[]> {
  */
 export function hasPermission(
   permissions: string[],
-  permission: string,
+  permission: string = '',
 ): boolean {
   if (permissions.includes(permission)) return true;
   const parts = permission.split('.');

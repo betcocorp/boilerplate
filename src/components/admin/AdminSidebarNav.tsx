@@ -37,6 +37,7 @@ export async function AdminSidebarNav() {
     getCurrentUserPermissions(),
     getUserOrDefault(),
   ]);
+  console.log('permissions', permissions, 'user', user);
   const denied = NAV_SELECTORS.filter(
     (selector) => !hasPermission(permissions, selector),
   );
