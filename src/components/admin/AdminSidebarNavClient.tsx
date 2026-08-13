@@ -3,12 +3,10 @@
 import {
   ChevronRight,
   FileText,
-  KeyRound,
   LayoutDashboard,
   Library,
   MessageSquare,
   Search,
-  ShieldCheck,
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
@@ -195,40 +193,6 @@ const sidebarSections: NavSectionModel[] = [
             label: 'Product label ingestion',
             href: '/admin/labels',
             permission: PERMISSIONS.NAVIGATION_SIDEBAR_LABELS,
-          },
-        ],
-      },
-    ],
-  },
-  {
-    title: 'API Security',
-    items: [
-      {
-        type: 'group',
-        label: 'API access',
-        icon: KeyRound,
-        items: [
-          {
-            label: 'Projects',
-            href: '/admin/projects',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_PROJECTS,
-          },
-          {
-            label: 'Analytics',
-            href: '/admin/projects/analytics',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_PROJECTS,
-          },
-        ],
-      },
-      {
-        type: 'group',
-        label: 'Access control',
-        icon: ShieldCheck,
-        items: [
-          {
-            label: 'Permissions',
-            href: '/admin/permissions',
-            permission: PERMISSIONS.ADMIN_CARD_PERMISSIONS,
           },
         ],
       },

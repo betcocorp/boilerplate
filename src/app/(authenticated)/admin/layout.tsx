@@ -18,6 +18,12 @@ import {
   SidebarTrigger,
 } from '~/components/ui/sidebar';
 import { TooltipProvider } from '~/components/ui/tooltip';
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { isPermissionsEnforced } from '~/lib/permissions/enforcement';
+import {
+  getCurrentUserPermissions,
+  hasPermission,
+} from '~/lib/permissions/permissions-server';
 
 type AdminLayoutProps = {
   children: ReactNode;
@@ -27,6 +33,13 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
   // Persist the collapsed/expanded state across navigations (read server-side to avoid a flash).
   const cookieStore = await cookies();
   const defaultOpen = cookieStore.get('sidebar_state')?.value !== 'false';
+
+  const permissions = await getCurrentUserPermissions();
+  const accountMenuHiddenSelectors = isPermissionsEnforced()
+    ? [PERMISSIONS.NAVIGATION_SIDEBAR_PROJECTS, PERMISSIONS.ADMIN_CARD_PERMISSIONS].filter(
+        (selector) => !hasPermission(permissions, selector),
+      )
+    : [];
 
   return (
     <SidebarProvider
@@ -56,7 +69,7 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
           </SidebarContent>
 
           <SidebarFooter className="p-3">
-            <AdminAccountMenu />
+            <AdminAccountMenu hiddenSelectors={accountMenuHiddenSelectors} />
           </SidebarFooter>
         </Sidebar>
 

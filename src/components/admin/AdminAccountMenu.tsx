@@ -1,12 +1,10 @@
 'use client';
 
 import {
-  Bell,
-  CircleUserRound,
-  CreditCard,
   EllipsisVertical,
+  KeyRound,
   LogOut,
-  Search,
+  ShieldCheck,
 } from 'lucide-react';
 import { signOut, useSession } from 'next-auth/react';
 import Link from 'next/link';
@@ -19,9 +17,13 @@ import {
   DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '~/components/ui/dropdown-menu';
 import { Button } from '~/components/ui/button';
+import { PERMISSIONS } from '~/lib/permissions/constants';
 import { cn } from '~/lib/utils';
 
 function getInitials(value: string | null | undefined) {
@@ -73,7 +75,11 @@ const AccountTrigger = forwardRef<HTMLButtonElement, AccountTriggerProps>(
 
 AccountTrigger.displayName = 'AccountTrigger';
 
-export function AdminAccountMenu() {
+export function AdminAccountMenu({
+  hiddenSelectors = [],
+}: {
+  hiddenSelectors?: string[];
+}) {
   const { data: session } = useSession();
   const mounted = useSyncExternalStore(
     () => () => {},
@@ -110,30 +116,30 @@ export function AdminAccountMenu() {
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
         <DropdownMenuGroup>
-          <DropdownMenuItem asChild>
-            <Link href="#">
-              <CircleUserRound className="size-4" />
-              Account
-            </Link>
-          </DropdownMenuItem>
-          <DropdownMenuItem asChild>
-            <Link href="#">
-              <CreditCard className="size-4" />
-              Billing
-            </Link>
-          </DropdownMenuItem>
-          <DropdownMenuItem asChild>
-            <Link href="#">
-              <Bell className="size-4" />
-              Notifications
-            </Link>
-          </DropdownMenuItem>
-          <DropdownMenuItem asChild>
-            <Link href="/admin/products/rag">
-              <Search className="size-4" />
-              Search
-            </Link>
-          </DropdownMenuItem>
+          {!hiddenSelectors.includes(PERMISSIONS.NAVIGATION_SIDEBAR_PROJECTS) ? (
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <KeyRound className="size-4" />
+                API access
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                <DropdownMenuItem asChild>
+                  <Link href="/admin/projects">Projects</Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link href="/admin/projects/analytics">Analytics</Link>
+                </DropdownMenuItem>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          ) : null}
+          {!hiddenSelectors.includes(PERMISSIONS.ADMIN_CARD_PERMISSIONS) ? (
+            <DropdownMenuItem asChild>
+              <Link href="/admin/permissions">
+                <ShieldCheck className="size-4" />
+                Access control
+              </Link>
+            </DropdownMenuItem>
+          ) : null}
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
         <DropdownMenuItem

@@ -24,7 +24,7 @@ export const PERMISSIONS = {
   NAVIGATION_SIDEBAR_OBSERVABILITY: 'navigation.sidebar.observability',
   /** Admin sidebar: tools (cross-reference, web search, semantic search). */
   NAVIGATION_SIDEBAR_TOOLS: 'navigation.sidebar.tools',
-  /** Admin sidebar: API access projects + analytics. */
+  /** Admin account menu: API access (Projects + Analytics). */
   NAVIGATION_SIDEBAR_PROJECTS: 'navigation.sidebar.projects',
   /** Admin dashboard: show the permissions administration card. */
   ADMIN_CARD_PERMISSIONS: 'admin.card.permissions',
