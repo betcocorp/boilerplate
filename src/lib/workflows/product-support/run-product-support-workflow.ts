@@ -1881,6 +1881,10 @@ export async function runProductSupportWorkflow(input: {
       }).answerText;
     }
 
+    // B0-349 — frozen snapshot of the fully-composed answer before the validator, revision pass,
+    // or any downstream gate can touch it.
+    const originalDraftAnswer = draftAnswer;
+
     const sources = collectSourcesFromToolOutputs(toolOutputLog);
     const retrieved_document_chunks =
       collectRetrievedDocumentChunksFromToolOutputs(toolOutputLog);
@@ -1956,6 +1960,9 @@ export async function runProductSupportWorkflow(input: {
       status: 'running',
       input: jsonContent({
         modelTag: input.modelTag ?? 'preview',
+        // B0-349 — the answer as composed before this step's validator pass could touch it.
+        // Recorded unconditionally (validator on or off) so it's a true superset of "every run".
+        draftAnswer: originalDraftAnswer,
         /**
          * B0-389 — recorded only when the pass actually calls a model. On the bypassed path
          * (`useValidator === false`, the test runner's default) there is no model call, and a prompt
@@ -2456,6 +2463,9 @@ export async function runProductSupportWorkflow(input: {
        */
       priorMessageCount: input.priorMessages?.length ?? 0,
       previousResponseId: input.previousOpenaiResponseId ?? null,
+      // B0-349 — the answer as composed before validator/revision/gate mutation; see the
+      // `originalDraftAnswer` capture above.
+      draftAnswer: originalDraftAnswer,
     };
 
     audit.enqueue('workflow_completed', { workflow_run_id: run.id }, wfCtx);

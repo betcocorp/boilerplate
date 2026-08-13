@@ -317,6 +317,20 @@ export function extractRoutingDecision(responsePayload: unknown): string | null 
 }
 
 /**
+ * B0-349 — extracts the pre-validation `draftAnswer` from a product-support response payload:
+ * the answer as composed before the validator, revision pass, or any downstream gate could
+ * rewrite it. Returns null when absent (historical payloads, or payloads where it equals the
+ * final answer and callers may choose not to render it separately).
+ */
+export function extractDraftAnswer(responsePayload: unknown): string | null {
+  if (!responsePayload || typeof responsePayload !== 'object' || Array.isArray(responsePayload)) {
+    return null;
+  }
+  const candidate = (responsePayload as Record<string, unknown>).draftAnswer;
+  return typeof candidate === 'string' && candidate.trim() ? candidate : null;
+}
+
+/**
  * B0-398 — extracts the per-item `promptVersion` hash (B0-393) stamped onto
  * `response_payload`. Returns null for pre-capture items (the field never existed) and any
  * malformed payload. Store/compare the full hash; use `shortHash` (from

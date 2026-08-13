@@ -133,6 +133,8 @@ export const productSupportStepInputSchema = z
   .object({
     prompt: promptRecordSchema.optional(),
     gate: gateRecordSchema.optional(),
+    /** B0-349 — the answer as composed before this step's validator pass could touch it. Present on every run once this ships; absent on historical rows. */
+    draftAnswer: z.string().optional(),
   })
   .loose();
 
@@ -246,6 +248,8 @@ export const productSupportFinalOutputSchema = z.object({
    */
   priorMessageCount: z.number().int().nonnegative().optional(),
   previousResponseId: z.string().nullable().optional(),
+  /** B0-349 — the pre-validation draft answer. Optional for historical payloads. */
+  draftAnswer: z.string().optional(),
 });
 
 export type ProductSupportFinalOutput = z.infer<typeof productSupportFinalOutputSchema>;
