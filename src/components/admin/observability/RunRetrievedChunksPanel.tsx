@@ -15,9 +15,14 @@ import type { RetrievedDocumentChunkRef } from '~/lib/workflows/product-support/
 
 type Props = {
   chunks: RetrievedDocumentChunkRef[];
+  /** B0-455 — legacy ERP product-line code by `product_line_key`, for the chunk row display. */
+  prodLineIdByProductLineKey?: Record<string, string | null>;
 };
 
-export function RunRetrievedChunksPanel({ chunks }: Props) {
+export function RunRetrievedChunksPanel({
+  chunks,
+  prodLineIdByProductLineKey = {},
+}: Props) {
   return (
     <details className="group overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
       <summary className="flex cursor-pointer list-none flex-wrap items-center gap-3 px-8 py-6 hover:bg-slate-50">
@@ -36,7 +41,10 @@ export function RunRetrievedChunksPanel({ chunks }: Props) {
             n/a — no retrieved document chunks recorded on this run.
           </p>
         ) : (
-          <RetrievedChunksPreview chunks={chunks} />
+          <RetrievedChunksPreview
+            chunks={chunks}
+            prodLineIdByProductLineKey={prodLineIdByProductLineKey}
+          />
         )}
       </div>
     </details>

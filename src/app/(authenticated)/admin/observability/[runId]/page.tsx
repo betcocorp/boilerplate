@@ -21,6 +21,7 @@ import {
 } from '~/lib/observability/prompt-history';
 import { readRunPayloadView } from '~/lib/observability/run-payload';
 import { getWorkflowRunTrace } from '~/lib/observability/runs-repository';
+import { getProdLineIdsByProductLineKeys } from '~/lib/rag/product-line-lookup';
 import {
   formatDurationSeconds,
   formatEasternTimestamp,
@@ -104,6 +105,14 @@ export default async function AdminRunTracePage({ params }: PageProps) {
   // B0-418 — the run's own payload (answer, chunks, similarity, timing, validation,
   // usage). Tolerates a null `final_output` and error-only payloads.
   const payload = readRunPayloadView(run?.final_output, run?.user_input);
+  /**
+   * B0-455 — legacy ERP product-line codes ("H610") for every distinct `product_line_key`
+   * on this run's retrieved chunks, for the "Product line id" column on the chunks panel.
+   * Admin-display lookup only — see `~/lib/rag/product-line-lookup`.
+   */
+  const prodLineIdByProductLineKey = await getProdLineIdsByProductLineKeys(
+    [...new Set(payload.chunks.map((c) => c.product_line_key).filter((v): v is string => Boolean(v)))],
+  );
   /**
    * B0-421 — where this cell sits in its column: the prompt's recent pass/fail outcomes. Necessarily
    * sequential, since the prompt's identity only exists once the harness lookup has resolved, and
@@ -273,7 +282,12 @@ export default async function AdminRunTracePage({ params }: PageProps) {
           ) : null}
 
           {/* Retrieved chunks — collapsed by default; the bulkiest section on the page. */}
-          {trace ? <RunRetrievedChunksPanel chunks={payload.chunks} /> : null}
+          {trace ? (
+            <RunRetrievedChunksPanel
+              chunks={payload.chunks}
+              prodLineIdByProductLineKey={Object.fromEntries(prodLineIdByProductLineKey)}
+            />
+          ) : null}
         </main>
       </div>
     </RunInsightsProvider>

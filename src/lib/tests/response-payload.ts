@@ -170,7 +170,8 @@ function parseRetrievedDocumentChunksArray(
     const chunk_id = typeof o.chunk_id === 'string' ? o.chunk_id : null;
     const document_kind = typeof o.document_kind === 'string' ? o.document_kind : null;
     const document_title = typeof o.document_title === 'string' ? o.document_title : null;
-    out.push({ document_id, chunk_id, document_kind, document_title });
+    const product_line_key = typeof o.product_line_key === 'string' ? o.product_line_key : null;
+    out.push({ document_id, chunk_id, document_kind, document_title, product_line_key });
   }
   return out;
 }

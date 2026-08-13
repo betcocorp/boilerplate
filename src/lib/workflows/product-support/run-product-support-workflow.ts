@@ -571,6 +571,7 @@ function collectRetrievedDocumentChunksFromToolOutputs(
           chunkId?: string;
           documentKind?: string;
           title?: string;
+          productLineKey?: string;
         }>;
       };
       for (const s of payload.sources ?? []) {
@@ -588,6 +589,10 @@ function collectRetrievedDocumentChunksFromToolOutputs(
           chunk_id: chunkId,
           document_kind: typeof s.documentKind === 'string' ? s.documentKind : null,
           document_title: typeof s.title === 'string' ? s.title : null,
+          product_line_key:
+            typeof s.productLineKey === 'string' && s.productLineKey.trim()
+              ? s.productLineKey.trim()
+              : null,
         });
       }
     } catch {

@@ -26,6 +26,8 @@ export const retrievedDocumentChunkRefSchema = z.object({
   chunk_id: z.string().nullable(),
   document_kind: z.string().nullable().optional(),
   document_title: z.string().nullable().optional(),
+  /** B0-455 — `rag.entity.product_line_key` for the retrieved chunk's owning product/product line. */
+  product_line_key: z.string().nullable().optional(),
 });
 
 export type RetrievedDocumentChunkRef = z.infer<typeof retrievedDocumentChunkRefSchema>;
