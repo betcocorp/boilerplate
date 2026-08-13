@@ -24,6 +24,13 @@ jobs:
     # Pinned to betcocorp/github-actions deb64da (main).
     uses: betcocorp/github-actions/.github/workflows/release.yml@deb64da324e8e5c22c2f5d0998e8497244428623
     with:
+      # pnpm-workspace.yaml here carries only `allowBuilds` (a pnpm 11 key) and no
+      # `packages:` list. The shared workflow defaults to pnpm 9, and pnpm 9 rejects
+      # that file outright — setup-node's `pnpm store path` cache probe dies with
+      # "ERROR packages field missing or empty" before semantic-release ever runs.
+      # pnpm 11 needs Node >= 22.13 (node:sqlite), so pin the runtime alongside it.
+      pnpm-version: "11.20.0"
+      node-version: "22"
       dry-run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run || false }}
     secrets:
       RELEASE_APP_ID: ${{ secrets.RELEASE_APP_ID }}
