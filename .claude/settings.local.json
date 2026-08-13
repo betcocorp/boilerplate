@@ -186,7 +186,9 @@
       "Bash(lsof -i :3000 -sTCP:LISTEN)",
       "Bash(disown)",
       "Read(//Users/thomasbird/**)",
-      "Read(//private/var/folders/**)"
+      "Read(//private/var/folders/**)",
+      "Bash(echo \"TSC_EXIT:$?\")",
+      "Bash(echo \"LINT_EXIT:$?\")"
     ]
   }
 }
