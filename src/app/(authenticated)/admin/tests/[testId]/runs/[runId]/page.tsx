@@ -364,7 +364,7 @@ export default async function AdminTestRunDetailsPage({
                 <TestRunNotesToolbarButton />
                 <RunReportButton
                   enabled={isCompletedRunStatus(result.status)}
-                  hasExistingReport={Boolean(result.report_markdown)}
+                  hasExistingReport={Boolean(result.report)}
                   runId={result.id}
                   testId={test.id}
                 />

@@ -27,13 +27,13 @@ export async function GET(
     return NextResponse.json({ error: 'Run not found' }, { status: 404 });
   }
 
-  if (!run.report_markdown) {
+  if (!run.report) {
     return NextResponse.json({ error: 'Report not generated yet.' }, { status: 404 });
   }
 
   return NextResponse.json({
     ok: true,
-    markdown: run.report_markdown,
+    markdown: run.report,
     generatedAt: run.report_generated_at,
   });
 }

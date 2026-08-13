@@ -976,8 +976,8 @@ export type Database = {
           insights_generated_at: string | null
           notes: string | null
           passed_items: number
+          report: string | null
           report_generated_at: string | null
-          report_markdown: string | null
           report_state: Json | null
           retrieval_strategy: string | null
           run_mode: string
@@ -1000,8 +1000,8 @@ export type Database = {
           insights_generated_at?: string | null
           notes?: string | null
           passed_items?: number
+          report?: string | null
           report_generated_at?: string | null
-          report_markdown?: string | null
           report_state?: Json | null
           retrieval_strategy?: string | null
           run_mode?: string
@@ -1024,8 +1024,8 @@ export type Database = {
           insights_generated_at?: string | null
           notes?: string | null
           passed_items?: number
+          report?: string | null
           report_generated_at?: string | null
-          report_markdown?: string | null
           report_state?: Json | null
           retrieval_strategy?: string | null
           run_mode?: string

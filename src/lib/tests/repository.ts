@@ -369,7 +369,7 @@ export async function saveReportMarkdown(
   generatedAt: string,
 ) {
   return updateTestResult(resultId, {
-    report_markdown: markdown,
+    report: markdown,
     report_generated_at: generatedAt,
   });
 }
