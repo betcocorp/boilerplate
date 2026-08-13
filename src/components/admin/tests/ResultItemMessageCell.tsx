@@ -8,12 +8,17 @@
 export function ResultItemMessageCell({
   errorMessage,
   responseText,
+  draftAnswer,
 }: {
   errorMessage: string | null;
   responseText: string | null;
+  /** B0-349 — pre-validation draft; rendered only when present and it differs from `responseText`. */
+  draftAnswer?: string | null;
 }) {
   const assistant = responseText?.trim() ?? '';
   const legacyLine = errorMessage?.trim() || assistant || 'n/a';
+  const draft = draftAnswer?.trim() ?? '';
+  const showDraft = draft.length > 0 && draft !== assistant;
 
   return (
     <div className="flex flex-col gap-2">
@@ -31,6 +36,14 @@ export function ResultItemMessageCell({
           {assistant || '—'}
         </p>
       </div>
+      {showDraft ? (
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+            Draft (pre-validation)
+          </p>
+          <p className="mt-1 whitespace-pre-wrap text-slate-800">{draft}</p>
+        </div>
+      ) : null}
     </div>
   );
 }

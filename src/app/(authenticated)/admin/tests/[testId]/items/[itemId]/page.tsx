@@ -28,6 +28,7 @@ import {
   listTestResultsByTestId,
 } from '~/lib/tests/repository';
 import {
+  extractDraftAnswer,
   extractModelTag,
   extractRagSearchMs,
   extractSimilarityStats,
@@ -465,6 +466,7 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
                           <ResultItemMessageCell
                             errorMessage={result.error_message}
                             responseText={result.response_text}
+                            draftAnswer={extractDraftAnswer(result.response_payload)}
                           />
                         </TableCell>
                       </TableRow>

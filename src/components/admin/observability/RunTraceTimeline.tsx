@@ -154,6 +154,14 @@ function formatConfidence(value: number | null): string {
   return typeof value === 'number' ? value.toFixed(2) : '—';
 }
 
+/** B0-349 — reads `detail.input.draftAnswer` off a validator step's timeline detail, or null. */
+function getStepInputDraftAnswer(detail: Record<string, unknown>): string | null {
+  const input = detail.input;
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+  const value = (input as Record<string, unknown>).draftAnswer;
+  return typeof value === 'string' ? value : null;
+}
+
 function TimelineEventRow({
   event,
   open,
@@ -427,6 +435,13 @@ function TimelineEventRow({
 
               {event.kind === 'step' && event.error ? (
                 <TraceJsonBlock label="Error" value={event.error} />
+              ) : null}
+
+              {event.kind === 'step' && event.stepName === 'validator' ? (
+                <TraceJsonBlock
+                  label="Draft (pre-validation)"
+                  value={getStepInputDraftAnswer(event.detail)}
+                />
               ) : null}
 
               {event.kind === 'audit' ? (
