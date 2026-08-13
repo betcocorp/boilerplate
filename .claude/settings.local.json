@@ -166,7 +166,27 @@
       "Bash(ln -s /Users/thomasbird/projects/client/betco/apps/bex-combined/bex2.0/node_modules node_modules)",
       "Bash(cp /Users/thomasbird/projects/client/betco/apps/bex-combined/bex2.0/.env* /tmp/dev-premerge/)",
       "Bash(npx tsx *)",
-      "Bash(echo \"tsc exit=$?\")"
+      "Bash(echo \"tsc exit=$?\")",
+      "Bash(git stash *)",
+      "Bash(mkdir -p /private/tmp/claude-501/-Users-thomasbird-projects-client-betco-apps-bex-combined-bex2-0/cb7a9f5a-255e-4cb2-a55d-554d08b69646/scratchpad/skill)",
+      "Bash(unzip -o \"/Users/thomasbird/Downloads/agent-evaluation.skill\" -d .)",
+      "Skill(ticket-and-work)",
+      "Bash(mkdir -p /private/tmp/claude-501/-Users-thomasbird-projects-client-betco-apps-bex-combined-bex2-0/cb7a9f5a-255e-4cb2-a55d-554d08b69646/scratchpad/docx1)",
+      "Bash(unzip -o \"/Users/thomasbird/Downloads/Bex_Eval_Executive_Summary_Product_Specialist_8-11-2026 \\(15 Questions\\).docx\" -d .)",
+      "Bash(git -C /Users/thomasbird/projects/client/betco/apps/bex-combined/bex2.0 log --oneline -1 -- src/supabase/migrations)",
+      "Bash(awk '/^export async function POST/,0' src/app/api/admin/tests/runs/\\\\[runId\\\\]/route.ts)",
+      "mcp__claude_ai_Atlassian__lookupJiraAccountId",
+      "mcp__claude_ai_Supabase__execute_sql",
+      "Bash(echo \"EXIT:$?\")",
+      "mcp__claude_ai_Supabase__apply_migration",
+      "mcp__claude_ai_Supabase__generate_typescript_types",
+      "Bash(npm view *)",
+      "Bash(xargs cat)",
+      "Bash(pnpm remove *)",
+      "Bash(lsof -i :3000 -sTCP:LISTEN)",
+      "Bash(disown)",
+      "Read(//Users/thomasbird/**)",
+      "Read(//private/var/folders/**)"
     ]
   }
 }

@@ -7,7 +7,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { BexStreamdown } from '~/components/bex/BexStreamdown';
 import { Button } from '~/components/ui/button';
 
-type ReportStatus = 'idle' | 'scoring' | 'synthesizing' | 'completed' | 'failed';
+type ReportStatus =
+  | 'idle'
+  | 'scoring'
+  | 'synthesizing'
+  | 'completed'
+  | 'failed';
 
 function isTerminal(status: ReportStatus): boolean {
   return status === 'completed' || status === 'failed';
@@ -58,7 +63,9 @@ export function RunReportView({
   const [totalCases, setTotalCases] = useState(initialTotalCases);
   const [completedCases, setCompletedCases] = useState(initialCompletedCases);
   const [error, setError] = useState<string | null>(initialError);
-  const [generatedAt, setGeneratedAt] = useState<string | null>(initialGeneratedAt);
+  const [generatedAt, setGeneratedAt] = useState<string | null>(
+    initialGeneratedAt,
+  );
   const [markdown, setMarkdown] = useState<string | null>(null);
   const [markdownLoading, setMarkdownLoading] = useState(false);
   const [pdfLoading, setPdfLoading] = useState(false);
@@ -76,7 +83,9 @@ export function RunReportView({
     setStatus((current) => (current === 'idle' ? 'scoring' : current));
 
     try {
-      const res = await fetch(`/api/admin/tests/runs/${runId}/report`, { method: 'POST' });
+      const res = await fetch(`/api/admin/tests/runs/${runId}/report`, {
+        method: 'POST',
+      });
       const data = (await res.json().catch(() => ({}))) as ReportStatusResponse;
       inFlightRef.current = false;
 
@@ -92,7 +101,7 @@ export function RunReportView({
       setCompletedCases(data.completedCases ?? completedCases);
       setError(data.error ?? null);
 
-      if ((nextStatus === 'scoring' || nextStatus === 'synthesizing')) {
+      if (nextStatus === 'scoring' || nextStatus === 'synthesizing') {
         if (continueAttemptsRef.current < MAX_AUTO_CONTINUES) {
           continueAttemptsRef.current += 1;
           void post();
@@ -136,8 +145,10 @@ export function RunReportView({
         const data = (await res.json()) as ReportStatusResponse;
         if (data.status) setStatus(data.status);
         if (typeof data.totalCases === 'number') setTotalCases(data.totalCases);
-        if (typeof data.completedCases === 'number') setCompletedCases(data.completedCases);
-        if (data.generatedAt !== undefined) setGeneratedAt(data.generatedAt ?? null);
+        if (typeof data.completedCases === 'number')
+          setCompletedCases(data.completedCases);
+        if (data.generatedAt !== undefined)
+          setGeneratedAt(data.generatedAt ?? null);
         setError(data.error ?? null);
       } catch {
         // keep polling; transient failures are expected during long generation runs.
@@ -155,15 +166,23 @@ export function RunReportView({
 
     let cancelled = false;
     setMarkdownLoading(true);
-    fetch(`/api/admin/tests/runs/${runId}/report/markdown`, { cache: 'no-store' })
+    fetch(`/api/admin/tests/runs/${runId}/report/markdown`, {
+      cache: 'no-store',
+    })
       .then((res) => res.json())
-      .then((data: { ok?: boolean; markdown?: string; generatedAt?: string | null }) => {
-        if (cancelled) return;
-        if (data.ok && data.markdown) {
-          setMarkdown(data.markdown);
-          setGeneratedAt(data.generatedAt ?? null);
-        }
-      })
+      .then(
+        (data: {
+          ok?: boolean;
+          markdown?: string;
+          generatedAt?: string | null;
+        }) => {
+          if (cancelled) return;
+          if (data.ok && data.markdown) {
+            setMarkdown(data.markdown);
+            setGeneratedAt(data.generatedAt ?? null);
+          }
+        },
+      )
       .catch(() => {
         if (!cancelled) setError('Failed to load the generated report.');
       })
@@ -239,12 +258,15 @@ export function RunReportView({
     );
   }
 
-  const progressPercent = totalCases > 0 ? Math.min(100, Math.round((completedCases / totalCases) * 100)) : 0;
+  const progressPercent =
+    totalCases > 0
+      ? Math.min(100, Math.round((completedCases / totalCases) * 100))
+      : 0;
 
   return (
     <div className="flex flex-col gap-6">
       <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-        <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-700">
               Agent evaluation report
@@ -260,18 +282,29 @@ export function RunReportView({
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Button asChild size="sm" variant="outline">
-              <Link href={`/admin/tests/${testId}/runs/${runId}`}>Back to run</Link>
+              <Link href={`/admin/tests/${testId}/runs/${runId}`}>
+                Back to run
+              </Link>
             </Button>
             {status === 'completed' && markdown ? (
               <>
-                <Button onClick={() => void copyMarkdown()} size="sm" variant="outline">
+                <Button
+                  onClick={() => void copyMarkdown()}
+                  size="sm"
+                  variant="outline"
+                >
                   {copyLabel}
                 </Button>
                 <Button onClick={downloadMarkdown} size="sm" variant="outline">
                   <Download className="size-4" />
                   Download .md
                 </Button>
-                <Button disabled={pdfLoading} onClick={() => void downloadPdf()} size="sm" variant="outline">
+                <Button
+                  disabled={pdfLoading}
+                  onClick={() => void downloadPdf()}
+                  size="sm"
+                  variant="outline"
+                >
                   {pdfLoading ? (
                     <Loader2 className="size-4 animate-spin" />
                   ) : (
@@ -279,7 +312,12 @@ export function RunReportView({
                   )}
                   Download PDF
                 </Button>
-                <Button disabled={inFlightRef.current} onClick={retryFromScratch} size="sm" variant="outline">
+                <Button
+                  disabled={inFlightRef.current}
+                  onClick={retryFromScratch}
+                  size="sm"
+                  variant="outline"
+                >
                   <RefreshCw className="size-4" />
                   Regenerate
                 </Button>
@@ -298,11 +336,18 @@ export function RunReportView({
             <div className="mt-3 h-3 w-full overflow-hidden rounded-full bg-slate-100">
               <div
                 className="h-full rounded-full bg-sky-600 transition-[width] duration-300"
-                style={{ width: `${status === 'synthesizing' ? 100 : progressPercent}%` }}
+                style={{
+                  width: `${status === 'synthesizing' ? 100 : progressPercent}%`,
+                }}
               />
             </div>
             {needsManualContinue ? (
-              <Button className="mt-4" onClick={retryFromScratch} size="sm" variant="outline">
+              <Button
+                className="mt-4"
+                onClick={retryFromScratch}
+                size="sm"
+                variant="outline"
+              >
                 Continue generating
               </Button>
             ) : null}
@@ -312,7 +357,12 @@ export function RunReportView({
         {status === 'failed' && error ? (
           <div className="mt-6 rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
             {error}
-            <Button className="mt-3 block" onClick={retryFromScratch} size="sm" variant="outline">
+            <Button
+              className="mt-3 block"
+              onClick={retryFromScratch}
+              size="sm"
+              variant="outline"
+            >
               Retry
             </Button>
           </div>
@@ -328,7 +378,11 @@ export function RunReportView({
       {markdown ? (
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <div ref={contentRef}>
-            <BexStreamdown content={markdown} isStreaming={false} isUser={false} />
+            <BexStreamdown
+              content={markdown}
+              isStreaming={false}
+              isUser={false}
+            />
           </div>
         </section>
       ) : null}

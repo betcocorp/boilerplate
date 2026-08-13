@@ -150,7 +150,9 @@ export default async function AdminTestRunDetailsPage({
   const erroredCount = resultItems.filter((item) => {
     if (item.status === 'failed') return true;
     const p = item.response_payload;
-    return p !== null && typeof p === 'object' && !Array.isArray(p) && 'error' in p;
+    return (
+      p !== null && typeof p === 'object' && !Array.isArray(p) && 'error' in p
+    );
   }).length;
 
   const chronologicalItems = [...resultItems].sort((a, b) => {
@@ -309,8 +311,7 @@ export default async function AdminTestRunDetailsPage({
             agent: extractRoutingDecision(row.response_payload),
             response_text: row.response_text,
             error_message: row.error_message,
-            ideal_response:
-              idealResponseByItemId.get(row.test_item_id) ?? null,
+            ideal_response: idealResponseByItemId.get(row.test_item_id) ?? null,
             expected_concepts:
               conceptExpectationsByItemId.get(row.test_item_id)
                 ?.expected_concepts ?? null,
@@ -344,7 +345,7 @@ export default async function AdminTestRunDetailsPage({
           testId={test.id}
         >
           <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-            <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="flex flex-wrap items-center justify-between gap-4">
               <div>
                 <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-700">
                   Run details
@@ -626,8 +627,15 @@ export default async function AdminTestRunDetailsPage({
                           </TableCell>
                           <TableCell className="whitespace-nowrap">
                             {(() => {
-                              const agent = extractRoutingDecision(row.response_payload);
-                              if (!agent) return <span className="text-xs text-slate-400">—</span>;
+                              const agent = extractRoutingDecision(
+                                row.response_payload,
+                              );
+                              if (!agent)
+                                return (
+                                  <span className="text-xs text-slate-400">
+                                    —
+                                  </span>
+                                );
                               const colorClass = getAgentBadgeClassName(agent);
                               return (
                                 <Badge className={colorClass} variant="outline">
