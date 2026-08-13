@@ -8,7 +8,8 @@
  * No polling — the page is a fresh server render per request.
  */
 
-import { useMemo } from 'react';
+import { ChevronDownIcon, ChevronUpIcon } from 'lucide-react';
+import { useMemo, useState } from 'react';
 import {
   Bar,
   BarChart,
@@ -127,6 +128,9 @@ function StatTile({
 }
 
 export function AggregateDashboard({ data }: { data: AggregateDashboardData }) {
+  // B0-456 — chart grid is collapsed by default; stat tiles above always render.
+  const [showCharts, setShowCharts] = useState(false);
+
   const routingPieData = useMemo(
     () =>
       data.routingDistribution.map((datum) => ({
@@ -177,9 +181,24 @@ export function AggregateDashboard({ data }: { data: AggregateDashboardData }) {
     <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
       <div className="flex flex-wrap items-baseline justify-between gap-3">
         <h2 className="text-lg font-semibold text-slate-900">Aggregate dashboard</h2>
-        <p className="text-xs text-slate-500">
-          {formatWindowDay(data.windowFrom)} → {formatWindowDay(data.windowTo)} (UTC days)
-        </p>
+        <div className="flex flex-wrap items-center gap-3">
+          <p className="text-xs text-slate-500">
+            {formatWindowDay(data.windowFrom)} → {formatWindowDay(data.windowTo)} (UTC days)
+          </p>
+          <button
+            aria-expanded={showCharts}
+            className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
+            onClick={() => setShowCharts((open) => !open)}
+            type="button"
+          >
+            {showCharts ? 'Hide charts' : 'Show charts'}
+            {showCharts ? (
+              <ChevronUpIcon aria-hidden className="size-4 shrink-0" />
+            ) : (
+              <ChevronDownIcon aria-hidden className="size-4 shrink-0" />
+            )}
+          </button>
+        </div>
       </div>
 
       {/* Headline numbers — one equal-width row at lg (7 tiles since B0-430). */}
@@ -235,6 +254,7 @@ export function AggregateDashboard({ data }: { data: AggregateDashboardData }) {
         />
       </div>
 
+      {showCharts ? (
       <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-4">
         {/* Routing distribution + avg confidence */}
         <article className="col-span-4 min-w-0 rounded-2xl border border-slate-200 p-5 lg:col-span-2">
@@ -407,6 +427,7 @@ export function AggregateDashboard({ data }: { data: AggregateDashboardData }) {
           )}
         </article>
       </div>
+      ) : null}
     </section>
   );
 }
