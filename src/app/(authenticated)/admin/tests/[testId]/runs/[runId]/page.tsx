@@ -16,6 +16,7 @@ import {
 } from '~/components/admin/tests/RunInsightsPanel';
 import { RunItemResultsCsvDownload } from '~/components/admin/tests/RunItemResultsCsvDownload';
 import { RunReportButton } from '~/components/admin/tests/RunReportButton';
+import { PromptBundleVersionBadge } from '~/components/admin/tests/PromptBundleVersionBadge';
 import {
   TestRunNotesDisplay,
   TestRunNotesProvider,
@@ -52,13 +53,16 @@ import {
   extractItemValidatorConfidence,
   extractModelTag,
   extractProgress,
+  extractPromptVersion,
   extractRetrievedDocumentChunks,
   extractRoutingDecision,
   extractTimingBreakdown,
   extractWorkflowRunId,
+  summarizePromptBundleVersions,
 } from '~/lib/tests/response-payload';
 import { isCompletedRunStatus } from '~/lib/tests/types';
 import { formatDate, formatDurationSeconds } from '~/lib/utils/time';
+import { shortHash } from '~/lib/workflows/product-support/prompt-version';
 
 import { deleteTestRunAction } from '../../../actions';
 
@@ -209,6 +213,15 @@ export default async function AdminTestRunDetailsPage({
   ).length;
   const notPassedItemCount = resultItems.filter((item) => !item.passed).length;
   /**
+   * B0-398 — run-level `promptBundleVersion` chip. The field is a build-time constant, identical
+   * across every item in a run, so reading it off `resultItems` (already fetched) needs no new
+   * query; `summarizePromptBundleVersions` also guards the (should-be-rare) case of a run whose
+   * items disagree, e.g. a deploy landing mid-run.
+   */
+  const promptBundleVersionSummary = summarizePromptBundleVersions(
+    resultItems.map((item) => item.response_payload),
+  );
+  /**
    * B0-419 — the run each execution produced. Prefer the real `workflow_run_id` column (B0-416,
    * backfilled) over re-extracting it from `response_payload`; the payload read stays only as a
    * fallback for any row the backfill could not reach. Null is expected and common: search-eval
@@ -354,8 +367,9 @@ export default async function AdminTestRunDetailsPage({
                   {test.name}
                 </h1>
                 <TestRunNotesDisplay />
-                <p className="mt-3 font-mono text-xs text-slate-600">
-                  Run id: {result.id}
+                <p className="mt-3 flex flex-wrap items-center gap-2 font-mono text-xs text-slate-600">
+                  <span>Run id: {result.id}</span>
+                  <PromptBundleVersionBadge summary={promptBundleVersionSummary} />
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -626,23 +640,42 @@ export default async function AdminTestRunDetailsPage({
                             </Badge>
                           </TableCell>
                           <TableCell className="whitespace-nowrap">
-                            {(() => {
-                              const agent = extractRoutingDecision(
-                                row.response_payload,
-                              );
-                              if (!agent)
-                                return (
-                                  <span className="text-xs text-slate-400">
-                                    —
-                                  </span>
+                            <div className="flex flex-wrap items-center gap-1">
+                              {(() => {
+                                const agent = extractRoutingDecision(
+                                  row.response_payload,
                                 );
-                              const colorClass = getAgentBadgeClassName(agent);
-                              return (
-                                <Badge className={colorClass} variant="outline">
-                                  {agent}
-                                </Badge>
-                              );
-                            })()}
+                                if (!agent)
+                                  return (
+                                    <span className="text-xs text-slate-400">
+                                      —
+                                    </span>
+                                  );
+                                const colorClass =
+                                  getAgentBadgeClassName(agent);
+                                return (
+                                  <Badge className={colorClass} variant="outline">
+                                    {agent}
+                                  </Badge>
+                                );
+                              })()}
+                              {/* B0-398 — per-item promptVersion chip (B0-393 hash). Absent
+                                  entirely for pre-capture items rather than a placeholder. */}
+                              {(() => {
+                                const promptVersion = extractPromptVersion(
+                                  row.response_payload,
+                                );
+                                if (!promptVersion) return null;
+                                return (
+                                  <Badge
+                                    title={`promptVersion: ${promptVersion}`}
+                                    variant="outline"
+                                  >
+                                    {shortHash(promptVersion)}
+                                  </Badge>
+                                );
+                              })()}
+                            </div>
                           </TableCell>
                           <TableCell className="max-w-[220px] whitespace-normal text-xs text-slate-600">
                             {formatTimingBreakdownLabel(row.response_payload)}

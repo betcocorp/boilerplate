@@ -6,6 +6,7 @@ import { Badge } from '~/components/ui/badge';
 
 import { AddTestItemDialog } from '~/components/admin/tests/AddTestItemDialog';
 import { AdminTestsActionToast } from '~/components/admin/tests/AdminTestsActionToast';
+import { PromptBundleVersionBadge } from '~/components/admin/tests/PromptBundleVersionBadge';
 import { RunSearchEvalDialog } from '~/components/admin/tests/RunSearchEvalDialog';
 import { TestPromptsSection } from '~/components/admin/tests/TestPromptsSection';
 import { Button } from '~/components/ui/button';
@@ -34,6 +35,7 @@ import {
 import {
   extractSearchRunEmbeddingSource,
   extractSearchRunMaxSimilarity,
+  summarizePromptBundleVersions,
 } from '~/lib/tests/response-payload';
 import {
   buildSuggestionListsFromTestItems,
@@ -200,6 +202,20 @@ export default async function AdminTestDetailsPage({
     });
   }
 
+  /**
+   * B0-398 — per-run `promptBundleVersion` chip for the "Recent runs" list. Reuses
+   * `resultItemsByRunId` (already fetched above for the trend chart / prompt aggregations) rather
+   * than issuing a new query — every listed run's items are already loaded.
+   */
+  const promptBundleVersionSummaryByRunId = new Map(
+    trendRuns.map((run) => [
+      run.id,
+      summarizePromptBundleVersions(
+        (resultItemsByRunId.get(run.id) ?? []).map((item) => item.response_payload),
+      ),
+    ]),
+  );
+
   const runsById = new Map(trendRuns.map((run) => [run.id, run]));
   const promptAggregations = buildPromptAggregations(
     allRecentResultItems,
@@ -361,6 +377,9 @@ export default async function AdminTestDetailsPage({
                 <TableRow>
                   <TableHead>Run id</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead title="Which build of the prompt bundle (specialist policies + tool defs) produced this run — B0-393">
+                    Prompt bundle
+                  </TableHead>
                   <TableHead>Pass/fail</TableHead>
                   <TableHead title="Share of items marked passed for this run (same basis as the pass rate trend chart)">
                     Pass %
@@ -378,7 +397,7 @@ export default async function AdminTestDetailsPage({
               <TableBody>
                 {results.length === 0 ? (
                   <TableRow>
-                    <TableCell className="text-slate-500" colSpan={8}>
+                    <TableCell className="text-slate-500" colSpan={9}>
                       No runs yet for this dataset.
                     </TableCell>
                   </TableRow>
@@ -406,6 +425,15 @@ export default async function AdminTestDetailsPage({
                           </Link>
                         </TableCell>
                         <TableCell>{result.status}</TableCell>
+                        <TableCell>
+                          <PromptBundleVersionBadge
+                            summary={
+                              promptBundleVersionSummaryByRunId.get(result.id) ?? {
+                                kind: 'none',
+                              }
+                            }
+                          />
+                        </TableCell>
                         <TableCell>
                           {result.passed_items}/{failedItems}
                         </TableCell>

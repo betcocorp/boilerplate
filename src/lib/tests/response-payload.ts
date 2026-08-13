@@ -316,6 +316,71 @@ export function extractRoutingDecision(responsePayload: unknown): string | null 
   return typeof candidate === 'string' && candidate.trim() ? candidate.trim() : null;
 }
 
+/**
+ * B0-398 — extracts the per-item `promptVersion` hash (B0-393) stamped onto
+ * `response_payload`. Returns null for pre-capture items (the field never existed) and any
+ * malformed payload. Store/compare the full hash; use `shortHash` (from
+ * `~/lib/workflows/product-support/prompt-version`) only for display.
+ */
+export function extractPromptVersion(responsePayload: unknown): string | null {
+  if (
+    !responsePayload ||
+    typeof responsePayload !== 'object' ||
+    Array.isArray(responsePayload)
+  ) {
+    return null;
+  }
+
+  const candidate = (responsePayload as Record<string, unknown>).promptVersion;
+  return typeof candidate === 'string' && candidate.trim() ? candidate.trim() : null;
+}
+
+/**
+ * B0-398 — extracts the run-level `promptBundleVersion` hash (B0-393) stamped onto every item's
+ * `response_payload` for a given run (it is a build-time constant, identical across every item in
+ * the same run). Returns null for pre-capture items.
+ */
+export function extractPromptBundleVersion(responsePayload: unknown): string | null {
+  if (
+    !responsePayload ||
+    typeof responsePayload !== 'object' ||
+    Array.isArray(responsePayload)
+  ) {
+    return null;
+  }
+
+  const candidate = (responsePayload as Record<string, unknown>).promptBundleVersion;
+  return typeof candidate === 'string' && candidate.trim() ? candidate.trim() : null;
+}
+
+export type PromptBundleVersionSummary =
+  | { kind: 'none' }
+  | { kind: 'single'; value: string }
+  | { kind: 'multiple'; count: number };
+
+/**
+ * B0-398 — summarizes the `promptBundleVersion` values across a run's items into a single
+ * displayable shape. Since the field is a build-time constant, a normal run has exactly one
+ * distinct non-null value; more than one (e.g. a deploy mid-run) must render as a count rather
+ * than silently picking one value to show as if it applied to the whole run.
+ */
+export function summarizePromptBundleVersions(
+  responsePayloads: readonly unknown[],
+): PromptBundleVersionSummary {
+  const values = new Set(
+    responsePayloads
+      .map((payload) => extractPromptBundleVersion(payload))
+      .filter((value): value is string => value !== null),
+  );
+  if (values.size === 0) {
+    return { kind: 'none' };
+  }
+  if (values.size === 1) {
+    return { kind: 'single', value: [...values][0]! };
+  }
+  return { kind: 'multiple', count: values.size };
+}
+
 /** Extracts completed/total progress from a run summary object. */
 export function extractProgress(
   summary: unknown,
