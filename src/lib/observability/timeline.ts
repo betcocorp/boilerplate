@@ -795,6 +795,56 @@ export function buildRunTimeline(
 }
 
 /**
+ * B0-399 — degraded/empty-state flags for the run trace page, derived once from the same inputs
+ * as `buildRunTimeline`. Kept as a companion function rather than folded into `buildRunTimeline`'s
+ * return value so every caller that already depends on `TimelineEvent[]` (this file's own test
+ * suite included) is unaffected.
+ */
+export type RunEmptyState = {
+  /**
+   * State #1 — "Not captured — this run predates prompt capture." True when zero
+   * `workflow_steps` rows exist for the run at all. Distinct from a `ToolCallTimelineEvent`'s
+   * `reconstructed` flag, which only means a run's tool-call *previews* are missing — that run
+   * still has real steps. `buildRunTimeline` always emits at least a synthesized
+   * `workflow_started` lifecycle event, so `timeline.length === 0` is never a usable check here;
+   * this looks at the underlying `workflow_steps` rows instead.
+   */
+  predatesCapture: boolean;
+  /**
+   * State #3 — "Run failed before completing. Partial timeline below." Mirrors
+   * `run.status === 'failed'`; exposed here so the page/component don't need to reach back into
+   * the run row just to decide whether to show the banner. The partial-timeline data itself
+   * (not-reached steps, the `workflow_failed` marker) is already produced by `buildRunTimeline` —
+   * this flag only gates the explanatory banner text.
+   */
+  runFailed: boolean;
+  /**
+   * State #4 — "No model call — answer produced by the decline gate." True when the timeline
+   * carries an `early_decline_gate` confidence-gate event and no `openai_responses_agent` step
+   * ran, i.e. the decline gate produced the final answer without any model call.
+   */
+  declinedWithoutModelCall: boolean;
+};
+
+/** Everything the run trace page needs to pick which of the four B0-399 empty-state banners (if any) to render. */
+export function deriveRunEmptyState(
+  run: WorkflowRunRow,
+  steps: WorkflowStepRow[],
+  timeline: TimelineEvent[],
+): RunEmptyState {
+  const hasAgentStep = steps.some((step) => step.step_name === TOOL_LOOP_STEP_NAME);
+  const hasEarlyDeclineGateEvent = timeline.some(
+    (event) => event.kind === 'confidence_gate' && event.gate === 'early_decline_gate',
+  );
+
+  return {
+    predatesCapture: steps.length === 0,
+    runFailed: run.status === 'failed',
+    declinedWithoutModelCall: hasEarlyDeclineGateEvent && !hasAgentStep,
+  };
+}
+
+/**
  * B0-367 — the usage/safety-coverage cap as logged by the workflow. Payload:
  * `{ missingEvidence, confidenceBefore, confidenceAfter, cap, issues,
  * requires_human_review }`. Not `inferred`: this is a real row.

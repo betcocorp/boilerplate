@@ -1,5 +1,4 @@
 import Link from 'next/link';
-import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
 
 import { HarnessVerdictBand } from '~/components/admin/observability/HarnessVerdictBand';
@@ -93,10 +92,13 @@ export default async function AdminRunTracePage({ params }: PageProps) {
         : 'Unable to load this workflow run trace. If this persists, apply the latest Supabase migration.';
   }
 
-  // `notFound()` throws, so it must stay outside the try/catch above.
-  if (!loadError && !trace) {
-    notFound();
-  }
+  /**
+   * B0-399 — state #2 ("The workflow record for this item has been deleted."). Previously this
+   * called the framework's bare `notFound()`, which renders the generic not-found page instead of
+   * a message explaining *why* — a run id can 404 here because the row was deleted (e.g. via
+   * "Delete run" on the test page), not because the URL is malformed.
+   */
+  const runRecordDeleted = !loadError && !trace;
 
   const run = trace?.run ?? null;
   const routingDecision = readStringField(run?.final_output, 'routingDecision');
@@ -257,6 +259,14 @@ export default async function AdminRunTracePage({ params }: PageProps) {
             </section>
           ) : null}
 
+          {/* B0-399 — state #2: the run id resolved to no row (deleted), as opposed to a load
+              error or a malformed id. */}
+          {runRecordDeleted ? (
+            <section className="rounded-3xl border border-slate-200 bg-white p-6 text-sm text-slate-600">
+              The workflow record for this item has been deleted.
+            </section>
+          ) : null}
+
           {/* Answer — read the thing being evaluated before anything else.
               On a harness run the verdict band above already shows the answer, beside the
               ideal response it is being judged against, so this panel would render the same
@@ -277,7 +287,7 @@ export default async function AdminRunTracePage({ params }: PageProps) {
                   {trace.timeline.length}
                 </span>
               </div>
-              <RunTraceTimeline events={trace.timeline} />
+              <RunTraceTimeline emptyState={trace.emptyState} events={trace.timeline} />
             </section>
           ) : null}
 

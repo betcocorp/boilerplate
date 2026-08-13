@@ -28,6 +28,8 @@ import {
   extractSearchRunMatches,
   extractSearchRunMaxSimilarity,
   extractSearchRunPassReason,
+  extractSearchRunQuery,
+  extractSearchRunQueryRewritten,
   extractSearchRunTotalMs,
 } from '~/lib/tests/response-payload';
 
@@ -309,15 +311,10 @@ export default async function AdminSearchRunDetailsPage({
                     const maxSim = extractSearchRunMaxSimilarity(row.response_payload);
                     const embeddingSource = extractSearchRunEmbeddingSource(row.response_payload);
                     const totalMs = extractSearchRunTotalMs(row.response_payload);
-                    const payload = row.response_payload as Record<string, unknown> | null;
-                    const queryUsed =
-                      payload && typeof payload.query === 'string'
-                        ? payload.query
-                        : null;
-                    const queryRewritten =
-                      payload && typeof payload.queryRewritten === 'string'
-                        ? payload.queryRewritten
-                        : null;
+                    const queryUsed = extractSearchRunQuery(row.response_payload);
+                    const queryRewritten = extractSearchRunQueryRewritten(
+                      row.response_payload,
+                    );
                     const displayQuery = queryRewritten ?? queryUsed;
                     const isRewritten = Boolean(queryRewritten);
 

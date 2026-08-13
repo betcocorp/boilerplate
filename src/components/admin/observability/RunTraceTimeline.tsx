@@ -36,7 +36,57 @@ import {
 import { cn } from '~/lib/utils';
 import { formatDurationMs, formatEasternTime } from '~/lib/utils/time';
 
+import type { RunEmptyState } from '~/lib/observability/timeline';
 import type { TimelineEvent, TimelineEventStatus } from '~/types/observability';
+
+/**
+ * B0-399 — the four empty/degraded-state banners. Order matters only for display: multiple can
+ * legitimately be true at once in principle (though in practice `predatesCapture` and
+ * `declinedWithoutModelCall` are mutually exclusive, since the decline gate is itself a
+ * `workflow_steps` row).
+ */
+function EmptyStateBanners({ emptyState }: { emptyState: RunEmptyState | undefined }) {
+  if (!emptyState) {
+    return null;
+  }
+
+  const banners: { key: string; text: string }[] = [];
+  if (emptyState.predatesCapture) {
+    banners.push({
+      key: 'predates-capture',
+      text: 'Not captured — this run predates prompt capture.',
+    });
+  }
+  if (emptyState.runFailed) {
+    banners.push({
+      key: 'run-failed',
+      text: 'Run failed before completing. Partial timeline below.',
+    });
+  }
+  if (emptyState.declinedWithoutModelCall) {
+    banners.push({
+      key: 'decline-gate-only',
+      text: 'No model call — answer produced by the decline gate.',
+    });
+  }
+
+  if (banners.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="space-y-2">
+      {banners.map((banner) => (
+        <p
+          className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-2.5 text-sm font-medium text-amber-900"
+          key={banner.key}
+        >
+          {banner.text}
+        </p>
+      ))}
+    </div>
+  );
+}
 
 const NODE_STYLES: Record<TimelineEventStatus, string> = {
   ok: 'border-emerald-500/50 bg-emerald-500/10 text-emerald-700',
@@ -397,14 +447,24 @@ function TimelineEventRow({
   );
 }
 
-export function RunTraceTimeline({ events }: { events: TimelineEvent[] }) {
+export function RunTraceTimeline({
+  events,
+  emptyState,
+}: {
+  events: TimelineEvent[];
+  /** B0-399 — undefined when the caller has no `emptyState` to offer (e.g. a stale caller/test). */
+  emptyState?: RunEmptyState;
+}) {
   const [openIds, setOpenIds] = useState<ReadonlySet<string>>(() => new Set<string>());
 
   if (events.length === 0) {
     return (
-      <p className="text-sm text-slate-500">
-        No timeline events were recorded for this run.
-      </p>
+      <div className="space-y-3">
+        <EmptyStateBanners emptyState={emptyState} />
+        <p className="text-sm text-slate-500">
+          No timeline events were recorded for this run.
+        </p>
+      </div>
     );
   }
 
@@ -422,6 +482,7 @@ export function RunTraceTimeline({ events }: { events: TimelineEvent[] }) {
 
   return (
     <div className="space-y-4">
+      <EmptyStateBanners emptyState={emptyState} />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-slate-600">
           {events.length} event{events.length === 1 ? '' : 's'} — collapsed by

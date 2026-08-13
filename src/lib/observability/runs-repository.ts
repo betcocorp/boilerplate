@@ -15,7 +15,11 @@ import {
   type WorkflowRunRow,
   type WorkflowStepRow,
 } from '~/lib/conversations/workflow-repository';
-import { buildRunTimeline } from '~/lib/observability/timeline';
+import {
+  buildRunTimeline,
+  deriveRunEmptyState,
+  type RunEmptyState,
+} from '~/lib/observability/timeline';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 import type {
@@ -340,6 +344,8 @@ export async function getWorkflowRunTrace(runId: string): Promise<{
   steps: WorkflowStepRow[];
   auditLogs: AuditLogRow[];
   timeline: TimelineEvent[];
+  /** B0-399 — which (if any) of the four empty/degraded-state banners the page should render. */
+  emptyState: RunEmptyState;
 } | null> {
   const bundle = await getWorkflowRunWithSteps(runId);
   if (!bundle) {
@@ -347,11 +353,13 @@ export async function getWorkflowRunTrace(runId: string): Promise<{
   }
 
   const auditLogs = (await listAuditLogsForRun(runId)) as AuditLogRow[];
+  const timeline = buildRunTimeline(bundle.run, bundle.steps, auditLogs);
 
   return {
     run: bundle.run,
     steps: bundle.steps,
     auditLogs,
-    timeline: buildRunTimeline(bundle.run, bundle.steps, auditLogs),
+    timeline,
+    emptyState: deriveRunEmptyState(bundle.run, bundle.steps, timeline),
   };
 }

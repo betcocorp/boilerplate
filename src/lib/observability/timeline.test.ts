@@ -8,6 +8,7 @@ import type {
 import {
   USAGE_SAFETY_COVERAGE_CONFIDENCE_CAP,
   buildRunTimeline,
+  deriveRunEmptyState,
 } from '~/lib/observability/timeline';
 import type {
   AuditLogRow,
@@ -903,6 +904,112 @@ describe('buildRunTimeline — tool calls reconstructed from audit_logs (B0-417)
       reconstructed: true,
       errorMessage: 'no efficacy rows for EPA reg 1839-86',
       auditArgumentsPreview: '{"productName":"pH7Q Dual"}',
+    });
+  });
+});
+
+/* -------------------------------------------------------------------------- *
+ * B0-399 — deriveRunEmptyState (four empty/degraded-state banners)
+ * -------------------------------------------------------------------------- */
+
+describe('deriveRunEmptyState', () => {
+  it('flags predatesCapture for a run with zero workflow_steps rows, even though the timeline is never actually empty', () => {
+    const run = makeRun({ status: 'completed', updated_at: at(5) });
+    const logs: AuditLogRow[] = [
+      makeLog({ id: 'log-completed', event_type: 'workflow_completed', created_at: at(5) }),
+    ];
+    const timeline = buildRunTimeline(run, [], logs);
+
+    // buildRunTimeline always synthesizes at least a workflow_started marker, so the
+    // "predates capture" check cannot be `timeline.length === 0` — it must look at `steps`.
+    expect(timeline.length).toBeGreaterThan(0);
+
+    const emptyState = deriveRunEmptyState(run, [], timeline);
+    expect(emptyState).toEqual({
+      predatesCapture: true,
+      runFailed: false,
+      declinedWithoutModelCall: false,
+    });
+  });
+
+  it('flags runFailed for a failed run, alongside its already-correct partial timeline', () => {
+    const run = makeRun({
+      status: 'failed',
+      confidence: null,
+      updated_at: at(55),
+      final_output: { error: 'OpenAI request timed out' },
+    });
+    const stepRows: WorkflowStepRow[] = [
+      plannerStep,
+      makeStep({
+        id: 'step-agent',
+        step_name: 'openai_responses_agent',
+        status: 'failed',
+        started_at: at(20),
+        completed_at: at(50),
+        error: { message: 'OpenAI request timed out' },
+      }),
+    ];
+    const logs: AuditLogRow[] = [
+      makeLog({ id: 'log-failed', event_type: 'workflow_failed', created_at: at(55), payload: { message: 'OpenAI request timed out' } }),
+    ];
+    const timeline = buildRunTimeline(run, stepRows, logs);
+
+    const emptyState = deriveRunEmptyState(run, stepRows, timeline);
+    expect(emptyState).toEqual({
+      predatesCapture: false,
+      runFailed: true,
+      declinedWithoutModelCall: false,
+    });
+    // The partial-timeline data (not-reached steps) is untouched by this flag.
+    expect(steps(timeline).some((event) => event.status === 'not_reached')).toBe(true);
+  });
+
+  it('flags declinedWithoutModelCall when the early-decline gate fired and no agent step ran', () => {
+    const run = makeRun({
+      confidence: 0.92,
+      updated_at: at(30),
+      final_output: { routingDecision: 'ambiguous', confidence: 0.92 },
+      user_input: { message: 'Can I mix bleach and ammonia?', modelTag: 'preview' },
+    });
+    const stepRows: WorkflowStepRow[] = [
+      plannerStep,
+      makeStep({
+        id: 'step-decline',
+        step_name: 'early_decline_gate',
+        started_at: at(15),
+        completed_at: at(15),
+        input: { reason: 'chemical_mixing_or_safety', message: 'Can I mix bleach and ammonia?' },
+        output: { applied: true, reason: 'chemical_mixing_or_safety' },
+      }),
+    ];
+    const logs: AuditLogRow[] = [
+      makeLog({
+        id: 'log-decline',
+        event_type: 'step_completed',
+        created_at: at(15),
+        payload: { step: 'early_decline_gate', step_id: 'step-decline', reason: 'chemical_mixing_or_safety' },
+      }),
+      makeLog({ id: 'log-completed', event_type: 'workflow_completed', created_at: at(30) }),
+    ];
+    const timeline = buildRunTimeline(run, stepRows, logs);
+
+    const emptyState = deriveRunEmptyState(run, stepRows, timeline);
+    expect(emptyState).toEqual({
+      predatesCapture: false,
+      runFailed: false,
+      declinedWithoutModelCall: true,
+    });
+  });
+
+  it('does not flag declinedWithoutModelCall for a normal run that did make a model call', () => {
+    const { run, stepRows, logs } = normalRunFixture();
+    const timeline = buildRunTimeline(run, stepRows, logs);
+
+    expect(deriveRunEmptyState(run, stepRows, timeline)).toEqual({
+      predatesCapture: false,
+      runFailed: false,
+      declinedWithoutModelCall: false,
     });
   });
 });

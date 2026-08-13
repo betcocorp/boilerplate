@@ -381,6 +381,30 @@ export function summarizePromptBundleVersions(
   return { kind: 'multiple', count: values.size };
 }
 
+/**
+ * B0-399 — extracts the search-eval `query` string (the query sent to vector search before any
+ * rewrite) from a search-run `response_payload`.
+ */
+export function extractSearchRunQuery(responsePayload: unknown): string | null {
+  if (!responsePayload || typeof responsePayload !== 'object' || Array.isArray(responsePayload)) {
+    return null;
+  }
+  const value = (responsePayload as Record<string, unknown>).query;
+  return typeof value === 'string' ? value : null;
+}
+
+/**
+ * B0-399 — extracts the search-eval `queryRewritten` string, when the executor rewrote the query
+ * before search. Null when no rewrite happened or the field is absent.
+ */
+export function extractSearchRunQueryRewritten(responsePayload: unknown): string | null {
+  if (!responsePayload || typeof responsePayload !== 'object' || Array.isArray(responsePayload)) {
+    return null;
+  }
+  const value = (responsePayload as Record<string, unknown>).queryRewritten;
+  return typeof value === 'string' ? value : null;
+}
+
 /** Extracts completed/total progress from a run summary object. */
 export function extractProgress(
   summary: unknown,
