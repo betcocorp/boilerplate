@@ -890,6 +890,7 @@ export type Database = {
       test_result_items: {
         Row: {
           answer_provenance: string | null
+          app_version: string | null
           created_at: string
           elapsed_ms: number
           error_message: string | null
@@ -907,6 +908,7 @@ export type Database = {
         }
         Insert: {
           answer_provenance?: string | null
+          app_version?: string | null
           created_at?: string
           elapsed_ms: number
           error_message?: string | null
@@ -924,6 +926,7 @@ export type Database = {
         }
         Update: {
           answer_provenance?: string | null
+          app_version?: string | null
           created_at?: string
           elapsed_ms?: number
           error_message?: string | null
@@ -965,6 +968,7 @@ export type Database = {
       }
       test_results: {
         Row: {
+          app_version: string | null
           avg_confidence: number | null
           avg_similarity: number | null
           completed_at: string | null
@@ -989,6 +993,7 @@ export type Database = {
           total_items: number
         }
         Insert: {
+          app_version?: string | null
           avg_confidence?: number | null
           avg_similarity?: number | null
           completed_at?: string | null
@@ -1013,6 +1018,7 @@ export type Database = {
           total_items?: number
         }
         Update: {
+          app_version?: string | null
           avg_confidence?: number | null
           avg_similarity?: number | null
           completed_at?: string | null

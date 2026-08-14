@@ -1,3 +1,4 @@
+import { APP_VERSION } from '~/lib/app-version';
 import { searchProductChunks, type RagSearchMatch } from '~/lib/rag/search';
 
 import {
@@ -193,6 +194,7 @@ export async function executeSearchRun(testResultId: string) {
         error_message: null,
         response_text: null,
         response_payload: JSON.parse(JSON.stringify(responsePayload)),
+        app_version: APP_VERSION,
       },
     ]);
 

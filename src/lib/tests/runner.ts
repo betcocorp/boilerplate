@@ -1,5 +1,6 @@
 import { runBexChatTurn } from '~/lib/bex/run-chat-turn';
 import { RECOMMENDATIONS_DECLINE_COPY } from '~/lib/agents/recommendations-specialist/recommendations-specialist-system-prompt';
+import { APP_VERSION } from '~/lib/app-version';
 import { XREF_DECLINE_COPY } from '~/lib/recommendations/confidence-scoring';
 
 import type { NewTestResultItemRecord, TestItemRecord } from './types';
@@ -368,6 +369,7 @@ export async function runSingleTestItem(
         // B0-416 — real FK alongside the payload copy, so the trace stays reachable from the
         // graded item (and vice versa) without parsing JSON.
         workflow_run_id: result.workflowRunId,
+        app_version: APP_VERSION,
       },
     };
   } catch (error) {
@@ -387,6 +389,7 @@ export async function runSingleTestItem(
         error_message: message,
         response_text: null,
         response_payload: null,
+        app_version: APP_VERSION,
       },
     };
   }
