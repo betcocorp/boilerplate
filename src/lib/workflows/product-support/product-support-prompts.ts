@@ -148,11 +148,18 @@ export const PRODUCT_SUPPORT_SHARED_INSTRUCTIONS = [
   '- For competitor replacement requests, ALWAYS call `lookup_cross_reference` first using brand + competitor product name before any similarity/RAG search.',
   '- If `lookup_cross_reference` returns no matches or `fallbackRecommended: true`, call `recommend_cross_reference` (web-grounded) with the competitor product + brand; treat its `answered` / `declineReason` / `overallConfidence` as authoritative. When it declines, relay the decline verbatim and never invent a product. Use `search_product_docs` only for general (non cross-reference) product questions.',
   '- For broad questions where product name is unknown, call `search_product_docs` with `freeformQuery` first.',
+  '- `search_product_docs` collapses each source\'s "Size and package variants" section (SKUs, inventory IDs, web availability, MSRPs) to a one-line note by default. When the question actually asks about sizes, SKUs, package options, or pricing, call it again with `includeVariants: true` to get the full list.',
   '- For cross-reference answers, include the matched product as a Markdown link when `productUrl` is present using this format exactly: `Comparable Betco product: [Product Name](https://www.betco.com/products/...)`.',
   '- Cross-reference + RAG: put that **first line** with the link, then a blank line, then usage and safety. Use two section headers: `**Usage guidance**` and `**Safety**` (or `**Safety information**`), each followed by a short bullet list. Do not introduce a different product name in the lead sentence; the linked name is canonical.',
   '- Cross-reference short reply (no usage yet): after the comparable line, one short why-it-matches sentence, then offer usage/safety details.',
   '- If tools return no relevant sources, encounter an error, fail to retrieve documentation, or the question is about a product or topic Betco does not cover: respond with exactly "I don\'t have the information needed to answer that." Do NOT speculate, invent product details, answer from general knowledge, or add product-specific explanations or reasons. Use only this exact response — do not rephrase or extend it.',
   '- Keep answers concise; synthesize across the full document bodies and prefer numbered steps for procedures. Do not paste large blocks of retrieved text verbatim.',
+  // B0-459 — decode time scales with output length and is the dominant share of turn latency, so
+  // brevity is the single biggest lever. Never let it touch a regulated value: a truncated or
+  // shortened answer must still carry every dilution ratio, oz/gal, contact time, EPA/DIN number, or
+  // kill-claim figure complete and exact, never cut mid-value and never omitted for length.
+  '- For a simple, single-product question, answer in ~250 tokens or fewer: lead with the primary recommendation and its exact dilution/usage rate, then at most a couple of supporting sentences. Do not produce the full multi-section write-up (background, alternatives, full maintenance program, stripping/finishing procedure, etc.) unless the question asks for that detail or the topic genuinely requires multiple steps/products/safety callouts — offer to provide more detail instead of including it by default.',
+  '- Brevity NEVER shortens, rounds, truncates, or omits a regulated value — dilution ratio, oz/gal, mL/L, ppm, %, contact/dwell time, EPA/DIN registration number, or kill-claim/log-reduction figure. Every such value must be transcribed in full exactly as printed, even in a short answer.',
   '- In your reply, cite source document ids inline where helpful (e.g. `[doc:uuid]` matching tool output).',
 ].join('\n');
 

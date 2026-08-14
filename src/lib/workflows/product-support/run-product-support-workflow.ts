@@ -246,6 +246,28 @@ function isEarlyDeclineGateEnabled() {
   return process.env.BEX_EARLY_DECLINE_GATE_ENABLED !== 'false';
 }
 
+/**
+ * B0-459 — hard backstop on assistant output length, independent of the prompt's own brevity
+ * directive (see `PRODUCT_SUPPORT_SHARED_INSTRUCTIONS`). Decode time scales linearly with output
+ * tokens and was measured at ~85% of total turn time at the pre-existing ~551-token average answer.
+ *
+ * Deliberately generous — this is NOT the ~250-token target the prompt asks for on a simple
+ * question, it is a ceiling that only a runaway generation should ever hit, so a legitimate
+ * multi-section answer (full maintenance program, stripping/finishing procedure) is never cut off
+ * mid-sentence or, worse, mid regulated-value. Configurable via `BEX_MAX_OUTPUT_TOKENS` without a
+ * redeploy; falls back to the default on anything that is not a positive finite number.
+ */
+export const DEFAULT_MAX_OUTPUT_TOKENS = 1200;
+
+export function resolveMaxOutputTokens(): number {
+  const raw = process.env.BEX_MAX_OUTPUT_TOKENS;
+  if (!raw) {
+    return DEFAULT_MAX_OUTPUT_TOKENS;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : DEFAULT_MAX_OUTPUT_TOKENS;
+}
+
 /** Closed set of early-decline reasons, in the order `classifyEarlyDecline` tests them. */
 export const EARLY_DECLINE_REASONS = [
   'chemical_mixing_or_safety',
@@ -1574,6 +1596,32 @@ export async function runProductSupportWorkflow(input: {
 
     const forcedCrossReference = shouldForceCrossReferenceLookup(input.userMessage);
 
+    /**
+     * B0-461 — the forced-cross-reference path still pins `tool_choice` to the named
+     * `lookup_cross_reference` function (a full single-call collapse was judged too risky here: the
+     * pinned-tool attribution, the safety-net override, and the persisted-trace ordering asserted by
+     * `workflow-instrumentation.test.ts` all assume the model's own call is what resolves a match).
+     * Ticket's fallback instead applies to the piece of this path that is actually slow and
+     * sequential today: the curated-override safety net further down only starts its lookup AFTER
+     * the full two-round model loop completes and comes up empty. Kicking it off here, concurrently
+     * with that loop, overlaps its DB round trip with the model's forced tool-call round instead of
+     * stacking after it — exactly the case the ticket's BNC-15 -> Triforce example exercises. Uses
+     * the same lenient full-message args as the safety net below (`{ brand: message, productName:
+     * message }`); `.catch` only suppresses an unhandled-rejection warning when the model's own call
+     * already resolves a match and this prefetch is never awaited — the real await below still sees
+     * a genuine rejection.
+     */
+    const safetyNetLookupPrefetch = forcedCrossReference
+      ? (() => {
+          const promise = lookupCrossReference({
+            brand: input.userMessage,
+            productName: input.userMessage,
+          });
+          promise.catch(() => undefined);
+          return promise;
+        })()
+      : null;
+
     // B0-439 — the rows recorded so far go out DURING the retrieval below, not before it.
     audit.flushDetached();
 
@@ -1625,6 +1673,9 @@ export async function runProductSupportWorkflow(input: {
     // between here and the first token waits on `audit_logs` any more.
     audit.flushDetached();
 
+    // B0-459 — same ceiling on both runtimes; see `resolveMaxOutputTokens`.
+    const maxOutputTokens = resolveMaxOutputTokens();
+
     // Generation runtime: AI SDK (`streamText`) when BEX_AI_SDK_GENERATION_ENABLED, else the
     // OpenAI Responses tool loop. Both return the same { assistantText, finalResponseId,
     // toolTrace, responseIds } shape consumed below.
@@ -1638,6 +1689,7 @@ export async function runProductSupportWorkflow(input: {
           toolChoice,
           promptCacheKey,
           preloadedEvidence,
+          maxOutputTokens,
           onAssistantDelta: input.onAssistantDelta,
           observeAssistantDelta,
           executeTool: executeToolForGeneration,
@@ -1652,6 +1704,7 @@ export async function runProductSupportWorkflow(input: {
           toolChoice,
           promptCacheKey,
           preloadedEvidence,
+          maxOutputTokens,
           onAssistantDelta: input.onAssistantDelta,
           observeAssistantDelta,
           executeTool: executeToolForGeneration,
@@ -1728,7 +1781,12 @@ export async function runProductSupportWorkflow(input: {
         productName: input.userMessage,
       };
       const safetyNetStartedAtMs = Date.now();
-      const forced = await lookupCrossReference(safetyNetArgs);
+      // B0-461 — reuse the concurrently-kicked-off lookup when this run forced cross-reference
+      // tool_choice from the start; identical args to a fresh call, just started earlier so its DB
+      // round trip overlapped the model's forced tool-call round instead of stacking after it.
+      const forced = safetyNetLookupPrefetch
+        ? await safetyNetLookupPrefetch
+        : await lookupCrossReference(safetyNetArgs);
       /**
        * B0-390 — this lookup bypasses `executeToolCall` entirely, so until now it produced no trace
        * entry at all: the run showed a cross-reference match that no recorded tool call could

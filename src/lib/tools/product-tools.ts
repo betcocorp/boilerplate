@@ -192,6 +192,11 @@ export async function executeProductTool(
         ok: true,
         adapter: ADAPTER_TAG,
         query: q,
+        // B0-460 — read back by `buildModelToolPayload` (`~/lib/tools/model-tool-payload`) to decide
+        // whether a `product_line_profile` source's "Size and package variants" section stays
+        // collapsed for the model. Carried on the payload (not threaded through `executeToolCall`)
+        // so the flag travels with the exact call that produced it.
+        includeVariants: p.includeVariants,
         entityContextBlock: result.entityContextBlock,
         sources: sourcePayload(result),
         retrieval: result.retrieval,

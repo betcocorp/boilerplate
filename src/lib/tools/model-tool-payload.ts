@@ -39,6 +39,44 @@ export const MODEL_DOCUMENT_BODY_MAX_CHARS = 8_000;
 export const MODEL_BODY_OMISSION_MARKER = '…(omitted)';
 
 /**
+ * B0-460 — the `product_line_profile` heading (see
+ * `rag.legacy_product_line_profile_source` / `chunk_document_text`) whose content the answer never
+ * cites: every size/package variant for the line — product key, SKU, inventory ID, web availability,
+ * MSRP. Collapsed to `PLP_VARIANTS_SECTION_NOTE` for the model by default; the full list is still what
+ * `toolOutputLog` persists (untouched — see `condensePlpVariantsSectionForModel`'s doc), and is still
+ * reachable by the model itself via `search_product_docs`'s `includeVariants: true`.
+ *
+ * CRITICAL: this heading is disjoint from the regulated data this module protects elsewhere
+ * (`REGULATED_SECTION_HEADING_PATTERN`, the separate `VERIFIED_FACTS_SOURCE_ID` source) — dilution,
+ * contact time, EPA registration, and kill-claim values never live under this heading and are never
+ * touched by this transform.
+ */
+export const PLP_VARIANTS_SECTION_HEADING = 'Size and package variants';
+
+const PLP_VARIANTS_SECTION_NOTE =
+  '## Size and package variants\nAdditional package sizes/SKUs exist for this product line. ' +
+  'Re-run `search_product_docs` with `includeVariants: true` for the exact SKU, inventory ID, web ' +
+  'availability, and MSRP for each size.';
+
+/**
+ * Collapses the body's "Size and package variants" section (heading through the next `## ` heading,
+ * or end of body) to a one-line note, model-facing copy only. A no-op when the heading is absent —
+ * i.e. every document that is not a `product_line_profile`, and any `product_line_profile` whose
+ * variant rollup was empty (`vr.variants_text` null, so the section was never emitted).
+ */
+export function condensePlpVariantsSectionForModel(body: string): string {
+  const heading = `## ${PLP_VARIANTS_SECTION_HEADING}`;
+  const start = body.indexOf(heading);
+  if (start === -1) {
+    return body;
+  }
+
+  const nextHeadingIndex = body.indexOf('\n## ', start + heading.length);
+  const end = nextHeadingIndex === -1 ? body.length : nextHeadingIndex;
+  return `${body.slice(0, start)}${PLP_VARIANTS_SECTION_NOTE}${body.slice(end)}`;
+}
+
+/**
  * Headings whose content a regulated claim may have to be transcribed from verbatim (EPA reg number,
  * dilution ratio, contact time, hazard statement, first-aid instruction). These are retained ahead of
  * ordinary prose when the 8k budget forces a choice.
@@ -164,10 +202,22 @@ function readString(source: FullSource, key: string): string {
  *   composition of the assembled body, which cannot be restated accurately once sections are dropped
  *   at character granularity — so they are carried ONLY when the model's body is byte-identical to it,
  *   and omitted otherwise rather than copied over as if still true.
+ *
+ * B0-460 — a `product_line_profile` source additionally has its "Size and package variants" section
+ * collapsed before the char-budget truncation above ever runs (unless `includeVariants` was
+ * requested), so `cappedForModel` (and therefore `documentBodyTruncated`) is true whenever EITHER
+ * transform changed the body, not only the char-budget one.
  */
-function buildModelSource(source: FullSource): Record<string, unknown> {
+function buildModelSource(
+  source: FullSource,
+  options: { includeVariants: boolean },
+): Record<string, unknown> {
   const fullBody = readString(source, 'documentBody');
-  const { body, truncated } = truncateDocumentBodyForModel(fullBody);
+  const preTruncation =
+    source.documentKind === 'product_line_profile' && !options.includeVariants
+      ? condensePlpVariantsSectionForModel(fullBody)
+      : fullBody;
+  const { body, truncated } = truncateDocumentBodyForModel(preTruncation);
   const cappedForModel = body !== fullBody;
 
   return {
@@ -176,7 +226,7 @@ function buildModelSource(source: FullSource): Record<string, unknown> {
     title: source.title,
     documentBody: body,
     documentBodyChars: body.length,
-    documentBodyTruncated: truncated || source.documentBodyTruncated === true,
+    documentBodyTruncated: cappedForModel || truncated || source.documentBodyTruncated === true,
     ...(cappedForModel ? { documentBodyFullChars: fullBody.length } : {}),
     ...(cappedForModel
       ? {}
@@ -210,11 +260,16 @@ export function buildModelToolPayload(
     return null;
   }
 
+  // B0-460 — `search_product_docs` stamps this on its own payload from the parsed tool call args
+  // (see `executeProductTool`'s `search_product_docs` case); every other tool's payload has no such
+  // field, so `includeVariants` defaults to false and the variants section stays collapsed for them.
+  const includeVariants = payload.includeVariants === true;
+
   return {
     ...payload,
     sources: sources.map((source) =>
       source && typeof source === 'object' && !Array.isArray(source)
-        ? buildModelSource(source as FullSource)
+        ? buildModelSource(source as FullSource, { includeVariants })
         : source,
     ),
   };

@@ -75,6 +75,14 @@ export type ResponsesRuntimeOptions = {
   temperature?: number;
   toolChoice?: ResponseCreateParamsNonStreaming['tool_choice'];
   /**
+   * B0-459 — hard backstop on assistant output length (`max_output_tokens`). Decode time scales
+   * linearly with output tokens and was measured at ~85% of total turn time, so this bounds a
+   * runaway generation independent of the prompt's own brevity instructions. Generous by design
+   * (not the ~250-token target for a simple question) so a legitimate multi-section answer is never
+   * cut off mid-value — see `resolveMaxOutputTokens` in `~/lib/workflows/product-support/run-product-support-workflow`.
+   */
+  maxOutputTokens?: number;
+  /**
    * B0-324 — `prompt_cache_key` routes every request sharing the same stable prefix
    * (instructions + tool schemas) to the same cache pool. Without it, identical prompts are
    * load-balanced across machines and OpenAI's automatic prompt caching mostly misses; with it,
@@ -202,6 +210,7 @@ export async function runResponsesWithToolLoop(
       input,
       ...(opts.promptCacheKey ? { prompt_cache_key: opts.promptCacheKey } : {}),
       ...(chainPrev ? { previous_response_id: chainPrev } : {}),
+      ...(opts.maxOutputTokens ? { max_output_tokens: opts.maxOutputTokens } : {}),
     };
 
     /**

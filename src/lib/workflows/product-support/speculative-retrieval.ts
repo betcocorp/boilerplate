@@ -165,7 +165,14 @@ export function canReuseSpeculativeSearch(input: {
 
   const args = parsed as Record<string, unknown>;
   // Any narrowing field the speculative call did not use makes this a different search.
-  if (trimmedString(args.surfaceType) || trimmedString(args.productName)) {
+  // B0-460 — `includeVariants: true` also makes this a different (fuller) search: the speculative
+  // call always ran with the default `includeVariants: false`, so its result has the "Size and
+  // package variants" section collapsed — not what a model call asking for it back should be served.
+  if (
+    trimmedString(args.surfaceType) ||
+    trimmedString(args.productName) ||
+    args.includeVariants === true
+  ) {
     return false;
   }
 

@@ -65,6 +65,8 @@ export type AiSdkRuntimeOptions = {
    */
   preloadedEvidence?: PreloadedEvidence;
   maxToolRounds?: number;
+  /** B0-459 — see `ResponsesRuntimeOptions.maxOutputTokens`; forwarded as `streamText`'s `maxOutputTokens`. */
+  maxOutputTokens?: number;
   /**
    * B0-370 — tuning for the bounded transport retry around each model request. Defaults are fine in
    * production; tests inject `sleep`/`random` to keep the suite fast and deterministic.
@@ -299,6 +301,9 @@ export async function runAiSdkWithToolLoop(opts: AiSdkRuntimeOptions): Promise<A
      * attempts) and uses unjittered exponential backoff from a 2s base.
      */
     maxRetries: 0,
+    // B0-459 — see `ResponsesRuntimeOptions.maxOutputTokens`; omitted (rather than `undefined`) so a
+    // caller that does not pass one gets the AI SDK/provider default, matching the Responses runtime.
+    ...(opts.maxOutputTokens ? { maxOutputTokens: opts.maxOutputTokens } : {}),
     // B0-324 — pin every step of the loop to the same prompt cache pool so the stable
     // system + tool-schema prefix is read from cache on the 2nd+ step.
     ...(opts.promptCacheKey

@@ -16,6 +16,14 @@ export const searchProductDocsInputSchema = z
     surfaceType: z.string().max(256).optional(),
     /** Use instead of productName for broad searches where the product is unknown. */
     freeformQuery: z.string().max(512).optional(),
+    /**
+     * B0-460 — by default the model-facing copy of a `product_line_profile` source has its
+     * "Size and package variants" section (every SKU/package variant: product keys, SKUs,
+     * inventory IDs, web availability, MSRPs) collapsed to a one-line note — none of that feeds an
+     * ordinary answer and it was bloating the final-call prompt. Set this when the question actually
+     * asks about sizes, SKUs, package options, or pricing to get the full variant list back.
+     */
+    includeVariants: z.boolean().optional().default(false),
   })
   .refine(
     (v) =>

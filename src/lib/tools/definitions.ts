@@ -28,7 +28,7 @@ export const productSupportTools: Tool[] = [
     name: 'search_product_docs',
     strict: false,
     description:
-      'Search Betco product documentation (RAG). Use for general product + topic questions. Returns up to 3 sources where each source is a full approved document (read `documentBody`, not just `snippet`). Provide `topic` or `freeformQuery` — pass `freeformQuery` alone (and leave `productName` empty) when the product name is unknown.',
+      'Search Betco product documentation (RAG). Use for general product + topic questions. Returns up to 3 sources where each source is a full approved document (read `documentBody`, not just `snippet`). Provide `topic` or `freeformQuery` — pass `freeformQuery` alone (and leave `productName` empty) when the product name is unknown. By default the "Size and package variants" section (SKUs, inventory IDs, web availability, MSRPs) is collapsed to a one-line note; set `includeVariants: true` when the question actually asks about sizes, SKUs, package options, or pricing.',
     parameters: {
       type: 'object',
       properties: {
@@ -48,6 +48,11 @@ export const productSupportTools: Tool[] = [
         freeformQuery: {
           type: 'string',
           description: 'Use instead of productName + topic for broad searches where the product is not yet known (e.g. "best product for removing mineral scale from toilet bowls").',
+        },
+        includeVariants: {
+          type: 'boolean',
+          description:
+            'Set true ONLY when the question asks about sizes, SKUs, package options, or pricing — returns the full "Size and package variants" section instead of the default one-line note.',
         },
       },
       // B0-362: `topic` is NOT required — the model is told to call this with `freeformQuery`
