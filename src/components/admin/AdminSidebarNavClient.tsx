@@ -126,18 +126,8 @@ const sidebarSections: NavSectionModel[] = [
         icon: Library,
         items: [
           {
-            label: 'RAG generate',
-            href: '/admin/products/rag/generate',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_PRODUCTS,
-          },
-          {
             label: 'RAG corpus quality',
             href: '/admin/products/rag/chunking',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_PRODUCTS,
-          },
-          {
-            label: 'Legacy products',
-            href: '/admin/products/legacy',
             permission: PERMISSIONS.NAVIGATION_SIDEBAR_PRODUCTS,
           },
           {
@@ -145,44 +135,40 @@ const sidebarSections: NavSectionModel[] = [
             href: '/admin/products/orphans',
             permission: PERMISSIONS.NAVIGATION_SIDEBAR_PRODUCTS,
           },
+          {
+            label: 'Legacy products',
+            href: '/admin/products/legacy',
+            permission: PERMISSIONS.NAVIGATION_SIDEBAR_PRODUCTS,
+          },
         ],
       },
       {
         type: 'group',
-        label: 'SDS',
+        label: 'Ingestion',
         icon: FileText,
         items: [
           {
-            label: 'SDS ingestion',
+            label: 'Product',
+            href: '/admin/products/rag/generate',
+            permission: PERMISSIONS.NAVIGATION_SIDEBAR_PRODUCTS,
+          },
+          {
+            label: 'SDS',
             href: '/admin/sds',
             permission: PERMISSIONS.NAVIGATION_SIDEBAR_SDS,
           },
-        ],
-      },
-      {
-        type: 'group',
-        label: 'Efficacy',
-        icon: FileText,
-        items: [
           {
-            label: 'Efficacy ingestion',
+            label: 'Efficacy',
             href: '/admin/efficacy',
             permission: PERMISSIONS.NAVIGATION_SIDEBAR_EFFICACY,
           },
-        ],
-      },
-      {
-        type: 'group',
-        label: 'Markdown',
-        icon: FileText,
-        items: [
           {
-            label: 'Markdown ingestion',
+            label: 'Knowledge',
             href: '/admin/knowledge',
             permission: PERMISSIONS.NAVIGATION_SIDEBAR_KNOWLEDGE,
           },
           {
-            label: 'Product label ingestion',
+            label: 'Product Label',
             href: '/admin/labels',
             permission: PERMISSIONS.NAVIGATION_SIDEBAR_LABELS,
           },

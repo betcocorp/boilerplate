@@ -29,7 +29,11 @@ import {
 } from '~/lib/permissions/redis';
 import { getPermissionsForUser } from '~/lib/permissions/repository';
 
-function matchesPermission(required: string, have: string[]): boolean {
+function matchesPermission(
+  required: string | null | undefined,
+  have: string[],
+): boolean {
+  if (!required || typeof required !== 'string') return false;
   if (have.includes(required)) return true;
   const parts = required.split('.');
   for (let i = parts.length - 1; i > 0; i--) {

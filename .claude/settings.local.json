@@ -193,7 +193,13 @@
       "Bash(gh run *)",
       "Bash(echo \"diffcode:$?\")",
       "Bash(ln -s \"/Users/thomasbird/projects/client/betco/apps/bex-combined/bex2.0/node_modules\" node_modules)",
-      "Bash(git hash-object *)"
+      "Bash(git hash-object *)",
+      "Bash(grep -n \"toBe\\(\\\\\"[0-9a-f]\\\\{10,\\\\}\\\\|toEqual\\(\\\\\"[0-9a-f]\\\\{10,\\\\}\\\\|expect\\(PROMPT_BUNDLE_VERSION\" /Users/thomasbird/projects/client/betco/apps/bex-combined/bex2.0/src/lib/workflows/product-support/prompt-version.test.ts)",
+      "Bash(xargs -n1 basename)",
+      "Bash(pnpm exec *)",
+      "Bash(wc -l /tmp_tsc_out.txt)",
+      "Bash(grep -E \"^/Users.*\\\\.tsx?$\")",
+      "Bash(grep -E \"^/Users.*\\\\.\\(ts|tsx\\)$\")"
     ]
   }
 }
