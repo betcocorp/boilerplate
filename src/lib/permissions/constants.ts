@@ -14,7 +14,6 @@ export const PERMISSIONS = {
   SIDEBAR_NAVIGATION_PRODUCTS_GENERATE: 'sidebar.navigation.products.generate',
   SIDEBAR_NAVIGATION_PRODUCTS_LEGACY: 'sidebar.navigation.products.legacy',
 
-  DASHBOARD_PERMISSIONS_CARD: 'dashboard.permissions.card',
   ADMIN_CARD_PERMISSIONS: 'admin.card.permissions',
 
   BEX_CHAT_USE: 'bex.chat.use',
@@ -30,12 +29,6 @@ export const PERMISSIONS = {
   NAVIGATION_SIDEBAR_OBSERVABILITY: 'navigation.sidebar.observability',
   NAVIGATION_SIDEBAR_TOOLS: 'navigation.sidebar.tools',
   NAVIGATION_SIDEBAR_PROJECTS: 'navigation.sidebar.projects',
-
-  /**
-   * Backward-compatible aliases for older constant names still used in parts of the app.
-   */
-  SIDEBAR_NAVIGATION_API_PERMISSIONS: 'navigation.sidebar.projects',
-  SIDEBAR_NAVIGATION_INGESTION: 'navigation.sidebar.sds',
 } as const;
 
 export type PermissionId =
