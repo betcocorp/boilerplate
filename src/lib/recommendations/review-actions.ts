@@ -7,6 +7,7 @@ import { authOptions } from '~/lib/auth';
 import { writeAuditLog } from '~/lib/audit/audit-log';
 import { newCorrelationId } from '~/lib/observability/correlation-id';
 import { promoteRecommendationToOverride } from '~/lib/recommendations/promote-recommendation';
+import { searchBetcoProducts, type BetcoProductOption } from '~/lib/recommendations/product-picker';
 import {
   createRecommendationCandidate,
   getRecommendation,
@@ -146,6 +147,15 @@ export async function addRecommendationCandidate(
 
   revalidatePath(REVIEW_QUEUE_PATH);
   return candidate;
+}
+
+/**
+ * B0-441 — server-backed typeahead for the "Add a candidate" / "Edit chosen candidate" product
+ * picker. No audit entry here (a search isn't a state change); the resulting selection is audited
+ * when it's actually saved via `addRecommendationCandidate` / `editRecommendationCandidate`.
+ */
+export async function searchBetcoProductOptions(query: string): Promise<BetcoProductOption[]> {
+  return searchBetcoProducts(query);
 }
 
 export async function editRecommendationCandidate(

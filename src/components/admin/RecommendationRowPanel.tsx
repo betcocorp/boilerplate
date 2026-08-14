@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 import { toast } from 'sonner';
 
+import { BetcoProductPicker } from '~/components/admin/BetcoProductPicker';
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
 import {
@@ -22,7 +23,6 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '~/components/ui/dialog';
-import { Input } from '~/components/ui/input';
 import { Label } from '~/components/ui/label';
 import { Textarea } from '~/components/ui/textarea';
 import {
@@ -116,24 +116,14 @@ function CandidateCard({
         <div className="min-w-0 flex-1">
           {editing ? (
             <div className="space-y-2">
-              <div className="grid gap-2 sm:grid-cols-2">
-                <div className="space-y-1">
-                  <Label htmlFor={`title-${candidate.id}`}>Betco title</Label>
-                  <Input
-                    id={`title-${candidate.id}`}
-                    onChange={(e) => setBetcoTitle(e.target.value)}
-                    value={betcoTitle}
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label htmlFor={`key-${candidate.id}`}>Betco product key</Label>
-                  <Input
-                    id={`key-${candidate.id}`}
-                    onChange={(e) => setBetcoProductKey(e.target.value)}
-                    value={betcoProductKey}
-                  />
-                </div>
-              </div>
+              <BetcoProductPicker
+                idPrefix={`candidate-${candidate.id}`}
+                onChange={({ betcoProductKey: key, betcoTitle: title }) => {
+                  setBetcoProductKey(key);
+                  setBetcoTitle(title);
+                }}
+                value={{ betcoProductKey, betcoTitle }}
+              />
               <div className="space-y-1">
                 <Label htmlFor={`rationale-${candidate.id}`}>Rationale</Label>
                 <Textarea
@@ -261,26 +251,14 @@ function AddCandidateForm({
   return (
     <div className="mt-2 space-y-2 rounded-2xl border border-dashed border-border p-4">
       <p className="text-sm font-medium text-foreground">Add a candidate</p>
-      <div className="grid gap-2 sm:grid-cols-2">
-        <div className="space-y-1">
-          <Label htmlFor={`add-title-${recommendationId}`}>Betco title *</Label>
-          <Input
-            id={`add-title-${recommendationId}`}
-            onChange={(e) => setBetcoTitle(e.target.value)}
-            placeholder="e.g. Green Earth Peroxide Cleaner"
-            value={betcoTitle}
-          />
-        </div>
-        <div className="space-y-1">
-          <Label htmlFor={`add-key-${recommendationId}`}>Betco product key *</Label>
-          <Input
-            id={`add-key-${recommendationId}`}
-            onChange={(e) => setBetcoProductKey(e.target.value)}
-            placeholder="e.g. 3355"
-            value={betcoProductKey}
-          />
-        </div>
-      </div>
+      <BetcoProductPicker
+        idPrefix={`add-candidate-${recommendationId}`}
+        onChange={({ betcoProductKey: key, betcoTitle: title }) => {
+          setBetcoProductKey(key);
+          setBetcoTitle(title);
+        }}
+        value={{ betcoProductKey, betcoTitle }}
+      />
       <div className="space-y-1">
         <Label htmlFor={`add-rationale-${recommendationId}`}>Rationale</Label>
         <Textarea
@@ -291,8 +269,9 @@ function AddCandidateForm({
         />
       </div>
       <p className="text-xs text-muted-foreground">
-        Both starred fields are required — the fast-path override table needs a title and a product
-        key, so a candidate missing either cannot be approved.
+        A Betco product (title and key) is required — the fast-path override table needs both, so a
+        candidate missing either cannot be approved. Pick from the search above, or use &ldquo;enter
+        a key manually&rdquo; for a legacy product with no search entry.
       </p>
       <div className="flex gap-2">
         <Button disabled={isPending || !canSubmit} onClick={submit} size="sm" type="button">

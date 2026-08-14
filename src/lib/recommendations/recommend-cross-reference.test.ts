@@ -37,6 +37,7 @@ const candidate = (similarity: number, key = 'PK'): BetcoCandidate => ({
   url: `https://betco.com/${key}`,
   documentId: `d-${key}`,
   evidence: 'evidence',
+  keySource: 'direct_match',
 });
 
 const legacyConfident = {
@@ -151,6 +152,54 @@ describe('recommendCrossReference (B0-85)', () => {
     expect(result.candidates).toHaveLength(2);
     expect(result.candidates[0].betcoProductKey).toBe('A');
     expect(result.evidence.source).toBe('web');
+  });
+
+  it('B0-442: a line-representative candidate carries its betcoProductKey and an honest rationale', async () => {
+    const lineRepCandidate: BetcoCandidate = {
+      betcoProductKey: 'REP-PK-1',
+      betcoProductLineKey: 'L1',
+      sku: 'GEP-1',
+      title: 'Green Earth Peroxide Cleaner',
+      similarity: 0.95,
+      url: 'https://betco.com/rep-pk-1',
+      documentId: 'd-line',
+      evidence: 'evidence',
+      keySource: 'line_representative',
+    };
+    const result = await recommendCrossReference(
+      { competitorProduct: 'Unknown Cleaner X', competitorBrand: 'Acme' },
+      { lookupInternal: async () => legacyMiss, ...webVia([lineRepCandidate]) },
+    );
+    expect(result.candidates[0]).toMatchObject({ betcoProductKey: 'REP-PK-1' });
+    expect(result.candidates[0].rationale).toMatch(/representative product/i);
+    expect(result.candidates[0].source).toMatchObject({ keySource: 'line_representative' });
+  });
+
+  it('B0-442: a line-only candidate (no resolvable key) is honestly marked, not silently dropped', async () => {
+    const lineOnlyCandidate: BetcoCandidate = {
+      betcoProductKey: null,
+      betcoProductLineKey: 'L-NO-REP',
+      sku: null,
+      title: 'Some Line Only Match',
+      similarity: 0.95,
+      url: null,
+      documentId: 'd-line-only',
+      evidence: 'evidence',
+      keySource: 'line_only',
+    };
+    const result = await recommendCrossReference(
+      { competitorProduct: 'Unknown Cleaner Y', competitorBrand: 'Acme' },
+      {
+        lookupInternal: async () => legacyMiss,
+        ...webVia([lineOnlyCandidate]),
+        // Grounding would normally check the line key against legacy.products_attr; here we just
+        // pass the (single) candidate through to isolate the rationale/source marking.
+        filterGrounded: async (cands) => ({ grounded: cands, dropped: [] }),
+      },
+    );
+    expect(result.candidates[0]).toMatchObject({ betcoProductKey: null });
+    expect(result.candidates[0].rationale).toMatch(/no representative product/i);
+    expect(result.candidates[0].source).toMatchObject({ keySource: 'line_only' });
   });
 
   it('declines on the web path when confidence is below threshold (still returned)', async () => {

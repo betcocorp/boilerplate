@@ -26,6 +26,18 @@ export type BetcoCandidate = {
   url: string | null;
   documentId: string;
   evidence: string;
+  /**
+   * B0-442 — how `betcoProductKey` was derived, so a line-level match can be represented honestly
+   * instead of silently looking like (or failing to look like) a precise SKU match:
+   *  - 'direct_match': the search hit itself resolved to a specific product.
+   *  - 'line_representative': the hit only resolved to a product *line*; `betcoProductKey` borrows
+   *    one representative product from that line (via `legacy.products_attr`) purely so the
+   *    candidate is promotable — it is not a guaranteed SKU-exact match and should read as such.
+   *  - 'line_only': a line-level hit with no representative product resolvable at all. This is a
+   *    legitimate outcome (not a bug) — the candidate has no `betcoProductKey` and stays honestly
+   *    unpromotable until a reviewer picks the right product.
+   */
+  keySource: 'direct_match' | 'line_representative' | 'line_only';
 };
 
 const DEFAULT_LIMIT = 5;
@@ -64,6 +76,10 @@ export function rankCandidates(matches: RagSearchMatch[], limit: number): BetcoC
       url: null,
       documentId: m.document_id,
       evidence: m.chunk_text,
+      // Provisional: a line-level hit (no direct product key) is 'line_only' until
+      // resolveCandidateUrls either upgrades it to 'line_representative' or confirms no
+      // representative product exists.
+      keySource: m.product_key ? 'direct_match' : 'line_only',
     });
   }
   return [...best.values()].sort((a, b) => b.similarity - a.similarity).slice(0, limit);
@@ -112,8 +128,11 @@ function legacyFrom(table: string) {
 /**
  * Resolve a canonical betco.com URL per candidate. Direct product keys use their legacy product row;
  * line-level candidates borrow a representative web-visible product from the line. Best-effort.
+ *
+ * Exported (rather than kept module-private) so the B0-442 line-level key-resolution regression can
+ * exercise the real implementation instead of a hand-rolled stand-in.
  */
-async function resolveCandidateUrls(candidates: BetcoCandidate[]): Promise<BetcoCandidate[]> {
+export async function resolveCandidateUrls(candidates: BetcoCandidate[]): Promise<BetcoCandidate[]> {
   if (candidates.length === 0) return candidates;
   try {
     // line-level candidates (no product key) → one representative ProductsKey via prodline attrs
@@ -167,10 +186,23 @@ async function resolveCandidateUrls(candidates: BetcoCandidate[]): Promise<Betco
 
     return candidates.map((c) => {
       const pk = c.betcoProductKey ?? (c.betcoProductLineKey ? repByLine.get(c.betcoProductLineKey) : null);
+      // B0-442: the resolved key must be written back onto the candidate, not just used locally to
+      // look up the URL — otherwise a line-level candidate keeps a null betco_product_key forever
+      // even when a representative product was found, and can never be promoted.
+      const betcoProductKey = pk ?? null;
+      const keySource: BetcoCandidate['keySource'] =
+        c.betcoProductKey != null ? 'direct_match' : pk != null ? 'line_representative' : 'line_only';
+
       const product = pk ? productByKey.get(pk) : undefined;
-      if (!product) return c;
+      if (!product) return { ...c, betcoProductKey, keySource };
       const link = deriveCanonicalProductUrl({ product, productDescr: descrByKey.get(pk as string) });
-      return { ...c, url: link.url ?? c.url, sku: c.sku ?? (product.SKU ?? null) };
+      return {
+        ...c,
+        betcoProductKey,
+        keySource,
+        url: link.url ?? c.url,
+        sku: c.sku ?? (product.SKU ?? null),
+      };
     });
   } catch {
     return candidates; // URL enrichment is best-effort

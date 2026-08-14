@@ -45,6 +45,7 @@ const cand = (similarity: number): BetcoCandidate => ({
   url: null,
   documentId: 'd',
   evidence: 'e',
+  keySource: 'direct_match',
 });
 
 describe('gateRecommendation threshold behavior (B0-88)', () => {

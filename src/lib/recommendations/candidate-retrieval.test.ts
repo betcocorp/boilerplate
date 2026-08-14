@@ -1,13 +1,50 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   buildRetrievalQuery,
   rankCandidates,
+  resolveCandidateUrls,
   retrieveBetcoCandidates,
   type BetcoCandidate,
 } from '~/lib/recommendations/candidate-retrieval';
 import type { RagSearchMatch } from '~/lib/rag/search';
+import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 import type { EnrichedCompetitorSpec } from '~/lib/websearch/enrich-competitor-spec';
+
+vi.mock('~/supabase/clients/service-role', () => ({
+  getSupabaseServiceRoleClient: vi.fn(),
+}));
+
+type LooseRow = Record<string, unknown>;
+
+/**
+ * B0-442 regression — mocks the `legacy.products_attr` / `legacy.products` / `legacy.products_descr`
+ * chain that `resolveCandidateUrls` (the default `retrieveBetcoCandidates` dep) queries live. Any
+ * `.select().ilike().in()` / `.select().in()` / `.select().eq().in()` combination resolves to the
+ * canned rows for that table.
+ */
+function mockLegacyTables(data: {
+  products_attr?: LooseRow[];
+  products?: LooseRow[];
+  products_descr?: LooseRow[];
+}) {
+  const chain = (rows: LooseRow[]) => {
+    const resolved = Promise.resolve({ data: rows });
+    const api = {
+      in: () => resolved,
+      ilike: () => api,
+      eq: () => api,
+    };
+    return api;
+  };
+  vi.mocked(getSupabaseServiceRoleClient).mockReturnValue({
+    schema: () => ({
+      from: (table: string) => ({
+        select: () => chain(data[table as keyof typeof data] ?? []),
+      }),
+    }),
+  } as unknown as ReturnType<typeof getSupabaseServiceRoleClient>);
+}
 
 function spec(overrides: Partial<EnrichedCompetitorSpec> = {}): EnrichedCompetitorSpec {
   return {
@@ -95,6 +132,155 @@ describe('rankCandidates (B0-87)', () => {
       5,
     );
     expect(ranked).toHaveLength(3);
+  });
+
+  it('B0-442: a product-level hit is keySource direct_match', () => {
+    const ranked = rankCandidates(
+      [match({ document_id: 'd1', similarity: 0.9, product_key: 'PK1' })],
+      5,
+    );
+    expect(ranked[0]).toMatchObject({ betcoProductKey: 'PK1', keySource: 'direct_match' });
+  });
+
+  it('B0-442: a line-level hit (no product key) is provisionally keySource line_only', () => {
+    const ranked = rankCandidates(
+      [match({ document_id: 'd1', similarity: 0.9, product_line_key: 'L1', product_key: null })],
+      5,
+    );
+    expect(ranked[0]).toMatchObject({ betcoProductKey: null, keySource: 'line_only' });
+  });
+});
+
+describe('resolveCandidateUrls — line-level key resolution (B0-442)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('resolves a representative product key for a line-level match and marks it line_representative', async () => {
+    mockLegacyTables({
+      products_attr: [{ AttrKey: 'L1', ProductsKey: 'REP-PK-1' }],
+      products: [
+        {
+          ProductsKey: 'REP-PK-1',
+          Title: 'Green Earth Peroxide Cleaner',
+          SKU: 'GEP-1',
+          SLDescr: null,
+          InvtID: null,
+          Status: 'A',
+          OnWeb: 'https://www.betco.com/products/green-earth-peroxide-cleaner',
+          User_Str_00: null,
+          User_Str_01: null,
+          User_Str_02: null,
+          User_Str_03: null,
+          User_Str_04: null,
+          User_Str_05: null,
+        },
+      ],
+      products_descr: [],
+    });
+
+    const ranked = rankCandidates(
+      [match({ document_id: 'd1', similarity: 0.9, product_line_key: 'L1', product_key: null })],
+      1,
+    );
+    expect(ranked[0]).toMatchObject({ betcoProductKey: null, keySource: 'line_only' });
+
+    const resolved = await resolveCandidateUrls(ranked);
+
+    // The regression this guards: the representative key must be written back onto the
+    // candidate, not just used locally to derive the URL.
+    expect(resolved[0]).toMatchObject({
+      betcoProductKey: 'REP-PK-1',
+      keySource: 'line_representative',
+      url: 'https://www.betco.com/products/green-earth-peroxide-cleaner',
+    });
+  });
+
+  it('leaves betcoProductKey null and keySource line_only when no representative product resolves', async () => {
+    mockLegacyTables({ products_attr: [], products: [], products_descr: [] });
+
+    const ranked = rankCandidates(
+      [match({ document_id: 'd1', similarity: 0.9, product_line_key: 'L-NO-REP', product_key: null })],
+      1,
+    );
+    const resolved = await resolveCandidateUrls(ranked);
+
+    expect(resolved[0]).toMatchObject({ betcoProductKey: null, keySource: 'line_only' });
+  });
+
+  it('leaves a direct product-level match untouched (keySource direct_match)', async () => {
+    mockLegacyTables({
+      products_attr: [],
+      products: [
+        {
+          ProductsKey: 'PK1',
+          Title: 'Direct Product',
+          SKU: 'D-1',
+          SLDescr: null,
+          InvtID: null,
+          Status: 'A',
+          OnWeb: null,
+          User_Str_00: null,
+          User_Str_01: null,
+          User_Str_02: null,
+          User_Str_03: null,
+          User_Str_04: null,
+          User_Str_05: null,
+        },
+      ],
+      products_descr: [],
+    });
+
+    const ranked = rankCandidates(
+      [match({ document_id: 'd1', similarity: 0.9, product_key: 'PK1' })],
+      1,
+    );
+    const resolved = await resolveCandidateUrls(ranked);
+
+    expect(resolved[0]).toMatchObject({ betcoProductKey: 'PK1', keySource: 'direct_match' });
+  });
+});
+
+describe('retrieveBetcoCandidates — end-to-end line-level wiring (B0-442)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('a recommendation whose match is a real product line still persists a usable betcoProductKey via retrieveBetcoCandidates', async () => {
+    mockLegacyTables({
+      products_attr: [{ AttrKey: 'L1', ProductsKey: 'REP-PK-1' }],
+      products: [
+        {
+          ProductsKey: 'REP-PK-1',
+          Title: 'Green Earth Peroxide Cleaner',
+          SKU: 'GEP-1',
+          SLDescr: null,
+          InvtID: null,
+          Status: 'A',
+          OnWeb: 'https://www.betco.com/products/green-earth-peroxide-cleaner',
+          User_Str_00: null,
+          User_Str_01: null,
+          User_Str_02: null,
+          User_Str_03: null,
+          User_Str_04: null,
+          User_Str_05: null,
+        },
+      ],
+      products_descr: [],
+    });
+
+    const out = await retrieveBetcoCandidates(
+      { spec: spec(), limit: 1 },
+      {
+        search: async () => [
+          match({ document_id: 'd1', similarity: 0.9, product_line_key: 'L1', product_key: null }),
+        ],
+        resolveUrls: resolveCandidateUrls,
+      },
+    );
+
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ betcoProductKey: 'REP-PK-1', keySource: 'line_representative' });
   });
 });
 

@@ -316,6 +316,21 @@ function mapLegacyMatches(matches: LegacyMatch[]): RecommendationCandidateOut[] 
   }));
 }
 
+/**
+ * B0-442 — surface `keySource` as a reviewer-legible rationale (not just a `source` field) so a
+ * line-level match reads honestly instead of looking like an unexplained missing/borrowed key.
+ */
+function rationaleForKeySource(keySource: BetcoCandidate['keySource']): string | null {
+  switch (keySource) {
+    case 'line_representative':
+      return 'Match resolved to a Betco product line, not a specific product. This key is a representative product from that line — verify the exact SKU before approving.';
+    case 'line_only':
+      return 'Match resolved to a Betco product line only; no representative product could be resolved automatically. Pick the correct product manually before approving.';
+    case 'direct_match':
+      return null;
+  }
+}
+
 function mapWebCandidates(candidates: BetcoCandidate[]): RecommendationCandidateOut[] {
   return candidates.map((c, index) => ({
     betcoProductKey: c.betcoProductKey,
@@ -324,11 +339,12 @@ function mapWebCandidates(candidates: BetcoCandidate[]): RecommendationCandidate
     confidence: c.similarity,
     rank: index + 1,
     url: c.url,
-    rationale: null,
+    rationale: rationaleForKeySource(c.keySource),
     source: {
       via: 'web',
       documentId: c.documentId,
       productLineKey: c.betcoProductLineKey,
+      keySource: c.keySource,
       evidence: c.evidence,
     },
   }));
