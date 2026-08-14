@@ -1,3 +1,10 @@
+# [1.0.0-dev.3](https://github.com/betcocorp/bex2.0/compare/v1.0.0-dev.2...v1.0.0-dev.3) (2026-08-14)
+
+
+### Bug Fixes
+
+* **na:** let BEX_DISABLE_CONFIDENCE_GATING also bypass regulated-claim grounding and chemistry-mismatch ([d35b0bb](https://github.com/betcocorp/bex2.0/commit/d35b0bb5e9486f1c555ba5f8bc4071469c0228ad))
+
 # [1.0.0-dev.2](https://github.com/betcocorp/bex2.0/compare/v1.0.0-dev.1...v1.0.0-dev.2) (2026-08-14)
 
 
