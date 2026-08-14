@@ -101,9 +101,18 @@ export function resolveXrefThreshold(override?: number | null): number {
  * floor, and the REC-4 similarity/brand confidence caps). The current threshold values are
  * unproven placeholders (see `src/docs/cross-reference-recommendations.md`) and are suppressing
  * correct answers; flip `BEX_DISABLE_CONFIDENCE_GATING` back off once real thresholds are
- * calibrated. Does NOT affect correctness/safety checks that are not confidence thresholds:
- * regulated-claim grounding, category-mismatch rejection, evidence/candidate grounding, and
- * validator-not-approved / requires-human-review / unsupported-safety-claim all keep running.
+ * calibrated.
+ *
+ * B0-452 follow-up (explicit, deliberate widening — not scope creep): while this testing window
+ * is open, the flag ALSO suppresses the regulated-claim grounding decline
+ * (`evaluateRegulatedClaimGrounding` / `run-product-support-workflow.ts`) and the REC-4
+ * category-mismatch rejection (`checkCategoryConsistency` above) — the two correctness/safety
+ * checks this flag was originally documented as never touching. Both still run and are always
+ * recorded (as a `regulated_claim_guardrail` / `recommendation_confidence` gate with
+ * `verdict: 'bypassed'`, plus the untouched draft answer in `final_output.draftAnswer`) so a
+ * reviewer can see exactly what would have been withheld and why, without it actually being
+ * withheld. Evidence/candidate grounding and validator-not-approved / requires-human-review /
+ * unsupported-safety-claim are NOT affected and keep running exactly as before.
  */
 export function isConfidenceGatingDisabled(): boolean {
   return process.env.BEX_DISABLE_CONFIDENCE_GATING === 'true';

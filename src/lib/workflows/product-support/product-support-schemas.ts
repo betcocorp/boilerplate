@@ -95,12 +95,17 @@ export type PromptRecord = z.infer<typeof promptRecordSchema>;
  * - `recommendation_confidence` — `evaluateRecommendationGate`, the REC-4 calibration applied
  *   whenever cross-reference post-processing ran (similarity/brand/chemistry confidence caps).
  *   Distinct from `gateRecommendation`/`XREF_RECOMMENDATION_MIN_CONFIDENCE` in `~/lib/recommendations`.
+ * - `regulated_claim_guardrail` — `evaluateRegulatedClaimGrounding` (B0-257); a hard verbatim-match
+ *   requirement, not a numeric threshold, so `BEX_DISABLE_CONFIDENCE_GATING` normally leaves it
+ *   running unconditionally. Only appears with `verdict: 'bypassed'`, recorded for the temporary
+ *   testing mode where the flag also suppresses this gate's decline (see B0-452 follow-up).
  */
 export const gateIdSchema = z.enum([
   'keyword_routing',
   'early_decline_gate',
   'usage_safety_coverage',
   'recommendation_confidence',
+  'regulated_claim_guardrail',
 ]);
 
 export type GateId = z.infer<typeof gateIdSchema>;

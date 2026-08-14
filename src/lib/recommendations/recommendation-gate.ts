@@ -41,6 +41,13 @@ export type RecommendationGateResult = {
   confidence: number;
   issues: string[];
   requires_human_review: boolean;
+  /**
+   * B0-452 follow-up — which checks below were detected but not enforced because
+   * `BEX_DISABLE_CONFIDENCE_GATING` is set. Empty when nothing was bypassed (including when
+   * nothing was wrong in the first place) so callers can tell "ran clean" apart from "ran but
+   * was overridden for testing".
+   */
+  bypassedChecks: string[];
 };
 
 function clamp01(value: number): number {
@@ -71,31 +78,43 @@ export function checkCategoryConsistency(
 
 /**
  * B0-452: the two confidence *caps* below (low-similarity, missing-brand) are skipped while
- * `BEX_DISABLE_CONFIDENCE_GATING` is set — both are unproven placeholder thresholds. The
- * category-consistency check is left out of the switch: it rejects a recommendation whose
- * chemistry class actually disagrees with the competitor's, which is a correctness check, not
- * a confidence-calibration guess, so it always runs.
+ * `BEX_DISABLE_CONFIDENCE_GATING` is set — both are unproven placeholder thresholds.
+ *
+ * B0-452 follow-up: the category-consistency check normally rejects a recommendation whose
+ * chemistry class actually disagrees with the competitor's regardless of the flag, since that is
+ * a correctness check, not a confidence-calibration guess. During the temporary testing window
+ * this flag also opens up, a real mismatch is still detected and recorded in `bypassedChecks` +
+ * `issues`, but no longer forces `approved: false` / caps confidence — so it can be seen ("this
+ * would have been rejected for chemistry mismatch") without actually withholding the answer.
  */
 export function evaluateRecommendationGate(
   input: RecommendationGateInput,
 ): RecommendationGateResult {
   const issues: string[] = [];
+  const bypassedChecks: string[] = [];
   let confidence = clamp01(input.baseConfidence);
   let approved = true;
   let requiresHumanReview = false;
+
+  const gatingDisabled = isConfidenceGatingDisabled();
 
   const category = checkCategoryConsistency(
     input.competitorChemistryClass ?? null,
     input.recommendedChemistryClass ?? null,
   );
   if (!category.consistent && category.issue) {
-    approved = false;
-    requiresHumanReview = true;
-    confidence = Math.min(confidence, CATEGORY_MISMATCH_CONFIDENCE_CAP);
-    issues.push(category.issue);
+    if (gatingDisabled) {
+      bypassedChecks.push('category_mismatch');
+      issues.push(
+        `${category.issue} (BEX_DISABLE_CONFIDENCE_GATING is set: not rejected, confidence not capped)`,
+      );
+    } else {
+      approved = false;
+      requiresHumanReview = true;
+      confidence = Math.min(confidence, CATEGORY_MISMATCH_CONFIDENCE_CAP);
+      issues.push(category.issue);
+    }
   }
-
-  const gatingDisabled = isConfidenceGatingDisabled();
 
   if (
     !gatingDisabled &&
@@ -123,5 +142,6 @@ export function evaluateRecommendationGate(
     confidence: round2(confidence),
     issues,
     requires_human_review: requiresHumanReview,
+    bypassedChecks,
   };
 }

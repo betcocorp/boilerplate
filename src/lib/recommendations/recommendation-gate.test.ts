@@ -98,7 +98,15 @@ describe('evaluateRecommendationGate (REC-4)', () => {
       expect(missingBrand.confidence).toBe(0.95);
     });
 
-    it('still rejects a chemistry-class mismatch — that is a correctness check, not a confidence threshold', () => {
+    /**
+     * B0-452 follow-up: while a user was testing with the flag on, this check was the one thing
+     * still silently blocking an answer (in `evaluateRegulatedClaimGrounding`, not this function —
+     * but the same "always on" design applied here too), with no way to see what would have
+     * happened. Widened deliberately so a real mismatch is still detected and recorded
+     * (`bypassedChecks`, `issues`) but no longer rejects, matching the regulated-claim guardrail's
+     * behavior in `run-product-support-workflow.ts`.
+     */
+    it('detects but no longer rejects a chemistry-class mismatch, and records it as bypassed', () => {
       process.env.BEX_DISABLE_CONFIDENCE_GATING = 'true';
       const result = evaluateRecommendationGate({
         baseConfidence: 0.9,
@@ -106,9 +114,22 @@ describe('evaluateRecommendationGate (REC-4)', () => {
         competitorChemistryClass: 'quat',
         recommendedChemistryClass: 'peroxide',
       });
-      expect(result.approved).toBe(false);
-      expect(result.requires_human_review).toBe(true);
-      expect(result.confidence).toBeLessThanOrEqual(0.2);
+      expect(result.approved).toBe(true);
+      expect(result.requires_human_review).toBe(false);
+      expect(result.confidence).toBe(0.9);
+      expect(result.bypassedChecks).toContain('category_mismatch');
+      expect(result.issues.some((issue) => issue.includes('Chemistry-class mismatch'))).toBe(true);
+    });
+
+    it('reports no bypassed checks when nothing was wrong', () => {
+      process.env.BEX_DISABLE_CONFIDENCE_GATING = 'true';
+      const result = evaluateRecommendationGate({
+        baseConfidence: 0.9,
+        topSimilarity: 0.9,
+        competitorChemistryClass: 'quat',
+        recommendedChemistryClass: 'quat',
+      });
+      expect(result.bypassedChecks).toEqual([]);
     });
   });
 });

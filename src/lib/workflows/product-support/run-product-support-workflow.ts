@@ -2264,11 +2264,18 @@ export async function runProductSupportWorkflow(input: {
       });
     }
 
-    // B0-257: regulated-claim guardrail -- runs unconditionally (independent of the
+    // B0-257: regulated-claim guardrail -- evaluated unconditionally (independent of the
     // `useValidator` opt-in toggle above, which only gates the LLM semantic-judge pass).
     // EPA registration, dilution/contact-time, hazard, and first-aid claims must be
-    // traceable to an exact quote in a retrieved source; anything that fails is a hard
-    // rejection, never a soft warning, per the org's regulated-data rule.
+    // traceable to an exact quote in a retrieved source; anything that fails is normally a
+    // hard rejection, never a soft warning, per the org's regulated-data rule.
+    //
+    // B0-452 follow-up: while testing untuned thresholds, `BEX_DISABLE_CONFIDENCE_GATING` also
+    // suppresses THIS rejection (previously the one check the kill-switch never touched) so the
+    // draft answer reaches the user unmodified even when it contains an unverified regulated
+    // claim. The detection still runs and is always recorded (`gates`, and the review task below
+    // when not bypassed) so a reviewer can see exactly what would have been withheld and why --
+    // turn the flag back off once real thresholds are calibrated.
     const regulatedClaimGrounding = evaluateRegulatedClaimGrounding({
       draftAnswer,
       sources: sourceMeta.map((s) => ({
@@ -2279,29 +2286,43 @@ export async function runProductSupportWorkflow(input: {
     });
 
     if (regulatedClaimGrounding.ungroundedCategories.length > 0) {
-      validation = {
-        ...validation,
-        approved: false,
-        confidence: Math.min(validation.confidence, 0.4),
-        issues: Array.from(
-          new Set([
-            ...validation.issues,
-            ...regulatedClaimGrounding.ungroundedCategories.map(
-              (c) => `regulated_claim_unverified:${c}`,
-            ),
-          ]),
-        ),
-        requires_human_review: true,
-      };
-      audit.enqueue(
-        'regulated_claim_guardrail_rejected',
-        {
-          categoriesDetected: regulatedClaimGrounding.categoriesDetected,
-          ungroundedCategories: regulatedClaimGrounding.ungroundedCategories,
-          ungroundedDetails: regulatedClaimGrounding.ungroundedDetails,
-        },
-        { ...wfCtx, stepId: validationStep.id },
-      );
+      if (isConfidenceGatingDisabled()) {
+        validatorStepGates.push({
+          gate: 'regulated_claim_guardrail',
+          inputs: {
+            categoriesDetected: regulatedClaimGrounding.categoriesDetected,
+            ungroundedCategories: regulatedClaimGrounding.ungroundedCategories,
+            ungroundedDetails: regulatedClaimGrounding.ungroundedDetails,
+          },
+          thresholds: { note: 'hard verbatim-match requirement, not a numeric threshold' },
+          verdict: 'bypassed',
+          effect: `BEX_DISABLE_CONFIDENCE_GATING is set: ${regulatedClaimGrounding.ungroundedCategories.join(', ')} could not be verified verbatim against a retrieved source, but the draft answer was allowed through unmodified instead of being replaced with the decline message. See draftAnswer on this run's final_output for exactly what was said.`,
+        });
+      } else {
+        validation = {
+          ...validation,
+          approved: false,
+          confidence: Math.min(validation.confidence, 0.4),
+          issues: Array.from(
+            new Set([
+              ...validation.issues,
+              ...regulatedClaimGrounding.ungroundedCategories.map(
+                (c) => `regulated_claim_unverified:${c}`,
+              ),
+            ]),
+          ),
+          requires_human_review: true,
+        };
+        audit.enqueue(
+          'regulated_claim_guardrail_rejected',
+          {
+            categoriesDetected: regulatedClaimGrounding.categoriesDetected,
+            ungroundedCategories: regulatedClaimGrounding.ungroundedCategories,
+            ungroundedDetails: regulatedClaimGrounding.ungroundedDetails,
+          },
+          { ...wfCtx, stepId: validationStep.id },
+        );
+      }
     }
 
     // REC-4: on the competitive-recommendation route, calibrate confidence to retrieval
@@ -2364,6 +2385,9 @@ export async function runProductSupportWorkflow(input: {
               ? 'recommendations_route'
               : 'cross_reference_intent',
           gateIssues: gate.issues,
+          // B0-452 follow-up — always present so a run where nothing was bypassed is
+          // distinguishable from one where this field is simply missing.
+          bypassedChecks: gate.bypassedChecks,
         },
         // Read from the module's exported constants, never re-typed here, so a threshold change
         // cannot silently desync from what the record claims was applied.
@@ -2373,13 +2397,22 @@ export async function runProductSupportWorkflow(input: {
           missingBrandConfidenceCap: MISSING_BRAND_CONFIDENCE_CAP,
           categoryMismatchConfidenceCap: CATEGORY_MISMATCH_CONFIDENCE_CAP,
         },
-        verdict: validation.confidence < confidenceBeforeGate ? 'capped' : 'passed',
+        verdict:
+          gate.bypassedChecks.length > 0
+            ? 'bypassed'
+            : validation.confidence < confidenceBeforeGate
+              ? 'capped'
+              : 'passed',
         effect:
-          validation.confidence < confidenceBeforeGate
-            ? `Confidence ${confidenceBeforeGate} → ${validation.confidence}${
-                gate.issues.length > 0 ? `; issues added: ${gate.issues.join(' | ')}` : ''
-              }.`
-            : `No change; confidence stayed at ${validation.confidence}.`,
+          gate.bypassedChecks.length > 0
+            ? `BEX_DISABLE_CONFIDENCE_GATING is set: ${gate.bypassedChecks.join(', ')} detected but not enforced. ${
+                gate.issues.length > 0 ? `Issues: ${gate.issues.join(' | ')}` : ''
+              }`
+            : validation.confidence < confidenceBeforeGate
+              ? `Confidence ${confidenceBeforeGate} → ${validation.confidence}${
+                  gate.issues.length > 0 ? `; issues added: ${gate.issues.join(' | ')}` : ''
+                }.`
+              : `No change; confidence stayed at ${validation.confidence}.`,
       });
     }
 

@@ -151,7 +151,7 @@ describe('gateRecordSchema', () => {
   it('rejects an unknown gate id', () => {
     expect(
       gateRecordSchema.safeParse({
-        gate: 'regulated_claim_guardrail',
+        gate: 'made_up_gate_id',
         inputs: {},
         thresholds: {},
         verdict: 'applied',
