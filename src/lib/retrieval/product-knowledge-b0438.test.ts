@@ -474,18 +474,15 @@ describe('B0-438 — B0-259 document-kind precedence is untouched', () => {
   });
 
   /**
-   * Pre-existing gap, found while building the parity fixtures above. NOT introduced by B0-438
-   * and deliberately NOT fixed here: changing claim-like detection changes which sources ground
-   * an answer, which is the one thing this ticket must not do.
-   *
-   * `CLAIM_LIKE_QUERY_PATTERN` ends in a `\b` that applies to the whole alternation, so bare
-   * stems only match when followed by a non-word character. "dilution" / "dilute" (`dilut`),
-   * "hazards" (`hazard`), "epa registered" (`epa\s*reg`) and "oz per gallon" therefore do NOT
-   * register as claim-like, and those queries miss the B0-259 label-first slot ordering --
-   * exactly the regulated-data phrasing the policy exists for. Pinned so that whoever fixes it
-   * sees this note and re-runs the retrieval golden sets.
+   * B0-443: `CLAIM_LIKE_QUERY_PATTERN` used to end in a single `\b` applied to the whole
+   * alternation, so bare stems only matched when followed by a non-word character. "dilution" /
+   * "dilute" (`dilut`), "hazards" (`hazard`), "epa registered" (`epa\s*reg`), and "oz per gallon"
+   * therefore did NOT register as claim-like, and those queries missed the B0-259 label-first
+   * slot ordering -- exactly the regulated-data phrasing the policy exists for. Fixed by giving
+   * each alternative its own boundaries. This test is inverted from the old pinned-gap version:
+   * it now asserts the label DOES win the first slot for a plain "dilution ratio" query.
    */
-  it('pins the pre-existing claim-detection gap: "dilution ratio" does not trigger label-first', async () => {
+  it('B0-443 fix: "dilution ratio" now triggers label-first ordering', async () => {
     stubSearches({
       broad: { matches: LOCKING_BROAD_MATCHES, similaritySearchMs: 10 },
       anchored: { matches: mixedKinds, similaritySearchMs: 20 },
@@ -495,8 +492,15 @@ describe('B0-438 — B0-259 document-kind precedence is untouched', () => {
       query: 'what is the dilution ratio for this product',
     });
 
-    // Should arguably be 'label'; documents today's behaviour, not an endorsement of it.
-    expect(result.sources[0]?.documentKind).toBe('product_line_profile');
+    expect(result.sources[0]?.documentKind).toBe('label');
+    expect(identity(result.sources)).toEqual(
+      legacyIdentity(
+        await legacySelect(mixedKinds, {
+          limit: 3,
+          requiredDocumentKinds: LABEL_FIRST_REQUIRED_DOCUMENT_KINDS,
+        }),
+      ),
+    );
   });
 });
 

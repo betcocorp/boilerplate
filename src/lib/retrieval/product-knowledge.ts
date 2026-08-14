@@ -369,11 +369,21 @@ const CLAIM_LIKE_SECTION_TYPES = new Set([
  * `inferSectionTypeFromQuery` (which only fires on narrow GHS-section phrasing) so a plain
  * "what's the dilution ratio" or "is this EPA registered" question still gets the label-first
  * ordering even though it doesn't match a specific GHS section pattern.
+ *
+ * B0-443: each alternative carries its OWN `\b` boundaries rather than one trailing `\b` applied
+ * to the whole group. A single trailing boundary requires the *last* alternative matched to be
+ * followed by a non-word character, which silently broke every stem-style alternative used
+ * mid-word: "dilut" in "dilution" never matched because `\b` fails between "t" and "i". Stems
+ * that should catch inflected forms (dilut(e/ed/ion/ing), hazard(s/ous), epa reg(istered)) use
+ * `\w*` instead of relying on the old shared boundary. Also folds in the phrasings B0-443 found
+ * missing: "hazards", "hazardous", "epa registered", and "N oz per gallon" (previously only
+ * "oz/gal"-style and "ounce(s) per gallon" literal were recognized).
  */
 const CLAIM_LIKE_QUERY_PATTERN =
-  /\b(dilut|oz\.?\s*\/?\s*gal|ounces? per gallon|mix ratio|ready.?to.?use|\bRTU\b|epa\s*reg|contact time|dwell time|kill\b|efficacy|hazard|first aid|corrosive|flammable|ppe|directions for use)\b/i;
+  /\bdilut\w*\b|\b(?:oz|ounces?)\.?\s*(?:\/|per)?\s*gal(?:lon)?s?\b|\bmix ratio\b|\bready.?to.?use\b|\bRTU\b|\bepa\s*reg\w*\b|\bcontact time\b|\bdwell time\b|\bkill\b|\befficacy\b|\bhazard\w*\b|\bfirst aid\b|\bcorrosive\b|\bflammable\b|\bppe\b|\bdirections for use\b/i;
 
-function isClaimLikeQuery(query: string): boolean {
+/** Exported for table-driven unit testing of the claim-like phrasing matrix (B0-443). */
+export function isClaimLikeQuery(query: string): boolean {
   return CLAIM_LIKE_QUERY_PATTERN.test(query);
 }
 
