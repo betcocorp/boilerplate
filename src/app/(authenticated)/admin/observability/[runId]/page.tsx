@@ -19,7 +19,11 @@ import {
   getPromptHistoryForItem,
 } from '~/lib/observability/prompt-history';
 import { readRunPayloadView } from '~/lib/observability/run-payload';
-import { getWorkflowRunTrace } from '~/lib/observability/runs-repository';
+import {
+  getWorkflowRunTrace,
+  indexHarnessTtftByRunIds,
+  readTtftMs,
+} from '~/lib/observability/runs-repository';
 import { getProdLineIdsByProductLineKeys } from '~/lib/rag/product-line-lookup';
 import {
   extractPromptBundleVersion,
@@ -112,6 +116,15 @@ export default async function AdminRunTracePage({ params }: PageProps) {
   const promptVersion = extractPromptVersion(run?.final_output);
   const promptBundleVersion = extractPromptBundleVersion(run?.final_output);
   const totalDurationMs = run ? durationMsBetween(run.created_at, run.updated_at) : null;
+  /**
+   * B0-473 — same precedence as the dashboard's avg-TTFT tile (B0-430) and the runs list "Stream"
+   * column (B0-416/B0-428): prefer the run's own `timingBreakdown.ttftMs`, falling back to the
+   * harness's `test_result_items.ttft_ms` only when the run predates that instrumentation. The
+   * harness lookup is a real query, so it's skipped entirely once the run's own value is present.
+   */
+  const ttftMs =
+    readTtftMs(run?.final_output) ??
+    (run ? (await indexHarnessTtftByRunIds([runId])).get(runId) ?? null : null);
   // B0-418 — the run's own payload (answer, chunks, similarity, timing, validation,
   // usage). Tolerates a null `final_output` and error-only payloads.
   const payload = readRunPayloadView(run?.final_output, run?.user_input);
@@ -200,6 +213,15 @@ export default async function AdminRunTracePage({ params }: PageProps) {
                   </Badge>
                   <Badge className="tabular-nums" variant="outline">
                     {formatDurationSeconds(totalDurationMs)}
+                  </Badge>
+                  {/* B0-473 — time to first streamed token, same precedence as the dashboard's
+                      avg-TTFT tile and the runs list "Stream" column. */}
+                  <Badge
+                    className="tabular-nums"
+                    title="Time to first token"
+                    variant="outline"
+                  >
+                    TTFT {formatDurationSeconds(ttftMs)}
                   </Badge>
                   {/* B0-463 — run-level prompt stamps, visible without expanding the timeline. */}
                   {promptVersion ? (
