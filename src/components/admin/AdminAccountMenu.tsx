@@ -1,6 +1,6 @@
 'use client';
 
-import { EllipsisVertical, KeyRound, LogOut, ShieldCheck } from 'lucide-react';
+import { BookOpen, EllipsisVertical, KeyRound, LogOut, ShieldCheck } from 'lucide-react';
 import { signOut, useSession } from 'next-auth/react';
 import Link from 'next/link';
 import { forwardRef, useSyncExternalStore } from 'react';
@@ -143,6 +143,15 @@ export function AdminAccountMenu({
             <DropdownMenuSeparator />
           </>
         ) : null}
+        <DropdownMenuGroup>
+          <DropdownMenuItem asChild>
+            <Link href="/admin/changelog">
+              <BookOpen className="size-4" />
+              Changelog
+            </Link>
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
+        <DropdownMenuSeparator />
         <DropdownMenuItem
           onSelect={(event) => {
             event.preventDefault();
