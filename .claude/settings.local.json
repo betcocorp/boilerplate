@@ -199,7 +199,8 @@
       "Bash(pnpm exec *)",
       "Bash(wc -l /tmp_tsc_out.txt)",
       "Bash(grep -E \"^/Users.*\\\\.tsx?$\")",
-      "Bash(grep -E \"^/Users.*\\\\.\\(ts|tsx\\)$\")"
+      "Bash(grep -E \"^/Users.*\\\\.\\(ts|tsx\\)$\")",
+      "Bash(git pull *)"
     ]
   }
 }
