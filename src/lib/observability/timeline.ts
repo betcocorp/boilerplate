@@ -18,6 +18,8 @@ import type {
   WorkflowRunRow,
   WorkflowStepRow,
 } from '~/lib/conversations/workflow-repository';
+import { promptRecordSchema } from '~/lib/workflows/product-support/product-support-schemas';
+import type { PromptRecord } from '~/lib/workflows/product-support/product-support-schemas';
 import type {
   AuditLogRow,
   ConfidenceGateKind,
@@ -153,6 +155,21 @@ function buildStepLabel(step: WorkflowStepRow): string {
   }
   const reason = readString(output, 'reason');
   return reason ? `${base} — skipped (${reason})` : `${base} — skipped`;
+}
+
+/**
+ * B0-463 — the persisted prompt for a step, or null. Reads `step.input.prompt` exactly as
+ * `recordPrompt` wrote it (`{ stage, instructions, model, runtime }`); a step whose `input`
+ * carries no `prompt` key (or an unparseable one, e.g. a pre-B0-389 row) is null rather than
+ * throwing, since this file must still render malformed historical runs.
+ */
+function readStepPrompt(step: WorkflowStepRow): PromptRecord | null {
+  const input = asRecord(step.input);
+  if (!input || !('prompt' in input)) {
+    return null;
+  }
+  const parsed = promptRecordSchema.safeParse(input.prompt);
+  return parsed.success ? parsed.data : null;
 }
 
 /** Anything longer than this in a step `detail` is the agent's tool trace, surfaced separately. */
@@ -517,6 +534,7 @@ export function buildRunTimeline(
       status: mapStepStatus(step.status),
       detail: buildStepDetail(step),
       error: step.error,
+      prompt: readStepPrompt(step),
     });
 
     // B0-417 — a step has EITHER its authoritative trace or reconstructed events,
@@ -999,6 +1017,7 @@ function projectNotReachedSteps(
       completedAt: null,
       status: 'not_reached' as const,
       error: null,
+      prompt: null,
       detail: {
         note: `Not reached — the run failed at "${failingStep.step_name}".`,
         failedAtStepName: failingStep.step_name,

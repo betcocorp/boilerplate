@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { useState } from 'react';
 
+import { StepPromptDetail } from '~/components/admin/observability/StepPromptDetail';
 import { ToolCallDetail } from '~/components/admin/observability/ToolCallDetail';
 import { TraceJsonBlock } from '~/components/admin/observability/TraceJsonBlock';
 import { Badge } from '~/components/ui/badge';
@@ -166,10 +167,15 @@ function TimelineEventRow({
   event,
   open,
   onOpenChange,
+  promptVersion,
+  promptBundleVersion,
 }: {
   event: TimelineEvent;
   open: boolean;
   onOpenChange: (next: boolean) => void;
+  /** B0-463 — run-level prompt stamps (`workflow_run.final_output`); same for every step in a run. */
+  promptVersion: string | null;
+  promptBundleVersion: string | null;
 }) {
   const isNotReached = event.status === 'not_reached';
   const isFailed = event.status === 'failed';
@@ -437,6 +443,18 @@ function TimelineEventRow({
                 <TraceJsonBlock label="Error" value={event.error} />
               ) : null}
 
+              {/* B0-463 — the persisted prompt for this LLM boundary (main agent / validator /
+                  revision), plus the run's promptVersion + promptBundleVersion stamps. Renders
+                  nothing for step kinds that never capture a prompt. */}
+              {event.kind === 'step' ? (
+                <StepPromptDetail
+                  prompt={event.prompt}
+                  promptBundleVersion={promptBundleVersion}
+                  promptVersion={promptVersion}
+                  stepName={event.stepName}
+                />
+              ) : null}
+
               {event.kind === 'step' && event.stepName === 'validator' ? (
                 <TraceJsonBlock
                   label="Draft (pre-validation)"
@@ -465,10 +483,20 @@ function TimelineEventRow({
 export function RunTraceTimeline({
   events,
   emptyState,
+  promptVersion = null,
+  promptBundleVersion = null,
 }: {
   events: TimelineEvent[];
   /** B0-399 — undefined when the caller has no `emptyState` to offer (e.g. a stale caller/test). */
   emptyState?: RunEmptyState;
+  /**
+   * B0-463 — the run's `promptVersion` / `promptBundleVersion` stamps (from
+   * `workflow_run.final_output`), shown alongside every prompt-bearing step. Optional/nullable so
+   * existing callers/tests that predate this prop still compile and render (just without the
+   * hash chips).
+   */
+  promptVersion?: string | null;
+  promptBundleVersion?: string | null;
 }) {
   const [openIds, setOpenIds] = useState<ReadonlySet<string>>(() => new Set<string>());
 
@@ -535,6 +563,8 @@ export function RunTraceTimeline({
               key={event.id}
               onOpenChange={(next) => setOpen(event.id, next)}
               open={openIds.has(event.id)}
+              promptBundleVersion={promptBundleVersion}
+              promptVersion={promptVersion}
             />
           ))}
         </ol>

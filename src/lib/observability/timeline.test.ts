@@ -909,6 +909,84 @@ describe('buildRunTimeline — tool calls reconstructed from audit_logs (B0-417)
 });
 
 /* -------------------------------------------------------------------------- *
+ * Scenario 7 — B0-463: persisted prompts read off `workflow_steps.input.prompt`
+ * -------------------------------------------------------------------------- */
+
+describe('buildRunTimeline — persisted prompts (B0-463)', () => {
+  it('reads the prompt record off a step whose input carries one', () => {
+    const run = makeRun();
+    const stepRows: WorkflowStepRow[] = [
+      plannerStep,
+      makeStep({
+        id: 'step-agent',
+        step_name: 'openai_responses_agent',
+        started_at: at(20),
+        completed_at: at(60),
+        input: {
+          model: 'gpt-5',
+          hasPreviousResponse: false,
+          prompt: {
+            stage: 'openai_responses_agent',
+            instructions: 'You are the Betco product specialist...',
+            model: 'gpt-5',
+            runtime: 'responses',
+          },
+        },
+      }),
+    ];
+    const timeline = buildRunTimeline(run, stepRows, []);
+    const agentStep = steps(timeline).find((event) => event.stepName === 'openai_responses_agent');
+    expect(agentStep?.prompt).toEqual({
+      stage: 'openai_responses_agent',
+      instructions: 'You are the Betco product specialist...',
+      model: 'gpt-5',
+      runtime: 'responses',
+    });
+  });
+
+  it('is null for a step whose input carries no prompt (orchestration_planner, a bypassed validator)', () => {
+    const { run, stepRows, logs } = normalRunFixture();
+    const timeline = buildRunTimeline(run, stepRows, logs);
+    expect(steps(timeline).map((event) => event.prompt)).toEqual([null, null, null]);
+  });
+
+  it('is null rather than throwing when input.prompt is present but malformed', () => {
+    const run = makeRun();
+    const stepRows: WorkflowStepRow[] = [
+      makeStep({
+        id: 'step-agent',
+        step_name: 'openai_responses_agent',
+        input: { prompt: { stage: 'not_a_real_stage', instructions: 'x' } },
+      }),
+    ];
+    const timeline = buildRunTimeline(run, stepRows, []);
+    expect(steps(timeline)[0]?.prompt).toBeNull();
+  });
+
+  it('is null on a synthesized not_reached step', () => {
+    const run = makeRun({ status: 'failed', updated_at: at(30) });
+    const stepRows: WorkflowStepRow[] = [
+      makeStep({
+        id: 'step-planner',
+        step_name: 'orchestration_planner',
+        started_at: at(0),
+        completed_at: at(5),
+      }),
+      makeStep({
+        id: 'step-agent',
+        step_name: 'openai_responses_agent',
+        status: 'failed',
+        started_at: at(10),
+        completed_at: at(20),
+      }),
+    ];
+    const timeline = buildRunTimeline(run, stepRows, []);
+    const notReached = steps(timeline).find((event) => event.status === 'not_reached');
+    expect(notReached?.prompt).toBeNull();
+  });
+});
+
+/* -------------------------------------------------------------------------- *
  * B0-399 — deriveRunEmptyState (four empty/degraded-state banners)
  * -------------------------------------------------------------------------- */
 

@@ -22,10 +22,15 @@ import { readRunPayloadView } from '~/lib/observability/run-payload';
 import { getWorkflowRunTrace } from '~/lib/observability/runs-repository';
 import { getProdLineIdsByProductLineKeys } from '~/lib/rag/product-line-lookup';
 import {
+  extractPromptBundleVersion,
+  extractPromptVersion,
+} from '~/lib/tests/response-payload';
+import {
   formatDurationSeconds,
   formatEasternTimestamp,
   formatShortDate,
 } from '~/lib/utils/time';
+import { shortHash } from '~/lib/workflows/product-support/prompt-version';
 
 export const metadata = {
   title: 'Run Trace | Betco BEX',
@@ -103,6 +108,9 @@ export default async function AdminRunTracePage({ params }: PageProps) {
   const run = trace?.run ?? null;
   const routingDecision = readStringField(run?.final_output, 'routingDecision');
   const userMessage = readStringField(run?.user_input, 'message');
+  // B0-463 — run-level prompt stamps (B0-393), for the "view persisted prompts" UI.
+  const promptVersion = extractPromptVersion(run?.final_output);
+  const promptBundleVersion = extractPromptBundleVersion(run?.final_output);
   const totalDurationMs = run ? durationMsBetween(run.created_at, run.updated_at) : null;
   // B0-418 — the run's own payload (answer, chunks, similarity, timing, validation,
   // usage). Tolerates a null `final_output` and error-only payloads.
@@ -193,6 +201,25 @@ export default async function AdminRunTracePage({ params }: PageProps) {
                   <Badge className="tabular-nums" variant="outline">
                     {formatDurationSeconds(totalDurationMs)}
                   </Badge>
+                  {/* B0-463 — run-level prompt stamps, visible without expanding the timeline. */}
+                  {promptVersion ? (
+                    <Badge
+                      className="font-mono"
+                      title={`promptVersion (specialist prompt): ${promptVersion}`}
+                      variant="outline"
+                    >
+                      prompt {shortHash(promptVersion)}
+                    </Badge>
+                  ) : null}
+                  {promptBundleVersion ? (
+                    <Badge
+                      className="font-mono"
+                      title={`promptBundleVersion (prompt + tool bundle): ${promptBundleVersion}`}
+                      variant="outline"
+                    >
+                      bundle {shortHash(promptBundleVersion)}
+                    </Badge>
+                  ) : null}
                 </div>
 
                 <dl className="mt-6 grid gap-3 text-sm sm:grid-cols-3">
@@ -287,7 +314,12 @@ export default async function AdminRunTracePage({ params }: PageProps) {
                   {trace.timeline.length}
                 </span>
               </div>
-              <RunTraceTimeline emptyState={trace.emptyState} events={trace.timeline} />
+              <RunTraceTimeline
+                emptyState={trace.emptyState}
+                events={trace.timeline}
+                promptBundleVersion={promptBundleVersion}
+                promptVersion={promptVersion}
+              />
             </section>
           ) : null}
 

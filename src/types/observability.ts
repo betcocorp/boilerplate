@@ -10,6 +10,7 @@
  */
 
 import type { ToolCallOrigin } from '~/lib/audit/trace';
+import type { PromptRecord } from '~/lib/workflows/product-support/product-support-schemas';
 import type { Json, Tables } from '~/types/supabase.public';
 
 export type AuditLogRow = Tables<'audit_logs'>;
@@ -89,6 +90,15 @@ export type StepTimelineEvent = TimelineEventBase & {
   startedAt: string | null;
   completedAt: string | null;
   error: Json | null;
+  /**
+   * B0-463 — the model prompt captured at this LLM boundary (`recordPrompt` in
+   * `run-product-support-workflow.ts`), read straight off persisted
+   * `workflow_steps.input.prompt` — never reconstructed from source. Null for steps that
+   * never call a model (`orchestration_planner`, `early_decline_gate`), a bypassed
+   * `validator` pass, a synthesized `not_reached` step, or any row written before B0-389
+   * shipped prompt capture.
+   */
+  prompt: PromptRecord | null;
 };
 
 /**
