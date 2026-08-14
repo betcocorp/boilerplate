@@ -1,3 +1,10 @@
+# [1.0.0-dev.2](https://github.com/betcocorp/bex2.0/compare/v1.0.0-dev.1...v1.0.0-dev.2) (2026-08-14)
+
+
+### Bug Fixes
+
+* **na:** remove duplicate PERMISSIONS keys causing TS1117 and permission-check breakage ([629b54f](https://github.com/betcocorp/bex2.0/commit/629b54f1611a3583b4114a562b26476a703e5bdc))
+
 # 1.0.0-dev.1 (2026-08-13)
 
 
