@@ -1,3 +1,5 @@
+import { logWarn } from '~/lib/observability/logger';
+
 import {
   getExistingResultItemIds,
   getTestItemsByTestId,
@@ -8,6 +10,7 @@ import {
   updateTestResult,
 } from './repository';
 import { runSingleTestItem } from './runner';
+import { generateAndSaveRunInsights } from './run-insights';
 import { isTerminalRunStatus } from './types';
 
 function asSummaryObject(value: unknown): Record<string, unknown> {
@@ -174,4 +177,23 @@ export async function executeTestRun(testResultId: string) {
   await updateTestRecord(testResult.test_id, {
     status: 'ready',
   });
+
+  // B0-517 — auto-populate `test_results.insights` on every terminal chat run so the
+  // "Run insights" panel has something on load instead of relying on someone clicking
+  // "Analyze this run" (previously true of only 1 of 92 runs). Best-effort: a failure here
+  // must not undo the run that just completed successfully, so it is logged, not thrown.
+  try {
+    const insightsResult = await generateAndSaveRunInsights(testResult.id);
+    if (!insightsResult.ok && insightsResult.reason !== 'no_items') {
+      logWarn('test_run_insights_auto_generate_failed', {
+        testResultId: testResult.id,
+        reason: insightsResult.reason,
+      });
+    }
+  } catch (error) {
+    logWarn('test_run_insights_auto_generate_error', {
+      testResultId: testResult.id,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
