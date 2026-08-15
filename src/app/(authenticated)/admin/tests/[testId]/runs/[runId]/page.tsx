@@ -16,6 +16,7 @@ import {
 } from '~/components/admin/tests/RunInsightsPanel';
 import { RunItemResultsCsvDownload } from '~/components/admin/tests/RunItemResultsCsvDownload';
 import { RunReportButton } from '~/components/admin/tests/RunReportButton';
+import { RunToolRoutingPanel } from '~/components/admin/tests/RunToolRoutingPanel';
 import { PromptBundleVersionBadge } from '~/components/admin/tests/PromptBundleVersionBadge';
 import {
   TestRunNotesDisplay,
@@ -46,6 +47,7 @@ import {
   getTestById,
   getTestItemsByTestId,
   getTestResultById,
+  listAgentStepOutputsByWorkflowRunIds,
   listAllResultItemsByResultId,
 } from '~/lib/tests/repository';
 import {
@@ -60,6 +62,11 @@ import {
   extractWorkflowRunId,
   summarizePromptBundleVersions,
 } from '~/lib/tests/response-payload';
+import {
+  computeToolRoutingReport,
+  extractExpectedTool,
+  parseAgentStepToolTrace,
+} from '~/lib/tests/tool-routing';
 import { isCompletedRunStatus } from '~/lib/tests/types';
 import { formatDate, formatDurationSeconds } from '~/lib/utils/time';
 import { shortHash } from '~/lib/workflows/product-support/prompt-version';
@@ -244,11 +251,40 @@ export default async function AdminTestRunDetailsPage({
       ),
     ),
   );
-  const workflowRuns = await listWorkflowRunsByIds(workflowRunIds);
+  const [workflowRuns, agentStepOutputs] = await Promise.all([
+    listWorkflowRunsByIds(workflowRunIds),
+    listAgentStepOutputsByWorkflowRunIds(workflowRunIds),
+  ]);
   const modelByWorkflowRunId = new Map(
     workflowRuns.map((workflowRun) => {
       const modelTag = extractModelTag(workflowRun.user_input);
       return [workflowRun.id, resolveResponsesModel(modelTag)] as const;
+    }),
+  );
+
+  /**
+   * B0-383 — per-run tool-call frequency + routing-accuracy. The agent step's `toolTrace` lives on
+   * `workflow_steps`, keyed by `workflow_run_id` (never on `test_result_items.response_payload`
+   * itself — see `~/lib/tests/tool-routing.ts`), so it is fetched separately and joined back onto
+   * each result item by its `workflow_run_id`.
+   */
+  const toolTraceByWorkflowRunId = new Map(
+    agentStepOutputs.map((row) => [row.workflow_run_id, parseAgentStepToolTrace(row.output)] as const),
+  );
+  const expectedToolByTestItemId = new Map(
+    testItems.map((item) => [item.id, extractExpectedTool(item.metadata)] as const),
+  );
+  const toolRoutingReport = computeToolRoutingReport(
+    resultItems.map((row) => {
+      const workflowRunId = workflowRunIdByResultItemId.get(row.id) ?? null;
+      return {
+        resultItemId: row.id,
+        testItemId: row.test_item_id,
+        rowIndex: row.row_index,
+        prompt: promptByItemId.get(row.test_item_id) ?? '',
+        expectedTool: expectedToolByTestItemId.get(row.test_item_id) ?? null,
+        toolTrace: workflowRunId ? (toolTraceByWorkflowRunId.get(workflowRunId) ?? null) : null,
+      };
     }),
   );
 
@@ -434,6 +470,8 @@ export default async function AdminTestRunDetailsPage({
           slowOverTenSecondsCount={slowOverTenSecondsCount}
           totalItems={result.total_items}
         />
+
+        <RunToolRoutingPanel report={toolRoutingReport} testId={test.id} />
 
         <RunInsightsPanel
           initialGeneratedAt={result.insights_generated_at}

@@ -5,6 +5,7 @@ import {
   extractItemSimilarityScore,
   extractSearchRunMaxSimilarity,
 } from './response-payload';
+import { extractExpectedTool, parseAgentStepToolTrace } from './tool-routing';
 import { COMPLETED_RUN_STATUSES } from './types';
 import type {
   LatestFailedTestResultItemView,
@@ -943,4 +944,160 @@ export async function listAllLatestFailedItemsForGroupedView(
   if (result.error) throw new Error(result.error.message);
   const data = result.data;
   return Array.isArray(data) ? (data as LatestFailedTestResultItemView[]) : [];
+}
+
+/** PostgREST `.in()` filter values are URL-encoded; chunk any id list to stay well under any practical URL-length cap. */
+const IN_FILTER_CHUNK_SIZE = 150;
+
+export type AgentStepOutputRow = { workflow_run_id: string; output: unknown };
+
+/**
+ * B0-383 — the `openai_responses_agent` `workflow_steps` row per workflow run (one per run that
+ * reached the agent step; a run that early-declined has none). `output.toolTrace` is the per-call
+ * trace the tool-routing report (`~/lib/tests/tool-routing.ts`) is built from — parse it with
+ * `parseAgentStepToolTrace` rather than reading `output` directly.
+ */
+export async function listAgentStepOutputsByWorkflowRunIds(
+  workflowRunIds: string[],
+): Promise<AgentStepOutputRow[]> {
+  if (workflowRunIds.length === 0) {
+    return [];
+  }
+
+  const supabase = getSupabaseServiceRoleClient();
+  const rows: AgentStepOutputRow[] = [];
+
+  for (let i = 0; i < workflowRunIds.length; i += IN_FILTER_CHUNK_SIZE) {
+    const chunk = workflowRunIds.slice(i, i + IN_FILTER_CHUNK_SIZE);
+    const result = await supabase
+      .from('workflow_steps')
+      .select('workflow_run_id,output')
+      .eq('step_name', 'openai_responses_agent')
+      .in('workflow_run_id', chunk);
+    assertNoError(result);
+    rows.push(...((result.data ?? []) as AgentStepOutputRow[]));
+  }
+
+  return rows;
+}
+
+export type ToolRoutingQueueRow = {
+  resultItemId: string;
+  testItemId: string;
+  testId: string;
+  testName: string;
+  rowIndex: number;
+  prompt: string;
+  expectedTool: string;
+  /** Tool names the most recent run for this question actually called; `[]` = none called at all. */
+  calledTools: string[];
+  runId: string;
+  runCreatedAt: string;
+};
+
+const TOOL_ROUTING_QUEUE_DEFAULT_LIMIT = 200;
+
+/**
+ * B0-383 — misrouted questions for the Failure Queue's "Routing" view: the LATEST run of every
+ * test item tagged with `metadata.expected_tool` (see `~/lib/tests/tool-routing.ts`) whose call
+ * trace never included that tool. Deliberately keyed off the `metadata->>expected_tool IS NOT NULL`
+ * filter rather than scanning every `test_result_item` in the system — this feature is opt-in per
+ * item, so until a test author tags items the query touches zero extra rows. Independent of
+ * `passed`: a question can pass the pass/fail grader on a decline/refusal and still have called the
+ * wrong tool, which is exactly the signal this view exists to surface (unlike
+ * `latest_failed_test_result_items`, which is pass/fail only).
+ */
+export async function listLatestToolRoutingMismatches(
+  limit = TOOL_ROUTING_QUEUE_DEFAULT_LIMIT,
+): Promise<ToolRoutingQueueRow[]> {
+  const supabase = getSupabaseServiceRoleClient();
+
+  const scoredItemsResult = await supabase
+    .from('test_items')
+    .select('id, test_id, prompt, row_index, metadata')
+    .not('metadata->>expected_tool', 'is', null);
+  assertNoError(scoredItemsResult);
+  const scoredItems = (scoredItemsResult.data ?? []).filter((row) => extractExpectedTool(row.metadata));
+
+  if (scoredItems.length === 0) {
+    return [];
+  }
+
+  const testIds = [...new Set(scoredItems.map((item) => item.test_id))];
+  const testsResult = await supabase.from('tests').select('id,name').in('id', testIds);
+  assertNoError(testsResult);
+  const testNameById = new Map((testsResult.data ?? []).map((row) => [row.id, row.name]));
+
+  // Latest test_result_item per scored test_item_id — one paginated scan ordered newest-first,
+  // keeping only the first (i.e. latest) row seen per test_item_id.
+  const testItemIds = scoredItems.map((item) => item.id);
+  const latestByTestItemId = new Map<
+    string,
+    Pick<TestResultItemRecord, 'id' | 'test_item_id' | 'test_result_id' | 'workflow_run_id' | 'created_at'>
+  >();
+  for (let i = 0; i < testItemIds.length; i += IN_FILTER_CHUNK_SIZE) {
+    const chunk = testItemIds.slice(i, i + IN_FILTER_CHUNK_SIZE);
+    const result = await supabase
+      .from('test_result_items')
+      .select('id, test_item_id, test_result_id, workflow_run_id, created_at')
+      .in('test_item_id', chunk)
+      .order('created_at', { ascending: false });
+    assertNoError(result);
+    for (const row of result.data ?? []) {
+      if (!latestByTestItemId.has(row.test_item_id)) {
+        latestByTestItemId.set(row.test_item_id, row);
+      }
+    }
+  }
+
+  const latestRows = [...latestByTestItemId.values()];
+  const runIds = [...new Set(latestRows.map((row) => row.test_result_id))];
+  const runsResult =
+    runIds.length > 0
+      ? await supabase.from('test_results').select('id, created_at').in('id', runIds)
+      : { data: [], error: null };
+  assertNoError(runsResult);
+  const runCreatedAtById = new Map((runsResult.data ?? []).map((row) => [row.id, row.created_at]));
+
+  const workflowRunIds = [
+    ...new Set(
+      latestRows.map((row) => row.workflow_run_id).filter((value): value is string => Boolean(value)),
+    ),
+  ];
+  const agentOutputs = await listAgentStepOutputsByWorkflowRunIds(workflowRunIds);
+  const toolTraceByWorkflowRunId = new Map(
+    agentOutputs.map((row) => [row.workflow_run_id, parseAgentStepToolTrace(row.output)] as const),
+  );
+
+  const mismatches: ToolRoutingQueueRow[] = [];
+  for (const item of scoredItems) {
+    const expectedTool = extractExpectedTool(item.metadata);
+    if (!expectedTool) continue;
+
+    const latest = latestByTestItemId.get(item.id);
+    if (!latest) continue; // tagged, but never run yet
+
+    const toolTrace = latest.workflow_run_id
+      ? (toolTraceByWorkflowRunId.get(latest.workflow_run_id) ?? null)
+      : null;
+    const calledTools = (toolTrace ?? []).map((entry) => entry.toolName);
+    if (calledTools.includes(expectedTool)) continue; // routed correctly — not a queue row
+
+    mismatches.push({
+      resultItemId: latest.id,
+      testItemId: item.id,
+      testId: item.test_id,
+      testName: testNameById.get(item.test_id) ?? 'Unknown test',
+      rowIndex: item.row_index,
+      prompt: item.prompt,
+      expectedTool,
+      calledTools,
+      runId: latest.test_result_id,
+      runCreatedAt: runCreatedAtById.get(latest.test_result_id) ?? latest.created_at,
+    });
+  }
+
+  return mismatches
+    .sort((a, b) => (a.runCreatedAt < b.runCreatedAt ? 1 : a.runCreatedAt > b.runCreatedAt ? -1 : 0))
+    .slice(0, limit);
 }

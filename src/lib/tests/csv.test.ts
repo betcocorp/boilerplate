@@ -64,6 +64,7 @@ describe('parseTestCsvContent — golden test set format', () => {
       'expected_result_type',
       'canonical_product',
       'reason_code',
+      'source',
       'priority',
       'ideal_response',
       'product_mention',
@@ -73,6 +74,7 @@ describe('parseTestCsvContent — golden test set format', () => {
       'minimum_concepts',
       'expected_sources',
       'should_cite',
+      'expected_tool',
     ]);
     // The template's example row is prose, so only the prompt is expected to survive typed parsing.
     expect(row.prompt).toContain('Enter the prompt/question to test');

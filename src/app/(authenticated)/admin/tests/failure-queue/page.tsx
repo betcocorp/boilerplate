@@ -2,6 +2,7 @@ import { ChevronDown } from 'lucide-react';
 import Link from 'next/link';
 import { connection } from 'next/server';
 
+import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
 import { Input } from '~/components/ui/input';
 import { Label } from '~/components/ui/label';
@@ -23,6 +24,8 @@ import { suggestResolution } from '~/lib/tests/failure-queue';
 import {
   listAllLatestFailedItemsForGroupedView,
   listLatestFailedTestResultItemsPage,
+  listLatestToolRoutingMismatches,
+  type ToolRoutingQueueRow,
 } from '~/lib/tests/repository';
 import { formatDurationSeconds } from '~/lib/utils/time';
 import { readSearchParam } from '~/lib/utils/params';
@@ -40,7 +43,11 @@ type PageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 };
 
-function buildFailureQueueHref(query: string, page: number, view = 'list') {
+function buildFailureQueueHref(
+  query: string,
+  page: number,
+  view: 'list' | 'grouped' | 'routing' = 'list',
+) {
   const params = new URLSearchParams();
   if (query.trim()) params.set('q', query.trim());
   if (page > 1) params.set('page', String(page));
@@ -53,7 +60,9 @@ export default async function AdminFailureQueuePage({ searchParams }: PageProps)
   await connection();
   const params = await searchParams;
   const query = readSearchParam(params.q);
-  const view = readSearchParam(params.view, 'list') === 'grouped' ? 'grouped' : 'list';
+  const rawView = readSearchParam(params.view, 'list');
+  const view: 'list' | 'grouped' | 'routing' =
+    rawView === 'grouped' ? 'grouped' : rawView === 'routing' ? 'routing' : 'list';
   const requestedPage = Number.parseInt(readSearchParam(params.page, '1'), 10);
   const currentPage =
     Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : 1;
@@ -81,8 +90,14 @@ export default async function AdminFailureQueuePage({ searchParams }: PageProps)
   };
   let groupedSections: GroupSection[] = [];
 
+  // ── Routing view data (B0-383) ────────────────────────────────────────────
+  let routingRows: ToolRoutingQueueRow[] = [];
+
   try {
-    if (view === 'grouped') {
+    if (view === 'routing') {
+      routingRows = await listLatestToolRoutingMismatches();
+      total = routingRows.length;
+    } else if (view === 'grouped') {
       const all = await listAllLatestFailedItemsForGroupedView(query);
       total = all.length;
 
@@ -194,7 +209,7 @@ export default async function AdminFailureQueuePage({ searchParams }: PageProps)
               <Button type="submit">Search</Button>
               {query ? (
                 <Button asChild type="button" variant="outline">
-                  <Link href={view === 'grouped' ? `${ROUTE}?view=grouped` : ROUTE}>Clear</Link>
+                  <Link href={view !== 'list' ? `${ROUTE}?view=${view}` : ROUTE}>Clear</Link>
                 </Button>
               ) : null}
             </div>
@@ -213,7 +228,9 @@ export default async function AdminFailureQueuePage({ searchParams }: PageProps)
           {/* Toolbar */}
           <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
             <div className="flex items-center gap-3">
-              <h2 className="text-lg font-semibold text-slate-900">Failures</h2>
+              <h2 className="text-lg font-semibold text-slate-900">
+                {view === 'routing' ? 'Misrouted questions' : 'Failures'}
+              </h2>
               <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-sm font-medium text-slate-500">
                 {total}
               </span>
@@ -240,8 +257,104 @@ export default async function AdminFailureQueuePage({ searchParams }: PageProps)
               >
                 By category
               </Link>
+              <Link
+                href={buildFailureQueueHref(query, 1, 'routing')}
+                className={`rounded-lg px-3 py-1.5 transition-colors ${
+                  view === 'routing'
+                    ? 'bg-white text-slate-900 shadow-sm'
+                    : 'text-slate-500 hover:text-slate-800'
+                }`}
+                title="Questions tagged with an expected_tool whose latest run called the wrong tool (B0-383)"
+              >
+                Tool routing
+              </Link>
             </div>
           </div>
+
+          {/* ── Routing view (B0-383) ────────────────────────────────── */}
+          {view === 'routing' && !loadError && (
+            <>
+              <p className="mb-4 max-w-3xl text-sm text-slate-600">
+                Latest run of every question tagged with an <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">expected_tool</code>{' '}
+                (see the test-set CSV template) whose tool call trace never included the expected
+                tool — independent of pass/fail, since a misrouted call can still produce a
+                passing answer.
+              </p>
+              <div className="max-h-[min(72vh,52rem)] overflow-auto overscroll-contain rounded-xl border border-slate-100">
+                <table className="w-full caption-bottom text-sm">
+                  <TableHeader className="sticky top-0 z-10 bg-white shadow-[0_1px_0_0_rgb(226,232,240)] [&_tr]:border-b-0">
+                    <TableRow>
+                      <TableHead>Test</TableHead>
+                      <TableHead>Prompt</TableHead>
+                      <TableHead>Expected tool</TableHead>
+                      <TableHead>Offending tool call</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {routingRows.length === 0 ? (
+                      <TableRow>
+                        <TableCell className="text-slate-500" colSpan={5}>
+                          No routing mismatches. Either every tagged question is routing correctly,
+                          or no test items have an <code>expected_tool</code> set yet — add one as a
+                          CSV column to start scoring routing accuracy.
+                        </TableCell>
+                      </TableRow>
+                    ) : null}
+                    {routingRows.map((row) => (
+                      <TableRow key={row.resultItemId}>
+                        <TableCell className="max-w-[180px] align-top">
+                          <Link
+                            className="font-medium text-sky-700 underline-offset-2 hover:underline"
+                            href={`/admin/tests/${row.testId}`}
+                          >
+                            <span className="line-clamp-2">{row.testName}</span>
+                          </Link>
+                        </TableCell>
+                        <TableCell className="max-w-md align-top text-sm text-slate-800">
+                          <span className="line-clamp-3">{row.prompt}</span>
+                        </TableCell>
+                        <TableCell className="align-top">
+                          <Badge variant="outline">
+                            <code>{row.expectedTool}</code>
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="max-w-xs align-top">
+                          {row.calledTools.length === 0 ? (
+                            <Badge variant="destructive">no tool called</Badge>
+                          ) : (
+                            <div className="flex flex-wrap gap-1">
+                              {row.calledTools.map((toolName, index) => (
+                                <Badge key={`${toolName}-${index}`} variant="destructive">
+                                  <code>{toolName}</code>
+                                </Badge>
+                              ))}
+                            </div>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right align-top">
+                          <div className="flex flex-col items-end gap-1 text-sm">
+                            <Link
+                              className="text-sky-700 underline-offset-2 hover:underline"
+                              href={`/admin/tests/${row.testId}/items/${row.testItemId}`}
+                            >
+                              Item history
+                            </Link>
+                            <Link
+                              className="text-sky-700 underline-offset-2 hover:underline"
+                              href={`/admin/tests/${row.testId}/runs/${row.runId}`}
+                            >
+                              Run
+                            </Link>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </table>
+              </div>
+            </>
+          )}
 
           {/* ── List view ─────────────────────────────────────────────── */}
           {view === 'list' && (
