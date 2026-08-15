@@ -898,10 +898,15 @@ export type Database = {
           elapsed_ms: number
           error_message: string | null
           id: string
+          intended_agent_label: string | null
+          keyword_route: string | null
+          llm_route: string | null
           passed: boolean
           prompt_version: string | null
           response_payload: Json | null
           response_text: string | null
+          routing_confidence: number | null
+          routing_decision: string | null
           row_index: number
           status: string
           test_item_id: string
@@ -916,10 +921,15 @@ export type Database = {
           elapsed_ms: number
           error_message?: string | null
           id?: string
+          intended_agent_label?: string | null
+          keyword_route?: string | null
+          llm_route?: string | null
           passed?: boolean
           prompt_version?: string | null
           response_payload?: Json | null
           response_text?: string | null
+          routing_confidence?: number | null
+          routing_decision?: string | null
           row_index: number
           status?: string
           test_item_id: string
@@ -934,10 +944,15 @@ export type Database = {
           elapsed_ms?: number
           error_message?: string | null
           id?: string
+          intended_agent_label?: string | null
+          keyword_route?: string | null
+          llm_route?: string | null
           passed?: boolean
           prompt_version?: string | null
           response_payload?: Json | null
           response_text?: string | null
+          routing_confidence?: number | null
+          routing_decision?: string | null
           row_index?: number
           status?: string
           test_item_id?: string
