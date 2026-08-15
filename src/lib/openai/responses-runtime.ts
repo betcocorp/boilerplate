@@ -71,6 +71,16 @@ export type ResponsesRuntimeOptions = {
   userMessage: string;
   /** Prior completed response id for multi-turn chaining (per conversation). */
   previousResponseId?: string | null;
+  /**
+   * B0-519 — prior conversation turns to replay as explicit messages instead of chaining via
+   * `previousResponseId`. Used ONLY when the caller intentionally omits `previousResponseId`
+   * (`null`/`undefined`) to break an over-grown chain — see `capConversationHistory` in
+   * `~/lib/workflows/product-support/run-product-support-workflow`. Ignored when a
+   * `previousResponseId` IS given: the server already remembers that conversation, so replaying it
+   * again here would duplicate it inside the chain. Injected into round 1's `input` only, same as
+   * `preloadedEvidence` — later rounds send `toolOutputs` instead.
+   */
+  history?: Array<{ role: 'user' | 'assistant'; content: string }>;
   maxToolRounds?: number;
   temperature?: number;
   toolChoice?: ResponseCreateParamsNonStreaming['tool_choice'];
@@ -179,6 +189,21 @@ export async function runResponsesWithToolLoop(
     const input: ResponseInputItem[] =
       toolOutputs ??
       [
+        // B0-519 — capped prior turns, replayed as explicit messages ONLY when this call is NOT
+        // chaining via `previousResponseId` (an intentional chain break to bound token growth — see
+        // `history`'s doc comment above). Never present alongside a real `previousResponseId`: the
+        // server already remembers that conversation, so this would duplicate it.
+        ...(!opts.previousResponseId && opts.history
+          ? opts.history
+              .filter((message) => message.content.trim().length > 0)
+              .map(
+                (message): ResponseInputItem => ({
+                  role: message.role,
+                  content: message.content,
+                  type: 'message',
+                }),
+              )
+          : []),
         {
           role: 'user',
           content: opts.userMessage,

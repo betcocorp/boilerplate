@@ -267,6 +267,78 @@ describe('runResponsesWithToolLoop — preloaded evidence (B0-436)', () => {
   });
 });
 
+describe('runResponsesWithToolLoop — capped history replay (B0-519)', () => {
+  it('injects history as explicit messages, before the user message, when no previousResponseId is given', async () => {
+    const { client, create } = stubClient([{ id: 'resp_1', output: [], output_text: 'hi' }]);
+
+    await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1',
+      instructions: 'stable prefix',
+      tools: [],
+      userMessage: 'and the bathroom cleaner?',
+      history: [
+        { role: 'user', content: 'What is your best floor cleaner?' },
+        { role: 'assistant', content: 'Try Green Earth Neutral Cleaner.' },
+      ],
+      executeTool: async ({ name }) => ({ output: '{}', trace: trace(name) }),
+    });
+
+    const round1 = (create.mock.calls as unknown as Array<[Record<string, unknown>]>)[0]?.[0]
+      .input as Array<Record<string, unknown>>;
+
+    expect(round1).toHaveLength(3);
+    expect(round1[0]).toMatchObject({
+      role: 'user',
+      content: 'What is your best floor cleaner?',
+    });
+    expect(round1[1]).toMatchObject({
+      role: 'assistant',
+      content: 'Try Green Earth Neutral Cleaner.',
+    });
+    expect(round1[2]).toMatchObject({ role: 'user', content: 'and the bathroom cleaner?' });
+  });
+
+  it('ignores history when a previousResponseId is given, to avoid duplicating the server-side chain', async () => {
+    const { client, create } = stubClient([{ id: 'resp_1', output: [], output_text: 'hi' }]);
+
+    await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1',
+      instructions: 'stable prefix',
+      tools: [],
+      userMessage: 'and the bathroom cleaner?',
+      previousResponseId: 'resp_prev',
+      history: [{ role: 'user', content: 'What is your best floor cleaner?' }],
+      executeTool: async ({ name }) => ({ output: '{}', trace: trace(name) }),
+    });
+
+    const round1 = (create.mock.calls as unknown as Array<[Record<string, unknown>]>)[0]?.[0]
+      .input as Array<Record<string, unknown>>;
+
+    expect(round1).toHaveLength(1);
+    expect(round1[0]).toMatchObject({ role: 'user', content: 'and the bathroom cleaner?' });
+  });
+
+  it('drops blank history messages, matching the AI SDK runtime', async () => {
+    const { client, create } = stubClient([{ id: 'resp_1', output: [], output_text: 'hi' }]);
+
+    await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1',
+      instructions: 'stable prefix',
+      tools: [],
+      userMessage: 'hello',
+      history: [{ role: 'user', content: '   ' }],
+      executeTool: async ({ name }) => ({ output: '{}', trace: trace(name) }),
+    });
+
+    const round1 = (create.mock.calls as unknown as Array<[Record<string, unknown>]>)[0]?.[0]
+      .input as Array<Record<string, unknown>>;
+    expect(round1).toHaveLength(1);
+  });
+});
+
 describe('runResponsesWithToolLoop — bounded transport retry (B0-370)', () => {
   it('retries a network fault and succeeds', async () => {
     const { client, create } = scriptedClient([
