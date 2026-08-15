@@ -825,6 +825,7 @@ export type Database = {
           id: string
           ideal_response: string | null
           input_payload: Json
+          intended_agent_item: string | null
           metadata: Json
           minimum_concepts: string | null
           priority: number | null
@@ -846,6 +847,7 @@ export type Database = {
           id?: string
           ideal_response?: string | null
           input_payload?: Json
+          intended_agent_item?: string | null
           metadata?: Json
           minimum_concepts?: string | null
           priority?: number | null
@@ -867,6 +869,7 @@ export type Database = {
           id?: string
           ideal_response?: string | null
           input_payload?: Json
+          intended_agent_item?: string | null
           metadata?: Json
           minimum_concepts?: string | null
           priority?: number | null
