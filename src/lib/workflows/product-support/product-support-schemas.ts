@@ -103,6 +103,10 @@ export type PromptRecord = z.infer<typeof promptRecordSchema>;
  *   (brand, product) tuple resolved per turn on the recommendations/cross-reference path, reused by
  *   the forced-lookup prefetch, the deterministic override safety net, and the B0-355 web-search
  *   backstop. Records which competitor was picked when the message named two.
+ * - `llm_intent_classifier_shadow` — `classifyUserIntent` (B0-507); shadow-mode only, gated on
+ *   `BEX_LLM_ROUTER_ENABLED` + `BEX_LLM_ROUTER_SHADOW_MODE`. Records what the LLM router would
+ *   have routed to next to what `keyword_routing` actually routed to, for rollout comparison —
+ *   never changes the turn's routing while this gate is the one being recorded.
  */
 export const gateIdSchema = z.enum([
   'keyword_routing',
@@ -111,6 +115,7 @@ export const gateIdSchema = z.enum([
   'recommendation_confidence',
   'regulated_claim_guardrail',
   'competitor_identity_resolution',
+  'llm_intent_classifier_shadow',
 ]);
 
 export type GateId = z.infer<typeof gateIdSchema>;

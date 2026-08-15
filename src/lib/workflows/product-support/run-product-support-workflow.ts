@@ -28,6 +28,15 @@ import {
   SME_ROUTE_TIE_BREAK_ORDER,
 } from '~/lib/orchestrator/sme-routing';
 import {
+  classifyUserIntent,
+  isLlmRouterEnabled,
+  isLlmRouterShadowMode,
+  resolveRouterModel,
+  resolveRouterTimeoutMs,
+  type IntentClassification,
+  type PriorTurnMessage,
+} from '~/lib/orchestrator/intent-classifier';
+import {
   CATEGORY_MISMATCH_CONFIDENCE_CAP,
   evaluateRecommendationGate,
   LOW_SIMILARITY_CONFIDENCE_CAP,
@@ -233,6 +242,20 @@ function dominantCacheSource(cacheSourceCounts: Map<string, number>) {
   return sorted[0]?.[0] ?? null;
 }
 
+/**
+ * B0-514 — evaluated as NOT SAFE to retire yet. This is a live production behavior switch (it
+ * pins `tool_choice` to `lookup_cross_reference`, suppresses the `broad_recommendation_without_context`
+ * early decline, and forces a search — see the three call sites below), which must never depend on
+ * the B0-507 classifier while that classifier is shadow-only (`BEX_LLM_ROUTER_ENABLED` defaults
+ * off, and even when on, `BEX_LLM_ROUTER_SHADOW_MODE` defaults on and its output is deliberately
+ * never used to route — see the `llm_intent_classifier_shadow` gate). Swapping this function for
+ * `classifiedIntent === 'recommendations'` today would either do nothing (classifier disabled) or
+ * silently change what gets forced (classifier enabled), neither of which is what a "retire this
+ * function" ticket should do to a shadow-mode rollout. It also loses signal this phrase check
+ * fires regardless of `routingDecision` (B0-339's point — a `product`-routed message can still
+ * carry cross-reference intent). Revisit once the classifier is validated well enough to become
+ * the actual routing cutover.
+ */
 export function shouldForceCrossReferenceLookup(userMessage: string) {
   const text = userMessage.toLowerCase();
   const hasCrossRefIntent =
@@ -1710,6 +1733,37 @@ export async function runProductSupportWorkflow(input: {
       : null;
 
     /**
+     * B0-507 — shadow-mode LLM intent classification, run alongside the keyword router above
+     * (`route` / `routingDecision`) without ever changing this turn's actual routing. Gated on
+     * BOTH `BEX_LLM_ROUTER_ENABLED` and `BEX_LLM_ROUTER_SHADOW_MODE`: `classifyUserIntent`
+     * already no-ops to the keyword-router fallback when the router is disabled, but checking
+     * `isLlmRouterEnabled()` here too skips even building the cache key / prior-message payload
+     * on the overwhelming majority of turns where the router is off. Requiring shadow mode as
+     * well keeps this ticket's wiring honest about what it is: a log-and-compare step, not the
+     * routing cutover (B0-514 discusses why the cutover isn't safe yet).
+     *
+     * Kicked off here (after the early-decline short-circuit above has already returned for the
+     * turns that never reach this point, so a declined turn never pays for an unused model call)
+     * and NOT awaited — it runs concurrently with the model's tool-call round, same shape as the
+     * `resolvedCompetitorPromise` prefetch above, and is only awaited later, right before the
+     * agent step is persisted (see `shadowIntentClassification` below).
+     */
+    const shadowIntentClassificationEnabled = isLlmRouterEnabled() && isLlmRouterShadowMode();
+    const shadowIntentClassificationPromise: Promise<IntentClassification> | null =
+      shadowIntentClassificationEnabled
+        ? classifyUserIntent(
+            input.userMessage,
+            cappedHistory.map(
+              (m, index): PriorTurnMessage => ({
+                id: String(index),
+                role: m.role,
+                content: m.content,
+              }),
+            ),
+          )
+        : null;
+
+    /**
      * B0-461 — the forced-cross-reference path still pins `tool_choice` to the named
      * `lookup_cross_reference` function (a full single-call collapse was judged too risky here: the
      * pinned-tool attribution, the safety-net override, and the persisted-trace ordering asserted by
@@ -2051,6 +2105,42 @@ export async function runProductSupportWorkflow(input: {
         }
       : null;
 
+    /**
+     * B0-507 — await the shadow classification kicked off far earlier (alongside
+     * `resolvedCompetitorPromise`, above): by this point in the turn the full tool-call round has
+     * already run, so the classifier's ~800ms budget has almost always already elapsed and this
+     * await resolves immediately. `classifyUserIntent` never rejects (it falls back to the
+     * keyword router internally on any error/timeout), so this cannot fail the turn.
+     *
+     * Recorded purely for observability — `keywordRoutingDecision` is what actually routed this
+     * turn; `classifiedIntent` is never substituted for it while shadow mode is on.
+     */
+    const shadowIntentClassification: IntentClassification | null = shadowIntentClassificationPromise
+      ? await shadowIntentClassificationPromise
+      : null;
+    const intentClassifierShadowGate: GateRecord | null = shadowIntentClassification
+      ? {
+          gate: 'llm_intent_classifier_shadow',
+          inputs: {
+            classifiedIntent: shadowIntentClassification.intent,
+            classifierConfidence: shadowIntentClassification.confidence,
+            classifierSource: shadowIntentClassification.source,
+            entities: shadowIntentClassification.entities,
+            suggestedTool: shadowIntentClassification.suggestedTool,
+            keywordRoutingDecision: routingDecision,
+          },
+          thresholds: {
+            model: resolveRouterModel(),
+            timeoutMs: resolveRouterTimeoutMs(),
+          },
+          verdict:
+            shadowIntentClassification.intent === routingDecision
+              ? 'agrees_with_keyword_router'
+              : 'disagrees_with_keyword_router',
+          effect: `Shadow mode only: the classifier proposed "${shadowIntentClassification.intent}" (confidence ${shadowIntentClassification.confidence}, source ${shadowIntentClassification.source}) while the keyword router actually routed this turn to "${routingDecision}". Not used to route this turn; recorded for rollout comparison only.`,
+        }
+      : null;
+
     let draftAnswer = agentResult.assistantText;
     /**
      * B0-391 — the single mutable answer-provenance cursor. Several branches below overwrite the
@@ -2181,7 +2271,11 @@ export async function runProductSupportWorkflow(input: {
         usage: agentResult.usage,
         usageByCall: agentResult.usageByCall,
         // B0-357 — the one resolved competitor-identity gate for this turn, when it ran.
-        ...recordGates(competitorIdentityGate ? [competitorIdentityGate] : []),
+        // B0-507 — the shadow-mode classifier comparison, when the classifier ran.
+        ...recordGates([
+          ...(competitorIdentityGate ? [competitorIdentityGate] : []),
+          ...(intentClassifierShadowGate ? [intentClassifierShadowGate] : []),
+        ]),
       }),
     });
     markStepClosed(agentStep.id);
@@ -2519,6 +2613,16 @@ export async function runProductSupportWorkflow(input: {
       const gateInput = {
         baseConfidence: validation.confidence,
         topSimilarity: sources.length > 0 ? topSimilarity : null,
+        /**
+         * B0-513 — wired from the B0-357 competitor-identity resolution already computed for this
+         * turn (`resolvedCompetitor`, above). Guaranteed non-null here: `useCrossReferencePostProcessing`
+         * and `competitorIdentityNeeded` share the exact same trigger condition
+         * (`routingDecision === 'recommendations' || forcedCrossReference`), so whenever this branch
+         * runs, `resolvedCompetitorPromise` was created and already awaited. `false` (not `undefined`)
+         * when the extraction ran but found no brand, so `evaluateRecommendationGate`'s missing-brand
+         * cap can actually fire instead of silently never applying.
+         */
+        brandKnown: Boolean(resolvedCompetitor?.brand?.trim()),
       };
       const gate = evaluateRecommendationGate(gateInput);
       const confidenceBeforeGate = validation.confidence;
@@ -2540,20 +2644,18 @@ export async function runProductSupportWorkflow(input: {
        * the ONLY record for every run predating this step, and the timeline still reads it.
        *
        * `inputs` lists exactly what the call site passes. `evaluateRecommendationGate` also accepts
-       * `competitorChemistryClass`, `recommendedChemistryClass` and `brandKnown`, but this workflow
-       * passes none of them, so the category-mismatch and missing-brand caps cannot fire here —
-       * recording them as if they had been evaluated would be a false claim.
+       * `competitorChemistryClass` and `recommendedChemistryClass`, but this workflow passes
+       * neither (REC-1 grounding + REC-2/3 structured fields are still dormant), so the
+       * category-mismatch cap cannot fire here — recording it as if it had been evaluated would be
+       * a false claim. `brandKnown` WAS wired above (B0-513, see `gateInput`), so it is no longer
+       * listed here.
        */
       validatorStepGates.push({
         gate: 'recommendation_confidence',
         inputs: {
           ...gateInput,
           retrievedSourceCount: sources.length,
-          unwiredInputs: [
-            'competitorChemistryClass',
-            'recommendedChemistryClass',
-            'brandKnown',
-          ],
+          unwiredInputs: ['competitorChemistryClass', 'recommendedChemistryClass'],
           trigger:
             routingDecision === 'recommendations'
               ? 'recommendations_route'

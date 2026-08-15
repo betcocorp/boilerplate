@@ -884,13 +884,15 @@ describe('recommendation confidence gate record (B0-391)', () => {
       missingBrandConfidenceCap: MISSING_BRAND_CONFIDENCE_CAP,
       categoryMismatchConfidenceCap: CATEGORY_MISMATCH_CONFIDENCE_CAP,
     });
-    expect(record.inputs).toMatchObject({ trigger: 'recommendations_route' });
-    // The chemistry/brand inputs this workflow never passes are declared as unwired rather than
+    // B0-513 — `brandKnown` is now wired from the B0-357 competitor resolution; the mocked
+    // `~/lib/openai/client` makes `extractCompetitorProduct` fall back to `brand: null`, so this
+    // run's resolved brand is unknown and the gate input reports that faithfully.
+    expect(record.inputs).toMatchObject({ trigger: 'recommendations_route', brandKnown: false });
+    // The chemistry inputs this workflow never passes are declared as unwired rather than
     // reported as evaluated.
     expect(record.inputs.unwiredInputs).toEqual([
       'competitorChemistryClass',
       'recommendedChemistryClass',
-      'brandKnown',
     ]);
   });
 
