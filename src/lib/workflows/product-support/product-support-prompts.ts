@@ -3,12 +3,55 @@ import { FLOOR_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/floor-specialist/fl
 import { PRODUCT_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/product-specialist/product-specialist-system-prompt';
 import { RECOMMENDATIONS_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/recommendations-specialist/recommendations-specialist-system-prompt';
 import type { BexChatAgentMode } from '~/lib/agents/agent-registry';
+import type { IntentClassification } from '~/lib/orchestrator/intent-classifier';
 
+/**
+ * B0-508 — render the classifier's entities as a single readable line, `null`/empty fields
+ * omitted. Returns `'none extracted'` rather than an empty string so the hint block never shows a
+ * dangling `Entities: ` line.
+ */
+function formatClassificationEntities(entities: IntentClassification['entities']): string {
+  const parts = [
+    entities.betcoProduct ? `Betco product: ${entities.betcoProduct}` : null,
+    entities.competitorBrand ? `competitor brand: ${entities.competitorBrand}` : null,
+    entities.competitorProduct ? `competitor product: ${entities.competitorProduct}` : null,
+    entities.surfaceType ? `surface: ${entities.surfaceType}` : null,
+    entities.taskDescription ? `task: ${entities.taskDescription}` : null,
+  ].filter((part): part is string => Boolean(part));
+
+  return parts.length > 0 ? parts.join(' · ') : 'none extracted';
+}
+
+/**
+ * B0-508 — the trailing "orchestrator hint" block. Before this ticket it always rendered the raw
+ * keyword-router scores (`route.productScore`/etc). Now, when the B0-503 LLM intent classifier
+ * actually ran for this turn (`classification.source === 'llm'`), the hint instead surfaces the
+ * classifier's own intent/confidence/entities — a calibrated signal instead of five uncalibrated
+ * hit counts.
+ *
+ * Backward compatibility (required by the ticket): when no classification is supplied, or the
+ * classifier fell back to the keyword router (`source === 'keyword_fallback'` — disabled via
+ * `BEX_LLM_ROUTER_ENABLED`, timed out, or errored), this renders EXACTLY what it rendered before —
+ * the scores line — so a turn that never invoked the classifier is byte-for-byte unchanged.
+ */
 function routingHintBlock(input: {
   decision: string;
   rationale: string;
   scores: string;
+  classification?: IntentClassification;
 }) {
+  if (input.classification && input.classification.source === 'llm') {
+    const { intent, confidence, entities } = input.classification;
+    return [
+      '## Orchestrator hint (non-authoritative)',
+      `Planner decision: ${input.decision}`,
+      `Intent classification: ${intent} (confidence ${confidence.toFixed(2)})`,
+      `Entities: ${formatClassificationEntities(entities)}`,
+      `Rationale: ${input.rationale}`,
+      'Use tools to retrieve facts; do not treat this routing as evidence.',
+    ].join('\n');
+  }
+
   return [
     '## Orchestrator hint (non-authoritative)',
     `Planner decision: ${input.decision}`,
@@ -187,6 +230,13 @@ export function buildProductSupportInstructions(input: {
     floorScore: number;
     recommendationScore: number;
   };
+  /**
+   * B0-508 — the B0-503 LLM intent classifier's result for this turn, when the caller ran one.
+   * Optional and additive: omitting it (every call site before this ticket, and any call site
+   * where the classifier is disabled) reproduces today's scores-only hint exactly — see
+   * `routingHintBlock`.
+   */
+  classification?: IntentClassification;
 }): string {
   const scores = `product ${input.routing.productScore} · bathroom ${input.routing.bathroomScore} · dilution ${input.routing.dilutionScore} · floor ${input.routing.floorScore} · recommendations ${input.routing.recommendationScore}`;
   const activePrompt = systemPromptForDecision(input.routing.decision);
@@ -217,6 +267,7 @@ export function buildProductSupportInstructions(input: {
       decision: input.routing.decision,
       rationale: input.routing.rationale,
       scores,
+      classification: input.classification,
     }),
   ].join('\n');
 }
