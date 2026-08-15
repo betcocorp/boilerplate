@@ -2,6 +2,12 @@ import { runBexChatTurn } from '~/lib/bex/run-chat-turn';
 import { RECOMMENDATIONS_DECLINE_COPY } from '~/lib/agents/recommendations-specialist/recommendations-specialist-system-prompt';
 import { APP_VERSION } from '~/lib/app-version';
 import { XREF_DECLINE_COPY } from '~/lib/recommendations/confidence-scoring';
+import {
+  EARLY_DECLINE_BROAD_RECOMMENDATION_COPY,
+  EARLY_DECLINE_CHEMICAL_MIXING_COPY,
+  EARLY_DECLINE_LEGAL_COMPLIANCE_COPY,
+  EARLY_DECLINE_STORAGE_EXPIRATION_COPY,
+} from '~/lib/workflows/product-support/run-product-support-workflow';
 
 import type { NewTestResultItemRecord, TestItemRecord } from './types';
 
@@ -10,8 +16,22 @@ import type { NewTestResultItemRecord, TestItemRecord } from './types';
  * verbatim before falling back to the keyword/regex heuristics below, since those are guesses at
  * paraphrasing this exact, deterministic copy and can miss it (e.g. XREF_DECLINE_COPY matched none
  * of the existing patterns).
+ *
+ * B0-518 — added the four `classifyEarlyDecline` canned copies for the same reason: the
+ * `broad_recommendation_without_context` text carries no decline vocabulary at all (no "can't",
+ * "unable", "no information", …) and the `chemical_mixing_or_safety` text uses "not able to
+ * **advise**", a verb the regex/phrase heuristics below don't cover. Both were confirmed (via the
+ * "Product Golden Test Set" run `6203d34f-…`) to correctly early-decline and then get graded as an
+ * unrecognized failed answer.
  */
-const CANONICAL_DECLINE_COPY = [RECOMMENDATIONS_DECLINE_COPY, XREF_DECLINE_COPY];
+const CANONICAL_DECLINE_COPY = [
+  RECOMMENDATIONS_DECLINE_COPY,
+  XREF_DECLINE_COPY,
+  EARLY_DECLINE_CHEMICAL_MIXING_COPY,
+  EARLY_DECLINE_LEGAL_COMPLIANCE_COPY,
+  EARLY_DECLINE_STORAGE_EXPIRATION_COPY,
+  EARLY_DECLINE_BROAD_RECOMMENDATION_COPY,
+];
 
 function matchesCanonicalDeclineCopy(responseText: string): boolean {
   return CANONICAL_DECLINE_COPY.some((copy) => responseText.includes(copy));
@@ -54,11 +74,22 @@ const DECLINE_REGEXES: RegExp[] = [
 /**
  * Declines, hedges, and “no answer” phrasing — treated as **failed** outcomes for visibility,
  * even when row expectations would otherwise accept a short decline.
+ *
+ * B0-518 — checks the same canonical decline copy as `responseIndicatesDeclineStyleAnswer` first,
+ * so the two "is this actually a decline" detectors agree: the chemical-mixing and
+ * broad-recommendation early-decline copies use vocabulary ("advise", no decline words at all) that
+ * the phrase/regex heuristics below don't cover, which previously meant a POSITIVE row
+ * (`expected_should_answer = true`) that got one of those two exact declines back was scored a false
+ * PASS instead of being flagged for review.
  */
 function responseIndicatesUnableToAssistOrRefusal(responseText: string): boolean {
   const t = responseText.trim().toLowerCase();
   if (!t) {
     return false;
+  }
+
+  if (matchesCanonicalDeclineCopy(responseText)) {
+    return true;
   }
 
   const phrases = [
@@ -206,13 +237,25 @@ function responseIndicatesDeclineStyleAnswer(responseText: string): boolean {
   return indicators.some((p) => t.includes(p)) || DECLINE_REGEXES.some((r) => r.test(t));
 }
 
-/** Rows configured for decline-style expectations should not be failed by the "unable to assist" visibility override. */
+/**
+ * Rows expecting a decline-style outcome should not be failed by the "unable to assist" visibility
+ * override below — `evaluateTestOutcome` already scored a decline response as a legitimate PASS for
+ * these, and the override exists to catch a decline where an ANSWER was expected, not to re-litigate
+ * one the base evaluator already approved.
+ *
+ * B0-518 — this used to ALSO require `expected_result_type` to literally be `'decline'`/`'none'`
+ * before exempting the row, on top of `expected_should_answer === false`. Confirmed against the live
+ * "Product Golden Test Set" run (`6203d34f-…`) and every other negative-expectation row in the
+ * database: `expected_result_type` is null on every single one, so that second condition never once
+ * matched in production — the exemption was effectively dead, and every correctly-triggered decline
+ * on a negative row was being re-failed by the override with "The assistant indicated it could not
+ * answer…", even though `evaluateTestOutcome` had already scored it a pass one line earlier.
+ * `expected_should_answer === false` is already the row's own "a decline is the correct outcome here"
+ * signal (it is the exact condition `evaluateTestOutcome` tests), so requiring a second field to
+ * separately agree was redundant, not an extra safety check.
+ */
 function expectsDeclineStyleOutcome(item: TestItemRecord): boolean {
-  if (shouldExpectAnswer(item) !== false) {
-    return false;
-  }
-  const expectedResultType = (item.expected_result_type || '').trim().toLowerCase();
-  return expectedResultType === 'decline' || expectedResultType === 'none';
+  return shouldExpectAnswer(item) === false;
 }
 
 /**
