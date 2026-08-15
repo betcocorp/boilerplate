@@ -1050,3 +1050,92 @@ describe('prompt identity on the final output (B0-393 wiring)', () => {
     expect(out.previousResponseId).toBeNull();
   });
 });
+
+/* -------------------------------------------------------------------------- *
+ * B0-519 — cap conversation history before replaying it via previous_response_id
+ * -------------------------------------------------------------------------- */
+
+describe('capped conversation history (B0-519)', () => {
+  afterEach(() => {
+    delete process.env.BEX_HISTORY_MAX_MESSAGES;
+  });
+
+  it('below the cap: keeps chaining via previousResponseId, unchanged from before this ticket', async () => {
+    process.env.BEX_HISTORY_MAX_MESSAGES = '10';
+
+    const out = await run({
+      priorMessages: [{ role: 'user', content: 'earlier question' }],
+      previousOpenaiResponseId: 'resp_prev',
+    });
+
+    const call = runResponsesWithToolLoopMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(call.previousResponseId).toBe('resp_prev');
+    expect(call.history).toBeUndefined();
+    expect(out.historyCapApplied).toBe(false);
+    expect(stepInput('openai_responses_agent')).toMatchObject({
+      hasPreviousResponse: true,
+      historyCapApplied: false,
+    });
+  });
+
+  it('over the cap: breaks the previous_response_id chain and replays only the capped tail', async () => {
+    process.env.BEX_HISTORY_MAX_MESSAGES = '2';
+    const priorMessages = [
+      { role: 'user' as const, content: 'turn 1 user' },
+      { role: 'assistant' as const, content: 'turn 1 assistant' },
+      { role: 'user' as const, content: 'turn 2 user' },
+      { role: 'assistant' as const, content: 'turn 2 assistant' },
+    ];
+
+    const out = await run({ priorMessages, previousOpenaiResponseId: 'resp_prev' });
+
+    const call = runResponsesWithToolLoopMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    // The chain is broken (never resumed) even though the caller passed a previousOpenaiResponseId.
+    expect(call.previousResponseId).toBeNull();
+    // Only the most recent `BEX_HISTORY_MAX_MESSAGES` messages are replayed, oldest-first.
+    expect(call.history).toEqual([
+      { role: 'user', content: 'turn 2 user' },
+      { role: 'assistant', content: 'turn 2 assistant' },
+    ]);
+    // Reported on the run and on the agent step, for observability.
+    expect(out.historyCapApplied).toBe(true);
+    expect(out.previousResponseId).toBe('resp_prev'); // raw echo of what was received, unchanged
+    expect(stepInput('openai_responses_agent')).toMatchObject({
+      hasPreviousResponse: false,
+      historyCapApplied: true,
+    });
+  });
+
+  it('caps the AI SDK runtime the same way, always stateless', async () => {
+    process.env.BEX_AI_SDK_GENERATION_ENABLED = 'true';
+    process.env.BEX_HISTORY_MAX_MESSAGES = '2';
+    runAiSdkWithToolLoopMock.mockImplementation(generationCalling([]));
+
+    const priorMessages = [
+      { role: 'user' as const, content: 'turn 1 user' },
+      { role: 'assistant' as const, content: 'turn 1 assistant' },
+      { role: 'user' as const, content: 'turn 2 user' },
+      { role: 'assistant' as const, content: 'turn 2 assistant' },
+    ];
+
+    await run({ priorMessages });
+
+    const call = runAiSdkWithToolLoopMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(call.history).toEqual([
+      { role: 'user', content: 'turn 2 user' },
+      { role: 'assistant', content: 'turn 2 assistant' },
+    ]);
+  });
+
+  it('falls back to the default cap on an invalid env value', async () => {
+    process.env.BEX_HISTORY_MAX_MESSAGES = 'not-a-number';
+
+    const out = await run({
+      priorMessages: [{ role: 'user', content: 'earlier question' }],
+      previousOpenaiResponseId: 'resp_prev',
+    });
+
+    // A single prior message never exceeds the (double-digit) default cap.
+    expect(out.historyCapApplied).toBe(false);
+  });
+});
