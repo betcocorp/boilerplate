@@ -73,8 +73,22 @@ vi.mock('~/supabase/clients/service-role', () => ({
   getSupabaseServiceRoleClient: () => fake.client,
 }));
 
+/**
+ * B0-516 — a controllable `client.responses.create`, used by the shadow-mode intent-classifier
+ * integration tests below. Defaults to throwing synchronously (same externally-observed effect as
+ * the old `getOpenAIClient: () => ({})` — any `client.responses.*` call blows up), so every
+ * pre-existing test that relies on `extractCompetitorProduct` falling back to `brand: null` (see
+ * the B0-513 comment further down) keeps behaving exactly as before.
+ */
+const openaiResponsesCreateMock = vi.fn();
+openaiResponsesCreateMock.mockImplementation(() => {
+  throw new Error('client.responses.create is not mocked for this test');
+});
+
 vi.mock('~/lib/openai/client', () => ({
-  getOpenAIClient: () => ({}),
+  getOpenAIClient: () => ({
+    responses: { create: (...args: unknown[]) => openaiResponsesCreateMock(...args) },
+  }),
   resolveResponsesModel: () => 'gpt-test',
 }));
 
@@ -157,6 +171,14 @@ import {
   runProductSupportWorkflow,
   VALIDATOR_BYPASS_REASON,
 } from '~/lib/workflows/product-support/run-product-support-workflow';
+// B0-516 — real (unmocked) module: `run-product-support-workflow.ts` calls `classifyUserIntent`
+// with its default deps, so the integration tests below drive it through the actual
+// `getOpenAIClient()` call above rather than an injected fake.
+import {
+  DEFAULT_BEX_ROUTER_MODEL,
+  DEFAULT_BEX_ROUTER_TIMEOUT_MS,
+  resetIntentClassifierCache,
+} from '~/lib/orchestrator/intent-classifier';
 
 const USAGE_MESSAGE = 'How do I use Betco pH7Q Dual on tile floors?';
 const XREF_MESSAGE = 'What is the Betco equivalent to BNC-15?';
@@ -242,6 +264,13 @@ beforeEach(() => {
   vi.clearAllMocks();
   process.env.BEX_AI_SDK_GENERATION_ENABLED = 'false';
   process.env.BEX_EARLY_DECLINE_GATE_ENABLED = 'true';
+  // B0-516 — every test gets the same default `client.responses.create` behavior (throws, so
+  // extractCompetitorProduct/classifyUserIntent both fall back) unless it opts into the
+  // shadow-classifier describe block below, which overrides this per-test.
+  openaiResponsesCreateMock.mockImplementation(() => {
+    throw new Error('client.responses.create is not mocked for this test');
+  });
+  resetIntentClassifierCache();
 
   runResponsesWithToolLoopMock.mockImplementation(
     generationCalling([
@@ -1139,5 +1168,162 @@ describe('capped conversation history (B0-519)', () => {
 
     // A single prior message never exceeds the (double-digit) default cap.
     expect(out.historyCapApplied).toBe(false);
+  });
+});
+
+/* -------------------------------------------------------------------------- *
+ * B0-507 / B0-516 — shadow-mode LLM intent classifier gate, exercised through the REAL
+ * `runProductSupportWorkflow` entry point (unlike `~/lib/orchestrator/intent-classifier.test.ts`,
+ * which tests `classifyUserIntent` in isolation with injected deps, these tests drive it via its
+ * default deps — the same `getOpenAIClient()` the workflow itself uses).
+ *
+ * "Cutover" (actually routing turns on the classifier's intent instead of the keyword router) has
+ * no code path to test yet — B0-514, which would build it, is intentionally still open. These
+ * tests only cover what IS wired today: the classifier running alongside the keyword router in
+ * shadow mode, the gate it records, and that a slow/broken classifier call still falls back
+ * safely without breaking the turn — end-to-end, not just at the `intent-classifier.ts` module
+ * boundary.
+ * -------------------------------------------------------------------------- */
+
+describe('shadow-mode LLM intent classifier gate (B0-507 / B0-516 integration)', () => {
+  function intentClassifierPayload(
+    overrides: {
+      intent?: string;
+      confidence?: number;
+      entities?: Partial<{
+        betcoProduct: string | null;
+        competitorBrand: string | null;
+        competitorProduct: string | null;
+        surfaceType: string | null;
+        taskDescription: string | null;
+      }>;
+      suggestedTool?: string | null;
+    } = {},
+  ) {
+    return {
+      intent: overrides.intent ?? 'recommendations',
+      confidence: overrides.confidence ?? 0.87,
+      entities: {
+        betcoProduct: null,
+        competitorBrand: 'BNC',
+        competitorProduct: 'BNC-15',
+        surfaceType: null,
+        taskDescription: 'find the Betco equivalent for BNC-15',
+        ...overrides.entities,
+      },
+      suggestedTool: overrides.suggestedTool ?? null,
+    };
+  }
+
+  /**
+   * Only answers the classifier's own schema-tagged call. `extractCompetitorProduct` fires
+   * concurrently on the recommendations route and calls the very same `client.responses.create` —
+   * its call is left to the file-wide default (throws, falls back to `brand: null`), which is not
+   * this describe block's concern.
+   */
+  function mockIntentClassifierResponse(
+    payload: Record<string, unknown>,
+    options: { delayMs?: number } = {},
+  ) {
+    openaiResponsesCreateMock.mockImplementation(async (body: unknown) => {
+      const schemaName = (body as { text?: { format?: { name?: string } } })?.text?.format?.name;
+      if (schemaName !== 'intent_classification') {
+        throw new Error(`unmocked responses.create call for schema "${schemaName}"`);
+      }
+      if (options.delayMs) {
+        await new Promise((resolve) => setTimeout(resolve, options.delayMs));
+      }
+      return { output_text: JSON.stringify(payload) };
+    });
+  }
+
+  afterEach(() => {
+    delete process.env.BEX_LLM_ROUTER_ENABLED;
+    delete process.env.BEX_LLM_ROUTER_SHADOW_MODE;
+    delete process.env.BEX_ROUTER_TIMEOUT_MS;
+    delete process.env.BEX_ROUTER_MODEL;
+  });
+
+  it('is absent when the LLM router is disabled (the default)', async () => {
+    await run({ userMessage: XREF_MESSAGE });
+    expect(gateRecordsFor('llm_intent_classifier_shadow')).toEqual([]);
+  });
+
+  it('records an "agrees_with_keyword_router" verdict end-to-end, without changing the actual routing, when the classifier matches the keyword route', async () => {
+    process.env.BEX_LLM_ROUTER_ENABLED = 'true';
+    mockIntentClassifierResponse(
+      intentClassifierPayload({ intent: 'recommendations', confidence: 0.87 }),
+    );
+
+    await run({ userMessage: XREF_MESSAGE });
+
+    // The keyword router still made the real routing decision (recommendations for this
+    // message — corroborated by the "keyword routing gate" describe block above).
+    expect(
+      (stepOutput('orchestration_planner').routing as Record<string, unknown>).decision,
+    ).toBe('recommendations');
+
+    const record = singleGateRecord('llm_intent_classifier_shadow');
+    expect(record.verdict).toBe('agrees_with_keyword_router');
+    expect(record.inputs).toMatchObject({
+      classifiedIntent: 'recommendations',
+      classifierConfidence: 0.87,
+      classifierSource: 'llm',
+      keywordRoutingDecision: 'recommendations',
+      suggestedTool: null,
+    });
+    // Entity extraction round-trips onto the gate record verbatim.
+    expect(record.inputs.entities).toMatchObject({
+      competitorBrand: 'BNC',
+      competitorProduct: 'BNC-15',
+      taskDescription: 'find the Betco equivalent for BNC-15',
+    });
+    expect(record.thresholds).toEqual({
+      model: DEFAULT_BEX_ROUTER_MODEL,
+      timeoutMs: DEFAULT_BEX_ROUTER_TIMEOUT_MS,
+    });
+  });
+
+  it('records a "disagrees_with_keyword_router" verdict end-to-end, and still does not cut over routing (no such code path exists yet — B0-514), when the classifier proposes a different intent', async () => {
+    process.env.BEX_LLM_ROUTER_ENABLED = 'true';
+    mockIntentClassifierResponse(intentClassifierPayload({ intent: 'floor', confidence: 0.62 }));
+
+    await run({ userMessage: XREF_MESSAGE });
+
+    // The disagreement is recorded, but the turn is still routed by the keyword router — there is
+    // no cutover to assert here, by design.
+    expect(
+      (stepOutput('orchestration_planner').routing as Record<string, unknown>).decision,
+    ).toBe('recommendations');
+
+    const record = singleGateRecord('llm_intent_classifier_shadow');
+    expect(record.verdict).toBe('disagrees_with_keyword_router');
+    expect(record.inputs).toMatchObject({
+      classifiedIntent: 'floor',
+      keywordRoutingDecision: 'recommendations',
+    });
+    expect(record.effect).toContain('Not used to route this turn');
+  });
+
+  it('falls back to the keyword router end-to-end, and still records the gate, when the classifier call exceeds BEX_ROUTER_TIMEOUT_MS', async () => {
+    process.env.BEX_LLM_ROUTER_ENABLED = 'true';
+    process.env.BEX_ROUTER_TIMEOUT_MS = '10';
+    mockIntentClassifierResponse(
+      intentClassifierPayload({ intent: 'floor', confidence: 0.9 }),
+      { delayMs: 100 },
+    );
+
+    await run({ userMessage: XREF_MESSAGE });
+
+    // A slow/broken classifier never breaks the turn — the run completes normally either way.
+    expect(
+      (stepOutput('orchestration_planner').routing as Record<string, unknown>).decision,
+    ).toBe('recommendations');
+
+    const record = singleGateRecord('llm_intent_classifier_shadow');
+    expect(record.inputs.classifierSource).toBe('keyword_fallback');
+    // The keyword fallback runs the same keyword router the workflow's own routing decision
+    // already used, so for this message it still reads as "agrees".
+    expect(record.verdict).toBe('agrees_with_keyword_router');
   });
 });
