@@ -1,5 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+/**
+ * B0-515 — a controllable `client.responses.create`, used only by the "context carry" describe
+ * block below to exercise the REAL `defaultRunLlm` (i.e. calling `classifyUserIntent` with its
+ * default deps, not an injected `runLlm`) and inspect exactly what gets sent to the model. Every
+ * other describe block in this file injects its own `runLlm` and never touches this mock.
+ */
+const responsesCreateMock = vi.fn();
+vi.mock('~/lib/openai/client', () => ({
+  getOpenAIClient: () => ({
+    responses: { create: (...args: unknown[]) => responsesCreateMock(...args) },
+  }),
+}));
+
 import {
   classifyUserIntent,
   computeIntentClassifierCacheKey,
@@ -19,6 +32,7 @@ const ORIGINAL_ENV = { ...process.env };
 
 beforeEach(() => {
   resetIntentClassifierCache();
+  responsesCreateMock.mockReset();
 });
 
 afterEach(() => {
@@ -206,5 +220,168 @@ describe('B0-506 env-var resolution', () => {
 
     process.env.BEX_LLM_ROUTER_SHADOW_MODE = 'true';
     expect(isLlmRouterShadowMode()).toBe(true);
+  });
+});
+
+describe('classifyUserIntent — B0-515 entity extraction', () => {
+  it('passes through every extracted entity field from a realistic recommendations-style message', async () => {
+    process.env.BEX_LLM_ROUTER_ENABLED = 'true';
+    const runLlm = vi.fn().mockResolvedValue({
+      intent: 'recommendations' as const,
+      confidence: 0.82,
+      entities: {
+        betcoProduct: 'Betco Green Earth NABC',
+        competitorBrand: 'Diversey',
+        competitorProduct: 'Virex II 256',
+        surfaceType: 'stainless steel prep table',
+        taskDescription: 'find the Betco equivalent to disinfect a prep table',
+      },
+      suggestedTool: 'lookup_cross_reference' as const,
+    });
+
+    const out = await classifyUserIntent(
+      'We currently use Diversey Virex II 256 on our stainless steel prep tables — what is the Betco equivalent?',
+      [],
+      { runLlm, now: () => Date.now() },
+    );
+
+    expect(intentClassificationSchema.safeParse(out).success).toBe(true);
+    // Every field, not just the one or two other tests in this file happen to touch.
+    expect(out.entities).toEqual({
+      betcoProduct: 'Betco Green Earth NABC',
+      competitorBrand: 'Diversey',
+      competitorProduct: 'Virex II 256',
+      surfaceType: 'stainless steel prep table',
+      taskDescription: 'find the Betco equivalent to disinfect a prep table',
+    });
+    expect(out.suggestedTool).toBe('lookup_cross_reference');
+  });
+
+  it('leaves every entity field null when the model extracted nothing, rather than defaulting any of them', async () => {
+    process.env.BEX_LLM_ROUTER_ENABLED = 'true';
+    const runLlm = vi.fn().mockResolvedValue({
+      intent: 'ambiguous' as const,
+      confidence: 0.2,
+      entities: {
+        betcoProduct: null,
+        competitorBrand: null,
+        competitorProduct: null,
+        surfaceType: null,
+        taskDescription: null,
+      },
+      suggestedTool: null,
+    });
+
+    const out = await classifyUserIntent('hello', [], { runLlm, now: () => Date.now() });
+
+    expect(out.entities).toEqual({
+      betcoProduct: null,
+      competitorBrand: null,
+      competitorProduct: null,
+      surfaceType: null,
+      taskDescription: null,
+    });
+    expect(out.suggestedTool).toBeNull();
+  });
+});
+
+/**
+ * B0-515 — conversational context carry. The tests above always inject their own `runLlm`, which
+ * proves `priorMessages` reaches the DEPS INTERFACE but never proves the real implementation
+ * (`defaultRunLlm`) actually forwards prior turns to the model, or how it shapes them. These tests
+ * call `classifyUserIntent` with its default deps and inspect the real `client.responses.create`
+ * payload built by `defaultRunLlm`.
+ */
+describe('classifyUserIntent — B0-515 conversational context carry (default deps)', () => {
+  beforeEach(() => {
+    process.env.BEX_LLM_ROUTER_ENABLED = 'true';
+    responsesCreateMock.mockResolvedValue({
+      output_text: JSON.stringify(llmResult),
+    });
+  });
+
+  it('replays prior turns to the model, oldest-first, ending with the current message', async () => {
+    const priorMessages: PriorTurnMessage[] = [
+      { id: 'm1', role: 'user', content: 'What do you recommend for a locker room floor?' },
+      { id: 'm2', role: 'assistant', content: 'A neutral disinfectant cleaner works well there.' },
+    ];
+
+    await classifyUserIntent('And what about the shower stalls specifically?', priorMessages);
+
+    expect(responsesCreateMock).toHaveBeenCalledTimes(1);
+    const call = responsesCreateMock.mock.calls[0]?.[0] as { input: unknown[] };
+    expect(call.input).toEqual([
+      { role: 'user', content: 'What do you recommend for a locker room floor?', type: 'message' },
+      {
+        role: 'assistant',
+        content: 'A neutral disinfectant cleaner works well there.',
+        type: 'message',
+      },
+      { role: 'user', content: 'And what about the shower stalls specifically?', type: 'message' },
+    ]);
+  });
+
+  it('sends only the current message when no prior turns are supplied', async () => {
+    await classifyUserIntent('What is the dilution ratio for Fight Bac RTU?', []);
+
+    const call = responsesCreateMock.mock.calls[0]?.[0] as { input: unknown[] };
+    expect(call.input).toEqual([
+      { role: 'user', content: 'What is the dilution ratio for Fight Bac RTU?', type: 'message' },
+    ]);
+  });
+
+  it('caps replayed history to the most recent 8 prior turns (MAX_PRIOR_MESSAGES)', async () => {
+    const priorMessages: PriorTurnMessage[] = Array.from({ length: 10 }, (_, i) => ({
+      id: `m${i}`,
+      role: i % 2 === 0 ? ('user' as const) : ('assistant' as const),
+      content: `turn ${i}`,
+    }));
+
+    await classifyUserIntent('current turn', priorMessages);
+
+    const call = responsesCreateMock.mock.calls[0]?.[0] as { input: Array<{ content: string }> };
+    // 8 capped prior turns + the current message = 9. The two oldest ("turn 0", "turn 1") are
+    // dropped, proving this is a genuine cap and not an accidental no-op.
+    expect(call.input).toHaveLength(9);
+    expect(call.input.map((m) => m.content)).toEqual([
+      'turn 2',
+      'turn 3',
+      'turn 4',
+      'turn 5',
+      'turn 6',
+      'turn 7',
+      'turn 8',
+      'turn 9',
+      'current turn',
+    ]);
+  });
+
+  it('filters out blank/whitespace-only prior turns before replaying them', async () => {
+    const priorMessages: PriorTurnMessage[] = [
+      { id: 'm1', role: 'user', content: 'a real question' },
+      { id: 'm2', role: 'assistant', content: '   ' },
+      { id: 'm3', role: 'user', content: '' },
+    ];
+
+    await classifyUserIntent('the current question', priorMessages);
+
+    const call = responsesCreateMock.mock.calls[0]?.[0] as { input: Array<{ content: string }> };
+    expect(call.input.map((m) => m.content)).toEqual(['a real question', 'the current question']);
+  });
+
+  it('changes what the model receives when priorMessages changes, for an otherwise identical current message', async () => {
+    await classifyUserIntent('follow-up question', [
+      { id: 'a', role: 'user', content: 'context A' },
+    ]);
+    const firstCallInput = responsesCreateMock.mock.calls[0]?.[0] as { input: unknown[] };
+
+    await classifyUserIntent('follow-up question', [
+      { id: 'b', role: 'user', content: 'context B' },
+    ]);
+    const secondCallInput = responsesCreateMock.mock.calls[1]?.[0] as { input: unknown[] };
+
+    // Same current message, different prior turn — the payload sent to the model differs, which
+    // is the mechanism by which a follow-up question actually inherits earlier context.
+    expect(firstCallInput.input).not.toEqual(secondCallInput.input);
   });
 });
