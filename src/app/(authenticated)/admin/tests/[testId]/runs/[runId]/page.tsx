@@ -16,6 +16,7 @@ import {
 } from '~/components/admin/tests/RunInsightsPanel';
 import { RunItemResultsCsvDownload } from '~/components/admin/tests/RunItemResultsCsvDownload';
 import { RunReportButton } from '~/components/admin/tests/RunReportButton';
+import { RoutingAccuracyBoard } from '~/components/admin/tests/RoutingAccuracyBoard';
 import { RunToolRoutingPanel } from '~/components/admin/tests/RunToolRoutingPanel';
 import { PromptBundleVersionBadge } from '~/components/admin/tests/PromptBundleVersionBadge';
 import {
@@ -62,6 +63,13 @@ import {
   extractWorkflowRunId,
   summarizePromptBundleVersions,
 } from '~/lib/tests/response-payload';
+import {
+  buildConfusionMatrix,
+  computeAmbiguousRouteRate,
+  computeConfidenceDistribution,
+  computeRoutingComparisonReport,
+  type RoutingComparisonReportInput,
+} from '~/lib/tests/routing-comparison';
 import {
   computeToolRoutingReport,
   extractExpectedTool,
@@ -288,6 +296,31 @@ export default async function AdminTestRunDetailsPage({
     }),
   );
 
+  /**
+   * B0-502 — RoutingAccuracyBoard data. `keyword_route`/`llm_route`/`routing_confidence`/
+   * `intended_agent_label` are plain columns on `test_result_items` (B0-500/501), already present on
+   * `resultItems` (`select('*')` above) — no extra fetch needed, unlike the tool-routing report above
+   * which has to join back to `workflow_steps`.
+   */
+  const routingComparisonInputs: RoutingComparisonReportInput[] = resultItems.map((row) => ({
+    resultItemId: row.id,
+    testItemId: row.test_item_id,
+    rowIndex: row.row_index,
+    prompt: promptByItemId.get(row.test_item_id) ?? '',
+    intendedAgentLabel: row.intended_agent_label,
+    routingDecision: row.routing_decision,
+    keywordRoute: row.keyword_route,
+    llmRoute: row.llm_route,
+  }));
+  const hasRoutingInstrumentation = resultItems.some((row) => row.keyword_route !== null);
+  const routingComparisonReport = computeRoutingComparisonReport(routingComparisonInputs);
+  const keywordConfusionMatrix = buildConfusionMatrix(routingComparisonInputs, 'keyword');
+  const llmConfusionMatrix = buildConfusionMatrix(routingComparisonInputs, 'llm');
+  const ambiguousRates = computeAmbiguousRouteRate(routingComparisonInputs);
+  const confidenceDistribution = computeConfidenceDistribution(
+    resultItems.map((row) => row.routing_confidence),
+  );
+
   const itemLevelCsvRows = chronologicalItems.map((row) => {
     const expectedRaw = expectedShouldAnswerByItemId.get(row.test_item_id);
     const expectedForCell: boolean | null =
@@ -472,6 +505,15 @@ export default async function AdminTestRunDetailsPage({
         />
 
         <RunToolRoutingPanel report={toolRoutingReport} testId={test.id} />
+
+        <RoutingAccuracyBoard
+          ambiguousRates={ambiguousRates}
+          comparisonReport={routingComparisonReport}
+          confidenceDistribution={confidenceDistribution}
+          hasRoutingInstrumentation={hasRoutingInstrumentation}
+          keywordConfusionMatrix={keywordConfusionMatrix}
+          llmConfusionMatrix={llmConfusionMatrix}
+        />
 
         <RunInsightsPanel
           initialGeneratedAt={result.insights_generated_at}

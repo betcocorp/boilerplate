@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  buildConfusionMatrix,
+  buildRouterDisagreementMatrix,
   buildRoutingComparisonFields,
+  computeAmbiguousRouteRate,
+  computeConfidenceDistribution,
   computeRoutingComparisonReport,
+  computeRoutingComparisonSummary,
   normalizeKeywordRoute,
   resolveIntendedAgentLabel,
   type RoutingComparisonReportInput,
@@ -179,5 +184,151 @@ describe('computeRoutingComparisonReport', () => {
       item({ resultItemId: 'r1', rowIndex: 2, intendedAgentLabel: 'bathroom', keywordRoute: 'product', llmRoute: 'product' }),
     ]);
     expect(report.mismatches.map((m) => m.rowIndex)).toEqual([2, 5]);
+  });
+});
+
+// B0-502 — RoutingAccuracyBoard reducers.
+
+describe('buildConfusionMatrix', () => {
+  const items = [
+    { intendedAgentLabel: 'floor', keywordRoute: 'floor', llmRoute: 'floor' },
+    { intendedAgentLabel: 'floor', keywordRoute: 'product', llmRoute: 'floor' },
+    { intendedAgentLabel: 'bathroom', keywordRoute: 'bathroom', llmRoute: 'bathroom' },
+    // No ground truth — excluded from both matrices.
+    { intendedAgentLabel: null, keywordRoute: 'dilution', llmRoute: 'dilution' },
+  ];
+
+  it('builds ground-truth-rows x predicted-columns counts for the keyword router', () => {
+    const matrix = buildConfusionMatrix(items, 'keyword');
+    expect(matrix.groundTruthLabels).toEqual(['bathroom', 'floor']);
+    expect(matrix.predictedLabels).toEqual(['bathroom', 'floor', 'product']);
+    expect(matrix.counts.floor.floor).toBe(1);
+    expect(matrix.counts.floor.product).toBe(1);
+    expect(matrix.counts.bathroom.bathroom).toBe(1);
+    expect(matrix.totalCount).toBe(3);
+  });
+
+  it('builds a separate matrix for the LLM router (perfect here)', () => {
+    const matrix = buildConfusionMatrix(items, 'llm');
+    expect(matrix.predictedLabels).toEqual(['bathroom', 'floor']);
+    expect(matrix.counts.floor.floor).toBe(2);
+    expect(matrix.counts.bathroom.bathroom).toBe(1);
+    expect(matrix.totalCount).toBe(3);
+  });
+
+  it('returns an empty matrix when nothing has ground truth', () => {
+    const matrix = buildConfusionMatrix(
+      [{ intendedAgentLabel: null, keywordRoute: 'floor', llmRoute: 'floor' }],
+      'keyword',
+    );
+    expect(matrix.groundTruthLabels).toEqual([]);
+    expect(matrix.totalCount).toBe(0);
+  });
+});
+
+describe('computeAmbiguousRouteRate', () => {
+  it('rates keyword and llm ambiguous outcomes independently', () => {
+    const report = computeAmbiguousRouteRate([
+      { keywordRoute: 'ambiguous', llmRoute: 'floor' },
+      { keywordRoute: 'floor', llmRoute: 'ambiguous' },
+      { keywordRoute: 'floor', llmRoute: 'floor' },
+      { keywordRoute: null, llmRoute: null },
+    ]);
+    expect(report.keywordPresentCount).toBe(3);
+    expect(report.llmPresentCount).toBe(3);
+    expect(report.keywordAmbiguousCount).toBe(1);
+    expect(report.llmAmbiguousCount).toBe(1);
+    expect(report.keywordAmbiguousRate).toBeCloseTo(1 / 3);
+    expect(report.llmAmbiguousRate).toBeCloseTo(1 / 3);
+  });
+
+  it('returns null rates when a router never reported at all', () => {
+    const report = computeAmbiguousRouteRate([{ keywordRoute: null, llmRoute: null }]);
+    expect(report.keywordAmbiguousRate).toBeNull();
+    expect(report.llmAmbiguousRate).toBeNull();
+  });
+});
+
+describe('computeConfidenceDistribution', () => {
+  it('buckets confidence values into 5 fixed 0.2-wide bins (lower-inclusive, last bin also holds 1.0)', () => {
+    // 0, 0.19 -> [0.0-0.2); 0.2 -> [0.2-0.4); 0.55 -> [0.4-0.6); 0.8, 1 -> [0.8-1.0].
+    const distribution = computeConfidenceDistribution([0, 0.19, 0.2, 0.55, 0.8, 1]);
+    expect(distribution.buckets.map((b) => b.count)).toEqual([2, 1, 1, 0, 2]);
+    expect(distribution.missingCount).toBe(0);
+    expect(distribution.totalCount).toBe(6);
+  });
+
+  it('counts null/undefined/non-finite values as missing, not zero-confidence', () => {
+    const distribution = computeConfidenceDistribution([null, undefined, NaN, 0.5]);
+    expect(distribution.missingCount).toBe(3);
+    expect(distribution.buckets.reduce((sum, b) => sum + b.count, 0)).toBe(1);
+  });
+
+  it('clamps out-of-range values instead of throwing', () => {
+    const distribution = computeConfidenceDistribution([-0.5, 1.5]);
+    expect(distribution.buckets[0].count).toBe(1);
+    expect(distribution.buckets[distribution.buckets.length - 1].count).toBe(1);
+  });
+
+  it('returns all-zero buckets for an empty input', () => {
+    const distribution = computeConfidenceDistribution([]);
+    expect(distribution.buckets.every((b) => b.count === 0)).toBe(true);
+    expect(distribution.totalCount).toBe(0);
+  });
+});
+
+// B0-509 — RoutingComparisonDashboard reducers.
+
+describe('buildRouterDisagreementMatrix', () => {
+  it('counts keyword-vs-llm pairings and the disagreement rate', () => {
+    const matrix = buildRouterDisagreementMatrix([
+      { keywordRoute: 'floor', llmRoute: 'floor' },
+      { keywordRoute: 'floor', llmRoute: 'product' },
+      { keywordRoute: 'bathroom', llmRoute: 'bathroom' },
+      { keywordRoute: null, llmRoute: 'floor' },
+    ]);
+    expect(matrix.keywordLabels).toEqual(['bathroom', 'floor']);
+    expect(matrix.llmLabels).toEqual(['bathroom', 'floor', 'product']);
+    expect(matrix.counts.floor.floor).toBe(1);
+    expect(matrix.counts.floor.product).toBe(1);
+    expect(matrix.comparableCount).toBe(3);
+    expect(matrix.disagreementCount).toBe(1);
+    expect(matrix.disagreementRate).toBeCloseTo(1 / 3);
+  });
+
+  it('returns null disagreement rate when nothing is comparable', () => {
+    const matrix = buildRouterDisagreementMatrix([{ keywordRoute: null, llmRoute: 'floor' }]);
+    expect(matrix.comparableCount).toBe(0);
+    expect(matrix.disagreementRate).toBeNull();
+  });
+});
+
+describe('computeRoutingComparisonSummary', () => {
+  it('computes cutover-readiness stats across cross-run rows', () => {
+    const summary = computeRoutingComparisonSummary([
+      { intendedAgentLabel: 'floor', routingDecision: 'floor', keywordRoute: 'floor', llmRoute: 'floor' },
+      {
+        intendedAgentLabel: 'bathroom',
+        routingDecision: 'product',
+        keywordRoute: 'product',
+        llmRoute: 'bathroom',
+      },
+      { intendedAgentLabel: null, routingDecision: 'floor', keywordRoute: 'floor', llmRoute: 'floor' },
+    ]);
+    expect(summary.scoredItemCount).toBe(2);
+    expect(summary.keywordAccuracy).toBeCloseTo(0.5);
+    expect(summary.llmAccuracy).toBeCloseTo(1);
+    expect(summary.actualAccuracy).toBeCloseTo(0.5);
+    expect(summary.comparableCount).toBe(3);
+    expect(summary.agreementRate).toBeCloseTo(2 / 3);
+  });
+
+  it('returns nulls when there is nothing to score or compare', () => {
+    const summary = computeRoutingComparisonSummary([]);
+    expect(summary.scoredItemCount).toBe(0);
+    expect(summary.keywordAccuracy).toBeNull();
+    expect(summary.llmAccuracy).toBeNull();
+    expect(summary.actualAccuracy).toBeNull();
+    expect(summary.agreementRate).toBeNull();
   });
 });
