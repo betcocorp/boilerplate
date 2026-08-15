@@ -1101,3 +1101,58 @@ export async function listLatestToolRoutingMismatches(
     .sort((a, b) => (a.runCreatedAt < b.runCreatedAt ? 1 : a.runCreatedAt > b.runCreatedAt ? -1 : 0))
     .slice(0, limit);
 }
+
+export type RoutingComparisonAggregateRow = {
+  resultItemId: string;
+  testResultId: string;
+  rowIndex: number;
+  createdAt: string;
+  intendedAgentLabel: string | null;
+  routingDecision: string | null;
+  keywordRoute: string | null;
+  llmRoute: string | null;
+  routingConfidence: number | null;
+};
+
+const ROUTING_COMPARISON_PAGE_SIZE = 500;
+
+/**
+ * B0-509 — every `test_result_items` row across ALL tests/runs that carries dual-router
+ * instrumentation (`keyword_route IS NOT NULL`, B0-500/501 — the same opt-in filter
+ * `listLatestToolRoutingMismatches` uses for its own column). Unlike the per-run
+ * `RoutingAccuracyBoard` (B0-502, one `test_result_id`), this powers a system-wide,
+ * cross-run rollup (`RoutingComparisonDashboard`), so it is intentionally not scoped to a test or
+ * run. `intended_agent_label` / `keyword_route` / `llm_route` / `routing_confidence` /
+ * `routing_decision` are plain columns on `test_result_items` (populated at insert time by
+ * `buildRoutingComparisonFields`), so no join back to `test_items`/`tests` is needed for the
+ * comparison itself.
+ */
+export async function listRoutingComparisonRows(): Promise<RoutingComparisonAggregateRow[]> {
+  const supabase = getSupabaseServiceRoleClient();
+  return fetchAllPages<RoutingComparisonAggregateRow>(ROUTING_COMPARISON_PAGE_SIZE, (from, to) =>
+    supabase
+      .from('test_result_items')
+      .select(
+        'id, test_result_id, row_index, created_at, intended_agent_label, routing_decision, keyword_route, llm_route, routing_confidence',
+      )
+      .not('keyword_route', 'is', null)
+      .order('created_at', { ascending: true })
+      .range(from, to)
+      .then((result) => {
+        const rows = assertNoError(result) ?? [];
+        return rows.map(
+          (row): RoutingComparisonAggregateRow => ({
+            resultItemId: row.id,
+            testResultId: row.test_result_id,
+            rowIndex: row.row_index,
+            createdAt: row.created_at,
+            intendedAgentLabel: row.intended_agent_label,
+            routingDecision: row.routing_decision,
+            keywordRoute: row.keyword_route,
+            llmRoute: row.llm_route,
+            routingConfidence: row.routing_confidence,
+          }),
+        );
+      }),
+  );
+}
