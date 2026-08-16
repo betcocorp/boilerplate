@@ -1,5 +1,10 @@
 import { getOpenAIClient, resolveResponsesModel } from '~/lib/openai/client';
 import { extractAssistantText } from '~/lib/openai/response-item-parsing';
+import type { LlmTokenUsage } from '~/lib/openai/responses-runtime';
+import {
+  resolveOpenAiRequestTimeoutMs,
+  retryTransportFaults,
+} from '~/lib/openai/transport-retry';
 import { resolveMaxOutputTokens } from '~/lib/workflows/product-support/max-output-tokens';
 
 import {
@@ -7,6 +12,28 @@ import {
   type ValidatorResult,
 } from '~/lib/workflows/product-support/product-support-schemas';
 import { VALIDATOR_SYSTEM_PROMPT } from '~/lib/workflows/product-support/product-support-prompts';
+
+/**
+ * B0-550 — the OpenAI SDK response shape's `usage` field, extracted into the shared
+ * `LlmTokenUsage` shape (the same fields `~/lib/openai/responses-runtime.ts`'s `accumulateUsage`
+ * reads). Kept loose/duck-typed rather than importing the SDK's `Response` type here, since both
+ * call sites below already type their `res` via inference from `client.responses.create`.
+ */
+function extractLlmUsage(res: {
+  usage?: {
+    input_tokens?: number | null;
+    output_tokens?: number | null;
+    total_tokens?: number | null;
+    input_tokens_details?: { cached_tokens?: number | null } | null;
+  } | null;
+}): LlmTokenUsage {
+  return {
+    promptTokens: res.usage?.input_tokens ?? 0,
+    completionTokens: res.usage?.output_tokens ?? 0,
+    totalTokens: res.usage?.total_tokens ?? 0,
+    cachedPromptTokens: res.usage?.input_tokens_details?.cached_tokens ?? 0,
+  };
+}
 
 // B0-369: `issues` is an UNSUPPORTED-findings-only channel -- it feeds the revision pass, so a
 // confirmation in there asks the revision model to repair a claim that verified fine. Positive
@@ -83,11 +110,14 @@ export function resolveValidatorModel(modelTag?: string): string {
   );
 }
 
+/** B0-554 — `runValidatorPass`'s result plus the token usage from its one model call. */
+export type ValidatorPassResult = ValidatorResult & { usage: LlmTokenUsage };
+
 export async function runValidatorPass(input: {
   draftAnswer: string;
   evidenceSummary: string;
   modelTag?: string;
-}): Promise<ValidatorResult> {
+}): Promise<ValidatorPassResult> {
   const client = getOpenAIClient();
   const model = resolveValidatorModel(input.modelTag);
 
@@ -96,29 +126,48 @@ export async function runValidatorPass(input: {
     evidence_summary: input.evidenceSummary,
   };
 
-  const res = await client.responses.create({
-    model,
-    instructions: VALIDATOR_SYSTEM_PROMPT,
-    input: [
-      {
-        role: 'user',
-        content: JSON.stringify(payload),
-        type: 'message',
-      },
-    ],
-    text: {
-      format: {
-        type: 'json_schema',
-        name: 'validation_result',
-        strict: true,
-        schema: VALIDATION_JSON_SCHEMA,
-      },
-    },
-    store: false,
-    stream: false,
-    temperature: 0,
-    max_output_tokens: resolveMaxOutputTokens(),
-  });
+  /**
+   * B0-550 — bounded retry/backoff (the same `retryTransportFaults` the generation runtime uses)
+   * plus an explicit per-attempt timeout, so a hung upstream request is bounded in seconds instead
+   * of the SDK's own 10-minute default (itself retried up to twice more by the SDK's own default
+   * `maxRetries: 2` -- see `resolveOpenAiRequestTimeoutMs`'s doc comment). `maxRetries: 0` disables
+   * the SDK's own retry in favor of this one. This call previously had NEITHER a timeout NOR any
+   * retry policy at all, which is exactly the shape of the observed 2,000-6,200-second stalls.
+   */
+  const res = await retryTransportFaults(
+    () =>
+      client.responses.create(
+        {
+          model,
+          instructions: VALIDATOR_SYSTEM_PROMPT,
+          input: [
+            {
+              role: 'user',
+              content: JSON.stringify(payload),
+              type: 'message',
+            },
+          ],
+          text: {
+            format: {
+              type: 'json_schema',
+              name: 'validation_result',
+              strict: true,
+              schema: VALIDATION_JSON_SCHEMA,
+            },
+          },
+          store: false,
+          stream: false,
+          temperature: 0,
+          max_output_tokens: resolveMaxOutputTokens(),
+        },
+        { maxRetries: 0, timeout: resolveOpenAiRequestTimeoutMs() },
+      ),
+    { runtime: 'responses', label: 'validator.create' },
+  );
+
+  // B0-554 — captured before the parse try/catch: the API call itself succeeded either way, so
+  // usage is real even on the parse-failure fallback below.
+  const usage = extractLlmUsage(res);
 
   try {
     const text = extractAssistantText(res);
@@ -133,6 +182,7 @@ export async function runValidatorPass(input: {
         ...(result.supported_claims ?? []),
         ...partitioned.supportedClaims,
       ],
+      usage,
     };
   } catch {
     return {
@@ -140,6 +190,7 @@ export async function runValidatorPass(input: {
       confidence: 0,
       issues: ['validator_output_parse_failed'],
       requires_human_review: true,
+      usage,
     };
   }
 }
@@ -478,34 +529,48 @@ export function resolveRevisionModel(modelTag?: string): string {
   return resolveResponsesModel(modelTag ?? 'preview');
 }
 
+/** B0-554 — `runRevisionPass`'s result plus the token usage from its one model call. */
+export type RevisionPassResult = { text: string; usage: LlmTokenUsage };
+
 export async function runRevisionPass(input: {
   draftAnswer: string;
   validatorIssues: string[];
   evidenceSummary: string;
   modelTag?: string;
-}): Promise<string> {
+}): Promise<RevisionPassResult> {
   const client = getOpenAIClient();
   const model = resolveRevisionModel(input.modelTag);
 
-  const res = await client.responses.create({
-    model,
-    instructions: REVISION_SYSTEM_PROMPT,
-    input: [
-      {
-        role: 'user',
-        content: JSON.stringify({
-          draft: input.draftAnswer,
-          issues: input.validatorIssues,
-          evidence_summary: input.evidenceSummary,
-        }),
-        type: 'message',
-      },
-    ],
-    store: false,
-    stream: false,
-    temperature: 0.2,
-    max_output_tokens: resolveMaxOutputTokens(),
-  });
+  // B0-550 — same bounded retry + explicit timeout as `runValidatorPass`; see its comment above.
+  const res = await retryTransportFaults(
+    () =>
+      client.responses.create(
+        {
+          model,
+          instructions: REVISION_SYSTEM_PROMPT,
+          input: [
+            {
+              role: 'user',
+              content: JSON.stringify({
+                draft: input.draftAnswer,
+                issues: input.validatorIssues,
+                evidence_summary: input.evidenceSummary,
+              }),
+              type: 'message',
+            },
+          ],
+          store: false,
+          stream: false,
+          temperature: 0.2,
+          max_output_tokens: resolveMaxOutputTokens(),
+        },
+        { maxRetries: 0, timeout: resolveOpenAiRequestTimeoutMs() },
+      ),
+    { runtime: 'responses', label: 'revision.create' },
+  );
 
-  return extractAssistantText(res);
+  return {
+    text: extractAssistantText(res),
+    usage: extractLlmUsage(res),
+  };
 }

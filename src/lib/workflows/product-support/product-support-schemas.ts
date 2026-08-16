@@ -20,6 +20,20 @@ export const validatorResultSchema = z.object({
 
 export type ValidatorResult = z.infer<typeof validatorResultSchema>;
 
+/**
+ * B0-554 — per-model-call token usage, shared by every `workflow_steps.output` that records it
+ * (currently `openai_responses_agent`, `validator`, `revision`) so cost-attribution readers have
+ * one shape to parse regardless of which step wrote it.
+ */
+export const llmTokenUsageSchema = z.object({
+  promptTokens: z.number(),
+  completionTokens: z.number(),
+  totalTokens: z.number(),
+  cachedPromptTokens: z.number().optional(),
+});
+
+export type LlmTokenUsageRecord = z.infer<typeof llmTokenUsageSchema>;
+
 /** Rows from `rag.document` / `rag.document_chunk` returned by semantic search (aggregated across tool calls). */
 export const retrievedDocumentChunkRefSchema = z.object({
   document_id: z.string(),
@@ -174,6 +188,10 @@ export const productSupportStepOutputSchema = z
      * writer, and `readStepGateRecords` reads either spelling.
      */
     gates: z.array(gateRecordSchema).optional(),
+    /** B0-554 — this step's total LLM usage, when it made at least one model call. */
+    usage: llmTokenUsageSchema.optional(),
+    /** B0-554 — per-model-call usage, in call order (the `validator` step can call the model twice). */
+    usageByCall: z.array(llmTokenUsageSchema).optional(),
   })
   .loose();
 

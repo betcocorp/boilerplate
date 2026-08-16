@@ -25,6 +25,7 @@ import {
 import { logError, logInfo } from '~/lib/observability/logger';
 import { getOpenAIClient, resolveResponsesModel } from '~/lib/openai/client';
 import { runResponsesWithToolLoop } from '~/lib/openai/responses-runtime';
+import type { LlmTokenUsage } from '~/lib/openai/responses-runtime';
 import { runAiSdkWithToolLoop } from '~/lib/bex/ai-sdk-runtime';
 import {
   routeUserMessageToSme,
@@ -61,6 +62,7 @@ import {
 import { buildCompetitiveRecommendationAnswer } from '~/lib/recommendations/recommendation-answer';
 import { productSupportToolsForRoute } from '~/lib/tools/definitions';
 import { buildToolTraceEntry, executeToolCall } from '~/lib/tools/execute-tool-call';
+import { assembleDocumentBodies } from '~/lib/retrieval/document-assembly';
 
 import type { Json } from '~/types/supabase.public';
 
@@ -172,9 +174,20 @@ export function buildToolCallAuditPayload(
 }
 
 /**
- * The validator now sees the full document body for each source (capped per
- * document) so it can verify claims against the entire approved document
- * rather than a single fragmented chunk.
+ * B0-546 — the validator's LLM pass sees CHUNK-level evidence (each source's retrieved
+ * `snippet`) rather than the reassembled full-document body: far fewer tokens per source (a
+ * ~900-char matched chunk vs. a whole label/SDS), so the pass is cheaper and faster, and it is
+ * sufficient for the validator's actual job (does the draft's claim appear in evidence retrieved
+ * for this turn?). Falls back to `documentBody` only when a source carries no snippet.
+ *
+ * This is deliberately separate from the B0-257 regulated-claim guardrail
+ * (`evaluateRegulatedClaimGrounding`), which needs the whole approved document to catch a
+ * regulated value quoted from elsewhere in it, not just the top-matching chunk. Post-B0-547,
+ * `RetrievedSourceMeta.documentBody` here is itself only the narrowed matched-chunk-plus-neighbors
+ * window (the same one the model sees) — it is NOT the full document — so the guardrail call site
+ * below re-fetches the full body per source via `assembleDocumentBodies` specifically for its own
+ * check, rather than reusing this narrowed value. That re-fetch never reaches the model or the
+ * persisted tool payload, so it costs an extra DB read but not extra prompt tokens.
  */
 function buildEvidenceSummary(sources: RetrievedSourceMeta[]): string {
   if (sources.length === 0) {
@@ -186,9 +199,9 @@ function buildEvidenceSummary(sources: RetrievedSourceMeta[]): string {
 
   for (const source of sources) {
     const body =
-      (source.documentBody && source.documentBody.length > 0
-        ? source.documentBody
-        : source.snippet) ?? '';
+      (source.snippet && source.snippet.length > 0
+        ? source.snippet
+        : source.documentBody) ?? '';
     const trimmed = body.slice(0, VALIDATOR_PER_DOCUMENT_CHAR_BUDGET);
     const truncatedSuffix =
       body.length > trimmed.length ? '\n…(truncated for evidence summary)' : '';
@@ -1050,12 +1063,81 @@ export function recordGates(records: readonly GateRecord[]): { gates?: GateRecor
 }
 
 /**
+ * B0-554 — sums per-call usage into one totals object, the same shape `openai_responses_agent`
+ * already persists as `usage` alongside its own `usageByCall`. Used by the `validator` step, which
+ * can call the model once (a plain approval/rejection) or twice (approval, then a second pass after
+ * the revision model rewrote the draft) — both calls' usage must be attributed to the one step row.
+ */
+export function sumLlmUsage(calls: readonly LlmTokenUsage[]): LlmTokenUsage {
+  return calls.reduce(
+    (acc, call) => ({
+      promptTokens: acc.promptTokens + call.promptTokens,
+      completionTokens: acc.completionTokens + call.completionTokens,
+      totalTokens: acc.totalTokens + call.totalTokens,
+      cachedPromptTokens: acc.cachedPromptTokens + call.cachedPromptTokens,
+    }),
+    { promptTokens: 0, completionTokens: 0, totalTokens: 0, cachedPromptTokens: 0 },
+  );
+}
+
+/**
  * B0-389 — the single spelling for "the validator pass did not run". The bypassed path used to say
  * `reason: 'temporary_test_bypass'` on the step while putting `validator_bypassed_for_testing` in
  * `validation.issues`, so the same state had two names. The issues token is load-bearing (the
  * observability timeline's `validator_bypass` gate keys off it), so it is the one that survives.
  */
 export const VALIDATOR_BYPASS_REASON = 'validator_bypassed_for_testing';
+
+/**
+ * B0-546 — the single spelling for "the validator pass was skipped because retrieval already
+ * found a near-exact match on a non-safety route", distinct from `VALIDATOR_BYPASS_REASON` (the
+ * admin `useValidator` toggle being off). Kept separate so the observability timeline can tell
+ * the two skip reasons apart instead of conflating "never asked for the validator" with "asked
+ * for it, but the confidence gate decided it wasn't needed this turn".
+ */
+export const VALIDATOR_SKIP_HIGH_SIMILARITY_REASON =
+  'validator_skipped_high_similarity_non_safety_route';
+
+/**
+ * B0-546 — minimum top-source retrieval similarity required to skip the validator's LLM pass
+ * entirely on a non-safety route. Deliberately high: this bypasses the one LLM check that catches
+ * a hallucinated/unsupported claim, so it only fires when retrieval already found a near-exact
+ * match. Configurable via `BEX_VALIDATOR_SKIP_MIN_SIMILARITY` without a redeploy; falls back to
+ * the default on anything that is not a finite number in (0, 1].
+ */
+export const DEFAULT_VALIDATOR_SKIP_MIN_SIMILARITY = 0.85;
+
+export function resolveValidatorSkipMinSimilarity(): number {
+  const raw = process.env.BEX_VALIDATOR_SKIP_MIN_SIMILARITY;
+  if (!raw) {
+    return DEFAULT_VALIDATOR_SKIP_MIN_SIMILARITY;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 && parsed <= 1
+    ? parsed
+    : DEFAULT_VALIDATOR_SKIP_MIN_SIMILARITY;
+}
+
+/** Kill switch: `BEX_VALIDATOR_SKIP_ENABLED=false` disables the B0-546 skip gate without a redeploy. */
+export function isValidatorSkipEnabled(): boolean {
+  return process.env.BEX_VALIDATOR_SKIP_ENABLED !== 'false';
+}
+
+/**
+ * B0-546 — routes considered safety-sensitive enough that the validator pass must never be
+ * skipped purely on retrieval-similarity grounds: usage/safety/dilution-shaped questions
+ * (`queryNeedsUsageAndSafetyCoverage`, already used by the usage/safety coverage gate above), the
+ * dedicated `dilution` SME (dilution ratios are inherently regulated per the org's regulated-data
+ * rule), and `recommendations` (an equivalence claim between an EPA-registered competitor product
+ * and a Betco one).
+ */
+export function isSafetySensitiveRoute(userMessage: string, decision: string): boolean {
+  return (
+    queryNeedsUsageAndSafetyCoverage(userMessage) ||
+    decision === 'dilution' ||
+    decision === 'recommendations'
+  );
+}
 
 /**
  * B0-386 — `error.reason` written on a step that was still `running` but is not the step the
@@ -2198,6 +2280,21 @@ export async function runProductSupportWorkflow(input: {
     const needsUsageSafetyCoverage = queryNeedsUsageAndSafetyCoverage(
       input.userMessage,
     );
+    /**
+     * B0-546 — gate for skipping the validator's LLM pass entirely: retrieval already found a
+     * near-exact match (`topSourceSimilarity` clears `resolveValidatorSkipMinSimilarity()`) AND the
+     * route is not safety-sensitive. Computed here (before the validator step even calls the
+     * model) so it can also decide whether that step's `input` records a prompt at all.
+     */
+    const topSourceSimilarity = sources.reduce(
+      (max, s) => (typeof s.similarity === 'number' && s.similarity > max ? s.similarity : max),
+      0,
+    );
+    const canSkipValidatorForHighSimilarity =
+      isValidatorSkipEnabled() &&
+      sources.length > 0 &&
+      topSourceSimilarity >= resolveValidatorSkipMinSimilarity() &&
+      !isSafetySensitiveRoute(input.userMessage, routingDecision);
     let evidenceSummary = buildEvidenceSummary(sourceMeta);
     // A competitive recommendation is grounded by its cross-reference match, not by RAG chunks.
     // Feed that match to the validator as evidence so it doesn't reject the recommendation as
@@ -2279,8 +2376,11 @@ export async function runProductSupportWorkflow(input: {
          * (`useValidator === false`, the test runner's default) there is no model call, and a prompt
          * record there would make a step that never ran look like it had. The bypass is instead
          * declared in the step's output (`skipped` + `VALIDATOR_BYPASS_REASON`).
+         *
+         * B0-546 — same reasoning applies to the high-similarity skip: `canSkipValidatorForHighSimilarity`
+         * means this run never calls the model either, so no prompt is recorded for it.
          */
-        ...(useValidator
+        ...(useValidator && !canSkipValidatorForHighSimilarity
           ? recordPrompt({
               stage: 'validator',
               instructions: VALIDATOR_SYSTEM_PROMPT,
@@ -2296,14 +2396,29 @@ export async function runProductSupportWorkflow(input: {
     // B0-368 — set when the revision pass refused to re-ground, so the eventual
     // human-review escalation is distinguishable from a plain validator rejection.
     let revisionPassRefused = false;
+    // B0-554 — per-model-call usage for every call this step makes (0, 1, or 2: the validator can
+    // run twice when the revision pass produces a re-check), summed onto the step's output below.
+    const validatorUsageByCall: LlmTokenUsage[] = [];
     // TODO: Remove this runtime toggle when validator behavior is fully tuned.
     let validation: ValidatorResult;
-    if (useValidator) {
-      validation = await runValidatorPass({
+    if (useValidator && !canSkipValidatorForHighSimilarity) {
+      const pass = await runValidatorPass({
         draftAnswer,
         evidenceSummary,
         modelTag: input.modelTag,
       });
+      validatorUsageByCall.push(pass.usage);
+      validation = pass;
+    } else if (useValidator) {
+      // B0-546 — high-similarity, non-safety route: skip the LLM pass and use the same
+      // heuristic-confidence shape as the `useValidator === false` bypass, tagged with its own
+      // reason so the two skip paths stay distinguishable in the trace.
+      validation = {
+        approved: true,
+        confidence: Math.max(0.9, topSourceSimilarity),
+        issues: [VALIDATOR_SKIP_HIGH_SIMILARITY_REASON],
+        requires_human_review: false,
+      };
     } else {
       validation = {
         approved: true,
@@ -2341,14 +2456,13 @@ export async function runProductSupportWorkflow(input: {
       });
       markStepOpen(revisionStep.id);
 
-      const revised = (
-        await runRevisionPass({
-          draftAnswer,
-          validatorIssues: validation.issues,
-          evidenceSummary,
-          modelTag: input.modelTag,
-        })
-      ).trim();
+      const revisionResult = await runRevisionPass({
+        draftAnswer,
+        validatorIssues: validation.issues,
+        evidenceSummary,
+        modelTag: input.modelTag,
+      });
+      const revised = revisionResult.text.trim();
       // The revision pass is told to refuse / ask for docs when it can't ground the flagged
       // claims. Never let such a refusal OVERWRITE a substantive answer the user already saw —
       // keep the draft and flag it for review instead. This matters most for recommendations,
@@ -2372,6 +2486,9 @@ export async function runProductSupportWorkflow(input: {
           refused: revisionRefused,
           outcome: revisionRefused ? 'refused_draft_retained' : 'draft_replaced',
           revisedAnswer: revised,
+          // B0-554 — the revision pass is its own model call; capture its usage on its own step
+          // instead of leaving it unattributed (it used to be dropped entirely).
+          usage: revisionResult.usage,
         }),
       });
       markStepClosed(revisionStep.id);
@@ -2391,11 +2508,13 @@ export async function runProductSupportWorkflow(input: {
             answerProvenance = 'cross_reference_composed';
           }
         }
-        validation = await runValidatorPass({
+        const secondPass = await runValidatorPass({
           draftAnswer,
           evidenceSummary,
           modelTag: input.modelTag,
         });
+        validatorUsageByCall.push(secondPass.usage);
+        validation = secondPass;
         audit.enqueue(
           'validation_completed',
           { pass: 'second', ...validation },
@@ -2529,12 +2648,25 @@ export async function runProductSupportWorkflow(input: {
     // claim. The detection still runs and is always recorded (`gates`, and the review task below
     // when not bypassed) so a reviewer can see exactly what would have been withheld and why --
     // turn the flag back off once real thresholds are calibrated.
+    //
+    // B0-547 follow-up: `sourceMeta[].documentBody` is only the narrowed matched-chunk-plus-
+    // neighbors window shown to the model, not the whole approved document -- reusing it here
+    // would silently shrink this guardrail's grounding pool and could reject (or, just as bad,
+    // fail to catch) a genuinely correct regulated claim quoted from a part of the document
+    // outside that window. Re-fetch the full body per distinct real document id instead; this
+    // never reaches the model or the persisted tool payload, so it costs one extra DB read, not
+    // extra prompt tokens. Synthetic sources (e.g. the verified-facts/lab-report blocks, whose
+    // `documentId` is not a real `rag.document` row) simply have no entry in the map and fall
+    // back to `s.documentBody`, which for those is already the full block, not a chunk window.
+    const fullDocumentBodies = await assembleDocumentBodies(
+      sourceMeta.map((s) => s.documentId),
+    );
     const regulatedClaimGrounding = evaluateRegulatedClaimGrounding({
       draftAnswer,
       sources: sourceMeta.map((s) => ({
         documentId: s.documentId,
         title: s.title,
-        documentBody: s.documentBody,
+        documentBody: fullDocumentBodies.get(s.documentId)?.body ?? s.documentBody,
       })),
     });
 
@@ -2681,13 +2813,26 @@ export async function runProductSupportWorkflow(input: {
       status: 'completed',
       output: jsonContent({
         ...validation,
-        ...(useValidator
+        /**
+         * B0-554 — usage from every model call this step made (0 on either bypass path, 1 for a
+         * plain approval/rejection, 2 when the revision pass triggered a re-check). Placed after
+         * `...validation` so it wins over any single-call `usage` that a `ValidatorPassResult`
+         * spread might otherwise leave stale on `validation` from just the LAST call.
+         */
+        ...(validatorUsageByCall.length > 0
+          ? { usage: sumLlmUsage(validatorUsageByCall), usageByCall: validatorUsageByCall }
+          : {}),
+        ...(useValidator && !canSkipValidatorForHighSimilarity
           ? {}
           : {
               // B0-389 — one unambiguous marker for a step that never called a model, using the
               // same token `validation.issues` already carries (see VALIDATOR_BYPASS_REASON).
+              // B0-546 — the high-similarity skip gets its own reason (VALIDATOR_SKIP_HIGH_SIMILARITY_REASON)
+              // so it stays distinguishable from the admin `useValidator` toggle being off.
               skipped: true,
-              reason: VALIDATOR_BYPASS_REASON,
+              reason: !useValidator
+                ? VALIDATOR_BYPASS_REASON
+                : VALIDATOR_SKIP_HIGH_SIMILARITY_REASON,
             }),
         /**
          * B0-391 — the deterministic gates that mutated `validation` on this step. Both run after

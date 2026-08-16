@@ -28,7 +28,26 @@ function createFakeSupabase(): FakeSupabase {
 
   const rowsFor = (table: string): Row[] => (tables[table] ??= []);
 
+  /**
+   * B0-547 follow-up (regulated-claim guardrail full-document re-fetch) — `assembleDocumentBodies`
+   * queries `rag.document_chunk` via `supabase.schema('rag').from(...)`, which this fake never
+   * previously needed to support. Every test's `sourceMeta` already carries the full `documentBody`
+   * it wants the guardrail to see directly (not via a real `document_chunk` table), so this stub
+   * always resolves to an empty result — `assembleDocumentBodies` then returns an empty map and the
+   * guardrail call site falls back to `s.documentBody`, exactly the pre-existing behavior.
+   */
+  const emptySelectChain = {
+    select: () => emptySelectChain,
+    in: () => emptySelectChain,
+    order: () => emptySelectChain,
+    then: (resolve: (value: { data: Row[]; error: null }) => unknown) =>
+      resolve({ data: [], error: null }),
+  };
+
   const client = {
+    schema(_name: string) {
+      return { from: (_table: string) => emptySelectChain };
+    },
     from(table: string) {
       return {
         insert(row: Row) {
@@ -190,6 +209,14 @@ const AGENT_USAGE = {
   cachedPromptTokens: 0,
 };
 
+/** B0-554 — `runValidatorPass`/`runRevisionPass` now report usage alongside their result. */
+const VALIDATOR_PASS_USAGE = {
+  promptTokens: 50,
+  completionTokens: 10,
+  totalTokens: 60,
+  cachedPromptTokens: 0,
+};
+
 type ExecuteTool = (input: {
   name: string;
   argumentsJson: string;
@@ -298,8 +325,9 @@ beforeEach(() => {
     confidence: 0.9,
     issues: [],
     requires_human_review: false,
+    usage: VALIDATOR_PASS_USAGE,
   });
-  runRevisionPassMock.mockResolvedValue('');
+  runRevisionPassMock.mockResolvedValue({ text: '', usage: VALIDATOR_PASS_USAGE });
 });
 
 afterEach(() => {
@@ -418,17 +446,22 @@ describe('revision step (B0-389)', () => {
         confidence: 0.4,
         issues: ['dilution claim unsupported'],
         requires_human_review: false,
+        usage: VALIDATOR_PASS_USAGE,
       })
       .mockResolvedValue({
         approved: true,
         confidence: 0.8,
         issues: [],
         requires_human_review: false,
+        usage: VALIDATOR_PASS_USAGE,
       });
   });
 
   it('carries its own prompt and reports the replaced draft', async () => {
-    runRevisionPassMock.mockResolvedValue('Use 2 oz per gallon of water.');
+    runRevisionPassMock.mockResolvedValue({
+      text: 'Use 2 oz per gallon of water.',
+      usage: VALIDATOR_PASS_USAGE,
+    });
 
     await run({ userMessage: USAGE_MESSAGE, useValidator: true });
 
@@ -451,9 +484,10 @@ describe('revision step (B0-389)', () => {
   });
 
   it('reports a refusal as such and keeps the original draft', async () => {
-    runRevisionPassMock.mockResolvedValue(
-      'Clarification needed: please supply approved documentation.',
-    );
+    runRevisionPassMock.mockResolvedValue({
+      text: 'Clarification needed: please supply approved documentation.',
+      usage: VALIDATOR_PASS_USAGE,
+    });
 
     await run({ userMessage: USAGE_MESSAGE, useValidator: true });
 
@@ -472,6 +506,7 @@ describe('revision step (B0-389)', () => {
       confidence: 0.9,
       issues: [],
       requires_human_review: false,
+      usage: VALIDATOR_PASS_USAGE,
     });
 
     await run({ userMessage: USAGE_MESSAGE, useValidator: true });
@@ -490,6 +525,166 @@ describe('revision step (B0-389)', () => {
     expect(stepNamed('revision').status).toBe('failed');
     expect(stepNamed('revision').error).toEqual({ message: 'revision exploded' });
     expect(steps().filter((step) => step.status === 'running')).toEqual([]);
+  });
+});
+
+/* -------------------------------------------------------------------------- *
+ * B0-546 — conditional/cheaper validator pass
+ * -------------------------------------------------------------------------- */
+
+describe('validator high-similarity skip gate (B0-546)', () => {
+  const NON_SAFETY_MESSAGE = 'Tell me about Betco Fight Bac RTU packaging options.';
+
+  it('skips the validator LLM pass on a non-safety route once retrieval similarity clears the threshold', async () => {
+    executeProductToolMock.mockResolvedValue({
+      sources: [
+        {
+          documentId: 'doc-1',
+          chunkId: 'chunk-1',
+          title: 'Fight Bac RTU label',
+          snippet: 'Ready to use; no dilution required.',
+          documentBody: 'Ready to use; no dilution required.',
+          confidence: 0.95,
+        },
+      ],
+    });
+
+    await run({ userMessage: NON_SAFETY_MESSAGE, useValidator: true });
+
+    expect(runValidatorPassMock).not.toHaveBeenCalled();
+    expect(stepInput('validator').prompt).toBeUndefined();
+    expect(stepOutput('validator')).toMatchObject({
+      approved: true,
+      skipped: true,
+      reason: 'validator_skipped_high_similarity_non_safety_route',
+    });
+    expect(stepOutput('validator').issues).toContain(
+      'validator_skipped_high_similarity_non_safety_route',
+    );
+  });
+
+  it('does not skip on a safety/usage-shaped route even at high similarity', async () => {
+    executeProductToolMock.mockResolvedValue({
+      sources: [
+        {
+          documentId: 'doc-1',
+          chunkId: 'chunk-1',
+          title: 'pH7Q Dual label',
+          snippet: 'Use 2 oz per gallon of water.',
+          documentBody: 'Use 2 oz per gallon of water.',
+          confidence: 0.95,
+        },
+      ],
+    });
+
+    // USAGE_MESSAGE ("How do I use...") is safety-sensitive per `isSafetySensitiveRoute`.
+    await run({ userMessage: USAGE_MESSAGE, useValidator: true });
+
+    expect(runValidatorPassMock).toHaveBeenCalledTimes(1);
+    expect(stepOutput('validator').issues).not.toContain(
+      'validator_skipped_high_similarity_non_safety_route',
+    );
+  });
+
+  it('does not skip when retrieval similarity is below the threshold', async () => {
+    executeProductToolMock.mockResolvedValue({
+      sources: [
+        {
+          documentId: 'doc-1',
+          chunkId: 'chunk-1',
+          title: 'Fight Bac RTU label',
+          snippet: 'Ready to use; no dilution required.',
+          documentBody: 'Ready to use; no dilution required.',
+          confidence: 0.5,
+        },
+      ],
+    });
+
+    await run({ userMessage: NON_SAFETY_MESSAGE, useValidator: true });
+
+    expect(runValidatorPassMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('feeds the validator chunk-level snippets rather than the full document body', async () => {
+    executeProductToolMock.mockResolvedValue({
+      sources: [
+        {
+          documentId: 'doc-1',
+          chunkId: 'chunk-1',
+          title: 'pH7Q Dual label',
+          snippet: 'Use 2 oz per gallon of water.',
+          documentBody:
+            'Use 2 oz per gallon of water. FULL_DOCUMENT_ONLY_MARKER: unrelated boilerplate repeated many times.',
+        },
+      ],
+    });
+
+    await run({ userMessage: USAGE_MESSAGE, useValidator: true });
+
+    expect(runValidatorPassMock).toHaveBeenCalledTimes(1);
+    const [{ evidenceSummary }] = runValidatorPassMock.mock.calls[0] as [
+      { evidenceSummary: string },
+    ];
+    expect(evidenceSummary).toContain('Use 2 oz per gallon of water.');
+    expect(evidenceSummary).not.toContain('FULL_DOCUMENT_ONLY_MARKER');
+  });
+});
+
+/* -------------------------------------------------------------------------- *
+ * B0-554 — token-usage capture on the validator and revision steps
+ * -------------------------------------------------------------------------- */
+
+describe('validator/revision usage capture (B0-554)', () => {
+  it('records the validator LLM pass usage on the validator step', async () => {
+    await run({ userMessage: USAGE_MESSAGE, useValidator: true });
+
+    expect(stepOutput('validator').usage).toEqual(VALIDATOR_PASS_USAGE);
+    expect(stepOutput('validator').usageByCall).toEqual([VALIDATOR_PASS_USAGE]);
+  });
+
+  it('records no usage on a bypassed (useValidator: false) validator step', async () => {
+    await run();
+
+    expect(stepOutput('validator').usage).toBeUndefined();
+    expect(stepOutput('validator').usageByCall).toBeUndefined();
+  });
+
+  it('records the revision pass usage on its own step', async () => {
+    runValidatorPassMock
+      .mockResolvedValueOnce({
+        approved: false,
+        confidence: 0.4,
+        issues: ['dilution claim unsupported'],
+        requires_human_review: false,
+        usage: VALIDATOR_PASS_USAGE,
+      })
+      .mockResolvedValue({
+        approved: true,
+        confidence: 0.8,
+        issues: [],
+        requires_human_review: false,
+        usage: VALIDATOR_PASS_USAGE,
+      });
+    runRevisionPassMock.mockResolvedValue({
+      text: 'Use 2 oz per gallon of water.',
+      usage: VALIDATOR_PASS_USAGE,
+    });
+
+    await run({ userMessage: USAGE_MESSAGE, useValidator: true });
+
+    expect(stepOutput('revision').usage).toEqual(VALIDATOR_PASS_USAGE);
+    // Two validator calls (first pass + the re-check after revision) — both attributed to the
+    // one validator step.
+    expect(stepOutput('validator').usageByCall).toEqual([
+      VALIDATOR_PASS_USAGE,
+      VALIDATOR_PASS_USAGE,
+    ]);
+    expect(stepOutput('validator').usage).toEqual({
+      promptTokens: VALIDATOR_PASS_USAGE.promptTokens * 2,
+      completionTokens: VALIDATOR_PASS_USAGE.completionTokens * 2,
+      totalTokens: VALIDATOR_PASS_USAGE.totalTokens * 2,
+      cachedPromptTokens: VALIDATOR_PASS_USAGE.cachedPromptTokens * 2,
+    });
   });
 });
 
@@ -977,8 +1172,12 @@ describe('answer provenance (B0-391)', () => {
       confidence: 0.3,
       issues: ['dilution claim unsupported'],
       requires_human_review: true,
+      usage: VALIDATOR_PASS_USAGE,
     });
-    runRevisionPassMock.mockResolvedValue('Clarification needed: please supply approved documentation.');
+    runRevisionPassMock.mockResolvedValue({
+      text: 'Clarification needed: please supply approved documentation.',
+      usage: VALIDATOR_PASS_USAGE,
+    });
 
     const out = await run({ userMessage: 'What is the EPA reg number for Betco Fight Bac RTU?', useValidator: true });
 

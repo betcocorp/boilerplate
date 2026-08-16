@@ -67,6 +67,7 @@ const STEP_LABELS: Record<string, string> = {
 const GATE_LABELS: Record<ConfidenceGateKind, string> = {
   early_decline_gate: 'Early decline gate applied',
   validator_bypass: 'Validator bypassed (heuristic confidence)',
+  validator_skip_high_similarity: 'Validator skipped (high-similarity, non-safety route)',
   llm_validator: 'LLM validator self-report',
   usage_safety_coverage_cap: `Usage/safety coverage cap (${USAGE_SAFETY_COVERAGE_CONFIDENCE_CAP})`,
   regulated_claim_guardrail: `Regulated-claim guardrail clamp (${REGULATED_CLAIM_CONFIDENCE_CAP})`,
@@ -648,8 +649,17 @@ export function buildRunTimeline(
     const payload = asRecord(log.payload);
     const issues = readStringArray(payload, 'issues');
     const bypassed = issues.includes('validator_bypassed_for_testing');
+    // B0-546 — the high-similarity skip path tags its heuristic result with its own reason string
+    // so it doesn't get misread as an actual LLM self-report.
+    const skippedHighSimilarity = issues.includes(
+      'validator_skipped_high_similarity_non_safety_route',
+    );
     const pass = readString(payload, 'pass');
-    const gate: ConfidenceGateKind = bypassed ? 'validator_bypass' : 'llm_validator';
+    const gate: ConfidenceGateKind = skippedHighSimilarity
+      ? 'validator_skip_high_similarity'
+      : bypassed
+        ? 'validator_bypass'
+        : 'llm_validator';
     const approved = readBoolean(payload, 'approved');
     push({
       kind: 'confidence_gate',

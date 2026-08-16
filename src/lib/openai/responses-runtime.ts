@@ -8,6 +8,7 @@ import type { ResponseInputItem } from 'openai/resources/responses/responses';
 
 import { extractAssistantText, extractFunctionCalls } from '~/lib/openai/response-item-parsing';
 import {
+  resolveOpenAiRequestTimeoutMs,
   retryTransportFaults,
   type TransportRetryTuning,
 } from '~/lib/openai/transport-retry';
@@ -320,13 +321,20 @@ export async function runResponsesWithToolLoop(
     const response: Response = await retryTransportFaults(
       async () => {
         visibleDeltaEmittedThisAttempt = false;
+        // B0-550 — explicit per-attempt timeout (see `resolveOpenAiRequestTimeoutMs`'s doc
+        // comment): without it, a hung request has no bound short of the SDK's own 10-minute
+        // default, which the SDK's default `maxRetries` would then retry on top of.
+        const requestOptions = {
+          maxRetries: 0,
+          timeout: resolveOpenAiRequestTimeoutMs(),
+        };
         if (wantsTokenEvents) {
           const stream = opts.client.responses.stream(
             {
               ...params,
               stream: true,
             } as Parameters<typeof opts.client.responses.stream>[0],
-            { maxRetries: 0 },
+            requestOptions,
           );
           for await (const event of stream) {
             if (event.type === 'response.output_text.delta') {
@@ -339,7 +347,7 @@ export async function runResponsesWithToolLoop(
           }
           return await stream.finalResponse();
         }
-        return await opts.client.responses.create(params, { maxRetries: 0 });
+        return await opts.client.responses.create(params, requestOptions);
       },
       {
         runtime: 'responses',
