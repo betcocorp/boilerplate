@@ -20,6 +20,11 @@ const TABS = [
     label: 'Recommendation queue',
     href: '/admin/tools/cross-reference/recommendations',
   },
+  {
+    value: 'aliases',
+    label: 'Alias review',
+    href: '/admin/tools/cross-reference/aliases',
+  },
 ] as const;
 
 export function CrossReferenceTabs() {
