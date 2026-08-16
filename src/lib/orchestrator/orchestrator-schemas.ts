@@ -1,6 +1,9 @@
 import { z } from 'zod';
 import { SME_AGENT_IDS, type SmeAgentId } from '~/lib/agents/agent-registry';
-import { answerProvenanceSchema } from '~/lib/workflows/product-support/product-support-schemas';
+import {
+  agentConfidenceReasonSchema,
+  answerProvenanceSchema,
+} from '~/lib/workflows/product-support/product-support-schemas';
 
 export type { SmeAgentId };
 
@@ -94,6 +97,15 @@ export const productSupportOutcomeSchema = z.object({
   priorMessageCount: z.number().int().nonnegative().optional(),
   previousResponseId: z.string().nullable().optional(),
   historyCapApplied: z.boolean().optional(),
+  /**
+   * B0-491 — the answering agent's own self-reported confidence, distinct from `confidence`
+   * (validator/heuristic/gate value). `run-orchestration.ts` and `run-sme-agent.ts` cherry-pick
+   * fields into this outcome, so these must be declared here (and threaded there) or they are
+   * silently dropped before an API caller ever sees them — same rule as `promptVersion` etc. above.
+   */
+  agentConfidence: z.number().min(0).max(1).nullable().optional(),
+  agentConfidenceBasis: z.string().max(500).nullable().optional(),
+  agentConfidenceReason: agentConfidenceReasonSchema.optional(),
 });
 
 export type ProductSupportOutcome = z.infer<typeof productSupportOutcomeSchema>;

@@ -1734,3 +1734,172 @@ describe('retrieval configuration rollup (B0-493)', () => {
     });
   });
 });
+
+/* -------------------------------------------------------------------------- *
+ * B0-491 — agent self-reported confidence captured as structured output.
+ * -------------------------------------------------------------------------- */
+
+describe('agent self-reported confidence (B0-491)', () => {
+  const MARKER = (agentConfidence: number, agentConfidenceBasis: string) =>
+    `<!--BEX_AGENT_CONFIDENCE {"agentConfidence":${agentConfidence},"agentConfidenceBasis":"${agentConfidenceBasis}"}-->`;
+
+  it('captures a valid self-reported confidence and strips the marker from the visible answer', async () => {
+    runResponsesWithToolLoopMock.mockImplementation(
+      generationCalling(
+        [
+          {
+            name: 'search_product_docs',
+            argumentsJson: JSON.stringify({ productName: 'pH7Q Dual', topic: 'tile floors' }),
+            callId: 'call_1',
+          },
+        ],
+        {
+          assistantText: `Use 2 oz per gallon of water.\n${MARKER(0.87, 'exact label ratio cited')}`,
+        },
+      ),
+    );
+
+    const out = await run();
+
+    expect(out.answerText).toBe('Use 2 oz per gallon of water.');
+    expect(out.answerText).not.toContain('BEX_AGENT_CONFIDENCE');
+    expect(out.agentConfidence).toBe(0.87);
+    expect(out.agentConfidenceBasis).toBe('exact label ratio cited');
+    expect(out.agentConfidenceReason).toBe('reported');
+  });
+
+  it('persists agentConfidence on the agent workflow_steps row alongside the tool trace', async () => {
+    runResponsesWithToolLoopMock.mockImplementation(
+      generationCalling([], { assistantText: `Answer.\n${MARKER(0.72, 'partial evidence')}` }),
+    );
+
+    await run();
+
+    expect(stepOutput('openai_responses_agent')).toMatchObject({
+      agentConfidence: 0.72,
+      agentConfidenceBasis: 'partial evidence',
+      agentConfidenceReason: 'reported',
+    });
+    // Same step row as the B0-390 tool trace — not a separate step.
+    expect(stepOutput('openai_responses_agent').toolTrace).toBeDefined();
+  });
+
+  it('records an explicit null with reason "not_reported" when the model never emits the marker', async () => {
+    const out = await run();
+    expect(out.agentConfidence).toBeNull();
+    expect(out.agentConfidenceBasis).toBeNull();
+    expect(out.agentConfidenceReason).toBe('not_reported');
+  });
+
+  it('records reason "no_model_call" on the early-decline path, which never calls a model', async () => {
+    const out = await run({ userMessage: 'Can I mix bleach with this Betco cleaner?' });
+    expect(out.agentConfidence).toBeNull();
+    expect(out.agentConfidenceBasis).toBeNull();
+    expect(out.agentConfidenceReason).toBe('no_model_call');
+  });
+
+  it('a self-scored-below-0.80 run is identifiable from agentConfidence alone, without reading answer text', async () => {
+    runResponsesWithToolLoopMock.mockImplementation(
+      generationCalling([], {
+        assistantText: `I don't have enough information to answer that.\n${MARKER(0.35, 'no verified source found')}`,
+      }),
+    );
+
+    const out = await run();
+
+    expect(out.agentConfidence).toBeLessThan(0.8);
+    expect(out.agentConfidenceReason).toBe('reported');
+  });
+
+  it('feeds agentConfidence into the recommendation gate as baseConfidence, replacing the bypass-heuristic value', async () => {
+    // Cross-reference route: the bypass-heuristic confidence would be 0.9 (sources.length > 0).
+    // The agent's own self-reported confidence (0.62) must be what the gate actually calibrates on.
+    runResponsesWithToolLoopMock.mockImplementation(
+      generationCalling(
+        [
+          {
+            name: 'lookup_cross_reference',
+            argumentsJson: JSON.stringify({ brand: 'BNC', productName: 'BNC-15' }),
+            callId: 'call_xref',
+          },
+        ],
+        { assistantText: `Comparable product found.\n${MARKER(0.62, 'moderate confidence match')}` },
+      ),
+    );
+    executeProductToolMock.mockImplementation(async (name: string) =>
+      name === 'lookup_cross_reference'
+        ? { matches: [], fallbackRecommended: true }
+        : {
+            sources: [
+              {
+                documentId: 'doc-1',
+                chunkId: 'chunk-1',
+                title: 'Triforce label',
+                snippet: 'Use 2 oz per gallon.',
+                documentBody: 'Use 2 oz per gallon.',
+              },
+            ],
+          },
+    );
+    lookupCrossReferenceMock.mockResolvedValue({
+      fallbackRecommended: false,
+      matches: [
+        {
+          competitorBrand: 'BNC',
+          competitorProductName: 'BNC-15',
+          productKey: 'triforce',
+          confidence: 0.9,
+          productUrl: 'https://www.betco.com/products/triforce',
+          betcoProduct: { title: 'Triforce', sku: '1234' },
+          rationale: 'curated equivalence',
+        },
+      ],
+    });
+
+    const out = await run({ userMessage: XREF_MESSAGE });
+
+    expect(out.agentConfidence).toBe(0.62);
+    const record = singleGateRecord('recommendation_confidence');
+    // Pinned: the gate's recorded `baseConfidence` input is the agent's self-score, not 0.9.
+    expect(record.inputs.baseConfidence).toBe(0.62);
+    expect(out.confidence).toBeLessThanOrEqual(0.62);
+  });
+
+  it('falls back to the validator/heuristic confidence for the gate when the agent reported no score', async () => {
+    runResponsesWithToolLoopMock.mockImplementation(
+      generationCalling([
+        {
+          name: 'lookup_cross_reference',
+          argumentsJson: JSON.stringify({ brand: 'BNC', productName: 'BNC-15' }),
+          callId: 'call_xref',
+        },
+      ]),
+    );
+    executeProductToolMock.mockImplementation(async (name: string) =>
+      name === 'lookup_cross_reference'
+        ? { matches: [], fallbackRecommended: true }
+        : { sources: [{ documentId: 'doc-1', chunkId: 'chunk-1', snippet: 'x', documentBody: 'x' }] },
+    );
+    lookupCrossReferenceMock.mockResolvedValue({
+      fallbackRecommended: false,
+      matches: [
+        {
+          competitorBrand: 'BNC',
+          competitorProductName: 'BNC-15',
+          productKey: 'triforce',
+          confidence: 0.9,
+          productUrl: 'https://www.betco.com/products/triforce',
+          betcoProduct: { title: 'Triforce', sku: '1234' },
+          rationale: 'curated equivalence',
+        },
+      ],
+    });
+
+    const out = await run({ userMessage: XREF_MESSAGE });
+
+    expect(out.agentConfidence).toBeNull();
+    const record = singleGateRecord('recommendation_confidence');
+    // No marker this turn — falls back to the bypass-heuristic confidence (sources.length > 0 -> 0.9).
+    expect(record.inputs.baseConfidence).toBe(0.9);
+  });
+});

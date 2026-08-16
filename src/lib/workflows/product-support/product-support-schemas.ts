@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { toolTraceSchema } from '~/lib/audit/trace';
+import { AGENT_CONFIDENCE_REASONS } from '~/lib/workflows/product-support/agent-self-confidence';
 
 export const validatorResultSchema = z.object({
   approved: z.boolean(),
@@ -33,6 +34,16 @@ export const llmTokenUsageSchema = z.object({
 });
 
 export type LlmTokenUsageRecord = z.infer<typeof llmTokenUsageSchema>;
+
+/**
+ * B0-491 — provenance for `agentConfidence`. Always present (never inferred from context) so a null
+ * score is never unexplained: `not_reported` (model didn't emit the marker this turn), `malformed`
+ * (marker present but unparseable), `out_of_range` (parsed but outside 0-1), `no_model_call` (the
+ * early-decline gate short-circuited before any model call existed).
+ */
+export const agentConfidenceReasonSchema = z.enum(AGENT_CONFIDENCE_REASONS);
+
+export type AgentConfidenceReason = z.infer<typeof agentConfidenceReasonSchema>;
 
 /** Rows from `rag.document` / `rag.document_chunk` returned by semantic search (aggregated across tool calls). */
 export const retrievedDocumentChunkRefSchema = z.object({
@@ -358,6 +369,19 @@ export const productSupportFinalOutputSchema = z.object({
   similaritySummary: similaritySummarySchema.optional(),
   /** B0-493 — run-level retrieval configuration rollup. See schema doc above. */
   retrievalConfig: retrievalConfigSummarySchema.optional(),
+  /**
+   * B0-491 — the answering agent's OWN self-reported confidence (see
+   * `~/lib/workflows/product-support/agent-self-confidence.ts`), distinct from `confidence`
+   * (validator judgment / bypass heuristic / gate-capped value — never conflated with this field,
+   * see B0-492). Null (with `agentConfidenceReason` explaining why) when the model returned no
+   * parseable score, or when the early-decline gate never called a model at all. Optional so
+   * historical payloads written before this ticket still parse.
+   */
+  agentConfidence: z.number().min(0).max(1).nullable().optional(),
+  /** B0-491 — the short reason the agent gave for its own `agentConfidence`. */
+  agentConfidenceBasis: z.string().max(500).nullable().optional(),
+  /** B0-491 — always present alongside `agentConfidence` once this ticket's code runs. */
+  agentConfidenceReason: agentConfidenceReasonSchema.optional(),
 });
 
 export type ProductSupportFinalOutput = z.infer<typeof productSupportFinalOutputSchema>;

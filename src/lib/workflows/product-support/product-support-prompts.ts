@@ -4,6 +4,7 @@ import { PRODUCT_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/product-specialis
 import { RECOMMENDATIONS_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/recommendations-specialist/recommendations-specialist-system-prompt';
 import type { BexChatAgentMode } from '~/lib/agents/agent-registry';
 import type { IntentClassification } from '~/lib/orchestrator/intent-classifier';
+import { AGENT_CONFIDENCE_TRAILER_INSTRUCTIONS } from '~/lib/workflows/product-support/agent-self-confidence';
 
 /**
  * B0-508 — render the classifier's entities as a single readable line, `null`/empty fields
@@ -204,6 +205,12 @@ export const PRODUCT_SUPPORT_SHARED_INSTRUCTIONS = [
   '- For a simple, single-product question, answer in ~250 tokens or fewer: lead with the primary recommendation and its exact dilution/usage rate, then at most a couple of supporting sentences. Do not produce the full multi-section write-up (background, alternatives, full maintenance program, stripping/finishing procedure, etc.) unless the question asks for that detail or the topic genuinely requires multiple steps/products/safety callouts — offer to provide more detail instead of including it by default.',
   '- Brevity NEVER shortens, rounds, truncates, or omits a regulated value — dilution ratio, oz/gal, mL/L, ppm, %, contact/dwell time, EPA/DIN registration number, or kill-claim/log-reduction figure. Every such value must be transcribed in full exactly as printed, even in a short answer.',
   '- In your reply, cite source document ids inline where helpful (e.g. `[doc:uuid]` matching tool output).',
+  '',
+  '---',
+  '',
+  // B0-491 — every specialist route assembles this shared block after its own policy text, so this
+  // reaches all five specialists in one place rather than editing each prompt file.
+  AGENT_CONFIDENCE_TRAILER_INSTRUCTIONS,
 ].join('\n');
 
 /**

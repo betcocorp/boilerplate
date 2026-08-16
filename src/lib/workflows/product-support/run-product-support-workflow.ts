@@ -79,6 +79,11 @@ import {
   runSpeculativeRetrieval,
 } from '~/lib/workflows/product-support/speculative-retrieval';
 import {
+  createAgentConfidenceStreamFilter,
+  extractAgentSelfConfidence,
+  NO_MODEL_CALL_AGENT_CONFIDENCE,
+} from '~/lib/workflows/product-support/agent-self-confidence';
+import {
   gateRecordSchema,
   promptRecordSchema,
   type AnswerProvenance,
@@ -1599,6 +1604,11 @@ export async function runProductSupportWorkflow(input: {
       // B0-519 — no model call happens on this path, so the chain is never touched either way;
       // still recorded for consistency with the answered path's same field.
       historyCapApplied,
+      // B0-491 — no model call happens on this path either; explicit null with a reason rather
+      // than an absent field, same rule as every other run-config field on this branch.
+      agentConfidence: NO_MODEL_CALL_AGENT_CONFIDENCE.agentConfidence,
+      agentConfidenceBasis: NO_MODEL_CALL_AGENT_CONFIDENCE.agentConfidenceBasis,
+      agentConfidenceReason: NO_MODEL_CALL_AGENT_CONFIDENCE.reason,
       timingBreakdown: {
         toolRounds: 0,
         cacheSource: null,
@@ -2031,6 +2041,19 @@ export async function runProductSupportWorkflow(input: {
     // B0-459 — same ceiling on both runtimes; see `resolveMaxOutputTokens`.
     const maxOutputTokens = resolveMaxOutputTokens();
 
+    /**
+     * B0-491 — the model appends a machine-readable `<!--BEX_AGENT_CONFIDENCE {...}-->` marker to
+     * its answer (see `agent-self-confidence.ts`), but `onAssistantDelta` is the CALLER-VISIBLE
+     * stream sink — "whatever is written here has been shown to someone and cannot be retracted".
+     * This filter sits between the runtime and the caller's own sink so the marker (and a short
+     * lookahead buffer that could be its opening sequence) never reaches the live chat stream, even
+     * though it is still present in the runtime's own `assistantText` return value for extraction
+     * below. `finish()` is called once the whole agent call (all rounds) has resolved.
+     */
+    const confidenceStreamFilter = input.onAssistantDelta
+      ? createAgentConfidenceStreamFilter(input.onAssistantDelta)
+      : null;
+
     // Generation runtime: AI SDK (`streamText`) when BEX_AI_SDK_GENERATION_ENABLED, else the
     // OpenAI Responses tool loop. Both return the same { assistantText, finalResponseId,
     // toolTrace, responseIds } shape consumed below.
@@ -2046,7 +2069,7 @@ export async function runProductSupportWorkflow(input: {
           promptCacheKey,
           preloadedEvidence,
           maxOutputTokens,
-          onAssistantDelta: input.onAssistantDelta,
+          onAssistantDelta: confidenceStreamFilter?.onDelta,
           observeAssistantDelta,
           executeTool: executeToolForGeneration,
         })
@@ -2065,10 +2088,20 @@ export async function runProductSupportWorkflow(input: {
           promptCacheKey,
           preloadedEvidence,
           maxOutputTokens,
-          onAssistantDelta: input.onAssistantDelta,
+          onAssistantDelta: confidenceStreamFilter?.onDelta,
           observeAssistantDelta,
           executeTool: executeToolForGeneration,
         });
+
+    // B0-491 — flush whatever the filter was still holding back as a cautious lookahead (never
+    // actually part of a marker); if a marker opened but never closed, this drops it silently.
+    confidenceStreamFilter?.finish();
+
+    // B0-491 — extract the model's self-reported confidence and strip the marker out of the text
+    // BEFORE anything downstream (decline detection, cross-reference composition, the validator's
+    // evidence summary, persistence) ever sees it.
+    const { text: strippedAssistantText, selfConfidence: agentSelfConfidence } =
+      extractAgentSelfConfidence(agentResult.assistantText);
 
     /**
      * B0-390 — reconcile the workflow's trace with what the runtime reported. Both normally hold the
@@ -2324,7 +2357,7 @@ export async function runProductSupportWorkflow(input: {
         }
       : null;
 
-    let draftAnswer = agentResult.assistantText;
+    let draftAnswer = strippedAssistantText;
     /**
      * B0-391 — the single mutable answer-provenance cursor. Several branches below overwrite the
      * answer, so the rule is LAST WRITER THAT ACTUALLY CHANGED THE TEXT WINS: whatever survives here
@@ -2367,11 +2400,11 @@ export async function runProductSupportWorkflow(input: {
     } else if (crossReferenceResult?.match.productUrl?.trim()) {
       draftAnswer = composeCrossReferenceUserFacingAnswer({
         match: crossReferenceResult.match,
-        assistantText: agentResult.assistantText,
+        assistantText: strippedAssistantText,
       });
       // The composer is a no-op on a declined answer, or one that already leads with the comparable
       // link — claiming composition there would overstate what the workflow did to the text.
-      if (draftAnswer.trim() !== agentResult.assistantText.trim()) {
+      if (draftAnswer.trim() !== strippedAssistantText.trim()) {
         answerProvenance = 'cross_reference_composed';
       }
     } else if (webFallback) {
@@ -2470,6 +2503,11 @@ export async function runProductSupportWorkflow(input: {
         // (`cachedPromptTokens` should be non-zero from the 2nd call onward).
         usage: agentResult.usage,
         usageByCall: agentResult.usageByCall,
+        // B0-491 — the agent's own self-reported confidence, persisted alongside the B0-390 tool
+        // trace on this same step row (never the validator/step-level `confidence`).
+        agentConfidence: agentSelfConfidence.agentConfidence,
+        agentConfidenceBasis: agentSelfConfidence.agentConfidenceBasis,
+        agentConfidenceReason: agentSelfConfidence.reason,
         // B0-357 — the one resolved competitor-identity gate for this turn, when it ran.
         // B0-507 — the shadow-mode classifier comparison, when the classifier ran.
         ...recordGates([
@@ -2839,7 +2877,12 @@ export async function runProductSupportWorkflow(input: {
     // product is to apply it whenever the cross-reference post-processing ran.
     if (useCrossReferencePostProcessing) {
       const gateInput = {
-        baseConfidence: validation.confidence,
+        /**
+         * B0-491 — the agent's own self-reported confidence replaces the validator/bypass-heuristic
+         * value as this gate's calibration input, per this ticket's explicit ask. Falls back to
+         * `validation.confidence` only when the model reported no parseable score this turn.
+         */
+        baseConfidence: agentSelfConfidence.agentConfidence ?? validation.confidence,
         /**
          * B0-490 — the RAW top similarity (the winning search's ANN score before
          * `selectCuratedMatches` filtered/deduped/truncated it), not the post-selection max of
@@ -3110,6 +3153,11 @@ export async function runProductSupportWorkflow(input: {
       // B0-493 — the retrieval configuration this run actually used, or `mixed` per-field when
       // this turn's search calls disagreed.
       retrievalConfig,
+      // B0-491 — the answering agent's OWN self-reported confidence, distinct from `confidence`
+      // (validator judgment / bypass heuristic / gate-capped value below).
+      agentConfidence: agentSelfConfidence.agentConfidence,
+      agentConfidenceBasis: agentSelfConfidence.agentConfidenceBasis,
+      agentConfidenceReason: agentSelfConfidence.reason,
     };
 
     audit.enqueue('workflow_completed', { workflow_run_id: run.id }, wfCtx);
