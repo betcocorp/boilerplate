@@ -22,6 +22,19 @@ type ProductAliasRow = {
   alias: string;
   entity_id: string | null;
   product_line_key: string | null;
+  verified?: boolean;
+};
+
+/** Shape of a row returned by the `rag.match_product_alias_fuzzy` RPC (B0-482). */
+type FuzzyTrgmRpcRow = {
+  alias_norm: string;
+  alias: string;
+  entity_id: string | null;
+  product_line_key: string | null;
+  verified: boolean;
+  alias_type: string | null;
+  confidence: number | null;
+  similarity: number;
 };
 
 type EntityRow = {
@@ -40,6 +53,8 @@ type Filter =
 
 let productAliasRows: ProductAliasRow[] = [];
 let entityRows: EntityRow[] = [];
+/** null = simulate the RPC being unavailable (falls through, like a pre-migration environment). */
+let fuzzyTrgmRpcRows: FuzzyTrgmRpcRow[] | null = null;
 
 function matchesFilter(row: Record<string, unknown>, filter: Filter): boolean {
   if (filter.kind === 'eq') {
@@ -93,6 +108,15 @@ const fakeSupabase = {
           },
         };
       },
+      // B0-482: rag.match_product_alias_fuzzy. Real RPC would already filter by
+      // similarity_threshold and rank descending -- fixtures below supply pre-filtered,
+      // pre-ranked rows to match that contract, same as the real function's output shape.
+      rpc(fn: string) {
+        if (fn === 'match_product_alias_fuzzy') {
+          return Promise.resolve({ data: fuzzyTrgmRpcRows, error: null });
+        }
+        return Promise.resolve({ data: null, error: new Error(`unexpected rpc: ${fn}`) });
+      },
     };
   },
 };
@@ -100,6 +124,7 @@ const fakeSupabase = {
 beforeEach(() => {
   productAliasRows = [];
   entityRows = [];
+  fuzzyTrgmRpcRows = null;
   vi.mocked(getSupabaseServiceRoleClient).mockReturnValue(fakeSupabase as never);
 });
 
@@ -226,5 +251,165 @@ describe('resolveProductEntityByName — tokenized fuzzy alias fallback (B0-272)
     const result = await resolveProductEntityByName('Foo Bar Baz');
 
     expect(result).toEqual({ productLineKey: null, productKey: null, resolutionSource: null });
+  });
+});
+
+describe('resolveProductEntityByName — exact alias_norm match spanning multiple product lines (B0-481/B0-483)', () => {
+  it('resolves to the single verified row when the exact alias_norm spans 2 product lines and exactly one is verified', async () => {
+    // B0-481 relaxed UNIQUE(alias_norm) to UNIQUE(alias_norm, product_line_key), so this is now a
+    // legal shape: a US variant (verified via trusted legacy backfill) and an unverified,
+    // not-yet-reviewed Canada alias sharing the same display name.
+    productAliasRows = [
+      { alias_norm: 'zorbex', alias: 'Zorbex', entity_id: 'ent-us', product_line_key: 'line-us', verified: true },
+      { alias_norm: 'zorbex', alias: 'Zorbex', entity_id: 'ent-ca', product_line_key: 'line-ca', verified: false },
+    ];
+    entityRows = [{ id: 'ent-us', entity_type: 'product_line', product_line_key: 'line-us' }];
+
+    const result = await resolveProductEntityByName('Zorbex');
+
+    expect(result).toEqual({ productLineKey: 'line-us', productKey: null, resolutionSource: 'alias_exact' });
+  });
+
+  it('returns null when the exact alias_norm spans multiple product lines and none is verified', async () => {
+    productAliasRows = [
+      { alias_norm: 'zorbex', alias: 'Zorbex', entity_id: 'ent-us', product_line_key: 'line-us', verified: false },
+      { alias_norm: 'zorbex', alias: 'Zorbex', entity_id: 'ent-ca', product_line_key: 'line-ca', verified: false },
+    ];
+    entityRows = [];
+
+    const result = await resolveProductEntityByName('Zorbex');
+
+    expect(result).toEqual({ productLineKey: null, productKey: null, resolutionSource: null });
+  });
+
+  it('returns null when the exact alias_norm spans multiple product lines and more than one is verified', async () => {
+    productAliasRows = [
+      { alias_norm: 'zorbex', alias: 'Zorbex', entity_id: 'ent-us', product_line_key: 'line-us', verified: true },
+      { alias_norm: 'zorbex', alias: 'Zorbex', entity_id: 'ent-ca', product_line_key: 'line-ca', verified: true },
+    ];
+    entityRows = [];
+
+    const result = await resolveProductEntityByName('Zorbex');
+
+    expect(result).toEqual({ productLineKey: null, productKey: null, resolutionSource: null });
+  });
+});
+
+describe('resolveProductEntityByName — trigram fuzzy alias RPC fallback (B0-482)', () => {
+  it('resolves via the fuzzy RPC when the top candidate clears the threshold with no competing product line nearby', async () => {
+    fuzzyTrgmRpcRows = [
+      {
+        alias_norm: 'acrylic polymer floor finish',
+        alias: 'Acrylic Polymer Floor Finish',
+        entity_id: 'ent-7',
+        product_line_key: 'line-7',
+        verified: true,
+        alias_type: 'title',
+        confidence: 0.9,
+        similarity: 0.9,
+      },
+      {
+        alias_norm: 'metal interlocked acrylic polymer floor finish',
+        alias: 'Metal Interlocked Acrylic Polymer Floor Finish',
+        entity_id: 'ent-8',
+        product_line_key: 'line-8',
+        verified: true,
+        alias_type: 'title',
+        confidence: 0.9,
+        similarity: 0.55,
+      },
+    ];
+    entityRows = [{ id: 'ent-7', entity_type: 'product_line', product_line_key: 'line-7' }];
+
+    // Query has no exact/tokenized alias match (typo breaks the tokenized AND-match), so this
+    // falls through to the fuzzy RPC tier.
+    const result = await resolveProductEntityByName('acrylic polymer flor finish');
+
+    expect(result).toEqual({ productLineKey: 'line-7', productKey: null, resolutionSource: 'alias_fuzzy_trgm' });
+  });
+
+  it('returns null when top-scoring fuzzy candidates within the ambiguity margin span multiple product lines with no single verified winner', async () => {
+    fuzzyTrgmRpcRows = [
+      {
+        alias_norm: 'alcohol foaming hand sanitizer',
+        alias: 'Alcohol Foaming Hand Sanitizer',
+        entity_id: 'ent-9',
+        product_line_key: 'line-9',
+        verified: true,
+        alias_type: 'title',
+        confidence: 0.9,
+        similarity: 0.85,
+      },
+      {
+        alias_norm: 'foaming alcohol hand sanitizer',
+        alias: 'Foaming Alcohol Hand Sanitizer',
+        entity_id: 'ent-10',
+        product_line_key: 'line-10',
+        verified: true,
+        alias_type: 'title',
+        confidence: 0.9,
+        similarity: 0.85,
+      },
+    ];
+    entityRows = [];
+
+    const result = await resolveProductEntityByName('alcohol foming hand sanitizer');
+
+    expect(result).toEqual({ productLineKey: null, productKey: null, resolutionSource: null });
+  });
+
+  it('resolves to the single verified candidate when close fuzzy candidates span multiple product lines', async () => {
+    fuzzyTrgmRpcRows = [
+      {
+        alias_norm: 'alcohol foaming hand sanitizer',
+        alias: 'Alcohol Foaming Hand Sanitizer',
+        entity_id: 'ent-9',
+        product_line_key: 'line-9',
+        verified: false,
+        alias_type: 'title',
+        confidence: 0.9,
+        similarity: 0.85,
+      },
+      {
+        alias_norm: 'foaming alcohol hand sanitizer',
+        alias: 'Foaming Alcohol Hand Sanitizer',
+        entity_id: 'ent-10',
+        product_line_key: 'line-10',
+        verified: true,
+        alias_type: 'title',
+        confidence: 0.9,
+        similarity: 0.84,
+      },
+    ];
+    entityRows = [{ id: 'ent-10', entity_type: 'product_line', product_line_key: 'line-10' }];
+
+    const result = await resolveProductEntityByName('alcohol foming hand sanitizer');
+
+    expect(result).toEqual({ productLineKey: 'line-10', productKey: null, resolutionSource: 'alias_fuzzy_trgm' });
+  });
+
+  it('does not fire the fuzzy RPC tier when an earlier tier (exact/tokenized alias) already matched', async () => {
+    productAliasRows = [
+      { alias_norm: 'zorbex', alias: 'Zorbex', entity_id: 'ent-1', product_line_key: 'line-1' },
+    ];
+    entityRows = [{ id: 'ent-1', entity_type: 'product', product_key: 'sku-1' }];
+    // If the fuzzy RPC were consulted despite the exact match already resolving, this would
+    // resolve to a different product line -- proving the exact-match tier short-circuits first.
+    fuzzyTrgmRpcRows = [
+      {
+        alias_norm: 'zorbex extra',
+        alias: 'Zorbex Extra',
+        entity_id: 'ent-99',
+        product_line_key: 'line-99',
+        verified: true,
+        alias_type: 'title',
+        confidence: 0.9,
+        similarity: 0.99,
+      },
+    ];
+
+    const result = await resolveProductEntityByName('Zorbex');
+
+    expect(result).toEqual({ productLineKey: 'line-1', productKey: 'sku-1', resolutionSource: 'alias_exact' });
   });
 });
