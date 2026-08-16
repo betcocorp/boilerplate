@@ -2,6 +2,7 @@ import { searchProductChunks, type RagSearchMatch } from '~/lib/rag/search';
 import {
   buildEntityContextBlock,
   fetchEntityContexts,
+  type ProductEntityResolutionSource,
 } from '~/lib/rag/entity-context';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
@@ -139,6 +140,15 @@ export type ProductKnowledgeRetrievalSummary = {
   broadCuratedCount: number;
   anchoredCuratedCount: number;
   productLineResolution?: ProductLineResolutionResult;
+  /**
+   * B0-479: when `strategy` is `'explicit_product_line'`, tags WHY an explicit key was supplied —
+   * specifically, whether it came from `resolveProductEntityByName`'s alias-table match (exact or
+   * tokenized-fuzzy) versus a non-alias resolution path (prod_line_id / title match), versus a
+   * caller that supplied a key without going through that resolver at all. Lets eval runs separate
+   * "alias-anchored" retrieval from other explicit-key retrieval. `null` for every other strategy
+   * (broad/anchored-via-similarity paths never have an explicit key to source).
+   */
+  explicitKeySource: ProductEntityResolutionSource | 'unspecified' | null;
 };
 
 export type ProductKnowledgeQueryResult = {
@@ -419,6 +429,8 @@ export async function ragQueryForProductKnowledge(input: {
   limit?: number;
   productLineKey?: string | null;
   productKey?: string | null;
+  /** B0-479: source of `productLineKey`, when the caller resolved it via `resolveProductEntityByName`. */
+  productLineKeySource?: ProductEntityResolutionSource;
   skipProductLineResolution?: boolean;
 }): Promise<CuratedSource[]> {
   const result = await ragQueryForProductKnowledgeWithMeta(input);
@@ -435,6 +447,13 @@ async function runProductKnowledgeQuery(input: {
   productLineKey?: string | null;
   /** Resolved product-tier key (B0-248 SKU/InvtID alias), if the caller anchored to a specific product. */
   productKey?: string | null;
+  /**
+   * B0-479: which `resolveProductEntityByName` branch produced `productLineKey`, if the caller
+   * resolved it that way. Threaded into `retrieval.explicitKeySource` when `productLineKey` is
+   * used as an explicit anchor, so eval telemetry can distinguish alias-anchored resolutions.
+   * Omit (or pass a plain string key from elsewhere) and the summary reports `'unspecified'`.
+   */
+  productLineKeySource?: ProductEntityResolutionSource;
   /** When true, skip candidate resolution (caller already anchored the query, e.g. by product id). */
   skipProductLineResolution?: boolean;
   /** Restrict retrieval to chunks belonging to a specific GHS section. Null = no filter. */
@@ -518,6 +537,7 @@ async function runProductKnowledgeQuery(input: {
         usedProductKeyFallback,
         broadCuratedCount: curated.length,
         anchoredCuratedCount: curated.length,
+        explicitKeySource: input.productLineKeySource ?? 'unspecified',
         productLineResolution: {
           candidates: [],
           lockedProductLineKey: explicitKey,
@@ -557,6 +577,7 @@ async function runProductKnowledgeQuery(input: {
         usedProductKeyFallback: false,
         broadCuratedCount: curated.length,
         anchoredCuratedCount: 0,
+        explicitKeySource: null,
         productLineResolution: {
           candidates: [],
           lockedProductLineKey: null,
@@ -600,6 +621,7 @@ async function runProductKnowledgeQuery(input: {
         usedProductKeyFallback: false,
         broadCuratedCount: broadCurated.length,
         anchoredCuratedCount: 0,
+        explicitKeySource: null,
         productLineResolution: resolution,
       },
     };
@@ -654,6 +676,7 @@ async function runProductKnowledgeQuery(input: {
       usedProductKeyFallback: false,
       broadCuratedCount: broadSelected.length,
       anchoredCuratedCount: anchoredSelected.length,
+      explicitKeySource: null,
       productLineResolution: resolution,
     },
   };

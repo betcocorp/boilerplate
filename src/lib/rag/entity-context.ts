@@ -1,5 +1,19 @@
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
+/**
+ * B0-479: which branch of `resolveProductEntityByName` actually produced the returned
+ * `productLineKey`, so callers (product-tools.ts -> ragQueryForProductKnowledgeWithMeta) can
+ * tag telemetry with "alias-anchored" vs. "other explicit-key source" instead of only knowing
+ * *that* a key was supplied. `null` means no match was found at all (both keys null).
+ */
+export type ProductEntityResolutionSource =
+  | 'alias_exact'
+  | 'alias_fuzzy'
+  | 'prod_line_id'
+  | 'title_exact'
+  | 'title_fuzzy'
+  | null;
+
 export type EntityContext = {
   entityId: string;
   title: string | null;
@@ -146,13 +160,21 @@ async function resolveProductKeyForAliasEntity(
  * guesses between multiple equally-plausible matches (e.g. US vs. Canada variants of the same
  * product name), by design: silently picking one would be exactly the kind of inferred
  * region/product identification the regulated-data handling rules prohibit.
+ *
+ * B0-479: also reports `resolutionSource` — which of the branches below actually produced the
+ * match — so callers can tag downstream retrieval telemetry with "alias-anchored" (alias_exact /
+ * alias_fuzzy) vs. a non-alias explicit-key source (prod_line_id / title match).
  */
 export async function resolveProductEntityByName(
   name: string,
-): Promise<{ productLineKey: string | null; productKey: string | null }> {
+): Promise<{
+  productLineKey: string | null;
+  productKey: string | null;
+  resolutionSource: ProductEntityResolutionSource;
+}> {
   const trimmed = name.trim();
   if (!trimmed) {
-    return { productLineKey: null, productKey: null };
+    return { productLineKey: null, productKey: null, resolutionSource: null };
   }
 
   const supabase = getSupabaseServiceRoleClient();
@@ -167,7 +189,7 @@ export async function resolveProductEntityByName(
       .limit(1);
     if (aliasRows && aliasRows[0]?.product_line_key) {
       const productKey = await resolveProductKeyForAliasEntity(supabase, aliasRows[0].entity_id);
-      return { productLineKey: aliasRows[0].product_line_key, productKey };
+      return { productLineKey: aliasRows[0].product_line_key, productKey, resolutionSource: 'alias_exact' };
     }
   } catch {
     // Alias table unavailable — fall through to legacy resolution.
@@ -200,7 +222,11 @@ export async function resolveProductEntityByName(
             supabase,
             fuzzyAliasRows[0].entity_id,
           );
-          return { productLineKey: fuzzyAliasRows[0].product_line_key, productKey };
+          return {
+            productLineKey: fuzzyAliasRows[0].product_line_key,
+            productKey,
+            resolutionSource: 'alias_fuzzy',
+          };
         }
       }
     } catch {
@@ -219,7 +245,7 @@ export async function resolveProductEntityByName(
       .limit(2);
 
     if (data && data.length === 1 && data[0].product_line_key) {
-      return { productLineKey: data[0].product_line_key, productKey: null };
+      return { productLineKey: data[0].product_line_key, productKey: null, resolutionSource: 'prod_line_id' };
     }
   }
 
@@ -233,7 +259,7 @@ export async function resolveProductEntityByName(
     .limit(2);
 
   if (data && data.length === 1 && data[0].product_line_key) {
-    return { productLineKey: data[0].product_line_key, productKey: null };
+    return { productLineKey: data[0].product_line_key, productKey: null, resolutionSource: 'title_exact' };
   }
 
   // B0-272: tokenized *title* fallback — last resort for names with no product_alias row at
@@ -253,11 +279,11 @@ export async function resolveProductEntityByName(
     const { data: tokenData } = await tokenQuery.limit(2);
 
     if (tokenData && tokenData.length === 1 && tokenData[0].product_line_key) {
-      return { productLineKey: tokenData[0].product_line_key, productKey: null };
+      return { productLineKey: tokenData[0].product_line_key, productKey: null, resolutionSource: 'title_fuzzy' };
     }
   }
 
-  return { productLineKey: null, productKey: null };
+  return { productLineKey: null, productKey: null, resolutionSource: null };
 }
 
 /**

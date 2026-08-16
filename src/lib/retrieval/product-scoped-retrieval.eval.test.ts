@@ -178,3 +178,68 @@ describe.skipIf(!hasSupabaseCreds || !hasOpenAiCreds)(
     );
   },
 );
+
+/**
+ * B0-479 — confirm alias-resolved `product_line_key` flows through hybrid retrieval routing
+ * end-to-end: `resolveProductEntityByName` (an alias-table hit, exactly as every
+ * `product-tools.ts` call site invokes it) -> non-null `productLineKey` -> passed into
+ * `ragQueryForProductKnowledgeWithMeta` as an explicit key -> `strategy: 'explicit_product_line'`,
+ * never falling through to the broad-probe `resolveProductLineFromMatches` path (that call only
+ * happens in the branch reached when there is NO explicit key -- see product-knowledge.ts).
+ *
+ * Also confirms the B0-479 telemetry addition: `retrieval.explicitKeySource` tags *why* the key
+ * was explicit -- `'alias_exact'` here, since `KLING.alias` ('07512-00') is a verified exact
+ * `rag.product_alias.alias_norm` match (not the tokenized-fuzzy or title-match fallbacks).
+ */
+describe.skipIf(!hasSupabaseCreds || !hasOpenAiCreds)(
+  'alias-resolved productLineKey flows through hybrid retrieval routing (B0-479)',
+  () => {
+    it(
+      'an alias name resolves via the exact-alias path and anchors retrieval, not the broad probe',
+      async () => {
+        const resolved = await resolveProductEntityByName(KLING.alias);
+        expect(resolved.productLineKey).toBe(KLING.productLineKey);
+        expect(resolved.productKey).toBe(KLING.productKey);
+        expect(resolved.resolutionSource).toBe('alias_exact');
+
+        const { ragQueryForProductKnowledgeWithMeta } = await import('~/lib/retrieval/product-knowledge');
+        const result = await ragQueryForProductKnowledgeWithMeta({
+          query: 'What are the hazards and signal word for this product?',
+          productLineKey: resolved.productLineKey,
+          productKey: resolved.productKey,
+          productLineKeySource: resolved.resolutionSource,
+        });
+
+        expect(result.sources.length).toBeGreaterThan(0);
+        expect(result.retrieval.strategy).toBe('explicit_product_line');
+        expect(result.retrieval.explicitKeySource).toBe('alias_exact');
+        // The explicit-key branch never calls `resolveProductLineFromMatches` (the broad-probe
+        // path) -- its own productLineResolution is synthesized directly from the explicit key,
+        // which is the concrete, checkable proof that the broad probe was bypassed.
+        expect(result.retrieval.productLineResolution?.lockReason).toBe('explicit_filter');
+        expect(result.retrieval.productLineResolution?.lockedProductLineKey).toBe(
+          KLING.productLineKey,
+        );
+        expect(result.retrieval.productLineResolution?.candidates).toEqual([]);
+      },
+      20_000,
+    );
+
+    it(
+      'a caller that supplies an explicit key without a resolutionSource is tagged unspecified, not misattributed to alias',
+      async () => {
+        const { ragQueryForProductKnowledgeWithMeta } = await import('~/lib/retrieval/product-knowledge');
+        const result = await ragQueryForProductKnowledgeWithMeta({
+          query: 'What are the hazards and signal word for this product?',
+          productLineKey: KLING.productLineKey,
+          productKey: KLING.productKey,
+          // productLineKeySource intentionally omitted -- simulates a caller that predates B0-479.
+        });
+
+        expect(result.retrieval.strategy).toBe('explicit_product_line');
+        expect(result.retrieval.explicitKeySource).toBe('unspecified');
+      },
+      20_000,
+    );
+  },
+);
