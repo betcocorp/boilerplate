@@ -125,6 +125,10 @@ type ProductAliasRow = {
   entity_id: string | null;
   /** Only populated when the caller's `.select()` includes it (B0-483 exact-match tiebreak). */
   verified?: boolean;
+  /** B0-488: `rag.product_alias.id` / `.confidence`, only populated when the caller's `.select()`
+   * includes them — needed so a successful match can be logged with which alias row produced it. */
+  id?: string;
+  confidence?: number | null;
 };
 
 /** Chainable filter shape for `rag.product_alias`, which isn't in the generated Supabase types. */
@@ -224,18 +228,45 @@ async function resolveProductKeyForAliasEntity(
  * B0-479: also reports `resolutionSource` — which of the branches below actually produced the
  * match — so callers can tag downstream retrieval telemetry with "alias-anchored" (alias_exact /
  * alias_fuzzy / alias_fuzzy_trgm) vs. a non-alias explicit-key source (prod_line_id / title match).
+ *
+ * B0-488: also reports `ambiguousAlias` / `matchedAliasId` / `matchedAliasConfidence`, so callers
+ * can log an alias-resolution audit event and distinguish, when `resolutionSource` is `null`,
+ * "genuinely no match found" from "found alias candidates spanning multiple product lines that
+ * were rejected by the verified-tiebreak gate" — those two cases were previously indistinguishable
+ * from the return value alone. `ambiguousAlias` is only ever true when the FINAL resolution is
+ * null; if an earlier tier's ambiguity is later resolved by a subsequent tier, the outcome is that
+ * tier's normal success, not "ambiguous".
  */
-export async function resolveProductEntityByName(
-  name: string,
-): Promise<{
+export type ProductEntityResolutionResult = {
   productLineKey: string | null;
   productKey: string | null;
   resolutionSource: ProductEntityResolutionSource;
-}> {
+  ambiguousAlias: boolean;
+  /** `rag.product_alias.id` of the matched row, when `resolutionSource` is an alias_* tier. Null
+   * for non-alias sources and for `alias_fuzzy_trgm` (the RPC doesn't return the row id). */
+  matchedAliasId: string | null;
+  /** `rag.product_alias.confidence` of the matched row, when `resolutionSource` is an alias_* tier. */
+  matchedAliasConfidence: number | null;
+};
+
+export async function resolveProductEntityByName(
+  name: string,
+): Promise<ProductEntityResolutionResult> {
   const trimmed = name.trim();
   if (!trimmed) {
-    return { productLineKey: null, productKey: null, resolutionSource: null };
+    return {
+      productLineKey: null,
+      productKey: null,
+      resolutionSource: null,
+      ambiguousAlias: false,
+      matchedAliasId: null,
+      matchedAliasConfidence: null,
+    };
   }
+
+  // B0-488: true once any alias tier below sees candidates spanning >1 distinct product line that
+  // the verified-tiebreak gate rejects — see the doc comment above for exactly what this means.
+  let sawAmbiguousAlias = false;
 
   const supabase = getSupabaseServiceRoleClient();
   const aliasClient = supabase.schema('rag') as unknown as ProductAliasClient;
@@ -249,7 +280,7 @@ export async function resolveProductEntityByName(
   try {
     const { data: aliasRows } = await aliasClient
       .from('product_alias')
-      .select('product_line_key, entity_id, verified')
+      .select('id, product_line_key, entity_id, verified, confidence')
       .eq('alias_norm', normalizeAlias(trimmed))
       .limit(20);
     if (aliasRows && aliasRows.length > 0) {
@@ -260,7 +291,17 @@ export async function resolveProductEntityByName(
         distinctLineKeys.size <= 1 ? aliasRows[0] : resolveVerifiedTiebreak(aliasRows);
       if (winner?.product_line_key) {
         const productKey = await resolveProductKeyForAliasEntity(supabase, winner.entity_id);
-        return { productLineKey: winner.product_line_key, productKey, resolutionSource: 'alias_exact' };
+        return {
+          productLineKey: winner.product_line_key,
+          productKey,
+          resolutionSource: 'alias_exact',
+          ambiguousAlias: false,
+          matchedAliasId: winner.id ?? null,
+          matchedAliasConfidence: winner.confidence ?? null,
+        };
+      }
+      if (distinctLineKeys.size > 1) {
+        sawAmbiguousAlias = true;
       }
     }
   } catch {
@@ -279,7 +320,7 @@ export async function resolveProductEntityByName(
     try {
       let fuzzyAliasQuery = aliasClient
         .from('product_alias')
-        .select('product_line_key, entity_id');
+        .select('id, product_line_key, entity_id, confidence');
       for (const token of aliasTokens) {
         fuzzyAliasQuery = fuzzyAliasQuery.ilike('alias_norm', `%${token}%`);
       }
@@ -298,7 +339,13 @@ export async function resolveProductEntityByName(
             productLineKey: fuzzyAliasRows[0].product_line_key,
             productKey,
             resolutionSource: 'alias_fuzzy',
+            ambiguousAlias: false,
+            matchedAliasId: fuzzyAliasRows[0].id ?? null,
+            matchedAliasConfidence: fuzzyAliasRows[0].confidence ?? null,
           };
+        }
+        if (distinctLineKeys.size > 1) {
+          sawAmbiguousAlias = true;
         }
       }
     } catch {
@@ -340,7 +387,14 @@ export async function resolveProductEntityByName(
           productLineKey: winner.product_line_key,
           productKey,
           resolutionSource: 'alias_fuzzy_trgm',
+          ambiguousAlias: false,
+          // B0-488: rag.match_product_alias_fuzzy doesn't return the alias row id.
+          matchedAliasId: null,
+          matchedAliasConfidence: winner.confidence ?? null,
         };
+      }
+      if (distinctCloseLineKeys.size > 1) {
+        sawAmbiguousAlias = true;
       }
     }
   } catch {
@@ -358,7 +412,14 @@ export async function resolveProductEntityByName(
       .limit(2);
 
     if (data && data.length === 1 && data[0].product_line_key) {
-      return { productLineKey: data[0].product_line_key, productKey: null, resolutionSource: 'prod_line_id' };
+      return {
+        productLineKey: data[0].product_line_key,
+        productKey: null,
+        resolutionSource: 'prod_line_id',
+        ambiguousAlias: false,
+        matchedAliasId: null,
+        matchedAliasConfidence: null,
+      };
     }
   }
 
@@ -372,7 +433,14 @@ export async function resolveProductEntityByName(
     .limit(2);
 
   if (data && data.length === 1 && data[0].product_line_key) {
-    return { productLineKey: data[0].product_line_key, productKey: null, resolutionSource: 'title_exact' };
+    return {
+      productLineKey: data[0].product_line_key,
+      productKey: null,
+      resolutionSource: 'title_exact',
+      ambiguousAlias: false,
+      matchedAliasId: null,
+      matchedAliasConfidence: null,
+    };
   }
 
   // B0-272: tokenized *title* fallback — last resort for names with no product_alias row at
@@ -392,11 +460,25 @@ export async function resolveProductEntityByName(
     const { data: tokenData } = await tokenQuery.limit(2);
 
     if (tokenData && tokenData.length === 1 && tokenData[0].product_line_key) {
-      return { productLineKey: tokenData[0].product_line_key, productKey: null, resolutionSource: 'title_fuzzy' };
+      return {
+        productLineKey: tokenData[0].product_line_key,
+        productKey: null,
+        resolutionSource: 'title_fuzzy',
+        ambiguousAlias: false,
+        matchedAliasId: null,
+        matchedAliasConfidence: null,
+      };
     }
   }
 
-  return { productLineKey: null, productKey: null, resolutionSource: null };
+  return {
+    productLineKey: null,
+    productKey: null,
+    resolutionSource: null,
+    ambiguousAlias: sawAmbiguousAlias,
+    matchedAliasId: null,
+    matchedAliasConfidence: null,
+  };
 }
 
 /**

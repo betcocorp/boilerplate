@@ -147,7 +147,14 @@ describe.skipIf(!hasSupabaseCreds)(
 
     it('does not guess for a nonsense query -- falls through every tier to null', async () => {
       const result = await resolveProductEntityByName('zzqx not a real betco product name qqzz');
-      expect(result).toEqual({ productLineKey: null, productKey: null, resolutionSource: null });
+      expect(result).toEqual({
+        productLineKey: null,
+        productKey: null,
+        resolutionSource: null,
+        ambiguousAlias: false,
+        matchedAliasId: null,
+        matchedAliasConfidence: null,
+      });
     });
   },
 );

@@ -6,7 +6,7 @@ import { CrossReferenceTabs } from '~/components/admin/CrossReferenceTabs';
 export const metadata = {
   title: 'Cross-reference | Betco BEX Admin',
   description:
-    'Competitor → Betco cross-reference: fast-path lookup, the 1:1 mapping browser, and the web-grounded recommendation review queue.',
+    'Competitor → Betco cross-reference: fast-path lookup, the 1:1 mapping browser, the web-grounded recommendation review queue, and unverified alias review.',
 };
 
 export default function CrossReferenceLayout({ children }: { children: ReactNode }) {
@@ -23,8 +23,9 @@ export default function CrossReferenceLayout({ children }: { children: ReactNode
               Cross-reference
             </h1>
             <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-              Competitor → Betco mapping. Test the fast-path lookup and browse the 1:1 mappings, or
-              review web-grounded recommendations before they are promoted into the fast-path table.
+              Competitor → Betco mapping. Test the fast-path lookup and browse the 1:1 mappings,
+              review web-grounded recommendations before they are promoted into the fast-path table,
+              or review unverified product aliases before they can anchor product resolution.
             </p>
           </div>
         </div>
