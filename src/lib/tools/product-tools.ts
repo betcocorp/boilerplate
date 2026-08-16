@@ -163,6 +163,10 @@ function sourcePayload(
     // audited after the fact (e.g. confirming a specific label section reached the model
     // vs. was dropped by the per-document truncation cap in assembleDocumentBodies()).
     documentBodyChunkIds: s.documentBodyChunkIds,
+    // B0-490 — `similarity` is the unambiguous key (the raw pgvector/hybrid score for the
+    // surviving match); `confidence` is kept alongside it for back-compat with any reader still
+    // keying off the old name, but is never the field a NEW reader should source from.
+    similarity: s.similarity,
     confidence: s.similarity,
     documentKind: s.documentKind,
     productLineKey: s.productLineKey,
@@ -189,6 +193,7 @@ function sourcePayload(
       documentBodyTruncated: false,
       documentBodyTokenEstimate: null,
       documentBodyChunkIds: [VERIFIED_FACTS_SOURCE_ID],
+      similarity: 1,
       confidence: 1,
       documentKind: 'facts',
       productLineKey: null,
@@ -743,6 +748,7 @@ export async function executeProductTool(
                 snippet: factsBlock.slice(0, 900),
                 documentBody: factsBlock,
                 documentKind: 'facts',
+                similarity: 1,
                 confidence: 1,
               },
             ]
@@ -756,6 +762,7 @@ export async function executeProductTool(
                 snippet: labReportBlock.slice(0, 900),
                 documentBody: labReportBlock,
                 documentKind: 'efficacy',
+                similarity: 1,
                 confidence: 1,
               },
             ]

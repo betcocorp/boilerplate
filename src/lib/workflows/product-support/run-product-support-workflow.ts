@@ -260,6 +260,65 @@ function dominantCacheSource(cacheSourceCounts: Map<string, number>) {
 }
 
 /**
+ * B0-490 — raw vs. post-selection top retrieval similarity, rolled up across every successful
+ * search-backed tool call this turn made. `rawTopSimilarity` is the max over each call's winning
+ * search pass BEFORE `selectCuratedMatches` filtered/deduped/truncated it — the score
+ * `evaluateRecommendationGate`'s `LOW_SIMILARITY_THRESHOLD` was actually calibrated against.
+ * `selectedTopSimilarity` is the max over what actually survived into `sources[]`. Both are null
+ * when no tool call this turn carried a `retrieval` block (e.g. a pure cross-reference lookup with
+ * no RAG search). Pure function of the tool output log — no I/O — so it is unit-testable in
+ * isolation from the workflow's DB/OpenAI dependencies.
+ */
+export function extractSimilarityRollupFromToolOutputs(toolOutputs: RuntimeToolOutput[]): {
+  rawTopSimilarity: number | null;
+  selectedTopSimilarity: number | null;
+  droppedByFilterCount: number | null;
+} {
+  let rawTopSimilarity: number | null = null;
+  let selectedTopSimilarity: number | null = null;
+  let droppedByFilterCount: number | null = null;
+
+  for (const entry of toolOutputs) {
+    if (!entry.ok) {
+      continue;
+    }
+    try {
+      const payload = JSON.parse(entry.output) as {
+        retrieval?: {
+          rawTopSimilarity?: unknown;
+          selectedTopSimilarity?: unknown;
+          droppedByFilterCount?: unknown;
+        };
+      };
+      const retrieval = payload.retrieval;
+      if (!retrieval || typeof retrieval !== 'object' || Array.isArray(retrieval)) {
+        continue;
+      }
+
+      if (typeof retrieval.rawTopSimilarity === 'number') {
+        rawTopSimilarity =
+          rawTopSimilarity === null
+            ? retrieval.rawTopSimilarity
+            : Math.max(rawTopSimilarity, retrieval.rawTopSimilarity);
+      }
+      if (typeof retrieval.selectedTopSimilarity === 'number') {
+        selectedTopSimilarity =
+          selectedTopSimilarity === null
+            ? retrieval.selectedTopSimilarity
+            : Math.max(selectedTopSimilarity, retrieval.selectedTopSimilarity);
+      }
+      if (typeof retrieval.droppedByFilterCount === 'number') {
+        droppedByFilterCount = (droppedByFilterCount ?? 0) + retrieval.droppedByFilterCount;
+      }
+    } catch {
+      // Ignore malformed output and continue scanning.
+    }
+  }
+
+  return { rawTopSimilarity, selectedTopSimilarity, droppedByFilterCount };
+}
+
+/**
  * B0-514 — evaluated as NOT SAFE to retire yet. This is a live production behavior switch (it
  * pins `tool_choice` to `lookup_cross_reference`, suppresses the `broad_recommendation_without_context`
  * early decline, and forces a search — see the three call sites below), which must never depend on
@@ -637,6 +696,7 @@ function collectSourcesFromToolOutputs(toolOutputs: RuntimeToolOutput[]): Source
           chunkId?: string;
           title?: string;
           snippet?: string;
+          similarity?: number;
           confidence?: number;
           s3Key?: string | null;
           sourceUri?: string | null;
@@ -655,7 +715,9 @@ function collectSourcesFromToolOutputs(toolOutputs: RuntimeToolOutput[]): Source
           chunkId: s.chunkId,
           title: s.title ?? s.documentId,
           snippet: s.snippet.slice(0, 2000),
-          similarity: s.confidence,
+          // B0-490 — `similarity` is the retrieval similarity under an unambiguous key; `confidence`
+          // is read only as a fallback for a payload that never carried the new key.
+          similarity: typeof s.similarity === 'number' ? s.similarity : s.confidence,
           // B0-257: thread the source PDF/markdown's S3 location through to the persisted
           // citation object so label/SDS-derived directions/hazards/first-aid answers carry it.
           s3Key: s.s3Key ?? undefined,
@@ -2276,6 +2338,8 @@ export async function runProductSupportWorkflow(input: {
     const retrieved_document_chunks =
       collectRetrievedDocumentChunksFromToolOutputs(toolOutputLog);
     const sourceMeta = collectSourceMetaFromToolOutputs(toolOutputLog);
+    // B0-490 — raw (pre-curation) vs. post-selection top retrieval similarity for this turn.
+    const similarityRollup = extractSimilarityRollupFromToolOutputs(toolOutputLog);
     const usageSafetyCoverage = evaluateUsageSafetyCoverage(sourceMeta);
     const needsUsageSafetyCoverage = queryNeedsUsageAndSafetyCoverage(
       input.userMessage,
@@ -2720,16 +2784,16 @@ export async function runProductSupportWorkflow(input: {
     // confidence, so the conservative direction for an equivalence claim about an EPA-registered
     // product is to apply it whenever the cross-reference post-processing ran.
     if (useCrossReferencePostProcessing) {
-      const topSimilarity = sources.reduce(
-        (max, s) =>
-          typeof s.similarity === 'number' && s.similarity > max
-            ? s.similarity
-            : max,
-        0,
-      );
       const gateInput = {
         baseConfidence: validation.confidence,
-        topSimilarity: sources.length > 0 ? topSimilarity : null,
+        /**
+         * B0-490 — the RAW top similarity (the winning search's ANN score before
+         * `selectCuratedMatches` filtered/deduped/truncated it), not the post-selection max of
+         * `sources[]`. `LOW_SIMILARITY_THRESHOLD` was calibrated against the raw retrieval score,
+         * so feeding it the post-filter max let a ~58% raw hit report 0.90 confidence — the
+         * defect this ticket fixes. Null (gate skips the cap) only when no search tool ran.
+         */
+        topSimilarity: similarityRollup.rawTopSimilarity,
         /**
          * B0-513 — wired from the B0-357 competitor-identity resolution already computed for this
          * turn (`resolvedCompetitor`, above). Guaranteed non-null here: `useCrossReferencePostProcessing`
@@ -2753,7 +2817,7 @@ export async function runProductSupportWorkflow(input: {
       };
       audit.enqueue(
         'recommendation_gate_applied',
-        { ...gate, topSimilarity },
+        { ...gate, topSimilarity: gateInput.topSimilarity },
         { ...wfCtx, stepId: validationStep.id },
       );
       /**
@@ -2976,6 +3040,15 @@ export async function runProductSupportWorkflow(input: {
             },
           }
         : {}),
+      // B0-490 — raw (pre-curation) vs. post-selection top retrieval similarity for this turn,
+      // distinguishable so a chart stops conflating "what the ANN search returned" with "what
+      // survived filtering". Absent-key detection lets consumers tell this run apart from one
+      // written before this ticket.
+      similaritySummary: {
+        rawTopSimilarity: similarityRollup.rawTopSimilarity,
+        selectedTopSimilarity: similarityRollup.selectedTopSimilarity,
+        droppedByFilterCount: similarityRollup.droppedByFilterCount,
+      },
     };
 
     audit.enqueue('workflow_completed', { workflow_run_id: run.id }, wfCtx);

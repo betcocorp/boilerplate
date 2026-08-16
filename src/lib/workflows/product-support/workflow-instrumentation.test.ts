@@ -1126,6 +1126,100 @@ describe('recommendation confidence gate record (B0-391)', () => {
   });
 });
 
+/* -------------------------------------------------------------------------- *
+ * B0-490 — the recommendation gate reads the RAW retrieval similarity, not the
+ * post-selection/curation max, for its low-similarity confidence cap.
+ * -------------------------------------------------------------------------- */
+
+describe('similarity rollup feeds the recommendation gate raw, not post-filter (B0-490)', () => {
+  /** Same shape as `arrangeOverrideRun`, but the search branch reports a `retrieval` block whose
+   * raw top similarity (58%, below LOW_SIMILARITY_THRESHOLD) is well under the post-curation max
+   * similarity carried on `sources[]` (95%) — the exact gap the B0-490 bug hid. */
+  function arrangeLowRawHighSelectedRun() {
+    runResponsesWithToolLoopMock.mockImplementation(
+      generationCalling([
+        {
+          name: 'lookup_cross_reference',
+          argumentsJson: JSON.stringify({ brand: 'BNC', productName: 'BNC-15' }),
+          callId: 'call_xref',
+        },
+      ]),
+    );
+    executeProductToolMock.mockImplementation(async (name: string) =>
+      name === 'lookup_cross_reference'
+        ? { matches: [], fallbackRecommended: true }
+        : {
+            sources: [
+              {
+                documentId: 'doc-1',
+                chunkId: 'chunk-1',
+                title: 'Triforce label',
+                snippet: 'Use 2 oz per gallon.',
+                documentBody: 'Use 2 oz per gallon.',
+                similarity: 0.95,
+                confidence: 0.95,
+              },
+            ],
+            retrieval: {
+              rawTopSimilarity: 0.58,
+              selectedTopSimilarity: 0.95,
+              droppedByFilterCount: 4,
+            },
+          },
+    );
+    lookupCrossReferenceMock.mockResolvedValue({
+      fallbackRecommended: false,
+      matches: [
+        {
+          competitorBrand: 'BNC',
+          competitorProductName: 'BNC-15',
+          productKey: 'triforce',
+          confidence: 0.9,
+          productUrl: 'https://www.betco.com/products/triforce',
+          betcoProduct: { title: 'Triforce', sku: '1234' },
+          rationale: 'curated equivalence',
+        },
+      ],
+    });
+  }
+
+  it('caps confidence at LOW_SIMILARITY_CONFIDENCE_CAP from a sub-threshold RAW hit even though the post-filter max is high', async () => {
+    arrangeLowRawHighSelectedRun();
+
+    const out = await run({ userMessage: XREF_MESSAGE });
+
+    // Pre-fix, `topSimilarity` would have been `sources[].similarity` (0.95, >= 60%), so no cap
+    // would have applied and confidence would have stayed at the 0.9 bypass-heuristic value.
+    expect(out.confidence).toBeLessThanOrEqual(LOW_SIMILARITY_CONFIDENCE_CAP);
+
+    const record = singleGateRecord('recommendation_confidence');
+    expect(record.verdict).toBe('capped');
+    expect(record.effect).toContain('Top retrieval similarity 58%');
+  });
+
+  it('persists both raw and post-selection top similarity on the final output, distinguishably', async () => {
+    arrangeLowRawHighSelectedRun();
+
+    const out = await run({ userMessage: XREF_MESSAGE });
+
+    expect(out.similaritySummary).toEqual({
+      rawTopSimilarity: 0.58,
+      selectedTopSimilarity: 0.95,
+      droppedByFilterCount: 4,
+    });
+  });
+
+  it('leaves similaritySummary all-null when no search tool carried a retrieval block', async () => {
+    const out = await run();
+    // The default beforeEach mock's `executeProductToolMock` payload has no `retrieval` key.
+    expect(out.similaritySummary).toEqual({
+      rawTopSimilarity: null,
+      selectedTopSimilarity: null,
+      droppedByFilterCount: null,
+    });
+  });
+});
+
 describe('answer provenance (B0-391)', () => {
   it('reports a plain model answer as model_generated', async () => {
     const out = await run();

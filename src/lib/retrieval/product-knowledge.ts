@@ -154,7 +154,23 @@ export type ProductKnowledgeRetrievalSummary = {
    * (broad/anchored-via-similarity paths never have an explicit key to source).
    */
   explicitKeySource: ProductEntityResolutionSource | 'unspecified' | null;
+  /**
+   * B0-490 — max `similarity` across the winning search's raw candidates (the matches
+   * `searchProductChunks` returned, before `selectCuratedMatches` filtered/deduped/truncated the
+   * set). Null when the winning pass returned zero candidates. This — NOT `selectedTopSimilarity`
+   * — is the score `evaluateRecommendationGate`'s `LOW_SIMILARITY_THRESHOLD` was calibrated
+   * against.
+   */
+  rawTopSimilarity: number | null;
+  /** Max `similarity` across the sources that actually survived curation (what reached the model). */
+  selectedTopSimilarity: number | null;
+  /** Raw candidate count minus surviving source count, for the winning pass. */
+  droppedByFilterCount: number;
 };
+
+function maxSimilarity(items: ReadonlyArray<{ similarity: number }>): number | null {
+  return items.length === 0 ? null : Math.max(...items.map((item) => item.similarity));
+}
 
 export type ProductKnowledgeQueryResult = {
   sources: CuratedSource[];
@@ -523,6 +539,9 @@ async function runProductKnowledgeQuery(input: {
     // Every similarity search performed on this path, so `searchMs` below counts the B0-250
     // fallback search too instead of silently under-reporting it.
     let searchMsTotal = result.timings.similaritySearchMs;
+    // B0-490 — raw candidates behind the winning pass (starts as the explicit-key search's
+    // matches; replaced wholesale if the B0-250 product-key fallback below actually ran).
+    let rawMatches = result.matches;
     if (curated.length === 0 && explicitProductKey) {
       const lineResult = await searchProductChunks({
         query: input.query,
@@ -533,6 +552,7 @@ async function runProductKnowledgeQuery(input: {
         useReranker: PRODUCT_SUPPORT_RERANK_ENABLED,
       });
       searchMsTotal += lineResult.timings.similaritySearchMs;
+      rawMatches = lineResult.matches;
       curated = await curateUniqueDocumentSources(lineResult.matches, {
         limit,
         requiredDocumentKinds,
@@ -560,6 +580,9 @@ async function runProductKnowledgeQuery(input: {
           lockedProductLineKey: explicitKey,
           lockReason: 'explicit_filter',
         },
+        rawTopSimilarity: maxSimilarity(rawMatches),
+        selectedTopSimilarity: maxSimilarity(curated),
+        droppedByFilterCount: Math.max(0, rawMatches.length - curated.length),
       },
     };
   }
@@ -600,6 +623,9 @@ async function runProductKnowledgeQuery(input: {
           lockedProductLineKey: null,
           lockReason: 'resolution_disabled',
         },
+        rawTopSimilarity: maxSimilarity(result.matches),
+        selectedTopSimilarity: maxSimilarity(curated),
+        droppedByFilterCount: Math.max(0, result.matches.length - curated.length),
       },
     };
   }
@@ -640,6 +666,9 @@ async function runProductKnowledgeQuery(input: {
         anchoredCuratedCount: 0,
         explicitKeySource: null,
         productLineResolution: resolution,
+        rawTopSimilarity: maxSimilarity(broadResult.matches),
+        selectedTopSimilarity: maxSimilarity(broadCurated),
+        droppedByFilterCount: Math.max(0, broadResult.matches.length - broadCurated.length),
       },
     };
   }
@@ -695,6 +724,15 @@ async function runProductKnowledgeQuery(input: {
       anchoredCuratedCount: anchoredSelected.length,
       explicitKeySource: null,
       productLineResolution: resolution,
+      rawTopSimilarity: maxSimilarity(
+        shouldUseBroadFallback ? broadResult.matches : anchoredResult.matches,
+      ),
+      selectedTopSimilarity: maxSimilarity(finalCurated),
+      droppedByFilterCount: Math.max(
+        0,
+        (shouldUseBroadFallback ? broadResult.matches.length : anchoredResult.matches.length) -
+          finalCurated.length,
+      ),
     },
   };
 }

@@ -210,6 +210,26 @@ export function readStepGateRecords(stepOutput: unknown): GateRecord[] {
   return [...(parsed.data.gates ?? []), ...(parsed.data.gate ? [parsed.data.gate] : [])];
 }
 
+/**
+ * B0-490 — the raw retrieval similarity (before `selectCuratedMatches` filtered/deduped/truncated
+ * the set) versus the post-selection similarity of what actually reached the model, rolled up to
+ * run level. Distinct fields so a chart can no longer conflate the two: `evaluateRecommendationGate`
+ * was calibrated against the RAW top-hit score, but the workflow used to feed it the post-filter
+ * max instead (the whole B0-490 bug). Optional — and every field independently nullable — so a
+ * payload written before this ticket, or a turn where no search tool ran, is honestly absent/null
+ * rather than defaulted to a number that was never computed.
+ */
+export const similaritySummarySchema = z.object({
+  /** Max `RagSearchMatch.similarity` across the winning search's raw candidates, before curation. */
+  rawTopSimilarity: z.number().nullable(),
+  /** Max similarity across the sources that actually survived `selectCuratedMatches`. */
+  selectedTopSimilarity: z.number().nullable(),
+  /** Raw candidate count minus surviving source count, summed across this turn's search calls. */
+  droppedByFilterCount: z.number().int().nonnegative().nullable(),
+});
+
+export type SimilaritySummary = z.infer<typeof similaritySummarySchema>;
+
 export const productSupportFinalOutputSchema = z.object({
   answerText: z.string(),
   sources: z
@@ -305,6 +325,8 @@ export const productSupportFinalOutputSchema = z.object({
       otherCompetitorProduct: z.string().nullable(),
     })
     .optional(),
+  /** B0-490 — raw vs. post-selection top retrieval similarity for this turn. See schema doc above. */
+  similaritySummary: similaritySummarySchema.optional(),
 });
 
 export type ProductSupportFinalOutput = z.infer<typeof productSupportFinalOutputSchema>;
