@@ -658,6 +658,7 @@ export function EfficacyIngestionPanel({
                 <th className="px-4 py-3 font-medium">Status</th>
                 <th className="px-4 py-3 font-medium">Locale</th>
                 <th className="px-4 py-3 font-medium">Chunks</th>
+                <th className="px-4 py-3 font-medium">Tokens</th>
                 <th className="px-4 py-3 font-medium">Last update</th>
               </tr>
             </thead>
@@ -687,6 +688,9 @@ export function EfficacyIngestionPanel({
                   </td>
                   <td className="px-4 py-3 align-top text-slate-700">
                     {row.chunkCount}
+                  </td>
+                  <td className="px-4 py-3 align-top text-slate-700">
+                    {row.tokenCount?.toLocaleString() ?? '—'}
                   </td>
                   <td className="px-4 py-3 align-top text-slate-700">
                     {formatIso(row.updatedAt)}

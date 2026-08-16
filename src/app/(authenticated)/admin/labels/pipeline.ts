@@ -77,6 +77,8 @@ export type LabelDashboardDocument = {
   sourceRecordId: string | null;
   documentId: string | null;
   chunkCount: number;
+  // B0-544: document-level token estimate (rag.document.token_count).
+  tokenCount: number | null;
   updatedAt: string | null;
   lastError: string | null;
   /** B0-259: true when the S3 ETag no longer matches the checksum captured at last ingest -- the master changed and this row needs re-sync even though status is still "ingested". */
@@ -421,6 +423,9 @@ async function upsertDocument(
     body_markdown: rawMarkdown,
     summary: summarize(bodyText),
     document_kind: DOCUMENT_KIND,
+    // B0-544: document-level token estimate, same ceil(length / 4) convention used
+    // for document_chunk.token_count in replaceDocumentChunks below.
+    token_count: estimateTokens(bodyText),
     metadata,
   };
 
@@ -547,6 +552,7 @@ type DocRow = {
   entity_id: string | null;
   updated_at: string;
   metadata: JsonObject | null;
+  token_count: number | null;
 };
 
 function isNeedsReview(metadata: JsonObject | null): boolean {
@@ -573,7 +579,7 @@ async function loadState() {
     supabase
       .schema('rag')
       .from('document')
-      .select('id, source_record_id, entity_id, updated_at, metadata')
+      .select('id, source_record_id, entity_id, updated_at, metadata, token_count')
       .eq('document_kind', DOCUMENT_KIND),
     supabase.schema('rag').from('document_chunk').select('document_id').like('chunk_key', 'label_md:%'),
   ]);
@@ -640,6 +646,7 @@ function buildDocumentRow(
     sourceRecordId: source?.id ?? null,
     documentId: doc?.id ?? null,
     chunkCount,
+    tokenCount: doc?.token_count ?? null,
     updatedAt: doc?.updated_at ?? source?.updated_at ?? null,
     lastError: asString(ingestion?.last_error),
     needsResync,
