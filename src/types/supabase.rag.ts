@@ -132,8 +132,6 @@ export type Database = {
           metadata: Json
           product_application: string | null
           profile_summary: string | null
-          project_number: string | null
-          source_lab: string | null
           source_record_id: string
           summary: string | null
           superseded_by_document_id: string | null
@@ -163,8 +161,6 @@ export type Database = {
           metadata?: Json
           product_application?: string | null
           profile_summary?: string | null
-          project_number?: string | null
-          source_lab?: string | null
           source_record_id: string
           summary?: string | null
           superseded_by_document_id?: string | null
@@ -194,8 +190,6 @@ export type Database = {
           metadata?: Json
           product_application?: string | null
           profile_summary?: string | null
-          project_number?: string | null
-          source_lab?: string | null
           source_record_id?: string
           summary?: string | null
           superseded_by_document_id?: string | null
@@ -459,32 +453,44 @@ export type Database = {
         Row: {
           alias: string
           alias_norm: string
+          alias_type: string
           confidence: number
           created_at: string
           entity_id: string | null
           id: string
           product_line_key: string
+          reviewed_at: string | null
+          reviewed_by: string | null
           source: string
+          verified: boolean
         }
         Insert: {
           alias: string
           alias_norm: string
+          alias_type?: string
           confidence?: number
           created_at?: string
           entity_id?: string | null
           id?: string
           product_line_key: string
+          reviewed_at?: string | null
+          reviewed_by?: string | null
           source?: string
+          verified?: boolean
         }
         Update: {
           alias?: string
           alias_norm?: string
+          alias_type?: string
           confidence?: number
           created_at?: string
           entity_id?: string | null
           id?: string
           product_line_key?: string
+          reviewed_at?: string | null
+          reviewed_by?: string | null
           source?: string
+          verified?: boolean
         }
         Relationships: [
           {
@@ -875,7 +881,14 @@ export type Database = {
           p_overlap_chars?: number
           p_title?: string
         }
-        Returns: Json
+        Returns: {
+          chunk_index: number
+          chunk_text: string
+          heading: string
+          section_path: string[]
+          section_type: string
+          token_count: number
+        }[]
       }
       chunk_sds_document_text: {
         Args: {
@@ -884,7 +897,13 @@ export type Database = {
           p_overlap_chars?: number
           p_title?: string
         }
-        Returns: Json
+        Returns: {
+          chunk_index: number
+          chunk_text: string
+          heading: string
+          section_path: string[]
+          token_count: number
+        }[]
       }
       compute_chunk_pairwise_similarity: {
         Args: { p_chunk_ids: string[] }
