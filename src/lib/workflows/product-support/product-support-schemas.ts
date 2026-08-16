@@ -230,6 +230,35 @@ export const similaritySummarySchema = z.object({
 
 export type SimilaritySummary = z.infer<typeof similaritySummarySchema>;
 
+/**
+ * B0-493 — run-level rollup of the retrieval configuration used by every search-backed tool call
+ * this turn made (see `ToolRetrievalParams` in `~/lib/audit/trace.ts` for the per-call record).
+ * Each field is null when no search tool ran, the agreed-upon value when every search-backed call
+ * this turn agreed, or null WITH the field name listed in `mixed` when calls disagreed — so a run
+ * is labelled with "the retrieval configuration used" without a reader having to open every tool
+ * call to check for disagreement.
+ */
+export const retrievalConfigFieldNameSchema = z.enum([
+  'embeddingModel',
+  'retrievalStrategy',
+  'embeddingSource',
+  'scope',
+  'minSimilarity',
+]);
+
+export const retrievalConfigSummarySchema = z.object({
+  embeddingModel: z.string().nullable(),
+  retrievalStrategy: z.string().nullable(),
+  embeddingSource: z.string().nullable(),
+  scope: z.string().nullable(),
+  /** The effective `selectCuratedMatches` floor applied (e.g. the silently-defaulted 0.2). */
+  minSimilarity: z.number().nullable(),
+  /** Field names above that disagreed across this turn's search calls, and are therefore null. */
+  mixed: z.array(retrievalConfigFieldNameSchema),
+});
+
+export type RetrievalConfigSummary = z.infer<typeof retrievalConfigSummarySchema>;
+
 export const productSupportFinalOutputSchema = z.object({
   answerText: z.string(),
   sources: z
@@ -327,6 +356,8 @@ export const productSupportFinalOutputSchema = z.object({
     .optional(),
   /** B0-490 — raw vs. post-selection top retrieval similarity for this turn. See schema doc above. */
   similaritySummary: similaritySummarySchema.optional(),
+  /** B0-493 — run-level retrieval configuration rollup. See schema doc above. */
+  retrievalConfig: retrievalConfigSummarySchema.optional(),
 });
 
 export type ProductSupportFinalOutput = z.infer<typeof productSupportFinalOutputSchema>;

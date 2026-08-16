@@ -1,7 +1,13 @@
 import type { RagSearchMatch } from '~/lib/rag/search';
 import { normalizeForDedupe } from '~/lib/utils';
 
-const DEFAULT_MIN_SIMILARITY = 0.2;
+/**
+ * B0-493 — exported so callers can report the applied floor rather than an absence. This value is
+ * silently substituted whenever `selectCuratedMatches` is called with no `minSimilarity` override
+ * (every call site in `product-knowledge.ts` today), so a retrieval-parameters record that omitted
+ * it would misreport "no floor" instead of "the 0.2 default floor was applied".
+ */
+export const DEFAULT_MIN_SIMILARITY = 0.2;
 
 export function trimSnippet(text: string, maxLen: number): string {
   const t = text.replace(/\s+/g, ' ').trim();

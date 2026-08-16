@@ -1620,3 +1620,117 @@ describe('shadow-mode LLM intent classifier gate (B0-507 / B0-516 integration)',
     expect(record.verdict).toBe('agrees_with_keyword_router');
   });
 });
+
+/* -------------------------------------------------------------------------- *
+ * B0-493 — retrieval parameters/strategy persisted per search call, rolled up to run level.
+ * -------------------------------------------------------------------------- */
+
+describe('retrieval configuration rollup (B0-493)', () => {
+  function retrievalPayload(overrides: Partial<{ retrievalStrategy: string; embeddingSource: string }> = {}) {
+    return {
+      strategy: 'anchored_only',
+      cacheSource: overrides.embeddingSource ?? 'new-embedding',
+      search: {
+        model: 'text-embedding-3-large',
+        limit: 20,
+        scope: 'all',
+        productLineKey: 'ph7q-dual',
+        productKey: null,
+        sectionType: null,
+        minSimilarity: null,
+        retrievalStrategy: overrides.retrievalStrategy ?? 'hybrid+reranked',
+        embeddingSource: overrides.embeddingSource ?? 'new-embedding',
+        timings: {
+          totalMs: 120,
+          queryEmbeddingMs: 12,
+          queryRewriteMs: 4,
+          cacheLookupMs: 2,
+          embeddingCreateMs: 50,
+          cachePersistMs: 3,
+          similaritySearchMs: 40,
+          rerankMs: 9,
+        },
+      },
+      selection: {
+        limit: 3,
+        minSimilarity: 0.2,
+        maxPerDocument: 1,
+        requiredDocumentKinds: ['product_line_profile', 'sds', 'knowledge', 'label'],
+      },
+    };
+  }
+
+  it('labels a run with the single search call’s retrieval configuration', async () => {
+    executeProductToolMock.mockResolvedValue({
+      sources: [{ documentId: 'doc-1', chunkId: 'chunk-1', snippet: 'Use 2 oz per gallon.' }],
+      retrieval: retrievalPayload(),
+    });
+
+    const out = await run();
+
+    expect(out.retrievalConfig).toEqual({
+      embeddingModel: 'text-embedding-3-large',
+      retrievalStrategy: 'hybrid+reranked',
+      embeddingSource: 'new-embedding',
+      scope: 'all',
+      minSimilarity: 0.2,
+      mixed: [],
+    });
+
+    // Persisted on the tool trace too, not just the run-level rollup.
+    const trace = persistedToolTrace();
+    const searchEntry = trace.find((t) => t.toolName === 'search_product_docs' && !t.speculative);
+    expect(searchEntry?.retrieval?.retrievalStrategy).toBe('hybrid+reranked');
+  });
+
+  it('marks retrievalStrategy mixed when two search calls this turn disagree', async () => {
+    runResponsesWithToolLoopMock.mockImplementation(
+      generationCalling([
+        {
+          name: 'search_product_docs',
+          argumentsJson: JSON.stringify({ freeformQuery: 'first search' }),
+          callId: 'call_a',
+        },
+        {
+          name: 'search_product_docs',
+          argumentsJson: JSON.stringify({ freeformQuery: 'second search' }),
+          callId: 'call_b',
+        },
+      ]),
+    );
+    executeProductToolMock
+      .mockResolvedValueOnce({
+        sources: [{ documentId: 'doc-1', chunkId: 'chunk-1', snippet: 'first' }],
+        retrieval: retrievalPayload({ retrievalStrategy: 'vector' }),
+      })
+      .mockResolvedValueOnce({
+        sources: [{ documentId: 'doc-2', chunkId: 'chunk-2', snippet: 'second' }],
+        retrieval: retrievalPayload({ retrievalStrategy: 'hybrid+reranked' }),
+      });
+
+    const out = await run();
+
+    expect(out.retrievalConfig?.retrievalStrategy).toBeNull();
+    expect(out.retrievalConfig?.mixed).toContain('retrievalStrategy');
+    // Fields both calls agreed on are still labelled, not swept into "mixed" wholesale.
+    expect(out.retrievalConfig?.embeddingModel).toBe('text-embedding-3-large');
+  });
+
+  it('is absent on the early-decline path, which never enters the tool loop at all', async () => {
+    const out = await run({ userMessage: 'Can I mix bleach with this Betco cleaner?' });
+    expect(out.retrievalConfig).toBeUndefined();
+  });
+
+  it('is all-null with no mixed fields on an answered turn whose tool calls carried no retrieval block', async () => {
+    // Default beforeEach mock: `search_product_docs` runs, but its payload has no `retrieval` key.
+    const out = await run();
+    expect(out.retrievalConfig).toEqual({
+      embeddingModel: null,
+      retrievalStrategy: null,
+      embeddingSource: null,
+      scope: null,
+      minSimilarity: null,
+      mixed: [],
+    });
+  });
+});

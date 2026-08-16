@@ -85,6 +85,7 @@ import {
   type GateRecord,
   type PromptRecord,
   type ProductSupportFinalOutput,
+  type RetrievalConfigSummary,
   type RetrievedDocumentChunkRef,
   type ValidatorResult,
 } from '~/lib/workflows/product-support/product-support-schemas';
@@ -316,6 +317,59 @@ export function extractSimilarityRollupFromToolOutputs(toolOutputs: RuntimeToolO
   }
 
   return { rawTopSimilarity, selectedTopSimilarity, droppedByFilterCount };
+}
+
+/**
+ * B0-493 — rolls every search-backed tool call's persisted `ToolTraceEntry.retrieval` up to one
+ * run-level record: a field carries the agreed value when every search call this turn agreed, or
+ * is null AND listed in `mixed` when calls disagreed. Reads the STRUCTURED `trace.retrieval` field
+ * (built from the full untruncated payload at `executeToolCall` time), not the tool output string,
+ * so truncation of a large `sources[]` array never loses this data. Pure function of the resolved
+ * tool trace — no I/O — so it is unit-testable in isolation.
+ */
+export function extractRetrievalConfigFromToolTrace(
+  toolTrace: readonly ToolTraceEntry[],
+): RetrievalConfigSummary {
+  const embeddingModel = new Set<string>();
+  const retrievalStrategy = new Set<string>();
+  const embeddingSource = new Set<string>();
+  const scope = new Set<string>();
+  const minSimilarity = new Set<number>();
+
+  for (const entry of toolTrace) {
+    const retrieval = entry.retrieval;
+    if (!retrieval) {
+      continue;
+    }
+    embeddingModel.add(retrieval.model);
+    retrievalStrategy.add(retrieval.retrievalStrategy);
+    embeddingSource.add(retrieval.embeddingSource);
+    scope.add(retrieval.scope);
+    minSimilarity.add(retrieval.selection.minSimilarity);
+  }
+
+  const mixed: RetrievalConfigSummary['mixed'] = [];
+
+  /** Single value when every search call agreed; null (and flagged in `mixed`) when they disagreed. */
+  function resolve<T>(field: RetrievalConfigSummary['mixed'][number], values: Set<T>): T | null {
+    if (values.size === 0) {
+      return null;
+    }
+    if (values.size > 1) {
+      mixed.push(field);
+      return null;
+    }
+    return [...values][0]!;
+  }
+
+  return {
+    embeddingModel: resolve('embeddingModel', embeddingModel),
+    retrievalStrategy: resolve('retrievalStrategy', retrievalStrategy),
+    embeddingSource: resolve('embeddingSource', embeddingSource),
+    scope: resolve('scope', scope),
+    minSimilarity: resolve('minSimilarity', minSimilarity),
+    mixed,
+  };
 }
 
 /**
@@ -3002,6 +3056,10 @@ export async function runProductSupportWorkflow(input: {
       }
     }
 
+    // B0-493 — run-level retrieval configuration rollup, computed from the FINAL resolved trace
+    // (every forced/injected search call included), not just the model's own calls.
+    const retrievalConfig = extractRetrievalConfigFromToolTrace(resolvedToolTrace);
+
     const finalOutput: ProductSupportFinalOutput = {
       answerText: finalText,
       sources,
@@ -3049,6 +3107,9 @@ export async function runProductSupportWorkflow(input: {
         selectedTopSimilarity: similarityRollup.selectedTopSimilarity,
         droppedByFilterCount: similarityRollup.droppedByFilterCount,
       },
+      // B0-493 — the retrieval configuration this run actually used, or `mixed` per-field when
+      // this turn's search calls disagreed.
+      retrievalConfig,
     };
 
     audit.enqueue('workflow_completed', { workflow_run_id: run.id }, wfCtx);

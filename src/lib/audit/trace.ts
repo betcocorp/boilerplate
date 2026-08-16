@@ -21,6 +21,52 @@ export const toolCallOriginSchema = z.enum([
 
 export type ToolCallOrigin = z.infer<typeof toolCallOriginSchema>;
 
+/**
+ * B0-493 — the exact retrieval parameters and strategy/cache outcome of a search-backed tool call,
+ * captured from the FULL tool payload at `executeToolCall` time (never reconstructed from the
+ * truncated `outputPreview`, which routinely drops this — it sits after the potentially-large
+ * `sources[]` array in the payload). Present only on calls whose tool actually ran a RAG search
+ * (`search_product_docs`, `get_product_spec`, `get_approved_usage_guidance`,
+ * `get_safety_constraints`, `get_compatibility_rules`, `list_allowed_surfaces`,
+ * `list_disallowed_uses`); absent on every other tool and on rows written before this ticket.
+ */
+export const toolRetrievalParamsSchema = z.object({
+  /** Embedding model used for the query vector. */
+  model: z.string(),
+  /** Candidate fetch limit passed to `searchProductChunks` (not the final document-source limit). */
+  limit: z.number(),
+  scope: z.string(),
+  productLineKey: z.string().nullable(),
+  productKey: z.string().nullable(),
+  sectionType: z.string().nullable(),
+  /** `searchProductChunks`'s own `minSimilarity` option; null on every call site today (none pass one). */
+  minSimilarity: z.number().nullable(),
+  retrievalStrategy: z.string(),
+  embeddingSource: z.string(),
+  timings: z.object({
+    totalMs: z.number(),
+    queryEmbeddingMs: z.number(),
+    queryRewriteMs: z.number(),
+    cacheLookupMs: z.number(),
+    embeddingCreateMs: z.number(),
+    cachePersistMs: z.number(),
+    similaritySearchMs: z.number(),
+    rerankMs: z.number(),
+  }),
+  /**
+   * The `selectCuratedMatches` options actually applied when curating this call's sources,
+   * INCLUDING the silently-defaulted 0.2 `minSimilarity` floor recorded as an applied value.
+   */
+  selection: z.object({
+    limit: z.number(),
+    minSimilarity: z.number(),
+    maxPerDocument: z.number(),
+    requiredDocumentKinds: z.array(z.string()),
+  }),
+});
+
+export type ToolRetrievalParams = z.infer<typeof toolRetrievalParamsSchema>;
+
 export const toolTraceEntrySchema = z.object({
   toolName: z.string(),
   callId: z.string(),
@@ -54,6 +100,8 @@ export const toolTraceEntrySchema = z.object({
    * from a production trace.
    */
   modelOutputChars: z.number().optional(),
+  /** B0-493 — retrieval parameters/strategy for this call, when it ran a RAG search. */
+  retrieval: toolRetrievalParamsSchema.optional(),
 });
 
 export type ToolTraceEntry = z.infer<typeof toolTraceEntrySchema>;

@@ -1,4 +1,4 @@
-import { searchProductChunks, type RagSearchMatch } from '~/lib/rag/search';
+import { searchProductChunks, type RagSearchMatch, type RagSearchResult } from '~/lib/rag/search';
 import {
   buildEntityContextBlock,
   fetchEntityContexts,
@@ -18,6 +18,7 @@ import {
   type ProductLineResolutionResult,
 } from '~/lib/retrieval/product-line-resolution';
 import {
+  DEFAULT_MIN_SIMILARITY,
   selectCuratedMatches,
   trimSnippet,
 } from '~/lib/retrieval/source-selection';
@@ -166,10 +167,75 @@ export type ProductKnowledgeRetrievalSummary = {
   selectedTopSimilarity: number | null;
   /** Raw candidate count minus surviving source count, for the winning pass. */
   droppedByFilterCount: number;
+  /**
+   * B0-493 — the exact request parameters and strategy/cache outcome of the WINNING
+   * `searchProductChunks` call (the one whose matches fed the final `sources[]`), so a run can be
+   * root-caused against "was this a corpus change or a retrieval-parameter change" without reading
+   * tool arguments.
+   */
+  search: {
+    model: string;
+    limit: number;
+    scope: string;
+    productLineKey: string | null;
+    productKey: string | null;
+    sectionType: string | null;
+    minSimilarity: number | null;
+    retrievalStrategy: RagSearchResult['retrieval_strategy'];
+    embeddingSource: RagSearchResult['embeddingSource'];
+    timings: RagSearchResult['timings'];
+  };
+  /**
+   * B0-493 — the `selectCuratedMatches` options actually applied for this call, INCLUDING the
+   * silently-defaulted `DEFAULT_MIN_SIMILARITY` floor when no override was passed (every call site
+   * in this module today) — recorded as an applied value, never as an absence.
+   */
+  selection: {
+    limit: number;
+    minSimilarity: number;
+    maxPerDocument: number;
+    requiredDocumentKinds: string[];
+  };
 };
 
 function maxSimilarity(items: ReadonlyArray<{ similarity: number }>): number | null {
   return items.length === 0 ? null : Math.max(...items.map((item) => item.similarity));
+}
+
+/** B0-493 — `search` field builder shared by every retrieval branch below. */
+function buildSearchDetails(
+  result: RagSearchResult,
+  overrides: { productLineKey?: string | null; sectionType?: string | null } = {},
+): ProductKnowledgeRetrievalSummary['search'] {
+  return {
+    model: result.model,
+    limit: result.limit,
+    scope: result.scope,
+    productLineKey: overrides.productLineKey ?? result.productLineKey,
+    productKey: result.productKey,
+    sectionType: overrides.sectionType ?? result.sectionType,
+    minSimilarity: result.minSimilarity,
+    retrievalStrategy: result.retrieval_strategy,
+    embeddingSource: result.embeddingSource,
+    timings: result.timings,
+  };
+}
+
+/** B0-493 — the `selection` field: the `selectCuratedMatches` options every branch actually used. */
+function buildSelectionDetails(input: {
+  limit: number;
+  maxPerDocument?: number;
+  requiredDocumentKinds: string[];
+}): ProductKnowledgeRetrievalSummary['selection'] {
+  return {
+    limit: input.limit,
+    // Every call site in this module omits `minSimilarity`, so `selectCuratedMatches` always
+    // silently substitutes its own default — reported here as the value actually applied.
+    minSimilarity: DEFAULT_MIN_SIMILARITY,
+    // Mirrors `selectCuratedSourceMatches`'s own `options.maxPerDocument ?? 1` default.
+    maxPerDocument: input.maxPerDocument ?? 1,
+    requiredDocumentKinds: input.requiredDocumentKinds,
+  };
 }
 
 export type ProductKnowledgeQueryResult = {
@@ -542,6 +608,8 @@ async function runProductKnowledgeQuery(input: {
     // B0-490 — raw candidates behind the winning pass (starts as the explicit-key search's
     // matches; replaced wholesale if the B0-250 product-key fallback below actually ran).
     let rawMatches = result.matches;
+    // B0-493 — the winning `RagSearchResult`, same replacement rule as `rawMatches` above.
+    let winningResult: RagSearchResult = result;
     if (curated.length === 0 && explicitProductKey) {
       const lineResult = await searchProductChunks({
         query: input.query,
@@ -553,6 +621,7 @@ async function runProductKnowledgeQuery(input: {
       });
       searchMsTotal += lineResult.timings.similaritySearchMs;
       rawMatches = lineResult.matches;
+      winningResult = lineResult;
       curated = await curateUniqueDocumentSources(lineResult.matches, {
         limit,
         requiredDocumentKinds,
@@ -583,6 +652,8 @@ async function runProductKnowledgeQuery(input: {
         rawTopSimilarity: maxSimilarity(rawMatches),
         selectedTopSimilarity: maxSimilarity(curated),
         droppedByFilterCount: Math.max(0, rawMatches.length - curated.length),
+        search: buildSearchDetails(winningResult, { productLineKey: explicitKey }),
+        selection: buildSelectionDetails({ limit, maxPerDocument, requiredDocumentKinds }),
       },
     };
   }
@@ -598,10 +669,11 @@ async function runProductKnowledgeQuery(input: {
       useReranker: PRODUCT_SUPPORT_RERANK_ENABLED,
     });
 
+    const requiredDocumentKindsForSkip = resolveRequiredDocumentKinds(input.query, sectionType);
     const curated = await curateUniqueDocumentSources(result.matches, {
       limit,
       maxPerDocument,
-      requiredDocumentKinds: resolveRequiredDocumentKinds(input.query, sectionType),
+      requiredDocumentKinds: requiredDocumentKindsForSkip,
     });
 
     return {
@@ -625,6 +697,12 @@ async function runProductKnowledgeQuery(input: {
         },
         rawTopSimilarity: maxSimilarity(result.matches),
         selectedTopSimilarity: maxSimilarity(curated),
+        search: buildSearchDetails(result),
+        selection: buildSelectionDetails({
+          limit,
+          maxPerDocument,
+          requiredDocumentKinds: requiredDocumentKindsForSkip,
+        }),
         droppedByFilterCount: Math.max(0, result.matches.length - curated.length),
       },
     };
@@ -669,6 +747,11 @@ async function runProductKnowledgeQuery(input: {
         rawTopSimilarity: maxSimilarity(broadResult.matches),
         selectedTopSimilarity: maxSimilarity(broadCurated),
         droppedByFilterCount: Math.max(0, broadResult.matches.length - broadCurated.length),
+        search: buildSearchDetails(broadResult),
+        selection: buildSelectionDetails({
+          limit,
+          requiredDocumentKinds: requiredDocumentKindsForQuery,
+        }),
       },
     };
   }
@@ -733,6 +816,11 @@ async function runProductKnowledgeQuery(input: {
         (shouldUseBroadFallback ? broadResult.matches.length : anchoredResult.matches.length) -
           finalCurated.length,
       ),
+      search: buildSearchDetails(shouldUseBroadFallback ? broadResult : anchoredResult),
+      selection: buildSelectionDetails({
+        limit,
+        requiredDocumentKinds: requiredDocumentKindsForQuery,
+      }),
     },
   };
 }
