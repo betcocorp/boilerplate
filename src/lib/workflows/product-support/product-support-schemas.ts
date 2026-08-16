@@ -99,6 +99,14 @@ export type PromptRecord = z.infer<typeof promptRecordSchema>;
  *   requirement, not a numeric threshold, so `BEX_DISABLE_CONFIDENCE_GATING` normally leaves it
  *   running unconditionally. Only appears with `verdict: 'bypassed'`, recorded for the temporary
  *   testing mode where the flag also suppresses this gate's decline (see B0-452 follow-up).
+ * - `competitor_identity_resolution` — `extractCompetitorProduct` (B0-357); the ONE deterministic
+ *   (brand, product) tuple resolved per turn on the recommendations/cross-reference path, reused by
+ *   the forced-lookup prefetch, the deterministic override safety net, and the B0-355 web-search
+ *   backstop. Records which competitor was picked when the message named two.
+ * - `llm_intent_classifier_shadow` — `classifyUserIntent` (B0-507); shadow-mode only, gated on
+ *   `BEX_LLM_ROUTER_ENABLED` + `BEX_LLM_ROUTER_SHADOW_MODE`. Records what the LLM router would
+ *   have routed to next to what `keyword_routing` actually routed to, for rollout comparison —
+ *   never changes the turn's routing while this gate is the one being recorded.
  */
 export const gateIdSchema = z.enum([
   'keyword_routing',
@@ -106,6 +114,8 @@ export const gateIdSchema = z.enum([
   'usage_safety_coverage',
   'recommendation_confidence',
   'regulated_claim_guardrail',
+  'competitor_identity_resolution',
+  'llm_intent_classifier_shadow',
 ]);
 
 export type GateId = z.infer<typeof gateIdSchema>;
@@ -253,8 +263,30 @@ export const productSupportFinalOutputSchema = z.object({
    */
   priorMessageCount: z.number().int().nonnegative().optional(),
   previousResponseId: z.string().nullable().optional(),
+  /**
+   * B0-519 — whether `priorMessageCount` exceeded `BEX_HISTORY_MAX_MESSAGES` this turn, which:
+   * (a) capped the history actually replayed to the most recent messages, and (b), on the Responses
+   * runtime only, intentionally broke the `previousResponseId` chain instead of resuming it. See
+   * `capConversationHistory` in `run-product-support-workflow.ts`. Optional for historical payloads
+   * written before this ticket.
+   */
+  historyCapApplied: z.boolean().optional(),
   /** B0-349 — the pre-validation draft answer. Optional for historical payloads. */
   draftAnswer: z.string().optional(),
+  /**
+   * B0-357 — the ONE (brand, product) competitor-identity tuple resolved this turn, when the
+   * recommendations/cross-reference path needed one. Persisted on the run itself (not only inside a
+   * step) so a bad resolution — e.g. the wrong one of two named competitor products — is
+   * diagnosable directly from `workflow_runs.final_output` without reading the step trace. Absent
+   * when the turn never needed competitor identity resolution.
+   */
+  resolvedCompetitor: z
+    .object({
+      brand: z.string().nullable(),
+      product: z.string().nullable(),
+      otherCompetitorProduct: z.string().nullable(),
+    })
+    .optional(),
 });
 
 export type ProductSupportFinalOutput = z.infer<typeof productSupportFinalOutputSchema>;

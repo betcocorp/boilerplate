@@ -1,5 +1,6 @@
 import { getOpenAIClient, resolveResponsesModel } from '~/lib/openai/client';
 import { extractAssistantText } from '~/lib/openai/response-item-parsing';
+import { resolveMaxOutputTokens } from '~/lib/workflows/product-support/max-output-tokens';
 
 import {
   validatorResultSchema,
@@ -116,6 +117,7 @@ export async function runValidatorPass(input: {
     store: false,
     stream: false,
     temperature: 0,
+    max_output_tokens: resolveMaxOutputTokens(),
   });
 
   try {
@@ -502,6 +504,7 @@ export async function runRevisionPass(input: {
     store: false,
     stream: false,
     temperature: 0.2,
+    max_output_tokens: resolveMaxOutputTokens(),
   });
 
   return extractAssistantText(res);

@@ -148,6 +148,76 @@ describe('buildProductSupportInstructions — prompt-cache stable prefix (B0-324
   });
 });
 
+describe('buildProductSupportInstructions — classifier-driven orchestrator hint (B0-508)', () => {
+  const llmClassification = {
+    intent: 'bathroom' as const,
+    confidence: 0.87456,
+    entities: {
+      betcoProduct: 'Green Earth Neutral Cleaner',
+      competitorBrand: null,
+      competitorProduct: null,
+      surfaceType: 'restroom floor',
+      taskDescription: 'find the right cleaner for a restroom floor',
+    },
+    suggestedTool: 'search_product_docs' as const,
+    source: 'llm' as const,
+  };
+
+  it('renders intent/confidence/entities instead of raw scores when the classifier ran', () => {
+    const instructions = buildProductSupportInstructions({
+      mode: 'orchestrator',
+      routing: { ...baseRouting, decision: 'bathroom' },
+      classification: llmClassification,
+    });
+
+    expect(instructions).toContain('Intent classification: bathroom (confidence 0.87)');
+    expect(instructions).toContain(
+      'Entities: Betco product: Green Earth Neutral Cleaner · surface: restroom floor · task: find the right cleaner for a restroom floor',
+    );
+    expect(instructions).not.toContain('Scores:');
+  });
+
+  it('degrades to the scores line when no classification is supplied (default/backward-compat)', () => {
+    const instructions = buildProductSupportInstructions({
+      mode: 'orchestrator',
+      routing: { ...baseRouting, decision: 'bathroom' },
+    });
+
+    expect(instructions).toContain('Scores:');
+    expect(instructions).not.toContain('Intent classification:');
+  });
+
+  it('degrades to the scores line when the classifier fell back to the keyword router', () => {
+    const instructions = buildProductSupportInstructions({
+      mode: 'orchestrator',
+      routing: { ...baseRouting, decision: 'bathroom' },
+      classification: { ...llmClassification, confidence: 0.5, source: 'keyword_fallback' },
+    });
+
+    expect(instructions).toContain('Scores:');
+    expect(instructions).not.toContain('Intent classification:');
+  });
+
+  it('shows "none extracted" when the classifier found no entities', () => {
+    const instructions = buildProductSupportInstructions({
+      mode: 'orchestrator',
+      routing: { ...baseRouting, decision: 'product' },
+      classification: {
+        ...llmClassification,
+        entities: {
+          betcoProduct: null,
+          competitorBrand: null,
+          competitorProduct: null,
+          surfaceType: null,
+          taskDescription: null,
+        },
+      },
+    });
+
+    expect(instructions).toContain('Entities: none extracted');
+  });
+});
+
 describe('effectivePromptIdForDecision (B0-392)', () => {
   it('maps each specialist decision to its own prompt id', () => {
     for (const id of EFFECTIVE_PROMPT_IDS) {

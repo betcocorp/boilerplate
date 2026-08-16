@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import {
   orchestratorStepSchema,
+  productSupportOutcomeSchema,
   smeAgentIdSchema,
 } from '~/lib/orchestrator/orchestrator-schemas';
 
@@ -50,6 +51,8 @@ export const smeAgentRunResultSchema = z.object({
   query: z.string().max(16000),
   context: z.record(z.string(), z.unknown()).nullable(),
   steps: z.array(orchestratorStepSchema),
+  /** Present once this agent is wired to the real product-support workflow (see `types.ts`). */
+  answer: productSupportOutcomeSchema.optional(),
 });
 
 export type SmeAgentRunResultValidated = z.infer<typeof smeAgentRunResultSchema>;

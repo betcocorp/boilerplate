@@ -3,12 +3,28 @@ import { DILUTION_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/dilution-special
 import { FLOOR_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/floor-specialist/floor-specialist-system-prompt';
 import { PRODUCT_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/product-specialist/product-specialist-system-prompt';
 import { RECOMMENDATIONS_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/recommendations-specialist/recommendations-specialist-system-prompt';
+import { runBexChatTurn } from '~/lib/bex/run-chat-turn';
+import type { ProductSupportOutcome } from '~/lib/orchestrator/orchestrator-schemas';
 
 import type {
   SmeAgentId,
   SmeAgentInvokeBody,
   SmeAgentRunResult,
 } from './types';
+
+/**
+ * B0-520/521/522/523 — agents wired to the real `runProductSupportWorkflow` (via
+ * `runBexChatTurn`, forced to that agent's `agentMode`) instead of the `runSmeAgent`
+ * placeholder. `recommendations` is intentionally out of scope for this set — it is already
+ * fully built via its own tool (`lookup_cross_reference` + web-search recommendation engine),
+ * not through this forced-routing mechanism.
+ */
+const REAL_WORKFLOW_AGENT_IDS = ['product', 'dilution', 'floor', 'bathroom'] as const;
+type RealWorkflowAgentId = (typeof REAL_WORKFLOW_AGENT_IDS)[number];
+
+function isRealWorkflowAgent(agentId: SmeAgentId): agentId is RealWorkflowAgentId {
+  return (REAL_WORKFLOW_AGENT_IDS as readonly string[]).includes(agentId);
+}
 
 /** Keys callers can send in `context` for restroom-care routing (session memory). */
 export const BATHROOM_AGENT_CONTEXT_KEYS = [
@@ -136,13 +152,116 @@ function bathroomContextSummary(
 }
 
 /**
- * Placeholder SME run: validates input and returns a stable shape the orchestrator
- * can merge into real tool + LLM steps later.
+ * B0-520/521/522/523 — runs the real specialist (`product`, `dilution`, `floor`, `bathroom`)
+ * through `runProductSupportWorkflow`, forced to this agent's mode via `runBexChatTurn` —
+ * the exact mechanism the Bex chat UI uses for `agentMode !== 'orchestrator'` direct routing
+ * (see `run-chat-turn.ts`, `run-orchestration.ts`'s `bex-chat` workflow, and
+ * `src/lib/tests/runner.ts`, which all funnel through this one entry point).
+ *
+ * Each `/api/v1/agents/*` call is a stateless, single-turn invocation from an external API
+ * client (no `conversationId` in the request contract — see `sme-schemas.ts`), so a fresh
+ * conversation is created per call and attributed to no end user, matching the eval-harness
+ * convention (`owner: { kind: 'system' }`). `source: 'orchestrator_api'` is reused rather than
+ * adding a new `run_source` value — these are, like `/api/v1/orchestrator`, token-authenticated
+ * server-to-server v1 callers, and the `workflow_runs.source` column has a DB CHECK constraint
+ * that would need its own migration to grow (out of scope for this wiring change).
+ *
+ * The caller's optional `context` (e.g. `dispenserModel`, `floorType`) isn't part of
+ * `runProductSupportWorkflow`'s input contract, so rather than silently dropping it now that
+ * this is a real model call, it is folded into the message sent to the workflow as a
+ * "Session context" hint.
  */
-export function runSmeAgent(
+async function runRealSmeAgentAnswer(
+  agentId: RealWorkflowAgentId,
+  meta: AgentMeta,
+  query: string,
+  context: Record<string, unknown> | null,
+  sessionNote: string | null,
+): Promise<SmeAgentRunResult> {
+  const ingestNote = sessionNote
+    ? `Query received; session context: ${sessionNote}. Ready for retrieval + synthesis.`
+    : 'Query received; ready for retrieval + synthesis.';
+
+  const messageForWorkflow = sessionNote
+    ? `${query}\n\n(Session context — ${sessionNote})`
+    : query;
+
+  const outcome = await runBexChatTurn({
+    conversationId: null,
+    message: messageForWorkflow,
+    // B0-416 — this path is only reachable through a token-authenticated `/api/v1/agents/*`
+    // route (server-to-server); see the module doc comment above for why this reuses
+    // 'orchestrator_api' rather than adding a new source.
+    source: 'orchestrator_api',
+    agentMode: agentId,
+    useValidator: false,
+    owner: { kind: 'system' },
+  });
+
+  const answer: ProductSupportOutcome = {
+    answerText: outcome.answerText,
+    conversationId: outcome.conversationId,
+    workflowRunId: outcome.workflowRunId,
+    latestOpenaiResponseId: outcome.latestOpenaiResponseId,
+    traceId: outcome.traceId,
+    sources: outcome.sources,
+    confidence: outcome.confidence,
+    validation: outcome.validation,
+    routingDecision: outcome.routingDecision,
+    usage: outcome.usage,
+    promptVersion: outcome.promptVersion,
+    promptBundleVersion: outcome.promptBundleVersion,
+    answerProvenance: outcome.answerProvenance,
+    priorMessageCount: outcome.priorMessageCount,
+    previousResponseId: outcome.previousResponseId,
+  };
+
+  return {
+    agent: agentId,
+    label: meta.label,
+    summary: meta.summary,
+    focusAreas: meta.focusAreas,
+    systemPrompt: meta.systemPrompt,
+    sessionContextGuide: meta.sessionContextGuide,
+    query,
+    context,
+    steps: [
+      {
+        id: 'ingest-query',
+        status: 'completed',
+        note: ingestNote,
+      },
+      {
+        id: 'retrieve-domain-knowledge',
+        status: 'completed',
+        note: `Ran the ${meta.label} via runProductSupportWorkflow forced to \`${agentId}\` routing (workflow run ${outcome.workflowRunId}); tool calls retrieved grounded Betco data — see \`answer.sources\`.`,
+      },
+      {
+        id: 'draft-sme-answer',
+        status: 'completed',
+        note: `Answer drafted${
+          typeof outcome.confidence === 'number'
+            ? ` with confidence ${outcome.confidence}`
+            : ''
+        }; validator approved=${outcome.validation.approved}${
+          outcome.validation.requires_human_review ? ' (flagged for human review)' : ''
+        }.`,
+      },
+    ],
+    answer,
+  };
+}
+
+/**
+ * Placeholder SME run: validates input and returns a stable shape the orchestrator
+ * can merge into real tool + LLM steps later. Still used for `recommendations` (out of
+ * scope for B0-520/521/522/523 — see the Confluence source doc) and for any real-workflow
+ * agent called with no query.
+ */
+export async function runSmeAgent(
   agentId: SmeAgentId,
   body: SmeAgentInvokeBody,
-): SmeAgentRunResult {
+): Promise<SmeAgentRunResult> {
   const query = typeof body.query === 'string' ? body.query.trim() : '';
   const meta = AGENTS[agentId];
   const context = normalizeContext(body.context);
@@ -185,6 +304,10 @@ export function runSmeAgent(
     }
     return 'Query received; ready for retrieval + synthesis.';
   })();
+
+  if (query && isRealWorkflowAgent(agentId)) {
+    return runRealSmeAgentAnswer(agentId, meta, query, context, sessionNote);
+  }
 
   return {
     agent: agentId,

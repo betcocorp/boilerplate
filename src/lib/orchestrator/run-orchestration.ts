@@ -93,6 +93,9 @@ async function runBexChatOrchestration(input: unknown): Promise<OrchestrationRun
       answerProvenance: outcome.answerProvenance,
       priorMessageCount: outcome.priorMessageCount,
       previousResponseId: outcome.previousResponseId,
+      // B0-519 — whether the history cap capped/reset this turn's replay; see
+      // `capConversationHistory` in `run-product-support-workflow.ts`.
+      historyCapApplied: outcome.historyCapApplied,
     },
   };
 }

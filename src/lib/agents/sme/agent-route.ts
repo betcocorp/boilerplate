@@ -10,7 +10,7 @@ import {
 import type { SmeAgentId } from './types';
 
 export function createSmeAgentPostHandler(agentId: SmeAgentId) {
-  return withApiV1(async (request) => {
+  return withApiV1(async (request, { recordUsage }) => {
     let raw: unknown = {};
 
     try {
@@ -31,7 +31,14 @@ export function createSmeAgentPostHandler(agentId: SmeAgentId) {
     }
 
     try {
-      const result = runSmeAgent(agentId, parsed.data);
+      const result = await runSmeAgent(agentId, parsed.data);
+
+      // B0-117 — attribute LLM token usage to this request's api_request_log row, same as
+      // `/api/v1/orchestrator` does for `productSupport.usage`. Absent for the `recommendations`
+      // stub and for any real-workflow agent run whose workflow didn't report usage.
+      if (result.answer?.usage) {
+        recordUsage(result.answer.usage);
+      }
 
       return NextResponse.json({ ok: true, ...result });
     } catch (error) {

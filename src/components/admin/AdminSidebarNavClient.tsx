@@ -87,6 +87,10 @@ const sidebarSections: NavSectionModel[] = [
             href: '/admin/tests/failure-queue',
           },
           {
+            label: 'Routing comparison',
+            href: '/admin/tests/routing-comparison',
+          },
+          {
             label: 'Prompt observability',
             href: '/admin/observability',
           },

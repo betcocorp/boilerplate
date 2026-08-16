@@ -128,8 +128,11 @@ function diffMs(from: string | null, to: string | null): number | undefined {
   if (!Number.isFinite(start) || !Number.isFinite(end)) {
     return undefined;
   }
+  // B0-551: `started_at` is Postgres `now()`, `completed_at` is the Node clock — clock skew can
+  // make a genuinely fast step's delta go negative. Clamp at 0 rather than dropping the row
+  // (returning undefined here would silently hide real fast-step data from duration views).
   const delta = end - start;
-  return delta >= 0 ? delta : undefined;
+  return delta >= 0 ? delta : 0;
 }
 
 function mapStepStatus(rawStatus: string): TimelineEventStatus {

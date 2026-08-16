@@ -267,6 +267,215 @@ describe('runResponsesWithToolLoop — preloaded evidence (B0-436)', () => {
   });
 });
 
+describe('runResponsesWithToolLoop — capped history replay (B0-519)', () => {
+  it('injects history as explicit messages, before the user message, when no previousResponseId is given', async () => {
+    const { client, create } = stubClient([{ id: 'resp_1', output: [], output_text: 'hi' }]);
+
+    await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1',
+      instructions: 'stable prefix',
+      tools: [],
+      userMessage: 'and the bathroom cleaner?',
+      history: [
+        { role: 'user', content: 'What is your best floor cleaner?' },
+        { role: 'assistant', content: 'Try Green Earth Neutral Cleaner.' },
+      ],
+      executeTool: async ({ name }) => ({ output: '{}', trace: trace(name) }),
+    });
+
+    const round1 = (create.mock.calls as unknown as Array<[Record<string, unknown>]>)[0]?.[0]
+      .input as Array<Record<string, unknown>>;
+
+    expect(round1).toHaveLength(3);
+    expect(round1[0]).toMatchObject({
+      role: 'user',
+      content: 'What is your best floor cleaner?',
+    });
+    expect(round1[1]).toMatchObject({
+      role: 'assistant',
+      content: 'Try Green Earth Neutral Cleaner.',
+    });
+    expect(round1[2]).toMatchObject({ role: 'user', content: 'and the bathroom cleaner?' });
+  });
+
+  it('ignores history when a previousResponseId is given, to avoid duplicating the server-side chain', async () => {
+    const { client, create } = stubClient([{ id: 'resp_1', output: [], output_text: 'hi' }]);
+
+    await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1',
+      instructions: 'stable prefix',
+      tools: [],
+      userMessage: 'and the bathroom cleaner?',
+      previousResponseId: 'resp_prev',
+      history: [{ role: 'user', content: 'What is your best floor cleaner?' }],
+      executeTool: async ({ name }) => ({ output: '{}', trace: trace(name) }),
+    });
+
+    const round1 = (create.mock.calls as unknown as Array<[Record<string, unknown>]>)[0]?.[0]
+      .input as Array<Record<string, unknown>>;
+
+    expect(round1).toHaveLength(1);
+    expect(round1[0]).toMatchObject({ role: 'user', content: 'and the bathroom cleaner?' });
+  });
+
+  it('drops blank history messages, matching the AI SDK runtime', async () => {
+    const { client, create } = stubClient([{ id: 'resp_1', output: [], output_text: 'hi' }]);
+
+    await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1',
+      instructions: 'stable prefix',
+      tools: [],
+      userMessage: 'hello',
+      history: [{ role: 'user', content: '   ' }],
+      executeTool: async ({ name }) => ({ output: '{}', trace: trace(name) }),
+    });
+
+    const round1 = (create.mock.calls as unknown as Array<[Record<string, unknown>]>)[0]?.[0]
+      .input as Array<Record<string, unknown>>;
+    expect(round1).toHaveLength(1);
+  });
+});
+
+describe('runResponsesWithToolLoop — suggestedFirstTool round-0 tool_choice bias (B0-512)', () => {
+  const searchTool = {
+    type: 'function' as const,
+    name: 'search_product_docs',
+    parameters: {},
+    strict: null,
+  };
+  const otherTool = {
+    type: 'function' as const,
+    name: 'get_efficacy_data',
+    parameters: {},
+    strict: null,
+  };
+
+  it('pins round 0 to the suggested tool when toolChoice is the generic "required"', async () => {
+    const { client, create } = stubClient([{ id: 'resp_1', output: [], output_text: 'hi' }]);
+
+    await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1',
+      instructions: 'stable prefix',
+      tools: [searchTool, otherTool],
+      userMessage: 'hello',
+      toolChoice: 'required',
+      suggestedFirstTool: { name: 'search_product_docs', confidence: 0.9 },
+      executeTool: async ({ name }) => ({ output: '{}', trace: trace(name) }),
+    });
+
+    const params = (create.mock.calls as unknown as Array<[Record<string, unknown>]>)[0]?.[0];
+    expect(params?.tool_choice).toEqual({ type: 'function', name: 'search_product_docs' });
+  });
+
+  it('leaves a named-function toolChoice (forced cross-reference/recommendations) untouched', async () => {
+    const { client, create } = stubClient([{ id: 'resp_1', output: [], output_text: 'hi' }]);
+
+    await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1',
+      instructions: 'stable prefix',
+      tools: [searchTool, otherTool],
+      userMessage: 'hello',
+      toolChoice: { type: 'function', name: 'lookup_cross_reference' },
+      suggestedFirstTool: { name: 'search_product_docs', confidence: 0.99 },
+      executeTool: async ({ name }) => ({ output: '{}', trace: trace(name) }),
+    });
+
+    const params = (create.mock.calls as unknown as Array<[Record<string, unknown>]>)[0]?.[0];
+    expect(params?.tool_choice).toEqual({ type: 'function', name: 'lookup_cross_reference' });
+  });
+
+  it('leaves an explicit "auto" toolChoice (preloaded-evidence turns) untouched', async () => {
+    const { client, create } = stubClient([{ id: 'resp_1', output: [], output_text: 'hi' }]);
+
+    await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1',
+      instructions: 'stable prefix',
+      tools: [searchTool, otherTool],
+      userMessage: 'hello',
+      toolChoice: 'auto',
+      suggestedFirstTool: { name: 'search_product_docs', confidence: 0.99 },
+      executeTool: async ({ name }) => ({ output: '{}', trace: trace(name) }),
+    });
+
+    const params = (create.mock.calls as unknown as Array<[Record<string, unknown>]>)[0]?.[0];
+    expect(params?.tool_choice).toBe('auto');
+  });
+
+  it('ignores a suggestion below the confidence floor, keeping the generic "required"', async () => {
+    const { client, create } = stubClient([{ id: 'resp_1', output: [], output_text: 'hi' }]);
+
+    await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1',
+      instructions: 'stable prefix',
+      tools: [searchTool, otherTool],
+      userMessage: 'hello',
+      toolChoice: 'required',
+      suggestedFirstTool: { name: 'search_product_docs', confidence: 0.2 },
+      executeTool: async ({ name }) => ({ output: '{}', trace: trace(name) }),
+    });
+
+    const params = (create.mock.calls as unknown as Array<[Record<string, unknown>]>)[0]?.[0];
+    expect(params?.tool_choice).toBe('required');
+  });
+
+  it('ignores a suggestion naming a tool not offered this round', async () => {
+    const { client, create } = stubClient([{ id: 'resp_1', output: [], output_text: 'hi' }]);
+
+    await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1',
+      instructions: 'stable prefix',
+      tools: [searchTool],
+      userMessage: 'hello',
+      toolChoice: 'required',
+      suggestedFirstTool: { name: 'get_efficacy_data', confidence: 0.9 },
+      executeTool: async ({ name }) => ({ output: '{}', trace: trace(name) }),
+    });
+
+    const params = (create.mock.calls as unknown as Array<[Record<string, unknown>]>)[0]?.[0];
+    expect(params?.tool_choice).toBe('required');
+  });
+
+  it('only biases round 0 — round 2+ still sends "auto" regardless of the suggestion', async () => {
+    const { client, create } = stubClient([
+      {
+        id: 'resp_1',
+        output: [
+          {
+            type: 'function_call',
+            call_id: 'call_1',
+            name: 'search_product_docs',
+            arguments: '{}',
+          },
+        ],
+      },
+      { id: 'resp_2', output: [], output_text: 'done' },
+    ]);
+
+    await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1',
+      instructions: 'stable prefix',
+      tools: [searchTool, otherTool],
+      userMessage: 'hello',
+      toolChoice: 'required',
+      suggestedFirstTool: { name: 'search_product_docs', confidence: 0.9 },
+      executeTool: async ({ name }) => ({ output: '{}', trace: trace(name) }),
+    });
+
+    const calls = create.mock.calls as unknown as Array<[Record<string, unknown>]>;
+    expect(calls[0]?.[0].tool_choice).toEqual({ type: 'function', name: 'search_product_docs' });
+    expect(calls[1]?.[0].tool_choice).toBe('auto');
+  });
+});
+
 describe('runResponsesWithToolLoop — bounded transport retry (B0-370)', () => {
   it('retries a network fault and succeeds', async () => {
     const { client, create } = scriptedClient([

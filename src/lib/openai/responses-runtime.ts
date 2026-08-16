@@ -71,9 +71,34 @@ export type ResponsesRuntimeOptions = {
   userMessage: string;
   /** Prior completed response id for multi-turn chaining (per conversation). */
   previousResponseId?: string | null;
+  /**
+   * B0-519 — prior conversation turns to replay as explicit messages instead of chaining via
+   * `previousResponseId`. Used ONLY when the caller intentionally omits `previousResponseId`
+   * (`null`/`undefined`) to break an over-grown chain — see `capConversationHistory` in
+   * `~/lib/workflows/product-support/run-product-support-workflow`. Ignored when a
+   * `previousResponseId` IS given: the server already remembers that conversation, so replaying it
+   * again here would duplicate it inside the chain. Injected into round 1's `input` only, same as
+   * `preloadedEvidence` — later rounds send `toolOutputs` instead.
+   */
+  history?: Array<{ role: 'user' | 'assistant'; content: string }>;
   maxToolRounds?: number;
   temperature?: number;
   toolChoice?: ResponseCreateParamsNonStreaming['tool_choice'];
+  /**
+   * B0-512 — the B0-503 LLM intent classifier's suggested first tool call, threaded in as a hint
+   * for round 0's `tool_choice`. Optional and additive, same pattern as `history` (B0-519): omit
+   * it and round 0 behaves exactly as it did before this ticket.
+   *
+   * This is a BIAS, not a hard override — it only ever replaces the GENERIC `'required'`
+   * tool_choice (some tool must be called, but the model was otherwise free to pick which) with a
+   * named-function pin toward the classifier's pick. It never touches:
+   *  - an already-pinned named-function `toolChoice` (the forced cross-reference/recommendations
+   *    path in `run-product-support-workflow.ts` sets this explicitly — that forcing must win), or
+   *  - an explicit `'auto'` (the B0-436 preloaded-evidence path sets this deliberately, to avoid
+   *    forcing a wasted extra tool round when evidence is already in hand).
+   * See `resolveRoundZeroToolChoice`.
+   */
+  suggestedFirstTool?: { name: string; confidence: number } | null;
   /**
    * B0-459 — hard backstop on assistant output length (`max_output_tokens`). Decode time scales
    * linearly with output tokens and was measured at ~85% of total turn time, so this bounds a
@@ -140,6 +165,49 @@ export type ResponsesRuntimeResult = {
   usageByCall: LlmTokenUsage[];
 };
 
+/**
+ * B0-512 — minimum classifier confidence before `suggestedFirstTool` is allowed to bias round 0's
+ * `tool_choice`. `0.6` matches `LOW_SIMILARITY_THRESHOLD` (`~/lib/recommendations/recommendation-gate.ts`)
+ * — the "reasonably confident" bar already established elsewhere in this codebase for a 0-1
+ * classifier score, rather than inventing a new number for this one call site.
+ */
+export const DEFAULT_SUGGESTED_TOOL_MIN_CONFIDENCE = 0.6;
+
+/**
+ * B0-512 — round 0's `tool_choice`, biased by the classifier's `suggestedFirstTool` when eligible.
+ *
+ * Eligible means ALL of:
+ *  - the caller's own `toolChoice` resolves to the generic `'required'` (no speculative evidence
+ *    was preloaded, and this is not a forced cross-reference/recommendations turn — see the
+ *    `suggestedFirstTool` doc comment above for why `'auto'` and a named-function pin are excluded);
+ *  - a suggestion was actually supplied;
+ *  - its confidence clears `DEFAULT_SUGGESTED_TOOL_MIN_CONFIDENCE`;
+ *  - its tool name is one of the tools actually offered this round (a stale/mismatched suggestion
+ *    must never be sent as a `tool_choice` the API doesn't recognize).
+ * Otherwise the caller's own `toolChoice` (or the existing `'auto'` default) passes through
+ * unchanged.
+ */
+function resolveRoundZeroToolChoice(
+  opts: Pick<ResponsesRuntimeOptions, 'toolChoice' | 'suggestedFirstTool' | 'tools'>,
+): ResponseCreateParamsNonStreaming['tool_choice'] {
+  const base = opts.toolChoice ?? 'auto';
+  if (base !== 'required') {
+    return base;
+  }
+
+  const suggestion = opts.suggestedFirstTool;
+  if (!suggestion || suggestion.confidence < DEFAULT_SUGGESTED_TOOL_MIN_CONFIDENCE) {
+    return base;
+  }
+
+  const toolExists = opts.tools.some((tool) => 'name' in tool && tool.name === suggestion.name);
+  if (!toolExists) {
+    return base;
+  }
+
+  return { type: 'function', name: suggestion.name };
+}
+
 export async function runResponsesWithToolLoop(
   opts: ResponsesRuntimeOptions,
 ): Promise<ResponsesRuntimeResult> {
@@ -179,6 +247,21 @@ export async function runResponsesWithToolLoop(
     const input: ResponseInputItem[] =
       toolOutputs ??
       [
+        // B0-519 — capped prior turns, replayed as explicit messages ONLY when this call is NOT
+        // chaining via `previousResponseId` (an intentional chain break to bound token growth — see
+        // `history`'s doc comment above). Never present alongside a real `previousResponseId`: the
+        // server already remembers that conversation, so this would duplicate it.
+        ...(!opts.previousResponseId && opts.history
+          ? opts.history
+              .filter((message) => message.content.trim().length > 0)
+              .map(
+                (message): ResponseInputItem => ({
+                  role: message.role,
+                  content: message.content,
+                  type: 'message',
+                }),
+              )
+          : []),
         {
           role: 'user',
           content: opts.userMessage,
@@ -202,7 +285,7 @@ export async function runResponsesWithToolLoop(
       model: opts.model,
       instructions: opts.instructions,
       tools: opts.tools,
-      tool_choice: i === 0 ? (opts.toolChoice ?? 'auto') : 'auto',
+      tool_choice: i === 0 ? resolveRoundZeroToolChoice(opts) : 'auto',
       parallel_tool_calls: true,
       store: true,
       stream: false,
