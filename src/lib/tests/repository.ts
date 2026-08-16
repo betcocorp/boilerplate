@@ -5,6 +5,7 @@ import {
   extractItemConfidenceProvenance,
   extractItemSimilarityScore,
   extractItemValidatorConfidence,
+  extractRuntimeConfig,
   extractSearchRunMaxSimilarity,
 } from './response-payload';
 import { extractExpectedTool, parseAgentStepToolTrace } from './tool-routing';
@@ -892,6 +893,42 @@ export async function computeAvgJudgmentConfidenceForResult(
   }
 
   return { avg: count > 0 ? sum / count : null, itemCount: count };
+}
+
+/**
+ * B0-494 — a run executed under the B0-452 master confidence-gate kill switch
+ * (`BEX_DISABLE_CONFIDENCE_GATING`) has fictional confidence caps: the gate detected something but
+ * was told not to act on it. CI must not silently let such a run satisfy `confidence_floor`, so the
+ * `/gate` endpoint calls this to check whether ANY item in the run recorded
+ * `runtimeConfig.confidenceGatingDisabled === true` before trusting `avg_confidence` at all.
+ */
+export async function anyResultItemHasConfidenceGatingDisabled(
+  testResultId: string,
+): Promise<boolean> {
+  const supabase = getSupabaseServiceRoleClient();
+  let from = 0;
+
+  while (true) {
+    const result = await supabase
+      .from('test_result_items')
+      .select('response_payload')
+      .eq('test_result_id', testResultId)
+      .in('status', ['completed', 'failed'])
+      .range(from, from + RESULT_ITEMS_PAGE_SIZE - 1);
+
+    const rows = (assertNoError(result) || []) as Pick<TestResultItemRecord, 'response_payload'>[];
+
+    if (rows.some((row) => extractRuntimeConfig(row.response_payload)?.confidenceGatingDisabled)) {
+      return true;
+    }
+
+    if (rows.length < RESULT_ITEMS_PAGE_SIZE) {
+      break;
+    }
+    from += RESULT_ITEMS_PAGE_SIZE;
+  }
+
+  return false;
 }
 
 export async function deleteTestById(testId: string) {

@@ -53,7 +53,9 @@ const SIMILARITY_CANDIDATE_FETCH_LIMIT = 20;
  * this flag is inert and every search below behaves exactly as if reranking were off, so it stays
  * safe to leave on before the cross-encoder is provisioned.
  */
-const PRODUCT_SUPPORT_RERANK_ENABLED =
+// B0-494 — exported so `run-product-support-workflow.ts` can record the effective value in its
+// per-run runtime-config snapshot, rather than a second, possibly-drifting read of the same flag.
+export const PRODUCT_SUPPORT_RERANK_ENABLED =
   process.env.BEX_PRODUCT_SUPPORT_RERANKER !== 'false';
 
 export type CuratedSource = {

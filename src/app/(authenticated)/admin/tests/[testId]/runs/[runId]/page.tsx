@@ -20,6 +20,7 @@ import { RoutingAccuracyBoard } from '~/components/admin/tests/RoutingAccuracyBo
 import { AliasResolutionPanel } from '~/components/admin/tests/AliasResolutionPanel';
 import { RunToolRoutingPanel } from '~/components/admin/tests/RunToolRoutingPanel';
 import { PromptBundleVersionBadge } from '~/components/admin/tests/PromptBundleVersionBadge';
+import { RuntimeConfigBadge } from '~/components/admin/tests/RuntimeConfigBadge';
 import {
   TestRunNotesDisplay,
   TestRunNotesProvider,
@@ -61,6 +62,7 @@ import {
   extractPromptVersion,
   extractRetrievedDocumentChunks,
   extractRoutingDecision,
+  extractRuntimeConfig,
   extractTimingBreakdown,
   extractWorkflowRunId,
   summarizePromptBundleVersions,
@@ -239,6 +241,15 @@ export default async function AdminTestRunDetailsPage({
   const promptBundleVersionSummary = summarizePromptBundleVersions(
     resultItems.map((item) => item.response_payload),
   );
+  /**
+   * B0-494 — run-level runtime-config chip. Every switch it reads (`useValidator`,
+   * `earlyDeclineGateEnabled`, etc.) is env/input-resolved, not per-item, so — like
+   * `promptBundleVersion` above — the first item that has one is representative of the whole run;
+   * unlike that field, a genuine per-item difference (e.g. an admin flipping `useValidator` between
+   * items in the same run, which the harness does not do today) is not separately flagged here.
+   */
+  const runtimeConfigForRun =
+    resultItems.map((item) => extractRuntimeConfig(item.response_payload)).find(Boolean) ?? null;
   /**
    * B0-419 — the run each execution produced. Prefer the real `workflow_run_id` column (B0-416,
    * backfilled) over re-extracting it from `response_payload`; the payload read stays only as a
@@ -454,6 +465,7 @@ export default async function AdminTestRunDetailsPage({
                 <p className="mt-3 flex flex-wrap items-center gap-2 font-mono text-xs text-slate-600">
                   <span>Run id: {result.id}</span>
                   <PromptBundleVersionBadge summary={promptBundleVersionSummary} />
+                  <RuntimeConfigBadge runtimeConfig={runtimeConfigForRun} />
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">

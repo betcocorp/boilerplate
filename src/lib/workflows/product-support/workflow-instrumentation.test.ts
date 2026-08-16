@@ -2096,3 +2096,119 @@ describe('confidence provenance (B0-492)', () => {
     expect(out.confidencePreCapProvenance).toBe('validator_bypassed_heuristic');
   });
 });
+
+/* -------------------------------------------------------------------------- *
+ * B0-494 — which gates and runtimes were active per run.
+ * -------------------------------------------------------------------------- */
+
+describe('runtime config and gate activation (B0-494)', () => {
+  it('records the resolved switches on a default answered run', async () => {
+    const out = await run();
+
+    expect(out.runtimeConfig).toMatchObject({
+      useValidator: false,
+      earlyDeclineGateEnabled: true,
+      aiSdkGenerationEnabled: false,
+      confidenceGatingDisabled: false,
+      agentMode: 'orchestrator',
+      routedDirectly: false,
+    });
+    expect(typeof out.runtimeConfig?.rerankerActive).toBe('boolean');
+  });
+
+  it('marks the validator "skipped — disabled by flag" when useValidator is false, and "ran" when true', async () => {
+    const bypassed = await run();
+    expect(bypassed.activeGates?.validator).toEqual({ state: 'skipped', reason: 'disabled_by_flag' });
+
+    const judged = await run({ useValidator: true });
+    expect(judged.activeGates?.validator).toEqual({ state: 'ran' });
+  });
+
+  it('marks the early-decline gate "skipped — disabled by flag" when BEX_EARLY_DECLINE_GATE_ENABLED=false', async () => {
+    process.env.BEX_EARLY_DECLINE_GATE_ENABLED = 'false';
+    const out = await run();
+    expect(out.runtimeConfig?.earlyDeclineGateEnabled).toBe(false);
+    expect(out.activeGates?.earlyDeclineGate).toEqual({ state: 'skipped', reason: 'disabled_by_flag' });
+  });
+
+  it('marks the early-decline gate "ran" on a run it actually declines, and the other four gates not_applicable', async () => {
+    const out = await run({ userMessage: 'Can I mix bleach with this Betco cleaner?' });
+    expect(out.activeGates).toEqual({
+      validator: { state: 'not_applicable' },
+      earlyDeclineGate: { state: 'ran' },
+      usageSafetyCoverage: { state: 'not_applicable' },
+      regulatedClaimGuardrail: { state: 'not_applicable' },
+      recommendationConfidence: { state: 'not_applicable' },
+    });
+    // The switches are still recorded even though the answering path never ran.
+    expect(out.runtimeConfig).toBeDefined();
+  });
+
+  it('marks usage/safety coverage "ran" when the question needs it and evidence is present', async () => {
+    const out = await run();
+    expect(out.activeGates?.usageSafetyCoverage).toEqual({ state: 'ran' });
+    expect(out.activeGates?.regulatedClaimGuardrail).toEqual({ state: 'ran' });
+    expect(out.activeGates?.recommendationConfidence).toEqual({ state: 'not_applicable' });
+  });
+
+  it('marks usage/safety coverage not_applicable when the question does not need it at all', async () => {
+    const out = await run({ userMessage: 'What is the EPA reg number for Betco Fight Bac RTU?' });
+    expect(out.activeGates?.usageSafetyCoverage).toEqual({ state: 'not_applicable' });
+  });
+
+  it('is identifiable as run-under-the-kill-switch: usage/safety coverage bypassed, confidenceGatingDisabled true', async () => {
+    process.env.BEX_DISABLE_CONFIDENCE_GATING = 'true';
+    executeProductToolMock.mockResolvedValue({
+      sources: [
+        {
+          documentId: 'doc-1',
+          chunkId: 'chunk-1',
+          title: 'pH7Q Dual label',
+          snippet: 'Usage: apply to the floor with a mop.',
+          documentBody: 'Usage: apply to the floor with a mop.',
+        },
+      ],
+    });
+
+    const out = await run();
+
+    expect(out.runtimeConfig?.confidenceGatingDisabled).toBe(true);
+    expect(out.activeGates?.usageSafetyCoverage).toEqual({
+      state: 'bypassed',
+      reason: 'confidence_gating_disabled',
+    });
+
+    delete process.env.BEX_DISABLE_CONFIDENCE_GATING;
+  });
+
+  it('marks the recommendation-confidence gate "ran" (not not_applicable) whenever cross-reference post-processing runs', async () => {
+    arrangeOverrideRun();
+    const out = await run({ userMessage: XREF_MESSAGE });
+    expect(out.activeGates?.recommendationConfidence).toEqual({ state: 'ran' });
+  });
+
+  it('records routedDirectly when an admin forces a direct specialist mode', async () => {
+    const out = await run({ agentMode: 'floor' });
+    expect(out.runtimeConfig?.agentMode).toBe('floor');
+    expect(out.runtimeConfig?.routedDirectly).toBe(true);
+  });
+
+  it('historical runs lacking the block are undefined, not defaulted to fully-enabled', async () => {
+    // Sanity check on the contract itself: both fields are optional, so an older
+    // final_output payload simply omits them rather than parsing to a default value.
+    const { productSupportFinalOutputSchema } = await import(
+      '~/lib/workflows/product-support/product-support-schemas'
+    );
+    const parsed = productSupportFinalOutputSchema.safeParse({
+      answerText: 'x',
+      workflowRunId: '00000000-0000-4000-8000-000000000000',
+      latestOpenaiResponseId: 'resp_1',
+      validation: { approved: true, confidence: 0.9, issues: [], requires_human_review: false },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.runtimeConfig).toBeUndefined();
+      expect(parsed.data.activeGates).toBeUndefined();
+    }
+  });
+});

@@ -88,6 +88,12 @@ import {
   confidenceProvenanceFields,
   type ConfidenceProvenanceState,
 } from '~/lib/workflows/product-support/confidence-provenance';
+import { PRODUCT_SUPPORT_RERANK_ENABLED } from '~/lib/retrieval/product-knowledge';
+import { isRerankerConfigured } from '~/lib/rag/rerank';
+import type {
+  GateActivationRecord,
+  RuntimeConfig,
+} from '~/lib/workflows/product-support/product-support-schemas';
 import {
   gateRecordSchema,
   promptRecordSchema,
@@ -1359,6 +1365,21 @@ export async function runProductSupportWorkflow(input: {
   // calibration for recommendations is instead enforced by evaluateRecommendationGate (below), which
   // runs regardless of this flag. So the validator stays opt-in on every route.
   const useValidator = input.useValidator ?? false;
+  /**
+   * B0-494 — resolved value of every behavior switch this run observes, computed once so every
+   * consumer (the run-level chip, `/gate`, the final output) agrees on the same snapshot. Resolved
+   * values, not env-var names: `rerankerActive` in particular depends on `isRerankerConfigured()`
+   * (COHERE_API_KEY presence), which can differ between otherwise-identical deploys.
+   */
+  const runtimeConfig: RuntimeConfig = {
+    useValidator,
+    earlyDeclineGateEnabled,
+    aiSdkGenerationEnabled: useAiSdkGeneration,
+    rerankerActive: PRODUCT_SUPPORT_RERANK_ENABLED && isRerankerConfigured(),
+    confidenceGatingDisabled: isConfidenceGatingDisabled(),
+    agentMode,
+    routedDirectly: agentMode !== 'orchestrator',
+  };
   const routingRationale =
     agentMode === 'orchestrator'
       ? route.rationale
@@ -1621,6 +1642,16 @@ export async function runProductSupportWorkflow(input: {
         preCapValue: null,
         preCapProvenance: null,
       }),
+      // B0-494 — the switches this run observed are still meaningful here (they're resolved
+      // before the decline check runs); the other four gates never got a chance to run at all.
+      runtimeConfig,
+      activeGates: {
+        validator: { state: 'not_applicable' },
+        earlyDeclineGate: { state: 'ran' },
+        usageSafetyCoverage: { state: 'not_applicable' },
+        regulatedClaimGuardrail: { state: 'not_applicable' },
+        recommendationConfidence: { state: 'not_applicable' },
+      },
       timingBreakdown: {
         toolRounds: 0,
         cacheSource: null,
@@ -2730,6 +2761,10 @@ export async function runProductSupportWorkflow(input: {
       retrievedSourceCount: sourceMeta.length,
     };
 
+    // B0-494 — this gate's own activation state, set in every branch below (including the
+    // `not_applicable` case, when `needsUsageSafetyCoverage` is false and none of them run).
+    let usageSafetyCoverageActivation: GateActivationRecord = { state: 'not_applicable' };
+
     if (
       needsUsageSafetyCoverage &&
       (!usageSafetyCoverage.hasUsageEvidence ||
@@ -2779,6 +2814,7 @@ export async function runProductSupportWorkflow(input: {
         verdict: 'capped',
         effect: `approved forced to false, issue "${coverageIssue}" added, confidence ${confidenceBeforeCap} → ${validation.confidence}. The usage/safety fallback copy replaces the draft unless the regulated-claim guardrail also rejected, whose copy wins; see answerProvenance for what the user saw.`,
       });
+      usageSafetyCoverageActivation = { state: 'ran' };
     } else if (
       needsUsageSafetyCoverage &&
       (!usageSafetyCoverage.hasUsageEvidence ||
@@ -2801,6 +2837,7 @@ export async function runProductSupportWorkflow(input: {
         effect:
           'BEX_DISABLE_CONFIDENCE_GATING is set: coverage was insufficient but the confidence cap and approval override were skipped.',
       });
+      usageSafetyCoverageActivation = { state: 'bypassed', reason: 'confidence_gating_disabled' };
     } else if (needsUsageSafetyCoverage) {
       // The gate RAN and found both kinds of evidence — a real verdict, not a skipped gate.
       validatorStepGates.push({
@@ -2811,6 +2848,7 @@ export async function runProductSupportWorkflow(input: {
         effect:
           'Usage and safety evidence were both retrieved; no confidence cap and no fallback copy.',
       });
+      usageSafetyCoverageActivation = { state: 'ran' };
     }
 
     // B0-257: regulated-claim guardrail -- evaluated unconditionally (independent of the
@@ -2847,6 +2885,11 @@ export async function runProductSupportWorkflow(input: {
       })),
     });
 
+    // B0-494 — this gate is evaluated unconditionally (see comment above), so it is either `ran`
+    // (whether or not it found anything to reject) or `bypassed` by the kill switch — never
+    // `skipped`/`not_applicable`.
+    let regulatedClaimGuardrailActivation: GateActivationRecord = { state: 'ran' };
+
     if (regulatedClaimGrounding.ungroundedCategories.length > 0) {
       if (isConfidenceGatingDisabled()) {
         validatorStepGates.push({
@@ -2860,6 +2903,7 @@ export async function runProductSupportWorkflow(input: {
           verdict: 'bypassed',
           effect: `BEX_DISABLE_CONFIDENCE_GATING is set: ${regulatedClaimGrounding.ungroundedCategories.join(', ')} could not be verified verbatim against a retrieved source, but the draft answer was allowed through unmodified instead of being replaced with the decline message. See draftAnswer on this run's final_output for exactly what was said.`,
         });
+        regulatedClaimGuardrailActivation = { state: 'bypassed', reason: 'confidence_gating_disabled' };
       } else {
         const confidenceBeforeRegulatedCap = validation.confidence;
         validation = {
@@ -2903,6 +2947,9 @@ export async function runProductSupportWorkflow(input: {
     // to route `product` than when it routed `recommendations` — and this gate only ever tightens
     // confidence, so the conservative direction for an equivalence claim about an EPA-registered
     // product is to apply it whenever the cross-reference post-processing ran.
+    // B0-494 — this gate's own trigger condition is `useCrossReferencePostProcessing` itself, so
+    // `not_applicable` (not `skipped`) is the right label when it never fires this turn.
+    let recommendationConfidenceActivation: GateActivationRecord = { state: 'not_applicable' };
     if (useCrossReferencePostProcessing) {
       const gateInput = {
         /**
@@ -2931,6 +2978,10 @@ export async function runProductSupportWorkflow(input: {
         brandKnown: Boolean(resolvedCompetitor?.brand?.trim()),
       };
       const gate = evaluateRecommendationGate(gateInput);
+      recommendationConfidenceActivation =
+        gate.bypassedChecks.length > 0
+          ? { state: 'bypassed', reason: 'confidence_gating_disabled' }
+          : { state: 'ran' };
       const confidenceBeforeGate = validation.confidence;
       /**
        * B0-492 — the gate's OWN candidate provenance: `agent_self_scored` when B0-491 substituted
@@ -3213,6 +3264,18 @@ export async function runProductSupportWorkflow(input: {
       // B0-492 — which of the (up to six) mechanisms produced `confidence` above, plus the
       // pre-cap value/provenance when a gate actually capped it.
       ...confidenceProvenanceFields(confidenceState),
+      // B0-494 — the resolved value of every behavior switch this run observed, and which gates
+      // ran / were skipped by flag / were bypassed by the B0-452 kill switch / never applied.
+      runtimeConfig,
+      activeGates: {
+        validator: useValidator ? { state: 'ran' } : { state: 'skipped', reason: 'disabled_by_flag' },
+        earlyDeclineGate: earlyDeclineGateEnabled
+          ? { state: 'ran' }
+          : { state: 'skipped', reason: 'disabled_by_flag' },
+        usageSafetyCoverage: usageSafetyCoverageActivation,
+        regulatedClaimGuardrail: regulatedClaimGuardrailActivation,
+        recommendationConfidence: recommendationConfidenceActivation,
+      },
     };
 
     audit.enqueue('workflow_completed', { workflow_run_id: run.id }, wfCtx);

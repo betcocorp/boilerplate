@@ -280,6 +280,70 @@ export const retrievalConfigSummarySchema = z.object({
 
 export type RetrievalConfigSummary = z.infer<typeof retrievalConfigSummarySchema>;
 
+/**
+ * B0-494 — the resolved (not env-var-name) value of every behavior switch this run's execution
+ * actually observed, so "was this run's behavior even comparable to that one" is answerable
+ * without reading env vars or logs. Every field is a plain resolved value — never the flag name —
+ * because two runs on different deploys could have the SAME flag name resolve to different
+ * effective values (e.g. `isRerankerConfigured()` depends on whether COHERE_API_KEY happens to be
+ * set), and it is the resolved value that determines behavior.
+ */
+export const runtimeConfigSchema = z.object({
+  /** `input.useValidator ?? false` — off by default everywhere, including prod chat. */
+  useValidator: z.boolean(),
+  /** `BEX_EARLY_DECLINE_GATE_ENABLED !== 'false'`. */
+  earlyDeclineGateEnabled: z.boolean(),
+  /** `BEX_AI_SDK_GENERATION_ENABLED === 'true'` — selects the AI SDK vs Responses generation runtime. */
+  aiSdkGenerationEnabled: z.boolean(),
+  /**
+   * Whether cross-encoder reranking actually ran this turn's retrieval, i.e.
+   * `BEX_PRODUCT_SUPPORT_RERANKER !== 'false'` AND `isRerankerConfigured()` (COHERE_API_KEY
+   * present). NOT the same as the generic `ENABLE_RERANKER` env var named in the ticket's starting
+   * list — verified against the live code that this workflow always passes an explicit
+   * `useReranker`, so the product-support retrieval path never actually reads `ENABLE_RERANKER`.
+   */
+  rerankerActive: z.boolean(),
+  /** `BEX_DISABLE_CONFIDENCE_GATING === 'true'` — the B0-452 master confidence-gate kill switch. */
+  confidenceGatingDisabled: z.boolean(),
+  /** The agent mode this run actually executed under. */
+  agentMode: z.string(),
+  /** `agentMode !== 'orchestrator'` — an admin forced direct routing, bypassing the router. */
+  routedDirectly: z.boolean(),
+});
+
+export type RuntimeConfig = z.infer<typeof runtimeConfigSchema>;
+
+/**
+ * B0-494 — per-gate activation state, distinct from the B0-391 `GateRecord` (which records WHAT a
+ * gate that ran decided). This records WHETHER it ran at all, and if not, why:
+ * - `ran` — the gate evaluated this turn (whatever its verdict).
+ * - `skipped` — disabled by a flag entirely; never evaluated. Never rendered as passing, and never
+ *   carries thresholds (extends the B0-396 "omit a gate that didn't run" rule to the disabled case).
+ * - `bypassed` — the gate (or its cap) DID evaluate/detect something, but the B0-452 kill switch
+ *   suppressed the effect (an unenforced cap/rejection is fiction if reported as if it capped).
+ * - `not_applicable` — the gate's own trigger condition never occurred this turn (e.g. no
+ *   usage/safety-shaped question, or no cross-reference post-processing) — distinct from `skipped`.
+ */
+export const gateActivationStateSchema = z.enum(['ran', 'skipped', 'bypassed', 'not_applicable']);
+
+export const gateActivationRecordSchema = z.object({
+  state: gateActivationStateSchema,
+  /** e.g. `'disabled_by_flag'`, `'confidence_gating_disabled'`. Absent when `state === 'ran'`. */
+  reason: z.string().max(256).optional(),
+});
+
+export type GateActivationRecord = z.infer<typeof gateActivationRecordSchema>;
+
+export const activeGatesSchema = z.object({
+  validator: gateActivationRecordSchema,
+  earlyDeclineGate: gateActivationRecordSchema,
+  usageSafetyCoverage: gateActivationRecordSchema,
+  regulatedClaimGuardrail: gateActivationRecordSchema,
+  recommendationConfidence: gateActivationRecordSchema,
+});
+
+export type ActiveGates = z.infer<typeof activeGatesSchema>;
+
 export const productSupportFinalOutputSchema = z.object({
   answerText: z.string(),
   sources: z
@@ -407,6 +471,18 @@ export const productSupportFinalOutputSchema = z.object({
   confidencePreCapValue: z.number().min(0).max(1).nullable().optional(),
   /** B0-492 — the provenance of `confidencePreCapValue`, when present. */
   confidencePreCapProvenance: confidenceProvenanceSchema.nullable().optional(),
+  /**
+   * B0-494 — the resolved value of every behavior switch this run observed. Absent on historical
+   * payloads written before this ticket (readers must render those as unknown, never
+   * fully-enabled — see `resolveRuntimeConfig`).
+   */
+  runtimeConfig: runtimeConfigSchema.optional(),
+  /**
+   * B0-494 — per-gate activation state (ran / skipped-by-flag / bypassed-by-kill-switch /
+   * not-applicable-this-turn). Absent on historical payloads for the same reason as
+   * `runtimeConfig`.
+   */
+  activeGates: activeGatesSchema.optional(),
 });
 
 export type ProductSupportFinalOutput = z.infer<typeof productSupportFinalOutputSchema>;

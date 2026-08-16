@@ -5,6 +5,7 @@ import { authOptions } from '~/lib/auth';
 import { PERMISSIONS } from '~/lib/permissions/constants';
 import { gateRoute } from '~/lib/permissions/route-gate';
 import {
+  anyResultItemHasConfidenceGatingDisabled,
   computeAvgJudgmentConfidenceForResult,
   computeAvgSimilarityForResult,
   getTestById,
@@ -69,11 +70,25 @@ export async function GET(
   const confidence_floor = test.confidence_floor;
 
   const similarity_ok = avg_similarity !== null ? avg_similarity >= similarity_floor : null;
-  // Confidence gate only applies to full-mode agent runs, and only when there is at least one
-  // judgment-provenance item to average — a run with zero `validator_judged` items (e.g.
-  // `useValidator` never enabled) must not silently pass or fail this gate on an empty population.
+
+  /**
+   * B0-494 — a run executed with the B0-452 kill switch on has FICTIONAL confidence caps (the
+   * gate detected something but was told not to act), so it must never silently satisfy
+   * `confidence_floor`. Checked before deciding `confidence_ok` so this can force it to null
+   * regardless of what `avg_confidence` happens to compute to.
+   */
+  const confidence_gating_disabled_for_any_item =
+    await anyResultItemHasConfidenceGatingDisabled(run.id);
+
+  // Confidence gate only applies to full-mode agent runs, only when there is at least one
+  // judgment-provenance item to average (a run with zero `validator_judged` items must not
+  // silently pass or fail on an empty population), and never when any item ran with confidence
+  // gating disabled.
   const confidence_ok =
-    run.run_mode === 'full' && avg_confidence !== null && confidence_population !== 'none'
+    run.run_mode === 'full' &&
+    avg_confidence !== null &&
+    confidence_population !== 'none' &&
+    !confidence_gating_disabled_for_any_item
       ? avg_confidence >= confidence_floor
       : null;
 
@@ -97,5 +112,8 @@ export async function GET(
     // B0-492 — which population `avg_confidence` was averaged over, and how many items.
     confidence_population,
     confidence_item_count,
+    // B0-494 — true when any item in this run executed with BEX_DISABLE_CONFIDENCE_GATING on;
+    // when true, `confidence_ok` is forced to null above regardless of `avg_confidence`.
+    confidence_gating_disabled_for_any_item,
   });
 }
