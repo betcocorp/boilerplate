@@ -840,6 +840,56 @@ export type Database = {
         }
         Relationships: []
       }
+      product_alias_conflicts: {
+        Row: {
+          alias: string | null
+          alias_norm: string | null
+          alias_type: string | null
+          confidence: number | null
+          created_at: string | null
+          entity_id: string | null
+          product_line_key: string | null
+          reviewed_at: string | null
+          reviewed_by: string | null
+          source: string | null
+          verified: boolean | null
+        }
+        Insert: {
+          alias?: string | null
+          alias_norm?: string | null
+          alias_type?: string | null
+          confidence?: number | null
+          created_at?: string | null
+          entity_id?: string | null
+          product_line_key?: string | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          source?: string | null
+          verified?: boolean | null
+        }
+        Update: {
+          alias?: string | null
+          alias_norm?: string | null
+          alias_type?: string | null
+          confidence?: number | null
+          created_at?: string | null
+          entity_id?: string | null
+          product_line_key?: string | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          source?: string | null
+          verified?: boolean | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_alias_entity_id_fkey"
+            columns: ["entity_id"]
+            isOneToOne: false
+            referencedRelation: "entity"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       suspect_sds_documents: {
         Row: {
           body_text_length: number | null
@@ -1039,6 +1089,23 @@ export type Database = {
           sku: string
           source_pk: string
           token_count: number
+        }[]
+      }
+      match_product_alias_fuzzy: {
+        Args: {
+          max_results?: number
+          query: string
+          similarity_threshold?: number
+        }
+        Returns: {
+          alias: string
+          alias_norm: string
+          alias_type: string
+          confidence: number
+          entity_id: string
+          product_line_key: string
+          similarity: number
+          verified: boolean
         }[]
       }
       match_product_chunks: {
