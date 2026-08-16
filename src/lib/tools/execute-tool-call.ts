@@ -4,6 +4,7 @@ import { buildModelToolPayload } from '~/lib/tools/model-tool-payload';
 import { executeProductTool } from '~/lib/tools/product-tools';
 
 import type { ToolCallOrigin, ToolTraceEntry } from '~/lib/audit/trace';
+import type { AuditContext } from '~/lib/audit/audit-log';
 
 function isProductTool(name: string): name is ProductToolName {
   return (PRODUCT_TOOL_NAMES as readonly string[]).includes(name);
@@ -75,6 +76,10 @@ export async function executeToolCall(input: {
   callId: string;
   /** B0-390 — why this call happened; defaults to a model-chosen call. */
   origin?: ToolCallOrigin;
+  /** B0-488 — the calling workflow's audit context (traceId/workflowRunId/...), so
+   * `executeProductTool` can log an alias-resolution hit. Undefined for callers with no run
+   * context (e.g. unit tests) — the call still executes, only that logging is skipped. */
+  auditCtx?: AuditContext;
 }): Promise<ExecutedToolCall> {
   const started = Date.now();
   let args: unknown;
@@ -106,7 +111,7 @@ export async function executeToolCall(input: {
       return { output: msg, trace: traceFor(msg, false) };
     }
 
-    const payload = await executeProductTool(input.name, args);
+    const payload = await executeProductTool(input.name, args, input.auditCtx);
     const out = JSON.stringify(payload);
 
     // B0-437 — only carry a model variant when it is actually smaller; an equal-size variant would

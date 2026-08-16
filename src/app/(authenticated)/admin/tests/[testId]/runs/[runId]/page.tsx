@@ -17,6 +17,7 @@ import {
 import { RunItemResultsCsvDownload } from '~/components/admin/tests/RunItemResultsCsvDownload';
 import { RunReportButton } from '~/components/admin/tests/RunReportButton';
 import { RoutingAccuracyBoard } from '~/components/admin/tests/RoutingAccuracyBoard';
+import { AliasResolutionPanel } from '~/components/admin/tests/AliasResolutionPanel';
 import { RunToolRoutingPanel } from '~/components/admin/tests/RunToolRoutingPanel';
 import { PromptBundleVersionBadge } from '~/components/admin/tests/PromptBundleVersionBadge';
 import {
@@ -75,6 +76,7 @@ import {
   extractExpectedTool,
   parseAgentStepToolTrace,
 } from '~/lib/tests/tool-routing';
+import { computeAliasResolutionReport } from '~/lib/tests/alias-routing';
 import { isCompletedRunStatus } from '~/lib/tests/types';
 import { formatDate, formatDurationSeconds } from '~/lib/utils/time';
 import { shortHash } from '~/lib/workflows/product-support/prompt-version';
@@ -297,6 +299,17 @@ export default async function AdminTestRunDetailsPage({
   );
 
   /**
+   * B0-488 — alias-resolution hit-rate report, reusing the SAME `toolTraceByWorkflowRunId` join
+   * the tool-routing report above already built (no extra `workflow_steps` fetch).
+   */
+  const aliasResolutionReport = computeAliasResolutionReport(
+    resultItems.map((row) => {
+      const workflowRunId = workflowRunIdByResultItemId.get(row.id) ?? null;
+      return workflowRunId ? (toolTraceByWorkflowRunId.get(workflowRunId) ?? null) : null;
+    }),
+  );
+
+  /**
    * B0-502 — RoutingAccuracyBoard data. `keyword_route`/`llm_route`/`routing_confidence`/
    * `intended_agent_label` are plain columns on `test_result_items` (B0-500/501), already present on
    * `resultItems` (`select('*')` above) — no extra fetch needed, unlike the tool-routing report above
@@ -505,6 +518,8 @@ export default async function AdminTestRunDetailsPage({
         />
 
         <RunToolRoutingPanel report={toolRoutingReport} testId={test.id} />
+
+        <AliasResolutionPanel report={aliasResolutionReport} />
 
         <RoutingAccuracyBoard
           ambiguousRates={ambiguousRates}

@@ -1646,7 +1646,7 @@ export async function runProductSupportWorkflow(input: {
         forcedToolChoiceConsumed = true;
       }
 
-      const out = await executeToolCall({ name, argumentsJson, callId, origin });
+      const out = await executeToolCall({ name, argumentsJson, callId, origin, auditCtx: wfCtx });
       // B0-436 — the marker travels on the persisted trace as well as the audit row, so an
       // `/admin/observability` timeline shows which retrieval the model did not ask for.
       const trace: ToolTraceEntry = speculative
@@ -2044,6 +2044,7 @@ export async function runProductSupportWorkflow(input: {
         callId: `forced-search-${Date.now()}`,
         // B0-390 — executed by the workflow, not chosen by the model.
         origin: 'workflow_injected',
+        auditCtx: wfCtx,
       });
       resolvedToolTrace.push(enforcedSearch.trace);
       toolOutputLog.push({

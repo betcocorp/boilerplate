@@ -11,11 +11,15 @@ import {
   renderEfficacyLabReportCitation,
 } from '~/lib/retrieval/efficacy-lab-report';
 import { VERIFIED_FACTS_SOURCE_ID } from '~/lib/rag/document-chunk-types';
-import { resolveProductEntityByName } from '~/lib/rag/entity-context';
+import {
+  resolveProductEntityByName,
+  type ProductEntityResolutionResult,
+} from '~/lib/rag/entity-context';
 import {
   inferSectionTypeFromQuery,
   inferSectionTypeFromToolName,
 } from '~/lib/rag/section-type-inference';
+import { writeAuditLog, type AuditContext } from '~/lib/audit/audit-log';
 
 import {
   findProductsByCategoryInputSchema,
@@ -40,6 +44,87 @@ import { routeCategoryQuery } from '~/lib/category/category-router';
 import { runCrossReferenceRecommendation } from '~/lib/recommendations/persist-recommendation';
 
 const ADAPTER_TAG = 'rag_corpus_full_document' as const;
+
+/**
+ * B0-488 — the eval-harness / audit-log outcome taxonomy for `rag.product_alias` resolution,
+ * distinct from `ProductEntityResolutionSource` (which also names the non-alias legacy fallback
+ * tiers, `prod_line_id`/`title_exact`/`title_fuzzy`). `alias_fuzzy` here covers BOTH the tokenized
+ * (`alias_fuzzy`) and trigram-RPC (`alias_fuzzy_trgm`) tiers — the ticket's outcome categories
+ * don't split those further.
+ */
+export type AliasResolutionOutcome = 'alias_exact' | 'alias_fuzzy' | 'no_alias_match' | 'ambiguous_alias';
+
+/**
+ * Per-call alias-resolution telemetry, attached near the front of every product-tool's JSON
+ * payload (see `resolveProductEntityWithAliasTelemetry` below) so it survives the 4,000-char
+ * `outputPreview` truncation applied when the call is persisted onto the workflow's tool trace
+ * (`~/lib/tools/execute-tool-call.ts`) — `~/lib/tests/alias-routing.ts` reads it back from there
+ * for the `/admin/tests` hit-rate metric.
+ */
+export type AliasResolutionTelemetry = {
+  /** False when the caller passed an empty/whitespace-only name — nothing was attempted. */
+  attempted: boolean;
+  /** Null only when `attempted` is false. */
+  outcome: AliasResolutionOutcome | null;
+};
+
+function classifyAliasResolutionOutcome(
+  resolution: Pick<ProductEntityResolutionResult, 'resolutionSource' | 'ambiguousAlias'>,
+): AliasResolutionOutcome {
+  if (resolution.resolutionSource === 'alias_exact') {
+    return 'alias_exact';
+  }
+  if (resolution.resolutionSource === 'alias_fuzzy' || resolution.resolutionSource === 'alias_fuzzy_trgm') {
+    return 'alias_fuzzy';
+  }
+  if (resolution.ambiguousAlias) {
+    return 'ambiguous_alias';
+  }
+  return 'no_alias_match';
+}
+
+/**
+ * B0-488 — wraps `resolveProductEntityByName` for every product-tool call site: attaches the
+ * `AliasResolutionTelemetry` returned to the model/harness, and — on an actual alias hit (exact or
+ * fuzzy) — writes an `audit_logs` row via the existing `writeAuditLog` helper.
+ *
+ * Logged here, not inside `~/lib/rag/entity-context.ts`: that module is a low-level DB helper with
+ * no `AuditContext` (traceId/workflowRunId) in scope, called from several places. This call site
+ * (reached via `executeToolCall` <- the `executeTool` closure in
+ * `~/lib/workflows/product-support/run-product-support-workflow.ts`) does have one, threaded down
+ * as `auditCtx`.
+ *
+ * Uses the immediate `writeAuditLog` helper rather than that workflow's `AuditLogQueue`: the queue
+ * instance lives inside the workflow's closure and isn't threaded this far down, and an alias hit
+ * is relatively rare (most tool calls carry no explicit product name at all), so the extra insert
+ * latency only lands on that minority hit path, not on every tool call.
+ */
+async function resolveProductEntityWithAliasTelemetry(
+  nameOrId: string,
+  toolName: string,
+  auditCtx: AuditContext | undefined,
+): Promise<ProductEntityResolutionResult & { aliasResolution: AliasResolutionTelemetry }> {
+  const resolution = await resolveProductEntityByName(nameOrId);
+  const attempted = nameOrId.trim().length > 0;
+  const outcome = attempted ? classifyAliasResolutionOutcome(resolution) : null;
+
+  if (attempted && auditCtx && (outcome === 'alias_exact' || outcome === 'alias_fuzzy')) {
+    await writeAuditLog(
+      'alias_resolution_hit',
+      {
+        query: nameOrId,
+        resolution_source: resolution.resolutionSource,
+        matched_alias_id: resolution.matchedAliasId,
+        matched_alias_confidence: resolution.matchedAliasConfidence,
+        product_line_key: resolution.productLineKey,
+        product_key: resolution.productKey,
+      },
+      { ...auditCtx, toolName },
+    );
+  }
+
+  return { ...resolution, aliasResolution: { attempted, outcome } };
+}
 
 /**
  * Each "source" is a full document (assembled from all its chunks). The model is
@@ -168,14 +253,19 @@ function classifyRetrievalIntent(
 export async function executeProductTool(
   name: ProductToolName,
   args: unknown,
+  /** B0-488: threaded from `executeToolCall` (which run-product-support-workflow.ts's `executeTool`
+   * closure calls with its `wfCtx`), so an alias-resolution hit can be audit-logged. Undefined for
+   * callers that don't have one (e.g. unit tests) — alias-resolution telemetry is still attached to
+   * the returned payload, only the audit-log write is skipped. */
+  auditCtx?: AuditContext,
 ): Promise<Record<string, unknown>> {
   switch (name) {
     case 'search_product_docs': {
       const p = searchProductDocsInputSchema.parse(args);
       const q = (p.freeformQuery?.trim() || [p.productName, p.topic, p.surfaceType].filter(Boolean).join(' ')).trim();
       const resolvedProductName = p.freeformQuery?.trim() ? '' : (p.productName || '');
-      const [{ productLineKey, productKey, resolutionSource }, sectionType] = await Promise.all([
-        resolveProductEntityByName(resolvedProductName),
+      const [{ productLineKey, productKey, resolutionSource, aliasResolution }, sectionType] = await Promise.all([
+        resolveProductEntityWithAliasTelemetry(resolvedProductName, name, auditCtx),
         Promise.resolve(inferSectionTypeFromQuery(q)),
       ]);
       const intent = classifyRetrievalIntent(q, resolvedProductName);
@@ -192,6 +282,7 @@ export async function executeProductTool(
       return {
         ok: true,
         adapter: ADAPTER_TAG,
+        aliasResolution,
         query: q,
         // B0-460 — read back by `buildModelToolPayload` (`~/lib/tools/model-tool-payload`) to decide
         // whether a `product_line_profile` source's "Size and package variants" section stays
@@ -206,7 +297,8 @@ export async function executeProductTool(
     case 'get_product_spec': {
       const p = getProductSpecInputSchema.parse(args);
       const q = `${p.productId} specifications technical datasheet performance`;
-      const { productLineKey, productKey, resolutionSource } = await resolveProductEntityByName(p.productId);
+      const { productLineKey, productKey, resolutionSource, aliasResolution } =
+        await resolveProductEntityWithAliasTelemetry(p.productId, name, auditCtx);
       const result = await ragQueryForProductKnowledgeWithMeta({
         query: q,
         productLineKey,
@@ -217,6 +309,7 @@ export async function executeProductTool(
       return {
         ok: true,
         adapter: ADAPTER_TAG,
+        aliasResolution,
         productId: p.productId,
         entityContextBlock: result.entityContextBlock,
         sources: sourcePayload(result),
@@ -225,7 +318,8 @@ export async function executeProductTool(
     }
     case 'get_approved_usage_guidance': {
       const p = getApprovedUsageGuidanceInputSchema.parse(args);
-      const { productLineKey, productKey, resolutionSource } = await resolveProductEntityByName(p.productId);
+      const { productLineKey, productKey, resolutionSource, aliasResolution } =
+        await resolveProductEntityWithAliasTelemetry(p.productId, name, auditCtx);
       const sectionType = inferSectionTypeFromToolName('get_approved_usage_guidance');
       const result = await retrieveApprovedUsage({
         ...p,
@@ -237,6 +331,7 @@ export async function executeProductTool(
       return {
         ok: true,
         adapter: ADAPTER_TAG,
+        aliasResolution,
         productId: p.productId,
         task: p.task,
         surfaceType: p.surfaceType,
@@ -248,8 +343,8 @@ export async function executeProductTool(
     }
     case 'get_safety_constraints': {
       const p = getSafetyConstraintsInputSchema.parse(args);
-      const [{ productLineKey, productKey, resolutionSource }, sectionType] = await Promise.all([
-        resolveProductEntityByName(p.productId),
+      const [{ productLineKey, productKey, resolutionSource, aliasResolution }, sectionType] = await Promise.all([
+        resolveProductEntityWithAliasTelemetry(p.productId, name, auditCtx),
         Promise.resolve(
           inferSectionTypeFromQuery(`${p.productId} safety hazards PPE SDS precautions first aid`),
         ),
@@ -264,6 +359,7 @@ export async function executeProductTool(
       return {
         ok: true,
         adapter: ADAPTER_TAG,
+        aliasResolution,
         productId: p.productId,
         entityContextBlock: result.entityContextBlock,
         sources: sourcePayload(result),
@@ -272,7 +368,8 @@ export async function executeProductTool(
     }
     case 'get_compatibility_rules': {
       const p = getCompatibilityRulesInputSchema.parse(args);
-      const { productLineKey, productKey, resolutionSource } = await resolveProductEntityByName(p.productId);
+      const { productLineKey, productKey, resolutionSource, aliasResolution } =
+        await resolveProductEntityWithAliasTelemetry(p.productId, name, auditCtx);
       const sectionType = inferSectionTypeFromToolName('get_compatibility_rules');
       const result = await retrieveCompatibility({
         ...p,
@@ -284,6 +381,7 @@ export async function executeProductTool(
       return {
         ok: true,
         adapter: ADAPTER_TAG,
+        aliasResolution,
         productId: p.productId,
         surfaceType: p.surfaceType,
         materialType: p.materialType ?? null,
@@ -294,7 +392,8 @@ export async function executeProductTool(
     }
     case 'list_allowed_surfaces': {
       const p = listAllowedSurfacesInputSchema.parse(args);
-      const { productLineKey, productKey, resolutionSource } = await resolveProductEntityByName(p.productId);
+      const { productLineKey, productKey, resolutionSource, aliasResolution } =
+        await resolveProductEntityWithAliasTelemetry(p.productId, name, auditCtx);
       const sectionType = inferSectionTypeFromToolName('list_allowed_surfaces');
       const result = await retrieveSurfacesLists({
         productId: p.productId,
@@ -307,6 +406,7 @@ export async function executeProductTool(
       return {
         ok: true,
         adapter: ADAPTER_TAG,
+        aliasResolution,
         productId: p.productId,
         entityContextBlock: result.entityContextBlock,
         sources: sourcePayload(result),
@@ -315,7 +415,8 @@ export async function executeProductTool(
     }
     case 'list_disallowed_uses': {
       const p = listDisallowedUsesInputSchema.parse(args);
-      const { productLineKey, productKey, resolutionSource } = await resolveProductEntityByName(p.productId);
+      const { productLineKey, productKey, resolutionSource, aliasResolution } =
+        await resolveProductEntityWithAliasTelemetry(p.productId, name, auditCtx);
       const sectionType = inferSectionTypeFromToolName('list_disallowed_uses');
       const result = await retrieveSurfacesLists({
         productId: p.productId,
@@ -328,6 +429,7 @@ export async function executeProductTool(
       return {
         ok: true,
         adapter: ADAPTER_TAG,
+        aliasResolution,
         productId: p.productId,
         entityContextBlock: result.entityContextBlock,
         sources: sourcePayload(result),
@@ -410,7 +512,11 @@ export async function executeProductTool(
     case 'get_efficacy_data': {
       const p = getEfficacyDataInputSchema.parse(args);
       // Out of scope for B0-250: fact/efficacy lookups key on product_line_key only.
-      const { productLineKey } = await resolveProductEntityByName(p.productId);
+      const { productLineKey, aliasResolution } = await resolveProductEntityWithAliasTelemetry(
+        p.productId,
+        name,
+        auditCtx,
+      );
       const [facts, labReport] = productLineKey
         ? await Promise.all([
             fetchFactsForProductLineKey(productLineKey, p.organism),
@@ -422,6 +528,7 @@ export async function executeProductTool(
         return {
           ok: true,
           adapter: 'structured_facts_v1',
+          aliasResolution,
           productId: p.productId,
           organism: p.organism ?? null,
           facts: null,
@@ -479,6 +586,7 @@ export async function executeProductTool(
       return {
         ok: true,
         adapter: 'structured_facts_v1',
+        aliasResolution,
         productId: p.productId,
         productLineKey,
         organism: p.organism ?? null,

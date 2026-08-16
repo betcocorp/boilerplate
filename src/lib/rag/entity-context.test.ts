@@ -23,6 +23,10 @@ type ProductAliasRow = {
   entity_id: string | null;
   product_line_key: string | null;
   verified?: boolean;
+  /** B0-488: only asserted where a test cares about the matched-row id/confidence surfaced on
+   * `resolveProductEntityByName`'s return value. */
+  id?: string;
+  confidence?: number;
 };
 
 /** Shape of a row returned by the `rag.match_product_alias_fuzzy` RPC (B0-482). */
@@ -131,7 +135,14 @@ beforeEach(() => {
 describe('resolveProductEntityByName — exact alias_norm match (B0-200)', () => {
   it('returns the alias row product_line_key and, for a SKU-tier entity, its product_key', async () => {
     productAliasRows = [
-      { alias_norm: 'zorbex', alias: 'Zorbex', entity_id: 'ent-1', product_line_key: 'line-1' },
+      {
+        alias_norm: 'zorbex',
+        alias: 'Zorbex',
+        entity_id: 'ent-1',
+        product_line_key: 'line-1',
+        id: 'alias-1',
+        confidence: 0.95,
+      },
     ];
     entityRows = [{ id: 'ent-1', entity_type: 'product', product_key: 'sku-1' }];
 
@@ -141,6 +152,9 @@ describe('resolveProductEntityByName — exact alias_norm match (B0-200)', () =>
       productLineKey: 'line-1',
       productKey: 'sku-1',
       resolutionSource: 'alias_exact',
+      ambiguousAlias: false,
+      matchedAliasId: 'alias-1',
+      matchedAliasConfidence: 0.95,
     });
   });
 
@@ -184,6 +198,9 @@ describe('resolveProductEntityByName — legacy fallback behavior unchanged when
       productLineKey: 'line-2',
       productKey: null,
       resolutionSource: 'prod_line_id',
+      ambiguousAlias: false,
+      matchedAliasId: null,
+      matchedAliasConfidence: null,
     });
   });
 
@@ -204,6 +221,9 @@ describe('resolveProductEntityByName — legacy fallback behavior unchanged when
       productLineKey: 'line-3',
       productKey: null,
       resolutionSource: 'title_exact',
+      ambiguousAlias: false,
+      matchedAliasId: null,
+      matchedAliasConfidence: null,
     });
   });
 
@@ -213,7 +233,14 @@ describe('resolveProductEntityByName — legacy fallback behavior unchanged when
 
     const result = await resolveProductEntityByName('Totally Unknown Product Name');
 
-    expect(result).toEqual({ productLineKey: null, productKey: null, resolutionSource: null });
+    expect(result).toEqual({
+      productLineKey: null,
+      productKey: null,
+      resolutionSource: null,
+      ambiguousAlias: false,
+      matchedAliasId: null,
+      matchedAliasConfidence: null,
+    });
   });
 });
 
@@ -225,6 +252,8 @@ describe('resolveProductEntityByName — tokenized fuzzy alias fallback (B0-272)
         alias: 'GE Fight BacT RTU Disinfectant',
         entity_id: 'ent-4',
         product_line_key: 'line-4',
+        id: 'alias-4',
+        confidence: 0.8,
       },
     ];
     // ent-4 is a product_line-tier entity (not "product"), so productKey stays null.
@@ -236,21 +265,32 @@ describe('resolveProductEntityByName — tokenized fuzzy alias fallback (B0-272)
       productLineKey: 'line-4',
       productKey: null,
       resolutionSource: 'alias_fuzzy',
+      ambiguousAlias: false,
+      matchedAliasId: 'alias-4',
+      matchedAliasConfidence: 0.8,
     });
   });
 
-  it('returns null instead of guessing when tokens match aliases across multiple product lines', async () => {
+  it('returns null instead of guessing when tokens match aliases across multiple product lines (ambiguous alias, B0-488)', async () => {
     productAliasRows = [
       { alias_norm: 'foo bar baz alpha', alias: 'Foo Bar Baz Alpha', entity_id: 'ent-5', product_line_key: 'line-5' },
       { alias_norm: 'foo bar baz beta', alias: 'Foo Bar Baz Beta', entity_id: 'ent-6', product_line_key: 'line-6' },
     ];
     // No entity titles match either, so the legacy fallbacks also can't resolve this — the
-    // ambiguity must surface as null, not a guess.
+    // ambiguity must surface as null, not a guess, with `ambiguousAlias: true` distinguishing it
+    // from a genuine no-match.
     entityRows = [];
 
     const result = await resolveProductEntityByName('Foo Bar Baz');
 
-    expect(result).toEqual({ productLineKey: null, productKey: null, resolutionSource: null });
+    expect(result).toEqual({
+      productLineKey: null,
+      productKey: null,
+      resolutionSource: null,
+      ambiguousAlias: true,
+      matchedAliasId: null,
+      matchedAliasConfidence: null,
+    });
   });
 });
 
@@ -260,17 +300,32 @@ describe('resolveProductEntityByName — exact alias_norm match spanning multipl
     // legal shape: a US variant (verified via trusted legacy backfill) and an unverified,
     // not-yet-reviewed Canada alias sharing the same display name.
     productAliasRows = [
-      { alias_norm: 'zorbex', alias: 'Zorbex', entity_id: 'ent-us', product_line_key: 'line-us', verified: true },
+      {
+        alias_norm: 'zorbex',
+        alias: 'Zorbex',
+        entity_id: 'ent-us',
+        product_line_key: 'line-us',
+        verified: true,
+        id: 'alias-us',
+        confidence: 1,
+      },
       { alias_norm: 'zorbex', alias: 'Zorbex', entity_id: 'ent-ca', product_line_key: 'line-ca', verified: false },
     ];
     entityRows = [{ id: 'ent-us', entity_type: 'product_line', product_line_key: 'line-us' }];
 
     const result = await resolveProductEntityByName('Zorbex');
 
-    expect(result).toEqual({ productLineKey: 'line-us', productKey: null, resolutionSource: 'alias_exact' });
+    expect(result).toEqual({
+      productLineKey: 'line-us',
+      productKey: null,
+      resolutionSource: 'alias_exact',
+      ambiguousAlias: false,
+      matchedAliasId: 'alias-us',
+      matchedAliasConfidence: 1,
+    });
   });
 
-  it('returns null when the exact alias_norm spans multiple product lines and none is verified', async () => {
+  it('returns null when the exact alias_norm spans multiple product lines and none is verified (ambiguous alias, B0-488)', async () => {
     productAliasRows = [
       { alias_norm: 'zorbex', alias: 'Zorbex', entity_id: 'ent-us', product_line_key: 'line-us', verified: false },
       { alias_norm: 'zorbex', alias: 'Zorbex', entity_id: 'ent-ca', product_line_key: 'line-ca', verified: false },
@@ -279,10 +334,17 @@ describe('resolveProductEntityByName — exact alias_norm match spanning multipl
 
     const result = await resolveProductEntityByName('Zorbex');
 
-    expect(result).toEqual({ productLineKey: null, productKey: null, resolutionSource: null });
+    expect(result).toEqual({
+      productLineKey: null,
+      productKey: null,
+      resolutionSource: null,
+      ambiguousAlias: true,
+      matchedAliasId: null,
+      matchedAliasConfidence: null,
+    });
   });
 
-  it('returns null when the exact alias_norm spans multiple product lines and more than one is verified', async () => {
+  it('returns null when the exact alias_norm spans multiple product lines and more than one is verified (ambiguous alias, B0-488)', async () => {
     productAliasRows = [
       { alias_norm: 'zorbex', alias: 'Zorbex', entity_id: 'ent-us', product_line_key: 'line-us', verified: true },
       { alias_norm: 'zorbex', alias: 'Zorbex', entity_id: 'ent-ca', product_line_key: 'line-ca', verified: true },
@@ -291,7 +353,14 @@ describe('resolveProductEntityByName — exact alias_norm match spanning multipl
 
     const result = await resolveProductEntityByName('Zorbex');
 
-    expect(result).toEqual({ productLineKey: null, productKey: null, resolutionSource: null });
+    expect(result).toEqual({
+      productLineKey: null,
+      productKey: null,
+      resolutionSource: null,
+      ambiguousAlias: true,
+      matchedAliasId: null,
+      matchedAliasConfidence: null,
+    });
   });
 });
 
@@ -325,10 +394,18 @@ describe('resolveProductEntityByName — trigram fuzzy alias RPC fallback (B0-48
     // falls through to the fuzzy RPC tier.
     const result = await resolveProductEntityByName('acrylic polymer flor finish');
 
-    expect(result).toEqual({ productLineKey: 'line-7', productKey: null, resolutionSource: 'alias_fuzzy_trgm' });
+    expect(result).toEqual({
+      productLineKey: 'line-7',
+      productKey: null,
+      resolutionSource: 'alias_fuzzy_trgm',
+      ambiguousAlias: false,
+      // The RPC never returns the alias row id.
+      matchedAliasId: null,
+      matchedAliasConfidence: 0.9,
+    });
   });
 
-  it('returns null when top-scoring fuzzy candidates within the ambiguity margin span multiple product lines with no single verified winner', async () => {
+  it('returns null when top-scoring fuzzy candidates within the ambiguity margin span multiple product lines with no single verified winner (ambiguous alias, B0-488)', async () => {
     fuzzyTrgmRpcRows = [
       {
         alias_norm: 'alcohol foaming hand sanitizer',
@@ -355,7 +432,14 @@ describe('resolveProductEntityByName — trigram fuzzy alias RPC fallback (B0-48
 
     const result = await resolveProductEntityByName('alcohol foming hand sanitizer');
 
-    expect(result).toEqual({ productLineKey: null, productKey: null, resolutionSource: null });
+    expect(result).toEqual({
+      productLineKey: null,
+      productKey: null,
+      resolutionSource: null,
+      ambiguousAlias: true,
+      matchedAliasId: null,
+      matchedAliasConfidence: null,
+    });
   });
 
   it('resolves to the single verified candidate when close fuzzy candidates span multiple product lines', async () => {
@@ -385,7 +469,14 @@ describe('resolveProductEntityByName — trigram fuzzy alias RPC fallback (B0-48
 
     const result = await resolveProductEntityByName('alcohol foming hand sanitizer');
 
-    expect(result).toEqual({ productLineKey: 'line-10', productKey: null, resolutionSource: 'alias_fuzzy_trgm' });
+    expect(result).toEqual({
+      productLineKey: 'line-10',
+      productKey: null,
+      resolutionSource: 'alias_fuzzy_trgm',
+      ambiguousAlias: false,
+      matchedAliasId: null,
+      matchedAliasConfidence: 0.9,
+    });
   });
 
   it('does not fire the fuzzy RPC tier when an earlier tier (exact/tokenized alias) already matched', async () => {
@@ -410,6 +501,13 @@ describe('resolveProductEntityByName — trigram fuzzy alias RPC fallback (B0-48
 
     const result = await resolveProductEntityByName('Zorbex');
 
-    expect(result).toEqual({ productLineKey: 'line-1', productKey: 'sku-1', resolutionSource: 'alias_exact' });
+    expect(result).toEqual({
+      productLineKey: 'line-1',
+      productKey: 'sku-1',
+      resolutionSource: 'alias_exact',
+      ambiguousAlias: false,
+      matchedAliasId: null,
+      matchedAliasConfidence: null,
+    });
   });
 });
