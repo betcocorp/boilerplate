@@ -142,12 +142,43 @@ export const recommendCrossReferenceInputSchema = z.object({
   maxResults: z.number().int().min(1).max(10).optional(),
 });
 
+/** B0-549: cap on how many product lines a single batch `get_efficacy_data` call resolves —
+ * generous enough to collapse the worst observed case (27 sequential single-product calls in one
+ * turn) into one call, while still bounding the fan-out of per-product lab-report lookups. */
+export const EFFICACY_BATCH_MAX_PRODUCTS = 30;
+
 export const getEfficacyDataInputSchema = z
   .object({
     ...productRefShape,
+    /**
+     * B0-549 — batch form: verified dilution/efficacy facts for SEVERAL product lines in one
+     * call, instead of one `get_efficacy_data` call per product. Provide this OR
+     * `productId`/`productName` (not required together) — when both `productIds` and `category`
+     * are omitted, the call behaves exactly as before (single product, unchanged response shape).
+     */
+    productIds: z
+      .array(z.string().min(1).max(256))
+      .min(1)
+      .max(EFFICACY_BATCH_MAX_PRODUCTS)
+      .optional(),
+    /**
+     * B0-549 — batch form: resolve the product-line set from a category name instead of an
+     * explicit `productIds` list (same category resolution as `get_products_in_category`).
+     */
+    category: z.string().min(1).max(256).optional(),
+    categoryLevel: z
+      .enum(['prod_type', 'sub_prod_type', 'sub_child_prod_type', 'prod_class', 'any'])
+      .optional(),
     organism: z.string().max(256).optional(),
   })
-  .refine(hasProductRef, productRefIssue())
+  .refine(
+    (v) => hasProductRef(v) || (v.productIds?.length ?? 0) > 0 || Boolean(v.category?.trim()),
+    {
+      message:
+        'Provide `productId`/`productName` for a single product, or `productIds` (array of names/codes) or `category` for a batch efficacy lookup.',
+      path: ['productId'],
+    },
+  )
   .transform(normalizeProductRef);
 
 export const PRODUCT_TOOL_NAMES = [

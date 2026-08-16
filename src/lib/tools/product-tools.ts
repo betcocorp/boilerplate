@@ -5,10 +5,16 @@ import {
   retrieveSurfacesLists,
 } from '~/lib/retrieval/product-guidance';
 import { ragQueryForProductKnowledgeWithMeta } from '~/lib/retrieval/product-knowledge';
-import { buildFactsBlock, fetchFactsForProductLineKey } from '~/lib/retrieval/product-facts';
+import {
+  buildFactsBlock,
+  fetchFactsForProductLineKey,
+  fetchFactsForProductLineKeys,
+  type ProductLineFacts,
+} from '~/lib/retrieval/product-facts';
 import {
   fetchCurrentEfficacyLabReport,
   renderEfficacyLabReportCitation,
+  type EfficacyLabReportCitation,
 } from '~/lib/retrieval/efficacy-lab-report';
 import { VERIFIED_FACTS_SOURCE_ID } from '~/lib/rag/document-chunk-types';
 import {
@@ -22,6 +28,7 @@ import {
 import { writeAuditLog, type AuditContext } from '~/lib/audit/audit-log';
 
 import {
+  EFFICACY_BATCH_MAX_PRODUCTS,
   findProductsByCategoryInputSchema,
   getApprovedUsageGuidanceInputSchema,
   getCompatibilityRulesInputSchema,
@@ -130,6 +137,14 @@ async function resolveProductEntityWithAliasTelemetry(
  * Each "source" is a full document (assembled from all its chunks). The model is
  * expected to read `documentBody` for grounding and use `snippet` only as a
  * preview / citation hint.
+ *
+ * B0-548: no longer also emits `matchedChunkText` — it duplicated content already in
+ * `documentBody` (or, when body assembly fell back to the single matched chunk, was
+ * byte-identical to it) and had no downstream reader, so it was pure token/storage waste on
+ * the persisted payload (`toolOutputLog`, `outputPreview`). `documentBody` (full grounding
+ * text) and `snippet` (bounded preview persisted for UI citations by
+ * `collectSourcesFromToolOutputs`/`collectSourceMetaFromToolOutputs`) remain distinct and
+ * both still have real consumers.
  */
 function sourcePayload(
   result: Awaited<ReturnType<typeof ragQueryForProductKnowledgeWithMeta>>,
@@ -148,7 +163,6 @@ function sourcePayload(
     // audited after the fact (e.g. confirming a specific label section reached the model
     // vs. was dropped by the per-document truncation cap in assembleDocumentBodies()).
     documentBodyChunkIds: s.documentBodyChunkIds,
-    matchedChunkText: s.matchedChunkText,
     confidence: s.similarity,
     documentKind: s.documentKind,
     productLineKey: s.productLineKey,
@@ -175,7 +189,6 @@ function sourcePayload(
       documentBodyTruncated: false,
       documentBodyTokenEstimate: null,
       documentBodyChunkIds: [VERIFIED_FACTS_SOURCE_ID],
-      matchedChunkText: result.factsBlock,
       confidence: 1,
       documentKind: 'facts',
       productLineKey: null,
@@ -248,6 +261,163 @@ function classifyRetrievalIntent(
     return { limit: 4, maxPerDocument: 2 };
   }
   return {};
+}
+
+/**
+ * B0-549 — resolves a batch `get_efficacy_data` call's product set to a flat list of
+ * name/code identifiers, each still resolved individually via `resolveProductEntityWithAliasTelemetry`
+ * (same alias/fuzzy resolution every other product-tool call goes through — a category lookup only
+ * replaces how the identifier LIST is produced, not how each one is resolved to a product line).
+ */
+async function resolveBatchProductIdentifiers(p: {
+  productIds?: string[];
+  category?: string;
+  categoryLevel?: 'prod_type' | 'sub_prod_type' | 'sub_child_prod_type' | 'prod_class' | 'any';
+}): Promise<string[]> {
+  if (p.productIds && p.productIds.length > 0) {
+    return p.productIds;
+  }
+  if (p.category?.trim()) {
+    const categoryResult = await getProductsInCategory({
+      categoryName: p.category,
+      categoryLevel: p.categoryLevel,
+      maxResults: EFFICACY_BATCH_MAX_PRODUCTS,
+    });
+    return categoryResult.products
+      .map((product) => product.productLineName?.trim() || product.productLineId?.trim() || '')
+      .filter((identifier): identifier is string => identifier.length > 0);
+  }
+  return [];
+}
+
+/**
+ * B0-549 — batch variant of the `get_efficacy_data` single-product path below: collapses what
+ * would otherwise be N sequential `get_efficacy_data` tool calls (worst observed case: 27 in one
+ * turn) into one call. Facts are fetched for every resolved product line in a SINGLE batched query
+ * (`fetchFactsForProductLineKeys`); lab-report citations still require one lookup per product line
+ * (no batched RPC exists for that yet) but those lookups run concurrently via `Promise.all` rather
+ * than sequentially, so wall-clock time tracks the slowest single lookup, not their sum.
+ */
+async function executeBatchEfficacyData(
+  p: {
+    productIds?: string[];
+    category?: string;
+    categoryLevel?: 'prod_type' | 'sub_prod_type' | 'sub_child_prod_type' | 'prod_class' | 'any';
+    organism?: string;
+  },
+  toolName: string,
+  auditCtx: AuditContext | undefined,
+): Promise<Record<string, unknown>> {
+  const identifiers = await resolveBatchProductIdentifiers(p);
+
+  if (identifiers.length === 0) {
+    return {
+      ok: true,
+      adapter: 'structured_facts_batch_v1',
+      batch: true,
+      organism: p.organism ?? null,
+      requestedCount: 0,
+      resolvedCount: 0,
+      results: [],
+      sources: [],
+      note: p.category?.trim()
+        ? `No products found in category "${p.category}".`
+        : 'No product identifiers resolved for this batch call.',
+    };
+  }
+
+  const resolutions = await Promise.all(
+    identifiers.map(async (identifier) => ({
+      identifier,
+      resolution: await resolveProductEntityWithAliasTelemetry(identifier, toolName, auditCtx),
+    })),
+  );
+
+  const productLineKeys = [
+    ...new Set(
+      resolutions
+        .map((r) => r.resolution.productLineKey)
+        .filter((key): key is string => Boolean(key)),
+    ),
+  ];
+
+  const [factsByLineKey, labReportEntries] = await Promise.all([
+    fetchFactsForProductLineKeys(productLineKeys, p.organism),
+    Promise.all(
+      productLineKeys.map(
+        async (key) => [key, await fetchCurrentEfficacyLabReport(key, p.organism)] as const,
+      ),
+    ),
+  ]);
+  const labReportByLineKey = new Map(labReportEntries);
+
+  const sources: Record<string, unknown>[] = [];
+  const results = resolutions.map(({ identifier, resolution }) => {
+    const { productLineKey, aliasResolution } = resolution;
+    const facts: ProductLineFacts | null =
+      (productLineKey && factsByLineKey.get(productLineKey)) || null;
+    const labReport: EfficacyLabReportCitation | null =
+      (productLineKey && labReportByLineKey.get(productLineKey)) || null;
+
+    if (facts) {
+      const factsBlock = buildFactsBlock(
+        new Map([[facts.entityId, facts]]),
+        new Map([[facts.entityId, identifier]]),
+      );
+      if (factsBlock) {
+        // B0-549: each product's facts source needs its own documentId — reusing the single
+        // VERIFIED_FACTS_SOURCE_ID sentinel across every product in the batch would collide under
+        // `collectSourceMetaFromToolOutputs`'s per-documentId dedupe and silently drop every
+        // product but one from the citable evidence.
+        sources.push({
+          documentId: `${VERIFIED_FACTS_SOURCE_ID}:${productLineKey}`,
+          chunkId: `${VERIFIED_FACTS_SOURCE_ID}:${productLineKey}`,
+          title: `Verified Product Facts (structured) — ${identifier}`,
+          snippet: factsBlock.slice(0, 900),
+          documentBody: factsBlock,
+          documentKind: 'facts',
+          confidence: 1,
+        });
+      }
+    }
+
+    if (labReport) {
+      const labReportBlock = renderEfficacyLabReportCitation(labReport);
+      sources.push({
+        documentId: labReport.documentId,
+        chunkId: labReport.documentId,
+        title: labReport.title,
+        snippet: labReportBlock.slice(0, 900),
+        documentBody: labReportBlock,
+        documentKind: 'efficacy',
+        confidence: 1,
+      });
+    }
+
+    return {
+      productId: identifier,
+      productLineKey,
+      aliasResolution,
+      facts,
+      labReport,
+      ...(facts || labReport
+        ? {}
+        : {
+            note: 'No verified dilution/efficacy data on file for this product. Do not estimate or infer a value — tell the user the data is not verified.',
+          }),
+    };
+  });
+
+  return {
+    ok: true,
+    adapter: 'structured_facts_batch_v1',
+    batch: true,
+    organism: p.organism ?? null,
+    requestedCount: identifiers.length,
+    resolvedCount: productLineKeys.length,
+    results,
+    sources,
+  };
 }
 
 export async function executeProductTool(
@@ -511,6 +681,15 @@ export async function executeProductTool(
     }
     case 'get_efficacy_data': {
       const p = getEfficacyDataInputSchema.parse(args);
+
+      // B0-549: batch form — an explicit id list or a category collapses what would otherwise be
+      // N sequential single-product calls into this one. `p.productId` is always `''` (never
+      // undefined, per `normalizeProductRef`) when neither productId nor productName was sent, so
+      // this only branches when the caller actually supplied `productIds`/`category`.
+      if ((p.productIds && p.productIds.length > 0) || p.category?.trim()) {
+        return executeBatchEfficacyData(p, name, auditCtx);
+      }
+
       // Out of scope for B0-250: fact/efficacy lookups key on product_line_key only.
       const { productLineKey, aliasResolution } = await resolveProductEntityWithAliasTelemetry(
         p.productId,

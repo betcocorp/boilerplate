@@ -7,7 +7,8 @@ import {
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 import {
-  assembleDocumentBodies,
+  assembleNeighborChunkBodies,
+  chunkWindowKey,
   fetchDocumentSourceRefs,
   type AssembledDocumentBody,
   type DocumentSourceRef,
@@ -65,9 +66,11 @@ export type CuratedSource = {
    */
   snippet: string;
   /**
-   * Full document body, assembled from every chunk of the parent document and
-   * passed to the LLM as grounding context. May be truncated if the document is
-   * extremely large; in that case `documentBodyTruncated` is true.
+   * Grounding text passed to the LLM. B0-547: assembled from the matched chunk plus
+   * `NEIGHBOR_CHUNK_RADIUS` chunks immediately before/after it in the parent document (NOT the
+   * whole document — see `assembleNeighborChunkBodies`). May still be truncated against the
+   * per-source char budget in the rare case a chunk itself is huge; `documentBodyTruncated`
+   * reflects that.
    */
   documentBody: string;
   documentBodyChars: number;
@@ -77,11 +80,13 @@ export type CuratedSource = {
   /**
    * B0-13: ordered `rag.document_chunk.id`s actually stitched into `documentBody`, so a
    * retrieval can be audited after the fact for exactly which chunks reached the model.
-   * Falls back to the single matched chunk id when full-document assembly wasn't available.
+   * Falls back to the single matched chunk id when windowed assembly wasn't available.
    */
   documentBodyChunkIds: string[];
-  /** Untruncated text of the matched chunk, for traceability and debugging. */
-  matchedChunkText: string;
+  // B0-548: `matchedChunkText` (the untruncated matched chunk) used to live here too, but it was
+  // always a substring of `documentBody` (or, when body assembly fell back to the single chunk,
+  // byte-identical to it) with no downstream reader — `snippet` already covers the short-preview
+  // use case. Removed rather than trimmed to keep exactly one canonical grounding field.
   similarity: number;
   documentKind: string;
   entityId: string | null;
@@ -196,7 +201,6 @@ function buildCuratedSource(
     documentBodyTruncated: body?.truncated ?? false,
     documentBodyTokenEstimate: body?.estimatedTokens ?? null,
     documentBodyChunkIds: body?.chunkIds ?? (fallbackBody ? [match.chunk_id] : []),
-    matchedChunkText: match.chunk_text,
     similarity: match.similarity,
     documentKind: match.document_kind,
     entityId: match.entity_id,
@@ -286,9 +290,14 @@ async function selectCuratedSourceMatches(
 }
 
 /**
- * Hydration half of curation: assemble the full document body and source provenance for each
- * already-selected match. This is the expensive half (full document text for every selected
- * document), so B0-438 runs it once, on the winning pass only.
+ * Hydration half of curation: assemble the matched-chunk body and source provenance for each
+ * already-selected match. This is the expensive half (chunk text for every selected document),
+ * so B0-438 runs it once, on the winning pass only.
+ *
+ * B0-547: hydrates a small window around each matched chunk (`assembleNeighborChunkBodies`)
+ * rather than the whole parent document (`assembleDocumentBodies`) — a retrieval tool's answer
+ * is grounded by the chunk that actually matched, and the 1-2 chunks immediately around it, not
+ * every section of the source document.
  */
 async function hydrateCuratedSources(selected: RagSearchMatch[]): Promise<CuratedSource[]> {
   if (selected.length === 0) {
@@ -296,13 +305,21 @@ async function hydrateCuratedSources(selected: RagSearchMatch[]): Promise<Curate
   }
 
   const documentIds = selected.map((match) => match.document_id);
+  const windowRequests = selected.map((match) => ({
+    documentId: match.document_id,
+    chunkIndex: match.chunk_index,
+  }));
   const [bodies, sourceRefs] = await Promise.all([
-    assembleDocumentBodies(documentIds),
+    assembleNeighborChunkBodies(windowRequests),
     fetchDocumentSourceRefs(documentIds),
   ]);
 
   return selected.map((match) =>
-    buildCuratedSource(match, bodies.get(match.document_id), sourceRefs.get(match.document_id)),
+    buildCuratedSource(
+      match,
+      bodies.get(chunkWindowKey({ documentId: match.document_id, chunkIndex: match.chunk_index })),
+      sourceRefs.get(match.document_id),
+    ),
   );
 }
 

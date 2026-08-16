@@ -10,7 +10,10 @@
  * This module derives a slimmer variant for the model ONLY. The full payload is unchanged and is what
  * `toolOutputLog` keeps, so `buildEvidenceSummary`, `evaluateRegulatedClaimGrounding`,
  * `evaluateUsageSafetyCoverage`, `collectSourcesFromToolOutputs` (which persists `snippet` for the UI)
- * and `collectSourceMetaFromToolOutputs` all still read the full 30k-per-document assembly.
+ * and `collectSourceMetaFromToolOutputs` all still read the same `documentBody` the model gets a
+ * projection of. (B0-547: `documentBody` itself is no longer a whole-document assembly — see
+ * `assembleNeighborChunkBodies` in `~/lib/retrieval/document-assembly` — but the model/full-payload
+ * split this module implements is orthogonal to that and unaffected by it.)
  *
  * It derives rather than being built inside `sourcePayload` because the model shape is a strict
  * projection of the full shape: every field it emits already exists on the full source, so there is
@@ -22,6 +25,13 @@
  *   reached the model up to three times (~1,370 tokens/search at ~924 avg chars/chunk).
  * - assembled bodies average 11,227 chars for `sds` (p95 22,866) against a 30k assembly cap; a
  *   profile+SDS+label triple is ~18,400 chars before the duplication above.
+ *
+ * B0-548 follow-up: `matchedChunkText` is no longer emitted on the full payload at all (see
+ * `sourcePayload()` in `~/lib/tools/product-tools.ts`) — it had no reader besides this module's
+ * now-moot projection, so the redundancy it describes above is fixed at the source instead of
+ * filtered here. `snippet` stays on the full payload; unlike `matchedChunkText` it has real
+ * downstream readers (`collectSourcesFromToolOutputs`/`collectSourceMetaFromToolOutputs`) and is
+ * still dropped for the model below since `documentBody` already covers grounding.
  */
 
 /**
@@ -249,8 +259,8 @@ function buildModelSource(
  * Returns the model-facing variant of a tool payload, or null when there is nothing to slim (no
  * `sources` array — e.g. `get_escalation_policy`, `lookup_cross_reference`, the category tools).
  *
- * `snippet` and `matchedChunkText` are dropped: both are substrings of `documentBody`, which the
- * prompt already tells the model to read for grounding.
+ * `snippet` is dropped (a substring of `documentBody`, which the prompt already tells the model to
+ * read for grounding); `matchedChunkText` no longer reaches this far — see the B0-548 note above.
  */
 export function buildModelToolPayload(
   payload: Record<string, unknown>,

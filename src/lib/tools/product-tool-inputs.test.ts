@@ -37,11 +37,17 @@ vi.mock('~/lib/retrieval/product-guidance', () => ({
 vi.mock('~/lib/retrieval/product-facts', () => ({
   buildFactsBlock: vi.fn(() => 'facts'),
   fetchFactsForProductLineKey: vi.fn(async () => null),
+  fetchFactsForProductLineKeys: vi.fn(async () => new Map()),
 }));
 
 vi.mock('~/lib/retrieval/efficacy-lab-report', () => ({
   fetchCurrentEfficacyLabReport: vi.fn(async () => null),
   renderEfficacyLabReportCitation: vi.fn(() => 'citation'),
+}));
+
+vi.mock('~/lib/tools/category-lookup', () => ({
+  getProductsInCategory: vi.fn(async () => ({ ok: true, adapter: 'test', categoryName: '', products: [] })),
+  getProductCategory: vi.fn(async () => ({ ok: true })),
 }));
 
 import { resolveProductEntityByName } from '~/lib/rag/entity-context';
@@ -52,9 +58,11 @@ import {
   retrieveSafetyConstraints,
   retrieveSurfacesLists,
 } from '~/lib/retrieval/product-guidance';
+import { fetchFactsForProductLineKeys } from '~/lib/retrieval/product-facts';
+import { getProductsInCategory } from '~/lib/tools/category-lookup';
 import { executeProductTool } from '~/lib/tools/product-tools';
 import { productSupportTools } from '~/lib/tools/definitions';
-import { searchProductDocsInputSchema } from '~/lib/tools/tool-schemas';
+import { getEfficacyDataInputSchema, searchProductDocsInputSchema } from '~/lib/tools/tool-schemas';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -231,6 +239,75 @@ describe('product-fact tools accept `productName` as well as `productId` (B0-364
     await expect(executeProductTool('get_efficacy_data', { organism: 'Norovirus' })).rejects.toThrow(
       /productId/,
     );
+  });
+
+  describe('get_efficacy_data batch form (B0-549)', () => {
+    it('accepts `productIds` without productId/productName and returns one result per identifier', async () => {
+      const out = await executeProductTool('get_efficacy_data', {
+        productIds: ['pH7Q', 'AF315', 'Kling'],
+        organism: 'Norovirus',
+      });
+
+      expect(out.ok).toBe(true);
+      expect(out.batch).toBe(true);
+      expect(out.requestedCount).toBe(3);
+      expect(Array.isArray(out.results)).toBe(true);
+      expect((out.results as Array<{ productId: string }>).map((r) => r.productId)).toEqual([
+        'pH7Q',
+        'AF315',
+        'Kling',
+      ]);
+      // All three identifiers resolve to the same mocked productLineKey ('PL-1'), so the batch
+      // facts fetch is deduped to a single resolved line, not one call per identifier.
+      expect(fetchFactsForProductLineKeys).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(fetchFactsForProductLineKeys).mock.calls[0]?.[0]).toEqual(['PL-1']);
+    });
+
+    it('resolves the batch set from `category` via getProductsInCategory', async () => {
+      vi.mocked(getProductsInCategory).mockResolvedValueOnce({
+        ok: true,
+        adapter: 'test',
+        categoryName: 'Disinfectants',
+        totalFound: 2,
+        products: [
+          { productLineId: '100', productLineName: 'pH7Q', documentKey: 'd1', prodTypes: [], subProdTypes: [], subChildProdTypes: [], prodClasses: [] },
+          { productLineId: '200', productLineName: 'Kling', documentKey: 'd2', prodTypes: [], subProdTypes: [], subChildProdTypes: [], prodClasses: [] },
+        ],
+      });
+
+      const out = await executeProductTool('get_efficacy_data', { category: 'Disinfectants' });
+
+      expect(out.batch).toBe(true);
+      expect(out.requestedCount).toBe(2);
+      expect((out.results as Array<{ productId: string }>).map((r) => r.productId)).toEqual([
+        'pH7Q',
+        'Kling',
+      ]);
+    });
+
+    it('returns an empty batch result (not an error) when the category has no products', async () => {
+      const out = await executeProductTool('get_efficacy_data', { category: 'Nonexistent Category' });
+
+      expect(out.ok).toBe(true);
+      expect(out.batch).toBe(true);
+      expect(out.results).toEqual([]);
+      expect(out.note).toMatch(/No products found in category/);
+    });
+
+    it('single-product call (no productIds/category) is unaffected — not routed through the batch path', async () => {
+      const out = await executeProductTool('get_efficacy_data', { productId: 'pH7Q' });
+
+      expect(out.batch).toBeUndefined();
+      expect(out.productId).toBe('pH7Q');
+      expect(fetchFactsForProductLineKeys).not.toHaveBeenCalled();
+    });
+
+    it('rejects more than EFFICACY_BATCH_MAX_PRODUCTS identifiers', () => {
+      const tooMany = Array.from({ length: 31 }, (_, i) => `product-${i}`);
+      expect(
+        getEfficacyDataInputSchema.safeParse({ productIds: tooMany }).success,
+      ).toBe(false);
+    });
   });
 
   it('trims and prefers productId when both keys are sent', async () => {
