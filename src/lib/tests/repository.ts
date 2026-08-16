@@ -2,15 +2,13 @@ import { assertSupabaseNoError as assertNoError } from '~/lib/utils';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 import {
-  extractItemConfidenceProvenance,
   extractItemSimilarityScore,
-  extractItemValidatorConfidence,
   extractRuntimeConfig,
   extractSearchRunMaxSimilarity,
 } from './response-payload';
 import { extractExpectedTool, parseAgentStepToolTrace } from './tool-routing';
 import { COMPLETED_RUN_STATUSES } from './types';
-import { isJudgmentProvenance } from '~/lib/workflows/product-support/confidence-provenance';
+import { JUDGMENT_CONFIDENCE_PROVENANCES } from '~/lib/workflows/product-support/confidence-provenance';
 import type {
   LatestFailedTestResultItemView,
   NewTestItemRecord,
@@ -854,8 +852,13 @@ export async function computeAvgSimilarityForResult(testResultId: string): Promi
  * B0-492 — CI's `avg_confidence` gate used to average every item's `confidence` regardless of
  * provenance: a regex constant (`decline_gate_constant`, `validator_bypassed_heuristic`) sitting in
  * the same mean as an actual model judgment (`validator_judged`). This computes the average over
- * ONLY `validator_judged` items (see `isJudgmentProvenance`), and reports how many items that was
+ * ONLY `validator_judged` items (see `JUDGMENT_CONFIDENCE_PROVENANCES`), and reports how many items that was
  * over so a reader can tell "no judgment items ran" apart from "the judgment average is 0".
+ *
+ * B0-495 — filters on the generated `confidence_provenance` column and selects only the generated
+ * `confidence` column (both stored/indexed — see `test_result_items_confidence_provenance_confidence_idx`),
+ * instead of fetching every row's full `response_payload` JSON and parsing it in JS. `EXPLAIN`
+ * confirms an index-only scan for this exact filter+column shape.
  */
 export async function computeAvgJudgmentConfidenceForResult(
   testResultId: string,
@@ -868,20 +871,18 @@ export async function computeAvgJudgmentConfidenceForResult(
   while (true) {
     const result = await supabase
       .from('test_result_items')
-      .select('response_payload')
+      .select('confidence')
       .eq('test_result_id', testResultId)
       .in('status', ['completed', 'failed'])
+      .in('confidence_provenance', [...JUDGMENT_CONFIDENCE_PROVENANCES])
+      .not('confidence', 'is', null)
       .range(from, from + RESULT_ITEMS_PAGE_SIZE - 1);
 
-    const rows = (assertNoError(result) || []) as Pick<TestResultItemRecord, 'response_payload'>[];
+    const rows = (assertNoError(result) || []) as Pick<TestResultItemRecord, 'confidence'>[];
 
     for (const row of rows) {
-      if (!isJudgmentProvenance(extractItemConfidenceProvenance(row.response_payload))) {
-        continue;
-      }
-      const score = extractItemValidatorConfidence(row.response_payload);
-      if (typeof score === 'number') {
-        sum += score;
+      if (typeof row.confidence === 'number') {
+        sum += row.confidence;
         count += 1;
       }
     }
