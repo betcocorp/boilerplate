@@ -93,6 +93,7 @@ export const productSupportOutcomeSchema = z.object({
   answerProvenance: answerProvenanceSchema.optional(),
   priorMessageCount: z.number().int().nonnegative().optional(),
   previousResponseId: z.string().nullable().optional(),
+  historyCapApplied: z.boolean().optional(),
 });
 
 export type ProductSupportOutcome = z.infer<typeof productSupportOutcomeSchema>;

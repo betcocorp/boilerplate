@@ -1,10 +1,11 @@
 'use client';
 
-import { EllipsisVertical, KeyRound, LogOut, ShieldCheck } from 'lucide-react';
+import { BookOpen, EllipsisVertical, KeyRound, LogOut, ShieldCheck } from 'lucide-react';
 import { signOut, useSession } from 'next-auth/react';
 import Link from 'next/link';
 import { forwardRef, useSyncExternalStore } from 'react';
 
+import { version as appVersion } from '../../../package.json';
 import { Avatar, AvatarFallback } from '~/components/ui/avatar';
 import { Button } from '~/components/ui/button';
 import {
@@ -106,6 +107,9 @@ export function AdminAccountMenu({
               <p className="truncate text-xs text-muted-foreground">
                 {userEmail || 'No email'}
               </p>
+              <p className="truncate text-xs font-light text-foreground">
+                Version: {appVersion}
+              </p>
             </div>
           </div>
         </DropdownMenuGroup>
@@ -139,6 +143,15 @@ export function AdminAccountMenu({
             <DropdownMenuSeparator />
           </>
         ) : null}
+        <DropdownMenuGroup>
+          <DropdownMenuItem asChild>
+            <Link href="/admin/changelog">
+              <BookOpen className="size-4" />
+              Changelog
+            </Link>
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
+        <DropdownMenuSeparator />
         <DropdownMenuItem
           onSelect={(event) => {
             event.preventDefault();

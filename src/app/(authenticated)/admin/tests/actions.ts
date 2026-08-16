@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 
 import { SME_AGENT_IDS } from '~/lib/agents/agent-registry';
+import { APP_VERSION } from '~/lib/app-version';
 import {
   parseCsvColumnNames,
   parseExpectedShouldAnswerFromForm,
@@ -507,6 +508,7 @@ export async function runTestAction(formData: FormData) {
     failed_items: 0,
     started_at: new Date().toISOString(),
     run_options: { modelTag },
+    app_version: APP_VERSION,
     summary: {
       completed_items: 0,
       total_items: items.length,
@@ -554,6 +556,7 @@ export async function runSearchEvalAction(formData: FormData) {
     failed_items: 0,
     started_at: new Date().toISOString(),
     run_options: { useHybrid, useReranker, useMultiIntent },
+    app_version: APP_VERSION,
     summary: {
       completed_items: 0,
       total_items: items.length,

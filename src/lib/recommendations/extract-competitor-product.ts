@@ -9,14 +9,29 @@ import { extractAssistantText } from '~/lib/openai/response-item-parsing';
  * whole raw message. Runs only on the recommendations route when the legacy/curated cross-reference
  * lookups miss. Degrades to `{ brand: null, product: <raw message> }` on any LLM/parse failure or an
  * empty extraction, so a miss never crashes the workflow — the engine still runs, just less precisely.
+ *
+ * B0-357 — this is now the SINGLE competitor-identity resolution for a turn, called once by
+ * `run-product-support-workflow.ts` and threaded through every consumer (forced-lookup prefetch,
+ * the deterministic override safety net, and the B0-355 web-search backstop) instead of each one
+ * re-deriving its own guess from the raw message. `otherCompetitorProduct` closes the "two
+ * competitor products in one message" gap: rather than silently picking one or mashing both
+ * together, the model must name whichever second product it did NOT choose, so the workflow can
+ * record which one won and why.
  */
 
 export const extractedCompetitorSchema = z.object({
   brand: z.string().nullable(),
   product: z.string().nullable(),
+  /** B0-357 — a second, distinct competitor product named in the same message, if any. */
+  otherCompetitorProduct: z.string().nullable().optional(),
 });
 
-export type ExtractedCompetitor = { brand: string | null; product: string };
+export type ExtractedCompetitor = {
+  brand: string | null;
+  product: string;
+  /** B0-357 — set when the message named a second, distinct competitor product that was NOT chosen. */
+  otherCompetitorProduct: string | null;
+};
 
 export type ExtractCompetitorProductDeps = {
   runLlm: (userMessage: string) => Promise<z.infer<typeof extractedCompetitorSchema>>;
@@ -28,7 +43,12 @@ Identify the competitor BRAND/manufacturer (e.g. "Spartan", "Diversey") and the 
 - Strip trademark symbols (®, ™) and marketing filler.
 - brand: the manufacturer/brand if stated or clearly implied, else null.
 - product: the specific product name only (brand prefix optional), else null if the message names no product.
-- Never invent a product that isn't in the message.`;
+- Never invent a product that isn't in the message.
+- If the message names TWO OR MORE distinct competitor products, deterministically choose only ONE as
+  brand/product: prefer the one adjacent to phrases like "equivalent to", "comparable to", "instead of",
+  "replace"/"replacement for", "alternative to"; if no such phrase favors one, choose the FIRST one
+  mentioned in reading order. Put the other product's name (brand + product if known) in
+  otherCompetitorProduct, else null. Never combine two different products into one brand/product pair.`;
 
 const JSON_SCHEMA = {
   type: 'object',
@@ -36,8 +56,9 @@ const JSON_SCHEMA = {
   properties: {
     brand: { type: ['string', 'null'] },
     product: { type: ['string', 'null'] },
+    otherCompetitorProduct: { type: ['string', 'null'] },
   },
-  required: ['brand', 'product'],
+  required: ['brand', 'product', 'otherCompetitorProduct'],
 } as const;
 
 async function defaultRunLlm(
@@ -73,13 +94,18 @@ export async function extractCompetitorProduct(
   userMessage: string,
   deps: ExtractCompetitorProductDeps = { runLlm: defaultRunLlm },
 ): Promise<ExtractedCompetitor> {
-  const fallback: ExtractedCompetitor = { brand: null, product: userMessage.trim() };
+  const fallback: ExtractedCompetitor = {
+    brand: null,
+    product: userMessage.trim(),
+    otherCompetitorProduct: null,
+  };
   try {
     const out = await deps.runLlm(userMessage);
     const brand = normalize(out.brand) || null;
     const product = normalize(out.product);
+    const otherCompetitorProduct = normalize(out.otherCompetitorProduct) || null;
     // No product extracted → fall back to the raw message so the engine still gets a query.
-    return { brand, product: product || fallback.product };
+    return { brand, product: product || fallback.product, otherCompetitorProduct };
   } catch {
     return fallback;
   }

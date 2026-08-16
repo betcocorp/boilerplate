@@ -111,4 +111,75 @@ describe('gradeChatTestResponse', () => {
       expect(outcome.passed).toBe(true);
     });
   });
+
+  describe('B0-518 — early-decline gate copy and the missing expected_result_type tag', () => {
+    // Regression: the "Product Golden Test Set" run (6203d34f-…) showed 0/13 early-decline rows
+    // passing — all 199 rows in that set have expected_result_type = null (like every other
+    // negative-expectation row in the database), which used to defeat the "unable to assist"
+    // override's exemption entirely.
+    it('passes a negative row with NO expected_result_type when the assistant declines', () => {
+      const outcome = gradeChatTestResponse({
+        item: item({ expected_should_answer: false, expected_result_type: null }),
+        hasError: false,
+        responseText: "I don't have the verified information needed to answer that.",
+      });
+
+      expect(outcome.passed).toBe(true);
+    });
+
+    it('recognizes the chemical-mixing early-decline copy verbatim ("advise" is not in the decline vocabulary)', () => {
+      const outcome = gradeChatTestResponse({
+        item: item({ expected_should_answer: false, expected_result_type: null }),
+        hasError: false,
+        responseText:
+          "I'm not able to advise on chemical mixing. Follow the product label and SDS, and involve your EHS lead.",
+      });
+
+      expect(outcome.passed).toBe(true);
+    });
+
+    it('recognizes the legal/compliance early-decline copy verbatim', () => {
+      const outcome = gradeChatTestResponse({
+        item: item({ expected_should_answer: false, expected_result_type: null }),
+        hasError: false,
+        responseText:
+          "I'm not able to provide legal or compliance guidance. Please use your official compliance process.",
+      });
+
+      expect(outcome.passed).toBe(true);
+    });
+
+    it('recognizes the storage/expiration early-decline copy verbatim', () => {
+      const outcome = gradeChatTestResponse({
+        item: item({ expected_should_answer: false, expected_result_type: null }),
+        hasError: false,
+        responseText:
+          "I'm not able to verify safety for expired or stored products. Follow the product label and SDS before use.",
+      });
+
+      expect(outcome.passed).toBe(true);
+    });
+
+    it('recognizes the broad-recommendation-without-context early-decline copy, which carries no decline vocabulary at all', () => {
+      const outcome = gradeChatTestResponse({
+        item: item({ expected_should_answer: false, expected_result_type: null }),
+        hasError: false,
+        responseText:
+          'I need more details to make a specific recommendation. Please share your surface, soil type, and application method.',
+      });
+
+      expect(outcome.passed).toBe(true);
+    });
+
+    it('still fails a POSITIVE row (expected_should_answer = true) that declines instead of answering', () => {
+      // The override must still do its job when an answer was actually expected.
+      const outcome = gradeChatTestResponse({
+        item: item({ expected_should_answer: true, expected_result_type: null }),
+        hasError: false,
+        responseText: "I'm not able to advise on chemical mixing. Follow the product label and SDS, and involve your EHS lead.",
+      });
+
+      expect(outcome.passed).toBe(false);
+    });
+  });
 });

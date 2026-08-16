@@ -825,6 +825,7 @@ export type Database = {
           id: string
           ideal_response: string | null
           input_payload: Json
+          intended_agent_item: string | null
           metadata: Json
           minimum_concepts: string | null
           priority: number | null
@@ -846,6 +847,7 @@ export type Database = {
           id?: string
           ideal_response?: string | null
           input_payload?: Json
+          intended_agent_item?: string | null
           metadata?: Json
           minimum_concepts?: string | null
           priority?: number | null
@@ -867,6 +869,7 @@ export type Database = {
           id?: string
           ideal_response?: string | null
           input_payload?: Json
+          intended_agent_item?: string | null
           metadata?: Json
           minimum_concepts?: string | null
           priority?: number | null
@@ -890,14 +893,22 @@ export type Database = {
       test_result_items: {
         Row: {
           answer_provenance: string | null
+          app_version: string | null
           created_at: string
           elapsed_ms: number
           error_message: string | null
           id: string
+          intended_agent_label: string | null
+          keyword_route: string | null
+          keyword_route_latency_ms: number | null
+          llm_route: string | null
+          llm_route_latency_ms: number | null
           passed: boolean
           prompt_version: string | null
           response_payload: Json | null
           response_text: string | null
+          routing_confidence: number | null
+          routing_decision: string | null
           row_index: number
           status: string
           test_item_id: string
@@ -907,14 +918,22 @@ export type Database = {
         }
         Insert: {
           answer_provenance?: string | null
+          app_version?: string | null
           created_at?: string
           elapsed_ms: number
           error_message?: string | null
           id?: string
+          intended_agent_label?: string | null
+          keyword_route?: string | null
+          keyword_route_latency_ms?: number | null
+          llm_route?: string | null
+          llm_route_latency_ms?: number | null
           passed?: boolean
           prompt_version?: string | null
           response_payload?: Json | null
           response_text?: string | null
+          routing_confidence?: number | null
+          routing_decision?: string | null
           row_index: number
           status?: string
           test_item_id: string
@@ -924,14 +943,22 @@ export type Database = {
         }
         Update: {
           answer_provenance?: string | null
+          app_version?: string | null
           created_at?: string
           elapsed_ms?: number
           error_message?: string | null
           id?: string
+          intended_agent_label?: string | null
+          keyword_route?: string | null
+          keyword_route_latency_ms?: number | null
+          llm_route?: string | null
+          llm_route_latency_ms?: number | null
           passed?: boolean
           prompt_version?: string | null
           response_payload?: Json | null
           response_text?: string | null
+          routing_confidence?: number | null
+          routing_decision?: string | null
           row_index?: number
           status?: string
           test_item_id?: string
@@ -965,6 +992,7 @@ export type Database = {
       }
       test_results: {
         Row: {
+          app_version: string | null
           avg_confidence: number | null
           avg_similarity: number | null
           completed_at: string | null
@@ -989,6 +1017,7 @@ export type Database = {
           total_items: number
         }
         Insert: {
+          app_version?: string | null
           avg_confidence?: number | null
           avg_similarity?: number | null
           completed_at?: string | null
@@ -1013,6 +1042,7 @@ export type Database = {
           total_items?: number
         }
         Update: {
+          app_version?: string | null
           avg_confidence?: number | null
           avg_similarity?: number | null
           completed_at?: string | null

@@ -2,6 +2,7 @@ import {
   ragQueryForProductKnowledgeWithMeta,
   type ProductKnowledgeQueryResult,
 } from '~/lib/retrieval/product-knowledge';
+import type { ProductEntityResolutionSource } from '~/lib/rag/entity-context';
 
 function buildQuery(parts: Array<string | undefined>): string {
   return parts.filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
@@ -14,6 +15,8 @@ export async function retrieveApprovedUsage(input: {
   environment?: string;
   productLineKey?: string | null;
   productKey?: string | null;
+  /** B0-479: source of `productLineKey`, from `resolveProductEntityByName` — threaded through so retrieval telemetry can tag "alias-anchored" resolutions. */
+  productLineKeySource?: ProductEntityResolutionSource;
   sectionType?: string | null;
 }): Promise<ProductKnowledgeQueryResult> {
   const q = buildQuery([
@@ -27,6 +30,7 @@ export async function retrieveApprovedUsage(input: {
     query: q,
     productLineKey: input.productLineKey,
     productKey: input.productKey,
+    productLineKeySource: input.productLineKeySource,
     skipProductLineResolution: !input.productLineKey,
     sectionType: input.sectionType,
   });
@@ -36,6 +40,7 @@ export async function retrieveSafetyConstraints(input: {
   productId: string;
   productLineKey?: string | null;
   productKey?: string | null;
+  productLineKeySource?: ProductEntityResolutionSource;
   sectionType?: string | null;
 }): Promise<ProductKnowledgeQueryResult> {
   const q = buildQuery([
@@ -46,6 +51,7 @@ export async function retrieveSafetyConstraints(input: {
     query: q,
     productLineKey: input.productLineKey,
     productKey: input.productKey,
+    productLineKeySource: input.productLineKeySource,
     skipProductLineResolution: !input.productLineKey,
     sectionType: input.sectionType,
   });
@@ -57,6 +63,7 @@ export async function retrieveCompatibility(input: {
   materialType?: string;
   productLineKey?: string | null;
   productKey?: string | null;
+  productLineKeySource?: ProductEntityResolutionSource;
   sectionType?: string | null;
 }): Promise<ProductKnowledgeQueryResult> {
   const q = buildQuery([
@@ -70,6 +77,7 @@ export async function retrieveCompatibility(input: {
     query: q,
     productLineKey: input.productLineKey,
     productKey: input.productKey,
+    productLineKeySource: input.productLineKeySource,
     skipProductLineResolution: !input.productLineKey,
     sectionType: input.sectionType,
   });
@@ -80,6 +88,7 @@ export async function retrieveSurfacesLists(input: {
   mode: 'allowed' | 'disallowed';
   productLineKey?: string | null;
   productKey?: string | null;
+  productLineKeySource?: ProductEntityResolutionSource;
   sectionType?: string | null;
 }): Promise<ProductKnowledgeQueryResult> {
   const hint =
@@ -91,6 +100,7 @@ export async function retrieveSurfacesLists(input: {
     query: q,
     productLineKey: input.productLineKey,
     productKey: input.productKey,
+    productLineKeySource: input.productLineKeySource,
     skipProductLineResolution: !input.productLineKey,
     sectionType: input.sectionType,
   });

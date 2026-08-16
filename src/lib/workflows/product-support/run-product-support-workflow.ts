@@ -1,4 +1,8 @@
 import { getErrorMessage } from '~/lib/utils';
+import {
+  DEFAULT_MAX_OUTPUT_TOKENS,
+  resolveMaxOutputTokens,
+} from '~/lib/workflows/product-support/max-output-tokens';
 import { createAuditLogQueue } from '~/lib/audit/audit-log-queue';
 import type { ToolCallOrigin, ToolTraceEntry } from '~/lib/audit/trace';
 import {
@@ -28,6 +32,15 @@ import {
   SME_ROUTE_TIE_BREAK_ORDER,
 } from '~/lib/orchestrator/sme-routing';
 import {
+  classifyUserIntent,
+  isLlmRouterEnabled,
+  isLlmRouterShadowMode,
+  resolveRouterModel,
+  resolveRouterTimeoutMs,
+  type IntentClassification,
+  type PriorTurnMessage,
+} from '~/lib/orchestrator/intent-classifier';
+import {
   CATEGORY_MISMATCH_CONFIDENCE_CAP,
   evaluateRecommendationGate,
   LOW_SIMILARITY_CONFIDENCE_CAP,
@@ -35,7 +48,10 @@ import {
   MISSING_BRAND_CONFIDENCE_CAP,
 } from '~/lib/recommendations/recommendation-gate';
 import { isConfidenceGatingDisabled } from '~/lib/recommendations/confidence-scoring';
-import { extractCompetitorProduct } from '~/lib/recommendations/extract-competitor-product';
+import {
+  extractCompetitorProduct,
+  type ExtractedCompetitor,
+} from '~/lib/recommendations/extract-competitor-product';
 import { runCrossReferenceRecommendation } from '~/lib/recommendations/persist-recommendation';
 import { buildWebFallbackAnswer } from '~/lib/recommendations/web-fallback-answer';
 import {
@@ -230,6 +246,20 @@ function dominantCacheSource(cacheSourceCounts: Map<string, number>) {
   return sorted[0]?.[0] ?? null;
 }
 
+/**
+ * B0-514 — evaluated as NOT SAFE to retire yet. This is a live production behavior switch (it
+ * pins `tool_choice` to `lookup_cross_reference`, suppresses the `broad_recommendation_without_context`
+ * early decline, and forces a search — see the three call sites below), which must never depend on
+ * the B0-507 classifier while that classifier is shadow-only (`BEX_LLM_ROUTER_ENABLED` defaults
+ * off, and even when on, `BEX_LLM_ROUTER_SHADOW_MODE` defaults on and its output is deliberately
+ * never used to route — see the `llm_intent_classifier_shadow` gate). Swapping this function for
+ * `classifiedIntent === 'recommendations'` today would either do nothing (classifier disabled) or
+ * silently change what gets forced (classifier enabled), neither of which is what a "retire this
+ * function" ticket should do to a shadow-mode rollout. It also loses signal this phrase check
+ * fires regardless of `routingDecision` (B0-339's point — a `product`-routed message can still
+ * carry cross-reference intent). Revisit once the classifier is validated well enough to become
+ * the actual routing cutover.
+ */
 export function shouldForceCrossReferenceLookup(userMessage: string) {
   const text = userMessage.toLowerCase();
   const hasCrossRefIntent =
@@ -246,26 +276,56 @@ function isEarlyDeclineGateEnabled() {
   return process.env.BEX_EARLY_DECLINE_GATE_ENABLED !== 'false';
 }
 
-/**
- * B0-459 — hard backstop on assistant output length, independent of the prompt's own brevity
- * directive (see `PRODUCT_SUPPORT_SHARED_INSTRUCTIONS`). Decode time scales linearly with output
- * tokens and was measured at ~85% of total turn time at the pre-existing ~551-token average answer.
- *
- * Deliberately generous — this is NOT the ~250-token target the prompt asks for on a simple
- * question, it is a ceiling that only a runaway generation should ever hit, so a legitimate
- * multi-section answer (full maintenance program, stripping/finishing procedure) is never cut off
- * mid-sentence or, worse, mid regulated-value. Configurable via `BEX_MAX_OUTPUT_TOKENS` without a
- * redeploy; falls back to the default on anything that is not a positive finite number.
- */
-export const DEFAULT_MAX_OUTPUT_TOKENS = 1200;
+export { DEFAULT_MAX_OUTPUT_TOKENS, resolveMaxOutputTokens };
 
-export function resolveMaxOutputTokens(): number {
-  const raw = process.env.BEX_MAX_OUTPUT_TOKENS;
+/**
+ * B0-519 — hard cap on how many prior conversation messages (user + assistant, oldest-first) are
+ * ever replayed for one turn. Without a ceiling, prompt tokens climb turn-over-turn with no bound —
+ * an 11-turn thread was observed growing 18k → 271k tokens — which is the single largest driver of
+ * the B0-434 latency tail.
+ *
+ * Below the cap, behavior is unchanged on both runtimes: the AI SDK replays `priorMessages` as-is,
+ * and the Responses runtime keeps chaining via `previous_response_id` (the cheaper path, since the
+ * stable prefix stays prompt-cached). Once a conversation's prior-message count exceeds the cap,
+ * the capped *tail* (most recent messages, so referenced products / entities from the last few
+ * turns are preserved) is used instead of the full history, and — on the Responses runtime only —
+ * the `previous_response_id` chain is intentionally broken (never resumed) in favor of replaying
+ * that capped tail as explicit messages, exactly like the AI SDK runtime already does. This turns
+ * an unbounded per-turn cost into a flat one for the remainder of the conversation.
+ *
+ * Configurable via `BEX_HISTORY_MAX_MESSAGES` without a redeploy; falls back to the default on
+ * anything that is not a positive finite integer.
+ */
+export const DEFAULT_HISTORY_MAX_MESSAGES = 12;
+
+export function resolveHistoryMaxMessages(): number {
+  const raw = process.env.BEX_HISTORY_MAX_MESSAGES;
   if (!raw) {
-    return DEFAULT_MAX_OUTPUT_TOKENS;
+    return DEFAULT_HISTORY_MAX_MESSAGES;
   }
   const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : DEFAULT_MAX_OUTPUT_TOKENS;
+  return Number.isFinite(parsed) && parsed > 0
+    ? Math.floor(parsed)
+    : DEFAULT_HISTORY_MAX_MESSAGES;
+}
+
+/**
+ * B0-519 — applies `resolveHistoryMaxMessages()` to one conversation's prior messages (already
+ * oldest-first). Returns the capped tail plus whether capping actually changed anything, since a
+ * short conversation should behave identically to before this ticket.
+ */
+export function capConversationHistory(
+  priorMessages: ReadonlyArray<{ role: 'user' | 'assistant'; content: string }>,
+): {
+  cappedHistory: Array<{ role: 'user' | 'assistant'; content: string }>;
+  historyCapApplied: boolean;
+} {
+  const maxMessages = resolveHistoryMaxMessages();
+  const historyCapApplied = priorMessages.length > maxMessages;
+  return {
+    cappedHistory: historyCapApplied ? priorMessages.slice(-maxMessages) : [...priorMessages],
+    historyCapApplied,
+  };
 }
 
 /** Closed set of early-decline reasons, in the order `classifyEarlyDecline` tests them. */
@@ -287,6 +347,24 @@ export type EarlyDeclineDecision = {
   text: string;
 };
 
+/**
+ * B0-518 — the four canned `classifyEarlyDecline` texts, named and exported so the eval harness
+ * (`src/lib/tests/runner.ts`) can recognize them verbatim as canonical decline copy — the same
+ * pattern already used there for `RECOMMENDATIONS_DECLINE_COPY` / `XREF_DECLINE_COPY`. Before this,
+ * the harness's decline-detection regex/phrase list didn't cover this exact wording (missing
+ * "advise", and the `broad_recommendation_without_context` copy has no decline vocabulary at all),
+ * so a correctly-triggered early decline was graded as a failed "unrecognized" answer on every
+ * Golden Test Set run.
+ */
+export const EARLY_DECLINE_CHEMICAL_MIXING_COPY =
+  "I'm not able to advise on chemical mixing. Follow the product label and SDS, and involve your EHS lead.";
+export const EARLY_DECLINE_LEGAL_COMPLIANCE_COPY =
+  "I'm not able to provide legal or compliance guidance. Please use your official compliance process.";
+export const EARLY_DECLINE_STORAGE_EXPIRATION_COPY =
+  "I'm not able to verify safety for expired or stored products. Follow the product label and SDS before use.";
+export const EARLY_DECLINE_BROAD_RECOMMENDATION_COPY =
+  'I need more details to make a specific recommendation. Please share your surface, soil type, and application method.';
+
 export function classifyEarlyDecline(userMessage: string): EarlyDeclineDecision | null {
   if (!isEarlyDeclineGateEnabled()) {
     return null;
@@ -299,14 +377,14 @@ export function classifyEarlyDecline(userMessage: string): EarlyDeclineDecision 
   if (asksChemicalMixing) {
     return {
       reason: 'chemical_mixing_or_safety',
-      text: "I'm not able to advise on chemical mixing. Follow the product label and SDS, and involve your EHS lead.",
+      text: EARLY_DECLINE_CHEMICAL_MIXING_COPY,
     };
   }
 
   if (/(legal|osha|compliant|compliance|regulation|regulatory)/.test(text)) {
     return {
       reason: 'legal_or_compliance',
-      text: "I'm not able to provide legal or compliance guidance. Please use your official compliance process.",
+      text: EARLY_DECLINE_LEGAL_COMPLIANCE_COPY,
     };
   }
 
@@ -317,7 +395,7 @@ export function classifyEarlyDecline(userMessage: string): EarlyDeclineDecision 
   ) {
     return {
       reason: 'storage_or_expiration',
-      text: "I'm not able to verify safety for expired or stored products. Follow the product label and SDS before use.",
+      text: EARLY_DECLINE_STORAGE_EXPIRATION_COPY,
     };
   }
 
@@ -333,7 +411,7 @@ export function classifyEarlyDecline(userMessage: string): EarlyDeclineDecision 
   ) {
     return {
       reason: 'broad_recommendation_without_context',
-      text: "I need more details to make a specific recommendation. Please share your surface, soil type, and application method.",
+      text: EARLY_DECLINE_BROAD_RECOMMENDATION_COPY,
     };
   }
 
@@ -1041,6 +1119,22 @@ export async function runProductSupportWorkflow(input: {
   onAssistantDelta?: (delta: string) => void;
 }): Promise<ProductSupportFinalOutput> {
   const useAiSdkGeneration = process.env.BEX_AI_SDK_GENERATION_ENABLED === 'true';
+  /**
+   * B0-519 — capped once, up front, so every consumer (the `hasPreviousResponse` step record below,
+   * and both generation runtimes further down) agrees on the same decision for this turn. See
+   * `capConversationHistory`.
+   */
+  const { cappedHistory, historyCapApplied } = capConversationHistory(input.priorMessages ?? []);
+  /**
+   * B0-519 — the Responses runtime's `previous_response_id` chain is the actual growth driver
+   * (OpenAI replays the whole server-side chain as input tokens on every chained call); once the
+   * conversation is over the cap, stop resuming it and fall back to the same bounded, explicit
+   * replay the AI SDK runtime already does. Below the cap this is just `input.previousOpenaiResponseId`,
+   * unchanged from before this ticket.
+   */
+  const effectivePreviousResponseId = historyCapApplied
+    ? null
+    : (input.previousOpenaiResponseId ?? null);
   const agentMode = input.agentMode ?? DEFAULT_BEX_CHAT_AGENT_MODE;
   const route = routeUserMessageToSme(input.userMessage);
   // B0-389 — read once so the flag recorded as run config is the same value the gate below used.
@@ -1304,6 +1398,9 @@ export async function runProductSupportWorkflow(input: {
       promptBundleVersion: PROMPT_BUNDLE_VERSION,
       priorMessageCount: input.priorMessages?.length ?? 0,
       previousResponseId: input.previousOpenaiResponseId ?? null,
+      // B0-519 — no model call happens on this path, so the chain is never touched either way;
+      // still recorded for consistency with the answered path's same field.
+      historyCapApplied,
       timingBreakdown: {
         toolRounds: 0,
         cacheSource: null,
@@ -1449,7 +1546,11 @@ export async function runProductSupportWorkflow(input: {
     status: 'running',
     input: jsonContent({
       model,
-      hasPreviousResponse: Boolean(input.previousOpenaiResponseId),
+      // B0-519 — reflects the EFFECTIVE decision (post-cap), not the raw input: once
+      // `historyCapApplied` breaks the chain, this turn has no previous response regardless of
+      // what the caller passed in.
+      hasPreviousResponse: Boolean(effectivePreviousResponseId),
+      historyCapApplied,
       /**
        * B0-389 — captured here, ABOVE the `useAiSdkGeneration` fork below, so both generation
        * runtimes inherit the same record. `runtime` is derived from the very flag that picks the
@@ -1597,6 +1698,56 @@ export async function runProductSupportWorkflow(input: {
     const forcedCrossReference = shouldForceCrossReferenceLookup(input.userMessage);
 
     /**
+     * B0-357 — resolve the ONE (competitorBrand, competitorProduct) tuple for this turn,
+     * deterministically, before any of its consumers run. Threaded through the forced-lookup
+     * prefetch below, the deterministic override safety net, and the B0-355 web-search backstop —
+     * replacing each one's own "guess from the raw message" with a single shared resolution, so the
+     * same phrasing produces the same tuple (and therefore a byte-identical `buildRecommendationQuery`
+     * output) every consumer agrees on.
+     *
+     * Only resolved when this turn could actually need it (recommendations route or explicit
+     * cross-reference intent) — an LLM call on every turn would cost latency/spend for the vast
+     * majority of turns that never touch this path. Kicked off here and NOT awaited: it runs
+     * concurrently with the model's forced tool-call round, same latency shape as the B0-461
+     * prefetch it now feeds, rather than stacking in front of it.
+     */
+    const competitorIdentityNeeded = routingDecision === 'recommendations' || forcedCrossReference;
+    const resolvedCompetitorPromise: Promise<ExtractedCompetitor> | null = competitorIdentityNeeded
+      ? extractCompetitorProduct(input.userMessage)
+      : null;
+
+    /**
+     * B0-507 — shadow-mode LLM intent classification, run alongside the keyword router above
+     * (`route` / `routingDecision`) without ever changing this turn's actual routing. Gated on
+     * BOTH `BEX_LLM_ROUTER_ENABLED` and `BEX_LLM_ROUTER_SHADOW_MODE`: `classifyUserIntent`
+     * already no-ops to the keyword-router fallback when the router is disabled, but checking
+     * `isLlmRouterEnabled()` here too skips even building the cache key / prior-message payload
+     * on the overwhelming majority of turns where the router is off. Requiring shadow mode as
+     * well keeps this ticket's wiring honest about what it is: a log-and-compare step, not the
+     * routing cutover (B0-514 discusses why the cutover isn't safe yet).
+     *
+     * Kicked off here (after the early-decline short-circuit above has already returned for the
+     * turns that never reach this point, so a declined turn never pays for an unused model call)
+     * and NOT awaited — it runs concurrently with the model's tool-call round, same shape as the
+     * `resolvedCompetitorPromise` prefetch above, and is only awaited later, right before the
+     * agent step is persisted (see `shadowIntentClassification` below).
+     */
+    const shadowIntentClassificationEnabled = isLlmRouterEnabled() && isLlmRouterShadowMode();
+    const shadowIntentClassificationPromise: Promise<IntentClassification> | null =
+      shadowIntentClassificationEnabled
+        ? classifyUserIntent(
+            input.userMessage,
+            cappedHistory.map(
+              (m, index): PriorTurnMessage => ({
+                id: String(index),
+                role: m.role,
+                content: m.content,
+              }),
+            ),
+          )
+        : null;
+
+    /**
      * B0-461 — the forced-cross-reference path still pins `tool_choice` to the named
      * `lookup_cross_reference` function (a full single-call collapse was judged too risky here: the
      * pinned-tool attribution, the safety-net override, and the persisted-trace ordering asserted by
@@ -1605,18 +1756,24 @@ export async function runProductSupportWorkflow(input: {
      * sequential today: the curated-override safety net further down only starts its lookup AFTER
      * the full two-round model loop completes and comes up empty. Kicking it off here, concurrently
      * with that loop, overlaps its DB round trip with the model's forced tool-call round instead of
-     * stacking after it — exactly the case the ticket's BNC-15 -> Triforce example exercises. Uses
-     * the same lenient full-message args as the safety net below (`{ brand: message, productName:
-     * message }`); `.catch` only suppresses an unhandled-rejection warning when the model's own call
-     * already resolves a match and this prefetch is never awaited — the real await below still sees
-     * a genuine rejection.
+     * stacking after it — exactly the case the ticket's BNC-15 -> Triforce example exercises.
+     *
+     * B0-357: uses the same resolved (brand, product) tuple as the safety net below, instead of the
+     * previous lenient full-message args (`{ brand: message, productName: message }`); `.catch` only
+     * suppresses an unhandled-rejection warning when the model's own call already resolves a match
+     * and this prefetch is never awaited — the real await below still sees a genuine rejection.
      */
     const safetyNetLookupPrefetch = forcedCrossReference
       ? (() => {
-          const promise = lookupCrossReference({
-            brand: input.userMessage,
-            productName: input.userMessage,
-          });
+          const promise = (
+            resolvedCompetitorPromise ??
+            Promise.resolve({ brand: null, product: input.userMessage, otherCompetitorProduct: null })
+          ).then((resolved) =>
+            lookupCrossReference({
+              brand: resolved.brand ?? '',
+              productName: resolved.product,
+            }),
+          );
           promise.catch(() => undefined);
           return promise;
         })()
@@ -1683,7 +1840,8 @@ export async function runProductSupportWorkflow(input: {
       ? await runAiSdkWithToolLoop({
           modelTag: input.modelTag,
           instructions,
-          history: input.priorMessages ?? [],
+          // B0-519 — capped tail, not the raw list; see `capConversationHistory`.
+          history: cappedHistory,
           userMessage: input.userMessage,
           tools: routeTools,
           toolChoice,
@@ -1700,7 +1858,11 @@ export async function runProductSupportWorkflow(input: {
           instructions,
           tools: routeTools,
           userMessage: input.userMessage,
-          previousResponseId: input.previousOpenaiResponseId ?? null,
+          // B0-519 — null once `historyCapApplied` breaks the chain; `history` then supplies the
+          // capped tail as explicit messages so this call still opens with recent context instead
+          // of none, same as a stateless AI SDK call would.
+          previousResponseId: effectivePreviousResponseId,
+          history: historyCapApplied ? cappedHistory : undefined,
           toolChoice,
           promptCacheKey,
           preloadedEvidence,
@@ -1772,13 +1934,23 @@ export async function runProductSupportWorkflow(input: {
 
     // Deterministic override safety-net: don't depend on the model to call lookup_cross_reference
     // with the competitor's exact name. On the recommendations route, if no cross-reference surfaced,
-    // consult the curated override directly with the raw user message — the lenient matcher finds the
-    // competitor mention inside it — so a curated equivalence (e.g. BNC-15 → Triforce) always wins.
+    // consult the curated override directly with the resolved competitor identity — so a curated
+    // equivalence (e.g. BNC-15 → Triforce) always wins.
+    //
+    // B0-357: `safetyNetArgs` used to be the whole raw message duplicated into both `brand` and
+    // `productName`, relying on the lenient matcher's token-overlap scoring to find the competitor
+    // mention buried inside it. That can't disambiguate two competitor products in one message and
+    // fragments the (brand, product) pair the web-search cache key is built from. Replaced with the
+    // ONE tuple `resolvedCompetitorPromise` resolved above, shared with the prefetch and the web
+    // fallback below.
     let overrideFromSafetyNet = false;
     if (useCrossReferencePostProcessing && !crossReferenceResult) {
+      const resolvedCompetitorForSafetyNet = resolvedCompetitorPromise
+        ? await resolvedCompetitorPromise
+        : { brand: null, product: input.userMessage, otherCompetitorProduct: null };
       const safetyNetArgs = {
-        brand: input.userMessage,
-        productName: input.userMessage,
+        brand: resolvedCompetitorForSafetyNet.brand ?? '',
+        productName: resolvedCompetitorForSafetyNet.product,
       };
       const safetyNetStartedAtMs = Date.now();
       // B0-461 — reuse the concurrently-kicked-off lookup when this run forced cross-reference
@@ -1824,7 +1996,14 @@ export async function runProductSupportWorkflow(input: {
     let webFallback: Awaited<ReturnType<typeof runCrossReferenceRecommendation>> | null = null;
     let webFallbackCompetitorLabel = '';
     if (routingDecision === 'recommendations' && !crossReferenceResult) {
-      const competitor = await extractCompetitorProduct(input.userMessage);
+      // B0-357: reuse the SAME resolved (brand, product) tuple as the prefetch/safety-net above
+      // (routingDecision === 'recommendations' implies `competitorIdentityNeeded`, so this promise
+      // exists) instead of calling `extractCompetitorProduct` a second time for this turn — a
+      // second call is not guaranteed to reproduce byte-identical output, which is exactly what
+      // fragmented the `buildRecommendationQuery` cache key run-to-run before this ticket.
+      const competitor = resolvedCompetitorPromise
+        ? await resolvedCompetitorPromise
+        : await extractCompetitorProduct(input.userMessage);
       if (competitor.product.trim()) {
         webFallbackCompetitorLabel = [competitor.brand, competitor.product]
           .filter(Boolean)
@@ -1878,6 +2057,73 @@ export async function runProductSupportWorkflow(input: {
         extractTopCrossReferenceMatch(resolvedToolTrace) ??
         crossReferenceResult;
     }
+
+    /**
+     * B0-357 — resolve (by now, virtually always already-settled) the ONE competitor-identity
+     * tuple for this turn, whether or not any consumer above ended up needing it (the model's own
+     * forced tool call can still match on the first try, in which case neither the safety net nor
+     * the web fallback ever awaits `resolvedCompetitorPromise`). Recorded as its own gate so a bad
+     * resolution — including which of two named competitor products was picked — is diagnosable
+     * from the trace, and persisted on `finalOutput.resolvedCompetitor` below (see AC).
+     */
+    const resolvedCompetitor: ExtractedCompetitor | null = resolvedCompetitorPromise
+      ? await resolvedCompetitorPromise
+      : null;
+    const competitorIdentityGate: GateRecord | null = competitorIdentityNeeded
+      ? {
+          gate: 'competitor_identity_resolution',
+          inputs: {
+            resolvedBrand: resolvedCompetitor?.brand ?? null,
+            resolvedProduct: resolvedCompetitor?.product ?? null,
+            otherCompetitorProductDetected: resolvedCompetitor?.otherCompetitorProduct ?? null,
+            trigger:
+              routingDecision === 'recommendations' ? 'recommendations_route' : 'cross_reference_intent',
+          },
+          thresholds: {
+            extractionModel: process.env.XREF_COMPETITOR_EXTRACT_MODEL?.trim() || 'default_preview_model',
+          },
+          verdict: resolvedCompetitor?.otherCompetitorProduct ? 'resolved_with_alternate' : 'resolved',
+          effect: resolvedCompetitor?.otherCompetitorProduct
+            ? `Two competitor products were named; deterministically picked "${[resolvedCompetitor.brand, resolvedCompetitor.product].filter(Boolean).join(' ')}" over "${resolvedCompetitor.otherCompetitorProduct}" as the one being cross-referenced. Reused by the forced-lookup prefetch, the deterministic override safety net, and the web-search backstop.`
+            : `Resolved competitor identity: brand="${resolvedCompetitor?.brand ?? '(none)'}", product="${resolvedCompetitor?.product ?? '(none)'}". Reused by the forced-lookup prefetch, the deterministic override safety net, and the web-search backstop.`,
+        }
+      : null;
+
+    /**
+     * B0-507 — await the shadow classification kicked off far earlier (alongside
+     * `resolvedCompetitorPromise`, above): by this point in the turn the full tool-call round has
+     * already run, so the classifier's ~800ms budget has almost always already elapsed and this
+     * await resolves immediately. `classifyUserIntent` never rejects (it falls back to the
+     * keyword router internally on any error/timeout), so this cannot fail the turn.
+     *
+     * Recorded purely for observability — `keywordRoutingDecision` is what actually routed this
+     * turn; `classifiedIntent` is never substituted for it while shadow mode is on.
+     */
+    const shadowIntentClassification: IntentClassification | null = shadowIntentClassificationPromise
+      ? await shadowIntentClassificationPromise
+      : null;
+    const intentClassifierShadowGate: GateRecord | null = shadowIntentClassification
+      ? {
+          gate: 'llm_intent_classifier_shadow',
+          inputs: {
+            classifiedIntent: shadowIntentClassification.intent,
+            classifierConfidence: shadowIntentClassification.confidence,
+            classifierSource: shadowIntentClassification.source,
+            entities: shadowIntentClassification.entities,
+            suggestedTool: shadowIntentClassification.suggestedTool,
+            keywordRoutingDecision: routingDecision,
+          },
+          thresholds: {
+            model: resolveRouterModel(),
+            timeoutMs: resolveRouterTimeoutMs(),
+          },
+          verdict:
+            shadowIntentClassification.intent === routingDecision
+              ? 'agrees_with_keyword_router'
+              : 'disagrees_with_keyword_router',
+          effect: `Shadow mode only: the classifier proposed "${shadowIntentClassification.intent}" (confidence ${shadowIntentClassification.confidence}, source ${shadowIntentClassification.source}) while the keyword router actually routed this turn to "${routingDecision}". Not used to route this turn; recorded for rollout comparison only.`,
+        }
+      : null;
 
     let draftAnswer = agentResult.assistantText;
     /**
@@ -2008,6 +2254,12 @@ export async function runProductSupportWorkflow(input: {
         // (`cachedPromptTokens` should be non-zero from the 2nd call onward).
         usage: agentResult.usage,
         usageByCall: agentResult.usageByCall,
+        // B0-357 — the one resolved competitor-identity gate for this turn, when it ran.
+        // B0-507 — the shadow-mode classifier comparison, when the classifier ran.
+        ...recordGates([
+          ...(competitorIdentityGate ? [competitorIdentityGate] : []),
+          ...(intentClassifierShadowGate ? [intentClassifierShadowGate] : []),
+        ]),
       }),
     });
     markStepClosed(agentStep.id);
@@ -2345,6 +2597,16 @@ export async function runProductSupportWorkflow(input: {
       const gateInput = {
         baseConfidence: validation.confidence,
         topSimilarity: sources.length > 0 ? topSimilarity : null,
+        /**
+         * B0-513 — wired from the B0-357 competitor-identity resolution already computed for this
+         * turn (`resolvedCompetitor`, above). Guaranteed non-null here: `useCrossReferencePostProcessing`
+         * and `competitorIdentityNeeded` share the exact same trigger condition
+         * (`routingDecision === 'recommendations' || forcedCrossReference`), so whenever this branch
+         * runs, `resolvedCompetitorPromise` was created and already awaited. `false` (not `undefined`)
+         * when the extraction ran but found no brand, so `evaluateRecommendationGate`'s missing-brand
+         * cap can actually fire instead of silently never applying.
+         */
+        brandKnown: Boolean(resolvedCompetitor?.brand?.trim()),
       };
       const gate = evaluateRecommendationGate(gateInput);
       const confidenceBeforeGate = validation.confidence;
@@ -2366,20 +2628,18 @@ export async function runProductSupportWorkflow(input: {
        * the ONLY record for every run predating this step, and the timeline still reads it.
        *
        * `inputs` lists exactly what the call site passes. `evaluateRecommendationGate` also accepts
-       * `competitorChemistryClass`, `recommendedChemistryClass` and `brandKnown`, but this workflow
-       * passes none of them, so the category-mismatch and missing-brand caps cannot fire here —
-       * recording them as if they had been evaluated would be a false claim.
+       * `competitorChemistryClass` and `recommendedChemistryClass`, but this workflow passes
+       * neither (REC-1 grounding + REC-2/3 structured fields are still dormant), so the
+       * category-mismatch cap cannot fire here — recording it as if it had been evaluated would be
+       * a false claim. `brandKnown` WAS wired above (B0-513, see `gateInput`), so it is no longer
+       * listed here.
        */
       validatorStepGates.push({
         gate: 'recommendation_confidence',
         inputs: {
           ...gateInput,
           retrievedSourceCount: sources.length,
-          unwiredInputs: [
-            'competitorChemistryClass',
-            'recommendedChemistryClass',
-            'brandKnown',
-          ],
+          unwiredInputs: ['competitorChemistryClass', 'recommendedChemistryClass'],
           trigger:
             routingDecision === 'recommendations'
               ? 'recommendations_route'
@@ -2554,9 +2814,22 @@ export async function runProductSupportWorkflow(input: {
        */
       priorMessageCount: input.priorMessages?.length ?? 0,
       previousResponseId: input.previousOpenaiResponseId ?? null,
+      // B0-519 — whether this turn's history exceeded the cap; see `capConversationHistory`.
+      historyCapApplied,
       // B0-349 — the answer as composed before validator/revision/gate mutation; see the
       // `originalDraftAnswer` capture above.
       draftAnswer: originalDraftAnswer,
+      // B0-357 — the one resolved competitor-identity tuple for this turn, when one was needed;
+      // absent when the turn never touched the recommendations/cross-reference path.
+      ...(resolvedCompetitor
+        ? {
+            resolvedCompetitor: {
+              brand: resolvedCompetitor.brand,
+              product: resolvedCompetitor.product,
+              otherCompetitorProduct: resolvedCompetitor.otherCompetitorProduct,
+            },
+          }
+        : {}),
     };
 
     audit.enqueue('workflow_completed', { workflow_run_id: run.id }, wfCtx);

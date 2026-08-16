@@ -18,28 +18,28 @@ export const V1_AGENT_REGISTRY = [
     path: '/api/v1/agents/product',
     label: 'Betco Product Specialist',
     description:
-      'Betco product facts, SDS (non-medical), compatibility, catalogs; handoffs to Dilution/Floor when needed (stub).',
+      'Betco product facts, SDS (non-medical), compatibility, catalogs; handoffs to Dilution/Floor when needed.',
   },
   {
     id: 'dilution',
     path: '/api/v1/agents/dilution',
     label: 'Dilution Control Specialist',
     description:
-      'Dispenser calibration, proportioners, metering tips, and setup from approved charts (stub).',
+      'Dispenser calibration, proportioners, metering tips, and setup from approved charts.',
   },
   {
     id: 'floor',
     path: '/api/v1/agents/floor',
     label: 'Floor Care Specialist',
     description:
-      'Stripping, finishing, burnishing, and floor maintenance programs (stub).',
+      'Stripping, finishing, burnishing, and floor maintenance programs.',
   },
   {
     id: 'bathroom',
     path: '/api/v1/agents/bathroom',
     label: 'Bathroom specialist',
     description:
-      'Restroom cleaning, disinfection, odor control, floor care, and Betco product/procedure guidance (stub).',
+      'Restroom cleaning, disinfection, odor control, floor care, and Betco product/procedure guidance.',
   },
   {
     id: 'recommendations',
