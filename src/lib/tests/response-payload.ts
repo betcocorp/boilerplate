@@ -1,4 +1,9 @@
 import type { RetrievedDocumentChunkRef } from '~/lib/workflows/product-support/product-support-schemas';
+import {
+  CONFIDENCE_PROVENANCES,
+  resolveConfidenceProvenance,
+  type ConfidenceProvenance,
+} from '~/lib/workflows/product-support/confidence-provenance';
 
 /**
  * Extracts the `workflowRunId` string from a response payload object.
@@ -114,6 +119,27 @@ export function extractItemValidatorConfidence(
   }
   const c = (responsePayload as Record<string, unknown>).confidence;
   return typeof c === 'number' && Number.isFinite(c) ? c : null;
+}
+
+/**
+ * B0-492 — which mechanism produced `confidence` on this item. `'unknown'` (never a judgment
+ * class) for a payload written before this ticket, or any malformed value.
+ */
+export function extractItemConfidenceProvenance(responsePayload: unknown): ConfidenceProvenance {
+  if (
+    !responsePayload ||
+    typeof responsePayload !== 'object' ||
+    Array.isArray(responsePayload)
+  ) {
+    return resolveConfidenceProvenance(undefined);
+  }
+  const value = (responsePayload as Record<string, unknown>).confidenceProvenance;
+  const validated =
+    typeof value === 'string' &&
+    (CONFIDENCE_PROVENANCES as readonly string[]).includes(value)
+      ? (value as ConfidenceProvenance)
+      : undefined;
+  return resolveConfidenceProvenance(validated);
 }
 
 /** Extracts `timingBreakdown` fields: toolRounds, cacheSource, searchMs. */

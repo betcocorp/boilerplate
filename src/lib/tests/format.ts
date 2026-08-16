@@ -1,6 +1,7 @@
 import type { RetrievedDocumentChunkRef } from '~/lib/workflows/product-support/product-support-schemas';
 import { formatDurationSeconds } from '~/lib/utils/time';
 import {
+  extractItemConfidenceProvenance,
   extractItemSimilarityScore,
   extractItemValidatorConfidence,
   extractTimingBreakdown,
@@ -57,8 +58,12 @@ export function formatShouldAnswerExport(value: boolean | null): string {
 }
 
 /**
- * Formats a combined "max similarity / validator confidence" label from a
- * response payload. Returns "n/a" when neither value is present.
+ * Formats a combined "max similarity / validator confidence (provenance)" label from a response
+ * payload. Returns "n/a" when neither value is present.
+ *
+ * B0-492 — every rendered confidence number carries its provenance label (`unknown` for a
+ * payload written before this ticket) so a decline-gate-constant, a bypass heuristic, and a real
+ * validator judgment are never visually indistinguishable.
  */
 export function formatItemSimilarityConfidenceLabel(
   responsePayload: unknown,
@@ -73,7 +78,8 @@ export function formatItemSimilarityConfidenceLabel(
     parts.push(`${(maxSimilarity * 100).toFixed(1)}%`);
   }
   if (confidence != null) {
-    parts.push(`${confidence.toFixed(2)}`);
+    const provenance = extractItemConfidenceProvenance(responsePayload);
+    parts.push(`${confidence.toFixed(2)} (${provenance})`);
   }
   return parts.join(' / ');
 }

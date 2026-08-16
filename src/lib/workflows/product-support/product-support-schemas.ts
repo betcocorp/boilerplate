@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { toolTraceSchema } from '~/lib/audit/trace';
 import { AGENT_CONFIDENCE_REASONS } from '~/lib/workflows/product-support/agent-self-confidence';
+import { CONFIDENCE_PROVENANCES } from '~/lib/workflows/product-support/confidence-provenance';
 
 export const validatorResultSchema = z.object({
   approved: z.boolean(),
@@ -44,6 +45,15 @@ export type LlmTokenUsageRecord = z.infer<typeof llmTokenUsageSchema>;
 export const agentConfidenceReasonSchema = z.enum(AGENT_CONFIDENCE_REASONS);
 
 export type AgentConfidenceReason = z.infer<typeof agentConfidenceReasonSchema>;
+
+/**
+ * B0-492 — which of the (up to six) mechanisms produced `confidence`. See
+ * `~/lib/workflows/product-support/confidence-provenance.ts` for the full definition of each value
+ * and the capping-chain rules.
+ */
+export const confidenceProvenanceSchema = z.enum(CONFIDENCE_PROVENANCES);
+
+export type ConfidenceProvenance = z.infer<typeof confidenceProvenanceSchema>;
 
 /** Rows from `rag.document` / `rag.document_chunk` returned by semantic search (aggregated across tool calls). */
 export const retrievedDocumentChunkRefSchema = z.object({
@@ -382,6 +392,21 @@ export const productSupportFinalOutputSchema = z.object({
   agentConfidenceBasis: z.string().max(500).nullable().optional(),
   /** B0-491 — always present alongside `agentConfidence` once this ticket's code runs. */
   agentConfidenceReason: agentConfidenceReasonSchema.optional(),
+  /**
+   * B0-492 — which mechanism produced `confidence` (validator judgment, bypass heuristic, decline
+   * gate, agent self-score, or a gate cap). Always present alongside `confidence` once this
+   * ticket's code runs; absent on historical payloads (readers must resolve that to `'unknown'`,
+   * never default it to a judgment class — see `resolveConfidenceProvenance`).
+   */
+  confidenceProvenance: confidenceProvenanceSchema.optional(),
+  /**
+   * B0-492 — when `confidenceProvenance === 'gate_capped'`, the value `confidence` had immediately
+   * before the FIRST cap in this run's chain (so `gate_capped` never hides what was capped). Null
+   * for every other provenance.
+   */
+  confidencePreCapValue: z.number().min(0).max(1).nullable().optional(),
+  /** B0-492 — the provenance of `confidencePreCapValue`, when present. */
+  confidencePreCapProvenance: confidenceProvenanceSchema.nullable().optional(),
 });
 
 export type ProductSupportFinalOutput = z.infer<typeof productSupportFinalOutputSchema>;

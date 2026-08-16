@@ -1903,3 +1903,196 @@ describe('agent self-reported confidence (B0-491)', () => {
     expect(record.inputs.baseConfidence).toBe(0.9);
   });
 });
+
+/* -------------------------------------------------------------------------- *
+ * B0-492 — every persisted confidence carries exactly one provenance.
+ * -------------------------------------------------------------------------- */
+
+describe('confidence provenance (B0-492)', () => {
+  const MARKER = (agentConfidence: number) =>
+    `<!--BEX_AGENT_CONFIDENCE {"agentConfidence":${agentConfidence},"agentConfidenceBasis":"x"}-->`;
+
+  it('is validator_bypassed_heuristic on the default (useValidator: false) path', async () => {
+    const out = await run();
+    expect(out.confidenceProvenance).toBe('validator_bypassed_heuristic');
+    expect(out.confidencePreCapValue).toBeNull();
+    expect(out.confidencePreCapProvenance).toBeNull();
+  });
+
+  it('is validator_judged when the model-scored validator pass actually ran', async () => {
+    const out = await run({ useValidator: true });
+    expect(out.confidenceProvenance).toBe('validator_judged');
+  });
+
+  it('is decline_gate_constant on the early-decline path', async () => {
+    const out = await run({ userMessage: 'Can I mix bleach with this Betco cleaner?' });
+    expect(out.confidenceProvenance).toBe('decline_gate_constant');
+  });
+
+  it('is persisted on the validator workflow_steps row, not just the final output', async () => {
+    const out = await run();
+    expect(stepOutput('validator')).toMatchObject({
+      confidenceProvenance: out.confidenceProvenance,
+      confidencePreCapValue: out.confidencePreCapValue,
+      confidencePreCapProvenance: out.confidencePreCapProvenance,
+    });
+  });
+
+  it('is gate_capped with the recoverable pre-cap value/provenance when the usage/safety coverage gate caps it', async () => {
+    executeProductToolMock.mockResolvedValue({
+      sources: [
+        {
+          documentId: 'doc-1',
+          chunkId: 'chunk-1',
+          title: 'pH7Q Dual label',
+          snippet: 'Usage: apply to the floor with a mop.',
+          documentBody: 'Usage: apply to the floor with a mop.',
+        },
+      ],
+    });
+
+    const out = await run();
+
+    expect(out.confidenceProvenance).toBe('gate_capped');
+    // The bypass-heuristic value (sources.length > 0 -> 0.9) BEFORE the coverage cap applied.
+    expect(out.confidencePreCapValue).toBe(0.9);
+    expect(out.confidencePreCapProvenance).toBe('validator_bypassed_heuristic');
+    expect(out.confidence).toBeLessThanOrEqual(0.55);
+  });
+
+  it('is agent_self_scored (no pre-cap) when the recommendation gate ran but did not cap the agent score further', async () => {
+    runResponsesWithToolLoopMock.mockImplementation(
+      generationCalling(
+        [
+          {
+            name: 'lookup_cross_reference',
+            argumentsJson: JSON.stringify({ brand: 'BNC', productName: 'BNC-15' }),
+            callId: 'call_xref',
+          },
+        ],
+        { assistantText: `Comparable product found.\n${MARKER(0.7)}` },
+      ),
+    );
+    executeProductToolMock.mockImplementation(async (name: string) =>
+      name === 'lookup_cross_reference'
+        ? { matches: [], fallbackRecommended: true }
+        : {
+            sources: [{ documentId: 'doc-1', chunkId: 'chunk-1', snippet: 'x', documentBody: 'x' }],
+            retrieval: { rawTopSimilarity: 0.9, selectedTopSimilarity: 0.9, droppedByFilterCount: 0 },
+          },
+    );
+    lookupCrossReferenceMock.mockResolvedValue({
+      fallbackRecommended: false,
+      matches: [
+        {
+          competitorBrand: 'BNC',
+          competitorProductName: 'BNC-15',
+          productKey: 'triforce',
+          confidence: 0.9,
+          productUrl: 'https://www.betco.com/products/triforce',
+          betcoProduct: { title: 'Triforce', sku: '1234' },
+          rationale: 'curated equivalence',
+        },
+      ],
+    });
+
+    const out = await run({ userMessage: XREF_MESSAGE });
+
+    expect(out.agentConfidence).toBe(0.7);
+    expect(out.confidence).toBe(0.7);
+    expect(out.confidenceProvenance).toBe('agent_self_scored');
+    expect(out.confidencePreCapValue).toBeNull();
+    expect(out.confidencePreCapProvenance).toBeNull();
+  });
+
+  it('is gate_capped (pre-cap = agent_self_scored) when the recommendation gate caps the agent score for low retrieval similarity', async () => {
+    runResponsesWithToolLoopMock.mockImplementation(
+      generationCalling(
+        [
+          {
+            name: 'lookup_cross_reference',
+            argumentsJson: JSON.stringify({ brand: 'BNC', productName: 'BNC-15' }),
+            callId: 'call_xref',
+          },
+        ],
+        { assistantText: `Comparable product found.\n${MARKER(0.9)}` },
+      ),
+    );
+    executeProductToolMock.mockImplementation(async (name: string) =>
+      name === 'lookup_cross_reference'
+        ? { matches: [], fallbackRecommended: true }
+        : {
+            sources: [{ documentId: 'doc-1', chunkId: 'chunk-1', snippet: 'x', documentBody: 'x' }],
+            // Below LOW_SIMILARITY_THRESHOLD (0.6) — the gate's own cap must fire on the agent's score.
+            retrieval: { rawTopSimilarity: 0.4, selectedTopSimilarity: 0.9, droppedByFilterCount: 2 },
+          },
+    );
+    lookupCrossReferenceMock.mockResolvedValue({
+      fallbackRecommended: false,
+      matches: [
+        {
+          competitorBrand: 'BNC',
+          competitorProductName: 'BNC-15',
+          productKey: 'triforce',
+          confidence: 0.9,
+          productUrl: 'https://www.betco.com/products/triforce',
+          betcoProduct: { title: 'Triforce', sku: '1234' },
+          rationale: 'curated equivalence',
+        },
+      ],
+    });
+
+    const out = await run({ userMessage: XREF_MESSAGE });
+
+    expect(out.agentConfidence).toBe(0.9);
+    expect(out.confidence).toBeLessThanOrEqual(LOW_SIMILARITY_CONFIDENCE_CAP);
+    expect(out.confidenceProvenance).toBe('gate_capped');
+    expect(out.confidencePreCapValue).toBe(0.9);
+    expect(out.confidencePreCapProvenance).toBe('agent_self_scored');
+  });
+
+  it('is gate_capped (pre-cap = validator_bypassed_heuristic) when the gate caps for a missing brand, with no agent score in play', async () => {
+    // No marker this turn (agentConfidence null): the gate calibrates on the bypass-heuristic 0.9.
+    // `extractCompetitorProduct` falls back to `brand: null` in this test file's default mocks, so
+    // the missing-brand cap (ceiling 0.8) fires and must win the outer min against 0.9.
+    runResponsesWithToolLoopMock.mockImplementation(
+      generationCalling([
+        {
+          name: 'lookup_cross_reference',
+          argumentsJson: JSON.stringify({ brand: 'BNC', productName: 'BNC-15' }),
+          callId: 'call_xref',
+        },
+      ]),
+    );
+    executeProductToolMock.mockImplementation(async (name: string) =>
+      name === 'lookup_cross_reference'
+        ? { matches: [], fallbackRecommended: true }
+        : {
+            sources: [{ documentId: 'doc-1', chunkId: 'chunk-1', snippet: 'x', documentBody: 'x' }],
+            retrieval: { rawTopSimilarity: 0.95, selectedTopSimilarity: 0.95, droppedByFilterCount: 0 },
+          },
+    );
+    lookupCrossReferenceMock.mockResolvedValue({
+      fallbackRecommended: false,
+      matches: [
+        {
+          competitorBrand: 'BNC',
+          competitorProductName: 'BNC-15',
+          productKey: 'triforce',
+          confidence: 0.9,
+          productUrl: 'https://www.betco.com/products/triforce',
+          betcoProduct: { title: 'Triforce', sku: '1234' },
+          rationale: 'curated equivalence',
+        },
+      ],
+    });
+
+    const out = await run({ userMessage: XREF_MESSAGE });
+
+    expect(out.agentConfidence).toBeNull();
+    expect(out.confidence).toBeLessThanOrEqual(0.8);
+    expect(out.confidenceProvenance).toBe('gate_capped');
+    expect(out.confidencePreCapValue).toBe(0.9);
+    expect(out.confidencePreCapProvenance).toBe('validator_bypassed_heuristic');
+  });
+});

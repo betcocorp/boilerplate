@@ -84,6 +84,11 @@ import {
   NO_MODEL_CALL_AGENT_CONFIDENCE,
 } from '~/lib/workflows/product-support/agent-self-confidence';
 import {
+  applyConfidenceCap,
+  confidenceProvenanceFields,
+  type ConfidenceProvenanceState,
+} from '~/lib/workflows/product-support/confidence-provenance';
+import {
   gateRecordSchema,
   promptRecordSchema,
   type AnswerProvenance,
@@ -1609,6 +1614,13 @@ export async function runProductSupportWorkflow(input: {
       agentConfidence: NO_MODEL_CALL_AGENT_CONFIDENCE.agentConfidence,
       agentConfidenceBasis: NO_MODEL_CALL_AGENT_CONFIDENCE.agentConfidenceBasis,
       agentConfidenceReason: NO_MODEL_CALL_AGENT_CONFIDENCE.reason,
+      // B0-492 — the fixed decline-gate constant, distinguishable by field from an approved
+      // validator-judged run rather than by string-matching the answer text.
+      ...confidenceProvenanceFields({
+        provenance: 'decline_gate_constant',
+        preCapValue: null,
+        preCapProvenance: null,
+      }),
       timingBreakdown: {
         toolRounds: 0,
         cacheSource: null,
@@ -2583,6 +2595,13 @@ export async function runProductSupportWorkflow(input: {
         requires_human_review: false,
       };
     }
+    // B0-492 — the base provenance for this run's confidence chain; every cap below only ever
+    // moves this to `gate_capped` (via `applyConfidenceCap`), never back.
+    let confidenceState: ConfidenceProvenanceState = {
+      provenance: useValidator ? 'validator_judged' : 'validator_bypassed_heuristic',
+      preCapValue: null,
+      preCapProvenance: null,
+    };
 
     audit.enqueue('validation_completed', validation, {
       ...wfCtx,
@@ -2735,6 +2754,8 @@ export async function runProductSupportWorkflow(input: {
         ),
         issues: Array.from(new Set([...validation.issues, coverageIssue])),
       };
+      // B0-492 — record the cap (no-op if it somehow didn't actually lower the value).
+      confidenceState = applyConfidenceCap(confidenceState, confidenceBeforeCap, validation.confidence);
       // B0-367: this was the only confidence gate with no audit row, which forced
       // the run-trace timeline to reverse-engineer it by diffing the logged
       // validator pass against the persisted validator step output.
@@ -2840,6 +2861,7 @@ export async function runProductSupportWorkflow(input: {
           effect: `BEX_DISABLE_CONFIDENCE_GATING is set: ${regulatedClaimGrounding.ungroundedCategories.join(', ')} could not be verified verbatim against a retrieved source, but the draft answer was allowed through unmodified instead of being replaced with the decline message. See draftAnswer on this run's final_output for exactly what was said.`,
         });
       } else {
+        const confidenceBeforeRegulatedCap = validation.confidence;
         validation = {
           ...validation,
           approved: false,
@@ -2854,6 +2876,12 @@ export async function runProductSupportWorkflow(input: {
           ),
           requires_human_review: true,
         };
+        // B0-492 — same capping-chain rule as the usage/safety coverage cap above.
+        confidenceState = applyConfidenceCap(
+          confidenceState,
+          confidenceBeforeRegulatedCap,
+          validation.confidence,
+        );
         audit.enqueue(
           'regulated_claim_guardrail_rejected',
           {
@@ -2904,6 +2932,24 @@ export async function runProductSupportWorkflow(input: {
       };
       const gate = evaluateRecommendationGate(gateInput);
       const confidenceBeforeGate = validation.confidence;
+      /**
+       * B0-492 — the gate's OWN candidate provenance: `agent_self_scored` when B0-491 substituted
+       * the agent's self-score as `baseConfidence`, otherwise whatever this run's confidence
+       * already was. `applyConfidenceCap` then records whether the gate's internal caps
+       * (low-similarity / missing-brand / category-mismatch) actually lowered that candidate below
+       * `gateInput.baseConfidence`. The outer `Math.min` below decides whether this candidate or
+       * the PRIOR value survives as the run's confidence — only if it wins does its provenance
+       * (and any cap it carries) replace `confidenceState`.
+       */
+      let gateCandidateState: ConfidenceProvenanceState =
+        agentSelfConfidence.agentConfidence !== null
+          ? { provenance: 'agent_self_scored', preCapValue: null, preCapProvenance: null }
+          : confidenceState;
+      gateCandidateState = applyConfidenceCap(
+        gateCandidateState,
+        gateInput.baseConfidence,
+        gate.confidence,
+      );
       validation = {
         ...validation,
         approved: validation.approved && gate.approved,
@@ -2912,6 +2958,9 @@ export async function runProductSupportWorkflow(input: {
         requires_human_review:
           validation.requires_human_review || gate.requires_human_review,
       };
+      if (gate.confidence < confidenceBeforeGate) {
+        confidenceState = gateCandidateState;
+      }
       audit.enqueue(
         'recommendation_gate_applied',
         { ...gate, topSimilarity: gateInput.topSimilarity },
@@ -3001,6 +3050,9 @@ export async function runProductSupportWorkflow(input: {
          * neither gate ran.
          */
         ...recordGates(validatorStepGates),
+        // B0-492 — which mechanism produced the confidence recorded on THIS step, so the
+        // observability trace can render it without reading `answerProvenance`/`issues` strings.
+        ...confidenceProvenanceFields(confidenceState),
       }),
     });
     markStepClosed(validationStep.id);
@@ -3158,6 +3210,9 @@ export async function runProductSupportWorkflow(input: {
       agentConfidence: agentSelfConfidence.agentConfidence,
       agentConfidenceBasis: agentSelfConfidence.agentConfidenceBasis,
       agentConfidenceReason: agentSelfConfidence.reason,
+      // B0-492 — which of the (up to six) mechanisms produced `confidence` above, plus the
+      // pre-cap value/provenance when a gate actually capped it.
+      ...confidenceProvenanceFields(confidenceState),
     };
 
     audit.enqueue('workflow_completed', { workflow_run_id: run.id }, wfCtx);

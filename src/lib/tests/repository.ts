@@ -2,11 +2,14 @@ import { assertSupabaseNoError as assertNoError } from '~/lib/utils';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 import {
+  extractItemConfidenceProvenance,
   extractItemSimilarityScore,
+  extractItemValidatorConfidence,
   extractSearchRunMaxSimilarity,
 } from './response-payload';
 import { extractExpectedTool, parseAgentStepToolTrace } from './tool-routing';
 import { COMPLETED_RUN_STATUSES } from './types';
+import { isJudgmentProvenance } from '~/lib/workflows/product-support/confidence-provenance';
 import type {
   LatestFailedTestResultItemView,
   NewTestItemRecord,
@@ -844,6 +847,51 @@ export async function computeAvgSimilarityForResult(testResultId: string): Promi
   }
 
   return count > 0 ? sum / count : null;
+}
+
+/**
+ * B0-492 — CI's `avg_confidence` gate used to average every item's `confidence` regardless of
+ * provenance: a regex constant (`decline_gate_constant`, `validator_bypassed_heuristic`) sitting in
+ * the same mean as an actual model judgment (`validator_judged`). This computes the average over
+ * ONLY `validator_judged` items (see `isJudgmentProvenance`), and reports how many items that was
+ * over so a reader can tell "no judgment items ran" apart from "the judgment average is 0".
+ */
+export async function computeAvgJudgmentConfidenceForResult(
+  testResultId: string,
+): Promise<{ avg: number | null; itemCount: number }> {
+  const supabase = getSupabaseServiceRoleClient();
+  let sum = 0;
+  let count = 0;
+  let from = 0;
+
+  while (true) {
+    const result = await supabase
+      .from('test_result_items')
+      .select('response_payload')
+      .eq('test_result_id', testResultId)
+      .in('status', ['completed', 'failed'])
+      .range(from, from + RESULT_ITEMS_PAGE_SIZE - 1);
+
+    const rows = (assertNoError(result) || []) as Pick<TestResultItemRecord, 'response_payload'>[];
+
+    for (const row of rows) {
+      if (!isJudgmentProvenance(extractItemConfidenceProvenance(row.response_payload))) {
+        continue;
+      }
+      const score = extractItemValidatorConfidence(row.response_payload);
+      if (typeof score === 'number') {
+        sum += score;
+        count += 1;
+      }
+    }
+
+    if (rows.length < RESULT_ITEMS_PAGE_SIZE) {
+      break;
+    }
+    from += RESULT_ITEMS_PAGE_SIZE;
+  }
+
+  return { avg: count > 0 ? sum / count : null, itemCount: count };
 }
 
 export async function deleteTestById(testId: string) {

@@ -53,6 +53,7 @@ import {
   listAllResultItemsByResultId,
 } from '~/lib/tests/repository';
 import {
+  extractItemConfidenceProvenance,
   extractItemSimilarityScore,
   extractItemValidatorConfidence,
   extractModelTag,
@@ -401,6 +402,7 @@ export default async function AdminTestRunDetailsPage({
             status: row.status,
             similarity: extractItemSimilarityScore(row.response_payload),
             confidence: extractItemValidatorConfidence(row.response_payload),
+            confidence_provenance: extractItemConfidenceProvenance(row.response_payload),
             elapsed_ms: row.elapsed_ms,
             model: modelTag ?? null,
             agent: extractRoutingDecision(row.response_payload),

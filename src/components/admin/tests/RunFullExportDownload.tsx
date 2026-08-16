@@ -22,6 +22,8 @@ export type RunExportItem = {
   status: string;
   similarity: number | null;
   confidence: number | null;
+  /** B0-492 — which mechanism produced `confidence` ('unknown' for a pre-B0-492 payload). */
+  confidence_provenance: string;
   elapsed_ms: number;
   model: string | null;
   agent: string | null;
