@@ -6,6 +6,7 @@ import {
   buildRoutingComparisonFields,
   computeAmbiguousRouteRate,
   computeConfidenceDistribution,
+  computeRouterLatencyProfile,
   computeRoutingComparisonReport,
   computeRoutingComparisonSummary,
   normalizeKeywordRoute,
@@ -60,6 +61,8 @@ describe('buildRoutingComparisonFields', () => {
       llm_route: 'product',
       routing_confidence: 0.82,
       intended_agent_label: 'dilution',
+      keyword_route_latency_ms: null,
+      llm_route_latency_ms: null,
     });
   });
 
@@ -72,6 +75,42 @@ describe('buildRoutingComparisonFields', () => {
 
     expect(fields.keyword_route).toBe('ambiguous');
     expect(fields.intended_agent_label).toBeNull();
+  });
+
+  it('B0-524 — passes through per-router latency when measured', () => {
+    const fields = buildRoutingComparisonFields({
+      keywordDecision: { agent: 'floor' },
+      llmClassification: { intent: 'floor', confidence: 0.9 },
+      intendedAgentLabel: 'floor',
+      keywordRouteLatencyMs: 3,
+      llmRouteLatencyMs: 412,
+    });
+
+    expect(fields.keyword_route_latency_ms).toBe(3);
+    expect(fields.llm_route_latency_ms).toBe(412);
+  });
+});
+
+describe('computeRouterLatencyProfile', () => {
+  it('computes median/p95 per router and excludes null samples', () => {
+    const profile = computeRouterLatencyProfile([
+      { keywordRouteLatencyMs: 1, llmRouteLatencyMs: 100 },
+      { keywordRouteLatencyMs: 2, llmRouteLatencyMs: 200 },
+      { keywordRouteLatencyMs: 3, llmRouteLatencyMs: null },
+      { keywordRouteLatencyMs: null, llmRouteLatencyMs: 400 },
+    ]);
+
+    expect(profile.keyword.sampleCount).toBe(3);
+    expect(profile.keyword.medianMs).toBe(2);
+    expect(profile.llm.sampleCount).toBe(3);
+    expect(profile.llm.medianMs).toBe(200);
+  });
+
+  it('returns null stats when there are no samples at all', () => {
+    const profile = computeRouterLatencyProfile([{ keywordRouteLatencyMs: null, llmRouteLatencyMs: null }]);
+
+    expect(profile.keyword).toEqual({ sampleCount: 0, medianMs: null, p95Ms: null });
+    expect(profile.llm).toEqual({ sampleCount: 0, medianMs: null, p95Ms: null });
   });
 });
 

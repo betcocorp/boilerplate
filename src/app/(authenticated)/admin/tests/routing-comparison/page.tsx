@@ -4,6 +4,7 @@ import { RoutingComparisonDashboard } from '~/components/admin/tests/RoutingComp
 import { listRoutingComparisonRows } from '~/lib/tests/repository';
 import {
   buildRouterDisagreementMatrix,
+  computeRouterLatencyProfile,
   computeRoutingComparisonSummary,
   type RoutingComparisonSummaryInput,
 } from '~/lib/tests/routing-comparison';
@@ -37,6 +38,12 @@ export default async function AdminRoutingComparisonPage() {
     llmRoute: row.llmRoute,
   }));
   const cutoverReport = computeRoutingComparisonSummary(summaryInputs);
+  const latencyProfile = computeRouterLatencyProfile(
+    rows.map((row) => ({
+      keywordRouteLatencyMs: row.keywordRouteLatencyMs,
+      llmRouteLatencyMs: row.llmRouteLatencyMs,
+    })),
+  );
 
   return (
     <div className="flex flex-1 bg-slate-50">
@@ -59,6 +66,7 @@ export default async function AdminRoutingComparisonPage() {
         <RoutingComparisonDashboard
           cutoverReport={cutoverReport}
           disagreementMatrix={disagreementMatrix}
+          latencyProfile={latencyProfile}
           totalItemCount={rows.length}
           totalRunCount={totalRunCount}
         />

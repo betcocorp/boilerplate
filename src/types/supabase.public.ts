@@ -900,7 +900,9 @@ export type Database = {
           id: string
           intended_agent_label: string | null
           keyword_route: string | null
+          keyword_route_latency_ms: number | null
           llm_route: string | null
+          llm_route_latency_ms: number | null
           passed: boolean
           prompt_version: string | null
           response_payload: Json | null
@@ -923,7 +925,9 @@ export type Database = {
           id?: string
           intended_agent_label?: string | null
           keyword_route?: string | null
+          keyword_route_latency_ms?: number | null
           llm_route?: string | null
+          llm_route_latency_ms?: number | null
           passed?: boolean
           prompt_version?: string | null
           response_payload?: Json | null
@@ -946,7 +950,9 @@ export type Database = {
           id?: string
           intended_agent_label?: string | null
           keyword_route?: string | null
+          keyword_route_latency_ms?: number | null
           llm_route?: string | null
+          llm_route_latency_ms?: number | null
           passed?: boolean
           prompt_version?: string | null
           response_payload?: Json | null

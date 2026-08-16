@@ -7,7 +7,12 @@ import {
   TableRow,
 } from '~/components/ui/table';
 import { getAgentBadgeClassName } from '~/lib/bex/agent-badge';
-import type { RouterDisagreementMatrix, RoutingComparisonSummary } from '~/lib/tests/routing-comparison';
+import type {
+  RouterDisagreementMatrix,
+  RouterLatencyProfile,
+  RouterLatencyStats,
+  RoutingComparisonSummary,
+} from '~/lib/tests/routing-comparison';
 
 type RoutingComparisonDashboardProps = {
   /** Distinct `test_result_id`s contributing to `disagreementMatrix`/`cutoverReport`. */
@@ -16,6 +21,8 @@ type RoutingComparisonDashboardProps = {
   totalItemCount: number;
   disagreementMatrix: RouterDisagreementMatrix;
   cutoverReport: RoutingComparisonSummary;
+  /** B0-524 — null-safe: samples may be 0 if every row predates the latency columns. */
+  latencyProfile: RouterLatencyProfile;
 };
 
 function formatPercent(value: number): string {
@@ -50,17 +57,30 @@ function AccuracyBadge({ label, accuracy, count }: { label: string; accuracy: nu
   );
 }
 
+function LatencyStatBadge({ label, stats }: { label: string; stats: RouterLatencyStats }) {
+  if (stats.sampleCount === 0) {
+    return <Badge variant="secondary">{label}: n/a (no samples)</Badge>;
+  }
+  return (
+    <Badge variant="outline">
+      {label}: {stats.medianMs}ms median / {stats.p95Ms}ms p95 ({stats.sampleCount} sample
+      {stats.sampleCount === 1 ? '' : 's'})
+    </Badge>
+  );
+}
+
 /**
- * B0-509 — cross-run routing comparison dashboard: keyword/LLM disagreement matrix, a latency
- * section that honestly reports "not available" (see comment below), and cutover-readiness signals.
- * Aggregate/system-wide counterpart to the per-run `RoutingAccuracyBoard` (B0-502) — this component
- * receives already-aggregated data (every run with dual-router instrumentation), not one run's items.
+ * B0-509 — cross-run routing comparison dashboard: keyword/LLM disagreement matrix, per-router
+ * latency profiling (median/p95, B0-524), and cutover-readiness signals. Aggregate/system-wide
+ * counterpart to the per-run `RoutingAccuracyBoard` (B0-502) — this component receives
+ * already-aggregated data (every run with dual-router instrumentation), not one run's items.
  */
 export function RoutingComparisonDashboard({
   totalRunCount,
   totalItemCount,
   disagreementMatrix,
   cutoverReport,
+  latencyProfile,
 }: RoutingComparisonDashboardProps) {
   if (totalItemCount === 0) {
     return (
@@ -171,18 +191,24 @@ export function RoutingComparisonDashboard({
 
       <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
         <h3 className="mb-1 text-base font-semibold text-slate-900">Latency profiling</h3>
-        <p className="max-w-2xl text-sm text-slate-600">
-          <span className="font-semibold text-amber-800">Not available yet.</span> Neither{' '}
-          <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">test_result_items</code> nor{' '}
-          <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">workflow_steps</code> records a
-          classifier-specific latency: <code>elapsed_ms</code>/<code>ttft_ms</code> measure the whole eval item
-          (including the real chat-turn answer), and{' '}
-          <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">run-executor.ts</code>&apos;s dual-router
-          instrumentation calls <code>routeUserMessageToSme</code> and <code>classifyUserIntent</code> with no
-          timing capture around either call. Showing a chart here would mean fabricating numbers. To light this
-          section up, add a <code>classifier_latency_ms</code> (or separate keyword/LLM columns) captured at the
-          call sites in <code>~/lib/tests/run-executor.ts</code>.
+        <p className="mb-4 max-w-2xl text-sm text-slate-600">
+          Wall-clock time for each router&apos;s call in{' '}
+          <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">run-executor.ts</code> (B0-524) — measured
+          independently of the real chat-turn answer&apos;s own latency (<code>elapsed_ms</code>/
+          <code>ttft_ms</code>). The LLM router&apos;s sample includes any cache-hit or keyword-fallback path,
+          since a fast fallback is still a real data point.
         </p>
+        {latencyProfile.keyword.sampleCount === 0 && latencyProfile.llm.sampleCount === 0 ? (
+          <p className="text-sm text-slate-500">
+            No rows carry latency data yet — every item predates the B0-524 columns. Run an eval suite through
+            the current harness to populate this section.
+          </p>
+        ) : (
+          <div className="flex flex-wrap gap-3">
+            <LatencyStatBadge label="Keyword router" stats={latencyProfile.keyword} />
+            <LatencyStatBadge label="LLM classifier" stats={latencyProfile.llm} />
+          </div>
+        )}
       </section>
 
       <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">

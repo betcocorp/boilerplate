@@ -53,23 +53,34 @@ export type RoutingComparisonFields = {
   llm_route: RoutingLabel;
   routing_confidence: number;
   intended_agent_label: string | null;
+  /** B0-524 — wall-clock ms for the `routeUserMessageToSme` call, measured at the run-executor.ts
+   * call site. Optional so callers that can't/don't measure (e.g. existing unit tests) still typecheck. */
+  keyword_route_latency_ms?: number | null;
+  /** B0-524 — wall-clock ms for the `classifyUserIntent` call, including cache-hit and
+   * keyword-fallback paths (both still measured — a fast fallback is a real, informative data point). */
+  llm_route_latency_ms?: number | null;
 };
 
 /**
- * Builds the four B0-501-computed `test_result_items` columns (`routing_decision` is not among
+ * Builds the B0-501-computed `test_result_items` columns (`routing_decision` is not among
  * them — it is generated from `response_payload`, not written by this instrumentation) from one
- * keyword decision + one LLM classification + the resolved ground-truth label.
+ * keyword decision + one LLM classification + the resolved ground-truth label, plus the B0-524
+ * per-router latencies measured at the call site.
  */
 export function buildRoutingComparisonFields(params: {
   keywordDecision: Pick<SmeRouteDecision, 'agent'>;
   llmClassification: Pick<IntentClassification, 'intent' | 'confidence'>;
   intendedAgentLabel: string | null;
+  keywordRouteLatencyMs?: number | null;
+  llmRouteLatencyMs?: number | null;
 }): RoutingComparisonFields {
   return {
     keyword_route: normalizeKeywordRoute(params.keywordDecision),
     llm_route: params.llmClassification.intent,
     routing_confidence: params.llmClassification.confidence,
     intended_agent_label: params.intendedAgentLabel,
+    keyword_route_latency_ms: params.keywordRouteLatencyMs ?? null,
+    llm_route_latency_ms: params.llmRouteLatencyMs ?? null,
   };
 }
 
@@ -465,5 +476,56 @@ export function computeRoutingComparisonSummary(
     comparableCount,
     agreementCount,
     agreementRate: comparableCount > 0 ? agreementCount / comparableCount : null,
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Latency profile — B0-524. Measured at the run-executor.ts call sites into
+// keyword_route_latency_ms/llm_route_latency_ms; this reduces a set of rows into per-router
+// median/p95, so the dashboard has a real comparison instead of the "not available yet" placeholder.
+// ---------------------------------------------------------------------------------------------
+
+export type RouterLatencyStats = {
+  sampleCount: number;
+  medianMs: number | null;
+  p95Ms: number | null;
+};
+
+export type RouterLatencyProfile = {
+  keyword: RouterLatencyStats;
+  llm: RouterLatencyStats;
+};
+
+function computeLatencyStats(samples: number[]): RouterLatencyStats {
+  if (samples.length === 0) {
+    return { sampleCount: 0, medianMs: null, p95Ms: null };
+  }
+  const sorted = [...samples].sort((a, b) => a - b);
+  const percentile = (p: number) => sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))];
+  return {
+    sampleCount: sorted.length,
+    medianMs: percentile(0.5),
+    p95Ms: percentile(0.95),
+  };
+}
+
+/**
+ * Reduces a set of `test_result_items` rows into a per-router latency profile. Rows predating
+ * B0-524 (or where a call site couldn't measure) have `null` latency and are excluded from the
+ * sample rather than treated as zero — a missing measurement is not a fast one.
+ */
+export function computeRouterLatencyProfile(
+  items: Array<{ keywordRouteLatencyMs: number | null; llmRouteLatencyMs: number | null }>,
+): RouterLatencyProfile {
+  const keywordSamples = items
+    .map((item) => item.keywordRouteLatencyMs)
+    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+  const llmSamples = items
+    .map((item) => item.llmRouteLatencyMs)
+    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+
+  return {
+    keyword: computeLatencyStats(keywordSamples),
+    llm: computeLatencyStats(llmSamples),
   };
 }

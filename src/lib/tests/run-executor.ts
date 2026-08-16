@@ -51,9 +51,12 @@ async function computeRoutingComparisonForItem(
     testIntendedAgent: test.intended_agent,
   });
 
+  const keywordStartedAt = performance.now();
   const keywordDecision: SmeRouteDecision = routeUserMessageToSme(item.prompt);
+  const keywordRouteLatencyMs = Math.round(performance.now() - keywordStartedAt);
 
   let llmClassification: Pick<IntentClassification, 'intent' | 'confidence'>;
+  const llmStartedAt = performance.now();
   try {
     llmClassification = await classifyUserIntent(item.prompt, []);
   } catch (error) {
@@ -66,11 +69,16 @@ async function computeRoutingComparisonForItem(
       confidence: keywordDecision.agent ? 0.5 : 0,
     };
   }
+  // B0-524 — measured even on the fallback path above: a fast keyword-fallback is still a real,
+  // informative latency sample, not a missing one (only a thrown-before-start case has no timing).
+  const llmRouteLatencyMs = Math.round(performance.now() - llmStartedAt);
 
   return buildRoutingComparisonFields({
     keywordDecision,
     llmClassification,
     intendedAgentLabel,
+    keywordRouteLatencyMs,
+    llmRouteLatencyMs,
   });
 }
 

@@ -1112,6 +1112,9 @@ export type RoutingComparisonAggregateRow = {
   keywordRoute: string | null;
   llmRoute: string | null;
   routingConfidence: number | null;
+  /** B0-524 — null on rows predating the latency columns. */
+  keywordRouteLatencyMs: number | null;
+  llmRouteLatencyMs: number | null;
 };
 
 const ROUTING_COMPARISON_PAGE_SIZE = 500;
@@ -1133,7 +1136,7 @@ export async function listRoutingComparisonRows(): Promise<RoutingComparisonAggr
     supabase
       .from('test_result_items')
       .select(
-        'id, test_result_id, row_index, created_at, intended_agent_label, routing_decision, keyword_route, llm_route, routing_confidence',
+        'id, test_result_id, row_index, created_at, intended_agent_label, routing_decision, keyword_route, llm_route, routing_confidence, keyword_route_latency_ms, llm_route_latency_ms',
       )
       .not('keyword_route', 'is', null)
       .order('created_at', { ascending: true })
@@ -1151,6 +1154,8 @@ export async function listRoutingComparisonRows(): Promise<RoutingComparisonAggr
             keywordRoute: row.keyword_route,
             llmRoute: row.llm_route,
             routingConfidence: row.routing_confidence,
+            keywordRouteLatencyMs: row.keyword_route_latency_ms,
+            llmRouteLatencyMs: row.llm_route_latency_ms,
           }),
         );
       }),
