@@ -2870,11 +2870,18 @@ export async function runProductSupportWorkflow(input: {
     // fail to catch) a genuinely correct regulated claim quoted from a part of the document
     // outside that window. Re-fetch the full body per distinct real document id instead; this
     // never reaches the model or the persisted tool payload, so it costs one extra DB read, not
-    // extra prompt tokens. Synthetic sources (e.g. the verified-facts/lab-report blocks, whose
-    // `documentId` is not a real `rag.document` row) simply have no entry in the map and fall
-    // back to `s.documentBody`, which for those is already the full block, not a chunk window.
+    // extra prompt tokens. Synthetic sources (e.g. `VERIFIED_FACTS_SOURCE_ID`, `'verified-facts'`,
+    // and its batch composite form `verified-facts:<productLineKey>`) are NOT `rag.document` rows
+    // and are not valid uuids -- `document_id` is a uuid column, so passing one through to
+    // `assembleDocumentBodies`'s `.in('document_id', ...)` filter throws a hard Postgres error
+    // (`invalid input syntax for type uuid`) rather than just omitting that row, taking down the
+    // whole request. Filter to real-looking document ids first; a synthetic source's `documentBody`
+    // (already the full facts/lab-report block, not a chunk window) is used as-is via the fallback
+    // below.
+    const UUID_PATTERN =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     const fullDocumentBodies = await assembleDocumentBodies(
-      sourceMeta.map((s) => s.documentId),
+      sourceMeta.map((s) => s.documentId).filter((id) => UUID_PATTERN.test(id)),
     );
     const regulatedClaimGrounding = evaluateRegulatedClaimGrounding({
       draftAnswer,
