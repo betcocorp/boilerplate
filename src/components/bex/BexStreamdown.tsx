@@ -1,5 +1,6 @@
 'use client';
 
+import type { ComponentProps } from 'react';
 import { defaultTranslations, Streamdown } from 'streamdown';
 import type { LinkSafetyModalProps } from 'streamdown';
 
@@ -53,6 +54,7 @@ type BexStreamdownProps = {
   isStreaming: boolean;
   isUser: boolean;
   className?: string;
+  components?: ComponentProps<typeof Streamdown>['components'];
 };
 
 export function BexStreamdown({
@@ -60,6 +62,7 @@ export function BexStreamdown({
   isStreaming,
   isUser,
   className,
+  components,
 }: BexStreamdownProps) {
   return (
     <div
@@ -79,6 +82,7 @@ export function BexStreamdown({
       )}
     >
       <Streamdown
+        components={components}
         isAnimating={isStreaming}
         linkSafety={{
           enabled: true,
