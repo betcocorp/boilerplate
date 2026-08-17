@@ -1,7 +1,14 @@
 import { getErrorMessage } from '~/lib/utils';
+import { logWarn } from '~/lib/observability/logger';
 import { PRODUCT_TOOL_NAMES, type ProductToolName } from '~/lib/tools/tool-schemas';
 import { buildModelToolPayload } from '~/lib/tools/model-tool-payload';
 import { executeProductTool } from '~/lib/tools/product-tools';
+import { enforceToolOutputBudget } from '~/lib/tools/tool-output-budget';
+import {
+  isToolTimeoutError,
+  resolveToolTimeoutMs,
+  withToolTimeout,
+} from '~/lib/tools/tool-timeouts';
 
 import type { ToolCallOrigin, ToolRetrievalParams, ToolTraceEntry } from '~/lib/audit/trace';
 import { toolRetrievalParamsSchema } from '~/lib/audit/trace';
@@ -76,6 +83,8 @@ export function buildToolTraceEntry(input: {
   durationMs: number;
   origin?: ToolCallOrigin;
   modelOutputChars?: number;
+  /** B0-382 — the model-facing output was capped by the tool-output size budget. */
+  modelOutputBudgetApplied?: boolean;
   /** B0-493 — retrieval parameters extracted from the FULL (untruncated) payload. */
   retrieval?: ToolRetrievalParams;
 }): ToolTraceEntry {
@@ -96,6 +105,7 @@ export function buildToolTraceEntry(input: {
     ...(input.modelOutputChars !== undefined
       ? { modelOutputChars: input.modelOutputChars }
       : {}),
+    ...(input.modelOutputBudgetApplied ? { modelOutputBudgetApplied: true } : {}),
     ...(input.retrieval ? { retrieval: input.retrieval } : {}),
   };
 }
@@ -125,6 +135,7 @@ export async function executeToolCall(input: {
     ok: boolean,
     modelOutputChars?: number,
     retrieval?: ToolRetrievalParams,
+    modelOutputBudgetApplied?: boolean,
   ) =>
     buildToolTraceEntry({
       toolName: input.name,
@@ -135,6 +146,7 @@ export async function executeToolCall(input: {
       durationMs: Date.now() - started,
       origin: input.origin ?? 'model_chosen',
       modelOutputChars,
+      modelOutputBudgetApplied,
       retrieval,
     });
 
@@ -147,7 +159,13 @@ export async function executeToolCall(input: {
       return { output: msg, trace: traceFor(msg, false) };
     }
 
-    const payload = await executeProductTool(input.name, args, input.auditCtx);
+    // B0-380 — bounded execution: a hung downstream call becomes a structured timeout failure
+    // (thrown as ToolTimeoutError, serialized by the catch below) instead of stalling the turn.
+    const payload = await withToolTimeout(
+      executeProductTool(input.name, args, input.auditCtx),
+      input.name,
+      resolveToolTimeoutMs(input.name),
+    );
     const out = JSON.stringify(payload);
 
     // B0-437 — only carry a model variant when it is actually smaller; an equal-size variant would
@@ -158,14 +176,46 @@ export async function executeToolCall(input: {
     // B0-493 — read off the FULL payload object, never the (possibly truncated) `out` string.
     const retrieval = extractToolRetrievalParams(payload);
 
+    // B0-382 — cap what enters the model context. Runs on the string the runtimes would actually
+    // send (`modelOutput ?? output`); the persisted full `out` is never capped.
+    const budget = enforceToolOutputBudget(useModelOut ? modelOut : out);
+    if (budget.applied) {
+      logWarn('tool_output_budget_applied', {
+        tool_name: input.name,
+        call_id: input.callId,
+        original_chars: budget.originalChars,
+        capped_chars: budget.output.length,
+        truncated_documents: budget.truncatedDocuments,
+        dropped_sources: budget.droppedSources,
+      });
+    }
+    const modelFacing = budget.applied ? budget.output : useModelOut ? modelOut : null;
+
     return {
       output: out,
-      ...(useModelOut ? { modelOutput: modelOut } : {}),
-      trace: traceFor(out, true, useModelOut ? modelOut.length : undefined, retrieval),
+      ...(modelFacing !== null ? { modelOutput: modelFacing } : {}),
+      trace: traceFor(
+        out,
+        true,
+        modelFacing !== null ? modelFacing.length : undefined,
+        retrieval,
+        budget.applied || undefined,
+      ),
     };
   } catch (err) {
     const message = getErrorMessage(err);
     const out = JSON.stringify({ ok: false, error: message });
+
+    // B0-380 — structured signal alongside the ordinary failure path; the workflow's `tool_failed`
+    // audit row is emitted off `trace.ok` exactly like any other tool failure.
+    if (isToolTimeoutError(err)) {
+      logWarn('tool_timeout', {
+        tool_name: input.name,
+        call_id: input.callId,
+        timeout_ms: err.timeoutMs,
+        duration_ms: Date.now() - started,
+      });
+    }
 
     return { output: out, trace: traceFor(out, false) };
   }
