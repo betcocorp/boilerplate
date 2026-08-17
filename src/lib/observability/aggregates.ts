@@ -55,9 +55,12 @@ const CHILD_WINDOW_PADDING_MS = 60 * 60 * 1000;
  *    "validator bypassed, no sources" heuristic — answered, but thin.
  *  - `low`  (< 0.50): the 0.4 regulated-claim clamp and validator rejections.
  *  - `none`: `confidence IS NULL` — in-flight or failed before the validator ran.
+ *
+ * Exported (B0-536) so `~/lib/observability/conversation-queries.ts` buckets confidence with the
+ * exact same boundaries — the escalation-vs-confidence correlation must agree with this dashboard.
  */
-const CONFIDENCE_HIGH_MIN = 0.8;
-const CONFIDENCE_MID_MIN = 0.5;
+export const CONFIDENCE_HIGH_MIN = 0.8;
+export const CONFIDENCE_MID_MIN = 0.5;
 
 /** Bucket label for runs whose `final_output` carries no `routingDecision`. */
 const UNROUTED_LABEL = 'unrouted';
