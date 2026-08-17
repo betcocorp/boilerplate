@@ -152,6 +152,61 @@ export async function fetchFactsForProductLineKey(
   return facts;
 }
 
+/**
+ * B0-549 — batch counterpart to `fetchFactsForProductLineKey`: resolves every given
+ * `product_line_key` to its entity id in ONE query, then reuses `fetchProductLineFacts` (already
+ * batched) for the facts/efficacy rows in a second query — two round trips total regardless of
+ * how many product lines are requested, instead of one `fetchFactsForProductLineKey` call (and its
+ * own entity + facts round trips) per product. Keyed by `product_line_key` (not entity id) so
+ * callers can look results up by the same key they passed in. Product lines that don't resolve to
+ * an entity, or resolve but carry no verified facts, are simply absent from the returned map —
+ * same "not on file" semantics as the single-key function, never a fabricated placeholder.
+ */
+export async function fetchFactsForProductLineKeys(
+  productLineKeys: string[],
+  organism?: string,
+): Promise<Map<string, ProductLineFacts>> {
+  const uniqueKeys = [...new Set(productLineKeys.filter((k) => k.trim()))];
+  const result = new Map<string, ProductLineFacts>();
+  if (uniqueKeys.length === 0) {
+    return result;
+  }
+
+  const rag = getSupabaseServiceRoleClient().schema('rag');
+  const { data: entities, error } = await rag
+    .from('entity')
+    .select('id, product_line_key')
+    .eq('entity_type', 'product_line')
+    .in('product_line_key', uniqueKeys);
+
+  if (error || !entities) {
+    return result; // degrade gracefully — same posture as fetchProductLineFacts on error
+  }
+
+  const entityIdByProductLineKey = new Map<string, string>();
+  for (const row of entities) {
+    if (row.product_line_key && !entityIdByProductLineKey.has(row.product_line_key)) {
+      entityIdByProductLineKey.set(row.product_line_key, row.id);
+    }
+  }
+
+  const factsByEntityId = await fetchProductLineFacts([...entityIdByProductLineKey.values()]);
+  const needle = organism?.trim().toLowerCase();
+
+  for (const [productLineKey, entityId] of entityIdByProductLineKey) {
+    const facts = factsByEntityId.get(entityId);
+    if (!facts || !hasAnyScalar(facts)) continue;
+    result.set(
+      productLineKey,
+      needle
+        ? { ...facts, efficacy: facts.efficacy.filter((e) => e.organism.toLowerCase().includes(needle)) }
+        : facts,
+    );
+  }
+
+  return result;
+}
+
 function hasAnyScalar(f: ProductLineFacts): boolean {
   return (
     f.dilutionDisplay != null ||

@@ -324,6 +324,29 @@ export type TransportRetryTuning = {
   }) => void;
 };
 
+/**
+ * B0-550 — per-attempt request timeout for `client.responses.create`/`.stream` calls. The OpenAI
+ * SDK's own default (10 minutes) is itself RETRIED by the SDK's default `maxRetries: 2` (see that
+ * option's own doc comment: "you may wait much longer than this timeout before the promise
+ * succeeds or fails") — production stalls of 2,000-6,200 SECONDS were observed with no bound at
+ * all, because none of these call sites overrode either default. Every call site now also passes
+ * `maxRetries: 0` to the SDK, so `retryTransportFaults` above is the ONE bounded-retry policy, and
+ * this timeout is the only thing bounding a single attempt's wall-clock time.
+ *
+ * Configurable via `BEX_OPENAI_REQUEST_TIMEOUT_MS` without a redeploy; falls back to the default
+ * on anything that is not a positive finite number.
+ */
+export const DEFAULT_OPENAI_REQUEST_TIMEOUT_MS = 60_000;
+
+export function resolveOpenAiRequestTimeoutMs(): number {
+  const raw = process.env.BEX_OPENAI_REQUEST_TIMEOUT_MS;
+  if (!raw) {
+    return DEFAULT_OPENAI_REQUEST_TIMEOUT_MS;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_OPENAI_REQUEST_TIMEOUT_MS;
+}
+
 export type RetryTransportOptions = TransportRetryTuning & {
   runtime: RetryRuntimeTag;
   /** Human label for logs, e.g. `responses.create round 2`. */

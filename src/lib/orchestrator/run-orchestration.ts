@@ -96,6 +96,10 @@ async function runBexChatOrchestration(input: unknown): Promise<OrchestrationRun
       // B0-519 — whether the history cap capped/reset this turn's replay; see
       // `capConversationHistory` in `run-product-support-workflow.ts`.
       historyCapApplied: outcome.historyCapApplied,
+      // B0-491 — the answering agent's own self-reported confidence, distinct from `confidence`.
+      agentConfidence: outcome.agentConfidence,
+      agentConfidenceBasis: outcome.agentConfidenceBasis,
+      agentConfidenceReason: outcome.agentConfidenceReason,
     },
   };
 }

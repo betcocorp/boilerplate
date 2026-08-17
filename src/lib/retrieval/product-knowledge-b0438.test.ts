@@ -18,7 +18,8 @@ import type { RagSearchMatch } from '~/lib/rag/search';
 vi.mock('~/lib/rag/search', () => ({ searchProductChunks: vi.fn() }));
 vi.mock('~/supabase/clients/service-role', () => ({ getSupabaseServiceRoleClient: vi.fn() }));
 vi.mock('~/lib/retrieval/document-assembly', () => ({
-  assembleDocumentBodies: vi.fn(),
+  assembleNeighborChunkBodies: vi.fn(),
+  chunkWindowKey: (r: { documentId: string; chunkIndex: number }) => `${r.documentId}:${r.chunkIndex}`,
   fetchDocumentSourceRefs: vi.fn(),
 }));
 vi.mock('~/lib/rag/entity-context', () => ({
@@ -33,7 +34,7 @@ vi.mock('~/lib/retrieval/product-facts', () => ({
 import { searchProductChunks } from '~/lib/rag/search';
 import { fetchEntityContexts } from '~/lib/rag/entity-context';
 import {
-  assembleDocumentBodies,
+  assembleNeighborChunkBodies,
   fetchDocumentSourceRefs,
 } from '~/lib/retrieval/document-assembly';
 import { fetchProductLineFacts } from '~/lib/retrieval/product-facts';
@@ -218,20 +219,22 @@ beforeEach(() => {
   hooks.pairwiseRows = [];
   hooks.onPairwiseCall = null;
   installSupabaseStub();
-  vi.mocked(assembleDocumentBodies).mockImplementation(async (ids: string[]) => {
-    return new Map(
-      ids.map((id) => [
-        id,
-        {
-          body: `assembled body for ${id}`,
-          chunkCount: 1,
-          truncated: false,
-          estimatedTokens: 12,
-          chunkIds: [`chunk-of-${id}`],
-        },
-      ]),
-    );
-  });
+  vi.mocked(assembleNeighborChunkBodies).mockImplementation(
+    async (requests: Array<{ documentId: string; chunkIndex: number }>) => {
+      return new Map(
+        requests.map((r) => [
+          `${r.documentId}:${r.chunkIndex}`,
+          {
+            body: `assembled body for ${r.documentId}`,
+            chunkCount: 1,
+            truncated: false,
+            estimatedTokens: 12,
+            chunkIds: [`chunk-of-${r.documentId}`],
+          },
+        ]),
+      );
+    },
+  );
   vi.mocked(fetchDocumentSourceRefs).mockResolvedValue(new Map());
   vi.mocked(fetchEntityContexts).mockResolvedValue(new Map());
   vi.mocked(fetchProductLineFacts).mockResolvedValue(new Map());
@@ -505,7 +508,7 @@ describe('B0-438 — B0-259 document-kind precedence is untouched', () => {
 });
 
 describe('B0-438 — only the winning pass is hydrated', () => {
-  it('assembles document bodies once, for the anchored winner', async () => {
+  it('assembles chunk-window bodies once, for the anchored winner', async () => {
     const anchoredMatches = [
       match({ chunk_id: 'a1', similarity: 0.9, document_kind: 'label' }),
       match({ chunk_id: 'a2', similarity: 0.8, document_kind: 'sds', section_type: 'hazard' }),
@@ -518,16 +521,16 @@ describe('B0-438 — only the winning pass is hydrated', () => {
 
     await ragQueryForProductKnowledgeWithMeta({ query: 'triforce contact time' });
 
-    expect(vi.mocked(assembleDocumentBodies)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(assembleNeighborChunkBodies)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(fetchDocumentSourceRefs)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(assembleDocumentBodies).mock.calls[0]?.[0]).toEqual([
-      'doc-a1',
-      'doc-a2',
-      'doc-a3',
+    expect(vi.mocked(assembleNeighborChunkBodies).mock.calls[0]?.[0]).toEqual([
+      { documentId: 'doc-a1', chunkIndex: 0 },
+      { documentId: 'doc-a2', chunkIndex: 0 },
+      { documentId: 'doc-a3', chunkIndex: 0 },
     ]);
   });
 
-  it('assembles document bodies once, for the broad winner', async () => {
+  it('assembles chunk-window bodies once, for the broad winner', async () => {
     stubSearches({
       broad: { matches: LOCKING_BROAD_MATCHES, similaritySearchMs: 10 },
       anchored: { matches: [], similaritySearchMs: 20 },
@@ -535,11 +538,11 @@ describe('B0-438 — only the winning pass is hydrated', () => {
 
     await ragQueryForProductKnowledgeWithMeta({ query: 'triforce contact time' });
 
-    expect(vi.mocked(assembleDocumentBodies)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(assembleDocumentBodies).mock.calls[0]?.[0]).toEqual([
-      'doc-b3',
-      'doc-b2',
-      'doc-b1',
+    expect(vi.mocked(assembleNeighborChunkBodies)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(assembleNeighborChunkBodies).mock.calls[0]?.[0]).toEqual([
+      { documentId: 'doc-b3', chunkIndex: 0 },
+      { documentId: 'doc-b2', chunkIndex: 0 },
+      { documentId: 'doc-b1', chunkIndex: 0 },
     ]);
   });
 });

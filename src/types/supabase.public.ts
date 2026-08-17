@@ -535,45 +535,6 @@ export type Database = {
         }
         Relationships: []
       }
-      golden_dataset: {
-        Row: {
-          category: string | null
-          created_at: string
-          expected_agent: string | null
-          expected_references: Json | null
-          id: number
-          ideal_response: string | null
-          Priority: number
-          question: string | null
-          should_answer: boolean | null
-          should_cite: boolean | null
-        }
-        Insert: {
-          category?: string | null
-          created_at?: string
-          expected_agent?: string | null
-          expected_references?: Json | null
-          id?: number
-          ideal_response?: string | null
-          Priority: number
-          question?: string | null
-          should_answer?: boolean | null
-          should_cite?: boolean | null
-        }
-        Update: {
-          category?: string | null
-          created_at?: string
-          expected_agent?: string | null
-          expected_references?: Json | null
-          id?: number
-          ideal_response?: string | null
-          Priority?: number
-          question?: string | null
-          should_answer?: boolean | null
-          should_cite?: boolean | null
-        }
-        Relationships: []
-      }
       group_permission: {
         Row: {
           created_at: string
@@ -892,8 +853,11 @@ export type Database = {
       }
       test_result_items: {
         Row: {
+          agent_confidence: number | null
           answer_provenance: string | null
           app_version: string | null
+          confidence: number | null
+          confidence_provenance: string | null
           created_at: string
           elapsed_ms: number
           error_message: string | null
@@ -903,6 +867,7 @@ export type Database = {
           keyword_route_latency_ms: number | null
           llm_route: string | null
           llm_route_latency_ms: number | null
+          max_similarity: number | null
           passed: boolean
           prompt_version: string | null
           response_payload: Json | null
@@ -917,8 +882,11 @@ export type Database = {
           workflow_run_id: string | null
         }
         Insert: {
+          agent_confidence?: number | null
           answer_provenance?: string | null
           app_version?: string | null
+          confidence?: number | null
+          confidence_provenance?: string | null
           created_at?: string
           elapsed_ms: number
           error_message?: string | null
@@ -928,6 +896,7 @@ export type Database = {
           keyword_route_latency_ms?: number | null
           llm_route?: string | null
           llm_route_latency_ms?: number | null
+          max_similarity?: number | null
           passed?: boolean
           prompt_version?: string | null
           response_payload?: Json | null
@@ -942,8 +911,11 @@ export type Database = {
           workflow_run_id?: string | null
         }
         Update: {
+          agent_confidence?: number | null
           answer_provenance?: string | null
           app_version?: string | null
+          confidence?: number | null
+          confidence_provenance?: string | null
           created_at?: string
           elapsed_ms?: number
           error_message?: string | null
@@ -953,6 +925,7 @@ export type Database = {
           keyword_route_latency_ms?: number | null
           llm_route?: string | null
           llm_route_latency_ms?: number | null
+          max_similarity?: number | null
           passed?: boolean
           prompt_version?: string | null
           response_payload?: Json | null

@@ -40,6 +40,13 @@ export type ConfidenceGateKind =
   | 'early_decline_gate'
   /** `useValidator === false` heuristic: 0.9 with sources, 0.6 without, issue `validator_bypassed_for_testing`. */
   | 'validator_bypass'
+  /**
+   * B0-546 — the validator's LLM pass was skipped because retrieval already found a
+   * near-exact match on a non-safety route (issue `validator_skipped_high_similarity_non_safety_route`).
+   * Distinct from `validator_bypass`: `useValidator` was true, but the confidence gate decided the
+   * LLM pass wasn't needed this turn.
+   */
+  | 'validator_skip_high_similarity'
   /** The LLM validator's own approved/confidence/issues self-report (`validation_completed`). */
   | 'llm_validator'
   /**

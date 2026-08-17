@@ -25,6 +25,7 @@ import {
 import { logError, logInfo } from '~/lib/observability/logger';
 import { getOpenAIClient, resolveResponsesModel } from '~/lib/openai/client';
 import { runResponsesWithToolLoop } from '~/lib/openai/responses-runtime';
+import type { LlmTokenUsage } from '~/lib/openai/responses-runtime';
 import { runAiSdkWithToolLoop } from '~/lib/bex/ai-sdk-runtime';
 import {
   routeUserMessageToSme,
@@ -61,6 +62,7 @@ import {
 import { buildCompetitiveRecommendationAnswer } from '~/lib/recommendations/recommendation-answer';
 import { productSupportToolsForRoute } from '~/lib/tools/definitions';
 import { buildToolTraceEntry, executeToolCall } from '~/lib/tools/execute-tool-call';
+import { assembleDocumentBodies } from '~/lib/retrieval/document-assembly';
 
 import type { Json } from '~/types/supabase.public';
 
@@ -77,12 +79,29 @@ import {
   runSpeculativeRetrieval,
 } from '~/lib/workflows/product-support/speculative-retrieval';
 import {
+  createAgentConfidenceStreamFilter,
+  extractAgentSelfConfidence,
+  NO_MODEL_CALL_AGENT_CONFIDENCE,
+} from '~/lib/workflows/product-support/agent-self-confidence';
+import {
+  applyConfidenceCap,
+  confidenceProvenanceFields,
+  type ConfidenceProvenanceState,
+} from '~/lib/workflows/product-support/confidence-provenance';
+import { PRODUCT_SUPPORT_RERANK_ENABLED } from '~/lib/retrieval/product-knowledge';
+import { isRerankerConfigured } from '~/lib/rag/rerank';
+import type {
+  GateActivationRecord,
+  RuntimeConfig,
+} from '~/lib/workflows/product-support/product-support-schemas';
+import {
   gateRecordSchema,
   promptRecordSchema,
   type AnswerProvenance,
   type GateRecord,
   type PromptRecord,
   type ProductSupportFinalOutput,
+  type RetrievalConfigSummary,
   type RetrievedDocumentChunkRef,
   type ValidatorResult,
 } from '~/lib/workflows/product-support/product-support-schemas';
@@ -172,9 +191,20 @@ export function buildToolCallAuditPayload(
 }
 
 /**
- * The validator now sees the full document body for each source (capped per
- * document) so it can verify claims against the entire approved document
- * rather than a single fragmented chunk.
+ * B0-546 — the validator's LLM pass sees CHUNK-level evidence (each source's retrieved
+ * `snippet`) rather than the reassembled full-document body: far fewer tokens per source (a
+ * ~900-char matched chunk vs. a whole label/SDS), so the pass is cheaper and faster, and it is
+ * sufficient for the validator's actual job (does the draft's claim appear in evidence retrieved
+ * for this turn?). Falls back to `documentBody` only when a source carries no snippet.
+ *
+ * This is deliberately separate from the B0-257 regulated-claim guardrail
+ * (`evaluateRegulatedClaimGrounding`), which needs the whole approved document to catch a
+ * regulated value quoted from elsewhere in it, not just the top-matching chunk. Post-B0-547,
+ * `RetrievedSourceMeta.documentBody` here is itself only the narrowed matched-chunk-plus-neighbors
+ * window (the same one the model sees) — it is NOT the full document — so the guardrail call site
+ * below re-fetches the full body per source via `assembleDocumentBodies` specifically for its own
+ * check, rather than reusing this narrowed value. That re-fetch never reaches the model or the
+ * persisted tool payload, so it costs an extra DB read but not extra prompt tokens.
  */
 function buildEvidenceSummary(sources: RetrievedSourceMeta[]): string {
   if (sources.length === 0) {
@@ -186,9 +216,9 @@ function buildEvidenceSummary(sources: RetrievedSourceMeta[]): string {
 
   for (const source of sources) {
     const body =
-      (source.documentBody && source.documentBody.length > 0
-        ? source.documentBody
-        : source.snippet) ?? '';
+      (source.snippet && source.snippet.length > 0
+        ? source.snippet
+        : source.documentBody) ?? '';
     const trimmed = body.slice(0, VALIDATOR_PER_DOCUMENT_CHAR_BUDGET);
     const truncatedSuffix =
       body.length > trimmed.length ? '\n…(truncated for evidence summary)' : '';
@@ -244,6 +274,118 @@ function dominantCacheSource(cacheSourceCounts: Map<string, number>) {
 
   const sorted = [...cacheSourceCounts.entries()].sort((a, b) => b[1] - a[1]);
   return sorted[0]?.[0] ?? null;
+}
+
+/**
+ * B0-490 — raw vs. post-selection top retrieval similarity, rolled up across every successful
+ * search-backed tool call this turn made. `rawTopSimilarity` is the max over each call's winning
+ * search pass BEFORE `selectCuratedMatches` filtered/deduped/truncated it — the score
+ * `evaluateRecommendationGate`'s `LOW_SIMILARITY_THRESHOLD` was actually calibrated against.
+ * `selectedTopSimilarity` is the max over what actually survived into `sources[]`. Both are null
+ * when no tool call this turn carried a `retrieval` block (e.g. a pure cross-reference lookup with
+ * no RAG search). Pure function of the tool output log — no I/O — so it is unit-testable in
+ * isolation from the workflow's DB/OpenAI dependencies.
+ */
+export function extractSimilarityRollupFromToolOutputs(toolOutputs: RuntimeToolOutput[]): {
+  rawTopSimilarity: number | null;
+  selectedTopSimilarity: number | null;
+  droppedByFilterCount: number | null;
+} {
+  let rawTopSimilarity: number | null = null;
+  let selectedTopSimilarity: number | null = null;
+  let droppedByFilterCount: number | null = null;
+
+  for (const entry of toolOutputs) {
+    if (!entry.ok) {
+      continue;
+    }
+    try {
+      const payload = JSON.parse(entry.output) as {
+        retrieval?: {
+          rawTopSimilarity?: unknown;
+          selectedTopSimilarity?: unknown;
+          droppedByFilterCount?: unknown;
+        };
+      };
+      const retrieval = payload.retrieval;
+      if (!retrieval || typeof retrieval !== 'object' || Array.isArray(retrieval)) {
+        continue;
+      }
+
+      if (typeof retrieval.rawTopSimilarity === 'number') {
+        rawTopSimilarity =
+          rawTopSimilarity === null
+            ? retrieval.rawTopSimilarity
+            : Math.max(rawTopSimilarity, retrieval.rawTopSimilarity);
+      }
+      if (typeof retrieval.selectedTopSimilarity === 'number') {
+        selectedTopSimilarity =
+          selectedTopSimilarity === null
+            ? retrieval.selectedTopSimilarity
+            : Math.max(selectedTopSimilarity, retrieval.selectedTopSimilarity);
+      }
+      if (typeof retrieval.droppedByFilterCount === 'number') {
+        droppedByFilterCount = (droppedByFilterCount ?? 0) + retrieval.droppedByFilterCount;
+      }
+    } catch {
+      // Ignore malformed output and continue scanning.
+    }
+  }
+
+  return { rawTopSimilarity, selectedTopSimilarity, droppedByFilterCount };
+}
+
+/**
+ * B0-493 — rolls every search-backed tool call's persisted `ToolTraceEntry.retrieval` up to one
+ * run-level record: a field carries the agreed value when every search call this turn agreed, or
+ * is null AND listed in `mixed` when calls disagreed. Reads the STRUCTURED `trace.retrieval` field
+ * (built from the full untruncated payload at `executeToolCall` time), not the tool output string,
+ * so truncation of a large `sources[]` array never loses this data. Pure function of the resolved
+ * tool trace — no I/O — so it is unit-testable in isolation.
+ */
+export function extractRetrievalConfigFromToolTrace(
+  toolTrace: readonly ToolTraceEntry[],
+): RetrievalConfigSummary {
+  const embeddingModel = new Set<string>();
+  const retrievalStrategy = new Set<string>();
+  const embeddingSource = new Set<string>();
+  const scope = new Set<string>();
+  const minSimilarity = new Set<number>();
+
+  for (const entry of toolTrace) {
+    const retrieval = entry.retrieval;
+    if (!retrieval) {
+      continue;
+    }
+    embeddingModel.add(retrieval.model);
+    retrievalStrategy.add(retrieval.retrievalStrategy);
+    embeddingSource.add(retrieval.embeddingSource);
+    scope.add(retrieval.scope);
+    minSimilarity.add(retrieval.selection.minSimilarity);
+  }
+
+  const mixed: RetrievalConfigSummary['mixed'] = [];
+
+  /** Single value when every search call agreed; null (and flagged in `mixed`) when they disagreed. */
+  function resolve<T>(field: RetrievalConfigSummary['mixed'][number], values: Set<T>): T | null {
+    if (values.size === 0) {
+      return null;
+    }
+    if (values.size > 1) {
+      mixed.push(field);
+      return null;
+    }
+    return [...values][0]!;
+  }
+
+  return {
+    embeddingModel: resolve('embeddingModel', embeddingModel),
+    retrievalStrategy: resolve('retrievalStrategy', retrievalStrategy),
+    embeddingSource: resolve('embeddingSource', embeddingSource),
+    scope: resolve('scope', scope),
+    minSimilarity: resolve('minSimilarity', minSimilarity),
+    mixed,
+  };
 }
 
 /**
@@ -624,6 +766,7 @@ function collectSourcesFromToolOutputs(toolOutputs: RuntimeToolOutput[]): Source
           chunkId?: string;
           title?: string;
           snippet?: string;
+          similarity?: number;
           confidence?: number;
           s3Key?: string | null;
           sourceUri?: string | null;
@@ -642,7 +785,9 @@ function collectSourcesFromToolOutputs(toolOutputs: RuntimeToolOutput[]): Source
           chunkId: s.chunkId,
           title: s.title ?? s.documentId,
           snippet: s.snippet.slice(0, 2000),
-          similarity: s.confidence,
+          // B0-490 — `similarity` is the retrieval similarity under an unambiguous key; `confidence`
+          // is read only as a fallback for a payload that never carried the new key.
+          similarity: typeof s.similarity === 'number' ? s.similarity : s.confidence,
           // B0-257: thread the source PDF/markdown's S3 location through to the persisted
           // citation object so label/SDS-derived directions/hazards/first-aid answers carry it.
           s3Key: s.s3Key ?? undefined,
@@ -1050,12 +1195,81 @@ export function recordGates(records: readonly GateRecord[]): { gates?: GateRecor
 }
 
 /**
+ * B0-554 — sums per-call usage into one totals object, the same shape `openai_responses_agent`
+ * already persists as `usage` alongside its own `usageByCall`. Used by the `validator` step, which
+ * can call the model once (a plain approval/rejection) or twice (approval, then a second pass after
+ * the revision model rewrote the draft) — both calls' usage must be attributed to the one step row.
+ */
+export function sumLlmUsage(calls: readonly LlmTokenUsage[]): LlmTokenUsage {
+  return calls.reduce(
+    (acc, call) => ({
+      promptTokens: acc.promptTokens + call.promptTokens,
+      completionTokens: acc.completionTokens + call.completionTokens,
+      totalTokens: acc.totalTokens + call.totalTokens,
+      cachedPromptTokens: acc.cachedPromptTokens + call.cachedPromptTokens,
+    }),
+    { promptTokens: 0, completionTokens: 0, totalTokens: 0, cachedPromptTokens: 0 },
+  );
+}
+
+/**
  * B0-389 — the single spelling for "the validator pass did not run". The bypassed path used to say
  * `reason: 'temporary_test_bypass'` on the step while putting `validator_bypassed_for_testing` in
  * `validation.issues`, so the same state had two names. The issues token is load-bearing (the
  * observability timeline's `validator_bypass` gate keys off it), so it is the one that survives.
  */
 export const VALIDATOR_BYPASS_REASON = 'validator_bypassed_for_testing';
+
+/**
+ * B0-546 — the single spelling for "the validator pass was skipped because retrieval already
+ * found a near-exact match on a non-safety route", distinct from `VALIDATOR_BYPASS_REASON` (the
+ * admin `useValidator` toggle being off). Kept separate so the observability timeline can tell
+ * the two skip reasons apart instead of conflating "never asked for the validator" with "asked
+ * for it, but the confidence gate decided it wasn't needed this turn".
+ */
+export const VALIDATOR_SKIP_HIGH_SIMILARITY_REASON =
+  'validator_skipped_high_similarity_non_safety_route';
+
+/**
+ * B0-546 — minimum top-source retrieval similarity required to skip the validator's LLM pass
+ * entirely on a non-safety route. Deliberately high: this bypasses the one LLM check that catches
+ * a hallucinated/unsupported claim, so it only fires when retrieval already found a near-exact
+ * match. Configurable via `BEX_VALIDATOR_SKIP_MIN_SIMILARITY` without a redeploy; falls back to
+ * the default on anything that is not a finite number in (0, 1].
+ */
+export const DEFAULT_VALIDATOR_SKIP_MIN_SIMILARITY = 0.85;
+
+export function resolveValidatorSkipMinSimilarity(): number {
+  const raw = process.env.BEX_VALIDATOR_SKIP_MIN_SIMILARITY;
+  if (!raw) {
+    return DEFAULT_VALIDATOR_SKIP_MIN_SIMILARITY;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 && parsed <= 1
+    ? parsed
+    : DEFAULT_VALIDATOR_SKIP_MIN_SIMILARITY;
+}
+
+/** Kill switch: `BEX_VALIDATOR_SKIP_ENABLED=false` disables the B0-546 skip gate without a redeploy. */
+export function isValidatorSkipEnabled(): boolean {
+  return process.env.BEX_VALIDATOR_SKIP_ENABLED !== 'false';
+}
+
+/**
+ * B0-546 — routes considered safety-sensitive enough that the validator pass must never be
+ * skipped purely on retrieval-similarity grounds: usage/safety/dilution-shaped questions
+ * (`queryNeedsUsageAndSafetyCoverage`, already used by the usage/safety coverage gate above), the
+ * dedicated `dilution` SME (dilution ratios are inherently regulated per the org's regulated-data
+ * rule), and `recommendations` (an equivalence claim between an EPA-registered competitor product
+ * and a Betco one).
+ */
+export function isSafetySensitiveRoute(userMessage: string, decision: string): boolean {
+  return (
+    queryNeedsUsageAndSafetyCoverage(userMessage) ||
+    decision === 'dilution' ||
+    decision === 'recommendations'
+  );
+}
 
 /**
  * B0-386 — `error.reason` written on a step that was still `running` but is not the step the
@@ -1151,6 +1365,21 @@ export async function runProductSupportWorkflow(input: {
   // calibration for recommendations is instead enforced by evaluateRecommendationGate (below), which
   // runs regardless of this flag. So the validator stays opt-in on every route.
   const useValidator = input.useValidator ?? false;
+  /**
+   * B0-494 — resolved value of every behavior switch this run observes, computed once so every
+   * consumer (the run-level chip, `/gate`, the final output) agrees on the same snapshot. Resolved
+   * values, not env-var names: `rerankerActive` in particular depends on `isRerankerConfigured()`
+   * (COHERE_API_KEY presence), which can differ between otherwise-identical deploys.
+   */
+  const runtimeConfig: RuntimeConfig = {
+    useValidator,
+    earlyDeclineGateEnabled,
+    aiSdkGenerationEnabled: useAiSdkGeneration,
+    rerankerActive: PRODUCT_SUPPORT_RERANK_ENABLED && isRerankerConfigured(),
+    confidenceGatingDisabled: isConfidenceGatingDisabled(),
+    agentMode,
+    routedDirectly: agentMode !== 'orchestrator',
+  };
   const routingRationale =
     agentMode === 'orchestrator'
       ? route.rationale
@@ -1401,6 +1630,28 @@ export async function runProductSupportWorkflow(input: {
       // B0-519 — no model call happens on this path, so the chain is never touched either way;
       // still recorded for consistency with the answered path's same field.
       historyCapApplied,
+      // B0-491 — no model call happens on this path either; explicit null with a reason rather
+      // than an absent field, same rule as every other run-config field on this branch.
+      agentConfidence: NO_MODEL_CALL_AGENT_CONFIDENCE.agentConfidence,
+      agentConfidenceBasis: NO_MODEL_CALL_AGENT_CONFIDENCE.agentConfidenceBasis,
+      agentConfidenceReason: NO_MODEL_CALL_AGENT_CONFIDENCE.reason,
+      // B0-492 — the fixed decline-gate constant, distinguishable by field from an approved
+      // validator-judged run rather than by string-matching the answer text.
+      ...confidenceProvenanceFields({
+        provenance: 'decline_gate_constant',
+        preCapValue: null,
+        preCapProvenance: null,
+      }),
+      // B0-494 — the switches this run observed are still meaningful here (they're resolved
+      // before the decline check runs); the other four gates never got a chance to run at all.
+      runtimeConfig,
+      activeGates: {
+        validator: { state: 'not_applicable' },
+        earlyDeclineGate: { state: 'ran' },
+        usageSafetyCoverage: { state: 'not_applicable' },
+        regulatedClaimGuardrail: { state: 'not_applicable' },
+        recommendationConfidence: { state: 'not_applicable' },
+      },
       timingBreakdown: {
         toolRounds: 0,
         cacheSource: null,
@@ -1833,6 +2084,19 @@ export async function runProductSupportWorkflow(input: {
     // B0-459 — same ceiling on both runtimes; see `resolveMaxOutputTokens`.
     const maxOutputTokens = resolveMaxOutputTokens();
 
+    /**
+     * B0-491 — the model appends a machine-readable `<!--BEX_AGENT_CONFIDENCE {...}-->` marker to
+     * its answer (see `agent-self-confidence.ts`), but `onAssistantDelta` is the CALLER-VISIBLE
+     * stream sink — "whatever is written here has been shown to someone and cannot be retracted".
+     * This filter sits between the runtime and the caller's own sink so the marker (and a short
+     * lookahead buffer that could be its opening sequence) never reaches the live chat stream, even
+     * though it is still present in the runtime's own `assistantText` return value for extraction
+     * below. `finish()` is called once the whole agent call (all rounds) has resolved.
+     */
+    const confidenceStreamFilter = input.onAssistantDelta
+      ? createAgentConfidenceStreamFilter(input.onAssistantDelta)
+      : null;
+
     // Generation runtime: AI SDK (`streamText`) when BEX_AI_SDK_GENERATION_ENABLED, else the
     // OpenAI Responses tool loop. Both return the same { assistantText, finalResponseId,
     // toolTrace, responseIds } shape consumed below.
@@ -1848,7 +2112,7 @@ export async function runProductSupportWorkflow(input: {
           promptCacheKey,
           preloadedEvidence,
           maxOutputTokens,
-          onAssistantDelta: input.onAssistantDelta,
+          onAssistantDelta: confidenceStreamFilter?.onDelta,
           observeAssistantDelta,
           executeTool: executeToolForGeneration,
         })
@@ -1867,10 +2131,20 @@ export async function runProductSupportWorkflow(input: {
           promptCacheKey,
           preloadedEvidence,
           maxOutputTokens,
-          onAssistantDelta: input.onAssistantDelta,
+          onAssistantDelta: confidenceStreamFilter?.onDelta,
           observeAssistantDelta,
           executeTool: executeToolForGeneration,
         });
+
+    // B0-491 — flush whatever the filter was still holding back as a cautious lookahead (never
+    // actually part of a marker); if a marker opened but never closed, this drops it silently.
+    confidenceStreamFilter?.finish();
+
+    // B0-491 — extract the model's self-reported confidence and strip the marker out of the text
+    // BEFORE anything downstream (decline detection, cross-reference composition, the validator's
+    // evidence summary, persistence) ever sees it.
+    const { text: strippedAssistantText, selfConfidence: agentSelfConfidence } =
+      extractAgentSelfConfidence(agentResult.assistantText);
 
     /**
      * B0-390 — reconcile the workflow's trace with what the runtime reported. Both normally hold the
@@ -2126,7 +2400,7 @@ export async function runProductSupportWorkflow(input: {
         }
       : null;
 
-    let draftAnswer = agentResult.assistantText;
+    let draftAnswer = strippedAssistantText;
     /**
      * B0-391 — the single mutable answer-provenance cursor. Several branches below overwrite the
      * answer, so the rule is LAST WRITER THAT ACTUALLY CHANGED THE TEXT WINS: whatever survives here
@@ -2169,11 +2443,11 @@ export async function runProductSupportWorkflow(input: {
     } else if (crossReferenceResult?.match.productUrl?.trim()) {
       draftAnswer = composeCrossReferenceUserFacingAnswer({
         match: crossReferenceResult.match,
-        assistantText: agentResult.assistantText,
+        assistantText: strippedAssistantText,
       });
       // The composer is a no-op on a declined answer, or one that already leads with the comparable
       // link — claiming composition there would overstate what the workflow did to the text.
-      if (draftAnswer.trim() !== agentResult.assistantText.trim()) {
+      if (draftAnswer.trim() !== strippedAssistantText.trim()) {
         answerProvenance = 'cross_reference_composed';
       }
     } else if (webFallback) {
@@ -2194,10 +2468,27 @@ export async function runProductSupportWorkflow(input: {
     const retrieved_document_chunks =
       collectRetrievedDocumentChunksFromToolOutputs(toolOutputLog);
     const sourceMeta = collectSourceMetaFromToolOutputs(toolOutputLog);
+    // B0-490 — raw (pre-curation) vs. post-selection top retrieval similarity for this turn.
+    const similarityRollup = extractSimilarityRollupFromToolOutputs(toolOutputLog);
     const usageSafetyCoverage = evaluateUsageSafetyCoverage(sourceMeta);
     const needsUsageSafetyCoverage = queryNeedsUsageAndSafetyCoverage(
       input.userMessage,
     );
+    /**
+     * B0-546 — gate for skipping the validator's LLM pass entirely: retrieval already found a
+     * near-exact match (`topSourceSimilarity` clears `resolveValidatorSkipMinSimilarity()`) AND the
+     * route is not safety-sensitive. Computed here (before the validator step even calls the
+     * model) so it can also decide whether that step's `input` records a prompt at all.
+     */
+    const topSourceSimilarity = sources.reduce(
+      (max, s) => (typeof s.similarity === 'number' && s.similarity > max ? s.similarity : max),
+      0,
+    );
+    const canSkipValidatorForHighSimilarity =
+      isValidatorSkipEnabled() &&
+      sources.length > 0 &&
+      topSourceSimilarity >= resolveValidatorSkipMinSimilarity() &&
+      !isSafetySensitiveRoute(input.userMessage, routingDecision);
     let evidenceSummary = buildEvidenceSummary(sourceMeta);
     // A competitive recommendation is grounded by its cross-reference match, not by RAG chunks.
     // Feed that match to the validator as evidence so it doesn't reject the recommendation as
@@ -2255,6 +2546,11 @@ export async function runProductSupportWorkflow(input: {
         // (`cachedPromptTokens` should be non-zero from the 2nd call onward).
         usage: agentResult.usage,
         usageByCall: agentResult.usageByCall,
+        // B0-491 — the agent's own self-reported confidence, persisted alongside the B0-390 tool
+        // trace on this same step row (never the validator/step-level `confidence`).
+        agentConfidence: agentSelfConfidence.agentConfidence,
+        agentConfidenceBasis: agentSelfConfidence.agentConfidenceBasis,
+        agentConfidenceReason: agentSelfConfidence.reason,
         // B0-357 — the one resolved competitor-identity gate for this turn, when it ran.
         // B0-507 — the shadow-mode classifier comparison, when the classifier ran.
         ...recordGates([
@@ -2279,8 +2575,11 @@ export async function runProductSupportWorkflow(input: {
          * (`useValidator === false`, the test runner's default) there is no model call, and a prompt
          * record there would make a step that never ran look like it had. The bypass is instead
          * declared in the step's output (`skipped` + `VALIDATOR_BYPASS_REASON`).
+         *
+         * B0-546 — same reasoning applies to the high-similarity skip: `canSkipValidatorForHighSimilarity`
+         * means this run never calls the model either, so no prompt is recorded for it.
          */
-        ...(useValidator
+        ...(useValidator && !canSkipValidatorForHighSimilarity
           ? recordPrompt({
               stage: 'validator',
               instructions: VALIDATOR_SYSTEM_PROMPT,
@@ -2296,14 +2595,29 @@ export async function runProductSupportWorkflow(input: {
     // B0-368 — set when the revision pass refused to re-ground, so the eventual
     // human-review escalation is distinguishable from a plain validator rejection.
     let revisionPassRefused = false;
+    // B0-554 — per-model-call usage for every call this step makes (0, 1, or 2: the validator can
+    // run twice when the revision pass produces a re-check), summed onto the step's output below.
+    const validatorUsageByCall: LlmTokenUsage[] = [];
     // TODO: Remove this runtime toggle when validator behavior is fully tuned.
     let validation: ValidatorResult;
-    if (useValidator) {
-      validation = await runValidatorPass({
+    if (useValidator && !canSkipValidatorForHighSimilarity) {
+      const pass = await runValidatorPass({
         draftAnswer,
         evidenceSummary,
         modelTag: input.modelTag,
       });
+      validatorUsageByCall.push(pass.usage);
+      validation = pass;
+    } else if (useValidator) {
+      // B0-546 — high-similarity, non-safety route: skip the LLM pass and use the same
+      // heuristic-confidence shape as the `useValidator === false` bypass, tagged with its own
+      // reason so the two skip paths stay distinguishable in the trace.
+      validation = {
+        approved: true,
+        confidence: Math.max(0.9, topSourceSimilarity),
+        issues: [VALIDATOR_SKIP_HIGH_SIMILARITY_REASON],
+        requires_human_review: false,
+      };
     } else {
       validation = {
         approved: true,
@@ -2312,6 +2626,13 @@ export async function runProductSupportWorkflow(input: {
         requires_human_review: false,
       };
     }
+    // B0-492 — the base provenance for this run's confidence chain; every cap below only ever
+    // moves this to `gate_capped` (via `applyConfidenceCap`), never back.
+    let confidenceState: ConfidenceProvenanceState = {
+      provenance: useValidator ? 'validator_judged' : 'validator_bypassed_heuristic',
+      preCapValue: null,
+      preCapProvenance: null,
+    };
 
     audit.enqueue('validation_completed', validation, {
       ...wfCtx,
@@ -2341,14 +2662,13 @@ export async function runProductSupportWorkflow(input: {
       });
       markStepOpen(revisionStep.id);
 
-      const revised = (
-        await runRevisionPass({
-          draftAnswer,
-          validatorIssues: validation.issues,
-          evidenceSummary,
-          modelTag: input.modelTag,
-        })
-      ).trim();
+      const revisionResult = await runRevisionPass({
+        draftAnswer,
+        validatorIssues: validation.issues,
+        evidenceSummary,
+        modelTag: input.modelTag,
+      });
+      const revised = revisionResult.text.trim();
       // The revision pass is told to refuse / ask for docs when it can't ground the flagged
       // claims. Never let such a refusal OVERWRITE a substantive answer the user already saw —
       // keep the draft and flag it for review instead. This matters most for recommendations,
@@ -2372,6 +2692,9 @@ export async function runProductSupportWorkflow(input: {
           refused: revisionRefused,
           outcome: revisionRefused ? 'refused_draft_retained' : 'draft_replaced',
           revisedAnswer: revised,
+          // B0-554 — the revision pass is its own model call; capture its usage on its own step
+          // instead of leaving it unattributed (it used to be dropped entirely).
+          usage: revisionResult.usage,
         }),
       });
       markStepClosed(revisionStep.id);
@@ -2391,11 +2714,13 @@ export async function runProductSupportWorkflow(input: {
             answerProvenance = 'cross_reference_composed';
           }
         }
-        validation = await runValidatorPass({
+        const secondPass = await runValidatorPass({
           draftAnswer,
           evidenceSummary,
           modelTag: input.modelTag,
         });
+        validatorUsageByCall.push(secondPass.usage);
+        validation = secondPass;
         audit.enqueue(
           'validation_completed',
           { pass: 'second', ...validation },
@@ -2436,6 +2761,10 @@ export async function runProductSupportWorkflow(input: {
       retrievedSourceCount: sourceMeta.length,
     };
 
+    // B0-494 — this gate's own activation state, set in every branch below (including the
+    // `not_applicable` case, when `needsUsageSafetyCoverage` is false and none of them run).
+    let usageSafetyCoverageActivation: GateActivationRecord = { state: 'not_applicable' };
+
     if (
       needsUsageSafetyCoverage &&
       (!usageSafetyCoverage.hasUsageEvidence ||
@@ -2460,6 +2789,8 @@ export async function runProductSupportWorkflow(input: {
         ),
         issues: Array.from(new Set([...validation.issues, coverageIssue])),
       };
+      // B0-492 — record the cap (no-op if it somehow didn't actually lower the value).
+      confidenceState = applyConfidenceCap(confidenceState, confidenceBeforeCap, validation.confidence);
       // B0-367: this was the only confidence gate with no audit row, which forced
       // the run-trace timeline to reverse-engineer it by diffing the logged
       // validator pass against the persisted validator step output.
@@ -2483,6 +2814,7 @@ export async function runProductSupportWorkflow(input: {
         verdict: 'capped',
         effect: `approved forced to false, issue "${coverageIssue}" added, confidence ${confidenceBeforeCap} → ${validation.confidence}. The usage/safety fallback copy replaces the draft unless the regulated-claim guardrail also rejected, whose copy wins; see answerProvenance for what the user saw.`,
       });
+      usageSafetyCoverageActivation = { state: 'ran' };
     } else if (
       needsUsageSafetyCoverage &&
       (!usageSafetyCoverage.hasUsageEvidence ||
@@ -2505,6 +2837,7 @@ export async function runProductSupportWorkflow(input: {
         effect:
           'BEX_DISABLE_CONFIDENCE_GATING is set: coverage was insufficient but the confidence cap and approval override were skipped.',
       });
+      usageSafetyCoverageActivation = { state: 'bypassed', reason: 'confidence_gating_disabled' };
     } else if (needsUsageSafetyCoverage) {
       // The gate RAN and found both kinds of evidence — a real verdict, not a skipped gate.
       validatorStepGates.push({
@@ -2515,6 +2848,7 @@ export async function runProductSupportWorkflow(input: {
         effect:
           'Usage and safety evidence were both retrieved; no confidence cap and no fallback copy.',
       });
+      usageSafetyCoverageActivation = { state: 'ran' };
     }
 
     // B0-257: regulated-claim guardrail -- evaluated unconditionally (independent of the
@@ -2529,14 +2863,39 @@ export async function runProductSupportWorkflow(input: {
     // claim. The detection still runs and is always recorded (`gates`, and the review task below
     // when not bypassed) so a reviewer can see exactly what would have been withheld and why --
     // turn the flag back off once real thresholds are calibrated.
+    //
+    // B0-547 follow-up: `sourceMeta[].documentBody` is only the narrowed matched-chunk-plus-
+    // neighbors window shown to the model, not the whole approved document -- reusing it here
+    // would silently shrink this guardrail's grounding pool and could reject (or, just as bad,
+    // fail to catch) a genuinely correct regulated claim quoted from a part of the document
+    // outside that window. Re-fetch the full body per distinct real document id instead; this
+    // never reaches the model or the persisted tool payload, so it costs one extra DB read, not
+    // extra prompt tokens. Synthetic sources (e.g. `VERIFIED_FACTS_SOURCE_ID`, `'verified-facts'`,
+    // and its batch composite form `verified-facts:<productLineKey>`) are NOT `rag.document` rows
+    // and are not valid uuids -- `document_id` is a uuid column, so passing one through to
+    // `assembleDocumentBodies`'s `.in('document_id', ...)` filter throws a hard Postgres error
+    // (`invalid input syntax for type uuid`) rather than just omitting that row, taking down the
+    // whole request. Filter to real-looking document ids first; a synthetic source's `documentBody`
+    // (already the full facts/lab-report block, not a chunk window) is used as-is via the fallback
+    // below.
+    const UUID_PATTERN =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const fullDocumentBodies = await assembleDocumentBodies(
+      sourceMeta.map((s) => s.documentId).filter((id) => UUID_PATTERN.test(id)),
+    );
     const regulatedClaimGrounding = evaluateRegulatedClaimGrounding({
       draftAnswer,
       sources: sourceMeta.map((s) => ({
         documentId: s.documentId,
         title: s.title,
-        documentBody: s.documentBody,
+        documentBody: fullDocumentBodies.get(s.documentId)?.body ?? s.documentBody,
       })),
     });
+
+    // B0-494 — this gate is evaluated unconditionally (see comment above), so it is either `ran`
+    // (whether or not it found anything to reject) or `bypassed` by the kill switch — never
+    // `skipped`/`not_applicable`.
+    let regulatedClaimGuardrailActivation: GateActivationRecord = { state: 'ran' };
 
     if (regulatedClaimGrounding.ungroundedCategories.length > 0) {
       if (isConfidenceGatingDisabled()) {
@@ -2551,7 +2910,9 @@ export async function runProductSupportWorkflow(input: {
           verdict: 'bypassed',
           effect: `BEX_DISABLE_CONFIDENCE_GATING is set: ${regulatedClaimGrounding.ungroundedCategories.join(', ')} could not be verified verbatim against a retrieved source, but the draft answer was allowed through unmodified instead of being replaced with the decline message. See draftAnswer on this run's final_output for exactly what was said.`,
         });
+        regulatedClaimGuardrailActivation = { state: 'bypassed', reason: 'confidence_gating_disabled' };
       } else {
+        const confidenceBeforeRegulatedCap = validation.confidence;
         validation = {
           ...validation,
           approved: false,
@@ -2566,6 +2927,12 @@ export async function runProductSupportWorkflow(input: {
           ),
           requires_human_review: true,
         };
+        // B0-492 — same capping-chain rule as the usage/safety coverage cap above.
+        confidenceState = applyConfidenceCap(
+          confidenceState,
+          confidenceBeforeRegulatedCap,
+          validation.confidence,
+        );
         audit.enqueue(
           'regulated_claim_guardrail_rejected',
           {
@@ -2587,17 +2954,25 @@ export async function runProductSupportWorkflow(input: {
     // to route `product` than when it routed `recommendations` — and this gate only ever tightens
     // confidence, so the conservative direction for an equivalence claim about an EPA-registered
     // product is to apply it whenever the cross-reference post-processing ran.
+    // B0-494 — this gate's own trigger condition is `useCrossReferencePostProcessing` itself, so
+    // `not_applicable` (not `skipped`) is the right label when it never fires this turn.
+    let recommendationConfidenceActivation: GateActivationRecord = { state: 'not_applicable' };
     if (useCrossReferencePostProcessing) {
-      const topSimilarity = sources.reduce(
-        (max, s) =>
-          typeof s.similarity === 'number' && s.similarity > max
-            ? s.similarity
-            : max,
-        0,
-      );
       const gateInput = {
-        baseConfidence: validation.confidence,
-        topSimilarity: sources.length > 0 ? topSimilarity : null,
+        /**
+         * B0-491 — the agent's own self-reported confidence replaces the validator/bypass-heuristic
+         * value as this gate's calibration input, per this ticket's explicit ask. Falls back to
+         * `validation.confidence` only when the model reported no parseable score this turn.
+         */
+        baseConfidence: agentSelfConfidence.agentConfidence ?? validation.confidence,
+        /**
+         * B0-490 — the RAW top similarity (the winning search's ANN score before
+         * `selectCuratedMatches` filtered/deduped/truncated it), not the post-selection max of
+         * `sources[]`. `LOW_SIMILARITY_THRESHOLD` was calibrated against the raw retrieval score,
+         * so feeding it the post-filter max let a ~58% raw hit report 0.90 confidence — the
+         * defect this ticket fixes. Null (gate skips the cap) only when no search tool ran.
+         */
+        topSimilarity: similarityRollup.rawTopSimilarity,
         /**
          * B0-513 — wired from the B0-357 competitor-identity resolution already computed for this
          * turn (`resolvedCompetitor`, above). Guaranteed non-null here: `useCrossReferencePostProcessing`
@@ -2610,7 +2985,29 @@ export async function runProductSupportWorkflow(input: {
         brandKnown: Boolean(resolvedCompetitor?.brand?.trim()),
       };
       const gate = evaluateRecommendationGate(gateInput);
+      recommendationConfidenceActivation =
+        gate.bypassedChecks.length > 0
+          ? { state: 'bypassed', reason: 'confidence_gating_disabled' }
+          : { state: 'ran' };
       const confidenceBeforeGate = validation.confidence;
+      /**
+       * B0-492 — the gate's OWN candidate provenance: `agent_self_scored` when B0-491 substituted
+       * the agent's self-score as `baseConfidence`, otherwise whatever this run's confidence
+       * already was. `applyConfidenceCap` then records whether the gate's internal caps
+       * (low-similarity / missing-brand / category-mismatch) actually lowered that candidate below
+       * `gateInput.baseConfidence`. The outer `Math.min` below decides whether this candidate or
+       * the PRIOR value survives as the run's confidence — only if it wins does its provenance
+       * (and any cap it carries) replace `confidenceState`.
+       */
+      let gateCandidateState: ConfidenceProvenanceState =
+        agentSelfConfidence.agentConfidence !== null
+          ? { provenance: 'agent_self_scored', preCapValue: null, preCapProvenance: null }
+          : confidenceState;
+      gateCandidateState = applyConfidenceCap(
+        gateCandidateState,
+        gateInput.baseConfidence,
+        gate.confidence,
+      );
       validation = {
         ...validation,
         approved: validation.approved && gate.approved,
@@ -2619,9 +3016,12 @@ export async function runProductSupportWorkflow(input: {
         requires_human_review:
           validation.requires_human_review || gate.requires_human_review,
       };
+      if (gate.confidence < confidenceBeforeGate) {
+        confidenceState = gateCandidateState;
+      }
       audit.enqueue(
         'recommendation_gate_applied',
-        { ...gate, topSimilarity },
+        { ...gate, topSimilarity: gateInput.topSimilarity },
         { ...wfCtx, stepId: validationStep.id },
       );
       /**
@@ -2681,13 +3081,26 @@ export async function runProductSupportWorkflow(input: {
       status: 'completed',
       output: jsonContent({
         ...validation,
-        ...(useValidator
+        /**
+         * B0-554 — usage from every model call this step made (0 on either bypass path, 1 for a
+         * plain approval/rejection, 2 when the revision pass triggered a re-check). Placed after
+         * `...validation` so it wins over any single-call `usage` that a `ValidatorPassResult`
+         * spread might otherwise leave stale on `validation` from just the LAST call.
+         */
+        ...(validatorUsageByCall.length > 0
+          ? { usage: sumLlmUsage(validatorUsageByCall), usageByCall: validatorUsageByCall }
+          : {}),
+        ...(useValidator && !canSkipValidatorForHighSimilarity
           ? {}
           : {
               // B0-389 — one unambiguous marker for a step that never called a model, using the
               // same token `validation.issues` already carries (see VALIDATOR_BYPASS_REASON).
+              // B0-546 — the high-similarity skip gets its own reason (VALIDATOR_SKIP_HIGH_SIMILARITY_REASON)
+              // so it stays distinguishable from the admin `useValidator` toggle being off.
               skipped: true,
-              reason: VALIDATOR_BYPASS_REASON,
+              reason: !useValidator
+                ? VALIDATOR_BYPASS_REASON
+                : VALIDATOR_SKIP_HIGH_SIMILARITY_REASON,
             }),
         /**
          * B0-391 — the deterministic gates that mutated `validation` on this step. Both run after
@@ -2695,6 +3108,9 @@ export async function runProductSupportWorkflow(input: {
          * neither gate ran.
          */
         ...recordGates(validatorStepGates),
+        // B0-492 — which mechanism produced the confidence recorded on THIS step, so the
+        // observability trace can render it without reading `answerProvenance`/`issues` strings.
+        ...confidenceProvenanceFields(confidenceState),
       }),
     });
     markStepClosed(validationStep.id);
@@ -2793,6 +3209,10 @@ export async function runProductSupportWorkflow(input: {
       }
     }
 
+    // B0-493 — run-level retrieval configuration rollup, computed from the FINAL resolved trace
+    // (every forced/injected search call included), not just the model's own calls.
+    const retrievalConfig = extractRetrievalConfigFromToolTrace(resolvedToolTrace);
+
     const finalOutput: ProductSupportFinalOutput = {
       answerText: finalText,
       sources,
@@ -2831,6 +3251,38 @@ export async function runProductSupportWorkflow(input: {
             },
           }
         : {}),
+      // B0-490 — raw (pre-curation) vs. post-selection top retrieval similarity for this turn,
+      // distinguishable so a chart stops conflating "what the ANN search returned" with "what
+      // survived filtering". Absent-key detection lets consumers tell this run apart from one
+      // written before this ticket.
+      similaritySummary: {
+        rawTopSimilarity: similarityRollup.rawTopSimilarity,
+        selectedTopSimilarity: similarityRollup.selectedTopSimilarity,
+        droppedByFilterCount: similarityRollup.droppedByFilterCount,
+      },
+      // B0-493 — the retrieval configuration this run actually used, or `mixed` per-field when
+      // this turn's search calls disagreed.
+      retrievalConfig,
+      // B0-491 — the answering agent's OWN self-reported confidence, distinct from `confidence`
+      // (validator judgment / bypass heuristic / gate-capped value below).
+      agentConfidence: agentSelfConfidence.agentConfidence,
+      agentConfidenceBasis: agentSelfConfidence.agentConfidenceBasis,
+      agentConfidenceReason: agentSelfConfidence.reason,
+      // B0-492 — which of the (up to six) mechanisms produced `confidence` above, plus the
+      // pre-cap value/provenance when a gate actually capped it.
+      ...confidenceProvenanceFields(confidenceState),
+      // B0-494 — the resolved value of every behavior switch this run observed, and which gates
+      // ran / were skipped by flag / were bypassed by the B0-452 kill switch / never applied.
+      runtimeConfig,
+      activeGates: {
+        validator: useValidator ? { state: 'ran' } : { state: 'skipped', reason: 'disabled_by_flag' },
+        earlyDeclineGate: earlyDeclineGateEnabled
+          ? { state: 'ran' }
+          : { state: 'skipped', reason: 'disabled_by_flag' },
+        usageSafetyCoverage: usageSafetyCoverageActivation,
+        regulatedClaimGuardrail: regulatedClaimGuardrailActivation,
+        recommendationConfidence: recommendationConfidenceActivation,
+      },
     };
 
     audit.enqueue('workflow_completed', { workflow_run_id: run.id }, wfCtx);

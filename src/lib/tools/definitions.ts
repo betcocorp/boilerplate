@@ -289,12 +289,28 @@ export const productSupportTools: Tool[] = [
     name: 'get_efficacy_data',
     strict: false,
     description:
-      'Return VERIFIED structured facts for a product from the fact tables — dilution (oz/gal), contact/dwell time, EPA registration, and per-organism kill claims — plus, when available, the authoritative lab-report citation (formula, version, lab, Project #, and the raw PDF\'s S3 source) from the efficacy document corpus. This does NOT run prose/semantic retrieval; it reads the typed dilution/contact-time/EPA columns directly, so it is an EXACT lookup, not a paraphrase. Use it for dilution ratio questions and any efficacy / "what does it kill" / kill-claim / contact-time question. Returns `facts` and/or `labReport` with the verified values — each fact row carries its own `confidence` (default 1.0 = source-of-record; below 1.0 means treat it as less certain and say so) — cite the lab report`s source document id (see `sources`) per the standard `[doc:uuid]` convention when present, citing the specific version that generated the numbers even if a newer formula reuses that data. Returns `facts: null` (and `labReport: null`) plus a `note` only when NEITHER is on file — in that case do NOT estimate or infer a value; tell the user the data is not verified.',
+      'Return VERIFIED structured facts for a product from the fact tables — dilution (oz/gal), contact/dwell time, EPA registration, and per-organism kill claims — plus, when available, the authoritative lab-report citation (formula, version, lab, Project #, and the raw PDF\'s S3 source) from the efficacy document corpus. This does NOT run prose/semantic retrieval; it reads the typed dilution/contact-time/EPA columns directly, so it is an EXACT lookup, not a paraphrase. Use it for dilution ratio questions and any efficacy / "what does it kill" / kill-claim / contact-time question. Returns `facts` and/or `labReport` with the verified values — each fact row carries its own `confidence` (default 1.0 = source-of-record; below 1.0 means treat it as less certain and say so) — cite the lab report`s source document id (see `sources`) per the standard `[doc:uuid]` convention when present, citing the specific version that generated the numbers even if a newer formula reuses that data. Returns `facts: null` (and `labReport: null`) plus a `note` only when NEITHER is on file — in that case do NOT estimate or infer a value; tell the user the data is not verified. BATCH FORM: whenever you need this data for MORE THAN ONE product in the same turn (e.g. "compare the kill claims of these 5 disinfectants", or any per-category/per-line sweep), do NOT call this once per product — pass `productIds` (array of names/codes) or `category` instead of `productId`/`productName` to get every product\'s facts in ONE call. The batch response returns `results` (one entry per resolved product, each shaped like the single-product response) instead of top-level `facts`/`labReport`.',
     parameters: {
       type: 'object',
       properties: {
         productId: PRODUCT_REF_PARAM,
         productName: PRODUCT_NAME_ALIAS_PARAM,
+        productIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'BATCH FORM: array of product names/codes to fetch efficacy data for in ONE call, instead of one `get_efficacy_data` call per product. Use this OR `productId`/`productName`, not both.',
+        },
+        category: {
+          type: 'string',
+          description:
+            'BATCH FORM: fetch efficacy data for every product in this website category (e.g. "Disinfectants") in ONE call, instead of one `get_efficacy_data` call per product. Use this OR `productId`/`productIds`, not multiple.',
+        },
+        categoryLevel: {
+          type: 'string',
+          enum: ['prod_type', 'sub_prod_type', 'sub_child_prod_type', 'prod_class', 'any'],
+          description: 'Only used with `category` — which level of the category hierarchy to match against. Defaults to "any".',
+        },
         organism: {
           type: 'string',
           description: 'Optional organism/pathogen to filter kill claims, e.g. "Norovirus".',

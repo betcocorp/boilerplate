@@ -119,3 +119,123 @@ describe('executeToolCall — model vs persisted payload (B0-437)', () => {
     expect(JSON.parse(result.output)).toMatchObject({ ok: false });
   });
 });
+
+describe('executeToolCall — retrieval parameters on the trace entry (B0-493)', () => {
+  const retrievalPayload = {
+    strategy: 'anchored_only',
+    cacheSource: 'new-embedding',
+    search: {
+      model: 'text-embedding-3-large',
+      limit: 20,
+      scope: 'all',
+      productLineKey: 'ph7q-dual',
+      productKey: null,
+      sectionType: null,
+      minSimilarity: null,
+      retrievalStrategy: 'hybrid+reranked',
+      embeddingSource: 'new-embedding',
+      timings: {
+        totalMs: 120,
+        queryEmbeddingMs: 12,
+        queryRewriteMs: 4,
+        cacheLookupMs: 2,
+        embeddingCreateMs: 50,
+        cachePersistMs: 3,
+        similaritySearchMs: 40,
+        rerankMs: 9,
+      },
+    },
+    selection: {
+      limit: 3,
+      minSimilarity: 0.2,
+      maxPerDocument: 1,
+      requiredDocumentKinds: ['product_line_profile', 'sds', 'knowledge', 'label'],
+    },
+  };
+
+  it('extracts retrieval parameters onto the trace entry from the full payload', async () => {
+    executeProductToolMock.mockResolvedValueOnce({
+      ok: true,
+      sources: [{ documentId: 'doc-1', chunkId: 'chunk-1', snippet: 'Use 2 oz per gallon.' }],
+      retrieval: retrievalPayload,
+    });
+
+    const result = await executeToolCall({
+      name: 'search_product_docs',
+      argumentsJson: JSON.stringify({ freeformQuery: 'pH7Q Dual dilution' }),
+      callId: 'call_retrieval',
+    });
+
+    expect(result.trace.retrieval).toEqual({
+      model: 'text-embedding-3-large',
+      limit: 20,
+      scope: 'all',
+      productLineKey: 'ph7q-dual',
+      productKey: null,
+      sectionType: null,
+      minSimilarity: null,
+      retrievalStrategy: 'hybrid+reranked',
+      embeddingSource: 'new-embedding',
+      timings: retrievalPayload.search.timings,
+      selection: retrievalPayload.selection,
+    });
+  });
+
+  it('survives outputPreview truncation — the structured field is built from the full payload, not the preview', async () => {
+    executeProductToolMock.mockResolvedValueOnce({
+      ok: true,
+      sources: Array.from({ length: 20 }, (_, i) => ({
+        documentId: `doc-${i}`,
+        chunkId: `chunk-${i}`,
+        snippet: 'x'.repeat(500),
+        documentBody: 'y'.repeat(2_000),
+      })),
+      // `retrieval` sits after the large `sources[]` array — exactly the case that gets cut from
+      // `outputPreview` (capped at 4,000 chars) if this were reconstructed from the preview string.
+      retrieval: retrievalPayload,
+    });
+
+    const result = await executeToolCall({
+      name: 'search_product_docs',
+      argumentsJson: '{}',
+      callId: 'call_truncated',
+    });
+
+    expect(result.trace.outputTruncated).toBe(true);
+    expect(result.trace.outputPreview).not.toContain('"retrieval"');
+    expect(result.trace.retrieval?.retrievalStrategy).toBe('hybrid+reranked');
+    expect(result.trace.retrieval?.selection.minSimilarity).toBe(0.2);
+  });
+
+  it('omits `retrieval` for a tool that never ran a search', async () => {
+    executeProductToolMock.mockResolvedValueOnce({
+      ok: true,
+      adapter: 'static_policy_v1',
+      policy: { summary: 's', steps: [] },
+    });
+
+    const result = await executeToolCall({
+      name: 'get_escalation_policy',
+      argumentsJson: '{}',
+      callId: 'call_no_retrieval',
+    });
+
+    expect(result.trace.retrieval).toBeUndefined();
+  });
+
+  it('omits `retrieval` rather than throwing on a malformed retrieval block', async () => {
+    executeProductToolMock.mockResolvedValueOnce({
+      ok: true,
+      sources: [],
+      retrieval: { strategy: 'broad_only', search: { model: 'x' } /* missing required fields */ },
+    });
+
+    const result = await executeToolCall({
+      name: 'search_product_docs',
+      argumentsJson: '{}',
+      callId: 'call_malformed',
+    });
+
+    expect(result.trace.retrieval).toBeUndefined();
+  });
+});

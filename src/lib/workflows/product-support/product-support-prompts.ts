@@ -4,6 +4,7 @@ import { PRODUCT_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/product-specialis
 import { RECOMMENDATIONS_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/recommendations-specialist/recommendations-specialist-system-prompt';
 import type { BexChatAgentMode } from '~/lib/agents/agent-registry';
 import type { IntentClassification } from '~/lib/orchestrator/intent-classifier';
+import { AGENT_CONFIDENCE_TRAILER_INSTRUCTIONS } from '~/lib/workflows/product-support/agent-self-confidence';
 
 /**
  * B0-508 — render the classifier's entities as a single readable line, `null`/empty fields
@@ -183,10 +184,10 @@ export const PRODUCT_SUPPORT_SHARED_INSTRUCTIONS = [
   '',
   '- You MUST call `search_product_docs` (or another retrieval tool) for every product or procedure question — no exceptions.',
   '- Call tools to retrieve approved documentation; never invent usage, compatibility, or safety claims.',
-  '- Each tool returns up to 3 sources, where each source is a **full approved document** (assembled from all of its chunks). Read the entire `documentBody` of each source for grounding before answering — do not rely solely on the short `snippet` preview.',
-  '- For exact **dilution ratios**, **contact/dwell time**, or **kill-claim / efficacy** ("what does it kill") questions, call `get_efficacy_data` first — it returns structured, verified facts and, when on file, an authoritative lab-report citation (formula, version, lab, Project #, S3 source). Use its exact values, and cite the lab report\'s source document id (`[doc:uuid]`) alongside them when present.',
+  '- Each tool returns up to 3 sources, where each source is an **excerpt from an approved document**: the matched passage plus its immediate neighboring passages (NOT the whole document). Read the entire `documentBody` of each source for grounding before answering — do not rely solely on the short `snippet` preview. If a fact you need is not present in the excerpt, do not assume it is absent from the source document — re-run the retrieval tool with a more specific `topic`/query, or use the dedicated tool for that fact (e.g. `get_efficacy_data`, `get_safety_constraints`) rather than concluding the data is not on file.',
+  '- For exact **dilution ratios**, **contact/dwell time**, or **kill-claim / efficacy** ("what does it kill") questions, call `get_efficacy_data` first — it returns structured, verified facts and, when on file, an authoritative lab-report citation (formula, version, lab, Project #, S3 source). Use its exact values, and cite the lab report\'s source document id (`[doc:uuid]`) alongside them when present. If you need this for MORE THAN ONE product (a comparison, a whole category, "which of these kill X") — call `get_efficacy_data` ONCE with `productIds` (array of names/codes) or `category`, never once per product; the batch call returns a `results` array (one entry per product) instead of top-level `facts`/`labReport`.',
   '- If `get_efficacy_data` returns both `facts: null` and `labReport: null`, do NOT decline yet — you MUST call `search_product_docs` (product name + the original question as `topic`/`freeformQuery`) before responding, to check for the same information stated as prose on an approved label/knowledge document. Only after that search also comes back with no clearly relevant chunk may you decline.',
-  '- When answering **contact/dwell-time** from a `search_product_docs` result (no structured facts on file), you may answer ONLY if a returned source explicitly states the value in its `documentBody`/`matchedChunkText` (e.g. "remain visibly wet for at least 60 seconds") — quote/transcribe it exactly as printed, cite the source `[doc:uuid]`, and never round, convert, or average it with any other figure. Do not extend this prose fallback to **dilution ratios** or **kill-claim/log-reduction** numbers — for those, if `get_efficacy_data` returns null, treat prose hits only as a pointer to escalate (mention the doc exists) and still tell the user the verified structured value is not on file.',
+  '- When answering **contact/dwell-time** from a `search_product_docs` result (no structured facts on file), you may answer ONLY if a returned source explicitly states the value in its `documentBody` (e.g. "remain visibly wet for at least 60 seconds") — quote/transcribe it exactly as printed, cite the source `[doc:uuid]`, and never round, convert, or average it with any other figure. Do not extend this prose fallback to **dilution ratios** or **kill-claim/log-reduction** numbers — for those, if `get_efficacy_data` returns null, treat prose hits only as a pointer to escalate (mention the doc exists) and still tell the user the verified structured value is not on file.',
   '- Decline (state that the verified data is not on file) only when BOTH `get_efficacy_data` returns `facts: null`/`labReport: null` AND the follow-up `search_product_docs` call returns no source that explicitly states the requested value.',
   '- For competitor replacement requests, ALWAYS call `lookup_cross_reference` first using brand + competitor product name before any similarity/RAG search.',
   '- If `lookup_cross_reference` returns no matches or `fallbackRecommended: true`, call `recommend_cross_reference` (web-grounded) with the competitor product + brand; treat its `answered` / `declineReason` / `overallConfidence` as authoritative. When it declines, relay the decline verbatim and never invent a product. Use `search_product_docs` only for general (non cross-reference) product questions.',
@@ -204,6 +205,12 @@ export const PRODUCT_SUPPORT_SHARED_INSTRUCTIONS = [
   '- For a simple, single-product question, answer in ~250 tokens or fewer: lead with the primary recommendation and its exact dilution/usage rate, then at most a couple of supporting sentences. Do not produce the full multi-section write-up (background, alternatives, full maintenance program, stripping/finishing procedure, etc.) unless the question asks for that detail or the topic genuinely requires multiple steps/products/safety callouts — offer to provide more detail instead of including it by default.',
   '- Brevity NEVER shortens, rounds, truncates, or omits a regulated value — dilution ratio, oz/gal, mL/L, ppm, %, contact/dwell time, EPA/DIN registration number, or kill-claim/log-reduction figure. Every such value must be transcribed in full exactly as printed, even in a short answer.',
   '- In your reply, cite source document ids inline where helpful (e.g. `[doc:uuid]` matching tool output).',
+  '',
+  '---',
+  '',
+  // B0-491 — every specialist route assembles this shared block after its own policy text, so this
+  // reaches all five specialists in one place rather than editing each prompt file.
+  AGENT_CONFIDENCE_TRAILER_INSTRUCTIONS,
 ].join('\n');
 
 /**

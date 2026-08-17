@@ -3,11 +3,38 @@ import { PRODUCT_TOOL_NAMES, type ProductToolName } from '~/lib/tools/tool-schem
 import { buildModelToolPayload } from '~/lib/tools/model-tool-payload';
 import { executeProductTool } from '~/lib/tools/product-tools';
 
-import type { ToolCallOrigin, ToolTraceEntry } from '~/lib/audit/trace';
+import type { ToolCallOrigin, ToolRetrievalParams, ToolTraceEntry } from '~/lib/audit/trace';
+import { toolRetrievalParamsSchema } from '~/lib/audit/trace';
 import type { AuditContext } from '~/lib/audit/audit-log';
 
 function isProductTool(name: string): name is ProductToolName {
   return (PRODUCT_TOOL_NAMES as readonly string[]).includes(name);
+}
+
+/**
+ * B0-493 — pulls retrieval parameters/strategy off the FULL tool payload (before it is
+ * JSON.stringify'd and truncated into `outputPreview`). Product tools that ran a RAG search carry
+ * `retrieval: { search: {...}, selection: {...}, ... }` (see `ProductKnowledgeRetrievalSummary` in
+ * `~/lib/retrieval/product-knowledge.ts`); this flattens that into the trace entry's own
+ * `retrieval` shape. Returns `undefined` (not persisted) for every other tool, and tolerates a
+ * malformed/missing block rather than throwing.
+ */
+function extractToolRetrievalParams(
+  payload: Record<string, unknown>,
+): ToolRetrievalParams | undefined {
+  const retrieval = payload.retrieval;
+  if (!retrieval || typeof retrieval !== 'object' || Array.isArray(retrieval)) {
+    return undefined;
+  }
+  const { search, selection } = retrieval as Record<string, unknown>;
+  if (!search || typeof search !== 'object' || Array.isArray(search)) {
+    return undefined;
+  }
+  const parsed = toolRetrievalParamsSchema.safeParse({
+    ...(search as Record<string, unknown>),
+    selection,
+  });
+  return parsed.success ? parsed.data : undefined;
 }
 
 /**
@@ -49,6 +76,8 @@ export function buildToolTraceEntry(input: {
   durationMs: number;
   origin?: ToolCallOrigin;
   modelOutputChars?: number;
+  /** B0-493 — retrieval parameters extracted from the FULL (untruncated) payload. */
+  retrieval?: ToolRetrievalParams;
 }): ToolTraceEntry {
   const argumentsJson = input.argumentsJson || '';
   const argumentsTruncated = argumentsJson.length > TOOL_ARGUMENTS_PREVIEW_MAX_CHARS;
@@ -67,6 +96,7 @@ export function buildToolTraceEntry(input: {
     ...(input.modelOutputChars !== undefined
       ? { modelOutputChars: input.modelOutputChars }
       : {}),
+    ...(input.retrieval ? { retrieval: input.retrieval } : {}),
   };
 }
 
@@ -90,7 +120,12 @@ export async function executeToolCall(input: {
     args = {};
   }
 
-  const traceFor = (output: string, ok: boolean, modelOutputChars?: number) =>
+  const traceFor = (
+    output: string,
+    ok: boolean,
+    modelOutputChars?: number,
+    retrieval?: ToolRetrievalParams,
+  ) =>
     buildToolTraceEntry({
       toolName: input.name,
       callId: input.callId,
@@ -100,6 +135,7 @@ export async function executeToolCall(input: {
       durationMs: Date.now() - started,
       origin: input.origin ?? 'model_chosen',
       modelOutputChars,
+      retrieval,
     });
 
   try {
@@ -119,11 +155,13 @@ export async function executeToolCall(input: {
     const modelPayload = buildModelToolPayload(payload);
     const modelOut = modelPayload ? JSON.stringify(modelPayload) : null;
     const useModelOut = modelOut !== null && modelOut.length < out.length;
+    // B0-493 — read off the FULL payload object, never the (possibly truncated) `out` string.
+    const retrieval = extractToolRetrievalParams(payload);
 
     return {
       output: out,
       ...(useModelOut ? { modelOutput: modelOut } : {}),
-      trace: traceFor(out, true, useModelOut ? modelOut.length : undefined),
+      trace: traceFor(out, true, useModelOut ? modelOut.length : undefined, retrieval),
     };
   } catch (err) {
     const message = getErrorMessage(err);

@@ -28,7 +28,26 @@ function createFakeSupabase(): FakeSupabase {
 
   const rowsFor = (table: string): Row[] => (tables[table] ??= []);
 
+  /**
+   * B0-547 follow-up (regulated-claim guardrail full-document re-fetch) — `assembleDocumentBodies`
+   * queries `rag.document_chunk` via `supabase.schema('rag').from(...)`, which this fake never
+   * previously needed to support. Every test's `sourceMeta` already carries the full `documentBody`
+   * it wants the guardrail to see directly (not via a real `document_chunk` table), so this stub
+   * always resolves to an empty result — `assembleDocumentBodies` then returns an empty map and the
+   * guardrail call site falls back to `s.documentBody`, exactly the pre-existing behavior.
+   */
+  const emptySelectChain = {
+    select: () => emptySelectChain,
+    in: () => emptySelectChain,
+    order: () => emptySelectChain,
+    then: (resolve: (value: { data: Row[]; error: null }) => unknown) =>
+      resolve({ data: [], error: null }),
+  };
+
   const client = {
+    schema(_name: string) {
+      return { from: (_table: string) => emptySelectChain };
+    },
     from(table: string) {
       return {
         insert(row: Row) {
@@ -190,6 +209,14 @@ const AGENT_USAGE = {
   cachedPromptTokens: 0,
 };
 
+/** B0-554 — `runValidatorPass`/`runRevisionPass` now report usage alongside their result. */
+const VALIDATOR_PASS_USAGE = {
+  promptTokens: 50,
+  completionTokens: 10,
+  totalTokens: 60,
+  cachedPromptTokens: 0,
+};
+
 type ExecuteTool = (input: {
   name: string;
   argumentsJson: string;
@@ -298,8 +325,9 @@ beforeEach(() => {
     confidence: 0.9,
     issues: [],
     requires_human_review: false,
+    usage: VALIDATOR_PASS_USAGE,
   });
-  runRevisionPassMock.mockResolvedValue('');
+  runRevisionPassMock.mockResolvedValue({ text: '', usage: VALIDATOR_PASS_USAGE });
 });
 
 afterEach(() => {
@@ -418,17 +446,22 @@ describe('revision step (B0-389)', () => {
         confidence: 0.4,
         issues: ['dilution claim unsupported'],
         requires_human_review: false,
+        usage: VALIDATOR_PASS_USAGE,
       })
       .mockResolvedValue({
         approved: true,
         confidence: 0.8,
         issues: [],
         requires_human_review: false,
+        usage: VALIDATOR_PASS_USAGE,
       });
   });
 
   it('carries its own prompt and reports the replaced draft', async () => {
-    runRevisionPassMock.mockResolvedValue('Use 2 oz per gallon of water.');
+    runRevisionPassMock.mockResolvedValue({
+      text: 'Use 2 oz per gallon of water.',
+      usage: VALIDATOR_PASS_USAGE,
+    });
 
     await run({ userMessage: USAGE_MESSAGE, useValidator: true });
 
@@ -451,9 +484,10 @@ describe('revision step (B0-389)', () => {
   });
 
   it('reports a refusal as such and keeps the original draft', async () => {
-    runRevisionPassMock.mockResolvedValue(
-      'Clarification needed: please supply approved documentation.',
-    );
+    runRevisionPassMock.mockResolvedValue({
+      text: 'Clarification needed: please supply approved documentation.',
+      usage: VALIDATOR_PASS_USAGE,
+    });
 
     await run({ userMessage: USAGE_MESSAGE, useValidator: true });
 
@@ -472,6 +506,7 @@ describe('revision step (B0-389)', () => {
       confidence: 0.9,
       issues: [],
       requires_human_review: false,
+      usage: VALIDATOR_PASS_USAGE,
     });
 
     await run({ userMessage: USAGE_MESSAGE, useValidator: true });
@@ -490,6 +525,166 @@ describe('revision step (B0-389)', () => {
     expect(stepNamed('revision').status).toBe('failed');
     expect(stepNamed('revision').error).toEqual({ message: 'revision exploded' });
     expect(steps().filter((step) => step.status === 'running')).toEqual([]);
+  });
+});
+
+/* -------------------------------------------------------------------------- *
+ * B0-546 — conditional/cheaper validator pass
+ * -------------------------------------------------------------------------- */
+
+describe('validator high-similarity skip gate (B0-546)', () => {
+  const NON_SAFETY_MESSAGE = 'Tell me about Betco Fight Bac RTU packaging options.';
+
+  it('skips the validator LLM pass on a non-safety route once retrieval similarity clears the threshold', async () => {
+    executeProductToolMock.mockResolvedValue({
+      sources: [
+        {
+          documentId: 'doc-1',
+          chunkId: 'chunk-1',
+          title: 'Fight Bac RTU label',
+          snippet: 'Ready to use; no dilution required.',
+          documentBody: 'Ready to use; no dilution required.',
+          confidence: 0.95,
+        },
+      ],
+    });
+
+    await run({ userMessage: NON_SAFETY_MESSAGE, useValidator: true });
+
+    expect(runValidatorPassMock).not.toHaveBeenCalled();
+    expect(stepInput('validator').prompt).toBeUndefined();
+    expect(stepOutput('validator')).toMatchObject({
+      approved: true,
+      skipped: true,
+      reason: 'validator_skipped_high_similarity_non_safety_route',
+    });
+    expect(stepOutput('validator').issues).toContain(
+      'validator_skipped_high_similarity_non_safety_route',
+    );
+  });
+
+  it('does not skip on a safety/usage-shaped route even at high similarity', async () => {
+    executeProductToolMock.mockResolvedValue({
+      sources: [
+        {
+          documentId: 'doc-1',
+          chunkId: 'chunk-1',
+          title: 'pH7Q Dual label',
+          snippet: 'Use 2 oz per gallon of water.',
+          documentBody: 'Use 2 oz per gallon of water.',
+          confidence: 0.95,
+        },
+      ],
+    });
+
+    // USAGE_MESSAGE ("How do I use...") is safety-sensitive per `isSafetySensitiveRoute`.
+    await run({ userMessage: USAGE_MESSAGE, useValidator: true });
+
+    expect(runValidatorPassMock).toHaveBeenCalledTimes(1);
+    expect(stepOutput('validator').issues).not.toContain(
+      'validator_skipped_high_similarity_non_safety_route',
+    );
+  });
+
+  it('does not skip when retrieval similarity is below the threshold', async () => {
+    executeProductToolMock.mockResolvedValue({
+      sources: [
+        {
+          documentId: 'doc-1',
+          chunkId: 'chunk-1',
+          title: 'Fight Bac RTU label',
+          snippet: 'Ready to use; no dilution required.',
+          documentBody: 'Ready to use; no dilution required.',
+          confidence: 0.5,
+        },
+      ],
+    });
+
+    await run({ userMessage: NON_SAFETY_MESSAGE, useValidator: true });
+
+    expect(runValidatorPassMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('feeds the validator chunk-level snippets rather than the full document body', async () => {
+    executeProductToolMock.mockResolvedValue({
+      sources: [
+        {
+          documentId: 'doc-1',
+          chunkId: 'chunk-1',
+          title: 'pH7Q Dual label',
+          snippet: 'Use 2 oz per gallon of water.',
+          documentBody:
+            'Use 2 oz per gallon of water. FULL_DOCUMENT_ONLY_MARKER: unrelated boilerplate repeated many times.',
+        },
+      ],
+    });
+
+    await run({ userMessage: USAGE_MESSAGE, useValidator: true });
+
+    expect(runValidatorPassMock).toHaveBeenCalledTimes(1);
+    const [{ evidenceSummary }] = runValidatorPassMock.mock.calls[0] as [
+      { evidenceSummary: string },
+    ];
+    expect(evidenceSummary).toContain('Use 2 oz per gallon of water.');
+    expect(evidenceSummary).not.toContain('FULL_DOCUMENT_ONLY_MARKER');
+  });
+});
+
+/* -------------------------------------------------------------------------- *
+ * B0-554 — token-usage capture on the validator and revision steps
+ * -------------------------------------------------------------------------- */
+
+describe('validator/revision usage capture (B0-554)', () => {
+  it('records the validator LLM pass usage on the validator step', async () => {
+    await run({ userMessage: USAGE_MESSAGE, useValidator: true });
+
+    expect(stepOutput('validator').usage).toEqual(VALIDATOR_PASS_USAGE);
+    expect(stepOutput('validator').usageByCall).toEqual([VALIDATOR_PASS_USAGE]);
+  });
+
+  it('records no usage on a bypassed (useValidator: false) validator step', async () => {
+    await run();
+
+    expect(stepOutput('validator').usage).toBeUndefined();
+    expect(stepOutput('validator').usageByCall).toBeUndefined();
+  });
+
+  it('records the revision pass usage on its own step', async () => {
+    runValidatorPassMock
+      .mockResolvedValueOnce({
+        approved: false,
+        confidence: 0.4,
+        issues: ['dilution claim unsupported'],
+        requires_human_review: false,
+        usage: VALIDATOR_PASS_USAGE,
+      })
+      .mockResolvedValue({
+        approved: true,
+        confidence: 0.8,
+        issues: [],
+        requires_human_review: false,
+        usage: VALIDATOR_PASS_USAGE,
+      });
+    runRevisionPassMock.mockResolvedValue({
+      text: 'Use 2 oz per gallon of water.',
+      usage: VALIDATOR_PASS_USAGE,
+    });
+
+    await run({ userMessage: USAGE_MESSAGE, useValidator: true });
+
+    expect(stepOutput('revision').usage).toEqual(VALIDATOR_PASS_USAGE);
+    // Two validator calls (first pass + the re-check after revision) — both attributed to the
+    // one validator step.
+    expect(stepOutput('validator').usageByCall).toEqual([
+      VALIDATOR_PASS_USAGE,
+      VALIDATOR_PASS_USAGE,
+    ]);
+    expect(stepOutput('validator').usage).toEqual({
+      promptTokens: VALIDATOR_PASS_USAGE.promptTokens * 2,
+      completionTokens: VALIDATOR_PASS_USAGE.completionTokens * 2,
+      totalTokens: VALIDATOR_PASS_USAGE.totalTokens * 2,
+      cachedPromptTokens: VALIDATOR_PASS_USAGE.cachedPromptTokens * 2,
+    });
   });
 });
 
@@ -931,6 +1126,100 @@ describe('recommendation confidence gate record (B0-391)', () => {
   });
 });
 
+/* -------------------------------------------------------------------------- *
+ * B0-490 — the recommendation gate reads the RAW retrieval similarity, not the
+ * post-selection/curation max, for its low-similarity confidence cap.
+ * -------------------------------------------------------------------------- */
+
+describe('similarity rollup feeds the recommendation gate raw, not post-filter (B0-490)', () => {
+  /** Same shape as `arrangeOverrideRun`, but the search branch reports a `retrieval` block whose
+   * raw top similarity (58%, below LOW_SIMILARITY_THRESHOLD) is well under the post-curation max
+   * similarity carried on `sources[]` (95%) — the exact gap the B0-490 bug hid. */
+  function arrangeLowRawHighSelectedRun() {
+    runResponsesWithToolLoopMock.mockImplementation(
+      generationCalling([
+        {
+          name: 'lookup_cross_reference',
+          argumentsJson: JSON.stringify({ brand: 'BNC', productName: 'BNC-15' }),
+          callId: 'call_xref',
+        },
+      ]),
+    );
+    executeProductToolMock.mockImplementation(async (name: string) =>
+      name === 'lookup_cross_reference'
+        ? { matches: [], fallbackRecommended: true }
+        : {
+            sources: [
+              {
+                documentId: 'doc-1',
+                chunkId: 'chunk-1',
+                title: 'Triforce label',
+                snippet: 'Use 2 oz per gallon.',
+                documentBody: 'Use 2 oz per gallon.',
+                similarity: 0.95,
+                confidence: 0.95,
+              },
+            ],
+            retrieval: {
+              rawTopSimilarity: 0.58,
+              selectedTopSimilarity: 0.95,
+              droppedByFilterCount: 4,
+            },
+          },
+    );
+    lookupCrossReferenceMock.mockResolvedValue({
+      fallbackRecommended: false,
+      matches: [
+        {
+          competitorBrand: 'BNC',
+          competitorProductName: 'BNC-15',
+          productKey: 'triforce',
+          confidence: 0.9,
+          productUrl: 'https://www.betco.com/products/triforce',
+          betcoProduct: { title: 'Triforce', sku: '1234' },
+          rationale: 'curated equivalence',
+        },
+      ],
+    });
+  }
+
+  it('caps confidence at LOW_SIMILARITY_CONFIDENCE_CAP from a sub-threshold RAW hit even though the post-filter max is high', async () => {
+    arrangeLowRawHighSelectedRun();
+
+    const out = await run({ userMessage: XREF_MESSAGE });
+
+    // Pre-fix, `topSimilarity` would have been `sources[].similarity` (0.95, >= 60%), so no cap
+    // would have applied and confidence would have stayed at the 0.9 bypass-heuristic value.
+    expect(out.confidence).toBeLessThanOrEqual(LOW_SIMILARITY_CONFIDENCE_CAP);
+
+    const record = singleGateRecord('recommendation_confidence');
+    expect(record.verdict).toBe('capped');
+    expect(record.effect).toContain('Top retrieval similarity 58%');
+  });
+
+  it('persists both raw and post-selection top similarity on the final output, distinguishably', async () => {
+    arrangeLowRawHighSelectedRun();
+
+    const out = await run({ userMessage: XREF_MESSAGE });
+
+    expect(out.similaritySummary).toEqual({
+      rawTopSimilarity: 0.58,
+      selectedTopSimilarity: 0.95,
+      droppedByFilterCount: 4,
+    });
+  });
+
+  it('leaves similaritySummary all-null when no search tool carried a retrieval block', async () => {
+    const out = await run();
+    // The default beforeEach mock's `executeProductToolMock` payload has no `retrieval` key.
+    expect(out.similaritySummary).toEqual({
+      rawTopSimilarity: null,
+      selectedTopSimilarity: null,
+      droppedByFilterCount: null,
+    });
+  });
+});
+
 describe('answer provenance (B0-391)', () => {
   it('reports a plain model answer as model_generated', async () => {
     const out = await run();
@@ -977,8 +1266,12 @@ describe('answer provenance (B0-391)', () => {
       confidence: 0.3,
       issues: ['dilution claim unsupported'],
       requires_human_review: true,
+      usage: VALIDATOR_PASS_USAGE,
     });
-    runRevisionPassMock.mockResolvedValue('Clarification needed: please supply approved documentation.');
+    runRevisionPassMock.mockResolvedValue({
+      text: 'Clarification needed: please supply approved documentation.',
+      usage: VALIDATOR_PASS_USAGE,
+    });
 
     const out = await run({ userMessage: 'What is the EPA reg number for Betco Fight Bac RTU?', useValidator: true });
 
@@ -1325,5 +1618,597 @@ describe('shadow-mode LLM intent classifier gate (B0-507 / B0-516 integration)',
     // The keyword fallback runs the same keyword router the workflow's own routing decision
     // already used, so for this message it still reads as "agrees".
     expect(record.verdict).toBe('agrees_with_keyword_router');
+  });
+});
+
+/* -------------------------------------------------------------------------- *
+ * B0-493 — retrieval parameters/strategy persisted per search call, rolled up to run level.
+ * -------------------------------------------------------------------------- */
+
+describe('retrieval configuration rollup (B0-493)', () => {
+  function retrievalPayload(overrides: Partial<{ retrievalStrategy: string; embeddingSource: string }> = {}) {
+    return {
+      strategy: 'anchored_only',
+      cacheSource: overrides.embeddingSource ?? 'new-embedding',
+      search: {
+        model: 'text-embedding-3-large',
+        limit: 20,
+        scope: 'all',
+        productLineKey: 'ph7q-dual',
+        productKey: null,
+        sectionType: null,
+        minSimilarity: null,
+        retrievalStrategy: overrides.retrievalStrategy ?? 'hybrid+reranked',
+        embeddingSource: overrides.embeddingSource ?? 'new-embedding',
+        timings: {
+          totalMs: 120,
+          queryEmbeddingMs: 12,
+          queryRewriteMs: 4,
+          cacheLookupMs: 2,
+          embeddingCreateMs: 50,
+          cachePersistMs: 3,
+          similaritySearchMs: 40,
+          rerankMs: 9,
+        },
+      },
+      selection: {
+        limit: 3,
+        minSimilarity: 0.2,
+        maxPerDocument: 1,
+        requiredDocumentKinds: ['product_line_profile', 'sds', 'knowledge', 'label'],
+      },
+    };
+  }
+
+  it('labels a run with the single search call’s retrieval configuration', async () => {
+    executeProductToolMock.mockResolvedValue({
+      sources: [{ documentId: 'doc-1', chunkId: 'chunk-1', snippet: 'Use 2 oz per gallon.' }],
+      retrieval: retrievalPayload(),
+    });
+
+    const out = await run();
+
+    expect(out.retrievalConfig).toEqual({
+      embeddingModel: 'text-embedding-3-large',
+      retrievalStrategy: 'hybrid+reranked',
+      embeddingSource: 'new-embedding',
+      scope: 'all',
+      minSimilarity: 0.2,
+      mixed: [],
+    });
+
+    // Persisted on the tool trace too, not just the run-level rollup.
+    const trace = persistedToolTrace();
+    const searchEntry = trace.find((t) => t.toolName === 'search_product_docs' && !t.speculative);
+    expect(searchEntry?.retrieval?.retrievalStrategy).toBe('hybrid+reranked');
+  });
+
+  it('marks retrievalStrategy mixed when two search calls this turn disagree', async () => {
+    runResponsesWithToolLoopMock.mockImplementation(
+      generationCalling([
+        {
+          name: 'search_product_docs',
+          argumentsJson: JSON.stringify({ freeformQuery: 'first search' }),
+          callId: 'call_a',
+        },
+        {
+          name: 'search_product_docs',
+          argumentsJson: JSON.stringify({ freeformQuery: 'second search' }),
+          callId: 'call_b',
+        },
+      ]),
+    );
+    executeProductToolMock
+      .mockResolvedValueOnce({
+        sources: [{ documentId: 'doc-1', chunkId: 'chunk-1', snippet: 'first' }],
+        retrieval: retrievalPayload({ retrievalStrategy: 'vector' }),
+      })
+      .mockResolvedValueOnce({
+        sources: [{ documentId: 'doc-2', chunkId: 'chunk-2', snippet: 'second' }],
+        retrieval: retrievalPayload({ retrievalStrategy: 'hybrid+reranked' }),
+      });
+
+    const out = await run();
+
+    expect(out.retrievalConfig?.retrievalStrategy).toBeNull();
+    expect(out.retrievalConfig?.mixed).toContain('retrievalStrategy');
+    // Fields both calls agreed on are still labelled, not swept into "mixed" wholesale.
+    expect(out.retrievalConfig?.embeddingModel).toBe('text-embedding-3-large');
+  });
+
+  it('is absent on the early-decline path, which never enters the tool loop at all', async () => {
+    const out = await run({ userMessage: 'Can I mix bleach with this Betco cleaner?' });
+    expect(out.retrievalConfig).toBeUndefined();
+  });
+
+  it('is all-null with no mixed fields on an answered turn whose tool calls carried no retrieval block', async () => {
+    // Default beforeEach mock: `search_product_docs` runs, but its payload has no `retrieval` key.
+    const out = await run();
+    expect(out.retrievalConfig).toEqual({
+      embeddingModel: null,
+      retrievalStrategy: null,
+      embeddingSource: null,
+      scope: null,
+      minSimilarity: null,
+      mixed: [],
+    });
+  });
+});
+
+/* -------------------------------------------------------------------------- *
+ * B0-491 — agent self-reported confidence captured as structured output.
+ * -------------------------------------------------------------------------- */
+
+describe('agent self-reported confidence (B0-491)', () => {
+  const MARKER = (agentConfidence: number, agentConfidenceBasis: string) =>
+    `<!--BEX_AGENT_CONFIDENCE {"agentConfidence":${agentConfidence},"agentConfidenceBasis":"${agentConfidenceBasis}"}-->`;
+
+  it('captures a valid self-reported confidence and strips the marker from the visible answer', async () => {
+    runResponsesWithToolLoopMock.mockImplementation(
+      generationCalling(
+        [
+          {
+            name: 'search_product_docs',
+            argumentsJson: JSON.stringify({ productName: 'pH7Q Dual', topic: 'tile floors' }),
+            callId: 'call_1',
+          },
+        ],
+        {
+          assistantText: `Use 2 oz per gallon of water.\n${MARKER(0.87, 'exact label ratio cited')}`,
+        },
+      ),
+    );
+
+    const out = await run();
+
+    expect(out.answerText).toBe('Use 2 oz per gallon of water.');
+    expect(out.answerText).not.toContain('BEX_AGENT_CONFIDENCE');
+    expect(out.agentConfidence).toBe(0.87);
+    expect(out.agentConfidenceBasis).toBe('exact label ratio cited');
+    expect(out.agentConfidenceReason).toBe('reported');
+  });
+
+  it('persists agentConfidence on the agent workflow_steps row alongside the tool trace', async () => {
+    runResponsesWithToolLoopMock.mockImplementation(
+      generationCalling([], { assistantText: `Answer.\n${MARKER(0.72, 'partial evidence')}` }),
+    );
+
+    await run();
+
+    expect(stepOutput('openai_responses_agent')).toMatchObject({
+      agentConfidence: 0.72,
+      agentConfidenceBasis: 'partial evidence',
+      agentConfidenceReason: 'reported',
+    });
+    // Same step row as the B0-390 tool trace — not a separate step.
+    expect(stepOutput('openai_responses_agent').toolTrace).toBeDefined();
+  });
+
+  it('records an explicit null with reason "not_reported" when the model never emits the marker', async () => {
+    const out = await run();
+    expect(out.agentConfidence).toBeNull();
+    expect(out.agentConfidenceBasis).toBeNull();
+    expect(out.agentConfidenceReason).toBe('not_reported');
+  });
+
+  it('records reason "no_model_call" on the early-decline path, which never calls a model', async () => {
+    const out = await run({ userMessage: 'Can I mix bleach with this Betco cleaner?' });
+    expect(out.agentConfidence).toBeNull();
+    expect(out.agentConfidenceBasis).toBeNull();
+    expect(out.agentConfidenceReason).toBe('no_model_call');
+  });
+
+  it('a self-scored-below-0.80 run is identifiable from agentConfidence alone, without reading answer text', async () => {
+    runResponsesWithToolLoopMock.mockImplementation(
+      generationCalling([], {
+        assistantText: `I don't have enough information to answer that.\n${MARKER(0.35, 'no verified source found')}`,
+      }),
+    );
+
+    const out = await run();
+
+    expect(out.agentConfidence).toBeLessThan(0.8);
+    expect(out.agentConfidenceReason).toBe('reported');
+  });
+
+  it('feeds agentConfidence into the recommendation gate as baseConfidence, replacing the bypass-heuristic value', async () => {
+    // Cross-reference route: the bypass-heuristic confidence would be 0.9 (sources.length > 0).
+    // The agent's own self-reported confidence (0.62) must be what the gate actually calibrates on.
+    runResponsesWithToolLoopMock.mockImplementation(
+      generationCalling(
+        [
+          {
+            name: 'lookup_cross_reference',
+            argumentsJson: JSON.stringify({ brand: 'BNC', productName: 'BNC-15' }),
+            callId: 'call_xref',
+          },
+        ],
+        { assistantText: `Comparable product found.\n${MARKER(0.62, 'moderate confidence match')}` },
+      ),
+    );
+    executeProductToolMock.mockImplementation(async (name: string) =>
+      name === 'lookup_cross_reference'
+        ? { matches: [], fallbackRecommended: true }
+        : {
+            sources: [
+              {
+                documentId: 'doc-1',
+                chunkId: 'chunk-1',
+                title: 'Triforce label',
+                snippet: 'Use 2 oz per gallon.',
+                documentBody: 'Use 2 oz per gallon.',
+              },
+            ],
+          },
+    );
+    lookupCrossReferenceMock.mockResolvedValue({
+      fallbackRecommended: false,
+      matches: [
+        {
+          competitorBrand: 'BNC',
+          competitorProductName: 'BNC-15',
+          productKey: 'triforce',
+          confidence: 0.9,
+          productUrl: 'https://www.betco.com/products/triforce',
+          betcoProduct: { title: 'Triforce', sku: '1234' },
+          rationale: 'curated equivalence',
+        },
+      ],
+    });
+
+    const out = await run({ userMessage: XREF_MESSAGE });
+
+    expect(out.agentConfidence).toBe(0.62);
+    const record = singleGateRecord('recommendation_confidence');
+    // Pinned: the gate's recorded `baseConfidence` input is the agent's self-score, not 0.9.
+    expect(record.inputs.baseConfidence).toBe(0.62);
+    expect(out.confidence).toBeLessThanOrEqual(0.62);
+  });
+
+  it('falls back to the validator/heuristic confidence for the gate when the agent reported no score', async () => {
+    runResponsesWithToolLoopMock.mockImplementation(
+      generationCalling([
+        {
+          name: 'lookup_cross_reference',
+          argumentsJson: JSON.stringify({ brand: 'BNC', productName: 'BNC-15' }),
+          callId: 'call_xref',
+        },
+      ]),
+    );
+    executeProductToolMock.mockImplementation(async (name: string) =>
+      name === 'lookup_cross_reference'
+        ? { matches: [], fallbackRecommended: true }
+        : { sources: [{ documentId: 'doc-1', chunkId: 'chunk-1', snippet: 'x', documentBody: 'x' }] },
+    );
+    lookupCrossReferenceMock.mockResolvedValue({
+      fallbackRecommended: false,
+      matches: [
+        {
+          competitorBrand: 'BNC',
+          competitorProductName: 'BNC-15',
+          productKey: 'triforce',
+          confidence: 0.9,
+          productUrl: 'https://www.betco.com/products/triforce',
+          betcoProduct: { title: 'Triforce', sku: '1234' },
+          rationale: 'curated equivalence',
+        },
+      ],
+    });
+
+    const out = await run({ userMessage: XREF_MESSAGE });
+
+    expect(out.agentConfidence).toBeNull();
+    const record = singleGateRecord('recommendation_confidence');
+    // No marker this turn — falls back to the bypass-heuristic confidence (sources.length > 0 -> 0.9).
+    expect(record.inputs.baseConfidence).toBe(0.9);
+  });
+});
+
+/* -------------------------------------------------------------------------- *
+ * B0-492 — every persisted confidence carries exactly one provenance.
+ * -------------------------------------------------------------------------- */
+
+describe('confidence provenance (B0-492)', () => {
+  const MARKER = (agentConfidence: number) =>
+    `<!--BEX_AGENT_CONFIDENCE {"agentConfidence":${agentConfidence},"agentConfidenceBasis":"x"}-->`;
+
+  it('is validator_bypassed_heuristic on the default (useValidator: false) path', async () => {
+    const out = await run();
+    expect(out.confidenceProvenance).toBe('validator_bypassed_heuristic');
+    expect(out.confidencePreCapValue).toBeNull();
+    expect(out.confidencePreCapProvenance).toBeNull();
+  });
+
+  it('is validator_judged when the model-scored validator pass actually ran', async () => {
+    const out = await run({ useValidator: true });
+    expect(out.confidenceProvenance).toBe('validator_judged');
+  });
+
+  it('is decline_gate_constant on the early-decline path', async () => {
+    const out = await run({ userMessage: 'Can I mix bleach with this Betco cleaner?' });
+    expect(out.confidenceProvenance).toBe('decline_gate_constant');
+  });
+
+  it('is persisted on the validator workflow_steps row, not just the final output', async () => {
+    const out = await run();
+    expect(stepOutput('validator')).toMatchObject({
+      confidenceProvenance: out.confidenceProvenance,
+      confidencePreCapValue: out.confidencePreCapValue,
+      confidencePreCapProvenance: out.confidencePreCapProvenance,
+    });
+  });
+
+  it('is gate_capped with the recoverable pre-cap value/provenance when the usage/safety coverage gate caps it', async () => {
+    executeProductToolMock.mockResolvedValue({
+      sources: [
+        {
+          documentId: 'doc-1',
+          chunkId: 'chunk-1',
+          title: 'pH7Q Dual label',
+          snippet: 'Usage: apply to the floor with a mop.',
+          documentBody: 'Usage: apply to the floor with a mop.',
+        },
+      ],
+    });
+
+    const out = await run();
+
+    expect(out.confidenceProvenance).toBe('gate_capped');
+    // The bypass-heuristic value (sources.length > 0 -> 0.9) BEFORE the coverage cap applied.
+    expect(out.confidencePreCapValue).toBe(0.9);
+    expect(out.confidencePreCapProvenance).toBe('validator_bypassed_heuristic');
+    expect(out.confidence).toBeLessThanOrEqual(0.55);
+  });
+
+  it('is agent_self_scored (no pre-cap) when the recommendation gate ran but did not cap the agent score further', async () => {
+    runResponsesWithToolLoopMock.mockImplementation(
+      generationCalling(
+        [
+          {
+            name: 'lookup_cross_reference',
+            argumentsJson: JSON.stringify({ brand: 'BNC', productName: 'BNC-15' }),
+            callId: 'call_xref',
+          },
+        ],
+        { assistantText: `Comparable product found.\n${MARKER(0.7)}` },
+      ),
+    );
+    executeProductToolMock.mockImplementation(async (name: string) =>
+      name === 'lookup_cross_reference'
+        ? { matches: [], fallbackRecommended: true }
+        : {
+            sources: [{ documentId: 'doc-1', chunkId: 'chunk-1', snippet: 'x', documentBody: 'x' }],
+            retrieval: { rawTopSimilarity: 0.9, selectedTopSimilarity: 0.9, droppedByFilterCount: 0 },
+          },
+    );
+    lookupCrossReferenceMock.mockResolvedValue({
+      fallbackRecommended: false,
+      matches: [
+        {
+          competitorBrand: 'BNC',
+          competitorProductName: 'BNC-15',
+          productKey: 'triforce',
+          confidence: 0.9,
+          productUrl: 'https://www.betco.com/products/triforce',
+          betcoProduct: { title: 'Triforce', sku: '1234' },
+          rationale: 'curated equivalence',
+        },
+      ],
+    });
+
+    const out = await run({ userMessage: XREF_MESSAGE });
+
+    expect(out.agentConfidence).toBe(0.7);
+    expect(out.confidence).toBe(0.7);
+    expect(out.confidenceProvenance).toBe('agent_self_scored');
+    expect(out.confidencePreCapValue).toBeNull();
+    expect(out.confidencePreCapProvenance).toBeNull();
+  });
+
+  it('is gate_capped (pre-cap = agent_self_scored) when the recommendation gate caps the agent score for low retrieval similarity', async () => {
+    runResponsesWithToolLoopMock.mockImplementation(
+      generationCalling(
+        [
+          {
+            name: 'lookup_cross_reference',
+            argumentsJson: JSON.stringify({ brand: 'BNC', productName: 'BNC-15' }),
+            callId: 'call_xref',
+          },
+        ],
+        { assistantText: `Comparable product found.\n${MARKER(0.9)}` },
+      ),
+    );
+    executeProductToolMock.mockImplementation(async (name: string) =>
+      name === 'lookup_cross_reference'
+        ? { matches: [], fallbackRecommended: true }
+        : {
+            sources: [{ documentId: 'doc-1', chunkId: 'chunk-1', snippet: 'x', documentBody: 'x' }],
+            // Below LOW_SIMILARITY_THRESHOLD (0.6) — the gate's own cap must fire on the agent's score.
+            retrieval: { rawTopSimilarity: 0.4, selectedTopSimilarity: 0.9, droppedByFilterCount: 2 },
+          },
+    );
+    lookupCrossReferenceMock.mockResolvedValue({
+      fallbackRecommended: false,
+      matches: [
+        {
+          competitorBrand: 'BNC',
+          competitorProductName: 'BNC-15',
+          productKey: 'triforce',
+          confidence: 0.9,
+          productUrl: 'https://www.betco.com/products/triforce',
+          betcoProduct: { title: 'Triforce', sku: '1234' },
+          rationale: 'curated equivalence',
+        },
+      ],
+    });
+
+    const out = await run({ userMessage: XREF_MESSAGE });
+
+    expect(out.agentConfidence).toBe(0.9);
+    expect(out.confidence).toBeLessThanOrEqual(LOW_SIMILARITY_CONFIDENCE_CAP);
+    expect(out.confidenceProvenance).toBe('gate_capped');
+    expect(out.confidencePreCapValue).toBe(0.9);
+    expect(out.confidencePreCapProvenance).toBe('agent_self_scored');
+  });
+
+  it('is gate_capped (pre-cap = validator_bypassed_heuristic) when the gate caps for a missing brand, with no agent score in play', async () => {
+    // No marker this turn (agentConfidence null): the gate calibrates on the bypass-heuristic 0.9.
+    // `extractCompetitorProduct` falls back to `brand: null` in this test file's default mocks, so
+    // the missing-brand cap (ceiling 0.8) fires and must win the outer min against 0.9.
+    runResponsesWithToolLoopMock.mockImplementation(
+      generationCalling([
+        {
+          name: 'lookup_cross_reference',
+          argumentsJson: JSON.stringify({ brand: 'BNC', productName: 'BNC-15' }),
+          callId: 'call_xref',
+        },
+      ]),
+    );
+    executeProductToolMock.mockImplementation(async (name: string) =>
+      name === 'lookup_cross_reference'
+        ? { matches: [], fallbackRecommended: true }
+        : {
+            sources: [{ documentId: 'doc-1', chunkId: 'chunk-1', snippet: 'x', documentBody: 'x' }],
+            retrieval: { rawTopSimilarity: 0.95, selectedTopSimilarity: 0.95, droppedByFilterCount: 0 },
+          },
+    );
+    lookupCrossReferenceMock.mockResolvedValue({
+      fallbackRecommended: false,
+      matches: [
+        {
+          competitorBrand: 'BNC',
+          competitorProductName: 'BNC-15',
+          productKey: 'triforce',
+          confidence: 0.9,
+          productUrl: 'https://www.betco.com/products/triforce',
+          betcoProduct: { title: 'Triforce', sku: '1234' },
+          rationale: 'curated equivalence',
+        },
+      ],
+    });
+
+    const out = await run({ userMessage: XREF_MESSAGE });
+
+    expect(out.agentConfidence).toBeNull();
+    expect(out.confidence).toBeLessThanOrEqual(0.8);
+    expect(out.confidenceProvenance).toBe('gate_capped');
+    expect(out.confidencePreCapValue).toBe(0.9);
+    expect(out.confidencePreCapProvenance).toBe('validator_bypassed_heuristic');
+  });
+});
+
+/* -------------------------------------------------------------------------- *
+ * B0-494 — which gates and runtimes were active per run.
+ * -------------------------------------------------------------------------- */
+
+describe('runtime config and gate activation (B0-494)', () => {
+  it('records the resolved switches on a default answered run', async () => {
+    const out = await run();
+
+    expect(out.runtimeConfig).toMatchObject({
+      useValidator: false,
+      earlyDeclineGateEnabled: true,
+      aiSdkGenerationEnabled: false,
+      confidenceGatingDisabled: false,
+      agentMode: 'orchestrator',
+      routedDirectly: false,
+    });
+    expect(typeof out.runtimeConfig?.rerankerActive).toBe('boolean');
+  });
+
+  it('marks the validator "skipped — disabled by flag" when useValidator is false, and "ran" when true', async () => {
+    const bypassed = await run();
+    expect(bypassed.activeGates?.validator).toEqual({ state: 'skipped', reason: 'disabled_by_flag' });
+
+    const judged = await run({ useValidator: true });
+    expect(judged.activeGates?.validator).toEqual({ state: 'ran' });
+  });
+
+  it('marks the early-decline gate "skipped — disabled by flag" when BEX_EARLY_DECLINE_GATE_ENABLED=false', async () => {
+    process.env.BEX_EARLY_DECLINE_GATE_ENABLED = 'false';
+    const out = await run();
+    expect(out.runtimeConfig?.earlyDeclineGateEnabled).toBe(false);
+    expect(out.activeGates?.earlyDeclineGate).toEqual({ state: 'skipped', reason: 'disabled_by_flag' });
+  });
+
+  it('marks the early-decline gate "ran" on a run it actually declines, and the other four gates not_applicable', async () => {
+    const out = await run({ userMessage: 'Can I mix bleach with this Betco cleaner?' });
+    expect(out.activeGates).toEqual({
+      validator: { state: 'not_applicable' },
+      earlyDeclineGate: { state: 'ran' },
+      usageSafetyCoverage: { state: 'not_applicable' },
+      regulatedClaimGuardrail: { state: 'not_applicable' },
+      recommendationConfidence: { state: 'not_applicable' },
+    });
+    // The switches are still recorded even though the answering path never ran.
+    expect(out.runtimeConfig).toBeDefined();
+  });
+
+  it('marks usage/safety coverage "ran" when the question needs it and evidence is present', async () => {
+    const out = await run();
+    expect(out.activeGates?.usageSafetyCoverage).toEqual({ state: 'ran' });
+    expect(out.activeGates?.regulatedClaimGuardrail).toEqual({ state: 'ran' });
+    expect(out.activeGates?.recommendationConfidence).toEqual({ state: 'not_applicable' });
+  });
+
+  it('marks usage/safety coverage not_applicable when the question does not need it at all', async () => {
+    const out = await run({ userMessage: 'What is the EPA reg number for Betco Fight Bac RTU?' });
+    expect(out.activeGates?.usageSafetyCoverage).toEqual({ state: 'not_applicable' });
+  });
+
+  it('is identifiable as run-under-the-kill-switch: usage/safety coverage bypassed, confidenceGatingDisabled true', async () => {
+    process.env.BEX_DISABLE_CONFIDENCE_GATING = 'true';
+    executeProductToolMock.mockResolvedValue({
+      sources: [
+        {
+          documentId: 'doc-1',
+          chunkId: 'chunk-1',
+          title: 'pH7Q Dual label',
+          snippet: 'Usage: apply to the floor with a mop.',
+          documentBody: 'Usage: apply to the floor with a mop.',
+        },
+      ],
+    });
+
+    const out = await run();
+
+    expect(out.runtimeConfig?.confidenceGatingDisabled).toBe(true);
+    expect(out.activeGates?.usageSafetyCoverage).toEqual({
+      state: 'bypassed',
+      reason: 'confidence_gating_disabled',
+    });
+
+    delete process.env.BEX_DISABLE_CONFIDENCE_GATING;
+  });
+
+  it('marks the recommendation-confidence gate "ran" (not not_applicable) whenever cross-reference post-processing runs', async () => {
+    arrangeOverrideRun();
+    const out = await run({ userMessage: XREF_MESSAGE });
+    expect(out.activeGates?.recommendationConfidence).toEqual({ state: 'ran' });
+  });
+
+  it('records routedDirectly when an admin forces a direct specialist mode', async () => {
+    const out = await run({ agentMode: 'floor' });
+    expect(out.runtimeConfig?.agentMode).toBe('floor');
+    expect(out.runtimeConfig?.routedDirectly).toBe(true);
+  });
+
+  it('historical runs lacking the block are undefined, not defaulted to fully-enabled', async () => {
+    // Sanity check on the contract itself: both fields are optional, so an older
+    // final_output payload simply omits them rather than parsing to a default value.
+    const { productSupportFinalOutputSchema } = await import(
+      '~/lib/workflows/product-support/product-support-schemas'
+    );
+    const parsed = productSupportFinalOutputSchema.safeParse({
+      answerText: 'x',
+      workflowRunId: '00000000-0000-4000-8000-000000000000',
+      latestOpenaiResponseId: 'resp_1',
+      validation: { approved: true, confidence: 0.9, issues: [], requires_human_review: false },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.runtimeConfig).toBeUndefined();
+      expect(parsed.data.activeGates).toBeUndefined();
+    }
   });
 });

@@ -30,6 +30,11 @@ type GateResponse = {
   avg_confidence: number | null;
   confidence_floor: number;
   confidence_ok: boolean | null;
+  /** B0-492 — which population `avg_confidence` was averaged over, and how many items. */
+  confidence_population: 'judgment_only' | 'unknown_legacy' | 'none';
+  confidence_item_count: number;
+  /** B0-494 — true when any item in this run executed with the B0-452 kill switch on. */
+  confidence_gating_disabled_for_any_item: boolean;
 };
 
 function pct(v: number | null): string {
@@ -78,9 +83,17 @@ async function main() {
     `Avg similarity:   ${pct(data.avg_similarity)} (floor: ${pct(data.similarity_floor)}) → ${gateLabel(data.similarity_ok)}`,
   );
   if (data.run_mode === 'full') {
+    // B0-492 — CI must see WHICH population this average came from, not just the number: a
+    // `judgment_only` average excludes decline-gate constants and bypass heuristics; an
+    // `unknown_legacy` one is a pre-B0-492 stored value with no such guarantee.
     console.log(
-      `Avg confidence:   ${pct(data.avg_confidence)} (floor: ${pct(data.confidence_floor)}) → ${gateLabel(data.confidence_ok)}`,
+      `Avg confidence:   ${pct(data.avg_confidence)} over ${data.confidence_item_count} item(s) [${data.confidence_population}] (floor: ${pct(data.confidence_floor)}) → ${gateLabel(data.confidence_ok)}`,
     );
+    if (data.confidence_gating_disabled_for_any_item) {
+      console.log(
+        '  ⚠ At least one item in this run executed with BEX_DISABLE_CONFIDENCE_GATING on — the confidence gate is forced to "skip" rather than trust a fictional cap.',
+      );
+    }
   }
   console.log('');
   console.log(`Gate result: ${data.pass ? '✓ PASS' : '✗ FAIL'}`);

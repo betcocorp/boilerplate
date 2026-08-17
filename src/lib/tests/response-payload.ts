@@ -1,4 +1,15 @@
 import type { RetrievedDocumentChunkRef } from '~/lib/workflows/product-support/product-support-schemas';
+import {
+  CONFIDENCE_PROVENANCES,
+  resolveConfidenceProvenance,
+  type ConfidenceProvenance,
+} from '~/lib/workflows/product-support/confidence-provenance';
+import {
+  activeGatesSchema,
+  runtimeConfigSchema,
+  type ActiveGates,
+  type RuntimeConfig,
+} from '~/lib/workflows/product-support/product-support-schemas';
 
 /**
  * Extracts the `workflowRunId` string from a response payload object.
@@ -114,6 +125,27 @@ export function extractItemValidatorConfidence(
   }
   const c = (responsePayload as Record<string, unknown>).confidence;
   return typeof c === 'number' && Number.isFinite(c) ? c : null;
+}
+
+/**
+ * B0-492 — which mechanism produced `confidence` on this item. `'unknown'` (never a judgment
+ * class) for a payload written before this ticket, or any malformed value.
+ */
+export function extractItemConfidenceProvenance(responsePayload: unknown): ConfidenceProvenance {
+  if (
+    !responsePayload ||
+    typeof responsePayload !== 'object' ||
+    Array.isArray(responsePayload)
+  ) {
+    return resolveConfidenceProvenance(undefined);
+  }
+  const value = (responsePayload as Record<string, unknown>).confidenceProvenance;
+  const validated =
+    typeof value === 'string' &&
+    (CONFIDENCE_PROVENANCES as readonly string[]).includes(value)
+      ? (value as ConfidenceProvenance)
+      : undefined;
+  return resolveConfidenceProvenance(validated);
 }
 
 /** Extracts `timingBreakdown` fields: toolRounds, cacheSource, searchMs. */
@@ -417,6 +449,32 @@ export function extractSearchRunQueryRewritten(responsePayload: unknown): string
   }
   const value = (responsePayload as Record<string, unknown>).queryRewritten;
   return typeof value === 'string' ? value : null;
+}
+
+/**
+ * B0-494 — the resolved runtime-switch snapshot for the run behind this item, when present.
+ * Returns null for a historical payload written before this ticket (readers must render that as
+ * unknown, never as "fully enabled" — never default any field to `true`/`false` here).
+ */
+export function extractRuntimeConfig(responsePayload: unknown): RuntimeConfig | null {
+  if (!responsePayload || typeof responsePayload !== 'object' || Array.isArray(responsePayload)) {
+    return null;
+  }
+  const parsed = runtimeConfigSchema.safeParse(
+    (responsePayload as Record<string, unknown>).runtimeConfig,
+  );
+  return parsed.success ? parsed.data : null;
+}
+
+/** B0-494 — per-gate activation state for the run behind this item, when present. */
+export function extractActiveGates(responsePayload: unknown): ActiveGates | null {
+  if (!responsePayload || typeof responsePayload !== 'object' || Array.isArray(responsePayload)) {
+    return null;
+  }
+  const parsed = activeGatesSchema.safeParse(
+    (responsePayload as Record<string, unknown>).activeGates,
+  );
+  return parsed.success ? parsed.data : null;
 }
 
 /** Extracts completed/total progress from a run summary object. */

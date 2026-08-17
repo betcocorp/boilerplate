@@ -299,7 +299,20 @@ export async function rejectProductAlias(id: string): Promise<void> {
   }
 }
 
-/** Search product lines by title, for the edit form's product-line picker. */
+/**
+ * Search product lines by title, for the edit form's product-line picker.
+ *
+ * Found via live QA: the `entity_type='product_line'` tier frequently carries a generic internal
+ * name rather than the commercial/brand name (e.g. the pH7Q family's product_line-tier titles are
+ * "Neutral pH disinfectant" and, for BOTH the Dual and Ultra lines, the identical
+ * "Concentrated Neutral Disinfectant Cleaner" — the actual "pH7Q..." branding only exists on
+ * `entity_type='product'` (SKU-tier) rows). Searching product_line-tier titles alone means an
+ * admin typing the product's real name (exactly what B0-485 seeded as a manual alias) gets "no
+ * matches" for a product line that very much exists. Search both tiers, then dedupe to one result
+ * per `product_line_key`, always displaying the canonical product_line-tier title (via
+ * `resolveProductLineTitles`) when one exists, falling back to the matched product-tier title only
+ * when the line has no product_line-tier entity at all.
+ */
 export async function searchProductLines(
   rawQuery: string,
   limit = 20,
@@ -311,9 +324,9 @@ export async function searchProductLines(
     schema: (s: 'rag') => {
       from: (t: 'entity') => {
         select: (cols: string) => {
-          eq: (
+          in: (
             c: string,
-            v: unknown,
+            v: string[],
           ) => {
             ilike: (
               c: string,
@@ -329,21 +342,35 @@ export async function searchProductLines(
     };
   };
 
+  const cappedLimit = Math.min(Math.max(Math.floor(limit) || 20, 1), 50);
   const pattern = `%${trimmed.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`;
   const { data, error } = await supabase
     .schema('rag')
     .from('entity')
     .select('product_line_key, title')
-    .eq('entity_type', 'product_line')
+    .in('entity_type', ['product_line', 'product'])
     .ilike('title', pattern)
-    .limit(Math.min(Math.max(Math.floor(limit) || 20, 1), 50));
+    // Over-fetch rows since several SKUs commonly share one product_line_key — the matches are
+    // deduped by key below, so this is rows-scanned, not distinct-results-returned.
+    .limit(cappedLimit * 5);
   if (error) throw new Error(`searchProductLines failed: ${error.message}`);
 
-  const results: Array<{ productLineKey: string; title: string }> = [];
+  const matchedKeys: string[] = [];
+  const fallbackTitleByKey = new Map<string, string>();
   for (const row of data ?? []) {
     const productLineKey = strOrNull(row.product_line_key);
     const title = strOrNull(row.title);
-    if (productLineKey && title) results.push({ productLineKey, title });
+    if (!productLineKey || !title) continue;
+    if (!fallbackTitleByKey.has(productLineKey)) {
+      matchedKeys.push(productLineKey);
+      fallbackTitleByKey.set(productLineKey, title);
+    }
+    if (matchedKeys.length >= cappedLimit) break;
   }
-  return results;
+
+  const canonicalTitles = await resolveProductLineTitles(matchedKeys);
+  return matchedKeys.map((productLineKey) => ({
+    productLineKey,
+    title: canonicalTitles.get(productLineKey) ?? fallbackTitleByKey.get(productLineKey) ?? productLineKey,
+  }));
 }

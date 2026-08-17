@@ -214,6 +214,10 @@ async function runRealSmeAgentAnswer(
     answerProvenance: outcome.answerProvenance,
     priorMessageCount: outcome.priorMessageCount,
     previousResponseId: outcome.previousResponseId,
+    // B0-491 — the answering agent's own self-reported confidence, distinct from `confidence`.
+    agentConfidence: outcome.agentConfidence,
+    agentConfidenceBasis: outcome.agentConfidenceBasis,
+    agentConfidenceReason: outcome.agentConfidenceReason,
   };
 
   return {

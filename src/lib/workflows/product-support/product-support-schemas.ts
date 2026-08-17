@@ -1,6 +1,8 @@
 import { z } from 'zod';
 
 import { toolTraceSchema } from '~/lib/audit/trace';
+import { AGENT_CONFIDENCE_REASONS } from '~/lib/workflows/product-support/agent-self-confidence';
+import { CONFIDENCE_PROVENANCES } from '~/lib/workflows/product-support/confidence-provenance';
 
 export const validatorResultSchema = z.object({
   approved: z.boolean(),
@@ -19,6 +21,39 @@ export const validatorResultSchema = z.object({
 });
 
 export type ValidatorResult = z.infer<typeof validatorResultSchema>;
+
+/**
+ * B0-554 — per-model-call token usage, shared by every `workflow_steps.output` that records it
+ * (currently `openai_responses_agent`, `validator`, `revision`) so cost-attribution readers have
+ * one shape to parse regardless of which step wrote it.
+ */
+export const llmTokenUsageSchema = z.object({
+  promptTokens: z.number(),
+  completionTokens: z.number(),
+  totalTokens: z.number(),
+  cachedPromptTokens: z.number().optional(),
+});
+
+export type LlmTokenUsageRecord = z.infer<typeof llmTokenUsageSchema>;
+
+/**
+ * B0-491 — provenance for `agentConfidence`. Always present (never inferred from context) so a null
+ * score is never unexplained: `not_reported` (model didn't emit the marker this turn), `malformed`
+ * (marker present but unparseable), `out_of_range` (parsed but outside 0-1), `no_model_call` (the
+ * early-decline gate short-circuited before any model call existed).
+ */
+export const agentConfidenceReasonSchema = z.enum(AGENT_CONFIDENCE_REASONS);
+
+export type AgentConfidenceReason = z.infer<typeof agentConfidenceReasonSchema>;
+
+/**
+ * B0-492 — which of the (up to six) mechanisms produced `confidence`. See
+ * `~/lib/workflows/product-support/confidence-provenance.ts` for the full definition of each value
+ * and the capping-chain rules.
+ */
+export const confidenceProvenanceSchema = z.enum(CONFIDENCE_PROVENANCES);
+
+export type ConfidenceProvenance = z.infer<typeof confidenceProvenanceSchema>;
 
 /** Rows from `rag.document` / `rag.document_chunk` returned by semantic search (aggregated across tool calls). */
 export const retrievedDocumentChunkRefSchema = z.object({
@@ -174,6 +209,10 @@ export const productSupportStepOutputSchema = z
      * writer, and `readStepGateRecords` reads either spelling.
      */
     gates: z.array(gateRecordSchema).optional(),
+    /** B0-554 — this step's total LLM usage, when it made at least one model call. */
+    usage: llmTokenUsageSchema.optional(),
+    /** B0-554 — per-model-call usage, in call order (the `validator` step can call the model twice). */
+    usageByCall: z.array(llmTokenUsageSchema).optional(),
   })
   .loose();
 
@@ -191,6 +230,119 @@ export function readStepGateRecords(stepOutput: unknown): GateRecord[] {
   }
   return [...(parsed.data.gates ?? []), ...(parsed.data.gate ? [parsed.data.gate] : [])];
 }
+
+/**
+ * B0-490 — the raw retrieval similarity (before `selectCuratedMatches` filtered/deduped/truncated
+ * the set) versus the post-selection similarity of what actually reached the model, rolled up to
+ * run level. Distinct fields so a chart can no longer conflate the two: `evaluateRecommendationGate`
+ * was calibrated against the RAW top-hit score, but the workflow used to feed it the post-filter
+ * max instead (the whole B0-490 bug). Optional — and every field independently nullable — so a
+ * payload written before this ticket, or a turn where no search tool ran, is honestly absent/null
+ * rather than defaulted to a number that was never computed.
+ */
+export const similaritySummarySchema = z.object({
+  /** Max `RagSearchMatch.similarity` across the winning search's raw candidates, before curation. */
+  rawTopSimilarity: z.number().nullable(),
+  /** Max similarity across the sources that actually survived `selectCuratedMatches`. */
+  selectedTopSimilarity: z.number().nullable(),
+  /** Raw candidate count minus surviving source count, summed across this turn's search calls. */
+  droppedByFilterCount: z.number().int().nonnegative().nullable(),
+});
+
+export type SimilaritySummary = z.infer<typeof similaritySummarySchema>;
+
+/**
+ * B0-493 — run-level rollup of the retrieval configuration used by every search-backed tool call
+ * this turn made (see `ToolRetrievalParams` in `~/lib/audit/trace.ts` for the per-call record).
+ * Each field is null when no search tool ran, the agreed-upon value when every search-backed call
+ * this turn agreed, or null WITH the field name listed in `mixed` when calls disagreed — so a run
+ * is labelled with "the retrieval configuration used" without a reader having to open every tool
+ * call to check for disagreement.
+ */
+export const retrievalConfigFieldNameSchema = z.enum([
+  'embeddingModel',
+  'retrievalStrategy',
+  'embeddingSource',
+  'scope',
+  'minSimilarity',
+]);
+
+export const retrievalConfigSummarySchema = z.object({
+  embeddingModel: z.string().nullable(),
+  retrievalStrategy: z.string().nullable(),
+  embeddingSource: z.string().nullable(),
+  scope: z.string().nullable(),
+  /** The effective `selectCuratedMatches` floor applied (e.g. the silently-defaulted 0.2). */
+  minSimilarity: z.number().nullable(),
+  /** Field names above that disagreed across this turn's search calls, and are therefore null. */
+  mixed: z.array(retrievalConfigFieldNameSchema),
+});
+
+export type RetrievalConfigSummary = z.infer<typeof retrievalConfigSummarySchema>;
+
+/**
+ * B0-494 — the resolved (not env-var-name) value of every behavior switch this run's execution
+ * actually observed, so "was this run's behavior even comparable to that one" is answerable
+ * without reading env vars or logs. Every field is a plain resolved value — never the flag name —
+ * because two runs on different deploys could have the SAME flag name resolve to different
+ * effective values (e.g. `isRerankerConfigured()` depends on whether COHERE_API_KEY happens to be
+ * set), and it is the resolved value that determines behavior.
+ */
+export const runtimeConfigSchema = z.object({
+  /** `input.useValidator ?? false` — off by default everywhere, including prod chat. */
+  useValidator: z.boolean(),
+  /** `BEX_EARLY_DECLINE_GATE_ENABLED !== 'false'`. */
+  earlyDeclineGateEnabled: z.boolean(),
+  /** `BEX_AI_SDK_GENERATION_ENABLED === 'true'` — selects the AI SDK vs Responses generation runtime. */
+  aiSdkGenerationEnabled: z.boolean(),
+  /**
+   * Whether cross-encoder reranking actually ran this turn's retrieval, i.e.
+   * `BEX_PRODUCT_SUPPORT_RERANKER !== 'false'` AND `isRerankerConfigured()` (COHERE_API_KEY
+   * present). NOT the same as the generic `ENABLE_RERANKER` env var named in the ticket's starting
+   * list — verified against the live code that this workflow always passes an explicit
+   * `useReranker`, so the product-support retrieval path never actually reads `ENABLE_RERANKER`.
+   */
+  rerankerActive: z.boolean(),
+  /** `BEX_DISABLE_CONFIDENCE_GATING === 'true'` — the B0-452 master confidence-gate kill switch. */
+  confidenceGatingDisabled: z.boolean(),
+  /** The agent mode this run actually executed under. */
+  agentMode: z.string(),
+  /** `agentMode !== 'orchestrator'` — an admin forced direct routing, bypassing the router. */
+  routedDirectly: z.boolean(),
+});
+
+export type RuntimeConfig = z.infer<typeof runtimeConfigSchema>;
+
+/**
+ * B0-494 — per-gate activation state, distinct from the B0-391 `GateRecord` (which records WHAT a
+ * gate that ran decided). This records WHETHER it ran at all, and if not, why:
+ * - `ran` — the gate evaluated this turn (whatever its verdict).
+ * - `skipped` — disabled by a flag entirely; never evaluated. Never rendered as passing, and never
+ *   carries thresholds (extends the B0-396 "omit a gate that didn't run" rule to the disabled case).
+ * - `bypassed` — the gate (or its cap) DID evaluate/detect something, but the B0-452 kill switch
+ *   suppressed the effect (an unenforced cap/rejection is fiction if reported as if it capped).
+ * - `not_applicable` — the gate's own trigger condition never occurred this turn (e.g. no
+ *   usage/safety-shaped question, or no cross-reference post-processing) — distinct from `skipped`.
+ */
+export const gateActivationStateSchema = z.enum(['ran', 'skipped', 'bypassed', 'not_applicable']);
+
+export const gateActivationRecordSchema = z.object({
+  state: gateActivationStateSchema,
+  /** e.g. `'disabled_by_flag'`, `'confidence_gating_disabled'`. Absent when `state === 'ran'`. */
+  reason: z.string().max(256).optional(),
+});
+
+export type GateActivationRecord = z.infer<typeof gateActivationRecordSchema>;
+
+export const activeGatesSchema = z.object({
+  validator: gateActivationRecordSchema,
+  earlyDeclineGate: gateActivationRecordSchema,
+  usageSafetyCoverage: gateActivationRecordSchema,
+  regulatedClaimGuardrail: gateActivationRecordSchema,
+  recommendationConfidence: gateActivationRecordSchema,
+});
+
+export type ActiveGates = z.infer<typeof activeGatesSchema>;
 
 export const productSupportFinalOutputSchema = z.object({
   answerText: z.string(),
@@ -287,6 +439,50 @@ export const productSupportFinalOutputSchema = z.object({
       otherCompetitorProduct: z.string().nullable(),
     })
     .optional(),
+  /** B0-490 — raw vs. post-selection top retrieval similarity for this turn. See schema doc above. */
+  similaritySummary: similaritySummarySchema.optional(),
+  /** B0-493 — run-level retrieval configuration rollup. See schema doc above. */
+  retrievalConfig: retrievalConfigSummarySchema.optional(),
+  /**
+   * B0-491 — the answering agent's OWN self-reported confidence (see
+   * `~/lib/workflows/product-support/agent-self-confidence.ts`), distinct from `confidence`
+   * (validator judgment / bypass heuristic / gate-capped value — never conflated with this field,
+   * see B0-492). Null (with `agentConfidenceReason` explaining why) when the model returned no
+   * parseable score, or when the early-decline gate never called a model at all. Optional so
+   * historical payloads written before this ticket still parse.
+   */
+  agentConfidence: z.number().min(0).max(1).nullable().optional(),
+  /** B0-491 — the short reason the agent gave for its own `agentConfidence`. */
+  agentConfidenceBasis: z.string().max(500).nullable().optional(),
+  /** B0-491 — always present alongside `agentConfidence` once this ticket's code runs. */
+  agentConfidenceReason: agentConfidenceReasonSchema.optional(),
+  /**
+   * B0-492 — which mechanism produced `confidence` (validator judgment, bypass heuristic, decline
+   * gate, agent self-score, or a gate cap). Always present alongside `confidence` once this
+   * ticket's code runs; absent on historical payloads (readers must resolve that to `'unknown'`,
+   * never default it to a judgment class — see `resolveConfidenceProvenance`).
+   */
+  confidenceProvenance: confidenceProvenanceSchema.optional(),
+  /**
+   * B0-492 — when `confidenceProvenance === 'gate_capped'`, the value `confidence` had immediately
+   * before the FIRST cap in this run's chain (so `gate_capped` never hides what was capped). Null
+   * for every other provenance.
+   */
+  confidencePreCapValue: z.number().min(0).max(1).nullable().optional(),
+  /** B0-492 — the provenance of `confidencePreCapValue`, when present. */
+  confidencePreCapProvenance: confidenceProvenanceSchema.nullable().optional(),
+  /**
+   * B0-494 — the resolved value of every behavior switch this run observed. Absent on historical
+   * payloads written before this ticket (readers must render those as unknown, never
+   * fully-enabled — see `resolveRuntimeConfig`).
+   */
+  runtimeConfig: runtimeConfigSchema.optional(),
+  /**
+   * B0-494 — per-gate activation state (ran / skipped-by-flag / bypassed-by-kill-switch /
+   * not-applicable-this-turn). Absent on historical payloads for the same reason as
+   * `runtimeConfig`.
+   */
+  activeGates: activeGatesSchema.optional(),
 });
 
 export type ProductSupportFinalOutput = z.infer<typeof productSupportFinalOutputSchema>;

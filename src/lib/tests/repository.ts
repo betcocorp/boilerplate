@@ -3,10 +3,12 @@ import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 import {
   extractItemSimilarityScore,
+  extractRuntimeConfig,
   extractSearchRunMaxSimilarity,
 } from './response-payload';
 import { extractExpectedTool, parseAgentStepToolTrace } from './tool-routing';
 import { COMPLETED_RUN_STATUSES } from './types';
+import { JUDGMENT_CONFIDENCE_PROVENANCES } from '~/lib/workflows/product-support/confidence-provenance';
 import type {
   LatestFailedTestResultItemView,
   NewTestItemRecord,
@@ -844,6 +846,90 @@ export async function computeAvgSimilarityForResult(testResultId: string): Promi
   }
 
   return count > 0 ? sum / count : null;
+}
+
+/**
+ * B0-492 — CI's `avg_confidence` gate used to average every item's `confidence` regardless of
+ * provenance: a regex constant (`decline_gate_constant`, `validator_bypassed_heuristic`) sitting in
+ * the same mean as an actual model judgment (`validator_judged`). This computes the average over
+ * ONLY `validator_judged` items (see `JUDGMENT_CONFIDENCE_PROVENANCES`), and reports how many items that was
+ * over so a reader can tell "no judgment items ran" apart from "the judgment average is 0".
+ *
+ * B0-495 — filters on the generated `confidence_provenance` column and selects only the generated
+ * `confidence` column (both stored/indexed — see `test_result_items_confidence_provenance_confidence_idx`),
+ * instead of fetching every row's full `response_payload` JSON and parsing it in JS. `EXPLAIN`
+ * confirms an index-only scan for this exact filter+column shape.
+ */
+export async function computeAvgJudgmentConfidenceForResult(
+  testResultId: string,
+): Promise<{ avg: number | null; itemCount: number }> {
+  const supabase = getSupabaseServiceRoleClient();
+  let sum = 0;
+  let count = 0;
+  let from = 0;
+
+  while (true) {
+    const result = await supabase
+      .from('test_result_items')
+      .select('confidence')
+      .eq('test_result_id', testResultId)
+      .in('status', ['completed', 'failed'])
+      .in('confidence_provenance', [...JUDGMENT_CONFIDENCE_PROVENANCES])
+      .not('confidence', 'is', null)
+      .range(from, from + RESULT_ITEMS_PAGE_SIZE - 1);
+
+    const rows = (assertNoError(result) || []) as Pick<TestResultItemRecord, 'confidence'>[];
+
+    for (const row of rows) {
+      if (typeof row.confidence === 'number') {
+        sum += row.confidence;
+        count += 1;
+      }
+    }
+
+    if (rows.length < RESULT_ITEMS_PAGE_SIZE) {
+      break;
+    }
+    from += RESULT_ITEMS_PAGE_SIZE;
+  }
+
+  return { avg: count > 0 ? sum / count : null, itemCount: count };
+}
+
+/**
+ * B0-494 — a run executed under the B0-452 master confidence-gate kill switch
+ * (`BEX_DISABLE_CONFIDENCE_GATING`) has fictional confidence caps: the gate detected something but
+ * was told not to act on it. CI must not silently let such a run satisfy `confidence_floor`, so the
+ * `/gate` endpoint calls this to check whether ANY item in the run recorded
+ * `runtimeConfig.confidenceGatingDisabled === true` before trusting `avg_confidence` at all.
+ */
+export async function anyResultItemHasConfidenceGatingDisabled(
+  testResultId: string,
+): Promise<boolean> {
+  const supabase = getSupabaseServiceRoleClient();
+  let from = 0;
+
+  while (true) {
+    const result = await supabase
+      .from('test_result_items')
+      .select('response_payload')
+      .eq('test_result_id', testResultId)
+      .in('status', ['completed', 'failed'])
+      .range(from, from + RESULT_ITEMS_PAGE_SIZE - 1);
+
+    const rows = (assertNoError(result) || []) as Pick<TestResultItemRecord, 'response_payload'>[];
+
+    if (rows.some((row) => extractRuntimeConfig(row.response_payload)?.confidenceGatingDisabled)) {
+      return true;
+    }
+
+    if (rows.length < RESULT_ITEMS_PAGE_SIZE) {
+      break;
+    }
+    from += RESULT_ITEMS_PAGE_SIZE;
+  }
+
+  return false;
 }
 
 export async function deleteTestById(testId: string) {

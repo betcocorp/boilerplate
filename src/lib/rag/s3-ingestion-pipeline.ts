@@ -10,7 +10,7 @@ import { GetObjectCommand, type S3Client } from '@aws-sdk/client-s3';
 import { createHash } from 'node:crypto';
 
 import { syncDocumentChunkEmbeddings } from '~/lib/rag/embeddings';
-import { summarize } from '~/lib/rag/markdown-chunking';
+import { estimateTokens, summarize } from '~/lib/rag/markdown-chunking';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 import type { Json as RagJson } from '~/types/supabase.rag';
 
@@ -87,6 +87,7 @@ type DocumentRow = {
   title: string;
   updated_at: string;
   metadata: JsonObject | null;
+  token_count: number | null;
 };
 
 export type S3IngestionDashboardDocumentStatus =
@@ -104,6 +105,8 @@ export type S3IngestionDashboardDocument = {
   sourceRecordId: string | null;
   documentId: string | null;
   chunkCount: number;
+  // B0-544: document-level token estimate (rag.document.token_count).
+  tokenCount: number | null;
   checksum: string | null;
   sourceUri: string | null;
   updatedAt: string | null;
@@ -347,6 +350,9 @@ export function createS3IngestionPipeline<TSeed extends S3IngestionSeedDocument>
           body_markdown: parsed.bodyMarkdown,
           summary: summarize(parsed.bodyText),
           document_kind: documentKind,
+          // B0-544: document-level token estimate, same ceil(length / 4) convention
+          // used for document_chunk.token_count everywhere else in this codebase.
+          token_count: estimateTokens(parsed.bodyText),
           metadata,
         })
         .eq('id', existing.id)
@@ -373,6 +379,9 @@ export function createS3IngestionPipeline<TSeed extends S3IngestionSeedDocument>
         body_markdown: parsed.bodyMarkdown,
         summary: summarize(parsed.bodyText),
         document_kind: documentKind,
+        // B0-544: document-level token estimate, same ceil(length / 4) convention
+        // used for document_chunk.token_count everywhere else in this codebase.
+        token_count: estimateTokens(parsed.bodyText),
         metadata,
         document_key: documentKey,
       })
@@ -470,7 +479,7 @@ export function createS3IngestionPipeline<TSeed extends S3IngestionSeedDocument>
     const { data, error } = await supabase
       .schema('rag')
       .from('document')
-      .select('id, source_record_id, title, updated_at, metadata')
+      .select('id, source_record_id, title, updated_at, metadata, token_count')
       .eq('document_kind', documentKind);
 
     if (error) {
@@ -660,6 +669,7 @@ export function createS3IngestionPipeline<TSeed extends S3IngestionSeedDocument>
         sourceRecordId: source.id,
         documentId: document?.id ?? null,
         chunkCount,
+        tokenCount: document?.token_count ?? null,
         checksum: source.checksum,
         sourceUri: source.source_uri,
         updatedAt: document?.updated_at ?? source.updated_at,
@@ -715,6 +725,7 @@ export function createS3IngestionPipeline<TSeed extends S3IngestionSeedDocument>
         sourceRecordId: source?.id ?? null,
         documentId: document?.id ?? null,
         chunkCount,
+        tokenCount: document?.token_count ?? null,
         checksum: source?.checksum ?? null,
         sourceUri: source?.source_uri ?? null,
         updatedAt: document?.updated_at ?? source?.updated_at ?? null,

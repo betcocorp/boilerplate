@@ -58,6 +58,8 @@ export type KnowledgeDashboardDocument = {
   sourceRecordId: string | null;
   documentId: string | null;
   chunkCount: number;
+  // B0-544: document-level token estimate (rag.document.token_count).
+  tokenCount: number | null;
   updatedAt: string | null;
   lastError: string | null;
 };
@@ -324,6 +326,9 @@ async function upsertDocument(
     body_markdown: rawMarkdown,
     summary: summarize(plainText),
     document_kind: DOCUMENT_KIND,
+    // B0-544: document-level token estimate, same ceil(length / 4) convention used
+    // for document_chunk.token_count in replaceDocumentChunks below.
+    token_count: estimateTokens(plainText),
     metadata,
   };
 
@@ -422,7 +427,7 @@ async function ingestSeedDocument(seed: KnowledgeSeedDocument) {
 // Status dashboard
 // --------------------------------------------------------------------------
 type SourceRow = { id: string; source_pk: string; metadata: JsonObject | null; updated_at: string };
-type DocRow = { id: string; source_record_id: string; updated_at: string };
+type DocRow = { id: string; source_record_id: string; updated_at: string; token_count: number | null };
 
 function asIngestion(metadata: JsonObject | null) {
   const ing = metadata && typeof metadata === 'object' ? (metadata as JsonObject).ingestion : null;
@@ -442,7 +447,7 @@ async function loadState() {
       .eq('source_schema', SOURCE_SCHEMA)
       .eq('source_table', SOURCE_TABLE)
       .eq('source_type', SOURCE_TYPE),
-    supabase.schema('rag').from('document').select('id, source_record_id, updated_at').eq('document_kind', DOCUMENT_KIND),
+    supabase.schema('rag').from('document').select('id, source_record_id, updated_at, token_count').eq('document_kind', DOCUMENT_KIND),
     // Real per-document chunk counts so "ingested" reflects actual chunks, not the
     // source's mutable metadata.ingestion.status (which register-seed resets). The
     // knowledge corpus is well under the 1000-row default cap; only the per-row chunk
@@ -503,6 +508,7 @@ function buildDocumentRow(
     sourceRecordId: source?.id ?? null,
     documentId: doc?.id ?? null,
     chunkCount,
+    tokenCount: doc?.token_count ?? null,
     updatedAt: doc?.updated_at ?? source?.updated_at ?? null,
     lastError: asString(ingestion?.last_error),
   };

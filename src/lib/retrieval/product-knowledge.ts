@@ -1,4 +1,4 @@
-import { searchProductChunks, type RagSearchMatch } from '~/lib/rag/search';
+import { searchProductChunks, type RagSearchMatch, type RagSearchResult } from '~/lib/rag/search';
 import {
   buildEntityContextBlock,
   fetchEntityContexts,
@@ -7,7 +7,8 @@ import {
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 import {
-  assembleDocumentBodies,
+  assembleNeighborChunkBodies,
+  chunkWindowKey,
   fetchDocumentSourceRefs,
   type AssembledDocumentBody,
   type DocumentSourceRef,
@@ -17,6 +18,7 @@ import {
   type ProductLineResolutionResult,
 } from '~/lib/retrieval/product-line-resolution';
 import {
+  DEFAULT_MIN_SIMILARITY,
   selectCuratedMatches,
   trimSnippet,
 } from '~/lib/retrieval/source-selection';
@@ -51,7 +53,9 @@ const SIMILARITY_CANDIDATE_FETCH_LIMIT = 20;
  * this flag is inert and every search below behaves exactly as if reranking were off, so it stays
  * safe to leave on before the cross-encoder is provisioned.
  */
-const PRODUCT_SUPPORT_RERANK_ENABLED =
+// B0-494 — exported so `run-product-support-workflow.ts` can record the effective value in its
+// per-run runtime-config snapshot, rather than a second, possibly-drifting read of the same flag.
+export const PRODUCT_SUPPORT_RERANK_ENABLED =
   process.env.BEX_PRODUCT_SUPPORT_RERANKER !== 'false';
 
 export type CuratedSource = {
@@ -65,9 +69,11 @@ export type CuratedSource = {
    */
   snippet: string;
   /**
-   * Full document body, assembled from every chunk of the parent document and
-   * passed to the LLM as grounding context. May be truncated if the document is
-   * extremely large; in that case `documentBodyTruncated` is true.
+   * Grounding text passed to the LLM. B0-547: assembled from the matched chunk plus
+   * `NEIGHBOR_CHUNK_RADIUS` chunks immediately before/after it in the parent document (NOT the
+   * whole document — see `assembleNeighborChunkBodies`). May still be truncated against the
+   * per-source char budget in the rare case a chunk itself is huge; `documentBodyTruncated`
+   * reflects that.
    */
   documentBody: string;
   documentBodyChars: number;
@@ -77,11 +83,13 @@ export type CuratedSource = {
   /**
    * B0-13: ordered `rag.document_chunk.id`s actually stitched into `documentBody`, so a
    * retrieval can be audited after the fact for exactly which chunks reached the model.
-   * Falls back to the single matched chunk id when full-document assembly wasn't available.
+   * Falls back to the single matched chunk id when windowed assembly wasn't available.
    */
   documentBodyChunkIds: string[];
-  /** Untruncated text of the matched chunk, for traceability and debugging. */
-  matchedChunkText: string;
+  // B0-548: `matchedChunkText` (the untruncated matched chunk) used to live here too, but it was
+  // always a substring of `documentBody` (or, when body assembly fell back to the single chunk,
+  // byte-identical to it) with no downstream reader — `snippet` already covers the short-preview
+  // use case. Removed rather than trimmed to keep exactly one canonical grounding field.
   similarity: number;
   documentKind: string;
   entityId: string | null;
@@ -149,7 +157,88 @@ export type ProductKnowledgeRetrievalSummary = {
    * (broad/anchored-via-similarity paths never have an explicit key to source).
    */
   explicitKeySource: ProductEntityResolutionSource | 'unspecified' | null;
+  /**
+   * B0-490 — max `similarity` across the winning search's raw candidates (the matches
+   * `searchProductChunks` returned, before `selectCuratedMatches` filtered/deduped/truncated the
+   * set). Null when the winning pass returned zero candidates. This — NOT `selectedTopSimilarity`
+   * — is the score `evaluateRecommendationGate`'s `LOW_SIMILARITY_THRESHOLD` was calibrated
+   * against.
+   */
+  rawTopSimilarity: number | null;
+  /** Max `similarity` across the sources that actually survived curation (what reached the model). */
+  selectedTopSimilarity: number | null;
+  /** Raw candidate count minus surviving source count, for the winning pass. */
+  droppedByFilterCount: number;
+  /**
+   * B0-493 — the exact request parameters and strategy/cache outcome of the WINNING
+   * `searchProductChunks` call (the one whose matches fed the final `sources[]`), so a run can be
+   * root-caused against "was this a corpus change or a retrieval-parameter change" without reading
+   * tool arguments.
+   */
+  search: {
+    model: string;
+    limit: number;
+    scope: string;
+    productLineKey: string | null;
+    productKey: string | null;
+    sectionType: string | null;
+    minSimilarity: number | null;
+    retrievalStrategy: RagSearchResult['retrieval_strategy'];
+    embeddingSource: RagSearchResult['embeddingSource'];
+    timings: RagSearchResult['timings'];
+  };
+  /**
+   * B0-493 — the `selectCuratedMatches` options actually applied for this call, INCLUDING the
+   * silently-defaulted `DEFAULT_MIN_SIMILARITY` floor when no override was passed (every call site
+   * in this module today) — recorded as an applied value, never as an absence.
+   */
+  selection: {
+    limit: number;
+    minSimilarity: number;
+    maxPerDocument: number;
+    requiredDocumentKinds: string[];
+  };
 };
+
+function maxSimilarity(items: ReadonlyArray<{ similarity: number }>): number | null {
+  return items.length === 0 ? null : Math.max(...items.map((item) => item.similarity));
+}
+
+/** B0-493 — `search` field builder shared by every retrieval branch below. */
+function buildSearchDetails(
+  result: RagSearchResult,
+  overrides: { productLineKey?: string | null; sectionType?: string | null } = {},
+): ProductKnowledgeRetrievalSummary['search'] {
+  return {
+    model: result.model,
+    limit: result.limit,
+    scope: result.scope,
+    productLineKey: overrides.productLineKey ?? result.productLineKey,
+    productKey: result.productKey,
+    sectionType: overrides.sectionType ?? result.sectionType,
+    minSimilarity: result.minSimilarity,
+    retrievalStrategy: result.retrieval_strategy,
+    embeddingSource: result.embeddingSource,
+    timings: result.timings,
+  };
+}
+
+/** B0-493 — the `selection` field: the `selectCuratedMatches` options every branch actually used. */
+function buildSelectionDetails(input: {
+  limit: number;
+  maxPerDocument?: number;
+  requiredDocumentKinds: string[];
+}): ProductKnowledgeRetrievalSummary['selection'] {
+  return {
+    limit: input.limit,
+    // Every call site in this module omits `minSimilarity`, so `selectCuratedMatches` always
+    // silently substitutes its own default — reported here as the value actually applied.
+    minSimilarity: DEFAULT_MIN_SIMILARITY,
+    // Mirrors `selectCuratedSourceMatches`'s own `options.maxPerDocument ?? 1` default.
+    maxPerDocument: input.maxPerDocument ?? 1,
+    requiredDocumentKinds: input.requiredDocumentKinds,
+  };
+}
 
 export type ProductKnowledgeQueryResult = {
   sources: CuratedSource[];
@@ -196,7 +285,6 @@ function buildCuratedSource(
     documentBodyTruncated: body?.truncated ?? false,
     documentBodyTokenEstimate: body?.estimatedTokens ?? null,
     documentBodyChunkIds: body?.chunkIds ?? (fallbackBody ? [match.chunk_id] : []),
-    matchedChunkText: match.chunk_text,
     similarity: match.similarity,
     documentKind: match.document_kind,
     entityId: match.entity_id,
@@ -286,9 +374,14 @@ async function selectCuratedSourceMatches(
 }
 
 /**
- * Hydration half of curation: assemble the full document body and source provenance for each
- * already-selected match. This is the expensive half (full document text for every selected
- * document), so B0-438 runs it once, on the winning pass only.
+ * Hydration half of curation: assemble the matched-chunk body and source provenance for each
+ * already-selected match. This is the expensive half (chunk text for every selected document),
+ * so B0-438 runs it once, on the winning pass only.
+ *
+ * B0-547: hydrates a small window around each matched chunk (`assembleNeighborChunkBodies`)
+ * rather than the whole parent document (`assembleDocumentBodies`) — a retrieval tool's answer
+ * is grounded by the chunk that actually matched, and the 1-2 chunks immediately around it, not
+ * every section of the source document.
  */
 async function hydrateCuratedSources(selected: RagSearchMatch[]): Promise<CuratedSource[]> {
   if (selected.length === 0) {
@@ -296,13 +389,21 @@ async function hydrateCuratedSources(selected: RagSearchMatch[]): Promise<Curate
   }
 
   const documentIds = selected.map((match) => match.document_id);
+  const windowRequests = selected.map((match) => ({
+    documentId: match.document_id,
+    chunkIndex: match.chunk_index,
+  }));
   const [bodies, sourceRefs] = await Promise.all([
-    assembleDocumentBodies(documentIds),
+    assembleNeighborChunkBodies(windowRequests),
     fetchDocumentSourceRefs(documentIds),
   ]);
 
   return selected.map((match) =>
-    buildCuratedSource(match, bodies.get(match.document_id), sourceRefs.get(match.document_id)),
+    buildCuratedSource(
+      match,
+      bodies.get(chunkWindowKey({ documentId: match.document_id, chunkIndex: match.chunk_index })),
+      sourceRefs.get(match.document_id),
+    ),
   );
 }
 
@@ -506,6 +607,11 @@ async function runProductKnowledgeQuery(input: {
     // Every similarity search performed on this path, so `searchMs` below counts the B0-250
     // fallback search too instead of silently under-reporting it.
     let searchMsTotal = result.timings.similaritySearchMs;
+    // B0-490 — raw candidates behind the winning pass (starts as the explicit-key search's
+    // matches; replaced wholesale if the B0-250 product-key fallback below actually ran).
+    let rawMatches = result.matches;
+    // B0-493 — the winning `RagSearchResult`, same replacement rule as `rawMatches` above.
+    let winningResult: RagSearchResult = result;
     if (curated.length === 0 && explicitProductKey) {
       const lineResult = await searchProductChunks({
         query: input.query,
@@ -516,6 +622,8 @@ async function runProductKnowledgeQuery(input: {
         useReranker: PRODUCT_SUPPORT_RERANK_ENABLED,
       });
       searchMsTotal += lineResult.timings.similaritySearchMs;
+      rawMatches = lineResult.matches;
+      winningResult = lineResult;
       curated = await curateUniqueDocumentSources(lineResult.matches, {
         limit,
         requiredDocumentKinds,
@@ -543,6 +651,11 @@ async function runProductKnowledgeQuery(input: {
           lockedProductLineKey: explicitKey,
           lockReason: 'explicit_filter',
         },
+        rawTopSimilarity: maxSimilarity(rawMatches),
+        selectedTopSimilarity: maxSimilarity(curated),
+        droppedByFilterCount: Math.max(0, rawMatches.length - curated.length),
+        search: buildSearchDetails(winningResult, { productLineKey: explicitKey }),
+        selection: buildSelectionDetails({ limit, maxPerDocument, requiredDocumentKinds }),
       },
     };
   }
@@ -558,10 +671,11 @@ async function runProductKnowledgeQuery(input: {
       useReranker: PRODUCT_SUPPORT_RERANK_ENABLED,
     });
 
+    const requiredDocumentKindsForSkip = resolveRequiredDocumentKinds(input.query, sectionType);
     const curated = await curateUniqueDocumentSources(result.matches, {
       limit,
       maxPerDocument,
-      requiredDocumentKinds: resolveRequiredDocumentKinds(input.query, sectionType),
+      requiredDocumentKinds: requiredDocumentKindsForSkip,
     });
 
     return {
@@ -583,6 +697,15 @@ async function runProductKnowledgeQuery(input: {
           lockedProductLineKey: null,
           lockReason: 'resolution_disabled',
         },
+        rawTopSimilarity: maxSimilarity(result.matches),
+        selectedTopSimilarity: maxSimilarity(curated),
+        search: buildSearchDetails(result),
+        selection: buildSelectionDetails({
+          limit,
+          maxPerDocument,
+          requiredDocumentKinds: requiredDocumentKindsForSkip,
+        }),
+        droppedByFilterCount: Math.max(0, result.matches.length - curated.length),
       },
     };
   }
@@ -623,6 +746,14 @@ async function runProductKnowledgeQuery(input: {
         anchoredCuratedCount: 0,
         explicitKeySource: null,
         productLineResolution: resolution,
+        rawTopSimilarity: maxSimilarity(broadResult.matches),
+        selectedTopSimilarity: maxSimilarity(broadCurated),
+        droppedByFilterCount: Math.max(0, broadResult.matches.length - broadCurated.length),
+        search: buildSearchDetails(broadResult),
+        selection: buildSelectionDetails({
+          limit,
+          requiredDocumentKinds: requiredDocumentKindsForQuery,
+        }),
       },
     };
   }
@@ -678,6 +809,20 @@ async function runProductKnowledgeQuery(input: {
       anchoredCuratedCount: anchoredSelected.length,
       explicitKeySource: null,
       productLineResolution: resolution,
+      rawTopSimilarity: maxSimilarity(
+        shouldUseBroadFallback ? broadResult.matches : anchoredResult.matches,
+      ),
+      selectedTopSimilarity: maxSimilarity(finalCurated),
+      droppedByFilterCount: Math.max(
+        0,
+        (shouldUseBroadFallback ? broadResult.matches.length : anchoredResult.matches.length) -
+          finalCurated.length,
+      ),
+      search: buildSearchDetails(shouldUseBroadFallback ? broadResult : anchoredResult),
+      selection: buildSelectionDetails({
+        limit,
+        requiredDocumentKinds: requiredDocumentKindsForQuery,
+      }),
     },
   };
 }
