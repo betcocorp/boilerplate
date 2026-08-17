@@ -418,6 +418,19 @@ function isEarlyDeclineGateEnabled() {
   return process.env.BEX_EARLY_DECLINE_GATE_ENABLED !== 'false';
 }
 
+/**
+ * B0-559 — Betco's sport/gym floor finish & coating line is formulated for wood (hardwood) sports
+ * floors only, so a message about a gym/sports floor has already answered the "which surface"
+ * question the broad-recommendation decline below would otherwise ask. Without this carve-out,
+ * "I need a durable gym floor finish, what do you recommend?" was declined for missing surface
+ * context it doesn't need, identically to a genuinely context-free "what should I use?".
+ */
+function hasWoodSportsFloorContext(text: string) {
+  return /(gym(nasium)?\s*floor|sports?\s*floor|sport\s*court|basketball\s*(court|floor))/.test(
+    text,
+  );
+}
+
 export { DEFAULT_MAX_OUTPUT_TOKENS, resolveMaxOutputTokens };
 
 /**
@@ -549,7 +562,9 @@ export function classifyEarlyDecline(userMessage: string): EarlyDeclineDecision 
     // Betco cross-reference (e.g. "...alternative to X. What do you recommend?")
     // isn't a broad, context-free request — let it reach the cross-reference /
     // recommendations flow that knows how to answer (or correctly decline) it.
-    !shouldForceCrossReferenceLookup(userMessage)
+    !shouldForceCrossReferenceLookup(userMessage) &&
+    // B0-559: same idea for gym/sports floor mentions — the surface isn't actually ambiguous.
+    !hasWoodSportsFloorContext(text)
   ) {
     return {
       reason: 'broad_recommendation_without_context',

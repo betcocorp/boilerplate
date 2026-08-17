@@ -40,3 +40,19 @@ describe('classifyEarlyDecline — B0-300 cross-reference false positive', () =>
     ).toEqual(expect.objectContaining({ reason: 'storage_or_expiration' }));
   });
 });
+
+describe('classifyEarlyDecline — B0-559 gym/sports floor is not ambiguous surface context', () => {
+  it('does not decline a gym floor finish request for missing surface context', () => {
+    expect(
+      classifyEarlyDecline(
+        'I need a durable gym floor finish but the gym is back in use tomorrow, what do you recommend?',
+      ),
+    ).toBeNull();
+  });
+
+  it('still declines a genuinely broad recommendation request with no floor/surface mention', () => {
+    expect(classifyEarlyDecline('What do you recommend for daily cleaning?')).toEqual(
+      expect.objectContaining({ reason: 'broad_recommendation_without_context' }),
+    );
+  });
+});
