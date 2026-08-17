@@ -12,6 +12,8 @@ import {
   retryTransportFaults,
   type TransportRetryTuning,
 } from '~/lib/openai/transport-retry';
+import { logWarn } from '~/lib/observability/logger';
+import { getErrorMessage } from '~/lib/utils';
 import type { ToolTraceEntry } from '~/lib/audit/trace';
 
 export type ExecuteToolFn = (input: {
@@ -139,6 +141,13 @@ export type ResponsesRuntimeOptions = {
    * was shown to anyone, so a replay cannot duplicate visible text.
    */
   observeAssistantDelta?: (delta: string) => void;
+  /**
+   * B0-381 — invoked once when the loop reaches `maxToolRounds` with the model still requesting
+   * tools, right before the forced final answer request. Hook for callers that want to record the
+   * event (e.g. an `audit_logs` row); the runtime itself has no audit context, so it only emits a
+   * structured log.
+   */
+  onToolRoundsExhausted?: (info: { maxToolRounds: number; pendingCallCount: number }) => void;
   executeTool: ExecuteToolFn;
 };
 
@@ -209,6 +218,33 @@ function resolveRoundZeroToolChoice(
   return { type: 'function', name: suggestion.name };
 }
 
+/**
+ * B0-381 — synthetic `function_call_output` for tool calls requested on the final round, which are
+ * deliberately NOT executed (their outputs could never inform another tool choice, only the final
+ * answer, and executing them would add a whole tool round to an already-pathological run). Sending
+ * these keeps the `previous_response_id` chain valid: every pending `function_call` gets an output.
+ */
+export const TOOL_ROUNDS_EXHAUSTED_TOOL_OUTPUT = JSON.stringify({
+  ok: false,
+  error:
+    'Tool-call limit reached for this turn; this call was not executed. Answer from the evidence already gathered.',
+});
+
+const TOOL_ROUNDS_EXHAUSTED_INSTRUCTION =
+  'You have reached the tool-call limit for this turn — no further tool calls will be executed. ' +
+  'Answer the user\'s question NOW using only the evidence already gathered above. ' +
+  'If the gathered evidence is not sufficient for a complete verified answer, say plainly which part ' +
+  'you could not verify instead of guessing or inventing values.';
+
+/**
+ * B0-381 — last-resort answer when even the forced `tool_choice: 'none'` request produces no text.
+ * Exhaustion must never surface an empty `assistantText`.
+ */
+export const TOOL_ROUNDS_EXHAUSTED_FALLBACK_TEXT =
+  'I hit the tool-call limit for this request before I could finish gathering evidence, so I can\'t ' +
+  'give a complete verified answer. Please narrow the question (one product or one topic at a time) ' +
+  'and ask again.';
+
 export async function runResponsesWithToolLoop(
   opts: ResponsesRuntimeOptions,
 ): Promise<ResponsesRuntimeResult> {
@@ -222,7 +258,6 @@ export async function runResponsesWithToolLoop(
   let chainPrev: string | undefined = opts.previousResponseId?.trim() || undefined;
   let toolOutputs: ResponseInputItem[] | null = null;
 
-  let lastResponse: Response | null = null;
   const usage: LlmTokenUsage = {
     promptTokens: 0,
     completionTokens: 0,
@@ -243,6 +278,81 @@ export async function runResponsesWithToolLoop(
     usage.totalTokens += call.totalTokens;
     usage.cachedPromptTokens += call.cachedPromptTokens;
   };
+
+  /**
+   * B0-370 — retry boundary: **one model request, within a single loop iteration.**
+   *
+   * Why this cannot duplicate a tool call, even though this path is stateful:
+   * 1. `params` is built by the caller, never mutated, and replayed identically —
+   *    `previous_response_id` included.
+   *    A failed attempt never returned a response, so `chainPrev` is still the same id — the
+   *    replay resumes from exactly the server-side state the failed attempt targeted, so the
+   *    provider does not re-run anything on its side either.
+   * 2. Tools for a round run strictly *after* this await resolves. At retry time no tool of
+   *    that round has executed, and earlier rounds are never re-entered (the loop only moves
+   *    forward), so no tool side effect exists to repeat.
+   * 3. Every piece of accumulated state (`accumulateUsage`, `responseIds.push`, `chainPrev`,
+   *    `toolOutputs`) is mutated only after success, so a retry cannot double-count usage or
+   *    push a duplicate response id.
+   *
+   * `maxRetries: 0` disables the OpenAI SDK's own default of 2 retries per request. Without it
+   * the two policies would stack multiplicatively (3 × 3 = 9 upstream attempts); this keeps the
+   * bound at `attempts` and puts the jitter under our control.
+   */
+  const requestModel = async (
+    params: ResponseCreateParamsNonStreaming,
+    label: string,
+  ): Promise<Response> => {
+    let visibleDeltaEmittedThisAttempt = false;
+    return retryTransportFaults(
+      async () => {
+        visibleDeltaEmittedThisAttempt = false;
+        // B0-550 — explicit per-attempt timeout (see `resolveOpenAiRequestTimeoutMs`'s doc
+        // comment): without it, a hung request has no bound short of the SDK's own 10-minute
+        // default, which the SDK's default `maxRetries` would then retry on top of.
+        const requestOptions = {
+          maxRetries: 0,
+          timeout: resolveOpenAiRequestTimeoutMs(),
+        };
+        if (wantsTokenEvents) {
+          const stream = opts.client.responses.stream(
+            {
+              ...params,
+              stream: true,
+            } as Parameters<typeof opts.client.responses.stream>[0],
+            requestOptions,
+          );
+          for await (const event of stream) {
+            if (event.type === 'response.output_text.delta') {
+              if (opts.onAssistantDelta) {
+                visibleDeltaEmittedThisAttempt = true;
+                opts.onAssistantDelta(event.delta);
+              }
+              opts.observeAssistantDelta?.(event.delta);
+            }
+          }
+          return await stream.finalResponse();
+        }
+        return await opts.client.responses.create(params, requestOptions);
+      },
+      {
+        runtime: 'responses',
+        label,
+        // A replay would re-stream text the user has already seen (the delta sink is write-only —
+        // there is no way to retract it), so a fault after the first visible token fails cleanly
+        // instead of retrying. Transport faults land at connection time, before any token, which
+        // is where all ten production failures occurred.
+        //
+        // B0-429 — gated on *visible* deltas only. A measurement-only observer (TTFT) streams
+        // without showing anyone anything, so it must not narrow this window for callers that
+        // consume no deltas.
+        canRetry: () => !visibleDeltaEmittedThisAttempt,
+        ...opts.retry,
+      },
+    );
+  };
+
+  const transport = wantsTokenEvents ? 'stream' : 'create';
 
   for (let i = 0; i < maxRounds; i += 1) {
     const input: ResponseInputItem[] =
@@ -297,75 +407,8 @@ export async function runResponsesWithToolLoop(
       ...(opts.maxOutputTokens ? { max_output_tokens: opts.maxOutputTokens } : {}),
     };
 
-    /**
-     * B0-370 — retry boundary: **the model request only, within a single loop iteration.**
-     *
-     * Why this cannot duplicate a tool call, even though this path is stateful:
-     * 1. `params` is built above, never mutated, and replayed identically — `previous_response_id`
-     *    included.
-     *    A failed attempt never returned a response, so `chainPrev` is still the same id — the
-     *    replay resumes from exactly the server-side state the failed attempt targeted, so the
-     *    provider does not re-run anything on its side either.
-     * 2. Tools for round `i` run strictly *after* this await resolves. At retry time no tool of
-     *    this round has executed, and earlier rounds are never re-entered (the loop only moves
-     *    forward), so no tool side effect exists to repeat.
-     * 3. Every piece of accumulated state (`accumulateUsage`, `responseIds.push`, `chainPrev`,
-     *    `toolOutputs`) is mutated only after success, so a retry cannot double-count usage or
-     *    push a duplicate response id.
-     *
-     * `maxRetries: 0` disables the OpenAI SDK's own default of 2 retries per request. Without it
-     * the two policies would stack multiplicatively (3 × 3 = 9 upstream attempts); this keeps the
-     * bound at `attempts` and puts the jitter under our control.
-     */
-    let visibleDeltaEmittedThisAttempt = false;
-    const response: Response = await retryTransportFaults(
-      async () => {
-        visibleDeltaEmittedThisAttempt = false;
-        // B0-550 — explicit per-attempt timeout (see `resolveOpenAiRequestTimeoutMs`'s doc
-        // comment): without it, a hung request has no bound short of the SDK's own 10-minute
-        // default, which the SDK's default `maxRetries` would then retry on top of.
-        const requestOptions = {
-          maxRetries: 0,
-          timeout: resolveOpenAiRequestTimeoutMs(),
-        };
-        if (wantsTokenEvents) {
-          const stream = opts.client.responses.stream(
-            {
-              ...params,
-              stream: true,
-            } as Parameters<typeof opts.client.responses.stream>[0],
-            requestOptions,
-          );
-          for await (const event of stream) {
-            if (event.type === 'response.output_text.delta') {
-              if (opts.onAssistantDelta) {
-                visibleDeltaEmittedThisAttempt = true;
-                opts.onAssistantDelta(event.delta);
-              }
-              opts.observeAssistantDelta?.(event.delta);
-            }
-          }
-          return await stream.finalResponse();
-        }
-        return await opts.client.responses.create(params, requestOptions);
-      },
-      {
-        runtime: 'responses',
-        label: `responses.${wantsTokenEvents ? 'stream' : 'create'} round ${i + 1}`,
-        // A replay would re-stream text the user has already seen (the delta sink is write-only —
-        // there is no way to retract it), so a fault after the first visible token fails cleanly
-        // instead of retrying. Transport faults land at connection time, before any token, which
-        // is where all ten production failures occurred.
-        //
-        // B0-429 — gated on *visible* deltas only. A measurement-only observer (TTFT) streams
-        // without showing anyone anything, so it must not narrow this window for callers that
-        // consume no deltas.
-        canRetry: () => !visibleDeltaEmittedThisAttempt,
-        ...opts.retry,
-      },
-    );
+    const response: Response = await requestModel(params, `responses.${transport} round ${i + 1}`);
 
-    lastResponse = response;
     accumulateUsage(response);
     opts.onRawResponse?.(response);
     responseIds.push(response.id);
@@ -386,36 +429,117 @@ export async function runResponsesWithToolLoop(
       };
     }
 
-    const outputs: ResponseInputItem[] = [];
-    for (const call of calls) {
-      const executed = await opts.executeTool({
-        name: call.name,
-        argumentsJson: call.arguments,
-        callId: call.call_id,
+    /**
+     * B0-381 — final-round overflow: the model is still requesting tools with no round left to
+     * return their outputs in. Previously the loop executed them anyway and exited with whatever
+     * the previous response's text held — usually nothing, since a tool-calling response
+     * carries no answer text. Instead: skip execution (no tool round may run whose outputs are
+     * never returned to the model), answer every pending call with a synthetic "not executed"
+     * output to keep the chain valid, and force one final answer with `tool_choice: 'none'`.
+     */
+    if (i === maxRounds - 1) {
+      logWarn('tool_rounds_exhausted', {
+        model: opts.model,
+        max_tool_rounds: maxRounds,
+        pending_call_count: calls.length,
+        response_id: response.id,
       });
-      toolTrace.push(executed.trace);
+      opts.onToolRoundsExhausted?.({
+        maxToolRounds: maxRounds,
+        pendingCallCount: calls.length,
+      });
+
+      const finalParams: ResponseCreateParamsNonStreaming = {
+        ...params,
+        tool_choice: 'none',
+        previous_response_id: chainPrev,
+        input: [
+          ...calls.map(
+            (call): ResponseInputItem => ({
+              type: 'function_call_output',
+              call_id: call.call_id,
+              output: TOOL_ROUNDS_EXHAUSTED_TOOL_OUTPUT,
+            }),
+          ),
+          {
+            role: 'user',
+            content: TOOL_ROUNDS_EXHAUSTED_INSTRUCTION,
+            type: 'message',
+          },
+        ],
+      };
+
+      const finalResponse = await requestModel(
+        finalParams,
+        `responses.${transport} final (tool rounds exhausted)`,
+      );
+      accumulateUsage(finalResponse);
+      opts.onRawResponse?.(finalResponse);
+      responseIds.push(finalResponse.id);
+
+      const finalText = extractAssistantText(finalResponse);
+      return {
+        lastResponse: finalResponse,
+        finalResponseId: finalResponse.id,
+        // Exhaustion must never yield an empty answer, even if the forced request returns nothing.
+        assistantText: finalText.trim() ? finalText : TOOL_ROUNDS_EXHAUSTED_FALLBACK_TEXT,
+        toolTrace,
+        responseIds,
+        usage,
+        usageByCall,
+      };
+    }
+
+    /**
+     * B0-379 — the request is sent with `parallel_tool_calls: true`, so a multi-call round now
+     * executes concurrently instead of serially. Per-call isolation: a rejection is captured into
+     * that call's own `{ok:false,error}` output + `ok:false` trace entry (belt-and-braces —
+     * `executeToolCall` already serializes its own failures), so one failing call never aborts its
+     * siblings. Ordering stays deterministic: traces and `function_call_output` items are appended
+     * in the model's own call order, keyed by `call_id`, regardless of settle order.
+     */
+    const executed = await Promise.all(
+      calls.map(async (call): Promise<Awaited<ReturnType<ExecuteToolFn>>> => {
+        try {
+          return await opts.executeTool({
+            name: call.name,
+            argumentsJson: call.arguments,
+            callId: call.call_id,
+          });
+        } catch (err) {
+          const output = JSON.stringify({ ok: false, error: getErrorMessage(err) });
+          return {
+            output,
+            trace: {
+              toolName: call.name,
+              callId: call.call_id,
+              // Mirrors the preview budgets in `~/lib/tools/execute-tool-call` (B0-390).
+              argumentsPreview: (call.arguments ?? '').slice(0, 1_800),
+              outputPreview: output.slice(0, 4_000),
+              ok: false,
+              durationMs: 0,
+            },
+          };
+        }
+      }),
+    );
+
+    const outputs: ResponseInputItem[] = [];
+    for (const [index, call] of calls.entries()) {
+      const result = executed[index]!;
+      toolTrace.push(result.trace);
       outputs.push({
         type: 'function_call_output',
         call_id: call.call_id,
         // B0-437 — the model gets the slimmed variant when the tool produced one.
-        output: executed.modelOutput ?? executed.output,
+        output: result.modelOutput ?? result.output,
       });
     }
 
     toolOutputs = outputs;
   }
 
-  if (!lastResponse) {
-    throw new Error('Responses tool loop exited without a model response.');
-  }
-
-  return {
-    lastResponse,
-    finalResponseId: lastResponse.id,
-    assistantText: extractAssistantText(lastResponse),
-    toolTrace,
-    responseIds,
-    usage,
-    usageByCall,
-  };
+  // Reachable only when maxToolRounds < 1 — every round either returns an answer, returns the
+  // exhaustion answer, or continues with tool outputs.
+  throw new Error('Responses tool loop exited without a model response.');
 }
