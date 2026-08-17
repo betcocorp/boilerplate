@@ -228,9 +228,15 @@ async function parsePdf(buffer: Buffer) {
   const standardFontDataUrl = pathToFileURL(
     join(process.cwd(), 'node_modules/pdfjs-dist/standard_fonts/'),
   ).href;
+  // Without cMapUrl/cMapPacked, pdfjs can't resolve the external CMap resources some PDFs'
+  // subset/embedded fonts rely on for non-ASCII glyphs (em/en dashes, smart quotes, bullets) —
+  // it silently renders those as U+FFFD ("�") while the rest of the page decodes fine.
+  const cMapUrl = pathToFileURL(join(process.cwd(), 'node_modules/pdfjs-dist/cmaps/')).href;
   const loadingTask = pdfjs.getDocument({
     data: new Uint8Array(buffer),
     standardFontDataUrl,
+    cMapUrl,
+    cMapPacked: true,
   });
   const pdfDocument = await loadingTask.promise;
   const pageCount = pdfDocument.numPages;
