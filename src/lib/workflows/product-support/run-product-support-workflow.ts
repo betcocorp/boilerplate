@@ -1379,6 +1379,10 @@ export async function runProductSupportWorkflow(input: {
    */
   const llmRouterCutoverActive =
     agentMode === 'orchestrator' && isLlmRouterEnabled() && !isLlmRouterShadowMode();
+  // Wall time this turn actually paid waiting on the classifier (a cache hit legitimately reads
+  // ~0ms) — recorded on the live gate so the observability page answers the latency question the
+  // cutover decision traded on, without needing server logs.
+  const liveClassifierStartedAtMs = Date.now();
   const liveIntentClassification: IntentClassification | null = llmRouterCutoverActive
     ? await classifyUserIntent(
         input.userMessage,
@@ -1391,6 +1395,7 @@ export async function runProductSupportWorkflow(input: {
         ),
       )
     : null;
+  const liveClassifierLatencyMs = Date.now() - liveClassifierStartedAtMs;
   const routingDecision =
     agentMode === 'orchestrator'
       ? (liveIntentClassification?.intent ?? route.agent ?? 'ambiguous')
@@ -1519,6 +1524,8 @@ export async function runProductSupportWorkflow(input: {
           classifiedIntent: liveIntentClassification.intent,
           classifierConfidence: liveIntentClassification.confidence,
           classifierSource: liveIntentClassification.source,
+          classifierFallbackReason: liveIntentClassification.fallbackReason,
+          classifierLatencyMs: liveClassifierLatencyMs,
           entities: liveIntentClassification.entities,
           suggestedTool: liveIntentClassification.suggestedTool,
           keywordRoutingDecision: route.agent ?? 'ambiguous',
@@ -1531,7 +1538,10 @@ export async function runProductSupportWorkflow(input: {
           liveIntentClassification.intent === (route.agent ?? 'ambiguous')
             ? 'agrees_with_keyword_router'
             : 'disagrees_with_keyword_router',
-        effect: `Routing cutover: the LLM classifier (${liveIntentClassification.source}) routed this turn to "${liveIntentClassification.intent}" (confidence ${liveIntentClassification.confidence}); the keyword router would have chosen "${route.agent ?? 'ambiguous'}".`,
+        effect:
+          liveIntentClassification.source === 'llm'
+            ? `Routing cutover: the LLM classifier routed this turn to "${liveIntentClassification.intent}" (confidence ${liveIntentClassification.confidence}, ${liveClassifierLatencyMs}ms); the keyword router would have chosen "${route.agent ?? 'ambiguous'}".`
+            : `Routing cutover DEGRADED: the LLM call fell back to the keyword router (${liveIntentClassification.fallbackReason ?? 'unknown reason'}, ${liveClassifierLatencyMs}ms), so this turn was still routed to "${liveIntentClassification.intent}" by keyword scoring.`,
       }
     : null;
 
@@ -2466,6 +2476,7 @@ export async function runProductSupportWorkflow(input: {
             classifiedIntent: shadowIntentClassification.intent,
             classifierConfidence: shadowIntentClassification.confidence,
             classifierSource: shadowIntentClassification.source,
+            classifierFallbackReason: shadowIntentClassification.fallbackReason,
             entities: shadowIntentClassification.entities,
             suggestedTool: shadowIntentClassification.suggestedTool,
             keywordRoutingDecision: routingDecision,
