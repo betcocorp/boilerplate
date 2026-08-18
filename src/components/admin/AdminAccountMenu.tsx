@@ -1,11 +1,16 @@
 'use client';
 
-import { BookOpen, EllipsisVertical, KeyRound, LogOut, ShieldCheck } from 'lucide-react';
+import {
+  BookOpen,
+  EllipsisVertical,
+  KeyRound,
+  LogOut,
+  ShieldCheck,
+} from 'lucide-react';
 import { signOut, useSession } from 'next-auth/react';
 import Link from 'next/link';
 import { forwardRef, useSyncExternalStore } from 'react';
 
-import { version as appVersion } from '../../../package.json';
 import { Avatar, AvatarFallback } from '~/components/ui/avatar';
 import { Button } from '~/components/ui/button';
 import {
@@ -21,6 +26,7 @@ import {
 } from '~/components/ui/dropdown-menu';
 import { PERMISSIONS } from '~/lib/permissions/constants';
 import { cn } from '~/lib/utils';
+import { version as appVersion } from '../../../package.json';
 
 function getInitials(value: string | null | undefined) {
   const raw = value?.trim();

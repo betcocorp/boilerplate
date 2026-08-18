@@ -87,6 +87,7 @@ Regenerate when the remote schema changes (requires CLI auth):
 - **Update jira**: Always use atlassian connector and update any tasks you work on
 - **Answer & Grounding**: Always use code to ground your answers and decisions, DO NOT rely solely on JIRA.
 - **Upon completion of any work**: Always ensure you include in ending summary a set of steps to test what was changed.
+- **Making commits**: Aways ensure to use Conventional commits when creating any new commits, if you're unsure consult documentation https://www.conventionalcommits.org/en/v1.0.0/
 
 ## Quick checks before handoff
 

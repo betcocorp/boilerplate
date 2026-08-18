@@ -200,7 +200,8 @@
       "Bash(wc -l /tmp_tsc_out.txt)",
       "Bash(grep -E \"^/Users.*\\\\.tsx?$\")",
       "Bash(grep -E \"^/Users.*\\\\.\\(ts|tsx\\)$\")",
-      "Bash(git pull *)"
+      "Bash(git pull *)",
+      "Bash(gh pr *)"
     ]
   }
 }
