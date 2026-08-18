@@ -4,6 +4,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  html2canvas: npm:html2canvas-pro@^2
+
 importers:
 
   .:
@@ -4186,9 +4189,9 @@ packages:
   html-void-elements@3.0.0:
     resolution: {integrity: sha512-bEqo66MRXsUGxWHV5IP0PUiAWwoEjba4VCzg0LjFJBpchPaTfyfCKTG6bc5F8ucKec3q5y6qOdGyYTSBEvhCrg==}
 
-  html2canvas@1.4.1:
-    resolution: {integrity: sha512-fPU6BHNpsyIhr8yyMpTLLxAbkaK8ArIBcmZIRiBLiDhjeqvXolaEmDGmELFuX9I4xDcaKKcJl+TKZLqruBbmWA==}
-    engines: {node: '>=8.0.0'}
+  html2canvas-pro@2.3.8:
+    resolution: {integrity: sha512-z4qgQmElYHkF4m0yhL4gW+keDInZwDu070xwbAoTsssS+1ieVc8uoWOHGXF8ClaqEzw5puGclxwqZa7T4XR35A==}
+    engines: {node: '>=16.0.0'}
 
   html2pdf.js@0.14.0:
     resolution: {integrity: sha512-yvNJgE/8yru2UeGflkPdjW8YEY+nDH5X7/2WG4uiuSCwYiCp8PZ8EKNiTAa6HxJ1NjC51fZSIEq6xld5CADKBQ==}
@@ -10903,7 +10906,7 @@ snapshots:
 
   html-void-elements@3.0.0: {}
 
-  html2canvas@1.4.1:
+  html2canvas-pro@2.3.8:
     dependencies:
       css-line-break: 2.1.0
       text-segmentation: 1.0.3
@@ -10911,7 +10914,7 @@ snapshots:
   html2pdf.js@0.14.0:
     dependencies:
       dompurify: 3.4.13
-      html2canvas: 1.4.1
+      html2canvas: html2canvas-pro@2.3.8
       jspdf: 4.2.1
 
   http-errors@2.0.1:
@@ -11227,7 +11230,7 @@ snapshots:
       canvg: 3.0.11
       core-js: 3.50.0
       dompurify: 3.4.13
-      html2canvas: 1.4.1
+      html2canvas: html2canvas-pro@2.3.8
 
   jsx-ast-utils@3.3.5:
     dependencies:

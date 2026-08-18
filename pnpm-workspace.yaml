@@ -5,3 +5,5 @@ allowBuilds:
   sharp: false
   supabase: true
   unrs-resolver: false
+overrides:
+  html2canvas: npm:html2canvas-pro@^2
