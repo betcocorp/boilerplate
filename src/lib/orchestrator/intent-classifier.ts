@@ -132,13 +132,18 @@ const MAX_PRIOR_MESSAGES = 8;
 
 export const DEFAULT_BEX_ROUTER_MODEL = 'gpt-4o-mini';
 /**
- * Default 800ms. This sits inside a single-shot structured-output call on a "mini" model, gating a
- * synchronous step of the turn — a few B0-434 latency-epic step budgets were consulted
- * (`XREF_ENRICH_TIMEOUT_MS`/`XREF_RETRIEVE_TIMEOUT_MS` default to 8s each, but those cover
- * multi-hop web search + DB retrieval) — this call is one small JSON completion, so it gets a much
- * tighter ceiling. Kept inside the 150-2000ms range called out for this ticket.
+ * Default 2500ms. B0-506 originally set this to 800ms based on the ticket's stated 150-2000ms
+ * range, but that range was never measured against a real call — B0-511's cutover rollout found
+ * live `client.responses.create` structured-output calls on `gpt-4o-mini` for this classifier
+ * consistently take ~1.2-1.9s (5/5 sampled calls), so 800ms caused the classifier to time out and
+ * fall back to the keyword router on nearly every turn once cutover made the call synchronous and
+ * authoritative (shadow mode never surfaced this — it ran the call concurrently with the tool
+ * loop, so a slow/timed-out classifier never blocked anything). 2500ms is a safety margin above
+ * the observed range, not a re-derivation of a target latency; product accepted the resulting
+ * ~1.2-2s added synchronous latency per orchestrator-mode turn as the cost of the classifier's
+ * output actually being used (2026-08-18).
  */
-export const DEFAULT_BEX_ROUTER_TIMEOUT_MS = 800;
+export const DEFAULT_BEX_ROUTER_TIMEOUT_MS = 2500;
 
 /** Which model `classifyUserIntent` calls. Env override → `DEFAULT_BEX_ROUTER_MODEL`. */
 export function resolveRouterModel(env: NodeJS.ProcessEnv = process.env): string {
