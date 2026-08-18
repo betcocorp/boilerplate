@@ -13,8 +13,7 @@
     "types:supabase": "pnpm run types:supabase:legacy && pnpm run types:supabase:rag && pnpm run types:supabase:public",
     "types:supabase:legacy": "npx supabase gen types typescript --project-id gbkobtatfsjibkxebvdw --schema legacy > src/types/supabase.legacy.ts",
     "types:supabase:rag": "npx supabase gen types typescript --project-id gbkobtatfsjibkxebvdw --schema rag > src/types/supabase.rag.ts",
-    "types:supabase:public": "npx supabase gen types typescript --project-id gbkobtatfsjibkxebvdw --schema public > src/types/supabase.public.ts",
-    "text": "Just a test"
+    "types:supabase:public": "npx supabase gen types typescript --project-id gbkobtatfsjibkxebvdw --schema public > src/types/supabase.public.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.53",

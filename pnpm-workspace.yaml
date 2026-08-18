@@ -1,5 +1,6 @@
 allowBuilds:
   '@sentry/cli': false
+  core-js: false
   msw: false
   sharp: false
   supabase: true
