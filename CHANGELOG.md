@@ -1,3 +1,10 @@
+# [1.2.0-dev.2](https://github.com/betcocorp/bex2.0/compare/v1.2.0-dev.1...v1.2.0-dev.2) (2026-08-18)
+
+
+### Bug Fixes
+
+* **B0-511:** raise router classifier timeout from 800ms to 2500ms ([45ad944](https://github.com/betcocorp/bex2.0/commit/45ad9449258e889b1473e2e228ab6026a4cd47b5))
+
 # [1.2.0-dev.1](https://github.com/betcocorp/bex2.0/compare/v1.1.0...v1.2.0-dev.1) (2026-08-18)
 
 
