@@ -1,3 +1,10 @@
+# [1.2.0-dev.3](https://github.com/betcocorp/bex2.0/compare/v1.2.0-dev.2...v1.2.0-dev.3) (2026-08-18)
+
+
+### Bug Fixes
+
+* **B0-511:** make the router cutover survive real-world failure modes ([b764b49](https://github.com/betcocorp/bex2.0/commit/b764b4913e1318978ce5c280192f84ad8cfe7500))
+
 # [1.2.0-dev.2](https://github.com/betcocorp/bex2.0/compare/v1.2.0-dev.1...v1.2.0-dev.2) (2026-08-18)
 
 
