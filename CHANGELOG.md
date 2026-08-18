@@ -1,3 +1,10 @@
+# [1.2.0-staging.1](https://github.com/betcocorp/bex2.0/compare/v1.1.0...v1.2.0-staging.1) (2026-08-18)
+
+
+### Features
+
+* **B0-511:** cut LLM router over to live routing when shadow mode is off ([a14385f](https://github.com/betcocorp/bex2.0/commit/a14385fbe0dd5943de3442fdf68d852f655592a0))
+
 # [1.2.0-dev.1](https://github.com/betcocorp/bex2.0/compare/v1.1.0...v1.2.0-dev.1) (2026-08-18)
 
 
