@@ -1369,9 +1369,31 @@ export async function runProductSupportWorkflow(input: {
   // B0-389 — read once so the flag recorded as run config is the same value the gate below used.
   const earlyDeclineGateEnabled = isEarlyDeclineGateEnabled();
   const earlyDeclineDecision = classifyEarlyDecline(input.userMessage);
+  /**
+   * B0-511 — the routing cutover: when the LLM router is enabled AND shadow mode is off, the
+   * classifier's own intent becomes this turn's `routingDecision` instead of the keyword router's.
+   * `classifyUserIntent` is the safety net here (see `intent-classifier.ts`): disabled, timeout, or
+   * any LLM error all fall back to `routeUserMessageToSme` internally and it never throws, so this
+   * await cannot fail the turn. Only applies in `orchestrator` mode — a forced direct `agentMode`
+   * bypasses routing entirely, same as it always has (and never spends a classifier call).
+   */
+  const llmRouterCutoverActive =
+    agentMode === 'orchestrator' && isLlmRouterEnabled() && !isLlmRouterShadowMode();
+  const liveIntentClassification: IntentClassification | null = llmRouterCutoverActive
+    ? await classifyUserIntent(
+        input.userMessage,
+        cappedHistory.map(
+          (m, index): PriorTurnMessage => ({
+            id: String(index),
+            role: m.role,
+            content: m.content,
+          }),
+        ),
+      )
+    : null;
   const routingDecision =
     agentMode === 'orchestrator'
-      ? (route.agent ?? 'ambiguous')
+      ? (liveIntentClassification?.intent ?? route.agent ?? 'ambiguous')
       : agentMode;
   // REC-4: the claims-validator requires RAG evidence for every assertion, which a competitive
   // recommendation (grounded by its cross-reference match, not by retrieved chunks) can't satisfy —
@@ -1397,7 +1419,9 @@ export async function runProductSupportWorkflow(input: {
   };
   const routingRationale =
     agentMode === 'orchestrator'
-      ? route.rationale
+      ? liveIntentClassification
+        ? `LLM intent classifier (${liveIntentClassification.source}, confidence ${liveIntentClassification.confidence}) routed to "${liveIntentClassification.intent}".`
+        : route.rationale
       : `Forced direct routing to ${agentMode} specialist by admin selection.`;
   const instructions = buildProductSupportInstructions({
     mode: agentMode,
@@ -1466,14 +1490,50 @@ export async function runProductSupportWorkflow(input: {
       tieBreakOrder: [...SME_ROUTE_TIE_BREAK_ORDER],
       decisiveRecommendationSignalWinsOutright: true,
     },
-    verdict: agentMode === 'orchestrator' ? route.decisionPath : 'overridden_by_direct_mode',
+    verdict:
+      agentMode === 'orchestrator'
+        ? llmRouterCutoverActive
+          ? 'overridden_by_llm_cutover'
+          : route.decisionPath
+        : 'overridden_by_direct_mode',
     effect:
       agentMode === 'orchestrator'
-        ? route.agent
-          ? `Routed to the ${route.agent} specialist; ran the ${effectivePromptId} prompt.`
-          : `No keyword signal fired, so routingDecision is "ambiguous" — the ${effectivePromptId} specialist prompt ran by fallthrough, while the model was told "No specialist keywords matched".`
+        ? llmRouterCutoverActive
+          ? `LLM routing cutover active; keyword scores computed for comparison only (would have routed to "${route.agent ?? 'ambiguous'}").`
+          : route.agent
+            ? `Routed to the ${route.agent} specialist; ran the ${effectivePromptId} prompt.`
+            : `No keyword signal fired, so routingDecision is "ambiguous" — the ${effectivePromptId} specialist prompt ran by fallthrough, while the model was told "No specialist keywords matched".`
         : `Admin forced direct \`${agentMode}\` routing, so the keyword scores did not decide; ran the ${effectivePromptId} prompt.`,
   };
+
+  /**
+   * B0-511 — the live counterpart to the B0-507 shadow gate below: recorded whenever the cutover
+   * actually decided this turn's routing (`llmRouterCutoverActive`), so the same
+   * agrees/disagrees-with-keyword-router comparison the rollout dashboard already reads survives
+   * cutover instead of only existing pre-cutover.
+   */
+  const intentClassifierLiveGate: GateRecord | null = liveIntentClassification
+    ? {
+        gate: 'llm_intent_classifier_live',
+        inputs: {
+          classifiedIntent: liveIntentClassification.intent,
+          classifierConfidence: liveIntentClassification.confidence,
+          classifierSource: liveIntentClassification.source,
+          entities: liveIntentClassification.entities,
+          suggestedTool: liveIntentClassification.suggestedTool,
+          keywordRoutingDecision: route.agent ?? 'ambiguous',
+        },
+        thresholds: {
+          model: resolveRouterModel(),
+          timeoutMs: resolveRouterTimeoutMs(),
+        },
+        verdict:
+          liveIntentClassification.intent === (route.agent ?? 'ambiguous')
+            ? 'agrees_with_keyword_router'
+            : 'disagrees_with_keyword_router',
+        effect: `Routing cutover: the LLM classifier (${liveIntentClassification.source}) routed this turn to "${liveIntentClassification.intent}" (confidence ${liveIntentClassification.confidence}); the keyword router would have chosen "${route.agent ?? 'ambiguous'}".`,
+      }
+    : null;
 
   const model = resolveResponsesModel(input.modelTag);
   const client = getOpenAIClient();
@@ -1603,7 +1663,10 @@ export async function runProductSupportWorkflow(input: {
         rationale: routingRationale,
       },
       // B0-391 — the same routing decision as a structured gate record (phrases + thresholds).
-      ...recordGates([keywordRoutingGate]),
+      ...recordGates([
+        keywordRoutingGate,
+        ...(intentClassifierLiveGate ? [intentClassifierLiveGate] : []),
+      ]),
     }),
     completed_at: new Date().toISOString(),
   });
@@ -1988,9 +2051,13 @@ export async function runProductSupportWorkflow(input: {
      * BOTH `BEX_LLM_ROUTER_ENABLED` and `BEX_LLM_ROUTER_SHADOW_MODE`: `classifyUserIntent`
      * already no-ops to the keyword-router fallback when the router is disabled, but checking
      * `isLlmRouterEnabled()` here too skips even building the cache key / prior-message payload
-     * on the overwhelming majority of turns where the router is off. Requiring shadow mode as
-     * well keeps this ticket's wiring honest about what it is: a log-and-compare step, not the
-     * routing cutover (B0-514 discusses why the cutover isn't safe yet).
+     * on the overwhelming majority of turns where the router is off.
+     *
+     * B0-511 — mutually exclusive with the cutover path above by construction: once shadow mode
+     * is off, `llmRouterCutoverActive` already awaited the classifier earlier (as
+     * `liveIntentClassification`) and used it to decide `routingDecision`, so
+     * `shadowIntentClassificationEnabled` below evaluates false and this block never fires a
+     * second, redundant call for the same turn.
      *
      * Kicked off here (after the early-decline short-circuit above has already returned for the
      * turns that never reach this point, so a declined turn never pays for an unused model call)

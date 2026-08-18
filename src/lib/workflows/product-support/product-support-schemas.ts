@@ -151,6 +151,7 @@ export const gateIdSchema = z.enum([
   'regulated_claim_guardrail',
   'competitor_identity_resolution',
   'llm_intent_classifier_shadow',
+  'llm_intent_classifier_live',
 ]);
 
 export type GateId = z.infer<typeof gateIdSchema>;
