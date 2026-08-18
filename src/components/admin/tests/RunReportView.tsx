@@ -2,10 +2,71 @@
 
 import { Download, FileDown, Loader2, RefreshCw } from 'lucide-react';
 import Link from 'next/link';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  type ComponentProps,
+  isValidElement,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 
 import { BexStreamdown } from '~/components/bex/BexStreamdown';
 import { Button } from '~/components/ui/button';
+import { caseAnchorId } from '~/lib/tests/report/render';
+
+/** Matches the leading UUID in a "Detailed results — case by case" heading (`${id} — ${question}`). */
+const CASE_HEADING_ID_PATTERN =
+  /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?=\s)/i;
+
+function reactNodeToText(node: ReactNode): string {
+  if (node == null || typeof node === 'boolean') return '';
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(reactNodeToText).join('');
+  if (isValidElement(node)) {
+    return reactNodeToText((node.props as { children?: ReactNode }).children);
+  }
+  return '';
+}
+
+/** Gives each "Detailed results" case heading a stable anchor id, matched by `linkifyCaseIds`. */
+function ReportCaseHeading({ children, ...rest }: ComponentProps<'h3'>) {
+  const match = CASE_HEADING_ID_PATTERN.exec(reactNodeToText(children));
+  return (
+    <h3 id={match ? caseAnchorId(match[1]) : undefined} {...rest}>
+      {children}
+    </h3>
+  );
+}
+
+/**
+ * Same-page `#case-…` links must scroll, not navigate — `rehype-harden` (inside `streamdown`)
+ * unconditionally stamps every link with `target="_blank"`, which would otherwise pop the anchor
+ * open in a new tab instead of jumping to it in place.
+ */
+function ReportAnchorLink({ href, children, ...rest }: ComponentProps<'a'>) {
+  if (typeof href === 'string' && href.startsWith('#')) {
+    const targetId = href.slice(1);
+    return (
+      <a
+        href={href}
+        onClick={(event) => {
+          event.preventDefault();
+          document.getElementById(targetId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }}
+      >
+        {children}
+      </a>
+    );
+  }
+  return (
+    <a href={href} {...rest}>
+      {children}
+    </a>
+  );
+}
 
 type ReportStatus =
   | 'idle'
@@ -75,6 +136,11 @@ export function RunReportView({
   const inFlightRef = useRef(false);
   const continueAttemptsRef = useRef(0);
   const contentRef = useRef<HTMLDivElement>(null);
+
+  const reportComponents = useMemo(
+    () => ({ a: ReportAnchorLink, h3: ReportCaseHeading }),
+    [],
+  );
 
   const post = useCallback(async () => {
     if (inFlightRef.current) return;
@@ -379,6 +445,7 @@ export function RunReportView({
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <div ref={contentRef}>
             <BexStreamdown
+              components={reportComponents}
               content={markdown}
               isStreaming={false}
               isUser={false}

@@ -145,6 +145,18 @@ export type ProductKnowledgeRetrievalSummary = {
   usedBroadFallback: boolean;
   /** True when an explicit product-key-scoped search returned no evidence and was retried at the line level (B0-250). */
   usedProductKeyFallback: boolean;
+  /**
+   * B0-556 — true when the explicit product-key-scoped search came back missing one or more of the
+   * required document kinds and a line-scoped search (same `productLineKey`, no `productKey`) was
+   * merged in to restore that coverage. The product-key predicate in the corpus RPCs is an AND
+   * (`e.product_key = key OR d.metadata variant match`), and SDS / product_line_profile documents
+   * hang off line-tier entities whose `product_key` is NULL — so a SKU-resolved anchor used to
+   * structurally exclude the resolved line's own SDS (the B0-556 misattribution vector: with no
+   * anchored SDS in the payload, the model escalated to unanchored freeform searches that could
+   * surface another product's SDS). Both passes are filtered by the same resolved
+   * `productLineKey`, so the merge can never introduce a cross-line document.
+   */
+  usedLineKindSupplement: boolean;
   broadCuratedCount: number;
   anchoredCuratedCount: number;
   productLineResolution?: ProductLineResolutionResult;
@@ -643,6 +655,7 @@ async function runProductKnowledgeQuery(input: {
         anchoredSearchMs: result.timings.similaritySearchMs,
         usedBroadFallback: false,
         usedProductKeyFallback,
+        usedLineKindSupplement: false,
         broadCuratedCount: curated.length,
         anchoredCuratedCount: curated.length,
         explicitKeySource: input.productLineKeySource ?? 'unspecified',
@@ -689,6 +702,7 @@ async function runProductKnowledgeQuery(input: {
         anchoredSearchMs: null,
         usedBroadFallback: false,
         usedProductKeyFallback: false,
+        usedLineKindSupplement: false,
         broadCuratedCount: curated.length,
         anchoredCuratedCount: 0,
         explicitKeySource: null,
@@ -742,6 +756,7 @@ async function runProductKnowledgeQuery(input: {
         anchoredSearchMs: null,
         usedBroadFallback: false,
         usedProductKeyFallback: false,
+        usedLineKindSupplement: false,
         broadCuratedCount: broadCurated.length,
         anchoredCuratedCount: 0,
         explicitKeySource: null,
@@ -805,6 +820,7 @@ async function runProductKnowledgeQuery(input: {
       anchoredSearchMs: anchoredResult.timings.similaritySearchMs,
       usedBroadFallback: shouldUseBroadFallback,
       usedProductKeyFallback: false,
+      usedLineKindSupplement: false,
       broadCuratedCount: broadSelected.length,
       anchoredCuratedCount: anchoredSelected.length,
       explicitKeySource: null,

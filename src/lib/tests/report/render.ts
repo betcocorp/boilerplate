@@ -33,6 +33,51 @@ export type CaseRenderDetail = {
   harness: CaseHarnessAside | null;
 };
 
+/**
+ * The DOM anchor id a case's "Detailed results — case by case" heading is given (see
+ * `RunReportView`'s heading override, which assigns this same id to any `<h3>` whose text starts
+ * with a case id). Shared here so server-rendered links and the client-side heading anchor can
+ * never drift apart.
+ */
+export function caseAnchorId(caseId: string): string {
+  return `case-${caseId.trim().toLowerCase()}`;
+}
+
+/** A case id rendered as a Markdown link back to its "Detailed results" entry. */
+function idLink(caseId: string): string {
+  return `[${caseId}](#${caseAnchorId(caseId)})`;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * The synthesis LLM is instructed to "cite case IDs" in its free-text findings, and routinely
+ * shortens a cited id to just its first 8 hex characters (the UUID's first segment) rather than
+ * the full id. This turns every such mention — full or shortened — into a Markdown link back to
+ * that case's entry in "Detailed results — case by case", so a reader can jump straight there.
+ */
+function linkifyCaseIds(text: string, caseIds: string[]): string {
+  if (!text) return text;
+
+  const candidates = new Map<string, string>();
+  for (const id of caseIds) {
+    candidates.set(id.toLowerCase(), id);
+    candidates.set(id.slice(0, 8).toLowerCase(), id);
+  }
+  if (candidates.size === 0) return text;
+
+  // Longest literal first so a full UUID is matched whole rather than only its 8-char prefix.
+  const literals = [...candidates.keys()].sort((a, b) => b.length - a.length);
+  const pattern = new RegExp(`\\b(${literals.map(escapeRegExp).join('|')})\\b`, 'gi');
+
+  return text.replace(pattern, (match) => {
+    const id = candidates.get(match.toLowerCase());
+    return id ? `[${match}](#${caseAnchorId(id)})` : match;
+  });
+}
+
 function mdCell(value: string | null | undefined): string {
   if (!value) return '—';
   return value.replace(/\r?\n/g, ' ').replace(/\|/g, '\\|').trim() || '—';
@@ -99,6 +144,8 @@ export function renderReportMarkdown(params: {
   const { test, run, metrics: m, synthesis, generatedAt } = params;
   const orderedCases = orderCasesByTier(params.cases);
   const byId = new Map(m.perCase.map((c) => [c.id, c]));
+  const caseIds = orderedCases.map((c) => c.id);
+  const link = (text: string) => linkifyCaseIds(text, caseIds);
   const lines: string[] = [];
 
   const push = (s: string) => lines.push(s);
@@ -157,7 +204,7 @@ export function renderReportMarkdown(params: {
     push(
       `Bands (good ≤ ${lat.thresholds.good} s · acceptable ≤ ${lat.thresholds.slow} s · slow > ${lat.thresholds.slow} s): **${lat.bands.good} good, ${lat.bands.acceptable} acceptable, ${lat.bands.slow} slow**.`,
     );
-    push(`Slowest: ${lat.slowest.map((s) => `${s.id} (${s.seconds} s)`).join(', ')}.`);
+    push(`Slowest: ${lat.slowest.map((s) => `${idLink(s.id)} (${s.seconds} s)`).join(', ')}.`);
     blank();
   }
 
@@ -171,16 +218,16 @@ export function renderReportMarkdown(params: {
   for (const rec of synthesis.top3) {
     push(`### Priority #${rec.priority}: ${rec.what}`);
     blank();
-    if (rec.whyFirst) push(`**Why first:** ${rec.whyFirst}`);
-    if (rec.evidence) push(`**Evidence:** ${rec.evidence}`);
-    if (rec.affected) push(`**Affected:** ${rec.affected}`);
-    if (rec.change) push(`**Recommended change:** ${rec.change}`);
+    if (rec.whyFirst) push(`**Why first:** ${link(rec.whyFirst)}`);
+    if (rec.evidence) push(`**Evidence:** ${link(rec.evidence)}`);
+    if (rec.affected) push(`**Affected:** ${link(rec.affected)}`);
+    if (rec.change) push(`**Recommended change:** ${link(rec.change)}`);
     blank();
     push('**Change pseudocode:**');
     blank();
     push(pseudocodeBlock(rec.changePseudocode));
     blank();
-    if (rec.impact) push(`**Expected impact:** ${rec.impact}`);
+    if (rec.impact) push(`**Expected impact:** ${link(rec.impact)}`);
     blank();
   }
 
@@ -189,16 +236,16 @@ export function renderReportMarkdown(params: {
   blank();
   push(`**Overall grade:** ${m.overall.grade} (${m.overall.avg ?? '—'}/100). Reflects calculated performance; not adjusted.`);
   push(
-    `**Strongest areas:** ${(synthesis.exec.strongestAreas.length ? synthesis.exec.strongestAreas : synthesis.strengths).slice(0, 3).join('  •  ') || '—'}`,
+    `**Strongest areas:** ${link((synthesis.exec.strongestAreas.length ? synthesis.exec.strongestAreas : synthesis.strengths).slice(0, 3).join('  •  ')) || '—'}`,
   );
   push(
-    `**Areas needing improvement:** ${(synthesis.exec.improvementAreas.length ? synthesis.exec.improvementAreas : synthesis.weaknesses).slice(0, 3).join('  •  ') || '—'}`,
+    `**Areas needing improvement:** ${link((synthesis.exec.improvementAreas.length ? synthesis.exec.improvementAreas : synthesis.weaknesses).slice(0, 3).join('  •  ')) || '—'}`,
   );
   push(
-    `**Most significant failure pattern:** ${synthesis.exec.mostSignificantFailure || synthesis.failurePatterns[0] || '—'}`,
+    `**Most significant failure pattern:** ${link(synthesis.exec.mostSignificantFailure || synthesis.failurePatterns[0] || '—')}`,
   );
-  if (synthesis.exec.majorRisk) push(`**Major risk:** ${synthesis.exec.majorRisk}`);
-  if (synthesis.exec.readiness) push(`**Readiness for broader testing:** ${synthesis.exec.readiness}`);
+  if (synthesis.exec.majorRisk) push(`**Major risk:** ${link(synthesis.exec.majorRisk)}`);
+  if (synthesis.exec.readiness) push(`**Readiness for broader testing:** ${link(synthesis.exec.readiness)}`);
   blank();
 
   // --- Methodology note ---
@@ -216,13 +263,13 @@ export function renderReportMarkdown(params: {
   push('|---|---|---|---|---|---|');
   for (const c of orderedCases) {
     if (c.score.unableToEvaluate) {
-      push(`| ${mdCell(c.id)} | ${mdCell(c.question)} | ${mdCell(c.tier)} | — | — | Unable to Evaluate |`);
+      push(`| ${idLink(c.id)} | ${mdCell(c.question)} | ${mdCell(c.tier)} | — | — | Unable to Evaluate |`);
       continue;
     }
     const evaluated = byId.get(c.id) as EvaluatedCase | undefined;
     if (!evaluated) continue;
     push(
-      `| ${mdCell(c.id)} | ${mdCell(c.question)} | ${mdCell(c.tier)} | ${evaluated.overall} | ${evaluated.grade} | ${evaluated.status} |`,
+      `| ${idLink(c.id)} | ${mdCell(c.question)} | ${mdCell(c.tier)} | ${evaluated.overall} | ${evaluated.grade} | ${evaluated.status} |`,
     );
   }
   blank();
@@ -279,10 +326,10 @@ export function renderReportMarkdown(params: {
     blank();
     push(`**Agent's actual response:**\n\n${mdBlock(c.actual)}`);
     blank();
-    push(`**Explanation of the grade:** ${mdBlock(c.score.explanation)}`);
-    push(`**Important information missed:** ${mdBlock(c.score.missed)}`);
-    push(`**Incorrect, misleading, or unsupported information:** ${mdBlock(c.score.incorrect)}`);
-    push(`**Recommended improvement:** ${mdBlock(c.score.improvement)}`);
+    push(`**Explanation of the grade:** ${mdBlock(link(c.score.explanation))}`);
+    push(`**Important information missed:** ${mdBlock(link(c.score.missed))}`);
+    push(`**Incorrect, misleading, or unsupported information:** ${mdBlock(link(c.score.incorrect))}`);
+    push(`**Recommended improvement:** ${mdBlock(link(c.score.improvement))}`);
     blank();
   }
 
@@ -297,21 +344,21 @@ export function renderReportMarkdown(params: {
   push(`- Pass: ${m.overall.pass} of ${m.evaluated} (${m.overall.passPct}%)`);
   push(`- Partial Pass: ${m.overall.partial} of ${m.evaluated} (${m.overall.partialPct}%)`);
   push(`- Fail: ${m.overall.fail} of ${m.evaluated} (${m.overall.failPct}%)`);
-  push(`- Highest scoring: ${m.highest.map((h) => `${h.id} (${h.overall})`).join(', ') || '—'}`);
-  push(`- Lowest scoring: ${m.lowest.map((h) => `${h.id} (${h.overall})`).join(', ') || '—'}`);
+  push(`- Highest scoring: ${m.highest.map((h) => `${idLink(h.id)} (${h.overall})`).join(', ') || '—'}`);
+  push(`- Lowest scoring: ${m.lowest.map((h) => `${idLink(h.id)} (${h.overall})`).join(', ') || '—'}`);
   blank();
 
   push('### Most common failure patterns');
   blank();
-  push(bulletList(synthesis.failurePatterns));
+  push(bulletList(synthesis.failurePatterns.map(link)));
   blank();
   push('### Key strengths');
   blank();
-  push(bulletList(synthesis.strengths));
+  push(bulletList(synthesis.strengths.map(link)));
   blank();
   push('### Recurring weaknesses');
   blank();
-  push(bulletList(synthesis.weaknesses));
+  push(bulletList(synthesis.weaknesses.map(link)));
   blank();
 
   return lines.join('\n');

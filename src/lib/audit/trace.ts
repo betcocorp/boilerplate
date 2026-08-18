@@ -100,6 +100,12 @@ export const toolTraceEntrySchema = z.object({
    * from a production trace.
    */
   modelOutputChars: z.number().optional(),
+  /**
+   * B0-382 — the model-facing output was additionally capped by the tool-output size budget
+   * (`~/lib/tools/tool-output-budget`). The persisted `output` this entry's `outputPreview`
+   * describes is never capped by it. Absent when the budget did not bite.
+   */
+  modelOutputBudgetApplied: z.boolean().optional(),
   /** B0-493 — retrieval parameters/strategy for this call, when it ran a RAG search. */
   retrieval: toolRetrievalParamsSchema.optional(),
 });

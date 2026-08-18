@@ -121,9 +121,12 @@ export type Database = {
           created_at: string
           id: string
           openai_response_id: string | null
+          pause_tier: string | null
           plain_text: string | null
+          processing_ms: number | null
           role: string
           tool_name: string | null
+          user_pause_ms: number | null
         }
         Insert: {
           content?: Json
@@ -132,8 +135,10 @@ export type Database = {
           id?: string
           openai_response_id?: string | null
           plain_text?: string | null
+          processing_ms?: number | null
           role: string
           tool_name?: string | null
+          user_pause_ms?: number | null
         }
         Update: {
           content?: Json
@@ -142,8 +147,10 @@ export type Database = {
           id?: string
           openai_response_id?: string | null
           plain_text?: string | null
+          processing_ms?: number | null
           role?: string
           tool_name?: string | null
+          user_pause_ms?: number | null
         }
         Relationships: [
           {
