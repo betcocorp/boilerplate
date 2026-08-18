@@ -1,3 +1,10 @@
+# [1.1.0-dev.1](https://github.com/betcocorp/bex2.0/compare/v1.0.0...v1.1.0-dev.1) (2026-08-18)
+
+
+### Features
+
+* **na:** updating build ([81a9402](https://github.com/betcocorp/bex2.0/commit/81a9402f8a8880fcc2f0d7d676eed94ca0a3e96f))
+
 # 1.0.0 (2026-08-18)
 
 
