@@ -137,14 +137,21 @@ describe('classifyUserIntent — B0-504 fallback behavior', () => {
     expect(getIntentClassifierCacheStats()).toMatchObject({ hits: 1, misses: 1 });
   });
 
-  it('caches a fallback classification too, so a down model is not re-hit within the TTL', async () => {
+  it('does NOT cache a failed classification: the next identical call retries the LLM (B0-511 — a cached transient timeout would poison live routing for the TTL)', async () => {
     process.env.BEX_LLM_ROUTER_ENABLED = 'true';
-    const runLlm = vi.fn().mockRejectedValue(new Error('llm down'));
+    const runLlm = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('llm down'))
+      .mockResolvedValueOnce(llmResult);
 
-    await classifyUserIntent('a message', [], { runLlm, now: () => Date.now() });
-    await classifyUserIntent('a message', [], { runLlm, now: () => Date.now() });
+    const first = await classifyUserIntent('a message', [], { runLlm, now: () => Date.now() });
+    const second = await classifyUserIntent('a message', [], { runLlm, now: () => Date.now() });
 
-    expect(runLlm).toHaveBeenCalledOnce();
+    expect(runLlm).toHaveBeenCalledTimes(2);
+    expect(first.source).toBe('keyword_fallback');
+    expect(first.fallbackReason).toBe('llm down');
+    expect(second.source).toBe('llm');
+    expect(second.fallbackReason).toBeNull();
   });
 
   it('does not throw even when the LLM dep itself throws synchronously', async () => {

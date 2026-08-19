@@ -64,9 +64,15 @@ const llmIntentClassificationSchema = z.object({
  * B0-503 — the classifier's public result. `source` is not part of the LLM's structured output; it
  * is stamped on afterward so a caller (or a future shadow-mode comparison) can tell a real model
  * classification from the keyword-router fallback without re-deriving it.
+ *
+ * B0-511 — `fallbackReason` (null on the llm path) says WHY a `keyword_fallback` result fell back
+ * (disabled flag / timeout / API error). Before this, the reason only went to `logError`, which is
+ * unreadable from the persisted trace — post-cutover, a fallback silently routes the turn, so the
+ * gate record on `/admin/observability` must carry the reason itself.
  */
 export const intentClassificationSchema = llmIntentClassificationSchema.extend({
   source: z.enum(['llm', 'keyword_fallback']),
+  fallbackReason: z.string().nullable(),
 });
 
 export type IntentClassification = z.infer<typeof intentClassificationSchema>;
@@ -132,13 +138,20 @@ const MAX_PRIOR_MESSAGES = 8;
 
 export const DEFAULT_BEX_ROUTER_MODEL = 'gpt-4o-mini';
 /**
- * Default 800ms. This sits inside a single-shot structured-output call on a "mini" model, gating a
- * synchronous step of the turn — a few B0-434 latency-epic step budgets were consulted
- * (`XREF_ENRICH_TIMEOUT_MS`/`XREF_RETRIEVE_TIMEOUT_MS` default to 8s each, but those cover
- * multi-hop web search + DB retrieval) — this call is one small JSON completion, so it gets a much
- * tighter ceiling. Kept inside the 150-2000ms range called out for this ticket.
+ * Default 5000ms. B0-506 originally set this to 800ms based on the ticket's stated 150-2000ms
+ * range, but that range was never measured against a real call — B0-511's cutover rollout found
+ * live `client.responses.create` structured-output calls on `gpt-4o-mini` for this classifier
+ * take ~1.2-1.9s warm (5/5 sampled), with server-runtime tails past 2.5s (a 2500ms interim ceiling
+ * still produced fallbacks on real turns). 800ms therefore made the classifier time out and fall
+ * back to the keyword router on nearly every turn once cutover made the call synchronous and
+ * authoritative (shadow mode never surfaced this — it ran the call concurrently with the tool
+ * loop, so a slow/timed-out classifier never blocked anything). This ceiling only binds on slow
+ * calls — the median turn pays ~1.5s regardless — and on those slow calls the alternative to
+ * waiting is exactly the keyword fallback the cutover exists to replace, so it is set generously;
+ * product accepted the added synchronous routing latency (2026-08-18). Tighten via
+ * `BEX_ROUTER_TIMEOUT_MS` once real p95s are known (B0-524's dashboard now captures them).
  */
-export const DEFAULT_BEX_ROUTER_TIMEOUT_MS = 800;
+export const DEFAULT_BEX_ROUTER_TIMEOUT_MS = 5000;
 
 /** Which model `classifyUserIntent` calls. Env override → `DEFAULT_BEX_ROUTER_MODEL`. */
 export function resolveRouterModel(env: NodeJS.ProcessEnv = process.env): string {
@@ -272,7 +285,10 @@ async function defaultRunLlm(
       stream: false,
       temperature: 0,
     },
-    { signal },
+    // maxRetries 0: the SDK's default 2 retries back off ~0.5s+ then replay the full ~1.2-1.9s
+    // call — that can never finish inside `withRouterTimeout`'s budget, so a transient 429/500
+    // just converts into a guaranteed timeout. Our keyword fallback owns resilience here.
+    { signal, maxRetries: 0 },
   );
 
   return llmIntentClassificationSchema.parse(JSON.parse(extractAssistantText(res)));
@@ -317,7 +333,7 @@ async function withRouterTimeout<T>(
  */
 const FALLBACK_MATCHED_CONFIDENCE = 0.5;
 
-function fallbackClassification(message: string): IntentClassification {
+function fallbackClassification(message: string, fallbackReason: string): IntentClassification {
   const decision = routeUserMessageToSme(message);
   const intent: IntentValue = decision.agent ?? 'ambiguous';
   const trimmed = message.trim();
@@ -334,6 +350,7 @@ function fallbackClassification(message: string): IntentClassification {
     },
     suggestedTool: null,
     source: 'keyword_fallback',
+    fallbackReason,
   };
 }
 
@@ -351,6 +368,7 @@ async function runLlmClassification(
     ...raw,
     confidence: clamp01(raw.confidence),
     source: 'llm',
+    fallbackReason: null,
   };
 }
 
@@ -371,7 +389,7 @@ export async function classifyUserIntent(
   deps: ClassifyUserIntentDeps = defaultDeps,
 ): Promise<IntentClassification> {
   if (!isLlmRouterEnabled()) {
-    return fallbackClassification(message);
+    return fallbackClassification(message, 'llm_router_disabled');
   }
 
   const now = deps.now();
@@ -387,10 +405,18 @@ export async function classifyUserIntent(
   cacheStats.misses += 1;
 
   const promise = runLlmClassification(message, priorMessages, deps).catch((error: unknown) => {
-    logError('bex.intent_classifier.fallback', {
-      reason: error instanceof Error ? error.message : String(error),
-    });
-    return fallbackClassification(message);
+    /**
+     * B0-511 — evict on failure so only SUCCESSFUL classifications are cached. Pre-cutover this
+     * deliberately cached the fallback too ("don't re-hit a down model"), which was harmless while
+     * the result was log-only — but a live router that caches a transient timeout serves poisoned
+     * keyword-fallback routing for the same message for 5 more minutes. The in-flight entry still
+     * dedupes concurrent callers; volume here is one bounded call per turn, so a genuinely down
+     * model costs one timed-out call per turn, not a hammer.
+     */
+    cache.delete(cacheKey);
+    const reason = error instanceof Error ? error.message : String(error);
+    logError('bex.intent_classifier.fallback', { reason });
+    return fallbackClassification(message, reason);
   });
 
   cache.set(cacheKey, { expiresAt: now + INTENT_CLASSIFIER_CACHE_TTL_MS, promise });
