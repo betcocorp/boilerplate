@@ -1,3 +1,10 @@
+# [2.0.0-dev.3](https://github.com/betcocorp/bex2.0/compare/v2.0.0-dev.2...v2.0.0-dev.3) (2026-08-19)
+
+
+### Bug Fixes
+
+* **B0-560:** drop the dead actions prop usage on PermissionGroupPage ([8fb32cf](https://github.com/betcocorp/bex2.0/commit/8fb32cf923a1ff8ae46fbb185b8f24f55c94568c))
+
 # [2.0.0-dev.2](https://github.com/betcocorp/bex2.0/compare/v2.0.0-dev.1...v2.0.0-dev.2) (2026-08-19)
 
 
