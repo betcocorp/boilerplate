@@ -1,4 +1,4 @@
-import { ArrowRight, FileText, GitCompareArrows, Globe, Search } from 'lucide-react';
+import { ArrowRight, GitCompareArrows, Globe, Search } from 'lucide-react';
 import Link from 'next/link';
 
 import {
@@ -35,13 +35,6 @@ const tools = [
       'Search retrieval chunks, inspect similarity matches, and validate tool retrieval quality.',
     href: '/admin/products/rag',
     icon: Search,
-  },
-  {
-    title: 'SDS ingestion',
-    description:
-      'Ingest and manage SDS corpus data that agents can query through retrieval tools.',
-    href: '/admin/sds',
-    icon: FileText,
   },
 ];
 
