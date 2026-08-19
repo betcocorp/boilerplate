@@ -49,12 +49,24 @@ export default async function PermissionGroupPage({ params }: Props) {
 
   return (
     <main className="min-w-0 space-y-4 p-4 sm:p-6">
-      <PermissionsPageHeader
-        actions={
-          <PermissionChecker
-            permission={PERMISSIONS.ADMIN_CARD_PERMISSIONS}
-            route="/admin/permissions/groups/[groupId] actions"
-          >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <PermissionsPageHeader
+          description={group.DESCRIPTION ?? 'Permission group details'}
+          eyebrow="Permission group"
+          title={group.SELECTOR}
+        >
+          <Button asChild className="mt-2 -ml-3" size="sm" variant="ghost">
+            <Link href="/admin/permissions">
+              <ArrowLeft className="size-4" />
+              Back to Permissions
+            </Link>
+          </Button>
+        </PermissionsPageHeader>
+        <PermissionChecker
+          permission={PERMISSIONS.ADMIN_CARD_PERMISSIONS}
+          route="/admin/permissions/groups/[groupId] actions"
+        >
+          <div className="flex flex-wrap items-center gap-2">
             <MergeGroupDialog
               allGroups={allGroupsRes.data}
               sourceGroup={{
@@ -68,19 +80,9 @@ export default async function PermissionGroupPage({ params }: Props) {
                 SELECTOR: group.SELECTOR,
               }}
             />
-          </PermissionChecker>
-        }
-        description={group.DESCRIPTION ?? 'Permission group details'}
-        eyebrow="Permission group"
-        title={group.SELECTOR}
-      >
-        <Button asChild className="mt-2 -ml-3" size="sm" variant="ghost">
-          <Link href="/admin/permissions">
-            <ArrowLeft className="size-4" />
-            Back to Permissions
-          </Link>
-        </Button>
-      </PermissionsPageHeader>
+          </div>
+        </PermissionChecker>
+      </div>
 
       <Card className="w-full rounded-3xl border border-border/60 shadow-none">
         <CardHeader className="gap-0">
