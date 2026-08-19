@@ -1,3 +1,58 @@
+# [2.0.0-dev.1](https://github.com/betcocorp/bex2.0/compare/v1.2.0-dev.3...v2.0.0-dev.1) (2026-08-19)
+
+
+* feat(B0-511)!: make LLM intent routing the default and retire keyword routing from every decision path ([43a90e9](https://github.com/betcocorp/bex2.0/commit/43a90e97d83b7c0c73232b27a450ebcb7c776f48))
+
+
+### BREAKING CHANGES
+
+* BEX_LLM_ROUTER_ENABLED now defaults ON and
+BEX_LLM_ROUTER_SHADOW_MODE defaults OFF — every environment routes by
+the LLM intent classifier with no env setup. The flags invert into
+rollback levers (ENABLED=false -> full keyword world; SHADOW_MODE=true
+-> classifier logs-and-compares while keyword routes).
+
+Why: "keyword routing" was never one component — it was five
+separately-wired behaviors, and prior rounds removed exactly one each.
+This removes the rest as deciders:
+
+- Default flip (above): the env-gated rollout meant any environment
+  nobody hand-configured (production included) silently stayed on
+  keyword routing forever.
+- classifyUserIntent's failure fallback no longer consults
+  routeUserMessageToSme: a degraded turn routes to the ambiguous
+  generalist fallthrough with the reason on the gate record, so
+  keyword scoring can never decide a live turn, even on LLM failure.
+- B0-514: shouldForceCrossReferenceLookup retired from the default
+  path. Cross-reference intent (early-decline suppression, pinned
+  round-0 tool_choice, forcedCrossReference) now derives from the
+  classifier's own output — intent `recommendations`, or a
+  cross-reference suggestedTool (preserving B0-339's product-routed
+  xref case). The substring check survives only for turns the
+  classifier did not decide (kill-switch/shadow/degraded).
+- B0-508 completed: the agent's orchestrator-hint block now receives
+  the classifier's intent/confidence/entities instead of raw keyword
+  scores whenever the classifier ran.
+- /api/v1/orchestrator responses report the decision that actually
+  routed the turn (schema-validated), with the keyword pre-route
+  demoted to labeled comparison metadata.
+
+Intent taxonomy fix (the user-facing bug): the classifier prompt now
+draws a hard line — `recommendations` is strictly competitor
+cross-reference (non-Betco product named, wants the Betco equivalent);
+"recommend the best product for this job/surface" routes to the
+specialist that owns the job; usage/compatibility questions are never
+`recommendations`.
+
+Live-verified on pure defaults (no env vars): gym-floor task
+recommendation -> floor with no cross-reference machinery; "Can I use
+Symplicity Nova on sealed concrete?" -> product; "Betco equivalent to
+Spartan GS High Gloss" -> recommendations with competitorBrand
+extracted and the forced cross-reference path firing. 600 tests green,
+tsc/lint clean.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
 # [1.2.0-dev.3](https://github.com/betcocorp/bex2.0/compare/v1.2.0-dev.2...v1.2.0-dev.3) (2026-08-18)
 
 
