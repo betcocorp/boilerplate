@@ -291,6 +291,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   process.env.BEX_AI_SDK_GENERATION_ENABLED = 'false';
   process.env.BEX_EARLY_DECLINE_GATE_ENABLED = 'true';
+  // B0-511 — the LLM router is ON by default since the cutover; pin the kill-switch here so every
+  // legacy test in this file keeps exercising the deterministic keyword-routing world it asserts.
+  // The router describe block below opts individual tests back in explicitly.
+  process.env.BEX_LLM_ROUTER_ENABLED = 'false';
   // B0-516 — every test gets the same default `client.responses.create` behavior (throws, so
   // extractCompetitorProduct/classifyUserIntent both fall back) unless it opts into the
   // shadow-classifier describe block below, which overrides this per-test.
@@ -1536,13 +1540,16 @@ describe('shadow-mode LLM intent classifier gate (B0-507 / B0-516 integration)',
     delete process.env.BEX_ROUTER_MODEL;
   });
 
-  it('is absent when the LLM router is disabled (the default)', async () => {
+  it('is absent when the LLM router is explicitly kill-switched', async () => {
+    process.env.BEX_LLM_ROUTER_ENABLED = 'false';
     await run({ userMessage: XREF_MESSAGE });
     expect(gateRecordsFor('llm_intent_classifier_shadow')).toEqual([]);
+    expect(gateRecordsFor('llm_intent_classifier_live')).toEqual([]);
   });
 
   it('records an "agrees_with_keyword_router" verdict end-to-end, without changing the actual routing, when the classifier matches the keyword route', async () => {
     process.env.BEX_LLM_ROUTER_ENABLED = 'true';
+    process.env.BEX_LLM_ROUTER_SHADOW_MODE = 'true';
     mockIntentClassifierResponse(
       intentClassifierPayload({ intent: 'recommendations', confidence: 0.87 }),
     );
@@ -1578,6 +1585,7 @@ describe('shadow-mode LLM intent classifier gate (B0-507 / B0-516 integration)',
 
   it('records a "disagrees_with_keyword_router" verdict end-to-end, and does not cut over routing while shadow mode is on, when the classifier proposes a different intent', async () => {
     process.env.BEX_LLM_ROUTER_ENABLED = 'true';
+    process.env.BEX_LLM_ROUTER_SHADOW_MODE = 'true';
     mockIntentClassifierResponse(intentClassifierPayload({ intent: 'floor', confidence: 0.62 }));
 
     await run({ userMessage: XREF_MESSAGE });
@@ -1597,8 +1605,9 @@ describe('shadow-mode LLM intent classifier gate (B0-507 / B0-516 integration)',
     expect(record.effect).toContain('Not used to route this turn');
   });
 
-  it('falls back to the keyword router end-to-end, and still records the gate, when the classifier call exceeds BEX_ROUTER_TIMEOUT_MS', async () => {
+  it('degrades safely in shadow mode, and still records the gate, when the classifier call exceeds BEX_ROUTER_TIMEOUT_MS', async () => {
     process.env.BEX_LLM_ROUTER_ENABLED = 'true';
+    process.env.BEX_LLM_ROUTER_SHADOW_MODE = 'true';
     process.env.BEX_ROUTER_TIMEOUT_MS = '10';
     mockIntentClassifierResponse(
       intentClassifierPayload({ intent: 'floor', confidence: 0.9 }),
@@ -1607,16 +1616,18 @@ describe('shadow-mode LLM intent classifier gate (B0-507 / B0-516 integration)',
 
     await run({ userMessage: XREF_MESSAGE });
 
-    // A slow/broken classifier never breaks the turn — the run completes normally either way.
+    // A slow/broken classifier never breaks the turn — shadow mode routes by keyword regardless.
     expect(
       (stepOutput('orchestration_planner').routing as Record<string, unknown>).decision,
     ).toBe('recommendations');
 
     const record = singleGateRecord('llm_intent_classifier_shadow');
     expect(record.inputs.classifierSource).toBe('keyword_fallback');
-    // The keyword fallback runs the same keyword router the workflow's own routing decision
-    // already used, so for this message it still reads as "agrees".
-    expect(record.verdict).toBe('agrees_with_keyword_router');
+    // B0-511 hardening: the degraded fallback is `ambiguous` (no keyword consultation), so
+    // against this keyword-routed 'recommendations' turn it reads as a disagreement.
+    expect(record.inputs.classifiedIntent).toBe('ambiguous');
+    expect(record.inputs.classifierFallbackReason).toContain('router timeout');
+    expect(record.verdict).toBe('disagrees_with_keyword_router');
   });
 
   it('B0-511: cuts routingDecision over to the classifier\'s intent when shadow mode is off, even though it disagrees with the keyword router', async () => {
@@ -1648,7 +1659,7 @@ describe('shadow-mode LLM intent classifier gate (B0-507 / B0-516 integration)',
     expect(keywordRecord.verdict).toBe('overridden_by_llm_cutover');
   });
 
-  it('B0-511: falls back to the keyword router\'s own decision (not a broken cutover) when the classifier call times out during cutover', async () => {
+  it('B0-511: degrades to the ambiguous generalist (never a keyword decision) when the classifier call times out during cutover, with the reason on the gate', async () => {
     process.env.BEX_LLM_ROUTER_ENABLED = 'true';
     process.env.BEX_LLM_ROUTER_SHADOW_MODE = 'false';
     process.env.BEX_ROUTER_TIMEOUT_MS = '10';
@@ -1659,15 +1670,48 @@ describe('shadow-mode LLM intent classifier gate (B0-507 / B0-516 integration)',
 
     await run({ userMessage: XREF_MESSAGE });
 
-    // classifyUserIntent's own fallback re-runs the keyword router, so the turn still lands on
-    // "recommendations" — a slow classifier degrades to today's behavior, it doesn't misroute.
+    // B0-511 hardening: a degraded classifier routes the turn to the `ambiguous` generalist
+    // fallthrough — keyword scoring never decides a live turn, even on failure.
     expect(
       (stepOutput('orchestration_planner').routing as Record<string, unknown>).decision,
-    ).toBe('recommendations');
+    ).toBe('ambiguous');
 
     const liveRecord = singleGateRecord('llm_intent_classifier_live');
     expect(liveRecord.inputs.classifierSource).toBe('keyword_fallback');
-    expect(liveRecord.verdict).toBe('agrees_with_keyword_router');
+    expect(liveRecord.inputs.classifiedIntent).toBe('ambiguous');
+    expect(liveRecord.inputs.classifierFallbackReason).toContain('router timeout');
+    expect(liveRecord.effect).toContain('DEGRADED');
+  });
+
+  it('B0-514: the classifier decides cross-reference intent — a task-recommendation turn does not force the cross-reference path, a competitor-equivalence turn does', async () => {
+    process.env.BEX_LLM_ROUTER_ENABLED = 'true';
+    process.env.BEX_LLM_ROUTER_SHADOW_MODE = 'false';
+
+    // The classifier says this is a floor job (no competitor, no cross-reference tool) even though
+    // the message contains "equivalent"+"betco" — the substring check would have forced the
+    // cross-reference machinery here before B0-514 retired it from the default path.
+    mockIntentClassifierResponse(
+      intentClassifierPayload({
+        intent: 'floor',
+        confidence: 0.9,
+        entities: { competitorBrand: null, competitorProduct: null },
+        suggestedTool: 'search_product_docs',
+      }),
+    );
+
+    await run({ userMessage: XREF_MESSAGE });
+
+    expect(
+      (stepOutput('orchestration_planner').routing as Record<string, unknown>).decision,
+    ).toBe('floor');
+    // No forced lookup_cross_reference call: the resolved trace contains no injected/forced
+    // cross-reference lookup for this turn.
+    const agentGates = (stepOutput('openai_responses_agent').gates ?? []) as Array<
+      Record<string, unknown>
+    >;
+    expect(
+      agentGates.find((g) => g.gate === 'competitor_identity_resolution'),
+    ).toBeUndefined();
   });
 });
 

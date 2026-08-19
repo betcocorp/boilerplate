@@ -30,17 +30,17 @@ import type { NewTestResultItemRecord, TestItemRecord, TestRecord } from './type
  * real `runBexChatTurn` → orchestrator path independently). Ground truth is resolved once per item
  * from `test_items.intended_agent_item` (B0-498), falling back to the suite-level `tests.intended_agent`.
  *
- * `classifyUserIntent` is documented to never throw — on any LLM error/timeout it already falls back
- * to the keyword router internally — but this is wrapped anyway so a future change to that contract
- * can't take an eval run down with it; the catch reproduces the same fallback shape
- * (`fallbackClassification` in `intent-classifier.ts`) using the keyword decision already in hand.
+ * `classifyUserIntent` is documented to never throw — on any LLM error/timeout it already degrades
+ * to its `ambiguous` fallback internally (B0-511 hardening: no keyword consultation) — but this is
+ * wrapped anyway so a future change to that contract can't take an eval run down with it; the
+ * catch falls back to the keyword decision already in hand, which for an offline comparison column
+ * is a reasonable stand-in.
  *
- * Cost/latency note: when `BEX_LLM_ROUTER_ENABLED` is not `'true'` (the default),
- * `classifyUserIntent` itself short-circuits to the keyword-router fallback with no model call at
- * all — so running this per item is free by default. Only flipping that env var on for an eval run
- * turns this into one real `gpt-4o-mini` structured-output call (≤800ms budget each,
- * `BEX_ROUTER_TIMEOUT_MS`) per item, on top of the existing chat-turn call; see the ticket report for
- * a concrete per-suite estimate.
+ * Cost/latency note: since the B0-511 cutover `BEX_LLM_ROUTER_ENABLED` defaults ON, so this is one
+ * real `gpt-4o-mini` structured-output call (bounded by `BEX_ROUTER_TIMEOUT_MS`) per item on top
+ * of the existing chat-turn call — the same call the chat turn itself now pays, and the B0-505
+ * cache dedupes replays of identical items. Set `BEX_LLM_ROUTER_ENABLED=false` to make this column
+ * free (it then records the degraded `ambiguous` fallback).
  */
 async function computeRoutingComparisonForItem(
   item: TestItemRecord,

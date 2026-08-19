@@ -54,8 +54,8 @@ const llmResult = {
 };
 
 describe('classifyUserIntent — B0-504 fallback behavior', () => {
-  it('returns the keyword-router fallback and never calls the LLM when BEX_LLM_ROUTER_ENABLED is unset', async () => {
-    delete process.env.BEX_LLM_ROUTER_ENABLED;
+  it('never calls the LLM and degrades to the ambiguous fallback when BEX_LLM_ROUTER_ENABLED is explicitly false (kill-switch)', async () => {
+    process.env.BEX_LLM_ROUTER_ENABLED = 'false';
     const runLlm = vi.fn();
 
     const out = await classifyUserIntent('What do you recommend to strip and recoat a VCT floor using the floor maintenance program?', [], {
@@ -65,11 +65,28 @@ describe('classifyUserIntent — B0-504 fallback behavior', () => {
 
     expect(runLlm).not.toHaveBeenCalled();
     expect(out.source).toBe('keyword_fallback');
-    expect(out.intent).toBe('floor');
+    // B0-511 hardening: the fallback no longer consults the keyword router — degraded turns run
+    // the generalist ambiguous fallthrough instead of a keyword guess.
+    expect(out.intent).toBe('ambiguous');
+    expect(out.fallbackReason).toBe('llm_router_disabled');
     expect(intentClassificationSchema.safeParse(out).success).toBe(true);
   });
 
-  it('falls back to the keyword router when the LLM call rejects, and never throws', async () => {
+  it('is enabled by default: an unset BEX_LLM_ROUTER_ENABLED calls the LLM', async () => {
+    delete process.env.BEX_LLM_ROUTER_ENABLED;
+    const runLlm = vi.fn().mockResolvedValue(llmResult);
+
+    const out = await classifyUserIntent('strip and recoat this VCT floor', [], {
+      runLlm,
+      now: () => Date.now(),
+    });
+
+    expect(runLlm).toHaveBeenCalledOnce();
+    expect(out.source).toBe('llm');
+    expect(out.intent).toBe('floor');
+  });
+
+  it('degrades to the ambiguous fallback when the LLM call rejects, and never throws', async () => {
     process.env.BEX_LLM_ROUTER_ENABLED = 'true';
     const runLlm = vi.fn().mockRejectedValue(new Error('llm down'));
 
@@ -79,10 +96,11 @@ describe('classifyUserIntent — B0-504 fallback behavior', () => {
     });
 
     expect(out.source).toBe('keyword_fallback');
-    expect(out.intent).toBe('product');
+    expect(out.intent).toBe('ambiguous');
+    expect(out.fallbackReason).toBe('llm down');
   });
 
-  it('falls back to the keyword router when the LLM call exceeds BEX_ROUTER_TIMEOUT_MS', async () => {
+  it('degrades to the ambiguous fallback when the LLM call exceeds BEX_ROUTER_TIMEOUT_MS', async () => {
     process.env.BEX_LLM_ROUTER_ENABLED = 'true';
     process.env.BEX_ROUTER_TIMEOUT_MS = '10';
     const runLlm = vi.fn(
@@ -98,7 +116,8 @@ describe('classifyUserIntent — B0-504 fallback behavior', () => {
     });
 
     expect(out.source).toBe('keyword_fallback');
-    expect(out.intent).toBe('dilution');
+    expect(out.intent).toBe('ambiguous');
+    expect(out.fallbackReason).toContain('router timeout');
   });
 
   it('returns the LLM classification, clamped and tagged, when it resolves in time', async () => {
@@ -207,20 +226,20 @@ describe('B0-506 env-var resolution', () => {
     expect(resolveRouterTimeoutMs()).toBe(DEFAULT_BEX_ROUTER_TIMEOUT_MS);
   });
 
-  it('isLlmRouterEnabled defaults to false and requires the literal string "true"', () => {
+  it('isLlmRouterEnabled defaults to true (B0-511 cutover) and is disabled only by the literal string "false"', () => {
     delete process.env.BEX_LLM_ROUTER_ENABLED;
-    expect(isLlmRouterEnabled()).toBe(false);
+    expect(isLlmRouterEnabled()).toBe(true);
 
     process.env.BEX_LLM_ROUTER_ENABLED = 'yes';
-    expect(isLlmRouterEnabled()).toBe(false);
-
-    process.env.BEX_LLM_ROUTER_ENABLED = 'true';
     expect(isLlmRouterEnabled()).toBe(true);
+
+    process.env.BEX_LLM_ROUTER_ENABLED = 'false';
+    expect(isLlmRouterEnabled()).toBe(false);
   });
 
-  it('isLlmRouterShadowMode defaults to true and is disabled only by the literal string "false"', () => {
+  it('isLlmRouterShadowMode defaults to false (B0-511 cutover) and requires the literal string "true"', () => {
     delete process.env.BEX_LLM_ROUTER_SHADOW_MODE;
-    expect(isLlmRouterShadowMode()).toBe(true);
+    expect(isLlmRouterShadowMode()).toBe(false);
 
     process.env.BEX_LLM_ROUTER_SHADOW_MODE = 'false';
     expect(isLlmRouterShadowMode()).toBe(false);

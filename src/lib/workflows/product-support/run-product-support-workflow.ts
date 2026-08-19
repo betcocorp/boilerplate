@@ -389,18 +389,14 @@ export function extractRetrievalConfigFromToolTrace(
 }
 
 /**
- * B0-514 — evaluated as NOT SAFE to retire yet. This is a live production behavior switch (it
- * pins `tool_choice` to `lookup_cross_reference`, suppresses the `broad_recommendation_without_context`
- * early decline, and forces a search — see the three call sites below), which must never depend on
- * the B0-507 classifier while that classifier is shadow-only (`BEX_LLM_ROUTER_ENABLED` defaults
- * off, and even when on, `BEX_LLM_ROUTER_SHADOW_MODE` defaults on and its output is deliberately
- * never used to route — see the `llm_intent_classifier_shadow` gate). Swapping this function for
- * `classifiedIntent === 'recommendations'` today would either do nothing (classifier disabled) or
- * silently change what gets forced (classifier enabled), neither of which is what a "retire this
- * function" ticket should do to a shadow-mode rollout. It also loses signal this phrase check
- * fires regardless of `routingDecision` (B0-339's point — a `product`-routed message can still
- * carry cross-reference intent). Revisit once the classifier is validated well enough to become
- * the actual routing cutover.
+ * B0-514 — RETIRED from the default path (2026-08-18). The B0-511 cutover made the classifier
+ * authoritative, so cross-reference intent for the turn is now derived from the classifier's own
+ * output (`crossReferenceIntentForTurn` in `runProductSupportWorkflow`: intent `recommendations`,
+ * or a cross-reference `suggestedTool` — the latter preserves B0-339's point that a
+ * `product`-routed message can still carry cross-reference intent). This substring check survives
+ * ONLY as the degraded/kill-switch fallback: when the classifier did not run for the turn
+ * (`BEX_LLM_ROUTER_ENABLED=false`, shadow mode, or an LLM failure that fell back), the old
+ * behavior is preserved verbatim. Delete it entirely when the rollback lever is removed.
  */
 export function shouldForceCrossReferenceLookup(userMessage: string) {
   const text = userMessage.toLowerCase();
@@ -520,7 +516,17 @@ export const EARLY_DECLINE_STORAGE_EXPIRATION_COPY =
 export const EARLY_DECLINE_BROAD_RECOMMENDATION_COPY =
   'I need more details to make a specific recommendation. Please share your surface, soil type, and application method.';
 
-export function classifyEarlyDecline(userMessage: string): EarlyDeclineDecision | null {
+export function classifyEarlyDecline(
+  userMessage: string,
+  options?: {
+    /**
+     * B0-514 — the turn's authoritative cross-reference intent (classifier-derived when the LLM
+     * router ran). Omitted (standalone callers/tests), the pre-cutover substring check decides,
+     * preserving B0-300's behavior verbatim.
+     */
+    crossReferenceIntent?: boolean;
+  },
+): EarlyDeclineDecision | null {
   if (!isEarlyDeclineGateEnabled()) {
     return null;
   }
@@ -562,7 +568,7 @@ export function classifyEarlyDecline(userMessage: string): EarlyDeclineDecision 
     // Betco cross-reference (e.g. "...alternative to X. What do you recommend?")
     // isn't a broad, context-free request — let it reach the cross-reference /
     // recommendations flow that knows how to answer (or correctly decline) it.
-    !shouldForceCrossReferenceLookup(userMessage) &&
+    !(options?.crossReferenceIntent ?? shouldForceCrossReferenceLookup(userMessage)) &&
     // B0-559: same idea for gym/sports floor mentions — the surface isn't actually ambiguous.
     !hasWoodSportsFloorContext(text)
   ) {
@@ -1368,14 +1374,14 @@ export async function runProductSupportWorkflow(input: {
   const route = routeUserMessageToSme(input.userMessage);
   // B0-389 — read once so the flag recorded as run config is the same value the gate below used.
   const earlyDeclineGateEnabled = isEarlyDeclineGateEnabled();
-  const earlyDeclineDecision = classifyEarlyDecline(input.userMessage);
   /**
-   * B0-511 — the routing cutover: when the LLM router is enabled AND shadow mode is off, the
-   * classifier's own intent becomes this turn's `routingDecision` instead of the keyword router's.
-   * `classifyUserIntent` is the safety net here (see `intent-classifier.ts`): disabled, timeout, or
-   * any LLM error all fall back to `routeUserMessageToSme` internally and it never throws, so this
-   * await cannot fail the turn. Only applies in `orchestrator` mode — a forced direct `agentMode`
-   * bypasses routing entirely, same as it always has (and never spends a classifier call).
+   * B0-511 — the routing cutover: when the LLM router is enabled AND shadow mode is off (both the
+   * defaults since 2026-08-18), the classifier's own intent becomes this turn's `routingDecision`
+   * instead of the keyword router's. `classifyUserIntent` is the safety net here (see
+   * `intent-classifier.ts`): disabled, timeout, or any LLM error all degrade to an `ambiguous`
+   * fallback internally and it never throws, so this await cannot fail the turn. Only applies in
+   * `orchestrator` mode — a forced direct `agentMode` bypasses routing entirely, same as it always
+   * has (and never spends a classifier call).
    */
   const llmRouterCutoverActive =
     agentMode === 'orchestrator' && isLlmRouterEnabled() && !isLlmRouterShadowMode();
@@ -1396,6 +1402,24 @@ export async function runProductSupportWorkflow(input: {
       )
     : null;
   const liveClassifierLatencyMs = Date.now() - liveClassifierStartedAtMs;
+  /**
+   * B0-514 — the turn's single cross-reference-intent verdict, consumed by every downstream site
+   * that used to call `shouldForceCrossReferenceLookup` (early-decline suppression, the pinned
+   * round-0 `tool_choice`, `forcedCrossReference`). When the classifier genuinely ran (`source:
+   * 'llm'`), its judgment decides: intent `recommendations` is strictly competitor cross-reference
+   * post-cutover, and a cross-reference `suggestedTool` catches equivalence asks that routed to
+   * another specialist (B0-339). The substring check survives only for turns the classifier did
+   * not decide (kill-switch, shadow mode, or a degraded fallback), preserving the old world there.
+   */
+  const crossReferenceIntentForTurn =
+    liveIntentClassification && liveIntentClassification.source === 'llm'
+      ? liveIntentClassification.intent === 'recommendations' ||
+        liveIntentClassification.suggestedTool === 'lookup_cross_reference' ||
+        liveIntentClassification.suggestedTool === 'recommend_cross_reference'
+      : shouldForceCrossReferenceLookup(input.userMessage);
+  const earlyDeclineDecision = classifyEarlyDecline(input.userMessage, {
+    crossReferenceIntent: crossReferenceIntentForTurn,
+  });
   const routingDecision =
     agentMode === 'orchestrator'
       ? (liveIntentClassification?.intent ?? route.agent ?? 'ambiguous')
@@ -1439,6 +1463,10 @@ export async function runProductSupportWorkflow(input: {
       floorScore: route.floorScore,
       recommendationScore: route.recommendationScore,
     },
+    // B0-508 — the hint block renders the classifier's intent/confidence/entities instead of the
+    // raw keyword scores whenever the classifier genuinely ran (`source: 'llm'`); degraded or
+    // kill-switched turns keep the scores line.
+    classification: liveIntentClassification ?? undefined,
   });
   // B0-324 — same prefix ⇒ same cache pool, for every model call in this turn and every later turn
   // routed the same way.
@@ -1776,7 +1804,7 @@ export async function runProductSupportWorkflow(input: {
             inputs: {
               reason: earlyDeclineDecision.reason,
               message: input.userMessage,
-              crossReferenceIntent: shouldForceCrossReferenceLookup(input.userMessage),
+              crossReferenceIntent: crossReferenceIntentForTurn,
             },
             thresholds: {
               gateEnabled: earlyDeclineGateEnabled,
@@ -1930,9 +1958,7 @@ export async function runProductSupportWorkflow(input: {
      * happens on the cross-reference path, so the pinned name is derived from that condition here —
      * it must be in scope before `executeTool` is defined below.
      */
-    const forcedToolChoiceName = shouldForceCrossReferenceLookup(input.userMessage)
-      ? 'lookup_cross_reference'
-      : null;
+    const forcedToolChoiceName = crossReferenceIntentForTurn ? 'lookup_cross_reference' : null;
     let forcedToolChoiceConsumed = false;
 
     const executeTool = async ({
@@ -2034,7 +2060,8 @@ export async function runProductSupportWorkflow(input: {
       return { ...out, trace };
     };
 
-    const forcedCrossReference = shouldForceCrossReferenceLookup(input.userMessage);
+    // B0-514 — the classifier-derived verdict computed once at the top of the run.
+    const forcedCrossReference = crossReferenceIntentForTurn;
 
     /**
      * B0-357 — resolve the ONE (competitorBrand, competitorProduct) tuple for this turn,

@@ -6,7 +6,6 @@ import { SME_AGENT_IDS, V1_AGENT_REGISTRY } from '~/lib/agents/agent-registry';
 import { logError } from '~/lib/observability/logger';
 import { getOpenAIClient } from '~/lib/openai/client';
 import { extractAssistantText } from '~/lib/openai/response-item-parsing';
-import { routeUserMessageToSme } from '~/lib/orchestrator/sme-routing';
 import { PRODUCT_TOOL_NAMES } from '~/lib/tools/tool-schemas';
 
 /**
@@ -113,15 +112,19 @@ function buildInstructions(): string {
 SME specialists:
 ${smeLines}
 
-Use "ambiguous" when the message does not clearly match any specialist above (small talk, off-topic, or too vague to route).
+Routing rules (apply in order):
+1. "recommendations" is ONLY competitor cross-reference: the message names or clearly refers to a NON-Betco competitor brand or product and wants the Betco equivalent, replacement, or comparison for it. If no competitor product is involved, never use "recommendations".
+2. Asking to recommend/suggest the best product for a job, task, surface, or situation — with no competitor product named — is a question for the specialist that owns the job: "floor" for floor coatings, finishes, sealers, stripping, scrubbing, burnishing, and maintenance programs (gym, sports, wood, VCT, and concrete floors included); "bathroom" for restroom cleaning, disinfection, and odor control; "dilution" for dispensers, proportioners, metering, and dilution setup; "product" for everything else.
+3. "Can I use <product> on <surface>?" and other usage/compatibility/how-to questions about a product belong to the specialist that owns the surface or task per rule 2 ("product" when none clearly does) — never "recommendations".
+4. Use "ambiguous" only when the message does not clearly match any specialist (small talk, off-topic, or too vague to route).
 
-Rules:
+Output rules:
 - confidence: your calibrated 0-1 belief that "intent" is correct. Do not default to 1; use lower values when the message is short, vague, or could fit more than one specialist.
 - entities.betcoProduct: a Betco product name/SKU mentioned, else null.
-- entities.competitorBrand / entities.competitorProduct: a competitor brand/product the user wants a Betco equivalent for, else null. Best-effort only — a dedicated extraction step runs later for the recommendations flow.
+- entities.competitorBrand / entities.competitorProduct: a NON-Betco competitor brand/product the user wants a Betco equivalent for, else null. Never put a Betco product here. Best-effort only — a dedicated extraction step runs later for the recommendations flow.
 - entities.surfaceType: the physical surface or material mentioned (e.g. "VCT floor", "grout", "stainless"), else null.
 - entities.taskDescription: a short (<=20 words) paraphrase of what the user is trying to do, else null.
-- suggestedTool: the single best FIRST tool to call from this list, else null if none clearly applies: ${PRODUCT_TOOL_NAMES.join(', ')}.
+- suggestedTool: the single best FIRST tool to call from this list, else null if none clearly applies: ${PRODUCT_TOOL_NAMES.join(', ')}. Suggest lookup_cross_reference or recommend_cross_reference ONLY for genuine competitor cross-reference (rule 1).
 - Only the most recent turns of conversation are provided for context; classify the CURRENT (last) user message.`;
 }
 
@@ -167,22 +170,25 @@ export function resolveRouterTimeoutMs(env: NodeJS.ProcessEnv = process.env): nu
 }
 
 /**
- * Master kill-switch (mirrors `isConfidenceGatingDisabled`): defaults OFF. Until a caller wires this
- * into `run-orchestration.ts`, this only guards whether `classifyUserIntent` attempts the LLM call at
- * all — when off, it returns the keyword-router fallback immediately without spending a model call.
+ * Master kill-switch — defaults ON since the B0-511 cutover hardening. The original rollout gated
+ * the LLM router behind opt-in env vars, which meant any environment nobody hand-configured
+ * (production included) silently stayed on keyword routing forever; product's directive is that
+ * LLM intent classification is THE router, so the default inverted (2026-08-18). Set
+ * `BEX_LLM_ROUTER_ENABLED=false` to roll back to the pure keyword-routing world.
  */
 export function isLlmRouterEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.BEX_LLM_ROUTER_ENABLED === 'true';
+  return env.BEX_LLM_ROUTER_ENABLED !== 'false';
 }
 
 /**
- * Defaults ON (the safe rollout order: land the classifier in shadow first, cut over later). This
- * module does not itself change behavior based on the flag — `classifyUserIntent` always returns the
- * LLM's own classification when the LLM path runs — it only exposes the flag so the (not-yet-built)
- * orchestrator integration can decide whether to log-and-compare or actually route on it.
+ * Defaults OFF since the B0-511 cutover (shadow was the pre-cutover default: land the classifier
+ * as log-and-compare first, route on it later). Set `BEX_LLM_ROUTER_SHADOW_MODE=true` to demote
+ * the classifier back to log-only comparison while keeping it running. This module does not itself
+ * change behavior based on the flag — `classifyUserIntent` always returns the LLM's own
+ * classification when the LLM path runs — the workflow integration decides whether to route on it.
  */
 export function isLlmRouterShadowMode(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.BEX_LLM_ROUTER_SHADOW_MODE !== 'false';
+  return env.BEX_LLM_ROUTER_SHADOW_MODE === 'true';
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -324,23 +330,22 @@ async function withRouterTimeout<T>(
 }
 
 /**
- * Keyword-router fallback, reshaped into an `IntentClassification`. Used whenever the LLM router is
- * disabled, times out, or errors — a router failure must never break the turn.
+ * Degraded-mode fallback, used whenever the LLM router is disabled, times out, or errors — a
+ * router failure must never break the turn.
  *
- * `confidence`: the keyword router has no calibrated probability to offer, so this is a fixed,
- * deliberately-moderate placeholder (0.5 when a specialist matched, 0 for `ambiguous`) rather than a
- * number that would misleadingly imply model-level certainty.
+ * B0-511 hardening: this used to reshape `routeUserMessageToSme`'s keyword decision, which meant
+ * keyword scoring could still silently DECIDE a live turn whenever the classifier hiccuped —
+ * the exact behavior the cutover exists to remove. It now returns `ambiguous` (confidence 0), so a
+ * degraded turn runs the generalist product-specialist fallthrough (`systemPromptForDecision`)
+ * with the full default toolset, and the persisted gate says plainly that routing was degraded,
+ * instead of a keyword guess that can trigger the forced cross-reference machinery.
  */
-const FALLBACK_MATCHED_CONFIDENCE = 0.5;
-
 function fallbackClassification(message: string, fallbackReason: string): IntentClassification {
-  const decision = routeUserMessageToSme(message);
-  const intent: IntentValue = decision.agent ?? 'ambiguous';
   const trimmed = message.trim();
 
   return {
-    intent,
-    confidence: decision.agent ? FALLBACK_MATCHED_CONFIDENCE : 0,
+    intent: 'ambiguous',
+    confidence: 0,
     entities: {
       betcoProduct: null,
       competitorBrand: null,

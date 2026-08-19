@@ -1,6 +1,9 @@
 import { runBexChatTurn } from '~/lib/bex/run-chat-turn';
 import { routeUserMessageToSme } from '~/lib/orchestrator/sme-routing';
-import { bexChatOrchestrationInputSchema } from '~/lib/orchestrator/orchestrator-schemas';
+import {
+  bexChatOrchestrationInputSchema,
+  orchestrationRoutingSchema,
+} from '~/lib/orchestrator/orchestrator-schemas';
 
 export type {
   OrchestrationRouting,
@@ -19,6 +22,12 @@ async function runBexChatOrchestration(input: unknown): Promise<OrchestrationRun
   const { message, model, conversationId } =
     bexChatOrchestrationInputSchema.parse(input);
 
+  /**
+   * B0-511 — since the cutover, the LLM intent classifier inside `runProductSupportWorkflow` makes
+   * the actual routing decision; the keyword route computed here is comparison metadata only (the
+   * five scores keep their wire-contract slots). `routing.decision` is overwritten from the
+   * workflow's real decision after the run, so this response never misreports what routed the turn.
+   */
   const route = routeUserMessageToSme(message);
 
   const routing: OrchestrationRouting = {
@@ -35,9 +44,7 @@ async function runBexChatOrchestration(input: unknown): Promise<OrchestrationRun
     {
       id: 'route-to-sme',
       status: 'completed',
-      note: route.agent
-        ? `Planner hint: **${route.agent}** SME. ${route.rationale}`
-        : `No strong SME signal. ${route.rationale}`,
+      note: `Keyword pre-route (comparison only): ${route.agent ?? 'no signal'}. The workflow's LLM intent classifier makes the routing decision — see routing.decision / productSupport.routingDecision.`,
     },
   ];
 
@@ -69,6 +76,21 @@ async function runBexChatOrchestration(input: unknown): Promise<OrchestrationRun
     status: 'completed',
     note: `Responses API + tools + validator (run ${outcome.workflowRunId}).`,
   });
+
+  // B0-511 — report the decision that actually routed the turn (classifier-driven), not the
+  // keyword pre-route; the scores stay as comparison metadata. Parsed through the wire enum so a
+  // forced direct agentMode (or any future decision value outside it) leaves the pre-route intact
+  // rather than corrupting the contract.
+  const actualDecision = orchestrationRoutingSchema.shape.decision.safeParse(
+    outcome.routingDecision,
+  );
+  if (actualDecision.success) {
+    routing.decision = actualDecision.data;
+    routing.rationale =
+      routing.decision === (route.agent ?? 'ambiguous')
+        ? routing.rationale
+        : `LLM intent classifier routed this turn to "${routing.decision}" (keyword comparison would have chosen "${route.agent ?? 'ambiguous'}": ${route.rationale})`;
+  }
 
   return {
     workflow: 'bex-chat',
