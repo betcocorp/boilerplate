@@ -201,7 +201,15 @@
       "Bash(grep -E \"^/Users.*\\\\.tsx?$\")",
       "Bash(grep -E \"^/Users.*\\\\.\\(ts|tsx\\)$\")",
       "Bash(git pull *)",
-      "Bash(gh pr *)"
+      "Bash(gh pr *)",
+      "mcp__plugin_vercel_vercel__list_teams",
+      "mcp__plugin_vercel_vercel__list_projects",
+      "Bash(curl -s -m 90 -X POST http://localhost:3000/api/v1/orchestrator -H 'Authorization: Bearer bex_fEO4WefrcCXnyAq8diCqHg2w8MssM7tSkmBvKrgXcLI' -H 'Content-Type: application/json' -d '{\"message\":\"QA cutover probe 1: I need a durable gym floor finish but the gym is back in use tomorrow, what do you recommend?\",\"workflow\":\"bex-chat\"}')",
+      "Bash(curl -s -m 120 -X POST http://localhost:3000/api/v1/orchestrator -H 'Authorization: Bearer bex_fEO4WefrcCXnyAq8diCqHg2w8MssM7tSkmBvKrgXcLI' -H 'Content-Type: application/json' -d '{\"message\":\"QA cutover probe 1: I need a durable gym floor finish but the gym is back in use tomorrow, what do you recommend?\",\"model\":null,\"conversationId\":null,\"workflow\":\"bex-chat\"}')",
+      "Bash(curl -s -m 120 -X POST http://localhost:3000/api/v1/orchestrator -H 'Authorization: Bearer bex_fEO4WefrcCXnyAq8diCqHg2w8MssM7tSkmBvKrgXcLI' -H 'Content-Type: application/json' -d '{\"message\":\"QA cutover probe 2: what floor finish works for a school gym that reopens tomorrow morning?\",\"model\":null,\"conversationId\":null,\"workflow\":\"bex-chat\"}' -o /dev/null -w 'http=%{http_code} time=%{time_total}s\\\\n')",
+      "Bash(kill 29564 29596 29618 35195)",
+      "Bash(kill -9 29618 29596 29564)",
+      "Bash(curl *)"
     ]
   }
 }
