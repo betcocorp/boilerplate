@@ -93,8 +93,8 @@ export function UserSwitcherClient({
         <AvatarFallback className="text-xs">{userInitials}</AvatarFallback>
       </Avatar>
       <span className="flex flex-col items-start leading-none">
-        <span className="text-xs text-muted-foreground">Acting as</span>
-        <span className="text-sm font-medium">
+        <span className="text-[10px] text-muted-foreground">Acting as</span>
+        <span className="text-xs font-bold -mt-px">
           {selectedUser?.NAME ?? 'Unknown user'}
         </span>
       </span>

@@ -56,8 +56,9 @@ type NavSectionModel = {
 
 /**
  * The permission catalog is per **surface**, not per visible link, so several sub-links can share a
- * selector (Test runner + Failure Queue) and one visual group can span two selectors (Bex, Tools,
- * Markdown). The Dashboard link is deliberately ungated — it is the admin landing page.
+ * selector (Test runner + Failure Queue + Routing comparison all share `navigation.sidebar.tests`).
+ * Dashboard and Bex chat are deliberately ungated — deny-by-default (B0-560) means an admin surface
+ * with no `permission` field here is unconditionally visible.
  */
 const sidebarSections: NavSectionModel[] = [
   {
@@ -81,18 +82,22 @@ const sidebarSections: NavSectionModel[] = [
           {
             label: 'Test runner',
             href: '/admin/tests',
+            permission: PERMISSIONS.NAVIGATION_SIDEBAR_TESTS,
           },
           {
             label: 'Failure Queue',
             href: '/admin/tests/failure-queue',
+            permission: PERMISSIONS.NAVIGATION_SIDEBAR_TESTS,
           },
           {
             label: 'Routing comparison',
             href: '/admin/tests/routing-comparison',
+            permission: PERMISSIONS.NAVIGATION_SIDEBAR_TESTS,
           },
           {
             label: 'Prompt observability',
             href: '/admin/observability',
+            permission: PERMISSIONS.NAVIGATION_SIDEBAR_OBSERVABILITY,
           },
         ],
       },
@@ -104,18 +109,22 @@ const sidebarSections: NavSectionModel[] = [
           {
             label: 'Tools home',
             href: '/admin/tools',
+            permission: PERMISSIONS.NAVIGATION_SIDEBAR_TOOLS,
           },
           {
             label: 'Cross-reference',
             href: '/admin/tools/cross-reference',
+            permission: PERMISSIONS.NAVIGATION_SIDEBAR_TOOLS,
           },
           {
             label: 'Web Search',
             href: '/admin/tools/web-search',
+            permission: PERMISSIONS.NAVIGATION_SIDEBAR_TOOLS,
           },
           {
             label: 'RAG semantic search',
             href: '/admin/products/rag',
+            permission: PERMISSIONS.NAVIGATION_SIDEBAR_TOOLS,
           },
         ],
       },
@@ -152,9 +161,9 @@ const sidebarSections: NavSectionModel[] = [
         icon: FileText,
         items: [
           {
-            label: 'Product',
+            label: 'Products',
             href: '/admin/products/rag/generate',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_PRODUCTS,
+            permission: PERMISSIONS.NAVIGATION_SIDEBAR_INGESTION_PRODUCTS,
           },
           {
             label: 'SDS',
@@ -172,7 +181,7 @@ const sidebarSections: NavSectionModel[] = [
             permission: PERMISSIONS.NAVIGATION_SIDEBAR_KNOWLEDGE,
           },
           {
-            label: 'Product Label',
+            label: 'Labels',
             href: '/admin/labels',
             permission: PERMISSIONS.NAVIGATION_SIDEBAR_LABELS,
           },

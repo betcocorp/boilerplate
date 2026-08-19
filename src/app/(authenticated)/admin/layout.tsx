@@ -1,4 +1,4 @@
-import { FileText, Rocket, Search, Sparkles } from 'lucide-react';
+import { Rocket, Search } from 'lucide-react';
 import { cookies } from 'next/headers';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
@@ -7,6 +7,7 @@ import { AdminAccountMenu } from '~/components/admin/AdminAccountMenu';
 import { AdminNavAutoClose } from '~/components/admin/AdminNavAutoClose';
 import { AdminScrollableMain } from '~/components/admin/AdminScrollableMain';
 import { AdminSidebarNav } from '~/components/admin/AdminSidebarNav';
+import UserSwitcher from '~/components/permissions/UserSwitcher';
 import { Button } from '~/components/ui/button';
 import {
   Sidebar,
@@ -18,7 +19,10 @@ import {
   SidebarTrigger,
 } from '~/components/ui/sidebar';
 import { TooltipProvider } from '~/components/ui/tooltip';
-import { getCurrentUserPermissions } from '~/lib/permissions/permissions-server';
+import {
+  getCurrentUserPermissions,
+  userHasSwitcher,
+} from '~/lib/permissions/permissions-server';
 
 type AdminLayoutProps = {
   children: ReactNode;
@@ -30,6 +34,7 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
   const defaultOpen = cookieStore.get('sidebar_state')?.value !== 'false';
 
   const permissions = await getCurrentUserPermissions();
+  const hasSwitcher = await userHasSwitcher();
 
   return (
     <SidebarProvider
@@ -78,28 +83,11 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
                 </div>
               </div>
               <div className="flex items-center gap-3">
-                <Button asChild size="sm" variant="outline">
-                  <Link href="/admin/sds">
-                    <FileText className="size-4" />
-                    <span className="hidden md:block">SDS</span>
-                  </Link>
-                </Button>
-                <Button asChild size="sm" variant="outline">
-                  <Link href="/admin/efficacy">
-                    <FileText className="size-4" />
-                    <span className="hidden md:block">Efficacy</span>
-                  </Link>
-                </Button>
+                {hasSwitcher && <UserSwitcher />}
                 <Button asChild size="sm" variant="outline">
                   <Link href="/admin/products/rag">
                     <Search className="size-4" />
                     <span className="hidden md:block">Search</span>
-                  </Link>
-                </Button>
-                <Button asChild size="sm" variant="outline">
-                  <Link href="/admin/products/rag/generate">
-                    <Sparkles className="size-4" />
-                    <span className="hidden md:block">Generate</span>
                   </Link>
                 </Button>
               </div>

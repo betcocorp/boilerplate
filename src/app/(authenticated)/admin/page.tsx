@@ -212,7 +212,7 @@ export default async function AdminDashboardPage() {
             admin today and only disappears for users missing the selector once the flag flips.
           */}
           <PermissionChecker
-            permission={PERMISSIONS.DASHBOARD_PERMISSIONS_CARD}
+            permission={PERMISSIONS.ADMIN_CARD_PERMISSIONS}
             route="/admin permissions card"
           >
             <section>

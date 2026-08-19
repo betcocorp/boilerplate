@@ -190,8 +190,6 @@ export default async function ProductsPage({
         )
       : await queryBuilder.order('Title', { ascending: true });
 
-    console.log(productResponse);
-
     if (productResponse.error) {
       throw productResponse.error;
     }

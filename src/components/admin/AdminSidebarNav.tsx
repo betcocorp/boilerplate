@@ -1,10 +1,7 @@
 import { AdminSidebarNavClient } from '~/components/admin/AdminSidebarNavClient';
 import { getUserOrDefault } from '~/lib/cookies-server';
 import { PERMISSIONS } from '~/lib/permissions/constants';
-import {
-  isPermissionsEnforced,
-  recordPermissionVerdict,
-} from '~/lib/permissions/enforcement';
+import { recordPermissionVerdict } from '~/lib/permissions/enforcement';
 import {
   getCurrentUserPermissions,
   hasPermission,
@@ -25,19 +22,19 @@ const NAV_SELECTORS: string[] = [
 ];
 
 /**
- * Server half of the admin sidebar (B0-408): resolves the effective user's permissions once per
- * render, records one aggregated verdict for the nav surface, and hands the client component the
- * selectors to hide.
+ * Server half of the admin sidebar (B0-408, B0-560): resolves the effective user's permissions
+ * once per render, records one aggregated verdict for the nav surface, and hands the client
+ * component the selectors to hide.
  *
- * While `BEX_PERMISSIONS_ENFORCED` is off nothing is hidden — that is the point of shadow mode. The
- * verdict log still tells us exactly which surfaces would vanish once the flag flips.
+ * Hiding is unconditional here — it does not defer to `BEX_PERMISSIONS_ENFORCED` shadow mode.
+ * Nav visibility is a UI concern, not an authorization boundary; API routes and the sign-in gate
+ * remain shadow-mode-gated separately.
  */
 export async function AdminSidebarNav() {
   const [permissions, user] = await Promise.all([
     getCurrentUserPermissions(),
     getUserOrDefault(),
   ]);
-  console.log('permissions', permissions, 'user', user);
   const denied = NAV_SELECTORS.filter(
     (selector) => !hasPermission(permissions, selector),
   );
@@ -60,9 +57,5 @@ export async function AdminSidebarNav() {
     detail: { grantedSelectorCount: NAV_SELECTORS.length - denied.length },
   });
 
-  return (
-    <AdminSidebarNavClient
-      hiddenSelectors={isPermissionsEnforced() ? denied : []}
-    />
-  );
+  return <AdminSidebarNavClient hiddenSelectors={denied} />;
 }

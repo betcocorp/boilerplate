@@ -10,6 +10,12 @@ import {
   setCachedPermissions,
 } from '~/lib/permissions/redis';
 import { getPermissionsForUser } from '~/lib/permissions/repository';
+import { getAuthUserDetails } from '../actions/cookies';
+
+export async function userHasSwitcher(): Promise<boolean> {
+  const authUserDetails = await getAuthUserDetails();
+  return !!authUserDetails?.HAS_USER_SWITCHER;
+}
 
 /**
  * Returns the effective user's permission selectors (selected user when act-as, else auth user).

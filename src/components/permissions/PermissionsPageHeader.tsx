@@ -9,14 +9,11 @@ import type { ReactNode } from 'react';
  * with the rest of the admin area.
  */
 export function PermissionsPageHeader({
-  actions,
   children,
   description,
   eyebrow = 'Access control',
   title,
 }: {
-  /** Buttons/dialog triggers shown opposite the title. */
-  actions?: ReactNode;
   /** Secondary row under the description, e.g. a back link. */
   children?: ReactNode;
   description?: ReactNode;
@@ -37,9 +34,6 @@ export function PermissionsPageHeader({
         ) : null}
         {children}
       </div>
-      {actions ? (
-        <div className="flex flex-wrap items-center gap-2">{actions}</div>
-      ) : null}
     </div>
   );
 }

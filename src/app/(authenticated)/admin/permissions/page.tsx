@@ -76,7 +76,6 @@ export default async function PermissionsPage() {
   return (
     <main className="min-w-0 space-y-4 p-4 sm:p-6">
       <PermissionsPageHeader
-        actions={<UserSwitcher />}
         description="Every user, permission group, and permission selector, plus how well the deployed selectors match the ones the app checks."
         title="Users, Groups & Permissions"
       />

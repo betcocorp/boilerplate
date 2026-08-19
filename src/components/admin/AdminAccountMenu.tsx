@@ -77,6 +77,21 @@ const AccountTrigger = forwardRef<HTMLButtonElement, AccountTriggerProps>(
 
 AccountTrigger.displayName = 'AccountTrigger';
 
+/**
+ * Exact-or-wildcard match against a flat permission list (e.g. "navigation.*" matches
+ * "navigation.sidebar.user.api_access"). Mirrors permissions-server's hasPermission(), duplicated
+ * here because that helper is server-only and this is a client component receiving a plain array.
+ */
+function hasPermission(permissions: string[], permission: string): boolean {
+  if (permissions.includes(permission)) return true;
+  const parts = permission.split('.');
+  for (let i = parts.length - 1; i > 0; i--) {
+    const wild = [...parts.slice(0, i), '*'].join('.');
+    if (permissions.includes(wild)) return true;
+  }
+  return permissions.includes('*');
+}
+
 export function AdminAccountMenu({
   permissions = [],
 }: {
@@ -90,6 +105,19 @@ export function AdminAccountMenu({
   );
   const userName = session?.user?.name;
   const userEmail = session?.user?.email;
+
+  const showApiAccess = hasPermission(
+    permissions,
+    PERMISSIONS.NAVIGATION_SIDEBAR_USER_API_ACCESS,
+  );
+  const showAccessControl = hasPermission(
+    permissions,
+    PERMISSIONS.ADMIN_CARD_PERMISSIONS,
+  );
+  const showChangelog = hasPermission(
+    permissions,
+    PERMISSIONS.NAVIGATION_SIDEBAR_USER_CHANGELOG,
+  );
 
   if (!mounted) {
     return <AccountTrigger userEmail={userEmail} userName={userName} />;
@@ -119,44 +147,50 @@ export function AdminAccountMenu({
             </div>
           </div>
         </DropdownMenuGroup>
-        <DropdownMenuSeparator />
-        {permissions.includes(
-          PERMISSIONS.SIDEBAR_NAVIGATION_API_PERMISSIONS,
-        ) ? (
+        {showApiAccess || showAccessControl || showChangelog ? (
+          <DropdownMenuSeparator />
+        ) : null}
+        {showApiAccess || showAccessControl ? (
           <>
             <DropdownMenuGroup>
-              <DropdownMenuSub>
-                <DropdownMenuSubTrigger>
-                  <KeyRound className="size-4" />
-                  API access
-                </DropdownMenuSubTrigger>
-                <DropdownMenuSubContent>
-                  <DropdownMenuItem asChild>
-                    <Link href="/admin/projects">Projects</Link>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem asChild>
-                    <Link href="/admin/projects/analytics">Analytics</Link>
-                  </DropdownMenuItem>
-                </DropdownMenuSubContent>
-              </DropdownMenuSub>
-              <DropdownMenuItem asChild>
-                <Link href="/admin/permissions">
-                  <ShieldCheck className="size-4" />
-                  Access control
-                </Link>
-              </DropdownMenuItem>
+              {showApiAccess ? (
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger>
+                    <KeyRound className="size-4" />
+                    API access
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent>
+                    <DropdownMenuItem asChild>
+                      <Link href="/admin/projects">Projects</Link>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem asChild>
+                      <Link href="/admin/projects/analytics">Analytics</Link>
+                    </DropdownMenuItem>
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+              ) : null}
+              {showAccessControl ? (
+                <DropdownMenuItem asChild>
+                  <Link href="/admin/permissions">
+                    <ShieldCheck className="size-4" />
+                    Access control
+                  </Link>
+                </DropdownMenuItem>
+              ) : null}
             </DropdownMenuGroup>
-            <DropdownMenuSeparator />
+            {showChangelog ? <DropdownMenuSeparator /> : null}
           </>
         ) : null}
-        <DropdownMenuGroup>
-          <DropdownMenuItem asChild>
-            <Link href="/admin/changelog">
-              <BookOpen className="size-4" />
-              Changelog
-            </Link>
-          </DropdownMenuItem>
-        </DropdownMenuGroup>
+        {showChangelog ? (
+          <DropdownMenuGroup>
+            <DropdownMenuItem asChild>
+              <Link href="/admin/changelog">
+                <BookOpen className="size-4" />
+                Changelog
+              </Link>
+            </DropdownMenuItem>
+          </DropdownMenuGroup>
+        ) : null}
         <DropdownMenuSeparator />
         <DropdownMenuItem
           onSelect={(event) => {
