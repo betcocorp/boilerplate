@@ -1,3 +1,10 @@
+# [2.0.0-dev.2](https://github.com/betcocorp/bex2.0/compare/v2.0.0-dev.1...v2.0.0-dev.2) (2026-08-19)
+
+
+### Bug Fixes
+
+* **B0-560:** reconcile nav-permission migration with actual live DB state ([115adb6](https://github.com/betcocorp/bex2.0/commit/115adb6b9d9467b8061b86bf995c156a7d1b9e5c))
+
 # [2.0.0-dev.1](https://github.com/betcocorp/bex2.0/compare/v1.2.0-dev.3...v2.0.0-dev.1) (2026-08-19)
 
 
