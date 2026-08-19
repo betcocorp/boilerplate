@@ -1,9 +1,14 @@
-# [1.2.0](https://github.com/betcocorp/bex2.0/compare/v1.1.0...v1.2.0) (2026-08-18)
+# [1.2.0-staging.1](https://github.com/betcocorp/bex2.0/compare/v1.1.0...v1.2.0-staging.1) (2026-08-18)
 
 
 ### Features
 
 * **B0-511:** cut LLM router over to live routing when shadow mode is off ([a14385f](https://github.com/betcocorp/bex2.0/commit/a14385fbe0dd5943de3442fdf68d852f655592a0))
+
+### Bug Fixes
+
+* **B0-511:** make the router cutover survive real-world failure modes ([b764b49](https://github.com/betcocorp/bex2.0/commit/b764b4913e1318978ce5c280192f84ad8cfe7500))
+* **B0-511:** raise router classifier timeout from 800ms to 2500ms ([45ad944](https://github.com/betcocorp/bex2.0/commit/45ad9449258e889b1473e2e228ab6026a4cd47b5))
 
 # [1.2.0-dev.1](https://github.com/betcocorp/bex2.0/compare/v1.1.0...v1.2.0-dev.1) (2026-08-18)
 
