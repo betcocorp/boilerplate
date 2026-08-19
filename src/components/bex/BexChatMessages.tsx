@@ -643,7 +643,7 @@ function AssistantFeedbackActions({
           aria-label="Thumbs up"
           className={cn(
             'h-8 rounded-xl text-xs',
-            feedback?.rating === 'up' && 'bg-muted text-foreground',
+            feedback?.rating === 'up' && 'text-green-600',
           )}
           disabled={isSubmitting || !onSubmitFeedback}
           onClick={() => void submit({ rating: 'up' })}
@@ -658,7 +658,7 @@ function AssistantFeedbackActions({
           aria-label="Thumbs down"
           className={cn(
             'h-8 rounded-xl text-xs',
-            feedback?.rating === 'down' && 'bg-muted text-foreground',
+            feedback?.rating === 'down' && 'text-red-600',
           )}
           disabled={isSubmitting || !onSubmitFeedback}
           onClick={() => setShowDownvoteDialog(true)}
