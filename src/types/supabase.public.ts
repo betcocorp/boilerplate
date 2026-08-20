@@ -134,6 +134,7 @@ export type Database = {
           created_at?: string
           id?: string
           openai_response_id?: string | null
+          pause_tier?: string | null
           plain_text?: string | null
           processing_ms?: number | null
           role: string
@@ -146,6 +147,7 @@ export type Database = {
           created_at?: string
           id?: string
           openai_response_id?: string | null
+          pause_tier?: string | null
           plain_text?: string | null
           processing_ms?: number | null
           role?: string
@@ -583,6 +585,42 @@ export type Database = {
             referencedColumns: ["permission_id"]
           },
         ]
+      }
+      model_pricing: {
+        Row: {
+          cached_input_cost_per_mtok: number | null
+          created_at: string
+          effective_date: string
+          id: string
+          input_cost_per_mtok: number
+          model_id: string
+          notes: string | null
+          output_cost_per_mtok: number
+          updated_by: string | null
+        }
+        Insert: {
+          cached_input_cost_per_mtok?: number | null
+          created_at?: string
+          effective_date: string
+          id?: string
+          input_cost_per_mtok: number
+          model_id: string
+          notes?: string | null
+          output_cost_per_mtok: number
+          updated_by?: string | null
+        }
+        Update: {
+          cached_input_cost_per_mtok?: number | null
+          created_at?: string
+          effective_date?: string
+          id?: string
+          input_cost_per_mtok?: number
+          model_id?: string
+          notes?: string | null
+          output_cost_per_mtok?: number
+          updated_by?: string | null
+        }
+        Relationships: []
       }
       orphan_ignore: {
         Row: {
@@ -1260,6 +1298,44 @@ export type Database = {
       }
     }
     Views: {
+      cost_by_model_per_day: {
+        Row: {
+          bucket: string | null
+          cached_prompt_tokens: number | null
+          completion_tokens: number | null
+          estimated_cost_usd: number | null
+          model_id: string | null
+          prompt_tokens: number | null
+          step_count: number | null
+          total_tokens: number | null
+        }
+        Relationships: []
+      }
+      cost_by_model_per_month: {
+        Row: {
+          bucket: string | null
+          cached_prompt_tokens: number | null
+          completion_tokens: number | null
+          estimated_cost_usd: number | null
+          model_id: string | null
+          prompt_tokens: number | null
+          step_count: number | null
+          total_tokens: number | null
+        }
+        Relationships: []
+      }
+      cost_comparison_yoy: {
+        Row: {
+          current_cost_usd: number | null
+          current_total_tokens: number | null
+          model_id: string | null
+          month: string | null
+          prior_year_cost_usd: number | null
+          prior_year_total_tokens: number | null
+          yoy_cost_change_pct: number | null
+        }
+        Relationships: []
+      }
       latest_failed_test_result_items: {
         Row: {
           created_at: string | null
