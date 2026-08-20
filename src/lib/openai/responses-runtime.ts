@@ -8,6 +8,11 @@ import type { ResponseInputItem } from 'openai/resources/responses/responses';
 
 import { extractAssistantText, extractFunctionCalls } from '~/lib/openai/response-item-parsing';
 import {
+  isTemperatureUnsupportedError,
+  recordTemperatureRejection,
+  samplingParamsFor,
+} from '~/lib/openai/model-capabilities';
+import {
   resolveOpenAiRequestTimeoutMs,
   retryTransportFaults,
   type TransportRetryTuning,
@@ -308,6 +313,43 @@ export async function runResponsesWithToolLoop(
     params: ResponseCreateParamsNonStreaming,
     label: string,
   ): Promise<Response> => {
+    /**
+     * B0-606 — safety net for a model whose sampling support we do not yet know about.
+     *
+     * `samplingParamsFor` already strips `temperature` for every model verified to reject it, but
+     * that list is a point-in-time snapshot and a stale parameter list is exactly what caused
+     * B0-606. If the API rejects `temperature` anyway, remember it for the process and replay the
+     * request once without it, so an unfamiliar model costs one failed request instead of failing
+     * every turn on that model.
+     *
+     * Deliberately outside `retryTransportFaults`: this is a deterministic 4xx, not a transport
+     * fault, so it must not consume that policy's attempts. `recordTemperatureRejection` returns
+     * false once already known, which is what bounds this to a single replay.
+     */
+    try {
+      return await requestModelOnce(params, label);
+    } catch (err) {
+      if (
+        params.temperature === undefined ||
+        !isTemperatureUnsupportedError(err) ||
+        !recordTemperatureRejection(params.model as string)
+      ) {
+        throw err;
+      }
+      const withoutTemperature: ResponseCreateParamsNonStreaming = { ...params };
+      // Deleted, not set to undefined: the API rejects the parameter on presence, not on value.
+      delete withoutTemperature.temperature;
+      return await requestModelOnce(
+        withoutTemperature,
+        `${label} (retry without temperature)`,
+      );
+    }
+  };
+
+  const requestModelOnce = async (
+    params: ResponseCreateParamsNonStreaming,
+    label: string,
+  ): Promise<Response> => {
     let visibleDeltaEmittedThisAttempt = false;
     return retryTransportFaults(
       async () => {
@@ -405,7 +447,10 @@ export async function runResponsesWithToolLoop(
       parallel_tool_calls: true,
       store: true,
       stream: false,
-      temperature: opts.temperature ?? 0.2,
+      // B0-606 — gpt-5.5/gpt-5.6 (and the o-series) reject `temperature` outright, which failed
+      // every run on those models in the agent loop, after a retrieval tool call had already
+      // been paid for. Omitted entirely for those models rather than sent-and-ignored.
+      ...samplingParamsFor(opts.model, { temperature: opts.temperature ?? 0.2 }),
       input,
       ...(opts.promptCacheKey ? { prompt_cache_key: opts.promptCacheKey } : {}),
       ...(chainPrev ? { previous_response_id: chainPrev } : {}),

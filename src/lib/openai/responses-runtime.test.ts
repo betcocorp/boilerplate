@@ -1,6 +1,6 @@
 import type OpenAI from 'openai';
 import type { Response } from 'openai/resources/responses/responses';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   runResponsesWithToolLoop,
@@ -12,6 +12,7 @@ import {
   UPSTREAM_RETRY_USER_MESSAGE,
 } from '~/lib/openai/transport-retry';
 import type { ToolTraceEntry } from '~/lib/audit/trace';
+import { __resetLearnedSamplingSupport } from '~/lib/openai/model-capabilities';
 
 type StubResponse = {
   id: string;
@@ -1140,5 +1141,94 @@ describe('runResponsesWithToolLoop — concurrent tool execution (B0-379)', () =
       .input as Array<Record<string, unknown>>;
     expect(round2).toHaveLength(1);
     expect(round2[0]?.call_id).toBe('call_a');
+  });
+});
+
+describe('runResponsesWithToolLoop — temperature gating (B0-606)', () => {
+  beforeEach(() => {
+    __resetLearnedSamplingSupport();
+  });
+
+  const answer = (id: string) => ({ id, output: [], output_text: 'ok' });
+
+  it('omits temperature for gpt-5.6, which rejects it outright', async () => {
+    const { client, create } = stubClient([answer('resp_1')]);
+
+    await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-5.6',
+      instructions: 'stable prefix',
+      tools: [],
+      userMessage: 'what dilution?',
+      executeTool: async ({ name }) => ({ output: '{}', trace: trace(name) }),
+    });
+
+    const params = (create.mock.calls as unknown as Array<[Record<string, unknown>]>)[0]?.[0];
+    // Absent, not undefined — the API rejects the parameter on presence, not on value.
+    expect('temperature' in (params ?? {})).toBe(false);
+  });
+
+  it('still sends temperature for gpt-4.1', async () => {
+    const { client, create } = stubClient([answer('resp_1')]);
+
+    await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1',
+      instructions: 'stable prefix',
+      tools: [],
+      userMessage: 'what dilution?',
+      executeTool: async ({ name }) => ({ output: '{}', trace: trace(name) }),
+    });
+
+    const params = (create.mock.calls as unknown as Array<[Record<string, unknown>]>)[0]?.[0];
+    expect(params?.temperature).toBe(0.2);
+  });
+
+  it('replays once without temperature when an unknown model rejects it', async () => {
+    const rejection = Object.assign(
+      new Error("400 Unsupported parameter: 'temperature' is not supported with this model."),
+      { status: 400 },
+    );
+    const { client, create } = scriptedClient([
+      { throws: rejection },
+      { id: 'resp_1', output: [], output_text: 'recovered' },
+    ]);
+
+    const result = await runResponsesWithToolLoop({
+      client,
+      model: 'mystery-future-model',
+      instructions: 'stable prefix',
+      tools: [],
+      userMessage: 'what dilution?',
+      retry: testRetry,
+      executeTool: async ({ name }) => ({ output: '{}', trace: trace(name) }),
+    });
+
+    // The turn survives instead of failing the whole run.
+    expect(result.assistantText).toBe('recovered');
+    expect(create).toHaveBeenCalledTimes(2);
+
+    const calls = create.mock.calls as unknown as Array<[Record<string, unknown>]>;
+    expect(calls[0]?.[0]?.temperature).toBe(0.2);
+    expect('temperature' in (calls[1]?.[0] ?? {})).toBe(false);
+  });
+
+  it('does not replay for an unrelated 400 — that must surface, not be swallowed', async () => {
+    const badRequest = Object.assign(new Error('Invalid schema for function'), { status: 400 });
+    const { client, create } = scriptedClient([{ throws: badRequest }]);
+
+    await expect(
+      runResponsesWithToolLoop({
+        client,
+        model: 'mystery-future-model',
+        instructions: 'stable prefix',
+        tools: [],
+        userMessage: 'what dilution?',
+        retry: testRetry,
+        executeTool: async ({ name }) => ({ output: '{}', trace: trace(name) }),
+      }),
+    ).rejects.toThrow(/Invalid schema for function/);
+
+    expect(create).toHaveBeenCalledTimes(1);
   });
 });
