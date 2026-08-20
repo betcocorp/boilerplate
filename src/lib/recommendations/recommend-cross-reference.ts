@@ -548,6 +548,15 @@ async function runWebGroundedPath(ctx: WebGroundedPathContext): Promise<Recommen
       droppedCandidates: dropped.length,
       validation,
       webSearch,
+      // B0-292 — the actual pages the search found (query + title/url/snippet per result), not just
+      // the searchesUsed/escalated telemetry above. `executeToolCall` folds this (plus `webSearch`'s
+      // telemetry) into the persisted `recommend_cross_reference` tool call's trace entry, so an
+      // admin auditing a recommendation can see what was actually retrieved. Never truncated or
+      // reworded here — exactly what the provider returned.
+      webSearchResults: {
+        query: web.query,
+        results: web.results.map((r) => ({ url: r.url, title: r.title, snippet: r.snippet ?? null })),
+      },
       timingBreakdown: buildTiming(timer, webSearch, legacyCacheHit),
     },
     declineReason,

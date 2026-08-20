@@ -10,8 +10,13 @@ import {
   withToolTimeout,
 } from '~/lib/tools/tool-timeouts';
 
-import type { ToolCallOrigin, ToolRetrievalParams, ToolTraceEntry } from '~/lib/audit/trace';
-import { toolRetrievalParamsSchema } from '~/lib/audit/trace';
+import type {
+  ToolCallOrigin,
+  ToolRetrievalParams,
+  ToolTraceEntry,
+  ToolWebSearchParams,
+} from '~/lib/audit/trace';
+import { toolRetrievalParamsSchema, toolWebSearchParamsSchema } from '~/lib/audit/trace';
 import type { AuditContext } from '~/lib/audit/audit-log';
 
 function isProductTool(name: string): name is ProductToolName {
@@ -40,6 +45,39 @@ function extractToolRetrievalParams(
   const parsed = toolRetrievalParamsSchema.safeParse({
     ...(search as Record<string, unknown>),
     selection,
+  });
+  return parsed.success ? parsed.data : undefined;
+}
+
+/**
+ * B0-292 — mirrors `extractToolRetrievalParams` for web-search results: pulls the search query,
+ * result list, and searches-used/escalation telemetry off the FULL tool payload's `evidence` block
+ * (`recommend-cross-reference.ts` sets `evidence.webSearchResults` = `{ query, results }` and
+ * `evidence.webSearch` = `{ searchesUsed, escalated, ... }`), never the truncated `outputPreview`.
+ * Returns `undefined` (not persisted) for any tool/run without both pieces, and tolerates a
+ * malformed block rather than throwing.
+ */
+function extractToolWebSearch(payload: Record<string, unknown>): ToolWebSearchParams | undefined {
+  const evidence = payload.evidence;
+  if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) {
+    return undefined;
+  }
+  const { webSearchResults, webSearch } = evidence as Record<string, unknown>;
+  if (
+    !webSearchResults ||
+    typeof webSearchResults !== 'object' ||
+    Array.isArray(webSearchResults)
+  ) {
+    return undefined;
+  }
+  const telemetry =
+    webSearch && typeof webSearch === 'object' && !Array.isArray(webSearch)
+      ? (webSearch as Record<string, unknown>)
+      : {};
+  const parsed = toolWebSearchParamsSchema.safeParse({
+    ...(webSearchResults as Record<string, unknown>),
+    searchesUsed: telemetry.searchesUsed,
+    escalated: telemetry.escalated,
   });
   return parsed.success ? parsed.data : undefined;
 }
@@ -87,6 +125,8 @@ export function buildToolTraceEntry(input: {
   modelOutputBudgetApplied?: boolean;
   /** B0-493 — retrieval parameters extracted from the FULL (untruncated) payload. */
   retrieval?: ToolRetrievalParams;
+  /** B0-292 — web-search results extracted from the FULL (untruncated) payload. */
+  webSearch?: ToolWebSearchParams;
 }): ToolTraceEntry {
   const argumentsJson = input.argumentsJson || '';
   const argumentsTruncated = argumentsJson.length > TOOL_ARGUMENTS_PREVIEW_MAX_CHARS;
@@ -107,6 +147,7 @@ export function buildToolTraceEntry(input: {
       : {}),
     ...(input.modelOutputBudgetApplied ? { modelOutputBudgetApplied: true } : {}),
     ...(input.retrieval ? { retrieval: input.retrieval } : {}),
+    ...(input.webSearch ? { webSearch: input.webSearch } : {}),
   };
 }
 
@@ -136,6 +177,7 @@ export async function executeToolCall(input: {
     modelOutputChars?: number,
     retrieval?: ToolRetrievalParams,
     modelOutputBudgetApplied?: boolean,
+    webSearch?: ToolWebSearchParams,
   ) =>
     buildToolTraceEntry({
       toolName: input.name,
@@ -148,6 +190,7 @@ export async function executeToolCall(input: {
       modelOutputChars,
       modelOutputBudgetApplied,
       retrieval,
+      webSearch,
     });
 
   try {
@@ -175,6 +218,8 @@ export async function executeToolCall(input: {
     const useModelOut = modelOut !== null && modelOut.length < out.length;
     // B0-493 — read off the FULL payload object, never the (possibly truncated) `out` string.
     const retrieval = extractToolRetrievalParams(payload);
+    // B0-292 — same principle: the web-search result list off the FULL payload's `evidence` block.
+    const webSearch = extractToolWebSearch(payload);
 
     // B0-382 — cap what enters the model context. Runs on the string the runtimes would actually
     // send (`modelOutput ?? output`); the persisted full `out` is never capped.
@@ -200,6 +245,7 @@ export async function executeToolCall(input: {
         modelFacing !== null ? modelFacing.length : undefined,
         retrieval,
         budget.applied || undefined,
+        webSearch,
       ),
     };
   } catch (err) {

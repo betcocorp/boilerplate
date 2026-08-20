@@ -67,6 +67,36 @@ export const toolRetrievalParamsSchema = z.object({
 
 export type ToolRetrievalParams = z.infer<typeof toolRetrievalParamsSchema>;
 
+/**
+ * B0-292 — the actual pages a `recommend_cross_reference` call's web search step found, captured
+ * from the FULL tool payload at `executeToolCall` time (never reconstructed from the truncated
+ * `outputPreview`, which routinely drops this — it sits well past the potentially-large `sources[]`/
+ * `candidates[]` arrays in the payload). Present only when the call ran a web search that actually
+ * returned a response (`recommend_cross_reference`'s web-grounded path, `evidence.webSearchResults`
+ * in `recommend-cross-reference.ts`); absent for the confident-legacy fast path, a
+ * budget-short-circuited or failed search, every other tool, and rows written before this ticket.
+ * URLs, titles and snippets are transcribed exactly as the provider returned them — never truncated,
+ * reworded, rounded, or summarized here.
+ */
+export const toolWebSearchParamsSchema = z.object({
+  /** The exact query string sent to the search provider (see `buildRecommendationQuery`). */
+  query: z.string(),
+  results: z.array(
+    z.object({
+      url: z.string(),
+      title: z.string(),
+      /** `null` only if the provider genuinely returned no snippet for this result. */
+      snippet: z.string().nullable(),
+    }),
+  ),
+  /** Provider queries actually spent (1 = basic only, 2 = escalated to advanced too). */
+  searchesUsed: z.number(),
+  /** Whether the search escalated from `basic` to `advanced` depth. */
+  escalated: z.boolean(),
+});
+
+export type ToolWebSearchParams = z.infer<typeof toolWebSearchParamsSchema>;
+
 export const toolTraceEntrySchema = z.object({
   toolName: z.string(),
   callId: z.string(),
@@ -108,6 +138,8 @@ export const toolTraceEntrySchema = z.object({
   modelOutputBudgetApplied: z.boolean().optional(),
   /** B0-493 — retrieval parameters/strategy for this call, when it ran a RAG search. */
   retrieval: toolRetrievalParamsSchema.optional(),
+  /** B0-292 — the web pages found by this call's web search step, when it ran one. */
+  webSearch: toolWebSearchParamsSchema.optional(),
 });
 
 export type ToolTraceEntry = z.infer<typeof toolTraceEntrySchema>;

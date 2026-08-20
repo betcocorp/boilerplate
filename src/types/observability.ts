@@ -9,7 +9,7 @@
  * Nothing here performs I/O; these are pure type declarations.
  */
 
-import type { ToolCallOrigin } from '~/lib/audit/trace';
+import type { ToolCallOrigin, ToolWebSearchParams } from '~/lib/audit/trace';
 import type { PromptRecord } from '~/lib/workflows/product-support/product-support-schemas';
 import type { Json, Tables } from '~/types/supabase.public';
 
@@ -164,6 +164,13 @@ export type ToolCallTimelineEvent = TimelineEventBase & {
    */
   argumentsTruncated: boolean | null;
   outputTruncated: boolean | null;
+  /**
+   * B0-292 — the web pages this call's web search step found (query + title/url/snippet per
+   * result), when it ran one. Null when the call ran no web search (every tool but the
+   * web-grounded path of `recommend_cross_reference`), on a `reconstructed` event (never
+   * recoverable — this only ever lived in `toolTrace`), or on a row written before this shipped.
+   */
+  webSearch: ToolWebSearchParams | null;
 };
 
 /** A confidence-affecting gate decision. */

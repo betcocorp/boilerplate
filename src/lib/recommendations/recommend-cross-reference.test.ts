@@ -152,6 +152,26 @@ describe('recommendCrossReference (B0-85)', () => {
     expect(result.candidates).toHaveLength(2);
     expect(result.candidates[0].betcoProductKey).toBe('A');
     expect(result.evidence.source).toBe('web');
+
+    // B0-292 — the actual pages found (query + title/url/snippet), for the tool trace to carry
+    // through to the admin timeline; not just the searchesUsed/escalated telemetry in `webSearch`.
+    const webSearchResults = result.evidence.webSearchResults as {
+      query: string;
+      results: Array<{ url: string; title: string; snippet: string | null }>;
+    };
+    expect(webSearchResults.query).toBe('competitor spec');
+    expect(webSearchResults.results).toEqual([
+      {
+        url: 'https://example.com/a',
+        title: 'Result for "competitor spec"',
+        snippet: 'A mock result about competitor spec.',
+      },
+      {
+        url: 'https://example.com/b',
+        title: 'Secondary result for "competitor spec"',
+        snippet: 'Another mock result about competitor spec.',
+      },
+    ]);
   });
 
   it('B0-442: a line-representative candidate carries its betcoProductKey and an honest rationale', async () => {

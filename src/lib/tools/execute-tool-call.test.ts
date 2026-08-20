@@ -239,3 +239,142 @@ describe('executeToolCall — retrieval parameters on the trace entry (B0-493)',
     expect(result.trace.retrieval).toBeUndefined();
   });
 });
+
+describe('executeToolCall — web search results on the trace entry (B0-292)', () => {
+  it('extracts the web search query/results/telemetry onto the trace entry from the full payload', async () => {
+    executeProductToolMock.mockResolvedValueOnce({
+      ok: true,
+      adapter: 'cross_reference_recommendation_v1',
+      source: 'web',
+      answered: true,
+      status: 'answered',
+      candidates: [],
+      evidence: {
+        source: 'web',
+        webSearch: { searchesUsed: 2, estimatedCostUsd: 0.024, escalated: true, budgetExceeded: false },
+        webSearchResults: {
+          query: 'Spartan Xtreme Blue product specifications disinfectant OR cleaner',
+          results: [
+            {
+              url: 'https://spartanchemical.com/xtreme-blue',
+              title: 'Xtreme Blue Glass Cleaner',
+              snippet: 'A concentrated glass and surface cleaner.',
+            },
+            {
+              url: 'https://spartanchemical.com/sds/xtreme-blue.pdf',
+              title: 'Xtreme Blue SDS',
+              snippet: null,
+            },
+          ],
+        },
+      },
+    });
+
+    const result = await executeToolCall({
+      name: 'recommend_cross_reference',
+      argumentsJson: JSON.stringify({ competitorProduct: 'Xtreme Blue', competitorBrand: 'Spartan' }),
+      callId: 'call_websearch',
+    });
+
+    expect(result.trace.webSearch).toEqual({
+      query: 'Spartan Xtreme Blue product specifications disinfectant OR cleaner',
+      results: [
+        {
+          url: 'https://spartanchemical.com/xtreme-blue',
+          title: 'Xtreme Blue Glass Cleaner',
+          snippet: 'A concentrated glass and surface cleaner.',
+        },
+        {
+          url: 'https://spartanchemical.com/sds/xtreme-blue.pdf',
+          title: 'Xtreme Blue SDS',
+          snippet: null,
+        },
+      ],
+      searchesUsed: 2,
+      escalated: true,
+    });
+  });
+
+  it('survives outputPreview truncation — the structured field is built from the full payload, not the preview', async () => {
+    executeProductToolMock.mockResolvedValueOnce({
+      ok: true,
+      candidates: Array.from({ length: 30 }, (_, i) => ({
+        betcoProductKey: `key-${i}`,
+        betcoTitle: `Product ${i}`,
+        rationale: 'x'.repeat(200),
+      })),
+      evidence: {
+        webSearch: { searchesUsed: 1, estimatedCostUsd: 0.008, escalated: false, budgetExceeded: false },
+        webSearchResults: {
+          query: 'Acme Cleaner X product specifications disinfectant OR cleaner',
+          results: [{ url: 'https://acme.example/cleaner-x', title: 'Cleaner X', snippet: 'y'.repeat(500) }],
+        },
+      },
+    });
+
+    const result = await executeToolCall({
+      name: 'recommend_cross_reference',
+      argumentsJson: '{}',
+      callId: 'call_websearch_truncated',
+    });
+
+    expect(result.trace.outputTruncated).toBe(true);
+    expect(result.trace.outputPreview).not.toContain('"webSearchResults"');
+    expect(result.trace.webSearch?.results[0]?.url).toBe('https://acme.example/cleaner-x');
+  });
+
+  it('omits `webSearch` for a call whose engine served a confident legacy match (no search run)', async () => {
+    executeProductToolMock.mockResolvedValueOnce({
+      ok: true,
+      adapter: 'cross_reference_recommendation_v1',
+      source: 'legacy',
+      answered: true,
+      status: 'answered',
+      candidates: [],
+      evidence: { source: 'legacy', normalizedInput: null, totalCandidates: 1 },
+    });
+
+    const result = await executeToolCall({
+      name: 'recommend_cross_reference',
+      argumentsJson: '{}',
+      callId: 'call_no_websearch',
+    });
+
+    expect(result.trace.webSearch).toBeUndefined();
+  });
+
+  it('omits `webSearch` for a tool that never ran one', async () => {
+    executeProductToolMock.mockResolvedValueOnce({
+      ok: true,
+      adapter: 'static_policy_v1',
+      policy: { summary: 's', steps: [] },
+    });
+
+    const result = await executeToolCall({
+      name: 'get_escalation_policy',
+      argumentsJson: '{}',
+      callId: 'call_no_websearch_2',
+    });
+
+    expect(result.trace.webSearch).toBeUndefined();
+  });
+
+  it('omits `webSearch` rather than throwing on a malformed block', async () => {
+    executeProductToolMock.mockResolvedValueOnce({
+      ok: true,
+      candidates: [],
+      evidence: {
+        webSearch: { searchesUsed: 1, escalated: false },
+        webSearchResults: { query: 'x' /* missing required `results` array */ },
+      },
+    });
+
+    const result = await executeToolCall({
+      name: 'recommend_cross_reference',
+      argumentsJson: '{}',
+      callId: 'call_websearch_malformed',
+    });
+
+    expect(result.trace.webSearch).toBeUndefined();
+  });
+});

@@ -407,6 +407,8 @@ function buildReconstructedToolCallEvent(input: {
     origin: null,
     argumentsTruncated: null,
     outputTruncated: null,
+    // B0-292 — same reasoning as the B0-390 fields above: unrecoverable for a reconstructed event.
+    webSearch: null,
     ok: call.ok,
     errorMessage: call.errorMessage,
     auditArgumentsPreview: call.argumentsPreview,
@@ -574,6 +576,8 @@ export function buildRunTimeline(
         origin: entry.origin ?? null,
         argumentsTruncated: entry.argumentsTruncated ?? null,
         outputTruncated: entry.outputTruncated ?? null,
+        // B0-292 — the web pages found, when this call ran a web search; null otherwise.
+        webSearch: entry.webSearch ?? null,
         label: `Tool: ${entry.toolName}`,
         // Forced tool calls (e.g. the cross-reference safety-net search) bypass
         // writeAuditLog, so fall back to the step's own start time.
@@ -591,6 +595,7 @@ export function buildRunTimeline(
           ...(entry.outputTruncated === undefined
             ? {}
             : { outputTruncated: entry.outputTruncated }),
+          ...(entry.webSearch ? { webSearch: entry.webSearch } : {}),
           ...(facts?.errorMessage ? { errorMessage: facts.errorMessage } : {}),
           ...(facts?.argumentsPreview
             ? { auditArgumentsPreview: facts.argumentsPreview }
