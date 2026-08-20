@@ -14,7 +14,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const costMetricsQuerySchema = z.object({
-  timeRange: z.enum(COST_TIME_RANGES).default('1m'),
+  timeRange: z.enum(COST_TIME_RANGES).default('1d'),
   groupBy: z.enum(COST_GROUP_BY_VALUES).default('day'),
   compareYoY: z.coerce.boolean().default(false),
   startDate: z.iso.date().optional(),

@@ -1,7 +1,7 @@
 /**
- * B0-567 — cost monitoring dashboard (epic B0-562). Server component: the default 1-month/daily
- * view is fetched directly via `getCostMetrics` (same function `GET /api/bex/cost/metrics` calls),
- * so the first paint needs no client round trip. Range/YoY changes re-fetch through that API route.
+ * B0-567 — cost monitoring dashboard (epic B0-562). Server component: the default 1-day view is
+ * fetched directly via `getCostMetrics` (same function `GET /api/bex/cost/metrics` calls), so the
+ * first paint needs no client round trip. Range/YoY changes re-fetch through that API route.
  */
 
 import { CostDashboard } from '~/components/admin/cost/CostDashboard';
@@ -14,7 +14,7 @@ export const metadata = {
 
 export default async function CostMonitoringPage() {
   const initial = await getCostMetrics({
-    timeRange: '1m',
+    timeRange: '1d',
     groupBy: 'day',
     compareYoY: false,
   });
