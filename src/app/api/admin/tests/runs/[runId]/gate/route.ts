@@ -1,9 +1,6 @@
-import { getServerSession } from 'next-auth';
 import { NextResponse } from 'next/server';
 
-import { authOptions } from '~/lib/auth';
-import { PERMISSIONS } from '~/lib/permissions/constants';
-import { gateRoute } from '~/lib/permissions/route-gate';
+import { authorizeAdminTestsRoute } from '~/lib/api/admin-tests-auth';
 import {
   anyResultItemHasConfidenceGatingDisabled,
   computeAvgJudgmentConfidenceForResult,
@@ -14,16 +11,12 @@ import {
 import { isTerminalRunStatus } from '~/lib/tests/types';
 
 export async function GET(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ runId: string }> },
 ) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-
-  const denied = await gateRoute(
-    PERMISSIONS.NAVIGATION_SIDEBAR_TESTS,
+  // B0-465 — session OR CI service token; the pinned-run-id gate could never authenticate.
+  const denied = await authorizeAdminTestsRoute(
+    request,
     'GET /api/admin/tests/runs/[runId]/gate',
   );
   if (denied) return denied;

@@ -5,6 +5,8 @@ import { NextResponse } from 'next/server';
 // can take 60–120 s, which exceeds the default Vercel function timeout.
 export const maxDuration = 300;
 
+import { authorizeAdminTestsRoute } from '~/lib/api/admin-tests-auth';
+// PATCH stays session-only: pausing/resuming a run is a UI action, not something the CI gate does.
 import { authOptions } from '~/lib/auth';
 import { PERMISSIONS } from '~/lib/permissions/constants';
 import { gateRoute } from '~/lib/permissions/route-gate';
@@ -47,16 +49,12 @@ function readProgressFromSummary(summary: unknown) {
 }
 
 export async function GET(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ runId: string }> },
 ) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-
-  const denied = await gateRoute(
-    PERMISSIONS.NAVIGATION_SIDEBAR_TESTS,
+  // B0-465 — session OR CI service token, so the eval gate can start and poll its own run.
+  const denied = await authorizeAdminTestsRoute(
+    request,
     'GET /api/admin/tests/runs/[runId]',
   );
   if (denied) return denied;
@@ -110,16 +108,12 @@ export async function GET(
 }
 
 export async function POST(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ runId: string }> },
 ) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-
-  const denied = await gateRoute(
-    PERMISSIONS.NAVIGATION_SIDEBAR_TESTS,
+  // B0-465 — session OR CI service token, so the eval gate can start and poll its own run.
+  const denied = await authorizeAdminTestsRoute(
+    request,
     'POST /api/admin/tests/runs/[runId]',
   );
   if (denied) return denied;
