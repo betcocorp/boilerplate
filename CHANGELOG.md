@@ -1,3 +1,75 @@
+# [2.0.0](https://github.com/betcocorp/bex2.0/compare/v1.2.1...v2.0.0) (2026-08-20)
+
+
+* feat(B0-511)!: make LLM intent routing the default and retire keyword routing from every decision path ([43a90e9](https://github.com/betcocorp/bex2.0/commit/43a90e97d83b7c0c73232b27a450ebcb7c776f48))
+
+
+### Bug Fixes
+
+* **B0-560:** drop the dead actions prop usage on PermissionGroupPage ([8fb32cf](https://github.com/betcocorp/bex2.0/commit/8fb32cf923a1ff8ae46fbb185b8f24f55c94568c))
+* **B0-560:** reconcile nav-permission migration with actual live DB state ([115adb6](https://github.com/betcocorp/bex2.0/commit/115adb6b9d9467b8061b86bf995c156a7d1b9e5c))
+* **B0-567:** default cost monitoring to the 1d time range ([82bbfef](https://github.com/betcocorp/bex2.0/commit/82bbfef067f93c18921e68729e262cb869bc5f67))
+
+
+### Features
+
+* **B0-563:** capture token usage on every model-calling workflow step ([b1d594f](https://github.com/betcocorp/bex2.0/commit/b1d594f1c0279556e01f546afcb20f02b94a2275))
+* **B0-564:** add model_pricing table with dated $/Mtok rates ([fcb6d1e](https://github.com/betcocorp/bex2.0/commit/fcb6d1e6bf4e12e3b9fa9a41e532b2ddd0bce71a))
+* **B0-566:** add GET /api/bex/cost/metrics ([c491993](https://github.com/betcocorp/bex2.0/commit/c491993c17a69bd93ce64519aae4cb4afb7cc2a6))
+* **B0-567:** add /admin/cost dashboard with protected nav item ([5151223](https://github.com/betcocorp/bex2.0/commit/5151223c48f4d8750d36e4673483d6b2b47f17b5))
+* **B0-567:** add a "Runs covered" summary card to cost monitoring ([07b5a93](https://github.com/betcocorp/bex2.0/commit/07b5a9336a44ef48ed8c3e91d39bddf13e2eede0))
+* **BO-563:** changed nav item location, updated builds to only fire on main ([5b33c7c](https://github.com/betcocorp/bex2.0/commit/5b33c7c306da3481e848d70d97fc5747da1bd60c))
+
+
+### BREAKING CHANGES
+
+* BEX_LLM_ROUTER_ENABLED now defaults ON and
+BEX_LLM_ROUTER_SHADOW_MODE defaults OFF — every environment routes by
+the LLM intent classifier with no env setup. The flags invert into
+rollback levers (ENABLED=false -> full keyword world; SHADOW_MODE=true
+-> classifier logs-and-compares while keyword routes).
+
+Why: "keyword routing" was never one component — it was five
+separately-wired behaviors, and prior rounds removed exactly one each.
+This removes the rest as deciders:
+
+- Default flip (above): the env-gated rollout meant any environment
+  nobody hand-configured (production included) silently stayed on
+  keyword routing forever.
+- classifyUserIntent's failure fallback no longer consults
+  routeUserMessageToSme: a degraded turn routes to the ambiguous
+  generalist fallthrough with the reason on the gate record, so
+  keyword scoring can never decide a live turn, even on LLM failure.
+- B0-514: shouldForceCrossReferenceLookup retired from the default
+  path. Cross-reference intent (early-decline suppression, pinned
+  round-0 tool_choice, forcedCrossReference) now derives from the
+  classifier's own output — intent `recommendations`, or a
+  cross-reference suggestedTool (preserving B0-339's product-routed
+  xref case). The substring check survives only for turns the
+  classifier did not decide (kill-switch/shadow/degraded).
+- B0-508 completed: the agent's orchestrator-hint block now receives
+  the classifier's intent/confidence/entities instead of raw keyword
+  scores whenever the classifier ran.
+- /api/v1/orchestrator responses report the decision that actually
+  routed the turn (schema-validated), with the keyword pre-route
+  demoted to labeled comparison metadata.
+
+Intent taxonomy fix (the user-facing bug): the classifier prompt now
+draws a hard line — `recommendations` is strictly competitor
+cross-reference (non-Betco product named, wants the Betco equivalent);
+"recommend the best product for this job/surface" routes to the
+specialist that owns the job; usage/compatibility questions are never
+`recommendations`.
+
+Live-verified on pure defaults (no env vars): gym-floor task
+recommendation -> floor with no cross-reference machinery; "Can I use
+Symplicity Nova on sealed concrete?" -> product; "Betco equivalent to
+Spartan GS High Gloss" -> recommendations with competitorBrand
+extracted and the forced cross-reference path firing. 600 tests green,
+tsc/lint clean.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
 # [2.0.0-dev.3](https://github.com/betcocorp/bex2.0/compare/v2.0.0-dev.2...v2.0.0-dev.3) (2026-08-19)
 
 
