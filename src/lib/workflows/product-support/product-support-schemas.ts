@@ -79,6 +79,10 @@ export type RetrievedDocumentChunkRef = z.infer<typeof retrievedDocumentChunkRef
  * - `usage_safety_fallback` — the usage/safety coverage gate forced fallback copy.
  * - `validator_fallback` — the validator's disapproval forced fallback copy.
  * - `revision_pass` — the second (revision) model pass produced the final text.
+ * - `validator_rejected_draft_retained` — B0-350 (resolves B0-262): the validator disapproved a
+ *   substantive, non-decline draft with no flagged safety problem, so the streamed answer was kept
+ *   visible instead of being hard-replaced; `requires_human_review` is always forced true alongside
+ *   this value.
  */
 export const answerProvenanceSchema = z.enum([
   'model_generated',
@@ -88,6 +92,7 @@ export const answerProvenanceSchema = z.enum([
   'usage_safety_fallback',
   'validator_fallback',
   'revision_pass',
+  'validator_rejected_draft_retained',
 ]);
 
 export type AnswerProvenance = z.infer<typeof answerProvenanceSchema>;

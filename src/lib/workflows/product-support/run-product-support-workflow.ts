@@ -715,6 +715,19 @@ export type ProductSupportWorkflowEvent =
       name: string;
       ok?: boolean;
       callId?: string;
+    }
+  | {
+      /**
+       * B0-350 — emitted whenever this turn escalates for human review (validator rejection kept
+       * visible per B0-262, a refused revision, or a hard-replaced safety rejection). Deliberately
+       * separate from `status`/`tool`: the UI renders it as a banner alongside the already-streamed
+       * answer text rather than as a stage transition.
+       */
+      type: 'answer_flagged_for_review';
+      reason: ReviewRequestReason;
+      issues: string[];
+      /** True when the streamed draft was kept visible (B0-350); false on a hard-replaced answer. */
+      answerRetained: boolean;
     };
 
 function extractTopCrossReferenceMatch(toolTrace: ToolTraceEntry[]) {
@@ -3278,6 +3291,18 @@ export async function runProductSupportWorkflow(input: {
 
     let finalText = draftAnswer;
     const hasUngroundedRegulatedClaim = regulatedClaimGrounding.ungroundedCategories.length > 0;
+    /**
+     * B0-350 — the validator prompt explicitly asks it to "Flag prohibited/off-label use
+     * suggestions" into `issues` (see `VALIDATOR_SYSTEM_PROMPT`). This is the one
+     * validator-detected condition that is a genuine SAFETY problem with the draft's own content
+     * (as opposed to a coverage/grounding shortfall), so it stays a hard replace below alongside
+     * the regulated-claim guardrail and the usage/safety coverage gate — per the org's
+     * regulated-data rule, none of those three gates gets "kinder" here.
+     */
+    const hasSafetyFlaggedIssue = validation.issues.some((issue) =>
+      /\boff[- ]label\b|\bprohibited\b/i.test(issue),
+    );
+    const draftIsEmpty = draftAnswer.trim().length === 0;
 
     if (!validation.approved) {
       if (hasUngroundedRegulatedClaim) {
@@ -3326,7 +3351,10 @@ export async function runProductSupportWorkflow(input: {
           'I can then return a grounded answer with both procedure and SDS-backed safety details.',
         ].join('\n');
         answerProvenance = 'usage_safety_fallback';
-      } else {
+      } else if (draftIsEmpty || isDeclineAnswer(draftAnswer) || hasSafetyFlaggedIssue) {
+        // B0-350: still snap to the generic fallback -- there is nothing substantive to keep
+        // (empty draft), the model already declined on its own (no streamed answer to protect),
+        // or the validator flagged an actual safety problem in the draft's own content.
         finalText = [
           'I could not fully verify this answer against the retrieved approved sources.',
           '',
@@ -3337,6 +3365,24 @@ export async function runProductSupportWorkflow(input: {
           'If this is safety-urgent, follow your facility protocol and SDS guidance.',
         ].join('\n');
         answerProvenance = 'validator_fallback';
+      } else {
+        /**
+         * B0-350 (resolves B0-262) — the draft is substantive, the model didn't decline on its
+         * own, and the validator's rejection is not a flagged safety problem: never overwrite an
+         * answer the user already watched stream in. Keep it visible and escalate for human review
+         * instead of hard-replacing it with confusing decline copy.
+         *
+         * This also completes the B0-368 `revisionRefused` guard above (see its comment): that
+         * guard only stopped the REVISION pass's own refusal text from overwriting `draftAnswer` --
+         * `validation.approved` stayed false either way, so without this branch the block here
+         * still clobbered `finalText` with the canned fallback whenever no safety gate fired.
+         */
+        finalText = draftAnswer;
+        answerProvenance = 'validator_rejected_draft_retained';
+        // Force the flag even when the validator's own judgment didn't request review: a kept
+        // (non-hard-replaced) rejection must always surface for a human, never just silently ride
+        // through as if nothing happened.
+        validation = { ...validation, requires_human_review: true };
       }
 
       if (validation.requires_human_review) {
@@ -3362,6 +3408,17 @@ export async function runProductSupportWorkflow(input: {
           { reason: reviewReason, issues: validation.issues },
           wfCtx,
         );
+        // B0-350 — a distinct stream event (not a text delta) so the UI can render a "flagged for
+        // review" banner without touching the answer text that already streamed to the user. Fired
+        // for every human-review escalation on this turn, not just the kept-draft case, so the
+        // banner and the persisted `review_tasks` row/`requires_human_review` flag never disagree
+        // about whether this turn needs review.
+        input.onEvent?.({
+          type: 'answer_flagged_for_review',
+          reason: reviewReason,
+          issues: validation.issues,
+          answerRetained: answerProvenance === 'validator_rejected_draft_retained',
+        });
       }
     }
 

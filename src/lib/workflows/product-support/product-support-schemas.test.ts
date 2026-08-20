@@ -72,7 +72,7 @@ describe('productSupportFinalOutputSchema — B0-388 additions are backward comp
 });
 
 describe('answerProvenanceSchema', () => {
-  it('covers exactly the seven answer branches', () => {
+  it('covers exactly the eight answer branches', () => {
     expect(answerProvenanceSchema.options).toEqual([
       'model_generated',
       'template_override',
@@ -81,6 +81,7 @@ describe('answerProvenanceSchema', () => {
       'usage_safety_fallback',
       'validator_fallback',
       'revision_pass',
+      'validator_rejected_draft_retained',
     ]);
   });
 });
