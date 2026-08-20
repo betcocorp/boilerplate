@@ -43,6 +43,8 @@ const STATUS_BADGE_VARIANT: Record<
   'default' | 'secondary' | 'destructive' | 'outline'
 > = {
   pending: 'outline',
+  // B0-353 — the validator-forced-review outcome; distinct from a fresh, undecided `pending` row.
+  escalated: 'destructive',
   answered: 'secondary',
   declined: 'outline',
   verified: 'default',
