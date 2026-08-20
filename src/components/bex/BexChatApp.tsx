@@ -2,6 +2,7 @@
 
 import { Check, Copy, Download, Info, Menu, Sparkles } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 
 import { Button } from '~/components/ui/button';
 import { Label } from '~/components/ui/label';
@@ -125,6 +126,8 @@ export function BexChatApp() {
   const hasPermission = usePermissionsStore((s) => s.hasPermission);
   const isAdminChrome = hasPermission(PERMISSIONS.BEX_CHAT_VIEW_ALL);
 
+  const searchParams = useSearchParams();
+
   useEffect(() => {
     if (!permissionsLoaded) {
       void usePermissionsStore.getState().load();
@@ -174,6 +177,20 @@ export function BexChatApp() {
     },
     [refreshConversation],
   );
+
+  // Auto-select conversation from query param if provided and sessions are loaded
+  useEffect(() => {
+    if (!hydrated || sessions.length === 0 || activeId) {
+      return;
+    }
+    const conversationIdParam = searchParams.get('conversationId');
+    if (conversationIdParam) {
+      const found = sessions.find((s) => s.id === conversationIdParam);
+      if (found) {
+        void selectConversation(conversationIdParam);
+      }
+    }
+  }, [hydrated, sessions, searchParams, activeId, selectConversation]);
 
   useEffect(() => {
     const cache = loadUiCache();
