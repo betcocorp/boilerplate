@@ -126,7 +126,13 @@ export function BexChatApp() {
   const hasPermission = usePermissionsStore((s) => s.hasPermission);
   const isAdminChrome = hasPermission(PERMISSIONS.BEX_CHAT_VIEW_ALL);
 
+  /**
+   * `?conversationId=` deep link, captured at mount: `useRef`'s initial value is only honored
+   * on the first render, so this stays the id the page was opened with even after the user
+   * switches threads (which would otherwise re-open the linked thread on every re-render).
+   */
   const searchParams = useSearchParams();
+  const requestedConversationIdRef = useRef(searchParams.get('conversationId'));
 
   useEffect(() => {
     if (!permissionsLoaded) {
@@ -178,20 +184,6 @@ export function BexChatApp() {
     [refreshConversation],
   );
 
-  // Auto-select conversation from query param if provided and sessions are loaded
-  useEffect(() => {
-    if (!hydrated || sessions.length === 0 || activeId) {
-      return;
-    }
-    const conversationIdParam = searchParams.get('conversationId');
-    if (conversationIdParam) {
-      const found = sessions.find((s) => s.id === conversationIdParam);
-      if (found) {
-        void selectConversation(conversationIdParam);
-      }
-    }
-  }, [hydrated, sessions, searchParams, activeId, selectConversation]);
-
   useEffect(() => {
     const cache = loadUiCache();
     setModel(cache.model);
@@ -201,6 +193,14 @@ export function BexChatApp() {
     setUserFilterId(cache.userFilter);
 
     void (async () => {
+      /**
+       * A deep link (`/admin/bex?conversationId=…`, e.g. from a run trace's Conversation
+       * field) wins over the cached last-active thread. Resolved here rather than in a
+       * follow-up effect because this effect always assigns `activeId` before flipping
+       * `hydrated`, so a later effect could only ever fight it.
+       */
+      const requestedId = requestedConversationIdRef.current;
+
       try {
         const list = await fetchConversationList({
           showTestRuns: cache.showTestRuns,
@@ -215,16 +215,50 @@ export function BexChatApp() {
           source: row.source,
           isOwner: row.isOwner,
         }));
+
+        /**
+         * The sidebar list is capped (80 rows) and narrowed by the source/user filters, so a
+         * deep-linked thread is frequently absent from it. Fetch it by id and splice it in —
+         * `activeId` must exist in `sessions` or the reconciling effect below reassigns it.
+         */
+        let requestedMessages: ChatMessage[] | null = null;
+        if (requestedId && !mapped.some((c) => c.id === requestedId)) {
+          try {
+            const detail = await apiFetchConversation(requestedId);
+            requestedMessages = detail.messages.map(mapApiMessageToChatMessage);
+            mapped.push({
+              id: detail.conversation.id,
+              title: detail.conversation.title,
+              updatedAt: toMillis(detail.conversation.updatedAt),
+              messages: requestedMessages,
+              owner: detail.conversation.owner,
+              source: detail.conversation.source,
+              isOwner: detail.conversation.isOwner,
+            });
+            mapped.sort((a, b) => b.updatedAt - a.updatedAt);
+          } catch (e) {
+            // Deleted, or not visible to this actor — say so instead of silently
+            // opening an unrelated thread.
+            setLoadError(
+              `Could not open conversation ${requestedId}: ${getErrorMessage(e)}`,
+            );
+          }
+        }
+
         setSessions(mapped);
 
-        const preferred = cache.lastActiveConversationId;
+        const preferred =
+          requestedId && mapped.some((c) => c.id === requestedId)
+            ? requestedId
+            : cache.lastActiveConversationId;
         const pick =
           preferred && mapped.some((c) => c.id === preferred)
             ? preferred
             : (mapped[0]?.id ?? null);
         setActiveId(pick);
 
-        if (pick) {
+        // The deep-linked thread arrived with its transcript already attached above.
+        if (pick && !(pick === requestedId && requestedMessages)) {
           await refreshConversation(pick);
         }
       } catch (e) {
