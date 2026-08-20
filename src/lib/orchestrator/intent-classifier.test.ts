@@ -53,6 +53,8 @@ const llmResult = {
   suggestedTool: 'search_product_docs' as const,
 };
 
+const USAGE = { promptTokens: 210, completionTokens: 24, totalTokens: 234, cachedPromptTokens: 0 };
+
 describe('classifyUserIntent — B0-504 fallback behavior', () => {
   it('never calls the LLM and degrades to the ambiguous fallback when BEX_LLM_ROUTER_ENABLED is explicitly false (kill-switch)', async () => {
     process.env.BEX_LLM_ROUTER_ENABLED = 'false';
@@ -74,7 +76,7 @@ describe('classifyUserIntent — B0-504 fallback behavior', () => {
 
   it('is enabled by default: an unset BEX_LLM_ROUTER_ENABLED calls the LLM', async () => {
     delete process.env.BEX_LLM_ROUTER_ENABLED;
-    const runLlm = vi.fn().mockResolvedValue(llmResult);
+    const runLlm = vi.fn().mockResolvedValue({ parsed: llmResult, usage: USAGE });
 
     const out = await classifyUserIntent('strip and recoat this VCT floor', [], {
       runLlm,
@@ -84,6 +86,9 @@ describe('classifyUserIntent — B0-504 fallback behavior', () => {
     expect(runLlm).toHaveBeenCalledOnce();
     expect(out.source).toBe('llm');
     expect(out.intent).toBe('floor');
+    // B0-563 — the live call's usage is attributed, tagged with the model that made it.
+    expect(out.usage).toEqual(USAGE);
+    expect(out.model).toBe(resolveRouterModel());
   });
 
   it('degrades to the ambiguous fallback when the LLM call rejects, and never throws', async () => {
@@ -106,7 +111,7 @@ describe('classifyUserIntent — B0-504 fallback behavior', () => {
     const runLlm = vi.fn(
       () =>
         new Promise((resolve) => {
-          setTimeout(() => resolve(llmResult), 100);
+          setTimeout(() => resolve({ parsed: llmResult, usage: USAGE }), 100);
         }),
     );
 
@@ -122,7 +127,7 @@ describe('classifyUserIntent — B0-504 fallback behavior', () => {
 
   it('returns the LLM classification, clamped and tagged, when it resolves in time', async () => {
     process.env.BEX_LLM_ROUTER_ENABLED = 'true';
-    const runLlm = vi.fn().mockResolvedValue({ ...llmResult, confidence: 1.4 });
+    const runLlm = vi.fn().mockResolvedValue({ parsed: { ...llmResult, confidence: 1.4 }, usage: USAGE });
 
     const out = await classifyUserIntent('strip and recoat this VCT floor', [], {
       runLlm,
@@ -137,7 +142,7 @@ describe('classifyUserIntent — B0-504 fallback behavior', () => {
 
   it('caches a successful classification: an identical (message, priorMessages) call does not re-invoke the LLM', async () => {
     process.env.BEX_LLM_ROUTER_ENABLED = 'true';
-    const runLlm = vi.fn().mockResolvedValue(llmResult);
+    const runLlm = vi.fn().mockResolvedValue({ parsed: llmResult, usage: USAGE });
     const priorMessages: PriorTurnMessage[] = [
       { id: 'm1', role: 'user', content: 'hi' },
     ];
@@ -152,7 +157,10 @@ describe('classifyUserIntent — B0-504 fallback behavior', () => {
     });
 
     expect(runLlm).toHaveBeenCalledOnce();
-    expect(second).toEqual(first);
+    // B0-563 — a cache HIT makes no model call, so its usage must not re-attribute the original
+    // call's tokens to this second, free turn; everything else about the cached decision matches.
+    expect(first.usage).toEqual(USAGE);
+    expect(second).toEqual({ ...first, usage: null });
     expect(getIntentClassifierCacheStats()).toMatchObject({ hits: 1, misses: 1 });
   });
 
@@ -161,7 +169,7 @@ describe('classifyUserIntent — B0-504 fallback behavior', () => {
     const runLlm = vi
       .fn()
       .mockRejectedValueOnce(new Error('llm down'))
-      .mockResolvedValueOnce(llmResult);
+      .mockResolvedValueOnce({ parsed: llmResult, usage: USAGE });
 
     const first = await classifyUserIntent('a message', [], { runLlm, now: () => Date.now() });
     const second = await classifyUserIntent('a message', [], { runLlm, now: () => Date.now() });
@@ -253,16 +261,19 @@ describe('classifyUserIntent — B0-515 entity extraction', () => {
   it('passes through every extracted entity field from a realistic recommendations-style message', async () => {
     process.env.BEX_LLM_ROUTER_ENABLED = 'true';
     const runLlm = vi.fn().mockResolvedValue({
-      intent: 'recommendations' as const,
-      confidence: 0.82,
-      entities: {
-        betcoProduct: 'Betco Green Earth NABC',
-        competitorBrand: 'Diversey',
-        competitorProduct: 'Virex II 256',
-        surfaceType: 'stainless steel prep table',
-        taskDescription: 'find the Betco equivalent to disinfect a prep table',
+      parsed: {
+        intent: 'recommendations' as const,
+        confidence: 0.82,
+        entities: {
+          betcoProduct: 'Betco Green Earth NABC',
+          competitorBrand: 'Diversey',
+          competitorProduct: 'Virex II 256',
+          surfaceType: 'stainless steel prep table',
+          taskDescription: 'find the Betco equivalent to disinfect a prep table',
+        },
+        suggestedTool: 'lookup_cross_reference' as const,
       },
-      suggestedTool: 'lookup_cross_reference' as const,
+      usage: USAGE,
     });
 
     const out = await classifyUserIntent(
@@ -286,16 +297,19 @@ describe('classifyUserIntent — B0-515 entity extraction', () => {
   it('leaves every entity field null when the model extracted nothing, rather than defaulting any of them', async () => {
     process.env.BEX_LLM_ROUTER_ENABLED = 'true';
     const runLlm = vi.fn().mockResolvedValue({
-      intent: 'ambiguous' as const,
-      confidence: 0.2,
-      entities: {
-        betcoProduct: null,
-        competitorBrand: null,
-        competitorProduct: null,
-        surfaceType: null,
-        taskDescription: null,
+      parsed: {
+        intent: 'ambiguous' as const,
+        confidence: 0.2,
+        entities: {
+          betcoProduct: null,
+          competitorBrand: null,
+          competitorProduct: null,
+          surfaceType: null,
+          taskDescription: null,
+        },
+        suggestedTool: null,
       },
-      suggestedTool: null,
+      usage: USAGE,
     });
 
     const out = await classifyUserIntent('hello', [], { runLlm, now: () => Date.now() });

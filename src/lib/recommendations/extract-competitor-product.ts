@@ -2,6 +2,15 @@ import { z } from 'zod';
 
 import { getOpenAIClient, resolveResponsesModel } from '~/lib/openai/client';
 import { extractAssistantText } from '~/lib/openai/response-item-parsing';
+import { usageFromResponse, type LlmTokenUsage } from '~/lib/openai/responses-runtime';
+
+/** B0-563 — zero usage for the fallback (no-model-call) path; never null so callers can sum unconditionally. */
+const ZERO_USAGE: LlmTokenUsage = {
+  promptTokens: 0,
+  completionTokens: 0,
+  totalTokens: 0,
+  cachedPromptTokens: 0,
+};
 
 /**
  * B0-183 — extract the competitor brand + product from a free-text recommendation request so the
@@ -31,10 +40,14 @@ export type ExtractedCompetitor = {
   product: string;
   /** B0-357 — set when the message named a second, distinct competitor product that was NOT chosen. */
   otherCompetitorProduct: string | null;
+  /** B0-563 — this call's token usage, so its cost is attributable; `ZERO_USAGE` on the fallback path. */
+  usage: LlmTokenUsage;
 };
 
 export type ExtractCompetitorProductDeps = {
-  runLlm: (userMessage: string) => Promise<z.infer<typeof extractedCompetitorSchema>>;
+  runLlm: (
+    userMessage: string,
+  ) => Promise<{ parsed: z.infer<typeof extractedCompetitorSchema>; usage: LlmTokenUsage }>;
 };
 
 const SYSTEM_PROMPT = `You extract the competitor cleaning/chemical product a user wants cross-referenced to a Betco equivalent.
@@ -63,7 +76,7 @@ const JSON_SCHEMA = {
 
 async function defaultRunLlm(
   userMessage: string,
-): Promise<z.infer<typeof extractedCompetitorSchema>> {
+): Promise<{ parsed: z.infer<typeof extractedCompetitorSchema>; usage: LlmTokenUsage }> {
   const client = getOpenAIClient();
   const res = await client.responses.create({
     model:
@@ -82,7 +95,10 @@ async function defaultRunLlm(
     stream: false,
     temperature: 0,
   });
-  return extractedCompetitorSchema.parse(JSON.parse(extractAssistantText(res)));
+  return {
+    parsed: extractedCompetitorSchema.parse(JSON.parse(extractAssistantText(res))),
+    usage: usageFromResponse(res),
+  };
 }
 
 /** Strip trademark marks, collapse whitespace. */
@@ -98,14 +114,15 @@ export async function extractCompetitorProduct(
     brand: null,
     product: userMessage.trim(),
     otherCompetitorProduct: null,
+    usage: ZERO_USAGE,
   };
   try {
-    const out = await deps.runLlm(userMessage);
+    const { parsed: out, usage } = await deps.runLlm(userMessage);
     const brand = normalize(out.brand) || null;
     const product = normalize(out.product);
     const otherCompetitorProduct = normalize(out.otherCompetitorProduct) || null;
     // No product extracted → fall back to the raw message so the engine still gets a query.
-    return { brand, product: product || fallback.product, otherCompetitorProduct };
+    return { brand, product: product || fallback.product, otherCompetitorProduct, usage };
   } catch {
     return fallback;
   }

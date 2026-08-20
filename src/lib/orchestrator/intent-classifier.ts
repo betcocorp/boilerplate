@@ -6,6 +6,7 @@ import { SME_AGENT_IDS, V1_AGENT_REGISTRY } from '~/lib/agents/agent-registry';
 import { logError } from '~/lib/observability/logger';
 import { getOpenAIClient } from '~/lib/openai/client';
 import { extractAssistantText } from '~/lib/openai/response-item-parsing';
+import { usageFromResponse } from '~/lib/openai/responses-runtime';
 import { PRODUCT_TOOL_NAMES } from '~/lib/tools/tool-schemas';
 
 /**
@@ -69,9 +70,24 @@ const llmIntentClassificationSchema = z.object({
  * unreadable from the persisted trace — post-cutover, a fallback silently routes the turn, so the
  * gate record on `/admin/observability` must carry the reason itself.
  */
+/** B0-563 — mirrors `LlmTokenUsage` (`~/lib/openai/responses-runtime.ts`) as a validated shape. */
+const llmTokenUsageSchema = z.object({
+  promptTokens: z.number(),
+  completionTokens: z.number(),
+  totalTokens: z.number(),
+  cachedPromptTokens: z.number(),
+});
+
 export const intentClassificationSchema = llmIntentClassificationSchema.extend({
   source: z.enum(['llm', 'keyword_fallback']),
   fallbackReason: z.string().nullable(),
+  /**
+   * B0-563 — this call's token usage, so the `orchestration_planner` step can attribute cost.
+   * Null on the `keyword_fallback` path (no model call was made).
+   */
+  usage: llmTokenUsageSchema.nullable(),
+  /** B0-563 — the model actually called, null alongside `usage` on the fallback path. */
+  model: z.string().nullable(),
 });
 
 export type IntentClassification = z.infer<typeof intentClassificationSchema>;
@@ -256,7 +272,10 @@ export type ClassifyUserIntentDeps = {
     message: string,
     priorMessages: PriorTurnMessage[],
     signal: AbortSignal,
-  ) => Promise<z.infer<typeof llmIntentClassificationSchema>>;
+  ) => Promise<{
+    parsed: z.infer<typeof llmIntentClassificationSchema>;
+    usage: z.infer<typeof llmTokenUsageSchema>;
+  }>;
   now: () => number;
 };
 
@@ -264,7 +283,10 @@ async function defaultRunLlm(
   message: string,
   priorMessages: PriorTurnMessage[],
   signal: AbortSignal,
-): Promise<z.infer<typeof llmIntentClassificationSchema>> {
+): Promise<{
+  parsed: z.infer<typeof llmIntentClassificationSchema>;
+  usage: z.infer<typeof llmTokenUsageSchema>;
+}> {
   const client = getOpenAIClient();
   const input = [
     ...priorMessages
@@ -297,7 +319,10 @@ async function defaultRunLlm(
     { signal, maxRetries: 0 },
   );
 
-  return llmIntentClassificationSchema.parse(JSON.parse(extractAssistantText(res)));
+  return {
+    parsed: llmIntentClassificationSchema.parse(JSON.parse(extractAssistantText(res))),
+    usage: usageFromResponse(res),
+  };
 }
 
 const defaultDeps: ClassifyUserIntentDeps = {
@@ -356,6 +381,8 @@ function fallbackClassification(message: string, fallbackReason: string): Intent
     suggestedTool: null,
     source: 'keyword_fallback',
     fallbackReason,
+    usage: null,
+    model: null,
   };
 }
 
@@ -365,7 +392,7 @@ async function runLlmClassification(
   deps: ClassifyUserIntentDeps,
 ): Promise<IntentClassification> {
   const timeoutMs = resolveRouterTimeoutMs();
-  const raw = await withRouterTimeout(timeoutMs, (signal) =>
+  const { parsed: raw, usage } = await withRouterTimeout(timeoutMs, (signal) =>
     deps.runLlm(message, priorMessages, signal),
   );
 
@@ -374,6 +401,8 @@ async function runLlmClassification(
     confidence: clamp01(raw.confidence),
     source: 'llm',
     fallbackReason: null,
+    usage,
+    model: resolveRouterModel(),
   };
 }
 
@@ -403,7 +432,9 @@ export async function classifyUserIntent(
 
   if (existing && existing.expiresAt > now) {
     cacheStats.hits += 1;
-    return existing.promise;
+    // B0-563 — a cache hit makes no model call, so the ORIGINAL call's `usage` must not be
+    // re-attributed to this turn (it would double-count the same tokens on every hit).
+    return existing.promise.then((cached) => ({ ...cached, usage: null }));
   }
 
   pruneCache(now);

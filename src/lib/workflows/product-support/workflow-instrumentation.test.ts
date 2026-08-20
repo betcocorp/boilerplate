@@ -120,6 +120,21 @@ const runRevisionPassMock = vi.fn();
 
 vi.mock('~/lib/openai/responses-runtime', () => ({
   runResponsesWithToolLoop: (...args: unknown[]) => runResponsesWithToolLoopMock(...args),
+  // B0-563 — real mapping (not a stub): `classifyUserIntent`/`extractCompetitorProduct` call this
+  // on whatever fake response `openaiResponsesCreateMock` resolves to in the tests below.
+  usageFromResponse: (response: {
+    usage?: {
+      input_tokens?: number;
+      output_tokens?: number;
+      total_tokens?: number;
+      input_tokens_details?: { cached_tokens?: number };
+    };
+  }) => ({
+    promptTokens: response.usage?.input_tokens ?? 0,
+    completionTokens: response.usage?.output_tokens ?? 0,
+    totalTokens: response.usage?.total_tokens ?? 0,
+    cachedPromptTokens: response.usage?.input_tokens_details?.cached_tokens ?? 0,
+  }),
 }));
 
 vi.mock('~/lib/bex/ai-sdk-runtime', () => ({

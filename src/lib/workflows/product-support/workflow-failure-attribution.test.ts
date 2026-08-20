@@ -126,6 +126,16 @@ vi.mock('~/lib/openai/responses-runtime', () => ({
       },
     ],
   }),
+  // B0-563 — `~/lib/openai/client`'s `getOpenAIClient` returns `{}` above, so any
+  // `client.responses.create` call in this file throws before reaching this function; it only
+  // needs to exist so the named import in `intent-classifier.ts`/`extract-competitor-product.ts`
+  // resolves against this mocked module.
+  usageFromResponse: () => ({
+    promptTokens: 0,
+    completionTokens: 0,
+    totalTokens: 0,
+    cachedPromptTokens: 0,
+  }),
 }));
 
 vi.mock('~/lib/workflows/product-support/validator', () => ({

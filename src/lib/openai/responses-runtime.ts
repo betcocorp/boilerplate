@@ -164,6 +164,16 @@ export type LlmTokenUsage = {
   cachedPromptTokens: number;
 };
 
+/** B0-563 — the one place `Response.usage` is mapped to `LlmTokenUsage`, reused by every other model-calling call site (intent classifier, competitor extraction) so a step's usage is directly comparable to this runtime's. */
+export function usageFromResponse(response: Response): LlmTokenUsage {
+  return {
+    promptTokens: response.usage?.input_tokens ?? 0,
+    completionTokens: response.usage?.output_tokens ?? 0,
+    totalTokens: response.usage?.total_tokens ?? 0,
+    cachedPromptTokens: response.usage?.input_tokens_details?.cached_tokens ?? 0,
+  };
+}
+
 export type ResponsesRuntimeResult = {
   lastResponse: Response;
   finalResponseId: string;
@@ -266,12 +276,7 @@ export async function runResponsesWithToolLoop(
   };
   const usageByCall: LlmTokenUsage[] = [];
   const accumulateUsage = (response: Response) => {
-    const call: LlmTokenUsage = {
-      promptTokens: response.usage?.input_tokens ?? 0,
-      completionTokens: response.usage?.output_tokens ?? 0,
-      totalTokens: response.usage?.total_tokens ?? 0,
-      cachedPromptTokens: response.usage?.input_tokens_details?.cached_tokens ?? 0,
-    };
+    const call = usageFromResponse(response);
     usageByCall.push(call);
     usage.promptTokens += call.promptTokens;
     usage.completionTokens += call.completionTokens;

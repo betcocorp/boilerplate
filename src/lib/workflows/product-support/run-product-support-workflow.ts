@@ -1705,6 +1705,15 @@ export async function runProductSupportWorkflow(input: {
         keywordRoutingGate,
         ...(intentClassifierLiveGate ? [intentClassifierLiveGate] : []),
       ]),
+      /**
+       * B0-563 — `classifyUserIntent`'s live model call was previously uncounted: this is the
+       * ONE step every run has, so it's where that usage belongs. Absent (not zeroed) whenever no
+       * NEW model call was billed for this turn — the router disabled, the keyword fallback, or a
+       * cache hit replaying an earlier call's decision.
+       */
+      ...(liveIntentClassification?.usage
+        ? { usage: liveIntentClassification.usage, model: liveIntentClassification.model }
+        : {}),
     }),
     completed_at: new Date().toISOString(),
   });
@@ -2639,6 +2648,20 @@ export async function runProductSupportWorkflow(input: {
       evidenceSummary = evidenceSummary ? `${xref}\n\n${evidenceSummary}` : xref;
     }
 
+    /**
+     * B0-563 — `extractCompetitorProduct`'s call (via `resolvedCompetitor`, resolved above) runs
+     * inside this step's window but outside `agentResult`'s own tool loop, so its usage was
+     * previously uncounted. Folded in here rather than left on `resolvedCompetitor` alone, so this
+     * step's `usage`/`usageByCall` stay the single source of truth for "every model call this step
+     * made".
+     */
+    const agentStepUsageByCall = resolvedCompetitor
+      ? [...agentResult.usageByCall, resolvedCompetitor.usage]
+      : agentResult.usageByCall;
+    const agentStepUsage = resolvedCompetitor
+      ? sumLlmUsage(agentStepUsageByCall)
+      : agentResult.usage;
+
     await completeWorkflowStep(agentStep.id, {
       status: 'completed',
       output: jsonContent({
@@ -2664,8 +2687,12 @@ export async function runProductSupportWorkflow(input: {
         // B0-324 — token usage for the turn plus the per-model-call breakdown, so prompt-cache
         // reuse across the multi-round tool loop is verifiable from the persisted step alone
         // (`cachedPromptTokens` should be non-zero from the 2nd call onward).
-        usage: agentResult.usage,
-        usageByCall: agentResult.usageByCall,
+        // B0-563 — includes the competitor-extraction call's usage (see agentStepUsage above).
+        usage: agentStepUsage,
+        usageByCall: agentStepUsageByCall,
+        // B0-563 — the model this step's primary calls ran on, so cost views can join
+        // `model_pricing` without reading three different jsonb shapes.
+        model,
         // B0-491 — the agent's own self-reported confidence, persisted alongside the B0-390 tool
         // trace on this same step row (never the validator/step-level `confidence`).
         agentConfidence: agentSelfConfidence.agentConfidence,
@@ -2815,6 +2842,8 @@ export async function runProductSupportWorkflow(input: {
           // B0-554 — the revision pass is its own model call; capture its usage on its own step
           // instead of leaving it unattributed (it used to be dropped entirely).
           usage: revisionResult.usage,
+          // B0-563 — same reasoning as the agent step's `model` field above.
+          model: resolveRevisionModel(input.modelTag),
         }),
       });
       markStepClosed(revisionStep.id);
@@ -3208,7 +3237,12 @@ export async function runProductSupportWorkflow(input: {
          * spread might otherwise leave stale on `validation` from just the LAST call.
          */
         ...(validatorUsageByCall.length > 0
-          ? { usage: sumLlmUsage(validatorUsageByCall), usageByCall: validatorUsageByCall }
+          ? {
+              usage: sumLlmUsage(validatorUsageByCall),
+              usageByCall: validatorUsageByCall,
+              // B0-563 — same reasoning as the agent step's `model` field above.
+              model: resolveValidatorModel(input.modelTag),
+            }
           : {}),
         ...(useValidator && !canSkipValidatorForHighSimilarity
           ? {}
