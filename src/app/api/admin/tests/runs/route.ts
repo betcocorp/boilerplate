@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { authorizeAdminTestsRoute } from '~/lib/api/admin-tests-auth';
 import { APP_VERSION } from '~/lib/app-version';
+import supportedModels from '~/lib/constants/models';
 import {
   createTestResult,
   getTestById,
@@ -24,11 +25,12 @@ const ROUTE = 'POST /api/admin/tests/runs';
  * The search-mode flags default to `false`, matching an unchecked checkbox in the admin form, so a
  * caller that omits them gets the same run the UI would produce. CI passes them explicitly.
  */
+const supportedModelNames = supportedModels.map((m) => m.name);
 const createRunBodySchema = z.object({
   testId: z.string().min(1),
   runMode: z.enum(['full', 'search']).default('full'),
   /** Maps to a concrete chat model in `resolveResponsesModel()`; `preview` is the configured default. */
-  modelTag: z.enum(['preview', 'gpt-4o', 'gpt-4.1']).default('preview'),
+  modelTag: z.enum(['preview', ...supportedModelNames]).default('preview'),
   useHybrid: z.boolean().default(false),
   useReranker: z.boolean().default(false),
   useMultiIntent: z.boolean().default(false),
@@ -47,7 +49,8 @@ export async function POST(request: Request) {
     );
   }
 
-  const { testId, runMode, modelTag, useHybrid, useReranker, useMultiIntent } = parsed.data;
+  const { testId, runMode, modelTag, useHybrid, useReranker, useMultiIntent } =
+    parsed.data;
 
   const test = await getTestById(testId).catch(() => null);
   if (!test) {
@@ -56,7 +59,10 @@ export async function POST(request: Request) {
 
   const items = await getTestItemsByTestId(testId);
   if (items.length === 0) {
-    return NextResponse.json({ error: 'This test has no items to run' }, { status: 409 });
+    return NextResponse.json(
+      { error: 'This test has no items to run' },
+      { status: 409 },
+    );
   }
 
   const run = await createTestResult({
@@ -68,7 +74,9 @@ export async function POST(request: Request) {
     failed_items: 0,
     started_at: new Date().toISOString(),
     run_options:
-      runMode === 'search' ? { useHybrid, useReranker, useMultiIntent } : { modelTag },
+      runMode === 'search'
+        ? { useHybrid, useReranker, useMultiIntent }
+        : { modelTag },
     app_version: APP_VERSION,
     summary: {
       completed_items: 0,

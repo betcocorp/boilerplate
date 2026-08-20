@@ -5,6 +5,7 @@ import { redirect } from 'next/navigation';
 
 import { SME_AGENT_IDS } from '~/lib/agents/agent-registry';
 import { APP_VERSION } from '~/lib/app-version';
+import supportedModels from '~/lib/constants/models';
 import {
   parseCsvColumnNames,
   parseExpectedShouldAnswerFromForm,
@@ -489,13 +490,23 @@ export async function runTestAction(formData: FormData) {
     redirect(encodeMessage(`/admin/tests/${testId}`, 'error', 'This test has no items to run.'));
   }
 
-  // Model the run against a specific chat model. Tags map to concrete models in
-  // resolveResponsesModel(); 'preview' is the configured default.
-  const ALLOWED_MODEL_TAGS = ['preview', 'gpt-4o', 'gpt-4.1'] as const;
+  /**
+   * Model the run against a specific chat model. Tags map to concrete models in
+   * resolveResponsesModel(); 'preview' is the configured default.
+   *
+   * Read from the SAME `~/lib/constants/models` list the form's <select> renders. This was a
+   * hardcoded ['preview','gpt-4o','gpt-4.1'], so any newer model offered by the dropdown fell
+   * through to the `: 'preview'` branch — the run silently executed on the preview default while
+   * recording a model the user never picked. An unknown tag still falls back to 'preview' (a
+   * hand-crafted POST is not a reason to 500), but the allow-list can no longer drift from the UI.
+   */
+  const ALLOWED_MODEL_TAGS: readonly string[] = [
+    'preview',
+    ...supportedModels.map((m) => m.name),
+  ];
   const rawModelTag = formData.get('modelTag');
   const modelTag =
-    typeof rawModelTag === 'string' &&
-    (ALLOWED_MODEL_TAGS as readonly string[]).includes(rawModelTag)
+    typeof rawModelTag === 'string' && ALLOWED_MODEL_TAGS.includes(rawModelTag)
       ? rawModelTag
       : 'preview';
 

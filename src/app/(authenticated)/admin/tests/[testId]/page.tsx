@@ -50,6 +50,7 @@ import {
   formatRunChartAxisLabel,
 } from '~/lib/utils/time';
 
+import supportedModels, { SupportedModel } from '~/lib/constants/models';
 import {
   deleteSearchRunAction,
   deleteTestRunAction,
@@ -211,7 +212,9 @@ export default async function AdminTestDetailsPage({
     trendRuns.map((run) => [
       run.id,
       summarizePromptBundleVersions(
-        (resultItemsByRunId.get(run.id) ?? []).map((item) => item.response_payload),
+        (resultItemsByRunId.get(run.id) ?? []).map(
+          (item) => item.response_payload,
+        ),
       ),
     ]),
   );
@@ -356,8 +359,11 @@ export default async function AdminTestDetailsPage({
                   name="modelTag"
                 >
                   <option value="preview">Model: preview</option>
-                  <option value="gpt-4o">Model: gpt-4o</option>
-                  <option value="gpt-4.1">Model: gpt-4.1</option>
+                  {supportedModels.map((m: SupportedModel) => (
+                    <option key={m.name} value={m.name}>
+                      {m.label}
+                    </option>
+                  ))}
                 </NativeSelect>
                 <Button size="sm" type="submit">
                   Run dataset
@@ -428,7 +434,9 @@ export default async function AdminTestDetailsPage({
                         <TableCell>
                           <PromptBundleVersionBadge
                             summary={
-                              promptBundleVersionSummaryByRunId.get(result.id) ?? {
+                              promptBundleVersionSummaryByRunId.get(
+                                result.id,
+                              ) ?? {
                                 kind: 'none',
                               }
                             }

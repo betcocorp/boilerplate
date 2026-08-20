@@ -1,8 +1,8 @@
 'use client';
 
 import { Check, Copy, Download, Info, Menu, Sparkles } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { Button } from '~/components/ui/button';
 import { Label } from '~/components/ui/label';
@@ -39,6 +39,7 @@ import {
 import { BEX_SUGGESTIONS } from '~/lib/bex/constants';
 import { mapApiMessageToChatMessage } from '~/lib/bex/map-api-messages';
 import { loadUiCache, saveUiCache } from '~/lib/bex/sessions';
+import supportedModels, { SupportedModel } from '~/lib/constants/models';
 import { PERMISSIONS } from '~/lib/permissions/constants';
 import { usePermissionsStore } from '~/lib/stores/permissions';
 import type { ChatMessage, Conversation } from '~/types/bex';
@@ -283,7 +284,15 @@ export function BexChatApp() {
       showTestRuns,
       userFilter: userFilterId,
     });
-  }, [activeId, hydrated, model, useValidator, agentMode, showTestRuns, userFilterId]);
+  }, [
+    activeId,
+    hydrated,
+    model,
+    useValidator,
+    agentMode,
+    showTestRuns,
+    userFilterId,
+  ]);
 
   // B0-451 — re-fetches the list under new filters and updates the sidebar; does not touch
   // messages for the active conversation (a filter change never implies the active thread's
@@ -315,7 +324,10 @@ export function BexChatApp() {
   const handleShowTestRunsChange = useCallback(
     (value: boolean) => {
       setShowTestRuns(value);
-      void applyConversationFilters({ showTestRuns: value, userFilter: userFilterId });
+      void applyConversationFilters({
+        showTestRuns: value,
+        userFilter: userFilterId,
+      });
     },
     [applyConversationFilters, userFilterId],
   );
@@ -555,7 +567,13 @@ export function BexChatApp() {
         setLoadError(e instanceof Error ? e.message : 'Delete failed.');
       }
     },
-    [activeId, fetchConversationList, refreshConversation, showTestRuns, userFilterId],
+    [
+      activeId,
+      fetchConversationList,
+      refreshConversation,
+      showTestRuns,
+      userFilterId,
+    ],
   );
 
   // B0-345: while the initial list/history fetch is running we hold the chat frame and show
@@ -837,7 +855,9 @@ export function BexChatApp() {
                   <SelectItem value="bathroom">Bathroom</SelectItem>
                   <SelectItem value="dilution">Dilution</SelectItem>
                   <SelectItem value="floor">Floor</SelectItem>
-                  <SelectItem value="recommendations">Recommendations</SelectItem>
+                  <SelectItem value="recommendations">
+                    Recommendations
+                  </SelectItem>
                 </SelectContent>
               </Select>
               <Label className="sr-only" htmlFor="bex-model">
@@ -855,9 +875,11 @@ export function BexChatApp() {
                   <SelectItem value="preview">
                     Model: preview (env default)
                   </SelectItem>
-                  <SelectItem value="gpt-4o">gpt-4o</SelectItem>
-                  <SelectItem value="gpt-4.1">gpt-4.1</SelectItem>
-                  <SelectItem value="custom">custom (requires env)</SelectItem>
+                  {supportedModels.map((m: SupportedModel) => (
+                    <SelectItem key={m.name} value={m.name}>
+                      {m.label}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
@@ -905,7 +927,8 @@ export function BexChatApp() {
               triggers for a view-all admin — no extra permission check needed here. */}
           {!showFullWelcome && activeConversation?.isOwner === false ? (
             <p className="border-t border-border/40 px-4 py-2 text-center text-xs text-muted-foreground sm:px-6">
-              Read-only — you&apos;re viewing another user&apos;s conversation. Sending is disabled.
+              Read-only — you&apos;re viewing another user&apos;s conversation.
+              Sending is disabled.
             </p>
           ) : null}
 

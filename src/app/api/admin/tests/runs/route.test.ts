@@ -197,6 +197,34 @@ describe('POST /api/admin/tests/runs (B0-465)', () => {
     expect(updateTestRecord).not.toHaveBeenCalled();
   });
 
+  it('accepts the newer models from ~/lib/constants/models', async () => {
+    signedIn();
+
+    // Proves the `z.enum(['preview', ...supportedModelNames])` spread validates at runtime, not
+    // just that it type-checks — a model added to the shared list is accepted here with no edit.
+    for (const modelTag of ['gpt-5.5', 'gpt-5.6', 'gpt-4.1-mini']) {
+      vi.mocked(createTestResult).mockClear();
+      const response = await POST(makeRequest({ testId: TEST_ID, modelTag }));
+
+      expect(response.status).toBe(200);
+      expect(createTestResult).toHaveBeenCalledWith(
+        expect.objectContaining({ run_options: { modelTag } }),
+      );
+    }
+  });
+
+  it('still rejects a model that is not on the supported list', async () => {
+    signedIn();
+
+    // The enum must remain a real allow-list — otherwise a typo silently bills a wrong model.
+    const response = await POST(
+      makeRequest({ testId: TEST_ID, modelTag: 'gpt-9.9-turbo-imaginary' }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(createTestResult).not.toHaveBeenCalled();
+  });
+
   it('rejects a malformed body with 400 and Zod issues', async () => {
     signedIn();
 
