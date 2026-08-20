@@ -106,6 +106,50 @@ function rateBlockSummary(block: RateBlock) {
   };
 }
 
+function formatPayloadAsText(
+  overall: ReturnType<typeof rateBlockSummary>,
+  tiers: Record<string, ReturnType<typeof rateBlockSummary>>,
+  categories: Record<string, ReturnType<typeof rateBlockSummary>>,
+  strongestCategory: string | null,
+  weakestCategory: string | null,
+  uteCount: number,
+  cases: ReturnType<typeof caseSummary>[],
+): string {
+  const lines: string[] = [];
+
+  lines.push('OVERALL METRICS');
+  lines.push(`  Grade: ${overall.grade}, Pass: ${overall.passPct}%, Partial: ${overall.partialPct}%, Fail: ${overall.failPct}%`);
+  lines.push(`  UTE Count: ${uteCount}`);
+  lines.push('');
+
+  lines.push('BY TIER');
+  for (const [tier, block] of Object.entries(tiers)) {
+    lines.push(`  ${tier}: ${block.grade} (n=${block.n}, avg=${block.avg})`);
+  }
+  lines.push('');
+
+  lines.push('BY CATEGORY');
+  for (const [cat, block] of Object.entries(categories)) {
+    lines.push(`  ${cat}: ${block.grade} (n=${block.n}, avg=${block.avg})`);
+  }
+  lines.push(
+    `  Strongest: ${strongestCategory ?? 'unknown'}, Weakest: ${weakestCategory ?? 'unknown'}`,
+  );
+  lines.push('');
+
+  lines.push('PER-CASE FINDINGS');
+  for (const c of cases) {
+    lines.push(`Case ${c.id} (Tier: ${c.tier}, Category: ${c.category})`);
+    lines.push(`  Grade: ${c.grade} (Overall: ${c.overall}), Status: ${c.status}`);
+    lines.push(`  Explanation: ${c.explanation}`);
+    lines.push(`  Missed: ${c.missed}`);
+    lines.push(`  Incorrect: ${c.incorrect}`);
+    lines.push('');
+  }
+
+  return lines.join('\n');
+}
+
 export async function synthesizeReportFindings(
   metrics: ReportMetrics,
   findingsByCaseId: Map<string, { explanation: string; missed: string; incorrect: string }>,
@@ -114,26 +158,31 @@ export async function synthesizeReportFindings(
   const client = getOpenAIClient();
   const model = resolveResponsesModel(modelTag ?? 'gpt-4.1');
 
-  const payload = {
-    overall: rateBlockSummary(metrics.overall),
-    tiers: Object.fromEntries(metrics.tiers.map(([k, v]) => [k, rateBlockSummary(v)])),
-    categories: Object.fromEntries(metrics.categories.map(([k, v]) => [k, rateBlockSummary(v)])),
-    strongestCategory: metrics.strongestCategory,
-    weakestCategory: metrics.weakestCategory,
-    uteCount: metrics.uteCount,
-    cases: metrics.perCase.map((c) =>
-      caseSummary(
-        c,
-        findingsByCaseId.get(c.id) ?? { explanation: '', missed: '', incorrect: '' },
-      ),
+  const overallSummary = rateBlockSummary(metrics.overall);
+  const tiersSummary = Object.fromEntries(metrics.tiers.map(([k, v]) => [k, rateBlockSummary(v)]));
+  const categoriesSummary = Object.fromEntries(metrics.categories.map(([k, v]) => [k, rateBlockSummary(v)]));
+  const casesSummary = metrics.perCase.map((c) =>
+    caseSummary(
+      c,
+      findingsByCaseId.get(c.id) ?? { explanation: '', missed: '', incorrect: '' },
     ),
-  };
+  );
+
+  const contentText = formatPayloadAsText(
+    overallSummary,
+    tiersSummary,
+    categoriesSummary,
+    metrics.strongestCategory,
+    metrics.weakestCategory,
+    metrics.uteCount,
+    casesSummary,
+  );
 
   try {
     const res = await client.responses.create({
       model,
       instructions: SYNTHESIS_SYSTEM_PROMPT,
-      input: [{ role: 'user', content: JSON.stringify(payload), type: 'message' }],
+      input: [{ role: 'user', content: contentText, type: 'message' }],
       text: {
         format: {
           type: 'json_schema',

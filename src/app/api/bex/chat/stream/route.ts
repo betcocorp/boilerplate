@@ -1,7 +1,7 @@
 import { createUIMessageStream, createUIMessageStreamResponse } from 'ai';
 import { NextResponse } from 'next/server';
 
-import { runBexChatTurn } from '~/lib/bex/run-chat-turn';
+import { type BexChatTurnResult, runBexChatTurn } from '~/lib/bex/run-chat-turn';
 import { getBexActor } from '~/lib/api/bex-actor';
 import { hasBexSession } from '~/lib/api/bex-api-auth';
 import { writeAuditLog } from '~/lib/audit/audit-log';
@@ -157,8 +157,9 @@ export async function POST(request: Request) {
         });
         writer.write({ type: 'text-start', id: textId });
 
+        let result: BexChatTurnResult | null = null;
         try {
-          const result = await runBexChatTurn({
+          result = await runBexChatTurn({
             conversationId: parsed.data.conversationId,
             message: parsed.data.message,
             source: 'bex_chat',
@@ -181,40 +182,6 @@ export async function POST(request: Request) {
               writer.write({ type: 'text-delta', id: textId, delta });
             },
           });
-          const completedAtMs = Date.now();
-          const streamMetrics = {
-            totalMs: completedAtMs - requestStartedAtMs,
-            timeToFirstTokenMs:
-              firstTokenAtMs === null ? null : firstTokenAtMs - requestStartedAtMs,
-            deltaCount,
-            usedFallbackChunking: !hasAssistantDelta,
-          };
-
-          writer.write({
-            type: 'data-bex-meta',
-            data: {
-              traceId: result.traceId,
-              conversationId: result.conversationId,
-              workflowRunId: result.workflowRunId,
-              latestOpenaiResponseId: result.latestOpenaiResponseId,
-              routingDecision: result.routingDecision,
-              streamMetrics,
-            },
-          });
-
-          if (!hasAssistantDelta) {
-            const chunks = chunkText(result.answerText);
-            for (const chunk of chunks) {
-              writer.write({ type: 'text-delta', id: textId, delta: chunk });
-            }
-          }
-          writer.write({ type: 'text-end', id: textId });
-          logInfo('stream_response_completed', {
-            trace_id: traceId,
-            route: 'POST /api/bex/chat/stream',
-            conversationId: result.conversationId,
-            ...streamMetrics,
-          });
         } catch (error) {
           const message =
             error instanceof Error ? error.message : 'Chat workflow failed.';
@@ -225,6 +192,21 @@ export async function POST(request: Request) {
               type: 'status',
               stage: 'request_failed',
               error: message,
+            },
+          });
+          const streamMetrics = {
+            totalMs: failedAtMs - requestStartedAtMs,
+            timeToFirstTokenMs:
+              firstTokenAtMs === null ? null : firstTokenAtMs - requestStartedAtMs,
+            deltaCount,
+            usedFallbackChunking: !hasAssistantDelta,
+          };
+          writer.write({
+            type: 'data-bex-meta',
+            data: {
+              traceId,
+              conversationId: parsed.data.conversationId ?? '',
+              streamMetrics,
             },
           });
           writer.write({ type: 'text-end', id: textId });
@@ -239,6 +221,41 @@ export async function POST(request: Request) {
           });
           throw error;
         }
+
+        const completedAtMs = Date.now();
+        const streamMetrics = {
+          totalMs: completedAtMs - requestStartedAtMs,
+          timeToFirstTokenMs:
+            firstTokenAtMs === null ? null : firstTokenAtMs - requestStartedAtMs,
+          deltaCount,
+          usedFallbackChunking: !hasAssistantDelta,
+        };
+
+        writer.write({
+          type: 'data-bex-meta',
+          data: {
+            traceId: result.traceId,
+            conversationId: result.conversationId,
+            workflowRunId: result.workflowRunId,
+            latestOpenaiResponseId: result.latestOpenaiResponseId,
+            routingDecision: result.routingDecision,
+            streamMetrics,
+          },
+        });
+
+        if (!hasAssistantDelta) {
+          const chunks = chunkText(result.answerText);
+          for (const chunk of chunks) {
+            writer.write({ type: 'text-delta', id: textId, delta: chunk });
+          }
+        }
+        writer.write({ type: 'text-end', id: textId });
+        logInfo('stream_response_completed', {
+          trace_id: traceId,
+          route: 'POST /api/bex/chat/stream',
+          conversationId: result.conversationId,
+          ...streamMetrics,
+        });
       },
     }),
   });
