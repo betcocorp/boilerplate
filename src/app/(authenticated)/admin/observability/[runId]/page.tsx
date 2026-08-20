@@ -269,8 +269,19 @@ export default async function AdminRunTracePage({ params }: PageProps) {
                     <dt className="text-xs uppercase tracking-wide text-slate-500">
                       Conversation
                     </dt>
-                    <dd className="break-all font-mono text-xs text-slate-800">
-                      {run.conversation_id}
+                    <dd className="break-all font-mono text-xs">
+                      {run.conversation_id ? (
+                        <Link
+                          href={`/admin/bex?conversationId=${encodeURIComponent(run.conversation_id)}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-blue-600 hover:text-blue-800 hover:underline"
+                        >
+                          {run.conversation_id}
+                        </Link>
+                      ) : (
+                        <span className="text-slate-500">—</span>
+                      )}
                     </dd>
                   </div>
                 </dl>

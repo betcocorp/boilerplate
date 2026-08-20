@@ -86,7 +86,12 @@ export async function GET(
       // `ok === null` (outcome unknown) and is not a failure.
       failedToolCallCount: toolCalls.filter((event) => event.ok === false).length,
     },
-    run,
+    run: {
+      ...run,
+      bexChatUrl: run.conversation_id
+        ? `/admin/bex?conversationId=${encodeURIComponent(run.conversation_id)}`
+        : null,
+    },
     steps,
     auditLogs,
     timeline,
