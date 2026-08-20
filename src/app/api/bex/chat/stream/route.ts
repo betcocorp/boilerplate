@@ -219,7 +219,7 @@ export async function POST(request: Request) {
               firstTokenAtMs === null ? null : firstTokenAtMs - requestStartedAtMs,
             deltaCount,
           });
-          throw error;
+          return;
         }
 
         const completedAtMs = Date.now();
