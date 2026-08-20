@@ -1,3 +1,17 @@
+/**
+ * B0-599 — model-tag types live in `~/lib/constants/models` (the list the UIs and the run API
+ * already import) and are re-exported here so this file stays the documented entry point without
+ * becoming a second, drift-prone copy.
+ */
+export {
+  BEX_MODEL_TAGS,
+  MODEL_DESCRIPTIONS,
+  isBexModelTag,
+  type BexModelTag,
+  type ExplicitBexModelTag,
+  type SupportedModel,
+} from '~/lib/constants/models';
+
 export type ChatRole = 'user' | 'assistant' | 'system';
 
 export type ChatSourceRef = {
