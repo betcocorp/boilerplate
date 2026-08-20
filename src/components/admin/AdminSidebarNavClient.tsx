@@ -99,11 +99,6 @@ const sidebarSections: NavSectionModel[] = [
             href: '/admin/observability',
             permission: PERMISSIONS.NAVIGATION_SIDEBAR_OBSERVABILITY,
           },
-          {
-            label: 'Cost monitoring',
-            href: '/admin/cost',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_COST,
-          },
         ],
       },
       {

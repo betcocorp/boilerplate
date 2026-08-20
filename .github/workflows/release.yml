@@ -1,14 +1,14 @@
-name: "Release"
+name: 'Release'
 
 on:
   push:
     # main -> stable release; staging/dev -> prerelease channels (x.y.z-staging.N / x.y.z-dev.N)
-    branches: [ "main", "staging", "dev" ]
+    branches: ['main']
   workflow_dispatch:
     inputs:
       dry-run:
         type: boolean
-        description: "Run semantic-release in --dry-run mode (no tag / commit / release)"
+        description: 'Run semantic-release in --dry-run mode (no tag / commit / release)'
         default: false
 
 concurrency:
@@ -29,8 +29,8 @@ jobs:
       # that file outright — setup-node's `pnpm store path` cache probe dies with
       # "ERROR packages field missing or empty" before semantic-release ever runs.
       # pnpm 11 needs Node >= 22.13 (node:sqlite); pinned to match package.json's engines.node.
-      pnpm-version: "11.20.0"
-      node-version: "24"
+      pnpm-version: '11.20.0'
+      node-version: '24'
       dry-run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run || false }}
     secrets:
       RELEASE_APP_ID: ${{ secrets.RELEASE_APP_ID }}

@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  BanknoteArrowDown,
   BookOpen,
   EllipsisVertical,
   KeyRound,
@@ -119,6 +120,11 @@ export function AdminAccountMenu({
     PERMISSIONS.NAVIGATION_SIDEBAR_USER_CHANGELOG,
   );
 
+  const showCostMonitoring = hasPermission(
+    permissions,
+    PERMISSIONS.NAVIGATION_SIDEBAR_COST,
+  );
+
   if (!mounted) {
     return <AccountTrigger userEmail={userEmail} userName={userName} />;
   }
@@ -177,6 +183,15 @@ export function AdminAccountMenu({
                   </Link>
                 </DropdownMenuItem>
               ) : null}
+
+              {showCostMonitoring && (
+                <DropdownMenuItem asChild>
+                  <Link href="/admin/cost">
+                    <BanknoteArrowDown className="size-4" />
+                    Cost monitoring
+                  </Link>
+                </DropdownMenuItem>
+              )}
             </DropdownMenuGroup>
             {showChangelog ? <DropdownMenuSeparator /> : null}
           </>
