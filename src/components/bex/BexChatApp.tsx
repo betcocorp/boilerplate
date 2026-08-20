@@ -39,7 +39,11 @@ import {
 import { BEX_SUGGESTIONS } from '~/lib/bex/constants';
 import { mapApiMessageToChatMessage } from '~/lib/bex/map-api-messages';
 import { loadUiCache, saveUiCache } from '~/lib/bex/sessions';
-import supportedModels, { SupportedModel } from '~/lib/constants/models';
+import supportedModels, {
+  MODEL_DESCRIPTIONS,
+  type BexModelTag,
+  type SupportedModel,
+} from '~/lib/constants/models';
 import { PERMISSIONS } from '~/lib/permissions/constants';
 import { usePermissionsStore } from '~/lib/stores/permissions';
 import type { ChatMessage, Conversation } from '~/types/bex';
@@ -882,6 +886,11 @@ export function BexChatApp() {
                   ))}
                 </SelectContent>
               </Select>
+              {/* B0-602 — what the selected model is and what it costs, so picking one in chat is
+                  an informed choice rather than a guess at an opaque tag. */}
+              <p className="mt-1 max-w-xs text-xs leading-snug text-muted-foreground">
+                {MODEL_DESCRIPTIONS[model as BexModelTag] ?? null}
+              </p>
             </div>
           </header>
 
