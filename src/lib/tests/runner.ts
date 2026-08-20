@@ -366,7 +366,7 @@ export function gradeChatTestResponse(params: {
 export async function runSingleTestItem(
   testResultId: string,
   testItem: TestItemRecord,
-  options?: { modelTag?: string },
+  options?: { modelTag?: string; useValidator?: boolean },
 ): Promise<RunSingleItemResult> {
   const startedAt = Date.now();
   let firstDeltaAt: number | null = null;
@@ -378,7 +378,13 @@ export async function runSingleTestItem(
       message: testItem.prompt,
       source: 'harness',
       modelTag: options?.modelTag,
-      useValidator: false,
+      /**
+       * B0-600 / B0-603 — the validator pass used to be hard-off for every harness run, which made
+       * the Phase 1 "Use Validator: true" A/B test impossible to actually configure. Now opt-in per
+       * run via `test_results.run_options.useValidator`; still defaults to false so existing suites
+       * keep their current cost and behaviour.
+       */
+      useValidator: options?.useValidator ?? false,
       agentMode: 'orchestrator',
       // B0-450: eval-harness conversations are never attributed to whoever kicked off the run.
       owner: { kind: 'system' },

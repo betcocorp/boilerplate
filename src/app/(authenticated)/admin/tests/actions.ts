@@ -510,6 +510,10 @@ export async function runTestAction(formData: FormData) {
       ? rawModelTag
       : 'preview';
 
+  // B0-600 / B0-603 — opt-in validator pass, so a validator A/B run can be started from the UI.
+  // Unchecked box means absent, matching every run created before this field existed.
+  const useValidator = formData.get('useValidator') === 'on';
+
   const testResult = await createTestResult({
     test_id: testId,
     status: 'queued',
@@ -518,7 +522,7 @@ export async function runTestAction(formData: FormData) {
     passed_items: 0,
     failed_items: 0,
     started_at: new Date().toISOString(),
-    run_options: { modelTag },
+    run_options: { modelTag, useValidator },
     app_version: APP_VERSION,
     summary: {
       completed_items: 0,

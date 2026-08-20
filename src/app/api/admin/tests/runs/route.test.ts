@@ -162,7 +162,7 @@ describe('POST /api/admin/tests/runs (B0-465)', () => {
         total_items: 2,
         passed_items: 0,
         failed_items: 0,
-        run_options: { modelTag: 'gpt-4.1' },
+        run_options: { modelTag: 'gpt-4.1', useValidator: false },
         summary: {
           completed_items: 0,
           total_items: 2,
@@ -197,6 +197,30 @@ describe('POST /api/admin/tests/runs (B0-465)', () => {
     expect(updateTestRecord).not.toHaveBeenCalled();
   });
 
+  it('persists the validator opt-in for a full-mode run (B0-600/B0-603)', async () => {
+    signedIn();
+
+    await POST(makeRequest({ testId: TEST_ID, modelTag: 'gpt-5.5', useValidator: true }));
+
+    expect(createTestResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        run_options: { modelTag: 'gpt-5.5', useValidator: true },
+      }),
+    );
+  });
+
+  it('defaults the validator off, matching runs created before the field existed', async () => {
+    signedIn();
+
+    await POST(makeRequest({ testId: TEST_ID }));
+
+    expect(createTestResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        run_options: { modelTag: 'preview', useValidator: false },
+      }),
+    );
+  });
+
   it('accepts the newer models from ~/lib/constants/models', async () => {
     signedIn();
 
@@ -208,7 +232,9 @@ describe('POST /api/admin/tests/runs (B0-465)', () => {
 
       expect(response.status).toBe(200);
       expect(createTestResult).toHaveBeenCalledWith(
-        expect.objectContaining({ run_options: { modelTag } }),
+        expect.objectContaining({
+          run_options: { modelTag, useValidator: false },
+        }),
       );
     }
   });

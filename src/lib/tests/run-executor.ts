@@ -106,6 +106,8 @@ export async function executeTestRun(testResultId: string) {
     typeof runOptions.modelTag === 'string' && runOptions.modelTag.trim()
       ? runOptions.modelTag.trim()
       : undefined;
+  // B0-600 / B0-603 — opt-in validator pass, read from the same run_options blob as modelTag.
+  const useValidator = runOptions.useValidator === true;
   // Use per-item existence check rather than an index offset so that retry (which
   // deletes only errored rows) and normal resume both work correctly when there
   // are gaps in the result set.
@@ -189,7 +191,10 @@ export async function executeTestRun(testResultId: string) {
       return;
     }
 
-    const itemResult = await runSingleTestItem(testResult.id, item, { modelTag });
+    const itemResult = await runSingleTestItem(testResult.id, item, {
+      modelTag,
+      useValidator,
+    });
     // B0-501 — dual-router instrumentation, independent of the answer `runSingleTestItem` already
     // produced above: never changes `itemResult.item`'s pass/fail or response fields, only adds the
     // B0-500 comparison columns before the single insert below.

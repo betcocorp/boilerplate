@@ -31,6 +31,11 @@ const createRunBodySchema = z.object({
   runMode: z.enum(['full', 'search']).default('full'),
   /** Maps to a concrete chat model in `resolveResponsesModel()`; `preview` is the configured default. */
   modelTag: z.enum(['preview', ...supportedModelNames]).default('preview'),
+  /**
+   * B0-600 / B0-603 — enables the validator pass for a full-mode run so a validator A/B test can be
+   * configured. Defaults false, matching every run created before this field existed.
+   */
+  useValidator: z.boolean().default(false),
   useHybrid: z.boolean().default(false),
   useReranker: z.boolean().default(false),
   useMultiIntent: z.boolean().default(false),
@@ -49,8 +54,15 @@ export async function POST(request: Request) {
     );
   }
 
-  const { testId, runMode, modelTag, useHybrid, useReranker, useMultiIntent } =
-    parsed.data;
+  const {
+    testId,
+    runMode,
+    modelTag,
+    useValidator,
+    useHybrid,
+    useReranker,
+    useMultiIntent,
+  } = parsed.data;
 
   const test = await getTestById(testId).catch(() => null);
   if (!test) {
@@ -76,7 +88,7 @@ export async function POST(request: Request) {
     run_options:
       runMode === 'search'
         ? { useHybrid, useReranker, useMultiIntent }
-        : { modelTag },
+        : { modelTag, useValidator },
     app_version: APP_VERSION,
     summary: {
       completed_items: 0,
