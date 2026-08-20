@@ -14,7 +14,9 @@ import {
 } from '~/components/admin/observability/RunsTable';
 import { SME_AGENT_IDS } from '~/lib/agents/agent-registry';
 import { getAggregateDashboardData } from '~/lib/observability/aggregates';
+import { resolveUserFilterInput } from '~/lib/observability/run-attribution';
 import { listWorkflowRuns } from '~/lib/observability/runs-repository';
+import { listTests } from '~/lib/tests/repository';
 import { readSearchParam } from '~/lib/utils/params';
 
 import type {
@@ -119,6 +121,27 @@ export default async function AdminObservabilityPage({ searchParams }: PageProps
     ? (sourceParam as RunSourceFilter)
     : undefined;
 
+  // B0-338 — "single test" filter. `tests` is a couple dozen rows, cheap to fetch for the
+  // dropdown and to validate the requested id against; a failure here degrades to an empty
+  // dropdown rather than breaking the runs list (caught separately from the main load below).
+  let testOptions: { id: string; name: string }[] = [];
+  try {
+    testOptions = (await listTests()).map((test) => ({ id: test.id, name: test.name }));
+  } catch {
+    testOptions = [];
+  }
+  const testIdParam = readSearchParam(params.testId).trim();
+  const testId = testOptions.some((test) => test.id === testIdParam) ? testIdParam : '';
+
+  // B0-338 — "single user" filter. Accepts a raw `app_user.user_id` (plain text — Salesforce ids,
+  // GUIDs, …) or an email address, resolved to a user_id below. Capped rather than
+  // shape-validated, mirroring the prompt search term above.
+  const userId = readSearchParam(params.userId).trim().slice(0, SEARCH_MAX_CHARS);
+  // An email that matches no `app_user` row resolves to null: the filter must return "no runs
+  // match" rather than silently ignoring a stale/typo'd filter and showing everyone's runs.
+  const resolvedUserId = userId ? await resolveUserFilterInput(userId) : undefined;
+  const userFilterMatchedNothing = Boolean(userId) && resolvedUserId === null;
+
   const requestedPage = Number.parseInt(readSearchParam(params.page, '1'), 10);
   const page = Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : 1;
 
@@ -134,6 +157,8 @@ export default async function AdminObservabilityPage({ searchParams }: PageProps
     confidenceMax: confidenceMax.raw,
     source: source ?? '',
     search,
+    userId,
+    testId,
   };
 
   let loadError: string | null = null;
@@ -142,24 +167,32 @@ export default async function AdminObservabilityPage({ searchParams }: PageProps
   let aggregates: AggregateDashboardData | null = null;
 
   try {
-    const [runs, dashboard] = await Promise.all([
-      listWorkflowRuns({
-        from: windowFrom,
-        to: windowTo,
-        status: status || undefined,
-        routingDecision: routingDecision || undefined,
-        confidenceMin: confidenceMin.parsed,
-        confidenceMax: confidenceMax.parsed,
-        source,
-        search: search || undefined,
-        limit: PAGE_SIZE,
-        offset: (page - 1) * PAGE_SIZE,
-      }),
-      getAggregateDashboardData({ from: windowFrom, to: windowTo }),
-    ]);
-    rows = runs.rows;
-    hasMore = runs.hasMore;
-    aggregates = dashboard;
+    if (userFilterMatchedNothing) {
+      // The typed email/id matched no `app_user` row — report "no runs match" rather than
+      // silently dropping the filter and showing every user's runs.
+      aggregates = await getAggregateDashboardData({ from: windowFrom, to: windowTo });
+    } else {
+      const [runs, dashboard] = await Promise.all([
+        listWorkflowRuns({
+          from: windowFrom,
+          to: windowTo,
+          status: status || undefined,
+          routingDecision: routingDecision || undefined,
+          confidenceMin: confidenceMin.parsed,
+          confidenceMax: confidenceMax.parsed,
+          source,
+          search: search || undefined,
+          userId: resolvedUserId || undefined,
+          testId: testId || undefined,
+          limit: PAGE_SIZE,
+          offset: (page - 1) * PAGE_SIZE,
+        }),
+        getAggregateDashboardData({ from: windowFrom, to: windowTo }),
+      ]);
+      rows = runs.rows;
+      hasMore = runs.hasMore;
+      aggregates = dashboard;
+    }
   } catch (error) {
     loadError =
       error instanceof Error
@@ -202,6 +235,7 @@ export default async function AdminObservabilityPage({ searchParams }: PageProps
           page={page}
           route={ROUTE}
           rows={rows}
+          testOptions={testOptions}
         />
       </main>
     </div>

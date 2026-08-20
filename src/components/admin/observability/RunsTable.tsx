@@ -8,6 +8,7 @@
 
 import Link from 'next/link';
 
+import { RunAttributionBadge } from '~/components/admin/observability/RunAttributionBadge';
 import { RunsFilters } from '~/components/admin/observability/RunsFilters';
 import { Badge } from '~/components/ui/badge';
 import {
@@ -63,6 +64,10 @@ export type RunsTableFilters = {
    * later pages.
    */
   search: string;
+  /** B0-338 — `''` (all) or an `app_user.user_id` to filter to that one asker. */
+  userId: string;
+  /** B0-338 — `''` (all) or a `tests.id` to filter to that one test's runs. */
+  testId: string;
 };
 
 type RunsTableProps = {
@@ -71,6 +76,8 @@ type RunsTableProps = {
   hasMore: boolean;
   page: number;
   filters: RunsTableFilters;
+  /** B0-338 — options for the "single test" filter dropdown. */
+  testOptions: { id: string; name: string }[];
 };
 
 export function buildObservabilityHref(
@@ -87,6 +94,8 @@ export function buildObservabilityHref(
   if (filters.confidenceMin) params.set('confidenceMin', filters.confidenceMin);
   if (filters.confidenceMax) params.set('confidenceMax', filters.confidenceMax);
   if (filters.source) params.set('source', filters.source);
+  if (filters.userId) params.set('userId', filters.userId);
+  if (filters.testId) params.set('testId', filters.testId);
   if (page > 1) params.set('page', String(page));
   const qs = params.toString();
   return qs ? `${route}?${qs}` : route;
@@ -109,10 +118,10 @@ function confidenceLabel(confidence: number | null): string {
   return typeof confidence === 'number' ? `${(confidence * 100).toFixed(0)}%` : '—';
 }
 
-export function RunsTable({ route, rows, hasMore, page, filters }: RunsTableProps) {
+export function RunsTable({ route, rows, hasMore, page, filters, testOptions }: RunsTableProps) {
   return (
     <>
-      <RunsFilters filters={filters} route={route} />
+      <RunsFilters filters={filters} route={route} testOptions={testOptions} />
 
       {/* Runs */}
       <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
@@ -133,6 +142,7 @@ export function RunsTable({ route, rows, hasMore, page, filters }: RunsTableProp
               <TableRow>
                 <TableHead>Started</TableHead>
                 <TableHead>Source</TableHead>
+                <TableHead>Asked by</TableHead>
                 <TableHead>Agent</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Confidence</TableHead>
@@ -148,7 +158,7 @@ export function RunsTable({ route, rows, hasMore, page, filters }: RunsTableProp
             <TableBody>
               {rows.length === 0 ? (
                 <TableRow>
-                  <TableCell className="text-slate-500" colSpan={9}>
+                  <TableCell className="text-slate-500" colSpan={10}>
                     {filters.search
                       ? `No workflow runs match “${filters.search}” with these filters.`
                       : 'No workflow runs match these filters.'}
@@ -187,6 +197,9 @@ export function RunsTable({ route, rows, hasMore, page, filters }: RunsTableProp
                           </Badge>
                         );
                       })()}
+                    </TableCell>
+                    <TableCell className="relative z-10 max-w-[16rem] align-top text-sm">
+                      <RunAttributionBadge attribution={run.attribution} />
                     </TableCell>
                     <TableCell className="align-top">
                       {run.routingDecision ? (

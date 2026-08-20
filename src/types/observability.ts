@@ -241,7 +241,32 @@ export type WorkflowRunListRow = {
    */
   ttftMs: number | null;
   userMessagePreview: string | null;
+  /** B0-338 — who asked for this run. See `RunAttribution` below. */
+  attribution: RunAttribution;
 };
+
+/**
+ * B0-338 — "who asked?" for a workflow run (epic B0-330 Phase 8), resolved by
+ * `~/lib/observability/run-attribution.ts`. Checked in this priority order:
+ *
+ *  1. `test`   — the run is linked to a `test_result_items` row via the indexed
+ *     `workflow_run_id` column (the same linkage `harness-linkage.ts` uses for the trace page's
+ *     verdict band). Attributed to the specific test, never a generic "harness" label.
+ *  2. `user`   — `workflow_runs.conversation_id` resolves to an `agent_conversations.user_id`,
+ *     joined to `app_user` for a display name / email.
+ *  3. `api_client` — `workflow_runs.source = 'orchestrator_api'` with no conversation owner.
+ *     `api_request_log` has no `workflow_run_id` column, so a specific app/project cannot be
+ *     correlated back to a specific run — deliberately out of scope for B0-338. Labeled
+ *     explicitly so these never render identical to a plain unattributed `bex_chat`/`harness` run.
+ *  4. `unknown` — none of the above: pre-instrumentation runs, a deleted conversation, an
+ *     unattributed service-token conversation, etc. Always rendered as an explicit neutral
+ *     state in the UI, never blank and never mislabeled as a user.
+ */
+export type RunAttribution =
+  | { kind: 'user'; userId: string; displayName: string | null; email: string | null }
+  | { kind: 'test'; testId: string; testName: string; testResultId: string; testItemId: string }
+  | { kind: 'api_client' }
+  | { kind: 'unknown' };
 
 export type ListWorkflowRunsFilters = {
   from?: string; // ISO, inclusive
@@ -258,6 +283,10 @@ export type ListWorkflowRunsFilters = {
    * (`user_input->>message`). Callers pass an already-normalized term.
    */
   search?: string;
+  /** B0-338 — narrows to runs attributed (see `RunAttribution`) to this one `app_user.user_id`. */
+  userId?: string;
+  /** B0-338 — narrows to runs attributed to this one `tests.id`. */
+  testId?: string;
   limit?: number;
   offset?: number;
 };

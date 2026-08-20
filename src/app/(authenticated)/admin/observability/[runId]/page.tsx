@@ -3,6 +3,7 @@ import { connection } from 'next/server';
 
 import { HarnessVerdictBand } from '~/components/admin/observability/HarnessVerdictBand';
 import { PromptHistoryStrip } from '~/components/admin/observability/PromptHistoryStrip';
+import { RunAttributionBadge } from '~/components/admin/observability/RunAttributionBadge';
 import { RunAnswerPanel } from '~/components/admin/observability/RunAnswerPanel';
 import { RunInsightsProvider } from '~/components/admin/observability/run-insights-context';
 import { RunPayloadSummary } from '~/components/admin/observability/RunPayloadSummary';
@@ -244,7 +245,14 @@ export default async function AdminRunTracePage({ params }: PageProps) {
                   ) : null}
                 </div>
 
-                <dl className="mt-6 grid gap-3 text-sm sm:grid-cols-3">
+                <dl className="mt-6 grid gap-3 text-sm sm:grid-cols-4">
+                  <div className="flex flex-col gap-0.5">
+                    {/* B0-338 — who asked for this run. */}
+                    <dt className="text-xs uppercase tracking-wide text-slate-500">Asked by</dt>
+                    <dd className="text-sm">
+                      <RunAttributionBadge attribution={trace?.attribution ?? { kind: 'unknown' }} />
+                    </dd>
+                  </div>
                   <div className="flex flex-col gap-0.5">
                     <dt className="text-xs uppercase tracking-wide text-slate-500">Created</dt>
                     <dd className="font-mono text-xs text-slate-800">

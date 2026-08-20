@@ -16,6 +16,12 @@ import {
   type WorkflowStepRow,
 } from '~/lib/conversations/workflow-repository';
 import {
+  getRunAttribution,
+  resolveConversationIdsForUser,
+  resolveRunAttributions,
+  resolveWorkflowRunIdsForTest,
+} from '~/lib/observability/run-attribution';
+import {
   buildRunTimeline,
   deriveRunEmptyState,
   type RunEmptyState,
@@ -25,6 +31,7 @@ import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 import type {
   AuditLogRow,
   ListWorkflowRunsFilters,
+  RunAttribution,
   RunSource,
   TimelineEvent,
   WorkflowRunListRow,
@@ -138,6 +145,7 @@ function toListRow(
   row: WorkflowRunRow,
   source: RunSource | null,
   harnessTtftMs: number | null,
+  attribution: RunAttribution,
 ): WorkflowRunListRow {
   return {
     id: row.id,
@@ -154,6 +162,7 @@ function toListRow(
     // B0-428 instrumented the workflow.
     ttftMs: readTtftMs(row.final_output) ?? harnessTtftMs,
     userMessagePreview: readUserMessagePreview(row.user_input),
+    attribution,
   };
 }
 
@@ -264,10 +273,37 @@ export async function listWorkflowRuns(
   const limit = clampLimit(filters.limit);
   const offset = clampOffset(filters.offset);
 
+  // B0-338 — "single user" / "single test" filters resolve to a set of ids up front (both
+  // sides of the join are small: `agent_conversations` is one user's rows, `test_result_items`
+  // is one test's runs), then narrow the main query with `.in('id'/'conversation_id', ...)`.
+  // An empty resolved set means "no runs match" without a wasted `workflow_runs` query.
+  let testFilterRunIds: string[] | null = null;
+  if (filters.testId) {
+    testFilterRunIds = await resolveWorkflowRunIdsForTest(filters.testId);
+    if (testFilterRunIds.length === 0) {
+      return { rows: [], hasMore: false };
+    }
+  }
+
+  let userFilterConversationIds: string[] | null = null;
+  if (filters.userId) {
+    userFilterConversationIds = await resolveConversationIdsForUser(filters.userId);
+    if (userFilterConversationIds.length === 0) {
+      return { rows: [], hasMore: false };
+    }
+  }
+
   let query = supabase
     .from('workflow_runs')
     .select()
     .order('created_at', { ascending: false });
+
+  if (testFilterRunIds) {
+    query = query.in('id', testFilterRunIds);
+  }
+  if (userFilterConversationIds) {
+    query = query.in('conversation_id', userFilterConversationIds);
+  }
 
   // B0-431 — a run id names exactly one run, so the date window must not hide it. Without
   // this, pasting an id from an older alert returns nothing while the filter bar still shows
@@ -325,10 +361,25 @@ export async function listWorkflowRuns(
 
   // Only for the "Stream" column's harness fallback (B0-428): one bounded query keyed on the
   // page's run ids. Run origin comes off each row's own `source` column.
-  const harnessTtft = await indexHarnessTtftByRunIds(page.map((row) => row.id));
+  const [harnessTtft, attributionIndex] = await Promise.all([
+    indexHarnessTtftByRunIds(page.map((row) => row.id)),
+    // B0-338 — "Asked by" column: resolved for exactly this page, same bound as the TTFT lookup.
+    resolveRunAttributions(
+      page.map((row) => ({
+        id: row.id,
+        conversationId: row.conversation_id,
+        source: readRunSource(row.source),
+      })),
+    ),
+  ]);
 
   const rows = page.map((row) =>
-    toListRow(row, readRunSource(row.source), harnessTtft.get(row.id) ?? null),
+    toListRow(
+      row,
+      readRunSource(row.source),
+      harnessTtft.get(row.id) ?? null,
+      attributionIndex.get(row.id) ?? { kind: 'unknown' },
+    ),
   );
 
   return { rows, hasMore };
@@ -346,13 +397,22 @@ export async function getWorkflowRunTrace(runId: string): Promise<{
   timeline: TimelineEvent[];
   /** B0-399 — which (if any) of the four empty/degraded-state banners the page should render. */
   emptyState: RunEmptyState;
+  /** B0-338 — who asked for this run. */
+  attribution: RunAttribution;
 } | null> {
   const bundle = await getWorkflowRunWithSteps(runId);
   if (!bundle) {
     return null;
   }
 
-  const auditLogs = (await listAuditLogsForRun(runId)) as AuditLogRow[];
+  const [auditLogs, attribution] = await Promise.all([
+    listAuditLogsForRun(runId) as Promise<AuditLogRow[]>,
+    getRunAttribution({
+      id: bundle.run.id,
+      conversationId: bundle.run.conversation_id,
+      source: readRunSource(bundle.run.source),
+    }),
+  ]);
   const timeline = buildRunTimeline(bundle.run, bundle.steps, auditLogs);
 
   return {
@@ -361,5 +421,6 @@ export async function getWorkflowRunTrace(runId: string): Promise<{
     auditLogs,
     timeline,
     emptyState: deriveRunEmptyState(bundle.run, bundle.steps, timeline),
+    attribution,
   };
 }
