@@ -19,6 +19,7 @@ import { Input } from '~/components/ui/input';
 import { Label } from '~/components/ui/label';
 import { NativeSelect } from '~/components/ui/native-select';
 import { SME_AGENT_IDS } from '~/lib/agents/agent-registry';
+import { PRODUCT_TOOL_NAMES } from '~/lib/tools/tool-schemas';
 
 import type { RunsTableFilters } from './RunsTable';
 
@@ -236,6 +237,24 @@ export function RunsFilters({
               </NativeSelect>
             </div>
 
+            <div className="flex min-w-0 flex-col gap-2">
+              <Label className="text-sm text-slate-700" htmlFor="observability-tool">
+                Tool call
+              </Label>
+              <NativeSelect
+                defaultValue={filters.toolName}
+                id="observability-tool"
+                name="tool"
+              >
+                <option value="">All tools</option>
+                {PRODUCT_TOOL_NAMES.map((tool) => (
+                  <option key={tool} value={tool}>
+                    {tool}
+                  </option>
+                ))}
+              </NativeSelect>
+            </div>
+
             <div className="flex items-end gap-2">
               <Button type="submit">Apply filters</Button>
               <Button asChild type="button" variant="outline">
@@ -250,6 +269,8 @@ export function RunsFilters({
             confidence bound excludes runs that never recorded a confidence (in-flight or
             failed runs). &ldquo;Asked by&rdquo; and &ldquo;Test&rdquo; filter to runs attributed
             (B0-338) to that one user or that one test, regardless of the run&apos;s source.
+            &ldquo;Tool call&rdquo; narrows to runs whose agent step actually called that tool at
+            least once.
           </p>
         </>
       ) : null}

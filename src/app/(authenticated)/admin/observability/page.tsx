@@ -17,6 +17,7 @@ import { getAggregateDashboardData } from '~/lib/observability/aggregates';
 import { resolveUserFilterInput } from '~/lib/observability/run-attribution';
 import { listWorkflowRuns } from '~/lib/observability/runs-repository';
 import { listTests } from '~/lib/tests/repository';
+import { PRODUCT_TOOL_NAMES } from '~/lib/tools/tool-schemas';
 import { readSearchParam } from '~/lib/utils/params';
 
 import type {
@@ -42,6 +43,8 @@ const RUN_STATUSES = new Set(['running', 'completed', 'failed']);
 const RUN_SOURCE_FILTERS = new Set(['harness', 'bex_chat', 'orchestrator_api', 'unknown']);
 /** `routingDecisionSchema` values: an SME agent id, or the planner's `ambiguous`. */
 const ROUTING_DECISIONS = new Set<string>([...SME_AGENT_IDS, 'ambiguous']);
+/** B0-593 — the static, compile-time set of callable tool names, for the "Tool call" filter. */
+const TOOL_NAMES = new Set<string>(PRODUCT_TOOL_NAMES);
 const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 /** B0-431 — bound on the `q` term so a pathological URL can't build a huge LIKE pattern. */
 const SEARCH_MAX_CHARS = 200;
@@ -111,6 +114,9 @@ export default async function AdminObservabilityPage({ searchParams }: PageProps
   const agentParam = readSearchParam(params.agent).trim();
   const routingDecision = ROUTING_DECISIONS.has(agentParam) ? agentParam : '';
 
+  const toolParam = readSearchParam(params.tool).trim();
+  const toolName = TOOL_NAMES.has(toolParam) ? toolParam : '';
+
   const confidenceMin = readConfidence(readSearchParam(params.confidenceMin).trim());
   const confidenceMax = readConfidence(readSearchParam(params.confidenceMax).trim());
 
@@ -159,6 +165,7 @@ export default async function AdminObservabilityPage({ searchParams }: PageProps
     search,
     userId,
     testId,
+    toolName,
   };
 
   let loadError: string | null = null;
@@ -184,6 +191,7 @@ export default async function AdminObservabilityPage({ searchParams }: PageProps
           search: search || undefined,
           userId: resolvedUserId || undefined,
           testId: testId || undefined,
+          toolName: toolName || undefined,
           limit: PAGE_SIZE,
           offset: (page - 1) * PAGE_SIZE,
         }),

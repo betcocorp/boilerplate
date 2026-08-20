@@ -68,6 +68,8 @@ export type RunsTableFilters = {
   userId: string;
   /** B0-338 — `''` (all) or a `tests.id` to filter to that one test's runs. */
   testId: string;
+  /** B0-593 — `''` (all) or one of `PRODUCT_TOOL_NAMES` to filter to runs that called that tool. */
+  toolName: string;
 };
 
 type RunsTableProps = {
@@ -96,6 +98,7 @@ export function buildObservabilityHref(
   if (filters.source) params.set('source', filters.source);
   if (filters.userId) params.set('userId', filters.userId);
   if (filters.testId) params.set('testId', filters.testId);
+  if (filters.toolName) params.set('tool', filters.toolName);
   if (page > 1) params.set('page', String(page));
   const qs = params.toString();
   return qs ? `${route}?${qs}` : route;

@@ -294,6 +294,12 @@ export type ListWorkflowRunsFilters = {
   userId?: string;
   /** B0-338 — narrows to runs attributed to this one `tests.id`. */
   testId?: string;
+  /**
+   * B0-593 — narrows to runs whose agent step's persisted `output.toolTrace` (see
+   * `ToolCallTimelineEvent`) contains at least one call to this tool. One of the static
+   * `PRODUCT_TOOL_NAMES` (`~/lib/tools/tool-schemas.ts`); callers pass an already-validated name.
+   */
+  toolName?: string;
   limit?: number;
   offset?: number;
 };

@@ -257,6 +257,59 @@ export async function indexHarnessWorkflowRuns(
 }
 
 /**
+ * B0-593 — `workflow_runs.id`s whose agent step (`step_name = 'openai_responses_agent'`) recorded
+ * a call to `toolName` in its persisted `output.toolTrace` (B0-331). `output->toolTrace` carries no
+ * index, so — like `indexHarnessWorkflowRuns` above — this stays a windowed, page-capped scan
+ * rather than one unbounded query; `from`/`to` (the same run-window bounds the caller already
+ * applies to `workflow_runs.created_at`) are applied to `workflow_steps.started_at`, which closely
+ * tracks its run's `created_at`, to keep the scan bounded as the table grows. Verified against live
+ * data (see B0-593 QA notes): `.filter('output->toolTrace', 'cs', ...)` matches exactly the set of
+ * rows a `jsonb_array_elements` + `toolName` equality scan finds.
+ */
+export async function resolveWorkflowRunIdsForToolCall(
+  toolName: string,
+  from?: string,
+  to?: string,
+): Promise<string[]> {
+  const supabase = getSupabaseServiceRoleClient();
+  const runIds = new Set<string>();
+
+  for (let page = 0; page < HARNESS_SCAN_MAX_PAGES; page += 1) {
+    const start = page * HARNESS_SCAN_PAGE_SIZE;
+    let query = supabase
+      .from('workflow_steps')
+      .select('workflow_run_id')
+      .eq('step_name', 'openai_responses_agent')
+      .filter('output->toolTrace', 'cs', JSON.stringify([{ toolName }]));
+
+    if (from) {
+      query = query.gte('started_at', from);
+    }
+    if (to) {
+      query = query.lte('started_at', to);
+    }
+
+    const { data, error } = await query.range(start, start + HARNESS_SCAN_PAGE_SIZE - 1);
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    const rows = data ?? [];
+    for (const row of rows) {
+      if (row.workflow_run_id) {
+        runIds.add(row.workflow_run_id);
+      }
+    }
+
+    if (rows.length < HARNESS_SCAN_PAGE_SIZE) {
+      break;
+    }
+  }
+
+  return [...runIds];
+}
+
+/**
  * Filtered, offset-paginated run list for `/admin/observability`.
  *
  * Routing is filtered with a PostgREST JSON-path equality on
@@ -273,14 +326,31 @@ export async function listWorkflowRuns(
   const limit = clampLimit(filters.limit);
   const offset = clampOffset(filters.offset);
 
-  // B0-338 — "single user" / "single test" filters resolve to a set of ids up front (both
-  // sides of the join are small: `agent_conversations` is one user's rows, `test_result_items`
-  // is one test's runs), then narrow the main query with `.in('id'/'conversation_id', ...)`.
-  // An empty resolved set means "no runs match" without a wasted `workflow_runs` query.
-  let testFilterRunIds: string[] | null = null;
+  // B0-338 / B0-593 — "single user" / "single test" / "tool call" filters each resolve to a set
+  // of ids up front (small joins: `agent_conversations` is one user's rows, `test_result_items`
+  // is one test's runs, `workflow_steps` is capped-and-paged for the tool-trace scan), then narrow
+  // the main query with `.in('id'/'conversation_id', ...)`. `testId` and `toolName` both resolve to
+  // `workflow_runs.id`s, so they are intersected in application code (rather than applying two
+  // `.in('id', …)` calls) so the two filters narrow the SAME query instead of relying on
+  // same-column filter semantics. An empty resolved set means "no runs match" without a wasted
+  // `workflow_runs` query.
+  let idFilterRunIds: string[] | null = null;
+  const intersectIds = (existing: string[] | null, next: string[]): string[] =>
+    existing === null ? next : existing.filter((id) => next.includes(id));
+
   if (filters.testId) {
-    testFilterRunIds = await resolveWorkflowRunIdsForTest(filters.testId);
-    if (testFilterRunIds.length === 0) {
+    idFilterRunIds = intersectIds(idFilterRunIds, await resolveWorkflowRunIdsForTest(filters.testId));
+    if (idFilterRunIds.length === 0) {
+      return { rows: [], hasMore: false };
+    }
+  }
+
+  if (filters.toolName) {
+    idFilterRunIds = intersectIds(
+      idFilterRunIds,
+      await resolveWorkflowRunIdsForToolCall(filters.toolName, filters.from, filters.to),
+    );
+    if (idFilterRunIds.length === 0) {
       return { rows: [], hasMore: false };
     }
   }
@@ -298,8 +368,8 @@ export async function listWorkflowRuns(
     .select()
     .order('created_at', { ascending: false });
 
-  if (testFilterRunIds) {
-    query = query.in('id', testFilterRunIds);
+  if (idFilterRunIds) {
+    query = query.in('id', idFilterRunIds);
   }
   if (userFilterConversationIds) {
     query = query.in('conversation_id', userFilterConversationIds);
