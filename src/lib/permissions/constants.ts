@@ -25,6 +25,7 @@ export const PERMISSIONS = {
   NAVIGATION_SIDEBAR_LABELS: 'navigation.sidebar.labels',
   NAVIGATION_SIDEBAR_USER_API_ACCESS: 'navigation.sidebar.user.api_access',
   NAVIGATION_SIDEBAR_USER_CHANGELOG: 'navigation.sidebar.user.changelog',
+  NAVIGATION_SIDEBAR_COST: 'navigation.sidebar.cost',
 } as const;
 
 export type PermissionId =
