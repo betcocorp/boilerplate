@@ -52,6 +52,8 @@ export type CostMetricsResult = {
   endDate: string;
   points: CostMetricsPoint[];
   yoy: CostYoyPoint[] | null;
+  /** Distinct workflow_runs with at least one cost-tracked step in [startDate, endDate]. */
+  runCount: number;
 };
 
 /** Approximate day-span per button; only used to derive a default window, never for YoY math (the `cost_comparison_yoy` view aligns on exact calendar months). */
@@ -158,14 +160,37 @@ async function fetchYoyPoints(params: {
     }));
 }
 
+async function fetchCoveredRunCount(params: { startDate: string; endDate: string }): Promise<number> {
+  const supabase = getSupabaseServiceRoleClient();
+  const { data, error } = await supabase.rpc('cost_covered_run_count', {
+    p_start: `${params.startDate}T00:00:00.000Z`,
+    p_end: `${params.endDate}T23:59:59.999Z`,
+  });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return data ?? 0;
+}
+
 async function loadCostMetrics(input: CostMetricsInput): Promise<CostMetricsResult> {
   const { startDate, endDate } = resolveCostWindow(input);
-  const [points, yoy] = await Promise.all([
+  const [points, yoy, runCount] = await Promise.all([
     fetchCostPoints({ groupBy: input.groupBy, startDate, endDate }),
     input.compareYoY ? fetchYoyPoints({ startDate, endDate }) : Promise.resolve(null),
+    fetchCoveredRunCount({ startDate, endDate }),
   ]);
 
-  return { timeRange: input.timeRange, groupBy: input.groupBy, startDate, endDate, points, yoy };
+  return {
+    timeRange: input.timeRange,
+    groupBy: input.groupBy,
+    startDate,
+    endDate,
+    points,
+    yoy,
+    runCount,
+  };
 }
 
 /** 1h cache — cost data changes with every workflow run, but a dashboard refresh doesn't need to. */

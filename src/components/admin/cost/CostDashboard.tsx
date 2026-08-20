@@ -194,7 +194,7 @@ export function CostDashboard({ initial }: { initial: CostMetricsResult }) {
         </p>
       )}
 
-      <div className="grid gap-4 sm:grid-cols-3">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Card>
           <CardHeader>
             <CardDescription>Total cost</CardDescription>
@@ -208,6 +208,14 @@ export function CostDashboard({ initial }: { initial: CostMetricsResult }) {
             <CardDescription>Total tokens</CardDescription>
             <CardTitle className="text-2xl">
               {integerFormatter.format(summary.totalTokens)}
+            </CardTitle>
+          </CardHeader>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardDescription>Runs covered</CardDescription>
+            <CardTitle className="text-2xl">
+              {integerFormatter.format(metrics.runCount)}
             </CardTitle>
           </CardHeader>
         </Card>

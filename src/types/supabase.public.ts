@@ -1449,6 +1449,10 @@ export type Database = {
         }
       }
       classify_prompt_category: { Args: { p_prompt: string }; Returns: string }
+      cost_covered_run_count: {
+        Args: { p_end: string; p_start: string }
+        Returns: number
+      }
       delete_permission_group_with_resources: {
         Args: {
           p_actor_email: string
