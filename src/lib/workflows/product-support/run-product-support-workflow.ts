@@ -28,6 +28,7 @@ import { runResponsesWithToolLoop } from '~/lib/openai/responses-runtime';
 import type { LlmTokenUsage } from '~/lib/openai/responses-runtime';
 import { runAiSdkWithToolLoop } from '~/lib/bex/ai-sdk-runtime';
 import {
+  hasDecisiveRecommendationSignal,
   routeUserMessageToSme,
   SME_ROUTE_MIN_HITS_TO_ROUTE,
   SME_ROUTE_TIE_BREAK_ORDER,
@@ -397,17 +398,18 @@ export function extractRetrievalConfigFromToolTrace(
  * ONLY as the degraded/kill-switch fallback: when the classifier did not run for the turn
  * (`BEX_LLM_ROUTER_ENABLED=false`, shadow mode, or an LLM failure that fell back), the old
  * behavior is preserved verbatim. Delete it entirely when the rollback lever is removed.
+ *
+ * B0-354 — used to carry its own 5-phrase list (`comparable`, `equivalent`, `cross reference`,
+ * `cross-reference`, `alternative`) gated on a co-occurring literal `betco`, independent of
+ * `hasDecisiveRecommendationSignal` (`sme-routing.ts`), the ~20-phrase list B0-339 added for SME
+ * routing with no such gate. The two disagreed on inputs like "Which product replaces Spartan
+ * BNC-15?" — decisive enough to route to `recommendations`, but not decisive enough to force
+ * `lookup_cross_reference` — so routing and tool-forcing silently diverged on the same turn. Now
+ * delegates entirely to `hasDecisiveRecommendationSignal` (no `betco` gate) so the two predicates
+ * share one phrase list and can never disagree again.
  */
 export function shouldForceCrossReferenceLookup(userMessage: string) {
-  const text = userMessage.toLowerCase();
-  const hasCrossRefIntent =
-    text.includes('comparable') ||
-    text.includes('equivalent') ||
-    text.includes('cross reference') ||
-    text.includes('cross-reference') ||
-    text.includes('alternative');
-  const hasBetcoContext = text.includes('betco');
-  return hasCrossRefIntent && hasBetcoContext;
+  return hasDecisiveRecommendationSignal(userMessage);
 }
 
 function isEarlyDeclineGateEnabled() {
