@@ -10,7 +10,6 @@ import { PromptBundleVersionBadge } from '~/components/admin/tests/PromptBundleV
 import { RunSearchEvalDialog } from '~/components/admin/tests/RunSearchEvalDialog';
 import { TestPromptsSection } from '~/components/admin/tests/TestPromptsSection';
 import { Button } from '~/components/ui/button';
-import { NativeSelect } from '~/components/ui/native-select';
 import {
   TableBody,
   TableCell,
@@ -50,7 +49,7 @@ import {
   formatRunChartAxisLabel,
 } from '~/lib/utils/time';
 
-import supportedModels, { SupportedModel } from '~/lib/constants/models';
+import { TestRunModelControls } from '~/components/admin/tests/TestRunModelControls';
 import {
   deleteSearchRunAction,
   deleteTestRunAction,
@@ -352,19 +351,7 @@ export default async function AdminTestDetailsPage({
                   value={`/admin/tests/${test.id}`}
                 />
                 <input name="testId" type="hidden" value={test.id} />
-                <NativeSelect
-                  aria-label="Chat model for this run"
-                  className="h-9 w-36"
-                  defaultValue="preview"
-                  name="modelTag"
-                >
-                  <option value="preview">Model: preview</option>
-                  {supportedModels.map((m: SupportedModel) => (
-                    <option key={m.name} value={m.name}>
-                      {m.label}
-                    </option>
-                  ))}
-                </NativeSelect>
+                <TestRunModelControls />
                 <Button size="sm" type="submit">
                   Run dataset
                 </Button>
