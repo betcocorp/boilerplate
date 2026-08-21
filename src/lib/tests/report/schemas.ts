@@ -59,6 +59,18 @@ export const REPORT_STATUSES = [
 ] as const;
 export type ReportStatus = (typeof REPORT_STATUSES)[number];
 
+// Mirrors `Grade` from `./metrics.ts` plus the '-' sentinel `RateBlock.grade` uses when there are
+// no evaluated cases; kept as an inline literal enum (rather than importing `Grade`) so this
+// persisted-data schema doesn't need to depend on the metrics module's types.
+const reportOverallGradeSchema = z.enum(['A', 'B', 'C', 'D', 'F', '-']);
+
+export const reportOverallSchema = z.object({
+  avg: z.number().nullable(),
+  grade: reportOverallGradeSchema,
+});
+
+export type ReportOverall = z.infer<typeof reportOverallSchema>;
+
 export const reportStateSchema = z.object({
   status: z.enum(REPORT_STATUSES),
   model: z.string(),
@@ -69,6 +81,13 @@ export const reportStateSchema = z.object({
   caseScores: z.record(z.string(), caseScoreSchema),
   synthesis: reportSynthesisSchema.nullable(),
   error: z.string().nullable(),
+  // B0-609 — the report's aggregate score/grade (`computeReportMetrics(...).overall`), persisted
+  // once generation completes so the "Recent runs" table can render it without recomputing
+  // metrics from per-item data it doesn't otherwise load. `.optional()` so `report_state` rows
+  // persisted before this field existed still parse successfully (falling back to `null`) instead
+  // of failing `safeParse` entirely and losing already-scored `caseScores` to the orchestrator's
+  // "start fresh" fallback.
+  overall: reportOverallSchema.nullable().optional().default(null),
 });
 
 export type ReportState = z.infer<typeof reportStateSchema>;
@@ -90,5 +109,6 @@ export function emptyReportState(model: string, totalCases: number): ReportState
     caseScores: {},
     synthesis: null,
     error: null,
+    overall: null,
   };
 }

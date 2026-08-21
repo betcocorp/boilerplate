@@ -36,6 +36,7 @@ import {
   extractSearchRunMaxSimilarity,
   summarizePromptBundleVersions,
 } from '~/lib/tests/response-payload';
+import { parseReportState } from '~/lib/tests/report/schemas';
 import {
   buildSuggestionListsFromTestItems,
   distinctNonEmptyStrings,
@@ -373,6 +374,9 @@ export default async function AdminTestDetailsPage({
                   <TableHead title="Which build of the prompt bundle (specialist policies + tool defs) produced this run — B0-393">
                     Prompt bundle
                   </TableHead>
+                  <TableHead title="Overall score/grade from the auto-generated eval report (B0-609)">
+                    Score
+                  </TableHead>
                   <TableHead>Pass/fail</TableHead>
                   <TableHead title="Share of items marked passed for this run (same basis as the pass rate trend chart)">
                     Pass %
@@ -390,7 +394,7 @@ export default async function AdminTestDetailsPage({
               <TableBody>
                 {results.length === 0 ? (
                   <TableRow>
-                    <TableCell className="text-slate-500" colSpan={9}>
+                    <TableCell className="text-slate-500" colSpan={10}>
                       No runs yet for this dataset.
                     </TableCell>
                   </TableRow>
@@ -407,6 +411,9 @@ export default async function AdminTestDetailsPage({
                         ? result.failed_items
                         : result.total_items - result.passed_items,
                     );
+                    const reportState = parseReportState(result.report_state);
+                    const overall =
+                      reportState?.status === 'completed' ? reportState.overall : null;
                     return (
                       <TableRow key={result.id}>
                         <TableCell className="font-mono text-xs">
@@ -428,6 +435,11 @@ export default async function AdminTestDetailsPage({
                               }
                             }
                           />
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap tabular-nums text-slate-700">
+                          {overall && typeof overall.avg === 'number'
+                            ? `${overall.avg}/100 (${overall.grade})`
+                            : '—'}
                         </TableCell>
                         <TableCell>
                           {result.passed_items}/{failedItems}
