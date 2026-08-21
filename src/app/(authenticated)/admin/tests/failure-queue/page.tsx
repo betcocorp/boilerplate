@@ -20,7 +20,7 @@ import {
   PROMPT_CATEGORY_BY_SLUG,
   type PromptCategorySlug,
 } from '~/lib/constants/prompt-categories';
-import { suggestResolution } from '~/lib/tests/failure-queue';
+import { FAILURE_ROOT_CAUSE_PENDING_COPY } from '~/lib/tests/failure-queue';
 import {
   listAllLatestFailedItemsForGroupedView,
   listLatestFailedTestResultItemsPage,
@@ -367,7 +367,7 @@ export default async function AdminFailureQueuePage({ searchParams }: PageProps)
                       <TableHead>Prompt</TableHead>
                       <TableHead>Latency</TableHead>
                       <TableHead>Error</TableHead>
-                      <TableHead>Suggested resolution</TableHead>
+                      <TableHead>Root cause</TableHead>
                       <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -410,7 +410,20 @@ export default async function AdminFailureQueuePage({ searchParams }: PageProps)
                           <span className="line-clamp-3">{row.error_message || '—'}</span>
                         </TableCell>
                         <TableCell className="max-w-sm align-top text-sm text-slate-600">
-                          <span className="line-clamp-3">{suggestResolution(row)}</span>
+                          {row.root_cause_content ? (
+                            <div className="flex flex-col gap-1">
+                              {row.root_cause_category ? (
+                                <Badge className="w-fit" variant="outline">
+                                  {row.root_cause_category}
+                                </Badge>
+                              ) : null}
+                              <span className="line-clamp-3">{row.root_cause_content}</span>
+                            </div>
+                          ) : (
+                            <span className="italic text-slate-400">
+                              {FAILURE_ROOT_CAUSE_PENDING_COPY}
+                            </span>
+                          )}
                         </TableCell>
                         <TableCell className="text-right align-top">
                           <div className="flex flex-col items-end gap-1 text-sm">

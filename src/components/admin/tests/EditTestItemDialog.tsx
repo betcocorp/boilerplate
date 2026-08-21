@@ -36,6 +36,8 @@ type EditTestItemDialogProps = {
   idealResponse: string | null;
   expectedConcepts: string | null;
   minimumConcepts: string | null;
+  /** Mini-syntax string (~/lib/tests/csv formatExpectedCriteriaCell), e.g. "t1: dilution 4 oz/gal". */
+  expectedCriteria: string;
   expectedSources: string | null;
   shouldCite: boolean | null;
   inputPayload: Json;
@@ -94,6 +96,7 @@ export function EditTestItemDialog({
   idealResponse,
   expectedConcepts,
   minimumConcepts,
+  expectedCriteria,
   expectedSources,
   shouldCite,
   inputPayload,
@@ -144,6 +147,7 @@ export function EditTestItemDialog({
                 idealResponse: idealResponse ?? '',
                 expectedConcepts: expectedConcepts ?? '',
                 minimumConcepts: minimumConcepts ?? '',
+                expectedCriteria,
                 expectedSources: expectedSources ?? '',
                 shouldCite: shouldCiteLabel(shouldCite),
                 productMention: payloadString(inputPayload, 'product_mention'),

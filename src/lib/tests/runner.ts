@@ -9,6 +9,8 @@ import {
   EARLY_DECLINE_STORAGE_EXPIRATION_COPY,
 } from '~/lib/workflows/product-support/run-product-support-workflow';
 
+import { gradeWithCriteria } from './criteria-grader';
+import { expectedCriteriaSchema } from './criteria-schemas';
 import type { NewTestResultItemRecord, TestItemRecord } from './types';
 
 /**
@@ -396,11 +398,38 @@ export async function runSingleTestItem(
     const elapsedMs = Math.max(0, Date.now() - startedAt);
     const ttftMs = firstDeltaAt !== null ? Math.max(0, firstDeltaAt - startedAt) : null;
     const responseText = result.answerText || '';
-    const outcome = gradeChatTestResponse({
-      item: testItem,
-      hasError: false,
+
+    /**
+     * B0-616 — when this item carries `expected_criteria`, per-criterion grading is the
+     * pass/fail signal (tier-1-must-all-pass), not the legacy behavior-only heuristic below.
+     * Items without criteria are completely unaffected — `gradeWithCriteria` returns `null`
+     * and `gradeChatTestResponse` decides, exactly as before (zero migration required).
+     */
+    const parsedCriteria = expectedCriteriaSchema.safeParse(testItem.expected_criteria);
+    const criteria = parsedCriteria.success ? parsedCriteria.data : [];
+    const criteriaOutcome = await gradeWithCriteria({
+      prompt: testItem.prompt,
       responseText,
-    });
+      criteria,
+      modelTag: options?.modelTag,
+    }).catch(() => null);
+
+    const outcome =
+      criteriaOutcome ??
+      gradeChatTestResponse({
+        item: testItem,
+        hasError: false,
+        responseText,
+      });
+
+    // Loose `any` (matching the original `JSON.parse(JSON.stringify(result))` call this
+    // replaces) — `response_payload` is `Json`, and threading a precise type through would
+    // require re-declaring `result`'s entire shape as JSON-safe for no real benefit here.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const responsePayload: any = JSON.parse(JSON.stringify(result));
+    if (criteriaOutcome) {
+      responsePayload.criteriaGrading = criteriaOutcome;
+    }
 
     return {
       passed: outcome.passed,
@@ -414,7 +443,7 @@ export async function runSingleTestItem(
         passed: outcome.passed,
         error_message: outcome.passed ? null : outcome.failureReason,
         response_text: responseText,
-        response_payload: JSON.parse(JSON.stringify(result)),
+        response_payload: responsePayload,
         // B0-416 — real FK alongside the payload copy, so the trace stays reachable from the
         // graded item (and vice versa) without parsing JSON.
         workflow_run_id: result.workflowRunId,

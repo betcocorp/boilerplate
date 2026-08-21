@@ -1,10 +1,12 @@
 import { APP_VERSION } from '~/lib/app-version';
 import { searchProductChunks, type RagSearchMatch } from '~/lib/rag/search';
 
+import { analyzeAndPersistFailureRootCause } from './failure-root-cause';
 import {
   computeAvgSimilarityForResult,
   countPassedAndFailedByResultId,
   getExistingResultItemIds,
+  getTestById,
   getTestItemsByTestId,
   getTestResultById,
   insertTestResultItems,
@@ -65,6 +67,9 @@ export async function executeSearchRun(testResultId: string) {
   }
 
   const items = await getTestItemsByTestId(testResult.test_id);
+  // B0-617 — fetched once per run, purely for the root-cause analyzer's context (same pattern
+  // as run-executor.ts's `test` fetch); never influences search grading itself.
+  const test = await getTestById(testResult.test_id);
   const existingItemIds = await getExistingResultItemIds(testResult.id);
   let currentSummary = asSummaryObject(testResult.summary);
   let completedItems = existingItemIds.size;
@@ -183,7 +188,7 @@ export async function executeSearchRun(testResultId: string) {
     const elapsedMs = Math.max(0, Date.now() - startedAt);
     itemElapsedSumMs += elapsedMs;
 
-    await insertTestResultItems([
+    const [insertedItem] = await insertTestResultItems([
       {
         test_result_id: testResult.id,
         test_item_id: item.id,
@@ -197,6 +202,31 @@ export async function executeSearchRun(testResultId: string) {
         app_version: APP_VERSION,
       },
     ]);
+
+    // B0-617 — same auto root-cause call as the chat-eval runner (run-executor.ts), so
+    // search/retrieval-eval failures land in the failure queue with a generated cause too.
+    if (!passed && insertedItem) {
+      const matches = Array.isArray((responsePayload as { matches?: unknown }).matches)
+        ? ((responsePayload as { matches: RagSearchMatch[] }).matches)
+        : [];
+      const similarities = matches.map((m) => m.similarity).filter((s): s is number => typeof s === 'number');
+      await analyzeAndPersistFailureRootCause({
+        testResultItemId: insertedItem.id,
+        testName: test.name,
+        prompt: item.prompt,
+        expectedShouldAnswer: item.expected_should_answer,
+        responseText: null,
+        errorMessage:
+          typeof (responsePayload as { error?: unknown }).error === 'string'
+            ? ((responsePayload as { error: string }).error)
+            : null,
+        retrieval: {
+          similarityMin: similarities.length > 0 ? Math.min(...similarities) : null,
+          similarityMax: similarities.length > 0 ? Math.max(...similarities) : null,
+          matchCount: matches.length,
+        },
+      });
+    }
 
     existingItemIds.add(item.id);
     completedItems = existingItemIds.size;

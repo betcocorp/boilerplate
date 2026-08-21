@@ -28,6 +28,9 @@ import {
 import { escapeCsvCell, sanitizeCsvFilename } from '~/lib/utils/csv';
 import type { Json } from '~/types/supabase.public';
 
+import { formatExpectedCriteriaCell } from '~/lib/tests/csv';
+import { expectedCriteriaSchema, type ExpectedCriterion } from '~/lib/tests/criteria-schemas';
+
 export type TestPromptRow = {
   id: string;
   row_index: number;
@@ -41,10 +44,18 @@ export type TestPromptRow = {
   ideal_response: string | null;
   expected_concepts: string | null;
   minimum_concepts: string | null;
+  expected_criteria: Json;
   expected_sources: string | null;
   should_cite: boolean | null;
   input_payload: Json;
 };
+
+/** `test_items.expected_criteria` is untyped `Json` at the DB boundary; parse defensively so a
+ * malformed row degrades to "no criteria" (legacy grading) instead of crashing the page. */
+function criteriaFromJson(value: Json): ExpectedCriterion[] {
+  const parsed = expectedCriteriaSchema.safeParse(value);
+  return parsed.success ? parsed.data : [];
+}
 
 /** Aggregated history for a single `test_item` across the recent runs surfaced on this page. */
 export type TestPromptAggregation = {
@@ -100,11 +111,14 @@ function rowMatchesQuery(item: TestPromptRow, raw: string): boolean {
     return true;
   }
   // Concept/source expectations are the main reason to hunt for a row (e.g. "13 oz/gal").
-  return [
-    item.expected_concepts,
-    item.minimum_concepts,
-    item.expected_sources,
-  ].some((value) => (value ?? '').toLowerCase().includes(q));
+  if (
+    [item.expected_concepts, item.minimum_concepts, item.expected_sources].some((value) =>
+      (value ?? '').toLowerCase().includes(q),
+    )
+  ) {
+    return true;
+  }
+  return criteriaFromJson(item.expected_criteria).some((c) => c.concept.toLowerCase().includes(q));
 }
 
 /**
@@ -114,7 +128,10 @@ function rowMatchesQuery(item: TestPromptRow, raw: string): boolean {
  */
 function ConceptExpectationsCell({ item }: { item: TestPromptRow }) {
   const concepts = item.minimum_concepts || item.expected_concepts;
-  const hasAny = Boolean(concepts || item.expected_sources || item.should_cite !== null);
+  const criteria = criteriaFromJson(item.expected_criteria);
+  const hasAny = Boolean(
+    concepts || item.expected_sources || item.should_cite !== null || criteria.length > 0,
+  );
 
   if (!hasAny) {
     return <span className="text-slate-400">—</span>;
@@ -122,6 +139,14 @@ function ConceptExpectationsCell({ item }: { item: TestPromptRow }) {
 
   return (
     <div className="flex flex-col gap-1">
+      {criteria.length > 0 ? (
+        <span
+          className="line-clamp-2 whitespace-normal font-medium text-sky-700"
+          title={formatExpectedCriteriaCell(criteria)}
+        >
+          {criteria.filter((c) => c.tier === 1).length} tier-1 · {criteria.length} total criteria
+        </span>
+      ) : null}
       {concepts ? (
         <span className="line-clamp-2 whitespace-normal" title={concepts}>
           {item.minimum_concepts ? 'Min: ' : 'Expected: '}
@@ -272,6 +297,7 @@ export function TestPromptsSection({
       'source_style',
       'expected_concepts',
       'minimum_concepts',
+      'expected_criteria',
       'expected_sources',
       'should_cite',
     ];
@@ -293,6 +319,7 @@ export function TestPromptsSection({
           payloadString(item.input_payload, 'source_style'),
           item.expected_concepts ?? '',
           item.minimum_concepts ?? '',
+          formatExpectedCriteriaCell(criteriaFromJson(item.expected_criteria)),
           item.expected_sources ?? '',
           formatShouldAnswerExport(item.should_cite),
         ]
@@ -546,6 +573,9 @@ export function TestPromptsSection({
                             item.expected_canonical_product
                           }
                           expectedConcepts={item.expected_concepts}
+                          expectedCriteria={formatExpectedCriteriaCell(
+                            criteriaFromJson(item.expected_criteria),
+                          )}
                           expectedReasonCode={item.expected_reason_code}
                           expectedResultType={item.expected_result_type}
                           expectedShouldAnswer={item.expected_should_answer}

@@ -102,6 +102,13 @@ export const TEST_TEMPLATE_COLUMNS: TestTemplateColumn[] = [
     help: 'The subset of expected_concepts a reviewer must see to pass the row, as one string. Stored verbatim.',
   },
   {
+    name: 'expected_criteria',
+    required: false,
+    example: 't1: dilution 4 oz/gal; t1x: EPA Reg. No. 12345-67; t2: dwell time',
+    help:
+      'Optional tiered grading (B0-615): semicolon-separated "t1"/"t2"/"t3" (must-have/should-have/bonus) criteria the grader checks individually, instead of the behavior-only pass/fail rules. Trailing "x" on the tier (e.g. "t1x:") marks an exact, literal match — for regulated values that must never be rounded or paraphrased. Leave blank to keep this row on the legacy rules.',
+  },
+  {
     name: 'expected_sources',
     required: false,
     example:

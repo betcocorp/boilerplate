@@ -14,6 +14,7 @@ import { updateTierTarget } from '~/lib/tests/tier-targets';
 import supportedModels from '~/lib/constants/models';
 import {
   parseCsvColumnNames,
+  parseExpectedCriteriaFromForm,
   parseExpectedShouldAnswerFromForm,
   parsePriority,
   parseShouldCiteFromForm,
@@ -72,9 +73,16 @@ function optionalFormText(formData: FormData, name: string): string | null {
  */
 function readConceptExpectationFields(formData: FormData) {
   const shouldCiteRaw = formData.get('shouldCite');
+  const expectedCriteriaRaw = formData.get('expectedCriteria');
   return {
     expected_concepts: optionalFormText(formData, 'expectedConcepts'),
     minimum_concepts: optionalFormText(formData, 'minimumConcepts'),
+    // B0-615 — blank clears the row back to legacy behavior-only grading (empty array),
+    // matching how every other field here treats a cleared input.
+    expected_criteria:
+      typeof expectedCriteriaRaw === 'string'
+        ? parseExpectedCriteriaFromForm(expectedCriteriaRaw)
+        : [],
     expected_sources: optionalFormText(formData, 'expectedSources'),
     should_cite:
       typeof shouldCiteRaw === 'string'
@@ -200,6 +208,7 @@ export async function uploadTestCsvAction(formData: FormData) {
     ideal_response: row.idealResponse,
     expected_concepts: row.expectedConcepts,
     minimum_concepts: row.minimumConcepts,
+    expected_criteria: row.expectedCriteria,
     expected_sources: row.expectedSources,
     should_cite: row.shouldCite,
     input_payload: row.inputPayload,
@@ -735,6 +744,7 @@ export async function createTestFromPromptsAction(formData: FormData) {
     ideal_response: item.ideal_response,
     expected_concepts: item.expected_concepts,
     minimum_concepts: item.minimum_concepts,
+    expected_criteria: item.expected_criteria,
     expected_sources: item.expected_sources,
     should_cite: item.should_cite,
     input_payload: item.input_payload,

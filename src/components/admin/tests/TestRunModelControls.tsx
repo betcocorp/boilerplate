@@ -20,7 +20,7 @@ import supportedModels, {
  * `BEX_RESPONSES_MODEL` is set, so it can only ever produce a failed run.
  */
 export function TestRunModelControls() {
-  const [modelTag, setModelTag] = useState<BexModelTag>('preview');
+  const [modelTag, setModelTag] = useState<BexModelTag>('gpt-4.1');
 
   return (
     <div className="flex flex-col gap-2">
