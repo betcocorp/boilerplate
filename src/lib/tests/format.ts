@@ -128,6 +128,11 @@ export function formatSimilarityDelta(absoluteDelta: number): string {
   return `${(absoluteDelta * 100).toFixed(1)}%`;
 }
 
+/** Formats an absolute report-score delta (0–100 points) for trend displays. */
+export function formatScoreDelta(absoluteDelta: number): string {
+  return `${absoluteDelta.toFixed(1)} pts`;
+}
+
 /** Formats an integer, abbreviating to a "k" suffix once it reaches 4+ digits, e.g. 1040 -> "1k", 1055 -> "1.1k", 1256 -> "1.3k". */
 export function formatCompactInt(value: number): string {
   if (!Number.isFinite(value)) return String(value);

@@ -22,6 +22,7 @@ import {
   buildPromptAggregations,
   extractItemMaxSimilarity,
 } from '~/lib/tests/prompt-aggregations';
+import { parseReportState } from '~/lib/tests/report/schemas';
 import {
   getGlobalTestItemSuggestionRows,
   getLegacyProductLineSuggestionMeta,
@@ -36,14 +37,17 @@ import {
   extractSearchRunMaxSimilarity,
   summarizePromptBundleVersions,
 } from '~/lib/tests/response-payload';
-import { parseReportState } from '~/lib/tests/report/schemas';
 import {
   buildSuggestionListsFromTestItems,
   distinctNonEmptyStrings,
 } from '~/lib/tests/suggestion-lists';
 
 import { TestHistoricalTrendsCharts } from '~/components/admin/tests/TestHistoricalTrendsCharts';
-import { formatPercentDelta, formatSimilarityDelta } from '~/lib/tests/format';
+import {
+  formatPercentDelta,
+  formatScoreDelta,
+  formatSimilarityDelta,
+} from '~/lib/tests/format';
 import {
   formatDate,
   formatDurationSeconds,
@@ -413,7 +417,16 @@ export default async function AdminTestDetailsPage({
                     );
                     const reportState = parseReportState(result.report_state);
                     const overall =
-                      reportState?.status === 'completed' ? reportState.overall : null;
+                      reportState?.status === 'completed'
+                        ? reportState.overall
+                        : null;
+                    const previousReportState = previousResult
+                      ? parseReportState(previousResult.report_state)
+                      : null;
+                    const previousOverall =
+                      previousReportState?.status === 'completed'
+                        ? previousReportState.overall
+                        : null;
                     return (
                       <TableRow key={result.id}>
                         <TableCell className="font-mono text-xs">
@@ -421,7 +434,7 @@ export default async function AdminTestDetailsPage({
                             className="text-sky-700 underline-offset-2 hover:underline"
                             href={`/admin/tests/${test.id}/runs/${result.id}`}
                           >
-                            {result.id}
+                            {index}
                           </Link>
                         </TableCell>
                         <TableCell>{result.status}</TableCell>
@@ -437,9 +450,19 @@ export default async function AdminTestDetailsPage({
                           />
                         </TableCell>
                         <TableCell className="whitespace-nowrap tabular-nums text-slate-700">
-                          {overall && typeof overall.avg === 'number'
-                            ? `${overall.avg}/100 (${overall.grade})`
-                            : '—'}
+                          <span className="inline-flex items-center gap-2">
+                            <span>
+                              {overall && typeof overall.avg === 'number'
+                                ? `${overall.avg}/100 (${overall.grade})`
+                                : '—'}
+                            </span>
+                            <RunTrendIndicator
+                              current={overall?.avg}
+                              formatDelta={formatScoreDelta}
+                              label="Score"
+                              previous={previousOverall?.avg}
+                            />
+                          </span>
                         </TableCell>
                         <TableCell>
                           {result.passed_items}/{failedItems}
