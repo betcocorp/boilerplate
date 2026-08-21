@@ -3,9 +3,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 
 import { authOptions } from '~/lib/auth';
-import { gateRoute } from '~/lib/permissions/route-gate';
 import { PERMISSIONS } from '~/lib/permissions/constants';
-import { getSupabaseServerClient } from '~/supabase/clients/server';
+import { gateRoute } from '~/lib/permissions/route-gate';
+import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 const updateSettingSchema = z.object({
   key: z.string(),
@@ -17,8 +17,7 @@ const updateSettingSchema = z.object({
  */
 export async function GET() {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const supabase = getSupabaseServerClient() as any;
+    const supabase = getSupabaseServiceRoleClient();
     const { data, error } = await supabase
       .from('settings')
       .select('key, value, value_type, description, allowed_values')
@@ -66,8 +65,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { key, value } = updateSettingSchema.parse(body);
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const supabase = getSupabaseServerClient() as any;
+    const supabase = getSupabaseServiceRoleClient();
 
     // Fetch the setting to validate value_type
     const { data: setting, error: fetchError } = await supabase

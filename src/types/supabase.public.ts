@@ -819,6 +819,42 @@ export type Database = {
           },
         ]
       }
+      settings: {
+        Row: {
+          allowed_values: string[] | null
+          created_at: string
+          description: string | null
+          id: string
+          key: string
+          updated_at: string
+          updated_by: string | null
+          value: string
+          value_type: string
+        }
+        Insert: {
+          allowed_values?: string[] | null
+          created_at?: string
+          description?: string | null
+          id?: string
+          key: string
+          updated_at?: string
+          updated_by?: string | null
+          value: string
+          value_type: string
+        }
+        Update: {
+          allowed_values?: string[] | null
+          created_at?: string
+          description?: string | null
+          id?: string
+          key?: string
+          updated_at?: string
+          updated_by?: string | null
+          value?: string
+          value_type?: string
+        }
+        Relationships: []
+      }
       test_items: {
         Row: {
           created_at: string
