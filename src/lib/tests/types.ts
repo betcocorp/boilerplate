@@ -22,6 +22,9 @@ export function isCompletedRunStatus(status: string): boolean {
 }
 
 export type TestRecord = Tables<'tests'>;
+export type TestRecordWithCompletionCount = TestRecord & {
+  completed_runs_count: number;
+};
 export type TestItemRecord = Tables<'test_items'>;
 export type TestResultRecord = Tables<'test_results'>;
 export type TestResultItemRecord = Tables<'test_result_items'>;

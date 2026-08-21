@@ -317,6 +317,7 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
                 <TableHead>Golden</TableHead>
                 <TableHead>Intended agent</TableHead>
                 <TableHead>Rows</TableHead>
+                <TableHead>Completed runs</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Actions</TableHead>
               </TableRow>
@@ -378,6 +379,7 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
                         : '—'}
                     </TableCell>
                     <TableCell>{test.row_count}</TableCell>
+                    <TableCell>{test.completed_runs_count}</TableCell>
                     <TableCell>{test.status}</TableCell>
                     <TableCell>
                       <div className="flex flex-wrap gap-2">

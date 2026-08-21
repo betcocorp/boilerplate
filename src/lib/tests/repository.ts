@@ -18,6 +18,7 @@ import type {
   NewTestResultRecord,
   TestItemRecord,
   TestRecord,
+  TestRecordWithCompletionCount,
   TestResultItemRecord,
   TestResultRecord,
 } from './types';
@@ -81,7 +82,26 @@ export async function listTests() {
     .select('*')
     .order('uploaded_at', { ascending: false });
 
-  return (assertNoError(result) || []) as TestRecord[];
+  const tests = (assertNoError(result) || []) as TestRecord[];
+
+  const completionCounts = await supabase
+    .from('test_results')
+    .select('test_id')
+    .in(
+      'status',
+      COMPLETED_RUN_STATUSES as unknown as string[],
+    );
+
+  const countsByTestId = new Map<string, number>();
+  const countData = assertNoError(completionCounts) || [];
+  for (const row of countData as Array<{ test_id: string }>) {
+    countsByTestId.set(row.test_id, (countsByTestId.get(row.test_id) ?? 0) + 1);
+  }
+
+  return tests.map((test) => ({
+    ...test,
+    completed_runs_count: countsByTestId.get(test.id) ?? 0,
+  })) as TestRecordWithCompletionCount[];
 }
 
 export async function getTestById(testId: string) {
