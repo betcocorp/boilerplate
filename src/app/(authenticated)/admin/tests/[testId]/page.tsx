@@ -746,6 +746,7 @@ export default async function AdminTestDetailsPage({
               ideal_response: item.ideal_response,
               expected_concepts: item.expected_concepts,
               minimum_concepts: item.minimum_concepts,
+              expected_criteria: item.expected_criteria,
               expected_sources: item.expected_sources,
               should_cite: item.should_cite,
               input_payload: item.input_payload,

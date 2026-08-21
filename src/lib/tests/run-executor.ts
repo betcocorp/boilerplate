@@ -14,6 +14,8 @@ import {
   updateTestRecord,
   updateTestResult,
 } from './repository';
+import type { CriteriaGradingOutcome } from './criteria-schemas';
+import { analyzeAndPersistFailureRootCause } from './failure-root-cause';
 import { generateReport } from './report/orchestrator';
 import { runSingleTestItem } from './runner';
 import { generateAndSaveRunInsights } from './run-insights';
@@ -206,8 +208,30 @@ export async function executeTestRun(testResultId: string) {
       ...itemResult.item,
       ...routingComparisonFields,
     };
-    await insertTestResultItems([itemToInsert]);
+    const [insertedItem] = await insertTestResultItems([itemToInsert]);
     existingItemIds.add(item.id);
+
+    /**
+     * B0-617 — auto-fires the moment a failure is recorded, so the failure queue is
+     * populated with a generated root cause by the time anyone views it (rather than the
+     * static `suggestResolution()` heuristic it replaces). Awaited, not fire-and-forget:
+     * the function itself never throws (see failure-root-cause.ts), and a full chat-eval
+     * turn already dominates per-item wall-clock, so one more model call here is a small
+     * marginal cost for a queue entry with an actual cause instead of a guess.
+     */
+    if (!itemResult.passed && insertedItem) {
+      const payload = insertedItem.response_payload as { criteriaGrading?: CriteriaGradingOutcome } | null;
+      await analyzeAndPersistFailureRootCause({
+        testResultItemId: insertedItem.id,
+        testName: test.name,
+        prompt: item.prompt,
+        expectedShouldAnswer: item.expected_should_answer,
+        responseText: insertedItem.response_text,
+        errorMessage: insertedItem.error_message,
+        criteriaGrading: payload?.criteriaGrading ?? null,
+        modelTag,
+      });
+    }
 
     itemElapsedSumMs += itemResult.item.elapsed_ms;
 

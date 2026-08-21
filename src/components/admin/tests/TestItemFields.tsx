@@ -48,6 +48,7 @@ export type TestItemFieldsInitialValues = {
   idealResponse?: string;
   expectedConcepts?: string;
   minimumConcepts?: string;
+  expectedCriteria?: string;
   expectedSources?: string;
   /** `'yes'` / `'no'` / `''` — matches the CSV cell vocabulary. */
   shouldCite?: string;
@@ -247,6 +248,27 @@ export function TestItemFields({
         />
         <p className="text-xs text-muted-foreground">
           The subset of the above a reviewer must see for this row to pass.
+        </p>
+      </div>
+
+      <div className="grid gap-2">
+        <Label htmlFor={`${idPrefix}-expected-criteria`}>
+          Expected criteria (tiered){' '}
+          <span className="font-normal text-muted-foreground">(optional)</span>
+        </Label>
+        <Textarea
+          defaultValue={initialValues?.expectedCriteria}
+          id={`${idPrefix}-expected-criteria`}
+          name="expectedCriteria"
+          placeholder="t1: dilution 4 oz/gal; t1x: EPA Reg. No. 12345-67; t2: dwell time"
+          rows={2}
+        />
+        <p className="text-xs text-muted-foreground">
+          Semicolon-separated <code>t1</code>/<code>t2</code>/<code>t3</code> (must-have /
+          should-have / bonus) criteria the grader checks individually. Trailing{' '}
+          <code>x</code> (e.g. <code>t1x:</code>) marks an exact, literal match for regulated
+          values — never rounded or paraphrased. Leave blank to keep this row on today&rsquo;s
+          behavior-only grading.
         </p>
       </div>
 

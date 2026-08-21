@@ -860,6 +860,7 @@ export type Database = {
           created_at: string
           expected_canonical_product: string | null
           expected_concepts: string | null
+          expected_criteria: Json
           expected_reason_code: string | null
           expected_result_type: string | null
           expected_should_answer: boolean | null
@@ -882,6 +883,7 @@ export type Database = {
           created_at?: string
           expected_canonical_product?: string | null
           expected_concepts?: string | null
+          expected_criteria?: Json
           expected_reason_code?: string | null
           expected_result_type?: string | null
           expected_should_answer?: boolean | null
@@ -904,6 +906,7 @@ export type Database = {
           created_at?: string
           expected_canonical_product?: string | null
           expected_concepts?: string | null
+          expected_criteria?: Json
           expected_reason_code?: string | null
           expected_result_type?: string | null
           expected_should_answer?: boolean | null
@@ -1420,6 +1423,10 @@ export type Database = {
           prompt_category: string | null
           response_payload: Json | null
           response_text: string | null
+          root_cause_category: string | null
+          root_cause_content: string | null
+          root_cause_generated_at: string | null
+          root_cause_title: string | null
           row_index: number | null
           run_created_at: string | null
           status: string | null
@@ -1505,6 +1512,10 @@ export type Database = {
           prompt_category: string | null
           response_payload: Json | null
           response_text: string | null
+          root_cause_category: string | null
+          root_cause_content: string | null
+          root_cause_generated_at: string | null
+          root_cause_title: string | null
           row_index: number | null
           run_created_at: string | null
           status: string | null
