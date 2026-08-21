@@ -29,6 +29,14 @@ import { getGoldenSetTierRollup } from '~/lib/tests/golden-set';
 import { getTierTargets } from '~/lib/tests/tier-targets';
 import { PROMPT_BUNDLE_VERSION_SHORT } from '~/lib/workflows/product-support/prompt-version';
 
+import { ProvenanceFooter } from './ProvenanceFooter';
+
+/** B0-584 — verified against `getGoldenSetTierRollup` / `getTierTargets`; keep in sync with them. */
+const VERDICT_SOURCES = [
+  'Pass/fail: test_result_items.passed × test_items.priority, scoped to golden-set membership (tests.is_golden), from each golden test’s latest completed full-mode run (test_results) in the selected window/version',
+  'Targets & gate flags: tier_targets (edited on /admin/tests, audited)',
+];
+
 const FAILURE_QUEUE_HREF = '/admin/tests/failure-queue';
 
 const CHIP_STYLES: Record<HealthVerdictState, string> = {
@@ -124,6 +132,8 @@ export async function VerdictStrip({ window, version }: HealthPanelProps) {
           Re-run sweep
         </Link>
       </div>
+
+      <ProvenanceFooter sources={VERDICT_SOURCES} tone="dark" />
     </section>
   );
 }

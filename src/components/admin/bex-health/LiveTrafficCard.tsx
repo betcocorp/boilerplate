@@ -17,6 +17,14 @@ import {
 
 import type { HealthPanelProps } from '~/lib/bex-health/search-params';
 
+import { ProvenanceFooter } from './ProvenanceFooter';
+
+/** B0-584 — verified against `getAggregateDashboardData` / `scanWorkflowRuns`; keep in sync with them. */
+const LIVE_TRAFFIC_SOURCES = [
+  'workflow_runs — status, confidence, final_output.timingBreakdown and final_output.usage, filtered to the selected window/version',
+  'TTFT falls back to the harness’s test_result_items.ttft_ms when a run recorded no timingBreakdown; Orphaned = runs still “running” past the staleness threshold',
+];
+
 const SPREAD_COLORS: Record<ConfidenceSpreadSegment['bucket'], string> = {
   // Same palette as the aggregate dashboard's confidence-health chart.
   high: 'bg-green-600',
@@ -127,6 +135,8 @@ export async function LiveTrafficCard({ window, version }: HealthPanelProps) {
           </>
         )}
       </div>
+
+      <ProvenanceFooter sources={LIVE_TRAFFIC_SOURCES} />
     </section>
   );
 }

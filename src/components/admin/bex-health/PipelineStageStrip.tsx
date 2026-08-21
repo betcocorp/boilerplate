@@ -20,6 +20,18 @@ import {
 
 import type { HealthPanelProps } from '~/lib/bex-health/search-params';
 
+import { ProvenanceFooter } from './ProvenanceFooter';
+
+/**
+ * B0-584 — verified against `getPipelineStageStripData` and the aggregate scans it composes;
+ * keep in sync with them (see `PIPELINE_STAGES` for the stage → step mapping).
+ */
+const PIPELINE_SOURCES = [
+  'Stage timings: workflow_steps (started_at → completed_at); Retrieve has NO step row — its timing and failed-call count come from audit_logs tool_called → tool_succeeded/tool_failed pairs',
+  'Forced to review: review_tasks (distinct runs); validator skips/bypasses: workflow_steps.output.issues',
+  'Stage footers (ambiguous routes, tokens/run, mean confidence): workflow_runs — final_output.routingDecision, final_output.usage, confidence',
+];
+
 const EM_DASH = '—';
 
 function formatMs(value: number): string {
@@ -130,6 +142,8 @@ export async function PipelineStageStrip({ window, version }: HealthPanelProps) 
           </div>
         ))}
       </div>
+
+      <ProvenanceFooter sources={PIPELINE_SOURCES} />
     </section>
   );
 }

@@ -19,9 +19,17 @@ import {
   type CostMetricsPoint,
 } from '~/lib/observability/cost-metrics';
 
+import { ProvenanceFooter } from './ProvenanceFooter';
 import { TokensPerDayChart, type TokensPerDayDatum } from './TokensPerDayChart';
 
 import type { HealthPanelProps } from '~/lib/bex-health/search-params';
+
+/** B0-584 — verified against `fetchDailyCostPoints` / `fetchCostCoveredRunCount`; keep in sync with them. */
+const TOKENS_SOURCES = [
+  'Bars & cache-hit rate: cost_by_model_per_day view, summed per UTC day across models',
+  'Tokens-per-run denominator: cost_covered_run_count RPC — runs with ≥1 cost-tracked step, exactly the runs the view aggregates',
+  'The version selector does NOT apply to this panel — the cost view has no version dimension',
+];
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -186,6 +194,8 @@ export async function TokensPerDayPanel(props: HealthPanelProps) {
           ? `${emptyDayCount} shaded ${emptyDayCount === 1 ? 'day is an empty slot' : 'days are empty slots'} — no cost-tracked runs that day, not low volume.`
           : 'Shaded slots (none in this window) would mark days with no cost-tracked runs, as distinct from low volume.'}
       </p>
+
+      <ProvenanceFooter sources={TOKENS_SOURCES} />
     </section>
   );
 }

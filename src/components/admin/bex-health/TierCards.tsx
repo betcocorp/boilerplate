@@ -24,7 +24,18 @@ import { GOLDEN_TIERS, getGoldenSetTierRollup } from '~/lib/tests/golden-set';
 import { getGoldenSetTrendForWindow, type TierTrendPoint } from '~/lib/tests/golden-set-trend';
 import { getTierTargets } from '~/lib/tests/tier-targets';
 
+import { ProvenanceFooter } from './ProvenanceFooter';
 import { TierSparkline, type TierSparklinePoint } from './TierSparkline';
+
+/**
+ * B0-584 — verified against `getGoldenSetTierRollup`, `getTierTargets` and
+ * `getGoldenSetTrendForWindow`; keep in sync with them.
+ */
+const TIER_CARD_SOURCES = [
+  'Pass rates & failing counts: test_result_items.passed × test_items.priority, scoped to golden-set membership (tests.is_golden), from each golden test’s latest completed full-mode run (test_results) in the selected window/version',
+  'Targets, gate flags & tier labels: tier_targets',
+  'Sparklines & deltas: the same tables, folded per UTC day of test_results.created_at; delta is vs the preceding equal-length window',
+];
 
 const FAILURE_QUEUE_HREF = '/admin/tests/failure-queue';
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -198,6 +209,11 @@ export async function TierCards({ window, version }: HealthPanelProps) {
           </section>
         );
       })}
+
+      {/* One provenance footer for the whole panel, spanning the card row. */}
+      <div className="lg:col-span-3">
+        <ProvenanceFooter sources={TIER_CARD_SOURCES} />
+      </div>
     </div>
   );
 }
