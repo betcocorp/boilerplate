@@ -1,3 +1,10 @@
+# [2.2.0](https://github.com/betcocorp/bex2.0/compare/v2.1.0...v2.2.0) (2026-08-21)
+
+
+### Features
+
+* **B0-619:** surface retrieval strategy, rerank timing, and product-line lock ([86187a3](https://github.com/betcocorp/bex2.0/commit/86187a30f2c33f296218f3a54ef28bbeb51b2c17))
+
 # [2.1.0](https://github.com/betcocorp/bex2.0/compare/v2.0.0...v2.1.0) (2026-08-21)
 
 
