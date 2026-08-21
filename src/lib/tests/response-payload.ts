@@ -1,3 +1,4 @@
+import { productLineLockSchema, type ProductLineLock } from '~/lib/audit/trace';
 import type { RetrievedDocumentChunkRef } from '~/lib/workflows/product-support/product-support-schemas';
 import {
   CONFIDENCE_PROVENANCES,
@@ -473,6 +474,53 @@ export function extractActiveGates(responsePayload: unknown): ActiveGates | null
   }
   const parsed = activeGatesSchema.safeParse(
     (responsePayload as Record<string, unknown>).activeGates,
+  );
+  return parsed.success ? parsed.data : null;
+}
+
+/**
+ * B0-619 — the run-level retrieval strategy ('vector'|'hybrid'|'vector+reranked'|'hybrid+reranked'),
+ * rolled up from every search-backed tool call this turn (`retrievalConfig.retrievalStrategy`,
+ * B0-493 — see `extractRetrievalConfigFromToolTrace`). Null when this turn's search calls
+ * disagreed (see `retrievalConfig.mixed`), no search tool ran, or on a payload written before
+ * B0-493.
+ */
+export function extractRetrievalStrategy(responsePayload: unknown): string | null {
+  if (!responsePayload || typeof responsePayload !== 'object' || Array.isArray(responsePayload)) {
+    return null;
+  }
+  const retrievalConfig = (responsePayload as Record<string, unknown>).retrievalConfig;
+  if (!retrievalConfig || typeof retrievalConfig !== 'object' || Array.isArray(retrievalConfig)) {
+    return null;
+  }
+  const value = (retrievalConfig as Record<string, unknown>).retrievalStrategy;
+  return typeof value === 'string' ? value : null;
+}
+
+/**
+ * B0-619 — sum of `rerankMs` across every search-backed tool call this turn (`rerankMsTotal`).
+ * Null when no search tool ran this turn, or on a payload written before this ticket.
+ */
+export function extractRerankMsTotal(responsePayload: unknown): number | null {
+  if (!responsePayload || typeof responsePayload !== 'object' || Array.isArray(responsePayload)) {
+    return null;
+  }
+  const value = (responsePayload as Record<string, unknown>).rerankMsTotal;
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+/**
+ * B0-619 — the product-line lock decision behind this turn's retrieval (`productLineLock`), the
+ * signal that used to require reading raw `workflow_steps` JSON to see whether retrieval actually
+ * locked onto a single product line or backed off as ambiguous. Null when no search tool ran this
+ * turn, or on a payload written before this ticket.
+ */
+export function extractProductLineLock(responsePayload: unknown): ProductLineLock | null {
+  if (!responsePayload || typeof responsePayload !== 'object' || Array.isArray(responsePayload)) {
+    return null;
+  }
+  const parsed = productLineLockSchema.safeParse(
+    (responsePayload as Record<string, unknown>).productLineLock,
   );
   return parsed.success ? parsed.data : null;
 }

@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import type { ToolTraceEntry } from '~/lib/audit/trace';
-import { extractRetrievalConfigFromToolTrace } from '~/lib/workflows/product-support/run-product-support-workflow';
+import type { ProductLineLock, ToolTraceEntry } from '~/lib/audit/trace';
+import {
+  extractProductLineLockFromToolTrace,
+  extractRerankMsFromToolTrace,
+  extractRetrievalConfigFromToolTrace,
+} from '~/lib/workflows/product-support/run-product-support-workflow';
 
 /**
  * B0-493 — `extractRetrievalConfigFromToolTrace` rolls every search-backed tool call's persisted
@@ -123,5 +127,81 @@ describe('extractRetrievalConfigFromToolTrace (B0-493)', () => {
       minSimilarity: null,
       mixed: [],
     });
+  });
+});
+
+/**
+ * B0-619 — `extractRerankMsFromToolTrace` sums `retrieval.timings.rerankMs` across every
+ * search-backed call this turn, distinguishing "no search ran" (null) from "search ran with
+ * reranking inactive" (0).
+ */
+describe('extractRerankMsFromToolTrace (B0-619)', () => {
+  it('sums rerankMs across multiple search-backed calls', () => {
+    const total = extractRerankMsFromToolTrace([
+      entry(retrieval({ timings: { ...retrieval().timings, rerankMs: 10 } })),
+      entry(retrieval({ timings: { ...retrieval().timings, rerankMs: 15 } })),
+    ]);
+    expect(total).toBe(25);
+  });
+
+  it('is 0 (not null) when every search call ran with reranking inactive', () => {
+    const total = extractRerankMsFromToolTrace([
+      entry(retrieval({ timings: { ...retrieval().timings, rerankMs: 0 } })),
+    ]);
+    expect(total).toBe(0);
+  });
+
+  it('is null when no call carried a retrieval block', () => {
+    expect(extractRerankMsFromToolTrace([entry(undefined)])).toBeNull();
+  });
+
+  it('is null on an empty trace', () => {
+    expect(extractRerankMsFromToolTrace([])).toBeNull();
+  });
+});
+
+/**
+ * B0-619 — `extractProductLineLockFromToolTrace` reports the first search-backed call's
+ * `productLineResolution`, so a turn with one dominant search call resolves unambiguously.
+ */
+describe('extractProductLineLockFromToolTrace (B0-619)', () => {
+  const ambiguousLock: ProductLineLock = {
+    candidates: [
+      { productLineKey: 'L1', label: 'MAD Detergent', maxSimilarity: 0.61 },
+      { productLineKey: 'L2', label: 'MAD Concentrate', maxSimilarity: 0.6 },
+    ],
+    lockedProductLineKey: null,
+    lockReason: 'skipped_ambiguous',
+  };
+  const lockedLock: ProductLineLock = {
+    candidates: [{ productLineKey: 'L1', label: 'Simplicity Emulsifier Detergent', maxSimilarity: 0.7 }],
+    lockedProductLineKey: 'L1',
+    lockReason: 'high_confidence',
+  };
+
+  it('returns the first call carrying a productLineResolution', () => {
+    const result = extractProductLineLockFromToolTrace([
+      entry(retrieval({ productLineResolution: ambiguousLock })),
+      entry(retrieval({ productLineResolution: lockedLock })),
+    ]);
+    expect(result).toEqual(ambiguousLock);
+  });
+
+  it('skips calls with no retrieval block on the way to the first one that has a lock', () => {
+    const result = extractProductLineLockFromToolTrace([
+      entry(undefined),
+      entry(retrieval({ productLineResolution: lockedLock })),
+    ]);
+    expect(result).toEqual(lockedLock);
+  });
+
+  it('is null when no call carried a productLineResolution', () => {
+    expect(
+      extractProductLineLockFromToolTrace([entry(retrieval())]),
+    ).toBeNull();
+  });
+
+  it('is null on an empty trace', () => {
+    expect(extractProductLineLockFromToolTrace([])).toBeNull();
   });
 });

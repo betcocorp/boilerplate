@@ -223,6 +223,56 @@ describe('executeToolCall — retrieval parameters on the trace entry (B0-493)',
     expect(result.trace.retrieval).toBeUndefined();
   });
 
+  it('carries productLineResolution onto the trace entry when present (B0-619)', async () => {
+    executeProductToolMock.mockResolvedValueOnce({
+      ok: true,
+      sources: [],
+      retrieval: {
+        ...retrievalPayload,
+        productLineResolution: {
+          candidates: [
+            { productLineKey: 'L1', label: 'MAD Detergent', maxSimilarity: 0.61 },
+            { productLineKey: 'L2', label: 'MAD Concentrate', maxSimilarity: 0.6 },
+          ],
+          lockedProductLineKey: null,
+          lockReason: 'skipped_ambiguous',
+        },
+      },
+    });
+
+    const result = await executeToolCall({
+      name: 'search_product_docs',
+      argumentsJson: '{}',
+      callId: 'call_lock',
+    });
+
+    expect(result.trace.retrieval?.productLineResolution).toEqual({
+      candidates: [
+        { productLineKey: 'L1', label: 'MAD Detergent', maxSimilarity: 0.61 },
+        { productLineKey: 'L2', label: 'MAD Concentrate', maxSimilarity: 0.6 },
+      ],
+      lockedProductLineKey: null,
+      lockReason: 'skipped_ambiguous',
+    });
+  });
+
+  it('omits `productLineResolution` (but keeps the rest of `retrieval`) when absent (B0-619)', async () => {
+    executeProductToolMock.mockResolvedValueOnce({
+      ok: true,
+      sources: [],
+      retrieval: retrievalPayload,
+    });
+
+    const result = await executeToolCall({
+      name: 'search_product_docs',
+      argumentsJson: '{}',
+      callId: 'call_no_lock',
+    });
+
+    expect(result.trace.retrieval?.productLineResolution).toBeUndefined();
+    expect(result.trace.retrieval?.retrievalStrategy).toBe('hybrid+reranked');
+  });
+
   it('omits `retrieval` rather than throwing on a malformed retrieval block', async () => {
     executeProductToolMock.mockResolvedValueOnce({
       ok: true,

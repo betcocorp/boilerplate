@@ -5,7 +5,7 @@ import {
   resolveMaxOutputTokens,
 } from '~/lib/workflows/product-support/max-output-tokens';
 import { createAuditLogQueue } from '~/lib/audit/audit-log-queue';
-import type { ToolCallOrigin, ToolTraceEntry } from '~/lib/audit/trace';
+import type { ProductLineLock, ToolCallOrigin, ToolTraceEntry } from '~/lib/audit/trace';
 import {
   DEFAULT_BEX_CHAT_AGENT_MODE,
   type BexChatAgentMode,
@@ -388,6 +388,43 @@ export function extractRetrievalConfigFromToolTrace(
     minSimilarity: resolve('minSimilarity', minSimilarity),
     mixed,
   };
+}
+
+/**
+ * B0-619 — sum of `retrieval.timings.rerankMs` across every search-backed tool call this turn
+ * (mirrors the `searchMsTotal` summation `ragQueryForProductKnowledgeWithMeta` already does
+ * per-call, just rolled up to run level). Null when no search tool ran this turn; zero is a real,
+ * distinct value (every search ran with reranking inactive) and must not be conflated with "no
+ * search ran" the way it would be if this defaulted to 0.
+ */
+export function extractRerankMsFromToolTrace(toolTrace: readonly ToolTraceEntry[]): number | null {
+  let total: number | null = null;
+  for (const entry of toolTrace) {
+    const rerankMs = entry.retrieval?.timings.rerankMs;
+    if (typeof rerankMs === 'number') {
+      total = (total ?? 0) + rerankMs;
+    }
+  }
+  return total;
+}
+
+/**
+ * B0-619 — the product-line lock decision behind this turn's retrieval, taken from the first
+ * search-backed tool call this turn that carried one. Every `ragQueryForProductKnowledgeWithMeta`
+ * branch computes a `productLineResolution`, so in the common case of one dominant search call
+ * this is unambiguous; when a turn made multiple independent search-backed calls (each resolving
+ * its own query against the corpus), this reports the earliest one rather than trying to reconcile
+ * decisions that were never required to agree. Null when no search tool ran this turn.
+ */
+export function extractProductLineLockFromToolTrace(
+  toolTrace: readonly ToolTraceEntry[],
+): ProductLineLock | null {
+  for (const entry of toolTrace) {
+    if (entry.retrieval?.productLineResolution) {
+      return entry.retrieval.productLineResolution;
+    }
+  }
+  return null;
 }
 
 /**
@@ -3431,6 +3468,11 @@ export async function runProductSupportWorkflow(input: {
     // B0-493 — run-level retrieval configuration rollup, computed from the FINAL resolved trace
     // (every forced/injected search call included), not just the model's own calls.
     const retrievalConfig = extractRetrievalConfigFromToolTrace(resolvedToolTrace);
+    // B0-619 — rerank timing and product-line lock, rolled up the same way (see the two functions
+    // above); both were previously buried in `workflow_steps`' per-call trace with no run-level
+    // surface, which is what made B0-619's own investigation require a raw-SQL read.
+    const rerankMsTotal = extractRerankMsFromToolTrace(resolvedToolTrace);
+    const productLineLock = extractProductLineLockFromToolTrace(resolvedToolTrace);
 
     const finalOutput: ProductSupportFinalOutput = {
       answerText: finalText,
@@ -3482,6 +3524,10 @@ export async function runProductSupportWorkflow(input: {
       // B0-493 — the retrieval configuration this run actually used, or `mixed` per-field when
       // this turn's search calls disagreed.
       retrievalConfig,
+      // B0-619 — rerank timing and product-line lock, surfaced at run level (see the extractors
+      // above for why each is null vs. a real absent-value distinction).
+      rerankMsTotal,
+      productLineLock,
       // B0-491 — the answering agent's OWN self-reported confidence, distinct from `confidence`
       // (validator judgment / bypass heuristic / gate-capped value below).
       agentConfidence: agentSelfConfidence.agentConfidence,

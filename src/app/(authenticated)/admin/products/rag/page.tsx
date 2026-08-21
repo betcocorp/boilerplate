@@ -155,6 +155,45 @@ function parseUseHybrid(value: string | string[] | undefined): boolean {
   return raw !== 'vector';
 }
 
+/**
+ * B0-619 — a checkbox on a GET-submitted form omits its name entirely from the query string when
+ * unchecked, so "absent" and "explicitly unchecked" are indistinguishable — which is exactly the
+ * semantics wanted here: an unchecked box means "don't override", not "force off", so
+ * `searchProductChunks` keeps inheriting its own default (ENABLE_RERANKER via the settings
+ * service). Only a checked box produces an explicit `true`.
+ */
+function parseExplicitTrue(value: string | string[] | undefined): true | undefined {
+  const raw = readSearchParam(value).trim().toLowerCase();
+  return raw === 'true' || raw === 'on' ? true : undefined;
+}
+
+function parseSectionType(value: string | string[] | undefined): string | undefined {
+  const raw = readSearchParam(value).trim();
+  return raw ? raw : undefined;
+}
+
+/** GHS section types recognized by the corpus chunker (see `~/lib/rag/section-type-inference.ts`). */
+const SECTION_TYPE_OPTIONS = [
+  'organism_contact_time',
+  'virucidal_activity',
+  'fungistatic',
+  'bactericidal_efficacy',
+  'first_aid',
+  'hazard',
+  'handling_storage',
+  'regulatory',
+  'exposure_ppe',
+  'physical_properties',
+  'composition',
+  'stability',
+  'spill_response',
+  'disposal',
+  'transport',
+  'fire_fighting',
+  'toxicology',
+  'ecological',
+];
+
 async function loadPopularQueries() {
   const supabase =
     getSupabaseServiceRoleClient() as unknown as PopularQueryClient;
@@ -215,8 +254,14 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
   const productLineKey = readSearchParam(resolvedSearchParams.productLineKey);
   const scope = parseScope(resolvedSearchParams.scope);
   const useHybrid = parseUseHybrid(resolvedSearchParams.retrieval);
+  const useReranker = parseExplicitTrue(resolvedSearchParams.useReranker);
+  const useMultiIntent = parseExplicitTrue(resolvedSearchParams.useMultiIntent);
+  const sectionType = parseSectionType(resolvedSearchParams.sectionType);
   const rawMinSimilarity = readSearchParam(resolvedSearchParams.minSimilarity);
   const minSimilarity = parseMinSimilarity(resolvedSearchParams.minSimilarity);
+  // B0-619 — presence-only check (never the key itself) so the panel can tell "reranker toggled
+  // off" apart from "reranker requested but unprovisioned, silently falling back".
+  const cohereConfigured = Boolean(process.env.COHERE_API_KEY);
   const popularQueries = await loadPopularQueries();
   let similaritySummary = '';
   const requestedLimit = Number.parseInt(
@@ -239,6 +284,9 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
         productLineKey: productLineKey || undefined,
         scope,
         useHybrid,
+        useReranker,
+        useMultiIntent,
+        sectionType,
         minSimilarity: minSimilarity ?? undefined,
       });
 
@@ -357,6 +405,65 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
                   />
                 </div>
               </div>
+              <div className="grid grid-cols-4 gap-2">
+                <div className="flex flex-col gap-2">
+                  <Label className="text-sm font-medium text-slate-700">
+                    Section type
+                  </Label>
+                  <NativeSelect
+                    className="h-12 rounded-2xl px-4"
+                    defaultValue={sectionType ?? ''}
+                    name="sectionType"
+                  >
+                    <option value="">Any</option>
+                    {SECTION_TYPE_OPTIONS.map((option) => (
+                      <option key={option} value={option}>
+                        {option}
+                      </option>
+                    ))}
+                  </NativeSelect>
+                </div>
+                <div className="col-span-3 flex items-center gap-6 rounded-2xl border border-slate-200 px-4 py-3">
+                  <label className="flex cursor-pointer items-start gap-2">
+                    <input
+                      className="mt-0.5 size-4 shrink-0"
+                      defaultChecked={useReranker === true}
+                      name="useReranker"
+                      type="checkbox"
+                      value="true"
+                    />
+                    <span className="flex flex-col gap-0.5">
+                      <span className="text-sm font-medium leading-none text-slate-700">
+                        Reranker
+                      </span>
+                      <span className="text-xs text-slate-500">
+                        Re-scores results with a cross-encoder model after
+                        retrieval (requires COHERE_API_KEY). Unchecked still
+                        inherits the ENABLE_RERANKER setting — this only
+                        forces it on for this search.
+                      </span>
+                    </span>
+                  </label>
+                  <label className="flex cursor-pointer items-start gap-2">
+                    <input
+                      className="mt-0.5 size-4 shrink-0"
+                      defaultChecked={useMultiIntent === true}
+                      name="useMultiIntent"
+                      type="checkbox"
+                      value="true"
+                    />
+                    <span className="flex flex-col gap-0.5">
+                      <span className="text-sm font-medium leading-none text-slate-700">
+                        Multi-intent fan-out
+                      </span>
+                      <span className="text-xs text-slate-500">
+                        Decomposes multi-part queries into sub-queries,
+                        searches each in parallel, and merges results.
+                      </span>
+                    </span>
+                  </label>
+                </div>
+              </div>
             </div>
             <Button
               className="mt-auto h-12 rounded-2xl px-6 font-semibold"
@@ -407,9 +514,11 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
             </section>
 
             <RagSearchTimingPanel
+              cohereConfigured={cohereConfigured}
               embeddingSourceLabel={formatEmbeddingSource(
                 result.embeddingSource,
               )}
+              retrievalStrategy={result.retrieval_strategy}
               timings={[
                 ['Total search', formatDurationMs(result.timings.totalMs)],
                 [
@@ -419,6 +528,12 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
                 [
                   'Similarity search',
                   formatDurationMs(result.timings.similaritySearchMs),
+                ],
+                [
+                  'Rerank',
+                  result.timings.rerankMs > 0
+                    ? formatDurationMs(result.timings.rerankMs)
+                    : 'Reranker off',
                 ],
                 [
                   'Query rewrite',

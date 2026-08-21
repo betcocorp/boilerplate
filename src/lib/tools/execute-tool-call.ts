@@ -38,13 +38,15 @@ function extractToolRetrievalParams(
   if (!retrieval || typeof retrieval !== 'object' || Array.isArray(retrieval)) {
     return undefined;
   }
-  const { search, selection } = retrieval as Record<string, unknown>;
+  const { search, selection, productLineResolution } = retrieval as Record<string, unknown>;
   if (!search || typeof search !== 'object' || Array.isArray(search)) {
     return undefined;
   }
   const parsed = toolRetrievalParamsSchema.safeParse({
     ...(search as Record<string, unknown>),
     selection,
+    // B0-619 — carried alongside search/selection when this call's retrieval summary resolved one.
+    ...(productLineResolution ? { productLineResolution } : {}),
   });
   return parsed.success ? parsed.data : undefined;
 }

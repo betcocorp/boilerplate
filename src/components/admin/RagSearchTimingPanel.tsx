@@ -8,6 +8,14 @@ import { Button } from '~/components/ui/button';
 
 type RagSearchTimingPanelProps = {
   embeddingSourceLabel: string;
+  /** B0-619 — this search's `retrieval_strategy` ('vector'|'hybrid'|'vector+reranked'|'hybrid+reranked'). */
+  retrievalStrategy?: string;
+  /**
+   * B0-619 — whether `COHERE_API_KEY` is configured server-side, passed down as a presence check
+   * only (never the key itself). Disambiguates "reranker toggled off" from "reranker requested but
+   * no key configured, silently falling back to unreranked results".
+   */
+  cohereConfigured?: boolean;
   timings: Array<{
     label: string;
     value: string;
@@ -16,6 +24,8 @@ type RagSearchTimingPanelProps = {
 
 export function RagSearchTimingPanel({
   embeddingSourceLabel,
+  retrievalStrategy,
+  cohereConfigured,
   timings,
 }: RagSearchTimingPanelProps) {
   const [isOpen, setIsOpen] = useState(false);
@@ -44,6 +54,21 @@ export function RagSearchTimingPanel({
             <Badge variant="secondary">Total: {timings[0].value}</Badge>
           )}
           <Badge variant="secondary">{embeddingSourceLabel}</Badge>
+          {retrievalStrategy ? (
+            <Badge variant="outline">{retrievalStrategy}</Badge>
+          ) : null}
+          {cohereConfigured !== undefined ? (
+            <Badge
+              title={
+                cohereConfigured
+                  ? 'COHERE_API_KEY is configured server-side'
+                  : 'COHERE_API_KEY is not configured — a requested reranker silently falls back to unreranked results'
+              }
+              variant={cohereConfigured ? 'outline' : 'secondary'}
+            >
+              {cohereConfigured ? 'Cohere key configured' : 'Cohere key not configured'}
+            </Badge>
+          ) : null}
           <span
             className={`mt-0.5 rounded-full border border-slate-200 p-2 text-slate-500 transition-transform duration-200 ${
               isOpen ? 'rotate-180' : ''

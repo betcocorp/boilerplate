@@ -59,8 +59,10 @@ import {
   extractItemSimilarityScore,
   extractItemValidatorConfidence,
   extractModelTag,
+  extractProductLineLock,
   extractProgress,
   extractPromptVersion,
+  extractRetrievalStrategy,
   extractRetrievedDocumentChunks,
   extractRoutingDecision,
   extractRuntimeConfig,
@@ -631,6 +633,7 @@ export default async function AdminTestRunDetailsPage({
                   <TableHead>Elapsed</TableHead>
                   <TableHead>Model</TableHead>
                   <TableHead>Agent</TableHead>
+                  <TableHead>Retrieval</TableHead>
                   <TableHead>Rounds | Cache | Elapsed</TableHead>
                   <TableHead>Message</TableHead>
                   <TableHead>Trace</TableHead>
@@ -639,7 +642,7 @@ export default async function AdminTestRunDetailsPage({
               <TableBody>
                 {displayResultItems.length === 0 ? (
                   <TableRow>
-                    <TableCell className="text-slate-500" colSpan={11}>
+                    <TableCell className="text-slate-500" colSpan={12}>
                       No item-level results yet.
                     </TableCell>
                   </TableRow>
@@ -783,6 +786,85 @@ export default async function AdminTestRunDetailsPage({
                                     variant="outline"
                                   >
                                     {shortHash(promptVersion)}
+                                  </Badge>
+                                );
+                              })()}
+                            </div>
+                          </TableCell>
+                          {/* B0-619 — retrieval strategy + product-line lock, previously only
+                              readable from raw `workflow_steps` JSON. */}
+                          <TableCell className="whitespace-nowrap">
+                            <div className="flex flex-col items-start gap-1">
+                              {(() => {
+                                const strategy = extractRetrievalStrategy(
+                                  row.response_payload,
+                                );
+                                if (!strategy) {
+                                  return (
+                                    <span className="text-xs text-slate-400">
+                                      —
+                                    </span>
+                                  );
+                                }
+                                return <Badge variant="outline">{strategy}</Badge>;
+                              })()}
+                              {(() => {
+                                const lock = extractProductLineLock(
+                                  row.response_payload,
+                                );
+                                if (!lock) {
+                                  return null;
+                                }
+                                if (lock.lockedProductLineKey) {
+                                  const label =
+                                    lock.candidates.find(
+                                      (c) =>
+                                        c.productLineKey ===
+                                        lock.lockedProductLineKey,
+                                    )?.label ?? lock.lockedProductLineKey;
+                                  return (
+                                    <Badge
+                                      className="border-emerald-600/45 bg-emerald-600/12 text-emerald-900 dark:border-emerald-500/40 dark:bg-emerald-500/15 dark:text-emerald-50"
+                                      title={`Locked to ${lock.lockedProductLineKey} (${lock.lockReason})`}
+                                      variant="outline"
+                                    >
+                                      Locked: {label}
+                                    </Badge>
+                                  );
+                                }
+                                if (lock.lockReason === 'skipped_ambiguous') {
+                                  const [first, second] = lock.candidates;
+                                  const margin =
+                                    first && second
+                                      ? (
+                                          first.maxSimilarity -
+                                          second.maxSimilarity
+                                        ).toFixed(3)
+                                      : null;
+                                  return (
+                                    <Badge
+                                      className="border-amber-600/45 bg-amber-600/12 text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/15 dark:text-amber-50"
+                                      title={
+                                        margin
+                                          ? `Top ${lock.candidates.length} candidates within ${margin} similarity`
+                                          : 'Ambiguous product-line resolution'
+                                      }
+                                      variant="outline"
+                                    >
+                                      Ambiguous ({lock.candidates.length} candidates)
+                                    </Badge>
+                                  );
+                                }
+                                if (lock.candidates.length === 0) {
+                                  return (
+                                    <span className="text-xs text-slate-400">
+                                      No line resolved
+                                    </span>
+                                  );
+                                }
+                                return (
+                                  <Badge title={lock.lockReason} variant="secondary">
+                                    Not locked
                                   </Badge>
                                 );
                               })()}

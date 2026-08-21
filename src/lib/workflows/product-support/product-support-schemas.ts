@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { toolTraceSchema } from '~/lib/audit/trace';
+import { productLineLockSchema, toolTraceSchema } from '~/lib/audit/trace';
 import { AGENT_CONFIDENCE_REASONS } from '~/lib/workflows/product-support/agent-self-confidence';
 import { CONFIDENCE_PROVENANCES } from '~/lib/workflows/product-support/confidence-provenance';
 
@@ -449,6 +449,17 @@ export const productSupportFinalOutputSchema = z.object({
   similaritySummary: similaritySummarySchema.optional(),
   /** B0-493 — run-level retrieval configuration rollup. See schema doc above. */
   retrievalConfig: retrievalConfigSummarySchema.optional(),
+  /**
+   * B0-619 — sum of `rerankMs` across every search-backed tool call this turn. Null when no
+   * search tool ran. Optional so historical payloads written before this ticket still parse.
+   */
+  rerankMsTotal: z.number().nullable().optional(),
+  /**
+   * B0-619 — the product-line lock decision behind this turn's retrieval (see
+   * `productLineLockSchema`), taken from the first search-backed tool call that carried one. Null
+   * when no search tool ran. Optional for historical payloads.
+   */
+  productLineLock: productLineLockSchema.nullable().optional(),
   /**
    * B0-491 — the answering agent's OWN self-reported confidence (see
    * `~/lib/workflows/product-support/agent-self-confidence.ts`), distinct from `confidence`

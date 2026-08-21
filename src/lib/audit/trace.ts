@@ -22,6 +22,35 @@ export const toolCallOriginSchema = z.enum([
 export type ToolCallOrigin = z.infer<typeof toolCallOriginSchema>;
 
 /**
+ * B0-619 — the product-line lock decision behind a search-backed tool call (see
+ * `ProductLineResolutionResult` in `~/lib/retrieval/product-line-resolution.ts`, which every
+ * `ragQueryForProductKnowledgeWithMeta` branch already computes as `retrieval.productLineResolution`
+ * — this just gives that shape a schema so it can be captured off the full tool payload the same way
+ * `toolRetrievalParamsSchema` captures `retrieval.search`/`retrieval.selection`). Shared with
+ * `productSupportFinalOutputSchema`'s run-level `productLineLock` so both persist the identical shape.
+ */
+export const productLineLockSchema = z.object({
+  candidates: z.array(
+    z.object({
+      productLineKey: z.string(),
+      label: z.string().nullable(),
+      maxSimilarity: z.number(),
+    }),
+  ),
+  lockedProductLineKey: z.string().nullable(),
+  lockReason: z.enum([
+    'explicit_filter',
+    'high_confidence',
+    'skipped_low_confidence',
+    'skipped_ambiguous',
+    'skipped_no_product_line',
+    'resolution_disabled',
+  ]),
+});
+
+export type ProductLineLock = z.infer<typeof productLineLockSchema>;
+
+/**
  * B0-493 — the exact retrieval parameters and strategy/cache outcome of a search-backed tool call,
  * captured from the FULL tool payload at `executeToolCall` time (never reconstructed from the
  * truncated `outputPreview`, which routinely drops this — it sits after the potentially-large
@@ -63,6 +92,12 @@ export const toolRetrievalParamsSchema = z.object({
     maxPerDocument: z.number(),
     requiredDocumentKinds: z.array(z.string()),
   }),
+  /**
+   * B0-619 — the product-line lock decision for this call, when its retrieval summary carried one
+   * (every `ragQueryForProductKnowledgeWithMeta` branch does). Optional so historical rows written
+   * before this ticket still parse.
+   */
+  productLineResolution: productLineLockSchema.optional(),
 });
 
 export type ToolRetrievalParams = z.infer<typeof toolRetrievalParamsSchema>;
