@@ -1,3 +1,4 @@
+import { APP_VERSION } from '~/lib/app-version';
 import { assertSupabaseNoError as assertNoError } from '~/lib/utils';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
@@ -319,7 +320,9 @@ export async function createTestResult(values: NewTestResultRecord) {
   const supabase = getSupabaseServiceRoleClient();
   const result = await supabase
     .from('test_results')
-    .insert(values)
+    // B0-575 — choke point: every run row carries app_version even if a future caller
+    // forgets to pass it. An explicit value (e.g. a replayed import) still wins.
+    .insert({ app_version: APP_VERSION, ...values })
     .select('*')
     .single();
   return assertNoError(result) as TestResultRecord;
@@ -398,8 +401,16 @@ export async function insertTestResultItems(items: NewTestResultItemRecord[]) {
   const supabase = getSupabaseServiceRoleClient();
   const inserted: TestResultItemRecord[] = [];
 
-  for (let i = 0; i < items.length; i += 500) {
-    const slice = items.slice(i, i + 500);
+  /**
+   * B0-575 — choke point: every harness result row carries `app_version`. The known
+   * writers (runner.ts, search-run-executor.ts) already stamp it, but the NULL rows that
+   * postdate B0-472 came from builds that missed the stamp — defaulting here means a
+   * future writer cannot reopen that hole. An explicit value still wins.
+   */
+  const stamped = items.map((item) => ({ app_version: APP_VERSION, ...item }));
+
+  for (let i = 0; i < stamped.length; i += 500) {
+    const slice = stamped.slice(i, i + 500);
     const result = await supabase.from('test_result_items').insert(slice).select('*');
     const data = assertNoError(result);
     inserted.push(...((data || []) as TestResultItemRecord[]));
