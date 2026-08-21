@@ -1,4 +1,5 @@
 import { getErrorMessage } from '~/lib/utils';
+import { APP_VERSION } from '~/lib/app-version';
 import {
   DEFAULT_MAX_OUTPUT_TOKENS,
   resolveMaxOutputTokens,
@@ -1659,6 +1660,11 @@ export async function runProductSupportWorkflow(input: {
     // window in which the run exists with no provenance, and would be skipped entirely on the
     // failure paths that never reach a completion write.
     source: input.source,
+    // B0-574 — queryable version stamps, written on the insert (same rationale as `source`
+    // above: no patch-later window, and failure paths that never complete still carry them).
+    // Pre-B0-574 rows have NULL here and read as "unversioned" — never backfilled.
+    app_version: APP_VERSION,
+    prompt_bundle_version: PROMPT_BUNDLE_VERSION,
     user_input: jsonContent({
       message: input.userMessage,
       modelTag: input.modelTag ?? 'preview',

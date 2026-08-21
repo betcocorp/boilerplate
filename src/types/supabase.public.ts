@@ -1135,6 +1135,7 @@ export type Database = {
           confidence_floor: number
           id: string
           intended_agent: string | null
+          is_golden: boolean
           metadata: Json
           name: string
           row_count: number
@@ -1151,6 +1152,7 @@ export type Database = {
           confidence_floor?: number
           id?: string
           intended_agent?: string | null
+          is_golden?: boolean
           metadata?: Json
           name: string
           row_count?: number
@@ -1167,6 +1169,7 @@ export type Database = {
           confidence_floor?: number
           id?: string
           intended_agent?: string | null
+          is_golden?: boolean
           metadata?: Json
           name?: string
           row_count?: number
@@ -1178,6 +1181,33 @@ export type Database = {
           suite_version?: string
           updated_at?: string
           uploaded_at?: string
+        }
+        Relationships: []
+      }
+      tier_targets: {
+        Row: {
+          created_at: string
+          is_gate: boolean
+          label: string
+          target_pass_rate: number
+          tier: number
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          is_gate?: boolean
+          label: string
+          target_pass_rate: number
+          tier: number
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          is_gate?: boolean
+          label?: string
+          target_pass_rate?: number
+          tier?: number
+          updated_at?: string
         }
         Relationships: []
       }
@@ -1243,11 +1273,13 @@ export type Database = {
       }
       workflow_runs: {
         Row: {
+          app_version: string | null
           confidence: number | null
           conversation_id: string
           created_at: string
           final_output: Json | null
           id: string
+          prompt_bundle_version: string | null
           source: string | null
           status: string
           updated_at: string
@@ -1255,11 +1287,13 @@ export type Database = {
           workflow_name: string
         }
         Insert: {
+          app_version?: string | null
           confidence?: number | null
           conversation_id: string
           created_at?: string
           final_output?: Json | null
           id?: string
+          prompt_bundle_version?: string | null
           source?: string | null
           status: string
           updated_at?: string
@@ -1267,11 +1301,13 @@ export type Database = {
           workflow_name: string
         }
         Update: {
+          app_version?: string | null
           confidence?: number | null
           conversation_id?: string
           created_at?: string
           final_output?: Json | null
           id?: string
+          prompt_bundle_version?: string | null
           source?: string | null
           status?: string
           updated_at?: string
@@ -1511,6 +1547,7 @@ export type Database = {
           selector: string
         }[]
       }
+      list_available_app_versions: { Args: never; Returns: string[] }
       merge_permission_groups: {
         Args: {
           p_actor_email: string
