@@ -1,3 +1,5 @@
+import { after } from 'next/server';
+
 import { logWarn } from '~/lib/observability/logger';
 import { classifyUserIntent, type IntentClassification } from '~/lib/orchestrator/intent-classifier';
 import { routeUserMessageToSme, type SmeRouteDecision } from '~/lib/orchestrator/sme-routing';
@@ -12,6 +14,7 @@ import {
   updateTestRecord,
   updateTestResult,
 } from './repository';
+import { generateReport } from './report/orchestrator';
 import { runSingleTestItem } from './runner';
 import { generateAndSaveRunInsights } from './run-insights';
 import {
@@ -281,4 +284,22 @@ export async function executeTestRun(testResultId: string) {
       message: error instanceof Error ? error.message : String(error),
     });
   }
+
+  // B0-608 — auto-generate the eval report on every terminal chat run so the run detail page
+  // can show "View report" without anyone clicking "Generate report" first. Scheduled via
+  // `after()` (not awaited inline) because `generateReport` can take minutes on large runs and
+  // this function is called from a route that shares its own `maxDuration = 300` budget with the
+  // run execution itself; `generateReport` is checkpointed/resumable via `report_state`, so a
+  // background run that gets cut off (or errors) is picked up again by the report page's own
+  // auto-continue POSTs. Best-effort: never let a report failure affect the run's own success.
+  after(async () => {
+    try {
+      await generateReport(testResult.id);
+    } catch (error) {
+      logWarn('test_run_report_auto_generate_error', {
+        testResultId: testResult.id,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
 }
