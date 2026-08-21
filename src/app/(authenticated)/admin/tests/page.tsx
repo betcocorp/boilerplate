@@ -16,6 +16,7 @@ import {
   TableRow,
 } from '~/components/ui/table';
 import { V1_AGENT_REGISTRY } from '~/lib/agents/agent-registry';
+import { getGoldenSetMembership } from '~/lib/tests/golden-set';
 import {
   listResultItemsByResultId,
   listTestResultsByTestId,
@@ -23,10 +24,13 @@ import {
 } from '~/lib/tests/repository';
 import { extractItemSimilarityScore } from '~/lib/tests/response-payload';
 import { TEST_TEMPLATE_COLUMNS } from '~/lib/tests/template';
+import { getTierTargets } from '~/lib/tests/tier-targets';
 
 import {
   deleteTestAction,
   runTestAction,
+  setTestGoldenAction,
+  updateTierTargetAction,
   uploadTestCsvAction,
 } from './actions';
 
@@ -52,7 +56,11 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
   const success = typeof params.success === 'string' ? params.success : null;
   const error = typeof params.error === 'string' ? params.error : null;
 
-  const tests = await listTests();
+  const [tests, tierTargets, goldenMembership] = await Promise.all([
+    listTests(),
+    getTierTargets(),
+    getGoldenSetMembership(),
+  ]);
   const testRows = await Promise.all(
     tests.map(async (test) => {
       const [latestResults, runsForSimilarity] = await Promise.all([
@@ -218,6 +226,116 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
         </section>
 
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
+          <h2 className="text-lg font-semibold text-slate-900">
+            Golden set &amp; tier targets
+          </h2>
+          <p className="mt-2 text-sm text-slate-600">
+            Golden sets ({goldenMembership.goldenTests.length}) gate releases; every prompt
+            in a golden set must carry a priority (tier 1&ndash;3). Targets are stored in{' '}
+            <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">tier_targets</code>{' '}
+            and take effect without a deploy; changes are audited.
+          </p>
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-3">
+            {tierTargets.map((target) => (
+              <form
+                action={updateTierTargetAction}
+                className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4"
+                key={target.tier}
+              >
+                <input name="returnPath" type="hidden" value="/admin/tests" />
+                <input name="tier" type="hidden" value={target.tier} />
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-semibold text-slate-900">
+                    Tier {target.tier}
+                  </span>
+                  {target.isGate ? (
+                    <span className="rounded-full bg-rose-100 px-2 py-0.5 text-xs font-medium text-rose-700">
+                      Hard gate
+                    </span>
+                  ) : (
+                    <span className="rounded-full bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-600">
+                      Target only
+                    </span>
+                  )}
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label className="text-xs text-slate-600" htmlFor={`tier-label-${target.tier}`}>
+                    Label
+                  </Label>
+                  <Input
+                    defaultValue={target.label}
+                    id={`tier-label-${target.tier}`}
+                    name="label"
+                    type="text"
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label
+                    className="text-xs text-slate-600"
+                    htmlFor={`tier-target-${target.tier}`}
+                  >
+                    Target pass rate (0&ndash;1)
+                  </Label>
+                  <Input
+                    defaultValue={target.targetPassRate}
+                    id={`tier-target-${target.tier}`}
+                    max="1"
+                    min="0"
+                    name="targetPassRate"
+                    step="0.01"
+                    type="number"
+                  />
+                </div>
+                <label className="flex items-center gap-2 text-sm text-slate-700">
+                  <input
+                    className="h-4 w-4 rounded border-slate-300"
+                    defaultChecked={target.isGate}
+                    name="isGate"
+                    type="checkbox"
+                  />
+                  Hard gate (can block)
+                </label>
+                <Button size="sm" type="submit" variant="outline">
+                  Save tier {target.tier}
+                </Button>
+              </form>
+            ))}
+          </div>
+
+          {goldenMembership.missingPriority.length > 0 ? (
+            <div className="mt-4 rounded-2xl border border-amber-300 bg-amber-50 p-4">
+              <h3 className="text-sm font-semibold text-amber-900">
+                Data errors: {goldenMembership.missingPriority.length} golden-set prompt
+                {goldenMembership.missingPriority.length === 1 ? '' : 's'} missing a priority
+              </h3>
+              <p className="mt-1 text-xs text-amber-800">
+                These prompts are in a golden set but carry no tier, so they are excluded
+                from tier figures until fixed &mdash; they are never silently dropped.
+              </p>
+              <ul className="mt-2 space-y-1">
+                {goldenMembership.missingPriority.slice(0, 20).map((item) => (
+                  <li className="truncate text-xs text-amber-900" key={item.testItemId}>
+                    <Link
+                      className="font-medium underline-offset-2 hover:underline"
+                      href={`/admin/tests/${item.testId}`}
+                    >
+                      {item.testName}
+                    </Link>{' '}
+                    &mdash; row {item.rowIndex}: {item.prompt}
+                  </li>
+                ))}
+                {goldenMembership.missingPriority.length > 20 ? (
+                  <li className="text-xs text-amber-800">
+                    &hellip;and {goldenMembership.missingPriority.length - 20} more.
+                  </li>
+                ) : null}
+              </ul>
+            </div>
+          ) : null}
+        </section>
+
+        <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <div className="mb-4 flex items-center justify-between">
             <h2 className="text-lg font-semibold text-slate-900">
               Uploaded tests
@@ -230,6 +348,7 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
             <TableHeader>
               <TableRow>
                 <TableHead>Name</TableHead>
+                <TableHead>Golden</TableHead>
                 <TableHead>Intended agent</TableHead>
                 <TableHead>Rows</TableHead>
                 <TableHead>Latest run</TableHead>
@@ -256,6 +375,36 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
                       >
                         {test.name}
                       </Link>
+                    </TableCell>
+                    <TableCell>
+                      <form action={setTestGoldenAction}>
+                        <input
+                          name="returnPath"
+                          type="hidden"
+                          value="/admin/tests"
+                        />
+                        <input name="testId" type="hidden" value={test.id} />
+                        <input
+                          name="isGolden"
+                          type="hidden"
+                          value={test.is_golden ? 'false' : 'true'}
+                        />
+                        <button
+                          className={
+                            test.is_golden
+                              ? 'rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-800 ring-1 ring-amber-300 hover:bg-amber-200'
+                              : 'rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-500 ring-1 ring-slate-200 hover:bg-slate-200'
+                          }
+                          title={
+                            test.is_golden
+                              ? 'In the gating golden set — click to remove (audited)'
+                              : 'Not in the golden set — click to add (audited)'
+                          }
+                          type="submit"
+                        >
+                          {test.is_golden ? 'Golden' : 'Mark golden'}
+                        </button>
+                      </form>
                     </TableCell>
                     <TableCell className="max-w-[200px] text-sm text-slate-600">
                       {test.intended_agent
