@@ -1,4 +1,7 @@
+import { getStringSetting } from '~/lib/settings/settings-service';
+
 const COHERE_RERANK_ENDPOINT = 'https://api.cohere.com/v2/rerank';
+const DEFAULT_RERANK_MODEL = 'rerank-v3.5';
 
 type RerankableChunk = {
   chunk_id: string;
@@ -44,7 +47,7 @@ export async function rerankChunks(
   const apiKey = rerankApiKey();
   if (!apiKey) return null;
 
-  const model = process.env.COHERE_RERANK_MODEL ?? 'rerank-v3.5';
+  const model = await getStringSetting('COHERE_RERANK_MODEL', DEFAULT_RERANK_MODEL);
 
   let resp: Response;
   try {

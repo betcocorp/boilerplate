@@ -1,6 +1,7 @@
 import { createEmbedding, EMBEDDING_MODEL } from '~/lib/rag/embeddings';
 import { isRerankerConfigured, rerankChunks } from '~/lib/rag/rerank';
 import { getOpenAIClient } from '~/lib/openai/client';
+import { getBooleanSetting } from '~/lib/settings/settings-service';
 import { normalizeForDedupe } from '~/lib/utils';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 const DEFAULT_REWRITE_MODEL = 'gpt-4.1-mini';
@@ -823,7 +824,7 @@ export async function searchProductChunks(
   } = resolveSearchScope(options.scope);
   const minSimilarity = normalizeMinSimilarity(options.minSimilarity);
   const useHybrid = options.useHybrid ?? false;
-  const useReranker = options.useReranker ?? process.env.ENABLE_RERANKER === 'true';
+  const useReranker = options.useReranker ?? (await getBooleanSetting('ENABLE_RERANKER', false));
   const useMultiIntent = options.useMultiIntent ?? false;
   // Fetch extra candidates when reranking so the reranker has a larger pool to
   // reorder before we slice down to the requested limit. When an app-layer document_kind
