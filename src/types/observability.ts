@@ -313,6 +313,26 @@ export type ConfidenceBucketDatum = { bucket: 'high' | 'mid' | 'low' | 'none'; c
 export type LatencyByStepDatum = { stepName: string; avgDurationMs: number; p95DurationMs: number; sampleSize: number };
 export type FailureRateByDayDatum = { day: string; total: number; failed: number; failureRate: number };
 
+/**
+ * B0-581 — token spend per run and the cached share of prompt tokens, folded from
+ * `final_output.usage` by `buildTokenUsage` in `~/lib/observability/aggregates.ts` (same
+ * window scan as everything else — no second pass).
+ */
+export type TokenUsageAggregate = {
+  /** Mean `usage.totalTokens` over runs that recorded usage; null when none did. */
+  avgTotalTokens: number | null;
+  /** Runs in the window whose `final_output.usage` exists — the mean's denominator. */
+  tokenSampleSize: number;
+  /**
+   * Σ cachedPromptTokens / Σ promptTokens, over ONLY runs whose usage carries the
+   * `cachedPromptTokens` key (added by B0-324). Pre-B0-324 runs are excluded from the
+   * denominator so they cannot deflate the share; null when no run in the window has the key.
+   */
+  cachedPromptShare: number | null;
+  /** Runs the cache share was computed over — surfaced so a thin sample is never hidden. */
+  cachedShareSampleSize: number;
+};
+
 export type AggregateDashboardData = {
   windowFrom: string;
   windowTo: string;
@@ -343,6 +363,8 @@ export type AggregateDashboardData = {
    */
   avgDurationMs: number | null;
   durationSampleSize: number;
+  /** B0-581 — see `TokenUsageAggregate`. */
+  tokenUsage: TokenUsageAggregate;
   routingDistribution: RoutingDistributionDatum[];
   confidenceBuckets: ConfidenceBucketDatum[];
   latencyByStep: LatencyByStepDatum[];

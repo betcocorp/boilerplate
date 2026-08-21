@@ -34,6 +34,7 @@ import type {
   FailureRateByDayDatum,
   LatencyByStepDatum,
   RoutingDistributionDatum,
+  TokenUsageAggregate,
 } from '~/types/observability';
 
 /** PostgREST caps a request at 1000 rows; sweep in pages of that size. */
@@ -78,7 +79,21 @@ export type AggregateWindow = {
   to: string;
 };
 
-type RunScanRow = {
+/**
+ * B0-581 — traffic-version narrowing for the Bex Health dashboard (epics B0-569/570/571).
+ *
+ * Semantics (the shared health-panel contract):
+ *  - `null` / `undefined`     → no filter, all traffic. Every pre-existing call site passes
+ *    nothing, so `/admin/observability` behavior is byte-for-byte unchanged.
+ *  - `UNVERSIONED_TRAFFIC`    → only runs whose `workflow_runs.app_version` IS NULL
+ *    (traffic that predates version stamping).
+ *  - any other string         → exact match on `workflow_runs.app_version`.
+ */
+export const UNVERSIONED_TRAFFIC = 'unversioned';
+export type VersionFilter = string | null | undefined;
+
+/** Exported for `~/lib/observability/pipeline-stages.ts`, which composes the same scan. */
+export type RunScanRow = {
   id: string;
   status: string;
   confidence: number | null;
@@ -87,9 +102,18 @@ type RunScanRow = {
   routing_decision: string | null;
   /** B0-430 — `->>` yields text, so this is parsed by `parseTtftMs` rather than used directly. */
   ttft_ms: string | null;
+  /**
+   * B0-581 — `final_output.usage` fields (written by B0-117; `cachedPromptTokens` added by
+   * B0-324). All `->>` text: null means the key is absent, NOT zero — `cached_prompt_tokens`
+   * being null is how a pre-B0-324 run is excluded from the cache-share denominator.
+   */
+  total_tokens: string | null;
+  prompt_tokens: string | null;
+  cached_prompt_tokens: string | null;
 };
 
-type StepScanRow = {
+/** Exported for `~/lib/observability/pipeline-stages.ts` (stage latency reuses `buildLatencyByStep`). */
+export type StepScanRow = {
   workflow_run_id: string;
   step_name: string;
   started_at: string;
@@ -110,7 +134,8 @@ function utcDayKey(iso: string): string | null {
   return new Date(parsed).toISOString().slice(0, 10);
 }
 
-function roundTo(value: number, decimals: number): number {
+/** Exported (B0-582) so the Gate stage's mean-confidence footer rounds exactly like `avgConfidence`. */
+export function roundTo(value: number, decimals: number): number {
   const factor = 10 ** decimals;
   return Math.round(value * factor) / factor;
 }
@@ -125,21 +150,35 @@ function percentile95(sortedAscending: number[]): number {
   return sortedAscending[index] ?? 0;
 }
 
-async function scanWorkflowRuns(window: AggregateWindow): Promise<RunScanRow[]> {
+/** Exported (B0-581/B0-582) so the Bex Health readers share this exact scan; see `VersionFilter`. */
+export async function scanWorkflowRuns(
+  window: AggregateWindow,
+  version?: VersionFilter,
+): Promise<RunScanRow[]> {
   const supabase = getSupabaseServiceRoleClient();
   const rows: RunScanRow[] = [];
 
   for (let page = 0; page < MAX_SCAN_PAGES; page += 1) {
     const start = page * SCAN_PAGE_SIZE;
     // `final_output` also holds the answer text and retrieved chunks, so pull
-    // only the routing decision and TTFT out of it rather than the whole JSON blob.
-    const { data, error } = await supabase
+    // only the routing decision, TTFT and token usage out of it rather than the
+    // whole JSON blob. (B0-581 added the three `usage` fields — same scan, no
+    // second pass, per this module's row-budget note above.)
+    let query = supabase
       .from('workflow_runs')
       .select(
-        'id,status,confidence,created_at,updated_at,routing_decision:final_output->>routingDecision,ttft_ms:final_output->timingBreakdown->>ttftMs',
+        'id,status,confidence,created_at,updated_at,routing_decision:final_output->>routingDecision,ttft_ms:final_output->timingBreakdown->>ttftMs,total_tokens:final_output->usage->>totalTokens,prompt_tokens:final_output->usage->>promptTokens,cached_prompt_tokens:final_output->usage->>cachedPromptTokens',
       )
       .gte('created_at', window.from)
-      .lte('created_at', window.to)
+      .lte('created_at', window.to);
+
+    if (version === UNVERSIONED_TRAFFIC) {
+      query = query.is('app_version', null);
+    } else if (typeof version === 'string') {
+      query = query.eq('app_version', version);
+    }
+
+    const { data, error } = await query
       .order('created_at', { ascending: true })
       .range(start, start + SCAN_PAGE_SIZE - 1);
 
@@ -158,7 +197,8 @@ async function scanWorkflowRuns(window: AggregateWindow): Promise<RunScanRow[]> 
   return rows;
 }
 
-async function scanWorkflowSteps(
+/** Exported (B0-582) so `~/lib/observability/pipeline-stages.ts` shares this exact scan. */
+export async function scanWorkflowSteps(
   window: AggregateWindow,
   runIds: ReadonlySet<string>,
 ): Promise<StepScanRow[]> {
@@ -204,8 +244,10 @@ async function scanWorkflowSteps(
  * of `run-product-support-workflow.ts`, but `review_tasks` is the durable
  * work-queue row with a real FK to `workflow_runs`. Counted as *distinct runs*
  * so a run with several tasks does not inflate the number.
+ *
+ * Exported (B0-582): the Gate stage's "forced to review" footer is this same figure.
  */
-async function countHumanReviewRuns(
+export async function countHumanReviewRuns(
   window: AggregateWindow,
   runIds: ReadonlySet<string>,
 ): Promise<number> {
@@ -246,7 +288,8 @@ async function countHumanReviewRuns(
   return reviewed.size;
 }
 
-function buildRoutingDistribution(runs: RunScanRow[]): RoutingDistributionDatum[] {
+/** Exported (B0-582): the Route stage's "ambiguous" footer reads this distribution's `ambiguous` entry. */
+export function buildRoutingDistribution(runs: RunScanRow[]): RoutingDistributionDatum[] {
   const byDecision = new Map<string, { count: number; confidenceSum: number; confidenceCount: number }>();
 
   for (const run of runs) {
@@ -300,7 +343,12 @@ function buildConfidenceBuckets(runs: RunScanRow[]): ConfidenceBucketDatum[] {
   ];
 }
 
-function buildLatencyByStep(steps: StepScanRow[]): LatencyByStepDatum[] {
+/**
+ * Exported (B0-582): the pipeline stage strip's per-stage avg/p95/n must reconcile with
+ * `/admin/observability`'s latency-by-step panel, so both go through this one function —
+ * including the clock-skew clamp below.
+ */
+export function buildLatencyByStep(steps: StepScanRow[]): LatencyByStepDatum[] {
   const byStep = new Map<string, number[]>();
 
   for (const step of steps) {
@@ -406,6 +454,66 @@ function buildAvgDurationMs(runs: RunScanRow[]): MeanMsDatum {
   return meanMs(values);
 }
 
+/** The token fields of `RunScanRow` — the only inputs `buildTokenUsage` needs, kept narrow for tests. */
+export type TokenUsageScanRow = Pick<
+  RunScanRow,
+  'total_tokens' | 'prompt_tokens' | 'cached_prompt_tokens'
+>;
+
+/** `->>` yields text; a token count must parse to a finite non-negative number to count. */
+function parseTokenCount(raw: string | null): number | null {
+  if (raw === null) {
+    return null;
+  }
+  const parsed = Number.parseFloat(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+/**
+ * B0-581 — token spend per run and the cached share of prompt tokens, folded from the
+ * rows the window scan already fetched (no second pass).
+ *
+ *  - `avgTotalTokens` averages `final_output.usage.totalTokens` over runs that recorded
+ *    usage at all (`tokenSampleSize`); a run with no `usage` (failed early, or predates
+ *    B0-117) is out of the sample rather than counted as zero.
+ *  - `cachedPromptShare` = Σ cachedPromptTokens / Σ promptTokens, over ONLY the runs whose
+ *    usage carries the `cachedPromptTokens` key (`cachedShareSampleSize`). Runs predating
+ *    B0-324 have usage without that key; including their prompt tokens in the denominator
+ *    would deflate the share, so they are excluded and the sample size is surfaced.
+ */
+export function buildTokenUsage(runs: TokenUsageScanRow[]): TokenUsageAggregate {
+  let totalTokensSum = 0;
+  let tokenSampleSize = 0;
+  let cachedSum = 0;
+  let promptSumForCache = 0;
+  let cachedShareSampleSize = 0;
+
+  for (const run of runs) {
+    const total = parseTokenCount(run.total_tokens);
+    if (total !== null) {
+      totalTokensSum += total;
+      tokenSampleSize += 1;
+    }
+
+    const cached = parseTokenCount(run.cached_prompt_tokens);
+    const prompt = parseTokenCount(run.prompt_tokens);
+    // Both fields must be present: `cached !== null` is what excludes pre-B0-324 runs.
+    if (cached !== null && prompt !== null) {
+      cachedSum += cached;
+      promptSumForCache += prompt;
+      cachedShareSampleSize += 1;
+    }
+  }
+
+  return {
+    avgTotalTokens: tokenSampleSize > 0 ? Math.round(totalTokensSum / tokenSampleSize) : null,
+    tokenSampleSize,
+    cachedPromptShare:
+      promptSumForCache > 0 ? roundTo(cachedSum / promptSumForCache, 4) : null,
+    cachedShareSampleSize,
+  };
+}
+
 /**
  * B0-371 — runs still `running` past the sweeper's staleness threshold, i.e. orphaned
  * records with no terminal row. Folded from the rows already scanned above, so this
@@ -467,8 +575,13 @@ function buildFailureRateByDay(
  */
 export async function getAggregateDashboardData(
   window: AggregateWindow,
+  /**
+   * B0-581 — optional; omitted by every `/admin/observability` call site, whose behavior is
+   * unchanged. The Bex Health panels pass `{ version }` per the shared props contract.
+   */
+  options?: { version?: VersionFilter },
 ): Promise<AggregateDashboardData> {
-  const runs = await scanWorkflowRuns(window);
+  const runs = await scanWorkflowRuns(window, options?.version);
   const runIds = new Set(runs.map((run) => run.id));
 
   const [steps, humanReviewCount, harnessTtft] = await Promise.all([
@@ -504,6 +617,7 @@ export async function getAggregateDashboardData(
     ttftSampleSize: avgTtft.sampleSize,
     avgDurationMs: avgDuration.mean,
     durationSampleSize: avgDuration.sampleSize,
+    tokenUsage: buildTokenUsage(runs),
     routingDistribution: buildRoutingDistribution(runs),
     confidenceBuckets: buildConfidenceBuckets(runs),
     latencyByStep: buildLatencyByStep(steps),
