@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
 
 import { AdminTestsActionToast } from '~/components/admin/tests/AdminTestsActionToast';
+import { AppVersionBadge } from '~/components/admin/tests/AppVersionBadge';
 import { ResultItemMessageCell } from '~/components/admin/tests/ResultItemMessageCell';
 import { RunAtAGlanceCharts } from '~/components/admin/tests/RunAtAGlanceCharts';
 import { RunExecutionProgress } from '~/components/admin/tests/RunExecutionProgress';
@@ -464,6 +465,7 @@ export default async function AdminTestRunDetailsPage({
                 <TestRunNotesDisplay />
                 <p className="mt-3 flex flex-wrap items-center gap-2 font-mono text-xs text-slate-600">
                   <span>Run id: {result.id}</span>
+                  <AppVersionBadge appVersion={result.app_version} />
                   <PromptBundleVersionBadge summary={promptBundleVersionSummary} />
                   <RuntimeConfigBadge runtimeConfig={runtimeConfigForRun} />
                 </p>

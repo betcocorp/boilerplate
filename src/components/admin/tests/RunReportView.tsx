@@ -13,6 +13,7 @@ import {
   useState,
 } from 'react';
 
+import { version as appVersion } from '~/../package.json';
 import { BexStreamdown } from '~/components/bex/BexStreamdown';
 import { Button } from '~/components/ui/button';
 import { caseAnchorId } from '~/lib/tests/report/render';
@@ -54,7 +55,9 @@ function ReportAnchorLink({ href, children, ...rest }: ComponentProps<'a'>) {
         href={href}
         onClick={(event) => {
           event.preventDefault();
-          document.getElementById(targetId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          document
+            .getElementById(targetId)
+            ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }}
       >
         {children}
@@ -342,7 +345,8 @@ export function RunReportView({
             </h1>
             {generatedAt ? (
               <p className="mt-1 text-xs text-slate-400">
-                Generated {new Date(generatedAt).toLocaleString()}
+                Generated {new Date(generatedAt).toLocaleString()} - v
+                {appVersion}
               </p>
             ) : null}
           </div>
