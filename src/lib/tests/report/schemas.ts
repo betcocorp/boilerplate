@@ -28,7 +28,6 @@ export const top3RecommendationSchema = z.object({
   evidence: z.string(),
   affected: z.string(),
   change: z.string(),
-  changePseudocode: z.array(z.string()).min(1),
   impact: z.string(),
 });
 

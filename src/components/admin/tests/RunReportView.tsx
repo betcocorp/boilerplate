@@ -19,17 +19,16 @@ import { Button } from '~/components/ui/button';
 import { caseAnchorId } from '~/lib/tests/report/render';
 import { cn } from '~/lib/utils';
 
-/** Matches the leading UUID in a "Detailed results — case by case" heading (`${id} — ${question}`). */
+/** Matches a UUID anywhere in a case's heading blockquote text (`**question**` + `` `id` ``). */
 const CASE_HEADING_ID_PATTERN =
-  /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?=\s)/i;
+  /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
 
 /** Exact `## …` line `render.ts` emits to open the case-by-case section. */
 const CASE_SECTION_HEADING_LINE = '## Detailed results — case by case';
 /** Any other `##` (not `###`) heading line — closes the case-by-case section. */
 const NEXT_H2_LINE_PATTERN = /^##(?!#)\s/;
-/** The `### {uuid} — {question}` line `render.ts` opens each case with. */
-const CASE_HEADING_LINE_PATTERN =
-  /^###\s[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i;
+/** The `> **{question}**` line `render.ts` opens each case's heading blockquote with (B0-613). */
+const CASE_HEADING_LINE_PATTERN = /^>\s*\*\*/;
 
 /** B0-612 — alternating background so each case reads as one visually distinct group. */
 const CASE_TONE_CLASSES = ['', 'rounded-2xl bg-slate-50'] as const;
@@ -85,6 +84,14 @@ function splitReportMarkdown(markdown: string): ReportMarkdownSections {
   }
   if (current) cases.push(current.join('\n'));
 
+  // A report generated before the case-heading format last changed (e.g. B0-613's `### id —
+  // question` → blockquote switch) won't match `CASE_HEADING_LINE_PATTERN` at all — rather than
+  // silently dropping the whole section (every line here would otherwise belong to no case),
+  // render it as one untoned block so old reports stay fully visible until regenerated.
+  if (cases.length === 0) {
+    return { before: markdown, cases: [], after: '' };
+  }
+
   return { before, cases, after };
 }
 
@@ -98,13 +105,24 @@ function reactNodeToText(node: ReactNode): string {
   return '';
 }
 
-/** Gives each "Detailed results" case heading a stable anchor id, matched by `linkifyCaseIds`. */
-function ReportCaseHeading({ children, ...rest }: ComponentProps<'h3'>) {
+/**
+ * Renders a case's heading blockquote (B0-613: bold question first, muted id below) and gives it
+ * the stable anchor id `linkifyCaseIds` links back to — replaces the old `### id — question` h3.
+ */
+function ReportCaseQuote({ children, className, ...rest }: ComponentProps<'blockquote'>) {
   const match = CASE_HEADING_ID_PATTERN.exec(reactNodeToText(children));
   return (
-    <h3 id={match ? caseAnchorId(match[1]) : undefined} {...rest}>
+    <blockquote
+      className={cn(
+        className,
+        match &&
+          '[&>p:first-child]:text-lg [&>p:first-child]:font-semibold [&>p:last-child]:mt-2 [&>p:last-child]:text-xs [&>p:last-child]:text-slate-500',
+      )}
+      id={match ? caseAnchorId(match[1]) : undefined}
+      {...rest}
+    >
       {children}
-    </h3>
+    </blockquote>
   );
 }
 
@@ -207,7 +225,7 @@ export function RunReportView({
   const contentRef = useRef<HTMLDivElement>(null);
 
   const reportComponents = useMemo(
-    () => ({ a: ReportAnchorLink, h3: ReportCaseHeading }),
+    () => ({ a: ReportAnchorLink, blockquote: ReportCaseQuote }),
     [],
   );
 

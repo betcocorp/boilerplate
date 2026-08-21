@@ -29,7 +29,6 @@ const SYNTHESIS_JSON_SCHEMA = {
           evidence: { type: 'string' },
           affected: { type: 'string' },
           change: { type: 'string' },
-          changePseudocode: { type: 'array', items: { type: 'string' } },
           impact: { type: 'string' },
         },
         required: [
@@ -39,7 +38,6 @@ const SYNTHESIS_JSON_SCHEMA = {
           'evidence',
           'affected',
           'change',
-          'changePseudocode',
           'impact',
         ],
       },
@@ -72,7 +70,7 @@ Identify the most common failure patterns (cite case IDs), key strengths (cite c
 
 Then produce exactly 3 "Top 3 recommended agent improvements", ranked Priority #1 (most important) to #3, by: frequency of the problem, severity, business impact, impact on Tier 1 (highest-priority) cases, weak categories, likely effect on the overall score, and whether the issue is systemic rather than isolated. Answer: "If we could fix only three things before testing this agent again, what should they be?" Keep recommendations about the AGENT (its instructions/system prompt, retrieval behavior, grounding against sources, knowledge gaps, response logic, handling of specific question types, completeness, hallucination/unsupported content, intent understanding) — not about the testing process, unless something about the test data itself prevented fair evaluation (say so separately if so).
 
-Each recommendation needs: what to improve, why it should be fixed first, evidence (cite case IDs and scores), affected tiers/categories, a one-line plain-English "change" summary, and "changePseudocode" — an array of lines (IF/THEN, FOR EACH, function-like) precise enough for an engineer to implement without another round of questions: state the trigger/condition, the action, guard clauses for edge cases (especially safety/scope boundaries), any thresholds/parameters named explicitly, and a fallback that flags rather than guesses when required information is absent. Keep it general enough to hold for future questions of the same type, not overfit to the exact cases given.
+Each recommendation needs: what to improve, why it should be fixed first, evidence (cite case IDs and scores), affected tiers/categories, and a one-line plain-English "change" summary precise enough for an engineer to act on without another round of questions.
 
 Finally produce an executive assessment: 2-3 strongest areas, 2-3 areas needing improvement, the single most significant failure pattern, any major risk discovered, and a short plain-English readiness recommendation for broader testing — written for business stakeholders.`;
 
@@ -211,7 +209,6 @@ export async function synthesizeReportFindings(
         evidence: '',
         affected: '',
         change: '',
-        changePseudocode: ['# synthesis unavailable'],
         impact: '',
       })),
       exec: {
