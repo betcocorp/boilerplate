@@ -21,9 +21,13 @@ type RunReportButtonProps = {
  *
  * B0-608 — report generation is now automatic (kicked off by `executeTestRun` on run completion),
  * so there is no manual "Generate report" affordance any more: once a report exists we link to it
- * as "View report"; until then we show a non-interactive "Generating report…" state instead of an
- * actionable button. The `/report` route itself is unchanged — it still safely no-ops/continues if
+ * as "View report". The `/report` route itself is unchanged — it still safely no-ops/continues if
  * hit while scoring, which is what powers the report page's own auto-continue behavior.
+ *
+ * B0-611 — while a report is generating (`enabled && !hasExistingReport`), "Generating report…"
+ * is now clickable too, linking to that same route so the user can watch the in-progress/loading
+ * state `RunReportView` already renders instead of staring at a disabled button. Only the run's
+ * not-yet-finished state (`!enabled`) has nowhere to send anyone, so it stays disabled.
  */
 export function RunReportButton({
   testId,
@@ -31,12 +35,12 @@ export function RunReportButton({
   enabled,
   hasExistingReport,
 }: RunReportButtonProps) {
-  if (hasExistingReport) {
+  if (hasExistingReport || enabled) {
     return (
       <Button asChild size="sm" variant="outline">
         <Link href={`/admin/tests/${testId}/runs/${runId}/report`}>
           <FileText className="size-4" />
-          View report
+          {hasExistingReport ? 'View report' : 'Generating report…'}
         </Link>
       </Button>
     );
@@ -53,9 +57,7 @@ export function RunReportButton({
         </span>
       </TooltipTrigger>
       <TooltipContent>
-        {enabled
-          ? 'The report is generated automatically after a run finishes and may take a few minutes for large runs.'
-          : 'Reports can only be generated once this run has finished.'}
+        Reports can only be generated once this run has finished.
       </TooltipContent>
     </Tooltip>
   );
