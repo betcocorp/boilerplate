@@ -49,3 +49,6 @@ storybook-static
 .env.sentry-build-plugin
 
 /supabase
+
+# Claude Code local settings (per-developer, not shared)
+.claude/settings.local.json

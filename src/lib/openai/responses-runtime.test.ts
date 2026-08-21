@@ -1,13 +1,18 @@
 import type OpenAI from 'openai';
 import type { Response } from 'openai/resources/responses/responses';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { runResponsesWithToolLoop } from '~/lib/openai/responses-runtime';
+import {
+  runResponsesWithToolLoop,
+  TOOL_ROUNDS_EXHAUSTED_FALLBACK_TEXT,
+  TOOL_ROUNDS_EXHAUSTED_TOOL_OUTPUT,
+} from '~/lib/openai/responses-runtime';
 import {
   isUpstreamTransportError,
   UPSTREAM_RETRY_USER_MESSAGE,
 } from '~/lib/openai/transport-retry';
 import type { ToolTraceEntry } from '~/lib/audit/trace';
+import { __resetLearnedSamplingSupport } from '~/lib/openai/model-capabilities';
 
 type StubResponse = {
   id: string;
@@ -835,5 +840,395 @@ describe('runResponsesWithToolLoop — model vs persisted tool output (B0-437)',
     const round2 = (create.mock.calls as unknown as Array<[Record<string, unknown>]>)[1]?.[0]
       .input as Array<Record<string, unknown>>;
     expect(round2[0]?.output).toBe('{"policy":"x"}');
+  });
+});
+
+describe('runResponsesWithToolLoop — tool-round exhaustion (B0-381)', () => {
+  /** Distinct call ids so ordering assertions can tell the entries apart. */
+  const traceFor = (name: string, callId: string): ToolTraceEntry => ({
+    ...trace(name),
+    toolName: name,
+    callId,
+  });
+
+  /** A model that never stops asking for tools — the pathological case the guard exists for. */
+  const alwaysCallsTools = (callId: string) => ({
+    type: 'function_call',
+    call_id: callId,
+    name: 'search_product_docs',
+    arguments: '{"topic":"dilution"}',
+  });
+
+  it('returns a non-empty answer when the model still requests tools on the final round', async () => {
+    const { client, create } = stubClient([
+      { id: 'resp_1', output: [alwaysCallsTools('call_1')] },
+      { id: 'resp_2', output: [alwaysCallsTools('call_2'), alwaysCallsTools('call_3')] },
+      { id: 'resp_3', output: [], output_text: 'Answering from the evidence gathered so far.' },
+    ]);
+
+    const executeTool = vi.fn(async ({ name, callId }: { name: string; callId: string }) => ({
+      output: '{"ok":true}',
+      trace: traceFor(name, callId),
+    }));
+
+    const result = await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1',
+      instructions: 'stable prefix',
+      tools: [],
+      userMessage: 'What dilution ratio does Norinse Floor Cleaner use?',
+      maxToolRounds: 2,
+      executeTool,
+    });
+
+    // The acceptance criterion: exhaustion never yields an empty answer.
+    expect(result.assistantText).toBe('Answering from the evidence gathered so far.');
+
+    // No tool round may run whose outputs are never returned to the model: round 1's single call
+    // executed, the final round's two calls did not.
+    expect(executeTool).toHaveBeenCalledTimes(1);
+    expect(result.toolTrace).toHaveLength(1);
+    expect(result.toolTrace[0]?.callId).toBe('call_1');
+
+    // The forced answering request: tools off, and every pending call answered so the
+    // `previous_response_id` chain has no dangling `function_call`.
+    const forced = (create.mock.calls as unknown as Array<[Record<string, unknown>]>)[2]?.[0];
+    expect(forced?.tool_choice).toBe('none');
+    expect(forced?.previous_response_id).toBe('resp_2');
+
+    const input = forced?.input as Array<Record<string, unknown>>;
+    expect(input.slice(0, 2)).toEqual([
+      {
+        type: 'function_call_output',
+        call_id: 'call_2',
+        output: TOOL_ROUNDS_EXHAUSTED_TOOL_OUTPUT,
+      },
+      {
+        type: 'function_call_output',
+        call_id: 'call_3',
+        output: TOOL_ROUNDS_EXHAUSTED_TOOL_OUTPUT,
+      },
+    ]);
+    // Followed by the instruction telling the model to answer now.
+    expect(input[2]?.role).toBe('user');
+    expect(result.responseIds).toEqual(['resp_1', 'resp_2', 'resp_3']);
+  });
+
+  it('falls back to the canned answer when even the forced request returns no text', async () => {
+    const { client } = stubClient([
+      { id: 'resp_1', output: [alwaysCallsTools('call_1')] },
+      // No `output_text` and no message item — the forced request produced nothing.
+      { id: 'resp_2', output: [] },
+    ]);
+
+    const result = await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1',
+      instructions: 'stable prefix',
+      tools: [],
+      userMessage: 'what dilution?',
+      maxToolRounds: 1,
+      executeTool: async ({ name, callId }) => ({
+        output: '{"ok":true}',
+        trace: traceFor(name, callId),
+      }),
+    });
+
+    expect(result.assistantText).toBe(TOOL_ROUNDS_EXHAUSTED_FALLBACK_TEXT);
+    expect(result.assistantText.trim()).not.toBe('');
+  });
+
+  it('reports the exhaustion to the caller with the pending-call count', async () => {
+    const { client } = stubClient([
+      { id: 'resp_1', output: [alwaysCallsTools('call_1'), alwaysCallsTools('call_2')] },
+      { id: 'resp_2', output: [], output_text: 'done' },
+    ]);
+
+    const onToolRoundsExhausted = vi.fn();
+
+    await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1',
+      instructions: 'stable prefix',
+      tools: [],
+      userMessage: 'what dilution?',
+      maxToolRounds: 1,
+      executeTool: async ({ name, callId }) => ({
+        output: '{"ok":true}',
+        trace: traceFor(name, callId),
+      }),
+      onToolRoundsExhausted,
+    });
+
+    expect(onToolRoundsExhausted).toHaveBeenCalledTimes(1);
+    expect(onToolRoundsExhausted).toHaveBeenCalledWith({
+      maxToolRounds: 1,
+      pendingCallCount: 2,
+    });
+  });
+
+  it('does not engage the guard when the model answers within the round budget', async () => {
+    const { client, create } = stubClient([
+      { id: 'resp_1', output: [alwaysCallsTools('call_1')] },
+      { id: 'resp_2', output: [], output_text: '2 oz per gallon.' },
+    ]);
+
+    const onToolRoundsExhausted = vi.fn();
+
+    const result = await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1',
+      instructions: 'stable prefix',
+      tools: [],
+      userMessage: 'what dilution?',
+      maxToolRounds: 4,
+      executeTool: async ({ name, callId }) => ({
+        output: '{"ok":true}',
+        trace: traceFor(name, callId),
+      }),
+      onToolRoundsExhausted,
+    });
+
+    expect(result.assistantText).toBe('2 oz per gallon.');
+    expect(onToolRoundsExhausted).not.toHaveBeenCalled();
+    expect(create).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('runResponsesWithToolLoop — concurrent tool execution (B0-379)', () => {
+  const traceFor = (name: string, callId: string): ToolTraceEntry => ({
+    ...trace(name),
+    toolName: name,
+    callId,
+  });
+
+  const callItem = (callId: string, name: string) => ({
+    type: 'function_call',
+    call_id: callId,
+    name,
+    arguments: '{}',
+  });
+
+  it('runs a multi-call round concurrently and keeps output order in model call order', async () => {
+    const { client, create } = stubClient([
+      {
+        id: 'resp_1',
+        output: [
+          callItem('call_a', 'search_product_docs'),
+          callItem('call_b', 'get_efficacy_data'),
+          callItem('call_c', 'lookup_category'),
+        ],
+      },
+      { id: 'resp_2', output: [], output_text: 'combined answer' },
+    ]);
+
+    /** Each call parks here until released, so all three must be in flight simultaneously. */
+    const release: Array<() => void> = [];
+    const executeTool = vi.fn(
+      async ({ name, callId }: { name: string; callId: string }) => {
+        await new Promise<void>((resolve) => {
+          release.push(resolve);
+        });
+        return { output: JSON.stringify({ ok: true, callId }), trace: traceFor(name, callId) };
+      },
+    );
+
+    const pending = runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1',
+      instructions: 'stable prefix',
+      tools: [],
+      userMessage: 'compare these products',
+      executeTool,
+    });
+
+    // Concurrency itself: all three calls entered before any of them was allowed to finish.
+    // Serial execution could never park more than one.
+    await vi.waitFor(() => expect(release).toHaveLength(3));
+    expect(executeTool).toHaveBeenCalledTimes(3);
+
+    // Settle in reverse order to prove ordering does not depend on completion order.
+    for (const resolve of [...release].reverse()) {
+      resolve();
+    }
+
+    const result = await pending;
+
+    expect(result.toolTrace.map((entry) => entry.callId)).toEqual([
+      'call_a',
+      'call_b',
+      'call_c',
+    ]);
+
+    const round2 = (create.mock.calls as unknown as Array<[Record<string, unknown>]>)[1]?.[0]
+      .input as Array<Record<string, unknown>>;
+    expect(round2.map((item) => item.call_id)).toEqual(['call_a', 'call_b', 'call_c']);
+    expect(round2.map((item) => item.output)).toEqual([
+      '{"ok":true,"callId":"call_a"}',
+      '{"ok":true,"callId":"call_b"}',
+      '{"ok":true,"callId":"call_c"}',
+    ]);
+    expect(result.assistantText).toBe('combined answer');
+  });
+
+  it('isolates a rejecting call so its siblings still return their own outputs', async () => {
+    const { client, create } = stubClient([
+      {
+        id: 'resp_1',
+        output: [
+          callItem('call_a', 'search_product_docs'),
+          callItem('call_b', 'get_efficacy_data'),
+          callItem('call_c', 'lookup_category'),
+        ],
+      },
+      { id: 'resp_2', output: [], output_text: 'answered around the failure' },
+    ]);
+
+    const executeTool = vi.fn(async ({ name, callId }: { name: string; callId: string }) => {
+      if (callId === 'call_b') {
+        throw new Error('supabase rpc exploded');
+      }
+      return { output: JSON.stringify({ ok: true, callId }), trace: traceFor(name, callId) };
+    });
+
+    const result = await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1',
+      instructions: 'stable prefix',
+      tools: [],
+      userMessage: 'compare these products',
+      executeTool,
+    });
+
+    // All three siblings ran and produced their own trace entry, in model call order.
+    expect(result.toolTrace.map((entry) => entry.callId)).toEqual([
+      'call_a',
+      'call_b',
+      'call_c',
+    ]);
+    expect(result.toolTrace.map((entry) => entry.ok)).toEqual([true, false, true]);
+
+    const round2 = (create.mock.calls as unknown as Array<[Record<string, unknown>]>)[1]?.[0]
+      .input as Array<Record<string, unknown>>;
+    // The failure is reported to the model as that one call's own structured output.
+    expect(round2[1]?.output).toBe('{"ok":false,"error":"supabase rpc exploded"}');
+    expect(round2[0]?.output).toBe('{"ok":true,"callId":"call_a"}');
+    expect(round2[2]?.output).toBe('{"ok":true,"callId":"call_c"}');
+    expect(result.assistantText).toBe('answered around the failure');
+  });
+
+  it('leaves single-call rounds behaving exactly as before', async () => {
+    const { client, create } = stubClient([
+      { id: 'resp_1', output: [callItem('call_a', 'search_product_docs')] },
+      { id: 'resp_2', output: [], output_text: 'single answer' },
+    ]);
+
+    const result = await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1',
+      instructions: 'stable prefix',
+      tools: [],
+      userMessage: 'what dilution?',
+      executeTool: async ({ name, callId }) => ({
+        output: '{"ok":true}',
+        trace: traceFor(name, callId),
+      }),
+    });
+
+    expect(result.toolTrace).toHaveLength(1);
+    expect(result.assistantText).toBe('single answer');
+    const round2 = (create.mock.calls as unknown as Array<[Record<string, unknown>]>)[1]?.[0]
+      .input as Array<Record<string, unknown>>;
+    expect(round2).toHaveLength(1);
+    expect(round2[0]?.call_id).toBe('call_a');
+  });
+});
+
+describe('runResponsesWithToolLoop — temperature gating (B0-606)', () => {
+  beforeEach(() => {
+    __resetLearnedSamplingSupport();
+  });
+
+  const answer = (id: string) => ({ id, output: [], output_text: 'ok' });
+
+  it('omits temperature for gpt-5.6, which rejects it outright', async () => {
+    const { client, create } = stubClient([answer('resp_1')]);
+
+    await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-5.6',
+      instructions: 'stable prefix',
+      tools: [],
+      userMessage: 'what dilution?',
+      executeTool: async ({ name }) => ({ output: '{}', trace: trace(name) }),
+    });
+
+    const params = (create.mock.calls as unknown as Array<[Record<string, unknown>]>)[0]?.[0];
+    // Absent, not undefined — the API rejects the parameter on presence, not on value.
+    expect('temperature' in (params ?? {})).toBe(false);
+  });
+
+  it('still sends temperature for gpt-4.1', async () => {
+    const { client, create } = stubClient([answer('resp_1')]);
+
+    await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1',
+      instructions: 'stable prefix',
+      tools: [],
+      userMessage: 'what dilution?',
+      executeTool: async ({ name }) => ({ output: '{}', trace: trace(name) }),
+    });
+
+    const params = (create.mock.calls as unknown as Array<[Record<string, unknown>]>)[0]?.[0];
+    expect(params?.temperature).toBe(0.2);
+  });
+
+  it('replays once without temperature when an unknown model rejects it', async () => {
+    const rejection = Object.assign(
+      new Error("400 Unsupported parameter: 'temperature' is not supported with this model."),
+      { status: 400 },
+    );
+    const { client, create } = scriptedClient([
+      { throws: rejection },
+      { id: 'resp_1', output: [], output_text: 'recovered' },
+    ]);
+
+    const result = await runResponsesWithToolLoop({
+      client,
+      model: 'mystery-future-model',
+      instructions: 'stable prefix',
+      tools: [],
+      userMessage: 'what dilution?',
+      retry: testRetry,
+      executeTool: async ({ name }) => ({ output: '{}', trace: trace(name) }),
+    });
+
+    // The turn survives instead of failing the whole run.
+    expect(result.assistantText).toBe('recovered');
+    expect(create).toHaveBeenCalledTimes(2);
+
+    const calls = create.mock.calls as unknown as Array<[Record<string, unknown>]>;
+    expect(calls[0]?.[0]?.temperature).toBe(0.2);
+    expect('temperature' in (calls[1]?.[0] ?? {})).toBe(false);
+  });
+
+  it('does not replay for an unrelated 400 — that must surface, not be swallowed', async () => {
+    const badRequest = Object.assign(new Error('Invalid schema for function'), { status: 400 });
+    const { client, create } = scriptedClient([{ throws: badRequest }]);
+
+    await expect(
+      runResponsesWithToolLoop({
+        client,
+        model: 'mystery-future-model',
+        instructions: 'stable prefix',
+        tools: [],
+        userMessage: 'what dilution?',
+        retry: testRetry,
+        executeTool: async ({ name }) => ({ output: '{}', trace: trace(name) }),
+      }),
+    ).rejects.toThrow(/Invalid schema for function/);
+
+    expect(create).toHaveBeenCalledTimes(1);
   });
 });

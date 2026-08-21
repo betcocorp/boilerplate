@@ -327,7 +327,18 @@ describe('B0-438 selection parity — the curated source set and order are uncha
     });
 
     expect(result.retrieval.strategy).toBe('broad_only');
-    expect(identity(result.sources)).toEqual(legacyIdentity(expected.sources));
+    /*
+     * B0-556 deliberately supersedes strict B0-438 parity on the UNANCHORED paths for one document
+     * kind: with no product line locked, an SDS belongs to an arbitrary line, so it may not ground a
+     * regulated safety answer and is withheld. Parity is still asserted for everything else, which
+     * is what the B0-438 restructure was actually about. See
+     * `b0556-cross-line-sds-regression.test.ts`.
+     */
+    const expectedAfterB0556 = expected.sources.filter((m) => m.document_kind !== 'sds');
+    expect(identity(result.sources)).toEqual(legacyIdentity(expectedAfterB0556));
+    expect(result.retrieval.withheldUnanchoredSdsCount).toBe(
+      expected.sources.length - expectedAfterB0556.length,
+    );
     expect(result.retrieval.anchoredSearchMs).toBeNull();
     expect(vi.mocked(searchProductChunks)).toHaveBeenCalledTimes(1);
   });

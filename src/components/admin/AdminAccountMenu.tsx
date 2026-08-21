@@ -7,6 +7,7 @@ import {
   KeyRound,
   LogOut,
   ShieldCheck,
+  Sliders,
 } from 'lucide-react';
 import { signOut, useSession } from 'next-auth/react';
 import Link from 'next/link';
@@ -27,7 +28,6 @@ import {
 } from '~/components/ui/dropdown-menu';
 import { PERMISSIONS } from '~/lib/permissions/constants';
 import { cn } from '~/lib/utils';
-import { version as appVersion } from '../../../package.json';
 
 function getInitials(value: string | null | undefined) {
   const raw = value?.trim();
@@ -125,6 +125,11 @@ export function AdminAccountMenu({
     PERMISSIONS.NAVIGATION_SIDEBAR_COST,
   );
 
+  const showSettings = hasPermission(
+    permissions,
+    PERMISSIONS.NAVIGATION_SIDEBAR_USER_SETTINGS,
+  );
+
   if (!mounted) {
     return <AccountTrigger userEmail={userEmail} userName={userName} />;
   }
@@ -147,16 +152,20 @@ export function AdminAccountMenu({
               <p className="truncate text-xs text-muted-foreground">
                 {userEmail || 'No email'}
               </p>
-              <p className="truncate text-xs font-light text-foreground">
-                Version: {appVersion}
-              </p>
             </div>
           </div>
         </DropdownMenuGroup>
-        {showApiAccess || showAccessControl || showChangelog ? (
+        {showApiAccess ||
+        showAccessControl ||
+        showChangelog ||
+        showSettings ||
+        showCostMonitoring ? (
           <DropdownMenuSeparator />
         ) : null}
-        {showApiAccess || showAccessControl ? (
+        {showApiAccess ||
+        showAccessControl ||
+        showSettings ||
+        showCostMonitoring ? (
           <>
             <DropdownMenuGroup>
               {showApiAccess ? (
@@ -189,6 +198,15 @@ export function AdminAccountMenu({
                   <Link href="/admin/cost">
                     <BanknoteArrowDown className="size-4" />
                     Cost monitoring
+                  </Link>
+                </DropdownMenuItem>
+              )}
+
+              {showSettings && (
+                <DropdownMenuItem asChild>
+                  <Link href="/admin/settings">
+                    <Sliders className="size-4" />
+                    Settings
                   </Link>
                 </DropdownMenuItem>
               )}

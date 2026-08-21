@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseShouldCiteFromForm, parseTestCsvContent } from './csv';
+import {
+  formatExpectedCriteriaCell,
+  parseExpectedCriteriaCell,
+  parseShouldCiteFromForm,
+  parseTestCsvContent,
+} from './csv';
 import { TEST_TEMPLATE_COLUMNS, buildTestTemplateCsv } from './template';
 
 describe('parseTestCsvContent — golden test set format', () => {
@@ -72,6 +77,7 @@ describe('parseTestCsvContent — golden test set format', () => {
       'source_style',
       'expected_concepts',
       'minimum_concepts',
+      'expected_criteria',
       'expected_sources',
       'should_cite',
       'expected_tool',
@@ -88,5 +94,51 @@ describe('parseShouldCiteFromForm', () => {
     expect(parseShouldCiteFromForm('No')).toBe(false);
     expect(parseShouldCiteFromForm('')).toBeNull();
     expect(parseShouldCiteFromForm('   ')).toBeNull();
+  });
+});
+
+describe('parseExpectedCriteriaCell — B0-615 tiered mini-syntax', () => {
+  it('parses tiered, exact, and semantic segments', () => {
+    const criteria = parseExpectedCriteriaCell(
+      't1: dilution 4 oz/gal; t1x: EPA Reg. No. 12345-67; t2: dwell time; t3: mentions PPE',
+    );
+
+    expect(criteria).toEqual([
+      { concept: 'dilution 4 oz/gal', tier: 1, match: 'semantic' },
+      { concept: 'EPA Reg. No. 12345-67', tier: 1, match: 'exact' },
+      { concept: 'dwell time', tier: 2, match: 'semantic' },
+      { concept: 'mentions PPE', tier: 3, match: 'semantic' },
+    ]);
+  });
+
+  it('drops malformed segments instead of throwing', () => {
+    expect(parseExpectedCriteriaCell('t1: fine; not a criterion; t4: bad tier; t2:')).toEqual([
+      { concept: 'fine', tier: 1, match: 'semantic' },
+    ]);
+  });
+
+  it('treats blank input as no criteria (legacy behavior-only grading)', () => {
+    expect(parseExpectedCriteriaCell('')).toEqual([]);
+    expect(parseExpectedCriteriaCell('   ')).toEqual([]);
+  });
+
+  it('round-trips through formatExpectedCriteriaCell', () => {
+    const original = 't1: dilution 4 oz/gal; t1x: EPA Reg. No. 12345-67; t2: dwell time';
+    expect(parseExpectedCriteriaCell(formatExpectedCriteriaCell(parseExpectedCriteriaCell(original)))).toEqual(
+      parseExpectedCriteriaCell(original),
+    );
+  });
+
+  it('parses expected_criteria out of a full CSV row', () => {
+    const csv = [
+      'question,expected_criteria',
+      '"How much pH7Q per gallon?","t1: dilution 4 oz/gal; t2: dwell time"',
+    ].join('\n');
+
+    const [row] = parseTestCsvContent(csv);
+    expect(row.expectedCriteria).toEqual([
+      { concept: 'dilution 4 oz/gal', tier: 1, match: 'semantic' },
+      { concept: 'dwell time', tier: 2, match: 'semantic' },
+    ]);
   });
 });

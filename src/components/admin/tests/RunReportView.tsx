@@ -13,13 +13,87 @@ import {
   useState,
 } from 'react';
 
+import { version as appVersion } from '~/../package.json';
 import { BexStreamdown } from '~/components/bex/BexStreamdown';
 import { Button } from '~/components/ui/button';
 import { caseAnchorId } from '~/lib/tests/report/render';
+import { cn } from '~/lib/utils';
 
-/** Matches the leading UUID in a "Detailed results — case by case" heading (`${id} — ${question}`). */
+/** Matches a UUID anywhere in a case's heading blockquote text (`**question**` + `` `id` ``). */
 const CASE_HEADING_ID_PATTERN =
-  /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?=\s)/i;
+  /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
+
+/** Exact `## …` line `render.ts` emits to open the case-by-case section. */
+const CASE_SECTION_HEADING_LINE = '## Detailed results — case by case';
+/** Any other `##` (not `###`) heading line — closes the case-by-case section. */
+const NEXT_H2_LINE_PATTERN = /^##(?!#)\s/;
+/** The `> **{question}**` line `render.ts` opens each case's heading blockquote with (B0-613). */
+const CASE_HEADING_LINE_PATTERN = /^>\s*\*\*/;
+
+/** B0-612 — alternating background so each case reads as one visually distinct group. */
+const CASE_TONE_CLASSES = ['', 'rounded-2xl bg-slate-50'] as const;
+
+type ReportMarkdownSections = {
+  /** Everything through and including the "## Detailed results — case by case" heading. */
+  before: string;
+  /** Each case's own `### id — question` chunk, in order. */
+  cases: string[];
+  /** Everything from the next `##` heading (e.g. "## Aggregate findings") onward. */
+  after: string;
+};
+
+/**
+ * Pure split of the report markdown into the case-by-case section's individual cases, so each
+ * one can be wrapped in its own alternating-background container (B0-612). Splitting the string
+ * itself — rather than tracking a mutable "which case am I in" cursor across sibling renders —
+ * keeps this a pure function of `markdown`, safe under React's render-must-be-pure rules (a
+ * ref mutated during render can double-fire under Strict Mode/concurrent rendering and throw off
+ * the alternation).
+ */
+function splitReportMarkdown(markdown: string): ReportMarkdownSections {
+  const lines = markdown.split('\n');
+  const sectionStart = lines.findIndex(
+    (line) => line.trim() === CASE_SECTION_HEADING_LINE,
+  );
+  if (sectionStart === -1) {
+    return { before: markdown, cases: [], after: '' };
+  }
+
+  let sectionEnd = lines.length;
+  for (let i = sectionStart + 1; i < lines.length; i += 1) {
+    if (NEXT_H2_LINE_PATTERN.test(lines[i]!)) {
+      sectionEnd = i;
+      break;
+    }
+  }
+
+  const before = lines.slice(0, sectionStart + 1).join('\n');
+  const after = lines.slice(sectionEnd).join('\n');
+
+  const cases: string[] = [];
+  let current: string[] | null = null;
+  for (const line of lines.slice(sectionStart + 1, sectionEnd)) {
+    if (CASE_HEADING_LINE_PATTERN.test(line)) {
+      if (current) cases.push(current.join('\n'));
+      current = [line];
+    } else if (current) {
+      current.push(line);
+    }
+    // else: a line before the first case heading (e.g. the blank line render.ts leaves after the
+    // section heading) — not part of any case, discarded rather than counted as a phantom one.
+  }
+  if (current) cases.push(current.join('\n'));
+
+  // A report generated before the case-heading format last changed (e.g. B0-613's `### id —
+  // question` → blockquote switch) won't match `CASE_HEADING_LINE_PATTERN` at all — rather than
+  // silently dropping the whole section (every line here would otherwise belong to no case),
+  // render it as one untoned block so old reports stay fully visible until regenerated.
+  if (cases.length === 0) {
+    return { before: markdown, cases: [], after: '' };
+  }
+
+  return { before, cases, after };
+}
 
 function reactNodeToText(node: ReactNode): string {
   if (node == null || typeof node === 'boolean') return '';
@@ -31,13 +105,24 @@ function reactNodeToText(node: ReactNode): string {
   return '';
 }
 
-/** Gives each "Detailed results" case heading a stable anchor id, matched by `linkifyCaseIds`. */
-function ReportCaseHeading({ children, ...rest }: ComponentProps<'h3'>) {
+/**
+ * Renders a case's heading blockquote (B0-613: bold question first, muted id below) and gives it
+ * the stable anchor id `linkifyCaseIds` links back to — replaces the old `### id — question` h3.
+ */
+function ReportCaseQuote({ children, className, ...rest }: ComponentProps<'blockquote'>) {
   const match = CASE_HEADING_ID_PATTERN.exec(reactNodeToText(children));
   return (
-    <h3 id={match ? caseAnchorId(match[1]) : undefined} {...rest}>
+    <blockquote
+      className={cn(
+        className,
+        match &&
+          '[&>p:first-child]:text-lg [&>p:first-child]:font-semibold [&>p:last-child]:mt-2 [&>p:last-child]:text-xs [&>p:last-child]:text-slate-500',
+      )}
+      id={match ? caseAnchorId(match[1]) : undefined}
+      {...rest}
+    >
       {children}
-    </h3>
+    </blockquote>
   );
 }
 
@@ -54,7 +139,9 @@ function ReportAnchorLink({ href, children, ...rest }: ComponentProps<'a'>) {
         href={href}
         onClick={(event) => {
           event.preventDefault();
-          document.getElementById(targetId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          document
+            .getElementById(targetId)
+            ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }}
       >
         {children}
@@ -138,8 +225,13 @@ export function RunReportView({
   const contentRef = useRef<HTMLDivElement>(null);
 
   const reportComponents = useMemo(
-    () => ({ a: ReportAnchorLink, h3: ReportCaseHeading }),
+    () => ({ a: ReportAnchorLink, blockquote: ReportCaseQuote }),
     [],
+  );
+
+  const reportSections = useMemo(
+    () => (markdown ? splitReportMarkdown(markdown) : null),
+    [markdown],
   );
 
   const post = useCallback(async () => {
@@ -342,7 +434,8 @@ export function RunReportView({
             </h1>
             {generatedAt ? (
               <p className="mt-1 text-xs text-slate-400">
-                Generated {new Date(generatedAt).toLocaleString()}
+                Generated {new Date(generatedAt).toLocaleString()} - v
+                {appVersion}
               </p>
             ) : null}
           </div>
@@ -441,12 +534,31 @@ export function RunReportView({
         </section>
       ) : null}
 
-      {markdown ? (
+      {markdown && reportSections ? (
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <div ref={contentRef}>
             <BexStreamdown
               components={reportComponents}
-              content={markdown}
+              content={reportSections.before}
+              isStreaming={false}
+              isUser={false}
+            />
+            {reportSections.cases.map((caseMarkdown, index) => (
+              <div
+                className={cn('px-3 py-8', CASE_TONE_CLASSES[index % 2])}
+                key={index}
+              >
+                <BexStreamdown
+                  components={reportComponents}
+                  content={caseMarkdown}
+                  isStreaming={false}
+                  isUser={false}
+                />
+              </div>
+            ))}
+            <BexStreamdown
+              components={reportComponents}
+              content={reportSections.after}
               isStreaming={false}
               isUser={false}
             />

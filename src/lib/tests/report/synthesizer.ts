@@ -29,7 +29,6 @@ const SYNTHESIS_JSON_SCHEMA = {
           evidence: { type: 'string' },
           affected: { type: 'string' },
           change: { type: 'string' },
-          changePseudocode: { type: 'array', items: { type: 'string' } },
           impact: { type: 'string' },
         },
         required: [
@@ -39,7 +38,6 @@ const SYNTHESIS_JSON_SCHEMA = {
           'evidence',
           'affected',
           'change',
-          'changePseudocode',
           'impact',
         ],
       },
@@ -72,7 +70,7 @@ Identify the most common failure patterns (cite case IDs), key strengths (cite c
 
 Then produce exactly 3 "Top 3 recommended agent improvements", ranked Priority #1 (most important) to #3, by: frequency of the problem, severity, business impact, impact on Tier 1 (highest-priority) cases, weak categories, likely effect on the overall score, and whether the issue is systemic rather than isolated. Answer: "If we could fix only three things before testing this agent again, what should they be?" Keep recommendations about the AGENT (its instructions/system prompt, retrieval behavior, grounding against sources, knowledge gaps, response logic, handling of specific question types, completeness, hallucination/unsupported content, intent understanding) — not about the testing process, unless something about the test data itself prevented fair evaluation (say so separately if so).
 
-Each recommendation needs: what to improve, why it should be fixed first, evidence (cite case IDs and scores), affected tiers/categories, a one-line plain-English "change" summary, and "changePseudocode" — an array of lines (IF/THEN, FOR EACH, function-like) precise enough for an engineer to implement without another round of questions: state the trigger/condition, the action, guard clauses for edge cases (especially safety/scope boundaries), any thresholds/parameters named explicitly, and a fallback that flags rather than guesses when required information is absent. Keep it general enough to hold for future questions of the same type, not overfit to the exact cases given.
+Each recommendation needs: what to improve, why it should be fixed first, evidence (cite case IDs and scores), affected tiers/categories, and a one-line plain-English "change" summary precise enough for an engineer to act on without another round of questions.
 
 Finally produce an executive assessment: 2-3 strongest areas, 2-3 areas needing improvement, the single most significant failure pattern, any major risk discovered, and a short plain-English readiness recommendation for broader testing — written for business stakeholders.`;
 
@@ -106,6 +104,50 @@ function rateBlockSummary(block: RateBlock) {
   };
 }
 
+function formatPayloadAsText(
+  overall: ReturnType<typeof rateBlockSummary>,
+  tiers: Record<string, ReturnType<typeof rateBlockSummary>>,
+  categories: Record<string, ReturnType<typeof rateBlockSummary>>,
+  strongestCategory: string | null,
+  weakestCategory: string | null,
+  uteCount: number,
+  cases: ReturnType<typeof caseSummary>[],
+): string {
+  const lines: string[] = [];
+
+  lines.push('OVERALL METRICS');
+  lines.push(`  Grade: ${overall.grade}, Pass: ${overall.passPct}%, Partial: ${overall.partialPct}%, Fail: ${overall.failPct}%`);
+  lines.push(`  UTE Count: ${uteCount}`);
+  lines.push('');
+
+  lines.push('BY TIER');
+  for (const [tier, block] of Object.entries(tiers)) {
+    lines.push(`  ${tier}: ${block.grade} (n=${block.n}, avg=${block.avg})`);
+  }
+  lines.push('');
+
+  lines.push('BY CATEGORY');
+  for (const [cat, block] of Object.entries(categories)) {
+    lines.push(`  ${cat}: ${block.grade} (n=${block.n}, avg=${block.avg})`);
+  }
+  lines.push(
+    `  Strongest: ${strongestCategory ?? 'unknown'}, Weakest: ${weakestCategory ?? 'unknown'}`,
+  );
+  lines.push('');
+
+  lines.push('PER-CASE FINDINGS');
+  for (const c of cases) {
+    lines.push(`Case ${c.id} (Tier: ${c.tier}, Category: ${c.category})`);
+    lines.push(`  Grade: ${c.grade} (Overall: ${c.overall}), Status: ${c.status}`);
+    lines.push(`  Explanation: ${c.explanation}`);
+    lines.push(`  Missed: ${c.missed}`);
+    lines.push(`  Incorrect: ${c.incorrect}`);
+    lines.push('');
+  }
+
+  return lines.join('\n');
+}
+
 export async function synthesizeReportFindings(
   metrics: ReportMetrics,
   findingsByCaseId: Map<string, { explanation: string; missed: string; incorrect: string }>,
@@ -114,26 +156,31 @@ export async function synthesizeReportFindings(
   const client = getOpenAIClient();
   const model = resolveResponsesModel(modelTag ?? 'gpt-4.1');
 
-  const payload = {
-    overall: rateBlockSummary(metrics.overall),
-    tiers: Object.fromEntries(metrics.tiers.map(([k, v]) => [k, rateBlockSummary(v)])),
-    categories: Object.fromEntries(metrics.categories.map(([k, v]) => [k, rateBlockSummary(v)])),
-    strongestCategory: metrics.strongestCategory,
-    weakestCategory: metrics.weakestCategory,
-    uteCount: metrics.uteCount,
-    cases: metrics.perCase.map((c) =>
-      caseSummary(
-        c,
-        findingsByCaseId.get(c.id) ?? { explanation: '', missed: '', incorrect: '' },
-      ),
+  const overallSummary = rateBlockSummary(metrics.overall);
+  const tiersSummary = Object.fromEntries(metrics.tiers.map(([k, v]) => [k, rateBlockSummary(v)]));
+  const categoriesSummary = Object.fromEntries(metrics.categories.map(([k, v]) => [k, rateBlockSummary(v)]));
+  const casesSummary = metrics.perCase.map((c) =>
+    caseSummary(
+      c,
+      findingsByCaseId.get(c.id) ?? { explanation: '', missed: '', incorrect: '' },
     ),
-  };
+  );
+
+  const contentText = formatPayloadAsText(
+    overallSummary,
+    tiersSummary,
+    categoriesSummary,
+    metrics.strongestCategory,
+    metrics.weakestCategory,
+    metrics.uteCount,
+    casesSummary,
+  );
 
   try {
     const res = await client.responses.create({
       model,
       instructions: SYNTHESIS_SYSTEM_PROMPT,
-      input: [{ role: 'user', content: JSON.stringify(payload), type: 'message' }],
+      input: [{ role: 'user', content: contentText, type: 'message' }],
       text: {
         format: {
           type: 'json_schema',
@@ -162,7 +209,6 @@ export async function synthesizeReportFindings(
         evidence: '',
         affected: '',
         change: '',
-        changePseudocode: ['# synthesis unavailable'],
         impact: '',
       })),
       exec: {

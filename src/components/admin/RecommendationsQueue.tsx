@@ -31,6 +31,8 @@ const PAGE_LINK_WINDOW = 5;
 
 const STATUS_OPTIONS: Array<{ value: RecommendationStatus; label: string }> = [
   { value: 'pending', label: 'Pending' },
+  // B0-353 — the validator-forced-review outcome; distinct from a fresh, undecided `pending` row.
+  { value: 'escalated', label: 'Escalated' },
   { value: 'answered', label: 'Answered' },
   { value: 'declined', label: 'Declined' },
   { value: 'verified', label: 'Verified' },
@@ -42,6 +44,7 @@ const STATUS_BADGE_VARIANT: Record<
   'default' | 'secondary' | 'destructive' | 'outline'
 > = {
   pending: 'outline',
+  escalated: 'destructive',
   answered: 'secondary',
   declined: 'outline',
   verified: 'default',

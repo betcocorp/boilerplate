@@ -1,6 +1,7 @@
 'use client';
 
 import { Check, Copy, Download, Info, Menu, Sparkles } from 'lucide-react';
+import { useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { Button } from '~/components/ui/button';
@@ -38,6 +39,11 @@ import {
 import { BEX_SUGGESTIONS } from '~/lib/bex/constants';
 import { mapApiMessageToChatMessage } from '~/lib/bex/map-api-messages';
 import { loadUiCache, saveUiCache } from '~/lib/bex/sessions';
+import supportedModels, {
+  MODEL_DESCRIPTIONS,
+  type BexModelTag,
+  type SupportedModel,
+} from '~/lib/constants/models';
 import { PERMISSIONS } from '~/lib/permissions/constants';
 import { usePermissionsStore } from '~/lib/stores/permissions';
 import type { ChatMessage, Conversation } from '~/types/bex';
@@ -125,6 +131,14 @@ export function BexChatApp() {
   const hasPermission = usePermissionsStore((s) => s.hasPermission);
   const isAdminChrome = hasPermission(PERMISSIONS.BEX_CHAT_VIEW_ALL);
 
+  /**
+   * `?conversationId=` deep link, captured at mount: `useRef`'s initial value is only honored
+   * on the first render, so this stays the id the page was opened with even after the user
+   * switches threads (which would otherwise re-open the linked thread on every re-render).
+   */
+  const searchParams = useSearchParams();
+  const requestedConversationIdRef = useRef(searchParams.get('conversationId'));
+
   useEffect(() => {
     if (!permissionsLoaded) {
       void usePermissionsStore.getState().load();
@@ -184,6 +198,14 @@ export function BexChatApp() {
     setUserFilterId(cache.userFilter);
 
     void (async () => {
+      /**
+       * A deep link (`/admin/bex?conversationId=…`, e.g. from a run trace's Conversation
+       * field) wins over the cached last-active thread. Resolved here rather than in a
+       * follow-up effect because this effect always assigns `activeId` before flipping
+       * `hydrated`, so a later effect could only ever fight it.
+       */
+      const requestedId = requestedConversationIdRef.current;
+
       try {
         const list = await fetchConversationList({
           showTestRuns: cache.showTestRuns,
@@ -198,16 +220,50 @@ export function BexChatApp() {
           source: row.source,
           isOwner: row.isOwner,
         }));
+
+        /**
+         * The sidebar list is capped (80 rows) and narrowed by the source/user filters, so a
+         * deep-linked thread is frequently absent from it. Fetch it by id and splice it in —
+         * `activeId` must exist in `sessions` or the reconciling effect below reassigns it.
+         */
+        let requestedMessages: ChatMessage[] | null = null;
+        if (requestedId && !mapped.some((c) => c.id === requestedId)) {
+          try {
+            const detail = await apiFetchConversation(requestedId);
+            requestedMessages = detail.messages.map(mapApiMessageToChatMessage);
+            mapped.push({
+              id: detail.conversation.id,
+              title: detail.conversation.title,
+              updatedAt: toMillis(detail.conversation.updatedAt),
+              messages: requestedMessages,
+              owner: detail.conversation.owner,
+              source: detail.conversation.source,
+              isOwner: detail.conversation.isOwner,
+            });
+            mapped.sort((a, b) => b.updatedAt - a.updatedAt);
+          } catch (e) {
+            // Deleted, or not visible to this actor — say so instead of silently
+            // opening an unrelated thread.
+            setLoadError(
+              `Could not open conversation ${requestedId}: ${getErrorMessage(e)}`,
+            );
+          }
+        }
+
         setSessions(mapped);
 
-        const preferred = cache.lastActiveConversationId;
+        const preferred =
+          requestedId && mapped.some((c) => c.id === requestedId)
+            ? requestedId
+            : cache.lastActiveConversationId;
         const pick =
           preferred && mapped.some((c) => c.id === preferred)
             ? preferred
             : (mapped[0]?.id ?? null);
         setActiveId(pick);
 
-        if (pick) {
+        // The deep-linked thread arrived with its transcript already attached above.
+        if (pick && !(pick === requestedId && requestedMessages)) {
           await refreshConversation(pick);
         }
       } catch (e) {
@@ -232,7 +288,15 @@ export function BexChatApp() {
       showTestRuns,
       userFilter: userFilterId,
     });
-  }, [activeId, hydrated, model, useValidator, agentMode, showTestRuns, userFilterId]);
+  }, [
+    activeId,
+    hydrated,
+    model,
+    useValidator,
+    agentMode,
+    showTestRuns,
+    userFilterId,
+  ]);
 
   // B0-451 — re-fetches the list under new filters and updates the sidebar; does not touch
   // messages for the active conversation (a filter change never implies the active thread's
@@ -264,7 +328,10 @@ export function BexChatApp() {
   const handleShowTestRunsChange = useCallback(
     (value: boolean) => {
       setShowTestRuns(value);
-      void applyConversationFilters({ showTestRuns: value, userFilter: userFilterId });
+      void applyConversationFilters({
+        showTestRuns: value,
+        userFilter: userFilterId,
+      });
     },
     [applyConversationFilters, userFilterId],
   );
@@ -504,7 +571,13 @@ export function BexChatApp() {
         setLoadError(e instanceof Error ? e.message : 'Delete failed.');
       }
     },
-    [activeId, fetchConversationList, refreshConversation, showTestRuns, userFilterId],
+    [
+      activeId,
+      fetchConversationList,
+      refreshConversation,
+      showTestRuns,
+      userFilterId,
+    ],
   );
 
   // B0-345: while the initial list/history fetch is running we hold the chat frame and show
@@ -786,7 +859,9 @@ export function BexChatApp() {
                   <SelectItem value="bathroom">Bathroom</SelectItem>
                   <SelectItem value="dilution">Dilution</SelectItem>
                   <SelectItem value="floor">Floor</SelectItem>
-                  <SelectItem value="recommendations">Recommendations</SelectItem>
+                  <SelectItem value="recommendations">
+                    Recommendations
+                  </SelectItem>
                 </SelectContent>
               </Select>
               <Label className="sr-only" htmlFor="bex-model">
@@ -804,11 +879,18 @@ export function BexChatApp() {
                   <SelectItem value="preview">
                     Model: preview (env default)
                   </SelectItem>
-                  <SelectItem value="gpt-4o">gpt-4o</SelectItem>
-                  <SelectItem value="gpt-4.1">gpt-4.1</SelectItem>
-                  <SelectItem value="custom">custom (requires env)</SelectItem>
+                  {supportedModels.map((m: SupportedModel) => (
+                    <SelectItem key={m.name} value={m.name}>
+                      {m.label}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
+              {/* B0-602 — what the selected model is and what it costs, so picking one in chat is
+                  an informed choice rather than a guess at an opaque tag. */}
+              <p className="mt-1 max-w-xs text-xs leading-snug text-muted-foreground">
+                {MODEL_DESCRIPTIONS[model as BexModelTag] ?? null}
+              </p>
             </div>
           </header>
 
@@ -854,7 +936,8 @@ export function BexChatApp() {
               triggers for a view-all admin — no extra permission check needed here. */}
           {!showFullWelcome && activeConversation?.isOwner === false ? (
             <p className="border-t border-border/40 px-4 py-2 text-center text-xs text-muted-foreground sm:px-6">
-              Read-only — you&apos;re viewing another user&apos;s conversation. Sending is disabled.
+              Read-only — you&apos;re viewing another user&apos;s conversation.
+              Sending is disabled.
             </p>
           ) : null}
 

@@ -4,8 +4,8 @@
  * B0-457 — collapsible filter bar for `/admin/observability` (epic B0-330).
  *
  * Client component so the "Filters" section can start collapsed to just its
- * title, matching the "Aggregate dashboard" toggle shipped in
- * `AggregateDashboard.tsx` (B0-456). The form itself still submits as a plain
+ * title (the aggregate dashboard this originally matched was retired to
+ * `/admin/bex/health` in B0-585). The form itself still submits as a plain
  * GET (see `RunsTable.tsx`'s doc comment) — this component only adds the
  * show/hide affordance around it.
  */
@@ -19,6 +19,7 @@ import { Input } from '~/components/ui/input';
 import { Label } from '~/components/ui/label';
 import { NativeSelect } from '~/components/ui/native-select';
 import { SME_AGENT_IDS } from '~/lib/agents/agent-registry';
+import { PRODUCT_TOOL_NAMES } from '~/lib/tools/tool-schemas';
 
 import type { RunsTableFilters } from './RunsTable';
 
@@ -48,9 +49,12 @@ const RUN_SOURCE_OPTIONS = [
 export function RunsFilters({
   route,
   filters,
+  testOptions,
 }: {
   route: string;
   filters: RunsTableFilters;
+  /** B0-338 — options for the "single test" filter dropdown. */
+  testOptions: { id: string; name: string }[];
 }) {
   // B0-457 — filter form is collapsed by default; only the "Filters" title always renders.
   const [showFilters, setShowFilters] = useState(false);
@@ -202,6 +206,55 @@ export function RunsFilters({
               </NativeSelect>
             </div>
 
+            <div className="flex min-w-0 flex-col gap-2">
+              <Label className="text-sm text-slate-700" htmlFor="observability-user">
+                Asked by (email or user ID)
+              </Label>
+              <Input
+                defaultValue={filters.userId}
+                id="observability-user"
+                name="userId"
+                placeholder="name@betco.com"
+                type="text"
+              />
+            </div>
+
+            <div className="flex min-w-0 flex-col gap-2">
+              <Label className="text-sm text-slate-700" htmlFor="observability-test">
+                Test
+              </Label>
+              <NativeSelect
+                defaultValue={filters.testId}
+                id="observability-test"
+                name="testId"
+              >
+                <option value="">All tests</option>
+                {testOptions.map((test) => (
+                  <option key={test.id} value={test.id}>
+                    {test.name}
+                  </option>
+                ))}
+              </NativeSelect>
+            </div>
+
+            <div className="flex min-w-0 flex-col gap-2">
+              <Label className="text-sm text-slate-700" htmlFor="observability-tool">
+                Tool call
+              </Label>
+              <NativeSelect
+                defaultValue={filters.toolName}
+                id="observability-tool"
+                name="tool"
+              >
+                <option value="">All tools</option>
+                {PRODUCT_TOOL_NAMES.map((tool) => (
+                  <option key={tool} value={tool}>
+                    {tool}
+                  </option>
+                ))}
+              </NativeSelect>
+            </div>
+
             <div className="flex items-end gap-2">
               <Button type="submit">Apply filters</Button>
               <Button asChild type="button" variant="outline">
@@ -214,7 +267,10 @@ export function RunsFilters({
             selected window, not just the runs on this page. A run ID is looked up on its
             own and ignores the date range, so an older run still resolves. Applying a
             confidence bound excludes runs that never recorded a confidence (in-flight or
-            failed runs).
+            failed runs). &ldquo;Asked by&rdquo; and &ldquo;Test&rdquo; filter to runs attributed
+            (B0-338) to that one user or that one test, regardless of the run&apos;s source.
+            &ldquo;Tool call&rdquo; narrows to runs whose agent step actually called that tool at
+            least once.
           </p>
         </>
       ) : null}

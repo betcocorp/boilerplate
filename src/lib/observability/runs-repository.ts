@@ -16,6 +16,12 @@ import {
   type WorkflowStepRow,
 } from '~/lib/conversations/workflow-repository';
 import {
+  getRunAttribution,
+  resolveConversationIdsForUser,
+  resolveRunAttributions,
+  resolveWorkflowRunIdsForTest,
+} from '~/lib/observability/run-attribution';
+import {
   buildRunTimeline,
   deriveRunEmptyState,
   type RunEmptyState,
@@ -25,6 +31,7 @@ import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 import type {
   AuditLogRow,
   ListWorkflowRunsFilters,
+  RunAttribution,
   RunSource,
   TimelineEvent,
   WorkflowRunListRow,
@@ -138,6 +145,7 @@ function toListRow(
   row: WorkflowRunRow,
   source: RunSource | null,
   harnessTtftMs: number | null,
+  attribution: RunAttribution,
 ): WorkflowRunListRow {
   return {
     id: row.id,
@@ -154,6 +162,7 @@ function toListRow(
     // B0-428 instrumented the workflow.
     ttftMs: readTtftMs(row.final_output) ?? harnessTtftMs,
     userMessagePreview: readUserMessagePreview(row.user_input),
+    attribution,
   };
 }
 
@@ -248,6 +257,59 @@ export async function indexHarnessWorkflowRuns(
 }
 
 /**
+ * B0-593 — `workflow_runs.id`s whose agent step (`step_name = 'openai_responses_agent'`) recorded
+ * a call to `toolName` in its persisted `output.toolTrace` (B0-331). `output->toolTrace` carries no
+ * index, so — like `indexHarnessWorkflowRuns` above — this stays a windowed, page-capped scan
+ * rather than one unbounded query; `from`/`to` (the same run-window bounds the caller already
+ * applies to `workflow_runs.created_at`) are applied to `workflow_steps.started_at`, which closely
+ * tracks its run's `created_at`, to keep the scan bounded as the table grows. Verified against live
+ * data (see B0-593 QA notes): `.filter('output->toolTrace', 'cs', ...)` matches exactly the set of
+ * rows a `jsonb_array_elements` + `toolName` equality scan finds.
+ */
+export async function resolveWorkflowRunIdsForToolCall(
+  toolName: string,
+  from?: string,
+  to?: string,
+): Promise<string[]> {
+  const supabase = getSupabaseServiceRoleClient();
+  const runIds = new Set<string>();
+
+  for (let page = 0; page < HARNESS_SCAN_MAX_PAGES; page += 1) {
+    const start = page * HARNESS_SCAN_PAGE_SIZE;
+    let query = supabase
+      .from('workflow_steps')
+      .select('workflow_run_id')
+      .eq('step_name', 'openai_responses_agent')
+      .filter('output->toolTrace', 'cs', JSON.stringify([{ toolName }]));
+
+    if (from) {
+      query = query.gte('started_at', from);
+    }
+    if (to) {
+      query = query.lte('started_at', to);
+    }
+
+    const { data, error } = await query.range(start, start + HARNESS_SCAN_PAGE_SIZE - 1);
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    const rows = data ?? [];
+    for (const row of rows) {
+      if (row.workflow_run_id) {
+        runIds.add(row.workflow_run_id);
+      }
+    }
+
+    if (rows.length < HARNESS_SCAN_PAGE_SIZE) {
+      break;
+    }
+  }
+
+  return [...runIds];
+}
+
+/**
  * Filtered, offset-paginated run list for `/admin/observability`.
  *
  * Routing is filtered with a PostgREST JSON-path equality on
@@ -264,10 +326,54 @@ export async function listWorkflowRuns(
   const limit = clampLimit(filters.limit);
   const offset = clampOffset(filters.offset);
 
+  // B0-338 / B0-593 — "single user" / "single test" / "tool call" filters each resolve to a set
+  // of ids up front (small joins: `agent_conversations` is one user's rows, `test_result_items`
+  // is one test's runs, `workflow_steps` is capped-and-paged for the tool-trace scan), then narrow
+  // the main query with `.in('id'/'conversation_id', ...)`. `testId` and `toolName` both resolve to
+  // `workflow_runs.id`s, so they are intersected in application code (rather than applying two
+  // `.in('id', …)` calls) so the two filters narrow the SAME query instead of relying on
+  // same-column filter semantics. An empty resolved set means "no runs match" without a wasted
+  // `workflow_runs` query.
+  let idFilterRunIds: string[] | null = null;
+  const intersectIds = (existing: string[] | null, next: string[]): string[] =>
+    existing === null ? next : existing.filter((id) => next.includes(id));
+
+  if (filters.testId) {
+    idFilterRunIds = intersectIds(idFilterRunIds, await resolveWorkflowRunIdsForTest(filters.testId));
+    if (idFilterRunIds.length === 0) {
+      return { rows: [], hasMore: false };
+    }
+  }
+
+  if (filters.toolName) {
+    idFilterRunIds = intersectIds(
+      idFilterRunIds,
+      await resolveWorkflowRunIdsForToolCall(filters.toolName, filters.from, filters.to),
+    );
+    if (idFilterRunIds.length === 0) {
+      return { rows: [], hasMore: false };
+    }
+  }
+
+  let userFilterConversationIds: string[] | null = null;
+  if (filters.userId) {
+    userFilterConversationIds = await resolveConversationIdsForUser(filters.userId);
+    if (userFilterConversationIds.length === 0) {
+      return { rows: [], hasMore: false };
+    }
+  }
+
   let query = supabase
     .from('workflow_runs')
     .select()
     .order('created_at', { ascending: false });
+
+  if (idFilterRunIds) {
+    query = query.in('id', idFilterRunIds);
+  }
+  if (userFilterConversationIds) {
+    query = query.in('conversation_id', userFilterConversationIds);
+  }
 
   // B0-431 — a run id names exactly one run, so the date window must not hide it. Without
   // this, pasting an id from an older alert returns nothing while the filter bar still shows
@@ -325,10 +431,25 @@ export async function listWorkflowRuns(
 
   // Only for the "Stream" column's harness fallback (B0-428): one bounded query keyed on the
   // page's run ids. Run origin comes off each row's own `source` column.
-  const harnessTtft = await indexHarnessTtftByRunIds(page.map((row) => row.id));
+  const [harnessTtft, attributionIndex] = await Promise.all([
+    indexHarnessTtftByRunIds(page.map((row) => row.id)),
+    // B0-338 — "Asked by" column: resolved for exactly this page, same bound as the TTFT lookup.
+    resolveRunAttributions(
+      page.map((row) => ({
+        id: row.id,
+        conversationId: row.conversation_id,
+        source: readRunSource(row.source),
+      })),
+    ),
+  ]);
 
   const rows = page.map((row) =>
-    toListRow(row, readRunSource(row.source), harnessTtft.get(row.id) ?? null),
+    toListRow(
+      row,
+      readRunSource(row.source),
+      harnessTtft.get(row.id) ?? null,
+      attributionIndex.get(row.id) ?? { kind: 'unknown' },
+    ),
   );
 
   return { rows, hasMore };
@@ -346,13 +467,22 @@ export async function getWorkflowRunTrace(runId: string): Promise<{
   timeline: TimelineEvent[];
   /** B0-399 — which (if any) of the four empty/degraded-state banners the page should render. */
   emptyState: RunEmptyState;
+  /** B0-338 — who asked for this run. */
+  attribution: RunAttribution;
 } | null> {
   const bundle = await getWorkflowRunWithSteps(runId);
   if (!bundle) {
     return null;
   }
 
-  const auditLogs = (await listAuditLogsForRun(runId)) as AuditLogRow[];
+  const [auditLogs, attribution] = await Promise.all([
+    listAuditLogsForRun(runId) as Promise<AuditLogRow[]>,
+    getRunAttribution({
+      id: bundle.run.id,
+      conversationId: bundle.run.conversation_id,
+      source: readRunSource(bundle.run.source),
+    }),
+  ]);
   const timeline = buildRunTimeline(bundle.run, bundle.steps, auditLogs);
 
   return {
@@ -361,5 +491,6 @@ export async function getWorkflowRunTrace(runId: string): Promise<{
     auditLogs,
     timeline,
     emptyState: deriveRunEmptyState(bundle.run, bundle.steps, timeline),
+    attribution,
   };
 }

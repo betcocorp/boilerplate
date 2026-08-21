@@ -1,5 +1,6 @@
 import type { TestRecord, TestResultRecord } from '~/lib/tests/types';
 
+import { normalizeAgentMarkdownLists } from './markdown-normalize';
 import type { EvaluatedCase, RateBlock, ReportMetrics } from './metrics';
 import type { CaseScore, ReportSynthesis } from './schemas';
 
@@ -34,9 +35,9 @@ export type CaseRenderDetail = {
 };
 
 /**
- * The DOM anchor id a case's "Detailed results — case by case" heading is given (see
- * `RunReportView`'s heading override, which assigns this same id to any `<h3>` whose text starts
- * with a case id). Shared here so server-rendered links and the client-side heading anchor can
+ * The DOM anchor id a case's "Detailed results — case by case" heading blockquote is given (see
+ * `RunReportView`'s `blockquote` override, which assigns this same id to any case heading whose
+ * text contains a case id). Shared here so server-rendered links and the client-side anchor can
  * never drift apart.
  */
 export function caseAnchorId(caseId: string): string {
@@ -90,7 +91,7 @@ function mdBlock(value: string | null | undefined): string {
 
 function formatExpected(c: CaseRenderDetail): string {
   const parts: string[] = [];
-  if (c.idealResponse) parts.push(c.idealResponse.trim());
+  if (c.idealResponse) parts.push(normalizeAgentMarkdownLists(c.idealResponse.trim()));
   if (c.expectedConcepts) parts.push(`**Expected concepts:** ${c.expectedConcepts.trim()}`);
   if (c.minimumConcepts) parts.push(`**Minimum concepts:** ${c.minimumConcepts.trim()}`);
   if (c.expectedSources) parts.push(`**Expected sources:** ${c.expectedSources.trim()}`);
@@ -113,11 +114,6 @@ function rateRow(name: string, block: RateBlock): string {
 function bulletList(items: string[]): string {
   if (items.length === 0) return '- _(none noted)_';
   return items.map((item) => `- ${item}`).join('\n');
-}
-
-function pseudocodeBlock(lines: string[]): string {
-  const body = lines.length > 0 ? lines.join('\n') : '(no pseudocode provided)';
-  return '```\n' + body + '\n```';
 }
 
 function tierRank(label: string): number {
@@ -161,6 +157,23 @@ export function renderReportMarkdown(params: {
     `Generated ${new Date(generatedAt).toLocaleString()}`,
   ].filter(Boolean);
   push(subtitleParts.join('  •  '));
+  blank();
+
+  // --- Executive assessment ---
+  push('## Executive assessment');
+  blank();
+  push(`**Overall grade:** ${m.overall.grade} (${m.overall.avg ?? '—'}/100). Reflects calculated performance; not adjusted.`);
+  push(
+    `**Strongest areas:** ${link((synthesis.exec.strongestAreas.length ? synthesis.exec.strongestAreas : synthesis.strengths).slice(0, 3).join('  •  ')) || '—'}`,
+  );
+  push(
+    `**Areas needing improvement:** ${link((synthesis.exec.improvementAreas.length ? synthesis.exec.improvementAreas : synthesis.weaknesses).slice(0, 3).join('  •  ')) || '—'}`,
+  );
+  push(
+    `**Most significant failure pattern:** ${link(synthesis.exec.mostSignificantFailure || synthesis.failurePatterns[0] || '—')}`,
+  );
+  if (synthesis.exec.majorRisk) push(`**Major risk:** ${link(synthesis.exec.majorRisk)}`);
+  if (synthesis.exec.readiness) push(`**Readiness for broader testing:** ${link(synthesis.exec.readiness)}`);
   blank();
 
   // --- Executive scorecard ---
@@ -223,30 +236,9 @@ export function renderReportMarkdown(params: {
     if (rec.affected) push(`**Affected:** ${link(rec.affected)}`);
     if (rec.change) push(`**Recommended change:** ${link(rec.change)}`);
     blank();
-    push('**Change pseudocode:**');
-    blank();
-    push(pseudocodeBlock(rec.changePseudocode));
-    blank();
     if (rec.impact) push(`**Expected impact:** ${link(rec.impact)}`);
     blank();
   }
-
-  // --- Executive assessment ---
-  push('## Executive assessment');
-  blank();
-  push(`**Overall grade:** ${m.overall.grade} (${m.overall.avg ?? '—'}/100). Reflects calculated performance; not adjusted.`);
-  push(
-    `**Strongest areas:** ${link((synthesis.exec.strongestAreas.length ? synthesis.exec.strongestAreas : synthesis.strengths).slice(0, 3).join('  •  ')) || '—'}`,
-  );
-  push(
-    `**Areas needing improvement:** ${link((synthesis.exec.improvementAreas.length ? synthesis.exec.improvementAreas : synthesis.weaknesses).slice(0, 3).join('  •  ')) || '—'}`,
-  );
-  push(
-    `**Most significant failure pattern:** ${link(synthesis.exec.mostSignificantFailure || synthesis.failurePatterns[0] || '—')}`,
-  );
-  if (synthesis.exec.majorRisk) push(`**Major risk:** ${link(synthesis.exec.majorRisk)}`);
-  if (synthesis.exec.readiness) push(`**Readiness for broader testing:** ${link(synthesis.exec.readiness)}`);
-  blank();
 
   // --- Methodology note ---
   push('## Methodology & scoring');
@@ -277,8 +269,14 @@ export function renderReportMarkdown(params: {
   // --- Detailed case-by-case ---
   push('## Detailed results — case by case');
   blank();
+  push(
+    '_Response time and harness signal (below, where present) are reported for reference only and are not part of the grade._',
+  );
+  blank();
   for (const c of orderedCases) {
-    push(`### ${c.id} — ${c.question}`);
+    push(`> **${c.question.replace(/\r?\n/g, ' ')}**`);
+    push('>');
+    push(`> \`${c.id}\``);
     blank();
     push(`**Tier / Priority:** ${c.tier}${c.priorityRaw != null ? ` (${c.priorityRaw})` : ''}`);
     push(`**Category:** ${c.category}`);
@@ -290,7 +288,7 @@ export function renderReportMarkdown(params: {
       blank();
       push(`**Expected answer / behavior:**\n\n${formatExpected(c)}`);
       blank();
-      push(`**Agent's actual response:**\n\n${mdBlock(c.actual)}`);
+      push(`**Agent's actual response:**\n\n${mdBlock(normalizeAgentMarkdownLists(c.actual))}`);
       blank();
       continue;
     }
@@ -307,7 +305,7 @@ export function renderReportMarkdown(params: {
 
     if (c.latencySeconds != null && m.latency) {
       const band = latBandLabel(c.latencySeconds, m.latency.thresholds);
-      push(`**Response time:** ${c.latencySeconds} s (${band}) — _reported separately; not part of the grade_`);
+      push(`**Response time:** ${c.latencySeconds} s (${band})`);
       blank();
     }
 
@@ -317,14 +315,14 @@ export function renderReportMarkdown(params: {
         c.harness.similarity != null ? `similarity ${c.harness.similarity.toFixed(2)}` : null,
       ].filter(Boolean);
       if (bits.length > 0) {
-        push(`_Harness signal (aside, not part of this grade): ${bits.join(', ')}._`);
+        push(`**Harness signal:** ${bits.join(' · ')}`);
         blank();
       }
     }
 
     push(`**Expected answer / behavior:**\n\n${formatExpected(c)}`);
     blank();
-    push(`**Agent's actual response:**\n\n${mdBlock(c.actual)}`);
+    push(`**Agent's actual response:**\n\n${mdBlock(normalizeAgentMarkdownLists(c.actual))}`);
     blank();
     push(`**Explanation of the grade:** ${mdBlock(link(c.score.explanation))}`);
     push(`**Important information missed:** ${mdBlock(link(c.score.missed))}`);

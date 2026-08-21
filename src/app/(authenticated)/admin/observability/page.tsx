@@ -1,27 +1,28 @@
 /**
- * B0-335 / B0-336 — Prompt observability runs list + aggregate dashboard (epic B0-330).
+ * B0-335 — Prompt observability runs list (epic B0-330).
  *
  * Server component. All filters are searchParams-driven so the page is
  * linkable/bookmarkable and the filter bar can stay a plain GET form.
+ *
+ * B0-585 — the B0-336 aggregate dashboard that used to render above the runs
+ * table is decommissioned: its figures live on `/admin/bex/health` now.
  */
 
+import Link from 'next/link';
 import { connection } from 'next/server';
 
-import { AggregateDashboard } from '~/components/admin/observability/AggregateDashboard';
 import {
   RunsTable,
   type RunsTableFilters,
 } from '~/components/admin/observability/RunsTable';
 import { SME_AGENT_IDS } from '~/lib/agents/agent-registry';
-import { getAggregateDashboardData } from '~/lib/observability/aggregates';
+import { resolveUserFilterInput } from '~/lib/observability/run-attribution';
 import { listWorkflowRuns } from '~/lib/observability/runs-repository';
+import { listTests } from '~/lib/tests/repository';
+import { PRODUCT_TOOL_NAMES } from '~/lib/tools/tool-schemas';
 import { readSearchParam } from '~/lib/utils/params';
 
-import type {
-  AggregateDashboardData,
-  RunSourceFilter,
-  WorkflowRunListRow,
-} from '~/types/observability';
+import type { RunSourceFilter, WorkflowRunListRow } from '~/types/observability';
 
 export const metadata = {
   title: 'Prompt observability | Betco BEX',
@@ -40,6 +41,8 @@ const RUN_STATUSES = new Set(['running', 'completed', 'failed']);
 const RUN_SOURCE_FILTERS = new Set(['harness', 'bex_chat', 'orchestrator_api', 'unknown']);
 /** `routingDecisionSchema` values: an SME agent id, or the planner's `ambiguous`. */
 const ROUTING_DECISIONS = new Set<string>([...SME_AGENT_IDS, 'ambiguous']);
+/** B0-593 — the static, compile-time set of callable tool names, for the "Tool call" filter. */
+const TOOL_NAMES = new Set<string>(PRODUCT_TOOL_NAMES);
 const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 /** B0-431 — bound on the `q` term so a pathological URL can't build a huge LIKE pattern. */
 const SEARCH_MAX_CHARS = 200;
@@ -109,6 +112,9 @@ export default async function AdminObservabilityPage({ searchParams }: PageProps
   const agentParam = readSearchParam(params.agent).trim();
   const routingDecision = ROUTING_DECISIONS.has(agentParam) ? agentParam : '';
 
+  const toolParam = readSearchParam(params.tool).trim();
+  const toolName = TOOL_NAMES.has(toolParam) ? toolParam : '';
+
   const confidenceMin = readConfidence(readSearchParam(params.confidenceMin).trim());
   const confidenceMax = readConfidence(readSearchParam(params.confidenceMax).trim());
 
@@ -118,6 +124,27 @@ export default async function AdminObservabilityPage({ searchParams }: PageProps
   const source: RunSourceFilter | undefined = RUN_SOURCE_FILTERS.has(sourceParam)
     ? (sourceParam as RunSourceFilter)
     : undefined;
+
+  // B0-338 — "single test" filter. `tests` is a couple dozen rows, cheap to fetch for the
+  // dropdown and to validate the requested id against; a failure here degrades to an empty
+  // dropdown rather than breaking the runs list (caught separately from the main load below).
+  let testOptions: { id: string; name: string }[] = [];
+  try {
+    testOptions = (await listTests()).map((test) => ({ id: test.id, name: test.name }));
+  } catch {
+    testOptions = [];
+  }
+  const testIdParam = readSearchParam(params.testId).trim();
+  const testId = testOptions.some((test) => test.id === testIdParam) ? testIdParam : '';
+
+  // B0-338 — "single user" filter. Accepts a raw `app_user.user_id` (plain text — Salesforce ids,
+  // GUIDs, …) or an email address, resolved to a user_id below. Capped rather than
+  // shape-validated, mirroring the prompt search term above.
+  const userId = readSearchParam(params.userId).trim().slice(0, SEARCH_MAX_CHARS);
+  // An email that matches no `app_user` row resolves to null: the filter must return "no runs
+  // match" rather than silently ignoring a stale/typo'd filter and showing everyone's runs.
+  const resolvedUserId = userId ? await resolveUserFilterInput(userId) : undefined;
+  const userFilterMatchedNothing = Boolean(userId) && resolvedUserId === null;
 
   const requestedPage = Number.parseInt(readSearchParam(params.page, '1'), 10);
   const page = Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : 1;
@@ -134,16 +161,21 @@ export default async function AdminObservabilityPage({ searchParams }: PageProps
     confidenceMax: confidenceMax.raw,
     source: source ?? '',
     search,
+    userId,
+    testId,
+    toolName,
   };
 
   let loadError: string | null = null;
   let rows: WorkflowRunListRow[] = [];
   let hasMore = false;
-  let aggregates: AggregateDashboardData | null = null;
 
   try {
-    const [runs, dashboard] = await Promise.all([
-      listWorkflowRuns({
+    // When the typed email/id matched no `app_user` row, skip the fetch — the table must
+    // report "no runs match" rather than silently dropping the filter and showing every
+    // user's runs.
+    if (!userFilterMatchedNothing) {
+      const runs = await listWorkflowRuns({
         from: windowFrom,
         to: windowTo,
         status: status || undefined,
@@ -152,14 +184,15 @@ export default async function AdminObservabilityPage({ searchParams }: PageProps
         confidenceMax: confidenceMax.parsed,
         source,
         search: search || undefined,
+        userId: resolvedUserId || undefined,
+        testId: testId || undefined,
+        toolName: toolName || undefined,
         limit: PAGE_SIZE,
         offset: (page - 1) * PAGE_SIZE,
-      }),
-      getAggregateDashboardData({ from: windowFrom, to: windowTo }),
-    ]);
-    rows = runs.rows;
-    hasMore = runs.hasMore;
-    aggregates = dashboard;
+      });
+      rows = runs.rows;
+      hasMore = runs.hasMore;
+    }
   } catch (error) {
     loadError =
       error instanceof Error
@@ -186,6 +219,17 @@ export default async function AdminObservabilityPage({ searchParams }: PageProps
             be included or excluded; runs from before that was recorded show as
             unknown. Select a run to open its trace.
           </p>
+          <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-500">
+            Looking for the aggregate dashboard (totals, confidence health, latency by step)?
+            It moved to{' '}
+            <Link
+              className="font-medium text-sky-700 underline-offset-2 hover:underline"
+              href="/admin/bex/health"
+            >
+              Bex health
+            </Link>
+            .
+          </p>
         </section>
 
         {loadError ? (
@@ -194,14 +238,13 @@ export default async function AdminObservabilityPage({ searchParams }: PageProps
           </section>
         ) : null}
 
-        {aggregates ? <AggregateDashboard data={aggregates} /> : null}
-
         <RunsTable
           filters={filters}
           hasMore={hasMore}
           page={page}
           route={ROUTE}
           rows={rows}
+          testOptions={testOptions}
         />
       </main>
     </div>

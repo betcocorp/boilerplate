@@ -193,6 +193,35 @@ async function loadCostMetrics(input: CostMetricsInput): Promise<CostMetricsResu
   };
 }
 
+/**
+ * B0-583 — additive reads for the Bex Health "Tokens per day" panel. Same `cost_by_model_per_day`
+ * view `getCostMetrics` uses, exposed with an explicit day window so the panel can also fetch the
+ * preceding equal-length window for its cache-hit delta. Deliberately uncached: the health page is
+ * request-rendered and small. Existing `/admin/cost` exports are untouched.
+ */
+export async function fetchDailyCostPoints(window: {
+  startDate: string;
+  endDate: string;
+}): Promise<CostMetricsPoint[]> {
+  return fetchCostPoints({
+    groupBy: 'day',
+    startDate: window.startDate,
+    endDate: window.endDate,
+  });
+}
+
+/**
+ * B0-583 — distinct workflow runs with at least one cost-tracked step in the window (the
+ * `cost_covered_run_count` RPC). This is the honest denominator for "tokens per run": it counts
+ * exactly the runs whose tokens appear in `cost_by_model_per_day`.
+ */
+export async function fetchCostCoveredRunCount(window: {
+  startDate: string;
+  endDate: string;
+}): Promise<number> {
+  return fetchCoveredRunCount({ startDate: window.startDate, endDate: window.endDate });
+}
+
 /** 1h cache — cost data changes with every workflow run, but a dashboard refresh doesn't need to. */
 const getCachedCostMetrics = unstable_cache(loadCostMetrics, ['bex-cost-metrics'], {
   revalidate: 3600,

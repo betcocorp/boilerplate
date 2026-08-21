@@ -3,6 +3,7 @@ import { cookies } from 'next/headers';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 
+import { version as appVersion } from '../../../../package.json';
 import { AdminAccountMenu } from '~/components/admin/AdminAccountMenu';
 import { AdminNavAutoClose } from '~/components/admin/AdminNavAutoClose';
 import { AdminScrollableMain } from '~/components/admin/AdminScrollableMain';
@@ -75,10 +76,10 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
                 <SidebarTrigger className="-ml-1" />
                 <div className="min-w-0">
                   <p className="text-sm font-medium text-muted-foreground">
-                    Dashboard
+                    {appVersion}
                   </p>
                   <h2 className="truncate text-lg font-semibold text-foreground">
-                    Document corpus, Search
+                    Dashboard
                   </h2>
                 </div>
               </div>

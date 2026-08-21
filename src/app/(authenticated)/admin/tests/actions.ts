@@ -1,12 +1,20 @@
 'use server';
 
+import { getServerSession } from 'next-auth';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 
 import { SME_AGENT_IDS } from '~/lib/agents/agent-registry';
 import { APP_VERSION } from '~/lib/app-version';
+import { writeAuditLog } from '~/lib/audit/audit-log';
+import { authOptions } from '~/lib/auth';
+import { newCorrelationId } from '~/lib/observability/correlation-id';
+import { GOLDEN_TIERS, type GoldenTier } from '~/lib/tests/golden-set';
+import { updateTierTarget } from '~/lib/tests/tier-targets';
+import supportedModels from '~/lib/constants/models';
 import {
   parseCsvColumnNames,
+  parseExpectedCriteriaFromForm,
   parseExpectedShouldAnswerFromForm,
   parsePriority,
   parseShouldCiteFromForm,
@@ -65,9 +73,16 @@ function optionalFormText(formData: FormData, name: string): string | null {
  */
 function readConceptExpectationFields(formData: FormData) {
   const shouldCiteRaw = formData.get('shouldCite');
+  const expectedCriteriaRaw = formData.get('expectedCriteria');
   return {
     expected_concepts: optionalFormText(formData, 'expectedConcepts'),
     minimum_concepts: optionalFormText(formData, 'minimumConcepts'),
+    // B0-615 — blank clears the row back to legacy behavior-only grading (empty array),
+    // matching how every other field here treats a cleared input.
+    expected_criteria:
+      typeof expectedCriteriaRaw === 'string'
+        ? parseExpectedCriteriaFromForm(expectedCriteriaRaw)
+        : [],
     expected_sources: optionalFormText(formData, 'expectedSources'),
     should_cite:
       typeof shouldCiteRaw === 'string'
@@ -193,6 +208,7 @@ export async function uploadTestCsvAction(formData: FormData) {
     ideal_response: row.idealResponse,
     expected_concepts: row.expectedConcepts,
     minimum_concepts: row.minimumConcepts,
+    expected_criteria: row.expectedCriteria,
     expected_sources: row.expectedSources,
     should_cite: row.shouldCite,
     input_payload: row.inputPayload,
@@ -489,15 +505,29 @@ export async function runTestAction(formData: FormData) {
     redirect(encodeMessage(`/admin/tests/${testId}`, 'error', 'This test has no items to run.'));
   }
 
-  // Model the run against a specific chat model. Tags map to concrete models in
-  // resolveResponsesModel(); 'preview' is the configured default.
-  const ALLOWED_MODEL_TAGS = ['preview', 'gpt-4o', 'gpt-4.1'] as const;
+  /**
+   * Model the run against a specific chat model. Tags map to concrete models in
+   * resolveResponsesModel(); 'preview' is the configured default.
+   *
+   * Read from the SAME `~/lib/constants/models` list the form's <select> renders. This was a
+   * hardcoded ['preview','gpt-4o','gpt-4.1'], so any newer model offered by the dropdown fell
+   * through to the `: 'preview'` branch — the run silently executed on the preview default while
+   * recording a model the user never picked. An unknown tag still falls back to 'preview' (a
+   * hand-crafted POST is not a reason to 500), but the allow-list can no longer drift from the UI.
+   */
+  const ALLOWED_MODEL_TAGS: readonly string[] = [
+    'preview',
+    ...supportedModels.map((m) => m.name),
+  ];
   const rawModelTag = formData.get('modelTag');
   const modelTag =
-    typeof rawModelTag === 'string' &&
-    (ALLOWED_MODEL_TAGS as readonly string[]).includes(rawModelTag)
+    typeof rawModelTag === 'string' && ALLOWED_MODEL_TAGS.includes(rawModelTag)
       ? rawModelTag
       : 'preview';
+
+  // B0-600 / B0-603 — opt-in validator pass, so a validator A/B run can be started from the UI.
+  // Unchecked box means absent, matching every run created before this field existed.
+  const useValidator = formData.get('useValidator') === 'on';
 
   const testResult = await createTestResult({
     test_id: testId,
@@ -507,7 +537,7 @@ export async function runTestAction(formData: FormData) {
     passed_items: 0,
     failed_items: 0,
     started_at: new Date().toISOString(),
-    run_options: { modelTag },
+    run_options: { modelTag, useValidator },
     app_version: APP_VERSION,
     summary: {
       completed_items: 0,
@@ -714,6 +744,7 @@ export async function createTestFromPromptsAction(formData: FormData) {
     ideal_response: item.ideal_response,
     expected_concepts: item.expected_concepts,
     minimum_concepts: item.minimum_concepts,
+    expected_criteria: item.expected_criteria,
     expected_sources: item.expected_sources,
     should_cite: item.should_cite,
     input_payload: item.input_payload,
@@ -810,6 +841,135 @@ export async function deleteTestRunAction(formData: FormData) {
   revalidatePath(`/admin/tests/${testId}`);
   revalidatePath(`/admin/tests/${testId}/runs/${runId}`);
   redirect(encodeMessage(returnPath, 'success', 'Run deleted.'));
+}
+
+/** Same actor convention as `~/lib/recommendations/review-actions.ts`. */
+async function currentAdminActor(): Promise<string> {
+  const session = await getServerSession(authOptions);
+  return session?.user?.email ?? 'admin';
+}
+
+/**
+ * B0-572 — mark/unmark a test set as part of the gating golden set. Audited with old and
+ * new values. The B0-572 rule (every golden-set item must carry a priority) is enforced as
+ * a VISIBLE data error by the golden-set reader's validation list, not by blocking the
+ * toggle — blocking would hide exactly the items an admin needs to go fix.
+ */
+export async function setTestGoldenAction(formData: FormData) {
+  const returnPath = normalizeReturnPath(formData.get('returnPath'), '/admin/tests');
+  const testId = formData.get('testId');
+  if (typeof testId !== 'string' || !testId.trim()) {
+    redirect(encodeMessage(returnPath, 'error', 'Missing test id.'));
+  }
+  const isGolden = formData.get('isGolden') === 'true';
+
+  const test = await getTestById(testId).catch(() => null);
+  if (!test) {
+    redirect(encodeMessage(returnPath, 'error', 'Test not found.'));
+  }
+
+  if (test.is_golden === isGolden) {
+    redirect(
+      encodeMessage(
+        returnPath,
+        'success',
+        `"${test.name}" is already ${isGolden ? 'in' : 'out of'} the golden set.`,
+      ),
+    );
+  }
+
+  await updateTestRecord(testId, { is_golden: isGolden });
+
+  const actor = await currentAdminActor();
+  await writeAuditLog(
+    'golden_set_membership_changed',
+    {
+      test_id: testId,
+      test_name: test.name,
+      actor,
+      old_is_golden: test.is_golden,
+      new_is_golden: isGolden,
+    },
+    { traceId: newCorrelationId() },
+  );
+
+  revalidatePath('/admin/tests');
+  revalidatePath(`/admin/tests/${testId}`);
+  redirect(
+    encodeMessage(
+      returnPath,
+      'success',
+      isGolden
+        ? `"${test.name}" added to the golden set.`
+        : `"${test.name}" removed from the golden set.`,
+    ),
+  );
+}
+
+/**
+ * B0-573 — edit one tier's pass-rate target / gate flag / label. Audited with old AND new
+ * values (`audit_logs.payload.old` / `.new`), so a target change is reconstructable.
+ */
+export async function updateTierTargetAction(formData: FormData) {
+  const returnPath = normalizeReturnPath(formData.get('returnPath'), '/admin/tests');
+
+  const tierRaw = formData.get('tier');
+  const tierNumber = typeof tierRaw === 'string' ? Number.parseInt(tierRaw, 10) : NaN;
+  if (!(GOLDEN_TIERS as readonly number[]).includes(tierNumber)) {
+    redirect(encodeMessage(returnPath, 'error', 'Invalid tier.'));
+  }
+  const tier = tierNumber as GoldenTier;
+
+  const targetRaw = formData.get('targetPassRate');
+  const targetPassRate = typeof targetRaw === 'string' ? Number.parseFloat(targetRaw) : NaN;
+  if (!Number.isFinite(targetPassRate) || targetPassRate < 0 || targetPassRate > 1) {
+    redirect(
+      encodeMessage(returnPath, 'error', 'Target pass rate must be between 0 and 1.'),
+    );
+  }
+
+  const isGate = formData.get('isGate') === 'on';
+
+  const labelRaw = formData.get('label');
+  const label = typeof labelRaw === 'string' ? labelRaw.trim() : '';
+  if (!label) {
+    redirect(encodeMessage(returnPath, 'error', 'Enter a label for the tier.'));
+  }
+
+  const { previous, next } = await updateTierTarget(tier, {
+    targetPassRate,
+    isGate,
+    label,
+  });
+
+  const actor = await currentAdminActor();
+  await writeAuditLog(
+    'tier_target_changed',
+    {
+      tier,
+      actor,
+      old: {
+        target_pass_rate: previous.targetPassRate,
+        is_gate: previous.isGate,
+        label: previous.label,
+      },
+      new: {
+        target_pass_rate: next.targetPassRate,
+        is_gate: next.isGate,
+        label: next.label,
+      },
+    },
+    { traceId: newCorrelationId() },
+  );
+
+  revalidatePath('/admin/tests');
+  redirect(
+    encodeMessage(
+      returnPath,
+      'success',
+      `Tier ${tier} target updated to ${(next.targetPassRate * 100).toFixed(0)}%${next.isGate ? ' (gate)' : ''}.`,
+    ),
+  );
 }
 
 const TEST_RUN_NOTES_MAX_LENGTH = 32_000;

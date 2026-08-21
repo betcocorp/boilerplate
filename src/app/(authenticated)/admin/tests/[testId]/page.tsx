@@ -10,7 +10,6 @@ import { PromptBundleVersionBadge } from '~/components/admin/tests/PromptBundleV
 import { RunSearchEvalDialog } from '~/components/admin/tests/RunSearchEvalDialog';
 import { TestPromptsSection } from '~/components/admin/tests/TestPromptsSection';
 import { Button } from '~/components/ui/button';
-import { NativeSelect } from '~/components/ui/native-select';
 import {
   TableBody,
   TableCell,
@@ -23,6 +22,7 @@ import {
   buildPromptAggregations,
   extractItemMaxSimilarity,
 } from '~/lib/tests/prompt-aggregations';
+import { parseReportState } from '~/lib/tests/report/schemas';
 import {
   getGlobalTestItemSuggestionRows,
   getLegacyProductLineSuggestionMeta,
@@ -43,13 +43,18 @@ import {
 } from '~/lib/tests/suggestion-lists';
 
 import { TestHistoricalTrendsCharts } from '~/components/admin/tests/TestHistoricalTrendsCharts';
-import { formatPercentDelta, formatSimilarityDelta } from '~/lib/tests/format';
+import {
+  formatPercentDelta,
+  formatScoreDelta,
+  formatSimilarityDelta,
+} from '~/lib/tests/format';
 import {
   formatDate,
   formatDurationSeconds,
   formatRunChartAxisLabel,
 } from '~/lib/utils/time';
 
+import { TestRunModelControls } from '~/components/admin/tests/TestRunModelControls';
 import {
   deleteSearchRunAction,
   deleteTestRunAction,
@@ -211,7 +216,9 @@ export default async function AdminTestDetailsPage({
     trendRuns.map((run) => [
       run.id,
       summarizePromptBundleVersions(
-        (resultItemsByRunId.get(run.id) ?? []).map((item) => item.response_payload),
+        (resultItemsByRunId.get(run.id) ?? []).map(
+          (item) => item.response_payload,
+        ),
       ),
     ]),
   );
@@ -349,16 +356,7 @@ export default async function AdminTestDetailsPage({
                   value={`/admin/tests/${test.id}`}
                 />
                 <input name="testId" type="hidden" value={test.id} />
-                <NativeSelect
-                  aria-label="Chat model for this run"
-                  className="h-9 w-36"
-                  defaultValue="preview"
-                  name="modelTag"
-                >
-                  <option value="preview">Model: preview</option>
-                  <option value="gpt-4o">Model: gpt-4o</option>
-                  <option value="gpt-4.1">Model: gpt-4.1</option>
-                </NativeSelect>
+                <TestRunModelControls />
                 <Button size="sm" type="submit">
                   Run dataset
                 </Button>
@@ -380,6 +378,9 @@ export default async function AdminTestDetailsPage({
                   <TableHead title="Which build of the prompt bundle (specialist policies + tool defs) produced this run — B0-393">
                     Prompt bundle
                   </TableHead>
+                  <TableHead title="Overall score/grade from the auto-generated eval report (B0-609)">
+                    Score
+                  </TableHead>
                   <TableHead>Pass/fail</TableHead>
                   <TableHead title="Share of items marked passed for this run (same basis as the pass rate trend chart)">
                     Pass %
@@ -397,7 +398,7 @@ export default async function AdminTestDetailsPage({
               <TableBody>
                 {results.length === 0 ? (
                   <TableRow>
-                    <TableCell className="text-slate-500" colSpan={9}>
+                    <TableCell className="text-slate-500" colSpan={10}>
                       No runs yet for this dataset.
                     </TableCell>
                   </TableRow>
@@ -414,6 +415,18 @@ export default async function AdminTestDetailsPage({
                         ? result.failed_items
                         : result.total_items - result.passed_items,
                     );
+                    const reportState = parseReportState(result.report_state);
+                    const overall =
+                      reportState?.status === 'completed'
+                        ? reportState.overall
+                        : null;
+                    const previousReportState = previousResult
+                      ? parseReportState(previousResult.report_state)
+                      : null;
+                    const previousOverall =
+                      previousReportState?.status === 'completed'
+                        ? previousReportState.overall
+                        : null;
                     return (
                       <TableRow key={result.id}>
                         <TableCell className="font-mono text-xs">
@@ -421,18 +434,35 @@ export default async function AdminTestDetailsPage({
                             className="text-sky-700 underline-offset-2 hover:underline"
                             href={`/admin/tests/${test.id}/runs/${result.id}`}
                           >
-                            {result.id}
+                            {index}
                           </Link>
                         </TableCell>
                         <TableCell>{result.status}</TableCell>
                         <TableCell>
                           <PromptBundleVersionBadge
                             summary={
-                              promptBundleVersionSummaryByRunId.get(result.id) ?? {
+                              promptBundleVersionSummaryByRunId.get(
+                                result.id,
+                              ) ?? {
                                 kind: 'none',
                               }
                             }
                           />
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap tabular-nums text-slate-700">
+                          <span className="inline-flex items-center gap-2">
+                            <span>
+                              {overall && typeof overall.avg === 'number'
+                                ? `${overall.avg}/100 (${overall.grade})`
+                                : '—'}
+                            </span>
+                            <RunTrendIndicator
+                              current={overall?.avg}
+                              formatDelta={formatScoreDelta}
+                              label="Score"
+                              previous={previousOverall?.avg}
+                            />
+                          </span>
                         </TableCell>
                         <TableCell>
                           {result.passed_items}/{failedItems}
@@ -716,6 +746,7 @@ export default async function AdminTestDetailsPage({
               ideal_response: item.ideal_response,
               expected_concepts: item.expected_concepts,
               minimum_concepts: item.minimum_concepts,
+              expected_criteria: item.expected_criteria,
               expected_sources: item.expected_sources,
               should_cite: item.should_cite,
               input_payload: item.input_payload,

@@ -229,7 +229,14 @@ export async function countRecommendations(
 
 /** Per-status counts across the whole table (unfiltered) — powers the "pending" badge on the review queue. */
 export async function countRecommendationsByStatus(): Promise<Record<RecommendationStatus, number>> {
-  const statuses: RecommendationStatus[] = ['pending', 'answered', 'declined', 'verified', 'rejected'];
+  const statuses: RecommendationStatus[] = [
+    'pending',
+    'escalated',
+    'answered',
+    'declined',
+    'verified',
+    'rejected',
+  ];
   const counts = await Promise.all(statuses.map((status) => countRecommendations({ status })));
   return statuses.reduce(
     (acc, status, i) => {
@@ -435,6 +442,7 @@ export async function getRecommendationMetrics(): Promise<RecommendationMetrics>
 
   const byStatus: Record<RecommendationStatus, number> = {
     pending: 0,
+    escalated: 0,
     answered: 0,
     declined: 0,
     verified: 0,

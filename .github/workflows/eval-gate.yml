@@ -1,37 +1,58 @@
 name: Eval gate
 
+# B0-465 — this gate now starts a FRESH golden-set run per PR. It used to grade whatever run id
+# sat in the `BEX_GATE_LATEST_RUN_ID` secret, so every PR re-scored the same historical run and
+# could not fail on a regression the PR introduced.
+#
+# Requires a reachable deployed app (`BEX_GATE_BASE_URL`) — the eval executes server-side inside
+# the app, not in this runner — plus a client token from the api_project → api_app → api_key
+# registry (`BEX_GATE_API_TOKEN`) and the golden-set suite id (`BEX_GATE_TEST_ID`).
+
 on:
   pull_request:
     paths:
-      - 'bex2.0/src/lib/rag/**'
-      - 'bex2.0/src/lib/tools/**'
-      - 'bex2.0/src/lib/agents/**'
-      - 'bex2.0/src/lib/tests/**'
+      # Repo root IS the app, so these must not carry a `bex2.0/` prefix — with it the filter
+      # matched nothing and this workflow never ran.
+      - 'src/lib/rag/**'
+      - 'src/lib/tools/**'
+      - 'src/lib/agents/**'
+      - 'src/lib/tests/**'
+      - 'scripts/run-eval-gate.ts'
+      - '.github/workflows/eval-gate.yml'
+
+concurrency:
+  group: eval-gate-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   eval-gate:
-    name: Similarity floor check
+    name: Golden-set floor check
     runs-on: ubuntu-latest
+    # The suite runs server-side; this job only starts it and waits.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
       - uses: pnpm/action-setup@v3
         with:
-          version: 9
+          # pnpm 9 rejects this repo's pnpm-workspace.yaml outright ("packages field missing or
+          # empty") — see the same pin and reasoning in release.yml.
+          version: '11.20.0'
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          # Matches engines.node; also what runs the .ts script below via native type stripping.
+          node-version: '24'
           cache: pnpm
-          cache-dependency-path: bex2.0/pnpm-lock.yaml
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-        working-directory: bex2.0
 
-      - name: Check eval gate
-        run: pnpm exec tsx scripts/run-eval-gate.ts
-        working-directory: bex2.0
+      - name: Run golden set and check floors
+        # Node 24 strips types natively — no tsx dependency (there never was one in this repo,
+        # so the previous `pnpm exec tsx` step could not have run).
+        run: node scripts/run-eval-gate.ts
         env:
           BEX_GATE_BASE_URL: ${{ secrets.BEX_GATE_BASE_URL }}
-          BEX_GATE_RUN_ID: ${{ secrets.BEX_GATE_LATEST_RUN_ID }}
+          BEX_GATE_API_TOKEN: ${{ secrets.BEX_GATE_API_TOKEN }}
+          BEX_GATE_TEST_ID: ${{ secrets.BEX_GATE_TEST_ID }}

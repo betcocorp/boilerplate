@@ -179,6 +179,43 @@ export function ToolCallDetail({ event }: { event: ToolCallTimelineEvent }) {
           <RetrievedChunksPreview chunks={chunks} />
         </div>
       ) : null}
+
+      {/* B0-292 — the actual pages a `recommend_cross_reference` web search found, not just the
+          searches-used/escalated telemetry already visible above in the output preview. */}
+      {event.webSearch ? (
+        <div className="min-w-0 space-y-1">
+          <p className="text-[0.65rem] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+            Web search results — &ldquo;{event.webSearch.query}&rdquo; ({event.webSearch.searchesUsed}{' '}
+            search{event.webSearch.searchesUsed === 1 ? '' : 'es'}
+            {event.webSearch.escalated ? ', escalated' : ''})
+          </p>
+          {event.webSearch.results.length === 0 ? (
+            <p className="text-xs text-muted-foreground">No results returned.</p>
+          ) : (
+            <ul className="space-y-1.5">
+              {event.webSearch.results.map((result, index) => (
+                <li
+                  className="rounded-lg border border-border/60 bg-muted/30 p-2"
+                  key={`${result.url}-${index}`}
+                >
+                  <a
+                    className="block truncate text-xs font-medium text-primary underline-offset-4 hover:underline"
+                    href={result.url}
+                    rel="noreferrer"
+                    target="_blank"
+                  >
+                    {result.title || result.url}
+                  </a>
+                  <p className="truncate text-[0.65rem] text-muted-foreground">{result.url}</p>
+                  {result.snippet ? (
+                    <p className="mt-1 line-clamp-3 text-xs text-slate-700">{result.snippet}</p>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }

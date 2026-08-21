@@ -1,4 +1,5 @@
 import type { Tables, TablesInsert } from '~/types/supabase.public';
+import type { ExpectedCriterion } from './criteria-schemas';
 
 export const TERMINAL_RUN_STATUSES = [
   'completed',
@@ -43,6 +44,8 @@ export type ParsedCsvRow = {
   idealResponse: string | null;
   expectedConcepts: string | null;
   minimumConcepts: string | null;
+  /** B0-615 — parsed from the `expected_criteria` CSV cell's tiered mini-syntax. Empty array when absent. */
+  expectedCriteria: ExpectedCriterion[];
   expectedSources: string | null;
   shouldCite: boolean | null;
   inputPayload: Record<string, string>;

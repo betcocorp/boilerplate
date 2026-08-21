@@ -1279,12 +1279,12 @@ describe('answer provenance (B0-391)', () => {
     expect(out.answerText).toContain('do not have enough retrieved evidence');
   });
 
-  it('reports the generic validator fallback as validator_fallback', async () => {
+  it('B0-350 (resolves B0-262): keeps a substantive generic validator rejection visible as validator_rejected_draft_retained instead of snapping to fallback copy', async () => {
     runValidatorPassMock.mockResolvedValue({
       approved: false,
       confidence: 0.3,
       issues: ['dilution claim unsupported'],
-      requires_human_review: true,
+      requires_human_review: false,
       usage: VALIDATOR_PASS_USAGE,
     });
     runRevisionPassMock.mockResolvedValue({
@@ -1292,10 +1292,68 @@ describe('answer provenance (B0-391)', () => {
       usage: VALIDATOR_PASS_USAGE,
     });
 
-    const out = await run({ userMessage: 'What is the EPA reg number for Betco Fight Bac RTU?', useValidator: true });
+    const events: unknown[] = [];
+    const out = await run({
+      userMessage: 'What is the EPA reg number for Betco Fight Bac RTU?',
+      useValidator: true,
+      onEvent: (event: unknown) => events.push(event),
+    });
+
+    // The streamed draft the user already saw is kept, not overwritten with decline copy.
+    expect(out.answerProvenance).toBe('validator_rejected_draft_retained');
+    expect(out.answerText).toBe('Dilute per the label instructions.');
+    expect(out.answerText).not.toContain('could not fully verify');
+    // A kept-but-rejected draft is always forced into human review, even though the validator's
+    // own pass (and the refused revision) never asked for it.
+    expect(out.validation.requires_human_review).toBe(true);
+    expect(fake.tables.review_tasks?.[0]?.reason).toBe('revision_refused');
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'answer_flagged_for_review',
+        reason: 'revision_refused',
+        answerRetained: true,
+      }),
+    );
+  });
+
+  it('B0-350: still hard-replaces when the validator flags an actual safety issue (off-label/prohibited use)', async () => {
+    runValidatorPassMock.mockResolvedValue({
+      approved: false,
+      confidence: 0.2,
+      issues: ['suggests a prohibited off-label use on food-contact surfaces'],
+      requires_human_review: false,
+      usage: VALIDATOR_PASS_USAGE,
+    });
+    runRevisionPassMock.mockResolvedValue({
+      text: 'Clarification needed: please supply approved documentation.',
+      usage: VALIDATOR_PASS_USAGE,
+    });
+
+    const out = await run({ userMessage: USAGE_MESSAGE, useValidator: true });
 
     expect(out.answerProvenance).toBe('validator_fallback');
     expect(out.answerText).toContain('could not fully verify');
+    expect(out.validation.requires_human_review).toBe(true);
+  });
+
+  it('B0-350: forces requires_human_review on a kept draft even when the validator itself never requested review', async () => {
+    // No `issues`, so the revision pass never runs (it only fires when `issues.length > 0`) --
+    // isolates the keep-draft branch's OWN forcing from the `revisionRefused` guard's forcing above.
+    runValidatorPassMock.mockResolvedValue({
+      approved: false,
+      confidence: 0.5,
+      issues: [],
+      requires_human_review: false,
+      usage: VALIDATOR_PASS_USAGE,
+    });
+
+    const out = await run({ userMessage: USAGE_MESSAGE, useValidator: true });
+
+    expect(runRevisionPassMock).not.toHaveBeenCalled();
+    expect(out.answerProvenance).toBe('validator_rejected_draft_retained');
+    expect(out.answerText).toBe('Dilute per the label instructions.');
+    expect(out.validation.requires_human_review).toBe(true);
+    expect(fake.tables.review_tasks?.[0]?.reason).toBe('validator_rejected');
   });
 
   it('reports a cross-reference headline stapled onto the model draft as cross_reference_composed', async () => {

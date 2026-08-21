@@ -157,6 +157,12 @@ export type ProductKnowledgeRetrievalSummary = {
    * `productLineKey`, so the merge can never introduce a cross-line document.
    */
   usedLineKindSupplement: boolean;
+  /**
+   * B0-556 — SDS-kind sources withheld because they were not provably on the resolved product
+   * line. Non-zero means the answer was deliberately denied regulated safety evidence rather than
+   * grounded on another product line's SDS. Always 0 on the line-filtered paths.
+   */
+  withheldUnanchoredSdsCount: number;
   broadCuratedCount: number;
   anchoredCuratedCount: number;
   productLineResolution?: ProductLineResolutionResult;
@@ -276,6 +282,48 @@ type ProductKnowledgeQueryBase = Omit<
 /** Wall-clock stopwatch for the retrieval phase -- see `searchMs` on the summary above (B0-438). */
 function retrievalElapsedMs(startedAt: number): number {
   return Number((performance.now() - startedAt).toFixed(1));
+}
+
+/**
+ * B0-556 — document kinds whose content is regulated safety data: GHS hazard statements, signal
+ * words, precautionary statements. Misattributing these across product lines is a safety
+ * misstatement, not a relevance miss, so they get a stricter rule than everything else.
+ */
+const REGULATED_SAFETY_DOCUMENT_KINDS = new Set(['sds']);
+
+/**
+ * B0-556 — withholds SDS-kind sources that are not provably on the resolved product line.
+ *
+ * Reported case: "hazards and signal word for SKU 07512-00" was answered with flammable-aerosol
+ * hazard language cited to the Baseboard Stripper SDS. The alias resolves correctly and the SQL
+ * line filter provably excludes that document, so the leak is not in resolution or the filter —
+ * it is the paths that search the corpus with NO line filter and hand the results straight to the
+ * model:
+ *
+ *  - `broad_only` — nothing resolved, so every SDS here belongs to an arbitrary line;
+ *  - `anchored_with_broad_fallback` — a line WAS resolved, but thin anchored evidence lost to the
+ *    unfiltered broad pass, so cross-line SDS content reaches the model despite a known line.
+ *
+ * `anchored_only` and `explicit_product_line` are filtered in SQL and are deliberately NOT passed
+ * through here: their sources can legitimately carry a null `productLineKey` (the RPC also matches
+ * on `source_record.source_pk`), and withholding those would drop correctly-anchored evidence.
+ *
+ * Everything that is not an SDS is untouched — cross-line label or profile prose is a relevance
+ * problem, not a regulated-data one.
+ */
+function withholdUnanchoredSafetySources(
+  sources: CuratedSource[],
+  resolvedProductLineKey: string | null,
+): { sources: CuratedSource[]; withheldCount: number } {
+  const kept = sources.filter((source) => {
+    if (!REGULATED_SAFETY_DOCUMENT_KINDS.has(source.documentKind)) {
+      return true;
+    }
+    // With no resolved line, no SDS can be attributed to this SKU at all.
+    return resolvedProductLineKey !== null && source.productLineKey === resolvedProductLineKey;
+  });
+
+  return { sources: kept, withheldCount: sources.length - kept.length };
 }
 
 function buildCuratedSource(
@@ -656,6 +704,8 @@ async function runProductKnowledgeQuery(input: {
         usedBroadFallback: false,
         usedProductKeyFallback,
         usedLineKindSupplement: false,
+        // Line-filtered in SQL; nothing to withhold.
+        withheldUnanchoredSdsCount: 0,
         broadCuratedCount: curated.length,
         anchoredCuratedCount: curated.length,
         explicitKeySource: input.productLineKeySource ?? 'unspecified',
@@ -685,11 +735,19 @@ async function runProductKnowledgeQuery(input: {
     });
 
     const requiredDocumentKindsForSkip = resolveRequiredDocumentKinds(input.query, sectionType);
-    const curated = await curateUniqueDocumentSources(result.matches, {
+    const curatedRaw = await curateUniqueDocumentSources(result.matches, {
       limit,
       maxPerDocument,
       requiredDocumentKinds: requiredDocumentKindsForSkip,
     });
+
+    // B0-556 — no line was resolved, so no SDS can be attributed to this product. In practice this
+    // path searches `scope: 'products'` (profiles only) and withholds nothing; kept as a guard so
+    // the invariant does not depend on that scope staying narrow.
+    const { sources: curated, withheldCount: withheldSds } = withholdUnanchoredSafetySources(
+      curatedRaw,
+      null,
+    );
 
     return {
       sources: curated,
@@ -703,6 +761,7 @@ async function runProductKnowledgeQuery(input: {
         usedBroadFallback: false,
         usedProductKeyFallback: false,
         usedLineKindSupplement: false,
+        withheldUnanchoredSdsCount: withheldSds,
         broadCuratedCount: curated.length,
         anchoredCuratedCount: 0,
         explicitKeySource: null,
@@ -744,7 +803,13 @@ async function runProductKnowledgeQuery(input: {
   });
 
   if (resolution.lockedProductLineKey == null) {
-    const broadCurated = await hydrateCuratedSources(await broadSelectedPromise);
+    const broadHydrated = await hydrateCuratedSources(await broadSelectedPromise);
+    // B0-556 — corpus-wide search with no line filter and nothing resolved: every SDS here belongs
+    // to an arbitrary product line, so none of it may ground a hazard answer.
+    const { sources: broadCurated, withheldCount: withheldSds } = withholdUnanchoredSafetySources(
+      broadHydrated,
+      null,
+    );
     return {
       sources: broadCurated,
       retrieval: {
@@ -757,6 +822,7 @@ async function runProductKnowledgeQuery(input: {
         usedBroadFallback: false,
         usedProductKeyFallback: false,
         usedLineKindSupplement: false,
+        withheldUnanchoredSdsCount: withheldSds,
         broadCuratedCount: broadCurated.length,
         anchoredCuratedCount: 0,
         explicitKeySource: null,
@@ -801,12 +867,23 @@ async function runProductKnowledgeQuery(input: {
 
   // B0-438: only the winning pass is hydrated. Assembling full document bodies for the pass
   // that is about to be discarded was the single largest piece of provably wasted retrieval work.
-  const finalCurated = await hydrateCuratedSources(
+  const finalHydrated = await hydrateCuratedSources(
     shouldUseBroadFallback ? broadSelected : anchoredSelected,
   );
   const strategy = shouldUseBroadFallback
     ? 'anchored_with_broad_fallback'
     : 'anchored_only';
+
+  /**
+   * B0-556 — the fallback hands over sources from the UNFILTERED broad pass even though a line was
+   * resolved, which is how a correctly-resolved SKU ended up answered from another line's SDS. Only
+   * SDS-kind sources actually on `lockedProductLineKey` survive. The `anchored_only` branch is left
+   * alone: it is already line-filtered in SQL, and its sources may legitimately carry a null
+   * `productLineKey` (the RPC also matches on `source_record.source_pk`).
+   */
+  const { sources: finalCurated, withheldCount: withheldSds } = shouldUseBroadFallback
+    ? withholdUnanchoredSafetySources(finalHydrated, resolution.lockedProductLineKey)
+    : { sources: finalHydrated, withheldCount: 0 };
 
   return {
     sources: finalCurated,
@@ -821,6 +898,7 @@ async function runProductKnowledgeQuery(input: {
       usedBroadFallback: shouldUseBroadFallback,
       usedProductKeyFallback: false,
       usedLineKindSupplement: false,
+      withheldUnanchoredSdsCount: withheldSds,
       broadCuratedCount: broadSelected.length,
       anchoredCuratedCount: anchoredSelected.length,
       explicitKeySource: null,

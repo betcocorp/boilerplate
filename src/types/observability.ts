@@ -9,7 +9,7 @@
  * Nothing here performs I/O; these are pure type declarations.
  */
 
-import type { ToolCallOrigin } from '~/lib/audit/trace';
+import type { ToolCallOrigin, ToolWebSearchParams } from '~/lib/audit/trace';
 import type { PromptRecord } from '~/lib/workflows/product-support/product-support-schemas';
 import type { Json, Tables } from '~/types/supabase.public';
 
@@ -164,6 +164,13 @@ export type ToolCallTimelineEvent = TimelineEventBase & {
    */
   argumentsTruncated: boolean | null;
   outputTruncated: boolean | null;
+  /**
+   * B0-292 — the web pages this call's web search step found (query + title/url/snippet per
+   * result), when it ran one. Null when the call ran no web search (every tool but the
+   * web-grounded path of `recommend_cross_reference`), on a `reconstructed` event (never
+   * recoverable — this only ever lived in `toolTrace`), or on a row written before this shipped.
+   */
+  webSearch: ToolWebSearchParams | null;
 };
 
 /** A confidence-affecting gate decision. */
@@ -241,7 +248,32 @@ export type WorkflowRunListRow = {
    */
   ttftMs: number | null;
   userMessagePreview: string | null;
+  /** B0-338 — who asked for this run. See `RunAttribution` below. */
+  attribution: RunAttribution;
 };
+
+/**
+ * B0-338 — "who asked?" for a workflow run (epic B0-330 Phase 8), resolved by
+ * `~/lib/observability/run-attribution.ts`. Checked in this priority order:
+ *
+ *  1. `test`   — the run is linked to a `test_result_items` row via the indexed
+ *     `workflow_run_id` column (the same linkage `harness-linkage.ts` uses for the trace page's
+ *     verdict band). Attributed to the specific test, never a generic "harness" label.
+ *  2. `user`   — `workflow_runs.conversation_id` resolves to an `agent_conversations.user_id`,
+ *     joined to `app_user` for a display name / email.
+ *  3. `api_client` — `workflow_runs.source = 'orchestrator_api'` with no conversation owner.
+ *     `api_request_log` has no `workflow_run_id` column, so a specific app/project cannot be
+ *     correlated back to a specific run — deliberately out of scope for B0-338. Labeled
+ *     explicitly so these never render identical to a plain unattributed `bex_chat`/`harness` run.
+ *  4. `unknown` — none of the above: pre-instrumentation runs, a deleted conversation, an
+ *     unattributed service-token conversation, etc. Always rendered as an explicit neutral
+ *     state in the UI, never blank and never mislabeled as a user.
+ */
+export type RunAttribution =
+  | { kind: 'user'; userId: string; displayName: string | null; email: string | null }
+  | { kind: 'test'; testId: string; testName: string; testResultId: string; testItemId: string }
+  | { kind: 'api_client' }
+  | { kind: 'unknown' };
 
 export type ListWorkflowRunsFilters = {
   from?: string; // ISO, inclusive
@@ -258,6 +290,16 @@ export type ListWorkflowRunsFilters = {
    * (`user_input->>message`). Callers pass an already-normalized term.
    */
   search?: string;
+  /** B0-338 — narrows to runs attributed (see `RunAttribution`) to this one `app_user.user_id`. */
+  userId?: string;
+  /** B0-338 — narrows to runs attributed to this one `tests.id`. */
+  testId?: string;
+  /**
+   * B0-593 — narrows to runs whose agent step's persisted `output.toolTrace` (see
+   * `ToolCallTimelineEvent`) contains at least one call to this tool. One of the static
+   * `PRODUCT_TOOL_NAMES` (`~/lib/tools/tool-schemas.ts`); callers pass an already-validated name.
+   */
+  toolName?: string;
   limit?: number;
   offset?: number;
 };
@@ -270,6 +312,26 @@ export type RoutingDistributionDatum = { routingDecision: string; count: number;
 export type ConfidenceBucketDatum = { bucket: 'high' | 'mid' | 'low' | 'none'; count: number };
 export type LatencyByStepDatum = { stepName: string; avgDurationMs: number; p95DurationMs: number; sampleSize: number };
 export type FailureRateByDayDatum = { day: string; total: number; failed: number; failureRate: number };
+
+/**
+ * B0-581 — token spend per run and the cached share of prompt tokens, folded from
+ * `final_output.usage` by `buildTokenUsage` in `~/lib/observability/aggregates.ts` (same
+ * window scan as everything else — no second pass).
+ */
+export type TokenUsageAggregate = {
+  /** Mean `usage.totalTokens` over runs that recorded usage; null when none did. */
+  avgTotalTokens: number | null;
+  /** Runs in the window whose `final_output.usage` exists — the mean's denominator. */
+  tokenSampleSize: number;
+  /**
+   * Σ cachedPromptTokens / Σ promptTokens, over ONLY runs whose usage carries the
+   * `cachedPromptTokens` key (added by B0-324). Pre-B0-324 runs are excluded from the
+   * denominator so they cannot deflate the share; null when no run in the window has the key.
+   */
+  cachedPromptShare: number | null;
+  /** Runs the cache share was computed over — surfaced so a thin sample is never hidden. */
+  cachedShareSampleSize: number;
+};
 
 export type AggregateDashboardData = {
   windowFrom: string;
@@ -301,6 +363,8 @@ export type AggregateDashboardData = {
    */
   avgDurationMs: number | null;
   durationSampleSize: number;
+  /** B0-581 — see `TokenUsageAggregate`. */
+  tokenUsage: TokenUsageAggregate;
   routingDistribution: RoutingDistributionDatum[];
   confidenceBuckets: ConfidenceBucketDatum[];
   latencyByStep: LatencyByStepDatum[];

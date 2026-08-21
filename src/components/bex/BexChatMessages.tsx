@@ -16,6 +16,7 @@ import { useEffect, useRef, useState } from 'react';
 
 import { BexMessagesSkeleton } from '~/components/bex/BexChatSkeleton';
 import { BexStreamdown } from '~/components/bex/BexStreamdown';
+import { RagDocumentChunkInspectButtons } from '~/components/rag/RagDocumentChunkInspect';
 import { Avatar, AvatarFallback } from '~/components/ui/avatar';
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
@@ -35,10 +36,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from '~/components/ui/select';
-import { RagDocumentChunkInspectButtons } from '~/components/rag/RagDocumentChunkInspect';
-import { isRagRowId } from '~/lib/rag/document-chunk-types';
 import { Separator } from '~/components/ui/separator';
 import { Textarea } from '~/components/ui/textarea';
+import { isRagRowId } from '~/lib/rag/document-chunk-types';
 import { cn } from '~/lib/utils';
 
 import {
@@ -117,18 +117,42 @@ function AssistantDetails({
         )}
         Details
         {hasReasoning ? (
-          <Badge className="ml-1.5 rounded-full px-1.5 py-0 text-[0.62rem]" variant="secondary">
+          <Badge
+            className="ml-1.5 rounded-full px-1.5 py-0 text-[0.62rem]"
+            variant="secondary"
+          >
             reasoning
           </Badge>
         ) : null}
         {hasSources ? (
-          <Badge className="ml-1 rounded-full px-1.5 py-0 text-[0.62rem]" variant="secondary">
+          <Badge
+            className="ml-1 rounded-full px-1.5 py-0 text-[0.62rem]"
+            variant="secondary"
+          >
             sources {meta.sources?.length}
           </Badge>
         ) : null}
       </Button>
       {open ? (
         <div className="mt-2 space-y-2 rounded-xl bg-muted/50 p-3 text-left">
+          {meta.workflowRunId ? (
+            <p className="font-mono text-[0.65rem] opacity-70">
+              Run:{' '}
+              <Link
+                className="underline decoration-muted-foreground/60 underline-offset-2 transition hover:text-foreground hover:decoration-foreground"
+                href={`/admin/observability/${meta.workflowRunId}`}
+              >
+                {meta.workflowRunId}
+              </Link>
+              {' · '}
+              <Link
+                className="underline decoration-muted-foreground/60 underline-offset-2 transition hover:text-foreground hover:decoration-foreground"
+                href={`/admin/observability/${meta.workflowRunId}`}
+              >
+                trace
+              </Link>
+            </p>
+          ) : null}
           {hasReasoning ? (
             <div className="space-y-2 rounded-lg border border-border/60 bg-background/70 p-2.5">
               <p className="text-[0.65rem] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
@@ -143,7 +167,9 @@ function AssistantDetails({
                 {meta.validation ? (
                   <Badge
                     className="rounded-full"
-                    variant={meta.validation.approved ? 'secondary' : 'destructive'}
+                    variant={
+                      meta.validation.approved ? 'secondary' : 'destructive'
+                    }
                   >
                     {meta.validation.approved ? 'validated' : 'not approved'}
                   </Badge>
@@ -156,7 +182,9 @@ function AssistantDetails({
               </div>
               {meta.validation?.issues && meta.validation.issues.length > 0 ? (
                 <div>
-                  <p className="font-medium text-foreground">Validation issues</p>
+                  <p className="font-medium text-foreground">
+                    Validation issues
+                  </p>
                   <ul className="mt-1 list-disc space-y-0.5 pl-4">
                     {meta.validation.issues.map((issue) => (
                       <li key={`${messageId}-${issue}`}>{issue}</li>
@@ -179,17 +207,6 @@ function AssistantDetails({
                     ))}
                   </div>
                 </div>
-              ) : null}
-              {meta.workflowRunId ? (
-                <p className="font-mono text-[0.65rem] opacity-70">
-                  Run:{' '}
-                  <Link
-                    className="underline decoration-muted-foreground/60 underline-offset-2 transition hover:text-foreground hover:decoration-foreground"
-                    href={`/admin/observability/${meta.workflowRunId}`}
-                  >
-                    {meta.workflowRunId}
-                  </Link>
-                </p>
               ) : null}
             </div>
           ) : null}
@@ -222,15 +239,23 @@ function AssistantDetails({
                             <ExternalLink className="size-3 shrink-0 opacity-60" />
                           </a>
                         ) : (
-                          <span className="font-medium text-foreground">{s.title}</span>
+                          <span className="font-medium text-foreground">
+                            {s.title}
+                          </span>
                         )}
                         {isExternal ? (
-                          <Badge className="rounded-full px-1.5 py-0 text-[0.62rem]" variant="secondary">
+                          <Badge
+                            className="rounded-full px-1.5 py-0 text-[0.62rem]"
+                            variant="secondary"
+                          >
                             web
                           </Badge>
                         ) : null}
                         {typeof s.similarity === 'number' ? (
-                          <Badge className="rounded-full px-1.5 py-0 text-[0.62rem]" variant="outline">
+                          <Badge
+                            className="rounded-full px-1.5 py-0 text-[0.62rem]"
+                            variant="outline"
+                          >
                             {(s.similarity * 100).toFixed(0)}%
                           </Badge>
                         ) : null}
@@ -261,7 +286,8 @@ function AssistantDetails({
               </ul>
               {meta.sources.length > 6 ? (
                 <p className="text-[0.7rem] opacity-70">
-                  +{meta.sources.length - 6} more source{meta.sources.length - 6 === 1 ? '' : 's'}
+                  +{meta.sources.length - 6} more source
+                  {meta.sources.length - 6 === 1 ? '' : 's'}
                 </p>
               ) : null}
             </div>
@@ -281,7 +307,13 @@ function BexChatMessageBody({
   isUser: boolean;
   isStreaming: boolean;
 }) {
-  return <BexStreamdown content={content} isStreaming={isStreaming} isUser={isUser} />;
+  return (
+    <BexStreamdown
+      content={content}
+      isStreaming={isStreaming}
+      isUser={isUser}
+    />
+  );
 }
 
 // AISDK-3: AI Elements rendering variant (Conversation + Message/MessageContent).
@@ -327,7 +359,9 @@ function BexAiElementsMessages({
                   <BexChatMessageBody
                     content={m.content}
                     isStreaming={
-                      !isUser && (isStreamingPlaceholder || (isTyping && isMostRecentMessage))
+                      !isUser &&
+                      (isStreamingPlaceholder ||
+                        (isTyping && isMostRecentMessage))
                     }
                     isUser={isUser}
                   />
@@ -539,7 +573,9 @@ export function BexChatMessages({
                   <BexChatMessageBody
                     content={m.content}
                     isStreaming={
-                      !isUser && (isStreamingPlaceholder || (isTyping && isMostRecentMessage))
+                      !isUser &&
+                      (isStreamingPlaceholder ||
+                        (isTyping && isMostRecentMessage))
                     }
                     isUser={isUser}
                   />

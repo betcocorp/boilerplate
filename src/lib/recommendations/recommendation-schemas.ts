@@ -11,6 +11,12 @@ const jsonObjectSchema = z.record(z.string(), z.unknown());
 
 export const recommendationStatusSchema = z.enum([
   'pending',
+  /**
+   * B0-353 — the validator-forced-review outcome (`recommend-cross-reference.ts`): the run went as
+   * far as it could and human-in-the-loop review has actually engaged. Distinct from `pending`,
+   * which means nothing has been decided yet (the default value on insert).
+   */
+  'escalated',
   'answered',
   'declined',
   'verified',

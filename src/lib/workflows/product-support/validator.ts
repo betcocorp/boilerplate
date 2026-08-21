@@ -1,4 +1,5 @@
 import { getOpenAIClient, resolveResponsesModel } from '~/lib/openai/client';
+import { samplingParamsFor } from '~/lib/openai/model-capabilities';
 import { extractAssistantText } from '~/lib/openai/response-item-parsing';
 import type { LlmTokenUsage } from '~/lib/openai/responses-runtime';
 import {
@@ -157,7 +158,9 @@ export async function runValidatorPass(input: {
           },
           store: false,
           stream: false,
-          temperature: 0,
+          // B0-606 — omitted for models that reject it (gpt-5.5/gpt-5.6/o-series). Determinism
+          // still matters here, so every model that DOES accept it keeps temperature 0.
+          ...samplingParamsFor(model, { temperature: 0 }),
           max_output_tokens: resolveMaxOutputTokens(),
         },
         { maxRetries: 0, timeout: resolveOpenAiRequestTimeoutMs() },
@@ -561,7 +564,8 @@ export async function runRevisionPass(input: {
           ],
           store: false,
           stream: false,
-          temperature: 0.2,
+          // B0-606 — same gating as the validator pass above.
+          ...samplingParamsFor(model, { temperature: 0.2 }),
           max_output_tokens: resolveMaxOutputTokens(),
         },
         { maxRetries: 0, timeout: resolveOpenAiRequestTimeoutMs() },

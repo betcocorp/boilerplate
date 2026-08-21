@@ -238,7 +238,7 @@ export type RecommendationCandidateOut = {
 export type RecommendCrossReferenceResult = {
   source: 'legacy' | 'web';
   answered: boolean;
-  /** Persistence status: 'answered' | 'declined' (below gate) | 'pending' (validator forced review). */
+  /** Persistence status: 'answered' | 'declined' (below gate) | 'escalated' (validator forced review). */
   status: RecommendationStatus;
   overallConfidence: number;
   thresholdUsed: number;
@@ -507,7 +507,7 @@ async function runWebGroundedPath(ctx: WebGroundedPathContext): Promise<Recommen
   let validation: Record<string, unknown> | null = null;
 
   // B0-91 validator pass — only when the engine would otherwise answer. Safety scan + validator
-  // verdict decide whether the drafted answer is surfaced or forced into human review ('pending').
+  // verdict decide whether the drafted answer is surfaced or forced into human review ('escalated').
   if (gate.answered) {
     const betcoEvidence = grounded.map((c) => c.evidence).filter(Boolean).join('\n\n');
     const draft = composeDraftAnswer(input, grounded);
@@ -528,7 +528,7 @@ async function runWebGroundedPath(ctx: WebGroundedPathContext): Promise<Recommen
     };
     if (!verdict.pass) {
       answered = false;
-      status = 'pending'; // route to human review rather than surface an unvalidated answer
+      status = 'escalated'; // B0-353: route to human review rather than surface an unvalidated answer
       declineReason = XREF_DECLINE_COPY;
     }
   }
@@ -548,6 +548,15 @@ async function runWebGroundedPath(ctx: WebGroundedPathContext): Promise<Recommen
       droppedCandidates: dropped.length,
       validation,
       webSearch,
+      // B0-292 — the actual pages the search found (query + title/url/snippet per result), not just
+      // the searchesUsed/escalated telemetry above. `executeToolCall` folds this (plus `webSearch`'s
+      // telemetry) into the persisted `recommend_cross_reference` tool call's trace entry, so an
+      // admin auditing a recommendation can see what was actually retrieved. Never truncated or
+      // reworded here — exactly what the provider returned.
+      webSearchResults: {
+        query: web.query,
+        results: web.results.map((r) => ({ url: r.url, title: r.title, snippet: r.snippet ?? null })),
+      },
       timingBreakdown: buildTiming(timer, webSearch, legacyCacheHit),
     },
     declineReason,
@@ -562,11 +571,11 @@ async function runWebGroundedPath(ctx: WebGroundedPathContext): Promise<Recommen
  * plain decline. Either way the status is `'declined'` with `XREF_DECLINE_COPY` shown; a degraded,
  * unvalidated equivalence for an EPA-registered product is never surfaced as an answer.
  *
- * Never `'pending'`: that status means the prompt ran as far as it could and the human-in-the-loop
- * phase has legitimately engaged (see the validator gate in `runWebGroundedPath`). A latency-ceiling
- * trip is the opposite — the run was cut short — so sending it to human review would pollute the
- * queue with merely-slow runs and misstate why they are there. Weak legacy matches are still carried
- * as candidates so a human debugging the run can see what step 1 did find.
+ * Never `'escalated'` (B0-353): that status means the prompt ran as far as it could and the
+ * human-in-the-loop phase has legitimately engaged (see the validator gate in `runWebGroundedPath`).
+ * A latency-ceiling trip is the opposite — the run was cut short — so sending it to human review
+ * would pollute the queue with merely-slow runs and misstate why they are there. Weak legacy matches
+ * are still carried as candidates so a human debugging the run can see what step 1 did find.
  */
 function latencyCeilingFallback(args: {
   error: unknown;
@@ -610,10 +619,10 @@ function latencyCeilingFallback(args: {
   return {
     source: hasLegacy ? 'legacy' : 'web',
     answered: false,
-    // Always 'declined', never 'pending'. 'pending' means the prompt ran as far as it could and the
-    // human-in-the-loop phase has legitimately engaged; a latency-ceiling trip is the opposite — the
-    // run was cut short. Routing timeouts into the HITL queue would both pollute it with merely-slow
-    // runs and misstate why they are there. Legacy matches are still carried as evidence.
+    // Always 'declined', never 'escalated' (B0-353). 'escalated' means the prompt ran as far as it
+    // could and the human-in-the-loop phase has legitimately engaged; a latency-ceiling trip is the
+    // opposite — the run was cut short. Routing timeouts into the HITL queue would both pollute it
+    // with merely-slow runs and misstate why they are there. Legacy matches are still carried as evidence.
     status: 'declined',
     overallConfidence: hasLegacy ? (legacyMatches[0]?.confidence ?? 0) : 0,
     thresholdUsed: hasLegacy ? LEGACY_MATCH_THRESHOLD : resolveXrefThreshold(),
