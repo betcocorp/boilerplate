@@ -1,30 +1,28 @@
 /**
- * B0-335 / B0-336 — Prompt observability runs list + aggregate dashboard (epic B0-330).
+ * B0-335 — Prompt observability runs list (epic B0-330).
  *
  * Server component. All filters are searchParams-driven so the page is
  * linkable/bookmarkable and the filter bar can stay a plain GET form.
+ *
+ * B0-585 — the B0-336 aggregate dashboard that used to render above the runs
+ * table is decommissioned: its figures live on `/admin/bex/health` now.
  */
 
+import Link from 'next/link';
 import { connection } from 'next/server';
 
-import { AggregateDashboard } from '~/components/admin/observability/AggregateDashboard';
 import {
   RunsTable,
   type RunsTableFilters,
 } from '~/components/admin/observability/RunsTable';
 import { SME_AGENT_IDS } from '~/lib/agents/agent-registry';
-import { getAggregateDashboardData } from '~/lib/observability/aggregates';
 import { resolveUserFilterInput } from '~/lib/observability/run-attribution';
 import { listWorkflowRuns } from '~/lib/observability/runs-repository';
 import { listTests } from '~/lib/tests/repository';
 import { PRODUCT_TOOL_NAMES } from '~/lib/tools/tool-schemas';
 import { readSearchParam } from '~/lib/utils/params';
 
-import type {
-  AggregateDashboardData,
-  RunSourceFilter,
-  WorkflowRunListRow,
-} from '~/types/observability';
+import type { RunSourceFilter, WorkflowRunListRow } from '~/types/observability';
 
 export const metadata = {
   title: 'Prompt observability | Betco BEX',
@@ -171,35 +169,29 @@ export default async function AdminObservabilityPage({ searchParams }: PageProps
   let loadError: string | null = null;
   let rows: WorkflowRunListRow[] = [];
   let hasMore = false;
-  let aggregates: AggregateDashboardData | null = null;
 
   try {
-    if (userFilterMatchedNothing) {
-      // The typed email/id matched no `app_user` row — report "no runs match" rather than
-      // silently dropping the filter and showing every user's runs.
-      aggregates = await getAggregateDashboardData({ from: windowFrom, to: windowTo });
-    } else {
-      const [runs, dashboard] = await Promise.all([
-        listWorkflowRuns({
-          from: windowFrom,
-          to: windowTo,
-          status: status || undefined,
-          routingDecision: routingDecision || undefined,
-          confidenceMin: confidenceMin.parsed,
-          confidenceMax: confidenceMax.parsed,
-          source,
-          search: search || undefined,
-          userId: resolvedUserId || undefined,
-          testId: testId || undefined,
-          toolName: toolName || undefined,
-          limit: PAGE_SIZE,
-          offset: (page - 1) * PAGE_SIZE,
-        }),
-        getAggregateDashboardData({ from: windowFrom, to: windowTo }),
-      ]);
+    // When the typed email/id matched no `app_user` row, skip the fetch — the table must
+    // report "no runs match" rather than silently dropping the filter and showing every
+    // user's runs.
+    if (!userFilterMatchedNothing) {
+      const runs = await listWorkflowRuns({
+        from: windowFrom,
+        to: windowTo,
+        status: status || undefined,
+        routingDecision: routingDecision || undefined,
+        confidenceMin: confidenceMin.parsed,
+        confidenceMax: confidenceMax.parsed,
+        source,
+        search: search || undefined,
+        userId: resolvedUserId || undefined,
+        testId: testId || undefined,
+        toolName: toolName || undefined,
+        limit: PAGE_SIZE,
+        offset: (page - 1) * PAGE_SIZE,
+      });
       rows = runs.rows;
       hasMore = runs.hasMore;
-      aggregates = dashboard;
     }
   } catch (error) {
     loadError =
@@ -227,6 +219,17 @@ export default async function AdminObservabilityPage({ searchParams }: PageProps
             be included or excluded; runs from before that was recorded show as
             unknown. Select a run to open its trace.
           </p>
+          <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-500">
+            Looking for the aggregate dashboard (totals, confidence health, latency by step)?
+            It moved to{' '}
+            <Link
+              className="font-medium text-sky-700 underline-offset-2 hover:underline"
+              href="/admin/bex/health"
+            >
+              Bex health
+            </Link>
+            .
+          </p>
         </section>
 
         {loadError ? (
@@ -234,8 +237,6 @@ export default async function AdminObservabilityPage({ searchParams }: PageProps
             {loadError}
           </section>
         ) : null}
-
-        {aggregates ? <AggregateDashboard data={aggregates} /> : null}
 
         <RunsTable
           filters={filters}

@@ -17,12 +17,7 @@ import {
 } from '~/components/ui/table';
 import { V1_AGENT_REGISTRY } from '~/lib/agents/agent-registry';
 import { getGoldenSetMembership } from '~/lib/tests/golden-set';
-import {
-  listResultItemsByResultId,
-  listTestResultsByTestId,
-  listTests,
-} from '~/lib/tests/repository';
-import { extractItemSimilarityScore } from '~/lib/tests/response-payload';
+import { listTests } from '~/lib/tests/repository';
 import { TEST_TEMPLATE_COLUMNS } from '~/lib/tests/template';
 import { getTierTargets } from '~/lib/tests/tier-targets';
 
@@ -56,43 +51,14 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
   const success = typeof params.success === 'string' ? params.success : null;
   const error = typeof params.error === 'string' ? params.error : null;
 
+  // B0-585 — the per-test latest-result and cross-run similarity roll-up that used to fan out
+  // over 20 runs per test on every load is decommissioned: run-level figures live on
+  // /admin/tests/[testId], golden-set health on /admin/bex/health.
   const [tests, tierTargets, goldenMembership] = await Promise.all([
     listTests(),
     getTierTargets(),
     getGoldenSetMembership(),
   ]);
-  const testRows = await Promise.all(
-    tests.map(async (test) => {
-      const [latestResults, runsForSimilarity] = await Promise.all([
-        listTestResultsByTestId(test.id, 1),
-        listTestResultsByTestId(test.id, 20),
-      ]);
-
-      const runItems = await Promise.all(
-        runsForSimilarity.map((run) => listResultItemsByResultId(run.id, 200)),
-      );
-      const similarityScores = runItems
-        .flat()
-        .map((item) => extractItemSimilarityScore(item.response_payload))
-        .filter((value): value is number => typeof value === 'number');
-      const similarityStats =
-        similarityScores.length > 0
-          ? {
-              min: Math.min(...similarityScores),
-              max: Math.max(...similarityScores),
-              avg:
-                similarityScores.reduce((sum, score) => sum + score, 0) /
-                similarityScores.length,
-            }
-          : null;
-
-      return {
-        ...test,
-        latestResult: latestResults[0] || null,
-        similarityStats,
-      };
-    }),
-  );
 
   return (
     <div className="flex flex-1 bg-slate-50">
@@ -341,7 +307,7 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
               Uploaded tests
             </h2>
             <span className="text-sm text-slate-600">
-              {testRows.length} datasets
+              {tests.length} datasets
             </span>
           </div>
           <Table>
@@ -351,21 +317,19 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
                 <TableHead>Golden</TableHead>
                 <TableHead>Intended agent</TableHead>
                 <TableHead>Rows</TableHead>
-                <TableHead>Latest run</TableHead>
-                <TableHead>Low/High/Avg</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {testRows.length === 0 ? (
+              {tests.length === 0 ? (
                 <TableRow>
-                  <TableCell className="text-slate-500" colSpan={8}>
+                  <TableCell className="text-slate-500" colSpan={6}>
                     No datasets uploaded yet.
                   </TableCell>
                 </TableRow>
               ) : (
-                testRows.map((test) => (
+                tests.map((test) => (
                   <TableRow key={test.id}>
                     <TableCell className="max-w-[240px] truncate font-medium">
                       <Link
@@ -414,16 +378,6 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
                         : '—'}
                     </TableCell>
                     <TableCell>{test.row_count}</TableCell>
-                    <TableCell>
-                      {test.latestResult
-                        ? `${test.latestResult.passed_items}/${test.latestResult.total_items} passed`
-                        : 'Never run'}
-                    </TableCell>
-                    <TableCell>
-                      {test.similarityStats
-                        ? `${(test.similarityStats.min * 100).toFixed(1)}%/${(test.similarityStats.max * 100).toFixed(1)}%/${(test.similarityStats.avg * 100).toFixed(1)}%`
-                        : 'n/a'}
-                    </TableCell>
                     <TableCell>{test.status}</TableCell>
                     <TableCell>
                       <div className="flex flex-wrap gap-2">
