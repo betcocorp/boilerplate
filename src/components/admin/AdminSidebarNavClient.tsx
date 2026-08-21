@@ -76,6 +76,11 @@ const sidebarSections: NavSectionModel[] = [
         icon: MessageSquare,
         items: [
           {
+            label: 'Bex health',
+            href: '/admin/bex/health',
+            permission: PERMISSIONS.NAVIGATION_SIDEBAR_OBSERVABILITY,
+          },
+          {
             label: 'Bex chat',
             href: '/admin/bex',
           },
@@ -223,6 +228,16 @@ const UUID_SEGMENT =
 function isActivePath(pathname: string, href: string) {
   if (href === '/admin') {
     return pathname === '/admin';
+  }
+
+  // "Bex chat" links to `/admin/bex`; without this carve-out it would also light up for the
+  // `/admin/bex/health` dashboard, which has its own sidebar entry.
+  if (href === '/admin/bex') {
+    return (
+      pathname === '/admin/bex' ||
+      (pathname.startsWith('/admin/bex/') &&
+        !pathname.startsWith('/admin/bex/health'))
+    );
   }
 
   if (href === '/admin/tests') {
