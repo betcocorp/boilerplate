@@ -25,6 +25,23 @@ export async function listAvailableVersions(): Promise<string[]> {
 }
 
 /**
+ * B0-578 — honesty check for the "Unversioned" selector option: true only when at least one
+ * unversioned row actually exists, in either population the dashboard reads —
+ * `workflow_runs.app_version IS NULL` (pre-B0-574 traffic) or `test_results.app_version IS NULL`
+ * (pre-B0-472 harness runs). Two `limit(1)` probes; no counting scan.
+ */
+export async function hasUnversionedRows(): Promise<boolean> {
+  const supabase = getSupabaseServiceRoleClient();
+  const [runs, harnessRuns] = await Promise.all([
+    supabase.from('workflow_runs').select('id').is('app_version', null).limit(1),
+    supabase.from('test_results').select('id').is('app_version', null).limit(1),
+  ]);
+  return (
+    (assertNoError(runs) ?? []).length > 0 || (assertNoError(harnessRuns) ?? []).length > 0
+  );
+}
+
+/**
  * Semver-aware descending sort (newest first): numeric segments compare numerically, and a
  * release (`2.0.0`) sorts ahead of its own pre-releases (`2.0.0-dev.3`), per semver. Falls
  * back to plain string comparison for non-semver values rather than throwing.
