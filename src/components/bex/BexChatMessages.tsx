@@ -189,6 +189,13 @@ function AssistantDetails({
                   >
                     {meta.workflowRunId}
                   </Link>
+                  {' · '}
+                  <Link
+                    className="underline decoration-muted-foreground/60 underline-offset-2 transition hover:text-foreground hover:decoration-foreground"
+                    href={`/admin/observability/${meta.workflowRunId}`}
+                  >
+                    trace
+                  </Link>
                 </p>
               ) : null}
             </div>
