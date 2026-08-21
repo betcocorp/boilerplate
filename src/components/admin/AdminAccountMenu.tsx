@@ -28,7 +28,6 @@ import {
 } from '~/components/ui/dropdown-menu';
 import { PERMISSIONS } from '~/lib/permissions/constants';
 import { cn } from '~/lib/utils';
-import { version as appVersion } from '../../../package.json';
 
 function getInitials(value: string | null | undefined) {
   const raw = value?.trim();
@@ -152,9 +151,6 @@ export function AdminAccountMenu({
               </p>
               <p className="truncate text-xs text-muted-foreground">
                 {userEmail || 'No email'}
-              </p>
-              <p className="truncate text-xs font-light text-foreground">
-                Version: {appVersion}
               </p>
             </div>
           </div>
