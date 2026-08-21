@@ -72,16 +72,18 @@ function splitReportMarkdown(markdown: string): ReportMarkdownSections {
   const after = lines.slice(sectionEnd).join('\n');
 
   const cases: string[] = [];
-  let current: string[] = [];
+  let current: string[] | null = null;
   for (const line of lines.slice(sectionStart + 1, sectionEnd)) {
     if (CASE_HEADING_LINE_PATTERN.test(line)) {
-      if (current.length > 0) cases.push(current.join('\n'));
+      if (current) cases.push(current.join('\n'));
       current = [line];
-    } else {
+    } else if (current) {
       current.push(line);
     }
+    // else: a line before the first case heading (e.g. the blank line render.ts leaves after the
+    // section heading) — not part of any case, discarded rather than counted as a phantom one.
   }
-  if (current.length > 0) cases.push(current.join('\n'));
+  if (current) cases.push(current.join('\n'));
 
   return { before, cases, after };
 }
@@ -525,10 +527,7 @@ export function RunReportView({
             />
             {reportSections.cases.map((caseMarkdown, index) => (
               <div
-                className={cn(
-                  'px-3 py-1',
-                  CASE_TONE_CLASSES[index % 2],
-                )}
+                className={cn('px-3 py-8', CASE_TONE_CLASSES[index % 2])}
                 key={index}
               >
                 <BexStreamdown
