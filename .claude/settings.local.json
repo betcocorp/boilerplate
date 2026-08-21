@@ -209,7 +209,8 @@
       "Bash(curl -s -m 120 -X POST http://localhost:3000/api/v1/orchestrator -H 'Authorization: Bearer bex_fEO4WefrcCXnyAq8diCqHg2w8MssM7tSkmBvKrgXcLI' -H 'Content-Type: application/json' -d '{\"message\":\"QA cutover probe 2: what floor finish works for a school gym that reopens tomorrow morning?\",\"model\":null,\"conversationId\":null,\"workflow\":\"bex-chat\"}' -o /dev/null -w 'http=%{http_code} time=%{time_total}s\\\\n')",
       "Bash(kill 29564 29596 29618 35195)",
       "Bash(kill -9 29618 29596 29564)",
-      "Bash(curl *)"
+      "Bash(curl *)",
+      "Bash(npx supabase *)"
     ]
   }
 }
