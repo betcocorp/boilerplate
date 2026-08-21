@@ -18,12 +18,7 @@ import {
   type StageLatency,
 } from '~/lib/observability/pipeline-stages';
 
-/** Shared props contract for all Bex Health panels (wave 2 wires real values). */
-export type HealthPanelProps = {
-  window: { from: Date; to: Date };
-  /** Null = all traffic; the string "unversioned" selects runs with NULL `app_version`. */
-  version: string | null;
-};
+import type { HealthPanelProps } from '~/lib/bex-health/search-params';
 
 const EM_DASH = '—';
 

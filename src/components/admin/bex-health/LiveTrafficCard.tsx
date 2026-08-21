@@ -15,12 +15,7 @@ import {
   type LiveTrafficTile,
 } from '~/lib/observability/live-traffic';
 
-/** Shared props contract for all Bex Health panels (wave 2 wires real values). */
-export type HealthPanelProps = {
-  window: { from: Date; to: Date };
-  /** Null = all traffic; the string "unversioned" selects runs with NULL `app_version`. */
-  version: string | null;
-};
+import type { HealthPanelProps } from '~/lib/bex-health/search-params';
 
 const SPREAD_COLORS: Record<ConfidenceSpreadSegment['bucket'], string> = {
   // Same palette as the aggregate dashboard's confidence-health chart.

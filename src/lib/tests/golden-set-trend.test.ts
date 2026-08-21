@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildDailyTierSeries,
   computeTierTrendDeltas,
+  filterGoldenRunsByVersion,
   type TierTrendPoint,
   type TrendResultItemRow,
 } from './golden-set-trend';
@@ -112,5 +113,29 @@ describe('computeTierTrendDeltas', () => {
   it('delta is null when the CURRENT window has no run for the tier', () => {
     const prior = [point(1, '2026-08-10', 8, 10)];
     expect(computeTierTrendDeltas([], prior)[1]).toBeNull();
+  });
+});
+
+describe('filterGoldenRunsByVersion (B0-580)', () => {
+  const unversioned: GoldenRunRow = {
+    id: 'r0',
+    test_id: 't1',
+    app_version: null,
+    created_at: '2026-08-18T09:00:00Z',
+  };
+  const v2 = run('r1', '2026-08-19T09:00:00Z'); // app_version '2.0.0'
+  const runs = [unversioned, v2];
+
+  it('undefined keeps every run (any version)', () => {
+    expect(filterGoldenRunsByVersion(runs, undefined)).toEqual(runs);
+  });
+
+  it('null selects only the unversioned bucket', () => {
+    expect(filterGoldenRunsByVersion(runs, null)).toEqual([unversioned]);
+  });
+
+  it('a string selects the exact version only', () => {
+    expect(filterGoldenRunsByVersion(runs, '2.0.0')).toEqual([v2]);
+    expect(filterGoldenRunsByVersion(runs, '9.9.9')).toEqual([]);
   });
 });

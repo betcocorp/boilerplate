@@ -145,6 +145,22 @@ export function computeTierTrendDeltas(
   return deltas;
 }
 
+/**
+ * B0-580 — version narrowing for the selection-scoped trend. Unlike
+ * `resolveGoldenRunsForVersion` (which collapses to the latest run per test for the rollup),
+ * the trend keeps EVERY matching run — each one is a day point. Semantics match
+ * `GoldenSetRollupQuery['version']`: `undefined` = any version, `null` = the unversioned
+ * bucket (`app_version IS NULL`), string = exact match.
+ */
+export function filterGoldenRunsByVersion(
+  runs: GoldenRunRow[],
+  version: string | null | undefined,
+): GoldenRunRow[] {
+  if (version === undefined) return runs;
+  if (version === null) return runs.filter((run) => run.app_version === null);
+  return runs.filter((run) => run.app_version === version);
+}
+
 // ---------------------------------------------------------------------------
 // Data access
 // ---------------------------------------------------------------------------
@@ -197,6 +213,57 @@ export async function getGoldenSetDailyTrend(
       to: now.toISOString(),
     }),
   ]);
+  const resultItems = await listTrendResultItems(runs.map((run) => run.id));
+
+  const currentRuns = runs.filter((run) => run.created_at >= window.from);
+  const priorRuns = runs.filter((run) => run.created_at < window.from);
+
+  const series = buildDailyTierSeries({ runs: currentRuns, items, resultItems });
+  const priorSeries = buildDailyTierSeries({ runs: priorRuns, items, resultItems });
+
+  return {
+    series,
+    deltaByTier: computeTierTrendDeltas(series, priorSeries),
+    window,
+  };
+}
+
+/**
+ * B0-580 — the selection-scoped variant for the health page's tier cards: the same per-tier
+ * daily series and preceding-window deltas, but over an EXPLICIT inclusive window (the page's
+ * `?from=/?to=` selection) and narrowed to one version bucket (`filterGoldenRunsByVersion`
+ * semantics; `undefined` = any version). `getGoldenSetDailyTrend` above is unchanged —
+ * this is additive per B0-576's contract.
+ *
+ * The prior comparison window is the equal-length span ending where the selection starts;
+ * both are fetched in ONE run scan and split in Node, like the trailing-window reader.
+ */
+export async function getGoldenSetTrendForWindow(options: {
+  window: { from: string; to: string };
+  version?: string | null;
+}): Promise<GoldenSetTrend> {
+  const { window } = options;
+  const fromMs = Date.parse(window.from);
+  const toMs = Date.parse(window.to);
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs)) {
+    throw new Error('getGoldenSetTrendForWindow: window.from/to must be valid ISO timestamps');
+  }
+  const spanMs = Math.max(toMs - fromMs, DAY_MS);
+  const priorFrom = new Date(fromMs - spanMs).toISOString();
+
+  const tests = await listGoldenTests();
+  const testIds = tests.map((test) => test.id);
+  const emptyDeltas = { 1: null, 2: null, 3: null } as TierTrendDelta;
+  if (testIds.length === 0) {
+    return { series: [], deltaByTier: emptyDeltas, window };
+  }
+
+  const [items, allRuns] = await Promise.all([
+    listGoldenItems(testIds),
+    // One scan covering both the selection and the prior comparison window.
+    listGoldenCandidateRuns(testIds, { from: priorFrom, to: window.to }),
+  ]);
+  const runs = filterGoldenRunsByVersion(allRuns, options.version);
   const resultItems = await listTrendResultItems(runs.map((run) => run.id));
 
   const currentRuns = runs.filter((run) => run.created_at >= window.from);
