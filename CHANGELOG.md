@@ -1,3 +1,62 @@
+# [2.1.0](https://github.com/betcocorp/bex2.0/compare/v2.0.0...v2.1.0) (2026-08-21)
+
+
+### Bug Fixes
+
+* **B0-354:** unify the two divergent cross-reference intent detectors ([79f91cf](https://github.com/betcocorp/bex2.0/commit/79f91cf27802e9fee662453b598c439946899847))
+* **B0-465:** trigger a fresh golden-set run per PR instead of grading a pinned run id ([a18ce81](https://github.com/betcocorp/bex2.0/commit/a18ce81bad02c42c4a1657a936a90a9f7e2de46d))
+* **B0-556:** never ground a safety answer on another product line's SDS ([92cfff5](https://github.com/betcocorp/bex2.0/commit/92cfff5d349f9cbdd91ea99706862805570ed97a))
+* **B0-606:** stop sending temperature to models that reject it ([dc5aff7](https://github.com/betcocorp/bex2.0/commit/dc5aff73aa5568ffb2c81bb9b471e3a298e046b8))
+* **B0-607:** apply settings migrations via Supabase MCP, use service-role client ([683ea5e](https://github.com/betcocorp/bex2.0/commit/683ea5edcc7ffe88c30416c78c763138363491f7))
+* **B0-607:** remove appVersion display from admin account menu ([e49e91e](https://github.com/betcocorp/bex2.0/commit/e49e91ea30986b58cc5f8a647bbeceb9fecee90c))
+* **B0-612:** correct off-by-one in case split that shifted tone alternation ([ed7d339](https://github.com/betcocorp/bex2.0/commit/ed7d339b657326f6046389122f0340fa7970ae4f))
+* **B0-XXX:** always send metadata in streaming response and use text format for synthesis payload ([d60c497](https://github.com/betcocorp/bex2.0/commit/d60c497a1a258052e01b5e612ce329845a89b709))
+* **B0-XXX:** don't re-throw error after writing stream metadata ([7ae155a](https://github.com/betcocorp/bex2.0/commit/7ae155a352041df9f6957d964bcd27ef7e08c009))
+* **B0-xxx:** honor the ?conversationId deep link on the Bex chat page ([5b7ebf2](https://github.com/betcocorp/bex2.0/commit/5b7ebf2fa05d9055245153d4a29d3f55837e3484))
+
+
+### Features
+
+* **B0-292:** surface web search results found by recommend_cross_reference ([b590669](https://github.com/betcocorp/bex2.0/commit/b590669d4f635f4fde6827c268f5559410d4e1a5))
+* **B0-338:** attribute every workflow run to who asked ([0976b94](https://github.com/betcocorp/bex2.0/commit/0976b94695ee581b94842db8bedf659a499971fa))
+* **B0-350:** keep the streamed draft on a validator rejection instead of snapping to a decline ([ec3f5f5](https://github.com/betcocorp/bex2.0/commit/ec3f5f5580596326fb4be9860b5095114099ef0e))
+* **B0-353:** split recommendation pending into pending + escalated ([45bca4f](https://github.com/betcocorp/bex2.0/commit/45bca4fc391b1f3b5e6439a67e0aac4a938ecb8c))
+* **B0-564:** add gpt-5.5/gpt-5.6 model tags and wire them end to end ([01e20ee](https://github.com/betcocorp/bex2.0/commit/01e20ee582902668944799631bb12d5ddfc48161))
+* **B0-572:** define the gating golden set with audited membership and tier validation ([697d97a](https://github.com/betcocorp/bex2.0/commit/697d97aafb776cb06c5762ec3e75084312d05019))
+* **B0-573:** persist per-tier pass-rate targets and gate semantics ([1d9395f](https://github.com/betcocorp/bex2.0/commit/1d9395fddc5e2f0fbf890bbaca1c17a4735160f6))
+* **B0-574:** stamp app_version and prompt_bundle_version on workflow_runs ([c5cbea9](https://github.com/betcocorp/bex2.0/commit/c5cbea9b719ea7cec17a6bdadfac42ddbf920035))
+* **B0-575:** close app_version gaps and add version-to-run resolution for golden rollups ([5b70954](https://github.com/betcocorp/bex2.0/commit/5b70954e892bef65a3e40afddf9290484e361046))
+* **B0-576:** per-tier daily pass-rate trend series with window deltas ([801e702](https://github.com/betcocorp/bex2.0/commit/801e702bb933ff104157a862909921edf886da3b))
+* **B0-577:** Bex Health route, page shell and sidebar entry ([c3ce9b9](https://github.com/betcocorp/bex2.0/commit/c3ce9b9e2fff4f0839b99dfd533bfb10a1fa4d31))
+* **B0-578:** window and version selectors, searchParams-driven ([772c61c](https://github.com/betcocorp/bex2.0/commit/772c61c74320266a82e5c5850f71b476cbf0cc6a))
+* **B0-579:** blocked/clear verdict strip with explicit unknown state ([a898e82](https://github.com/betcocorp/bex2.0/commit/a898e82369a979d33472306318c5346d39348dba))
+* **B0-580:** golden-set tier cards and final panel integration ([9502425](https://github.com/betcocorp/bex2.0/commit/950242559c4411858033f07c258cbf99682e675e))
+* **B0-581:** live traffic card with token usage and version-filterable window scan ([d72c0f5](https://github.com/betcocorp/bex2.0/commit/d72c0f53d1c1cf14f83da2bdb6f7e5e1a5e5b305))
+* **B0-582:** pipeline stage strip with stage-to-step mapping and clamped durations ([45d0887](https://github.com/betcocorp/bex2.0/commit/45d0887f102c143d5c9cc36243d32e84272f6c48))
+* **B0-583:** tokens-per-day panel from cost_by_model_per_day ([06cebd5](https://github.com/betcocorp/bex2.0/commit/06cebd5c28656b02b02ee8213508fcb813996b40))
+* **B0-584:** per-panel provenance footers on the Bex Health dashboard ([3b42c72](https://github.com/betcocorp/bex2.0/commit/3b42c7210be8ebcb91783e35fe7e82c5a8a0f223))
+* **B0-585:** decommission the superseded aggregate dashboards ([6da4571](https://github.com/betcocorp/bex2.0/commit/6da457150016bdd102c7733b986c0c0c7d607515))
+* **B0-593:** add a tool call filter to the observability runs list ([72cd95a](https://github.com/betcocorp/bex2.0/commit/72cd95a6bae573ba7ffe5f045bedc18525f6f1fe))
+* **B0-598:** resolve gpt-5.5/gpt-5.6 with BEX_MODEL_GPT55/56 overrides ([83148e8](https://github.com/betcocorp/bex2.0/commit/83148e8332d2e2ab8dc5c85ed376beb1a3dbd714))
+* **B0-599:** add BexModelTag, BEX_MODEL_TAGS and MODEL_DESCRIPTIONS ([0e804ff](https://github.com/betcocorp/bex2.0/commit/0e804ff806703d5d89a45f8fdea36e4cd0660438))
+* **B0-600:** add createModelComparisonRun and make the validator opt-in per run ([584254e](https://github.com/betcocorp/bex2.0/commit/584254e200d393b20e1e19f8c95943b0e6212f1b))
+* **B0-601:** show model descriptions and a validator toggle on the run form ([20cbf0c](https://github.com/betcocorp/bex2.0/commit/20cbf0cde38136b0a46c9c16a368896d3cee990d))
+* **B0-602:** show the selected model's description in the Bex chat picker ([84a8d4a](https://github.com/betcocorp/bex2.0/commit/84a8d4acd97d99b176124c16604e110c8d97b114))
+* **B0-607:** add settings page with environment variable toggles ([a7a7736](https://github.com/betcocorp/bex2.0/commit/a7a77362729497293db90c41a7ea268e6c00d484))
+* **B0-607:** show app version above Dashboard header in admin layout ([66e4e41](https://github.com/betcocorp/bex2.0/commit/66e4e41d171a4b80106e6f15899ad841f8f52096))
+* **B0-608:** auto-generate eval report when a test run completes ([4135922](https://github.com/betcocorp/bex2.0/commit/4135922ea055b73c59ba12fe12b7ed729d93baab))
+* **B0-609:** show overall report score in the Recent runs table ([f4f8d8a](https://github.com/betcocorp/bex2.0/commit/f4f8d8aaff442c9b216cf2782470a7d3fb1fb1cd))
+* **B0-610:** add a run-over-run trend indicator to the Score column ([3e03489](https://github.com/betcocorp/bex2.0/commit/3e0348975c9e66ecb8d02357f3a91c55c86dce8a))
+* **B0-611:** make the "Generating report…" button link to the report page ([3650a19](https://github.com/betcocorp/bex2.0/commit/3650a1926df82473a9f188089d61d16c2a0ad76c))
+* **B0-612:** two-tone alternating cases in the report's case-by-case detail ([c6a0b1f](https://github.com/betcocorp/bex2.0/commit/c6a0b1f5b962d9708185ccd409a89fb1459690cf))
+* **B0-613:** eval report formatting pass — quote heading, dedupe boilerplate, fix lists, drop pseudocode, reorder assessment ([9e27266](https://github.com/betcocorp/bex2.0/commit/9e27266a8069187882a65980a1f1ac8331577a88))
+* **B0-614:** default model selector to gpt-4.1 in test dataset details ([c7cb502](https://github.com/betcocorp/bex2.0/commit/c7cb502fb2eca120f1be0b77e831427b56383edf))
+* **B0-614:** structured per-criterion grading for the eval harness ([c5c426e](https://github.com/betcocorp/bex2.0/commit/c5c426e0f6c19952670200c76a0d75955cf25f7a))
+* **B0-618:** read ENABLE_RERANKER and COHERE_RERANK_MODEL from settings table ([c76ce08](https://github.com/betcocorp/bex2.0/commit/c76ce0826974c06911f4f50a31530dc3c20f1b3a))
+* **B0-xxx:** add bex chat links to observability run traces ([272539e](https://github.com/betcocorp/bex2.0/commit/272539e9731fa1591573dde35d4ea3dc7b8022c9))
+* **B0-xxx:** add conversationId query param support to Bex chat ([cfe1b33](https://github.com/betcocorp/bex2.0/commit/cfe1b3345a28ef432762c8bae09876bfaba16487))
+* **B0:** add trace link in Details section of Bex chat responses ([1015e63](https://github.com/betcocorp/bex2.0/commit/1015e638b7d2142c084c97380e8bdf3ef1a3f28e))
+
 # [2.0.0](https://github.com/betcocorp/bex2.0/compare/v1.2.1...v2.0.0) (2026-08-20)
 
 
