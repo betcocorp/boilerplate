@@ -17,10 +17,74 @@ import { version as appVersion } from '~/../package.json';
 import { BexStreamdown } from '~/components/bex/BexStreamdown';
 import { Button } from '~/components/ui/button';
 import { caseAnchorId } from '~/lib/tests/report/render';
+import { cn } from '~/lib/utils';
 
 /** Matches the leading UUID in a "Detailed results — case by case" heading (`${id} — ${question}`). */
 const CASE_HEADING_ID_PATTERN =
   /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?=\s)/i;
+
+/** Exact `## …` line `render.ts` emits to open the case-by-case section. */
+const CASE_SECTION_HEADING_LINE = '## Detailed results — case by case';
+/** Any other `##` (not `###`) heading line — closes the case-by-case section. */
+const NEXT_H2_LINE_PATTERN = /^##(?!#)\s/;
+/** The `### {uuid} — {question}` line `render.ts` opens each case with. */
+const CASE_HEADING_LINE_PATTERN =
+  /^###\s[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i;
+
+/** B0-612 — alternating background so each case reads as one visually distinct group. */
+const CASE_TONE_CLASSES = ['', 'rounded-2xl bg-slate-50'] as const;
+
+type ReportMarkdownSections = {
+  /** Everything through and including the "## Detailed results — case by case" heading. */
+  before: string;
+  /** Each case's own `### id — question` chunk, in order. */
+  cases: string[];
+  /** Everything from the next `##` heading (e.g. "## Aggregate findings") onward. */
+  after: string;
+};
+
+/**
+ * Pure split of the report markdown into the case-by-case section's individual cases, so each
+ * one can be wrapped in its own alternating-background container (B0-612). Splitting the string
+ * itself — rather than tracking a mutable "which case am I in" cursor across sibling renders —
+ * keeps this a pure function of `markdown`, safe under React's render-must-be-pure rules (a
+ * ref mutated during render can double-fire under Strict Mode/concurrent rendering and throw off
+ * the alternation).
+ */
+function splitReportMarkdown(markdown: string): ReportMarkdownSections {
+  const lines = markdown.split('\n');
+  const sectionStart = lines.findIndex(
+    (line) => line.trim() === CASE_SECTION_HEADING_LINE,
+  );
+  if (sectionStart === -1) {
+    return { before: markdown, cases: [], after: '' };
+  }
+
+  let sectionEnd = lines.length;
+  for (let i = sectionStart + 1; i < lines.length; i += 1) {
+    if (NEXT_H2_LINE_PATTERN.test(lines[i]!)) {
+      sectionEnd = i;
+      break;
+    }
+  }
+
+  const before = lines.slice(0, sectionStart + 1).join('\n');
+  const after = lines.slice(sectionEnd).join('\n');
+
+  const cases: string[] = [];
+  let current: string[] = [];
+  for (const line of lines.slice(sectionStart + 1, sectionEnd)) {
+    if (CASE_HEADING_LINE_PATTERN.test(line)) {
+      if (current.length > 0) cases.push(current.join('\n'));
+      current = [line];
+    } else {
+      current.push(line);
+    }
+  }
+  if (current.length > 0) cases.push(current.join('\n'));
+
+  return { before, cases, after };
+}
 
 function reactNodeToText(node: ReactNode): string {
   if (node == null || typeof node === 'boolean') return '';
@@ -143,6 +207,11 @@ export function RunReportView({
   const reportComponents = useMemo(
     () => ({ a: ReportAnchorLink, h3: ReportCaseHeading }),
     [],
+  );
+
+  const reportSections = useMemo(
+    () => (markdown ? splitReportMarkdown(markdown) : null),
+    [markdown],
   );
 
   const post = useCallback(async () => {
@@ -445,12 +514,34 @@ export function RunReportView({
         </section>
       ) : null}
 
-      {markdown ? (
+      {markdown && reportSections ? (
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <div ref={contentRef}>
             <BexStreamdown
               components={reportComponents}
-              content={markdown}
+              content={reportSections.before}
+              isStreaming={false}
+              isUser={false}
+            />
+            {reportSections.cases.map((caseMarkdown, index) => (
+              <div
+                className={cn(
+                  'px-3 py-1',
+                  CASE_TONE_CLASSES[index % 2],
+                )}
+                key={index}
+              >
+                <BexStreamdown
+                  components={reportComponents}
+                  content={caseMarkdown}
+                  isStreaming={false}
+                  isUser={false}
+                />
+              </div>
+            ))}
+            <BexStreamdown
+              components={reportComponents}
+              content={reportSections.after}
               isStreaming={false}
               isUser={false}
             />
