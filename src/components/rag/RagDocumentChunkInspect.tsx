@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { Streamdown } from 'streamdown';
 
 import {
   Dialog,
@@ -13,6 +14,36 @@ import { cn } from '~/lib/utils';
 
 import { toast } from 'sonner';
 import type { RagDocumentChunkApiResponse } from '~/lib/rag/document-chunk-types';
+
+/**
+ * B0-622 — compact markdown typography for the inspect dialog's scrollable panels, distinct from
+ * `BexStreamdown` (chat-bubble-specific: `isUser`/`isStreaming` props, external-link-safety modal)
+ * which doesn't fit this admin diagnostic context.
+ */
+function MarkdownBlock({ value }: { value: string }) {
+  return (
+    <div
+      className={cn(
+        'wrap-break-word text-xs leading-relaxed text-foreground',
+        '[&_h1]:mt-2 [&_h1]:text-sm [&_h1]:font-semibold [&_h1]:first:mt-0',
+        '[&_h2]:mt-2 [&_h2]:text-sm [&_h2]:font-semibold [&_h2]:first:mt-0',
+        '[&_h3]:mt-1.5 [&_h3]:text-xs [&_h3]:font-semibold [&_h3]:first:mt-0',
+        '[&_p]:my-1.5 [&_p]:first:mt-0',
+        '[&_a]:text-primary [&_a]:underline [&_a]:underline-offset-2',
+        '[&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[11px]',
+        '[&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:bg-muted [&_pre]:p-2 [&_pre]:text-[11px]',
+        '[&_ul]:my-1.5 [&_ul]:list-inside [&_ul]:list-disc [&_ul]:ps-4',
+        '[&_ol]:my-1.5 [&_ol]:list-inside [&_ol]:list-decimal [&_ol]:ps-4',
+        '[&_li]:my-0.5 [&_li>p]:my-0 [&_li>p:empty]:hidden',
+        '[&_table]:my-2 [&_table]:w-full [&_table]:border-collapse [&_table]:text-[11px]',
+        '[&_th]:border [&_th]:border-border [&_th]:px-2 [&_th]:py-1 [&_th]:text-left',
+        '[&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1',
+      )}
+    >
+      <Streamdown>{value}</Streamdown>
+    </div>
+  );
+}
 
 type InspectMode = 'document' | 'chunk';
 
@@ -95,10 +126,8 @@ function RagDocumentChunkDetailBody({
             <p className="text-xs font-medium text-muted-foreground">
               Body (markdown)
             </p>
-            <div className="max-h-[min(32vh,260px)] overflow-auto rounded-lg border border-border/80 bg-muted/30">
-              <pre className="whitespace-pre-wrap wrap-break-word p-3 font-mono text-[11px] leading-relaxed">
-                {doc.body_markdown}
-              </pre>
+            <div className="max-h-[min(32vh,260px)] overflow-auto rounded-lg border border-border/80 bg-muted/30 p-3">
+              <MarkdownBlock value={doc.body_markdown} />
             </div>
           </div>
         ) : null}
