@@ -1,15 +1,11 @@
-import { Search } from 'lucide-react';
-import Link from 'next/link';
 import { connection } from 'next/server';
 
-import { RagSearchMatchInspectBar } from '~/components/admin/rag/RagSearchMatchInspectBar';
-import { RagQueryAutocomplete } from '~/components/admin/RagQueryAutocomplete';
+import { RagSearchControls } from '~/components/admin/rag/RagSearchControls';
+import type { RagSearchSettingsValues } from '~/components/admin/rag/RagSearchControls';
+import { RagSearchResultCard } from '~/components/admin/rag/RagSearchResultCard';
 import { RagSearchTimingPanel } from '~/components/admin/RagSearchTimingPanel';
-import { Button } from '~/components/ui/button';
-import { Input } from '~/components/ui/input';
-import { Label } from '~/components/ui/label';
-import { NativeSelect } from '~/components/ui/native-select';
 import { searchProductChunks } from '~/lib/rag/search';
+import type { SearchScope } from '~/lib/rag/search';
 import { formatDurationMs } from '~/lib/utils/time';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
@@ -19,7 +15,6 @@ export const metadata = {
 };
 
 const SEARCH_ROUTE = '/admin/products/rag';
-type SearchScope = 'all' | 'products' | 'sds' | 'knowledge' | 'label';
 
 type SearchPageProps = {
   searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
@@ -54,16 +49,6 @@ function readSearchParam(value: string | string[] | undefined, fallback = '') {
   }
 
   return value ?? fallback;
-}
-
-function truncateText(value: string, maxLength = 320) {
-  const trimmed = value.trim();
-
-  if (trimmed.length <= maxLength) {
-    return trimmed;
-  }
-
-  return `${trimmed.slice(0, maxLength - 3)}...`;
 }
 
 function formatEmbeddingSource(
@@ -131,11 +116,17 @@ function buildProductLineDetailHref(
   return queryString ? `${detailPath}?${queryString}` : detailPath;
 }
 
+/**
+ * B0-621 — the drawer's Scope select only offers all/label/efficacy/sds (products and knowledge
+ * are out of scope for this tool), but `products`/`knowledge` stay parseable here so existing
+ * deep links keep working; `searchProductChunks` already accepts all six `SearchScope` values.
+ */
 function parseScope(value: string | string[] | undefined): SearchScope {
   const raw = readSearchParam(value).trim().toLowerCase();
   if (
     raw === 'products' ||
     raw === 'sds' ||
+    raw === 'efficacy' ||
     raw === 'knowledge' ||
     raw === 'label'
   ) {
@@ -304,182 +295,48 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
     }
   }
 
+  const initialSettings: RagSearchSettingsValues = {
+    scope,
+    retrieval: useHybrid ? 'hybrid' : 'vector',
+    limit: String(limit),
+    minSimilarity: rawMinSimilarity,
+    sectionType: sectionType ?? '',
+    productLineKey,
+    useReranker: useReranker === true,
+    useMultiIntent: useMultiIntent === true,
+  };
+
   return (
-    <div className="flex flex-1 bg-slate-50">
+    <div className="flex flex-1 bg-muted/30">
       <main className="flex w-full flex-1 flex-col gap-8 px-6 py-10 sm:px-8">
-        <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
+        <section className="rounded-[2rem] border border-border/60 bg-background p-8 shadow-sm">
           <div className="flex flex-col gap-3">
-            <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-700">
+            <p className="text-sm font-semibold uppercase tracking-[0.2em] text-primary">
               RAG Similarity Search
             </p>
-            <h1 className="text-4xl font-semibold tracking-tight text-slate-950">
+            <h1 className="text-4xl font-semibold tracking-tight text-foreground">
               Search the RAG product line corpus semantically
             </h1>
-            <p className="max-w-3xl text-base leading-7 text-slate-600">
+            <p className="max-w-3xl text-base leading-7 text-muted-foreground">
               Retrieval is one document per legacy product line. Semantic search
               is constrained to English (`EN`) documents only. Chunks include
               rolled-up size variants; filters only target product line keys.
             </p>
           </div>
 
-          <form action={SEARCH_ROUTE} className="mt-8 flex gap-2" method="get">
-            <div className="flex flex-col gap-4 flex-1">
-              <div className="grid grid-cols-2 gap-2">
-                <div className="flex flex-col gap-2">
-                  <Label className="text-sm font-medium text-slate-700">
-                    Query
-                  </Label>
-                  <RagQueryAutocomplete
-                    defaultValue={query}
-                    options={popularQueries}
-                    name="q"
-                    placeholder="Ask something like: peroxide bathroom disinfectant"
-                  />
-                </div>
-                <div className="flex flex-col gap-2">
-                  <Label className="text-sm font-medium text-slate-700">
-                    Product line key
-                  </Label>
-                  <Input
-                    className="h-12 rounded-2xl px-4"
-                    defaultValue={productLineKey}
-                    name="productLineKey"
-                    placeholder="Optional product line key"
-                    type="text"
-                  />
-                </div>
-              </div>
-              <div className="grid grid-cols-4 gap-2">
-                <div className="flex flex-col gap-2">
-                  <Label className="text-sm font-medium text-slate-700">
-                    Scope
-                  </Label>
-                  <NativeSelect
-                    className="h-12 rounded-2xl px-4"
-                    defaultValue={scope}
-                    name="scope"
-                  >
-                    <option value="all">All</option>
-                    <option value="products">Products</option>
-                    <option value="sds">SDS</option>
-                    <option value="knowledge">Knowledge (markdown)</option>
-                    <option value="label">Labels</option>
-                  </NativeSelect>
-                </div>
-                <div className="flex flex-col gap-2">
-                  <Label className="text-sm font-medium text-slate-700">
-                    Retrieval
-                  </Label>
-                  <NativeSelect
-                    className="h-12 rounded-2xl px-4"
-                    defaultValue={useHybrid ? 'hybrid' : 'vector'}
-                    name="retrieval"
-                  >
-                    <option value="hybrid">Hybrid (vector + keyword)</option>
-                    <option value="vector">Vector only</option>
-                  </NativeSelect>
-                </div>
-                <div className="flex flex-col gap-2">
-                  <Label className="text-sm font-medium text-slate-700">
-                    Limit
-                  </Label>
-                  <Input
-                    className="h-12 rounded-2xl px-4"
-                    defaultValue={String(limit)}
-                    max={20}
-                    min={1}
-                    name="limit"
-                    type="number"
-                  />
-                </div>
-                <div className="flex flex-col gap-2">
-                  <Label className="text-sm font-medium text-slate-700">
-                    Similarity threshold
-                  </Label>
-                  <Input
-                    className="h-12 rounded-2xl px-4"
-                    defaultValue={rawMinSimilarity}
-                    name="minSimilarity"
-                    placeholder="0.65 or 65"
-                    type="text"
-                  />
-                </div>
-              </div>
-              <div className="grid grid-cols-4 gap-2">
-                <div className="flex flex-col gap-2">
-                  <Label className="text-sm font-medium text-slate-700">
-                    Section type
-                  </Label>
-                  <NativeSelect
-                    className="h-12 rounded-2xl px-4"
-                    defaultValue={sectionType ?? ''}
-                    name="sectionType"
-                  >
-                    <option value="">Any</option>
-                    {SECTION_TYPE_OPTIONS.map((option) => (
-                      <option key={option} value={option}>
-                        {option}
-                      </option>
-                    ))}
-                  </NativeSelect>
-                </div>
-                <div className="col-span-3 flex items-center gap-6 rounded-2xl border border-slate-200 px-4 py-3">
-                  <label className="flex cursor-pointer items-start gap-2">
-                    <input
-                      className="mt-0.5 size-4 shrink-0"
-                      defaultChecked={useReranker === true}
-                      name="useReranker"
-                      type="checkbox"
-                      value="true"
-                    />
-                    <span className="flex flex-col gap-0.5">
-                      <span className="text-sm font-medium leading-none text-slate-700">
-                        Reranker
-                      </span>
-                      <span className="text-xs text-slate-500">
-                        Re-scores results with a cross-encoder model after
-                        retrieval (requires COHERE_API_KEY). Unchecked still
-                        inherits the ENABLE_RERANKER setting — this only
-                        forces it on for this search.
-                      </span>
-                    </span>
-                  </label>
-                  <label className="flex cursor-pointer items-start gap-2">
-                    <input
-                      className="mt-0.5 size-4 shrink-0"
-                      defaultChecked={useMultiIntent === true}
-                      name="useMultiIntent"
-                      type="checkbox"
-                      value="true"
-                    />
-                    <span className="flex flex-col gap-0.5">
-                      <span className="text-sm font-medium leading-none text-slate-700">
-                        Multi-intent fan-out
-                      </span>
-                      <span className="text-xs text-slate-500">
-                        Decomposes multi-part queries into sub-queries,
-                        searches each in parallel, and merges results.
-                      </span>
-                    </span>
-                  </label>
-                </div>
-              </div>
-            </div>
-            <Button
-              className="mt-auto h-12 rounded-2xl px-6 font-semibold"
-              type="submit"
-            >
-              <Search className="size-4" />
-            </Button>
-          </form>
-          <p className="mt-3 text-sm text-slate-500">
-            Minimum similarity is optional. Enter a decimal like `0.65` or a
-            whole percent like `65`.
-          </p>
+          <div className="mt-8">
+            <RagSearchControls
+              formAction={SEARCH_ROUTE}
+              initialSettings={initialSettings}
+              popularQueries={popularQueries}
+              query={query}
+              sectionTypeOptions={SECTION_TYPE_OPTIONS}
+            />
+          </div>
         </section>
 
         {error ? (
-          <section className="rounded-2xl border border-rose-200 bg-rose-50 p-5 text-sm text-rose-700">
+          <section className="rounded-2xl border border-destructive/30 bg-destructive/10 p-5 text-sm text-destructive">
             {error}
           </section>
         ) : null}
@@ -487,23 +344,25 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
         {result ? (
           <>
             <section className="flex flex-wrap items-center justify-between gap-3">
-              <div className="text-sm text-slate-600">
+              <div className="text-sm text-muted-foreground">
                 Showing {result.matches.length} line-level matches using{' '}
-                <code className="rounded bg-slate-100 px-1">
+                <code className="rounded bg-muted px-1">
                   {result.model}
                 </code>
                 .
               </div>
-              <div className="text-sm text-slate-600">
+              <div className="text-sm text-muted-foreground">
                 {result.scope === 'all'
                   ? 'Scope: all corpus docs (EN only).'
                   : result.scope === 'products'
                     ? 'Scope: products only (EN only).'
                     : result.scope === 'sds'
                       ? 'Scope: SDS only (EN only).'
-                      : result.scope === 'knowledge'
-                        ? 'Scope: knowledge/markdown only (EN only).'
-                        : 'Scope: labels only (EN only).'}{' '}
+                      : result.scope === 'efficacy'
+                        ? 'Scope: efficacy documents only (EN only).'
+                        : result.scope === 'knowledge'
+                          ? 'Scope: knowledge/markdown only (EN only).'
+                          : 'Scope: labels only (EN only).'}{' '}
                 {result.productLineKey
                   ? `Filtered to product line ${result.productLineKey}.`
                   : 'No metadata filter applied.'}
@@ -519,105 +378,70 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
                 result.embeddingSource,
               )}
               retrievalStrategy={result.retrieval_strategy}
+              totalMs={result.timings.totalMs}
               timings={[
-                ['Total search', formatDurationMs(result.timings.totalMs)],
-                [
-                  'Query embedding total',
-                  formatDurationMs(result.timings.queryEmbeddingMs),
-                ],
-                [
-                  'Similarity search',
-                  formatDurationMs(result.timings.similaritySearchMs),
-                ],
-                [
-                  'Rerank',
-                  result.timings.rerankMs > 0
-                    ? formatDurationMs(result.timings.rerankMs)
-                    : 'Reranker off',
-                ],
-                [
-                  'Query rewrite',
-                  formatDurationMs(result.timings.queryRewriteMs),
-                ],
-                [
-                  'Cache lookup',
-                  formatDurationMs(result.timings.cacheLookupMs),
-                ],
-                [
-                  'Embedding creation',
-                  formatDurationMs(result.timings.embeddingCreateMs),
-                ],
-                [
-                  'Cache persist/update',
-                  formatDurationMs(result.timings.cachePersistMs),
-                ],
-                ['Similarity range', similaritySummary],
-              ].map(([label, value]) => ({
-                label,
-                value,
-              }))}
+                {
+                  label: 'Total search',
+                  value: formatDurationMs(result.timings.totalMs),
+                  ms: result.timings.totalMs,
+                },
+                {
+                  label: 'Query embedding total',
+                  value: formatDurationMs(result.timings.queryEmbeddingMs),
+                  ms: result.timings.queryEmbeddingMs,
+                },
+                {
+                  label: 'Similarity search',
+                  value: formatDurationMs(result.timings.similaritySearchMs),
+                  ms: result.timings.similaritySearchMs,
+                },
+                {
+                  label: 'Rerank',
+                  value:
+                    result.timings.rerankMs > 0
+                      ? formatDurationMs(result.timings.rerankMs)
+                      : 'Reranker off',
+                  ms: result.timings.rerankMs > 0 ? result.timings.rerankMs : undefined,
+                },
+                {
+                  label: 'Query rewrite',
+                  value: formatDurationMs(result.timings.queryRewriteMs),
+                  ms: result.timings.queryRewriteMs,
+                },
+                {
+                  label: 'Cache lookup',
+                  value: formatDurationMs(result.timings.cacheLookupMs),
+                  ms: result.timings.cacheLookupMs,
+                },
+                {
+                  label: 'Embedding creation',
+                  value: formatDurationMs(result.timings.embeddingCreateMs),
+                  ms: result.timings.embeddingCreateMs,
+                },
+                {
+                  label: 'Cache persist/update',
+                  value: formatDurationMs(result.timings.cachePersistMs),
+                  ms: result.timings.cachePersistMs,
+                },
+                { label: 'Similarity range', value: similaritySummary },
+              ]}
             />
 
-            <section className="grid gap-4 lg:grid-cols-2">
+            <section className="grid gap-4 sm:grid-cols-1 lg:grid-cols-2">
               {result.matches.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-sm text-slate-600 lg:col-span-2">
+                <div className="rounded-2xl border border-dashed border-border/60 bg-background p-8 text-sm text-muted-foreground lg:col-span-2">
                   No semantic matches were returned for that query. Try lowering
                   the minimum similarity if the query is too strict.
                 </div>
               ) : null}
 
-              {result.matches.map((match) => (
-                <article
-                  className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm"
+              {result.matches.map((match, index) => (
+                <RagSearchResultCard
                   key={match.chunk_id}
-                >
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">
-                      Similarity: {(match.similarity * 100).toFixed(1)}%
-                    </span>
-                    <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
-                      Chunk {match.chunk_index}
-                    </span>
-                    <span className="rounded-full bg-violet-50 px-2.5 py-1 text-xs font-medium text-violet-700">
-                      {match.document_kind}
-                    </span>
-                    {match.heading ? (
-                      <span className="rounded-full bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700">
-                        {match.heading}
-                      </span>
-                    ) : null}
-                  </div>
-
-                  <div className="mt-4 flex flex-col gap-2">
-                    <h2 className="text-xl font-semibold text-slate-950">
-                      {match.document_title}
-                    </h2>
-                    <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm text-slate-600">
-                      <span>
-                        Product line:{' '}
-                        {match.product_line_key || match.source_pk || 'N/A'}
-                      </span>
-                      <span>Representative SKU: {match.sku || 'N/A'}</span>
-                      <span>
-                        Section path: {match.section_path?.join(' / ') || 'N/A'}
-                      </span>
-                    </div>
-                  </div>
-
-                  <p className="mt-4 whitespace-pre-wrap text-sm leading-6 text-slate-700">
-                    {truncateText(match.chunk_text)}
-                  </p>
-
-                  <RagSearchMatchInspectBar
-                    chunkId={match.chunk_id}
-                    documentId={match.document_id}
-                  />
-
-                  <div className="mt-4 flex flex-wrap gap-3">
-                    {match.document_kind === 'product_line_profile' ? (
-                      <Link
-                        className="inline-flex rounded-full bg-slate-950 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-800"
-                        href={buildProductLineDetailHref(
+                  match={match}
+                  productLineHref={
+                    match.document_kind === 'product_line_profile'
+                      ? buildProductLineDetailHref(
                           match.product_line_key || match.source_pk,
                           {
                             query,
@@ -626,18 +450,16 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
                             minSimilarity: rawMinSimilarity,
                             scope,
                           },
-                        )}
-                      >
-                        View RAG product line
-                      </Link>
-                    ) : null}
-                  </div>
-                </article>
+                        )
+                      : null
+                  }
+                  rank={index + 1}
+                />
               ))}
             </section>
           </>
         ) : (
-          <section className="rounded-3xl border border-dashed border-slate-300 bg-white p-8 text-sm leading-7 text-slate-600">
+          <section className="rounded-[2rem] border border-dashed border-border/60 bg-background p-8 text-sm leading-7 text-muted-foreground">
             Enter a natural-language query to test vector similarity against
             product line chunks. Optional filters: product line key and minimum
             similarity.
