@@ -11,8 +11,8 @@ import {
 } from '~/components/ui/dialog';
 import { cn } from '~/lib/utils';
 
-import type { RagDocumentChunkApiResponse } from '~/lib/rag/document-chunk-types';
 import { toast } from 'sonner';
+import type { RagDocumentChunkApiResponse } from '~/lib/rag/document-chunk-types';
 
 type InspectMode = 'document' | 'chunk';
 
@@ -33,7 +33,11 @@ function JsonBlock({ value }: { value: unknown }) {
   );
 }
 
-function RagDocumentChunkDetailBody({ data }: { data: RagDocumentChunkApiResponse }) {
+function RagDocumentChunkDetailBody({
+  data,
+}: {
+  data: RagDocumentChunkApiResponse;
+}) {
   const { document: doc, chunk } = data;
 
   return (
@@ -57,7 +61,9 @@ function RagDocumentChunkDetailBody({ data }: { data: RagDocumentChunkApiRespons
             </span>
             <span>
               key:{' '}
-              <span className="font-mono text-foreground">{doc.document_key}</span>
+              <span className="font-mono text-foreground">
+                {doc.document_key}
+              </span>
             </span>
             <span>
               lang: <span className="text-foreground">{doc.language_code}</span>
@@ -75,7 +81,9 @@ function RagDocumentChunkDetailBody({ data }: { data: RagDocumentChunkApiRespons
           <JsonBlock value={doc.metadata} />
         </div>
         <div className="space-y-1">
-          <p className="text-xs font-medium text-muted-foreground">Body (full text)</p>
+          <p className="text-xs font-medium text-muted-foreground">
+            Body (full text)
+          </p>
           <div className="max-h-[min(40vh,320px)] overflow-auto rounded-lg border border-border/80 bg-muted/30">
             <pre className="whitespace-pre-wrap wrap-break-word p-3 font-mono text-[11px] leading-relaxed">
               {doc.body_text}
@@ -84,7 +92,9 @@ function RagDocumentChunkDetailBody({ data }: { data: RagDocumentChunkApiRespons
         </div>
         {doc.body_markdown ? (
           <div className="space-y-1">
-            <p className="text-xs font-medium text-muted-foreground">Body (markdown)</p>
+            <p className="text-xs font-medium text-muted-foreground">
+              Body (markdown)
+            </p>
             <div className="max-h-[min(32vh,260px)] overflow-auto rounded-lg border border-border/80 bg-muted/30">
               <pre className="whitespace-pre-wrap wrap-break-word p-3 font-mono text-[11px] leading-relaxed">
                 {doc.body_markdown}
@@ -102,16 +112,22 @@ function RagDocumentChunkDetailBody({ data }: { data: RagDocumentChunkApiRespons
           <dl className="grid gap-2 text-sm">
             <div className="flex flex-col gap-0.5 sm:flex-row sm:gap-2">
               <dt className="shrink-0 text-muted-foreground">Chunk ID</dt>
-              <dd className="min-w-0 break-all font-mono text-xs">{chunk.id}</dd>
+              <dd className="min-w-0 break-all font-mono text-xs">
+                {chunk.id}
+              </dd>
             </div>
             <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
               <span>
                 index:{' '}
-                <span className="font-mono text-foreground">{chunk.chunk_index}</span>
+                <span className="font-mono text-foreground">
+                  {chunk.chunk_index}
+                </span>
               </span>
               <span>
                 key:{' '}
-                <span className="font-mono text-foreground">{chunk.chunk_key}</span>
+                <span className="font-mono text-foreground">
+                  {chunk.chunk_key}
+                </span>
               </span>
             </div>
             {chunk.heading ? (
@@ -130,11 +146,15 @@ function RagDocumentChunkDetailBody({ data }: { data: RagDocumentChunkApiRespons
             </div>
           </dl>
           <div className="space-y-1">
-            <p className="text-xs font-medium text-muted-foreground">Chunk metadata</p>
+            <p className="text-xs font-medium text-muted-foreground">
+              Chunk metadata
+            </p>
             <JsonBlock value={chunk.metadata} />
           </div>
           <div className="space-y-1">
-            <p className="text-xs font-medium text-muted-foreground">Chunk text</p>
+            <p className="text-xs font-medium text-muted-foreground">
+              Chunk text
+            </p>
             <div className="max-h-[min(36vh,280px)] overflow-auto rounded-lg border border-border/80 bg-muted/30">
               <pre className="whitespace-pre-wrap wrap-break-word p-3 font-mono text-[11px] leading-relaxed">
                 {chunk.chunk_text}
@@ -223,7 +243,9 @@ export function RagDocumentChunkInspectDialog({
   }, [open]);
 
   const title =
-    mode === 'chunk' && chunkId ? 'Document & chunk details' : 'Document details';
+    mode === 'chunk' && chunkId
+      ? 'Document & chunk details'
+      : 'Document details';
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -286,7 +308,7 @@ export function RagDocumentChunkInspectButtons({
     layout === 'inline' ? (
       <span
         className={cn(
-          'inline-flex flex-wrap items-baseline gap-x-2 gap-y-1',
+          'inline-flex flex-wrap items-baseline gap-x-2 gap-y-1 font-mono text-[11px] text-muted-foreground',
           className,
         )}
       >
