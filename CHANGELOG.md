@@ -1,3 +1,16 @@
+# [2.3.0](https://github.com/betcocorp/bex2.0/compare/v2.2.0...v2.3.0) (2026-08-22)
+
+
+### Bug Fixes
+
+* **B0-621:** use clickable inspect buttons for result-card doc/chunk footer ([a996e5d](https://github.com/betcocorp/bex2.0/commit/a996e5d3ccf2370683ff870ffca723c89ca78c1e))
+* **B0-622:** render RAG document body_markdown through Streamdown ([ef3b659](https://github.com/betcocorp/bex2.0/commit/ef3b65904e1fb282b6f10fe110082f354862db4f))
+
+
+### Features
+
+* **B0-621:** redesign RAG semantic search page with settings drawer and card grid ([3d59978](https://github.com/betcocorp/bex2.0/commit/3d5997850e7cc4f026a8b681324b5d69f83324c5))
+
 # [2.2.0](https://github.com/betcocorp/bex2.0/compare/v2.1.0...v2.2.0) (2026-08-21)
 
 
