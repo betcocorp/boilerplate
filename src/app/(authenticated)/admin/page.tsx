@@ -1,323 +1,61 @@
-import {
-  ArrowRight,
-  ChevronDown,
-  ChevronRight,
-  Plus,
-  ShieldCheck,
-  TrendingDown,
-  TrendingUp,
-} from 'lucide-react';
-import Link from 'next/link';
+/**
+ * B0-629 — `/admin` Mission Control dashboard.
+ *
+ * Replaces the previous landing page, which rendered shadcn demo boilerplate (hardcoded document
+ * rows, invented reviewer names, dead "Quick Create" / Outline controls) around two real metrics.
+ *
+ * Server component, searchParams-driven like `/admin/bex/health` and `/admin/observability`, so
+ * the window AND version selection are linkable and a pasted URL fully determines the view. Thin
+ * by convention: composition only — every panel, and the filter row, lives under
+ * `~/components/admin/dashboard/*` and fetches its own data from a canonical reader.
+ *
+ * The window default is `resolveHealthSearchParams`' own 7 days rather than the mockup's
+ * "Last 24 hours": golden-set sweeps are started by hand from /admin/tests rather than nightly, so
+ * a one-day landing window would leave the health bar's gate verdict — the page's headline — empty
+ * on most days. Sharing the health page's default also means the two surfaces reconcile.
+ *
+ * The previous page's permissions shortcut card is gone with the rest of the layout. That is not an
+ * access-control change: `admin.card.permissions` still gates the account menu's Access control
+ * entry (`AdminAccountMenu`), the sidebar (`AdminSidebarNav`), every `/api/admin/permissions` route
+ * and the permissions pages themselves — the card was the one checkpoint that only decorated.
+ */
+
 import { connection } from 'next/server';
 
-import {
-  SimilarityFailRateTrendChart,
-  type SimilarityFailRateTrendPoint,
-} from '~/components/admin/SimilarityFailRateTrendChart';
-import PermissionChecker from '~/components/permissions/PermissionChecker';
-import { Avatar, AvatarFallback, AvatarGroup } from '~/components/ui/avatar';
-import { Badge } from '~/components/ui/badge';
-import { Button } from '~/components/ui/button';
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '~/components/ui/card';
-import { Separator } from '~/components/ui/separator';
-import { Tabs, TabsList, TabsTrigger } from '~/components/ui/tabs';
-import { PERMISSIONS } from '~/lib/permissions/constants';
-import { formatCompactInt } from '~/lib/tests/format';
-import {
-  getGlobalSimilarityFailRateTrend,
-  getGlobalTestCaseMetrics,
-} from '~/lib/tests/repository';
+import { DashboardHeader } from '~/components/admin/dashboard/DashboardHeader';
+import { HealthBar } from '~/components/admin/dashboard/HealthBar';
+import { KpiRow } from '~/components/admin/dashboard/KpiRow';
+import { PipelinePanel } from '~/components/admin/dashboard/PipelinePanel';
+import { RoutingPanel } from '~/components/admin/dashboard/RoutingPanel';
+import { ToolHealthPanel } from '~/components/admin/dashboard/ToolHealthPanel';
+import { resolveHealthSearchParams } from '~/lib/bex-health/search-params';
 
 export const metadata = {
-  title: 'Admin Dashboard | Betco BEX',
+  title: 'Mission Control | Betco BEX',
   description:
-    'Overview dashboard for Betco BEX admin operations and shortcuts.',
+    'Gate verdict, traffic, pipeline, routing and tool health for the Bex product-support workflow.',
 };
 
-type MetricCardData = {
-  title: string;
-  value: string;
-  delta?: string;
-  trend?: 'up' | 'down';
-  summary: string;
-  detail: string;
+type PageProps = {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 };
 
-function buildMetrics(
-  input: Awaited<ReturnType<typeof getGlobalTestCaseMetrics>>,
-): MetricCardData[] {
-  return [
-    {
-      title: 'Avg Similarity',
-      value:
-        input.avgSimilarity === null
-          ? 'n/a'
-          : `${(input.avgSimilarity * 100).toFixed(1)}%`,
-      summary:
-        input.avgSimilarity === null
-          ? 'No similarity-bearing responses yet'
-          : 'Average source similarity across all completed test cases',
-      detail: `Based on ${formatCompactInt(input.similaritySampleSize)} test case(s) with similarity data`,
-    },
-    {
-      title: 'Avg Elapsed Runtime',
-      value: `${(input.avgElapsedMs / 1000).toFixed(2)}s`,
-      summary: 'Mean elapsed runtime across all completed test cases',
-      detail: `Based on ${formatCompactInt(input.totalCases)} completed test case(s)`,
-    },
-    {
-      title: 'Avg Pass Rate',
-      value: `${(input.passRate * 100).toFixed(1)}%`,
-      summary: 'Passed test cases divided by all completed test cases',
-      detail: `${formatCompactInt(input.passedCases)} passed / ${formatCompactInt(input.totalCases)} total`,
-    },
-    {
-      title: 'Avg Fail Rate',
-      value: `${(input.failRate * 100).toFixed(1)}%`,
-      summary: 'Failed test cases divided by all completed test cases',
-      detail: `${formatCompactInt(input.failedCases)} failed / ${formatCompactInt(input.totalCases)} total`,
-    },
-  ];
-}
-
-const outlineTabs = [
-  { label: 'Outline', value: 'outline' },
-  { label: 'Past Performance', value: 'past-performance', badge: '3' },
-  { label: 'Key Personnel', value: 'key-personnel', badge: '2' },
-  { label: 'Focus Documents', value: 'focus-documents' },
-];
-
-const rows = [
-  ['Cover page', 'Cover page', 'In Process', 'Eddie Lake'],
-  ['Table of contents', 'Table of contents', 'Done', 'Eddie Lake'],
-  ['Executive summary', 'Narrative', 'Done', 'Eddie Lake'],
-  ['Technical approach', 'Narrative', 'Done', 'Jamik Tashpulatov'],
-  ['Design', 'Narrative', 'In Process', 'Jamik Tashpulatov'],
-  ['Capabilities', 'Narrative', 'In Process', 'Jamik Tashpulatov'],
-  [
-    'Integration with existing systems',
-    'Narrative',
-    'In Process',
-    'Jamik Tashpulatov',
-  ],
-  ['Innovation and Advantages', 'Narrative', 'Done', 'Assign reviewer'],
-  [
-    "Overview of EMR's Innovative Solutions",
-    'Technical content',
-    'Done',
-    'Assign reviewer',
-  ],
-  [
-    'Advanced Algorithms and Machine Learning',
-    'Narrative',
-    'Done',
-    'Assign reviewer',
-  ],
-];
-
-function MetricCard({
-  detail,
-  delta,
-  summary,
-  title,
-  trend,
-  value,
-}: MetricCardData) {
-  const showTrend = trend && delta;
-  const isUp = trend === 'up';
-  const TrendIcon = isUp ? TrendingUp : TrendingDown;
-
-  return (
-    <Card className="gap-4 rounded-3xl border border-border/60 shadow-none">
-      <CardHeader className="px-5 pb-0">
-        <CardDescription>{title}</CardDescription>
-        <div className="flex items-center justify-between gap-3">
-          <CardTitle className="text-3xl font-semibold">{value}</CardTitle>
-          {showTrend ? (
-            <Badge
-              className={
-                isUp
-                  ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-50'
-                  : 'bg-rose-50 text-rose-700 hover:bg-rose-50'
-              }
-              variant="secondary"
-            >
-              <TrendIcon className="size-3.5" />
-              {delta}
-            </Badge>
-          ) : null}
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-1 px-5 pt-0 text-sm">
-        <p className="font-medium text-foreground">{summary}</p>
-        <p className="text-muted-foreground">{detail}</p>
-      </CardContent>
-    </Card>
-  );
-}
-
-export default async function AdminDashboardPage() {
+export default async function AdminDashboardPage({ searchParams }: PageProps) {
   await connection();
-  const [globalMetrics, similarityFailTrendRaw] = await Promise.all([
-    getGlobalTestCaseMetrics(),
-    getGlobalSimilarityFailRateTrend({ maxRuns: 30 }),
-  ]);
-  const similarityFailTrend: SimilarityFailRateTrendPoint[] =
-    similarityFailTrendRaw;
-  const metrics = buildMetrics(globalMetrics);
+  const { window, version } = resolveHealthSearchParams(await searchParams);
 
   return (
-    <main className="min-w-0 p-4 sm:p-6">
-      <div className="rounded-[2rem] border border-border/60 bg-background shadow-sm">
-        <div className="flex items-center justify-between gap-4 px-6 py-5 sm:px-8">
-          <div>
-            <p className="text-sm text-muted-foreground">Dashboard</p>
-            <h1 className="mt-1 text-3xl font-semibold tracking-tight">
-              Documents
-            </h1>
-          </div>
-          <div className="flex items-center gap-3">
-            <AvatarGroup>
-              {['EL', 'JT', 'CN'].map((initials) => (
-                <Avatar key={initials}>
-                  <AvatarFallback>{initials}</AvatarFallback>
-                </Avatar>
-              ))}
-            </AvatarGroup>
-            <Button className="rounded-2xl" size="lg">
-              <Plus className="size-4" />
-              Quick Create
-            </Button>
-          </div>
-        </div>
+    <main className="flex min-w-0 flex-1 flex-col gap-5 p-4 sm:p-6">
+      <DashboardHeader version={version} window={window} />
 
-        <Separator />
+      <HealthBar version={version} window={window} />
+      <KpiRow version={version} window={window} />
+      <PipelinePanel version={version} window={window} />
 
-        <div className="space-y-6 px-6 py-6 sm:px-8">
-          <section className="grid gap-4 xl:grid-cols-4">
-            {metrics.map((metric) => (
-              <MetricCard key={metric.title} {...metric} />
-            ))}
-          </section>
-
-          {/*
-            Gated by `admin.card.permissions` (B0-410). While `BEX_PERMISSIONS_ENFORCED` is off,
-            `PermissionChecker` records the verdict and still renders — the card is visible to every
-            admin today and only disappears for users missing the selector once the flag flips.
-          */}
-          <PermissionChecker
-            permission={PERMISSIONS.ADMIN_CARD_PERMISSIONS}
-            route="/admin permissions card"
-          >
-            <section>
-              <Link href="/admin/permissions">
-                <Card className="rounded-3xl border border-border/60 shadow-none transition hover:bg-accent/40">
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2 text-lg">
-                      <ShieldCheck className="size-5 text-primary" />
-                      Permissions
-                    </CardTitle>
-                    <CardDescription>
-                      Administer users, permission groups, and permission
-                      selectors — who holds what, directly or through a group.
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="inline-flex items-center gap-1 text-sm font-medium text-primary">
-                      Open
-                      <ArrowRight className="size-4" />
-                    </div>
-                  </CardContent>
-                </Card>
-              </Link>
-            </section>
-          </PermissionChecker>
-
-          <section className="grid gap-4 xl:grid-cols-[minmax(0,1.4fr)_minmax(320px,1fr)]">
-            <Card className="rounded-3xl border border-border/60 shadow-none">
-              <CardHeader className="flex flex-row items-start justify-between gap-4 px-5 pb-0">
-                <div>
-                  <CardTitle className="text-lg font-semibold">
-                    Similarity and fail-rate trend
-                  </CardTitle>
-                  <CardDescription>
-                    Per-run averages over the latest 30 test runs
-                  </CardDescription>
-                </div>
-                <Button className="rounded-2xl" size="sm" variant="outline">
-                  Last 30 runs
-                  <ChevronDown className="size-4" />
-                </Button>
-              </CardHeader>
-              <CardContent className="px-5 pt-0">
-                <SimilarityFailRateTrendChart points={similarityFailTrend} />
-              </CardContent>
-            </Card>
-
-            <Card className="rounded-3xl border border-border/60 shadow-none">
-              <CardHeader className="px-5 pb-0">
-                <CardTitle className="text-lg font-semibold">Outline</CardTitle>
-                <CardDescription>
-                  Keep the current product admin pages under Documents while you
-                  expand the RAG pipeline.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4 px-5 pt-0">
-                <Tabs defaultValue="outline">
-                  <TabsList className="w-full justify-start gap-2 rounded-2xl bg-muted/70 p-1">
-                    {outlineTabs.map((tab) => (
-                      <TabsTrigger
-                        className="rounded-2xl px-3"
-                        key={tab.value}
-                        value={tab.value}
-                      >
-                        {tab.label}
-                        {tab.badge ? (
-                          <span className="rounded-full bg-background px-2 py-0.5 text-xs">
-                            {tab.badge}
-                          </span>
-                        ) : null}
-                      </TabsTrigger>
-                    ))}
-                  </TabsList>
-                </Tabs>
-
-                <div className="rounded-3xl bg-muted/60 p-4">
-                  <p className="text-sm font-medium text-foreground">
-                    Current admin shortcuts
-                  </p>
-                  <div className="mt-4 grid gap-3">
-                    {[
-                      ['Bex chat', '/admin/bex'],
-                      ['Tools home', '/admin/tools'],
-                      ['Legacy product browser', '/admin/products/legacy'],
-                      ['RAG search', '/admin/products/rag'],
-                      ['SDS ingestion dashboard', '/admin/sds'],
-                      ['Efficacy ingestion dashboard', '/admin/efficacy'],
-                      ['RAG generation', '/admin/products/rag/generate'],
-                      ['Users, groups & permissions', '/admin/permissions'],
-                    ].map(([label, href]) => (
-                      <Link
-                        className="flex items-center justify-between rounded-2xl bg-background px-4 py-3 text-sm font-medium text-foreground transition hover:bg-accent"
-                        href={href}
-                        key={label}
-                      >
-                        <span>{label}</span>
-                        <ChevronRight className="size-4 text-muted-foreground" />
-                      </Link>
-                    ))}
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </section>
-        </div>
+      {/* Routing and Tool health are peers: side by side on wide screens, stacked below. */}
+      <div className="grid items-start gap-4 xl:grid-cols-2">
+        <RoutingPanel version={version} window={window} />
+        <ToolHealthPanel version={version} window={window} />
       </div>
     </main>
   );

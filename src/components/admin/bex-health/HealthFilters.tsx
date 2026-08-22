@@ -6,18 +6,23 @@
  * holds no filter state of its own beyond the router transition's pending flag, so a pasted
  * URL reproduces the exact view and browser navigation works.
  *
+ * B0-629 moved that searchParams writing into `useWindowVersionParams`
+ * (`~/components/admin/filters/use-window-version-params`), now shared with `/admin` Mission
+ * Control's chip variant. The two surfaces look different on purpose; they must not disagree on
+ * what the params MEAN, so there is one writer. Rendering here is unchanged.
+ *
  * Option lists arrive as props from the server (`HealthHeader` derives them from
  * `listAvailableVersions()` / `hasUnversionedRows()`), so this client bundle imports no
  * data-layer module and no option is ever hardcoded here.
  */
 
-import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { useTransition } from 'react';
-
+import {
+  CUSTOM_WINDOW_VALUE,
+  useWindowVersionParams,
+  type WindowVersionOption,
+} from '~/components/admin/filters/use-window-version-params';
 import { Label } from '~/components/ui/label';
 import { NativeSelect } from '~/components/ui/native-select';
-
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Trailing inclusive-day presets; values are the day count as a string. */
 const WINDOW_PRESETS = [
@@ -27,7 +32,9 @@ const WINDOW_PRESETS = [
   { value: '30', label: 'Last 30 days' },
 ] as const;
 
-export type HealthVersionOption = { value: string; label: string };
+const PRESET_DAYS = WINDOW_PRESETS.map((preset) => Number(preset.value));
+
+export type HealthVersionOption = WindowVersionOption;
 
 export function HealthFilters({
   windowDays,
@@ -44,46 +51,12 @@ export function HealthFilters({
   /** First entry is "All traffic" (`value: ''`); derived from data, never hardcoded. */
   versionOptions: HealthVersionOption[];
 }) {
-  const router = useRouter();
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
-  const [isPending, startTransition] = useTransition();
-
-  const matchedPreset = WINDOW_PRESETS.find(
-    (preset) => windowEndsToday && Number(preset.value) === windowDays,
-  );
-  const windowValue = matchedPreset ? matchedPreset.value : 'custom';
-
-  function replaceParams(mutate: (params: URLSearchParams) => void) {
-    const params = new URLSearchParams(searchParams.toString());
-    mutate(params);
-    const query = params.toString();
-    startTransition(() => {
-      router.replace(query ? `${pathname}?${query}` : pathname);
+  const { isPending, windowValue, isCustomWindow, setWindowDays, setVersion } =
+    useWindowVersionParams({
+      presetDays: PRESET_DAYS,
+      windowDays,
+      windowEndsToday,
     });
-  }
-
-  function onWindowChange(value: string) {
-    const days = Number(value);
-    if (!Number.isInteger(days) || days < 1) return; // the disabled "custom" echo
-    const nowMs = Date.now();
-    const to = new Date(nowMs).toISOString().slice(0, 10);
-    const from = new Date(nowMs - (days - 1) * DAY_MS).toISOString().slice(0, 10);
-    replaceParams((params) => {
-      params.set('from', from);
-      params.set('to', to);
-    });
-  }
-
-  function onVersionChange(value: string) {
-    replaceParams((params) => {
-      if (value) {
-        params.set('version', value);
-      } else {
-        params.delete('version');
-      }
-    });
-  }
 
   return (
     <div
@@ -98,7 +71,7 @@ export function HealthFilters({
         </Label>
         <NativeSelect
           id="bex-health-window"
-          onChange={(event) => onWindowChange(event.target.value)}
+          onChange={(event) => setWindowDays(event.target.value)}
           value={windowValue}
         >
           {WINDOW_PRESETS.map((preset) => (
@@ -106,11 +79,11 @@ export function HealthFilters({
               {preset.label}
             </option>
           ))}
-          {matchedPreset ? null : (
-            <option disabled value="custom">
+          {isCustomWindow ? (
+            <option disabled value={CUSTOM_WINDOW_VALUE}>
               Custom ({windowDays}d from URL)
             </option>
-          )}
+          ) : null}
         </NativeSelect>
       </div>
 
@@ -120,7 +93,7 @@ export function HealthFilters({
         </Label>
         <NativeSelect
           id="bex-health-version"
-          onChange={(event) => onVersionChange(event.target.value)}
+          onChange={(event) => setVersion(event.target.value)}
           value={selectedVersion}
         >
           {versionOptions.map((option) => (

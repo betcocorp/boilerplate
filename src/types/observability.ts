@@ -310,7 +310,18 @@ export type ListWorkflowRunsFilters = {
 
 export type RoutingDistributionDatum = { routingDecision: string; count: number; avgConfidence: number | null };
 export type ConfidenceBucketDatum = { bucket: 'high' | 'mid' | 'low' | 'none'; count: number };
-export type LatencyByStepDatum = { stepName: string; avgDurationMs: number; p95DurationMs: number; sampleSize: number };
+/**
+ * Per-step latency. `p50DurationMs` (B0-629) is the nearest-rank median from
+ * `percentileNearestRank` in `~/lib/observability/aggregates.ts` — no interpolation, so an
+ * even-sized sample reports the lower middle value and every figure is an observed duration.
+ */
+export type LatencyByStepDatum = {
+  stepName: string;
+  avgDurationMs: number;
+  p50DurationMs: number;
+  p95DurationMs: number;
+  sampleSize: number;
+};
 export type FailureRateByDayDatum = { day: string; total: number; failed: number; failureRate: number };
 
 /**

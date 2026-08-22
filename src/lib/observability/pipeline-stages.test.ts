@@ -89,7 +89,12 @@ describe('buildPipelineStageStripData', () => {
     });
 
     // The fast step still shows up: n=1 with a 0ms average — never a vanished sample.
-    expect(data.route.latency).toEqual({ avgDurationMs: 0, p95DurationMs: 0, sampleSize: 1 });
+    expect(data.route.latency).toEqual({
+      avgDurationMs: 0,
+      p50DurationMs: 0,
+      p95DurationMs: 0,
+      sampleSize: 1,
+    });
   });
 
   it('degrades a step name absent from the window to null latency, not a zero average', () => {
@@ -121,6 +126,7 @@ describe('buildPipelineStageStripData', () => {
 
     expect(data.validate.latency).toEqual({
       avgDurationMs: 2000,
+      p50DurationMs: 1000, // nearest rank over [1000, 3000] — the lower middle value
       p95DurationMs: 3000,
       sampleSize: 2,
     });
@@ -141,6 +147,7 @@ describe('buildPipelineStageStripData', () => {
 
     expect(data.retrieve.latency).toEqual({
       avgDurationMs: 300, // (400 + 200) / 2
+      p50DurationMs: 200, // nearest rank over [200, 400]
       p95DurationMs: 400,
       sampleSize: 2,
     });
