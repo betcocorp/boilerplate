@@ -23,7 +23,6 @@
 import { connection } from 'next/server';
 
 import { DashboardHeader } from '~/components/admin/dashboard/DashboardHeader';
-import { DashboardProvenance } from '~/components/admin/dashboard/DashboardProvenance';
 import { HealthBar } from '~/components/admin/dashboard/HealthBar';
 import { KpiRow } from '~/components/admin/dashboard/KpiRow';
 import { PipelinePanel } from '~/components/admin/dashboard/PipelinePanel';
@@ -58,8 +57,6 @@ export default async function AdminDashboardPage({ searchParams }: PageProps) {
         <RoutingPanel version={version} window={window} />
         <ToolHealthPanel version={version} window={window} />
       </div>
-
-      <DashboardProvenance />
     </main>
   );
 }
