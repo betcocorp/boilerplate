@@ -69,8 +69,12 @@ const UNROUTED_LABEL = 'unrouted';
 /**
  * B0-430 — `workflow_runs.status` values for which `updated_at` is a real end time. A run still
  * `running` is excluded from the elapsed average; see `buildAvgDurationMs`.
+ *
+ * Exported (B0-629) so `~/lib/observability/dashboard-kpis.ts` splits terminal from in-flight
+ * runs on exactly this list. Verified against live data 2026-08-22: `workflow_runs.status` only
+ * ever holds `completed`, `failed` or `running`.
  */
-const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed']);
+export const TERMINAL_RUN_STATUSES: ReadonlySet<string> = new Set(['completed', 'failed']);
 
 export type AggregateWindow = {
   /** ISO timestamp, inclusive. */
@@ -125,8 +129,11 @@ function shiftIso(iso: string, deltaMs: number): string {
   return Number.isFinite(parsed) ? new Date(parsed + deltaMs).toISOString() : iso;
 }
 
-/** `YYYY-MM-DD` in UTC — matches `date_trunc('day', created_at)` on the server. */
-function utcDayKey(iso: string): string | null {
+/**
+ * `YYYY-MM-DD` in UTC — matches `date_trunc('day', created_at)` on the server.
+ * Exported (B0-629) so the dashboard's day buckets key identically to `failureRateByDay`.
+ */
+export function utcDayKey(iso: string): string | null {
   const parsed = Date.parse(iso);
   if (!Number.isFinite(parsed)) {
     return null;
@@ -140,14 +147,29 @@ export function roundTo(value: number, decimals: number): number {
   return Math.round(value * factor) / factor;
 }
 
-/** Nearest-rank p95 over an ascending-sorted array. */
-function percentile95(sortedAscending: number[]): number {
+/**
+ * Nearest-rank percentile over an ascending-sorted array. `percentile` is a fraction (0..1),
+ * so p95 is `0.95` and the median is `0.5`.
+ *
+ * Exported (B0-629) so the Mission Control KPI cards compute p50/p95 with exactly this
+ * definition — the dashboard's latency figures must reconcile with `/admin/observability`'s.
+ * Nearest rank (no interpolation) means an even-sized sample's p50 is the LOWER of the two
+ * middle values; that is deliberate, so a percentile is always an observed measurement.
+ * Returns 0 for an empty array — callers that must distinguish "no samples" from a real 0ms
+ * check the sample size themselves (see `StageLatency`, `RunKpiSummary.elapsedSampleSize`).
+ */
+export function percentileNearestRank(sortedAscending: number[], percentile: number): number {
   if (sortedAscending.length === 0) {
     return 0;
   }
-  const rank = Math.ceil(0.95 * sortedAscending.length);
+  const rank = Math.ceil(percentile * sortedAscending.length);
   const index = Math.min(sortedAscending.length - 1, Math.max(0, rank - 1));
   return sortedAscending[index] ?? 0;
+}
+
+/** Nearest-rank p95 over an ascending-sorted array. */
+function percentile95(sortedAscending: number[]): number {
+  return percentileNearestRank(sortedAscending, 0.95);
 }
 
 /** Exported (B0-581/B0-582) so the Bex Health readers share this exact scan; see `VersionFilter`. */
@@ -226,6 +248,69 @@ export async function scanWorkflowSteps(
     }
 
     const batch = data ?? [];
+    // Padded scan, so drop steps belonging to runs outside the window.
+    rows.push(...batch.filter((row) => runIds.has(row.workflow_run_id)));
+
+    if (batch.length < SCAN_PAGE_SIZE) {
+      break;
+    }
+  }
+
+  return rows;
+}
+
+/**
+ * B0-629 — one `workflow_steps` row's persisted `output`, for a single named step.
+ * `output` is jsonb, so it arrives as an already-parsed but unvalidated value: narrow it at
+ * the call site (the routing-health and tool-health readers each parse their own shape).
+ */
+export type NamedStepScanRow = { workflow_run_id: string; output: unknown };
+
+/**
+ * B0-629 — the persisted `output` of ONE named step, for runs in the window.
+ *
+ * Same contract as `scanWorkflowSteps` above (padded `started_at` scan, same page budget,
+ * post-filtered against the window's run-id set), narrowed to a single `step_name` and
+ * selecting `output` instead of the timing columns. Exists so the Mission Control readers
+ * that each need one step's output — routing-health (`orchestration_planner`), tool-health
+ * (`openai_responses_agent`) — share one scan implementation rather than re-deriving the
+ * padding and paging rules; compare `scanValidatorIssueRows` in
+ * `~/lib/observability/pipeline-stages.ts`, which predates this helper.
+ *
+ * Note `output` is the FULL step blob (no `->` narrowing), which is the point — callers want
+ * different keys out of it — but it is therefore the widest of the child scans. Callers that
+ * only need one jsonb key should select that key directly instead.
+ */
+export async function scanWorkflowStepOutputsByName(
+  window: AggregateWindow,
+  runIds: ReadonlySet<string>,
+  stepName: string,
+): Promise<NamedStepScanRow[]> {
+  if (runIds.size === 0) {
+    return [];
+  }
+
+  const supabase = getSupabaseServiceRoleClient();
+  const from = shiftIso(window.from, -CHILD_WINDOW_PADDING_MS);
+  const to = shiftIso(window.to, CHILD_WINDOW_PADDING_MS);
+  const rows: NamedStepScanRow[] = [];
+
+  for (let page = 0; page < MAX_SCAN_PAGES; page += 1) {
+    const start = page * SCAN_PAGE_SIZE;
+    const { data, error } = await supabase
+      .from('workflow_steps')
+      .select('workflow_run_id,output')
+      .eq('step_name', stepName)
+      .gte('started_at', from)
+      .lte('started_at', to)
+      .order('started_at', { ascending: true })
+      .range(start, start + SCAN_PAGE_SIZE - 1);
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    const batch = (data ?? []) as unknown as NamedStepScanRow[];
     // Padded scan, so drop steps belonging to runs outside the window.
     rows.push(...batch.filter((row) => runIds.has(row.workflow_run_id)));
 
@@ -378,6 +463,8 @@ export function buildLatencyByStep(steps: StepScanRow[]): LatencyByStepDatum[] {
       return {
         stepName,
         avgDurationMs: Math.round(total / sorted.length),
+        // B0-629 — p50 reuses the single sort above; the array is not sorted twice.
+        p50DurationMs: Math.round(percentileNearestRank(sorted, 0.5)),
         p95DurationMs: Math.round(percentile95(sorted)),
         sampleSize: sorted.length,
       };
@@ -439,19 +526,33 @@ function buildAvgDurationMs(runs: RunScanRow[]): MeanMsDatum {
   const values: number[] = [];
 
   for (const run of runs) {
-    if (!TERMINAL_RUN_STATUSES.has(run.status)) {
-      continue;
+    const elapsed = terminalElapsedMs(run);
+    if (elapsed !== null) {
+      values.push(elapsed);
     }
-    const started = Date.parse(run.created_at);
-    const ended = Date.parse(run.updated_at);
-    // Same guard as `durationMsBetween`: drop unparseable or inverted spans.
-    if (!Number.isFinite(started) || !Number.isFinite(ended) || ended < started) {
-      continue;
-    }
-    values.push(ended - started);
   }
 
   return meanMs(values);
+}
+
+/**
+ * `updated_at - created_at` for a FINISHED run, or null when the run is still in flight or the
+ * span is unusable. The single definition of "elapsed" — exported (B0-629) so
+ * `~/lib/observability/dashboard-kpis.ts` and `buildAvgDurationMs` above cannot drift apart.
+ */
+export function terminalElapsedMs(
+  run: Pick<RunScanRow, 'status' | 'created_at' | 'updated_at'>,
+): number | null {
+  if (!TERMINAL_RUN_STATUSES.has(run.status)) {
+    return null;
+  }
+  const started = Date.parse(run.created_at);
+  const ended = Date.parse(run.updated_at);
+  // Same guard as `durationMsBetween`: drop unparseable or inverted spans.
+  if (!Number.isFinite(started) || !Number.isFinite(ended) || ended < started) {
+    return null;
+  }
+  return ended - started;
 }
 
 /** The token fields of `RunScanRow` — the only inputs `buildTokenUsage` needs, kept narrow for tests. */

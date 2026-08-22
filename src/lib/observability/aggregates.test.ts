@@ -37,6 +37,7 @@ describe('buildLatencyByStep', () => {
       {
         stepName: 'orchestration_planner',
         avgDurationMs: 100, // (0 + 200) / 2 — the skewed row contributes 0, not -100
+        p50DurationMs: 0, // nearest rank over [0, 200]: the lower middle value
         p95DurationMs: 200,
         sampleSize: 2, // both rows kept
       },
@@ -50,7 +51,13 @@ describe('buildLatencyByStep', () => {
     ];
 
     expect(buildLatencyByStep(rows)).toEqual([
-      { stepName: 'validator', avgDurationMs: 3000, p95DurationMs: 3000, sampleSize: 1 },
+      {
+        stepName: 'validator',
+        avgDurationMs: 3000,
+        p50DurationMs: 3000,
+        p95DurationMs: 3000,
+        sampleSize: 1,
+      },
     ]);
   });
 });

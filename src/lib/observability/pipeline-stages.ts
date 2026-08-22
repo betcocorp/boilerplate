@@ -115,9 +115,14 @@ export const VALIDATOR_SKIP_ISSUES = [
   'validator_skipped_high_similarity_non_safety_route',
 ] as const;
 
-/** avg/p95/n for one stage; null = no samples in the window (never a zero average). */
+/**
+ * avg/p50/p95/n for one stage; null = no samples in the window (never a zero average).
+ * `p50DurationMs` (B0-629) comes from the same `buildLatencyByStep` datum as the other two,
+ * so the strip's median reconciles with `/admin/observability` by construction.
+ */
 export type StageLatency = {
   avgDurationMs: number;
+  p50DurationMs: number;
   p95DurationMs: number;
   sampleSize: number;
 } | null;
@@ -228,6 +233,7 @@ export function buildPipelineStageStripData(input: {
       datum.stepName,
       {
         avgDurationMs: datum.avgDurationMs,
+        p50DurationMs: datum.p50DurationMs,
         p95DurationMs: datum.p95DurationMs,
         sampleSize: datum.sampleSize,
       },
