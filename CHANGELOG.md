@@ -1,3 +1,10 @@
+# [2.4.0](https://github.com/betcocorp/bex2.0/compare/v2.3.0...v2.4.0) (2026-08-22)
+
+
+### Features
+
+* **B0-629:** replace /admin with Mission Control dashboard ([1e2efb0](https://github.com/betcocorp/bex2.0/commit/1e2efb0e9f9b09c4b6bbfd760e8e9eda92efe960))
+
 # [2.3.0](https://github.com/betcocorp/bex2.0/compare/v2.2.0...v2.3.0) (2026-08-22)
 
 
