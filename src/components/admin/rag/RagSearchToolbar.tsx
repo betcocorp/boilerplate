@@ -44,8 +44,14 @@ export function RagSearchToolbar({
   settings,
 }: RagSearchToolbarProps) {
   const chips: Array<{ label: string; value: string }> = [
-    { label: 'Scope', value: SCOPE_CHIP_LABELS[settings.scope] ?? settings.scope },
-    { label: 'Retrieval', value: settings.retrieval === 'vector' ? 'Vector' : 'Hybrid' },
+    {
+      label: 'Scope',
+      value: SCOPE_CHIP_LABELS[settings.scope] ?? settings.scope,
+    },
+    {
+      label: 'Retrieval',
+      value: settings.retrieval === 'vector' ? 'Vector' : 'Hybrid',
+    },
     { label: 'Limit', value: settings.limit.trim() || '8' },
     { label: 'Section', value: settings.sectionType || 'Any' },
     { label: 'Floor', value: settings.minSimilarity.trim() || 'none' },
@@ -76,7 +82,6 @@ export function RagSearchToolbar({
             variant="outline"
           >
             <SlidersHorizontal className="size-4" />
-            Retrieval settings
             <Badge variant={changedCount > 0 ? 'default' : 'secondary'}>
               {changedCount > 0 ? changedCount : 'default'}
             </Badge>
