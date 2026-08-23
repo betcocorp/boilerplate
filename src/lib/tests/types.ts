@@ -24,6 +24,15 @@ export function isCompletedRunStatus(status: string): boolean {
 export type TestRecord = Tables<'tests'>;
 export type TestRecordWithCompletionCount = TestRecord & {
   completed_runs_count: number;
+  /**
+   * B0-630 — mean of `report_state->overall->>avg` across this dataset's completed reports,
+   * rounded to one decimal (the precision the UI renders, so the number and its derived letter
+   * grade always agree). `null` when no run has a completed report carrying a score —
+   * pre-B0-609 reports omit the key entirely.
+   */
+  avg_report_score: number | null;
+  /** B0-630 — how many runs contributed to `avg_report_score`. */
+  scored_runs_count: number;
 };
 export type TestItemRecord = Tables<'test_items'>;
 export type TestResultRecord = Tables<'test_results'>;

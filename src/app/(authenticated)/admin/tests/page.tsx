@@ -17,6 +17,7 @@ import {
 } from '~/components/ui/table';
 import { V1_AGENT_REGISTRY } from '~/lib/agents/agent-registry';
 import { getGoldenSetMembership } from '~/lib/tests/golden-set';
+import { gradeFromScore } from '~/lib/tests/report/metrics';
 import { listTests } from '~/lib/tests/repository';
 import { TEST_TEMPLATE_COLUMNS } from '~/lib/tests/template';
 import { getTierTargets } from '~/lib/tests/tier-targets';
@@ -316,6 +317,7 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
                 <TableHead>Name</TableHead>
                 <TableHead>Golden</TableHead>
                 <TableHead>Intended agent</TableHead>
+                <TableHead>Avg Score</TableHead>
                 <TableHead>Rows</TableHead>
                 <TableHead>Completed runs</TableHead>
                 <TableHead>Status</TableHead>
@@ -325,7 +327,7 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
             <TableBody>
               {tests.length === 0 ? (
                 <TableRow>
-                  <TableCell className="text-slate-500" colSpan={6}>
+                  <TableCell className="text-slate-500" colSpan={8}>
                     No datasets uploaded yet.
                   </TableCell>
                 </TableRow>
@@ -377,6 +379,22 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
                             (a) => a.id === test.intended_agent,
                           )?.label ?? test.intended_agent)
                         : '—'}
+                    </TableCell>
+                    <TableCell
+                      className="whitespace-nowrap tabular-nums text-slate-700"
+                      title={
+                        test.avg_report_score === null
+                          ? 'No run has a completed report score yet'
+                          : `Average of ${test.scored_runs_count} scored run${
+                              test.scored_runs_count === 1 ? '' : 's'
+                            }`
+                      }
+                    >
+                      {test.avg_report_score === null
+                        ? '—'
+                        : `${test.avg_report_score.toFixed(1)}/100 (${gradeFromScore(
+                            test.avg_report_score,
+                          )})`}
                     </TableCell>
                     <TableCell>{test.row_count}</TableCell>
                     <TableCell>{test.completed_runs_count}</TableCell>
