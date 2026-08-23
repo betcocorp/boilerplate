@@ -4,8 +4,6 @@ import { connection } from 'next/server';
 import { AdminTestsActionToast } from '~/components/admin/tests/AdminTestsActionToast';
 import { CreateOrUploadTestDatasetDialog } from '~/components/admin/tests/CreateOrUploadTestDatasetDialog';
 import { Button } from '~/components/ui/button';
-import { Input } from '~/components/ui/input';
-import { Label } from '~/components/ui/label';
 import {
   Table,
   TableBody,
@@ -17,7 +15,6 @@ import {
 import { V1_AGENT_REGISTRY } from '~/lib/agents/agent-registry';
 import { gradeFromScore } from '~/lib/tests/report/metrics';
 import { listTests } from '~/lib/tests/repository';
-import { TEST_TEMPLATE_COLUMNS } from '~/lib/tests/template';
 
 import {
   deleteTestAction,
@@ -44,11 +41,7 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
   // B0-585 — the per-test latest-result and cross-run similarity roll-up that used to fan out
   // over 20 runs per test on every load is decommissioned: run-level figures live on
   // /admin/tests/[testId], golden-set health on /admin/bex/health.
-  const [tests, tierTargets, goldenMembership] = await Promise.all([
-    listTests(),
-    getTierTargets(),
-    getGoldenSetMembership(),
-  ]);
+  const tests = await listTests();
 
   return (
     <div className="flex flex-1 bg-slate-50">
