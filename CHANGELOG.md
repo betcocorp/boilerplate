@@ -1,3 +1,19 @@
+# [2.5.0](https://github.com/betcocorp/bex2.0/compare/v2.4.0...v2.5.0) (2026-08-23)
+
+
+### Bug Fixes
+
+* **B0-484:** gate corpus alias mining on name derivation ([e1797fb](https://github.com/betcocorp/bex2.0/commit/e1797fbb199ee6fd12ed21e08123ee18371f93a0))
+* **B0-631:** aggressive table width reduction ([7fea643](https://github.com/betcocorp/bex2.0/commit/7fea6435189d4cbc6f0745477545fe8d7fb6468d))
+* **B0-631:** improve dialog scroll behavior ([96a5661](https://github.com/betcocorp/bex2.0/commit/96a566117b6db0105bf7ccb5b5281b408f5e18d0))
+* **B0-631:** reduce horizontal scrolling in column reference table ([e982c11](https://github.com/betcocorp/bex2.0/commit/e982c11307125939f81bf821d0c50fc887844c3d))
+* **B0-631:** set fixed width for column reference description ([77bf9b4](https://github.com/betcocorp/bex2.0/commit/77bf9b41dcaebbafe81c34e182b957b65b7beea0))
+
+
+### Features
+
+* **B0-249:** link resolvable label docs to product-line entities ([1021a8c](https://github.com/betcocorp/bex2.0/commit/1021a8c1224aa39830872506cb312330157d4359))
+
 # [2.4.0](https://github.com/betcocorp/bex2.0/compare/v2.3.0...v2.4.0) (2026-08-22)
 
 
