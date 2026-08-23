@@ -40,7 +40,7 @@
  * Env (from .env.local): NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY.
  */
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { createClient } from '@supabase/supabase-js';
 
 // ---------------------------------------------------------------------------
@@ -84,6 +84,8 @@ function log(msg) {
 // ---------------------------------------------------------------------------
 const args = process.argv.slice(2);
 const DRY_RUN = args.includes('--dry-run');
+/** Optional `--json=<path>`: also write the full deduped candidate list to disk for review. */
+const JSON_OUT = args.find((a) => a.startsWith('--json='))?.slice('--json='.length) ?? null;
 
 // ---------------------------------------------------------------------------
 // Text helpers
@@ -202,6 +204,36 @@ export function detectParenthetical(records, entityTitleTokens) {
 // ---------------------------------------------------------------------------
 // Pattern 2 — all-caps token co-occurring with the product's own title
 // ---------------------------------------------------------------------------
+
+/** product_line_profile chunks embed structured identifier lines verbatim —
+ * "Product key: AFFE515B-53A8-4D2C-ABE2-C5698A554082", "SKU: E87383-00",
+ * "Inventory ID: E010507EQP0600BE1200". Hyphens are word boundaries, so the
+ * alpha-only segments of a GUID (ABDA, CEEB, BDFC, ...) match the all-caps token
+ * regex and were by far the largest source of junk candidates. Mask every
+ * identifier out before tokenizing. */
+export function maskIdentifiers(text) {
+  return text
+    .replace(/\b[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\b/g, ' ')
+    .replace(/^[ \t]*(?:Product key|SKU|Inventory ID|Item|UPC|GTIN)[ \t]*:.*$/gim, ' ')
+    .replace(/\b[A-Z]{1,2}\d{5,}[A-Z0-9]*\b/g, ' '); // bare InvtID / SKU codes
+}
+
+/** True when `token` is exactly the initials of some contiguous run of words in
+ * the product's own title (e.g. "Hard As Nails" -> HAN). This is the same
+ * name-derivation test pattern 1 applies, minus the parentheses. Without it,
+ * "co-occurs with the title" admits every pathogen (HIV, MRSA, VRE), standards
+ * body (ASTM, NWFA), and unit (GPM, PSI, CFU) that legitimately appears in
+ * product copy but is never a name for the product. */
+export function matchesTitleInitials(token, title) {
+  const words = title.replace(/[®™]/g, '').split(/[^A-Za-z0-9]+/).filter(Boolean);
+  const n = token.length;
+  if (n < 2 || words.length < n) return false;
+  for (let i = 0; i + n <= words.length; i++) {
+    if (initialsOf(words.slice(i, i + n).join(' ')) === token) return true;
+  }
+  return false;
+}
+
 // Minimum length 3 (not 2) for this pattern specifically: 2-letter all-caps tokens (IN, ID,
 // AC, OF, OR, TO, ...) occur so often by incidental capitalization/emphasis in running text
 // that they swamp this already-lowest-confidence pattern with noise the other two patterns
@@ -220,7 +252,7 @@ function isPartOfAllCapsRun(text, index, length) {
   return isShouting(prevWord) || isShouting(nextWord);
 }
 
-export function detectCooccurrence(records, entityTitleTokens, excludeKeys) {
+export function detectCooccurrence(records, entityTitleTokens, excludeKeys, entities) {
   // First pass: collect every (alias, product line) hit along with which distinct records it
   // showed up in. "Co-occurrence" implies a recurring association, not a one-off — a token that
   // only ever appears once in a single chunk (e.g. one cell of a wiring-diagram table) is much
@@ -236,7 +268,10 @@ export function detectCooccurrence(records, entityTitleTokens, excludeKeys) {
     // practice, was the single biggest source of noise seen while tuning this pattern (a large
     // spare-parts catalog product line whose profile document is full of generic part jargon).
     if (!titleTokens || titleTokens.length < 2) return;
-    const textLower = rec.text.toLowerCase();
+    const entityTitle = entities?.get(rec.entityId)?.title;
+    if (!entityTitle) return;
+    const text = maskIdentifiers(rec.text);
+    const textLower = text.toLowerCase();
     const overlap = titleTokens.filter((t) => textLower.includes(t)).length;
     const requiredOverlap = Math.min(2, titleTokens.length);
     if (overlap < requiredOverlap) return;
@@ -244,17 +279,18 @@ export function detectCooccurrence(records, entityTitleTokens, excludeKeys) {
     ALLCAPS_TOKEN_RE.lastIndex = 0;
     let m;
     const seenInRecord = new Set();
-    while ((m = ALLCAPS_TOKEN_RE.exec(rec.text))) {
+    while ((m = ALLCAPS_TOKEN_RE.exec(text))) {
       const token = m[0];
       if (GENERIC_ACRONYM_BLOCKLIST.has(token)) continue;
       if (seenInRecord.has(token)) continue;
-      if (isPartOfAllCapsRun(rec.text, m.index, token.length)) continue;
+      if (isPartOfAllCapsRun(text, m.index, token.length)) continue;
+      if (!matchesTitleInitials(token, entityTitle)) continue;
       seenInRecord.add(token);
       const aliasNorm = normalizeAlias(token);
       const key = `${aliasNorm}::${rec.productLineKey}`;
       if (excludeKeys.has(key)) continue;
       if (!hits.has(key)) {
-        hits.set(key, { alias: token, entityId: rec.entityId, productLineKey: rec.productLineKey, titleTokens, recordIds: new Set() });
+        hits.set(key, { alias: token, entityId: rec.entityId, productLineKey: rec.productLineKey, entityTitle, recordIds: new Set() });
       }
       hits.get(key).recordIds.add(recordIdx);
     }
@@ -271,7 +307,7 @@ export function detectCooccurrence(records, entityTitleTokens, excludeKeys) {
       source: 'corpus_scan_cooccurrence',
       aliasType: 'synonym',
       confidence: 0.35,
-      evidence: `"${hit.alias}" in ${hit.recordIds.size} passages near title tokens [${hit.titleTokens.join(', ')}]`,
+      evidence: `"${hit.alias}" = initials of "${hit.entityTitle}", in ${hit.recordIds.size} passages`,
     });
   }
   return candidates;
@@ -311,12 +347,31 @@ export function hasStandaloneOccurrence(text, head, fullTitle) {
   return false;
 }
 
+/** Suffixes that carry REGION or LIFECYCLE STATUS. Dropping one of these to form a
+ * "shorter name" would produce an alias that silently erases the very distinction the
+ * suffix exists to make — e.g. "Neutral Disinfectant Cleaner (Canada Only)" -> "Neutral
+ * Disinfectant Cleaner". Per the org-wide regulated-data rule, active/discontinued status
+ * and region are never inferred away, so these titles yield no head-phrase alias. */
+const REGION_OR_STATUS_SUFFIX_RE =
+  /\b(canada|canadian|us|usa|united states|mexico|export|overseas|only|discontinued|obsolete|inactive|nla|do not use|replaced)\b/i;
+
+/** Catalog bookkeeping buckets, not products. Their titles head-phrase into generic
+ * strings ("Demo Kits", "RAW MATERIAL", "Unclassified NS Parts") that would collide
+ * across many unrelated product lines. */
+const CATALOG_BUCKET_RE =
+  /\b(unclass|unclassified|raw materials?|demo kits?|costing|packaging|price lists?|support materials?|misc|miscellaneous|samples?|billing)\b/i;
+
 export function detectNounPhraseVariants(entities, recordsByEntity) {
   const candidates = [];
   for (const [entityId, entity] of entities) {
     const head = deriveHeadPhrase(entity.title);
     if (!head || head.length < 4) continue;
     if (head.split(/\s+/).filter(Boolean).length < 2) continue;
+    if (CATALOG_BUCKET_RE.test(entity.title)) continue;
+    // Only the dropped remainder is checked: a region/status word inside the head itself
+    // is retained by the alias, so it loses nothing.
+    const dropped = entity.title.slice(head.length);
+    if (REGION_OR_STATUS_SUFFIX_RE.test(dropped)) continue;
     // Compare against the title with the same trailing punctuation stripped, so a title that
     // merely ends in "...product." doesn't produce a "new" head phrase that's really identical.
     const normalizedTitle = entity.title.trim().replace(/[!?.,;:]+$/, '').toLowerCase();
@@ -577,7 +632,7 @@ async function main() {
   // guarded by the initials/title-overlap and title-derivation checks respectively.
   const claimedKeys = new Set(parenthetical.map((c) => `${c.aliasNorm}::${c.productLineKey}`));
   const cooccurrenceRecords = records.filter((r) => r.documentKind !== 'label');
-  const cooccurrence = detectCooccurrence(cooccurrenceRecords, entityTitleTokens, claimedKeys);
+  const cooccurrence = detectCooccurrence(cooccurrenceRecords, entityTitleTokens, claimedKeys, entities);
 
   // Pattern 3
   const recordsByEntity = new Map();
@@ -597,11 +652,38 @@ async function main() {
     const current = bestByKey.get(key);
     if (!current || c.confidence > current.confidence) bestByKey.set(key, c);
   }
-  const deduped = [...bestByKey.values()];
+  let deduped = [...bestByKey.values()];
+
+  // Drop aliases mined for more than one product line. resolveProductEntityByName only
+  // resolves an ambiguous alias_norm when exactly one candidate line is verified, and these
+  // all land unverified — so a multi-line mined alias can never resolve, and would only add
+  // review-queue noise (e.g. "Demo Kits" derived from six unrelated catalog lines).
+  const linesPerAlias = new Map();
+  for (const c of deduped) {
+    if (!linesPerAlias.has(c.aliasNorm)) linesPerAlias.set(c.aliasNorm, new Set());
+    linesPerAlias.get(c.aliasNorm).add(c.productLineKey);
+  }
+  const ambiguous = deduped.filter((c) => linesPerAlias.get(c.aliasNorm).size > 1);
+  deduped = deduped.filter((c) => linesPerAlias.get(c.aliasNorm).size === 1);
+  if (ambiguous.length > 0) {
+    const names = [...new Set(ambiguous.map((c) => c.alias))];
+    log(`Dropped ${ambiguous.length} candidate(s) spanning ${names.length} ambiguous alias(es): ${names.slice(0, 15).join(', ')}${names.length > 15 ? ', ...' : ''}`);
+  }
+
+  // An alias identical to a name the resolver already has for the same line adds nothing.
+  deduped = deduped.filter((c) => {
+    const entity = entities.get(c.entityId);
+    return !entity || normalizeAlias(entity.title) !== c.aliasNorm;
+  });
 
   log('');
   log(`=== Candidate summary (${deduped.length} unique alias/product-line pairs; ${allCandidates.length} raw hits) ===`);
   summarize(deduped);
+
+  if (JSON_OUT) {
+    writeFileSync(JSON_OUT, JSON.stringify(deduped, null, 2));
+    log(`Wrote ${deduped.length} candidates to ${JSON_OUT}`);
+  }
 
   if (DRY_RUN) {
     log('');
