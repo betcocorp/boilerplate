@@ -147,24 +147,24 @@ export function CreateOrUploadTestDatasetDialog({
                 Column reference
               </summary>
               <div className="mt-3 min-w-0 overflow-x-auto">
-                <Table className="w-full">
+                <Table className="w-full text-xs">
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Column</TableHead>
-                      <TableHead>Required</TableHead>
-                      <TableHead>What it&rsquo;s for</TableHead>
+                      <TableHead className="w-24">Name</TableHead>
+                      <TableHead className="w-16">Req.</TableHead>
+                      <TableHead>Description</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {TEST_TEMPLATE_COLUMNS.map((column) => (
                       <TableRow key={column.name}>
-                        <TableCell className="font-mono text-xs text-slate-700">
+                        <TableCell className="w-24 font-mono text-slate-700">
                           {column.name}
                         </TableCell>
-                        <TableCell className="text-xs text-slate-600">
+                        <TableCell className="w-16 text-slate-600">
                           {column.required ? 'Yes' : 'No'}
                         </TableCell>
-                        <TableCell className="max-w-[10rem] text-xs text-slate-600 leading-tight">
+                        <TableCell className="text-slate-600 leading-snug">
                           {column.help}
                         </TableCell>
                       </TableRow>
