@@ -158,13 +158,13 @@ export function CreateOrUploadTestDatasetDialog({
                   <TableBody>
                     {TEST_TEMPLATE_COLUMNS.map((column) => (
                       <TableRow key={column.name}>
-                        <TableCell className="whitespace-nowrap font-mono text-xs text-slate-700">
+                        <TableCell className="font-mono text-xs text-slate-700">
                           {column.name}
                         </TableCell>
-                        <TableCell className="whitespace-nowrap text-xs text-slate-600">
-                          {column.required ? 'Required' : 'Optional'}
+                        <TableCell className="text-xs text-slate-600">
+                          {column.required ? 'Yes' : 'No'}
                         </TableCell>
-                        <TableCell className="w-64 text-sm text-slate-600">
+                        <TableCell className="max-w-[10rem] text-xs text-slate-600 leading-tight">
                           {column.help}
                         </TableCell>
                       </TableRow>
