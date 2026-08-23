@@ -164,7 +164,7 @@ export function CreateOrUploadTestDatasetDialog({
                         <TableCell className="whitespace-nowrap text-xs text-slate-600">
                           {column.required ? 'Required' : 'Optional'}
                         </TableCell>
-                        <TableCell className="text-sm text-slate-600">
+                        <TableCell className="w-64 text-sm text-slate-600">
                           {column.help}
                         </TableCell>
                       </TableRow>
