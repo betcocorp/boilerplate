@@ -84,13 +84,22 @@ export async function listTests() {
 
   const tests = (assertNoError(result) || []) as TestRecord[];
 
-  const completionCounts = await supabase
-    .from('test_results')
-    .select('test_id')
-    .in(
-      'status',
-      COMPLETED_RUN_STATUSES as unknown as string[],
-    );
+  // Both roll-ups are single, whole-table queries folded in memory — never a per-test fan-out
+  // (B0-585 decommissioned that). The score query projects only the scalar JSON path so the heavy
+  // `report_state.caseScores` prose stays in Postgres.
+  const [completionCounts, reportScores] = await Promise.all([
+    supabase
+      .from('test_results')
+      .select('test_id')
+      .in(
+        'status',
+        COMPLETED_RUN_STATUSES as unknown as string[],
+      ),
+    supabase
+      .from('test_results')
+      .select('test_id, overall_avg:report_state->overall->>avg')
+      .eq('report_state->>status', 'completed'),
+  ]);
 
   const countsByTestId = new Map<string, number>();
   const countData = assertNoError(completionCounts) || [];
@@ -98,10 +107,38 @@ export async function listTests() {
     countsByTestId.set(row.test_id, (countsByTestId.get(row.test_id) ?? 0) + 1);
   }
 
-  return tests.map((test) => ({
-    ...test,
-    completed_runs_count: countsByTestId.get(test.id) ?? 0,
-  })) as TestRecordWithCompletionCount[];
+  // B0-630 — PostgREST returns the `->>` projection as a string (or null), so parse and guard.
+  const scoreTotalsByTestId = new Map<string, { sum: number; count: number }>();
+  const scoreData = assertNoError(reportScores) || [];
+  for (const row of scoreData as Array<{ test_id: string; overall_avg: string | null }>) {
+    if (typeof row.overall_avg !== 'string' || row.overall_avg.trim() === '') {
+      continue;
+    }
+    const avg = Number(row.overall_avg);
+    if (!Number.isFinite(avg)) {
+      continue;
+    }
+    const totals = scoreTotalsByTestId.get(row.test_id) ?? { sum: 0, count: 0 };
+    totals.sum += avg;
+    totals.count += 1;
+    scoreTotalsByTestId.set(row.test_id, totals);
+  }
+
+  return tests.map((test) => {
+    const totals = scoreTotalsByTestId.get(test.id);
+    return {
+      ...test,
+      completed_runs_count: countsByTestId.get(test.id) ?? 0,
+      // Rounded to the single decimal the UI renders, so the displayed number and the letter
+      // grade derived from it can never disagree at a boundary (an unrounded 89.96 would
+      // otherwise render as "90.0/100 (B)").
+      avg_report_score:
+        totals && totals.count > 0
+          ? Math.round((totals.sum / totals.count) * 10) / 10
+          : null,
+      scored_runs_count: totals?.count ?? 0,
+    };
+  }) as TestRecordWithCompletionCount[];
 }
 
 export async function getTestById(testId: string) {

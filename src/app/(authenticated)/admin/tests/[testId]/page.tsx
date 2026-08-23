@@ -18,6 +18,8 @@ import {
   TableRow,
 } from '~/components/ui/table';
 import { V1_AGENT_REGISTRY } from '~/lib/agents/agent-registry';
+import { isBexModelTag } from '~/lib/constants/models';
+import { resolveResponsesModel } from '~/lib/openai/client';
 import {
   buildPromptAggregations,
   extractItemMaxSimilarity,
@@ -119,6 +121,61 @@ function RunTrendIndicator({
 
 function formatElapsedDelta(absoluteDelta: number) {
   return formatDurationSeconds(absoluteDelta);
+}
+
+/** Reads `run_options.modelTag` off a run row without trusting the generated `Json` type. */
+function extractRunModelTag(runOptions: unknown): string | null {
+  if (!runOptions || typeof runOptions !== 'object' || Array.isArray(runOptions)) {
+    return null;
+  }
+  const tag = (runOptions as Record<string, unknown>).modelTag;
+  return typeof tag === 'string' && tag.trim() !== '' ? tag.trim() : null;
+}
+
+/**
+ * B0-632 — the model a run was executed with, from `run_options.modelTag`. A tag is not a model id
+ * (see `~/lib/constants/models`), so it is resolved the same way the run-detail page resolves it.
+ *
+ * `preview` is deliberately badged rather than shown as a bare model name: it resolves against
+ * `BEX_RESPONSES_MODEL` at render time, so it reports today's default, not necessarily the model
+ * that actually ran. Runs predating the option carry no tag at all and must stay an em dash —
+ * defaulting them to `preview` would invent a fact the row never recorded.
+ */
+function RunModelLabel({ runOptions }: { runOptions: unknown }) {
+  const tag = extractRunModelTag(runOptions);
+
+  if (!tag) {
+    return (
+      <span className="text-slate-400" title="Model not recorded for this run">
+        —
+      </span>
+    );
+  }
+
+  // `resolveResponsesModel` throws on unknown tags that need an env override, so never hand it one.
+  if (!isBexModelTag(tag)) {
+    return (
+      <span title={`Unrecognised model tag: ${tag}`}>{tag}</span>
+    );
+  }
+
+  const resolved = resolveResponsesModel(tag);
+
+  if (tag === 'preview') {
+    return (
+      <span
+        className="inline-flex items-center gap-1.5"
+        title={`Run recorded the "preview" tag, not a pinned model. "${resolved}" is the current environment default, resolved just now — it may differ from the model that actually ran.`}
+      >
+        <span>{resolved}</span>
+        <Badge className="px-1 py-0 text-[10px] font-normal" variant="outline">
+          preview
+        </Badge>
+      </span>
+    );
+  }
+
+  return <span title={`Model tag: ${tag}`}>{resolved}</span>;
 }
 
 type PageProps = {
@@ -391,6 +448,9 @@ export default async function AdminTestDetailsPage({
                   <TableHead title="Total answer time: sum of each prompt's elapsed time for this run">
                     Elapsed
                   </TableHead>
+                  <TableHead title="Model this run was executed with, from its run options (B0-632)">
+                    Model
+                  </TableHead>
                   <TableHead>Started / completed</TableHead>
                   <TableHead>Actions</TableHead>
                 </TableRow>
@@ -398,7 +458,7 @@ export default async function AdminTestDetailsPage({
               <TableBody>
                 {results.length === 0 ? (
                   <TableRow>
-                    <TableCell className="text-slate-500" colSpan={10}>
+                    <TableCell className="text-slate-500" colSpan={11}>
                       No runs yet for this dataset.
                     </TableCell>
                   </TableRow>
@@ -510,6 +570,9 @@ export default async function AdminTestDetailsPage({
                               previous={previousResult?.elapsed_ms}
                             />
                           </span>
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap text-xs text-slate-600">
+                          <RunModelLabel runOptions={result.run_options} />
                         </TableCell>
                         <TableCell className="text-slate-600">
                           <div className="flex flex-col gap-1 text-xs leading-tight">
