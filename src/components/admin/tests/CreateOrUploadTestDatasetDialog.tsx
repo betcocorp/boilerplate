@@ -50,7 +50,7 @@ export function CreateOrUploadTestDatasetDialog({
           Create or upload dataset
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+      <DialogContent className="flex max-h-[90vh] flex-col sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>Create or upload test dataset</DialogTitle>
           <DialogDescription>
@@ -64,7 +64,7 @@ export function CreateOrUploadTestDatasetDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-6 py-4">
+        <div className="space-y-6 overflow-y-auto py-4">
           {/* Form section */}
           <form
             action={uploadTestCsvAction}
@@ -146,8 +146,8 @@ export function CreateOrUploadTestDatasetDialog({
               <summary className="cursor-pointer text-sm font-medium text-slate-800">
                 Column reference
               </summary>
-              <div className="mt-3 overflow-x-auto">
-                <Table>
+              <div className="mt-3 min-w-0 overflow-x-auto">
+                <Table className="w-full">
                   <TableHeader>
                     <TableRow>
                       <TableHead>Column</TableHead>
