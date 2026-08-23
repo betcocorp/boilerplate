@@ -1,3 +1,4 @@
+import { GoldenSetAndTierTargets } from '~/components/admin/settings/GoldenSetAndTierTargets';
 import { SettingsPanel } from '~/components/admin/settings/SettingsPanel';
 
 export const metadata = {
@@ -14,6 +15,7 @@ export default async function SettingsPage() {
           Configure environment variables and feature toggles for Bex.
         </p>
       </div>
+      <GoldenSetAndTierTargets />
       <SettingsPanel />
     </div>
   );
