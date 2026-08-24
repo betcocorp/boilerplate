@@ -1,4 +1,5 @@
 import type { BetcoCandidate } from '~/lib/recommendations/candidate-retrieval';
+import { getBooleanSetting } from '~/lib/settings/settings-service';
 import type { EnrichedCompetitorSpec } from '~/lib/websearch/enrich-competitor-spec';
 
 /**
@@ -114,8 +115,8 @@ export function resolveXrefThreshold(override?: number | null): number {
  * withheld. Evidence/candidate grounding and validator-not-approved / requires-human-review /
  * unsupported-safety-claim are NOT affected and keep running exactly as before.
  */
-export function isConfidenceGatingDisabled(): boolean {
-  return process.env.BEX_DISABLE_CONFIDENCE_GATING === 'true';
+export async function isConfidenceGatingDisabled(): Promise<boolean> {
+  return getBooleanSetting('BEX_DISABLE_CONFIDENCE_GATING', false);
 }
 
 export type RecommendationGate = {
@@ -124,12 +125,12 @@ export type RecommendationGate = {
   declineReason: string | null;
 };
 
-export function gateRecommendation(input: {
+export async function gateRecommendation(input: {
   overallConfidence: number;
   thresholdOverride?: number | null;
-}): RecommendationGate {
+}): Promise<RecommendationGate> {
   const thresholdUsed = resolveXrefThreshold(input.thresholdOverride);
-  if (isConfidenceGatingDisabled()) {
+  if (await isConfidenceGatingDisabled()) {
     return { answered: true, thresholdUsed, declineReason: null };
   }
   const answered = input.overallConfidence >= thresholdUsed;

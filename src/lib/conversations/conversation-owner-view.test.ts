@@ -32,12 +32,24 @@ describe('resolveIsOwner', () => {
 describe('resolveConversationOwnerAttribution', () => {
   const admin = { kind: 'user', userId: 'admin-1', canViewAll: true } as const;
 
-  it('reports owner "admin" for a test_run row, ignoring user_id', () => {
+  it('reports owner "admin" for a test_run row with no resolvable test_name, ignoring user_id', () => {
     const result = resolveConversationOwnerAttribution(
       { source: 'test_run', user_id: null },
       admin,
     );
     expect(result).toEqual({ owner: 'admin', source: 'test_run', isOwner: false });
+  });
+
+  it('reports owner { kind: "test", title } for a test_run row with a resolved test_name (B0-645)', () => {
+    const result = resolveConversationOwnerAttribution(
+      { source: 'test_run', user_id: null, test_name: 'Product Golden Test Set' },
+      admin,
+    );
+    expect(result).toEqual({
+      owner: { kind: 'test', title: 'Product Golden Test Set' },
+      source: 'test_run',
+      isOwner: false,
+    });
   });
 
   it('reports owner null for a legacy chat row with no user_id', () => {

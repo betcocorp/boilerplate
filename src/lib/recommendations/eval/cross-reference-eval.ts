@@ -106,7 +106,7 @@ export async function runCrossReferenceEval(
     const categoryMatch =
       grounded && groundedChemistryClass === testCase.expectedChemistryClass;
 
-    const gate = evaluateRecommendationGate({
+    const gate = await evaluateRecommendationGate({
       baseConfidence: 0.9,
       topSimilarity: 0.85,
       competitorChemistryClass: groundedChemistryClass,

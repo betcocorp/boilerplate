@@ -48,9 +48,6 @@ import { PERMISSIONS } from '~/lib/permissions/constants';
 import { usePermissionsStore } from '~/lib/stores/permissions';
 import type { ChatMessage, Conversation } from '~/types/bex';
 
-const STREAMING_ROLLOUT_COHORT =
-  process.env.NEXT_PUBLIC_BEX_STREAMING_ROLLOUT_COHORT ?? 'default';
-
 function toMillis(iso: string): number {
   const t = Date.parse(iso);
   return Number.isFinite(t) ? t : Date.now();
@@ -66,7 +63,25 @@ function makeOptimisticMessage(content: string): ChatMessage {
   };
 }
 
-export function BexChatApp() {
+/**
+ * Server-resolved `settings`-table values (`NEXT_PUBLIC_BEX_AI_ELEMENTS_UI`,
+ * `NEXT_PUBLIC_BEX_STREAMING_ROLLOUT_COHORT`) passed down from the page component, which can
+ * await the DB read this client component cannot make itself.
+ */
+export type BexChatAppSettings = {
+  useAiElements: boolean;
+  streamingRolloutCohort: string;
+};
+
+const DEFAULT_BEX_CHAT_APP_SETTINGS: BexChatAppSettings = {
+  useAiElements: false,
+  streamingRolloutCohort: 'default',
+};
+
+export function BexChatApp({
+  settings = DEFAULT_BEX_CHAT_APP_SETTINGS,
+}: { settings?: BexChatAppSettings } = {}) {
+  const { useAiElements, streamingRolloutCohort } = settings;
   const [hydrated, setHydrated] = useState(false);
   const [sessions, setSessions] = useState<Conversation[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -454,6 +469,7 @@ export function BexChatApp() {
           model,
           useValidator,
           agentMode,
+          rolloutCohort: streamingRolloutCohort,
           onTextDelta: (delta) => {
             queueStreamingDelta(delta);
           },
@@ -806,7 +822,7 @@ export function BexChatApp() {
                       ? 'preview → BEX_RESPONSES_MODEL'
                       : model}
                     {' · transport: '}
-                    {`stream (${STREAMING_ROLLOUT_COHORT})`}
+                    {`stream (${streamingRolloutCohort})`}
                     {' · markdown: '}
                     {'streamdown'}
                     {(() => {
@@ -905,6 +921,7 @@ export function BexChatApp() {
               void sendUserText(t);
             }}
             showWelcome={showFullWelcome}
+            useAiElements={useAiElements}
           />
 
           {!showFullWelcome &&
@@ -945,7 +962,11 @@ export function BexChatApp() {
             <BexChatComposer
               disabled={isTyping || activeConversation?.isOwner === false}
               onChange={setDraft}
-              onSend={() => void sendUserText(draft)}
+              onSend={() => {
+                const text = draft;
+                setDraft('');
+                void sendUserText(text);
+              }}
               onUseValidatorChange={setUseValidator}
               useValidator={useValidator}
               value={draft}

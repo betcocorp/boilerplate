@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { BetcoCandidate } from '~/lib/recommendations/candidate-retrieval';
 import { XREF_DECLINE_COPY } from '~/lib/recommendations/confidence-scoring';
@@ -9,9 +9,17 @@ import {
   type XrefLatencyPolicy,
   type XrefTimingBreakdown,
 } from '~/lib/recommendations/recommend-cross-reference';
+import { getNumberSetting } from '~/lib/settings/settings-service';
 import type { EnrichedCompetitorSpec } from '~/lib/websearch/enrich-competitor-spec';
 import { MockWebSearchProvider } from '~/lib/websearch/mock-provider';
 import { WebSearchService } from '~/lib/websearch/web-search-service';
+
+// Keep the confidence-gate/latency-policy DB reads out of this file's tests: default to the
+// same "gating on, 20s ceiling" behavior the old env-var defaults gave every test here.
+vi.mock('~/lib/settings/settings-service', () => ({
+  getBooleanSetting: vi.fn().mockResolvedValue(false),
+  getNumberSetting: vi.fn().mockResolvedValue(20_000),
+}));
 
 const SPEC: EnrichedCompetitorSpec = {
   chemistryClass: 'quat',
@@ -608,8 +616,8 @@ describe('B0-329: latency ceiling / circuit breaker', () => {
 });
 
 describe('loadXrefLatencyPolicy (B0-329)', () => {
-  it('defaults every budget and honors env overrides without a code change', () => {
-    expect(loadXrefLatencyPolicy({} as NodeJS.ProcessEnv)).toEqual({
+  it('defaults every budget and honors env overrides without a code change', async () => {
+    expect(await loadXrefLatencyPolicy({} as NodeJS.ProcessEnv)).toEqual({
       totalBudgetMs: 20_000,
       webSearchBudgetMs: 12_000,
       enrichBudgetMs: 8_000,
@@ -617,15 +625,14 @@ describe('loadXrefLatencyPolicy (B0-329)', () => {
       validateBudgetMs: 8_000,
     });
     expect(
-      loadXrefLatencyPolicy({
-        XREF_RECOMMENDATION_TIMEOUT_MS: '9000',
+      await loadXrefLatencyPolicy({
         XREF_WEB_SEARCH_TIMEOUT_MS: '4000',
         XREF_ENRICH_TIMEOUT_MS: '3000',
         XREF_RETRIEVE_TIMEOUT_MS: '2000',
         XREF_VALIDATE_TIMEOUT_MS: '1000',
       } as NodeJS.ProcessEnv),
     ).toEqual({
-      totalBudgetMs: 9000,
+      totalBudgetMs: 20_000,
       webSearchBudgetMs: 4000,
       enrichBudgetMs: 3000,
       retrieveBudgetMs: 2000,
@@ -633,10 +640,15 @@ describe('loadXrefLatencyPolicy (B0-329)', () => {
     });
     // Garbage / non-positive values fall back to the defaults rather than disabling the ceiling.
     expect(
-      loadXrefLatencyPolicy({ XREF_RECOMMENDATION_TIMEOUT_MS: '0' } as NodeJS.ProcessEnv).totalBudgetMs,
-    ).toBe(20_000);
+      (await loadXrefLatencyPolicy({ XREF_WEB_SEARCH_TIMEOUT_MS: '0' } as NodeJS.ProcessEnv)).webSearchBudgetMs,
+    ).toBe(12_000);
     expect(
-      loadXrefLatencyPolicy({ XREF_RECOMMENDATION_TIMEOUT_MS: 'soon' } as NodeJS.ProcessEnv).totalBudgetMs,
-    ).toBe(20_000);
+      (await loadXrefLatencyPolicy({ XREF_WEB_SEARCH_TIMEOUT_MS: 'soon' } as NodeJS.ProcessEnv)).webSearchBudgetMs,
+    ).toBe(12_000);
+  });
+
+  it('resolves totalBudgetMs from the `settings` table (XREF_RECOMMENDATION_TIMEOUT_MS)', async () => {
+    vi.mocked(getNumberSetting).mockResolvedValueOnce(9000);
+    expect((await loadXrefLatencyPolicy({} as NodeJS.ProcessEnv)).totalBudgetMs).toBe(9000);
   });
 });

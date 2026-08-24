@@ -1,10 +1,15 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const writeAuditLog = vi.fn();
 vi.mock('~/lib/audit/audit-log', () => ({
   writeAuditLog: (...args: unknown[]) => writeAuditLog(...args),
 }));
 
+vi.mock('~/lib/settings/settings-service', () => ({
+  getBooleanSetting: vi.fn().mockResolvedValue(false),
+}));
+
+import { getBooleanSetting } from '~/lib/settings/settings-service';
 import {
   isPermissionsEnforced,
   recordPermissionVerdict,
@@ -22,33 +27,26 @@ beforeEach(() => {
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   writeAuditLog.mockReset().mockResolvedValue(undefined);
   resetPermissionVerdictDedupe();
-  delete process.env.BEX_PERMISSIONS_ENFORCED;
-});
-
-afterEach(() => {
-  delete process.env.BEX_PERMISSIONS_ENFORCED;
+  vi.mocked(getBooleanSetting).mockReset().mockResolvedValue(false);
 });
 
 describe('isPermissionsEnforced', () => {
-  it('defaults to shadow mode when the env var is absent', () => {
-    expect(isPermissionsEnforced()).toBe(false);
+  it('defaults to shadow mode when the `settings` row is missing/unreadable', async () => {
+    expect(await isPermissionsEnforced()).toBe(false);
   });
 
-  it('enforces only on the exact string "true"', () => {
-    for (const value of ['', 'false', 'TRUE', 'True', '1', 'yes', ' true']) {
-      process.env.BEX_PERMISSIONS_ENFORCED = value;
-      expect(isPermissionsEnforced(), value).toBe(false);
-    }
-    process.env.BEX_PERMISSIONS_ENFORCED = 'true';
-    expect(isPermissionsEnforced()).toBe(true);
+  it('enforces only when the `settings` row resolves exactly `true`', async () => {
+    vi.mocked(getBooleanSetting).mockResolvedValueOnce(false);
+    expect(await isPermissionsEnforced()).toBe(false);
+    vi.mocked(getBooleanSetting).mockResolvedValueOnce(true);
+    expect(await isPermissionsEnforced()).toBe(true);
   });
 
-  it('is read at call time, so a flip takes effect without re-importing', () => {
-    expect(isPermissionsEnforced()).toBe(false);
-    process.env.BEX_PERMISSIONS_ENFORCED = 'true';
-    expect(isPermissionsEnforced()).toBe(true);
-    delete process.env.BEX_PERMISSIONS_ENFORCED;
-    expect(isPermissionsEnforced()).toBe(false);
+  it('is read at call time, so a flip takes effect without re-importing', async () => {
+    expect(await isPermissionsEnforced()).toBe(false);
+    vi.mocked(getBooleanSetting).mockResolvedValueOnce(true);
+    expect(await isPermissionsEnforced()).toBe(true);
+    expect(await isPermissionsEnforced()).toBe(false);
   });
 });
 
@@ -113,7 +111,7 @@ describe('recordPermissionVerdict', () => {
       reason: 'missing-permission',
       userId: 'u1',
     });
-    process.env.BEX_PERMISSIONS_ENFORCED = 'true';
+    vi.mocked(getBooleanSetting).mockResolvedValueOnce(true);
     await recordPermissionVerdict({
       surface: 'api',
       selector: 'navigation.sidebar.sds',

@@ -39,7 +39,7 @@ async function gateSignIn(params: {
   error?: unknown;
 }): Promise<true | SignInRejection> {
   const { rejection, reason, message, email, userId, provider, error } = params;
-  const enforced = isPermissionsEnforced();
+  const enforced = await isPermissionsEnforced();
 
   const fields = {
     reason,
@@ -153,19 +153,6 @@ export const authOptions: NextAuthOptions = {
           error,
         });
       }
-    },
-    async jwt({ token, account }) {
-      if (account) {
-        token.accessToken = account.access_token;
-      }
-      return token;
-    },
-    async session({ session, token }) {
-      if (token.accessToken) {
-        (session as { accessToken?: string }).accessToken =
-          token.accessToken as string;
-      }
-      return session;
     },
     async redirect({ url, baseUrl }) {
       if (url.startsWith("/")) {

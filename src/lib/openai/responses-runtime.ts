@@ -153,6 +153,20 @@ export type ResponsesRuntimeOptions = {
    * structured log.
    */
   onToolRoundsExhausted?: (info: { maxToolRounds: number; pendingCallCount: number }) => void;
+  /**
+   * B0-635 — invoked once, at the moment retrieval tools are withdrawn because
+   * `UNPRODUCTIVE_RETRIEVAL_CALL_LIMIT` consecutive retrieval calls returned no evidence id the run
+   * had not already seen. Same shape of hook as `onToolRoundsExhausted`: the runtime has no audit
+   * context, so it only emits a structured log of its own.
+   */
+  onRetrievalExhausted?: (info: {
+    /** How many consecutive retrieval calls produced nothing new (always the limit). */
+    unproductiveCallCount: number;
+    /** Distinct evidence ids gathered across the whole run at the moment of withdrawal. */
+    seenEvidenceIdCount: number;
+    /** 1-based tool round the withdrawal was decided on. */
+    round: number;
+  }) => void;
   executeTool: ExecuteToolFn;
 };
 
@@ -260,6 +274,150 @@ export const TOOL_ROUNDS_EXHAUSTED_FALLBACK_TEXT =
   'give a complete verified answer. Please narrow the question (one product or one topic at a time) ' +
   'and ask again.';
 
+/**
+ * B0-635 — the tools whose payloads carry a `sources[]` array of retrieved RAG evidence, i.e. the
+ * ones whose *only* contribution to a turn is documents. Taken from the `executeProductTool` switch
+ * in `~/lib/tools/product-tools.ts`: every branch below returns `sources: sourcePayload(result)`
+ * (the semantic-search family) or an explicitly built `sources` array (`get_efficacy_data`, both its
+ * single and batch forms).
+ *
+ * Deliberately NOT listed, because their value is structured/computed rather than retrieved and a
+ * repeat call can legitimately return the same ids: `get_escalation_policy` (static policy),
+ * `lookup_cross_reference` / `recommend_cross_reference` (competitor cross-reference),
+ * `get_products_in_category` / `get_product_category` / `find_products_by_category` (website
+ * taxonomy navigation). Those stay callable even after retrieval is withdrawn.
+ *
+ * A hard-coded list rather than an import from `~/lib/tools/tool-schemas`: this runtime is generic
+ * over whatever `opts.tools` it is handed and must not take a dependency on the product-support tool
+ * surface. An unrecognised tool name is simply not treated as retrieval (fail-open — it can never
+ * cause an early stop).
+ */
+export const RETRIEVAL_TOOL_NAMES: ReadonlySet<string> = new Set([
+  'search_product_docs',
+  'get_product_spec',
+  'get_approved_usage_guidance',
+  'get_safety_constraints',
+  'get_compatibility_rules',
+  'list_allowed_surfaces',
+  'list_disallowed_uses',
+  'get_efficacy_data',
+]);
+
+/**
+ * B0-635 — how many *consecutive* retrieval calls may return zero previously-unseen evidence ids
+ * before retrieval tools are withdrawn for the rest of the run.
+ *
+ * 2, not 1: one repeat is normal and often productive in a different way (a second call re-reads the
+ * same document with different arguments, or narrows to one product of several). Two in a row is the
+ * observed signature of the pathological pattern in run `5b13095f` — progressively broader generic
+ * queries returning unrelated products, ~26k chars of context and ~4s for nothing. Any productive
+ * call resets the counter, so an arbitrarily long chain of searches that keep finding new documents
+ * is completely unaffected.
+ */
+export const UNPRODUCTIVE_RETRIEVAL_CALL_LIMIT = 2;
+
+/**
+ * B0-635 — sent to the model in the same turn retrieval is withdrawn.
+ *
+ * Withdrawing a tool silently is worse than leaving it: an agent that still wants a number and has
+ * no way to look it up is precisely the setup that invents one (the repro run reported confidence
+ * 0.93 citing a "2 L package" present in no retrieved evidence). So the withdrawal is stated
+ * explicitly, together with what to do instead — name the gap.
+ */
+export const RETRIEVAL_EXHAUSTED_INSTRUCTION =
+  `Retrieval is exhausted for this turn. Your last ${UNPRODUCTIVE_RETRIEVAL_CALL_LIMIT} retrieval ` +
+  'calls returned only documents you have already been given, so the retrieval tools have been ' +
+  'withdrawn for the rest of this turn and no further search will run. The corpus does not hold ' +
+  'more on this question than what is already above — searching again would return the same or ' +
+  'unrelated documents. ' +
+  'Answer the user NOW from the evidence already gathered. Where the evidence does not contain a ' +
+  'value the question needs, say plainly and specifically that it is not on file: do not estimate, ' +
+  'convert, back-calculate, or recall from general knowledge any dilution ratio, oz/gal, mL/L, ppm, ' +
+  'percentage, contact time, yield, container volume, or pack size that does not appear verbatim in ' +
+  'the evidence above.';
+
+/**
+ * B0-635 — the evidence ids one retrieval tool payload contributed, namespaced by field so a
+ * document id can never collide with a chunk id.
+ *
+ * Reads the FULL tool payload (`output`), not the slimmed model-facing projection (`modelOutput`):
+ * the projection drops `documentBodyChunkIds` whenever it truncates a body, and this decision must
+ * be made on what was actually retrieved.
+ *
+ * `documentBodyChunkIds` is included alongside `documentId`/`chunkId` deliberately: since B0-547 the
+ * same document can come back with a different assembled chunk window, which IS new information,
+ * and counting those ids keeps such a call productive.
+ *
+ * Anything unparseable, non-object, or without a `sources` array yields no ids — a failed, errored,
+ * or genuinely empty retrieval counts as "nothing new", which is the intended reading.
+ */
+export function collectRetrievalEvidenceIds(payloadJson: string): string[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payloadJson);
+  } catch {
+    return [];
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return [];
+  }
+
+  const sources = (parsed as { sources?: unknown }).sources;
+  if (!Array.isArray(sources)) {
+    return [];
+  }
+
+  const ids: string[] = [];
+  const push = (namespace: string, value: unknown) => {
+    if (typeof value === 'string' && value.trim().length > 0) {
+      ids.push(`${namespace}:${value}`);
+    }
+  };
+
+  for (const source of sources) {
+    if (!source || typeof source !== 'object' || Array.isArray(source)) {
+      continue;
+    }
+    const record = source as Record<string, unknown>;
+    push('documentId', record.documentId);
+    push('chunkId', record.chunkId);
+    if (Array.isArray(record.documentBodyChunkIds)) {
+      for (const chunkId of record.documentBodyChunkIds) {
+        push('chunkId', chunkId);
+      }
+    }
+  }
+
+  return ids;
+}
+
+/**
+ * B0-635 — whether this payload came from a corpus *search* rather than a structured point lookup.
+ *
+ * Only a search can be evidence that the corpus is exhausted. `get_efficacy_data` answering "no
+ * facts on file" for one product (adapter `structured_facts_v1`, no `sources` at all — exactly what
+ * Push returns) says nothing about whether a document search would find the answer, so it must not
+ * push the run toward withdrawing search. Without this, two empty efficacy lookups — a normal
+ * opening move when efficacy rows are sparse — would withdraw `search_product_docs` before it had
+ * been tried even once.
+ *
+ * Read from the payload's own `adapter` discriminator (`rag_corpus_full_document` for the semantic
+ * search family, `structured_facts_v1` for fact lookups) rather than inferred from the tool name: a
+ * tool like `get_efficacy_data` can answer from either path depending on what it finds.
+ */
+export function isCorpusSearchPayload(payloadJson: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(payloadJson);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return false;
+    }
+    const adapter = (parsed as { adapter?: unknown }).adapter;
+    return typeof adapter === 'string' && adapter.startsWith('rag_corpus');
+  } catch {
+    return false;
+  }
+}
+
 export async function runResponsesWithToolLoop(
   opts: ResponsesRuntimeOptions,
 ): Promise<ResponsesRuntimeResult> {
@@ -272,6 +430,21 @@ export async function runResponsesWithToolLoop(
 
   let chainPrev: string | undefined = opts.previousResponseId?.trim() || undefined;
   let toolOutputs: ResponseInputItem[] | null = null;
+
+  /**
+   * B0-635 — early stop for retrieval that has stopped producing information.
+   *
+   * `maxRounds` (16) bounds a runaway loop but never engaged on the pathological runs: the model
+   * stopped on its own after 7 calls, having spent the last two on progressively broader generic
+   * queries that returned already-seen or unrelated documents. The signal used here is deliberately
+   * the objective one — "this call yielded zero evidence ids the run had not already seen" — never
+   * query-text similarity, embedding distance, or any guess at intent.
+   */
+  const seenEvidenceIds = new Set<string>();
+  let consecutiveUnproductiveRetrievalCalls = 0;
+  let retrievalWithdrawn = false;
+  /** Set with `retrievalWithdrawn`, consumed by the very next request so the model is told why. */
+  let retrievalExhaustedNoticePending = false;
 
   const usage: LlmTokenUsage = {
     promptTokens: 0,
@@ -403,7 +576,22 @@ export async function runResponsesWithToolLoop(
 
   for (let i = 0; i < maxRounds; i += 1) {
     const input: ResponseInputItem[] =
-      toolOutputs ??
+      (toolOutputs
+        ? [
+            ...toolOutputs,
+            // B0-635 — the withdrawal notice rides along with the tool outputs of the round that
+            // tripped it, as its own message item (the same shape the B0-381 exhaustion path uses).
+            ...(retrievalExhaustedNoticePending
+              ? [
+                  {
+                    role: 'user' as const,
+                    content: RETRIEVAL_EXHAUSTED_INSTRUCTION,
+                    type: 'message' as const,
+                  },
+                ]
+              : []),
+          ]
+        : null) ??
       [
         // B0-519 — capped prior turns, replayed as explicit messages ONLY when this call is NOT
         // chaining via `previousResponseId` (an intentional chain break to bound token growth — see
@@ -439,11 +627,27 @@ export async function runResponsesWithToolLoop(
           : []),
       ];
 
+    /**
+     * B0-635 — once retrieval is exhausted its tools stop being offered for the rest of the run;
+     * every other tool stays available. Round 0 can never be withdrawn (nothing has been retrieved
+     * yet), so `resolveRoundZeroToolChoice`'s view of `opts.tools` remains accurate.
+     */
+    const roundTools = retrievalWithdrawn
+      ? opts.tools.filter((tool) => !('name' in tool) || !RETRIEVAL_TOOL_NAMES.has(tool.name))
+      : opts.tools;
+
     const params: ResponseCreateParamsNonStreaming = {
       model: opts.model,
       instructions: opts.instructions,
-      tools: opts.tools,
-      tool_choice: i === 0 ? resolveRoundZeroToolChoice(opts) : 'auto',
+      tools: roundTools,
+      tool_choice:
+        i === 0
+          ? resolveRoundZeroToolChoice(opts)
+          : // Nothing left to call (every offered tool was a retrieval tool) — say so explicitly
+            // rather than sending 'auto' against an empty tool list.
+            roundTools.length === 0
+            ? 'none'
+            : 'auto',
       parallel_tool_calls: true,
       store: true,
       stream: false,
@@ -464,6 +668,9 @@ export async function runResponsesWithToolLoop(
     responseIds.push(response.id);
     chainPrev = response.id;
     toolOutputs = null;
+    // B0-635 — consumed by the request above; mutated only after it succeeded, so a transport
+    // replay (which re-sends the identical `params`) still carries the notice exactly once.
+    retrievalExhaustedNoticePending = false;
 
     const calls = extractFunctionCalls(response.output);
 
@@ -578,11 +785,53 @@ export async function runResponsesWithToolLoop(
     for (const [index, call] of calls.entries()) {
       const result = executed[index]!;
       toolTrace.push(result.trace);
+
+      /**
+       * B0-635 — productivity of THIS retrieval call, in the model's own call order. Ids are added
+       * to the run-wide set as each call is scored, so within a parallel round the second of two
+       * calls returning the same documents is correctly scored as having added nothing.
+       */
+      if (!retrievalWithdrawn && RETRIEVAL_TOOL_NAMES.has(call.name)) {
+        const ids = collectRetrievalEvidenceIds(result.output);
+        const producedSomethingNew = ids.some((id) => !seenEvidenceIds.has(id));
+        for (const id of ids) {
+          seenEvidenceIds.add(id);
+        }
+        if (producedSomethingNew) {
+          consecutiveUnproductiveRetrievalCalls = 0;
+        } else if (isCorpusSearchPayload(result.output)) {
+          // Only a fruitless corpus SEARCH counts toward exhaustion. An empty structured-fact
+          // lookup is neutral — see `isCorpusSearchPayload`.
+          consecutiveUnproductiveRetrievalCalls += 1;
+        }
+      }
+
       outputs.push({
         type: 'function_call_output',
         call_id: call.call_id,
         // B0-437 — the model gets the slimmed variant when the tool produced one.
         output: result.modelOutput ?? result.output,
+      });
+    }
+
+    // B0-635 — trip the early stop once, after the whole round has been scored.
+    if (
+      !retrievalWithdrawn &&
+      consecutiveUnproductiveRetrievalCalls >= UNPRODUCTIVE_RETRIEVAL_CALL_LIMIT
+    ) {
+      retrievalWithdrawn = true;
+      retrievalExhaustedNoticePending = true;
+      logWarn('retrieval_exhausted_early_stop', {
+        model: opts.model,
+        round: i + 1,
+        unproductive_call_count: consecutiveUnproductiveRetrievalCalls,
+        seen_evidence_id_count: seenEvidenceIds.size,
+        response_id: response.id,
+      });
+      opts.onRetrievalExhausted?.({
+        unproductiveCallCount: consecutiveUnproductiveRetrievalCalls,
+        seenEvidenceIdCount: seenEvidenceIds.size,
+        round: i + 1,
       });
     }
 

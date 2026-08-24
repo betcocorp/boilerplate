@@ -75,11 +75,12 @@ export async function insertTestItems(items: NewTestItemRecord[]) {
   return inserted;
 }
 
-export async function listTests() {
+export async function listTests(includeArchived = false) {
   const supabase = getSupabaseServiceRoleClient();
   const result = await supabase
     .from('tests')
     .select('*')
+    .eq('is_archived', includeArchived ? true : false)
     .order('uploaded_at', { ascending: false });
 
   const tests = (assertNoError(result) || []) as TestRecord[];
@@ -139,6 +140,18 @@ export async function listTests() {
       scored_runs_count: totals?.count ?? 0,
     };
   }) as TestRecordWithCompletionCount[];
+}
+
+export async function listArchivedTests() {
+  return listTests(true);
+}
+
+export async function archiveTest(testId: string) {
+  return updateTestRecord(testId, { is_archived: true });
+}
+
+export async function unarchiveTest(testId: string) {
+  return updateTestRecord(testId, { is_archived: false });
 }
 
 export async function getTestById(testId: string) {

@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server';
 import { withApiV1 } from '~/lib/api/with-api-v1';
 import { writeAuditLog } from '~/lib/audit/audit-log';
 import { newCorrelationId } from '~/lib/observability/correlation-id';
-import { WebSearchService } from '~/lib/websearch/web-search-service';
+import { createWebSearchService } from '~/lib/websearch/web-search-service';
 import { WebSearchError } from '~/lib/websearch/types';
 import { webSearchRequestSchema } from '~/lib/websearch/websearch-schemas';
 import { getErrorMessage } from '~/lib/utils';
@@ -35,7 +35,7 @@ export const POST = withApiV1(async (request, ctx) => {
 
   const traceId = newCorrelationId();
   try {
-    const service = new WebSearchService();
+    const service = await createWebSearchService();
     const result = await service.search(parsed.data);
 
     await writeAuditLog(

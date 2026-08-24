@@ -48,6 +48,13 @@ export async function runBexChatTurn(input: {
    * existing conversation.
    */
   owner?: { kind: 'user'; userId: string } | { kind: 'system' };
+  /**
+   * B0-645 — the source test's `tests.name`, stamped onto the conversation at creation for
+   * `owner: { kind: 'system' }` turns so the admin sidebar can show which test produced it instead
+   * of a generic "Admin" badge. Ignored for `owner: { kind: 'user' }`/no-owner turns, and only
+   * consulted alongside `owner` (i.e. only when no `conversationId` is supplied).
+   */
+  testName?: string | null;
   onWorkflowEvent?: (event: ProductSupportWorkflowEvent) => void;
   onAssistantDelta?: (delta: string) => void;
 }): Promise<BexChatTurnResult> {
@@ -64,7 +71,7 @@ export async function runBexChatTurn(input: {
       input.owner?.kind === 'user'
         ? { user_id: input.owner.userId }
         : input.owner?.kind === 'system'
-          ? { user_id: null, source: 'test_run' }
+          ? { user_id: null, source: 'test_run', test_name: input.testName ?? null }
           : undefined,
     );
   }

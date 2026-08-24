@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { getStringSetting } from '~/lib/settings/settings-service';
 import { WebSearchCache, webSearchCacheKey } from '~/lib/websearch/cache';
 import type { WebSearchDurableCache } from '~/lib/websearch/db-cache';
 import { MockWebSearchProvider } from '~/lib/websearch/mock-provider';
@@ -8,13 +9,18 @@ import type { ProviderSearchResult, WebSearchProvider } from '~/lib/websearch/ty
 import { WebSearchError } from '~/lib/websearch/types';
 import {
   WebSearchService,
-  createProviderFromEnv,
+  createProviderFromSettings,
 } from '~/lib/websearch/web-search-service';
 import {
   webSearchRequestSchema,
   type WebSearchResponse,
   type WebSearchResult,
 } from '~/lib/websearch/websearch-schemas';
+
+vi.mock('~/lib/settings/settings-service', () => ({
+  getStringSetting: vi.fn((_key: string, fallback: string) => Promise.resolve(fallback)),
+  getBooleanSetting: vi.fn((_key: string, fallback: boolean) => Promise.resolve(fallback)),
+}));
 
 const freshCache = () => new WebSearchCache(60_000);
 
@@ -113,31 +119,29 @@ describe('WebSearchService', () => {
   });
 });
 
-describe('createProviderFromEnv', () => {
-  const prevProvider = process.env.WEBSEARCH_PROVIDER;
+describe('createProviderFromSettings', () => {
   const prevKey = process.env.TAVILY_API_KEY;
 
   afterEach(() => {
-    if (prevProvider === undefined) delete process.env.WEBSEARCH_PROVIDER;
-    else process.env.WEBSEARCH_PROVIDER = prevProvider;
     if (prevKey === undefined) delete process.env.TAVILY_API_KEY;
     else process.env.TAVILY_API_KEY = prevKey;
+    vi.mocked(getStringSetting).mockReset().mockImplementation((_key, fallback) => Promise.resolve(fallback));
   });
 
-  it('selects the mock provider', () => {
-    process.env.WEBSEARCH_PROVIDER = 'mock';
-    expect(createProviderFromEnv()).toBeInstanceOf(MockWebSearchProvider);
+  it('selects the mock provider', async () => {
+    vi.mocked(getStringSetting).mockResolvedValueOnce('mock');
+    expect(await createProviderFromSettings()).toBeInstanceOf(MockWebSearchProvider);
   });
 
-  it('selects the Tavily provider when a key is present', () => {
-    process.env.WEBSEARCH_PROVIDER = 'tavily';
+  it('selects the Tavily provider when a key is present', async () => {
+    vi.mocked(getStringSetting).mockResolvedValueOnce('tavily');
     process.env.TAVILY_API_KEY = 'test-key';
-    expect(createProviderFromEnv()).toBeInstanceOf(TavilyProvider);
+    expect(await createProviderFromSettings()).toBeInstanceOf(TavilyProvider);
   });
 
-  it('throws a structured error for an unknown provider', () => {
-    process.env.WEBSEARCH_PROVIDER = 'nope';
-    expect(() => createProviderFromEnv()).toThrow(WebSearchError);
+  it('throws a structured error for an unknown provider', async () => {
+    vi.mocked(getStringSetting).mockResolvedValueOnce('nope');
+    await expect(createProviderFromSettings()).rejects.toThrow(WebSearchError);
   });
 });
 

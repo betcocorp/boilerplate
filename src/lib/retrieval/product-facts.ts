@@ -36,6 +36,118 @@ export type ProductLineFacts = {
   efficacy: ProductEfficacyFact[];
 };
 
+const PRODUCT_LINE_FACT_COLUMNS =
+  'entity_id, product_key, dilution_oz_per_gal, dilution_display, coverage_sq_ft, chemistry_class, product_application, product_application_confidence, epa_registration, contact_time_seconds, confidence';
+
+const PRODUCT_EFFICACY_COLUMNS =
+  'entity_id, organism, claim_type, dilution_oz_per_gal, contact_time_seconds, epa_registration, confidence';
+
+type FactRow = {
+  entity_id: string;
+  /** NULL on product_line-tier rows; the SKU's product_key on product-tier rows. */
+  product_key: string | null;
+  dilution_oz_per_gal: number | null;
+  dilution_display: string | null;
+  coverage_sq_ft: number | null;
+  chemistry_class: string | null;
+  product_application: string | null;
+  product_application_confidence: number | null;
+  epa_registration: string | null;
+  contact_time_seconds: number | null;
+  confidence: number;
+};
+
+type EfficacyRow = {
+  entity_id: string;
+  organism: string;
+  claim_type: string | null;
+  dilution_oz_per_gal: number | null;
+  contact_time_seconds: number | null;
+  epa_registration: string | null;
+  confidence: number | null;
+};
+
+/**
+ * One round trip (two parallel statements) for the fact + efficacy rows of any set of entity ids,
+ * across BOTH tiers — no `product_key IS NULL` predicate, so product-tier fact rows come back too.
+ * Tier partitioning happens in memory (see `fetchProductLineFacts` and the B0-634 merge below).
+ * Returns null on error so callers can degrade instead of blocking retrieval.
+ */
+async function fetchFactAndEfficacyRows(
+  entityIds: string[],
+): Promise<{ factRows: FactRow[]; efficacyRows: EfficacyRow[] } | null> {
+  const rag = getSupabaseServiceRoleClient().schema('rag');
+  const [factsRes, efficacyRes] = await Promise.all([
+    rag.from('product_line_fact').select(PRODUCT_LINE_FACT_COLUMNS).in('entity_id', entityIds),
+    rag.from('product_efficacy').select(PRODUCT_EFFICACY_COLUMNS).in('entity_id', entityIds),
+  ]);
+
+  if (factsRes.error || efficacyRes.error) {
+    return null;
+  }
+
+  return {
+    factRows: (factsRes.data ?? []) as FactRow[],
+    efficacyRows: (efficacyRes.data ?? []) as EfficacyRow[],
+  };
+}
+
+function toEfficacyFact(row: EfficacyRow): ProductEfficacyFact {
+  return {
+    organism: row.organism,
+    claimType: row.claim_type,
+    dilutionOzPerGal: row.dilution_oz_per_gal,
+    contactTimeSeconds: row.contact_time_seconds,
+    epaRegistration: row.epa_registration,
+    confidence: row.confidence,
+  };
+}
+
+function groupEfficacyByEntity(rows: EfficacyRow[]): Map<string, ProductEfficacyFact[]> {
+  const byEntity = new Map<string, ProductEfficacyFact[]>();
+  for (const row of rows) {
+    const list = byEntity.get(row.entity_id) ?? [];
+    list.push(toEfficacyFact(row));
+    byEntity.set(row.entity_id, list);
+  }
+  return byEntity;
+}
+
+function factsFromRow(row: FactRow, efficacy: ProductEfficacyFact[]): ProductLineFacts {
+  return {
+    entityId: row.entity_id,
+    dilutionOzPerGal: row.dilution_oz_per_gal,
+    dilutionDisplay: row.dilution_display,
+    coverageSqFt: row.coverage_sq_ft,
+    chemistryClass: row.chemistry_class,
+    productApplication: row.product_application,
+    productApplicationConfidence: row.product_application_confidence,
+    epaRegistration: row.epa_registration,
+    contactTimeSeconds: row.contact_time_seconds,
+    confidence: row.confidence,
+    efficacy,
+  };
+}
+
+function factsWithoutScalarRow(entityId: string, efficacy: ProductEfficacyFact[]): ProductLineFacts {
+  return {
+    entityId,
+    dilutionOzPerGal: null,
+    dilutionDisplay: null,
+    coverageSqFt: null,
+    chemistryClass: null,
+    productApplication: null,
+    productApplicationConfidence: null,
+    epaRegistration: null,
+    contactTimeSeconds: null,
+    // No product_line_fact row for this entity -- confidence defaults to the same
+    // 1.0 baseline the column itself defaults to, since there's no lower-confidence
+    // signal without a row.
+    confidence: 1,
+    efficacy,
+  };
+}
+
 /** Fetch line-level facts + efficacy rows for a set of entity ids. Degrades to an empty map on error. */
 export async function fetchProductLineFacts(
   entityIds: string[],
@@ -46,76 +158,24 @@ export async function fetchProductLineFacts(
     return map;
   }
 
-  const rag = getSupabaseServiceRoleClient().schema('rag');
-  const [factsRes, efficacyRes] = await Promise.all([
-    rag
-      .from('product_line_fact')
-      .select(
-        'entity_id, dilution_oz_per_gal, dilution_display, coverage_sq_ft, chemistry_class, product_application, product_application_confidence, epa_registration, contact_time_seconds, confidence',
-      )
-      .in('entity_id', unique)
-      .is('product_key', null),
-    rag
-      .from('product_efficacy')
-      .select(
-        'entity_id, organism, claim_type, dilution_oz_per_gal, contact_time_seconds, epa_registration, confidence',
-      )
-      .in('entity_id', unique),
-  ]);
-
-  if (factsRes.error || efficacyRes.error) {
+  const rows = await fetchFactAndEfficacyRows(unique);
+  if (!rows) {
     return map; // grounding degrades gracefully — never block retrieval on a facts miss
   }
 
-  const efficacyByEntity = new Map<string, ProductEfficacyFact[]>();
-  for (const row of efficacyRes.data ?? []) {
-    const list = efficacyByEntity.get(row.entity_id) ?? [];
-    list.push({
-      organism: row.organism,
-      claimType: row.claim_type,
-      dilutionOzPerGal: row.dilution_oz_per_gal,
-      contactTimeSeconds: row.contact_time_seconds,
-      epaRegistration: row.epa_registration,
-      confidence: row.confidence,
-    });
-    efficacyByEntity.set(row.entity_id, list);
-  }
+  const efficacyByEntity = groupEfficacyByEntity(rows.efficacyRows);
 
-  for (const row of factsRes.data ?? []) {
-    map.set(row.entity_id, {
-      entityId: row.entity_id,
-      dilutionOzPerGal: row.dilution_oz_per_gal,
-      dilutionDisplay: row.dilution_display,
-      coverageSqFt: row.coverage_sq_ft,
-      chemistryClass: row.chemistry_class,
-      productApplication: row.product_application,
-      productApplicationConfidence: row.product_application_confidence,
-      epaRegistration: row.epa_registration,
-      contactTimeSeconds: row.contact_time_seconds,
-      confidence: row.confidence,
-      efficacy: efficacyByEntity.get(row.entity_id) ?? [],
-    });
+  // Line-tier scalars only (`product_key IS NULL`) — same predicate as before, applied in memory
+  // so the shared query above can also serve the B0-634 product-tier lookup.
+  for (const row of rows.factRows) {
+    if (row.product_key != null) continue;
+    map.set(row.entity_id, factsFromRow(row, efficacyByEntity.get(row.entity_id) ?? []));
   }
 
   // Entities with efficacy rows but no scalar fact row still get an entry.
   for (const [entityId, efficacy] of efficacyByEntity) {
     if (!map.has(entityId)) {
-      map.set(entityId, {
-        entityId,
-        dilutionOzPerGal: null,
-        dilutionDisplay: null,
-        coverageSqFt: null,
-        chemistryClass: null,
-        productApplication: null,
-        productApplicationConfidence: null,
-        epaRegistration: null,
-        contactTimeSeconds: null,
-        // No product_line_fact row for this entity -- confidence defaults to the same
-        // 1.0 baseline the column itself defaults to, since there's no lower-confidence
-        // signal without a row.
-        confidence: 1,
-        efficacy,
-      });
+      map.set(entityId, factsWithoutScalarRow(entityId, efficacy));
     }
   }
 
@@ -123,33 +183,170 @@ export async function fetchProductLineFacts(
 }
 
 /**
+ * B0-634 — the scalars that participate in the cross-tier merge, with the comparison kind used to
+ * decide whether two product-tier values *agree*.
+ *
+ * `numeric` compares the stored Postgres numeric canonically (`5` and `5.000` are the same stored
+ * number — normalising insignificant zeros is not rounding); `text` compares the stored string
+ * exactly, byte for byte. Values from different columns are never compared to each other, so a
+ * `dilution_display` of `"1:64"` is never coerced into equivalence with a `dilution_oz_per_gal` of
+ * `2.000`. Nothing is rounded, unit-converted, or inferred.
+ */
+const MERGED_SCALARS = [
+  { field: 'dilutionOzPerGal', column: 'dilution_oz_per_gal', kind: 'numeric' },
+  { field: 'dilutionDisplay', column: 'dilution_display', kind: 'text' },
+  { field: 'coverageSqFt', column: 'coverage_sq_ft', kind: 'numeric' },
+  { field: 'chemistryClass', column: 'chemistry_class', kind: 'text' },
+  { field: 'productApplication', column: 'product_application', kind: 'text' },
+  { field: 'epaRegistration', column: 'epa_registration', kind: 'text' },
+  { field: 'contactTimeSeconds', column: 'contact_time_seconds', kind: 'numeric' },
+] as const satisfies readonly {
+  field: keyof ProductLineFacts;
+  column: keyof FactRow;
+  kind: 'numeric' | 'text';
+}[];
+
+/**
+ * Canonical form of a Postgres numeric for *equality only*. Strips the sign of zero and
+ * insignificant zeros (`5` / `5.0` / `05.000` → `5`) so two spellings of the same stored number
+ * count as agreement. Anything that isn't a plain decimal (including exponent notation) falls back
+ * to the raw string, so it can only ever match an identical raw string. Never used to reformat a
+ * value that is returned to callers.
+ */
+function canonicalNumeric(value: number | string): string {
+  const raw = typeof value === 'number' ? String(value) : value.trim();
+  const match = /^([+-]?)(\d*)(?:\.(\d*))?$/.exec(raw);
+  if (!match || (!match[2] && !match[3])) {
+    return `raw:${raw}`;
+  }
+  const integer = (match[2] ?? '').replace(/^0+/, '') || '0';
+  const fraction = (match[3] ?? '').replace(/0+$/, '');
+  const magnitude = fraction ? `${integer}.${fraction}` : integer;
+  const sign = match[1] === '-' && magnitude !== '0' ? '-' : '';
+  return `${sign}${magnitude}`;
+}
+
+function canonicalValue(value: unknown, kind: 'numeric' | 'text'): string {
+  if (kind === 'numeric' && (typeof value === 'number' || typeof value === 'string')) {
+    return `n:${canonicalNumeric(value)}`;
+  }
+  return `t:${String(value)}`;
+}
+
+/**
+ * Dedupe identity for an efficacy row: organism + claim type + the regulated scalars. Two rows that
+ * differ on contact time, dilution, or EPA registration are DIFFERENT claims and both survive the
+ * cross-tier union — collapsing them would fabricate a regulated figure.
+ */
+function efficacyDedupeKey(e: ProductEfficacyFact): string {
+  return [
+    e.organism,
+    e.claimType ?? '',
+    e.dilutionOzPerGal == null ? '' : canonicalNumeric(e.dilutionOzPerGal),
+    e.contactTimeSeconds == null ? '' : canonicalNumeric(e.contactTimeSeconds),
+    e.epaRegistration ?? '',
+  ].join('');
+}
+
+/**
+ * B0-634 — agree-or-abstain merge of product-tier facts onto a product_line-tier base.
+ *
+ * Some product lines carry their regulated scalars on the product (SKU) tier rather than the line
+ * tier — "Push" holds `dilution_oz_per_gal = 5` on its two product-tier entities while the
+ * product_line-tier row leaves it null. The rules, in order:
+ *
+ *  1. A non-null line-tier value is authoritative and is NEVER overwritten by a product-tier value.
+ *  2. For a still-null scalar, if every non-null product-tier value agrees, adopt it — returned
+ *     exactly as stored, never reformatted.
+ *  3. If the non-null product-tier values disagree, leave it null. Differing dilution / EPA /
+ *     contact-time values across variants mean genuinely different formulations (see
+ *     `src/docs/formulation-variant-aliasing-rules.md`, pH7Q family), so picking one — or averaging
+ *     them — would fabricate a regulated figure. Abstain instead.
+ *  4. Efficacy rows are UNIONed across tiers and deduped on organism + claim type + regulated
+ *     scalars, never field-merged: the same organism at two different contact times keeps both rows.
+ */
+function mergeProductTierFacts(
+  base: ProductLineFacts,
+  productTierRows: FactRow[],
+  productTierEfficacy: ProductEfficacyFact[],
+): ProductLineFacts {
+  if (productTierRows.length === 0 && productTierEfficacy.length === 0) {
+    return base;
+  }
+
+  const merged: ProductLineFacts = { ...base };
+  const contributingConfidences: number[] = [];
+  let adoptedApplicationFrom: FactRow[] = [];
+
+  for (const { field, column, kind } of MERGED_SCALARS) {
+    if (merged[field] != null) continue; // rule 1 — line tier wins outright
+
+    const candidates = productTierRows.filter((row) => row[column] != null);
+    if (candidates.length === 0) continue;
+
+    const canon = canonicalValue(candidates[0]![column], kind);
+    if (candidates.some((row) => canonicalValue(row[column], kind) !== canon)) {
+      continue; // rule 3 — disagreement, abstain rather than pick
+    }
+
+    // rule 2 — adopt the value exactly as stored
+    (merged as Record<string, unknown>)[field] = candidates[0]![column];
+    for (const row of candidates) contributingConfidences.push(row.confidence);
+    if (field === 'productApplication') adoptedApplicationFrom = candidates;
+  }
+
+  if (adoptedApplicationFrom.length > 0) {
+    // product_application carries its own classifier confidence — carry the (lowest) one that came
+    // with the adopted value rather than leaving it null, which would read as "unknown".
+    const applicationConfidences = adoptedApplicationFrom
+      .map((row) => row.product_application_confidence)
+      .filter((c): c is number => c != null);
+    merged.productApplicationConfidence =
+      applicationConfidences.length > 0 ? Math.min(...applicationConfidences) : null;
+  }
+
+  if (contributingConfidences.length > 0) {
+    // The single `confidence` scalar covers several columns at once, so once a product-tier value is
+    // adopted the block can be no more certain than the least certain row behind it.
+    merged.confidence = Math.min(merged.confidence, ...contributingConfidences);
+  }
+
+  // rule 4 — union + dedupe, line tier first so its rows win the dedupe.
+  const seen = new Set<string>();
+  const efficacy: ProductEfficacyFact[] = [];
+  for (const fact of [...base.efficacy, ...productTierEfficacy]) {
+    const key = efficacyDedupeKey(fact);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    efficacy.push(fact);
+  }
+  merged.efficacy = efficacy;
+
+  return merged;
+}
+
+function filterEfficacyByOrganism(facts: ProductLineFacts, needle?: string): ProductLineFacts {
+  if (!needle) return facts;
+  return {
+    ...facts,
+    efficacy: facts.efficacy.filter((e) => e.organism.toLowerCase().includes(needle)),
+  };
+}
+
+/**
  * Fact-only lookup for a single product line resolved by product_line_key.
  * Returns null when the line can't be resolved or has no verified facts.
  * `organism` optionally filters the efficacy rows (case-insensitive contains).
+ *
+ * B0-634: delegates to the batch resolver so both paths share one tier-aware merge — same two round
+ * trips as before (one entity query, one facts/efficacy query).
  */
 export async function fetchFactsForProductLineKey(
   productLineKey: string,
   organism?: string,
 ): Promise<ProductLineFacts | null> {
-  const rag = getSupabaseServiceRoleClient().schema('rag');
-  const { data: entity } = await rag
-    .from('entity')
-    .select('id')
-    .eq('entity_type', 'product_line')
-    .eq('product_line_key', productLineKey)
-    .limit(1)
-    .maybeSingle();
-
-  if (!entity?.id) return null;
-
-  const facts = (await fetchProductLineFacts([entity.id])).get(entity.id);
-  if (!facts || !hasAnyScalar(facts)) return null;
-
-  const needle = organism?.trim().toLowerCase();
-  if (needle) {
-    return { ...facts, efficacy: facts.efficacy.filter((e) => e.organism.toLowerCase().includes(needle)) };
-  }
-  return facts;
+  const byKey = await fetchFactsForProductLineKeys([productLineKey], organism);
+  return byKey.get(productLineKey) ?? null;
 }
 
 /**
@@ -161,6 +358,10 @@ export async function fetchFactsForProductLineKey(
  * callers can look results up by the same key they passed in. Product lines that don't resolve to
  * an entity, or resolve but carry no verified facts, are simply absent from the returned map —
  * same "not on file" semantics as the single-key function, never a fabricated placeholder.
+ *
+ * B0-634 — the entity query now selects BOTH tiers (`product_line` + `product`) and partitions them
+ * in memory, so a line whose regulated scalars live on the product tier is no longer read as null.
+ * Still two round trips total. See `mergeProductTierFacts` for the agree-or-abstain merge rule.
  */
 export async function fetchFactsForProductLineKeys(
   productLineKeys: string[],
@@ -173,35 +374,73 @@ export async function fetchFactsForProductLineKeys(
   }
 
   const rag = getSupabaseServiceRoleClient().schema('rag');
+  // B0-634: widened from `.eq('entity_type', 'product_line')` to both tiers so product-tier
+  // scalars are reachable; still ONE entity query no matter how many keys are passed.
   const { data: entities, error } = await rag
     .from('entity')
-    .select('id, product_line_key')
-    .eq('entity_type', 'product_line')
+    .select('id, entity_type, product_line_key')
+    .in('entity_type', ['product_line', 'product'])
     .in('product_line_key', uniqueKeys);
 
   if (error || !entities) {
     return result; // degrade gracefully — same posture as fetchProductLineFacts on error
   }
 
-  const entityIdByProductLineKey = new Map<string, string>();
+  const lineEntityIdByKey = new Map<string, string>();
+  const productEntityIdsByKey = new Map<string, string[]>();
   for (const row of entities) {
-    if (row.product_line_key && !entityIdByProductLineKey.has(row.product_line_key)) {
-      entityIdByProductLineKey.set(row.product_line_key, row.id);
+    if (!row.product_line_key) continue;
+    if (row.entity_type === 'product_line') {
+      if (!lineEntityIdByKey.has(row.product_line_key)) {
+        lineEntityIdByKey.set(row.product_line_key, row.id);
+      }
+      continue;
     }
+    const list = productEntityIdsByKey.get(row.product_line_key) ?? [];
+    list.push(row.id);
+    productEntityIdsByKey.set(row.product_line_key, list);
   }
 
-  const factsByEntityId = await fetchProductLineFacts([...entityIdByProductLineKey.values()]);
+  if (lineEntityIdByKey.size === 0) {
+    return result; // no product_line-tier entity to anchor on — unchanged "not on file" semantics
+  }
+
+  const entityIds = new Set<string>();
+  for (const [key, lineEntityId] of lineEntityIdByKey) {
+    entityIds.add(lineEntityId);
+    for (const id of productEntityIdsByKey.get(key) ?? []) entityIds.add(id);
+  }
+
+  const rows = await fetchFactAndEfficacyRows([...entityIds]);
+  if (!rows) {
+    return result;
+  }
+
+  const efficacyByEntity = groupEfficacyByEntity(rows.efficacyRows);
+  const factRowsByEntity = new Map<string, FactRow[]>();
+  for (const row of rows.factRows) {
+    const list = factRowsByEntity.get(row.entity_id) ?? [];
+    list.push(row);
+    factRowsByEntity.set(row.entity_id, list);
+  }
+
   const needle = organism?.trim().toLowerCase();
 
-  for (const [productLineKey, entityId] of entityIdByProductLineKey) {
-    const facts = factsByEntityId.get(entityId);
-    if (!facts || !hasAnyScalar(facts)) continue;
-    result.set(
-      productLineKey,
-      needle
-        ? { ...facts, efficacy: facts.efficacy.filter((e) => e.organism.toLowerCase().includes(needle)) }
-        : facts,
-    );
+  for (const [productLineKey, lineEntityId] of lineEntityIdByKey) {
+    // Line tier is the base: only its `product_key IS NULL` row counts, exactly as before.
+    const lineRow = (factRowsByEntity.get(lineEntityId) ?? []).find((row) => row.product_key == null);
+    const lineEfficacy = efficacyByEntity.get(lineEntityId) ?? [];
+    const base = lineRow
+      ? factsFromRow(lineRow, lineEfficacy)
+      : factsWithoutScalarRow(lineEntityId, lineEfficacy);
+
+    const productEntityIds = productEntityIdsByKey.get(productLineKey) ?? [];
+    const productTierRows = productEntityIds.flatMap((id) => factRowsByEntity.get(id) ?? []);
+    const productTierEfficacy = productEntityIds.flatMap((id) => efficacyByEntity.get(id) ?? []);
+
+    const facts = mergeProductTierFacts(base, productTierRows, productTierEfficacy);
+    if (!hasAnyScalar(facts)) continue;
+    result.set(productLineKey, filterEfficacyByOrganism(facts, needle));
   }
 
   return result;

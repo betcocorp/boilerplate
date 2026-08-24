@@ -1,4 +1,4 @@
-import { ArrowRight, GitCompareArrows, Globe, Search } from 'lucide-react';
+import { ArrowRight, Boxes, GitCompareArrows, Globe, Search } from 'lucide-react';
 import Link from 'next/link';
 
 import {
@@ -15,6 +15,13 @@ export const metadata = {
 };
 
 const tools = [
+  {
+    title: 'All tools',
+    description:
+      'Complete documentation for all 14 product-support tools with JSON schemas and parameter definitions.',
+    href: '/admin/tools/all-tools',
+    icon: Boxes,
+  },
   {
     title: 'Cross-reference',
     description:

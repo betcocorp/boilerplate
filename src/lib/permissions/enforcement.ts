@@ -10,15 +10,18 @@
  * | unset / anything but `'true'`    | shadow — evaluate + record, always allow            |
  * | `'true'`                         | enforce — deny (403 / sign-in redirect / hidden nav)|
  *
- * The env var is read at **call time** (not module load) so tests and a dev env can flip it, and
- * through a static `process.env.BEX_PERMISSIONS_ENFORCED` property access so it also resolves in
- * the Edge runtime, where dynamic `process.env[key]` lookups are not inlined. Do not import this
- * module from `src/proxy.ts` though — `recordPermissionVerdict` pulls in the Supabase client.
+ * B0-638 — moved from the `BEX_PERMISSIONS_ENFORCED` env var to the `settings` table, read at call
+ * time (never cached beyond the shared 30s `settings-service` TTL) so an admin toggle takes effect
+ * without a deploy. This makes `isPermissionsEnforced` a DB read, so — same as before the move —
+ * do not import this module from `src/proxy.ts`: it and `recordPermissionVerdict` both need the
+ * Node runtime (Supabase client), and every real call site here already is (API routes, server
+ * components, NextAuth callbacks).
  */
 
 import { writeAuditLog } from '~/lib/audit/audit-log';
 import { newCorrelationId } from '~/lib/observability/correlation-id';
 import { logInfo, logWarn } from '~/lib/observability/logger';
+import { getBooleanSetting } from '~/lib/settings/settings-service';
 
 /** Name of the single env var that governs enforcement (for docs/log payloads). */
 export const PERMISSIONS_ENFORCED_ENV_VAR = 'BEX_PERMISSIONS_ENFORCED';
@@ -36,8 +39,8 @@ export const PERMISSION_DENIED_EVENT = 'permission.denied';
  * True only when `BEX_PERMISSIONS_ENFORCED` is exactly `'true'`. Everything else — unset, `'1'`,
  * `'TRUE'`, `''` — means shadow mode, so a typo can never lock users out.
  */
-export function isPermissionsEnforced(): boolean {
-  return process.env.BEX_PERMISSIONS_ENFORCED === 'true';
+export async function isPermissionsEnforced(): Promise<boolean> {
+  return getBooleanSetting('BEX_PERMISSIONS_ENFORCED', false);
 }
 
 /** Which enforcement site produced the verdict. */
@@ -121,7 +124,7 @@ export function resetPermissionVerdictDedupe(): void {
 export async function recordPermissionVerdict(
   verdict: PermissionVerdict,
 ): Promise<void> {
-  const enforced = isPermissionsEnforced();
+  const enforced = await isPermissionsEnforced();
   const mode = enforced ? 'enforced' : 'shadow';
   const { detail, ...rest } = verdict;
   const fields = {

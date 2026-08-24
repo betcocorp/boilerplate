@@ -55,6 +55,6 @@ export default async function PermissionChecker({
     email: user?.EMAIL ?? null,
   });
 
-  if (!allowed && isPermissionsEnforced()) return null;
+  if (!allowed && (await isPermissionsEnforced())) return null;
   return <>{children}</>;
 }

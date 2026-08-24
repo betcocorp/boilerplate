@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * The sign-in gate (B0-406) under both states of `BEX_PERMISSIONS_ENFORCED` (B0-408). Shadow mode
@@ -35,6 +35,11 @@ vi.mock('~/lib/audit/audit-log', () => ({
   writeAuditLog: (...args: unknown[]) => writeAuditLog(...args),
 }));
 
+vi.mock('~/lib/settings/settings-service', () => ({
+  getBooleanSetting: vi.fn().mockResolvedValue(false),
+}));
+
+import { getBooleanSetting } from '~/lib/settings/settings-service';
 import { authOptions } from './auth';
 import { resetPermissionVerdictDedupe } from './permissions/enforcement';
 
@@ -82,12 +87,8 @@ beforeEach(() => {
   captureException.mockReset();
   captureMessage.mockReset();
   writeAuditLog.mockReset().mockResolvedValue(undefined);
+  vi.mocked(getBooleanSetting).mockReset().mockResolvedValue(false);
   resetPermissionVerdictDedupe();
-  delete process.env.BEX_PERMISSIONS_ENFORCED;
-});
-
-afterEach(() => {
-  delete process.env.BEX_PERMISSIONS_ENFORCED;
 });
 
 describe('session lifetime', () => {
@@ -153,7 +154,7 @@ describe('signIn callback — shadow mode', () => {
 
 describe('signIn callback — enforced mode', () => {
   beforeEach(() => {
-    process.env.BEX_PERMISSIONS_ENFORCED = 'true';
+    vi.mocked(getBooleanSetting).mockResolvedValue(true);
   });
 
   it('still lets a known active user in', async () => {

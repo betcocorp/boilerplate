@@ -65,6 +65,7 @@ import { buildCompetitiveRecommendationAnswer } from '~/lib/recommendations/reco
 import { productSupportToolsForRoute } from '~/lib/tools/definitions';
 import { buildToolTraceEntry, executeToolCall } from '~/lib/tools/execute-tool-call';
 import { assembleDocumentBodies } from '~/lib/retrieval/document-assembly';
+import { getBooleanSetting } from '~/lib/settings/settings-service';
 
 import type { Json } from '~/types/supabase.public';
 
@@ -723,7 +724,7 @@ type RuntimeToolOutput = {
   trace: ToolTraceEntry;
 };
 
-type RetrievedSourceMeta = {
+export type RetrievedSourceMeta = {
   documentId: string;
   chunkId: string | null;
   title: string;
@@ -826,11 +827,55 @@ function extractTopCrossReferenceMatchFromToolOutputs(toolOutputs: RuntimeToolOu
   return null;
 }
 
-function collectSourcesFromToolOutputs(toolOutputs: RuntimeToolOutput[]): SourceRef[] {
+/**
+ * B0-635 — whether a tool output's hits are an unendorsed guess that must not be cited.
+ *
+ * The B0-436 speculative pre-fetch searches the RAW user message before the model has reasoned
+ * about it, so it can match on an incidental word rather than on the product actually being asked
+ * about: "how many quarts of end use product can I get from one cartridge of push?" matched
+ * "Quarterpack Chemical Management Program" (0.417) and a label literally titled "quart" (a toilet
+ * bowl cleaner) purely on "quarts". The retriever itself said so — its
+ * `retrieval.productLineResolution` came back `skipped_low_confidence` with no
+ * `lockedProductLineKey`, i.e. it judged every candidate too weak to lock onto a product line —
+ * and those documents were cited to the user anyway.
+ *
+ * So: a speculative call whose own product-line resolution declined to lock is treated as
+ * contributing no citable sources.
+ *
+ * Deliberately narrow. This is ONLY about the speculative call, which is a guess the model never
+ * endorsed. A `model_chosen` search that comes back ambiguous is a deliberate request from the
+ * model and keeps citing exactly as before, as does a speculative call whose resolution DID lock
+ * (`explicit_filter` / `high_confidence`), and one whose resolution is absent (no product-line
+ * resolution ran, so there is no low-confidence judgement to act on).
+ */
+export function isUnendorsedSpeculativeToolOutput(trace: ToolTraceEntry): boolean {
+  // `speculative` is only ever set on the pre-fetch itself. A model call served FROM the
+  // speculative result is marked `reusedSpeculativeResult` instead (and is not re-logged into
+  // `toolOutputLog`), so it is not reachable here.
+  if (trace.speculative !== true) {
+    return false;
+  }
+
+  const resolution = trace.retrieval?.productLineResolution;
+  if (!resolution || resolution.lockedProductLineKey) {
+    return false;
+  }
+
+  return (
+    resolution.lockReason === 'skipped_low_confidence' ||
+    resolution.lockReason === 'skipped_ambiguous'
+  );
+}
+
+export function collectSourcesFromToolOutputs(toolOutputs: RuntimeToolOutput[]): SourceRef[] {
   const map = new Map<string, SourceRef>();
 
   for (const entry of toolOutputs) {
     if (!entry.ok) {
+      continue;
+    }
+    // B0-635 — user-visible citations only. See `isUnendorsedSpeculativeToolOutput`.
+    if (isUnendorsedSpeculativeToolOutput(entry.trace)) {
       continue;
     }
     try {
@@ -876,8 +921,16 @@ function collectSourcesFromToolOutputs(toolOutputs: RuntimeToolOutput[]): Source
   return [...map.values()].slice(0, 16);
 }
 
-/** Every semantic-search hit from tool outputs (deduped), using `rag.document` / `rag.document_chunk` ids. */
-function collectRetrievedDocumentChunksFromToolOutputs(
+/**
+ * Every semantic-search hit from tool outputs (deduped), using `rag.document` / `rag.document_chunk` ids.
+ *
+ * B0-635 — deliberately NOT narrowed by `isUnendorsedSpeculativeToolOutput`. This is the run's
+ * forensic record of what retrieval actually returned (`final_output.retrieved_document_chunks`,
+ * read by `/admin/observability`'s retrieved-chunks panel and by the test-harness retrieval
+ * metrics). Hiding the speculative call's weak hits here would make the trace lie about the very
+ * behaviour B0-635 exists to diagnose. Citations are filtered; the audit record is not.
+ */
+export function collectRetrievedDocumentChunksFromToolOutputs(
   toolOutputs: RuntimeToolOutput[],
 ): RetrievedDocumentChunkRef[] {
   const map = new Map<string, RetrievedDocumentChunkRef>();
@@ -925,7 +978,18 @@ function collectRetrievedDocumentChunksFromToolOutputs(
   return [...map.values()];
 }
 
-function collectSourceMetaFromToolOutputs(
+/**
+ * The evidence pool: every retrieved source with its body, feeding `buildEvidenceSummary` (validator
+ * evidence), `evaluateUsageSafetyCoverage`, and the B0-257 regulated-claim guardrail's grounding set.
+ *
+ * B0-635 — deliberately NOT narrowed by `isUnendorsedSpeculativeToolOutput`. The regulated-claim
+ * guardrail must always receive the COMPLETE evidence set: it verifies that every dilution ratio,
+ * contact time, EPA registration number and hazard statement in the draft answer is quoted verbatim
+ * from a retrieved document, so removing candidate documents from its pool can only make it reject a
+ * correct regulated claim, or fail to catch a wrong one. Filtering citations is a presentation
+ * decision; filtering this would be a regulated-data decision, and always the unsafe one.
+ */
+export function collectSourceMetaFromToolOutputs(
   toolOutputs: RuntimeToolOutput[],
 ): RetrievedSourceMeta[] {
   const map = new Map<string, RetrievedSourceMeta>();
@@ -1406,7 +1470,7 @@ export async function runProductSupportWorkflow(input: {
   onEvent?: (event: ProductSupportWorkflowEvent) => void;
   onAssistantDelta?: (delta: string) => void;
 }): Promise<ProductSupportFinalOutput> {
-  const useAiSdkGeneration = process.env.BEX_AI_SDK_GENERATION_ENABLED === 'true';
+  const useAiSdkGeneration = await getBooleanSetting('BEX_AI_SDK_GENERATION_ENABLED', false);
   /**
    * B0-519 — capped once, up front, so every consumer (the `hasPreviousResponse` step record below,
    * and both generation runtimes further down) agrees on the same decision for this turn. See
@@ -1437,7 +1501,7 @@ export async function runProductSupportWorkflow(input: {
    * has (and never spends a classifier call).
    */
   const llmRouterCutoverActive =
-    agentMode === 'orchestrator' && isLlmRouterEnabled() && !isLlmRouterShadowMode();
+    agentMode === 'orchestrator' && (await isLlmRouterEnabled()) && !(await isLlmRouterShadowMode());
   // Wall time this turn actually paid waiting on the classifier (a cache hit legitimately reads
   // ~0ms) — recorded on the live gate so the observability page answers the latency question the
   // cutover decision traded on, without needing server logs.
@@ -1495,7 +1559,7 @@ export async function runProductSupportWorkflow(input: {
     earlyDeclineGateEnabled,
     aiSdkGenerationEnabled: useAiSdkGeneration,
     rerankerActive: PRODUCT_SUPPORT_RERANK_ENABLED && isRerankerConfigured(),
-    confidenceGatingDisabled: isConfidenceGatingDisabled(),
+    confidenceGatingDisabled: await isConfidenceGatingDisabled(),
     agentMode,
     routedDirectly: agentMode !== 'orchestrator',
   };
@@ -2169,7 +2233,8 @@ export async function runProductSupportWorkflow(input: {
      * `resolvedCompetitorPromise` prefetch above, and is only awaited later, right before the
      * agent step is persisted (see `shadowIntentClassification` below).
      */
-    const shadowIntentClassificationEnabled = isLlmRouterEnabled() && isLlmRouterShadowMode();
+    const shadowIntentClassificationEnabled =
+      (await isLlmRouterEnabled()) && (await isLlmRouterShadowMode());
     const shadowIntentClassificationPromise: Promise<IntentClassification> | null =
       shadowIntentClassificationEnabled
         ? classifyUserIntent(
@@ -2976,7 +3041,7 @@ export async function runProductSupportWorkflow(input: {
       needsUsageSafetyCoverage &&
       (!usageSafetyCoverage.hasUsageEvidence ||
         !usageSafetyCoverage.hasSafetyEvidence) &&
-      !isConfidenceGatingDisabled()
+      !(await isConfidenceGatingDisabled())
     ) {
       const missingEvidence: string[] = [];
       if (!usageSafetyCoverage.hasUsageEvidence) {
@@ -3105,7 +3170,7 @@ export async function runProductSupportWorkflow(input: {
     let regulatedClaimGuardrailActivation: GateActivationRecord = { state: 'ran' };
 
     if (regulatedClaimGrounding.ungroundedCategories.length > 0) {
-      if (isConfidenceGatingDisabled()) {
+      if (await isConfidenceGatingDisabled()) {
         validatorStepGates.push({
           gate: 'regulated_claim_guardrail',
           inputs: {
@@ -3191,7 +3256,7 @@ export async function runProductSupportWorkflow(input: {
          */
         brandKnown: Boolean(resolvedCompetitor?.brand?.trim()),
       };
-      const gate = evaluateRecommendationGate(gateInput);
+      const gate = await evaluateRecommendationGate(gateInput);
       recommendationConfidenceActivation =
         gate.bypassedChecks.length > 0
           ? { state: 'bypassed', reason: 'confidence_gating_disabled' }

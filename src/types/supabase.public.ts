@@ -23,6 +23,7 @@ export type Database = {
           openai_conversation_id: string | null
           source: string
           status: string
+          test_name: string | null
           title: string
           updated_at: string
           user_id: string | null
@@ -36,6 +37,7 @@ export type Database = {
           openai_conversation_id?: string | null
           source?: string
           status?: string
+          test_name?: string | null
           title?: string
           updated_at?: string
           user_id?: string | null
@@ -49,6 +51,7 @@ export type Database = {
           openai_conversation_id?: string | null
           source?: string
           status?: string
+          test_name?: string | null
           title?: string
           updated_at?: string
           user_id?: string | null
@@ -1138,6 +1141,7 @@ export type Database = {
           confidence_floor: number
           id: string
           intended_agent: string | null
+          is_archived: boolean
           is_golden: boolean
           metadata: Json
           name: string
@@ -1155,6 +1159,7 @@ export type Database = {
           confidence_floor?: number
           id?: string
           intended_agent?: string | null
+          is_archived?: boolean
           is_golden?: boolean
           metadata?: Json
           name: string
@@ -1172,6 +1177,7 @@ export type Database = {
           confidence_floor?: number
           id?: string
           intended_agent?: string | null
+          is_archived?: boolean
           is_golden?: boolean
           metadata?: Json
           name?: string

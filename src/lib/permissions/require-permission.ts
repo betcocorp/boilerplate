@@ -88,7 +88,7 @@ async function resolveVerdict(params: {
 
   if (allowed) return { allowed: true, userId, permissions };
 
-  if (!isPermissionsEnforced()) {
+  if (!(await isPermissionsEnforced())) {
     return { allowed: true, shadowAllowed: true, userId, permissions };
   }
 

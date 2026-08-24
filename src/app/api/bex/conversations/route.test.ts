@@ -148,6 +148,18 @@ describe('/api/bex/conversations', () => {
           ownerName: null,
           ownerEmail: null,
         } as never,
+        {
+          id: 'conv-3',
+          title: 'C',
+          updated_at: '2026-08-11T00:00:00.000Z',
+          status: 'active',
+          latest_model: null,
+          user_id: null,
+          source: 'test_run',
+          ownerName: null,
+          ownerEmail: null,
+          test_name: 'Product Golden Test Set',
+        } as never,
       ]);
 
       const response = await GET(makeRequest());
@@ -156,7 +168,7 @@ describe('/api/bex/conversations', () => {
       expect(response.status).toBe(200);
       expect(listAllConversations).toHaveBeenCalledWith({ limit: 80 });
       expect(listConversationsForUser).not.toHaveBeenCalled();
-      expect(body.conversations).toHaveLength(2);
+      expect(body.conversations).toHaveLength(3);
       expect(body.conversations[0]).toMatchObject({
         owner: { name: 'User One', email: 'user1@betco.com', userId: 'user-1' },
         source: 'chat',
@@ -164,6 +176,12 @@ describe('/api/bex/conversations', () => {
       });
       expect(body.conversations[1]).toMatchObject({
         owner: 'admin',
+        source: 'test_run',
+        isOwner: false,
+      });
+      // B0-645 — a test_run row with a resolved test_name is attributed to the test, not 'admin'.
+      expect(body.conversations[2]).toMatchObject({
+        owner: { kind: 'test', title: 'Product Golden Test Set' },
         source: 'test_run',
         isOwner: false,
       });

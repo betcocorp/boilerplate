@@ -3,7 +3,10 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { fetchFactsForProductLineKey } from '~/lib/retrieval/product-facts';
+import {
+  fetchFactsForProductLineKey,
+  fetchFactsForProductLineKeys,
+} from '~/lib/retrieval/product-facts';
 import {
   fetchDiscontinuedEntityIds,
   ragQueryForProductKnowledgeWithMeta,
@@ -98,20 +101,70 @@ describe.skipIf(!hasSupabaseCreds)('get_efficacy_data exact lookup — real prod
   });
 
   it(
-    'KNOWN GAP (verified live, pre-existing, out of scope for this ticket): kill-claim data ' +
-      'keyed to a product-TIER entity (rag.product_efficacy) is invisible to this product-LINE-' +
-      'keyed lookup, even though real verified data exists for the line. "Oxy Fight Bac RTU" has ' +
-      'real bactericidal/fungicidal claims (contact_time_seconds=600, EPA 85837-4-4170, confidence ' +
-      '0.9) on its product-tier entity, but its product_line-tier sibling entity has none — so ' +
-      'fetchFactsForProductLineKey (and therefore get_efficacy_data) returns null here instead of ' +
-      'those verified facts. B0-250 explicitly scoped fact/efficacy lookups to product_line_key ' +
-      'only; extending this to also resolve product-tier data is a real follow-up, not something ' +
-      'this ticket silently fixes.',
+    'GAP NOW CLOSED BY B0-634 (was a documented KNOWN GAP here): kill-claim data keyed to a ' +
+      'product-TIER entity (rag.product_efficacy) used to be invisible to this product-LINE-keyed ' +
+      'lookup. "Oxy Fight Bac RTU" carries real bactericidal/fungicidal/virucidal claims ' +
+      '(contact_time_seconds=600, EPA 85837-4-4170, confidence 0.9) on its product-tier entity and ' +
+      'none on its product_line-tier sibling, so this returned null. B0-634 unions efficacy rows ' +
+      'across both tiers, so those verified claims now reach get_efficacy_data.',
     async () => {
       const facts = await fetchFactsForProductLineKey('63A713FE-F46F-49F0-80A7-A61D4D2F25C5');
-      expect(facts).toBeNull();
+      expect(facts).not.toBeNull();
+      const staph = facts?.efficacy.find((e) => e.organism === 'Staphylococcus aureus');
+      expect(staph?.claimType).toBe('bactericidal');
+      expect(staph?.contactTimeSeconds).toBe(600);
+      expect(staph?.epaRegistration).toBe('85837-4-4170');
+      expect(staph?.confidence).toBe(0.9);
     },
   );
+});
+
+/**
+ * B0-634 — tier-aware fact resolution. `get_efficacy_data` for "Push" returned
+ * dilutionOzPerGal: null even though rag.product_line_fact holds dilution_oz_per_gal = 5 for it,
+ * because the resolver only ever read the product_line-TIER entity. Line keys / values below were
+ * read live via mcp__supabase__execute_sql and are transcribed verbatim. Merge-rule unit coverage
+ * (agree / disagree / union) lives in b0634-cross-tier-facts.test.ts.
+ */
+describe.skipIf(!hasSupabaseCreds)('cross-tier fact resolution — real product lines (B0-634)', () => {
+  it('"Push" — product-tier dilution_oz_per_gal = 5 now reaches the line-keyed lookup', async () => {
+    const facts = await fetchFactsForProductLineKey('F831DAC3-288E-4013-AE36-D0141F8F94F1');
+    expect(facts).not.toBeNull();
+    // product-tier entities "Push" (13304) and "Push Mango" (260804) both store 5 -> they agree.
+    expect(facts?.dilutionOzPerGal).toBe(5);
+    // line-tier scalars are untouched by the merge
+    expect(facts?.coverageSqFt).toBe(3200);
+    expect(facts?.productApplication).toBe('drain-maintenance, general-cleaner');
+    expect(facts?.confidence).toBe(1);
+  });
+
+  it('"Aggressive No-Rinse Stripper" — a non-null line-tier value is never overwritten by the product tier', async () => {
+    // product-tier rows carry dilution_display "1:3" and "Normal stripping — 1:10"; the line tier
+    // has "13 oz./gal." and must win outright.
+    const facts = await fetchFactsForProductLineKey('75FCC5DE-ECD2-4AD3-8117-3A397A3A916D');
+    expect(facts).not.toBeNull();
+    expect(facts?.dilutionDisplay).toBe('13 oz./gal.');
+    expect(facts?.dilutionOzPerGal).toBe(13);
+    expect(facts?.confidence).toBe(0.75);
+  });
+
+  it('"Super Concentrated Industrial Degreaser" — disagreeing product-tier dilutions abstain rather than pick one', async () => {
+    // Two product-tier fact rows, dilution_display "1:22" (58864) vs "1:100" (SP58864), and no
+    // line-tier fact row at all. Differing dilutions mean different formulations, so the merge
+    // must leave every scalar null -- which leaves nothing on file and returns null, not a guess.
+    const facts = await fetchFactsForProductLineKey('5C84E6CF-449C-4B3C-A058-145FE28122FA');
+    expect(facts).toBeNull();
+  });
+
+  it('batch resolver agrees with the single-key resolver on the "Push" line', async () => {
+    const batch = await fetchFactsForProductLineKeys([
+      'F831DAC3-288E-4013-AE36-D0141F8F94F1',
+      '5C84E6CF-449C-4B3C-A058-145FE28122FA',
+    ]);
+    expect(batch.get('F831DAC3-288E-4013-AE36-D0141F8F94F1')?.dilutionOzPerGal).toBe(5);
+    // abstained line carries no facts at all -> absent from the map, never a placeholder
+    expect(batch.has('5C84E6CF-449C-4B3C-A058-145FE28122FA')).toBe(false);
+  });
 });
 
 describe.skipIf(!hasSupabaseCreds)('discontinued-product retrieval filter (B0-257 work item 4)', () => {

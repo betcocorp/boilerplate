@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { POST } from '~/app/api/bex/chat/stream/route';
 import { getBexActor } from '~/lib/api/bex-actor';
@@ -47,6 +47,13 @@ vi.mock('~/lib/observability/correlation-id', () => ({
   newCorrelationId: () => 'trace-test-1',
 }));
 
+vi.mock('~/lib/settings/settings-service', () => ({
+  getBooleanSetting: vi.fn().mockResolvedValue(true),
+  getStringSetting: vi.fn().mockResolvedValue('all'),
+}));
+
+import { getBooleanSetting } from '~/lib/settings/settings-service';
+
 function makeRequest(body: unknown) {
   return new Request('http://localhost/api/bex/chat/stream', {
     method: 'POST',
@@ -78,7 +85,7 @@ async function readResponseBody(response: Response): Promise<string> {
 
 describe('POST /api/bex/chat/stream', () => {
   beforeEach(() => {
-    process.env.BEX_AI_SDK_STREAMING_ENABLED = 'true';
+    vi.mocked(getBooleanSetting).mockReset().mockResolvedValue(true);
     vi.mocked(hasBexSession).mockReset();
     vi.mocked(runBexChatTurn).mockReset();
     vi.mocked(getBexActor).mockReset();
@@ -93,12 +100,8 @@ describe('POST /api/bex/chat/stream', () => {
     vi.mocked(writeAuditLog).mockResolvedValue(undefined);
   });
 
-  afterEach(() => {
-    delete process.env.BEX_AI_SDK_STREAMING_ENABLED;
-  });
-
   it('returns 404 when streaming is disabled', async () => {
-    process.env.BEX_AI_SDK_STREAMING_ENABLED = 'false';
+    vi.mocked(getBooleanSetting).mockResolvedValue(false);
     vi.mocked(hasBexSession).mockResolvedValue(true);
 
     const response = await POST(makeRequest({ message: 'Hi there' }));

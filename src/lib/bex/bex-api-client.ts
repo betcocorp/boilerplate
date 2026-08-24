@@ -246,10 +246,16 @@ export async function apiPostBexChatStream(options: {
   model: string;
   useValidator?: boolean;
   agentMode?: BexChatAgentMode;
+  /**
+   * Sent as `x-bex-streaming-cohort`. Resolved server-side from the `settings` table
+   * (`NEXT_PUBLIC_BEX_STREAMING_ROLLOUT_COHORT`) and threaded down by the caller — this client
+   * module cannot read a DB-backed setting itself.
+   */
+  rolloutCohort?: string;
   onTextDelta?: (delta: string) => void;
   onEvent?: (event: unknown) => void;
 }): Promise<BexChatStreamResponse> {
-  const rolloutCohort = process.env.NEXT_PUBLIC_BEX_STREAMING_ROLLOUT_COHORT?.trim();
+  const rolloutCohort = options.rolloutCohort?.trim();
   const res = await fetch('/api/bex/chat/stream', {
     method: 'POST',
     headers: {
