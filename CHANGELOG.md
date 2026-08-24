@@ -1,3 +1,21 @@
+# [2.6.0](https://github.com/betcocorp/bex2.0/compare/v2.5.0...v2.6.0) (2026-08-24)
+
+
+### Bug Fixes
+
+* **B0-634:** resolve product-line facts across entity tiers ([a273570](https://github.com/betcocorp/bex2.0/commit/a2735701487e8c58d43999ff7b0284198b00a944))
+* **B0-639:** clear Bex chat composer and restore focus after send ([4e402f4](https://github.com/betcocorp/bex2.0/commit/4e402f43cb03e7902cac4f27c8fb4f7aa0c2b2ef))
+* **B0-640:** stop diluting Tavily relevance and starving enrich of raw content ([a113e16](https://github.com/betcocorp/bex2.0/commit/a113e16ad3d071d4656a7ddd730edde069709d2f)), closes [hi#signal](https://github.com/hi/issues/signal)
+* **B0-643:** restore bex.chat.view-all permission grant for it-admin ([2a68c07](https://github.com/betcocorp/bex2.0/commit/2a68c0765c7e9ab57d133ba66e07b4bb599133d5))
+* remove unused NextAuth accessToken pass-through ([120846f](https://github.com/betcocorp/bex2.0/commit/120846ffadc36f2f7b6cd4448f0ea61fc2968efb))
+
+
+### Features
+
+* **B0-635:** stop retrieval once searches stop finding anything new ([60d467d](https://github.com/betcocorp/bex2.0/commit/60d467d370af9a0c369509451c79dc06f2dea6dd))
+* **B0-644:** add archive/restore capability for test datasets ([9645500](https://github.com/betcocorp/bex2.0/commit/9645500f2186a626df0eea7c1a727ea16c7531fb))
+* **B0-645:** store test name on agent conversations for admin sidebar ([cd29e5b](https://github.com/betcocorp/bex2.0/commit/cd29e5b0233576fa3675f73a45f02bfa669e4ea7))
+
 # [2.5.0](https://github.com/betcocorp/bex2.0/compare/v2.4.0...v2.5.0) (2026-08-23)
 
 
