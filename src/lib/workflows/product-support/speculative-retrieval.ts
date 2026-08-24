@@ -16,10 +16,17 @@ import type { ExecuteToolFn, PreloadedEvidence } from '~/lib/openai/responses-ru
  *
  * Guardrail: this must SATISFY the prompt's mandatory-retrieval requirement, never bypass it. The
  * speculative result flows through the workflow's own `executeTool` closure, so it lands in
- * `toolOutputLog` / `toolTrace` and is seen by `collectSourcesFromToolOutputs`,
- * `collectSourceMetaFromToolOutputs`, `collectRetrievedDocumentChunksFromToolOutputs`, the
- * usage/safety coverage gate, `buildEvidenceSummary` and `evaluateRegulatedClaimGrounding` exactly as
- * a model-requested call would be.
+ * `toolOutputLog` / `toolTrace` and is seen by `collectSourceMetaFromToolOutputs`,
+ * `collectRetrievedDocumentChunksFromToolOutputs`, the usage/safety coverage gate,
+ * `buildEvidenceSummary` and `evaluateRegulatedClaimGrounding` exactly as a model-requested call
+ * would be.
+ *
+ * B0-635 — one exception, and only for user-visible citations: `collectSourcesFromToolOutputs` skips
+ * a speculative result whose own product-line resolution declined to lock (see
+ * `isUnendorsedSpeculativeToolOutput`). Because this searches the RAW user message, it can match an
+ * incidental word rather than the product asked about, and those weak hits were being cited. The
+ * evidence and audit paths above are deliberately NOT narrowed — the regulated-claim guardrail must
+ * always see the complete evidence set.
  */
 
 export const SPECULATIVE_SEARCH_TOOL_NAME = 'search_product_docs';
