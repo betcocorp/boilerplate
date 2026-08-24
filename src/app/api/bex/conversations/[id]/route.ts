@@ -91,6 +91,7 @@ export async function GET(request: Request, ctx: RouteParams) {
       {
         source: conversation.source,
         user_id: conversation.user_id,
+        test_name: conversation.test_name,
         ...ownerInfo,
       },
       actor,

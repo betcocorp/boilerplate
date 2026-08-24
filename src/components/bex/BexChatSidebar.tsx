@@ -67,6 +67,11 @@ function ownerBadge(owner: ConversationOwner): { label: string; variant: 'second
   if (owner === null) {
     return { label: 'Unattributed', variant: 'outline' };
   }
+  // B0-645 — test-runner conversation attributed to its source test, distinguished from a real
+  // named user (below) by the `secondary` variant, same as the 'admin' fallback it replaces.
+  if ('kind' in owner) {
+    return { label: `Test: ${owner.title}`, variant: 'secondary' };
+  }
   return { label: owner.name, variant: 'outline' };
 }
 
@@ -116,7 +121,9 @@ export function BexChatSidebar({
   const userFilterOptions = useMemo(() => {
     const byUserId = new Map<string, string>();
     for (const c of conversations) {
-      if (c.owner && typeof c.owner === 'object') {
+      // B0-645 — narrowed to the real named-user shape only: `'userId' in c.owner` excludes the
+      // new `{ kind: 'test'; title }` variant, which must never appear as a filterable "user".
+      if (c.owner && typeof c.owner === 'object' && 'userId' in c.owner) {
         byUserId.set(c.owner.userId, c.owner.name);
       }
     }

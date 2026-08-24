@@ -368,7 +368,7 @@ export function gradeChatTestResponse(params: {
 export async function runSingleTestItem(
   testResultId: string,
   testItem: TestItemRecord,
-  options?: { modelTag?: string; useValidator?: boolean },
+  options?: { modelTag?: string; useValidator?: boolean; testName?: string | null },
 ): Promise<RunSingleItemResult> {
   const startedAt = Date.now();
   let firstDeltaAt: number | null = null;
@@ -390,6 +390,9 @@ export async function runSingleTestItem(
       agentMode: 'orchestrator',
       // B0-450: eval-harness conversations are never attributed to whoever kicked off the run.
       owner: { kind: 'system' },
+      // B0-645: stamps the source test's name onto the conversation so the admin sidebar shows
+      // which test produced it instead of a generic "Admin" badge.
+      testName: options?.testName,
       onAssistantDelta: () => {
         if (firstDeltaAt === null) firstDeltaAt = Date.now();
       },

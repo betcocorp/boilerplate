@@ -199,6 +199,8 @@ export async function executeTestRun(testResultId: string) {
     const itemResult = await runSingleTestItem(testResult.id, item, {
       modelTag,
       useValidator,
+      // B0-645: stamps the source test's name onto the created conversation.
+      testName: test.name,
     });
     // B0-501 — dual-router instrumentation, independent of the answer `runSingleTestItem` already
     // produced above: never changes `itemResult.item`'s pass/fail or response fields, only adds the

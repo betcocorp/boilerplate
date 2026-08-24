@@ -56,13 +56,19 @@ export type ChatMessage = {
 };
 
 /**
- * B0-451 — admin sidebar owner attribution. `'admin'` for test-runner conversations (never a real
- * user, per B0-450); `null` for a legacy/unresolved `source: 'chat'` row with no owner ("Unattributed");
- * otherwise the resolved user. `userId` is included so the "filter by user" control has a value to
- * send back as `?userFilter=`.
+ * B0-451 — admin sidebar owner attribution. `'admin'` for a test-runner conversation whose source
+ * test can't be resolved; `null` for a legacy/unresolved `source: 'chat'` row with no owner
+ * ("Unattributed"); otherwise the resolved user. `userId` is included so the "filter by user"
+ * control has a value to send back as `?userFilter=`.
+ *
+ * B0-645 — `{ kind: 'test'; title }` for a test-runner conversation whose source test IS
+ * resolvable: `title` is the `tests.name` of the dataset that produced it. Discriminate this from
+ * the named-user shape via `'kind' in owner`, since the named-user shape deliberately has no
+ * `kind` field.
  */
 export type ConversationOwner =
   | { name: string; email: string | null; userId: string }
+  | { kind: 'test'; title: string }
   | 'admin'
   | null;
 

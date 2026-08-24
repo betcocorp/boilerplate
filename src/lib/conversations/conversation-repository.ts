@@ -6,7 +6,10 @@ export type AgentConversationRow = Tables<'agent_conversations'>;
 
 export async function createConversation(
   input: Partial<
-    Pick<TablesInsert<'agent_conversations'>, 'title' | 'workspace_id' | 'user_id' | 'source'>
+    Pick<
+      TablesInsert<'agent_conversations'>,
+      'title' | 'workspace_id' | 'user_id' | 'source' | 'test_name'
+    >
   > = {},
 ): Promise<AgentConversationRow> {
   const supabase = getSupabaseServiceRoleClient();
@@ -17,6 +20,7 @@ export async function createConversation(
       workspace_id: input.workspace_id ?? null,
       user_id: input.user_id ?? null,
       ...(input.source !== undefined ? { source: input.source } : {}),
+      ...(input.test_name !== undefined ? { test_name: input.test_name } : {}),
     })
     .select()
     .single();
@@ -134,6 +138,8 @@ export async function listAllConversations(options?: {
     };
   });
 }
+
+
 
 /**
  * B0-451 — single-row owner-join for `GET /api/bex/conversations/[id]`. Mirrors the fallback

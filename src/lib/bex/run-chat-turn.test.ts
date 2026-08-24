@@ -97,7 +97,31 @@ describe('runBexChatTurn — conversation ownership (B0-449/450)', () => {
       owner: { kind: 'system' },
     });
 
-    expect(createConversation).toHaveBeenCalledWith({ user_id: null, source: 'test_run' });
+    expect(createConversation).toHaveBeenCalledWith({
+      user_id: null,
+      source: 'test_run',
+      test_name: null,
+    });
+  });
+
+  it("owner: {kind:'system'} with testName stamps it onto the created conversation (B0-645)", async () => {
+    vi.mocked(createConversation).mockResolvedValue(
+      baseConversation({ user_id: null, source: 'test_run' }),
+    );
+
+    await runBexChatTurn({
+      conversationId: null,
+      message: 'hello',
+      source: 'harness',
+      owner: { kind: 'system' },
+      testName: 'Product Golden Test Set',
+    });
+
+    expect(createConversation).toHaveBeenCalledWith({
+      user_id: null,
+      source: 'test_run',
+      test_name: 'Product Golden Test Set',
+    });
   });
 
   it('no owner creates the conversation with no override, so the DB default (user_id null, source chat) applies', async () => {
