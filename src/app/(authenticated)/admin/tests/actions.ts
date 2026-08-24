@@ -25,6 +25,7 @@ import {
   buildManualAddTestItemPayload,
 } from '~/lib/tests/manual-add-payload';
 import {
+  archiveTest,
   createTestRecord,
   createTestResult,
   deleteTestById,
@@ -36,6 +37,7 @@ import {
   getTestItemsByTestId,
   getTestResultById,
   insertTestItems,
+  unarchiveTest,
   updateTestItemForTest,
   updateTestRecord,
   updateTestResult,
@@ -1017,4 +1019,30 @@ export async function updateTestRunNotesAction(input: {
   revalidatePath(`/admin/tests/${testId}/runs/${runId}`);
 
   return { ok: true };
+}
+
+export async function archiveTestAction(formData: FormData) {
+  const returnPath = normalizeReturnPath(formData.get('returnPath'), '/admin/tests');
+  const testId = formData.get('testId');
+  if (typeof testId !== 'string' || !testId.trim()) {
+    redirect(encodeMessage(returnPath, 'error', 'Missing test id.'));
+  }
+
+  const isArchiving = formData.get('isArchiving') === 'true';
+
+  if (isArchiving) {
+    await archiveTest(testId);
+  } else {
+    await unarchiveTest(testId);
+  }
+
+  revalidatePath('/admin/tests');
+  revalidatePath('/admin/tests/archived');
+  redirect(
+    encodeMessage(
+      returnPath,
+      'success',
+      isArchiving ? 'Test archived.' : 'Test restored.',
+    ),
+  );
 }

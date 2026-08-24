@@ -1138,6 +1138,7 @@ export type Database = {
           confidence_floor: number
           id: string
           intended_agent: string | null
+          is_archived: boolean
           is_golden: boolean
           metadata: Json
           name: string
@@ -1155,6 +1156,7 @@ export type Database = {
           confidence_floor?: number
           id?: string
           intended_agent?: string | null
+          is_archived?: boolean
           is_golden?: boolean
           metadata?: Json
           name: string
@@ -1172,6 +1174,7 @@ export type Database = {
           confidence_floor?: number
           id?: string
           intended_agent?: string | null
+          is_archived?: boolean
           is_golden?: boolean
           metadata?: Json
           name?: string
