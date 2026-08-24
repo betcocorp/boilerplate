@@ -1,11 +1,14 @@
 import type OpenAI from 'openai';
-import type { Response } from 'openai/resources/responses/responses';
+import type { Response, Tool } from 'openai/resources/responses/responses';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  collectRetrievalEvidenceIds,
+  RETRIEVAL_EXHAUSTED_INSTRUCTION,
   runResponsesWithToolLoop,
   TOOL_ROUNDS_EXHAUSTED_FALLBACK_TEXT,
   TOOL_ROUNDS_EXHAUSTED_TOOL_OUTPUT,
+  UNPRODUCTIVE_RETRIEVAL_CALL_LIMIT,
 } from '~/lib/openai/responses-runtime';
 import {
   isUpstreamTransportError,
@@ -1029,7 +1032,12 @@ describe('runResponsesWithToolLoop — concurrent tool execution (B0-379)', () =
         await new Promise<void>((resolve) => {
           release.push(resolve);
         });
-        return { output: JSON.stringify({ ok: true, callId }), trace: traceFor(name, callId) };
+        // B0-635 — each call returns its own new document, so this productive round is nowhere
+        // near the unproductive-retrieval early stop; this test is about concurrency and ordering.
+        return {
+          output: JSON.stringify({ ok: true, callId, sources: [{ documentId: callId }] }),
+          trace: traceFor(name, callId),
+        };
       },
     );
 
@@ -1064,9 +1072,9 @@ describe('runResponsesWithToolLoop — concurrent tool execution (B0-379)', () =
       .input as Array<Record<string, unknown>>;
     expect(round2.map((item) => item.call_id)).toEqual(['call_a', 'call_b', 'call_c']);
     expect(round2.map((item) => item.output)).toEqual([
-      '{"ok":true,"callId":"call_a"}',
-      '{"ok":true,"callId":"call_b"}',
-      '{"ok":true,"callId":"call_c"}',
+      '{"ok":true,"callId":"call_a","sources":[{"documentId":"call_a"}]}',
+      '{"ok":true,"callId":"call_b","sources":[{"documentId":"call_b"}]}',
+      '{"ok":true,"callId":"call_c","sources":[{"documentId":"call_c"}]}',
     ]);
     expect(result.assistantText).toBe('combined answer');
   });
@@ -1230,5 +1238,384 @@ describe('runResponsesWithToolLoop — temperature gating (B0-606)', () => {
     ).rejects.toThrow(/Invalid schema for function/);
 
     expect(create).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('collectRetrievalEvidenceIds (B0-635)', () => {
+  it('namespaces document and chunk ids so the two id spaces cannot collide', () => {
+    const ids = collectRetrievalEvidenceIds(
+      JSON.stringify({
+        ok: true,
+        sources: [{ documentId: 'same', chunkId: 'same' }],
+      }),
+    );
+    expect(ids).toEqual(['documentId:same', 'chunkId:same']);
+  });
+
+  it('counts every assembled chunk id, so a different chunk window is new information (B0-547)', () => {
+    const ids = collectRetrievalEvidenceIds(
+      JSON.stringify({
+        ok: true,
+        sources: [
+          {
+            documentId: 'doc-a',
+            chunkId: 'chunk-1',
+            documentBodyChunkIds: ['chunk-1', 'chunk-2', 'chunk-3'],
+          },
+        ],
+      }),
+    );
+    expect(ids).toEqual([
+      'documentId:doc-a',
+      'chunkId:chunk-1',
+      'chunkId:chunk-1',
+      'chunkId:chunk-2',
+      'chunkId:chunk-3',
+    ]);
+  });
+
+  it('yields nothing for an errored, empty, or unparseable payload', () => {
+    expect(collectRetrievalEvidenceIds('not json at all')).toEqual([]);
+    expect(collectRetrievalEvidenceIds(JSON.stringify({ ok: false, error: 'boom' }))).toEqual([]);
+    // A structured-facts lookup with genuinely nothing on file: no `sources` key at all.
+    expect(
+      collectRetrievalEvidenceIds(
+        JSON.stringify({ ok: true, adapter: 'structured_facts_v1', facts: null }),
+      ),
+    ).toEqual([]);
+    expect(collectRetrievalEvidenceIds(JSON.stringify({ ok: true, sources: [] }))).toEqual([]);
+    // Blank/missing ids are not ids.
+    expect(
+      collectRetrievalEvidenceIds(JSON.stringify({ ok: true, sources: [{ documentId: '  ' }] })),
+    ).toEqual([]);
+  });
+});
+
+describe('runResponsesWithToolLoop — unproductive-retrieval early stop (B0-635)', () => {
+  const functionTool = (name: string): Tool => ({
+    type: 'function',
+    name,
+    description: name,
+    parameters: { type: 'object', properties: {}, required: [] },
+    strict: false,
+  });
+
+  /** One retrieval tool + one non-retrieval tool, matching `productSupportToolsForRoute`'s shape. */
+  const offeredTools: Tool[] = [
+    functionTool('search_product_docs'),
+    functionTool('lookup_cross_reference'),
+  ];
+
+  const callTool = (callId: string, name = 'search_product_docs') => ({
+    type: 'function_call',
+    call_id: callId,
+    name,
+    arguments: '{"freeformQuery":"cartridge yield"}',
+  });
+
+  /**
+   * A corpus-SEARCH payload citing exactly these documents (one chunk each). Carries the real
+   * `adapter` discriminator the semantic-search family returns — only a search payload can count
+   * toward exhaustion (see `isCorpusSearchPayload`).
+   */
+  const retrieved = (...documentIds: string[]) =>
+    JSON.stringify({
+      ok: true,
+      adapter: 'rag_corpus_full_document',
+      sources: documentIds.map((documentId) => ({
+        documentId,
+        chunkId: `${documentId}#c1`,
+        documentBody: 'FastDraw dilution guidance…',
+      })),
+    });
+
+  /** A corpus search that ran and genuinely matched nothing — counts as "nothing new". */
+  const searchedNothing = () =>
+    JSON.stringify({ ok: true, adapter: 'rag_corpus_full_document', sources: [] });
+
+  /** A structured point lookup with no facts on file — neutral, never counts toward exhaustion. */
+  const noFactsOnFile = () =>
+    JSON.stringify({ ok: true, adapter: 'structured_facts_v1', facts: null });
+
+  const toolNamesOf = (params: Record<string, unknown> | undefined): string[] =>
+    ((params?.tools ?? []) as Array<Record<string, unknown>>).map((tool) => String(tool.name));
+
+  const inputOf = (params: Record<string, unknown> | undefined): Array<Record<string, unknown>> =>
+    (params?.input ?? []) as Array<Record<string, unknown>>;
+
+  const paramsOf = (create: ReturnType<typeof vi.fn>, index: number) =>
+    (create.mock.calls as unknown as Array<[Record<string, unknown>]>)[index]?.[0];
+
+  it('withdraws retrieval tools after two consecutive calls that surface no new document', async () => {
+    const { client, create } = stubClient([
+      { id: 'resp_1', output: [callTool('call_1')] },
+      { id: 'resp_2', output: [callTool('call_2')] },
+      { id: 'resp_3', output: [callTool('call_3')] },
+      { id: 'resp_4', output: [], output_text: 'The cartridge volume is not on file.' },
+    ]);
+
+    // call_1 finds doc-a (productive); call_2 and call_3 re-find only doc-a — the repro pattern.
+    const outputs = [retrieved('doc-a'), retrieved('doc-a'), retrieved('doc-a')];
+    let call = 0;
+    const executeTool = vi.fn(async ({ name }: { name: string }) => ({
+      output: outputs[call++] ?? '{}',
+      trace: trace(name),
+    }));
+
+    const result = await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1',
+      instructions: 'stable prefix',
+      tools: offeredTools,
+      userMessage: 'how many quarts of end use product from one cartridge of push?',
+      maxToolRounds: 16,
+      executeTool,
+    });
+
+    // maxToolRounds (16) never engages — the early stop ends the search after 3 calls.
+    expect(create).toHaveBeenCalledTimes(4);
+    expect(executeTool).toHaveBeenCalledTimes(3);
+    expect(result.assistantText).toBe('The cartridge volume is not on file.');
+
+    // Retrieval was on offer for every round up to and including the one that tripped the stop…
+    for (const index of [0, 1, 2]) {
+      expect(toolNamesOf(paramsOf(create, index))).toContain('search_product_docs');
+    }
+    // …and gone afterwards, with the non-retrieval tool untouched.
+    expect(toolNamesOf(paramsOf(create, 3))).toEqual(['lookup_cross_reference']);
+  });
+
+  it('does not withdraw retrieval when two structured point lookups find no facts on file', async () => {
+    // Regression guard: efficacy rows are sparse, so "no facts on file" twice is a normal opening
+    // move. It says nothing about whether a document search would find the answer, and must not
+    // withdraw search before search has been tried even once.
+    const { client, create } = stubClient([
+      { id: 'resp_1', output: [callTool('call_1', 'get_efficacy_data')] },
+      { id: 'resp_2', output: [callTool('call_2', 'get_efficacy_data')] },
+      { id: 'resp_3', output: [callTool('call_3')] },
+      { id: 'resp_4', output: [], output_text: 'Dilute 5 oz per gallon.' },
+    ]);
+
+    const outputs = [noFactsOnFile(), noFactsOnFile(), retrieved('doc-a')];
+    let call = 0;
+
+    await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1',
+      instructions: 'stable prefix',
+      tools: offeredTools,
+      userMessage: 'does push kill MRSA, and what is its dilution?',
+      executeTool: async ({ name }) => ({ output: outputs[call++] ?? '{}', trace: trace(name) }),
+    });
+
+    // Search survives both empty lookups and is still on offer for every round.
+    for (const index of [0, 1, 2, 3]) {
+      expect(toolNamesOf(paramsOf(create, index))).toContain('search_product_docs');
+    }
+    // No exhaustion notice was ever delivered.
+    for (const index of [1, 2, 3]) {
+      expect(
+        inputOf(paramsOf(create, index)).some((item) =>
+          String(item.content ?? '').includes('Retrieval is exhausted'),
+        ),
+      ).toBe(false);
+    }
+  });
+
+  it('tells the model retrieval is exhausted instead of silently removing the tool', async () => {
+    const { client, create } = stubClient([
+      { id: 'resp_1', output: [callTool('call_1')] },
+      { id: 'resp_2', output: [callTool('call_2')] },
+      { id: 'resp_3', output: [], output_text: 'Not on file.' },
+    ]);
+
+    await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1',
+      instructions: 'stable prefix',
+      tools: offeredTools,
+      userMessage: 'how many quarts per cartridge?',
+      // Both calls are corpus searches that matched nothing: nothing new, twice in a row.
+      executeTool: async ({ name }) => ({
+        output: searchedNothing(),
+        trace: trace(name),
+      }),
+    });
+
+    const withdrawalRound = inputOf(paramsOf(create, 2));
+    // The tool outputs come first, then the notice as its own user message.
+    expect(withdrawalRound[0]?.type).toBe('function_call_output');
+    const notice = withdrawalRound[withdrawalRound.length - 1];
+    expect(notice?.role).toBe('user');
+    expect(notice?.content).toBe(RETRIEVAL_EXHAUSTED_INSTRUCTION);
+
+    // The notice has to say retrieval is over AND what to do instead, or an agent that still wants
+    // a number and can no longer look it up invents one.
+    expect(RETRIEVAL_EXHAUSTED_INSTRUCTION).toMatch(/retrieval is exhausted/i);
+    expect(RETRIEVAL_EXHAUSTED_INSTRUCTION).toMatch(/not on file/i);
+    expect(RETRIEVAL_EXHAUSTED_INSTRUCTION).toMatch(/do not estimate/i);
+  });
+
+  it('reports the withdrawal to the caller exactly once', async () => {
+    const { client } = stubClient([
+      { id: 'resp_1', output: [callTool('call_1')] },
+      { id: 'resp_2', output: [callTool('call_2')] },
+      { id: 'resp_3', output: [callTool('call_3')] },
+      // Post-withdrawal round: a second notification must NOT fire.
+      { id: 'resp_4', output: [callTool('call_4', 'lookup_cross_reference')] },
+      { id: 'resp_5', output: [], output_text: 'Not on file.' },
+    ]);
+
+    const onRetrievalExhausted = vi.fn();
+
+    await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1',
+      instructions: 'stable prefix',
+      tools: offeredTools,
+      userMessage: 'how many quarts per cartridge?',
+      executeTool: async ({ name }) => ({ output: retrieved('doc-a'), trace: trace(name) }),
+      onRetrievalExhausted,
+    });
+
+    expect(onRetrievalExhausted).toHaveBeenCalledTimes(1);
+    expect(onRetrievalExhausted).toHaveBeenCalledWith({
+      unproductiveCallCount: UNPRODUCTIVE_RETRIEVAL_CALL_LIMIT,
+      // `documentId:doc-a` + `chunkId:doc-a#c1`.
+      seenEvidenceIdCount: 2,
+      // Round 1 found doc-a; rounds 2 and 3 re-found only doc-a.
+      round: 3,
+    });
+  });
+
+  it('leaves a long PRODUCTIVE chain of searches completely unaffected', async () => {
+    const { client, create } = stubClient([
+      { id: 'resp_1', output: [callTool('call_1')] },
+      { id: 'resp_2', output: [callTool('call_2')] },
+      { id: 'resp_3', output: [callTool('call_3')] },
+      { id: 'resp_4', output: [callTool('call_4')] },
+      { id: 'resp_5', output: [callTool('call_5')] },
+      { id: 'resp_6', output: [callTool('call_6')] },
+      { id: 'resp_7', output: [], output_text: 'Dilute at 2 oz per gallon.' },
+    ]);
+
+    // Alternating dup / new: the counter reaches 1 repeatedly but a productive call always resets
+    // it, so it never reaches the limit no matter how long the chain gets.
+    const outputs = [
+      retrieved('doc-a'),
+      retrieved('doc-a'),
+      retrieved('doc-b'),
+      retrieved('doc-b'),
+      // Same document, different assembled chunk window — genuinely new evidence.
+      JSON.stringify({
+        ok: true,
+        sources: [
+          { documentId: 'doc-b', chunkId: 'doc-b#c1', documentBodyChunkIds: ['doc-b#c9'] },
+        ],
+      }),
+      retrieved('doc-c'),
+    ];
+    let call = 0;
+    const onRetrievalExhausted = vi.fn();
+
+    const result = await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1',
+      instructions: 'stable prefix',
+      tools: offeredTools,
+      userMessage: 'walk the whole FastDraw range',
+      maxToolRounds: 16,
+      executeTool: async ({ name }) => ({ output: outputs[call++] ?? '{}', trace: trace(name) }),
+      onRetrievalExhausted,
+    });
+
+    expect(result.assistantText).toBe('Dilute at 2 oz per gallon.');
+    expect(create).toHaveBeenCalledTimes(7);
+    expect(onRetrievalExhausted).not.toHaveBeenCalled();
+
+    // Retrieval stayed on offer for every single round, and no round carried the notice.
+    for (let index = 0; index < 7; index += 1) {
+      expect(toolNamesOf(paramsOf(create, index))).toContain('search_product_docs');
+      expect(
+        inputOf(paramsOf(create, index)).some(
+          (item) => item.content === RETRIEVAL_EXHAUSTED_INSTRUCTION,
+        ),
+      ).toBe(false);
+    }
+  });
+
+  it('keeps non-retrieval tools callable after retrieval is withdrawn', async () => {
+    const { client, create } = stubClient([
+      { id: 'resp_1', output: [callTool('call_1')] },
+      { id: 'resp_2', output: [callTool('call_2')] },
+      { id: 'resp_3', output: [callTool('call_3')] },
+      // Post-withdrawal the model reaches for a non-retrieval tool, which must still work.
+      { id: 'resp_4', output: [callTool('call_4', 'lookup_cross_reference')] },
+      { id: 'resp_5', output: [], output_text: 'Closest Betco match is Push.' },
+    ]);
+
+    const executeTool = vi.fn(async ({ name }: { name: string }) => ({
+      output: name === 'lookup_cross_reference' ? '{"ok":true,"matches":[]}' : retrieved('doc-a'),
+      trace: trace(name),
+    }));
+
+    const result = await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1',
+      instructions: 'stable prefix',
+      tools: offeredTools,
+      userMessage: 'what replaces this competitor cartridge?',
+      executeTool,
+    });
+
+    expect(result.assistantText).toBe('Closest Betco match is Push.');
+    expect(executeTool).toHaveBeenCalledTimes(4);
+    expect(executeTool.mock.calls[3]?.[0]?.name).toBe('lookup_cross_reference');
+    // Still offered on both post-withdrawal rounds; retrieval never comes back.
+    expect(toolNamesOf(paramsOf(create, 3))).toEqual(['lookup_cross_reference']);
+    expect(toolNamesOf(paramsOf(create, 4))).toEqual(['lookup_cross_reference']);
+  });
+
+  it('scores each call of a parallel round, so two dead calls in one round trip the stop', async () => {
+    const { client, create } = stubClient([
+      { id: 'resp_1', output: [callTool('call_1')] },
+      { id: 'resp_2', output: [callTool('call_2'), callTool('call_3')] },
+      { id: 'resp_3', output: [], output_text: 'Not on file.' },
+    ]);
+
+    await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1',
+      instructions: 'stable prefix',
+      tools: offeredTools,
+      userMessage: 'how many quarts per cartridge?',
+      // Round 1 is productive; round 2's two parallel calls both re-find only doc-a.
+      executeTool: async ({ name }) => ({ output: retrieved('doc-a'), trace: trace(name) }),
+    });
+
+    expect(create).toHaveBeenCalledTimes(3);
+    expect(toolNamesOf(paramsOf(create, 2))).toEqual(['lookup_cross_reference']);
+  });
+
+  it('sends tool_choice "none" when every offered tool was a retrieval tool', async () => {
+    const { client, create } = stubClient([
+      { id: 'resp_1', output: [callTool('call_1')] },
+      { id: 'resp_2', output: [callTool('call_2')] },
+      { id: 'resp_3', output: [callTool('call_3')] },
+      { id: 'resp_4', output: [], output_text: 'Not on file.' },
+    ]);
+
+    await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1',
+      instructions: 'stable prefix',
+      tools: [functionTool('search_product_docs')],
+      userMessage: 'how many quarts per cartridge?',
+      executeTool: async ({ name }) => ({ output: retrieved('doc-a'), trace: trace(name) }),
+    });
+
+    const withdrawn = paramsOf(create, 3);
+    expect(toolNamesOf(withdrawn)).toEqual([]);
+    expect(withdrawn?.tool_choice).toBe('none');
   });
 });
