@@ -8,6 +8,7 @@ import { AdminAccountMenu } from '~/components/admin/AdminAccountMenu';
 import { AdminNavAutoClose } from '~/components/admin/AdminNavAutoClose';
 import { AdminScrollableMain } from '~/components/admin/AdminScrollableMain';
 import { AdminSidebarNav } from '~/components/admin/AdminSidebarNav';
+import { EventCountdown } from '~/components/admin/EventCountdown';
 import UserSwitcher from '~/components/permissions/UserSwitcher';
 import { Button } from '~/components/ui/button';
 import {
@@ -91,6 +92,7 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
                     <span className="hidden md:block">Search</span>
                   </Link>
                 </Button>
+                <EventCountdown targetDate={new Date('2026-11-17')} />
               </div>
             </div>
           </header>
