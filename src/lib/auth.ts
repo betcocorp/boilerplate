@@ -154,19 +154,6 @@ export const authOptions: NextAuthOptions = {
         });
       }
     },
-    async jwt({ token, account }) {
-      if (account) {
-        token.accessToken = account.access_token;
-      }
-      return token;
-    },
-    async session({ session, token }) {
-      if (token.accessToken) {
-        (session as { accessToken?: string }).accessToken =
-          token.accessToken as string;
-      }
-      return session;
-    },
     async redirect({ url, baseUrl }) {
       if (url.startsWith("/")) {
         return `${baseUrl}${url}`;
