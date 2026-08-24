@@ -1,5 +1,5 @@
 import { normalizeSearchQuery } from '~/lib/websearch/cache';
-import { WebSearchService } from '~/lib/websearch/web-search-service';
+import { createWebSearchService } from '~/lib/websearch/web-search-service';
 import { WebSearchError } from '~/lib/websearch/types';
 import type { WebSearchRequest, WebSearchResponse } from '~/lib/websearch/websearch-schemas';
 
@@ -232,7 +232,7 @@ export type RecommendationWebSearchDeps = {
 };
 
 const defaultDeps: RecommendationWebSearchDeps = {
-  search: (request) => new WebSearchService().search(request),
+  search: async (request) => (await createWebSearchService()).search(request),
   getDailySpendUsd: () => getRecommendationDailySpendUsd(),
   recordDailySpendUsd: (usd) => recordRecommendationDailySpendUsd(usd),
 };

@@ -12,23 +12,23 @@ import { newCorrelationId } from '~/lib/observability/correlation-id';
 import { logInfo } from '~/lib/observability/logger';
 import { PERMISSIONS } from '~/lib/permissions/constants';
 import { gateRoute } from '~/lib/permissions/route-gate';
+import { getBooleanSetting, getStringSetting } from '~/lib/settings/settings-service';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
 
-function isStreamingEnabled(): boolean {
-  return process.env.BEX_AI_SDK_STREAMING_ENABLED === 'true';
+async function isStreamingEnabled(): Promise<boolean> {
+  return getBooleanSetting('BEX_AI_SDK_STREAMING_ENABLED', false);
 }
 
-function streamingRolloutMode(): 'all' | 'internal' {
-  return process.env.BEX_AI_SDK_STREAMING_ROLLOUT_MODE === 'internal'
-    ? 'internal'
-    : 'all';
+async function streamingRolloutMode(): Promise<'all' | 'internal'> {
+  const mode = await getStringSetting('BEX_AI_SDK_STREAMING_ROLLOUT_MODE', 'all');
+  return mode === 'internal' ? 'internal' : 'all';
 }
 
-function isRequestInStreamingCohort(request: Request): boolean {
-  const mode = streamingRolloutMode();
+async function isRequestInStreamingCohort(request: Request): Promise<boolean> {
+  const mode = await streamingRolloutMode();
   if (mode === 'all') {
     return true;
   }
@@ -49,13 +49,13 @@ function chunkText(input: string, chunkSize = 120): string[] {
 }
 
 export async function POST(request: Request) {
-  if (!isStreamingEnabled()) {
+  if (!(await isStreamingEnabled())) {
     return NextResponse.json(
       { error: 'Streaming endpoint is disabled.' },
       { status: 404 },
     );
   }
-  if (!isRequestInStreamingCohort(request)) {
+  if (!(await isRequestInStreamingCohort(request))) {
     return NextResponse.json(
       { error: 'Streaming rollout cohort does not include this request.' },
       { status: 404 },

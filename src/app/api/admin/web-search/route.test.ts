@@ -5,9 +5,14 @@ vi.mock('~/lib/auth', () => ({ authOptions: {} }));
 vi.mock('~/lib/audit/audit-log', () => ({
   writeAuditLog: vi.fn().mockResolvedValue(undefined),
 }));
+vi.mock('~/lib/settings/settings-service', () => ({
+  getStringSetting: vi.fn(),
+  getBooleanSetting: vi.fn((_key: string, fallback: boolean) => Promise.resolve(fallback)),
+}));
 
 import { getServerSession } from 'next-auth';
 
+import { getStringSetting } from '~/lib/settings/settings-service';
 import { POST } from './route';
 
 const mockedSession = vi.mocked(getServerSession);
@@ -23,7 +28,7 @@ function makeRequest(body: unknown): Request {
 describe('POST /api/admin/web-search', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    process.env.WEBSEARCH_PROVIDER = 'mock';
+    vi.mocked(getStringSetting).mockResolvedValue('mock');
   });
 
   it('returns 401 when unauthenticated', async () => {

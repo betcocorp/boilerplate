@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * The single most important behaviour in epic B0-401: with `BEX_PERMISSIONS_ENFORCED` off, a user
@@ -36,6 +36,11 @@ vi.mock('~/lib/audit/audit-log', () => ({
   writeAuditLog: (...args: unknown[]) => writeAuditLog(...args),
 }));
 
+vi.mock('~/lib/settings/settings-service', () => ({
+  getBooleanSetting: vi.fn().mockResolvedValue(false),
+}));
+
+import { getBooleanSetting } from '~/lib/settings/settings-service';
 import { PERMISSIONS } from './constants';
 import { resetPermissionVerdictDedupe } from './enforcement';
 import { requireAnyPermission, requirePermission } from './require-permission';
@@ -43,8 +48,7 @@ import { requireAnyPermission, requirePermission } from './require-permission';
 const SIGNED_IN = { user: { email: 'Sales.Rep@betco.com' } };
 
 function enforce(on: boolean) {
-  if (on) process.env.BEX_PERMISSIONS_ENFORCED = 'true';
-  else delete process.env.BEX_PERMISSIONS_ENFORCED;
+  vi.mocked(getBooleanSetting).mockResolvedValue(on);
 }
 
 beforeEach(() => {
@@ -59,11 +63,8 @@ beforeEach(() => {
     .mockReset()
     .mockResolvedValue({ permissions: [], permission_groups: [] });
   writeAuditLog.mockReset().mockResolvedValue(undefined);
+  vi.mocked(getBooleanSetting).mockReset();
   resetPermissionVerdictDedupe();
-  enforce(false);
-});
-
-afterEach(() => {
   enforce(false);
 });
 
@@ -156,16 +157,12 @@ describe('requirePermission — shadow mode (BEX_PERMISSIONS_ENFORCED unset)', (
     expect(result.errorResponse).toBeUndefined();
   });
 
-  it('does not treat a non-exact flag value as enforcement', async () => {
-    for (const value of ['TRUE', '1', 'yes', '']) {
-      process.env.BEX_PERMISSIONS_ENFORCED = value;
-      resetPermissionVerdictDedupe();
-      const result = await requirePermission(
-        PERMISSIONS.NAVIGATION_SIDEBAR_SDS,
-      );
-      expect(result.allowed, `flag value ${JSON.stringify(value)}`).toBe(true);
-      expect(result.shadowAllowed).toBe(true);
-    }
+  it('shadow-allows while the `settings` row resolves to not-enforced', async () => {
+    enforce(false);
+    resetPermissionVerdictDedupe();
+    const result = await requirePermission(PERMISSIONS.NAVIGATION_SIDEBAR_SDS);
+    expect(result.allowed).toBe(true);
+    expect(result.shadowAllowed).toBe(true);
   });
 });
 

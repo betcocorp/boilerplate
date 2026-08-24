@@ -25,6 +25,7 @@ import {
   type WebSearchRequest,
   type WebSearchResponse,
 } from '~/lib/websearch/websearch-schemas';
+import { getBooleanSetting, getStringSetting } from '~/lib/settings/settings-service';
 
 /** Rough per-search cost estimate (USD) for observability; not billing-accurate. */
 function estimateCost(providerName: string, request: WebSearchRequest): number {
@@ -34,9 +35,9 @@ function estimateCost(providerName: string, request: WebSearchRequest): number {
   return request.depth === 'advanced' ? 0.016 : 0.008;
 }
 
-/** Select the active provider from env; consumers never change when the provider swaps. */
-export function createProviderFromEnv(): WebSearchProvider {
-  const name = (process.env.WEBSEARCH_PROVIDER ?? 'tavily').trim().toLowerCase();
+/** Select the active provider from the `settings` table (`WEBSEARCH_PROVIDER`, B0-618/B0-638). */
+export async function createProviderFromSettings(): Promise<WebSearchProvider> {
+  const name = (await getStringSetting('WEBSEARCH_PROVIDER', 'tavily')).trim().toLowerCase();
   switch (name) {
     case 'tavily':
       return new TavilyProvider();
@@ -68,8 +69,13 @@ export class WebSearchService {
   private readonly guardrails: WebSearchGuardrails;
   private readonly trustPolicy: SourceTrustPolicy;
 
+  /**
+   * `provider` is required — it cannot default to a `settings`-table read (that needs an async
+   * DB call a constructor can't await). Production callers get one resolved from the `settings`
+   * table via {@link createWebSearchService}; tests pass one directly.
+   */
   constructor(
-    provider?: WebSearchProvider,
+    provider: WebSearchProvider,
     cache?: WebSearchCache,
     opts?: {
       guardrails?: WebSearchGuardrails;
@@ -77,19 +83,15 @@ export class WebSearchService {
       dbCache?: WebSearchDurableCache | null;
     },
   ) {
-    this.provider = provider ?? createProviderFromEnv();
+    this.provider = provider;
     this.cache = cache ?? sharedCache;
     this.cacheTtlMs = defaultCacheTtlMs();
     this.guardrails = opts?.guardrails ?? sharedGuardrails;
     this.trustPolicy = opts?.trustPolicy ?? loadSourceTrustPolicyFromEnv();
-    // Durable cache is opt-in (WEBSEARCH_DB_CACHE_ENABLED=true) unless a cache is injected;
-    // pass `{ dbCache: null }` to force it off (tests do this implicitly by omitting the flag).
-    this.dbCache =
-      opts && 'dbCache' in opts
-        ? (opts.dbCache ?? null)
-        : process.env.WEBSEARCH_DB_CACHE_ENABLED === 'true'
-          ? sharedDbCache
-          : null;
+    // Durable cache is opt-in unless a cache is injected; pass `{ dbCache: null }` to force it off
+    // (tests do this implicitly by omitting the flag). Production default comes from
+    // `createWebSearchService`, which resolves `WEBSEARCH_DB_CACHE_ENABLED` from `settings` first.
+    this.dbCache = opts && 'dbCache' in opts ? (opts.dbCache ?? null) : null;
   }
 
   get providerName(): string {
@@ -175,4 +177,19 @@ export class WebSearchService {
     }
     return response;
   }
+}
+
+/**
+ * Production default: resolves `WEBSEARCH_PROVIDER` and `WEBSEARCH_DB_CACHE_ENABLED` from the
+ * `settings` table (B0-618/B0-638) before constructing. Every non-test call site should use this
+ * instead of `new WebSearchService()` with no args.
+ */
+export async function createWebSearchService(): Promise<WebSearchService> {
+  const [provider, dbCacheEnabled] = await Promise.all([
+    createProviderFromSettings(),
+    getBooleanSetting('WEBSEARCH_DB_CACHE_ENABLED', false),
+  ]);
+  return new WebSearchService(provider, undefined, {
+    dbCache: dbCacheEnabled ? sharedDbCache : null,
+  });
 }

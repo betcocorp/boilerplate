@@ -1,9 +1,14 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   checkCategoryConsistency,
   evaluateRecommendationGate,
 } from '~/lib/recommendations/recommendation-gate';
+import { getBooleanSetting } from '~/lib/settings/settings-service';
+
+vi.mock('~/lib/settings/settings-service', () => ({
+  getBooleanSetting: vi.fn().mockResolvedValue(false),
+}));
 
 describe('checkCategoryConsistency', () => {
   it('rejects a chemistry-class mismatch and passes an exact match', () => {
@@ -18,8 +23,8 @@ describe('checkCategoryConsistency', () => {
 });
 
 describe('evaluateRecommendationGate (REC-4)', () => {
-  it('rejects the wrong-chemistry-class recommendation (quat competitor → peroxide Betco)', () => {
-    const result = evaluateRecommendationGate({
+  it('rejects the wrong-chemistry-class recommendation (quat competitor → peroxide Betco)', async () => {
+    const result = await evaluateRecommendationGate({
       baseConfidence: 0.9,
       topSimilarity: 0.62,
       competitorChemistryClass: 'quat',
@@ -31,8 +36,8 @@ describe('evaluateRecommendationGate (REC-4)', () => {
     expect(result.issues.some((i) => /mismatch/i.test(i))).toBe(true);
   });
 
-  it('caps confidence at 0.75 when top similarity is below 60% (the 0.90-on-58% bug)', () => {
-    const result = evaluateRecommendationGate({
+  it('caps confidence at 0.75 when top similarity is below 60% (the 0.90-on-58% bug)', async () => {
+    const result = await evaluateRecommendationGate({
       baseConfidence: 0.9,
       topSimilarity: 0.58,
       competitorChemistryClass: 'quat',
@@ -42,8 +47,8 @@ describe('evaluateRecommendationGate (REC-4)', () => {
     expect(result.approved).toBe(true);
   });
 
-  it('keeps a strong, category-consistent match at high confidence', () => {
-    const result = evaluateRecommendationGate({
+  it('keeps a strong, category-consistent match at high confidence', async () => {
+    const result = await evaluateRecommendationGate({
       baseConfidence: 0.9,
       topSimilarity: 0.88,
       competitorChemistryClass: 'quat',
@@ -54,8 +59,8 @@ describe('evaluateRecommendationGate (REC-4)', () => {
     expect(result.issues).toEqual([]);
   });
 
-  it('lowers the ceiling when the competitor brand is unknown', () => {
-    const result = evaluateRecommendationGate({
+  it('lowers the ceiling when the competitor brand is unknown', async () => {
+    const result = await evaluateRecommendationGate({
       baseConfidence: 0.95,
       topSimilarity: 0.9,
       brandKnown: false,
@@ -63,8 +68,8 @@ describe('evaluateRecommendationGate (REC-4)', () => {
     expect(result.confidence).toBe(0.8);
   });
 
-  it('applies no category block when chemistry classes are not yet known (data-gated)', () => {
-    const result = evaluateRecommendationGate({
+  it('applies no category block when chemistry classes are not yet known (data-gated)', async () => {
+    const result = await evaluateRecommendationGate({
       baseConfidence: 0.7,
       topSimilarity: 0.82,
     });
@@ -74,15 +79,13 @@ describe('evaluateRecommendationGate (REC-4)', () => {
   });
 
   describe('BEX_DISABLE_CONFIDENCE_GATING kill-switch (B0-452)', () => {
-    const prev = process.env.BEX_DISABLE_CONFIDENCE_GATING;
     afterEach(() => {
-      if (prev === undefined) delete process.env.BEX_DISABLE_CONFIDENCE_GATING;
-      else process.env.BEX_DISABLE_CONFIDENCE_GATING = prev;
+      vi.mocked(getBooleanSetting).mockResolvedValue(false);
     });
 
-    it('skips the low-similarity and missing-brand confidence caps', () => {
-      process.env.BEX_DISABLE_CONFIDENCE_GATING = 'true';
-      const lowSimilarity = evaluateRecommendationGate({
+    it('skips the low-similarity and missing-brand confidence caps', async () => {
+      vi.mocked(getBooleanSetting).mockResolvedValue(true);
+      const lowSimilarity = await evaluateRecommendationGate({
         baseConfidence: 0.9,
         topSimilarity: 0.58,
         competitorChemistryClass: 'quat',
@@ -90,7 +93,7 @@ describe('evaluateRecommendationGate (REC-4)', () => {
       });
       expect(lowSimilarity.confidence).toBe(0.9);
 
-      const missingBrand = evaluateRecommendationGate({
+      const missingBrand = await evaluateRecommendationGate({
         baseConfidence: 0.95,
         topSimilarity: 0.9,
         brandKnown: false,
@@ -106,9 +109,9 @@ describe('evaluateRecommendationGate (REC-4)', () => {
      * (`bypassedChecks`, `issues`) but no longer rejects, matching the regulated-claim guardrail's
      * behavior in `run-product-support-workflow.ts`.
      */
-    it('detects but no longer rejects a chemistry-class mismatch, and records it as bypassed', () => {
-      process.env.BEX_DISABLE_CONFIDENCE_GATING = 'true';
-      const result = evaluateRecommendationGate({
+    it('detects but no longer rejects a chemistry-class mismatch, and records it as bypassed', async () => {
+      vi.mocked(getBooleanSetting).mockResolvedValue(true);
+      const result = await evaluateRecommendationGate({
         baseConfidence: 0.9,
         topSimilarity: 0.62,
         competitorChemistryClass: 'quat',
@@ -121,9 +124,9 @@ describe('evaluateRecommendationGate (REC-4)', () => {
       expect(result.issues.some((issue) => issue.includes('Chemistry-class mismatch'))).toBe(true);
     });
 
-    it('reports no bypassed checks when nothing was wrong', () => {
-      process.env.BEX_DISABLE_CONFIDENCE_GATING = 'true';
-      const result = evaluateRecommendationGate({
+    it('reports no bypassed checks when nothing was wrong', async () => {
+      vi.mocked(getBooleanSetting).mockResolvedValue(true);
+      const result = await evaluateRecommendationGate({
         baseConfidence: 0.9,
         topSimilarity: 0.9,
         competitorChemistryClass: 'quat',

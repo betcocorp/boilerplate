@@ -25,6 +25,7 @@ import {
   type EnrichCompetitorSpecInput,
   type EnrichedCompetitorSpec,
 } from '~/lib/websearch/enrich-competitor-spec';
+import { getNumberSetting } from '~/lib/settings/settings-service';
 import { getErrorMessage } from '~/lib/utils';
 import { runValidatorPass } from '~/lib/workflows/product-support/validator';
 import type { ValidatorResult } from '~/lib/workflows/product-support/product-support-schemas';
@@ -170,9 +171,15 @@ function positiveNumber(raw: string | undefined, fallback: number): number {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
-export function loadXrefLatencyPolicy(env: NodeJS.ProcessEnv = process.env): XrefLatencyPolicy {
+/**
+ * `totalBudgetMs` moved to the `settings` table (`XREF_RECOMMENDATION_TIMEOUT_MS`); the other four
+ * step ceilings were never added there and stay deployment-time env vars.
+ */
+export async function loadXrefLatencyPolicy(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<XrefLatencyPolicy> {
   return {
-    totalBudgetMs: positiveNumber(env.XREF_RECOMMENDATION_TIMEOUT_MS, 20_000),
+    totalBudgetMs: await getNumberSetting('XREF_RECOMMENDATION_TIMEOUT_MS', 20_000),
     webSearchBudgetMs: positiveNumber(env.XREF_WEB_SEARCH_TIMEOUT_MS, 12_000),
     enrichBudgetMs: positiveNumber(env.XREF_ENRICH_TIMEOUT_MS, 8_000),
     retrieveBudgetMs: positiveNumber(env.XREF_RETRIEVE_TIMEOUT_MS, 8_000),
@@ -353,8 +360,9 @@ function mapWebCandidates(candidates: BetcoCandidate[]): RecommendationCandidate
 export async function recommendCrossReference(
   input: RecommendCrossReferenceInput,
   deps: RecommendCrossReferenceDeps = defaultDeps,
-  policy: XrefLatencyPolicy = loadXrefLatencyPolicy(),
+  policyOverride?: XrefLatencyPolicy,
 ): Promise<RecommendCrossReferenceResult> {
+  const policy = policyOverride ?? (await loadXrefLatencyPolicy());
   const brand = input.competitorBrand?.trim() ?? '';
   const timer = createXrefTimer();
   const guard = createStepGuard(timer, policy);
@@ -499,7 +507,7 @@ async function runWebGroundedPath(ctx: WebGroundedPathContext): Promise<Recommen
     deps.filterGrounded(retrieved),
   );
   const score = scoreRecommendation({ candidates: grounded, spec, brandKnown: brand.length > 0 });
-  const gate = gateRecommendation({ overallConfidence: score.overallConfidence });
+  const gate = await gateRecommendation({ overallConfidence: score.overallConfidence });
 
   let answered = gate.answered;
   let status: RecommendationStatus = gate.answered ? 'answered' : 'declined';
@@ -516,7 +524,7 @@ async function runWebGroundedPath(ctx: WebGroundedPathContext): Promise<Recommen
     const validator = await guard('validate', policy.validateBudgetMs, () =>
       deps.validate({ draftAnswer: draft, evidenceSummary }),
     );
-    const verdict = evaluateValidatorGate({ validator, unsupportedClaims });
+    const verdict = await evaluateValidatorGate({ validator, unsupportedClaims });
     validation = {
       approved: validator.approved,
       confidence: validator.confidence,

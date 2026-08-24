@@ -3,7 +3,7 @@ import {
   extractCompetitorSpec,
   type CompetitorSpec,
 } from '~/lib/websearch/extract-competitor-spec';
-import { WebSearchService } from '~/lib/websearch/web-search-service';
+import { createWebSearchService } from '~/lib/websearch/web-search-service';
 
 /**
  * REC-1 — Ground a competitor product to a structured spec BEFORE any Betco retrieval.
@@ -102,7 +102,7 @@ async function defaultLookupInternal(input: {
 }
 
 async function defaultFetchWeb(query: string): Promise<WebEvidence | null> {
-  const response = await new WebSearchService().search({
+  const response = await (await createWebSearchService()).search({
     query,
     maxResults: 5,
   });

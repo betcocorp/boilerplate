@@ -50,3 +50,16 @@ export async function getStringSetting(key: string, fallback: string): Promise<s
   const value = await fetchSettingValue(key);
   return value ?? fallback;
 }
+
+/** Resolved numeric value of a `settings` row, or `fallback` if the row is missing/unreadable/non-numeric. */
+export async function getNumberSetting(key: string, fallback: number): Promise<number> {
+  const value = await fetchSettingValue(key);
+  if (value === null) return fallback;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+/** Test seam: clears the per-key value cache so a test can change the mocked DB response. */
+export function resetSettingsCacheForTest(): void {
+  cache.clear();
+}

@@ -1,4 +1,10 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import { getBooleanSetting } from '~/lib/settings/settings-service';
+
+vi.mock('~/lib/settings/settings-service', () => ({
+  getBooleanSetting: vi.fn().mockResolvedValue(false),
+}));
 
 import {
   detectInjectionAttempt,
@@ -133,61 +139,59 @@ const validator = (over: Partial<{ approved: boolean; confidence: number; requir
 });
 
 describe('validator gate (B0-91)', () => {
-  it('passes an approved, high-confidence, no-review verdict with no unsupported claims', () => {
-    expect(evaluateValidatorGate({ validator: validator({}), unsupportedClaims: [] }).pass).toBe(true);
+  it('passes an approved, high-confidence, no-review verdict with no unsupported claims', async () => {
+    expect((await evaluateValidatorGate({ validator: validator({}), unsupportedClaims: [] })).pass).toBe(true);
   });
 
-  it('fails when the validator requires human review', () => {
-    const r = evaluateValidatorGate({ validator: validator({ requires_human_review: true }) });
+  it('fails when the validator requires human review', async () => {
+    const r = await evaluateValidatorGate({ validator: validator({ requires_human_review: true }) });
     expect(r.pass).toBe(false);
     expect(r.reasons).toContain('requires_human_review');
   });
 
-  it('fails when the validator did not approve', () => {
-    const r = evaluateValidatorGate({ validator: validator({ approved: false }) });
+  it('fails when the validator did not approve', async () => {
+    const r = await evaluateValidatorGate({ validator: validator({ approved: false }) });
     expect(r.pass).toBe(false);
     expect(r.reasons).toContain('validator_not_approved');
   });
 
-  it('fails when confidence is below the floor', () => {
-    const r = evaluateValidatorGate({ validator: validator({ confidence: 0.2 }), minConfidence: 0.6 });
+  it('fails when confidence is below the floor', async () => {
+    const r = await evaluateValidatorGate({ validator: validator({ confidence: 0.2 }), minConfidence: 0.6 });
     expect(r.pass).toBe(false);
     expect(r.reasons.some((x) => x.startsWith('validator_confidence_below'))).toBe(true);
   });
 
-  it('fails when an unsupported safety claim is present', () => {
-    const r = evaluateValidatorGate({ validator: validator({}), unsupportedClaims: ['dilution: 1:64'] });
+  it('fails when an unsupported safety claim is present', async () => {
+    const r = await evaluateValidatorGate({ validator: validator({}), unsupportedClaims: ['dilution: 1:64'] });
     expect(r.pass).toBe(false);
     expect(r.reasons.some((x) => x.startsWith('unsupported_safety_claim'))).toBe(true);
   });
 
   describe('BEX_DISABLE_CONFIDENCE_GATING kill-switch (B0-452)', () => {
-    const prev = process.env.BEX_DISABLE_CONFIDENCE_GATING;
     afterEach(() => {
-      if (prev === undefined) delete process.env.BEX_DISABLE_CONFIDENCE_GATING;
-      else process.env.BEX_DISABLE_CONFIDENCE_GATING = prev;
+      vi.mocked(getBooleanSetting).mockResolvedValue(false);
     });
 
-    it('skips only the confidence-floor check, not the other guardrails', () => {
-      process.env.BEX_DISABLE_CONFIDENCE_GATING = 'true';
+    it('skips only the confidence-floor check, not the other guardrails', async () => {
+      vi.mocked(getBooleanSetting).mockResolvedValue(true);
 
-      const belowFloor = evaluateValidatorGate({
+      const belowFloor = await evaluateValidatorGate({
         validator: validator({ confidence: 0.2 }),
         minConfidence: 0.6,
       });
       expect(belowFloor.pass).toBe(true);
 
-      const notApproved = evaluateValidatorGate({ validator: validator({ approved: false }) });
+      const notApproved = await evaluateValidatorGate({ validator: validator({ approved: false }) });
       expect(notApproved.pass).toBe(false);
       expect(notApproved.reasons).toContain('validator_not_approved');
 
-      const humanReview = evaluateValidatorGate({
+      const humanReview = await evaluateValidatorGate({
         validator: validator({ requires_human_review: true }),
       });
       expect(humanReview.pass).toBe(false);
       expect(humanReview.reasons).toContain('requires_human_review');
 
-      const unsupportedClaim = evaluateValidatorGate({
+      const unsupportedClaim = await evaluateValidatorGate({
         validator: validator({}),
         unsupportedClaims: ['dilution: 1:64'],
       });

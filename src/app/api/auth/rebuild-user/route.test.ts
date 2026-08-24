@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * `/api/auth/rebuild-user` (B0-406): mid-session cookie loss must self-heal, and in shadow mode a
@@ -24,12 +24,17 @@ vi.mock('~/lib/permissions/redis', () => ({
   setCachedPermissions: (...args: unknown[]) => setCachedPermissions(...args),
 }));
 
+vi.mock('~/lib/settings/settings-service', () => ({
+  getBooleanSetting: vi.fn().mockResolvedValue(false),
+}));
+
 import { NextRequest } from 'next/server';
 
 import {
   AUTH_USER_DETAILS_COOKIE,
   AUTH_USER_REBUILD_FAILED_COOKIE,
 } from '~/lib/cookies-config';
+import { getBooleanSetting } from '~/lib/settings/settings-service';
 
 import { GET } from './route';
 
@@ -61,11 +66,7 @@ beforeEach(() => {
     .mockReset()
     .mockResolvedValue({ permissions: ['*'], permission_groups: ['it-admin'] });
   setCachedPermissions.mockReset();
-  delete process.env.BEX_PERMISSIONS_ENFORCED;
-});
-
-afterEach(() => {
-  delete process.env.BEX_PERMISSIONS_ENFORCED;
+  vi.mocked(getBooleanSetting).mockReset().mockResolvedValue(false);
 });
 
 describe('rebuild-user — happy path', () => {
@@ -126,7 +127,7 @@ describe('rebuild-user — user missing from app_user', () => {
   });
 
   it('enforced mode signs the user out back to the sign-in page', async () => {
-    process.env.BEX_PERMISSIONS_ENFORCED = 'true';
+    vi.mocked(getBooleanSetting).mockResolvedValue(true);
 
     const response = await GET(request('/admin/tests'));
 
@@ -155,7 +156,7 @@ describe('rebuild-user — lookup failure', () => {
   });
 
   it('enforced mode signs the user out', async () => {
-    process.env.BEX_PERMISSIONS_ENFORCED = 'true';
+    vi.mocked(getBooleanSetting).mockResolvedValue(true);
     const response = await GET(request('/admin'));
     expect(response.headers.get('location')).toBe(
       'http://localhost:3000/?callbackUrl=%2Fadmin',

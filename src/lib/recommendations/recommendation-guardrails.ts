@@ -255,16 +255,16 @@ export type ValidatorGateResult = { pass: boolean; reasons: string[] };
  * set — it's the piece backed by an unproven placeholder threshold. The other checks are
  * correctness/safety signals, not tunable confidence thresholds, and always run.
  */
-export function evaluateValidatorGate(input: {
+export async function evaluateValidatorGate(input: {
   validator: ValidatorResult;
   unsupportedClaims?: string[];
   minConfidence?: number | null;
-}): ValidatorGateResult {
+}): Promise<ValidatorGateResult> {
   const min = resolveValidatorMinConfidence(input.minConfidence);
   const reasons: string[] = [];
   if (!input.validator.approved) reasons.push('validator_not_approved');
   if (input.validator.requires_human_review) reasons.push('requires_human_review');
-  if (!isConfidenceGatingDisabled() && input.validator.confidence < min) {
+  if (!(await isConfidenceGatingDisabled()) && input.validator.confidence < min) {
     reasons.push(`validator_confidence_below_${min}`);
   }
   for (const claim of input.unsupportedClaims ?? []) {

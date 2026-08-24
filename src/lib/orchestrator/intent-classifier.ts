@@ -7,6 +7,7 @@ import { logError } from '~/lib/observability/logger';
 import { getOpenAIClient } from '~/lib/openai/client';
 import { extractAssistantText } from '~/lib/openai/response-item-parsing';
 import { usageFromResponse } from '~/lib/openai/responses-runtime';
+import { getBooleanSetting } from '~/lib/settings/settings-service';
 import { PRODUCT_TOOL_NAMES } from '~/lib/tools/tool-schemas';
 
 /**
@@ -189,22 +190,24 @@ export function resolveRouterTimeoutMs(env: NodeJS.ProcessEnv = process.env): nu
  * Master kill-switch — defaults ON since the B0-511 cutover hardening. The original rollout gated
  * the LLM router behind opt-in env vars, which meant any environment nobody hand-configured
  * (production included) silently stayed on keyword routing forever; product's directive is that
- * LLM intent classification is THE router, so the default inverted (2026-08-18). Set
- * `BEX_LLM_ROUTER_ENABLED=false` to roll back to the pure keyword-routing world.
+ * LLM intent classification is THE router, so the default inverted (2026-08-18). Moved to the
+ * `settings` table (B0-618/B0-638); flip `BEX_LLM_ROUTER_ENABLED` off there to roll back to the
+ * pure keyword-routing world.
  */
-export function isLlmRouterEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.BEX_LLM_ROUTER_ENABLED !== 'false';
+export async function isLlmRouterEnabled(): Promise<boolean> {
+  return getBooleanSetting('BEX_LLM_ROUTER_ENABLED', true);
 }
 
 /**
  * Defaults OFF since the B0-511 cutover (shadow was the pre-cutover default: land the classifier
- * as log-and-compare first, route on it later). Set `BEX_LLM_ROUTER_SHADOW_MODE=true` to demote
- * the classifier back to log-only comparison while keeping it running. This module does not itself
- * change behavior based on the flag — `classifyUserIntent` always returns the LLM's own
- * classification when the LLM path runs — the workflow integration decides whether to route on it.
+ * as log-and-compare first, route on it later). Set `BEX_LLM_ROUTER_SHADOW_MODE=true` in the
+ * `settings` table to demote the classifier back to log-only comparison while keeping it running.
+ * This module does not itself change behavior based on the flag — `classifyUserIntent` always
+ * returns the LLM's own classification when the LLM path runs — the workflow integration decides
+ * whether to route on it.
  */
-export function isLlmRouterShadowMode(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.BEX_LLM_ROUTER_SHADOW_MODE === 'true';
+export async function isLlmRouterShadowMode(): Promise<boolean> {
+  return getBooleanSetting('BEX_LLM_ROUTER_SHADOW_MODE', false);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -422,7 +425,7 @@ export async function classifyUserIntent(
   priorMessages: PriorTurnMessage[] = [],
   deps: ClassifyUserIntentDeps = defaultDeps,
 ): Promise<IntentClassification> {
-  if (!isLlmRouterEnabled()) {
+  if (!(await isLlmRouterEnabled())) {
     return fallbackClassification(message, 'llm_router_disabled');
   }
 

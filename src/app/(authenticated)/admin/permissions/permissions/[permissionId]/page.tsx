@@ -45,7 +45,7 @@ export default async function PermissionDetailPage({ params }: Props) {
       </PermissionsPageHeader>
 
       <PermissionDetailClient
-        enforced={isPermissionsEnforced()}
+        enforced={await isPermissionsEnforced()}
         groups={res.groups}
         permission={permission}
         permissionId={permissionId}

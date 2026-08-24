@@ -87,16 +87,16 @@ export function checkCategoryConsistency(
  * `issues`, but no longer forces `approved: false` / caps confidence — so it can be seen ("this
  * would have been rejected for chemistry mismatch") without actually withholding the answer.
  */
-export function evaluateRecommendationGate(
+export async function evaluateRecommendationGate(
   input: RecommendationGateInput,
-): RecommendationGateResult {
+): Promise<RecommendationGateResult> {
   const issues: string[] = [];
   const bypassedChecks: string[] = [];
   let confidence = clamp01(input.baseConfidence);
   let approved = true;
   let requiresHumanReview = false;
 
-  const gatingDisabled = isConfidenceGatingDisabled();
+  const gatingDisabled = await isConfidenceGatingDisabled();
 
   const category = checkCategoryConsistency(
     input.competitorChemistryClass ?? null,

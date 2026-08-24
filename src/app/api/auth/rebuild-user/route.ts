@@ -144,7 +144,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       return response;
     }
 
-    const enforced = isPermissionsEnforced();
+    const enforced = await isPermissionsEnforced();
     logWarn('auth.rebuild_user.user_not_found', {
       email,
       callbackUrl,
@@ -155,7 +155,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       ? redirectToSignIn(request, callbackUrl)
       : forwardWithoutRebuild(request, callbackUrl);
   } catch (error) {
-    const enforced = isPermissionsEnforced();
+    const enforced = await isPermissionsEnforced();
     logError('auth.rebuild_user.failed', {
       email,
       callbackUrl,

@@ -65,6 +65,7 @@ import { buildCompetitiveRecommendationAnswer } from '~/lib/recommendations/reco
 import { productSupportToolsForRoute } from '~/lib/tools/definitions';
 import { buildToolTraceEntry, executeToolCall } from '~/lib/tools/execute-tool-call';
 import { assembleDocumentBodies } from '~/lib/retrieval/document-assembly';
+import { getBooleanSetting } from '~/lib/settings/settings-service';
 
 import type { Json } from '~/types/supabase.public';
 
@@ -1469,7 +1470,7 @@ export async function runProductSupportWorkflow(input: {
   onEvent?: (event: ProductSupportWorkflowEvent) => void;
   onAssistantDelta?: (delta: string) => void;
 }): Promise<ProductSupportFinalOutput> {
-  const useAiSdkGeneration = process.env.BEX_AI_SDK_GENERATION_ENABLED === 'true';
+  const useAiSdkGeneration = await getBooleanSetting('BEX_AI_SDK_GENERATION_ENABLED', false);
   /**
    * B0-519 — capped once, up front, so every consumer (the `hasPreviousResponse` step record below,
    * and both generation runtimes further down) agrees on the same decision for this turn. See
@@ -1500,7 +1501,7 @@ export async function runProductSupportWorkflow(input: {
    * has (and never spends a classifier call).
    */
   const llmRouterCutoverActive =
-    agentMode === 'orchestrator' && isLlmRouterEnabled() && !isLlmRouterShadowMode();
+    agentMode === 'orchestrator' && (await isLlmRouterEnabled()) && !(await isLlmRouterShadowMode());
   // Wall time this turn actually paid waiting on the classifier (a cache hit legitimately reads
   // ~0ms) — recorded on the live gate so the observability page answers the latency question the
   // cutover decision traded on, without needing server logs.
@@ -1558,7 +1559,7 @@ export async function runProductSupportWorkflow(input: {
     earlyDeclineGateEnabled,
     aiSdkGenerationEnabled: useAiSdkGeneration,
     rerankerActive: PRODUCT_SUPPORT_RERANK_ENABLED && isRerankerConfigured(),
-    confidenceGatingDisabled: isConfidenceGatingDisabled(),
+    confidenceGatingDisabled: await isConfidenceGatingDisabled(),
     agentMode,
     routedDirectly: agentMode !== 'orchestrator',
   };
@@ -2232,7 +2233,8 @@ export async function runProductSupportWorkflow(input: {
      * `resolvedCompetitorPromise` prefetch above, and is only awaited later, right before the
      * agent step is persisted (see `shadowIntentClassification` below).
      */
-    const shadowIntentClassificationEnabled = isLlmRouterEnabled() && isLlmRouterShadowMode();
+    const shadowIntentClassificationEnabled =
+      (await isLlmRouterEnabled()) && (await isLlmRouterShadowMode());
     const shadowIntentClassificationPromise: Promise<IntentClassification> | null =
       shadowIntentClassificationEnabled
         ? classifyUserIntent(
@@ -3039,7 +3041,7 @@ export async function runProductSupportWorkflow(input: {
       needsUsageSafetyCoverage &&
       (!usageSafetyCoverage.hasUsageEvidence ||
         !usageSafetyCoverage.hasSafetyEvidence) &&
-      !isConfidenceGatingDisabled()
+      !(await isConfidenceGatingDisabled())
     ) {
       const missingEvidence: string[] = [];
       if (!usageSafetyCoverage.hasUsageEvidence) {
@@ -3168,7 +3170,7 @@ export async function runProductSupportWorkflow(input: {
     let regulatedClaimGuardrailActivation: GateActivationRecord = { state: 'ran' };
 
     if (regulatedClaimGrounding.ungroundedCategories.length > 0) {
-      if (isConfidenceGatingDisabled()) {
+      if (await isConfidenceGatingDisabled()) {
         validatorStepGates.push({
           gate: 'regulated_claim_guardrail',
           inputs: {
@@ -3254,7 +3256,7 @@ export async function runProductSupportWorkflow(input: {
          */
         brandKnown: Boolean(resolvedCompetitor?.brand?.trim()),
       };
-      const gate = evaluateRecommendationGate(gateInput);
+      const gate = await evaluateRecommendationGate(gateInput);
       recommendationConfidenceActivation =
         gate.bypassedChecks.length > 0
           ? { state: 'bypassed', reason: 'confidence_gating_disabled' }

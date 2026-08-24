@@ -93,6 +93,25 @@ vi.mock('~/supabase/clients/service-role', () => ({
 }));
 
 /**
+ * B0-638 — BEX_AI_SDK_GENERATION_ENABLED, BEX_LLM_ROUTER_ENABLED, BEX_LLM_ROUTER_SHADOW_MODE and
+ * BEX_DISABLE_CONFIDENCE_GATING moved from `process.env` to the `settings` table. `beforeEach`
+ * seeds this file's own defaults (below); individual tests override with `settingOverrides.set`.
+ */
+const settingOverrides = new Map<string, boolean | string | number>();
+
+vi.mock('~/lib/settings/settings-service', () => ({
+  getBooleanSetting: vi.fn((key: string, fallback: boolean) =>
+    Promise.resolve(settingOverrides.has(key) ? (settingOverrides.get(key) as boolean) : fallback),
+  ),
+  getStringSetting: vi.fn((key: string, fallback: string) =>
+    Promise.resolve(settingOverrides.has(key) ? (settingOverrides.get(key) as string) : fallback),
+  ),
+  getNumberSetting: vi.fn((key: string, fallback: number) =>
+    Promise.resolve(settingOverrides.has(key) ? (settingOverrides.get(key) as number) : fallback),
+  ),
+}));
+
+/**
  * B0-516 — a controllable `client.responses.create`, used by the shadow-mode intent-classifier
  * integration tests below. Defaults to throwing synchronously (same externally-observed effect as
  * the old `getOpenAIClient: () => ({})` — any `client.responses.*` call blows up), so every
@@ -297,19 +316,19 @@ async function run(overrides: Parameters<typeof runProductSupportWorkflow>[0] | 
 }
 
 const ORIGINAL_ENV = {
-  aiSdk: process.env.BEX_AI_SDK_GENERATION_ENABLED,
   declineGate: process.env.BEX_EARLY_DECLINE_GATE_ENABLED,
 };
 
 beforeEach(() => {
   fake = createFakeSupabase();
   vi.clearAllMocks();
-  process.env.BEX_AI_SDK_GENERATION_ENABLED = 'false';
+  settingOverrides.clear();
+  settingOverrides.set('BEX_AI_SDK_GENERATION_ENABLED', false);
   process.env.BEX_EARLY_DECLINE_GATE_ENABLED = 'true';
   // B0-511 — the LLM router is ON by default since the cutover; pin the kill-switch here so every
   // legacy test in this file keeps exercising the deterministic keyword-routing world it asserts.
   // The router describe block below opts individual tests back in explicitly.
-  process.env.BEX_LLM_ROUTER_ENABLED = 'false';
+  settingOverrides.set('BEX_LLM_ROUTER_ENABLED', false);
   // B0-516 — every test gets the same default `client.responses.create` behavior (throws, so
   // extractCompetitorProduct/classifyUserIntent both fall back) unless it opts into the
   // shadow-classifier describe block below, which overrides this per-test.
@@ -350,7 +369,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  process.env.BEX_AI_SDK_GENERATION_ENABLED = ORIGINAL_ENV.aiSdk;
   process.env.BEX_EARLY_DECLINE_GATE_ENABLED = ORIGINAL_ENV.declineGate;
 });
 
@@ -392,7 +410,7 @@ describe('prompt capture (B0-389)', () => {
   });
 
   it('records the ai-sdk runtime when the generation flag selects it', async () => {
-    process.env.BEX_AI_SDK_GENERATION_ENABLED = 'true';
+    settingOverrides.set('BEX_AI_SDK_GENERATION_ENABLED', true);
     runAiSdkWithToolLoopMock.mockImplementation(generationCalling([]));
 
     await run();
@@ -1508,7 +1526,7 @@ describe('capped conversation history (B0-519)', () => {
   });
 
   it('caps the AI SDK runtime the same way, always stateless', async () => {
-    process.env.BEX_AI_SDK_GENERATION_ENABLED = 'true';
+    settingOverrides.set('BEX_AI_SDK_GENERATION_ENABLED', true);
     process.env.BEX_HISTORY_MAX_MESSAGES = '2';
     runAiSdkWithToolLoopMock.mockImplementation(generationCalling([]));
 
@@ -1607,22 +1625,22 @@ describe('shadow-mode LLM intent classifier gate (B0-507 / B0-516 integration)',
   }
 
   afterEach(() => {
-    delete process.env.BEX_LLM_ROUTER_ENABLED;
-    delete process.env.BEX_LLM_ROUTER_SHADOW_MODE;
+    settingOverrides.delete('BEX_LLM_ROUTER_ENABLED');
+    settingOverrides.delete('BEX_LLM_ROUTER_SHADOW_MODE');
     delete process.env.BEX_ROUTER_TIMEOUT_MS;
     delete process.env.BEX_ROUTER_MODEL;
   });
 
   it('is absent when the LLM router is explicitly kill-switched', async () => {
-    process.env.BEX_LLM_ROUTER_ENABLED = 'false';
+    settingOverrides.set('BEX_LLM_ROUTER_ENABLED', false);
     await run({ userMessage: XREF_MESSAGE });
     expect(gateRecordsFor('llm_intent_classifier_shadow')).toEqual([]);
     expect(gateRecordsFor('llm_intent_classifier_live')).toEqual([]);
   });
 
   it('records an "agrees_with_keyword_router" verdict end-to-end, without changing the actual routing, when the classifier matches the keyword route', async () => {
-    process.env.BEX_LLM_ROUTER_ENABLED = 'true';
-    process.env.BEX_LLM_ROUTER_SHADOW_MODE = 'true';
+    settingOverrides.set('BEX_LLM_ROUTER_ENABLED', true);
+    settingOverrides.set('BEX_LLM_ROUTER_SHADOW_MODE', true);
     mockIntentClassifierResponse(
       intentClassifierPayload({ intent: 'recommendations', confidence: 0.87 }),
     );
@@ -1657,8 +1675,8 @@ describe('shadow-mode LLM intent classifier gate (B0-507 / B0-516 integration)',
   });
 
   it('records a "disagrees_with_keyword_router" verdict end-to-end, and does not cut over routing while shadow mode is on, when the classifier proposes a different intent', async () => {
-    process.env.BEX_LLM_ROUTER_ENABLED = 'true';
-    process.env.BEX_LLM_ROUTER_SHADOW_MODE = 'true';
+    settingOverrides.set('BEX_LLM_ROUTER_ENABLED', true);
+    settingOverrides.set('BEX_LLM_ROUTER_SHADOW_MODE', true);
     mockIntentClassifierResponse(intentClassifierPayload({ intent: 'floor', confidence: 0.62 }));
 
     await run({ userMessage: XREF_MESSAGE });
@@ -1679,8 +1697,8 @@ describe('shadow-mode LLM intent classifier gate (B0-507 / B0-516 integration)',
   });
 
   it('degrades safely in shadow mode, and still records the gate, when the classifier call exceeds BEX_ROUTER_TIMEOUT_MS', async () => {
-    process.env.BEX_LLM_ROUTER_ENABLED = 'true';
-    process.env.BEX_LLM_ROUTER_SHADOW_MODE = 'true';
+    settingOverrides.set('BEX_LLM_ROUTER_ENABLED', true);
+    settingOverrides.set('BEX_LLM_ROUTER_SHADOW_MODE', true);
     process.env.BEX_ROUTER_TIMEOUT_MS = '10';
     mockIntentClassifierResponse(
       intentClassifierPayload({ intent: 'floor', confidence: 0.9 }),
@@ -1704,8 +1722,8 @@ describe('shadow-mode LLM intent classifier gate (B0-507 / B0-516 integration)',
   });
 
   it('B0-511: cuts routingDecision over to the classifier\'s intent when shadow mode is off, even though it disagrees with the keyword router', async () => {
-    process.env.BEX_LLM_ROUTER_ENABLED = 'true';
-    process.env.BEX_LLM_ROUTER_SHADOW_MODE = 'false';
+    settingOverrides.set('BEX_LLM_ROUTER_ENABLED', true);
+    settingOverrides.set('BEX_LLM_ROUTER_SHADOW_MODE', false);
     mockIntentClassifierResponse(intentClassifierPayload({ intent: 'floor', confidence: 0.81 }));
 
     await run({ userMessage: XREF_MESSAGE });
@@ -1733,8 +1751,8 @@ describe('shadow-mode LLM intent classifier gate (B0-507 / B0-516 integration)',
   });
 
   it('B0-511: degrades to the ambiguous generalist (never a keyword decision) when the classifier call times out during cutover, with the reason on the gate', async () => {
-    process.env.BEX_LLM_ROUTER_ENABLED = 'true';
-    process.env.BEX_LLM_ROUTER_SHADOW_MODE = 'false';
+    settingOverrides.set('BEX_LLM_ROUTER_ENABLED', true);
+    settingOverrides.set('BEX_LLM_ROUTER_SHADOW_MODE', false);
     process.env.BEX_ROUTER_TIMEOUT_MS = '10';
     mockIntentClassifierResponse(
       intentClassifierPayload({ intent: 'floor', confidence: 0.9 }),
@@ -1757,8 +1775,8 @@ describe('shadow-mode LLM intent classifier gate (B0-507 / B0-516 integration)',
   });
 
   it('B0-514: the classifier decides cross-reference intent — a task-recommendation turn does not force the cross-reference path, a competitor-equivalence turn does', async () => {
-    process.env.BEX_LLM_ROUTER_ENABLED = 'true';
-    process.env.BEX_LLM_ROUTER_SHADOW_MODE = 'false';
+    settingOverrides.set('BEX_LLM_ROUTER_ENABLED', true);
+    settingOverrides.set('BEX_LLM_ROUTER_SHADOW_MODE', false);
 
     // The classifier says this is a floor job (no competitor, no cross-reference tool) even though
     // the message contains "equivalent"+"betco" — the substring check would have forced the
@@ -2324,7 +2342,7 @@ describe('runtime config and gate activation (B0-494)', () => {
   });
 
   it('is identifiable as run-under-the-kill-switch: usage/safety coverage bypassed, confidenceGatingDisabled true', async () => {
-    process.env.BEX_DISABLE_CONFIDENCE_GATING = 'true';
+    settingOverrides.set('BEX_DISABLE_CONFIDENCE_GATING', true);
     executeProductToolMock.mockResolvedValue({
       sources: [
         {
@@ -2345,7 +2363,7 @@ describe('runtime config and gate activation (B0-494)', () => {
       reason: 'confidence_gating_disabled',
     });
 
-    delete process.env.BEX_DISABLE_CONFIDENCE_GATING;
+    settingOverrides.delete('BEX_DISABLE_CONFIDENCE_GATING');
   });
 
   it('marks the recommendation-confidence gate "ran" (not not_applicable) whenever cross-reference post-processing runs', async () => {

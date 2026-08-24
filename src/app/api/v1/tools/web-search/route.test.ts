@@ -27,8 +27,13 @@ vi.mock('~/lib/api/rate-limit', async (importOriginal) => {
 vi.mock('~/lib/audit/audit-log', () => ({
   writeAuditLog: vi.fn().mockResolvedValue(undefined),
 }));
+vi.mock('~/lib/settings/settings-service', () => ({
+  getStringSetting: vi.fn(),
+  getBooleanSetting: vi.fn((_key: string, fallback: boolean) => Promise.resolve(fallback)),
+}));
 
 import { authenticateApiToken } from '~/lib/api/client-auth';
+import { getStringSetting } from '~/lib/settings/settings-service';
 
 import { POST } from './route';
 
@@ -61,7 +66,7 @@ describe('POST /api/v1/tools/web-search', () => {
   beforeEach(() => {
     afterCallbacks.length = 0;
     vi.clearAllMocks();
-    process.env.WEBSEARCH_PROVIDER = 'mock';
+    vi.mocked(getStringSetting).mockResolvedValue('mock');
   });
 
   it('returns 401 when the client token is not authenticated', async () => {

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { BetcoCandidate } from '~/lib/recommendations/candidate-retrieval';
 import {
@@ -11,7 +11,12 @@ import {
   resolveXrefThreshold,
   scoreRecommendation,
 } from '~/lib/recommendations/confidence-scoring';
+import { getBooleanSetting } from '~/lib/settings/settings-service';
 import type { EnrichedCompetitorSpec } from '~/lib/websearch/enrich-competitor-spec';
+
+vi.mock('~/lib/settings/settings-service', () => ({
+  getBooleanSetting: vi.fn().mockResolvedValue(false),
+}));
 
 const noProv = {
   chemistryClass: null,
@@ -49,18 +54,18 @@ const cand = (similarity: number): BetcoCandidate => ({
 });
 
 describe('gateRecommendation threshold behavior (B0-88)', () => {
-  it('declines just below, answers at and just above the 0.80 threshold', () => {
-    expect(gateRecommendation({ overallConfidence: 0.79, thresholdOverride: 0.8 })).toEqual({
+  it('declines just below, answers at and just above the 0.80 threshold', async () => {
+    expect(await gateRecommendation({ overallConfidence: 0.79, thresholdOverride: 0.8 })).toEqual({
       answered: false,
       thresholdUsed: 0.8,
       declineReason: XREF_DECLINE_COPY,
     });
-    expect(gateRecommendation({ overallConfidence: 0.8, thresholdOverride: 0.8 })).toMatchObject({
+    expect(await gateRecommendation({ overallConfidence: 0.8, thresholdOverride: 0.8 })).toMatchObject({
       answered: true,
       thresholdUsed: 0.8,
       declineReason: null,
     });
-    expect(gateRecommendation({ overallConfidence: 0.81, thresholdOverride: 0.8 }).answered).toBe(true);
+    expect((await gateRecommendation({ overallConfidence: 0.81, thresholdOverride: 0.8 })).answered).toBe(true);
   });
 });
 
@@ -109,24 +114,20 @@ describe('computeSpecCompleteness (B0-88)', () => {
 });
 
 describe('BEX_DISABLE_CONFIDENCE_GATING kill-switch (B0-452)', () => {
-  const prev = process.env.BEX_DISABLE_CONFIDENCE_GATING;
   afterEach(() => {
-    if (prev === undefined) delete process.env.BEX_DISABLE_CONFIDENCE_GATING;
-    else process.env.BEX_DISABLE_CONFIDENCE_GATING = prev;
+    vi.mocked(getBooleanSetting).mockResolvedValue(false);
   });
 
-  it('is off unless the env var is exactly "true"', () => {
-    delete process.env.BEX_DISABLE_CONFIDENCE_GATING;
-    expect(isConfidenceGatingDisabled()).toBe(false);
-    process.env.BEX_DISABLE_CONFIDENCE_GATING = 'false';
-    expect(isConfidenceGatingDisabled()).toBe(false);
-    process.env.BEX_DISABLE_CONFIDENCE_GATING = 'true';
-    expect(isConfidenceGatingDisabled()).toBe(true);
+  it('is off unless the `settings` row is exactly "true"', async () => {
+    vi.mocked(getBooleanSetting).mockResolvedValueOnce(false);
+    expect(await isConfidenceGatingDisabled()).toBe(false);
+    vi.mocked(getBooleanSetting).mockResolvedValueOnce(true);
+    expect(await isConfidenceGatingDisabled()).toBe(true);
   });
 
-  it('answers below the threshold once the kill-switch is on, and still reports thresholdUsed', () => {
-    process.env.BEX_DISABLE_CONFIDENCE_GATING = 'true';
-    expect(gateRecommendation({ overallConfidence: 0.1, thresholdOverride: 0.8 })).toEqual({
+  it('answers below the threshold once the kill-switch is on, and still reports thresholdUsed', async () => {
+    vi.mocked(getBooleanSetting).mockResolvedValue(true);
+    expect(await gateRecommendation({ overallConfidence: 0.1, thresholdOverride: 0.8 })).toEqual({
       answered: true,
       thresholdUsed: 0.8,
       declineReason: null,

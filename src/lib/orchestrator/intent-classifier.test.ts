@@ -13,6 +13,15 @@ vi.mock('~/lib/openai/client', () => ({
   }),
 }));
 
+// B0-638 — BEX_LLM_ROUTER_ENABLED/BEX_LLM_ROUTER_SHADOW_MODE moved to the `settings` table.
+// Default mock just echoes back each call's own `fallback` arg, so every existing test that
+// relied on the old "true"/"false" env-var defaults keeps working unchanged; tests that need a
+// non-default value override with `mockResolvedValueOnce`/`mockImplementationOnce` below.
+vi.mock('~/lib/settings/settings-service', () => ({
+  getBooleanSetting: vi.fn((_key: string, fallback: boolean) => Promise.resolve(fallback)),
+}));
+
+import { getBooleanSetting } from '~/lib/settings/settings-service';
 import {
   classifyUserIntent,
   computeIntentClassifierCacheKey,
@@ -33,6 +42,7 @@ const ORIGINAL_ENV = { ...process.env };
 beforeEach(() => {
   resetIntentClassifierCache();
   responsesCreateMock.mockReset();
+  vi.mocked(getBooleanSetting).mockImplementation((_key, fallback) => Promise.resolve(fallback));
 });
 
 afterEach(() => {
@@ -57,7 +67,7 @@ const USAGE = { promptTokens: 210, completionTokens: 24, totalTokens: 234, cache
 
 describe('classifyUserIntent — B0-504 fallback behavior', () => {
   it('never calls the LLM and degrades to the ambiguous fallback when BEX_LLM_ROUTER_ENABLED is explicitly false (kill-switch)', async () => {
-    process.env.BEX_LLM_ROUTER_ENABLED = 'false';
+    vi.mocked(getBooleanSetting).mockResolvedValueOnce(false);
     const runLlm = vi.fn();
 
     const out = await classifyUserIntent('What do you recommend to strip and recoat a VCT floor using the floor maintenance program?', [], {
@@ -75,7 +85,6 @@ describe('classifyUserIntent — B0-504 fallback behavior', () => {
   });
 
   it('is enabled by default: an unset BEX_LLM_ROUTER_ENABLED calls the LLM', async () => {
-    delete process.env.BEX_LLM_ROUTER_ENABLED;
     const runLlm = vi.fn().mockResolvedValue({ parsed: llmResult, usage: USAGE });
 
     const out = await classifyUserIntent('strip and recoat this VCT floor', [], {
@@ -92,7 +101,6 @@ describe('classifyUserIntent — B0-504 fallback behavior', () => {
   });
 
   it('degrades to the ambiguous fallback when the LLM call rejects, and never throws', async () => {
-    process.env.BEX_LLM_ROUTER_ENABLED = 'true';
     const runLlm = vi.fn().mockRejectedValue(new Error('llm down'));
 
     const out = await classifyUserIntent('what is the SDS hazard rating for this cleaner', [], {
@@ -106,7 +114,6 @@ describe('classifyUserIntent — B0-504 fallback behavior', () => {
   });
 
   it('degrades to the ambiguous fallback when the LLM call exceeds BEX_ROUTER_TIMEOUT_MS', async () => {
-    process.env.BEX_LLM_ROUTER_ENABLED = 'true';
     process.env.BEX_ROUTER_TIMEOUT_MS = '10';
     const runLlm = vi.fn(
       () =>
@@ -126,7 +133,6 @@ describe('classifyUserIntent — B0-504 fallback behavior', () => {
   });
 
   it('returns the LLM classification, clamped and tagged, when it resolves in time', async () => {
-    process.env.BEX_LLM_ROUTER_ENABLED = 'true';
     const runLlm = vi.fn().mockResolvedValue({ parsed: { ...llmResult, confidence: 1.4 }, usage: USAGE });
 
     const out = await classifyUserIntent('strip and recoat this VCT floor', [], {
@@ -141,7 +147,6 @@ describe('classifyUserIntent — B0-504 fallback behavior', () => {
   });
 
   it('caches a successful classification: an identical (message, priorMessages) call does not re-invoke the LLM', async () => {
-    process.env.BEX_LLM_ROUTER_ENABLED = 'true';
     const runLlm = vi.fn().mockResolvedValue({ parsed: llmResult, usage: USAGE });
     const priorMessages: PriorTurnMessage[] = [
       { id: 'm1', role: 'user', content: 'hi' },
@@ -165,7 +170,6 @@ describe('classifyUserIntent — B0-504 fallback behavior', () => {
   });
 
   it('does NOT cache a failed classification: the next identical call retries the LLM (B0-511 — a cached transient timeout would poison live routing for the TTL)', async () => {
-    process.env.BEX_LLM_ROUTER_ENABLED = 'true';
     const runLlm = vi
       .fn()
       .mockRejectedValueOnce(new Error('llm down'))
@@ -182,7 +186,6 @@ describe('classifyUserIntent — B0-504 fallback behavior', () => {
   });
 
   it('does not throw even when the LLM dep itself throws synchronously', async () => {
-    process.env.BEX_LLM_ROUTER_ENABLED = 'true';
     const runLlm = vi.fn(() => {
       throw new Error('sync boom');
     });
@@ -234,32 +237,23 @@ describe('B0-506 env-var resolution', () => {
     expect(resolveRouterTimeoutMs()).toBe(DEFAULT_BEX_ROUTER_TIMEOUT_MS);
   });
 
-  it('isLlmRouterEnabled defaults to true (B0-511 cutover) and is disabled only by the literal string "false"', () => {
-    delete process.env.BEX_LLM_ROUTER_ENABLED;
-    expect(isLlmRouterEnabled()).toBe(true);
+  it('isLlmRouterEnabled defaults to true (B0-511 cutover) and reads the `settings` row otherwise', async () => {
+    expect(await isLlmRouterEnabled()).toBe(true);
 
-    process.env.BEX_LLM_ROUTER_ENABLED = 'yes';
-    expect(isLlmRouterEnabled()).toBe(true);
-
-    process.env.BEX_LLM_ROUTER_ENABLED = 'false';
-    expect(isLlmRouterEnabled()).toBe(false);
+    vi.mocked(getBooleanSetting).mockResolvedValueOnce(false);
+    expect(await isLlmRouterEnabled()).toBe(false);
   });
 
-  it('isLlmRouterShadowMode defaults to false (B0-511 cutover) and requires the literal string "true"', () => {
-    delete process.env.BEX_LLM_ROUTER_SHADOW_MODE;
-    expect(isLlmRouterShadowMode()).toBe(false);
+  it('isLlmRouterShadowMode defaults to false (B0-511 cutover) and reads the `settings` row otherwise', async () => {
+    expect(await isLlmRouterShadowMode()).toBe(false);
 
-    process.env.BEX_LLM_ROUTER_SHADOW_MODE = 'false';
-    expect(isLlmRouterShadowMode()).toBe(false);
-
-    process.env.BEX_LLM_ROUTER_SHADOW_MODE = 'true';
-    expect(isLlmRouterShadowMode()).toBe(true);
+    vi.mocked(getBooleanSetting).mockResolvedValueOnce(true);
+    expect(await isLlmRouterShadowMode()).toBe(true);
   });
 });
 
 describe('classifyUserIntent — B0-515 entity extraction', () => {
   it('passes through every extracted entity field from a realistic recommendations-style message', async () => {
-    process.env.BEX_LLM_ROUTER_ENABLED = 'true';
     const runLlm = vi.fn().mockResolvedValue({
       parsed: {
         intent: 'recommendations' as const,
@@ -295,7 +289,6 @@ describe('classifyUserIntent — B0-515 entity extraction', () => {
   });
 
   it('leaves every entity field null when the model extracted nothing, rather than defaulting any of them', async () => {
-    process.env.BEX_LLM_ROUTER_ENABLED = 'true';
     const runLlm = vi.fn().mockResolvedValue({
       parsed: {
         intent: 'ambiguous' as const,
@@ -334,7 +327,6 @@ describe('classifyUserIntent — B0-515 entity extraction', () => {
  */
 describe('classifyUserIntent — B0-515 conversational context carry (default deps)', () => {
   beforeEach(() => {
-    process.env.BEX_LLM_ROUTER_ENABLED = 'true';
     responsesCreateMock.mockResolvedValue({
       output_text: JSON.stringify(llmResult),
     });

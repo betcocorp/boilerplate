@@ -39,7 +39,7 @@ async function gateSignIn(params: {
   error?: unknown;
 }): Promise<true | SignInRejection> {
   const { rejection, reason, message, email, userId, provider, error } = params;
-  const enforced = isPermissionsEnforced();
+  const enforced = await isPermissionsEnforced();
 
   const fields = {
     reason,

@@ -6,7 +6,7 @@ import { writeAuditLog } from '~/lib/audit/audit-log';
 import { newCorrelationId } from '~/lib/observability/correlation-id';
 import { PERMISSIONS } from '~/lib/permissions/constants';
 import { gateRoute } from '~/lib/permissions/route-gate';
-import { WebSearchService } from '~/lib/websearch/web-search-service';
+import { createWebSearchService } from '~/lib/websearch/web-search-service';
 import { WebSearchError } from '~/lib/websearch/types';
 import { webSearchRequestSchema } from '~/lib/websearch/websearch-schemas';
 import { getErrorMessage } from '~/lib/utils';
@@ -36,7 +36,7 @@ export async function POST(request: Request) {
 
   const traceId = newCorrelationId();
   try {
-    const service = new WebSearchService();
+    const service = await createWebSearchService();
     const result = await service.search(parsed.data);
 
     await writeAuditLog(

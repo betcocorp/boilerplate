@@ -50,10 +50,6 @@ import { Message, MessageContent } from '~/components/ai-elements/message';
 import { BEX_SUGGESTIONS } from '~/lib/bex/constants';
 import type { ChatMessage } from '~/types/bex';
 
-// AISDK-3: gate the AI Elements rendering variant. Default off — the existing
-// custom bubble UI is unchanged until this flag is flipped and visually QA'd.
-const USE_AI_ELEMENTS = process.env.NEXT_PUBLIC_BEX_AI_ELEMENTS_UI === 'true';
-
 type BexChatMessagesProps = {
   messages: ChatMessage[];
   isTyping: boolean;
@@ -69,6 +65,13 @@ type BexChatMessagesProps = {
     reasonCode?: string;
     comment?: string;
   }) => Promise<void>;
+  /**
+   * AISDK-3: gate the AI Elements rendering variant. Default off — the existing custom bubble UI
+   * is unchanged until this flag is flipped and visually QA'd. Resolved server-side from the
+   * `settings` table (`NEXT_PUBLIC_BEX_AI_ELEMENTS_UI`) and passed down, since a client component
+   * cannot read a DB-backed setting itself.
+   */
+  useAiElements?: boolean;
 };
 
 const DOWNVOTE_REASON_OPTIONS = [
@@ -318,7 +321,7 @@ function BexChatMessageBody({
 
 // AISDK-3: AI Elements rendering variant (Conversation + Message/MessageContent).
 // Reuses the existing markdown body, feedback, details, and copy — only the scroll
-// container and bubble shell come from AI Elements. Selected via USE_AI_ELEMENTS.
+// container and bubble shell come from AI Elements. Selected via the `useAiElements` prop.
 function BexAiElementsMessages({
   messages,
   isTyping,
@@ -422,6 +425,7 @@ export function BexChatMessages({
   onStartEmptyChat,
   onSuggestion,
   showWelcome,
+  useAiElements = false,
 }: BexChatMessagesProps) {
   const endRef = useRef<HTMLDivElement | null>(null);
 
@@ -495,7 +499,7 @@ export function BexChatMessages({
     );
   }
 
-  if (USE_AI_ELEMENTS) {
+  if (useAiElements) {
     return (
       <BexAiElementsMessages
         feedbackSubmittingMessageId={feedbackSubmittingMessageId}
