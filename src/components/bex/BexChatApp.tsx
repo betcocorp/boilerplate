@@ -962,7 +962,11 @@ export function BexChatApp({
             <BexChatComposer
               disabled={isTyping || activeConversation?.isOwner === false}
               onChange={setDraft}
-              onSend={() => void sendUserText(draft)}
+              onSend={() => {
+                const text = draft;
+                setDraft('');
+                void sendUserText(text);
+              }}
               onUseValidatorChange={setUseValidator}
               useValidator={useValidator}
               value={draft}

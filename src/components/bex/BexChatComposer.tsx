@@ -1,7 +1,7 @@
 'use client';
 
 import { Paperclip, SendHorizontal } from 'lucide-react';
-import { useCallback, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 
 import { Button } from '~/components/ui/button';
 import { Label } from '~/components/ui/label';
@@ -29,6 +29,17 @@ export function BexChatComposer({
   value,
 }: BexChatComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const wasDisabledRef = useRef(disabled);
+
+  // Re-focus the composer once it re-enables (e.g. after a send completes). Browsers
+  // auto-blur a focused element when it becomes `disabled`, so restore focus on the
+  // true→false transition only — never on mount or on every render.
+  useEffect(() => {
+    if (wasDisabledRef.current && !disabled) {
+      textareaRef.current?.focus();
+    }
+    wasDisabledRef.current = disabled;
+  }, [disabled]);
 
   const resize = useCallback(() => {
     const el = textareaRef.current;
