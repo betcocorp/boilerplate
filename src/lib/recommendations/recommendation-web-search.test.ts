@@ -259,6 +259,15 @@ describe('buildRecommendationQuery (B0-92)', () => {
       buildRecommendationQuery({ brand: 'Zorbex', product: 'X' }),
     );
   });
+
+  // B0-640: the old 'product specifications disinfectant OR cleaner' suffix diluted Tavily
+  // relevance (0.358) vs a bare 'specifications' suffix (0.892, live A/B on "Spartan CDC-10").
+  it('appends the single-word "specifications" suffix, not the old boilerplate', () => {
+    const query = buildRecommendationQuery({ brand: 'Spartan', product: 'CDC-10' });
+    expect(query).toContain('specifications');
+    expect(query).not.toContain('disinfectant OR cleaner');
+    expect(query).not.toContain(' OR ');
+  });
 });
 
 describe('parallel escalation (B0-325)', () => {

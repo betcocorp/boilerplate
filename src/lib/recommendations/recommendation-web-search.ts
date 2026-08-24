@@ -97,7 +97,7 @@ export type RecommendationSearchResult = {
 };
 
 /** Boilerplate appended to every recommendation query to bias the provider toward spec pages. */
-const RECOMMENDATION_QUERY_SUFFIX = 'product specifications disinfectant OR cleaner';
+const RECOMMENDATION_QUERY_SUFFIX = 'specifications';
 
 /**
  * Corporate-form tokens that carry no retrieval signal but do fragment the cache (B0-326): the
@@ -154,10 +154,10 @@ export function buildRecommendationQuery(input: { brand: string; product: string
  * Previously a `topScore < 0.3` alone forced escalation. Measured against the live
  * `web_search_cache` corpus that was firing on passes that were already rich in evidence: every
  * escalation on record had 5/5 results carrying usable content (up to ~1.6KB), and the trigger was
- * purely a depressed relevance score — the appended `RECOMMENDATION_QUERY_SUFFIX` drags the
- * provider's score down (the same product scored 0.93 without the suffix vs 0.04 with it). So a weak
- * score now escalates only when the evidence set is ALSO thin, which is what "inconclusive" was
- * always meant to capture.
+ * purely a depressed relevance score — an earlier, more boilerplate-heavy `RECOMMENDATION_QUERY_SUFFIX`
+ * dragged the provider's score down well below this threshold even on passes with plenty of usable
+ * content. So a weak score now escalates only when the evidence set is ALSO thin, which is what
+ * "inconclusive" was always meant to capture.
  */
 export function isSearchInconclusive(
   response: WebSearchResponse,

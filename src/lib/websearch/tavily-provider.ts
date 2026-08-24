@@ -76,7 +76,7 @@ export class TavilyProvider implements WebSearchProvider {
       query: request.query,
       search_depth: depth,
       include_answer: true,
-      include_raw_content: depth === 'advanced',
+      include_raw_content: true,
       max_results: request.maxResults ?? 5,
       ...(request.domains?.length ? { include_domains: request.domains } : {}),
     })) as { answer?: unknown; results?: unknown };
