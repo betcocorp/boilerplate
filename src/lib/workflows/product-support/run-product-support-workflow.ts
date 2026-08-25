@@ -138,6 +138,18 @@ import {
 
 import type { RunSource } from '~/types/observability';
 
+/**
+ * B0-681 — per-run routing override for the "Run dataset" workbench (`/admin/tests/[testId]`),
+ * mirroring the router types the `/admin/routing-test` tool already exercises. When set, the turn
+ * is forced onto exactly that router — no silent cross-router fallback: a forced `semantic`/`llm`
+ * that degrades falls straight to the keyword router's `route.agent ?? 'ambiguous'`, the same
+ * floor every route already has, rather than chaining into the OTHER router's live settings. This
+ * keeps a chosen-router test run interpretable (the grade reflects the router picked, not whatever
+ * the `settings` table happens to say today). `undefined` is the pre-existing behavior: the
+ * `settings`-driven semantic/LLM rollout levers decide, unchanged.
+ */
+export type RouterTypeOverride = 'keyword' | 'semantic' | 'llm';
+
 const VALIDATOR_EVIDENCE_CHAR_BUDGET = 60_000;
 const VALIDATOR_PER_DOCUMENT_CHAR_BUDGET = 24_000;
 
@@ -1480,6 +1492,8 @@ export async function runProductSupportWorkflow(input: {
   modelTag?: string;
   useValidator?: boolean;
   agentMode?: BexChatAgentMode;
+  /** B0-681 — see `RouterTypeOverride`. Absent everywhere except the test-run workbench. */
+  routerTypeOverride?: RouterTypeOverride;
   previousOpenaiResponseId?: string | null;
   priorMessages?: Array<{ role: 'user' | 'assistant'; content: string }>;
   onEvent?: (event: ProductSupportWorkflowEvent) => void;
@@ -1521,16 +1535,34 @@ export async function runProductSupportWorkflow(input: {
    * describe both levers, not leave one undefined because of evaluation order.
    */
   const [
-    llmRouterEnabled,
-    llmRouterShadowMode,
-    semanticRouterEnabledSetting,
-    semanticRouterShadowModeSetting,
+    llmRouterEnabledFromSettings,
+    llmRouterShadowModeFromSettings,
+    semanticRouterEnabledFromSettings,
+    semanticRouterShadowModeFromSettings,
   ] = await Promise.all([
     isLlmRouterEnabled(),
     isLlmRouterShadowMode(),
     isSemanticRouterEnabled(),
     isSemanticRouterShadowMode(),
   ]);
+
+  /**
+   * B0-681 — `routerTypeOverride` supersedes the `settings`-table rollout levers for this turn
+   * only. Forcing one router also forces the OTHER router off (rather than leaving it to the
+   * settings value), so a degraded `semantic`/`llm` override falls straight to the keyword floor
+   * instead of silently picking up whatever the live settings happen to say — see the type doc.
+   */
+  const routerTypeOverride = input.routerTypeOverride;
+  const llmRouterEnabled = routerTypeOverride
+    ? routerTypeOverride === 'llm'
+    : llmRouterEnabledFromSettings;
+  const llmRouterShadowMode = routerTypeOverride ? false : llmRouterShadowModeFromSettings;
+  const semanticRouterEnabledSetting = routerTypeOverride
+    ? routerTypeOverride === 'semantic'
+    : semanticRouterEnabledFromSettings;
+  const semanticRouterShadowModeSetting = routerTypeOverride
+    ? false
+    : semanticRouterShadowModeFromSettings;
 
   /**
    * B0-649 — the semantic router's three-state rollout (see `semantic-router-decision.ts` for the

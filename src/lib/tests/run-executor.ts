@@ -7,6 +7,7 @@ import {
   type SemanticRouteDecision,
 } from '~/lib/orchestrator/semantic-router';
 import { routeUserMessageToSme, type SmeRouteDecision } from '~/lib/orchestrator/sme-routing';
+import type { RouterTypeOverride } from '~/lib/workflows/product-support/run-product-support-workflow';
 
 import {
   getExistingResultItemIds,
@@ -136,6 +137,17 @@ function asSummaryObject(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+const ROUTER_TYPE_OVERRIDES: readonly RouterTypeOverride[] = ['keyword', 'semantic', 'llm'];
+
+/** `run_options.routerType`, validated against `RouterTypeOverride` — anything else is unset (settings decide). */
+function extractRouterTypeOverride(runOptions: Record<string, unknown>): RouterTypeOverride | undefined {
+  const raw = runOptions.routerType;
+  return typeof raw === 'string' &&
+    (ROUTER_TYPE_OVERRIDES as readonly string[]).includes(raw)
+    ? (raw as RouterTypeOverride)
+    : undefined;
+}
+
 export async function executeTestRun(testResultId: string) {
   const testResult = await getTestResultById(testResultId);
 
@@ -154,6 +166,8 @@ export async function executeTestRun(testResultId: string) {
       : undefined;
   // B0-600 / B0-603 — opt-in validator pass, read from the same run_options blob as modelTag.
   const useValidator = runOptions.useValidator === true;
+  // B0-681 — opt-in router override, read from the same run_options blob.
+  const routerTypeOverride = extractRouterTypeOverride(runOptions);
   // Use per-item existence check rather than an index offset so that retry (which
   // deletes only errored rows) and normal resume both work correctly when there
   // are gaps in the result set.
@@ -240,6 +254,7 @@ export async function executeTestRun(testResultId: string) {
     const itemResult = await runSingleTestItem(testResult.id, item, {
       modelTag,
       useValidator,
+      routerTypeOverride,
       // B0-645: stamps the source test's name onto the created conversation.
       testName: test.name,
     });
