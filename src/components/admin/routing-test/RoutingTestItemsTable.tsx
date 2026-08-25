@@ -65,20 +65,21 @@ export function RoutingTestItemsTable({
   }, [items]);
 
   return (
-    <div className="overflow-x-auto rounded-2xl border border-slate-200">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead className="w-[40%]">Prompt</TableHead>
-            <TableHead>Expected agent</TableHead>
-            {showResults ? <TableHead>Predicted</TableHead> : null}
-            {showResults ? <TableHead>Result</TableHead> : null}
-            {showResults ? (
-              <TableHead className="w-[30%]">Router detail</TableHead>
-            ) : null}
-            <TableHead className="text-right">Actions</TableHead>
-          </TableRow>
-        </TableHeader>
+    <div className="rounded-2xl border border-slate-200 overflow-hidden">
+      <div className="max-h-[75vh] overflow-x-auto overflow-y-auto">
+        <Table>
+          <TableHeader>
+            <TableRow className="sticky top-0 z-10 bg-white">
+              <TableHead className="w-[40%]">Prompt</TableHead>
+              <TableHead>Expected agent</TableHead>
+              {showResults ? <TableHead>Predicted</TableHead> : null}
+              {showResults ? <TableHead>Result</TableHead> : null}
+              {showResults ? (
+                <TableHead className="w-[30%]">Router detail</TableHead>
+              ) : null}
+              <TableHead className="text-right">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
         <TableBody>
           {groups.map((group) => (
             <Fragment key={`group-${group.option.id}`}>
@@ -168,6 +169,7 @@ export function RoutingTestItemsTable({
           ))}
         </TableBody>
       </Table>
+      </div>
     </div>
   );
 }
