@@ -7,6 +7,7 @@ import {
   EARLY_DECLINE_CHEMICAL_MIXING_COPY,
   EARLY_DECLINE_LEGAL_COMPLIANCE_COPY,
   EARLY_DECLINE_STORAGE_EXPIRATION_COPY,
+  type RouterTypeOverride,
 } from '~/lib/workflows/product-support/run-product-support-workflow';
 
 import { gradeWithCriteria } from './criteria-grader';
@@ -368,7 +369,12 @@ export function gradeChatTestResponse(params: {
 export async function runSingleTestItem(
   testResultId: string,
   testItem: TestItemRecord,
-  options?: { modelTag?: string; useValidator?: boolean; testName?: string | null },
+  options?: {
+    modelTag?: string;
+    useValidator?: boolean;
+    testName?: string | null;
+    routerTypeOverride?: RouterTypeOverride;
+  },
 ): Promise<RunSingleItemResult> {
   const startedAt = Date.now();
   let firstDeltaAt: number | null = null;
@@ -388,6 +394,7 @@ export async function runSingleTestItem(
        */
       useValidator: options?.useValidator ?? false,
       agentMode: 'orchestrator',
+      routerTypeOverride: options?.routerTypeOverride,
       // B0-450: eval-harness conversations are never attributed to whoever kicked off the run.
       owner: { kind: 'system' },
       // B0-645: stamps the source test's name onto the conversation so the admin sidebar shows

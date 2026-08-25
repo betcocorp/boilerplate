@@ -16,6 +16,7 @@ import {
 import {
   runProductSupportWorkflow,
   type ProductSupportWorkflowEvent,
+  type RouterTypeOverride,
 } from '~/lib/workflows/product-support/run-product-support-workflow';
 
 import type { RunSource } from '~/types/observability';
@@ -37,6 +38,8 @@ export async function runBexChatTurn(input: {
   modelTag?: string;
   useValidator?: boolean;
   agentMode?: BexChatAgentMode;
+  /** B0-681 — see `RouterTypeOverride`. Only the test-run workbench passes this. */
+  routerTypeOverride?: RouterTypeOverride;
   /**
    * Who owns the conversation this turn creates, if any. Chat routes resolve
    * `resolveConversationOwnerUserId()` and pass `{ kind: 'user', userId }` when it resolves, or omit
@@ -101,6 +104,7 @@ export async function runBexChatTurn(input: {
     modelTag: input.modelTag,
     useValidator: input.useValidator ?? false,
     agentMode: input.agentMode ?? DEFAULT_BEX_CHAT_AGENT_MODE,
+    routerTypeOverride: input.routerTypeOverride,
     previousOpenaiResponseId: conversation.latest_openai_response_id,
     priorMessages: priorMessages.map((message) => ({
       role: message.role === 'assistant' ? ('assistant' as const) : ('user' as const),

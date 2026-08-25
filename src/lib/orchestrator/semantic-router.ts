@@ -3,7 +3,10 @@ import { createHash } from 'node:crypto';
 import { SME_AGENT_IDS, type SmeAgentId } from '~/lib/agents/agent-registry';
 import { logError, logWarn } from '~/lib/observability/logger';
 import { getOpenAIClient } from '~/lib/openai/client';
-import type { IntentValue, PriorTurnMessage } from '~/lib/orchestrator/intent-classifier';
+import type {
+  IntentValue,
+  PriorTurnMessage,
+} from '~/lib/orchestrator/intent-classifier';
 import {
   readCachedRouteEmbeddings,
   writeCachedRouteEmbeddings,
@@ -153,7 +156,10 @@ async function embedBatch(
 
   return response.data.map((item, index) => {
     const vector = item.embedding;
-    if (!Array.isArray(vector) || vector.length !== SEMANTIC_ROUTER_EMBEDDING_DIMENSIONS) {
+    if (
+      !Array.isArray(vector) ||
+      vector.length !== SEMANTIC_ROUTER_EMBEDDING_DIMENSIONS
+    ) {
       throw new Error(
         `Embedding ${index} had ${vector?.length ?? 0} dimensions; expected ${SEMANTIC_ROUTER_EMBEDDING_DIMENSIONS}.`,
       );
@@ -188,7 +194,13 @@ export function cosineSimilarityWithNorms(
   normB: number,
 ): number {
   if (a.length !== b.length || a.length === 0) return 0;
-  if (!Number.isFinite(normA) || !Number.isFinite(normB) || normA <= 0 || normB <= 0) return 0;
+  if (
+    !Number.isFinite(normA) ||
+    !Number.isFinite(normB) ||
+    normA <= 0 ||
+    normB <= 0
+  )
+    return 0;
 
   let dot = 0;
   for (let i = 0; i < a.length; i += 1) dot += a[i]! * b[i]!;
@@ -198,7 +210,10 @@ export function cosineSimilarityWithNorms(
 }
 
 /** Convenience wrapper that derives both norms. Used by tests and any non-hot-path caller. */
-export function cosineSimilarity(a: readonly number[], b: readonly number[]): number {
+export function cosineSimilarity(
+  a: readonly number[],
+  b: readonly number[],
+): number {
   return cosineSimilarityWithNorms(a, vectorNorm(a), b, vectorNorm(b));
 }
 
@@ -443,8 +458,16 @@ function pruneCache(now: number): void {
 }
 
 /** Observability/test helper: message-embedding cache counters. */
-export function getSemanticRouterCacheStats(): { hits: number; misses: number; size: number } {
-  return { hits: cacheStats.hits, misses: cacheStats.misses, size: embeddingCache.size };
+export function getSemanticRouterCacheStats(): {
+  hits: number;
+  misses: number;
+  size: number;
+} {
+  return {
+    hits: cacheStats.hits,
+    misses: cacheStats.misses,
+    size: embeddingCache.size,
+  };
 }
 
 /**
@@ -503,7 +526,8 @@ export function buildSemanticRouteDecision({
 
   const confidencePassed = Boolean(top) && confidence >= thresholds.confidence;
   const marginPassed = Boolean(top) && margin >= thresholds.margin;
-  const routed = error === null && top !== undefined && confidencePassed && marginPassed;
+  const routed =
+    error === null && top !== undefined && confidencePassed && marginPassed;
 
   return {
     route: routed ? top!.route : 'ambiguous',
@@ -523,7 +547,10 @@ export function buildSemanticRouteDecision({
   };
 }
 
-async function resolveThresholds(): Promise<{ confidence: number; margin: number }> {
+async function resolveThresholds(): Promise<{
+  confidence: number;
+  margin: number;
+}> {
   const [confidence, margin] = await Promise.all([
     getSemanticRouterConfidenceThreshold(),
     getSemanticRouterMarginThreshold(),
@@ -552,7 +579,11 @@ export async function classifyUserIntentSemantic(
   const startedAt = nowMs();
   const thresholds = await resolveThresholds();
 
-  const degraded = (error: string, embeddingModel: string, embeddingMs = 0): SemanticRouteDecision =>
+  const degraded = (
+    error: string,
+    embeddingModel: string,
+    embeddingMs = 0,
+  ): SemanticRouteDecision =>
     buildSemanticRouteDecision({
       scores: [],
       thresholds,
@@ -578,7 +609,11 @@ export async function classifyUserIntentSemantic(
     );
   }
 
-  const cacheKey = computeSemanticRouterCacheKey(trimmed, priorMessages, active.embeddingModel);
+  const cacheKey = computeSemanticRouterCacheKey(
+    trimmed,
+    priorMessages,
+    active.embeddingModel,
+  );
   const now = Date.now();
   const existing = embeddingCache.get(cacheKey);
 
@@ -620,13 +655,21 @@ export async function classifyUserIntentSemantic(
       embeddingCache.delete(cacheKey);
       const reason = error instanceof Error ? error.message : String(error);
       logError('bex.semantic_router.fallback', { reason });
-      return degraded(reason, active.embeddingModel, nowMs() - embeddingStartedAt);
+      return degraded(
+        reason,
+        active.embeddingModel,
+        nowMs() - embeddingStartedAt,
+      );
     }
     embeddingMs = nowMs() - embeddingStartedAt;
   }
 
   if (embedded.norm <= 0) {
-    return degraded('zero_norm_message_embedding', active.embeddingModel, embeddingMs);
+    return degraded(
+      'zero_norm_message_embedding',
+      active.embeddingModel,
+      embeddingMs,
+    );
   }
 
   const scoringStartedAt = nowMs();

@@ -12,6 +12,7 @@ import { newCorrelationId } from '~/lib/observability/correlation-id';
 import { GOLDEN_TIERS, type GoldenTier } from '~/lib/tests/golden-set';
 import { updateTierTarget } from '~/lib/tests/tier-targets';
 import supportedModels from '~/lib/constants/models';
+import type { RouterTypeOverride } from '~/lib/workflows/product-support/run-product-support-workflow';
 import {
   parseCsvColumnNames,
   parseExpectedCriteriaFromForm,
@@ -549,6 +550,17 @@ export async function runTestAction(formData: FormData) {
   // Unchecked box means absent, matching every run created before this field existed.
   const useValidator = formData.get('useValidator') === 'on';
 
+  // B0-681 — opt-in router override; "Router: default" submits an empty string, which leaves
+  // `routerType` out of `run_options` entirely so the run falls back to the settings-driven router,
+  // matching every run created before this field existed.
+  const ROUTER_TYPE_OVERRIDES: readonly RouterTypeOverride[] = ['keyword', 'semantic', 'llm'];
+  const rawRouterType = formData.get('routerType');
+  const routerType =
+    typeof rawRouterType === 'string' &&
+    (ROUTER_TYPE_OVERRIDES as readonly string[]).includes(rawRouterType)
+      ? (rawRouterType as RouterTypeOverride)
+      : undefined;
+
   const testResult = await createTestResult({
     test_id: testId,
     status: 'queued',
@@ -557,7 +569,9 @@ export async function runTestAction(formData: FormData) {
     passed_items: 0,
     failed_items: 0,
     started_at: new Date().toISOString(),
-    run_options: { modelTag, useValidator },
+    run_options: routerType
+      ? { modelTag, useValidator, routerType }
+      : { modelTag, useValidator },
     app_version: APP_VERSION,
     summary: {
       completed_items: 0,
