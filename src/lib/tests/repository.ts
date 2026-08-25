@@ -1282,6 +1282,15 @@ export type RoutingComparisonAggregateRow = {
   /** B0-524 — null on rows predating the latency columns. */
   keywordRouteLatencyMs: number | null;
   llmRouteLatencyMs: number | null;
+  /** B0-652 — null on rows predating the semantic-router columns, or where the router wasn't reached. */
+  semanticRoute: string | null;
+  semanticConfidence: number | null;
+  semanticMargin: number | null;
+  semanticPath: string | null;
+  semanticRouteLatencyMs: number | null;
+  semanticEmbeddingMs: number | null;
+  semanticScoringMs: number | null;
+  routingAgreement: string | null;
 };
 
 const ROUTING_COMPARISON_PAGE_SIZE = 500;
@@ -1296,6 +1305,11 @@ const ROUTING_COMPARISON_PAGE_SIZE = 500;
  * `routing_decision` are plain columns on `test_result_items` (populated at insert time by
  * `buildRoutingComparisonFields`), so no join back to `test_items`/`tests` is needed for the
  * comparison itself.
+ *
+ * B0-652 adds the `semantic_*` / `routing_agreement` columns to the same projection. The
+ * `keyword_route IS NOT NULL` filter is deliberately NOT changed to key off `semantic_route`:
+ * every row already collected under the two-router instrumentation must keep flowing to the
+ * dashboard, with its semantic fields simply null.
  */
 export async function listRoutingComparisonRows(): Promise<RoutingComparisonAggregateRow[]> {
   const supabase = getSupabaseServiceRoleClient();
@@ -1303,7 +1317,7 @@ export async function listRoutingComparisonRows(): Promise<RoutingComparisonAggr
     supabase
       .from('test_result_items')
       .select(
-        'id, test_result_id, row_index, created_at, intended_agent_label, routing_decision, keyword_route, llm_route, routing_confidence, keyword_route_latency_ms, llm_route_latency_ms',
+        'id, test_result_id, row_index, created_at, intended_agent_label, routing_decision, keyword_route, llm_route, routing_confidence, keyword_route_latency_ms, llm_route_latency_ms, semantic_route, semantic_confidence, semantic_margin, semantic_path, semantic_route_latency_ms, semantic_embedding_ms, semantic_scoring_ms, routing_agreement',
       )
       .not('keyword_route', 'is', null)
       .order('created_at', { ascending: true })
@@ -1323,6 +1337,14 @@ export async function listRoutingComparisonRows(): Promise<RoutingComparisonAggr
             routingConfidence: row.routing_confidence,
             keywordRouteLatencyMs: row.keyword_route_latency_ms,
             llmRouteLatencyMs: row.llm_route_latency_ms,
+            semanticRoute: row.semantic_route,
+            semanticConfidence: row.semantic_confidence,
+            semanticMargin: row.semantic_margin,
+            semanticPath: row.semantic_path,
+            semanticRouteLatencyMs: row.semantic_route_latency_ms,
+            semanticEmbeddingMs: row.semantic_embedding_ms,
+            semanticScoringMs: row.semantic_scoring_ms,
+            routingAgreement: row.routing_agreement,
           }),
         );
       }),

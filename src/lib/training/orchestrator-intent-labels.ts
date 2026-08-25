@@ -114,6 +114,36 @@ export function orchestratorIntentLabelsByAgent(): Map<
   return map;
 }
 
+/**
+ * B0-652 — join key for matching an eval result row back to its golden-set label. The harness
+ * persists a test item's PROMPT, not this dataset's `id`, so the prompt text is the only link
+ * available; normalizing case and internal whitespace keeps a round-trip through CSV import/export
+ * (which can re-wrap or pad a cell) from silently losing the label.
+ */
+function normalizeMessageKey(message: string): string {
+  return message.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+const labelsByMessage: Map<string, OrchestratorIntentLabelRow> = new Map(
+  ORCHESTRATOR_INTENT_LABELS.map((row) => [normalizeMessageKey(row.message), row]),
+);
+
+/** The golden-set row whose message matches `message`, or null when it isn't from this dataset. */
+export function findOrchestratorIntentLabelByMessage(
+  message: string,
+): OrchestratorIntentLabelRow | null {
+  return labelsByMessage.get(normalizeMessageKey(message)) ?? null;
+}
+
+/**
+ * Every agent a reasonable classifier could pick for `message` without being wrong — the input to
+ * lenient grading. Returns null (not `[]`) for a prompt that isn't in the golden set, so a caller
+ * can tell "no lenient grading available" apart from "nothing is plausible".
+ */
+export function plausibleAgentsForMessage(message: string): OrchestratorIntentLabel[] | null {
+  return findOrchestratorIntentLabelByMessage(message)?.plausible_agents ?? null;
+}
+
 export type OrchestratorIntentLabelSummary = {
   total: number;
   byAgent: Record<string, number>;
