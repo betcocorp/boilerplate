@@ -1,3 +1,23 @@
+# [2.8.0](https://github.com/betcocorp/bex2.0/compare/v2.7.0...v2.8.0) (2026-08-25)
+
+
+### Bug Fixes
+
+* **B0-664:** add missing test-run owner variant to conversation schema ([a17feff](https://github.com/betcocorp/bex2.0/commit/a17fefff9c7261d88faf694d138a9f2c287908ab))
+* **B0-665:** allow cross_reference in routing_test_items check constraint ([f47ff60](https://github.com/betcocorp/bex2.0/commit/f47ff600d7c1ab2232010b872cd2f62d42da600a))
+
+
+### Features
+
+* **B0-663:** split cross-reference and recommendations into two SME agents ([4f4f6ef](https://github.com/betcocorp/bex2.0/commit/4f4f6efe22068b2bf9b682db0c82cee2a67fac42))
+* **B0-666:** add LLM router as a third option in the routing test tool ([2f4ca0c](https://github.com/betcocorp/bex2.0/commit/2f4ca0cd7ffa4847097e672c7eb13e8b76d3ca89))
+* **B0-667:** persist routing test run history with per-run summary and per-item drill-down ([809f6d5](https://github.com/betcocorp/bex2.0/commit/809f6d5c53f9e21124cc74bd785c0889a4c6f38a))
+* **B0-668:** lead routing-comparison dashboard with LLM vs semantic, demote keyword ([e4f0ea3](https://github.com/betcocorp/bex2.0/commit/e4f0ea3188b95c4040f4d3400edb4905f1b585c7))
+* **B0-669:** add embedding_large/embedding_model_large to routing_test_items ([848b12b](https://github.com/betcocorp/bex2.0/commit/848b12babd9115a71abb1337d8e251ca4d1f3848))
+* **B0-670:** color-code routing test accuracy (green >80%, red <=50%) ([b32719d](https://github.com/betcocorp/bex2.0/commit/b32719dd6d2d6b1c7c4f7fdb48296db9eef5ccbd))
+* **B0-671:** add LLM model selector next to router selection on routing test ([e0b095c](https://github.com/betcocorp/bex2.0/commit/e0b095c39247ecfec0a5ede331167c385a705077))
+* **B0-675:** group routing test items by specialist, add create-another to add dialog ([c0738fb](https://github.com/betcocorp/bex2.0/commit/c0738fb9b784ce80f2d3a9f88543994283f4c0b2))
+
 # [2.7.0](https://github.com/betcocorp/bex2.0/compare/v2.6.0...v2.7.0) (2026-08-25)
 
 
