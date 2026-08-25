@@ -13,6 +13,7 @@ import {
   listRoutingTestItems,
   deleteRoutingTestItem,
   insertRoutingTestItem,
+  insertRoutingTestRun,
   updateRoutingTestItem,
 } from './repository';
 import { runRoutingTest } from './run';
@@ -164,9 +165,16 @@ export async function deleteRoutingTestItemAction(formData: FormData) {
 }
 
 /**
- * B0-659 — run every item through the selected router and hand back a plain serializable result.
- * Deliberately NOT a redirect action: results are ephemeral component state, so nothing is
- * persisted and no run-history row is written.
+ * B0-659/B0-667 — run every item through the selected router and hand back a plain serializable
+ * result. Deliberately NOT a redirect action: the live result is ephemeral component state, exactly
+ * as it was before B0-667 — re-running still replaces it inline, with no page navigation.
+ *
+ * B0-667 adds persistence as a SIDE EFFECT of an `ok: true` result: one `routing_test_runs` row plus
+ * its `routing_test_run_items` snapshots (`insertRoutingTestRun`). This is deliberately best-effort
+ * — swallow-and-log, the same convention `writeAuditLog` (`~/lib/audit/audit-log.ts`) already uses
+ * for this file's other non-fatal side effects. The workbench is waiting on the run result itself;
+ * a history-write failure is a real problem worth logging, but it must never turn a successful run
+ * into an error response, and `ok: false` results (nothing ran) are never persisted.
  */
 export async function runRoutingTestAction(
   routerType: string,
@@ -182,8 +190,9 @@ export async function runRoutingTestAction(
 
   const items = await listRoutingTestItems();
 
+  let result: RoutingTestRunResult;
   try {
-    return await runRoutingTest(items, parsedRouterType.data);
+    result = await runRoutingTest(items, parsedRouterType.data);
   } catch (error) {
     return {
       ok: false,
@@ -193,4 +202,22 @@ export async function runRoutingTestAction(
       }`,
     };
   }
+
+  if (result.ok) {
+    try {
+      await insertRoutingTestRun(result);
+      revalidatePath(ROUTING_TEST_PATH);
+    } catch (error) {
+      console.error(
+        JSON.stringify({
+          level: 'error',
+          event: 'routing_test_run_persist_failed',
+          routerType: result.routerType,
+          message: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    }
+  }
+
+  return result;
 }

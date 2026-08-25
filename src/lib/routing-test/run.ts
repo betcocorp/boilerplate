@@ -23,7 +23,14 @@ export const ROUTING_TEST_SEMANTIC_CONCURRENCY = 4;
 /** Same reasoning as `ROUTING_TEST_SEMANTIC_CONCURRENCY` — one LLM classification call per item. */
 export const ROUTING_TEST_LLM_CONCURRENCY = 4;
 
-function keywordResult(item: RoutingTestItemRecord): RoutingTestItemResult {
+/**
+ * B0-667 — the four result-builder functions below run before timing is known to their caller
+ * (`runRoutingTest` measures the whole classification call, including the builder itself), so they
+ * build everything except `elapsedMs`; each call site stamps that on afterward.
+ */
+type TimelessItemResult = Omit<RoutingTestItemResult, 'elapsedMs'>;
+
+function keywordResult(item: RoutingTestItemRecord): TimelessItemResult {
   const decision = routeUserMessageToSme(item.prompt);
   // `agent` is `SmeAgentId | null`; `null` collapses to 'ambiguous' (see `normalizeRoutedAgent`).
   const predicted = normalizeRoutedAgent(decision.agent);
@@ -55,7 +62,7 @@ function keywordResult(item: RoutingTestItemRecord): RoutingTestItemResult {
 function semanticResult(
   item: RoutingTestItemRecord,
   decision: SemanticRouteDecision,
-): RoutingTestItemResult {
+): TimelessItemResult {
   const predicted = normalizeRoutedAgent(decision.route);
 
   return {
@@ -93,7 +100,7 @@ function semanticResult(
 function degradedSemanticResult(
   item: RoutingTestItemRecord,
   error: string,
-): RoutingTestItemResult {
+): TimelessItemResult {
   return {
     itemId: item.id,
     prompt: item.prompt,
@@ -114,7 +121,7 @@ function degradedSemanticResult(
 function llmResult(
   item: RoutingTestItemRecord,
   classification: Awaited<ReturnType<typeof import('~/lib/orchestrator/intent-classifier').classifyUserIntent>>,
-): RoutingTestItemResult {
+): TimelessItemResult {
   const predicted = normalizeRoutedAgent(classification.intent);
 
   return {
@@ -139,7 +146,7 @@ function llmResult(
 function degradedLlmResult(
   item: RoutingTestItemRecord,
   error: string,
-): RoutingTestItemResult {
+): TimelessItemResult {
   return {
     itemId: item.id,
     prompt: item.prompt,
@@ -152,8 +159,10 @@ function degradedLlmResult(
 }
 
 /**
- * B0-659 — score every routing-test item against one router. Results are EPHEMERAL: nothing here
- * writes to the database, and a re-run simply replaces the caller's previous result.
+ * B0-659 — score every routing-test item against one router. This function itself writes nothing
+ * to the database — it is `runRoutingTestAction` (`./actions.ts`), not `runRoutingTest`, that
+ * persists an `ok: true` result as a history row (B0-667). The live inline result stays the
+ * caller's source of truth either way: a re-run simply replaces it.
  *
  * "Semantic unavailable" is a real runtime capability check rather than a hardcoded flag: the
  * semantic module is imported lazily, and a failure to load (or a per-item degradation reported via
@@ -164,6 +173,10 @@ export async function runRoutingTest(
   routerType: RoutingTestRouterType,
 ): Promise<RoutingTestRunResult> {
   const ranAt = new Date().toISOString();
+  // B0-667 — wall-clock start for the whole run; `computeRoutingTestSummary`'s `durationMs` is
+  // measured against this, not derived from the items (their work can overlap under
+  // `mapWithConcurrency`).
+  const runStartedAt = Date.now();
 
   if (items.length === 0) {
     return {
@@ -171,19 +184,23 @@ export async function runRoutingTest(
       routerType,
       ranAt,
       items: [],
-      summary: computeRoutingTestSummary([]),
+      summary: computeRoutingTestSummary([], Date.now() - runStartedAt),
       warning: 'No routing test items to run yet.',
     };
   }
 
   if (routerType === 'keyword') {
-    const results = items.map(keywordResult);
+    const results = items.map((item) => {
+      const itemStartedAt = Date.now();
+      const result = keywordResult(item);
+      return { ...result, elapsedMs: Date.now() - itemStartedAt };
+    });
     return {
       ok: true,
       routerType,
       ranAt,
       items: results,
-      summary: computeRoutingTestSummary(results),
+      summary: computeRoutingTestSummary(results, Date.now() - runStartedAt),
       warning: null,
     };
   }
@@ -210,18 +227,21 @@ export async function runRoutingTest(
       items,
       ROUTING_TEST_SEMANTIC_CONCURRENCY,
       async (item) => {
+        const itemStartedAt = Date.now();
         // `classifyUserIntentSemantic` is contractually never-throwing, but this run is an admin
         // surface: a future regression that broke that contract would reject the whole
         // `Promise.all` and replace the page with an error boundary, losing every other item's
         // result. Degrading the single item keeps the run — and the AC's "clearly unavailable
         // rather than erroring" — intact.
         try {
-          return semanticResult(item, await classify(item.prompt));
+          const result = semanticResult(item, await classify(item.prompt));
+          return { ...result, elapsedMs: Date.now() - itemStartedAt };
         } catch (error) {
-          return degradedSemanticResult(
+          const result = degradedSemanticResult(
             item,
             error instanceof Error ? error.message : String(error),
           );
+          return { ...result, elapsedMs: Date.now() - itemStartedAt };
         }
       },
     );
@@ -234,7 +254,7 @@ export async function runRoutingTest(
       routerType,
       ranAt,
       items: results,
-      summary: computeRoutingTestSummary(results),
+      summary: computeRoutingTestSummary(results, Date.now() - runStartedAt),
       warning:
         degradedCount === results.length
           ? `Semantic router degraded on every item (${firstError ?? 'unknown reason'}) — treat these results as unavailable, not as routing failures.`
@@ -267,15 +287,18 @@ export async function runRoutingTest(
     items,
     ROUTING_TEST_LLM_CONCURRENCY,
     async (item) => {
+      const itemStartedAt = Date.now();
       // `classifyUserIntent` is also contractually never-throwing (it has its own internal
       // fallback), but the same admin-surface defense applies as the semantic path above.
       try {
-        return llmResult(item, await classify(item.prompt));
+        const result = llmResult(item, await classify(item.prompt));
+        return { ...result, elapsedMs: Date.now() - itemStartedAt };
       } catch (error) {
-        return degradedLlmResult(
+        const result = degradedLlmResult(
           item,
           error instanceof Error ? error.message : String(error),
         );
+        return { ...result, elapsedMs: Date.now() - itemStartedAt };
       }
     },
   );
@@ -288,7 +311,7 @@ export async function runRoutingTest(
     routerType,
     ranAt,
     items: results,
-    summary: computeRoutingTestSummary(results),
+    summary: computeRoutingTestSummary(results, Date.now() - runStartedAt),
     warning:
       degradedCount === results.length
         ? `LLM router degraded on every item (${firstError ?? 'unknown reason'}) — treat these results as unavailable, not as routing failures.`

@@ -26,18 +26,32 @@ export function isRoutingTestItemPass(
   return predicted === expectedAgent;
 }
 
+/**
+ * `durationMs` is the whole run's wall-clock time — it cannot be derived from the items array
+ * (mapWithConcurrency overlaps item work), so the caller measures it and passes it in.
+ * `avgItemDurationMs` IS derivable from `items[].elapsedMs` and is computed here (B0-667).
+ */
 export function computeRoutingTestSummary(
-  items: readonly Pick<RoutingTestItemResult, 'passed' | 'error'>[],
+  items: readonly Pick<RoutingTestItemResult, 'passed' | 'error' | 'elapsedMs'>[],
+  durationMs: number,
 ): RoutingTestRunSummary {
   const total = items.length;
   const correct = items.filter((item) => item.passed).length;
   const degraded = items.filter((item) => item.error !== null).length;
+  const avgItemDurationMs =
+    total === 0
+      ? 0
+      : Math.round(
+          items.reduce((sum, item) => sum + item.elapsedMs, 0) / total,
+        );
 
   return {
     total,
     correct,
     accuracy: total === 0 ? 0 : Math.round((correct / total) * 10000) / 10000,
     degraded,
+    durationMs,
+    avgItemDurationMs,
   };
 }
 
@@ -47,6 +61,19 @@ export function formatRoutingTestAccuracy(
 ): string {
   const percent = Math.round(summary.accuracy * 100);
   return `${summary.correct}/${summary.total} correct — ${percent}%`;
+}
+
+/**
+ * "2/4 50%" — the run-HISTORY display format (B0-667), distinct from `formatRoutingTestAccuracy`'s
+ * "N/M correct — P%". Takes plain counts (not a `RoutingTestRunSummary`) so it works directly off a
+ * persisted `RoutingTestRunRecord`'s `passed_items`/`total_items` columns.
+ */
+export function formatRoutingTestRunScore(
+  passed: number,
+  total: number,
+): string {
+  const percent = total === 0 ? 0 : Math.round((passed / total) * 100);
+  return `${passed}/${total} ${percent}%`;
 }
 
 /**

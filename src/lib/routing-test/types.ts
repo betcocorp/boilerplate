@@ -65,7 +65,10 @@ export type RoutingTestItemDetail =
   | RoutingTestSemanticDetail
   | RoutingTestLlmDetail;
 
-/** One item's outcome. Ephemeral — never persisted (B0-659). */
+/**
+ * One item's outcome. Was ephemeral-only under B0-659; B0-667 snapshots this shape into
+ * `public.routing_test_run_items` on every `ok: true` run (see `./repository.ts`).
+ */
 export type RoutingTestItemResult = {
   itemId: string;
   prompt: string;
@@ -75,6 +78,8 @@ export type RoutingTestItemResult = {
   /** Non-null when the router degraded (semantic fallback, missing service, thrown error). */
   error: string | null;
   detail: RoutingTestItemDetail | null;
+  /** Wall-clock time for this one item's classification call (B0-667), in milliseconds. */
+  elapsedMs: number;
 };
 
 export type RoutingTestRunSummary = {
@@ -84,6 +89,10 @@ export type RoutingTestRunSummary = {
   accuracy: number;
   /** Items whose router reported an error/degradation, correct or not. */
   degraded: number;
+  /** Wall-clock time for the whole run (B0-667), in milliseconds. */
+  durationMs: number;
+  /** Mean of every item's `elapsedMs` (B0-667). `0` when there are no items. */
+  avgItemDurationMs: number;
 };
 
 export type RoutingTestRunResult =
@@ -101,3 +110,43 @@ export type RoutingTestRunResult =
       routerType: RoutingTestRouterType;
       error: string;
     };
+
+/**
+ * B0-667 — one row of `public.routing_test_runs`: the persisted, run-level summary of an `ok: true`
+ * `RoutingTestRunResult`. Written by `insertRoutingTestRun` (`./repository.ts`) as a best-effort
+ * side effect of `runRoutingTestAction` — the live inline result stays the source of truth for the
+ * request that triggered it either way.
+ */
+export type RoutingTestRunRecord = {
+  id: string;
+  router_type: RoutingTestRouterType;
+  ran_at: string;
+  total_items: number;
+  passed_items: number;
+  degraded_items: number;
+  duration_ms: number;
+  avg_item_duration_ms: number | null;
+  warning: string | null;
+  created_at: string;
+};
+
+/**
+ * B0-667 — one row of `public.routing_test_run_items`: a per-item snapshot of a
+ * `RoutingTestItemResult` taken at run time. `prompt`/`expected_agent` are snapshots of the source
+ * `routing_test_items` row (which can later change or be deleted — `item_id` is nullable via
+ * `ON DELETE SET NULL` for exactly that reason).
+ */
+export type RoutingTestRunItemRecord = {
+  id: string;
+  run_id: string;
+  item_id: string | null;
+  row_index: number;
+  prompt: string;
+  expected_agent: SmeAgentId;
+  predicted_agent: RoutingTestPredictedLabel;
+  passed: boolean;
+  error: string | null;
+  elapsed_ms: number;
+  detail: RoutingTestItemDetail | null;
+  created_at: string;
+};

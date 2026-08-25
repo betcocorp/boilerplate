@@ -2,16 +2,23 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { assertSupabaseNoError as assertNoError } from '~/lib/utils';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
+import type { Json } from '~/types/supabase.public';
 
-import type { RoutingTestItemRecord } from './types';
+import type {
+  RoutingTestItemRecord,
+  RoutingTestRunItemRecord,
+  RoutingTestRunRecord,
+  RoutingTestRunResult,
+} from './types';
 
 /**
- * `public.routing_test_items` (B0-657) is newer than the checked-in generated types
- * (`src/types/supabase.public.ts`), so this module narrows the shared service-role client to a
- * locally declared table definition rather than regenerating a shared file. Remove this shim and
+ * `public.routing_test_items` (B0-657) and `public.routing_test_runs` /
+ * `public.routing_test_run_items` (B0-667) are all newer than the checked-in generated types
+ * (`src/types/supabase.public.ts`), so this module narrows the shared service-role client to
+ * locally declared table definitions rather than regenerating a shared file. Remove this shim and
  * lean on the generated `Database` type after the next `pnpm run types:supabase:public`.
  */
-type RoutingTestItemsDatabase = {
+type RoutingTestDatabase = {
   public: {
     Tables: {
       routing_test_items: {
@@ -30,6 +37,42 @@ type RoutingTestItemsDatabase = {
         };
         Relationships: [];
       };
+      routing_test_runs: {
+        Row: RoutingTestRunRecord;
+        Insert: {
+          id?: string;
+          router_type: string;
+          ran_at: string;
+          total_items?: number;
+          passed_items?: number;
+          degraded_items?: number;
+          duration_ms?: number;
+          avg_item_duration_ms?: number | null;
+          warning?: string | null;
+          created_at?: string;
+        };
+        Update: Record<string, never>;
+        Relationships: [];
+      };
+      routing_test_run_items: {
+        Row: RoutingTestRunItemRecord;
+        Insert: {
+          id?: string;
+          run_id: string;
+          item_id?: string | null;
+          row_index: number;
+          prompt: string;
+          expected_agent: string;
+          predicted_agent: string;
+          passed: boolean;
+          error?: string | null;
+          elapsed_ms: number;
+          detail?: Json | null;
+          created_at?: string;
+        };
+        Update: Record<string, never>;
+        Relationships: [];
+      };
     };
     Views: Record<never, never>;
     Functions: Record<never, never>;
@@ -39,11 +82,11 @@ type RoutingTestItemsDatabase = {
 };
 
 function routingTestClient(): SupabaseClient<
-  RoutingTestItemsDatabase,
+  RoutingTestDatabase,
   'public'
 > {
   return getSupabaseServiceRoleClient() as unknown as SupabaseClient<
-    RoutingTestItemsDatabase,
+    RoutingTestDatabase,
     'public'
   >;
 }
@@ -111,4 +154,98 @@ export async function deleteRoutingTestItem(id: string): Promise<boolean> {
 
   const rows = (assertNoError(result) ?? []) as { id: string }[];
   return rows.length > 0;
+}
+
+/**
+ * B0-667 — persist one `ok: true` run: the `routing_test_runs` header row, then every item's
+ * `routing_test_run_items` snapshot in original order (`row_index` = position in `run.items`,
+ * which `runRoutingTest`/`mapWithConcurrency` always preserve). `run.summary` already carries
+ * `durationMs`/`avgItemDurationMs` (computed once, in `computeRoutingTestSummary`), so there is no
+ * second timing input to reconcile here.
+ *
+ * Callers (`runRoutingTestAction`) treat this as a best-effort side effect — a thrown error here
+ * must not blow up the live, ephemeral result the workbench is waiting on.
+ */
+export async function insertRoutingTestRun(
+  run: RoutingTestRunResult & { ok: true },
+): Promise<RoutingTestRunRecord> {
+  const client = routingTestClient();
+
+  const runResult = await client
+    .from('routing_test_runs')
+    .insert({
+      router_type: run.routerType,
+      ran_at: run.ranAt,
+      total_items: run.summary.total,
+      passed_items: run.summary.correct,
+      degraded_items: run.summary.degraded,
+      duration_ms: run.summary.durationMs,
+      avg_item_duration_ms: run.summary.avgItemDurationMs,
+      warning: run.warning,
+    })
+    .select('*')
+    .single();
+
+  const insertedRun = assertNoError(runResult) as RoutingTestRunRecord;
+
+  if (run.items.length > 0) {
+    const itemRows = run.items.map((item, index) => ({
+      run_id: insertedRun.id,
+      item_id: item.itemId,
+      row_index: index,
+      prompt: item.prompt,
+      expected_agent: item.expectedAgent,
+      predicted_agent: item.predicted,
+      passed: item.passed,
+      error: item.error,
+      elapsed_ms: item.elapsedMs,
+      detail: item.detail as Json | null,
+    }));
+
+    const itemsResult = await client
+      .from('routing_test_run_items')
+      .insert(itemRows);
+
+    assertNoError(itemsResult);
+  }
+
+  return insertedRun;
+}
+
+/** Run history, newest first — no joins, just the header rows for the history table. */
+export async function listRoutingTestRuns(): Promise<RoutingTestRunRecord[]> {
+  const result = await routingTestClient()
+    .from('routing_test_runs')
+    .select('*')
+    .order('ran_at', { ascending: false });
+
+  return (assertNoError(result) ?? []) as RoutingTestRunRecord[];
+}
+
+/** One run plus its item-level snapshots (`row_index` ascending), or `null` if the id is unknown. */
+export async function getRoutingTestRunWithItems(
+  runId: string,
+): Promise<{ run: RoutingTestRunRecord; items: RoutingTestRunItemRecord[] } | null> {
+  const client = routingTestClient();
+
+  const runResult = await client
+    .from('routing_test_runs')
+    .select('*')
+    .eq('id', runId)
+    .maybeSingle();
+
+  const run = (assertNoError(runResult) ?? null) as RoutingTestRunRecord | null;
+  if (!run) {
+    return null;
+  }
+
+  const itemsResult = await client
+    .from('routing_test_run_items')
+    .select('*')
+    .eq('run_id', runId)
+    .order('row_index', { ascending: true });
+
+  const items = (assertNoError(itemsResult) ?? []) as RoutingTestRunItemRecord[];
+
+  return { run, items };
 }

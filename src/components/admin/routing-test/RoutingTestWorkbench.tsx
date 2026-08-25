@@ -176,8 +176,9 @@ export function RoutingTestWorkbench({
         {run?.ok && run.items.length > 0 ? (
           <p className="mt-4 text-xs text-slate-500">
             {ROUTING_TEST_ROUTER_LABELS[run.routerType]} router ·{' '}
-            {new Date(run.ranAt).toLocaleString()} · results are not saved —
-            re-running replaces them.
+            {new Date(run.ranAt).toLocaleString()} · this inline result is
+            replaced by the next run, but has also been saved — reload to see
+            it in the run history below.
           </p>
         ) : null}
       </section>
