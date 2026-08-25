@@ -3,7 +3,6 @@ import { cookies } from 'next/headers';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 
-import { version as appVersion } from '../../../../package.json';
 import { AdminAccountMenu } from '~/components/admin/AdminAccountMenu';
 import { AdminNavAutoClose } from '~/components/admin/AdminNavAutoClose';
 import { AdminScrollableMain } from '~/components/admin/AdminScrollableMain';
@@ -25,6 +24,7 @@ import {
   getCurrentUserPermissions,
   userHasSwitcher,
 } from '~/lib/permissions/permissions-server';
+import { version as appVersion } from '../../../../package.json';
 
 type AdminLayoutProps = {
   children: ReactNode;
@@ -77,7 +77,7 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
                 <SidebarTrigger className="-ml-1" />
                 <div className="min-w-0">
                   <p className="text-sm font-medium text-muted-foreground">
-                    {appVersion}
+                    v{appVersion}
                   </p>
                   <h2 className="truncate text-lg font-semibold text-foreground">
                     Dashboard
@@ -92,7 +92,10 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
                     <span className="hidden md:block">Search</span>
                   </Link>
                 </Button>
-                <EventCountdown targetDate={new Date('2026-11-17')} />
+                <EventCountdown
+                  title="ISSA: "
+                  targetDate={new Date('2026-11-17')}
+                />
               </div>
             </div>
           </header>

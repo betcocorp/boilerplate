@@ -49,8 +49,10 @@ describe('routing golden set (B0-339)', () => {
     expect(engages.length).toBeGreaterThanOrEqual(8);
     expect(doesNotEngage.length).toBeGreaterThanOrEqual(8);
     // Every specialist route is represented, so widening cross-reference cannot quietly eat one.
+    // B0-663 — `cross_reference` (competitor) and `recommendations` (job-based, new) are now
+    // distinct routes; both must be represented.
     expect(new Set(ROUTING_GOLDEN_SET.map((c) => c.expectedRoute))).toEqual(
-      new Set(['recommendations', 'product', 'floor', 'dilution', 'bathroom', null]),
+      new Set(['cross_reference', 'recommendations', 'product', 'floor', 'dilution', 'bathroom', null]),
     );
   });
 

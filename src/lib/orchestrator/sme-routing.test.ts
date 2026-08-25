@@ -5,22 +5,22 @@ import {
   SME_ROUTE_TIE_BREAK_ORDER,
 } from '~/lib/orchestrator/sme-routing';
 
-describe('routeUserMessageToSme — recommendations (REC-7)', () => {
-  it('routes the BNC-15 competitive-analysis trigger query to the recommendations agent', () => {
+describe('routeUserMessageToSme — cross_reference (REC-7)', () => {
+  it('routes the BNC-15 competitive-analysis trigger query to the cross_reference agent', () => {
     const route = routeUserMessageToSme(
       'Spartan Chemical has the product BNC-15, find the Betco product you would recommend and give a competitive analysis.',
     );
-    expect(route.agent).toBe('recommendations');
-    expect(route.recommendationScore).toBeGreaterThan(route.productScore);
+    expect(route.agent).toBe('cross_reference');
+    expect(route.crossReferenceScore).toBeGreaterThan(route.productScore);
   });
 
-  it('routes an explicit cross-reference / equivalent query to recommendations', () => {
+  it('routes an explicit cross-reference / equivalent query to cross_reference', () => {
     expect(
       routeUserMessageToSme("What is the Betco equivalent of Zep's heavy-duty degreaser?").agent,
-    ).toBe('recommendations');
+    ).toBe('cross_reference');
     expect(
       routeUserMessageToSme('Cross-reference this competitor disinfectant to a comparable Betco product.').agent,
-    ).toBe('recommendations');
+    ).toBe('cross_reference');
   });
 
   it('does not let the broad "recommend" signal hijack a floor-procedure query', () => {
@@ -35,24 +35,25 @@ describe('routeUserMessageToSme — recommendations (REC-7)', () => {
     expect(route.agent).toBe('product');
   });
 
-  it('returns a zero recommendationScore and no agent for an empty message', () => {
+  it('returns a zero crossReferenceScore and no agent for an empty message', () => {
     const route = routeUserMessageToSme('   ');
     expect(route.agent).toBeNull();
+    expect(route.crossReferenceScore).toBe(0);
     expect(route.recommendationScore).toBe(0);
   });
 });
 
 describe('routeUserMessageToSme — cross-reference intent beats generic product tokens (B0-339)', () => {
   // The three prompts from test run 577d100e that routed `product` and so skipped the
-  // recommendations-only post-processing, including the curated-override safety net.
+  // cross-reference-only post-processing, including the curated-override safety net.
   it('routes a literal cross-reference request that also says "Betco product"', () => {
     const route = routeUserMessageToSme(
       'Cross-reference Fictibrand QuantumClean 7 to a Betco product.',
     );
-    expect(route.agent).toBe('recommendations');
+    expect(route.agent).toBe('cross_reference');
     // The regression it guards: 'product' + 'betco' out-hit the single cross-reference phrase, so
     // counting alone still favours product here. The decisive signal has to win outright.
-    expect(route.productScore).toBeGreaterThanOrEqual(route.recommendationScore);
+    expect(route.productScore).toBeGreaterThanOrEqual(route.crossReferenceScore);
     expect(route.rationale).toContain('Decisive cross-reference signal');
   });
 
@@ -61,7 +62,7 @@ describe('routeUserMessageToSme — cross-reference intent beats generic product
       routeUserMessageToSme(
         'We currently use Nonexistex ProShine Ultra. Which Betco product should we switch to?',
       ).agent,
-    ).toBe('recommendations');
+    ).toBe('cross_reference');
   });
 
   it('routes "replaces" phrasing', () => {
@@ -69,7 +70,7 @@ describe('routeUserMessageToSme — cross-reference intent beats generic product
       routeUserMessageToSme(
         "Which Betco product replaces Placeholder Chemical Co's Zenith 3000?",
       ).agent,
-    ).toBe('recommendations');
+    ).toBe('cross_reference');
   });
 
   it('routes other substitution verbs that previously scored zero here', () => {
@@ -78,7 +79,7 @@ describe('routeUserMessageToSme — cross-reference intent beats generic product
       'What can replace our current Diversey degreaser?',
       'We want to swap out Zep Big Orange for a Betco product.',
     ]) {
-      expect(routeUserMessageToSme(message).agent, message).toBe('recommendations');
+      expect(routeUserMessageToSme(message).agent, message).toBe('cross_reference');
     }
   });
 
@@ -89,9 +90,9 @@ describe('routeUserMessageToSme — cross-reference intent beats generic product
     const route = routeUserMessageToSme(
       'Should I use the Betco concentrate instead of the RTU for this floor?',
     );
-    expect(route.recommendationScore).toBeGreaterThan(0);
+    expect(route.crossReferenceScore).toBeGreaterThan(0);
     expect(route.rationale).not.toContain('Decisive');
-    expect(route.agent).not.toBe('recommendations');
+    expect(route.agent).not.toBe('cross_reference');
   });
 
   it('leaves genuine product questions on the product route', () => {
@@ -116,13 +117,48 @@ describe('routeUserMessageToSme — cross-reference intent beats generic product
   });
 });
 
+describe('routeUserMessageToSme — job-based recommendations (B0-663, additive only)', () => {
+  it('routes a generic job/problem ask with no competitor and no domain signal', () => {
+    const route = routeUserMessageToSme(
+      'I have an issue with static cling building up on the carpet, what would you recommend?',
+    );
+    expect(route.agent).toBe('recommendations');
+    expect(route.recommendationScore).toBeGreaterThan(0);
+  });
+
+  it('does not fire on a factual/spec lookup phrased as a question', () => {
+    for (const message of [
+      'Does Betco make a neutral floor cleaner?',
+      'Tell me about the Green Earth product line.',
+      'What is the SDS for this concentrate?',
+    ]) {
+      expect(routeUserMessageToSme(message).agent, message).not.toBe('recommendations');
+    }
+  });
+
+  it('additive-only: a domain-specific "what should I use" question still routes to its specialist', () => {
+    const route = routeUserMessageToSme('What should I use on urinals and toilets in a restroom?');
+    expect(route.agent).toBe('bathroom');
+    expect(route.recommendationScore).toBeGreaterThan(0);
+    expect(route.bathroomScore).toBeGreaterThan(route.recommendationScore);
+  });
+
+  it('never gets the decisive short-circuit treatment cross_reference gets', () => {
+    // A message with only job-phrase signals (no decisive cross-reference phrase) must resolve via
+    // scoring/tie-break, never a "decisive" decisionPath.
+    const route = routeUserMessageToSme('What should I use to degrease a commercial kitchen floor?');
+    expect(route.agent).toBe('recommendations');
+    expect(route.decisionPath).not.toBe('decisive_cross_reference_signal');
+  });
+});
+
 describe('routeUserMessageToSme — matched phrases and decision path (B0-392)', () => {
   it('returns the exact phrases behind each score, and the counts still equal their length', () => {
     const route = routeUserMessageToSme(
       'Cross-reference this competitor disinfectant to a comparable Betco product.',
     );
 
-    expect(route.matchedPhrases.recommendations).toEqual([
+    expect(route.matchedPhrases.cross_reference).toEqual([
       'cross-reference',
       'competitor',
       'comparable',
@@ -131,6 +167,7 @@ describe('routeUserMessageToSme — matched phrases and decision path (B0-392)',
     expect(route.matchedPhrases.floor).toEqual([]);
 
     // The phrases are the score: counts are unchanged, they are just no longer the only record.
+    expect(route.matchedPhrases.cross_reference).toHaveLength(route.crossReferenceScore);
     expect(route.matchedPhrases.recommendations).toHaveLength(route.recommendationScore);
     expect(route.matchedPhrases.product).toHaveLength(route.productScore);
     expect(route.matchedPhrases.bathroom).toHaveLength(route.bathroomScore);
@@ -143,11 +180,11 @@ describe('routeUserMessageToSme — matched phrases and decision path (B0-392)',
     // where an equivalent single floor phrase scores 1. Only the phrases make that visible.
     const route = routeUserMessageToSme('Please give a competitive analysis of this.');
 
-    expect(route.matchedPhrases.recommendations).toEqual([
+    expect(route.matchedPhrases.cross_reference).toEqual([
       'competitive analysis',
       'competitive',
     ]);
-    expect(route.recommendationScore).toBe(2);
+    expect(route.crossReferenceScore).toBe(2);
   });
 
   it('reports a zero-signal message as no_signal (not a tie, not ambiguity between agents)', () => {
@@ -182,9 +219,9 @@ describe('routeUserMessageToSme — matched phrases and decision path (B0-392)',
       'Cross-reference Fictibrand QuantumClean 7 to a Betco product.',
     );
 
-    expect(route.decisionPath).toBe('decisive_recommendation_signal');
-    expect(route.decisiveRecommendationPhrases).toContain('cross-reference');
-    expect(route.agent).toBe('recommendations');
+    expect(route.decisionPath).toBe('decisive_cross_reference_signal');
+    expect(route.decisiveCrossReferencePhrases).toContain('cross-reference');
+    expect(route.agent).toBe('cross_reference');
   });
 
   it('reports an uncontested winner as outright_winner', () => {

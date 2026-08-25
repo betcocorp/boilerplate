@@ -33,6 +33,11 @@ const conversationOwnerSchema = z
       email: z.string().nullable(),
       userId: z.string(),
     }),
+    // B0-645 — test-run conversation attributed to its source test.
+    z.object({
+      kind: z.literal('test'),
+      title: z.string(),
+    }),
     z.literal('admin'),
   ])
   .nullable();

@@ -58,10 +58,10 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
                 Upload prompt datasets and run evaluation sets
               </h1>
               <p className="mt-4 max-w-4xl text-base leading-7 text-slate-600">
-                Create an empty test set and add prompts manually, or upload a CSV
-                to S3 (`retool-360/bex`) and persist rows into `public.tests` and
-                `public.test_items`, then run prompt sets and save run metrics in
-                `public.test_results`.
+                Create an empty test set and add prompts manually, or upload a
+                CSV to S3 (`retool-360/bex`) and persist rows into
+                `public.tests` and `public.test_items`, then run prompt sets and
+                save run metrics in `public.test_results`.
               </p>
             </div>
             <div className="shrink-0">
@@ -76,18 +76,20 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
               <h2 className="text-lg font-semibold text-slate-900">
                 Uploaded tests
               </h2>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-slate-600">
+                {tests.length} datasets
+              </span>
               {archivedTests.length > 0 && (
                 <Link
                   href="/admin/tests/archived"
                   className="text-sm text-sky-700 underline-offset-2 hover:underline"
                 >
-                  View archived tests ({archivedTests.length})
+                  Archived ({archivedTests.length})
                 </Link>
               )}
             </div>
-            <span className="text-sm text-slate-600">
-              {tests.length} datasets
-            </span>
           </div>
           <Table>
             <TableHeader>

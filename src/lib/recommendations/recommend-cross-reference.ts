@@ -240,6 +240,13 @@ export type RecommendationCandidateOut = {
   url: string | null;
   rationale: string | null;
   source: Record<string, unknown>;
+  /**
+   * B0-663 — both cross-reference and recommendations agents must present exactly 1 best-suited
+   * primary product plus up to 2 alternatives, never an undifferentiated list. `rank === 1` is
+   * `'primary'`, everything else is `'alternate'`. Enforced (not just advisory) by capping both
+   * mapping functions below to at most 3 entries.
+   */
+  tier: 'primary' | 'alternate';
 };
 
 export type RecommendCrossReferenceResult = {
@@ -320,6 +327,8 @@ function mapLegacyMatches(matches: LegacyMatch[]): RecommendationCandidateOut[] 
     url: m.productUrl ?? null,
     rationale: `Legacy cross-reference (${m.matchType ?? 'match'})`,
     source: { via: 'legacy', legacyRowId: m.legacyRowId ?? null, matchType: m.matchType ?? null },
+    // Already capped to LEGACY_LOOKUP_MAX_RESULTS (3) upstream — only the tier marker is new here.
+    tier: index === 0 ? 'primary' : 'alternate',
   }));
 }
 
@@ -338,8 +347,23 @@ function rationaleForKeySource(keySource: BetcoCandidate['keySource']): string |
   }
 }
 
+/**
+ * B0-663 — both agents must present exactly 1 primary + up to 2 alternatives, never an
+ * undifferentiated list. The web-grounded path can arrive here with more than 3 candidates
+ * (retrieval intentionally over-fetches for the grounding/reranking pool, see
+ * `candidate-retrieval.ts`'s `CANDIDATE_FETCH_MULTIPLIER`), so the cap is enforced at this output
+ * boundary rather than by touching retrieval.
+ *
+ * `candidates` arrives here already sorted descending by `similarity` — verified via
+ * `rankCandidates` in `candidate-retrieval.ts` (`.sort((a, b) => b.similarity - a.similarity)`)
+ * and confirmed `filterGroundedCandidates`/`partitionCandidatesByGrounding` only filter, never
+ * reorder — so slicing the first 3 keeps rank 1 as the genuine best match. No latent bug found;
+ * no re-sort needed here.
+ */
+const MAX_OUTPUT_CANDIDATES = 3;
+
 function mapWebCandidates(candidates: BetcoCandidate[]): RecommendationCandidateOut[] {
-  return candidates.map((c, index) => ({
+  return candidates.slice(0, MAX_OUTPUT_CANDIDATES).map((c, index) => ({
     betcoProductKey: c.betcoProductKey,
     betcoProdId: null,
     betcoTitle: c.title,
@@ -354,6 +378,7 @@ function mapWebCandidates(candidates: BetcoCandidate[]): RecommendationCandidate
       keySource: c.keySource,
       evidence: c.evidence,
     },
+    tier: index === 0 ? 'primary' : 'alternate',
   }));
 }
 
@@ -554,6 +579,9 @@ async function runWebGroundedPath(ctx: WebGroundedPathContext): Promise<Recommen
       score: score.components,
       sources: web.results.map((r) => ({ url: r.url, title: r.title, score: r.score })),
       droppedCandidates: dropped.length,
+      // B0-663 — how many grounded matches beyond the top 3 were cut at the mapWebCandidates output
+      // boundary (distinct from `droppedCandidates`, which counts grounding failures, not the cap).
+      cappedCount: Math.max(0, grounded.length - MAX_OUTPUT_CANDIDATES),
       validation,
       webSearch,
       // B0-292 — the actual pages the search found (query + title/url/snippet per result), not just

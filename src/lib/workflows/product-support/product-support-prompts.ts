@@ -1,3 +1,4 @@
+import { CROSS_REFERENCE_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/cross-reference-specialist/cross-reference-specialist-system-prompt';
 import { DILUTION_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/dilution-specialist/dilution-specialist-system-prompt';
 import { FLOOR_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/floor-specialist/floor-specialist-system-prompt';
 import { PRODUCT_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/product-specialist/product-specialist-system-prompt';
@@ -112,6 +113,7 @@ export const EFFECTIVE_PROMPT_IDS = [
   'floor',
   'product',
   'recommendations',
+  'cross_reference',
 ] as const;
 
 export type EffectivePromptId = (typeof EFFECTIVE_PROMPT_IDS)[number];
@@ -122,6 +124,7 @@ const SPECIALIST_SYSTEM_PROMPTS: Record<EffectivePromptId, string> = {
   floor: FLOOR_SPECIALIST_SYSTEM_PROMPT,
   product: PRODUCT_SPECIALIST_SYSTEM_PROMPT,
   recommendations: RECOMMENDATIONS_SPECIALIST_SYSTEM_PROMPT,
+  cross_reference: CROSS_REFERENCE_SPECIALIST_SYSTEM_PROMPT,
 };
 
 /**
@@ -240,7 +243,10 @@ export function buildProductSupportInstructions(input: {
     bathroomScore: number;
     dilutionScore: number;
     floorScore: number;
+    /** B0-663 — job/problem-driven recommendation score (renamed from the old competitor-only meaning). */
     recommendationScore: number;
+    /** B0-663 — competitor cross-reference score (split out of the old `recommendationScore`). */
+    crossReferenceScore: number;
   };
   /**
    * B0-508 — the B0-503 LLM intent classifier's result for this turn, when the caller ran one.
@@ -250,7 +256,7 @@ export function buildProductSupportInstructions(input: {
    */
   classification?: IntentClassification;
 }): string {
-  const scores = `product ${input.routing.productScore} · bathroom ${input.routing.bathroomScore} · dilution ${input.routing.dilutionScore} · floor ${input.routing.floorScore} · recommendations ${input.routing.recommendationScore}`;
+  const scores = `product ${input.routing.productScore} · bathroom ${input.routing.bathroomScore} · dilution ${input.routing.dilutionScore} · floor ${input.routing.floorScore} · recommendations ${input.routing.recommendationScore} · cross_reference ${input.routing.crossReferenceScore}`;
   const activePrompt = systemPromptForDecision(input.routing.decision);
   const modeLine =
     input.mode === 'orchestrator'

@@ -33,7 +33,14 @@ afterEach(() => {
 
 describe('classifySpeculativeRetrievalSkip (B0-436)', () => {
   it('speculates on the ordinary product / ambiguous routes', () => {
-    for (const routingDecision of ['product', 'ambiguous', 'bathroom', 'dilution', 'floor']) {
+    for (const routingDecision of [
+      'product',
+      'ambiguous',
+      'bathroom',
+      'dilution',
+      'floor',
+      'recommendations',
+    ]) {
       expect(
         classifySpeculativeRetrievalSkip({
           userMessage: USER_MESSAGE,
@@ -54,14 +61,14 @@ describe('classifySpeculativeRetrievalSkip (B0-436)', () => {
     ).toBe('forced_cross_reference');
   });
 
-  it('skips the recommendations route, where lookup_cross_reference must come first', () => {
+  it('skips the cross_reference route, where lookup_cross_reference must come first', () => {
     expect(
       classifySpeculativeRetrievalSkip({
         userMessage: USER_MESSAGE,
         forcedCrossReference: false,
-        routingDecision: 'recommendations',
+        routingDecision: 'cross_reference',
       }),
-    ).toBe('recommendations_route');
+    ).toBe('cross_reference_route');
   });
 
   it('skips an empty message', () => {

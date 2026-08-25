@@ -44,8 +44,8 @@ export type SpeculativeSkipReason =
   | 'flag_disabled'
   /** `shouldForceCrossReferenceLookup` fired — that path forces `lookup_cross_reference` and is left exactly as it was. */
   | 'forced_cross_reference'
-  /** The recommendations route must call `lookup_cross_reference` before any similarity search, so a product-docs search is wasted work. */
-  | 'recommendations_route'
+  /** The cross_reference route must call `lookup_cross_reference` before any similarity search, so a product-docs search is wasted work. */
+  | 'cross_reference_route'
   /** Nothing to search for. */
   | 'empty_message';
 
@@ -64,8 +64,8 @@ export function classifySpeculativeRetrievalSkip(input: {
   if (input.forcedCrossReference) {
     return 'forced_cross_reference';
   }
-  if (input.routingDecision === 'recommendations') {
-    return 'recommendations_route';
+  if (input.routingDecision === 'cross_reference') {
+    return 'cross_reference_route';
   }
   if (!input.userMessage.trim()) {
     return 'empty_message';

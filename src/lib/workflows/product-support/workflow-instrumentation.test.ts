@@ -1017,18 +1017,18 @@ describe('keyword routing gate (B0-391 / B0-392)', () => {
     await run({ userMessage: XREF_MESSAGE });
 
     const record = singleGateRecord('keyword_routing');
-    expect(record.verdict).toBe('decisive_recommendation_signal');
-    expect(record.inputs.routedAgent).toBe('recommendations');
-    expect(record.inputs.scores).toMatchObject({ recommendations: expect.any(Number) });
-    // The phrases, not just the counts: "recommendations 2" is meaningless without them.
-    expect((record.inputs.matchedPhrases as Record<string, string[]>).recommendations).toContain(
-      'equivalent to',
-    );
-    expect(record.inputs.decisiveRecommendationPhrases).toContain('equivalent to');
+    expect(record.verdict).toBe('decisive_cross_reference_signal');
+    expect(record.inputs.routedAgent).toBe('cross_reference');
+    expect(record.inputs.scores).toMatchObject({ cross_reference: expect.any(Number) });
+    // The phrases, not just the counts: "cross_reference 2" is meaningless without them.
+    expect(
+      (record.inputs.matchedPhrases as Record<string, string[]>).cross_reference,
+    ).toContain('equivalent to');
+    expect(record.inputs.decisiveCrossReferencePhrases).toContain('equivalent to');
     expect(record.thresholds).toEqual({
       minHitsToRoute: SME_ROUTE_MIN_HITS_TO_ROUTE,
       tieBreakOrder: [...SME_ROUTE_TIE_BREAK_ORDER],
-      decisiveRecommendationSignalWinsOutright: true,
+      decisiveCrossReferenceSignalWinsOutright: true,
     });
   });
 
@@ -1148,7 +1148,7 @@ describe('recommendation confidence gate record (B0-391)', () => {
     // B0-513 — `brandKnown` is now wired from the B0-357 competitor resolution; the mocked
     // `~/lib/openai/client` makes `extractCompetitorProduct` fall back to `brand: null`, so this
     // run's resolved brand is unknown and the gate input reports that faithfully.
-    expect(record.inputs).toMatchObject({ trigger: 'recommendations_route', brandKnown: false });
+    expect(record.inputs).toMatchObject({ trigger: 'cross_reference_route', brandKnown: false });
     // The chemistry inputs this workflow never passes are declared as unwired rather than
     // reported as evaluated.
     expect(record.inputs.unwiredInputs).toEqual([
@@ -1264,7 +1264,7 @@ describe('answer provenance (B0-391)', () => {
     expect(out.answerText).toBe('Dilute per the label instructions.');
   });
 
-  it('reports the recommendations override as template_override', async () => {
+  it('reports the cross_reference override as template_override', async () => {
     arrangeOverrideRun();
 
     const out = await run({ userMessage: XREF_MESSAGE });
@@ -1588,7 +1588,7 @@ describe('shadow-mode LLM intent classifier gate (B0-507 / B0-516 integration)',
     } = {},
   ) {
     return {
-      intent: overrides.intent ?? 'recommendations',
+      intent: overrides.intent ?? 'cross_reference',
       confidence: overrides.confidence ?? 0.87,
       entities: {
         betcoProduct: null,
@@ -1604,7 +1604,7 @@ describe('shadow-mode LLM intent classifier gate (B0-507 / B0-516 integration)',
 
   /**
    * Only answers the classifier's own schema-tagged call. `extractCompetitorProduct` fires
-   * concurrently on the recommendations route and calls the very same `client.responses.create` —
+   * concurrently on the cross_reference route and calls the very same `client.responses.create` —
    * its call is left to the file-wide default (throws, falls back to `brand: null`), which is not
    * this describe block's concern.
    */
@@ -1642,24 +1642,24 @@ describe('shadow-mode LLM intent classifier gate (B0-507 / B0-516 integration)',
     settingOverrides.set('BEX_LLM_ROUTER_ENABLED', true);
     settingOverrides.set('BEX_LLM_ROUTER_SHADOW_MODE', true);
     mockIntentClassifierResponse(
-      intentClassifierPayload({ intent: 'recommendations', confidence: 0.87 }),
+      intentClassifierPayload({ intent: 'cross_reference', confidence: 0.87 }),
     );
 
     await run({ userMessage: XREF_MESSAGE });
 
-    // The keyword router still made the real routing decision (recommendations for this
+    // The keyword router still made the real routing decision (cross_reference for this
     // message — corroborated by the "keyword routing gate" describe block above).
     expect(
       (stepOutput('orchestration_planner').routing as Record<string, unknown>).decision,
-    ).toBe('recommendations');
+    ).toBe('cross_reference');
 
     const record = singleGateRecord('llm_intent_classifier_shadow');
     expect(record.verdict).toBe('agrees_with_keyword_router');
     expect(record.inputs).toMatchObject({
-      classifiedIntent: 'recommendations',
+      classifiedIntent: 'cross_reference',
       classifierConfidence: 0.87,
       classifierSource: 'llm',
-      keywordRoutingDecision: 'recommendations',
+      keywordRoutingDecision: 'cross_reference',
       suggestedTool: null,
     });
     // Entity extraction round-trips onto the gate record verbatim.
@@ -1685,13 +1685,13 @@ describe('shadow-mode LLM intent classifier gate (B0-507 / B0-516 integration)',
     // no cutover to assert here, by design.
     expect(
       (stepOutput('orchestration_planner').routing as Record<string, unknown>).decision,
-    ).toBe('recommendations');
+    ).toBe('cross_reference');
 
     const record = singleGateRecord('llm_intent_classifier_shadow');
     expect(record.verdict).toBe('disagrees_with_keyword_router');
     expect(record.inputs).toMatchObject({
       classifiedIntent: 'floor',
-      keywordRoutingDecision: 'recommendations',
+      keywordRoutingDecision: 'cross_reference',
     });
     expect(record.effect).toContain('Not used to route this turn');
   });
@@ -1710,12 +1710,12 @@ describe('shadow-mode LLM intent classifier gate (B0-507 / B0-516 integration)',
     // A slow/broken classifier never breaks the turn — shadow mode routes by keyword regardless.
     expect(
       (stepOutput('orchestration_planner').routing as Record<string, unknown>).decision,
-    ).toBe('recommendations');
+    ).toBe('cross_reference');
 
     const record = singleGateRecord('llm_intent_classifier_shadow');
     expect(record.inputs.classifierSource).toBe('keyword_fallback');
     // B0-511 hardening: the degraded fallback is `ambiguous` (no keyword consultation), so
-    // against this keyword-routed 'recommendations' turn it reads as a disagreement.
+    // against this keyword-routed 'cross_reference' turn it reads as a disagreement.
     expect(record.inputs.classifiedIntent).toBe('ambiguous');
     expect(record.inputs.classifierFallbackReason).toContain('router timeout');
     expect(record.verdict).toBe('disagrees_with_keyword_router');
@@ -1728,7 +1728,7 @@ describe('shadow-mode LLM intent classifier gate (B0-507 / B0-516 integration)',
 
     await run({ userMessage: XREF_MESSAGE });
 
-    // The keyword router would have said "recommendations" for this message (see the shadow-mode
+    // The keyword router would have said "cross_reference" for this message (see the shadow-mode
     // tests above); the classifier's "floor" now actually decides the turn.
     expect(
       (stepOutput('orchestration_planner').routing as Record<string, unknown>).decision,
@@ -1743,7 +1743,7 @@ describe('shadow-mode LLM intent classifier gate (B0-507 / B0-516 integration)',
       classifiedIntent: 'floor',
       classifierConfidence: 0.81,
       classifierSource: 'llm',
-      keywordRoutingDecision: 'recommendations',
+      keywordRoutingDecision: 'cross_reference',
     });
 
     const keywordRecord = singleGateRecord('keyword_routing');

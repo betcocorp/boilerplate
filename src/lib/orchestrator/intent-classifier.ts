@@ -130,15 +130,15 @@ SME specialists:
 ${smeLines}
 
 Routing rules (apply in order):
-1. "recommendations" is ONLY competitor cross-reference: the message names or clearly refers to a NON-Betco competitor brand or product and wants the Betco equivalent, replacement, or comparison for it. If no competitor product is involved, never use "recommendations".
-2. Asking to recommend/suggest the best product for a job, task, surface, or situation — with no competitor product named — is a question for the specialist that owns the job: "floor" for floor coatings, finishes, sealers, stripping, scrubbing, burnishing, and maintenance programs (gym, sports, wood, VCT, and concrete floors included); "bathroom" for restroom cleaning, disinfection, and odor control; "dilution" for dispensers, proportioners, metering, and dilution setup; "product" for everything else.
-3. "Can I use <product> on <surface>?" and other usage/compatibility/how-to questions about a product belong to the specialist that owns the surface or task per rule 2 ("product" when none clearly does) — never "recommendations".
+1. "cross_reference" is ONLY competitor cross-reference: the message names or clearly refers to a NON-Betco competitor brand or product and wants the Betco equivalent, replacement, or comparison for it. If no competitor product is involved, never use "cross_reference".
+2. Asking to recommend/suggest the best product for a job, task, surface, or situation — with no competitor product named — is a question for the specialist that owns the job: "floor" for floor coatings, finishes, sealers, stripping, scrubbing, burnishing, and maintenance programs (gym, sports, wood, VCT, and concrete floors included); "bathroom" for restroom cleaning, disinfection, and odor control; "dilution" for dispensers, proportioners, metering, and dilution setup. When the job or problem does NOT fit floor/bathroom/dilution's specific domains (i.e. it would otherwise fall to "product" as a generic catch-all) AND the message is genuinely ASKING FOR a best-fit product recommendation ("what should I use", "what do you recommend", "best product for X") rather than a factual/spec lookup ("does Betco make X", "tell me about X", "what is the SDS for X") AND no competitor product is named, use "recommendations" instead of "product". Be conservative: when in doubt between a generic product QUESTION and a recommendation ASK, prefer "product".
+3. "Can I use <product> on <surface>?" and other usage/compatibility/how-to questions about a product belong to the specialist that owns the surface or task per rule 2 ("product" when none clearly does) — never "cross_reference", and never "recommendations" either (it is a factual lookup, not a recommendation ask).
 4. Use "ambiguous" only when the message does not clearly match any specialist (small talk, off-topic, or too vague to route).
 
 Output rules:
 - confidence: your calibrated 0-1 belief that "intent" is correct. Do not default to 1; use lower values when the message is short, vague, or could fit more than one specialist.
 - entities.betcoProduct: a Betco product name/SKU mentioned, else null.
-- entities.competitorBrand / entities.competitorProduct: a NON-Betco competitor brand/product the user wants a Betco equivalent for, else null. Never put a Betco product here. Best-effort only — a dedicated extraction step runs later for the recommendations flow.
+- entities.competitorBrand / entities.competitorProduct: a NON-Betco competitor brand/product the user wants a Betco equivalent for, else null. Never put a Betco product here. Best-effort only — a dedicated extraction step runs later for the cross_reference flow.
 - entities.surfaceType: the physical surface or material mentioned (e.g. "VCT floor", "grout", "stainless"), else null.
 - entities.taskDescription: a short (<=20 words) paraphrase of what the user is trying to do, else null.
 - suggestedTool: the single best FIRST tool to call from this list, else null if none clearly applies: ${PRODUCT_TOOL_NAMES.join(', ')}. Suggest lookup_cross_reference or recommend_cross_reference ONLY for genuine competitor cross-reference (rule 1).
@@ -222,15 +222,25 @@ export const INTENT_CLASSIFIER_CACHE_TTL_MS = 5 * 60_000;
 /** Bound on distinct cached classifications; a turn only ever needs a handful. */
 const MAX_CACHE_ENTRIES = 256;
 
-/** `hash(message + prior-turn-ids)`, per the B0-505 ticket. Length-prefixed fields so no ambiguous concatenation. */
+/**
+ * `hash(message + prior-turn-ids + model)`, per the B0-505 ticket (the `model` segment added by
+ * B0-671). Length-prefixed fields so no ambiguous concatenation.
+ *
+ * B0-671 — `model` is folded into the key so a routing-test run with an explicit model override
+ * never reads back a classification cached under a different model for the same message: every
+ * existing caller omits `model`, so their keys are unaffected relative to one another (same
+ * `model:` suffix on every one of them), only the raw hash value changes.
+ */
 export function computeIntentClassifierCacheKey(
   message: string,
   priorMessages: PriorTurnMessage[] = [],
+  model?: string,
 ): string {
   const ids = priorMessages.map((m) => m.id);
   const canonical = [
     `msg:${message.length}:${message}`,
     `ids:${ids.length}:${ids.join(',')}`,
+    `model:${model ?? ''}`,
   ].join('|');
   return createHash('sha256').update(canonical, 'utf8').digest('hex');
 }
@@ -275,6 +285,8 @@ export type ClassifyUserIntentDeps = {
     message: string,
     priorMessages: PriorTurnMessage[],
     signal: AbortSignal,
+    /** B0-671 — resolved model id override for this call only; omitted → `resolveRouterModel()`. */
+    model?: string,
   ) => Promise<{
     parsed: z.infer<typeof llmIntentClassificationSchema>;
     usage: z.infer<typeof llmTokenUsageSchema>;
@@ -286,6 +298,7 @@ async function defaultRunLlm(
   message: string,
   priorMessages: PriorTurnMessage[],
   signal: AbortSignal,
+  model?: string,
 ): Promise<{
   parsed: z.infer<typeof llmIntentClassificationSchema>;
   usage: z.infer<typeof llmTokenUsageSchema>;
@@ -301,7 +314,7 @@ async function defaultRunLlm(
 
   const res = await client.responses.create(
     {
-      model: resolveRouterModel(),
+      model: model ?? resolveRouterModel(),
       instructions: buildInstructions(),
       input,
       text: {
@@ -393,10 +406,11 @@ async function runLlmClassification(
   message: string,
   priorMessages: PriorTurnMessage[],
   deps: ClassifyUserIntentDeps,
+  model?: string,
 ): Promise<IntentClassification> {
   const timeoutMs = resolveRouterTimeoutMs();
   const { parsed: raw, usage } = await withRouterTimeout(timeoutMs, (signal) =>
-    deps.runLlm(message, priorMessages, signal),
+    deps.runLlm(message, priorMessages, signal, model),
   );
 
   return {
@@ -405,7 +419,7 @@ async function runLlmClassification(
     source: 'llm',
     fallbackReason: null,
     usage,
-    model: resolveRouterModel(),
+    model: model ?? resolveRouterModel(),
   };
 }
 
@@ -416,21 +430,28 @@ async function runLlmClassification(
  * router failure break the turn. Also gated by `BEX_LLM_ROUTER_ENABLED` (default off): when disabled,
  * returns the keyword fallback immediately without a model call.
  *
- * B0-505 — results are cached in-process, keyed on `hash(message + prior-turn-ids)`, so an eval
- * replay or an immediate duplicate call does not re-hit the model. Cache is skipped when the LLM
+ * B0-505 — results are cached in-process, keyed on `hash(message + prior-turn-ids + model)`, so an
+ * eval replay or an immediate duplicate call does not re-hit the model. Cache is skipped when the LLM
  * router is disabled (the fallback path is already free).
+ *
+ * B0-671 — the optional `model` param overrides `resolveRouterModel()` for this call only (used by
+ * the routing-test workbench to compare LLM router accuracy across models). It is a resolved model
+ * id (e.g. what `resolveResponsesModel` returns for a `BexModelTag`), NOT a tag itself — this
+ * function does no tag resolution. Every existing caller omits it and sees byte-for-byte the same
+ * behavior as before this parameter existed.
  */
 export async function classifyUserIntent(
   message: string,
   priorMessages: PriorTurnMessage[] = [],
   deps: ClassifyUserIntentDeps = defaultDeps,
+  model?: string,
 ): Promise<IntentClassification> {
   if (!(await isLlmRouterEnabled())) {
     return fallbackClassification(message, 'llm_router_disabled');
   }
 
   const now = deps.now();
-  const cacheKey = computeIntentClassifierCacheKey(message, priorMessages);
+  const cacheKey = computeIntentClassifierCacheKey(message, priorMessages, model);
   const existing = cache.get(cacheKey);
 
   if (existing && existing.expiresAt > now) {
@@ -443,7 +464,7 @@ export async function classifyUserIntent(
   pruneCache(now);
   cacheStats.misses += 1;
 
-  const promise = runLlmClassification(message, priorMessages, deps).catch((error: unknown) => {
+  const promise = runLlmClassification(message, priorMessages, deps, model).catch((error: unknown) => {
     /**
      * B0-511 — evict on failure so only SUCCESSFUL classifications are cached. Pre-cutover this
      * deliberately cached the fallback too ("don't re-hit a down model"), which was harmless while

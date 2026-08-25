@@ -4,15 +4,20 @@ import { RoutingComparisonDashboard } from '~/components/admin/tests/RoutingComp
 import { listRoutingComparisonRows } from '~/lib/tests/repository';
 import {
   buildRouterDisagreementMatrix,
+  buildSemanticLlmDisagreementMatrix,
   computeRouterLatencyProfile,
   computeRoutingComparisonSummary,
+  computeSemanticLlmLatencyProfile,
+  computeSemanticRoutingReport,
+  computeThreeWayAgreement,
   type RoutingComparisonSummaryInput,
+  type SemanticRoutingItem,
 } from '~/lib/tests/routing-comparison';
 
 export const metadata = {
   title: 'Routing Comparison | Betco BEX',
   description:
-    'Cross-run keyword vs. LLM router comparison: disagreement matrix, latency profiling, and cutover-readiness signals.',
+    'Cross-run LLM vs. semantic router comparison: disagreement matrix, latency profiling, and cutover-readiness signals (keyword vs. LLM legacy comparison available below).',
 };
 
 /**
@@ -45,6 +50,34 @@ export default async function AdminRoutingComparisonPage() {
     })),
   );
 
+  // B0-668 — LLM vs. semantic is now the primary comparison; keyword vs. LLM above is demoted to a
+  // secondary section in the dashboard component but still computed the same way.
+  const semanticDisagreementMatrix = buildSemanticLlmDisagreementMatrix(
+    rows.map((row) => ({ semanticRoute: row.semanticRoute, llmRoute: row.llmRoute })),
+  );
+  const semanticLatencyProfile = computeSemanticLlmLatencyProfile(
+    rows.map((row) => ({
+      semanticRouteLatencyMs: row.semanticRouteLatencyMs,
+      llmRouteLatencyMs: row.llmRouteLatencyMs,
+    })),
+  );
+  const semanticRoutingItems: SemanticRoutingItem[] = rows.map((row) => ({
+    intendedAgentLabel: row.intendedAgentLabel,
+    semanticRoute: row.semanticRoute,
+    semanticPath: row.semanticPath,
+    semanticRouteLatencyMs: row.semanticRouteLatencyMs,
+    semanticEmbeddingMs: row.semanticEmbeddingMs,
+    semanticScoringMs: row.semanticScoringMs,
+  }));
+  const semanticRoutingReport = computeSemanticRoutingReport(semanticRoutingItems);
+  const threeWayAgreement = computeThreeWayAgreement(
+    rows.map((row) => ({
+      keywordRoute: row.keywordRoute,
+      llmRoute: row.llmRoute,
+      semanticRoute: row.semanticRoute,
+    })),
+  );
+
   return (
     <div className="flex flex-1 bg-slate-50">
       <main className="flex w-full flex-1 flex-col gap-8 px-6 py-10 sm:px-8">
@@ -53,13 +86,16 @@ export default async function AdminRoutingComparisonPage() {
             Routing comparison
           </p>
           <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">
-            Keyword vs. LLM router — cross-run
+            LLM vs. semantic router — cross-run
           </h1>
           <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-600">
-            Aggregates every eval item with dual-router instrumentation (B0-500/501), across every
-            test and run, to help decide whether the LLM classifier is ready to take over routing
-            from the keyword router. For a single run&apos;s confusion matrix and confidence
-            distribution, see the &quot;Routing accuracy&quot; panel on that run&apos;s detail page.
+            Aggregates every eval item with router instrumentation (B0-500/501, B0-652), across
+            every test and run, to help decide whether the semantic router is ready for a wider
+            rollout against the LLM classifier — the two routers actually likely to be used in
+            production. The keyword router is a legacy fallback and its comparison against the LLM
+            classifier is still available below, demoted. For a single run&apos;s confusion matrix
+            and confidence distribution, see the &quot;Routing accuracy&quot; panel on that
+            run&apos;s detail page.
           </p>
         </section>
 
@@ -67,6 +103,10 @@ export default async function AdminRoutingComparisonPage() {
           cutoverReport={cutoverReport}
           disagreementMatrix={disagreementMatrix}
           latencyProfile={latencyProfile}
+          semanticDisagreementMatrix={semanticDisagreementMatrix}
+          semanticLatencyProfile={semanticLatencyProfile}
+          semanticRoutingReport={semanticRoutingReport}
+          threeWayAgreement={threeWayAgreement}
           totalItemCount={rows.length}
           totalRunCount={totalRunCount}
         />

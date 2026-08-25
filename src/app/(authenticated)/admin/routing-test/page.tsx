@@ -3,13 +3,16 @@ import { connection } from 'next/server';
 import { RoutingTestActionToast } from '~/components/admin/routing-test/RoutingTestActionToast';
 import { RoutingTestWorkbench } from '~/components/admin/routing-test/RoutingTestWorkbench';
 import { ROUTING_TEST_PATH } from '~/lib/routing-test/constants';
-import { listRoutingTestItems } from '~/lib/routing-test/repository';
+import {
+  listRoutingTestItems,
+  listRoutingTestRuns,
+} from '~/lib/routing-test/repository';
 import { getRouterType } from '~/lib/settings/settings-service';
 
 export const metadata = {
   title: 'Routing Test | Betco BEX',
   description:
-    'Score a flat list of prompts against the keyword or semantic SME router.',
+    'Score a flat list of prompts against the keyword, semantic, or LLM SME router.',
 };
 
 type PageProps = {
@@ -17,9 +20,11 @@ type PageProps = {
 };
 
 /**
- * B0-658/659 — the routing test surface. Deliberately single-purpose and much simpler than
+ * B0-658/659/667 — the routing test surface. Deliberately single-purpose and much simpler than
  * `/admin/tests`: one flat list of prompt + expected agent (`public.routing_test_items`, B0-657),
- * and one ephemeral run against the selected router. No datasets, no run history.
+ * one live run against the selected router (still ephemeral inline UX — re-running replaces the
+ * result on this page), and a persisted run-history list below it (B0-667) written as a side
+ * effect of that same run.
  */
 export default async function AdminRoutingTestPage({ searchParams }: PageProps) {
   await connection();
@@ -27,9 +32,10 @@ export default async function AdminRoutingTestPage({ searchParams }: PageProps) 
   const success = typeof params.success === 'string' ? params.success : null;
   const error = typeof params.error === 'string' ? params.error : null;
 
-  const [items, defaultRouterType] = await Promise.all([
+  const [items, defaultRouterType, runs] = await Promise.all([
     listRoutingTestItems(),
     getRouterType(),
+    listRoutingTestRuns(),
   ]);
 
   return (
@@ -46,8 +52,9 @@ export default async function AdminRoutingTestPage({ searchParams }: PageProps) 
           <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-600">
             One flat list of prompts, each tagged with the SME agent it should
             route to. Pick a router, hit Run, and every prompt is classified and
-            scored against its expected agent. Results are shown inline and never
-            saved — re-running replaces them.
+            scored against its expected agent. The result shown inline here is
+            replaced by the next run, but every run is also saved to the history
+            below.
           </p>
         </section>
 
@@ -55,6 +62,7 @@ export default async function AdminRoutingTestPage({ searchParams }: PageProps) 
           defaultRouterType={defaultRouterType}
           items={items}
           returnPath={ROUTING_TEST_PATH}
+          runs={runs}
         />
       </main>
     </div>

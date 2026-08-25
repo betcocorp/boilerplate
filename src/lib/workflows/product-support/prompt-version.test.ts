@@ -30,6 +30,7 @@ const fixtureSpecialists: SpecialistPromptTexts = {
   floor: 'floor policy',
   product: 'product policy',
   recommendations: 'recommendations policy',
+  cross_reference: 'cross reference policy',
 };
 
 const fixtureShared = {
@@ -168,7 +169,7 @@ describe('promptBundleVersion (B0-393)', () => {
   });
 
   it('changes when ANY specialist prompt is edited', () => {
-    for (const id of ['bathroom', 'dilution', 'floor', 'product', 'recommendations'] as const) {
+    for (const id of ['bathroom', 'dilution', 'floor', 'product', 'recommendations', 'cross_reference'] as const) {
       expect(
         bundle({ specialists: { ...fixtureSpecialists, [id]: `${fixtureSpecialists[id]} (edited)` } }),
       ).not.toBe(bundle());

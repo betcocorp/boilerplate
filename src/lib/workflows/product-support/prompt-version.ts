@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 
+import { CROSS_REFERENCE_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/cross-reference-specialist/cross-reference-specialist-system-prompt';
 import { DILUTION_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/dilution-specialist/dilution-specialist-system-prompt';
 import { FLOOR_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/floor-specialist/floor-specialist-system-prompt';
 import { PRODUCT_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/product-specialist/product-specialist-system-prompt';
@@ -86,6 +87,7 @@ const SPECIALIST_PROMPT_IDS: readonly SpecialistPromptId[] = [
   'floor',
   'product',
   'recommendations',
+  'cross_reference',
 ];
 
 /**
@@ -205,6 +207,7 @@ export const PRODUCT_SUPPORT_SPECIALIST_PROMPTS: SpecialistPromptTexts = {
   floor: FLOOR_SPECIALIST_SYSTEM_PROMPT,
   product: PRODUCT_SPECIALIST_SYSTEM_PROMPT,
   recommendations: RECOMMENDATIONS_SPECIALIST_SYSTEM_PROMPT,
+  cross_reference: CROSS_REFERENCE_SPECIALIST_SYSTEM_PROMPT,
 };
 
 const PRODUCT_SUPPORT_SHARED_PROMPTS: SharedPromptTexts = {
