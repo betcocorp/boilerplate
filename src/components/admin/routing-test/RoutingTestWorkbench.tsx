@@ -27,7 +27,14 @@ type RoutingTestWorkbenchProps = {
   defaultRouterType: RoutingTestRouterType;
 };
 
-const ROUTER_TYPES: RoutingTestRouterType[] = ['keyword', 'semantic'];
+const ROUTER_TYPES: RoutingTestRouterType[] = ['keyword', 'semantic', 'llm'];
+
+/** Router types that can report themselves unavailable at runtime (every non-keyword router). */
+type DegradableRouterType = Exclude<RoutingTestRouterType, 'keyword'>;
+
+function isDegradableRouterType(value: RoutingTestRouterType): value is DegradableRouterType {
+  return value !== 'keyword';
+}
 
 export function RoutingTestWorkbench({
   items,
@@ -38,12 +45,13 @@ export function RoutingTestWorkbench({
     useState<RoutingTestRouterType>(defaultRouterType);
   const [run, setRun] = useState<RoutingTestRunResult | null>(null);
   /**
-   * B0-659 — capability check at RUNTIME, not a hardcoded `disabled`: the semantic option is only
-   * marked unavailable after an actual run reported that the semantic router could not be used.
+   * B0-659/B0-666 — capability check at RUNTIME, not a hardcoded `disabled`: a router is only
+   * marked unavailable after an actual run reported it could not be used. Keyed per router type
+   * (rather than one shared flag) so semantic and llm degrade independently.
    */
-  const [semanticUnavailable, setSemanticUnavailable] = useState<string | null>(
-    null,
-  );
+  const [unavailableByRouter, setUnavailableByRouter] = useState<
+    Partial<Record<DegradableRouterType, string>>
+  >({});
   const [isRunning, startRun] = useTransition();
 
   const resultsByItemId = useMemo(() => {
@@ -66,16 +74,23 @@ export function RoutingTestWorkbench({
       setRun(result);
 
       if (!result.ok) {
-        if (result.routerType === 'semantic') {
-          setSemanticUnavailable(result.error);
+        if (isDegradableRouterType(result.routerType)) {
+          setUnavailableByRouter((prev) => ({
+            ...prev,
+            [result.routerType as DegradableRouterType]: result.error,
+          }));
           setRouterType('keyword');
         }
         toast.error(result.error);
         return;
       }
 
-      if (routerType === 'semantic') {
-        setSemanticUnavailable(null);
+      if (isDegradableRouterType(routerType)) {
+        setUnavailableByRouter((prev) => {
+          const next = { ...prev };
+          delete next[routerType];
+          return next;
+        });
       }
       toast.success(
         `${ROUTING_TEST_ROUTER_LABELS[result.routerType]} router — ${formatRoutingTestAccuracy(result.summary)}`,
@@ -96,24 +111,22 @@ export function RoutingTestWorkbench({
               }
               value={routerType}
             >
-              {ROUTER_TYPES.map((type) => (
-                <option
-                  disabled={type === 'semantic' && semanticUnavailable !== null}
-                  key={type}
-                  value={type}
-                >
-                  {ROUTING_TEST_ROUTER_LABELS[type]}
-                  {type === 'semantic' && semanticUnavailable !== null
-                    ? ' (unavailable)'
-                    : ''}
-                </option>
-              ))}
+              {ROUTER_TYPES.map((type) => {
+                const unavailable =
+                  isDegradableRouterType(type) && unavailableByRouter[type] !== undefined;
+                return (
+                  <option disabled={unavailable} key={type} value={type}>
+                    {ROUTING_TEST_ROUTER_LABELS[type]}
+                    {unavailable ? ' (unavailable)' : ''}
+                  </option>
+                );
+              })}
             </NativeSelect>
             <p className="text-xs text-slate-500">
               Defaults to the current <code>ROUTER_TYPE</code> setting (
               {ROUTING_TEST_ROUTER_LABELS[defaultRouterType]}). Keyword routing
-              is instant; semantic routing makes one embedding call per item and
-              runs a few at a time.
+              is instant; semantic and LLM routing each make one call per item
+              and run a few at a time.
             </p>
           </div>
 
@@ -138,15 +151,20 @@ export function RoutingTestWorkbench({
           </div>
         </div>
 
-        {semanticUnavailable ? (
-          <p className="mt-4 flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">
-            <AlertTriangleIcon className="mt-0.5 size-4 shrink-0" />
-            <span>
-              Semantic router unavailable: {semanticUnavailable} — reload once it
-              is deployed to re-enable the option.
-            </span>
-          </p>
-        ) : null}
+        {(Object.entries(unavailableByRouter) as [DegradableRouterType, string][]).map(
+          ([type, reason]) => (
+            <p
+              className="mt-4 flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800"
+              key={type}
+            >
+              <AlertTriangleIcon className="mt-0.5 size-4 shrink-0" />
+              <span>
+                {ROUTING_TEST_ROUTER_LABELS[type]} router unavailable: {reason} —
+                reload once it is deployed to re-enable the option.
+              </span>
+            </p>
+          ),
+        )}
 
         {run?.ok && run.warning ? (
           <p className="mt-4 flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">

@@ -15,7 +15,7 @@ export type RoutingTestItemRecord = {
 };
 
 /** Which router a run exercises (mirrors the `ROUTER_TYPE` setting). */
-export type RoutingTestRouterType = 'keyword' | 'semantic';
+export type RoutingTestRouterType = 'keyword' | 'semantic' | 'llm';
 
 /**
  * The label space a router prediction is compared in. `SmeRouteDecision.agent` can be `null`
@@ -48,9 +48,22 @@ export type RoutingTestSemanticDetail = {
   embeddingModel: string;
 };
 
+export type RoutingTestLlmDetail = {
+  kind: 'llm';
+  /** `'llm'` on a real classification, `'keyword_fallback'` when the LLM router degraded. */
+  source: 'llm' | 'keyword_fallback';
+  confidence: number;
+  /** Non-null only on the `keyword_fallback` source — mirrors `IntentClassification.fallbackReason`. */
+  fallbackReason: string | null;
+  /** Null on the fallback path — no model call was made. */
+  model: string | null;
+  suggestedTool: string | null;
+};
+
 export type RoutingTestItemDetail =
   | RoutingTestKeywordDetail
-  | RoutingTestSemanticDetail;
+  | RoutingTestSemanticDetail
+  | RoutingTestLlmDetail;
 
 /** One item's outcome. Ephemeral — never persisted (B0-659). */
 export type RoutingTestItemResult = {

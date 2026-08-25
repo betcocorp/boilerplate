@@ -9,7 +9,7 @@ import { getRouterType } from '~/lib/settings/settings-service';
 export const metadata = {
   title: 'Routing Test | Betco BEX',
   description:
-    'Score a flat list of prompts against the keyword or semantic SME router.',
+    'Score a flat list of prompts against the keyword, semantic, or LLM SME router.',
 };
 
 type PageProps = {

@@ -176,7 +176,7 @@ export async function runRoutingTestAction(
     return {
       ok: false,
       routerType: 'keyword',
-      error: 'Unknown router type — pick Keyword or Semantic.',
+      error: 'Unknown router type — pick Keyword, Semantic, or LLM.',
     };
   }
 

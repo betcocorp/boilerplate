@@ -95,10 +95,11 @@ describe('routingTestItemUpdateSchema', () => {
   });
 });
 
-describe('routingTestRouterTypeSchema (B0-659)', () => {
-  it('accepts only keyword and semantic', () => {
+describe('routingTestRouterTypeSchema (B0-659/B0-666)', () => {
+  it('accepts keyword, semantic, and llm', () => {
     expect(routingTestRouterTypeSchema.safeParse('keyword').success).toBe(true);
     expect(routingTestRouterTypeSchema.safeParse('semantic').success).toBe(true);
-    expect(routingTestRouterTypeSchema.safeParse('llm').success).toBe(false);
+    expect(routingTestRouterTypeSchema.safeParse('llm').success).toBe(true);
+    expect(routingTestRouterTypeSchema.safeParse('other').success).toBe(false);
   });
 });

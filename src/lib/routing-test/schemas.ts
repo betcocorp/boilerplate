@@ -13,8 +13,8 @@ import { SME_AGENT_IDS } from '~/lib/agents/agent-registry';
  */
 export const routingTestExpectedAgentSchema = z.enum(SME_AGENT_IDS);
 
-/** Mirrors the `ROUTER_TYPE` setting's allowed values. */
-export const routingTestRouterTypeSchema = z.enum(['keyword', 'semantic']);
+/** Mirrors the `ROUTER_TYPE` setting's allowed values, plus `'llm'` (routing-test-only — B0-666). */
+export const routingTestRouterTypeSchema = z.enum(['keyword', 'semantic', 'llm']);
 
 const promptSchema = z
   .string()
