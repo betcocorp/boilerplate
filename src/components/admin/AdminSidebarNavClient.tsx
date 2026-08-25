@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  ChartScatter,
   ChevronRight,
   FileText,
   LayoutDashboard,
@@ -72,9 +73,15 @@ const sidebarSections: NavSectionModel[] = [
         icon: LayoutDashboard,
       },
       {
-        type: 'group',
+        type: 'link',
         label: 'Bex',
+        href: '/admin/bex',
         icon: MessageSquare,
+      },
+      {
+        type: 'group',
+        label: 'Observability',
+        icon: ChartScatter,
         items: [
           {
             label: 'Bex health',
@@ -82,23 +89,19 @@ const sidebarSections: NavSectionModel[] = [
             permission: PERMISSIONS.NAVIGATION_SIDEBAR_OBSERVABILITY,
           },
           {
-            label: 'Bex chat',
-            href: '/admin/bex',
-          },
-          {
             label: 'Test runner',
             href: '/admin/tests',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_TESTS,
-          },
-          {
-            label: 'Failure Queue',
-            href: '/admin/tests/failure-queue',
             permission: PERMISSIONS.NAVIGATION_SIDEBAR_TESTS,
           },
           {
             label: 'Prompt observability',
             href: '/admin/observability',
             permission: PERMISSIONS.NAVIGATION_SIDEBAR_OBSERVABILITY,
+          },
+          {
+            label: 'Failure Queue',
+            href: '/admin/tests/failure-queue',
+            permission: PERMISSIONS.NAVIGATION_SIDEBAR_TESTS,
           },
         ],
       },
