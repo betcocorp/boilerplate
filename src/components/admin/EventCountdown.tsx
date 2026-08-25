@@ -11,6 +11,7 @@ interface CountdownUnit {
 }
 
 interface EventCountdownProps {
+  title?: string;
   targetDate: Date;
 }
 
@@ -30,7 +31,8 @@ function calculateTimeRemaining(targetDate: Date): CountdownUnit {
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
   const startOfNextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
   const daysInCurrentMonth = Math.floor(
-    (startOfNextMonth.getTime() - startOfMonth.getTime()) / (24 * 60 * 60 * 1000)
+    (startOfNextMonth.getTime() - startOfMonth.getTime()) /
+      (24 * 60 * 60 * 1000),
   );
 
   let months = 0;
@@ -56,8 +58,13 @@ function calculateTimeRemaining(targetDate: Date): CountdownUnit {
   return { months, days, hours, minutes, seconds };
 }
 
-export function EventCountdown({ targetDate }: EventCountdownProps) {
-  const [timeRemaining, setTimeRemaining] = useState<CountdownUnit | null>(null);
+export function EventCountdown({
+  title = undefined,
+  targetDate,
+}: EventCountdownProps) {
+  const [timeRemaining, setTimeRemaining] = useState<CountdownUnit | null>(
+    null,
+  );
 
   useEffect(() => {
     setTimeRemaining(calculateTimeRemaining(targetDate));
@@ -74,7 +81,8 @@ export function EventCountdown({ targetDate }: EventCountdownProps) {
   }
 
   const { months, days, hours, minutes, seconds } = timeRemaining;
-  const isExpired = months === 0 && days === 0 && hours === 0 && minutes === 0 && seconds === 0;
+  const isExpired =
+    months === 0 && days === 0 && hours === 0 && minutes === 0 && seconds === 0;
 
   return (
     <div className="flex items-center gap-2 rounded-lg bg-primary/10 px-3 py-2 text-sm font-medium text-primary">
@@ -83,6 +91,7 @@ export function EventCountdown({ targetDate }: EventCountdownProps) {
           <span>Event started!</span>
         ) : (
           <>
+            {title && <span className="font-bold">{title}</span>}
             <span>{months}m </span>
             <span>{days}d </span>
             <span>{hours}h </span>
