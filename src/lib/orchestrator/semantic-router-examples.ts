@@ -20,14 +20,19 @@ import { SME_AGENT_IDS, type SmeAgentId } from '~/lib/agents/agent-registry';
  * - The labeled JSON set is the EVAL ground truth. Using it as router example data would make the
  *   B0-652 evaluation self-scoring, so these examples are authored fresh and independently.
  * - Betco brands only: Betco, Basic Coatings (wood floor coatings), EnviroZyme, 1950. Competitor
- *   brands appear only in the `recommendations` bucket, which is what that route is FOR.
+ *   brands appear only in the `cross_reference` bucket, which is what that route is FOR. Job/problem
+ *   phrasing with NO competitor named belongs in the `recommendations` bucket instead (B0-663).
  * - Never state a dilution ratio, oz/gal, mL/L, ppm, %, contact time, EPA registration number, or
  *   log-reduction value here. Regulated values must be transcribed from a label, never invented, so
  *   every such utterance is phrased as a question that ASKS for the value.
  * - Discriminative, not merely on-topic: an utterance that would score nearly as well against a
  *   second route teaches the router nothing and depresses the margin for real traffic.
+ *
+ * B0-663 — bumped v1 -> v2: split the old single `recommendations` (competitor) bucket into
+ * `cross_reference` (competitor examples, unchanged) and a new `recommendations` bucket (job/problem
+ * phrasing, no competitor). Per the cache-key rule above, ANY edit to the utterances requires this.
  */
-export const SEMANTIC_ROUTER_EXAMPLES_VERSION = 'v1';
+export const SEMANTIC_ROUTER_EXAMPLES_VERSION = 'v2';
 
 /**
  * Route ownership boundaries, mirroring the LLM classifier's routing rules in
@@ -41,9 +46,13 @@ export const SEMANTIC_ROUTER_EXAMPLES_VERSION = 'v1';
  *                  burnish, screen-and-recoat, maintenance programs (Basic Coatings for wood).
  * - `product`    — catalog attributes: shelf life, packaging and case pack, item numbers,
  *                  certifications, availability, where-to-find-the-SDS, product-vs-product specs.
- * - `recommendations` — competitor cross-reference ONLY (per B0-511/B0-514): the message names a
- *                  NON-Betco product and wants the Betco equivalent. "What should I use to clean X?"
- *                  is task advice and belongs to the specialist that owns the job, NOT here.
+ * - `cross_reference` — competitor cross-reference ONLY (per B0-511/B0-514/B0-663): the message
+ *                  names a NON-Betco product and wants the Betco equivalent.
+ * - `recommendations` — B0-663 NEW: job/problem-driven "what should I use / what do you recommend"
+ *                  asks with NO competitor named, that do NOT fit bathroom/dilution/floor's own
+ *                  domain (those specialists still own their own "what should I use" questions —
+ *                  additive-only). A factual/spec lookup ("does Betco make X", "tell me about X")
+ *                  is `product`, not `recommendations`.
  */
 export const SEMANTIC_ROUTER_EXAMPLES: Readonly<Record<SmeAgentId, readonly string[]>> = {
   product: [
@@ -94,7 +103,7 @@ export const SEMANTIC_ROUTER_EXAMPLES: Readonly<Record<SmeAgentId, readonly stri
     'The floor finish is peeling in front of the entry mats, what is causing the delamination?',
     'Does a brand new VCT installation need to be sealed before we apply finish?',
   ],
-  recommendations: [
+  cross_reference: [
     'What is the Betco equivalent to Diversey Virex II 256?',
     'We currently buy Zep Formula 50, what should we switch to from Betco?',
     'Do you have a cross-reference for Spartan Clean by Peroxy?',
@@ -105,6 +114,19 @@ export const SEMANTIC_ROUTER_EXAMPLES: Readonly<Record<SmeAgentId, readonly stri
     'What is our answer to State Industrial Products enzyme drain treatment?',
     'The account is on a Buckeye program today, which Betco products cross-reference to it?',
     'Is there a Betco equivalent for Spic and Span concentrate?',
+  ],
+  // B0-663 — starter set only, authored to be discriminative against product/bathroom/dilution/
+  // floor rather than tuned against a real eval; expand/re-tune once B0-652-style routing-accuracy
+  // data exists for this route. TODO(B0-663): revisit once real traffic/eval data is available.
+  recommendations: [
+    'What should I use to degrease a commercial kitchen floor?',
+    'I have a problem with sticky residue on tile, what do you recommend?',
+    'What product would you recommend for general all-purpose cleaning around the office?',
+    'We have a persistent odor problem in the break room, what should we use?',
+    'I have an issue with static cling building up on the carpet, what would you recommend?',
+    'Looking for a product to handle graffiti removal on a masonry wall.',
+    'What is the best product for cleaning up a chemical spill in the loading dock?',
+    "We have a stubborn stain on the office carpet that regular cleaner isn't touching, what should we use?",
   ],
 };
 

@@ -878,6 +878,9 @@ export function BexChatApp({
                   <SelectItem value="recommendations">
                     Recommendations
                   </SelectItem>
+                  <SelectItem value="cross_reference">
+                    Cross-Reference
+                  </SelectItem>
                 </SelectContent>
               </Select>
               <Label className="sr-only" htmlFor="bex-model">

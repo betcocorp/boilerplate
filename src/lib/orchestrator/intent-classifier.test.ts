@@ -253,10 +253,10 @@ describe('B0-506 env-var resolution', () => {
 });
 
 describe('classifyUserIntent — B0-515 entity extraction', () => {
-  it('passes through every extracted entity field from a realistic recommendations-style message', async () => {
+  it('passes through every extracted entity field from a realistic cross_reference-style message', async () => {
     const runLlm = vi.fn().mockResolvedValue({
       parsed: {
-        intent: 'recommendations' as const,
+        intent: 'cross_reference' as const,
         confidence: 0.82,
         entities: {
           betcoProduct: 'Betco Green Earth NABC',

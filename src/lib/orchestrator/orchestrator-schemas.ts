@@ -35,6 +35,8 @@ export const orchestrationRoutingSchema = z.object({
   dilutionScore: z.number().finite().int().nonnegative(),
   floorScore: z.number().finite().int().nonnegative(),
   recommendationScore: z.number().finite().int().nonnegative(),
+  /** B0-663 — competitor cross-reference score (split out of the old `recommendationScore`). */
+  crossReferenceScore: z.number().finite().int().nonnegative(),
   rationale: z.string().max(8000),
 });
 

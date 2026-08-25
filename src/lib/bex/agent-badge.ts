@@ -17,6 +17,8 @@ export function getAgentBadgeClassName(
       return 'border-emerald-600/45 bg-emerald-600/12 text-emerald-900';
     case 'recommendations':
       return 'border-rose-600/45 bg-rose-600/12 text-rose-900';
+    case 'cross_reference':
+      return 'border-indigo-600/45 bg-indigo-600/12 text-indigo-900';
     // `ambiguous` is a real routingDecision (routingDecisionSchema = SME id ∪ 'ambiguous'),
     // not an unmapped value — it means the router never settled on a specialist. Dashed +
     // neutral so it reads as "unresolved" and stays distinct from both the five solid agent

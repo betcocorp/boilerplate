@@ -4,6 +4,7 @@ export const SME_AGENT_IDS = [
   'dilution',
   'floor',
   'recommendations',
+  'cross_reference',
 ] as const;
 export type SmeAgentId = (typeof SME_AGENT_IDS)[number];
 
@@ -46,7 +47,14 @@ export const V1_AGENT_REGISTRY = [
     path: '/api/v1/agents/recommendations',
     label: 'Product Recommendations Specialist',
     description:
-      'Recommends the Betco equivalent for a competitor product using the cross-reference lookup and (when available) the web-search-grounded recommendation engine; answers only above a confidence threshold, otherwise defers to a Betco sales representative (stub).',
+      'Recommends the best-fit Betco product for a described job or problem (no competitor named) using the product catalog and RAG tools; presents one primary pick plus up to two alternatives when there is a genuine reason to offer them.',
+  },
+  {
+    id: 'cross_reference',
+    path: '/api/v1/agents/cross_reference',
+    label: 'Cross-Reference Specialist',
+    description:
+      'Recommends the Betco equivalent for a competitor product using the cross-reference lookup and (when available) the web-search-grounded recommendation engine; answers only above a confidence threshold, otherwise defers to a Betco sales representative.',
   },
 ] as const satisfies ReadonlyArray<{
   id: SmeAgentId;

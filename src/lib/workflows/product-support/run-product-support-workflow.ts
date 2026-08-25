@@ -29,7 +29,7 @@ import { runResponsesWithToolLoop } from '~/lib/openai/responses-runtime';
 import type { LlmTokenUsage } from '~/lib/openai/responses-runtime';
 import { runAiSdkWithToolLoop } from '~/lib/bex/ai-sdk-runtime';
 import {
-  hasDecisiveRecommendationSignal,
+  hasDecisiveCrossReferenceSignal,
   routeUserMessageToSme,
   SME_ROUTE_MIN_HITS_TO_ROUTE,
   SME_ROUTE_TIE_BREAK_ORDER,
@@ -446,7 +446,7 @@ export function extractProductLineLockFromToolTrace(
 /**
  * B0-514 — RETIRED from the default path (2026-08-18). The B0-511 cutover made the classifier
  * authoritative, so cross-reference intent for the turn is now derived from the classifier's own
- * output (`crossReferenceIntentForTurn` in `runProductSupportWorkflow`: intent `recommendations`,
+ * output (`crossReferenceIntentForTurn` in `runProductSupportWorkflow`: intent `cross_reference`,
  * or a cross-reference `suggestedTool` — the latter preserves B0-339's point that a
  * `product`-routed message can still carry cross-reference intent). This substring check survives
  * ONLY as the degraded/kill-switch fallback: when the classifier did not run for the turn
@@ -455,15 +455,15 @@ export function extractProductLineLockFromToolTrace(
  *
  * B0-354 — used to carry its own 5-phrase list (`comparable`, `equivalent`, `cross reference`,
  * `cross-reference`, `alternative`) gated on a co-occurring literal `betco`, independent of
- * `hasDecisiveRecommendationSignal` (`sme-routing.ts`), the ~20-phrase list B0-339 added for SME
+ * `hasDecisiveCrossReferenceSignal` (`sme-routing.ts`), the ~20-phrase list B0-339 added for SME
  * routing with no such gate. The two disagreed on inputs like "Which product replaces Spartan
- * BNC-15?" — decisive enough to route to `recommendations`, but not decisive enough to force
+ * BNC-15?" — decisive enough to route to `cross_reference`, but not decisive enough to force
  * `lookup_cross_reference` — so routing and tool-forcing silently diverged on the same turn. Now
- * delegates entirely to `hasDecisiveRecommendationSignal` (no `betco` gate) so the two predicates
+ * delegates entirely to `hasDecisiveCrossReferenceSignal` (no `betco` gate) so the two predicates
  * share one phrase list and can never disagree again.
  */
 export function shouldForceCrossReferenceLookup(userMessage: string) {
-  return hasDecisiveRecommendationSignal(userMessage);
+  return hasDecisiveCrossReferenceSignal(userMessage);
 }
 
 function isEarlyDeclineGateEnabled() {
@@ -622,8 +622,8 @@ export function classifyEarlyDecline(
     ) &&
     // B0-300: a message that already names a competitor product and asks for a
     // Betco cross-reference (e.g. "...alternative to X. What do you recommend?")
-    // isn't a broad, context-free request — let it reach the cross-reference /
-    // recommendations flow that knows how to answer (or correctly decline) it.
+    // isn't a broad, context-free request — let it reach the cross_reference
+    // flow that knows how to answer (or correctly decline) it.
     !(options?.crossReferenceIntent ?? shouldForceCrossReferenceLookup(userMessage)) &&
     // B0-559: same idea for gym/sports floor mentions — the surface isn't actually ambiguous.
     !hasWoodSportsFloorContext(text)
@@ -1222,7 +1222,7 @@ function assistantAlreadyStartsWithComparableLink(text: string): boolean {
  * If the model also produced usage/safety text (after forced RAG), keep it below that line.
  */
 /**
- * Decline/refusal markers. When the model declines (e.g. the recommendations agent's
+ * Decline/refusal markers. When the model declines (e.g. the cross_reference agent's
  * sub-threshold "contact a Betco sales representative" reply, or the product agent's
  * low-confidence line), we must NOT staple a "Comparable Betco product" headline on top —
  * that produced the contradictory BNC-15 output (a wrong-chemistry product link above a decline).
@@ -1413,14 +1413,14 @@ export function isValidatorSkipEnabled(): boolean {
  * skipped purely on retrieval-similarity grounds: usage/safety/dilution-shaped questions
  * (`queryNeedsUsageAndSafetyCoverage`, already used by the usage/safety coverage gate above), the
  * dedicated `dilution` SME (dilution ratios are inherently regulated per the org's regulated-data
- * rule), and `recommendations` (an equivalence claim between an EPA-registered competitor product
+ * rule), and `cross_reference` (an equivalence claim between an EPA-registered competitor product
  * and a Betco one).
  */
 export function isSafetySensitiveRoute(userMessage: string, decision: string): boolean {
   return (
     queryNeedsUsageAndSafetyCoverage(userMessage) ||
     decision === 'dilution' ||
-    decision === 'recommendations'
+    decision === 'cross_reference'
   );
 }
 
@@ -1601,7 +1601,7 @@ export async function runProductSupportWorkflow(input: {
    * B0-514 — the turn's single cross-reference-intent verdict, consumed by every downstream site
    * that used to call `shouldForceCrossReferenceLookup` (early-decline suppression, the pinned
    * round-0 `tool_choice`, `forcedCrossReference`). When the classifier genuinely ran (`source:
-   * 'llm'`), its judgment decides: intent `recommendations` is strictly competitor cross-reference
+   * 'llm'`), its judgment decides: intent `cross_reference` is strictly competitor cross-reference
    * post-cutover, and a cross-reference `suggestedTool` catches equivalence asks that routed to
    * another specialist (B0-339). The substring check survives only for turns the classifier did
    * not decide (kill-switch, shadow mode, or a degraded fallback), preserving the old world there.
@@ -1613,9 +1613,9 @@ export async function runProductSupportWorkflow(input: {
    * substring check's known false positives on this path. See `src/docs/semantic-router-cutover.md`.
    */
   const crossReferenceIntentForTurn = semanticRoute
-    ? semanticRoute === 'recommendations' || shouldForceCrossReferenceLookup(input.userMessage)
+    ? semanticRoute === 'cross_reference' || shouldForceCrossReferenceLookup(input.userMessage)
     : liveIntentClassification && liveIntentClassification.source === 'llm'
-      ? liveIntentClassification.intent === 'recommendations' ||
+      ? liveIntentClassification.intent === 'cross_reference' ||
         liveIntentClassification.suggestedTool === 'lookup_cross_reference' ||
         liveIntentClassification.suggestedTool === 'recommend_cross_reference'
       : shouldForceCrossReferenceLookup(input.userMessage);
@@ -1627,7 +1627,7 @@ export async function runProductSupportWorkflow(input: {
    * `'ambiguous'`. The value space is unchanged (`IntentValue`), because everything downstream
    * (`buildProductSupportInstructions`, `buildProductSupportPromptCacheKey`,
    * `productSupportToolsForRoute`, `effectivePromptIdForDecision`, `computePromptVersion`, the
-   * recommendations gating) is keyed on it.
+   * cross-reference gating) is keyed on it.
    */
   const routingDecision =
     agentMode === 'orchestrator'
@@ -1645,8 +1645,8 @@ export async function runProductSupportWorkflow(input: {
   // recommendation (grounded by its cross-reference match, not by retrieved chunks) can't satisfy —
   // forcing it on made the validator reject the recommendation as "unsupported" and the not-approved
   // fallback overwrote it with "I could not fully verify…". Chemistry-consistency + confidence
-  // calibration for recommendations is instead enforced by evaluateRecommendationGate (below), which
-  // runs regardless of this flag. So the validator stays opt-in on every route.
+  // calibration for the cross_reference route is instead enforced by evaluateRecommendationGate
+  // (below), which runs regardless of this flag. So the validator stays opt-in on every route.
   const useValidator = input.useValidator ?? false;
   /**
    * B0-494 — resolved value of every behavior switch this run observes, computed once so every
@@ -1695,6 +1695,7 @@ export async function runProductSupportWorkflow(input: {
       dilutionScore: route.dilutionScore,
       floorScore: route.floorScore,
       recommendationScore: route.recommendationScore,
+      crossReferenceScore: route.crossReferenceScore,
     },
     // B0-508 — the hint block renders the classifier's intent/confidence/entities instead of the
     // raw keyword scores whenever the classifier genuinely ran (`source: 'llm'`); degraded or
@@ -1726,10 +1727,12 @@ export async function runProductSupportWorkflow(input: {
   const promptVersion = computePromptVersion(routingDecision);
 
   /**
-   * B0-391 — the keyword-routing gate: five scores, the phrases behind them, and which branch
-   * decided. In `orchestrator` mode the verdict IS the branch taken (`no_signal` is the state the
-   * workflow relabels `ambiguous`); in a forced direct mode the scores were computed but did not
-   * decide, and saying so is the point of recording the gate at all.
+   * B0-391 — the keyword-routing gate: six scores (B0-663 split `recommendations` into the
+   * competitor `cross_reference` score and a new job-based `recommendations` score), the phrases
+   * behind them, and which branch decided. In `orchestrator` mode the verdict IS the branch taken
+   * (`no_signal` is the state the workflow relabels `ambiguous`); in a forced direct mode the
+   * scores were computed but did not decide, and saying so is the point of recording the gate at
+   * all.
    */
   const keywordRoutingGate: GateRecord = {
     gate: 'keyword_routing',
@@ -1740,12 +1743,13 @@ export async function runProductSupportWorkflow(input: {
         bathroom: route.bathroomScore,
         dilution: route.dilutionScore,
         floor: route.floorScore,
+        cross_reference: route.crossReferenceScore,
         recommendations: route.recommendationScore,
       },
       // B0-392 — the counts are not comparable across categories (the lists overlap internally),
       // so the phrases are what make a score reviewable.
       matchedPhrases: route.matchedPhrases,
-      decisiveRecommendationPhrases: route.decisiveRecommendationPhrases,
+      decisiveCrossReferencePhrases: route.decisiveCrossReferencePhrases,
       routedAgent: route.agent,
       decisionPath: route.decisionPath,
       tiedCategories: route.tiedCategories,
@@ -1754,7 +1758,7 @@ export async function runProductSupportWorkflow(input: {
     thresholds: {
       minHitsToRoute: SME_ROUTE_MIN_HITS_TO_ROUTE,
       tieBreakOrder: [...SME_ROUTE_TIE_BREAK_ORDER],
-      decisiveRecommendationSignalWinsOutright: true,
+      decisiveCrossReferenceSignalWinsOutright: true,
     },
     verdict:
       agentMode === 'orchestrator'
@@ -1967,6 +1971,7 @@ export async function runProductSupportWorkflow(input: {
           bathroom: route.bathroomScore,
           dilution: route.dilutionScore,
           floor: route.floorScore,
+          cross_reference: route.crossReferenceScore,
           recommendations: route.recommendationScore,
         },
         rationale: routingRationale,
@@ -2353,13 +2358,13 @@ export async function runProductSupportWorkflow(input: {
      * same phrasing produces the same tuple (and therefore a byte-identical `buildRecommendationQuery`
      * output) every consumer agrees on.
      *
-     * Only resolved when this turn could actually need it (recommendations route or explicit
+     * Only resolved when this turn could actually need it (cross_reference route or explicit
      * cross-reference intent) — an LLM call on every turn would cost latency/spend for the vast
      * majority of turns that never touch this path. Kicked off here and NOT awaited: it runs
      * concurrently with the model's forced tool-call round, same latency shape as the B0-461
      * prefetch it now feeds, rather than stacking in front of it.
      */
-    const competitorIdentityNeeded = routingDecision === 'recommendations' || forcedCrossReference;
+    const competitorIdentityNeeded = routingDecision === 'cross_reference' || forcedCrossReference;
     const resolvedCompetitorPromise: Promise<ExtractedCompetitor> | null = competitorIdentityNeeded
       ? extractCompetitorProduct(input.userMessage)
       : null;
@@ -2592,16 +2597,16 @@ export async function runProductSupportWorkflow(input: {
      * A cross-reference request phrased without "equivalent" ("Which Betco product replaces X?")
      * can still land on the `product` route, and gating on `routingDecision` meant the curated
      * override was looked up, matched, and then silently ignored. Explicit cross-reference intent
-     * is treated as equivalent to the recommendations route so the override always wins.
+     * is treated as equivalent to the cross_reference route so the override always wins.
      */
     const useCrossReferencePostProcessing =
-      routingDecision === 'recommendations' || crossReferenceIntent;
+      routingDecision === 'cross_reference' || crossReferenceIntent;
     let crossReferenceResult =
       extractTopCrossReferenceMatchFromToolOutputs(toolOutputLog) ??
       extractTopCrossReferenceMatch(resolvedToolTrace);
 
     // Deterministic override safety-net: don't depend on the model to call lookup_cross_reference
-    // with the competitor's exact name. On the recommendations route, if no cross-reference surfaced,
+    // with the competitor's exact name. On the cross_reference route, if no cross-reference surfaced,
     // consult the curated override directly with the resolved competitor identity — so a curated
     // equivalence (e.g. BNC-15 → Triforce) always wins.
     //
@@ -2656,16 +2661,16 @@ export async function runProductSupportWorkflow(input: {
     }
 
     // B0-183 — deterministic web-search fallback. When neither the model's forced lookup_cross_reference
-    // nor the curated-override safety-net surfaced a match on the recommendations route, this is a genuine
+    // nor the curated-override safety-net surfaced a match on the cross_reference route, this is a genuine
     // "no 1-1 match" case. Don't depend on the model to voluntarily call recommend_cross_reference: run the
     // budgeted web-grounded engine directly (identify competitor → web search → semantic Betco match →
     // confidence gate). Every outcome (answered/declined/pending) is persisted for HITL 1-1 review inside
     // runCrossReferenceRecommendation.
     let webFallback: Awaited<ReturnType<typeof runCrossReferenceRecommendation>> | null = null;
     let webFallbackCompetitorLabel = '';
-    if (routingDecision === 'recommendations' && !crossReferenceResult) {
+    if (routingDecision === 'cross_reference' && !crossReferenceResult) {
       // B0-357: reuse the SAME resolved (brand, product) tuple as the prefetch/safety-net above
-      // (routingDecision === 'recommendations' implies `competitorIdentityNeeded`, so this promise
+      // (routingDecision === 'cross_reference' implies `competitorIdentityNeeded`, so this promise
       // exists) instead of calling `extractCompetitorProduct` a second time for this turn — a
       // second call is not guaranteed to reproduce byte-identical output, which is exactly what
       // fragmented the `buildRecommendationQuery` cache key run-to-run before this ticket.
@@ -2746,7 +2751,7 @@ export async function runProductSupportWorkflow(input: {
             resolvedProduct: resolvedCompetitor?.product ?? null,
             otherCompetitorProductDetected: resolvedCompetitor?.otherCompetitorProduct ?? null,
             trigger:
-              routingDecision === 'recommendations' ? 'recommendations_route' : 'cross_reference_intent',
+              routingDecision === 'cross_reference' ? 'cross_reference_route' : 'cross_reference_intent',
           },
           thresholds: {
             extractionModel: process.env.XREF_COMPETITOR_EXTRACT_MODEL?.trim() || 'default_preview_model',
@@ -2803,7 +2808,7 @@ export async function runProductSupportWorkflow(input: {
      * composition that returns the text unchanged deliberately does NOT claim provenance.
      */
     let answerProvenance: AnswerProvenance = 'model_generated';
-    // A curated-override match (carries analysis facts) is authoritative on the recommendations
+    // A curated-override match (carries analysis facts) is authoritative on the cross_reference
     // route — build a full competitive analysis from those facts + retrieved context, replacing
     // whatever product the model may have drafted. Works even with no web URL (Triforce, OnWeb=0).
     const isOverrideMatch =
@@ -2847,7 +2852,7 @@ export async function runProductSupportWorkflow(input: {
       }
     } else if (webFallback) {
       // B0-183 — surface the web-grounded fallback outcome. An answered result is authoritative on the
-      // recommendations route (it already passed the engine's grounding + validator gate); a declined /
+      // cross_reference route (it already passed the engine's grounding + validator gate); a declined /
       // pending result becomes a decline the user sees and is already queued for human 1-1 review.
       draftAnswer = buildWebFallbackAnswer({
         result: webFallback,
@@ -2904,7 +2909,7 @@ export async function runProductSupportWorkflow(input: {
     }
     // B0-183 — same for a web-grounded fallback recommendation, so the (opt-in) validator doesn't
     // reject an already-gated web answer as "unsupported" for lack of RAG chunks.
-    if (routingDecision === 'recommendations' && webFallback?.answered) {
+    if (routingDecision === 'cross_reference' && webFallback?.answered) {
       const top = webFallback.candidates[0];
       const xref = [
         `Web-grounded cross-reference (confidence ${webFallback.overallConfidence.toFixed(2)}):`,
@@ -3084,7 +3089,7 @@ export async function runProductSupportWorkflow(input: {
       const revised = revisionResult.text.trim();
       // The revision pass is told to refuse / ask for docs when it can't ground the flagged
       // claims. Never let such a refusal OVERWRITE a substantive answer the user already saw —
-      // keep the draft and flag it for review instead. This matters most for recommendations,
+      // keep the draft and flag it for review instead. This matters most for cross_reference,
       // whose helpful usage/safety detail often isn't in the retrieved marketing profile.
       const revisionRefused =
         !revised ||
@@ -3366,7 +3371,7 @@ export async function runProductSupportWorkflow(input: {
     //
     // B0-339 widened this past `routingDecision` alongside the branches above. Keeping it on the
     // label alone would have left the same question reporting a higher confidence when it happened
-    // to route `product` than when it routed `recommendations` — and this gate only ever tightens
+    // to route `product` than when it routed `cross_reference` — and this gate only ever tightens
     // confidence, so the conservative direction for an equivalence claim about an EPA-registered
     // product is to apply it whenever the cross-reference post-processing ran.
     // B0-494 — this gate's own trigger condition is `useCrossReferencePostProcessing` itself, so
@@ -3392,7 +3397,7 @@ export async function runProductSupportWorkflow(input: {
          * B0-513 — wired from the B0-357 competitor-identity resolution already computed for this
          * turn (`resolvedCompetitor`, above). Guaranteed non-null here: `useCrossReferencePostProcessing`
          * and `competitorIdentityNeeded` share the exact same trigger condition
-         * (`routingDecision === 'recommendations' || forcedCrossReference`), so whenever this branch
+         * (`routingDecision === 'cross_reference' || forcedCrossReference`), so whenever this branch
          * runs, `resolvedCompetitorPromise` was created and already awaited. `false` (not `undefined`)
          * when the extraction ran but found no brand, so `evaluateRecommendationGate`'s missing-brand
          * cap can actually fire instead of silently never applying.
@@ -3457,8 +3462,8 @@ export async function runProductSupportWorkflow(input: {
           retrievedSourceCount: sources.length,
           unwiredInputs: ['competitorChemistryClass', 'recommendedChemistryClass'],
           trigger:
-            routingDecision === 'recommendations'
-              ? 'recommendations_route'
+            routingDecision === 'cross_reference'
+              ? 'cross_reference_route'
               : 'cross_reference_intent',
           gateIssues: gate.issues,
           // B0-452 follow-up — always present so a run where nothing was bypassed is
@@ -3710,7 +3715,7 @@ export async function runProductSupportWorkflow(input: {
       // `originalDraftAnswer` capture above.
       draftAnswer: originalDraftAnswer,
       // B0-357 — the one resolved competitor-identity tuple for this turn, when one was needed;
-      // absent when the turn never touched the recommendations/cross-reference path.
+      // absent when the turn never touched the cross-reference path.
       ...(resolvedCompetitor
         ? {
             resolvedCompetitor: {
