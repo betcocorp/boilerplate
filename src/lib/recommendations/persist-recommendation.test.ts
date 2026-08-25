@@ -15,7 +15,7 @@ const answered: RecommendCrossReferenceResult = {
   overallConfidence: 0.86,
   thresholdUsed: 0.8,
   candidates: [
-    { betcoProductKey: 'PK1', betcoProdId: null, betcoTitle: 'Triforce', confidence: 0.9, rank: 1, url: 'https://betco.com/x', rationale: null, source: { via: 'web' } },
+    { betcoProductKey: 'PK1', betcoProdId: null, betcoTitle: 'Triforce', confidence: 0.9, rank: 1, url: 'https://betco.com/x', rationale: null, source: { via: 'web' }, tier: 'primary' },
   ],
   evidence: { source: 'web', sources: [{ url: 'https://a' }] },
   declineReason: null,

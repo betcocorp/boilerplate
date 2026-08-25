@@ -126,10 +126,15 @@ const PRODUCT_SIGNALS = [
 /**
  * Competitor → Betco cross-reference / equivalent-recommendation intent. Fires on
  * language about matching or replacing a *competitor* product with a Betco one — the
- * signal that should route to the Recommendations specialist rather than the general
+ * signal that should route to the `cross_reference` specialist rather than the general
  * product catalog. Kept capability/phrase-based (no hardcoded competitor SKUs).
+ *
+ * B0-663 — renamed from `RECOMMENDATION_SIGNALS`. Content is unchanged: this list is, and always
+ * was, exclusively competitor-cross-reference phrasing. It is now paired with a SEPARATE
+ * `JOB_RECOMMENDATION_SIGNALS` list for the new job/problem-driven `recommendations` agent (no
+ * competitor named) — the two are deliberately distinct categories, not a rename of meaning.
  */
-const RECOMMENDATION_SIGNALS = [
+const CROSS_REFERENCE_SIGNALS = [
   'cross-reference',
   'cross reference',
   'crossreference',
@@ -166,13 +171,39 @@ const RECOMMENDATION_SIGNALS = [
 ];
 
 /**
+ * B0-663 — job/problem-driven product-recommendation phrasing with NO competitor named, e.g.
+ * "What should I use to degrease a kitchen floor?" or "What do you recommend for sticky
+ * residue?". Fires the `recommendations` agent, which is ADDITIVE ONLY: bathroom/dilution/floor
+ * keep answering their own domain-specific "what should I use" questions exactly as before (their
+ * signal lists still win the tie-break — see `SME_ROUTE_TIE_BREAK_ORDER`). Deliberately pure
+ * job/problem PHRASING — no surface or product vocabulary — so this never double-counts against
+ * `PRODUCT_SIGNALS` / `BATHROOM_SIGNALS` / `DILUTION_SIGNALS` / `FLOOR_SIGNALS`.
+ *
+ * Unlike `CROSS_REFERENCE_SIGNALS`, this category has no decisive-signal short-circuit — it is
+ * scored like `product`/`bathroom`/`dilution`/`floor` and can lose ties to any of them.
+ */
+const JOB_RECOMMENDATION_SIGNALS = [
+  'what should i use',
+  'what would you recommend',
+  'what do you recommend',
+  'best product for',
+  'what product for',
+  'which product should i use',
+  'i have a problem',
+  'i have an issue',
+  'what would work for',
+  'need something for',
+  'looking for a product',
+];
+
+/**
  * B0-339 — signals that mean competitor→Betco cross-reference and essentially nothing else.
  *
  * `PRODUCT_SIGNALS` contains the generic tokens 'product' and 'betco', which appear in almost every
  * cross-reference phrasing, so a literal "Cross-reference X to a Betco product" scored product 2 /
- * recommendations 1 and routed to `product`. The existing tie-break could not help, because product
+ * cross_reference 1 and routed to `product`. The existing tie-break could not help, because product
  * never tied — it won outright. Measured on live `audit_logs`: 270 of the 414 runs that called
- * `lookup_cross_reference` (65%) were labeled `product`, which skipped the recommendations-only
+ * `lookup_cross_reference` (65%) were labeled `product`, which skipped the cross-reference-only
  * post-processing (curated-override safety net, competitive-answer builder, validator evidence
  * injection) — so a real competitor with a curated override could be declined on the label alone.
  *
@@ -182,8 +213,10 @@ const RECOMMENDATION_SIGNALS = [
  *
  * Removing 'product'/'betco' from `PRODUCT_SIGNALS` was the other option and was rejected: they are
  * that route's catch-all, and dropping them would strand ordinary product questions at `agent: null`.
+ *
+ * B0-663 — renamed from `DECISIVE_RECOMMENDATION_SIGNALS`; content unchanged.
  */
-const DECISIVE_RECOMMENDATION_SIGNALS = [
+const DECISIVE_CROSS_REFERENCE_SIGNALS = [
   'cross-reference',
   'cross reference',
   'crossreference',
@@ -211,7 +244,7 @@ const DECISIVE_RECOMMENDATION_SIGNALS = [
  * signal-list entry found as a substring), so routing maths is untouched; the phrases exist because
  * the counts are not comparable across categories — the lists overlap internally (e.g. both
  * `competitive` and `competitive analysis` match "competitive analysis", scoring 2 where an
- * equivalent floor phrase scores 1), so a bare "recommendations 2 / floor 1" implies a margin that
+ * equivalent floor phrase scores 1), so a bare "cross_reference 2 / floor 1" implies a margin that
  * does not exist. The phrases are what make a score auditable.
  */
 function countSignalHits(
@@ -231,17 +264,19 @@ function countSignalHits(
 }
 
 /** B0-392 — the decisive phrases present in the message (empty when none are). */
-function matchedDecisiveRecommendationSignals(message: string): string[] {
+function matchedDecisiveCrossReferenceSignals(message: string): string[] {
   const lower = message.toLowerCase();
-  return DECISIVE_RECOMMENDATION_SIGNALS.filter((signal) => lower.includes(signal));
+  return DECISIVE_CROSS_REFERENCE_SIGNALS.filter((signal) => lower.includes(signal));
 }
 
 /**
  * B0-339 — true when the message carries unambiguous competitor→Betco cross-reference intent.
  * Delegates to the phrase list (B0-392) so the predicate and the recorded phrases cannot disagree.
+ *
+ * B0-663 — renamed from `hasDecisiveRecommendationSignal`; behavior unchanged.
  */
-export function hasDecisiveRecommendationSignal(message: string): boolean {
-  return matchedDecisiveRecommendationSignals(message).length > 0;
+export function hasDecisiveCrossReferenceSignal(message: string): boolean {
+  return matchedDecisiveCrossReferenceSignals(message).length > 0;
 }
 
 export type SmeRouteScoreKey =
@@ -249,19 +284,20 @@ export type SmeRouteScoreKey =
   | 'bathroom'
   | 'dilution'
   | 'floor'
+  | 'cross_reference'
   | 'recommendations';
 
 /**
  * B0-392 — HOW the decision was reached, so a consumer never has to parse `rationale` prose.
  *
  * `no_signal` is the honest name for what the workflow later labels `ambiguous`: zero keyword hits
- * across all five lists, which is NOT a tie — a tie resolves through `SME_ROUTE_TIE_BREAK_ORDER`
+ * across all six lists, which is NOT a tie — a tie resolves through `SME_ROUTE_TIE_BREAK_ORDER`
  * and reports `tie_break`.
  */
 export type SmeRouteDecisionPath =
   | 'empty_message'
   | 'no_signal'
-  | 'decisive_recommendation_signal'
+  | 'decisive_cross_reference_signal'
   | 'tie_break'
   | 'outright_winner';
 
@@ -271,11 +307,14 @@ export type SmeRouteDecision = {
   bathroomScore: number;
   dilutionScore: number;
   floorScore: number;
+  /** B0-663 — competitor→Betco cross-reference signal count (renamed from `recommendationScore`). */
+  crossReferenceScore: number;
+  /** B0-663 — NEW: job/problem-driven "what should I use" signal count, no competitor named. */
   recommendationScore: number;
   /** B0-392 — the exact phrases that matched, per category. Counts alone are not comparable. */
   matchedPhrases: Record<SmeRouteScoreKey, string[]>;
-  /** B0-392 — the decisive cross-reference phrases found (B0-339 short-circuit inputs). */
-  decisiveRecommendationPhrases: string[];
+  /** B0-392 — the decisive cross-reference phrases found (B0-339 short-circuit inputs). Renamed from `decisiveRecommendationPhrases` (B0-663). */
+  decisiveCrossReferencePhrases: string[];
   /** B0-392 — which branch produced `agent`. */
   decisionPath: SmeRouteDecisionPath;
   /** B0-392 — categories tied at the top score; empty unless `decisionPath === 'tie_break'`. */
@@ -284,14 +323,23 @@ export type SmeRouteDecision = {
 };
 
 /**
- * When scores tie, prefer system/procedure specialists, then cross-reference, over broad catalog
- * routing. Exported (B0-392) so a recorded routing decision cites the order actually applied.
+ * When scores tie, prefer system/procedure specialists (dilution/floor/bathroom), then the
+ * job-based `recommendations` agent, then `cross_reference`, over broad catalog routing. Exported
+ * (B0-392) so a recorded routing decision cites the order actually applied.
+ *
+ * B0-663 — `recommendations` (job-based, additive-only) is deliberately placed ABOVE
+ * `cross_reference` in this list: it still loses ties to the three domain specialists (the
+ * additive-only guarantee), but a plain "what should I use for X" with no domain/competitor signal
+ * should not lose to a `cross_reference` category that, in practice, almost never reaches a numeric
+ * tie anyway (it wins outright via `DECISIVE_CROSS_REFERENCE_SIGNALS` before scoring is even
+ * consulted). `product` remains the final catch-all.
  */
 export const SME_ROUTE_TIE_BREAK_ORDER: readonly SmeRouteScoreKey[] = [
   'dilution',
   'floor',
   'bathroom',
   'recommendations',
+  'cross_reference',
   'product',
 ];
 
@@ -300,16 +348,23 @@ export const SME_ROUTE_MIN_HITS_TO_ROUTE = 1;
 
 /** Fresh arrays per call — a shared constant would let one caller mutate another's record. */
 function emptyMatchedPhrases(): Record<SmeRouteScoreKey, string[]> {
-  return { product: [], bathroom: [], dilution: [], floor: [], recommendations: [] };
+  return {
+    product: [],
+    bathroom: [],
+    dilution: [],
+    floor: [],
+    cross_reference: [],
+    recommendations: [],
+  };
 }
 
 /**
  * Picks an SME from free text.
  *
  * `agent: null` happens in exactly two cases — an empty message, or zero keyword hits across all
- * five lists (`decisionPath` says which). A TIE is not one of them: it resolves through
- * `SME_ROUTE_TIE_BREAK_ORDER` (dilution > floor > bathroom > recommendations > product) and returns
- * a real agent with `decisionPath: 'tie_break'`.
+ * six lists (`decisionPath` says which). A TIE is not one of them: it resolves through
+ * `SME_ROUTE_TIE_BREAK_ORDER` (dilution > floor > bathroom > recommendations > cross_reference >
+ * product) and returns a real agent with `decisionPath: 'tie_break'`.
  */
 export function routeUserMessageToSme(message: string): SmeRouteDecision {
   const trimmed = message.trim();
@@ -321,9 +376,10 @@ export function routeUserMessageToSme(message: string): SmeRouteDecision {
       bathroomScore: 0,
       dilutionScore: 0,
       floorScore: 0,
+      crossReferenceScore: 0,
       recommendationScore: 0,
       matchedPhrases: emptyMatchedPhrases(),
-      decisiveRecommendationPhrases: [],
+      decisiveCrossReferencePhrases: [],
       decisionPath: 'empty_message',
       tiedCategories: [],
       rationale: 'Empty message; cannot route.',
@@ -334,28 +390,32 @@ export function routeUserMessageToSme(message: string): SmeRouteDecision {
   const product = countSignalHits(trimmed, PRODUCT_SIGNALS);
   const dilution = countSignalHits(trimmed, DILUTION_SIGNALS);
   const floor = countSignalHits(trimmed, FLOOR_SIGNALS);
-  const recommendation = countSignalHits(trimmed, RECOMMENDATION_SIGNALS);
+  const crossReference = countSignalHits(trimmed, CROSS_REFERENCE_SIGNALS);
+  const jobRecommendation = countSignalHits(trimmed, JOB_RECOMMENDATION_SIGNALS);
 
   const bathroomScore = bathroom.hits;
   const productScore = product.hits;
   const dilutionScore = dilution.hits;
   const floorScore = floor.hits;
-  const recommendationScore = recommendation.hits;
+  const crossReferenceScore = crossReference.hits;
+  const recommendationScore = jobRecommendation.hits;
 
   const matchedPhrases: Record<SmeRouteScoreKey, string[]> = {
     product: product.matched,
     bathroom: bathroom.matched,
     dilution: dilution.matched,
     floor: floor.matched,
-    recommendations: recommendation.matched,
+    cross_reference: crossReference.matched,
+    recommendations: jobRecommendation.matched,
   };
-  const decisiveRecommendationPhrases = matchedDecisiveRecommendationSignals(trimmed);
+  const decisiveCrossReferencePhrases = matchedDecisiveCrossReferenceSignals(trimmed);
 
   const scores: Record<SmeRouteScoreKey, number> = {
     product: productScore,
     bathroom: bathroomScore,
     dilution: dilutionScore,
     floor: floorScore,
+    cross_reference: crossReferenceScore,
     recommendations: recommendationScore,
   };
 
@@ -368,9 +428,10 @@ export function routeUserMessageToSme(message: string): SmeRouteDecision {
     bathroomScore,
     dilutionScore,
     floorScore,
+    crossReferenceScore,
     recommendationScore,
     matchedPhrases,
-    decisiveRecommendationPhrases,
+    decisiveCrossReferencePhrases,
   };
 
   if (entries.length === 0) {
@@ -380,20 +441,20 @@ export function routeUserMessageToSme(message: string): SmeRouteDecision {
       decisionPath: 'no_signal',
       tiedCategories: [],
       rationale:
-        'No specialist keywords matched. Mention a Betco product or SDS topic, restroom care, dilution control hardware, floor maintenance procedures, or a competitor product to cross-reference.',
+        'No specialist keywords matched. Mention a Betco product or SDS topic, restroom care, dilution control hardware, floor maintenance procedures, a competitor product to cross-reference, or ask what product to use for a job.',
     };
   }
 
   // B0-339: an unambiguous cross-reference phrase wins outright, before any counting. Counting
   // cannot resolve this on its own — the generic 'product'/'betco' PRODUCT_SIGNALS out-hit the
   // single cross-reference phrase, so `product` won without ever tying.
-  if (recommendationScore > 0 && decisiveRecommendationPhrases.length > 0) {
+  if (crossReferenceScore > 0 && decisiveCrossReferencePhrases.length > 0) {
     return {
-      agent: 'recommendations',
+      agent: 'cross_reference',
       ...common,
-      decisionPath: 'decisive_recommendation_signal',
+      decisionPath: 'decisive_cross_reference_signal',
       tiedCategories: [],
-      rationale: `Decisive cross-reference signal; chose **recommendations** outright (product ${productScore}, bathroom ${bathroomScore}, dilution ${dilutionScore}, floor ${floorScore}, recommendations ${recommendationScore}).`,
+      rationale: `Decisive cross-reference signal; chose **cross_reference** outright (product ${productScore}, bathroom ${bathroomScore}, dilution ${dilutionScore}, floor ${floorScore}, cross_reference ${crossReferenceScore}, recommendations ${recommendationScore}).`,
     };
   }
 
@@ -411,7 +472,7 @@ export function routeUserMessageToSme(message: string): SmeRouteDecision {
   const rationale =
     winners.length > 1
       ? `Tie at ${max} hits between ${winners.map(([k]) => k).join(', ')}; chose **${agent}** by priority (${SME_ROUTE_TIE_BREAK_ORDER.join(' > ')}).`
-      : `${agent} signals (${max}) won (product ${productScore}, bathroom ${bathroomScore}, dilution ${dilutionScore}, floor ${floorScore}, recommendations ${recommendationScore}).`;
+      : `${agent} signals (${max}) won (product ${productScore}, bathroom ${bathroomScore}, dilution ${dilutionScore}, floor ${floorScore}, cross_reference ${crossReferenceScore}, recommendations ${recommendationScore}).`;
 
   return {
     agent,

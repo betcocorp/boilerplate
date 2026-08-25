@@ -16,6 +16,7 @@ const candidate = (over: Partial<RecommendationCandidateOut>): RecommendationCan
   url: 'https://betco.com/fight-bac',
   rationale: 'Same quat one-step disinfectant chemistry.',
   source: { via: 'web' },
+  tier: 'primary',
   ...over,
 });
 

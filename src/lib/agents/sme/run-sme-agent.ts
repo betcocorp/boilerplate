@@ -1,10 +1,15 @@
 import { BATHROOM_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/bathroom-specialist/bathroom-specialist-system-prompt';
+import { CROSS_REFERENCE_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/cross-reference-specialist/cross-reference-specialist-system-prompt';
 import { DILUTION_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/dilution-specialist/dilution-specialist-system-prompt';
 import { FLOOR_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/floor-specialist/floor-specialist-system-prompt';
 import { PRODUCT_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/product-specialist/product-specialist-system-prompt';
 import { RECOMMENDATIONS_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/recommendations-specialist/recommendations-specialist-system-prompt';
 import { runBexChatTurn } from '~/lib/bex/run-chat-turn';
+import { newCorrelationId } from '~/lib/observability/correlation-id';
 import type { ProductSupportOutcome } from '~/lib/orchestrator/orchestrator-schemas';
+import { extractCompetitorProduct } from '~/lib/recommendations/extract-competitor-product';
+import { runCrossReferenceRecommendation } from '~/lib/recommendations/persist-recommendation';
+import { buildWebFallbackAnswer } from '~/lib/recommendations/web-fallback-answer';
 
 import type {
   SmeAgentId,
@@ -15,11 +20,17 @@ import type {
 /**
  * B0-520/521/522/523 — agents wired to the real `runProductSupportWorkflow` (via
  * `runBexChatTurn`, forced to that agent's `agentMode`) instead of the `runSmeAgent`
- * placeholder. `recommendations` is intentionally out of scope for this set — it is already
- * fully built via its own tool (`lookup_cross_reference` + web-search recommendation engine),
- * not through this forced-routing mechanism.
+ * placeholder.
+ *
+ * B0-663 — `recommendations` was previously excluded here because it was (nominally) built via
+ * its own tool/engine rather than this forced-routing mechanism; in practice its HTTP route was
+ * always a placeholder. `recommendations` now means job/problem-driven product recommendation
+ * (no competitor named), which runs through the same RAG/catalog tool loop as `product`/
+ * `dilution`/`floor`/`bathroom`, so it is wired in here like them. Competitor cross-reference
+ * moved to the new `cross_reference` agent, which does NOT go through this real-workflow chat
+ * loop — see `runCrossReferenceSmeAgentAnswer` below.
  */
-const REAL_WORKFLOW_AGENT_IDS = ['product', 'dilution', 'floor', 'bathroom'] as const;
+const REAL_WORKFLOW_AGENT_IDS = ['product', 'dilution', 'floor', 'bathroom', 'recommendations'] as const;
 type RealWorkflowAgentId = (typeof REAL_WORKFLOW_AGENT_IDS)[number];
 
 function isRealWorkflowAgent(agentId: SmeAgentId): agentId is RealWorkflowAgentId {
@@ -109,6 +120,23 @@ const AGENTS: Record<SmeAgentId, AgentMeta> = {
   recommendations: {
     label: 'Product Recommendations Specialist',
     summary:
+      'Job/problem-driven product recommendation across categories, when no competitor product is named and the ask doesn\'t belong to a specific domain specialist (bathroom/dilution/floor); finds the single best-fit Betco product from the catalog/RAG tools.',
+    focusAreas: [
+      'Job/problem-driven best-fit product selection (no competitor named)',
+      'Uses the existing product catalog/RAG tools (search_product_docs, find_products_by_category, get_products_in_category, get_product_category, get_product_spec) — no bespoke retrieval engine',
+      'Always presents exactly 1 primary best-fit pick, plus up to 2 alternatives (e.g. lower-cost or lighter-duty) only when there is a genuine reason to offer them',
+      'Confidence gating at 0.80 with a graceful decline to a sales representative',
+      'Grounded only: never invent product names, SKUs, or claims not in retrieved Betco data',
+    ],
+    systemPrompt: RECOMMENDATIONS_SPECIALIST_SYSTEM_PROMPT,
+    sessionContextGuide: [
+      '`taskDescription` — the job or problem the user described.',
+      '`facilityType` — if known, helps narrow category.',
+    ],
+  },
+  cross_reference: {
+    label: 'Cross-Reference Specialist',
+    summary:
       'Recommends the Betco equivalent for a competitor product via the cross-reference lookup and (when available) the web-search-grounded recommendation engine; answers only above 0.80 confidence, otherwise defers to a Betco sales representative.',
     focusAreas: [
       'Competitor product → Betco equivalent cross-reference (many-to-many; may offer more than one match)',
@@ -116,7 +144,7 @@ const AGENTS: Record<SmeAgentId, AgentMeta> = {
       'Confidence gating at 0.80 with a graceful decline to a sales representative',
       'Grounded only: never invent product names, SKUs, EPA numbers, dilution, or claims',
     ],
-    systemPrompt: RECOMMENDATIONS_SPECIALIST_SYSTEM_PROMPT,
+    systemPrompt: CROSS_REFERENCE_SPECIALIST_SYSTEM_PROMPT,
     sessionContextGuide: [
       '`competitorBrand` — competitor company/brand (optional but strongly preferred; missing lowers confidence).',
       '`competitorProduct` — competitor product name or SKU the user wants a Betco equivalent for.',
@@ -257,10 +285,118 @@ async function runRealSmeAgentAnswer(
 }
 
 /**
- * Placeholder SME run: validates input and returns a stable shape the orchestrator
- * can merge into real tool + LLM steps later. Still used for `recommendations` (out of
- * scope for B0-520/521/522/523 — see the Confluence source doc) and for any real-workflow
- * agent called with no query.
+ * B0-663 — competitor cross-reference SME answer. Unlike `runRealSmeAgentAnswer` (the generic
+ * RAG/tool chat loop `product`/`dilution`/`floor`/`bathroom`/`recommendations` all share), this
+ * agent is driven directly by the dedicated `recommendCrossReference()` engine (legacy lookup +
+ * web-grounded fallback + validator gate) via `runCrossReferenceRecommendation` — the same engine
+ * the orchestrator's `recommend_cross_reference` tool and the deterministic workflow-level
+ * cross-reference fallback call — so it never runs a model chat loop of its own.
+ *
+ * Resolves the competitor brand/product from `context` (`competitorBrand`/`competitorProduct`,
+ * per this agent's `sessionContextGuide`) when the caller supplied them; otherwise falls back to
+ * `extractCompetitorProduct` on the raw query text.
+ *
+ * This path creates no conversation/workflow_run row (there is no chat turn), so `conversationId`
+ * and `workflowRunId` are synthetic UUIDs and `latestOpenaiResponseId` is a synthetic
+ * `cross-reference:<traceId>` marker — the same "no real OpenAI response id" idea the AI SDK
+ * generation runtime uses (`ai_sdk:<runId>`) for its own non-Responses-API path.
+ */
+async function runCrossReferenceSmeAgentAnswer(
+  meta: AgentMeta,
+  query: string,
+  context: Record<string, unknown> | null,
+): Promise<SmeAgentRunResult> {
+  const traceId = newCorrelationId();
+
+  const contextProductRaw = context?.competitorProduct;
+  const contextBrandRaw = context?.competitorBrand;
+  const contextProduct =
+    typeof contextProductRaw === 'string' && contextProductRaw.trim() ? contextProductRaw.trim() : null;
+
+  let resolvedBrand: string | null;
+  let resolvedProduct: string;
+  let extractNote: string;
+
+  if (contextProduct) {
+    resolvedBrand =
+      typeof contextBrandRaw === 'string' && contextBrandRaw.trim() ? contextBrandRaw.trim() : null;
+    resolvedProduct = contextProduct;
+    extractNote = 'Competitor brand/product resolved from session context.';
+  } else {
+    const extracted = await extractCompetitorProduct(query);
+    resolvedBrand = extracted.brand;
+    resolvedProduct = extracted.product;
+    extractNote = `Competitor brand/product extracted from the query text (brand: ${extracted.brand ?? 'unknown'}).`;
+  }
+
+  const result = await runCrossReferenceRecommendation(
+    { competitorProduct: resolvedProduct, competitorBrand: resolvedBrand },
+    { traceId },
+  );
+
+  const competitorLabel =
+    [resolvedBrand, resolvedProduct].filter(Boolean).join(' ').trim() || resolvedProduct;
+  const { answerText } = buildWebFallbackAnswer({ result, competitorLabel });
+
+  const answer: ProductSupportOutcome = {
+    answerText,
+    conversationId: newCorrelationId(),
+    workflowRunId: newCorrelationId(),
+    latestOpenaiResponseId: `cross-reference:${traceId}`,
+    traceId,
+    sources: [],
+    confidence: result.overallConfidence,
+    validation: {
+      approved: result.answered,
+      confidence: result.overallConfidence,
+      issues: [],
+      requires_human_review: result.status === 'escalated',
+    },
+    routingDecision: 'cross_reference',
+    priorMessageCount: 0,
+    previousResponseId: null,
+    agentConfidence: null,
+    agentConfidenceBasis: null,
+  };
+
+  return {
+    agent: 'cross_reference',
+    label: meta.label,
+    summary: meta.summary,
+    focusAreas: meta.focusAreas,
+    systemPrompt: meta.systemPrompt,
+    sessionContextGuide: meta.sessionContextGuide,
+    query,
+    context,
+    steps: [
+      {
+        id: 'ingest-query',
+        status: 'completed',
+        note: `Query received; ${extractNote}`,
+      },
+      {
+        id: 'retrieve-domain-knowledge',
+        status: 'completed',
+        note: `Ran recommendCrossReference (source: ${result.source}); ${result.candidates.length} grounded candidate(s) considered.`,
+      },
+      {
+        id: 'draft-sme-answer',
+        status: 'completed',
+        note: `Answer drafted with confidence ${result.overallConfidence} (threshold ${result.thresholdUsed}); status=${result.status}${
+          result.status === 'escalated' ? ' (flagged for human review)' : ''
+        }.`,
+      },
+    ],
+    answer,
+  };
+}
+
+/**
+ * Placeholder SME run: validates input and returns a stable shape the orchestrator can merge
+ * into real tool + LLM steps later. Only reachable now when a real-workflow agent (including
+ * `recommendations`) is called with no query, or when `cross_reference` is called with no query
+ * (see `runSmeAgent` below — both real agents dispatch to their real answer path once a query is
+ * present).
  */
 export async function runSmeAgent(
   agentId: SmeAgentId,
@@ -296,6 +432,16 @@ export async function runSmeAgent(
     if (agentId === 'floor' && typeof ft === 'string' && ft.trim()) {
       parts.push(`floorType: ${ft.trim()}`);
     }
+    if (agentId === 'recommendations') {
+      const td = context.taskDescription;
+      const recFacility = context.facilityType;
+      if (typeof td === 'string' && td.trim()) {
+        parts.push(`taskDescription: ${td.trim()}`);
+      }
+      if (typeof recFacility === 'string' && recFacility.trim()) {
+        parts.push(`facilityType: ${recFacility.trim()}`);
+      }
+    }
     return parts.length > 0 ? parts.join(' · ') : null;
   })();
 
@@ -311,6 +457,10 @@ export async function runSmeAgent(
 
   if (query && isRealWorkflowAgent(agentId)) {
     return runRealSmeAgentAnswer(agentId, meta, query, context, sessionNote);
+  }
+
+  if (query && agentId === 'cross_reference') {
+    return runCrossReferenceSmeAgentAnswer(meta, query, context);
   }
 
   return {
@@ -345,6 +495,9 @@ export async function runSmeAgent(
             return 'Wire floor-care SOPs, finish/stripper bulletins, and procedural RAG scoped to maintenance programs.';
           }
           if (agentId === 'recommendations') {
+            return 'Wire the product catalog/RAG tools (search_product_docs, find_products_by_category, get_products_in_category, get_product_category, get_product_spec) to identify the job/problem and select the single best-fit Betco product; enforce the 0.80 confidence gate before naming a product.';
+          }
+          if (agentId === 'cross_reference') {
             return 'Wire `lookup_cross_reference` first, then the web-search-grounded recommendation engine (Jira B0-77) and RAG fallback; enforce the 0.80 confidence gate before naming a product.';
           }
           return 'Wire RAG / internal APIs scoped to this SME.';

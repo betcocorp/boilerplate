@@ -141,8 +141,9 @@ describe('B0-647 example corpus', () => {
     expect(Object.keys(SEMANTIC_ROUTER_EXAMPLES).sort()).toEqual([...SME_AGENT_IDS].sort());
   });
 
-  it('defines ~50 examples in total, with no duplicate utterance across the whole corpus', () => {
-    expect(SEMANTIC_ROUTER_EXAMPLE_COUNT).toBe(50);
+  it('defines ~58 examples in total, with no duplicate utterance across the whole corpus', () => {
+    // B0-663 — 5 routes x 10 + `recommendations` (new job-based route) x 8 = 58.
+    expect(SEMANTIC_ROUTER_EXAMPLE_COUNT).toBe(58);
     const all = SME_AGENT_IDS.flatMap((route) => [...SEMANTIC_ROUTER_EXAMPLES[route]]);
     expect(new Set(all).size).toBe(all.length);
   });

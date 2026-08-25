@@ -1,11 +1,13 @@
 'use client';
 
 import {
+  ChartScatter,
   ChevronRight,
   FileText,
   LayoutDashboard,
   Library,
   MessageSquare,
+  Route,
   Search,
 } from 'lucide-react';
 import Link from 'next/link';
@@ -71,9 +73,15 @@ const sidebarSections: NavSectionModel[] = [
         icon: LayoutDashboard,
       },
       {
-        type: 'group',
+        type: 'link',
         label: 'Bex',
+        href: '/admin/bex',
         icon: MessageSquare,
+      },
+      {
+        type: 'group',
+        label: 'Observability',
+        icon: ChartScatter,
         items: [
           {
             label: 'Bex health',
@@ -81,24 +89,27 @@ const sidebarSections: NavSectionModel[] = [
             permission: PERMISSIONS.NAVIGATION_SIDEBAR_OBSERVABILITY,
           },
           {
-            label: 'Bex chat',
-            href: '/admin/bex',
-          },
-          {
             label: 'Test runner',
             href: '/admin/tests',
             permission: PERMISSIONS.NAVIGATION_SIDEBAR_TESTS,
+          },
+          {
+            label: 'Prompt observability',
+            href: '/admin/observability',
+            permission: PERMISSIONS.NAVIGATION_SIDEBAR_OBSERVABILITY,
           },
           {
             label: 'Failure Queue',
             href: '/admin/tests/failure-queue',
             permission: PERMISSIONS.NAVIGATION_SIDEBAR_TESTS,
           },
-          {
-            label: 'Routing comparison',
-            href: '/admin/tests/routing-comparison',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_TESTS,
-          },
+        ],
+      },
+      {
+        type: 'group',
+        label: 'Routing',
+        icon: Route,
+        items: [
           {
             // B0-658 — same surface family as the other test links, so it reuses
             // `navigation.sidebar.tests` rather than minting a permission selector that would need
@@ -108,9 +119,9 @@ const sidebarSections: NavSectionModel[] = [
             permission: PERMISSIONS.NAVIGATION_SIDEBAR_TESTS,
           },
           {
-            label: 'Prompt observability',
-            href: '/admin/observability',
-            permission: PERMISSIONS.NAVIGATION_SIDEBAR_OBSERVABILITY,
+            label: 'Routing comparison',
+            href: '/admin/tests/routing-comparison',
+            permission: PERMISSIONS.NAVIGATION_SIDEBAR_TESTS,
           },
         ],
       },

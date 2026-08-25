@@ -12,7 +12,9 @@ import { ROUTING_TEST_PATH } from './constants';
 import {
   listRoutingTestItems,
   deleteRoutingTestItem,
+  deleteRoutingTestRun,
   insertRoutingTestItem,
+  insertRoutingTestRun,
   updateRoutingTestItem,
 } from './repository';
 import { runRoutingTest } from './run';
@@ -20,7 +22,9 @@ import {
   firstIssueMessage,
   routingTestItemCreateSchema,
   routingTestItemDeleteSchema,
+  routingTestRunDeleteSchema,
   routingTestItemUpdateSchema,
+  routingTestModelTagSchema,
   routingTestRouterTypeSchema,
 } from './schemas';
 import type { RoutingTestRunResult } from './types';
@@ -57,18 +61,27 @@ function formText(formData: FormData, name: string): string {
   return typeof raw === 'string' ? raw : '';
 }
 
-export async function addRoutingTestItemAction(formData: FormData) {
-  const returnPath = normalizeReturnPath(formData.get('returnPath'));
+/**
+ * B0-675 — the add dialog stays open for "create another", which a `redirect()` (real navigation)
+ * would unconditionally break by unmounting the Radix `Dialog`. So unlike the other two item
+ * actions below, this one is called directly from an `onSubmit` handler (not bound to a `<form
+ * action>`, which would trigger React 19's auto-reset-on-success and desync the dialog's checkbox
+ * state) and returns a discriminated result instead of redirecting to a `?success=`/`?error=` param.
+ */
+export type AddRoutingTestItemActionState =
+  | { ok: true }
+  | { ok: false; error: string };
 
+export async function addRoutingTestItemAction(
+  formData: FormData,
+): Promise<AddRoutingTestItemActionState> {
   const parsed = routingTestItemCreateSchema.safeParse({
     prompt: formText(formData, 'prompt'),
     expectedAgent: formText(formData, 'expectedAgent'),
   });
 
   if (!parsed.success) {
-    redirect(
-      encodeMessage(returnPath, 'error', firstIssueMessage(parsed.error)),
-    );
+    return { ok: false, error: firstIssueMessage(parsed.error) };
   }
 
   const created = await insertRoutingTestItem({
@@ -87,7 +100,7 @@ export async function addRoutingTestItemAction(formData: FormData) {
   );
 
   revalidatePath(ROUTING_TEST_PATH);
-  redirect(encodeMessage(returnPath, 'success', 'Routing test item added.'));
+  return { ok: true };
 }
 
 export async function updateRoutingTestItemAction(formData: FormData) {
@@ -164,26 +177,45 @@ export async function deleteRoutingTestItemAction(formData: FormData) {
 }
 
 /**
- * B0-659 — run every item through the selected router and hand back a plain serializable result.
- * Deliberately NOT a redirect action: results are ephemeral component state, so nothing is
- * persisted and no run-history row is written.
+ * B0-659/B0-667 — run every item through the selected router and hand back a plain serializable
+ * result. Deliberately NOT a redirect action: the live result is ephemeral component state, exactly
+ * as it was before B0-667 — re-running still replaces it inline, with no page navigation.
+ *
+ * B0-667 adds persistence as a SIDE EFFECT of an `ok: true` result: one `routing_test_runs` row plus
+ * its `routing_test_run_items` snapshots (`insertRoutingTestRun`). This is deliberately best-effort
+ * — swallow-and-log, the same convention `writeAuditLog` (`~/lib/audit/audit-log.ts`) already uses
+ * for this file's other non-fatal side effects. The workbench is waiting on the run result itself;
+ * a history-write failure is a real problem worth logging, but it must never turn a successful run
+ * into an error response, and `ok: false` results (nothing ran) are never persisted.
+ *
+ * B0-671 — `modelTag` is only meaningful when `routerType === 'llm'`; an invalid/unknown tag is
+ * silently ignored (treated as "no override chosen") rather than failing the whole run, since a
+ * stale/mismatched client-side value should degrade to the default model, not block the test.
  */
 export async function runRoutingTestAction(
   routerType: string,
+  modelTag?: string,
 ): Promise<RoutingTestRunResult> {
   const parsedRouterType = routingTestRouterTypeSchema.safeParse(routerType);
   if (!parsedRouterType.success) {
     return {
       ok: false,
       routerType: 'keyword',
-      error: 'Unknown router type — pick Keyword or Semantic.',
+      error: 'Unknown router type — pick Keyword, Semantic, or LLM.',
     };
   }
 
+  const parsedModelTag = routingTestModelTagSchema.safeParse(modelTag);
+
   const items = await listRoutingTestItems();
 
+  let result: RoutingTestRunResult;
   try {
-    return await runRoutingTest(items, parsedRouterType.data);
+    result = await runRoutingTest(
+      items,
+      parsedRouterType.data,
+      parsedModelTag.success ? parsedModelTag.data : undefined,
+    );
   } catch (error) {
     return {
       ok: false,
@@ -193,4 +225,56 @@ export async function runRoutingTestAction(
       }`,
     };
   }
+
+  if (result.ok) {
+    try {
+      await insertRoutingTestRun(result);
+      revalidatePath(ROUTING_TEST_PATH);
+    } catch (error) {
+      console.error(
+        JSON.stringify({
+          level: 'error',
+          event: 'routing_test_run_persist_failed',
+          routerType: result.routerType,
+          message: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    }
+  }
+
+  return result;
+}
+
+/** B0-678 — delete a routing test run by id, with redirect on success/failure. */
+export async function deleteRoutingTestRunAction(formData: FormData) {
+  const returnPath = normalizeReturnPath(formData.get('returnPath'));
+
+  const parsed = routingTestRunDeleteSchema.safeParse({
+    id: formText(formData, 'runId'),
+  });
+
+  if (!parsed.success) {
+    redirect(
+      encodeMessage(returnPath, 'error', firstIssueMessage(parsed.error)),
+    );
+  }
+
+  const removed = await deleteRoutingTestRun(parsed.data.id);
+  if (!removed) {
+    redirect(
+      encodeMessage(returnPath, 'error', 'That routing test run no longer exists.'),
+    );
+  }
+
+  await writeAuditLog(
+    'routing_test_run_deleted',
+    {
+      routing_test_run_id: parsed.data.id,
+      actor: await currentAdminActor(),
+    },
+    { traceId: newCorrelationId() },
+  );
+
+  revalidatePath(ROUTING_TEST_PATH);
+  redirect(encodeMessage(returnPath, 'success', 'Routing test run deleted.'));
 }

@@ -12,7 +12,7 @@ import type { SmeAgentId } from '~/lib/agents/sme/types';
  *
  * That distinction is what B0-339 was about. `PRODUCT_SIGNALS` carries the generic tokens 'product'
  * and 'betco', so a literal "Cross-reference X to a Betco product" scored product 2 /
- * recommendations 1 and routed to `product` — which skipped the curated-override safety net, the
+ * cross_reference 1 and routed to `product` — which skipped the curated-override safety net, the
  * competitive-answer builder, and the validator evidence injection. On live `audit_logs`, 270 of the
  * 414 runs that called `lookup_cross_reference` (65%) were labeled `product`.
  *
@@ -26,6 +26,11 @@ import type { SmeAgentId } from '~/lib/agents/sme/types';
  * Regulated-data note: these messages deliberately *ask about* dilution ratios, contact times and
  * EPA registrations rather than asserting them. No case states a regulated value, so this file can
  * never become a source of an unverified claim. Keep it that way when extending.
+ *
+ * B0-663 — the `cross_reference` cases below are a straight rename of the old `recommendations`
+ * (competitor) expectations; behavior is unchanged. A new "--- Job-based recommendations (B0-663)
+ * ---" section further down adds cases for the SEPARATE job/problem-driven `recommendations` agent
+ * (no competitor named) — those never expect cross-reference post-processing.
  */
 
 export type RoutingGoldenCase = {
@@ -36,7 +41,7 @@ export type RoutingGoldenCase = {
   /**
    * Whether the cross-reference post-processing should engage for this turn — the curated-override
    * safety net, `buildCompetitiveRecommendationAnswer`, validator evidence injection, and the REC-4
-   * gate. In the workflow this is `routingDecision === 'recommendations' || crossReferenceIntent`.
+   * gate. In the workflow this is `routingDecision === 'cross_reference' || crossReferenceIntent`.
    */
   expectsCrossReferencePostProcessing: boolean;
   /** What regression this case guards. Keep it specific — this is why the case earns its place. */
@@ -48,7 +53,7 @@ export const ROUTING_GOLDEN_SET: RoutingGoldenCase[] = [
   {
     id: 'xref-literal-with-product-token',
     message: 'Cross-reference Multi-Clean 007 Peroxide Cleaner to a Betco product.',
-    expectedRoute: 'recommendations',
+    expectedRoute: 'cross_reference',
     expectsCrossReferencePostProcessing: true,
     note: 'Headline B0-339 case: "product" + "betco" out-hit "cross-reference" 2-1, so counting alone routed this to product.',
   },
@@ -56,35 +61,35 @@ export const ROUTING_GOLDEN_SET: RoutingGoldenCase[] = [
     id: 'xref-switch-to',
     message:
       'We currently use Diversey AHP 5. Which Betco product should we switch to?',
-    expectedRoute: 'recommendations',
+    expectedRoute: 'cross_reference',
     expectsCrossReferencePostProcessing: true,
-    note: '"switch to" scored zero in RECOMMENDATION_SIGNALS before B0-339; only "switch from" was listed.',
+    note: '"switch to" scored zero in CROSS_REFERENCE_SIGNALS before B0-339; only "switch from" was listed.',
   },
   {
     id: 'xref-replaces',
     message: 'Which Betco product replaces Ecolab A-456 II?',
-    expectedRoute: 'recommendations',
+    expectedRoute: 'cross_reference',
     expectsCrossReferencePostProcessing: true,
     note: '"replaces" scored zero before B0-339; PRODUCT_SIGNALS only carried "replacement".',
   },
   {
     id: 'xref-looking-to-replace',
     message: 'Looking to replace Hillyard 1907 Gym Finish with something from Betco.',
-    expectedRoute: 'recommendations',
+    expectedRoute: 'cross_reference',
     expectsCrossReferencePostProcessing: true,
     note: 'Substitution phrased as an intent rather than a question.',
   },
   {
     id: 'xref-swap-out',
     message: 'We want to swap out Buckeye 1844 for a Betco floor finish.',
-    expectedRoute: 'recommendations',
+    expectedRoute: 'cross_reference',
     expectsCrossReferencePostProcessing: true,
     note: 'Guards "swap out" and confirms a floor-finish noun does not pull this to the floor specialist.',
   },
   {
     id: 'xref-can-replace',
     message: 'What can replace our current Franklin 2 N’ 1 Rug Spotter RTU?',
-    expectedRoute: 'recommendations',
+    expectedRoute: 'cross_reference',
     expectsCrossReferencePostProcessing: true,
     note: 'Substitution with no "betco" token at all — must still reach the cross-reference path.',
   },
@@ -96,21 +101,21 @@ export const ROUTING_GOLDEN_SET: RoutingGoldenCase[] = [
   {
     id: 'xref-equivalent',
     message: 'What is the Betco equivalent of 3M #5 Quat Disinfectant Cleaner?',
-    expectedRoute: 'recommendations',
+    expectedRoute: 'cross_reference',
     expectsCrossReferencePostProcessing: true,
-    note: 'Canonical "Betco equivalent" phrasing that still lost pre-B0-339, because "disinfectant" and "cleaner" in the competitor name pushed productScore to 3 against recommendations 2.',
+    note: 'Canonical "Betco equivalent" phrasing that still lost pre-B0-339, because "disinfectant" and "cleaner" in the competitor name pushed productScore to 3 against cross_reference 2.',
   },
   {
     id: 'xref-comparable',
     message: 'Is there a comparable Betco product to Claire Ammoniated Glass Cleaner?',
-    expectedRoute: 'recommendations',
+    expectedRoute: 'cross_reference',
     expectsCrossReferencePostProcessing: true,
     note: '"comparable" plus a competitor name containing "cleaner" — also routed to product pre-B0-339.',
   },
   {
     id: 'xref-alternative-to',
     message: 'We need a Betco alternative to NCL 24/7 Floor Finish.',
-    expectedRoute: 'recommendations',
+    expectedRoute: 'cross_reference',
     expectsCrossReferencePostProcessing: true,
     note: 'Regression guard for "alternative to" — again with a floor-finish noun present.',
   },
@@ -118,7 +123,7 @@ export const ROUTING_GOLDEN_SET: RoutingGoldenCase[] = [
     id: 'xref-competitor-word',
     message:
       'Cross-reference this competitor disinfectant to a comparable Betco product.',
-    expectedRoute: 'recommendations',
+    expectedRoute: 'cross_reference',
     expectsCrossReferencePostProcessing: true,
     note: 'Generic competitor phrasing with no named brand.',
   },
@@ -176,7 +181,7 @@ export const ROUTING_GOLDEN_SET: RoutingGoldenCase[] = [
       'What do you recommend to strip and recoat a VCT floor using the floor maintenance program?',
     expectedRoute: 'floor',
     expectsCrossReferencePostProcessing: false,
-    note: 'The broad "recommend" signal must not hijack a floor procedure.',
+    note: 'The broad "recommend" cross_reference signal, and the job-based "what do you recommend" recommendations signal, must not hijack a floor procedure — a 3-way tie resolves to floor by SME_ROUTE_TIE_BREAK_ORDER (B0-663).',
   },
   {
     id: 'boundary-dilution-hardware',
@@ -191,7 +196,7 @@ export const ROUTING_GOLDEN_SET: RoutingGoldenCase[] = [
     message: 'What should I use on urinals and toilets in a restroom?',
     expectedRoute: 'bathroom',
     expectsCrossReferencePostProcessing: false,
-    note: 'Bathroom route intact.',
+    note: 'Bathroom route intact — also the B0-663 additive-only guard: "what should I use" matches the new job-based recommendations signal too, but bathroom out-scores it (2 vs 1) here.',
   },
   {
     id: 'boundary-no-signal',
@@ -199,6 +204,46 @@ export const ROUTING_GOLDEN_SET: RoutingGoldenCase[] = [
     expectedRoute: null,
     expectsCrossReferencePostProcessing: false,
     note: 'No signals fire; the router must decline to guess.',
+  },
+
+  // --- Job-based recommendations (B0-663): "what should I use" with no competitor named and no ----
+  // --- bathroom/dilution/floor-specific domain signal — additive-only, never expects cross-------
+  // --- reference post-processing. ------------------------------------------------------------------
+  {
+    id: 'job-degrease-kitchen-floor',
+    message: 'What should I use to degrease a commercial kitchen floor?',
+    expectedRoute: 'recommendations',
+    expectsCrossReferencePostProcessing: false,
+    note: 'Generic job/problem ask ("what should I use") with a bare "degreas" PRODUCT_SIGNALS hit — ties product 1-1 and recommendations wins the tie (additive-only order still keeps it below dilution/floor/bathroom).',
+  },
+  {
+    id: 'job-sticky-residue-tile',
+    message: 'I have a problem with sticky residue on tile, what do you recommend?',
+    expectedRoute: 'recommendations',
+    expectsCrossReferencePostProcessing: false,
+    note: 'Incidentally touches bathroom vocabulary ("tile") but two job-phrase hits ("i have a problem", "what do you recommend") outscore the single bathroom hit outright.',
+  },
+  {
+    id: 'job-best-product-warehouse-grease',
+    message:
+      'What is the best product for removing grease buildup in a warehouse — what would you recommend?',
+    expectedRoute: 'recommendations',
+    expectsCrossReferencePostProcessing: false,
+    note: 'No competitor named; "best product for" + "what would you recommend" outscore the single generic PRODUCT_SIGNALS "product" hit.',
+  },
+  {
+    id: 'job-static-cling-carpet',
+    message: 'I have an issue with static cling building up on the carpet, what would you recommend?',
+    expectedRoute: 'recommendations',
+    expectsCrossReferencePostProcessing: false,
+    note: 'Cross-domain problem (carpet is outside bathroom/dilution/floor) with no competitor named — outright win.',
+  },
+  {
+    id: 'job-adhesive-residue-need-something',
+    message: 'Need something for removing stubborn adhesive residue — what would you recommend?',
+    expectedRoute: 'recommendations',
+    expectsCrossReferencePostProcessing: false,
+    note: '"need something for" + "what would you recommend" with no product/domain vocabulary at all.',
   },
 ];
 
@@ -244,7 +289,7 @@ export function runRoutingGoldenSet(
 
     // Mirrors `useCrossReferencePostProcessing` in run-product-support-workflow.ts.
     const actualCrossReferencePostProcessing =
-      actualRoute === 'recommendations' ||
+      actualRoute === 'cross_reference' ||
       deps.hasCrossReferenceIntent(testCase.message);
     const postProcessingMatch =
       actualCrossReferencePostProcessing === testCase.expectsCrossReferencePostProcessing;

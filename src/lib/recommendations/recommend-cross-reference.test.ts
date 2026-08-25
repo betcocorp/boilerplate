@@ -146,6 +146,7 @@ describe('recommendCrossReference (B0-85)', () => {
     expect(result.answered).toBe(true);
     expect(result.status).toBe('answered');
     expect(result.candidates[0]).toMatchObject({ betcoTitle: 'Triforce', betcoProductKey: '333B5-00', rank: 1 });
+    expect(result.candidates[0].tier).toBe('primary'); // B0-663
     expect(result.overallConfidence).toBe(0.92);
   });
 
@@ -159,6 +160,8 @@ describe('recommendCrossReference (B0-85)', () => {
     expect(result.declineReason).toBeNull();
     expect(result.candidates).toHaveLength(2);
     expect(result.candidates[0].betcoProductKey).toBe('A');
+    expect(result.candidates[0].tier).toBe('primary'); // B0-663
+    expect(result.candidates[1].tier).toBe('alternate');
     expect(result.evidence.source).toBe('web');
 
     // B0-292 — the actual pages found (query + title/url/snippet), for the tool trace to carry
@@ -257,6 +260,33 @@ describe('recommendCrossReference (B0-85)', () => {
     );
     expect(result.candidates.map((c) => c.betcoProductKey)).toEqual(['A']);
     expect(result.evidence.droppedCandidates).toBe(1);
+  });
+
+  it('B0-663: caps web-grounded candidates at 3 (1 primary + 2 alternates), never an undifferentiated list', async () => {
+    // Five grounded candidates, already sorted descending by similarity (as rankCandidates produces).
+    const result = await recommendCrossReference(
+      { competitorProduct: 'Cleaner X', competitorBrand: 'Acme' },
+      {
+        lookupInternal: async () => legacyMiss,
+        ...webVia([
+          candidate(0.97, 'A'),
+          candidate(0.95, 'B'),
+          candidate(0.93, 'C'),
+          candidate(0.9, 'D'),
+          candidate(0.85, 'E'),
+        ]),
+      },
+    );
+    expect(result.candidates).toHaveLength(3);
+    expect(result.candidates.map((c) => c.betcoProductKey)).toEqual(['A', 'B', 'C']);
+    expect(result.candidates.map((c) => c.rank)).toEqual([1, 2, 3]);
+    expect(result.candidates.map((c) => c.tier)).toEqual(['primary', 'alternate', 'alternate']);
+    // Scoring/gating still sees the FULL grounded pool (5), not just the capped top-3 output — the
+    // deliberate B0-663 choice so confidence-gating behavior is unchanged by the output cap.
+    // candidateAgreement = mean similarity of all 5 (0.92), not just the top 3 (0.95).
+    const score = result.evidence.score as { candidateAgreement: number };
+    expect(score.candidateAgreement).toBeCloseTo(0.92, 3);
+    expect(result.evidence.cappedCount).toBe(2);
   });
 
   it('B0-353: a validator that requires human review forces status=escalated and declines', async () => {

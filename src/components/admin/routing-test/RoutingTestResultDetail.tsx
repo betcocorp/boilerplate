@@ -82,6 +82,29 @@ export function RoutingTestResultDetail({
         </>
       ) : null}
 
+      {detail?.kind === 'llm' ? (
+        <>
+          <p>
+            <span className="font-medium text-slate-800">Source:</span>{' '}
+            <code className="rounded bg-slate-100 px-1 py-0.5">
+              {detail.source}
+            </code>{' '}
+            <span className="text-slate-400">|</span>{' '}
+            <span className="font-medium text-slate-800">Confidence:</span>{' '}
+            {formatScore(detail.confidence)}
+          </p>
+          <p className="text-slate-500">
+            {detail.model ? `Model: ${detail.model}` : 'No model call (fallback)'}
+            {detail.suggestedTool ? ` · Suggested tool: ${detail.suggestedTool}` : ''}
+          </p>
+          {detail.fallbackReason ? (
+            <p className="text-amber-700">
+              Fallback reason: {detail.fallbackReason}
+            </p>
+          ) : null}
+        </>
+      ) : null}
+
       {!detail && !error ? (
         <span className="text-slate-500">No router detail reported.</span>
       ) : null}
