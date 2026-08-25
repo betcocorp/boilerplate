@@ -1,7 +1,6 @@
 import { connection } from 'next/server';
 
 import { RoutingTestActionToast } from '~/components/admin/routing-test/RoutingTestActionToast';
-import { RoutingTestRunHistory } from '~/components/admin/routing-test/RoutingTestRunHistory';
 import { RoutingTestWorkbench } from '~/components/admin/routing-test/RoutingTestWorkbench';
 import { ROUTING_TEST_PATH } from '~/lib/routing-test/constants';
 import {
@@ -63,9 +62,8 @@ export default async function AdminRoutingTestPage({ searchParams }: PageProps) 
           defaultRouterType={defaultRouterType}
           items={items}
           returnPath={ROUTING_TEST_PATH}
+          runs={runs}
         />
-
-        <RoutingTestRunHistory runs={runs} />
       </main>
     </div>
   );

@@ -1,44 +1,36 @@
 'use client';
 
-import { AlertTriangleIcon, PlayIcon } from 'lucide-react';
+import { AlertTriangleIcon } from 'lucide-react';
 import { useMemo, useState, useTransition } from 'react';
 import { toast } from 'sonner';
 
 import { AddRoutingTestItemDialog } from '~/components/admin/routing-test/AddRoutingTestItemDialog';
 import { RoutingTestItemsTable } from '~/components/admin/routing-test/RoutingTestItemsTable';
-import { Button } from '~/components/ui/button';
-import { Label } from '~/components/ui/label';
-import { NativeSelect } from '~/components/ui/native-select';
-import { Spinner } from '~/components/ui/spinner';
-import supportedModels, {
-  MODEL_DESCRIPTIONS,
-  type ExplicitBexModelTag,
-  type SupportedModel,
-} from '~/lib/constants/models';
+import { RoutingTestRunHistory } from '~/components/admin/routing-test/RoutingTestRunHistory';
+import { MODEL_DESCRIPTIONS, type ExplicitBexModelTag } from '~/lib/constants/models';
 import { runRoutingTestAction } from '~/lib/routing-test/actions';
 import {
-  ROUTING_TEST_ACCURACY_TONE_CLASSES,
   ROUTING_TEST_ROUTER_LABELS,
 } from '~/lib/routing-test/constants';
-import { formatRoutingTestAccuracy, routingTestAccuracyTone } from '~/lib/routing-test/scoring';
+import { formatRoutingTestAccuracy } from '~/lib/routing-test/scoring';
 import type {
   RoutingTestItemRecord,
   RoutingTestItemResult,
   RoutingTestRouterType,
   RoutingTestRunResult,
+  RoutingTestRunRecord,
 } from '~/lib/routing-test/types';
 
 /** B0-671 — default selection for the LLM router's model picker; mirrors `TestRunModelControls`. */
-const DEFAULT_ROUTING_TEST_MODEL_TAG: ExplicitBexModelTag = 'gpt-4.1';
+const DEFAULT_ROUTING_TEST_MODEL_TAG: ExplicitBexModelTag = 'gpt-4.1-mini';
 
 type RoutingTestWorkbenchProps = {
   items: RoutingTestItemRecord[];
+  runs: RoutingTestRunRecord[];
   returnPath: string;
   /** Current `ROUTER_TYPE` setting (B0-656) — the select's initial value. */
   defaultRouterType: RoutingTestRouterType;
 };
-
-const ROUTER_TYPES: RoutingTestRouterType[] = ['keyword', 'semantic', 'llm'];
 
 /** Router types that can report themselves unavailable at runtime (every non-keyword router). */
 type DegradableRouterType = Exclude<RoutingTestRouterType, 'keyword'>;
@@ -49,6 +41,7 @@ function isDegradableRouterType(value: RoutingTestRouterType): value is Degradab
 
 export function RoutingTestWorkbench({
   items,
+  runs,
   returnPath,
   defaultRouterType,
 }: RoutingTestWorkbenchProps) {
@@ -120,108 +113,47 @@ export function RoutingTestWorkbench({
   return (
     <div className="flex flex-col gap-6">
       <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-          <div className="flex flex-col gap-2 sm:max-w-xs sm:flex-1">
-            <Label htmlFor="routing-test-router-type">Router</Label>
-            <NativeSelect
-              id="routing-test-router-type"
-              onChange={(event) =>
-                setRouterType(event.target.value as RoutingTestRouterType)
-              }
-              value={routerType}
-            >
-              {ROUTER_TYPES.map((type) => {
-                const unavailable =
-                  isDegradableRouterType(type) && unavailableByRouter[type] !== undefined;
-                return (
-                  <option disabled={unavailable} key={type} value={type}>
-                    {ROUTING_TEST_ROUTER_LABELS[type]}
-                    {unavailable ? ' (unavailable)' : ''}
-                  </option>
-                );
-              })}
-            </NativeSelect>
-            <p className="text-xs text-slate-500">
-              Defaults to the current <code>ROUTER_TYPE</code> setting (
-              {ROUTING_TEST_ROUTER_LABELS[defaultRouterType]}). Keyword routing
-              is instant; semantic and LLM routing each make one call per item
-              and run a few at a time.
-            </p>
-          </div>
-
-          {/*
-           * B0-671 — model picker for the LLM router only, mirroring `TestRunModelControls`
-           * (`~/components/admin/tests/TestRunModelControls.tsx`) off the same canonical
-           * `~/lib/constants/models.ts` list. `preview` is not offered here — an explicit choice is
-           * the point of this selector (see `routingTestModelTagSchema`).
-           */}
+        <div className="mb-4 flex flex-col gap-1">
+          <p className="text-xs text-slate-500">
+            Defaults to the current <code>ROUTER_TYPE</code> setting (
+            {ROUTING_TEST_ROUTER_LABELS[defaultRouterType]}). Keyword routing
+            is instant; semantic and LLM routing each make one call per item
+            and run a few at a time.
+          </p>
           {routerType === 'llm' ? (
-            <div className="flex flex-col gap-2 sm:max-w-xs sm:flex-1">
-              <Label htmlFor="routing-test-model-tag">Model</Label>
-              <NativeSelect
-                id="routing-test-model-tag"
-                onChange={(event) =>
-                  setModelTag(event.target.value as ExplicitBexModelTag)
-                }
-                value={modelTag}
-              >
-                {supportedModels.map((m: SupportedModel) => (
-                  <option key={m.name} value={m.name}>
-                    {m.label}
-                  </option>
-                ))}
-              </NativeSelect>
-              <p className="text-xs text-slate-500">{MODEL_DESCRIPTIONS[modelTag]}</p>
-            </div>
+            <p className="text-xs text-slate-500">
+              {MODEL_DESCRIPTIONS[modelTag]}
+            </p>
           ) : null}
-
-          <div className="flex items-center gap-3">
-            {run?.ok ? (
-              <p
-                className={`text-sm font-medium ${ROUTING_TEST_ACCURACY_TONE_CLASSES[routingTestAccuracyTone(run.summary.accuracy)]}`}
-              >
-                {formatRoutingTestAccuracy(run.summary)}
-              </p>
-            ) : null}
-            <Button
-              disabled={isRunning || items.length === 0}
-              onClick={handleRun}
-              type="button"
-            >
-              {isRunning ? (
-                <Spinner className="size-4" />
-              ) : (
-                <PlayIcon className="size-4" />
-              )}
-              {isRunning ? 'Running…' : 'Run'}
-            </Button>
-          </div>
         </div>
 
-        {(Object.entries(unavailableByRouter) as [DegradableRouterType, string][]).map(
-          ([type, reason]) => (
-            <p
-              className="mt-4 flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800"
-              key={type}
-            >
-              <AlertTriangleIcon className="mt-0.5 size-4 shrink-0" />
-              <span>
-                {ROUTING_TEST_ROUTER_LABELS[type]} router unavailable: {reason} —
-                reload once it is deployed to re-enable the option.
-              </span>
-            </p>
-          ),
-        )}
+        {(
+          Object.entries(unavailableByRouter) as [
+            DegradableRouterType,
+            string,
+          ][]
+        ).map(([type, reason]) => (
+          <p
+            className="flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800"
+            key={type}
+          >
+            <AlertTriangleIcon className="mt-0.5 size-4 shrink-0" />
+            <span>
+              {ROUTING_TEST_ROUTER_LABELS[type]} router unavailable: {reason} —
+              reload once it is deployed to re-enable the option.
+            </span>
+          </p>
+        ))}
 
         {run?.ok && run.warning ? (
-          <p className="mt-4 flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">
+          <p className="flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">
             <AlertTriangleIcon className="mt-0.5 size-4 shrink-0" />
             <span>{run.warning}</span>
           </p>
         ) : null}
 
         {run?.ok && run.items.length > 0 ? (
-          <p className="mt-4 text-xs text-slate-500">
+          <p className="text-xs text-slate-500">
             {ROUTING_TEST_ROUTER_LABELS[run.routerType]} router ·{' '}
             {new Date(run.ranAt).toLocaleString()} · this inline result is
             replaced by the next run, but has also been saved — reload to see
@@ -229,6 +161,19 @@ export function RoutingTestWorkbench({
           </p>
         ) : null}
       </section>
+
+      <RoutingTestRunHistory
+        runs={runs}
+        routerType={routerType}
+        onRouterTypeChange={setRouterType}
+        modelTag={modelTag}
+        onModelTagChange={setModelTag}
+        onRun={handleRun}
+        isRunning={isRunning}
+        run={run}
+        unavailableByRouter={unavailableByRouter}
+        items={items}
+      />
 
       <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
