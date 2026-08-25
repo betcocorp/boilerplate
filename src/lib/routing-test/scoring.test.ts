@@ -7,6 +7,7 @@ import {
   isRoutingTestItemPass,
   mapWithConcurrency,
   normalizeRoutedAgent,
+  routingTestAccuracyTone,
 } from '~/lib/routing-test/scoring';
 
 describe('normalizeRoutedAgent (B0-659)', () => {
@@ -118,6 +119,28 @@ describe('formatRoutingTestAccuracy', () => {
     expect(formatRoutingTestAccuracy(computeRoutingTestSummary([], 0))).toBe(
       '0/0 correct — 0%',
     );
+  });
+});
+
+describe('routingTestAccuracyTone (B0-670)', () => {
+  it('is "good" strictly above 80%', () => {
+    expect(routingTestAccuracyTone(0.801)).toBe('good');
+    expect(routingTestAccuracyTone(1)).toBe('good');
+  });
+
+  it('is "neutral" at exactly 80% (not strictly above the threshold)', () => {
+    expect(routingTestAccuracyTone(0.8)).toBe('neutral');
+  });
+
+  it('is "neutral" between the two thresholds', () => {
+    expect(routingTestAccuracyTone(0.6)).toBe('neutral');
+    expect(routingTestAccuracyTone(0.51)).toBe('neutral');
+  });
+
+  it('is "bad" at or below 50%', () => {
+    expect(routingTestAccuracyTone(0.5)).toBe('bad');
+    expect(routingTestAccuracyTone(0.2)).toBe('bad');
+    expect(routingTestAccuracyTone(0)).toBe('bad');
   });
 });
 

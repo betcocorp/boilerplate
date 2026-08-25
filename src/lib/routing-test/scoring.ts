@@ -76,6 +76,22 @@ export function formatRoutingTestRunScore(
   return `${passed}/${total} ${percent}%`;
 }
 
+/** Traffic-light tone for an accuracy figure (B0-670). See `routingTestAccuracyTone`. */
+export type RoutingTestAccuracyTone = 'good' | 'neutral' | 'bad';
+
+/**
+ * B0-670 — maps a 0-1 accuracy fraction to a traffic-light tone: `'good'` strictly above 80%,
+ * `'bad'` at or below 50%, `'neutral'` (the render site's current color) in between. Shared by the
+ * live workbench result (`RoutingTestWorkbench.tsx`) and the run-history score column
+ * (`RoutingTestRunHistory.tsx`) so both apply identical thresholds — see
+ * `ROUTING_TEST_ACCURACY_TONE_CLASSES` (`./constants.ts`) for the Tailwind class each tone maps to.
+ */
+export function routingTestAccuracyTone(accuracy: number): RoutingTestAccuracyTone {
+  if (accuracy > 0.8) return 'good';
+  if (accuracy <= 0.5) return 'bad';
+  return 'neutral';
+}
+
 /**
  * Runs `worker` over `inputs` with at most `limit` in flight, preserving input order in the output.
  * The keyword router is synchronous, but the semantic router costs one embedding call per item —
