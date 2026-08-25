@@ -9,8 +9,10 @@ vi.mock('~/supabase/clients/service-role', () => ({
 }));
 
 import {
+  DEFAULT_ROUTER_TYPE,
   getBooleanSetting,
   getNumberSetting,
+  getRouterType,
   getStringSetting,
   resetSettingsCacheForTest,
 } from '~/lib/settings/settings-service';
@@ -80,6 +82,37 @@ describe('getNumberSetting', () => {
   });
 });
 
+describe('getRouterType (B0-656)', () => {
+  it('returns each allowed router type as stored', async () => {
+    mockRow('keyword');
+    expect(await getRouterType()).toBe('keyword');
+    resetSettingsCacheForTest();
+    mockRow('semantic');
+    expect(await getRouterType()).toBe('semantic');
+  });
+
+  it('normalizes surrounding whitespace and casing', async () => {
+    mockRow('  SEMANTIC ');
+    expect(await getRouterType()).toBe('semantic');
+  });
+
+  it('coerces an unrecognized stored value back to keyword (allowed_values is not a DB constraint)', async () => {
+    for (const stored of ['llm', 'hybrid', '', 'true']) {
+      resetSettingsCacheForTest();
+      mockRow(stored);
+      expect(await getRouterType(), stored).toBe('keyword');
+    }
+  });
+
+  it('falls back to keyword when the row is missing or the query errors', async () => {
+    mockRow(null);
+    expect(await getRouterType()).toBe(DEFAULT_ROUTER_TYPE);
+    resetSettingsCacheForTest();
+    mockRow(null, { message: 'db down' });
+    await expect(getRouterType()).resolves.toBe('keyword');
+  });
+});
+
 describe('caching', () => {
   it('serves a second call to the same key from cache, without re-querying', async () => {
     mockRow('true');
@@ -111,6 +144,8 @@ describe('settings-table coverage does not regress to process.env (B0-638)', () 
     'ENABLE_RERANKER',
     'NEXT_PUBLIC_BEX_AI_ELEMENTS_UI',
     'NEXT_PUBLIC_BEX_STREAMING_ROLLOUT_COHORT',
+    // B0-656 — read through getRouterType(); no process.env.ROUTER_TYPE read has ever existed.
+    'ROUTER_TYPE',
     'WEBSEARCH_DB_CACHE_ENABLED',
     'WEBSEARCH_PROVIDER',
     'XREF_RECOMMENDATION_TIMEOUT_MS',

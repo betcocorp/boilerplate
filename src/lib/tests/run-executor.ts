@@ -2,6 +2,10 @@ import { after } from 'next/server';
 
 import { logWarn } from '~/lib/observability/logger';
 import { classifyUserIntent, type IntentClassification } from '~/lib/orchestrator/intent-classifier';
+import {
+  classifyUserIntentSemantic,
+  type SemanticRouteDecision,
+} from '~/lib/orchestrator/semantic-router';
 import { routeUserMessageToSme, type SmeRouteDecision } from '~/lib/orchestrator/sme-routing';
 
 import {
@@ -24,13 +28,15 @@ import {
   normalizeKeywordRoute,
   resolveIntendedAgentLabel,
   type RoutingComparisonFields,
+  type SemanticRouteInstrumentation,
 } from './routing-comparison';
 import { isTerminalRunStatus } from './types';
 import type { NewTestResultItemRecord, TestItemRecord, TestRecord } from './types';
 
 /**
- * B0-501 — runs BOTH the keyword router (`routeUserMessageToSme`) and the LLM intent classifier
- * (`classifyUserIntent`) for a chat-style eval item, purely for instrumentation: neither call
+ * B0-501 / B0-652 — runs ALL THREE routers for a chat-style eval item: the keyword router
+ * (`routeUserMessageToSme`), the LLM intent classifier (`classifyUserIntent`) and the semantic
+ * router (`classifyUserIntentSemantic`), purely for instrumentation — no call
  * influences the answer already produced by `runSingleTestItem` above it (which goes through the
  * real `runBexChatTurn` → orchestrator path independently). Ground truth is resolved once per item
  * from `test_items.intended_agent_item` (B0-498), falling back to the suite-level `tests.intended_agent`.
@@ -78,12 +84,47 @@ async function computeRoutingComparisonForItem(
   // informative latency sample, not a missing one (only a thrown-before-start case has no timing).
   const llmRouteLatencyMs = Math.round(performance.now() - llmStartedAt);
 
+  /**
+   * B0-652 — third router in the comparison. `classifyUserIntentSemantic` is contracted never to
+   * throw (it degrades to `path: 'fallback'`, `route: 'ambiguous'`, `error: <reason>`), and its own
+   * `latencyMs`/`embeddingMs`/`scoringMs` are used rather than a wrapper measurement so the
+   * embedding round-trip stays separable from the cosine pass — the ONLY way the ticket's ~10ms
+   * budget can be reported honestly.
+   *
+   * The catch below exists for the same reason as the LLM one above: a future contract change must
+   * not be able to take an eval run down. On that path the semantic fields are left UNSET (not
+   * zeroed), because "not measured" and "measured as ambiguous in 0ms" are different facts.
+   *
+   * Cost note: this is one embedding call per chat item on top of the existing chat turn and LLM
+   * classification. The B0-647 cache dedupes identical prompts within its TTL, and the router
+   * returns a cheap degraded decision when it isn't initialized/enabled.
+   */
+  let semanticDecision: SemanticRouteInstrumentation | null = null;
+  try {
+    const decision: SemanticRouteDecision = await classifyUserIntentSemantic(item.prompt, []);
+    semanticDecision = {
+      route: decision.route,
+      confidence: decision.confidence,
+      margin: decision.margin,
+      path: decision.path,
+      latencyMs: Math.round(decision.latencyMs),
+      embeddingMs: Math.round(decision.embeddingMs),
+      scoringMs: Math.round(decision.scoringMs),
+    };
+  } catch (error) {
+    logWarn('test_run_semantic_router_classification_failed', {
+      testItemId: item.id,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+
   return buildRoutingComparisonFields({
     keywordDecision,
     llmClassification,
     intendedAgentLabel,
     keywordRouteLatencyMs,
     llmRouteLatencyMs,
+    semanticDecision,
   });
 }
 

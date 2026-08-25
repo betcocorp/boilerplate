@@ -17,6 +17,11 @@ on:
       - 'src/lib/tools/**'
       - 'src/lib/agents/**'
       - 'src/lib/tests/**'
+      # B0-652 — the semantic router and the labeled golden set it is graded against.
+      - 'src/lib/orchestrator/semantic-router*.ts'
+      - 'src/lib/orchestrator/intent-classifier.ts'
+      - 'src/lib/orchestrator/sme-routing.ts'
+      - 'src/lib/training/**'
       - 'scripts/run-eval-gate.ts'
       - '.github/workflows/eval-gate.yml'
 
@@ -57,3 +62,67 @@ jobs:
           BEX_GATE_BASE_URL: ${{ secrets.BEX_GATE_BASE_URL }}
           BEX_GATE_API_TOKEN: ${{ secrets.BEX_GATE_API_TOKEN }}
           BEX_GATE_TEST_ID: ${{ secrets.BEX_GATE_TEST_ID }}
+
+  # B0-652 — semantic-router routing-accuracy gate. Deliberately a SEPARATE job from the
+  # golden-set floor check above: that one needs a deployed app (`BEX_GATE_BASE_URL`) because the
+  # chat eval runs server-side, whereas this one runs the routers in-process in the runner and so
+  # needs nothing but an OpenAI key. Consequently it is NOT behind that job's `if: false`.
+  #
+  # It executes via vitest rather than `node scripts/…` because the routers are app modules
+  # imported through the `~` alias, which the bare node runner cannot resolve (the same reason
+  # `run-eval-gate.ts` talks HTTP instead of importing anything).
+  #
+  # HONEST LIMITATION: with no `OPENAI_API_KEY` repo secret this job cannot grade anything, so it
+  # warns and passes rather than failing every PR on a missing credential. Until that secret is
+  # added it is a NO-OP, not a gate. Nothing else blocks it — no deployed environment, no test-suite
+  # id, no database.
+  semantic-routing-eval:
+    name: Semantic router routing accuracy (B0-652)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v3
+        with:
+          # Same pin and reasoning as the job above / release.yml.
+          version: '11.20.0'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check for the credentials this gate needs
+        id: guard
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -z "${OPENAI_API_KEY}" ]; then
+            echo "::warning title=Semantic router eval skipped::OPENAI_API_KEY is not set as a repository secret, so the semantic router cannot be embedded and this gate graded nothing. Add the secret to make this job able to fail."
+            echo "runnable=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "runnable=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run the golden set through the semantic router
+        if: steps.guard.outputs.runnable == 'true'
+        # Prints strict/lenient accuracy per route, the false-positive rate, the fallback rate and
+        # p50/p95/p99 for total/embedding/scoring latency, then exits non-zero if any check fails.
+        run: pnpm exec vitest run src/lib/tests/semantic-routing-eval.live.test.ts
+        env:
+          # Opt-in flag: without it the eval self-skips, which is what keeps `pnpm exec vitest run`
+          # offline for everyone else.
+          BEX_ROUTING_EVAL_LIVE: 'true'
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # Optional. Absent, the router's thresholds/embedding-model settings reads fall back to
+          # their in-code defaults (settings-service never throws) and the embedding cache runs
+          # in-memory only — both fine for a single-shot eval, just slower and using code defaults
+          # rather than whatever /admin/settings currently holds.
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          UPSTASH_REDIS_REST_URL: ${{ secrets.UPSTASH_REDIS_REST_URL }}
+          UPSTASH_REDIS_REST_TOKEN: ${{ secrets.UPSTASH_REDIS_REST_TOKEN }}

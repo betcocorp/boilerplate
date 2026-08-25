@@ -41,8 +41,13 @@ import {
   resolveRouterModel,
   resolveRouterTimeoutMs,
   type IntentClassification,
+  type IntentValue,
   type PriorTurnMessage,
 } from '~/lib/orchestrator/intent-classifier';
+import {
+  classifyUserIntentSemantic,
+  type SemanticRouteDecision,
+} from '~/lib/orchestrator/semantic-router';
 import {
   CATEGORY_MISMATCH_CONFIDENCE_CAP,
   evaluateRecommendationGate,
@@ -112,6 +117,16 @@ import {
   computePromptVersion,
   PROMPT_BUNDLE_VERSION,
 } from '~/lib/workflows/product-support/prompt-version';
+import {
+  buildSemanticRouterGate,
+  isSemanticRouterEnabled,
+  isSemanticRouterShadowMode,
+  logSemanticRouterDecision,
+  resolveSemanticRoute,
+  resolveSemanticRouterMode,
+  semanticRouterRationale,
+  semanticRouterRuntimeConfigFields,
+} from '~/lib/workflows/product-support/semantic-router-decision';
 import {
   evaluateRegulatedClaimGrounding,
   resolveRevisionModel,
@@ -1492,6 +1507,72 @@ export async function runProductSupportWorkflow(input: {
   // B0-389 — read once so the flag recorded as run config is the same value the gate below used.
   const earlyDeclineGateEnabled = isEarlyDeclineGateEnabled();
   /**
+   * B0-389/B0-649 — every routing flag is read ONCE here and reused for both the decision and the
+   * recorded run config, for the same reason `earlyDeclineGateEnabled` is (above): a second read
+   * could resolve differently (the `settings` cache expires mid-turn, or an admin flips a row) and
+   * the persisted trace would then describe a configuration the turn never ran under.
+   *
+   * Resolved CONCURRENTLY rather than as four sequential awaits: each getter is a `settings` row
+   * read behind a 30s cache, so on a cold cache four awaits in series put four Postgres
+   * round-trips on the critical path of every turn — a latency regression in the one epic whose
+   * whole point is removing latency from routing. `Promise.all` also means the two LLM flags are
+   * now always both read (previously `isLlmRouterShadowMode()` was short-circuited away when the
+   * router was disabled), which is what the gate record wants anyway: the recorded config should
+   * describe both levers, not leave one undefined because of evaluation order.
+   */
+  const [
+    llmRouterEnabled,
+    llmRouterShadowMode,
+    semanticRouterEnabledSetting,
+    semanticRouterShadowModeSetting,
+  ] = await Promise.all([
+    isLlmRouterEnabled(),
+    isLlmRouterShadowMode(),
+    isSemanticRouterEnabled(),
+    isSemanticRouterShadowMode(),
+  ]);
+
+  /**
+   * B0-649 — the semantic router's three-state rollout (see `semantic-router-decision.ts` for the
+   * full precedence contract):
+   *   `live`   — the semantic router decides; on `path: 'fallback'` the turn degrades to the
+   *              PRE-EXISTING chain (LLM classifier if enabled → keyword agent → `'ambiguous'`).
+   *   `shadow` — it runs and is logged, but the LLM/keyword routers still decide.
+   *   `off`    — never called; the code below is byte-identical to the pre-B0-649 path.
+   *
+   * `classifyUserIntentSemantic` shares `classifyUserIntent`'s safety contract: it never throws and
+   * degrades to `path: 'fallback'`, so this await cannot fail the turn.
+   *
+   * The call is AWAITED here in shadow mode too, rather than raced against the tool loop the way
+   * the B0-507 LLM shadow gate is. That is deliberate: B0-511 learned the hard way that a
+   * concurrent shadow call hides its own latency and timeouts (`intent-classifier.ts`'s
+   * `DEFAULT_BEX_ROUTER_TIMEOUT_MS` comment), so a shadow stage measured that way cannot answer the
+   * one question the B0-653 cutover turns on. Shadow mode therefore pays the router's real latency,
+   * which is exactly what it is there to measure.
+   */
+  const semanticRouterMode = resolveSemanticRouterMode({
+    enabled: semanticRouterEnabledSetting,
+    shadowMode: semanticRouterShadowModeSetting,
+    agentMode,
+  });
+  const priorTurnsForRouting = cappedHistory.map(
+    (m, index): PriorTurnMessage => ({
+      id: String(index),
+      role: m.role,
+      content: m.content,
+    }),
+  );
+  const semanticRouteDecision: SemanticRouteDecision | null =
+    semanticRouterMode === 'off'
+      ? null
+      : await classifyUserIntentSemantic(input.userMessage, priorTurnsForRouting);
+  /** Non-null only when the semantic router genuinely decided this turn (mode `live` + `path: 'semantic'`). */
+  const semanticRoute: IntentValue | null = resolveSemanticRoute(
+    semanticRouterMode,
+    semanticRouteDecision,
+  );
+
+  /**
    * B0-511 — the routing cutover: when the LLM router is enabled AND shadow mode is off (both the
    * defaults since 2026-08-18), the classifier's own intent becomes this turn's `routingDecision`
    * instead of the keyword router's. `classifyUserIntent` is the safety net here (see
@@ -1499,24 +1580,21 @@ export async function runProductSupportWorkflow(input: {
    * fallback internally and it never throws, so this await cannot fail the turn. Only applies in
    * `orchestrator` mode — a forced direct `agentMode` bypasses routing entirely, same as it always
    * has (and never spends a classifier call).
+   *
+   * B0-653 — `&& semanticRoute === null` is the cutover itself: once the semantic router has
+   * decided, the LLM classifier is NOT CALLED AT ALL (no model call, no token spend, no ~1.5s
+   * synchronous wait). It is still reached on a semantic FALLBACK, which is the whole point of
+   * degrading to the old chain rather than to `'ambiguous'`.
    */
   const llmRouterCutoverActive =
-    agentMode === 'orchestrator' && (await isLlmRouterEnabled()) && !(await isLlmRouterShadowMode());
+    agentMode === 'orchestrator' && llmRouterEnabled && !llmRouterShadowMode;
+  const llmClassifierWillDecide = llmRouterCutoverActive && semanticRoute === null;
   // Wall time this turn actually paid waiting on the classifier (a cache hit legitimately reads
   // ~0ms) — recorded on the live gate so the observability page answers the latency question the
   // cutover decision traded on, without needing server logs.
   const liveClassifierStartedAtMs = Date.now();
-  const liveIntentClassification: IntentClassification | null = llmRouterCutoverActive
-    ? await classifyUserIntent(
-        input.userMessage,
-        cappedHistory.map(
-          (m, index): PriorTurnMessage => ({
-            id: String(index),
-            role: m.role,
-            content: m.content,
-          }),
-        ),
-      )
+  const liveIntentClassification: IntentClassification | null = llmClassifierWillDecide
+    ? await classifyUserIntent(input.userMessage, priorTurnsForRouting)
     : null;
   const liveClassifierLatencyMs = Date.now() - liveClassifierStartedAtMs;
   /**
@@ -1527,9 +1605,16 @@ export async function runProductSupportWorkflow(input: {
    * post-cutover, and a cross-reference `suggestedTool` catches equivalence asks that routed to
    * another specialist (B0-339). The substring check survives only for turns the classifier did
    * not decide (kill-switch, shadow mode, or a degraded fallback), preserving the old world there.
+   *
+   * B0-649 — when the SEMANTIC router decided the turn, its route label is the only signal it
+   * offers (`SemanticRouteDecision` has no `suggestedTool` counterpart), so the keyword substring
+   * check is kept as an OR rather than dropped. That is deliberately the conservative direction:
+   * it cannot lose a cross-reference the old world would have caught, at the cost of keeping the
+   * substring check's known false positives on this path. See `src/docs/semantic-router-cutover.md`.
    */
-  const crossReferenceIntentForTurn =
-    liveIntentClassification && liveIntentClassification.source === 'llm'
+  const crossReferenceIntentForTurn = semanticRoute
+    ? semanticRoute === 'recommendations' || shouldForceCrossReferenceLookup(input.userMessage)
+    : liveIntentClassification && liveIntentClassification.source === 'llm'
       ? liveIntentClassification.intent === 'recommendations' ||
         liveIntentClassification.suggestedTool === 'lookup_cross_reference' ||
         liveIntentClassification.suggestedTool === 'recommend_cross_reference'
@@ -1537,10 +1622,25 @@ export async function runProductSupportWorkflow(input: {
   const earlyDeclineDecision = classifyEarlyDecline(input.userMessage, {
     crossReferenceIntent: crossReferenceIntentForTurn,
   });
+  /**
+   * B0-649 — precedence: semantic router (when it decided) → LLM classifier → keyword agent →
+   * `'ambiguous'`. The value space is unchanged (`IntentValue`), because everything downstream
+   * (`buildProductSupportInstructions`, `buildProductSupportPromptCacheKey`,
+   * `productSupportToolsForRoute`, `effectivePromptIdForDecision`, `computePromptVersion`, the
+   * recommendations gating) is keyed on it.
+   */
   const routingDecision =
     agentMode === 'orchestrator'
-      ? (liveIntentClassification?.intent ?? route.agent ?? 'ambiguous')
+      ? (semanticRoute ?? liveIntentClassification?.intent ?? route.agent ?? 'ambiguous')
       : agentMode;
+  /** Which router the value above came from — recorded on the semantic gate and the log line. */
+  const routingDecidedBy = semanticRoute
+    ? 'semantic_router'
+    : liveIntentClassification
+      ? 'llm_classifier'
+      : route.agent
+        ? 'keyword_router'
+        : 'ambiguous_fallback';
   // REC-4: the claims-validator requires RAG evidence for every assertion, which a competitive
   // recommendation (grounded by its cross-reference match, not by retrieved chunks) can't satisfy —
   // forcing it on made the validator reject the recommendation as "unsupported" and the not-approved
@@ -1562,12 +1662,28 @@ export async function runProductSupportWorkflow(input: {
     confidenceGatingDisabled: await isConfidenceGatingDisabled(),
     agentMode,
     routedDirectly: agentMode !== 'orchestrator',
+    // B0-649 — the semantic-router rollout state this run observed, from the SAME flag reads the
+    // decision above used.
+    ...semanticRouterRuntimeConfigFields({
+      mode: semanticRouterMode,
+      enabled: semanticRouterEnabledSetting,
+      shadowMode: semanticRouterShadowModeSetting,
+      decision: semanticRouteDecision,
+      decidedRoute: semanticRoute,
+    }),
   };
+  /**
+   * B0-649 — same precedence as `routingDecision`: whoever decided explains the turn. A semantic
+   * FALLBACK deliberately does not claim the rationale (it did not decide) — the classifier/keyword
+   * sentence stands, and the fallback itself is explained by the semantic gate record below.
+   */
   const routingRationale =
     agentMode === 'orchestrator'
-      ? liveIntentClassification
-        ? `LLM intent classifier (${liveIntentClassification.source}, confidence ${liveIntentClassification.confidence}) routed to "${liveIntentClassification.intent}".`
-        : route.rationale
+      ? semanticRoute && semanticRouteDecision
+        ? semanticRouterRationale(semanticRouteDecision)
+        : liveIntentClassification
+          ? `LLM intent classifier (${liveIntentClassification.source}, confidence ${liveIntentClassification.confidence}) routed to "${liveIntentClassification.intent}".`
+          : route.rationale
       : `Forced direct routing to ${agentMode} specialist by admin selection.`;
   const instructions = buildProductSupportInstructions({
     mode: agentMode,
@@ -1642,17 +1758,23 @@ export async function runProductSupportWorkflow(input: {
     },
     verdict:
       agentMode === 'orchestrator'
-        ? llmRouterCutoverActive
-          ? 'overridden_by_llm_cutover'
-          : route.decisionPath
+        ? // B0-649 — the semantic router, when it decided, is what overrode the keyword scores;
+          // saying "llm cutover" there would misattribute the override.
+          semanticRoute
+          ? 'overridden_by_semantic_router'
+          : llmRouterCutoverActive
+            ? 'overridden_by_llm_cutover'
+            : route.decisionPath
         : 'overridden_by_direct_mode',
     effect:
       agentMode === 'orchestrator'
-        ? llmRouterCutoverActive
-          ? `LLM routing cutover active; keyword scores computed for comparison only (would have routed to "${route.agent ?? 'ambiguous'}").`
-          : route.agent
-            ? `Routed to the ${route.agent} specialist; ran the ${effectivePromptId} prompt.`
-            : `No keyword signal fired, so routingDecision is "ambiguous" — the ${effectivePromptId} specialist prompt ran by fallthrough, while the model was told "No specialist keywords matched".`
+        ? semanticRoute
+          ? `Semantic router decided this turn; keyword scores computed for comparison only (would have routed to "${route.agent ?? 'ambiguous'}").`
+          : llmRouterCutoverActive
+            ? `LLM routing cutover active; keyword scores computed for comparison only (would have routed to "${route.agent ?? 'ambiguous'}").`
+            : route.agent
+              ? `Routed to the ${route.agent} specialist; ran the ${effectivePromptId} prompt.`
+              : `No keyword signal fired, so routingDecision is "ambiguous" — the ${effectivePromptId} specialist prompt ran by fallthrough, while the model was told "No specialist keywords matched".`
         : `Admin forced direct \`${agentMode}\` routing, so the keyword scores did not decide; ran the ${effectivePromptId} prompt.`,
   };
 
@@ -1689,6 +1811,33 @@ export async function runProductSupportWorkflow(input: {
             : `Routing cutover DEGRADED: the LLM call fell back to the keyword router (${liveIntentClassification.fallbackReason ?? 'unknown reason'}, ${liveClassifierLatencyMs}ms), so this turn was still routed to "${liveIntentClassification.intent}" by keyword scoring.`,
       }
     : null;
+
+  /**
+   * B0-651 — the persisted, queryable record of this turn's semantic routing decision (every route's
+   * similarity, confidence, margin, per-threshold pass/fail, path, and the latency split), plus the
+   * matching real-time structured log line. Emitted for BOTH rollout stages: `semantic_router_live`
+   * when the router decided (or degraded while live), `semantic_router_shadow` when it only
+   * compared. `null` — and therefore no log line and no gate — when the router never ran.
+   */
+  const semanticRouterGate: GateRecord | null =
+    semanticRouterMode !== 'off' && semanticRouteDecision
+      ? buildSemanticRouterGate({
+          mode: semanticRouterMode,
+          decision: semanticRouteDecision,
+          routingDecision,
+          decidedBy: routingDecidedBy,
+        })
+      : null;
+  if (semanticRouterMode !== 'off' && semanticRouteDecision) {
+    logSemanticRouterDecision({
+      mode: semanticRouterMode,
+      decision: semanticRouteDecision,
+      routingDecision,
+      decidedBy: routingDecidedBy,
+      traceId: input.traceId,
+      conversationId: input.conversationId,
+    });
+  }
 
   const model = resolveResponsesModel(input.modelTag);
   const client = getOpenAIClient();
@@ -1826,6 +1975,8 @@ export async function runProductSupportWorkflow(input: {
       ...recordGates([
         keywordRoutingGate,
         ...(intentClassifierLiveGate ? [intentClassifierLiveGate] : []),
+        // B0-651 — the semantic router's own record, on the one step every run has.
+        ...(semanticRouterGate ? [semanticRouterGate] : []),
       ]),
       /**
        * B0-563 — `classifyUserIntent`'s live model call was previously uncounted: this is the
@@ -2233,20 +2384,12 @@ export async function runProductSupportWorkflow(input: {
      * `resolvedCompetitorPromise` prefetch above, and is only awaited later, right before the
      * agent step is persisted (see `shadowIntentClassification` below).
      */
-    const shadowIntentClassificationEnabled =
-      (await isLlmRouterEnabled()) && (await isLlmRouterShadowMode());
+    // B0-649 — reuses the single flag read at the top of the run (see `llmRouterEnabled`), so the
+    // shadow gate can never describe a different flag state than the routing decision did.
+    const shadowIntentClassificationEnabled = llmRouterEnabled && llmRouterShadowMode;
     const shadowIntentClassificationPromise: Promise<IntentClassification> | null =
       shadowIntentClassificationEnabled
-        ? classifyUserIntent(
-            input.userMessage,
-            cappedHistory.map(
-              (m, index): PriorTurnMessage => ({
-                id: String(index),
-                role: m.role,
-                content: m.content,
-              }),
-            ),
-          )
+        ? classifyUserIntent(input.userMessage, priorTurnsForRouting)
         : null;
 
     /**

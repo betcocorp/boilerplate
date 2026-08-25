@@ -48,6 +48,79 @@ export function resolveIntendedAgentLabel(params: {
   return testLabel ? testLabel : null;
 }
 
+/**
+ * B0-652 — the plain-field slice of `SemanticRouteDecision` (`~/lib/orchestrator/semantic-router`)
+ * this module needs. Deliberately a LOCAL structural type rather than an import: every reducer
+ * below then stays unit-testable without the router module (and without an embedding call), exactly
+ * as `normalizeKeywordRoute` takes a `Pick<SmeRouteDecision, 'agent'>` instead of the whole
+ * decision. The run-executor call site is the only place that touches the real decision object.
+ */
+export type SemanticRouteInstrumentation = {
+  /** `SmeAgentId | 'ambiguous'` — `'ambiguous'` whenever the router took the fallback path. */
+  route: string;
+  confidence: number;
+  margin: number;
+  /** `'semantic'` = BOTH thresholds passed and the router committed; `'fallback'` = it gave up. */
+  path: string;
+  /** Total ms the caller waited (embedding round-trip + scoring). */
+  latencyMs?: number | null;
+  /** The embedding-call portion of `latencyMs` — network-bound, and the reason a cold route can
+   * never meet a 10ms budget. */
+  embeddingMs?: number | null;
+  /** The cosine-scoring portion of `latencyMs` — no I/O; the only part a ≤10ms budget applies to. */
+  scoringMs?: number | null;
+};
+
+/**
+ * B0-652 — categorical three-way agreement label. Not a boolean: with three routers, WHICH pair
+ * agreed is the informative part during a cutover ("semantic already tracks the LLM classifier" is
+ * a very different story from "semantic tracks the keyword router the LLM disagrees with").
+ */
+export const ROUTING_AGREEMENT_VALUES = [
+  'all_agree',
+  'keyword_llm',
+  'keyword_semantic',
+  'llm_semantic',
+  'all_differ',
+] as const;
+
+export type RoutingAgreement = (typeof ROUTING_AGREEMENT_VALUES)[number];
+
+/**
+ * Reduces the three router routes to one agreement label. Returns `null` when fewer than two of the
+ * three are present — with one route there is nothing to agree about, and calling that `'all_differ'`
+ * would inflate the disagreement count with items that were never compared.
+ */
+export function computeRoutingAgreement(params: {
+  keywordRoute: string | null | undefined;
+  llmRoute: string | null | undefined;
+  semanticRoute: string | null | undefined;
+}): RoutingAgreement | null {
+  const keyword = params.keywordRoute ?? null;
+  const llm = params.llmRoute ?? null;
+  const semantic = params.semanticRoute ?? null;
+  const presentCount = [keyword, llm, semantic].filter((route) => route !== null).length;
+  if (presentCount < 2) {
+    return null;
+  }
+
+  const keywordLlm = keyword !== null && llm !== null && keyword === llm;
+  const keywordSemantic = keyword !== null && semantic !== null && keyword === semantic;
+  const llmSemantic = llm !== null && semantic !== null && llm === semantic;
+
+  if (presentCount === 3 && keywordLlm && keywordSemantic) {
+    return 'all_agree';
+  }
+  // With only two routes present, the pair matching IS total agreement for this item.
+  if (presentCount === 2 && (keywordLlm || keywordSemantic || llmSemantic)) {
+    return 'all_agree';
+  }
+  if (keywordLlm) return 'keyword_llm';
+  if (keywordSemantic) return 'keyword_semantic';
+  if (llmSemantic) return 'llm_semantic';
+  return 'all_differ';
+}
+
 export type RoutingComparisonFields = {
   keyword_route: RoutingLabel;
   llm_route: RoutingLabel;
@@ -59,13 +132,26 @@ export type RoutingComparisonFields = {
   /** B0-524 — wall-clock ms for the `classifyUserIntent` call, including cache-hit and
    * keyword-fallback paths (both still measured — a fast fallback is a real, informative data point). */
   llm_route_latency_ms?: number | null;
+  /**
+   * B0-652 — semantic-router columns. Optional in the same spirit as B0-524's latency fields, and
+   * OMITTED ENTIRELY (not set to null) when no semantic decision was passed, so an eval run made
+   * before the semantic router existed inserts exactly the rows it used to.
+   */
+  semantic_route?: string | null;
+  semantic_confidence?: number | null;
+  semantic_margin?: number | null;
+  semantic_path?: string | null;
+  semantic_route_latency_ms?: number | null;
+  semantic_embedding_ms?: number | null;
+  semantic_scoring_ms?: number | null;
+  routing_agreement?: RoutingAgreement | null;
 };
 
 /**
  * Builds the B0-501-computed `test_result_items` columns (`routing_decision` is not among
  * them — it is generated from `response_payload`, not written by this instrumentation) from one
  * keyword decision + one LLM classification + the resolved ground-truth label, plus the B0-524
- * per-router latencies measured at the call site.
+ * per-router latencies measured at the call site and (B0-652) an optional semantic-router decision.
  */
 export function buildRoutingComparisonFields(params: {
   keywordDecision: Pick<SmeRouteDecision, 'agent'>;
@@ -73,14 +159,37 @@ export function buildRoutingComparisonFields(params: {
   intendedAgentLabel: string | null;
   keywordRouteLatencyMs?: number | null;
   llmRouteLatencyMs?: number | null;
+  /** B0-652 — omit (or pass null) when the semantic router was not consulted for this item. */
+  semanticDecision?: SemanticRouteInstrumentation | null;
 }): RoutingComparisonFields {
-  return {
+  const fields: RoutingComparisonFields = {
     keyword_route: normalizeKeywordRoute(params.keywordDecision),
     llm_route: params.llmClassification.intent,
     routing_confidence: params.llmClassification.confidence,
     intended_agent_label: params.intendedAgentLabel,
     keyword_route_latency_ms: params.keywordRouteLatencyMs ?? null,
     llm_route_latency_ms: params.llmRouteLatencyMs ?? null,
+  };
+
+  const semantic = params.semanticDecision;
+  if (!semantic) {
+    return fields;
+  }
+
+  return {
+    ...fields,
+    semantic_route: semantic.route,
+    semantic_confidence: semantic.confidence,
+    semantic_margin: semantic.margin,
+    semantic_path: semantic.path,
+    semantic_route_latency_ms: semantic.latencyMs ?? null,
+    semantic_embedding_ms: semantic.embeddingMs ?? null,
+    semantic_scoring_ms: semantic.scoringMs ?? null,
+    routing_agreement: computeRoutingAgreement({
+      keywordRoute: fields.keyword_route,
+      llmRoute: fields.llm_route,
+      semanticRoute: semantic.route,
+    }),
   };
 }
 
@@ -100,6 +209,9 @@ export type RoutingComparisonReportInput = {
   routingDecision: string | null;
   keywordRoute: string | null;
   llmRoute: string | null;
+  /** B0-652 — `undefined` means "the semantic router was never consulted for this item", which is
+   * scored differently from `null`/`'ambiguous'`: an un-consulted router is excluded, not wrong. */
+  semanticRoute?: string | null;
 };
 
 export type RoutingComparisonMismatch = {
@@ -111,6 +223,8 @@ export type RoutingComparisonMismatch = {
   keywordRoute: string | null;
   llmRoute: string | null;
   routingDecision: string | null;
+  /** B0-652 — undefined on items with no semantic instrumentation. */
+  semanticRoute?: string | null;
 };
 
 export type RoutingComparisonReport = {
@@ -119,9 +233,15 @@ export type RoutingComparisonReport = {
   keywordMatchedCount: number;
   llmMatchedCount: number;
   actualMatchedCount: number;
+  /** B0-652 — scored items that ALSO carry a semantic route; the denominator for `semanticAccuracy`
+   * (smaller than `scoredItemCount` on runs where only some items were instrumented). */
+  semanticScoredItemCount: number;
+  semanticMatchedCount: number;
   /** `keywordMatchedCount / scoredItemCount`, or null when nothing in the run has ground truth. */
   keywordAccuracy: number | null;
   llmAccuracy: number | null;
+  /** B0-652 — `semanticMatchedCount / semanticScoredItemCount`; null when no item was instrumented. */
+  semanticAccuracy: number | null;
   /** How often the REAL routing decision (whatever generated the answer) matched ground truth. */
   actualAccuracy: number | null;
   /** Items where keyword_route and llm_route were both present and agreed with each other
@@ -139,6 +259,8 @@ export function computeRoutingComparisonReport(
   let keywordMatchedCount = 0;
   let llmMatchedCount = 0;
   let actualMatchedCount = 0;
+  let semanticScoredItemCount = 0;
+  let semanticMatchedCount = 0;
   let agreementCount = 0;
   let comparableCount = 0;
   const mismatches: RoutingComparisonMismatch[] = [];
@@ -164,7 +286,18 @@ export function computeRoutingComparisonReport(
     if (llmMatch) llmMatchedCount += 1;
     if (actualMatch) actualMatchedCount += 1;
 
-    if (!keywordMatch || !llmMatch) {
+    // B0-652 — an item with no semantic instrumentation is neither a hit nor a miss; it is out of
+    // the semantic denominator entirely, and it cannot make the item a mismatch.
+    const semanticEvaluated =
+      item.semanticRoute !== undefined && item.semanticRoute !== null;
+    let semanticMatch = true;
+    if (semanticEvaluated) {
+      semanticScoredItemCount += 1;
+      semanticMatch = item.semanticRoute === label;
+      if (semanticMatch) semanticMatchedCount += 1;
+    }
+
+    if (!keywordMatch || !llmMatch || !semanticMatch) {
       mismatches.push({
         resultItemId: item.resultItemId,
         testItemId: item.testItemId,
@@ -174,6 +307,7 @@ export function computeRoutingComparisonReport(
         keywordRoute: item.keywordRoute,
         llmRoute: item.llmRoute,
         routingDecision: item.routingDecision,
+        semanticRoute: item.semanticRoute,
       });
     }
   }
@@ -183,8 +317,12 @@ export function computeRoutingComparisonReport(
     keywordMatchedCount,
     llmMatchedCount,
     actualMatchedCount,
+    semanticScoredItemCount,
+    semanticMatchedCount,
     keywordAccuracy: scoredItemCount > 0 ? keywordMatchedCount / scoredItemCount : null,
     llmAccuracy: scoredItemCount > 0 ? llmMatchedCount / scoredItemCount : null,
+    semanticAccuracy:
+      semanticScoredItemCount > 0 ? semanticMatchedCount / semanticScoredItemCount : null,
     actualAccuracy: scoredItemCount > 0 ? actualMatchedCount / scoredItemCount : null,
     agreementCount,
     agreementRate: comparableCount > 0 ? agreementCount / comparableCount : null,
@@ -199,7 +337,8 @@ export function computeRoutingComparisonReport(
 // `test_result_items` routing row.
 // ---------------------------------------------------------------------------------------------
 
-export type RouterKey = 'keyword' | 'llm';
+/** B0-652 added `'semantic'`; existing `'keyword'`/`'llm'` callers are unaffected. */
+export type RouterKey = 'keyword' | 'llm' | 'semantic';
 
 export type ConfusionMatrix = {
   /** Distinct `intended_agent_label` values seen among scored items — the matrix rows. */
@@ -219,7 +358,10 @@ export type ConfusionMatrix = {
  * whole point of comparing the two routers in the first place.
  */
 export function buildConfusionMatrix(
-  items: Pick<RoutingComparisonReportInput, 'intendedAgentLabel' | 'keywordRoute' | 'llmRoute'>[],
+  items: Pick<
+    RoutingComparisonReportInput,
+    'intendedAgentLabel' | 'keywordRoute' | 'llmRoute' | 'semanticRoute'
+  >[],
   router: RouterKey,
 ): ConfusionMatrix {
   const counts: Record<string, Record<string, number>> = {};
@@ -229,7 +371,12 @@ export function buildConfusionMatrix(
 
   for (const item of items) {
     const groundTruth = item.intendedAgentLabel;
-    const predicted = router === 'keyword' ? item.keywordRoute : item.llmRoute;
+    const predicted =
+      router === 'keyword'
+        ? item.keywordRoute
+        : router === 'llm'
+          ? item.llmRoute
+          : (item.semanticRoute ?? null);
     if (!groundTruth || predicted === null) {
       continue;
     }
@@ -414,6 +561,8 @@ export type RoutingComparisonSummaryInput = {
   routingDecision: string | null;
   keywordRoute: string | null;
   llmRoute: string | null;
+  /** B0-652 — undefined/null = the semantic router was not consulted for this row. */
+  semanticRoute?: string | null;
 };
 
 export type RoutingComparisonSummary = {
@@ -427,6 +576,10 @@ export type RoutingComparisonSummary = {
   comparableCount: number;
   agreementCount: number;
   agreementRate: number | null;
+  /** B0-652 — semantic-router figures over their own (usually smaller) denominator. */
+  semanticScoredItemCount: number;
+  semanticMatchedCount: number;
+  semanticAccuracy: number | null;
 };
 
 /**
@@ -445,6 +598,8 @@ export function computeRoutingComparisonSummary(
   let actualMatchedCount = 0;
   let comparableCount = 0;
   let agreementCount = 0;
+  let semanticScoredItemCount = 0;
+  let semanticMatchedCount = 0;
 
   for (const item of items) {
     if (item.keywordRoute !== null && item.llmRoute !== null) {
@@ -463,6 +618,10 @@ export function computeRoutingComparisonSummary(
     if (item.keywordRoute === label) keywordMatchedCount += 1;
     if (item.llmRoute === label) llmMatchedCount += 1;
     if (item.routingDecision === label) actualMatchedCount += 1;
+    if (item.semanticRoute !== undefined && item.semanticRoute !== null) {
+      semanticScoredItemCount += 1;
+      if (item.semanticRoute === label) semanticMatchedCount += 1;
+    }
   }
 
   return {
@@ -476,6 +635,10 @@ export function computeRoutingComparisonSummary(
     comparableCount,
     agreementCount,
     agreementRate: comparableCount > 0 ? agreementCount / comparableCount : null,
+    semanticScoredItemCount,
+    semanticMatchedCount,
+    semanticAccuracy:
+      semanticScoredItemCount > 0 ? semanticMatchedCount / semanticScoredItemCount : null,
   };
 }
 
@@ -496,17 +659,50 @@ export type RouterLatencyProfile = {
   llm: RouterLatencyStats;
 };
 
-function computeLatencyStats(samples: number[]): RouterLatencyStats {
+/**
+ * B0-652 — p50/p95/p99 (plus min/max) over one latency sample set. The percentile formula is the
+ * one `computeLatencyStats` has always used (nearest-rank, `floor(p * n)` clamped to the last
+ * index); this is the single implementation both the B0-524 two-router profile and the B0-652
+ * semantic distribution now go through, so a keyword p95 and a semantic p95 mean the same thing.
+ */
+export type LatencyDistribution = {
+  sampleCount: number;
+  p50Ms: number | null;
+  p95Ms: number | null;
+  p99Ms: number | null;
+  minMs: number | null;
+  maxMs: number | null;
+};
+
+export function computeLatencyDistribution(samples: number[]): LatencyDistribution {
   if (samples.length === 0) {
-    return { sampleCount: 0, medianMs: null, p95Ms: null };
+    return { sampleCount: 0, p50Ms: null, p95Ms: null, p99Ms: null, minMs: null, maxMs: null };
   }
   const sorted = [...samples].sort((a, b) => a - b);
   const percentile = (p: number) => sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))];
   return {
     sampleCount: sorted.length,
-    medianMs: percentile(0.5),
+    p50Ms: percentile(0.5),
     p95Ms: percentile(0.95),
+    p99Ms: percentile(0.99),
+    minMs: sorted[0],
+    maxMs: sorted[sorted.length - 1],
   };
+}
+
+/** Kept at its original three-field shape so B0-509's dashboard and its tests are untouched. */
+function computeLatencyStats(samples: number[]): RouterLatencyStats {
+  const distribution = computeLatencyDistribution(samples);
+  return {
+    sampleCount: distribution.sampleCount,
+    medianMs: distribution.p50Ms,
+    p95Ms: distribution.p95Ms,
+  };
+}
+
+/** Keeps only real, finite measurements — a missing measurement is not a fast one. */
+function finiteSamples(values: Array<number | null | undefined>): number[] {
+  return values.filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
 }
 
 /**
@@ -517,15 +713,297 @@ function computeLatencyStats(samples: number[]): RouterLatencyStats {
 export function computeRouterLatencyProfile(
   items: Array<{ keywordRouteLatencyMs: number | null; llmRouteLatencyMs: number | null }>,
 ): RouterLatencyProfile {
-  const keywordSamples = items
-    .map((item) => item.keywordRouteLatencyMs)
-    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
-  const llmSamples = items
-    .map((item) => item.llmRouteLatencyMs)
-    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+  return {
+    keyword: computeLatencyStats(finiteSamples(items.map((item) => item.keywordRouteLatencyMs))),
+    llm: computeLatencyStats(finiteSamples(items.map((item) => item.llmRouteLatencyMs))),
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
+// B0-652 — semantic-router accuracy / false-positive / fallback / latency reducers.
+//
+// Everything below is a pure reducer over already-measured rows, in the same spirit as the B0-502
+// and B0-509 blocks above: the semantic router is called once per item at the run-executor.ts call
+// site (or by the golden-set harness), and its raw output plus ground truth is reduced here. No
+// reducer in this block imports the router module, so all of it is testable without an embedding
+// call.
+// ---------------------------------------------------------------------------------------------
+
+export type SemanticRoutingItem = {
+  /** Ground truth (`intended_agent_label`); null = unlabeled, excluded from every accuracy figure. */
+  intendedAgentLabel: string | null;
+  /**
+   * Golden-set lenient grading: every label a reasonable router could pick for this prompt without
+   * being wrong (`orchestrator-intent-labels.json`'s `plausible_agents`, always containing
+   * `intended_agent`). Null/omitted = no lenient grading available for this item, in which case it
+   * is graded strictly in BOTH modes rather than being silently credited or dropped.
+   */
+  plausibleAgentLabels?: string[] | null;
+  semanticRoute: string | null;
+  /** `'semantic'` = both thresholds passed; `'fallback'` = the router declined. */
+  semanticPath?: string | null;
+  semanticRouteLatencyMs?: number | null;
+  semanticEmbeddingMs?: number | null;
+  semanticScoringMs?: number | null;
+};
+
+export type SemanticRoutingAccuracy = {
+  /** Items with ground truth AND a semantic route — the denominator for both accuracies. */
+  scoredItemCount: number;
+  /** `semanticRoute === intendedAgentLabel`. */
+  strictMatchedCount: number;
+  /** `plausibleAgentLabels.includes(semanticRoute)` — falls back to the strict test when the item
+   * carries no plausible list, so lenient is never *lower* than strict but is also never invented. */
+  lenientMatchedCount: number;
+  strictAccuracy: number | null;
+  lenientAccuracy: number | null;
+};
+
+function matchesStrict(item: SemanticRoutingItem, label: string): boolean {
+  return item.semanticRoute === label;
+}
+
+function matchesLenient(item: SemanticRoutingItem, label: string): boolean {
+  const plausible = item.plausibleAgentLabels;
+  if (!plausible || plausible.length === 0) {
+    return matchesStrict(item, label);
+  }
+  return item.semanticRoute !== null && plausible.includes(item.semanticRoute);
+}
+
+/** Scored items = ground truth present AND the semantic router actually reported a route. */
+function scorableSemanticItems(items: SemanticRoutingItem[]): Array<SemanticRoutingItem & { label: string }> {
+  return items.flatMap((item) =>
+    item.intendedAgentLabel && item.semanticRoute !== null
+      ? [{ ...item, label: item.intendedAgentLabel }]
+      : [],
+  );
+}
+
+export function computeSemanticRoutingAccuracy(items: SemanticRoutingItem[]): SemanticRoutingAccuracy {
+  const scored = scorableSemanticItems(items);
+  let strictMatchedCount = 0;
+  let lenientMatchedCount = 0;
+
+  for (const item of scored) {
+    if (matchesStrict(item, item.label)) strictMatchedCount += 1;
+    if (matchesLenient(item, item.label)) lenientMatchedCount += 1;
+  }
 
   return {
-    keyword: computeLatencyStats(keywordSamples),
-    llm: computeLatencyStats(llmSamples),
+    scoredItemCount: scored.length,
+    strictMatchedCount,
+    lenientMatchedCount,
+    strictAccuracy: scored.length > 0 ? strictMatchedCount / scored.length : null,
+    lenientAccuracy: scored.length > 0 ? lenientMatchedCount / scored.length : null,
+  };
+}
+
+export type SemanticRoutePerRouteAccuracy = {
+  /** The ground-truth route these items belong to (a row of the confusion matrix). */
+  groundTruthLabel: string;
+  itemCount: number;
+  strictMatchedCount: number;
+  lenientMatchedCount: number;
+  strictAccuracy: number;
+  lenientAccuracy: number;
+};
+
+/**
+ * Per-ground-truth-route accuracy ("accuracy reported per route", B0-652 DoD). Sorted by label so
+ * two runs' tables line up. Routes with zero scored items are absent rather than shown as 0% —
+ * "no data" and "always wrong" must not render identically.
+ */
+export function computeSemanticRoutingAccuracyByRoute(
+  items: SemanticRoutingItem[],
+): SemanticRoutePerRouteAccuracy[] {
+  const byLabel = new Map<string, Array<SemanticRoutingItem & { label: string }>>();
+  for (const item of scorableSemanticItems(items)) {
+    const list = byLabel.get(item.label) ?? [];
+    list.push(item);
+    byLabel.set(item.label, list);
+  }
+
+  return [...byLabel.entries()]
+    .map(([groundTruthLabel, group]) => {
+      const strictMatchedCount = group.filter((item) => matchesStrict(item, item.label)).length;
+      const lenientMatchedCount = group.filter((item) => matchesLenient(item, item.label)).length;
+      return {
+        groundTruthLabel,
+        itemCount: group.length,
+        strictMatchedCount,
+        lenientMatchedCount,
+        strictAccuracy: strictMatchedCount / group.length,
+        lenientAccuracy: lenientMatchedCount / group.length,
+      };
+    })
+    .sort((a, b) => a.groundTruthLabel.localeCompare(b.groundTruthLabel));
+}
+
+export type SemanticFalsePositiveReport = {
+  /**
+   * Items with ground truth where `semanticPath === 'semantic'` — i.e. BOTH the confidence and
+   * margin thresholds passed, so the router committed to a route instead of declining. This is the
+   * denominator of `falsePositiveRate`.
+   */
+  confidentItemCount: number;
+  /**
+   * FALSE POSITIVE, defined exactly: `semanticPath === 'semantic'` (the router was confident) AND
+   * `semanticRoute !== intendedAgentLabel` (it was wrong). A wrong route on the `'fallback'` path is
+   * NOT a false positive — the router already reported low confidence, so downstream code is free to
+   * distrust it; that case is counted by the fallback rate instead. "Confidently wrong" is
+   * meaningless without pinning down which of those two populations you mean, so both are reported.
+   */
+  falsePositiveCount: number;
+  /** `falsePositiveCount / confidentItemCount` — wrongness among the routes the router stood behind. */
+  falsePositiveRate: number | null;
+  /** Items with ground truth and a path, confident or not — the denominator below. */
+  scoredItemCount: number;
+  /** `falsePositiveCount / scoredItemCount` — the same numerator over ALL scored items, which is a
+   * different (always lower or equal) number. Reported so a "<5%" target can't be read off the
+   * denominator that happens to flatter it. */
+  falsePositiveRateOfScored: number | null;
+};
+
+export function computeSemanticFalsePositiveRate(
+  items: SemanticRoutingItem[],
+): SemanticFalsePositiveReport {
+  let confidentItemCount = 0;
+  let falsePositiveCount = 0;
+  let scoredItemCount = 0;
+
+  for (const item of items) {
+    const label = item.intendedAgentLabel;
+    if (!label || !item.semanticPath) {
+      continue;
+    }
+    scoredItemCount += 1;
+    if (item.semanticPath !== 'semantic') {
+      continue;
+    }
+    confidentItemCount += 1;
+    if (item.semanticRoute !== label) {
+      falsePositiveCount += 1;
+    }
+  }
+
+  return {
+    confidentItemCount,
+    falsePositiveCount,
+    falsePositiveRate: confidentItemCount > 0 ? falsePositiveCount / confidentItemCount : null,
+    scoredItemCount,
+    falsePositiveRateOfScored: scoredItemCount > 0 ? falsePositiveCount / scoredItemCount : null,
+  };
+}
+
+export type SemanticFallbackReport = {
+  /** Items where the semantic router reported a path at all (it was consulted and returned). */
+  pathPresentCount: number;
+  /** `semanticPath === 'fallback'` — one or both thresholds failed, or the router errored out. */
+  fallbackCount: number;
+  fallbackRate: number | null;
+};
+
+/**
+ * How often the router declined rather than committing. Deliberately independent of ground truth:
+ * a fallback is a fallback whether or not the item happens to be labeled, and mixing the two would
+ * make the rate move when the golden set's labeling changes.
+ */
+export function computeSemanticFallbackRate(items: SemanticRoutingItem[]): SemanticFallbackReport {
+  let pathPresentCount = 0;
+  let fallbackCount = 0;
+
+  for (const item of items) {
+    if (!item.semanticPath) continue;
+    pathPresentCount += 1;
+    if (item.semanticPath === 'fallback') fallbackCount += 1;
+  }
+
+  return {
+    pathPresentCount,
+    fallbackCount,
+    fallbackRate: pathPresentCount > 0 ? fallbackCount / pathPresentCount : null,
+  };
+}
+
+export type SemanticLatencyProfile = {
+  /** End-to-end wait: embedding round-trip + scoring. Cold routes are network-bound (~80-400ms). */
+  total: LatencyDistribution;
+  /** The embedding round-trip alone. */
+  embedding: LatencyDistribution;
+  /** Cosine scoring alone — no I/O. The only component a single-digit-ms budget applies to. */
+  scoring: LatencyDistribution;
+};
+
+/**
+ * Splits the latency distribution three ways on purpose. B0-652's "≤10ms p95" target is only
+ * meaningful against `scoring` (or a warm embedding cache); quoting it against `total` would either
+ * look like a failure or require pretending the OpenAI call didn't happen.
+ */
+export function computeSemanticLatencyProfile(items: SemanticRoutingItem[]): SemanticLatencyProfile {
+  return {
+    total: computeLatencyDistribution(finiteSamples(items.map((item) => item.semanticRouteLatencyMs))),
+    embedding: computeLatencyDistribution(finiteSamples(items.map((item) => item.semanticEmbeddingMs))),
+    scoring: computeLatencyDistribution(finiteSamples(items.map((item) => item.semanticScoringMs))),
+  };
+}
+
+export type ThreeWayAgreementReport = {
+  /** Items where at least two of the three routers reported a route (the denominator). */
+  comparableCount: number;
+  /** Counts per `RoutingAgreement` label; every label is present, zero-filled. */
+  counts: Record<RoutingAgreement, number>;
+  /** `counts.all_agree / comparableCount`. */
+  allAgreeRate: number | null;
+};
+
+/**
+ * Three-way keyword/LLM/semantic agreement, alongside (not replacing) the existing two-way
+ * `agreementRate` in `computeRoutingComparisonReport`. Uses `computeRoutingAgreement`, so an item
+ * with fewer than two routes present is excluded rather than counted as a disagreement.
+ */
+export function computeThreeWayAgreement(
+  items: Array<{
+    keywordRoute: string | null | undefined;
+    llmRoute: string | null | undefined;
+    semanticRoute: string | null | undefined;
+  }>,
+): ThreeWayAgreementReport {
+  const counts = Object.fromEntries(ROUTING_AGREEMENT_VALUES.map((value) => [value, 0])) as Record<
+    RoutingAgreement,
+    number
+  >;
+  let comparableCount = 0;
+
+  for (const item of items) {
+    const agreement = computeRoutingAgreement(item);
+    if (!agreement) continue;
+    comparableCount += 1;
+    counts[agreement] += 1;
+  }
+
+  return {
+    comparableCount,
+    counts,
+    allAgreeRate: comparableCount > 0 ? counts.all_agree / comparableCount : null,
+  };
+}
+
+export type SemanticRoutingReport = {
+  accuracy: SemanticRoutingAccuracy;
+  accuracyByRoute: SemanticRoutePerRouteAccuracy[];
+  falsePositives: SemanticFalsePositiveReport;
+  fallback: SemanticFallbackReport;
+  latency: SemanticLatencyProfile;
+};
+
+/** One call for the whole B0-652 measurement set, so callers can't accidentally report a subset. */
+export function computeSemanticRoutingReport(items: SemanticRoutingItem[]): SemanticRoutingReport {
+  return {
+    accuracy: computeSemanticRoutingAccuracy(items),
+    accuracyByRoute: computeSemanticRoutingAccuracyByRoute(items),
+    falsePositives: computeSemanticFalsePositiveRate(items),
+    fallback: computeSemanticFallbackRate(items),
+    latency: computeSemanticLatencyProfile(items),
   };
 }

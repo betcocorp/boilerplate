@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   buildRoutingHealthData,
+  buildSemanticRouterDistribution,
+  buildSemanticRouterMetrics,
   LOW_CONFIDENCE_THRESHOLD,
   type RoutingPlannerScanRow,
 } from '~/lib/observability/routing-health';
@@ -307,5 +309,214 @@ describe('buildRoutingHealthData — router agreement', () => {
     expect(data.agreement.agreementCount).toBe(0);
     expect(data.agreement.agreementRate).toBe(0);
     expect(data.agreement.meanLlmConfidence).toBe(0.5);
+  });
+});
+
+/* -------------------------------------------------------------------------- *
+ * B0-651 — semantic-router metrics (query-time reducers, NOT a metrics exporter)
+ * -------------------------------------------------------------------------- */
+
+/** One semantic-router gate record on a planner step, shaped exactly as the workflow writes it. */
+function semanticGateStep(options: {
+  mode?: 'live' | 'shadow';
+  route?: string;
+  path?: string;
+  confidence?: number;
+  margin?: number;
+  similarity?: number;
+  latencyMs?: number;
+  embeddingMs?: number;
+  scoringMs?: number;
+  confidencePassed?: boolean;
+  marginPassed?: boolean;
+  error?: string | null;
+  routingDecision?: string;
+  runId?: string;
+}): RoutingPlannerScanRow {
+  const mode = options.mode ?? 'live';
+  const route = options.route ?? 'product';
+  const path = options.path ?? 'semantic';
+
+  return {
+    workflow_run_id: options.runId ?? 'run-semantic',
+    output: {
+      gates: [
+        {
+          gate: mode === 'live' ? 'semantic_router_live' : 'semantic_router_shadow',
+          inputs: {
+            semanticRoute: route,
+            semanticConfidence: options.confidence ?? 0.7,
+            semanticSimilarity: options.similarity ?? 0.7,
+            semanticMargin: options.margin ?? 0.2,
+            semanticPath: path,
+            semanticScores: [{ route, similarity: options.similarity ?? 0.7 }],
+            semanticLatencyMs: options.latencyMs ?? 100,
+            semanticEmbeddingMs: options.embeddingMs ?? 95,
+            semanticScoringMs: options.scoringMs ?? 5,
+            semanticEmbeddingModel: 'text-embedding-3-large',
+            semanticExamplesVersion: 'v1',
+            semanticError: options.error ?? null,
+            routingDecision: options.routingDecision ?? route,
+            decidedBy: 'semantic_router',
+          },
+          thresholds: {
+            confidenceThreshold: 0.5,
+            marginThreshold: 0.1,
+            confidenceThresholdPassed: options.confidencePassed ?? true,
+            marginThresholdPassed: options.marginPassed ?? true,
+            mode,
+          },
+          verdict: path === 'fallback' ? 'fell_back' : 'agrees_with_routing_decision',
+          effect: 'n/a',
+        },
+      ],
+    },
+  };
+}
+
+describe('buildSemanticRouterDistribution', () => {
+  it('returns all-null at zero samples, so "no data" never reads as a measured 0', () => {
+    expect(buildSemanticRouterDistribution([], 0)).toEqual({
+      sampleSize: 0,
+      mean: null,
+      p50: null,
+      p95: null,
+      p99: null,
+      min: null,
+      max: null,
+    });
+  });
+
+  it('computes nearest-rank percentiles over unsorted input', () => {
+    const stats = buildSemanticRouterDistribution([300, 100, 200, 400, 500], 0);
+    expect(stats).toEqual({
+      sampleSize: 5,
+      mean: 300,
+      p50: 300,
+      p95: 500,
+      p99: 500,
+      min: 100,
+      max: 500,
+    });
+  });
+
+  it('clamps a negative sample at 0 instead of dropping it, keeping the denominator honest', () => {
+    const stats = buildSemanticRouterDistribution([-5, 10, 20], 0);
+    expect(stats.sampleSize).toBe(3);
+    expect(stats.min).toBe(0);
+    expect(stats.mean).toBe(10);
+  });
+
+  it('keeps score precision at 4 decimals', () => {
+    const stats = buildSemanticRouterDistribution([0.62341, 0.7], 4);
+    expect(stats.mean).toBe(0.6617);
+    expect(stats.p50).toBe(0.6234);
+  });
+});
+
+describe('buildSemanticRouterMetrics', () => {
+  it('is empty (and fallbackRate null, not 0) when no semantic decision was recorded', () => {
+    const metrics = buildSemanticRouterMetrics([liveGateStep({})]);
+    expect(metrics.decisionCount).toBe(0);
+    expect(metrics.semanticRouterFallbackRate).toBe(null);
+    expect(metrics.semanticRouterRoute).toEqual([]);
+    expect(metrics.semanticRouterLatencyMs.sampleSize).toBe(0);
+  });
+
+  it('counts routes labeled by path and splits live vs shadow', () => {
+    const metrics = buildSemanticRouterMetrics([
+      semanticGateStep({ route: 'product' }),
+      semanticGateStep({ route: 'product' }),
+      semanticGateStep({ route: 'floor' }),
+      semanticGateStep({ route: 'ambiguous', path: 'fallback', error: 'embedding_failed' }),
+      semanticGateStep({ mode: 'shadow', route: 'bathroom' }),
+    ]);
+
+    expect(metrics.decisionCount).toBe(5);
+    expect(metrics.liveCount).toBe(4);
+    expect(metrics.shadowCount).toBe(1);
+    expect(metrics.semanticRouterRoute).toEqual([
+      { route: 'product', path: 'semantic', count: 2 },
+      { route: 'ambiguous', path: 'fallback', count: 1 },
+      { route: 'bathroom', path: 'semantic', count: 1 },
+      { route: 'floor', path: 'semantic', count: 1 },
+    ]);
+  });
+
+  it('derives the fallback rate and names the reasons behind it', () => {
+    const metrics = buildSemanticRouterMetrics([
+      semanticGateStep({}),
+      semanticGateStep({}),
+      semanticGateStep({ path: 'fallback', error: 'embedding_request_failed' }),
+      // A threshold miss carries no error string; it gets a named bucket rather than being dropped,
+      // so the reasons always sum to `fallbackCount`.
+      semanticGateStep({ path: 'fallback', error: null, confidencePassed: false }),
+    ]);
+
+    expect(metrics.fallbackCount).toBe(2);
+    expect(metrics.semanticRouterFallbackRate).toBe(0.5);
+    expect(metrics.fallbackReasons).toEqual([
+      { reason: 'embedding_request_failed', count: 1 },
+      { reason: 'thresholds_not_met', count: 1 },
+    ]);
+    expect(metrics.confidenceThresholdPassRate).toBe(0.75);
+    expect(metrics.marginThresholdPassRate).toBe(1);
+  });
+
+  it('reports the honest latency split, never a blended number alone', () => {
+    const metrics = buildSemanticRouterMetrics([
+      semanticGateStep({ latencyMs: 4, embeddingMs: 0, scoringMs: 4 }),
+      semanticGateStep({ latencyMs: 320, embeddingMs: 315, scoringMs: 5 }),
+    ]);
+
+    expect(metrics.semanticRouterLatencyMs).toMatchObject({ sampleSize: 2, p50: 4, max: 320 });
+    // A warm cache hit legitimately measures 0ms of embedding — a real sample, not missing data.
+    expect(metrics.semanticRouterEmbeddingMs).toMatchObject({ sampleSize: 2, min: 0, max: 315 });
+    expect(metrics.semanticRouterScoringMs).toMatchObject({ sampleSize: 2, min: 4, max: 5 });
+  });
+
+  it('excludes fallback decisions from the confidence/margin distributions', () => {
+    const metrics = buildSemanticRouterMetrics([
+      semanticGateStep({ confidence: 0.8, margin: 0.3 }),
+      // A degraded decision carries a fabricated 0 — counting it would drag both means down.
+      semanticGateStep({ path: 'fallback', confidence: 0, margin: 0, error: 'boom' }),
+    ]);
+
+    expect(metrics.semanticRouterConfidence).toMatchObject({ sampleSize: 1, mean: 0.8 });
+    expect(metrics.semanticRouterMargin).toMatchObject({ sampleSize: 1, mean: 0.3 });
+  });
+
+  it('measures agreement against the route the turn actually ran', () => {
+    const metrics = buildSemanticRouterMetrics([
+      semanticGateStep({ mode: 'shadow', route: 'bathroom', routingDecision: 'bathroom' }),
+      semanticGateStep({ mode: 'shadow', route: 'bathroom', routingDecision: 'dilution' }),
+    ]);
+
+    expect(metrics.agreementWithRoutingDecision).toEqual({
+      comparableCount: 2,
+      agreementCount: 1,
+      agreementRate: 0.5,
+    });
+  });
+
+  it('is exposed on buildRoutingHealthData off the same planner scan', () => {
+    const data = buildRoutingHealthData({
+      window: WINDOW,
+      runs: [],
+      plannerSteps: [semanticGateStep({ route: 'floor' })],
+    });
+
+    expect(data.semanticRouter.decisionCount).toBe(1);
+    expect(data.semanticRouter.semanticRouterRoute).toEqual([
+      { route: 'floor', path: 'semantic', count: 1 },
+    ]);
+  });
+
+  it('ignores a malformed planner row instead of throwing', () => {
+    const metrics = buildSemanticRouterMetrics([
+      { workflow_run_id: 'r', output: { gates: 'not-an-array' } },
+      semanticGateStep({}),
+    ]);
+    expect(metrics.decisionCount).toBe(1);
   });
 });

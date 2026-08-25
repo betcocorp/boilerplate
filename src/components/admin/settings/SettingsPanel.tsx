@@ -17,6 +17,13 @@ type SettingRecord = {
   allowed_values?: string[];
 };
 
+/**
+ * Both lists are registries, not seeds: a key renders here only if a `settings` row with that key
+ * (and a matching `value_type`) actually exists, so listing a key whose migration has not been
+ * applied is inert rather than broken. B0-656 registers the whole semantic-router batch
+ * (`ROUTER_TYPE` plus the `*_SEMANTIC_ROUTER_*` keys seeded by B0-648/B0-649) from one place,
+ * because three tickets editing these two arrays in parallel is a guaranteed merge conflict.
+ */
 const BOOLEAN_SETTINGS = [
   'WEBSEARCH_DB_CACHE_ENABLED',
   'BEX_DISABLE_CONFIDENCE_GATING',
@@ -28,6 +35,8 @@ const BOOLEAN_SETTINGS = [
   'BEX_AI_SDK_GENERATION_ENABLED',
   'BEX_LLM_ROUTER_ENABLED',
   'BEX_LLM_ROUTER_SHADOW_MODE',
+  'BEX_SEMANTIC_ROUTER_ENABLED',
+  'BEX_SEMANTIC_ROUTER_SHADOW_MODE',
   'ENABLE_RERANKER',
 ];
 
@@ -38,6 +47,10 @@ const STRING_SETTINGS = [
   'NEXT_PUBLIC_BEX_STREAMING_ROLLOUT_COHORT',
   'XREF_RECOMMENDATION_TIMEOUT_MS',
   'COHERE_RERANK_MODEL',
+  'ROUTER_TYPE',
+  'SEMANTIC_ROUTER_EMBEDDING_MODEL',
+  'SEMANTIC_ROUTER_CONFIDENCE_THRESHOLD',
+  'SEMANTIC_ROUTER_MARGIN_THRESHOLD',
 ];
 
 export function SettingsPanel() {

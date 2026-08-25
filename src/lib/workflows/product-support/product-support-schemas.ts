@@ -147,6 +147,13 @@ export type PromptRecord = z.infer<typeof promptRecordSchema>;
  *   `BEX_LLM_ROUTER_ENABLED` + `BEX_LLM_ROUTER_SHADOW_MODE`. Records what the LLM router would
  *   have routed to next to what `keyword_routing` actually routed to, for rollout comparison —
  *   never changes the turn's routing while this gate is the one being recorded.
+ * - `semantic_router_live` / `semantic_router_shadow` — `classifyUserIntentSemantic` (B0-649/651),
+ *   gated on `BEX_SEMANTIC_ROUTER_ENABLED` + `BEX_SEMANTIC_ROUTER_SHADOW_MODE`. Same
+ *   live-vs-shadow split as the LLM classifier pair above; carries the per-route similarity
+ *   scores, confidence, margin, which threshold passed, the path taken, and the latency split
+ *   (`latencyMs` = `embeddingMs` + `scoringMs`). Built by
+ *   `~/lib/workflows/product-support/semantic-router-decision.ts` and reduced into rollout
+ *   metrics by `~/lib/observability/routing-health.ts`.
  */
 export const gateIdSchema = z.enum([
   'keyword_routing',
@@ -157,6 +164,8 @@ export const gateIdSchema = z.enum([
   'competitor_identity_resolution',
   'llm_intent_classifier_shadow',
   'llm_intent_classifier_live',
+  'semantic_router_live',
+  'semantic_router_shadow',
 ]);
 
 export type GateId = z.infer<typeof gateIdSchema>;
@@ -315,6 +324,23 @@ export const runtimeConfigSchema = z.object({
   agentMode: z.string(),
   /** `agentMode !== 'orchestrator'` — an admin forced direct routing, bypassing the router. */
   routedDirectly: z.boolean(),
+  /**
+   * B0-649 — the semantic-router rollout switches this run observed. OPTIONAL, unlike every field
+   * above: `runtimeConfigSchema.safeParse` is run against ALREADY-PERSISTED payloads
+   * (`~/lib/tests/response-payload.ts`), so making these required would make every pre-B0-649 run
+   * fail to parse and silently drop its whole runtime-config badge. Absent means "this run predates
+   * the semantic router", which is not the same as `false`.
+   */
+  semanticRouterEnabled: z.boolean().optional(),
+  /** `BEX_SEMANTIC_ROUTER_SHADOW_MODE` — the router ran but did not decide. */
+  semanticRouterShadowMode: z.boolean().optional(),
+  /**
+   * `'semantic'` (the router decided on its own scores), `'fallback'` (it degraded — embedding
+   * failure, thresholds not met), or null when it was never called this turn.
+   */
+  semanticRouterPath: z.string().nullable().optional(),
+  /** Whether the semantic router's route is the one this turn actually ran. */
+  semanticRouterDecided: z.boolean().optional(),
 });
 
 export type RuntimeConfig = z.infer<typeof runtimeConfigSchema>;
