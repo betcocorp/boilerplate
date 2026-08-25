@@ -63,6 +63,12 @@ function toUtf8Text(bytes: Uint8Array) {
   return new TextDecoder('utf-8').decode(bytes);
 }
 
+/** Surfaces a failed dataset create/upload as a toast message instead of an unhandled 500. */
+function describeUploadError(error: unknown) {
+  const detail = error instanceof Error ? error.message : String(error);
+  return `Could not save this test dataset: ${detail}`;
+}
+
 /** Trimmed form string, or null when absent/blank — a cleared input clears the stored value. */
 function optionalFormText(formData: FormData, name: string): string | null {
   const raw = formData.get(name);
@@ -137,16 +143,22 @@ export async function uploadTestCsvAction(formData: FormData) {
       );
     }
 
-    await createTestRecord({
-      name: testName,
-      source_file_name: '(no CSV)',
-      source_bucket: 'ad-hoc',
-      source_key: 'none',
-      row_count: 0,
-      status: 'ready',
-      intended_agent,
-      metadata: {},
-    });
+    try {
+      await createTestRecord({
+        name: testName,
+        source_file_name: '(no CSV)',
+        source_bucket: 'ad-hoc',
+        source_key: 'none',
+        row_count: 0,
+        status: 'ready',
+        intended_agent,
+        metadata: {},
+      });
+    } catch (error) {
+      redirect(
+        encodeMessage('/admin/tests', 'error', describeUploadError(error)),
+      );
+    }
 
     revalidatePath('/admin/tests');
     redirect(
@@ -175,62 +187,68 @@ export async function uploadTestCsvAction(formData: FormData) {
     );
   }
 
-  const initialTest = await createTestRecord({
-    name: testName || file.name.replace(/\.csv$/i, ''),
-    source_file_name: file.name,
-    source_bucket: 'retool-360',
-    source_key: 'pending',
-    row_count: 0,
-    status: 'uploading',
-    intended_agent,
-    metadata: {
-      column_names: columnNames,
-      content_type: file.type || 'text/csv',
-      file_size_bytes: file.size,
-    },
-  });
+  try {
+    const initialTest = await createTestRecord({
+      name: testName || file.name.replace(/\.csv$/i, ''),
+      source_file_name: file.name,
+      source_bucket: 'retool-360',
+      source_key: 'pending',
+      row_count: 0,
+      status: 'uploading',
+      intended_agent,
+      metadata: {
+        column_names: columnNames,
+        content_type: file.type || 'text/csv',
+        file_size_bytes: file.size,
+      },
+    });
 
-  const uploaded = await uploadTestCsvToS3({
-    testId: initialTest.id,
-    fileName: file.name,
-    bytes: fileBytes,
-    contentType: file.type || 'text/csv',
-  });
+    const uploaded = await uploadTestCsvToS3({
+      testId: initialTest.id,
+      fileName: file.name,
+      bytes: fileBytes,
+      contentType: file.type || 'text/csv',
+    });
 
-  const testItems = parsedRows.map((row) => ({
-    test_id: initialTest.id,
-    row_index: row.rowIndex,
-    prompt: row.prompt,
-    expected_should_answer: row.expectedShouldAnswer,
-    expected_result_type: row.expectedResultType,
-    expected_canonical_product: row.expectedCanonicalProduct,
-    expected_reason_code: row.expectedReasonCode,
-    source: row.source,
-    priority: row.priority,
-    ideal_response: row.idealResponse,
-    expected_concepts: row.expectedConcepts,
-    minimum_concepts: row.minimumConcepts,
-    expected_criteria: row.expectedCriteria,
-    expected_sources: row.expectedSources,
-    should_cite: row.shouldCite,
-    input_payload: row.inputPayload,
-    metadata: row.metadata,
-  }));
+    const testItems = parsedRows.map((row) => ({
+      test_id: initialTest.id,
+      row_index: row.rowIndex,
+      prompt: row.prompt,
+      expected_should_answer: row.expectedShouldAnswer,
+      expected_result_type: row.expectedResultType,
+      expected_canonical_product: row.expectedCanonicalProduct,
+      expected_reason_code: row.expectedReasonCode,
+      source: row.source,
+      priority: row.priority,
+      ideal_response: row.idealResponse,
+      expected_concepts: row.expectedConcepts,
+      minimum_concepts: row.minimumConcepts,
+      expected_criteria: row.expectedCriteria,
+      expected_sources: row.expectedSources,
+      should_cite: row.shouldCite,
+      input_payload: row.inputPayload,
+      metadata: row.metadata,
+    }));
 
-  await insertTestItems(testItems);
-  await updateTestRecord(initialTest.id, {
-    source_bucket: uploaded.bucket,
-    source_key: uploaded.key,
-    row_count: parsedRows.length,
-    status: 'ready',
-    intended_agent,
-    metadata: {
-      column_names: columnNames,
-      content_type: file.type || 'text/csv',
-      file_size_bytes: file.size,
-      parsed_rows: parsedRows.length,
-    },
-  });
+    await insertTestItems(testItems);
+    await updateTestRecord(initialTest.id, {
+      source_bucket: uploaded.bucket,
+      source_key: uploaded.key,
+      row_count: parsedRows.length,
+      status: 'ready',
+      intended_agent,
+      metadata: {
+        column_names: columnNames,
+        content_type: file.type || 'text/csv',
+        file_size_bytes: file.size,
+        parsed_rows: parsedRows.length,
+      },
+    });
+  } catch (error) {
+    redirect(
+      encodeMessage('/admin/tests', 'error', describeUploadError(error)),
+    );
+  }
 
   revalidatePath('/admin/tests');
   redirect(
