@@ -4,6 +4,7 @@ import {
   buildConfusionMatrix,
   buildRouterDisagreementMatrix,
   buildRoutingComparisonFields,
+  buildSemanticLlmDisagreementMatrix,
   computeAmbiguousRouteRate,
   computeConfidenceDistribution,
   computeLatencyDistribution,
@@ -14,6 +15,7 @@ import {
   computeSemanticFallbackRate,
   computeSemanticFalsePositiveRate,
   computeSemanticLatencyProfile,
+  computeSemanticLlmLatencyProfile,
   computeSemanticRoutingAccuracy,
   computeSemanticRoutingAccuracyByRoute,
   computeSemanticRoutingReport,
@@ -349,6 +351,57 @@ describe('buildRouterDisagreementMatrix', () => {
     const matrix = buildRouterDisagreementMatrix([{ keywordRoute: null, llmRoute: 'floor' }]);
     expect(matrix.comparableCount).toBe(0);
     expect(matrix.disagreementRate).toBeNull();
+  });
+});
+
+// B0-668 — LLM vs. semantic pair, sibling of the keyword-vs-LLM reducers above.
+
+describe('buildSemanticLlmDisagreementMatrix', () => {
+  it('counts semantic-vs-llm pairings and the disagreement rate', () => {
+    const matrix = buildSemanticLlmDisagreementMatrix([
+      { semanticRoute: 'floor', llmRoute: 'floor' },
+      { semanticRoute: 'floor', llmRoute: 'product' },
+      { semanticRoute: 'bathroom', llmRoute: 'bathroom' },
+      { semanticRoute: null, llmRoute: 'floor' },
+    ]);
+    expect(matrix.semanticLabels).toEqual(['bathroom', 'floor']);
+    expect(matrix.llmLabels).toEqual(['bathroom', 'floor', 'product']);
+    expect(matrix.counts.floor.floor).toBe(1);
+    expect(matrix.counts.floor.product).toBe(1);
+    expect(matrix.comparableCount).toBe(3);
+    expect(matrix.disagreementCount).toBe(1);
+    expect(matrix.disagreementRate).toBeCloseTo(1 / 3);
+  });
+
+  it('returns null disagreement rate when nothing is comparable', () => {
+    const matrix = buildSemanticLlmDisagreementMatrix([{ semanticRoute: null, llmRoute: 'floor' }]);
+    expect(matrix.comparableCount).toBe(0);
+    expect(matrix.disagreementRate).toBeNull();
+  });
+});
+
+describe('computeSemanticLlmLatencyProfile', () => {
+  it('computes median/p95 per router and excludes null samples', () => {
+    const profile = computeSemanticLlmLatencyProfile([
+      { semanticRouteLatencyMs: 1, llmRouteLatencyMs: 100 },
+      { semanticRouteLatencyMs: 2, llmRouteLatencyMs: 200 },
+      { semanticRouteLatencyMs: 3, llmRouteLatencyMs: null },
+      { semanticRouteLatencyMs: null, llmRouteLatencyMs: 400 },
+    ]);
+
+    expect(profile.semantic.sampleCount).toBe(3);
+    expect(profile.semantic.medianMs).toBe(2);
+    expect(profile.llm.sampleCount).toBe(3);
+    expect(profile.llm.medianMs).toBe(200);
+  });
+
+  it('returns null stats when there are no samples at all', () => {
+    const profile = computeSemanticLlmLatencyProfile([
+      { semanticRouteLatencyMs: null, llmRouteLatencyMs: null },
+    ]);
+
+    expect(profile.semantic).toEqual({ sampleCount: 0, medianMs: null, p95Ms: null });
+    expect(profile.llm).toEqual({ sampleCount: 0, medianMs: null, p95Ms: null });
   });
 });
 

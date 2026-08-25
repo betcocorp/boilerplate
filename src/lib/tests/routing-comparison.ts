@@ -556,6 +556,69 @@ export function buildRouterDisagreementMatrix(
   };
 }
 
+/**
+ * B0-668 — sibling of `RouterDisagreementMatrix` for the semantic/LLM pair (semantic router rows,
+ * LLM classifier columns). A separate type + function rather than generalizing
+ * `buildRouterDisagreementMatrix` itself: the keyword-vs-LLM shape (`keywordLabels`/`llmLabels`) is
+ * already relied on by this file's own tests and by `page.tsx`/the dashboard, so keeping it in place
+ * and adding this alongside is the least-invasive way to lead the dashboard with LLM vs. semantic
+ * without touching the keyword comparison at all.
+ */
+export type SemanticLlmDisagreementMatrix = {
+  /** Distinct `semantic_route` values seen among comparable items — the matrix rows. */
+  semanticLabels: string[];
+  /** Distinct `llm_route` values seen among comparable items — the matrix columns. */
+  llmLabels: string[];
+  /** `counts[semanticRoute][llmRoute]` across every item where both routers reported a route. */
+  counts: Record<string, Record<string, number>>;
+  /** Items where both `semantic_route` and `llm_route` are present — the denominator below. */
+  comparableCount: number;
+  /** Off-diagonal cells: `semantic_route !== llm_route`. */
+  disagreementCount: number;
+  disagreementRate: number | null;
+};
+
+/**
+ * `semantic_route` (rows) vs. `llm_route` (columns) across every comparable item, independent of
+ * ground truth — the LLM-vs-semantic counterpart to `buildRouterDisagreementMatrix`'s
+ * keyword-vs-LLM matrix, now the pair the dashboard leads with.
+ */
+export function buildSemanticLlmDisagreementMatrix(
+  items: Array<{ semanticRoute: string | null | undefined; llmRoute: string | null | undefined }>,
+): SemanticLlmDisagreementMatrix {
+  const counts: Record<string, Record<string, number>> = {};
+  const semanticLabels = new Set<string>();
+  const llmLabels = new Set<string>();
+  let comparableCount = 0;
+  let disagreementCount = 0;
+
+  for (const item of items) {
+    const semantic = item.semanticRoute ?? null;
+    const llm = item.llmRoute ?? null;
+    if (semantic === null || llm === null) {
+      continue;
+    }
+    comparableCount += 1;
+    semanticLabels.add(semantic);
+    llmLabels.add(llm);
+    const row = counts[semantic] ?? {};
+    row[llm] = (row[llm] ?? 0) + 1;
+    counts[semantic] = row;
+    if (semantic !== llm) {
+      disagreementCount += 1;
+    }
+  }
+
+  return {
+    semanticLabels: [...semanticLabels].sort((a, b) => a.localeCompare(b)),
+    llmLabels: [...llmLabels].sort((a, b) => a.localeCompare(b)),
+    counts,
+    comparableCount,
+    disagreementCount,
+    disagreementRate: comparableCount > 0 ? disagreementCount / comparableCount : null,
+  };
+}
+
 export type RoutingComparisonSummaryInput = {
   intendedAgentLabel: string | null;
   routingDecision: string | null;
@@ -715,6 +778,29 @@ export function computeRouterLatencyProfile(
 ): RouterLatencyProfile {
   return {
     keyword: computeLatencyStats(finiteSamples(items.map((item) => item.keywordRouteLatencyMs))),
+    llm: computeLatencyStats(finiteSamples(items.map((item) => item.llmRouteLatencyMs))),
+  };
+}
+
+/** B0-668 — sibling of `RouterLatencyProfile` for the semantic/LLM pair. */
+export type SemanticLlmLatencyProfile = {
+  semantic: RouterLatencyStats;
+  llm: RouterLatencyStats;
+};
+
+/**
+ * Reduces a set of `test_result_items` rows into a semantic-vs-LLM latency profile, mirroring
+ * `computeRouterLatencyProfile`'s keyword-vs-LLM one exactly (same median/p95 shape, same
+ * missing-measurement handling) so the two profiles read the same way on the dashboard.
+ */
+export function computeSemanticLlmLatencyProfile(
+  items: Array<{
+    semanticRouteLatencyMs: number | null | undefined;
+    llmRouteLatencyMs: number | null | undefined;
+  }>,
+): SemanticLlmLatencyProfile {
+  return {
+    semantic: computeLatencyStats(finiteSamples(items.map((item) => item.semanticRouteLatencyMs))),
     llm: computeLatencyStats(finiteSamples(items.map((item) => item.llmRouteLatencyMs))),
   };
 }
