@@ -59,18 +59,27 @@ function formText(formData: FormData, name: string): string {
   return typeof raw === 'string' ? raw : '';
 }
 
-export async function addRoutingTestItemAction(formData: FormData) {
-  const returnPath = normalizeReturnPath(formData.get('returnPath'));
+/**
+ * B0-675 — the add dialog stays open for "create another", which a `redirect()` (real navigation)
+ * would unconditionally break by unmounting the Radix `Dialog`. So unlike the other two item
+ * actions below, this one is called directly from an `onSubmit` handler (not bound to a `<form
+ * action>`, which would trigger React 19's auto-reset-on-success and desync the dialog's checkbox
+ * state) and returns a discriminated result instead of redirecting to a `?success=`/`?error=` param.
+ */
+export type AddRoutingTestItemActionState =
+  | { ok: true }
+  | { ok: false; error: string };
 
+export async function addRoutingTestItemAction(
+  formData: FormData,
+): Promise<AddRoutingTestItemActionState> {
   const parsed = routingTestItemCreateSchema.safeParse({
     prompt: formText(formData, 'prompt'),
     expectedAgent: formText(formData, 'expectedAgent'),
   });
 
   if (!parsed.success) {
-    redirect(
-      encodeMessage(returnPath, 'error', firstIssueMessage(parsed.error)),
-    );
+    return { ok: false, error: firstIssueMessage(parsed.error) };
   }
 
   const created = await insertRoutingTestItem({
@@ -89,7 +98,7 @@ export async function addRoutingTestItemAction(formData: FormData) {
   );
 
   revalidatePath(ROUTING_TEST_PATH);
-  redirect(encodeMessage(returnPath, 'success', 'Routing test item added.'));
+  return { ok: true };
 }
 
 export async function updateRoutingTestItemAction(formData: FormData) {

@@ -240,7 +240,7 @@ export function RoutingTestWorkbench({
               {items.length} {items.length === 1 ? 'item' : 'items'}
             </p>
           </div>
-          <AddRoutingTestItemDialog returnPath={returnPath} />
+          <AddRoutingTestItemDialog />
         </div>
 
         {items.length === 0 ? (
@@ -252,7 +252,7 @@ export function RoutingTestWorkbench({
               Add a prompt and the SME agent it should route to, then use Run to
               check the selected router against every item.
             </p>
-            <AddRoutingTestItemDialog returnPath={returnPath} />
+            <AddRoutingTestItemDialog />
           </div>
         ) : (
           <RoutingTestItemsTable
