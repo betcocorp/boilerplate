@@ -1,3 +1,10 @@
+# [2.9.0](https://github.com/betcocorp/bex2.0/compare/v2.8.0...v2.9.0) (2026-08-25)
+
+
+### Features
+
+* **B0-681:** add per-run router selector to test dataset run form ([75b0261](https://github.com/betcocorp/bex2.0/commit/75b02615a0eb11778e31cee4933075373720783c))
+
 # [2.8.0](https://github.com/betcocorp/bex2.0/compare/v2.7.0...v2.8.0) (2026-08-25)
 
 
