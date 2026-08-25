@@ -84,6 +84,15 @@ describe('apiListConversations', () => {
           source: 'test_run',
           isOwner: false,
         },
+        {
+          id: CONVERSATION_ID,
+          title: 'C',
+          updatedAt: '2026-08-11T00:00:00.000Z',
+          status: 'active',
+          owner: { kind: 'test', title: 'Golden Set Regression' },
+          source: 'test_run',
+          isOwner: false,
+        },
       ],
     });
 
@@ -96,6 +105,8 @@ describe('apiListConversations', () => {
     });
     expect(rows[1]?.owner).toBe('admin');
     expect(rows[1]?.source).toBe('test_run');
+    expect(rows[2]?.owner).toEqual({ kind: 'test', title: 'Golden Set Regression' });
+    expect(rows[2]?.source).toBe('test_run');
   });
 
   it('throws when the response is missing the new required fields', async () => {
