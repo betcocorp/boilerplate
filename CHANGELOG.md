@@ -1,3 +1,25 @@
+# [2.7.0](https://github.com/betcocorp/bex2.0/compare/v2.6.0...v2.7.0) (2026-08-25)
+
+
+### Bug Fixes
+
+* **B0-662:** catch dataset create/upload failures and toast instead of crashing ([1d6a78e](https://github.com/betcocorp/bex2.0/commit/1d6a78ea17a5d8e7d1377c5b868663dda18a0233))
+
+
+### Features
+
+* **B0-647:** define semantic router example corpus and lazy startup pre-compute ([a960366](https://github.com/betcocorp/bex2.0/commit/a960366aa1edb8c869390d4e5d405b5b37426c1a))
+* **B0-648:** implement semantic similarity matching service ([cce473e](https://github.com/betcocorp/bex2.0/commit/cce473ede1239587ac0dded5944b3c7d71f03798))
+* **B0-649:** integrate semantic router into the orchestrator with shadow mode ([cda86a0](https://github.com/betcocorp/bex2.0/commit/cda86a0e09ba57c491db32200be17f92d1a105ee))
+* **B0-650:** add confidence and margin thresholds for semantic routing safety ([60468d6](https://github.com/betcocorp/bex2.0/commit/60468d614c1205c6ea4727a7abc02a3eaca94533))
+* **B0-651:** add semantic router observability and derived metrics ([8da49ad](https://github.com/betcocorp/bex2.0/commit/8da49ad4de4bb2b46b9f5a677218aa1995fe239b))
+* **B0-652:** extend eval harness for semantic router routing accuracy ([79e5758](https://github.com/betcocorp/bex2.0/commit/79e57589eba4ec104703093d80db84f336f2e624))
+* **B0-654:** cache semantic router example embeddings in Redis ([cd5862e](https://github.com/betcocorp/bex2.0/commit/cd5862ee20756de782d52823324c167542dc15c5))
+* **B0-656:** add ROUTER_TYPE setting to select the active router implementation ([22a45a6](https://github.com/betcocorp/bex2.0/commit/22a45a68e1f03ba586ac379b8021d81fb6c89b01))
+* **B0-657:** add routing test data model and CRUD actions ([1ffae9b](https://github.com/betcocorp/bex2.0/commit/1ffae9b7fec6c63afe214066598bc15ffbf53b52))
+* **B0-658:** add routing test admin page and nav entry ([a0a3c4e](https://github.com/betcocorp/bex2.0/commit/a0a3c4e5d65ebfa6ab4749929a48097edf69a00d))
+* **B0-659:** run routing test items against a selectable router ([51157a7](https://github.com/betcocorp/bex2.0/commit/51157a732ec2064efca191c1466655de535fad00))
+
 # [2.6.0](https://github.com/betcocorp/bex2.0/compare/v2.5.0...v2.6.0) (2026-08-24)
 
 
