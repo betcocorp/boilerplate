@@ -22,6 +22,7 @@ import {
   routingTestItemCreateSchema,
   routingTestItemDeleteSchema,
   routingTestItemUpdateSchema,
+  routingTestModelTagSchema,
   routingTestRouterTypeSchema,
 } from './schemas';
 import type { RoutingTestRunResult } from './types';
@@ -175,9 +176,14 @@ export async function deleteRoutingTestItemAction(formData: FormData) {
  * for this file's other non-fatal side effects. The workbench is waiting on the run result itself;
  * a history-write failure is a real problem worth logging, but it must never turn a successful run
  * into an error response, and `ok: false` results (nothing ran) are never persisted.
+ *
+ * B0-671 — `modelTag` is only meaningful when `routerType === 'llm'`; an invalid/unknown tag is
+ * silently ignored (treated as "no override chosen") rather than failing the whole run, since a
+ * stale/mismatched client-side value should degrade to the default model, not block the test.
  */
 export async function runRoutingTestAction(
   routerType: string,
+  modelTag?: string,
 ): Promise<RoutingTestRunResult> {
   const parsedRouterType = routingTestRouterTypeSchema.safeParse(routerType);
   if (!parsedRouterType.success) {
@@ -188,11 +194,17 @@ export async function runRoutingTestAction(
     };
   }
 
+  const parsedModelTag = routingTestModelTagSchema.safeParse(modelTag);
+
   const items = await listRoutingTestItems();
 
   let result: RoutingTestRunResult;
   try {
-    result = await runRoutingTest(items, parsedRouterType.data);
+    result = await runRoutingTest(
+      items,
+      parsedRouterType.data,
+      parsedModelTag.success ? parsedModelTag.data : undefined,
+    );
   } catch (error) {
     return {
       ok: false,

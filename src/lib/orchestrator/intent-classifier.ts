@@ -222,15 +222,25 @@ export const INTENT_CLASSIFIER_CACHE_TTL_MS = 5 * 60_000;
 /** Bound on distinct cached classifications; a turn only ever needs a handful. */
 const MAX_CACHE_ENTRIES = 256;
 
-/** `hash(message + prior-turn-ids)`, per the B0-505 ticket. Length-prefixed fields so no ambiguous concatenation. */
+/**
+ * `hash(message + prior-turn-ids + model)`, per the B0-505 ticket (the `model` segment added by
+ * B0-671). Length-prefixed fields so no ambiguous concatenation.
+ *
+ * B0-671 — `model` is folded into the key so a routing-test run with an explicit model override
+ * never reads back a classification cached under a different model for the same message: every
+ * existing caller omits `model`, so their keys are unaffected relative to one another (same
+ * `model:` suffix on every one of them), only the raw hash value changes.
+ */
 export function computeIntentClassifierCacheKey(
   message: string,
   priorMessages: PriorTurnMessage[] = [],
+  model?: string,
 ): string {
   const ids = priorMessages.map((m) => m.id);
   const canonical = [
     `msg:${message.length}:${message}`,
     `ids:${ids.length}:${ids.join(',')}`,
+    `model:${model ?? ''}`,
   ].join('|');
   return createHash('sha256').update(canonical, 'utf8').digest('hex');
 }
@@ -275,6 +285,8 @@ export type ClassifyUserIntentDeps = {
     message: string,
     priorMessages: PriorTurnMessage[],
     signal: AbortSignal,
+    /** B0-671 — resolved model id override for this call only; omitted → `resolveRouterModel()`. */
+    model?: string,
   ) => Promise<{
     parsed: z.infer<typeof llmIntentClassificationSchema>;
     usage: z.infer<typeof llmTokenUsageSchema>;
@@ -286,6 +298,7 @@ async function defaultRunLlm(
   message: string,
   priorMessages: PriorTurnMessage[],
   signal: AbortSignal,
+  model?: string,
 ): Promise<{
   parsed: z.infer<typeof llmIntentClassificationSchema>;
   usage: z.infer<typeof llmTokenUsageSchema>;
@@ -301,7 +314,7 @@ async function defaultRunLlm(
 
   const res = await client.responses.create(
     {
-      model: resolveRouterModel(),
+      model: model ?? resolveRouterModel(),
       instructions: buildInstructions(),
       input,
       text: {
@@ -393,10 +406,11 @@ async function runLlmClassification(
   message: string,
   priorMessages: PriorTurnMessage[],
   deps: ClassifyUserIntentDeps,
+  model?: string,
 ): Promise<IntentClassification> {
   const timeoutMs = resolveRouterTimeoutMs();
   const { parsed: raw, usage } = await withRouterTimeout(timeoutMs, (signal) =>
-    deps.runLlm(message, priorMessages, signal),
+    deps.runLlm(message, priorMessages, signal, model),
   );
 
   return {
@@ -405,7 +419,7 @@ async function runLlmClassification(
     source: 'llm',
     fallbackReason: null,
     usage,
-    model: resolveRouterModel(),
+    model: model ?? resolveRouterModel(),
   };
 }
 
@@ -416,21 +430,28 @@ async function runLlmClassification(
  * router failure break the turn. Also gated by `BEX_LLM_ROUTER_ENABLED` (default off): when disabled,
  * returns the keyword fallback immediately without a model call.
  *
- * B0-505 — results are cached in-process, keyed on `hash(message + prior-turn-ids)`, so an eval
- * replay or an immediate duplicate call does not re-hit the model. Cache is skipped when the LLM
+ * B0-505 — results are cached in-process, keyed on `hash(message + prior-turn-ids + model)`, so an
+ * eval replay or an immediate duplicate call does not re-hit the model. Cache is skipped when the LLM
  * router is disabled (the fallback path is already free).
+ *
+ * B0-671 — the optional `model` param overrides `resolveRouterModel()` for this call only (used by
+ * the routing-test workbench to compare LLM router accuracy across models). It is a resolved model
+ * id (e.g. what `resolveResponsesModel` returns for a `BexModelTag`), NOT a tag itself — this
+ * function does no tag resolution. Every existing caller omits it and sees byte-for-byte the same
+ * behavior as before this parameter existed.
  */
 export async function classifyUserIntent(
   message: string,
   priorMessages: PriorTurnMessage[] = [],
   deps: ClassifyUserIntentDeps = defaultDeps,
+  model?: string,
 ): Promise<IntentClassification> {
   if (!(await isLlmRouterEnabled())) {
     return fallbackClassification(message, 'llm_router_disabled');
   }
 
   const now = deps.now();
-  const cacheKey = computeIntentClassifierCacheKey(message, priorMessages);
+  const cacheKey = computeIntentClassifierCacheKey(message, priorMessages, model);
   const existing = cache.get(cacheKey);
 
   if (existing && existing.expiresAt > now) {
@@ -443,7 +464,7 @@ export async function classifyUserIntent(
   pruneCache(now);
   cacheStats.misses += 1;
 
-  const promise = runLlmClassification(message, priorMessages, deps).catch((error: unknown) => {
+  const promise = runLlmClassification(message, priorMessages, deps, model).catch((error: unknown) => {
     /**
      * B0-511 — evict on failure so only SUCCESSFUL classifications are cached. Pre-cutover this
      * deliberately cached the fallback too ("don't re-hit a down model"), which was harmless while

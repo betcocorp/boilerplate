@@ -54,6 +54,8 @@ type RoutingTestDatabase = {
           duration_ms?: number;
           avg_item_duration_ms?: number | null;
           warning?: string | null;
+          /** B0-671 — resolved model id an `llm` run called, null otherwise. */
+          model?: string | null;
           created_at?: string;
         };
         Update: Record<string, never>;
@@ -251,6 +253,7 @@ export async function insertRoutingTestRun(
       duration_ms: run.summary.durationMs,
       avg_item_duration_ms: run.summary.avgItemDurationMs,
       warning: run.warning,
+      model: run.model,
     })
     .select('*')
     .single();

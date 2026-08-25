@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { SME_AGENT_IDS } from '~/lib/agents/agent-registry';
+import { type ExplicitBexModelTag, isBexModelTag } from '~/lib/constants/models';
 
 /**
  * B0-657 — the expected-agent enum, derived from `SME_AGENT_IDS` so the TS side can never drift
@@ -15,6 +16,19 @@ export const routingTestExpectedAgentSchema = z.enum(SME_AGENT_IDS);
 
 /** Mirrors the `ROUTER_TYPE` setting's allowed values, plus `'llm'` (routing-test-only — B0-666). */
 export const routingTestRouterTypeSchema = z.enum(['keyword', 'semantic', 'llm']);
+
+/**
+ * B0-671 — the LLM-router model picker's allowed tags. Reuses `isBexModelTag`/`BEX_MODEL_TAGS`
+ * (`~/lib/constants/models.ts`, the single canonical list — see its file comment re: B0-564 drift)
+ * rather than a second enum, and deliberately excludes `'preview'`: an explicit choice is the point
+ * of this selector, and `'preview'` is already the implicit behavior when no `modelTag` is supplied
+ * at all. `z.custom` (not `z.enum`) because the allowed-values set is derived at runtime from
+ * `isBexModelTag`, not a literal tuple.
+ */
+export const routingTestModelTagSchema = z.custom<ExplicitBexModelTag>(
+  (value) => typeof value === 'string' && isBexModelTag(value) && value !== 'preview',
+  { message: 'Unknown model — choose a specific model, not preview.' },
+);
 
 const promptSchema = z
   .string()

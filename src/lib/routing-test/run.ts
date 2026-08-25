@@ -1,3 +1,5 @@
+import type { ExplicitBexModelTag } from '~/lib/constants/models';
+import { resolveResponsesModel } from '~/lib/openai/client';
 import type { SemanticRouteDecision } from '~/lib/orchestrator/semantic-router';
 import { routeUserMessageToSme } from '~/lib/orchestrator/sme-routing';
 
@@ -168,9 +170,17 @@ function degradedLlmResult(
  * semantic module is imported lazily, and a failure to load (or a per-item degradation reported via
  * `SemanticRouteDecision.error`) is reported back to the UI instead of throwing.
  */
+/**
+ * B0-671 — `modelTag` only affects the `llm` branch: an explicit `ExplicitBexModelTag` (never
+ * `'preview'` — see `routingTestModelTagSchema`) resolved via `resolveResponsesModel` before being
+ * passed into `classifyUserIntent` as a raw model id, so the LLM router calls the chosen model
+ * instead of whatever `BEX_ROUTER_MODEL` resolves to. Ignored (and reported back as `model: null`)
+ * for `keyword`/`semantic` runs, and for an `llm` run where the caller omits it.
+ */
 export async function runRoutingTest(
   items: readonly RoutingTestItemRecord[],
   routerType: RoutingTestRouterType,
+  modelTag?: ExplicitBexModelTag,
 ): Promise<RoutingTestRunResult> {
   const ranAt = new Date().toISOString();
   // B0-667 — wall-clock start for the whole run; `computeRoutingTestSummary`'s `durationMs` is
@@ -186,6 +196,7 @@ export async function runRoutingTest(
       items: [],
       summary: computeRoutingTestSummary([], Date.now() - runStartedAt),
       warning: 'No routing test items to run yet.',
+      model: null,
     };
   }
 
@@ -202,6 +213,7 @@ export async function runRoutingTest(
       items: results,
       summary: computeRoutingTestSummary(results, Date.now() - runStartedAt),
       warning: null,
+      model: null,
     };
   }
 
@@ -261,6 +273,7 @@ export async function runRoutingTest(
           : degradedCount > 0
             ? `${degradedCount} of ${results.length} items degraded to the semantic fallback (${firstError ?? 'unknown reason'}).`
             : null,
+      model: null,
     };
   }
 
@@ -283,6 +296,13 @@ export async function runRoutingTest(
     };
   }
 
+  // B0-671 — resolve the chosen tag to a concrete OpenAI model id ONCE per run (not per item):
+  // `resolveResponsesModel` applies the same env-override/alias layer the Run-dataset/chat pickers
+  // go through, so `gpt-5.5`/`gpt-5.6` resolve correctly instead of being passed to the API as a raw
+  // (non-existent) tag string. `undefined` when no tag was chosen — `classifyUserIntent` then falls
+  // back to `resolveRouterModel()` exactly as it did before this parameter existed.
+  const resolvedModel = modelTag ? resolveResponsesModel(modelTag) : undefined;
+
   const results = await mapWithConcurrency(
     items,
     ROUTING_TEST_LLM_CONCURRENCY,
@@ -291,7 +311,7 @@ export async function runRoutingTest(
       // `classifyUserIntent` is also contractually never-throwing (it has its own internal
       // fallback), but the same admin-surface defense applies as the semantic path above.
       try {
-        const result = llmResult(item, await classify(item.prompt));
+        const result = llmResult(item, await classify(item.prompt, undefined, undefined, resolvedModel));
         return { ...result, elapsedMs: Date.now() - itemStartedAt };
       } catch (error) {
         const result = degradedLlmResult(
@@ -318,5 +338,6 @@ export async function runRoutingTest(
         : degradedCount > 0
           ? `${degradedCount} of ${results.length} items degraded to the keyword fallback (${firstError ?? 'unknown reason'}).`
           : null,
+    model: resolvedModel ?? null,
   };
 }

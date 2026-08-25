@@ -108,6 +108,13 @@ export type RoutingTestRunResult =
       summary: RoutingTestRunSummary;
       /** Set when the whole run degraded (e.g. semantic router unavailable). */
       warning: string | null;
+      /**
+       * B0-671 — the resolved OpenAI model id the `llm` router actually called (from
+       * `resolveResponsesModel(modelTag)`), so a caller can verify which model produced this run
+       * without relying on `items[].detail.model` alone. `null` for `keyword`/`semantic` runs, and
+       * for an `llm` run where no explicit model tag was chosen (falls back to `BEX_ROUTER_MODEL`).
+       */
+      model: string | null;
     }
   | {
       ok: false;
@@ -131,6 +138,8 @@ export type RoutingTestRunRecord = {
   duration_ms: number;
   avg_item_duration_ms: number | null;
   warning: string | null;
+  /** B0-671 — the resolved OpenAI model id an `llm` run called, `null` otherwise (see `RoutingTestRunResult.model`). */
+  model: string | null;
   created_at: string;
 };
 

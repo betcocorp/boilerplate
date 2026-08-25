@@ -10,15 +10,26 @@ import { Button } from '~/components/ui/button';
 import { Label } from '~/components/ui/label';
 import { NativeSelect } from '~/components/ui/native-select';
 import { Spinner } from '~/components/ui/spinner';
+import supportedModels, {
+  MODEL_DESCRIPTIONS,
+  type ExplicitBexModelTag,
+  type SupportedModel,
+} from '~/lib/constants/models';
 import { runRoutingTestAction } from '~/lib/routing-test/actions';
-import { ROUTING_TEST_ROUTER_LABELS } from '~/lib/routing-test/constants';
-import { formatRoutingTestAccuracy } from '~/lib/routing-test/scoring';
+import {
+  ROUTING_TEST_ACCURACY_TONE_CLASSES,
+  ROUTING_TEST_ROUTER_LABELS,
+} from '~/lib/routing-test/constants';
+import { formatRoutingTestAccuracy, routingTestAccuracyTone } from '~/lib/routing-test/scoring';
 import type {
   RoutingTestItemRecord,
   RoutingTestItemResult,
   RoutingTestRouterType,
   RoutingTestRunResult,
 } from '~/lib/routing-test/types';
+
+/** B0-671 — default selection for the LLM router's model picker; mirrors `TestRunModelControls`. */
+const DEFAULT_ROUTING_TEST_MODEL_TAG: ExplicitBexModelTag = 'gpt-4.1';
 
 type RoutingTestWorkbenchProps = {
   items: RoutingTestItemRecord[];
@@ -43,6 +54,10 @@ export function RoutingTestWorkbench({
 }: RoutingTestWorkbenchProps) {
   const [routerType, setRouterType] =
     useState<RoutingTestRouterType>(defaultRouterType);
+  /** B0-671 — only consulted (and only sent to `runRoutingTestAction`) when `routerType === 'llm'`. */
+  const [modelTag, setModelTag] = useState<ExplicitBexModelTag>(
+    DEFAULT_ROUTING_TEST_MODEL_TAG,
+  );
   const [run, setRun] = useState<RoutingTestRunResult | null>(null);
   /**
    * B0-659/B0-666 — capability check at RUNTIME, not a hardcoded `disabled`: a router is only
@@ -70,7 +85,11 @@ export function RoutingTestWorkbench({
   function handleRun() {
     startRun(async () => {
       // Re-running REPLACES the prior result; nothing is persisted (ephemeral by design).
-      const result = await runRoutingTestAction(routerType);
+      // B0-671 — the model tag is only relevant (and only sent) for the LLM router.
+      const result = await runRoutingTestAction(
+        routerType,
+        routerType === 'llm' ? modelTag : undefined,
+      );
       setRun(result);
 
       if (!result.ok) {
@@ -93,7 +112,7 @@ export function RoutingTestWorkbench({
         });
       }
       toast.success(
-        `${ROUTING_TEST_ROUTER_LABELS[result.routerType]} router — ${formatRoutingTestAccuracy(result.summary)}`,
+        `${ROUTING_TEST_ROUTER_LABELS[result.routerType]} router${result.model ? ` (${result.model})` : ''} — ${formatRoutingTestAccuracy(result.summary)}`,
       );
     });
   }
@@ -130,9 +149,37 @@ export function RoutingTestWorkbench({
             </p>
           </div>
 
+          {/*
+           * B0-671 — model picker for the LLM router only, mirroring `TestRunModelControls`
+           * (`~/components/admin/tests/TestRunModelControls.tsx`) off the same canonical
+           * `~/lib/constants/models.ts` list. `preview` is not offered here — an explicit choice is
+           * the point of this selector (see `routingTestModelTagSchema`).
+           */}
+          {routerType === 'llm' ? (
+            <div className="flex flex-col gap-2 sm:max-w-xs sm:flex-1">
+              <Label htmlFor="routing-test-model-tag">Model</Label>
+              <NativeSelect
+                id="routing-test-model-tag"
+                onChange={(event) =>
+                  setModelTag(event.target.value as ExplicitBexModelTag)
+                }
+                value={modelTag}
+              >
+                {supportedModels.map((m: SupportedModel) => (
+                  <option key={m.name} value={m.name}>
+                    {m.label}
+                  </option>
+                ))}
+              </NativeSelect>
+              <p className="text-xs text-slate-500">{MODEL_DESCRIPTIONS[modelTag]}</p>
+            </div>
+          ) : null}
+
           <div className="flex items-center gap-3">
             {run?.ok ? (
-              <p className="text-sm font-medium text-slate-900">
+              <p
+                className={`text-sm font-medium ${ROUTING_TEST_ACCURACY_TONE_CLASSES[routingTestAccuracyTone(run.summary.accuracy)]}`}
+              >
                 {formatRoutingTestAccuracy(run.summary)}
               </p>
             ) : null}

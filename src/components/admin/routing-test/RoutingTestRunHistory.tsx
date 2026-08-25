@@ -9,8 +9,11 @@ import {
   TableHeader,
   TableRow,
 } from '~/components/ui/table';
-import { ROUTING_TEST_ROUTER_LABELS } from '~/lib/routing-test/constants';
-import { formatRoutingTestRunScore } from '~/lib/routing-test/scoring';
+import {
+  ROUTING_TEST_ACCURACY_TONE_CLASSES,
+  ROUTING_TEST_ROUTER_LABELS,
+} from '~/lib/routing-test/constants';
+import { formatRoutingTestRunScore, routingTestAccuracyTone } from '~/lib/routing-test/scoring';
 import type { RoutingTestRunRecord } from '~/lib/routing-test/types';
 import { formatDate, formatDurationSeconds } from '~/lib/utils/time';
 
@@ -56,7 +59,11 @@ export function RoutingTestRunHistory({ runs }: RoutingTestRunHistoryProps) {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {runs.map((run) => (
+              {runs.map((run) => {
+                // B0-670 — same 0-1 accuracy fraction `routingTestAccuracyTone` expects; derived
+                // from the persisted counts since `RoutingTestRunRecord` has no `accuracy` field.
+                const accuracy = run.total_items === 0 ? 0 : run.passed_items / run.total_items;
+                return (
                 <TableRow key={run.id}>
                   <TableCell className="text-sm text-slate-800">
                     <Link
@@ -68,8 +75,14 @@ export function RoutingTestRunHistory({ runs }: RoutingTestRunHistoryProps) {
                   </TableCell>
                   <TableCell className="text-sm text-slate-800">
                     {ROUTING_TEST_ROUTER_LABELS[run.router_type]}
+                    {/* B0-671 — which model an `llm` run actually called, straight off the persisted column. */}
+                    {run.router_type === 'llm' && run.model ? (
+                      <span className="ml-1 text-xs text-slate-500">({run.model})</span>
+                    ) : null}
                   </TableCell>
-                  <TableCell className="text-sm font-medium text-slate-900">
+                  <TableCell
+                    className={`text-sm font-medium ${ROUTING_TEST_ACCURACY_TONE_CLASSES[routingTestAccuracyTone(accuracy)]}`}
+                  >
                     {formatRoutingTestRunScore(run.passed_items, run.total_items)}
                   </TableCell>
                   <TableCell className="text-sm text-slate-700">
@@ -88,7 +101,8 @@ export function RoutingTestRunHistory({ runs }: RoutingTestRunHistoryProps) {
                     </Button>
                   </TableCell>
                 </TableRow>
-              ))}
+                );
+              })}
             </TableBody>
           </Table>
         </div>
