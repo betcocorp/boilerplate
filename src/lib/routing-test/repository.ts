@@ -321,3 +321,24 @@ export async function getRoutingTestRunWithItems(
 
   return { run, items };
 }
+
+/** B0-678 — delete a run and all its associated items; `true` when a row was actually removed, `false` when the id did not exist. */
+export async function deleteRoutingTestRun(id: string): Promise<boolean> {
+  const client = routingTestClient();
+
+  // Delete associated items first
+  await client
+    .from('routing_test_run_items')
+    .delete()
+    .eq('run_id', id);
+
+  // Delete the run record
+  const result = await client
+    .from('routing_test_runs')
+    .delete()
+    .eq('id', id)
+    .select('id');
+
+  const rows = (assertNoError(result) ?? []) as { id: string }[];
+  return rows.length > 0;
+}

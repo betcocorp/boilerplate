@@ -7,6 +7,7 @@ import { Button } from '~/components/ui/button';
 import { Label } from '~/components/ui/label';
 import { NativeSelect } from '~/components/ui/native-select';
 import { Spinner } from '~/components/ui/spinner';
+import { DeleteRoutingTestRunDialog } from '~/components/admin/routing-test/DeleteRoutingTestRunDialog';
 import supportedModels, {
   type ExplicitBexModelTag,
   type SupportedModel,
@@ -208,12 +209,16 @@ export function RoutingTestRunHistory({
                       ? `${Math.round(run.avg_item_duration_ms)}ms`
                       : '—'}
                   </TableCell>
-                  <TableCell className="text-right">
+                  <TableCell className="flex items-center justify-end gap-2">
                     <Button asChild size="sm" variant="outline">
                       <Link href={`/admin/routing-test/runs/${run.id}`}>
                         View
                       </Link>
                     </Button>
+                    <DeleteRoutingTestRunDialog
+                      run={run}
+                      returnPath="/admin/routing-test"
+                    />
                   </TableCell>
                 </TableRow>
                 );

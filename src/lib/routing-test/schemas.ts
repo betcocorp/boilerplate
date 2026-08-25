@@ -51,6 +51,11 @@ export const routingTestItemDeleteSchema = z.object({
   id: z.string().uuid('Missing or malformed item id.'),
 });
 
+/** B0-678 — delete run payload. */
+export const routingTestRunDeleteSchema = z.object({
+  id: z.string().uuid('Missing or malformed run id.'),
+});
+
 export type RoutingTestItemCreateInput = z.infer<
   typeof routingTestItemCreateSchema
 >;

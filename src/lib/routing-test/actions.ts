@@ -12,6 +12,7 @@ import { ROUTING_TEST_PATH } from './constants';
 import {
   listRoutingTestItems,
   deleteRoutingTestItem,
+  deleteRoutingTestRun,
   insertRoutingTestItem,
   insertRoutingTestRun,
   updateRoutingTestItem,
@@ -21,6 +22,7 @@ import {
   firstIssueMessage,
   routingTestItemCreateSchema,
   routingTestItemDeleteSchema,
+  routingTestRunDeleteSchema,
   routingTestItemUpdateSchema,
   routingTestModelTagSchema,
   routingTestRouterTypeSchema,
@@ -241,4 +243,38 @@ export async function runRoutingTestAction(
   }
 
   return result;
+}
+
+/** B0-678 — delete a routing test run by id, with redirect on success/failure. */
+export async function deleteRoutingTestRunAction(formData: FormData) {
+  const returnPath = normalizeReturnPath(formData.get('returnPath'));
+
+  const parsed = routingTestRunDeleteSchema.safeParse({
+    id: formText(formData, 'runId'),
+  });
+
+  if (!parsed.success) {
+    redirect(
+      encodeMessage(returnPath, 'error', firstIssueMessage(parsed.error)),
+    );
+  }
+
+  const removed = await deleteRoutingTestRun(parsed.data.id);
+  if (!removed) {
+    redirect(
+      encodeMessage(returnPath, 'error', 'That routing test run no longer exists.'),
+    );
+  }
+
+  await writeAuditLog(
+    'routing_test_run_deleted',
+    {
+      routing_test_run_id: parsed.data.id,
+      actor: await currentAdminActor(),
+    },
+    { traceId: newCorrelationId() },
+  );
+
+  revalidatePath(ROUTING_TEST_PATH);
+  redirect(encodeMessage(returnPath, 'success', 'Routing test run deleted.'));
 }
