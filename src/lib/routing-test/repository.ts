@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import { assertSupabaseNoError as assertNoError } from '~/lib/utils';
+import { createEmbedding } from '~/lib/rag/embeddings';
+import { assertSupabaseNoError as assertNoError, withRetry } from '~/lib/utils';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 import type { Json } from '~/types/supabase.public';
 
@@ -27,12 +28,16 @@ type RoutingTestDatabase = {
           id?: string;
           prompt: string;
           expected_agent: string;
+          embedding_large?: number[] | string | null;
+          embedding_model_large?: string | null;
           created_at?: string;
           updated_at?: string;
         };
         Update: {
           prompt?: string;
           expected_agent?: string;
+          embedding_large?: number[] | string | null;
+          embedding_model_large?: string | null;
           updated_at?: string;
         };
         Relationships: [];
@@ -113,13 +118,50 @@ export async function getRoutingTestItemById(
   return (assertNoError(result) ?? null) as RoutingTestItemRecord | null;
 }
 
+function toVectorLiteral(embedding: number[]) {
+  return `[${embedding.join(',')}]`;
+}
+
+/**
+ * B0-669 — embed a routing-test-item `prompt` via `createEmbedding` (`~/lib/rag/embeddings.ts`),
+ * wrapped in `withRetry` the same way the batch chunk path wraps its OpenAI calls. On failure
+ * (even after retries) this swallows and structured-logs rather than throwing, so a flaky
+ * embeddings call never blocks saving the item — callers get both columns back as `null`, which
+ * mirrors the `is distinct from → null` idiom `rag.document_chunk` uses for stale-embedding
+ * handling.
+ */
+async function embedRoutingTestPrompt(
+  prompt: string,
+): Promise<{ embedding_large: string | null; embedding_model_large: string | null }> {
+  try {
+    const { embedding, model } = await withRetry(() => createEmbedding(prompt));
+    return { embedding_large: toVectorLiteral(embedding), embedding_model_large: model };
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        level: 'error',
+        event: 'routing_test_item_embedding_failed',
+        message: error instanceof Error ? error.message : String(error),
+      }),
+    );
+    return { embedding_large: null, embedding_model_large: null };
+  }
+}
+
+/**
+ * B0-669 — always embeds the new `prompt` (via `embedRoutingTestPrompt`) and stores
+ * `embedding_large`/`embedding_model_large` alongside the row. A failed embedding still lets the
+ * item save, with both columns `null`.
+ */
 export async function insertRoutingTestItem(values: {
   prompt: string;
   expected_agent: string;
 }): Promise<RoutingTestItemRecord> {
+  const embedding = await embedRoutingTestPrompt(values.prompt);
+
   const result = await routingTestClient()
     .from('routing_test_items')
-    .insert(values)
+    .insert({ ...values, ...embedding })
     .select('*')
     .single();
 
@@ -129,14 +171,41 @@ export async function insertRoutingTestItem(values: {
 /**
  * `updated_at` is maintained by `trg_routing_test_items_updated_at` (same trigger function as
  * `public.tests`), so callers never set it.
+ *
+ * B0-669 — reads the current row first (rather than requiring the caller to thread the prior
+ * prompt through) so it can tell whether `prompt` actually changed. `embedding_large`/
+ * `embedding_model_large` are only ever included in the update payload when the trimmed incoming
+ * prompt differs from the stored one; an `expected_agent`-only edit omits both keys entirely, so
+ * they are left completely untouched rather than re-written to their existing value.
  */
 export async function updateRoutingTestItem(
   id: string,
   values: { prompt: string; expected_agent: string },
 ): Promise<RoutingTestItemRecord | null> {
+  const current = await getRoutingTestItemById(id);
+  if (!current) {
+    return null;
+  }
+
+  const trimmedPrompt = values.prompt.trim();
+  const promptChanged = trimmedPrompt !== current.prompt;
+
+  const updateValues: {
+    prompt: string;
+    expected_agent: string;
+    embedding_large?: string | null;
+    embedding_model_large?: string | null;
+  } = { prompt: values.prompt, expected_agent: values.expected_agent };
+
+  if (promptChanged) {
+    const embedding = await embedRoutingTestPrompt(trimmedPrompt);
+    updateValues.embedding_large = embedding.embedding_large;
+    updateValues.embedding_model_large = embedding.embedding_model_large;
+  }
+
   const result = await routingTestClient()
     .from('routing_test_items')
-    .update(values)
+    .update(updateValues)
     .eq('id', id)
     .select('*')
     .maybeSingle();

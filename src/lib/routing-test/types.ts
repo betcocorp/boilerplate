@@ -10,6 +10,10 @@ export type RoutingTestItemRecord = {
   id: string;
   prompt: string;
   expected_agent: SmeAgentId;
+  /** `halfvec(3072)` of `prompt` (B0-669) — round-trips through supabase-js as a JSON number array. */
+  embedding_large: number[] | null;
+  /** Model that produced `embedding_large` (B0-669), e.g. `text-embedding-3-large`. */
+  embedding_model_large: string | null;
   created_at: string;
   updated_at: string;
 };
