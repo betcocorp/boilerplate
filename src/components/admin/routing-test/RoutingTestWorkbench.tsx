@@ -112,56 +112,6 @@ export function RoutingTestWorkbench({
 
   return (
     <div className="flex flex-col gap-6">
-      <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-        <div className="mb-4 flex flex-col gap-1">
-          <p className="text-xs text-slate-500">
-            Defaults to the current <code>ROUTER_TYPE</code> setting (
-            {ROUTING_TEST_ROUTER_LABELS[defaultRouterType]}). Keyword routing
-            is instant; semantic and LLM routing each make one call per item
-            and run a few at a time.
-          </p>
-          {routerType === 'llm' ? (
-            <p className="text-xs text-slate-500">
-              {MODEL_DESCRIPTIONS[modelTag]}
-            </p>
-          ) : null}
-        </div>
-
-        {(
-          Object.entries(unavailableByRouter) as [
-            DegradableRouterType,
-            string,
-          ][]
-        ).map(([type, reason]) => (
-          <p
-            className="flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800"
-            key={type}
-          >
-            <AlertTriangleIcon className="mt-0.5 size-4 shrink-0" />
-            <span>
-              {ROUTING_TEST_ROUTER_LABELS[type]} router unavailable: {reason} —
-              reload once it is deployed to re-enable the option.
-            </span>
-          </p>
-        ))}
-
-        {run?.ok && run.warning ? (
-          <p className="flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">
-            <AlertTriangleIcon className="mt-0.5 size-4 shrink-0" />
-            <span>{run.warning}</span>
-          </p>
-        ) : null}
-
-        {run?.ok && run.items.length > 0 ? (
-          <p className="text-xs text-slate-500">
-            {ROUTING_TEST_ROUTER_LABELS[run.routerType]} router ·{' '}
-            {new Date(run.ranAt).toLocaleString()} · this inline result is
-            replaced by the next run, but has also been saved — reload to see
-            it in the run history below.
-          </p>
-        ) : null}
-      </section>
-
       <RoutingTestRunHistory
         runs={runs}
         routerType={routerType}
