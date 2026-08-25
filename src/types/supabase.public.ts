@@ -959,9 +959,17 @@ export type Database = {
           prompt_version: string | null
           response_payload: Json | null
           response_text: string | null
+          routing_agreement: string | null
           routing_confidence: number | null
           routing_decision: string | null
           row_index: number
+          semantic_confidence: number | null
+          semantic_embedding_ms: number | null
+          semantic_margin: number | null
+          semantic_path: string | null
+          semantic_route: string | null
+          semantic_route_latency_ms: number | null
+          semantic_scoring_ms: number | null
           status: string
           test_item_id: string
           test_result_id: string
@@ -988,9 +996,17 @@ export type Database = {
           prompt_version?: string | null
           response_payload?: Json | null
           response_text?: string | null
+          routing_agreement?: string | null
           routing_confidence?: number | null
           routing_decision?: string | null
           row_index: number
+          semantic_confidence?: number | null
+          semantic_embedding_ms?: number | null
+          semantic_margin?: number | null
+          semantic_path?: string | null
+          semantic_route?: string | null
+          semantic_route_latency_ms?: number | null
+          semantic_scoring_ms?: number | null
           status?: string
           test_item_id: string
           test_result_id: string
@@ -1017,9 +1033,17 @@ export type Database = {
           prompt_version?: string | null
           response_payload?: Json | null
           response_text?: string | null
+          routing_agreement?: string | null
           routing_confidence?: number | null
           routing_decision?: string | null
           row_index?: number
+          semantic_confidence?: number | null
+          semantic_embedding_ms?: number | null
+          semantic_margin?: number | null
+          semantic_path?: string | null
+          semantic_route?: string | null
+          semantic_route_latency_ms?: number | null
+          semantic_scoring_ms?: number | null
           status?: string
           test_item_id?: string
           test_result_id?: string

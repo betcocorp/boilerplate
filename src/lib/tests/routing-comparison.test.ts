@@ -6,12 +6,22 @@ import {
   buildRoutingComparisonFields,
   computeAmbiguousRouteRate,
   computeConfidenceDistribution,
+  computeLatencyDistribution,
   computeRouterLatencyProfile,
+  computeRoutingAgreement,
   computeRoutingComparisonReport,
   computeRoutingComparisonSummary,
+  computeSemanticFallbackRate,
+  computeSemanticFalsePositiveRate,
+  computeSemanticLatencyProfile,
+  computeSemanticRoutingAccuracy,
+  computeSemanticRoutingAccuracyByRoute,
+  computeSemanticRoutingReport,
+  computeThreeWayAgreement,
   normalizeKeywordRoute,
   resolveIntendedAgentLabel,
   type RoutingComparisonReportInput,
+  type SemanticRoutingItem,
 } from './routing-comparison';
 
 describe('normalizeKeywordRoute', () => {
@@ -369,5 +379,396 @@ describe('computeRoutingComparisonSummary', () => {
     expect(summary.llmAccuracy).toBeNull();
     expect(summary.actualAccuracy).toBeNull();
     expect(summary.agreementRate).toBeNull();
+  });
+});
+
+// B0-652 — semantic-router (third router) instrumentation and reducers.
+
+describe('buildRoutingComparisonFields — semantic decision (B0-652)', () => {
+  it('omits the semantic columns entirely when no semantic decision is passed', () => {
+    const fields = buildRoutingComparisonFields({
+      keywordDecision: { agent: 'floor' },
+      llmClassification: { intent: 'floor', confidence: 0.9 },
+      intendedAgentLabel: 'floor',
+    });
+
+    expect('semantic_route' in fields).toBe(false);
+    expect('routing_agreement' in fields).toBe(false);
+  });
+
+  it('maps a semantic decision onto the semantic_* columns and derives routing_agreement', () => {
+    const fields = buildRoutingComparisonFields({
+      keywordDecision: { agent: 'floor' },
+      llmClassification: { intent: 'floor', confidence: 0.9 },
+      intendedAgentLabel: 'floor',
+      keywordRouteLatencyMs: 2,
+      llmRouteLatencyMs: 300,
+      semanticDecision: {
+        route: 'floor',
+        confidence: 0.71,
+        margin: 0.12,
+        path: 'semantic',
+        latencyMs: 180,
+        embeddingMs: 176,
+        scoringMs: 4,
+      },
+    });
+
+    expect(fields.semantic_route).toBe('floor');
+    expect(fields.semantic_confidence).toBe(0.71);
+    expect(fields.semantic_margin).toBe(0.12);
+    expect(fields.semantic_path).toBe('semantic');
+    expect(fields.semantic_route_latency_ms).toBe(180);
+    expect(fields.semantic_embedding_ms).toBe(176);
+    expect(fields.semantic_scoring_ms).toBe(4);
+    expect(fields.routing_agreement).toBe('all_agree');
+  });
+
+  it('records nulls (not zeros) for latency components the decision did not report', () => {
+    const fields = buildRoutingComparisonFields({
+      keywordDecision: { agent: null },
+      llmClassification: { intent: 'ambiguous', confidence: 0 },
+      intendedAgentLabel: null,
+      semanticDecision: { route: 'ambiguous', confidence: 0.2, margin: 0.01, path: 'fallback' },
+    });
+
+    expect(fields.semantic_route_latency_ms).toBeNull();
+    expect(fields.semantic_embedding_ms).toBeNull();
+    expect(fields.semantic_scoring_ms).toBeNull();
+  });
+});
+
+describe('computeRoutingAgreement', () => {
+  it('reports all_agree when all three routers match', () => {
+    expect(
+      computeRoutingAgreement({ keywordRoute: 'floor', llmRoute: 'floor', semanticRoute: 'floor' }),
+    ).toBe('all_agree');
+  });
+
+  it('names the agreeing pair when the third differs', () => {
+    expect(
+      computeRoutingAgreement({ keywordRoute: 'floor', llmRoute: 'floor', semanticRoute: 'product' }),
+    ).toBe('keyword_llm');
+    expect(
+      computeRoutingAgreement({ keywordRoute: 'floor', llmRoute: 'product', semanticRoute: 'floor' }),
+    ).toBe('keyword_semantic');
+    expect(
+      computeRoutingAgreement({ keywordRoute: 'product', llmRoute: 'floor', semanticRoute: 'floor' }),
+    ).toBe('llm_semantic');
+  });
+
+  it('reports all_differ only when three present routes are mutually distinct', () => {
+    expect(
+      computeRoutingAgreement({ keywordRoute: 'floor', llmRoute: 'product', semanticRoute: 'bathroom' }),
+    ).toBe('all_differ');
+  });
+
+  it('treats two present, matching routes as agreement and two differing as all_differ', () => {
+    expect(
+      computeRoutingAgreement({ keywordRoute: 'floor', llmRoute: null, semanticRoute: 'floor' }),
+    ).toBe('all_agree');
+    expect(
+      computeRoutingAgreement({ keywordRoute: 'floor', llmRoute: null, semanticRoute: 'product' }),
+    ).toBe('all_differ');
+  });
+
+  it('returns null when fewer than two routes are present (nothing to compare)', () => {
+    expect(
+      computeRoutingAgreement({ keywordRoute: 'floor', llmRoute: null, semanticRoute: undefined }),
+    ).toBeNull();
+    expect(
+      computeRoutingAgreement({ keywordRoute: null, llmRoute: null, semanticRoute: null }),
+    ).toBeNull();
+  });
+});
+
+describe('computeRoutingComparisonReport — semantic route (B0-652)', () => {
+  function item(overrides: Partial<RoutingComparisonReportInput>): RoutingComparisonReportInput {
+    return {
+      resultItemId: 'r1',
+      testItemId: 'item-1',
+      rowIndex: 1,
+      prompt: 'p',
+      intendedAgentLabel: null,
+      routingDecision: null,
+      keywordRoute: null,
+      llmRoute: null,
+      ...overrides,
+    };
+  }
+
+  it('scores the semantic router over its own denominator', () => {
+    const report = computeRoutingComparisonReport([
+      item({ intendedAgentLabel: 'floor', keywordRoute: 'floor', llmRoute: 'floor', semanticRoute: 'floor' }),
+      item({
+        rowIndex: 2,
+        intendedAgentLabel: 'bathroom',
+        keywordRoute: 'bathroom',
+        llmRoute: 'bathroom',
+        semanticRoute: 'product',
+      }),
+      // Scored for keyword/llm but never semantically instrumented.
+      item({ rowIndex: 3, intendedAgentLabel: 'floor', keywordRoute: 'floor', llmRoute: 'floor' }),
+    ]);
+
+    expect(report.scoredItemCount).toBe(3);
+    expect(report.semanticScoredItemCount).toBe(2);
+    expect(report.semanticMatchedCount).toBe(1);
+    expect(report.semanticAccuracy).toBeCloseTo(0.5);
+    expect(report.keywordAccuracy).toBeCloseTo(1);
+  });
+
+  it('adds an item to mismatches when only the semantic router missed', () => {
+    const report = computeRoutingComparisonReport([
+      item({
+        intendedAgentLabel: 'floor',
+        routingDecision: 'floor',
+        keywordRoute: 'floor',
+        llmRoute: 'floor',
+        semanticRoute: 'product',
+      }),
+    ]);
+    expect(report.mismatches).toHaveLength(1);
+    expect(report.mismatches[0].semanticRoute).toBe('product');
+  });
+
+  it('leaves semanticAccuracy null when no item carries a semantic route', () => {
+    const report = computeRoutingComparisonReport([
+      item({ intendedAgentLabel: 'floor', keywordRoute: 'floor', llmRoute: 'floor' }),
+    ]);
+    expect(report.semanticScoredItemCount).toBe(0);
+    expect(report.semanticAccuracy).toBeNull();
+  });
+});
+
+describe('buildConfusionMatrix — semantic router key (B0-652)', () => {
+  it('builds a matrix from semanticRoute when asked for the semantic router', () => {
+    const matrix = buildConfusionMatrix(
+      [
+        { intendedAgentLabel: 'floor', keywordRoute: 'product', llmRoute: 'product', semanticRoute: 'floor' },
+        { intendedAgentLabel: 'floor', keywordRoute: 'floor', llmRoute: 'floor', semanticRoute: 'product' },
+        // No semantic instrumentation — excluded from the semantic matrix only.
+        { intendedAgentLabel: 'floor', keywordRoute: 'floor', llmRoute: 'floor' },
+      ],
+      'semantic',
+    );
+    expect(matrix.totalCount).toBe(2);
+    expect(matrix.counts.floor.floor).toBe(1);
+    expect(matrix.counts.floor.product).toBe(1);
+  });
+});
+
+describe('computeSemanticRoutingAccuracy (strict vs plausible_agents-lenient)', () => {
+  const items: SemanticRoutingItem[] = [
+    // Exactly right.
+    { intendedAgentLabel: 'floor', plausibleAgentLabels: ['floor'], semanticRoute: 'floor' },
+    // Near miss the golden set deliberately allows.
+    {
+      intendedAgentLabel: 'bathroom',
+      plausibleAgentLabels: ['bathroom', 'product'],
+      semanticRoute: 'product',
+    },
+    // Wrong under both modes.
+    { intendedAgentLabel: 'dilution', plausibleAgentLabels: ['dilution'], semanticRoute: 'floor' },
+    // Unlabeled — excluded entirely.
+    { intendedAgentLabel: null, plausibleAgentLabels: ['floor'], semanticRoute: 'floor' },
+    // Labeled but the router never reported — excluded, not counted wrong.
+    { intendedAgentLabel: 'floor', plausibleAgentLabels: ['floor'], semanticRoute: null },
+  ];
+
+  it('scores strict and lenient over the same denominator', () => {
+    const accuracy = computeSemanticRoutingAccuracy(items);
+    expect(accuracy.scoredItemCount).toBe(3);
+    expect(accuracy.strictMatchedCount).toBe(1);
+    expect(accuracy.lenientMatchedCount).toBe(2);
+    expect(accuracy.strictAccuracy).toBeCloseTo(1 / 3);
+    expect(accuracy.lenientAccuracy).toBeCloseTo(2 / 3);
+  });
+
+  it('falls back to the strict test when an item carries no plausible list', () => {
+    const accuracy = computeSemanticRoutingAccuracy([
+      { intendedAgentLabel: 'floor', semanticRoute: 'product' },
+      { intendedAgentLabel: 'floor', plausibleAgentLabels: [], semanticRoute: 'product' },
+    ]);
+    expect(accuracy.lenientMatchedCount).toBe(0);
+    expect(accuracy.lenientAccuracy).toBe(0);
+  });
+
+  it('returns null accuracies when nothing is scorable', () => {
+    const accuracy = computeSemanticRoutingAccuracy([
+      { intendedAgentLabel: null, semanticRoute: 'floor' },
+    ]);
+    expect(accuracy.scoredItemCount).toBe(0);
+    expect(accuracy.strictAccuracy).toBeNull();
+    expect(accuracy.lenientAccuracy).toBeNull();
+  });
+});
+
+describe('computeSemanticRoutingAccuracyByRoute', () => {
+  it('groups by ground truth, sorted, omitting routes with no scorable items', () => {
+    const byRoute = computeSemanticRoutingAccuracyByRoute([
+      { intendedAgentLabel: 'floor', semanticRoute: 'floor' },
+      { intendedAgentLabel: 'floor', semanticRoute: 'product' },
+      { intendedAgentLabel: 'bathroom', plausibleAgentLabels: ['bathroom', 'product'], semanticRoute: 'product' },
+      { intendedAgentLabel: 'dilution', semanticRoute: null },
+    ]);
+
+    expect(byRoute.map((r) => r.groundTruthLabel)).toEqual(['bathroom', 'floor']);
+    expect(byRoute[0].strictAccuracy).toBe(0);
+    expect(byRoute[0].lenientAccuracy).toBe(1);
+    expect(byRoute[1].itemCount).toBe(2);
+    expect(byRoute[1].strictAccuracy).toBeCloseTo(0.5);
+  });
+});
+
+describe('computeSemanticFalsePositiveRate', () => {
+  it('counts only confident (path=semantic) wrong routes, over the confident denominator', () => {
+    const report = computeSemanticFalsePositiveRate([
+      // Confident and right.
+      { intendedAgentLabel: 'floor', semanticRoute: 'floor', semanticPath: 'semantic' },
+      // Confident and WRONG — the false positive.
+      { intendedAgentLabel: 'bathroom', semanticRoute: 'product', semanticPath: 'semantic' },
+      // Wrong but the router already said it wasn't sure — not a false positive.
+      { intendedAgentLabel: 'dilution', semanticRoute: 'ambiguous', semanticPath: 'fallback' },
+      // Unlabeled — out of scope.
+      { intendedAgentLabel: null, semanticRoute: 'product', semanticPath: 'semantic' },
+    ]);
+
+    expect(report.confidentItemCount).toBe(2);
+    expect(report.falsePositiveCount).toBe(1);
+    expect(report.falsePositiveRate).toBeCloseTo(0.5);
+    expect(report.scoredItemCount).toBe(3);
+    expect(report.falsePositiveRateOfScored).toBeCloseTo(1 / 3);
+  });
+
+  it('returns null rates when nothing was measurable', () => {
+    const report = computeSemanticFalsePositiveRate([
+      { intendedAgentLabel: 'floor', semanticRoute: 'floor' },
+    ]);
+    expect(report.falsePositiveRate).toBeNull();
+    expect(report.falsePositiveRateOfScored).toBeNull();
+  });
+});
+
+describe('computeSemanticFallbackRate', () => {
+  it('rates fallbacks over every item with a path, labeled or not', () => {
+    const report = computeSemanticFallbackRate([
+      { intendedAgentLabel: 'floor', semanticRoute: 'floor', semanticPath: 'semantic' },
+      { intendedAgentLabel: null, semanticRoute: 'ambiguous', semanticPath: 'fallback' },
+      { intendedAgentLabel: 'floor', semanticRoute: 'ambiguous', semanticPath: 'fallback' },
+      { intendedAgentLabel: 'floor', semanticRoute: null },
+    ]);
+    expect(report.pathPresentCount).toBe(3);
+    expect(report.fallbackCount).toBe(2);
+    expect(report.fallbackRate).toBeCloseTo(2 / 3);
+  });
+
+  it('returns a null rate when the router was never consulted', () => {
+    expect(
+      computeSemanticFallbackRate([{ intendedAgentLabel: 'floor', semanticRoute: null }]).fallbackRate,
+    ).toBeNull();
+  });
+});
+
+describe('computeLatencyDistribution / computeSemanticLatencyProfile', () => {
+  it('reports p50/p95/p99 plus min/max, excluding non-finite samples', () => {
+    const distribution = computeLatencyDistribution([5, 1, 3, 2, 4]);
+    expect(distribution.sampleCount).toBe(5);
+    expect(distribution.p50Ms).toBe(3);
+    expect(distribution.p95Ms).toBe(5);
+    expect(distribution.p99Ms).toBe(5);
+    expect(distribution.minMs).toBe(1);
+    expect(distribution.maxMs).toBe(5);
+  });
+
+  it('returns all-null stats for an empty sample set', () => {
+    expect(computeLatencyDistribution([])).toEqual({
+      sampleCount: 0,
+      p50Ms: null,
+      p95Ms: null,
+      p99Ms: null,
+      minMs: null,
+      maxMs: null,
+    });
+  });
+
+  it('splits total/embedding/scoring so a cold embedding cannot be mistaken for scoring cost', () => {
+    const profile = computeSemanticLatencyProfile([
+      {
+        intendedAgentLabel: 'floor',
+        semanticRoute: 'floor',
+        semanticRouteLatencyMs: 200,
+        semanticEmbeddingMs: 196,
+        semanticScoringMs: 4,
+      },
+      {
+        intendedAgentLabel: 'floor',
+        semanticRoute: 'floor',
+        semanticRouteLatencyMs: 6,
+        semanticEmbeddingMs: 0,
+        semanticScoringMs: 6,
+      },
+      // Not measured — must not be counted as 0ms.
+      { intendedAgentLabel: 'floor', semanticRoute: 'floor' },
+    ]);
+
+    expect(profile.total.sampleCount).toBe(2);
+    expect(profile.scoring.sampleCount).toBe(2);
+    expect(profile.scoring.p95Ms).toBe(6);
+    expect(profile.embedding.maxMs).toBe(196);
+  });
+});
+
+describe('computeThreeWayAgreement', () => {
+  it('counts every agreement label and the all-agree rate over comparable items', () => {
+    const report = computeThreeWayAgreement([
+      { keywordRoute: 'floor', llmRoute: 'floor', semanticRoute: 'floor' },
+      { keywordRoute: 'floor', llmRoute: 'floor', semanticRoute: 'product' },
+      { keywordRoute: 'floor', llmRoute: 'product', semanticRoute: 'bathroom' },
+      // Only one route present — excluded, not a disagreement.
+      { keywordRoute: 'floor', llmRoute: null, semanticRoute: null },
+    ]);
+
+    expect(report.comparableCount).toBe(3);
+    expect(report.counts.all_agree).toBe(1);
+    expect(report.counts.keyword_llm).toBe(1);
+    expect(report.counts.all_differ).toBe(1);
+    expect(report.allAgreeRate).toBeCloseTo(1 / 3);
+  });
+
+  it('returns a null rate when nothing is comparable', () => {
+    const report = computeThreeWayAgreement([
+      { keywordRoute: null, llmRoute: null, semanticRoute: 'floor' },
+    ]);
+    expect(report.comparableCount).toBe(0);
+    expect(report.allAgreeRate).toBeNull();
+  });
+});
+
+describe('computeSemanticRoutingReport', () => {
+  it('bundles accuracy, per-route accuracy, false positives, fallback and latency', () => {
+    const report = computeSemanticRoutingReport([
+      {
+        intendedAgentLabel: 'floor',
+        plausibleAgentLabels: ['floor'],
+        semanticRoute: 'floor',
+        semanticPath: 'semantic',
+        semanticScoringMs: 3,
+      },
+      {
+        intendedAgentLabel: 'bathroom',
+        plausibleAgentLabels: ['bathroom', 'product'],
+        semanticRoute: 'product',
+        semanticPath: 'semantic',
+        semanticScoringMs: 5,
+      },
+    ]);
+
+    expect(report.accuracy.strictAccuracy).toBeCloseTo(0.5);
+    expect(report.accuracy.lenientAccuracy).toBeCloseTo(1);
+    expect(report.accuracyByRoute).toHaveLength(2);
+    expect(report.falsePositives.falsePositiveRate).toBeCloseTo(0.5);
+    expect(report.fallback.fallbackRate).toBe(0);
+    expect(report.latency.scoring.p95Ms).toBe(5);
   });
 });

@@ -15,6 +15,7 @@ import { SME_AGENT_IDS, V1_AGENT_REGISTRY } from '~/lib/agents/agent-registry';
 import {
   type AggregateWindow,
   buildRoutingDistribution,
+  percentileNearestRank,
   type RunScanRow,
   roundTo,
   scanWorkflowRuns,
@@ -40,6 +41,17 @@ export const LOW_CONFIDENCE_THRESHOLD = 0.4;
  */
 const PLANNER_STEP_NAME = 'orchestration_planner';
 const LIVE_CLASSIFIER_GATE_ID = 'llm_intent_classifier_live';
+
+/**
+ * B0-651 — the two gate ids `~/lib/workflows/product-support/semantic-router-decision.ts` writes,
+ * both on the same `orchestration_planner` step as the classifier gates above. Read together (and
+ * distinguished by `thresholds.mode`) so a rollout that is half shadow and half live still reduces
+ * to one set of numbers, while `liveCount`/`shadowCount` say how the sample splits.
+ */
+const SEMANTIC_ROUTER_LIVE_GATE_ID = 'semantic_router_live';
+const SEMANTIC_ROUTER_SHADOW_GATE_ID = 'semantic_router_shadow';
+const SEMANTIC_PATH_SEMANTIC = 'semantic';
+const SEMANTIC_PATH_FALLBACK = 'fallback';
 
 /** `gateRecordSchema.verdict` is a free string; these are the two the live gate writes. */
 const AGREES_VERDICT = 'agrees_with_keyword_router';
@@ -88,6 +100,88 @@ export type RouterAgreementSummary = {
   fallbackCount: number;
 };
 
+/**
+ * B0-651 — a distribution over one numeric field, named for the ticket's "histogram" metrics.
+ *
+ * Percentiles use `percentileNearestRank` (no interpolation) so every reported value is an
+ * OBSERVED measurement, matching `/admin/observability`'s latency figures exactly. Every field is
+ * `null` at `sampleSize === 0` rather than 0 — "no samples" and "measured zero" must not read alike
+ * (a warm in-process cache hit can legitimately measure 0ms, which is a real data point).
+ */
+export type SemanticRouterDistribution = {
+  sampleSize: number;
+  mean: number | null;
+  p50: number | null;
+  p95: number | null;
+  p99: number | null;
+  min: number | null;
+  max: number | null;
+};
+
+/** One cell of the `semantic_router_route` counter: a route, labeled by the path that produced it. */
+export type SemanticRouterRouteCount = {
+  route: string;
+  /** `'semantic'` or `'fallback'` — the AC's metric label. */
+  path: string;
+  count: number;
+};
+
+/**
+ * B0-651 — the semantic router's rollout metrics.
+ *
+ * These are QUERY-TIME REDUCERS over persisted `workflow_steps.output` gate records, not an
+ * exported metrics pipeline: bex-2.0 has no Prometheus/StatsD/OpenTelemetry exporter (see
+ * `~/lib/observability/logger.ts` — observability here is structured logs plus Supabase rows). The
+ * field names deliberately match the metric names the ticket asks for, so the mapping from
+ * "`semantic_router_fallback_rate` in Prometheus" to "this number on the dashboard" is one-to-one.
+ */
+export type SemanticRouterMetrics = {
+  /** Total semantic-router decisions recorded in the window (live + shadow). */
+  decisionCount: number;
+  /** Decisions where the router was the authority (`semantic_router_live`). */
+  liveCount: number;
+  /** Decisions recorded for comparison only (`semantic_router_shadow`). */
+  shadowCount: number;
+  /** `semantic_router_route` — counter per route, labeled by path. Desc by count. */
+  semanticRouterRoute: SemanticRouterRouteCount[];
+  /** `semantic_router_latency_ms` — end-to-end router latency. */
+  semanticRouterLatencyMs: SemanticRouterDistribution;
+  /**
+   * The honest split of the number above. A cold route pays an OpenAI embedding round-trip
+   * (`embeddingMs`, typically 80-400ms); only a warm in-process cache hit is single-digit ms. Both
+   * halves are reported so nobody reads a warm p50 as the general case.
+   */
+  semanticRouterEmbeddingMs: SemanticRouterDistribution;
+  semanticRouterScoringMs: SemanticRouterDistribution;
+  /** `semantic_router_confidence`. */
+  semanticRouterConfidence: SemanticRouterDistribution;
+  /** `semantic_router_margin`. */
+  semanticRouterMargin: SemanticRouterDistribution;
+  /**
+   * `semantic_router_fallback_rate` — derived: `fallbackCount / decisionCount`. `null` when the
+   * window recorded no decisions, never 0 (which would read as "it never falls back").
+   */
+  semanticRouterFallbackRate: number | null;
+  fallbackCount: number;
+  /** Distinct `error` strings on the fallback path, desc by count. The "why" behind the rate. */
+  fallbackReasons: Array<{ reason: string; count: number }>;
+  /** Share of decisions whose confidence cleared its threshold. `null` with no samples. */
+  confidenceThresholdPassRate: number | null;
+  /** Share of decisions whose margin cleared its threshold. `null` with no samples. */
+  marginThresholdPassRate: number | null;
+  /**
+   * How often the semantic route matched the route the turn ACTUALLY ran. On a live+`semantic`
+   * decision these agree by construction (the router decided), so this is informative mainly for
+   * shadow decisions and for live fallbacks — which is exactly the shadow-stage comparison
+   * B0-649's DoD asks to surface.
+   */
+  agreementWithRoutingDecision: {
+    comparableCount: number;
+    agreementCount: number;
+    agreementRate: number | null;
+  };
+};
+
 export type RoutingHealthData = {
   windowFrom: string;
   windowTo: string;
@@ -95,6 +189,8 @@ export type RoutingHealthData = {
   /** Desc by count. `'ambiguous'` (a real classifier outcome) and `'unrouted'` (no decision recorded) stay distinct. */
   rows: RoutingHealthRow[];
   agreement: RouterAgreementSummary;
+  /** B0-651 — semantic-router rollout metrics. All-zero/null when the router has never run. */
+  semanticRouter: SemanticRouterMetrics;
 };
 
 /** One `orchestration_planner` step row: the shape `scanWorkflowStepOutputsByName` returns. */
@@ -191,6 +287,201 @@ function buildRouterAgreement(plannerSteps: RoutingPlannerScanRow[]): RouterAgre
   };
 }
 
+/** A metric value must be a finite number to count; anything else is absent, not zero. */
+function readFiniteNumber(inputs: Record<string, unknown>, key: string): number | null {
+  const value = inputs[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function readBoolean(record: Record<string, unknown>, key: string): boolean | null {
+  const value = record[key];
+  return typeof value === 'boolean' ? value : null;
+}
+
+const EMPTY_DISTRIBUTION: SemanticRouterDistribution = {
+  sampleSize: 0,
+  mean: null,
+  p50: null,
+  p95: null,
+  p99: null,
+  min: null,
+  max: null,
+};
+
+/**
+ * B0-651 — p50/p95/p99 + mean/min/max over one metric's samples.
+ *
+ * `decimals` because latency (ms) and confidence (0..1) want different precision: rounding a
+ * confidence of 0.6234 to 0 decimals would report every decision as "1".
+ *
+ * Samples are clamped at 0 rather than dropped. A negative latency should be impossible here (the
+ * router measures its own wall time from one Node clock, unlike `workflow_steps`, where
+ * `started_at` is Postgres `now()` and `completed_at` is the Node clock and fast steps therefore
+ * compute negative) — but the clamp costs nothing and the repo's rule is clamp, never filter: a
+ * dropped sample silently shrinks the denominator of every percentile beside it.
+ */
+export function buildSemanticRouterDistribution(
+  samples: number[],
+  decimals: number,
+): SemanticRouterDistribution {
+  if (samples.length === 0) {
+    return EMPTY_DISTRIBUTION;
+  }
+  const clamped = samples.map((sample) => Math.max(0, sample));
+  const sorted = [...clamped].sort((a, b) => a - b);
+  const sum = clamped.reduce((total, sample) => total + sample, 0);
+
+  return {
+    sampleSize: sorted.length,
+    mean: roundTo(sum / sorted.length, decimals),
+    p50: roundTo(percentileNearestRank(sorted, 0.5), decimals),
+    p95: roundTo(percentileNearestRank(sorted, 0.95), decimals),
+    p99: roundTo(percentileNearestRank(sorted, 0.99), decimals),
+    min: roundTo(sorted[0] ?? 0, decimals),
+    max: roundTo(sorted[sorted.length - 1] ?? 0, decimals),
+  };
+}
+
+/** Latency is whole milliseconds; confidence/margin keep 4 decimals like `avgConfidence`. */
+const LATENCY_DECIMALS = 0;
+const SCORE_DECIMALS = 4;
+
+/**
+ * B0-651 — fold every persisted semantic-router gate record in the window into the five metrics the
+ * ticket names, plus the fallback reasons and threshold pass-rates that explain them.
+ *
+ * Counted per GATE RECORD, not per run — same rule as `buildRouterAgreement`: one record is one
+ * routing decision. `readStepGateRecords` degrades a malformed `output` to `[]`, so a bad row
+ * contributes nothing and never throws.
+ */
+export function buildSemanticRouterMetrics(
+  plannerSteps: RoutingPlannerScanRow[],
+): SemanticRouterMetrics {
+  const routeCounts = new Map<string, SemanticRouterRouteCount>();
+  const fallbackReasonCounts = new Map<string, number>();
+  const latency: number[] = [];
+  const embedding: number[] = [];
+  const scoring: number[] = [];
+  const confidence: number[] = [];
+  const margin: number[] = [];
+
+  let decisionCount = 0;
+  let liveCount = 0;
+  let shadowCount = 0;
+  let fallbackCount = 0;
+  let confidenceThresholdSamples = 0;
+  let confidenceThresholdPassed = 0;
+  let marginThresholdSamples = 0;
+  let marginThresholdPassed = 0;
+  let comparableCount = 0;
+  let agreementCount = 0;
+
+  for (const step of plannerSteps) {
+    for (const record of readStepGateRecords(step.output)) {
+      const isLive = record.gate === SEMANTIC_ROUTER_LIVE_GATE_ID;
+      const isShadow = record.gate === SEMANTIC_ROUTER_SHADOW_GATE_ID;
+      if (!isLive && !isShadow) {
+        continue;
+      }
+
+      decisionCount += 1;
+      if (isLive) {
+        liveCount += 1;
+      } else {
+        shadowCount += 1;
+      }
+
+      const route = readString(record.inputs, 'semanticRoute') ?? 'unknown';
+      const path = readString(record.inputs, 'semanticPath') ?? 'unknown';
+      const key = `${route} ${path}`;
+      const existing = routeCounts.get(key);
+      if (existing) {
+        existing.count += 1;
+      } else {
+        routeCounts.set(key, { route, path, count: 1 });
+      }
+
+      if (path === SEMANTIC_PATH_FALLBACK) {
+        fallbackCount += 1;
+        // `error` is the router's own reason string; a threshold miss carries no error, so the
+        // bucket is named rather than dropped — otherwise the reasons would not sum to the rate.
+        const reason = readString(record.inputs, 'semanticError') ?? 'thresholds_not_met';
+        fallbackReasonCounts.set(reason, (fallbackReasonCounts.get(reason) ?? 0) + 1);
+      }
+
+      const latencyMs = readFiniteNumber(record.inputs, 'semanticLatencyMs');
+      if (latencyMs !== null) latency.push(latencyMs);
+      const embeddingMs = readFiniteNumber(record.inputs, 'semanticEmbeddingMs');
+      if (embeddingMs !== null) embedding.push(embeddingMs);
+      const scoringMs = readFiniteNumber(record.inputs, 'semanticScoringMs');
+      if (scoringMs !== null) scoring.push(scoringMs);
+
+      /**
+       * Confidence/margin are only meaningful on the `semantic` path: a `fallback` decision carries
+       * whatever the failed attempt happened to leave behind (0 on an embedding error), so counting
+       * those would fabricate zeros into both distributions — the same trap `buildRouterAgreement`
+       * documents for `keyword_fallback` confidences.
+       */
+      if (path === SEMANTIC_PATH_SEMANTIC) {
+        const confidenceValue = readFiniteNumber(record.inputs, 'semanticConfidence');
+        if (confidenceValue !== null) confidence.push(confidenceValue);
+        const marginValue = readFiniteNumber(record.inputs, 'semanticMargin');
+        if (marginValue !== null) margin.push(marginValue);
+      }
+
+      const confidencePassed = readBoolean(record.thresholds, 'confidenceThresholdPassed');
+      if (confidencePassed !== null) {
+        confidenceThresholdSamples += 1;
+        if (confidencePassed) confidenceThresholdPassed += 1;
+      }
+      const marginPassed = readBoolean(record.thresholds, 'marginThresholdPassed');
+      if (marginPassed !== null) {
+        marginThresholdSamples += 1;
+        if (marginPassed) marginThresholdPassed += 1;
+      }
+
+      const actualRoute = readString(record.inputs, 'routingDecision');
+      if (actualRoute !== null) {
+        comparableCount += 1;
+        if (actualRoute === route) agreementCount += 1;
+      }
+    }
+  }
+
+  return {
+    decisionCount,
+    liveCount,
+    shadowCount,
+    semanticRouterRoute: [...routeCounts.values()].sort(
+      (a, b) => b.count - a.count || a.route.localeCompare(b.route) || a.path.localeCompare(b.path),
+    ),
+    semanticRouterLatencyMs: buildSemanticRouterDistribution(latency, LATENCY_DECIMALS),
+    semanticRouterEmbeddingMs: buildSemanticRouterDistribution(embedding, LATENCY_DECIMALS),
+    semanticRouterScoringMs: buildSemanticRouterDistribution(scoring, LATENCY_DECIMALS),
+    semanticRouterConfidence: buildSemanticRouterDistribution(confidence, SCORE_DECIMALS),
+    semanticRouterMargin: buildSemanticRouterDistribution(margin, SCORE_DECIMALS),
+    semanticRouterFallbackRate:
+      decisionCount > 0 ? roundTo(fallbackCount / decisionCount, 4) : null,
+    fallbackCount,
+    fallbackReasons: [...fallbackReasonCounts.entries()]
+      .map(([reason, count]) => ({ reason, count }))
+      .sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason)),
+    confidenceThresholdPassRate:
+      confidenceThresholdSamples > 0
+        ? roundTo(confidenceThresholdPassed / confidenceThresholdSamples, 4)
+        : null,
+    marginThresholdPassRate:
+      marginThresholdSamples > 0
+        ? roundTo(marginThresholdPassed / marginThresholdSamples, 4)
+        : null,
+    agreementWithRoutingDecision: {
+      comparableCount,
+      agreementCount,
+      agreementRate: comparableCount > 0 ? roundTo(agreementCount / comparableCount, 4) : null,
+    },
+  };
+}
+
 /**
  * Pure reducer — no I/O, so every trap above is unit-testable. Mirrors
  * `buildRoutingDistribution` / `buildPipelineStageStripData`.
@@ -230,6 +521,9 @@ export function buildRoutingHealthData(input: {
     totalRuns,
     rows,
     agreement: buildRouterAgreement(input.plannerSteps),
+    // B0-651 — same scan, second fold: the semantic router's gate records live on the very same
+    // planner steps, so no extra query is added for them.
+    semanticRouter: buildSemanticRouterMetrics(input.plannerSteps),
   };
 }
 
