@@ -16,11 +16,16 @@ import type {
   LatestFailedTestResultItemView,
   NewTestItemRecord,
   NewTestRecord,
+  NewTestResultComparisonRecord,
   NewTestResultItemRecord,
   NewTestResultRecord,
+  RunComparisonFix,
+  RunComparisonNewFailure,
+  RunComparisonVerdict,
   TestItemRecord,
   TestRecord,
   TestRecordWithCompletionCount,
+  TestResultComparisonRecord,
   TestResultItemRecord,
   TestResultRecord,
 } from './types';
@@ -449,6 +454,120 @@ export async function saveReportMarkdown(
   return updateTestResult(resultId, {
     report: markdown,
     report_generated_at: generatedAt,
+  });
+}
+
+/** Reads back the post-mortem comparison for a run (B0-312). Null when none has been started. */
+export async function getRunComparisonByResultId(resultId: string) {
+  const supabase = getSupabaseServiceRoleClient();
+  const result = await supabase
+    .from('test_result_comparisons')
+    .select('*')
+    .eq('test_result_id', resultId)
+    .maybeSingle();
+
+  return assertNoError(result) as TestResultComparisonRecord | null;
+}
+
+/**
+ * B0-312/311 — starts a comparison job by inserting the 'generating' row. A plain INSERT (not
+ * upsert) against the `test_result_id` UNIQUE constraint, so a concurrent/duplicate call for the
+ * same run fails with a unique-violation instead of silently clobbering the first caller's row —
+ * this is what makes `startRunComparison` (`~/lib/tests/run-comparison.ts`) idempotent without a
+ * separate locking scheme.
+ */
+export async function createGeneratingRunComparison(
+  resultId: string,
+  previousResultId: string,
+): Promise<{ created: true; row: TestResultComparisonRecord } | { created: false }> {
+  const supabase = getSupabaseServiceRoleClient();
+  const result = await supabase
+    .from('test_result_comparisons')
+    .insert({
+      test_result_id: resultId,
+      previous_test_result_id: previousResultId,
+      status: 'generating',
+    })
+    .select('*')
+    .single();
+
+  if (result.error) {
+    if (result.error.code === '23505') {
+      return { created: false };
+    }
+    throw new Error(result.error.message);
+  }
+
+  return { created: true, row: result.data as TestResultComparisonRecord };
+}
+
+/** Same insert-not-upsert idempotency as `createGeneratingRunComparison`, for the no-baseline case. */
+export async function createNoBaselineRunComparison(
+  resultId: string,
+): Promise<{ created: true } | { created: false }> {
+  const supabase = getSupabaseServiceRoleClient();
+  const result = await supabase.from('test_result_comparisons').insert({
+    test_result_id: resultId,
+    previous_test_result_id: null,
+    status: 'no_baseline',
+  });
+
+  if (result.error) {
+    if (result.error.code === '23505') {
+      return { created: false };
+    }
+    throw new Error(result.error.message);
+  }
+
+  return { created: true };
+}
+
+async function updateRunComparisonByResultId(
+  resultId: string,
+  values: Partial<NewTestResultComparisonRecord>,
+) {
+  const supabase = getSupabaseServiceRoleClient();
+  const result = await supabase
+    .from('test_result_comparisons')
+    .update(values)
+    .eq('test_result_id', resultId)
+    .select('*')
+    .single();
+
+  return assertNoError(result) as TestResultComparisonRecord;
+}
+
+/** Persists the finished B0-314 LLM analysis and flips the row to 'ready'. */
+export async function saveRunComparisonReady(
+  resultId: string,
+  data: {
+    verdict: RunComparisonVerdict;
+    verdictSummary: string;
+    currentPassRate: number;
+    previousPassRate: number;
+    scoreDelta: number;
+    newFailures: RunComparisonNewFailure[];
+    fixes: RunComparisonFix[];
+  },
+) {
+  return updateRunComparisonByResultId(resultId, {
+    status: 'ready',
+    verdict: data.verdict,
+    verdict_summary: data.verdictSummary,
+    current_pass_rate: data.currentPassRate,
+    previous_pass_rate: data.previousPassRate,
+    score_delta: data.scoreDelta,
+    new_failures: data.newFailures as unknown as NewTestResultComparisonRecord['new_failures'],
+    fixes: data.fixes as unknown as NewTestResultComparisonRecord['fixes'],
+    error_message: null,
+  });
+}
+
+/** Flips an in-progress comparison row to 'failed' so the run-detail page can show the error state. */
+export async function saveRunComparisonFailed(resultId: string, errorMessage: string) {
+  return updateRunComparisonByResultId(resultId, {
+    status: 'failed',
+    error_message: errorMessage,
   });
 }
 

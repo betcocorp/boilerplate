@@ -10,7 +10,7 @@ export type Database = {
   // Allows to automatically instantiate createClient with right options
   // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
   __InternalSupabase: {
-    PostgrestVersion: "14.1"
+    PostgrestVersion: "14.17"
   }
   public: {
     Tables: {
@@ -1066,6 +1066,72 @@ export type Database = {
             columns: ["test_id"]
             isOneToOne: false
             referencedRelation: "tests"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      test_result_comparisons: {
+        Row: {
+          created_at: string
+          current_pass_rate: number | null
+          error_message: string | null
+          fixes: Json
+          id: string
+          new_failures: Json
+          previous_pass_rate: number | null
+          previous_test_result_id: string | null
+          score_delta: number | null
+          status: string
+          test_result_id: string
+          updated_at: string
+          verdict: string | null
+          verdict_summary: string | null
+        }
+        Insert: {
+          created_at?: string
+          current_pass_rate?: number | null
+          error_message?: string | null
+          fixes?: Json
+          id?: string
+          new_failures?: Json
+          previous_pass_rate?: number | null
+          previous_test_result_id?: string | null
+          score_delta?: number | null
+          status?: string
+          test_result_id: string
+          updated_at?: string
+          verdict?: string | null
+          verdict_summary?: string | null
+        }
+        Update: {
+          created_at?: string
+          current_pass_rate?: number | null
+          error_message?: string | null
+          fixes?: Json
+          id?: string
+          new_failures?: Json
+          previous_pass_rate?: number | null
+          previous_test_result_id?: string | null
+          score_delta?: number | null
+          status?: string
+          test_result_id?: string
+          updated_at?: string
+          verdict?: string | null
+          verdict_summary?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "test_result_comparisons_previous_test_result_id_fkey"
+            columns: ["previous_test_result_id"]
+            isOneToOne: false
+            referencedRelation: "test_results"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "test_result_comparisons_test_result_id_fkey"
+            columns: ["test_result_id"]
+            isOneToOne: true
+            referencedRelation: "test_results"
             referencedColumns: ["id"]
           },
         ]
