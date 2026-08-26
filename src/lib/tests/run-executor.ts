@@ -24,6 +24,7 @@ import { analyzeAndPersistFailureRootCause } from './failure-root-cause';
 import { generateReport } from './report/orchestrator';
 import { runSingleTestItem } from './runner';
 import { generateAndSaveRunInsights } from './run-insights';
+import { runRunComparisonAnalysis, startRunComparison } from './run-comparison';
 import {
   buildRoutingComparisonFields,
   normalizeKeywordRoute,
@@ -384,4 +385,32 @@ export async function executeTestRun(testResultId: string) {
       });
     }
   });
+
+  // B0-311 — post-mortem comparison against the previous completed run (Phase 1 of the "Test Run
+  // Post-Mortem Analysis" epic, B0-310). The 'generating' (or 'no_baseline') row is written
+  // SYNCHRONOUSLY, before after() fires, so the run-detail page can render a state on the very next
+  // request; the LLM cause/fix analysis itself runs in the background via after(), same idiom as the
+  // report/insights blocks above. `startRunComparison` is idempotent (a comparison row already
+  // existing for this result id is left untouched), so re-entry never enqueues a second job, and any
+  // failure here is logged, never thrown, so it can't undo the run that just completed successfully.
+  try {
+    const started = await startRunComparison(testResult.id);
+    if (started.started) {
+      after(async () => {
+        try {
+          await runRunComparisonAnalysis(testResult.id);
+        } catch (error) {
+          logWarn('test_run_comparison_auto_generate_error', {
+            testResultId: testResult.id,
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+      });
+    }
+  } catch (error) {
+    logWarn('test_run_comparison_start_error', {
+      testResultId: testResult.id,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
