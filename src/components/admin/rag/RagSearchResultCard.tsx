@@ -1,3 +1,6 @@
+'use client';
+
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { RagDocumentChunkInspectButtons } from '~/components/rag/RagDocumentChunkInspect';
 
@@ -23,6 +26,7 @@ type RagSearchResultCardProps = {
 /**
  * B0-621 — one result card in the two-column grid. Pure presentation over an existing
  * `RagSearchMatch`; no retrieval logic lives here.
+ * B0-684 — "Product line:" and "SKU:" are now clickable links to documents.
  */
 export function RagSearchResultCard({
   match,
@@ -30,6 +34,72 @@ export function RagSearchResultCard({
   productLineHref,
 }: RagSearchResultCardProps) {
   const similarityPct = match.similarity * 100;
+
+  // B0-684: State for clickable product line field
+  const [productLineDocId, setProductLineDocId] = useState<string | null>(null);
+  const [productLineLoading, setProductLineLoading] = useState(false);
+
+  // B0-684: State for clickable SKU field
+  const [skuDocId, setSkuDocId] = useState<string | null>(null);
+  const [skuLoading, setSkuLoading] = useState(false);
+
+  // B0-684: Fetch document ID for product line on mount or when match changes
+  useEffect(() => {
+    if (!match.product_line_key && !match.source_pk) {
+      return;
+    }
+
+    const lookupKey = match.product_line_key || match.source_pk;
+    const fetchProductLineDoc = async () => {
+      setProductLineLoading(true);
+      try {
+        const response = await fetch(
+          `/api/admin/rag/document-lookup?productLineKey=${encodeURIComponent(lookupKey)}`
+        );
+        if (response.ok) {
+          const data = await response.json();
+          if (data.documentId) {
+            setProductLineDocId(data.documentId);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to fetch product line document ID:', error);
+      } finally {
+        setProductLineLoading(false);
+      }
+    };
+
+    fetchProductLineDoc();
+  }, [match.product_line_key, match.source_pk]);
+
+  // B0-684: Fetch document ID for SKU on mount or when match changes
+  useEffect(() => {
+    const sku = match.sku;
+    if (!sku) {
+      return;
+    }
+
+    const fetchSkuDoc = async () => {
+      setSkuLoading(true);
+      try {
+        const response = await fetch(
+          `/api/admin/rag/document-lookup?sku=${encodeURIComponent(sku)}`
+        );
+        if (response.ok) {
+          const data = await response.json();
+          if (data.documentId) {
+            setSkuDocId(data.documentId);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to fetch SKU document ID:', error);
+      } finally {
+        setSkuLoading(false);
+      }
+    };
+
+    fetchSkuDoc();
+  }, [match.sku]);
 
   return (
     <article className="flex flex-col gap-4 rounded-3xl border border-border/60 bg-background p-6 shadow-sm">
@@ -68,12 +138,57 @@ export function RagSearchResultCard({
         <div className="flex gap-1">
           <dt className="font-medium text-foreground">Product line:</dt>
           <dd className="truncate">
-            {match.product_line_key || match.source_pk || 'N/A'}
+            {(() => {
+              const productLineKey = match.product_line_key || match.source_pk;
+              if (!productLineKey) {
+                return 'N/A';
+              }
+
+              if (productLineLoading) {
+                return 'Loading...';
+              }
+
+              if (productLineDocId) {
+                return (
+                  <Link
+                    href={`/admin/products/rag/documents/${productLineDocId}`}
+                    className="text-primary hover:underline"
+                  >
+                    {productLineKey}
+                  </Link>
+                );
+              }
+
+              return productLineKey;
+            })()}
           </dd>
         </div>
         <div className="flex gap-1">
           <dt className="font-medium text-foreground">SKU:</dt>
-          <dd className="truncate">{match.sku || 'N/A'}</dd>
+          <dd className="truncate">
+            {(() => {
+              if (!match.sku) {
+                return 'N/A';
+              }
+
+              if (skuLoading) {
+                return 'Loading...';
+              }
+
+              if (skuDocId) {
+                return (
+                  <Link
+                    href={`/admin/products/rag/documents/${skuDocId}`}
+                    className="text-primary hover:underline"
+                  >
+                    {match.sku}
+                  </Link>
+                );
+              }
+
+              return match.sku;
+            })()}
+          </dd>
         </div>
         <div className="flex gap-1">
           <dt className="font-medium text-foreground">Section:</dt>
