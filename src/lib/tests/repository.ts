@@ -7,8 +7,10 @@ import {
   extractRuntimeConfig,
   extractSearchRunMaxSimilarity,
 } from './response-payload';
+import { parseReportState } from './report/schemas';
 import { extractExpectedTool, parseAgentStepToolTrace } from './tool-routing';
 import { COMPLETED_RUN_STATUSES } from './types';
+import type { ReportOverall, ReportStatus } from './report/schemas';
 import { JUDGMENT_CONFIDENCE_PROVENANCES } from '~/lib/workflows/product-support/confidence-provenance';
 import type {
   LatestFailedTestResultItemView,
@@ -524,6 +526,83 @@ export async function getTestResultById(testResultId: string) {
     .single();
 
   return assertNoError(result) as TestResultRecord;
+}
+
+/** One row of the cross-dataset report index (B0-687). */
+export type ReportRunRow = {
+  runId: string;
+  testId: string;
+  testName: string;
+  /** When the run itself started — the "date run" the index sorts and renders by. */
+  startedAt: string;
+  reportGeneratedAt: string | null;
+  reportStatus: ReportStatus | null;
+  /** Overall 0–100 score, present only once the report finished scoring (B0-609). */
+  score: number | null;
+  grade: ReportOverall['grade'] | null;
+  /** Session email of whoever started the run, `api-client` for a service-token run, or null. */
+  triggeredBy: string | null;
+};
+
+const REPORT_RUNS_PAGE_SIZE = 500;
+
+/**
+ * B0-687 — every run that has an eval report, across all datasets, newest run first.
+ *
+ * Reports were previously reachable only by drilling into one dataset at a time. The filter is
+ * "has a `report_state`" rather than "has a `report_generated_at`" on purpose: a report that is
+ * still scoring or that failed is exactly the one an admin needs to find, and dropping those rows
+ * would hide them entirely. Score/grade come from the persisted `report_state.overall` (B0-609),
+ * never recomputed from per-item data, so this page and `/admin/tests/[testId]` can't disagree.
+ *
+ * Archived datasets are included — archiving hides a dataset from the runner list, it does not
+ * retract reports already generated against it.
+ */
+export async function listAllReportRuns(): Promise<ReportRunRow[]> {
+  const supabase = getSupabaseServiceRoleClient();
+
+  type RawRow = {
+    id: string;
+    test_id: string;
+    started_at: string;
+    report_generated_at: string | null;
+    report_state: unknown;
+    triggered_by: string | null;
+    tests: { id: string; name: string } | Array<{ id: string; name: string }> | null;
+  };
+
+  // Paged rather than a bare select so a growing history can never be silently truncated at
+  // PostgREST's 1000-row cap (there are ~40 reported runs today).
+  const rows = await fetchAllPages<RawRow>(REPORT_RUNS_PAGE_SIZE, async (from, to) => {
+    const result = await supabase
+      .from('test_results')
+      .select(
+        'id, test_id, started_at, report_generated_at, report_state, triggered_by, tests!inner(id, name)',
+      )
+      .not('report_state', 'is', null)
+      .order('started_at', { ascending: false })
+      .range(from, to);
+
+    return (assertNoError(result) || []) as unknown as RawRow[];
+  });
+
+  return rows.map((row) => {
+    const test = Array.isArray(row.tests) ? row.tests[0] : row.tests;
+    const state = parseReportState(row.report_state);
+    const overall = state?.status === 'completed' ? state.overall : null;
+
+    return {
+      runId: row.id,
+      testId: row.test_id,
+      testName: test?.name ?? '(deleted dataset)',
+      startedAt: row.started_at,
+      reportGeneratedAt: row.report_generated_at,
+      reportStatus: state?.status ?? null,
+      score: typeof overall?.avg === 'number' ? overall.avg : null,
+      grade: overall?.grade ?? null,
+      triggeredBy: row.triggered_by,
+    };
+  });
 }
 
 const RESULT_ITEMS_PAGE_SIZE = 500;
