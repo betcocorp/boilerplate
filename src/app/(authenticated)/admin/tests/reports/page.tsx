@@ -1,6 +1,8 @@
+import { ArrowDown, ArrowUp, Minus } from 'lucide-react';
 import Link from 'next/link';
 import { connection } from 'next/server';
 
+import { ReportScoreTrendChart } from '~/components/admin/tests/ReportScoreTrendChart';
 import { Button } from '~/components/ui/button';
 import {
   Table,
@@ -10,13 +12,20 @@ import {
   TableHeader,
   TableRow,
 } from '~/components/ui/table';
+import type { ReportScoreChange } from '~/lib/tests/report-trend';
+import {
+  buildReportScoreTrend,
+  formatChangePercent,
+  formatChangePoints,
+} from '~/lib/tests/report-trend';
 import type { ReportRunRow } from '~/lib/tests/repository';
 import { listAllReportRuns } from '~/lib/tests/repository';
 import { formatDate } from '~/lib/utils/time';
 
 export const metadata = {
   title: 'Eval Reports | Betco BEX',
-  description: 'Every LLM-graded eval report generated across all test datasets.',
+  description:
+    'Every LLM-graded eval report generated across all test datasets.',
 };
 
 /**
@@ -43,10 +52,64 @@ function describeScore(row: ReportRunRow): string {
   }
 }
 
+/**
+ * Run-over-run change (B0-689). An absent change is an em-dash, never `0%`: a dataset's first
+ * scored run has nothing to compare against, which is not the same as "no change".
+ */
+function ReportChangeCell({
+  change,
+  row,
+}: {
+  change: ReportScoreChange | undefined;
+  row: ReportRunRow;
+}) {
+  if (!change) {
+    return (
+      <span
+        className="text-slate-400"
+        title={
+          row.score === null
+            ? 'This run has no score yet, so there is nothing to compare'
+            : 'First scored run for this dataset — no earlier score to compare against'
+        }
+      >
+        —
+      </span>
+    );
+  }
+
+  const rising = change.deltaPoints > 0;
+  const falling = change.deltaPoints < 0;
+  const Icon = rising ? ArrowUp : falling ? ArrowDown : Minus;
+  const tone = rising
+    ? 'text-emerald-600'
+    : falling
+      ? 'text-rose-600'
+      : 'text-slate-500';
+
+  return (
+    <span
+      className="flex flex-col items-start"
+      title={`Previous scored run: ${change.previousScore}/100`}
+    >
+      <span
+        className={`inline-flex items-center gap-1 font-medium tabular-nums ${tone}`}
+      >
+        <Icon aria-hidden className="size-3.5" />
+        {formatChangePercent(change)}
+      </span>
+      <span className="text-xs tabular-nums text-slate-500">
+        {formatChangePoints(change)}
+      </span>
+    </span>
+  );
+}
+
 export default async function AdminTestReportsPage() {
   await connection();
 
   const reports = await listAllReportRuns();
+  const trend = buildReportScoreTrend(reports);
 
   return (
     <div className="flex flex-1 bg-slate-50">
@@ -63,8 +126,9 @@ export default async function AdminTestReportsPage() {
               <p className="mt-4 max-w-4xl text-base leading-7 text-slate-600">
                 Each LLM-graded report from every run of an active test set,
                 newest first, so scores can be compared across datasets without
-                opening one test set at a time. Archiving a dataset removes its
-                reports from this list.
+                opening one test set at a time, charted over time with each
+                run&rsquo;s change from that dataset&rsquo;s previous scored
+                run. Archiving a dataset removes its reports from this list.
               </p>
             </div>
             <Button asChild variant="outline">
@@ -72,6 +136,8 @@ export default async function AdminTestReportsPage() {
             </Button>
           </div>
         </section>
+
+        <ReportScoreTrendChart trend={trend} />
 
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <div className="mb-4 flex items-center justify-between">
@@ -83,10 +149,14 @@ export default async function AdminTestReportsPage() {
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead></TableHead>
                 <TableHead>Test name</TableHead>
                 <TableHead>Date run</TableHead>
                 <TableHead title="Overall score/grade from the auto-generated eval report (B0-609)">
                   Score
+                </TableHead>
+                <TableHead title="Change from this dataset's previous scored run (B0-689)">
+                  Change
                 </TableHead>
                 <TableHead title="Who started the run — recorded from B0-687 onward; earlier runs were never attributed">
                   Run by
@@ -97,14 +167,17 @@ export default async function AdminTestReportsPage() {
             <TableBody>
               {reports.length === 0 ? (
                 <TableRow>
-                  <TableCell className="text-slate-500" colSpan={5}>
+                  <TableCell className="text-slate-500" colSpan={7}>
                     No reports generated yet. Open a completed run and choose
                     &ldquo;Generate report&rdquo;.
                   </TableCell>
                 </TableRow>
               ) : (
-                reports.map((row) => (
+                reports.map((row, index) => (
                   <TableRow key={row.runId}>
+                    <TableCell className="whitespace-nowrap text-slate-600">
+                      {index + 1}
+                    </TableCell>
                     <TableCell className="max-w-[280px] truncate font-medium">
                       <Link
                         className="text-sky-700 underline-offset-2 hover:underline"
@@ -126,6 +199,12 @@ export default async function AdminTestReportsPage() {
                       }
                     >
                       {describeScore(row)}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap">
+                      <ReportChangeCell
+                        change={trend.changeByRunId.get(row.runId)}
+                        row={row}
+                      />
                     </TableCell>
                     <TableCell
                       className="max-w-[220px] truncate text-slate-600"
