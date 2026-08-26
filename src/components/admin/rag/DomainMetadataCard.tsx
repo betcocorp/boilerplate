@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useActionState } from 'react';
+import { ExternalLink } from 'lucide-react';
 import {
   saveDomainMetadataAction,
   type SaveDomainMetadataState,
@@ -20,8 +21,21 @@ function DocumentMetadataRow({ doc }: { doc: EnrichmentDocument }) {
   return (
     <tr className="border-b border-slate-100 last:border-0">
       <td className="py-3 pr-4">
-        <p className="text-sm font-medium text-slate-800">{doc.title}</p>
-        <p className="mt-0.5 font-mono text-[11px] text-slate-400">{doc.documentKey}</p>
+        <div className="flex items-start gap-2">
+          <div>
+            <p className="text-sm font-medium text-slate-800">{doc.title}</p>
+            <p className="mt-0.5 font-mono text-[11px] text-slate-400">{doc.documentKey}</p>
+          </div>
+          <Link
+            href={`/admin/products/rag/documents/${doc.id}`}
+            className="mt-0.5 flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-sky-600 hover:bg-sky-50 transition"
+            title="View source document"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <ExternalLink className="size-3" />
+          </Link>
+        </div>
       </td>
       <td className="py-3 pr-4">
         <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600">
