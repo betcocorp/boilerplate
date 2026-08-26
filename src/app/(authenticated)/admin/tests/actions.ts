@@ -573,6 +573,7 @@ export async function runTestAction(formData: FormData) {
       ? { modelTag, useValidator, routerType }
       : { modelTag, useValidator },
     app_version: APP_VERSION,
+    triggered_by: await currentRunActor(),
     summary: {
       completed_items: 0,
       total_items: items.length,
@@ -621,6 +622,7 @@ export async function runSearchEvalAction(formData: FormData) {
     started_at: new Date().toISOString(),
     run_options: { useHybrid, useReranker, useMultiIntent },
     app_version: APP_VERSION,
+    triggered_by: await currentRunActor(),
     summary: {
       completed_items: 0,
       total_items: items.length,
@@ -881,6 +883,17 @@ export async function deleteTestRunAction(formData: FormData) {
 async function currentAdminActor(): Promise<string> {
   const session = await getServerSession(authOptions);
   return session?.user?.email ?? 'admin';
+}
+
+/**
+ * B0-687 — who to stamp on `test_results.triggered_by`. Unlike `currentAdminActor()` (whose
+ * `'admin'` fallback keeps audit rows non-null) this returns null when there is no session email,
+ * so the reports index shows "—" rather than attributing the run to a placeholder that isn't a real
+ * account.
+ */
+async function currentRunActor(): Promise<string | null> {
+  const session = await getServerSession(authOptions);
+  return session?.user?.email ?? null;
 }
 
 /**

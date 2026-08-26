@@ -1231,6 +1231,7 @@ export type Database = {
           summary: Json
           test_id: string
           total_items: number
+          triggered_by: string | null
         }
         Insert: {
           app_version?: string | null
@@ -1256,6 +1257,7 @@ export type Database = {
           summary?: Json
           test_id: string
           total_items?: number
+          triggered_by?: string | null
         }
         Update: {
           app_version?: string | null
@@ -1281,6 +1283,7 @@ export type Database = {
           summary?: Json
           test_id?: string
           total_items?: number
+          triggered_by?: string | null
         }
         Relationships: [
           {
