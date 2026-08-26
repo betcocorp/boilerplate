@@ -8,20 +8,30 @@ type PageProps = {
 };
 
 /**
- * Linkify legacy:*:<id> references in text
- * Converts patterns like legacy:product_line:UUID to clickable links
+ * Pattern for embedded legacy source references, e.g. `legacy:product_line:<UUID>`.
+ * The UUID is a legacy record key (e.g. `metadata->>'product_line_key'`), not a
+ * `rag.document.id` — callers must resolve it via `resolvedDocumentIds` before linking.
  */
-function linkifyLegacyReferences(text: string) {
-  const legacyRefPattern = /legacy:(\w+):([A-F0-9]{8}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{12})/gi;
+const LEGACY_REF_PATTERN =
+  /legacy:(\w+):([A-F0-9]{8}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{12})/gi;
+
+function findLegacyReferenceIds(text: string): string[] {
+  return Array.from(text.matchAll(LEGACY_REF_PATTERN), (match) => match[2]);
+}
+
+/**
+ * Linkify legacy:*:<id> references in text, resolving each embedded legacy key to its
+ * actual `rag.document.id` via `resolvedDocumentIds`. A reference with no resolved id
+ * renders as plain (non-clickable) text.
+ */
+function linkifyLegacyReferences(text: string, resolvedDocumentIds: Map<string, string>) {
   const parts: Array<{ type: 'text' | 'link'; value: string; table?: string; id?: string }> = [];
   let lastIndex = 0;
   let match;
 
-  // Reset regex lastIndex for global match iteration
-  legacyRefPattern.lastIndex = 0;
+  LEGACY_REF_PATTERN.lastIndex = 0;
 
-  while ((match = legacyRefPattern.exec(text)) !== null) {
-    // Add text before the match
+  while ((match = LEGACY_REF_PATTERN.exec(text)) !== null) {
     if (match.index > lastIndex) {
       parts.push({
         type: 'text',
@@ -29,7 +39,6 @@ function linkifyLegacyReferences(text: string) {
       });
     }
 
-    // Add the link
     parts.push({
       type: 'link',
       value: match[0],
@@ -37,10 +46,9 @@ function linkifyLegacyReferences(text: string) {
       id: match[2],
     });
 
-    lastIndex = legacyRefPattern.lastIndex;
+    lastIndex = LEGACY_REF_PATTERN.lastIndex;
   }
 
-  // Add remaining text after last match
   if (lastIndex < text.length) {
     parts.push({
       type: 'text',
@@ -48,22 +56,26 @@ function linkifyLegacyReferences(text: string) {
     });
   }
 
-  // If no matches, return original text
   if (parts.length === 0) {
     return text;
   }
 
-  // Render mixed text and links
   return parts.map((part, idx) => {
     if (part.type === 'text') {
       return part.value;
     }
+
+    const resolvedId = part.id ? resolvedDocumentIds.get(part.id) : undefined;
+    if (!resolvedId) {
+      return part.value;
+    }
+
     return (
       <Link
         key={idx}
-        href={`/admin/products/rag/documents/${part.id}`}
+        href={`/admin/products/rag/documents/${resolvedId}`}
         className="inline-flex items-center gap-1 font-mono text-sky-600 hover:text-sky-700 hover:underline transition"
-        title={`Navigate to ${part.table} document ${part.id}`}
+        title={`Navigate to ${part.table} document ${resolvedId}`}
       >
         {part.value}
         <ExternalLink className="size-3" />
@@ -136,6 +148,42 @@ export default async function DocumentViewerPage({ params }: PageProps) {
   const dinNo = doc.metadata?.din_no;
   const brand = doc.metadata?.brand;
 
+  // Resolve every embedded legacy:*:<id> reference (document_key + chunk text) to its
+  // actual rag.document.id in one batch lookup, since the embedded id is a legacy record
+  // key (e.g. product_line_key), not a document id.
+  const legacyReferenceIds = Array.from(
+    new Set([
+      ...findLegacyReferenceIds(doc.document_key),
+      ...chunkData.flatMap((chunk) => findLegacyReferenceIds(chunk.chunk_text)),
+    ]),
+  );
+
+  const resolvedDocumentIds = new Map<string, string>();
+  if (legacyReferenceIds.length > 0) {
+    const { data: resolvedDocs } = await (
+      supabase.schema('rag').from('document') as unknown as {
+        select(cols: string): {
+          eq(col: string, val: string): {
+            in(col: string, vals: string[]): Promise<{
+              data: Array<{ id: string; metadata: Record<string, unknown> | null }> | null;
+              error: { message: string } | null;
+            }>;
+          };
+        };
+      }
+    )
+      .select('id, metadata')
+      .eq('document_kind', 'product_line_profile')
+      .in('metadata->>product_line_key', legacyReferenceIds);
+
+    for (const resolvedDoc of resolvedDocs ?? []) {
+      const productLineKey = resolvedDoc.metadata?.product_line_key;
+      if (typeof productLineKey === 'string') {
+        resolvedDocumentIds.set(productLineKey, resolvedDoc.id);
+      }
+    }
+  }
+
   return (
     <div className="flex flex-1 bg-slate-50">
       <main className="flex w-full flex-1 flex-col gap-6 px-6 py-10 sm:px-8">
@@ -158,7 +206,9 @@ export default async function DocumentViewerPage({ params }: PageProps) {
               <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">
                 {doc.title}
               </h1>
-              <p className="mt-1 font-mono text-sm text-slate-500">{doc.document_key}</p>
+              <p className="mt-1 font-mono text-sm text-slate-500">
+                {linkifyLegacyReferences(doc.document_key, resolvedDocumentIds)}
+              </p>
             </div>
 
             {/* Metadata grid */}
@@ -201,7 +251,7 @@ export default async function DocumentViewerPage({ params }: PageProps) {
                     </div>
                   </div>
                   <div className="mt-3 overflow-auto rounded-lg bg-slate-50 p-3 text-xs leading-relaxed text-slate-700 max-h-64">
-                    {linkifyLegacyReferences(chunk.chunk_text)}
+                    {linkifyLegacyReferences(chunk.chunk_text, resolvedDocumentIds)}
                   </div>
                 </div>
               ))

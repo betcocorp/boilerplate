@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
-import type { Database as RagDatabase } from '~/types/supabase.rag';
+import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -34,17 +33,27 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const client = createClient<RagDatabase>(
-      process.env.NEXT_PUBLIC_SUPABASE_URL || '',
-      process.env.SUPABASE_SERVICE_ROLE_KEY || ''
-    );
+    const supabase = getSupabaseServiceRoleClient();
+    const documentTable = supabase.schema('rag').from('document') as unknown as {
+      select(cols: string): {
+        eq(col: string, val: string): {
+          eq(col: string, val: string): {
+            limit(n: number): {
+              maybeSingle(): Promise<{
+                data: { id: string } | null;
+                error: { message: string } | null;
+              }>;
+            };
+          };
+        };
+      };
+    };
 
-    let data;
+    let data: { id: string } | null = null;
 
     if (productLineKey) {
       // Look up product_line_profile documents by product_line_key
-      const result = await client
-        .from('document')
+      const result = await documentTable
         .select('id')
         .eq('document_kind', 'product_line_profile')
         .eq('metadata->>product_line_key', productLineKey)
@@ -54,8 +63,7 @@ export async function GET(request: NextRequest) {
       data = result.data;
     } else if (sku) {
       // Look up label documents by sku
-      const result = await client
-        .from('document')
+      const result = await documentTable
         .select('id')
         .eq('document_kind', 'label')
         .eq('metadata->>sku', sku)
