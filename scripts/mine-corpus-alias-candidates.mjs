@@ -41,6 +41,7 @@
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 import { createClient } from '@supabase/supabase-js';
 
 // ---------------------------------------------------------------------------
@@ -163,20 +164,39 @@ export function initialsOf(phrase) {
 // ---------------------------------------------------------------------------
 // Pattern 1 — parenthetical acronym extraction
 // ---------------------------------------------------------------------------
-const PHRASE_ACRONYM_RE = /((?:[A-Za-z][A-Za-z0-9&'’.-]*\s+){1,5}[A-Za-z][A-Za-z0-9&'’.-]*)\s*\(([A-Z]{2,6})\)/g;
+/**
+ * Only the parenthesised acronym is matched here. The defining phrase is deliberately NOT captured
+ * by the regex: a greedy `{1,5}` word-run swallows more words than the acronym has letters
+ * ("New Hard As Nails (HAN)" captured "New Hard As Nails" -> "NHAN"), and because `exec` advances
+ * `lastIndex` past the whole match there was no retry at a shorter boundary — so a valid
+ * "Phrase (ACRONYM)" was only ever detected when it began the scanned text. Instead we walk back
+ * exactly `acronym.length` words, which is the only word count whose initials can equal the
+ * acronym (`initialsOf` takes one letter per whitespace-delimited token).
+ */
+const PARENTHETICAL_ACRONYM_RE = /\(([A-Z]{2,6})\)/g;
+/** A phrase word: must start with a letter, may carry internal &'’.- (e.g. "Betco's", "U.S."). */
+const PHRASE_WORD_RE = /[A-Za-z][A-Za-z0-9&'’.-]*/g;
+
+/** The words of the sentence immediately preceding `index`, so a phrase never spans sentences. */
+function precedingSentenceWords(text, index) {
+  const sentence = text.slice(0, index).split(/(?<=[.!?])\s+/).pop() ?? '';
+  return sentence.match(PHRASE_WORD_RE) ?? [];
+}
 
 export function detectParenthetical(records, entityTitleTokens) {
   const candidates = [];
   for (const rec of records) {
     if (!rec.text) continue;
     const titleTokens = entityTitleTokens.get(rec.entityId);
-    PHRASE_ACRONYM_RE.lastIndex = 0;
+    PARENTHETICAL_ACRONYM_RE.lastIndex = 0;
     let m;
-    while ((m = PHRASE_ACRONYM_RE.exec(rec.text))) {
-      const phrase = m[1].trim();
-      const acronym = m[2];
-      if (!/^[A-Z]/.test(phrase)) continue; // require a proper-noun-like phrase
+    while ((m = PARENTHETICAL_ACRONYM_RE.exec(rec.text))) {
+      const acronym = m[1];
       if (GENERIC_ACRONYM_BLOCKLIST.has(acronym)) continue;
+      const words = precedingSentenceWords(rec.text, m.index);
+      if (words.length < acronym.length) continue;
+      const phrase = words.slice(-acronym.length).join(' ');
+      if (!/^[A-Z]/.test(phrase)) continue; // require a proper-noun-like phrase
       if (initialsOf(phrase) !== acronym) continue;
       // Require the defined phrase to share real vocabulary with the product's own title —
       // filters out things like "Hepatitis B Virus (HBV)" (an organism the product treats,
@@ -698,7 +718,17 @@ async function main() {
   log('Done.');
 }
 
-main().catch((err) => {
-  console.error('Fatal:', err);
-  process.exit(1);
-});
+// Run only when invoked directly. Without this guard, merely importing this module (as the test
+// suite does, to exercise the detectors) executes main() — which reads credentials, exits the host
+// process if they're absent, and, since a test runner's argv carries no --dry-run, writes to
+// rag.product_alias.
+const invokedDirectly =
+  process.argv[1] !== undefined &&
+  import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (invokedDirectly) {
+  main().catch((err) => {
+    console.error('Fatal:', err);
+    process.exit(1);
+  });
+}
