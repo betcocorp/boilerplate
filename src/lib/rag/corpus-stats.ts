@@ -32,7 +32,6 @@ export type EnrichmentDocument = {
   dilutionRatio: string;
 };
 
-type RawChunkRow = { token_count: number | null };
 type RawDocumentRow = {
   id: string;
   document_key: string;
@@ -40,16 +39,6 @@ type RawDocumentRow = {
   document_kind: string;
   metadata: Record<string, unknown> | null;
 };
-
-/**
- * PostgREST `db-max-rows` on this project is 1000 — the previous `.limit(20000)` silently returned
- * the first 1,000 of 28,942 chunks, so every number on the stats card was computed from ~3.5% of
- * the corpus in physical row order. Pages are the full width PostgREST will serve.
- */
-const CHUNK_PAGE_SIZE = 1000;
-
-/** Pages fetched at a time, so a 29-page sweep doesn't open 29 simultaneous PostgREST connections. */
-const CHUNK_PAGE_CONCURRENCY = 6;
 
 const EMPTY_CHUNK_TOKEN_STATS: ChunkTokenStats = {
   totalChunks: 0,
@@ -66,18 +55,25 @@ type ChunkCountClient = {
   ): Promise<{ count: number | null; error: { message: string } | null }>;
 };
 
-type ChunkPageClient = {
-  select(cols: string): {
-    order(
-      col: string,
-      opts: { ascending: boolean },
-    ): {
-      range(
-        from: number,
-        to: number,
-      ): Promise<{ data: RawChunkRow[] | null; error: { message: string } | null }>;
-    };
-  };
+/** Shape returned by the `rag.chunk_token_stats()` RPC. */
+type RawChunkTokenStats = {
+  total_chunks: number | null;
+  avg_tokens: number | null;
+  min_tokens: number | null;
+  max_tokens: number | null;
+  distribution: {
+    under100: number | null;
+    from100to299: number | null;
+    from300to599: number | null;
+    from600to999: number | null;
+    over1000: number | null;
+  } | null;
+};
+
+type ChunkStatsRpcClient = {
+  rpc: (
+    fn: 'chunk_token_stats',
+  ) => Promise<{ data: RawChunkTokenStats | null; error: { message: string } | null }>;
 };
 
 /** Exact `rag.document_chunk` row count — a HEAD request, no rows transferred. */
@@ -93,92 +89,49 @@ async function countAllChunks(): Promise<number> {
   return count ?? 0;
 }
 
+/**
+ * B0-686 — corpus-wide token stats in one round trip.
+ *
+ * The previous implementation selected `token_count` and paged the whole table client-side.
+ * PostgREST's `db-max-rows` is 1000 on this project, so the original `.limit(20000)` silently
+ * returned the first 1,000 of ~29k chunks and the card was drawn from ~3.5% of the corpus in
+ * physical row order. PostgREST aggregates are disabled here (PGRST123), so the aggregate lives
+ * in SQL instead: `rag.chunk_token_stats()` is a single seq scan (~28ms) whose bucket boundaries
+ * and `token_count is null -> 0` handling mirror what this function used to do in JS.
+ */
 async function loadChunkTokenStats(): Promise<ChunkTokenStats> {
   const supabase = getSupabaseServiceRoleClient();
-  const chunkTable = () => supabase.schema('rag').from('document_chunk');
 
-  const totalChunks = await countAllChunks();
-  if (totalChunks === 0) {
+  const { data, error } = await (
+    supabase.schema('rag') as unknown as ChunkStatsRpcClient
+  ).rpc('chunk_token_stats');
+
+  if (error) {
+    throw new Error(`Failed to fetch chunk token stats: ${error.message}`);
+  }
+  if (!data) {
     return EMPTY_CHUNK_TOKEN_STATS;
   }
 
-  // Aggregate functions are disabled on this PostgREST deployment (PGRST123, "Use of aggregate
-  // functions is not allowed"), so an exact mean still needs every `token_count`. Only that one
-  // column is selected, and the whole result is cached below rather than recomputed per page load.
-  const pageStarts: number[] = [];
-  for (let offset = 0; offset < totalChunks; offset += CHUNK_PAGE_SIZE) {
-    pageStarts.push(offset);
-  }
-
-  const counts: number[] = [];
-  for (let i = 0; i < pageStarts.length; i += CHUNK_PAGE_CONCURRENCY) {
-    const wave = await Promise.all(
-      pageStarts.slice(i, i + CHUNK_PAGE_CONCURRENCY).map((offset) =>
-        (chunkTable() as unknown as ChunkPageClient)
-          .select('token_count')
-          // Ordered by the primary key so pages partition the table deterministically.
-          .order('id', { ascending: true })
-          .range(offset, offset + CHUNK_PAGE_SIZE - 1),
-      ),
-    );
-
-    for (const { data, error } of wave) {
-      if (error) {
-        throw new Error(`Failed to fetch chunk token stats: ${error.message}`);
-      }
-      for (const row of data ?? []) {
-        counts.push(row.token_count ?? 0);
-      }
-    }
-  }
-
-  if (counts.length === 0) {
-    return { ...EMPTY_CHUNK_TOKEN_STATS, totalChunks };
-  }
-
-  let sum = 0;
-  let min = Number.POSITIVE_INFINITY;
-  let max = 0;
-  const distribution = {
-    under100: 0,
-    from100to299: 0,
-    from300to599: 0,
-    from600to999: 0,
-    over1000: 0,
-  };
-
-  for (const value of counts) {
-    sum += value;
-    if (value < min) min = value;
-    if (value > max) max = value;
-    if (value < 100) distribution.under100 += 1;
-    else if (value < 300) distribution.from100to299 += 1;
-    else if (value < 600) distribution.from300to599 += 1;
-    else if (value < 1000) distribution.from600to999 += 1;
-    else distribution.over1000 += 1;
-  }
+  const buckets = data.distribution;
 
   return {
-    // The exact row count, even if a concurrent write means a page returned fewer rows.
-    totalChunks,
-    avgTokens: Math.round(sum / counts.length),
-    minTokens: min === Number.POSITIVE_INFINITY ? 0 : min,
-    maxTokens: max,
-    distribution,
+    totalChunks: data.total_chunks ?? 0,
+    avgTokens: data.avg_tokens ?? 0,
+    minTokens: data.min_tokens ?? 0,
+    maxTokens: data.max_tokens ?? 0,
+    distribution: {
+      under100: buckets?.under100 ?? 0,
+      from100to299: buckets?.from100to299 ?? 0,
+      from300to599: buckets?.from300to599 ?? 0,
+      from600to999: buckets?.from600to999 ?? 0,
+      over1000: buckets?.over1000 ?? 0,
+    },
   };
 }
 
-/**
- * 15m cache — the corpus only changes when documents are (re)ingested, and the sweep above costs
- * ~29 PostgREST round trips. A `rag.chunk_token_stats()` SQL function would collapse it to one
- * row; that is DB-side work and deliberately out of scope here.
- */
-const getCachedChunkTokenStats = unstable_cache(loadChunkTokenStats, ['rag-chunk-token-stats'], {
-  revalidate: 900,
-});
-
 export async function getChunkTokenStats(): Promise<ChunkTokenStats> {
-  return getCachedChunkTokenStats();
+  return loadChunkTokenStats();
 }
 
 export type BoostFieldCoverage = {
