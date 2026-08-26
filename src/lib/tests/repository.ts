@@ -623,6 +623,34 @@ export async function listTestResultsByTestId(testId: string, limit = 10) {
   return (assertNoError(result) || []) as TestResultRecord[];
 }
 
+/**
+ * B0-313 — the run immediately preceding `currentResultId` for post-mortem comparison: the most
+ * recent OTHER completed run (`completed`/`completed_with_failures`, `run_mode='full'`) on the same
+ * test, strictly older than the current run's `created_at`. Returns null when none exists — a
+ * "no baseline" run (e.g. the first-ever run of a dataset) is a normal, clean outcome, not an error.
+ */
+export async function getPreviousCompletedTestResult(
+  testId: string,
+  currentResultId: string,
+): Promise<TestResultRecord | null> {
+  const supabase = getSupabaseServiceRoleClient();
+  const current = await getTestResultById(currentResultId);
+
+  const result = await supabase
+    .from('test_results')
+    .select('*')
+    .eq('test_id', testId)
+    .eq('run_mode', 'full')
+    .in('status', [...COMPLETED_RUN_STATUSES])
+    .neq('id', currentResultId)
+    .lt('created_at', current.created_at)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  return assertNoError(result) as TestResultRecord | null;
+}
+
 export async function listSearchResultsByTestId(testId: string, limit = 10) {
   const supabase = getSupabaseServiceRoleClient();
   const result = await supabase
