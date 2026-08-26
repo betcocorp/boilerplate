@@ -1,11 +1,76 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, ExternalLink } from 'lucide-react';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 type PageProps = {
   params: Promise<{ id: string }>;
 };
+
+/**
+ * Linkify legacy:*:<id> references in text
+ * Converts patterns like legacy:product_line:UUID to clickable links
+ */
+function linkifyLegacyReferences(text: string) {
+  const legacyRefPattern = /legacy:(\w+):([A-F0-9]{8}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{12})/gi;
+  const parts: Array<{ type: 'text' | 'link'; value: string; table?: string; id?: string }> = [];
+  let lastIndex = 0;
+  let match;
+
+  // Reset regex lastIndex for global match iteration
+  legacyRefPattern.lastIndex = 0;
+
+  while ((match = legacyRefPattern.exec(text)) !== null) {
+    // Add text before the match
+    if (match.index > lastIndex) {
+      parts.push({
+        type: 'text',
+        value: text.slice(lastIndex, match.index),
+      });
+    }
+
+    // Add the link
+    parts.push({
+      type: 'link',
+      value: match[0],
+      table: match[1],
+      id: match[2],
+    });
+
+    lastIndex = legacyRefPattern.lastIndex;
+  }
+
+  // Add remaining text after last match
+  if (lastIndex < text.length) {
+    parts.push({
+      type: 'text',
+      value: text.slice(lastIndex),
+    });
+  }
+
+  // If no matches, return original text
+  if (parts.length === 0) {
+    return text;
+  }
+
+  // Render mixed text and links
+  return parts.map((part, idx) => {
+    if (part.type === 'text') {
+      return part.value;
+    }
+    return (
+      <Link
+        key={idx}
+        href={`/admin/products/rag/documents/${part.id}`}
+        className="inline-flex items-center gap-1 font-mono text-sky-600 hover:text-sky-700 hover:underline transition"
+        title={`Navigate to ${part.table} document ${part.id}`}
+      >
+        {part.value}
+        <ExternalLink className="size-3" />
+      </Link>
+    );
+  });
+}
 
 export const metadata = {
   title: 'Document Viewer | Betco BEX',
@@ -136,7 +201,7 @@ export default async function DocumentViewerPage({ params }: PageProps) {
                     </div>
                   </div>
                   <div className="mt-3 overflow-auto rounded-lg bg-slate-50 p-3 text-xs leading-relaxed text-slate-700 max-h-64">
-                    {chunk.chunk_text}
+                    {linkifyLegacyReferences(chunk.chunk_text)}
                   </div>
                 </div>
               ))
