@@ -2,6 +2,10 @@ import { ArrowDown, ArrowUp, Minus } from 'lucide-react';
 import Link from 'next/link';
 import { connection } from 'next/server';
 
+import {
+  ReportDatasetFilter,
+  type ReportDatasetOption,
+} from '~/components/admin/tests/ReportDatasetFilter';
 import { ReportScoreTrendChart } from '~/components/admin/tests/ReportScoreTrendChart';
 import { Button } from '~/components/ui/button';
 import {
@@ -20,6 +24,7 @@ import {
 } from '~/lib/tests/report-trend';
 import type { ReportRunRow } from '~/lib/tests/repository';
 import { listAllReportRuns } from '~/lib/tests/repository';
+import { readSearchParam } from '~/lib/utils/params';
 import { formatDate } from '~/lib/utils/time';
 
 export const metadata = {
@@ -27,6 +32,36 @@ export const metadata = {
   description:
     'Every LLM-graded eval report generated across all test datasets.',
 };
+
+type PageProps = {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+};
+
+/**
+ * B0-690 — one option per dataset that actually HAS report rows, so the picker can never offer a
+ * selection that produces an empty page. Rows arrive newest-first, so the first row seen for a
+ * dataset is its newest: a dataset renamed between runs reads under its current name.
+ */
+function buildDatasetOptions(
+  rows: readonly ReportRunRow[],
+): ReportDatasetOption[] {
+  const byTestId = new Map<string, ReportDatasetOption>();
+  for (const row of rows) {
+    const existing = byTestId.get(row.testId);
+    if (existing) {
+      existing.reportCount += 1;
+    } else {
+      byTestId.set(row.testId, {
+        testId: row.testId,
+        testName: row.testName,
+        reportCount: 1,
+      });
+    }
+  }
+  return [...byTestId.values()].sort((a, b) =>
+    a.testName.localeCompare(b.testName),
+  );
+}
 
 /**
  * Score cell text. A report that hasn't finished scoring has no score to show, so it shows its
@@ -105,10 +140,30 @@ function ReportChangeCell({
   );
 }
 
-export default async function AdminTestReportsPage() {
+export default async function AdminTestReportsPage({ searchParams }: PageProps) {
   await connection();
+  const params = await searchParams;
 
-  const reports = await listAllReportRuns();
+  const allReports = await listAllReportRuns();
+  const datasetOptions = buildDatasetOptions(allReports);
+
+  // An unknown, malformed, or array-valued `testId` degrades to "all datasets" rather than
+  // erroring or rendering an empty page.
+  const testIdParam = readSearchParam(params.testId).trim();
+  const selectedTestId = datasetOptions.some(
+    (option) => option.testId === testIdParam,
+  )
+    ? testIdParam
+    : '';
+  const selectedDataset = datasetOptions.find(
+    (option) => option.testId === selectedTestId,
+  );
+
+  const reports = selectedTestId
+    ? allReports.filter((row) => row.testId === selectedTestId)
+    : allReports;
+  // Chart and table are always fed the same filtered rows. Narrowing to one dataset cannot change
+  // any run-over-run number: `buildReportScoreTrend` only ever compares runs within a dataset.
   const trend = buildReportScoreTrend(reports);
 
   return (
@@ -140,11 +195,20 @@ export default async function AdminTestReportsPage() {
         <ReportScoreTrendChart trend={trend} />
 
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-          <div className="mb-4 flex items-center justify-between">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-lg font-semibold text-slate-900">Reports</h2>
-            <span className="text-sm text-slate-600">
-              {reports.length} report{reports.length === 1 ? '' : 's'}
-            </span>
+            <div className="flex flex-wrap items-center gap-4">
+              <ReportDatasetFilter
+                options={datasetOptions}
+                selectedTestId={selectedTestId}
+              />
+              <span className="text-sm text-slate-600">
+                {/* Filtered shows both numbers, so the narrowing is never mistaken for a shrinking history. */}
+                {selectedTestId
+                  ? `${reports.length} of ${allReports.length} reports`
+                  : `${reports.length} report${reports.length === 1 ? '' : 's'}`}
+              </span>
+            </div>
           </div>
           <Table>
             <TableHeader>
@@ -168,8 +232,9 @@ export default async function AdminTestReportsPage() {
               {reports.length === 0 ? (
                 <TableRow>
                   <TableCell className="text-slate-500" colSpan={7}>
-                    No reports generated yet. Open a completed run and choose
-                    &ldquo;Generate report&rdquo;.
+                    {selectedTestId
+                      ? `No reports for ${selectedDataset?.testName ?? 'this dataset'}. Choose "All datasets" to see every report.`
+                      : 'No reports generated yet. Open a completed run and choose “Generate report”.'}
                   </TableCell>
                 </TableRow>
               ) : (
