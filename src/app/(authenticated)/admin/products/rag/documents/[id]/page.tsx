@@ -6,6 +6,7 @@ import {
   legacyReferenceHref,
   resolveDocumentSourceLinks,
 } from '~/lib/rag/document-source-links';
+import { SOURCE_FILE_URL_TTL_SECONDS } from '~/lib/rag/source-file-signing';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 type PageProps = {
@@ -184,6 +185,7 @@ export default async function DocumentViewerPage({ params }: PageProps) {
   ]);
 
   const sourceLinks = resolveDocumentSourceLinks({
+    documentId: doc.id,
     documentKind: doc.document_kind,
     documentKey: doc.document_key,
     sourceRecord: sourceRecordResult.data,
@@ -240,8 +242,8 @@ export default async function DocumentViewerPage({ params }: PageProps) {
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <h2 className="text-lg font-semibold text-slate-900">Source data</h2>
           <p className="mt-1 text-sm text-slate-500">
-            Where this document was derived from. Ingested files live in S3 and have no in-app
-            viewer.
+            Where this document was derived from. Ingested files open via a signed link that
+            expires after {SOURCE_FILE_URL_TTL_SECONDS / 60} minutes.
           </p>
           {sourceLinks.length === 0 ? (
             <p className="mt-6 text-sm text-slate-400">No source linkage on file.</p>
@@ -255,6 +257,10 @@ export default async function DocumentViewerPage({ params }: PageProps) {
                       <Link
                         className="inline-flex items-center gap-1 text-sky-600 transition hover:text-sky-700 hover:underline"
                         href={link.href}
+                        // Signed-URL redirects must leave the SPA router, not be prefetched.
+                        {...(link.external
+                          ? { prefetch: false, rel: 'noopener noreferrer', target: '_blank' }
+                          : {})}
                       >
                         {link.value}
                         <ExternalLink className="size-3 shrink-0" />

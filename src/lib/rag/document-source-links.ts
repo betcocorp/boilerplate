@@ -11,6 +11,8 @@
  * on the product_line_profile document that owns the key — i.e. the page you are already on.
  */
 
+import { isSignableSourceUri } from '~/lib/rag/source-file-signing';
+
 /** Legacy source references embedded in a `document_key` (or chunk text). */
 export const LEGACY_REF_PATTERN =
   /legacy:(\w+):([0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12})/gi;
@@ -38,11 +40,18 @@ export type DocumentSourceLink = {
   label: string;
   /** Value to display — a key, a SKU, or an `s3://` URI. */
   value: string;
-  /** In-app destination, or null when the source is not reachable in the app (S3 objects). */
+  /** Destination, or null when the source cannot be reached (e.g. an unsignable bucket). */
   href: string | null;
+  /**
+   * True when `href` leaves the app — currently only the ingested-file row, which redirects
+   * to a time-limited signed S3 URL and so must open in a new tab rather than client-navigate.
+   */
+  external?: boolean;
 };
 
 export type DocumentSourceInput = {
+  /** `rag.document.id` — used to address the ingested file without exposing bucket/key. */
+  documentId: string;
   documentKind: string;
   documentKey: string;
   sourceRecord: {
@@ -98,13 +107,17 @@ export function resolveDocumentSourceLinks(
     });
   }
 
-  // Raw ingested file (labels, SDS, efficacy, knowledge). No in-app viewer for S3 objects,
-  // so this is shown for provenance rather than navigation.
+  // Raw ingested file (labels, SDS, efficacy, knowledge). Addressed by document id so the
+  // bucket/key never round-trips through the client; the route presigns on each request.
   if (sourceRecord?.source_uri) {
+    const signable = isSignableSourceUri(sourceRecord.source_uri);
     links.push({
       label: 'Ingested file',
       value: sourceRecord.source_uri,
-      href: null,
+      href: signable
+        ? `/api/admin/rag/document-source-file?documentId=${encodeURIComponent(input.documentId)}`
+        : null,
+      external: signable,
     });
   }
 

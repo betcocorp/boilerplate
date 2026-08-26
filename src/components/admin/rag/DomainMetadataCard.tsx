@@ -139,7 +139,7 @@ export function DomainMetadataCard({ documents, total, page, pageSize }: Props) 
       </div>
       <p className="mt-2 text-sm text-slate-500">
         These fields are stored in <code className="font-mono text-xs">document.metadata</code> JSONB
-        today and will be used for similarity boosting once the RPC migration is applied.
+        and feed the similarity boost rules below, which apply once boosting is enabled.
       </p>
 
       {/* Datalist shared with ChunkingConfigCard if rendered on same page */}

@@ -9,9 +9,14 @@ vi.mock('~/supabase/clients/service-role', () => ({
 }));
 
 import {
+  DEFAULT_RAG_CHUNK_STRATEGY,
   DEFAULT_ROUTER_TYPE,
   getBooleanSetting,
   getNumberSetting,
+  getRagBoostConfig,
+  getRagBoostWeights,
+  getRagChunkingConfig,
+  getRagChunkStrategy,
   getRouterType,
   getStringSetting,
   resetSettingsCacheForTest,
@@ -21,6 +26,19 @@ function mockRow(value: string | null, error: { message: string } | null = null)
   const maybeSingle = vi.fn().mockResolvedValue({ data: value === null ? null : { value }, error });
   const eq = vi.fn().mockReturnValue({ maybeSingle });
   const select = vi.fn().mockReturnValue({ eq });
+  from.mockReturnValue({ select });
+}
+
+/** Per-key mock: keys absent from `values` behave as a missing row. */
+function mockRows(values: Record<string, string>) {
+  const select = vi.fn().mockReturnValue({
+    eq: vi.fn((_col: string, key: string) => ({
+      maybeSingle: vi.fn().mockResolvedValue({
+        data: key in values ? { value: values[key] } : null,
+        error: null,
+      }),
+    })),
+  });
   from.mockReturnValue({ select });
 }
 
@@ -113,6 +131,163 @@ describe('getRouterType (B0-656)', () => {
   });
 });
 
+describe('getRagChunkStrategy (B0-686)', () => {
+  it('returns each allowed strategy as stored, normalizing case and whitespace', async () => {
+    mockRow('heading-aware');
+    expect(await getRagChunkStrategy()).toBe('heading-aware');
+    resetSettingsCacheForTest();
+    mockRow('  NAIVE ');
+    expect(await getRagChunkStrategy()).toBe('naive');
+  });
+
+  it('coerces an unrecognized stored value back to naive (allowed_values is not a DB constraint)', async () => {
+    for (const stored of ['semantic', 'heading', '', 'true']) {
+      resetSettingsCacheForTest();
+      mockRow(stored);
+      expect(await getRagChunkStrategy(), stored).toBe('naive');
+    }
+  });
+
+  it('falls back to naive when the row is missing or the query errors', async () => {
+    mockRow(null);
+    expect(await getRagChunkStrategy()).toBe(DEFAULT_RAG_CHUNK_STRATEGY);
+    resetSettingsCacheForTest();
+    mockRow(null, { message: 'db down' });
+    await expect(getRagChunkStrategy()).resolves.toBe('naive');
+  });
+});
+
+describe('getRagChunkingConfig (B0-686)', () => {
+  it('returns the inert defaults when no rows exist', async () => {
+    mockRows({});
+    expect(await getRagChunkingConfig()).toEqual({
+      strategy: 'naive',
+      minTokens: 300,
+      maxTokens: 600,
+      overlapTokens: 50,
+    });
+  });
+
+  it('returns stored values', async () => {
+    mockRows({
+      RAG_CHUNK_STRATEGY: 'heading-aware',
+      RAG_CHUNK_MIN_TOKENS: '250',
+      RAG_CHUNK_MAX_TOKENS: '800',
+      RAG_CHUNK_OVERLAP_TOKENS: '75',
+    });
+    expect(await getRagChunkingConfig()).toEqual({
+      strategy: 'heading-aware',
+      minTokens: 250,
+      maxTokens: 800,
+      overlapTokens: 75,
+    });
+  });
+
+  it('clamps out-of-range stored values to the admin form bounds', async () => {
+    mockRows({
+      RAG_CHUNK_MIN_TOKENS: '5',
+      RAG_CHUNK_MAX_TOKENS: '99999',
+      RAG_CHUNK_OVERLAP_TOKENS: '-40',
+    });
+    expect(await getRagChunkingConfig()).toEqual({
+      strategy: 'naive',
+      minTokens: 50,
+      maxTokens: 2000,
+      overlapTokens: 0,
+    });
+  });
+
+  it('never reports min > max, even when the stored rows say so', async () => {
+    mockRows({ RAG_CHUNK_MIN_TOKENS: '600', RAG_CHUNK_MAX_TOKENS: '100' });
+    const config = await getRagChunkingConfig();
+    expect(config.minTokens).toBe(600);
+    expect(config.maxTokens).toBe(600);
+  });
+
+  it('falls back per key on a non-numeric stored value', async () => {
+    mockRows({ RAG_CHUNK_MIN_TOKENS: 'lots', RAG_CHUNK_MAX_TOKENS: '700' });
+    expect(await getRagChunkingConfig()).toEqual({
+      strategy: 'naive',
+      minTokens: 300,
+      maxTokens: 700,
+      overlapTokens: 50,
+    });
+  });
+});
+
+describe('getRagBoostConfig (B0-686)', () => {
+  it('reports every weight as 0 when the feature is disabled, so callers need no second branch', async () => {
+    mockRows({
+      RAG_BOOST_ENABLED: 'false',
+      RAG_BOOST_SURFACE_TYPE: '0.30',
+      RAG_BOOST_DWELL_TIME: '0.20',
+      RAG_BOOST_DILUTION_RATIO: '0.10',
+    });
+    expect(await getRagBoostConfig()).toEqual({
+      enabled: false,
+      surfaceType: 0,
+      dwellTime: 0,
+      dilutionRatio: 0,
+    });
+  });
+
+  it('defaults to disabled when no rows exist', async () => {
+    mockRows({});
+    expect(await getRagBoostConfig()).toEqual({
+      enabled: false,
+      surfaceType: 0,
+      dwellTime: 0,
+      dilutionRatio: 0,
+    });
+  });
+
+  it('returns the stored weights once enabled', async () => {
+    mockRows({
+      RAG_BOOST_ENABLED: 'true',
+      RAG_BOOST_SURFACE_TYPE: '0.12',
+      RAG_BOOST_DWELL_TIME: '0.03',
+      RAG_BOOST_DILUTION_RATIO: '0.07',
+    });
+    expect(await getRagBoostConfig()).toEqual({
+      enabled: true,
+      surfaceType: 0.12,
+      dwellTime: 0.03,
+      dilutionRatio: 0.07,
+    });
+  });
+
+  it('clamps an out-of-range weight and falls back on a non-numeric one', async () => {
+    mockRows({
+      RAG_BOOST_ENABLED: 'true',
+      RAG_BOOST_SURFACE_TYPE: '9',
+      RAG_BOOST_DWELL_TIME: '-1',
+      RAG_BOOST_DILUTION_RATIO: 'heavy',
+    });
+    expect(await getRagBoostConfig()).toEqual({
+      enabled: true,
+      surfaceType: 0.5,
+      dwellTime: 0,
+      dilutionRatio: 0.05,
+    });
+  });
+});
+
+describe('getRagBoostWeights (B0-686)', () => {
+  it('reports the stored weights even while boosting is disabled, for the admin form to seed from', async () => {
+    mockRows({
+      RAG_BOOST_ENABLED: 'false',
+      RAG_BOOST_SURFACE_TYPE: '0.12',
+      RAG_BOOST_DWELL_TIME: '0.03',
+      RAG_BOOST_DILUTION_RATIO: '0.07',
+    });
+    expect(await getRagBoostWeights()).toEqual({
+      surfaceType: 0.12,
+      dwellTime: 0.03,
+      dilutionRatio: 0.07,
+    });
+  });
+});
+
 describe('caching', () => {
   it('serves a second call to the same key from cache, without re-querying', async () => {
     mockRow('true');
@@ -144,6 +319,16 @@ describe('settings-table coverage does not regress to process.env (B0-638)', () 
     'ENABLE_RERANKER',
     'NEXT_PUBLIC_BEX_AI_ELEMENTS_UI',
     'NEXT_PUBLIC_BEX_STREAMING_ROLLOUT_COHORT',
+    // B0-686 — read through getRagBoostConfig()/getRagChunkingConfig(); these rows replaced a
+    // clipboard "paste this into a migration" panel, never a process.env read.
+    'RAG_BOOST_DILUTION_RATIO',
+    'RAG_BOOST_DWELL_TIME',
+    'RAG_BOOST_ENABLED',
+    'RAG_BOOST_SURFACE_TYPE',
+    'RAG_CHUNK_MAX_TOKENS',
+    'RAG_CHUNK_MIN_TOKENS',
+    'RAG_CHUNK_OVERLAP_TOKENS',
+    'RAG_CHUNK_STRATEGY',
     // B0-656 — read through getRouterType(); no process.env.ROUTER_TYPE read has ever existed.
     'ROUTER_TYPE',
     'WEBSEARCH_DB_CACHE_ENABLED',
