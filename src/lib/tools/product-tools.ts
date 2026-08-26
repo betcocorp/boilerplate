@@ -19,7 +19,9 @@ import {
 import { VERIFIED_FACTS_SOURCE_ID } from '~/lib/rag/document-chunk-types';
 import {
   resolveProductEntityByName,
+  type ProductEntityResolutionMode,
   type ProductEntityResolutionResult,
+  type ResolveProductEntityOptions,
 } from '~/lib/rag/entity-context';
 import {
   inferSectionTypeFromQuery,
@@ -73,15 +75,30 @@ export type AliasResolutionTelemetry = {
   attempted: boolean;
   /** Null only when `attempted` is false. */
   outcome: AliasResolutionOutcome | null;
+  /**
+   * B0-479: which resolution mode produced `outcome` — `'name'` for a model-asserted product
+   * name/code, `'freeform'` for a precise-tiers-only attempt against raw `freeformQuery` text.
+   * `computeAliasResolutionReport` (`~/lib/tests/alias-routing.ts`) intentionally ignores this and
+   * pools both modes into one hit rate; it's carried so a trace can still be read back per-mode
+   * (freeform attempts are expected to miss far more often — most freeform queries name no product).
+   */
+  mode: ProductEntityResolutionMode;
 };
 
 function classifyAliasResolutionOutcome(
   resolution: Pick<ProductEntityResolutionResult, 'resolutionSource' | 'ambiguousAlias'>,
 ): AliasResolutionOutcome {
-  if (resolution.resolutionSource === 'alias_exact') {
+  if (
+    resolution.resolutionSource === 'alias_exact' ||
+    resolution.resolutionSource === 'alias_exact_freeform'
+  ) {
     return 'alias_exact';
   }
-  if (resolution.resolutionSource === 'alias_fuzzy' || resolution.resolutionSource === 'alias_fuzzy_trgm') {
+  if (
+    resolution.resolutionSource === 'alias_fuzzy' ||
+    resolution.resolutionSource === 'alias_fuzzy_freeform' ||
+    resolution.resolutionSource === 'alias_fuzzy_trgm'
+  ) {
     return 'alias_fuzzy';
   }
   if (resolution.ambiguousAlias) {
@@ -110,8 +127,11 @@ async function resolveProductEntityWithAliasTelemetry(
   nameOrId: string,
   toolName: string,
   auditCtx: AuditContext | undefined,
+  /** B0-479: `{ mode: 'freeform' }` for a precise-tiers-only attempt against raw user text. */
+  options: ResolveProductEntityOptions = { mode: 'name' },
 ): Promise<ProductEntityResolutionResult & { aliasResolution: AliasResolutionTelemetry }> {
-  const resolution = await resolveProductEntityByName(nameOrId);
+  const mode: ProductEntityResolutionMode = options.mode ?? 'name';
+  const resolution = await resolveProductEntityByName(nameOrId, options);
   const attempted = nameOrId.trim().length > 0;
   const outcome = attempted ? classifyAliasResolutionOutcome(resolution) : null;
 
@@ -130,7 +150,7 @@ async function resolveProductEntityWithAliasTelemetry(
     );
   }
 
-  return { ...resolution, aliasResolution: { attempted, outcome } };
+  return { ...resolution, aliasResolution: { attempted, outcome, mode } };
 }
 
 /**
@@ -437,10 +457,27 @@ export async function executeProductTool(
   switch (name) {
     case 'search_product_docs': {
       const p = searchProductDocsInputSchema.parse(args);
-      const q = (p.freeformQuery?.trim() || [p.productName, p.topic, p.surfaceType].filter(Boolean).join(' ')).trim();
-      const resolvedProductName = p.freeformQuery?.trim() ? '' : (p.productName || '');
+      const freeformQuery = p.freeformQuery?.trim() ?? '';
+      const q = (freeformQuery || [p.productName, p.topic, p.surfaceType].filter(Boolean).join(' ')).trim();
+      const resolvedProductName = freeformQuery ? '' : (p.productName || '');
+      /**
+       * B0-479 — a `freeformQuery` call used to skip product-entity resolution entirely (this
+       * passed `''`), so a query that names a product perfectly well (a bare SKU like `07512-00`,
+       * an acronym, a short product name) never touched `rag.product_alias` and instead fell
+       * through to `resolveProductLineFromMatches`'s post-hoc similarity lock over an unfiltered
+       * search — which is how a Kling SKU query ended up served another product line's SDS as a
+       * cited source. Freeform text now gets a resolution attempt too, but in `mode: 'freeform'`
+       * (exact + tokenized alias tiers only, no verified-tiebreak; see
+       * `~/lib/rag/entity-context.ts`), so an unambiguous alias hit anchors retrieval while a
+       * natural-language question or a name spanning several product lines still resolves to
+       * nothing and behaves exactly as before.
+       */
       const [{ productLineKey, productKey, resolutionSource, aliasResolution }, sectionType] = await Promise.all([
-        resolveProductEntityWithAliasTelemetry(resolvedProductName, name, auditCtx),
+        freeformQuery
+          ? resolveProductEntityWithAliasTelemetry(freeformQuery, name, auditCtx, {
+              mode: 'freeform',
+            })
+          : resolveProductEntityWithAliasTelemetry(resolvedProductName, name, auditCtx),
         Promise.resolve(inferSectionTypeFromQuery(q)),
       ]);
       const intent = classifyRetrievalIntent(q, resolvedProductName);

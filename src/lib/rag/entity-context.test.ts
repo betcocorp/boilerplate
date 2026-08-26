@@ -59,6 +59,8 @@ let productAliasRows: ProductAliasRow[] = [];
 let entityRows: EntityRow[] = [];
 /** null = simulate the RPC being unavailable (falls through, like a pre-migration environment). */
 let fuzzyTrgmRpcRows: FuzzyTrgmRpcRow[] | null = null;
+/** B0-479: how many times the trigram RPC tier was actually invoked. */
+let fuzzyTrgmRpcCalls = 0;
 
 function matchesFilter(row: Record<string, unknown>, filter: Filter): boolean {
   if (filter.kind === 'eq') {
@@ -117,6 +119,7 @@ const fakeSupabase = {
       // pre-ranked rows to match that contract, same as the real function's output shape.
       rpc(fn: string) {
         if (fn === 'match_product_alias_fuzzy') {
+          fuzzyTrgmRpcCalls += 1;
           return Promise.resolve({ data: fuzzyTrgmRpcRows, error: null });
         }
         return Promise.resolve({ data: null, error: new Error(`unexpected rpc: ${fn}`) });
@@ -129,6 +132,7 @@ beforeEach(() => {
   productAliasRows = [];
   entityRows = [];
   fuzzyTrgmRpcRows = null;
+  fuzzyTrgmRpcCalls = 0;
   vi.mocked(getSupabaseServiceRoleClient).mockReturnValue(fakeSupabase as never);
 });
 
@@ -509,5 +513,188 @@ describe('resolveProductEntityByName — trigram fuzzy alias RPC fallback (B0-48
       matchedAliasId: null,
       matchedAliasConfidence: null,
     });
+  });
+});
+
+/**
+ * B0-479 — `{ mode: 'freeform' }`: the resolution attempt `search_product_docs` now makes against
+ * raw `freeformQuery` text (it previously passed `''` and skipped resolution entirely, letting an
+ * unfiltered similarity probe pick the product line — which is how a bare SKU query got served a
+ * different product's SDS). Only the two high-precision alias tiers may run, and only on an
+ * unambiguous match.
+ */
+describe('resolveProductEntityByName — freeform mode restricts resolution to precise tiers (B0-479)', () => {
+  it('resolves an exact alias hit on freeform text and tags it alias_exact_freeform', async () => {
+    // Real shape from rag.product_alias: the SKU that the B0-480 gold-set case queries.
+    productAliasRows = [
+      {
+        alias_norm: '07512-00',
+        alias: '07512-00',
+        entity_id: 'ent-kling',
+        product_line_key: 'line-kling',
+        verified: true,
+        id: 'alias-kling',
+        confidence: 1,
+      },
+    ];
+    entityRows = [{ id: 'ent-kling', entity_type: 'product', product_key: 'sku-kling' }];
+
+    const result = await resolveProductEntityByName('07512-00', { mode: 'freeform' });
+
+    expect(result).toEqual({
+      productLineKey: 'line-kling',
+      productKey: 'sku-kling',
+      resolutionSource: 'alias_exact_freeform',
+      ambiguousAlias: false,
+      matchedAliasId: 'alias-kling',
+      matchedAliasConfidence: 1,
+    });
+  });
+
+  it('resolves a tokenized alias hit on freeform text and tags it alias_fuzzy_freeform', async () => {
+    productAliasRows = [
+      {
+        alias_norm: 'ge fight bact rtu disinfectant',
+        alias: 'GE Fight BacT RTU Disinfectant',
+        entity_id: 'ent-4',
+        product_line_key: 'line-4',
+        id: 'alias-4',
+        confidence: 0.8,
+      },
+    ];
+    entityRows = [{ id: 'ent-4', entity_type: 'product_line', product_line_key: 'line-4' }];
+
+    const result = await resolveProductEntityByName('GE Fight Bac RTU', { mode: 'freeform' });
+
+    expect(result).toEqual({
+      productLineKey: 'line-4',
+      productKey: null,
+      resolutionSource: 'alias_fuzzy_freeform',
+      ambiguousAlias: false,
+      matchedAliasId: 'alias-4',
+      matchedAliasConfidence: 0.8,
+    });
+  });
+
+  it('never fires the trigram fuzzy RPC in freeform mode, even when it would have locked a line', async () => {
+    // A long natural-language question is exactly the input whole-string trigram similarity can
+    // spuriously match: this fixture clears the 0.35 threshold and would lock retrieval onto
+    // line-trgm in the default (name) mode.
+    fuzzyTrgmRpcRows = [
+      {
+        alias_norm: 'grout and tile restroom cleaner',
+        alias: 'Grout and Tile Restroom Cleaner',
+        entity_id: 'ent-trgm',
+        product_line_key: 'line-trgm',
+        verified: true,
+        alias_type: 'title',
+        confidence: 0.9,
+        similarity: 0.44,
+      },
+    ];
+    const question = 'what should I use to clean grout in a restroom?';
+
+    const freeform = await resolveProductEntityByName(question, { mode: 'freeform' });
+
+    expect(fuzzyTrgmRpcCalls).toBe(0);
+    expect(freeform).toEqual({
+      productLineKey: null,
+      productKey: null,
+      resolutionSource: null,
+      ambiguousAlias: false,
+      matchedAliasId: null,
+      matchedAliasConfidence: null,
+    });
+
+    // Control: the same fixture and query DO reach (and resolve through) the RPC in name mode —
+    // proving the assertion above is the tier restriction, not an inert fixture.
+    const nameMode = await resolveProductEntityByName(question);
+    expect(fuzzyTrgmRpcCalls).toBe(1);
+    expect(nameMode.productLineKey).toBe('line-trgm');
+    expect(nameMode.resolutionSource).toBe('alias_fuzzy_trgm');
+  });
+
+  it('returns no lock when freeform text hits an alias spanning multiple product lines, even with exactly one verified candidate', async () => {
+    // The B0-483 verified-tiebreak is deliberately NOT applied in freeform mode: the user never
+    // asserted this product name, so electing the verified line would be a guess.
+    productAliasRows = [
+      {
+        alias_norm: 'zorbex',
+        alias: 'Zorbex',
+        entity_id: 'ent-us',
+        product_line_key: 'line-us',
+        verified: true,
+        id: 'alias-us',
+        confidence: 1,
+      },
+      {
+        alias_norm: 'zorbex',
+        alias: 'Zorbex',
+        entity_id: 'ent-ca',
+        product_line_key: 'line-ca',
+        verified: false,
+      },
+    ];
+    entityRows = [{ id: 'ent-us', entity_type: 'product_line', product_line_key: 'line-us' }];
+
+    const freeform = await resolveProductEntityByName('Zorbex', { mode: 'freeform' });
+
+    expect(freeform).toEqual({
+      productLineKey: null,
+      productKey: null,
+      resolutionSource: null,
+      ambiguousAlias: true,
+      matchedAliasId: null,
+      matchedAliasConfidence: null,
+    });
+
+    // Control: name mode still applies the verified-tiebreak, unchanged by B0-479.
+    const nameMode = await resolveProductEntityByName('Zorbex');
+    expect(nameMode.productLineKey).toBe('line-us');
+    expect(nameMode.resolutionSource).toBe('alias_exact');
+  });
+
+  it('returns no lock when tokenized freeform candidates span multiple product lines', async () => {
+    // "Foaming Hand Sanitizer" (B0-480 gold-set case): six real aliases across six product lines
+    // share these tokens, so the correct outcome is no lock at all.
+    productAliasRows = [
+      { alias_norm: 'alcohol foaming hand sanitizer', alias: 'Alcohol Foaming Hand Sanitizer', entity_id: 'ent-a', product_line_key: 'line-a', verified: true },
+      { alias_norm: 'alcohol free foaming hand sanitizer', alias: 'Alcohol Free Foaming Hand Sanitizer', entity_id: 'ent-b', product_line_key: 'line-b', verified: false },
+    ];
+    entityRows = [];
+
+    const result = await resolveProductEntityByName('Foaming Hand Sanitizer', { mode: 'freeform' });
+
+    expect(result.productLineKey).toBeNull();
+    expect(result.resolutionSource).toBeNull();
+    expect(result.ambiguousAlias).toBe(true);
+  });
+
+  it('does not fall back to the legacy prod_line_id / title tiers in freeform mode', async () => {
+    entityRows = [
+      {
+        id: 'ent-line-2',
+        entity_type: 'product_line',
+        product_line_key: 'line-2',
+        title: 'SuperClean 500',
+        metadata: { prod_line_id: '4020' },
+      },
+    ];
+
+    // Both of these resolve in name mode (prod_line_id and title_exact respectively).
+    expect((await resolveProductEntityByName('4020')).resolutionSource).toBe('prod_line_id');
+    expect((await resolveProductEntityByName('SuperClean 500')).resolutionSource).toBe('title_exact');
+
+    expect(await resolveProductEntityByName('4020', { mode: 'freeform' })).toEqual({
+      productLineKey: null,
+      productKey: null,
+      resolutionSource: null,
+      ambiguousAlias: false,
+      matchedAliasId: null,
+      matchedAliasConfidence: null,
+    });
+    expect(
+      (await resolveProductEntityByName('SuperClean 500', { mode: 'freeform' })).productLineKey,
+    ).toBeNull();
   });
 });
