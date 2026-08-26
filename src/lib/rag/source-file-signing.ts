@@ -78,7 +78,7 @@ export function isSignableSourceUri(uri: string | null | undefined): boolean {
   return parsed ? parsed.bucket in ALLOWED_BUCKETS : false;
 }
 
-function readFirstEnv(names: string[]): string | undefined {
+function readFirstEnv(names: readonly string[]): string | undefined {
   for (const name of names) {
     const value = process.env[name]?.trim();
     if (value) {
@@ -124,4 +124,96 @@ export async function createSourceFileViewUrl(uri: string): Promise<string> {
   return getSignedUrl(client, new GetObjectCommand({ Bucket: parsed.bucket, Key: parsed.key }), {
     expiresIn: SOURCE_FILE_URL_TTL_SECONDS,
   });
+}
+
+/**
+ * Ingestion corpora whose admin panels list raw S3 keys discovered in the bucket. Those rows
+ * are pre-ingestion — there is no `rag.document` yet — so they cannot be addressed by document
+ * id like `createSourceFileViewUrl` callers are. Instead the corpus name selects the bucket
+ * server-side and constrains which keys may be signed, so a request can never name a bucket.
+ *
+ * Bucket/prefix resolution mirrors each corpus's own pipeline module so this stays in step
+ * with wherever those panels actually read from.
+ */
+const CORPUS_SOURCES = {
+  sds: {
+    bucketVars: ['AWS_S3_BUCKET_NAME'],
+    bucketDefault: 'betco-sds',
+    prefixVars: ['SDS_S3_PREFIX'],
+    // Dedicated single-purpose bucket, so the whole bucket is the corpus.
+    prefixDefault: '',
+  },
+  label: {
+    bucketVars: ['LABEL_S3_BUCKET'],
+    bucketDefault: 'retool-360',
+    prefixVars: ['LABEL_S3_PREFIX'],
+    prefixDefault: 'labels/',
+  },
+  knowledge: {
+    bucketVars: ['KNOWLEDGE_S3_BUCKET'],
+    bucketDefault: 'retool-360',
+    prefixVars: ['KNOWLEDGE_S3_PREFIX'],
+    prefixDefault: 'v1-markdown-files/',
+  },
+  efficacy: {
+    bucketVars: ['AWS_EFFICACY_S3_BUCKET'],
+    bucketDefault: 'retool-360',
+    prefixVars: ['EFFICACY_S3_PREFIX'],
+    prefixDefault: 'efficacy/',
+  },
+} as const satisfies Record<
+  string,
+  {
+    bucketVars: readonly string[];
+    bucketDefault: string;
+    prefixVars: readonly string[];
+    prefixDefault: string;
+  }
+>;
+
+export type SourceCorpus = keyof typeof CORPUS_SOURCES;
+
+export const SOURCE_CORPORA = Object.keys(CORPUS_SOURCES) as [SourceCorpus, ...SourceCorpus[]];
+
+function normalizePrefix(prefix: string): string {
+  if (!prefix) return '';
+  return prefix.endsWith('/') ? prefix : `${prefix}/`;
+}
+
+/** The `s3://` URI for a key listed under a corpus, or null if the key escapes its prefix. */
+export function corpusSourceUri(corpus: SourceCorpus, key: string): string | null {
+  const config = CORPUS_SOURCES[corpus];
+  const trimmedKey = key.trim();
+
+  // Reject traversal and absolute-looking keys outright rather than relying on the prefix
+  // check alone, since `..` segments could otherwise climb out of an allowed prefix.
+  if (!trimmedKey || trimmedKey.startsWith('/') || trimmedKey.split('/').includes('..')) {
+    return null;
+  }
+
+  const prefix = normalizePrefix(readFirstEnv(config.prefixVars) ?? config.prefixDefault);
+  if (prefix && !trimmedKey.startsWith(prefix)) {
+    return null;
+  }
+
+  const bucket = readFirstEnv(config.bucketVars) ?? config.bucketDefault;
+  return `s3://${bucket}/${trimmedKey}`;
+}
+
+/**
+ * Presign a key listed by a corpus ingestion panel.
+ *
+ * @throws SourceFileSigningError when the key falls outside the corpus prefix, or when the
+ *   resolved bucket is not allowlisted / has no credentials.
+ */
+export async function createCorpusFileViewUrl(
+  corpus: SourceCorpus,
+  key: string,
+): Promise<string> {
+  const uri = corpusSourceUri(corpus, key);
+  if (!uri) {
+    throw new SourceFileSigningError(`Key is not inside the ${corpus} corpus prefix.`);
+  }
+
+  return createSourceFileViewUrl(uri);
 }

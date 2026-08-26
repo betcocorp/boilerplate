@@ -1,6 +1,8 @@
 'use client';
 
 import { CheckCircle2, Loader2, PlayCircle, StopCircle } from 'lucide-react';
+
+import { SourceFileLink } from '~/components/admin/rag/SourceFileLink';
 import { useRouter } from 'next/navigation';
 import { useActionState, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
@@ -667,9 +669,7 @@ export function EfficacyIngestionPanel({
                 <tr className="border-t border-slate-100" key={row.id}>
                   <td className="px-4 py-3 align-top">
                     <p className="font-medium text-slate-900">{row.title}</p>
-                    <p className="mt-1 font-mono text-xs text-slate-500">
-                      {row.s3Key}
-                    </p>
+                    <p className="mt-1"><SourceFileLink corpus="efficacy" s3Key={row.s3Key} /></p>
                     {row.lastError ? (
                       <p className="mt-2 text-xs text-rose-700">
                         {row.lastError}
