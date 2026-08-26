@@ -61,9 +61,10 @@ export default async function AdminTestReportsPage() {
                 Every generated eval report
               </h1>
               <p className="mt-4 max-w-4xl text-base leading-7 text-slate-600">
-                Each LLM-graded report from every test run, newest first, so
-                scores can be compared across datasets without opening one test
-                set at a time.
+                Each LLM-graded report from every run of an active test set,
+                newest first, so scores can be compared across datasets without
+                opening one test set at a time. Archiving a dataset removes its
+                reports from this list.
               </p>
             </div>
             <Button asChild variant="outline">
