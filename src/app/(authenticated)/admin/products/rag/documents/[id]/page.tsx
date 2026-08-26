@@ -1,6 +1,11 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { ArrowLeft, ExternalLink } from 'lucide-react';
+import {
+  LEGACY_REF_PATTERN,
+  legacyReferenceHref,
+  resolveDocumentSourceLinks,
+} from '~/lib/rag/document-source-links';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 type PageProps = {
@@ -8,26 +13,15 @@ type PageProps = {
 };
 
 /**
- * Pattern for embedded legacy source references, e.g. `legacy:product_line:<UUID>`.
- * The UUID is a legacy record key (e.g. `metadata->>'product_line_key'`), not a
- * `rag.document.id` — callers must resolve it via `resolvedDocumentIds` before linking.
+ * Linkify `legacy:<table>:<pk>` references, pointing each at the legacy source record the
+ * key belongs to. The embedded GUID is a legacy primary key (e.g. `prod_line.ProdLineKey`),
+ * so it must NOT be treated as a `rag.document.id` — doing so resolves back to the
+ * product_line_profile document that owns the key, i.e. this same page.
  */
-const LEGACY_REF_PATTERN =
-  /legacy:(\w+):([A-F0-9]{8}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{12})/gi;
-
-function findLegacyReferenceIds(text: string): string[] {
-  return Array.from(text.matchAll(LEGACY_REF_PATTERN), (match) => match[2]);
-}
-
-/**
- * Linkify legacy:*:<id> references in text, resolving each embedded legacy key to its
- * actual `rag.document.id` via `resolvedDocumentIds`. A reference with no resolved id
- * renders as plain (non-clickable) text.
- */
-function linkifyLegacyReferences(text: string, resolvedDocumentIds: Map<string, string>) {
-  const parts: Array<{ type: 'text' | 'link'; value: string; table?: string; id?: string }> = [];
+function linkifyLegacyReferences(text: string) {
+  const parts: Array<{ type: 'text' | 'link'; value: string; table: string; pk: string }> = [];
   let lastIndex = 0;
-  let match;
+  let match: RegExpExecArray | null;
 
   LEGACY_REF_PATTERN.lastIndex = 0;
 
@@ -36,6 +30,8 @@ function linkifyLegacyReferences(text: string, resolvedDocumentIds: Map<string, 
       parts.push({
         type: 'text',
         value: text.slice(lastIndex, match.index),
+        table: '',
+        pk: '',
       });
     }
 
@@ -43,21 +39,18 @@ function linkifyLegacyReferences(text: string, resolvedDocumentIds: Map<string, 
       type: 'link',
       value: match[0],
       table: match[1],
-      id: match[2],
+      pk: match[2],
     });
 
     lastIndex = LEGACY_REF_PATTERN.lastIndex;
   }
 
-  if (lastIndex < text.length) {
-    parts.push({
-      type: 'text',
-      value: text.slice(lastIndex),
-    });
-  }
-
   if (parts.length === 0) {
     return text;
+  }
+
+  if (lastIndex < text.length) {
+    parts.push({ type: 'text', value: text.slice(lastIndex), table: '', pk: '' });
   }
 
   return parts.map((part, idx) => {
@@ -65,17 +58,17 @@ function linkifyLegacyReferences(text: string, resolvedDocumentIds: Map<string, 
       return part.value;
     }
 
-    const resolvedId = part.id ? resolvedDocumentIds.get(part.id) : undefined;
-    if (!resolvedId) {
+    const href = legacyReferenceHref(part.table, part.pk);
+    if (!href) {
       return part.value;
     }
 
     return (
       <Link
         key={idx}
-        href={`/admin/products/rag/documents/${resolvedId}`}
-        className="inline-flex items-center gap-1 font-mono text-sky-600 hover:text-sky-700 hover:underline transition"
-        title={`Navigate to ${part.table} document ${resolvedId}`}
+        href={href}
+        className="inline-flex items-center gap-1 font-mono text-sky-600 transition hover:text-sky-700 hover:underline"
+        title={`Open legacy ${part.table} record ${part.pk}`}
       >
         {part.value}
         <ExternalLink className="size-3" />
@@ -104,6 +97,8 @@ export default async function DocumentViewerPage({ params }: PageProps) {
               document_kind: string;
               language_code: string;
               metadata: Record<string, unknown> | null;
+              source_record_id: string | null;
+              entity_id: string | null;
             } | null;
             error: { message: string } | null;
           }>;
@@ -111,7 +106,9 @@ export default async function DocumentViewerPage({ params }: PageProps) {
       };
     }
   )
-    .select('id, document_key, title, document_kind, language_code, metadata')
+    .select(
+      'id, document_key, title, document_kind, language_code, metadata, source_record_id, entity_id',
+    )
     .eq('id', id)
     .single();
 
@@ -148,41 +145,50 @@ export default async function DocumentViewerPage({ params }: PageProps) {
   const dinNo = doc.metadata?.din_no;
   const brand = doc.metadata?.brand;
 
-  // Resolve every embedded legacy:*:<id> reference (document_key + chunk text) to its
-  // actual rag.document.id in one batch lookup, since the embedded id is a legacy record
-  // key (e.g. product_line_key), not a document id.
-  const legacyReferenceIds = Array.from(
-    new Set([
-      ...findLegacyReferenceIds(doc.document_key),
-      ...chunkData.flatMap((chunk) => findLegacyReferenceIds(chunk.chunk_text)),
-    ]),
-  );
+  // Source provenance: where this document was derived from, and the product/line it
+  // describes. Both are optional — efficacy/knowledge documents have no entity linkage.
+  type SingleRowSelect<T> = {
+    select(cols: string): {
+      eq(col: string, val: string): {
+        maybeSingle(): Promise<{ data: T | null; error: { message: string } | null }>;
+      };
+    };
+  };
 
-  const resolvedDocumentIds = new Map<string, string>();
-  if (legacyReferenceIds.length > 0) {
-    const { data: resolvedDocs } = await (
-      supabase.schema('rag').from('document') as unknown as {
-        select(cols: string): {
-          eq(col: string, val: string): {
-            in(col: string, vals: string[]): Promise<{
-              data: Array<{ id: string; metadata: Record<string, unknown> | null }> | null;
-              error: { message: string } | null;
-            }>;
-          };
-        };
-      }
-    )
-      .select('id, metadata')
-      .eq('document_kind', 'product_line_profile')
-      .in('metadata->>product_line_key', legacyReferenceIds);
+  const [sourceRecordResult, entityResult] = await Promise.all([
+    doc.source_record_id
+      ? (
+          supabase.schema('rag').from('source_record') as unknown as SingleRowSelect<{
+            source_schema: string | null;
+            source_table: string | null;
+            source_pk: string | null;
+            source_type: string | null;
+            source_uri: string | null;
+          }>
+        )
+          .select('source_schema, source_table, source_pk, source_type, source_uri')
+          .eq('id', doc.source_record_id)
+          .maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+    doc.entity_id
+      ? (
+          supabase.schema('rag').from('entity') as unknown as SingleRowSelect<{
+            product_key: string | null;
+            product_line_key: string | null;
+          }>
+        )
+          .select('product_key, product_line_key')
+          .eq('id', doc.entity_id)
+          .maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+  ]);
 
-    for (const resolvedDoc of resolvedDocs ?? []) {
-      const productLineKey = resolvedDoc.metadata?.product_line_key;
-      if (typeof productLineKey === 'string') {
-        resolvedDocumentIds.set(productLineKey, resolvedDoc.id);
-      }
-    }
-  }
+  const sourceLinks = resolveDocumentSourceLinks({
+    documentKind: doc.document_kind,
+    documentKey: doc.document_key,
+    sourceRecord: sourceRecordResult.data,
+    entity: entityResult.data,
+  });
 
   return (
     <div className="flex flex-1 bg-slate-50">
@@ -207,7 +213,7 @@ export default async function DocumentViewerPage({ params }: PageProps) {
                 {doc.title}
               </h1>
               <p className="mt-1 font-mono text-sm text-slate-500">
-                {linkifyLegacyReferences(doc.document_key, resolvedDocumentIds)}
+                {linkifyLegacyReferences(doc.document_key)}
               </p>
             </div>
 
@@ -228,6 +234,39 @@ export default async function DocumentViewerPage({ params }: PageProps) {
               ))}
             </div>
           </div>
+        </section>
+
+        {/* Source data */}
+        <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
+          <h2 className="text-lg font-semibold text-slate-900">Source data</h2>
+          <p className="mt-1 text-sm text-slate-500">
+            Where this document was derived from. Ingested files live in S3 and have no in-app
+            viewer.
+          </p>
+          {sourceLinks.length === 0 ? (
+            <p className="mt-6 text-sm text-slate-400">No source linkage on file.</p>
+          ) : (
+            <dl className="mt-6 divide-y divide-slate-100">
+              {sourceLinks.map((link) => (
+                <div className="flex flex-wrap gap-x-4 gap-y-1 py-3" key={`${link.label}-${link.value}`}>
+                  <dt className="w-44 shrink-0 text-sm font-medium text-slate-700">{link.label}</dt>
+                  <dd className="min-w-0 flex-1 break-all font-mono text-xs text-slate-600">
+                    {link.href ? (
+                      <Link
+                        className="inline-flex items-center gap-1 text-sky-600 transition hover:text-sky-700 hover:underline"
+                        href={link.href}
+                      >
+                        {link.value}
+                        <ExternalLink className="size-3 shrink-0" />
+                      </Link>
+                    ) : (
+                      link.value
+                    )}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          )}
         </section>
 
         {/* Chunks */}
@@ -251,7 +290,7 @@ export default async function DocumentViewerPage({ params }: PageProps) {
                     </div>
                   </div>
                   <div className="mt-3 overflow-auto rounded-lg bg-slate-50 p-3 text-xs leading-relaxed text-slate-700 max-h-64">
-                    {linkifyLegacyReferences(chunk.chunk_text, resolvedDocumentIds)}
+                    {linkifyLegacyReferences(chunk.chunk_text)}
                   </div>
                 </div>
               ))
