@@ -186,10 +186,16 @@ export const PRODUCT_SUPPORT_SHARED_INSTRUCTIONS = [
   '## Tool and grounding rules',
   '',
   '- You MUST call `search_product_docs` (or another retrieval tool) for every product or procedure question — no exceptions.',
+  // B0-660 — the general rule: don't ask for a surface the user already named. Reported against
+  // concrete, but the earlier B0-559 fix only covered gym/sports floor, so every other surface
+  // still got asked about, which reads as not having read the message.
+  '- If the user\'s message already names a surface, material, or substrate (e.g. concrete, VCT, terrazzo, grout, carpet, stainless steel, tile, hardwood), do not ask which surface it is — that question is already answered. Use the surface they gave you and go straight to retrieval.',
   // B0-559 — a "gym floor finish" question got met with "please share your surface, soil type,
   // and application method" instead of a recommendation, even though Betco only sells sport
-  // floor finish for wood floors, so the surface was never actually ambiguous.
-  '- Before asking a clarifying question, check whether Betco\'s own product scope already answers it — do not ask something the catalog makes moot. Example: Betco\'s sport/gym floor finish and coating line is formulated for wood (hardwood) sports floors only, so a "gym floor" or "sports floor" finish/coating question is never ambiguous about surface material — infer hardwood and go straight to `search_product_docs`. Only ask about surface material when Betco genuinely offers the relevant product line on more than one surface type.',
+  // floor finish for wood floors, so the surface was never actually ambiguous — a different,
+  // adjacent case from the rule above: the CATALOG makes it moot even when the user never said
+  // "wood" or "hardwood" outright.
+  '- Separately, before asking any clarifying question, check whether Betco\'s own product scope already answers it — do not ask something the catalog makes moot. Example: Betco\'s sport/gym floor finish and coating line is formulated for wood (hardwood) sports floors only, so a "gym floor" or "sports floor" finish/coating question is never ambiguous about surface material — infer hardwood and go straight to `search_product_docs`. Only ask about surface material when Betco genuinely offers the relevant product line on more than one surface type and the user hasn\'t already told you which.',
   '- When a clarifying question is genuinely needed, ask the single most decision-relevant one, not a checklist (e.g. not "surface, soil type, and application method" all at once) — and skip it entirely once you can already give a confident, useful recommendation from what the user said plus retrieval.',
   '- Call tools to retrieve approved documentation; never invent usage, compatibility, or safety claims.',
   '- Each tool returns up to 3 sources, where each source is an **excerpt from an approved document**: the matched passage plus its immediate neighboring passages (NOT the whole document). Read the entire `documentBody` of each source for grounding before answering — do not rely solely on the short `snippet` preview. If a fact you need is not present in the excerpt, do not assume it is absent from the source document — re-run the retrieval tool with a more specific `topic`/query, or use the dedicated tool for that fact (e.g. `get_efficacy_data`, `get_safety_constraints`) rather than concluding the data is not on file.',

@@ -56,3 +56,43 @@ describe('classifyEarlyDecline — B0-559 gym/sports floor is not ambiguous surf
     );
   });
 });
+
+describe('classifyEarlyDecline — B0-660 don\'t ask for a surface the user already named', () => {
+  it('does not decline "what\'s the best product for a concrete floor"', () => {
+    expect(classifyEarlyDecline("What's the best product for a concrete floor?")).toBeNull();
+  });
+
+  it('does not decline a VCT surface question', () => {
+    expect(
+      classifyEarlyDecline('What do you recommend for cleaning a VCT floor?'),
+    ).toBeNull();
+  });
+
+  it('does not decline a terrazzo surface question', () => {
+    expect(
+      classifyEarlyDecline("What's the best product for terrazzo?"),
+    ).toBeNull();
+  });
+
+  it('does not decline a grout surface question', () => {
+    expect(classifyEarlyDecline('What do you recommend for grout?')).toBeNull();
+  });
+
+  it('does not decline a carpet surface question', () => {
+    expect(
+      classifyEarlyDecline("What's the best product for carpet in a lobby?"),
+    ).toBeNull();
+  });
+
+  it('does not decline a stainless steel surface question', () => {
+    expect(
+      classifyEarlyDecline('What do you recommend for cleaning stainless steel prep tables?'),
+    ).toBeNull();
+  });
+
+  it('still declines a genuinely context-free ask with no surface named', () => {
+    expect(classifyEarlyDecline('What do you recommend for daily cleaning?')).toEqual(
+      expect.objectContaining({ reason: 'broad_recommendation_without_context' }),
+    );
+  });
+});

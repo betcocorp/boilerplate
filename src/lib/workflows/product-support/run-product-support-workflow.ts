@@ -48,6 +48,7 @@ import {
   classifyUserIntentSemantic,
   type SemanticRouteDecision,
 } from '~/lib/orchestrator/semantic-router';
+import { hasNamedSurfaceContext } from '~/lib/orchestrator/surface-vocabulary';
 import {
   CATEGORY_MISMATCH_CONFIDENCE_CAP,
   evaluateRecommendationGate,
@@ -638,7 +639,13 @@ export function classifyEarlyDecline(
     // flow that knows how to answer (or correctly decline) it.
     !(options?.crossReferenceIntent ?? shouldForceCrossReferenceLookup(userMessage)) &&
     // B0-559: same idea for gym/sports floor mentions — the surface isn't actually ambiguous.
-    !hasWoodSportsFloorContext(text)
+    !hasWoodSportsFloorContext(text) &&
+    // B0-660: the general case B0-559 is one instance of — the user already named a
+    // surface/material (concrete, VCT, terrazzo, grout, carpet, stainless steel, etc.) outright,
+    // so there is nothing to disambiguate regardless of how many surfaces the line serves. Before
+    // this, only surfaces with their own filed bug were suppressed; see `surface-vocabulary.ts`
+    // for the shared vocabulary (also used by the intent classifier's prompt examples).
+    !hasNamedSurfaceContext(text)
   ) {
     return {
       reason: 'broad_recommendation_without_context',
