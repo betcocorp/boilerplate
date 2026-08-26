@@ -822,6 +822,138 @@ export type Database = {
           },
         ]
       }
+      routing_test_items: {
+        Row: {
+          created_at: string
+          embedding_large: unknown
+          embedding_model_large: string | null
+          expected_agent: string
+          id: string
+          prompt: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          embedding_large?: unknown
+          embedding_model_large?: string | null
+          expected_agent: string
+          id?: string
+          prompt: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          embedding_large?: unknown
+          embedding_model_large?: string | null
+          expected_agent?: string
+          id?: string
+          prompt?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      routing_test_run_items: {
+        Row: {
+          created_at: string
+          detail: Json | null
+          elapsed_ms: number
+          error: string | null
+          expected_agent: string
+          id: string
+          item_id: string | null
+          passed: boolean
+          predicted_agent: string
+          prompt: string
+          row_index: number
+          run_id: string
+        }
+        Insert: {
+          created_at?: string
+          detail?: Json | null
+          elapsed_ms: number
+          error?: string | null
+          expected_agent: string
+          id?: string
+          item_id?: string | null
+          passed: boolean
+          predicted_agent: string
+          prompt: string
+          row_index: number
+          run_id: string
+        }
+        Update: {
+          created_at?: string
+          detail?: Json | null
+          elapsed_ms?: number
+          error?: string | null
+          expected_agent?: string
+          id?: string
+          item_id?: string | null
+          passed?: boolean
+          predicted_agent?: string
+          prompt?: string
+          row_index?: number
+          run_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "routing_test_run_items_item_id_fkey"
+            columns: ["item_id"]
+            isOneToOne: false
+            referencedRelation: "routing_test_items"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "routing_test_run_items_run_id_fkey"
+            columns: ["run_id"]
+            isOneToOne: false
+            referencedRelation: "routing_test_runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      routing_test_runs: {
+        Row: {
+          avg_item_duration_ms: number | null
+          created_at: string
+          degraded_items: number
+          duration_ms: number
+          id: string
+          model: string | null
+          passed_items: number
+          ran_at: string
+          router_type: string
+          total_items: number
+          warning: string | null
+        }
+        Insert: {
+          avg_item_duration_ms?: number | null
+          created_at?: string
+          degraded_items?: number
+          duration_ms?: number
+          id?: string
+          model?: string | null
+          passed_items?: number
+          ran_at: string
+          router_type: string
+          total_items?: number
+          warning?: string | null
+        }
+        Update: {
+          avg_item_duration_ms?: number | null
+          created_at?: string
+          degraded_items?: number
+          duration_ms?: number
+          id?: string
+          model?: string | null
+          passed_items?: number
+          ran_at?: string
+          router_type?: string
+          total_items?: number
+          warning?: string | null
+        }
+        Relationships: []
+      }
       settings: {
         Row: {
           allowed_values: string[] | null
@@ -1456,6 +1588,8 @@ export type Database = {
           root_cause_category: string | null
           root_cause_content: string | null
           root_cause_generated_at: string | null
+          root_cause_reason: string | null
+          root_cause_suggested_fix: string | null
           root_cause_title: string | null
           row_index: number | null
           run_created_at: string | null
@@ -1545,6 +1679,8 @@ export type Database = {
           root_cause_category: string | null
           root_cause_content: string | null
           root_cause_generated_at: string | null
+          root_cause_reason: string | null
+          root_cause_suggested_fix: string | null
           root_cause_title: string | null
           row_index: number | null
           run_created_at: string | null
