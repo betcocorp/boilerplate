@@ -38,6 +38,7 @@ export function EndpointDocumentation({ endpoint }: EndpointDocumentationProps) 
   const [isLoading, setIsLoading] = useState(false);
   const [response, setResponse] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [bearerToken, setBearerToken] = useState('');
   const [formData, setFormData] = useState<Record<string, string>>(
     endpoint.parameters.reduce(
       (acc, param) => {
@@ -85,6 +86,7 @@ export function EndpointDocumentation({ endpoint }: EndpointDocumentationProps) 
           method: endpoint.method,
           parameters: payload,
           authType: endpoint.auth,
+          ...(endpoint.auth === 'Bearer Token' && { bearerToken }),
         }),
       });
 
@@ -194,6 +196,20 @@ export function EndpointDocumentation({ endpoint }: EndpointDocumentationProps) 
           {showExample && (
             <div className="space-y-3 rounded-lg border border-border/40 bg-muted/20 p-4">
               <h4 className="text-sm font-semibold text-foreground">Example Request</h4>
+              {endpoint.auth === 'Bearer Token' && (
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground">
+                    Bearer Token
+                  </label>
+                  <input
+                    type="password"
+                    value={bearerToken}
+                    onChange={(e) => setBearerToken(e.target.value)}
+                    placeholder="Enter Bearer token (required for Bearer Token auth)"
+                    className="mt-1 w-full rounded border border-border bg-background px-2 py-1 text-xs text-foreground placeholder-muted-foreground focus:border-primary focus:outline-none"
+                  />
+                </div>
+              )}
               <div className="space-y-2">
                 {endpoint.parameters.map((param) => (
                   <div key={param.name}>

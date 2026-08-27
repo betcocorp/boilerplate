@@ -14,11 +14,14 @@ interface ExecuteEndpointPayload {
   bearerToken?: string;
 }
 
+interface ExecuteEndpointRequest extends ExecuteEndpointPayload {}
+
+
 export async function POST(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
 
-    const payload: ExecuteEndpointPayload = await request.json();
+    const payload: ExecuteEndpointRequest = await request.json();
     const { path, method, parameters, authType, bearerToken } = payload;
 
     if (!path || !method) {
@@ -33,6 +36,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { error: 'Session authentication required' },
         { status: 401 },
+      );
+    }
+
+    if (authType === 'Bearer Token' && !bearerToken) {
+      return NextResponse.json(
+        { error: 'Bearer token required for Bearer Token authentication' },
+        { status: 400 },
       );
     }
 
@@ -63,7 +73,7 @@ export async function POST(request: NextRequest) {
       'Content-Type': 'application/json',
     };
 
-    if (authType === 'Bearer Token' && bearerToken) {
+    if (bearerToken) {
       headers['Authorization'] = `Bearer ${bearerToken}`;
     }
 
