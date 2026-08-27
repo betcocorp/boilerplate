@@ -160,7 +160,7 @@ const MAX_PRIOR_MESSAGES = 8;
 // raw string), invalid/absent → documented default.
 // ---------------------------------------------------------------------------------------------
 
-export const DEFAULT_BEX_ROUTER_MODEL = 'gpt-4o-mini';
+export const DEFAULT_BEX_ROUTER_MODEL = 'gpt-4.1-mini';
 /**
  * Default 5000ms. B0-506 originally set this to 800ms based on the ticket's stated 150-2000ms
  * range, but that range was never measured against a real call — B0-511's cutover rollout found
@@ -174,6 +174,10 @@ export const DEFAULT_BEX_ROUTER_MODEL = 'gpt-4o-mini';
  * waiting is exactly the keyword fallback the cutover exists to replace, so it is set generously;
  * product accepted the added synchronous routing latency (2026-08-18). Tighten via
  * `BEX_ROUTER_TIMEOUT_MS` once real p95s are known (B0-524's dashboard now captures them).
+ *
+ * B0-695 (2026-08-26) switched the default router model from `gpt-4o-mini` to `gpt-4.1-mini` —
+ * the ~1.2-1.9s figures above are from the `gpt-4o-mini` era and haven't been re-measured on the
+ * new model; revisit this ceiling once B0-524's dashboard has real `gpt-4.1-mini` samples.
  */
 export const DEFAULT_BEX_ROUTER_TIMEOUT_MS = 5000;
 
