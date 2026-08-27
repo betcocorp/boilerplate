@@ -1,9 +1,10 @@
 'use client';
 
-import { ChevronDown } from 'lucide-react';
+import { ChevronDown, Loader2 } from 'lucide-react';
 import { useState } from 'react';
 
 import { Badge } from '~/components/ui/badge';
+import { Button } from '~/components/ui/button';
 import {
   Card,
   CardContent,
@@ -33,6 +34,72 @@ const AUTH_COLORS = {
 
 export function EndpointDocumentation({ endpoint }: EndpointDocumentationProps) {
   const [isExpanded, setIsExpanded] = useState(false);
+  const [showExample, setShowExample] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [response, setResponse] = useState<Record<string, unknown> | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [formData, setFormData] = useState<Record<string, string>>(
+    endpoint.parameters.reduce(
+      (acc, param) => {
+        acc[param.name] = '';
+        return acc;
+      },
+      {} as Record<string, string>,
+    ),
+  );
+
+  const handleFormChange = (key: string, value: string) => {
+    setFormData((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const handleSubmit = async () => {
+    setIsLoading(true);
+    setError(null);
+    setResponse(null);
+
+    try {
+      const payload = Object.entries(formData).reduce(
+        (acc, [key, value]) => {
+          if (!value) return acc;
+          try {
+            acc[key] = value === 'true' ? true : value === 'false' ? false : value;
+            // Try parsing as JSON for complex types
+            if (value.startsWith('{') || value.startsWith('[')) {
+              acc[key] = JSON.parse(value);
+            } else if (!isNaN(Number(value)) && value !== '') {
+              acc[key] = Number(value);
+            }
+          } catch {
+            acc[key] = value;
+          }
+          return acc;
+        },
+        {} as Record<string, unknown>,
+      );
+
+      const res = await fetch(`/api/admin/tools/execute-endpoint`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          path: endpoint.path,
+          method: endpoint.method,
+          parameters: payload,
+          authType: endpoint.auth,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || 'Request failed');
+      } else {
+        setResponse(data);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unknown error');
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   return (
     <Card className="rounded-2xl">
@@ -112,6 +179,64 @@ export function EndpointDocumentation({ endpoint }: EndpointDocumentationProps) 
                   </pre>
                 )}
               </div>
+            </div>
+          )}
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowExample(!showExample)}
+            className="mb-2"
+          >
+            {showExample ? 'Hide' : 'Show'} Example Call
+          </Button>
+
+          {showExample && (
+            <div className="space-y-3 rounded-lg border border-border/40 bg-muted/20 p-4">
+              <h4 className="text-sm font-semibold text-foreground">Example Request</h4>
+              <div className="space-y-2">
+                {endpoint.parameters.map((param) => (
+                  <div key={param.name}>
+                    <label className="text-xs font-medium text-muted-foreground">
+                      {param.name}
+                      {param.required && <span className="ml-1 font-semibold text-red-500">*</span>}
+                    </label>
+                    <input
+                      type="text"
+                      value={formData[param.name] || ''}
+                      onChange={(e) => handleFormChange(param.name, e.target.value)}
+                      placeholder={`Enter ${param.name}`}
+                      className="mt-1 w-full rounded border border-border bg-background px-2 py-1 text-xs text-foreground placeholder-muted-foreground focus:border-primary focus:outline-none"
+                    />
+                    <p className="mt-1 text-xs text-muted-foreground">{param.description}</p>
+                  </div>
+                ))}
+              </div>
+
+              <Button
+                onClick={handleSubmit}
+                disabled={isLoading}
+                size="sm"
+                className="w-full"
+              >
+                {isLoading && <Loader2 className="mr-2 size-3 animate-spin" />}
+                {isLoading ? 'Executing...' : 'Execute'}
+              </Button>
+
+              {error && (
+                <div className="rounded bg-red-500/10 p-2 text-xs text-red-600">
+                  <strong>Error:</strong> {error}
+                </div>
+              )}
+
+              {response && (
+                <div className="rounded bg-muted/50 p-2">
+                  <h5 className="mb-2 text-xs font-semibold text-foreground">Response:</h5>
+                  <pre className="overflow-x-auto text-xs text-muted-foreground whitespace-pre-wrap break-words">
+                    {typeof response === 'string' ? response : JSON.stringify(response, null, 2)}
+                  </pre>
+                </div>
+              )}
             </div>
           )}
 
