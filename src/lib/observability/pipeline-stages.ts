@@ -109,6 +109,9 @@ export const PIPELINE_STAGES: ReadonlyArray<{
  * step's `output.issues`. These are the same strings `~/lib/observability/timeline.ts`
  * discriminates its `validator_bypass` / `validator_skip_high_similarity` gates on.
  * NOT an audit event — no such audit row exists.
+ *
+ * B0-358 — kept as the FALLBACK only. `workflow_steps.output->validatorMode` is the authority on
+ * every row written since that ticket; these markers are what historical rows carry instead.
  */
 export const VALIDATOR_SKIP_ISSUES = [
   'validator_bypassed_for_testing',
@@ -156,10 +159,18 @@ export type ToolEventScanRow = {
   call_id: string | null;
 };
 
-/** One validator step's `workflow_run_id` + `output->issues` (a JSON array, or null). */
+/**
+ * One validator step's `workflow_run_id`, `output->issues` (a JSON array, or null) and, since
+ * B0-358, `output->validatorMode`.
+ *
+ * `validatorMode` is the authority when present; the issue markers below are the fallback for every
+ * step row written before B0-358, which carry no mode at all.
+ */
 export type ValidatorIssueScanRow = {
   workflow_run_id: string;
   issues: unknown;
+  /** B0-358 — `'llm' | 'bypassed'`; null/absent on rows written before that ticket. */
+  validator_mode?: unknown;
 };
 
 /**
@@ -249,6 +260,14 @@ export function buildPipelineStageStripData(input: {
   // Validate footer — distinct runs whose validator output carries a skip/bypass marker.
   const skippedOrBypassedRunIds = new Set<string>();
   for (const row of validatorIssueRows) {
+    // B0-358 — prefer the explicit mode; fall back to the issue markers for pre-B0-358 rows.
+    if (row.validator_mode === 'bypassed') {
+      skippedOrBypassedRunIds.add(row.workflow_run_id);
+      continue;
+    }
+    if (row.validator_mode === 'llm') {
+      continue;
+    }
     const issues = readIssueStrings(row.issues);
     if (VALIDATOR_SKIP_ISSUES.some((marker) => issues.includes(marker))) {
       skippedOrBypassedRunIds.add(row.workflow_run_id);
@@ -363,10 +382,11 @@ async function scanValidatorIssueRows(
 
   for (let page = 0; page < MAX_SCAN_PAGES; page += 1) {
     const start = page * SCAN_PAGE_SIZE;
-    // Only the issues array — validator `output` also carries the full validation blob.
+    // Only the issues array and (B0-358) the validator mode — validator `output` also carries the
+    // full validation blob, which this scan has no use for.
     const { data, error } = await supabase
       .from('workflow_steps')
-      .select('workflow_run_id,issues:output->issues')
+      .select('workflow_run_id,issues:output->issues,validator_mode:output->>validatorMode')
       .eq('step_name', 'validator')
       .gte('started_at', from)
       .lte('started_at', to)

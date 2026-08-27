@@ -12,8 +12,85 @@ import { Badge } from '~/components/ui/badge';
 import { formatSimilarityValue } from '~/lib/tests/format';
 
 import type { RunPayloadView } from '~/lib/observability/run-payload';
+import type {
+  ActiveGates,
+  GateActivationRecord,
+  ValidatorMode,
+} from '~/lib/workflows/product-support/product-support-schemas';
 
 const NA = 'n/a';
+
+/**
+ * B0-358 — the deterministic guardrails, in the order the workflow evaluates them, with the labels
+ * a reviewer would recognise. `validator` is deliberately excluded: it gets its own mode chip above,
+ * because "was this answer checked by a model at all" is the question the panel exists to answer.
+ */
+const GUARDRAIL_LABELS: Array<{ key: keyof ActiveGates; label: string }> = [
+  { key: 'earlyDeclineGate', label: 'early decline' },
+  { key: 'usageSafetyCoverage', label: 'usage/safety coverage' },
+  { key: 'regulatedClaimGuardrail', label: 'regulated-claim grounding' },
+  { key: 'recommendationConfidence', label: 'recommendation confidence' },
+  { key: 'recommendationEngineVerdict', label: 'recommendation engine verdict' },
+];
+
+/**
+ * B0-358 — a guardrail that RAN AND PASSED must look different from one that never ran, and both
+ * must look different from one the B0-452 kill switch neutered. Colour carries that distinction;
+ * the title attribute carries the exact recorded reason/verdict.
+ */
+function guardrailBadgeClassName(record: GateActivationRecord): string {
+  if (record.state === 'bypassed') {
+    return 'border-destructive/45 bg-destructive/10 text-destructive';
+  }
+  if (record.state === 'ran') {
+    return record.verdict && record.verdict !== 'passed' && record.verdict !== 'approved'
+      ? 'border-amber-600/45 bg-amber-600/12 text-amber-900'
+      : 'border-emerald-600/45 bg-emerald-600/12 text-emerald-900';
+  }
+  // skipped / not_applicable — a real state, but never rendered as a pass.
+  return 'border-slate-300 bg-slate-100 text-slate-600';
+}
+
+function guardrailStateLabel(record: GateActivationRecord): string {
+  if (record.state === 'ran') {
+    return record.verdict ? `ran · ${record.verdict}` : 'ran';
+  }
+  return record.state === 'not_applicable' ? 'n/a this turn' : record.state;
+}
+
+/**
+ * B0-358 — the run's verification level. Renders NOTHING for a run written before this ticket
+ * (`null`): a placeholder would be a claim, and "unknown" must not read as "validated".
+ */
+function ValidatorModeBadge({ mode }: { mode: ValidatorMode | null }) {
+  if (!mode) {
+    return null;
+  }
+  if (mode === 'llm') {
+    return (
+      <Badge
+        className="border-emerald-600/45 bg-emerald-600/12 text-emerald-900"
+        title="validatorMode: llm — the LLM validator pass genuinely ran and judged this answer."
+        variant="outline"
+      >
+        LLM validator ran
+      </Badge>
+    );
+  }
+  return (
+    <Badge
+      className="border-amber-600/45 bg-amber-600/12 text-amber-900"
+      title={
+        mode === 'bypassed'
+          ? 'validatorMode: bypassed — no LLM validator pass ran on this turn (REC-4: useValidator defaults to false on the live Bex path, or the B0-546 high-similarity skip applied). The confidence number is a heuristic, not a judgment. The deterministic guardrails below still ran.'
+          : 'validatorMode: not_run — the early-decline gate short-circuited this turn before a validator step existed.'
+      }
+      variant="outline"
+    >
+      {mode === 'bypassed' ? 'validator bypassed' : 'validator not run'}
+    </Badge>
+  );
+}
 
 function formatCount(value: number): string {
   return value.toLocaleString('en-US');
@@ -53,7 +130,8 @@ function Field({
 }
 
 export function RunPayloadSummary({ payload }: { payload: RunPayloadView }) {
-  const { modelTag, similarity, timing, usage, validation } = payload;
+  const { activeGates, modelTag, similarity, timing, usage, validation, validatorMode } =
+    payload;
 
   return (
     <div className="mt-6 space-y-4">
@@ -98,8 +176,37 @@ export function RunPayloadSummary({ payload }: { payload: RunPayloadView }) {
 
       <div className="rounded-2xl border border-slate-100 bg-slate-50/70 p-4">
         <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
-          Validator
+          Verification
         </p>
+        {/* B0-358 — how far this run's verification actually got, at a glance: which validator
+            mode, then every deterministic guardrail including the ones that ran and PASSED.
+            Both render nothing at all for a run that predates the instrumentation. */}
+        {validatorMode || activeGates ? (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            <ValidatorModeBadge mode={validatorMode} />
+            {activeGates
+              ? GUARDRAIL_LABELS.map(({ key, label }) => {
+                  const record = activeGates[key];
+                  if (!record) {
+                    // Absent key = the run predates this gate. Never invent a state for it.
+                    return null;
+                  }
+                  return (
+                    <Badge
+                      className={`rounded-full px-2 py-0 text-[0.65rem] ${guardrailBadgeClassName(record)}`}
+                      key={key}
+                      title={`${String(key)}: ${record.state}${
+                        record.verdict ? ` (${record.verdict})` : ''
+                      }${record.reason ? ` — ${record.reason}` : ''}`}
+                      variant="outline"
+                    >
+                      {label} · {guardrailStateLabel(record)}
+                    </Badge>
+                  );
+                })
+              : null}
+          </div>
+        ) : null}
         {validation ? (
           <>
             <div className="mt-2 flex flex-wrap items-center gap-2">

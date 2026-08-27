@@ -12,6 +12,10 @@ export {
   type SupportedModel,
 } from '~/lib/constants/models';
 
+export type { RagDocumentKind } from '~/lib/rag/document-kind';
+
+import type { RagDocumentKind } from '~/lib/rag/document-kind';
+
 export type ChatRole = 'user' | 'assistant' | 'system';
 
 export type ChatSourceRef = {
@@ -23,6 +27,16 @@ export type ChatSourceRef = {
   /** WEB-6: external (web) sources render as clickable links in the Sources panel. */
   kind?: 'internal' | 'external';
   url?: string;
+  /**
+   * B0-293: which corpus this source came from — SDS, label, product profile, efficacy report,
+   * knowledge article, or the synthetic "Verified Product Facts" block. A union of the values that
+   * actually exist in `rag.document.document_kind` (plus `facts`), never a free string.
+   *
+   * Optional on purpose: messages persisted before B0-293 have no such field, external/web sources
+   * have no corpus, and a synthetic source with no known kind must render without a badge rather
+   * than with an empty one.
+   */
+  documentKind?: RagDocumentKind;
 };
 
 export type ChatMessage = {

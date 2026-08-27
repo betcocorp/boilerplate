@@ -653,9 +653,19 @@ export function buildRunTimeline(
   for (const [index, log] of validationLogs.entries()) {
     const payload = asRecord(log.payload);
     const issues = readStringArray(payload, 'issues');
-    const bypassed = issues.includes('validator_bypassed_for_testing');
+    /**
+     * B0-358 — `validatorMode` is the authority when the run recorded one (`'llm' | 'bypassed'`);
+     * the `validator_bypassed_for_testing` issues token is the fallback for runs written before
+     * that ticket. Reading the field first is what demotes the token from load-bearing to
+     * redundant — it is still emitted, and still the only signal historical rows carry.
+     */
+    const validatorMode = readString(payload, 'validatorMode');
+    const bypassed =
+      validatorMode === 'bypassed' ||
+      (validatorMode === null && issues.includes('validator_bypassed_for_testing'));
     // B0-546 — the high-similarity skip path tags its heuristic result with its own reason string
-    // so it doesn't get misread as an actual LLM self-report.
+    // so it doesn't get misread as an actual LLM self-report. It is also a `bypassed` mode, so this
+    // check stays keyed on the issues token, which is what distinguishes the two skip reasons.
     const skippedHighSimilarity = issues.includes(
       'validator_skipped_high_similarity_non_safety_route',
     );

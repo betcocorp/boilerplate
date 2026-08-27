@@ -72,7 +72,9 @@ describe('productSupportFinalOutputSchema — B0-388 additions are backward comp
 });
 
 describe('answerProvenanceSchema', () => {
-  it('covers exactly the eight answer branches', () => {
+  // B0-356 added `recommendation_engine_decline` (the recommendation engine's own decline, which is
+  // NOT this workflow's validator fallback).
+  it('covers exactly the nine answer branches', () => {
     expect(answerProvenanceSchema.options).toEqual([
       'model_generated',
       'template_override',
@@ -82,6 +84,7 @@ describe('answerProvenanceSchema', () => {
       'validator_fallback',
       'revision_pass',
       'validator_rejected_draft_retained',
+      'recommendation_engine_decline',
     ]);
   });
 });
