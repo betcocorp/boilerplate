@@ -4,6 +4,7 @@ import { ChevronRight, ChevronsDownUp, ChevronsUpDown } from 'lucide-react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { type ReactNode, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 
+import { BexStreamdown } from '~/components/bex/BexStreamdown';
 import { CaseTraceDownloadButton } from '~/components/admin/tests/report/CaseTraceDownloadButton';
 import {
   CONCEPT_MARKER_LEGEND,
@@ -456,11 +457,17 @@ function ExpectedColumn({ c }: { c: ReportCase }) {
 }
 
 function ActualColumn({ c }: { c: ReportCase }) {
+  const trimmedResponse = c.actual?.trim() ?? '';
+
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4">
       <FieldLabel>Agent&apos;s actual response</FieldLabel>
       {c.responseRecorded ? (
-        <Verbatim className="mt-2" value={c.actual} />
+        trimmedResponse ? (
+          <BexStreamdown content={trimmedResponse} isStreaming={false} isUser={false} />
+        ) : (
+          <p className="text-sm text-slate-400 italic">{NONE_NOTED}</p>
+        )
       ) : (
         // `actual` still carries the payload's own placeholder — shown as-is, flagged as absent.
         <p className="mt-2 text-sm text-slate-400 italic">{c.actual}</p>
