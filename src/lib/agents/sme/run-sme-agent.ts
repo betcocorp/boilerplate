@@ -392,11 +392,18 @@ async function runCrossReferenceSmeAgentAnswer(
 }
 
 /**
- * Placeholder SME run: validates input and returns a stable shape the orchestrator can merge
- * into real tool + LLM steps later. Only reachable now when a real-workflow agent (including
- * `recommendations`) is called with no query, or when `cross_reference` is called with no query
- * (see `runSmeAgent` below — both real agents dispatch to their real answer path once a query is
- * present).
+ * Entry point for every `/api/v1/agents/{id}` route.
+ *
+ * B0-352 — all six agent ids dispatch to a REAL answer path: `product`, `dilution`, `floor`,
+ * `bathroom` and `recommendations` run the product-support workflow forced to that specialist
+ * (`runRealSmeAgentAnswer`, B0-520/521/522/523/663) and `cross_reference` runs the dedicated
+ * cross-reference engine (`runCrossReferenceSmeAgentAnswer`, B0-663). None of them is a stub.
+ *
+ * The `pending`-steps payload at the bottom is the ONLY placeholder left, and it is unreachable
+ * over HTTP: `smeAgentHttpInvokeSchema` rejects an absent/blank `query` with a 400 before this
+ * function is called, so the empty-query branch can only be hit by a direct in-process call. It is
+ * kept as a defensive default (this function's return type has no "no answer" variant), not as a
+ * feature — see the `/api/v1/agents/*` section of `AGENTS.md` for the decision.
  */
 export async function runSmeAgent(
   agentId: SmeAgentId,
@@ -447,7 +454,9 @@ export async function runSmeAgent(
 
   const ingestNote = (() => {
     if (!query) {
-      return 'No query yet — caller should send { query: string }.';
+      // B0-352 — unreachable over HTTP (the route 400s on a blank query). If it ever surfaces,
+      // it must be unmistakable that this is a placeholder payload and not a real agent answer.
+      return 'PLACEHOLDER RESPONSE — no answer was produced. No query yet: caller should send { query: string }.';
     }
     if (sessionNote) {
       return `Query received; session context: ${sessionNote}. Ready for retrieval + synthesis.`;

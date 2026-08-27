@@ -34,8 +34,10 @@ export function createSmeAgentPostHandler(agentId: SmeAgentId) {
       const result = await runSmeAgent(agentId, parsed.data);
 
       // B0-117 — attribute LLM token usage to this request's api_request_log row, same as
-      // `/api/v1/orchestrator` does for `productSupport.usage`. Absent for the `recommendations`
-      // stub and for any real-workflow agent run whose workflow didn't report usage.
+      // `/api/v1/orchestrator` does for `productSupport.usage`. B0-352: the "recommendations is a
+      // stub" note that used to be here was stale — every agent id is wired to a real answer path.
+      // Usage is still absent for `cross_reference` (no chat loop of its own) and for any run whose
+      // workflow didn't report usage.
       if (result.answer?.usage) {
         recordUsage(result.answer.usage);
       }
