@@ -791,7 +791,13 @@ async function runProductKnowledgeQuery(input: {
     useReranker: PRODUCT_SUPPORT_RERANK_ENABLED,
   });
 
-  const resolution = resolveProductLineFromMatches(broadResult.matches);
+  // B0-693 — a query targeting a specific GHS section (hazard, first aid, dilution/contact-time,
+  // EPA reg, etc.) is regulated content: require the margin-over-runner-up check even when the top
+  // score alone would otherwise clear the absolute confidence bar. General queries (`sectionType ===
+  // null`) are unaffected — see `resolveProductLineFromMatches`'s doc comment.
+  const resolution = resolveProductLineFromMatches(broadResult.matches, {
+    requireMarginForHighConfidence: sectionType !== null,
+  });
   const requiredDocumentKindsForQuery = resolveRequiredDocumentKinds(input.query, sectionType);
 
   // B0-438: start broad candidate selection now, but do not await it yet. The anchored search

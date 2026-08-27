@@ -39,9 +39,17 @@ function readResolutionEnvNumber(name: string, fallback: number): number {
 /**
  * From an unfiltered product similarity result set, derive the top few `product_line_key`
  * candidates and optionally lock retrieval to one line when confidence is high enough.
+ *
+ * B0-693 — `requireMarginForHighConfidence` closes the loophole where the absolute-threshold
+ * shortcut below let a high top score lock even with a close, uncorroborated runner-up (reported:
+ * a hazard/signal-word question for a 9% HCl SKU was answered with a 23% HCl SKU's hazard
+ * profile). Callers set it for queries targeting a specific regulated GHS section (hazard, first
+ * aid, dilution/contact-time, EPA reg, etc.) — general "what is this product" queries are
+ * unaffected and keep the existing absolute-threshold shortcut.
  */
 export function resolveProductLineFromMatches(
   matches: RagSearchMatch[],
+  options: { requireMarginForHighConfidence?: boolean } = {},
 ): ProductLineResolutionResult {
   const minSim = readResolutionEnvNumber(
     'BEX_PRODUCT_LINE_LOCK_MIN_SIMILARITY',
@@ -104,8 +112,9 @@ export function resolveProductLineFromMatches(
 
   const spread =
     second != null ? first.maxSimilarity - second.maxSimilarity : 1;
+  const requireMargin = options.requireMarginForHighConfidence === true;
 
-  if (first.maxSimilarity >= highAbs) {
+  if (first.maxSimilarity >= highAbs && !requireMargin) {
     return {
       candidates,
       lockedProductLineKey: first.productLineKey,
