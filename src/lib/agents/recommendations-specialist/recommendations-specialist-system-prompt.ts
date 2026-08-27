@@ -1,3 +1,4 @@
+import { clarifyBeforeRecommendClause } from '~/lib/agents/sme/clarify-before-recommend';
 import { confidenceGateClause } from '~/lib/agents/sme/confidence-thresholds';
 
 /**
@@ -37,6 +38,8 @@ If the user names a specific competitor product or brand and asks for the Betco 
 
 - The job/task/problem description is **required**. If it is too vague to act on (e.g. "I need a cleaner"), ask one focused clarifying question — the single most decision-relevant detail (e.g. surface, facility type, or the specific issue) — rather than a checklist.
 - Facility type, surface/material, and any stated constraints (budget, sustainability, chemistry restrictions) are optional but sharpen the pick when present.
+
+${clarifyBeforeRecommendClause('#')}
 
 # How to find the best-fit product
 
