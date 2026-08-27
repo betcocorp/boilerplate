@@ -1,3 +1,42 @@
+# [2.11.0](https://github.com/betcocorp/bex2.0/compare/v2.10.0...v2.11.0) (2026-08-27)
+
+
+### Bug Fixes
+
+* **B0-16:** dedupe RAG SDS results on product identity instead of chunk text ([9e2257d](https://github.com/betcocorp/bex2.0/commit/9e2257d0af3debc35c3639f5d938f381aaadfa09))
+* **B0-355:** enforce and instrument the cross-reference recommendation engine ([3ce8909](https://github.com/betcocorp/bex2.0/commit/3ce89099c2b66938fb57ec7c69710ded039549ad))
+* **B0-373:** give /admin/bex/compare its own loading.tsx instead of the chat skeleton ([a3a3fea](https://github.com/betcocorp/bex2.0/commit/a3a3feac94d34c5a58e96a1cac81cf4601a2fd86))
+* **B0-464:** audit live schema drift and gate it in CI ([f8b30b1](https://github.com/betcocorp/bex2.0/commit/f8b30b163ba9a8421b5e7d53421c2dcf24afc9bb))
+* **B0-694:** promote test_items.expected_tool from metadata jsonb to a typed column ([3dff47f](https://github.com/betcocorp/bex2.0/commit/3dff47f4f4c07e548d3463e50c2069682092666a))
+* **B0-696:** gate unverified aliases out of the exact-match and tokenized-fuzzy resolution tiers ([ab40c03](https://github.com/betcocorp/bex2.0/commit/ab40c033387e8c4d51569816fc979f160d2e9a55))
+
+
+### Features
+
+* **B0-264:** extract dilution from ingested label documents, with skip audit ([763d755](https://github.com/betcocorp/bex2.0/commit/763d7555a3ed91cc44b8b4013c5c93149ecbb467))
+* **B0-351:** per-run agent-mode config for the test runner, and one parser for run_options ([d34f29f](https://github.com/betcocorp/bex2.0/commit/d34f29fe6b49d8220d812ba53983e53e32274221))
+* **B0-372:** add shape-matched loading.tsx to routes falling back to the generic /admin skeleton ([b3faed1](https://github.com/betcocorp/bex2.0/commit/b3faed1683ce25c3e332204076b12f9d15998c4b))
+* **B0-378:** replay prior-turn tool context on the AI SDK generation path ([23edd74](https://github.com/betcocorp/bex2.0/commit/23edd74d96452354e58c8de2b72c814113586d6e))
+* **B0-466:** alert on tool-failure-rate and golden-set pass-rate regressions ([d2d9b0c](https://github.com/betcocorp/bex2.0/commit/d2d9b0c883d0051303bc658d34d6d54ec2ab0a35))
+* **B0-496:** add the confidence and similarity integrity panel plus a coverage assertion test ([36f90be](https://github.com/betcocorp/bex2.0/commit/36f90beb80fc984f9ae2463b38e9cb62ec61b909))
+* **B0-529:** add get_dispenser_asset and get_floor_asset knowledge tools ([9e46685](https://github.com/betcocorp/bex2.0/commit/9e46685e210d2a739ad9855d24af38bcf525f586))
+* **B0-537,B0-538:** multi-turn eval format and cross-turn assertion evaluator ([2217e67](https://github.com/betcocorp/bex2.0/commit/2217e67638490f7feb4b5999c78db16b2e6a6a42))
+* **B0-586:** add the structured report data contract and endpoint ([cf848a3](https://github.com/betcocorp/bex2.0/commit/cf848a34e0d369c558d61d20c5fe7c54a2cf6d1b))
+* **B0-587:** add the report verdict strip ([1c5aa6f](https://github.com/betcocorp/bex2.0/commit/1c5aa6f6921ffec1f09fbed3c4855e3930d39346))
+* **B0-588:** add the report tier, category and responsiveness cards ([c04e04b](https://github.com/betcocorp/bex2.0/commit/c04e04b218b880c30420130745ba975aa11bfe57))
+* **B0-589:** add the top-3 fix cards with derived evidence chips ([8c9023a](https://github.com/betcocorp/bex2.0/commit/8c9023a38475415898c3ba32c8eca66bd6f3d6b3))
+* **B0-590:** add the case ledger with tier grouping, filters and in-place expansion ([5b19e41](https://github.com/betcocorp/bex2.0/commit/5b19e4188a910c65e1e4f3e5b46473b7596a9019))
+* **B0-591:** add the executive assessment, aggregate findings and methodology sections ([4c2b8c0](https://github.com/betcocorp/bex2.0/commit/4c2b8c0276ff747d20caee762e7a5f13ee39ba87))
+* **B0-592:** render the verdict-first report layout and re-point the PDF export at it ([8907248](https://github.com/betcocorp/bex2.0/commit/8907248c22d7e817062240d1af0ec17420e0b7d1))
+* **B0-680:** add the pre-computed semantic router embeddings generator and artifact ([3aff5a4](https://github.com/betcocorp/bex2.0/commit/3aff5a42ed99b164ac831c7d59486366de20b8ca))
+* **B0-695:** switch LLM router's classifier model to gpt-4.1-mini ([78f9caf](https://github.com/betcocorp/bex2.0/commit/78f9cafb51da0dd856b2e80ad1f3f99c434f38cc))
+* **B0-698:** add router comparison charts to /admin/routing-test ([0d5447a](https://github.com/betcocorp/bex2.0/commit/0d5447a0a316e8fadfd5f42a747213cb571f670b))
+
+
+### Reverts
+
+* **B0-695:** switch LLM router's classifier model back to gpt-4o-mini ([e3b9c68](https://github.com/betcocorp/bex2.0/commit/e3b9c68dd5a94c859d604192f10e7cccca63ff43))
+
 # [2.10.0](https://github.com/betcocorp/bex2.0/compare/v2.9.0...v2.10.0) (2026-08-27)
 
 
