@@ -68,6 +68,18 @@ describe('classifyEarlyDecline — B0-660 don\'t ask for a surface the user alre
     ).toBeNull();
   });
 
+  // B0-568 — VCT is the most common surface in this corpus, so both the acronym and the
+  // spelled-out form must suppress the decline; the acronym alone passing would hide a gap.
+  it('does not decline a VCT surface question written out as "vinyl composition tile"', () => {
+    expect(
+      classifyEarlyDecline('What do you recommend for a vinyl composition tile floor?'),
+    ).toBeNull();
+  });
+
+  it('does not decline a VCT stripping ask phrased as "what should I use"', () => {
+    expect(classifyEarlyDecline('What should I use to strip a VCT floor?')).toBeNull();
+  });
+
   it('does not decline a terrazzo surface question', () => {
     expect(
       classifyEarlyDecline("What's the best product for terrazzo?"),
