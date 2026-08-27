@@ -1,3 +1,29 @@
+# [2.12.0](https://github.com/betcocorp/bex2.0/compare/v2.11.1...v2.12.0) (2026-08-27)
+
+
+### Bug Fixes
+
+* **B0-726:** sharpen best/strongest routing boundary and add ranking-claim gate ([9d147af](https://github.com/betcocorp/bex2.0/commit/9d147aff54c1f96b65a5a27dbcedab500599209e))
+* **B0-727:** add SDS/shelf-life lifecycle escalation script ([9ded70e](https://github.com/betcocorp/bex2.0/commit/9ded70ee17cb10cfa9eac48f47fbd4f1d3527e0f))
+* **B0-729:** add organism/efficacy claim non-transfer caveat to cross-reference specialist ([dff650d](https://github.com/betcocorp/bex2.0/commit/dff650d17ff0f45dcf19dea96435f05d9a98855c))
+* **B0-730:** require per-product label/EPA citation for technical claims ([199624b](https://github.com/betcocorp/bex2.0/commit/199624b011844ed8cf99f74c18d5e7cf3bcc7593))
+
+
+### Features
+
+* **B0-706:** add a collapse/expand-all control to the report case ledger ([2686613](https://github.com/betcocorp/bex2.0/commit/26866136d017b6d2de3a5fc01202910f835ee6f8))
+* **B0-707:** add a per-case trace download to the report case ledger ([cf99c45](https://github.com/betcocorp/bex2.0/commit/cf99c4556935c2457259845ee2dd996577367a4a))
+* **B0-708:** gate report Results on concept coverage, with hard structural invariants ([5da2425](https://github.com/betcocorp/bex2.0/commit/5da2425897beeaddad2c68993bc2a38ae8c363f1))
+* **B0-709:** replace the report's latency block with a two-metric Speed Performance Score ([94f5cfc](https://github.com/betcocorp/bex2.0/commit/94f5cfcbc917d8bf102d73e88dba9b0f935520c3))
+* **B0-710:** grade over N independent passes and report where they disagree ([70737d4](https://github.com/betcocorp/bex2.0/commit/70737d4448c41ddee29a9339629d9853b742185e))
+* **B0-716:** add a speed-rules module for the report's speed thresholds ([0aac24f](https://github.com/betcocorp/bex2.0/commit/0aac24f3ef3eaea033f0d3dcf1ce73c983cea430))
+* **B0-722:** add endpoint testing to Web Endpoints page ([09a7af3](https://github.com/betcocorp/bex2.0/commit/09a7af3a42034e0e61b79c7061631c152b0e6b4d))
+* **B0-723:** add Bearer token input to Web Endpoints example request form ([c7a2530](https://github.com/betcocorp/bex2.0/commit/c7a253065c20821ee96546ac1e33c258057c699a))
+* **B0-724:** add click-to-copy for token prefixes in app management ([0646fa8](https://github.com/betcocorp/bex2.0/commit/0646fa89bce5395a536959789d73149bcfc2d4cf))
+* **B0-724:** add clipboard icon with checkmark feedback to token prefix copy ([559b155](https://github.com/betcocorp/bex2.0/commit/559b155ea3104fabff1e71577fc1f14bd713c769))
+* **B0-728:** require clarify-before-recommend across product/recommendations/cross_reference ([9a69624](https://github.com/betcocorp/bex2.0/commit/9a6962405788d6f0a99b813c6db039ae1049831f))
+* **B0:** add Web Endpoints documentation page to admin tools ([a5c2657](https://github.com/betcocorp/bex2.0/commit/a5c26570f1030014e24aeaf8e17297a37cb9049f))
+
 ## [2.11.1](https://github.com/betcocorp/bex2.0/compare/v2.11.0...v2.11.1) (2026-08-27)
 
 
