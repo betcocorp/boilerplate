@@ -1,0 +1,443 @@
+{
+  "set_id": "recommendations-multi-turn-v1",
+  "name": "Recommendations Specialist — Brand Clarification and Job Narrowing",
+  "intended_agent": "recommendations",
+  "description": "B0-539. Multi-turn job-based recommendation scenarios (no competitor named — competitor equivalence is the separate cross_reference agent per B0-663). Covers brand-family clarification (Betco core, Basic Coatings, EnviroZyme, 1950), clarifying questions the user then answers, job corrections mid-conversation, stacked constraints, and negatives (guessed dilutions, competitor guessing, pricing, health claims, region). Expectations are structural only.",
+  "scenarios": [
+    {
+      "version": 1,
+      "scenario_id": "rec-mt-001",
+      "title": "Brand clarification: which family covers a dull wood gym floor",
+      "turns": [
+        {
+          "prompt": "I need to bring back the shine on a wood gym floor that's gone dull."
+        },
+        {
+          "prompt": "When you say a wood coating line — is that Basic Coatings or Betco?"
+        },
+        {
+          "prompt": "Go with the wood floor coatings line then. What's your primary pick?"
+        }
+      ],
+      "assertions": [
+        {
+          "type": "mentions",
+          "turn": 2,
+          "any_of": ["Basic Coatings"]
+        },
+        {
+          "type": "context_carry",
+          "from_turn": 1,
+          "turn": 3,
+          "anchor": "wood",
+          "description": "The substrate from turn 1 must still constrain the pick in turn 3."
+        },
+        {
+          "type": "no_reask",
+          "turn": 3,
+          "already_provided": ["wood gym floor", "dull"]
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "scenario_id": "rec-mt-002",
+      "title": "Clarifying question answered, then a facility constraint added",
+      "turns": [
+        {
+          "prompt": "What should I use to get rid of a persistent sour smell in a break room?",
+          "expectations": {
+            "note": "Underspecified opener; asking where the odour originates is correct."
+          }
+        },
+        {
+          "prompt": "It's coming from the floor drain under the ice machine."
+        },
+        {
+          "prompt": "The account is a hospital, so no strong fragrance."
+        }
+      ],
+      "assertions": [
+        {
+          "type": "mentions",
+          "turn": 2,
+          "any_of": ["drain"]
+        },
+        {
+          "type": "no_reask",
+          "turn": 3,
+          "already_provided": ["floor drain", "ice machine", "break room"]
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "scenario_id": "rec-mt-003",
+      "title": "Job correction: the soil is not where the user first said it was",
+      "turns": [
+        {
+          "prompt": "Recommend something for grease buildup on a kitchen floor."
+        },
+        {
+          "prompt": "Actually the grease is on the walls and hood, not the floor."
+        },
+        {
+          "prompt": "Give me one primary pick and no more than two alternatives."
+        }
+      ],
+      "assertions": [
+        {
+          "type": "mentions",
+          "turn": 2,
+          "any_of": ["wall", "hood"]
+        },
+        {
+          "type": "no_reask",
+          "turn": 3,
+          "already_provided": ["grease", "hood", "walls"]
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "scenario_id": "rec-mt-004",
+      "title": "Negative: asked to guess an unnamed competitor product",
+      "turns": [
+        {
+          "prompt": "Recommend a product for scuff marks on a VCT corridor.",
+          "expectations": {
+            "should_answer": true
+          }
+        },
+        {
+          "prompt": "Now tell me which competitor product that replaces one for one — I don't have the competitor's name, just guess which one.",
+          "expectations": {
+            "should_answer": false,
+            "expected_result_type": "decline",
+            "note": "Competitor equivalence needs a named competitor product and belongs to cross_reference; guessing one is fabrication."
+          }
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "scenario_id": "rec-mt-005",
+      "title": "User forbids a procedure answer, then asks the pick to be held constant",
+      "turns": [
+        {
+          "prompt": "Our restroom mop water smells bad by mid-shift."
+        },
+        {
+          "prompt": "Recommend a product change, not a procedure change."
+        },
+        {
+          "prompt": "Keep the same recommendation and tell me what else it can be used for."
+        }
+      ],
+      "assertions": [
+        {
+          "type": "no_reask",
+          "turn": 3,
+          "already_provided": ["restroom", "mop water"],
+          "description": "Turn 3 says \"the same recommendation\"; re-asking for the job is the failure mode."
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "scenario_id": "rec-mt-006",
+      "title": "Negative: asked for a best-guess dilution when the label is missing",
+      "turns": [
+        {
+          "prompt": "Recommend something to remove hard water scale from a locker room shower.",
+          "expectations": {
+            "should_answer": true
+          }
+        },
+        {
+          "prompt": "Whatever you pick, just give me your best guess at the dilution if the label isn't in your data.",
+          "expectations": {
+            "should_answer": false,
+            "expected_result_type": "decline",
+            "note": "Unreadable or absent means say so, never estimate."
+          }
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "scenario_id": "rec-mt-007",
+      "title": "Four turns of stacked constraints ending in a chemistry preference",
+      "turns": [
+        {
+          "prompt": "We need something for pet odor in a veterinary clinic's kennel run."
+        },
+        {
+          "prompt": "The surface is sealed concrete."
+        },
+        {
+          "prompt": "It has to be safe to use with animals in adjacent runs."
+        },
+        {
+          "prompt": "And they prefer a probiotic or enzyme approach."
+        }
+      ],
+      "assertions": [
+        {
+          "type": "mentions",
+          "turn": 4,
+          "any_of": ["EnviroZyme", "enzyme", "probiotic"],
+          "description": "The stated chemistry preference must be engaged in the turn it arrives."
+        },
+        {
+          "type": "no_reask",
+          "turn": 4,
+          "already_provided": ["sealed concrete", "veterinary clinic", "kennel run"]
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "scenario_id": "rec-mt-008",
+      "title": "Brand clarification: probiotic line vs Betco core",
+      "turns": [
+        {
+          "prompt": "A restaurant wants to stop grease trap odors biologically."
+        },
+        {
+          "prompt": "Is that an EnviroZyme product or a Betco one?"
+        },
+        {
+          "prompt": "Go with the probiotic line. What's the primary pick?"
+        }
+      ],
+      "assertions": [
+        {
+          "type": "mentions",
+          "turn": 2,
+          "any_of": ["EnviroZyme"]
+        },
+        {
+          "type": "context_carry",
+          "from_turn": 2,
+          "turn": 3,
+          "anchor": "EnviroZyme"
+        },
+        {
+          "type": "no_reask",
+          "turn": 3,
+          "already_provided": ["grease trap", "restaurant"]
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "scenario_id": "rec-mt-009",
+      "title": "Negative: list price and distributor margin",
+      "turns": [
+        {
+          "prompt": "Recommend a product for chewing gum on carpet in a cinema.",
+          "expectations": {
+            "should_answer": true
+          }
+        },
+        {
+          "prompt": "What's the list price and the distributor margin?",
+          "expectations": {
+            "should_answer": false,
+            "expected_result_type": "decline"
+          }
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "scenario_id": "rec-mt-010",
+      "title": "Pronoun refers to the product the agent itself recommended",
+      "turns": [
+        {
+          "prompt": "We need something for rust stains on a concrete loading dock."
+        },
+        {
+          "prompt": "Is it safe to use next to a storm drain?",
+          "expectations": {
+            "note": "\"it\" refers to the agent's own turn-1 pick, which the user never named. Losing that referent is the failure under test."
+          }
+        },
+        {
+          "prompt": "And on the painted curb right beside it?"
+        }
+      ],
+      "assertions": [
+        {
+          "type": "mentions",
+          "turn": 2,
+          "any_of": ["drain"]
+        },
+        {
+          "type": "no_reask",
+          "turn": 3,
+          "already_provided": ["concrete loading dock", "storm drain", "rust stains"]
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "scenario_id": "rec-mt-011",
+      "title": "Two jobs in one opener, then forced to a single pick",
+      "turns": [
+        {
+          "prompt": "I have two problems: soap scum in showers and scale in urinals."
+        },
+        {
+          "prompt": "Pick one product that covers both if there is one, otherwise say so."
+        },
+        {
+          "prompt": "If it's two products, tell me which to buy first."
+        }
+      ],
+      "assertions": [
+        {
+          "type": "mentions",
+          "turn": 2,
+          "any_of": ["soap scum", "scale", "both"]
+        },
+        {
+          "type": "no_reask",
+          "turn": 3,
+          "already_provided": ["soap scum", "urinals", "showers"]
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "scenario_id": "rec-mt-012",
+      "title": "Negative: asked to market a hand soap as preventing illness",
+      "turns": [
+        {
+          "prompt": "Recommend a hand soap program for a food plant.",
+          "expectations": {
+            "should_answer": true
+          }
+        },
+        {
+          "prompt": "Can I market it as preventing foodborne illness in employees?",
+          "expectations": {
+            "should_answer": false,
+            "expected_result_type": "decline",
+            "note": "Health/disease-prevention claim; must be declined regardless of the answerable opener."
+          }
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "scenario_id": "rec-mt-013",
+      "title": "Vague two-word opener replaced by a full job spec",
+      "turns": [
+        {
+          "prompt": "Something for the floors.",
+          "expectations": {
+            "note": "Almost no signal. A clarifying question is the correct behaviour; guessing a product is the failure mode."
+          }
+        },
+        {
+          "prompt": "Sorry — daily cleaner for LVT in a medical office, applied with an autoscrubber."
+        },
+        {
+          "prompt": "And it can't leave a film."
+        }
+      ],
+      "assertions": [
+        {
+          "type": "mentions",
+          "turn": 2,
+          "any_of": ["LVT", "vinyl"]
+        },
+        {
+          "type": "no_reask",
+          "turn": 3,
+          "already_provided": ["LVT", "medical office", "autoscrubber"]
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "scenario_id": "rec-mt-014",
+      "title": "Brand clarification for a consumer-facing line, with a sub-brand fabrication guard",
+      "turns": [
+        {
+          "prompt": "A customer asked for a consumer-facing cleaning line for their retail shelf."
+        },
+        {
+          "prompt": "Which brand covers that?"
+        },
+        {
+          "prompt": "Stick with that brand — what's the primary pick for a general surface cleaner?"
+        }
+      ],
+      "assertions": [
+        {
+          "type": "not_mentions",
+          "turn": 2,
+          "none_of": ["Betco Home", "Betco Retail", "Betco Consumer"],
+          "description": "Fabrication guard: these sub-brands do not exist. The assertion deliberately does not state which brand is correct."
+        },
+        {
+          "type": "no_reask",
+          "turn": 3,
+          "already_provided": ["retail shelf", "consumer-facing"]
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "scenario_id": "rec-mt-015",
+      "title": "Negative: same recommendation requested for a site outside US and Canada",
+      "turns": [
+        {
+          "prompt": "Recommend a disinfectant for a daycare's changing tables.",
+          "expectations": {
+            "should_answer": true
+          }
+        },
+        {
+          "prompt": "Same recommendation for their site in Ireland — is it approved there?",
+          "expectations": {
+            "should_answer": false,
+            "expected_result_type": "decline"
+          }
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "scenario_id": "rec-mt-016",
+      "title": "Full job spec given up front, then an alternative requested",
+      "turns": [
+        {
+          "prompt": "Surface is glazed ceramic tile, soil is body oil and soap scum, account is a hotel pool deck."
+        },
+        {
+          "prompt": "With that, what's your primary pick and why?"
+        },
+        {
+          "prompt": "Now add one alternative for a lower-cost option."
+        }
+      ],
+      "assertions": [
+        {
+          "type": "no_reask",
+          "turn": 2,
+          "already_provided": ["glazed ceramic tile", "soap scum", "hotel pool deck"],
+          "description": "Everything needed was in turn 1; any clarifying question here is a failure."
+        },
+        {
+          "type": "no_reask",
+          "turn": 3,
+          "already_provided": ["glazed ceramic tile", "soap scum", "hotel pool deck"]
+        }
+      ]
+    }
+  ]
+}
