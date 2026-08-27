@@ -14,8 +14,18 @@ import {
 } from 'react';
 
 import { version as appVersion } from '~/../package.json';
+import { ReportBreakdownCards } from '~/components/admin/tests/report/ReportBreakdownCards';
+import { ReportCaseLedger } from '~/components/admin/tests/report/ReportCaseLedger';
+import {
+  ReportAggregateFindings,
+  ReportExecutiveAssessment,
+  ReportMethodology,
+} from '~/components/admin/tests/report/ReportNarrativeSections';
+import { ReportTopFixes } from '~/components/admin/tests/report/ReportTopFixes';
+import { ReportVerdictStrip } from '~/components/admin/tests/report/ReportVerdictStrip';
 import { BexStreamdown } from '~/components/bex/BexStreamdown';
 import { Button } from '~/components/ui/button';
+import type { ReportDataReady } from '~/lib/tests/report/data-schemas';
 import { caseAnchorId } from '~/lib/tests/report/render';
 import { cn } from '~/lib/utils';
 
@@ -216,6 +226,12 @@ export function RunReportView({
   );
   const [markdown, setMarkdown] = useState<string | null>(null);
   const [markdownLoading, setMarkdownLoading] = useState(false);
+  /**
+   * B0-571 — the structured read of the same report the Markdown endpoint renders. The Markdown is
+   * still fetched and held above, unchanged: B0-592 requires Copy markdown / Download .md to stay
+   * byte-identical, so this is an ADDITIONAL read path, not a replacement for it.
+   */
+  const [reportData, setReportData] = useState<ReportDataReady | null>(null);
   const [pdfLoading, setPdfLoading] = useState(false);
   const [copyLabel, setCopyLabel] = useState('Copy markdown');
   const [needsManualContinue, setNeedsManualContinue] = useState(false);
@@ -356,6 +372,28 @@ export function RunReportView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, runId, markdown]);
 
+  // B0-586/B0-571 — structured payload for the verdict-first layout, fetched alongside the Markdown
+  // once generation completes. A `not_generated` response leaves `reportData` null and the view
+  // simply keeps showing the Markdown fallback below.
+  useEffect(() => {
+    if (status !== 'completed' || reportData) return;
+
+    let cancelled = false;
+    fetch(`/api/admin/tests/runs/${runId}/report/data`, { cache: 'no-store' })
+      .then((res) => res.json())
+      .then((data: { status?: string }) => {
+        if (cancelled) return;
+        if (data.status === 'ready') setReportData(data as ReportDataReady);
+      })
+      .catch(() => {
+        // Non-fatal: the Markdown render below is the fallback.
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [status, runId, reportData]);
+
   const downloadMarkdown = useCallback(() => {
     if (!markdown) return;
     const blob = new Blob([markdown], { type: 'text/markdown' });
@@ -380,12 +418,27 @@ export function RunReportView({
   }, [markdown]);
 
   const downloadPdf = useCallback(async () => {
-    if (!contentRef.current) return;
+    const root = contentRef.current;
+    if (!root) return;
     setPdfLoading(true);
+    /**
+     * B0-592 — every disclosure and every collapsed ledger row must appear in the PDF. `html2pdf`
+     * rasterises through `html2canvas`, which renders the SCREEN styles, so an `@media print` rule
+     * would never fire: the only reliable way to get closed `<details>` into the capture is to open
+     * them imperatively first and put them back afterwards. Restoration runs in `finally` so an
+     * export that throws mid-render cannot leave the reader's page permanently expanded.
+     */
+    const disclosures = Array.from(root.querySelectorAll('details'));
+    const wasClosed = disclosures.filter((node) => !node.open);
+    wasClosed.forEach((node) => {
+      node.open = true;
+    });
+    root.classList.add('report-pdf-capture');
+
     try {
       const html2pdf = (await import('html2pdf.js')).default;
       await html2pdf()
-        .from(contentRef.current)
+        .from(root)
         .set({
           filename: `${sanitizeFilename(fileBase)}.pdf`,
           margin: 12,
@@ -395,6 +448,10 @@ export function RunReportView({
         })
         .save();
     } finally {
+      root.classList.remove('report-pdf-capture');
+      wasClosed.forEach((node) => {
+        node.open = false;
+      });
       setPdfLoading(false);
     }
   }, [fileBase]);
@@ -528,13 +585,70 @@ export function RunReportView({
         ) : null}
       </section>
 
-      {status === 'completed' && (markdownLoading || !markdown) ? (
+      {status === 'completed' && !reportData && (markdownLoading || !markdown) ? (
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <p className="text-sm text-slate-500">Loading report…</p>
         </section>
       ) : null}
 
-      {markdown && reportSections ? (
+      {reportData ? (
+        <div className="flex flex-col gap-6" ref={contentRef}>
+          {/* B0-592 — the capture class keeps segmented bars readable when the PDF renderer drops
+              background colours, and drives pagination: html2pdf's default pagebreak mode honours
+              these CSS rules, so a case record is never split and each major section starts a page. */}
+          <style>{`
+            .report-pdf-capture [data-report-bar-segment] { outline: 1px solid rgba(15,23,42,.35); }
+            .report-pdf-capture [data-report-case] { break-inside: avoid; page-break-inside: avoid; }
+            .report-pdf-capture [data-report-section] { break-before: page; page-break-before: always; }
+            .report-pdf-capture [data-report-section]:first-of-type { break-before: auto; page-break-before: auto; }
+          `}</style>
+
+          <ReportVerdictStrip cases={reportData.cases} metrics={reportData.metrics} />
+
+          <div data-report-section>
+            <ReportBreakdownCards
+              categories={reportData.metrics.categories}
+              latency={reportData.metrics.latency}
+              strongestCategory={reportData.metrics.strongestCategory}
+              tiers={reportData.metrics.tiers}
+              totalCases={reportData.metrics.totalCases}
+              weakestCategory={reportData.metrics.weakestCategory}
+            />
+          </div>
+
+          <div className="grid gap-6 lg:grid-cols-3" data-report-section>
+            <div className="lg:col-span-2">
+              <ReportTopFixes
+                metrics={reportData.metrics}
+                synthesis={reportData.synthesis}
+              />
+            </div>
+            <ReportExecutiveAssessment synthesis={reportData.synthesis} />
+          </div>
+
+          <div data-report-section>
+            <ReportCaseLedger
+              cases={reportData.cases}
+              metrics={reportData.metrics}
+            />
+          </div>
+
+          <div data-report-section>
+            <ReportAggregateFindings
+              metrics={reportData.metrics}
+              synthesis={reportData.synthesis}
+            />
+          </div>
+
+          <div data-report-section>
+            <ReportMethodology uteCount={reportData.metrics.uteCount} />
+          </div>
+        </div>
+      ) : null}
+
+      {/* Fallback: a report generated before the structured endpoint existed, or a payload that
+          failed to load. The Markdown render is unchanged from before the restructure. */}
+      {!reportData && markdown && reportSections ? (
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <div ref={contentRef}>
             <BexStreamdown
