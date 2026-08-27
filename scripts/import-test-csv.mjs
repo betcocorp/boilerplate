@@ -72,8 +72,42 @@ const PRIMARY_COLS = new Set([
   'should_answer', 'expected_result_type', 'canonical_product', 'reason_code',
   'source', 'priority', 'ideal_response',
   'expected_concepts', 'minimum_concepts', 'expected_sources', 'should_cite',
+  // B0-264: these two were missing, so a CSV carrying them imported them into the
+  // `metadata` catch-all and the typed columns stayed empty — silently, with no error.
+  // `expected_criteria` arrived with B0-615 and `expected_tool` with B0-694; this file
+  // was never updated to match, despite the "keep in sync" note above.
+  'expected_criteria', 'expected_tool',
 ]);
 const PAYLOAD_COLS = new Set(['product_mention', 'question_category', 'source_style']);
+
+/**
+ * Mirror of `parseExpectedCriteriaCell` in src/lib/tests/csv.ts (B0-615). Segments split on
+ * `;`, each `t<tier>[x]: <concept>`; a trailing `x` marks `match: 'exact'` for regulated
+ * values (dilution ratios, oz/gal, mL/L, ppm, contact times, CAS/EPA numbers), which are
+ * compared as a literal substring and never rounded, converted, or inferred. Malformed
+ * segments are dropped rather than thrown so one typo cannot fail a whole import.
+ *
+ * Reimplemented rather than imported because this is a plain .mjs script and the canonical
+ * parser is TypeScript. Keep the two in sync.
+ */
+const CRITERION_SEGMENT_PATTERN = /^t([123])(x)?\s*:\s*(.+)$/i;
+
+function parseExpectedCriteriaCell(value) {
+  const trimmed = asTrimmedString(value);
+  if (!trimmed) return [];
+  return trimmed
+    .split(';')
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+    .map((segment) => {
+      const match = CRITERION_SEGMENT_PATTERN.exec(segment);
+      if (!match) return null;
+      const concept = (match[3] ?? '').trim();
+      if (!concept) return null;
+      return { concept, tier: Number(match[1]), match: match[2] ? 'exact' : 'semantic' };
+    })
+    .filter(Boolean);
+}
 
 const rows = records
   .map((record, index) => {
@@ -108,6 +142,8 @@ const rows = records
       minimum_concepts: asTrimmedString(record.minimum_concepts) || null,
       expected_sources: asTrimmedString(record.expected_sources) || null,
       should_cite: parseShouldAnswer(record.should_cite),
+      expected_criteria: parseExpectedCriteriaCell(record.expected_criteria),
+      expected_tool: asTrimmedString(record.expected_tool) || null,
       input_payload: inputPayload,
       metadata,
     };
