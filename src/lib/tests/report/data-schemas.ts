@@ -101,6 +101,77 @@ export const reportScoreExtremeSchema = z.object({
 export type ReportScoreExtreme = z.infer<typeof reportScoreExtremeSchema>;
 
 /**
+ * B0-713 — which rule produced a case's Result. `'rubric'` is the untouched weighted status;
+ * `'auto_pass'` means full expected-concept coverage raised it; `'minimal_gate'` means a missing
+ * must-have concept capped it below Pass.
+ */
+export const reportCaseStatusSourceSchema = z.enum(['rubric', 'auto_pass', 'minimal_gate']);
+export type ReportCaseStatusSource = z.infer<typeof reportCaseStatusSourceSchema>;
+
+/**
+ * Coverage of one concept kind for one case. `required` is always `satisfied ∪ missing` — B0-714
+ * asserts it as a structural invariant, so a renderer may print "satisfied of required" directly.
+ * Concept phrases are regulated free text (rule 1): render them verbatim, never parsed.
+ */
+export const reportConceptKindCoverageSchema = z.object({
+  required: z.array(z.string()),
+  satisfied: z.array(z.string()),
+  missing: z.array(z.string()),
+});
+export type ReportConceptKindCoverage = z.infer<typeof reportConceptKindCoverageSchema>;
+
+/**
+ * The per-case concept judgment, from the criteria grading the run already persisted (B0-711).
+ * Absent — never an empty object — for a case with no concepts, so every concept-driven section
+ * can be omitted entirely rather than rendered as "0 of 0".
+ */
+export const reportCaseConceptsSchema = z.object({
+  /** Tier-1 ("must have") criteria — the set the rating gate reads. */
+  mandatory: reportConceptKindCoverageSchema,
+  /** The full criteria set (tiers 1, 2 and 3). */
+  expected: reportConceptKindCoverageSchema,
+  /** A failed deterministic (`match: 'exact'`) check on a regulated value. Derived in code. */
+  materialIssue: z.boolean(),
+  /** Names the failed concept(s) verbatim. Null exactly when `materialIssue` is false. */
+  materialIssueNote: z.string().nullable(),
+});
+export type ReportCaseConcepts = z.infer<typeof reportCaseConceptsSchema>;
+
+/** Coverage for one concept kind across the run. `pct` is out of `casesSpecifying`, never total. */
+export const reportConceptKindRollupSchema = z.object({
+  casesSpecifying: z.number().int().min(0),
+  casesSatisfyingAll: z.number().int().min(0),
+  pct: z.number(),
+});
+export type ReportConceptKindRollup = z.infer<typeof reportConceptKindRollupSchema>;
+
+/** One concept phrase missing from more than one case, with the cases it spans. */
+export const reportRecurringMissingConceptSchema = z.object({
+  concept: z.string(),
+  count: z.number().int().min(0),
+  caseIds: z.array(z.string()),
+});
+export type ReportRecurringMissingConcept = z.infer<typeof reportRecurringMissingConceptSchema>;
+
+/** The run-level concept readout. Null when no evaluated case carried concept data at all. */
+export const reportConceptRollupSchema = z.object({
+  casesWithConcepts: z.number().int().min(0),
+  mandatory: reportConceptKindRollupSchema,
+  expected: reportConceptKindRollupSchema,
+  missingMandatory: z.array(
+    z.object({ id: z.string(), question: z.string(), missing: z.array(z.string()) }),
+  ),
+  /** How many of `missingMandatory` actually lost a Pass to the gate. */
+  gateBlockedPasses: z.number().int().min(0),
+  autoPassed: z.array(z.object({ id: z.string(), question: z.string() })),
+  autoPassBlocked: z.array(
+    z.object({ id: z.string(), question: z.string(), note: z.string().nullable() }),
+  ),
+  recurringMissing: z.array(reportRecurringMissingConceptSchema),
+});
+export type ReportConceptRollup = z.infer<typeof reportConceptRollupSchema>;
+
+/**
  * The derived scoreline for one evaluated case. Sub-scores are the grader's raw 0–100 judgments;
  * `overall` is the weighted roll-up (Accuracy 40 / Completeness 30 / Relevance 20 / Clarity 10),
  * and `grade`/`status` are derived from `overall`. Absent for Unable-to-Evaluate cases.
@@ -117,7 +188,20 @@ export const reportEvaluatedCaseSchema = z.object({
   clarity: z.number(),
   overall: z.number(),
   grade: reportGradeSchema,
+  /** The weighted rubric's own verdict, before any concept rule (B0-712). */
+  rubricStatus: reportCaseStatusSchema,
+  /** The reported Result: `rubricStatus` after the concept rules. */
   status: reportCaseStatusSchema,
+  statusSource: reportCaseStatusSourceSchema,
+  /** True for every case missing a mandatory concept, even one already below Pass on score. */
+  ratingConstrained: z.boolean(),
+  /** The narrower fact that the gate actually removed a Pass. Not a substitute for the above. */
+  gateBlockedAPass: z.boolean(),
+  autoPassTriggered: z.boolean(),
+  /** The case qualified for an automatic Pass but a material factual issue withheld it. */
+  autoPassBlocked: z.boolean(),
+  /** Null when the case has no concept data — every flag above is then false. */
+  concepts: reportCaseConceptsSchema.nullable(),
 });
 export type ReportEvaluatedCase = z.infer<typeof reportEvaluatedCaseSchema>;
 
@@ -139,7 +223,12 @@ export const reportMetricsSchema = z.object({
   strongestCategory: z.string().nullable(),
   weakestCategory: z.string().nullable(),
   latency: reportLatencySchema.nullable(),
-  /** Non-fatal reconciliation/data-quality notes from metric computation. Usually empty. */
+  /** Null when no evaluated case carried concept data — omit every concept section entirely. */
+  concepts: reportConceptRollupSchema.nullable(),
+  /**
+   * Non-fatal data-quality notes from metric computation. Usually empty. Structural
+   * reconciliation failures are *not* here: those throw and the report is never written (B0-714).
+   */
   warnings: z.array(z.string()),
 });
 export type ReportMetricsData = z.infer<typeof reportMetricsSchema>;
@@ -193,6 +282,12 @@ export const reportCaseSchema = z.object({
   unableToEvaluate: z.boolean(),
   /** Null for UTE cases. Looked up from `metrics.perCase` — never recomputed. */
   evaluated: reportEvaluatedCaseSchema.nullable(),
+  /**
+   * The concept block this case was rated with (B0-713), or null when it has none. The same
+   * object as `evaluated.concepts` for an evaluated case; present here too so the ledger can read
+   * coverage without going through the scoreline.
+   */
+  concepts: reportCaseConceptsSchema.nullable(),
 
   // --- Reference signals (never part of the grade) ---
   latencySeconds: z.number().nullable(),

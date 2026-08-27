@@ -5,8 +5,15 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { type ReactNode, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 
 import { CaseTraceDownloadButton } from '~/components/admin/tests/report/CaseTraceDownloadButton';
+import {
+  CONCEPT_MARKER_LEGEND,
+  conceptMarkers,
+  formatConceptCoverage,
+  formatConceptList,
+} from '~/lib/tests/report/case-concepts';
 import type {
   ReportCase,
+  ReportCaseConcepts,
   ReportCaseStatus,
   ReportGroupRate,
   ReportLatencyBand,
@@ -408,6 +415,81 @@ function ActualColumn({ c }: { c: ReportCase }) {
   );
 }
 
+/**
+ * B0-713 — the expected-concept misses that are *not* also mandatory misses.
+ *
+ * Mandatory ⊆ expected, so a missing must-have appears in both lists. It is named once, in red,
+ * and the amber line carries only the should-have/bonus remainder — otherwise the same regulated
+ * phrase is printed twice in two colours and the reader has to work out that it is one miss.
+ * Multiset-aware because a dataset may legitimately repeat a phrase.
+ */
+export function expectedOnlyMissing(concepts: ReportCaseConcepts): string[] {
+  const remaining = [...concepts.mandatory.missing];
+  return concepts.expected.missing.filter((concept) => {
+    const at = remaining.indexOf(concept);
+    if (at === -1) return true;
+    remaining.splice(at, 1);
+    return false;
+  });
+}
+
+/**
+ * The per-case concept lines: one coverage readout, what is missing by name, and one sentence for
+ * whichever rule constrained, raised, or was withheld from the rating. Methodology §9 caps the
+ * per-case detail here — the full audit lives in the run-level rollup, not in every row.
+ *
+ * Concept phrases are regulated free text and are rendered exactly as stored.
+ */
+function ConceptCoverageCard({ c }: { c: ReportCase }) {
+  const concepts = c.concepts;
+  if (!concepts) return null;
+  const evaluated = c.evaluated;
+  const alsoExpected = expectedOnlyMissing(concepts);
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+      <FieldLabel>Concept coverage</FieldLabel>
+      <p className="mt-2 text-sm font-semibold text-slate-900 tabular-nums">
+        {formatConceptCoverage(concepts)}
+      </p>
+
+      {concepts.mandatory.missing.length > 0 ? (
+        <p className="mt-2 text-sm break-words whitespace-pre-wrap text-rose-700">
+          <span className="font-medium">Missing mandatory:</span>{' '}
+          {formatConceptList(concepts.mandatory.missing)}
+        </p>
+      ) : null}
+      {alsoExpected.length > 0 ? (
+        <p className="mt-1.5 text-sm break-words whitespace-pre-wrap text-amber-700">
+          <span className="font-medium">Missing expected:</span> {formatConceptList(alsoExpected)}
+        </p>
+      ) : null}
+
+      {evaluated?.ratingConstrained ? (
+        <p className="mt-3 rounded-xl bg-rose-50 px-3 py-2 text-sm break-words whitespace-pre-wrap text-rose-800 ring-1 ring-rose-200 ring-inset">
+          Rating constrained: mandatory concept(s) missing —{' '}
+          {formatConceptList(concepts.mandatory.missing)}
+          {evaluated.gateBlockedAPass
+            ? ` (scored ${evaluated.overall}/100, so the gate removed a Pass)`
+            : ''}
+        </p>
+      ) : null}
+      {evaluated?.autoPassTriggered ? (
+        <p className="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-800 ring-1 ring-emerald-200 ring-inset">
+          Automatic Pass: every expected concept satisfied, so the {evaluated.rubricStatus} the
+          rubric scored was raised to Pass.
+        </p>
+      ) : null}
+      {evaluated?.autoPassBlocked ? (
+        <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-sm break-words whitespace-pre-wrap text-amber-900 ring-1 ring-amber-200 ring-inset">
+          Automatic Pass blocked:{' '}
+          {concepts.materialIssueNote ?? 'a material factual issue was recorded on this case.'}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function NarrativeCard({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4">
@@ -462,7 +544,9 @@ function CaseRow({
                 STATUS_BADGE_CLASS[evaluated.status],
               )}
             >
-              {evaluated.status} · {evaluated.grade}
+              {evaluated.status}
+              {/* B0-713 — † gate-constrained, ‡ automatic Pass; legend above the groups. */}
+              {conceptMarkers(evaluated)} · {evaluated.grade}
             </span>
           ) : (
             <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600 ring-1 ring-slate-200 ring-inset">
@@ -533,6 +617,9 @@ function CaseRow({
             {c.harness ? <HarnessAside harness={c.harness} /> : null}
           </div>
         </div>
+
+        {/* --- Concept coverage (only when this case has concept data) --- */}
+        <ConceptCoverageCard c={c} />
 
         {/* --- Expected vs actual --- */}
         <div className="grid gap-4 lg:grid-cols-2">
@@ -683,6 +770,18 @@ function ReportCaseLedgerContent({
 
   // The bulk control acts on what is on screen under the active filter, never the whole payload.
   const visibleCaseIds = visibleGroups.flatMap((group) => group.cases.map((c) => c.id));
+
+  // B0-713 — only legend the marks actually on screen, so a filtered view never carries an
+  // orphan footnote and a run with no concept data shows no legend at all.
+  const visibleEvaluated = visibleGroups.flatMap((group) =>
+    group.cases.map((c) => c.evaluated).filter((e) => e != null),
+  );
+  const legendLines = [
+    visibleEvaluated.some((e) => e.ratingConstrained)
+      ? CONCEPT_MARKER_LEGEND.ratingConstrained
+      : null,
+    visibleEvaluated.some((e) => e.autoPassTriggered) ? CONCEPT_MARKER_LEGEND.autoPass : null,
+  ].filter((line) => line != null);
   const bulkAction = bulkDisclosureAction(openIds, visibleCaseIds);
   const toggleAllVisible = () =>
     setOpenIds((prev) => applyBulkDisclosure(prev, visibleCaseIds, bulkAction));
@@ -746,6 +845,10 @@ function ReportCaseLedgerContent({
           </button>
         ) : null}
       </div>
+
+      {legendLines.length > 0 ? (
+        <p className="mt-3 text-xs text-slate-500">{legendLines.join('  ')}</p>
+      ) : null}
 
       {visibleGroups.length === 0 ? (
         <p className="mt-6 text-sm text-slate-500">No cases match this filter.</p>

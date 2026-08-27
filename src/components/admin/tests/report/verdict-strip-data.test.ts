@@ -18,7 +18,14 @@ function evaluated(overrides: Partial<ReportEvaluatedCase>): ReportEvaluatedCase
     clarity: 0,
     overall: 0,
     grade: 'F',
+    rubricStatus: 'Fail',
     status: 'Fail',
+    statusSource: 'rubric',
+    ratingConstrained: false,
+    gateBlockedAPass: false,
+    autoPassTriggered: false,
+    autoPassBlocked: false,
+    concepts: null,
     ...overrides,
   };
 }
@@ -37,6 +44,7 @@ function detail(overrides: Partial<ReportCase>): ReportCase {
     minimumConcepts: null,
     expectedSources: null,
     expectedShouldAnswer: null,
+    concepts: null,
     actual: '(no response recorded)',
     responseRecorded: false,
     score: {

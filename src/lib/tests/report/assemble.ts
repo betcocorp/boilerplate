@@ -4,7 +4,11 @@ import {
   getTestResultById,
   listAllResultItemsByResultId,
 } from '~/lib/tests/repository';
-import { extractItemSimilarityScore, extractRetrievedDocumentChunks } from '~/lib/tests/response-payload';
+import {
+  extractCriteriaGrading,
+  extractItemSimilarityScore,
+  extractRetrievedDocumentChunks,
+} from '~/lib/tests/response-payload';
 import type {
   TestItemRecord,
   TestRecord,
@@ -12,8 +16,15 @@ import type {
   TestResultRecord,
 } from '~/lib/tests/types';
 
+import { deriveCaseConcepts } from './case-concepts';
 import type { ReportCase, ReportDataResponse, ReportMetricsData } from './data-schemas';
-import { computeReportMetrics, tierLabel, type ReportCaseInput, type ReportMetrics } from './metrics';
+import {
+  computeReportMetrics,
+  tierLabel,
+  type InvariantSeverity,
+  type ReportCaseInput,
+  type ReportMetrics,
+} from './metrics';
 import type { CaseHarnessAside } from './render';
 import { caseAnchorId, latencyBandLabel, orderCasesByTier } from './render';
 import { parseReportState, type CaseScore, type ReportState, type ReportSynthesis } from './schemas';
@@ -80,6 +91,13 @@ export type AssembleReportCasesParams = {
   resultItems: TestResultItemRecord[];
   /** `report_state.caseScores`, keyed by `test_items.id`. */
   caseScores: Record<string, CaseScore>;
+  /**
+   * B0-714 — how a failed structural invariant is treated. Defaults to `'throw'`, so the
+   * generation path can never persist a report whose numbers contradict each other. `loadReportData`
+   * passes `'warn'`: re-deriving an already-stored report is a read, and a historical record should
+   * surface its contradiction loudly rather than become unopenable.
+   */
+  invariantSeverity?: InvariantSeverity;
 };
 
 export type AssembledReportCases = {
@@ -125,10 +143,23 @@ export function assembleReportCases(params: AssembleReportCasesParams): Assemble
       category: item.prompt_category,
       score: caseScores[item.id] ?? unscoredPlaceholder(),
       latencySeconds: latencySecondsOf(resultItem),
+      /**
+       * B0-711 — per-concept verdicts come from the criteria grading the *run* already persisted
+       * (`response_payload.criteriaGrading`), not from a second model call: the concepts were
+       * judged once, at run time, and the report reads that judgment. Items without criteria get
+       * `undefined` and behave exactly as they did before the concept rules existed.
+       */
+      concepts: deriveCaseConcepts({
+        criteriaGrading: extractCriteriaGrading(resultItem?.response_payload),
+        minimumConcepts: item.minimum_concepts,
+        expectedConcepts: item.expected_concepts,
+      }),
     };
   });
 
-  const metrics = computeReportMetrics(caseInputs);
+  const metrics = computeReportMetrics(caseInputs, {
+    invariantSeverity: params.invariantSeverity,
+  });
   const evaluatedById = new Map(metrics.perCase.map((c) => [c.id, c]));
 
   const cases: ReportCase[] = items.map((item, index) => {
@@ -165,6 +196,9 @@ export function assembleReportCases(params: AssembleReportCasesParams): Assemble
       score,
       unableToEvaluate: score.unableToEvaluate,
       evaluated: evaluatedById.get(item.id) ?? null,
+      // The same object `computeReportMetrics` rated this case with — surfaced on the case record
+      // so a renderer never has to reach back into `evaluated` (or re-derive) to show coverage.
+      concepts: caseInputs[index].concepts ?? null,
       latencySeconds,
       latencyMs: resultItem ? resultItem.elapsed_ms : null,
       latencyBand:
@@ -208,6 +242,7 @@ function toMetricsPayload(metrics: ReportMetrics): ReportMetricsData {
     strongestCategory: metrics.strongestCategory,
     weakestCategory: metrics.weakestCategory,
     latency: metrics.latency,
+    concepts: metrics.concepts,
     warnings: metrics.warnings,
   };
 }
@@ -281,6 +316,10 @@ export async function loadReportData(runId: string): Promise<ReportDataResponse 
       caseScores: state.caseScores,
       synthesis: state.synthesis,
       generatedAt: run.report_generated_at ?? state.updatedAt,
+      // Read path: surface a reconciliation failure on `metrics.warnings` rather than throwing.
+      // Generation already refused to persist a report that does not reconcile; a report that is
+      // nonetheless stored stays viewable, with the violation named.
+      invariantSeverity: 'warn',
     }),
   );
 }

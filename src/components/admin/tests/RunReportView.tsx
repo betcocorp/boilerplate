@@ -26,6 +26,7 @@ import { ReportVerdictStrip } from '~/components/admin/tests/report/ReportVerdic
 import { BexStreamdown } from '~/components/bex/BexStreamdown';
 import { Button } from '~/components/ui/button';
 import type { ReportDataReady } from '~/lib/tests/report/data-schemas';
+import { isInvariantErrorMessage } from '~/lib/tests/report/invariants';
 import { caseAnchorId } from '~/lib/tests/report/render';
 import { cn } from '~/lib/utils';
 
@@ -577,17 +578,46 @@ export function RunReportView({
         ) : null}
 
         {status === 'failed' && error ? (
-          <div className="mt-6 rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
-            {error}
-            <Button
-              className="mt-3 block"
-              onClick={retryFromScratch}
-              size="sm"
-              variant="outline"
-            >
-              Retry
-            </Button>
-          </div>
+          /**
+           * B0-714 — two failures that look identical in a log but are nothing alike to a reader.
+           * A structural invariant failure means the numbers did not reconcile and the report was
+           * deliberately refused: retrying the same data will refuse it again, so the panel says
+           * what failed and points at the data instead of leading with a Retry button. Everything
+           * else (OpenAI, the network, a timeout) is transient and Retry is the right first move.
+           */
+          isInvariantErrorMessage(error) ? (
+            <div className="mt-6 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+              <p className="font-semibold">
+                Report refused — the run&apos;s numbers did not reconcile
+              </p>
+              <p className="mt-1">
+                A consistency check failed while computing the metrics, so no report was written.
+                This is a problem with the run&apos;s data, not a transient error — regenerating
+                will fail the same way until it is fixed.
+              </p>
+              <p className="mt-2 font-mono text-xs break-words whitespace-pre-wrap">{error}</p>
+              <Button
+                className="mt-3 block"
+                onClick={retryFromScratch}
+                size="sm"
+                variant="outline"
+              >
+                Regenerate anyway
+              </Button>
+            </div>
+          ) : (
+            <div className="mt-6 rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
+              {error}
+              <Button
+                className="mt-3 block"
+                onClick={retryFromScratch}
+                size="sm"
+                variant="outline"
+              >
+                Retry
+              </Button>
+            </div>
+          )
         ) : null}
       </section>
 
@@ -648,7 +678,10 @@ export function RunReportView({
           </div>
 
           <div data-report-section>
-            <ReportMethodology uteCount={reportData.metrics.uteCount} />
+            <ReportMethodology
+              hasConcepts={reportData.metrics.concepts != null}
+              uteCount={reportData.metrics.uteCount}
+            />
           </div>
         </div>
       ) : null}

@@ -131,6 +131,11 @@ export async function generateReport(testResultId: string): Promise<ReportState>
     await saveReportState(testResultId, state);
 
     // B0-586 — one shared assembly for both the Markdown below and `/report/data`.
+    // B0-714 — this is also where the structural invariants run (`computeReportMetrics` asserts
+    // them). A violation throws a `ReportInvariantError` from inside this try, so the catch below
+    // persists `status: 'failed'` with an `INVARIANT:`-prefixed `state.error` and execution never
+    // reaches `saveReportMarkdown` — a report that does not reconcile can never be written as
+    // `completed`.
     const { metrics, cases } = assembleReportCases({
       test,
       run,

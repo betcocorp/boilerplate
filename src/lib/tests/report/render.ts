@@ -1,5 +1,11 @@
 import type { TestRecord, TestResultRecord } from '~/lib/tests/types';
 
+import {
+  CONCEPT_MARKER_LEGEND,
+  conceptMarkers,
+  formatConceptCoverage,
+  formatConceptList,
+} from './case-concepts';
 import { normalizeAgentMarkdownLists } from './markdown-normalize';
 import type { EvaluatedCase, RateBlock, ReportMetrics } from './metrics';
 import type { CaseScore, ReportSynthesis } from './schemas';
@@ -254,12 +260,74 @@ export function renderReportMarkdown(params: {
     'Cases were matched to this run\'s own test items by ID, not row position. Each response was scored on a weighted 0–100 scale: Accuracy 40%, Completeness 30%, Relevance 20%, Clarity 10%. Grades: A 90–100, B 80–89, C 70–79, D 60–69, F below 60. Result: Pass ≥ 80, Partial Pass 60–79, Fail below 60. The golden dataset (ideal response, expected concepts/sources) is the source of truth; responses were judged on substantive correctness, not wording. Cases that could not be judged are marked "Unable to Evaluate" and excluded from every average, grade, count, and rate.',
   );
   blank();
+  // Stated only when the run actually has concept data, so a legacy run's methodology is unchanged.
+  if (m.concepts) {
+    push(
+      'Where a case carries expected criteria, the Grade above stays pure arithmetic and only the Result can move: satisfying every expected concept raises a below-Pass Result to Pass, and missing a mandatory (must-have) concept caps the Result below Pass. The cap is applied last, so it always wins over the automatic Pass, and the automatic Pass is withheld entirely when a deterministic check on a regulated value failed.',
+    );
+    blank();
+  }
+
+  // --- Concept coverage (B0-713) ---
+  // Omitted entirely — heading and all — when no case in the run carried concept data, so a
+  // legacy run's document is byte-identical to the one it produced before the concept rules.
+  if (m.concepts) {
+    const con = m.concepts;
+    push('## Concept coverage');
+    blank();
+    push(
+      `- Satisfied every mandatory concept: **${con.mandatory.casesSatisfyingAll} of ${con.mandatory.casesSpecifying}** (${con.mandatory.pct}%) — of the cases that specify one.`,
+    );
+    push(
+      `- Satisfied every expected concept: **${con.expected.casesSatisfyingAll} of ${con.expected.casesSpecifying}** (${con.expected.pct}%) — of the cases that specify one.`,
+    );
+    push(
+      `- Missing a mandatory concept: **${con.missingMandatory.length}**, of which **${con.gateBlockedPasses}** lost a Pass to the gate.`,
+    );
+    push(`- Qualified for an automatic Pass: **${con.autoPassed.length}**.`);
+    push(
+      `- Automatic Pass withheld over a material factual issue: **${con.autoPassBlocked.length}**.`,
+    );
+    blank();
+
+    if (con.missingMandatory.length > 0) {
+      push('### Cases missing a mandatory concept');
+      blank();
+      for (const entry of con.missingMandatory) {
+        // Concept phrases verbatim — they carry dilution ratios, contact times, ppm and EPA numbers.
+        push(`- ${idLink(entry.id)} — ${formatConceptList(entry.missing)}`);
+      }
+      blank();
+    }
+
+    if (con.autoPassBlocked.length > 0) {
+      push('### Automatic Passes withheld');
+      blank();
+      for (const entry of con.autoPassBlocked) {
+        push(`- ${idLink(entry.id)} — ${entry.note ?? 'material factual issue recorded'}`);
+      }
+      blank();
+    }
+
+    if (con.recurringMissing.length > 0) {
+      push('### Recurring missing concepts');
+      blank();
+      for (const entry of con.recurringMissing) {
+        push(
+          `- ${formatConceptList([entry.concept])} — missing in ${entry.count} cases: ${entry.caseIds.map(idLink).join(', ')}`,
+        );
+      }
+      blank();
+    }
+  }
 
   // --- Results at a glance ---
   push('## Results at a glance');
   blank();
   push('| ID | Question | Tier | Score | Grade | Result |');
   push('|---|---|---|---|---|---|');
+  let anyRatingConstrained = false;
+  let anyAutoPass = false;
   for (const c of orderedCases) {
     if (c.score.unableToEvaluate) {
       push(`| ${idLink(c.id)} | ${mdCell(c.question)} | ${mdCell(c.tier)} | — | — | Unable to Evaluate |`);
@@ -267,11 +335,25 @@ export function renderReportMarkdown(params: {
     }
     const evaluated = byId.get(c.id) as EvaluatedCase | undefined;
     if (!evaluated) continue;
+    anyRatingConstrained ||= evaluated.ratingConstrained;
+    anyAutoPass ||= evaluated.autoPassTriggered;
     push(
-      `| ${idLink(c.id)} | ${mdCell(c.question)} | ${mdCell(c.tier)} | ${evaluated.overall} | ${evaluated.grade} | ${evaluated.status} |`,
+      `| ${idLink(c.id)} | ${mdCell(c.question)} | ${mdCell(c.tier)} | ${evaluated.overall} | ${evaluated.grade} | ${evaluated.status}${conceptMarkers(evaluated)} |`,
     );
   }
   blank();
+  // Legend only for marks actually used — no orphan footnote on a run with no concept data.
+  if (anyRatingConstrained || anyAutoPass) {
+    push(
+      `_${[
+        anyRatingConstrained ? CONCEPT_MARKER_LEGEND.ratingConstrained : null,
+        anyAutoPass ? CONCEPT_MARKER_LEGEND.autoPass : null,
+      ]
+        .filter(Boolean)
+        .join('  ')}_`,
+    );
+    blank();
+  }
 
   // --- Detailed case-by-case ---
   push('## Detailed results — case by case');
@@ -308,6 +390,40 @@ export function renderReportMarkdown(params: {
         `| ${evaluated.accuracy} | ${evaluated.completeness} | ${evaluated.relevance} | ${evaluated.clarity} | ${evaluated.overall}/100 | ${evaluated.grade} | ${evaluated.status} |`,
       );
       blank();
+
+      // B0-713 — a few lines, only when this case has concept data: the coverage, what is missing
+      // by name, and one sentence for whichever rule moved (or was withheld from) the Result.
+      // Methodology §9 is explicit that this is as much as a reader needs here.
+      if (evaluated.concepts) {
+        const con = evaluated.concepts;
+        push(`**Concept coverage:** ${formatConceptCoverage(con)}`);
+        if (con.mandatory.missing.length > 0) {
+          push(`**Missing mandatory concepts:** ${formatConceptList(con.mandatory.missing)}`);
+        }
+        if (con.expected.missing.length > 0) {
+          push(`**Missing expected concepts:** ${formatConceptList(con.expected.missing)}`);
+        }
+        if (evaluated.ratingConstrained) {
+          push(
+            `**Rating constrained:** mandatory concept(s) missing — ${formatConceptList(con.mandatory.missing)}${
+              evaluated.gateBlockedAPass
+                ? ` (scored ${evaluated.overall}/100, so the gate removed a Pass)`
+                : ''
+            }`,
+          );
+        }
+        if (evaluated.autoPassTriggered) {
+          push(
+            `**Automatic Pass:** every expected concept satisfied, so the ${evaluated.rubricStatus} the rubric scored was raised to Pass.`,
+          );
+        }
+        if (evaluated.autoPassBlocked) {
+          push(
+            `**Automatic Pass blocked:** ${con.materialIssueNote ?? 'a material factual issue was recorded on this case.'}`,
+          );
+        }
+        blank();
+      }
     }
 
     if (c.latencySeconds != null && m.latency) {

@@ -1,7 +1,8 @@
 import { ChevronRight, TriangleAlert } from 'lucide-react';
 import type { ReactNode } from 'react';
 
-import type { ReportMetricsData } from '~/lib/tests/report/data-schemas';
+import { formatConceptList } from '~/lib/tests/report/case-concepts';
+import type { ReportConceptRollup, ReportMetricsData } from '~/lib/tests/report/data-schemas';
 import {
   GRADE_BANDS,
   STATUS_BANDS,
@@ -161,6 +162,137 @@ export function ReportExecutiveAssessment({
   );
 }
 
+/**
+ * B0-713 — the run-level concept readout. Every number is read straight off
+ * `metrics.concepts`; nothing here counts cases.
+ *
+ * Two things it is careful about:
+ *
+ * - The denominator is *cases that specify concepts of that kind*, never the whole run. A run
+ *   where three of forty cases carry criteria must not report "3 of 40 satisfied all mandatory
+ *   concepts" — the other thirty-seven were never asked.
+ * - The whole block is absent when `metrics.concepts` is null, so a run with no concept data
+ *   shows no heading and no "0 of 0".
+ */
+function ConceptCoverageRollup({ concepts }: { concepts: ReportConceptRollup }) {
+  return (
+    <div className="mt-8 rounded-2xl border border-slate-200 bg-slate-50 p-5">
+      <h3 className="text-sm font-semibold text-slate-900">Concept coverage</h3>
+      <p className="mt-1 text-xs text-slate-600">
+        Across the {concepts.casesWithConcepts}{' '}
+        {concepts.casesWithConcepts === 1 ? 'case that carries' : 'cases that carry'} expected
+        criteria. Percentages are out of the cases that specify concepts of that kind, not the
+        whole run.
+      </p>
+
+      <dl className="mt-4 grid gap-3 sm:grid-cols-2">
+        <div className="rounded-xl bg-white p-3 ring-1 ring-slate-200">
+          <dt className="text-[11px] font-semibold tracking-[0.14em] text-slate-500 uppercase">
+            Satisfied every mandatory concept
+          </dt>
+          <dd className="mt-1 text-sm text-slate-900 tabular-nums">
+            {concepts.mandatory.casesSatisfyingAll} of {concepts.mandatory.casesSpecifying} (
+            {concepts.mandatory.pct}%)
+          </dd>
+        </div>
+        <div className="rounded-xl bg-white p-3 ring-1 ring-slate-200">
+          <dt className="text-[11px] font-semibold tracking-[0.14em] text-slate-500 uppercase">
+            Satisfied every expected concept
+          </dt>
+          <dd className="mt-1 text-sm text-slate-900 tabular-nums">
+            {concepts.expected.casesSatisfyingAll} of {concepts.expected.casesSpecifying} (
+            {concepts.expected.pct}%)
+          </dd>
+        </div>
+      </dl>
+
+      <ul className="mt-4 space-y-1.5 text-sm text-slate-700">
+        <li>
+          <span className="font-medium text-rose-700 tabular-nums">
+            {concepts.missingMandatory.length}
+          </span>{' '}
+          missing a mandatory concept, of which{' '}
+          <span className="font-medium tabular-nums">{concepts.gateBlockedPasses}</span> lost a Pass
+          to the gate.
+        </li>
+        <li>
+          <span className="font-medium tabular-nums">{concepts.autoPassed.length}</span> qualified
+          for an automatic Pass on full expected coverage.
+        </li>
+        <li>
+          <span className="font-medium text-amber-700 tabular-nums">
+            {concepts.autoPassBlocked.length}
+          </span>{' '}
+          had an automatic Pass withheld over a material factual issue.
+        </li>
+      </ul>
+
+      {concepts.missingMandatory.length > 0 ? (
+        <div className="mt-5">
+          <SectionLabel>Cases missing a mandatory concept</SectionLabel>
+          <ul className="mt-2 space-y-2">
+            {concepts.missingMandatory.map((entry) => (
+              <li className="text-sm" key={entry.id}>
+                <a className="font-mono text-[0.6875rem] text-sky-700 hover:underline" href={`#case-${entry.id}`}>
+                  {entry.id}
+                </a>
+                {/* Concept phrases verbatim — regulated free text, never re-worded. */}
+                <p className="break-words whitespace-pre-wrap text-rose-700">
+                  {formatConceptList(entry.missing)}
+                </p>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {concepts.autoPassBlocked.length > 0 ? (
+        <div className="mt-5">
+          <SectionLabel>Automatic Passes withheld</SectionLabel>
+          <ul className="mt-2 space-y-2">
+            {concepts.autoPassBlocked.map((entry) => (
+              <li className="text-sm" key={entry.id}>
+                <a className="font-mono text-[0.6875rem] text-sky-700 hover:underline" href={`#case-${entry.id}`}>
+                  {entry.id}
+                </a>
+                <p className="break-words whitespace-pre-wrap text-amber-800">
+                  {entry.note ?? 'material factual issue recorded'}
+                </p>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {concepts.recurringMissing.length > 0 ? (
+        <div className="mt-5">
+          <SectionLabel>Recurring missing concepts</SectionLabel>
+          <ul className="mt-2 space-y-2">
+            {concepts.recurringMissing.map((entry) => (
+              <li className="text-sm" key={entry.concept}>
+                <p className="break-words whitespace-pre-wrap text-slate-800">
+                  {formatConceptList([entry.concept])}
+                </p>
+                <p className="mt-0.5 text-xs text-slate-500">
+                  missing in {entry.count} cases ·{' '}
+                  {entry.caseIds.map((caseId, index) => (
+                    <span key={caseId}>
+                      {index > 0 ? ', ' : ''}
+                      <a className="font-mono text-sky-700 hover:underline" href={`#case-${caseId}`}>
+                        {caseId.slice(0, 8)}
+                      </a>
+                    </span>
+                  ))}
+                </p>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export type ReportAggregateFindingsProps = {
   synthesis: ReportSynthesis;
   metrics: ReportMetricsData;
@@ -214,6 +346,8 @@ export function ReportAggregateFindings({
         ))}
       </div>
 
+      {metrics.concepts ? <ConceptCoverageRollup concepts={metrics.concepts} /> : null}
+
       {metrics.warnings.length > 0 ? (
         <div className="mt-8 rounded-2xl border border-amber-300 bg-amber-50 p-5">
           <div className="flex items-center gap-2">
@@ -263,6 +397,11 @@ export function ReportAggregateFindings({
 export type ReportMethodologyProps = {
   /** Named in the exclusion sentence when the run has excluded cases. */
   uteCount?: number;
+  /**
+   * B0-713 — whether this run has any concept data. The concept rules are stated only when they
+   * actually applied, so a legacy run's methodology reads exactly as it did before.
+   */
+  hasConcepts?: boolean;
   /** Collapsed by default on screen; B0-592 forces it open for the PDF via `details[open]`. */
   defaultOpen?: boolean;
   className?: string;
@@ -274,6 +413,7 @@ export type ReportMethodologyProps = {
  */
 export function ReportMethodology({
   uteCount,
+  hasConcepts = false,
   defaultOpen = false,
   className,
 }: ReportMethodologyProps) {
@@ -345,6 +485,21 @@ export function ReportMethodology({
           The golden dataset — ideal response, expected concepts and expected sources — is the
           source of truth. Responses are judged on substantive correctness, not wording.
         </p>
+
+        {hasConcepts ? (
+          <div className="space-y-2">
+            <SectionLabel>Concept rules</SectionLabel>
+            <p>
+              Where a case carries expected criteria, the grade above stays pure arithmetic and only
+              the Result can move: satisfying every expected concept raises a below-Pass Result to
+              Pass, and missing a mandatory (must-have) concept caps the Result below Pass.
+            </p>
+            <p className="text-xs text-slate-500">
+              The cap is applied last, so it always wins over the automatic Pass, and the automatic
+              Pass is withheld entirely when a deterministic check on a regulated value failed.
+            </p>
+          </div>
+        ) : null}
 
         <p>
           {UTE_EXCLUSION_RULE}

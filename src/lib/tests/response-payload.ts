@@ -1,4 +1,8 @@
 import { productLineLockSchema, type ProductLineLock } from '~/lib/audit/trace';
+import {
+  criteriaGradingOutcomeSchema,
+  type CriteriaGradingOutcome,
+} from '~/lib/tests/criteria-schemas';
 import type { RetrievedDocumentChunkRef } from '~/lib/workflows/product-support/product-support-schemas';
 import {
   CONFIDENCE_PROVENANCES,
@@ -521,6 +525,28 @@ export function extractProductLineLock(responsePayload: unknown): ProductLineLoc
   }
   const parsed = productLineLockSchema.safeParse(
     (responsePayload as Record<string, unknown>).productLineLock,
+  );
+  return parsed.success ? parsed.data : null;
+}
+
+/**
+ * B0-711 — the per-criterion grading the harness already persisted for this item
+ * (`response_payload.criteriaGrading`, written by `~/lib/tests/runner.ts` whenever the test item
+ * carries `expected_criteria`). This is the report's *only* source of per-concept verdicts: the
+ * concept gate never re-asks a model for a judgment the criteria grader already made.
+ *
+ * Validated with `criteriaGradingOutcomeSchema` rather than probed field-by-field, so a payload
+ * written by an older runner (or hand-edited) is rejected whole instead of half-read. Returns null
+ * for any item that never had criteria — a blank concept set is not a failure.
+ */
+export function extractCriteriaGrading(
+  responsePayload: unknown,
+): CriteriaGradingOutcome | null {
+  if (!responsePayload || typeof responsePayload !== 'object' || Array.isArray(responsePayload)) {
+    return null;
+  }
+  const parsed = criteriaGradingOutcomeSchema.safeParse(
+    (responsePayload as Record<string, unknown>).criteriaGrading,
   );
   return parsed.success ? parsed.data : null;
 }
