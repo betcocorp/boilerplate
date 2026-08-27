@@ -26,7 +26,7 @@ import {
   type ReportMetrics,
 } from './metrics';
 import type { CaseHarnessAside } from './render';
-import { caseAnchorId, latencyBandLabel, orderCasesByTier } from './render';
+import { caseAnchorId, orderCasesByTier } from './render';
 import { parseReportState, type CaseScore, type ReportState, type ReportSynthesis } from './schemas';
 
 /**
@@ -45,8 +45,9 @@ import { parseReportState, type CaseScore, type ReportState, type ReportSynthesi
  * `computeReportMetrics` is called from exactly one place in this module and nowhere else in the
  * report path.
  *
- * Regulated-data rule: every expected/actual string, sub-score and latency is copied by reference
- * or by value with no parsing, rounding or unit conversion.
+ * Regulated-data rule: every expected/actual string, sub-score and timing is copied by reference
+ * or by value with no parsing, rounding or unit conversion. The one conversion in this module is
+ * milliseconds → seconds, isolated in `latencySecondsOf` / `ttftSecondsOf` below.
  */
 
 const NO_RESPONSE_PLACEHOLDER = '(no response recorded)';
@@ -121,8 +122,27 @@ export type AssembledReport = AssembledReportCases & {
   generatedAt: string;
 };
 
+/**
+ * **The unit boundary.** `test_result_items` stores both timings in milliseconds; everything
+ * downstream of these two functions — scoring, thresholds, aggregates, both renderers — works in
+ * seconds and only in seconds. The `/ 1000` happens here, once, and nowhere else.
+ *
+ * This is the single worst trap in the speed work: a raw `1826` that never got divided scores a
+ * 1.8 s first token as "Very slow" and looks entirely plausible on the page. `IMPLAUSIBLE_SECONDS`
+ * in `./speed-rules` is the backstop that catches it, but the fix is to keep the conversion here.
+ */
 function latencySecondsOf(resultItem: TestResultItemRecord | undefined): number | null {
   return resultItem ? resultItem.elapsed_ms / 1000 : null;
+}
+
+/**
+ * B0-715 — time to first token, in seconds. Null stays null: `ttft_ms` has only been populated
+ * since B0-318/319, so older runs legitimately have none, and an unrecorded measurement is not a
+ * fast one. It never becomes 0 and never affects whether a case is Unable to Evaluate.
+ */
+function ttftSecondsOf(resultItem: TestResultItemRecord | undefined): number | null {
+  const ttftMs = resultItem?.ttft_ms;
+  return typeof ttftMs === 'number' && Number.isFinite(ttftMs) ? ttftMs / 1000 : null;
 }
 
 /**
@@ -143,6 +163,7 @@ export function assembleReportCases(params: AssembleReportCasesParams): Assemble
       category: item.prompt_category,
       score: caseScores[item.id] ?? unscoredPlaceholder(),
       latencySeconds: latencySecondsOf(resultItem),
+      ttftSeconds: ttftSecondsOf(resultItem),
       /**
        * B0-711 — per-concept verdicts come from the criteria grading the *run* already persisted
        * (`response_payload.criteriaGrading`), not from a second model call: the concepts were
@@ -161,11 +182,13 @@ export function assembleReportCases(params: AssembleReportCasesParams): Assemble
     invariantSeverity: params.invariantSeverity,
   });
   const evaluatedById = new Map(metrics.perCase.map((c) => [c.id, c]));
+  // Looked up, never recomputed — the same objects `computeReportMetrics` built the aggregates
+  // from, so a case's speed line and the run's speed table can never disagree.
+  const speedById = new Map((metrics.speed?.perCase ?? []).map((c) => [c.id, c]));
 
   const cases: ReportCase[] = items.map((item, index) => {
     const resultItem = resultItemByTestItemId.get(item.id);
     const score = caseInputs[index].score;
-    const latencySeconds = latencySecondsOf(resultItem);
     const harness: CaseHarnessAside | null = resultItem
       ? {
           passed: resultItem.passed,
@@ -199,12 +222,11 @@ export function assembleReportCases(params: AssembleReportCasesParams): Assemble
       // The same object `computeReportMetrics` rated this case with — surfaced on the case record
       // so a renderer never has to reach back into `evaluated` (or re-derive) to show coverage.
       concepts: caseInputs[index].concepts ?? null,
-      latencySeconds,
+      latencySeconds: caseInputs[index].latencySeconds,
       latencyMs: resultItem ? resultItem.elapsed_ms : null,
-      latencyBand:
-        latencySeconds != null && metrics.latency
-          ? latencyBandLabel(latencySeconds, metrics.latency.thresholds)
-          : null,
+      ttftSeconds: caseInputs[index].ttftSeconds,
+      ttftMs: resultItem?.ttft_ms ?? null,
+      speed: speedById.get(item.id) ?? null,
       harness,
       retrievedDocumentIds: [...documentIds],
       workflowRunId: resultItem?.workflow_run_id ?? null,
@@ -241,7 +263,7 @@ function toMetricsPayload(metrics: ReportMetrics): ReportMetricsData {
     categories: metrics.categories.map(([name, block]) => ({ name, block })),
     strongestCategory: metrics.strongestCategory,
     weakestCategory: metrics.weakestCategory,
-    latency: metrics.latency,
+    speed: metrics.speed,
     concepts: metrics.concepts,
     warnings: metrics.warnings,
   };

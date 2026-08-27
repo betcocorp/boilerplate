@@ -8,15 +8,19 @@
  * from here rather than restating it — a restated literal is how the scorecard and the stated
  * methodology drift apart.
  *
- * Known remaining offender (for B0-717): `latencyBlock` in `./metrics.ts` still carries
- * `goodThreshold = 5` / `slowThreshold = 10` as function defaults. Those are the `total` band
- * edges below and should be replaced by `SPEED_THRESHOLDS.total` when that function is rewired.
+ * B0-717 removed the last restatement (`latencyBlock`'s `goodThreshold = 5` / `slowThreshold = 10`
+ * function defaults, now `SPEED_THRESHOLDS.total`), so this file is the only home again. Keep it
+ * that way.
  *
  * The maths here is deliberately pure and synchronous. Any settings-backed override is resolved
  * at the edge by `loadSpeedThresholds()` and passed *in*; `normalizeSpeed` never reads config.
+ *
+ * `loadSpeedThresholds()` is **not yet wired into the report path** — `speedBlock` uses the shipped
+ * defaults synchronously, because `computeReportMetrics` and `assembleReportCases` are both pure
+ * and sync, and threading resolved thresholds through would make the whole assembly chain async.
+ * With no `REPORT_SPEED_*` rows configured the two are identical, but a future settings override
+ * will not take effect until someone does that work.
  */
-
-import { getNumberSetting } from '~/lib/settings/settings-service';
 
 export type SpeedMetric = 'ttft' | 'total';
 
@@ -411,6 +415,12 @@ export type ResolvedSpeedThresholds = {
  * with no rows configured this returns `SPEED_THRESHOLDS` unchanged and no warnings.
  */
 export async function loadSpeedThresholds(): Promise<ResolvedSpeedThresholds> {
+  // Imported here rather than at the top of the file: `settings-service` reaches the Supabase
+  // service-role client, and this module's constants are read by client components (the report
+  // cards and ledger). A static import would drag server-only code into their bundle for the sake
+  // of a function they never call.
+  const { getNumberSetting } = await import('~/lib/settings/settings-service');
+
   const warnings: string[] = [];
   const resolved: Record<SpeedMetric, SpeedThresholds> = {
     ttft: { ...SPEED_THRESHOLDS.ttft },

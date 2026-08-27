@@ -33,9 +33,34 @@ export type ReportRateGrade = z.infer<typeof reportRateGradeSchema>;
 export const reportCaseStatusSchema = z.enum(['Pass', 'Partial Pass', 'Fail']);
 export type ReportCaseStatus = z.infer<typeof reportCaseStatusSchema>;
 
-/** Which responsiveness band a case's latency falls in. Reported, never part of the grade. */
-export const reportLatencyBandSchema = z.enum(['good', 'acceptable', 'slow']);
-export type ReportLatencyBand = z.infer<typeof reportLatencyBandSchema>;
+/**
+ * Which band a single timing falls in (`metricBand` in `./speed-rules`). Reported, never part of
+ * the grade.
+ */
+export const reportSpeedBandSchema = z.enum(['good', 'acceptable', 'slow']);
+export type ReportSpeedBand = z.infer<typeof reportSpeedBandSchema>;
+
+/**
+ * Rating words for a 0–100 Speed Performance Score (`SPEED_RATING_BANDS`). Words, never letters:
+ * a "B" beside the content grade's "B" would read as the same judgment, and they are not.
+ * Renderers print these verbatim and must never map them onto A–F.
+ */
+export const reportSpeedRatingSchema = z.enum([
+  'Excellent',
+  'Good',
+  'Acceptable',
+  'Slow',
+  'Very slow',
+]);
+export type ReportSpeedRating = z.infer<typeof reportSpeedRatingSchema>;
+
+/** Which timings a case's Speed Performance Score was computed from. */
+export const reportSpeedBasisSchema = z.enum(['combined', 'ttft_only', 'total_only']);
+export type ReportSpeedBasis = z.infer<typeof reportSpeedBasisSchema>;
+
+/** Which metric a timing is. `ttft` = time to first token, `total` = total response time. */
+export const reportSpeedMetricNameSchema = z.enum(['ttft', 'total']);
+export type ReportSpeedMetricName = z.infer<typeof reportSpeedMetricNameSchema>;
 
 /**
  * Counts, average and pass/partial/fail rates for one population of evaluated cases (the whole
@@ -66,23 +91,96 @@ export const reportGroupRateSchema = z.object({
 });
 export type ReportGroupRate = z.infer<typeof reportGroupRateSchema>;
 
-/** Response-time summary across every case that recorded one. Never blended into the grade. */
-export const reportLatencySchema = z.object({
-  unit: z.literal('s'),
+/** One measured timing on one case, with its normalized 0–100 score and band. */
+export const reportCaseSpeedMetricSchema = z.object({
+  metric: reportSpeedMetricNameSchema,
+  /** Seconds at source precision — converted from ms once, in assembly, and never re-derived. */
+  seconds: z.number(),
+  score: z.number(),
+  band: reportSpeedBandSchema,
+  /** The renormalized weight actually applied (1 when this is the only metric measured). */
+  weight: z.number(),
+});
+export type ReportCaseSpeedMetric = z.infer<typeof reportCaseSpeedMetricSchema>;
+
+/**
+ * B0-717 — one case's speed, as its own object rather than a field on the scoreline. Present only
+ * for a case that recorded at least one timing, evaluated or Unable to Evaluate alike: the two
+ * facts are independent in both directions.
+ */
+export const reportCaseSpeedSchema = z.object({
+  id: z.string(),
+  /** Null when that metric was not recorded. Never a zero standing in for an absent measurement. */
+  ttft: reportCaseSpeedMetricSchema.nullable(),
+  total: reportCaseSpeedMetricSchema.nullable(),
+  /** The combined Speed Performance Score. Never blended into any content score or grade. */
+  score: z.number(),
+  rating: reportSpeedRatingSchema,
+  basis: reportSpeedBasisSchema,
+});
+export type ReportCaseSpeed = z.infer<typeof reportCaseSpeedSchema>;
+
+/** The thresholds in force for one metric, as `./speed-rules` resolved them for this run. */
+export const reportSpeedThresholdsSchema = z.object({
+  good: z.number(),
+  acceptable: z.number(),
+  poor: z.number(),
+  floor: z.number(),
+});
+export type ReportSpeedThresholds = z.infer<typeof reportSpeedThresholdsSchema>;
+
+/** Run-level aggregate for one metric. Every figure is rounded once here; render as-is. */
+export const reportSpeedMetricAggregateSchema = z.object({
+  metric: reportSpeedMetricNameSchema,
+  label: z.string(),
   n: z.number().int().min(0),
-  avg: z.number(),
-  min: z.number(),
-  max: z.number(),
-  median: z.number(),
-  thresholds: z.object({ good: z.number(), slow: z.number() }),
+  avgSeconds: z.number(),
+  medianSeconds: z.number(),
+  /** Null below the minimum sample size — print `p90Label`, which is then the `n/a` sentinel. */
+  p90Seconds: z.number().nullable(),
+  p90Label: z.string(),
+  minSeconds: z.number(),
+  maxSeconds: z.number(),
+  avgScore: z.number(),
   bands: z.object({
     good: z.number().int().min(0),
     acceptable: z.number().int().min(0),
     slow: z.number().int().min(0),
   }),
+  thresholds: reportSpeedThresholdsSchema,
+  fastest: z.array(z.object({ id: z.string(), seconds: z.number() })),
   slowest: z.array(z.object({ id: z.string(), seconds: z.number() })),
 });
-export type ReportLatency = z.infer<typeof reportLatencySchema>;
+export type ReportSpeedMetricAggregate = z.infer<typeof reportSpeedMetricAggregateSchema>;
+
+/**
+ * The run's speed readout, across both metrics. Null when not one case recorded either timing —
+ * renderers then state that timing data was unavailable and draw no table.
+ */
+export const reportSpeedSchema = z.object({
+  unit: z.literal('s'),
+  /** Cases with at least one timing. */
+  n: z.number().int().min(0),
+  metrics: z.object({
+    ttft: reportSpeedMetricAggregateSchema.nullable(),
+    total: reportSpeedMetricAggregateSchema.nullable(),
+  }),
+  avgScore: z.number(),
+  medianScore: z.number(),
+  rating: reportSpeedRatingSchema,
+  /** Every rating, including zero counts, in band order — so the distribution table is stable. */
+  ratingDistribution: z.array(
+    z.object({ rating: reportSpeedRatingSchema, count: z.number().int().min(0) }),
+  ),
+  basisCounts: z.object({
+    combined: z.number().int().min(0),
+    ttftOnly: z.number().int().min(0),
+    totalOnly: z.number().int().min(0),
+  }),
+  weights: z.object({ ttft: z.number(), total: z.number() }),
+  perCase: z.array(reportCaseSpeedSchema),
+});
+export type ReportSpeed = z.infer<typeof reportSpeedSchema>;
 
 /** A case that could not be judged. Excluded from every average, grade, count and rate. */
 export const reportUteCaseSchema = z.object({
@@ -222,7 +320,11 @@ export const reportMetricsSchema = z.object({
   categories: z.array(reportGroupRateSchema),
   strongestCategory: z.string().nullable(),
   weakestCategory: z.string().nullable(),
-  latency: reportLatencySchema.nullable(),
+  /**
+   * B0-717 — the run's speed readout, replacing the old single-metric `latency` block. Null when
+   * no case recorded a timing. Reported beside the grade and never part of it.
+   */
+  speed: reportSpeedSchema.nullable(),
   /** Null when no evaluated case carried concept data — omit every concept section entirely. */
   concepts: reportConceptRollupSchema.nullable(),
   /**
@@ -290,11 +392,19 @@ export const reportCaseSchema = z.object({
   concepts: reportCaseConceptsSchema.nullable(),
 
   // --- Reference signals (never part of the grade) ---
+  /** Total response time in seconds — `latencyMs / 1000`, converted once during assembly. */
   latencySeconds: z.number().nullable(),
   /** Source precision, straight from `test_result_items.elapsed_ms`. */
   latencyMs: z.number().nullable(),
-  /** Null when the case has no latency, or the run recorded none at all. */
-  latencyBand: reportLatencyBandSchema.nullable(),
+  /** B0-715 — time to first token in seconds. Null for runs that recorded none; never 0. */
+  ttftSeconds: z.number().nullable(),
+  /** Source precision, straight from `test_result_items.ttft_ms`. */
+  ttftMs: z.number().nullable(),
+  /**
+   * The scored speed for this case (B0-717), or null when it recorded no timing at all. Looked up
+   * from `metrics.speed.perCase` — never recomputed, in assembly or in a renderer.
+   */
+  speed: reportCaseSpeedSchema.nullable(),
   harness: reportCaseHarnessSchema.nullable(),
   /** `rag.document` ids retrieved for this answer, de-duplicated, in payload order. */
   retrievedDocumentIds: z.array(z.string()),

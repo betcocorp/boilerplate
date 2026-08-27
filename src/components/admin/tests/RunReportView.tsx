@@ -644,7 +644,7 @@ export function RunReportView({
           <div data-report-section>
             <ReportBreakdownCards
               categories={reportData.metrics.categories}
-              latency={reportData.metrics.latency}
+              speed={reportData.metrics.speed}
               strongestCategory={reportData.metrics.strongestCategory}
               tiers={reportData.metrics.tiers}
               totalCases={reportData.metrics.totalCases}

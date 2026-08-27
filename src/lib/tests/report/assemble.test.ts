@@ -97,6 +97,7 @@ function resultItem(
     status: 'ok',
     passed: true,
     elapsed_ms: 3200,
+    ttft_ms: null,
     error_message: null,
     response_text: null,
     response_payload: null,
@@ -169,6 +170,7 @@ const RESULT_ITEMS: TestResultItemRecord[] = [
   resultItem({
     test_item_id: CASE_A,
     elapsed_ms: 3200,
+    ttft_ms: 1200,
     passed: true,
     status: 'ok',
     response_text: `  ${REGULATED.dilution} ${REGULATED.metric}  `,
@@ -181,6 +183,8 @@ const RESULT_ITEMS: TestResultItemRecord[] = [
     },
     workflow_run_id: 'wf-aaa',
   }),
+  // CASE_B keeps the default `ttft_ms: null` — an older attempt that predates the streaming
+  // instrumentation, so its speed is scored from the total alone rather than a zero-filled TTFT.
   resultItem({
     test_item_id: CASE_B,
     elapsed_ms: 7500,
@@ -191,6 +195,7 @@ const RESULT_ITEMS: TestResultItemRecord[] = [
   resultItem({
     test_item_id: CASE_C,
     elapsed_ms: 12000,
+    ttft_ms: 4000,
     passed: false,
     status: 'failed',
     response_text: REGULATED.concentration,
@@ -357,23 +362,38 @@ describe('assembleReportData → report data contract', () => {
       `_Strongest: ${m.strongestCategory} · Weakest: ${m.weakestCategory}_`,
     );
 
-    // --- Responsiveness ---
-    const lat = m.latency!;
+    // --- Responsiveness (B0-717/B0-718) ---
+    const sp = m.speed!;
     check(
-      'metrics.latency (summary line)',
-      `Average response time: **${lat.avg} s** (range ${lat.min}–${lat.max} s, median ${lat.median} s, n=${lat.n}).`,
+      'metrics.speed (headline)',
+      `**Speed Performance Score: ${sp.avgScore}/100 (${sp.rating})** — median ${sp.medianScore}/100 across ${sp.n} timed cases.`,
     );
-    check(
-      'metrics.latency.thresholds/bands',
-      `Bands (good ≤ ${lat.thresholds.good} s · acceptable ≤ ${lat.thresholds.slow} s · slow > ${lat.thresholds.slow} s): **${lat.bands.good} good, ${lat.bands.acceptable} acceptable, ${lat.bands.slow} slow**.`,
-    );
-    for (const slowest of lat.slowest) {
+    for (const aggregate of [sp.metrics.ttft!, sp.metrics.total!]) {
       check(
-        `metrics.latency.slowest[${slowest.id}]`,
-        `[${slowest.id}](#${caseAnchorId(slowest.id)}) (${slowest.seconds} s)`,
+        `metrics.speed.metrics.${aggregate.metric} (table row)`,
+        `| ${aggregate.label} | ${aggregate.n} | ${aggregate.avgSeconds} ${sp.unit} | ${aggregate.medianSeconds} ${sp.unit} | ${aggregate.p90Label} | ${aggregate.minSeconds}–${aggregate.maxSeconds} ${sp.unit} | ${aggregate.avgScore} | ${aggregate.bands.good} / ${aggregate.bands.acceptable} / ${aggregate.bands.slow} |`,
+      );
+      check(
+        `metrics.speed.metrics.${aggregate.metric} (extremes)`,
+        `${aggregate.label} — fastest: ${aggregate.fastest.map((e) => `[${e.id}](#${caseAnchorId(e.id)}) (${e.seconds} ${sp.unit})`).join(', ')} · slowest: ${aggregate.slowest.map((e) => `[${e.id}](#${caseAnchorId(e.id)}) (${e.seconds} ${sp.unit})`).join(', ')}.`,
+      );
+      check(
+        `metrics.speed.metrics.${aggregate.metric}.thresholds`,
+        `${aggregate.label}: good ≤ ${aggregate.thresholds.good} ${sp.unit}, acceptable ≤ ${aggregate.thresholds.acceptable} ${sp.unit}, slow > ${aggregate.thresholds.acceptable} ${sp.unit}`,
       );
     }
-    check('metrics.latency.unit', ` ${lat.unit}`);
+    check(
+      'metrics.speed.ratingDistribution',
+      `Ratings: ${sp.ratingDistribution.map((r) => `${r.count} ${r.rating}`).join(' · ')}.`,
+    );
+    check(
+      'metrics.speed.basisCounts',
+      `Partial timings: ${sp.basisCounts.combined} cases scored from both timings, ${sp.basisCounts.ttftOnly} from TTFT alone and ${sp.basisCounts.totalOnly} from Total response time alone`,
+    );
+    check(
+      'metrics.speed.weights',
+      `_Weighting: TTFT ${sp.weights.ttft} · Total response time ${sp.weights.total}.`,
+    );
 
     // --- Top 3 ---
     for (const rec of s.top3) {
@@ -426,9 +446,21 @@ describe('assembleReportData → report data contract', () => {
         `| ${e.accuracy} | ${e.completeness} | ${e.relevance} | ${e.clarity} | ${e.overall}/100 | ${e.grade} | ${e.status} |`,
       );
       check(`case[${c.id}] glance row`, `| ${c.tier} | ${e.overall} | ${e.grade} | ${e.status} |`);
+      const speed = c.speed!;
       check(
-        `case[${c.id}].latencySeconds/latencyBand`,
-        `**Response time:** ${c.latencySeconds} s (${c.latencyBand})`,
+        `case[${c.id}].speed`,
+        `**Speed (reported separately; not part of the content grade):** ${[
+          speed.ttft ? `TTFT ${speed.ttft.seconds} s — ${speed.ttft.score}/100 (${speed.ttft.band})` : null,
+          speed.total
+            ? `Total response time ${speed.total.seconds} s — ${speed.total.score}/100 (${speed.total.band})`
+            : null,
+          `Speed Performance Score ${speed.score}/100 (${speed.rating})`,
+          speed.basis === 'total_only'
+            ? 'scored from Total response time alone — no TTFT was recorded'
+            : null,
+        ]
+          .filter(Boolean)
+          .join(' · ')}`,
       );
       if (c.harness) {
         check(
@@ -564,12 +596,25 @@ describe('assembleReportData → report data contract', () => {
     expect(a.evaluated!.overall).toBe(91);
     expect(a.latencyMs).toBe(3200);
     expect(a.latencySeconds).toBe(3.2);
+    // B0-715 — ms → s exactly once, at the assembly boundary.
+    expect(a.ttftMs).toBe(1200);
+    expect(a.ttftSeconds).toBe(1.2);
     expect(a.harness).toEqual({ passed: true, status: 'ok', similarity: 0.83 });
     expect(a.retrievedDocumentIds).toEqual(['doc-label-1', 'doc-sds-9']);
     expect(a.workflowRunId).toBe('wf-aaa');
-    expect(a.latencyBand).toBe('good');
-    expect(byId.get(CASE_B)!.latencyBand).toBe('acceptable');
-    expect(byId.get(CASE_C)!.latencyBand).toBe('slow');
+    expect(a.speed!.total!.band).toBe('good');
+    expect(a.speed!.ttft!.band).toBe('good');
+    expect(a.speed!.basis).toBe('combined');
+    // CASE_B recorded no first token: total only, and no zero stood in for the missing metric.
+    const bSpeed = byId.get(CASE_B)!;
+    expect(bSpeed.ttftMs).toBeNull();
+    expect(bSpeed.ttftSeconds).toBeNull();
+    expect(bSpeed.speed!.basis).toBe('total_only');
+    expect(bSpeed.speed!.ttft).toBeNull();
+    expect(bSpeed.speed!.total!.band).toBe('acceptable');
+    expect(byId.get(CASE_C)!.speed!.total!.band).toBe('slow');
+    // CASE_D has no result row at all, so it has no speed entry — not a zero-scored one.
+    expect(byId.get(CASE_D)!.speed).toBeNull();
   });
 
   it('marks a report stale when the dataset gained items after generation', () => {

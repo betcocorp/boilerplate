@@ -11,11 +11,13 @@ import {
 import {
   applyConceptRules,
   computeReportMetrics,
+  WEIGHTS,
   type EvaluatedCase,
   type RateBlock,
   type ReportCaseInput,
 } from './metrics';
 import type { CaseScore } from './schemas';
+import { speedRating } from './speed-rules';
 
 /**
  * B0-712 / B0-714 — the concept rating rules and the structural invariants.
@@ -97,6 +99,7 @@ function input(
     category: 'Dilution',
     score: score(overall),
     latencySeconds: null,
+    ttftSeconds: null,
     ...extra,
   };
 }
@@ -424,6 +427,8 @@ describe('report invariants (B0-714)', () => {
       overall: BLOCK,
       tiers: [['Tier 1', BLOCK]],
       categories: [['Dilution', BLOCK]],
+      speed: null,
+      weights: WEIGHTS,
       ...overrides,
     };
   }
@@ -488,6 +493,34 @@ describe('report invariants (B0-714)', () => {
             },
           },
         ],
+      }),
+    ],
+    [
+      // B0-717 — the reverse leak: a speed score that no timing supports. `basis` claims both
+      // metrics while only one was measured, which is how an imputed timing would look.
+      'grade_isolated_from_speed',
+      context({
+        speed: {
+          unit: 's',
+          n: 1,
+          metrics: { ttft: null, total: null },
+          avgScore: 90,
+          medianScore: 90,
+          rating: 'Excellent',
+          ratingDistribution: [],
+          basisCounts: { combined: 1, ttftOnly: 0, totalOnly: 0 },
+          weights: { ttft: 0.6, total: 0.4 },
+          perCase: [
+            {
+              id: 'invented',
+              ttft: null,
+              total: { metric: 'total', seconds: 3.2, score: 95, band: 'good', weight: 1 },
+              score: 95,
+              rating: 'Excellent',
+              basis: 'combined',
+            },
+          ],
+        },
       }),
     ],
   ];
@@ -601,5 +634,170 @@ describe('report invariants (B0-714)', () => {
       const metrics = computeReportMetrics([input('clean', 90)], { invariantSeverity: 'warn' });
       expect(metrics.warnings.filter((w) => w.startsWith('INVARIANT:'))).toEqual([]);
     });
+  });
+});
+
+/**
+ * B0-717 — the speed aggregates.
+ *
+ * Two properties every test below is really defending: a missing timing is never imputed (no
+ * zero, no average stood in for it), and nothing here can move a content score. The numeric
+ * expectations are derived from `./speed-rules`'s published anchors, not from observed output.
+ */
+describe('computeReportMetrics — speed aggregates (B0-717)', () => {
+  function timed(
+    id: string,
+    timings: { ttftSeconds?: number | null; latencySeconds?: number | null },
+  ): ReportCaseInput {
+    return input(id, 90, {
+      ttftSeconds: timings.ttftSeconds ?? null,
+      latencySeconds: timings.latencySeconds ?? null,
+    });
+  }
+
+  it('scores a case from both timings and names the basis "combined"', () => {
+    // ttft 1 s sits half way between the 0 s (100) and 2 s (90) anchors → 95.
+    // total 3.2 s sits 3.2/5 of the way between 0 s (100) and 5 s (90) → 93.6.
+    // Weighted 0.6/0.4 → 94.44, rounded once for display.
+    const speed = computeReportMetrics([timed('both', { ttftSeconds: 1, latencySeconds: 3.2 })])
+      .speed!;
+
+    expect(speed.n).toBe(1);
+    const c = speed.perCase[0];
+    expect(c.basis).toBe('combined');
+    expect(c.ttft).toEqual({ metric: 'ttft', seconds: 1, score: 95, band: 'good', weight: 0.6 });
+    expect(c.total).toEqual({
+      metric: 'total',
+      seconds: 3.2,
+      score: 93.6,
+      band: 'good',
+      weight: 0.4,
+    });
+    expect(c.score).toBe(94.4);
+    expect(c.rating).toBe('Excellent');
+    expect(speed.basisCounts).toEqual({ combined: 1, ttftOnly: 0, totalOnly: 0 });
+  });
+
+  it('renormalizes to the one metric measured rather than imputing the other', () => {
+    const ttftOnly = computeReportMetrics([timed('ttft', { ttftSeconds: 1 })]).speed!.perCase[0];
+    expect(ttftOnly.basis).toBe('ttft_only');
+    expect(ttftOnly.total).toBeNull();
+    // Weight renormalized to 1, so the score is the metric's own — not 0.6 of it, and not
+    // dragged toward "Very slow" by a zero-filled total.
+    expect(ttftOnly.ttft?.weight).toBe(1);
+    expect(ttftOnly.score).toBe(95);
+    expect(ttftOnly.rating).toBe('Excellent');
+
+    const totalOnly = computeReportMetrics([timed('total', { latencySeconds: 3.2 })])
+      .speed!.perCase[0];
+    expect(totalOnly.basis).toBe('total_only');
+    expect(totalOnly.ttft).toBeNull();
+    expect(totalOnly.total?.weight).toBe(1);
+    expect(totalOnly.score).toBe(93.6);
+  });
+
+  it('reports no speed block at all when neither timing was recorded', () => {
+    const metrics = computeReportMetrics([input('untimed', 90)]);
+    expect(metrics.speed).toBeNull();
+    // …and the content side is untouched.
+    expect(metrics.overall.avg).toBe(90);
+    expect(metrics.perCase[0].grade).toBe('A');
+  });
+
+  it('suppresses P90 below the minimum sample size and reports it at the threshold', () => {
+    const four = computeReportMetrics(
+      [1, 2, 3, 4].map((s) => timed(`c${s}`, { latencySeconds: s })),
+    ).speed!.metrics.total!;
+    expect(four.n).toBe(4);
+    expect(four.p90Seconds).toBeNull();
+    expect(four.p90Label).toBe('n/a');
+
+    const five = computeReportMetrics(
+      [1, 2, 3, 4, 5].map((s) => timed(`c${s}`, { latencySeconds: s })),
+    ).speed!.metrics.total!;
+    expect(five.n).toBe(5);
+    // Linear interpolation between ranks 3 and 4 at position 0.9 * (5 - 1) = 3.6.
+    expect(five.p90Seconds).toBe(4.6);
+    expect(five.p90Label).toBe('4.6s');
+  });
+
+  it('keeps a timed Unable-to-Evaluate case in the speed aggregates', () => {
+    const ute: ReportCaseInput = {
+      ...timed('ute', { ttftSeconds: 1, latencySeconds: 3.2 }),
+      score: {
+        ...score(0),
+        unableToEvaluate: true,
+        uteReason: 'No result recorded for this item in this run.',
+      },
+    };
+    const metrics = computeReportMetrics([ute, timed('graded', { latencySeconds: 3.2 })]);
+
+    // Excluded from every content number…
+    expect(metrics.evaluated).toBe(1);
+    expect(metrics.uteCount).toBe(1);
+    expect(metrics.overall.n).toBe(1);
+    // …and still present in the speed ones: the two flags are independent in both directions.
+    expect(metrics.speed!.n).toBe(2);
+    expect(metrics.speed!.perCase.map((c) => c.id)).toEqual(['ute', 'graded']);
+    expect(metrics.speed!.metrics.total!.n).toBe(2);
+    expect(metrics.speed!.metrics.ttft!.n).toBe(1);
+  });
+
+  it('aggregates per metric, with the thresholds actually in force', () => {
+    const speed = computeReportMetrics([
+      timed('fast', { ttftSeconds: 1, latencySeconds: 3.2 }),
+      timed('mid', { ttftSeconds: 4, latencySeconds: 8 }),
+      timed('slow', { ttftSeconds: 12, latencySeconds: 25 }),
+    ]).speed!;
+
+    const total = speed.metrics.total!;
+    expect(total.label).toBe('Total response time');
+    expect(total.minSeconds).toBe(3.2);
+    expect(total.maxSeconds).toBe(25);
+    expect(total.medianSeconds).toBe(8);
+    expect(total.bands).toEqual({ good: 1, acceptable: 1, slow: 1 });
+    // Straight off SPEED_THRESHOLDS — the report prints the numbers it graded with.
+    expect(total.thresholds).toEqual({ good: 5, acceptable: 10, poor: 20, floor: 40 });
+    expect(total.fastest[0]).toEqual({ id: 'fast', seconds: 3.2 });
+    expect(total.slowest[0]).toEqual({ id: 'slow', seconds: 25 });
+
+    expect(speed.metrics.ttft!.bands).toEqual({ good: 1, acceptable: 1, slow: 1 });
+    expect(speed.ratingDistribution.map((r) => r.rating)).toEqual([
+      'Excellent',
+      'Good',
+      'Acceptable',
+      'Slow',
+      'Very slow',
+    ]);
+    expect(speed.ratingDistribution.reduce((sum, r) => sum + r.count, 0)).toBe(3);
+    expect(speed.rating).toBe(speedRating(speed.avgScore));
+  });
+
+  it('raises the implausible-seconds advisory with the case id, and still scores the value', () => {
+    const metrics = computeReportMetrics([timed('unit-bug', { latencySeconds: 1826 })], {
+      invariantSeverity: 'warn',
+    });
+
+    const advisory = metrics.warnings.find((w) => w.includes('plausibility ceiling'));
+    expect(advisory).toBeDefined();
+    expect(advisory!.startsWith('unit-bug: ')).toBe(true);
+    // Names the likely-correct converted value so the reader can confirm the unit mix-up.
+    expect(advisory).toContain('1826 ms = 1.8s');
+    // Scored as given — this module never rewrites a measurement it was handed.
+    expect(metrics.speed!.perCase[0].total?.seconds).toBe(1826);
+    expect(metrics.speed!.perCase[0].score).toBe(0);
+  });
+
+  it('leaves every content score identical whether or not timings are present', () => {
+    const withoutTimings = computeReportMetrics([input('a', 84), input('b', 62)]);
+    const withTimings = computeReportMetrics([
+      input('a', 84, { ttftSeconds: 1, latencySeconds: 3.2 }),
+      input('b', 62, { latencySeconds: 30 }),
+    ]);
+
+    expect(withTimings.perCase).toEqual(withoutTimings.perCase);
+    expect(withTimings.overall).toEqual(withoutTimings.overall);
+    expect(withoutTimings.speed).toBeNull();
+    expect(withTimings.speed).not.toBeNull();
   });
 });

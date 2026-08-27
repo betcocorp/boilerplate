@@ -16,9 +16,10 @@ import type {
   ReportCaseConcepts,
   ReportCaseStatus,
   ReportGroupRate,
-  ReportLatencyBand,
   ReportMetricsData,
+  ReportSpeedBand,
 } from '~/lib/tests/report/data-schemas';
+import { SPEED_METRIC_LABELS } from '~/lib/tests/report/speed-rules';
 import { cn } from '~/lib/utils';
 
 /**
@@ -231,7 +232,7 @@ const STATUS_BADGE_CLASS: Record<ReportCaseStatus, string> = {
   Fail: 'bg-rose-50 text-rose-700 ring-rose-200',
 };
 
-const LATENCY_BAND_CLASS: Record<ReportLatencyBand, string> = {
+const SPEED_BAND_CLASS: Record<ReportSpeedBand, string> = {
   good: 'text-emerald-700',
   acceptable: 'text-amber-700',
   slow: 'text-rose-700',
@@ -288,20 +289,95 @@ function ScoreBar({ overall, status }: { overall: number; status: ReportCaseStat
   );
 }
 
+/**
+ * The row's total-response-time readout. Deliberately *not* the Speed Performance Score: the
+ * summary row already carries the content score, grade and Result, and putting a second 0–100
+ * number beside them is exactly the confusion §7 exists to prevent. The full speed line lives in
+ * the expanded record, below the sub-scores (B0-718).
+ */
 function LatencyReadout({ c, className }: { c: ReportCase; className?: string }) {
-  if (c.latencySeconds == null) {
+  const total = c.speed?.total ?? null;
+  if (!total) {
     return <span className={cn('text-xs text-slate-400', className)}>—</span>;
   }
   return (
-    <span
-      className={cn(
-        'text-xs tabular-nums',
-        c.latencyBand ? LATENCY_BAND_CLASS[c.latencyBand] : 'text-slate-600',
-        className,
-      )}
-    >
-      {c.latencySeconds} s{c.latencyBand ? ` (${c.latencyBand})` : ''}
+    <span className={cn('text-xs tabular-nums', SPEED_BAND_CLASS[total.band], className)}>
+      {total.seconds} s ({total.band})
     </span>
+  );
+}
+
+/** One metric on the expanded record's speed line: seconds, normalized score, band and raw ms. */
+function SpeedMetricReadout({
+  label,
+  metric,
+  sourceMs,
+}: {
+  label: string;
+  metric: NonNullable<ReportCase['speed']>['total'];
+  /** `latencyMs` / `ttftMs` — the stored millisecond value, shown beside the converted seconds. */
+  sourceMs: number | null;
+}) {
+  if (!metric) return null;
+  return (
+    <>
+      <span className="font-medium">{label}:</span>{' '}
+      {/* Seconds and score both arrive rounded once at source — printed exactly as stored. */}
+      <span className={cn('tabular-nums', SPEED_BAND_CLASS[metric.band])}>
+        {metric.seconds} s
+      </span>
+      <span className="tabular-nums"> · {metric.score}/100</span> ({metric.band})
+      {sourceMs != null ? <span className="text-slate-400"> · {sourceMs} ms</span> : null}
+      {' · '}
+    </>
+  );
+}
+
+/**
+ * B0-718 — the per-case speed line, placed below the sub-score grid and never inside it, and
+ * labelled so it cannot be read as part of the content grade. Rating words are printed verbatim
+ * from the payload; they are never mapped onto A–F.
+ */
+function CaseSpeedLine({ c }: { c: ReportCase }) {
+  const speed = c.speed;
+  if (!speed) {
+    return (
+      <p className="mt-3 text-xs text-slate-500">
+        <span className="font-medium">Speed:</span>{' '}
+        <span className="text-slate-400">no timing recorded for this case</span>
+      </p>
+    );
+  }
+
+  return (
+    <p className="mt-3 rounded-xl bg-white px-3 py-2 text-xs leading-5 text-slate-600 ring-1 ring-slate-200">
+      <span className="text-[11px] font-semibold tracking-[0.14em] text-slate-500 uppercase">
+        Speed — reported separately; not part of the content grade
+      </span>
+      <br />
+      <SpeedMetricReadout
+        label={SPEED_METRIC_LABELS.ttft}
+        metric={speed.ttft}
+        sourceMs={c.ttftMs}
+      />
+      <SpeedMetricReadout
+        label={SPEED_METRIC_LABELS.total}
+        metric={speed.total}
+        sourceMs={c.latencyMs}
+      />
+      <span className="font-medium">Speed Performance Score:</span>{' '}
+      <span className="tabular-nums">{speed.score}/100</span> ({speed.rating})
+      {speed.basis !== 'combined' ? (
+        <span className="text-slate-400">
+          {' '}
+          — scored from{' '}
+          {speed.basis === 'ttft_only' ? SPEED_METRIC_LABELS.ttft : SPEED_METRIC_LABELS.total}{' '}
+          alone; no{' '}
+          {speed.basis === 'ttft_only' ? SPEED_METRIC_LABELS.total : SPEED_METRIC_LABELS.ttft} was
+          recorded.
+        </span>
+      ) : null}
+    </p>
   );
 }
 
@@ -596,26 +672,14 @@ function CaseRow({
             </p>
           ) : null}
 
-          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
-            <p className="text-xs text-slate-600">
-              <span className="font-medium">Response time:</span>{' '}
-              {c.latencySeconds != null ? (
-                <>
-                  <span className={cn('tabular-nums', c.latencyBand ? LATENCY_BAND_CLASS[c.latencyBand] : '')}>
-                    {c.latencySeconds} s
-                  </span>
-                  {c.latencyBand ? ` (${c.latencyBand})` : ''}
-                  {c.latencyMs != null ? (
-                    <span className="text-slate-400"> · {c.latencyMs} ms</span>
-                  ) : null}
-                </>
-              ) : (
-                <span className="text-slate-400">not recorded</span>
-              )}
-              <span className="text-slate-400"> — reported for reference, not graded</span>
-            </p>
-            {c.harness ? <HarnessAside harness={c.harness} /> : null}
-          </div>
+          {/* Below the score grid, never inside it. */}
+          <CaseSpeedLine c={c} />
+
+          {c.harness ? (
+            <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
+              <HarnessAside harness={c.harness} />
+            </div>
+          ) : null}
         </div>
 
         {/* --- Concept coverage (only when this case has concept data) --- */}

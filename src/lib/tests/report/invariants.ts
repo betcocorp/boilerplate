@@ -1,5 +1,5 @@
 import type { ConceptKindCoverage } from './case-concepts';
-import type { EvaluatedCase, RateBlock } from './metrics';
+import type { EvaluatedCase, RateBlock, SpeedBlock, SubScoreWeights } from './metrics';
 
 /**
  * B0-714 — the report's reconciliation checks (methodology §11), split by severity.
@@ -21,8 +21,8 @@ import type { EvaluatedCase, RateBlock } from './metrics';
  *   Python script on the null sub-score in particular — one flaky grading call should degrade a
  *   report, not destroy it.
  *
- * The checks are a list, not a run of inline `if`s, so adding one (B0-717 adds a ninth) is a
- * single entry rather than an edit to control flow.
+ * The checks are a list, not a run of inline `if`s, so adding one (B0-717 added the ninth,
+ * `grade_isolated_from_speed`) is a single entry rather than an edit to control flow.
  */
 
 /**
@@ -57,6 +57,14 @@ export type ReportInvariantContext = {
   overall: RateBlock;
   tiers: ReadonlyArray<[string, RateBlock]>;
   categories: ReadonlyArray<[string, RateBlock]>;
+  /** B0-717 — the run's speed readout, or null when nothing was timed. */
+  speed: SpeedBlock | null;
+  /**
+   * The sub-score weighting `computeReportMetrics` used. Handed in rather than imported so
+   * `grade_isolated_from_speed` can recompute a content score from the *same* constant without
+   * this module taking a runtime dependency on `./metrics` (which imports this one).
+   */
+  weights: SubScoreWeights;
 };
 
 /**
@@ -69,6 +77,13 @@ export type ReportInvariant = {
   describes: string;
   failed: (ctx: ReportInvariantContext) => string | null;
 };
+
+/**
+ * Slack allowed when re-deriving a combined speed score from its stored parts. Both the per-metric
+ * scores and the combined score are rounded once at source (one decimal each), so an exact
+ * comparison would fail on rounding alone; anything past this is a real disagreement.
+ */
+const SPEED_RECOMPUTE_TOLERANCE = 0.2;
 
 /** Order-insensitive multiset equality; concept phrases may legitimately repeat. */
 function sameMultiset(a: readonly string[], b: readonly string[]): boolean {
@@ -178,6 +193,51 @@ export const REPORT_INVARIANTS: readonly ReportInvariant[] = [
         ].filter((m): m is string => m !== null);
         if (mismatches.length > 0) offenders.push(`${c.id} — ${mismatches.join('; ')}`);
       }
+      return offenders.length === 0 ? null : offenders.join(' | ');
+    },
+  },
+  {
+    name: 'grade_isolated_from_speed',
+    describes:
+      'every content score recomputes from its four sub-scores alone, and no speed score was invented from a missing timing',
+    failed: (ctx) => {
+      const offenders: string[] = [];
+
+      // Half one: the grade is the weighted rubric and nothing else. If speed (or anything else)
+      // ever leaked into `overall`, the four sub-scores would no longer reproduce it.
+      for (const c of ctx.evaluated) {
+        const recomputed = Math.round(
+          ctx.weights.accuracy * c.accuracy +
+            ctx.weights.completeness * c.completeness +
+            ctx.weights.relevance * c.relevance +
+            ctx.weights.clarity * c.clarity,
+        );
+        if (recomputed !== c.overall) {
+          offenders.push(`${c.id} — overall ${c.overall}, sub-scores recompute to ${recomputed}`);
+        }
+      }
+
+      // Half two: the reverse leak. A speed score may only exist where a timing does, and its
+      // `basis` must name exactly the metrics that were measured.
+      for (const s of ctx.speed?.perCase ?? []) {
+        const present = [s.ttft, s.total].filter((m) => m !== null);
+        if (present.length === 0) {
+          offenders.push(`${s.id} — speed score ${s.score} with neither timing recorded`);
+          continue;
+        }
+        const expected = s.ttft && s.total ? 'combined' : s.ttft ? 'ttft_only' : 'total_only';
+        if (s.basis !== expected) {
+          offenders.push(`${s.id} — basis "${s.basis}" but the measured metrics say "${expected}"`);
+          continue;
+        }
+        const weighted = present.reduce((sum, m) => sum + m.score * m.weight, 0);
+        if (Math.abs(weighted - s.score) > SPEED_RECOMPUTE_TOLERANCE) {
+          offenders.push(
+            `${s.id} — speed score ${s.score} does not match its weighted metrics (${weighted})`,
+          );
+        }
+      }
+
       return offenders.length === 0 ? null : offenders.join(' | ');
     },
   },

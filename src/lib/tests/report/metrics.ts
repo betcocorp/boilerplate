@@ -1,6 +1,21 @@
 import type { CaseConcepts } from './case-concepts';
 import { assertReportInvariants, collectInvariantFailures } from './invariants';
 import type { CaseScore } from './schemas';
+import {
+  combineSpeedScores,
+  formatP90,
+  percentile90,
+  roundSpeedScore,
+  speedRating,
+  SPEED_METRIC_LABELS,
+  SPEED_RATING_BANDS,
+  SPEED_THRESHOLDS,
+  SPEED_WEIGHTS,
+  type SpeedBand,
+  type SpeedMetric,
+  type SpeedRating,
+  type SpeedThresholds,
+} from './speed-rules';
 
 /**
  * Pure TS port of the manual "agent-evaluation" skill's `compute_metrics.py` (B0-453): every
@@ -24,6 +39,9 @@ export const WEIGHTS = {
   relevance: 0.2,
   clarity: 0.1,
 } as const;
+
+/** The shape of `WEIGHTS`, so `./invariants` can be handed them without importing this module. */
+export type SubScoreWeights = typeof WEIGHTS;
 
 export type Grade = 'A' | 'B' | 'C' | 'D' | 'F';
 export type CaseStatus = 'Pass' | 'Partial Pass' | 'Fail';
@@ -216,45 +234,199 @@ function rateBlock(cases: readonly RatedCase[]): RateBlock {
   };
 }
 
-export type LatencyBlock = {
-  unit: 's';
+/** Nearest-lower/upper mean median of an already-ascending list. */
+function medianOf(sorted: number[]): number {
+  const n = sorted.length;
+  return n % 2 === 1 ? sorted[(n - 1) / 2] : round1((sorted[n / 2 - 1] + sorted[n / 2]) / 2);
+}
+
+/**
+ * Which timings a case's Speed Performance Score was actually computed from. Reported rather than
+ * inferred, because a one-metric score and a two-metric score are not the same measurement and a
+ * reader comparing cases has to be able to tell them apart.
+ */
+export type SpeedBasis = 'combined' | 'ttft_only' | 'total_only';
+
+/** One measured metric on one case: the seconds as recorded, its normalized score and its band. */
+export type CaseSpeedMetric = {
+  metric: SpeedMetric;
+  /** Seconds at source precision — converted once, at the assembly boundary, and never again. */
+  seconds: number;
+  score: number;
+  band: SpeedBand;
+  /** The renormalized weight actually applied, so a one-metric score can show its 1.0. */
+  weight: number;
+};
+
+/**
+ * B0-717 — a case's speed, as its own object.
+ *
+ * Deliberately *not* a field on `EvaluatedCase` and deliberately not shaped like a `RateBlock`:
+ * responsiveness is reported beside the content grade and may never be averaged into it
+ * (methodology §7). Keeping it in a separate structure is what makes "speed leaked into the grade"
+ * a type error rather than a review comment.
+ */
+export type CaseSpeed = {
+  id: string;
+  /** Null when that metric was not recorded for this case. Never a zero standing in for absent. */
+  ttft: CaseSpeedMetric | null;
+  total: CaseSpeedMetric | null;
+  score: number;
+  rating: SpeedRating;
+  basis: SpeedBasis;
+};
+
+/** Run-level aggregate for one metric. Every threshold comes from `./speed-rules`. */
+export type SpeedMetricAggregate = {
+  metric: SpeedMetric;
+  /** `SPEED_METRIC_LABELS[metric]` — carried so a renderer never restates the label either. */
+  label: string;
   n: number;
-  avg: number;
-  min: number;
-  max: number;
-  median: number;
-  thresholds: { good: number; slow: number };
+  avgSeconds: number;
+  medianSeconds: number;
+  /** Null below `P90_MIN_N` samples; `p90Label` is then the `n/a` a renderer prints verbatim. */
+  p90Seconds: number | null;
+  p90Label: string;
+  minSeconds: number;
+  maxSeconds: number;
+  avgScore: number;
   bands: { good: number; acceptable: number; slow: number };
+  /** The thresholds actually in force when this run was scored. */
+  thresholds: SpeedThresholds;
+  fastest: Array<{ id: string; seconds: number }>;
   slowest: Array<{ id: string; seconds: number }>;
 };
 
-/** Responsiveness is reported alongside the grade but never blended into it (methodology §7). */
-function latencyBlock(
-  entries: Array<{ id: string; seconds: number }>,
-  goodThreshold = 5,
-  slowThreshold = 10,
-): LatencyBlock | null {
-  if (entries.length === 0) {
-    return null;
+/** The run's speed readout. Null when not one case recorded either timing. */
+export type SpeedBlock = {
+  unit: 's';
+  /** Cases with at least one timing — evaluated and Unable to Evaluate alike. */
+  n: number;
+  metrics: { ttft: SpeedMetricAggregate | null; total: SpeedMetricAggregate | null };
+  avgScore: number;
+  medianScore: number;
+  rating: SpeedRating;
+  /** Every rating in `SPEED_RATING_BANDS` order, including the zero counts, so tables are stable. */
+  ratingDistribution: Array<{ rating: SpeedRating; count: number }>;
+  /** How many cases were scored from both timings versus one. */
+  basisCounts: { combined: number; ttftOnly: number; totalOnly: number };
+  weights: { ttft: number; total: number };
+  perCase: CaseSpeed[];
+};
+
+/** Both timings for one case, already in seconds. Either may be absent; both absent is allowed. */
+export type SpeedTimingInput = {
+  id: string;
+  ttftSeconds: number | null;
+  totalSeconds: number | null;
+};
+
+type MetricSample = { id: string; seconds: number; score: number; band: SpeedBand };
+
+function metricAggregate(
+  metric: SpeedMetric,
+  samples: MetricSample[],
+): SpeedMetricAggregate | null {
+  if (samples.length === 0) return null;
+  const byFastest = [...samples].sort((a, b) => a.seconds - b.seconds);
+  const seconds = byFastest.map((s) => s.seconds);
+  const p90 = percentile90(seconds);
+  return {
+    metric,
+    label: SPEED_METRIC_LABELS[metric],
+    n: samples.length,
+    avgSeconds: round1(seconds.reduce((a, b) => a + b, 0) / samples.length),
+    medianSeconds: medianOf(seconds),
+    p90Seconds: p90 == null ? null : roundSpeedScore(p90),
+    p90Label: formatP90(seconds),
+    minSeconds: seconds[0],
+    maxSeconds: seconds[seconds.length - 1],
+    avgScore: roundSpeedScore(samples.reduce((sum, s) => sum + s.score, 0) / samples.length),
+    bands: {
+      good: samples.filter((s) => s.band === 'good').length,
+      acceptable: samples.filter((s) => s.band === 'acceptable').length,
+      slow: samples.filter((s) => s.band === 'slow').length,
+    },
+    thresholds: SPEED_THRESHOLDS[metric],
+    fastest: byFastest.slice(0, 3).map((s) => ({ id: s.id, seconds: s.seconds })),
+    slowest: [...byFastest]
+      .reverse()
+      .slice(0, 3)
+      .map((s) => ({ id: s.id, seconds: s.seconds })),
+  };
+}
+
+/**
+ * Responsiveness is reported alongside the grade but never blended into it (methodology §7).
+ *
+ * A case with neither timing produces no entry at all — no zero, no imputed average — which is
+ * what lets `speed === null` mean "this run recorded no timings" rather than "this run was slow".
+ * Implausible-seconds advisories are pushed onto the shared `warnings` list with the case id in
+ * front, so a reader can go straight to the offending row.
+ */
+function speedBlock(entries: SpeedTimingInput[], warnings: string[]): SpeedBlock | null {
+  const perCase: CaseSpeed[] = [];
+  const samples: Record<SpeedMetric, MetricSample[]> = { ttft: [], total: [] };
+
+  for (const entry of entries) {
+    const combined = combineSpeedScores({
+      ttftSeconds: entry.ttftSeconds,
+      totalSeconds: entry.totalSeconds,
+    });
+    for (const warning of combined.warnings) warnings.push(`${entry.id}: ${warning}`);
+    if (combined.score == null) continue;
+
+    const scored: Partial<Record<SpeedMetric, CaseSpeedMetric>> = {};
+    for (const m of combined.metrics) {
+      const score = roundSpeedScore(m.score);
+      scored[m.metric] = {
+        metric: m.metric,
+        seconds: m.seconds,
+        score,
+        band: m.band,
+        weight: Math.round(m.weight * 100) / 100,
+      };
+      samples[m.metric].push({ id: entry.id, seconds: m.seconds, score, band: m.band });
+    }
+
+    const score = roundSpeedScore(combined.score);
+    perCase.push({
+      id: entry.id,
+      ttft: scored.ttft ?? null,
+      total: scored.total ?? null,
+      score,
+      // Rated from the *rounded* score the report prints, so the number and the word can never
+      // disagree at a band edge — an 89.96 shown as "90" must not also read "Good".
+      rating: speedRating(score),
+      basis: scored.ttft && scored.total ? 'combined' : scored.ttft ? 'ttft_only' : 'total_only',
+    });
   }
-  const secs = entries.map((e) => e.seconds).sort((a, b) => a - b);
-  const n = secs.length;
-  const median =
-    n % 2 === 1 ? secs[(n - 1) / 2] : round1((secs[n / 2 - 1] + secs[n / 2]) / 2);
-  const good = secs.filter((s) => s <= goodThreshold).length;
-  const slow = secs.filter((s) => s > slowThreshold).length;
-  const acceptable = n - good - slow;
-  const slowest = [...entries].sort((a, b) => b.seconds - a.seconds).slice(0, 3);
+
+  if (perCase.length === 0) return null;
+
+  const scores = perCase.map((c) => c.score);
+  const avgScore = roundSpeedScore(scores.reduce((a, b) => a + b, 0) / scores.length);
   return {
     unit: 's',
-    n,
-    avg: round1(secs.reduce((a, b) => a + b, 0) / n),
-    min: secs[0],
-    max: secs[n - 1],
-    median,
-    thresholds: { good: goodThreshold, slow: slowThreshold },
-    bands: { good, acceptable, slow },
-    slowest,
+    n: perCase.length,
+    metrics: {
+      ttft: metricAggregate('ttft', samples.ttft),
+      total: metricAggregate('total', samples.total),
+    },
+    avgScore,
+    medianScore: medianOf([...scores].sort((a, b) => a - b)),
+    rating: speedRating(avgScore),
+    ratingDistribution: SPEED_RATING_BANDS.map(({ rating }) => ({
+      rating,
+      count: perCase.filter((c) => c.rating === rating).length,
+    })),
+    basisCounts: {
+      combined: perCase.filter((c) => c.basis === 'combined').length,
+      ttftOnly: perCase.filter((c) => c.basis === 'ttft_only').length,
+      totalOnly: perCase.filter((c) => c.basis === 'total_only').length,
+    },
+    weights: { ttft: SPEED_WEIGHTS.ttft, total: SPEED_WEIGHTS.total },
+    perCase,
   };
 }
 
@@ -264,7 +436,14 @@ export type ReportCaseInput = {
   priorityRaw: number | null;
   category: string | null;
   score: CaseScore;
+  /** Total response time in seconds. Null when the run recorded none — never coerced to 0. */
   latencySeconds: number | null;
+  /**
+   * B0-715 — time to first token in seconds. Null for runs that predate `test_result_items.ttft_ms`
+   * or that never streamed; an unrecorded measurement is not a fast one, so it stays null all the
+   * way through and simply drops out of the speed aggregates.
+   */
+  ttftSeconds: number | null;
   /**
    * B0-711 — per-concept verdicts for this case, from grading the harness already persisted.
    * Absent (not empty) when the case has no concepts, which leaves every concept rule a no-op.
@@ -349,7 +528,11 @@ export type ReportMetrics = {
   categories: Array<[string, RateBlock]>;
   strongestCategory: string | null;
   weakestCategory: string | null;
-  latency: LatencyBlock | null;
+  /**
+   * B0-717 — the run's speed readout, replacing the old single-metric `latency` block. Null when
+   * no case recorded either timing. Never part of any grade.
+   */
+  speed: SpeedBlock | null;
   /** Null when no evaluated case carried concept data. */
   concepts: ConceptRollup | null;
   warnings: string[];
@@ -453,11 +636,18 @@ export function computeReportMetrics(
   const ute: UteCase[] = [];
   const evaluated: EvaluatedCase[] = [];
   const warnings: string[] = [];
-  const latencyEntries: Array<{ id: string; seconds: number }> = [];
+  const speedEntries: SpeedTimingInput[] = [];
 
   for (const input of inputs) {
-    if (input.latencySeconds != null) {
-      latencyEntries.push({ id: input.testItemId, seconds: input.latencySeconds });
+    // Collected before the Unable-to-Evaluate branch below, on purpose: a case that could not be
+    // graded was still answered, and how long that took is a real measurement. "Unable to
+    // Evaluate" and "timed" are independent facts in both directions (B0-717).
+    if (input.latencySeconds != null || input.ttftSeconds != null) {
+      speedEntries.push({
+        id: input.testItemId,
+        ttftSeconds: input.ttftSeconds,
+        totalSeconds: input.latencySeconds,
+      });
     }
 
     if (input.score.unableToEvaluate) {
@@ -563,7 +753,7 @@ export function computeReportMetrics(
     }
   }
 
-  const latency = latencyBlock(latencyEntries);
+  const speed = speedBlock(speedEntries, warnings);
 
   if (warnings.length > 0) {
     console.warn('[report-metrics]', warnings.join('; '));
@@ -580,6 +770,11 @@ export function computeReportMetrics(
     overall,
     tiers,
     categories,
+    speed,
+    // Passed in rather than imported by `./invariants`, so the check that a content score still
+    // recomputes from its four sub-scores reads the same constant the computation used without
+    // introducing a runtime import cycle between the two modules.
+    weights: WEIGHTS,
   };
   if (options?.invariantSeverity === 'warn') {
     warnings.push(...collectInvariantFailures(invariantContext));
@@ -600,7 +795,7 @@ export function computeReportMetrics(
     categories,
     strongestCategory,
     weakestCategory,
-    latency,
+    speed,
     concepts: conceptRollup(evaluated),
     warnings,
   };

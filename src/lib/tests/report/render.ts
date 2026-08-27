@@ -7,8 +7,20 @@ import {
   formatConceptList,
 } from './case-concepts';
 import { normalizeAgentMarkdownLists } from './markdown-normalize';
-import type { EvaluatedCase, RateBlock, ReportMetrics } from './metrics';
+import type {
+  CaseSpeed,
+  EvaluatedCase,
+  RateBlock,
+  ReportMetrics,
+  SpeedMetricAggregate,
+} from './metrics';
 import type { CaseScore, ReportSynthesis } from './schemas';
+import {
+  P90_MIN_N,
+  P90_UNAVAILABLE_LABEL,
+  SPEED_METRIC_LABELS,
+  SPEED_METRICS,
+} from './speed-rules';
 
 /**
  * Renders the "agent-evaluation" methodology's two Word documents (executive summary + detailed
@@ -36,7 +48,8 @@ export type CaseRenderDetail = {
   expectedShouldAnswer: boolean | null;
   actual: string;
   score: CaseScore;
-  latencySeconds: number | null;
+  /** B0-717 — null when this case recorded no timing at all. Read, never re-derived. */
+  speed: CaseSpeed | null;
   harness: CaseHarnessAside | null;
 };
 
@@ -107,17 +120,34 @@ function formatExpected(c: CaseRenderDetail): string {
   return parts.length > 0 ? parts.join('\n\n') : '_(no expected answer recorded)_';
 }
 
-export type LatencyBand = 'good' | 'acceptable' | 'slow';
+/**
+ * B0-718 — the one line of speed a case gets, and the reason it is a *sentence* rather than a
+ * column: it sits below the score table, never inside it, so nothing here can be read as part of
+ * the content grade. Rating words are printed verbatim (never mapped onto A–F), and every number
+ * comes off `metrics.speed`, which is where it was rounded.
+ */
+function caseSpeedLine(speed: CaseSpeed): string {
+  const parts = SPEED_METRICS.map((metric) => {
+    const m = metric === 'ttft' ? speed.ttft : speed.total;
+    if (!m) return null;
+    return `${SPEED_METRIC_LABELS[metric]} ${m.seconds} s — ${m.score}/100 (${m.band})`;
+  }).filter((part): part is string => part !== null);
 
-/** Which responsiveness band a case's latency falls in. Exported so the B0-586 data contract can
- * surface the same band the Markdown prints, rather than re-deriving it from the thresholds. */
-export function latencyBandLabel(
-  seconds: number,
-  thresholds: { good: number; slow: number },
-): LatencyBand {
-  if (seconds <= thresholds.good) return 'good';
-  if (seconds > thresholds.slow) return 'slow';
-  return 'acceptable';
+  parts.push(`Speed Performance Score ${speed.score}/100 (${speed.rating})`);
+  if (speed.basis !== 'combined') {
+    const measured = speed.basis === 'ttft_only' ? 'ttft' : 'total';
+    const absent = speed.basis === 'ttft_only' ? 'total' : 'ttft';
+    parts.push(
+      `scored from ${SPEED_METRIC_LABELS[measured]} alone — no ${SPEED_METRIC_LABELS[absent]} was recorded`,
+    );
+  }
+
+  return `**Speed (reported separately; not part of the content grade):** ${parts.join(' · ')}`;
+}
+
+/** One row of the per-metric speed table. `p90Label` already carries the `n/a` sentinel. */
+function speedMetricRow(aggregate: SpeedMetricAggregate, unit: string): string {
+  return `| ${aggregate.label} | ${aggregate.n} | ${aggregate.avgSeconds} ${unit} | ${aggregate.medianSeconds} ${unit} | ${aggregate.p90Label} | ${aggregate.minSeconds}–${aggregate.maxSeconds} ${unit} | ${aggregate.avgScore} | ${aggregate.bands.good} / ${aggregate.bands.acceptable} / ${aggregate.bands.slow} |`;
 }
 
 function rateRow(name: string, block: RateBlock): string {
@@ -219,18 +249,69 @@ export function renderReportMarkdown(params: {
   );
   blank();
 
-  // --- Responsiveness ---
-  if (m.latency) {
-    const lat = m.latency;
-    push('## Responsiveness (reported separately — not part of the grade)');
+  // --- Responsiveness (B0-718) ---
+  // Kept below the grade tables and titled so it can never be mistaken for one of them. The
+  // heading's parenthetical is load-bearing: as this section grew from one number to two metrics
+  // and a score, "not part of the grade" is the sentence that stops a reader adding them up.
+  push('## Responsiveness (reported separately — not part of the grade)');
+  blank();
+  if (!m.speed) {
+    push(
+      'Timing data was unavailable for this run — no case recorded a time to first token or a total response time, so no speed figures are reported.',
+    );
     blank();
+  } else {
+    const sp = m.speed;
+    const unit = sp.unit;
+
     push(
-      `Average response time: **${lat.avg} s** (range ${lat.min}–${lat.max} s, median ${lat.median} s, n=${lat.n}).`,
+      `**Speed Performance Score: ${sp.avgScore}/100 (${sp.rating})** — median ${sp.medianScore}/100 across ${sp.n} timed case${sp.n === 1 ? '' : 's'}. This is a responsiveness score on its own 0–100 scale, rated in words; it is never converted to a letter grade and never enters the content score.`,
     );
+    blank();
+
+    push(`| Metric | n | Average | Median | P90 | Range | Avg score | Good / acceptable / slow |`);
+    push('|---|---|---|---|---|---|---|---|');
+    for (const metric of SPEED_METRICS) {
+      const aggregate = metric === 'ttft' ? sp.metrics.ttft : sp.metrics.total;
+      if (aggregate) push(speedMetricRow(aggregate, unit));
+    }
+    blank();
+
     push(
-      `Bands (good ≤ ${lat.thresholds.good} s · acceptable ≤ ${lat.thresholds.slow} s · slow > ${lat.thresholds.slow} s): **${lat.bands.good} good, ${lat.bands.acceptable} acceptable, ${lat.bands.slow} slow**.`,
+      `Ratings: ${sp.ratingDistribution.map((r) => `${r.count} ${r.rating}`).join(' · ')}.`,
     );
-    push(`Slowest: ${lat.slowest.map((s) => `${idLink(s.id)} (${s.seconds} s)`).join(', ')}.`);
+
+    for (const metric of SPEED_METRICS) {
+      const aggregate = metric === 'ttft' ? sp.metrics.ttft : sp.metrics.total;
+      if (!aggregate) continue;
+      push(
+        `${aggregate.label} — fastest: ${aggregate.fastest.map((s) => `${idLink(s.id)} (${s.seconds} ${unit})`).join(', ')} · slowest: ${aggregate.slowest.map((s) => `${idLink(s.id)} (${s.seconds} ${unit})`).join(', ')}.`,
+      );
+    }
+
+    // Named explicitly rather than left to inference: a one-metric score and a two-metric score
+    // are different measurements, and a reader comparing cases has to be able to tell.
+    if (sp.basisCounts.ttftOnly > 0 || sp.basisCounts.totalOnly > 0) {
+      push(
+        `Partial timings: ${sp.basisCounts.combined} case${sp.basisCounts.combined === 1 ? '' : 's'} scored from both timings, ${sp.basisCounts.ttftOnly} from ${SPEED_METRIC_LABELS.ttft} alone and ${sp.basisCounts.totalOnly} from ${SPEED_METRIC_LABELS.total} alone (the remaining weight is renormalized, never imputed).`,
+      );
+    }
+    blank();
+
+    // The thresholds actually in force, printed from the constants rather than restated as prose.
+    push(
+      `_Weighting: ${SPEED_METRIC_LABELS.ttft} ${sp.weights.ttft} · ${SPEED_METRIC_LABELS.total} ${sp.weights.total}. Bands in force — ${SPEED_METRICS.map(
+        (metric) => {
+          const aggregate = metric === 'ttft' ? sp.metrics.ttft : sp.metrics.total;
+          const thresholds = aggregate?.thresholds;
+          return thresholds
+            ? `${SPEED_METRIC_LABELS[metric]}: good ≤ ${thresholds.good} ${unit}, acceptable ≤ ${thresholds.acceptable} ${unit}, slow > ${thresholds.acceptable} ${unit}`
+            : null;
+        },
+      )
+        .filter(Boolean)
+        .join(' · ')}. P90 is reported as ${P90_UNAVAILABLE_LABEL} below ${P90_MIN_N} samples._`,
+    );
     blank();
   }
 
@@ -359,7 +440,7 @@ export function renderReportMarkdown(params: {
   push('## Detailed results — case by case');
   blank();
   push(
-    '_Response time and harness signal (below, where present) are reported for reference only and are not part of the grade._',
+    '_Speed and harness signal (below, where present) are reported for reference only and are not part of the grade._',
   );
   blank();
   for (const c of orderedCases) {
@@ -375,6 +456,12 @@ export function renderReportMarkdown(params: {
       push('**Status:** Unable to Evaluate _(excluded from all scores and rates)_');
       push(`**Reason:** ${c.score.uteReason ?? 'unspecified'}`);
       blank();
+      // Unable to Evaluate and timed are independent: the case still got an answer, and how long
+      // that took is a real measurement that counts in the run's speed aggregates.
+      if (c.speed) {
+        push(caseSpeedLine(c.speed));
+        blank();
+      }
       push(`**Expected answer / behavior:**\n\n${formatExpected(c)}`);
       blank();
       push(`**Agent's actual response:**\n\n${mdBlock(normalizeAgentMarkdownLists(c.actual))}`);
@@ -426,9 +513,9 @@ export function renderReportMarkdown(params: {
       }
     }
 
-    if (c.latencySeconds != null && m.latency) {
-      const band = latencyBandLabel(c.latencySeconds, m.latency.thresholds);
-      push(`**Response time:** ${c.latencySeconds} s (${band})`);
+    // Placed after the score table, never inside it (B0-718).
+    if (c.speed) {
+      push(caseSpeedLine(c.speed));
       blank();
     }
 
