@@ -25,3 +25,15 @@ export const ROUTING_TEST_ACCURACY_TONE_CLASSES: Record<RoutingTestAccuracyTone,
   neutral: 'text-slate-900',
   bad: 'text-red-700',
 };
+
+/**
+ * B0-698 — one chart color per router type, used by `RoutingTestRunCharts.tsx` for both the
+ * per-router bars and the per-router trend lines so a router keeps the same identity across all
+ * three charts. Distinct from `ROUTING_TEST_ACCURACY_TONE_CLASSES`, which encodes how GOOD a score
+ * is rather than WHICH router produced it.
+ */
+export const ROUTING_TEST_ROUTER_COLORS = {
+  keyword: '#0ea5e9',
+  semantic: '#a855f7',
+  llm: '#16a34a',
+} as const satisfies Record<keyof typeof ROUTING_TEST_ROUTER_LABELS, string>;

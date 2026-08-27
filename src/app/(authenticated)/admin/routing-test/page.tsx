@@ -1,6 +1,7 @@
 import { connection } from 'next/server';
 
 import { RoutingTestActionToast } from '~/components/admin/routing-test/RoutingTestActionToast';
+import { RoutingTestRunCharts } from '~/components/admin/routing-test/RoutingTestRunCharts';
 import { RoutingTestWorkbench } from '~/components/admin/routing-test/RoutingTestWorkbench';
 import { ROUTING_TEST_PATH } from '~/lib/routing-test/constants';
 import {
@@ -57,6 +58,12 @@ export default async function AdminRoutingTestPage({ searchParams }: PageProps) 
             below.
           </p>
         </section>
+
+        {/*
+          B0-698 — router comparison charts over the same persisted runs the history table below
+          renders. Omitted entirely with no runs; the run-history section owns that empty state.
+        */}
+        {runs.length > 0 ? <RoutingTestRunCharts runs={runs} /> : null}
 
         <RoutingTestWorkbench
           defaultRouterType={defaultRouterType}
