@@ -1,6 +1,11 @@
 import { parse } from 'csv-parse/sync';
 
 import type { CriteriaTier, ExpectedCriterion } from './criteria-schemas';
+import {
+  MULTI_TURN_PAYLOAD_KEY,
+  multiTurnScenarioSchema,
+  type MultiTurnScenario,
+} from './multi-turn';
 import type { ParsedCsvRow } from './types';
 
 function asTrimmedString(value: unknown) {
@@ -93,6 +98,8 @@ const TYPED_CSV_COLUMNS = new Set([
   'expected_sources',
   'should_cite',
   'expected_tool',
+  // B0-537 — routed into `input_payload.multi_turn`, not `metadata`, by `parseMultiTurnJsonCell`.
+  'multi_turn_json',
 ]);
 
 /** CSV columns routed into `input_payload` rather than `metadata`. */
@@ -156,6 +163,71 @@ export function parseExpectedCriteriaFromForm(value: string): ExpectedCriterion[
   return parseExpectedCriteriaCell(value);
 }
 
+/**
+ * B0-537 — CSV escape hatch for a multi-turn scenario: the whole
+ * `multiTurnScenarioSchema` document in one `multi_turn_json` cell. The primary authoring path is
+ * the JSON scenario-set importer (`./multi-turn-import.ts`); this exists so a single scenario can
+ * ride along in an otherwise-normal CSV.
+ *
+ * Tolerant like `parseExpectedCriteriaCell`: a blank, unparseable, or schema-invalid cell yields
+ * `null` (the row imports as an ordinary single-turn prompt) rather than failing a 200-row upload.
+ * The runner is the backstop — a scenario that IS stored but invalid is reported as a failed row,
+ * never silently downgraded.
+ */
+export function parseMultiTurnJsonCell(value: string): MultiTurnScenario | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  try {
+    const parsed = multiTurnScenarioSchema.safeParse(JSON.parse(trimmed));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Inverse of {@link parseMultiTurnJsonCell} — compact one-line JSON for CSV export. */
+export function formatMultiTurnJsonCell(scenario: MultiTurnScenario | null): string {
+  return scenario ? JSON.stringify(scenario) : '';
+}
+
+/**
+ * The add/edit prompt dialog's multi-turn field. Unlike the CSV cell this is STRICT: one
+ * interactive row has one author watching, so a typo must be reported rather than silently dropped.
+ * Blank clears the row back to a single-turn prompt.
+ */
+export function parseMultiTurnJsonFromForm(
+  value: string,
+): { ok: true; scenario: MultiTurnScenario | null } | { ok: false; message: string } {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return { ok: true, scenario: null };
+  }
+
+  let raw: unknown;
+  try {
+    raw = JSON.parse(trimmed);
+  } catch (error) {
+    return {
+      ok: false,
+      message: `Multi-turn scenario is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+
+  const parsed = multiTurnScenarioSchema.safeParse(raw);
+  if (!parsed.success) {
+    const issues = parsed.error.issues
+      .slice(0, 3)
+      .map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`)
+      .join('; ');
+    return { ok: false, message: `Multi-turn scenario is invalid — ${issues}` };
+  }
+
+  return { ok: true, scenario: parsed.data };
+}
+
 export function parseTestCsvContent(content: string): ParsedCsvRow[] {
   const records = parse(content, {
     columns: true,
@@ -194,8 +266,11 @@ export function parseTestCsvContent(content: string): ParsedCsvRow[] {
       const expectedSources = asTrimmedString(record.expected_sources) || null;
       const shouldCite = parseBooleanCell(asTrimmedString(record.should_cite));
       const expectedTool = asTrimmedString(record.expected_tool) || null;
+      const multiTurnScenario = parseMultiTurnJsonCell(
+        asTrimmedString(record.multi_turn_json),
+      );
 
-      const inputPayload: Record<string, string> = {};
+      const inputPayload: ParsedCsvRow['inputPayload'] = {};
       const metadata: Record<string, string> = {};
 
       for (const [key, value] of Object.entries(record)) {
@@ -218,6 +293,15 @@ export function parseTestCsvContent(content: string): ParsedCsvRow[] {
         metadata[normalizedKey] = normalizedValue;
       }
 
+      if (multiTurnScenario) {
+        // Same storage key the JSON importer and the runner use — there is only one place a
+        // scenario ever lives.
+        inputPayload[MULTI_TURN_PAYLOAD_KEY] = JSON.parse(
+          JSON.stringify(multiTurnScenario),
+        );
+        metadata.multi_turn_turn_count = String(multiTurnScenario.turns.length);
+      }
+
       return {
         rowIndex,
         prompt,
@@ -234,6 +318,7 @@ export function parseTestCsvContent(content: string): ParsedCsvRow[] {
         expectedSources,
         shouldCite,
         expectedTool,
+        multiTurnScenario,
         inputPayload,
         metadata,
       } satisfies ParsedCsvRow;

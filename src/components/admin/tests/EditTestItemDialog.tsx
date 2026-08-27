@@ -18,6 +18,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '~/components/ui/dialog';
+import { formatMultiTurnScenarioForEditing } from '~/lib/tests/multi-turn-display';
 import type { Json } from '~/types/supabase.public';
 
 type EditTestItemDialogProps = {
@@ -153,6 +154,8 @@ export function EditTestItemDialog({
                 productMention: payloadString(inputPayload, 'product_mention'),
                 questionCategory: payloadString(inputPayload, 'question_category'),
                 sourceStyle: payloadString(inputPayload, 'source_style'),
+                // B0-537 — pretty-printed so the scenario is actually editable in a textarea.
+                multiTurnJson: formatMultiTurnScenarioForEditing(inputPayload),
               }}
               suggestionLists={suggestionLists}
             />

@@ -93,6 +93,8 @@ describe('parseTestCsvContent — golden test set format', () => {
       'expected_sources',
       'should_cite',
       'expected_tool',
+      // B0-537 — optional multi-turn scenario escape hatch.
+      'multi_turn_json',
     ]);
     // The template's example row is prose, so only the prompt is expected to survive typed parsing.
     expect(row.prompt).toContain('Enter the prompt/question to test');

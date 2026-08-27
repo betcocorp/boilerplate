@@ -129,6 +129,14 @@ export const TEST_TEMPLATE_COLUMNS: TestTemplateColumn[] = [
     help:
       "Which of the 14 product-support function tools (search_product_docs, get_efficacy_data, lookup_cross_reference, etc.) this question is expected to call, scored by the run detail page's Tool routing panel (B0-383). Leave blank for no routing expectation.",
   },
+  {
+    name: 'multi_turn_json',
+    required: false,
+    example:
+      '{"version":1,"title":"Follow-up keeps the product","turns":[{"prompt":"What is pH7Q used for?"},{"prompt":"Is it safe on sealed concrete?","expectations":{"should_answer":true}}],"assertions":[{"type":"context_carry","from_turn":1,"turn":2,"anchor":"pH7Q"}]}',
+    help:
+      'Optional multi-turn scenario (B0-537) for this row, as one JSON object: an ordered "turns" array (2 or more) plus optional cross-turn "assertions" (context_carry, no_reask, consistent_product_anchor, mentions, not_mentions). The row is then replayed turn by turn in one conversation and graded across turns. Leave blank for an ordinary single-turn prompt. For whole scenario SETS, upload a .json file instead of a CSV — that is the primary path.',
+  },
 ];
 
 export const TEST_TEMPLATE_FILENAME = 'bex-test-set-template.csv';

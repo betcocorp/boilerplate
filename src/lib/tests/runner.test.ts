@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { gradeChatTestResponse as gradeFromGradingModule } from './grading';
+import { parseMultiTurnFromInputPayload } from './multi-turn';
 import { gradeChatTestResponse } from './runner';
 import type { TestItemRecord } from './types';
 
@@ -180,6 +182,35 @@ describe('gradeChatTestResponse', () => {
       });
 
       expect(outcome.passed).toBe(false);
+    });
+  });
+  /**
+   * B0-537 / B0-538 — single-turn grading must be BYTE-IDENTICAL after (a) the runner/grading
+   * dedupe and (b) the multi-turn dispatch. The identity assertion is the strongest available
+   * proof for (a): `runner.gradeChatTestResponse` is now literally the `./grading` function, not a
+   * second copy that could drift. (b) is covered by the `parseMultiTurnFromInputPayload` cases —
+   * every payload shape the existing corpus actually uses resolves to `single_turn`, so those rows
+   * never reach the multi-turn path at all.
+   */
+  describe('B0-537 — single-turn grading is unchanged', () => {
+    it('runner.gradeChatTestResponse IS the ./grading implementation (no second copy)', () => {
+      expect(gradeChatTestResponse).toBe(gradeFromGradingModule);
+    });
+
+    it.each([
+      ['null input_payload', null],
+      ['empty object', {}],
+      ['the real CSV-imported shape', { product_mention: 'pH7Q', question_category: 'dilution' }],
+      ['a non-object payload', 'not an object'],
+      ['an array payload', [1, 2, 3]],
+      ['an explicit null multi_turn key', { multi_turn: null }],
+    ])('treats %s as single-turn', (_label, payload) => {
+      expect(parseMultiTurnFromInputPayload(payload).kind).toBe('single_turn');
+    });
+
+    it('reports a present-but-invalid scenario instead of silently running it single-turn', () => {
+      const parsed = parseMultiTurnFromInputPayload({ multi_turn: { version: 1, turns: [] } });
+      expect(parsed.kind).toBe('invalid');
     });
   });
 });

@@ -115,8 +115,12 @@ async function gradeSemanticCriteria(params: {
  * "4.0 oz/gal" or "40 oz/gal". This is the deterministic guardrail the business case calls
  * out as the highest-stakes payoff: a judge that "mostly" catches a wrong dilution ratio is
  * not an acceptable control.
+ *
+ * B0-538 — exported so the multi-turn evaluator routes every regulated-looking expectation term
+ * (dilution ratios, oz/gal, mL/L, ppm, %, contact times, CAS/EPA numbers, log reductions) through
+ * this exact same literal check rather than its own case-insensitive `mentions` matching.
  */
-function gradeExactCriterion(concept: string, responseText: string): CriterionVerdict {
+export function gradeExactCriterion(concept: string, responseText: string): CriterionVerdict {
   const found = responseText.includes(concept);
   return {
     criterionIndex: -1, // caller overwrites with the real index
