@@ -2,6 +2,7 @@
 
 import { KeyRound, Loader2 } from 'lucide-react';
 import { useActionState, useState } from 'react';
+import { toast } from 'sonner';
 
 import { TokenReveal } from '~/components/admin/projects/TokenReveal';
 import { formatDate, formatLastUsed } from '~/components/admin/projects/format';
@@ -105,10 +106,33 @@ function IssueTokenDialog({ projectId, appId }: { projectId: string; appId: stri
 
 function TokenRow({ projectId, appId, token }: { projectId: string; appId: string; token: TokenView }) {
   const [state, revoke, pending] = useActionState<SimpleActionState, FormData>(revokeTokenAction, null);
+
+  const handleCopyPrefix = async () => {
+    try {
+      await navigator.clipboard.writeText(token.prefix);
+      toast.success('Token prefix copied to clipboard');
+    } catch {
+      toast.error('Failed to copy prefix to clipboard');
+    }
+  };
+
   return (
     <TableRow className="border-border/60">
       <TableCell className="font-medium">{token.label ?? '—'}</TableCell>
-      <TableCell className="font-mono text-xs text-muted-foreground">{token.prefix}…</TableCell>
+      <TableCell
+        className="cursor-pointer font-mono text-xs text-muted-foreground hover:text-foreground"
+        onClick={handleCopyPrefix}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            handleCopyPrefix();
+          }
+        }}
+      >
+        {token.prefix}…
+      </TableCell>
       <TableCell className="text-muted-foreground">{formatDate(token.createdAt)}</TableCell>
       <TableCell className="text-muted-foreground">{formatLastUsed(token.lastUsedAt)}</TableCell>
       <TableCell>
