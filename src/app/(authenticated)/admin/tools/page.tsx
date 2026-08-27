@@ -23,6 +23,13 @@ const tools = [
     icon: Boxes,
   },
   {
+    title: 'Web Endpoints',
+    description:
+      'Complete documentation for all API endpoints—Bex chat, orchestrator, agents, tools, RAG search, and admin utilities with authentication and parameter details.',
+    href: '/admin/tools/web-endpoints',
+    icon: Globe,
+  },
+  {
     title: 'Cross-reference',
     description:
       'Test competitor → Betco lookups against legacy tables, browse the 1:1 mappings, and review web-grounded recommendations before promotion—the pipeline behind lookup_cross_reference and recommend_cross_reference.',

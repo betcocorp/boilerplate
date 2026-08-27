@@ -13,6 +13,7 @@ import {
   toNotGeneratedPayload,
   toReportDataPayload,
 } from './assemble';
+import { splitConceptPhrases } from './case-concepts';
 import { reportDataResponseSchema, type ReportDataReady } from './data-schemas';
 import { caseAnchorId, renderReportMarkdown } from './render';
 import type { CaseScore, ReportSynthesis } from './schemas';
@@ -96,6 +97,7 @@ function resultItem(
     status: 'ok',
     passed: true,
     elapsed_ms: 3200,
+    ttft_ms: null,
     error_message: null,
     response_text: null,
     response_payload: null,
@@ -168,6 +170,7 @@ const RESULT_ITEMS: TestResultItemRecord[] = [
   resultItem({
     test_item_id: CASE_A,
     elapsed_ms: 3200,
+    ttft_ms: 1200,
     passed: true,
     status: 'ok',
     response_text: `  ${REGULATED.dilution} ${REGULATED.metric}  `,
@@ -180,6 +183,8 @@ const RESULT_ITEMS: TestResultItemRecord[] = [
     },
     workflow_run_id: 'wf-aaa',
   }),
+  // CASE_B keeps the default `ttft_ms: null` — an older attempt that predates the streaming
+  // instrumentation, so its speed is scored from the total alone rather than a zero-filled TTFT.
   resultItem({
     test_item_id: CASE_B,
     elapsed_ms: 7500,
@@ -190,6 +195,7 @@ const RESULT_ITEMS: TestResultItemRecord[] = [
   resultItem({
     test_item_id: CASE_C,
     elapsed_ms: 12000,
+    ttft_ms: 4000,
     passed: false,
     status: 'failed',
     response_text: REGULATED.concentration,
@@ -356,23 +362,38 @@ describe('assembleReportData → report data contract', () => {
       `_Strongest: ${m.strongestCategory} · Weakest: ${m.weakestCategory}_`,
     );
 
-    // --- Responsiveness ---
-    const lat = m.latency!;
+    // --- Responsiveness (B0-717/B0-718) ---
+    const sp = m.speed!;
     check(
-      'metrics.latency (summary line)',
-      `Average response time: **${lat.avg} s** (range ${lat.min}–${lat.max} s, median ${lat.median} s, n=${lat.n}).`,
+      'metrics.speed (headline)',
+      `**Speed Performance Score: ${sp.avgScore}/100 (${sp.rating})** — median ${sp.medianScore}/100 across ${sp.n} timed cases.`,
     );
-    check(
-      'metrics.latency.thresholds/bands',
-      `Bands (good ≤ ${lat.thresholds.good} s · acceptable ≤ ${lat.thresholds.slow} s · slow > ${lat.thresholds.slow} s): **${lat.bands.good} good, ${lat.bands.acceptable} acceptable, ${lat.bands.slow} slow**.`,
-    );
-    for (const slowest of lat.slowest) {
+    for (const aggregate of [sp.metrics.ttft!, sp.metrics.total!]) {
       check(
-        `metrics.latency.slowest[${slowest.id}]`,
-        `[${slowest.id}](#${caseAnchorId(slowest.id)}) (${slowest.seconds} s)`,
+        `metrics.speed.metrics.${aggregate.metric} (table row)`,
+        `| ${aggregate.label} | ${aggregate.n} | ${aggregate.avgSeconds} ${sp.unit} | ${aggregate.medianSeconds} ${sp.unit} | ${aggregate.p90Label} | ${aggregate.minSeconds}–${aggregate.maxSeconds} ${sp.unit} | ${aggregate.avgScore} | ${aggregate.bands.good} / ${aggregate.bands.acceptable} / ${aggregate.bands.slow} |`,
+      );
+      check(
+        `metrics.speed.metrics.${aggregate.metric} (extremes)`,
+        `${aggregate.label} — fastest: ${aggregate.fastest.map((e) => `[${e.id}](#${caseAnchorId(e.id)}) (${e.seconds} ${sp.unit})`).join(', ')} · slowest: ${aggregate.slowest.map((e) => `[${e.id}](#${caseAnchorId(e.id)}) (${e.seconds} ${sp.unit})`).join(', ')}.`,
+      );
+      check(
+        `metrics.speed.metrics.${aggregate.metric}.thresholds`,
+        `${aggregate.label}: good ≤ ${aggregate.thresholds.good} ${sp.unit}, acceptable ≤ ${aggregate.thresholds.acceptable} ${sp.unit}, slow > ${aggregate.thresholds.acceptable} ${sp.unit}`,
       );
     }
-    check('metrics.latency.unit', ` ${lat.unit}`);
+    check(
+      'metrics.speed.ratingDistribution',
+      `Ratings: ${sp.ratingDistribution.map((r) => `${r.count} ${r.rating}`).join(' · ')}.`,
+    );
+    check(
+      'metrics.speed.basisCounts',
+      `Partial timings: ${sp.basisCounts.combined} cases scored from both timings, ${sp.basisCounts.ttftOnly} from TTFT alone and ${sp.basisCounts.totalOnly} from Total response time alone`,
+    );
+    check(
+      'metrics.speed.weights',
+      `_Weighting: TTFT ${sp.weights.ttft} · Total response time ${sp.weights.total}.`,
+    );
 
     // --- Top 3 ---
     for (const rec of s.top3) {
@@ -425,9 +446,21 @@ describe('assembleReportData → report data contract', () => {
         `| ${e.accuracy} | ${e.completeness} | ${e.relevance} | ${e.clarity} | ${e.overall}/100 | ${e.grade} | ${e.status} |`,
       );
       check(`case[${c.id}] glance row`, `| ${c.tier} | ${e.overall} | ${e.grade} | ${e.status} |`);
+      const speed = c.speed!;
       check(
-        `case[${c.id}].latencySeconds/latencyBand`,
-        `**Response time:** ${c.latencySeconds} s (${c.latencyBand})`,
+        `case[${c.id}].speed`,
+        `**Speed (reported separately; not part of the content grade):** ${[
+          speed.ttft ? `TTFT ${speed.ttft.seconds} s — ${speed.ttft.score}/100 (${speed.ttft.band})` : null,
+          speed.total
+            ? `Total response time ${speed.total.seconds} s — ${speed.total.score}/100 (${speed.total.band})`
+            : null,
+          `Speed Performance Score ${speed.score}/100 (${speed.rating})`,
+          speed.basis === 'total_only'
+            ? 'scored from Total response time alone — no TTFT was recorded'
+            : null,
+        ]
+          .filter(Boolean)
+          .join(' · ')}`,
       );
       if (c.harness) {
         check(
@@ -563,12 +596,25 @@ describe('assembleReportData → report data contract', () => {
     expect(a.evaluated!.overall).toBe(91);
     expect(a.latencyMs).toBe(3200);
     expect(a.latencySeconds).toBe(3.2);
+    // B0-715 — ms → s exactly once, at the assembly boundary.
+    expect(a.ttftMs).toBe(1200);
+    expect(a.ttftSeconds).toBe(1.2);
     expect(a.harness).toEqual({ passed: true, status: 'ok', similarity: 0.83 });
     expect(a.retrievedDocumentIds).toEqual(['doc-label-1', 'doc-sds-9']);
     expect(a.workflowRunId).toBe('wf-aaa');
-    expect(a.latencyBand).toBe('good');
-    expect(byId.get(CASE_B)!.latencyBand).toBe('acceptable');
-    expect(byId.get(CASE_C)!.latencyBand).toBe('slow');
+    expect(a.speed!.total!.band).toBe('good');
+    expect(a.speed!.ttft!.band).toBe('good');
+    expect(a.speed!.basis).toBe('combined');
+    // CASE_B recorded no first token: total only, and no zero stood in for the missing metric.
+    const bSpeed = byId.get(CASE_B)!;
+    expect(bSpeed.ttftMs).toBeNull();
+    expect(bSpeed.ttftSeconds).toBeNull();
+    expect(bSpeed.speed!.basis).toBe('total_only');
+    expect(bSpeed.speed!.ttft).toBeNull();
+    expect(bSpeed.speed!.total!.band).toBe('acceptable');
+    expect(byId.get(CASE_C)!.speed!.total!.band).toBe('slow');
+    // CASE_D has no result row at all, so it has no speed entry — not a zero-scored one.
+    expect(byId.get(CASE_D)!.speed).toBeNull();
   });
 
   it('marks a report stale when the dataset gained items after generation', () => {
@@ -621,5 +667,359 @@ describe('assembleReportData → report data contract', () => {
       expect(inProgress.completedCases).toBe(15);
       expect(inProgress.totalCases).toBe(40);
     }
+  });
+});
+
+/**
+ * B0-711 — the concept block is threaded in from the criteria grading the *run* persisted
+ * (`test_result_items.response_payload.criteriaGrading`), not from a second grader call. These
+ * cases use their own fixture so the contract walk above keeps exercising the concept-free path
+ * that every legacy run takes.
+ */
+describe('assembleReportCases → per-concept verdicts (B0-711)', () => {
+  const CASE_CRITERIA = '55555555-eeee-4eee-8eee-eeeeeeeeeeee';
+  const CASE_NO_CRITERIA = '66666666-ffff-4fff-8fff-ffffffffffff';
+  const CASE_EXACT_MISS = '77777777-9999-4999-8999-999999999999';
+
+  /** `criteriaGrading` exactly as `~/lib/tests/runner.ts` writes it onto the payload. */
+  function grading(
+    verdicts: Array<{
+      concept: string;
+      tier: 1 | 2 | 3;
+      match: 'semantic' | 'exact';
+      met: boolean;
+    }>,
+  ) {
+    return {
+      criteriaGrading: {
+        passed: verdicts.every((v) => v.tier !== 1 || v.met),
+        score: 0.5,
+        failureReason: null,
+        verdicts: verdicts.map((v, index) => ({
+          criterionIndex: index,
+          met: v.met,
+          evidence: v.met ? 'quoted' : '',
+          concept: v.concept,
+          tier: v.tier,
+          match: v.match,
+        })),
+      },
+    };
+  }
+
+  const CONCEPT_ITEMS: TestItemRecord[] = [
+    item({
+      id: CASE_CRITERIA,
+      row_index: 0,
+      prompt: 'What is the dilution ratio and dwell time?',
+      prompt_category: 'Dilution',
+      priority: 1,
+      // Free text is present too — the block must still come from the verdicts, not from here.
+      minimum_concepts: 'States the 1:64 ratio | States the 10 minute dwell',
+      expected_concepts: 'States the 1:64 ratio | States the 10 minute dwell | Metric equivalent',
+    }),
+    item({
+      id: CASE_NO_CRITERIA,
+      row_index: 1,
+      prompt: 'Is this product registered in Canada?',
+      prompt_category: 'Registration',
+      priority: 1,
+      minimum_concepts: 'Names the DIN',
+    }),
+    item({
+      id: CASE_EXACT_MISS,
+      row_index: 2,
+      prompt: 'Quote the EPA registration number.',
+      prompt_category: 'Registration',
+      priority: 2,
+    }),
+  ];
+
+  const CONCEPT_RESULT_ITEMS: TestResultItemRecord[] = [
+    resultItem({
+      test_item_id: CASE_CRITERIA,
+      response_text: REGULATED.dilution,
+      response_payload: grading([
+        { concept: 'Dilute 1:64 (2 oz/gal)', tier: 1, match: 'semantic', met: true },
+        { concept: REGULATED.contactTime, tier: 1, match: 'semantic', met: false },
+        { concept: REGULATED.metric, tier: 3, match: 'semantic', met: true },
+      ]),
+    }),
+    resultItem({
+      test_item_id: CASE_NO_CRITERIA,
+      response_text: 'Registered in Canada.',
+      response_payload: { sources: [] },
+    }),
+    resultItem({
+      test_item_id: CASE_EXACT_MISS,
+      response_text: REGULATED.epa,
+      response_payload: grading([
+        { concept: 'Names the product', tier: 1, match: 'semantic', met: true },
+        { concept: REGULATED.epa, tier: 2, match: 'exact', met: false },
+      ]),
+    }),
+  ];
+
+  const CONCEPT_SCORES: Record<string, CaseScore> = {
+    [CASE_CRITERIA]: score({ accuracy: 84, completeness: 84, relevance: 84, clarity: 84 }),
+    [CASE_NO_CRITERIA]: score({ accuracy: 84, completeness: 84, relevance: 84, clarity: 84 }),
+    [CASE_EXACT_MISS]: score({ accuracy: 74, completeness: 74, relevance: 74, clarity: 74 }),
+  };
+
+  function buildConceptFixture() {
+    return assembleReportCases({
+      test: TEST_RECORD,
+      run: RUN_RECORD,
+      items: CONCEPT_ITEMS,
+      resultItems: CONCEPT_RESULT_ITEMS,
+      caseScores: CONCEPT_SCORES,
+    });
+  }
+
+  it('populates the concept block from the persisted criteria verdicts', () => {
+    const assembled = buildConceptFixture();
+    const c = assembled.cases.find((entry) => entry.id === CASE_CRITERIA)!;
+
+    expect(c.concepts).not.toBeNull();
+    // mandatory = tier 1 only; expected = the full criteria set.
+    expect(c.concepts!.mandatory.required).toEqual([
+      'Dilute 1:64 (2 oz/gal)',
+      REGULATED.contactTime,
+    ]);
+    expect(c.concepts!.mandatory.satisfied).toEqual(['Dilute 1:64 (2 oz/gal)']);
+    expect(c.concepts!.mandatory.missing).toEqual([REGULATED.contactTime]);
+    expect(c.concepts!.expected.required).toEqual([
+      'Dilute 1:64 (2 oz/gal)',
+      REGULATED.contactTime,
+      REGULATED.metric,
+    ]);
+    expect(c.concepts!.materialIssue).toBe(false);
+    expect(c.concepts!.materialIssueNote).toBeNull();
+
+    // The block is the same object the metrics rated the case with.
+    expect(c.evaluated!.concepts).toEqual(c.concepts);
+    expect(c.evaluated!.ratingConstrained).toBe(true);
+    expect(c.evaluated!.grade).toBe('B');
+    expect(c.evaluated!.status).toBe('Partial Pass');
+  });
+
+  it('gives a case with no persisted criteria no concept block at all', () => {
+    const assembled = buildConceptFixture();
+    const c = assembled.cases.find((entry) => entry.id === CASE_NO_CRITERIA)!;
+
+    // Free text in `minimum_concepts` alone is not a usable block — a blank cell is not a failure.
+    expect(c.concepts).toBeNull();
+    expect(c.evaluated!.concepts).toBeNull();
+    expect(c.evaluated!.status).toBe('Pass');
+    expect(c.evaluated!.statusSource).toBe('rubric');
+    expect(c.evaluated!.ratingConstrained).toBe(false);
+  });
+
+  it('flags a failed exact-match check as a material issue and names the concept verbatim', () => {
+    const assembled = buildConceptFixture();
+    const c = assembled.cases.find((entry) => entry.id === CASE_EXACT_MISS)!;
+
+    expect(c.concepts!.materialIssue).toBe(true);
+    expect(c.concepts!.materialIssueNote).toContain(REGULATED.epa);
+    // The failed exact criterion is itself part of the expected set, so coverage is not full and
+    // the automatic Pass never had a chance to fire (the withholding branch stays a guard — see
+    // `applyConceptRules`). The case keeps its rubric Result.
+    expect(c.evaluated!.autoPassTriggered).toBe(false);
+    expect(c.evaluated!.statusSource).toBe('rubric');
+    expect(c.evaluated!.status).toBe('Partial Pass');
+    expect(c.concepts!.expected.missing).toEqual([REGULATED.epa]);
+  });
+
+  it('rolls the run up with the concept-free case excluded from the denominators', () => {
+    const rollup = buildConceptFixture().metrics.concepts!;
+
+    expect(rollup.casesWithConcepts).toBe(2);
+    expect(rollup.mandatory.casesSpecifying).toBe(2);
+    expect(rollup.mandatory.casesSatisfyingAll).toBe(1);
+    expect(rollup.missingMandatory).toEqual([
+      { id: CASE_CRITERIA, question: CONCEPT_ITEMS[0].prompt, missing: [REGULATED.contactTime] },
+    ]);
+    expect(rollup.gateBlockedPasses).toBe(1);
+    expect(rollup.autoPassBlocked).toEqual([]);
+  });
+
+  it('renders the concept lines and the glance markers into the Markdown', () => {
+    const assembled = buildConceptFixture();
+    const markdown = renderReportMarkdown({
+      test: assembled.test,
+      run: assembled.run,
+      metrics: assembled.metrics,
+      cases: assembled.cases,
+      synthesis: SYNTHESIS,
+      generatedAt: RUN_RECORD.report_generated_at!,
+    });
+
+    expect(markdown).toContain('## Concept coverage');
+    expect(markdown).toContain('**Concept coverage:** Mandatory 1/2 · Expected 2/3');
+    expect(markdown).toContain(`**Missing mandatory concepts:** "${REGULATED.contactTime}"`);
+    expect(markdown).toContain('**Rating constrained:**');
+    // † on the gated row, and a legend for it.
+    expect(markdown).toContain('| Partial Pass† |');
+    expect(markdown).toContain('† Rating constrained by a missing mandatory concept.');
+    // Concept phrases verbatim.
+    expect(markdown).toContain(REGULATED.epa);
+  });
+
+  it('leaves a run with no concept data free of every concept section', () => {
+    const { markdown } = buildFixture();
+    expect(markdown).not.toContain('## Concept coverage');
+    expect(markdown).not.toContain('**Concept coverage:**');
+    expect(markdown).not.toContain('Rating constrained');
+    expect(markdown).not.toContain('†');
+    expect(markdown).not.toContain('‡');
+  });
+});
+
+describe('assembleReportCases → multi-pass consolidation and consistency (B0-719/720/721)', () => {
+  /**
+   * Three independent passes per case, as `report_state.casePassScores` persists them. CASE_A's
+   * passes straddle the Pass boundary; CASE_B's sit 20 points apart; CASE_C's agree exactly;
+   * CASE_D's disagree about whether the case could be evaluated at all.
+   */
+  const CASE_PASS_SCORES: Record<string, CaseScore[]> = {
+    [CASE_A]: [
+      score({ accuracy: 92, completeness: 88, relevance: 95, clarity: 90, explanation: 'p1' }),
+      score({ accuracy: 70, completeness: 74, relevance: 80, clarity: 78, explanation: 'p2' }),
+      score({ accuracy: 88, completeness: 84, relevance: 90, clarity: 86, explanation: 'p3' }),
+    ],
+    [CASE_B]: [
+      score({ accuracy: 55, completeness: 60, relevance: 70, clarity: 80, explanation: 'p1' }),
+      score({ accuracy: 55, completeness: 60, relevance: 70, clarity: 80, explanation: 'p2' }),
+      score({ accuracy: 35, completeness: 40, relevance: 50, clarity: 60, explanation: 'p3' }),
+    ],
+    [CASE_C]: [
+      score({ accuracy: 30, completeness: 40, relevance: 50, clarity: 60, explanation: 'p1' }),
+      score({ accuracy: 30, completeness: 40, relevance: 50, clarity: 60, explanation: 'p2' }),
+      score({ accuracy: 30, completeness: 40, relevance: 50, clarity: 60, explanation: 'p3' }),
+    ],
+    [CASE_D]: [
+      score({ unableToEvaluate: true, uteReason: 'No result recorded for this item in this run.' }),
+      score({ unableToEvaluate: true, uteReason: 'No result recorded for this item in this run.' }),
+      score({ accuracy: 40, completeness: 40, relevance: 40, clarity: 40 }),
+    ],
+  };
+
+  function buildMultiPassFixture() {
+    return assembleReportData({
+      test: TEST_RECORD,
+      run: RUN_RECORD,
+      items: ITEMS,
+      resultItems: RESULT_ITEMS,
+      caseScores: CASE_SCORES,
+      casePassScores: CASE_PASS_SCORES,
+      spreadThreshold: 10,
+      synthesis: SYNTHESIS,
+      generatedAt: RUN_RECORD.report_generated_at!,
+    });
+  }
+
+  it('serializes the variance and the consistency rollup onto the wire contract', () => {
+    const parsed = reportDataResponseSchema.parse(toReportDataPayload(buildMultiPassFixture()));
+    if (parsed.status !== 'ready') throw new Error('fixture should assemble a ready report');
+
+    const con = parsed.metrics.consistency!;
+    expect(con.passes).toBe(3);
+    expect(con.casesConsolidated).toBe(4);
+    expect(con.spreadThreshold).toBe(10);
+    // Every queue entry deep-links to the ledger through the same anchor the Markdown links to.
+    for (const entry of con.queue) {
+      const match = parsed.cases.find((c) => c.id === entry.id)!;
+      expect(match.anchorId).toBe(caseAnchorId(entry.id));
+      expect(match.variance!.flagged).toBe(true);
+    }
+    // The unflagged case still carries its variance, so its spread is visible in the ledger.
+    const agreed = parsed.cases.find((c) => c.id === CASE_C)!;
+    expect(agreed.variance!.flagged).toBe(false);
+    expect(agreed.variance!.range).toBe(0);
+  });
+
+  it('consolidates on the median sub-score, leaving the weighted maths to recompute', () => {
+    const { metrics } = buildMultiPassFixture();
+    const caseA = metrics.perCase.find((c) => c.id === CASE_A)!;
+
+    // Medians of 92/70/88, 88/74/84, 95/80/90, 90/78/86 — not the median of the three totals.
+    expect(caseA.accuracy).toBe(88);
+    expect(caseA.completeness).toBe(84);
+    expect(caseA.relevance).toBe(90);
+    expect(caseA.clarity).toBe(86);
+    expect(caseA.overall).toBe(Math.round(0.4 * 88 + 0.3 * 84 + 0.2 * 90 + 0.1 * 86));
+  });
+
+  it('renders the consistency section, the queue and the ⚑ marker into the Markdown', () => {
+    const assembled = buildMultiPassFixture();
+    const markdown = renderReportMarkdown({
+      test: assembled.test,
+      run: assembled.run,
+      metrics: assembled.metrics,
+      cases: assembled.cases,
+      synthesis: SYNTHESIS,
+      generatedAt: RUN_RECORD.report_generated_at!,
+    });
+
+    expect(markdown).toContain('## Grading consistency');
+    expect(markdown).toContain('### Cases flagged for human review');
+    expect(markdown).toContain('**Grading consistency:** 3 independent passes');
+    // The third marker, and its legend, alongside the existing concept marks.
+    expect(markdown).toContain('⚑');
+    expect(markdown).toContain(
+      '⚑ Flagged for human review — the independent grading passes disagreed.',
+    );
+    // The causes are named with the same words the React report uses.
+    expect(markdown).toContain('Passes disagreed on Pass / Partial Pass / Fail');
+    expect(markdown).toContain('Passes disagreed on whether the case could be evaluated');
+    // Every flagged case is linked back to its ledger entry.
+    for (const entry of assembled.metrics.consistency!.queue) {
+      expect(markdown).toContain(`[${entry.id}](#${caseAnchorId(entry.id)})`);
+    }
+  });
+
+  it('omits every consistency readout from a single-pass report', () => {
+    const { markdown, payload } = buildFixture();
+    expect(payload.metrics.consistency).toBeNull();
+    expect(payload.cases.every((c) => c.variance === null)).toBe(true);
+    expect(markdown).not.toContain('## Grading consistency');
+    expect(markdown).not.toContain('**Grading consistency:**');
+    expect(markdown).not.toContain('⚑');
+    expect(markdown).not.toContain('flagged for human review');
+  });
+
+  it('assembles a report persisted before per-pass scores exactly as it always did', () => {
+    // No `casePassScores` at all — the legacy `report_state` shape.
+    const legacy = assembleReportCases({
+      test: TEST_RECORD,
+      run: RUN_RECORD,
+      items: ITEMS,
+      resultItems: RESULT_ITEMS,
+      caseScores: CASE_SCORES,
+    });
+    const { assembled } = buildFixture();
+
+    expect(legacy.metrics.consistency).toBeNull();
+    expect(legacy.metrics.overall).toEqual(assembled.metrics.overall);
+    expect(legacy.cases.every((c) => c.variance === null)).toBe(true);
+  });
+});
+
+describe('splitConceptPhrases (B0-711 fallback splitter)', () => {
+  it('splits on pipes, newlines, bullets, numbered markers and semicolons', () => {
+    expect(splitConceptPhrases('a | b\nc; d')).toEqual(['a', 'b', 'c', 'd']);
+    expect(splitConceptPhrases('- first\n- second')).toEqual(['first', 'second']);
+    expect(splitConceptPhrases('1. first 2. second')).toEqual(['first', 'second']);
+  });
+
+  it('never splits on a comma — a concept phrase routinely contains one', () => {
+    expect(splitConceptPhrases('Dilute at 2 oz/gal, then dwell for 10 minutes')).toEqual([
+      'Dilute at 2 oz/gal, then dwell for 10 minutes',
+    ]);
+  });
+
+  it('returns nothing for a blank or absent column', () => {
+    expect(splitConceptPhrases(null)).toEqual([]);
+    expect(splitConceptPhrases('   ')).toEqual([]);
   });
 });

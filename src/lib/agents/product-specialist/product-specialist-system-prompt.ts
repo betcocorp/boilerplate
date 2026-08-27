@@ -1,3 +1,4 @@
+import { clarifyBeforeRecommendClause } from '~/lib/agents/sme/clarify-before-recommend';
 import { confidenceGateClause } from '~/lib/agents/sme/confidence-thresholds';
 
 /**
@@ -102,6 +103,10 @@ When possible:
 - Clear limitations or next steps if applicable
 
 For exact dilution or dispenser setup, direct users to the Dilution Control Specialist. For floor maintenance programs, stripping, or finishing procedures, direct users to the Floor Care Specialist.
+
+---
+
+${clarifyBeforeRecommendClause('##')}
 
 ---
 

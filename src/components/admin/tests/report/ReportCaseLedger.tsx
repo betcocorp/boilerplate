@@ -1,16 +1,31 @@
 'use client';
 
-import { ChevronRight } from 'lucide-react';
+import { ChevronRight, ChevronsDownUp, ChevronsUpDown } from 'lucide-react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { type ReactNode, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 
+import { BexStreamdown } from '~/components/bex/BexStreamdown';
+import { CaseTraceDownloadButton } from '~/components/admin/tests/report/CaseTraceDownloadButton';
+import {
+  CONCEPT_MARKER_LEGEND,
+  caseMarkers,
+  formatConceptCoverage,
+  formatConceptList,
+  REVIEW_MARKER_LEGEND,
+} from '~/lib/tests/report/case-concepts';
+import {
+  CONCEPT_DISAGREEMENT_LABELS,
+  VARIANCE_CAUSE_LABELS,
+} from '~/lib/tests/report/consolidate';
 import type {
   ReportCase,
+  ReportCaseConcepts,
   ReportCaseStatus,
   ReportGroupRate,
-  ReportLatencyBand,
   ReportMetricsData,
+  ReportSpeedBand,
 } from '~/lib/tests/report/data-schemas';
+import { SPEED_METRIC_LABELS } from '~/lib/tests/report/speed-rules';
 import { cn } from '~/lib/utils';
 
 /**
@@ -101,6 +116,34 @@ export function seedOpenCaseIds(
     if (isDefaultOpenCase(c) || (hashTarget && c.anchorId === hashTarget)) open.add(c.id);
   }
   return open;
+}
+
+export type BulkDisclosureAction = 'expand' | 'collapse';
+
+/**
+ * B0-706 — which action the bulk control offers. Two-state on purpose: while any visible row is
+ * open it collapses, and only once they are all closed does it expand, so one click is always
+ * predictable rather than depending on how many rows happen to be open.
+ */
+export function bulkDisclosureAction(
+  openIds: ReadonlySet<string>,
+  visibleIds: readonly string[],
+): BulkDisclosureAction {
+  return visibleIds.some((id) => openIds.has(id)) ? 'collapse' : 'expand';
+}
+
+/** `openIds` with every visible row opened or closed; rows the filter hides keep their state. */
+export function applyBulkDisclosure(
+  openIds: ReadonlySet<string>,
+  visibleIds: readonly string[],
+  action: BulkDisclosureAction,
+): ReadonlySet<string> {
+  const next = new Set(openIds);
+  for (const id of visibleIds) {
+    if (action === 'expand') next.add(id);
+    else next.delete(id);
+  }
+  return next;
 }
 
 export function matchesLedgerFilter(c: ReportCase, filter: LedgerFilter): boolean {
@@ -195,7 +238,7 @@ const STATUS_BADGE_CLASS: Record<ReportCaseStatus, string> = {
   Fail: 'bg-rose-50 text-rose-700 ring-rose-200',
 };
 
-const LATENCY_BAND_CLASS: Record<ReportLatencyBand, string> = {
+const SPEED_BAND_CLASS: Record<ReportSpeedBand, string> = {
   good: 'text-emerald-700',
   acceptable: 'text-amber-700',
   slow: 'text-rose-700',
@@ -252,20 +295,95 @@ function ScoreBar({ overall, status }: { overall: number; status: ReportCaseStat
   );
 }
 
+/**
+ * The row's total-response-time readout. Deliberately *not* the Speed Performance Score: the
+ * summary row already carries the content score, grade and Result, and putting a second 0–100
+ * number beside them is exactly the confusion §7 exists to prevent. The full speed line lives in
+ * the expanded record, below the sub-scores (B0-718).
+ */
 function LatencyReadout({ c, className }: { c: ReportCase; className?: string }) {
-  if (c.latencySeconds == null) {
+  const total = c.speed?.total ?? null;
+  if (!total) {
     return <span className={cn('text-xs text-slate-400', className)}>—</span>;
   }
   return (
-    <span
-      className={cn(
-        'text-xs tabular-nums',
-        c.latencyBand ? LATENCY_BAND_CLASS[c.latencyBand] : 'text-slate-600',
-        className,
-      )}
-    >
-      {c.latencySeconds} s{c.latencyBand ? ` (${c.latencyBand})` : ''}
+    <span className={cn('text-xs tabular-nums', SPEED_BAND_CLASS[total.band], className)}>
+      {total.seconds} s ({total.band})
     </span>
+  );
+}
+
+/** One metric on the expanded record's speed line: seconds, normalized score, band and raw ms. */
+function SpeedMetricReadout({
+  label,
+  metric,
+  sourceMs,
+}: {
+  label: string;
+  metric: NonNullable<ReportCase['speed']>['total'];
+  /** `latencyMs` / `ttftMs` — the stored millisecond value, shown beside the converted seconds. */
+  sourceMs: number | null;
+}) {
+  if (!metric) return null;
+  return (
+    <>
+      <span className="font-medium">{label}:</span>{' '}
+      {/* Seconds and score both arrive rounded once at source — printed exactly as stored. */}
+      <span className={cn('tabular-nums', SPEED_BAND_CLASS[metric.band])}>
+        {metric.seconds} s
+      </span>
+      <span className="tabular-nums"> · {metric.score}/100</span> ({metric.band})
+      {sourceMs != null ? <span className="text-slate-400"> · {sourceMs} ms</span> : null}
+      {' · '}
+    </>
+  );
+}
+
+/**
+ * B0-718 — the per-case speed line, placed below the sub-score grid and never inside it, and
+ * labelled so it cannot be read as part of the content grade. Rating words are printed verbatim
+ * from the payload; they are never mapped onto A–F.
+ */
+function CaseSpeedLine({ c }: { c: ReportCase }) {
+  const speed = c.speed;
+  if (!speed) {
+    return (
+      <p className="mt-3 text-xs text-slate-500">
+        <span className="font-medium">Speed:</span>{' '}
+        <span className="text-slate-400">no timing recorded for this case</span>
+      </p>
+    );
+  }
+
+  return (
+    <p className="mt-3 rounded-xl bg-white px-3 py-2 text-xs leading-5 text-slate-600 ring-1 ring-slate-200">
+      <span className="text-[11px] font-semibold tracking-[0.14em] text-slate-500 uppercase">
+        Speed — reported separately; not part of the content grade
+      </span>
+      <br />
+      <SpeedMetricReadout
+        label={SPEED_METRIC_LABELS.ttft}
+        metric={speed.ttft}
+        sourceMs={c.ttftMs}
+      />
+      <SpeedMetricReadout
+        label={SPEED_METRIC_LABELS.total}
+        metric={speed.total}
+        sourceMs={c.latencyMs}
+      />
+      <span className="font-medium">Speed Performance Score:</span>{' '}
+      <span className="tabular-nums">{speed.score}/100</span> ({speed.rating})
+      {speed.basis !== 'combined' ? (
+        <span className="text-slate-400">
+          {' '}
+          — scored from{' '}
+          {speed.basis === 'ttft_only' ? SPEED_METRIC_LABELS.ttft : SPEED_METRIC_LABELS.total}{' '}
+          alone; no{' '}
+          {speed.basis === 'ttft_only' ? SPEED_METRIC_LABELS.total : SPEED_METRIC_LABELS.ttft} was
+          recorded.
+        </span>
+      ) : null}
+    </p>
   );
 }
 
@@ -339,11 +457,17 @@ function ExpectedColumn({ c }: { c: ReportCase }) {
 }
 
 function ActualColumn({ c }: { c: ReportCase }) {
+  const trimmedResponse = c.actual?.trim() ?? '';
+
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4">
       <FieldLabel>Agent&apos;s actual response</FieldLabel>
       {c.responseRecorded ? (
-        <Verbatim className="mt-2" value={c.actual} />
+        trimmedResponse ? (
+          <BexStreamdown content={trimmedResponse} isStreaming={false} isUser={false} />
+        ) : (
+          <p className="text-sm text-slate-400 italic">{NONE_NOTED}</p>
+        )
       ) : (
         // `actual` still carries the payload's own placeholder — shown as-is, flagged as absent.
         <p className="mt-2 text-sm text-slate-400 italic">{c.actual}</p>
@@ -379,6 +503,139 @@ function ActualColumn({ c }: { c: ReportCase }) {
   );
 }
 
+/**
+ * B0-713 — the expected-concept misses that are *not* also mandatory misses.
+ *
+ * Mandatory ⊆ expected, so a missing must-have appears in both lists. It is named once, in red,
+ * and the amber line carries only the should-have/bonus remainder — otherwise the same regulated
+ * phrase is printed twice in two colours and the reader has to work out that it is one miss.
+ * Multiset-aware because a dataset may legitimately repeat a phrase.
+ */
+export function expectedOnlyMissing(concepts: ReportCaseConcepts): string[] {
+  const remaining = [...concepts.mandatory.missing];
+  return concepts.expected.missing.filter((concept) => {
+    const at = remaining.indexOf(concept);
+    if (at === -1) return true;
+    remaining.splice(at, 1);
+    return false;
+  });
+}
+
+/**
+ * The per-case concept lines: one coverage readout, what is missing by name, and one sentence for
+ * whichever rule constrained, raised, or was withheld from the rating. Methodology §9 caps the
+ * per-case detail here — the full audit lives in the run-level rollup, not in every row.
+ *
+ * Concept phrases are regulated free text and are rendered exactly as stored.
+ */
+function ConceptCoverageCard({ c }: { c: ReportCase }) {
+  const concepts = c.concepts;
+  if (!concepts) return null;
+  const evaluated = c.evaluated;
+  const alsoExpected = expectedOnlyMissing(concepts);
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+      <FieldLabel>Concept coverage</FieldLabel>
+      <p className="mt-2 text-sm font-semibold text-slate-900 tabular-nums">
+        {formatConceptCoverage(concepts)}
+      </p>
+
+      {concepts.mandatory.missing.length > 0 ? (
+        <p className="mt-2 text-sm break-words whitespace-pre-wrap text-rose-700">
+          <span className="font-medium">Missing mandatory:</span>{' '}
+          {formatConceptList(concepts.mandatory.missing)}
+        </p>
+      ) : null}
+      {alsoExpected.length > 0 ? (
+        <p className="mt-1.5 text-sm break-words whitespace-pre-wrap text-amber-700">
+          <span className="font-medium">Missing expected:</span> {formatConceptList(alsoExpected)}
+        </p>
+      ) : null}
+
+      {evaluated?.ratingConstrained ? (
+        <p className="mt-3 rounded-xl bg-rose-50 px-3 py-2 text-sm break-words whitespace-pre-wrap text-rose-800 ring-1 ring-rose-200 ring-inset">
+          Rating constrained: mandatory concept(s) missing —{' '}
+          {formatConceptList(concepts.mandatory.missing)}
+          {evaluated.gateBlockedAPass
+            ? ` (scored ${evaluated.overall}/100, so the gate removed a Pass)`
+            : ''}
+        </p>
+      ) : null}
+      {evaluated?.autoPassTriggered ? (
+        <p className="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-800 ring-1 ring-emerald-200 ring-inset">
+          Automatic Pass: every expected concept satisfied, so the {evaluated.rubricStatus} the
+          rubric scored was raised to Pass.
+        </p>
+      ) : null}
+      {evaluated?.autoPassBlocked ? (
+        <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-sm break-words whitespace-pre-wrap text-amber-900 ring-1 ring-amber-200 ring-inset">
+          Automatic Pass blocked:{' '}
+          {concepts.materialIssueNote ?? 'a material factual issue was recorded on this case.'}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * B0-721 — the per-pass spread behind this case's review flag. Detailed ledger only: the row badge
+ * carries the mark, this carries the evidence a reviewer needs to settle the grade.
+ *
+ * Nothing here is recomputed — every number is read off `case.variance`, which
+ * `consolidateCasePasses` produced once.
+ */
+function GradingConsistencyCard({ c }: { c: ReportCase }) {
+  const variance = c.variance;
+  if (!variance) return null;
+
+  return (
+    <div
+      className={cn(
+        'rounded-2xl border p-4',
+        variance.flagged ? 'border-amber-300 bg-amber-50' : 'border-slate-200 bg-white',
+      )}
+    >
+      <FieldLabel>Grading consistency</FieldLabel>
+      <p className="mt-2 text-sm text-slate-900 tabular-nums">
+        {variance.passes} independent passes · overalls{' '}
+        {variance.passOveralls
+          .map((overall) => (overall == null ? 'n/a' : String(overall)))
+          .join(' / ')}
+        {variance.range == null ? '' : ` · range ${variance.range}`}
+      </p>
+      {variance.flagged ? (
+        <ul className="mt-2 space-y-1 text-sm text-amber-900">
+          {variance.causes.map((cause) => (
+            <li className="break-words whitespace-pre-wrap" key={cause}>
+              {cause === 'concept' && variance.conceptDisagreements.length > 0
+                ? `${VARIANCE_CAUSE_LABELS.concept}: ${variance.conceptDisagreements
+                    .map((d) => {
+                      const label = CONCEPT_DISAGREEMENT_LABELS[d.kind];
+                      // Concept phrases are regulated free text — quoted verbatim.
+                      const subject = d.concept ? `${label} ${formatConceptList([d.concept])}` : label;
+                      return `${subject} (${d.votesFor} of ${d.voters} passes)`;
+                    })
+                    .join('; ')}`
+                : VARIANCE_CAUSE_LABELS[cause]}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-2 text-sm text-slate-600">
+          The passes agreed — no human review needed on consistency grounds.
+        </p>
+      )}
+      {variance.timingWarnings.length > 0 ? (
+        <p className="mt-2 text-xs text-slate-600">
+          <span className="font-medium">Data quality (not a grading flag):</span>{' '}
+          {variance.timingWarnings.join(' ')}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function NarrativeCard({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4">
@@ -392,10 +649,12 @@ function CaseRow({
   c,
   open,
   onToggle,
+  canDownloadTrace,
 }: {
   c: ReportCase;
   open: boolean;
   onToggle: (caseId: string, open: boolean) => void;
+  canDownloadTrace: boolean;
 }) {
   const evaluated = c.evaluated;
 
@@ -431,14 +690,28 @@ function CaseRow({
                 STATUS_BADGE_CLASS[evaluated.status],
               )}
             >
-              {evaluated.status} · {evaluated.grade}
+              {evaluated.status}
+              {/* B0-713 — † gate-constrained, ‡ automatic Pass. B0-721 adds ⚑ flagged for human
+                  review, alongside them rather than instead of them; legend above the groups. */}
+              {caseMarkers({ ...evaluated, reviewFlagged: c.variance?.flagged ?? false })} ·{' '}
+              {evaluated.grade}
             </span>
           ) : (
             <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600 ring-1 ring-slate-200 ring-inset">
+              {/* An Unable-to-Evaluate case can still be flagged: the passes may have disagreed
+                  about whether it could be judged at all. */}
               Unable to Evaluate
+              {caseMarkers({
+                ratingConstrained: false,
+                autoPassTriggered: false,
+                reviewFlagged: c.variance?.flagged ?? false,
+              })}
             </span>
           )}
         </span>
+        {canDownloadTrace ? (
+          <CaseTraceDownloadButton caseId={c.id} workflowRunId={c.workflowRunId} />
+        ) : null}
       </summary>
 
       <div className="flex flex-col gap-4 px-3 pt-1 pb-6">
@@ -478,27 +751,21 @@ function CaseRow({
             </p>
           ) : null}
 
-          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
-            <p className="text-xs text-slate-600">
-              <span className="font-medium">Response time:</span>{' '}
-              {c.latencySeconds != null ? (
-                <>
-                  <span className={cn('tabular-nums', c.latencyBand ? LATENCY_BAND_CLASS[c.latencyBand] : '')}>
-                    {c.latencySeconds} s
-                  </span>
-                  {c.latencyBand ? ` (${c.latencyBand})` : ''}
-                  {c.latencyMs != null ? (
-                    <span className="text-slate-400"> · {c.latencyMs} ms</span>
-                  ) : null}
-                </>
-              ) : (
-                <span className="text-slate-400">not recorded</span>
-              )}
-              <span className="text-slate-400"> — reported for reference, not graded</span>
-            </p>
-            {c.harness ? <HarnessAside harness={c.harness} /> : null}
-          </div>
+          {/* Below the score grid, never inside it. */}
+          <CaseSpeedLine c={c} />
+
+          {c.harness ? (
+            <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
+              <HarnessAside harness={c.harness} />
+            </div>
+          ) : null}
         </div>
+
+        {/* --- Concept coverage (only when this case has concept data) --- */}
+        <ConceptCoverageCard c={c} />
+
+        {/* --- Grading consistency (only when this case was graded more than once) --- */}
+        <GradingConsistencyCard c={c} />
 
         {/* --- Expected vs actual --- */}
         <div className="grid gap-4 lg:grid-cols-2">
@@ -553,6 +820,12 @@ export type ReportCaseLedgerProps = {
   /** `ReportDataReady.cases`, already ordered Tier 1 → Tier N → "Unspecified". Not re-sorted. */
   cases: readonly ReportCase[];
   metrics: ReportCaseLedgerMetrics;
+  /**
+   * B0-707 — whether to offer the per-row trace download. Resolved on the server from
+   * `navigation.sidebar.observability`, the permission the export route itself enforces, so a user
+   * who would only get a 403 is never shown the button.
+   */
+  canDownloadTrace: boolean;
   className?: string;
 };
 
@@ -567,7 +840,12 @@ function readLocationHash(): string | null {
   }
 }
 
-function ReportCaseLedgerContent({ cases, metrics, className }: ReportCaseLedgerProps) {
+function ReportCaseLedgerContent({
+  cases,
+  metrics,
+  canDownloadTrace,
+  className,
+}: ReportCaseLedgerProps) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -636,6 +914,28 @@ function ReportCaseLedgerContent({ cases, metrics, className }: ReportCaseLedger
     }))
     .filter((group) => group.cases.length > 0);
 
+  // The bulk control acts on what is on screen under the active filter, never the whole payload.
+  const visibleCaseIds = visibleGroups.flatMap((group) => group.cases.map((c) => c.id));
+
+  // B0-713 — only legend the marks actually on screen, so a filtered view never carries an
+  // orphan footnote and a run with no concept data shows no legend at all.
+  const visibleEvaluated = visibleGroups.flatMap((group) =>
+    group.cases.map((c) => c.evaluated).filter((e) => e != null),
+  );
+  // B0-721 — the review mark is legended on the same terms: only when it is actually on screen,
+  // and read off every visible case (an Unable-to-Evaluate one can carry it too).
+  const visibleCases = visibleGroups.flatMap((group) => group.cases);
+  const legendLines = [
+    visibleEvaluated.some((e) => e.ratingConstrained)
+      ? CONCEPT_MARKER_LEGEND.ratingConstrained
+      : null,
+    visibleEvaluated.some((e) => e.autoPassTriggered) ? CONCEPT_MARKER_LEGEND.autoPass : null,
+    visibleCases.some((c) => c.variance?.flagged) ? REVIEW_MARKER_LEGEND : null,
+  ].filter((line) => line != null);
+  const bulkAction = bulkDisclosureAction(openIds, visibleCaseIds);
+  const toggleAllVisible = () =>
+    setOpenIds((prev) => applyBulkDisclosure(prev, visibleCaseIds, bulkAction));
+
   return (
     <section
       className={cn(
@@ -651,7 +951,7 @@ function ReportCaseLedgerContent({ cases, metrics, className }: ReportCaseLedger
         reported for reference only and are not part of the grade.
       </p>
 
-      <div className="mt-4 flex flex-wrap gap-2">
+      <div className="mt-4 flex flex-wrap items-center gap-2">
         {chips.map((chip) => {
           const active = ledgerFilterEquals(chip.filter, filter);
           return (
@@ -674,7 +974,31 @@ function ReportCaseLedgerContent({ cases, metrics, className }: ReportCaseLedger
             </button>
           );
         })}
+
+        {visibleCaseIds.length > 0 ? (
+          <button
+            className="ml-auto inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600 transition-colors hover:border-slate-300 hover:bg-slate-50 print:hidden"
+            onClick={toggleAllVisible}
+            title={
+              bulkAction === 'collapse'
+                ? 'Close every case record shown below'
+                : 'Open every case record shown below'
+            }
+            type="button"
+          >
+            {bulkAction === 'collapse' ? (
+              <ChevronsDownUp className="size-3.5 text-slate-400" />
+            ) : (
+              <ChevronsUpDown className="size-3.5 text-slate-400" />
+            )}
+            {bulkAction === 'collapse' ? 'Collapse all' : 'Expand all'}
+          </button>
+        ) : null}
       </div>
+
+      {legendLines.length > 0 ? (
+        <p className="mt-3 text-xs text-slate-500">{legendLines.join('  ')}</p>
+      ) : null}
 
       {visibleGroups.length === 0 ? (
         <p className="mt-6 text-sm text-slate-500">No cases match this filter.</p>
@@ -687,6 +1011,7 @@ function ReportCaseLedgerContent({ cases, metrics, className }: ReportCaseLedger
                 {group.cases.map((c) => (
                   <CaseRow
                     c={c}
+                    canDownloadTrace={canDownloadTrace}
                     key={c.id}
                     onToggle={handleToggle}
                     open={openIds.has(c.id)}

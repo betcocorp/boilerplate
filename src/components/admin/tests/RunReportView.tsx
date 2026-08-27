@@ -26,6 +26,7 @@ import { ReportVerdictStrip } from '~/components/admin/tests/report/ReportVerdic
 import { BexStreamdown } from '~/components/bex/BexStreamdown';
 import { Button } from '~/components/ui/button';
 import type { ReportDataReady } from '~/lib/tests/report/data-schemas';
+import { isInvariantErrorMessage } from '~/lib/tests/report/invariants';
 import { caseAnchorId } from '~/lib/tests/report/render';
 import { cn } from '~/lib/utils';
 
@@ -183,6 +184,11 @@ type ReportStatusResponse = {
   status?: ReportStatus;
   totalCases?: number;
   completedCases?: number;
+  /** B0-719 — independent grading passes per case. 1 on every report before multi-pass grading. */
+  passes?: number;
+  /** Finished (case, pass) grading units, and the `cases x passes` denominator that goes with it. */
+  completedPasses?: number;
+  totalPasses?: number;
   generatedAt?: string | null;
   error?: string | null;
 };
@@ -200,9 +206,18 @@ type RunReportViewProps = {
   initialStatus: ReportStatus;
   initialTotalCases: number;
   initialCompletedCases: number;
+  /** B0-719 — the pass count this report is being graded at, so the operator sees what they set. */
+  initialPasses: number;
+  /** Finished (case, pass) units — what the progress bar counts. */
+  initialCompletedPasses: number;
   initialError: string | null;
   initialGeneratedAt: string | null;
   isRunCompleted: boolean;
+  /**
+   * B0-707 — whether the viewer may download a case's workflow-run trace. Resolved server-side
+   * from `navigation.sidebar.observability`, the permission the export route enforces.
+   */
+  canDownloadTrace: boolean;
 };
 
 export function RunReportView({
@@ -213,13 +228,18 @@ export function RunReportView({
   initialStatus,
   initialTotalCases,
   initialCompletedCases,
+  initialPasses,
+  initialCompletedPasses,
   initialError,
   initialGeneratedAt,
   isRunCompleted,
+  canDownloadTrace,
 }: RunReportViewProps) {
   const [status, setStatus] = useState<ReportStatus>(initialStatus);
   const [totalCases, setTotalCases] = useState(initialTotalCases);
   const [completedCases, setCompletedCases] = useState(initialCompletedCases);
+  const [passes, setPasses] = useState(initialPasses);
+  const [completedPasses, setCompletedPasses] = useState(initialCompletedPasses);
   const [error, setError] = useState<string | null>(initialError);
   const [generatedAt, setGeneratedAt] = useState<string | null>(
     initialGeneratedAt,
@@ -273,6 +293,8 @@ export function RunReportView({
       setStatus(nextStatus);
       setTotalCases(data.totalCases ?? totalCases);
       setCompletedCases(data.completedCases ?? completedCases);
+      setPasses(data.passes ?? passes);
+      setCompletedPasses(data.completedPasses ?? completedPasses);
       setError(data.error ?? null);
 
       if (nextStatus === 'scoring' || nextStatus === 'synthesizing') {
@@ -321,6 +343,9 @@ export function RunReportView({
         if (typeof data.totalCases === 'number') setTotalCases(data.totalCases);
         if (typeof data.completedCases === 'number')
           setCompletedCases(data.completedCases);
+        if (typeof data.passes === 'number') setPasses(data.passes);
+        if (typeof data.completedPasses === 'number')
+          setCompletedPasses(data.completedPasses);
         if (data.generatedAt !== undefined)
           setGeneratedAt(data.generatedAt ?? null);
         setError(data.error ?? null);
@@ -473,9 +498,16 @@ export function RunReportView({
     );
   }
 
+  /**
+   * B0-719 — counted in (case, pass) units, never in cases. A 3-pass report that counted cases
+   * would show nothing at all until the third pass began and then jump to 100%; this advances
+   * through every pass. `passes` is 1 for every report graded before multi-pass grading existed,
+   * so this is the same arithmetic it always was for them.
+   */
+  const totalUnits = totalCases * Math.max(1, passes);
   const progressPercent =
-    totalCases > 0
-      ? Math.min(100, Math.round((completedCases / totalCases) * 100))
+    totalUnits > 0
+      ? Math.min(100, Math.round((completedPasses / totalUnits) * 100))
       : 0;
 
   return (
@@ -547,7 +579,11 @@ export function RunReportView({
             <p className="text-sm text-slate-600">
               {status === 'synthesizing'
                 ? 'Scoring complete — synthesizing failure patterns and recommendations…'
-                : `Grading responses: ${completedCases} of ${totalCases || '…'} cases scored`}
+                : `Grading responses: ${completedCases} of ${totalCases || '…'} cases scored${
+                    passes > 1
+                      ? ` · ${passes} independent passes per case (${completedPasses} of ${totalUnits} gradings done)`
+                      : ''
+                  }`}
             </p>
             <div className="mt-3 h-3 w-full overflow-hidden rounded-full bg-slate-100">
               <div
@@ -571,17 +607,46 @@ export function RunReportView({
         ) : null}
 
         {status === 'failed' && error ? (
-          <div className="mt-6 rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
-            {error}
-            <Button
-              className="mt-3 block"
-              onClick={retryFromScratch}
-              size="sm"
-              variant="outline"
-            >
-              Retry
-            </Button>
-          </div>
+          /**
+           * B0-714 — two failures that look identical in a log but are nothing alike to a reader.
+           * A structural invariant failure means the numbers did not reconcile and the report was
+           * deliberately refused: retrying the same data will refuse it again, so the panel says
+           * what failed and points at the data instead of leading with a Retry button. Everything
+           * else (OpenAI, the network, a timeout) is transient and Retry is the right first move.
+           */
+          isInvariantErrorMessage(error) ? (
+            <div className="mt-6 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+              <p className="font-semibold">
+                Report refused — the run&apos;s numbers did not reconcile
+              </p>
+              <p className="mt-1">
+                A consistency check failed while computing the metrics, so no report was written.
+                This is a problem with the run&apos;s data, not a transient error — regenerating
+                will fail the same way until it is fixed.
+              </p>
+              <p className="mt-2 font-mono text-xs break-words whitespace-pre-wrap">{error}</p>
+              <Button
+                className="mt-3 block"
+                onClick={retryFromScratch}
+                size="sm"
+                variant="outline"
+              >
+                Regenerate anyway
+              </Button>
+            </div>
+          ) : (
+            <div className="mt-6 rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
+              {error}
+              <Button
+                className="mt-3 block"
+                onClick={retryFromScratch}
+                size="sm"
+                variant="outline"
+              >
+                Retry
+              </Button>
+            </div>
+          )
         ) : null}
       </section>
 
@@ -608,7 +673,7 @@ export function RunReportView({
           <div data-report-section>
             <ReportBreakdownCards
               categories={reportData.metrics.categories}
-              latency={reportData.metrics.latency}
+              speed={reportData.metrics.speed}
               strongestCategory={reportData.metrics.strongestCategory}
               tiers={reportData.metrics.tiers}
               totalCases={reportData.metrics.totalCases}
@@ -628,6 +693,7 @@ export function RunReportView({
 
           <div data-report-section>
             <ReportCaseLedger
+              canDownloadTrace={canDownloadTrace}
               cases={reportData.cases}
               metrics={reportData.metrics}
             />
@@ -641,7 +707,10 @@ export function RunReportView({
           </div>
 
           <div data-report-section>
-            <ReportMethodology uteCount={reportData.metrics.uteCount} />
+            <ReportMethodology
+              hasConcepts={reportData.metrics.concepts != null}
+              uteCount={reportData.metrics.uteCount}
+            />
           </div>
         </div>
       ) : null}

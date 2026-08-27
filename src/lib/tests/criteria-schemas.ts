@@ -78,15 +78,35 @@ export const GRADER_JSON_SCHEMA = {
   required: ['verdicts'],
 } as const;
 
-/** Deterministic outcome of aggregating exact + semantic verdicts for one item. */
-export type CriteriaGradingOutcome = {
-  passed: boolean;
+/**
+ * One grader verdict enriched with the criterion it judged — the shape actually persisted onto
+ * `test_result_items.response_payload.criteriaGrading.verdicts` (B0-616).
+ */
+export const criterionOutcomeSchema = criterionVerdictSchema.extend({
+  concept: z.string(),
+  tier: criteriaTierSchema,
+  match: criteriaMatchModeSchema,
+});
+export type CriterionOutcome = z.infer<typeof criterionOutcomeSchema>;
+
+/**
+ * Deterministic outcome of aggregating exact + semantic verdicts for one item.
+ *
+ * B0-711 — expressed as a schema rather than a bare type because it is also read back *out* of
+ * a persisted `response_payload`, where it is untrusted JSON: the report path validates it with
+ * `criteriaGradingOutcomeSchema` instead of trusting the shape (see `extractCriteriaGrading` in
+ * `~/lib/tests/response-payload`). The inferred type is the one this module already exported, so
+ * the writer and the reader can never drift apart.
+ */
+export const criteriaGradingOutcomeSchema = z.object({
+  passed: z.boolean(),
   /** Weighted tier coverage in [0, 1]; null when there are no criteria to score. */
-  score: number | null;
-  verdicts: Array<CriterionVerdict & { concept: string; tier: CriteriaTier; match: CriteriaMatchMode }>;
+  score: z.number().nullable(),
+  verdicts: z.array(criterionOutcomeSchema),
   /** Human-readable explanation when `passed` is false — names the missed tier-1 concept(s). */
-  failureReason: string | null;
-};
+  failureReason: z.string().nullable(),
+});
+export type CriteriaGradingOutcome = z.infer<typeof criteriaGradingOutcomeSchema>;
 
 /** Tier → aggregation weight. Kept as a single source of truth for score math. */
 export const TIER_WEIGHT: Record<CriteriaTier, number> = { 1: 3, 2: 2, 3: 1 };

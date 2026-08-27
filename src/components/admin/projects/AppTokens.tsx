@@ -1,7 +1,8 @@
 'use client';
 
-import { KeyRound, Loader2 } from 'lucide-react';
+import { Clipboard, ClipboardCheck, KeyRound, Loader2 } from 'lucide-react';
 import { useActionState, useState } from 'react';
+import { toast } from 'sonner';
 
 import { TokenReveal } from '~/components/admin/projects/TokenReveal';
 import { formatDate, formatLastUsed } from '~/components/admin/projects/format';
@@ -105,10 +106,43 @@ function IssueTokenDialog({ projectId, appId }: { projectId: string; appId: stri
 
 function TokenRow({ projectId, appId, token }: { projectId: string; appId: string; token: TokenView }) {
   const [state, revoke, pending] = useActionState<SimpleActionState, FormData>(revokeTokenAction, null);
+  const [copied, setCopied] = useState(false);
+
+  const handleCopyPrefix = async () => {
+    try {
+      await navigator.clipboard.writeText(token.prefix);
+      setCopied(true);
+      toast.success('Token prefix copied to clipboard');
+      setTimeout(() => setCopied(false), 1000);
+    } catch {
+      toast.error('Failed to copy prefix to clipboard');
+    }
+  };
+
   return (
     <TableRow className="border-border/60">
       <TableCell className="font-medium">{token.label ?? '—'}</TableCell>
-      <TableCell className="font-mono text-xs text-muted-foreground">{token.prefix}…</TableCell>
+      <TableCell
+        className="cursor-pointer font-mono text-xs text-muted-foreground hover:text-foreground"
+        onClick={handleCopyPrefix}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            handleCopyPrefix();
+          }
+        }}
+      >
+        <div className="flex items-center gap-2">
+          <span>{token.prefix}…</span>
+          {copied ? (
+            <ClipboardCheck className="size-4 text-emerald-600 dark:text-emerald-400" />
+          ) : (
+            <Clipboard className="size-4" />
+          )}
+        </div>
+      </TableCell>
       <TableCell className="text-muted-foreground">{formatDate(token.createdAt)}</TableCell>
       <TableCell className="text-muted-foreground">{formatLastUsed(token.lastUsedAt)}</TableCell>
       <TableCell>

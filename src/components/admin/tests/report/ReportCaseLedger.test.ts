@@ -3,10 +3,13 @@ import { describe, expect, it } from 'vitest';
 import type { ReportCase, ReportGroupRate } from '~/lib/tests/report/data-schemas';
 
 import {
+  applyBulkDisclosure,
   buildLedgerChips,
+  bulkDisclosureAction,
   groupCasesByTier,
   isDefaultOpenCase,
   isExceptionCase,
+  expectedOnlyMissing,
   ledgerFilterEquals,
   matchesLedgerFilter,
   parseLedgerFilter,
@@ -59,11 +62,21 @@ function makeCase(overrides: Partial<ReportCase> & Pick<ReportCase, 'id'>): Repo
       clarity: 90,
       overall: 90,
       grade: 'A',
+      rubricStatus: 'Pass',
       status: 'Pass',
+      statusSource: 'rubric',
+      ratingConstrained: false,
+      gateBlockedAPass: false,
+      autoPassTriggered: false,
+      autoPassBlocked: false,
+      concepts: null,
     },
+    concepts: null,
     latencySeconds: null,
     latencyMs: null,
-    latencyBand: null,
+    ttftSeconds: null,
+    ttftMs: null,
+    speed: null,
     harness: null,
     retrievedDocumentIds: [],
     workflowRunId: null,
@@ -250,5 +263,95 @@ describe('matchesLedgerFilter / buildLedgerChips', () => {
       ['Tier 2', 2],
     ]);
     expect(chips[3]!.filter).toEqual({ kind: 'tier', tier: 'Tier 2' });
+  });
+});
+
+describe('bulkDisclosureAction / applyBulkDisclosure', () => {
+  const visible = ['a', 'b', 'c'];
+
+  it('offers collapse while any visible row is open, expand once none are', () => {
+    expect(bulkDisclosureAction(new Set(['b']), visible)).toBe('collapse');
+    expect(bulkDisclosureAction(new Set(visible), visible)).toBe('collapse');
+    expect(bulkDisclosureAction(new Set(), visible)).toBe('expand');
+    // An open row hidden by the filter must not make the button offer "collapse".
+    expect(bulkDisclosureAction(new Set(['hidden']), visible)).toBe('expand');
+  });
+
+  it('opens or closes every visible row in one step', () => {
+    expect([...applyBulkDisclosure(new Set(['a']), visible, 'expand')].sort()).toEqual([
+      'a',
+      'b',
+      'c',
+    ]);
+    expect([...applyBulkDisclosure(new Set(visible), visible, 'collapse')]).toEqual([]);
+  });
+
+  it('leaves rows the filter hides untouched in both directions', () => {
+    expect([...applyBulkDisclosure(new Set(['hidden']), visible, 'collapse')]).toEqual(['hidden']);
+    expect([...applyBulkDisclosure(new Set(['hidden']), visible, 'expand')].sort()).toEqual([
+      'a',
+      'b',
+      'c',
+      'hidden',
+    ]);
+  });
+
+  it('round-trips: collapse then expand restores every visible row', () => {
+    const open = new Set(['a', 'b', 'c', 'hidden']);
+    const collapsed = applyBulkDisclosure(open, visible, 'collapse');
+    expect(bulkDisclosureAction(collapsed, visible)).toBe('expand');
+    expect([...applyBulkDisclosure(collapsed, visible, 'expand')].sort()).toEqual([
+      'a',
+      'b',
+      'c',
+      'hidden',
+    ]);
+  });
+});
+
+describe('expectedOnlyMissing (B0-713)', () => {
+  /** Regulated phrases — asserted back verbatim, never re-punctuated or split on the comma. */
+  const MANDATORY = 'Dilute 1:64 (2 oz/gal), then dwell';
+  const BONUS = 'Metric equivalent 15.6 mL/L';
+
+  it('names a missing must-have once, leaving only the non-mandatory remainder in amber', () => {
+    expect(
+      expectedOnlyMissing({
+        mandatory: { required: [MANDATORY], satisfied: [], missing: [MANDATORY] },
+        expected: {
+          required: [MANDATORY, BONUS],
+          satisfied: [],
+          missing: [MANDATORY, BONUS],
+        },
+        materialIssue: false,
+        materialIssueNote: null,
+      }),
+    ).toEqual([BONUS]);
+  });
+
+  it('keeps a repeated phrase that is missing more times than it is mandatory', () => {
+    expect(
+      expectedOnlyMissing({
+        mandatory: { required: [MANDATORY], satisfied: [], missing: [MANDATORY] },
+        expected: {
+          required: [MANDATORY, MANDATORY],
+          satisfied: [],
+          missing: [MANDATORY, MANDATORY],
+        },
+        materialIssue: false,
+        materialIssueNote: null,
+      }),
+    ).toEqual([MANDATORY]);
+  });
+
+  it('returns nothing when the only expected misses are the mandatory ones', () => {
+    expect(
+      expectedOnlyMissing({
+        mandatory: { required: [MANDATORY], satisfied: [], missing: [MANDATORY] },
+        expected: { required: [MANDATORY], satisfied: [], missing: [MANDATORY] },
+        materialIssue: false,
+        materialIssueNote: null,
+      }),
+    ).toEqual([]);
   });
 });

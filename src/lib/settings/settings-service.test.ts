@@ -343,6 +343,10 @@ describe('settings-table coverage does not regress to process.env (B0-638)', () 
     'RAG_CHUNK_MIN_TOKENS',
     'RAG_CHUNK_OVERLAP_TOKENS',
     'RAG_CHUNK_STRATEGY',
+    // B0-719/B0-720 — read through loadConsistencyConfig(); multi-pass report grading has never
+    // had a process.env read, and per the config rule it never will.
+    'REPORT_CONSISTENCY_SPREAD_THRESHOLD',
+    'REPORT_GRADING_PASSES',
     // B0-656 — read through getRouterType(); no process.env.ROUTER_TYPE read has ever existed.
     'ROUTER_TYPE',
     'WEBSEARCH_DB_CACHE_ENABLED',

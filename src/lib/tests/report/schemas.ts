@@ -77,7 +77,35 @@ export const reportStateSchema = z.object({
   completedCases: z.number().int().min(0),
   startedAt: z.string(),
   updatedAt: z.string(),
+  /**
+   * The **consolidated** score per case — one per case, whatever the pass count. Kept as the
+   * single-score record it has always been so every existing reader (the synthesizer, the read
+   * path, a `report_state` row persisted before B0-719) keeps working untouched. With
+   * `passes === 1` this is the one pass verbatim.
+   */
   caseScores: z.record(z.string(), caseScoreSchema),
+  /**
+   * B0-719 — each pass's independent score for a case, in pass order. The resumption unit: a crash
+   * during pass 2 leaves a one-entry array and only pass 2 is re-run.
+   *
+   * `.optional().default({})` for the same reason `overall` got it in B0-609 — a `report_state`
+   * persisted before this field existed must still `safeParse`. A parse failure drops every
+   * already-scored case to the orchestrator's "start fresh" fallback, which throws away real money
+   * in grading calls.
+   */
+  casePassScores: z.record(z.string(), z.array(caseScoreSchema)).optional().default({}),
+  /**
+   * B0-719 — how many independent passes each case gets in *this* report. Resolved from
+   * `settings.REPORT_GRADING_PASSES` when the state is created and then persisted, so a settings
+   * change mid-run can never change the pass count of a report already part-way through.
+   * Defaults to 1: a legacy row was graded exactly once.
+   */
+  passes: z.number().int().min(1).optional().default(1),
+  /**
+   * B0-720 — the score-range flag threshold in force when this report was graded. Null on a legacy
+   * row (and on any single-pass report), where the reader falls back to the shipped default.
+   */
+  spreadThreshold: z.number().nullable().optional().default(null),
   synthesis: reportSynthesisSchema.nullable(),
   error: z.string().nullable(),
   // B0-609 — the report's aggregate score/grade (`computeReportMetrics(...).overall`), persisted
@@ -96,7 +124,14 @@ export function parseReportState(value: unknown): ReportState | null {
   return result.success ? result.data : null;
 }
 
-export function emptyReportState(model: string, totalCases: number): ReportState {
+export function emptyReportState(
+  model: string,
+  totalCases: number,
+  /** B0-719 — the configured pass count, resolved once and then persisted. */
+  passes = 1,
+  /** B0-720 — the configured score-range flag threshold; null leaves the reader's default. */
+  spreadThreshold: number | null = null,
+): ReportState {
   const now = new Date().toISOString();
   return {
     status: 'idle',
@@ -106,8 +141,31 @@ export function emptyReportState(model: string, totalCases: number): ReportState
     startedAt: now,
     updatedAt: now,
     caseScores: {},
+    casePassScores: {},
+    passes,
+    spreadThreshold,
     synthesis: null,
     error: null,
     overall: null,
   };
+}
+
+/**
+ * B0-719 — how many (case, pass) grading units are finished, which is what the progress bar counts.
+ *
+ * Counting cases would stall a 3-pass report's bar at 33% for two thirds of its run. A report
+ * persisted before per-pass scores existed has no `casePassScores` at all, so it falls back to its
+ * case count and its progress reads exactly as it did before.
+ */
+export function completedPassCount(state: ReportState): number {
+  const fromPasses = Object.values(state.casePassScores).reduce(
+    (total, scores) => total + scores.length,
+    0,
+  );
+  return fromPasses > 0 ? fromPasses : state.completedCases;
+}
+
+/** The denominator that goes with `completedPassCount`. */
+export function totalPassCount(state: ReportState): number {
+  return state.totalCases * state.passes;
 }

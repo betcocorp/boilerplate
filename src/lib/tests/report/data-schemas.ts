@@ -33,9 +33,34 @@ export type ReportRateGrade = z.infer<typeof reportRateGradeSchema>;
 export const reportCaseStatusSchema = z.enum(['Pass', 'Partial Pass', 'Fail']);
 export type ReportCaseStatus = z.infer<typeof reportCaseStatusSchema>;
 
-/** Which responsiveness band a case's latency falls in. Reported, never part of the grade. */
-export const reportLatencyBandSchema = z.enum(['good', 'acceptable', 'slow']);
-export type ReportLatencyBand = z.infer<typeof reportLatencyBandSchema>;
+/**
+ * Which band a single timing falls in (`metricBand` in `./speed-rules`). Reported, never part of
+ * the grade.
+ */
+export const reportSpeedBandSchema = z.enum(['good', 'acceptable', 'slow']);
+export type ReportSpeedBand = z.infer<typeof reportSpeedBandSchema>;
+
+/**
+ * Rating words for a 0–100 Speed Performance Score (`SPEED_RATING_BANDS`). Words, never letters:
+ * a "B" beside the content grade's "B" would read as the same judgment, and they are not.
+ * Renderers print these verbatim and must never map them onto A–F.
+ */
+export const reportSpeedRatingSchema = z.enum([
+  'Excellent',
+  'Good',
+  'Acceptable',
+  'Slow',
+  'Very slow',
+]);
+export type ReportSpeedRating = z.infer<typeof reportSpeedRatingSchema>;
+
+/** Which timings a case's Speed Performance Score was computed from. */
+export const reportSpeedBasisSchema = z.enum(['combined', 'ttft_only', 'total_only']);
+export type ReportSpeedBasis = z.infer<typeof reportSpeedBasisSchema>;
+
+/** Which metric a timing is. `ttft` = time to first token, `total` = total response time. */
+export const reportSpeedMetricNameSchema = z.enum(['ttft', 'total']);
+export type ReportSpeedMetricName = z.infer<typeof reportSpeedMetricNameSchema>;
 
 /**
  * Counts, average and pass/partial/fail rates for one population of evaluated cases (the whole
@@ -66,23 +91,96 @@ export const reportGroupRateSchema = z.object({
 });
 export type ReportGroupRate = z.infer<typeof reportGroupRateSchema>;
 
-/** Response-time summary across every case that recorded one. Never blended into the grade. */
-export const reportLatencySchema = z.object({
-  unit: z.literal('s'),
+/** One measured timing on one case, with its normalized 0–100 score and band. */
+export const reportCaseSpeedMetricSchema = z.object({
+  metric: reportSpeedMetricNameSchema,
+  /** Seconds at source precision — converted from ms once, in assembly, and never re-derived. */
+  seconds: z.number(),
+  score: z.number(),
+  band: reportSpeedBandSchema,
+  /** The renormalized weight actually applied (1 when this is the only metric measured). */
+  weight: z.number(),
+});
+export type ReportCaseSpeedMetric = z.infer<typeof reportCaseSpeedMetricSchema>;
+
+/**
+ * B0-717 — one case's speed, as its own object rather than a field on the scoreline. Present only
+ * for a case that recorded at least one timing, evaluated or Unable to Evaluate alike: the two
+ * facts are independent in both directions.
+ */
+export const reportCaseSpeedSchema = z.object({
+  id: z.string(),
+  /** Null when that metric was not recorded. Never a zero standing in for an absent measurement. */
+  ttft: reportCaseSpeedMetricSchema.nullable(),
+  total: reportCaseSpeedMetricSchema.nullable(),
+  /** The combined Speed Performance Score. Never blended into any content score or grade. */
+  score: z.number(),
+  rating: reportSpeedRatingSchema,
+  basis: reportSpeedBasisSchema,
+});
+export type ReportCaseSpeed = z.infer<typeof reportCaseSpeedSchema>;
+
+/** The thresholds in force for one metric, as `./speed-rules` resolved them for this run. */
+export const reportSpeedThresholdsSchema = z.object({
+  good: z.number(),
+  acceptable: z.number(),
+  poor: z.number(),
+  floor: z.number(),
+});
+export type ReportSpeedThresholds = z.infer<typeof reportSpeedThresholdsSchema>;
+
+/** Run-level aggregate for one metric. Every figure is rounded once here; render as-is. */
+export const reportSpeedMetricAggregateSchema = z.object({
+  metric: reportSpeedMetricNameSchema,
+  label: z.string(),
   n: z.number().int().min(0),
-  avg: z.number(),
-  min: z.number(),
-  max: z.number(),
-  median: z.number(),
-  thresholds: z.object({ good: z.number(), slow: z.number() }),
+  avgSeconds: z.number(),
+  medianSeconds: z.number(),
+  /** Null below the minimum sample size — print `p90Label`, which is then the `n/a` sentinel. */
+  p90Seconds: z.number().nullable(),
+  p90Label: z.string(),
+  minSeconds: z.number(),
+  maxSeconds: z.number(),
+  avgScore: z.number(),
   bands: z.object({
     good: z.number().int().min(0),
     acceptable: z.number().int().min(0),
     slow: z.number().int().min(0),
   }),
+  thresholds: reportSpeedThresholdsSchema,
+  fastest: z.array(z.object({ id: z.string(), seconds: z.number() })),
   slowest: z.array(z.object({ id: z.string(), seconds: z.number() })),
 });
-export type ReportLatency = z.infer<typeof reportLatencySchema>;
+export type ReportSpeedMetricAggregate = z.infer<typeof reportSpeedMetricAggregateSchema>;
+
+/**
+ * The run's speed readout, across both metrics. Null when not one case recorded either timing —
+ * renderers then state that timing data was unavailable and draw no table.
+ */
+export const reportSpeedSchema = z.object({
+  unit: z.literal('s'),
+  /** Cases with at least one timing. */
+  n: z.number().int().min(0),
+  metrics: z.object({
+    ttft: reportSpeedMetricAggregateSchema.nullable(),
+    total: reportSpeedMetricAggregateSchema.nullable(),
+  }),
+  avgScore: z.number(),
+  medianScore: z.number(),
+  rating: reportSpeedRatingSchema,
+  /** Every rating, including zero counts, in band order — so the distribution table is stable. */
+  ratingDistribution: z.array(
+    z.object({ rating: reportSpeedRatingSchema, count: z.number().int().min(0) }),
+  ),
+  basisCounts: z.object({
+    combined: z.number().int().min(0),
+    ttftOnly: z.number().int().min(0),
+    totalOnly: z.number().int().min(0),
+  }),
+  weights: z.object({ ttft: z.number(), total: z.number() }),
+  perCase: z.array(reportCaseSpeedSchema),
+});
+export type ReportSpeed = z.infer<typeof reportSpeedSchema>;
 
 /** A case that could not be judged. Excluded from every average, grade, count and rate. */
 export const reportUteCaseSchema = z.object({
@@ -101,6 +199,176 @@ export const reportScoreExtremeSchema = z.object({
 export type ReportScoreExtreme = z.infer<typeof reportScoreExtremeSchema>;
 
 /**
+ * B0-713 — which rule produced a case's Result. `'rubric'` is the untouched weighted status;
+ * `'auto_pass'` means full expected-concept coverage raised it; `'minimal_gate'` means a missing
+ * must-have concept capped it below Pass.
+ */
+export const reportCaseStatusSourceSchema = z.enum(['rubric', 'auto_pass', 'minimal_gate']);
+export type ReportCaseStatusSource = z.infer<typeof reportCaseStatusSourceSchema>;
+
+/**
+ * Coverage of one concept kind for one case. `required` is always `satisfied ∪ missing` — B0-714
+ * asserts it as a structural invariant, so a renderer may print "satisfied of required" directly.
+ * Concept phrases are regulated free text (rule 1): render them verbatim, never parsed.
+ */
+export const reportConceptKindCoverageSchema = z.object({
+  required: z.array(z.string()),
+  satisfied: z.array(z.string()),
+  missing: z.array(z.string()),
+});
+export type ReportConceptKindCoverage = z.infer<typeof reportConceptKindCoverageSchema>;
+
+/**
+ * The per-case concept judgment, from the criteria grading the run already persisted (B0-711).
+ * Absent — never an empty object — for a case with no concepts, so every concept-driven section
+ * can be omitted entirely rather than rendered as "0 of 0".
+ */
+export const reportCaseConceptsSchema = z.object({
+  /** Tier-1 ("must have") criteria — the set the rating gate reads. */
+  mandatory: reportConceptKindCoverageSchema,
+  /** The full criteria set (tiers 1, 2 and 3). */
+  expected: reportConceptKindCoverageSchema,
+  /** A failed deterministic (`match: 'exact'`) check on a regulated value. Derived in code. */
+  materialIssue: z.boolean(),
+  /** Names the failed concept(s) verbatim. Null exactly when `materialIssue` is false. */
+  materialIssueNote: z.string().nullable(),
+});
+export type ReportCaseConcepts = z.infer<typeof reportCaseConceptsSchema>;
+
+/** Coverage for one concept kind across the run. `pct` is out of `casesSpecifying`, never total. */
+export const reportConceptKindRollupSchema = z.object({
+  casesSpecifying: z.number().int().min(0),
+  casesSatisfyingAll: z.number().int().min(0),
+  pct: z.number(),
+});
+export type ReportConceptKindRollup = z.infer<typeof reportConceptKindRollupSchema>;
+
+/** One concept phrase missing from more than one case, with the cases it spans. */
+export const reportRecurringMissingConceptSchema = z.object({
+  concept: z.string(),
+  count: z.number().int().min(0),
+  caseIds: z.array(z.string()),
+});
+export type ReportRecurringMissingConcept = z.infer<typeof reportRecurringMissingConceptSchema>;
+
+/** The run-level concept readout. Null when no evaluated case carried concept data at all. */
+export const reportConceptRollupSchema = z.object({
+  casesWithConcepts: z.number().int().min(0),
+  mandatory: reportConceptKindRollupSchema,
+  expected: reportConceptKindRollupSchema,
+  missingMandatory: z.array(
+    z.object({ id: z.string(), question: z.string(), missing: z.array(z.string()) }),
+  ),
+  /** How many of `missingMandatory` actually lost a Pass to the gate. */
+  gateBlockedPasses: z.number().int().min(0),
+  autoPassed: z.array(z.object({ id: z.string(), question: z.string() })),
+  autoPassBlocked: z.array(
+    z.object({ id: z.string(), question: z.string(), note: z.string().nullable() }),
+  ),
+  recurringMissing: z.array(reportRecurringMissingConceptSchema),
+});
+export type ReportConceptRollup = z.infer<typeof reportConceptRollupSchema>;
+
+/**
+ * B0-720 — why a case is in the human-review queue. The labels a renderer prints come from
+ * `VARIANCE_CAUSE_LABELS` in `./consolidate`, so the Markdown and the React report cannot word the
+ * same cause differently.
+ */
+export const reportVarianceCauseSchema = z.enum([
+  'band_split',
+  'score_range',
+  'evaluability',
+  'concept',
+]);
+export type ReportVarianceCause = z.infer<typeof reportVarianceCauseSchema>;
+
+/** Which judgment the grading passes split on. */
+export const reportConceptDisagreementKindSchema = z.enum([
+  'mandatory_concept',
+  'expected_concept',
+  'all_mandatory',
+  'all_expected',
+  'auto_pass_eligible',
+  'material_issue',
+]);
+export type ReportConceptDisagreementKind = z.infer<typeof reportConceptDisagreementKindSchema>;
+
+/**
+ * One split concept judgment. `concept` names the phrase verbatim (rule 1) for the two per-phrase
+ * kinds and is null for the whole-case judgments, which are about the case rather than a phrase.
+ */
+export const reportConceptDisagreementSchema = z.object({
+  kind: reportConceptDisagreementKindSchema,
+  concept: z.string().nullable(),
+  votesFor: z.number().int().min(0),
+  voters: z.number().int().min(0),
+});
+export type ReportConceptDisagreement = z.infer<typeof reportConceptDisagreementSchema>;
+
+/**
+ * B0-720 — how one case's independent grading passes disagreed. Null for a single-pass case, which
+ * is what omits every consistency readout rather than showing it as zeroes.
+ */
+export const reportCaseVarianceSchema = z.object({
+  passes: z.number().int().min(1),
+  /** Each pass's own weighted overall, in pass order; null for a pass that could not evaluate. */
+  passOveralls: z.array(z.number().nullable()),
+  /** Each pass's rubric band, before any concept rule (identical across passes by construction). */
+  passBands: z.array(reportCaseStatusSchema.nullable()),
+  /** max − min of the numeric overalls; null with fewer than two of them. */
+  range: z.number().nullable(),
+  bandSplit: z.boolean(),
+  scoreRangeExceeded: z.boolean(),
+  spreadThreshold: z.number(),
+  evaluabilitySplit: z.boolean(),
+  conceptDisagreements: z.array(reportConceptDisagreementSchema),
+  causes: z.array(reportVarianceCauseSchema),
+  flagged: z.boolean(),
+  /** Timing disagreements between passes — a data-quality warning, never a grading flag. */
+  timingWarnings: z.array(z.string()),
+});
+export type ReportCaseVariance = z.infer<typeof reportCaseVarianceSchema>;
+
+/** One case in the human-review queue. Every field is read off its variance, never re-derived. */
+export const reportConsistencyQueueEntrySchema = z.object({
+  id: z.string(),
+  question: z.string(),
+  causes: z.array(reportVarianceCauseSchema),
+  passOveralls: z.array(z.number().nullable()),
+  range: z.number().nullable(),
+  /** A flagged case can be Unable to Evaluate and still need a human to look at it. */
+  unableToEvaluate: z.boolean(),
+  conceptDisagreements: z.array(reportConceptDisagreementSchema),
+});
+export type ReportConsistencyQueueEntry = z.infer<typeof reportConsistencyQueueEntrySchema>;
+
+/**
+ * B0-721 — the run's grading-consistency readout. Null for a single-pass run: the block is then
+ * omitted entirely rather than rendered as "0 flags", because zero disagreements out of zero
+ * comparisons is not a reassuring number, it is no measurement at all.
+ */
+export const reportConsistencySchema = z.object({
+  passes: z.number().int().min(1),
+  spreadThreshold: z.number(),
+  casesConsolidated: z.number().int().min(0),
+  flagged: z.number().int().min(0),
+  /** A case can be counted under more than one cause; these do not sum to `flagged`. */
+  byCause: z.object({
+    band_split: z.number().int().min(0),
+    score_range: z.number().int().min(0),
+    evaluability: z.number().int().min(0),
+    concept: z.number().int().min(0),
+  }),
+  conceptDisagreementCases: z.number().int().min(0),
+  conceptDisagreements: z.number().int().min(0),
+  maxRange: z.number().nullable(),
+  queue: z.array(reportConsistencyQueueEntrySchema),
+  /** Cases whose passes reported different timings — data quality, never a grading flag. */
+  timingDisagreementCases: z.number().int().min(0),
+});
+export type ReportConsistency = z.infer<typeof reportConsistencySchema>;
+
+/**
  * The derived scoreline for one evaluated case. Sub-scores are the grader's raw 0–100 judgments;
  * `overall` is the weighted roll-up (Accuracy 40 / Completeness 30 / Relevance 20 / Clarity 10),
  * and `grade`/`status` are derived from `overall`. Absent for Unable-to-Evaluate cases.
@@ -117,7 +385,20 @@ export const reportEvaluatedCaseSchema = z.object({
   clarity: z.number(),
   overall: z.number(),
   grade: reportGradeSchema,
+  /** The weighted rubric's own verdict, before any concept rule (B0-712). */
+  rubricStatus: reportCaseStatusSchema,
+  /** The reported Result: `rubricStatus` after the concept rules. */
   status: reportCaseStatusSchema,
+  statusSource: reportCaseStatusSourceSchema,
+  /** True for every case missing a mandatory concept, even one already below Pass on score. */
+  ratingConstrained: z.boolean(),
+  /** The narrower fact that the gate actually removed a Pass. Not a substitute for the above. */
+  gateBlockedAPass: z.boolean(),
+  autoPassTriggered: z.boolean(),
+  /** The case qualified for an automatic Pass but a material factual issue withheld it. */
+  autoPassBlocked: z.boolean(),
+  /** Null when the case has no concept data — every flag above is then false. */
+  concepts: reportCaseConceptsSchema.nullable(),
 });
 export type ReportEvaluatedCase = z.infer<typeof reportEvaluatedCaseSchema>;
 
@@ -138,8 +419,22 @@ export const reportMetricsSchema = z.object({
   categories: z.array(reportGroupRateSchema),
   strongestCategory: z.string().nullable(),
   weakestCategory: z.string().nullable(),
-  latency: reportLatencySchema.nullable(),
-  /** Non-fatal reconciliation/data-quality notes from metric computation. Usually empty. */
+  /**
+   * B0-717 — the run's speed readout, replacing the old single-metric `latency` block. Null when
+   * no case recorded a timing. Reported beside the grade and never part of it.
+   */
+  speed: reportSpeedSchema.nullable(),
+  /** Null when no evaluated case carried concept data — omit every concept section entirely. */
+  concepts: reportConceptRollupSchema.nullable(),
+  /**
+   * B0-721 — the grading-consistency readout. Null on a single-pass run, which omits the summary,
+   * the human-review queue and every per-case spread readout entirely.
+   */
+  consistency: reportConsistencySchema.nullable(),
+  /**
+   * Non-fatal data-quality notes from metric computation. Usually empty. Structural
+   * reconciliation failures are *not* here: those throw and the report is never written (B0-714).
+   */
   warnings: z.array(z.string()),
 });
 export type ReportMetricsData = z.infer<typeof reportMetricsSchema>;
@@ -193,13 +488,32 @@ export const reportCaseSchema = z.object({
   unableToEvaluate: z.boolean(),
   /** Null for UTE cases. Looked up from `metrics.perCase` — never recomputed. */
   evaluated: reportEvaluatedCaseSchema.nullable(),
+  /**
+   * The concept block this case was rated with (B0-713), or null when it has none. The same
+   * object as `evaluated.concepts` for an evaluated case; present here too so the ledger can read
+   * coverage without going through the scoreline.
+   */
+  concepts: reportCaseConceptsSchema.nullable(),
 
   // --- Reference signals (never part of the grade) ---
+  /** Total response time in seconds — `latencyMs / 1000`, converted once during assembly. */
   latencySeconds: z.number().nullable(),
   /** Source precision, straight from `test_result_items.elapsed_ms`. */
   latencyMs: z.number().nullable(),
-  /** Null when the case has no latency, or the run recorded none at all. */
-  latencyBand: reportLatencyBandSchema.nullable(),
+  /** B0-715 — time to first token in seconds. Null for runs that recorded none; never 0. */
+  ttftSeconds: z.number().nullable(),
+  /** Source precision, straight from `test_result_items.ttft_ms`. */
+  ttftMs: z.number().nullable(),
+  /**
+   * The scored speed for this case (B0-717), or null when it recorded no timing at all. Looked up
+   * from `metrics.speed.perCase` — never recomputed, in assembly or in a renderer.
+   */
+  speed: reportCaseSpeedSchema.nullable(),
+  /**
+   * B0-720 — how this case's grading passes disagreed. Null for a single-pass case, and therefore
+   * for every case of a single-pass run.
+   */
+  variance: reportCaseVarianceSchema.nullable(),
   harness: reportCaseHarnessSchema.nullable(),
   /** `rag.document` ids retrieved for this answer, de-duplicated, in payload order. */
   retrievedDocumentIds: z.array(z.string()),
