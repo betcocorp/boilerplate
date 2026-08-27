@@ -319,6 +319,68 @@ export const productSupportTools: Tool[] = [
       required: [],
     },
   },
+  {
+    type: 'function',
+    name: 'get_dispenser_asset',
+    strict: false,
+    description:
+      'Retrieve Betco dispenser / dilution-control reference documents from the approved knowledge corpus — proportioner and dispenser setup guides, metering-tip selection, calibration procedures, and dilution-ratio calculation guides. Use this for "how is the dispenser set up / which tip / how do I calculate the ratio" questions, where the answer is a documented PROCEDURE rather than a per-product fact. For the exact verified dilution ratio of a specific product, call `get_efficacy_data` instead — this tool returns procedure text, not the fact tables. Returns up to 5 full knowledge documents in `sources[].documentBody`; transcribe any ratio, oz/gal, mL/L, or dwell time exactly as written and cite the source document id.',
+    parameters: {
+      type: 'object',
+      properties: {
+        dispenserModel: {
+          type: 'string',
+          description: 'Dispenser, proportioner, or dilution-control system name/model when the user named one.',
+        },
+        productName: {
+          type: 'string',
+          description: 'Betco product the dispenser is being set up for, when known.',
+        },
+        topic: {
+          type: 'string',
+          description:
+            'What is being asked, e.g. "metering tip selection", "calibration", "dilution ratio chart", "installation".',
+        },
+        maxResults: {
+          type: 'number',
+          description: 'Max knowledge documents to return (default 3, max 5).',
+        },
+      },
+      // At least one of dispenserModel / productName / topic must be set (enforced by the schema).
+      required: [],
+    },
+  },
+  {
+    type: 'function',
+    name: 'get_floor_asset',
+    strict: false,
+    description:
+      'Retrieve Betco floor-care reference documents from the approved knowledge corpus — coat-count and coverage/yield charts, finish application and dry/cure guidance, top-scrub and recoat procedures, stripping procedures, and pad/equipment guides. Use this for "how many coats", "what coverage should I expect", "what is the top-scrub procedure" style questions on a named surface (VCT, terrazzo, concrete, wood). Returns up to 5 full knowledge documents in `sources[].documentBody`; transcribe coat counts, coverage figures, dry times, and dilution values exactly as written — never round, convert, or average them — and cite the source document id.',
+    parameters: {
+      type: 'object',
+      properties: {
+        surfaceType: {
+          type: 'string',
+          description: 'Floor surface named by the user, e.g. "VCT", "terrazzo", "sealed concrete", "hardwood".',
+        },
+        productName: {
+          type: 'string',
+          description: 'Betco or Basic Coatings product when the question names one.',
+        },
+        procedure: {
+          type: 'string',
+          description:
+            'Procedure or chart wanted, e.g. "coat count", "coverage yield", "top scrub recoat", "stripping", "burnishing".',
+        },
+        maxResults: {
+          type: 'number',
+          description: 'Max knowledge documents to return (default 3, max 5).',
+        },
+      },
+      // At least one of surfaceType / productName / procedure must be set (enforced by the schema).
+      required: [],
+    },
+  },
 ];
 
 /* -------------------------------------------------------------------------- *
@@ -372,10 +434,13 @@ const ROUTE_TOOL_NAMES: Record<string, readonly ProductToolName[]> = {
   // Catalog/filter questions land here too ("what floor strippers do you have?"), so both the
   // bathroom and floor routes keep the category tools — production traces show both using them.
   bathroom: [...BASE_ROUTE_TOOL_NAMES, ...CATEGORY_ROUTE_TOOL_NAMES],
-  floor: [...BASE_ROUTE_TOOL_NAMES, ...CATEGORY_ROUTE_TOOL_NAMES],
+  // B0-529: `get_floor_asset` is scoped to the floor route only — the coat-count/coverage corpus it
+  // reads is meaningless to the other specialists, and it is named in the floor policy (rule 3).
+  floor: [...BASE_ROUTE_TOOL_NAMES, ...CATEGORY_ROUTE_TOOL_NAMES, 'get_floor_asset'],
   // Dilution is always about a NAMED product's ratio/dispenser setup, never about browsing a
-  // category; no dilution-route run has called a category tool.
-  dilution: BASE_ROUTE_TOOL_NAMES,
+  // category; no dilution-route run has called a category tool. B0-529: `get_dispenser_asset` is
+  // named in the dilution policy, so it joins this route (rule 3) and no other.
+  dilution: [...BASE_ROUTE_TOOL_NAMES, 'get_dispenser_asset'],
   // The recommendations policy is cross-reference-first and has only ever used
   // lookup_cross_reference / recommend_cross_reference / search_product_docs.
   recommendations: BASE_ROUTE_TOOL_NAMES,

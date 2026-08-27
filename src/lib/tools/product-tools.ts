@@ -30,12 +30,20 @@ import {
 import { writeAuditLog, type AuditContext } from '~/lib/audit/audit-log';
 
 import {
+  buildKnowledgeAssetQuery,
+  KNOWLEDGE_ASSET_ADAPTER_TAG,
+  retrieveKnowledgeAssets,
+} from '~/lib/retrieval/knowledge-assets';
+
+import {
   EFFICACY_BATCH_MAX_PRODUCTS,
   findProductsByCategoryInputSchema,
   getApprovedUsageGuidanceInputSchema,
   getCompatibilityRulesInputSchema,
+  getDispenserAssetInputSchema,
   getEfficacyDataInputSchema,
   getEscalationPolicyInputSchema,
+  getFloorAssetInputSchema,
   getProductCategoryInputSchema,
   getProductSpecInputSchema,
   getProductsInCategoryInputSchema,
@@ -816,6 +824,56 @@ export async function executeProductTool(
         facts,
         labReport,
         sources,
+      };
+    }
+    /**
+     * B0-529 — dispenser/proportioner setup and dilution-ratio PROCEDURE documents.
+     *
+     * Deliberately not a product-entity-anchored search: a dispenser guide is written per dispenser
+     * family, not per product line, so `resolveProductEntityByName` would either miss or wrongly lock
+     * retrieval to one product line. The product name is used only as query text.
+     */
+    case 'get_dispenser_asset': {
+      const p = getDispenserAssetInputSchema.parse(args);
+      const q = buildKnowledgeAssetQuery([
+        p.dispenserModel,
+        p.productName,
+        p.topic,
+        'dispenser dilution control proportioner metering tip setup calibration dilution ratio',
+      ]);
+      const result = await retrieveKnowledgeAssets({ query: q, limit: p.maxResults });
+      return {
+        ok: true,
+        adapter: KNOWLEDGE_ASSET_ADAPTER_TAG,
+        query: result.query,
+        scope: result.scope,
+        dispenserModel: p.dispenserModel ?? null,
+        productName: p.productName ?? null,
+        topic: p.topic ?? null,
+        sources: result.sources,
+        retrieval: result.retrieval,
+      };
+    }
+    /** B0-529 — coat-count / coverage charts and floor procedure bulletins. Same rationale as above. */
+    case 'get_floor_asset': {
+      const p = getFloorAssetInputSchema.parse(args);
+      const q = buildKnowledgeAssetQuery([
+        p.surfaceType,
+        p.productName,
+        p.procedure,
+        'floor finish coats coverage yield recoat top scrub stripping procedure',
+      ]);
+      const result = await retrieveKnowledgeAssets({ query: q, limit: p.maxResults });
+      return {
+        ok: true,
+        adapter: KNOWLEDGE_ASSET_ADAPTER_TAG,
+        query: result.query,
+        scope: result.scope,
+        surfaceType: p.surfaceType ?? null,
+        productName: p.productName ?? null,
+        procedure: p.procedure ?? null,
+        sources: result.sources,
+        retrieval: result.retrieval,
       };
     }
   }

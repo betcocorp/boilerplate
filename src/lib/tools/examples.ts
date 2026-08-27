@@ -69,6 +69,18 @@ export const TOOL_EXAMPLES: Record<string, Record<string, unknown>> = {
     productId: 'pH7Q',
     productName: '',
   },
+  get_dispenser_asset: {
+    dispenserModel: '',
+    productName: '',
+    topic: 'calculating dilution ratios',
+    maxResults: 3,
+  },
+  get_floor_asset: {
+    surfaceType: 'VCT',
+    productName: '',
+    procedure: 'coat count',
+    maxResults: 3,
+  },
 };
 
 export function getToolExample(toolName: string): Record<string, unknown> {

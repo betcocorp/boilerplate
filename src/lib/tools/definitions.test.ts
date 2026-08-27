@@ -8,7 +8,14 @@ import {
   productSupportTools,
   productSupportToolsForRoute,
 } from '~/lib/tools/definitions';
-import { PRODUCT_TOOL_NAMES } from '~/lib/tools/tool-schemas';
+import { RETRIEVAL_TOOL_NAMES } from '~/lib/openai/responses-runtime';
+import { getToolExample } from '~/lib/tools/examples';
+import { DEFAULT_TOOL_TIMEOUT_MS, resolveToolTimeoutMs } from '~/lib/tools/tool-timeouts';
+import {
+  getDispenserAssetInputSchema,
+  getFloorAssetInputSchema,
+  PRODUCT_TOOL_NAMES,
+} from '~/lib/tools/tool-schemas';
 import {
   BATHROOM_SPECIALIST_SYSTEM_PROMPT,
   PRODUCT_SUPPORT_SHARED_INSTRUCTIONS,
@@ -117,6 +124,70 @@ describe('productSupportToolsForRoute (B0-437)', () => {
     const fullChars = JSON.stringify(productSupportTools).length;
     for (const route of ['dilution', 'recommendations']) {
       expect(JSON.stringify(productSupportToolsForRoute(route)).length).toBeLessThan(fullChars);
+    }
+  });
+});
+
+/**
+ * B0-529 — the classic failure mode for a new tool is being wired into some sites and not others,
+ * so this asserts every site at once: definition, name enum, route scoping, timeout, and the
+ * retrieval-tool set the Responses runtime uses for its unproductive-call guard.
+ */
+describe('get_dispenser_asset / get_floor_asset wiring (B0-529)', () => {
+  const NEW_TOOLS = ['get_dispenser_asset', 'get_floor_asset'] as const;
+
+  it('is a real product tool with a definition', () => {
+    for (const name of NEW_TOOLS) {
+      expect(PRODUCT_TOOL_NAMES as readonly string[]).toContain(name);
+      expect(productSupportTools.some((t) => 'name' in t && t.name === name)).toBe(true);
+    }
+  });
+
+  it('scopes each tool to the route whose prompt names it, and nowhere else', () => {
+    expect(toolNames('dilution')).toContain('get_dispenser_asset');
+    expect(toolNames('dilution')).not.toContain('get_floor_asset');
+
+    expect(toolNames('floor')).toContain('get_floor_asset');
+    expect(toolNames('floor')).not.toContain('get_dispenser_asset');
+
+    for (const route of ['bathroom', 'recommendations']) {
+      for (const name of NEW_TOOLS) {
+        expect(toolNames(route), `${route} should not carry ${name}`).not.toContain(name);
+      }
+    }
+  });
+
+  it('is reachable from the catch-all routes like every other tool', () => {
+    for (const route of ['product', 'ambiguous']) {
+      for (const name of NEW_TOOLS) {
+        expect(toolNames(route)).toContain(name);
+      }
+    }
+  });
+
+  it('resolves a tool-execution timeout (no unbounded call)', () => {
+    for (const name of NEW_TOOLS) {
+      expect(resolveToolTimeoutMs(name)).toBe(DEFAULT_TOOL_TIMEOUT_MS);
+    }
+  });
+
+  it('counts as retrieval for the unproductive-retrieval guard', () => {
+    for (const name of NEW_TOOLS) {
+      expect(RETRIEVAL_TOOL_NAMES.has(name)).toBe(true);
+    }
+  });
+
+  it('has an admin example payload that satisfies its own schema', () => {
+    expect(getDispenserAssetInputSchema.safeParse(getToolExample('get_dispenser_asset')).success).toBe(
+      true,
+    );
+    expect(getFloorAssetInputSchema.safeParse(getToolExample('get_floor_asset')).success).toBe(true);
+  });
+
+  it('tells the model to transcribe regulated values exactly', () => {
+    for (const name of NEW_TOOLS) {
+      const def = productSupportTools.find((t) => 'name' in t && t.name === name);
+      expect((def as { description: string }).description).toMatch(/exactly as written/);
     }
   });
 });

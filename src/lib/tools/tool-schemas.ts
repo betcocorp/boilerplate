@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { MAX_KNOWLEDGE_ASSET_RESULTS } from '~/lib/retrieval/knowledge-assets';
+
 /**
  * B0-362: `topic` is optional. The tool prose (and the product-support prompt) tells the
  * model to call this with `freeformQuery` alone when the product is unknown, so requiring
@@ -181,6 +183,56 @@ export const getEfficacyDataInputSchema = z
   )
   .transform(normalizeProductRef);
 
+/**
+ * B0-529 — `get_dispenser_asset` / `get_floor_asset`.
+ *
+ * Every field is optional and the refine requires at least one: the model rarely has all three, and
+ * a hard-required field is exactly what made `search_product_docs` reject ~32% of calls (B0-362).
+ * The executor composes whichever fields arrived into one retrieval query.
+ */
+const knowledgeAssetMaxResults = z
+  .number()
+  .int()
+  .min(1)
+  .max(MAX_KNOWLEDGE_ASSET_RESULTS)
+  .optional();
+
+export const getDispenserAssetInputSchema = z
+  .object({
+    /** Dispenser / proportioner model or family, e.g. "FastDraw", "Clario". */
+    dispenserModel: z.string().max(256).optional(),
+    /** Betco product the dispenser is set up for, when known. */
+    productName: z.string().max(256).optional(),
+    /** What is being asked, e.g. "metering tip selection", "dilution ratio chart". */
+    topic: z.string().max(512).optional(),
+    maxResults: knowledgeAssetMaxResults,
+  })
+  .refine(
+    (v) => Boolean(v.dispenserModel?.trim() || v.productName?.trim() || v.topic?.trim()),
+    {
+      message: 'Provide at least one of `dispenserModel`, `productName`, or `topic`.',
+      path: ['topic'],
+    },
+  );
+
+export const getFloorAssetInputSchema = z
+  .object({
+    /** Floor surface, e.g. "VCT", "terrazzo", "sealed concrete". */
+    surfaceType: z.string().max(256).optional(),
+    /** Betco or Basic Coatings product, when the question names one. */
+    productName: z.string().max(256).optional(),
+    /** The procedure or chart wanted, e.g. "coat count", "top scrub recoat", "coverage yield". */
+    procedure: z.string().max(512).optional(),
+    maxResults: knowledgeAssetMaxResults,
+  })
+  .refine(
+    (v) => Boolean(v.surfaceType?.trim() || v.productName?.trim() || v.procedure?.trim()),
+    {
+      message: 'Provide at least one of `surfaceType`, `productName`, or `procedure`.',
+      path: ['procedure'],
+    },
+  );
+
 export const PRODUCT_TOOL_NAMES = [
   'search_product_docs',
   'get_product_spec',
@@ -196,6 +248,8 @@ export const PRODUCT_TOOL_NAMES = [
   'find_products_by_category',
   'recommend_cross_reference',
   'get_efficacy_data',
+  'get_dispenser_asset',
+  'get_floor_asset',
 ] as const;
 
 export type ProductToolName = (typeof PRODUCT_TOOL_NAMES)[number];
