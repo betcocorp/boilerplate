@@ -1,6 +1,6 @@
 'use client';
 
-import { ChevronRight } from 'lucide-react';
+import { ChevronRight, ChevronsDownUp, ChevronsUpDown } from 'lucide-react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { type ReactNode, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 
@@ -101,6 +101,34 @@ export function seedOpenCaseIds(
     if (isDefaultOpenCase(c) || (hashTarget && c.anchorId === hashTarget)) open.add(c.id);
   }
   return open;
+}
+
+export type BulkDisclosureAction = 'expand' | 'collapse';
+
+/**
+ * B0-706 — which action the bulk control offers. Two-state on purpose: while any visible row is
+ * open it collapses, and only once they are all closed does it expand, so one click is always
+ * predictable rather than depending on how many rows happen to be open.
+ */
+export function bulkDisclosureAction(
+  openIds: ReadonlySet<string>,
+  visibleIds: readonly string[],
+): BulkDisclosureAction {
+  return visibleIds.some((id) => openIds.has(id)) ? 'collapse' : 'expand';
+}
+
+/** `openIds` with every visible row opened or closed; rows the filter hides keep their state. */
+export function applyBulkDisclosure(
+  openIds: ReadonlySet<string>,
+  visibleIds: readonly string[],
+  action: BulkDisclosureAction,
+): ReadonlySet<string> {
+  const next = new Set(openIds);
+  for (const id of visibleIds) {
+    if (action === 'expand') next.add(id);
+    else next.delete(id);
+  }
+  return next;
 }
 
 export function matchesLedgerFilter(c: ReportCase, filter: LedgerFilter): boolean {
@@ -636,6 +664,12 @@ function ReportCaseLedgerContent({ cases, metrics, className }: ReportCaseLedger
     }))
     .filter((group) => group.cases.length > 0);
 
+  // The bulk control acts on what is on screen under the active filter, never the whole payload.
+  const visibleCaseIds = visibleGroups.flatMap((group) => group.cases.map((c) => c.id));
+  const bulkAction = bulkDisclosureAction(openIds, visibleCaseIds);
+  const toggleAllVisible = () =>
+    setOpenIds((prev) => applyBulkDisclosure(prev, visibleCaseIds, bulkAction));
+
   return (
     <section
       className={cn(
@@ -651,7 +685,7 @@ function ReportCaseLedgerContent({ cases, metrics, className }: ReportCaseLedger
         reported for reference only and are not part of the grade.
       </p>
 
-      <div className="mt-4 flex flex-wrap gap-2">
+      <div className="mt-4 flex flex-wrap items-center gap-2">
         {chips.map((chip) => {
           const active = ledgerFilterEquals(chip.filter, filter);
           return (
@@ -674,6 +708,26 @@ function ReportCaseLedgerContent({ cases, metrics, className }: ReportCaseLedger
             </button>
           );
         })}
+
+        {visibleCaseIds.length > 0 ? (
+          <button
+            className="ml-auto inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600 transition-colors hover:border-slate-300 hover:bg-slate-50 print:hidden"
+            onClick={toggleAllVisible}
+            title={
+              bulkAction === 'collapse'
+                ? 'Close every case record shown below'
+                : 'Open every case record shown below'
+            }
+            type="button"
+          >
+            {bulkAction === 'collapse' ? (
+              <ChevronsDownUp className="size-3.5 text-slate-400" />
+            ) : (
+              <ChevronsUpDown className="size-3.5 text-slate-400" />
+            )}
+            {bulkAction === 'collapse' ? 'Collapse all' : 'Expand all'}
+          </button>
+        ) : null}
       </div>
 
       {visibleGroups.length === 0 ? (

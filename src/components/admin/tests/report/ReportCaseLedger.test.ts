@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import type { ReportCase, ReportGroupRate } from '~/lib/tests/report/data-schemas';
 
 import {
+  applyBulkDisclosure,
   buildLedgerChips,
+  bulkDisclosureAction,
   groupCasesByTier,
   isDefaultOpenCase,
   isExceptionCase,
@@ -250,5 +252,48 @@ describe('matchesLedgerFilter / buildLedgerChips', () => {
       ['Tier 2', 2],
     ]);
     expect(chips[3]!.filter).toEqual({ kind: 'tier', tier: 'Tier 2' });
+  });
+});
+
+describe('bulkDisclosureAction / applyBulkDisclosure', () => {
+  const visible = ['a', 'b', 'c'];
+
+  it('offers collapse while any visible row is open, expand once none are', () => {
+    expect(bulkDisclosureAction(new Set(['b']), visible)).toBe('collapse');
+    expect(bulkDisclosureAction(new Set(visible), visible)).toBe('collapse');
+    expect(bulkDisclosureAction(new Set(), visible)).toBe('expand');
+    // An open row hidden by the filter must not make the button offer "collapse".
+    expect(bulkDisclosureAction(new Set(['hidden']), visible)).toBe('expand');
+  });
+
+  it('opens or closes every visible row in one step', () => {
+    expect([...applyBulkDisclosure(new Set(['a']), visible, 'expand')].sort()).toEqual([
+      'a',
+      'b',
+      'c',
+    ]);
+    expect([...applyBulkDisclosure(new Set(visible), visible, 'collapse')]).toEqual([]);
+  });
+
+  it('leaves rows the filter hides untouched in both directions', () => {
+    expect([...applyBulkDisclosure(new Set(['hidden']), visible, 'collapse')]).toEqual(['hidden']);
+    expect([...applyBulkDisclosure(new Set(['hidden']), visible, 'expand')].sort()).toEqual([
+      'a',
+      'b',
+      'c',
+      'hidden',
+    ]);
+  });
+
+  it('round-trips: collapse then expand restores every visible row', () => {
+    const open = new Set(['a', 'b', 'c', 'hidden']);
+    const collapsed = applyBulkDisclosure(open, visible, 'collapse');
+    expect(bulkDisclosureAction(collapsed, visible)).toBe('expand');
+    expect([...applyBulkDisclosure(collapsed, visible, 'expand')].sort()).toEqual([
+      'a',
+      'b',
+      'c',
+      'hidden',
+    ]);
   });
 });
