@@ -13,14 +13,6 @@ import { PRODUCT_TOOL_NAMES, type ProductToolName } from '~/lib/tools/tool-schem
  * between `response-payload.ts` (pure extraction) and `repository.ts` (Supabase reads).
  */
 
-/**
- * The `test_items.metadata` key a test author sets to record which tool the question is expected
- * to route to. Same catch-all path as any other unrecognized CSV column (`csv.ts`'s
- * `TYPED_CSV_COLUMNS` / `INPUT_PAYLOAD_CSV_COLUMNS` don't claim it) — a CSV with an `expected_tool`
- * column round-trips into `metadata.expected_tool` with zero importer changes.
- */
-export const EXPECTED_TOOL_METADATA_KEY = 'expected_tool';
-
 const KNOWN_TOOL_NAME_SET: ReadonlySet<string> = new Set(PRODUCT_TOOL_NAMES);
 
 /** True when `name` is one of the 14 live function tools in `~/lib/tools/tool-schemas.ts`. */
@@ -29,16 +21,12 @@ export function isKnownToolName(name: string): name is ProductToolName {
 }
 
 /**
- * Reads `metadata.expected_tool` off a `test_items` row. Returns the raw trimmed string even when
+ * Normalizes a `test_items.expected_tool` column value. Returns the raw trimmed string even when
  * it doesn't match a known tool name (surfaced separately as `unknownExpectedTools` in the report)
  * so a typo'd tool name is visible instead of silently treated as "no expectation".
  */
-export function extractExpectedTool(metadata: unknown): string | null {
-  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
-    return null;
-  }
-  const raw = (metadata as Record<string, unknown>)[EXPECTED_TOOL_METADATA_KEY];
-  return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
+export function extractExpectedTool(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
 /**
@@ -99,7 +87,7 @@ export type ToolRoutingReportInput = {
   testItemId: string;
   rowIndex: number;
   prompt: string;
-  /** From `extractExpectedTool(testItem.metadata)`; `null` = this question has no routing expectation. */
+  /** From `extractExpectedTool(testItem.expected_tool)`; `null` = this question has no routing expectation. */
   expectedTool: string | null;
   /** From `parseAgentStepToolTrace(...)`, keyed by this item's `workflow_run_id`; `null` = no trace on file. */
   toolTrace: ToolTraceEntry[] | null;

@@ -102,15 +102,22 @@ export function CreateOrUploadTestDatasetDialog({
                 className="text-sm text-slate-700"
                 htmlFor="test-dataset-input"
               >
-                CSV file{' '}
+                CSV or multi-turn JSON file{' '}
                 <span className="font-normal text-slate-500">(optional)</span>
               </Label>
               <Input
-                accept=".csv,text/csv"
+                accept=".csv,text/csv,.json,application/json"
                 id="test-dataset-input"
                 name="dataset"
                 type="file"
               />
+              <p className="text-xs text-slate-500">
+                A <code className="rounded bg-slate-100 px-1 py-0.5">.csv</code> imports one prompt
+                per row. A <code className="rounded bg-slate-100 px-1 py-0.5">.json</code> multi-turn
+                scenario set (B0-537) imports one ordered conversation per scenario — see the{' '}
+                <code className="rounded bg-slate-100 px-1 py-0.5">multi_turn_json</code> column
+                reference below for the scenario shape.
+              </p>
             </div>
 
             <div className="sm:col-span-2">

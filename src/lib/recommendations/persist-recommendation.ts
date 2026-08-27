@@ -7,6 +7,7 @@ import {
   type RecommendCrossReferenceDeps,
   type RecommendCrossReferenceInput,
   type RecommendCrossReferenceResult,
+  type XrefLatencyPolicy,
 } from '~/lib/recommendations/recommend-cross-reference';
 import { getErrorMessage } from '~/lib/utils';
 
@@ -94,6 +95,13 @@ export type RunCrossReferenceRecommendationDeps = {
   persist?: PersistRecommendationDeps;
   /** B0-92 — record per-recommendation web-search cost/outcome. Best-effort (never blocks). */
   audit?: (eventType: string, payload: Record<string, unknown>, ctx: { traceId: string }) => Promise<void>;
+  /**
+   * B0-355 — override the B0-329 latency policy for this invocation. Used by the deterministic
+   * invocation backstop, which runs after the model's tool loop has already spent part of the turn
+   * and must therefore get the REMAINING budget rather than a fresh full ceiling. Absent (the
+   * default) keeps `recommendCrossReference`'s own `loadXrefLatencyPolicy()` read.
+   */
+  policy?: XrefLatencyPolicy;
 };
 
 /**
@@ -107,7 +115,7 @@ export async function runCrossReferenceRecommendation(
   deps: RunCrossReferenceRecommendationDeps = {},
 ): Promise<RecommendCrossReferenceResult & { recommendationId: string | null }> {
   const traceId = ctx.traceId ?? newCorrelationId();
-  const result = await recommendCrossReference(input, deps.recommend);
+  const result = await recommendCrossReference(input, deps.recommend, deps.policy);
   const recommendationId = await persistRecommendation(input, result, { ...ctx, traceId }, deps.persist);
 
   const audit = deps.audit ?? ((eventType, payload, auditCtx) => writeAuditLog(eventType, payload, auditCtx));

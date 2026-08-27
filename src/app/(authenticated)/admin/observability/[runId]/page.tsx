@@ -6,6 +6,7 @@ import { PromptHistoryStrip } from '~/components/admin/observability/PromptHisto
 import { RunAttributionBadge } from '~/components/admin/observability/RunAttributionBadge';
 import { RunAnswerPanel } from '~/components/admin/observability/RunAnswerPanel';
 import { RunInsightsProvider } from '~/components/admin/observability/run-insights-context';
+import { RunIntegrityPanel } from '~/components/admin/observability/RunIntegrityPanel';
 import { RunPayloadSummary } from '~/components/admin/observability/RunPayloadSummary';
 import { RunPromptInsightsPanel } from '~/components/admin/observability/RunPromptInsightsPanel';
 import { RunRetrievedChunksPanel } from '~/components/admin/observability/RunRetrievedChunksPanel';
@@ -15,6 +16,7 @@ import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
 import { getAgentBadgeClassName } from '~/lib/bex/agent-badge';
 import { getHarnessContextForRun } from '~/lib/observability/harness-linkage';
+import { buildRunIntegrityView } from '~/lib/observability/integrity-coverage';
 import {
   EMPTY_PROMPT_HISTORY,
   getPromptHistoryForItem,
@@ -129,6 +131,17 @@ export default async function AdminRunTracePage({ params }: PageProps) {
   // B0-418 — the run's own payload (answer, chunks, similarity, timing, validation,
   // usage). Tolerates a null `final_output` and error-only payloads.
   const payload = readRunPayloadView(run?.final_output, run?.user_input);
+  /**
+   * B0-496 — decision-node coverage, confidence provenance and the raw-vs-selected similarity split
+   * for this run. Pure: it reads only the rows already loaded above.
+   */
+  const integrity = trace
+    ? buildRunIntegrityView({
+        runConfidence: trace.run.confidence,
+        finalOutput: trace.run.final_output,
+        steps: trace.steps,
+      })
+    : null;
   /**
    * B0-455 — legacy ERP product-line codes ("H610") for every distinct `product_line_key`
    * on this run's retrieved chunks, for the "Product line id" column on the chunks panel.
@@ -363,6 +376,10 @@ export default async function AdminRunTracePage({ params }: PageProps) {
               />
             </section>
           ) : null}
+
+          {/* B0-496 — does every decision point in the trace above actually carry a measurement?
+              Diagnostic only; opens itself when the run has unmeasured nodes. */}
+          {integrity ? <RunIntegrityPanel view={integrity} /> : null}
 
           {/* Retrieved chunks — collapsed by default; the bulkiest section on the page. */}
           {trace ? (

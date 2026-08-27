@@ -56,12 +56,27 @@ import {
   LOW_SIMILARITY_THRESHOLD,
   MISSING_BRAND_CONFIDENCE_CAP,
 } from '~/lib/recommendations/recommendation-gate';
-import { isConfidenceGatingDisabled } from '~/lib/recommendations/confidence-scoring';
+import {
+  isConfidenceGatingDisabled,
+  XREF_DECLINE_COPY,
+} from '~/lib/recommendations/confidence-scoring';
 import {
   extractCompetitorProduct,
   type ExtractedCompetitor,
 } from '~/lib/recommendations/extract-competitor-product';
 import { runCrossReferenceRecommendation } from '~/lib/recommendations/persist-recommendation';
+import { loadXrefLatencyPolicy } from '~/lib/recommendations/recommend-cross-reference';
+import {
+  evaluateRecommendationEngineGate,
+  parseRecommendationEngineOutput,
+  type RecommendationEngineOutcome,
+} from '~/lib/recommendations/recommendation-engine-gate';
+import {
+  decideXrefBackstop,
+  RECOMMEND_CROSS_REFERENCE_TOOL,
+  resolveXrefBackstopPolicy,
+  XREF_BACKSTOP_MIN_BUDGET_MS,
+} from '~/lib/recommendations/xref-backstop';
 import { buildWebFallbackAnswer } from '~/lib/recommendations/web-fallback-answer';
 import {
   lookupCrossReference,
@@ -70,6 +85,7 @@ import {
 import { buildCompetitiveRecommendationAnswer } from '~/lib/recommendations/recommendation-answer';
 import { productSupportToolsForRoute } from '~/lib/tools/definitions';
 import { buildToolTraceEntry, executeToolCall } from '~/lib/tools/execute-tool-call';
+import { asRagDocumentKind } from '~/lib/rag/document-kind';
 import { assembleDocumentBodies } from '~/lib/retrieval/document-assembly';
 import { getBooleanSetting } from '~/lib/settings/settings-service';
 
@@ -112,6 +128,7 @@ import {
   type ProductSupportFinalOutput,
   type RetrievalConfigSummary,
   type RetrievedDocumentChunkRef,
+  type ValidatorMode,
   type ValidatorResult,
 } from '~/lib/workflows/product-support/product-support-schemas';
 import {
@@ -862,6 +879,37 @@ function extractTopCrossReferenceMatchFromToolOutputs(toolOutputs: RuntimeToolOu
 }
 
 /**
+ * B0-356 — the `recommend_cross_reference` engine's own verdict for this turn, if it ran.
+ *
+ * Deliberately a THIRD extractor alongside the two above: both of those filter on
+ * `toolName === 'lookup_cross_reference'` and skipped the engine's output entirely, which is why
+ * `answered` / `status` / `overallConfidence` / `thresholdUsed` / `declineReason` — the fields the
+ * prompt calls authoritative — reached no code at all. Scans backwards so the LAST engine call in
+ * the turn wins, and reports whether the model asked for it or the B0-355 backstop forced it
+ * (`origin: 'workflow_injected'` is set only by the backstop).
+ */
+export function extractRecommendationEngineOutcomeFromToolOutputs(
+  toolOutputs: RuntimeToolOutput[],
+): RecommendationEngineOutcome | null {
+  for (let i = toolOutputs.length - 1; i >= 0; i -= 1) {
+    const entry = toolOutputs[i];
+    if (!entry || entry.toolName !== RECOMMEND_CROSS_REFERENCE_TOOL || !entry.ok) {
+      continue;
+    }
+    const parsed = parseRecommendationEngineOutput(entry.output);
+    if (!parsed) {
+      continue;
+    }
+    return {
+      ...parsed,
+      invocation:
+        entry.trace.origin === 'workflow_injected' ? 'backstop' : 'model_called',
+    };
+  }
+  return null;
+}
+
+/**
  * B0-635 — whether a tool output's hits are an unendorsed guess that must not be cited.
  *
  * The B0-436 speculative pre-fetch searches the RAW user message before the model has reasoned
@@ -921,6 +969,7 @@ export function collectSourcesFromToolOutputs(toolOutputs: RuntimeToolOutput[]):
           snippet?: string;
           similarity?: number;
           confidence?: number;
+          documentKind?: string;
           s3Key?: string | null;
           sourceUri?: string | null;
         }>;
@@ -933,6 +982,9 @@ export function collectSourcesFromToolOutputs(toolOutputs: RuntimeToolOutput[]):
         if (map.has(key)) {
           continue;
         }
+        // B0-293 — narrowed to the known corpus values; an unrecognised kind is dropped rather
+        // than shown, so the Sources panel never labels a source with a corpus we can't vouch for.
+        const documentKind = asRagDocumentKind(s.documentKind);
         map.set(key, {
           documentId: s.documentId,
           chunkId: s.chunkId,
@@ -945,6 +997,8 @@ export function collectSourcesFromToolOutputs(toolOutputs: RuntimeToolOutput[]):
           // citation object so label/SDS-derived directions/hazards/first-aid answers carry it.
           s3Key: s.s3Key ?? undefined,
           sourceUri: s.sourceUri ?? undefined,
+          // B0-293: which corpus the source came from, so the Bex Sources panel can label it.
+          ...(documentKind ? { documentKind } : {}),
         });
       }
     } catch {
@@ -2089,11 +2143,15 @@ export async function runProductSupportWorkflow(input: {
       runtimeConfig,
       activeGates: {
         validator: { state: 'not_applicable' },
-        earlyDeclineGate: { state: 'ran' },
+        earlyDeclineGate: { state: 'ran', verdict: 'declined' },
         usageSafetyCoverage: { state: 'not_applicable' },
         regulatedClaimGuardrail: { state: 'not_applicable' },
         recommendationConfidence: { state: 'not_applicable' },
+        recommendationEngineVerdict: { state: 'not_applicable' },
       },
+      // B0-358 — no validator pass exists on this path at all (no model was called), so the run
+      // record says `not_run` rather than claiming either an LLM judgment or a bypass heuristic.
+      validatorMode: 'not_run',
       timingBreakdown: {
         toolRounds: 0,
         cacheSource: null,
@@ -2699,20 +2757,40 @@ export async function runProductSupportWorkflow(input: {
       }
     }
 
-    // B0-183 — deterministic web-search fallback. When neither the model's forced lookup_cross_reference
-    // nor the curated-override safety-net surfaced a match on the cross_reference route, this is a genuine
-    // "no 1-1 match" case. Don't depend on the model to voluntarily call recommend_cross_reference: run the
-    // budgeted web-grounded engine directly (identify competitor → web search → semantic Betco match →
-    // confidence gate). Every outcome (answered/declined/pending) is persisted for HITL 1-1 review inside
-    // runCrossReferenceRecommendation.
+    /**
+     * B0-183 / B0-355 — deterministic invocation backstop for `recommend_cross_reference`.
+     *
+     * `lookup_cross_reference` has had a deterministic safety net since B0-339 (the curated-override
+     * block directly above). The second hop — the web-grounded recommendation engine — used to live
+     * entirely in prompt text ("if `lookup_cross_reference` returns no matches or
+     * `fallbackRecommended: true`, call `recommend_cross_reference`"), so a model that simply didn't
+     * make the call fell through to generic RAG or a flat decline, and NOTHING in the run record
+     * said the web path had been skipped: an absent `toolTrace` entry is indistinguishable from
+     * "not applicable". B0-183's original version of this block only covered the
+     * `routingDecision === 'cross_reference' && !crossReferenceResult` case, which misses both the
+     * B0-339 intent-without-the-route turns AND the `fallbackRecommended: true` case (a weak legacy
+     * match makes `crossReferenceResult` truthy, so the block never fired).
+     *
+     * `decideXrefBackstop` holds the three conditions; a row is enqueued for EVERY cross-reference
+     * turn (fired or not), so the model's miss rate is `fired = true` over that population — one
+     * query against `audit_logs`, instead of an invisible absence.
+     */
+    const modelCalledRecommendationEngine = toolOutputLog.some(
+      (entry) => entry.toolName === RECOMMEND_CROSS_REFERENCE_TOOL && entry.ok,
+    );
+    const backstopDecision = decideXrefBackstop({
+      crossReferencePostProcessing: useCrossReferencePostProcessing,
+      legacyMatch: crossReferenceResult,
+      modelCalledEngine: modelCalledRecommendationEngine,
+    });
+
     let webFallback: Awaited<ReturnType<typeof runCrossReferenceRecommendation>> | null = null;
     let webFallbackCompetitorLabel = '';
-    if (routingDecision === 'cross_reference' && !crossReferenceResult) {
+    if (backstopDecision.fired) {
       // B0-357: reuse the SAME resolved (brand, product) tuple as the prefetch/safety-net above
-      // (routingDecision === 'cross_reference' implies `competitorIdentityNeeded`, so this promise
-      // exists) instead of calling `extractCompetitorProduct` a second time for this turn — a
-      // second call is not guaranteed to reproduce byte-identical output, which is exactly what
-      // fragmented the `buildRecommendationQuery` cache key run-to-run before this ticket.
+      // instead of calling `extractCompetitorProduct` a second time for this turn — a second call is
+      // not guaranteed to reproduce byte-identical output, which is exactly what fragmented the
+      // `buildRecommendationQuery` cache key run-to-run before that ticket.
       const competitor = resolvedCompetitorPromise
         ? await resolvedCompetitorPromise
         : await extractCompetitorProduct(input.userMessage);
@@ -2721,10 +2799,64 @@ export async function runProductSupportWorkflow(input: {
           .filter(Boolean)
           .join(' ')
           .trim();
+        /**
+         * B0-355 / B0-329 — the backstop runs AFTER the model's tool loop, so handing it a fresh
+         * `totalBudgetMs` would stack a second full 20s+ ceiling onto an already-slow turn. It gets
+         * the turn's REMAINING budget instead, floored at `XREF_BACKSTOP_MIN_BUDGET_MS` (below which
+         * the engine cannot complete step 1 plus a budgeted web search, so a smaller budget would
+         * only manufacture a timeout that says nothing about the real match). Per-step ceilings need
+         * no adjustment: `createStepGuard` already clamps each one to the remaining total.
+         */
+        const backstopPolicy = resolveXrefBackstopPolicy(
+          await loadXrefLatencyPolicy(),
+          Date.now() - workflowStartedAtMs,
+        );
+        const backstopStartedAtMs = Date.now();
         webFallback = await runCrossReferenceRecommendation(
           { competitorProduct: competitor.product, competitorBrand: competitor.brand },
           { traceId: run.id },
+          { policy: backstopPolicy },
         );
+        /**
+         * B0-355 — the backstop's invocation is recorded as a real tool call with
+         * `origin: 'workflow_injected'`, so a reader can tell a backstop-forced engine run from one
+         * the model chose (`model_chosen`) directly on the persisted step. Before this it executed
+         * with no trace entry at all. Pushed into `toolOutputLog` in the SAME payload shape
+         * `product-tools.ts` emits, so the B0-356 gate below reads model-called and backstopped runs
+         * through one code path.
+         */
+        const backstopToolOutput = JSON.stringify({
+          ok: true,
+          adapter: 'cross_reference_recommendation_v1',
+          source: webFallback.source,
+          answered: webFallback.answered,
+          status: webFallback.status,
+          overallConfidence: webFallback.overallConfidence,
+          thresholdUsed: webFallback.thresholdUsed,
+          declineReason: webFallback.declineReason,
+          candidates: webFallback.candidates,
+          evidence: webFallback.evidence,
+          recommendationId: webFallback.recommendationId,
+        });
+        const backstopTrace = buildToolTraceEntry({
+          toolName: RECOMMEND_CROSS_REFERENCE_TOOL,
+          callId: `xref-backstop-${backstopStartedAtMs}`,
+          argumentsJson: JSON.stringify({
+            competitorProduct: competitor.product,
+            competitorBrand: competitor.brand,
+          }),
+          output: backstopToolOutput,
+          ok: true,
+          durationMs: Date.now() - backstopStartedAtMs,
+          origin: 'workflow_injected',
+        });
+        resolvedToolTrace.push(backstopTrace);
+        toolOutputLog.push({
+          toolName: RECOMMEND_CROSS_REFERENCE_TOOL,
+          ok: true,
+          output: backstopToolOutput,
+          trace: backstopTrace,
+        });
         audit.enqueue(
           'recommendation_web_fallback',
           {
@@ -2738,6 +2870,25 @@ export async function runProductSupportWorkflow(input: {
           wfCtx,
         );
       }
+    }
+    // B0-355 — one row per cross-reference turn, fired or not, so the miss rate has a denominator.
+    if (useCrossReferencePostProcessing) {
+      audit.enqueue(
+        'recommendation_backstop',
+        {
+          fired: backstopDecision.fired,
+          reason: backstopDecision.reason,
+          model_called_engine: modelCalledRecommendationEngine,
+          legacy_match_present: crossReferenceResult !== null,
+          legacy_fallback_recommended: crossReferenceResult?.fallbackRecommended ?? null,
+          routing_decision: routingDecision,
+          /** Null when the backstop did not fire, or fired but found no competitor to look up. */
+          engine_status: webFallback?.status ?? null,
+          engine_answered: webFallback?.answered ?? null,
+          min_budget_ms: XREF_BACKSTOP_MIN_BUDGET_MS,
+        },
+        { ...wfCtx, stepId: agentStep.id, toolName: RECOMMEND_CROSS_REFERENCE_TOOL },
+      );
     }
 
     if (
@@ -2899,6 +3050,53 @@ export async function runProductSupportWorkflow(input: {
       }).answerText;
     }
 
+    /**
+     * B0-356 — enforce the recommendation engine's OWN verdict.
+     *
+     * `recommend_cross_reference` returns `answered`, `status`, `overallConfidence`, `thresholdUsed`
+     * and `declineReason`, and the specialist prompt calls them authoritative — but until this
+     * ticket nothing read them: both cross-reference extractors filter on `lookup_cross_reference`
+     * and skipped the engine payload entirely. So an engine decline (sub-threshold score, a
+     * validator-forced `escalated`, or a B0-329 latency-ceiling trip returning `XREF_DECLINE_COPY`)
+     * could be paraphrased away by the model and shipped at the workflow's default
+     * `confidence: 0.9`, discarding `filterGroundedCandidates` and `scanUnsupportedSafetyClaims` on
+     * a product-equivalence claim for EPA-registered chemistry.
+     *
+     * The gate is skipped when a CONFIDENT legacy/curated 1:1 match is what grounds this turn
+     * (`fallbackRecommended === false`): that mapping is human-curated and authoritative, the engine
+     * would have returned it from its own step-1 fast path anyway, and REC-4's
+     * `evaluateRecommendationGate` already calibrates its confidence below. A weak legacy match
+     * (`fallbackRecommended: true`) is NOT authoritative and does not skip the gate — that case is
+     * exactly the B0-355 backstop's reason for existing.
+     */
+    const recommendationEngineOutcome =
+      extractRecommendationEngineOutcomeFromToolOutputs(toolOutputLog);
+    const legacyMatchIsAuthoritative = Boolean(
+      crossReferenceResult && !crossReferenceResult.fallbackRecommended,
+    );
+    const confidenceGatingDisabled = runtimeConfig.confidenceGatingDisabled;
+    const recommendationEngineGate =
+      recommendationEngineOutcome && !legacyMatchIsAuthoritative
+        ? evaluateRecommendationEngineGate({
+            outcome: recommendationEngineOutcome,
+            // Placeholder: the engine's cap is re-applied against the REAL confidence at the
+            // validator step below (this call only decides the answer text). Passing 1 here keeps
+            // `declineText` / `requiresHumanReview` decisions independent of confidence.
+            confidence: 1,
+            approved: true,
+            requiresHumanReview: false,
+            confidenceGatingDisabled,
+            fallbackDeclineCopy: XREF_DECLINE_COPY,
+          })
+        : null;
+    if (recommendationEngineGate?.declineText) {
+      // Verbatim, and it outranks whatever the model drafted: there is no grounded equivalent to
+      // state. Enforced even under `BEX_DISABLE_CONFIDENCE_GATING` — see the kill-switch note in
+      // `evaluateRecommendationEngineGate`.
+      draftAnswer = recommendationEngineGate.declineText;
+      answerProvenance = 'recommendation_engine_decline';
+    }
+
     // B0-349 — frozen snapshot of the fully-composed answer before the validator, revision pass,
     // or any downstream gate can touch it.
     const originalDraftAnswer = draftAnswer;
@@ -3055,7 +3253,19 @@ export async function runProductSupportWorkflow(input: {
     // B0-554 — per-model-call usage for every call this step makes (0, 1, or 2: the validator can
     // run twice when the revision pass produces a re-check), summed onto the step's output below.
     const validatorUsageByCall: LlmTokenUsage[] = [];
-    // TODO: Remove this runtime toggle when validator behavior is fully tuned.
+    /**
+     * B0-358 — this is NOT a temporary toggle awaiting re-tuning (the TODO that used to sit here
+     * claimed it was, with no ticket behind it). `useValidator` defaulting to `false` is the
+     * documented REC-4 decision recorded above: the claims validator requires RAG evidence for
+     * every assertion, which a competitive recommendation — grounded by a cross-reference match,
+     * not by retrieved chunks — cannot satisfy, so it rejected valid recommendations and the
+     * not-approved fallback overwrote them. The deterministic guardrails (regulated-claim
+     * grounding, usage/safety coverage, `evaluateRecommendationGate`) run regardless. What B0-358
+     * changes is only LEGIBILITY: `validatorMode` below says outright which of the three states a
+     * run reached, instead of leaving the answer to a magic string inside `validation.issues`.
+     */
+    const validatorLlmPassRan = useValidator && !canSkipValidatorForHighSimilarity;
+    const validatorMode: ValidatorMode = validatorLlmPassRan ? 'llm' : 'bypassed';
     let validation: ValidatorResult;
     if (useValidator && !canSkipValidatorForHighSimilarity) {
       const pass = await runValidatorPass({
@@ -3091,10 +3301,21 @@ export async function runProductSupportWorkflow(input: {
       preCapProvenance: null,
     };
 
-    audit.enqueue('validation_completed', validation, {
-      ...wfCtx,
-      stepId: validationStep.id,
-    });
+    /**
+     * B0-358 — `validatorMode` travels on the audit payload too, not only on the step row. The
+     * observability timeline picks its `llm_validator` vs `validator_bypass` gate label from THIS
+     * payload (`~/lib/observability/timeline.ts`), and it used to do so by string-matching
+     * `issues.includes('validator_bypassed_for_testing')`. With the mode present, that token is
+     * redundant rather than load-bearing.
+     */
+    audit.enqueue(
+      'validation_completed',
+      { ...validation, validatorMode },
+      {
+        ...wfCtx,
+        stepId: validationStep.id,
+      },
+    );
 
     if (useValidator && !validation.approved && validation.issues.length > 0) {
       /**
@@ -3182,7 +3403,7 @@ export async function runProductSupportWorkflow(input: {
         validation = secondPass;
         audit.enqueue(
           'validation_completed',
-          { pass: 'second', ...validation },
+          { pass: 'second', ...validation, validatorMode },
           {
             ...wfCtx,
             stepId: validationStep.id,
@@ -3273,7 +3494,8 @@ export async function runProductSupportWorkflow(input: {
         verdict: 'capped',
         effect: `approved forced to false, issue "${coverageIssue}" added, confidence ${confidenceBeforeCap} → ${validation.confidence}. The usage/safety fallback copy replaces the draft unless the regulated-claim guardrail also rejected, whose copy wins; see answerProvenance for what the user saw.`,
       });
-      usageSafetyCoverageActivation = { state: 'ran' };
+      // B0-358 — the gate ran AND acted; `verdict` says which.
+      usageSafetyCoverageActivation = { state: 'ran', verdict: 'capped' };
     } else if (
       needsUsageSafetyCoverage &&
       (!usageSafetyCoverage.hasUsageEvidence ||
@@ -3296,7 +3518,11 @@ export async function runProductSupportWorkflow(input: {
         effect:
           'BEX_DISABLE_CONFIDENCE_GATING is set: coverage was insufficient but the confidence cap and approval override were skipped.',
       });
-      usageSafetyCoverageActivation = { state: 'bypassed', reason: 'confidence_gating_disabled' };
+      usageSafetyCoverageActivation = {
+        state: 'bypassed',
+        reason: 'confidence_gating_disabled',
+        verdict: 'capped',
+      };
     } else if (needsUsageSafetyCoverage) {
       // The gate RAN and found both kinds of evidence — a real verdict, not a skipped gate.
       validatorStepGates.push({
@@ -3307,7 +3533,8 @@ export async function runProductSupportWorkflow(input: {
         effect:
           'Usage and safety evidence were both retrieved; no confidence cap and no fallback copy.',
       });
-      usageSafetyCoverageActivation = { state: 'ran' };
+      // B0-358 — the gate ran and PASSED; distinguishable from "the gate never ran".
+      usageSafetyCoverageActivation = { state: 'ran', verdict: 'passed' };
     }
 
     // B0-257: regulated-claim guardrail -- evaluated unconditionally (independent of the
@@ -3369,7 +3596,11 @@ export async function runProductSupportWorkflow(input: {
           verdict: 'bypassed',
           effect: `BEX_DISABLE_CONFIDENCE_GATING is set: ${regulatedClaimGrounding.ungroundedCategories.join(', ')} could not be verified verbatim against a retrieved source, but the draft answer was allowed through unmodified instead of being replaced with the decline message. See draftAnswer on this run's final_output for exactly what was said.`,
         });
-        regulatedClaimGuardrailActivation = { state: 'bypassed', reason: 'confidence_gating_disabled' };
+        regulatedClaimGuardrailActivation = {
+          state: 'bypassed',
+          reason: 'confidence_gating_disabled',
+          verdict: 'rejected',
+        };
       } else {
         const confidenceBeforeRegulatedCap = validation.confidence;
         validation = {
@@ -3401,7 +3632,48 @@ export async function runProductSupportWorkflow(input: {
           },
           { ...wfCtx, stepId: validationStep.id },
         );
+        /**
+         * B0-358 — the enforced rejection had no `GateRecord` of its own: the ONLY structured
+         * record was the `bypassed` branch above, so a persisted step showed this gate exclusively
+         * on runs where it did NOT act. Recorded here too, so the step row carries the rejection
+         * as a first-class gate evaluation rather than only an audit row.
+         */
+        validatorStepGates.push({
+          gate: 'regulated_claim_guardrail',
+          inputs: {
+            categoriesDetected: regulatedClaimGrounding.categoriesDetected,
+            ungroundedCategories: regulatedClaimGrounding.ungroundedCategories,
+            ungroundedDetails: regulatedClaimGrounding.ungroundedDetails,
+          },
+          thresholds: { note: 'hard verbatim-match requirement, not a numeric threshold' },
+          verdict: 'rejected',
+          effect: `${regulatedClaimGrounding.ungroundedCategories.join(', ')} could not be verified verbatim against a retrieved source: approved forced to false, confidence ${confidenceBeforeRegulatedCap} → ${validation.confidence}, human review requested, and the draft answer replaced with the regulated-claim decline copy.`,
+        });
+        regulatedClaimGuardrailActivation = { state: 'ran', verdict: 'rejected' };
       }
+    } else {
+      /**
+       * B0-358 — the guardrail RAN and found nothing ungrounded. Previously this produced no record
+       * at all, so "the guardrail ran and passed" and "the guardrail never ran" were the same empty
+       * space in the trace. Recorded as a real `passed` verdict, listing which regulated categories
+       * the draft even contained (an answer with no regulated claim in it passes trivially, which
+       * is a different fact from one whose EPA/dilution values were all verified verbatim).
+       */
+      validatorStepGates.push({
+        gate: 'regulated_claim_guardrail',
+        inputs: {
+          categoriesDetected: regulatedClaimGrounding.categoriesDetected,
+          ungroundedCategories: [],
+          groundedSourceCount: sourceMeta.length,
+        },
+        thresholds: { note: 'hard verbatim-match requirement, not a numeric threshold' },
+        verdict: 'passed',
+        effect:
+          regulatedClaimGrounding.categoriesDetected.length > 0
+            ? `Every regulated value in the draft (${regulatedClaimGrounding.categoriesDetected.join(', ')}) was matched verbatim against a retrieved source. No cap, no replacement.`
+            : 'The draft made no regulated claim (no EPA registration, dilution/contact time, hazard or first-aid statement), so there was nothing to verify. No cap, no replacement.',
+      });
+      regulatedClaimGuardrailActivation = { state: 'ran', verdict: 'passed' };
     }
 
     // REC-4: on the competitive-recommendation route, calibrate confidence to retrieval
@@ -3534,12 +3806,116 @@ export async function runProductSupportWorkflow(input: {
                 }.`
               : `No change; confidence stayed at ${validation.confidence}.`,
       });
+      // B0-358 — say whether the gate that RAN actually acted, not just that it ran.
+      if (recommendationConfidenceActivation.state === 'ran') {
+        recommendationConfidenceActivation = {
+          state: 'ran',
+          verdict: validation.confidence < confidenceBeforeGate ? 'capped' : 'passed',
+        };
+      }
+    }
+
+    /**
+     * B0-356 — the recommendation engine's own verdict, enforced against the run's confidence.
+     *
+     * Runs LAST among the validator-step gates, deliberately: `overallConfidence` is the engine's
+     * calibrated score for the equivalence claim itself, so it must cap whatever REC-4's
+     * retrieval-strength gate above arrived at, never the other way round. The workflow's
+     * `sources.length > 0 ? 0.9 : 0.6` default can only ever be lowered here — never raised.
+     *
+     * The answer-text half of this gate already ran (see `recommendationEngineGate` at the
+     * draft-composition chain above); this half owns confidence / approval / human review, plus the
+     * `thresholdUsed` + `source` record that makes the two confidence numbers reconcilable after
+     * the fact.
+     */
+    let recommendationEngineVerdictActivation: GateActivationRecord | null = null;
+    if (recommendationEngineOutcome && recommendationEngineGate) {
+      const confidenceBeforeEngine = validation.confidence;
+      const engineVerdict = evaluateRecommendationEngineGate({
+        outcome: recommendationEngineOutcome,
+        confidence: validation.confidence,
+        approved: validation.approved,
+        requiresHumanReview: validation.requires_human_review,
+        confidenceGatingDisabled,
+        fallbackDeclineCopy: XREF_DECLINE_COPY,
+      });
+      validation = {
+        ...validation,
+        approved: engineVerdict.approved,
+        confidence: engineVerdict.confidence,
+        issues: Array.from(new Set([...validation.issues, ...engineVerdict.issues])),
+        requires_human_review: engineVerdict.requiresHumanReview,
+      };
+      // B0-492 — same capping-chain rule as every other cap on this step.
+      confidenceState = applyConfidenceCap(
+        confidenceState,
+        confidenceBeforeEngine,
+        validation.confidence,
+      );
+      recommendationEngineVerdictActivation = engineVerdict.capBypassed
+        ? { state: 'bypassed', reason: 'confidence_gating_disabled', verdict: engineVerdict.verdict }
+        : { state: 'ran', verdict: engineVerdict.verdict };
+      audit.enqueue(
+        'recommendation_engine_verdict_applied',
+        {
+          invocation: recommendationEngineOutcome.invocation,
+          source: recommendationEngineOutcome.source,
+          answered: recommendationEngineOutcome.answered,
+          status: recommendationEngineOutcome.status,
+          overall_confidence: recommendationEngineOutcome.overallConfidence,
+          threshold_used: recommendationEngineOutcome.thresholdUsed,
+          confidence_before: confidenceBeforeEngine,
+          confidence_after: validation.confidence,
+          cap_bypassed: engineVerdict.capBypassed,
+          verdict: engineVerdict.verdict,
+          answer_replaced_with_decline: recommendationEngineGate.declineText !== null,
+        },
+        { ...wfCtx, stepId: validationStep.id, toolName: RECOMMEND_CROSS_REFERENCE_TOOL },
+      );
+      validatorStepGates.push({
+        gate: 'recommendation_engine_verdict',
+        inputs: {
+          // B0-356 AC — `thresholdUsed` and `source` on the persisted step, so the engine's
+          // calibrated number and the workflow's own confidence are reconcilable after the fact.
+          source: recommendationEngineOutcome.source,
+          invocation: recommendationEngineOutcome.invocation,
+          answered: recommendationEngineOutcome.answered,
+          status: recommendationEngineOutcome.status,
+          overallConfidence: recommendationEngineOutcome.overallConfidence,
+          declineReasonPresent: Boolean(recommendationEngineOutcome.declineReason),
+          workflowConfidenceBefore: confidenceBeforeEngine,
+        },
+        thresholds: {
+          // The engine's own gate threshold (XREF_RECOMMENDATION_MIN_CONFIDENCE), transcribed
+          // exactly as the engine reported it — never recomputed here.
+          thresholdUsed: recommendationEngineOutcome.thresholdUsed,
+        },
+        verdict: engineVerdict.verdict,
+        effect: engineVerdict.capBypassed
+          ? `BEX_DISABLE_CONFIDENCE_GATING is set: the engine's overallConfidence ${recommendationEngineOutcome.overallConfidence} would have capped this run's ${confidenceBeforeEngine}, but the cap was not enforced.${
+              recommendationEngineGate.declineText
+                ? ' The decline copy and human-review escalation WERE still enforced (they are the engine\'s final verdict, not a threshold).'
+                : ''
+            }`
+          : `Confidence ${confidenceBeforeEngine} → ${validation.confidence} (engine overallConfidence ${recommendationEngineOutcome.overallConfidence}, threshold ${recommendationEngineOutcome.thresholdUsed}).${
+              recommendationEngineGate.declineText
+                ? " The engine's declineReason replaced the draft answer verbatim."
+                : ''
+            }`,
+      });
     }
 
     await completeWorkflowStep(validationStep.id, {
       status: 'completed',
       output: jsonContent({
         ...validation,
+        /**
+         * B0-358 — the step's verification level as a first-class field. Previously the ONLY
+         * counter-signal to "this answer was validated" was the `validator_bypassed_for_testing`
+         * magic string inside `issues`; that token is kept (the observability timeline and
+         * historical rows still carry it) but is now redundant with this field, not load-bearing.
+         */
+        validatorMode,
         /**
          * B0-554 — usage from every model call this step made (0 on either bypass path, 1 for a
          * plain approval/rejection, 2 when the revision pass triggered a re-check). Placed after
@@ -3630,6 +4006,20 @@ export async function runProductSupportWorkflow(input: {
          * validation" without adding information.
          */
         answerProvenance = 'validator_fallback';
+      } else if (answerProvenance === 'recommendation_engine_decline') {
+        /**
+         * B0-356 — the recommendation engine's own `declineReason` is ALREADY the final text (it
+         * replaced the draft at composition time, and this branch runs because that same gate set
+         * `approved: false`). Keep it verbatim: the generic "I could not fully verify this answer"
+         * copy below says strictly less, and the `validator_rejected_draft_retained` branch after
+         * it would both re-label the provenance and force human review on what is a normal,
+         * expected sub-threshold decline. `requires_human_review` is deliberately left as the
+         * engine set it — `escalated`/`pending` already forced it true, `declined` did not.
+         *
+         * Ordered AFTER the regulated-claim branch above on purpose: an ungrounded regulated claim
+         * is the harder rejection and its more specific copy must win.
+         */
+        finalText = draftAnswer;
       } else if (
         needsUsageSafetyCoverage &&
         (!usageSafetyCoverage.hasUsageEvidence ||
@@ -3792,14 +4182,30 @@ export async function runProductSupportWorkflow(input: {
       // ran / were skipped by flag / were bypassed by the B0-452 kill switch / never applied.
       runtimeConfig,
       activeGates: {
-        validator: useValidator ? { state: 'ran' } : { state: 'skipped', reason: 'disabled_by_flag' },
+        /**
+         * B0-358 — `useValidator` alone was not the whole story: the B0-546 high-similarity skip
+         * also produces a run where no LLM pass happened. `validatorMode` is the authority; this
+         * record now agrees with it instead of claiming `ran` for a skipped pass.
+         */
+        validator: !useValidator
+          ? { state: 'skipped', reason: 'disabled_by_flag' }
+          : canSkipValidatorForHighSimilarity
+            ? { state: 'skipped', reason: VALIDATOR_SKIP_HIGH_SIMILARITY_REASON }
+            : { state: 'ran', verdict: validation.approved ? 'approved' : 'rejected' },
+        // B0-358 — this gate ran on every non-declined turn and, by definition, did not decline
+        // (a decline short-circuits long before here).
         earlyDeclineGate: earlyDeclineGateEnabled
-          ? { state: 'ran' }
+          ? { state: 'ran', verdict: 'passed' }
           : { state: 'skipped', reason: 'disabled_by_flag' },
         usageSafetyCoverage: usageSafetyCoverageActivation,
         regulatedClaimGuardrail: regulatedClaimGuardrailActivation,
         recommendationConfidence: recommendationConfidenceActivation,
+        // B0-356 — absent-vs-not_applicable matters here: a run predating the gate has no key.
+        recommendationEngineVerdict:
+          recommendationEngineVerdictActivation ?? { state: 'not_applicable' },
       },
+      // B0-358 — the run's actual verification level, first-class rather than a magic string.
+      validatorMode,
     };
 
     audit.enqueue('workflow_completed', { workflow_run_id: run.id }, wfCtx);

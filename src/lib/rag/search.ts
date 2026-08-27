@@ -2,7 +2,6 @@ import { createEmbedding, EMBEDDING_MODEL } from '~/lib/rag/embeddings';
 import { isRerankerConfigured, rerankChunks } from '~/lib/rag/rerank';
 import { getOpenAIClient } from '~/lib/openai/client';
 import { getBooleanSetting } from '~/lib/settings/settings-service';
-import { normalizeForDedupe } from '~/lib/utils';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 const DEFAULT_REWRITE_MODEL = 'gpt-4.1-mini';
 const APPROX_QUERY_THRESHOLD_SHORT = 0.95;
@@ -209,6 +208,127 @@ export function resolveRerankPlan(input: {
       : input.limit;
 
   return { rerankerActive, rpcLimit };
+}
+
+/**
+ * B0-16 — region/language suffixes Betco's SDS corpus appends to an otherwise identical product
+ * code. The S3 corpus stores the US, Canadian, French and Spanish sheets for one product as
+ * separate files (`092.pdf`, `092_CAN.pdf`, `092CAN.pdf`, `092_FR.pdf`), which ingest as separate
+ * `rag.document` rows with separate titles, so a single glass-cleaner question returns the same
+ * product three times.
+ *
+ * Longest-first so `CANADA` is stripped before `CAN` and `USA` before `US`.
+ */
+const SDS_REGION_SUFFIXES = [
+  'CANADA',
+  'CAN',
+  'USA',
+  'US',
+  'FR',
+  'SP',
+  'ES',
+  'EN',
+  'MX',
+] as const;
+
+/**
+ * B0-16 — reduces an SDS document title to the product code shared by its regional siblings.
+ *
+ * Only two transforms are applied, both deliberately narrow:
+ *  1. drop a trailing re-upload marker (`092 (2)` -> `092`), which the S3 loader adds when the
+ *     same sheet exists in more than one folder;
+ *  2. strip at most ONE trailing region/language suffix, and only when what remains still ends in
+ *     a digit.
+ *
+ * The "still ends in a digit" guard is what stops the strip from eating real product codes:
+ * `0925` keeps its `5` (there is no suffix to strip and it is never confused with `092`), and a
+ * concentrate/RTU sibling such as `192 DIL` keeps `DIL` because `DIL` is not a region suffix.
+ * Verified against the live corpus: 0 of the 286 `rag.entity` rows that carry SDS documents hold
+ * more than one distinct product code once these suffixes are stripped, so the strip cannot merge
+ * two genuinely different products in the corpus as it stands.
+ */
+export function normalizeSdsTitleToProductCode(title: string): string {
+  const collapsed = title.trim().replace(/\s+/g, ' ').toUpperCase();
+  const withoutReuploadMarker = collapsed.replace(/\s*\(\d+\)$/, '').trim();
+
+  for (const suffix of SDS_REGION_SUFFIXES) {
+    const match = withoutReuploadMarker.match(
+      new RegExp(`^(.*\\d)[\\s_-]*${suffix}$`),
+    );
+
+    if (match) {
+      return match[1].trim();
+    }
+  }
+
+  return withoutReuploadMarker;
+}
+
+/**
+ * B0-16 — the identity two SDS rows must share to count as the same product.
+ *
+ * The RPCs already return the real product identity: `match_corpus_chunks*` left-joins
+ * `rag.entity` on `rag.document.entity_id` and projects `entity_id`, `product_key`, `sku` and
+ * `product_line_key`. `product_line_key` is the stable legacy business key, so it is preferred;
+ * `product_key` and `entity_id` are fallbacks for the product-tier entity rows.
+ *
+ * The title-derived product code is carried alongside the identity rather than instead of it,
+ * for two reasons. 1,110 of the 3,159 SDS documents in the corpus have no `entity_id` at all, so
+ * an identity-only key would silently stop deduplicating for a third of the corpus. And an
+ * identity-only key would over-collapse: `rag.entity` is at product_line grain here
+ * (`product_key` is null on these rows), so two different SKUs in one product line — a
+ * concentrate and its RTU, for example — would otherwise share a key and one would disappear.
+ */
+export function sdsProductDedupeKey(
+  match: Pick<
+    RagSearchMatch,
+    'document_title' | 'entity_id' | 'product_key' | 'product_line_key'
+  >,
+): string {
+  const identity = match.product_line_key || match.product_key || match.entity_id || '';
+  return `${identity}|${normalizeSdsTitleToProductCode(match.document_title)}`;
+}
+
+/**
+ * B0-16 — collapses regional SDS siblings down to one row per product, keeping the highest
+ * `similarity` in each group at that group's best rank position.
+ *
+ * Scoped to `document_kind === 'sds'` on purpose. A US and a Canadian SDS are the same GHS
+ * hazard content for the same formulation, so showing both is pure noise. Labels and efficacy
+ * documents are NOT collapsed: a US label and a Canadian label carry different regulatory
+ * identifiers (EPA registration number vs DIN), so hiding one would suppress regulated data the
+ * user needs to see. Revisit only with a per-kind rule, never by widening this one.
+ *
+ * Similarity values are never recomputed or mutated — a surviving row is returned exactly as the
+ * RPC produced it. Only which rows survive, and which member of a group represents it, changes.
+ */
+export function dedupeSdsMatchesByProduct(matches: RagSearchMatch[]): RagSearchMatch[] {
+  const deduped: RagSearchMatch[] = [];
+  const positionByKey = new Map<string, number>();
+
+  for (const match of matches) {
+    if (match.document_kind !== 'sds') {
+      deduped.push(match);
+      continue;
+    }
+
+    const key = sdsProductDedupeKey(match);
+    const existingPosition = positionByKey.get(key);
+
+    if (existingPosition === undefined) {
+      positionByKey.set(key, deduped.length);
+      deduped.push(match);
+      continue;
+    }
+
+    // Same product: keep the highest-similarity sheet, but hold the group's original (best) rank
+    // position so deduplication never demotes the product in the result order.
+    if (match.similarity > deduped[existingPosition].similarity) {
+      deduped[existingPosition] = match;
+    }
+  }
+
+  return deduped;
 }
 
 function nowMs() {
@@ -931,8 +1051,14 @@ export async function searchProductChunks(
     ? mappedMatches.filter((match) => match.document_kind === documentKindFilter)
     : mappedMatches;
 
-  // Rerank phase — reorders the candidate pool by cross-encoder relevance then
-  // slices to `limit`. Falls back to cosine order if the API is unavailable.
+  // Rerank phase — reorders the candidate pool by cross-encoder relevance.
+  // Falls back to cosine order if the API is unavailable.
+  //
+  // B0-16: this phase no longer slices to `limit`. It used to, which put the trim *before* the
+  // SDS dedupe at the end of this function, so every duplicate the dedupe removed shrank the
+  // result set below `limit` instead of being backfilled from the candidate pool. The single
+  // trim to `limit` now happens after dedupe, which is the only place it can preserve the
+  // caller's limit semantics.
   let rerankMs = 0;
   let rankedMatches = kindFilteredMatches;
 
@@ -943,19 +1069,15 @@ export async function searchProductChunks(
 
     if (reranked && reranked.length > 0) {
       const scoreMap = new Map(reranked.map((r) => [r.chunk_id, r.relevance_score]));
-      rankedMatches = [...kindFilteredMatches]
-        .sort((a, b) => (scoreMap.get(b.chunk_id) ?? 0) - (scoreMap.get(a.chunk_id) ?? 0))
-        .slice(0, limit);
-    } else {
-      rankedMatches = kindFilteredMatches.slice(0, limit);
+      rankedMatches = [...kindFilteredMatches].sort(
+        (a, b) => (scoreMap.get(b.chunk_id) ?? 0) - (scoreMap.get(a.chunk_id) ?? 0),
+      );
     }
   }
 
-  const filteredMatches = rankedMatches
-    .filter((match) => minSimilarity === null || match.similarity >= minSimilarity)
-    // Over-fetch for the app-layer kind filter means the non-rerank path can still hold more
-    // than `limit` rows here; trim to the requested count (no-op for the native scopes).
-    .slice(0, limit);
+  const filteredMatches = rankedMatches.filter(
+    (match) => minSimilarity === null || match.similarity >= minSimilarity,
+  );
 
   const timings = {
     totalMs: elapsedMs(startedAt) + rerankMs,
@@ -974,28 +1096,12 @@ export async function searchProductChunks(
     // Timing persistence is best-effort and should not block search results.
   }
 
-  const dedupedMatches: RagSearchMatch[] = [];
-  const seenSdsChunkKeys = new Set<string>();
-
-  for (const match of filteredMatches) {
-    if (match.document_kind !== 'sds') {
-      dedupedMatches.push(match);
-      continue;
-    }
-
-    const sdsDuplicateKey = [
-      normalizeForDedupe(match.document_title),
-      String(match.chunk_index),
-      normalizeForDedupe(match.chunk_text).slice(0, 280),
-    ].join('|');
-
-    if (seenSdsChunkKeys.has(sdsDuplicateKey)) {
-      continue;
-    }
-
-    seenSdsChunkKeys.add(sdsDuplicateKey);
-    dedupedMatches.push(match);
-  }
+  // B0-16: dedupe on product identity, then take the requested count. The previous key was
+  // built from (title, chunk_index, first 280 chars of chunk_text), which could only catch
+  // byte-identical sheets — the US and Canadian SDS bodies genuinely differ (supplier address
+  // block, "Hazard identification" vs "Hazards identification"), so `092`, `092 CAN` and
+  // `092CAN` all survived it as three separate "sources" for one product.
+  const dedupedMatches = dedupeSdsMatchesByProduct(filteredMatches).slice(0, limit);
 
   return {
     query,

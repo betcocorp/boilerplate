@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   collectRetrievalEvidenceIds,
+  formatPriorTurnToolContext,
+  PRIOR_TURN_TOOL_CONTEXT_HEADER,
   RETRIEVAL_EXHAUSTED_INSTRUCTION,
   runResponsesWithToolLoop,
   TOOL_ROUNDS_EXHAUSTED_FALLBACK_TEXT,
@@ -1617,5 +1619,119 @@ describe('runResponsesWithToolLoop — unproductive-retrieval early stop (B0-635
     const withdrawn = paramsOf(create, 3);
     expect(toolNamesOf(withdrawn)).toEqual([]);
     expect(withdrawn?.tool_choice).toBe('none');
+  });
+});
+
+/**
+ * B0-378 — parity coverage for the two generation runtimes' history replay. The AI SDK side of the
+ * same assertions lives in `~/lib/bex/ai-sdk-runtime.test.ts`.
+ */
+describe('runResponsesWithToolLoop — prior-turn tool context (B0-378)', () => {
+  const toolContext = formatPriorTurnToolContext({
+    toolNames: ['search_product_docs', 'get_efficacy_data'],
+    sourceTitles: ['pH7Q Dual Label (US)'],
+  })!;
+
+  it('chaining is unchanged: a live previousResponseId replays no history and no tool context', async () => {
+    const { client, create } = stubClient([{ id: 'resp_1', output: [], output_text: 'hi' }]);
+
+    await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1',
+      instructions: 'stable prefix',
+      tools: [],
+      userMessage: 'and what dilution did that use?',
+      previousResponseId: 'resp_prev',
+      history: [
+        { role: 'user', content: 'Is pH7Q effective against norovirus?' },
+        { role: 'assistant', content: 'Yes — see the label.', toolContext },
+      ],
+      executeTool: async ({ name }) => ({ output: '{}', trace: trace(name) }),
+    });
+
+    const params = (create.mock.calls as unknown as Array<[Record<string, unknown>]>)[0]?.[0];
+    const round1 = params?.input as Array<Record<string, unknown>>;
+
+    // The server already holds the real tool calls for that conversation — nothing to restore.
+    expect(params?.previous_response_id).toBe('resp_prev');
+    expect(round1).toHaveLength(1);
+    expect(round1[0]).toMatchObject({ role: 'user', content: 'and what dilution did that use?' });
+    expect(JSON.stringify(round1)).not.toContain(PRIOR_TURN_TOOL_CONTEXT_HEADER);
+  });
+
+  it('replays the tool context right after its assistant turn once the chain is broken', async () => {
+    const { client, create } = stubClient([{ id: 'resp_1', output: [], output_text: 'hi' }]);
+
+    await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1',
+      instructions: 'stable prefix',
+      tools: [],
+      userMessage: 'and what dilution did that use?',
+      history: [
+        { role: 'user', content: 'Is pH7Q effective against norovirus?' },
+        { role: 'assistant', content: 'Yes — see the label.', toolContext },
+      ],
+      executeTool: async ({ name }) => ({ output: '{}', trace: trace(name) }),
+    });
+
+    const round1 = (create.mock.calls as unknown as Array<[Record<string, unknown>]>)[0]?.[0]
+      .input as Array<Record<string, unknown>>;
+
+    expect(round1.map((item) => item.role)).toEqual(['user', 'assistant', 'user', 'user']);
+    expect(String(round1[2]?.content)).toContain(PRIOR_TURN_TOOL_CONTEXT_HEADER);
+    expect(String(round1[2]?.content)).toContain('search_product_docs');
+    expect(round1[3]).toMatchObject({ role: 'user', content: 'and what dilution did that use?' });
+    // Never a function_call_output: there is no matching function_call for a replayed turn.
+    expect(JSON.stringify(round1)).not.toContain('function_call_output');
+  });
+
+  it('omits the block for a prior turn that recorded no tool activity', async () => {
+    const { client, create } = stubClient([{ id: 'resp_1', output: [], output_text: 'hi' }]);
+
+    await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1',
+      instructions: 'stable prefix',
+      tools: [],
+      userMessage: 'follow-up',
+      history: [{ role: 'assistant', content: 'Earlier answer.' }],
+      executeTool: async ({ name }) => ({ output: '{}', trace: trace(name) }),
+    });
+
+    const round1 = (create.mock.calls as unknown as Array<[Record<string, unknown>]>)[0]?.[0]
+      .input as Array<Record<string, unknown>>;
+    expect(round1).toHaveLength(2);
+  });
+});
+
+describe('formatPriorTurnToolContext (B0-378)', () => {
+  it('returns null when the prior turn recorded neither tools nor sources', () => {
+    expect(formatPriorTurnToolContext({ toolNames: [], sourceTitles: [] })).toBeNull();
+    expect(formatPriorTurnToolContext({ toolNames: ['  '], sourceTitles: [''] })).toBeNull();
+  });
+
+  it('labels itself a summary and warns off regulated values it does not carry', () => {
+    const block = formatPriorTurnToolContext({
+      toolNames: ['search_product_docs'],
+      sourceTitles: ['pH7Q Dual Label (US)'],
+    })!;
+
+    expect(block.startsWith(PRIOR_TURN_TOOL_CONTEXT_HEADER)).toBe(true);
+    expect(block).toContain('SUMMARY');
+    expect(block).toContain('not the tool results themselves');
+    expect(block).toContain('dilution ratio');
+    // Titles only — a snippet fragment of a regulated document is never re-injected.
+    expect(block).toContain('titles only');
+  });
+
+  it('reports how many source titles the caller capped away', () => {
+    const block = formatPriorTurnToolContext({
+      toolNames: [],
+      sourceTitles: ['A', 'B'],
+      omittedSourceCount: 5,
+    })!;
+
+    expect(block).toContain('"A"; "B" (+5 more)');
   });
 });

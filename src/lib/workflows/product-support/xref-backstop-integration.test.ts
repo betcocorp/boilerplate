@@ -1,0 +1,558 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+/**
+ * B0-355 / B0-356 — the `recommend_cross_reference` backstop and the enforcement of the engine's
+ * own verdict, exercised through the real workflow against an in-memory Supabase double (same
+ * harness shape as `workflow-instrumentation.test.ts`).
+ *
+ * B0-355's three cases: the model called the engine itself (no double-invoke), the model skipped it
+ * (the backstop fires), and a confident legacy match (no fire, zero web spend).
+ * B0-356: the engine's decline is surfaced verbatim, its `overallConfidence` caps the run, and a
+ * validator-forced `escalated` reaches the human-review queue instead of the user.
+ */
+
+type Row = Record<string, unknown>;
+
+function createFakeSupabase() {
+  const tables: Record<string, Row[]> = {};
+  let sequence = 0;
+  const rowsFor = (table: string): Row[] => (tables[table] ??= []);
+
+  const emptySelectChain = {
+    select: () => emptySelectChain,
+    in: () => emptySelectChain,
+    order: () => emptySelectChain,
+    then: (resolve: (value: { data: Row[]; error: null }) => unknown) =>
+      resolve({ data: [], error: null }),
+  };
+
+  const client = {
+    schema(_name: string) {
+      return { from: (_table: string) => emptySelectChain };
+    },
+    from(table: string) {
+      return {
+        // The audit-log queue (B0-439) inserts a BATCH; every other writer inserts one row.
+        insert(row: Row | Row[]) {
+          const incoming = Array.isArray(row) ? row : [row];
+          const insertedRows = incoming.map((one) => {
+            sequence += 1;
+            const inserted: Row = {
+              id: `${table}-${sequence}`,
+              started_at: new Date().toISOString(),
+              completed_at: null,
+              output: null,
+              error: null,
+              ...one,
+            };
+            rowsFor(table).push(inserted);
+            return inserted;
+          });
+          const result = {
+            data: Array.isArray(row) ? insertedRows : insertedRows[0],
+            error: null,
+          };
+          return {
+            select: () => ({ single: async () => result }),
+            then: (resolve: (value: typeof result) => unknown) => resolve(result),
+          };
+        },
+        update(patch: Row) {
+          return {
+            async eq(column: string, value: unknown) {
+              for (const row of rowsFor(table)) {
+                if (row[column] === value) {
+                  Object.assign(row, patch);
+                }
+              }
+              return { error: null };
+            },
+          };
+        },
+      };
+    },
+  };
+
+  return { client, tables };
+}
+
+let fake = createFakeSupabase();
+
+vi.mock('~/supabase/clients/service-role', () => ({
+  getSupabaseServiceRoleClient: () => fake.client,
+}));
+
+const settingOverrides = new Map<string, boolean | string | number>();
+
+vi.mock('~/lib/settings/settings-service', () => ({
+  getBooleanSetting: vi.fn((key: string, fallback: boolean) =>
+    Promise.resolve(settingOverrides.has(key) ? (settingOverrides.get(key) as boolean) : fallback),
+  ),
+  getStringSetting: vi.fn((key: string, fallback: string) =>
+    Promise.resolve(settingOverrides.has(key) ? (settingOverrides.get(key) as string) : fallback),
+  ),
+  getNumberSetting: vi.fn((key: string, fallback: number) =>
+    Promise.resolve(settingOverrides.has(key) ? (settingOverrides.get(key) as number) : fallback),
+  ),
+}));
+
+vi.mock('~/lib/openai/client', () => ({
+  getOpenAIClient: () => ({
+    responses: {
+      create: () => {
+        throw new Error('client.responses.create is not mocked for this test');
+      },
+    },
+  }),
+  resolveResponsesModel: () => 'gpt-test',
+}));
+
+const runResponsesWithToolLoopMock = vi.fn();
+const executeProductToolMock = vi.fn();
+const lookupCrossReferenceMock = vi.fn();
+const runCrossReferenceRecommendationMock = vi.fn();
+
+vi.mock('~/lib/openai/responses-runtime', () => ({
+  runResponsesWithToolLoop: (...args: unknown[]) => runResponsesWithToolLoopMock(...args),
+  usageFromResponse: () => ({
+    promptTokens: 0,
+    completionTokens: 0,
+    totalTokens: 0,
+    cachedPromptTokens: 0,
+  }),
+}));
+
+vi.mock('~/lib/bex/ai-sdk-runtime', () => ({
+  runAiSdkWithToolLoop: vi.fn(),
+}));
+
+vi.mock('~/lib/tools/product-tools', () => ({
+  executeProductTool: (...args: unknown[]) => executeProductToolMock(...args),
+}));
+
+vi.mock('~/lib/tools/cross-reference-lookup', () => ({
+  lookupCrossReference: (...args: unknown[]) => lookupCrossReferenceMock(...args),
+  fetchRecommendationContext: async () => ({ betcoEpaRegistration: null, alternatives: [] }),
+}));
+
+vi.mock('~/lib/recommendations/persist-recommendation', () => ({
+  runCrossReferenceRecommendation: (...args: unknown[]) =>
+    runCrossReferenceRecommendationMock(...args),
+}));
+
+vi.mock('~/lib/workflows/product-support/validator', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('~/lib/workflows/product-support/validator')>();
+  return {
+    ...actual,
+    runValidatorPass: vi.fn(),
+    runRevisionPass: vi.fn(),
+    evaluateRegulatedClaimGrounding: () => ({
+      categoriesDetected: [],
+      ungroundedCategories: [],
+      ungroundedDetails: [],
+    }),
+  };
+});
+
+import { XREF_DECLINE_COPY } from '~/lib/recommendations/confidence-scoring';
+import { resetIntentClassifierCache } from '~/lib/orchestrator/intent-classifier';
+import { runProductSupportWorkflow } from '~/lib/workflows/product-support/run-product-support-workflow';
+import { readStepGateRecords } from '~/lib/workflows/product-support/product-support-schemas';
+
+const XREF_MESSAGE = 'What is the Betco equivalent to BNC-15?';
+
+const AGENT_USAGE = {
+  promptTokens: 100,
+  completionTokens: 20,
+  totalTokens: 120,
+  cachedPromptTokens: 0,
+};
+
+const RAG_SOURCES = {
+  sources: [
+    {
+      documentId: '11111111-1111-4111-8111-111111111111',
+      chunkId: '22222222-2222-4222-8222-222222222222',
+      title: 'Triforce label',
+      snippet: 'A general purpose cleaner.',
+      documentBody: 'A general purpose cleaner.',
+      documentKind: 'label',
+      similarity: 0.72,
+    },
+  ],
+};
+
+type ExecuteTool = (input: {
+  name: string;
+  argumentsJson: string;
+  callId: string;
+}) => Promise<{ output: string }>;
+
+function generationCalling(calls: Array<{ name: string; argumentsJson: string; callId: string }>) {
+  return async (opts: unknown) => {
+    const { executeTool } = opts as { executeTool: ExecuteTool };
+    for (const call of calls) {
+      await executeTool(call);
+    }
+    return {
+      lastResponse: {},
+      finalResponseId: 'resp_final',
+      assistantText: 'Betco Triforce is the closest equivalent to BNC-15.',
+      toolTrace: [],
+      responseIds: ['resp_1'],
+      usage: AGENT_USAGE,
+      usageByCall: [AGENT_USAGE],
+    };
+  };
+}
+
+function engineResult(overrides: Record<string, unknown> = {}) {
+  return {
+    source: 'web',
+    answered: true,
+    status: 'answered',
+    overallConfidence: 0.83,
+    thresholdUsed: 0.8,
+    candidates: [{ betcoTitle: 'Triforce', url: null, rationale: null, rank: 1, tier: 'primary' }],
+    evidence: {},
+    declineReason: null,
+    recommendationId: 'rec-1',
+    ...overrides,
+  };
+}
+
+function steps(): Row[] {
+  return fake.tables.workflow_steps ?? [];
+}
+
+function stepOutput(name: string): Record<string, unknown> {
+  const step = steps().find((row) => row.step_name === name);
+  expect(step, `expected a "${name}" step`).toBeDefined();
+  return (step as Row).output as Record<string, unknown>;
+}
+
+function auditRows(eventType: string): Array<Record<string, unknown>> {
+  return (fake.tables.audit_logs ?? [])
+    .filter((row) => row.event_type === eventType)
+    .map((row) => row.payload as Record<string, unknown>);
+}
+
+async function run(overrides: Row = {}) {
+  return runProductSupportWorkflow({
+    traceId: 'trace-1',
+    conversationId: 'conversation-1',
+    userMessage: XREF_MESSAGE,
+    source: 'chat',
+    ...(overrides as Record<string, unknown>),
+  } as Parameters<typeof runProductSupportWorkflow>[0]);
+}
+
+const ORIGINAL_DECLINE_GATE = process.env.BEX_EARLY_DECLINE_GATE_ENABLED;
+
+beforeEach(() => {
+  fake = createFakeSupabase();
+  vi.clearAllMocks();
+  settingOverrides.clear();
+  settingOverrides.set('BEX_AI_SDK_GENERATION_ENABLED', false);
+  settingOverrides.set('BEX_LLM_ROUTER_ENABLED', false);
+  process.env.BEX_EARLY_DECLINE_GATE_ENABLED = 'true';
+  resetIntentClassifierCache();
+
+  // Default: the model calls only `lookup_cross_reference`, which finds nothing.
+  runResponsesWithToolLoopMock.mockImplementation(
+    generationCalling([
+      {
+        name: 'lookup_cross_reference',
+        argumentsJson: JSON.stringify({ brand: 'BNC', productName: 'BNC-15' }),
+        callId: 'call_xref',
+      },
+    ]),
+  );
+  executeProductToolMock.mockImplementation(async (name: string) =>
+    name === 'lookup_cross_reference' ? { matches: [], fallbackRecommended: true } : RAG_SOURCES,
+  );
+  lookupCrossReferenceMock.mockResolvedValue({ matches: [], fallbackRecommended: true });
+  runCrossReferenceRecommendationMock.mockResolvedValue(engineResult());
+});
+
+afterEach(() => {
+  process.env.BEX_EARLY_DECLINE_GATE_ENABLED = ORIGINAL_DECLINE_GATE;
+});
+
+/* ---------------------------------------------------------------- B0-355 -- */
+
+describe('recommend_cross_reference invocation backstop (B0-355)', () => {
+  it('fires when the model skipped the engine and legacy found nothing', async () => {
+    await run();
+
+    expect(runCrossReferenceRecommendationMock).toHaveBeenCalledTimes(1);
+    const [payload] = auditRows('recommendation_backstop');
+    expect(payload).toMatchObject({
+      fired: true,
+      reason: 'legacy_missing_model_skipped',
+      model_called_engine: false,
+    });
+  });
+
+  it('fires when legacy matched but recommended a fallback (the case B0-183 missed)', async () => {
+    lookupCrossReferenceMock.mockResolvedValue({
+      fallbackRecommended: true,
+      matches: [
+        {
+          competitorBrand: 'BNC',
+          competitorProductName: 'BNC-15',
+          productKey: 'weak-match',
+          confidence: 0.41,
+          betcoProduct: { title: 'Weak match' },
+        },
+      ],
+    });
+    executeProductToolMock.mockImplementation(async (name: string) =>
+      name === 'lookup_cross_reference'
+        ? {
+            fallbackRecommended: true,
+            matches: [
+              {
+                competitorBrand: 'BNC',
+                competitorProductName: 'BNC-15',
+                productKey: 'weak-match',
+                confidence: 0.41,
+                betcoProduct: { title: 'Weak match' },
+              },
+            ],
+          }
+        : RAG_SOURCES,
+    );
+
+    await run();
+
+    expect(runCrossReferenceRecommendationMock).toHaveBeenCalledTimes(1);
+    expect(auditRows('recommendation_backstop')[0]).toMatchObject({
+      fired: true,
+      reason: 'legacy_fallback_recommended_model_skipped',
+      legacy_match_present: true,
+      legacy_fallback_recommended: true,
+    });
+  });
+
+  it('does NOT double-invoke when the model called recommend_cross_reference itself', async () => {
+    runResponsesWithToolLoopMock.mockImplementation(
+      generationCalling([
+        {
+          name: 'lookup_cross_reference',
+          argumentsJson: JSON.stringify({ brand: 'BNC', productName: 'BNC-15' }),
+          callId: 'call_xref',
+        },
+        {
+          name: 'recommend_cross_reference',
+          argumentsJson: JSON.stringify({ competitorProduct: 'BNC-15' }),
+          callId: 'call_engine',
+        },
+      ]),
+    );
+    executeProductToolMock.mockImplementation(async (name: string) => {
+      if (name === 'lookup_cross_reference') {
+        return { matches: [], fallbackRecommended: true };
+      }
+      if (name === 'recommend_cross_reference') {
+        return { ok: true, adapter: 'cross_reference_recommendation_v1', ...engineResult() };
+      }
+      return RAG_SOURCES;
+    });
+
+    await run();
+
+    expect(runCrossReferenceRecommendationMock).not.toHaveBeenCalled();
+    expect(auditRows('recommendation_backstop')[0]).toMatchObject({
+      fired: false,
+      reason: 'model_called_engine',
+      model_called_engine: true,
+    });
+  });
+
+  it('does NOT fire on a confident legacy match — that path stays zero-web-spend', async () => {
+    const confident = {
+      fallbackRecommended: false,
+      matches: [
+        {
+          competitorBrand: 'BNC',
+          competitorProductName: 'BNC-15',
+          productKey: 'triforce',
+          confidence: 0.92,
+          productUrl: 'https://www.betco.com/products/triforce',
+          betcoProduct: { title: 'Triforce', sku: '1234' },
+          rationale: 'curated equivalence',
+        },
+      ],
+    };
+    lookupCrossReferenceMock.mockResolvedValue(confident);
+    executeProductToolMock.mockImplementation(async (name: string) =>
+      name === 'lookup_cross_reference' ? confident : RAG_SOURCES,
+    );
+
+    await run();
+
+    expect(runCrossReferenceRecommendationMock).not.toHaveBeenCalled();
+    expect(auditRows('recommendation_backstop')[0]).toMatchObject({
+      fired: false,
+      reason: 'confident_legacy_match',
+    });
+  });
+
+  it('records the forced invocation as a workflow_injected tool call, not a model-chosen one', async () => {
+    await run();
+
+    const trace = stepOutput('openai_responses_agent').toolTrace as Array<Record<string, unknown>>;
+    const engineCall = trace.find((entry) => entry.toolName === 'recommend_cross_reference');
+    expect(engineCall).toBeDefined();
+    expect(engineCall?.origin).toBe('workflow_injected');
+  });
+
+  it('hands the backstop the remaining turn budget, not a fresh full one', async () => {
+    settingOverrides.set('XREF_RECOMMENDATION_TIMEOUT_MS', 25_000);
+    await run();
+
+    const [, , deps] = runCrossReferenceRecommendationMock.mock.calls[0] as [
+      unknown,
+      unknown,
+      { policy: { totalBudgetMs: number } },
+    ];
+    expect(deps.policy.totalBudgetMs).toBeGreaterThan(0);
+    expect(deps.policy.totalBudgetMs).toBeLessThanOrEqual(25_000);
+  });
+});
+
+/* ---------------------------------------------------------------- B0-356 -- */
+
+describe('recommendation engine verdict enforcement (B0-356)', () => {
+  it('surfaces the engine decline verbatim instead of the model prose', async () => {
+    runCrossReferenceRecommendationMock.mockResolvedValue(
+      engineResult({
+        answered: false,
+        status: 'declined',
+        overallConfidence: 0.35,
+        declineReason: XREF_DECLINE_COPY,
+        candidates: [],
+      }),
+    );
+
+    const out = await run();
+
+    expect(out.answerText).toBe(XREF_DECLINE_COPY);
+    expect(out.answerProvenance).toBe('recommendation_engine_decline');
+    expect(out.validation.approved).toBe(false);
+  });
+
+  it('never lets the workflow 0.9 default exceed the engine overallConfidence', async () => {
+    runCrossReferenceRecommendationMock.mockResolvedValue(
+      engineResult({ overallConfidence: 0.61 }),
+    );
+
+    const out = await run();
+
+    expect(out.confidence).toBeLessThanOrEqual(0.61);
+  });
+
+  it("routes the engine's validator-forced 'escalated' to human review, not to the user", async () => {
+    runCrossReferenceRecommendationMock.mockResolvedValue(
+      engineResult({
+        answered: false,
+        status: 'escalated',
+        overallConfidence: 0.81,
+        declineReason: XREF_DECLINE_COPY,
+        candidates: [],
+      }),
+    );
+
+    const out = await run();
+
+    expect(out.validation.requires_human_review).toBe(true);
+    expect(out.validation.issues).toContain('recommendation_engine_escalated');
+    expect(out.answerText).toBe(XREF_DECLINE_COPY);
+  });
+
+  it('treats a B0-329 latency-ceiling trip as a user-visible decline, not a low-confidence answer', async () => {
+    runCrossReferenceRecommendationMock.mockResolvedValue(
+      engineResult({
+        source: 'legacy',
+        answered: false,
+        status: 'declined',
+        overallConfidence: 0.55,
+        declineReason: XREF_DECLINE_COPY,
+        candidates: [],
+        evidence: { timeout: { timedOut: true, reason: 'latency_ceiling' } },
+      }),
+    );
+
+    const out = await run();
+
+    expect(out.answerText).toBe(XREF_DECLINE_COPY);
+    expect(out.validation.issues).toContain('recommendation_engine_declined');
+    expect(out.validation.requires_human_review).toBe(false);
+  });
+
+  it('persists thresholdUsed and source on the validator step so the two numbers reconcile', async () => {
+    runCrossReferenceRecommendationMock.mockResolvedValue(
+      engineResult({ overallConfidence: 0.61, thresholdUsed: 0.8 }),
+    );
+
+    await run();
+
+    const record = readStepGateRecords(stepOutput('validator')).find(
+      (r) => r.gate === 'recommendation_engine_verdict',
+    );
+    expect(record).toBeDefined();
+    expect(record?.thresholds).toMatchObject({ thresholdUsed: 0.8 });
+    expect(record?.inputs).toMatchObject({
+      source: 'web',
+      invocation: 'backstop',
+      overallConfidence: 0.61,
+    });
+  });
+
+  it('under the B0-452 kill switch: cap suppressed, decline + escalation still enforced', async () => {
+    settingOverrides.set('BEX_DISABLE_CONFIDENCE_GATING', true);
+    runCrossReferenceRecommendationMock.mockResolvedValue(
+      engineResult({
+        answered: false,
+        status: 'escalated',
+        overallConfidence: 0.2,
+        declineReason: XREF_DECLINE_COPY,
+        candidates: [],
+      }),
+    );
+
+    const out = await run();
+
+    // The run stays identifiable as kill-switched.
+    expect(out.runtimeConfig?.confidenceGatingDisabled).toBe(true);
+    expect(out.activeGates?.recommendationEngineVerdict?.state).toBe('bypassed');
+    // Cap not enforced...
+    expect(out.confidence).toBeGreaterThan(0.2);
+    // ...but the engine's own verdict still is.
+    expect(out.answerText).toBe(XREF_DECLINE_COPY);
+    expect(out.validation.requires_human_review).toBe(true);
+  });
+});
+
+/* ---------------------------------------------------------------- B0-358 -- */
+
+describe('validator mode legibility (B0-358)', () => {
+  it('records validatorMode "bypassed" on the run and the validator step by default', async () => {
+    const out = await run();
+
+    expect(out.validatorMode).toBe('bypassed');
+    expect(stepOutput('validator').validatorMode).toBe('bypassed');
+    // The legacy token stays for historical readers, but is now redundant with the field above.
+    expect(out.validation.issues).toContain('validator_bypassed_for_testing');
+  });
+
+  it('records the guardrails that ran AND PASSED, not only the ones that fired', async () => {
+    await run();
+
+    const records = readStepGateRecords(stepOutput('validator'));
+    const regulated = records.find((r) => r.gate === 'regulated_claim_guardrail');
+    expect(regulated?.verdict).toBe('passed');
+  });
+});

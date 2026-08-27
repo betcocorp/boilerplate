@@ -7,6 +7,7 @@ import { Badge } from '~/components/ui/badge';
 import { AddTestItemDialog } from '~/components/admin/tests/AddTestItemDialog';
 import { AdminTestsActionToast } from '~/components/admin/tests/AdminTestsActionToast';
 import { PromptBundleVersionBadge } from '~/components/admin/tests/PromptBundleVersionBadge';
+import { RunConfigBadges } from '~/components/admin/tests/RuntimeConfigBadge';
 import { RunSearchEvalDialog } from '~/components/admin/tests/RunSearchEvalDialog';
 import { TestPromptsSection } from '~/components/admin/tests/TestPromptsSection';
 import { Button } from '~/components/ui/button';
@@ -25,6 +26,7 @@ import {
   extractItemMaxSimilarity,
 } from '~/lib/tests/prompt-aggregations';
 import { parseReportState } from '~/lib/tests/report/schemas';
+import { parseTestRunConfig } from '~/lib/tests/run-config';
 import {
   getGlobalTestItemSuggestionRows,
   getLegacyProductLineSuggestionMeta,
@@ -448,8 +450,8 @@ export default async function AdminTestDetailsPage({
                   <TableHead title="Total answer time: sum of each prompt's elapsed time for this run">
                     Elapsed
                   </TableHead>
-                  <TableHead title="Model this run was executed with, from its run options (B0-632)">
-                    Model
+                  <TableHead title="Immutable per-run config from run_options: model (B0-632), validator pass, forced agent mode, and router override (B0-351)">
+                    Run config
                   </TableHead>
                   <TableHead>Started / completed</TableHead>
                   <TableHead>Actions</TableHead>
@@ -571,8 +573,21 @@ export default async function AdminTestDetailsPage({
                             />
                           </span>
                         </TableCell>
-                        <TableCell className="whitespace-nowrap text-xs text-slate-600">
-                          <RunModelLabel runOptions={result.run_options} />
+                        <TableCell className="text-xs text-slate-600">
+                          <div className="flex flex-col gap-1.5">
+                            <RunModelLabel runOptions={result.run_options} />
+                            {/*
+                              B0-351 — validator / agent mode / router chips alongside the resolved
+                              model, so two runs of the same dataset that differ only in one of them
+                              are distinguishable here, without opening either run.
+                            */}
+                            <span className="flex flex-wrap items-center gap-1">
+                              <RunConfigBadges
+                                runConfig={parseTestRunConfig(result.run_options)}
+                                showModel={false}
+                              />
+                            </span>
+                          </div>
                         </TableCell>
                         <TableCell className="text-slate-600">
                           <div className="flex flex-col gap-1 text-xs leading-tight">

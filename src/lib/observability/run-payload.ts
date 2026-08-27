@@ -16,6 +16,7 @@
  */
 
 import {
+  extractActiveGates,
   extractModelTag,
   extractRetrievedDocumentChunks,
   extractSimilarityStats,
@@ -24,8 +25,10 @@ import {
 import { productSupportFinalOutputSchema } from '~/lib/workflows/product-support/product-support-schemas';
 
 import type {
+  ActiveGates,
   ProductSupportFinalOutput,
   RetrievedDocumentChunkRef,
+  ValidatorMode,
   ValidatorResult,
 } from '~/lib/workflows/product-support/product-support-schemas';
 
@@ -49,6 +52,16 @@ export type RunPayloadView = {
   chunks: RetrievedDocumentChunkRef[];
   /** `user_input.modelTag` — which model tag the run was executed against. */
   modelTag: string | null;
+  /**
+   * B0-358 — the verification level this run's validator step actually reached. Null on runs
+   * written before that ticket: absent means UNKNOWN, and must never be rendered as `'llm'`.
+   */
+  validatorMode: ValidatorMode | null;
+  /**
+   * B0-494/B0-358 — which deterministic guardrails ran, were skipped/bypassed, or never applied,
+   * plus (post-B0-358) the verdict of the ones that ran. Null on runs written before B0-494.
+   */
+  activeGates: ActiveGates | null;
 };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -82,6 +95,11 @@ export function readRunPayloadView(
     record?.usage,
   );
   const modelTag = extractModelTag(userInput)?.trim();
+  // B0-358 — parsed with the workflow's own schema, so an unknown/legacy value reads as absent
+  // rather than being coerced into a verification level the run never had.
+  const validatorMode = productSupportFinalOutputSchema.shape.validatorMode.safeParse(
+    record?.validatorMode,
+  );
 
   return {
     answerText: readNonEmptyString(record, 'answerText'),
@@ -92,5 +110,7 @@ export function readRunPayloadView(
     similarity: extractSimilarityStats(finalOutput),
     chunks: extractRetrievedDocumentChunks(finalOutput),
     modelTag: modelTag ? modelTag : null,
+    validatorMode: validatorMode.success ? (validatorMode.data ?? null) : null,
+    activeGates: extractActiveGates(finalOutput),
   };
 }

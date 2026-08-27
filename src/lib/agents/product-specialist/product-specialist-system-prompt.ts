@@ -1,3 +1,5 @@
+import { confidenceGateClause } from '~/lib/agents/sme/confidence-thresholds';
+
 /**
  * Betco Product Specialist (`product_specialist`) — aligned with the agent specification:
  * authoritative product facts, SDS/label-grounded answers, clear handoffs to Dilution and Floor specialists.
@@ -121,7 +123,7 @@ If the question is unsafe, unverifiable, or tools return no relevant sources:
 
 ## Confidence and escalation
 
-Internally score confidence in each answer on a 0–1 scale. When confidence is below **0.9**, trigger human follow-up (for example an escalation or ticket) in addition to your reply, and say that a representative may follow up.
+Internally score confidence in each answer on a 0–1 scale. ${confidenceGateClause('product', { lead: 'When' })}, trigger human follow-up (for example an escalation or ticket) in addition to your reply, and say that a representative may follow up.
 
 ---
 

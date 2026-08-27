@@ -15,7 +15,39 @@ describe('readRunPayloadView', () => {
       similarity: null,
       chunks: [],
       modelTag: null,
+      // B0-358 — absent means UNKNOWN verification level, never "validated".
+      validatorMode: null,
+      activeGates: null,
     });
+  });
+
+  it('reads the B0-358 validator mode and gate activation off a payload that carries them', () => {
+    const view = readRunPayloadView(
+      {
+        answerText: 'ok',
+        validatorMode: 'bypassed',
+        activeGates: {
+          validator: { state: 'skipped', reason: 'disabled_by_flag' },
+          earlyDeclineGate: { state: 'ran', verdict: 'passed' },
+          usageSafetyCoverage: { state: 'not_applicable' },
+          regulatedClaimGuardrail: { state: 'ran', verdict: 'passed' },
+          recommendationConfidence: { state: 'not_applicable' },
+        },
+      },
+      null,
+    );
+
+    expect(view.validatorMode).toBe('bypassed');
+    // The guardrail that RAN AND PASSED is distinguishable from the ones that never ran.
+    expect(view.activeGates?.regulatedClaimGuardrail).toEqual({
+      state: 'ran',
+      verdict: 'passed',
+    });
+    expect(view.activeGates?.usageSafetyCoverage).toEqual({ state: 'not_applicable' });
+  });
+
+  it('reports an unknown validatorMode as absent rather than coercing it', () => {
+    expect(readRunPayloadView({ validatorMode: 'sort_of' }, null).validatorMode).toBeNull();
   });
 
   it('reads an error-only payload without treating it as an answer', () => {

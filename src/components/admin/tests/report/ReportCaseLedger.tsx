@@ -1,0 +1,714 @@
+'use client';
+
+import { ChevronRight } from 'lucide-react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { type ReactNode, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+
+import type {
+  ReportCase,
+  ReportCaseStatus,
+  ReportGroupRate,
+  ReportLatencyBand,
+  ReportMetricsData,
+} from '~/lib/tests/report/data-schemas';
+import { cn } from '~/lib/utils';
+
+/**
+ * B0-590 — "Detailed results — case by case" as a compact ledger: one row per case, grouped by
+ * tier, with the complete per-case record (everything `renderReportMarkdown`'s per-case section
+ * emits) behind the row rather than ahead of it.
+ *
+ * Three rules this module holds to:
+ *
+ * 1. **Nothing is recomputed.** Tier group headers read `metrics.tiers[].block` — the `n`, `avg`
+ *    and `grade` `computeReportMetrics` already produced. Nothing here averages `cases`.
+ * 2. **Regulated values pass through verbatim.** Expected answers, agent responses, sub-scores,
+ *    latencies and similarities carry dilution ratios, dwell/contact times, ppm, oz/gal, mL/L and
+ *    EPA/DIN numbers. Every one of them is rendered exactly as stored — no `toFixed`, no rounding,
+ *    no unit conversion, no slicing. Where a value must be visually constrained it is constrained
+ *    with CSS (`truncate`, `whitespace-pre-wrap`) and never with string surgery. Note this is
+ *    *stricter* than the Markdown, which prints harness similarity through `.toFixed(2)`; the
+ *    ledger shows the stored precision instead.
+ * 3. **Disclosures are real `<details>` elements.** Keyboard-operable for free, deep-linkable
+ *    (`id={case.anchorId}` lives on the `<details>`), and force-openable for PDF export with a
+ *    single `details > *:not(summary) { display: revert }` print rule — the body is always in the
+ *    DOM, only hidden by the UA stylesheet.
+ */
+
+/** Query-string key the filter chips write. Linkable without any server-side `searchParams`. */
+export const LEDGER_FILTER_PARAM = 'caseFilter';
+
+export type LedgerFilter =
+  | { kind: 'all' }
+  | { kind: 'exceptions' }
+  | { kind: 'tier'; tier: string };
+
+const FILTER_ALL: LedgerFilter = { kind: 'all' };
+const TIER_FILTER_PREFIX = 'tier:';
+
+/** `?caseFilter=` → a filter. Unknown values (and unknown tiers) fall back to "all". */
+export function parseLedgerFilter(
+  raw: string | null | undefined,
+  tierNames: readonly string[],
+): LedgerFilter {
+  if (!raw || raw === 'all') return FILTER_ALL;
+  if (raw === 'exceptions') return { kind: 'exceptions' };
+  if (raw.startsWith(TIER_FILTER_PREFIX)) {
+    const tier = raw.slice(TIER_FILTER_PREFIX.length);
+    return tierNames.includes(tier) ? { kind: 'tier', tier } : FILTER_ALL;
+  }
+  return FILTER_ALL;
+}
+
+/** The `?caseFilter=` value for a filter, or null when the param should be dropped entirely. */
+export function serializeLedgerFilter(filter: LedgerFilter): string | null {
+  if (filter.kind === 'all') return null;
+  if (filter.kind === 'exceptions') return 'exceptions';
+  return `${TIER_FILTER_PREFIX}${filter.tier}`;
+}
+
+export function ledgerFilterEquals(a: LedgerFilter, b: LedgerFilter): boolean {
+  if (a.kind !== b.kind) return false;
+  if (a.kind === 'tier' && b.kind === 'tier') return a.tier === b.tier;
+  return true;
+}
+
+/**
+ * A graded case that did not pass. Deliberately the same population the verdict strip's
+ * "cases needing attention" column uses (B0-587 `buildExceptionRows`): evaluated, non-`Pass`.
+ * Unable-to-Evaluate cases are *not* exceptions — they have no grade to fail.
+ */
+export function isExceptionCase(c: ReportCase): boolean {
+  return c.evaluated != null && c.evaluated.status !== 'Pass';
+}
+
+/**
+ * Which rows open on first paint. Exceptions per the ticket, plus Unable-to-Evaluate cases so
+ * their `uteReason` is visible without a click — a UTE case is the one row whose whole story is
+ * "why it could not be judged". Derived from the data during render, never from an effect.
+ */
+export function isDefaultOpenCase(c: ReportCase): boolean {
+  return isExceptionCase(c) || c.unableToEvaluate;
+}
+
+/** The set of case ids open on first paint: the defaults, plus an incoming `#case-…` deep link. */
+export function seedOpenCaseIds(
+  cases: readonly ReportCase[],
+  hashTarget: string | null,
+): Set<string> {
+  const open = new Set<string>();
+  for (const c of cases) {
+    if (isDefaultOpenCase(c) || (hashTarget && c.anchorId === hashTarget)) open.add(c.id);
+  }
+  return open;
+}
+
+export function matchesLedgerFilter(c: ReportCase, filter: LedgerFilter): boolean {
+  if (filter.kind === 'all') return true;
+  if (filter.kind === 'exceptions') return isExceptionCase(c);
+  return c.tier === filter.tier;
+}
+
+export type ReportTierGroup = {
+  /** `Tier N`, or `Unspecified`. */
+  tier: string;
+  /** The raw priority shared by the group's cases; null for the "Unspecified" group. */
+  priorityRaw: number | null;
+  /** `metrics.tiers[].block` for this tier — read, never derived. Null if metrics has no row. */
+  block: ReportGroupRate['block'] | null;
+  cases: ReportCase[];
+  /** Rows in this group excluded from `block.avg` because they could not be judged. */
+  uteCount: number;
+};
+
+/**
+ * Groups the already-ordered `cases` (Tier 1 → Tier N → "Unspecified") by tier, preserving both
+ * the group order and the within-group order the payload arrived in. Each group is paired with
+ * the metrics block of the same name; a tier with no metrics row (every case UTE) gets `null`.
+ */
+export function groupCasesByTier(
+  cases: readonly ReportCase[],
+  tiers: readonly ReportGroupRate[],
+): ReportTierGroup[] {
+  const blocks = new Map(tiers.map((t) => [t.name, t.block]));
+  const groups: ReportTierGroup[] = [];
+  const byTier = new Map<string, ReportTierGroup>();
+
+  for (const c of cases) {
+    let group = byTier.get(c.tier);
+    if (!group) {
+      group = {
+        tier: c.tier,
+        priorityRaw: c.priorityRaw,
+        block: blocks.get(c.tier) ?? null,
+        cases: [],
+        uteCount: 0,
+      };
+      byTier.set(c.tier, group);
+      groups.push(group);
+    }
+    group.cases.push(c);
+    if (c.unableToEvaluate) group.uteCount += 1;
+  }
+
+  return groups;
+}
+
+export type LedgerChip = {
+  key: string;
+  label: string;
+  /** How many ledger *rows* this chip shows — not a metric `n` (which counts graded cases only). */
+  count: number;
+  filter: LedgerFilter;
+};
+
+export function buildLedgerChips(
+  cases: readonly ReportCase[],
+  groups: readonly ReportTierGroup[],
+): LedgerChip[] {
+  return [
+    { key: 'all', label: 'All', count: cases.length, filter: FILTER_ALL },
+    {
+      key: 'exceptions',
+      label: 'Exceptions',
+      count: cases.filter(isExceptionCase).length,
+      filter: { kind: 'exceptions' },
+    },
+    ...groups.map((group) => ({
+      key: `tier:${group.tier}`,
+      label: group.tier,
+      count: group.cases.length,
+      filter: { kind: 'tier', tier: group.tier } as LedgerFilter,
+    })),
+  ];
+}
+
+const STATUS_BAR_CLASS: Record<ReportCaseStatus, string> = {
+  Pass: 'bg-emerald-500',
+  'Partial Pass': 'bg-amber-500',
+  Fail: 'bg-rose-500',
+};
+
+const STATUS_BADGE_CLASS: Record<ReportCaseStatus, string> = {
+  Pass: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
+  'Partial Pass': 'bg-amber-50 text-amber-800 ring-amber-200',
+  Fail: 'bg-rose-50 text-rose-700 ring-rose-200',
+};
+
+const LATENCY_BAND_CLASS: Record<ReportLatencyBand, string> = {
+  good: 'text-emerald-700',
+  acceptable: 'text-amber-700',
+  slow: 'text-rose-700',
+};
+
+/** The Markdown's `mdBlock` placeholder, so an empty narrative field reads the same in both. */
+const NONE_NOTED = '(none noted)';
+
+/**
+ * Free text straight from the payload. `whitespace-pre-wrap` keeps stored line breaks, and
+ * `break-words` constrains long strings visually rather than by slicing them.
+ */
+function Verbatim({ className, value }: { className?: string; value: string | null }) {
+  const text = value?.trim() ?? '';
+  if (!text) {
+    return <p className="text-sm text-slate-400 italic">{NONE_NOTED}</p>;
+  }
+  return (
+    <p className={cn('text-sm leading-relaxed break-words whitespace-pre-wrap text-slate-700', className)}>
+      {text}
+    </p>
+  );
+}
+
+function FieldLabel({ children }: { children: ReactNode }) {
+  return (
+    <p className="text-[11px] font-semibold tracking-[0.14em] text-slate-500 uppercase">
+      {children}
+    </p>
+  );
+}
+
+function SubScore({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-xl bg-white px-3 py-2 ring-1 ring-slate-200">
+      <p className="text-[11px] font-medium tracking-wide text-slate-500 uppercase">{label}</p>
+      {/* Raw grader sub-score — printed exactly as stored, never rounded. */}
+      <p className="mt-0.5 text-base font-semibold text-slate-900 tabular-nums">{value}</p>
+    </div>
+  );
+}
+
+function ScoreBar({ overall, status }: { overall: number; status: ReportCaseStatus }) {
+  return (
+    <span className="flex items-center gap-2">
+      <span className="h-1.5 w-16 overflow-hidden rounded-full bg-slate-200">
+        <span
+          className={cn('block h-full rounded-full', STATUS_BAR_CLASS[status])}
+          style={{ width: `${Math.max(0, Math.min(100, overall))}%` }}
+        />
+      </span>
+      <span className="text-xs font-semibold text-slate-700 tabular-nums">{overall}</span>
+    </span>
+  );
+}
+
+function LatencyReadout({ c, className }: { c: ReportCase; className?: string }) {
+  if (c.latencySeconds == null) {
+    return <span className={cn('text-xs text-slate-400', className)}>—</span>;
+  }
+  return (
+    <span
+      className={cn(
+        'text-xs tabular-nums',
+        c.latencyBand ? LATENCY_BAND_CLASS[c.latencyBand] : 'text-slate-600',
+        className,
+      )}
+    >
+      {c.latencySeconds} s{c.latencyBand ? ` (${c.latencyBand})` : ''}
+    </span>
+  );
+}
+
+/**
+ * The harness's own verdict. Kept visually subordinate — smaller, muted, set off behind a rule —
+ * because it is a different judgement from the LLM grade and must never read as its equal.
+ */
+function HarnessAside({ harness }: { harness: NonNullable<ReportCase['harness']> }) {
+  const bits = [
+    harness.passed != null ? `harness result: ${harness.passed ? 'passed' : 'failed'}` : null,
+    harness.status ? `status ${harness.status}` : null,
+    // Source precision on purpose: the Markdown rounds this to 2 dp, the ledger must not.
+    harness.similarity != null ? `similarity ${harness.similarity}` : null,
+  ].filter(Boolean);
+
+  if (bits.length === 0) return null;
+
+  return (
+    <p className="border-l border-slate-200 pl-3 text-[11px] text-slate-400">
+      <span className="font-medium">Harness signal</span> · {bits.join(' · ')}
+    </p>
+  );
+}
+
+function ExpectedColumn({ c }: { c: ReportCase }) {
+  // Same truthiness test the Markdown's `formatExpected` uses, so both agree on "nothing recorded".
+  const hasAny = Boolean(
+    c.idealResponse ||
+      c.expectedConcepts ||
+      c.minimumConcepts ||
+      c.expectedSources ||
+      c.expectedShouldAnswer != null,
+  );
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+      <FieldLabel>Expected answer / behavior</FieldLabel>
+      {hasAny ? (
+        <div className="mt-2 flex flex-col gap-3">
+          {c.idealResponse ? <Verbatim value={c.idealResponse} /> : null}
+          {c.expectedConcepts ? (
+            <div>
+              <FieldLabel>Expected concepts</FieldLabel>
+              <Verbatim className="mt-1" value={c.expectedConcepts} />
+            </div>
+          ) : null}
+          {c.minimumConcepts ? (
+            <div>
+              <FieldLabel>Minimum concepts</FieldLabel>
+              <Verbatim className="mt-1" value={c.minimumConcepts} />
+            </div>
+          ) : null}
+          {c.expectedSources ? (
+            <div>
+              <FieldLabel>Expected sources</FieldLabel>
+              <Verbatim className="mt-1" value={c.expectedSources} />
+            </div>
+          ) : null}
+          {c.expectedShouldAnswer != null ? (
+            <p className="text-sm text-slate-700">
+              <span className="font-medium">Should answer:</span>{' '}
+              {c.expectedShouldAnswer ? 'Yes' : 'No'}
+            </p>
+          ) : null}
+        </div>
+      ) : (
+        <p className="mt-2 text-sm text-slate-400 italic">(no expected answer recorded)</p>
+      )}
+    </div>
+  );
+}
+
+function ActualColumn({ c }: { c: ReportCase }) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+      <FieldLabel>Agent&apos;s actual response</FieldLabel>
+      {c.responseRecorded ? (
+        <Verbatim className="mt-2" value={c.actual} />
+      ) : (
+        // `actual` still carries the payload's own placeholder — shown as-is, flagged as absent.
+        <p className="mt-2 text-sm text-slate-400 italic">{c.actual}</p>
+      )}
+
+      <div className="mt-4 border-t border-slate-100 pt-3">
+        <FieldLabel>Retrieved documents</FieldLabel>
+        {c.retrievedDocumentIds.length > 0 ? (
+          <ul className="mt-1.5 flex flex-wrap gap-1.5">
+            {c.retrievedDocumentIds.map((documentId) => (
+              <li
+                className="rounded-lg bg-slate-100 px-2 py-0.5 font-mono text-[11px] break-all text-slate-600"
+                key={documentId}
+              >
+                {documentId}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-1 text-xs text-slate-400 italic">(none recorded)</p>
+        )}
+        <p className="mt-2 text-[11px] text-slate-400">
+          Documents retrieved while answering — not a citation list.
+          {c.workflowRunId ? (
+            <>
+              {' '}
+              Workflow run <span className="font-mono break-all">{c.workflowRunId}</span>
+            </>
+          ) : null}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function NarrativeCard({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+      <FieldLabel>{label}</FieldLabel>
+      <Verbatim className="mt-2" value={value} />
+    </div>
+  );
+}
+
+function CaseRow({
+  c,
+  open,
+  onToggle,
+}: {
+  c: ReportCase;
+  open: boolean;
+  onToggle: (caseId: string, open: boolean) => void;
+}) {
+  const evaluated = c.evaluated;
+
+  return (
+    <details
+      className="group border-b border-slate-100 last:border-b-0"
+      // B0-592 — marks one case record as an unbreakable block for the PDF export.
+      data-report-case
+      id={c.anchorId}
+      onToggle={(event) => onToggle(c.id, event.currentTarget.open)}
+      open={open}
+    >
+      <summary className="flex cursor-pointer list-none items-center gap-3 px-3 py-2.5 hover:bg-slate-50 focus-visible:ring-2 focus-visible:ring-sky-500/40 focus-visible:outline-none [&::-webkit-details-marker]:hidden">
+        <ChevronRight className="size-4 shrink-0 text-slate-400 transition-transform group-open:rotate-90" />
+        {/* The UUID's first segment — the same short form the synthesis cites. Full id below. */}
+        <code className="w-[4.75rem] shrink-0 font-mono text-[11px] text-slate-500" title={c.id}>
+          {c.id.slice(0, 8)}
+        </code>
+        <span className="min-w-0 flex-1 truncate text-sm text-slate-800">{c.question}</span>
+        <span className="hidden w-28 shrink-0 sm:block">
+          {evaluated ? (
+            <ScoreBar overall={evaluated.overall} status={evaluated.status} />
+          ) : (
+            <span className="text-xs text-slate-400">not scored</span>
+          )}
+        </span>
+        <LatencyReadout c={c} className="hidden w-24 shrink-0 text-right sm:block" />
+        <span className="shrink-0">
+          {evaluated ? (
+            <span
+              className={cn(
+                'inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset',
+                STATUS_BADGE_CLASS[evaluated.status],
+              )}
+            >
+              {evaluated.status} · {evaluated.grade}
+            </span>
+          ) : (
+            <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600 ring-1 ring-slate-200 ring-inset">
+              Unable to Evaluate
+            </span>
+          )}
+        </span>
+      </summary>
+
+      <div className="flex flex-col gap-4 px-3 pt-1 pb-6">
+        {/* --- Header band --- */}
+        <div className="rounded-2xl bg-slate-50 p-4 ring-1 ring-slate-200">
+          <p className="font-mono text-xs break-all text-slate-500">{c.id}</p>
+          <p className="mt-1 text-xs text-slate-600">
+            {c.tier}
+            {c.priorityRaw != null ? ` (priority ${c.priorityRaw})` : ''} · {c.category}
+          </p>
+
+          {evaluated ? (
+            <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <SubScore label="Accuracy" value={evaluated.accuracy} />
+              <SubScore label="Completeness" value={evaluated.completeness} />
+              <SubScore label="Relevance" value={evaluated.relevance} />
+              <SubScore label="Clarity" value={evaluated.clarity} />
+            </div>
+          ) : (
+            <div className="mt-3 rounded-xl border border-slate-200 bg-white p-3">
+              <p className="text-sm font-medium text-slate-700">
+                Unable to Evaluate — excluded from all scores, grades, counts and rates
+                {c.tier ? `, including the ${c.tier} average` : ''}.
+              </p>
+              <p className="mt-1 text-sm text-slate-600">
+                <span className="font-medium">Reason:</span> {c.score.uteReason ?? 'unspecified'}
+              </p>
+            </div>
+          )}
+
+          {evaluated ? (
+            <p className="mt-3 text-xs text-slate-600">
+              <span className="font-medium">Overall</span>{' '}
+              <span className="tabular-nums">{evaluated.overall}</span>/100 ·{' '}
+              <span className="font-medium">Grade</span> {evaluated.grade} ·{' '}
+              <span className="font-medium">Result</span> {evaluated.status}
+            </p>
+          ) : null}
+
+          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
+            <p className="text-xs text-slate-600">
+              <span className="font-medium">Response time:</span>{' '}
+              {c.latencySeconds != null ? (
+                <>
+                  <span className={cn('tabular-nums', c.latencyBand ? LATENCY_BAND_CLASS[c.latencyBand] : '')}>
+                    {c.latencySeconds} s
+                  </span>
+                  {c.latencyBand ? ` (${c.latencyBand})` : ''}
+                  {c.latencyMs != null ? (
+                    <span className="text-slate-400"> · {c.latencyMs} ms</span>
+                  ) : null}
+                </>
+              ) : (
+                <span className="text-slate-400">not recorded</span>
+              )}
+              <span className="text-slate-400"> — reported for reference, not graded</span>
+            </p>
+            {c.harness ? <HarnessAside harness={c.harness} /> : null}
+          </div>
+        </div>
+
+        {/* --- Expected vs actual --- */}
+        <div className="grid gap-4 lg:grid-cols-2">
+          <ExpectedColumn c={c} />
+          <ActualColumn c={c} />
+        </div>
+
+        {/* --- The grade, in the grader's words --- */}
+        <NarrativeCard label="Explanation of the grade" value={c.score.explanation} />
+        <div className="grid gap-4 lg:grid-cols-3">
+          <NarrativeCard label="Important information missed" value={c.score.missed} />
+          <NarrativeCard
+            label="Incorrect, misleading, or unsupported information"
+            value={c.score.incorrect}
+          />
+          <NarrativeCard label="Recommended improvement" value={c.score.improvement} />
+        </div>
+      </div>
+    </details>
+  );
+}
+
+function TierGroupHeader({ group }: { group: ReportTierGroup }) {
+  const block = group.block;
+  return (
+    <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded-2xl bg-slate-100/70 px-3 py-2">
+      <h3 className="text-sm font-semibold text-slate-900">{group.tier}</h3>
+      <p className="text-xs text-slate-600">
+        {group.priorityRaw != null ? `priority ${group.priorityRaw}` : 'no priority'}
+        {/* Straight from `metrics.tiers[].block` — never averaged from the rows below. */}
+        {block ? (
+          <>
+            {' · '}n={block.n}
+            {' · '}avg {block.avg ?? '—'}
+            {' · '}grade {block.grade}
+          </>
+        ) : null}
+      </p>
+      {group.uteCount > 0 ? (
+        <p className="text-xs text-slate-500 italic">
+          {group.uteCount} unable to evaluate — excluded from this average
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/** `metrics`, narrowed to the slices the ledger reads. Passing the whole object satisfies it. */
+export type ReportCaseLedgerMetrics = Pick<ReportMetricsData, 'tiers'>;
+
+export type ReportCaseLedgerProps = {
+  /** `ReportDataReady.cases`, already ordered Tier 1 → Tier N → "Unspecified". Not re-sorted. */
+  cases: readonly ReportCase[];
+  metrics: ReportCaseLedgerMetrics;
+  className?: string;
+};
+
+function readLocationHash(): string | null {
+  if (typeof window === 'undefined') return null;
+  const raw = window.location.hash.replace(/^#/, '');
+  if (!raw) return null;
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
+function ReportCaseLedgerContent({ cases, metrics, className }: ReportCaseLedgerProps) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
+  const groups = useMemo(() => groupCasesByTier(cases, metrics.tiers), [cases, metrics.tiers]);
+  const chips = useMemo(() => buildLedgerChips(cases, groups), [cases, groups]);
+  const tierNames = useMemo(() => groups.map((g) => g.tier), [groups]);
+  const filter = parseLedgerFilter(searchParams.get(LEDGER_FILTER_PARAM), tierNames);
+
+  const [hashTarget, setHashTarget] = useState<string | null>(readLocationHash);
+  // Seeded during the first render from the data itself — exceptions (and UTE cases) are open on
+  // first paint with no effect, no second fetch and no post-paint state flip.
+  const [openIds, setOpenIds] = useState<ReadonlySet<string>>(() =>
+    seedOpenCaseIds(cases, readLocationHash()),
+  );
+
+  const handleToggle = useCallback((caseId: string, open: boolean) => {
+    setOpenIds((prev) => {
+      if (prev.has(caseId) === open) return prev;
+      const next = new Set(prev);
+      if (open) next.add(caseId);
+      else next.delete(caseId);
+      return next;
+    });
+  }, []);
+
+  // Later `#case-…` navigations (evidence chips elsewhere on the page) open and reveal their row.
+  useEffect(() => {
+    const applyHash = () => {
+      const target = readLocationHash();
+      setHashTarget(target);
+      if (!target) return;
+      const match = cases.find((c) => c.anchorId === target);
+      if (!match) return;
+      setOpenIds((prev) => (prev.has(match.id) ? prev : new Set(prev).add(match.id)));
+      window.requestAnimationFrame(() => {
+        document.getElementById(target)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    };
+
+    applyHash();
+    window.addEventListener('hashchange', applyHash);
+    return () => window.removeEventListener('hashchange', applyHash);
+  }, [cases]);
+
+  const selectFilter = useCallback(
+    (next: LedgerFilter) => {
+      const params = new URLSearchParams(searchParams.toString());
+      const value = serializeLedgerFilter(next);
+      if (value) params.set(LEDGER_FILTER_PARAM, value);
+      else params.delete(LEDGER_FILTER_PARAM);
+      const query = params.toString();
+      router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+    },
+    [pathname, router, searchParams],
+  );
+
+  // A deep-linked row stays visible even when the active filter would otherwise hide it, so an
+  // anchor from an evidence chip always lands on its target.
+  const visibleGroups = groups
+    .map((group) => ({
+      ...group,
+      cases: group.cases.filter(
+        (c) => matchesLedgerFilter(c, filter) || (hashTarget != null && c.anchorId === hashTarget),
+      ),
+    }))
+    .filter((group) => group.cases.length > 0);
+
+  return (
+    <section
+      className={cn(
+        'rounded-3xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8',
+        className,
+      )}
+    >
+      <h2 className="text-lg font-semibold tracking-tight text-slate-950">
+        Detailed results — case by case
+      </h2>
+      <p className="mt-1 text-xs text-slate-500">
+        One row per case; open a row for the full record. Response time and harness signal are
+        reported for reference only and are not part of the grade.
+      </p>
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        {chips.map((chip) => {
+          const active = ledgerFilterEquals(chip.filter, filter);
+          return (
+            <button
+              aria-pressed={active}
+              className={cn(
+                'inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors',
+                active
+                  ? 'border-sky-600 bg-sky-600 text-white'
+                  : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50',
+              )}
+              key={chip.key}
+              onClick={() => selectFilter(chip.filter)}
+              type="button"
+            >
+              {chip.label}
+              <span className={cn('tabular-nums', active ? 'text-sky-100' : 'text-slate-400')}>
+                {chip.count}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      {visibleGroups.length === 0 ? (
+        <p className="mt-6 text-sm text-slate-500">No cases match this filter.</p>
+      ) : (
+        <div className="mt-6 flex flex-col gap-6">
+          {visibleGroups.map((group) => (
+            <div key={group.tier}>
+              <TierGroupHeader group={group} />
+              <div className="mt-2 overflow-hidden rounded-2xl border border-slate-200">
+                {group.cases.map((c) => (
+                  <CaseRow
+                    c={c}
+                    key={c.id}
+                    onToggle={handleToggle}
+                    open={openIds.has(c.id)}
+                  />
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+/**
+ * `useSearchParams()` needs a Suspense boundary above it under static rendering; owning one here
+ * keeps the ledger safe to drop anywhere in `RunReportView` without the caller having to know.
+ */
+export function ReportCaseLedger(props: ReportCaseLedgerProps) {
+  return (
+    <Suspense fallback={null}>
+      <ReportCaseLedgerContent {...props} />
+    </Suspense>
+  );
+}

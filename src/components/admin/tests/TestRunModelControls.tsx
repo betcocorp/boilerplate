@@ -3,6 +3,12 @@
 import { useState } from 'react';
 
 import { NativeSelect } from '~/components/ui/native-select';
+import {
+  BEX_CHAT_AGENT_MODES,
+  BEX_CHAT_AGENT_MODE_LABELS,
+  DEFAULT_BEX_CHAT_AGENT_MODE,
+  type BexChatAgentMode,
+} from '~/lib/agents/agent-registry';
 import supportedModels, {
   MODEL_DESCRIPTIONS,
   type BexModelTag,
@@ -19,6 +25,10 @@ const ROUTER_TYPE_OPTIONS: readonly RouterTypeOverride[] = ['keyword', 'semantic
  * B0-681 — added the router selector next to it: leaving it on "default" runs the turn through the
  * live `settings`-driven router (semantic/LLM rollout levers), same as before this ticket; picking
  * a router forces that run onto exactly that one (see `RouterTypeOverride`).
+ * B0-351 — added the agent-mode selector: `Orchestrator` (the default, and what every run did
+ * before this ticket) auto-selects a specialist by intent; any other value forces every item in the
+ * run onto that one specialist, the same direct-routing mechanism the Bex chat composer exposes.
+ * The options come from `BEX_CHAT_AGENT_MODES`, so this picker cannot drift from the chat one.
  *
  * A client component purely so the description under the dropdown can react to the selection; the
  * inputs are plain named form fields, so the enclosing server-action form (`runTestAction`) submits
@@ -30,6 +40,9 @@ const ROUTER_TYPE_OPTIONS: readonly RouterTypeOverride[] = ['keyword', 'semantic
 export function TestRunModelControls() {
   const [modelTag, setModelTag] = useState<BexModelTag>('gpt-4.1');
   const [routerType, setRouterType] = useState<RouterTypeOverride | ''>('');
+  const [agentMode, setAgentMode] = useState<BexChatAgentMode>(
+    DEFAULT_BEX_CHAT_AGENT_MODE,
+  );
 
   return (
     <div className="flex flex-col gap-2">
@@ -62,6 +75,22 @@ export function TestRunModelControls() {
           {ROUTER_TYPE_OPTIONS.map((type) => (
             <option key={type} value={type}>
               Router: {ROUTING_TEST_ROUTER_LABELS[type]}
+            </option>
+          ))}
+        </NativeSelect>
+
+        <NativeSelect
+          aria-label="Agent mode for this run"
+          className="h-9 w-48"
+          name="agentMode"
+          onChange={(event) =>
+            setAgentMode(event.target.value as BexChatAgentMode)
+          }
+          value={agentMode}
+        >
+          {BEX_CHAT_AGENT_MODES.map((mode) => (
+            <option key={mode} value={mode}>
+              Agent: {BEX_CHAT_AGENT_MODE_LABELS[mode]}
             </option>
           ))}
         </NativeSelect>

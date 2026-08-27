@@ -28,8 +28,13 @@ import {
 import { escapeCsvCell, sanitizeCsvFilename } from '~/lib/utils/csv';
 import type { Json } from '~/types/supabase.public';
 
-import { formatExpectedCriteriaCell } from '~/lib/tests/csv';
+import { formatExpectedCriteriaCell, formatMultiTurnJsonCell } from '~/lib/tests/csv';
 import { expectedCriteriaSchema, type ExpectedCriterion } from '~/lib/tests/criteria-schemas';
+import {
+  formatMultiTurnBadgeLabel,
+  formatMultiTurnTurnsTooltip,
+  readMultiTurnItemView,
+} from '~/lib/tests/multi-turn-display';
 
 export type TestPromptRow = {
   id: string;
@@ -118,7 +123,15 @@ function rowMatchesQuery(item: TestPromptRow, raw: string): boolean {
   ) {
     return true;
   }
-  return criteriaFromJson(item.expected_criteria).some((c) => c.concept.toLowerCase().includes(q));
+  if (criteriaFromJson(item.expected_criteria).some((c) => c.concept.toLowerCase().includes(q))) {
+    return true;
+  }
+  // B0-537 — only turn 1 lives in `prompt`, so later turns are otherwise unsearchable.
+  const view = readMultiTurnItemView(item.input_payload);
+  return (
+    view.kind === 'multi_turn' &&
+    view.scenario.turns.some((turn) => turn.prompt.toLowerCase().includes(q))
+  );
 }
 
 /**
@@ -175,6 +188,44 @@ function ConceptExpectationsCell({ item }: { item: TestPromptRow }) {
         </Badge>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * B0-537 — marks a row that is an ordered multi-turn scenario rather than a single prompt. Rendered
+ * inside the existing Prompt cell (rather than as a new column) so the table's `colSpan`s and the
+ * re-uploadable CSV column order stay untouched.
+ */
+function MultiTurnRowBadge({ item }: { item: TestPromptRow }) {
+  const view = readMultiTurnItemView(item.input_payload);
+
+  if (view.kind === 'single_turn') {
+    return null;
+  }
+
+  if (view.kind === 'invalid') {
+    return (
+      <Badge
+        className="mr-2 align-middle"
+        title={view.message}
+        variant="destructive"
+      >
+        Multi-turn · invalid
+      </Badge>
+    );
+  }
+
+  return (
+    <Badge
+      className="mr-2 border-sky-600/45 bg-sky-600/12 align-middle text-sky-900 dark:border-sky-500/40 dark:bg-sky-500/15 dark:text-sky-50"
+      title={formatMultiTurnTurnsTooltip(view.scenario)}
+      variant="outline"
+    >
+      {formatMultiTurnBadgeLabel(view.turnCount)}
+      {view.scenario.assertions?.length
+        ? ` · ${view.scenario.assertions.length} assertion${view.scenario.assertions.length === 1 ? '' : 's'}`
+        : ''}
+    </Badge>
   );
 }
 
@@ -300,6 +351,8 @@ export function TestPromptsSection({
       'expected_criteria',
       'expected_sources',
       'should_cite',
+      // B0-537 — so a downloaded set round-trips its scenarios on re-upload.
+      'multi_turn_json',
     ];
 
     const lines = [
@@ -322,6 +375,12 @@ export function TestPromptsSection({
           formatExpectedCriteriaCell(criteriaFromJson(item.expected_criteria)),
           item.expected_sources ?? '',
           formatShouldAnswerExport(item.should_cite),
+          (() => {
+            const view = readMultiTurnItemView(item.input_payload);
+            return view.kind === 'multi_turn'
+              ? formatMultiTurnJsonCell(view.scenario)
+              : '';
+          })(),
         ]
           .map(escapeCsvCell)
           .join(','),
@@ -510,6 +569,7 @@ export function TestPromptsSection({
                           P{item.priority}
                         </Badge>
                       ) : null}
+                      <MultiTurnRowBadge item={item} />
                       {item.prompt}
                     </TableCell>
                     <TableCell>{expectedSummary(item)}</TableCell>

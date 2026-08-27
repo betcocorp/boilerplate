@@ -19,6 +19,8 @@ import {
   RunComparisonPanel,
   type RunComparisonPanelData,
 } from '~/components/admin/tests/RunComparisonPanel';
+import { MultiTurnRunPanel } from '~/components/admin/tests/MultiTurnRunPanel';
+import { extractMultiTurnResult } from '~/lib/tests/multi-turn-result';
 import { RunItemResultsCsvDownload } from '~/components/admin/tests/RunItemResultsCsvDownload';
 import { RunReportButton } from '~/components/admin/tests/RunReportButton';
 import { RoutingAccuracyBoard } from '~/components/admin/tests/RoutingAccuracyBoard';
@@ -59,6 +61,7 @@ import {
   listAgentStepOutputsByWorkflowRunIds,
   listAllResultItemsByResultId,
 } from '~/lib/tests/repository';
+import { parseTestRunConfig } from '~/lib/tests/run-config';
 import {
   extractItemConfidenceProvenance,
   extractItemSimilarityScore,
@@ -283,6 +286,13 @@ export default async function AdminTestRunDetailsPage({
   const runtimeConfigForRun =
     resultItems.map((item) => extractRuntimeConfig(item.response_payload)).find(Boolean) ?? null;
   /**
+   * B0-351 — the run's REQUESTED config (`test_results.run_options`), as opposed to the observed
+   * `runtimeConfigForRun` above. Written once when the run row was created and never updated, so it
+   * is the authoritative record of what this run was configured to do — including for a run whose
+   * items all errored and therefore carry no observed runtime config at all.
+   */
+  const runConfigForRun = parseTestRunConfig(result.run_options);
+  /**
    * B0-419 — the run each execution produced. Prefer the real `workflow_run_id` column (B0-416,
    * backfilled) over re-extracting it from `response_payload`; the payload read stays only as a
    * fallback for any row the backfill could not reach. Null is expected and common: search-eval
@@ -326,7 +336,7 @@ export default async function AdminTestRunDetailsPage({
     agentStepOutputs.map((row) => [row.workflow_run_id, parseAgentStepToolTrace(row.output)] as const),
   );
   const expectedToolByTestItemId = new Map(
-    testItems.map((item) => [item.id, extractExpectedTool(item.metadata)] as const),
+    testItems.map((item) => [item.id, extractExpectedTool(item.expected_tool)] as const),
   );
   const toolRoutingReport = computeToolRoutingReport(
     resultItems.map((row) => {
@@ -411,6 +421,12 @@ export default async function AdminTestRunDetailsPage({
         extractRetrievedDocumentChunks(row.response_payload),
       ),
       test_item_id: row.test_item_id,
+      // B0-351 — run-level config, constant across the export by construction (it is read once,
+      // before the loop, from the immutable `run_options` blob).
+      run_model_tag: runConfigForRun.modelTag ?? '',
+      run_use_validator: runConfigForRun.useValidator ? 'yes' : 'no',
+      run_agent_mode: runConfigForRun.agentMode,
+      run_router_type: runConfigForRun.routerType ?? '',
     };
   });
 
@@ -429,6 +445,12 @@ export default async function AdminTestRunDetailsPage({
           passed_items: passCount,
           failed_items: failCount,
           notes: result.notes,
+          run_config: {
+            model_tag: runConfigForRun.modelTag,
+            use_validator: runConfigForRun.useValidator,
+            agent_mode: runConfigForRun.agentMode,
+            router_type: runConfigForRun.routerType,
+          },
         },
         items: chronologicalItems.map((row): RunExportItem => {
           const modelTag = modelByWorkflowRunId.get(
@@ -498,7 +520,10 @@ export default async function AdminTestRunDetailsPage({
                   <span>Run id: {result.id}</span>
                   <AppVersionBadge appVersion={result.app_version} />
                   <PromptBundleVersionBadge summary={promptBundleVersionSummary} />
-                  <RuntimeConfigBadge runtimeConfig={runtimeConfigForRun} />
+                  <RuntimeConfigBadge
+                    runConfig={runConfigForRun}
+                    runtimeConfig={runtimeConfigForRun}
+                  />
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -588,6 +613,19 @@ export default async function AdminTestRunDetailsPage({
         />
 
         <RunComparisonPanel comparison={comparisonForPanel} />
+
+        {/* B0-537 / B0-538 — renders nothing when the run contains no multi-turn scenarios. */}
+        <MultiTurnRunPanel
+          rows={chronologicalItems.map((row) => ({
+            id: row.id,
+            testItemId: row.test_item_id,
+            rowIndex: row.row_index,
+            prompt: promptByItemId.get(row.test_item_id) || '',
+            passed: row.passed ?? false,
+            responsePayload: row.response_payload,
+          }))}
+          testId={test.id}
+        />
 
         <section
           className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm"
@@ -719,6 +757,25 @@ export default async function AdminTestRunDetailsPage({
                                 P{itemPriority}
                               </Badge>
                             ) : null}
+                            {/* B0-537 — this row is a scenario; the turn-by-turn detail is in the
+                                Multi-turn scenarios section above. */}
+                            {(() => {
+                              const multiTurn = extractMultiTurnResult(
+                                row.response_payload,
+                              );
+                              if (!multiTurn) return null;
+                              return (
+                                <Badge
+                                  className="mr-1.5 border-sky-600/45 bg-sky-600/12 align-middle text-sky-900 dark:border-sky-500/40 dark:bg-sky-500/15 dark:text-sky-50"
+                                  title={`${multiTurn.summary.passedTurnCount}/${multiTurn.summary.turnCount} turns passed, ${multiTurn.summary.passedAssertionCount}/${multiTurn.summary.assertionCount} assertions passed`}
+                                  variant="outline"
+                                >
+                                  <Link href="#multi-turn-results">
+                                    {multiTurn.summary.turnCount} turns
+                                  </Link>
+                                </Badge>
+                              );
+                            })()}
                             <Link
                               className="text-sky-700 underline-offset-2 hover:underline"
                               href={itemHistoryHref}

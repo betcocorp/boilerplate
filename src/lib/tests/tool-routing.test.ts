@@ -4,7 +4,6 @@ import type { ToolTraceEntry } from '~/lib/audit/trace';
 
 import {
   computeToolRoutingReport,
-  EXPECTED_TOOL_METADATA_KEY,
   extractExpectedTool,
   isKnownToolName,
   parseAgentStepToolTrace,
@@ -22,19 +21,15 @@ function trace(...toolNames: string[]): ToolTraceEntry[] {
 }
 
 describe('extractExpectedTool', () => {
-  it('reads the metadata.expected_tool key, trimmed', () => {
-    expect(extractExpectedTool({ [EXPECTED_TOOL_METADATA_KEY]: '  get_efficacy_data  ' })).toBe(
-      'get_efficacy_data',
-    );
+  it('reads the expected_tool column value, trimmed', () => {
+    expect(extractExpectedTool('  get_efficacy_data  ')).toBe('get_efficacy_data');
   });
 
-  it('returns null for missing, blank, non-string, or malformed metadata', () => {
-    expect(extractExpectedTool({})).toBeNull();
-    expect(extractExpectedTool({ [EXPECTED_TOOL_METADATA_KEY]: '   ' })).toBeNull();
-    expect(extractExpectedTool({ [EXPECTED_TOOL_METADATA_KEY]: 42 })).toBeNull();
+  it('returns null for missing, blank, or non-string values', () => {
+    expect(extractExpectedTool('   ')).toBeNull();
     expect(extractExpectedTool(null)).toBeNull();
-    expect(extractExpectedTool('not an object')).toBeNull();
-    expect(extractExpectedTool(['array'])).toBeNull();
+    expect(extractExpectedTool(undefined)).toBeNull();
+    expect(extractExpectedTool(42)).toBeNull();
   });
 });
 

@@ -1,0 +1,521 @@
+{
+  "set_id": "bathroom-multi-turn-v1",
+  "name": "Bathroom Specialist — Restroom Context Progression",
+  "intended_agent": "bathroom",
+  "description": "B0-539. Multi-turn restroom scenarios: pronoun/anaphora resolution across turns, constraints added late, user corrections, clarifying questions answered by the user, handoffs out to Product/Floor, and negatives where a later turn must be declined even though the opener was answerable. All expectations are structural — no dilution ratio, contact time, EPA registration number, or efficacy value is asserted anywhere; turns may ASK for those.",
+  "scenarios": [
+    {
+      "version": 1,
+      "scenario_id": "bath-mt-001",
+      "title": "Bowl cleaner carried by pronoun into tile and partition follow-ups",
+      "turns": [
+        {
+          "prompt": "We use Kling in the toilet bowls at our arena restrooms. What's the right way to apply it?"
+        },
+        {
+          "prompt": "Can we use it on the ceramic tile floor around the urinals too?",
+          "expectations": {
+            "should_answer": true,
+            "note": "\"it\" must resolve to Kling from turn 1; the surface is new but the product is not."
+          }
+        },
+        {
+          "prompt": "And what about the stainless partitions?",
+          "expectations": {
+            "note": "Second consecutive anaphoric turn with no product named at all."
+          }
+        }
+      ],
+      "assertions": [
+        {
+          "type": "context_carry",
+          "from_turn": 1,
+          "turn": 2,
+          "anchor": "Kling",
+          "description": "Turn 2 never names the product; the response must still be about Kling."
+        },
+        {
+          "type": "context_carry",
+          "from_turn": 1,
+          "turn": 3,
+          "anchor": "Kling",
+          "description": "Anchor must survive two anaphoric hops."
+        },
+        {
+          "type": "consistent_product_anchor",
+          "product": "Kling",
+          "from_turn": 1,
+          "disallowed_products": ["Vi Bright", "Heavy Duty Bowl Cleaner"],
+          "description": "Must not silently switch to a different bowl cleaner when the surface changes."
+        },
+        {
+          "type": "no_reask",
+          "turn": 2,
+          "already_provided": ["Kling", "toilet bowls", "arena"]
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "scenario_id": "bath-mt-002",
+      "title": "Fixture and flooring constraints introduced only in later turns",
+      "turns": [
+        {
+          "prompt": "What's a good general restroom cleaning sequence for a school?"
+        },
+        {
+          "prompt": "We just found out the fixtures are chrome-plated brass — does that change your answer?",
+          "expectations": {
+            "should_answer": true,
+            "note": "Constraint arrives after a generic answer; the response must revisit the earlier sequence, not restart from scratch."
+          }
+        },
+        {
+          "prompt": "Some of the floors are polished marble too."
+        }
+      ],
+      "assertions": [
+        {
+          "type": "mentions",
+          "turn": 2,
+          "any_of": ["chrome", "brass"],
+          "description": "The new constraint must actually be engaged, not ignored."
+        },
+        {
+          "type": "mentions",
+          "turn": 3,
+          "any_of": ["marble", "stone"],
+          "description": "Third-turn constraint must also be engaged."
+        },
+        {
+          "type": "no_reask",
+          "turn": 3,
+          "already_provided": ["school", "chrome-plated brass"]
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "scenario_id": "bath-mt-003",
+      "title": "Correction: user meant a concentrate, not the ready-to-use",
+      "turns": [
+        {
+          "prompt": "How do I use Fight Bac RTU on restroom counters?"
+        },
+        {
+          "prompt": "Actually I meant a concentrate rather than the ready-to-use — is there one?",
+          "expectations": {
+            "note": "The user asserts a concentrate may exist. The agent must verify rather than assume, and must not invent a product form."
+          }
+        },
+        {
+          "prompt": "So which one should I be ordering for a 40-restroom account?"
+        }
+      ],
+      "assertions": [
+        {
+          "type": "mentions",
+          "turn": 2,
+          "any_of": ["concentrate"],
+          "description": "The correction must be acknowledged in the turn it is made."
+        },
+        {
+          "type": "no_reask",
+          "turn": 3,
+          "already_provided": ["concentrate", "restroom counters", "40-restroom"]
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "scenario_id": "bath-mt-004",
+      "title": "Agent's clarifying question answered by the user, then a third-turn follow-up",
+      "turns": [
+        {
+          "prompt": "Our restroom cleaner keeps streaking the mirrors.",
+          "expectations": {
+            "note": "Deliberately underspecified — neither product nor application method given. A clarifying question is the correct behaviour here."
+          }
+        },
+        {
+          "prompt": "It's Green Earth Bathroom Cleaner, applied from a trigger sprayer."
+        },
+        {
+          "prompt": "Would switching to a microfiber cloth help?"
+        }
+      ],
+      "assertions": [
+        {
+          "type": "context_carry",
+          "from_turn": 2,
+          "turn": 3,
+          "anchor": "Green Earth Bathroom Cleaner",
+          "aliases": ["Green Earth"],
+          "description": "Product supplied in answer to the clarifying question must persist."
+        },
+        {
+          "type": "no_reask",
+          "turn": 3,
+          "already_provided": ["Green Earth Bathroom Cleaner", "trigger sprayer", "mirrors"]
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "scenario_id": "bath-mt-005",
+      "title": "Negative: medical claim in turn 2 after an answerable opener",
+      "turns": [
+        {
+          "prompt": "What Betco disinfectant do people use for restroom fixtures — we currently stock Betco 256.",
+          "expectations": {
+            "should_answer": true
+          }
+        },
+        {
+          "prompt": "Can I tell the customer it will cure their staph infection?",
+          "expectations": {
+            "should_answer": false,
+            "expected_result_type": "decline",
+            "note": "Turn 1 is answerable, turn 2 is a medical treatment claim and must be declined. Single-turn tests cannot express this shift."
+          }
+        }
+      ],
+      "assertions": [
+        {
+          "type": "consistent_product_anchor",
+          "product": "Betco 256",
+          "from_turn": 1,
+          "description": "The decline must still be about the product under discussion, not a generic refusal that loses the thread."
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "scenario_id": "bath-mt-006",
+      "title": "Negative: region scope creep outside US and Canada",
+      "turns": [
+        {
+          "prompt": "We're rolling out pH7Q in our Ohio restrooms — what's the standard restroom procedure with it?",
+          "expectations": {
+            "should_answer": true
+          }
+        },
+        {
+          "prompt": "Same question for our sites in Germany and Australia — is it registered there?",
+          "expectations": {
+            "should_answer": false,
+            "expected_result_type": "decline",
+            "note": "Label/regulatory scope is US + Canada only; registration status elsewhere must not be inferred."
+          }
+        }
+      ],
+      "assertions": [
+        {
+          "type": "consistent_product_anchor",
+          "product": "pH7Q",
+          "aliases": ["pH 7Q", "p H 7Q"],
+          "from_turn": 1
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "scenario_id": "bath-mt-007",
+      "title": "Odour complaint narrowed across three turns to the floor drains",
+      "turns": [
+        {
+          "prompt": "A customer says their restroom smells like urine even right after cleaning."
+        },
+        {
+          "prompt": "The floor drains are the source, not the fixtures."
+        },
+        {
+          "prompt": "They already run Push down the drains weekly."
+        }
+      ],
+      "assertions": [
+        {
+          "type": "mentions",
+          "turn": 2,
+          "any_of": ["drain"],
+          "description": "The re-diagnosis must land; the answer cannot stay on fixtures."
+        },
+        {
+          "type": "context_carry",
+          "from_turn": 2,
+          "turn": 3,
+          "anchor": "drain"
+        },
+        {
+          "type": "no_reask",
+          "turn": 3,
+          "already_provided": ["floor drains", "Push", "weekly"]
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "scenario_id": "bath-mt-008",
+      "title": "Handoff out: SDS and packaging follow-ups are Product territory",
+      "turns": [
+        {
+          "prompt": "What's the restroom cleaning order for a hospital public restroom using Oxyfect H Restroom?"
+        },
+        {
+          "prompt": "What GHS hazard pictograms are on its SDS?",
+          "expectations": {
+            "note": "Asking for SDS content is fine; the specialist should answer or hand off, but must stay on the same product."
+          }
+        },
+        {
+          "prompt": "And what container sizes does it ship in?"
+        }
+      ],
+      "assertions": [
+        {
+          "type": "consistent_product_anchor",
+          "product": "Oxyfect H Restroom",
+          "aliases": ["Oxyfect H"],
+          "from_turn": 1,
+          "description": "The handoff must not drop or swap the product."
+        },
+        {
+          "type": "no_reask",
+          "turn": 3,
+          "already_provided": ["Oxyfect H Restroom", "hospital"]
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "scenario_id": "bath-mt-009",
+      "title": "Two products in play; the user pins one and the anchor must not drift back",
+      "turns": [
+        {
+          "prompt": "We stock both Betco 256 and Quat Stat 5. What's the difference in where we'd use each in a restroom?"
+        },
+        {
+          "prompt": "Stick with Quat Stat 5 for the rest of this conversation. What's the mop-and-bucket procedure with it?"
+        },
+        {
+          "prompt": "Is it OK on the terrazzo entry just outside the restroom?"
+        }
+      ],
+      "assertions": [
+        {
+          "type": "consistent_product_anchor",
+          "product": "Quat Stat 5",
+          "aliases": ["Quat Stat"],
+          "from_turn": 3,
+          "disallowed_products": ["Betco 256"],
+          "description": "An explicit user instruction to pin one of two named products must hold."
+        },
+        {
+          "type": "not_mentions",
+          "turn": 3,
+          "none_of": ["Betco 256"],
+          "description": "The de-selected product must not reappear once pinned away."
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "scenario_id": "bath-mt-010",
+      "title": "Ambiguous pronoun with two live referents, resolved by the user in turn 3",
+      "turns": [
+        {
+          "prompt": "We use Vi Bright Disinfectant Acid Bowl Cleaner in the bowls and Green Earth Bathroom Cleaner on the walls."
+        },
+        {
+          "prompt": "Is that one safe on the chrome flush valves?",
+          "expectations": {
+            "note": "\"that one\" is genuinely ambiguous. Asking which product is the correct behaviour; silently picking one is the failure mode under test."
+          }
+        },
+        {
+          "prompt": "I meant the bowl cleaner."
+        }
+      ],
+      "assertions": [
+        {
+          "type": "mentions",
+          "turn": 3,
+          "any_of": ["Vi Bright", "bowl cleaner"],
+          "description": "Once disambiguated, the right referent must be named."
+        },
+        {
+          "type": "no_reask",
+          "turn": 3,
+          "already_provided": ["chrome flush valves"]
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "scenario_id": "bath-mt-011",
+      "title": "Facility policy constraints stack up after the recommendation",
+      "turns": [
+        {
+          "prompt": "What's the best approach for hard water scale in urinals?"
+        },
+        {
+          "prompt": "Their policy bans acid products entirely on that site."
+        },
+        {
+          "prompt": "Also the maintenance staff can't use anything requiring a respirator."
+        }
+      ],
+      "assertions": [
+        {
+          "type": "mentions",
+          "turn": 2,
+          "any_of": ["acid"],
+          "description": "The policy constraint must be engaged, including where it rules out the turn-1 answer."
+        },
+        {
+          "type": "no_reask",
+          "turn": 3,
+          "already_provided": ["acid", "urinals", "hard water scale"]
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "scenario_id": "bath-mt-012",
+      "title": "Negative: pricing and warehouse inventory after an answerable procedure question",
+      "turns": [
+        {
+          "prompt": "Walk me through daily restroom disinfection with Fight Bac RTU.",
+          "expectations": {
+            "should_answer": true
+          }
+        },
+        {
+          "prompt": "What does a case cost and how much is in the Toledo warehouse right now?",
+          "expectations": {
+            "should_answer": false,
+            "expected_result_type": "decline",
+            "note": "Live pricing and inventory are out of scope for the specialist."
+          }
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "scenario_id": "bath-mt-013",
+      "title": "Four surfaces in four turns, product named only once",
+      "turns": [
+        {
+          "prompt": "We're using Tile Clean on the restroom floor at a fitness club."
+        },
+        {
+          "prompt": "What about the shower walls?"
+        },
+        {
+          "prompt": "And the grout lines between the shower tiles?"
+        },
+        {
+          "prompt": "Same product for the locker room benches?"
+        }
+      ],
+      "assertions": [
+        {
+          "type": "consistent_product_anchor",
+          "product": "Tile Clean",
+          "from_turn": 2,
+          "description": "Three consecutive turns name no product; the anchor must hold across all of them."
+        },
+        {
+          "type": "context_carry",
+          "from_turn": 1,
+          "turn": 4,
+          "anchor": "Tile Clean"
+        },
+        {
+          "type": "no_reask",
+          "turn": 3,
+          "already_provided": ["Tile Clean", "shower", "fitness club"]
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "scenario_id": "bath-mt-014",
+      "title": "Negative: forced yes/no on discontinued status",
+      "turns": [
+        {
+          "prompt": "Our restrooms use Cide-Bet II — what's the standard fixture procedure?",
+          "expectations": {
+            "should_answer": true
+          }
+        },
+        {
+          "prompt": "Has it been discontinued? Just tell me yes or no.",
+          "expectations": {
+            "should_answer": false,
+            "expected_result_type": "decline",
+            "note": "Active/discontinued status must never be inferred, and the forced yes/no framing is the pressure being tested."
+          }
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "scenario_id": "bath-mt-015",
+      "title": "Restroom question becomes a floor care question mid-conversation",
+      "turns": [
+        {
+          "prompt": "The restroom floor at a bus terminal stays dingy after mopping."
+        },
+        {
+          "prompt": "It's sealed concrete, and they're asking about stripping and recoating it."
+        },
+        {
+          "prompt": "Who should own that — is that still a restroom question?"
+        }
+      ],
+      "assertions": [
+        {
+          "type": "mentions",
+          "turn": 2,
+          "any_of": ["concrete", "seal"],
+          "description": "The substrate detail must be engaged before any handoff."
+        },
+        {
+          "type": "no_reask",
+          "turn": 3,
+          "already_provided": ["sealed concrete", "bus terminal", "stripping"]
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "scenario_id": "bath-mt-016",
+      "title": "Subject leaves the restroom in turn 2 and is explicitly brought back in turn 3",
+      "turns": [
+        {
+          "prompt": "How often should restroom touchpoints be disinfected in a K-12 school?"
+        },
+        {
+          "prompt": "Same for the cafeteria tables?"
+        },
+        {
+          "prompt": "Back to the restrooms — what about the baby changing stations?"
+        }
+      ],
+      "assertions": [
+        {
+          "type": "mentions",
+          "turn": 3,
+          "any_of": ["restroom", "changing"],
+          "description": "An explicit topic return must be honoured after an off-topic detour."
+        },
+        {
+          "type": "no_reask",
+          "turn": 3,
+          "already_provided": ["K-12 school"]
+        }
+      ]
+    }
+  ]
+}

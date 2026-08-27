@@ -4,6 +4,10 @@
     {
       "path": "/api/v1/observability/sweep-stalled-runs",
       "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/v1/observability/evaluate-alerts",
+      "schedule": "10 7 * * *"
     }
   ]
 }

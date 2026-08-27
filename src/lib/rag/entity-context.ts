@@ -334,11 +334,14 @@ export async function resolveProductEntityByName(
       const distinctLineKeys = new Set(
         aliasRows.filter((r) => r.product_line_key).map((r) => r.product_line_key),
       );
-      // B0-479: the verified-tiebreak is a `mode: 'name'`-only exception — freeform text that hits
-      // multiple product lines must produce no lock at all.
+      // B0-696: the single-line branch used to trust aliasRows[0] unconditionally — including a
+      // row that's `verified = false` (e.g. an unreviewed corpus-mined alias from B0-484). Require
+      // verification here too; the multi-line branch below already requires it via
+      // resolveVerifiedTiebreak. B0-479: the verified-tiebreak is a `mode: 'name'`-only exception —
+      // freeform text that hits multiple product lines must produce no lock at all.
       const winner =
         distinctLineKeys.size <= 1
-          ? aliasRows[0]
+          ? (aliasRows.find((r) => r.verified === true) ?? null)
           : freeform
             ? null
             : resolveVerifiedTiebreak(aliasRows);
@@ -373,7 +376,7 @@ export async function resolveProductEntityByName(
     try {
       let fuzzyAliasQuery = aliasClient
         .from('product_alias')
-        .select('id, product_line_key, entity_id, confidence');
+        .select('id, product_line_key, entity_id, verified, confidence');
       for (const token of aliasTokens) {
         fuzzyAliasQuery = fuzzyAliasQuery.ilike('alias_norm', `%${token}%`);
       }
@@ -383,7 +386,11 @@ export async function resolveProductEntityByName(
         const distinctLineKeys = new Set(
           fuzzyAliasRows.filter((r) => r.product_line_key).map((r) => r.product_line_key),
         );
-        if (distinctLineKeys.size === 1 && fuzzyAliasRows[0].product_line_key) {
+        // B0-696: this tier didn't even select `verified` before — an unreviewed corpus-mined
+        // alias could win the tokenized fallback on its own. Require at least one matching row to
+        // be verified, on top of the existing same-product-line unanimity requirement.
+        const hasVerifiedMatch = fuzzyAliasRows.some((r) => r.verified === true);
+        if (distinctLineKeys.size === 1 && hasVerifiedMatch && fuzzyAliasRows[0].product_line_key) {
           const productKey = await resolveProductKeyForAliasEntity(
             supabase,
             fuzzyAliasRows[0].entity_id,

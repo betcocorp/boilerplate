@@ -101,7 +101,14 @@ function formatExpected(c: CaseRenderDetail): string {
   return parts.length > 0 ? parts.join('\n\n') : '_(no expected answer recorded)_';
 }
 
-function latBandLabel(seconds: number, thresholds: { good: number; slow: number }): string {
+export type LatencyBand = 'good' | 'acceptable' | 'slow';
+
+/** Which responsiveness band a case's latency falls in. Exported so the B0-586 data contract can
+ * surface the same band the Markdown prints, rather than re-deriving it from the thresholds. */
+export function latencyBandLabel(
+  seconds: number,
+  thresholds: { good: number; slow: number },
+): LatencyBand {
   if (seconds <= thresholds.good) return 'good';
   if (seconds > thresholds.slow) return 'slow';
   return 'acceptable';
@@ -304,7 +311,7 @@ export function renderReportMarkdown(params: {
     }
 
     if (c.latencySeconds != null && m.latency) {
-      const band = latBandLabel(c.latencySeconds, m.latency.thresholds);
+      const band = latencyBandLabel(c.latencySeconds, m.latency.thresholds);
       push(`**Response time:** ${c.latencySeconds} s (${band})`);
       blank();
     }

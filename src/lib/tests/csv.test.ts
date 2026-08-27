@@ -31,6 +31,18 @@ describe('parseTestCsvContent — golden test set format', () => {
     });
   });
 
+  it('reads expected_tool into a typed field, not the metadata catch-all', () => {
+    const csv = [
+      'question,expected_tool',
+      '"What is the dilution for pH7Q?",get_efficacy_data',
+    ].join('\n');
+
+    const [row] = parseTestCsvContent(csv);
+
+    expect(row.expectedTool).toBe('get_efficacy_data');
+    expect(row.metadata).not.toHaveProperty('expected_tool');
+  });
+
   it('treats blank or unrecognized should_cite as no expectation', () => {
     const csv = [
       'question,should_cite',
@@ -81,6 +93,8 @@ describe('parseTestCsvContent — golden test set format', () => {
       'expected_sources',
       'should_cite',
       'expected_tool',
+      // B0-537 — optional multi-turn scenario escape hatch.
+      'multi_turn_json',
     ]);
     // The template's example row is prose, so only the prompt is expected to survive typed parsing.
     expect(row.prompt).toContain('Enter the prompt/question to test');

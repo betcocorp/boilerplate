@@ -2306,7 +2306,8 @@ describe('runtime config and gate activation (B0-494)', () => {
     expect(bypassed.activeGates?.validator).toEqual({ state: 'skipped', reason: 'disabled_by_flag' });
 
     const judged = await run({ useValidator: true });
-    expect(judged.activeGates?.validator).toEqual({ state: 'ran' });
+    // B0-358 — a gate that ran now also reports WHAT it decided.
+    expect(judged.activeGates?.validator).toEqual({ state: 'ran', verdict: 'approved' });
   });
 
   it('marks the early-decline gate "skipped — disabled by flag" when BEX_EARLY_DECLINE_GATE_ENABLED=false', async () => {
@@ -2320,10 +2321,12 @@ describe('runtime config and gate activation (B0-494)', () => {
     const out = await run({ userMessage: 'Can I mix bleach with this Betco cleaner?' });
     expect(out.activeGates).toEqual({
       validator: { state: 'not_applicable' },
-      earlyDeclineGate: { state: 'ran' },
+      // B0-358 — the gate ran AND declined; B0-356 adds the engine-verdict gate.
+      earlyDeclineGate: { state: 'ran', verdict: 'declined' },
       usageSafetyCoverage: { state: 'not_applicable' },
       regulatedClaimGuardrail: { state: 'not_applicable' },
       recommendationConfidence: { state: 'not_applicable' },
+      recommendationEngineVerdict: { state: 'not_applicable' },
     });
     // The switches are still recorded even though the answering path never ran.
     expect(out.runtimeConfig).toBeDefined();
@@ -2331,8 +2334,9 @@ describe('runtime config and gate activation (B0-494)', () => {
 
   it('marks usage/safety coverage "ran" when the question needs it and evidence is present', async () => {
     const out = await run();
-    expect(out.activeGates?.usageSafetyCoverage).toEqual({ state: 'ran' });
-    expect(out.activeGates?.regulatedClaimGuardrail).toEqual({ state: 'ran' });
+    // B0-358 — "ran and passed" is now distinguishable from "ran and fired".
+    expect(out.activeGates?.usageSafetyCoverage).toEqual({ state: 'ran', verdict: 'passed' });
+    expect(out.activeGates?.regulatedClaimGuardrail).toEqual({ state: 'ran', verdict: 'passed' });
     expect(out.activeGates?.recommendationConfidence).toEqual({ state: 'not_applicable' });
   });
 
@@ -2361,6 +2365,8 @@ describe('runtime config and gate activation (B0-494)', () => {
     expect(out.activeGates?.usageSafetyCoverage).toEqual({
       state: 'bypassed',
       reason: 'confidence_gating_disabled',
+      // B0-358 — what the gate WOULD have done, recorded alongside the bypass.
+      verdict: 'capped',
     });
 
     settingOverrides.delete('BEX_DISABLE_CONFIDENCE_GATING');
@@ -2369,7 +2375,7 @@ describe('runtime config and gate activation (B0-494)', () => {
   it('marks the recommendation-confidence gate "ran" (not not_applicable) whenever cross-reference post-processing runs', async () => {
     arrangeOverrideRun();
     const out = await run({ userMessage: XREF_MESSAGE });
-    expect(out.activeGates?.recommendationConfidence).toEqual({ state: 'ran' });
+    expect(out.activeGates?.recommendationConfidence).toMatchObject({ state: 'ran' });
   });
 
   it('records routedDirectly when an admin forces a direct specialist mode', async () => {

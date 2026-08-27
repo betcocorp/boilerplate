@@ -144,6 +144,7 @@ describe('resolveProductEntityByName — exact alias_norm match (B0-200)', () =>
         alias: 'Zorbex',
         entity_id: 'ent-1',
         product_line_key: 'line-1',
+        verified: true,
         id: 'alias-1',
         confidence: 0.95,
       },
@@ -164,7 +165,7 @@ describe('resolveProductEntityByName — exact alias_norm match (B0-200)', () =>
 
   it('resolveProductLineKeyByName wraps the same lookup and returns just the key', async () => {
     productAliasRows = [
-      { alias_norm: 'zorbex', alias: 'Zorbex', entity_id: 'ent-1', product_line_key: 'line-1' },
+      { alias_norm: 'zorbex', alias: 'Zorbex', entity_id: 'ent-1', product_line_key: 'line-1', verified: true },
     ];
     entityRows = [{ id: 'ent-1', entity_type: 'product', product_key: 'sku-1' }];
 
@@ -173,9 +174,35 @@ describe('resolveProductEntityByName — exact alias_norm match (B0-200)', () =>
     expect(key).toBe('line-1');
   });
 
+  it('returns null instead of resolving when the only exact alias_norm match is unverified (B0-696)', async () => {
+    productAliasRows = [
+      {
+        alias_norm: 'trident 10x',
+        alias: 'Trident 10x',
+        entity_id: 'ent-corpus',
+        product_line_key: 'line-corpus',
+        verified: false,
+        id: 'alias-corpus',
+        confidence: 0.45,
+      },
+    ];
+    entityRows = [{ id: 'ent-corpus', entity_type: 'product_line', product_line_key: 'line-corpus' }];
+
+    const result = await resolveProductEntityByName('Trident 10x');
+
+    expect(result).toEqual({
+      productLineKey: null,
+      productKey: null,
+      resolutionSource: null,
+      ambiguousAlias: false,
+      matchedAliasId: null,
+      matchedAliasConfidence: null,
+    });
+  });
+
   it('normalizes trademark glyphs/case/whitespace before matching alias_norm', async () => {
     productAliasRows = [
-      { alias_norm: 'super clean 500', alias: 'Super Clean 500', entity_id: null, product_line_key: 'line-9' },
+      { alias_norm: 'super clean 500', alias: 'Super Clean 500', entity_id: null, product_line_key: 'line-9', verified: true },
     ];
 
     const result = await resolveProductEntityByName('  SUPER   CLEAN® 500™  ');
@@ -256,6 +283,7 @@ describe('resolveProductEntityByName — tokenized fuzzy alias fallback (B0-272)
         alias: 'GE Fight BacT RTU Disinfectant',
         entity_id: 'ent-4',
         product_line_key: 'line-4',
+        verified: true,
         id: 'alias-4',
         confidence: 0.8,
       },
@@ -272,6 +300,32 @@ describe('resolveProductEntityByName — tokenized fuzzy alias fallback (B0-272)
       ambiguousAlias: false,
       matchedAliasId: 'alias-4',
       matchedAliasConfidence: 0.8,
+    });
+  });
+
+  it('returns null instead of resolving when the only tokenized alias match is unverified (B0-696)', async () => {
+    productAliasRows = [
+      {
+        alias_norm: 'corpus mined noun phrase disinfectant',
+        alias: 'Corpus Mined Noun Phrase Disinfectant',
+        entity_id: 'ent-corpus-2',
+        product_line_key: 'line-corpus-2',
+        verified: false,
+        id: 'alias-corpus-2',
+        confidence: 0.4,
+      },
+    ];
+    entityRows = [{ id: 'ent-corpus-2', entity_type: 'product_line', product_line_key: 'line-corpus-2' }];
+
+    const result = await resolveProductEntityByName('Corpus Mined Phrase Disinfectant');
+
+    expect(result).toEqual({
+      productLineKey: null,
+      productKey: null,
+      resolutionSource: null,
+      ambiguousAlias: false,
+      matchedAliasId: null,
+      matchedAliasConfidence: null,
     });
   });
 
@@ -485,7 +539,7 @@ describe('resolveProductEntityByName — trigram fuzzy alias RPC fallback (B0-48
 
   it('does not fire the fuzzy RPC tier when an earlier tier (exact/tokenized alias) already matched', async () => {
     productAliasRows = [
-      { alias_norm: 'zorbex', alias: 'Zorbex', entity_id: 'ent-1', product_line_key: 'line-1' },
+      { alias_norm: 'zorbex', alias: 'Zorbex', entity_id: 'ent-1', product_line_key: 'line-1', verified: true },
     ];
     entityRows = [{ id: 'ent-1', entity_type: 'product', product_key: 'sku-1' }];
     // If the fuzzy RPC were consulted despite the exact match already resolving, this would
@@ -558,6 +612,7 @@ describe('resolveProductEntityByName — freeform mode restricts resolution to p
         alias: 'GE Fight BacT RTU Disinfectant',
         entity_id: 'ent-4',
         product_line_key: 'line-4',
+        verified: true,
         id: 'alias-4',
         confidence: 0.8,
       },

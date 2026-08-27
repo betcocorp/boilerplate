@@ -50,6 +50,18 @@ vi.mock('~/lib/tools/category-lookup', () => ({
   getProductCategory: vi.fn(async () => ({ ok: true })),
 }));
 
+// B0-529 — the two knowledge-asset tools. Only the query composition and payload shape are under
+// test here; the retrieval itself has its own unit test (`~/lib/retrieval/knowledge-assets.test.ts`).
+vi.mock('~/lib/retrieval/knowledge-assets', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('~/lib/retrieval/knowledge-assets')>()),
+  retrieveKnowledgeAssets: vi.fn(async ({ query }: { query: string }) => ({
+    query,
+    scope: 'knowledge' as const,
+    sources: [],
+    retrieval: { adapter: 'rag_knowledge_document' as const },
+  })),
+}));
+
 import { resolveProductEntityByName } from '~/lib/rag/entity-context';
 import { ragQueryForProductKnowledgeWithMeta } from '~/lib/retrieval/product-knowledge';
 import {
@@ -60,9 +72,15 @@ import {
 } from '~/lib/retrieval/product-guidance';
 import { fetchFactsForProductLineKeys } from '~/lib/retrieval/product-facts';
 import { getProductsInCategory } from '~/lib/tools/category-lookup';
+import { retrieveKnowledgeAssets } from '~/lib/retrieval/knowledge-assets';
 import { executeProductTool } from '~/lib/tools/product-tools';
 import { productSupportTools } from '~/lib/tools/definitions';
-import { getEfficacyDataInputSchema, searchProductDocsInputSchema } from '~/lib/tools/tool-schemas';
+import {
+  getDispenserAssetInputSchema,
+  getEfficacyDataInputSchema,
+  getFloorAssetInputSchema,
+  searchProductDocsInputSchema,
+} from '~/lib/tools/tool-schemas';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -338,6 +356,80 @@ describe('product-fact tools accept `productName` as well as `productId` (B0-364
         .parameters;
       expect(Object.keys(params.properties)).toContain('productName');
       expect(params.required ?? []).not.toContain('productId');
+    }
+  });
+});
+
+describe('get_dispenser_asset / get_floor_asset input contract (B0-529)', () => {
+  it('get_dispenser_asset composes every supplied field into one knowledge query', async () => {
+    const out = await executeProductTool('get_dispenser_asset', {
+      dispenserModel: 'FastDraw',
+      productName: 'pH7Q',
+      topic: 'metering tip selection',
+    });
+
+    expect(out.ok).toBe(true);
+    expect(out.scope).toBe('knowledge');
+    expect(out.query).toBe(
+      'FastDraw pH7Q metering tip selection dispenser dilution control proportioner metering tip setup calibration dilution ratio',
+    );
+    expect(retrieveKnowledgeAssets).toHaveBeenCalledWith(
+      expect.objectContaining({ query: expect.stringContaining('FastDraw') }),
+    );
+  });
+
+  it('get_dispenser_asset accepts a topic-only call', async () => {
+    const out = await executeProductTool('get_dispenser_asset', {
+      topic: 'calculating dilution ratios',
+    });
+    expect(out.ok).toBe(true);
+    expect(String(out.query)).toContain('calculating dilution ratios');
+  });
+
+  it('get_floor_asset composes surface + procedure into one knowledge query', async () => {
+    const out = await executeProductTool('get_floor_asset', {
+      surfaceType: 'VCT',
+      procedure: 'coat count',
+    });
+
+    expect(out.ok).toBe(true);
+    expect(out.surfaceType).toBe('VCT');
+    expect(out.procedure).toBe('coat count');
+    expect(out.query).toBe(
+      'VCT coat count floor finish coats coverage yield recoat top scrub stripping procedure',
+    );
+  });
+
+  it('both tools reject a call with no anchoring field at all', async () => {
+    expect(getDispenserAssetInputSchema.safeParse({}).success).toBe(false);
+    expect(getFloorAssetInputSchema.safeParse({}).success).toBe(false);
+    await expect(executeProductTool('get_dispenser_asset', {})).rejects.toBeTruthy();
+    await expect(executeProductTool('get_floor_asset', {})).rejects.toBeTruthy();
+  });
+
+  it('both tools reject whitespace-only anchoring fields', () => {
+    expect(getDispenserAssetInputSchema.safeParse({ topic: '   ' }).success).toBe(false);
+    expect(getFloorAssetInputSchema.safeParse({ surfaceType: '  ' }).success).toBe(false);
+  });
+
+  it('both tools cap maxResults at 5', () => {
+    expect(getDispenserAssetInputSchema.safeParse({ topic: 't', maxResults: 5 }).success).toBe(true);
+    expect(getDispenserAssetInputSchema.safeParse({ topic: 't', maxResults: 6 }).success).toBe(false);
+    expect(getFloorAssetInputSchema.safeParse({ procedure: 'p', maxResults: 6 }).success).toBe(false);
+  });
+
+  it('threads maxResults through to retrieval rather than silently ignoring it', async () => {
+    await executeProductTool('get_floor_asset', { surfaceType: 'terrazzo', maxResults: 5 });
+    expect(retrieveKnowledgeAssets).toHaveBeenLastCalledWith(
+      expect.objectContaining({ limit: 5 }),
+    );
+  });
+
+  it('advertises no required parameter, matching the at-least-one schema rule', () => {
+    for (const name of ['get_dispenser_asset', 'get_floor_asset']) {
+      const def = productSupportTools.find((t) => 'name' in t && t.name === name);
+      const params = (def as { parameters: { required?: string[] } }).parameters;
+      expect(params.required ?? []).toEqual([]);
     }
   });
 });

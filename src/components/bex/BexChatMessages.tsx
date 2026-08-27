@@ -17,6 +17,7 @@ import { useEffect, useRef, useState } from 'react';
 import { BexMessagesSkeleton } from '~/components/bex/BexChatSkeleton';
 import { BexStreamdown } from '~/components/bex/BexStreamdown';
 import { RagDocumentChunkInspectButtons } from '~/components/rag/RagDocumentChunkInspect';
+import { documentKindLabel } from '~/lib/rag/document-kind';
 import { Avatar, AvatarFallback } from '~/components/ui/avatar';
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
@@ -225,6 +226,9 @@ function AssistantDetails({
                   // rag.document row to inspect — the facts are the snippet itself, so
                   // show it in full and skip the DB-backed inspect buttons.
                   const isFacts = !isExternal && !isRagRowId(s.documentId);
+                  // B0-293 — an external source is already labelled `web`; labelling it with a
+                  // corpus too would be two names for one fact.
+                  const kindLabel = isExternal ? null : documentKindLabel(s.documentKind);
                   return (
                     <li
                       className="wrap-break-word rounded-md border border-border/60 bg-muted/30 p-2"
@@ -252,6 +256,19 @@ function AssistantDetails({
                             variant="secondary"
                           >
                             web
+                          </Badge>
+                        ) : kindLabel ? (
+                          /* B0-293 — which corpus this source came from (SDS / Label / Product /
+                             Efficacy / Knowledge / Verified facts). Same treatment as the `web`
+                             chip above, so external and internal sources read as one family.
+                             Absent for a historical message with no `documentKind`, and for any
+                             kind we can't name — never an empty badge. */
+                          <Badge
+                            className="rounded-full px-1.5 py-0 text-[0.62rem]"
+                            title={`Source type: ${s.documentKind}`}
+                            variant="secondary"
+                          >
+                            {kindLabel}
                           </Badge>
                         ) : null}
                         {typeof s.similarity === 'number' ? (

@@ -26,6 +26,18 @@ const SHOULD_CITE_PRESETS = ['yes', 'no'] as const;
 /** Common origins for a test prompt — distinct from `sourceStyle` (how it was authored). */
 const SOURCE_PRESETS = ['bex', 'email', 'contact-us'] as const;
 
+/** B0-537 — shape hint for the multi-turn field, matching `multiTurnScenarioSchema`. */
+const MULTI_TURN_PLACEHOLDER = `{
+  "version": 1,
+  "turns": [
+    { "prompt": "First user turn (same as the Prompt field above)" },
+    { "prompt": "Follow-up turn", "expectations": { "should_answer": true } }
+  ],
+  "assertions": [
+    { "type": "context_carry", "from_turn": 1, "turn": 2, "anchor": "pH7Q" }
+  ]
+}`;
+
 export type TestItemSuggestionLists = {
   resultTypes: string[];
   canonicalProducts: string[];
@@ -55,6 +67,8 @@ export type TestItemFieldsInitialValues = {
   productMention?: string;
   questionCategory?: string;
   sourceStyle?: string;
+  /** B0-537 — pretty-printed `input_payload.multi_turn` scenario, or '' for a single-turn row. */
+  multiTurnJson?: string;
 };
 
 type TestItemFieldsProps = {
@@ -304,6 +318,33 @@ export function TestItemFields({
         presetSuggestions={SHOULD_CITE_PRESETS}
         suggestionsFromDataset={[]}
       />
+
+      <div className="grid gap-2">
+        <Label htmlFor={`${idPrefix}-multi-turn-json`}>
+          Multi-turn scenario{' '}
+          <span className="font-normal text-muted-foreground">
+            (JSON · optional)
+          </span>
+        </Label>
+        <Textarea
+          className="font-mono text-xs"
+          defaultValue={initialValues?.multiTurnJson}
+          id={`${idPrefix}-multi-turn-json`}
+          name="multiTurnJson"
+          placeholder={MULTI_TURN_PLACEHOLDER}
+          rows={6}
+        />
+        <p className="text-xs text-muted-foreground">
+          Turns this row into an ordered conversation (B0-537): an{' '}
+          <code>turns</code> array of two or more prompts, replayed in one conversation, plus
+          optional cross-turn <code>assertions</code> (<code>context_carry</code>,{' '}
+          <code>no_reask</code>, <code>consistent_product_anchor</code>,{' '}
+          <code>mentions</code>, <code>not_mentions</code>). Turn 1&rsquo;s prompt must match the
+          Prompt field above. Leave blank for an ordinary single-turn row; clearing it converts the
+          row back. Keep expectations structural — never author dilution ratios, contact times, or
+          EPA numbers you have not read verbatim off a label.
+        </p>
+      </div>
 
       <div className="rounded-2xl border border-slate-200 bg-slate-50/80">
         <Button

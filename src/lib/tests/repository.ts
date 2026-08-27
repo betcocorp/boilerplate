@@ -1397,8 +1397,8 @@ const TOOL_ROUTING_QUEUE_DEFAULT_LIMIT = 200;
 
 /**
  * B0-383 — misrouted questions for the Failure Queue's "Routing" view: the LATEST run of every
- * test item tagged with `metadata.expected_tool` (see `~/lib/tests/tool-routing.ts`) whose call
- * trace never included that tool. Deliberately keyed off the `metadata->>expected_tool IS NOT NULL`
+ * test item tagged with `expected_tool` (see `~/lib/tests/tool-routing.ts`) whose call
+ * trace never included that tool. Deliberately keyed off the `expected_tool IS NOT NULL`
  * filter rather than scanning every `test_result_item` in the system — this feature is opt-in per
  * item, so until a test author tags items the query touches zero extra rows. Independent of
  * `passed`: a question can pass the pass/fail grader on a decline/refusal and still have called the
@@ -1412,10 +1412,10 @@ export async function listLatestToolRoutingMismatches(
 
   const scoredItemsResult = await supabase
     .from('test_items')
-    .select('id, test_id, prompt, row_index, metadata')
-    .not('metadata->>expected_tool', 'is', null);
+    .select('id, test_id, prompt, row_index, expected_tool')
+    .not('expected_tool', 'is', null);
   assertNoError(scoredItemsResult);
-  const scoredItems = (scoredItemsResult.data ?? []).filter((row) => extractExpectedTool(row.metadata));
+  const scoredItems = (scoredItemsResult.data ?? []).filter((row) => extractExpectedTool(row.expected_tool));
 
   if (scoredItems.length === 0) {
     return [];
@@ -1469,7 +1469,7 @@ export async function listLatestToolRoutingMismatches(
 
   const mismatches: ToolRoutingQueueRow[] = [];
   for (const item of scoredItems) {
-    const expectedTool = extractExpectedTool(item.metadata);
+    const expectedTool = extractExpectedTool(item.expected_tool);
     if (!expectedTool) continue;
 
     const latest = latestByTestItemId.get(item.id);

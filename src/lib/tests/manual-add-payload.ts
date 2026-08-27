@@ -1,3 +1,4 @@
+import { MULTI_TURN_PAYLOAD_KEY, type MultiTurnScenario } from '~/lib/tests/multi-turn';
 import type { Json } from '~/types/supabase.public';
 
 /**
@@ -11,8 +12,10 @@ export function buildManualAddTestItemPayload(input: {
   productMention: string | null;
   questionCategory: string | null;
   sourceStyle: string | null;
-}): { input_payload: Record<string, string>; metadata: Record<string, string> } {
-  const input_payload: Record<string, string> = {};
+  /** B0-537 — stored under `input_payload.multi_turn`; null keeps the row single-turn. */
+  multiTurnScenario?: MultiTurnScenario | null;
+}): { input_payload: Record<string, Json>; metadata: Record<string, string> } {
+  const input_payload: Record<string, Json> = {};
   const metadata: Record<string, string> = {};
 
   if (input.productMention) {
@@ -23,6 +26,12 @@ export function buildManualAddTestItemPayload(input: {
   }
   if (input.sourceStyle) {
     input_payload.source_style = input.sourceStyle;
+  }
+  if (input.multiTurnScenario) {
+    input_payload[MULTI_TURN_PAYLOAD_KEY] = JSON.parse(
+      JSON.stringify(input.multiTurnScenario),
+    );
+    metadata.multi_turn_turn_count = String(input.multiTurnScenario.turns.length);
   }
 
   metadata.added_via = 'manual_dialog';
@@ -62,6 +71,8 @@ export function buildEditedTestItemPayload(input: {
   productMention: string | null;
   questionCategory: string | null;
   sourceStyle: string | null;
+  /** B0-537 — null clears `input_payload.multi_turn`, turning the row back into a single-turn item. */
+  multiTurnScenario?: MultiTurnScenario | null;
   existingInputPayload: unknown;
   existingMetadata: unknown;
 }): {
@@ -81,6 +92,16 @@ export function buildEditedTestItemPayload(input: {
   applyPayloadField('product_mention', input.productMention);
   applyPayloadField('question_category', input.questionCategory);
   applyPayloadField('source_style', input.sourceStyle);
+
+  if (input.multiTurnScenario) {
+    input_payload[MULTI_TURN_PAYLOAD_KEY] = JSON.parse(
+      JSON.stringify(input.multiTurnScenario),
+    );
+    metadata.multi_turn_turn_count = String(input.multiTurnScenario.turns.length);
+  } else {
+    delete input_payload[MULTI_TURN_PAYLOAD_KEY];
+    delete metadata.multi_turn_turn_count;
+  }
 
   metadata.edited_via = 'manual_dialog';
 

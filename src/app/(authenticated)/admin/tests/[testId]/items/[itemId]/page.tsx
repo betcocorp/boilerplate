@@ -5,6 +5,7 @@ import { connection } from 'next/server';
 import { AiSuggestionCards } from '~/components/admin/tests/AiSuggestionCards';
 import { ItemAIReviewButton } from '~/components/admin/tests/ItemAIReviewButton';
 import { ItemAtAGlanceCharts } from '~/components/admin/tests/ItemAtAGlanceCharts';
+import { MultiTurnScenarioCard } from '~/components/admin/tests/MultiTurnScenarioCard';
 import { ResultItemMessageCell } from '~/components/admin/tests/ResultItemMessageCell';
 import { Button } from '~/components/ui/button';
 import {
@@ -354,6 +355,9 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
             suggestions={existingSuggestions}
           />
         </section>
+
+        {/* B0-537 — renders nothing for a single-turn row. */}
+        <MultiTurnScenarioCard inputPayload={item.input_payload} />
 
         <ItemAtAGlanceCharts
           avgPromptElapsedMs={avgPromptElapsedMs}

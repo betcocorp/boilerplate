@@ -1,5 +1,6 @@
-import type { Tables, TablesInsert } from '~/types/supabase.public';
+import type { Json, Tables, TablesInsert } from '~/types/supabase.public';
 import type { ExpectedCriterion } from './criteria-schemas';
+import type { MultiTurnScenario } from './multi-turn';
 
 export const TERMINAL_RUN_STATUSES = [
   'completed',
@@ -92,6 +93,13 @@ export type ParsedCsvRow = {
   expectedCriteria: ExpectedCriterion[];
   expectedSources: string | null;
   shouldCite: boolean | null;
-  inputPayload: Record<string, string>;
+  expectedTool: string | null;
+  /** B0-537 — the `multi_turn_json` cell's scenario, or null for an ordinary single-turn row. */
+  multiTurnScenario: MultiTurnScenario | null;
+  /**
+   * B0-537 — values are strings for every CSV column except the `multi_turn` scenario object the
+   * `multi_turn_json` cell contributes, hence `Json` rather than `string`.
+   */
+  inputPayload: Record<string, Json>;
   metadata: Record<string, string>;
 };

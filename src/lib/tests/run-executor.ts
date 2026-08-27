@@ -7,7 +7,6 @@ import {
   type SemanticRouteDecision,
 } from '~/lib/orchestrator/semantic-router';
 import { routeUserMessageToSme, type SmeRouteDecision } from '~/lib/orchestrator/sme-routing';
-import type { RouterTypeOverride } from '~/lib/workflows/product-support/run-product-support-workflow';
 
 import {
   getExistingResultItemIds,
@@ -22,6 +21,7 @@ import {
 import type { CriteriaGradingOutcome } from './criteria-schemas';
 import { analyzeAndPersistFailureRootCause } from './failure-root-cause';
 import { generateReport } from './report/orchestrator';
+import { parseTestRunConfig } from './run-config';
 import { runSingleTestItem } from './runner';
 import { generateAndSaveRunInsights } from './run-insights';
 import { runRunComparisonAnalysis, startRunComparison } from './run-comparison';
@@ -54,6 +54,19 @@ import type { NewTestResultItemRecord, TestItemRecord, TestRecord } from './type
  * of the existing chat-turn call — the same call the chat turn itself now pays, and the B0-505
  * cache dedupes replays of identical items. Set `BEX_LLM_ROUTER_ENABLED=false` to make this column
  * free (it then records the degraded `ambiguous` fallback).
+ *
+ * **B0-537 — multi-turn behaviour (deliberate, unchanged).** For a multi-turn scenario row this
+ * still classifies `item.prompt` — i.e. TURN 1 ONLY, with `[]` history. Two reasons:
+ *   1. The B0-500 comparison columns are one SET per `test_result_items` row (one keyword route, one
+ *      LLM route, one semantic route, one agreement flag). There is nowhere to put N per-turn
+ *      routes without the `turn_index` column this ticket deliberately did not add, so a scenario
+ *      can only be represented by one turn.
+ *   2. Turn 1 with empty history is exactly what the live chat classifies on a first message, so
+ *      routing accuracy stays apples-to-apples with the single-turn corpus these columns were built
+ *      for. Comparing a turn-3 route (which the live router sees WITH history) against a turn-1
+ *      ground truth would silently poison the routing-accuracy dashboards.
+ * The scope is recorded explicitly as `multiTurn.routingComparisonScope = 'first_turn_only'` on the
+ * result payload so no one has to infer it. Per-turn routing instrumentation is a follow-up.
  */
 async function computeRoutingComparisonForItem(
   item: TestItemRecord,
@@ -138,17 +151,6 @@ function asSummaryObject(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-const ROUTER_TYPE_OVERRIDES: readonly RouterTypeOverride[] = ['keyword', 'semantic', 'llm'];
-
-/** `run_options.routerType`, validated against `RouterTypeOverride` — anything else is unset (settings decide). */
-function extractRouterTypeOverride(runOptions: Record<string, unknown>): RouterTypeOverride | undefined {
-  const raw = runOptions.routerType;
-  return typeof raw === 'string' &&
-    (ROUTER_TYPE_OVERRIDES as readonly string[]).includes(raw)
-    ? (raw as RouterTypeOverride)
-    : undefined;
-}
-
 export async function executeTestRun(testResultId: string) {
   const testResult = await getTestResultById(testResultId);
 
@@ -160,15 +162,18 @@ export async function executeTestRun(testResultId: string) {
   // B0-501 — fetched once per run (not per item): `tests.intended_agent` is the suite-level
   // ground-truth fallback `resolveIntendedAgentLabel` uses when a row has no `intended_agent_item`.
   const test = await getTestById(testResult.test_id);
-  const runOptions = asSummaryObject(testResult.run_options);
-  const modelTag =
-    typeof runOptions.modelTag === 'string' && runOptions.modelTag.trim()
-      ? runOptions.modelTag.trim()
-      : undefined;
-  // B0-600 / B0-603 — opt-in validator pass, read from the same run_options blob as modelTag.
-  const useValidator = runOptions.useValidator === true;
-  // B0-681 — opt-in router override, read from the same run_options blob.
-  const routerTypeOverride = extractRouterTypeOverride(runOptions);
+  /**
+   * B0-351 — the run's immutable execution config, read ONCE here from the `run_options` blob that
+   * `runTestAction` wrote when the row was created. `parseTestRunConfig` replaces the three
+   * hand-rolled extractions that used to live in this file (modelTag B0-632, useValidator
+   * B0-600/603, routerType B0-681) and adds `agentMode`; the admin pages and CSV export read the
+   * same parser, so what is displayed for a run cannot drift from what executed.
+   */
+  const runConfig = parseTestRunConfig(testResult.run_options);
+  const modelTag = runConfig.modelTag ?? undefined;
+  const useValidator = runConfig.useValidator;
+  const agentMode = runConfig.agentMode;
+  const routerTypeOverride = runConfig.routerType ?? undefined;
   // Use per-item existence check rather than an index offset so that retry (which
   // deletes only errored rows) and normal resume both work correctly when there
   // are gaps in the result set.
@@ -255,6 +260,7 @@ export async function executeTestRun(testResultId: string) {
     const itemResult = await runSingleTestItem(testResult.id, item, {
       modelTag,
       useValidator,
+      agentMode,
       routerTypeOverride,
       // B0-645: stamps the source test's name onto the created conversation.
       testName: test.name,

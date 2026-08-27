@@ -1,380 +1,116 @@
 import { runBexChatTurn } from '~/lib/bex/run-chat-turn';
-import { RECOMMENDATIONS_DECLINE_COPY } from '~/lib/agents/recommendations-specialist/recommendations-specialist-system-prompt';
-import { APP_VERSION } from '~/lib/app-version';
-import { XREF_DECLINE_COPY } from '~/lib/recommendations/confidence-scoring';
 import {
-  EARLY_DECLINE_BROAD_RECOMMENDATION_COPY,
-  EARLY_DECLINE_CHEMICAL_MIXING_COPY,
-  EARLY_DECLINE_LEGAL_COMPLIANCE_COPY,
-  EARLY_DECLINE_STORAGE_EXPIRATION_COPY,
+  DEFAULT_BEX_CHAT_AGENT_MODE,
+  type BexChatAgentMode,
+} from '~/lib/agents/agent-registry';
+import { APP_VERSION } from '~/lib/app-version';
+import {
+  resolveHistoryMaxMessages,
   type RouterTypeOverride,
 } from '~/lib/workflows/product-support/run-product-support-workflow';
 
 import { gradeWithCriteria } from './criteria-grader';
 import { expectedCriteriaSchema } from './criteria-schemas';
+import {
+  gradeChatTestResponse,
+  responseIndicatesDeclineStyleAnswer,
+  responseIndicatesUnableToAssistOrRefusal,
+  UNABLE_TO_ASSIST_FAILURE_REASON,
+  type EvaluationOutcome,
+  type GradableExpectations,
+} from './grading';
+import {
+  evaluateMultiTurnScenario,
+  type ExecutedTurn,
+} from './multi-turn-evaluator';
+import {
+  MULTI_TURN_RESULT_PAYLOAD_KEY,
+  type MultiTurnResultPayload,
+} from './multi-turn-result';
+import { parseMultiTurnFromInputPayload, type MultiTurnScenario } from './multi-turn';
 import type { NewTestResultItemRecord, TestItemRecord } from './types';
 
 /**
- * The app's own canonical "no confident equivalent" decline strings (B0-300 follow-up). Checked
- * verbatim before falling back to the keyword/regex heuristics below, since those are guesses at
- * paraphrasing this exact, deterministic copy and can miss it (e.g. XREF_DECLINE_COPY matched none
- * of the existing patterns).
- *
- * B0-518 — added the four `classifyEarlyDecline` canned copies for the same reason: the
- * `broad_recommendation_without_context` text carries no decline vocabulary at all (no "can't",
- * "unable", "no information", …) and the `chemical_mixing_or_safety` text uses "not able to
- * **advise**", a verb the regex/phrase heuristics below don't cover. Both were confirmed (via the
- * "Product Golden Test Set" run `6203d34f-…`) to correctly early-decline and then get graded as an
- * unrecognized failed answer.
+ * B0-537 — the response-grading layer that used to live inline here now lives in `./grading` (pure,
+ * workflow-free) so the multi-turn evaluator can reuse per-turn grading without importing this
+ * module and its live workflow/conversation stack. These re-exports are the ONLY definition path:
+ * the byte-identical duplicate that shipped alongside `grading.ts` (which the commit that added it
+ * claimed to have removed, but did not) has been deleted, so there is exactly one copy of the
+ * decline heuristics again.
  */
-const CANONICAL_DECLINE_COPY = [
-  RECOMMENDATIONS_DECLINE_COPY,
-  XREF_DECLINE_COPY,
-  EARLY_DECLINE_CHEMICAL_MIXING_COPY,
-  EARLY_DECLINE_LEGAL_COMPLIANCE_COPY,
-  EARLY_DECLINE_STORAGE_EXPIRATION_COPY,
-  EARLY_DECLINE_BROAD_RECOMMENDATION_COPY,
-];
-
-function matchesCanonicalDeclineCopy(responseText: string): boolean {
-  return CANONICAL_DECLINE_COPY.some((copy) => responseText.includes(copy));
-}
+export {
+  gradeChatTestResponse,
+  responseIndicatesDeclineStyleAnswer,
+  responseIndicatesUnableToAssistOrRefusal,
+  UNABLE_TO_ASSIST_FAILURE_REASON,
+};
+export type { EvaluationOutcome, GradableExpectations };
 
 type RunSingleItemResult = {
   item: NewTestResultItemRecord;
   passed: boolean;
 };
 
-function shouldExpectAnswer(item: TestItemRecord) {
-  return item.expected_should_answer;
-}
-
-type EvaluationOutcome = {
-  passed: boolean;
-  /** Human-readable explanation when `passed` is false (stored on `error_message`). */
-  failureReason: string | null;
+type RunItemOptions = {
+  modelTag?: string;
+  useValidator?: boolean;
+  /**
+   * B0-351 — the specialist this run forces every turn onto, from
+   * `test_results.run_options.agentMode`. Omitted (and every run created before this ticket)
+   * means `orchestrator`, which is exactly what was hardcoded here before, so historical
+   * behaviour is unchanged.
+   */
+  agentMode?: BexChatAgentMode;
+  testName?: string | null;
+  routerTypeOverride?: RouterTypeOverride;
 };
 
-const UNABLE_TO_ASSIST_FAILURE_REASON =
-  'The assistant indicated it could not answer (e.g. no verified information, could not find a hazard, or cannot provide). Marked failed so you can review and investigate.';
-
 /**
- * Decline patterns that are robust to intervening words the fixed phrase list misses.
- * Kept deliberately tight (the "lack of information/data" family) so genuine answers that merely
- * cite a label are not flagged. These catch e.g. "I don't have **the** verified information on the
- * required wet contact time" — which the substring list slips because of the inserted "the".
- */
-const DECLINE_REGEXES: RegExp[] = [
-  // "(do not|don't|does not|doesn't|no longer) have [the/any/enough/sufficient/access to …]
-  //  [verified/specific/reliable/confirmed/detailed/that/this …] information|data|details|answer|documentation"
-  /\b(?:do not|don't|does not|doesn't|did not|didn't|no longer)\s+have\s+(?:the\s+|any\s+|enough\s+|sufficient\s+|access to\s+|specific\s+|verified\s+|reliable\s+|confirmed\s+|detailed\s+|that\s+|this\s+|required\s+|necessary\s+)*(?:information|data|details|answer|documentation)\b/,
-  // "no (verified|reliable|confirmed|specific) information|data" (lack statement, not a citation)
-  /\bno\s+(?:verified|reliable|confirmed|specific)\s+(?:information|data)\b/,
-  // Canonical normalized decline: "I('m| am)? (unable|not able) to (provide|verify|confirm|locate|answer) …"
-  /\b(?:unable|not able)\s+to\s+(?:provide|verify|confirm|locate|find|answer|retrieve)\b/,
-];
-
-/**
- * Declines, hedges, and “no answer” phrasing — treated as **failed** outcomes for visibility,
- * even when row expectations would otherwise accept a short decline.
+ * B0-537 — the pass/fail entry point for one `test_items` row, unchanged for every single-turn row.
  *
- * B0-518 — checks the same canonical decline copy as `responseIndicatesDeclineStyleAnswer` first,
- * so the two "is this actually a decline" detectors agree: the chemical-mixing and
- * broad-recommendation early-decline copies use vocabulary ("advise", no decline words at all) that
- * the phrase/regex heuristics below don't cover, which previously meant a POSITIVE row
- * (`expected_should_answer = true`) that got one of those two exact declines back was scored a false
- * PASS instead of being flagged for review.
+ * Dispatch only: rows whose `input_payload.multi_turn` is absent (the entire pre-B0-537 corpus) go
+ * to `runSingleTurnTestItem`, which is the original function verbatim, so single-turn behaviour is
+ * byte-identical. Rows carrying a valid scenario go to `runMultiTurnTestItem`; rows carrying an
+ * INVALID one fail immediately with the parse message and cost nothing, rather than silently
+ * running as single-turn and hiding an authoring mistake.
  */
-function responseIndicatesUnableToAssistOrRefusal(responseText: string): boolean {
-  const t = responseText.trim().toLowerCase();
-  if (!t) {
-    return false;
-  }
-
-  if (matchesCanonicalDeclineCopy(responseText)) {
-    return true;
-  }
-
-  const phrases = [
-    "can't provide",
-    'cannot provide',
-    'unable to provide',
-    'not able to provide',
-    "couldn't provide",
-    'could not provide',
-    "i can't",
-    'i cannot',
-    "can't find",
-    'cannot find',
-    'could not find',
-    "couldn't find",
-    'unable to find',
-    'unable to retrieve',
-    "don't have verified",
-    'do not have verified',
-    'verified first-aid',
-    'verified first aid',
-    'could not find specific',
-    "couldn't find specific",
-    'cannot find specific',
-    "can't find specific",
-    'insufficient information',
-    'not sufficient information',
-    "don't have that information",
-    'do not have that information',
-    'unable to locate',
-    'could not locate',
-    // Clarification-seeking responses — the model is asking for more info instead of answering.
-    // For expected_should_answer=true items these are failures, not passes.
-    'need a bit more detail',
-    'need more detail',
-    'need more specific',
-    'need more information to',
-    'do not have enough retrieved',
-    'not have enough retrieved',
-    'what i still need',
-    'what i need to answer',
-    'currently unable to retrieve',
-    // Tool failure / technical issue patterns — model acknowledged it could not retrieve docs
-    'i encountered a technical issue',
-    'encountered a technical issue',
-    "i'm unable to provide a verified answer",
-    'i am unable to provide a verified answer',
-    'unable to provide a verified answer',
-    "i'm unable to respond with an answer",
-    'i am unable to respond with an answer',
-    'unable to respond with an answer',
-    'unable to respond with a verified',
-    // Canonical normalized decline phrase used across all agents
-    "i don't have the information needed",
-    'i do not have the information needed',
-    "don't have the information needed",
-    'do not have the information needed',
-    // Scope gate phrase — agent rejected an in-scope question by treating it as out-of-scope
-    "i'm not able to help with that topic",
-    'i am not able to help with that topic',
-    'not able to help with that topic',
-    // Guessing / speculation patterns — agent speculated instead of declining
-    'experiencing difficulty retrieving',
-    'difficulty retrieving',
-    'betco typically offers',
-    'betco typically provides',
-    'would you like me to attempt another search',
-    'would you like to attempt another search',
-    'i can try again to find',
-    'you may consult with a betco',
-    'consult with a betco sales representative',
-  ];
-
-  return phrases.some((p) => t.includes(p)) || DECLINE_REGEXES.some((r) => r.test(t));
-}
-
-/**
- * True when the assistant is clearly declining, hedging, or refusing to confirm — beyond only
- * "can't"/"cannot" (e.g. "don't have verified information", "unable to verify").
- */
-function responseIndicatesDeclineStyleAnswer(responseText: string): boolean {
-  const t = responseText.trim().toLowerCase();
-  if (!t) {
-    return false;
-  }
-
-  if (matchesCanonicalDeclineCopy(responseText)) {
-    return true;
-  }
-
-  const indicators = [
-    "can't",
-    'cannot',
-    "don't have verified",
-    'do not have verified',
-    'no verified information',
-    "don't have that information",
-    'do not have that information',
-    'insufficient information',
-    'not sufficient information',
-    'unable to verify',
-    'unable to confirm',
-    'unable to provide',
-    'unable to locate',
-    'could not verify',
-    "couldn't verify",
-    'could not find',
-    "couldn't find",
-    'cannot find',
-    "can't find",
-    'unable to find',
-    'not able to verify',
-    'cannot determine',
-    "can't determine",
-    'outside the scope',
-    'outside of the scope',
-    "i'm sorry, but that topic",
-    'that topic is outside',
-    // Soft redirects — model refuses to answer and points elsewhere
-    'you might want to consult',
-    'i recommend consulting',
-    'i would recommend consulting',
-    'you may want to consult',
-    'i suggest consulting',
-    'recommend reaching out to',
-    'i focus on providing information about betco',
-    "i'm here to provide information and support related to betco",
-    // Tool failure acknowledgements
-    'i encountered a technical issue',
-    'encountered a technical issue',
-    'unable to provide a verified answer',
-    'unable to respond with an answer',
-    'unable to respond with a verified',
-    // Canonical normalized decline phrase used across all agents
-    "i don't have the information needed",
-    'i do not have the information needed',
-    "don't have the information needed",
-    'do not have the information needed',
-    // Scope gate phrase
-    "i'm not able to help with that topic",
-    'i am not able to help with that topic',
-    'not able to help with that topic',
-  ];
-
-  return indicators.some((p) => t.includes(p)) || DECLINE_REGEXES.some((r) => r.test(t));
-}
-
-/**
- * Rows expecting a decline-style outcome should not be failed by the "unable to assist" visibility
- * override below — `evaluateTestOutcome` already scored a decline response as a legitimate PASS for
- * these, and the override exists to catch a decline where an ANSWER was expected, not to re-litigate
- * one the base evaluator already approved.
- *
- * B0-518 — this used to ALSO require `expected_result_type` to literally be `'decline'`/`'none'`
- * before exempting the row, on top of `expected_should_answer === false`. Confirmed against the live
- * "Product Golden Test Set" run (`6203d34f-…`) and every other negative-expectation row in the
- * database: `expected_result_type` is null on every single one, so that second condition never once
- * matched in production — the exemption was effectively dead, and every correctly-triggered decline
- * on a negative row was being re-failed by the override with "The assistant indicated it could not
- * answer…", even though `evaluateTestOutcome` had already scored it a pass one line earlier.
- * `expected_should_answer === false` is already the row's own "a decline is the correct outcome here"
- * signal (it is the exact condition `evaluateTestOutcome` tests), so requiring a second field to
- * separately agree was redundant, not an extra safety check.
- */
-function expectsDeclineStyleOutcome(item: TestItemRecord): boolean {
-  return shouldExpectAnswer(item) === false;
-}
-
-/**
- * Same pass/fail rules as the historical boolean helper; adds `failureReason` for failed assertions.
- */
-function evaluateTestOutcome(params: {
-  item: TestItemRecord;
-  hasError: boolean;
-  responseText: string;
-}): EvaluationOutcome {
-  const expectedShouldAnswer = shouldExpectAnswer(params.item);
-  const expectedResultType = (params.item.expected_result_type || '')
-    .trim()
-    .toLowerCase();
-
-  const hasResponse = !params.hasError && params.responseText.trim().length > 0;
-
-  if (expectedShouldAnswer === null) {
-    const passed = !params.hasError;
-    return {
-      passed,
-      failureReason: passed
-        ? null
-        : 'This row has no expectation (expected_should_answer is null) but the run reported an error before a final answer.',
-    };
-  }
-
-  if (expectedShouldAnswer === true) {
-    if (hasResponse) {
-      return { passed: true, failureReason: null };
-    }
-    return {
-      passed: false,
-      failureReason:
-        'This row expects an assistant answer (expected_should_answer = true) but the response text was empty.',
-    };
-  }
-
-  if (expectedShouldAnswer === false) {
-    if (!hasResponse) {
-      return { passed: true, failureReason: null };
-    }
-
-    // A proper decline is always a pass for negative tests, regardless of expected_result_type.
-    if (responseIndicatesDeclineStyleAnswer(params.responseText)) {
-      return { passed: true, failureReason: null };
-    }
-
-    if (expectedResultType === 'decline' || expectedResultType === 'none') {
-      return {
-        passed: false,
-        failureReason: `This row expects a decline-style answer (expected_result_type "${expectedResultType}") — e.g. inability to verify, no verified information, or phrasing with "can't"/"cannot" or "outside the scope"; the response did not match decline-style criteria.`,
-      };
-    }
-
-    return {
-      passed: false,
-      failureReason:
-        'This row expects no assistant answer (expected_should_answer = false) but the model returned a non-empty response without a recognizable decline.',
-    };
-  }
-
-  return {
-    passed: false,
-    failureReason:
-      'expected_should_answer is not true, false, or null, so this item cannot be evaluated with the current rules.',
-  };
-}
-
-function withUnableToAssistFailureOverride(
-  responseText: string,
-  outcome: EvaluationOutcome,
-  item: TestItemRecord,
-): EvaluationOutcome {
-  const hasText = responseText.trim().length > 0;
-  if (!hasText || !outcome.passed) {
-    return outcome;
-  }
-
-  if (expectsDeclineStyleOutcome(item)) {
-    return outcome;
-  }
-
-  if (!responseIndicatesUnableToAssistOrRefusal(responseText)) {
-    return outcome;
-  }
-
-  return {
-    passed: false,
-    failureReason: UNABLE_TO_ASSIST_FAILURE_REASON,
-  };
-}
-
-/**
- * Full pass/fail decision for a single chat test item: applies the expectation rules and the
- * "unable to assist" decline override. Exported so the grading behavior can be unit-tested
- * independently of the live workflow.
- */
-export function gradeChatTestResponse(params: {
-  item: TestItemRecord;
-  hasError: boolean;
-  responseText: string;
-}): EvaluationOutcome {
-  const base = evaluateTestOutcome(params);
-  return withUnableToAssistFailureOverride(params.responseText, base, params.item);
-}
-
 export async function runSingleTestItem(
   testResultId: string,
   testItem: TestItemRecord,
-  options?: {
-    modelTag?: string;
-    useValidator?: boolean;
-    testName?: string | null;
-    routerTypeOverride?: RouterTypeOverride;
-  },
+  options?: RunItemOptions,
+): Promise<RunSingleItemResult> {
+  const parsed = parseMultiTurnFromInputPayload(testItem.input_payload);
+
+  if (parsed.kind === 'multi_turn') {
+    return runMultiTurnTestItem(testResultId, testItem, parsed.scenario, options);
+  }
+
+  if (parsed.kind === 'invalid') {
+    return {
+      passed: false,
+      item: {
+        test_result_id: testResultId,
+        test_item_id: testItem.id,
+        row_index: testItem.row_index,
+        elapsed_ms: 0,
+        ttft_ms: null,
+        status: 'failed',
+        passed: false,
+        error_message: parsed.message,
+        response_text: null,
+        response_payload: null,
+        app_version: APP_VERSION,
+      },
+    };
+  }
+
+  return runSingleTurnTestItem(testResultId, testItem, options);
+}
+
+async function runSingleTurnTestItem(
+  testResultId: string,
+  testItem: TestItemRecord,
+  options?: RunItemOptions,
 ): Promise<RunSingleItemResult> {
   const startedAt = Date.now();
   let firstDeltaAt: number | null = null;
@@ -393,7 +129,8 @@ export async function runSingleTestItem(
        * keep their current cost and behaviour.
        */
       useValidator: options?.useValidator ?? false,
-      agentMode: 'orchestrator',
+      // B0-351 — was hardcoded `'orchestrator'`; now per-run, defaulting to the same value.
+      agentMode: options?.agentMode ?? DEFAULT_BEX_CHAT_AGENT_MODE,
       routerTypeOverride: options?.routerTypeOverride,
       // B0-450: eval-harness conversations are never attributed to whoever kicked off the run.
       owner: { kind: 'system' },
@@ -481,4 +218,212 @@ export async function runSingleTestItem(
       },
     };
   }
+}
+
+/**
+ * B0-537 — replays an ordered multi-turn scenario against the real chat path.
+ *
+ * The execution primitive needed no change: `runBexChatTurn` derives history from the DB and
+ * RETURNS the `conversationId` it used, so multi-turn execution is simply feeding turn N's returned
+ * conversation id back in as turn N+1's. Turn 1 passes `conversationId: null` (identical to the
+ * single-turn path) and therefore creates the conversation, stamped with the same
+ * `owner: { kind: 'system' }` / `testName` as before.
+ *
+ * A turn that throws stops the replay: the remaining turns would run without the context the
+ * scenario is testing, so continuing would produce misleading verdicts rather than more data. The
+ * partial run is still graded and persisted, and `summary.executedTurnCount` records the truncation.
+ */
+async function runMultiTurnTestItem(
+  testResultId: string,
+  testItem: TestItemRecord,
+  scenario: MultiTurnScenario,
+  options?: RunItemOptions,
+): Promise<RunSingleItemResult> {
+  const scenarioStartedAt = Date.now();
+  const executedTurns: ExecutedTurn[] = [];
+  let conversationId: string | null = null;
+  let lastResult: Awaited<ReturnType<typeof runBexChatTurn>> | null = null;
+  let firstTurnTtftMs: number | null = null;
+  let fatalError: string | null = null;
+
+  for (const [zeroBasedIndex, turn] of scenario.turns.entries()) {
+    const turnIndex = zeroBasedIndex + 1;
+    const turnStartedAt = Date.now();
+    let firstDeltaAt: number | null = null;
+
+    try {
+      const result = await runBexChatTurn({
+        // The whole point: turn 1 creates the conversation, every later turn resumes it, so
+        // `listMessagesForConversation` hands the workflow the real prior turns as `priorMessages`.
+        conversationId,
+        message: turn.prompt,
+        source: 'harness',
+        modelTag: options?.modelTag,
+        useValidator: options?.useValidator ?? false,
+        // B0-351 — same per-run agent mode as the single-turn path; every turn of a scenario runs
+        // under it, so a multi-turn run cannot drift between specialists mid-conversation.
+        agentMode: options?.agentMode ?? DEFAULT_BEX_CHAT_AGENT_MODE,
+        routerTypeOverride: options?.routerTypeOverride,
+        owner: { kind: 'system' },
+        testName: options?.testName,
+        onAssistantDelta: () => {
+          if (firstDeltaAt === null) firstDeltaAt = Date.now();
+        },
+      });
+
+      conversationId = result.conversationId;
+      lastResult = result;
+
+      const ttftMs = firstDeltaAt !== null ? Math.max(0, firstDeltaAt - turnStartedAt) : null;
+      if (turnIndex === 1) {
+        firstTurnTtftMs = ttftMs;
+      }
+
+      executedTurns.push({
+        turnIndex,
+        prompt: turn.prompt,
+        responseText: result.answerText || '',
+        hasError: false,
+        errorMessage: null,
+        elapsedMs: Math.max(0, Date.now() - turnStartedAt),
+        ttftMs,
+        conversationId: result.conversationId,
+        workflowRunId: result.workflowRunId ?? null,
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Unknown multi-turn test item run failure.';
+      fatalError = `Turn ${turnIndex} failed: ${message}`;
+      executedTurns.push({
+        turnIndex,
+        prompt: turn.prompt,
+        responseText: '',
+        hasError: true,
+        errorMessage: message,
+        elapsedMs: Math.max(0, Date.now() - turnStartedAt),
+        ttftMs: firstDeltaAt !== null ? Math.max(0, firstDeltaAt - turnStartedAt) : null,
+        conversationId,
+        workflowRunId: null,
+      });
+      break;
+    }
+  }
+
+  const evaluation = evaluateMultiTurnScenario({ scenario, turns: executedTurns });
+
+  /**
+   * A multi-turn row that ALSO carries `expected_criteria` is graded by BOTH: the criteria are
+   * applied to the FINAL turn's answer (the turn the scenario is driving toward) and folded in as
+   * an additional required check, so criteria authored on a scenario row can't silently do nothing.
+   * Rows without criteria are unaffected — `gradeWithCriteria` returns null.
+   */
+  const finalTurn = executedTurns.find((turn) => turn.turnIndex === scenario.turns.length);
+  const parsedCriteria = expectedCriteriaSchema.safeParse(testItem.expected_criteria);
+  const criteria = parsedCriteria.success ? parsedCriteria.data : [];
+  const criteriaOutcome =
+    finalTurn && !finalTurn.hasError
+      ? await gradeWithCriteria({
+          prompt: finalTurn.prompt,
+          responseText: finalTurn.responseText,
+          criteria,
+          modelTag: options?.modelTag,
+        }).catch(() => null)
+      : null;
+
+  const passed = evaluation.passed && (criteriaOutcome?.passed ?? true);
+
+  const elapsedMs = executedTurns.reduce(
+    (sum, turn) => sum + (turn.elapsedMs ?? 0),
+    0,
+  ) || Math.max(0, Date.now() - scenarioStartedAt);
+
+  const multiTurnPayload: MultiTurnResultPayload = {
+    version: 1,
+    scenarioId: scenario.scenario_id ?? null,
+    title: scenario.title ?? null,
+    passed: evaluation.passed,
+    summary: evaluation.summary,
+    turns: executedTurns.map((turn) => {
+      const verdict = evaluation.turnVerdicts.find((v) => v.turnIndex === turn.turnIndex);
+      return {
+        turnIndex: turn.turnIndex,
+        prompt: turn.prompt,
+        responseText: turn.responseText,
+        passed: verdict?.passed ?? false,
+        failureReason: verdict?.failureReason ?? null,
+        behaviorPassed: verdict?.behaviorPassed ?? false,
+        declined: verdict?.declined ?? false,
+        mustMention: verdict?.mustMention ?? [],
+        mustNotMention: verdict?.mustNotMention ?? [],
+        hasError: turn.hasError,
+        errorMessage: turn.errorMessage ?? null,
+        elapsedMs: turn.elapsedMs ?? null,
+        ttftMs: turn.ttftMs ?? null,
+        conversationId: turn.conversationId ?? null,
+        workflowRunId: turn.workflowRunId ?? null,
+      };
+    }),
+    assertions: evaluation.assertionVerdicts.map((verdict) => ({
+      type: verdict.type,
+      turns: verdict.turns,
+      passed: verdict.passed,
+      reason: verdict.reason,
+      description: verdict.description,
+      caveat: verdict.caveat,
+      observed: verdict.observed,
+    })),
+    routingComparisonScope: 'first_turn_only',
+    conversationId,
+    /**
+     * B0-519's `capConversationHistory` keeps only the last `BEX_HISTORY_MAX_MESSAGES` (default 12)
+     * messages, and each turn contributes two (user + assistant). A scenario deeper than half that
+     * cap loses its earliest turns from the model's view, which is exactly what a `context_carry`
+     * from turn 1 asks about — flagged here so a failure can be read as a cap effect rather than a
+     * model regression.
+     */
+    historyCapAtRisk: scenario.turns.length * 2 > resolveHistoryMaxMessages(),
+  };
+
+  // Loose `any` for the same reason as the single-turn path: `response_payload` is `Json`.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const responsePayload: any = lastResult ? JSON.parse(JSON.stringify(lastResult)) : {};
+  responsePayload[MULTI_TURN_RESULT_PAYLOAD_KEY] = JSON.parse(
+    JSON.stringify(multiTurnPayload),
+  );
+  if (criteriaOutcome) {
+    responsePayload.criteriaGrading = criteriaOutcome;
+  }
+
+  const failureReason =
+    [
+      fatalError,
+      evaluation.failureReason,
+      criteriaOutcome && !criteriaOutcome.passed
+        ? 'Final-turn expected_criteria were not met.'
+        : null,
+    ]
+      .filter(Boolean)
+      .join(' ') || null;
+
+  return {
+    passed,
+    item: {
+      test_result_id: testResultId,
+      test_item_id: testItem.id,
+      row_index: testItem.row_index,
+      // Scenario-level rollups (see the persistence note in ./multi-turn-result.ts): total wall
+      // clock across every turn, and turn 1's time-to-first-token (the only one comparable with a
+      // single-turn row's `ttft_ms`).
+      elapsed_ms: elapsedMs,
+      ttft_ms: firstTurnTtftMs,
+      status: fatalError ? 'failed' : 'completed',
+      passed,
+      error_message: passed ? null : failureReason,
+      response_text: finalTurn?.responseText || executedTurns.at(-1)?.responseText || null,
+      response_payload: responsePayload,
+      // The FINAL turn's workflow run, matching which turn's result the rest of the payload holds.
+      workflow_run_id: lastResult?.workflowRunId ?? null,
+      app_version: APP_VERSION,
+    },
+  };
 }

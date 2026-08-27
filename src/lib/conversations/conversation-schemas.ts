@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { BEX_CHAT_AGENT_MODES } from '~/lib/agents/agent-registry';
+import { ragDocumentKindSchema } from '~/lib/rag/document-kind';
 
 export const bexChatPostBodySchema = z
   .object({
@@ -25,6 +26,13 @@ export const sourceRefSchema = z.object({
   /** B0-257: raw S3 location of the source document (label/SDS PDF or markdown), for regulated-claim citation. */
   s3Key: z.string().optional(),
   sourceUri: z.string().optional(),
+  /**
+   * B0-293: which corpus this source came from (`rag.document.document_kind`, plus the synthetic
+   * `facts` kind). Optional and narrowly typed: absent on every message persisted before B0-293,
+   * and absent for an external/web source (`kind: 'external'` already says that) — a reader must
+   * render nothing rather than guess a corpus.
+   */
+  documentKind: ragDocumentKindSchema.optional(),
 });
 
 export type SourceRef = z.infer<typeof sourceRefSchema>;

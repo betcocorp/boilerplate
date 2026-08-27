@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { productLineLockSchema, toolTraceSchema } from '~/lib/audit/trace';
+import { ragDocumentKindSchema } from '~/lib/rag/document-kind';
 import { AGENT_CONFIDENCE_REASONS } from '~/lib/workflows/product-support/agent-self-confidence';
 import { CONFIDENCE_PROVENANCES } from '~/lib/workflows/product-support/confidence-provenance';
 
@@ -83,6 +84,12 @@ export type RetrievedDocumentChunkRef = z.infer<typeof retrievedDocumentChunkRef
  *   substantive, non-decline draft with no flagged safety problem, so the streamed answer was kept
  *   visible instead of being hard-replaced; `requires_human_review` is always forced true alongside
  *   this value.
+ * - `recommendation_engine_decline` — B0-356: the `recommend_cross_reference` engine did not answer
+ *   (sub-threshold score, validator-forced `escalated`, or a B0-329 latency-ceiling trip), so its
+ *   `declineReason` replaced the draft VERBATIM. A distinct value, not `validator_fallback`,
+ *   because the deciding gate is the recommendation engine's own confidence/grounding gate, not
+ *   this workflow's validator — conflating them would make an equivalence-claim decline
+ *   indistinguishable from a general "could not verify" fallback.
  */
 export const answerProvenanceSchema = z.enum([
   'model_generated',
@@ -93,6 +100,7 @@ export const answerProvenanceSchema = z.enum([
   'validator_fallback',
   'revision_pass',
   'validator_rejected_draft_retained',
+  'recommendation_engine_decline',
 ]);
 
 export type AnswerProvenance = z.infer<typeof answerProvenanceSchema>;
@@ -160,6 +168,14 @@ export const gateIdSchema = z.enum([
   'early_decline_gate',
   'usage_safety_coverage',
   'recommendation_confidence',
+  /**
+   * B0-356 — `evaluateRecommendationEngineGate`: enforcement of the `recommend_cross_reference`
+   * engine's OWN verdict (`answered` / `status` / `overallConfidence` / `thresholdUsed` /
+   * `declineReason`). Distinct from `recommendation_confidence`, which is REC-4's retrieval-strength
+   * calibration computed by this workflow — this one only ever REPORTS and enforces a decision the
+   * engine already made.
+   */
+  'recommendation_engine_verdict',
   'regulated_claim_guardrail',
   'competitor_identity_resolution',
   'llm_intent_classifier_shadow',
@@ -362,6 +378,14 @@ export const gateActivationRecordSchema = z.object({
   state: gateActivationStateSchema,
   /** e.g. `'disabled_by_flag'`, `'confidence_gating_disabled'`. Absent when `state === 'ran'`. */
   reason: z.string().max(256).optional(),
+  /**
+   * B0-358 — the outcome of a gate whose `state` is `'ran'`: `'passed'` (it evaluated and found
+   * nothing to act on) versus `'capped'` / `'rejected'` / `'declined'` (it acted). Without this,
+   * "the guardrail ran and passed" and "the guardrail ran and fired" were both just `ran`, so a
+   * reader could not tell "nothing fired" from "nothing ran". Absent when `state !== 'ran'` (the
+   * `state` already says what happened) and on runs written before this ticket.
+   */
+  verdict: z.string().max(64).optional(),
 });
 
 export type GateActivationRecord = z.infer<typeof gateActivationRecordSchema>;
@@ -372,9 +396,38 @@ export const activeGatesSchema = z.object({
   usageSafetyCoverage: gateActivationRecordSchema,
   regulatedClaimGuardrail: gateActivationRecordSchema,
   recommendationConfidence: gateActivationRecordSchema,
+  /**
+   * B0-356 — enforcement of the recommendation engine's own verdict. OPTIONAL, unlike the five
+   * above: `activeGatesSchema.safeParse` runs against ALREADY-PERSISTED payloads, so a required
+   * field here would make every pre-B0-356 run fail to parse and silently drop its whole gate
+   * badge. Absent means "this run predates the gate", which is not the same as `not_applicable`.
+   */
+  recommendationEngineVerdict: gateActivationRecordSchema.optional(),
 });
 
 export type ActiveGates = z.infer<typeof activeGatesSchema>;
+
+/**
+ * B0-358 — the verification level a run's `validator` step actually reached, as a first-class
+ * field rather than a magic string buried in `validation.issues`.
+ *
+ * On the live Bex path the LLM validator never runs: `useValidator` defaults to `false` and
+ * `run-chat-turn.ts` never passes it, so every production turn takes the else-branch and gets
+ * `{approved: true, confidence: sources.length > 0 ? 0.9 : 0.6, issues: ['validator_bypassed_for_testing']}`.
+ * That bypass is the DELIBERATE REC-4 decision (a claims-validator requiring RAG evidence for every
+ * assertion rejects competitive recommendations, which are grounded by a cross-reference match, not
+ * by chunks) — this field does not change it, it only stops the persisted step from reading as
+ * "this answer was validated".
+ *
+ * - `llm` — the validator's LLM pass genuinely ran and judged this answer.
+ * - `bypassed` — no LLM pass ran. Which bypass (the `useValidator` toggle, or the B0-546
+ *   high-similarity skip) is recorded on the step's own `reason` field; both mean the confidence
+ *   number came from a heuristic, not a judgment.
+ * - `not_run` — the early-decline gate short-circuited before a validator step existed at all.
+ */
+export const validatorModeSchema = z.enum(['llm', 'bypassed', 'not_run']);
+
+export type ValidatorMode = z.infer<typeof validatorModeSchema>;
 
 export const productSupportFinalOutputSchema = z.object({
   answerText: z.string(),
@@ -386,6 +439,12 @@ export const productSupportFinalOutputSchema = z.object({
         title: z.string(),
         snippet: z.string(),
         similarity: z.number().optional(),
+        /**
+         * B0-293 — which corpus the source came from (`rag.document.document_kind`, plus the
+         * synthetic `facts` kind). Optional: absent on payloads written before this ticket, and on
+         * any source whose kind the tool layer did not report.
+         */
+        documentKind: ragDocumentKindSchema.optional(),
       }),
     )
     .optional(),
@@ -526,6 +585,12 @@ export const productSupportFinalOutputSchema = z.object({
    * `runtimeConfig`.
    */
   activeGates: activeGatesSchema.optional(),
+  /**
+   * B0-358 — the run's actual verification level (see `validatorModeSchema`). Optional so payloads
+   * written before this ticket still parse; readers must render an absent value as unknown, never
+   * as `'llm'`.
+   */
+  validatorMode: validatorModeSchema.optional(),
 });
 
 export type ProductSupportFinalOutput = z.infer<typeof productSupportFinalOutputSchema>;
