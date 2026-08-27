@@ -351,7 +351,8 @@ export async function listGoldenCandidateRuns(
   });
 }
 
-async function listResultItemsForRuns(runIds: string[]): Promise<GoldenResultItemRow[]> {
+/** Exported (B0-466) so `~/lib/tests/golden-set-run-series.ts` reads result rows through this reader. */
+export async function listResultItemsForRuns(runIds: string[]): Promise<GoldenResultItemRow[]> {
   if (runIds.length === 0) return [];
   const supabase = getSupabaseServiceRoleClient();
   return fetchAllPages<GoldenResultItemRow>((from, to) =>

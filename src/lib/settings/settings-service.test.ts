@@ -308,6 +308,20 @@ describe('caching', () => {
  */
 describe('settings-table coverage does not regress to process.env (B0-638)', () => {
   const DB_BACKED_KEYS = [
+    // B0-466 — read through getObservabilityAlertConfig(); the alerter's thresholds have never
+    // had a process.env read. (The optional webhook URL is env-only ON PURPOSE — it is a
+    // credential — and is deliberately not a settings key, so it is not listed here.)
+    'ALERT_GOLDEN_GATE_MISS_ENABLED',
+    'ALERT_GOLDEN_MIN_GRADED_ITEMS',
+    'ALERT_GOLDEN_PASS_RATE_DROP_CRITICAL',
+    'ALERT_GOLDEN_PASS_RATE_DROP_WARNING',
+    'ALERT_SENTRY_ENABLED',
+    'ALERT_TOOL_FAILURE_LOOKBACK_DAYS',
+    'ALERT_TOOL_FAILURE_MIN_SETTLED_CALLS',
+    'ALERT_TOOL_FAILURE_RATE_CRITICAL',
+    'ALERT_TOOL_FAILURE_RATE_WARNING',
+    'ALERT_TOOL_FAILURE_SPIKE_DELTA',
+    'ALERT_TOOL_FAILURE_SPIKE_RATIO',
     'BEX_AI_SDK_GENERATION_ENABLED',
     'BEX_AI_SDK_STREAMING_ENABLED',
     'BEX_AI_SDK_STREAMING_ROLLOUT_MODE',

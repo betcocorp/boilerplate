@@ -625,6 +625,57 @@ export type Database = {
         }
         Relationships: []
       }
+      observability_alert_evaluations: {
+        Row: {
+          delivery: Json
+          duration_ms: number | null
+          error: string | null
+          evaluated_at: string
+          finding_count: number
+          findings: Json
+          id: string
+          max_severity: string | null
+          metrics: Json
+          thresholds: Json
+          trigger: string
+          verdict: string
+          window_from: string | null
+          window_to: string | null
+        }
+        Insert: {
+          delivery?: Json
+          duration_ms?: number | null
+          error?: string | null
+          evaluated_at?: string
+          finding_count?: number
+          findings?: Json
+          id?: string
+          max_severity?: string | null
+          metrics?: Json
+          thresholds?: Json
+          trigger?: string
+          verdict: string
+          window_from?: string | null
+          window_to?: string | null
+        }
+        Update: {
+          delivery?: Json
+          duration_ms?: number | null
+          error?: string | null
+          evaluated_at?: string
+          finding_count?: number
+          findings?: Json
+          id?: string
+          max_severity?: string | null
+          metrics?: Json
+          thresholds?: Json
+          trigger?: string
+          verdict?: string
+          window_from?: string | null
+          window_to?: string | null
+        }
+        Relationships: []
+      }
       orphan_ignore: {
         Row: {
           check_key: string
