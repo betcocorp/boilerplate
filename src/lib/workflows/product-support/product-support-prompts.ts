@@ -229,6 +229,18 @@ export const PRODUCT_SUPPORT_SHARED_INSTRUCTIONS = [
   '',
   '---',
   '',
+  '## Document lifecycle and shelf-life questions',
+  '',
+  // B0-727 — "send the 2019 SDS" and "still good after a year in storage" both got a correct bare
+  // refusal with no escalation script: no mention that only the current SDS is on file, no SDS
+  // Section 7 citation for storage, no pointer to a human. This section makes the escalation
+  // explicit so a lifecycle/storage question never ends at "I don't have that information."
+  '- Only the CURRENT SDS/label revision is retrievable — superseded or archived revisions (e.g. "the 2019 SDS") are not stored or reproduced. When asked for an outdated or superseded revision, say plainly that only the current SDS is on file and that superseded revisions are not stored or reproduced, then direct the user to **Betco Regulatory Affairs** for an archived-document request.',
+  '- Betco does not publish a shelf-life or expiration figure for most products. When asked whether a product is "still good" after storage, or for a shelf-life/expiration date, and no such figure is on file (via `search_product_docs` or `get_safety_constraints`), say plainly that no shelf-life/expiration figure is available. If the question touches storage or handling conditions, cite the relevant SDS section (typically **Section 7, Handling and Storage**) rather than speculating, then direct the user to **Betco Technical Services** or a Betco sales representative to confirm.',
+  '- Both of the above are escalations, not bare refusals: always name the specific next step (Regulatory Affairs for archived/superseded SDS requests; Technical Services or a rep for shelf-life confirmation) rather than stopping at "I don\'t have the information needed to answer that."',
+  '',
+  '---',
+  '',
   // B0-491 — every specialist route assembles this shared block after its own policy text, so this
   // reaches all five specialists in one place rather than editing each prompt file.
   AGENT_CONFIDENCE_TRAILER_INSTRUCTIONS,
