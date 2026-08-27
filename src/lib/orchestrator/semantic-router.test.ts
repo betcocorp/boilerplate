@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * B0-647/648/650 — semantic router unit tests. No real OpenAI call and no real Redis: the embedding
- * client, the Redis example cache, and the `settings` reader are all mocked (same style as
- * `intent-classifier.test.ts`, including the arrow-wrapped mock bodies so the hoisted `vi.mock`
- * factories can reference these consts).
+ * B0-647/648/650/680 — semantic router unit tests. No real OpenAI call for the example corpus and
+ * no Redis (B0-680 deleted `semantic-router-cache.ts` entirely): the pre-computed embeddings file
+ * is mocked via `semantic-router-embeddings-source.ts` — the thin indirection module
+ * `semantic-router.ts` reads it through — so these tests exercise the loader/validator logic
+ * against a synthetic corpus without depending on real OpenAI-computed vectors being checked in.
+ * The OpenAI client mock and the `settings` reader mock remain: a LIVE user message is still
+ * embedded via OpenAI on every call (same style as `intent-classifier.test.ts`, including the
+ * arrow-wrapped mock bodies so the hoisted `vi.mock` factories can reference these consts).
  */
 const embeddingsCreateMock = vi.fn();
 vi.mock('~/lib/openai/client', () => ({
@@ -13,11 +17,16 @@ vi.mock('~/lib/openai/client', () => ({
   }),
 }));
 
-const readCachedMock = vi.fn();
-const writeCachedMock = vi.fn();
-vi.mock('~/lib/orchestrator/semantic-router-cache', () => ({
-  readCachedRouteEmbeddings: (...args: unknown[]) => readCachedMock(...args),
-  writeCachedRouteEmbeddings: (...args: unknown[]) => writeCachedMock(...args),
+// `vi.hoisted` because the factory below needs a stable object to close over, but its CONTENT
+// (`buildValidEmbeddingsFile()`) depends on `SME_AGENT_IDS` / `SEMANTIC_ROUTER_EXAMPLES`, which are
+// only available once the real imports further down this file have run. The ref exists from the
+// first possible moment; `.current` is populated once those imports are in scope (see below) and
+// reset per-test in `beforeEach`.
+const embeddingsFileRef = vi.hoisted(() => ({ current: undefined as unknown }));
+vi.mock('~/lib/orchestrator/semantic-router-embeddings-source', () => ({
+  get semanticRouterEmbeddingsFile() {
+    return embeddingsFileRef.current;
+  },
 }));
 
 // Echoes each call's own `fallback`, so the documented defaults (0.50 / 0.10 /
@@ -38,6 +47,7 @@ import {
   getSemanticRouterEmbeddingModel,
   getSemanticRouterMarginThreshold,
 } from '~/lib/orchestrator/semantic-router-config';
+import type { SemanticRouterEmbeddingsFile } from '~/lib/orchestrator/semantic-router-embeddings-source';
 import {
   SEMANTIC_ROUTER_EXAMPLES,
   SEMANTIC_ROUTER_EXAMPLE_COUNT,
@@ -92,6 +102,36 @@ for (const route of SME_AGENT_IDS) {
   }
 }
 
+/**
+ * B0-680 — a valid `semantic-router-embeddings.json`-shaped fixture standing in for the mocked
+ * `semanticRouterEmbeddingsFile` import. Every example's vector sits on its own route's axis,
+ * matching `exampleAxisByText`/`vectorForInput` above, so a live message vectored onto that same
+ * axis is a clean match against the whole corpus, not just a single example.
+ */
+function buildValidEmbeddingsFile(): SemanticRouterEmbeddingsFile {
+  const routes: SemanticRouterEmbeddingsFile['routes'] = {};
+  for (const route of SME_AGENT_IDS) {
+    const examples = SEMANTIC_ROUTER_EXAMPLES[route];
+    routes[route] = {
+      examples: [...examples],
+      vectors: examples.map(() => basis(routeAxis(route))),
+    };
+  }
+  return {
+    format: 1,
+    examplesVersion: SEMANTIC_ROUTER_EXAMPLES_VERSION,
+    embeddingModel: DEFAULT_SEMANTIC_ROUTER_EMBEDDING_MODEL,
+    dimensions: DIMS,
+    generatedAt: 'test-fixture',
+    routes,
+  };
+}
+
+/** Typed convenience setter for the mocked `semanticRouterEmbeddingsFile` — see `embeddingsFileRef` above. */
+function setMockEmbeddingsFile(file: SemanticRouterEmbeddingsFile): void {
+  embeddingsFileRef.current = file;
+}
+
 /** Test-controlled vectors for live messages, keyed by the exact message text. */
 const messageVectors = new Map<string, number[]>();
 
@@ -114,10 +154,7 @@ beforeEach(() => {
   embeddingsCreateMock.mockImplementation((body: { input: string[] }) =>
     Promise.resolve(embedResponse(body.input)),
   );
-  readCachedMock.mockReset();
-  readCachedMock.mockResolvedValue(null); // Redis absent by default
-  writeCachedMock.mockReset();
-  writeCachedMock.mockResolvedValue(false);
+  setMockEmbeddingsFile(buildValidEmbeddingsFile());
   vi.mocked(getNumberSetting).mockImplementation((_key, fallback) => Promise.resolve(fallback));
   vi.mocked(getStringSetting).mockImplementation((_key, fallback) => Promise.resolve(fallback));
 });
@@ -387,23 +424,22 @@ describe('B0-650 threshold configuration', () => {
   });
 });
 
-describe('B0-647 initSemanticRouter', () => {
-  it('pre-computes every example embedding in one batched call per route', async () => {
+describe('B0-680 initSemanticRouter (pre-computed embeddings file)', () => {
+  it('loads every example embedding from the pre-computed file without calling OpenAI', async () => {
     const result = await initSemanticRouter();
 
     expect(result.routeCount).toBe(SME_AGENT_IDS.length);
     expect(result.exampleCount).toBe(SEMANTIC_ROUTER_EXAMPLE_COUNT);
-    expect(result.source).toBe('openai');
+    expect(result.source).toBe('static');
     expect(result.errors).toEqual([]);
     expect(result.examplesVersion).toBe(SEMANTIC_ROUTER_EXAMPLES_VERSION);
     expect(result.embeddingModel).toBe('text-embedding-3-large');
-    // One batched embeddings.create per route, not one per example.
-    expect(embeddingsCreateMock).toHaveBeenCalledTimes(SME_AGENT_IDS.length);
+    // No live-message call happened either — init touches OpenAI zero times.
+    expect(embeddingsCreateMock).not.toHaveBeenCalled();
   });
 
-  it('is idempotent: a second call re-uses the in-memory corpus and makes no API call', async () => {
+  it('is idempotent: a second call re-uses the in-memory corpus', async () => {
     await initSemanticRouter();
-    embeddingsCreateMock.mockClear();
 
     const second = await initSemanticRouter();
 
@@ -419,69 +455,98 @@ describe('B0-647 initSemanticRouter', () => {
       initSemanticRouter(),
     ]);
 
-    expect(embeddingsCreateMock).toHaveBeenCalledTimes(SME_AGENT_IDS.length);
     expect(a.exampleCount).toBe(SEMANTIC_ROUTER_EXAMPLE_COUNT);
     expect(b.exampleCount).toBe(SEMANTIC_ROUTER_EXAMPLE_COUNT);
     expect(c.exampleCount).toBe(SEMANTIC_ROUTER_EXAMPLE_COUNT);
-  });
-
-  it('loads from the shared Redis cache when it hits, skipping OpenAI entirely (B0-654)', async () => {
-    readCachedMock.mockImplementation(({ route }: { route: SmeAgentId }) =>
-      Promise.resolve(SEMANTIC_ROUTER_EXAMPLES[route].map(() => basis(routeAxis(route)))),
-    );
-
-    const result = await initSemanticRouter();
-
-    expect(result.source).toBe('redis');
-    expect(result.exampleCount).toBe(SEMANTIC_ROUTER_EXAMPLE_COUNT);
     expect(embeddingsCreateMock).not.toHaveBeenCalled();
-    expect(writeCachedMock).not.toHaveBeenCalled();
   });
 
-  it('writes freshly computed vectors back to the shared cache (B0-654)', async () => {
-    await initSemanticRouter();
-
-    expect(writeCachedMock).toHaveBeenCalledTimes(SME_AGENT_IDS.length);
-    const call = writeCachedMock.mock.calls[0]?.[0] as {
-      examplesVersion: string;
-      embeddingModel: string;
-      route: SmeAgentId;
-      vectors: number[][];
-    };
-    expect(call.examplesVersion).toBe(SEMANTIC_ROUTER_EXAMPLES_VERSION);
-    expect(call.embeddingModel).toBe('text-embedding-3-large');
-    expect(call.vectors).toHaveLength(SEMANTIC_ROUTER_EXAMPLES[call.route].length);
-  });
-
-  it('still initializes the routes that succeeded when one route fails to embed', async () => {
-    embeddingsCreateMock.mockImplementation((body: { input: string[] }) => {
-      const isFloor = exampleAxisByText.get(body.input[0]!) === routeAxis('floor');
-      return isFloor
-        ? Promise.reject(new Error('rate limited'))
-        : Promise.resolve(embedResponse(body.input));
-    });
+  it('still initializes the routes that validate when one route is missing from the file', async () => {
+    const file = buildValidEmbeddingsFile();
+    delete file.routes.floor;
+    setMockEmbeddingsFile(file);
 
     const result = await initSemanticRouter();
 
     expect(result.routeCount).toBe(SME_AGENT_IDS.length - 1);
     expect(result.errors).toHaveLength(1);
-    expect(result.errors[0]).toContain('rate limited');
+    expect(result.errors[0]).toContain('floor');
+    expect(result.errors[0]).toContain('missing from the embeddings file');
   });
 
-  it('never throws on total failure, and clears the memo so the next call can retry', async () => {
-    embeddingsCreateMock.mockRejectedValue(new Error('openai down'));
+  it('skips a route whose example text has drifted from semantic-router-examples.ts', async () => {
+    const file = buildValidEmbeddingsFile();
+    file.routes.bathroom!.examples[0] = 'a stale example nobody edited the version for';
+    setMockEmbeddingsFile(file);
+
+    const result = await initSemanticRouter();
+
+    expect(result.routeCount).toBe(SME_AGENT_IDS.length - 1);
+    expect(result.errors[0]).toContain('bathroom');
+    expect(result.errors[0]).toContain('regenerate');
+  });
+
+  it('skips a route with a non-finite value in a stored vector', async () => {
+    const file = buildValidEmbeddingsFile();
+    file.routes.dilution!.vectors[0]![0] = Number.NaN;
+    setMockEmbeddingsFile(file);
+
+    const result = await initSemanticRouter();
+
+    expect(result.routeCount).toBe(SME_AGENT_IDS.length - 1);
+    expect(result.errors[0]).toContain('dilution');
+  });
+
+  it('rejects the whole file when the examples version is stale', async () => {
+    setMockEmbeddingsFile({ ...buildValidEmbeddingsFile(), examplesVersion: 'v0-stale' });
+
+    const result = await initSemanticRouter();
+
+    expect(result.routeCount).toBe(0);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toContain('v0-stale');
+    expect(result.errors[0]).toContain(SEMANTIC_ROUTER_EXAMPLES_VERSION);
+  });
+
+  it('rejects the whole file when the embedding model does not match the current setting', async () => {
+    setMockEmbeddingsFile({ ...buildValidEmbeddingsFile(), embeddingModel: 'text-embedding-3-small' });
+
+    const result = await initSemanticRouter();
+
+    expect(result.routeCount).toBe(0);
+    expect(result.errors[0]).toContain('text-embedding-3-small');
+  });
+
+  it('rejects the whole file when its dimensions do not match the router constant', async () => {
+    setMockEmbeddingsFile({ ...buildValidEmbeddingsFile(), dimensions: 1536 });
+
+    const result = await initSemanticRouter();
+
+    expect(result.routeCount).toBe(0);
+    expect(result.errors[0]).toContain('1536');
+  });
+
+  it('rejects the whole file on an unrecognized envelope format', async () => {
+    setMockEmbeddingsFile({ ...buildValidEmbeddingsFile(), format: 2 });
+
+    const result = await initSemanticRouter();
+
+    expect(result.routeCount).toBe(0);
+    expect(result.errors[0]).toContain('format');
+  });
+
+  it('never throws on total failure (bad file), and clears the memo so the next call can retry', async () => {
+    setMockEmbeddingsFile({ ...buildValidEmbeddingsFile(), format: 2 });
 
     const failed = await initSemanticRouter();
     expect(failed.routeCount).toBe(0);
-    expect(failed.errors.length).toBe(SME_AGENT_IDS.length);
+    expect(failed.errors).toHaveLength(1);
 
-    embeddingsCreateMock.mockReset();
-    embeddingsCreateMock.mockImplementation((body: { input: string[] }) =>
-      Promise.resolve(embedResponse(body.input)),
-    );
+    setMockEmbeddingsFile(buildValidEmbeddingsFile());
 
     const retried = await initSemanticRouter();
     expect(retried.routeCount).toBe(SME_AGENT_IDS.length);
+    expect(retried.errors).toEqual([]);
   });
 });
 
@@ -574,15 +639,17 @@ describe('B0-648 classifyUserIntentSemantic', () => {
     expect(retried.route).toBe('floor');
   });
 
-  it('degrades when the corpus could not be initialized at all', async () => {
-    embeddingsCreateMock.mockRejectedValue(new Error('openai down'));
+  it('degrades when the corpus could not be initialized at all (bad embeddings file)', async () => {
+    setMockEmbeddingsFile({ ...buildValidEmbeddingsFile(), format: 2 });
 
     const decision = await classifyUserIntentSemantic('a floor question');
 
     expect(decision.path).toBe('fallback');
     expect(decision.route).toBe('ambiguous');
-    expect(decision.error).toContain('openai down');
+    expect(decision.error).toContain('format');
     expect(decision.scores).toEqual([]);
+    // The corpus never loaded, so the live message was never even sent to embed.
+    expect(embeddingsCreateMock).not.toHaveBeenCalled();
   });
 
   it('caches the message embedding in-process: a repeat call makes no API call and reports embeddingMs 0', async () => {
