@@ -6,7 +6,11 @@ import type { CaseScore } from './schemas';
  * so the executive scorecard and the case-by-case detail can never disagree.
  */
 
-const WEIGHTS = {
+/**
+ * Sub-score weighting for the 0-100 roll-up. Exported (B0-591) so the report UI can state the
+ * weighting from the same constant the computation uses, rather than restating it as prose.
+ */
+export const WEIGHTS = {
   accuracy: 0.4,
   completeness: 0.3,
   relevance: 0.2,
@@ -16,17 +20,37 @@ const WEIGHTS = {
 export type Grade = 'A' | 'B' | 'C' | 'D' | 'F';
 export type CaseStatus = 'Pass' | 'Partial Pass' | 'Fail';
 
+/**
+ * Letter-grade bands, highest first, each as the inclusive minimum weighted score that earns it.
+ * Exported (B0-591) so the report's stated methodology reads the same numbers `gradeFromScore`
+ * applies and the two can never drift apart. The last band is the 0 floor.
+ */
+export const GRADE_BANDS: ReadonlyArray<{ grade: Grade; min: number }> = [
+  { grade: 'A', min: 90 },
+  { grade: 'B', min: 80 },
+  { grade: 'C', min: 70 },
+  { grade: 'D', min: 60 },
+  { grade: 'F', min: 0 },
+];
+
+/** Pass/Partial/Fail bands, highest first — same contract as `GRADE_BANDS` (B0-591). */
+export const STATUS_BANDS: ReadonlyArray<{ status: CaseStatus; min: number }> = [
+  { status: 'Pass', min: 80 },
+  { status: 'Partial Pass', min: 60 },
+  { status: 'Fail', min: 0 },
+];
+
 export function gradeFromScore(score: number): Grade {
-  if (score >= 90) return 'A';
-  if (score >= 80) return 'B';
-  if (score >= 70) return 'C';
-  if (score >= 60) return 'D';
+  for (const band of GRADE_BANDS) {
+    if (score >= band.min) return band.grade;
+  }
   return 'F';
 }
 
 export function statusFromScore(score: number): CaseStatus {
-  if (score >= 80) return 'Pass';
-  if (score >= 60) return 'Partial Pass';
+  for (const band of STATUS_BANDS) {
+    if (score >= band.min) return band.status;
+  }
   return 'Fail';
 }
 
