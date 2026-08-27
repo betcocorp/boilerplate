@@ -17,6 +17,7 @@ import type {
   ExecuteToolFn,
   LlmTokenUsage,
   PreloadedEvidence,
+  ReplayedHistoryMessage,
   ResponsesRuntimeResult,
 } from '~/lib/openai/responses-runtime';
 import {
@@ -33,11 +34,13 @@ import type { Tool } from 'openai/resources/responses/responses';
 /**
  * A prior conversation turn replayed to the model. The AI SDK is stateless, so
  * replaying history here replaces the OpenAI Responses `previous_response_id` chain.
+ *
+ * B0-378 — now the same type both runtimes replay (`ReplayedHistoryMessage`), including the
+ * optional `toolContext` summary. Before this ticket the AI SDK path replayed user/assistant TEXT
+ * only, so every prior turn's tool activity vanished from context while the Responses chain kept
+ * it — the same conversation could answer differently depending on which runtime ran it.
  */
-export type AiSdkHistoryMessage = {
-  role: 'user' | 'assistant';
-  content: string;
-};
+export type AiSdkHistoryMessage = ReplayedHistoryMessage;
 
 /** Responses-style tool choice (what the workflow already computes), mapped to the AI SDK shape internally. */
 export type ResponsesToolChoice =
@@ -260,10 +263,25 @@ export async function runAiSdkWithToolLoop(opts: AiSdkRuntimeOptions): Promise<A
   const messages: ModelMessage[] = [
     ...opts.history
       .filter((message) => message.content.trim().length > 0)
-      .map((message): ModelMessage =>
+      .flatMap((message): ModelMessage[] =>
         message.role === 'assistant'
-          ? { role: 'assistant', content: message.content }
-          : { role: 'user', content: message.content },
+          ? [
+              { role: 'assistant', content: message.content },
+              /**
+               * B0-378 — the prior turn's tool activity, replayed as its own message right after the
+               * assistant turn it describes. This is a SUMMARY (tool names + retrieved document
+               * titles), NOT the real tool-call/tool-result parts: the persisted message only stores
+               * `toolSummary` and `sources`, so genuine parts would require fabricating tool-call ids
+               * and passing off a truncated preview as the full payload. See `PriorTurnToolContext`.
+               *
+               * Emitted as a `user` message rather than a mid-conversation `system` one, matching how
+               * both runtimes already inject the B0-436 preloaded-evidence block.
+               */
+              ...(message.toolContext?.trim()
+                ? [{ role: 'user' as const, content: message.toolContext }]
+                : []),
+            ]
+          : [{ role: 'user', content: message.content }],
       ),
     { role: 'user', content: opts.userMessage },
     // B0-436 — appended AFTER the user message, matching the Responses runtime's round-1 input.

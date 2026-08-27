@@ -54,6 +54,8 @@ When changing API shapes, update **Zod schemas first**, then types/implementatio
 
 - **Generation runtime**: `runProductSupportWorkflow` selects between the OpenAI **Responses** loop (`~/lib/openai/responses-runtime.ts`, default) and the **AI SDK** `streamText` loop (`~/lib/bex/ai-sdk-runtime.ts`) via `BEX_AI_SDK_GENERATION_ENABLED`. Both share the extracted `executeTool` closure and produce `{ assistantText, finalResponseId, toolTrace, responseIds }`. The AI SDK path replays `priorMessages` (stateless) and sets a synthetic `ai_sdk:<runId>` in place of `latest_openai_response_id`.
 
+- **B0-378 — both runtimes stay; Responses is canonical.** The decision record is `src/docs/generation-runtimes.md` — read it before changing either loop. `BEX_AI_SDK_GENERATION_ENABLED` is a **settings-table** flag (B0-638), not an env var; it defaults to `false`, so the Responses loop is the production default. Prior-turn tool context is no longer dropped on the AI SDK path: `buildPriorTurnHistory` (`~/lib/bex/run-chat-turn.ts`) attaches a `toolContext` **summary** (tool names + retrieved document titles, rendered by `formatPriorTurnToolContext`) to each assistant history message, and both runtimes replay it as its own message item. It is a summary, not real tool-call/tool-result parts, because the persisted message only stores `toolSummary` + `sources` — never fabricate call ids or pass a truncated `toolTrace` preview off as a tool payload, and never replay source snippets. Any loop change still has to be made in both files; keep the two history-replay paths byte-identical.
+
 ## RAG / admin products
 
 - Pipeline and status: `~/lib/rag/pipeline.ts`, search: `~/lib/rag/search.ts`, embeddings: `~/lib/rag/embeddings.ts`.

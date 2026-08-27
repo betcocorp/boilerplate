@@ -71,6 +71,103 @@ export function formatPreloadedEvidence(evidence: PreloadedEvidence): string {
   ].join('\n');
 }
 
+/**
+ * B0-378 — one prior conversation turn as it is replayed into a stateless model call.
+ *
+ * Shared by both generation runtimes (`runResponsesWithToolLoop`'s `history` and
+ * `runAiSdkWithToolLoop`'s `history`) so a replayed conversation is assembled identically on either
+ * path — that symmetry is the point of the ticket.
+ *
+ * `toolContext` is the B0-378 fidelity patch: a *summary* of the tool activity that produced the
+ * assistant turn, rendered by `formatPriorTurnToolContext`. It is only ever populated for
+ * `role: 'assistant'` messages, and only by callers that have the persisted turn in hand
+ * (`~/lib/bex/run-chat-turn`). See `PriorTurnToolContext` for why it is a summary and not real
+ * tool-call/tool-result parts.
+ */
+export type ReplayedHistoryMessage = {
+  role: 'user' | 'assistant';
+  content: string;
+  /** B0-378 — summarised tool activity for an assistant turn; see `formatPriorTurnToolContext`. */
+  toolContext?: string;
+};
+
+/**
+ * B0-378 — the prior-turn tool facts that are actually recoverable from a persisted assistant
+ * message (`agent_messages.content`, `assistantMessageContentSchema`).
+ *
+ * What is stored is `toolSummary: [{ name, ok }]` and `sources: [{ title, documentId, … }]` — tool
+ * NAMES and the TITLES of the documents that turn cited. The tool *arguments* and tool *outputs*
+ * are not stored on the message at all: the only copy of them is the truncated
+ * `argumentsPreview` / `outputPreview` on `workflow_steps`' persisted `toolTrace` (1.8k / 4k chars).
+ *
+ * So genuine AI SDK tool-call / tool-result message parts cannot be reconstructed: doing it would
+ * require inventing tool-call ids and presenting a truncated preview as if it were the full tool
+ * payload. A model handed a silently-truncated "tool result" believes it holds the whole document —
+ * which, for label and SDS data, is precisely how an unsupported dilution or contact time gets
+ * asserted. A summary that says plainly what it is cannot cause that; an inaccurate replay can.
+ */
+export type PriorTurnToolContext = {
+  /** Tool names in execution order, deduplicated, exactly as recorded on the persisted turn. */
+  toolNames: string[];
+  /** Titles of the documents that turn retrieved. Titles only — never snippets (see below). */
+  sourceTitles: string[];
+  /** How many further source titles the caller's cap dropped, if any. */
+  omittedSourceCount?: number;
+};
+
+/** B0-378 — stable opening line of a replayed tool-context block; asserted on by both runtimes' tests. */
+export const PRIOR_TURN_TOOL_CONTEXT_HEADER = '## Prior turn tool activity (summary)';
+
+/**
+ * B0-378 — renders `PriorTurnToolContext` as the single message item both runtimes inject after the
+ * assistant turn it belongs to. Shared with `formatPreloadedEvidence` above for the same reason:
+ * the Responses and AI SDK paths must present byte-identical text to the model.
+ *
+ * Deliberately carries NO source snippets, only titles. A snippet is a fragment of a regulated
+ * document lifted out of its context; re-injecting fragments turn after turn is an invitation to
+ * quote a dilution ratio or contact time whose surrounding qualifiers were dropped. Titles let the
+ * model recognise what it already looked at and re-fetch it — which is the actual thing the AI SDK
+ * path was missing — without ever putting an unverifiable number in front of it.
+ *
+ * Returns `null` when there is nothing to say, so callers do not emit an empty block.
+ */
+export function formatPriorTurnToolContext(context: PriorTurnToolContext): string | null {
+  const toolNames = context.toolNames.filter((name) => name.trim().length > 0);
+  const sourceTitles = context.sourceTitles.filter((title) => title.trim().length > 0);
+  if (toolNames.length === 0 && sourceTitles.length === 0) {
+    return null;
+  }
+
+  const omitted = context.omittedSourceCount ?? 0;
+  const lines = [
+    PRIOR_TURN_TOOL_CONTEXT_HEADER,
+    '',
+    'This is a SUMMARY of what ran on the previous assistant turn — not the tool results themselves.',
+    'The tool arguments and tool payloads from that turn are not available in this context.',
+    '',
+  ];
+
+  if (toolNames.length > 0) {
+    lines.push(`Tools called, in order: ${toolNames.join(', ')}`);
+  }
+  if (sourceTitles.length > 0) {
+    lines.push(
+      `Documents retrieved (titles only): ${sourceTitles.map((title) => `"${title}"`).join('; ')}` +
+        (omitted > 0 ? ` (+${omitted} more)` : ''),
+    );
+  }
+
+  lines.push(
+    '',
+    'Do not quote or infer any dilution ratio, oz/gal, mL/L, ppm, percentage, contact time, EPA ' +
+      'registration number, CAS number, or log-reduction value from this summary — it contains ' +
+      'none. If this turn needs a value from one of those documents, call the appropriate tool ' +
+      'again now.',
+  );
+
+  return lines.join('\n');
+}
+
 export type ResponsesRuntimeOptions = {
   client: OpenAI;
   model: string;
@@ -87,8 +184,13 @@ export type ResponsesRuntimeOptions = {
    * `previousResponseId` IS given: the server already remembers that conversation, so replaying it
    * again here would duplicate it inside the chain. Injected into round 1's `input` only, same as
    * `preloadedEvidence` — later rounds send `toolOutputs` instead.
+   *
+   * B0-378 — each message may carry a `toolContext` summary, replayed as its own message item
+   * directly after the assistant turn it describes. On this runtime that only ever applies to the
+   * chain-broken case above: when a real `previousResponseId` IS chained, the server already holds
+   * the prior turns' genuine tool calls and outputs, so nothing is summarised or injected.
    */
-  history?: Array<{ role: 'user' | 'assistant'; content: string }>;
+  history?: ReplayedHistoryMessage[];
   maxToolRounds?: number;
   temperature?: number;
   toolChoice?: ResponseCreateParamsNonStreaming['tool_choice'];
@@ -301,6 +403,10 @@ export const RETRIEVAL_TOOL_NAMES: ReadonlySet<string> = new Set([
   'list_allowed_surfaces',
   'list_disallowed_uses',
   'get_efficacy_data',
+  // B0-529 — knowledge-corpus retrievals: they return document ids, so an unproductive repeat is
+  // the same signal here as for any other retrieval tool.
+  'get_dispenser_asset',
+  'get_floor_asset',
 ]);
 
 /**
@@ -600,13 +706,26 @@ export async function runResponsesWithToolLoop(
         ...(!opts.previousResponseId && opts.history
           ? opts.history
               .filter((message) => message.content.trim().length > 0)
-              .map(
-                (message): ResponseInputItem => ({
+              .flatMap((message): ResponseInputItem[] => [
+                {
                   role: message.role,
                   content: message.content,
                   type: 'message',
-                }),
-              )
+                },
+                // B0-378 — the assistant turn's summarised tool activity, replayed right after it
+                // as its own message item (same shape the B0-436 evidence block uses). Present only
+                // on this chain-broken path: a live `previous_response_id` already carries the real
+                // tool calls server-side, so there is nothing here to restore.
+                ...(message.role === 'assistant' && message.toolContext?.trim()
+                  ? [
+                      {
+                        role: 'user' as const,
+                        content: message.toolContext,
+                        type: 'message' as const,
+                      },
+                    ]
+                  : []),
+              ])
           : []),
         {
           role: 'user',

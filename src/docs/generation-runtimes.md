@@ -1,0 +1,135 @@
+# Generation runtimes — decision record (B0-378)
+
+Status: **accepted, both runtimes stay** — 2026-08-26.
+Scope: the agent loop inside `runProductSupportWorkflow` only. The wider migration is
+[`vercel-ai-sdk-migration-plan.md`](./vercel-ai-sdk-migration-plan.md); this record covers the one
+fork that plan created and the fidelity gap it left behind.
+
+## The two runtimes
+
+| | Responses loop | AI SDK loop |
+| --- | --- | --- |
+| File | `~/lib/openai/responses-runtime.ts` | `~/lib/bex/ai-sdk-runtime.ts` |
+| Entry | `runResponsesWithToolLoop` | `runAiSdkWithToolLoop` |
+| Transport | OpenAI SDK Responses API | Vercel AI SDK `streamText` |
+| Multi-turn memory | server-side, via `previous_response_id` chaining | stateless, history replayed every call |
+| Status | **canonical / production default** | opt-in, off by default |
+
+Both are called from the same fork in
+`~/lib/workflows/product-support/run-product-support-workflow.ts`, share the same `executeTool`
+closure, and return the same `{ assistantText, finalResponseId, toolTrace, responseIds, usage,
+usageByCall }` shape. The AI SDK path has no OpenAI response id, so the workflow substitutes a
+synthetic `ai_sdk:<runId>` where `latest_openai_response_id` would go.
+
+## The flag
+
+`BEX_AI_SDK_GENERATION_ENABLED` — **read from the `settings` table, not `process.env`.**
+
+```ts
+// run-product-support-workflow.ts:1509
+const useAiSdkGeneration = await getBooleanSetting('BEX_AI_SDK_GENERATION_ENABLED', false);
+```
+
+It was migrated out of the environment by B0-638 and is now editable at `/admin/settings`
+(`~/components/admin/settings/SettingsPanel.tsx`), seeded `false` by
+`20260820170000_create_settings_table.sql`. No redeploy is needed to flip it, and nothing reads an
+env var of that name any more. Any doc or ticket still describing it as an env flag is stale.
+
+## Why both stay (for now)
+
+- The Responses loop is the production default and carries a large amount of hard-won behaviour that
+  the AI SDK loop does not yet reproduce: the B0-635 unproductive-retrieval early stop, the B0-381
+  tool-rounds-exhausted forced final answer, the B0-606 temperature-rejection replay, and
+  `previous_response_id` chaining itself (which is also the cheaper path — the stable prefix stays
+  prompt-cached server-side instead of being re-sent).
+- Deleting it is a cutover, not a refactor, and would have to be run and measured, not reasoned
+  about. That is deliberately out of this ticket's scope.
+- The organisation has an in-flight AI SDK migration, so the second runtime is a live destination,
+  not dead code.
+
+The cost of keeping both is real and acknowledged: every change to the agent loop has to be made
+twice, and the two can drift. This record plus the parity tests below is how that is contained.
+
+## Fidelity: what each path carries today
+
+| Prior-turn information | Responses (chained) | Responses (chain broken) | AI SDK |
+| --- | --- | --- | --- |
+| User + assistant text | yes (server-side) | yes, replayed | yes, replayed |
+| Tool call names | yes, verbatim | summary (B0-378) | summary (B0-378) |
+| Tool call **arguments** | yes, verbatim | no | no |
+| Tool **results** (full payloads) | yes, verbatim | no | no |
+| Retrieved document titles | yes, inside the payloads | summary (B0-378) | summary (B0-378) |
+| Turn count before capping | unbounded chain | `BEX_HISTORY_MAX_MESSAGES` (12) | `BEX_HISTORY_MAX_MESSAGES` (12) |
+
+"Chain broken" is the B0-519 case: once a conversation exceeds the history cap, the Responses path
+stops chaining and replays the capped tail as explicit messages, exactly as the AI SDK path always
+does. From that point the two paths are assembled identically — that symmetry is the point.
+
+### Why a summary and not real tool parts
+
+Before B0-378 the AI SDK path replayed user/assistant **text only**, so every prior turn's tool
+activity silently vanished. It is now restored as a compact, self-labelling block
+(`formatPriorTurnToolContext`, in `responses-runtime.ts` alongside `formatPreloadedEvidence` so both
+runtimes emit byte-identical text), injected as its own `user` message directly after the assistant
+turn it describes.
+
+It is a summary because that is all that is recoverable. A persisted assistant message
+(`agent_messages.content`, `assistantMessageContentSchema`) stores:
+
+- `toolSummary: [{ name, ok }]` — tool names and success flags, in execution order
+- `sources: [{ documentId, title, snippet, … }]` — the documents that turn cited
+
+The tool **arguments** and tool **outputs** are not on the message at all. The only surviving copy is
+the truncated `argumentsPreview` (1.8k chars) / `outputPreview` (4k chars) on the `workflow_steps`
+row's persisted `toolTrace`. Reconstructing genuine AI SDK tool-call / tool-result parts from that
+would mean inventing tool-call ids and presenting a silently-truncated preview as the full payload —
+and a model that believes it holds a whole label is exactly how an unsupported dilution ratio or
+contact time gets asserted. An inaccurate replay is worse than a summarised one.
+
+For the same reason the block carries document **titles only, never snippets**: a snippet is a
+fragment of a regulated document with its qualifiers stripped, and re-injecting fragments turn after
+turn invites exactly the quoting this codebase must not do. The block says plainly that it holds no
+dilution, ppm, contact time, EPA/CAS number or log-reduction value, and tells the model to call the
+tool again if it needs one.
+
+### Where the summary is built
+
+`~/lib/bex/run-chat-turn.ts` (`buildPriorTurnHistory` / `buildPriorTurnToolContext`) — the only layer
+that has the persisted rows in hand. It replaces the old text-only `{ role, content }` mapping.
+
+One wire detail: `runProductSupportWorkflow`'s `priorMessages` parameter is still declared as
+`Array<{ role; content }>`, so `toolContext` currently travels as an extra property that
+`capConversationHistory`'s shallow copy preserves. It reaches both runtimes intact and is dropped by
+every other consumer — `priorTurnsForRouting` re-maps to `{ id, role, content }`, so the LLM intent
+classifier and the semantic router see the same clean text as before and **no routing decision
+moves**. Widening that parameter (and `capConversationHistory`'s return type) to
+`ReplayedHistoryMessage[]` is a one-line follow-up that makes the contract explicit.
+
+## Parity coverage
+
+Unit tests, not an `/admin/tests` harness run (the harness was owned by another change at the time):
+
+- `~/lib/bex/ai-sdk-runtime.test.ts` — "prior-turn tool context replay (B0-378)": the constructed
+  message array carries the block right after its assistant turn; no fabricated `tool-call` /
+  `tool-result` parts or `tool`-role messages ever appear; a turn with no tool activity adds nothing.
+- `~/lib/openai/responses-runtime.test.ts` — "prior-turn tool context (B0-378)": a live
+  `previousResponseId` still replays **no** history and no block (chaining unchanged); the
+  chain-broken path emits the identical block in the identical position.
+- `~/lib/bex/run-chat-turn.test.ts` — the summary is derived from persisted content, deduped, capped,
+  snippet-free, and reaches `runProductSupportWorkflow`.
+
+A live A/B parity eval in `/admin/tests` (same question set, both runtimes, compared answers) is the
+follow-up that would let the flag be flipped with evidence rather than judgement.
+
+## Before the Responses loop can be deleted
+
+1. Port the Responses-only loop behaviours: B0-635 unproductive-retrieval withdrawal, B0-381
+   tool-rounds-exhausted forced answer, B0-606 temperature-rejection replay.
+2. Decide what replaces `previous_response_id` chaining — the AI SDK path pays full prompt cost per
+   turn, so the cost/latency delta has to be measured on real conversations, not assumed.
+3. Run the `/admin/tests` parity eval above and hold it green across the golden sets.
+4. Retire `latest_openai_response_id` (or accept the synthetic `ai_sdk:<runId>` marker permanently)
+   and everything downstream that reads it.
+5. Flip `BEX_AI_SDK_GENERATION_ENABLED` on in production, soak, then delete.
+
+Until step 3 exists, "which runtime answers better" is an opinion, and the default stays Responses.

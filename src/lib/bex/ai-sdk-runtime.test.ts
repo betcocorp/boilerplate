@@ -12,6 +12,10 @@ vi.mock('~/lib/bex/ai-sdk-adapters', () => ({
 
 import { runAiSdkWithToolLoop } from '~/lib/bex/ai-sdk-runtime';
 import {
+  formatPriorTurnToolContext,
+  PRIOR_TURN_TOOL_CONTEXT_HEADER,
+} from '~/lib/openai/responses-runtime';
+import {
   isUpstreamTransportError,
   UPSTREAM_RETRY_USER_MESSAGE,
 } from '~/lib/openai/transport-retry';
@@ -533,5 +537,107 @@ describe('runAiSdkWithToolLoop — model vs persisted tool output (B0-437)', () 
     const step2 = JSON.stringify(prompts[1]);
     expect(step2).toContain('SLIM');
     expect(step2).not.toContain('FULL BODY');
+  });
+});
+
+/**
+ * B0-378 — the fidelity gap this ticket closes. Before it, `history` was user/assistant TEXT only,
+ * so every prior turn's tool activity was dropped on this runtime while the Responses
+ * `previous_response_id` chain kept it server-side.
+ */
+describe('runAiSdkWithToolLoop — prior-turn tool context replay (B0-378)', () => {
+  function capturingModel(prompts: unknown[]): MockLanguageModelV3 {
+    return new MockLanguageModelV3({
+      doStream: async ({ prompt }) => {
+        prompts.push(prompt);
+        return {
+          stream: simulateReadableStream({
+            chunks: [
+              { type: 'text-start', id: '0' },
+              { type: 'text-delta', id: '0', delta: 'ok' },
+              { type: 'text-end', id: '0' },
+              {
+                type: 'finish',
+                finishReason: 'stop',
+                usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+              },
+            ] as const,
+          }),
+        };
+      },
+    });
+  }
+
+  const toolContext = formatPriorTurnToolContext({
+    toolNames: ['search_product_docs', 'get_efficacy_data'],
+    sourceTitles: ['pH7Q Dual Label (US)'],
+  });
+
+  it('replays an assistant turn\'s tool context as its own message, immediately after that turn', async () => {
+    const prompts: unknown[] = [];
+    modelRef.current = capturingModel(prompts);
+
+    await runAiSdkWithToolLoop({
+      instructions: 'You are Bex.',
+      history: [
+        { role: 'user', content: 'Is pH7Q effective against norovirus?' },
+        { role: 'assistant', content: 'Yes — see the label.', toolContext: toolContext! },
+      ],
+      userMessage: 'And what dilution did that use?',
+      executeTool: noopExecuteTool,
+    });
+
+    const messages = prompts[0] as Array<{ role: string; content: unknown }>;
+    const nonSystem = messages.filter((message) => message.role !== 'system');
+
+    expect(nonSystem.map((message) => message.role)).toEqual([
+      'user', // prior user turn
+      'assistant', // prior assistant turn
+      'user', // B0-378 — its tool context, replayed right after it
+      'user', // this turn's message
+    ]);
+    const replayed = JSON.stringify(nonSystem[2]?.content);
+    expect(replayed).toContain(PRIOR_TURN_TOOL_CONTEXT_HEADER);
+    expect(replayed).toContain('search_product_docs');
+    expect(replayed).toContain('get_efficacy_data');
+    expect(replayed).toContain('pH7Q Dual Label (US)');
+    expect(JSON.stringify(nonSystem.at(-1)?.content)).toContain('And what dilution did that use?');
+  });
+
+  it('never fabricates tool-call or tool-result parts for a replayed turn', async () => {
+    const prompts: unknown[] = [];
+    modelRef.current = capturingModel(prompts);
+
+    await runAiSdkWithToolLoop({
+      instructions: 'You are Bex.',
+      history: [
+        { role: 'assistant', content: 'Earlier answer.', toolContext: toolContext! },
+      ],
+      userMessage: 'follow-up',
+      executeTool: noopExecuteTool,
+    });
+
+    const messages = prompts[0] as Array<{ role: string; content: unknown }>;
+    // Replaying invented tool parts (with invented call ids, and a truncated preview posing as the
+    // full payload) would be worse than summarising: the model would believe it holds the evidence.
+    expect(JSON.stringify(messages)).not.toContain('"tool-call"');
+    expect(JSON.stringify(messages)).not.toContain('"tool-result"');
+    expect(messages.some((message) => message.role === 'tool')).toBe(false);
+  });
+
+  it('emits nothing extra for a prior turn that recorded no tool activity', async () => {
+    const prompts: unknown[] = [];
+    modelRef.current = capturingModel(prompts);
+
+    await runAiSdkWithToolLoop({
+      instructions: 'You are Bex.',
+      history: [{ role: 'assistant', content: 'Earlier answer.' }],
+      userMessage: 'follow-up',
+      executeTool: noopExecuteTool,
+    });
+
+    const messages = prompts[0] as Array<{ role: string; content: unknown }>;
+    const nonSystem = messages.filter((message) => message.role !== 'system');
+    expect(nonSystem.map((message) => message.role)).toEqual(['assistant', 'user']);
   });
 });
