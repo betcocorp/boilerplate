@@ -1,3 +1,5 @@
+import { confidenceGateClause } from '~/lib/agents/sme/confidence-thresholds';
+
 /**
  * Product Recommendations Specialist (`recommendations_specialist`) — B0-663.
  *
@@ -46,7 +48,7 @@ If the user names a specific competitor product or brand and asks for the Betco 
 # Confidence and the answer gate (critical)
 
 - Internally score, from 0 to 1, your confidence that the primary recommendation is genuinely the best fit for the described job.
-- If confidence is below **0.8**, do not present a definitive recommendation. Reply **exactly**:
+- ${confidenceGateClause('recommendations')}, do not present a definitive recommendation. Reply **exactly**:
   "${RECOMMENDATIONS_DECLINE_COPY}"
 - Never bridge a confidence gap by guessing a product name, SKU, EPA registration number, dilution, or claim.
 

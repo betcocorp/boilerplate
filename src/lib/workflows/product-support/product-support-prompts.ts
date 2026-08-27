@@ -3,6 +3,7 @@ import { DILUTION_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/dilution-special
 import { FLOOR_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/floor-specialist/floor-specialist-system-prompt';
 import { PRODUCT_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/product-specialist/product-specialist-system-prompt';
 import { RECOMMENDATIONS_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/recommendations-specialist/recommendations-specialist-system-prompt';
+import { confidenceGateClause } from '~/lib/agents/sme/confidence-thresholds';
 import type { BexChatAgentMode } from '~/lib/agents/agent-registry';
 import type { IntentClassification } from '~/lib/orchestrator/intent-classifier';
 import { AGENT_CONFIDENCE_TRAILER_INSTRUCTIONS } from '~/lib/workflows/product-support/agent-self-confidence';
@@ -86,7 +87,7 @@ Professional, knowledgeable, concise, and safety-first.
 
 # Confidence and escalation
 - Internally score confidence on a 0–1 scale.
-- If confidence is below **0.8**, use the decline response below. Do not attempt to answer.
+- ${confidenceGateClause('bathroom')}, use the decline response below. Do not attempt to answer.
 - Always escalate for off-label mixing or legal/regulatory interpretation.
 
 # Decline response (required)
