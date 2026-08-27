@@ -4,6 +4,7 @@ import { ChevronRight, ChevronsDownUp, ChevronsUpDown } from 'lucide-react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { type ReactNode, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 
+import { CaseTraceDownloadButton } from '~/components/admin/tests/report/CaseTraceDownloadButton';
 import type {
   ReportCase,
   ReportCaseStatus,
@@ -420,10 +421,12 @@ function CaseRow({
   c,
   open,
   onToggle,
+  canDownloadTrace,
 }: {
   c: ReportCase;
   open: boolean;
   onToggle: (caseId: string, open: boolean) => void;
+  canDownloadTrace: boolean;
 }) {
   const evaluated = c.evaluated;
 
@@ -467,6 +470,9 @@ function CaseRow({
             </span>
           )}
         </span>
+        {canDownloadTrace ? (
+          <CaseTraceDownloadButton caseId={c.id} workflowRunId={c.workflowRunId} />
+        ) : null}
       </summary>
 
       <div className="flex flex-col gap-4 px-3 pt-1 pb-6">
@@ -581,6 +587,12 @@ export type ReportCaseLedgerProps = {
   /** `ReportDataReady.cases`, already ordered Tier 1 → Tier N → "Unspecified". Not re-sorted. */
   cases: readonly ReportCase[];
   metrics: ReportCaseLedgerMetrics;
+  /**
+   * B0-707 — whether to offer the per-row trace download. Resolved on the server from
+   * `navigation.sidebar.observability`, the permission the export route itself enforces, so a user
+   * who would only get a 403 is never shown the button.
+   */
+  canDownloadTrace: boolean;
   className?: string;
 };
 
@@ -595,7 +607,12 @@ function readLocationHash(): string | null {
   }
 }
 
-function ReportCaseLedgerContent({ cases, metrics, className }: ReportCaseLedgerProps) {
+function ReportCaseLedgerContent({
+  cases,
+  metrics,
+  canDownloadTrace,
+  className,
+}: ReportCaseLedgerProps) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -741,6 +758,7 @@ function ReportCaseLedgerContent({ cases, metrics, className }: ReportCaseLedger
                 {group.cases.map((c) => (
                   <CaseRow
                     c={c}
+                    canDownloadTrace={canDownloadTrace}
                     key={c.id}
                     onToggle={handleToggle}
                     open={openIds.has(c.id)}

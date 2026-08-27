@@ -203,6 +203,11 @@ type RunReportViewProps = {
   initialError: string | null;
   initialGeneratedAt: string | null;
   isRunCompleted: boolean;
+  /**
+   * B0-707 — whether the viewer may download a case's workflow-run trace. Resolved server-side
+   * from `navigation.sidebar.observability`, the permission the export route enforces.
+   */
+  canDownloadTrace: boolean;
 };
 
 export function RunReportView({
@@ -216,6 +221,7 @@ export function RunReportView({
   initialError,
   initialGeneratedAt,
   isRunCompleted,
+  canDownloadTrace,
 }: RunReportViewProps) {
   const [status, setStatus] = useState<ReportStatus>(initialStatus);
   const [totalCases, setTotalCases] = useState(initialTotalCases);
@@ -628,6 +634,7 @@ export function RunReportView({
 
           <div data-report-section>
             <ReportCaseLedger
+              canDownloadTrace={canDownloadTrace}
               cases={reportData.cases}
               metrics={reportData.metrics}
             />
