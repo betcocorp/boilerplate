@@ -1000,6 +1000,7 @@ export type Database = {
           expected_result_type: string | null
           expected_should_answer: boolean | null
           expected_sources: string | null
+          expected_tool: string | null
           id: string
           ideal_response: string | null
           input_payload: Json
@@ -1023,6 +1024,7 @@ export type Database = {
           expected_result_type?: string | null
           expected_should_answer?: boolean | null
           expected_sources?: string | null
+          expected_tool?: string | null
           id?: string
           ideal_response?: string | null
           input_payload?: Json
@@ -1046,6 +1048,7 @@ export type Database = {
           expected_result_type?: string | null
           expected_should_answer?: boolean | null
           expected_sources?: string | null
+          expected_tool?: string | null
           id?: string
           ideal_response?: string | null
           input_payload?: Json

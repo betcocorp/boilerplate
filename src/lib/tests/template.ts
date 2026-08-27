@@ -127,7 +127,7 @@ export const TEST_TEMPLATE_COLUMNS: TestTemplateColumn[] = [
     example:
       'Function tool this question should route to, e.g. get_efficacy_data (see ~/lib/tools/tool-schemas.ts PRODUCT_TOOL_NAMES)',
     help:
-      "Which of the 14 product-support function tools (search_product_docs, get_efficacy_data, lookup_cross_reference, etc.) this question is expected to call. Not a typed column — stored under metadata.expected_tool — and scored by the run detail page's Tool routing panel (B0-383). Leave blank for no routing expectation.",
+      "Which of the 14 product-support function tools (search_product_docs, get_efficacy_data, lookup_cross_reference, etc.) this question is expected to call, scored by the run detail page's Tool routing panel (B0-383). Leave blank for no routing expectation.",
   },
 ];
 

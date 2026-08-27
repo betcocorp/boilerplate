@@ -31,6 +31,18 @@ describe('parseTestCsvContent — golden test set format', () => {
     });
   });
 
+  it('reads expected_tool into a typed field, not the metadata catch-all', () => {
+    const csv = [
+      'question,expected_tool',
+      '"What is the dilution for pH7Q?",get_efficacy_data',
+    ].join('\n');
+
+    const [row] = parseTestCsvContent(csv);
+
+    expect(row.expectedTool).toBe('get_efficacy_data');
+    expect(row.metadata).not.toHaveProperty('expected_tool');
+  });
+
   it('treats blank or unrecognized should_cite as no expectation', () => {
     const csv = [
       'question,should_cite',

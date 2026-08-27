@@ -92,6 +92,7 @@ const TYPED_CSV_COLUMNS = new Set([
   'expected_criteria',
   'expected_sources',
   'should_cite',
+  'expected_tool',
 ]);
 
 /** CSV columns routed into `input_payload` rather than `metadata`. */
@@ -192,6 +193,7 @@ export function parseTestCsvContent(content: string): ParsedCsvRow[] {
       const expectedCriteria = parseExpectedCriteriaCell(asTrimmedString(record.expected_criteria));
       const expectedSources = asTrimmedString(record.expected_sources) || null;
       const shouldCite = parseBooleanCell(asTrimmedString(record.should_cite));
+      const expectedTool = asTrimmedString(record.expected_tool) || null;
 
       const inputPayload: Record<string, string> = {};
       const metadata: Record<string, string> = {};
@@ -231,6 +233,7 @@ export function parseTestCsvContent(content: string): ParsedCsvRow[] {
         expectedCriteria,
         expectedSources,
         shouldCite,
+        expectedTool,
         inputPayload,
         metadata,
       } satisfies ParsedCsvRow;

@@ -227,6 +227,7 @@ export async function uploadTestCsvAction(formData: FormData) {
       expected_criteria: row.expectedCriteria,
       expected_sources: row.expectedSources,
       should_cite: row.shouldCite,
+      expected_tool: row.expectedTool,
       input_payload: row.inputPayload,
       metadata: row.metadata,
     }));

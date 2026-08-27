@@ -92,6 +92,7 @@ export type ParsedCsvRow = {
   expectedCriteria: ExpectedCriterion[];
   expectedSources: string | null;
   shouldCite: boolean | null;
+  expectedTool: string | null;
   inputPayload: Record<string, string>;
   metadata: Record<string, string>;
 };

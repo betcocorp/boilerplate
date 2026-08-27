@@ -326,7 +326,7 @@ export default async function AdminTestRunDetailsPage({
     agentStepOutputs.map((row) => [row.workflow_run_id, parseAgentStepToolTrace(row.output)] as const),
   );
   const expectedToolByTestItemId = new Map(
-    testItems.map((item) => [item.id, extractExpectedTool(item.metadata)] as const),
+    testItems.map((item) => [item.id, extractExpectedTool(item.expected_tool)] as const),
   );
   const toolRoutingReport = computeToolRoutingReport(
     resultItems.map((row) => {
