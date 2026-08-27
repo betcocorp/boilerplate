@@ -1,0 +1,94 @@
+import { describe, expect, it } from 'vitest';
+
+import type { TestItemRecord } from '~/lib/tests/types';
+
+import { hydrateLegacyPassScores, pendingPasses } from './orchestrator';
+import { emptyReportState, type CaseScore, type ReportState } from './schemas';
+
+/**
+ * B0-719 — the resumption unit. `generateReport` itself needs a database and a grading model, so
+ * what is pinned here is the part that decides *what still has to be paid for*: which (case, pass)
+ * grading calls a resumed report re-runs, and which it must not.
+ */
+
+const SCORE: CaseScore = {
+  unableToEvaluate: false,
+  uteReason: null,
+  accuracy: 80,
+  completeness: 80,
+  relevance: 80,
+  clarity: 80,
+  explanation: '',
+  missed: '',
+  incorrect: '',
+  improvement: '',
+};
+
+function item(id: string): TestItemRecord {
+  return { id } as TestItemRecord;
+}
+
+const ITEMS = [item('a'), item('b'), item('c')];
+
+function state(passes: number, casePassScores: Record<string, CaseScore[]> = {}): ReportState {
+  return { ...emptyReportState('gpt-4.1', ITEMS.length, passes), casePassScores };
+}
+
+describe('pendingPasses (B0-719)', () => {
+  it('owes one grading call per case at a single pass', () => {
+    expect(pendingPasses(ITEMS, state(1))).toEqual([
+      { item: ITEMS[0], passIndex: 0 },
+      { item: ITEMS[1], passIndex: 0 },
+      { item: ITEMS[2], passIndex: 0 },
+    ]);
+  });
+
+  it('owes cases × passes calls, pass-major, on a fresh multi-pass report', () => {
+    const pending = pendingPasses(ITEMS, state(3));
+    expect(pending).toHaveLength(9);
+    // Pass-major: every case finishes pass 1 before any case starts pass 2.
+    expect(pending.slice(0, 3).every((p) => p.passIndex === 0)).toBe(true);
+    expect(pending.slice(3, 6).every((p) => p.passIndex === 1)).toBe(true);
+  });
+
+  it('re-runs only the incomplete pass after an interruption', () => {
+    // Pass 1 finished for every case; pass 2 got as far as case "a" before the crash.
+    const interrupted = state(3, {
+      a: [SCORE, SCORE],
+      b: [SCORE],
+      c: [SCORE],
+    });
+
+    expect(pendingPasses(ITEMS, interrupted)).toEqual([
+      { item: ITEMS[1], passIndex: 1 },
+      { item: ITEMS[2], passIndex: 1 },
+      { item: ITEMS[0], passIndex: 2 },
+      { item: ITEMS[1], passIndex: 2 },
+      { item: ITEMS[2], passIndex: 2 },
+    ]);
+  });
+
+  it('owes nothing once every pass is in', () => {
+    const done = state(2, { a: [SCORE, SCORE], b: [SCORE, SCORE], c: [SCORE, SCORE] });
+    expect(pendingPasses(ITEMS, done)).toEqual([]);
+  });
+});
+
+describe('hydrateLegacyPassScores (B0-719)', () => {
+  it('seeds pass 1 from a report graded before per-pass scores existed', () => {
+    const legacy = state(1);
+    legacy.caseScores = { a: SCORE, b: SCORE };
+    hydrateLegacyPassScores(legacy);
+
+    expect(legacy.casePassScores).toEqual({ a: [SCORE], b: [SCORE] });
+    // And so the resume owes only the case that was never scored — not all three again.
+    expect(pendingPasses(ITEMS, legacy)).toEqual([{ item: ITEMS[2], passIndex: 0 }]);
+  });
+
+  it('leaves a report that already has per-pass scores alone', () => {
+    const current = state(2, { a: [SCORE] });
+    current.caseScores = { b: SCORE };
+    hydrateLegacyPassScores(current);
+    expect(current.casePassScores).toEqual({ a: [SCORE] });
+  });
+});

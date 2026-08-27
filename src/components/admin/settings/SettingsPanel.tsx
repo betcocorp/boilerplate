@@ -64,6 +64,10 @@ const STRING_SETTINGS = [
   'ALERT_GOLDEN_PASS_RATE_DROP_WARNING',
   'ALERT_GOLDEN_PASS_RATE_DROP_CRITICAL',
   'ALERT_GOLDEN_MIN_GRADED_ITEMS',
+  // B0-719/B0-720 — multi-pass report grading. Numeric; 1 pass is the shipped default, and
+  // raising it multiplies grading cost and wall clock by that many passes.
+  'REPORT_GRADING_PASSES',
+  'REPORT_CONSISTENCY_SPREAD_THRESHOLD',
 ];
 
 export function SettingsPanel() {

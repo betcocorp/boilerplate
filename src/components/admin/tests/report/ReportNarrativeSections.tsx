@@ -2,7 +2,17 @@ import { ChevronRight, TriangleAlert } from 'lucide-react';
 import type { ReactNode } from 'react';
 
 import { formatConceptList } from '~/lib/tests/report/case-concepts';
-import type { ReportConceptRollup, ReportMetricsData } from '~/lib/tests/report/data-schemas';
+import {
+  CONCEPT_DISAGREEMENT_LABELS,
+  VARIANCE_CAUSE_LABELS,
+} from '~/lib/tests/report/consolidate';
+import type {
+  ReportConceptDisagreement,
+  ReportConceptRollup,
+  ReportConsistency,
+  ReportMetricsData,
+  ReportVarianceCause,
+} from '~/lib/tests/report/data-schemas';
 import {
   GRADE_BANDS,
   STATUS_BANDS,
@@ -293,6 +303,145 @@ function ConceptCoverageRollup({ concepts }: { concepts: ReportConceptRollup }) 
   );
 }
 
+/**
+ * B0-721 — one split concept judgment, worded from the same label maps the Markdown reads, so the
+ * two renderers can never name the same disagreement differently. The phrase is regulated free
+ * text: quoted verbatim, never re-worded.
+ */
+function conceptDisagreementText(d: ReportConceptDisagreement): string {
+  const label = CONCEPT_DISAGREEMENT_LABELS[d.kind];
+  const subject = d.concept ? `${label} ${formatConceptList([d.concept])}` : label;
+  return `${subject} (${d.votesFor} of ${d.voters} passes)`;
+}
+
+/** The causes of one flag, in the order `consolidateCasePasses` recorded them. */
+function varianceCauseText(
+  causes: readonly ReportVarianceCause[],
+  disagreements: readonly ReportConceptDisagreement[],
+): string {
+  return causes
+    .map((cause) =>
+      cause === 'concept' && disagreements.length > 0
+        ? `${VARIANCE_CAUSE_LABELS.concept}: ${disagreements.map(conceptDisagreementText).join('; ')}`
+        : VARIANCE_CAUSE_LABELS[cause],
+    )
+    .join(' · ');
+}
+
+/** `58 / 62 / 60`, with a pass that could not evaluate shown as `n/a`, never as a zero. */
+export function passOverallsText(overalls: ReadonlyArray<number | null>): string {
+  return overalls.map((overall) => (overall == null ? 'n/a' : String(overall))).join(' / ');
+}
+
+/**
+ * B0-721 — the grading-consistency summary and the human-review queue.
+ *
+ * Every number is read straight off `metrics.consistency`; nothing here counts cases or re-judges
+ * a disagreement. The block is absent entirely when `metrics.consistency` is null — a single-pass
+ * run has nothing to compare, and "0 flags" would read as a clean bill of health for a
+ * measurement that was never taken.
+ */
+function GradingConsistencyRollup({ consistency }: { consistency: ReportConsistency }) {
+  const con = consistency;
+  const causeRows: Array<{ label: string; count: number; tone?: string }> = [
+    { label: VARIANCE_CAUSE_LABELS.band_split, count: con.byCause.band_split },
+    {
+      label: `${VARIANCE_CAUSE_LABELS.score_range} (≥ ${con.spreadThreshold} points)`,
+      count: con.byCause.score_range,
+    },
+    { label: VARIANCE_CAUSE_LABELS.evaluability, count: con.byCause.evaluability },
+  ];
+
+  return (
+    <div className="mt-8 rounded-2xl border border-slate-200 bg-slate-50 p-5">
+      <h3 className="text-sm font-semibold text-slate-900">Grading consistency</h3>
+      <p className="mt-1 text-xs text-slate-600">
+        Every case was graded {con.passes} times, independently — no pass saw another pass&apos;s
+        scores or narrative. The sub-scores in this report are the median of those passes; this is
+        how much they disagreed. A flagged case needs a human to settle the grade; it is not a
+        failure.
+      </p>
+
+      <dl className="mt-4 grid gap-3 sm:grid-cols-2">
+        <div className="rounded-xl bg-white p-3 ring-1 ring-slate-200">
+          <dt className="text-[11px] font-semibold tracking-[0.14em] text-slate-500 uppercase">
+            Flagged for human review
+          </dt>
+          <dd className="mt-1 text-sm text-slate-900 tabular-nums">
+            <span className="font-semibold text-amber-700">{con.flagged}</span> of{' '}
+            {con.casesConsolidated} cases graded more than once
+          </dd>
+        </div>
+        <div className="rounded-xl bg-white p-3 ring-1 ring-slate-200">
+          <dt className="text-[11px] font-semibold tracking-[0.14em] text-slate-500 uppercase">
+            Widest score range
+          </dt>
+          <dd className="mt-1 text-sm text-slate-900 tabular-nums">{con.maxRange ?? '—'}</dd>
+        </div>
+      </dl>
+
+      <ul className="mt-4 space-y-1.5 text-sm text-slate-700">
+        {causeRows.map((row) => (
+          <li key={row.label}>
+            <span className="font-medium tabular-nums">{row.count}</span> — {row.label}
+          </li>
+        ))}
+        {/* Called out separately from the other three: a split on a concept is a split on a
+            regulated must-have, not on a number. */}
+        <li>
+          <span className="font-medium text-rose-700 tabular-nums">
+            {con.conceptDisagreementCases}
+          </span>{' '}
+          — {VARIANCE_CAUSE_LABELS.concept}, across{' '}
+          <span className="font-medium tabular-nums">{con.conceptDisagreements}</span> individual
+          concept {con.conceptDisagreements === 1 ? 'judgment' : 'judgments'}
+        </li>
+      </ul>
+
+      {con.queue.length > 0 ? (
+        <div className="mt-5">
+          <SectionLabel>Human-review queue</SectionLabel>
+          <ul className="mt-2 space-y-2">
+            {con.queue.map((entry) => (
+              <li className="rounded-xl bg-white p-3 ring-1 ring-slate-200" key={entry.id}>
+                <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                  <a
+                    className="font-mono text-[0.6875rem] text-sky-700 hover:underline"
+                    href={`#case-${entry.id}`}
+                  >
+                    {entry.id}
+                  </a>
+                  <span className="text-xs text-slate-500 tabular-nums">
+                    passes {passOverallsText(entry.passOveralls)}
+                    {entry.range == null ? '' : ` · range ${entry.range}`}
+                    {entry.unableToEvaluate ? ' · Unable to Evaluate' : ''}
+                  </span>
+                </div>
+                <p className="mt-1 truncate text-sm text-slate-800" title={entry.question}>
+                  {entry.question}
+                </p>
+                <p className="mt-1 break-words whitespace-pre-wrap text-xs text-amber-800">
+                  {varianceCauseText(entry.causes, entry.conceptDisagreements)}
+                </p>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {con.timingDisagreementCases > 0 ? (
+        <p className="mt-4 text-xs text-slate-600">
+          <span className="font-medium">Data quality (not a grading flag):</span>{' '}
+          {con.timingDisagreementCases}{' '}
+          {con.timingDisagreementCases === 1 ? 'case' : 'cases'} recorded different timings across
+          passes. A timing is a measurement, not a judgment, so it is reported exactly as recorded
+          and never averaged. The affected cases are named in the data-quality notes.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 export type ReportAggregateFindingsProps = {
   synthesis: ReportSynthesis;
   metrics: ReportMetricsData;
@@ -347,6 +496,10 @@ export function ReportAggregateFindings({
       </div>
 
       {metrics.concepts ? <ConceptCoverageRollup concepts={metrics.concepts} /> : null}
+
+      {metrics.consistency ? (
+        <GradingConsistencyRollup consistency={metrics.consistency} />
+      ) : null}
 
       {metrics.warnings.length > 0 ? (
         <div className="mt-8 rounded-2xl border border-amber-300 bg-amber-50 p-5">

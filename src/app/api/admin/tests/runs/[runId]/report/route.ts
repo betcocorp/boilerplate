@@ -9,7 +9,11 @@ import { authOptions } from '~/lib/auth';
 import { gateRoute } from '~/lib/permissions/route-gate';
 import { PERMISSIONS } from '~/lib/permissions/constants';
 import { generateReport } from '~/lib/tests/report/orchestrator';
-import { parseReportState } from '~/lib/tests/report/schemas';
+import {
+  completedPassCount,
+  parseReportState,
+  totalPassCount,
+} from '~/lib/tests/report/schemas';
 import { getTestResultById } from '~/lib/tests/repository';
 import { isCompletedRunStatus } from '~/lib/tests/types';
 
@@ -21,6 +25,11 @@ function statusPayload(runId: string, run: { report_state: unknown; report_gener
     status: state?.status ?? 'idle',
     totalCases: state?.totalCases ?? 0,
     completedCases: state?.completedCases ?? 0,
+    // B0-719 — progress is counted in (case, pass) units so a multi-pass report's bar advances
+    // through every pass instead of sitting at 33% until the last one starts.
+    passes: state?.passes ?? 1,
+    completedPasses: state ? completedPassCount(state) : 0,
+    totalPasses: state ? totalPassCount(state) : 0,
     generatedAt: run.report_generated_at,
     error: state?.error ?? null,
   };
@@ -85,6 +94,9 @@ export async function POST(
     status: state.status,
     totalCases: state.totalCases,
     completedCases: state.completedCases,
+    passes: state.passes,
+    completedPasses: completedPassCount(state),
+    totalPasses: totalPassCount(state),
     error: state.error,
   });
 }

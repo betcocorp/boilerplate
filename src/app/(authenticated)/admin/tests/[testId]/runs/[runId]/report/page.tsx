@@ -8,7 +8,7 @@ import {
   getCurrentUserPermissions,
   hasPermission,
 } from '~/lib/permissions/permissions-server';
-import { parseReportState } from '~/lib/tests/report/schemas';
+import { completedPassCount, parseReportState } from '~/lib/tests/report/schemas';
 import { getTestById, getTestResultById } from '~/lib/tests/repository';
 import { isCompletedRunStatus } from '~/lib/tests/types';
 
@@ -56,6 +56,8 @@ export default async function AdminTestRunReportPage({ params }: PageProps) {
           canDownloadTrace={canDownloadTrace}
           fileBase={`${test.name}-run-${result.id}-report`}
           initialCompletedCases={state?.completedCases ?? 0}
+          initialCompletedPasses={state ? completedPassCount(state) : 0}
+          initialPasses={state?.passes ?? 1}
           initialError={state?.error ?? null}
           initialGeneratedAt={result.report_generated_at}
           initialStatus={state?.status ?? 'idle'}

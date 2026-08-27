@@ -7,10 +7,15 @@ import { type ReactNode, Suspense, useCallback, useEffect, useMemo, useState } f
 import { CaseTraceDownloadButton } from '~/components/admin/tests/report/CaseTraceDownloadButton';
 import {
   CONCEPT_MARKER_LEGEND,
-  conceptMarkers,
+  caseMarkers,
   formatConceptCoverage,
   formatConceptList,
+  REVIEW_MARKER_LEGEND,
 } from '~/lib/tests/report/case-concepts';
+import {
+  CONCEPT_DISAGREEMENT_LABELS,
+  VARIANCE_CAUSE_LABELS,
+} from '~/lib/tests/report/consolidate';
 import type {
   ReportCase,
   ReportCaseConcepts,
@@ -566,6 +571,64 @@ function ConceptCoverageCard({ c }: { c: ReportCase }) {
   );
 }
 
+/**
+ * B0-721 — the per-pass spread behind this case's review flag. Detailed ledger only: the row badge
+ * carries the mark, this carries the evidence a reviewer needs to settle the grade.
+ *
+ * Nothing here is recomputed — every number is read off `case.variance`, which
+ * `consolidateCasePasses` produced once.
+ */
+function GradingConsistencyCard({ c }: { c: ReportCase }) {
+  const variance = c.variance;
+  if (!variance) return null;
+
+  return (
+    <div
+      className={cn(
+        'rounded-2xl border p-4',
+        variance.flagged ? 'border-amber-300 bg-amber-50' : 'border-slate-200 bg-white',
+      )}
+    >
+      <FieldLabel>Grading consistency</FieldLabel>
+      <p className="mt-2 text-sm text-slate-900 tabular-nums">
+        {variance.passes} independent passes · overalls{' '}
+        {variance.passOveralls
+          .map((overall) => (overall == null ? 'n/a' : String(overall)))
+          .join(' / ')}
+        {variance.range == null ? '' : ` · range ${variance.range}`}
+      </p>
+      {variance.flagged ? (
+        <ul className="mt-2 space-y-1 text-sm text-amber-900">
+          {variance.causes.map((cause) => (
+            <li className="break-words whitespace-pre-wrap" key={cause}>
+              {cause === 'concept' && variance.conceptDisagreements.length > 0
+                ? `${VARIANCE_CAUSE_LABELS.concept}: ${variance.conceptDisagreements
+                    .map((d) => {
+                      const label = CONCEPT_DISAGREEMENT_LABELS[d.kind];
+                      // Concept phrases are regulated free text — quoted verbatim.
+                      const subject = d.concept ? `${label} ${formatConceptList([d.concept])}` : label;
+                      return `${subject} (${d.votesFor} of ${d.voters} passes)`;
+                    })
+                    .join('; ')}`
+                : VARIANCE_CAUSE_LABELS[cause]}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-2 text-sm text-slate-600">
+          The passes agreed — no human review needed on consistency grounds.
+        </p>
+      )}
+      {variance.timingWarnings.length > 0 ? (
+        <p className="mt-2 text-xs text-slate-600">
+          <span className="font-medium">Data quality (not a grading flag):</span>{' '}
+          {variance.timingWarnings.join(' ')}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function NarrativeCard({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4">
@@ -621,12 +684,21 @@ function CaseRow({
               )}
             >
               {evaluated.status}
-              {/* B0-713 — † gate-constrained, ‡ automatic Pass; legend above the groups. */}
-              {conceptMarkers(evaluated)} · {evaluated.grade}
+              {/* B0-713 — † gate-constrained, ‡ automatic Pass. B0-721 adds ⚑ flagged for human
+                  review, alongside them rather than instead of them; legend above the groups. */}
+              {caseMarkers({ ...evaluated, reviewFlagged: c.variance?.flagged ?? false })} ·{' '}
+              {evaluated.grade}
             </span>
           ) : (
             <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600 ring-1 ring-slate-200 ring-inset">
+              {/* An Unable-to-Evaluate case can still be flagged: the passes may have disagreed
+                  about whether it could be judged at all. */}
               Unable to Evaluate
+              {caseMarkers({
+                ratingConstrained: false,
+                autoPassTriggered: false,
+                reviewFlagged: c.variance?.flagged ?? false,
+              })}
             </span>
           )}
         </span>
@@ -684,6 +756,9 @@ function CaseRow({
 
         {/* --- Concept coverage (only when this case has concept data) --- */}
         <ConceptCoverageCard c={c} />
+
+        {/* --- Grading consistency (only when this case was graded more than once) --- */}
+        <GradingConsistencyCard c={c} />
 
         {/* --- Expected vs actual --- */}
         <div className="grid gap-4 lg:grid-cols-2">
@@ -840,11 +915,15 @@ function ReportCaseLedgerContent({
   const visibleEvaluated = visibleGroups.flatMap((group) =>
     group.cases.map((c) => c.evaluated).filter((e) => e != null),
   );
+  // B0-721 — the review mark is legended on the same terms: only when it is actually on screen,
+  // and read off every visible case (an Unable-to-Evaluate one can carry it too).
+  const visibleCases = visibleGroups.flatMap((group) => group.cases);
   const legendLines = [
     visibleEvaluated.some((e) => e.ratingConstrained)
       ? CONCEPT_MARKER_LEGEND.ratingConstrained
       : null,
     visibleEvaluated.some((e) => e.autoPassTriggered) ? CONCEPT_MARKER_LEGEND.autoPass : null,
+    visibleCases.some((c) => c.variance?.flagged) ? REVIEW_MARKER_LEGEND : null,
   ].filter((line) => line != null);
   const bulkAction = bulkDisclosureAction(openIds, visibleCaseIds);
   const toggleAllVisible = () =>

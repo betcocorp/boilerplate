@@ -2,13 +2,22 @@ import type { TestRecord, TestResultRecord } from '~/lib/tests/types';
 
 import {
   CONCEPT_MARKER_LEGEND,
-  conceptMarkers,
+  caseMarkers,
   formatConceptCoverage,
   formatConceptList,
+  REVIEW_MARKER_LEGEND,
 } from './case-concepts';
+import {
+  CONCEPT_DISAGREEMENT_LABELS,
+  VARIANCE_CAUSE_LABELS,
+  type CaseGradingVariance,
+  type ConceptDisagreement,
+  type VarianceCause,
+} from './consolidate';
 import { normalizeAgentMarkdownLists } from './markdown-normalize';
 import type {
   CaseSpeed,
+  ConsistencyRollup,
   EvaluatedCase,
   RateBlock,
   ReportMetrics,
@@ -50,6 +59,8 @@ export type CaseRenderDetail = {
   score: CaseScore;
   /** B0-717 — null when this case recorded no timing at all. Read, never re-derived. */
   speed: CaseSpeed | null;
+  /** B0-720 — null for a single-pass case, which is every case of a single-pass run. */
+  variance: CaseGradingVariance | null;
   harness: CaseHarnessAside | null;
 };
 
@@ -148,6 +159,64 @@ function caseSpeedLine(speed: CaseSpeed): string {
 /** One row of the per-metric speed table. `p90Label` already carries the `n/a` sentinel. */
 function speedMetricRow(aggregate: SpeedMetricAggregate, unit: string): string {
   return `| ${aggregate.label} | ${aggregate.n} | ${aggregate.avgSeconds} ${unit} | ${aggregate.medianSeconds} ${unit} | ${aggregate.p90Label} | ${aggregate.minSeconds}–${aggregate.maxSeconds} ${unit} | ${aggregate.avgScore} | ${aggregate.bands.good} / ${aggregate.bands.acceptable} / ${aggregate.bands.slow} |`;
+}
+
+/**
+ * B0-721 — one split concept judgment, named the way both renderers name it. Phrases are quoted
+ * verbatim: they are regulated free text and carry dilution ratios, contact times and EPA numbers.
+ */
+function conceptDisagreementText(d: ConceptDisagreement): string {
+  const label = CONCEPT_DISAGREEMENT_LABELS[d.kind];
+  const subject = d.concept ? `${label} ${formatConceptList([d.concept])}` : label;
+  return `${subject} (${d.votesFor} of ${d.voters} passes)`;
+}
+
+/** The causes of one flag, in the fixed `VARIANCE_CAUSES` order, with the concept detail spelled out. */
+function varianceCauseText(
+  causes: readonly VarianceCause[],
+  disagreements: readonly ConceptDisagreement[],
+): string {
+  return causes
+    .map((cause) =>
+      cause === 'concept' && disagreements.length > 0
+        ? `${VARIANCE_CAUSE_LABELS.concept}: ${disagreements.map(conceptDisagreementText).join('; ')}`
+        : VARIANCE_CAUSE_LABELS[cause],
+    )
+    .join(' · ');
+}
+
+/**
+ * `58 / 62 / 60`, with a pass that could not evaluate shown as `n/a` rather than as a zero.
+ * Slash-separated rather than `·`, because the sentence around it already separates its clauses
+ * with `·` and a reader must be able to see where the list of passes ends.
+ */
+function passOverallsText(overalls: ReadonlyArray<number | null>): string {
+  return overalls.map((overall) => (overall == null ? 'n/a' : String(overall))).join(' / ');
+}
+
+/**
+ * The per-case spread readout, in the detailed ledger only (B0-721): the reviewer looking at a
+ * flagged case needs to see the passes that produced the flag, not just that there was one.
+ */
+function caseVarianceLine(variance: CaseGradingVariance): string {
+  const parts = [
+    `${variance.passes} independent passes`,
+    `overalls ${passOverallsText(variance.passOveralls)}`,
+    variance.range == null ? null : `range ${variance.range}`,
+  ].filter((part): part is string => part !== null);
+
+  if (variance.flagged) {
+    parts.push(
+      `flagged for human review — ${varianceCauseText(variance.causes, variance.conceptDisagreements)}`,
+    );
+  }
+
+  return `**Grading consistency:** ${parts.join(' · ')}`;
+}
+
+/** One row of the human-review queue. Every value is read off `metrics.consistency`. */
+function consistencyQueueRow(entry: ConsistencyRollup['queue'][number]): string {
+  return `| ${idLink(entry.id)} | ${mdCell(entry.question)} | ${passOverallsText(entry.passOveralls)} | ${entry.range ?? '—'} | ${mdCell(varianceCauseText(entry.causes, entry.conceptDisagreements))} |`;
 }
 
 function rateRow(name: string, block: RateBlock): string {
@@ -402,6 +471,54 @@ export function renderReportMarkdown(params: {
     }
   }
 
+  // --- Grading consistency (B0-721) ---
+  // Omitted entirely — heading and all — for a single-pass run: `metrics.consistency` is null when
+  // no case was graded more than once, and "0 flags out of 0 comparisons" would read as a clean
+  // bill of health for a measurement that was never taken.
+  if (m.consistency) {
+    const con = m.consistency;
+    push('## Grading consistency');
+    blank();
+    push(
+      `Every case was graded **${con.passes} times, independently** — no pass saw another pass's scores or narrative. The sub-scores above are the median of those passes; this section is how much they disagreed. Flagged cases need a human to settle the grade; they are not failures.`,
+    );
+    blank();
+    push(
+      `- Cases graded more than once: **${con.casesConsolidated}**`,
+    );
+    push(`- **Flagged for human review: ${con.flagged} of ${con.casesConsolidated}**`);
+    push(`- ${VARIANCE_CAUSE_LABELS.band_split}: **${con.byCause.band_split}**`);
+    push(
+      `- ${VARIANCE_CAUSE_LABELS.score_range} (≥ ${con.spreadThreshold} points): **${con.byCause.score_range}**`,
+    );
+    push(`- ${VARIANCE_CAUSE_LABELS.evaluability}: **${con.byCause.evaluability}**`);
+    // Called out separately from the other three causes: a split on a concept is a split on a
+    // regulated must-have, not on a number.
+    push(
+      `- **${VARIANCE_CAUSE_LABELS.concept}: ${con.conceptDisagreementCases}** ${con.conceptDisagreementCases === 1 ? 'case' : 'cases'}, across ${con.conceptDisagreements} individual concept ${con.conceptDisagreements === 1 ? 'judgment' : 'judgments'}`,
+    );
+    push(`- Widest score range on any case: **${con.maxRange ?? '—'}**`);
+    blank();
+
+    if (con.queue.length > 0) {
+      push('### Cases flagged for human review');
+      blank();
+      push('| ID | Question | Pass overalls | Range | Why |');
+      push('|---|---|---|---|---|');
+      for (const entry of con.queue) push(consistencyQueueRow(entry));
+      blank();
+    }
+
+    // A timing the passes recorded differently is a data-entry problem at the source, not a shaky
+    // grade — stated here, out of the flag counts, and never smoothed into an average.
+    if (con.timingDisagreementCases > 0) {
+      push(
+        `_Data quality (not a grading flag): ${con.timingDisagreementCases} ${con.timingDisagreementCases === 1 ? 'case' : 'cases'} recorded different timings across passes. A timing is a measurement, not a judgment, so it is reported exactly as recorded and never averaged. The affected cases are named in the data-quality notes._`,
+      );
+      blank();
+    }
+  }
+
   // --- Results at a glance ---
   push('## Results at a glance');
   blank();
@@ -409,9 +526,17 @@ export function renderReportMarkdown(params: {
   push('|---|---|---|---|---|---|');
   let anyRatingConstrained = false;
   let anyAutoPass = false;
+  let anyReviewFlagged = false;
   for (const c of orderedCases) {
+    // B0-721 — the review mark rides alongside the concept marks rather than replacing them, and
+    // an Unable-to-Evaluate row can carry it too: passes that disagreed about whether a case could
+    // be judged at all is exactly the kind of grade a human has to settle.
+    const reviewFlagged = c.variance?.flagged ?? false;
+    anyReviewFlagged ||= reviewFlagged;
     if (c.score.unableToEvaluate) {
-      push(`| ${idLink(c.id)} | ${mdCell(c.question)} | ${mdCell(c.tier)} | — | — | Unable to Evaluate |`);
+      push(
+        `| ${idLink(c.id)} | ${mdCell(c.question)} | ${mdCell(c.tier)} | — | — | Unable to Evaluate${caseMarkers({ ratingConstrained: false, autoPassTriggered: false, reviewFlagged })} |`,
+      );
       continue;
     }
     const evaluated = byId.get(c.id) as EvaluatedCase | undefined;
@@ -419,16 +544,17 @@ export function renderReportMarkdown(params: {
     anyRatingConstrained ||= evaluated.ratingConstrained;
     anyAutoPass ||= evaluated.autoPassTriggered;
     push(
-      `| ${idLink(c.id)} | ${mdCell(c.question)} | ${mdCell(c.tier)} | ${evaluated.overall} | ${evaluated.grade} | ${evaluated.status}${conceptMarkers(evaluated)} |`,
+      `| ${idLink(c.id)} | ${mdCell(c.question)} | ${mdCell(c.tier)} | ${evaluated.overall} | ${evaluated.grade} | ${evaluated.status}${caseMarkers({ ...evaluated, reviewFlagged })} |`,
     );
   }
   blank();
   // Legend only for marks actually used — no orphan footnote on a run with no concept data.
-  if (anyRatingConstrained || anyAutoPass) {
+  if (anyRatingConstrained || anyAutoPass || anyReviewFlagged) {
     push(
       `_${[
         anyRatingConstrained ? CONCEPT_MARKER_LEGEND.ratingConstrained : null,
         anyAutoPass ? CONCEPT_MARKER_LEGEND.autoPass : null,
+        anyReviewFlagged ? REVIEW_MARKER_LEGEND : null,
       ]
         .filter(Boolean)
         .join('  ')}_`,
@@ -456,6 +582,10 @@ export function renderReportMarkdown(params: {
       push('**Status:** Unable to Evaluate _(excluded from all scores and rates)_');
       push(`**Reason:** ${c.score.uteReason ?? 'unspecified'}`);
       blank();
+      if (c.variance) {
+        push(caseVarianceLine(c.variance));
+        blank();
+      }
       // Unable to Evaluate and timed are independent: the case still got an answer, and how long
       // that took is a real measurement that counts in the run's speed aggregates.
       if (c.speed) {
@@ -511,6 +641,13 @@ export function renderReportMarkdown(params: {
         }
         blank();
       }
+    }
+
+    // B0-721 — the spread that produced (or did not produce) this case's review flag. Detailed
+    // ledger only: the glance table carries the mark, the detail carries the evidence.
+    if (c.variance) {
+      push(caseVarianceLine(c.variance));
+      blank();
     }
 
     // Placed after the score table, never inside it (B0-718).

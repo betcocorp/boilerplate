@@ -153,6 +153,29 @@ export function conceptMarkers(flags: {
   );
 }
 
+/**
+ * B0-721 — the third mark: this case's independent grading passes disagreed and a human should
+ * look at the grade.
+ *
+ * It is defined here, beside the two concept marks, rather than in `./consolidate` where the
+ * variance itself lives, because this module is the one place every mark the "Results at a glance"
+ * table carries is written down — that is what stops the Markdown document and the React ledger
+ * marking the same case with different glyphs. Distinct from † and ‡ on purpose, and appended
+ * after them so a case can honestly carry all three.
+ */
+export const REVIEW_MARKER = '⚑';
+
+export const REVIEW_MARKER_LEGEND = `${REVIEW_MARKER} Flagged for human review — the independent grading passes disagreed.`;
+
+/** Every mark one case carries, concept marks first. Empty string when no rule and no flag fired. */
+export function caseMarkers(flags: {
+  ratingConstrained: boolean;
+  autoPassTriggered: boolean;
+  reviewFlagged?: boolean;
+}): string {
+  return conceptMarkers(flags) + (flags.reviewFlagged ? REVIEW_MARKER : '');
+}
+
 /** The one-line coverage readout, e.g. `Mandatory 2/3 · Expected 4/6`. */
 export function formatConceptCoverage(concepts: CaseConcepts): string {
   const mandatory = concepts.mandatory;

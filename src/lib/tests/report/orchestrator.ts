@@ -11,11 +11,13 @@ import type { TestItemRecord, TestResultItemRecord } from '~/lib/tests/types';
 
 import { assembleReportCases, indexLatestResultItems } from './assemble';
 import { scoreCase } from './case-scorer';
+import { consolidateCasePasses, loadConsistencyConfig } from './consolidate';
 import { renderReportMarkdown } from './render';
 import { emptyReportState, parseReportState, type CaseScore, type ReportState } from './schemas';
 import { synthesizeReportFindings } from './synthesizer';
 
 const MODEL_TAG = 'gpt-4.1';
+/** Concurrent grading calls in flight, counted in (case, pass) units — not in cases. */
 const BATCH_SIZE = 5;
 /** Leaves headroom under the route's `maxDuration = 300` for the final save + response. */
 const WALL_CLOCK_BUDGET_MS = 260_000;
@@ -35,6 +37,73 @@ function noResponseScore(reason: string): CaseScore {
   };
 }
 
+/**
+ * B0-719 — a report persisted before per-pass scores existed has its one grading pass in
+ * `caseScores` and nothing in `casePassScores`. Seeding pass 0 from it is what stops a resume
+ * re-grading (and re-paying for) every case that was already scored.
+ */
+export function hydrateLegacyPassScores(state: ReportState): void {
+  if (Object.keys(state.casePassScores).length > 0) return;
+  for (const [itemId, score] of Object.entries(state.caseScores)) {
+    state.casePassScores[itemId] = [score];
+  }
+}
+
+/** One grading call still owed: this case, this pass index. */
+export type PendingPass = { item: TestItemRecord; passIndex: number };
+
+/**
+ * Pass-major, so pass 1 finishes for every case before pass 2 starts on any of them. That is what
+ * makes an interruption cheap: a crash part-way through pass 2 leaves every pass-1 score on the
+ * record and only the incomplete pass is re-run.
+ */
+export function pendingPasses(items: TestItemRecord[], state: ReportState): PendingPass[] {
+  const pending: PendingPass[] = [];
+  for (let passIndex = 0; passIndex < state.passes; passIndex += 1) {
+    for (const item of items) {
+      if ((state.casePassScores[item.id]?.length ?? 0) <= passIndex) {
+        pending.push({ item, passIndex });
+      }
+    }
+  }
+  return pending;
+}
+
+async function scoreOnePass(
+  item: TestItemRecord,
+  resultItem: TestResultItemRecord | undefined,
+): Promise<CaseScore> {
+  const responseText = resultItem?.response_text?.trim();
+  if (!resultItem) {
+    return noResponseScore('No result recorded for this item in this run.');
+  }
+  if (!responseText) {
+    return noResponseScore(
+      resultItem.error_message
+        ? `No response text recorded; harness error: ${resultItem.error_message}`
+        : 'No response text recorded for this item in this run.',
+    );
+  }
+  /**
+   * Every pass sees exactly this — the question, the golden answer and the response. **No pass is
+   * ever told what another pass scored, or shown another pass's narrative**, and the grading
+   * prompt is untouched: passes that could see each other would agree by construction, and their
+   * agreement would measure nothing.
+   */
+  return scoreCase({
+    question: item.prompt,
+    category: item.prompt_category,
+    priorityRaw: item.priority,
+    idealResponse: item.ideal_response,
+    expectedConcepts: item.expected_concepts,
+    minimumConcepts: item.minimum_concepts,
+    expectedSources: item.expected_sources,
+    expectedShouldAnswer: item.expected_should_answer,
+    actualResponseText: responseText,
+    modelTag: MODEL_TAG,
+  });
+}
+
 async function scoreRemainingCases(
   resultId: string,
   items: TestItemRecord[],
@@ -42,43 +111,30 @@ async function scoreRemainingCases(
   state: ReportState,
   deadline: number,
 ): Promise<ReportState> {
-  const pending = items.filter((item) => !(item.id in state.caseScores));
+  const pending = pendingPasses(items, state);
 
   for (let i = 0; i < pending.length; i += BATCH_SIZE) {
     if (Date.now() >= deadline) break;
 
     const batch = pending.slice(i, i + BATCH_SIZE);
     const results = await Promise.all(
-      batch.map(async (item) => {
-        const resultItem = resultItemByTestItemId.get(item.id);
-        const responseText = resultItem?.response_text?.trim();
-        if (!resultItem) {
-          return [item.id, noResponseScore('No result recorded for this item in this run.')] as const;
-        }
-        if (!responseText) {
-          const reason = resultItem.error_message
-            ? `No response text recorded; harness error: ${resultItem.error_message}`
-            : 'No response text recorded for this item in this run.';
-          return [item.id, noResponseScore(reason)] as const;
-        }
-        const score = await scoreCase({
-          question: item.prompt,
-          category: item.prompt_category,
-          priorityRaw: item.priority,
-          idealResponse: item.ideal_response,
-          expectedConcepts: item.expected_concepts,
-          minimumConcepts: item.minimum_concepts,
-          expectedSources: item.expected_sources,
-          expectedShouldAnswer: item.expected_should_answer,
-          actualResponseText: responseText,
-          modelTag: MODEL_TAG,
-        });
-        return [item.id, score] as const;
+      batch.map(async ({ item, passIndex }) => {
+        const score = await scoreOnePass(item, resultItemByTestItemId.get(item.id));
+        return { itemId: item.id, passIndex, score } as const;
       }),
     );
 
-    for (const [itemId, score] of results) {
-      state.caseScores[itemId] = score;
+    for (const { itemId, passIndex, score } of results) {
+      const scores = (state.casePassScores[itemId] ??= []);
+      scores[passIndex] = score;
+      // Consolidated only once every pass for this case is in, so `caseScores` never holds a
+      // half-consolidated verdict that a crash could leave behind as if it were final.
+      if (scores.length >= state.passes) {
+        state.caseScores[itemId] = consolidateCasePasses(
+          scores.map((passScore) => ({ score: passScore })),
+          { spreadThreshold: state.spreadThreshold ?? undefined },
+        ).score;
+      }
     }
     state.completedCases = Object.keys(state.caseScores).length;
     state.updatedAt = new Date().toISOString();
@@ -107,11 +163,18 @@ export async function generateReport(testResultId: string): Promise<ReportState>
   const resultItemByTestItemId = indexLatestResultItems(resultItems);
 
   const model = resolveResponsesModel(MODEL_TAG);
-  let state = parseReportState(run.report_state) ?? emptyReportState(model, items.length);
+  // B0-719/B0-720 — read once, and only ever written into a *fresh* state. A report already
+  // part-way through keeps the pass count and threshold it started with, so changing the setting
+  // mid-report can never leave one half of its cases graded three times and the other half once.
+  const config = await loadConsistencyConfig();
+  const fresh = () =>
+    emptyReportState(model, items.length, config.passes, config.spreadThreshold);
+  let state = parseReportState(run.report_state) ?? fresh();
   if (state.totalCases !== items.length) {
     // The run's item set changed (e.g. items added) since a prior partial report — start fresh.
-    state = emptyReportState(model, items.length);
+    state = fresh();
   }
+  hydrateLegacyPassScores(state);
   state.status = 'scoring';
   state.updatedAt = new Date().toISOString();
   await saveReportState(testResultId, state);
@@ -142,6 +205,11 @@ export async function generateReport(testResultId: string): Promise<ReportState>
       items,
       resultItems,
       caseScores: state.caseScores,
+      // B0-720 — the per-pass scores are what the consistency block is computed from. Assembly
+      // consolidates them through the same pure function this module already used above, so the
+      // score it lands on and the score persisted in `caseScores` cannot disagree.
+      casePassScores: state.casePassScores,
+      spreadThreshold: state.spreadThreshold,
     });
 
     const findingsByCaseId = new Map(

@@ -1,4 +1,12 @@
 import type { CaseConcepts } from './case-concepts';
+// Type-only, and deliberately so: `./consolidate` imports this module's `WEIGHTS` and
+// `statusFromScore` at runtime, and a type import is erased, so the two files cannot form a
+// runtime cycle.
+import type {
+  CaseGradingVariance,
+  ConceptDisagreement,
+  VarianceCause,
+} from './consolidate';
 import { assertReportInvariants, collectInvariantFailures } from './invariants';
 import type { CaseScore } from './schemas';
 import {
@@ -449,6 +457,12 @@ export type ReportCaseInput = {
    * Absent (not empty) when the case has no concepts, which leaves every concept rule a no-op.
    */
   concepts?: CaseConcepts;
+  /**
+   * B0-720 — how this case's independent grading passes disagreed, from `consolidateCasePasses`.
+   * Null for a single-pass case (and for every legacy report), which is what makes the whole
+   * consistency rollup null and every consistency section absent rather than empty.
+   */
+  variance?: CaseGradingVariance | null;
 };
 
 export type EvaluatedCase = {
@@ -515,6 +529,49 @@ export type ConceptRollup = {
   recurringMissing: RecurringMissingConcept[];
 };
 
+/** One case in the human-review queue. Every field is read off its `variance`, never re-derived. */
+export type ConsistencyQueueEntry = {
+  id: string;
+  question: string;
+  causes: VarianceCause[];
+  /** Each pass's own overall, in pass order; null for a pass that could not evaluate. */
+  passOveralls: Array<number | null>;
+  range: number | null;
+  /** The consolidated verdict — a flagged case can be Unable to Evaluate and still need a look. */
+  unableToEvaluate: boolean;
+  conceptDisagreements: ConceptDisagreement[];
+};
+
+/**
+ * B0-721 — the run's grading-consistency readout. Null when no case carried a variance block,
+ * which is exactly a single-pass run: the whole block is then omitted rather than reported as
+ * "0 flags", because zero flags out of zero comparisons is not a reassuring number, it is no
+ * measurement at all.
+ */
+export type ConsistencyRollup = {
+  /** Passes per case, as configured for this report. */
+  passes: number;
+  spreadThreshold: number;
+  /** Cases with more than one pass — the denominator for every count here. */
+  casesConsolidated: number;
+  flagged: number;
+  /** A case can be counted under more than one cause; these do not sum to `flagged`. */
+  byCause: Record<VarianceCause, number>;
+  /** Called out separately (B0-721): cases where the passes split on a concept judgment. */
+  conceptDisagreementCases: number;
+  /** Individual split judgments across those cases. */
+  conceptDisagreements: number;
+  /** Widest per-case score range in the run, or null when nothing was comparable. */
+  maxRange: number | null;
+  queue: ConsistencyQueueEntry[];
+  /**
+   * Cases whose passes reported different timings. **A data-quality warning, never a grading
+   * flag** — the detail is on `warnings`, and none of these cases is flagged for review on this
+   * account.
+   */
+  timingDisagreementCases: number;
+};
+
 export type ReportMetrics = {
   totalCases: number;
   evaluated: number;
@@ -535,6 +592,8 @@ export type ReportMetrics = {
   speed: SpeedBlock | null;
   /** Null when no evaluated case carried concept data. */
   concepts: ConceptRollup | null;
+  /** B0-721 — null on a single-pass run, which omits the whole grading-consistency block. */
+  consistency: ConsistencyRollup | null;
   warnings: string[];
 };
 
@@ -617,6 +676,81 @@ function conceptRollup(cases: readonly EvaluatedCase[]): ConceptRollup | null {
   };
 }
 
+/** One case's variance, paired with the two things the queue has to name it by. */
+type VarianceEntry = {
+  id: string;
+  question: string;
+  unableToEvaluate: boolean;
+  variance: CaseGradingVariance;
+};
+
+/**
+ * B0-721 — rolls the per-case variance blocks up into the consistency summary and the review
+ * queue. Every number is a projection of what `consolidateCasePasses` already decided; nothing
+ * here re-judges a case, and no renderer downstream recomputes any of it.
+ *
+ * Built from *every* case, not only the evaluated ones: a case the passes disagreed about being
+ * evaluable at all is precisely one a human needs to look at, and it would be invisible if the
+ * queue were drawn from `evaluated` alone.
+ */
+function consistencyRollup(entries: readonly VarianceEntry[]): ConsistencyRollup | null {
+  if (entries.length === 0) return null;
+
+  const flagged = entries.filter((entry) => entry.variance.flagged);
+  // Written out rather than built from the `VARIANCE_CAUSES` list so it stays exhaustive by type:
+  // adding a cause to the union breaks this initializer instead of silently reporting zero.
+  const byCause: Record<VarianceCause, number> = {
+    band_split: 0,
+    score_range: 0,
+    evaluability: 0,
+    concept: 0,
+  };
+  for (const entry of flagged) {
+    for (const cause of entry.variance.causes) byCause[cause] += 1;
+  }
+
+  const ranges = entries
+    .map((entry) => entry.variance.range)
+    .filter((range): range is number => range != null);
+
+  return {
+    passes: Math.max(...entries.map((entry) => entry.variance.passes)),
+    spreadThreshold: entries[0].variance.spreadThreshold,
+    casesConsolidated: entries.length,
+    flagged: flagged.length,
+    byCause,
+    conceptDisagreementCases: flagged.filter(
+      (entry) => entry.variance.conceptDisagreements.length > 0,
+    ).length,
+    conceptDisagreements: entries.reduce(
+      (total, entry) => total + entry.variance.conceptDisagreements.length,
+      0,
+    ),
+    maxRange: ranges.length > 0 ? Math.max(...ranges) : null,
+    // Most-contested first, so a reviewer working top-down spends their attention where the
+    // passes disagreed most. Ties break on the widest score range, then on id for stability.
+    queue: [...flagged]
+      .sort(
+        (a, b) =>
+          b.variance.causes.length - a.variance.causes.length ||
+          (b.variance.range ?? -1) - (a.variance.range ?? -1) ||
+          a.id.localeCompare(b.id),
+      )
+      .map((entry) => ({
+        id: entry.id,
+        question: entry.question,
+        causes: entry.variance.causes,
+        passOveralls: entry.variance.passOveralls,
+        range: entry.variance.range,
+        unableToEvaluate: entry.unableToEvaluate,
+        conceptDisagreements: entry.variance.conceptDisagreements,
+      })),
+    timingDisagreementCases: entries.filter(
+      (entry) => entry.variance.timingWarnings.length > 0,
+    ).length,
+  };
+}
+
 /**
  * How a failed structural invariant is treated. `'throw'` (the default, and the generation path)
  * refuses to produce metrics at all; `'warn'` records every violation on `metrics.warnings` and
@@ -637,8 +771,26 @@ export function computeReportMetrics(
   const evaluated: EvaluatedCase[] = [];
   const warnings: string[] = [];
   const speedEntries: SpeedTimingInput[] = [];
+  const varianceEntries: VarianceEntry[] = [];
 
   for (const input of inputs) {
+    // B0-720/B0-721 — collected before the Unable-to-Evaluate branch, for the same reason the
+    // speed entries are: passes that disagreed about whether a case could be judged at all is the
+    // single most reviewable kind of disagreement, and it lives on a case that never gets rated.
+    if (input.variance) {
+      varianceEntries.push({
+        id: input.testItemId,
+        question: input.question,
+        unableToEvaluate: input.score.unableToEvaluate,
+        variance: input.variance,
+      });
+      // Data quality, never a grading flag: a timing is a measurement, so passes disagreeing on
+      // one means it was recorded inconsistently upstream — nothing about the grade is shakier.
+      for (const warning of input.variance.timingWarnings) {
+        warnings.push(`${input.testItemId}: ${warning}`);
+      }
+    }
+
     // Collected before the Unable-to-Evaluate branch below, on purpose: a case that could not be
     // graded was still answered, and how long that took is a real measurement. "Unable to
     // Evaluate" and "timed" are independent facts in both directions (B0-717).
@@ -797,6 +949,7 @@ export function computeReportMetrics(
     weakestCategory,
     speed,
     concepts: conceptRollup(evaluated),
+    consistency: consistencyRollup(varianceEntries),
     warnings,
   };
 }

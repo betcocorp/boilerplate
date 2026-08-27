@@ -17,6 +17,7 @@ import type {
 } from '~/lib/tests/types';
 
 import { deriveCaseConcepts } from './case-concepts';
+import { consolidateCasePasses, type CaseGradingVariance } from './consolidate';
 import type { ReportCase, ReportDataResponse, ReportMetricsData } from './data-schemas';
 import {
   computeReportMetrics,
@@ -90,8 +91,16 @@ export type AssembleReportCasesParams = {
   run: TestResultRecord;
   items: TestItemRecord[];
   resultItems: TestResultItemRecord[];
-  /** `report_state.caseScores`, keyed by `test_items.id`. */
+  /** `report_state.caseScores`, keyed by `test_items.id`. Already consolidated when multi-pass. */
   caseScores: Record<string, CaseScore>;
+  /**
+   * B0-719/B0-720 — `report_state.casePassScores`: each pass's independent score, keyed by
+   * `test_items.id`. Absent (or empty) for a report graded before per-pass scoring existed, which
+   * then assembles from `caseScores` alone exactly as it always did, with no variance block.
+   */
+  casePassScores?: Record<string, CaseScore[]>;
+  /** B0-720 — `report_state.spreadThreshold`; null falls back to the shipped default. */
+  spreadThreshold?: number | null;
   /**
    * B0-714 — how a failed structural invariant is treated. Defaults to `'throw'`, so the
    * generation path can never persist a report whose numbers contradict each other. `loadReportData`
@@ -154,27 +163,53 @@ export function assembleReportCases(params: AssembleReportCasesParams): Assemble
   const { test, run, items, caseScores } = params;
   const resultItemByTestItemId = indexLatestResultItems(params.resultItems);
 
+  const varianceByCaseId = new Map<string, CaseGradingVariance>();
+
   const caseInputs: ReportCaseInput[] = items.map((item) => {
     const resultItem = resultItemByTestItemId.get(item.id);
+    const latencySeconds = latencySecondsOf(resultItem);
+    const ttftSeconds = ttftSecondsOf(resultItem);
+    /**
+     * B0-711 — per-concept verdicts come from the criteria grading the *run* already persisted
+     * (`response_payload.criteriaGrading`), not from a second model call: the concepts were
+     * judged once, at run time, and the report reads that judgment. Items without criteria get
+     * `undefined` and behave exactly as they did before the concept rules existed.
+     */
+    const concepts = deriveCaseConcepts({
+      criteriaGrading: extractCriteriaGrading(resultItem?.response_payload),
+      minimumConcepts: item.minimum_concepts,
+      expectedConcepts: item.expected_concepts,
+    });
+
+    /**
+     * B0-720 — the passes are consolidated here, through the same pure function the generation
+     * path already ran, so `caseScores` and this can never land on different numbers.
+     *
+     * The concepts and both timings are handed to every pass deliberately: they are derived once
+     * per case (from the run's own row), not once per pass, so the agreement checks inside
+     * `consolidateCasePasses` are guards rather than live comparisons. Feeding them through keeps
+     * those guards armed if per-pass concepts or timings ever appear.
+     */
+    const passScores = params.casePassScores?.[item.id];
+    const consolidated =
+      passScores && passScores.length > 0
+        ? consolidateCasePasses(
+            passScores.map((score) => ({ score, concepts, ttftSeconds, totalSeconds: latencySeconds })),
+            { spreadThreshold: params.spreadThreshold ?? undefined },
+          )
+        : null;
+    if (consolidated?.variance) varianceByCaseId.set(item.id, consolidated.variance);
+
     return {
       testItemId: item.id,
       question: item.prompt,
       priorityRaw: item.priority,
       category: item.prompt_category,
-      score: caseScores[item.id] ?? unscoredPlaceholder(),
-      latencySeconds: latencySecondsOf(resultItem),
-      ttftSeconds: ttftSecondsOf(resultItem),
-      /**
-       * B0-711 — per-concept verdicts come from the criteria grading the *run* already persisted
-       * (`response_payload.criteriaGrading`), not from a second model call: the concepts were
-       * judged once, at run time, and the report reads that judgment. Items without criteria get
-       * `undefined` and behave exactly as they did before the concept rules existed.
-       */
-      concepts: deriveCaseConcepts({
-        criteriaGrading: extractCriteriaGrading(resultItem?.response_payload),
-        minimumConcepts: item.minimum_concepts,
-        expectedConcepts: item.expected_concepts,
-      }),
+      score: consolidated?.score ?? caseScores[item.id] ?? unscoredPlaceholder(),
+      latencySeconds,
+      ttftSeconds,
+      concepts: consolidated ? consolidated.concepts : concepts,
+      variance: consolidated?.variance ?? null,
     };
   });
 
@@ -227,6 +262,8 @@ export function assembleReportCases(params: AssembleReportCasesParams): Assemble
       ttftSeconds: caseInputs[index].ttftSeconds,
       ttftMs: resultItem?.ttft_ms ?? null,
       speed: speedById.get(item.id) ?? null,
+      // B0-720 — null for a single-pass case, which is what omits every consistency readout.
+      variance: varianceByCaseId.get(item.id) ?? null,
       harness,
       retrievedDocumentIds: [...documentIds],
       workflowRunId: resultItem?.workflow_run_id ?? null,
@@ -265,6 +302,8 @@ function toMetricsPayload(metrics: ReportMetrics): ReportMetricsData {
     weakestCategory: metrics.weakestCategory,
     speed: metrics.speed,
     concepts: metrics.concepts,
+    // B0-721 — null for a single-pass report, so the whole consistency block is omitted.
+    consistency: metrics.consistency,
     warnings: metrics.warnings,
   };
 }
@@ -336,6 +375,8 @@ export async function loadReportData(runId: string): Promise<ReportDataResponse 
       items,
       resultItems,
       caseScores: state.caseScores,
+      casePassScores: state.casePassScores,
+      spreadThreshold: state.spreadThreshold,
       synthesis: state.synthesis,
       generatedAt: run.report_generated_at ?? state.updatedAt,
       // Read path: surface a reconciliation failure on `metrics.warnings` rather than throwing.

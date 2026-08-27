@@ -875,6 +875,136 @@ describe('assembleReportCases → per-concept verdicts (B0-711)', () => {
   });
 });
 
+describe('assembleReportCases → multi-pass consolidation and consistency (B0-719/720/721)', () => {
+  /**
+   * Three independent passes per case, as `report_state.casePassScores` persists them. CASE_A's
+   * passes straddle the Pass boundary; CASE_B's sit 20 points apart; CASE_C's agree exactly;
+   * CASE_D's disagree about whether the case could be evaluated at all.
+   */
+  const CASE_PASS_SCORES: Record<string, CaseScore[]> = {
+    [CASE_A]: [
+      score({ accuracy: 92, completeness: 88, relevance: 95, clarity: 90, explanation: 'p1' }),
+      score({ accuracy: 70, completeness: 74, relevance: 80, clarity: 78, explanation: 'p2' }),
+      score({ accuracy: 88, completeness: 84, relevance: 90, clarity: 86, explanation: 'p3' }),
+    ],
+    [CASE_B]: [
+      score({ accuracy: 55, completeness: 60, relevance: 70, clarity: 80, explanation: 'p1' }),
+      score({ accuracy: 55, completeness: 60, relevance: 70, clarity: 80, explanation: 'p2' }),
+      score({ accuracy: 35, completeness: 40, relevance: 50, clarity: 60, explanation: 'p3' }),
+    ],
+    [CASE_C]: [
+      score({ accuracy: 30, completeness: 40, relevance: 50, clarity: 60, explanation: 'p1' }),
+      score({ accuracy: 30, completeness: 40, relevance: 50, clarity: 60, explanation: 'p2' }),
+      score({ accuracy: 30, completeness: 40, relevance: 50, clarity: 60, explanation: 'p3' }),
+    ],
+    [CASE_D]: [
+      score({ unableToEvaluate: true, uteReason: 'No result recorded for this item in this run.' }),
+      score({ unableToEvaluate: true, uteReason: 'No result recorded for this item in this run.' }),
+      score({ accuracy: 40, completeness: 40, relevance: 40, clarity: 40 }),
+    ],
+  };
+
+  function buildMultiPassFixture() {
+    return assembleReportData({
+      test: TEST_RECORD,
+      run: RUN_RECORD,
+      items: ITEMS,
+      resultItems: RESULT_ITEMS,
+      caseScores: CASE_SCORES,
+      casePassScores: CASE_PASS_SCORES,
+      spreadThreshold: 10,
+      synthesis: SYNTHESIS,
+      generatedAt: RUN_RECORD.report_generated_at!,
+    });
+  }
+
+  it('serializes the variance and the consistency rollup onto the wire contract', () => {
+    const parsed = reportDataResponseSchema.parse(toReportDataPayload(buildMultiPassFixture()));
+    if (parsed.status !== 'ready') throw new Error('fixture should assemble a ready report');
+
+    const con = parsed.metrics.consistency!;
+    expect(con.passes).toBe(3);
+    expect(con.casesConsolidated).toBe(4);
+    expect(con.spreadThreshold).toBe(10);
+    // Every queue entry deep-links to the ledger through the same anchor the Markdown links to.
+    for (const entry of con.queue) {
+      const match = parsed.cases.find((c) => c.id === entry.id)!;
+      expect(match.anchorId).toBe(caseAnchorId(entry.id));
+      expect(match.variance!.flagged).toBe(true);
+    }
+    // The unflagged case still carries its variance, so its spread is visible in the ledger.
+    const agreed = parsed.cases.find((c) => c.id === CASE_C)!;
+    expect(agreed.variance!.flagged).toBe(false);
+    expect(agreed.variance!.range).toBe(0);
+  });
+
+  it('consolidates on the median sub-score, leaving the weighted maths to recompute', () => {
+    const { metrics } = buildMultiPassFixture();
+    const caseA = metrics.perCase.find((c) => c.id === CASE_A)!;
+
+    // Medians of 92/70/88, 88/74/84, 95/80/90, 90/78/86 — not the median of the three totals.
+    expect(caseA.accuracy).toBe(88);
+    expect(caseA.completeness).toBe(84);
+    expect(caseA.relevance).toBe(90);
+    expect(caseA.clarity).toBe(86);
+    expect(caseA.overall).toBe(Math.round(0.4 * 88 + 0.3 * 84 + 0.2 * 90 + 0.1 * 86));
+  });
+
+  it('renders the consistency section, the queue and the ⚑ marker into the Markdown', () => {
+    const assembled = buildMultiPassFixture();
+    const markdown = renderReportMarkdown({
+      test: assembled.test,
+      run: assembled.run,
+      metrics: assembled.metrics,
+      cases: assembled.cases,
+      synthesis: SYNTHESIS,
+      generatedAt: RUN_RECORD.report_generated_at!,
+    });
+
+    expect(markdown).toContain('## Grading consistency');
+    expect(markdown).toContain('### Cases flagged for human review');
+    expect(markdown).toContain('**Grading consistency:** 3 independent passes');
+    // The third marker, and its legend, alongside the existing concept marks.
+    expect(markdown).toContain('⚑');
+    expect(markdown).toContain(
+      '⚑ Flagged for human review — the independent grading passes disagreed.',
+    );
+    // The causes are named with the same words the React report uses.
+    expect(markdown).toContain('Passes disagreed on Pass / Partial Pass / Fail');
+    expect(markdown).toContain('Passes disagreed on whether the case could be evaluated');
+    // Every flagged case is linked back to its ledger entry.
+    for (const entry of assembled.metrics.consistency!.queue) {
+      expect(markdown).toContain(`[${entry.id}](#${caseAnchorId(entry.id)})`);
+    }
+  });
+
+  it('omits every consistency readout from a single-pass report', () => {
+    const { markdown, payload } = buildFixture();
+    expect(payload.metrics.consistency).toBeNull();
+    expect(payload.cases.every((c) => c.variance === null)).toBe(true);
+    expect(markdown).not.toContain('## Grading consistency');
+    expect(markdown).not.toContain('**Grading consistency:**');
+    expect(markdown).not.toContain('⚑');
+    expect(markdown).not.toContain('flagged for human review');
+  });
+
+  it('assembles a report persisted before per-pass scores exactly as it always did', () => {
+    // No `casePassScores` at all — the legacy `report_state` shape.
+    const legacy = assembleReportCases({
+      test: TEST_RECORD,
+      run: RUN_RECORD,
+      items: ITEMS,
+      resultItems: RESULT_ITEMS,
+      caseScores: CASE_SCORES,
+    });
+    const { assembled } = buildFixture();
+
+    expect(legacy.metrics.consistency).toBeNull();
+    expect(legacy.metrics.overall).toEqual(assembled.metrics.overall);
+    expect(legacy.cases.every((c) => c.variance === null)).toBe(true);
+  });
+});
+
 describe('splitConceptPhrases (B0-711 fallback splitter)', () => {
   it('splits on pipes, newlines, bullets, numbered markers and semicolons', () => {
     expect(splitConceptPhrases('a | b\nc; d')).toEqual(['a', 'b', 'c', 'd']);

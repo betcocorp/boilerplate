@@ -184,6 +184,11 @@ type ReportStatusResponse = {
   status?: ReportStatus;
   totalCases?: number;
   completedCases?: number;
+  /** B0-719 — independent grading passes per case. 1 on every report before multi-pass grading. */
+  passes?: number;
+  /** Finished (case, pass) grading units, and the `cases x passes` denominator that goes with it. */
+  completedPasses?: number;
+  totalPasses?: number;
   generatedAt?: string | null;
   error?: string | null;
 };
@@ -201,6 +206,10 @@ type RunReportViewProps = {
   initialStatus: ReportStatus;
   initialTotalCases: number;
   initialCompletedCases: number;
+  /** B0-719 — the pass count this report is being graded at, so the operator sees what they set. */
+  initialPasses: number;
+  /** Finished (case, pass) units — what the progress bar counts. */
+  initialCompletedPasses: number;
   initialError: string | null;
   initialGeneratedAt: string | null;
   isRunCompleted: boolean;
@@ -219,6 +228,8 @@ export function RunReportView({
   initialStatus,
   initialTotalCases,
   initialCompletedCases,
+  initialPasses,
+  initialCompletedPasses,
   initialError,
   initialGeneratedAt,
   isRunCompleted,
@@ -227,6 +238,8 @@ export function RunReportView({
   const [status, setStatus] = useState<ReportStatus>(initialStatus);
   const [totalCases, setTotalCases] = useState(initialTotalCases);
   const [completedCases, setCompletedCases] = useState(initialCompletedCases);
+  const [passes, setPasses] = useState(initialPasses);
+  const [completedPasses, setCompletedPasses] = useState(initialCompletedPasses);
   const [error, setError] = useState<string | null>(initialError);
   const [generatedAt, setGeneratedAt] = useState<string | null>(
     initialGeneratedAt,
@@ -280,6 +293,8 @@ export function RunReportView({
       setStatus(nextStatus);
       setTotalCases(data.totalCases ?? totalCases);
       setCompletedCases(data.completedCases ?? completedCases);
+      setPasses(data.passes ?? passes);
+      setCompletedPasses(data.completedPasses ?? completedPasses);
       setError(data.error ?? null);
 
       if (nextStatus === 'scoring' || nextStatus === 'synthesizing') {
@@ -328,6 +343,9 @@ export function RunReportView({
         if (typeof data.totalCases === 'number') setTotalCases(data.totalCases);
         if (typeof data.completedCases === 'number')
           setCompletedCases(data.completedCases);
+        if (typeof data.passes === 'number') setPasses(data.passes);
+        if (typeof data.completedPasses === 'number')
+          setCompletedPasses(data.completedPasses);
         if (data.generatedAt !== undefined)
           setGeneratedAt(data.generatedAt ?? null);
         setError(data.error ?? null);
@@ -480,9 +498,16 @@ export function RunReportView({
     );
   }
 
+  /**
+   * B0-719 — counted in (case, pass) units, never in cases. A 3-pass report that counted cases
+   * would show nothing at all until the third pass began and then jump to 100%; this advances
+   * through every pass. `passes` is 1 for every report graded before multi-pass grading existed,
+   * so this is the same arithmetic it always was for them.
+   */
+  const totalUnits = totalCases * Math.max(1, passes);
   const progressPercent =
-    totalCases > 0
-      ? Math.min(100, Math.round((completedCases / totalCases) * 100))
+    totalUnits > 0
+      ? Math.min(100, Math.round((completedPasses / totalUnits) * 100))
       : 0;
 
   return (
@@ -554,7 +579,11 @@ export function RunReportView({
             <p className="text-sm text-slate-600">
               {status === 'synthesizing'
                 ? 'Scoring complete — synthesizing failure patterns and recommendations…'
-                : `Grading responses: ${completedCases} of ${totalCases || '…'} cases scored`}
+                : `Grading responses: ${completedCases} of ${totalCases || '…'} cases scored${
+                    passes > 1
+                      ? ` · ${passes} independent passes per case (${completedPasses} of ${totalUnits} gradings done)`
+                      : ''
+                  }`}
             </p>
             <div className="mt-3 h-3 w-full overflow-hidden rounded-full bg-slate-100">
               <div

@@ -270,6 +270,105 @@ export const reportConceptRollupSchema = z.object({
 export type ReportConceptRollup = z.infer<typeof reportConceptRollupSchema>;
 
 /**
+ * B0-720 — why a case is in the human-review queue. The labels a renderer prints come from
+ * `VARIANCE_CAUSE_LABELS` in `./consolidate`, so the Markdown and the React report cannot word the
+ * same cause differently.
+ */
+export const reportVarianceCauseSchema = z.enum([
+  'band_split',
+  'score_range',
+  'evaluability',
+  'concept',
+]);
+export type ReportVarianceCause = z.infer<typeof reportVarianceCauseSchema>;
+
+/** Which judgment the grading passes split on. */
+export const reportConceptDisagreementKindSchema = z.enum([
+  'mandatory_concept',
+  'expected_concept',
+  'all_mandatory',
+  'all_expected',
+  'auto_pass_eligible',
+  'material_issue',
+]);
+export type ReportConceptDisagreementKind = z.infer<typeof reportConceptDisagreementKindSchema>;
+
+/**
+ * One split concept judgment. `concept` names the phrase verbatim (rule 1) for the two per-phrase
+ * kinds and is null for the whole-case judgments, which are about the case rather than a phrase.
+ */
+export const reportConceptDisagreementSchema = z.object({
+  kind: reportConceptDisagreementKindSchema,
+  concept: z.string().nullable(),
+  votesFor: z.number().int().min(0),
+  voters: z.number().int().min(0),
+});
+export type ReportConceptDisagreement = z.infer<typeof reportConceptDisagreementSchema>;
+
+/**
+ * B0-720 — how one case's independent grading passes disagreed. Null for a single-pass case, which
+ * is what omits every consistency readout rather than showing it as zeroes.
+ */
+export const reportCaseVarianceSchema = z.object({
+  passes: z.number().int().min(1),
+  /** Each pass's own weighted overall, in pass order; null for a pass that could not evaluate. */
+  passOveralls: z.array(z.number().nullable()),
+  /** Each pass's rubric band, before any concept rule (identical across passes by construction). */
+  passBands: z.array(reportCaseStatusSchema.nullable()),
+  /** max − min of the numeric overalls; null with fewer than two of them. */
+  range: z.number().nullable(),
+  bandSplit: z.boolean(),
+  scoreRangeExceeded: z.boolean(),
+  spreadThreshold: z.number(),
+  evaluabilitySplit: z.boolean(),
+  conceptDisagreements: z.array(reportConceptDisagreementSchema),
+  causes: z.array(reportVarianceCauseSchema),
+  flagged: z.boolean(),
+  /** Timing disagreements between passes — a data-quality warning, never a grading flag. */
+  timingWarnings: z.array(z.string()),
+});
+export type ReportCaseVariance = z.infer<typeof reportCaseVarianceSchema>;
+
+/** One case in the human-review queue. Every field is read off its variance, never re-derived. */
+export const reportConsistencyQueueEntrySchema = z.object({
+  id: z.string(),
+  question: z.string(),
+  causes: z.array(reportVarianceCauseSchema),
+  passOveralls: z.array(z.number().nullable()),
+  range: z.number().nullable(),
+  /** A flagged case can be Unable to Evaluate and still need a human to look at it. */
+  unableToEvaluate: z.boolean(),
+  conceptDisagreements: z.array(reportConceptDisagreementSchema),
+});
+export type ReportConsistencyQueueEntry = z.infer<typeof reportConsistencyQueueEntrySchema>;
+
+/**
+ * B0-721 — the run's grading-consistency readout. Null for a single-pass run: the block is then
+ * omitted entirely rather than rendered as "0 flags", because zero disagreements out of zero
+ * comparisons is not a reassuring number, it is no measurement at all.
+ */
+export const reportConsistencySchema = z.object({
+  passes: z.number().int().min(1),
+  spreadThreshold: z.number(),
+  casesConsolidated: z.number().int().min(0),
+  flagged: z.number().int().min(0),
+  /** A case can be counted under more than one cause; these do not sum to `flagged`. */
+  byCause: z.object({
+    band_split: z.number().int().min(0),
+    score_range: z.number().int().min(0),
+    evaluability: z.number().int().min(0),
+    concept: z.number().int().min(0),
+  }),
+  conceptDisagreementCases: z.number().int().min(0),
+  conceptDisagreements: z.number().int().min(0),
+  maxRange: z.number().nullable(),
+  queue: z.array(reportConsistencyQueueEntrySchema),
+  /** Cases whose passes reported different timings — data quality, never a grading flag. */
+  timingDisagreementCases: z.number().int().min(0),
+});
+export type ReportConsistency = z.infer<typeof reportConsistencySchema>;
+
+/**
  * The derived scoreline for one evaluated case. Sub-scores are the grader's raw 0–100 judgments;
  * `overall` is the weighted roll-up (Accuracy 40 / Completeness 30 / Relevance 20 / Clarity 10),
  * and `grade`/`status` are derived from `overall`. Absent for Unable-to-Evaluate cases.
@@ -327,6 +426,11 @@ export const reportMetricsSchema = z.object({
   speed: reportSpeedSchema.nullable(),
   /** Null when no evaluated case carried concept data — omit every concept section entirely. */
   concepts: reportConceptRollupSchema.nullable(),
+  /**
+   * B0-721 — the grading-consistency readout. Null on a single-pass run, which omits the summary,
+   * the human-review queue and every per-case spread readout entirely.
+   */
+  consistency: reportConsistencySchema.nullable(),
   /**
    * Non-fatal data-quality notes from metric computation. Usually empty. Structural
    * reconciliation failures are *not* here: those throw and the report is never written (B0-714).
@@ -405,6 +509,11 @@ export const reportCaseSchema = z.object({
    * from `metrics.speed.perCase` — never recomputed, in assembly or in a renderer.
    */
   speed: reportCaseSpeedSchema.nullable(),
+  /**
+   * B0-720 — how this case's grading passes disagreed. Null for a single-pass case, and therefore
+   * for every case of a single-pass run.
+   */
+  variance: reportCaseVarianceSchema.nullable(),
   harness: reportCaseHarnessSchema.nullable(),
   /** `rag.document` ids retrieved for this answer, de-duplicated, in payload order. */
   retrievedDocumentIds: z.array(z.string()),
