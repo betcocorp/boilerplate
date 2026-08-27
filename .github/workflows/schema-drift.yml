@@ -1,0 +1,90 @@
+name: Schema drift
+
+# B0-464 — fails when the live Postgres catalog contains DDL that no checked-in migration accounts
+# for. This is the guard against the 59f118f1 class of incident: a `sectionType` parameter was added
+# to rag.match_corpus_chunks* / match_product_chunks* on the live database with no migration file,
+# the new all-defaults overload made every call ambiguous to Postgres, and tool_failed went from
+# 0.6% to 45.6% for 11 days. `git log` on migrations could not reconstruct live state, so nothing
+# in CI could have caught it.
+#
+# DELIBERATELY NOT INERT. The sibling eval-gate.yml (B0-465) never ran once: its first job carries
+# `if: false` and its second job's credential guard downgrades a missing secret to a warning and
+# passes. This workflow does the opposite — a missing secret FAILS the job by name. There is no
+# `continue-on-error`, no `if: ${{ secrets.* }}`, and no skip path anywhere below. If you are here
+# because this job is red, either the schema really has drifted or a required secret is missing;
+# both are real problems, neither is a reason to add a guard.
+#
+# Required repository secrets (Settings → Secrets and variables → Actions):
+#   NEXT_PUBLIC_SUPABASE_URL   — the Supabase project URL
+#   SUPABASE_SERVICE_ROLE_KEY  — service-role key; public.schema_drift_snapshot() is a read-only
+#                                catalog snapshot, but the anon role has no business calling it
+#
+# The checker only READS pg_catalog through that RPC. It never writes, and it never applies a
+# migration.
+
+on:
+  pull_request:
+    paths:
+      # Repo root IS the app, so no `bex2.0/` prefix — the same filter bug that kept eval-gate.yml
+      # from ever matching a path.
+      - 'src/supabase/migrations/**'
+      - 'scripts/check-schema-drift.mjs'
+      - '.github/workflows/schema-drift.yml'
+  schedule:
+    # 07:15 UTC daily (~03:15 ET). Drift usually arrives from an out-of-band `apply_migration`, not
+    # from a PR, so the scheduled run is the one that actually catches it.
+    - cron: '15 7 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: schema-drift-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  schema-drift:
+    name: Live catalog vs checked-in migrations
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v3
+        with:
+          # pnpm 9 rejects this repo's pnpm-workspace.yaml outright ("packages field missing or
+          # empty") — same pin and reasoning as release.yml and eval-gate.yml.
+          version: '11.20.0'
+
+      - uses: actions/setup-node@v4
+        with:
+          # Matches engines.node.
+          node-version: '24'
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Fails the job loudly and by name rather than skipping. Do not convert this into a
+      # `runnable=false` output — see the header.
+      - name: Require Supabase credentials
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          missing=""
+          [ -z "${NEXT_PUBLIC_SUPABASE_URL}" ] && missing="${missing} NEXT_PUBLIC_SUPABASE_URL"
+          [ -z "${SUPABASE_SERVICE_ROLE_KEY}" ] && missing="${missing} SUPABASE_SERVICE_ROLE_KEY"
+          if [ -n "${missing}" ]; then
+            echo "::error title=Schema drift check cannot run::Missing repository secret(s):${missing}. Add them under Settings -> Secrets and variables -> Actions. This job fails instead of skipping on purpose (B0-464/B0-465)."
+            exit 1
+          fi
+          echo "Both required secrets are present."
+
+      - name: Check for live schema drift
+        # Exit 1 = drift found, exit 2 = could not run (missing env / RPC unavailable). Both fail
+        # the job. The full per-object report is printed to this step's log — deliberately no
+        # artifact step, so there is nowhere for a `|| true` to creep back in. The checker's own
+        # --env-file flag is for local use only (`pnpm check:schema-drift`); CI passes env directly.
+        run: node scripts/check-schema-drift.mjs
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
