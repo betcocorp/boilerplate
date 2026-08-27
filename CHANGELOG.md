@@ -1,3 +1,10 @@
+## [2.11.1](https://github.com/betcocorp/bex2.0/compare/v2.11.0...v2.11.1) (2026-08-27)
+
+
+### Bug Fixes
+
+* **B0-264:** correct the dilution eval's abstention rows and teach the CSV importer expected_criteria ([a5b1bbc](https://github.com/betcocorp/bex2.0/commit/a5b1bbc153aa470ee00c7d1f9a007e43a2cd685b)), closes [#1](https://github.com/betcocorp/bex2.0/issues/1) [#2](https://github.com/betcocorp/bex2.0/issues/2)
+
 # [2.11.0](https://github.com/betcocorp/bex2.0/compare/v2.10.0...v2.11.0) (2026-08-27)
 
 
