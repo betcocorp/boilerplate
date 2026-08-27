@@ -33,6 +33,12 @@ type SearchProductChunksOptions = {
   productLineKey?: string;
   productKey?: string;
   sectionType?: string;
+  /**
+   * B0-686 — exact-match surface type for the metadata boost (`filter_surface_type`). Nothing
+   * infers one from a user query yet, so this is `null` in practice; the RPC only reorders on it
+   * and never changes the returned `similarity`.
+   */
+  surfaceType?: string;
   minSimilarity?: number;
   model?: string;
   scope?: SearchScope;
@@ -90,6 +96,7 @@ export type RagSearchResult = {
   productLineKey: string | null;
   productKey: string | null;
   sectionType: string | null;
+  surfaceType: string | null;
   scope: SearchScope;
   minSimilarity: number | null;
   retrieval_strategy: 'vector' | 'hybrid' | 'vector+reranked' | 'hybrid+reranked';
@@ -736,6 +743,7 @@ type MatchRpcOpts = {
   productLineKey: string | null;
   productKey: string | null;
   sectionType: string | null;
+  surfaceType: string | null;
 };
 
 async function callMatchRpc(
@@ -757,6 +765,7 @@ async function callMatchRpc(
         filter_scope: 'all' | 'products' | 'sds' | 'efficacy';
         filter_section_type?: string;
         filter_product_key?: string;
+        filter_surface_type?: string;
       },
     ) => Promise<{ data: RagCorpusSearchMatch[] | null; error: { message: string } | null }>;
   };
@@ -774,6 +783,7 @@ async function callMatchRpc(
             filter_product_key: opts.productKey || null,
             filter_product_line_key: opts.productLineKey || null,
             filter_section_type: opts.sectionType || null,
+            filter_surface_type: opts.surfaceType || null,
           })
         : // Same null-not-undefined trick as the hybrid branch above: match_product_chunks also
           // has two live overloads (with/without filter_section_type), and supabase-js strips
@@ -784,6 +794,7 @@ async function callMatchRpc(
             filter_product_key: opts.productKey || null,
             filter_product_line_key: opts.productLineKey || null,
             filter_section_type: opts.sectionType || null,
+            filter_surface_type: opts.surfaceType || null,
           })
       : await (rag as unknown as CorpusRpcClient).rpc(
           opts.useHybrid ? 'match_corpus_chunks_hybrid' : 'match_corpus_chunks',
@@ -795,6 +806,9 @@ async function callMatchRpc(
             filter_scope: opts.scope,
             filter_section_type: opts.sectionType || undefined,
             filter_product_key: opts.productKey || undefined,
+            // Corpus branch has a single overload each, so an omitted key falls through to the
+            // SQL default — matching how the other filters are sent here.
+            filter_surface_type: opts.surfaceType || undefined,
           },
         );
 
@@ -817,6 +831,7 @@ export async function searchProductChunks(
   const productLineKey = options.productLineKey?.trim() || null;
   const productKey = options.productKey?.trim() || null;
   const sectionType = options.sectionType?.trim() || null;
+  const surfaceType = options.surfaceType?.trim() || null;
   const {
     requested: requestedScope,
     rpcScope: scope,
@@ -856,6 +871,7 @@ export async function searchProductChunks(
     productLineKey,
     productKey,
     sectionType,
+    surfaceType,
   };
   const similaritySearchStartedAt = nowMs();
 
@@ -988,6 +1004,7 @@ export async function searchProductChunks(
     productLineKey,
     productKey,
     sectionType,
+    surfaceType,
     scope: requestedScope,
     minSimilarity,
     // B0-440: reports what actually ran. Reranking that was requested but not provisioned

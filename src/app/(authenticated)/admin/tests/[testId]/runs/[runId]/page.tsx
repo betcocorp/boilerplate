@@ -15,6 +15,10 @@ import {
   RunInsightsPanel,
   type Insight,
 } from '~/components/admin/tests/RunInsightsPanel';
+import {
+  RunComparisonPanel,
+  type RunComparisonPanelData,
+} from '~/components/admin/tests/RunComparisonPanel';
 import { RunItemResultsCsvDownload } from '~/components/admin/tests/RunItemResultsCsvDownload';
 import { RunReportButton } from '~/components/admin/tests/RunReportButton';
 import { RoutingAccuracyBoard } from '~/components/admin/tests/RoutingAccuracyBoard';
@@ -48,6 +52,7 @@ import {
 } from '~/lib/tests/format';
 import {
   countResultItemsByResultId,
+  getRunComparisonByResultId,
   getTestById,
   getTestItemsByTestId,
   getTestResultById,
@@ -125,11 +130,35 @@ export default async function AdminTestRunDetailsPage({
     notFound();
   }
 
-  const [allResultItems, testItems, completedFromRows] = await Promise.all([
+  const [allResultItems, testItems, completedFromRows, runComparison] = await Promise.all([
     listAllResultItemsByResultId(result.id),
     getTestItemsByTestId(test.id),
     countResultItemsByResultId(result.id),
+    getRunComparisonByResultId(result.id),
   ]);
+  /**
+   * B0-315 — hydrates `RunComparisonPanel` from the persisted B0-312 row. `null` when no comparison
+   * job was ever started for this run (still running, or a pre-B0-311 legacy run) — the panel
+   * itself renders nothing in that case, same as the 4 states it does render being read straight off
+   * `status` rather than re-derived here.
+   */
+  const comparisonForPanel: RunComparisonPanelData | null = runComparison
+    ? {
+        status: runComparison.status as RunComparisonPanelData['status'],
+        verdict: runComparison.verdict as RunComparisonPanelData['verdict'],
+        verdictSummary: runComparison.verdict_summary,
+        currentPassRate: runComparison.current_pass_rate,
+        previousPassRate: runComparison.previous_pass_rate,
+        scoreDelta: runComparison.score_delta,
+        newFailures: Array.isArray(runComparison.new_failures)
+          ? (runComparison.new_failures as unknown as RunComparisonPanelData['newFailures'])
+          : [],
+        fixes: Array.isArray(runComparison.fixes)
+          ? (runComparison.fixes as unknown as RunComparisonPanelData['fixes'])
+          : [],
+        errorMessage: runComparison.error_message,
+      }
+    : null;
   const resultItems = allResultItems;
   const displayResultItems = allResultItems.slice(0, 200);
   const progress = extractProgress(result.summary, result.total_items);
@@ -557,6 +586,8 @@ export default async function AdminTestRunDetailsPage({
           }
           runId={result.id}
         />
+
+        <RunComparisonPanel comparison={comparisonForPanel} />
 
         <section
           className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm"

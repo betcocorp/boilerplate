@@ -8,6 +8,7 @@ import { getOpenAIClient } from '~/lib/openai/client';
 import { extractAssistantText } from '~/lib/openai/response-item-parsing';
 import { usageFromResponse } from '~/lib/openai/responses-runtime';
 import { getBooleanSetting } from '~/lib/settings/settings-service';
+import { SURFACE_VOCABULARY_PROMPT_EXAMPLES } from '~/lib/orchestrator/surface-vocabulary';
 import { PRODUCT_TOOL_NAMES } from '~/lib/tools/tool-schemas';
 
 /**
@@ -45,7 +46,10 @@ export const intentEntitiesSchema = z.object({
   competitorBrand: z.string().nullable(),
   /** Competitor product name — same concept as `extractCompetitorProduct`'s `product`. */
   competitorProduct: z.string().nullable(),
-  /** Physical surface/material mentioned (e.g. "VCT floor", "grout"), else `null`. */
+  /**
+   * Physical surface/material mentioned (e.g. {@link SURFACE_VOCABULARY_PROMPT_EXAMPLES}), else
+   * `null`.
+   */
   surfaceType: z.string().nullable(),
   /** Short paraphrase of what the user is trying to do, else `null`. */
   taskDescription: z.string().nullable(),
@@ -139,7 +143,7 @@ Output rules:
 - confidence: your calibrated 0-1 belief that "intent" is correct. Do not default to 1; use lower values when the message is short, vague, or could fit more than one specialist.
 - entities.betcoProduct: a Betco product name/SKU mentioned, else null.
 - entities.competitorBrand / entities.competitorProduct: a NON-Betco competitor brand/product the user wants a Betco equivalent for, else null. Never put a Betco product here. Best-effort only — a dedicated extraction step runs later for the cross_reference flow.
-- entities.surfaceType: the physical surface or material mentioned (e.g. "VCT floor", "grout", "stainless"), else null.
+- entities.surfaceType: the physical surface or material mentioned (e.g. ${SURFACE_VOCABULARY_PROMPT_EXAMPLES.map((example) => `"${example}"`).join(', ')}), else null.
 - entities.taskDescription: a short (<=20 words) paraphrase of what the user is trying to do, else null.
 - suggestedTool: the single best FIRST tool to call from this list, else null if none clearly applies: ${PRODUCT_TOOL_NAMES.join(', ')}. Suggest lookup_cross_reference or recommend_cross_reference ONLY for genuine competitor cross-reference (rule 1).
 - Only the most recent turns of conversation are provided for context; classify the CURRENT (last) user message.`;

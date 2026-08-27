@@ -29,6 +29,12 @@ export async function createModelComparisonRun(input: {
   models: readonly BexModelTag[];
   /** Both arms get the same setting — otherwise the comparison is not like-for-like. */
   useValidator?: boolean;
+  /**
+   * B0-687 — actor stamped on every arm's `test_results.triggered_by`. Optional and defaulting to
+   * null: this helper has no request context of its own, so the caller supplies the session email
+   * when it has one rather than this module inventing an actor.
+   */
+  triggeredBy?: string | null;
 }): Promise<{
   testId: string;
   suiteVersion: string;
@@ -66,6 +72,7 @@ export async function createModelComparisonRun(input: {
       started_at: new Date().toISOString(),
       run_options: { modelTag, useValidator },
       app_version: APP_VERSION,
+      triggered_by: input.triggeredBy ?? null,
       summary: {
         completed_items: 0,
         total_items: items.length,

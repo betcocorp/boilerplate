@@ -7,18 +7,25 @@ import {
   extractRuntimeConfig,
   extractSearchRunMaxSimilarity,
 } from './response-payload';
+import { parseReportState } from './report/schemas';
 import { extractExpectedTool, parseAgentStepToolTrace } from './tool-routing';
 import { COMPLETED_RUN_STATUSES } from './types';
+import type { ReportOverall, ReportStatus } from './report/schemas';
 import { JUDGMENT_CONFIDENCE_PROVENANCES } from '~/lib/workflows/product-support/confidence-provenance';
 import type {
   LatestFailedTestResultItemView,
   NewTestItemRecord,
   NewTestRecord,
+  NewTestResultComparisonRecord,
   NewTestResultItemRecord,
   NewTestResultRecord,
+  RunComparisonFix,
+  RunComparisonNewFailure,
+  RunComparisonVerdict,
   TestItemRecord,
   TestRecord,
   TestRecordWithCompletionCount,
+  TestResultComparisonRecord,
   TestResultItemRecord,
   TestResultRecord,
 } from './types';
@@ -450,6 +457,120 @@ export async function saveReportMarkdown(
   });
 }
 
+/** Reads back the post-mortem comparison for a run (B0-312). Null when none has been started. */
+export async function getRunComparisonByResultId(resultId: string) {
+  const supabase = getSupabaseServiceRoleClient();
+  const result = await supabase
+    .from('test_result_comparisons')
+    .select('*')
+    .eq('test_result_id', resultId)
+    .maybeSingle();
+
+  return assertNoError(result) as TestResultComparisonRecord | null;
+}
+
+/**
+ * B0-312/311 — starts a comparison job by inserting the 'generating' row. A plain INSERT (not
+ * upsert) against the `test_result_id` UNIQUE constraint, so a concurrent/duplicate call for the
+ * same run fails with a unique-violation instead of silently clobbering the first caller's row —
+ * this is what makes `startRunComparison` (`~/lib/tests/run-comparison.ts`) idempotent without a
+ * separate locking scheme.
+ */
+export async function createGeneratingRunComparison(
+  resultId: string,
+  previousResultId: string,
+): Promise<{ created: true; row: TestResultComparisonRecord } | { created: false }> {
+  const supabase = getSupabaseServiceRoleClient();
+  const result = await supabase
+    .from('test_result_comparisons')
+    .insert({
+      test_result_id: resultId,
+      previous_test_result_id: previousResultId,
+      status: 'generating',
+    })
+    .select('*')
+    .single();
+
+  if (result.error) {
+    if (result.error.code === '23505') {
+      return { created: false };
+    }
+    throw new Error(result.error.message);
+  }
+
+  return { created: true, row: result.data as TestResultComparisonRecord };
+}
+
+/** Same insert-not-upsert idempotency as `createGeneratingRunComparison`, for the no-baseline case. */
+export async function createNoBaselineRunComparison(
+  resultId: string,
+): Promise<{ created: true } | { created: false }> {
+  const supabase = getSupabaseServiceRoleClient();
+  const result = await supabase.from('test_result_comparisons').insert({
+    test_result_id: resultId,
+    previous_test_result_id: null,
+    status: 'no_baseline',
+  });
+
+  if (result.error) {
+    if (result.error.code === '23505') {
+      return { created: false };
+    }
+    throw new Error(result.error.message);
+  }
+
+  return { created: true };
+}
+
+async function updateRunComparisonByResultId(
+  resultId: string,
+  values: Partial<NewTestResultComparisonRecord>,
+) {
+  const supabase = getSupabaseServiceRoleClient();
+  const result = await supabase
+    .from('test_result_comparisons')
+    .update(values)
+    .eq('test_result_id', resultId)
+    .select('*')
+    .single();
+
+  return assertNoError(result) as TestResultComparisonRecord;
+}
+
+/** Persists the finished B0-314 LLM analysis and flips the row to 'ready'. */
+export async function saveRunComparisonReady(
+  resultId: string,
+  data: {
+    verdict: RunComparisonVerdict;
+    verdictSummary: string;
+    currentPassRate: number;
+    previousPassRate: number;
+    scoreDelta: number;
+    newFailures: RunComparisonNewFailure[];
+    fixes: RunComparisonFix[];
+  },
+) {
+  return updateRunComparisonByResultId(resultId, {
+    status: 'ready',
+    verdict: data.verdict,
+    verdict_summary: data.verdictSummary,
+    current_pass_rate: data.currentPassRate,
+    previous_pass_rate: data.previousPassRate,
+    score_delta: data.scoreDelta,
+    new_failures: data.newFailures as unknown as NewTestResultComparisonRecord['new_failures'],
+    fixes: data.fixes as unknown as NewTestResultComparisonRecord['fixes'],
+    error_message: null,
+  });
+}
+
+/** Flips an in-progress comparison row to 'failed' so the run-detail page can show the error state. */
+export async function saveRunComparisonFailed(resultId: string, errorMessage: string) {
+  return updateRunComparisonByResultId(resultId, {
+    status: 'failed',
+    error_message: errorMessage,
+  });
+}
+
 export async function claimQueuedTestResultForExecution(resultId: string) {
   const supabase = getSupabaseServiceRoleClient();
   const result = await supabase
@@ -502,6 +623,34 @@ export async function listTestResultsByTestId(testId: string, limit = 10) {
   return (assertNoError(result) || []) as TestResultRecord[];
 }
 
+/**
+ * B0-313 — the run immediately preceding `currentResultId` for post-mortem comparison: the most
+ * recent OTHER completed run (`completed`/`completed_with_failures`, `run_mode='full'`) on the same
+ * test, strictly older than the current run's `created_at`. Returns null when none exists — a
+ * "no baseline" run (e.g. the first-ever run of a dataset) is a normal, clean outcome, not an error.
+ */
+export async function getPreviousCompletedTestResult(
+  testId: string,
+  currentResultId: string,
+): Promise<TestResultRecord | null> {
+  const supabase = getSupabaseServiceRoleClient();
+  const current = await getTestResultById(currentResultId);
+
+  const result = await supabase
+    .from('test_results')
+    .select('*')
+    .eq('test_id', testId)
+    .eq('run_mode', 'full')
+    .in('status', [...COMPLETED_RUN_STATUSES])
+    .neq('id', currentResultId)
+    .lt('created_at', current.created_at)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  return assertNoError(result) as TestResultRecord | null;
+}
+
 export async function listSearchResultsByTestId(testId: string, limit = 10) {
   const supabase = getSupabaseServiceRoleClient();
   const result = await supabase
@@ -524,6 +673,88 @@ export async function getTestResultById(testResultId: string) {
     .single();
 
   return assertNoError(result) as TestResultRecord;
+}
+
+/** One row of the cross-dataset report index (B0-687). */
+export type ReportRunRow = {
+  runId: string;
+  testId: string;
+  testName: string;
+  /** When the run itself started — the "date run" the index sorts and renders by. */
+  startedAt: string;
+  reportGeneratedAt: string | null;
+  reportStatus: ReportStatus | null;
+  /** Overall 0–100 score, present only once the report finished scoring (B0-609). */
+  score: number | null;
+  grade: ReportOverall['grade'] | null;
+  /** Session email of whoever started the run, `api-client` for a service-token run, or null. */
+  triggeredBy: string | null;
+};
+
+const REPORT_RUNS_PAGE_SIZE = 500;
+
+/**
+ * B0-687 — every run that has an eval report, across all datasets, newest run first.
+ *
+ * Reports were previously reachable only by drilling into one dataset at a time. The filter is
+ * "has a `report_state`" rather than "has a `report_generated_at`" on purpose: a report that is
+ * still scoring or that failed is exactly the one an admin needs to find, and dropping those rows
+ * would hide them entirely. Score/grade come from the persisted `report_state.overall` (B0-609),
+ * never recomputed from per-item data, so this page and `/admin/tests/[testId]` can't disagree.
+ *
+ * B0-688 — archived datasets are EXCLUDED: an archived test set disappears from this index the
+ * same way it disappears from `/admin/tests`. The filter rides on the existing `tests!inner`
+ * embed, so it is a join predicate applied in Postgres rather than a post-fetch filter in JS —
+ * which also keeps the paging honest (a client-side filter would make each page's row count
+ * mean something different from the rows returned).
+ */
+export async function listAllReportRuns(): Promise<ReportRunRow[]> {
+  const supabase = getSupabaseServiceRoleClient();
+
+  type EmbeddedTest = { id: string; name: string; is_archived: boolean };
+  type RawRow = {
+    id: string;
+    test_id: string;
+    started_at: string;
+    report_generated_at: string | null;
+    report_state: unknown;
+    triggered_by: string | null;
+    tests: EmbeddedTest | EmbeddedTest[] | null;
+  };
+
+  // Paged rather than a bare select so a growing history can never be silently truncated at
+  // PostgREST's 1000-row cap (there are ~40 reported runs today).
+  const rows = await fetchAllPages<RawRow>(REPORT_RUNS_PAGE_SIZE, async (from, to) => {
+    const result = await supabase
+      .from('test_results')
+      .select(
+        'id, test_id, started_at, report_generated_at, report_state, triggered_by, tests!inner(id, name, is_archived)',
+      )
+      .not('report_state', 'is', null)
+      .eq('tests.is_archived', false)
+      .order('started_at', { ascending: false })
+      .range(from, to);
+
+    return (assertNoError(result) || []) as unknown as RawRow[];
+  });
+
+  return rows.map((row) => {
+    const test = Array.isArray(row.tests) ? row.tests[0] : row.tests;
+    const state = parseReportState(row.report_state);
+    const overall = state?.status === 'completed' ? state.overall : null;
+
+    return {
+      runId: row.id,
+      testId: row.test_id,
+      testName: test?.name ?? '(deleted dataset)',
+      startedAt: row.started_at,
+      reportGeneratedAt: row.report_generated_at,
+      reportStatus: state?.status ?? null,
+      score: typeof overall?.avg === 'number' ? overall.avg : null,
+      grade: overall?.grade ?? null,
+      triggeredBy: row.triggered_by,
+    };
+  });
 }
 
 const RESULT_ITEMS_PAGE_SIZE = 500;

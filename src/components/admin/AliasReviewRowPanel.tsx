@@ -63,7 +63,17 @@ export function AliasReviewRowPanel({ row }: { row: ProductAliasReviewRow }) {
   function handleApprove() {
     startTransition(async () => {
       try {
-        await approveProductAlias(row.id);
+        const result = await approveProductAlias(row.id);
+        if (!result.ok) {
+          // B0-486 — the formulation-variant guard refused the merge. Surface the field-by-field
+          // reason (exact stored values) rather than a generic failure; the full decision is in
+          // `audit_logs` under `product_alias_approval_blocked`.
+          toast.error(`Cannot approve "${row.alias}"`, {
+            description: result.decision.reason,
+            duration: 12_000,
+          });
+          return;
+        }
         toast.success(`Approved "${row.alias}"`);
         router.refresh();
       } catch (err) {

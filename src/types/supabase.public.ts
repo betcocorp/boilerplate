@@ -10,7 +10,7 @@ export type Database = {
   // Allows to automatically instantiate createClient with right options
   // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
   __InternalSupabase: {
-    PostgrestVersion: "14.1"
+    PostgrestVersion: "14.17"
   }
   public: {
     Tables: {
@@ -822,6 +822,138 @@ export type Database = {
           },
         ]
       }
+      routing_test_items: {
+        Row: {
+          created_at: string
+          embedding_large: unknown
+          embedding_model_large: string | null
+          expected_agent: string
+          id: string
+          prompt: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          embedding_large?: unknown
+          embedding_model_large?: string | null
+          expected_agent: string
+          id?: string
+          prompt: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          embedding_large?: unknown
+          embedding_model_large?: string | null
+          expected_agent?: string
+          id?: string
+          prompt?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      routing_test_run_items: {
+        Row: {
+          created_at: string
+          detail: Json | null
+          elapsed_ms: number
+          error: string | null
+          expected_agent: string
+          id: string
+          item_id: string | null
+          passed: boolean
+          predicted_agent: string
+          prompt: string
+          row_index: number
+          run_id: string
+        }
+        Insert: {
+          created_at?: string
+          detail?: Json | null
+          elapsed_ms: number
+          error?: string | null
+          expected_agent: string
+          id?: string
+          item_id?: string | null
+          passed: boolean
+          predicted_agent: string
+          prompt: string
+          row_index: number
+          run_id: string
+        }
+        Update: {
+          created_at?: string
+          detail?: Json | null
+          elapsed_ms?: number
+          error?: string | null
+          expected_agent?: string
+          id?: string
+          item_id?: string | null
+          passed?: boolean
+          predicted_agent?: string
+          prompt?: string
+          row_index?: number
+          run_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "routing_test_run_items_item_id_fkey"
+            columns: ["item_id"]
+            isOneToOne: false
+            referencedRelation: "routing_test_items"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "routing_test_run_items_run_id_fkey"
+            columns: ["run_id"]
+            isOneToOne: false
+            referencedRelation: "routing_test_runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      routing_test_runs: {
+        Row: {
+          avg_item_duration_ms: number | null
+          created_at: string
+          degraded_items: number
+          duration_ms: number
+          id: string
+          model: string | null
+          passed_items: number
+          ran_at: string
+          router_type: string
+          total_items: number
+          warning: string | null
+        }
+        Insert: {
+          avg_item_duration_ms?: number | null
+          created_at?: string
+          degraded_items?: number
+          duration_ms?: number
+          id?: string
+          model?: string | null
+          passed_items?: number
+          ran_at: string
+          router_type: string
+          total_items?: number
+          warning?: string | null
+        }
+        Update: {
+          avg_item_duration_ms?: number | null
+          created_at?: string
+          degraded_items?: number
+          duration_ms?: number
+          id?: string
+          model?: string | null
+          passed_items?: number
+          ran_at?: string
+          router_type?: string
+          total_items?: number
+          warning?: string | null
+        }
+        Relationships: []
+      }
       settings: {
         Row: {
           allowed_values: string[] | null
@@ -934,6 +1066,72 @@ export type Database = {
             columns: ["test_id"]
             isOneToOne: false
             referencedRelation: "tests"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      test_result_comparisons: {
+        Row: {
+          created_at: string
+          current_pass_rate: number | null
+          error_message: string | null
+          fixes: Json
+          id: string
+          new_failures: Json
+          previous_pass_rate: number | null
+          previous_test_result_id: string | null
+          score_delta: number | null
+          status: string
+          test_result_id: string
+          updated_at: string
+          verdict: string | null
+          verdict_summary: string | null
+        }
+        Insert: {
+          created_at?: string
+          current_pass_rate?: number | null
+          error_message?: string | null
+          fixes?: Json
+          id?: string
+          new_failures?: Json
+          previous_pass_rate?: number | null
+          previous_test_result_id?: string | null
+          score_delta?: number | null
+          status?: string
+          test_result_id: string
+          updated_at?: string
+          verdict?: string | null
+          verdict_summary?: string | null
+        }
+        Update: {
+          created_at?: string
+          current_pass_rate?: number | null
+          error_message?: string | null
+          fixes?: Json
+          id?: string
+          new_failures?: Json
+          previous_pass_rate?: number | null
+          previous_test_result_id?: string | null
+          score_delta?: number | null
+          status?: string
+          test_result_id?: string
+          updated_at?: string
+          verdict?: string | null
+          verdict_summary?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "test_result_comparisons_previous_test_result_id_fkey"
+            columns: ["previous_test_result_id"]
+            isOneToOne: false
+            referencedRelation: "test_results"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "test_result_comparisons_test_result_id_fkey"
+            columns: ["test_result_id"]
+            isOneToOne: true
+            referencedRelation: "test_results"
             referencedColumns: ["id"]
           },
         ]
@@ -1099,6 +1297,7 @@ export type Database = {
           summary: Json
           test_id: string
           total_items: number
+          triggered_by: string | null
         }
         Insert: {
           app_version?: string | null
@@ -1124,6 +1323,7 @@ export type Database = {
           summary?: Json
           test_id: string
           total_items?: number
+          triggered_by?: string | null
         }
         Update: {
           app_version?: string | null
@@ -1149,6 +1349,7 @@ export type Database = {
           summary?: Json
           test_id?: string
           total_items?: number
+          triggered_by?: string | null
         }
         Relationships: [
           {
@@ -1456,6 +1657,8 @@ export type Database = {
           root_cause_category: string | null
           root_cause_content: string | null
           root_cause_generated_at: string | null
+          root_cause_reason: string | null
+          root_cause_suggested_fix: string | null
           root_cause_title: string | null
           row_index: number | null
           run_created_at: string | null
@@ -1545,6 +1748,8 @@ export type Database = {
           root_cause_category: string | null
           root_cause_content: string | null
           root_cause_generated_at: string | null
+          root_cause_reason: string | null
+          root_cause_suggested_fix: string | null
           root_cause_title: string | null
           row_index: number | null
           run_created_at: string | null

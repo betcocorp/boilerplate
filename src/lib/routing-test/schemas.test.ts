@@ -23,13 +23,14 @@ describe('routingTestExpectedAgentSchema (B0-657)', () => {
     expect(routingTestExpectedAgentSchema.safeParse('').success).toBe(false);
   });
 
-  it('stays derived from the registry, so the enum and the DB CHECK cover the same five ids', () => {
+  it('stays derived from the registry, so the enum and the DB CHECK cover the same six ids', () => {
     expect([...SME_AGENT_IDS]).toEqual([
       'product',
       'bathroom',
       'dilution',
       'floor',
       'recommendations',
+      'cross_reference',
     ]);
   });
 });

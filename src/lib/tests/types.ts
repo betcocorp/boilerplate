@@ -38,11 +38,43 @@ export type TestItemRecord = Tables<'test_items'>;
 export type TestResultRecord = Tables<'test_results'>;
 export type TestResultItemRecord = Tables<'test_result_items'>;
 export type LatestFailedTestResultItemView = Tables<'latest_failed_test_result_items'>;
+/** B0-312 — post-mortem comparison of a run against the previous completed run on the same test. */
+export type TestResultComparisonRecord = Tables<'test_result_comparisons'>;
 
 export type NewTestRecord = TablesInsert<'tests'>;
 export type NewTestItemRecord = TablesInsert<'test_items'>;
 export type NewTestResultRecord = TablesInsert<'test_results'>;
 export type NewTestResultItemRecord = TablesInsert<'test_result_items'>;
+export type NewTestResultComparisonRecord = TablesInsert<'test_result_comparisons'>;
+
+/** B0-312 — `test_result_comparisons.status` values. */
+export const RUN_COMPARISON_STATUSES = ['generating', 'ready', 'failed', 'no_baseline'] as const;
+export type RunComparisonStatus = (typeof RUN_COMPARISON_STATUSES)[number];
+
+/** B0-314 — `test_result_comparisons.verdict` values (set only once `status` is 'ready'). */
+export const RUN_COMPARISON_VERDICTS = ['improved', 'regressed', 'flat'] as const;
+export type RunComparisonVerdict = (typeof RUN_COMPARISON_VERDICTS)[number];
+
+/** One entry of `test_result_comparisons.new_failures` — a case that passed previously and fails now. */
+export type RunComparisonNewFailure = {
+  resultItemId: string;
+  testItemId: string;
+  rowIndex: number;
+  prompt: string;
+  errorMessage: string | null;
+  /** Null until the B0-314 LLM analysis stage fills it in. */
+  cause: string | null;
+  fix: string | null;
+};
+
+/** One entry of `test_result_comparisons.fixes` — a case that failed previously and passes now. */
+export type RunComparisonFix = {
+  resultItemId: string;
+  testItemId: string;
+  rowIndex: number;
+  prompt: string;
+  errorMessage: string | null;
+};
 
 export type ParsedCsvRow = {
   rowIndex: number;

@@ -366,7 +366,6 @@ export default async function AdminFailureQueuePage({ searchParams }: PageProps)
                       <TableHead>Test</TableHead>
                       <TableHead>Prompt</TableHead>
                       <TableHead>Latency</TableHead>
-                      <TableHead>Error</TableHead>
                       <TableHead>Root cause</TableHead>
                       <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
@@ -374,7 +373,7 @@ export default async function AdminFailureQueuePage({ searchParams }: PageProps)
                   <TableBody>
                     {!loadError && rows.length === 0 ? (
                       <TableRow>
-                        <TableCell className="text-slate-500" colSpan={7}>
+                        <TableCell className="text-slate-500" colSpan={5}>
                           No failed prompts match this search.
                         </TableCell>
                       </TableRow>
@@ -406,18 +405,28 @@ export default async function AdminFailureQueuePage({ searchParams }: PageProps)
                         <TableCell className="whitespace-nowrap align-top text-sm text-slate-600">
                           {formatDurationSeconds(row.elapsed_ms)}
                         </TableCell>
-                        <TableCell className="max-w-xs align-top text-sm text-slate-600">
-                          <span className="line-clamp-3">{row.error_message || '—'}</span>
-                        </TableCell>
                         <TableCell className="max-w-sm align-top text-sm text-slate-600">
                           {row.root_cause_content ? (
-                            <div className="flex flex-col gap-1">
+                            <div className="flex flex-col gap-2">
                               {row.root_cause_category ? (
                                 <Badge className="w-fit" variant="outline">
                                   {row.root_cause_category}
                                 </Badge>
                               ) : null}
-                              <span className="line-clamp-3">{row.root_cause_content}</span>
+                              <div>
+                                <p className="text-xs font-semibold text-slate-500">Cause</p>
+                                <p className="whitespace-pre-wrap break-words">
+                                  {row.root_cause_reason ?? row.root_cause_content}
+                                </p>
+                              </div>
+                              {row.root_cause_suggested_fix ? (
+                                <div>
+                                  <p className="text-xs font-semibold text-slate-500">Solution</p>
+                                  <p className="whitespace-pre-wrap break-words">
+                                    {row.root_cause_suggested_fix}
+                                  </p>
+                                </div>
+                              ) : null}
                             </div>
                           ) : (
                             <span className="italic text-slate-400">
@@ -529,7 +538,6 @@ export default async function AdminFailureQueuePage({ searchParams }: PageProps)
                                 <tr className="border-b border-slate-100 bg-slate-50/60 text-xs font-medium text-slate-500">
                                   <th className="px-4 py-2 text-left font-medium">Test</th>
                                   <th className="px-4 py-2 text-left font-medium">Prompt</th>
-                                  <th className="px-4 py-2 text-left font-medium">Error</th>
                                   <th className="px-4 py-2 text-right font-medium">Actions</th>
                                 </tr>
                               </thead>
@@ -559,11 +567,6 @@ export default async function AdminFailureQueuePage({ searchParams }: PageProps)
                                             testItemId={row.test_item_id ?? ''}
                                           />
                                         </div>
-                                      </td>
-                                      <td className="max-w-xs px-4 py-3 align-top">
-                                        <span className="line-clamp-2 text-xs text-slate-500">
-                                          {row.error_message || '—'}
-                                        </span>
                                       </td>
                                       <td className="px-4 py-3 align-top text-right">
                                         <div className="flex flex-col items-end gap-1">

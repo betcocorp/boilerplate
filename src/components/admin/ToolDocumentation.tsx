@@ -1,9 +1,10 @@
 'use client';
 
-import { ChevronDown } from 'lucide-react';
+import { ChevronDown, Loader2 } from 'lucide-react';
 import { useState } from 'react';
 import type { Tool } from 'openai/resources/responses/responses';
 
+import { Button } from '~/components/ui/button';
 import {
   Card,
   CardContent,
@@ -11,6 +12,7 @@ import {
   CardHeader,
   CardTitle,
 } from '~/components/ui/card';
+import { getToolExample } from '~/lib/tools/examples';
 
 interface ToolDocumentationProps {
   tool: Tool;
@@ -18,6 +20,21 @@ interface ToolDocumentationProps {
 
 export function ToolDocumentation({ tool }: ToolDocumentationProps) {
   const [isExpanded, setIsExpanded] = useState(false);
+  const [showExample, setShowExample] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [response, setResponse] = useState<Record<string, unknown> | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [formData, setFormData] = useState<Record<string, string>>(
+    tool.type === 'function'
+      ? Object.entries(getToolExample(tool.name) || {}).reduce(
+          (acc, [key, value]) => {
+            acc[key] = typeof value === 'string' ? value : JSON.stringify(value);
+            return acc;
+          },
+          {} as Record<string, string>,
+        )
+      : {},
+  );
 
   if (tool.type !== 'function') {
     return null;
@@ -26,6 +43,54 @@ export function ToolDocumentation({ tool }: ToolDocumentationProps) {
   const parameters = tool.parameters as Record<string, unknown> | undefined;
   const properties = (parameters?.properties as Record<string, unknown>) || {};
   const requiredFields = (parameters?.required as string[]) || [];
+
+  const handleFormChange = (key: string, value: string) => {
+    setFormData((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const handleSubmit = async () => {
+    setIsLoading(true);
+    setError(null);
+    setResponse(null);
+
+    try {
+      const payload = Object.entries(formData).reduce(
+        (acc, [key, value]) => {
+          if (!value) return acc;
+          try {
+            acc[key] = value === 'true' ? true : value === 'false' ? false : value;
+            // Try parsing as JSON for complex types
+            if (value.startsWith('{') || value.startsWith('[')) {
+              acc[key] = JSON.parse(value);
+            } else if (!isNaN(Number(value)) && value !== '') {
+              acc[key] = Number(value);
+            }
+          } catch {
+            acc[key] = value;
+          }
+          return acc;
+        },
+        {} as Record<string, unknown>,
+      );
+
+      const res = await fetch(`/api/admin/tools/execute/${tool.name}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || 'Request failed');
+      } else {
+        setResponse(data);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unknown error');
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   return (
     <Card className="rounded-2xl">
@@ -96,7 +161,64 @@ export function ToolDocumentation({ tool }: ToolDocumentationProps) {
             </div>
           )}
 
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowExample(!showExample)}
+            className="mb-2"
+          >
+            {showExample ? 'Hide' : 'Show'} Example Call
+          </Button>
+
+          {showExample && (
+            <div className="space-y-3 rounded-lg border border-border/40 bg-muted/20 p-4">
+              <h4 className="text-sm font-semibold text-foreground">Example Request</h4>
+              <div className="space-y-2">
+                {Object.entries(properties).map(([paramName]) => (
+                  <div key={paramName}>
+                    <label className="text-xs font-medium text-muted-foreground">
+                      {paramName}
+                    </label>
+                    <input
+                      type="text"
+                      value={formData[paramName] || ''}
+                      onChange={(e) => handleFormChange(paramName, e.target.value)}
+                      placeholder={`Enter ${paramName}`}
+                      className="mt-1 w-full rounded border border-border bg-background px-2 py-1 text-xs text-foreground placeholder-muted-foreground focus:border-primary focus:outline-none"
+                    />
+                  </div>
+                ))}
+              </div>
+
+              <Button
+                onClick={handleSubmit}
+                disabled={isLoading}
+                size="sm"
+                className="w-full"
+              >
+                {isLoading && <Loader2 className="mr-2 size-3 animate-spin" />}
+                {isLoading ? 'Executing...' : 'Execute'}
+              </Button>
+
+              {error && (
+                <div className="rounded bg-red-500/10 p-2 text-xs text-red-600">
+                  <strong>Error:</strong> {error}
+                </div>
+              )}
+
+              {response && (
+                <div className="rounded bg-muted/50 p-2">
+                  <h5 className="mb-2 text-xs font-semibold text-foreground">Response:</h5>
+                  <pre className="overflow-x-auto text-xs text-muted-foreground whitespace-pre-wrap break-words">
+                    {typeof response === 'string' ? response : JSON.stringify(response, null, 2)}
+                  </pre>
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="rounded-lg bg-muted/30 p-3 overflow-x-auto">
+            <h4 className="mb-2 text-sm font-semibold text-foreground">Full Schema</h4>
             <pre className="text-xs font-mono text-muted-foreground whitespace-pre-wrap break-words">
               {JSON.stringify(tool, null, 2)}
             </pre>

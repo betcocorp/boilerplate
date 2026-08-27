@@ -1,8 +1,10 @@
+import { getServerSession } from 'next-auth';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
 import { authorizeAdminTestsRoute } from '~/lib/api/admin-tests-auth';
 import { APP_VERSION } from '~/lib/app-version';
+import { authOptions } from '~/lib/auth';
 import supportedModels from '~/lib/constants/models';
 import {
   createTestResult,
@@ -77,6 +79,15 @@ export async function POST(request: Request) {
     );
   }
 
+  /**
+   * B0-687 — `authorizeAdminTestsRoute` accepts either a signed-in admin OR a client token, so the
+   * actor is resolved separately here. No session means the request authenticated with a service
+   * token (the CI eval gate), which carries no NextAuth user — labeled `api-client` rather than
+   * left null, so a CI-created run is never mistaken for a pre-B0-687 run of unknown origin.
+   */
+  const session = await getServerSession(authOptions);
+  const triggeredBy = session?.user?.email ?? 'api-client';
+
   const run = await createTestResult({
     test_id: testId,
     status: 'queued',
@@ -90,6 +101,7 @@ export async function POST(request: Request) {
         ? { useHybrid, useReranker, useMultiIntent }
         : { modelTag, useValidator },
     app_version: APP_VERSION,
+    triggered_by: triggeredBy,
     summary: {
       completed_items: 0,
       total_items: items.length,

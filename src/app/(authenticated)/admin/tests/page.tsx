@@ -64,7 +64,10 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
                 save run metrics in `public.test_results`.
               </p>
             </div>
-            <div className="shrink-0">
+            <div className="flex shrink-0 items-center gap-2">
+              <Button asChild variant="outline">
+                <Link href="/admin/tests/reports">View reports</Link>
+              </Button>
               <CreateOrUploadTestDatasetDialog returnPath="/admin/tests" />
             </div>
           </div>

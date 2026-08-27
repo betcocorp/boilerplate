@@ -13,6 +13,15 @@ export type ProductEntityResolutionSource =
   | 'prod_line_id'
   | 'title_exact'
   | 'title_fuzzy'
+  /**
+   * B0-479: the two `freeform` variants are the same alias tiers, reached with
+   * `{ mode: 'freeform' }` — i.e. the input was a raw user question/phrase rather than a
+   * model-asserted product name, so only the high-precision alias tiers were allowed to run.
+   * Kept distinct so retrieval telemetry can tell a model-asserted product name apart from a
+   * key recovered out of freeform text.
+   */
+  | 'alias_exact_freeform'
+  | 'alias_fuzzy_freeform'
   | null;
 
 export type EntityContext = {
@@ -156,9 +165,11 @@ type FuzzyTrgmAliasRow = {
   similarity: number;
 };
 
-// rag.match_product_alias_fuzzy is not yet in the generated Supabase RPC types (regenerate via
-// `pnpm run types:supabase:rag` once CLI-authenticated); cast the client narrowly for this one
-// call, same pattern used in retrieval/near-duplicate-suppression.ts for compute_chunk_pairwise_similarity.
+// rag.match_product_alias_fuzzy IS now in the generated Supabase RPC types
+// (`~/types/supabase.rag.ts`), but the generated `Returns` row declares every column
+// non-nullable (`product_line_key: string`, `confidence: number`) while the SQL function can
+// return NULL for both. Keep this narrow local cast — it models the real nullability — rather
+// than adopting the generated shape and losing the null checks below.
 type FuzzyTrgmAliasRpcClient = {
   rpc: (
     fn: 'match_product_alias_fuzzy',
@@ -225,6 +236,9 @@ async function resolveProductKeyForAliasEntity(
  * and the fuzzy-trigram similarity cluster) make a single deterministic exception to that rule —
  * if exactly one candidate among the ambiguous set is `verified`, that one wins.
  *
+ * B0-479: `options.mode` restricts which tiers may run — `'freeform'` narrows resolution to the
+ * two high-precision alias tiers for raw user text (see `ResolveProductEntityOptions`).
+ *
  * B0-479: also reports `resolutionSource` — which of the branches below actually produced the
  * match — so callers can tag downstream retrieval telemetry with "alias-anchored" (alias_exact /
  * alias_fuzzy / alias_fuzzy_trgm) vs. a non-alias explicit-key source (prod_line_id / title match).
@@ -249,9 +263,42 @@ export type ProductEntityResolutionResult = {
   matchedAliasConfidence: number | null;
 };
 
+/**
+ * B0-479: which family of tiers `resolveProductEntityByName` is allowed to run.
+ *
+ * - `'name'` (default) — the caller is passing a product name/code the model explicitly asserted
+ *   (`productName` / `productId`). All six tiers run, including the trigram-similarity RPC and the
+ *   legacy prod_line_id/title fallbacks.
+ * - `'freeform'` — the caller is passing raw user text (`search_product_docs.freeformQuery`), which
+ *   may be a SKU or short product name but may equally be a full natural-language question. Only
+ *   the two high-precision alias tiers run, and only on an unambiguous match:
+ *     * exact `alias_norm` equality — the WHOLE input must equal a curated alias, so a sentence
+ *       can never match by accident;
+ *     * tokenized alias AND-match — every significant token of the input must appear in one
+ *       `alias_norm`. AND-ing more tokens can only shrink the candidate set, so a long sentence is
+ *       strictly *less* likely to match than a short phrase — the tier gets more precise, not less,
+ *       as the input grows, which is why no input-length gate is needed here.
+ *   Deliberately EXCLUDED in this mode:
+ *     * the trigram RPC (`match_product_alias_fuzzy`, threshold 0.35) — whole-string similarity is
+ *       not monotonic in input length, so a long question can score a spurious 0.4+ against some
+ *       unrelated alias and lock retrieval onto the wrong product's label/SDS;
+ *     * the `prod_line_id` / `title ILIKE` / tokenized-title fallbacks — those resolve against
+ *       legacy internal titles rather than the curated alias table, and freeform text is exactly
+ *       the input for which "no lock" is the correct outcome;
+ *     * the B0-483 verified-tiebreak — when freeform text hits aliases spanning multiple product
+ *       lines, this mode returns no key at all rather than electing the single verified one.
+ */
+export type ProductEntityResolutionMode = 'name' | 'freeform';
+
+export type ResolveProductEntityOptions = {
+  mode?: ProductEntityResolutionMode;
+};
+
 export async function resolveProductEntityByName(
   name: string,
+  options: ResolveProductEntityOptions = {},
 ): Promise<ProductEntityResolutionResult> {
+  const freeform = options.mode === 'freeform';
   const trimmed = name.trim();
   if (!trimmed) {
     return {
@@ -287,14 +334,20 @@ export async function resolveProductEntityByName(
       const distinctLineKeys = new Set(
         aliasRows.filter((r) => r.product_line_key).map((r) => r.product_line_key),
       );
+      // B0-479: the verified-tiebreak is a `mode: 'name'`-only exception — freeform text that hits
+      // multiple product lines must produce no lock at all.
       const winner =
-        distinctLineKeys.size <= 1 ? aliasRows[0] : resolveVerifiedTiebreak(aliasRows);
+        distinctLineKeys.size <= 1
+          ? aliasRows[0]
+          : freeform
+            ? null
+            : resolveVerifiedTiebreak(aliasRows);
       if (winner?.product_line_key) {
         const productKey = await resolveProductKeyForAliasEntity(supabase, winner.entity_id);
         return {
           productLineKey: winner.product_line_key,
           productKey,
-          resolutionSource: 'alias_exact',
+          resolutionSource: freeform ? 'alias_exact_freeform' : 'alias_exact',
           ambiguousAlias: false,
           matchedAliasId: winner.id ?? null,
           matchedAliasConfidence: winner.confidence ?? null,
@@ -338,7 +391,7 @@ export async function resolveProductEntityByName(
           return {
             productLineKey: fuzzyAliasRows[0].product_line_key,
             productKey,
-            resolutionSource: 'alias_fuzzy',
+            resolutionSource: freeform ? 'alias_fuzzy_freeform' : 'alias_fuzzy',
             ambiguousAlias: false,
             matchedAliasId: fuzzyAliasRows[0].id ?? null,
             matchedAliasConfidence: fuzzyAliasRows[0].confidence ?? null,
@@ -351,6 +404,20 @@ export async function resolveProductEntityByName(
     } catch {
       // Alias table unavailable — fall through to legacy resolution.
     }
+  }
+
+  // B0-479: freeform input stops here. Everything below is either a similarity-scored net cast
+  // over the whole input string or a legacy non-alias fallback — see `ResolveProductEntityOptions`
+  // for why neither is safe to run against a raw user question. "No key" is the correct outcome.
+  if (freeform) {
+    return {
+      productLineKey: null,
+      productKey: null,
+      resolutionSource: null,
+      ambiguousAlias: sawAmbiguousAlias,
+      matchedAliasId: null,
+      matchedAliasConfidence: null,
+    };
   }
 
   // B0-482: trigram-similarity fuzzy alias lookup (rag.match_product_alias_fuzzy) — a broader net

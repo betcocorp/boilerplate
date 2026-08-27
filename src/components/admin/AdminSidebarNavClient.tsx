@@ -94,6 +94,14 @@ const sidebarSections: NavSectionModel[] = [
             permission: PERMISSIONS.NAVIGATION_SIDEBAR_TESTS,
           },
           {
+            // B0-687 — same surface family as the other test links, so it reuses
+            // `navigation.sidebar.tests` rather than minting a selector that would need its own
+            // row + role grants to ever appear (B0-643).
+            label: 'Reports',
+            href: '/admin/tests/reports',
+            permission: PERMISSIONS.NAVIGATION_SIDEBAR_TESTS,
+          },
+          {
             label: 'Prompt observability',
             href: '/admin/observability',
             permission: PERMISSIONS.NAVIGATION_SIDEBAR_OBSERVABILITY,

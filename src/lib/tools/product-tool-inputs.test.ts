@@ -76,8 +76,12 @@ describe('search_product_docs input contract (B0-362)', () => {
 
     expect(out.ok).toBe(true);
     expect(out.query).toBe('best product for removing mineral scale from toilet bowls');
-    // freeformQuery path deliberately skips product-entity scoping.
-    expect(resolveProductEntityByName).toHaveBeenCalledWith('');
+    // B0-479: the freeformQuery path no longer skips product-entity resolution (it used to pass
+    // `''`); it attempts it against the freeform text in the precise, alias-tiers-only mode.
+    expect(resolveProductEntityByName).toHaveBeenCalledWith(
+      'best product for removing mineral scale from toilet bowls',
+      { mode: 'freeform' },
+    );
   });
 
   it('still accepts a topic-only call', async () => {
@@ -92,7 +96,7 @@ describe('search_product_docs input contract (B0-362)', () => {
       topic: 'kill claims',
     });
     expect(out.query).toBe('pH7Q kill claims');
-    expect(resolveProductEntityByName).toHaveBeenCalledWith('pH7Q');
+    expect(resolveProductEntityByName).toHaveBeenCalledWith('pH7Q', { mode: 'name' });
   });
 
   it('composes a NON-EMPTY query from productName + surfaceType with no topic', async () => {
@@ -139,7 +143,7 @@ describe('product-fact tools accept `productName` as well as `productId` (B0-364
     const out = await executeProductTool('get_product_spec', { productName: 'pH7Q' });
     expect(out.ok).toBe(true);
     expect(out.productId).toBe('pH7Q');
-    expect(resolveProductEntityByName).toHaveBeenCalledWith('pH7Q');
+    expect(resolveProductEntityByName).toHaveBeenCalledWith('pH7Q', { mode: 'name' });
     expect(ragQueryForProductKnowledgeWithMeta).toHaveBeenCalledWith(
       expect.objectContaining({ query: 'pH7Q specifications technical datasheet performance' }),
     );
@@ -148,7 +152,7 @@ describe('product-fact tools accept `productName` as well as `productId` (B0-364
   it('get_product_spec: productId keeps working', async () => {
     const out = await executeProductTool('get_product_spec', { productId: 'AF315' });
     expect(out.productId).toBe('AF315');
-    expect(resolveProductEntityByName).toHaveBeenCalledWith('AF315');
+    expect(resolveProductEntityByName).toHaveBeenCalledWith('AF315', { mode: 'name' });
   });
 
   it('get_product_spec: rejects a call with neither key', async () => {
@@ -235,7 +239,7 @@ describe('product-fact tools accept `productName` as well as `productId` (B0-364
       expect(out.productId).toBe('pH7Q');
       expect(out.organism).toBe('Norovirus');
     }
-    expect(resolveProductEntityByName).toHaveBeenLastCalledWith('pH7Q');
+    expect(resolveProductEntityByName).toHaveBeenLastCalledWith('pH7Q', { mode: 'name' });
     await expect(executeProductTool('get_efficacy_data', { organism: 'Norovirus' })).rejects.toThrow(
       /productId/,
     );

@@ -4,7 +4,21 @@ import { connection } from 'next/server';
 import { BoostRulesCard } from '~/components/admin/rag/BoostRulesCard';
 import { ChunkingConfigCard } from '~/components/admin/rag/ChunkingConfigCard';
 import { DomainMetadataCard } from '~/components/admin/rag/DomainMetadataCard';
-import { getChunkTokenStats, listEnrichmentDocuments } from '~/lib/rag/corpus-stats';
+import {
+  getBoostFieldCoverage,
+  getChunkTokenStats,
+  getCorpusImprovementStatus,
+  listEnrichmentDocuments,
+  type CorpusImprovementState,
+} from '~/lib/rag/corpus-stats';
+import { getRagBoostWeights } from '~/lib/settings/settings-service';
+
+/** Amber is reserved for "not built"; slate marks built-but-switched-off, emerald marks live. */
+const STATE_BADGE: Record<CorpusImprovementState, string> = {
+  active: 'bg-emerald-50 text-emerald-700',
+  migrated: 'bg-slate-100 text-slate-600',
+  inactive: 'bg-amber-50 text-amber-700',
+};
 
 export const maxDuration = 300;
 
@@ -25,9 +39,12 @@ export default async function RagChunkingPage({ searchParams }: PageProps) {
   const params = await searchParams;
   const page = Math.max(1, parseInt(String(params.page ?? '1'), 10) || 1);
 
-  const [chunkStats, { documents, total }] = await Promise.all([
+  const [chunkStats, { documents, total }, status, boostWeights, boostCoverage] = await Promise.all([
     getChunkTokenStats(),
     listEnrichmentDocuments(page, PAGE_SIZE),
+    getCorpusImprovementStatus(),
+    getRagBoostWeights(),
+    getBoostFieldCoverage(),
   ]);
 
   return (
@@ -60,44 +77,21 @@ export default async function RagChunkingPage({ searchParams }: PageProps) {
             </h1>
             <p className="max-w-3xl text-base leading-7 text-slate-600">
               Four targeted improvements to raise average similarity from the current ~54% baseline.
-              Chunking config and boost rules generate migration SQL to apply.{' '}
-              <strong>Domain metadata enrichment</strong> writes to the database immediately.
+              Every setting on this page is stored in the <code className="font-mono text-sm">settings</code>{' '}
+              table and applied by the retrieval layer — nothing here generates SQL to paste
+              elsewhere. The shipped defaults are deliberately inert, so a corpus only changes once
+              an operator opts in.
             </p>
           </div>
 
           <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            {[
-              {
-                label: 'Semantic chunking',
-                status: 'Pending migration',
-                color: 'amber',
-              },
-              {
-                label: 'Token budget + overlap',
-                status: 'Pending migration',
-                color: 'amber',
-              },
-              {
-                label: 'Domain metadata fields',
-                status: 'Active — live',
-                color: 'emerald',
-              },
-              {
-                label: 'Similarity boost rules',
-                status: 'Pending migration',
-                color: 'amber',
-              },
-            ].map(({ label, status, color }) => (
+            {status.improvements.map(({ label, status: statusLabel, state }) => (
               <div className="rounded-2xl bg-slate-50 px-4 py-3" key={label}>
                 <p className="text-xs font-medium text-slate-700">{label}</p>
                 <span
-                  className={`mt-1.5 inline-block rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                    color === 'emerald'
-                      ? 'bg-emerald-50 text-emerald-700'
-                      : 'bg-amber-50 text-amber-700'
-                  }`}
+                  className={`mt-1.5 inline-block rounded-full px-2.5 py-0.5 text-xs font-medium ${STATE_BADGE[state]}`}
                 >
-                  {status}
+                  {statusLabel}
                 </span>
               </div>
             ))}
@@ -105,7 +99,7 @@ export default async function RagChunkingPage({ searchParams }: PageProps) {
         </section>
 
         {/* Card 1: Chunking config + token budget */}
-        <ChunkingConfigCard chunkStats={chunkStats} />
+        <ChunkingConfigCard chunkStats={chunkStats} config={status.chunking} />
 
         {/* Card 2: Domain metadata enrichment */}
         <DomainMetadataCard
@@ -116,7 +110,11 @@ export default async function RagChunkingPage({ searchParams }: PageProps) {
         />
 
         {/* Card 3: Boost rules */}
-        <BoostRulesCard />
+        <BoostRulesCard
+          coverage={boostCoverage}
+          enabled={status.boost.enabled}
+          weights={boostWeights}
+        />
       </main>
     </div>
   );

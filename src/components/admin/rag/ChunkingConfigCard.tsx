@@ -1,9 +1,17 @@
 'use client';
 
-import { useState } from 'react';
+import { useActionState, useState } from 'react';
+import {
+  saveChunkingConfigAction,
+  type SaveCorpusSettingsState,
+} from '~/lib/rag/corpus-config-actions';
 import type { ChunkTokenStats } from '~/lib/rag/corpus-stats';
-
-type Strategy = 'naive' | 'heading-aware';
+import {
+  RAG_CHUNK_STRATEGIES,
+  RAG_CHUNK_TOKEN_BOUNDS,
+  type RagChunkingConfig,
+  type RagChunkStrategy,
+} from '~/lib/settings/rag-corpus-config';
 
 const SURFACE_SUGGESTIONS = [
   'Hard floor',
@@ -43,28 +51,50 @@ function DistributionBar({
   );
 }
 
-export function ChunkingConfigCard({ chunkStats }: { chunkStats: ChunkTokenStats }) {
-  const [strategy, setStrategy] = useState<Strategy>('naive');
-  const [minTokens, setMinTokens] = useState(300);
-  const [maxTokens, setMaxTokens] = useState(600);
-  const [overlapTokens, setOverlapTokens] = useState(50);
-  const [showConfig, setShowConfig] = useState(false);
-  const [copied, setCopied] = useState(false);
+type Props = {
+  chunkStats: ChunkTokenStats;
+  config: RagChunkingConfig;
+};
 
-  const migrationConfig = JSON.stringify(
-    { strategy, min_tokens: minTokens, max_tokens: maxTokens, overlap_tokens: overlapTokens },
+export function ChunkingConfigCard({ chunkStats, config }: Props) {
+  const [strategy, setStrategy] = useState<RagChunkStrategy>(config.strategy);
+  const [minTokens, setMinTokens] = useState(String(config.minTokens));
+  const [maxTokens, setMaxTokens] = useState(String(config.maxTokens));
+  const [overlapTokens, setOverlapTokens] = useState(String(config.overlapTokens));
+
+  const [state, formAction, isPending] = useActionState<SaveCorpusSettingsState, FormData>(
+    saveChunkingConfigAction,
     null,
-    2,
   );
 
-  function copyConfig() {
-    void navigator.clipboard.writeText(migrationConfig).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
+  // React 19 resets a controlled input's DOM state when a `<form action={…}>` succeeds, which would
+  // snap these fields back to their initial render values. They must keep what the operator typed
+  // (the server round-trip is what confirms it), so the form submits via onSubmit + preventDefault.
+  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formData = new FormData();
+    formData.set('strategy', strategy);
+    formData.set('minTokens', minTokens);
+    formData.set('maxTokens', maxTokens);
+    formData.set('overlapTokens', overlapTokens);
+    formAction(formData);
   }
 
-  const { totalChunks, avgTokens, minTokens: statMin, maxTokens: statMax, distribution } = chunkStats;
+  const {
+    totalChunks,
+    avgTokens,
+    minTokens: statMin,
+    maxTokens: statMax,
+    distribution,
+  } = chunkStats;
+
+  const isHeadingAware = strategy === 'heading-aware';
+  const savedHeadingAware = config.strategy === 'heading-aware';
+  const dirty =
+    strategy !== config.strategy ||
+    Number(minTokens) !== config.minTokens ||
+    Number(maxTokens) !== config.maxTokens ||
+    Number(overlapTokens) !== config.overlapTokens;
 
   return (
     <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
@@ -77,13 +107,18 @@ export function ChunkingConfigCard({ chunkStats }: { chunkStats: ChunkTokenStats
             Chunking strategy &amp; token budget
           </h2>
         </div>
-        <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700">
-          Pending migration
+        <span
+          className={`rounded-full px-3 py-1 text-xs font-medium ${
+            savedHeadingAware ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'
+          }`}
+        >
+          {savedHeadingAware ? 'Active — heading-aware' : 'Saved — naive (default)'}
         </span>
       </div>
       <p className="mt-2 text-sm text-slate-500">
-        Configure the desired chunking strategy and token targets. Copy the migration config below
-        and use it to update the <code className="font-mono text-xs">sync_legacy_product_profile_chunks</code> RPC.
+        These values are stored in the <code className="font-mono text-xs">settings</code> table as{' '}
+        <code className="font-mono text-xs">RAG_CHUNK_*</code> and read by the ingestion pipeline the
+        next time a document is chunked. Saving does not re-chunk the existing corpus.
       </p>
 
       {/* Live stats */}
@@ -122,22 +157,20 @@ export function ChunkingConfigCard({ chunkStats }: { chunkStats: ChunkTokenStats
         )}
         <p className="mt-2 text-xs text-slate-400">
           Violet bar (300–599) is the target range. Currently{' '}
-          {totalChunks > 0
-            ? Math.round((distribution.from300to599 / totalChunks) * 100)
-            : 0}
-          % of chunks fall within it.
+          {totalChunks > 0 ? Math.round((distribution.from300to599 / totalChunks) * 100) : 0}% of
+          chunks fall within it.
         </p>
       </div>
 
       {/* Config form */}
-      <div className="mt-8 border-t border-slate-100 pt-6">
-        <p className="mb-4 text-sm font-medium text-slate-700">Desired configuration</p>
+      <form className="mt-8 border-t border-slate-100 pt-6" onSubmit={handleSubmit}>
+        <p className="mb-4 text-sm font-medium text-slate-700">Stored configuration</p>
         <div className="flex flex-wrap gap-4">
           {/* Strategy toggle */}
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-medium text-slate-600">Strategy</label>
             <div className="flex overflow-hidden rounded-xl border border-slate-200">
-              {(['naive', 'heading-aware'] as Strategy[]).map((s) => (
+              {RAG_CHUNK_STRATEGIES.map((s) => (
                 <button
                   className={`px-4 py-2 text-sm font-medium transition ${
                     strategy === s
@@ -156,54 +189,82 @@ export function ChunkingConfigCard({ chunkStats }: { chunkStats: ChunkTokenStats
 
           {/* Number inputs */}
           {[
-            { label: 'Min tokens', value: minTokens, setter: setMinTokens, min: 50, max: 600 },
-            { label: 'Max tokens', value: maxTokens, setter: setMaxTokens, min: 100, max: 2000 },
-            { label: 'Overlap tokens', value: overlapTokens, setter: setOverlapTokens, min: 0, max: 200 },
-          ].map(({ label, value, setter, min, max }) => (
+            {
+              label: 'Min tokens',
+              value: minTokens,
+              setter: setMinTokens,
+              bounds: RAG_CHUNK_TOKEN_BOUNDS.minTokens,
+            },
+            {
+              label: 'Max tokens',
+              value: maxTokens,
+              setter: setMaxTokens,
+              bounds: RAG_CHUNK_TOKEN_BOUNDS.maxTokens,
+            },
+            {
+              label: 'Overlap tokens',
+              value: overlapTokens,
+              setter: setOverlapTokens,
+              bounds: RAG_CHUNK_TOKEN_BOUNDS.overlapTokens,
+            },
+          ].map(({ label, value, setter, bounds }) => (
             <div className="flex flex-col gap-1.5" key={label}>
               <label className="text-xs font-medium text-slate-600">{label}</label>
               <input
-                className="h-10 w-28 rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-violet-500"
-                max={max}
-                min={min}
-                onChange={(e) => setter(Number(e.target.value) || 0)}
+                className={`h-10 w-28 rounded-xl border border-slate-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500 ${
+                  isHeadingAware ? 'text-slate-900' : 'text-slate-400'
+                }`}
+                max={bounds.max}
+                min={bounds.min}
+                onChange={(e) => setter(e.target.value)}
                 type="number"
                 value={value}
               />
             </div>
           ))}
         </div>
-      </div>
 
-      {/* Migration config */}
-      <div className="mt-6">
-        <button
-          className="flex items-center gap-2 text-sm font-medium text-violet-700 hover:text-violet-900"
-          onClick={() => setShowConfig((v) => !v)}
-          type="button"
-        >
-          <span>{showConfig ? '▼' : '▶'}</span>
-          Migration config
-        </button>
-        {showConfig ? (
-          <div className="mt-3">
-            <pre className="overflow-x-auto rounded-2xl bg-slate-900 p-5 text-xs text-slate-100">
-              {migrationConfig}
-            </pre>
-            <button
-              className={`mt-2 rounded-xl px-4 py-2 text-xs font-medium transition ${
-                copied
-                  ? 'bg-emerald-50 text-emerald-700'
-                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-              }`}
-              onClick={copyConfig}
-              type="button"
-            >
-              {copied ? 'Copied!' : 'Copy'}
-            </button>
-          </div>
+        {!isHeadingAware ? (
+          <p className="mt-4 rounded-2xl bg-slate-50 px-4 py-3 text-xs text-slate-600">
+            The naive strategy splits on blank lines and does no packing, so the token budget and
+            overlap above are stored but have no effect on chunking. Switch to{' '}
+            <strong>heading-aware</strong> for them to apply.
+          </p>
         ) : null}
-      </div>
+
+        <div className="mt-6 flex flex-wrap items-center gap-3">
+          <button
+            className="flex h-10 items-center gap-2 rounded-xl bg-violet-600 px-4 text-sm font-medium text-white transition hover:bg-violet-700 disabled:opacity-50"
+            disabled={isPending}
+            type="submit"
+          >
+            {isPending ? (
+              <>
+                <span className="inline-block size-3 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                Saving
+              </>
+            ) : (
+              'Save configuration'
+            )}
+          </button>
+          {state?.ok === true && !dirty ? (
+            <span className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700">
+              Saved
+            </span>
+          ) : null}
+          {state?.ok === false ? (
+            <span
+              className="rounded-full bg-rose-50 px-2.5 py-0.5 text-xs font-medium text-rose-700"
+              title={state.error}
+            >
+              {state.error}
+            </span>
+          ) : null}
+          <span className="text-xs text-slate-400">
+            Cached for up to 30 seconds on the read path.
+          </span>
+        </div>
+      </form>
 
       {/* Datalist for surface type (shared across metadata rows) */}
       <datalist id="surface-type-suggestions">
