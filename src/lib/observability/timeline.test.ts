@@ -722,6 +722,43 @@ describe('buildRunTimeline — usage/safety coverage cap with a real audit row (
   });
 });
 
+describe('buildRunTimeline — alias resolution hit (B0-732)', () => {
+  it('projects an alias_resolution_hit audit row into its own audit timeline event', () => {
+    const run = makeRun();
+    const stepRows: WorkflowStepRow[] = [plannerStep];
+    const logs: AuditLogRow[] = [
+      makeLog({
+        id: 'log-alias-hit',
+        event_type: 'alias_resolution_hit',
+        created_at: at(15),
+        payload: {
+          query: 'pH7Q',
+          resolution_source: 'alias_exact',
+          matched_alias_id: 'alias-123',
+          matched_alias_confidence: 0.98,
+          product_line_key: 'line-ph7q',
+          product_key: 'product-ph7q-dual',
+        },
+      }),
+    ];
+    const timeline = buildRunTimeline(run, stepRows, logs);
+
+    const aliasEvents = timeline.filter(
+      (event) => event.kind === 'audit' && event.eventType === 'alias_resolution_hit',
+    );
+    expect(aliasEvents).toHaveLength(1);
+    expect(aliasEvents[0]).toMatchObject({
+      kind: 'audit',
+      eventType: 'alias_resolution_hit',
+      id: 'audit:log-alias-hit',
+      status: 'ok',
+    });
+    expect(aliasEvents[0]?.label).toContain('pH7Q');
+    expect(aliasEvents[0]?.label).toContain('alias_exact');
+    expect(aliasEvents[0]?.detail.auditPayload).toEqual(logs[0]?.payload);
+  });
+});
+
 /* -------------------------------------------------------------------------- *
  * Scenario 6 — B0-417: tool-call events reconstructed from audit_logs for runs
  * whose agent step predates `output.toolTrace` (only ~3% of rows have it).
