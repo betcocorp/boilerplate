@@ -59,6 +59,13 @@ export type RunExportData = {
     passed_items: number;
     failed_items: number;
     notes: string | null;
+    /** B0-351 — the run's immutable `run_options` config (model / validator / agent mode / router). */
+    run_config: {
+      model_tag: string | null;
+      use_validator: boolean;
+      agent_mode: string;
+      router_type: string | null;
+    };
   };
   items: RunExportItem[];
 };

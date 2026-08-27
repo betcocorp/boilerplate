@@ -41,6 +41,17 @@ export type RunResultCsvRow = {
   /** Encoded semantic hits: `document_id|chunk_id` pairs joined by `; ` (Docs dialog). */
   retrieved_chunks: string;
   test_item_id: string;
+  /**
+   * B0-351 — the run's immutable `run_options` config, repeated on every row so a downloaded CSV
+   * stays self-describing (and two runs' exports can be concatenated and still told apart).
+   */
+  run_model_tag: string;
+  /** `yes` / `no`. */
+  run_use_validator: string;
+  /** `orchestrator` unless the run forced a single specialist. */
+  run_agent_mode: string;
+  /** Forced router override, or empty when the run used the settings-driven default. */
+  run_router_type: string;
 };
 
 function escapeCsvCell(value: string): string {
@@ -90,6 +101,10 @@ export function RunItemResultsCsvDownload({
       'item_detail_path',
       'retrieved_chunks',
       'test_item_id',
+      'run_model_tag',
+      'run_use_validator',
+      'run_agent_mode',
+      'run_router_type',
     ];
 
     const lines = [
@@ -115,6 +130,10 @@ export function RunItemResultsCsvDownload({
           row.item_detail_path,
           row.retrieved_chunks,
           row.test_item_id,
+          row.run_model_tag,
+          row.run_use_validator,
+          row.run_agent_mode,
+          row.run_router_type,
         ]
           .map(escapeCsvCell)
           .join(','),

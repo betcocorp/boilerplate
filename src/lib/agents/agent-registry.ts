@@ -13,6 +13,21 @@ export type BexChatAgentMode = (typeof BEX_CHAT_AGENT_MODES)[number];
 
 export const DEFAULT_BEX_CHAT_AGENT_MODE: BexChatAgentMode = 'orchestrator';
 
+/**
+ * B0-351 — human labels for the agent-mode picker, so the eval harness's "Run dataset" control and
+ * any other mode selector render the same names without re-listing the modes. The Bex chat composer
+ * still hardcodes its own `<SelectItem>` labels; these are byte-identical to them.
+ */
+export const BEX_CHAT_AGENT_MODE_LABELS: Record<BexChatAgentMode, string> = {
+  orchestrator: 'Orchestrator',
+  product: 'Product',
+  bathroom: 'Bathroom',
+  dilution: 'Dilution',
+  floor: 'Floor',
+  recommendations: 'Recommendations',
+  cross_reference: 'Cross-Reference',
+};
+
 export const V1_AGENT_REGISTRY = [
   {
     id: 'product',

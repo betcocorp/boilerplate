@@ -4,7 +4,11 @@ import { getServerSession } from 'next-auth';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 
-import { SME_AGENT_IDS } from '~/lib/agents/agent-registry';
+import {
+  DEFAULT_BEX_CHAT_AGENT_MODE,
+  isBexChatAgentMode,
+  SME_AGENT_IDS,
+} from '~/lib/agents/agent-registry';
 import { APP_VERSION } from '~/lib/app-version';
 import { writeAuditLog } from '~/lib/audit/audit-log';
 import { authOptions } from '~/lib/auth';
@@ -18,6 +22,7 @@ import {
   parseExpectedCriteriaFromForm,
   parseExpectedShouldAnswerFromForm,
   parsePriority,
+  parseMultiTurnJsonFromForm,
   parseShouldCiteFromForm,
   parseTestCsvContent,
 } from '~/lib/tests/csv';
@@ -25,6 +30,10 @@ import {
   buildEditedTestItemPayload,
   buildManualAddTestItemPayload,
 } from '~/lib/tests/manual-add-payload';
+import {
+  buildTestItemsFromScenarioSet,
+  parseMultiTurnScenarioSetJson,
+} from '~/lib/tests/multi-turn-import';
 import {
   archiveTest,
   createTestRecord,
@@ -43,6 +52,7 @@ import {
   updateTestRecord,
   updateTestResult,
 } from '~/lib/tests/repository';
+import { buildTestRunOptions } from '~/lib/tests/run-config';
 import { uploadTestCsvToS3 } from '~/lib/tests/storage';
 
 function normalizeReturnPath(value: FormDataEntryValue | null, fallback: string) {
@@ -132,6 +142,67 @@ export async function uploadTestCsvAction(formData: FormData) {
   const intended_agent = intendedParsed.id;
 
   const hasCsvFile = file instanceof File && file.size > 0;
+
+  /**
+   * B0-537 — a `.json` upload is a multi-turn scenario SET (`multiTurnScenarioSetSchema`), not a
+   * CSV. It creates one `test_items` row per scenario, with the whole scenario under
+   * `input_payload.multi_turn`. Scenarios do not flatten into a CSV cell, so this — not the
+   * `multi_turn_json` escape-hatch column — is the primary authoring path.
+   */
+  if (hasCsvFile && /\.json$/i.test(file.name)) {
+    const parsed = parseMultiTurnScenarioSetJson(toUtf8Text(new Uint8Array(await file.arrayBuffer())));
+    if (!parsed.ok) {
+      redirect(
+        encodeMessage(
+          '/admin/tests',
+          'error',
+          `Could not import ${file.name}: ${parsed.message}`,
+        ),
+      );
+    }
+
+    const set = parsed.set;
+    let createdTestId: string;
+    try {
+      const created = await createTestRecord({
+        name: testName || set.name,
+        source_file_name: file.name,
+        source_bucket: 'ad-hoc',
+        source_key: 'none',
+        row_count: set.scenarios.length,
+        status: 'ready',
+        // The set declares its own intended agent; an explicit form choice still wins.
+        intended_agent: intended_agent ?? set.intended_agent,
+        metadata: {
+          multi_turn_set_id: set.set_id,
+          multi_turn_scenario_count: set.scenarios.length,
+          content_type: file.type || 'application/json',
+          file_size_bytes: file.size,
+        },
+      });
+      createdTestId = created.id;
+
+      await insertTestItems(
+        buildTestItemsFromScenarioSet({
+          testId: created.id,
+          set,
+          sourceFileName: file.name,
+        }),
+      );
+    } catch (error) {
+      redirect(encodeMessage('/admin/tests', 'error', describeUploadError(error)));
+    }
+
+    revalidatePath('/admin/tests');
+    revalidatePath(`/admin/tests/${createdTestId}`);
+    redirect(
+      encodeMessage(
+        '/admin/tests',
+        'success',
+        `Imported ${set.scenarios.length} multi-turn scenario${set.scenarios.length === 1 ? '' : 's'} from ${file.name}.`,
+      ),
+    );
+  }
 
   if (!hasCsvFile) {
     if (!testName) {
@@ -331,9 +402,19 @@ export async function addTestItemAction(formData: FormData) {
   const questionCategoryRaw = formData.get('questionCategory');
   const sourceStyleRaw = formData.get('sourceStyle');
 
+  // B0-537 — strict: an invalid scenario in an interactive dialog is reported, never dropped.
+  const multiTurnRaw = formData.get('multiTurnJson');
+  const multiTurnParsed = parseMultiTurnJsonFromForm(
+    typeof multiTurnRaw === 'string' ? multiTurnRaw : '',
+  );
+  if (!multiTurnParsed.ok) {
+    redirect(encodeMessage(returnPath, 'error', multiTurnParsed.message));
+  }
+
   const { input_payload, metadata } = buildManualAddTestItemPayload({
     prompt,
     expected_should_answer,
+    multiTurnScenario: multiTurnParsed.scenario,
     productMention:
       typeof productMentionRaw === 'string' && productMentionRaw.trim()
         ? productMentionRaw.trim()
@@ -465,9 +546,19 @@ export async function updateTestItemAction(formData: FormData) {
   const questionCategoryRaw = formData.get('questionCategory');
   const sourceStyleRaw = formData.get('sourceStyle');
 
+  // B0-537 — see the add action; a cleared field turns the row back into a single-turn prompt.
+  const multiTurnRaw = formData.get('multiTurnJson');
+  const multiTurnParsed = parseMultiTurnJsonFromForm(
+    typeof multiTurnRaw === 'string' ? multiTurnRaw : '',
+  );
+  if (!multiTurnParsed.ok) {
+    redirect(encodeMessage(returnPath, 'error', multiTurnParsed.message));
+  }
+
   const { input_payload, metadata } = buildEditedTestItemPayload({
     prompt,
     expected_should_answer,
+    multiTurnScenario: multiTurnParsed.scenario,
     productMention:
       typeof productMentionRaw === 'string' && productMentionRaw.trim()
         ? productMentionRaw.trim()
@@ -562,6 +653,14 @@ export async function runTestAction(formData: FormData) {
       ? (rawRouterType as RouterTypeOverride)
       : undefined;
 
+  // B0-351 — opt-in forced specialist, same shape as the Bex chat composer's agent-mode picker.
+  // Anything unrecognised (or absent, i.e. every run created before this ticket) falls back to
+  // `orchestrator`, which is what `runSingleTestItem` hardcoded until now.
+  const rawAgentMode = formData.get('agentMode');
+  const agentMode = isBexChatAgentMode(rawAgentMode)
+    ? rawAgentMode
+    : DEFAULT_BEX_CHAT_AGENT_MODE;
+
   const testResult = await createTestResult({
     test_id: testId,
     status: 'queued',
@@ -570,9 +669,9 @@ export async function runTestAction(formData: FormData) {
     passed_items: 0,
     failed_items: 0,
     started_at: new Date().toISOString(),
-    run_options: routerType
-      ? { modelTag, useValidator, routerType }
-      : { modelTag, useValidator },
+    // B0-351 — written once, here, and never updated afterwards: this blob IS the run's immutable
+    // config, and `executeTestRun` reads it back through the same `~/lib/tests/run-config` parser.
+    run_options: buildTestRunOptions({ modelTag, useValidator, agentMode, routerType }),
     app_version: APP_VERSION,
     triggered_by: await currentRunActor(),
     summary: {
