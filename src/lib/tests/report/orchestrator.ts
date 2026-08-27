@@ -7,12 +7,10 @@ import {
   saveReportMarkdown,
   saveReportState,
 } from '~/lib/tests/repository';
-import { extractItemSimilarityScore } from '~/lib/tests/response-payload';
 import type { TestItemRecord, TestResultItemRecord } from '~/lib/tests/types';
 
+import { assembleReportCases, indexLatestResultItems } from './assemble';
 import { scoreCase } from './case-scorer';
-import { computeReportMetrics, tierLabel, type ReportCaseInput } from './metrics';
-import type { CaseHarnessAside, CaseRenderDetail } from './render';
 import { renderReportMarkdown } from './render';
 import { emptyReportState, parseReportState, type CaseScore, type ReportState } from './schemas';
 import { synthesizeReportFindings } from './synthesizer';
@@ -106,14 +104,7 @@ export async function generateReport(testResultId: string): Promise<ReportState>
     listAllResultItemsByResultId(run.id),
   ]);
 
-  const resultItemByTestItemId = new Map<string, TestResultItemRecord>();
-  for (const resultItem of resultItems) {
-    // Keep the most recent result per item (retries can leave more than one row per test_item_id).
-    const existing = resultItemByTestItemId.get(resultItem.test_item_id);
-    if (!existing || resultItem.created_at > existing.created_at) {
-      resultItemByTestItemId.set(resultItem.test_item_id, resultItem);
-    }
-  }
+  const resultItemByTestItemId = indexLatestResultItems(resultItems);
 
   const model = resolveResponsesModel(MODEL_TAG);
   let state = parseReportState(run.report_state) ?? emptyReportState(model, items.length);
@@ -139,18 +130,14 @@ export async function generateReport(testResultId: string): Promise<ReportState>
     state.updatedAt = new Date().toISOString();
     await saveReportState(testResultId, state);
 
-    const caseInputs: ReportCaseInput[] = items.map((item) => {
-      const resultItem = resultItemByTestItemId.get(item.id);
-      return {
-        testItemId: item.id,
-        question: item.prompt,
-        priorityRaw: item.priority,
-        category: item.prompt_category,
-        score: state.caseScores[item.id],
-        latencySeconds: resultItem ? resultItem.elapsed_ms / 1000 : null,
-      };
+    // B0-586 — one shared assembly for both the Markdown below and `/report/data`.
+    const { metrics, cases } = assembleReportCases({
+      test,
+      run,
+      items,
+      resultItems,
+      caseScores: state.caseScores,
     });
-    const metrics = computeReportMetrics(caseInputs);
 
     const findingsByCaseId = new Map(
       items.map((item) => {
@@ -164,39 +151,12 @@ export async function generateReport(testResultId: string): Promise<ReportState>
     const synthesis = await synthesizeReportFindings(metrics, findingsByCaseId, MODEL_TAG);
     state.synthesis = synthesis;
 
-    const caseDetails: CaseRenderDetail[] = items.map((item) => {
-      const resultItem = resultItemByTestItemId.get(item.id);
-      const harness: CaseHarnessAside | null = resultItem
-        ? {
-            passed: resultItem.passed,
-            status: resultItem.status,
-            similarity: extractItemSimilarityScore(resultItem.response_payload),
-          }
-        : null;
-      return {
-        id: item.id,
-        question: item.prompt,
-        tier: tierLabel(item.priority),
-        priorityRaw: item.priority,
-        category: item.prompt_category ?? 'Uncategorized',
-        idealResponse: item.ideal_response,
-        expectedConcepts: item.expected_concepts,
-        minimumConcepts: item.minimum_concepts,
-        expectedSources: item.expected_sources,
-        expectedShouldAnswer: item.expected_should_answer,
-        actual: resultItem?.response_text?.trim() || '(no response recorded)',
-        score: state.caseScores[item.id],
-        latencySeconds: resultItem ? resultItem.elapsed_ms / 1000 : null,
-        harness,
-      };
-    });
-
     const generatedAt = new Date().toISOString();
     const markdown = renderReportMarkdown({
       test,
       run,
       metrics,
-      cases: caseDetails,
+      cases,
       synthesis,
       generatedAt,
     });
