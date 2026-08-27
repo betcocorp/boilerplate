@@ -1,3 +1,44 @@
+# [2.10.0](https://github.com/betcocorp/bex2.0/compare/v2.9.0...v2.10.0) (2026-08-27)
+
+
+### Bug Fixes
+
+* **B0-479:** resolve aliases for freeformQuery product doc searches ([48d2354](https://github.com/betcocorp/bex2.0/commit/48d23544e734fca07bd2ecc0c8c1934067ad9262)), closes [hi#precision](https://github.com/hi/issues/precision)
+* **B0-480:** give the alias regression gold set real grading criteria ([c80bfb9](https://github.com/betcocorp/bex2.0/commit/c80bfb92c692873bd0084c5b11ca03cb494b15f0))
+* **B0-484:** fix parenthetical acronym recall and guard script entrypoint ([c8c2b5c](https://github.com/betcocorp/bex2.0/commit/c8c2b5c8001570221574fdef2e36919a5ff1e934))
+* **B0-673:** update stale SME_AGENT_IDS assertion to include cross_reference ([709c806](https://github.com/betcocorp/bex2.0/commit/709c80615ab4317dc0da817f13718cc9a9a6114f))
+* **B0-683:** apply missing failure-queue root-cause migration, split cause/fix display ([0b47e60](https://github.com/betcocorp/bex2.0/commit/0b47e6086fd4d83251a78108f6372d53155101a2))
+* **B0-684:** Fix document-lookup schema bug and legacy reference targeting ([63ebc73](https://github.com/betcocorp/bex2.0/commit/63ebc734d452d733cf5f77ae5b5549e9bbe4a383))
+* **B0-684:** Link document_key references to legacy source, not back to same page ([e190f3f](https://github.com/betcocorp/bex2.0/commit/e190f3fc44a5b28ac46b263cd8140a20963dd6cf))
+
+
+### Features
+
+* **B0-311:** trigger post-mortem comparison job on run completion ([94b6882](https://github.com/betcocorp/bex2.0/commit/94b6882c0568e4ae35eabb70c17337d3c03091a1))
+* **B0-312:** add test_result_comparisons table and repository methods ([46b8264](https://github.com/betcocorp/bex2.0/commit/46b8264ca32a9de7b6a36d35e57d99a2483d2ea5))
+* **B0-313:** compute run-vs-previous-run diff for post-mortem comparison ([39b240b](https://github.com/betcocorp/bex2.0/commit/39b240bee3fad8a605613cc7e4b7c43f9f182cab))
+* **B0-314:** add LLM cause/fix analysis for run comparisons ([3606f71](https://github.com/betcocorp/bex2.0/commit/3606f7111ed24f6cb30b5c576be9d01223ace0fb))
+* **B0-315:** render post-mortem comparison on run detail page ([866091e](https://github.com/betcocorp/bex2.0/commit/866091e59e2f8b011403f64f48df2c58274e7ad7))
+* **B0-486:** enforce formulation-variant rules on alias approval ([4e9b84d](https://github.com/betcocorp/bex2.0/commit/4e9b84df1932ab2729d91ede9ece156bf92fab77))
+* **B0-660:** don't ask for a surface the user already named ([ec3c2f8](https://github.com/betcocorp/bex2.0/commit/ec3c2f87e6a1624686a238cabcf61399d84c9f9c))
+* **B0-682:** Add interactive example calls and response testing to admin tool documentation ([561c393](https://github.com/betcocorp/bex2.0/commit/561c393242236884903925fdfacdc226a76139a3))
+* **B0-684:** Add API endpoint to resolve product_line_key and sku to document IDs ([f943d73](https://github.com/betcocorp/bex2.0/commit/f943d73658a34e9eb50372dfd7d61c47c9653c6a))
+* **B0-684:** Add linkify legacy:*:<id> references in document viewer chunk text ([5d31d06](https://github.com/betcocorp/bex2.0/commit/5d31d06be59642276d14c18e41be43df56d13f8e))
+* **B0-684:** Make ingestion panel S3 keys open the file via signed URLs ([9f53202](https://github.com/betcocorp/bex2.0/commit/9f53202e11e52e678f802c11b656100e9bc434ce))
+* **B0-684:** Make Product line and SKU fields clickable in RagSearchResultCard ([a7aaf55](https://github.com/betcocorp/bex2.0/commit/a7aaf55ffd99e9378c873a33b0870f78bffe11be))
+* **B0-684:** Open ingested source files via short-lived signed S3 URLs ([afe0b94](https://github.com/betcocorp/bex2.0/commit/afe0b941d20b0e70e6c7c8c8aa5a41a337e41d3b))
+* **B0-687:** add cross-dataset eval report index at /admin/tests/reports ([7abe07e](https://github.com/betcocorp/bex2.0/commit/7abe07ea6b849d0f924681726a1ec5aa32579f62))
+* **B0-687:** record who started a test run on test_results.triggered_by ([6c46453](https://github.com/betcocorp/bex2.0/commit/6c46453ee2d739ec91e823b9747ccf7ebda4eb4d))
+* **B0-688:** exclude archived test sets from the report index ([a46634f](https://github.com/betcocorp/bex2.0/commit/a46634f17878cc5e285db77d462e2abeeca3f8e3))
+* **B0-689:** chart eval scores over time with run-over-run change ([3e7e84e](https://github.com/betcocorp/bex2.0/commit/3e7e84ef7eaafe6af036e44d28477ffaf10cb470))
+* **B0-690:** add a dataset filter to the eval report index ([aa9d1d3](https://github.com/betcocorp/bex2.0/commit/aa9d1d3923aee9f80cd794ff1c55afe06ca7f0c6))
+* **B0-ROG:** Add view source document links and delete French corpus ([32e2510](https://github.com/betcocorp/bex2.0/commit/32e2510ab35a5532353bba9ef271ddbaf1cd9782))
+
+
+### Performance Improvements
+
+* **B0-686:** replace paged chunk-stats sweep with chunk_token_stats RPC ([bf7d061](https://github.com/betcocorp/bex2.0/commit/bf7d061a6ddedf3e33a3af10d523ffeb343ac5d2))
+
 # [2.9.0](https://github.com/betcocorp/bex2.0/compare/v2.8.0...v2.9.0) (2026-08-25)
 
 
