@@ -288,14 +288,18 @@ export default async function AdminTestReportsPage({ searchParams }: PageProps) 
                     </TableCell>
                     <TableCell
                       className="whitespace-nowrap text-slate-600"
-                      title={row.routerType ?? 'Settings-driven'}
+                      title={
+                        row.routerType
+                          ? `Routing method: ${row.routerType}`
+                          : 'Not recorded for this run'
+                      }
                     >
                       {row.routerType ? (
                         <span className="inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
                           {row.routerType}
                         </span>
                       ) : (
-                        <span className="text-slate-500">Settings-driven</span>
+                        '—'
                       )}
                     </TableCell>
                     <TableCell

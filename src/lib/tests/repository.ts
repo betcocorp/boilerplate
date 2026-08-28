@@ -746,6 +746,45 @@ export async function listAllReportRuns(): Promise<ReportRunRow[]> {
     return (assertNoError(result) || []) as unknown as RawRow[];
   });
 
+  // B0-733: For runs where routerType is null (settings-driven), query the items to find the
+  // actual routing method used. Collect run IDs where we need this data.
+  const runIdsNeedingRoutingDecision = rows
+    .filter((row) => {
+      const runOptions =
+        row.run_options && typeof row.run_options === 'object' && !Array.isArray(row.run_options)
+          ? (row.run_options as Record<string, unknown>)
+          : {};
+      const routerType = typeof runOptions.routerType === 'string' ? runOptions.routerType : null;
+      return routerType === null;
+    })
+    .map((row) => row.id);
+
+  // Fetch one routing_decision per run (we just need to know what method was used, not count them)
+  const actualRoutingByRunId = new Map<string, string>();
+  if (runIdsNeedingRoutingDecision.length > 0) {
+    const result = await supabase
+      .from('test_result_items')
+      .select('test_result_id, routing_decision')
+      .in('test_result_id', runIdsNeedingRoutingDecision)
+      .not('routing_decision', 'is', null)
+      .limit(runIdsNeedingRoutingDecision.length); // One per run is enough
+
+    const items = (assertNoError(result) || []) as Array<{
+      test_result_id: string;
+      routing_decision: string | null;
+    }>;
+
+    for (const item of items) {
+      if (
+        item.routing_decision &&
+        typeof item.routing_decision === 'string' &&
+        !actualRoutingByRunId.has(item.test_result_id)
+      ) {
+        actualRoutingByRunId.set(item.test_result_id, item.routing_decision);
+      }
+    }
+  }
+
   return rows.map((row) => {
     const test = Array.isArray(row.tests) ? row.tests[0] : row.tests;
     const state = parseReportState(row.report_state);
@@ -756,7 +795,12 @@ export async function listAllReportRuns(): Promise<ReportRunRow[]> {
         ? (row.run_options as Record<string, unknown>)
         : {};
     const modelTag = typeof runOptions.modelTag === 'string' ? runOptions.modelTag : null;
-    const routerType = typeof runOptions.routerType === 'string' ? runOptions.routerType : null;
+    let routerType = typeof runOptions.routerType === 'string' ? runOptions.routerType : null;
+
+    // If routerType is null (settings-driven), use the actual routing method from items
+    if (routerType === null && actualRoutingByRunId.has(row.id)) {
+      routerType = actualRoutingByRunId.get(row.id) ?? null;
+    }
 
     return {
       runId: row.id,
