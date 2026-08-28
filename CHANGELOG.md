@@ -1,3 +1,12 @@
+## [2.14.1](https://github.com/betcocorp/bex2.0/compare/v2.14.0...v2.14.1) (2026-08-28)
+
+
+### Bug Fixes
+
+* **B0-734:** keep procedure, diagnosis and frequency questions with the domain specialist ([b376d80](https://github.com/betcocorp/bex2.0/commit/b376d8025647498bcd5370d63529308281bc7ee9))
+* **B0-734:** require an extracted competitor before a suggested tool forces a cross-reference turn ([f03b435](https://github.com/betcocorp/bex2.0/commit/f03b43538dbec05a66c32d4be1ffe650e766f94e))
+* **B0-735:** raise synthesis token caps and cap digest bullets, name truncated calls ([e7047e1](https://github.com/betcocorp/bex2.0/commit/e7047e151a2a2dcfd89b46db4181ea4e37773255))
+
 # [2.14.0](https://github.com/betcocorp/bex2.0/compare/v2.13.0...v2.14.0) (2026-08-28)
 
 
