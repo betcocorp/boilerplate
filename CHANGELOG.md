@@ -1,3 +1,15 @@
+# [2.13.0](https://github.com/betcocorp/bex2.0/compare/v2.12.0...v2.13.0) (2026-08-28)
+
+
+### Bug Fixes
+
+* **B0-693:** require margin corroboration for a high-confidence product-line lock on regulated queries ([faa5a07](https://github.com/betcocorp/bex2.0/commit/faa5a07aef0f2076bcf8f6857d67b3477f2190f5)), closes [hi#confidence](https://github.com/hi/issues/confidence)
+
+
+### Features
+
+* **B0-732:** surface alias resolution hits in the run trace timeline ([f8ac872](https://github.com/betcocorp/bex2.0/commit/f8ac8729b1ad012bcef0855f59629f32b65f4e98))
+
 # [2.12.0](https://github.com/betcocorp/bex2.0/compare/v2.11.1...v2.12.0) (2026-08-27)
 
 
