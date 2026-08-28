@@ -1,3 +1,19 @@
+# [2.14.0](https://github.com/betcocorp/bex2.0/compare/v2.13.0...v2.14.0) (2026-08-28)
+
+
+### Bug Fixes
+
+* **B0-733:** show actual routing method even when settings-driven ([3e650b7](https://github.com/betcocorp/bex2.0/commit/3e650b772f12c7b659f917e0bd5646a55e76ca20))
+* **B0-734:** expose the category tools on the recommendations route its policy names ([4a05fee](https://github.com/betcocorp/bex2.0/commit/4a05fee7348df65c1af7d95cc9300f9ce304ca52))
+* **B0-735:** chunk eval report synthesis so it stops silently failing on large runs ([06826a1](https://github.com/betcocorp/bex2.0/commit/06826a16b469abed33c93c6fe3a1144f3104d5f2))
+
+
+### Features
+
+* **B0-733:** surface model, router type, and appVersion in reports table ([6149f00](https://github.com/betcocorp/bex2.0/commit/6149f00cd20900f9afed2c04a9e0bcae53310a9c))
+* **B0-734:** move the early-decline gate to the settings table, default off ([cd7e206](https://github.com/betcocorp/bex2.0/commit/cd7e20628c40d97c0dddab480051fd604fd38daf))
+* **B0-734:** rewrite specialist prompts to the eval report's grading basis ([0ec4463](https://github.com/betcocorp/bex2.0/commit/0ec44632bcba7d48309c6623dc018c2685253b27))
+
 # [2.13.0](https://github.com/betcocorp/bex2.0/compare/v2.12.0...v2.13.0) (2026-08-28)
 
 
