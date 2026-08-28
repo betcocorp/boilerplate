@@ -1,3 +1,4 @@
+import type { Response } from 'openai/resources/responses/responses';
 import { z } from 'zod';
 
 import { getOpenAIClient, resolveResponsesModel } from '~/lib/openai/client';
@@ -78,13 +79,14 @@ Finally produce an executive assessment: 2-3 strongest areas, 2-3 areas needing 
 
 /**
  * B0-735 — this batch is a SLICE of a larger run; the digest is an intermediate summary that will
- * be merged with digests from other batches, never the final report. Findings must stay concise
- * (a handful of bullets, not one per case) so N batches of digests stay bounded regardless of how
- * large the run is.
+ * be merged with digests from other batches, never the final report. The numeric cap (not just
+ * "keep it concise") is deliberate: strict json_schema mode has no `maxItems`, so without an
+ * explicit number the model tends to write one bullet per case, which is exactly the unbounded
+ * growth this digest step exists to avoid.
  */
-const DIGEST_SYSTEM_PROMPT = `You are summarizing ONE BATCH of cases from a larger agent-evaluation run, following Betco's internal agent-evaluation methodology. This batch is a slice of a bigger run — your output will be merged with digests from other batches into a final report, so keep it concise: a handful of the most notable bullets per list, not one bullet per case.
+const DIGEST_SYSTEM_PROMPT = `You are summarizing ONE BATCH of cases from a larger agent-evaluation run, following Betco's internal agent-evaluation methodology. This batch is a slice of a bigger run — your output will be merged with digests from other batches into a final report.
 
-From only the cases in this batch, list: the clearest failure patterns (cite case IDs), the clearest strengths (cite case IDs), and the clearest recurring weaknesses (cite case IDs).`;
+From only the cases in this batch, list AT MOST 5 of the clearest failure patterns (cite case IDs), AT MOST 5 of the clearest strengths (cite case IDs), and AT MOST 5 of the clearest recurring weaknesses (cite case IDs). Do not write one bullet per case — merge similar cases into a single bullet citing all their IDs.`;
 
 const DIGEST_JSON_SCHEMA = {
   type: 'object',
@@ -107,16 +109,22 @@ type BatchDigest = z.infer<typeof batchDigestSchema>;
 
 /**
  * B0-735 — above this many cases, the synthesis call switches from raw per-case text to the
- * chunked digest-then-merge path. Chosen so a single chunk's per-case text (a few hundred chars
- * per case) stays well under any output-truncation risk on its own digest call.
+ * chunked digest-then-merge path. Kept small so even a model that ignores the "at most 5 bullets"
+ * instruction and writes one bullet per case per list (worst case ~3 * CHUNK_SIZE short bullets)
+ * still fits comfortably under `DIGEST_MAX_OUTPUT_TOKENS`.
  */
-const CHUNK_SIZE = 50;
+const CHUNK_SIZE = 25;
 /** Concurrent digest calls in flight, mirroring the grading batch size in `orchestrator.ts`. */
 const DIGEST_CONCURRENCY = 4;
-/** Generous headroom for the largest legitimate output (a full Top-3 + exec write-up). */
-const SYNTHESIS_MAX_OUTPUT_TOKENS = 4000;
-/** A batch digest is a handful of bullets; it never needs anywhere near this much. */
-const DIGEST_MAX_OUTPUT_TOKENS = 1500;
+/**
+ * Generous headroom for the largest legitimate output (a full Top-3 + exec write-up). Structured
+ * outputs (`strict: true`) guarantee syntactically valid JSON as long as generation isn't cut off
+ * by this cap — truncation is the only way this call produces invalid JSON — so the cap only needs
+ * to be big enough that the model never legitimately needs more, not tight.
+ */
+const SYNTHESIS_MAX_OUTPUT_TOKENS = 8000;
+/** Sized for the worst case above (~3 * CHUNK_SIZE short bullets), not just the instructed one. */
+const DIGEST_MAX_OUTPUT_TOKENS = 4000;
 
 function truncate(text: string, max = 240): string {
   const trimmed = text.trim();
@@ -230,10 +238,29 @@ function formatMetricsHeaderAsText(
   return lines.join('\n');
 }
 
+/**
+ * Structured outputs (`strict: true`) only ever produce invalid JSON when generation is cut off
+ * mid-string by `max_output_tokens` — so checking `incomplete_details` first turns that failure
+ * mode into a clear "raise the cap" error instead of a `JSON.parse` message that doesn't say why.
+ * Labeled per call site so a future failure names which call (and which chunk) broke.
+ */
+function parseStructuredResponse<T>(res: Response, schema: z.ZodType<T>, label: string): T {
+  if (res.incomplete_details?.reason === 'max_output_tokens') {
+    throw new Error(`${label}: output truncated at max_output_tokens; raise the cap or shrink the input.`);
+  }
+  try {
+    return schema.parse(JSON.parse(extractAssistantText(res)));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'unknown error';
+    throw new Error(`${label}: ${message}`);
+  }
+}
+
 async function digestChunk(
   client: ReturnType<typeof getOpenAIClient>,
   model: string,
   chunk: CaseSummary[],
+  label: string,
 ): Promise<BatchDigest> {
   const res = await client.responses.create({
     model,
@@ -253,7 +280,7 @@ async function digestChunk(
     max_output_tokens: DIGEST_MAX_OUTPUT_TOKENS,
   });
 
-  return batchDigestSchema.parse(JSON.parse(extractAssistantText(res)));
+  return parseStructuredResponse(res, batchDigestSchema, label);
 }
 
 /** Runs `digestChunk` over every chunk in bounded concurrency, mirroring `scoreRemainingCases`. */
@@ -265,7 +292,11 @@ async function digestAllChunks(
   const digests: BatchDigest[] = new Array(chunks.length);
   for (let i = 0; i < chunks.length; i += DIGEST_CONCURRENCY) {
     const batch = chunks.slice(i, i + DIGEST_CONCURRENCY);
-    const results = await Promise.all(batch.map((chunk) => digestChunk(client, model, chunk)));
+    const results = await Promise.all(
+      batch.map((chunk, j) =>
+        digestChunk(client, model, chunk, `Batch digest ${i + j + 1}/${chunks.length}`),
+      ),
+    );
     results.forEach((result, j) => {
       digests[i + j] = result;
     });
@@ -338,6 +369,5 @@ export async function synthesizeReportFindings(
     max_output_tokens: SYNTHESIS_MAX_OUTPUT_TOKENS,
   });
 
-  const text = extractAssistantText(res);
-  return reportSynthesisSchema.parse(JSON.parse(text));
+  return parseStructuredResponse(res, reportSynthesisSchema, 'Final synthesis call');
 }
