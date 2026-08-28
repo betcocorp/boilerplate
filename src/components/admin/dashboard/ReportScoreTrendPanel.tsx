@@ -1,5 +1,6 @@
 /**
- * B0-749 — golden-set report-score trend panel for `/admin/bex/health` (epic B0-569).
+ * B0-749 — Mission Control (`/admin`) golden-set report-score trend panel, placed between
+ * `HealthBar` and `KpiRow`.
  *
  * Async server component. One aggregate score per UTC day, across ALL golden datasets'
  * completed runs (`tests.is_golden = true`), from `~/lib/tests/golden-report-score-trend`. This
@@ -12,10 +13,13 @@ import { toGoldenSetVersionQuery, type HealthPanelProps } from '~/lib/bex-health
 import { getGoldenReportScoreTrendForWindow } from '~/lib/tests/golden-report-score-trend';
 
 import { GoldenReportScoreTrendChart } from './GoldenReportScoreTrendChart';
-import { ProvenanceFooter } from './ProvenanceFooter';
 
-/** B0-749 — verified against `getGoldenReportScoreTrendForWindow`; keep in sync with it. */
-const REPORT_SCORE_TREND_SOURCES = [
+/**
+ * Verified against `getGoldenReportScoreTrendForWindow`; keep in sync with it. Rendered by the
+ * page's consolidated provenance footer, not by this component — same convention as
+ * `HEALTH_BAR_SOURCES`/`KPI_ROW_SOURCES` and the rest of `~/components/admin/dashboard/*`.
+ */
+export const REPORT_SCORE_TREND_SOURCES = [
   'Score: test_results.report_state.overall.avg (persisted once report generation completes), scoped to golden-set membership (tests.is_golden) and each day\'s completed full-mode runs',
   'One point per UTC day of test_results.created_at, averaged across every golden dataset\'s runs that day; days with no scored golden run are empty slots, not zero',
   'Day-over-day % change is vs the immediately preceding calendar day\'s aggregate score',
@@ -45,13 +49,13 @@ export async function ReportScoreTrendPanel({ window, version }: HealthPanelProp
   const scoredDayCount = trend.points.filter((point) => point.score !== null).length;
 
   return (
-    <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
+    <section className="rounded-3xl border border-border bg-card p-6">
+      <div className="flex flex-wrap items-baseline justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold tracking-tight text-slate-950">
+          <h2 className="text-base font-semibold tracking-tight text-foreground">
             Golden report score per day
           </h2>
-          <p className="mt-1 text-sm text-slate-600">
+          <p className="mt-1 text-xs text-muted-foreground">
             One point per UTC day — the aggregate report score across all golden test sets,
             0-100.
           </p>
@@ -62,13 +66,11 @@ export async function ReportScoreTrendPanel({ window, version }: HealthPanelProp
         <GoldenReportScoreTrendChart points={trend.points} />
       </div>
 
-      <p className="mt-3 text-xs text-slate-500">
+      <p className="mt-3 text-xs tabular-nums text-muted-foreground">
         {scoredDayCount > 0
           ? `${scoredDayCount} of ${trend.points.length} day${trend.points.length === 1 ? '' : 's'} in this window have a scored golden report. Shaded slots have none — an empty day, not a zero score.`
           : 'No scored golden reports in this window — every day is an empty slot, not a zero score.'}
       </p>
-
-      <ProvenanceFooter sources={REPORT_SCORE_TREND_SOURCES} />
     </section>
   );
 }

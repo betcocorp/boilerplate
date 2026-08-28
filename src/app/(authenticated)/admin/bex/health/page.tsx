@@ -12,7 +12,6 @@ import { connection } from 'next/server';
 import { HealthHeader } from '~/components/admin/bex-health/HealthHeader';
 import { LiveTrafficCard } from '~/components/admin/bex-health/LiveTrafficCard';
 import { PipelineStageStrip } from '~/components/admin/bex-health/PipelineStageStrip';
-import { ReportScoreTrendPanel } from '~/components/admin/bex-health/ReportScoreTrendPanel';
 import { TierCards } from '~/components/admin/bex-health/TierCards';
 import { TokensPerDayPanel } from '~/components/admin/bex-health/TokensPerDayPanel';
 import { VerdictStrip } from '~/components/admin/bex-health/VerdictStrip';
@@ -38,7 +37,6 @@ export default async function AdminBexHealthPage({ searchParams }: PageProps) {
         <HealthHeader version={version} window={window} />
         <VerdictStrip version={version} window={window} />
         <TierCards version={version} window={window} />
-        <ReportScoreTrendPanel version={version} window={window} />
         <LiveTrafficCard version={version} window={window} />
         <PipelineStageStrip version={version} window={window} />
         <TokensPerDayPanel version={version} window={window} />

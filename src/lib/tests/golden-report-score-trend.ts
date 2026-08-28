@@ -5,7 +5,7 @@ import { assertSupabaseNoError as assertNoError } from '~/lib/utils';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 /**
- * B0-749 — golden-set-only, day-bucketed REPORT SCORE trend for `/admin/bex/health`.
+ * B0-749 — golden-set-only, day-bucketed REPORT SCORE trend for `/admin` (Mission Control).
  *
  * Do not confuse this with two existing, similar-looking trends:
  *  - `~/lib/tests/golden-set-trend.ts` is golden-scoped and day-bucketed like this module, but

@@ -26,6 +26,7 @@ import { DashboardHeader } from '~/components/admin/dashboard/DashboardHeader';
 import { HealthBar } from '~/components/admin/dashboard/HealthBar';
 import { KpiRow } from '~/components/admin/dashboard/KpiRow';
 import { PipelinePanel } from '~/components/admin/dashboard/PipelinePanel';
+import { ReportScoreTrendPanel } from '~/components/admin/dashboard/ReportScoreTrendPanel';
 import { RoutingPanel } from '~/components/admin/dashboard/RoutingPanel';
 import { ToolHealthPanel } from '~/components/admin/dashboard/ToolHealthPanel';
 import { resolveHealthSearchParams } from '~/lib/bex-health/search-params';
@@ -49,6 +50,7 @@ export default async function AdminDashboardPage({ searchParams }: PageProps) {
       <DashboardHeader version={version} window={window} />
 
       <HealthBar version={version} window={window} />
+      <ReportScoreTrendPanel version={version} window={window} />
       <KpiRow version={version} window={window} />
       <PipelinePanel version={version} window={window} />
 
