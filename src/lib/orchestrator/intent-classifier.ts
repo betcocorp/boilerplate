@@ -143,8 +143,16 @@ Routing rules (apply in order):
    - "What is the best glass cleaner?" → product (names an existing category and asks which wins; no job/problem described; no domain specialist owns "glass cleaner")
    - "What is the strongest floor stripper you have?" → floor (floor-care category comparison; stays with the domain specialist, never "recommendations", even though "strongest" appears)
    - "What disinfectant works best against norovirus?" → bathroom (disinfection category narrowed by a pathogen claim — still a catalog/spec filter within bathroom's domain, not an open-ended job)
-   - "What should I use to get grease off a kitchen floor?" → recommendations (describes a job/problem; no product category named up front)
-   - "I need something for a gym floor that keeps getting scuffed" → recommendations (describes a problem/situation; no category named up front)
+   - "What should I use to get grease off a kitchen floor?" → recommendations (describes a job/problem; no product category named up front; kitchen degreasing is not floor care's stripping/finishing/maintenance-program domain)
+   - "I need something for a gym floor that keeps getting scuffed" → floor (a gym/sports floor problem is the floor specialist's domain per this rule; "recommendations" is only for jobs no domain specialist owns)
+
+   Procedure, diagnosis, and frequency questions are NOT recommendation asks, even when the answer will name a product. "How do I…", "How should we…", "Why is my…", "Why does…", "How often…", "What's the right way to…" about a floor, restroom, or dispenser task belong to the domain specialist that owns the task (floor, bathroom, dilution), never to "recommendations". Route to "recommendations" only when the user is asking WHICH product to use for a job that none of those three specialists owns.
+
+   Examples:
+   - "How do I strip and wax a floor?" → floor (procedure; floor owns stripping and finishing)
+   - "Why is my VCT flooring dull?" → floor (diagnosis of a floor-care problem)
+   - "Why does the grout stay dirty even after we mop it?" → bathroom (diagnosis of a restroom-cleaning problem)
+   - "How often should we dust mop the gym?" → floor (frequency question about a sports floor maintenance program)
 3. "Can I use <product> on <surface>?" and other usage/compatibility/how-to questions about a product belong to the specialist that owns the surface or task per rule 2 ("product" when none clearly does) — never "cross_reference", and never "recommendations" either (it is a factual lookup, not a recommendation ask).
 4. Use "ambiguous" only when the message does not clearly match any specialist (small talk, off-topic, or too vague to route).
 
