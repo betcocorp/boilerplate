@@ -768,6 +768,24 @@ export function buildRunTimeline(
     });
   }
 
+  /* --- B0-732: alias resolution hits (writeAuditLog from product-tools.ts) --- */
+  for (const log of logsByType('alias_resolution_hit')) {
+    const payload = asRecord(log.payload);
+    const query = readString(payload, 'query');
+    const resolutionSource = readString(payload, 'resolution_source');
+    push({
+      kind: 'audit',
+      eventType: log.event_type,
+      id: `audit:${log.id}`,
+      label: query
+        ? `Alias matched — ${resolutionSource ?? 'unknown source'} ("${query}")`
+        : `Alias matched — ${resolutionSource ?? 'unknown source'}`,
+      at: log.created_at,
+      status: 'ok',
+      detail: { auditPayload: log.payload },
+    });
+  }
+
   for (const log of logsByType('review_requested')) {
     const payload = asRecord(log.payload);
     const reason = readString(payload, 'reason');

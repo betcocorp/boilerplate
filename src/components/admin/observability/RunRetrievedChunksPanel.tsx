@@ -9,6 +9,7 @@
  * used on `/admin/tests`, so the section needs no client-side state of its own.
  */
 
+import { ChevronDownIcon, ChevronUpIcon } from 'lucide-react';
 import { RetrievedChunksPreview } from '~/components/admin/tests/RetrievedChunksPreview';
 
 import type { RetrievedDocumentChunkRef } from '~/lib/workflows/product-support/product-support-schemas';
@@ -26,13 +27,17 @@ export function RunRetrievedChunksPanel({
   return (
     <details className="group overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
       <summary className="flex cursor-pointer list-none flex-wrap items-center gap-3 px-8 py-6 hover:bg-slate-50">
-        <h2 className="text-lg font-semibold text-slate-900">Retrieved chunks</h2>
+        <h2 className="text-lg font-semibold text-slate-900">
+          Retrieved chunks
+        </h2>
         <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-sm font-medium tabular-nums text-slate-500">
           {chunks.length}
         </span>
-        <span className="ml-auto text-xs text-slate-500 group-open:hidden">Show</span>
+        <span className="ml-auto text-xs text-slate-500 group-open:hidden">
+          <ChevronDownIcon aria-hidden className="size-4 shrink-0" />
+        </span>
         <span className="ml-auto hidden text-xs text-slate-500 group-open:inline">
-          Hide
+          <ChevronUpIcon aria-hidden className="size-4 shrink-0" />
         </span>
       </summary>
       <div className="border-t border-slate-100 px-8 py-6">
