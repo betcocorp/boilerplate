@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * B0-355 / B0-356 — the `recommend_cross_reference` backstop and the enforcement of the engine's
@@ -248,15 +248,14 @@ async function run(overrides: Row = {}) {
   } as Parameters<typeof runProductSupportWorkflow>[0]);
 }
 
-const ORIGINAL_DECLINE_GATE = process.env.BEX_EARLY_DECLINE_GATE_ENABLED;
-
 beforeEach(() => {
   fake = createFakeSupabase();
   vi.clearAllMocks();
   settingOverrides.clear();
   settingOverrides.set('BEX_AI_SDK_GENERATION_ENABLED', false);
   settingOverrides.set('BEX_LLM_ROUTER_ENABLED', false);
-  process.env.BEX_EARLY_DECLINE_GATE_ENABLED = 'true';
+  // B0-734 — settings row, default false; these tests assert the gate-on world.
+  settingOverrides.set('BEX_EARLY_DECLINE_GATE_ENABLED', true);
   resetIntentClassifierCache();
 
   // Default: the model calls only `lookup_cross_reference`, which finds nothing.
@@ -274,10 +273,6 @@ beforeEach(() => {
   );
   lookupCrossReferenceMock.mockResolvedValue({ matches: [], fallbackRecommended: true });
   runCrossReferenceRecommendationMock.mockResolvedValue(engineResult());
-});
-
-afterEach(() => {
-  process.env.BEX_EARLY_DECLINE_GATE_ENABLED = ORIGINAL_DECLINE_GATE;
 });
 
 /* ---------------------------------------------------------------- B0-355 -- */

@@ -322,7 +322,7 @@ export type RetrievalConfigSummary = z.infer<typeof retrievalConfigSummarySchema
 export const runtimeConfigSchema = z.object({
   /** `input.useValidator ?? false` — off by default everywhere, including prod chat. */
   useValidator: z.boolean(),
-  /** `BEX_EARLY_DECLINE_GATE_ENABLED !== 'false'`. */
+  /** `settings.BEX_EARLY_DECLINE_GATE_ENABLED === 'true'` (B0-734: a settings row, default false). */
   earlyDeclineGateEnabled: z.boolean(),
   /** `BEX_AI_SDK_GENERATION_ENABLED === 'true'` — selects the AI SDK vs Responses generation runtime. */
   aiSdkGenerationEnabled: z.boolean(),

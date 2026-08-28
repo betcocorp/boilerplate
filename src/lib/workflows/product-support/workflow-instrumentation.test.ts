@@ -315,16 +315,14 @@ async function run(overrides: Parameters<typeof runProductSupportWorkflow>[0] | 
   } as Parameters<typeof runProductSupportWorkflow>[0]);
 }
 
-const ORIGINAL_ENV = {
-  declineGate: process.env.BEX_EARLY_DECLINE_GATE_ENABLED,
-};
-
 beforeEach(() => {
   fake = createFakeSupabase();
   vi.clearAllMocks();
   settingOverrides.clear();
   settingOverrides.set('BEX_AI_SDK_GENERATION_ENABLED', false);
-  process.env.BEX_EARLY_DECLINE_GATE_ENABLED = 'true';
+  // B0-734 — the gate is a settings row defaulting to false; the legacy tests in this file were
+  // written against the gate-on world, so pin it on here and opt out per test.
+  settingOverrides.set('BEX_EARLY_DECLINE_GATE_ENABLED', true);
   // B0-511 — the LLM router is ON by default since the cutover; pin the kill-switch here so every
   // legacy test in this file keeps exercising the deterministic keyword-routing world it asserts.
   // The router describe block below opts individual tests back in explicitly.
@@ -366,10 +364,6 @@ beforeEach(() => {
     usage: VALIDATOR_PASS_USAGE,
   });
   runRevisionPassMock.mockResolvedValue({ text: '', usage: VALIDATOR_PASS_USAGE });
-});
-
-afterEach(() => {
-  process.env.BEX_EARLY_DECLINE_GATE_ENABLED = ORIGINAL_ENV.declineGate;
 });
 
 /* -------------------------------------------------------------------------- *
@@ -453,7 +447,7 @@ describe('prompt capture (B0-389)', () => {
     });
 
     fake = createFakeSupabase();
-    process.env.BEX_EARLY_DECLINE_GATE_ENABLED = 'false';
+    settingOverrides.set('BEX_EARLY_DECLINE_GATE_ENABLED', false);
     await run();
     expect(stepInput('orchestration_planner').runConfig).toEqual({
       earlyDeclineGateEnabled: false,
@@ -2310,8 +2304,8 @@ describe('runtime config and gate activation (B0-494)', () => {
     expect(judged.activeGates?.validator).toEqual({ state: 'ran', verdict: 'approved' });
   });
 
-  it('marks the early-decline gate "skipped — disabled by flag" when BEX_EARLY_DECLINE_GATE_ENABLED=false', async () => {
-    process.env.BEX_EARLY_DECLINE_GATE_ENABLED = 'false';
+  it('marks the early-decline gate "skipped — disabled by flag" when the BEX_EARLY_DECLINE_GATE_ENABLED setting is false', async () => {
+    settingOverrides.set('BEX_EARLY_DECLINE_GATE_ENABLED', false);
     const out = await run();
     expect(out.runtimeConfig?.earlyDeclineGateEnabled).toBe(false);
     expect(out.activeGates?.earlyDeclineGate).toEqual({ state: 'skipped', reason: 'disabled_by_flag' });
