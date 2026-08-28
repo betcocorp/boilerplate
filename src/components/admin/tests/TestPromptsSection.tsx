@@ -1,6 +1,6 @@
 'use client';
 
-import { Download } from 'lucide-react';
+import { Download, Star } from 'lucide-react';
 import Link from 'next/link';
 import { useCallback, useMemo, useState } from 'react';
 
@@ -25,6 +25,7 @@ import {
   formatShouldAnswerExport,
   formatSimilarityPercent,
 } from '~/lib/tests/format';
+import type { GoldenSetItemOrigin } from '~/lib/tests/golden-set';
 import { escapeCsvCell, sanitizeCsvFilename } from '~/lib/utils/csv';
 import type { Json } from '~/types/supabase.public';
 
@@ -229,6 +230,32 @@ function MultiTurnRowBadge({ item }: { item: TestPromptRow }) {
   );
 }
 
+/** Tooltip copy for the Golden badge: matched golden test name(s) and the rule(s) that matched. */
+function formatGoldenOriginTooltip(origin: GoldenSetItemOrigin): string {
+  const names = origin.goldenTests.map((test) => test.name).join(', ');
+  return `Golden set: ${names} · matched by ${origin.rules.join(', ')}`;
+}
+
+/**
+ * B0-750 — marks a row that belongs to a golden test set, by lineage (derived from a golden
+ * test) or because the same prompt exists verbatim in a golden test. Rendered inside the Prompt
+ * cell like `MultiTurnRowBadge` so `colSpan`s and the CSV column order stay untouched.
+ */
+function GoldenRowBadge({ origin }: { origin: GoldenSetItemOrigin | undefined }) {
+  if (!origin) {
+    return null;
+  }
+  return (
+    <Badge
+      className="mr-2 border-amber-600/45 bg-amber-500/12 align-middle text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/15 dark:text-amber-50"
+      title={formatGoldenOriginTooltip(origin)}
+      variant="outline"
+    >
+      Golden
+    </Badge>
+  );
+}
+
 type TestPromptsSectionProps = {
   items: TestPromptRow[];
   returnPath: string;
@@ -243,6 +270,8 @@ type TestPromptsSectionProps = {
   canonicalProductLabels: Record<string, string>;
   /** Combobox suggestion values shared with the add/edit prompt dialogs. */
   suggestionLists: TestItemSuggestionLists;
+  /** B0-750 — golden-set origin keyed by `test_item.id`; items with no golden origin are absent. */
+  goldenOriginsByItemId: Record<string, GoldenSetItemOrigin>;
 };
 
 export function TestPromptsSection({
@@ -254,6 +283,7 @@ export function TestPromptsSection({
   aggregatedRunCount,
   canonicalProductLabels,
   suggestionLists,
+  goldenOriginsByItemId,
 }: TestPromptsSectionProps) {
   const [query, setQuery] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
@@ -326,6 +356,16 @@ export function TestPromptsSection({
   const clearSelection = useCallback(() => {
     setSelectedIds(new Set());
   }, []);
+
+  const goldenItemIds = useMemo(
+    () => items.filter((item) => goldenOriginsByItemId[item.id]).map((item) => item.id),
+    [items, goldenOriginsByItemId],
+  );
+
+  /** Replaces (not extends) the selection — the point is an exact golden-only subset. */
+  const selectGoldenItems = useCallback(() => {
+    setSelectedIds(new Set(goldenItemIds));
+  }, [goldenItemIds]);
 
   const downloadCsv = useCallback(() => {
     if (items.length === 0) {
@@ -433,6 +473,19 @@ export function TestPromptsSection({
             type="search"
             value={query}
           />
+          <Button
+            aria-label={`Select the ${goldenItemIds.length} prompts that belong to a golden test set, replacing the current selection`}
+            className="shrink-0 rounded-2xl"
+            disabled={goldenItemIds.length === 0}
+            onClick={selectGoldenItems}
+            size="sm"
+            title="Selects prompts that belong to a golden test set — by lineage (derived from a golden test) or because the same prompt exists in a golden test."
+            type="button"
+            variant="outline"
+          >
+            <Star className="size-4" />
+            Select golden-set prompts ({goldenItemIds.length})
+          </Button>
           <CreateTestFromPromptsDialog
             returnPath={returnPath}
             selectedTestItemIds={orderedSelectedIds}
@@ -569,6 +622,7 @@ export function TestPromptsSection({
                           P{item.priority}
                         </Badge>
                       ) : null}
+                      <GoldenRowBadge origin={goldenOriginsByItemId[item.id]} />
                       <MultiTurnRowBadge item={item} />
                       {item.prompt}
                     </TableCell>

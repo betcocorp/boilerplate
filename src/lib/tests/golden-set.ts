@@ -27,6 +27,14 @@ import { COMPLETED_RUN_STATUSES } from './types';
  * One run per golden test. If NO golden test has a matching run, the result is the explicit
  * `{ kind: 'no_golden_run_for_version' }` shape — never 0%, and never another version's rows.
  *
+ * ## Golden origin of a non-golden test's items (B0-750)
+ * `computeGoldenSetItemOrigins` flags items of ANY test that belong to a golden set, by two
+ * rules: **lineage** — `test_items.metadata.derived_from_test_id` (written by "Create new
+ * test from prompts") names a golden test; **prompt** — the item's normalized prompt
+ * (`trim().toLowerCase()`) exists verbatim in a golden test. Prompt-match exists because
+ * origin sets get archived / un-goldened while their prompts live on in curated golden sets,
+ * so lineage alone under-counts. Membership is still `tests.is_golden = true` — nothing else.
+ *
  * ## Why this folds rows in Node instead of a Postgres RPC
  * Golden sets are a deliberately small, curated subset (hundreds of items, a handful of
  * runs per version), so the scans here are a few pages at most — same reasoning as
@@ -286,6 +294,89 @@ export function computeGoldenSetRollup(input: {
   };
 }
 
+// --- Golden origin of items in a (possibly non-golden) test (B0-750) ---
+
+export type GoldenOriginRule = 'lineage' | 'prompt';
+
+export type GoldenSetItemOrigin = {
+  /** Golden tests this item was matched to, deduped, in `goldenTests` order. */
+  goldenTests: Array<{ id: string; name: string }>;
+  /** Which rule(s) matched, 'lineage' first. */
+  rules: GoldenOriginRule[];
+};
+
+export type GoldenOriginCandidateItem = { id: string; prompt: string; metadata: unknown };
+
+export function normalizeGoldenPrompt(prompt: string): string {
+  return prompt.trim().toLowerCase();
+}
+
+/** Safe read of `test_items.metadata.derived_from_test_id`; any non-object / missing shape is "no lineage". */
+export function readDerivedFromTestId(metadata: unknown): string | null {
+  if (metadata === null || typeof metadata !== 'object' || Array.isArray(metadata)) {
+    return null;
+  }
+  const raw = (metadata as Record<string, unknown>).derived_from_test_id;
+  return typeof raw === 'string' && raw.length > 0 ? raw : null;
+}
+
+/**
+ * Keyed by `item.id`; ONLY items that matched at least one rule are present. Callers pass the
+ * items of the page's own test — an item whose own test is golden is not special-cased here.
+ */
+export function computeGoldenSetItemOrigins(
+  items: GoldenOriginCandidateItem[],
+  goldenTests: GoldenTestRow[],
+  goldenItems: GoldenItemRow[],
+): Map<string, GoldenSetItemOrigin> {
+  const origins = new Map<string, GoldenSetItemOrigin>();
+  if (items.length === 0 || goldenTests.length === 0) {
+    return origins;
+  }
+
+  const goldenTestById = new Map(goldenTests.map((test) => [test.id, test]));
+  const goldenTestIdsByPrompt = new Map<string, Set<string>>();
+  for (const goldenItem of goldenItems) {
+    if (!goldenTestById.has(goldenItem.test_id)) continue;
+    const key = normalizeGoldenPrompt(goldenItem.prompt);
+    const set = goldenTestIdsByPrompt.get(key);
+    if (set) {
+      set.add(goldenItem.test_id);
+    } else {
+      goldenTestIdsByPrompt.set(key, new Set([goldenItem.test_id]));
+    }
+  }
+
+  for (const item of items) {
+    const matchedTestIds = new Set<string>();
+    const rules: GoldenOriginRule[] = [];
+
+    const lineageTestId = readDerivedFromTestId(item.metadata);
+    if (lineageTestId !== null && goldenTestById.has(lineageTestId)) {
+      matchedTestIds.add(lineageTestId);
+      rules.push('lineage');
+    }
+
+    const promptTestIds = goldenTestIdsByPrompt.get(normalizeGoldenPrompt(item.prompt));
+    if (promptTestIds && promptTestIds.size > 0) {
+      for (const testId of promptTestIds) matchedTestIds.add(testId);
+      rules.push('prompt');
+    }
+
+    if (rules.length === 0) continue;
+
+    origins.set(item.id, {
+      // Emit in `goldenTests` order so the tooltip is stable across renders.
+      goldenTests: goldenTests
+        .filter((test) => matchedTestIds.has(test.id))
+        .map((test) => ({ id: test.id, name: test.name })),
+      rules,
+    });
+  }
+
+  return origins;
+}
+
 // ---------------------------------------------------------------------------
 // Data access
 // ---------------------------------------------------------------------------
@@ -371,6 +462,24 @@ export async function getGoldenSetMembership(): Promise<GoldenSetMembership> {
   const tests = await listGoldenTests();
   const items = await listGoldenItems(tests.map((test) => test.id));
   return computeGoldenSetMembership(tests, items);
+}
+
+/**
+ * B0-750 — golden origin for the items of one (possibly non-golden) test; see the module doc
+ * for the two rules. Empty Map when there are no items or no golden tests.
+ */
+export async function resolveGoldenSetItemOrigins(
+  items: GoldenOriginCandidateItem[],
+): Promise<Map<string, GoldenSetItemOrigin>> {
+  if (items.length === 0) {
+    return new Map();
+  }
+  const tests = await listGoldenTests();
+  if (tests.length === 0) {
+    return new Map();
+  }
+  const goldenItems = await listGoldenItems(tests.map((test) => test.id));
+  return computeGoldenSetItemOrigins(items, tests, goldenItems);
 }
 
 /**
