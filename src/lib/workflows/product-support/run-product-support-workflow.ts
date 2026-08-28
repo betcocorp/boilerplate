@@ -1716,8 +1716,19 @@ export async function runProductSupportWorkflow(input: {
     ? semanticRoute === 'cross_reference' || shouldForceCrossReferenceLookup(input.userMessage)
     : liveIntentClassification && liveIntentClassification.source === 'llm'
       ? liveIntentClassification.intent === 'cross_reference' ||
-        liveIntentClassification.suggestedTool === 'lookup_cross_reference' ||
-        liveIntentClassification.suggestedTool === 'recommend_cross_reference'
+        // B0-734 — a cross-reference `suggestedTool` only counts when the classifier also extracted
+        // a competitor. On the 2026-08-28 re-runs the classifier suggested a cross-reference tool
+        // for job questions it had routed to `recommendations` ("why is my VCT flooring dull"),
+        // which made the whole message the "competitor product", ran the prefetch and the B0-355
+        // backstop, and replaced the specialist's draft with the engine's template or its decline
+        // (six answers scoring 1 to 31). A genuine equivalence ask that routed elsewhere (B0-339)
+        // still carries the competitor entity, so it still forces the lookup.
+        ((liveIntentClassification.suggestedTool === 'lookup_cross_reference' ||
+          liveIntentClassification.suggestedTool === 'recommend_cross_reference') &&
+          Boolean(
+            liveIntentClassification.entities.competitorBrand ||
+              liveIntentClassification.entities.competitorProduct,
+          ))
       : shouldForceCrossReferenceLookup(input.userMessage);
   const earlyDeclineDecision = earlyDeclineGateEnabled
     ? classifyEarlyDecline(input.userMessage, {
