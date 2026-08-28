@@ -689,6 +689,12 @@ export type ReportRunRow = {
   grade: ReportOverall['grade'] | null;
   /** Session email of whoever started the run, `api-client` for a service-token run, or null. */
   triggeredBy: string | null;
+  /** Model tag from run_options (e.g., 'gpt-4.1', 'gpt-4o-mini', null for unrecorded runs). */
+  modelTag: string | null;
+  /** Router type from run_options ('llm', 'semantic', 'keyword', or null for settings-driven). */
+  routerType: string | null;
+  /** App version recorded at run time (B0-733). */
+  appVersion: string | null;
 };
 
 const REPORT_RUNS_PAGE_SIZE = 500;
@@ -719,6 +725,8 @@ export async function listAllReportRuns(): Promise<ReportRunRow[]> {
     report_generated_at: string | null;
     report_state: unknown;
     triggered_by: string | null;
+    run_options: unknown;
+    app_version: string | null;
     tests: EmbeddedTest | EmbeddedTest[] | null;
   };
 
@@ -728,7 +736,7 @@ export async function listAllReportRuns(): Promise<ReportRunRow[]> {
     const result = await supabase
       .from('test_results')
       .select(
-        'id, test_id, started_at, report_generated_at, report_state, triggered_by, tests!inner(id, name, is_archived)',
+        'id, test_id, started_at, report_generated_at, report_state, triggered_by, run_options, app_version, tests!inner(id, name, is_archived)',
       )
       .not('report_state', 'is', null)
       .eq('tests.is_archived', false)
@@ -743,6 +751,13 @@ export async function listAllReportRuns(): Promise<ReportRunRow[]> {
     const state = parseReportState(row.report_state);
     const overall = state?.status === 'completed' ? state.overall : null;
 
+    const runOptions =
+      row.run_options && typeof row.run_options === 'object' && !Array.isArray(row.run_options)
+        ? (row.run_options as Record<string, unknown>)
+        : {};
+    const modelTag = typeof runOptions.modelTag === 'string' ? runOptions.modelTag : null;
+    const routerType = typeof runOptions.routerType === 'string' ? runOptions.routerType : null;
+
     return {
       runId: row.id,
       testId: row.test_id,
@@ -753,6 +768,9 @@ export async function listAllReportRuns(): Promise<ReportRunRow[]> {
       score: typeof overall?.avg === 'number' ? overall.avg : null,
       grade: overall?.grade ?? null,
       triggeredBy: row.triggered_by,
+      modelTag,
+      routerType,
+      appVersion: row.app_version,
     };
   });
 }
