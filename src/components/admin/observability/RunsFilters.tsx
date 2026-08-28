@@ -62,14 +62,13 @@ export function RunsFilters({
   return (
     <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-lg font-semibold text-slate-900">Filters</h2>
         <button
           aria-expanded={showFilters}
-          className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
+          className="w-full inline-flex items-center justify-between gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium text-slate-600"
           onClick={() => setShowFilters((open) => !open)}
           type="button"
         >
-          {showFilters ? 'Hide filters' : 'Show filters'}
+          <h2 className="text-lg font-semibold text-slate-900">Filters</h2>
           {showFilters ? (
             <ChevronUpIcon aria-hidden className="size-4 shrink-0" />
           ) : (
@@ -89,7 +88,10 @@ export function RunsFilters({
                 part of the server-side filter set rather than as a filter over the
                 rows currently on screen. */}
             <div className="flex min-w-0 flex-col gap-2 sm:col-span-2 lg:col-span-4">
-              <Label className="text-sm text-slate-700" htmlFor="observability-search">
+              <Label
+                className="text-sm text-slate-700"
+                htmlFor="observability-search"
+              >
                 Search
               </Label>
               <Input
@@ -102,7 +104,10 @@ export function RunsFilters({
             </div>
 
             <div className="flex min-w-0 flex-col gap-2">
-              <Label className="text-sm text-slate-700" htmlFor="observability-from">
+              <Label
+                className="text-sm text-slate-700"
+                htmlFor="observability-from"
+              >
                 From (UTC)
               </Label>
               <Input
@@ -114,14 +119,25 @@ export function RunsFilters({
             </div>
 
             <div className="flex min-w-0 flex-col gap-2">
-              <Label className="text-sm text-slate-700" htmlFor="observability-to">
+              <Label
+                className="text-sm text-slate-700"
+                htmlFor="observability-to"
+              >
                 To (UTC)
               </Label>
-              <Input defaultValue={filters.to} id="observability-to" name="to" type="date" />
+              <Input
+                defaultValue={filters.to}
+                id="observability-to"
+                name="to"
+                type="date"
+              />
             </div>
 
             <div className="flex min-w-0 flex-col gap-2">
-              <Label className="text-sm text-slate-700" htmlFor="observability-status">
+              <Label
+                className="text-sm text-slate-700"
+                htmlFor="observability-status"
+              >
                 Status
               </Label>
               <NativeSelect
@@ -139,7 +155,10 @@ export function RunsFilters({
             </div>
 
             <div className="flex min-w-0 flex-col gap-2">
-              <Label className="text-sm text-slate-700" htmlFor="observability-agent">
+              <Label
+                className="text-sm text-slate-700"
+                htmlFor="observability-agent"
+              >
                 Agent / routing
               </Label>
               <NativeSelect
@@ -157,7 +176,10 @@ export function RunsFilters({
             </div>
 
             <div className="flex min-w-0 flex-col gap-2">
-              <Label className="text-sm text-slate-700" htmlFor="observability-confidence-min">
+              <Label
+                className="text-sm text-slate-700"
+                htmlFor="observability-confidence-min"
+              >
                 Confidence min (0–1)
               </Label>
               <Input
@@ -173,7 +195,10 @@ export function RunsFilters({
             </div>
 
             <div className="flex min-w-0 flex-col gap-2">
-              <Label className="text-sm text-slate-700" htmlFor="observability-confidence-max">
+              <Label
+                className="text-sm text-slate-700"
+                htmlFor="observability-confidence-max"
+              >
                 Confidence max (0–1)
               </Label>
               <Input
@@ -189,7 +214,10 @@ export function RunsFilters({
             </div>
 
             <div className="flex min-w-0 flex-col gap-2">
-              <Label className="text-sm text-slate-700" htmlFor="observability-source">
+              <Label
+                className="text-sm text-slate-700"
+                htmlFor="observability-source"
+              >
                 Source
               </Label>
               <NativeSelect
@@ -207,7 +235,10 @@ export function RunsFilters({
             </div>
 
             <div className="flex min-w-0 flex-col gap-2">
-              <Label className="text-sm text-slate-700" htmlFor="observability-user">
+              <Label
+                className="text-sm text-slate-700"
+                htmlFor="observability-user"
+              >
                 Asked by (email or user ID)
               </Label>
               <Input
@@ -220,7 +251,10 @@ export function RunsFilters({
             </div>
 
             <div className="flex min-w-0 flex-col gap-2">
-              <Label className="text-sm text-slate-700" htmlFor="observability-test">
+              <Label
+                className="text-sm text-slate-700"
+                htmlFor="observability-test"
+              >
                 Test
               </Label>
               <NativeSelect
@@ -238,7 +272,10 @@ export function RunsFilters({
             </div>
 
             <div className="flex min-w-0 flex-col gap-2">
-              <Label className="text-sm text-slate-700" htmlFor="observability-tool">
+              <Label
+                className="text-sm text-slate-700"
+                htmlFor="observability-tool"
+              >
                 Tool call
               </Label>
               <NativeSelect
@@ -263,14 +300,15 @@ export function RunsFilters({
             </div>
           </form>
           <p className="mt-4 text-xs text-slate-500">
-            Defaults to the last 7 days. Search matches the prompt text across the whole
-            selected window, not just the runs on this page. A run ID is looked up on its
-            own and ignores the date range, so an older run still resolves. Applying a
-            confidence bound excludes runs that never recorded a confidence (in-flight or
-            failed runs). &ldquo;Asked by&rdquo; and &ldquo;Test&rdquo; filter to runs attributed
-            (B0-338) to that one user or that one test, regardless of the run&apos;s source.
-            &ldquo;Tool call&rdquo; narrows to runs whose agent step actually called that tool at
-            least once.
+            Defaults to the last 7 days. Search matches the prompt text across
+            the whole selected window, not just the runs on this page. A run ID
+            is looked up on its own and ignores the date range, so an older run
+            still resolves. Applying a confidence bound excludes runs that never
+            recorded a confidence (in-flight or failed runs). &ldquo;Asked
+            by&rdquo; and &ldquo;Test&rdquo; filter to runs attributed (B0-338)
+            to that one user or that one test, regardless of the run&apos;s
+            source. &ldquo;Tool call&rdquo; narrows to runs whose agent step
+            actually called that tool at least once.
           </p>
         </>
       ) : null}

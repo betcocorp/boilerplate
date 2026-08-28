@@ -12,6 +12,7 @@
  * regulated-data rule forbids altering. This is a diagnostic view, not a source of record.
  */
 
+import { ChevronDownIcon, ChevronUpIcon } from 'lucide-react';
 import { Badge } from '~/components/ui/badge';
 
 import type {
@@ -41,7 +42,13 @@ function exact(value: number | null): string {
   return value === null ? NA : String(value);
 }
 
-function SectionHeading({ children, hint }: { children: string; hint?: string }) {
+function SectionHeading({
+  children,
+  hint,
+}: {
+  children: string;
+  hint?: string;
+}) {
   return (
     <div className="mb-3">
       <h3 className="text-sm font-semibold text-slate-900">{children}</h3>
@@ -58,7 +65,11 @@ function ProvenanceTag({ children }: { children: string }) {
   );
 }
 
-function ConfidenceRow({ observation }: { observation: ConfidenceObservation }) {
+function ConfidenceRow({
+  observation,
+}: {
+  observation: ConfidenceObservation;
+}) {
   return (
     <tr className="border-t border-slate-100 align-top">
       <td className="py-2 pr-3 text-xs text-slate-800">{observation.label}</td>
@@ -68,7 +79,9 @@ function ConfidenceRow({ observation }: { observation: ConfidenceObservation }) 
       <td className="py-2 pr-3">
         <ProvenanceTag>{observation.provenance}</ProvenanceTag>
         {observation.isJudgment ? null : (
-          <span className="ml-1.5 text-[0.65rem] text-slate-500">not a judgment</span>
+          <span className="ml-1.5 text-[0.65rem] text-slate-500">
+            not a judgment
+          </span>
         )}
       </td>
       <td className="py-2 pr-3 font-mono text-xs tabular-nums text-slate-700">
@@ -103,7 +116,8 @@ function ProvenanceGroupRow({ group }: { group: ConfidenceProvenanceGroup }) {
         {group.count} value{group.count === 1 ? '' : 's'}
       </span>
       <span className="font-mono text-xs tabular-nums text-slate-800">
-        min {exact(group.min)} · max {exact(group.max)} · mean {exact(group.mean)}
+        min {exact(group.min)} · max {exact(group.max)} · mean{' '}
+        {exact(group.mean)}
       </span>
       <span className="ml-auto text-[0.65rem] text-slate-500">
         {group.isJudgment ? 'model judgment' : 'constant / cap / self-score'}
@@ -126,7 +140,9 @@ function NodeRow({ node }: { node: DecisionNodeCoverageRow }) {
       </td>
       <td className="py-2.5 pr-3 text-xs text-slate-700">
         <p>{node.detail}</p>
-        <p className="mt-1 text-[0.65rem] text-slate-500">{node.changesOutcome}</p>
+        <p className="mt-1 text-[0.65rem] text-slate-500">
+          {node.changesOutcome}
+        </p>
         {node.records.length > 0 ? (
           <ul className="mt-1.5 space-y-1">
             {node.records.map((record, index) => (
@@ -137,7 +153,9 @@ function NodeRow({ node }: { node: DecisionNodeCoverageRow }) {
                 <span className="font-mono">{record.gate}</span> →{' '}
                 <span className="font-mono">{record.verdict}</span>
                 {/* Verbatim: a gate effect can quote a label/SDS value. */}
-                <span className="mt-0.5 block whitespace-pre-wrap">{record.effect}</span>
+                <span className="mt-0.5 block whitespace-pre-wrap">
+                  {record.effect}
+                </span>
               </li>
             ))}
           </ul>
@@ -151,7 +169,9 @@ function NodeRow({ node }: { node: DecisionNodeCoverageRow }) {
             </span>
           ))
         ) : (
-          <span className="text-slate-400">no record persisted — expected at {node.recordedAt}</span>
+          <span className="text-slate-400">
+            no record persisted — expected at {node.recordedAt}
+          </span>
         )}
       </td>
     </tr>
@@ -159,7 +179,8 @@ function NodeRow({ node }: { node: DecisionNodeCoverageRow }) {
 }
 
 export function RunIntegrityPanel({ view }: { view: RunIntegrityView }) {
-  const { confidenceByProvenance, confidences, nodes, retrieval, similarity } = view;
+  const { confidenceByProvenance, confidences, nodes, retrieval, similarity } =
+    view;
   const unmeasuredCount = view.unmeasuredNodeIds.length;
 
   return (
@@ -171,7 +192,10 @@ export function RunIntegrityPanel({ view }: { view: RunIntegrityView }) {
         <h2 className="text-lg font-semibold text-slate-900">
           Confidence &amp; similarity integrity
         </h2>
-        <Badge className="border-slate-300 bg-slate-100 text-slate-600" variant="outline">
+        <Badge
+          className="border-slate-300 bg-slate-100 text-slate-600"
+          variant="outline"
+        >
           diagnostic
         </Badge>
         {unmeasuredCount > 0 ? (
@@ -183,30 +207,38 @@ export function RunIntegrityPanel({ view }: { view: RunIntegrityView }) {
             fully measured
           </Badge>
         )}
-        <span className="ml-auto text-xs text-slate-500 group-open:hidden">Show</span>
-        <span className="ml-auto hidden text-xs text-slate-500 group-open:inline">Hide</span>
+        <span className="ml-auto text-xs text-slate-500 group-open:hidden">
+          <ChevronDownIcon aria-hidden className="size-4 shrink-0" />
+        </span>
+        <span className="ml-auto hidden text-xs text-slate-500 group-open:inline">
+          <ChevronUpIcon aria-hidden className="size-4 shrink-0" />
+        </span>
       </summary>
 
       <div className="space-y-6 border-t border-slate-100 px-8 py-6">
         <p className="rounded-2xl border border-amber-600/30 bg-amber-50/70 p-4 text-xs text-amber-900">
-          Diagnostic view — not a source of record. Values are shown exactly as the run recorded
-          them, with no rounding or unit conversion. Any dilution ratio, contact time, EPA
-          registration number or hazard statement quoted in a gate effect below is reproduced
-          verbatim from the run trace and must be verified against the product label or SDS before
-          it is relied on.
+          Diagnostic view — not a source of record. Values are shown exactly as
+          the run recorded them, with no rounding or unit conversion. Any
+          dilution ratio, contact time, EPA registration number or hazard
+          statement quoted in a gate effect below is reproduced verbatim from
+          the run trace and must be verified against the product label or SDS
+          before it is relied on.
         </p>
 
         {view.predatesIntegrityInstrumentation ? (
           <p className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-600">
-            This run carries none of the B0-490 – B0-494 measurement blocks. It predates the
-            instrumentation, so most rows below are unmeasured — that is a gap in what was
-            recorded, not evidence that these nodes did not run.
+            This run carries none of the B0-490 – B0-494 measurement blocks. It
+            predates the instrumentation, so most rows below are unmeasured —
+            that is a gap in what was recorded, not evidence that these nodes
+            did not run.
           </p>
         ) : null}
 
         {/* --- Similarity ------------------------------------------------- */}
         <section>
-          <SectionHeading hint={similarity.source}>Retrieval similarity</SectionHeading>
+          <SectionHeading hint={similarity.source}>
+            Retrieval similarity
+          </SectionHeading>
           <dl className="grid gap-3 sm:grid-cols-3">
             {[
               {
@@ -226,7 +258,9 @@ export function RunIntegrityPanel({ view }: { view: RunIntegrityView }) {
               },
             ].map((field) => (
               <div className="flex flex-col gap-0.5" key={field.label}>
-                <dt className="text-xs uppercase tracking-wide text-slate-500">{field.label}</dt>
+                <dt className="text-xs uppercase tracking-wide text-slate-500">
+                  {field.label}
+                </dt>
                 <dd
                   className={
                     field.value === null
@@ -261,7 +295,10 @@ export function RunIntegrityPanel({ view }: { view: RunIntegrityView }) {
               </thead>
               <tbody>
                 {confidences.map((observation) => (
-                  <ConfidenceRow key={observation.id} observation={observation} />
+                  <ConfidenceRow
+                    key={observation.id}
+                    observation={observation}
+                  />
                 ))}
               </tbody>
             </table>
@@ -312,7 +349,9 @@ export function RunIntegrityPanel({ view }: { view: RunIntegrityView }) {
 
         {/* --- Retrieval + runtime configuration --------------------------- */}
         <section>
-          <SectionHeading hint={retrieval.source}>Retrieval configuration used</SectionHeading>
+          <SectionHeading hint={retrieval.source}>
+            Retrieval configuration used
+          </SectionHeading>
           {retrieval.measured && retrieval.config ? (
             <>
               <dl className="grid gap-3 sm:grid-cols-3">
@@ -321,14 +360,21 @@ export function RunIntegrityPanel({ view }: { view: RunIntegrityView }) {
                   ['Retrieval strategy', retrieval.config.retrievalStrategy],
                   ['Embedding source', retrieval.config.embeddingSource],
                   ['Scope', retrieval.config.scope],
-                  ['Min similarity floor', exact(retrieval.config.minSimilarity)],
+                  [
+                    'Min similarity floor',
+                    exact(retrieval.config.minSimilarity),
+                  ],
                   ['Rerank total', exact(retrieval.rerankMsTotal)],
                 ].map(([label, value]) => (
                   <div className="flex flex-col gap-0.5" key={label}>
-                    <dt className="text-xs uppercase tracking-wide text-slate-500">{label}</dt>
+                    <dt className="text-xs uppercase tracking-wide text-slate-500">
+                      {label}
+                    </dt>
                     <dd
                       className={
-                        value ? 'font-mono text-xs text-slate-800' : 'text-xs text-slate-400'
+                        value
+                          ? 'font-mono text-xs text-slate-800'
+                          : 'text-xs text-slate-400'
                       }
                     >
                       {value && value !== NA ? value : NA}
@@ -339,8 +385,11 @@ export function RunIntegrityPanel({ view }: { view: RunIntegrityView }) {
               {retrieval.config.mixed.length > 0 ? (
                 <p className="mt-2 text-xs text-amber-800">
                   This turn’s search calls disagreed on:{' '}
-                  <span className="font-mono">{retrieval.config.mixed.join(', ')}</span> — those
-                  fields are null above rather than showing one call’s value as the run’s.
+                  <span className="font-mono">
+                    {retrieval.config.mixed.join(', ')}
+                  </span>{' '}
+                  — those fields are null above rather than showing one call’s
+                  value as the run’s.
                 </p>
               ) : null}
             </>
@@ -353,15 +402,19 @@ export function RunIntegrityPanel({ view }: { view: RunIntegrityView }) {
           {retrieval.runtimeConfig ? (
             <div className="mt-3 flex flex-wrap gap-1.5">
               {Object.entries(retrieval.runtimeConfig).map(([key, value]) => (
-                <Badge className="font-mono text-[0.65rem]" key={key} variant="outline">
+                <Badge
+                  className="font-mono text-[0.65rem]"
+                  key={key}
+                  variant="outline"
+                >
                   {key}: {value === null ? 'null' : String(value)}
                 </Badge>
               ))}
             </div>
           ) : (
             <p className="mt-3 text-xs text-slate-400">
-              unmeasured — no runtime switch snapshot on this run, so which gates were enabled is
-              unknown (not &ldquo;all enabled&rdquo;).
+              unmeasured — no runtime switch snapshot on this run, so which
+              gates were enabled is unknown (not &ldquo;all enabled&rdquo;).
             </p>
           )}
         </section>
