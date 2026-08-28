@@ -222,6 +222,15 @@ export default async function AdminTestReportsPage({ searchParams }: PageProps) 
                 <TableHead title="Change from this dataset's previous scored run (B0-689)">
                   Change
                 </TableHead>
+                <TableHead title="LLM model used in this run (B0-733)">
+                  Model
+                </TableHead>
+                <TableHead title="Routing method used in this run (B0-733)">
+                  Router
+                </TableHead>
+                <TableHead title="App version at run time (B0-733)">
+                  Version
+                </TableHead>
                 <TableHead title="Who started the run — recorded from B0-687 onward; earlier runs were never attributed">
                   Run by
                 </TableHead>
@@ -231,7 +240,7 @@ export default async function AdminTestReportsPage({ searchParams }: PageProps) 
             <TableBody>
               {reports.length === 0 ? (
                 <TableRow>
-                  <TableCell className="text-slate-500" colSpan={7}>
+                  <TableCell className="text-slate-500" colSpan={10}>
                     {selectedTestId
                       ? `No reports for ${selectedDataset?.testName ?? 'this dataset'}. Choose "All datasets" to see every report.`
                       : 'No reports generated yet. Open a completed run and choose “Generate report”.'}
@@ -270,6 +279,34 @@ export default async function AdminTestReportsPage({ searchParams }: PageProps) 
                         change={trend.changeByRunId.get(row.runId)}
                         row={row}
                       />
+                    </TableCell>
+                    <TableCell
+                      className="whitespace-nowrap text-slate-600"
+                      title={row.modelTag ?? 'Not recorded for this run'}
+                    >
+                      {row.modelTag ?? '—'}
+                    </TableCell>
+                    <TableCell
+                      className="whitespace-nowrap text-slate-600"
+                      title={
+                        row.routerType
+                          ? `Routing method: ${row.routerType}`
+                          : 'Not recorded for this run'
+                      }
+                    >
+                      {row.routerType ? (
+                        <span className="inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
+                          {row.routerType}
+                        </span>
+                      ) : (
+                        '—'
+                      )}
+                    </TableCell>
+                    <TableCell
+                      className="whitespace-nowrap text-slate-600"
+                      title={row.appVersion ?? 'Not recorded for this run'}
+                    >
+                      {row.appVersion ?? '—'}
                     </TableCell>
                     <TableCell
                       className="max-w-[220px] truncate text-slate-600"

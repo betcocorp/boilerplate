@@ -84,13 +84,14 @@ describe('productSupportToolsForRoute (B0-437)', () => {
   it('prunes only the category-navigation tools, and only where they do not apply', () => {
     const category = ['get_products_in_category', 'get_product_category', 'find_products_by_category'];
 
-    for (const route of ['dilution', 'recommendations']) {
+    for (const route of ['dilution']) {
       for (const name of category) {
         expect(toolNames(route), `${route} should not carry ${name}`).not.toContain(name);
       }
     }
     // Catalog/filter questions do land on these routes ("what floor strippers do you have?").
-    for (const route of ['bathroom', 'floor']) {
+    // B0-734 — recommendations joins them: its B0-663 policy names the category tools.
+    for (const route of ['bathroom', 'floor', 'recommendations']) {
       for (const name of category) {
         expect(toolNames(route)).toContain(name);
       }

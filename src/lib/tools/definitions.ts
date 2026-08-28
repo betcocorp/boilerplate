@@ -441,9 +441,13 @@ const ROUTE_TOOL_NAMES: Record<string, readonly ProductToolName[]> = {
   // category; no dilution-route run has called a category tool. B0-529: `get_dispenser_asset` is
   // named in the dilution policy, so it joins this route (rule 3) and no other.
   dilution: [...BASE_ROUTE_TOOL_NAMES, 'get_dispenser_asset'],
-  // The recommendations policy is cross-reference-first and has only ever used
-  // lookup_cross_reference / recommend_cross_reference / search_product_docs.
-  recommendations: BASE_ROUTE_TOOL_NAMES,
+  // B0-663 made this route job/problem-driven and its policy names the category tools
+  // (`find_products_by_category` / `get_products_in_category` / `get_product_category`) as the way
+  // to answer filter-shaped asks — but the route kept the pre-B0-663 cross-reference-only tool
+  // set, so the model was told to call tools it did not have and fell through to the cross-
+  // reference engine's decline on "what should I use for greasy kitchen floors"-style asks
+  // (B0-734, Product Golden run de5bc6c6: 21 recommendations-routed cases averaged 48.8/100).
+  recommendations: [...BASE_ROUTE_TOOL_NAMES, ...CATEGORY_ROUTE_TOOL_NAMES],
 };
 
 /**

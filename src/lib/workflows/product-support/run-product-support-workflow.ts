@@ -496,8 +496,17 @@ export function shouldForceCrossReferenceLookup(userMessage: string) {
   return hasDecisiveCrossReferenceSignal(userMessage);
 }
 
-function isEarlyDeclineGateEnabled() {
-  return process.env.BEX_EARLY_DECLINE_GATE_ENABLED !== 'false';
+/**
+ * B0-734 — the early-decline gate is a `settings` row now (per the B0-638 rule: flags live in the
+ * table, env is for secrets), and it defaults OFF. The four canned replies it short-circuits with
+ * contradict the golden datasets on every class they cover (mixing, compliance, shelf life, broad
+ * recommendation) and, because the gate runs before any model call, they also prevented the
+ * B0-727 shelf-life policy and the B0-559/B0-660 "don't ask for a surface already named" rules
+ * from ever applying to the messages they were written for. The gate code stays so it can be
+ * re-enabled from /admin/settings.
+ */
+async function isEarlyDeclineGateEnabled(): Promise<boolean> {
+  return getBooleanSetting('BEX_EARLY_DECLINE_GATE_ENABLED', false);
 }
 
 /**
@@ -613,10 +622,8 @@ export function classifyEarlyDecline(
     crossReferenceIntent?: boolean;
   },
 ): EarlyDeclineDecision | null {
-  if (!isEarlyDeclineGateEnabled()) {
-    return null;
-  }
-
+  // B0-734 — pure classifier: the enabled/disabled decision is made by the caller from the
+  // `settings` row, so this function's verdict never depends on ambient configuration.
   const text = userMessage.toLowerCase();
   const asksChemicalMixing =
     /(mix|mixing|combine|adding|add)\b/.test(text) &&
@@ -1580,7 +1587,7 @@ export async function runProductSupportWorkflow(input: {
   const agentMode = input.agentMode ?? DEFAULT_BEX_CHAT_AGENT_MODE;
   const route = routeUserMessageToSme(input.userMessage);
   // B0-389 — read once so the flag recorded as run config is the same value the gate below used.
-  const earlyDeclineGateEnabled = isEarlyDeclineGateEnabled();
+  const earlyDeclineGateEnabled = await isEarlyDeclineGateEnabled();
   /**
    * B0-389/B0-649 — every routing flag is read ONCE here and reused for both the decision and the
    * recorded run config, for the same reason `earlyDeclineGateEnabled` is (above): a second read
@@ -1712,9 +1719,11 @@ export async function runProductSupportWorkflow(input: {
         liveIntentClassification.suggestedTool === 'lookup_cross_reference' ||
         liveIntentClassification.suggestedTool === 'recommend_cross_reference'
       : shouldForceCrossReferenceLookup(input.userMessage);
-  const earlyDeclineDecision = classifyEarlyDecline(input.userMessage, {
-    crossReferenceIntent: crossReferenceIntentForTurn,
-  });
+  const earlyDeclineDecision = earlyDeclineGateEnabled
+    ? classifyEarlyDecline(input.userMessage, {
+        crossReferenceIntent: crossReferenceIntentForTurn,
+      })
+    : null;
   /**
    * B0-649 — precedence: semantic router (when it decided) → LLM classifier → keyword agent →
    * `'ambiguous'`. The value space is unchanged (`IntentValue`), because everything downstream

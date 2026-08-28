@@ -27,6 +27,8 @@ type SettingRecord = {
 const BOOLEAN_SETTINGS = [
   'WEBSEARCH_DB_CACHE_ENABLED',
   'BEX_DISABLE_CONFIDENCE_GATING',
+  // B0-734 — pre-model canned-decline gate (mixing / compliance / shelf-life / broad ask). Off by default.
+  'BEX_EARLY_DECLINE_GATE_ENABLED',
   'BEX_PERMISSIONS_ENFORCED',
   'BEX_AI_SDK_STREAMING_ENABLED',
   'NEXT_PUBLIC_BEX_STREAMING_UI_ENABLED',

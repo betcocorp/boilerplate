@@ -326,6 +326,8 @@ describe('settings-table coverage does not regress to process.env (B0-638)', () 
     'BEX_AI_SDK_STREAMING_ENABLED',
     'BEX_AI_SDK_STREAMING_ROLLOUT_MODE',
     'BEX_DISABLE_CONFIDENCE_GATING',
+    // B0-734 — the early-decline gate switch, moved off process.env; defaults to false.
+    'BEX_EARLY_DECLINE_GATE_ENABLED',
     'BEX_LLM_ROUTER_ENABLED',
     'BEX_LLM_ROUTER_SHADOW_MODE',
     'BEX_PERMISSIONS_ENFORCED',
