@@ -13,6 +13,7 @@
 export type CompetitorSelfReferenceReason =
   | 'betco_brand'
   | 'betco_product'
+  | 'betco_catalog'
   | 'chemistry_term'
   | 'conversion_list_ask';
 
@@ -29,6 +30,14 @@ export type CompetitorSelfReferenceVerdict =
 export type BetcoEntityResolution = {
   productLineKey: string | null;
   ambiguousAlias: boolean;
+  /**
+   * B0-751 follow-up — the name is in the Betco catalog even though no single product line
+   * resolved. The alias table has no row for most product names (speedex, grease solv, af315,
+   * green earth all have zero), so alias resolution alone answered "not ours" for products that
+   * plainly are. Membership is the question this check actually asks; the line key is a bonus.
+   */
+  catalogMatch: boolean;
+  catalogProductLineKey: string | null;
 };
 
 export type ClassifyCompetitorSelfReferenceInput = {
@@ -70,6 +79,29 @@ const CONVERSION_LIST_PATTERNS: readonly RegExp[] = [
   /\b(cross[\s-]?reference|xref|conversion|convert)\b[^.?!]{0,40}\b(their|the|our|a|an|this)?\s*(whole|entire|full|complete)\s+(catalog(ue)?|line|product line|portfolio)\b/i,
   /\b(cross[\s-]?reference|xref|conversion)\s+(list|sheet|chart)\b[^.?!]{0,40}\b(their|the|our|a)?\s*(whole|entire|full|complete)?\s*(catalog(ue)?|line|conversion)\b/i,
 ];
+
+/**
+ * B0-751 follow-up — words that describe a product category rather than identify a product. A name
+ * built only from these ("low-odor floor stripper", "glass cleaner") is a DESCRIPTION of what the
+ * user wants, not a product identity, and it would substring-match dozens of Betco titles. Matching
+ * on one would suppress a genuine cross-reference, so the catalog tier is skipped unless at least
+ * one token carries identity. Category words only — never a brand or product word.
+ */
+const GENERIC_PRODUCT_WORDS = new Set([
+  'cleaner', 'cleaners', 'degreaser', 'disinfectant', 'disinfectants', 'sanitizer', 'stripper',
+  'finish', 'sealer', 'soap', 'detergent', 'deodorizer', 'polish', 'wax', 'shampoo',
+  'floor', 'floors', 'glass', 'restroom', 'bathroom', 'carpet', 'wood', 'tile', 'window',
+  'multi', 'surface', 'general', 'purpose', 'all', 'low', 'odor', 'free', 'heavy', 'duty',
+  'concentrate', 'concentrated', 'rtu', 'ready', 'to', 'use', 'neutral', 'acid', 'foam', 'foaming',
+  'product', 'products', 'solution', 'chemical', 'spray', 'wipe', 'liquid', 'and', 'the', 'a', 'an',
+]);
+
+/** True when the name carries at least one token that identifies rather than describes. */
+function hasDistinctiveToken(product: string): boolean {
+  return product
+    .split(/[^a-z0-9]+/)
+    .some((token) => token.length >= 3 && !GENERIC_PRODUCT_WORDS.has(token));
+}
 
 function normalizeProductText(value: string | null | undefined): string {
   return (value ?? '')
@@ -124,6 +156,21 @@ export async function classifyCompetitorSelfReference(
     return { suppressed: true, reason: 'chemistry_term', productLineKey: null, matched: chemistry };
   }
 
+  /**
+   * B0-751 follow-up — a named brand that is not one of ours settles it: this is a real competitor,
+   * so no amount of product-name matching below may withdraw the cross-reference. Without this,
+   * a generic product half ("3M" + "#1 Glass Cleaner", "Diversey" + "quat disinfectant") could
+   * match a Betco title and suppress the single thing the cross-reference path exists to do.
+   */
+  if (input.competitorBrand && normalizeProductText(input.competitorBrand)) {
+    return { suppressed: false };
+  }
+
+  // A pure category description identifies nothing — see GENERIC_PRODUCT_WORDS.
+  if (!hasDistinctiveToken(product)) {
+    return { suppressed: false };
+  }
+
   try {
     const resolution = await input.resolveBetcoEntity(product);
     if (resolution.productLineKey && !resolution.ambiguousAlias) {
@@ -131,6 +178,24 @@ export async function classifyCompetitorSelfReference(
         suppressed: true,
         reason: 'betco_product',
         productLineKey: resolution.productLineKey,
+        matched: product,
+      };
+    }
+    /**
+     * An alias spanning several product lines (pH7Q resolves to three EPA-registered formulations)
+     * is still unambiguously OURS — the ambiguity is about which line, which this check does not
+     * need. The resolver returns no key in that case, so read the flag rather than the key.
+     */
+    if (resolution.ambiguousAlias) {
+      return { suppressed: true, reason: 'betco_product', productLineKey: null, matched: product };
+    }
+    // Catalog membership last: the weakest signal, and the one that catches the products with no
+    // alias row at all (speedex, grease solv, af315).
+    if (resolution.catalogMatch) {
+      return {
+        suppressed: true,
+        reason: 'betco_catalog',
+        productLineKey: resolution.catalogProductLineKey,
         matched: product,
       };
     }

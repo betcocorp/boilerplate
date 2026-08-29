@@ -442,9 +442,9 @@ describe('competitor self-reference check (B0-751)', () => {
     expect(runCrossReferenceRecommendationMock).toHaveBeenCalledTimes(1);
     expect(out.activeGates?.crossReferenceSelfReference).toEqual({ state: 'ran', verdict: 'passed' });
     expect(auditRows('cross_reference_self_reference_suppressed')).toEqual([]);
-    expect(resolveProductEntityByNameMock).toHaveBeenCalledWith('spartan xtreme blue', {
-      mode: 'freeform',
-    });
+    // A named non-Betco brand settles the question on its own, so no catalog/alias lookup runs at
+    // all — the check can never product-match its way past a real competitor.
+    expect(resolveProductEntityByNameMock).not.toHaveBeenCalled();
     // Classifier entities fed the check; the B0-357 extraction still ran exactly once downstream.
     expect(extractionCallCount()).toBe(1);
   });
@@ -468,7 +468,8 @@ describe('competitor self-reference check (B0-751)', () => {
 
     expect(out.routingDecision).toBe('cross_reference');
     expect(out.activeGates?.crossReferenceSelfReference).toEqual({ state: 'ran', verdict: 'passed' });
-    expect(resolveProductEntityByNameMock).toHaveBeenCalledWith('bnc-15', { mode: 'freeform' });
+    // Brand 'BNC' is not ours, so the check settles on the brand alone — see the Spartan case.
+    expect(resolveProductEntityByNameMock).not.toHaveBeenCalled();
     // Awaited early for the check, then reused as `resolvedCompetitorPromise`: ONE call, not two.
     expect(extractionCallCount()).toBe(1);
     expect(runCrossReferenceRecommendationMock).toHaveBeenCalledWith(

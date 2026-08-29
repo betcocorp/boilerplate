@@ -6,10 +6,15 @@ import {
   type BetcoEntityResolution,
 } from '~/lib/recommendations/competitor-self-reference';
 
-const NO_MATCH: BetcoEntityResolution = { productLineKey: null, ambiguousAlias: false };
+const NO_MATCH: BetcoEntityResolution = {
+  productLineKey: null,
+  ambiguousAlias: false,
+  catalogMatch: false,
+  catalogProductLineKey: null,
+};
 
-function resolverReturning(result: BetcoEntityResolution) {
-  return vi.fn(async (): Promise<BetcoEntityResolution> => result);
+function resolverReturning(result: Partial<BetcoEntityResolution>) {
+  return vi.fn(async (): Promise<BetcoEntityResolution> => ({ ...NO_MATCH, ...result }));
 }
 
 async function classify(
@@ -118,15 +123,72 @@ describe('classifyCompetitorSelfReference (B0-751)', () => {
     ).toEqual({ suppressed: false });
   });
 
-  it('does NOT suppress on an ambiguous alias, a blank product, or a resolver rejection', async () => {
+  /**
+   * An alias that spans several Betco product lines (pH7Q has three EPA-registered formulations)
+   * still identifies the name as OURS — the ambiguity is only about which line, which this check
+   * does not need. Suppressing with a null key is the point: the original rule refused to suppress
+   * here, which is why every pH7Q comparison on the 234-item set kept being forced to the
+   * competitor cross-reference engine.
+   */
+  it('suppresses on an ambiguous alias, reporting no product line', async () => {
+    expect(
+      await classify({
+        competitorProduct: 'pH7Q',
+        resolveBetcoEntity: resolverReturning({ ambiguousAlias: true }),
+      }),
+    ).toEqual({
+      suppressed: true,
+      reason: 'betco_product',
+      productLineKey: null,
+      matched: 'ph7q',
+    });
+  });
+
+  /** Catalog membership is the weakest tier and catches names with no alias row at all. */
+  it('suppresses on catalog membership when no alias resolves', async () => {
     expect(
       await classify({
         competitorProduct: 'Grease Solv',
-        resolveBetcoEntity: resolverReturning({ productLineKey: null, ambiguousAlias: true }),
+        resolveBetcoEntity: resolverReturning({
+          catalogMatch: true,
+          catalogProductLineKey: 'line-9',
+        }),
+      }),
+    ).toEqual({
+      suppressed: true,
+      reason: 'betco_catalog',
+      productLineKey: 'line-9',
+      matched: 'grease solv',
+    });
+  });
+
+  /** A named non-Betco brand settles it — never product-match past a real competitor. */
+  it('does NOT suppress, or even look up, when a non-Betco brand is named', async () => {
+    const resolver = resolverReturning({ catalogMatch: true });
+    expect(
+      await classify({
+        competitorBrand: '3M',
+        competitorProduct: 'Glass Cleaner',
+        resolveBetcoEntity: resolver,
       }),
     ).toEqual({ suppressed: false });
+    expect(resolver).not.toHaveBeenCalled();
+  });
 
-    const untouched = resolverReturning({ productLineKey: 'x', ambiguousAlias: false });
+  /** A pure category description would substring-match dozens of Betco titles. */
+  it('does NOT suppress on a generic category description', async () => {
+    const resolver = resolverReturning({ catalogMatch: true });
+    expect(
+      await classify({
+        competitorProduct: 'low-odor floor stripper',
+        resolveBetcoEntity: resolver,
+      }),
+    ).toEqual({ suppressed: false });
+    expect(resolver).not.toHaveBeenCalled();
+  });
+
+  it('does NOT suppress on a blank product or a resolver rejection', async () => {
+    const untouched = resolverReturning({ productLineKey: 'x' });
     expect(await classify({ competitorProduct: '   ', resolveBetcoEntity: untouched })).toEqual({
       suppressed: false,
     });

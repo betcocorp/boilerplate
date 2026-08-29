@@ -69,6 +69,7 @@ import {
   isConversionListAsk,
   type CompetitorSelfReferenceVerdict,
 } from '~/lib/recommendations/competitor-self-reference';
+import { matchBetcoProductName } from '~/lib/rag/betco-product-name';
 import { resolveProductEntityByName } from '~/lib/rag/entity-context';
 import { runCrossReferenceRecommendation } from '~/lib/recommendations/persist-recommendation';
 import { loadXrefLatencyPolicy } from '~/lib/recommendations/recommend-cross-reference';
@@ -1806,7 +1807,21 @@ export async function runProductSupportWorkflow(input: {
         competitorBrand: classifierCompetitorBrand ?? earlyExtractedCompetitor?.brand ?? null,
         competitorProduct:
           classifierCompetitorProduct ?? earlyExtractedCompetitor?.product ?? null,
-        resolveBetcoEntity: (name) => resolveProductEntityByName(name, { mode: 'freeform' }),
+        // B0-751 follow-up — the curated alias table and the catalog disagree about what exists,
+        // so ask both. The alias tiers give a product line when they can; catalog membership
+        // answers "is this ours at all" for the many names with no alias row.
+        resolveBetcoEntity: async (name) => {
+          const [resolution, catalog] = await Promise.all([
+            resolveProductEntityByName(name, { mode: 'freeform' }),
+            matchBetcoProductName(name),
+          ]);
+          return {
+            productLineKey: resolution.productLineKey,
+            ambiguousAlias: resolution.ambiguousAlias,
+            catalogMatch: catalog.matched,
+            catalogProductLineKey: catalog.productLineKey,
+          };
+        },
       })
     : null;
   const selfReferenceSuppressed = selfReferenceVerdict?.suppressed === true;
