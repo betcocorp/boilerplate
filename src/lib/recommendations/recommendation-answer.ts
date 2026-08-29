@@ -78,6 +78,22 @@ export function buildCompetitiveRecommendationAnswer(
     );
   }
 
+  /**
+   * B0-760 — the head-to-head table puts two EPA registrations side by side, which on its own
+   * reads as "these kill the same things". They do not: organism claims attach to a specific
+   * registration and label, and neither matching chemistry nor a shared registrant carries them
+   * across. This block is unconditional because every answer this composer builds is a
+   * disinfectant substitution, which is exactly where an assumed claim transfer does harm.
+   */
+  const competitorLabel = input.competitorLabel?.trim() || 'the competitor product';
+  parts.push(
+    '',
+    '**Kill claims do not transfer**',
+    `Organism claims are specific to each product's own EPA registration and label. ${input.recommendedTitle} covers only the organisms listed on its own label and efficacy data — a matching chemistry${
+      shared ? ', or a shared registrant,' : ''
+    } does not carry ${competitorLabel}'s claims across. Confirm every organism you need against ${input.recommendedTitle}'s label before substituting.`,
+  );
+
   parts.push(
     '',
     'This is a recommendation for verification — confirm exact dilution, contact time, and safety on the product label or with a Betco sales representative.',
