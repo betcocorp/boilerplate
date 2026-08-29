@@ -1,3 +1,18 @@
+# [2.15.0](https://github.com/betcocorp/bex2.0/compare/v2.14.1...v2.15.0) (2026-08-29)
+
+
+### Bug Fixes
+
+* **B0-735:** retry synthesis calls on overflow instead of only budgeting for it ([86103c6](https://github.com/betcocorp/bex2.0/commit/86103c6205b97afdb08ae8d35809af8a663f6b62))
+* **B0-751:** identify Betco products by catalog membership, not alias resolution ([6a2779c](https://github.com/betcocorp/bex2.0/commit/6a2779c0d470aa9a1d2e8043586b2a9986c1682a)), closes [#1](https://github.com/betcocorp/bex2.0/issues/1)
+
+
+### Features
+
+* **B0-750:** flag golden-set prompts on the test page and select them in one click ([f33777d](https://github.com/betcocorp/bex2.0/commit/f33777d7c7002c0c17dbe7961e9bec53afead251))
+* **B0-751:** withdraw cross-reference handling when the "competitor" is Betco's own ([1b80572](https://github.com/betcocorp/bex2.0/commit/1b805721c29455588fa80549608278d63024c520))
+* **B0-758:** extract brand family, setting, category and cross-turn product carry-over ([6cefe16](https://github.com/betcocorp/bex2.0/commit/6cefe16acfa08d6d2798cfb451c53e001c3b77d1))
+
 ## [2.14.1](https://github.com/betcocorp/bex2.0/compare/v2.14.0...v2.14.1) (2026-08-28)
 
 
