@@ -279,10 +279,30 @@ function escalationForIssueType(raw: string) {
 }
 
 /**
+ * B0-759 — question shapes whose answer is an enumeration or a procedure: a maintenance
+ * schedule, a list of failure causes, a dry/recoat window. These need DEPTH from one procedural
+ * document, which is the opposite of what the default gives them.
+ *
+ * Matched against the raw query, so keep every pattern anchored on an interrogative opener rather
+ * than a bare noun — `\bmaintenance\b` alone would fire on "what dilution does the maintenance
+ * cleaner use", a single-value lookup that is well served by the default breadth.
+ */
+const PROCEDURAL_DEPTH_PATTERNS: readonly RegExp[] = [
+  /\bwhat\s+(factors|causes|kinds?\s+of|types?\s+of|sorts?\s+of)\b/,
+  /\b(what|which)\b[^.?!]{0,16}\bsteps\b/,
+  /\bwhat\s+maintenance\b/,
+  /\bmaintenance\s+(schedule|checklist|routine|plan|interval)\b/,
+  /\bhow\s+(often|long|soon)\b/,
+  /\bstep[-\s]by[-\s]step\b/,
+  /\bchecklist\b/,
+];
+
+/**
  * B0-201: derive curation knobs from query intent. Single-product deep-dives get more facets
  * of one line; comparisons surface several distinct lines. Undefined fields = pipeline defaults.
  */
-function classifyRetrievalIntent(
+/** Exported only so the B0-759 regression test can pin which shapes do and do not widen. */
+export function classifyRetrievalIntent(
   query: string,
   productName?: string,
 ): { limit?: number; maxPerDocument?: number; requiredDocumentKinds?: string[] } {
@@ -292,6 +312,16 @@ function classifyRetrievalIntent(
   }
   if (productName && productName.trim()) {
     return { limit: 4, maxPerDocument: 2 };
+  }
+  /**
+   * B0-759 — deliberately AFTER the product-name branch, so a named product keeps the tuning
+   * it has today and this only affects queries that would otherwise inherit the bare 3x1 default.
+   * `maxPerDocument: 3` is the load-bearing half: the default of 1 caps a fifteen-step maintenance
+   * schedule at a single excerpt of the document that contains it, no matter how many documents
+   * are fetched.
+   */
+  if (PROCEDURAL_DEPTH_PATTERNS.some((pattern) => pattern.test(q))) {
+    return { limit: 6, maxPerDocument: 3 };
   }
   return {};
 }

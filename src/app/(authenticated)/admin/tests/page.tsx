@@ -194,9 +194,6 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
                             value="/admin/tests"
                           />
                           <input name="testId" type="hidden" value={test.id} />
-                          <Button size="sm" type="submit" variant="outline">
-                            Run
-                          </Button>
                         </form>
                         <form action={archiveTestAction}>
                           <input
