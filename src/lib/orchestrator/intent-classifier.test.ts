@@ -59,6 +59,10 @@ const llmResult = {
     competitorProduct: null,
     surfaceType: 'VCT floor',
     taskDescription: 'strip and recoat a VCT floor',
+    brandFamily: null,
+    setting: null,
+    productCategory: null,
+    carriedProduct: null,
   },
   suggestedTool: 'search_product_docs' as const,
 };
@@ -339,6 +343,10 @@ describe('classifyUserIntent — B0-515 entity extraction', () => {
           competitorProduct: 'Virex II 256',
           surfaceType: 'stainless steel prep table',
           taskDescription: 'find the Betco equivalent to disinfect a prep table',
+          brandFamily: null,
+          setting: null,
+          productCategory: null,
+          carriedProduct: null,
         },
         suggestedTool: 'lookup_cross_reference' as const,
       },
@@ -359,8 +367,76 @@ describe('classifyUserIntent — B0-515 entity extraction', () => {
       competitorProduct: 'Virex II 256',
       surfaceType: 'stainless steel prep table',
       taskDescription: 'find the Betco equivalent to disinfect a prep table',
+      brandFamily: null,
+      setting: null,
+      productCategory: null,
+      carriedProduct: null,
     });
     expect(out.suggestedTool).toBe('lookup_cross_reference');
+  });
+
+  /**
+   * B0-758 — the scope signals survive parsing, including the two closed enums. `brandFamily` and
+   * `setting` are `z.enum(...)`, so an unlisted value would fail the parse rather than pass through
+   * — that is deliberate, and this test pins the accepted spellings.
+   */
+  it('parses the B0-758 scope, category and carry-over signals', async () => {
+    const runLlm = vi.fn().mockResolvedValue({
+      parsed: {
+        intent: 'floor' as const,
+        confidence: 0.71,
+        entities: {
+          betcoProduct: null,
+          competitorBrand: null,
+          competitorProduct: null,
+          surfaceType: 'hardwood',
+          taskDescription: 'refinish a hardwood floor at home',
+          brandFamily: 'basic_coatings' as const,
+          setting: 'residential' as const,
+          productCategory: 'wood floor finish',
+          carriedProduct: 'Street Shine',
+        },
+        suggestedTool: 'search_product_docs' as const,
+      },
+      usage: USAGE,
+    });
+
+    const out = await classifyUserIntent('what about at home?', [], {
+      runLlm,
+      now: () => Date.now(),
+    });
+
+    expect(intentClassificationSchema.safeParse(out).success).toBe(true);
+    expect(out.entities.brandFamily).toBe('basic_coatings');
+    expect(out.entities.setting).toBe('residential');
+    expect(out.entities.productCategory).toBe('wood floor finish');
+    expect(out.entities.carriedProduct).toBe('Street Shine');
+  });
+
+  it('rejects a brandFamily outside the four Betco brands plus competitor', () => {
+    // Guards the org rule: no invented sub-brands may enter the pipeline through this field.
+    const withInventedBrand = {
+      intent: 'product' as const,
+      confidence: 0.6,
+      entities: {
+        betcoProduct: null,
+        competitorBrand: null,
+        competitorProduct: null,
+        surfaceType: null,
+        taskDescription: null,
+        brandFamily: 'betco_pro',
+        setting: null,
+        productCategory: null,
+        carriedProduct: null,
+      },
+      suggestedTool: null,
+      source: 'llm' as const,
+      fallbackReason: null,
+      usage: null,
+      model: null,
+    };
+
+    expect(intentClassificationSchema.safeParse(withInventedBrand).success).toBe(false);
   });
 
   it('leaves every entity field null when the model extracted nothing, rather than defaulting any of them', async () => {
@@ -374,6 +450,10 @@ describe('classifyUserIntent — B0-515 entity extraction', () => {
           competitorProduct: null,
           surfaceType: null,
           taskDescription: null,
+          brandFamily: null,
+          setting: null,
+          productCategory: null,
+          carriedProduct: null,
         },
         suggestedTool: null,
       },
@@ -388,6 +468,10 @@ describe('classifyUserIntent — B0-515 entity extraction', () => {
       competitorProduct: null,
       surfaceType: null,
       taskDescription: null,
+      brandFamily: null,
+      setting: null,
+      productCategory: null,
+      carriedProduct: null,
     });
     expect(out.suggestedTool).toBeNull();
   });

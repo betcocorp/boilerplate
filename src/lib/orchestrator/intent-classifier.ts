@@ -39,6 +39,24 @@ export type PriorTurnMessage = {
   content: string;
 };
 
+/**
+ * B0-758 — the four brand families named in the org brand rule, plus `competitor` for anything
+ * outside them. NEVER extend this with a sub-brand: the rule is that Betco's brands are Betco,
+ * Basic Coatings (wood floor coatings), EnviroZyme and 1950, and nothing else exists.
+ */
+export const BRAND_FAMILIES = [
+  'betco',
+  'basic_coatings',
+  'envirozyme',
+  '1950',
+  'competitor',
+] as const;
+export type BrandFamily = (typeof BRAND_FAMILIES)[number];
+
+/** B0-758 — commercial vs residential end use. Residential is outside the business entirely. */
+export const USE_SETTINGS = ['commercial', 'residential'] as const;
+export type UseSetting = (typeof USE_SETTINGS)[number];
+
 export const intentEntitiesSchema = z.object({
   /** A Betco product name/SKU mentioned in the message, else `null`. */
   betcoProduct: z.string().nullable(),
@@ -53,6 +71,33 @@ export const intentEntitiesSchema = z.object({
   surfaceType: z.string().nullable(),
   /** Short paraphrase of what the user is trying to do, else `null`. */
   taskDescription: z.string().nullable(),
+  /**
+   * B0-758 — which brand family owns the subject of the question. Extracted because the eval set's
+   * largest identifiable failure cluster was scope: wood-floor questions belong to Basic Coatings
+   * (which has almost no corpus, so the right answer is a referral, not a Betco-core product), and
+   * a competitor brand is what separates a genuine cross-reference from a Betco-vs-Betco
+   * comparison. `null` when no brand is identifiable from the message.
+   */
+  brandFamily: z.enum(BRAND_FAMILIES).nullable(),
+  /**
+   * B0-758 — commercial vs residential end use. Betco is a commercial manufacturer, so a
+   * residential ask ("for my floor at home") is out of scope regardless of whether a matching
+   * product exists. Only set when the message actually says so; `null` is the common case.
+   */
+  setting: z.enum(USE_SETTINGS).nullable(),
+  /**
+   * B0-758 — the product category being asked about ("floor finish", "quat disinfectant",
+   * "degreaser"), independent of any named product. This is the one signal nothing on the chat
+   * path produced: `routeCategoryQuery` exists but only fires inside the
+   * `find_products_by_category` tool, i.e. after generation has already started.
+   */
+  productCategory: z.string().nullable(),
+  /**
+   * B0-758 — a product named in an EARLIER turn that the current message refers to only by
+   * pronoun or ellipsis ("is it safe on marble?", "what about the concentrate?"). The routers
+   * otherwise see the current message alone, so a follow-up loses its subject entirely.
+   */
+  carriedProduct: z.string().nullable(),
 });
 
 export type IntentEntities = z.infer<typeof intentEntitiesSchema>;
@@ -112,13 +157,23 @@ const JSON_SCHEMA = {
         competitorProduct: { type: ['string', 'null'] },
         surfaceType: { type: ['string', 'null'] },
         taskDescription: { type: ['string', 'null'] },
+        brandFamily: { type: ['string', 'null'], enum: [...BRAND_FAMILIES, null] },
+        setting: { type: ['string', 'null'], enum: [...USE_SETTINGS, null] },
+        productCategory: { type: ['string', 'null'] },
+        carriedProduct: { type: ['string', 'null'] },
       },
+      // `strict: true` requires EVERY property to be listed here — a missing name is a 400, and a
+      // new field added above without a line here fails at the API rather than in a type check.
       required: [
         'betcoProduct',
         'competitorBrand',
         'competitorProduct',
         'surfaceType',
         'taskDescription',
+        'brandFamily',
+        'setting',
+        'productCategory',
+        'carriedProduct',
       ],
     },
     suggestedTool: { type: ['string', 'null'], enum: [...PRODUCT_TOOL_NAMES, null] },
@@ -162,6 +217,10 @@ Output rules:
 - entities.competitorBrand / entities.competitorProduct: a NON-Betco competitor brand/product the user wants a Betco equivalent for, else null. Never put a Betco product here. Best-effort only — a dedicated extraction step runs later for the cross_reference flow.
 - entities.surfaceType: the physical surface or material mentioned (e.g. ${SURFACE_VOCABULARY_PROMPT_EXAMPLES.map((example) => `"${example}"`).join(', ')}), else null.
 - entities.taskDescription: a short (<=20 words) paraphrase of what the user is trying to do, else null.
+- entities.brandFamily: which brand family the SUBJECT of the question belongs to — one of ${BRAND_FAMILIES.join(', ')} — else null. Betco's brands are Betco (core commercial cleaning chemicals), Basic Coatings (wood floor coatings), EnviroZyme (probiotic cleaning) and 1950; there are no others. Use "basic_coatings" for wood-floor subjects even when no brand is named, "competitor" for a non-Betco manufacturer, and null when no brand is identifiable. Naming a brand family is NOT a claim that the product exists.
+- entities.setting: "residential" only when the message says the use is a home/house/apartment or personal ("my floor at home"); "commercial" only when it names a commercial/institutional site (school, hospital, gym, office, restaurant); otherwise null. Do not guess from the product.
+- entities.productCategory: the product category being asked about, in the user's own terms ("floor finish", "quat disinfectant", "degreaser", "glass cleaner"), else null. Set this even when a specific product is also named.
+- entities.carriedProduct: when the CURRENT message refers to a product only by pronoun or ellipsis ("is it safe on marble?", "what about the concentrate?"), the product name from the EARLIER turns it refers to, else null. Never repeat a product the current message names itself — that belongs in betcoProduct or competitorProduct.
 - suggestedTool: the single best FIRST tool to call from this list, else null if none clearly applies: ${PRODUCT_TOOL_NAMES.join(', ')}. Suggest lookup_cross_reference or recommend_cross_reference ONLY for genuine competitor cross-reference (rule 1).
 - Only the most recent turns of conversation are provided for context; classify the CURRENT (last) user message.`;
 }
@@ -414,6 +473,11 @@ function fallbackClassification(message: string, fallbackReason: string): Intent
       competitorProduct: null,
       surfaceType: null,
       taskDescription: trimmed ? trimmed.slice(0, 512) : null,
+      // B0-758 — a degraded turn asserts no signals. Per B0-511 this path must never guess.
+      brandFamily: null,
+      setting: null,
+      productCategory: null,
+      carriedProduct: null,
     },
     suggestedTool: null,
     source: 'keyword_fallback',

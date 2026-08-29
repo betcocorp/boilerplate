@@ -158,6 +158,10 @@ describe('buildProductSupportInstructions — classifier-driven orchestrator hin
       competitorProduct: null,
       surfaceType: 'restroom floor',
       taskDescription: 'find the right cleaner for a restroom floor',
+      brandFamily: null,
+      setting: null,
+      productCategory: null,
+      carriedProduct: null,
     },
     suggestedTool: 'search_product_docs' as const,
     source: 'llm' as const,
@@ -210,11 +214,53 @@ describe('buildProductSupportInstructions — classifier-driven orchestrator hin
           competitorProduct: null,
           surfaceType: null,
           taskDescription: null,
+          brandFamily: null,
+          setting: null,
+          productCategory: null,
+          carriedProduct: null,
         },
       },
     });
 
     expect(instructions).toContain('Entities: none extracted');
+  });
+
+  /**
+   * B0-758 — the four new signals are only worth extracting if they reach the model. The scope
+   * pair (brand family, setting) renders before surface/task, and a carried product is labelled as
+   * carried so the model cannot read it as something the current message said.
+   */
+  it('renders the B0-758 scope, category and carry-over signals', () => {
+    const instructions = buildProductSupportInstructions({
+      mode: 'orchestrator',
+      routing: { ...baseRouting, decision: 'product' },
+      classification: {
+        ...llmClassification,
+        entities: {
+          betcoProduct: null,
+          competitorBrand: null,
+          competitorProduct: null,
+          surfaceType: 'wood',
+          taskDescription: 'clean a wood gym floor',
+          brandFamily: 'basic_coatings',
+          setting: 'residential',
+          productCategory: 'floor cleaner',
+          carriedProduct: 'Hard As Nails',
+        },
+      },
+    });
+
+    expect(instructions).toContain('brand family: basic_coatings');
+    expect(instructions).toContain('setting: residential');
+    expect(instructions).toContain('category: floor cleaner');
+    expect(instructions).toContain('carried from earlier turn: Hard As Nails');
+    // Scope before detail: a residential Basic Coatings ask may not be answerable at all, so the
+    // model must see that before it sees the surface it would otherwise answer about.
+    const entitiesLine = instructions
+      .split('\n')
+      .find((line) => line.startsWith('Entities:')) as string;
+    expect(entitiesLine.indexOf('brand family:')).toBeLessThan(entitiesLine.indexOf('surface:'));
+    expect(entitiesLine.indexOf('setting:')).toBeLessThan(entitiesLine.indexOf('task:'));
   });
 });
 
