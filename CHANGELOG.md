@@ -1,3 +1,15 @@
+## [2.15.1](https://github.com/betcocorp/bex2.0/compare/v2.15.0...v2.15.1) (2026-08-29)
+
+
+### Bug Fixes
+
+* **B0-759:** give procedural and enumeration questions enough evidence to answer ([69b3fb1](https://github.com/betcocorp/bex2.0/commit/69b3fb1d1d082a2e219cad0cfed5523a87aea52a))
+
+
+### Reverts
+
+* restore the Run button on /admin/tests ([8c53008](https://github.com/betcocorp/bex2.0/commit/8c5300833192ed2e882fa5f6610e24e35963fd50))
+
 # [2.15.0](https://github.com/betcocorp/bex2.0/compare/v2.14.1...v2.15.0) (2026-08-29)
 
 
