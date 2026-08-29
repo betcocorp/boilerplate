@@ -64,6 +64,13 @@ import {
   extractCompetitorProduct,
   type ExtractedCompetitor,
 } from '~/lib/recommendations/extract-competitor-product';
+import {
+  classifyCompetitorSelfReference,
+  isConversionListAsk,
+  type CompetitorSelfReferenceVerdict,
+} from '~/lib/recommendations/competitor-self-reference';
+import { matchBetcoProductName } from '~/lib/rag/betco-product-name';
+import { resolveProductEntityByName } from '~/lib/rag/entity-context';
 import { runCrossReferenceRecommendation } from '~/lib/recommendations/persist-recommendation';
 import { loadXrefLatencyPolicy } from '~/lib/recommendations/recommend-cross-reference';
 import {
@@ -1711,8 +1718,12 @@ export async function runProductSupportWorkflow(input: {
    * check is kept as an OR rather than dropped. That is deliberately the conservative direction:
    * it cannot lose a cross-reference the old world would have caught, at the cost of keeping the
    * substring check's known false positives on this path. See `src/docs/semantic-router-cutover.md`.
+   *
+   * B0-751 — this is now the PRELIMINARY verdict: the routers' own opinion, before the competitor
+   * self-reference check below has looked at WHO the "competitor" is. `crossReferenceIntentForTurn`
+   * (the value every downstream site consumes) is derived from it further down.
    */
-  const crossReferenceIntentForTurn = semanticRoute
+  const preliminaryCrossReferenceIntentForTurn = semanticRoute
     ? semanticRoute === 'cross_reference' || shouldForceCrossReferenceLookup(input.userMessage)
     : liveIntentClassification && liveIntentClassification.source === 'llm'
       ? liveIntentClassification.intent === 'cross_reference' ||
@@ -1730,22 +1741,112 @@ export async function runProductSupportWorkflow(input: {
               liveIntentClassification.entities.competitorProduct,
           ))
       : shouldForceCrossReferenceLookup(input.userMessage);
-  const earlyDeclineDecision = earlyDeclineGateEnabled
-    ? classifyEarlyDecline(input.userMessage, {
-        crossReferenceIntent: crossReferenceIntentForTurn,
-      })
-    : null;
   /**
    * B0-649 — precedence: semantic router (when it decided) → LLM classifier → keyword agent →
    * `'ambiguous'`. The value space is unchanged (`IntentValue`), because everything downstream
    * (`buildProductSupportInstructions`, `buildProductSupportPromptCacheKey`,
    * `productSupportToolsForRoute`, `effectivePromptIdForDecision`, `computePromptVersion`, the
    * cross-reference gating) is keyed on it.
+   *
+   * B0-751 — preliminary for the same reason as the intent verdict above; `routingDecision` is
+   * finalised below once the self-reference check has run.
    */
-  const routingDecision =
+  const preliminaryRoutingDecision =
     agentMode === 'orchestrator'
       ? (semanticRoute ?? liveIntentClassification?.intent ?? route.agent ?? 'ambiguous')
       : agentMode;
+
+  /**
+   * B0-751 — competitor self-reference check. The routers decide WHETHER a turn is a competitor
+   * cross-reference from its phrasing; nothing before this point asked WHO the competitor is. On
+   * the fada7fde eval run the "competitor" was a Betco product (Speedex, Grease Solv, Triforce), a
+   * chemistry ("bleach") or a whole-catalog conversion ask, and because the cross-reference verdict
+   * alone pinned `tool_choice`, ran the prefetch and the B0-355 backstop, the B0-356 engine gate
+   * replaced the specialist's draft with the engine's decline (answers scoring 6-61). The B0-734
+   * prompt text already says these are not cross-references, but the workflow decided before the
+   * model ran.
+   *
+   * Evaluated ONCE, only for turns that would otherwise be cross-reference (the routers' verdict
+   * above, or a `cross_reference` route from any router), and only in `orchestrator` mode — a
+   * forced direct specialist is an explicit operator choice this check must not second-guess.
+   * Competitor identity comes from the classifier's own entities when it extracted any; otherwise
+   * `extractCompetitorProduct` is awaited HERE and its promise is reused as
+   * `resolvedCompetitorPromise` below, so the turn never pays for a second extraction call
+   * (B0-357: one competitor identity per turn). That await is the one latency cost this adds, and
+   * only on turns that already run the extraction — it moves the call ahead of the tool loop
+   * instead of alongside it. The message-only conversion-list rule is checked first so those turns
+   * skip the extraction entirely. The resolver is the freeform-mode alias lookup (exact + tokenized
+   * tiers only, no trigram): a genuine competitor name must never fuzzy-match a Betco alias.
+   *
+   * When suppressed, `crossReferenceIntentForTurn` is false and a `cross_reference` route becomes
+   * `product` — the product policy carries the shared "Comparing Betco products to each other"
+   * section — so `forcedToolChoiceName`, the prefetch, `competitorIdentityNeeded`,
+   * `useCrossReferencePostProcessing`, `decideXrefBackstop` and the engine gate all fall through
+   * on their existing conditions. `routingDecidedBy` is left alone (the router did decide; this
+   * check overrode it) — the override is recorded on `activeGates.crossReferenceSelfReference` and
+   * the `cross_reference_self_reference_suppressed` audit row instead.
+   */
+  const crossReferenceCandidate =
+    agentMode === 'orchestrator' &&
+    (preliminaryCrossReferenceIntentForTurn || preliminaryRoutingDecision === 'cross_reference');
+  const classifierCompetitorBrand = liveIntentClassification?.entities.competitorBrand ?? null;
+  const classifierCompetitorProduct = liveIntentClassification?.entities.competitorProduct ?? null;
+  const earlyCompetitorExtractionPromise: Promise<ExtractedCompetitor> | null =
+    crossReferenceCandidate &&
+    !classifierCompetitorBrand &&
+    !classifierCompetitorProduct &&
+    !isConversionListAsk(input.userMessage)
+      ? extractCompetitorProduct(input.userMessage)
+      : null;
+  const earlyExtractedCompetitor = earlyCompetitorExtractionPromise
+    ? await earlyCompetitorExtractionPromise
+    : null;
+  const selfReferenceVerdict: CompetitorSelfReferenceVerdict | null = crossReferenceCandidate
+    ? await classifyCompetitorSelfReference({
+        userMessage: input.userMessage,
+        competitorBrand: classifierCompetitorBrand ?? earlyExtractedCompetitor?.brand ?? null,
+        competitorProduct:
+          classifierCompetitorProduct ?? earlyExtractedCompetitor?.product ?? null,
+        // B0-751 follow-up — the curated alias table and the catalog disagree about what exists,
+        // so ask both. The alias tiers give a product line when they can; catalog membership
+        // answers "is this ours at all" for the many names with no alias row.
+        resolveBetcoEntity: async (name) => {
+          const [resolution, catalog] = await Promise.all([
+            resolveProductEntityByName(name, { mode: 'freeform' }),
+            matchBetcoProductName(name),
+          ]);
+          return {
+            productLineKey: resolution.productLineKey,
+            ambiguousAlias: resolution.ambiguousAlias,
+            catalogMatch: catalog.matched,
+            catalogProductLineKey: catalog.productLineKey,
+          };
+        },
+      })
+    : null;
+  const selfReferenceSuppressed = selfReferenceVerdict?.suppressed === true;
+  /** B0-514 — the turn's single cross-reference-intent verdict (see the preliminary value above). */
+  const crossReferenceIntentForTurn = selfReferenceSuppressed
+    ? false
+    : preliminaryCrossReferenceIntentForTurn;
+  const routingDecision =
+    selfReferenceSuppressed && preliminaryRoutingDecision === 'cross_reference'
+      ? 'product'
+      : preliminaryRoutingDecision;
+  const crossReferenceSelfReferenceActivation: GateActivationRecord = !selfReferenceVerdict
+    ? { state: 'not_applicable' }
+    : selfReferenceVerdict.suppressed
+      ? {
+          state: 'ran',
+          verdict: 'suppressed',
+          reason: `${selfReferenceVerdict.reason}:${selfReferenceVerdict.matched}`.slice(0, 256),
+        }
+      : { state: 'ran', verdict: 'passed' };
+  const earlyDeclineDecision = earlyDeclineGateEnabled
+    ? classifyEarlyDecline(input.userMessage, {
+        crossReferenceIntent: crossReferenceIntentForTurn,
+      })
+    : null;
   /** Which router the value above came from — recorded on the semantic gate and the log line. */
   const routingDecidedBy = semanticRoute
     ? 'semantic_router'
@@ -1790,7 +1891,7 @@ export async function runProductSupportWorkflow(input: {
    * FALLBACK deliberately does not claim the rationale (it did not decide) — the classifier/keyword
    * sentence stands, and the fallback itself is explained by the semantic gate record below.
    */
-  const routingRationale =
+  const routerRationale =
     agentMode === 'orchestrator'
       ? semanticRoute && semanticRouteDecision
         ? semanticRouterRationale(semanticRouteDecision)
@@ -1798,6 +1899,12 @@ export async function runProductSupportWorkflow(input: {
           ? `LLM intent classifier (${liveIntentClassification.source}, confidence ${liveIntentClassification.confidence}) routed to "${liveIntentClassification.intent}".`
           : route.rationale
       : `Forced direct routing to ${agentMode} specialist by admin selection.`;
+  // B0-751 — the router's sentence still stands (it did decide); the override is appended so the
+  // planner step never claims a `cross_reference` decision for a turn that ran the product policy.
+  const routingRationale =
+    selfReferenceVerdict?.suppressed
+      ? `${routerRationale} Competitor self-reference check (B0-751) withdrew cross-reference handling (${selfReferenceVerdict.reason}: "${selfReferenceVerdict.matched}")${routingDecision !== preliminaryRoutingDecision ? ` and re-routed "${preliminaryRoutingDecision}" to "${routingDecision}"` : ''}.`
+      : routerRationale;
   const instructions = buildProductSupportInstructions({
     mode: agentMode,
     routing: {
@@ -2114,6 +2221,21 @@ export async function runProductSupportWorkflow(input: {
     { step: 'orchestration_planner', step_id: plannerStep.id },
     { ...wfCtx, stepId: plannerStep.id },
   );
+  // B0-751 — one row per suppression, so "how often does the router call a Betco product a
+  // competitor" is a query against `audit_logs` rather than an inference from missing engine rows.
+  if (selfReferenceVerdict?.suppressed) {
+    audit.enqueue(
+      'cross_reference_self_reference_suppressed',
+      {
+        reason: selfReferenceVerdict.reason,
+        matched: selfReferenceVerdict.matched,
+        product_line_key: selfReferenceVerdict.productLineKey,
+        preliminary_route: preliminaryRoutingDecision,
+        final_route: routingDecision,
+      },
+      wfCtx,
+    );
+  }
 
   if (earlyDeclineDecision) {
     const declineResponseId = `decline_gate:${run.id}`;
@@ -2168,6 +2290,8 @@ export async function runProductSupportWorkflow(input: {
         regulatedClaimGuardrail: { state: 'not_applicable' },
         recommendationConfidence: { state: 'not_applicable' },
         recommendationEngineVerdict: { state: 'not_applicable' },
+        // B0-751 — this check runs BEFORE the decline gate, so its record is real even here.
+        crossReferenceSelfReference: crossReferenceSelfReferenceActivation,
       },
       // B0-358 — no validator pass exists on this path at all (no model was called), so the run
       // record says `not_run` rather than claiming either an LLM judgment or a bypass heuristic.
@@ -2482,8 +2606,10 @@ export async function runProductSupportWorkflow(input: {
      * prefetch it now feeds, rather than stacking in front of it.
      */
     const competitorIdentityNeeded = routingDecision === 'cross_reference' || forcedCrossReference;
+    // B0-751 — when the self-reference check already awaited the extraction for this turn, that
+    // settled promise IS the turn's competitor identity; never start a second extraction call.
     const resolvedCompetitorPromise: Promise<ExtractedCompetitor> | null = competitorIdentityNeeded
-      ? extractCompetitorProduct(input.userMessage)
+      ? (earlyCompetitorExtractionPromise ?? extractCompetitorProduct(input.userMessage))
       : null;
 
     /**
@@ -4223,6 +4349,8 @@ export async function runProductSupportWorkflow(input: {
         // B0-356 — absent-vs-not_applicable matters here: a run predating the gate has no key.
         recommendationEngineVerdict:
           recommendationEngineVerdictActivation ?? { state: 'not_applicable' },
+        // B0-751 — absent-vs-not_applicable matters here too: a run predating the check has no key.
+        crossReferenceSelfReference: crossReferenceSelfReferenceActivation,
       },
       // B0-358 — the run's actual verification level, first-class rather than a magic string.
       validatorMode,

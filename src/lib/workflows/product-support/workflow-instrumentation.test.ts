@@ -1590,6 +1590,10 @@ describe('shadow-mode LLM intent classifier gate (B0-507 / B0-516 integration)',
         competitorProduct: 'BNC-15',
         surfaceType: null,
         taskDescription: 'find the Betco equivalent for BNC-15',
+        brandFamily: null,
+        setting: null,
+        productCategory: null,
+        carriedProduct: null,
         ...overrides.entities,
       },
       suggestedTool: overrides.suggestedTool ?? null,
@@ -1661,6 +1665,10 @@ describe('shadow-mode LLM intent classifier gate (B0-507 / B0-516 integration)',
       competitorBrand: 'BNC',
       competitorProduct: 'BNC-15',
       taskDescription: 'find the Betco equivalent for BNC-15',
+      brandFamily: null,
+      setting: null,
+      productCategory: null,
+      carriedProduct: null,
     });
     expect(record.thresholds).toEqual({
       model: DEFAULT_BEX_ROUTER_MODEL,
@@ -2321,6 +2329,8 @@ describe('runtime config and gate activation (B0-494)', () => {
       regulatedClaimGuardrail: { state: 'not_applicable' },
       recommendationConfidence: { state: 'not_applicable' },
       recommendationEngineVerdict: { state: 'not_applicable' },
+      // B0-751 — never a cross-reference candidate, so the self-reference check did not run.
+      crossReferenceSelfReference: { state: 'not_applicable' },
     });
     // The switches are still recorded even though the answering path never ran.
     expect(out.runtimeConfig).toBeDefined();

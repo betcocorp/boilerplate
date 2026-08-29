@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  computeGoldenSetItemOrigins,
   computeGoldenSetMembership,
   computeGoldenSetRollup,
+  readDerivedFromTestId,
   resolveGoldenRunsForVersion,
   type GoldenItemRow,
   type GoldenResultItemRow,
@@ -249,6 +251,139 @@ describe('computeGoldenSetMembership', () => {
     expect(membership.itemCountByTier).toEqual({ 1: 2, 2: 1, 3: 0 });
     expect(membership.totalItems).toBe(4);
     expect(membership.missingPriority.map((entry) => entry.testItemId)).toEqual(['i4']);
+  });
+});
+
+describe('computeGoldenSetItemOrigins (B0-750)', () => {
+  const golden = [goldenTest('g1', 'Golden A'), goldenTest('g2', 'Golden B')];
+  const goldenItems: GoldenItemRow[] = [
+    { id: 'gi1', test_id: 'g1', row_index: 1, prompt: 'How do I dilute pH7Q?', priority: 1 },
+    { id: 'gi2', test_id: 'g2', row_index: 1, prompt: 'What is the contact time?', priority: 2 },
+  ];
+  const candidate = (id: string, prompt: string, metadata: unknown) => ({ id, prompt, metadata });
+
+  it('flags an item whose lineage points at a golden test (lineage only)', () => {
+    const origins = computeGoldenSetItemOrigins(
+      [candidate('c1', 'Some unrelated prompt', { derived_from_test_id: 'g1' })],
+      golden,
+      goldenItems,
+    );
+    expect(origins.get('c1')).toEqual({
+      goldenTests: [{ id: 'g1', name: 'Golden A' }],
+      rules: ['lineage'],
+    });
+  });
+
+  it('flags an item by prompt when its lineage points at a non-golden (archived) test', () => {
+    const origins = computeGoldenSetItemOrigins(
+      [candidate('c1', 'How do I dilute pH7Q?', { derived_from_test_id: 'archived-not-golden' })],
+      golden,
+      goldenItems,
+    );
+    expect(origins.get('c1')).toEqual({
+      goldenTests: [{ id: 'g1', name: 'Golden A' }],
+      rules: ['prompt'],
+    });
+  });
+
+  it('reports both rules, lineage first, and dedupes the golden test when both hit the same one', () => {
+    const origins = computeGoldenSetItemOrigins(
+      [candidate('c1', 'How do I dilute pH7Q?', { derived_from_test_id: 'g1' })],
+      golden,
+      goldenItems,
+    );
+    expect(origins.get('c1')).toEqual({
+      goldenTests: [{ id: 'g1', name: 'Golden A' }],
+      rules: ['lineage', 'prompt'],
+    });
+  });
+
+  it('lists every matched golden test in goldenTests order when rules hit different tests', () => {
+    const origins = computeGoldenSetItemOrigins(
+      [candidate('c1', 'What is the contact time?', { derived_from_test_id: 'g1' })],
+      golden,
+      goldenItems,
+    );
+    expect(origins.get('c1')).toEqual({
+      goldenTests: [
+        { id: 'g1', name: 'Golden A' },
+        { id: 'g2', name: 'Golden B' },
+      ],
+      rules: ['lineage', 'prompt'],
+    });
+  });
+
+  it('omits items that match neither rule', () => {
+    const origins = computeGoldenSetItemOrigins(
+      [
+        candidate('c1', 'Nothing golden here', { derived_from_test_id: 'not-golden' }),
+        candidate('c2', 'Uploaded row', {}),
+      ],
+      golden,
+      goldenItems,
+    );
+    expect(origins.size).toBe(0);
+    expect(origins.has('c1')).toBe(false);
+  });
+
+  it('never throws on odd metadata shapes and treats them as no lineage', () => {
+    const origins = computeGoldenSetItemOrigins(
+      [
+        candidate('null', 'x', null),
+        candidate('string', 'x', 'g1'),
+        candidate('array', 'x', ['g1']),
+        candidate('no-key', 'x', { other: 'g1' }),
+        candidate('empty-id', 'x', { derived_from_test_id: '' }),
+        candidate('non-string-id', 'x', { derived_from_test_id: 42 }),
+      ],
+      golden,
+      goldenItems,
+    );
+    expect(origins.size).toBe(0);
+  });
+
+  it('matches prompts after trimming and case-folding', () => {
+    const origins = computeGoldenSetItemOrigins(
+      [candidate('c1', '  HOW do i DILUTE ph7q?  \n', null)],
+      golden,
+      goldenItems,
+    );
+    expect(origins.get('c1')?.rules).toEqual(['prompt']);
+  });
+
+  it('returns an empty map when there are no golden tests', () => {
+    const origins = computeGoldenSetItemOrigins(
+      [candidate('c1', 'How do I dilute pH7Q?', { derived_from_test_id: 'g1' })],
+      [],
+      goldenItems,
+    );
+    expect(origins.size).toBe(0);
+  });
+
+  it('ignores golden items whose test_id is not in goldenTests (stale rows)', () => {
+    const origins = computeGoldenSetItemOrigins(
+      [candidate('c1', 'orphan prompt', null)],
+      golden,
+      [{ id: 'gx', test_id: 'not-golden', row_index: 1, prompt: 'orphan prompt', priority: 1 }],
+    );
+    expect(origins.size).toBe(0);
+  });
+});
+
+describe('readDerivedFromTestId (B0-750)', () => {
+  it('reads a non-empty string id', () => {
+    expect(readDerivedFromTestId({ derived_from_test_id: 'abc' })).toBe('abc');
+  });
+
+  it('returns null for null, strings, arrays, missing keys, empty and non-string ids', () => {
+    expect(readDerivedFromTestId(null)).toBeNull();
+    expect(readDerivedFromTestId(undefined)).toBeNull();
+    expect(readDerivedFromTestId('abc')).toBeNull();
+    expect(readDerivedFromTestId(['abc'])).toBeNull();
+    expect(readDerivedFromTestId({})).toBeNull();
+    expect(readDerivedFromTestId({ derived_from_test_item_id: 'abc' })).toBeNull();
+    expect(readDerivedFromTestId({ derived_from_test_id: '' })).toBeNull();
+    expect(readDerivedFromTestId({ derived_from_test_id: 7 })).toBeNull();
   });
 });
 

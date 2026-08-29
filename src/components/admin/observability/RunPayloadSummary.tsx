@@ -31,6 +31,7 @@ const GUARDRAIL_LABELS: Array<{ key: keyof ActiveGates; label: string }> = [
   { key: 'regulatedClaimGuardrail', label: 'regulated-claim grounding' },
   { key: 'recommendationConfidence', label: 'recommendation confidence' },
   { key: 'recommendationEngineVerdict', label: 'recommendation engine verdict' },
+  { key: 'crossReferenceSelfReference', label: 'cross-reference self-reference' },
 ];
 
 /**

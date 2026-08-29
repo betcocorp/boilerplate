@@ -26,6 +26,10 @@ import {
   extractItemMaxSimilarity,
 } from '~/lib/tests/prompt-aggregations';
 import { parseReportState } from '~/lib/tests/report/schemas';
+import {
+  resolveGoldenSetItemOrigins,
+  type GoldenSetItemOrigin,
+} from '~/lib/tests/golden-set';
 import { parseTestRunConfig } from '~/lib/tests/run-config';
 import {
   getGlobalTestItemSuggestionRows,
@@ -217,10 +221,16 @@ export default async function AdminTestDetailsPage({
   ]);
   const trendRuns = [...results].reverse();
   /** One IN-query for every result item across every recent run feeds both the trend chart and the per-prompt aggregation. */
-  const [allRecentResultItems, searchRunItems] = await Promise.all([
+  const [allRecentResultItems, searchRunItems, goldenOrigins] = await Promise.all([
     listAllResultItemsByResultIds(trendRuns.map((run) => run.id)),
     listAllResultItemsByResultIds(searchResults.map((run) => run.id)),
+    // B0-750 — which of this test's prompts belong to a golden set (lineage or verbatim prompt).
+    resolveGoldenSetItemOrigins(
+      items.map((item) => ({ id: item.id, prompt: item.prompt, metadata: item.metadata })),
+    ),
   ]);
+  const goldenOriginsByItemId: Record<string, GoldenSetItemOrigin> =
+    Object.fromEntries(goldenOrigins);
   const resultItemsByRunId = new Map<string, typeof allRecentResultItems>();
   for (const item of allRecentResultItems) {
     const list = resultItemsByRunId.get(item.test_result_id);
@@ -811,6 +821,7 @@ export default async function AdminTestDetailsPage({
             aggregationsByItemId={aggregationsForClient}
             canonicalProductLabels={legacyProductLines.labelByKey}
             datasetName={test.name}
+            goldenOriginsByItemId={goldenOriginsByItemId}
             items={items.map((item) => ({
               id: item.id,
               row_index: item.row_index,

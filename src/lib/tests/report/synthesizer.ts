@@ -69,7 +69,7 @@ const SYNTHESIS_JSON_SCHEMA = {
 
 const SYNTHESIS_SYSTEM_PROMPT = `You are synthesizing findings across a full agent-evaluation run, following Betco's internal agent-evaluation methodology.
 
-Identify the most common failure patterns (cite case IDs), key strengths (cite case IDs), and recurring weaknesses (cite case IDs) across the cases provided.
+Identify AT MOST 8 of the most common failure patterns (cite case IDs), AT MOST 8 key strengths (cite case IDs), and AT MOST 8 recurring weaknesses (cite case IDs) across the cases provided — merge similar findings from different batches into one bullet citing all their case IDs rather than listing each batch's findings separately.
 
 Then produce exactly 3 "Top 3 recommended agent improvements", ranked Priority #1 (most important) to #3, by: frequency of the problem, severity, business impact, impact on Tier 1 (highest-priority) cases, weak categories, likely effect on the overall score, and whether the issue is systemic rather than isolated. Answer: "If we could fix only three things before testing this agent again, what should they be?" Keep recommendations about the AGENT (its instructions/system prompt, retrieval behavior, grounding against sources, knowledge gaps, response logic, handling of specific question types, completeness, hallucination/unsupported content, intent understanding) — not about the testing process, unless something about the test data itself prevented fair evaluation (say so separately if so).
 
@@ -109,11 +109,13 @@ type BatchDigest = z.infer<typeof batchDigestSchema>;
 
 /**
  * B0-735 — above this many cases, the synthesis call switches from raw per-case text to the
- * chunked digest-then-merge path. Kept small so even a model that ignores the "at most 5 bullets"
- * instruction and writes one bullet per case per list (worst case ~3 * CHUNK_SIZE short bullets)
- * still fits comfortably under `DIGEST_MAX_OUTPUT_TOKENS`.
+ * chunked digest-then-merge path. Not load-bearing for correctness on its own — a chunk that still
+ * overflows its budget gets bisected and retried by `digestChunkWithRetry` — but a smaller starting
+ * size means fewer chunks ever need that fallback.
  */
 const CHUNK_SIZE = 25;
+/** A chunk this small that still overflows its budget is treated as a real, non-retryable failure. */
+const MIN_DIGEST_CHUNK_SIZE = 4;
 /** Concurrent digest calls in flight, mirroring the grading batch size in `orchestrator.ts`. */
 const DIGEST_CONCURRENCY = 4;
 /**
@@ -122,9 +124,11 @@ const DIGEST_CONCURRENCY = 4;
  * by this cap — truncation is the only way this call produces invalid JSON — so the cap only needs
  * to be big enough that the model never legitimately needs more, not tight.
  */
-const SYNTHESIS_MAX_OUTPUT_TOKENS = 8000;
-/** Sized for the worst case above (~3 * CHUNK_SIZE short bullets), not just the instructed one. */
-const DIGEST_MAX_OUTPUT_TOKENS = 4000;
+const SYNTHESIS_MAX_OUTPUT_TOKENS = 10_000;
+/** Used only for the one-shot retry after the first final-synthesis attempt overflows. */
+const SYNTHESIS_RETRY_MAX_OUTPUT_TOKENS = 16_000;
+/** Sized well above the instructed "at most 5 bullets" case; the retry-on-overflow below is the real backstop. */
+const DIGEST_MAX_OUTPUT_TOKENS = 6000;
 
 function truncate(text: string, max = 240): string {
   const trimmed = text.trim();
@@ -256,7 +260,15 @@ function parseStructuredResponse<T>(res: Response, schema: z.ZodType<T>, label: 
   }
 }
 
-async function digestChunk(
+function mergeDigests(a: BatchDigest, b: BatchDigest): BatchDigest {
+  return {
+    failurePatterns: [...a.failurePatterns, ...b.failurePatterns],
+    strengths: [...a.strengths, ...b.strengths],
+    weaknesses: [...a.weaknesses, ...b.weaknesses],
+  };
+}
+
+async function digestChunkOnce(
   client: ReturnType<typeof getOpenAIClient>,
   model: string,
   chunk: CaseSummary[],
@@ -283,7 +295,35 @@ async function digestChunk(
   return parseStructuredResponse(res, batchDigestSchema, label);
 }
 
-/** Runs `digestChunk` over every chunk in bounded concurrency, mirroring `scoreRemainingCases`. */
+/**
+ * B0-735 — a fixed `CHUNK_SIZE` plus a generous token budget is still a guess: verbosity varies
+ * run to run for the same input, so no fixed pair of numbers can *guarantee* every chunk fits.
+ * On failure this bisects the chunk and digests each half independently (recursing until it
+ * succeeds or hits `MIN_DIGEST_CHUNK_SIZE`), so correctness no longer depends on guessing right —
+ * a chunk that overflows always has a smaller one under it that won't.
+ */
+export async function digestChunkWithRetry(
+  client: ReturnType<typeof getOpenAIClient>,
+  model: string,
+  chunk: CaseSummary[],
+  label: string,
+): Promise<BatchDigest> {
+  try {
+    return await digestChunkOnce(client, model, chunk, label);
+  } catch (error) {
+    if (chunk.length <= MIN_DIGEST_CHUNK_SIZE) {
+      throw error;
+    }
+    const mid = Math.ceil(chunk.length / 2);
+    const [left, right] = await Promise.all([
+      digestChunkWithRetry(client, model, chunk.slice(0, mid), `${label} (split a)`),
+      digestChunkWithRetry(client, model, chunk.slice(mid), `${label} (split b)`),
+    ]);
+    return mergeDigests(left, right);
+  }
+}
+
+/** Runs `digestChunkWithRetry` over every chunk in bounded concurrency, mirroring `scoreRemainingCases`. */
 async function digestAllChunks(
   client: ReturnType<typeof getOpenAIClient>,
   model: string,
@@ -294,7 +334,7 @@ async function digestAllChunks(
     const batch = chunks.slice(i, i + DIGEST_CONCURRENCY);
     const results = await Promise.all(
       batch.map((chunk, j) =>
-        digestChunk(client, model, chunk, `Batch digest ${i + j + 1}/${chunks.length}`),
+        digestChunkWithRetry(client, model, chunk, `Batch digest ${i + j + 1}/${chunks.length}`),
       ),
     );
     results.forEach((result, j) => {
@@ -314,9 +354,15 @@ async function digestAllChunks(
  * of propagating. Above `CHUNK_SIZE` cases this now runs a bounded map-reduce: each chunk gets its
  * own small "batch digest" call, and the final Top-3/exec call reads the merged digests instead of
  * raw per-case text — so the final call's input (and required output) stays roughly constant-sized
- * as the run grows, rather than scaling with it. A genuine failure now throws, and the caller
- * (`generateReport` in `orchestrator.ts`) already has a `status: 'failed'` / `state.error` path for
- * exactly that — this no longer bypasses it.
+ * as the run grows, rather than scaling with it.
+ *
+ * A fixed chunk size and token budget narrow the odds of overflow but can't guarantee it away —
+ * generation length varies run to run for the same input. So every call is also retried on
+ * overflow rather than just budgeted generously: a digest call bisects its chunk and recurses
+ * (`digestChunkWithRetry`) down to `MIN_DIGEST_CHUNK_SIZE`, and the final call retries once with a
+ * stricter instruction and a bigger budget. Only a failure that survives every one of those
+ * fallbacks throws, and the caller (`generateReport` in `orchestrator.ts`) already has a
+ * `status: 'failed'` / `state.error` path for exactly that — this no longer bypasses it.
  */
 export async function synthesizeReportFindings(
   metrics: ReportMetrics,
@@ -351,23 +397,35 @@ export async function synthesizeReportFindings(
       ? `${metricsHeaderText}${formatDigestsAsText(await digestAllChunks(client, model, chunks))}`
       : `${metricsHeaderText}PER-CASE FINDINGS\n${formatCasesAsText(casesSummary)}`;
 
-  const res = await client.responses.create({
-    model,
-    instructions: SYNTHESIS_SYSTEM_PROMPT,
-    input: [{ role: 'user', content: contentText, type: 'message' }],
-    text: {
-      format: {
-        type: 'json_schema',
-        name: 'report_synthesis',
-        strict: true,
-        schema: SYNTHESIS_JSON_SCHEMA,
-      },
-    },
-    store: false,
-    stream: false,
-    temperature: 0.2,
-    max_output_tokens: SYNTHESIS_MAX_OUTPUT_TOKENS,
-  });
+  const runFinalSynthesis = (instructions: string, maxOutputTokens: number) =>
+    client.responses
+      .create({
+        model,
+        instructions,
+        input: [{ role: 'user', content: contentText, type: 'message' }],
+        text: {
+          format: {
+            type: 'json_schema',
+            name: 'report_synthesis',
+            strict: true,
+            schema: SYNTHESIS_JSON_SCHEMA,
+          },
+        },
+        store: false,
+        stream: false,
+        temperature: 0.2,
+        max_output_tokens: maxOutputTokens,
+      })
+      .then((res) => parseStructuredResponse(res, reportSynthesisSchema, 'Final synthesis call'));
 
-  return parseStructuredResponse(res, reportSynthesisSchema, 'Final synthesis call');
+  try {
+    return await runFinalSynthesis(SYNTHESIS_SYSTEM_PROMPT, SYNTHESIS_MAX_OUTPUT_TOKENS);
+  } catch {
+    // B0-735 — same rationale as `digestChunkWithRetry`: verbosity varies run to run, so a single
+    // fixed budget can't be guaranteed to fit. There's nothing left to bisect at this stage (the
+    // input is already the bounded cross-batch digest), so the retry instead asks for less output
+    // and gives it more room, which is the two things that make an overflow less likely.
+    const retryInstructions = `${SYNTHESIS_SYSTEM_PROMPT}\n\nIMPORTANT: A previous attempt at this exact synthesis overflowed its output budget. This time, keep failurePatterns, strengths, and weaknesses to AT MOST 3 entries each.`;
+    return runFinalSynthesis(retryInstructions, SYNTHESIS_RETRY_MAX_OUTPUT_TOKENS);
+  }
 }

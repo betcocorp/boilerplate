@@ -18,7 +18,15 @@ function formatClassificationEntities(entities: IntentClassification['entities']
     entities.betcoProduct ? `Betco product: ${entities.betcoProduct}` : null,
     entities.competitorBrand ? `competitor brand: ${entities.competitorBrand}` : null,
     entities.competitorProduct ? `competitor product: ${entities.competitorProduct}` : null,
+    // B0-758 — the scope-defining pair. Rendered before surface/task because a brand family or a
+    // residential setting can make the whole question one this assistant should not answer.
+    entities.brandFamily ? `brand family: ${entities.brandFamily}` : null,
+    entities.setting ? `setting: ${entities.setting}` : null,
+    entities.productCategory ? `category: ${entities.productCategory}` : null,
     entities.surfaceType ? `surface: ${entities.surfaceType}` : null,
+    // B0-758 — carried from an earlier turn, so label it as such: the current message did not say
+    // it, and the model must not cite it as though the user just did.
+    entities.carriedProduct ? `carried from earlier turn: ${entities.carriedProduct}` : null,
     entities.taskDescription ? `task: ${entities.taskDescription}` : null,
   ].filter((part): part is string => Boolean(part));
 

@@ -1,6 +1,20 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { chunkCases, formatDigestsAsText } from './synthesizer';
+import { chunkCases, digestChunkWithRetry, formatDigestsAsText } from './synthesizer';
+
+type CaseSummary = Parameters<typeof chunkCases>[0][number];
+
+const fakeCase = (id: string): CaseSummary => ({
+  id,
+  tier: 'Tier 1',
+  category: 'general',
+  overall: 90,
+  grade: 'A',
+  status: 'Pass',
+  explanation: '',
+  missed: '',
+  incorrect: '',
+});
 
 /**
  * B0-735 — these pin down the two pieces of the chunk/merge fix that don't require an OpenAI
@@ -8,20 +22,6 @@ import { chunkCases, formatDigestsAsText } from './synthesizer';
  * text grows with chunk COUNT, not case count.
  */
 describe('chunkCases', () => {
-  type CaseSummary = Parameters<typeof chunkCases>[0][number];
-
-  const fakeCase = (id: string): CaseSummary => ({
-    id,
-    tier: 'Tier 1',
-    category: 'general',
-    overall: 90,
-    grade: 'A',
-    status: 'Pass',
-    explanation: '',
-    missed: '',
-    incorrect: '',
-  });
-
   it('splits into chunkSize-sized groups, preserving order', () => {
     const cases = Array.from({ length: 12 }, (_, i) => fakeCase(String(i)));
     const chunks = chunkCases(cases, 5);
@@ -56,5 +56,49 @@ describe('formatDigestsAsText', () => {
   it('handles a batch with no findings in a list without crashing', () => {
     const text = formatDigestsAsText([{ failurePatterns: [], strengths: [], weaknesses: [] }]);
     expect(text).toContain('aggregated from 1 batches');
+  });
+});
+
+/**
+ * B0-735 — a fixed chunk size and token budget narrowed the odds of overflow but couldn't
+ * guarantee it away (verbosity varies run to run for the same input); these prove the bisection
+ * retry actually recovers instead of just hoping the budget was big enough.
+ */
+describe('digestChunkWithRetry', () => {
+  const idsInPrompt = (content: string) => [...content.matchAll(/^Case (\S+)/gm)].map((m) => m[1]);
+
+  /** Simulates `max_output_tokens` truncation for any call whose chunk exceeds `maxCasesOk`. */
+  function fakeClient(maxCasesOk: number) {
+    const create = vi.fn(async ({ input }: { input: Array<{ content: string }> }) => {
+      const ids = idsInPrompt(input[0].content);
+      if (ids.length > maxCasesOk) {
+        return { incomplete_details: { reason: 'max_output_tokens' }, output_text: '', output: [] };
+      }
+      return {
+        incomplete_details: null,
+        output_text: JSON.stringify({ failurePatterns: [`fail:${ids.join(',')}`], strengths: [], weaknesses: [] }),
+        output: [],
+      };
+    });
+    return { responses: { create } } as unknown as Parameters<typeof digestChunkWithRetry>[0];
+  }
+
+  it('bisects an overflowing chunk until every half fits, then merges in original order', async () => {
+    const client = fakeClient(3);
+    const chunk = Array.from({ length: 10 }, (_, i) => fakeCase(String(i)));
+
+    const digest = await digestChunkWithRetry(client, 'model', chunk, 'label');
+
+    const citedIds = digest.failurePatterns.flatMap((line) => line.replace('fail:', '').split(','));
+    expect(citedIds).toEqual(chunk.map((c) => c.id));
+  });
+
+  it('rethrows once bisection bottoms out and every half still overflows', async () => {
+    const client = fakeClient(-1); // nothing ever fits
+    const chunk = Array.from({ length: 5 }, (_, i) => fakeCase(String(i)));
+
+    await expect(digestChunkWithRetry(client, 'model', chunk, 'label')).rejects.toThrow(
+      /max_output_tokens/,
+    );
   });
 });
