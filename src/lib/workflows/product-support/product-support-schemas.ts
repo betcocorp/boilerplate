@@ -403,6 +403,15 @@ export const activeGatesSchema = z.object({
    * badge. Absent means "this run predates the gate", which is not the same as `not_applicable`.
    */
   recommendationEngineVerdict: gateActivationRecordSchema.optional(),
+  /**
+   * B0-751 — the competitor self-reference check: did a turn the routers called cross-reference
+   * actually name a Betco product / brand, a chemistry, or ask for a whole conversion list?
+   * `not_applicable` when the turn was never a cross-reference candidate; `ran`/`passed` when it
+   * was checked and a genuine competitor stood; `ran`/`suppressed` (with `reason` =
+   * `<rule>:<matched>`) when the forcing and the engine path were withdrawn. OPTIONAL for the
+   * same reason as `recommendationEngineVerdict`: already-persisted payloads predate the field.
+   */
+  crossReferenceSelfReference: gateActivationRecordSchema.optional(),
 });
 
 export type ActiveGates = z.infer<typeof activeGatesSchema>;

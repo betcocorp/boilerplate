@@ -2321,6 +2321,8 @@ describe('runtime config and gate activation (B0-494)', () => {
       regulatedClaimGuardrail: { state: 'not_applicable' },
       recommendationConfidence: { state: 'not_applicable' },
       recommendationEngineVerdict: { state: 'not_applicable' },
+      // B0-751 — never a cross-reference candidate, so the self-reference check did not run.
+      crossReferenceSelfReference: { state: 'not_applicable' },
     });
     // The switches are still recorded even though the answering path never ran.
     expect(out.runtimeConfig).toBeDefined();
