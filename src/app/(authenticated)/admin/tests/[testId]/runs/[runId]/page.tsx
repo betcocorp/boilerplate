@@ -3,9 +3,17 @@ import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
 
 import { AdminTestsActionToast } from '~/components/admin/tests/AdminTestsActionToast';
+import { AliasResolutionPanel } from '~/components/admin/tests/AliasResolutionPanel';
 import { AppVersionBadge } from '~/components/admin/tests/AppVersionBadge';
+import { MultiTurnRunPanel } from '~/components/admin/tests/MultiTurnRunPanel';
+import { PromptBundleVersionBadge } from '~/components/admin/tests/PromptBundleVersionBadge';
 import { ResultItemMessageCell } from '~/components/admin/tests/ResultItemMessageCell';
+import { RoutingAccuracyBoard } from '~/components/admin/tests/RoutingAccuracyBoard';
 import { RunAtAGlanceCharts } from '~/components/admin/tests/RunAtAGlanceCharts';
+import {
+  RunComparisonPanel,
+  type RunComparisonPanelData,
+} from '~/components/admin/tests/RunComparisonPanel';
 import { RunExecutionProgress } from '~/components/admin/tests/RunExecutionProgress';
 import {
   RunFullExportDownload,
@@ -15,19 +23,10 @@ import {
   RunInsightsPanel,
   type Insight,
 } from '~/components/admin/tests/RunInsightsPanel';
-import {
-  RunComparisonPanel,
-  type RunComparisonPanelData,
-} from '~/components/admin/tests/RunComparisonPanel';
-import { MultiTurnRunPanel } from '~/components/admin/tests/MultiTurnRunPanel';
-import { extractMultiTurnResult } from '~/lib/tests/multi-turn-result';
 import { RunItemResultsCsvDownload } from '~/components/admin/tests/RunItemResultsCsvDownload';
 import { RunReportButton } from '~/components/admin/tests/RunReportButton';
-import { RoutingAccuracyBoard } from '~/components/admin/tests/RoutingAccuracyBoard';
-import { AliasResolutionPanel } from '~/components/admin/tests/AliasResolutionPanel';
-import { RunToolRoutingPanel } from '~/components/admin/tests/RunToolRoutingPanel';
-import { PromptBundleVersionBadge } from '~/components/admin/tests/PromptBundleVersionBadge';
 import { RuntimeConfigBadge } from '~/components/admin/tests/RuntimeConfigBadge';
+import { RunToolRoutingPanel } from '~/components/admin/tests/RunToolRoutingPanel';
 import {
   TestRunNotesDisplay,
   TestRunNotesProvider,
@@ -45,6 +44,7 @@ import {
 import { getAgentBadgeClassName } from '~/lib/bex/agent-badge';
 import { listWorkflowRunsByIds } from '~/lib/conversations/workflow-repository';
 import { resolveResponsesModel } from '~/lib/openai/client';
+import { computeAliasResolutionReport } from '~/lib/tests/alias-routing';
 import {
   formatExpectedShouldAnswerLabel as formatExpectedShouldAnswerCell,
   formatItemSimilarityConfidenceLabel,
@@ -52,6 +52,7 @@ import {
   formatShouldAnswerExport,
   formatTimingBreakdownLabel,
 } from '~/lib/tests/format';
+import { extractMultiTurnResult } from '~/lib/tests/multi-turn-result';
 import {
   countResultItemsByResultId,
   getRunComparisonByResultId,
@@ -61,7 +62,6 @@ import {
   listAgentStepOutputsByWorkflowRunIds,
   listAllResultItemsByResultId,
 } from '~/lib/tests/repository';
-import { parseTestRunConfig } from '~/lib/tests/run-config';
 import {
   extractItemConfidenceProvenance,
   extractItemSimilarityScore,
@@ -85,12 +85,12 @@ import {
   computeRoutingComparisonReport,
   type RoutingComparisonReportInput,
 } from '~/lib/tests/routing-comparison';
+import { parseTestRunConfig } from '~/lib/tests/run-config';
 import {
   computeToolRoutingReport,
   extractExpectedTool,
   parseAgentStepToolTrace,
 } from '~/lib/tests/tool-routing';
-import { computeAliasResolutionReport } from '~/lib/tests/alias-routing';
 import { isCompletedRunStatus } from '~/lib/tests/types';
 import { formatDate, formatDurationSeconds } from '~/lib/utils/time';
 import { shortHash } from '~/lib/workflows/product-support/prompt-version';
@@ -133,12 +133,13 @@ export default async function AdminTestRunDetailsPage({
     notFound();
   }
 
-  const [allResultItems, testItems, completedFromRows, runComparison] = await Promise.all([
-    listAllResultItemsByResultId(result.id),
-    getTestItemsByTestId(test.id),
-    countResultItemsByResultId(result.id),
-    getRunComparisonByResultId(result.id),
-  ]);
+  const [allResultItems, testItems, completedFromRows, runComparison] =
+    await Promise.all([
+      listAllResultItemsByResultId(result.id),
+      getTestItemsByTestId(test.id),
+      countResultItemsByResultId(result.id),
+      getRunComparisonByResultId(result.id),
+    ]);
   /**
    * B0-315 — hydrates `RunComparisonPanel` from the persisted B0-312 row. `null` when no comparison
    * job was ever started for this run (still running, or a pre-B0-311 legacy run) — the panel
@@ -284,7 +285,9 @@ export default async function AdminTestRunDetailsPage({
    * items in the same run, which the harness does not do today) is not separately flagged here.
    */
   const runtimeConfigForRun =
-    resultItems.map((item) => extractRuntimeConfig(item.response_payload)).find(Boolean) ?? null;
+    resultItems
+      .map((item) => extractRuntimeConfig(item.response_payload))
+      .find(Boolean) ?? null;
   /**
    * B0-351 — the run's REQUESTED config (`test_results.run_options`), as opposed to the observed
    * `runtimeConfigForRun` above. Written once when the run row was created and never updated, so it
@@ -333,10 +336,15 @@ export default async function AdminTestRunDetailsPage({
    * each result item by its `workflow_run_id`.
    */
   const toolTraceByWorkflowRunId = new Map(
-    agentStepOutputs.map((row) => [row.workflow_run_id, parseAgentStepToolTrace(row.output)] as const),
+    agentStepOutputs.map(
+      (row) =>
+        [row.workflow_run_id, parseAgentStepToolTrace(row.output)] as const,
+    ),
   );
   const expectedToolByTestItemId = new Map(
-    testItems.map((item) => [item.id, extractExpectedTool(item.expected_tool)] as const),
+    testItems.map(
+      (item) => [item.id, extractExpectedTool(item.expected_tool)] as const,
+    ),
   );
   const toolRoutingReport = computeToolRoutingReport(
     resultItems.map((row) => {
@@ -347,7 +355,9 @@ export default async function AdminTestRunDetailsPage({
         rowIndex: row.row_index,
         prompt: promptByItemId.get(row.test_item_id) ?? '',
         expectedTool: expectedToolByTestItemId.get(row.test_item_id) ?? null,
-        toolTrace: workflowRunId ? (toolTraceByWorkflowRunId.get(workflowRunId) ?? null) : null,
+        toolTrace: workflowRunId
+          ? (toolTraceByWorkflowRunId.get(workflowRunId) ?? null)
+          : null,
       };
     }),
   );
@@ -359,7 +369,9 @@ export default async function AdminTestRunDetailsPage({
   const aliasResolutionReport = computeAliasResolutionReport(
     resultItems.map((row) => {
       const workflowRunId = workflowRunIdByResultItemId.get(row.id) ?? null;
-      return workflowRunId ? (toolTraceByWorkflowRunId.get(workflowRunId) ?? null) : null;
+      return workflowRunId
+        ? (toolTraceByWorkflowRunId.get(workflowRunId) ?? null)
+        : null;
     }),
   );
 
@@ -369,20 +381,31 @@ export default async function AdminTestRunDetailsPage({
    * `resultItems` (`select('*')` above) — no extra fetch needed, unlike the tool-routing report above
    * which has to join back to `workflow_steps`.
    */
-  const routingComparisonInputs: RoutingComparisonReportInput[] = resultItems.map((row) => ({
-    resultItemId: row.id,
-    testItemId: row.test_item_id,
-    rowIndex: row.row_index,
-    prompt: promptByItemId.get(row.test_item_id) ?? '',
-    intendedAgentLabel: row.intended_agent_label,
-    routingDecision: row.routing_decision,
-    keywordRoute: row.keyword_route,
-    llmRoute: row.llm_route,
-  }));
-  const hasRoutingInstrumentation = resultItems.some((row) => row.keyword_route !== null);
-  const routingComparisonReport = computeRoutingComparisonReport(routingComparisonInputs);
-  const keywordConfusionMatrix = buildConfusionMatrix(routingComparisonInputs, 'keyword');
-  const llmConfusionMatrix = buildConfusionMatrix(routingComparisonInputs, 'llm');
+  const routingComparisonInputs: RoutingComparisonReportInput[] =
+    resultItems.map((row) => ({
+      resultItemId: row.id,
+      testItemId: row.test_item_id,
+      rowIndex: row.row_index,
+      prompt: promptByItemId.get(row.test_item_id) ?? '',
+      intendedAgentLabel: row.intended_agent_label,
+      routingDecision: row.routing_decision,
+      keywordRoute: row.keyword_route,
+      llmRoute: row.llm_route,
+    }));
+  const hasRoutingInstrumentation = resultItems.some(
+    (row) => row.keyword_route !== null,
+  );
+  const routingComparisonReport = computeRoutingComparisonReport(
+    routingComparisonInputs,
+  );
+  const keywordConfusionMatrix = buildConfusionMatrix(
+    routingComparisonInputs,
+    'keyword',
+  );
+  const llmConfusionMatrix = buildConfusionMatrix(
+    routingComparisonInputs,
+    'llm',
+  );
   const ambiguousRates = computeAmbiguousRouteRate(routingComparisonInputs);
   const confidenceDistribution = computeConfidenceDistribution(
     resultItems.map((row) => row.routing_confidence),
@@ -467,7 +490,9 @@ export default async function AdminTestRunDetailsPage({
             status: row.status,
             similarity: extractItemSimilarityScore(row.response_payload),
             confidence: extractItemValidatorConfidence(row.response_payload),
-            confidence_provenance: extractItemConfidenceProvenance(row.response_payload),
+            confidence_provenance: extractItemConfidenceProvenance(
+              row.response_payload,
+            ),
             elapsed_ms: row.elapsed_ms,
             model: modelTag ?? null,
             agent: extractRoutingDecision(row.response_payload),
@@ -508,18 +533,24 @@ export default async function AdminTestRunDetailsPage({
         >
           <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-4">
-              <div>
-                <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-700">
-                  Run details
-                </p>
+              <div className="flex flex-col gap-2">
+                <div className="flex w-full justify-between items-center">
+                  <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-700">
+                    Run details
+                  </p>
+                  <span className="text-xs text-slate-600">
+                    Run id: {result.id}
+                  </span>
+                </div>
                 <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">
                   {test.name}
                 </h1>
                 <TestRunNotesDisplay />
                 <p className="mt-3 flex flex-wrap items-center gap-2 font-mono text-xs text-slate-600">
-                  <span>Run id: {result.id}</span>
                   <AppVersionBadge appVersion={result.app_version} />
-                  <PromptBundleVersionBadge summary={promptBundleVersionSummary} />
+                  <PromptBundleVersionBadge
+                    summary={promptBundleVersionSummary}
+                  />
                   <RuntimeConfigBadge
                     runConfig={runConfigForRun}
                     runtimeConfig={runtimeConfigForRun}
@@ -856,7 +887,10 @@ export default async function AdminTestRunDetailsPage({
                                 const colorClass =
                                   getAgentBadgeClassName(agent);
                                 return (
-                                  <Badge className={colorClass} variant="outline">
+                                  <Badge
+                                    className={colorClass}
+                                    variant="outline"
+                                  >
                                     {agent}
                                   </Badge>
                                 );
@@ -894,7 +928,9 @@ export default async function AdminTestRunDetailsPage({
                                     </span>
                                   );
                                 }
-                                return <Badge variant="outline">{strategy}</Badge>;
+                                return (
+                                  <Badge variant="outline">{strategy}</Badge>
+                                );
                               })()}
                               {(() => {
                                 const lock = extractProductLineLock(
@@ -939,7 +975,8 @@ export default async function AdminTestRunDetailsPage({
                                       }
                                       variant="outline"
                                     >
-                                      Ambiguous ({lock.candidates.length} candidates)
+                                      Ambiguous ({lock.candidates.length}{' '}
+                                      candidates)
                                     </Badge>
                                   );
                                 }
@@ -951,7 +988,10 @@ export default async function AdminTestRunDetailsPage({
                                   );
                                 }
                                 return (
-                                  <Badge title={lock.lockReason} variant="secondary">
+                                  <Badge
+                                    title={lock.lockReason}
+                                    variant="secondary"
+                                  >
                                     Not locked
                                   </Badge>
                                 );
