@@ -37,6 +37,7 @@ import { GOLDEN_TIERS, getGoldenSetTierRollup } from '~/lib/tests/golden-set';
 import { getTierTargets } from '~/lib/tests/tier-targets';
 import { PROMPT_BUNDLE_VERSION_SHORT } from '~/lib/workflows/product-support/prompt-version';
 
+import { Badge } from '~/components/ui/badge';
 import { EM_DASH } from './format';
 
 /**
@@ -97,7 +98,9 @@ export async function HealthBar({ window, version }: HealthPanelProps) {
     ...new Set<number>([
       ...GOLDEN_TIERS,
       ...targets.map((target) => target.tier),
-      ...(rollup.kind === 'rollup' ? rollup.tiers.map((tier) => tier.tier) : []),
+      ...(rollup.kind === 'rollup'
+        ? rollup.tiers.map((tier) => tier.tier)
+        : []),
     ]),
   ].sort((a, b) => a - b);
 
@@ -129,7 +132,8 @@ export async function HealthBar({ window, version }: HealthPanelProps) {
                 {verdict.failures.map((failure, index) => (
                   <span key={failure.tier}>
                     {index > 0 ? '; ' : null}
-                    Tier {failure.tier} gate at {formatPassRatePercent(failure.passRate)} of the{' '}
+                    Tier {failure.tier} gate at{' '}
+                    {formatPassRatePercent(failure.passRate)} of the{' '}
                     {formatPassRatePercent(failure.targetPassRate)} required ·{' '}
                     <Link
                       className="underline decoration-red-400/60 underline-offset-4 hover:text-red-300"
@@ -142,7 +146,9 @@ export async function HealthBar({ window, version }: HealthPanelProps) {
                 ))}
               </p>
             ) : (
-              <p className="text-base font-medium leading-6 text-slate-100">{verdict.sentence}</p>
+              <p className="text-base font-medium leading-6 text-slate-100">
+                {verdict.sentence}
+              </p>
             )}
 
             <p className="mt-1.5 font-mono text-[11px] leading-5 text-slate-400">
@@ -158,20 +164,28 @@ export async function HealthBar({ window, version }: HealthPanelProps) {
           </div>
         </div>
 
-        <div className="flex shrink-0 items-center gap-3">
-          <Link
-            className="inline-flex items-center rounded-full bg-slate-100 px-4 py-2 text-sm font-medium text-slate-900 hover:bg-white"
-            href="/admin/tests"
-            title="Golden-set sweeps run from the tests admin — open a golden test there and start a full run."
-          >
-            Re-run sweep
-          </Link>
-          <Link
-            className="inline-flex items-center rounded-full border border-slate-600 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
-            href={FAILURE_QUEUE_HREF}
-          >
-            Open failure queue →
-          </Link>
+        <div className="flex shrink-0 items-center gap-4">
+          {verdict.totalFailingCount > 0 && (
+            <Badge variant="destructive" className="text-right">
+              {verdict.totalFailingCount} failing prompt
+              {verdict.totalFailingCount === 1 ? '' : 's'}
+            </Badge>
+          )}
+          <div className="flex items-center gap-3">
+            <Link
+              className="inline-flex items-center rounded-full bg-slate-100 px-4 py-2 text-sm font-medium text-slate-900 hover:bg-white"
+              href="/admin/tests"
+              title="Golden-set sweeps run from the tests admin — open a golden test there and start a full run."
+            >
+              Re-run sweep
+            </Link>
+            <Link
+              className="inline-flex items-center rounded-full border border-slate-600 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
+              href={FAILURE_QUEUE_HREF}
+            >
+              Open failure queue →
+            </Link>
+          </div>
         </div>
       </div>
 
@@ -195,7 +209,9 @@ export async function HealthBar({ window, version }: HealthPanelProps) {
             // Denominator is what the sweep GRADED, not how big the tier is.
             const gradedCount = tierRollup?.gradedCount ?? 0;
             const failingCount =
-              tierRollup !== undefined ? tierRollup.gradedCount - tierRollup.passedCount : null;
+              tierRollup !== undefined
+                ? tierRollup.gradedCount - tierRollup.passedCount
+                : null;
 
             return (
               <div
@@ -214,10 +230,14 @@ export async function HealthBar({ window, version }: HealthPanelProps) {
                     TIER_TONE_TEXT[status.tone],
                   ].join(' ')}
                 >
-                  {passRate === null ? EM_DASH : formatPassRatePercent(passRate)}
+                  {passRate === null
+                    ? EM_DASH
+                    : formatPassRatePercent(passRate)}
                 </p>
                 {/* The tone in words, so the tint is never the only signal. */}
-                <p className="mt-0.5 text-[11px] text-slate-400">{status.label}</p>
+                <p className="mt-0.5 text-[11px] text-slate-400">
+                  {status.label}
+                </p>
                 <p className="mt-1 text-[11px] tabular-nums text-slate-400">
                   {failingCount !== null && gradedCount > 0 ? (
                     <Link

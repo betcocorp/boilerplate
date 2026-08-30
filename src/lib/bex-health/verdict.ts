@@ -38,6 +38,8 @@ export type HealthVerdict = {
   failures: GateFailure[];
   /** `created_at` of the most recent resolved golden run, when a rollup exists. */
   lastSweepAt: string | null;
+  /** Total count of failing items across all golden sets (sum of failingCount from all failures). */
+  totalFailingCount: number;
 };
 
 /** `0.9583…` → `95.8%`; `1` → `100%` (one decimal, trailing `.0` dropped). */
@@ -66,6 +68,7 @@ export function deriveHealthVerdict(
       sentence: 'No golden sets are configured — verdict unknown',
       failures: [],
       lastSweepAt: null,
+      totalFailingCount: 0,
     };
   }
 
@@ -75,6 +78,7 @@ export function deriveHealthVerdict(
       sentence: 'No golden-set run for this selection — verdict unknown',
       failures: [],
       lastSweepAt: null,
+      totalFailingCount: 0,
     };
   }
 
@@ -90,6 +94,7 @@ export function deriveHealthVerdict(
       sentence: 'No gating tiers are configured — nothing can block',
       failures: [],
       lastSweepAt,
+      totalFailingCount: 0,
     };
   }
 
@@ -121,12 +126,15 @@ export function deriveHealthVerdict(
   }
 
   // A real failing measurement outranks a missing one.
+  const totalFailingCount = failures.reduce((sum, failure) => sum + failure.failingCount, 0);
+
   if (failures.length > 0) {
     return {
       state: 'blocked',
       sentence: failures.map(describeGateFailure).join('; '),
       failures,
       lastSweepAt,
+      totalFailingCount,
     };
   }
 
@@ -137,6 +145,7 @@ export function deriveHealthVerdict(
       sentence: `No graded golden-set result for gating ${tierList} in this selection — verdict unknown`,
       failures: [],
       lastSweepAt,
+      totalFailingCount,
     };
   }
 
@@ -145,6 +154,7 @@ export function deriveHealthVerdict(
     sentence: `Every gating tier is at or above target — ${passingGates.join('; ')}`,
     failures: [],
     lastSweepAt,
+    totalFailingCount,
   };
 }
 

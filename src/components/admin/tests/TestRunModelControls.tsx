@@ -39,7 +39,7 @@ const ROUTER_TYPE_OPTIONS: readonly RouterTypeOverride[] = ['keyword', 'semantic
  */
 export function TestRunModelControls() {
   const [modelTag, setModelTag] = useState<BexModelTag>('gpt-4.1');
-  const [routerType, setRouterType] = useState<RouterTypeOverride | ''>('');
+  const [routerType, setRouterType] = useState<RouterTypeOverride | ''>('llm');
   const [agentMode, setAgentMode] = useState<BexChatAgentMode>(
     DEFAULT_BEX_CHAT_AGENT_MODE,
   );
