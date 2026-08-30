@@ -124,13 +124,21 @@ export async function VerdictStrip({ window, version }: HealthPanelProps) {
           </div>
         </div>
 
-        <Link
-          className="inline-flex shrink-0 items-center rounded-full border border-slate-600 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
-          href="/admin/tests"
-          title="Golden-set sweeps run from the tests admin — open a golden test there and start a full run."
-        >
-          Re-run sweep
-        </Link>
+        <div className="flex shrink-0 items-center gap-4">
+          {verdict.totalFailingCount > 0 && (
+            <div className="text-right">
+              <p className="text-sm font-semibold text-slate-100">{verdict.totalFailingCount}</p>
+              <p className="text-xs text-slate-400">failing prompt{verdict.totalFailingCount === 1 ? '' : 's'}</p>
+            </div>
+          )}
+          <Link
+            className="inline-flex items-center rounded-full border border-slate-600 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
+            href="/admin/tests"
+            title="Golden-set sweeps run from the tests admin — open a golden test there and start a full run."
+          >
+            Re-run sweep
+          </Link>
+        </div>
       </div>
 
       <ProvenanceFooter sources={VERDICT_SOURCES} tone="dark" />
