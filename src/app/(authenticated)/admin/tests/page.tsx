@@ -3,6 +3,7 @@ import { connection } from 'next/server';
 
 import { AdminTestsActionToast } from '~/components/admin/tests/AdminTestsActionToast';
 import { CreateOrUploadTestDatasetDialog } from '~/components/admin/tests/CreateOrUploadTestDatasetDialog';
+import { GoldenSetMetricsCards } from '~/components/admin/tests/GoldenSetMetricsCards';
 import { Button } from '~/components/ui/button';
 import {
   Table,
@@ -14,6 +15,7 @@ import {
 } from '~/components/ui/table';
 import { V1_AGENT_REGISTRY } from '~/lib/agents/agent-registry';
 import { gradeFromScore } from '~/lib/tests/report/metrics';
+import { calculateGoldenSetMetrics } from '~/lib/tests/golden-set-metrics';
 import { listArchivedTests, listTests } from '~/lib/tests/repository';
 
 import {
@@ -41,8 +43,11 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
   // B0-585 — the per-test latest-result and cross-run similarity roll-up that used to fan out
   // over 20 runs per test on every load is decommissioned: run-level figures live on
   // /admin/tests/[testId], golden-set health on /admin/bex/health.
-  const tests = await listTests();
-  const archivedTests = await listArchivedTests();
+  const [tests, archivedTests, goldenSetMetrics] = await Promise.all([
+    listTests(),
+    listArchivedTests(),
+    calculateGoldenSetMetrics(),
+  ]);
 
   return (
     <div className="flex flex-1 bg-slate-50">
@@ -72,6 +77,8 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
             </div>
           </div>
         </section>
+
+        <GoldenSetMetricsCards metrics={goldenSetMetrics} />
 
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <div className="mb-4 flex items-center justify-between">
