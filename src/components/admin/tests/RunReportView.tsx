@@ -120,7 +120,11 @@ function reactNodeToText(node: ReactNode): string {
  * Renders a case's heading blockquote (B0-613: bold question first, muted id below) and gives it
  * the stable anchor id `linkifyCaseIds` links back to — replaces the old `### id — question` h3.
  */
-function ReportCaseQuote({ children, className, ...rest }: ComponentProps<'blockquote'>) {
+function ReportCaseQuote({
+  children,
+  className,
+  ...rest
+}: ComponentProps<'blockquote'>) {
   const match = CASE_HEADING_ID_PATTERN.exec(reactNodeToText(children));
   return (
     <blockquote
@@ -241,7 +245,9 @@ export function RunReportView({
   const [totalCases, setTotalCases] = useState(initialTotalCases);
   const [completedCases, setCompletedCases] = useState(initialCompletedCases);
   const [passes, setPasses] = useState(initialPasses);
-  const [completedPasses, setCompletedPasses] = useState(initialCompletedPasses);
+  const [completedPasses, setCompletedPasses] = useState(
+    initialCompletedPasses,
+  );
   const [error, setError] = useState<string | null>(initialError);
   const [generatedAt, setGeneratedAt] = useState<string | null>(
     initialGeneratedAt,
@@ -515,7 +521,7 @@ export function RunReportView({
   return (
     <div className="flex flex-col gap-6">
       <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="flex flex-col text-center flex-wrap items-center justify-between gap-4">
           <div className="flex-1">
             <div className="flex items-center gap-2">
               <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-700">
@@ -629,11 +635,14 @@ export function RunReportView({
                 Report refused — the run&apos;s numbers did not reconcile
               </p>
               <p className="mt-1">
-                A consistency check failed while computing the metrics, so no report was written.
-                This is a problem with the run&apos;s data, not a transient error — regenerating
-                will fail the same way until it is fixed.
+                A consistency check failed while computing the metrics, so no
+                report was written. This is a problem with the run&apos;s data,
+                not a transient error — regenerating will fail the same way
+                until it is fixed.
               </p>
-              <p className="mt-2 font-mono text-xs break-words whitespace-pre-wrap">{error}</p>
+              <p className="mt-2 font-mono text-xs break-words whitespace-pre-wrap">
+                {error}
+              </p>
               <Button
                 className="mt-3 block"
                 onClick={retryFromScratch}
@@ -659,7 +668,9 @@ export function RunReportView({
         ) : null}
       </section>
 
-      {status === 'completed' && !reportData && (markdownLoading || !markdown) ? (
+      {status === 'completed' &&
+      !reportData &&
+      (markdownLoading || !markdown) ? (
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <p className="text-sm text-slate-500">Loading report…</p>
         </section>
@@ -677,7 +688,10 @@ export function RunReportView({
             .report-pdf-capture [data-report-section]:first-of-type { break-before: auto; page-break-before: auto; }
           `}</style>
 
-          <ReportVerdictStrip cases={reportData.cases} metrics={reportData.metrics} />
+          <ReportVerdictStrip
+            cases={reportData.cases}
+            metrics={reportData.metrics}
+          />
 
           <div data-report-section>
             <ReportBreakdownCards
