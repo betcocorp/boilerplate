@@ -1,3 +1,16 @@
+# [2.17.0](https://github.com/betcocorp/bex2.0/compare/v2.16.0...v2.17.0) (2026-08-30)
+
+
+### Bug Fixes
+
+* **B0-golden-set-metrics:** use test_results.failed_items for failing prompt count ([190a70e](https://github.com/betcocorp/bex2.0/commit/190a70e3128789dbdafc6ddf0271f177c9b0546c))
+
+
+### Features
+
+* add golden set aggregate metrics cards to /admin/tests ([652c142](https://github.com/betcocorp/bex2.0/commit/652c1427c4f4260c2394335f7954e18a2ed2a5de))
+* **B0-golden-set-metrics:** display TTFT and elapsed averages in golden set metrics ([b17f9aa](https://github.com/betcocorp/bex2.0/commit/b17f9aa446b2d858ea8dcc543d2f9c2c7d6c9392))
+
 # [2.16.0](https://github.com/betcocorp/bex2.0/compare/v2.15.2...v2.16.0) (2026-08-30)
 
 
