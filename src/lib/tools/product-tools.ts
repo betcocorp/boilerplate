@@ -295,6 +295,18 @@ const PROCEDURAL_DEPTH_PATTERNS: readonly RegExp[] = [
   /\bhow\s+(often|long|soon)\b/,
   /\bstep[-\s]by[-\s]step\b/,
   /\bchecklist\b/,
+  /**
+   * B0-759 follow-up — "which X get missed most often" is an enumeration ask wearing a question
+   * word: the graded answer is a list of fixtures, not a single fact.
+   */
+  /\b(which|what)\b[^.?!]{0,40}\b(most often|most commonly|commonly|typically)\b/,
+  /**
+   * A hard superlative ("strongest stripper you have") cannot be answered by naming one product —
+   * Betco publishes no performance ranking, so the answer has to enumerate the labeled options and
+   * decline to rank them, which needs several of them retrieved. Deliberately excludes "best",
+   * which appears in already-passing single-product asks like "what is the best glass cleaner".
+   */
+  /\b(strongest|toughest|most\s+aggressive|most\s+powerful|heaviest[-\s]duty)\b/,
 ];
 
 /**

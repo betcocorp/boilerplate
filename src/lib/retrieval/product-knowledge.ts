@@ -805,6 +805,11 @@ async function runProductKnowledgeQuery(input: {
   // overlap below instead of stacking two full round-trip chains on the critical path.
   const broadSelectedPromise = selectCuratedSourceMatches(broadResult.matches, {
     limit,
+    // B0-759 follow-up — this branch dropped `maxPerDocument` entirely, so a caller asking for
+    // several excerpts of one procedural document silently got `?? 1`. That is precisely the path
+    // an unlocked query takes, which is where the B0-759 F cases landed: they received the widened
+    // `limit` and none of the widened depth.
+    maxPerDocument,
     requiredDocumentKinds: requiredDocumentKindsForQuery,
   });
 
@@ -839,6 +844,7 @@ async function runProductKnowledgeQuery(input: {
         search: buildSearchDetails(broadResult),
         selection: buildSelectionDetails({
           limit,
+          maxPerDocument,
           requiredDocumentKinds: requiredDocumentKindsForQuery,
         }),
       },
@@ -859,6 +865,9 @@ async function runProductKnowledgeQuery(input: {
 
   const anchoredSelected = await selectCuratedSourceMatches(anchoredResult.matches, {
     limit,
+    // B0-759 follow-up — same omission as the broad pass above; both must agree or the fallback
+    // comparison below would weigh two passes curated under different rules.
+    maxPerDocument,
     requiredDocumentKinds: requiredDocumentKindsForQuery,
   });
 
@@ -921,6 +930,7 @@ async function runProductKnowledgeQuery(input: {
       search: buildSearchDetails(shouldUseBroadFallback ? broadResult : anchoredResult),
       selection: buildSelectionDetails({
         limit,
+          maxPerDocument,
         requiredDocumentKinds: requiredDocumentKindsForQuery,
       }),
     },

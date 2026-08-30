@@ -25,6 +25,9 @@ describe('classifyRetrievalIntent procedural depth branch', () => {
       'What are the steps to strip and recoat?',
       'How often should we verify dilution accuracy?',
       'Give me a step-by-step for the startup check',
+      // B0-759 follow-up — D-band enumeration asks from the same golden set.
+      'Which high-touch points get missed most often when cleaning restrooms?',
+      'What is the strongest floor stripper you have?',
     ];
 
     for (const query of widened) {
@@ -41,7 +44,8 @@ describe('classifyRetrievalIntent procedural depth branch', () => {
       'Can I use pH7Q on stainless steel?',
       'What disinfectant works best against norovirus?',
       'How do I get shoe scuffs and ball marks off the floor?',
-      'Which high-touch points get missed most often when cleaning restrooms?',
+      // "best" is deliberately NOT a depth trigger: this one already scores in the high 80s as a
+      // single-product answer, and widening it would be churn on a case that works.
       'What is the best glass cleaner?',
       // The noun alone must not fire — this is a single-value lookup, not a schedule.
       'what dilution does the maintenance cleaner use',
