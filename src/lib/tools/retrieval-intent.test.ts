@@ -13,7 +13,8 @@ import { classifyRetrievalIntent } from '~/lib/tools/product-tools';
  * alone" block is therefore the load-bearing half — it is drawn from real prompts in that set.
  */
 describe('classifyRetrievalIntent procedural depth branch', () => {
-  const DEPTH = { limit: 6, maxPerDocument: 3 };
+  // Width only — see the B0-759 note in classifyRetrievalIntent for why depth was measured and dropped.
+  const DEPTH = { limit: 6 };
 
   describe('widens for the shapes that graded F', () => {
     const widened = [

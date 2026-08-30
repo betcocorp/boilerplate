@@ -326,14 +326,25 @@ export function classifyRetrievalIntent(
     return { limit: 4, maxPerDocument: 2 };
   }
   /**
-   * B0-759 — deliberately AFTER the product-name branch, so a named product keeps the tuning
-   * it has today and this only affects queries that would otherwise inherit the bare 3x1 default.
-   * `maxPerDocument: 3` is the load-bearing half: the default of 1 caps a fifteen-step maintenance
-   * schedule at a single excerpt of the document that contains it, no matter how many documents
-   * are fetched.
+   * B0-759 — deliberately AFTER the product-name branch, so a named product keeps the tuning it
+   * has today and this only affects queries that would otherwise inherit the bare 3x1 default.
+   *
+   * WIDTH ONLY — `maxPerDocument` is deliberately NOT raised, and this was measured, not assumed.
+   * The first version returned `maxPerDocument: 3` on the theory that a fifteen-step schedule
+   * needs several excerpts of the one document holding it. Run f08f12a0 (the first run where it
+   * actually reached retrieval) refuted that: letting one document claim three of the six slots
+   * crowds the others out, and answers that span several documents lost badly —
+   * "what factors can throw off dilution accuracy", whose graded answer covers four distinct
+   * areas, fell 67 -> 50, and the recoat-window question fell 69 -> 58 on 30,667 characters of
+   * evidence, more than twice what it had when it scored higher. Only the single-document
+   * enumeration gained ("which high-touch points get missed most often", 68 -> 96/99), and that
+   * gain came from the width increase, which it had never had before.
+   *
+   * Net: `limit 6` with the default `maxPerDocument` graded 79.6 with no F; adding depth graded
+   * 79.1 with two. Raise width here; do not raise depth without evidence for the specific shape.
    */
   if (PROCEDURAL_DEPTH_PATTERNS.some((pattern) => pattern.test(q))) {
-    return { limit: 6, maxPerDocument: 3 };
+    return { limit: 6 };
   }
   return {};
 }
