@@ -218,6 +218,7 @@ type RunReportViewProps = {
    * from `navigation.sidebar.observability`, the permission the export route enforces.
    */
   canDownloadTrace: boolean;
+  isGolden: boolean;
 };
 
 export function RunReportView({
@@ -234,6 +235,7 @@ export function RunReportView({
   initialGeneratedAt,
   isRunCompleted,
   canDownloadTrace,
+  isGolden,
 }: RunReportViewProps) {
   const [status, setStatus] = useState<ReportStatus>(initialStatus);
   const [totalCases, setTotalCases] = useState(initialTotalCases);
@@ -514,10 +516,17 @@ export function RunReportView({
     <div className="flex flex-col gap-6">
       <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-700">
-              Agent evaluation report
-            </p>
+          <div className="flex-1">
+            <div className="flex items-center gap-2">
+              <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-700">
+                Agent evaluation report
+              </p>
+              {isGolden && (
+                <span className="inline-flex items-center rounded-full bg-yellow-100 px-2.5 py-0.5 text-xs font-semibold text-yellow-900">
+                  Golden Set
+                </span>
+              )}
+            </div>
             <h1 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
               {testName}
             </h1>

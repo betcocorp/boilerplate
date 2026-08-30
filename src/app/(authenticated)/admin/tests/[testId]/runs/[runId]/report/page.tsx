@@ -63,6 +63,7 @@ export default async function AdminTestRunReportPage({ params }: PageProps) {
           initialStatus={state?.status ?? 'idle'}
           initialTotalCases={state?.totalCases ?? result.total_items}
           isRunCompleted={isCompletedRunStatus(result.status)}
+          isGolden={test.is_golden}
           runId={result.id}
           testId={test.id}
           testName={test.name}
