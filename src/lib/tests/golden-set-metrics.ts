@@ -6,7 +6,6 @@
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 import { listTests } from '~/lib/tests/repository';
 import { listGoldenCandidateRuns, listResultItemsForRuns } from '~/lib/tests/golden-set';
-import { parseReportState } from '~/lib/tests/report/schemas';
 
 export type GoldenSetMetrics = {
   totalFailingPrompts: number;
@@ -54,25 +53,17 @@ export async function calculateGoldenSetMetrics(): Promise<GoldenSetMetrics> {
   const supabase = getSupabaseServiceRoleClient();
   const runIds = runs.map((r) => r.id);
 
-  // Fetch test results with report state to get completion status and case counts
+  // Fetch test results to get failing item counts
   const testResults = await supabase
     .from('test_results')
-    .select('id, report_state')
+    .select('id, failed_items')
     .in('id', runIds)
     .then((result) => (result.error ? [] : result.data ?? []));
 
-  // Calculate total failing prompts from report state (totalCases - (cases marked as Pass))
-  // This counts partial passes and failures together
+  // Calculate total failing prompts from test_results.failed_items
   let totalFailingPrompts = 0;
   for (const run of testResults) {
-    const reportState = parseReportState(run.report_state);
-    if (reportState && reportState.status === 'completed' && reportState.totalCases > 0) {
-      // Count failing as total minus the completed passes
-      // In a completed report, we count how many cases passed
-      const casesList = Object.values(reportState.caseScores || {});
-      const failedCount = casesList.filter((score) => score.unableToEvaluate).length;
-      totalFailingPrompts += Math.max(failedCount, reportState.totalCases - casesList.length);
-    }
+    totalFailingPrompts += run.failed_items || 0;
   }
 
   // Fetch result items for metrics
