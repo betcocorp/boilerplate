@@ -79,7 +79,9 @@ export function GoldenSetMetricsCards({ metrics }: GoldenSetMetricsCardsProps) {
             </p>
           </div>
           <div className="pt-1 text-xs text-slate-600">
-            <span className="text-slate-500">Avg elapsed: {formatMs(metrics.averageElapsed)}</span>
+            <span className="text-slate-500">
+              TTFT: {formatMs(metrics.averageTtft)} · Elapsed: {formatMs(metrics.averageElapsed)}
+            </span>
           </div>
         </div>
       </div>

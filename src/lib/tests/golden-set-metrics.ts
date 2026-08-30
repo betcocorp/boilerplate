@@ -1,11 +1,12 @@
 /**
  * Calculate aggregate metrics for golden test sets (used on /admin/tests).
- * Metrics include: total failing prompts, average score, score change, and performance stats.
+ * Metrics include: total failing prompts from report grading, average score, and performance stats.
  */
 
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 import { listTests } from '~/lib/tests/repository';
 import { listGoldenCandidateRuns, listResultItemsForRuns } from '~/lib/tests/golden-set';
+import { parseReportState } from '~/lib/tests/report/schemas';
 
 export type GoldenSetMetrics = {
   totalFailingPrompts: number;
@@ -35,27 +36,55 @@ export async function calculateGoldenSetMetrics(): Promise<GoldenSetMetrics> {
 
   const goldenTestIds = goldenTests.map((t) => t.id);
 
-  // Fetch golden runs and result items
+  // Fetch golden runs
   const runs = await listGoldenCandidateRuns(goldenTestIds);
-  const resultItems =
-    runs.length > 0 ? await listResultItemsForRuns(runs.map((r) => r.id)) : [];
 
-  // Fetch test result items with elapsed metrics to calculate average elapsed time
+  if (runs.length === 0) {
+    return {
+      totalFailingPrompts: 0,
+      averageScore: null,
+      scoreChangePercent: null,
+      averagePassPercent: null,
+      averageTtft: null,
+      averageElapsed: null,
+      goldenSetCount: goldenTests.length,
+    };
+  }
+
   const supabase = getSupabaseServiceRoleClient();
-  const resultItemsWithMetrics: Array<{ elapsed_ms: number | null }> =
-    runs.length > 0
-      ? await supabase
-          .from('test_result_items')
-          .select('elapsed_ms')
-          .in(
-            'test_result_id',
-            runs.map((r) => r.id),
-          )
-          .then((result) => (result.error ? [] : result.data ?? []))
-      : [];
+  const runIds = runs.map((r) => r.id);
 
-  // Calculate total failing prompts from latest runs
-  const totalFailingPrompts = resultItems.filter((item) => !item.passed).length;
+  // Fetch test results with report state to get completion status and case counts
+  const testResults = await supabase
+    .from('test_results')
+    .select('id, report_state')
+    .in('id', runIds)
+    .then((result) => (result.error ? [] : result.data ?? []));
+
+  // Calculate total failing prompts from report state (totalCases - (cases marked as Pass))
+  // This counts partial passes and failures together
+  let totalFailingPrompts = 0;
+  for (const run of testResults) {
+    const reportState = parseReportState(run.report_state);
+    if (reportState && reportState.status === 'completed' && reportState.totalCases > 0) {
+      // Count failing as total minus the completed passes
+      // In a completed report, we count how many cases passed
+      const casesList = Object.values(reportState.caseScores || {});
+      const failedCount = casesList.filter((score) => score.unableToEvaluate).length;
+      totalFailingPrompts += Math.max(failedCount, reportState.totalCases - casesList.length);
+    }
+  }
+
+  // Fetch result items for metrics
+  const resultItems = await listResultItemsForRuns(runIds);
+
+  // Fetch test result items with performance metrics
+  const resultItemsWithMetrics: Array<{ elapsed_ms: number | null; ttft_ms: number | null }> =
+    await supabase
+      .from('test_result_items')
+      .select('elapsed_ms, ttft_ms')
+      .in('test_result_id', runIds)
+      .then((result) => (result.error ? [] : result.data ?? []));
 
   // Calculate average score from golden tests
   const scoredTests = goldenTests.filter((t) => t.avg_report_score !== null);
@@ -65,17 +94,23 @@ export async function calculateGoldenSetMetrics(): Promise<GoldenSetMetrics> {
         scoredTests.length
       : null;
 
-  // Calculate average pass percentage
+  // Calculate average pass percentage from result items
   const totalItems = resultItems.length;
   const passedItems = resultItems.filter((item) => item.passed).length;
   const averagePassPercent = totalItems > 0 ? (passedItems / totalItems) * 100 : null;
 
-  // Calculate elapsed average from result items
+  // Calculate elapsed and TTFT averages from result items
   const itemsWithElapsed = resultItemsWithMetrics.filter((r) => r.elapsed_ms !== null);
   const averageElapsed =
     itemsWithElapsed.length > 0
-      ? itemsWithElapsed.reduce((sum, r) => sum + (r.elapsed_ms ?? 0), 0) /
+      ? itemsWithElapsed.reduce((sum, r) => sum + (Number(r.elapsed_ms) || 0), 0) /
         itemsWithElapsed.length
+      : null;
+
+  const itemsWithTtft = resultItemsWithMetrics.filter((r) => r.ttft_ms !== null);
+  const averageTtft =
+    itemsWithTtft.length > 0
+      ? itemsWithTtft.reduce((sum, r) => sum + (Number(r.ttft_ms) || 0), 0) / itemsWithTtft.length
       : null;
 
   // Calculate score change percentage (current vs previous run average)
@@ -87,7 +122,7 @@ export async function calculateGoldenSetMetrics(): Promise<GoldenSetMetrics> {
     averageScore,
     scoreChangePercent,
     averagePassPercent,
-    averageTtft: null, // TTFT not available in current schema
+    averageTtft,
     averageElapsed,
     goldenSetCount: goldenTests.length,
   };
