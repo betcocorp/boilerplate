@@ -1,3 +1,17 @@
+# [2.16.0](https://github.com/betcocorp/bex2.0/compare/v2.15.2...v2.16.0) (2026-08-30)
+
+
+### Bug Fixes
+
+* **B0-759:** widen retrieval without deepening it -- depth measured, refuted ([1c2fcb5](https://github.com/betcocorp/bex2.0/commit/1c2fcb5cdd6d7bd433a362536304dde8a5c11aac)), closes [hi#touch](https://github.com/hi/issues/touch)
+
+
+### Features
+
+* add golden set badge to test report header ([17085e0](https://github.com/betcocorp/bex2.0/commit/17085e0c4b2ebd5d725c27a8feb19b1b19eb5a8b))
+* default admin test router to LLM ([32918de](https://github.com/betcocorp/bex2.0/commit/32918de403ce6aadf51de119bf4c83c604bdd6b0))
+* display total golden set failing items count on dashboard and health pages ([f8f5bc3](https://github.com/betcocorp/bex2.0/commit/f8f5bc357c285fa48e202f5b3cd8f8ccc5b8db8d))
+
 ## [2.15.2](https://github.com/betcocorp/bex2.0/compare/v2.15.1...v2.15.2) (2026-08-30)
 
 
