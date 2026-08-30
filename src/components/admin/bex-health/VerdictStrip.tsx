@@ -15,20 +15,21 @@
 import Link from 'next/link';
 
 import {
-  formatPassRatePercent,
-  deriveHealthVerdict,
-  type HealthVerdictState,
-} from '~/lib/bex-health/verdict';
-import {
   describeVersionSelection,
   toGoldenSetVersionQuery,
   utcDay,
   type HealthPanelProps,
 } from '~/lib/bex-health/search-params';
+import {
+  deriveHealthVerdict,
+  formatPassRatePercent,
+  type HealthVerdictState,
+} from '~/lib/bex-health/verdict';
 import { getGoldenSetTierRollup } from '~/lib/tests/golden-set';
 import { getTierTargets } from '~/lib/tests/tier-targets';
 import { PROMPT_BUNDLE_VERSION_SHORT } from '~/lib/workflows/product-support/prompt-version';
 
+import { Badge } from '~/components/ui/badge';
 import { ProvenanceFooter } from './ProvenanceFooter';
 
 /** B0-584 — verified against `getGoldenSetTierRollup` / `getTierTargets`; keep in sync with them. */
@@ -91,8 +92,9 @@ export async function VerdictStrip({ window, version }: HealthPanelProps) {
                 {verdict.failures.map((failure, index) => (
                   <span key={failure.tier}>
                     {index > 0 ? '; ' : null}
-                    Tier {failure.tier} gate at {formatPassRatePercent(failure.passRate)} of
-                    the {formatPassRatePercent(failure.targetPassRate)} required ·{' '}
+                    Tier {failure.tier} gate at{' '}
+                    {formatPassRatePercent(failure.passRate)} of the{' '}
+                    {formatPassRatePercent(failure.targetPassRate)} required ·{' '}
                     <Link
                       className="underline decoration-red-400/60 underline-offset-4 hover:text-red-300"
                       href={FAILURE_QUEUE_HREF}
@@ -104,7 +106,9 @@ export async function VerdictStrip({ window, version }: HealthPanelProps) {
                 ))}
               </p>
             ) : (
-              <p className="text-lg font-medium leading-7 text-slate-100">{verdict.sentence}</p>
+              <p className="text-lg font-medium leading-7 text-slate-100">
+                {verdict.sentence}
+              </p>
             )}
 
             <p className="mt-2 text-xs text-slate-400">
@@ -126,10 +130,10 @@ export async function VerdictStrip({ window, version }: HealthPanelProps) {
 
         <div className="flex shrink-0 items-center gap-4">
           {verdict.totalFailingCount > 0 && (
-            <div className="text-right">
-              <p className="text-sm font-semibold text-slate-100">{verdict.totalFailingCount}</p>
-              <p className="text-xs text-slate-400">failing prompt{verdict.totalFailingCount === 1 ? '' : 's'}</p>
-            </div>
+            <Badge variant="destructive">
+              {verdict.totalFailingCount}&nbsp; failing prompt
+              {verdict.totalFailingCount === 1 ? '' : 's'}
+            </Badge>
           )}
           <Link
             className="inline-flex items-center rounded-full border border-slate-600 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
