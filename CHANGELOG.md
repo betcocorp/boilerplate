@@ -1,3 +1,10 @@
+## [2.15.2](https://github.com/betcocorp/bex2.0/compare/v2.15.1...v2.15.2) (2026-08-30)
+
+
+### Bug Fixes
+
+* **B0-759:** apply maxPerDocument on the unlocked retrieval path ([aebaba8](https://github.com/betcocorp/bex2.0/commit/aebaba87d041594294926d333ba7328073ad43dd))
+
 ## [2.15.1](https://github.com/betcocorp/bex2.0/compare/v2.15.0...v2.15.1) (2026-08-29)
 
 
