@@ -1,10 +1,11 @@
 'use client';
 
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
 import { RagSearchSettingsDrawer } from '~/components/admin/rag/RagSearchSettingsDrawer';
 import { RagSearchToolbar } from '~/components/admin/rag/RagSearchToolbar';
+import { logSearchSubmit } from '~/lib/event-logging/search-events';
 
 /** Drawer-editable retrieval settings. Mirrors the query-string fields `page.tsx` parses. */
 export type RagSearchSettingsValues = {
@@ -29,6 +30,9 @@ export const RAG_SEARCH_DEFAULT_SETTINGS: RagSearchSettingsValues = {
   useMultiIntent: false,
 };
 
+/** B0-761 — stable analytics surface id for the RAG semantic-search page. */
+const RAG_SEARCH_SURFACE = 'rag-search';
+
 type QueryOption = {
   query: string;
   queryCount: number;
@@ -39,6 +43,8 @@ type RagSearchControlsProps = {
   query: string;
   popularQueries: QueryOption[];
   initialSettings: RagSearchSettingsValues;
+  /** Matches rendered for the current query, or `null` when no search ran. */
+  resultCount: number | null;
   sectionTypeOptions: string[];
 };
 
@@ -70,14 +76,51 @@ export function RagSearchControls({
   query,
   popularQueries,
   initialSettings,
+  resultCount,
   sectionTypeOptions,
 }: RagSearchControlsProps) {
   const router = useRouter();
   const formRef = useRef<HTMLFormElement | null>(null);
   const [settings, setSettings] = useState<RagSearchSettingsValues>(initialSettings);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const loggedSearchRef = useRef<string | null>(null);
 
   const changedCount = useMemo(() => countChangedSettings(settings), [settings]);
+
+  // B0-761 — the search itself runs server-side from the query string, so the submit event is
+  // emitted once the rendered results are known. Query length only; the query text is never logged.
+  useEffect(() => {
+    const trimmed = query.trim();
+    if (!trimmed || resultCount === null) {
+      return;
+    }
+
+    const key = `${trimmed}|${resultCount}`;
+    if (loggedSearchRef.current === key) {
+      return;
+    }
+    loggedSearchRef.current = key;
+
+    logSearchSubmit({
+      entityType: 'chunk',
+      resultCount,
+      queryLength: trimmed.length,
+      surface: RAG_SEARCH_SURFACE,
+      extra: {
+        retrieval: initialSettings.retrieval,
+        scope: initialSettings.scope,
+        useReranker: initialSettings.useReranker,
+        useMultiIntent: initialSettings.useMultiIntent,
+      },
+    });
+  }, [
+    query,
+    resultCount,
+    initialSettings.retrieval,
+    initialSettings.scope,
+    initialSettings.useReranker,
+    initialSettings.useMultiIntent,
+  ]);
 
   function navigate() {
     const form = formRef.current;

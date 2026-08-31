@@ -330,6 +330,7 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
               initialSettings={initialSettings}
               popularQueries={popularQueries}
               query={query}
+              resultCount={result ? result.matches.length : null}
               sectionTypeOptions={SECTION_TYPE_OPTIONS}
             />
           </div>
@@ -454,6 +455,7 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
                       : null
                   }
                   rank={index + 1}
+                  resultCount={result.matches.length}
                 />
               ))}
             </section>

@@ -39,6 +39,13 @@ import {
 import { BEX_SUGGESTIONS } from '~/lib/bex/constants';
 import { mapApiMessageToChatMessage } from '~/lib/bex/map-api-messages';
 import { loadUiCache, saveUiCache } from '~/lib/bex/sessions';
+import {
+  logBexChatConversationCreated,
+  logBexChatConversationDeleted,
+  logBexChatConversationExported,
+  logBexChatFeedbackSubmitted,
+  logBexChatMessageSent,
+} from '~/lib/event-logging/bex-events';
 import supportedModels, {
   MODEL_DESCRIPTIONS,
   type BexModelTag,
@@ -461,7 +468,20 @@ export function BexChatApp({
             ),
           );
           setActiveId(createdConversationId);
+          // B0-761 — analytics tag, fire-and-forget.
+          logBexChatConversationCreated({
+            conversationId: createdConversationId,
+          });
         }
+
+        // B0-761 — prompt length only; the prompt text never leaves as event meta.
+        logBexChatMessageSent({
+          conversationId: convId,
+          promptLength: trimmed.length,
+          model,
+          agentMode,
+          useValidator,
+        });
 
         const reply = await apiPostBexChatStream({
           conversationId: convId,
@@ -554,6 +574,8 @@ export function BexChatApp({
         ...prev.filter((s) => s.id !== id),
       ]);
       setActiveId(id);
+      // B0-761 — analytics tag, fire-and-forget.
+      logBexChatConversationCreated({ conversationId: id });
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : 'Could not start chat.');
     }
@@ -563,6 +585,8 @@ export function BexChatApp({
     async (id: string) => {
       try {
         await apiDeleteConversation(id);
+        // B0-761 — analytics tag, fire-and-forget.
+        logBexChatConversationDeleted({ conversationId: id });
         const list = await fetchConversationList({
           showTestRuns,
           userFilter: userFilterId,
@@ -615,6 +639,13 @@ export function BexChatApp({
       setLoadError(null);
       try {
         await apiSubmitMessageFeedback(input);
+        // B0-761 — rating + reason code only; `input.comment` is free text and is never logged.
+        logBexChatFeedbackSubmitted({
+          conversationId: activeId,
+          messageId: input.messageId,
+          rating: input.rating,
+          reasonCode: input.reasonCode,
+        });
         await refreshConversation(activeId);
       } catch (error) {
         setLoadError(
@@ -690,6 +721,11 @@ export function BexChatApp({
     link.click();
     link.remove();
     URL.revokeObjectURL(url);
+    // B0-761 — analytics tag, fire-and-forget.
+    logBexChatConversationExported({
+      conversationId: activeConversation.id,
+      format: 'json',
+    });
   };
 
   return (

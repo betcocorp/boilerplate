@@ -1,8 +1,8 @@
 import { TrendingDown, TrendingUp } from 'lucide-react';
 
-import { gradeFromScore } from '~/lib/tests/report/metrics';
 import { formatScoreDelta } from '~/lib/tests/format';
 import type { GoldenSetMetrics } from '~/lib/tests/golden-set-metrics';
+import { gradeFromScore } from '~/lib/tests/report/metrics';
 
 const EM_DASH = '—';
 
@@ -42,7 +42,8 @@ export function GoldenSetMetricsCards({ metrics }: GoldenSetMetricsCardsProps) {
           {metrics.totalFailingPrompts}
         </p>
         <p className="mt-1 text-xs text-slate-500">
-          across {metrics.goldenSetCount} golden set{metrics.goldenSetCount === 1 ? '' : 's'}
+          across {metrics.goldenSetCount} golden set
+          {metrics.goldenSetCount === 1 ? '' : 's'}
         </p>
       </div>
 
@@ -85,10 +86,12 @@ export function GoldenSetMetricsCards({ metrics }: GoldenSetMetricsCardsProps) {
             );
           })()
         ) : (
-          <p className="mt-2 text-2xl font-semibold tabular-nums text-slate-900">{EM_DASH}</p>
+          <p className="mt-2 text-2xl font-semibold tabular-nums text-slate-900">
+            {EM_DASH}
+          </p>
         )}
         <p className="mt-1 text-xs text-slate-500">
-          latest run avg vs. previous run avg, across golden sets
+          latest run avg vs. previous overall avg, across golden sets
         </p>
       </div>
 
@@ -105,7 +108,8 @@ export function GoldenSetMetricsCards({ metrics }: GoldenSetMetricsCardsProps) {
           </div>
           <div className="pt-1 text-xs text-slate-600">
             <span className="text-slate-500">
-              TTFT: {formatMs(metrics.averageTtft)} · Elapsed: {formatMs(metrics.averageElapsed)}
+              TTFT: {formatMs(metrics.averageTtft)} · Elapsed:{' '}
+              {formatMs(metrics.averageElapsed)}
             </span>
           </div>
         </div>

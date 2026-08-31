@@ -4,6 +4,7 @@ import AzureADProvider from "next-auth/providers/azure-ad";
 
 import { setAuthUserDetails } from "~/lib/actions/cookies";
 import { AUTH_SESSION_MAX_AGE_SECONDS } from "~/lib/cookies-config";
+import { logServerEvent } from "~/lib/event-logging/log-server-event";
 import { logError, logInfo, logWarn } from "~/lib/observability/logger";
 import {
   isPermissionsEnforced,
@@ -70,6 +71,14 @@ async function gateSignIn(params: {
     userId,
     email,
     detail: { rejection },
+  });
+
+  // B0-761 — usage analytics. Never carries a credential; `fields` is the same metadata the
+  // structured log above emits. Written directly (not via POST /api/events/log): sign-in runs
+  // before a session cookie exists, so the HTTP path would 401. Swallows its own failures.
+  await logServerEvent("analytics.user.login.failure", {
+    ...fields,
+    userId: userId ?? null,
   });
 
   return enforced ? rejection : true;
@@ -205,6 +214,15 @@ export const authOptions: NextAuthOptions = {
           userId: appUser.USER_ID,
           groups: permission_groups,
           permissionCount: permissions.length,
+        });
+
+        // B0-761 — usage analytics, emitted only once the prefetch above has succeeded so a
+        // logging failure can never sit between sign-in and the cookie/permission write.
+        await logServerEvent("analytics.user.login.success", {
+          userId: appUser.USER_ID,
+          email,
+          name: user?.name ?? null,
+          permission_groups,
         });
       } catch (error) {
         logError("auth.login.prefetch_failed", {

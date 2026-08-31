@@ -15,12 +15,19 @@ import {
   SelectValue,
 } from '~/components/ui/select';
 import { WebSearchResultsSkeleton } from '~/components/admin/web-search/WebSearchResultsSkeleton';
+import {
+  logSearchResultClick,
+  logSearchSubmit,
+} from '~/lib/event-logging/search-events';
 import { apiWebSearch } from '~/lib/websearch/websearch-api-client';
 import { getErrorMessage } from '~/lib/utils';
 import type {
   WebSearchDepth,
   WebSearchResponse,
 } from '~/lib/websearch/websearch-schemas';
+
+/** B0-761 — stable analytics surface id for this tester. */
+const WEB_SEARCH_SURFACE = 'web-search';
 
 export function WebSearchTester() {
   const [query, setQuery] = useState('');
@@ -50,6 +57,14 @@ export function WebSearchTester() {
       });
       setResponse(result);
       setRecent((prev) => [q, ...prev.filter((item) => item !== q)].slice(0, 8));
+      // B0-761 — query length only; the query text is never logged.
+      logSearchSubmit({
+        entityType: 'web',
+        resultCount: result.results.length,
+        queryLength: q.length,
+        surface: WEB_SEARCH_SURFACE,
+        extra: { depth },
+      });
     } catch (err) {
       setError(getErrorMessage(err, 'Web search failed'));
       setResponse(null);
@@ -173,7 +188,7 @@ export function WebSearchTester() {
             </p>
           ) : (
             <ul className="space-y-2">
-              {response.results.map((result) => (
+              {response.results.map((result, index) => (
                 <li
                   className="rounded-2xl border border-border/60 bg-background p-3"
                   key={result.url}
@@ -182,6 +197,16 @@ export function WebSearchTester() {
                     <a
                       className="flex min-w-0 items-center gap-1 font-medium text-foreground hover:underline"
                       href={result.url}
+                      onClick={() => {
+                        // B0-761 — analytics tag, fire-and-forget.
+                        logSearchResultClick({
+                          entityType: 'web',
+                          rank: index + 1,
+                          resultId: result.url,
+                          resultCount: response.results.length,
+                          surface: WEB_SEARCH_SURFACE,
+                        });
+                      }}
                       rel="noreferrer"
                       target="_blank"
                     >

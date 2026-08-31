@@ -1,13 +1,14 @@
 import { Rocket, Search } from 'lucide-react';
 import { cookies } from 'next/headers';
 import Link from 'next/link';
-import type { ReactNode } from 'react';
+import { Suspense, type ReactNode } from 'react';
 
 import { AdminAccountMenu } from '~/components/admin/AdminAccountMenu';
 import { AdminNavAutoClose } from '~/components/admin/AdminNavAutoClose';
 import { AdminScrollableMain } from '~/components/admin/AdminScrollableMain';
 import { AdminSidebarNav } from '~/components/admin/AdminSidebarNav';
 import { EventCountdown } from '~/components/admin/EventCountdown';
+import { PageViewLogger } from '~/components/analytics/PageViewLogger';
 import UserSwitcher from '~/components/permissions/UserSwitcher';
 import { Button } from '~/components/ui/button';
 import {
@@ -43,6 +44,10 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
       className="h-svh overflow-hidden bg-muted/40"
       defaultOpen={defaultOpen}
     >
+      {/* B0-761 — page-view analytics. Suspense-wrapped because it reads useSearchParams. */}
+      <Suspense fallback={null}>
+        <PageViewLogger />
+      </Suspense>
       <TooltipProvider delayDuration={0}>
         <Sidebar className="border-r border-border/60" collapsible="icon">
           <SidebarHeader className="p-3">
