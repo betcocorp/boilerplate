@@ -70,6 +70,8 @@ const STRING_SETTINGS = [
   // raising it multiplies grading cost and wall clock by that many passes.
   'REPORT_GRADING_PASSES',
   'REPORT_CONSISTENCY_SPREAD_THRESHOLD',
+  // B0-765 — model tag for run-report case grading + Top-3 findings synthesis.
+  'REPORT_GRADING_MODEL',
 ];
 
 export function SettingsPanel() {

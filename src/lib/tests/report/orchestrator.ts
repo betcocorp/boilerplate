@@ -1,4 +1,5 @@
 import { resolveResponsesModel } from '~/lib/openai/client';
+import { getStringSetting } from '~/lib/settings/settings-service';
 import {
   getTestById,
   getTestItemsByTestId,
@@ -16,7 +17,8 @@ import { renderReportMarkdown } from './render';
 import { emptyReportState, parseReportState, type CaseScore, type ReportState } from './schemas';
 import { synthesizeReportFindings } from './synthesizer';
 
-const MODEL_TAG = 'gpt-4.1';
+/** B0-765 — fallback only if the `REPORT_GRADING_MODEL` settings row is missing/unreadable. */
+const DEFAULT_MODEL_TAG = 'gpt-4.1';
 /** Concurrent grading calls in flight, counted in (case, pass) units — not in cases. */
 const BATCH_SIZE = 5;
 /** Leaves headroom under the route's `maxDuration = 300` for the final save + response. */
@@ -72,6 +74,7 @@ export function pendingPasses(items: TestItemRecord[], state: ReportState): Pend
 async function scoreOnePass(
   item: TestItemRecord,
   resultItem: TestResultItemRecord | undefined,
+  modelTag: string,
 ): Promise<CaseScore> {
   const responseText = resultItem?.response_text?.trim();
   if (!resultItem) {
@@ -100,7 +103,7 @@ async function scoreOnePass(
     expectedSources: item.expected_sources,
     expectedShouldAnswer: item.expected_should_answer,
     actualResponseText: responseText,
-    modelTag: MODEL_TAG,
+    modelTag,
   });
 }
 
@@ -110,6 +113,7 @@ async function scoreRemainingCases(
   resultItemByTestItemId: Map<string, TestResultItemRecord>,
   state: ReportState,
   deadline: number,
+  modelTag: string,
 ): Promise<ReportState> {
   const pending = pendingPasses(items, state);
 
@@ -119,7 +123,7 @@ async function scoreRemainingCases(
     const batch = pending.slice(i, i + BATCH_SIZE);
     const results = await Promise.all(
       batch.map(async ({ item, passIndex }) => {
-        const score = await scoreOnePass(item, resultItemByTestItemId.get(item.id));
+        const score = await scoreOnePass(item, resultItemByTestItemId.get(item.id), modelTag);
         return { itemId: item.id, passIndex, score } as const;
       }),
     );
@@ -162,7 +166,10 @@ export async function generateReport(testResultId: string): Promise<ReportState>
 
   const resultItemByTestItemId = indexLatestResultItems(resultItems);
 
-  const model = resolveResponsesModel(MODEL_TAG);
+  // B0-765 — read once per call so a report already in flight can't have half its cases graded
+  // on one model and the other half on a mid-run settings change.
+  const modelTag = await getStringSetting('REPORT_GRADING_MODEL', DEFAULT_MODEL_TAG);
+  const model = resolveResponsesModel(modelTag);
   // B0-719/B0-720 — read once, and only ever written into a *fresh* state. A report already
   // part-way through keeps the pass count and threshold it started with, so changing the setting
   // mid-report can never leave one half of its cases graded three times and the other half once.
@@ -180,7 +187,14 @@ export async function generateReport(testResultId: string): Promise<ReportState>
   await saveReportState(testResultId, state);
 
   try {
-    state = await scoreRemainingCases(testResultId, items, resultItemByTestItemId, state, deadline);
+    state = await scoreRemainingCases(
+      testResultId,
+      items,
+      resultItemByTestItemId,
+      state,
+      deadline,
+      modelTag,
+    );
 
     if (state.completedCases < state.totalCases) {
       // Time budget exhausted with cases still pending — leave status 'scoring' so the caller
@@ -221,7 +235,7 @@ export async function generateReport(testResultId: string): Promise<ReportState>
         ] as const;
       }),
     );
-    const synthesis = await synthesizeReportFindings(metrics, findingsByCaseId, MODEL_TAG);
+    const synthesis = await synthesizeReportFindings(metrics, findingsByCaseId, modelTag);
     state.synthesis = synthesis;
 
     const generatedAt = new Date().toISOString();
