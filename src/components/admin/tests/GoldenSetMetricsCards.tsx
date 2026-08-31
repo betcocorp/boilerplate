@@ -1,4 +1,7 @@
+import { TrendingDown, TrendingUp } from 'lucide-react';
+
 import { gradeFromScore } from '~/lib/tests/report/metrics';
+import { formatScoreDelta } from '~/lib/tests/format';
 import type { GoldenSetMetrics } from '~/lib/tests/golden-set-metrics';
 
 const EM_DASH = '—';
@@ -54,17 +57,39 @@ export function GoldenSetMetricsCards({ metrics }: GoldenSetMetricsCardsProps) {
         <p className="mt-1 text-xs text-slate-500">golden set average</p>
       </div>
 
-      {/* Card 3: Score change percentage */}
+      {/* Card 3: Score change (avg of each golden set's latest run vs. its previous run) */}
       <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <p className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">
           Score change
         </p>
-        <p className="mt-2 text-2xl font-semibold tabular-nums text-slate-900">
-          {metrics.scoreChangePercent !== null
-            ? `${metrics.scoreChangePercent > 0 ? '+' : ''}${metrics.scoreChangePercent.toFixed(1)}%`
-            : EM_DASH}
+        {metrics.scoreChangePoints !== null ? (
+          (() => {
+            const delta = metrics.scoreChangePoints;
+            const isUp = delta > 0;
+            const isFlat = delta === 0;
+            const Icon = isUp ? TrendingUp : TrendingDown;
+            const colorClass = isFlat
+              ? 'text-slate-900'
+              : isUp
+                ? 'text-emerald-600'
+                : 'text-red-600';
+            const sign = delta > 0 ? '+' : delta < 0 ? '−' : '';
+            return (
+              <p
+                className={`mt-2 inline-flex items-center gap-1 text-2xl font-semibold tabular-nums ${colorClass}`}
+              >
+                {sign}
+                {formatScoreDelta(Math.abs(delta))}
+                {!isFlat && <Icon aria-hidden className="h-5 w-5" />}
+              </p>
+            );
+          })()
+        ) : (
+          <p className="mt-2 text-2xl font-semibold tabular-nums text-slate-900">{EM_DASH}</p>
+        )}
+        <p className="mt-1 text-xs text-slate-500">
+          latest run avg vs. previous run avg, across golden sets
         </p>
-        <p className="mt-1 text-xs text-slate-500">vs previous run</p>
       </div>
 
       {/* Card 4: Pass % avg + TTFT/Elapsed avg */}
