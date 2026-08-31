@@ -3,6 +3,7 @@
 import {
   BanknoteArrowDown,
   BookOpen,
+  ChartNoAxesCombined,
   EllipsisVertical,
   KeyRound,
   LogOut,
@@ -107,6 +108,11 @@ export function AdminAccountMenu({
   const userName = session?.user?.name;
   const userEmail = session?.user?.email;
 
+  // B0-761 — application usage dashboard (`event_logging` analytics).
+  const showAnalytics = hasPermission(
+    permissions,
+    PERMISSIONS.NAVIGATION_SIDEBAR_USER_ANALYTICS,
+  );
   const showApiAccess = hasPermission(
     permissions,
     PERMISSIONS.NAVIGATION_SIDEBAR_USER_API_ACCESS,
@@ -155,19 +161,29 @@ export function AdminAccountMenu({
             </div>
           </div>
         </DropdownMenuGroup>
-        {showApiAccess ||
+        {showAnalytics ||
+        showApiAccess ||
         showAccessControl ||
         showChangelog ||
         showSettings ||
         showCostMonitoring ? (
           <DropdownMenuSeparator />
         ) : null}
-        {showApiAccess ||
+        {showAnalytics ||
+        showApiAccess ||
         showAccessControl ||
         showSettings ||
         showCostMonitoring ? (
           <>
             <DropdownMenuGroup>
+              {showAnalytics ? (
+                <DropdownMenuItem asChild>
+                  <Link href="/admin/analytics">
+                    <ChartNoAxesCombined className="size-4" />
+                    Analytics
+                  </Link>
+                </DropdownMenuItem>
+              ) : null}
               {showApiAccess ? (
                 <DropdownMenuSub>
                   <DropdownMenuSubTrigger>

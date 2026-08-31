@@ -547,6 +547,36 @@ export type Database = {
         }
         Relationships: []
       }
+      event_logging: {
+        Row: {
+          created_at: string
+          event: string
+          id: string
+          meta: Json
+          sentry: Json
+          session_id: string | null
+          user_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          event: string
+          id?: string
+          meta?: Json
+          sentry?: Json
+          session_id?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          event?: string
+          id?: string
+          meta?: Json
+          sentry?: Json
+          session_id?: string | null
+          user_id?: string | null
+        }
+        Relationships: []
+      }
       group_permission: {
         Row: {
           created_at: string
@@ -1839,6 +1869,10 @@ export type Database = {
           members_removed: number
           permissions_removed: number
         }[]
+      }
+      event_analytics_summary: {
+        Args: { p_days?: number; p_groups?: string[] }
+        Returns: Json
       }
       get_user_permission_bundle: {
         Args: { p_user_id: string }

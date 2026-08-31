@@ -5,7 +5,11 @@ import Link from 'next/link';
 import { RagDocumentChunkInspectButtons } from '~/components/rag/RagDocumentChunkInspect';
 
 import { Badge } from '~/components/ui/badge';
+import { logSearchResultClick } from '~/lib/event-logging/search-events';
 import type { RagSearchMatch } from '~/lib/rag/search';
+
+/** B0-761 — stable analytics surface id for the RAG semantic-search page. */
+const RAG_SEARCH_SURFACE = 'rag-search';
 
 function truncateText(value: string, maxLength = 320) {
   const trimmed = value.trim();
@@ -21,6 +25,8 @@ type RagSearchResultCardProps = {
   match: RagSearchMatch;
   rank: number;
   productLineHref: string | null;
+  /** Total matches rendered for the current query (B0-761 analytics). */
+  resultCount: number;
 };
 
 /**
@@ -32,8 +38,20 @@ export function RagSearchResultCard({
   match,
   rank,
   productLineHref,
+  resultCount,
 }: RagSearchResultCardProps) {
   const similarityPct = match.similarity * 100;
+
+  // B0-761 — analytics tag for opening a result's document. Fire-and-forget, ids only.
+  const logResultClick = () => {
+    logSearchResultClick({
+      entityType: 'chunk',
+      rank,
+      resultId: match.chunk_id,
+      resultCount,
+      surface: RAG_SEARCH_SURFACE,
+    });
+  };
 
   // B0-684: State for clickable product line field
   const [productLineDocId, setProductLineDocId] = useState<string | null>(null);
@@ -153,6 +171,7 @@ export function RagSearchResultCard({
                   <Link
                     href={`/admin/products/rag/documents/${productLineDocId}`}
                     className="text-primary hover:underline"
+                    onClick={logResultClick}
                   >
                     {productLineKey}
                   </Link>
@@ -180,6 +199,7 @@ export function RagSearchResultCard({
                   <Link
                     href={`/admin/products/rag/documents/${skuDocId}`}
                     className="text-primary hover:underline"
+                    onClick={logResultClick}
                   >
                     {match.sku}
                   </Link>
@@ -206,6 +226,7 @@ export function RagSearchResultCard({
         <Link
           className="inline-flex w-fit rounded-full bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition hover:bg-primary/80"
           href={productLineHref}
+          onClick={logResultClick}
         >
           View RAG product line
         </Link>

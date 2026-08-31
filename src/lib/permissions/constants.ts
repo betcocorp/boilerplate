@@ -23,6 +23,7 @@ export const PERMISSIONS = {
   NAVIGATION_SIDEBAR_EFFICACY: 'navigation.sidebar.efficacy',
   NAVIGATION_SIDEBAR_KNOWLEDGE: 'navigation.sidebar.knowledge',
   NAVIGATION_SIDEBAR_LABELS: 'navigation.sidebar.labels',
+  NAVIGATION_SIDEBAR_USER_ANALYTICS: 'navigation.sidebar.user.analytics',
   NAVIGATION_SIDEBAR_USER_API_ACCESS: 'navigation.sidebar.user.api_access',
   NAVIGATION_SIDEBAR_USER_CHANGELOG: 'navigation.sidebar.user.changelog',
   NAVIGATION_SIDEBAR_USER_SETTINGS: 'navigation.sidebar.user.settings',

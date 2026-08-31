@@ -22,7 +22,14 @@ import {
   SelectValue,
 } from '~/components/ui/select';
 import { Skeleton } from '~/components/ui/skeleton';
+import {
+  logSearchResultClick,
+  logSearchSubmit,
+} from '~/lib/event-logging/search-events';
 import { lookupCrossReferenceInputSchema } from '~/lib/tools/tool-schemas';
+
+/** B0-761 — stable analytics surface id for this tester. */
+const XREF_SEARCH_SURFACE = 'cross-reference-tester';
 
 type MatchRow = {
   legacyRowId?: string | null;
@@ -222,6 +229,14 @@ export function ProductCrossReferenceTester() {
       }
 
       setResult(data as LookupOk);
+      // B0-761 — lengths and counts only; the brand/product text is never logged.
+      logSearchSubmit({
+        entityType: 'cross_reference',
+        resultCount: data.matches.length,
+        queryLength: parsed.data.brand.length + parsed.data.productName.length,
+        surface: XREF_SEARCH_SURFACE,
+        extra: { fallbackRecommended: data.fallbackRecommended === true },
+      });
     } catch {
       setError('Network error');
     } finally {
@@ -376,6 +391,17 @@ export function ProductCrossReferenceTester() {
                           target="_blank"
                           rel="noreferrer"
                           className="font-medium text-primary underline-offset-4 hover:underline"
+                          onClick={() => {
+                            // B0-761 — analytics tag, fire-and-forget.
+                            logSearchResultClick({
+                              entityType: 'cross_reference',
+                              rank: i + 1,
+                              resultId:
+                                m.legacyRowId ?? m.productKey ?? String(i + 1),
+                              resultCount: result.matches.length,
+                              surface: XREF_SEARCH_SURFACE,
+                            });
+                          }}
                         >
                           {m.productUrl}
                         </a>
