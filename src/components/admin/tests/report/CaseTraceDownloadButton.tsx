@@ -1,6 +1,6 @@
 'use client';
 
-import { Download, Loader2 } from 'lucide-react';
+import { Download, Eye, Loader2 } from 'lucide-react';
 import { type MouseEvent, useState } from 'react';
 import { toast } from 'sonner';
 
@@ -31,7 +31,7 @@ export function traceExportFilename(caseId: string, workflowRunId: string): stri
   return `case-${caseShort}-run-trace-${run}.json`;
 }
 
-const BUTTON_CLASS =
+export const BUTTON_CLASS =
   'inline-flex size-7 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-700 focus-visible:ring-2 focus-visible:ring-sky-500/40 focus-visible:outline-none disabled:cursor-not-allowed disabled:border-slate-100 disabled:text-slate-300 disabled:hover:bg-white print:hidden';
 
 export type CaseTraceDownloadButtonProps = {
@@ -101,7 +101,7 @@ export function CaseTraceDownloadButton({
       className={cn(BUTTON_CLASS, className)}
       disabled={loading}
       onClick={handleClick}
-      title={loading ? 'Preparing trace report…' : 'Download this case’s trace report (JSON)'}
+      title={loading ? 'Preparing trace report...' : 'Download this case\'s trace report (JSON)'}
       type="button"
     >
       {loading ? (
@@ -109,6 +109,54 @@ export function CaseTraceDownloadButton({
       ) : (
         <Download aria-hidden className="size-3.5" />
       )}
+    </button>
+  );
+}
+
+export type CaseTraceViewButtonProps = {
+  /** The workflow run id; null when none was recorded. */
+  workflowRunId: string | null;
+  className?: string;
+};
+
+export function CaseTraceViewButton({
+  workflowRunId,
+  className,
+}: CaseTraceViewButtonProps) {
+  function handleClick(event: MouseEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!workflowRunId) return;
+
+    window.open(
+      `/admin/observability/${encodeURIComponent(workflowRunId)}`,
+      '_blank',
+    );
+  }
+
+  if (!workflowRunId) {
+    return (
+      <button
+        aria-label="Trace report unavailable"
+        className={cn(BUTTON_CLASS, className)}
+        disabled
+        title="No workflow run was recorded for this case"
+        type="button"
+      >
+        <Eye aria-hidden className="size-3.5" />
+      </button>
+    );
+  }
+
+  return (
+    <button
+      aria-label="View trace report"
+      className={cn(BUTTON_CLASS, className)}
+      onClick={handleClick}
+      title="View this case\'s trace report in a new tab"
+      type="button"
+    >
+      <Eye aria-hidden className="size-3.5" />
     </button>
   );
 }

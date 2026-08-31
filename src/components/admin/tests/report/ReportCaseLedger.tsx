@@ -5,7 +5,10 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { type ReactNode, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 
 import { BexStreamdown } from '~/components/bex/BexStreamdown';
-import { CaseTraceDownloadButton } from '~/components/admin/tests/report/CaseTraceDownloadButton';
+import {
+  CaseTraceDownloadButton,
+  CaseTraceViewButton,
+} from '~/components/admin/tests/report/CaseTraceDownloadButton';
 import {
   CONCEPT_MARKER_LEGEND,
   caseMarkers,
@@ -710,7 +713,10 @@ function CaseRow({
           )}
         </span>
         {canDownloadTrace ? (
-          <CaseTraceDownloadButton caseId={c.id} workflowRunId={c.workflowRunId} />
+          <div className="flex gap-1">
+            <CaseTraceViewButton workflowRunId={c.workflowRunId} />
+            <CaseTraceDownloadButton caseId={c.id} workflowRunId={c.workflowRunId} />
+          </div>
         ) : null}
       </summary>
 
