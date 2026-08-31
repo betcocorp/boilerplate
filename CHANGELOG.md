@@ -1,3 +1,15 @@
+# [2.18.0](https://github.com/betcocorp/bex2.0/compare/v2.17.0...v2.18.0) (2026-08-31)
+
+
+### Bug Fixes
+
+* **B0-golden-set-metrics:** scope aggregate metrics to latest run per golden set, add score change ([077d4a2](https://github.com/betcocorp/bex2.0/commit/077d4a28d7ec6a5cc850f1929ec75566130a8284))
+
+
+### Features
+
+* **B0-761:** port c360 event analytics into Bex with an /admin/analytics dashboard ([3864db3](https://github.com/betcocorp/bex2.0/commit/3864db31709b9516f876e5b659e80aa1f25430bd))
+
 # [2.17.0](https://github.com/betcocorp/bex2.0/compare/v2.16.0...v2.17.0) (2026-08-30)
 
 
