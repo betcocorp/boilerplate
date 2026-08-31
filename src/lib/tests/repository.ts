@@ -95,7 +95,7 @@ export async function listTests(includeArchived = false) {
   // Both roll-ups are single, whole-table queries folded in memory — never a per-test fan-out
   // (B0-585 decommissioned that). The score query projects only the scalar JSON path so the heavy
   // `report_state.caseScores` prose stays in Postgres.
-  const [completionCounts, reportScores] = await Promise.all([
+  const [completionCounts, reportScores, latestRunScores] = await Promise.all([
     supabase
       .from('test_results')
       .select('test_id')
@@ -107,6 +107,11 @@ export async function listTests(includeArchived = false) {
       .from('test_results')
       .select('test_id, overall_avg:report_state->overall->>avg')
       .eq('report_state->>status', 'completed'),
+    supabase
+      .from('test_results')
+      .select('test_id, overall_avg:report_state->overall->>avg, created_at')
+      .eq('report_state->>status', 'completed')
+      .order('created_at', { ascending: false }),
   ]);
 
   const countsByTestId = new Map<string, number>();
@@ -132,6 +137,27 @@ export async function listTests(includeArchived = false) {
     scoreTotalsByTestId.set(row.test_id, totals);
   }
 
+  // Latest run score per test (first result after ordering by created_at DESC)
+  const latestRunScoreByTestId = new Map<string, number | null>();
+  const latestScoreData = assertNoError(latestRunScores) || [];
+  const seenTestIds = new Set<string>();
+  for (const row of latestScoreData as Array<{ test_id: string; overall_avg: string | null }>) {
+    if (seenTestIds.has(row.test_id)) {
+      continue; // Already found the latest for this test
+    }
+    seenTestIds.add(row.test_id);
+    if (typeof row.overall_avg !== 'string' || row.overall_avg.trim() === '') {
+      latestRunScoreByTestId.set(row.test_id, null);
+      continue;
+    }
+    const avg = Number(row.overall_avg);
+    if (!Number.isFinite(avg)) {
+      latestRunScoreByTestId.set(row.test_id, null);
+      continue;
+    }
+    latestRunScoreByTestId.set(row.test_id, Math.round(avg * 10) / 10);
+  }
+
   return tests.map((test) => {
     const totals = scoreTotalsByTestId.get(test.id);
     return {
@@ -145,6 +171,7 @@ export async function listTests(includeArchived = false) {
           ? Math.round((totals.sum / totals.count) * 10) / 10
           : null,
       scored_runs_count: totals?.count ?? 0,
+      latest_run_score: latestRunScoreByTestId.get(test.id) ?? null,
     };
   }) as TestRecordWithCompletionCount[];
 }

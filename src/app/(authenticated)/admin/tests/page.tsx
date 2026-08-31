@@ -107,9 +107,10 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
                 <TableHead>Name</TableHead>
                 <TableHead>Golden</TableHead>
                 <TableHead>Intended agent</TableHead>
+                <TableHead>Last Run</TableHead>
                 <TableHead>Avg Score</TableHead>
                 <TableHead>Rows</TableHead>
-                <TableHead>Completed runs</TableHead>
+                <TableHead>Runs</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Actions</TableHead>
               </TableRow>
@@ -117,7 +118,7 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
             <TableBody>
               {tests.length === 0 ? (
                 <TableRow>
-                  <TableCell className="text-slate-500" colSpan={8}>
+                  <TableCell className="text-slate-500" colSpan={9}>
                     No datasets uploaded yet.
                   </TableCell>
                 </TableRow>
@@ -173,6 +174,20 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
                     <TableCell
                       className="whitespace-nowrap tabular-nums text-slate-700"
                       title={
+                        test.latest_run_score === null
+                          ? 'No run has a completed report score yet'
+                          : `Latest run score`
+                      }
+                    >
+                      {test.latest_run_score === null
+                        ? '—'
+                        : `${test.latest_run_score.toFixed(1)} (${gradeFromScore(
+                            test.latest_run_score,
+                          )})`}
+                    </TableCell>
+                    <TableCell
+                      className="whitespace-nowrap tabular-nums text-slate-700"
+                      title={
                         test.avg_report_score === null
                           ? 'No run has a completed report score yet'
                           : `Average of ${test.scored_runs_count} scored run${
@@ -182,9 +197,7 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
                     >
                       {test.avg_report_score === null
                         ? '—'
-                        : `${test.avg_report_score.toFixed(1)}/100 (${gradeFromScore(
-                            test.avg_report_score,
-                          )})`}
+                        : `${test.avg_report_score.toFixed(1)}`}
                     </TableCell>
                     <TableCell>{test.row_count}</TableCell>
                     <TableCell>{test.completed_runs_count}</TableCell>

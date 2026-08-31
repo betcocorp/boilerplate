@@ -34,6 +34,8 @@ export type TestRecordWithCompletionCount = TestRecord & {
   avg_report_score: number | null;
   /** B0-630 — how many runs contributed to `avg_report_score`. */
   scored_runs_count: number;
+  /** Latest run's report score, rounded to one decimal. */
+  latest_run_score: number | null;
 };
 export type TestItemRecord = Tables<'test_items'>;
 export type TestResultRecord = Tables<'test_results'>;
