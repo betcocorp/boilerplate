@@ -152,16 +152,50 @@ function buildChunkMetadata(row) {
 // ---------------------------------------------------------------------------
 // Supabase
 // ---------------------------------------------------------------------------
+/**
+ * Resolves the PRODUCT_LINE-tier `rag.entity` for a SKU, not the product/SKU-tier entity.
+ *
+ * `get_efficacy_data` (`src/lib/tools/product-tools.ts`) resolves a `productLineLock` for every
+ * dilution question and queries `rag.entity` by that lock's `product_line_key`
+ * (`resolveFastDrawEntityIds` in `~/lib/retrieval/fastdraw-dilution.ts`). It only also resolves a
+ * SKU-specific `productKey` when a product line has exactly one SKU under it — for any multi-SKU
+ * product line (gallon bottles, pails, and the 2L FastDraw variant, which is the common case here),
+ * no `productKey` is passed at all. A chunk attached only to the SKU-tier `product` entity is
+ * therefore unreachable for most of these 40 rows — verified live 2026-09-01 via a real eval run
+ * (5/14 pass) after the first ingestion attached chunks to the wrong tier. `rag.product_line_fact`
+ * (the existing general-dilution fact this field sits beside) is ALSO keyed at product_line tier,
+ * so this matches the established pattern rather than diverging from it.
+ */
 async function resolveEntityBySku(supabase, sku) {
-  const { data, error } = await supabase
+  const { data: productEntity, error: productError } = await supabase
     .schema('rag')
     .from('entity')
     .select('id, product_key, product_line_key, title')
     .eq('entity_type', 'product')
     .eq('sku', sku)
     .maybeSingle();
-  if (error) throw new Error(`entity lookup failed for sku ${sku}: ${error.message}`);
-  return data;
+  if (productError) throw new Error(`product entity lookup failed for sku ${sku}: ${productError.message}`);
+  if (!productEntity) return null;
+  if (!productEntity.product_line_key) {
+    log(`WARNING: product entity for ${sku} (${productEntity.id}) has no product_line_key — falling back to the product-tier entity, which may be unreachable by get_efficacy_data for multi-SKU lines.`);
+    return productEntity;
+  }
+
+  const { data: lineEntity, error: lineError } = await supabase
+    .schema('rag')
+    .from('entity')
+    .select('id, product_key, product_line_key, title')
+    .eq('entity_type', 'product_line')
+    .eq('product_line_key', productEntity.product_line_key)
+    .maybeSingle();
+  if (lineError) {
+    throw new Error(`product_line entity lookup failed for sku ${sku} (product_line_key=${productEntity.product_line_key}): ${lineError.message}`);
+  }
+  if (!lineEntity) {
+    log(`WARNING: no product_line entity found for sku ${sku}'s product_line_key ${productEntity.product_line_key} — falling back to the product-tier entity.`);
+    return productEntity;
+  }
+  return lineEntity;
 }
 
 async function findExistingDilutionChunk(supabase, entityId) {
