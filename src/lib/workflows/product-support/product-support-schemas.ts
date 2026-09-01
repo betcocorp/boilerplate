@@ -101,6 +101,14 @@ export const answerProvenanceSchema = z.enum([
   'revision_pass',
   'validator_rejected_draft_retained',
   'recommendation_engine_decline',
+  /**
+   * B0-779 — the turn's resolved competitor identity (`extractCompetitorProduct`) had neither a
+   * brand nor a confidently-extracted product, so any match line (the backstop's or one the model
+   * drafted after calling `recommend_cross_reference` itself) was discarded in favor of the
+   * standard decline. Distinct from `recommendation_engine_decline`, which is the engine's OWN
+   * verdict on a resolved identity — this fires before the engine's verdict is even trusted.
+   */
+  'competitor_identity_unresolved_decline',
 ]);
 
 export type AnswerProvenance = z.infer<typeof answerProvenanceSchema>;
