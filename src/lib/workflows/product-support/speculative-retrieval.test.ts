@@ -10,6 +10,7 @@ import {
   canReuseSpeculativeSearch,
   classifySpeculativeRetrievalSkip,
   createSpeculativeReuseExecutor,
+  looksLikeExactEfficacyQuestion,
   runSpeculativeRetrieval,
 } from '~/lib/workflows/product-support/speculative-retrieval';
 
@@ -29,6 +30,33 @@ function trace(overrides: Partial<ToolTraceEntry> = {}): ToolTraceEntry {
 
 afterEach(() => {
   vi.unstubAllEnvs();
+});
+
+describe('looksLikeExactEfficacyQuestion (B0-788)', () => {
+  it.each([
+    'What is the dilution ratio for AF315 Disinfectant?',
+    'How many oz per gallon should I use for TOP FLITE?',
+    'What is the mL/L dilution for pH7Q?',
+    'What is the contact time for disinfection?',
+    'What is the required dwell time on this surface?',
+    'What does this product kill? Give me the kill claim.',
+    'What log reduction does this achieve against E. coli?',
+    'What is the EPA registration number and efficacy data?',
+    'How many gallons do I get from a 2-liter FastDraw bottle of pH7 ULTRA?',
+    'What is the gallon yield from a 2-liter FastDraw bottle?',
+    'How many gallons does a 2-liter FastDraw bottle of EXTREME ULTRA Floor Stripper make?',
+  ])('matches an exact fact-shaped question: %s', (message) => {
+    expect(looksLikeExactEfficacyQuestion(message)).toBe(true);
+  });
+
+  it.each([
+    'How do I install a FastDraw dispenser?',
+    'What surfaces is this floor finish approved for?',
+    'How many coats of finish do I need?',
+    'Tell me about your green cleaning products.',
+  ])('does not match a non-fact-shaped question: %s', (message) => {
+    expect(looksLikeExactEfficacyQuestion(message)).toBe(false);
+  });
 });
 
 describe('classifySpeculativeRetrievalSkip (B0-436)', () => {

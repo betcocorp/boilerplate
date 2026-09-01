@@ -27,7 +27,38 @@ import type { ExecuteToolFn, PreloadedEvidence } from '~/lib/openai/responses-ru
  * incidental word rather than the product asked about, and those weak hits were being cited. The
  * evidence and audit paths above are deliberately NOT narrowed — the regulated-claim guardrail must
  * always see the complete evidence set.
+ *
+ * B0-788 — one more exception, and it is a correctness fix, not a citation-narrowing one. Dropping
+ * `tool_choice` to `'auto'` means the model is free to answer straight from the speculative
+ * `search_product_docs` result instead of making the SECOND call both the dilution-specialist prompt
+ * and the shared product-support instructions explicitly require for exact dilution/contact-time/
+ * kill-claim questions (`get_efficacy_data` — a typed-column lookup, not prose retrieval). Verified
+ * live: a 14-item real eval of dilution questions called `get_efficacy_data` ZERO times across every
+ * item; the prompt instruction alone was not enough. `looksLikeExactEfficacyQuestion` below is a
+ * narrow, deterministic keyword check (same style as `classifySpeculativeRetrievalSkip`) the calling
+ * workflow uses to override `'auto'` back to a named-function pin on `get_efficacy_data` for this one
+ * question shape — everything else keeps the B0-436 latency win untouched. Deliberately NOT built by
+ * relaxing `resolveRoundZeroToolChoice`'s `suggestedFirstTool` bias (`~/lib/openai/responses-runtime`):
+ * that mechanism is unused in production (nothing currently threads a `suggestedFirstTool`) and its
+ * own tests pin "leaves an explicit 'auto' toolChoice... untouched" as deliberate B0-512 behavior —
+ * changing shared, tested runtime semantics for one workflow's bug is a bigger, riskier change than
+ * this one call site needs.
  */
+
+/**
+ * B0-788 — questions whose correct answer is an EXACT number from the fact tables
+ * (`get_efficacy_data`), not a paraphrase of retrieved prose: dilution ratios, oz/gal or mL/L
+ * figures, gallon/RTU yield, contact/dwell time, and kill-claim / log-reduction / EPA-registration
+ * questions. Kept deliberately broad (false positives cost one extra, cheap, informative tool call;
+ * false negatives silently reproduce the bug this exists to fix) and deliberately simple (a keyword
+ * match, not an LLM call — this must run before the first model call).
+ */
+const EXACT_EFFICACY_QUESTION_PATTERN =
+  /\b(dilut\w*|oz\.?\s*(?:per|\/)\s*gal\w*|ml\s*(?:per|\/)\s*l\b|contact\s*time|dwell\s*time|kill\s*claim|log\s*reduction|efficacy|epa\s*reg(?:istration)?|yield\w*|gallons?)\b/i;
+
+export function looksLikeExactEfficacyQuestion(userMessage: string): boolean {
+  return EXACT_EFFICACY_QUESTION_PATTERN.test(userMessage);
+}
 
 export const SPECULATIVE_SEARCH_TOOL_NAME = 'search_product_docs';
 

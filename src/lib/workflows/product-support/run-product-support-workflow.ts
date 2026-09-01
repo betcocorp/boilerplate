@@ -117,6 +117,7 @@ import {
   buildPreloadedEvidence,
   buildSpeculativeCallId,
   createSpeculativeReuseExecutor,
+  looksLikeExactEfficacyQuestion,
   runSpeculativeRetrieval,
 } from '~/lib/workflows/product-support/speculative-retrieval';
 import {
@@ -2885,13 +2886,26 @@ export async function runProductSupportWorkflow(input: {
       },
     });
 
+    // B0-788 — the speculative search_product_docs result is prose, not the fact tables. For an
+    // exact dilution/contact-time/kill-claim question, prose alone is not sufficient evidence even
+    // when the model is willing to answer from it — verified live, the model called get_efficacy_data
+    // ZERO times across a 14-item real eval despite the prompt explicitly requiring it. Pin the named
+    // function instead of leaving 'auto' so this one question shape still gets its required second
+    // call; everything else keeps the B0-436 latency win unchanged.
+    const forceEfficacyLookup =
+      Boolean(usableSpeculation) &&
+      looksLikeExactEfficacyQuestion(input.userMessage) &&
+      routeTools.some((tool) => 'name' in tool && tool.name === 'get_efficacy_data');
+
     const toolChoice = forcedCrossReference
       ? ({ type: 'function', name: 'lookup_cross_reference' } as const)
-      : usableSpeculation
-        ? // Round 1 already holds retrieved evidence, so forcing another tool call would re-create
-          // the wasted round this ticket removes.
-          ('auto' as const)
-        : ('required' as const);
+      : forceEfficacyLookup
+        ? ({ type: 'function', name: 'get_efficacy_data' } as const)
+        : usableSpeculation
+          ? // Round 1 already holds retrieved evidence, so forcing another tool call would re-create
+            // the wasted round this ticket removes.
+            ('auto' as const)
+          : ('required' as const);
 
     const preloadedEvidence = usableSpeculation
       ? buildPreloadedEvidence({
