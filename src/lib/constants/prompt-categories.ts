@@ -168,7 +168,7 @@ export const PROMPT_CATEGORIES = [
     label: 'Dispensing Systems',
     group: 'application-chemistry',
     description: 'ProGuard, dispenser hardware, metering tips, installation',
-    inDataset: false,
+    inDataset: true,
   },
   {
     slug: 'dwell-time',

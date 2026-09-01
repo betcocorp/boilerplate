@@ -16,6 +16,10 @@ import {
   renderEfficacyLabReportCitation,
   type EfficacyLabReportCitation,
 } from '~/lib/retrieval/efficacy-lab-report';
+import {
+  fetchFastDrawDilution,
+  type FastDrawDilutionLookup,
+} from '~/lib/retrieval/fastdraw-dilution';
 import { VERIFIED_FACTS_SOURCE_ID } from '~/lib/rag/document-chunk-types';
 import {
   resolveProductEntityByName,
@@ -233,6 +237,25 @@ function sourcePayload(
   }
 
   return docs;
+}
+
+/**
+ * B0-636 — citation entry for a FastDraw-dispenser dilution/yield chunk, pushed onto `sources[]`
+ * the same way `get_efficacy_data` already cites "Verified Product Facts (structured)" and the
+ * efficacy lab report — a distinctly titled entry so the model can tell the two dilution contexts
+ * apart rather than treating them as one value.
+ */
+function fastDrawDilutionSourceEntry(lookup: FastDrawDilutionLookup) {
+  return {
+    documentId: lookup.documentId,
+    chunkId: lookup.chunkId,
+    title: 'FastDraw Dispenser Dilution (structured)',
+    snippet: lookup.documentBody.slice(0, 900),
+    documentBody: lookup.documentBody,
+    documentKind: 'fastdraw_dilution',
+    similarity: 1,
+    confidence: 1,
+  };
 }
 
 const ESCALATION_MAP: Record<string, { summary: string; steps: string[] }> = {
@@ -794,17 +817,20 @@ export async function executeProductTool(
       }
 
       // Out of scope for B0-250: fact/efficacy lookups key on product_line_key only.
-      const { productLineKey, aliasResolution } = await resolveProductEntityWithAliasTelemetry(
-        p.productId,
-        name,
-        auditCtx,
-      );
-      const [facts, labReport] = productLineKey
-        ? await Promise.all([
-            fetchFactsForProductLineKey(productLineKey, p.organism),
-            fetchCurrentEfficacyLabReport(productLineKey, p.organism),
-          ])
-        : [null, null];
+      const { productLineKey, productKey, aliasResolution } =
+        await resolveProductEntityWithAliasTelemetry(p.productId, name, auditCtx);
+      const [facts, labReport, fastDrawLookup] = await Promise.all([
+        productLineKey ? fetchFactsForProductLineKey(productLineKey, p.organism) : Promise.resolve(null),
+        productLineKey
+          ? fetchCurrentEfficacyLabReport(productLineKey, p.organism)
+          : Promise.resolve(null),
+        // B0-636 — FastDraw-dispenser-specific dilution/yield, kept as a DISTINCT sibling field,
+        // never merged into `facts`: for ~8/40 FastDraw SKUs it legitimately disagrees with
+        // `facts.dilutionDisplay` because the two describe different dilution contexts (general use
+        // vs. the FastDraw dispenser).
+        fetchFastDrawDilution(productLineKey, productKey),
+      ]);
+      const fastDrawDilution = fastDrawLookup?.fastDrawDilution ?? null;
 
       if (!facts && !labReport) {
         return {
@@ -814,7 +840,9 @@ export async function executeProductTool(
           productId: p.productId,
           organism: p.organism ?? null,
           facts: null,
+          fastDrawDilution,
           note: 'No verified dilution/efficacy data on file for this product. Do not estimate or infer a value — tell the user the data is not verified.',
+          ...(fastDrawLookup ? { sources: [fastDrawDilutionSourceEntry(fastDrawLookup)] } : {}),
         };
       }
 
@@ -865,6 +893,9 @@ export async function executeProductTool(
               },
             ]
           : []),
+        // B0-636 — distinct citation from "Verified Product Facts (structured)" above, so the
+        // model can tell the general-use dilution and the FastDraw-dispenser dilution apart.
+        ...(fastDrawLookup ? [fastDrawDilutionSourceEntry(fastDrawLookup)] : []),
       ];
 
       return {
@@ -876,6 +907,7 @@ export async function executeProductTool(
         organism: p.organism ?? null,
         facts,
         labReport,
+        fastDrawDilution,
         sources,
       };
     }

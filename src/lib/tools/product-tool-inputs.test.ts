@@ -45,6 +45,14 @@ vi.mock('~/lib/retrieval/efficacy-lab-report', () => ({
   renderEfficacyLabReportCitation: vi.fn(() => 'citation'),
 }));
 
+// B0-636 — FastDraw dispenser-specific dilution/yield lookup used by `get_efficacy_data`. Behaviour
+// for this field is covered in detail by `product-tools-fastdraw-dilution.test.ts`; here it just
+// needs to default to "no chunk found" so the pre-existing input-contract assertions below are
+// unaffected.
+vi.mock('~/lib/retrieval/fastdraw-dilution', () => ({
+  fetchFastDrawDilution: vi.fn(async () => null),
+}));
+
 vi.mock('~/lib/tools/category-lookup', () => ({
   getProductsInCategory: vi.fn(async () => ({ ok: true, adapter: 'test', categoryName: '', products: [] })),
   getProductCategory: vi.fn(async () => ({ ok: true })),
