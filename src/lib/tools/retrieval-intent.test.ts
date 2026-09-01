@@ -29,6 +29,10 @@ describe('classifyRetrievalIntent procedural depth branch', () => {
       // B0-759 follow-up — D-band enumeration asks from the same golden set.
       'Which high-touch points get missed most often when cleaning restrooms?',
       'What is the strongest floor stripper you have?',
+      // B0-781 — RST-016 and VCT-003: adjectival "most common" phrasing and "why didn't" causal
+      // troubleshooting phrasing, neither matched by any pattern before this ticket.
+      'What are the most common mistakes staff make when cleaning restrooms?',
+      "Why didn't all the finish come off when I stripped the VCT floor?",
     ];
 
     for (const query of widened) {
