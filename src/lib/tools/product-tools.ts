@@ -389,6 +389,16 @@ const PROCEDURAL_DEPTH_PATTERNS: readonly RegExp[] = [
    * off when I stripped the VCT floor?", 7 documented causes in one procedural document).
    */
   /\bwhy\s+(?:didn'?t|doesn'?t|wasn'?t|isn'?t|hasn'?t|won'?t)\b/,
+  /**
+   * B0-784 — a compound-subject verification question ("do/does X AND Y both/actually work...")
+   * names two distinct product categories and needs a document that covers both, not the single
+   * narrowest-matching product doc. VCT-087 ("Do green-certified finishes and strippers actually
+   * work as well on VCT?") has an exact-topic answer in one knowledge document ("VCT Green
+   * Certified"), but at the default breadth the narrower per-product stripper docs (much stronger
+   * lexical overlap on "stripper") crowded it out of the returned set entirely — this widens the
+   * candidate pool so the actually-relevant generic document has a chance to surface.
+   */
+  /\b(?:do|does|did)\b[^.?!]{0,40}\band\b[^.?!]{0,60}\b(?:work|perform|hold up|clean(?:s)?\s+as\s+well|last(?:s)?\s+as\s+long)\b/,
 ];
 
 /**
