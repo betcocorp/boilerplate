@@ -558,8 +558,22 @@ export function isClaimLikeQuery(query: string): boolean {
   return CLAIM_LIKE_QUERY_PATTERN.test(query);
 }
 
-function resolveRequiredDocumentKinds(query: string, sectionType: string | null): string[] {
-  if (isClaimLikeQuery(query) || (sectionType && CLAIM_LIKE_SECTION_TYPES.has(sectionType))) {
+/**
+ * B0-786 — `regulatedSectionIntent` is the consolidated signals call's read of "this answer is
+ * label-governed". It is OR'd with the two deterministic checks, NEVER substituted for them: an LLM
+ * miss must only be able to WIDEN label-first grounding, never narrow it. `isClaimLikeQuery` and
+ * `inferSectionTypeFromQuery` remain the floor under this decision.
+ */
+function resolveRequiredDocumentKinds(
+  query: string,
+  sectionType: string | null,
+  regulatedSectionIntent?: boolean,
+): string[] {
+  if (
+    isClaimLikeQuery(query) ||
+    (sectionType && CLAIM_LIKE_SECTION_TYPES.has(sectionType)) ||
+    regulatedSectionIntent === true
+  ) {
     return LABEL_FIRST_REQUIRED_DOCUMENT_KINDS;
   }
   return DEFAULT_REQUIRED_DOCUMENT_KINDS;
@@ -633,6 +647,12 @@ async function runProductKnowledgeQuery(input: {
    * product-line domain. Omit (or pass `[]`) for no restriction.
    */
   excludeKnowledgeCategories?: string[];
+  /**
+   * B0-786 — ADDITIVE label-first signal from the pre-orchestration signals call. OR'd with the
+   * deterministic checks inside `resolveRequiredDocumentKinds`; ignored entirely when the caller
+   * passes an explicit `requiredDocumentKinds`, exactly like the deterministic checks are.
+   */
+  regulatedSectionIntent?: boolean;
 }): Promise<ProductKnowledgeQueryBase> {
   const retrievalStartedAt = performance.now();
   const limit = input.limit ?? DEFAULT_UNIQUE_DOCUMENT_LIMIT;
@@ -641,7 +661,8 @@ async function runProductKnowledgeQuery(input: {
   const sectionType = input.sectionType?.trim() || null;
   const maxPerDocument = input.maxPerDocument;
   const requiredDocumentKinds =
-    input.requiredDocumentKinds ?? resolveRequiredDocumentKinds(input.query, sectionType);
+    input.requiredDocumentKinds ??
+    resolveRequiredDocumentKinds(input.query, sectionType, input.regulatedSectionIntent);
   const excludeKnowledgeCategories = input.excludeKnowledgeCategories ?? [];
 
   if (explicitKey) {

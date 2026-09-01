@@ -7,25 +7,39 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * other describe block in this file injects its own `runLlm` and never touches this mock.
  */
 const responsesCreateMock = vi.fn();
-vi.mock('~/lib/openai/client', () => ({
-  getOpenAIClient: () => ({
-    responses: { create: (...args: unknown[]) => responsesCreateMock(...args) },
-  }),
-}));
+vi.mock('~/lib/openai/client', async (importOriginal) => {
+  // B0-786 — `resolveRouterModel` puts the settings TAG through the real `resolveResponsesModel`,
+  // so that export must stay genuine here; only the client itself is stubbed.
+  const actual = await importOriginal<typeof import('~/lib/openai/client')>();
+  return {
+    ...actual,
+    getOpenAIClient: () => ({
+      responses: { create: (...args: unknown[]) => responsesCreateMock(...args) },
+    }),
+  };
+});
 
 // B0-638 — BEX_LLM_ROUTER_ENABLED/BEX_LLM_ROUTER_SHADOW_MODE moved to the `settings` table.
 // Default mock just echoes back each call's own `fallback` arg, so every existing test that
 // relied on the old "true"/"false" env-var defaults keeps working unchanged; tests that need a
 // non-default value override with `mockResolvedValueOnce`/`mockImplementationOnce` below.
+// B0-786 — BEX_ROUTER_MODEL/BEX_ROUTER_TIMEOUT_MS moved to the table too; same echo-the-fallback
+// default so every test that never cared about them keeps the documented defaults.
 vi.mock('~/lib/settings/settings-service', () => ({
   getBooleanSetting: vi.fn((_key: string, fallback: boolean) => Promise.resolve(fallback)),
+  getStringSetting: vi.fn((_key: string, fallback: string) => Promise.resolve(fallback)),
+  getNumberSetting: vi.fn((_key: string, fallback: number) => Promise.resolve(fallback)),
 }));
 
-import { getBooleanSetting } from '~/lib/settings/settings-service';
+import {
+  getBooleanSetting,
+  getNumberSetting,
+  getStringSetting,
+} from '~/lib/settings/settings-service';
 import {
   classifyUserIntent,
   computeIntentClassifierCacheKey,
-  DEFAULT_BEX_ROUTER_MODEL,
+  DEFAULT_BEX_ROUTER_MODEL_TAG,
   DEFAULT_BEX_ROUTER_TIMEOUT_MS,
   getIntentClassifierCacheStats,
   intentClassificationSchema,
@@ -33,6 +47,7 @@ import {
   isLlmRouterShadowMode,
   resetIntentClassifierCache,
   resolveRouterModel,
+  resolveRouterModelTag,
   resolveRouterTimeoutMs,
   type PriorTurnMessage,
 } from '~/lib/orchestrator/intent-classifier';
@@ -43,6 +58,8 @@ beforeEach(() => {
   resetIntentClassifierCache();
   responsesCreateMock.mockReset();
   vi.mocked(getBooleanSetting).mockImplementation((_key, fallback) => Promise.resolve(fallback));
+  vi.mocked(getStringSetting).mockImplementation((_key, fallback) => Promise.resolve(fallback));
+  vi.mocked(getNumberSetting).mockImplementation((_key, fallback) => Promise.resolve(fallback));
 });
 
 afterEach(() => {
@@ -101,7 +118,7 @@ describe('classifyUserIntent — B0-504 fallback behavior', () => {
     expect(out.intent).toBe('floor');
     // B0-563 — the live call's usage is attributed, tagged with the model that made it.
     expect(out.usage).toEqual(USAGE);
-    expect(out.model).toBe(resolveRouterModel());
+    expect(out.model).toBe(await resolveRouterModel());
   });
 
   it('degrades to the ambiguous fallback when the LLM call rejects, and never throws', async () => {
@@ -118,7 +135,10 @@ describe('classifyUserIntent — B0-504 fallback behavior', () => {
   });
 
   it('degrades to the ambiguous fallback when the LLM call exceeds BEX_ROUTER_TIMEOUT_MS', async () => {
-    process.env.BEX_ROUTER_TIMEOUT_MS = '10';
+    // B0-786 — the ceiling is a `settings` row now, not an env var.
+    vi.mocked(getNumberSetting).mockImplementation((key, fallback) =>
+      Promise.resolve(key === 'BEX_ROUTER_TIMEOUT_MS' ? 10 : fallback),
+    );
     const runLlm = vi.fn(
       () =>
         new Promise((resolve) => {
@@ -236,7 +256,9 @@ describe('computeIntentClassifierCacheKey', () => {
 
 describe('classifyUserIntent — B0-671 model override', () => {
   it('passes the override through to runLlm and stamps it on the result, leaving resolveRouterModel untouched', async () => {
-    process.env.BEX_ROUTER_MODEL = 'gpt-4o-mini';
+    vi.mocked(getStringSetting).mockImplementation((key, fallback) =>
+      Promise.resolve(key === 'BEX_ROUTER_MODEL' ? 'gpt-4o' : fallback),
+    );
     const runLlm = vi.fn().mockResolvedValue({ parsed: llmResult, usage: USAGE });
 
     const out = await classifyUserIntent(
@@ -253,7 +275,7 @@ describe('classifyUserIntent — B0-671 model override', () => {
       'gpt-4.1',
     );
     expect(out.model).toBe('gpt-4.1');
-    expect(out.model).not.toBe(resolveRouterModel());
+    expect(out.model).not.toBe(await resolveRouterModel());
   });
 
   it('falls back to resolveRouterModel() when the override is omitted — every existing caller is unaffected', async () => {
@@ -270,7 +292,7 @@ describe('classifyUserIntent — B0-671 model override', () => {
       expect.anything(),
       undefined,
     );
-    expect(out.model).toBe(resolveRouterModel());
+    expect(out.model).toBe(await resolveRouterModel());
   });
 
   it('a call with a model override does not read back a classification cached under a different (or no) model for the same message', async () => {
@@ -288,32 +310,48 @@ describe('classifyUserIntent — B0-671 model override', () => {
     );
 
     expect(runLlm).toHaveBeenCalledTimes(2);
-    expect(withoutOverride.model).toBe(resolveRouterModel());
+    expect(withoutOverride.model).toBe(await resolveRouterModel());
     expect(withOverride.model).toBe('gpt-4.1');
   });
 });
 
-describe('B0-506 env-var resolution', () => {
-  it('resolveRouterModel defaults and honors an override', () => {
-    delete process.env.BEX_ROUTER_MODEL;
-    expect(resolveRouterModel()).toBe(DEFAULT_BEX_ROUTER_MODEL);
+describe('B0-786 settings-table resolution', () => {
+  it('resolveRouterModelTag defaults to gpt-4.1 and honors a valid `settings` tag', async () => {
+    expect(await resolveRouterModelTag()).toBe(DEFAULT_BEX_ROUTER_MODEL_TAG);
 
-    process.env.BEX_ROUTER_MODEL = 'gpt-4.1-mini';
-    expect(resolveRouterModel()).toBe('gpt-4.1-mini');
+    vi.mocked(getStringSetting).mockImplementation((key, fallback) =>
+      Promise.resolve(key === 'BEX_ROUTER_MODEL' ? 'gpt-4.1-mini' : fallback),
+    );
+    expect(await resolveRouterModelTag()).toBe('gpt-4.1-mini');
   });
 
-  it('resolveRouterTimeoutMs defaults and rejects invalid overrides', () => {
-    delete process.env.BEX_ROUTER_TIMEOUT_MS;
-    expect(resolveRouterTimeoutMs()).toBe(DEFAULT_BEX_ROUTER_TIMEOUT_MS);
+  it('rejects a stored value that is not a BEX_MODEL_TAGS tag (allowed_values is advisory, not a constraint)', async () => {
+    vi.mocked(getStringSetting).mockImplementation((key, fallback) =>
+      Promise.resolve(key === 'BEX_ROUTER_MODEL' ? 'gpt-4o-mini' : fallback),
+    );
+    expect(await resolveRouterModelTag()).toBe(DEFAULT_BEX_ROUTER_MODEL_TAG);
+  });
 
-    process.env.BEX_ROUTER_TIMEOUT_MS = '500';
-    expect(resolveRouterTimeoutMs()).toBe(500);
+  it('resolveRouterModel resolves the tag to a concrete model id, never the raw tag string', async () => {
+    vi.mocked(getStringSetting).mockImplementation((key, fallback) =>
+      Promise.resolve(key === 'BEX_ROUTER_MODEL' ? 'preview' : fallback),
+    );
+    process.env.BEX_RESPONSES_MODEL = 'gpt-4.1-mini-2026-01-01';
+    expect(await resolveRouterModel()).toBe('gpt-4.1-mini-2026-01-01');
+  });
 
-    process.env.BEX_ROUTER_TIMEOUT_MS = '-5';
-    expect(resolveRouterTimeoutMs()).toBe(DEFAULT_BEX_ROUTER_TIMEOUT_MS);
+  it('resolveRouterTimeoutMs defaults and rejects a non-positive stored value', async () => {
+    expect(await resolveRouterTimeoutMs()).toBe(DEFAULT_BEX_ROUTER_TIMEOUT_MS);
 
-    process.env.BEX_ROUTER_TIMEOUT_MS = 'not-a-number';
-    expect(resolveRouterTimeoutMs()).toBe(DEFAULT_BEX_ROUTER_TIMEOUT_MS);
+    vi.mocked(getNumberSetting).mockImplementation((key, fallback) =>
+      Promise.resolve(key === 'BEX_ROUTER_TIMEOUT_MS' ? 500 : fallback),
+    );
+    expect(await resolveRouterTimeoutMs()).toBe(500);
+
+    vi.mocked(getNumberSetting).mockImplementation((key, fallback) =>
+      Promise.resolve(key === 'BEX_ROUTER_TIMEOUT_MS' ? -5 : fallback),
+    );
+    expect(await resolveRouterTimeoutMs()).toBe(DEFAULT_BEX_ROUTER_TIMEOUT_MS);
   });
 
   it('isLlmRouterEnabled defaults to true (B0-511 cutover) and reads the `settings` row otherwise', async () => {

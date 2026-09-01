@@ -45,6 +45,14 @@ export type ClassifyCompetitorSelfReferenceInput = {
   competitorBrand: string | null;
   competitorProduct: string | null;
   resolveBetcoEntity: (name: string) => Promise<BetcoEntityResolution>;
+  /**
+   * B0-786 — when the consolidated signals call decided these, its verdict is used INSTEAD of the
+   * keyword rules below (`CONVERSION_LIST_PATTERNS`, `CHEMISTRY_TERMS`). Omitted — by a standalone
+   * caller, or by a turn whose signals call degraded — and those rules still decide, so this
+   * module's behaviour without them is byte-identical to before B0-786.
+   */
+  isConversionListAsk?: boolean;
+  competitorIsGenericChemistry?: boolean;
 };
 
 /** Betco and its sub-brands only — see the org rule: never invent sub-brands. */
@@ -128,7 +136,7 @@ function chemistryTermMatch(product: string): string | null {
 export async function classifyCompetitorSelfReference(
   input: ClassifyCompetitorSelfReferenceInput,
 ): Promise<CompetitorSelfReferenceVerdict> {
-  if (isConversionListAsk(input.userMessage)) {
+  if (input.isConversionListAsk ?? isConversionListAsk(input.userMessage)) {
     return {
       suppressed: true,
       reason: 'conversion_list_ask',
@@ -151,7 +159,14 @@ export async function classifyCompetitorSelfReference(
     return { suppressed: false };
   }
 
-  const chemistry = chemistryTermMatch(product);
+  // B0-786 — the signal says WHETHER it is a bare chemistry; the matched text is then the product
+  // string itself (there is no keyword term to report).
+  const chemistry =
+    input.competitorIsGenericChemistry === undefined
+      ? chemistryTermMatch(product)
+      : input.competitorIsGenericChemistry
+        ? product
+        : null;
   if (chemistry) {
     return { suppressed: true, reason: 'chemistry_term', productLineKey: null, matched: chemistry };
   }

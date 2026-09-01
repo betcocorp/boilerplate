@@ -4,10 +4,15 @@ import { z } from 'zod';
 
 import { SME_AGENT_IDS, V1_AGENT_REGISTRY } from '~/lib/agents/agent-registry';
 import { logError } from '~/lib/observability/logger';
-import { getOpenAIClient } from '~/lib/openai/client';
+import { isBexModelTag, type BexModelTag } from '~/lib/constants/models';
+import { getOpenAIClient, resolveResponsesModel } from '~/lib/openai/client';
 import { extractAssistantText } from '~/lib/openai/response-item-parsing';
 import { usageFromResponse } from '~/lib/openai/responses-runtime';
-import { getBooleanSetting } from '~/lib/settings/settings-service';
+import {
+  getBooleanSetting,
+  getNumberSetting,
+  getStringSetting,
+} from '~/lib/settings/settings-service';
 import { SURFACE_VOCABULARY_PROMPT_EXAMPLES } from '~/lib/orchestrator/surface-vocabulary';
 import { PRODUCT_TOOL_NAMES } from '~/lib/tools/tool-schemas';
 
@@ -120,8 +125,12 @@ const llmIntentClassificationSchema = z.object({
  * unreadable from the persisted trace — post-cutover, a fallback silently routes the turn, so the
  * gate record on `/admin/observability` must carry the reason itself.
  */
-/** B0-563 — mirrors `LlmTokenUsage` (`~/lib/openai/responses-runtime.ts`) as a validated shape. */
-const llmTokenUsageSchema = z.object({
+/**
+ * B0-563 — mirrors `LlmTokenUsage` (`~/lib/openai/responses-runtime.ts`) as a validated shape.
+ * B0-786 — exported so the consolidated signals contract (`~/lib/orchestrator/signals`) reuses this
+ * exact shape rather than declaring a second copy of it.
+ */
+export const llmTokenUsageSchema = z.object({
   promptTokens: z.number(),
   completionTokens: z.number(),
   totalTokens: z.number(),
@@ -181,14 +190,13 @@ const JSON_SCHEMA = {
   required: ['intent', 'confidence', 'entities', 'suggestedTool'],
 } as const;
 
-function buildInstructions(): string {
-  const smeLines = V1_AGENT_REGISTRY.map((a) => `- ${a.id}: ${a.description}`).join('\n');
-  return `You classify a single Bex chat user message into exactly one specialist intent so the orchestrator can route it, without running any tools yourself.
-
-SME specialists:
-${smeLines}
-
-Routing rules (apply in order):
+/**
+ * B0-786 — the substantive routing rules, extracted so the consolidated signals prompt
+ * (`~/lib/orchestrator/signals/analyze-turn-signals.ts`) renders the SAME text instead of
+ * keeping a second, silently-diverging copy of it. Only the surrounding output-field
+ * instructions differ between the two prompts.
+ */
+export const SME_ROUTING_RULES_PROMPT = `Routing rules (apply in order):
 1. "cross_reference" is ONLY competitor cross-reference: the message names or clearly refers to a NON-Betco competitor brand or product and wants the Betco equivalent, replacement, or comparison for it. If no competitor product is involved, never use "cross_reference".
 2. Asking to recommend/suggest the best product for a job, task, surface, or situation — with no competitor product named — is a question for the specialist that owns the job: "floor" for floor coatings, finishes, sealers, stripping, scrubbing, burnishing, and maintenance programs (gym, sports, wood, VCT, and concrete floors included); "bathroom" for restroom cleaning, disinfection, and odor control; "dilution" for dispensers, proportioners, metering, and dilution setup. When the job or problem does NOT fit floor/bathroom/dilution's specific domains (i.e. it would otherwise fall to "product" as a generic catch-all) AND the message describes an open-ended JOB, TASK, PROBLEM, or SITUATION for the model to solve — not merely a request to compare or pick among an already-named product category — AND no competitor product is named, use "recommendations" instead of "product". Be conservative: when in doubt between a generic product QUESTION and a recommendation ASK, prefer "product" (or the owning domain specialist).
 
@@ -209,7 +217,16 @@ Routing rules (apply in order):
    - "Why does the grout stay dirty even after we mop it?" → bathroom (diagnosis of a restroom-cleaning problem)
    - "How often should we dust mop the gym?" → floor (frequency question about a sports floor maintenance program)
 3. "Can I use <product> on <surface>?" and other usage/compatibility/how-to questions about a product belong to the specialist that owns the surface or task per rule 2 ("product" when none clearly does) — never "cross_reference", and never "recommendations" either (it is a factual lookup, not a recommendation ask).
-4. Use "ambiguous" only when the message does not clearly match any specialist (small talk, off-topic, or too vague to route).
+4. Use "ambiguous" only when the message does not clearly match any specialist (small talk, off-topic, or too vague to route).`;
+
+function buildInstructions(): string {
+  const smeLines = V1_AGENT_REGISTRY.map((a) => `- ${a.id}: ${a.description}`).join('\n');
+  return `You classify a single Bex chat user message into exactly one specialist intent so the orchestrator can route it, without running any tools yourself.
+
+SME specialists:
+${smeLines}
+
+${SME_ROUTING_RULES_PROMPT}
 
 Output rules:
 - confidence: your calibrated 0-1 belief that "intent" is correct. Do not default to 1; use lower values when the message is short, vague, or could fit more than one specialist.
@@ -231,12 +248,21 @@ const clamp01 = (n: number): number => Math.max(0, Math.min(1, n));
 const MAX_PRIOR_MESSAGES = 8;
 
 // ---------------------------------------------------------------------------------------------
-// B0-506 — env-gated rollout knobs. Follows the `resolveXrefThreshold` / `isConfidenceGatingDisabled`
-// pattern in `confidence-scoring.ts`: read directly off `process.env` each call (no caching of the
-// raw string), invalid/absent → documented default.
+// B0-506 — rollout knobs. B0-786 moved the model and the timeout off `process.env` and into
+// `public.settings` (the B0-638 rule: env is for secrets and runtime-required values; flags,
+// models, thresholds and timeouts are settings rows). Both getters are therefore async now.
 // ---------------------------------------------------------------------------------------------
 
-export const DEFAULT_BEX_ROUTER_MODEL = 'gpt-4o-mini';
+/**
+ * B0-786 — a `BEX_MODEL_TAGS` TAG, not a raw OpenAI model id: `resolveRouterModel` puts it through
+ * `resolveResponsesModel` exactly like `REPORT_GRADING_MODEL` does, so the router picks up the same
+ * env-override/alias layer every other model selection goes through (and so its resolved id keeps
+ * matching a `public.model_pricing` row for the B0-565 cost views).
+ *
+ * The default moved from `gpt-4o-mini` to `gpt-4.1` (product owner, 2026-09-01): ~5x the input and
+ * ~13x the output rate, on a per-turn call, bought for routing/signal accuracy.
+ */
+export const DEFAULT_BEX_ROUTER_MODEL_TAG: BexModelTag = 'gpt-4.1';
 /**
  * Default 5000ms. B0-506 originally set this to 800ms based on the ticket's stated 150-2000ms
  * range, but that range was never measured against a real call — B0-511's cutover rollout found
@@ -253,16 +279,25 @@ export const DEFAULT_BEX_ROUTER_MODEL = 'gpt-4o-mini';
  */
 export const DEFAULT_BEX_ROUTER_TIMEOUT_MS = 5000;
 
-/** Which model `classifyUserIntent` calls. Env override → `DEFAULT_BEX_ROUTER_MODEL`. */
-export function resolveRouterModel(env: NodeJS.ProcessEnv = process.env): string {
-  const raw = env.BEX_ROUTER_MODEL?.trim();
-  return raw || DEFAULT_BEX_ROUTER_MODEL;
+/**
+ * B0-786 — the `BEX_ROUTER_MODEL` settings row, re-validated against `BEX_MODEL_TAGS` before use.
+ * `settings.allowed_values` is advisory metadata the admin API validates writes against, NOT a
+ * database constraint, so an unrecognized stored value falls back to the default tag rather than
+ * being handed to the API as a non-existent model id.
+ */
+export async function resolveRouterModelTag(): Promise<BexModelTag> {
+  const raw = (await getStringSetting('BEX_ROUTER_MODEL', DEFAULT_BEX_ROUTER_MODEL_TAG)).trim();
+  return isBexModelTag(raw) ? raw : DEFAULT_BEX_ROUTER_MODEL_TAG;
+}
+
+/** Which concrete model id `classifyUserIntent` calls: the settings tag through `resolveResponsesModel`. */
+export async function resolveRouterModel(): Promise<string> {
+  return resolveResponsesModel(await resolveRouterModelTag());
 }
 
 /** Router call latency ceiling in ms. Invalid/absent/non-positive → `DEFAULT_BEX_ROUTER_TIMEOUT_MS`. */
-export function resolveRouterTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
-  const raw = env.BEX_ROUTER_TIMEOUT_MS?.trim();
-  const value = raw ? Number(raw) : Number.NaN;
+export async function resolveRouterTimeoutMs(): Promise<number> {
+  const value = await getNumberSetting('BEX_ROUTER_TIMEOUT_MS', DEFAULT_BEX_ROUTER_TIMEOUT_MS);
   return Number.isFinite(value) && value > 0 ? value : DEFAULT_BEX_ROUTER_TIMEOUT_MS;
 }
 
@@ -394,7 +429,7 @@ async function defaultRunLlm(
 
   const res = await client.responses.create(
     {
-      model: model ?? resolveRouterModel(),
+      model: model ?? (await resolveRouterModel()),
       instructions: buildInstructions(),
       input,
       text: {
@@ -493,7 +528,7 @@ async function runLlmClassification(
   deps: ClassifyUserIntentDeps,
   model?: string,
 ): Promise<IntentClassification> {
-  const timeoutMs = resolveRouterTimeoutMs();
+  const timeoutMs = await resolveRouterTimeoutMs();
   const { parsed: raw, usage } = await withRouterTimeout(timeoutMs, (signal) =>
     deps.runLlm(message, priorMessages, signal, model),
   );
@@ -504,7 +539,7 @@ async function runLlmClassification(
     source: 'llm',
     fallbackReason: null,
     usage,
-    model: model ?? resolveRouterModel(),
+    model: model ?? (await resolveRouterModel()),
   };
 }
 
