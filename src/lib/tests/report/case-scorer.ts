@@ -1,4 +1,5 @@
 import { getOpenAIClient, resolveResponsesModel } from '~/lib/openai/client';
+import { samplingParamsFor } from '~/lib/openai/model-capabilities';
 import { extractAssistantText } from '~/lib/openai/response-item-parsing';
 
 import { caseScoreSchema, type CaseScore } from './schemas';
@@ -133,7 +134,7 @@ export async function scoreCase(input: CaseScoringInput): Promise<CaseScore> {
       },
       store: false,
       stream: false,
-      temperature: 0,
+      ...samplingParamsFor(model, { temperature: 0 }),
     });
 
     const text = extractAssistantText(res);

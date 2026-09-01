@@ -2,6 +2,7 @@ import type { Response } from 'openai/resources/responses/responses';
 import { z } from 'zod';
 
 import { getOpenAIClient, resolveResponsesModel } from '~/lib/openai/client';
+import { samplingParamsFor } from '~/lib/openai/model-capabilities';
 import { extractAssistantText } from '~/lib/openai/response-item-parsing';
 
 import type { EvaluatedCase, RateBlock, ReportMetrics } from './metrics';
@@ -288,7 +289,7 @@ async function digestChunkOnce(
     },
     store: false,
     stream: false,
-    temperature: 0.2,
+    ...samplingParamsFor(model, { temperature: 0.2 }),
     max_output_tokens: DIGEST_MAX_OUTPUT_TOKENS,
   });
 
@@ -413,7 +414,7 @@ export async function synthesizeReportFindings(
         },
         store: false,
         stream: false,
-        temperature: 0.2,
+        ...samplingParamsFor(model, { temperature: 0.2 }),
         max_output_tokens: maxOutputTokens,
       })
       .then((res) => parseStructuredResponse(res, reportSynthesisSchema, 'Final synthesis call'));
