@@ -33,6 +33,10 @@ describe('classifyRetrievalIntent procedural depth branch', () => {
       // troubleshooting phrasing, neither matched by any pattern before this ticket.
       'What are the most common mistakes staff make when cleaning restrooms?',
       "Why didn't all the finish come off when I stripped the VCT floor?",
+      // B0-784 — VCT-087: a compound-subject verification question. The exact-topic answer ("VCT
+      // Green Certified") was being crowded out of the default-width candidate set by
+      // narrower, higher-lexical-overlap per-product stripper documents.
+      'Do green-certified finishes and strippers actually work as well on VCT?',
     ];
 
     for (const query of widened) {
