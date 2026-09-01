@@ -163,6 +163,8 @@ function toSource(
 export async function retrieveKnowledgeAssets(input: {
   query: string;
   limit?: number;
+  /** B0-780: see `runProductKnowledgeQuery` (`~/lib/retrieval/product-knowledge.ts`). */
+  excludeKnowledgeCategories?: string[];
 }): Promise<KnowledgeAssetResult> {
   const query = input.query.trim();
   if (!query) {
@@ -179,6 +181,7 @@ export async function retrieveKnowledgeAssets(input: {
     limit: limit * CANDIDATE_CHUNKS_PER_DOCUMENT,
     scope: 'knowledge',
     useHybrid: true,
+    excludeKnowledgeCategories: input.excludeKnowledgeCategories,
   });
 
   const selected = topMatchPerDocument(result.matches, limit);

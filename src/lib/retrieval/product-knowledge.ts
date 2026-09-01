@@ -593,6 +593,8 @@ export async function ragQueryForProductKnowledge(input: {
   /** B0-479: source of `productLineKey`, when the caller resolved it via `resolveProductEntityByName`. */
   productLineKeySource?: ProductEntityResolutionSource;
   skipProductLineResolution?: boolean;
+  /** B0-780: see `runProductKnowledgeQuery`. */
+  excludeKnowledgeCategories?: string[];
 }): Promise<CuratedSource[]> {
   const result = await ragQueryForProductKnowledgeWithMeta(input);
   return result.sources;
@@ -623,6 +625,14 @@ async function runProductKnowledgeQuery(input: {
   maxPerDocument?: number;
   /** Override which document kinds are guaranteed a slot. Default: profile + sds + knowledge. */
   requiredDocumentKinds?: string[];
+  /**
+   * B0-780 — excludes `knowledge`-kind sources whose S3-folder category (see
+   * `deriveKnowledgeCategoryFromS3Key`, `~/lib/rag/search.ts`) is in this list, on every
+   * `searchProductChunks` call this function makes. Set by `resolveKnowledgeCategoryExclusions`
+   * (`~/lib/tools/product-tools.ts`) to bind a floor/bathroom specialist call to its own
+   * product-line domain. Omit (or pass `[]`) for no restriction.
+   */
+  excludeKnowledgeCategories?: string[];
 }): Promise<ProductKnowledgeQueryBase> {
   const retrievalStartedAt = performance.now();
   const limit = input.limit ?? DEFAULT_UNIQUE_DOCUMENT_LIMIT;
@@ -632,6 +642,7 @@ async function runProductKnowledgeQuery(input: {
   const maxPerDocument = input.maxPerDocument;
   const requiredDocumentKinds =
     input.requiredDocumentKinds ?? resolveRequiredDocumentKinds(input.query, sectionType);
+  const excludeKnowledgeCategories = input.excludeKnowledgeCategories ?? [];
 
   if (explicitKey) {
     // B0-272 follow-up: `filter_section_type` is a hard SQL-level filter against
@@ -652,6 +663,7 @@ async function runProductKnowledgeQuery(input: {
       scope: 'all',
       useHybrid: true,
       useReranker: PRODUCT_SUPPORT_RERANK_ENABLED,
+      excludeKnowledgeCategories,
     });
 
     let curated = await curateUniqueDocumentSources(result.matches, {
@@ -680,6 +692,7 @@ async function runProductKnowledgeQuery(input: {
         scope: 'all',
         useHybrid: true,
         useReranker: PRODUCT_SUPPORT_RERANK_ENABLED,
+        excludeKnowledgeCategories,
       });
       searchMsTotal += lineResult.timings.similaritySearchMs;
       rawMatches = lineResult.matches;
@@ -732,6 +745,7 @@ async function runProductKnowledgeQuery(input: {
       scope: 'products',
       useHybrid: true,
       useReranker: PRODUCT_SUPPORT_RERANK_ENABLED,
+      excludeKnowledgeCategories,
     });
 
     const requiredDocumentKindsForSkip = resolveRequiredDocumentKinds(input.query, sectionType);
@@ -789,6 +803,7 @@ async function runProductKnowledgeQuery(input: {
     scope: 'all',
     useHybrid: true,
     useReranker: PRODUCT_SUPPORT_RERANK_ENABLED,
+    excludeKnowledgeCategories,
   });
 
   // B0-693 — a query targeting a specific GHS section (hazard, first aid, dilution/contact-time,
@@ -860,6 +875,7 @@ async function runProductKnowledgeQuery(input: {
       scope: 'all',
       useHybrid: true,
       useReranker: PRODUCT_SUPPORT_RERANK_ENABLED,
+      excludeKnowledgeCategories,
     }),
   ]);
 

@@ -3,6 +3,7 @@ import { isRerankerConfigured, rerankChunks } from '~/lib/rag/rerank';
 import { getOpenAIClient } from '~/lib/openai/client';
 import { getBooleanSetting } from '~/lib/settings/settings-service';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
+import { fetchDocumentSourceRefs } from '~/lib/retrieval/document-assembly';
 const DEFAULT_REWRITE_MODEL = 'gpt-4.1-mini';
 const APPROX_QUERY_THRESHOLD_SHORT = 0.95;
 const APPROX_QUERY_THRESHOLD_LONG = 0.9;
@@ -44,6 +45,17 @@ type SearchProductChunksOptions = {
   useHybrid?: boolean;
   useReranker?: boolean;
   useMultiIntent?: boolean;
+  /**
+   * B0-780 — excludes `document_kind: 'knowledge'` matches whose `metadata.s3_key` folder
+   * (the segment right after `v1-markdown-files/`, e.g. `vct`, `sportszone`, `restroom`) is one
+   * of these categories. Used to bind a floor or bathroom specialist's retrieval to its own
+   * product-line domain so e.g. a wood sport-floor question cannot surface a VCT procedure
+   * document. Never excludes non-`knowledge` matches, and `dilution-control`/`product` are
+   * cross-cutting categories this should never be passed for. See
+   * `deriveKnowledgeCategoryFromS3Key` / `resolveKnowledgeCategoryExclusions`
+   * (`~/lib/tools/product-tools.ts`).
+   */
+  excludeKnowledgeCategories?: string[];
 };
 
 type SearchEmbeddingRow = {
@@ -177,6 +189,59 @@ function resolveSearchScope(scope?: string): {
   }
   const rpcScope = normalizeScope(raw);
   return { requested: rpcScope, rpcScope, documentKindFilter: null };
+}
+
+/**
+ * B0-780 — the S3 folder segment right after `v1-markdown-files/` in a `knowledge`-kind
+ * document's `metadata.s3_key`, e.g. `"v1-markdown-files/vct/01_VCT_Stripping_Failures.md"` ->
+ * `"vct"`. Verified live (2026-09-01): every `document_kind = 'knowledge'` row in `rag.document`
+ * has this segment, and it is a clean, complete category taxonomy — `vct` (38), `dilution-control`
+ * (27), `restroom` (15), `sportszone` (15, wood sport floors), `product` (5). Returns `null` for a
+ * key that doesn't follow this shape (defensive only; not expected on knowledge rows).
+ */
+export function deriveKnowledgeCategoryFromS3Key(s3Key: string | null): string | null {
+  if (!s3Key) return null;
+  const marker = 'v1-markdown-files/';
+  const idx = s3Key.indexOf(marker);
+  if (idx === -1) return null;
+  const rest = s3Key.slice(idx + marker.length);
+  const category = rest.split('/')[0]?.trim();
+  return category ? category : null;
+}
+
+/**
+ * B0-780 — drops `document_kind: 'knowledge'` matches whose S3-folder category is in
+ * `excludedCategories`. Non-`knowledge` matches are never touched (SDS/label/product_line_profile
+ * documents don't carry this taxonomy), and an empty `excludedCategories` list is a no-op that
+ * skips the metadata lookup entirely.
+ */
+async function filterExcludedKnowledgeCategories<
+  T extends { document_id: string; document_kind: string },
+>(matches: T[], excludedCategories: string[]): Promise<T[]> {
+  if (excludedCategories.length === 0) {
+    return matches;
+  }
+
+  const knowledgeDocumentIds = matches
+    .filter((match) => match.document_kind === 'knowledge')
+    .map((match) => match.document_id);
+
+  if (knowledgeDocumentIds.length === 0) {
+    return matches;
+  }
+
+  const excluded = new Set(excludedCategories);
+  const sourceRefs = await fetchDocumentSourceRefs(knowledgeDocumentIds);
+
+  return matches.filter((match) => {
+    if (match.document_kind !== 'knowledge') {
+      return true;
+    }
+    const category = deriveKnowledgeCategoryFromS3Key(
+      sourceRefs.get(match.document_id)?.s3Key ?? null,
+    );
+    return !category || !excluded.has(category);
+  });
 }
 
 /**
@@ -1047,9 +1112,18 @@ export async function searchProductChunks(
   }));
 
   // App-layer scope: keep only the requested document_kind (knowledge/label) before ranking.
-  const kindFilteredMatches = documentKindFilter
+  const kindScopedMatches = documentKindFilter
     ? mappedMatches.filter((match) => match.document_kind === documentKindFilter)
     : mappedMatches;
+
+  // B0-780 — category-binding: drop knowledge documents outside the caller's product-line domain
+  // (e.g. a wood-floor query never sees a `vct`-folder document, and a bathroom-specialist query
+  // never sees `vct`/`sportszone` at all) before ranking, so an excluded document can never win a
+  // retrieval slot ahead of an in-domain one.
+  const kindFilteredMatches = await filterExcludedKnowledgeCategories(
+    kindScopedMatches,
+    options.excludeKnowledgeCategories ?? [],
+  );
 
   // Rerank phase — reorders the candidate pool by cross-encoder relevance.
   // Falls back to cosine order if the API is unavailable.
