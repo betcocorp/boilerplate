@@ -39,6 +39,9 @@ const BOOLEAN_SETTINGS = [
   'BEX_LLM_ROUTER_SHADOW_MODE',
   'BEX_SEMANTIC_ROUTER_ENABLED',
   'BEX_SEMANTIC_ROUTER_SHADOW_MODE',
+  // B0-786 — consolidated pre-orchestration signals analysis. Off = the scattered
+  // intent-classifier + keyword path decides.
+  'BEX_SIGNALS_ANALYSIS_ENABLED',
   'ENABLE_RERANKER',
   // B0-466 — observability alerting (tool-failure rate / golden-set pass rate).
   'ALERT_SENTRY_ENABLED',
@@ -53,6 +56,10 @@ const STRING_SETTINGS = [
   'XREF_RECOMMENDATION_TIMEOUT_MS',
   'COHERE_RERANK_MODEL',
   'ROUTER_TYPE',
+  // B0-786 — model tag + latency ceiling for the intent/signals classifier call; both moved off
+  // process.env per B0-638. BEX_ROUTER_TIMEOUT_MS is numeric (this list renders string and number).
+  'BEX_ROUTER_MODEL',
+  'BEX_ROUTER_TIMEOUT_MS',
   'SEMANTIC_ROUTER_EMBEDDING_MODEL',
   'SEMANTIC_ROUTER_CONFIDENCE_THRESHOLD',
   'SEMANTIC_ROUTER_MARGIN_THRESHOLD',
