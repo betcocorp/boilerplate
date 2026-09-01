@@ -25,8 +25,10 @@ import {
   resolveProductEntityByName,
   type ProductEntityResolutionMode,
   type ProductEntityResolutionResult,
+  type ProductEntityResolutionSource,
   type ResolveProductEntityOptions,
 } from '~/lib/rag/entity-context';
+import type { AnswerShape } from '~/lib/orchestrator/signals/signals-schemas';
 import {
   inferSectionTypeFromQuery,
   inferSectionTypeFromToolName,
@@ -409,9 +411,19 @@ const PROCEDURAL_DEPTH_PATTERNS: readonly RegExp[] = [
 export function classifyRetrievalIntent(
   query: string,
   productName?: string,
+  /**
+   * B0-786 — the consolidated signals call's `answerShape`. When supplied it REPLACES both regex
+   * branches below (the comparison test and `PROCEDURAL_DEPTH_PATTERNS`); when omitted — every
+   * standalone caller, and every turn whose signals call degraded or never ran — the regexes decide
+   * exactly as they did before B0-786. The tunings themselves are unchanged either way.
+   */
+  answerShape?: AnswerShape,
 ): { limit?: number; maxPerDocument?: number; requiredDocumentKinds?: string[] } {
   const q = query.toLowerCase();
-  if (/\bvs\.?\b|\bversus\b|\bcompare\b|\bdifference between\b/.test(q)) {
+  if (
+    answerShape === 'comparison' ||
+    (answerShape === undefined && /\bvs\.?\b|\bversus\b|\bcompare\b|\bdifference between\b/.test(q))
+  ) {
     return { limit: 5, maxPerDocument: 1, requiredDocumentKinds: ['product_line_profile'] };
   }
   if (productName && productName.trim()) {
@@ -435,7 +447,11 @@ export function classifyRetrievalIntent(
    * Net: `limit 6` with the default `maxPerDocument` graded 79.6 with no F; adding depth graded
    * 79.1 with two. Raise width here; do not raise depth without evidence for the specific shape.
    */
-  if (PROCEDURAL_DEPTH_PATTERNS.some((pattern) => pattern.test(q))) {
+  if (
+    answerShape === undefined
+      ? PROCEDURAL_DEPTH_PATTERNS.some((pattern) => pattern.test(q))
+      : answerShape === 'procedure' || answerShape === 'enumeration'
+  ) {
     return { limit: 6 };
   }
   return {};
@@ -598,6 +614,34 @@ async function executeBatchEfficacyData(
   };
 }
 
+/**
+ * B0-786 — signals the consolidated pre-orchestration analysis produced for THIS turn, threaded
+ * from `runProductSupportWorkflow` through `executeToolCall`. Every field is optional and every
+ * consumer below falls back to its pre-B0-786 deterministic behaviour when a field is absent, so a
+ * caller that supplies nothing (unit tests, `/api/v1/agents/*`, a degraded signals call) behaves
+ * exactly as it did before.
+ */
+export type ProductToolTurnOptions = {
+  /** Replaces `PROCEDURAL_DEPTH_PATTERNS` in `classifyRetrievalIntent` when present. */
+  answerShape?: AnswerShape;
+  /**
+   * ADDITIVE grounding signal, OR'd with `inferSectionTypeFromQuery` / `isClaimLikeQuery` inside
+   * `resolveRequiredDocumentKinds` — never substituted for them. It can only widen label-first
+   * ordering, never narrow it.
+   */
+  regulatedSectionIntent?: boolean;
+  /**
+   * B0-786 product lock — an explicit product-line filter the workflow resolved BEFORE retrieval
+   * (from the signals call's `betcoProduct`). Supplied only for the speculative pre-fetch, which
+   * otherwise searches the raw user message with no anchor at all. When set it replaces this call's
+   * own resolution; when absent, resolution is untouched.
+   */
+  productLineLock?: {
+    productLineKey: string;
+    resolutionSource: ProductEntityResolutionSource;
+  };
+};
+
 export async function executeProductTool(
   name: ProductToolName,
   args: unknown,
@@ -606,6 +650,8 @@ export async function executeProductTool(
    * callers that don't have one (e.g. unit tests) — alias-resolution telemetry is still attached to
    * the returned payload, only the audit-log write is skipped. */
   auditCtx?: AuditContext,
+  /** B0-786 — per-turn signals, supplied by the workflow only; undefined elsewhere. */
+  turnOptions?: ProductToolTurnOptions,
 ): Promise<Record<string, unknown>> {
   switch (name) {
     case 'search_product_docs': {
@@ -625,7 +671,7 @@ export async function executeProductTool(
        * natural-language question or a name spanning several product lines still resolves to
        * nothing and behaves exactly as before.
        */
-      const [{ productLineKey, productKey, resolutionSource, aliasResolution }, sectionType] = await Promise.all([
+      const [resolved, sectionType] = await Promise.all([
         freeformQuery
           ? resolveProductEntityWithAliasTelemetry(freeformQuery, name, auditCtx, {
               mode: 'freeform',
@@ -633,7 +679,17 @@ export async function executeProductTool(
           : resolveProductEntityWithAliasTelemetry(resolvedProductName, name, auditCtx),
         Promise.resolve(inferSectionTypeFromQuery(q)),
       ]);
-      const intent = classifyRetrievalIntent(q, resolvedProductName);
+      const { productKey, aliasResolution } = resolved;
+      /**
+       * B0-786 product lock — a key the workflow resolved from the turn's named Betco product wins
+       * over this call's own resolution. Only ever supplied for the speculative pre-fetch (see
+       * `ProductToolTurnOptions.productLineLock`), so a model-requested search still resolves for
+       * itself exactly as before.
+       */
+      const productLineKey = turnOptions?.productLineLock?.productLineKey ?? resolved.productLineKey;
+      const resolutionSource =
+        turnOptions?.productLineLock?.resolutionSource ?? resolved.resolutionSource;
+      const intent = classifyRetrievalIntent(q, resolvedProductName, turnOptions?.answerShape);
       const result = await ragQueryForProductKnowledgeWithMeta({
         query: q,
         productLineKey,
@@ -643,6 +699,7 @@ export async function executeProductTool(
         limit: intent.limit,
         maxPerDocument: intent.maxPerDocument,
         requiredDocumentKinds: intent.requiredDocumentKinds,
+        regulatedSectionIntent: turnOptions?.regulatedSectionIntent,
         excludeKnowledgeCategories: resolveKnowledgeCategoryExclusions(auditCtx?.specialistId, q),
       });
       return {

@@ -48,6 +48,13 @@ import {
   classifyUserIntentSemantic,
   type SemanticRouteDecision,
 } from '~/lib/orchestrator/semantic-router';
+import {
+  analyzeTurnSignals,
+  competitorIdentityFromSignals,
+  isSignalsAnalysisEnabled,
+  toIntentClassification,
+} from '~/lib/orchestrator/signals/analyze-turn-signals';
+import type { DeclineClass, TurnSignals } from '~/lib/orchestrator/signals/signals-schemas';
 import { hasNamedSurfaceContext } from '~/lib/orchestrator/surface-vocabulary';
 import {
   CATEGORY_MISMATCH_CONFIDENCE_CAP,
@@ -93,6 +100,7 @@ import {
 import { buildCompetitiveRecommendationAnswer } from '~/lib/recommendations/recommendation-answer';
 import { productSupportToolsForRoute } from '~/lib/tools/definitions';
 import { buildToolTraceEntry, executeToolCall } from '~/lib/tools/execute-tool-call';
+import type { ProductToolTurnOptions } from '~/lib/tools/product-tools';
 import { asRagDocumentKind } from '~/lib/rag/document-kind';
 import { assembleDocumentBodies } from '~/lib/retrieval/document-assembly';
 import { getBooleanSetting } from '~/lib/settings/settings-service';
@@ -619,6 +627,14 @@ export const EARLY_DECLINE_STORAGE_EXPIRATION_COPY =
 export const EARLY_DECLINE_BROAD_RECOMMENDATION_COPY =
   'I need more details to make a specific recommendation. Please share your surface, soil type, and application method.';
 
+/** The canned copy for each decline class, so the B0-786 signal path maps a class without re-testing regexes. */
+const EARLY_DECLINE_COPY: Record<(typeof EARLY_DECLINE_REASONS)[number], string> = {
+  chemical_mixing_or_safety: EARLY_DECLINE_CHEMICAL_MIXING_COPY,
+  legal_or_compliance: EARLY_DECLINE_LEGAL_COMPLIANCE_COPY,
+  storage_or_expiration: EARLY_DECLINE_STORAGE_EXPIRATION_COPY,
+  broad_recommendation_without_context: EARLY_DECLINE_BROAD_RECOMMENDATION_COPY,
+};
+
 export function classifyEarlyDecline(
   userMessage: string,
   options?: {
@@ -628,11 +644,39 @@ export function classifyEarlyDecline(
      * preserving B0-300's behavior verbatim.
      */
     crossReferenceIntent?: boolean;
+    /**
+     * B0-786 — the consolidated signals call's decline class. Supplied (INCLUDING as `null`, which
+     * means "no decline") it replaces the four detection regexes below; omitted entirely — the
+     * signals flag off, or a degraded signals call — and those regexes decide exactly as before.
+     *
+     * The two SUPPRESSION checks are deliberately NOT replaced: `hasWoodSportsFloorContext` and
+     * `hasNamedSurfaceContext` still veto a `broad_recommendation_without_context` signal. They are
+     * a deterministic floor in the safe direction (they can only turn a decline into a real answer,
+     * never the reverse), and the same asymmetry the regulated-grounding rule turns on applies
+     * here: an LLM miss must not be able to hand a user canned copy in place of an answer.
+     */
+    declineClass?: DeclineClass | null;
   },
 ): EarlyDeclineDecision | null {
   // B0-734 — pure classifier: the enabled/disabled decision is made by the caller from the
   // `settings` row, so this function's verdict never depends on ambient configuration.
   const text = userMessage.toLowerCase();
+
+  if (options?.declineClass !== undefined) {
+    if (options.declineClass === null) {
+      return null;
+    }
+    if (
+      options.declineClass === 'broad_recommendation_without_context' &&
+      ((options.crossReferenceIntent ?? shouldForceCrossReferenceLookup(userMessage)) ||
+        hasWoodSportsFloorContext(text) ||
+        hasNamedSurfaceContext(text))
+    ) {
+      return null;
+    }
+    return { reason: options.declineClass, text: EARLY_DECLINE_COPY[options.declineClass] };
+  }
+
   const asksChemicalMixing =
     /(mix|mixing|combine|adding|add)\b/.test(text) &&
     /(bleach|ammonia|acid|chlorine|cleaner|concentrate|chemical)/.test(text);
@@ -1615,11 +1659,22 @@ export async function runProductSupportWorkflow(input: {
     llmRouterShadowModeFromSettings,
     semanticRouterEnabledFromSettings,
     semanticRouterShadowModeFromSettings,
+    // B0-786 — read HERE, with the other routing flags, for the reason documented above: a second
+    // read can resolve differently mid-turn (the 30s settings cache expires, or an admin flips the
+    // row) and the persisted trace would then describe a configuration the turn never ran under.
+    signalsAnalysisEnabled,
+    // B0-786 — the router model/timeout are `settings` rows now, so they are resolved once here
+    // too and reused by every gate record below rather than re-read per record.
+    routerModel,
+    routerTimeoutMs,
   ] = await Promise.all([
     isLlmRouterEnabled(),
     isLlmRouterShadowMode(),
     isSemanticRouterEnabled(),
     isSemanticRouterShadowMode(),
+    isSignalsAnalysisEnabled(),
+    resolveRouterModel(),
+    resolveRouterTimeoutMs(),
   ]);
 
   /**
@@ -1701,9 +1756,28 @@ export async function runProductSupportWorkflow(input: {
   // ~0ms) — recorded on the live gate so the observability page answers the latency question the
   // cutover decision traded on, without needing server logs.
   const liveClassifierStartedAtMs = Date.now();
-  const liveIntentClassification: IntentClassification | null = llmClassifierWillDecide
-    ? await classifyUserIntent(input.userMessage, priorTurnsForRouting)
-    : null;
+  /**
+   * B0-786 — the consolidated signals call takes the classifier's precedence position exactly: it
+   * runs when, and only when, `classifyUserIntent` would have run, and its `intent`/`confidence`
+   * are the same routing decision. It answers eight more questions in the same call (competitor
+   * identity, cross-reference intent, chemistry/conversion-list, answer shape, decline class,
+   * regulated-section intent) that were previously spread across nine sites, plus the second LLM
+   * call `extractCompetitorProduct` used to make for a competitor identity this call already has.
+   *
+   * `analyzeTurnSignals` shares `classifyUserIntent`'s never-throws contract, so this await cannot
+   * fail the turn; a degraded result carries the keyword router's decision.
+   */
+  const turnSignals: TurnSignals | null =
+    llmClassifierWillDecide && signalsAnalysisEnabled
+      ? await analyzeTurnSignals(input.userMessage, priorTurnsForRouting)
+      : null;
+  /** True only when the model call actually ran and parsed — a degraded turn must keep the old deterministic checks. */
+  const signalsDecided = turnSignals !== null && turnSignals.source === 'llm';
+  const liveIntentClassification: IntentClassification | null = turnSignals
+    ? toIntentClassification(turnSignals)
+    : llmClassifierWillDecide
+      ? await classifyUserIntent(input.userMessage, priorTurnsForRouting)
+      : null;
   const liveClassifierLatencyMs = Date.now() - liveClassifierStartedAtMs;
   /**
    * B0-514 — the turn's single cross-reference-intent verdict, consumed by every downstream site
@@ -1726,7 +1800,13 @@ export async function runProductSupportWorkflow(input: {
    */
   const preliminaryCrossReferenceIntentForTurn = semanticRoute
     ? semanticRoute === 'cross_reference' || shouldForceCrossReferenceLookup(input.userMessage)
-    : liveIntentClassification && liveIntentClassification.source === 'llm'
+    : // B0-786 — the signals call answers this directly, replacing `shouldForceCrossReferenceLookup`
+      // on the deciding path. A DEGRADED signals result already carries that same substring check
+      // as its `crossReferenceIntent` (see `fallbackTurnSignals`), so reading it unconditionally
+      // here preserves the pre-B0-786 behaviour on the degraded path too.
+      turnSignals
+      ? turnSignals.crossReferenceIntent
+      : liveIntentClassification && liveIntentClassification.source === 'llm'
       ? liveIntentClassification.intent === 'cross_reference' ||
         // B0-734 — a cross-reference `suggestedTool` only counts when the classifier also extracted
         // a competitor. On the 2026-08-28 re-runs the classifier suggested a cross-reference tool
@@ -1792,7 +1872,12 @@ export async function runProductSupportWorkflow(input: {
     (preliminaryCrossReferenceIntentForTurn || preliminaryRoutingDecision === 'cross_reference');
   const classifierCompetitorBrand = liveIntentClassification?.entities.competitorBrand ?? null;
   const classifierCompetitorProduct = liveIntentClassification?.entities.competitorProduct ?? null;
+  /**
+   * B0-786 — on the signals path there is NOTHING to extract: the one call already produced the
+   * competitor brand/product/other, which is the duplicate LLM call this ticket removes.
+   */
   const earlyCompetitorExtractionPromise: Promise<ExtractedCompetitor> | null =
+    !turnSignals &&
     crossReferenceCandidate &&
     !classifierCompetitorBrand &&
     !classifierCompetitorProduct &&
@@ -1802,7 +1887,14 @@ export async function runProductSupportWorkflow(input: {
   const earlyExtractedCompetitor = earlyCompetitorExtractionPromise
     ? await earlyCompetitorExtractionPromise
     : null;
-  const selfReferenceVerdict: CompetitorSelfReferenceVerdict | null = crossReferenceCandidate
+  /**
+   * B0-786 — `analyzeTurnSignals` already ran this check as its deterministic enrichment step,
+   * reusing the competitor identity above; re-running it here would repeat the alias/catalog
+   * lookups for the same identity.
+   */
+  const selfReferenceVerdict: CompetitorSelfReferenceVerdict | null = turnSignals
+    ? turnSignals.selfReferenceVerdict
+    : crossReferenceCandidate
     ? await classifyCompetitorSelfReference({
         userMessage: input.userMessage,
         competitorBrand: classifierCompetitorBrand ?? earlyExtractedCompetitor?.brand ?? null,
@@ -1846,6 +1938,9 @@ export async function runProductSupportWorkflow(input: {
   const earlyDeclineDecision = earlyDeclineGateEnabled
     ? classifyEarlyDecline(input.userMessage, {
         crossReferenceIntent: crossReferenceIntentForTurn,
+        // B0-786 — supplied ONLY when the model call really produced a class; a degraded turn omits
+        // the key entirely so `classifyEarlyDecline` keeps its own regexes.
+        ...(signalsDecided && turnSignals ? { declineClass: turnSignals.declineClass } : {}),
       })
     : null;
   /** Which router the value above came from — recorded on the semantic gate and the log line. */
@@ -2023,8 +2118,8 @@ export async function runProductSupportWorkflow(input: {
           keywordRoutingDecision: route.agent ?? 'ambiguous',
         },
         thresholds: {
-          model: resolveRouterModel(),
-          timeoutMs: resolveRouterTimeoutMs(),
+          model: routerModel,
+          timeoutMs: routerTimeoutMs,
         },
         verdict:
           liveIntentClassification.intent === (route.agent ?? 'ambiguous')
@@ -2034,6 +2129,34 @@ export async function runProductSupportWorkflow(input: {
           liveIntentClassification.source === 'llm'
             ? `Routing cutover: the LLM classifier routed this turn to "${liveIntentClassification.intent}" (confidence ${liveIntentClassification.confidence}, ${liveClassifierLatencyMs}ms); the keyword router would have chosen "${route.agent ?? 'ambiguous'}".`
             : `Routing cutover DEGRADED: the LLM call fell back to the keyword router (${liveIntentClassification.fallbackReason ?? 'unknown reason'}, ${liveClassifierLatencyMs}ms), so this turn was still routed to "${liveIntentClassification.intent}" by keyword scoring.`,
+      }
+    : null;
+
+  /**
+   * B0-786 — the whole `TurnSignals` object, persisted on the one step every run has, so every
+   * consolidated decision this turn made is queryable from `/admin/observability` instead of being
+   * re-derived from nine call sites. Modeled on `llm_intent_classifier_live` above (which already
+   * records `entities`); that gate still records the routing half, so the two are readable side by
+   * side while the rollout flag is being flipped.
+   */
+  const signalsAnalysisGate: GateRecord | null = turnSignals
+    ? {
+        gate: 'signals_analysis',
+        inputs: {
+          signals: turnSignals,
+          analysisLatencyMs: liveClassifierLatencyMs,
+          keywordRoutingDecision: route.agent ?? 'ambiguous',
+        },
+        thresholds: {
+          model: routerModel,
+          timeoutMs: routerTimeoutMs,
+          signalsAnalysisEnabled,
+        },
+        verdict: turnSignals.source === 'llm' ? 'signals_analyzed' : 'degraded_to_keyword_router',
+        effect:
+          turnSignals.source === 'llm'
+            ? `One signals call routed this turn to "${turnSignals.intent}" (confidence ${turnSignals.confidence}, ${liveClassifierLatencyMs}ms) and supplied crossReferenceIntent=${turnSignals.crossReferenceIntent}, answerShape="${turnSignals.answerShape}", declineClass=${turnSignals.declineClass ?? 'null'}, regulatedSectionIntent=${turnSignals.regulatedSectionIntent}, productLineLock=${turnSignals.resolvedProductLineKey ?? 'none'}. No separate competitor-extraction call was made.`
+            : `Signals analysis DEGRADED (${turnSignals.fallbackReason ?? 'unknown reason'}, ${liveClassifierLatencyMs}ms): the keyword router decided this turn ("${turnSignals.intent}") and every downstream consumer fell back to its own deterministic check.`,
       }
     : null;
 
@@ -2204,6 +2327,8 @@ export async function runProductSupportWorkflow(input: {
       ...recordGates([
         keywordRoutingGate,
         ...(intentClassifierLiveGate ? [intentClassifierLiveGate] : []),
+        // B0-786 — the consolidated signals object, alongside the routing gate it supersedes.
+        ...(signalsAnalysisGate ? [signalsAnalysisGate] : []),
         // B0-651 — the semantic router's own record, on the one step every run has.
         ...(semanticRouterGate ? [semanticRouterGate] : []),
       ]),
@@ -2493,6 +2618,42 @@ export async function runProductSupportWorkflow(input: {
     const forcedToolChoiceName = crossReferenceIntentForTurn ? 'lookup_cross_reference' : null;
     let forcedToolChoiceConsumed = false;
 
+    /**
+     * B0-786 — the retrieval-shaping signals handed to every product tool this turn. Only set when
+     * the model call really ran (`signalsDecided`): a degraded turn leaves this undefined so
+     * `classifyRetrievalIntent` and `resolveRequiredDocumentKinds` keep their own deterministic
+     * checks, exactly as before this ticket.
+     *
+     * `regulatedSectionIntent` is ADDITIVE: it is OR'd with `isClaimLikeQuery` /
+     * `inferSectionTypeFromQuery` inside `resolveRequiredDocumentKinds`, never substituted for
+     * them, so a model miss can only widen label-first grounding.
+     */
+    const turnToolOptions: ProductToolTurnOptions | undefined =
+      signalsDecided && turnSignals
+        ? {
+            answerShape: turnSignals.answerShape,
+            regulatedSectionIntent: turnSignals.regulatedSectionIntent,
+          }
+        : undefined;
+
+    /**
+     * B0-786 PRODUCT LOCK — separable block: delete this constant and the one spread that uses it
+     * below to drop the lock while leaving the rest of the signals wiring intact.
+     *
+     * The speculative pre-fetch searches the RAW user message with no product anchor at all, which
+     * is why B0-635 had to stop citing its weak hits. When the signals call named a Betco product
+     * AND that name resolved to a real product line, hand the pre-fetch that key so it searches the
+     * right product instead of whatever the message's incidental words match. Model-requested
+     * searches are untouched — they still resolve for themselves.
+     */
+    const speculativeProductLineLock =
+      signalsDecided && turnSignals?.resolvedProductLineKey
+        ? {
+            productLineKey: turnSignals.resolvedProductLineKey,
+            resolutionSource: turnSignals.resolutionSource,
+          }
+        : null;
+
     const executeTool = async ({
       name,
       argumentsJson,
@@ -2543,7 +2704,21 @@ export async function runProductSupportWorkflow(input: {
         forcedToolChoiceConsumed = true;
       }
 
-      const out = await executeToolCall({ name, argumentsJson, callId, origin, auditCtx: wfCtx });
+      const out = await executeToolCall({
+        name,
+        argumentsJson,
+        callId,
+        origin,
+        auditCtx: wfCtx,
+        ...(turnToolOptions
+          ? {
+              turnOptions:
+                speculative && speculativeProductLineLock
+                  ? { ...turnToolOptions, productLineLock: speculativeProductLineLock }
+                  : turnToolOptions,
+            }
+          : {}),
+      });
       // B0-436 — the marker travels on the persisted trace as well as the audit row, so an
       // `/admin/observability` timeline shows which retrieval the model did not ask for.
       const trace: ToolTraceEntry = speculative
@@ -2613,7 +2788,11 @@ export async function runProductSupportWorkflow(input: {
     // B0-751 — when the self-reference check already awaited the extraction for this turn, that
     // settled promise IS the turn's competitor identity; never start a second extraction call.
     const resolvedCompetitorPromise: Promise<ExtractedCompetitor> | null = competitorIdentityNeeded
-      ? (earlyCompetitorExtractionPromise ?? extractCompetitorProduct(input.userMessage))
+      ? // B0-786 — the signals call IS the competitor identity for this turn; the second LLM call
+        // it replaces was the literal duplicate this ticket set out to remove.
+        turnSignals
+        ? Promise.resolve(competitorIdentityFromSignals(turnSignals, input.userMessage))
+        : (earlyCompetitorExtractionPromise ?? extractCompetitorProduct(input.userMessage))
       : null;
 
     /**
@@ -2943,7 +3122,11 @@ export async function runProductSupportWorkflow(input: {
       // `buildRecommendationQuery` cache key run-to-run before that ticket.
       const competitor = resolvedCompetitorPromise
         ? await resolvedCompetitorPromise
-        : await extractCompetitorProduct(input.userMessage);
+        : // B0-786 — same rule as the prefetch above: when the signals call ran, IT is this turn's
+          // competitor identity, so this last-resort branch must not fire a second extraction.
+          turnSignals
+          ? competitorIdentityFromSignals(turnSignals, input.userMessage)
+          : await extractCompetitorProduct(input.userMessage);
       /**
        * B0-779 — `competitor.product` is NEVER empty (it falls back to the raw message, see
        * `extractCompetitorProduct`), so `competitor.product.trim()` was never actually gating
@@ -3137,8 +3320,8 @@ export async function runProductSupportWorkflow(input: {
             keywordRoutingDecision: routingDecision,
           },
           thresholds: {
-            model: resolveRouterModel(),
-            timeoutMs: resolveRouterTimeoutMs(),
+            model: routerModel,
+            timeoutMs: routerTimeoutMs,
           },
           verdict:
             shadowIntentClassification.intent === routingDecision

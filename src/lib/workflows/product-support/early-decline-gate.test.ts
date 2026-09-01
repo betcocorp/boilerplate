@@ -108,3 +108,71 @@ describe('classifyEarlyDecline — B0-660 don\'t ask for a surface the user alre
     );
   });
 });
+
+/**
+ * B0-786 — the signals call's `declineClass` replaces the four DETECTION regexes. The two
+ * SUPPRESSION checks stay as a deterministic floor: they can only turn a decline into a real
+ * answer, never the reverse, so an LLM miss cannot hand a user canned copy in place of an answer.
+ */
+describe('classifyEarlyDecline — B0-786 declineClass signal', () => {
+  it('maps a supplied class to its canned copy without testing any regex', () => {
+    expect(
+      classifyEarlyDecline('a message with no decline vocabulary whatsoever', {
+        declineClass: 'chemical_mixing_or_safety',
+      }),
+    ).toEqual({
+      reason: 'chemical_mixing_or_safety',
+      text: expect.stringContaining('chemical mixing'),
+    });
+  });
+
+  it('a supplied null means NO decline, even for a message the regexes would have declined', () => {
+    // The regex path declines this one (see the B0-300 case above); the signal overrides it.
+    expect(classifyEarlyDecline('What do you recommend for daily cleaning?', { declineClass: null }))
+      .toBeNull();
+  });
+
+  it('still suppresses a broad-recommendation class when the user already named a surface', () => {
+    expect(
+      classifyEarlyDecline('What do you recommend for cleaning a VCT floor?', {
+        declineClass: 'broad_recommendation_without_context',
+      }),
+    ).toBeNull();
+  });
+
+  it('still suppresses a broad-recommendation class for a gym/sports floor', () => {
+    expect(
+      classifyEarlyDecline('I need a durable gym floor finish, what do you recommend?', {
+        declineClass: 'broad_recommendation_without_context',
+      }),
+    ).toBeNull();
+  });
+
+  it('still suppresses a broad-recommendation class on a cross-reference turn', () => {
+    expect(
+      classifyEarlyDecline('We use a competitor product. What do you recommend?', {
+        declineClass: 'broad_recommendation_without_context',
+        crossReferenceIntent: true,
+      }),
+    ).toBeNull();
+  });
+
+  it('declines when the class is broad-recommendation and nothing suppresses it', () => {
+    expect(
+      classifyEarlyDecline('what should I use', {
+        declineClass: 'broad_recommendation_without_context',
+        crossReferenceIntent: false,
+      }),
+    ).toEqual({
+      reason: 'broad_recommendation_without_context',
+      text: expect.stringContaining('I need more details'),
+    });
+  });
+
+  it('omitting the key entirely leaves the pre-B0-786 regex path untouched', () => {
+    expect(classifyEarlyDecline('Can I mix bleach and this cleaner?')).toEqual({
+      reason: 'chemical_mixing_or_safety',
+      text: expect.any(String),
+    });
+  });
+});

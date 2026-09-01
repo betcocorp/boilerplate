@@ -170,6 +170,11 @@ export type PromptRecord = z.infer<typeof promptRecordSchema>;
  *   (`latencyMs` = `embeddingMs` + `scoringMs`). Built by
  *   `~/lib/workflows/product-support/semantic-router-decision.ts` and reduced into rollout
  *   metrics by `~/lib/observability/routing-health.ts`.
+ * - `signals_analysis` — `analyzeTurnSignals` (B0-786), gated on `BEX_SIGNALS_ANALYSIS_ENABLED`.
+ *   The ONE pre-orchestration signal-detection call: carries the whole `TurnSignals` object
+ *   (routing intent + entities + the six signals that replaced keyword sites + the deterministic
+ *   product-line/self-reference enrichment), so every consolidated decision this turn made is
+ *   queryable from `/admin/observability` instead of being re-derived from nine call sites.
  */
 export const gateIdSchema = z.enum([
   'keyword_routing',
@@ -190,6 +195,7 @@ export const gateIdSchema = z.enum([
   'llm_intent_classifier_live',
   'semantic_router_live',
   'semantic_router_shadow',
+  'signals_analysis',
 ]);
 
 export type GateId = z.infer<typeof gateIdSchema>;

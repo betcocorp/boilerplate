@@ -2,7 +2,7 @@ import { getErrorMessage } from '~/lib/utils';
 import { logWarn } from '~/lib/observability/logger';
 import { PRODUCT_TOOL_NAMES, type ProductToolName } from '~/lib/tools/tool-schemas';
 import { buildModelToolPayload } from '~/lib/tools/model-tool-payload';
-import { executeProductTool } from '~/lib/tools/product-tools';
+import { executeProductTool, type ProductToolTurnOptions } from '~/lib/tools/product-tools';
 import { enforceToolOutputBudget } from '~/lib/tools/tool-output-budget';
 import {
   isToolTimeoutError,
@@ -163,6 +163,12 @@ export async function executeToolCall(input: {
    * `executeProductTool` can log an alias-resolution hit. Undefined for callers with no run
    * context (e.g. unit tests) — the call still executes, only that logging is skipped. */
   auditCtx?: AuditContext;
+  /**
+   * B0-786 — the turn's consolidated signals (answer shape, regulated-section intent, resolved
+   * product-line lock), supplied by `runProductSupportWorkflow` only. Undefined for every other
+   * caller, in which case the product tools use their own deterministic behaviour unchanged.
+   */
+  turnOptions?: ProductToolTurnOptions;
 }): Promise<ExecutedToolCall> {
   const started = Date.now();
   let args: unknown;
@@ -207,7 +213,7 @@ export async function executeToolCall(input: {
     // B0-380 — bounded execution: a hung downstream call becomes a structured timeout failure
     // (thrown as ToolTimeoutError, serialized by the catch below) instead of stalling the turn.
     const payload = await withToolTimeout(
-      executeProductTool(input.name, args, input.auditCtx),
+      executeProductTool(input.name, args, input.auditCtx, input.turnOptions),
       input.name,
       resolveToolTimeoutMs(input.name),
     );

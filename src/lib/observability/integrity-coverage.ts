@@ -65,6 +65,8 @@ export const DECISION_NODE_IDS = [
   'keyword_routing',
   'llm_intent_classifier',
   'semantic_router',
+  // B0-786 — the consolidated pre-orchestration signals call.
+  'signals_analysis',
   'competitor_identity_resolution',
   'early_decline_gate',
   'validator',
@@ -372,6 +374,32 @@ export const DECISION_NODES: readonly DecisionNodeDefinition[] = [
         status: 'unknown',
         detail:
           'No record and no `runtimeConfig.semanticRouterEnabled`: this run predates B0-649, so whether the router ran was never captured.',
+        evidence: [],
+      };
+    },
+  },
+  {
+    id: 'signals_analysis',
+    label: 'Consolidated signals analysis',
+    kind: 'routing',
+    changesOutcome:
+      "B0-786 — one pre-orchestration call supplies the turn's route, cross-reference intent, competitor identity, answer shape, decline class and regulated-section intent.",
+    recordedAt: 'workflow_steps[orchestration_planner].output.gates[gate=signals_analysis]',
+    gateIds: ['signals_analysis'],
+    activationKey: null,
+    resolve: (ctx) => {
+      const records = ctx.gateRecordsByGateId.get('signals_analysis') ?? [];
+      if (records.length > 0) {
+        return {
+          status: 'measured',
+          detail: `Analyzed and recorded (${records[0].verdict}).`,
+          evidence: ['workflow_steps[orchestration_planner].output.gates[gate=signals_analysis]'],
+        };
+      }
+      return {
+        status: 'skipped',
+        detail:
+          'No signals record: `BEX_SIGNALS_ANALYSIS_ENABLED` was off (its default) for this run, or the run predates B0-786 — the scattered classifier + keyword path decided instead.',
         evidence: [],
       };
     },

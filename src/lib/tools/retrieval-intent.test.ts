@@ -84,3 +84,43 @@ describe('classifyRetrievalIntent procedural depth branch', () => {
     });
   });
 });
+
+/**
+ * B0-786 — when the consolidated signals call supplies `answerShape`, it REPLACES both regex
+ * branches. Width only, and the same tunings: the B0-759 depth finding is untouched.
+ */
+describe('classifyRetrievalIntent — B0-786 answerShape overrides the regexes', () => {
+  it('widens for procedure/enumeration WITHOUT raising maxPerDocument', () => {
+    for (const shape of ['procedure', 'enumeration'] as const) {
+      const out = classifyRetrievalIntent('a query with no depth phrasing at all', undefined, shape);
+      expect(out).toEqual({ limit: 6 });
+      expect(out.maxPerDocument).toBeUndefined();
+    }
+  });
+
+  it('returns the pipeline default for single_value even when a depth regex would have matched', () => {
+    expect(classifyRetrievalIntent('how often should I recoat?', undefined, 'single_value')).toEqual(
+      {},
+    );
+  });
+
+  it('returns the comparison tuning for comparison even with no comparison phrasing', () => {
+    expect(classifyRetrievalIntent('which one holds up longer', undefined, 'comparison')).toEqual({
+      limit: 5,
+      maxPerDocument: 1,
+      requiredDocumentKinds: ['product_line_profile'],
+    });
+  });
+
+  it('keeps the named-product branch ahead of the shape branch, exactly as before', () => {
+    expect(classifyRetrievalIntent('how often should I recoat?', 'StreetShoe', 'procedure')).toEqual({
+      limit: 4,
+      maxPerDocument: 2,
+    });
+  });
+
+  it('falls back to the regexes when no shape is supplied (degraded/standalone callers)', () => {
+    expect(classifyRetrievalIntent('how often should I recoat?')).toEqual({ limit: 6 });
+    expect(classifyRetrievalIntent('what is the dilution ratio')).toEqual({});
+  });
+});

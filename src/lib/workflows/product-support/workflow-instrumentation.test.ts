@@ -228,10 +228,10 @@ import {
 // with its default deps, so the integration tests below drive it through the actual
 // `getOpenAIClient()` call above rather than an injected fake.
 import {
-  DEFAULT_BEX_ROUTER_MODEL,
   DEFAULT_BEX_ROUTER_TIMEOUT_MS,
   resetIntentClassifierCache,
 } from '~/lib/orchestrator/intent-classifier';
+import { resetTurnSignalsCache } from '~/lib/orchestrator/signals/analyze-turn-signals';
 
 const USAGE_MESSAGE = 'How do I use Betco pH7Q Dual on tile floors?';
 const XREF_MESSAGE = 'What is the Betco equivalent to BNC-15?';
@@ -1625,8 +1625,8 @@ describe('shadow-mode LLM intent classifier gate (B0-507 / B0-516 integration)',
   afterEach(() => {
     settingOverrides.delete('BEX_LLM_ROUTER_ENABLED');
     settingOverrides.delete('BEX_LLM_ROUTER_SHADOW_MODE');
-    delete process.env.BEX_ROUTER_TIMEOUT_MS;
-    delete process.env.BEX_ROUTER_MODEL;
+    settingOverrides.delete('BEX_ROUTER_TIMEOUT_MS');
+    settingOverrides.delete('BEX_ROUTER_MODEL');
   });
 
   it('is absent when the LLM router is explicitly kill-switched', async () => {
@@ -1671,7 +1671,9 @@ describe('shadow-mode LLM intent classifier gate (B0-507 / B0-516 integration)',
       carriedProduct: null,
     });
     expect(record.thresholds).toEqual({
-      model: DEFAULT_BEX_ROUTER_MODEL,
+      // B0-786 — the router model is a `settings` TAG resolved through `resolveResponsesModel`,
+      // which this suite stubs to 'gpt-test'.
+      model: 'gpt-test',
       timeoutMs: DEFAULT_BEX_ROUTER_TIMEOUT_MS,
     });
   });
@@ -1701,7 +1703,7 @@ describe('shadow-mode LLM intent classifier gate (B0-507 / B0-516 integration)',
   it('degrades safely in shadow mode, and still records the gate, when the classifier call exceeds BEX_ROUTER_TIMEOUT_MS', async () => {
     settingOverrides.set('BEX_LLM_ROUTER_ENABLED', true);
     settingOverrides.set('BEX_LLM_ROUTER_SHADOW_MODE', true);
-    process.env.BEX_ROUTER_TIMEOUT_MS = '10';
+    settingOverrides.set('BEX_ROUTER_TIMEOUT_MS', 10);
     mockIntentClassifierResponse(
       intentClassifierPayload({ intent: 'floor', confidence: 0.9 }),
       { delayMs: 100 },
@@ -1755,7 +1757,7 @@ describe('shadow-mode LLM intent classifier gate (B0-507 / B0-516 integration)',
   it('B0-511: degrades to the ambiguous generalist (never a keyword decision) when the classifier call times out during cutover, with the reason on the gate', async () => {
     settingOverrides.set('BEX_LLM_ROUTER_ENABLED', true);
     settingOverrides.set('BEX_LLM_ROUTER_SHADOW_MODE', false);
-    process.env.BEX_ROUTER_TIMEOUT_MS = '10';
+    settingOverrides.set('BEX_ROUTER_TIMEOUT_MS', 10);
     mockIntentClassifierResponse(
       intentClassifierPayload({ intent: 'floor', confidence: 0.9 }),
       { delayMs: 100 },
@@ -2405,5 +2407,122 @@ describe('runtime config and gate activation (B0-494)', () => {
       expect(parsed.data.runtimeConfig).toBeUndefined();
       expect(parsed.data.activeGates).toBeUndefined();
     }
+  });
+});
+
+/* --------------------------------------------------------------------------
+ * B0-786 — consolidated pre-orchestration signals analysis.
+ *
+ * The point of the ticket is that ONE call answers every question: with the flag on, the turn makes
+ * a single pre-generation model call (schema `turn_signals`) instead of the intent classifier plus
+ * the separate `extractCompetitorProduct` call, and the whole `TurnSignals` object lands on the
+ * `signals_analysis` gate. With the flag off nothing changes.
+ * -------------------------------------------------------------------------- */
+
+describe('consolidated signals analysis (B0-786)', () => {
+  // The signals cache is module-level and keyed on the message, so it would otherwise carry a
+  // result between the cases below (they deliberately reuse one message).
+  beforeEach(() => {
+    resetTurnSignalsCache();
+  });
+
+  function signalsPayload(overrides: Record<string, unknown> = {}) {
+    return {
+      intent: 'cross_reference',
+      confidence: 0.87,
+      betcoProduct: null,
+      competitorBrand: 'BNC',
+      competitorProduct: 'BNC-15',
+      otherCompetitorProduct: null,
+      surfaceType: null,
+      taskDescription: 'find the Betco equivalent for BNC-15',
+      brandFamily: 'competitor',
+      setting: null,
+      productCategory: null,
+      carriedProduct: null,
+      suggestedTool: 'lookup_cross_reference',
+      crossReferenceIntent: true,
+      competitorIsGenericChemistry: false,
+      isConversionListAsk: false,
+      answerShape: 'single_value',
+      declineClass: null,
+      regulatedSectionIntent: false,
+      ...overrides,
+    };
+  }
+
+  /** Answers ONLY the `turn_signals` schema call — any other pre-generation call is a failure. */
+  function mockSignalsResponse(payload: Record<string, unknown>) {
+    openaiResponsesCreateMock.mockImplementation(async (body: unknown) => {
+      const schemaName = (body as { text?: { format?: { name?: string } } })?.text?.format?.name;
+      if (schemaName !== 'turn_signals') {
+        throw new Error(`unexpected pre-generation responses.create call for schema "${schemaName}"`);
+      }
+      return { output_text: JSON.stringify(payload) };
+    });
+  }
+
+  afterEach(() => {
+    settingOverrides.delete('BEX_SIGNALS_ANALYSIS_ENABLED');
+    settingOverrides.delete('BEX_LLM_ROUTER_ENABLED');
+    settingOverrides.delete('BEX_LLM_ROUTER_SHADOW_MODE');
+  });
+
+  it('is absent by default: the flag off leaves the existing classifier path deciding', async () => {
+    await run({ userMessage: XREF_MESSAGE });
+    expect(gateRecordsFor('signals_analysis')).toEqual([]);
+  });
+
+  it('records the whole TurnSignals object on the gate and routes the turn from it', async () => {
+    settingOverrides.set('BEX_SIGNALS_ANALYSIS_ENABLED', true);
+    settingOverrides.set('BEX_LLM_ROUTER_ENABLED', true);
+    settingOverrides.set('BEX_LLM_ROUTER_SHADOW_MODE', false);
+    mockSignalsResponse(signalsPayload({ intent: 'floor', crossReferenceIntent: false }));
+
+    await run({ userMessage: XREF_MESSAGE });
+
+    const record = singleGateRecord('signals_analysis');
+    expect(record.verdict).toBe('signals_analyzed');
+    const signals = record.inputs.signals as Record<string, unknown>;
+    expect(signals.intent).toBe('floor');
+    expect(signals.source).toBe('llm');
+    expect(signals.answerShape).toBe('single_value');
+    expect(signals.regulatedSectionIntent).toBe(false);
+    // The routing decision the turn actually ran on came from the same object.
+    expect(
+      (stepOutput('orchestration_planner').routing as Record<string, unknown>).decision,
+    ).toBe('floor');
+  });
+
+  it('makes exactly ONE pre-generation model call — no separate competitor extraction', async () => {
+    settingOverrides.set('BEX_SIGNALS_ANALYSIS_ENABLED', true);
+    settingOverrides.set('BEX_LLM_ROUTER_ENABLED', true);
+    settingOverrides.set('BEX_LLM_ROUTER_SHADOW_MODE', false);
+    // This mock THROWS on any schema other than `turn_signals`, so a surviving
+    // `competitor_extract` call would surface as a fallback rather than passing silently.
+    mockSignalsResponse(signalsPayload());
+
+    await run({ userMessage: XREF_MESSAGE });
+
+    const schemaNames = openaiResponsesCreateMock.mock.calls.map(
+      (call) => (call[0] as { text?: { format?: { name?: string } } })?.text?.format?.name,
+    );
+    expect(schemaNames).toEqual(['turn_signals']);
+    expect(schemaNames).not.toContain('competitor_extract');
+    expect(schemaNames).not.toContain('intent_classification');
+  });
+
+  it('degrades to the keyword router, and still records the gate, when the signals call fails', async () => {
+    settingOverrides.set('BEX_SIGNALS_ANALYSIS_ENABLED', true);
+    settingOverrides.set('BEX_LLM_ROUTER_ENABLED', true);
+    settingOverrides.set('BEX_LLM_ROUTER_SHADOW_MODE', false);
+    openaiResponsesCreateMock.mockRejectedValue(new Error('signals call unavailable'));
+
+    const out = await run({ userMessage: XREF_MESSAGE });
+
+    expect(out).toBeTruthy();
+    const record = singleGateRecord('signals_analysis');
+    expect(record.verdict).toBe('degraded_to_keyword_router');
+    expect((record.inputs.signals as Record<string, unknown>).source).toBe('keyword_fallback');
   });
 });
