@@ -62,6 +62,7 @@ import {
 } from '~/lib/recommendations/confidence-scoring';
 import {
   extractCompetitorProduct,
+  isCompetitorIdentityUnresolved,
   type ExtractedCompetitor,
 } from '~/lib/recommendations/extract-competitor-product';
 import {
@@ -2145,7 +2146,10 @@ export async function runProductSupportWorkflow(input: {
     }),
   });
 
-  const wfCtx = { ...ctx, workflowRunId: run.id };
+  // B0-780 — carries which specialist policy is running down into `executeProductTool` (via
+  // `executeToolCall`'s `auditCtx`), so retrieval can bind to that specialist's product category
+  // (see `resolveKnowledgeCategoryExclusions` in `~/lib/tools/product-tools.ts`).
+  const wfCtx = { ...ctx, workflowRunId: run.id, specialistId: effectivePromptId as string };
 
   /**
    * B0-386 — ids of steps inserted `running` and not yet completed, oldest first. Every step
@@ -2940,7 +2944,15 @@ export async function runProductSupportWorkflow(input: {
       const competitor = resolvedCompetitorPromise
         ? await resolvedCompetitorPromise
         : await extractCompetitorProduct(input.userMessage);
-      if (competitor.product.trim()) {
+      /**
+       * B0-779 — `competitor.product` is NEVER empty (it falls back to the raw message, see
+       * `extractCompetitorProduct`), so `competitor.product.trim()` was never actually gating
+       * anything here: this backstop fired the web-grounded engine on the raw message text even
+       * when no competitor was named at all (PRO-045). `isCompetitorIdentityUnresolved` is the
+       * real check — no brand and no confidently-extracted product means there is nothing to
+       * cross-reference, so the engine must not be invoked on the raw message.
+       */
+      if (competitor.product.trim() && !isCompetitorIdentityUnresolved(competitor)) {
         webFallbackCompetitorLabel = [competitor.brand, competitor.product]
           .filter(Boolean)
           .join(' ')
@@ -3241,6 +3253,39 @@ export async function runProductSupportWorkflow(input: {
       // `evaluateRecommendationEngineGate`.
       draftAnswer = recommendationEngineGate.declineText;
       answerProvenance = 'recommendation_engine_decline';
+    }
+
+    /**
+     * B0-779 — final backstop against a fabricated "Comparable Betco product" match line.
+     *
+     * `resolvedCompetitor` is the turn's SINGLE competitor-identity resolution (B0-357,
+     * `extractCompetitorProduct`), shared by the forced-lookup prefetch, the curated override
+     * safety net, and the web-search backstop above. When it comes back with neither a brand nor a
+     * confidently-extracted product, there is no competitor identity to match against — and that
+     * holds regardless of HOW a match line reached `draftAnswer`: the backstop is already gated
+     * above (`isCompetitorIdentityUnresolved`), but the model can also call `recommend_cross_reference`
+     * itself with the same degraded identity (PRO-036's shape) and, per its own prompt instructions,
+     * append a "Comparable Betco product" line whenever the tool call returns a `productUrl` — which
+     * `recommendationEngineGate` above does NOT catch when the engine's own confidence gate happened
+     * to clear (PRO-045's fabricated "Portable Chemical Management System" match). This check is the
+     * last writer specifically because of that: it must outrank a model-drafted match line the
+     * engine itself approved.
+     *
+     * Deliberately does NOT touch `isOverrideMatch` / `crossReferenceResult` — those are the
+     * curated/legacy `lookup_cross_reference` match, whose matching quality is explicitly out of
+     * scope for this guard (B0-779); it only ever overrides a web-grounded match (the backstop's or
+     * the model's own `recommend_cross_reference` call).
+     */
+    const hasLegacyOrCuratedMatch =
+      isOverrideMatch || Boolean(crossReferenceResult?.match.productUrl?.trim());
+    if (
+      useCrossReferencePostProcessing &&
+      !hasLegacyOrCuratedMatch &&
+      resolvedCompetitor &&
+      isCompetitorIdentityUnresolved(resolvedCompetitor)
+    ) {
+      draftAnswer = XREF_DECLINE_COPY;
+      answerProvenance = 'competitor_identity_unresolved_decline';
     }
 
     // B0-349 — frozen snapshot of the fully-composed answer before the validator, revision pass,

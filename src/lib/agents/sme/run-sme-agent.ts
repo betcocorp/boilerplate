@@ -7,7 +7,11 @@ import { RECOMMENDATIONS_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/recommend
 import { runBexChatTurn } from '~/lib/bex/run-chat-turn';
 import { newCorrelationId } from '~/lib/observability/correlation-id';
 import type { ProductSupportOutcome } from '~/lib/orchestrator/orchestrator-schemas';
-import { extractCompetitorProduct } from '~/lib/recommendations/extract-competitor-product';
+import { XREF_DECLINE_COPY, resolveXrefThreshold } from '~/lib/recommendations/confidence-scoring';
+import {
+  extractCompetitorProduct,
+  isCompetitorIdentityUnresolved,
+} from '~/lib/recommendations/extract-competitor-product';
 import { runCrossReferenceRecommendation } from '~/lib/recommendations/persist-recommendation';
 import { buildWebFallbackAnswer } from '~/lib/recommendations/web-fallback-answer';
 
@@ -16,6 +20,27 @@ import type {
   SmeAgentInvokeBody,
   SmeAgentRunResult,
 } from './types';
+
+/**
+ * B0-779 — the decline used when the query names no resolvable competitor brand/product at all
+ * (`extractCompetitorProduct` came back with neither). Returned WITHOUT ever calling
+ * `runCrossReferenceRecommendation` — there is no competitor identity to look up, and calling the
+ * engine on the raw query text is exactly what fabricated "Comparable Betco product" matches in
+ * PRO-045/PRO-036. Never persisted: an attempt that never ran isn't a recommendation outcome.
+ */
+function unresolvedCompetitorDecline(): Awaited<ReturnType<typeof runCrossReferenceRecommendation>> {
+  return {
+    source: 'web',
+    answered: false,
+    status: 'declined',
+    overallConfidence: 0,
+    thresholdUsed: resolveXrefThreshold(),
+    candidates: [],
+    evidence: { source: 'web', reason: 'competitor_identity_unresolved' },
+    declineReason: XREF_DECLINE_COPY,
+    recommendationId: null,
+  };
+}
 
 /**
  * B0-520/521/522/523 — agents wired to the real `runProductSupportWorkflow` (via
@@ -316,6 +341,9 @@ async function runCrossReferenceSmeAgentAnswer(
   let resolvedBrand: string | null;
   let resolvedProduct: string;
   let extractNote: string;
+  // B0-779 — set only on the extraction branch below; session-context-supplied identity is treated
+  // as caller-confirmed and never subject to this guard.
+  let identityUnresolved = false;
 
   if (contextProduct) {
     resolvedBrand =
@@ -326,13 +354,23 @@ async function runCrossReferenceSmeAgentAnswer(
     const extracted = await extractCompetitorProduct(query);
     resolvedBrand = extracted.brand;
     resolvedProduct = extracted.product;
-    extractNote = `Competitor brand/product extracted from the query text (brand: ${extracted.brand ?? 'unknown'}).`;
+    identityUnresolved = isCompetitorIdentityUnresolved(extracted);
+    extractNote = identityUnresolved
+      ? 'No competitor brand or product could be confidently identified in the query text; declining rather than matching on the raw query (B0-779).'
+      : `Competitor brand/product extracted from the query text (brand: ${extracted.brand ?? 'unknown'}).`;
   }
 
-  const result = await runCrossReferenceRecommendation(
-    { competitorProduct: resolvedProduct, competitorBrand: resolvedBrand },
-    { traceId },
-  );
+  /**
+   * B0-779 — never call the engine (or persist an attempt) on an unresolved competitor identity:
+   * `resolvedProduct` would otherwise be standing in for the raw query text, which is exactly the
+   * PRO-045/PRO-036 shape that fabricated a "Comparable Betco product" match.
+   */
+  const result = identityUnresolved
+    ? unresolvedCompetitorDecline()
+    : await runCrossReferenceRecommendation(
+        { competitorProduct: resolvedProduct, competitorBrand: resolvedBrand },
+        { traceId },
+      );
 
   const competitorLabel =
     [resolvedBrand, resolvedProduct].filter(Boolean).join(' ').trim() || resolvedProduct;

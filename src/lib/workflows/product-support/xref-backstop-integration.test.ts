@@ -96,16 +96,27 @@ vi.mock('~/lib/settings/settings-service', () => ({
   ),
 }));
 
+/**
+ * `extractCompetitorProduct` (schema `competitor_extract`) is the only consumer of this mock in
+ * this file (the LLM router is off, so `classifyUserIntent` never calls it). Defaults to a
+ * confident extraction so the pre-existing backstop tests below keep exercising "a real competitor
+ * was resolved" — B0-779's own tests override this per-case to exercise the degraded/unresolved
+ * shape instead.
+ */
+const competitorExtractionMock = vi.fn();
+
 vi.mock('~/lib/openai/client', () => ({
   getOpenAIClient: () => ({
-    responses: {
-      create: () => {
-        throw new Error('client.responses.create is not mocked for this test');
-      },
-    },
+    responses: { create: (...args: unknown[]) => competitorExtractionMock(...args) },
   }),
   resolveResponsesModel: () => 'gpt-test',
 }));
+
+function mockCompetitorExtraction(extraction: { brand: string | null; product: string | null }) {
+  competitorExtractionMock.mockResolvedValue({
+    output_text: JSON.stringify({ ...extraction, otherCompetitorProduct: null }),
+  });
+}
 
 const runResponsesWithToolLoopMock = vi.fn();
 const executeProductToolMock = vi.fn();
@@ -257,6 +268,10 @@ beforeEach(() => {
   // B0-734 — settings row, default false; these tests assert the gate-on world.
   settingOverrides.set('BEX_EARLY_DECLINE_GATE_ENABLED', true);
   resetIntentClassifierCache();
+
+  // Default: `extractCompetitorProduct` confidently resolves "BNC-15" (no brand named in
+  // XREF_MESSAGE, but a real product) — a resolved identity, not the raw-message fallback.
+  mockCompetitorExtraction({ brand: null, product: 'BNC-15' });
 
   // Default: the model calls only `lookup_cross_reference`, which finds nothing.
   runResponsesWithToolLoopMock.mockImplementation(
@@ -549,5 +564,98 @@ describe('validator mode legibility (B0-358)', () => {
     const records = readStepGateRecords(stepOutput('validator'));
     const regulated = records.find((r) => r.gate === 'regulated_claim_guardrail');
     expect(regulated?.verdict).toBe('passed');
+  });
+});
+
+/* ---------------------------------------------------------------- B0-779 -- */
+
+/**
+ * The message names no specific competitor brand or product — the "replace my current X" shape
+ * from PRO-045/PRO-036 — but still carries a decisive cross-reference phrase ("equivalent to") so
+ * it still forces the lookup path.
+ */
+const UNRESOLVED_XREF_MESSAGE = "What's the Betco equivalent to what we're currently using?";
+
+describe('competitor identity guard against a fabricated match (B0-779)', () => {
+  it('never invokes the engine, and declines, when extractCompetitorProduct is fully unresolved', async () => {
+    mockCompetitorExtraction({ brand: null, product: null });
+
+    const out = await run({ userMessage: UNRESOLVED_XREF_MESSAGE });
+
+    expect(runCrossReferenceRecommendationMock).not.toHaveBeenCalled();
+    expect(out.answerText).toBe(XREF_DECLINE_COPY);
+    expect(out.answerText).not.toContain('Comparable Betco product');
+    expect(out.answerProvenance).toBe('competitor_identity_unresolved_decline');
+  });
+
+  it('overrides a model-drafted match line even when the model called recommend_cross_reference itself with the same unresolved identity (PRO-045/PRO-036 shape)', async () => {
+    mockCompetitorExtraction({ brand: null, product: null });
+    runResponsesWithToolLoopMock.mockImplementation(
+      generationCalling([
+        {
+          name: 'lookup_cross_reference',
+          argumentsJson: JSON.stringify({ brand: '', productName: UNRESOLVED_XREF_MESSAGE }),
+          callId: 'call_xref',
+        },
+        {
+          name: 'recommend_cross_reference',
+          argumentsJson: JSON.stringify({ competitorProduct: UNRESOLVED_XREF_MESSAGE }),
+          callId: 'call_engine',
+        },
+      ]),
+    );
+    executeProductToolMock.mockImplementation(async (name: string) => {
+      if (name === 'lookup_cross_reference') {
+        return { matches: [], fallbackRecommended: true };
+      }
+      if (name === 'recommend_cross_reference') {
+        // The engine itself (wrongly) approved a match built from the raw message — the exact
+        // PRO-045 shape (a fabricated, "answered: true" candidate with a URL).
+        return {
+          ok: true,
+          adapter: 'cross_reference_recommendation_v1',
+          ...engineResult({
+            candidates: [
+              {
+                betcoTitle: 'Portable Chemical Management System',
+                url: 'https://www.betco.com/products/portable-chemical-management-system',
+                rationale: null,
+                rank: 1,
+                tier: 'primary',
+              },
+            ],
+          }),
+        };
+      }
+      return RAG_SOURCES;
+    });
+
+    const out = await run({ userMessage: UNRESOLVED_XREF_MESSAGE });
+
+    // The backstop never fires (model called the engine itself)...
+    expect(runCrossReferenceRecommendationMock).not.toHaveBeenCalled();
+    // ...but the unresolved-identity guard still overrides whatever the model drafted.
+    expect(out.answerText).toBe(XREF_DECLINE_COPY);
+    expect(out.answerText).not.toContain('Comparable Betco product');
+    expect(out.answerProvenance).toBe('competitor_identity_unresolved_decline');
+  });
+
+  it('does NOT change the confident-match path — a brand-only (no product) resolution still lets the engine answer', async () => {
+    // Confidently resolved brand, no specific product named — NOT the unresolved shape (AC: no
+    // change to a correctly resolved competitor).
+    mockCompetitorExtraction({ brand: 'Spartan', product: null });
+
+    await run();
+
+    expect(runCrossReferenceRecommendationMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT change the confident-match path — a resolved product with no brand still lets the engine answer', async () => {
+    mockCompetitorExtraction({ brand: null, product: 'BNC-15' });
+
+    const out = await run();
+
+    expect(runCrossReferenceRecommendationMock).toHaveBeenCalledTimes(1);
+    expect(out.answerProvenance).not.toBe('competitor_identity_unresolved_decline');
   });
 });

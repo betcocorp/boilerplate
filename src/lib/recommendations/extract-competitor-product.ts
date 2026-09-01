@@ -42,6 +42,16 @@ export type ExtractedCompetitor = {
   otherCompetitorProduct: string | null;
   /** B0-563 — this call's token usage, so its cost is attributable; `ZERO_USAGE` on the fallback path. */
   usage: LlmTokenUsage;
+  /**
+   * B0-779 — true only when the LLM actually named a product in the message. `product` is NEVER
+   * empty (it falls back to the raw message so the engine always has a query string, see below),
+   * so `product`/`product.trim()` can't distinguish "a real product was extracted" from "nothing
+   * was found and this is standing in for the raw message" — every consumer that would render a
+   * "Comparable Betco product" match line MUST check `resolved` (or `brand`) instead of `product`
+   * before doing so. False on the LLM/parse-failure fallback and whenever the LLM itself returned
+   * `product: null` (it found no product name in the message).
+   */
+  resolved: boolean;
 };
 
 export type ExtractCompetitorProductDeps = {
@@ -115,15 +125,38 @@ export async function extractCompetitorProduct(
     product: userMessage.trim(),
     otherCompetitorProduct: null,
     usage: ZERO_USAGE,
+    resolved: false,
   };
   try {
     const { parsed: out, usage } = await deps.runLlm(userMessage);
     const brand = normalize(out.brand) || null;
     const product = normalize(out.product);
     const otherCompetitorProduct = normalize(out.otherCompetitorProduct) || null;
-    // No product extracted → fall back to the raw message so the engine still gets a query.
-    return { brand, product: product || fallback.product, otherCompetitorProduct, usage };
+    // No product extracted → fall back to the raw message so the engine still gets a query, but
+    // `resolved` stays false so a caller can tell this apart from a genuine extraction (B0-779).
+    return {
+      brand,
+      product: product || fallback.product,
+      otherCompetitorProduct,
+      usage,
+      resolved: Boolean(product),
+    };
   } catch {
     return fallback;
   }
+}
+
+/**
+ * B0-779 — the one predicate every consumer of `ExtractedCompetitor` must use before composing or
+ * rendering a "Comparable Betco product" match line (directly, or by invoking the cross-reference
+ * recommendation engine). Unresolved means neither a brand nor a confidently-extracted product
+ * name exists — `product` is standing in for the raw message — so there is no competitor identity
+ * to match against; PRO-045 and PRO-036 (B0-779) both fabricated a match from exactly this shape.
+ * A brand alone (no confident product name) is NOT treated as unresolved: enough identity to
+ * proceed, and unchanged behavior for that case is required (see the ticket's confident-match AC).
+ */
+export function isCompetitorIdentityUnresolved(
+  competitor: Pick<ExtractedCompetitor, 'brand' | 'resolved'>,
+): boolean {
+  return !competitor.brand && !competitor.resolved;
 }
