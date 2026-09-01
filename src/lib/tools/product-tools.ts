@@ -67,6 +67,55 @@ import { runCrossReferenceRecommendation } from '~/lib/recommendations/persist-r
 const ADAPTER_TAG = 'rag_corpus_full_document' as const;
 
 /**
+ * B0-780 — category-binding: `vct` and `sportszone` are mutually exclusive floor-care domains in
+ * the `knowledge` corpus (resilient tile vs. wood sport floors — see `deriveKnowledgeCategoryFromS3Key`
+ * in `~/lib/rag/search.ts`), and `restroom` is out of scope for either. A wood-sport-floor question
+ * must never ground on a VCT procedure document (and vice versa), and a bathroom-specialist question
+ * must never ground on floor-care content at all.
+ *
+ * Deliberately keyword-based and deliberately narrow: an AMBIGUOUS or neither-signal floor query
+ * (e.g. "how do I select a floor finish" with no substrate named) excludes nothing, so it keeps
+ * behaving exactly as before this ticket. Only a query that actually names one domain gets bound
+ * away from the other.
+ */
+const WOOD_FLOOR_QUERY_PATTERN =
+  /\bwood(?:en)?\b|\bhardwood\b|\bgym(?:nasium)?s?\b|\bsport(?:s)?\s*(?:zone|floor|court)\b|\bmaple\b|\bathletic floor\b/i;
+const VCT_FLOOR_QUERY_PATTERN =
+  /\bvct\b|\bvinyl composition tile\b|\bvinyl tile\b|\bresilient tile\b|\bmastic\b/i;
+
+/** B0-780 — a bathroom-specialist call never needs floor-care content, regardless of query wording. */
+const BATHROOM_EXCLUDED_KNOWLEDGE_CATEGORIES = ['vct', 'sportszone'] as const;
+
+/**
+ * B0-780 — resolves which `knowledge` document categories (see `deriveKnowledgeCategoryFromS3Key`)
+ * to exclude from retrieval for this call, from the specialist policy actually running
+ * (`auditCtx.specialistId`, threaded from `run-product-support-workflow.ts`'s `effectivePromptId`
+ * via `wfCtx`) and the text of this specific call's query.
+ *
+ * `dilution-control` and `product` are cross-cutting categories and are never excluded here, for
+ * any specialist.
+ */
+export function resolveKnowledgeCategoryExclusions(
+  specialistId: string | null | undefined,
+  queryText: string,
+): string[] {
+  if (specialistId === 'bathroom') {
+    return [...BATHROOM_EXCLUDED_KNOWLEDGE_CATEGORIES];
+  }
+  if (specialistId === 'floor') {
+    const isWoodDomain = WOOD_FLOOR_QUERY_PATTERN.test(queryText);
+    const isVctDomain = VCT_FLOOR_QUERY_PATTERN.test(queryText);
+    if (isWoodDomain && !isVctDomain) {
+      return ['vct'];
+    }
+    if (isVctDomain && !isWoodDomain) {
+      return ['sportszone'];
+    }
+  }
+  return [];
+}
+
+/**
  * B0-488 — the eval-harness / audit-log outcome taxonomy for `rag.product_alias` resolution,
  * distinct from `ProductEntityResolutionSource` (which also names the non-alias legacy fallback
  * tiers, `prod_line_id`/`title_exact`/`title_fuzzy`). `alias_fuzzy` here covers BOTH the tokenized
@@ -584,6 +633,7 @@ export async function executeProductTool(
         limit: intent.limit,
         maxPerDocument: intent.maxPerDocument,
         requiredDocumentKinds: intent.requiredDocumentKinds,
+        excludeKnowledgeCategories: resolveKnowledgeCategoryExclusions(auditCtx?.specialistId, q),
       });
       return {
         ok: true,
@@ -611,6 +661,7 @@ export async function executeProductTool(
         productKey,
         productLineKeySource: resolutionSource,
         sectionType: null,
+        excludeKnowledgeCategories: resolveKnowledgeCategoryExclusions(auditCtx?.specialistId, q),
       });
       return {
         ok: true,
@@ -633,6 +684,10 @@ export async function executeProductTool(
         productKey,
         productLineKeySource: resolutionSource,
         sectionType,
+        excludeKnowledgeCategories: resolveKnowledgeCategoryExclusions(
+          auditCtx?.specialistId,
+          `${p.productId} ${p.task} ${p.surfaceType} ${p.environment ?? ''}`,
+        ),
       });
       return {
         ok: true,
@@ -661,6 +716,10 @@ export async function executeProductTool(
         productKey,
         productLineKeySource: resolutionSource,
         sectionType,
+        excludeKnowledgeCategories: resolveKnowledgeCategoryExclusions(
+          auditCtx?.specialistId,
+          p.productId,
+        ),
       });
       return {
         ok: true,
@@ -683,6 +742,10 @@ export async function executeProductTool(
         productKey,
         productLineKeySource: resolutionSource,
         sectionType,
+        excludeKnowledgeCategories: resolveKnowledgeCategoryExclusions(
+          auditCtx?.specialistId,
+          `${p.productId} ${p.surfaceType} ${p.materialType ?? ''}`,
+        ),
       });
       return {
         ok: true,
@@ -708,6 +771,10 @@ export async function executeProductTool(
         productKey,
         productLineKeySource: resolutionSource,
         sectionType,
+        excludeKnowledgeCategories: resolveKnowledgeCategoryExclusions(
+          auditCtx?.specialistId,
+          p.productId,
+        ),
       });
       return {
         ok: true,
@@ -731,6 +798,10 @@ export async function executeProductTool(
         productKey,
         productLineKeySource: resolutionSource,
         sectionType,
+        excludeKnowledgeCategories: resolveKnowledgeCategoryExclusions(
+          auditCtx?.specialistId,
+          p.productId,
+        ),
       });
       return {
         ok: true,
@@ -958,7 +1029,11 @@ export async function executeProductTool(
         p.procedure,
         'floor finish coats coverage yield recoat top scrub stripping procedure',
       ]);
-      const result = await retrieveKnowledgeAssets({ query: q, limit: p.maxResults });
+      const result = await retrieveKnowledgeAssets({
+        query: q,
+        limit: p.maxResults,
+        excludeKnowledgeCategories: resolveKnowledgeCategoryExclusions(auditCtx?.specialistId, q),
+      });
       return {
         ok: true,
         adapter: KNOWLEDGE_ASSET_ADAPTER_TAG,

@@ -18,6 +18,8 @@ export async function retrieveApprovedUsage(input: {
   /** B0-479: source of `productLineKey`, from `resolveProductEntityByName` — threaded through so retrieval telemetry can tag "alias-anchored" resolutions. */
   productLineKeySource?: ProductEntityResolutionSource;
   sectionType?: string | null;
+  /** B0-780: see `runProductKnowledgeQuery` in `~/lib/retrieval/product-knowledge.ts`. */
+  excludeKnowledgeCategories?: string[];
 }): Promise<ProductKnowledgeQueryResult> {
   const q = buildQuery([
     input.productId,
@@ -33,6 +35,7 @@ export async function retrieveApprovedUsage(input: {
     productLineKeySource: input.productLineKeySource,
     skipProductLineResolution: !input.productLineKey,
     sectionType: input.sectionType,
+    excludeKnowledgeCategories: input.excludeKnowledgeCategories,
   });
 }
 
@@ -42,6 +45,8 @@ export async function retrieveSafetyConstraints(input: {
   productKey?: string | null;
   productLineKeySource?: ProductEntityResolutionSource;
   sectionType?: string | null;
+  /** B0-780: see `runProductKnowledgeQuery` in `~/lib/retrieval/product-knowledge.ts`. */
+  excludeKnowledgeCategories?: string[];
 }): Promise<ProductKnowledgeQueryResult> {
   const q = buildQuery([
     input.productId,
@@ -54,6 +59,7 @@ export async function retrieveSafetyConstraints(input: {
     productLineKeySource: input.productLineKeySource,
     skipProductLineResolution: !input.productLineKey,
     sectionType: input.sectionType,
+    excludeKnowledgeCategories: input.excludeKnowledgeCategories,
   });
 }
 
@@ -65,6 +71,8 @@ export async function retrieveCompatibility(input: {
   productKey?: string | null;
   productLineKeySource?: ProductEntityResolutionSource;
   sectionType?: string | null;
+  /** B0-780: see `runProductKnowledgeQuery` in `~/lib/retrieval/product-knowledge.ts`. */
+  excludeKnowledgeCategories?: string[];
 }): Promise<ProductKnowledgeQueryResult> {
   const q = buildQuery([
     input.productId,
@@ -80,6 +88,7 @@ export async function retrieveCompatibility(input: {
     productLineKeySource: input.productLineKeySource,
     skipProductLineResolution: !input.productLineKey,
     sectionType: input.sectionType,
+    excludeKnowledgeCategories: input.excludeKnowledgeCategories,
   });
 }
 
@@ -90,6 +99,8 @@ export async function retrieveSurfacesLists(input: {
   productKey?: string | null;
   productLineKeySource?: ProductEntityResolutionSource;
   sectionType?: string | null;
+  /** B0-780: see `runProductKnowledgeQuery` in `~/lib/retrieval/product-knowledge.ts`. */
+  excludeKnowledgeCategories?: string[];
 }): Promise<ProductKnowledgeQueryResult> {
   const hint =
     input.mode === 'allowed'
@@ -103,5 +114,6 @@ export async function retrieveSurfacesLists(input: {
     productLineKeySource: input.productLineKeySource,
     skipProductLineResolution: !input.productLineKey,
     sectionType: input.sectionType,
+    excludeKnowledgeCategories: input.excludeKnowledgeCategories,
   });
 }
