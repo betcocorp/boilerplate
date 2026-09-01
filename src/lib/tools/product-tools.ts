@@ -321,8 +321,12 @@ const PROCEDURAL_DEPTH_PATTERNS: readonly RegExp[] = [
   /**
    * B0-759 follow-up — "which X get missed most often" is an enumeration ask wearing a question
    * word: the graded answer is a list of fixtures, not a single fact.
+   *
+   * B0-781 — added the adjectival "most common" alongside the adverbial "most often/most
+   * commonly": RST-016 ("What are the most common mistakes staff make when cleaning restrooms?",
+   * 9-concept golden answer) used the adjectival form and matched none of the original four.
    */
-  /\b(which|what)\b[^.?!]{0,40}\b(most often|most commonly|commonly|typically)\b/,
+  /\b(which|what)\b[^.?!]{0,40}\b(most often|most commonly|commonly|typically|most common)\b/,
   /**
    * A hard superlative ("strongest stripper you have") cannot be answered by naming one product —
    * Betco publishes no performance ranking, so the answer has to enumerate the labeled options and
@@ -330,6 +334,12 @@ const PROCEDURAL_DEPTH_PATTERNS: readonly RegExp[] = [
    * which appears in already-passing single-product asks like "what is the best glass cleaner".
    */
   /\b(strongest|toughest|most\s+aggressive|most\s+powerful|heaviest[-\s]duty)\b/,
+  /**
+   * B0-781 — troubleshooting-cause phrasing: "why didn't/doesn't/wasn't X" asks for the set of
+   * possible causes of an observed failure, not one fact (VCT-003: "Why didn't all the finish come
+   * off when I stripped the VCT floor?", 7 documented causes in one procedural document).
+   */
+  /\bwhy\s+(?:didn'?t|doesn'?t|wasn'?t|isn'?t|hasn'?t|won'?t)\b/,
 ];
 
 /**
