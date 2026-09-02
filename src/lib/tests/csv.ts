@@ -98,6 +98,10 @@ const TYPED_CSV_COLUMNS = new Set([
   'expected_sources',
   'should_cite',
   'expected_tool',
+  // B0-790 — ground-truth columns for the signals-accuracy harness.
+  'expected_surface_type',
+  'expected_brand_family',
+  'expected_setting',
   // B0-537 — routed into `input_payload.multi_turn`, not `metadata`, by `parseMultiTurnJsonCell`.
   'multi_turn_json',
 ]);
@@ -266,6 +270,11 @@ export function parseTestCsvContent(content: string): ParsedCsvRow[] {
       const expectedSources = asTrimmedString(record.expected_sources) || null;
       const shouldCite = parseBooleanCell(asTrimmedString(record.should_cite));
       const expectedTool = asTrimmedString(record.expected_tool) || null;
+      // B0-790 — ground truth for the signals-accuracy harness; validated only in app code
+      // (~/lib/tests/signal-accuracy.ts), same as expected_tool above.
+      const expectedSurfaceType = asTrimmedString(record.expected_surface_type) || null;
+      const expectedBrandFamily = asTrimmedString(record.expected_brand_family) || null;
+      const expectedSetting = asTrimmedString(record.expected_setting) || null;
       const multiTurnScenario = parseMultiTurnJsonCell(
         asTrimmedString(record.multi_turn_json),
       );
@@ -318,6 +327,9 @@ export function parseTestCsvContent(content: string): ParsedCsvRow[] {
         expectedSources,
         shouldCite,
         expectedTool,
+        expectedSurfaceType,
+        expectedBrandFamily,
+        expectedSetting,
         multiTurnScenario,
         inputPayload,
         metadata,

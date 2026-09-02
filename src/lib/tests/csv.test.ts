@@ -43,6 +43,22 @@ describe('parseTestCsvContent — golden test set format', () => {
     expect(row.metadata).not.toHaveProperty('expected_tool');
   });
 
+  it('reads the B0-790 signal ground-truth columns into typed fields, not the metadata catch-all', () => {
+    const csv = [
+      'question,expected_surface_type,expected_brand_family,expected_setting',
+      '"What is pH7Q used on?",tile,betco,commercial',
+    ].join('\n');
+
+    const [row] = parseTestCsvContent(csv);
+
+    expect(row.expectedSurfaceType).toBe('tile');
+    expect(row.expectedBrandFamily).toBe('betco');
+    expect(row.expectedSetting).toBe('commercial');
+    expect(row.metadata).not.toHaveProperty('expected_surface_type');
+    expect(row.metadata).not.toHaveProperty('expected_brand_family');
+    expect(row.metadata).not.toHaveProperty('expected_setting');
+  });
+
   it('treats blank or unrecognized should_cite as no expectation', () => {
     const csv = [
       'question,should_cite',
@@ -93,6 +109,10 @@ describe('parseTestCsvContent — golden test set format', () => {
       'expected_sources',
       'should_cite',
       'expected_tool',
+      // B0-790 — ground-truth columns for the signals-accuracy harness.
+      'expected_surface_type',
+      'expected_brand_family',
+      'expected_setting',
       // B0-537 — optional multi-turn scenario escape hatch.
       'multi_turn_json',
     ]);

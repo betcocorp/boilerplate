@@ -130,6 +130,27 @@ export const TEST_TEMPLATE_COLUMNS: TestTemplateColumn[] = [
       "Which of the 14 product-support function tools (search_product_docs, get_efficacy_data, lookup_cross_reference, etc.) this question is expected to call, scored by the run detail page's Tool routing panel (B0-383). Leave blank for no routing expectation.",
   },
   {
+    name: 'expected_surface_type',
+    required: false,
+    example: 'Ground-truth surface type this question is about, e.g. tile',
+    help:
+      "Ground-truth surface type (matches the B0-786 signals extraction's surfaceType), scored by the run detail page's Signal accuracy panel (B0-790). Leave blank for no expectation.",
+  },
+  {
+    name: 'expected_brand_family',
+    required: false,
+    example: 'Ground-truth brand family: betco | basic_coatings | envirozyme | 1950 | competitor',
+    help:
+      "Ground-truth brand family (matches the B0-786 signals extraction's brandFamily), scored by the run detail page's Signal accuracy panel (B0-790). Leave blank for no expectation.",
+  },
+  {
+    name: 'expected_setting',
+    required: false,
+    example: 'Ground-truth use setting: commercial | residential',
+    help:
+      "Ground-truth use setting (matches the B0-786 signals extraction's setting), scored by the run detail page's Signal accuracy panel (B0-790). Leave blank for no expectation.",
+  },
+  {
     name: 'multi_turn_json',
     required: false,
     example:
