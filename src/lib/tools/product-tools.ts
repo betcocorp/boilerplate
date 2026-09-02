@@ -640,6 +640,14 @@ export type ProductToolTurnOptions = {
     productLineKey: string;
     resolutionSource: ProductEntityResolutionSource;
   };
+  /**
+   * B0-738 — a deterministic query augmentation built from this turn's `TurnSignals`
+   * (`buildSignalQueryRewrite`, `~/lib/orchestrator/signals/signal-query-rewrite.ts`). No LLM call
+   * produces this; it is signals already extracted for the turn, joined. Appended to the
+   * `search_product_docs` query only when its content isn't already present, so it can only add
+   * context the model's own query terms missed (e.g. a named surface type), never override them.
+   */
+  queryRewrite?: string | null;
 };
 
 export async function executeProductTool(
@@ -690,8 +698,18 @@ export async function executeProductTool(
       const resolutionSource =
         turnOptions?.productLineLock?.resolutionSource ?? resolved.resolutionSource;
       const intent = classifyRetrievalIntent(q, resolvedProductName, turnOptions?.answerShape);
+      /**
+       * B0-738 — append the signals-derived rewrite only when it isn't already substantially
+       * present in the model's own query. This is context the model's own terms may have missed
+       * (e.g. the model asks about "wood floor finish" without naming the surface type signals
+       * already resolved from earlier turns), never a replacement for the model's query.
+       */
+      const query =
+        turnOptions?.queryRewrite && !q.toLowerCase().includes(turnOptions.queryRewrite.toLowerCase())
+          ? [q, turnOptions.queryRewrite].filter(Boolean).join(' ').trim()
+          : q;
       const result = await ragQueryForProductKnowledgeWithMeta({
-        query: q,
+        query,
         productLineKey,
         productKey,
         productLineKeySource: resolutionSource,
