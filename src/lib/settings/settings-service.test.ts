@@ -331,6 +331,9 @@ describe('settings-table coverage does not regress to process.env (B0-638)', () 
     'BEX_LLM_ROUTER_ENABLED',
     'BEX_LLM_ROUTER_SHADOW_MODE',
     'BEX_PERMISSIONS_ENFORCED',
+    // B0-603 — read through resolveValidatorModelTag(); BEX_VALIDATOR_MODEL was never actually
+    // set as an env var anywhere, so moving it here is behavior-preserving, not a model change.
+    'BEX_VALIDATOR_MODEL',
     'COHERE_RERANK_MODEL',
     'ENABLE_RERANKER',
     // B0-686 — read through getRagBoostConfig()/getRagChunkingConfig(); these rows replaced a

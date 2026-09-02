@@ -1,3 +1,4 @@
+import { isBexModelTag, type BexModelTag } from '~/lib/constants/models';
 import { getOpenAIClient, resolveResponsesModel } from '~/lib/openai/client';
 import { samplingParamsFor } from '~/lib/openai/model-capabilities';
 import { extractAssistantText } from '~/lib/openai/response-item-parsing';
@@ -6,6 +7,7 @@ import {
   resolveOpenAiRequestTimeoutMs,
   retryTransportFaults,
 } from '~/lib/openai/transport-retry';
+import { getStringSetting } from '~/lib/settings/settings-service';
 import { resolveMaxOutputTokens } from '~/lib/workflows/product-support/max-output-tokens';
 
 import {
@@ -99,16 +101,38 @@ export function partitionValidatorIssues(issues: string[]): {
   return { issues: genuine, supportedClaims: supported };
 }
 
+/** B0-603 — real prior default: BEX_VALIDATOR_MODEL was never set anywhere, so the validator has
+ * always fallen through to the 'preview' tag (gpt-4.1-mini). Seeded as the settings row default. */
+export const DEFAULT_BEX_VALIDATOR_MODEL_TAG: BexModelTag = 'preview';
+
+/**
+ * B0-603 — the `BEX_VALIDATOR_MODEL` settings row, re-validated against `BEX_MODEL_TAGS` before
+ * use. `settings.allowed_values` is advisory metadata the admin API validates writes against, NOT
+ * a database constraint, so an unrecognized stored value falls back to the default tag rather
+ * than being handed to the API as a non-existent model id.
+ */
+export async function resolveValidatorModelTag(): Promise<BexModelTag> {
+  const raw = (
+    await getStringSetting('BEX_VALIDATOR_MODEL', DEFAULT_BEX_VALIDATOR_MODEL_TAG)
+  ).trim();
+  return isBexModelTag(raw) ? raw : DEFAULT_BEX_VALIDATOR_MODEL_TAG;
+}
+
 /**
  * B0-389 — the model the validator pass actually calls. Exported so the workflow can record it on
  * the validator step's prompt record without duplicating (and eventually contradicting) the
- * `BEX_VALIDATOR_MODEL` override resolution.
+ * `BEX_VALIDATOR_MODEL` resolution.
+ *
+ * An explicit `modelTag` (e.g. a test run's model override) always wins; the settings row only
+ * supplies the default when a run doesn't pass one. Moved off the old env-var override per
+ * B0-638/B0-603 — that env var was never actually set in any environment, so this is
+ * behavior-preserving, not a model change.
  */
-export function resolveValidatorModel(modelTag?: string): string {
-  return (
-    process.env.BEX_VALIDATOR_MODEL?.trim() ||
-    resolveResponsesModel(modelTag ?? 'preview')
-  );
+export async function resolveValidatorModel(modelTag?: string): Promise<string> {
+  if (modelTag) {
+    return resolveResponsesModel(modelTag);
+  }
+  return resolveResponsesModel(await resolveValidatorModelTag());
 }
 
 /** B0-554 — `runValidatorPass`'s result plus the token usage from its one model call. */
@@ -120,7 +144,7 @@ export async function runValidatorPass(input: {
   modelTag?: string;
 }): Promise<ValidatorPassResult> {
   const client = getOpenAIClient();
-  const model = resolveValidatorModel(input.modelTag);
+  const model = await resolveValidatorModel(input.modelTag);
 
   const payload = {
     draft: input.draftAnswer,

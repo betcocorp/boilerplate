@@ -3651,7 +3651,7 @@ export async function runProductSupportWorkflow(input: {
           ? recordPrompt({
               stage: 'validator',
               instructions: VALIDATOR_SYSTEM_PROMPT,
-              model: resolveValidatorModel(input.modelTag),
+              model: await resolveValidatorModel(input.modelTag),
               runtime: 'responses',
             })
           : {}),
@@ -4340,7 +4340,7 @@ export async function runProductSupportWorkflow(input: {
               usage: sumLlmUsage(validatorUsageByCall),
               usageByCall: validatorUsageByCall,
               // B0-563 — same reasoning as the agent step's `model` field above.
-              model: resolveValidatorModel(input.modelTag),
+              model: await resolveValidatorModel(input.modelTag),
             }
           : {}),
         ...(useValidator && !canSkipValidatorForHighSimilarity
