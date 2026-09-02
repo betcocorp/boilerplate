@@ -29,6 +29,15 @@ import {
 } from '~/lib/permissions/redis';
 import { getPermissionsForUser } from '~/lib/permissions/repository';
 
+/**
+ * B0-413 — shown when the permission lookup succeeded and the user simply holds no grants.
+ * Deliberately does NOT suggest signing in again: re-authenticating cannot create a grant, and
+ * telling someone to retry an action that can never succeed sends them into a loop and then to
+ * the helpdesk. Names the actual next step instead.
+ */
+export const NO_ACCESS_DENY_ERROR =
+  'You do not have access to this feature. Contact IT to request access.';
+
 function matchesPermission(
   required: string | null | undefined,
   have: string[],
@@ -144,6 +153,9 @@ export async function requirePermission(
   }
 
   let permissions: string[] | null = await getCachedPermissions(userId);
+  // B0-413 — did the read itself fail, or did it succeed and return nothing? The two used to
+  // collapse into one verdict; see `no-permissions-granted` in `~/lib/permissions/enforcement`.
+  let lookupFailed = false;
   if (!permissions || permissions.length === 0) {
     try {
       const fresh = await getPermissionsForUser(userId);
@@ -156,19 +168,21 @@ export async function requirePermission(
         permissions = fresh.permissions;
       }
     } catch {
-      // keep null
+      lookupFailed = true;
     }
   }
   if (!permissions || permissions.length === 0) {
     return resolveVerdict({
       selector: requiredPermission,
       allowed: false,
-      reason: 'permissions-unavailable',
+      reason: lookupFailed ? 'permissions-unavailable' : 'no-permissions-granted',
       route,
       userId,
       email,
       permissions: [],
-      denyError: 'Permissions not available; try signing in again',
+      denyError: lookupFailed
+        ? 'Permissions not available; try signing in again'
+        : NO_ACCESS_DENY_ERROR,
     });
   }
 
@@ -223,6 +237,8 @@ export async function requireAnyPermission(
   }
 
   let permissions: string[] | null = await getCachedPermissions(userId);
+  // B0-413 — same split as `requirePermission` above; these two functions mirror each other.
+  let lookupFailed = false;
   if (!permissions || permissions.length === 0) {
     try {
       const fresh = await getPermissionsForUser(userId);
@@ -235,19 +251,21 @@ export async function requireAnyPermission(
         permissions = fresh.permissions;
       }
     } catch {
-      // keep null
+      lookupFailed = true;
     }
   }
   if (!permissions || permissions.length === 0) {
     return resolveVerdict({
       selector: requiredPermissions,
       allowed: false,
-      reason: 'permissions-unavailable',
+      reason: lookupFailed ? 'permissions-unavailable' : 'no-permissions-granted',
       route,
       userId,
       email,
       permissions: [],
-      denyError: 'Permissions not available; try signing in again',
+      denyError: lookupFailed
+        ? 'Permissions not available; try signing in again'
+        : NO_ACCESS_DENY_ERROR,
     });
   }
 
