@@ -114,7 +114,7 @@ precision/recall so an unverified case can never silently inflate either metric)
 with synthetic numeric fixtures (`threshold-calibration.test.ts`) — no product data is embedded in
 the library itself; callers supply real labeled cases.
 
-### Coverage snapshot from real historical engine runs (not yet a precision/recall calibration)
+### Coverage snapshot from real historical engine runs, 2026-07-26 (superseded — see 2026-09-02 below)
 
 `rag.cross_reference_recommendations` (DB table backing `src/lib/recommendations/persist-recommendation.ts`)
 holds 23 real rows from prior manual runs of the live web-grounded engine (queried 2026-07-26). None of
@@ -136,39 +136,190 @@ candidates:
 manually-tried competitor products so far fall below even 0.70 — but says nothing about whether the
 *answered* cases are *correct*, which is the actual question a precision target needs to answer.
 
-### Blocker: no labeled (confidence, correctness) pairs yet for the web-grounded gate
+---
 
-To turn the coverage snapshot above into a real precision/recall calibration for
-`XREF_RECOMMENDATION_MIN_CONFIDENCE`, we need cases where (a) the web-grounded path actually ran
-(competitor product not in the legacy table, or run with the legacy shortcut disabled) and (b) a
-human — SME or product team — confirmed whether the top candidate was the correct Betco equivalent.
-Neither exists yet in this environment. **This is a genuine data gap, not a code gap**, and it should
-not be closed by guessing plausible-sounding competitor→Betco mappings.
+## Calibration executed against real data (B0-97, 2026-09-02)
 
-**Proposed next step:** sample ~30–50 competitor products from the legacy golden set's *long tail*
-(brands/products with weaker retrieval signal), force them through the web-grounded path (bypass the
-legacy shortcut for the sample), and have an SME/product-team reviewer mark each top candidate
-correct/incorrect. Feed the resulting `{ id, overallConfidence, correct }` list into
-`computeThresholdCalibration` to get a real precision/recall table across 0.70–0.90, and set
-`XREF_RECOMMENDATION_MIN_CONFIDENCE` from that data rather than the current placeholder default.
+The 2026-07-26 pass above stopped at "no labeled pairs exist". They do now. This section supersedes
+it: the ground-truth deadlock was broken, the sweep was run for real, and the conclusion is **not**
+"0.80 is right" — it is that the threshold is the wrong knob.
 
-### Target (provisional, pending real calibration data)
+### Where the threshold actually lives today (verified live)
 
-Proposed target once real data exists: **precision ≥ 90% on answered recommendations** at the chosen
-threshold (a wrong equivalent reaching a customer is a materially worse failure mode than an
-unnecessary decline-to-sales-rep). Until the blocker above is resolved, `0.80` remains the operating
-default — reasonable given the coverage snapshot (very few false-positive-risk answers slip through)
-but **not yet proven correct** by a labeled precision curve.
+- **`XREF_RECOMMENDATION_MIN_CONFIDENCE` is still read from `process.env`**, in
+  `resolveXrefThreshold()` (`src/lib/recommendations/confidence-scoring.ts`). It was **not** migrated
+  in B0-638; `select key from public.settings where key like '%XREF%'` returns only
+  `XREF_RECOMMENDATION_TIMEOUT_MS` (`25000`). There is no settings row and no env var set, so the
+  live effective value is the hardcoded fallback `DEFAULT_XREF_MIN_CONFIDENCE = 0.8`. Per the
+  config-in-settings rule this belongs in `public.settings`; moving it is deliberately **not** done
+  here, because the number itself should change first (below).
+- **The gate is currently bypassed in production.** `BEX_DISABLE_CONFIDENCE_GATING` is `true` in
+  `public.settings`, and `gateRecommendation()` returns `answered: true` unconditionally when it is
+  set. This is visible in the data: of 432 rows in `rag.cross_reference_recommendations`, 129 are
+  `answer_given = true` but only **1** of those scores ≥ 0.80 — answered confidences go down to
+  **0.365**. Any statement of the form "the 0.80 gate is protecting users today" is false.
 
-### Harness run — pre-handoff checklist
+### Method: forced-web-path harvest with auto-derived labels
 
-Any change to the recommendation prompt, `scoreRecommendation`/`gateRecommendation` weights, or
-`XREF_RECOMMENDATION_MIN_CONFIDENCE` should be checked against the legacy-lookup regression set before
-merge:
+The blocker was that the two paths are mutually exclusive — `recommendCrossReference()` returns
+immediately on a confident legacy match and never reaches `scoreRecommendation`/`gateRecommendation`,
+so a competitor product either has a curated answer (and skips the gate) or reaches the gate (and has
+no curated answer to be checked against). Measured live: of 327 historical web-path rows, exactly
+**1** has a counterpart in `legacy.competitor_products`.
+
+`scripts/calibrate-xref-threshold.ts --harvest` breaks the deadlock without inventing any product
+data. It samples competitor products that **do** have a curated Betco equivalent, injects a
+deliberately-missing legacy lookup (`deps.lookupInternal` returning the engine's own legacy-miss
+shape — no production code changed), and forces the run down the web-grounded path. The label is
+then derived, not authored: the top candidate's `betcoProductKey` is compared against the curated
+`ProductKey` from Betco's own cross-reference table. Two data-quality fixes were required for the
+harvest to be valid at all — `competitor_products.Competitor` is a `CompetitorID`, not a brand name
+(feeding the raw id sends `"24 First Step Floor Sealer"` to web search), and rows whose id does not
+resolve to a brand are dropped rather than harvested brandless, since `brandKnown: false` applies a
+0.9 penalty that would bias the curve downward.
+
+**Label semantics — read this before quoting any precision number.** `correct` means *the web path
+reproduced the curated SKU exactly*. It is a strict lower bound on real-world correctness: a run that
+returns the right product line in the wrong pack size, or a defensible alternate, counts as wrong.
+Spot-checking the misses confirms both kinds are present — e.g. Misco `First Step Floor Sealer`
+(curated `Floor Sealer`) returned `Metal Interlocked Acrylic Polymer Floor Sealer`, plausibly the
+same thing at a different naming grain, while Misco `Hang-Tite Plus` (curated `Kling 9% HCl Thick
+Bowl Cleaner`) returned `Concentrated Acid Free Bathroom Disinfectant`, a materially different
+chemistry. Distinguishing these is SME work; the harness does not.
+
+### Score distribution (n = 327 historical web-path runs + 60 harvested)
+
+| Statistic | Historical web-path rows | Harvest (60 forced runs) |
+|---|---|---|
+| p50 | 0.588 | 0.615 |
+| p90 | 0.705 | — |
+| p99 | 0.787 | — |
+| max | **0.831** | **0.760** |
+| ≥ 0.70 | 38 / 327 (11.6%) | 4 / 60 |
+| ≥ 0.80 | **1 / 327 (0.3%)** | **0 / 60** |
+| ≥ 0.85 | 0 / 327 | 0 / 60 |
+
+The scorer's realised range tops out around 0.83. **A 0.80 threshold is not a strict gate, it is an
+off switch** — it answers 0.3% of web-path questions. That is almost certainly why
+`BEX_DISABLE_CONFIDENCE_GATING` was turned on.
+
+### The precision/recall curve (61 cases, 49 labeled)
+
+Produced by `npx tsx --env-file=.env.local scripts/calibrate-xref-threshold.ts`, sweeping 0.70–0.90
+in 0.01 steps over the 60 harvested cases plus the 1 human-verified row from the review queue.
+Abbreviated (rows are flat between the breakpoints shown):
+
+| Threshold | Answered | Coverage | Labeled answered | Correct | FP | Precision | Recall | F1 |
+|---|---|---|---|---|---|---|---|---|
+| 0.70–0.72 | 4 | 6.6% | 4 | 1 | 3 | 0.250 | 0.250 | 0.250 |
+| 0.73–0.75 | 3 | 4.9% | 3 | 1 | 2 | 0.333 | 0.250 | 0.286 |
+| 0.76 | 2 | 3.3% | 2 | 1 | 1 | 0.500 | 0.250 | 0.333 |
+| 0.77 | 1 | 1.6% | 1 | 1 | 0 | 1.000 | 0.250 | 0.400 |
+| **0.78–0.90** | **0** | **0%** | 0 | 0 | 0 | — | 0.000 | — |
+
+**At the current default of 0.80, every threshold in the range answers nothing at all.** The
+`precision = 1.000` at 0.77 rests on a single case and is not evidence; `selectThreshold()` refuses
+to return it (`minLabeledAnswered` default 20) rather than let it be quoted as a result.
+
+### The finding that matters: the score does not separate correct from incorrect
+
+Across the 48 labeled harvest cases (3 correct, 45 wrong at exact-key grain):
+
+- mean `overallConfidence` of **correct** answers: **0.574**
+- mean `overallConfidence` of **wrong** answers: **0.607**
+- AUC (probability a correct case outranks a wrong one): **0.319**
+
+All three correct cases scored *below* 0.70 (0.645, 0.540, 0.536) and would be declined at every
+threshold in the sweep. With only 3 positives the AUC point estimate carries enormous uncertainty and
+should **not** be reported as "the score is anti-correlated with correctness" — but it is squarely
+inconsistent with the score having useful discriminative power. **No threshold can rescue a score
+that does not rank correct above incorrect.** Tuning `XREF_RECOMMENDATION_MIN_CONFIDENCE` up or down
+is choosing a point on a curve that is flat in the only dimension that matters.
+
+### Recommendation
+
+1. **Do not retune `XREF_RECOMMENDATION_MIN_CONFIDENCE` on this data.** The honest answer to "is 0.80
+   right?" is that the question is malformed: at 0.80 the gate answers 0.3% of web-path questions,
+   and the confidence signal it thresholds shows no measured ability to rank correct answers above
+   wrong ones. Changing the number trades one arbitrary operating point for another.
+2. **Fix `scoreRecommendation` before the threshold.** Its inputs (`topSimilarity` 0.55,
+   `specCompleteness` 0.25, `candidateAgreement` 0.20) are embedding-similarity and
+   metadata-completeness proxies; none of them measures whether the candidate is *the same kind of
+   product*. `candidateAgreement` (mean similarity across candidates) arguably rewards an
+   undifferentiated candidate list, which is the opposite of confidence.
+3. **Keep the target as stated: precision ≥ 90% on answered recommendations.** A wrong equivalent
+   reaching a customer is materially worse than a decline-to-sales-rep. That target is currently
+   unreachable at any coverage worth having.
+4. **Leave `BEX_DISABLE_CONFIDENCE_GATING = true` as-is for now, but treat it as a known open risk,
+   not a setting.** With the gate bypassed, sub-0.40-confidence cross-reference answers reach users.
+   The pairing of "gate bypassed" + "gate would answer almost nothing if re-enabled" is the real
+   finding of this ticket.
+5. **Move the threshold into `public.settings` when its value is next changed** (config-in-settings
+   rule), not before — a settings row that codifies an unproven number is worse than a documented
+   fallback.
+
+### How much labeled data would settle it
+
+`selectThreshold()` requires ≥ 20 labeled *answered* cases before it will name a threshold. Because
+only ~7% of harvested runs clear even 0.70, reaching 20 labeled answered cases needs roughly
+**300 harvested runs** at the current score distribution — or far fewer once the scorer is fixed and
+its output actually spreads across the 0.70–0.90 band.
+
+What an SME must supply is **not** more competitor→Betco pairs (Betco already has 1,954 curated ones
+and the harvest reads them automatically). It is adjudication of the *near-misses*: a reviewer
+marking, for ~50 harvested cases, whether the returned Betco product is an acceptable equivalent even
+when it is not the exact curated SKU. That converts the strict exact-key lower bound into a true
+precision figure and is the only labeling step a machine cannot do here. The review queue at
+`/admin/tools/cross-reference/recommendations` (B0-95/96) already writes exactly this verdict —
+`status = 'verified'` plus `evidence.verification.verifier` — and `loadReviewedCases()` in the script
+picks those rows up automatically. Today that queue holds **1** reviewed row.
+
+### Harness question set (AC1)
+
+`Cross-Reference Gate Calibration (B0-97)` — test id `3a1c7f52-9d4b-4e18-b6a7-2c95f0e41d83`,
+`intended_agent: cross_reference`, 65 items, seeded by
+`src/supabase/migrations/20260902120000_seed_cross_reference_gate_calibration_b0_97.sql`
+(fixture: `src/lib/tests/fixtures/cross-reference-gate-calibration-b0-97.csv`). Every item records
+its provenance:
+
+- **60 positives, `source: curated_legacy_mapping`** — real competitor brand + product with the
+  curated Betco equivalent. The migration SELECTs brand, competitor description and expected product
+  live from `legacy.competitor_products` / `legacy.competitor` / `legacy.products`; nothing is
+  transcribed by hand. Each carries `metadata.harvest_confidence` and
+  `metadata.harvest_correct_exact_key` so the set and the curve above trace to the same engine runs.
+  `expected_criteria` uses `match: 'exact'` on the Betco product name — a product identity is an
+  exact value and exact matching costs no LLM call.
+- **5 negatives, `source: synthetic_no_equivalent`** — deliberately fictional brands/products
+  (`metadata.synthetic: true`). The legacy cardinality audit found **zero** real competitor products
+  without a Betco mapping, so a real no-equivalent case does not exist in the available data. These
+  test graceful decline only and must never be read as market data.
+
+Also retagged to `cross_reference` by the same migration (they predate the B0-663 split and were
+mislabeled `recommendations` / `product`): the B0-99 1,954-row golden set, the 23-row
+`Recommendations test set`, and the 5-row synthetic no-equivalent probes. **All three remain
+`is_archived = true`** — B0-750 pruned the golden roster and that decision is left alone here. Note
+the standing caveat: those positives are answered by the deterministic legacy path and so are a
+regression check on *legacy-lookup retrieval*, not on the gate. Gate calibration requires the
+harvest script.
+
+### Pre-handoff checklist (AC4)
+
+Any change to the recommendation/cross-reference prompt, `sme-routing.ts` recommendation signals,
+`scoreRecommendation`/`gateRecommendation`, or `XREF_RECOMMENDATION_MIN_CONFIDENCE` requires **all
+three** before merge:
 
 ```bash
+# 1. Unit + guardrail suite (fast, no network).
 pnpm exec vitest run src/lib/recommendations
+
+# 2. Re-run the threshold curve on the stored labeled cases and confirm it has not regressed.
+npx tsx --env-file=.env.local scripts/calibrate-xref-threshold.ts
+
+# 3. Only when the scorer itself changed — re-harvest, because stored confidences are stale the
+#    moment scoreRecommendation's weights or inputs move.
+npx tsx --env-file=.env.local scripts/calibrate-xref-threshold.ts --harvest --limit 60
 ```
 
-and, once real calibration data exists, re-running `computeThresholdCalibration` against it before
-changing the default threshold. See `AGENTS.md` → "Quick checks before handoff".
+plus the `/admin/tests` run of `Cross-Reference Gate Calibration (B0-97)`. Labeled cases live in
+`src/lib/recommendations/eval/xref-threshold-cases.json` (checked in, regenerated by `--harvest`).
+See `AGENTS.md` → "Quick checks before handoff".

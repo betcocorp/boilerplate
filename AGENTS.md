@@ -105,9 +105,17 @@ Fix any new diagnostics in files you touched.
 - **Recommendations / cross-reference changes:** if you touch the recommendations prompt
   (`recommendations-specialist-system-prompt.ts`), `sme-routing.ts` recommendation signals,
   `scoreRecommendation`/`gateRecommendation`, or `XREF_RECOMMENDATION_MIN_CONFIDENCE`, also run the
-  recommendations regression suite and the `/admin/tests` "Recommendation Golden Set — Cross-Reference
-  1:1 (B0-99)" harness run before merging (see `src/docs/cross-reference-recommendations.md`):
+  recommendations regression suite, the threshold curve, and the `/admin/tests`
+  "Cross-Reference Gate Calibration (B0-97)" harness run before merging
+  (see `src/docs/cross-reference-recommendations.md` → "Pre-handoff checklist"):
 
   ```bash
   pnpm exec vitest run src/lib/recommendations
+  npx tsx --env-file=.env.local scripts/calibrate-xref-threshold.ts
   ```
+
+  Add `--harvest --limit 60` to that second command when `scoreRecommendation` itself changed —
+  stored confidences are stale the moment its weights or inputs move. **Do not retune
+  `XREF_RECOMMENDATION_MIN_CONFIDENCE` from the curve alone:** B0-97 measured the score as having no
+  usable ability to rank correct answers above wrong ones (AUC 0.319 on 48 labeled cases), and at the
+  0.80 default the gate answers 0.3% of web-path questions. Fix the scorer before the threshold.

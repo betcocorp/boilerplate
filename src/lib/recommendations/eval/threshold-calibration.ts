@@ -34,16 +34,41 @@ export type ThresholdCalibrationRow = {
   /** Answered cases that also carry a known correct/incorrect verdict. */
   labeledAnswered: number;
   correctAnswered: number;
+  /**
+   * Answered AND labeled incorrect — a wrong Betco equivalent that reached the user. This is the
+   * failure mode the precision target exists to bound; surfaced as a raw count because at small n
+   * a single one moves precision by tens of points.
+   */
+  falsePositives: number;
+  /** Declined despite being labeled correct — a good answer withheld (the recall cost). */
+  falseNegatives: number;
   /** correctAnswered / labeledAnswered. `null` when no answered case has a verdict yet. */
   precision: number | null;
   /** correctAnswered / (all cases labeled correct, regardless of threshold). `null` when no case has `correct: true`. */
   recall: number | null;
+  /** Harmonic mean of precision and recall. `null` when either is null or both are 0. */
+  f1: number | null;
 };
 
 export const DEFAULT_CALIBRATION_THRESHOLDS = [0.7, 0.75, 0.8, 0.85, 0.9];
 
 function round3(value: number): number {
   return Math.round(value * 1000) / 1000;
+}
+
+/**
+ * Inclusive sweep, e.g. `buildThresholdSweep(0.7, 0.9, 0.01)` → 21 thresholds. Values are rounded
+ * to 3dp so floating-point accumulation cannot produce `0.7300000000000001` as a table label.
+ */
+export function buildThresholdSweep(min: number, max: number, step: number): number[] {
+  if (!(step > 0) || max < min) return [];
+  const out: number[] = [];
+  for (let i = 0; ; i += 1) {
+    const value = round3(min + i * step);
+    if (value > round3(max) + Number.EPSILON) break;
+    out.push(value);
+  }
+  return out;
 }
 
 export function computeThresholdCalibration(
@@ -56,6 +81,12 @@ export function computeThresholdCalibration(
     const answeredCases = cases.filter((c) => c.overallConfidence >= threshold);
     const labeledAnswered = answeredCases.filter((c) => c.correct !== null);
     const correctAnswered = answeredCases.filter((c) => c.correct === true);
+    const falsePositives = answeredCases.filter((c) => c.correct === false).length;
+
+    const precision =
+      labeledAnswered.length > 0 ? round3(correctAnswered.length / labeledAnswered.length) : null;
+    const recall =
+      totalCorrectKnown > 0 ? round3(correctAnswered.length / totalCorrectKnown) : null;
 
     return {
       threshold,
@@ -64,12 +95,64 @@ export function computeThresholdCalibration(
       coverage: cases.length > 0 ? round3(answeredCases.length / cases.length) : 0,
       labeledAnswered: labeledAnswered.length,
       correctAnswered: correctAnswered.length,
-      precision:
-        labeledAnswered.length > 0
-          ? round3(correctAnswered.length / labeledAnswered.length)
+      falsePositives,
+      falseNegatives: totalCorrectKnown - correctAnswered.length,
+      precision,
+      recall,
+      f1:
+        precision !== null && recall !== null && precision + recall > 0
+          ? round3((2 * precision * recall) / (precision + recall))
           : null,
-      recall:
-        totalCorrectKnown > 0 ? round3(correctAnswered.length / totalCorrectKnown) : null,
     };
   });
+}
+
+export type ThresholdSelection =
+  | {
+      chosen: true;
+      threshold: number;
+      row: ThresholdCalibrationRow;
+      /** How many labeled-answered cases backed the winning row — the honesty check on `threshold`. */
+      labeledAnswered: number;
+    }
+  | { chosen: false; reason: string };
+
+/**
+ * Pick the operating threshold from a computed curve: the LOWEST threshold whose precision meets
+ * `minPrecision`, because among thresholds that clear the precision bar the lowest one answers the
+ * most questions (highest coverage/recall). Rows whose precision is `null` (no labeled answered
+ * case) are never eligible — an unlabeled row cannot clear a precision bar.
+ *
+ * `minLabeledAnswered` guards the small-n trap: at n=1 a single correct answer reads as precision
+ * 1.0, which is not evidence. Callers that cannot meet it get `chosen: false` and must say so
+ * rather than quoting the number.
+ */
+export function selectThreshold(
+  rows: ThresholdCalibrationRow[],
+  options: { minPrecision: number; minLabeledAnswered?: number },
+): ThresholdSelection {
+  const minLabeledAnswered = options.minLabeledAnswered ?? 1;
+  const eligible = rows
+    .filter((r) => r.precision !== null && r.precision >= options.minPrecision)
+    .sort((a, b) => a.threshold - b.threshold);
+
+  if (eligible.length === 0) {
+    return {
+      chosen: false,
+      reason: `No threshold in the sweep reached precision >= ${options.minPrecision}.`,
+    };
+  }
+
+  const row = eligible[0]!;
+  if (row.labeledAnswered < minLabeledAnswered) {
+    return {
+      chosen: false,
+      reason:
+        `Threshold ${row.threshold} met precision >= ${options.minPrecision}, but on only ` +
+        `${row.labeledAnswered} labeled answered case(s) (need >= ${minLabeledAnswered}). ` +
+        `Insufficient evidence to set the gate from this data.`,
+    };
+  }
+
+  return { chosen: true, threshold: row.threshold, row, labeledAnswered: row.labeledAnswered };
 }

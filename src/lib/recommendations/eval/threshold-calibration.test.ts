@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  buildThresholdSweep,
   computeThresholdCalibration,
   DEFAULT_CALIBRATION_THRESHOLDS,
+  selectThreshold,
   type ThresholdCalibrationCase,
 } from '~/lib/recommendations/eval/threshold-calibration';
 
@@ -69,6 +71,83 @@ describe('computeThresholdCalibration', () => {
       precision: null,
       recall: null,
     });
+  });
+});
+
+describe('buildThresholdSweep', () => {
+  it('is inclusive of both ends and free of float drift', () => {
+    const sweep = buildThresholdSweep(0.7, 0.9, 0.01);
+    expect(sweep).toHaveLength(21);
+    expect(sweep[0]).toBe(0.7);
+    expect(sweep.at(-1)).toBe(0.9);
+    // 0.7 + 3*0.01 accumulates to 0.7300000000000001 without rounding.
+    expect(sweep[3]).toBe(0.73);
+  });
+
+  it('returns an empty sweep for a non-positive step or inverted range', () => {
+    expect(buildThresholdSweep(0.7, 0.9, 0)).toEqual([]);
+    expect(buildThresholdSweep(0.9, 0.7, 0.01)).toEqual([]);
+  });
+});
+
+describe('falsePositives / falseNegatives / f1', () => {
+  it('counts an answered-but-wrong case as a false positive', () => {
+    const row = computeThresholdCalibration(LABELED_CASES, [0.8])[0]!;
+    expect(row.falsePositives).toBe(1); // c: 0.82, correct false
+    expect(row.falseNegatives).toBe(1); // d: 0.79, correct true but declined
+    expect(row.f1).toBeCloseTo(2 / 3, 3);
+  });
+
+  it('reports no false positives once the confidently-wrong case is gated out', () => {
+    const row = computeThresholdCalibration(LABELED_CASES, [0.85])[0]!;
+    expect(row.falsePositives).toBe(0);
+  });
+
+  it('leaves f1 null when precision is unknown', () => {
+    const rows = computeThresholdCalibration([{ id: 'x', overallConfidence: 0.9, correct: null }], [
+      0.8,
+    ]);
+    expect(rows[0]!.f1).toBeNull();
+  });
+});
+
+describe('selectThreshold', () => {
+  const rows = computeThresholdCalibration(LABELED_CASES, buildThresholdSweep(0.7, 0.9, 0.01));
+
+  it('picks the LOWEST threshold clearing the precision bar, to maximise coverage', () => {
+    const selection = selectThreshold(rows, { minPrecision: 1, minLabeledAnswered: 1 });
+    expect(selection.chosen).toBe(true);
+    // c (0.82, wrong) is the last false positive, so precision hits 1.0 at 0.83.
+    if (selection.chosen) expect(selection.threshold).toBe(0.83);
+  });
+
+  it('refuses to recommend when the winning row rests on too few labeled cases', () => {
+    const selection = selectThreshold(rows, { minPrecision: 1, minLabeledAnswered: 20 });
+    expect(selection.chosen).toBe(false);
+    if (!selection.chosen) expect(selection.reason).toMatch(/Insufficient evidence/);
+  });
+
+  it('refuses when no threshold reaches the target precision', () => {
+    const selection = selectThreshold(
+      computeThresholdCalibration(
+        [
+          { id: 'w1', overallConfidence: 0.95, correct: false },
+          { id: 'w2', overallConfidence: 0.85, correct: false },
+        ],
+        [0.8, 0.9],
+      ),
+      { minPrecision: 0.9 },
+    );
+    expect(selection.chosen).toBe(false);
+    if (!selection.chosen) expect(selection.reason).toMatch(/No threshold/);
+  });
+
+  it('never selects a row whose precision is unknown', () => {
+    const unlabeled = computeThresholdCalibration(
+      [{ id: 'u', overallConfidence: 0.9, correct: null }],
+      [0.8, 0.9],
+    );
+    expect(selectThreshold(unlabeled, { minPrecision: 0.5 }).chosen).toBe(false);
   });
 });
 
