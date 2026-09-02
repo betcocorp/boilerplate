@@ -11,6 +11,7 @@ import {
   type S3IngestionRunResult,
 } from '~/lib/rag/s3-ingestion-pipeline';
 
+import { parseEfficacyFrontmatter } from './efficacy-frontmatter';
 import {
   EFFICACY_FILE_OVERRIDES,
   EFFICACY_S3_BUCKET_DEFAULT,
@@ -176,14 +177,16 @@ async function discoverEfficacySeedDocuments(): Promise<EfficacySeedDocument[]> 
 
 // Efficacy documents are markdown-primary (unlike SDS, which is
 // PDF-text-primary): the S3 object body is the body_markdown, and body_text
-// is a derived plain-text fallback/preview. Frontmatter parsing
-// (formula_code/version/project_number extraction from YAML frontmatter) is
-// a follow-up once B0-224 lands with real source files to define the exact
-// frontmatter shape against — buildDocumentMetadata below is the extension
-// point for that.
+// is a derived plain-text fallback/preview. Identifying frontmatter fields are
+// lifted into document.metadata by parseEfficacyFrontmatter — see that module
+// for why that has to happen at ingest time rather than in a backfill (B0-797).
 async function parseEfficacyFile(buffer: Buffer) {
   const bodyMarkdown = buffer.toString('utf-8');
-  return { bodyText: markdownToPlainText(bodyMarkdown), bodyMarkdown };
+  return {
+    bodyText: markdownToPlainText(bodyMarkdown),
+    bodyMarkdown,
+    extraMetadata: parseEfficacyFrontmatter(bodyMarkdown),
+  };
 }
 
 const efficacyPipeline = createS3IngestionPipeline<EfficacySeedDocument>({
@@ -197,8 +200,8 @@ const efficacyPipeline = createS3IngestionPipeline<EfficacySeedDocument>({
   getS3Client,
   discoverSeedDocuments: discoverEfficacySeedDocuments,
   parseFile: parseEfficacyFile,
-  // No frontmatter parser yet — see comment above. Once B0-224 lands, extract
-  // formula_code/version/project_number here.
+  // Identifying metadata comes from the file's own frontmatter (parseEfficacyFile
+  // returns it as extraMetadata), not from the S3 key.
   buildDocumentMetadata: () => ({}),
 });
 
