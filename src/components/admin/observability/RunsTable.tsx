@@ -21,7 +21,7 @@ import {
 import { getAgentBadgeClassName } from '~/lib/bex/agent-badge';
 import { formatDurationSeconds, formatEasternTimestamp } from '~/lib/utils/time';
 
-import type { WorkflowRunListRow } from '~/types/observability';
+import type { RunScore, WorkflowRunListRow } from '~/types/observability';
 
 const RUN_SOURCE_BADGES: Record<
   string,
@@ -121,6 +121,11 @@ function confidenceLabel(confidence: number | null): string {
   return typeof confidence === 'number' ? `${(confidence * 100).toFixed(0)}%` : '—';
 }
 
+/** B0-793 — "82 (B)", never "82/100" or "82 out of 100" phrasing. */
+function scoreLabel(score: RunScore | null): string {
+  return score ? `${score.overall} (${score.grade})` : '—';
+}
+
 export function RunsTable({ route, rows, hasMore, page, filters, testOptions }: RunsTableProps) {
   return (
     <>
@@ -149,6 +154,9 @@ export function RunsTable({ route, rows, hasMore, page, filters, testOptions }: 
                 <TableHead>Agent</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Confidence</TableHead>
+                <TableHead title="Weighted score (Accuracy 40% / Completeness 30% / Relevance 20% / Clarity 10%) from the test harness's grading, when this run was scored as part of a test report. Only harness-sourced runs can have a score.">
+                  Score
+                </TableHead>
                 {/* B0-428 / B0-429 — time to first token, next to total duration. */}
                 <TableHead title="Time to first assistant token, measured from workflow start. Policy-declined runs report the time their decline text was produced (no model call happens).">
                   Stream
@@ -161,7 +169,7 @@ export function RunsTable({ route, rows, hasMore, page, filters, testOptions }: 
             <TableBody>
               {rows.length === 0 ? (
                 <TableRow>
-                  <TableCell className="text-slate-500" colSpan={10}>
+                  <TableCell className="text-slate-500" colSpan={11}>
                     {filters.search
                       ? `No workflow runs match “${filters.search}” with these filters.`
                       : 'No workflow runs match these filters.'}
@@ -223,6 +231,9 @@ export function RunsTable({ route, rows, hasMore, page, filters, testOptions }: 
                     </TableCell>
                     <TableCell className="whitespace-nowrap align-top tabular-nums text-slate-700">
                       {confidenceLabel(run.confidence)}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap align-top tabular-nums text-slate-700">
+                      {scoreLabel(run.score)}
                     </TableCell>
                     <TableCell className="whitespace-nowrap align-top tabular-nums text-slate-600">
                       {formatDurationSeconds(run.ttftMs)}
