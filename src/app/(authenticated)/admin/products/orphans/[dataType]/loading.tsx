@@ -15,6 +15,7 @@ export default function OrphanDataTypeLoading() {
           <Skeleton className="h-9 max-w-sm flex-1 rounded-md" />
           <Skeleton className="h-9 w-20 rounded-md" />
           <Skeleton className="h-4 w-36 rounded-md" />
+          <Skeleton className="h-4 w-32 rounded-md" />
         </div>
 
         <TableSkeleton columns={5} />

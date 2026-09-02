@@ -38,6 +38,8 @@ export const orphanQueueRowSchema = z.object({
   ref_id: z.string(),
   ref_label: z.string().nullable(),
   detail: z.record(z.string(), z.unknown()).nullable(),
+  /** Non-English source document (B0-804) — expected, never chunked or retrieved. */
+  translated: z.boolean(),
   ignored: z.boolean(),
   ignore_reason: z.string().nullable(),
   ignored_by: z.string().nullable(),
@@ -51,6 +53,15 @@ export const orphanSummaryRowSchema = z.object({
   total: z.number(),
   active: z.number(),
   ignored: z.number(),
+  /** How many of `total` are non-English source documents (B0-804). */
+  translated: z.number(),
+  /**
+   * How many of `active` are translated. The queue table's default view is
+   * "not acknowledged AND not translated", so the visible count is
+   * `active - active_translated` — subtracting `translated` would double-count any
+   * translated row that was also acknowledged.
+   */
+  active_translated: z.number(),
 });
 export type OrphanSummaryRow = z.infer<typeof orphanSummaryRowSchema>;
 

@@ -9,7 +9,12 @@ export const dynamic = 'force-dynamic';
 
 interface PageProps {
   params: Promise<{ dataType: string }>;
-  searchParams: Promise<{ page?: string; q?: string; includeIgnored?: string }>;
+  searchParams: Promise<{
+    page?: string;
+    q?: string;
+    includeIgnored?: string;
+    includeTranslated?: string;
+  }>;
 }
 
 export default async function OrphanDataTypePage({ params, searchParams }: PageProps) {
@@ -22,12 +27,14 @@ export default async function OrphanDataTypePage({ params, searchParams }: PageP
   const page = Math.max(1, Number(sp.page ?? '1') || 1);
   const search = sp.q ?? '';
   const includeIgnored = sp.includeIgnored === '1';
+  const includeTranslated = sp.includeTranslated === '1';
 
   const { rows, total, pageSize } = await getOrphanQueue({
     dataType,
     page,
     search,
     includeIgnored,
+    includeTranslated,
   });
 
   return (
@@ -46,6 +53,7 @@ export default async function OrphanDataTypePage({ params, searchParams }: PageP
         page={page}
         pageSize={pageSize}
         includeIgnored={includeIgnored}
+        includeTranslated={includeTranslated}
         search={search}
       />
     </div>
