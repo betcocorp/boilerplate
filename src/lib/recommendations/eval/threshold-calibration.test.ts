@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   buildThresholdSweep,
+  computeDiscrimination,
   computeThresholdCalibration,
   DEFAULT_CALIBRATION_THRESHOLDS,
   selectThreshold,
@@ -148,6 +149,65 @@ describe('selectThreshold', () => {
       [0.8, 0.9],
     );
     expect(selectThreshold(unlabeled, { minPrecision: 0.5 }).chosen).toBe(false);
+  });
+});
+
+describe('computeDiscrimination (B0-795)', () => {
+  it('reports AUC 1 when every correct case outranks every wrong one', () => {
+    const d = computeDiscrimination([
+      { id: 'a', overallConfidence: 0.9, correct: true },
+      { id: 'b', overallConfidence: 0.8, correct: true },
+      { id: 'c', overallConfidence: 0.4, correct: false },
+      { id: 'd', overallConfidence: 0.3, correct: false },
+    ]);
+    expect(d).toMatchObject({ auc: 1, positives: 2, negatives: 2, labeled: 4 });
+    expect(d.meanConfidenceCorrect).toBe(0.85);
+    expect(d.meanConfidenceWrong).toBe(0.35);
+  });
+
+  it('reports AUC 0 when the ranking is exactly inverted', () => {
+    expect(
+      computeDiscrimination([
+        { id: 'a', overallConfidence: 0.1, correct: true },
+        { id: 'b', overallConfidence: 0.9, correct: false },
+      ]).auc,
+    ).toBe(0);
+  });
+
+  it('counts ties as half, so an all-tied score reads as coin-flip', () => {
+    expect(
+      computeDiscrimination([
+        { id: 'a', overallConfidence: 0.5, correct: true },
+        { id: 'b', overallConfidence: 0.5, correct: false },
+        { id: 'c', overallConfidence: 0.5, correct: false },
+      ]).auc,
+    ).toBe(0.5);
+  });
+
+  it('handles partial ties via midranks', () => {
+    // One positive at 0.6 against negatives at 0.6 and 0.4: beats one outright, ties the other.
+    expect(
+      computeDiscrimination([
+        { id: 'a', overallConfidence: 0.6, correct: true },
+        { id: 'b', overallConfidence: 0.6, correct: false },
+        { id: 'c', overallConfidence: 0.4, correct: false },
+      ]).auc,
+    ).toBe(0.75);
+  });
+
+  it('excludes unlabeled cases and returns null AUC when a class is empty', () => {
+    const d = computeDiscrimination([
+      { id: 'a', overallConfidence: 0.9, correct: true },
+      { id: 'u', overallConfidence: 0.5, correct: null },
+    ]);
+    expect(d).toMatchObject({ labeled: 1, positives: 1, negatives: 0, auc: null });
+    expect(d.meanConfidenceWrong).toBeNull();
+  });
+
+  it('returns null AUC for an entirely unlabeled set rather than implying a result', () => {
+    expect(
+      computeDiscrimination([{ id: 'u', overallConfidence: 0.5, correct: null }]),
+    ).toMatchObject({ labeled: 0, auc: null });
   });
 });
 

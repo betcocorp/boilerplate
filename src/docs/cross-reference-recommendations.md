@@ -238,6 +238,13 @@ is choosing a point on a curve that is flat in the only dimension that matters.
 
 ### Recommendation
 
+> **Partly superseded by B0-795 (below), same day.** Items 2 and 5 were acted on: the scorer was
+> fixed (`candidateAgreement` → `candidateMargin`) and the threshold moved into `public.settings` at
+> its unchanged value of 0.80. Items 1, 3 and 4 still stand. Note also that the **AUC 0.319** quoted
+> above was measured on 48 cases with 3 positives; re-measured on 200 harvested runs with the same
+> scorer it is **0.489** — i.e. coin-flip rather than anti-correlated, which is the more defensible
+> reading and the one the small-n caveat above anticipated.
+
 1. **Do not retune `XREF_RECOMMENDATION_MIN_CONFIDENCE` on this data.** The honest answer to "is 0.80
    right?" is that the question is malformed: at 0.80 the gate answers 0.3% of web-path questions,
    and the confidence signal it thresholds shows no measured ability to rank correct answers above
@@ -302,6 +309,185 @@ the standing caveat: those positives are answered by the deterministic legacy pa
 regression check on *legacy-lookup retrieval*, not on the gate. Gate calibration requires the
 harvest script.
 
+---
+
+## Fixing the scorer, not the threshold (B0-795, 2026-09-02)
+
+B0-97 ended by refusing to name a threshold and saying the scorer had to be fixed first. This is
+that work. **Read the B0-97 section above first** — the method, the harvest and the label semantics
+are unchanged, and the caveats there still apply to every number below.
+
+### The measurement instrument came first
+
+Two additions made an honest A/B possible at all:
+
+- **`computeDiscrimination()`** (`src/lib/recommendations/eval/threshold-calibration.ts`) — AUC via
+  Mann–Whitney U over midranks, plus per-class means and the positive/negative counts. `AUC` is the
+  probability a correct case outranks a wrong one; the counts are returned beside it because at this
+  n the point estimate alone is not a result. `scripts/calibrate-xref-threshold.ts` now prints this
+  block **above** the threshold sweep, because the sweep is only meaningful once the score ranks.
+- **`--rescore`** — the harvest now persists the exact inputs `scoreRecommendation` saw
+  (`scoreInputs`: enriched spec, grounded candidate list with similarities, `brandKnown`), so a
+  changed scorer can be replayed over the identical runs offline: no web searches, no LLM calls, no
+  non-determinism. `correct` is never recomputed, so a scorer change can move the score but can
+  never move the ground truth it is graded against. This is what makes the before/after below a
+  true like-for-like comparison rather than two different experiments.
+
+The labeled set was also widened from 48 to **200 harvested runs** (seed 97, superset of B0-97's 60),
+which raised known-correct cases from 3 to 4 (+1 from the review queue = 5).
+
+### Signals measured, in isolation, over the same 200-run harvest
+
+AUC of each signal used **alone**, under two labels. "Exact" is B0-97's strict exact-SKU label.
+"Line" is a secondary label derived from `legacy.products_attr` — the returned product belongs to the
+same Betco **product line** as the curated one. That converts "right product line, wrong pack size"
+near-misses into positives; it is still machine-derived from Betco's own line grouping, not authored
+equivalence, and it has 17 positives rather than 4, so it carries most of the statistical weight.
+
+| Signal (alone) | AUC (exact, 4 pos) | AUC (line, 17 pos) |
+|---|---|---|
+| `candidateMargin` — top vs runner-up similarity | **0.741** | **0.574** |
+| `topSimilarity` | 0.516 | 0.561 |
+| `specCompleteness` | 0.432 | 0.497 |
+| `categoryCompatibility` — product-kind match | 0.155 | 0.474 |
+| `candidateAgreement` — mean similarity | **0.117** | **0.389** |
+
+### `candidateAgreement` is removed — the evidence (AC3)
+
+It is **below chance under both labels** (0.117 / 0.389), which is what its shape predicts: mean
+similarity rises when every candidate looks alike, and an undifferentiated candidate list is
+ambiguity, not confidence. Its 0.20 weight now goes to **`candidateMargin`**, the normalized gap
+between the top candidate and the runner-up (`MARGIN_FULL_SEPARATION = 0.10`; sweeping that constant
+to 0.05 and 0.15 moved AUC by ≤0.003). A single candidate yields `null`, not 0 — an un-measurable
+margin is not a lost run-off — and null components are dropped from the weighted mean with their
+weight redistributed.
+
+### The category signal does not work here, and that is the finding (AC1)
+
+`public.product_category` / `product_category_link` were evaluated first and are the wrong tool for
+this comparison for a structural reason, not a coverage one: the links are **product-line** scoped
+across two unreconciled taxonomies (240 `metakeywords` + 224 `betco_site_scrape`, B0-205), and only
+one side of the comparison — the Betco candidate — appears in them at all. The competitor is a
+third-party product with no row anywhere, so it would have to be classified into the taxonomy by
+text regardless. `product_category.aliases` carries no synonyms (every alias is a concatenation of
+the node's own path, e.g. `Restroom - Acid Cleaner`), so the table supplies no competitor vocabulary
+either.
+
+What it *is* good for is the vocabulary's shape, and that was taken from it:
+`src/lib/recommendations/product-kind.ts` is a deterministic classifier whose domains are the live
+`metakeywords` roots (Restroom / Floor Care / Carpet Care / Industrial / Gen'l Cleaning /
+Disinfectants / Laundry / Warewash / Wood Floor / Skin Care / Odor / Food Serv / Concrete) and whose
+leaves are its leaves (`Acid Cleaner` vs `Acid Free Cleaner`, Sealers, Strippers, Finishes,
+Spotters, Glass). It classifies accurately — 76/89 competitor sides and 81/89 candidate sides
+resolve — **once `keyClaims` is excluded from its input.** Feeding claims text in produced 25 domain
+"mismatches" in 72 comparable cases, most of them the artefact of a bowl cleaner claiming a
+"pleasant fragrance" being read as an odor product. With claims excluded that falls to 9, and those
+9 are genuine category boundaries.
+
+**And it still carries no information about correctness:**
+
+| Top candidate judged | line-correct | wrong |
+|---|---|---|
+| same product kind | 10 | 43 (18.9% correct) |
+| different domain | 1 | 5 (16.7% correct) |
+
+Those rates are indistinguishable. The reason is visible in the same numbers: retrieval already
+lands in the right category ~82% of the time (53 same-kind of 65 comparable), so the errors this
+scorer needs to catch are **within-category SKU errors**, which a category check is blind to by
+construction. Weighted at 0.30 it dropped combined AUC from 0.66 to 0.24; applied as a
+mismatch-only penalty it would have suppressed **one of only five** known-correct answers.
+
+So `categoryCompatibility` is **computed and persisted on every run** (in `evidence.score`, with the
+two kind labels beside it so a verdict is auditable) and **deliberately not weighted**. That is a
+measured decision, not an oversight — `confidence-scoring.ts` says so at the top and a unit test
+asserts the score does not move with it. It is collected so the next investigation starts with the
+feature already in the data. Do not give it a weight without re-running the calibration script.
+
+Note the Hang-Tite Plus case from B0-97 specifically: the classifier *does* separate
+`bowl_cleaner_acid` from `bowl_cleaner_acid_free`, but the enriched competitor spec for that run
+never captured the acid/HCl chemistry at all (`productCategory: "disinfectant"`,
+`primaryUse: "toilet bowls and urinals"`). The information needed to catch it is missing upstream, in
+spec enrichment — not in the scorer. That is the real next lever.
+
+### Before / after on the identical labeled set (AC2)
+
+Produced by `npx tsx --env-file=.env.local scripts/calibrate-xref-threshold.ts --rescore`. Same 200
+harvested runs, same labels, only `scoreRecommendation` changed. (The 111 cases without
+`scoreInputs` are exactly the runs that returned no candidate: all score 0 and all are unlabeled, so
+every case that contributes to a metric below was rescored.)
+
+| | AUC exact (4 pos / 79 neg) | AUC line (17 / 66) | AUC as the script prints it (5 / 79) |
+|---|---|---|---|
+| Before (`candidateAgreement`) | 0.361 | 0.525 | **0.489** |
+| After (`candidateMargin`) | **0.660** | **0.577** | **0.728** |
+
+Mean confidence, correct vs wrong, went from 0.612 / **0.604** (a 0.008 gap in the *wrong*
+direction on the script's set) to 0.612 / **0.537**.
+
+**The AC2 gate is MET: AUC is above 0.5 on every view of the labeled set.** With the honest
+qualifiers attached, all of which matter:
+
+- **n is small and the exact-label result rests on 4 positives.** The 0.361 → 0.660 jump is the
+  headline number but the widest error bar. The line label carries 17 positives and shows a real but
+  far more modest 0.525 → 0.577.
+- **Variant selection is an overfitting risk.** 17 scoring variants were compared. The two
+  conclusions drawn are the two that hold under *both* labels, in the same direction, and have a
+  mechanical explanation independent of this dataset (a flat candidate list is ambiguity; a clear
+  leader is separation). Nothing was tuned per-case, and the product-kind vocabulary was written
+  before any of its results were seen.
+- The exact-SKU label remains a **strict lower bound** — reasonable near-misses still count as wrong.
+
+### Score distribution after the change
+
+| Statistic | Before | After |
+|---|---|---|
+| p50 | 0.600 | 0.538 |
+| p90 | 0.670 | 0.621 |
+| max | 0.757 | 0.738 |
+| ≥ 0.70 | 4 / 89 | 3 / 89 |
+| ≥ 0.80 | **0 / 89** | **0 / 89** |
+
+The realised range still tops out below 0.75. Discrimination improved; **calibration did not** — the
+score now ranks better but is still compressed into roughly 0.4–0.75.
+
+### Threshold: still not nameable, and that is the answer (AC5)
+
+`selectThreshold()` refuses. At the precision target of 0.90 the lowest qualifying row is 0.74, and
+it rests on **1** labeled answered case against a floor of 20. Naming 0.74 would be quoting a
+sample of one.
+
+**Recommendation: leave `XREF_RECOMMENDATION_MIN_CONFIDENCE` at 0.80. Confidence in that number:
+low — it is a preserved status quo, not a calibrated choice.** The reasoning is unchanged from
+B0-97 in kind but has a new specific: at 0.80 the gate would answer 0 of 89 web-path runs, so
+turning `BEX_DISABLE_CONFIDENCE_GATING` off today would still take cross-reference to near-zero
+coverage. The scorer now ranks; it is not yet *calibrated to an absolute scale*, and a threshold is
+an absolute-scale question. Two things are needed before the number can move:
+
+1. **More labeled answered cases.** ~20 are needed; the harvest produces roughly 1 per 20 runs at
+   this distribution, so on the order of 400 more harvested runs — or far fewer once the score
+   spreads across the 0.70–0.90 band.
+2. **Calibration, not just ranking.** The obvious next step is to map the score onto observed
+   correctness rates (isotonic/Platt) so 0.80 means "80% of these are right", at which point the
+   threshold follows from the precision target instead of being chosen.
+
+`BEX_DISABLE_CONFIDENCE_GATING` stays `true` and stays a known open risk, unchanged by this ticket.
+
+### `XREF_RECOMMENDATION_MIN_CONFIDENCE` moved to `public.settings` (AC4)
+
+`src/supabase/migrations/20260902160000_add_xref_recommendation_min_confidence_setting_b0795.sql`
+seeds the row at **0.80** — the value that was already live — so applying it changes nothing.
+`resolveXrefThreshold()` now reads `getNumberSetting(...)` and is `async`; `gateRecommendation`,
+`buildCrossReferenceRecommendationPrompt`, `latencyCeilingFallback` and
+`unresolvedCompetitorDecline` became async with it. The key is registered in
+`src/components/admin/settings/SettingsPanel.tsx`. A stray env var of the old name can no longer
+influence the gate, and there is a test asserting that.
+
+One trap this surfaced, worth knowing about elsewhere: `recommend-cross-reference.test.ts` mocked
+`getNumberSetting` with a blanket `mockResolvedValue(20_000)` for every key. The moment the
+threshold started coming from the same service, the answer gate silently became 20000 and six
+web-path tests failed for a reason unrelated to what they were testing. Settings mocks must honour
+each key's own fallback.
+
 ### Pre-handoff checklist (AC4)
 
 Any change to the recommendation/cross-reference prompt, `sme-routing.ts` recommendation signals,
@@ -312,12 +498,18 @@ three** before merge:
 # 1. Unit + guardrail suite (fast, no network).
 pnpm exec vitest run src/lib/recommendations
 
-# 2. Re-run the threshold curve on the stored labeled cases and confirm it has not regressed.
+# 2. Re-run the discrimination (AUC) + threshold curve on the stored labeled cases and confirm
+#    neither has regressed. AUC is the gate; the sweep is only meaningful once the score ranks.
 npx tsx --env-file=.env.local scripts/calibrate-xref-threshold.ts
 
-# 3. Only when the scorer itself changed — re-harvest, because stored confidences are stale the
-#    moment scoreRecommendation's weights or inputs move.
-npx tsx --env-file=.env.local scripts/calibrate-xref-threshold.ts --harvest --limit 60
+# 3. When the scorer itself changed — replay the stored scoreInputs through the new scorer. This is
+#    offline (no web search, no LLM) and keeps the labels fixed, so it is a true like-for-like A/B.
+#    Prefer this over re-harvesting: re-harvesting changes the labels too and stops being a
+#    controlled comparison.
+npx tsx --env-file=.env.local scripts/calibrate-xref-threshold.ts --rescore
+
+# 4. Only to grow the labeled set (or refresh cases harvested before scoreInputs was captured).
+npx tsx --env-file=.env.local scripts/calibrate-xref-threshold.ts --harvest --limit 200
 ```
 
 plus the `/admin/tests` run of `Cross-Reference Gate Calibration (B0-97)`. Labeled cases live in

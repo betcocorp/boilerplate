@@ -1,18 +1,47 @@
 import type { BetcoCandidate } from '~/lib/recommendations/candidate-retrieval';
-import { getBooleanSetting } from '~/lib/settings/settings-service';
+import { compareProductKind, competitorKindText } from '~/lib/recommendations/product-kind';
+import { getBooleanSetting, getNumberSetting } from '~/lib/settings/settings-service';
 import type { EnrichedCompetitorSpec } from '~/lib/websearch/enrich-competitor-spec';
 
 /**
- * B0-88 — calibrated 0–1 confidence for a cross-reference recommendation + the threshold gate.
+ * B0-88 / B0-795 — calibrated 0–1 confidence for a cross-reference recommendation + the gate.
  *
- * Combines four signals into `overallConfidence`:
+ * Combines three weighted signals into `overallConfidence`:
  *   - retrieval similarity of the top candidate (0.55),
  *   - spec completeness (0.25),
- *   - agreement across candidates = mean similarity (0.20),
+ *   - candidate MARGIN — how far the top candidate leads the runner-up (0.20),
  *   then a company/brand factor (missing company → ×0.9 penalty, never a hard block).
- * The gate compares against a configurable threshold (env `XREF_RECOMMENDATION_MIN_CONFIDENCE`,
- * default 0.80, with an optional per-call override) and declines below it. The chosen threshold is
- * returned so callers persist it as `threshold_used`.
+ * A fourth signal, `categoryCompatibility`, is computed and reported but deliberately NOT weighted;
+ * see below. The gate compares against a configurable threshold (settings row
+ * `XREF_RECOMMENDATION_MIN_CONFIDENCE`, default 0.80, with an optional per-call override) and
+ * declines below it. The chosen threshold is returned so callers persist it as `threshold_used`.
+ *
+ * ## B0-795 — what changed and what the measurement said
+ *
+ * The scorer previously used `candidateAgreement` (mean similarity across candidates) in the 0.20
+ * slot. Measured over B0-97's labeled harvest (200 forced web-path runs against Betco's own curated
+ * cross-reference table), that signal ranked correct answers BELOW wrong ones: AUC 0.117 on the
+ * strict exact-SKU label and 0.389 on a product-line label — both worse than a coin flip. That is
+ * the behaviour its shape predicts. Mean similarity rises when every candidate looks alike, which
+ * is ambiguity, not confidence.
+ *
+ * `candidateMargin` replaces it and is the single strongest signal available: AUC 0.741 (exact) /
+ * 0.574 (line) alone, against 0.516 / 0.561 for `topSimilarity`. A clear leader means retrieval
+ * discriminated; a flat list means it did not.
+ *
+ * **`categoryCompatibility` is reported, not weighted, and that is a measured decision.** A
+ * product-kind comparison (`~/lib/recommendations/product-kind`) was built specifically to catch the
+ * failure this ticket names — an acid bowl cleaner answered with an acid-free disinfectant — and it
+ * does classify accurately once claims text is excluded. It still carries no information about
+ * correctness on this corpus: of the top candidates it judged the SAME kind, 10/53 were right; of
+ * those it judged a domain MISMATCH, 1/6 were right. Those rates are indistinguishable, because
+ * retrieval already lands in the right category ~82% of the time — the errors are *within-category
+ * SKU* errors, which a category check is blind to by construction. Weighted in, it dropped combined
+ * AUC from 0.66 to 0.24; applied as a mismatch penalty it would have suppressed one of only five
+ * known-correct answers. It is computed on every run and persisted in `evidence.score` so the next
+ * investigation has the feature already collected — but it must not move the number until data says
+ * it should. Do not "finish the job" by giving it a weight without re-running
+ * `scripts/calibrate-xref-threshold.ts`.
  */
 
 export const DEFAULT_XREF_MIN_CONFIDENCE = 0.8;
@@ -23,7 +52,15 @@ export const XREF_DECLINE_COPY =
 
 const SIMILARITY_WEIGHT = 0.55;
 const COMPLETENESS_WEIGHT = 0.25;
-const AGREEMENT_WEIGHT = 0.2;
+const MARGIN_WEIGHT = 0.2;
+
+/**
+ * Similarity gap at which the top candidate counts as fully separated from the runner-up. Set from
+ * the observed spread of this corpus (candidate similarities cluster in a ~0.55–0.65 band, so a
+ * 0.10 lead is decisive); sweeping it to 0.05 and 0.15 moved AUC by ≤0.003, i.e. the signal is not
+ * sensitive to this constant.
+ */
+export const MARGIN_FULL_SEPARATION = 0.1;
 
 const clamp01 = (n: number): number => Math.max(0, Math.min(1, n));
 const round3 = (n: number): number => Math.round(n * 1000) / 1000;
@@ -45,10 +82,41 @@ export function computeSpecCompleteness(spec: EnrichedCompetitorSpec): number {
   return round3(filled / (SPEC_FIELDS.length + 1));
 }
 
+/**
+ * How far the top candidate leads the runner-up, normalized to `MARGIN_FULL_SEPARATION`.
+ *
+ * `null` (not 0) when there is no runner-up to compare against: a single surviving candidate is an
+ * un-measurable margin, not a zero one, and scoring it as zero would punish a correctly narrow
+ * retrieval. `null` components are excluded from the weighted mean and their weight is
+ * redistributed, so a missing signal never silently drags the score down.
+ */
+export function computeCandidateMargin(candidates: BetcoCandidate[]): number | null {
+  if (candidates.length < 2) return null;
+  const [top, runnerUp] = candidates;
+  return round3(clamp01((top!.similarity - runnerUp!.similarity) / MARGIN_FULL_SEPARATION));
+}
+
+/** Weighted mean over `[weight, value]` pairs, skipping `null` values and renormalizing. */
+function weightedMean(parts: Array<[number, number | null]>): number {
+  const live = parts.filter((p): p is [number, number] => p[1] !== null);
+  const totalWeight = live.reduce((sum, [w]) => sum + w, 0);
+  if (totalWeight === 0) return 0;
+  return live.reduce((sum, [w, v]) => sum + (w / totalWeight) * v, 0);
+}
+
 export type ScoreComponents = {
   topSimilarity: number;
   specCompleteness: number;
-  candidateAgreement: number;
+  /** B0-795 — top-vs-runner-up separation. `null` when there is no runner-up. */
+  candidateMargin: number | null;
+  /**
+   * B0-795 — 1 same product kind / 0.5 same domain / 0 different domain, `null` when either side
+   * cannot be classified. DIAGNOSTIC ONLY: recorded on every run, never folded into
+   * `overallConfidence` (see the module header for the measurement that decided this).
+   */
+  categoryCompatibility: number | null;
+  /** The kind labels behind `categoryCompatibility`, so a reviewer can audit a verdict. */
+  categoryKinds: { competitor: string | null; candidate: string | null };
   brandKnown: boolean;
   brandFactor: number;
 };
@@ -63,37 +131,56 @@ export function scoreRecommendation(input: {
   spec: EnrichedCompetitorSpec;
   brandKnown: boolean;
 }): RecommendationScore {
-  const topSimilarity = input.candidates[0]?.similarity ?? 0;
+  const top = input.candidates[0] ?? null;
+  const topSimilarity = top?.similarity ?? 0;
   const specCompleteness = computeSpecCompleteness(input.spec);
-  const candidateAgreement =
-    input.candidates.length > 0
-      ? input.candidates.reduce((sum, c) => sum + c.similarity, 0) / input.candidates.length
-      : 0;
+  const candidateMargin = computeCandidateMargin(input.candidates);
   const brandFactor = input.brandKnown ? 1 : MISSING_COMPANY_PENALTY_FACTOR;
 
-  const base =
-    SIMILARITY_WEIGHT * topSimilarity +
-    COMPLETENESS_WEIGHT * specCompleteness +
-    AGREEMENT_WEIGHT * candidateAgreement;
+  const kind = top
+    ? compareProductKind({
+        competitorText: competitorKindText(input.spec),
+        candidateTitle: top.title,
+        candidateEvidence: top.evidence,
+      })
+    : { score: null, competitor: null, candidate: null };
+
+  const base = weightedMean([
+    [SIMILARITY_WEIGHT, topSimilarity],
+    [COMPLETENESS_WEIGHT, specCompleteness],
+    [MARGIN_WEIGHT, candidateMargin],
+  ]);
 
   return {
     overallConfidence: round3(clamp01(base * brandFactor)),
     components: {
       topSimilarity: round3(topSimilarity),
       specCompleteness,
-      candidateAgreement: round3(candidateAgreement),
+      candidateMargin,
+      categoryCompatibility: kind.score,
+      categoryKinds: {
+        competitor: kind.competitor ? `${kind.competitor.domain}/${kind.competitor.kind}` : null,
+        candidate: kind.candidate ? `${kind.candidate.domain}/${kind.candidate.kind}` : null,
+      },
       brandKnown: input.brandKnown,
       brandFactor,
     },
   };
 }
 
-/** Resolve the gate threshold: explicit override → env → default 0.80. */
-export function resolveXrefThreshold(override?: number | null): number {
+/**
+ * Resolve the gate threshold: explicit override → `settings.XREF_RECOMMENDATION_MIN_CONFIDENCE` →
+ * default 0.80.
+ *
+ * B0-795 moved this off `process.env` (B0-638's sweep missed it). No env var was ever set, so the
+ * live effective value was always the `DEFAULT_XREF_MIN_CONFIDENCE` fallback; the settings row is
+ * seeded to that same 0.80, which makes the migration a no-op on behaviour by design. Note that the
+ * gate is separately bypassed while `BEX_DISABLE_CONFIDENCE_GATING` is true — see
+ * `isConfidenceGatingDisabled` below.
+ */
+export async function resolveXrefThreshold(override?: number | null): Promise<number> {
   if (typeof override === 'number' && Number.isFinite(override)) return override;
-  const raw = process.env.XREF_RECOMMENDATION_MIN_CONFIDENCE?.trim();
-  const env = raw ? Number(raw) : Number.NaN;
-  return Number.isFinite(env) ? env : DEFAULT_XREF_MIN_CONFIDENCE;
+  return getNumberSetting('XREF_RECOMMENDATION_MIN_CONFIDENCE', DEFAULT_XREF_MIN_CONFIDENCE);
 }
 
 /**
@@ -129,7 +216,7 @@ export async function gateRecommendation(input: {
   overallConfidence: number;
   thresholdOverride?: number | null;
 }): Promise<RecommendationGate> {
-  const thresholdUsed = resolveXrefThreshold(input.thresholdOverride);
+  const thresholdUsed = await resolveXrefThreshold(input.thresholdOverride);
   if (await isConfidenceGatingDisabled()) {
     return { answered: true, thresholdUsed, declineReason: null };
   }

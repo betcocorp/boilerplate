@@ -52,3 +52,6 @@ storybook-static
 
 # Claude Code local settings (per-developer, not shared)
 .claude/settings.local.json
+
+# Efficacy PDF re-conversion scratch output (B0-797)
+.efficacy-convert-out/

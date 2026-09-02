@@ -7,22 +7,23 @@ import {
 } from '~/lib/recommendations/recommendation-prompt';
 
 describe('buildCrossReferenceRecommendationPrompt (B0-90)', () => {
-  it('injects the threshold from config and inlines the shared decline copy', () => {
-    const prompt = buildCrossReferenceRecommendationPrompt({ threshold: 0.8 });
+  // B0-795: the builder is async now that the threshold comes from the settings table.
+  it('injects the threshold from config and inlines the shared decline copy', async () => {
+    const prompt = await buildCrossReferenceRecommendationPrompt({ threshold: 0.8 });
     expect(prompt).toContain('at or above 0.8');
     expect(prompt).toContain(XREF_DECLINE_COPY);
     // threshold is not hardcoded — a different config value flows through
-    expect(buildCrossReferenceRecommendationPrompt({ threshold: 0.9 })).toContain('at or above 0.9');
+    expect(await buildCrossReferenceRecommendationPrompt({ threshold: 0.9 })).toContain('at or above 0.9');
   });
 
-  it('instructs grounding (no fabricated products/keys/specs)', () => {
-    const prompt = buildCrossReferenceRecommendationPrompt({ threshold: 0.8 });
+  it('instructs grounding (no fabricated products/keys/specs)', async () => {
+    const prompt = await buildCrossReferenceRecommendationPrompt({ threshold: 0.8 });
     expect(prompt).toMatch(/real retrieved candidate/i);
     expect(prompt).toMatch(/do not (use outside knowledge|invent)/i);
   });
 
-  it('is stable for a fixed threshold (snapshot)', () => {
-    expect(buildCrossReferenceRecommendationPrompt({ threshold: 0.8 })).toMatchSnapshot();
+  it('is stable for a fixed threshold (snapshot)', async () => {
+    expect(await buildCrossReferenceRecommendationPrompt({ threshold: 0.8 })).toMatchSnapshot();
   });
 });
 

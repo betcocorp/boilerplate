@@ -16,9 +16,16 @@ import { WebSearchService } from '~/lib/websearch/web-search-service';
 
 // Keep the confidence-gate/latency-policy DB reads out of this file's tests: default to the
 // same "gating on, 20s ceiling" behavior the old env-var defaults gave every test here.
+//
+// B0-795: the mock MUST honour each key's own fallback rather than returning one number for every
+// key. XREF_RECOMMENDATION_MIN_CONFIDENCE moved into this same settings service, and a blanket
+// `mockResolvedValue(20_000)` silently made the answer gate 20000 — every web-path test declined
+// for a reason that had nothing to do with what it was testing.
 vi.mock('~/lib/settings/settings-service', () => ({
   getBooleanSetting: vi.fn().mockResolvedValue(false),
-  getNumberSetting: vi.fn().mockResolvedValue(20_000),
+  getNumberSetting: vi.fn(async (key: string, fallback: number) =>
+    key === 'XREF_RECOMMENDATION_TIMEOUT_MS' ? 20_000 : fallback,
+  ),
 }));
 
 const SPEC: EnrichedCompetitorSpec = {
@@ -281,11 +288,16 @@ describe('recommendCrossReference (B0-85)', () => {
     expect(result.candidates.map((c) => c.betcoProductKey)).toEqual(['A', 'B', 'C']);
     expect(result.candidates.map((c) => c.rank)).toEqual([1, 2, 3]);
     expect(result.candidates.map((c) => c.tier)).toEqual(['primary', 'alternate', 'alternate']);
-    // Scoring/gating still sees the FULL grounded pool (5), not just the capped top-3 output — the
-    // deliberate B0-663 choice so confidence-gating behavior is unchanged by the output cap.
-    // candidateAgreement = mean similarity of all 5 (0.92), not just the top 3 (0.95).
-    const score = result.evidence.score as { candidateAgreement: number };
-    expect(score.candidateAgreement).toBeCloseTo(0.92, 3);
+    // Scoring/gating still runs on the FULL grounded pool (5) before the top-3 output cap — the
+    // deliberate B0-663 choice so confidence-gating behavior is unchanged by the cap.
+    //
+    // B0-795: the component that observes the pool is now `candidateMargin` (top vs runner-up),
+    // which replaced `candidateAgreement` (mean similarity). Here that is (0.97 - 0.95) / 0.10 =
+    // 0.2 — a near-tie at the top, which is exactly the state the old mean-similarity signal used
+    // to read as high confidence.
+    const score = result.evidence.score as { candidateMargin: number; candidateAgreement?: unknown };
+    expect(score.candidateMargin).toBeCloseTo(0.2, 3);
+    expect(score.candidateAgreement).toBeUndefined();
     expect(result.evidence.cappedCount).toBe(2);
   });
 
