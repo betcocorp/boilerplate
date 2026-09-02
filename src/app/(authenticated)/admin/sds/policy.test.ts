@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { evaluateSdsContentLanguage, evaluateSdsPolicy } from './policy';
+import {
+  evaluateSdsContentLanguage,
+  evaluateSdsPolicy,
+  matchSdsFilenameLanguageSuffix,
+} from './policy';
 
 describe('evaluateSdsPolicy', () => {
   it('includes an ordinary EN Betco SDS file', () => {
@@ -59,6 +63,74 @@ describe('evaluateSdsPolicy', () => {
       // the folder-keyword check is the defense-in-depth layer that still excludes them.
       expect(evaluateSdsPolicy(path, 'EN').inScope).toBe(false);
     }
+  });
+
+  it('excludes FR/SP/MX/IT filename suffixes in folders no keyword can see (B0-794)', () => {
+    // Every path here is a real live filename from the 364 documents B0-794 removed from
+    // the retrievable corpus. None of their folders contains a language keyword.
+    const cases = [
+      'betco sds/archive sds/609fr.pdf',
+      'betco sds/chemtrec sds files ready to transfer/5.20.24/065_fr.pdf',
+      'betco sds/chemtrec sds files ready to transfer/betco ccn2664 files as of 12-31-21/188 draw fr.pdf',
+      'betco sds/chemtrec sds files ready to transfer/betco ccn2664 files as of 12-31-21/024sp.pdf',
+      'betco sds/chemtrec sds files ready to transfer/betco ccn 2664 7-7-22 index/141sp.pdf',
+      'betco sds/specials/sp796sp.pdf',
+      'betco sds/chemtrec sds files ready to transfer/betco ccn2664 7-25-25/gts305eu_it.pdf',
+      'betco sds/diluted product sds/fastdraw diluted sds/167 fd sp.pdf',
+    ];
+    for (const path of cases) {
+      const decision = evaluateSdsPolicy(path, 'EN');
+      expect(decision, path).toEqual({
+        inScope: false,
+        reason: 'language_filename_suffix',
+        matched: expect.any(String),
+      });
+    }
+  });
+
+  it('sees through trailing "Archive" / "(2)" decorations after the suffix', () => {
+    for (const path of [
+      'betco sds/archive sds/781sp archive.pdf',
+      'betco sds/archive sds/795sp (2).pdf',
+      'betco sds/archive sds/114fr archive.pdf',
+    ]) {
+      expect(evaluateSdsPolicy(path, 'EN').inScope, path).toBe(false);
+    }
+  });
+
+  it('does NOT treat "ES" as Spanish -- it is the Essendant private-label code (B0-794)', () => {
+    // All 14 live `<code> ES.pdf` files are English by content and belong to
+    // "Private label SDS/Essendant Co ES1040 (Boardwalk)/". Sweeping them up as Spanish
+    // would exclude legitimate English safety sheets, so `es` is not a suffix token.
+    expect(matchSdsFilenameLanguageSuffix('betco sds/248 es.pdf')).toBeNull();
+    expect(matchSdsFilenameLanguageSuffix('betco sds/5000 es.pdf')).toBeNull();
+    expect(evaluateSdsPolicy('betco sds/248 es.pdf', 'EN').inScope).toBe(true);
+  });
+
+  it('does not sweep up English codes that merely END in the suffix letters', () => {
+    // The token must be preceded by a digit, space, underscore or hyphen -- never another
+    // letter. Nine real English filenames end in "Kit"; none may match the `it` token.
+    const englishKits = [
+      'betco sds/f02857 fastpak kit.pdf',
+      'betco sds/f091874 water hardness test kit.pdf',
+      'betco sds/f092535 fastpak mobile dilution control kit.pdf',
+    ];
+    for (const path of englishKits) {
+      expect(matchSdsFilenameLanguageSuffix(path), path).toBeNull();
+      expect(evaluateSdsPolicy(path, 'EN').inScope, path).toBe(true);
+    }
+    // Ordinary English Betco sheets are untouched.
+    for (const path of ['betco sds/528.pdf', 'betco sds/2102.pdf', 'betco sds/035.pdf']) {
+      expect(evaluateSdsPolicy(path, 'EN').inScope, path).toBe(true);
+    }
+    // A leading "SP" (the Specials prefix) is not a language marker on its own.
+    expect(matchSdsFilenameLanguageSuffix('betco sds/specials/sp58864.pdf')).toBeNull();
+  });
+
+  it('reports which suffix matched, so a decision can be audited', () => {
+    expect(matchSdsFilenameLanguageSuffix('betco sds/archive sds/609fr.pdf')).toBe('fr');
+    expect(matchSdsFilenameLanguageSuffix('betco sds/archive sds/024sp.pdf')).toBe('sp');
+    expect(matchSdsFilenameLanguageSuffix('betco sds/x/gts305eu_it.pdf')).toBe('it');
   });
 
   it('is env-configurable without code changes', () => {

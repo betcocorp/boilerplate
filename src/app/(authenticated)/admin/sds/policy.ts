@@ -50,6 +50,84 @@ export const SDS_POLICY_DEFAULT_EXCLUDE_KEYWORDS = [
 
 export const SDS_POLICY_DEFAULT_ALLOWED_LOCALES = ['EN', 'CAN'];
 
+/**
+ * B0-794 -- filename-suffix language markers.
+ *
+ * The folder-keyword list above still had a false-negative class: 364 Spanish, French
+ * and Italian SDS filed inside ordinary `Betco SDS/Chemtrec SDS files ready to transfer/`,
+ * `Betco SDS/Archive SDS/` and `Betco SDS/Specials/` folders, recorded as
+ * `language_code = 'EN'`, chunked and live in the retrievable corpus. Nothing in their
+ * folder path says "spanish" or "french"; the only path-level signal is a language
+ * suffix on the filename stem (`609FR.pdf`, `065_FR.pdf`, `188 DRAW FR.pdf`,
+ * `795SP (2).pdf`, `781SP Archive.pdf`, `GTS305EU_IT.pdf`).
+ *
+ * The token list is deliberately NOT the obvious one. Calibrated against all 3,159 real
+ * `document_kind = 'sds'` filenames cross-checked against their detected body language:
+ *
+ *  - `ES` is EXCLUDED on purpose. It is not Spanish here, it is the private-label
+ *    customer Essendant: all 14 `<code> ES.pdf` files live under
+ *    `Private label SDS/Essendant Co ES1040 (Boardwalk)/` and every one of them is
+ *    English by content. Adding `ES` would wrongly exclude legitimate English sheets.
+ *  - `IT` is included but survives only because of the boundary rule below: nine real
+ *    English filenames end in "Kit" (`F02857 FastPak kit`, `F091874 Water Hardness Test
+ *    Kit`, ...). Requiring a digit/space/underscore/hyphen before the token -- never
+ *    another letter -- rejects all nine and keeps the one genuine `GTS305EU_IT`.
+ *
+ * Measured on the live corpus: 0 false positives among the 1,526 retrievable SDS, and
+ * 2 across all 3,159 (`696 BRI SP`, `470 BRI SP` -- English sheets mis-suffixed by the
+ * supplier, both already out of scope under the `private label` keyword). It catches 360
+ * of the 364; the 4 it misses (`SNF390 SP Wexford Only`, `248SP(RSFMAIZ)`,
+ * `247 DIL (1_100)SP`) carry the token mid-name or before a parenthetical. Widening the
+ * pattern to reach them re-introduces false positives, so they are deliberately left to
+ * `evaluateSdsContentLanguage`, which remains the authoritative gate. This check is a
+ * cheap pre-filter that stops the common shape re-entering, not a replacement for it.
+ */
+export const SDS_POLICY_DEFAULT_LANGUAGE_SUFFIXES = ['fr', 'sp', 'mx', 'it'];
+
+export function getSdsPolicyLanguageSuffixes(): string[] {
+  return parseListEnv(
+    process.env.SDS_POLICY_LANGUAGE_SUFFIXES,
+    SDS_POLICY_DEFAULT_LANGUAGE_SUFFIXES,
+  );
+}
+
+/**
+ * Trailing bookkeeping decorations that sit after the language suffix in real filenames:
+ * "781SP Archive", "795SP (2)", "533FR - Copy".
+ */
+function stripFilenameDecorations(stem: string): string {
+  let current = stem.trim();
+  for (let i = 0; i < 5; i += 1) {
+    const next = current
+      .replace(/\s*\(\d+\)$/, '')
+      .replace(/[\s_-]*archive$/, '')
+      .replace(/[\s_-]*copy$/, '')
+      .trim();
+    if (next === current) return current;
+    current = next;
+  }
+  return current;
+}
+
+/** The lowercased filename stem of a path, with extension and trailing decorations removed. */
+function normalizedFilenameStem(normalizedPath: string): string {
+  const base = normalizedPath.split('/').pop() ?? '';
+  return stripFilenameDecorations(base.replace(/\.[a-z0-9]+$/, ''));
+}
+
+/**
+ * Returns the matched language suffix (e.g. 'fr') when the filename stem ends in one,
+ * or null. The token must be preceded by a digit, space, underscore or hyphen -- never
+ * by another letter -- which is what keeps "...Kit" from matching `it`.
+ */
+export function matchSdsFilenameLanguageSuffix(relativePath: string): string | null {
+  const stem = normalizedFilenameStem(relativePath.toLowerCase());
+  for (const suffix of getSdsPolicyLanguageSuffixes()) {
+    if (new RegExp(`(?:^|[0-9 _-])${suffix}$`).test(stem)) return suffix;
+  }
+  return null;
+}
+
 function parseListEnv(value: string | undefined, fallback: string[]): string[] {
   if (!value?.trim()) return fallback;
   return value
@@ -77,7 +155,11 @@ export type SdsPolicyDecision =
   | { inScope: true }
   | {
       inScope: false;
-      reason: 'not_in_include_prefix' | 'exclude_keyword' | 'excluded_locale';
+      reason:
+        | 'not_in_include_prefix'
+        | 'exclude_keyword'
+        | 'language_filename_suffix'
+        | 'excluded_locale';
       matched: string;
     };
 
@@ -94,6 +176,13 @@ export function evaluateSdsPolicy(relativePath: string, locale: string): SdsPoli
   const matchedKeyword = excludeKeywords.find((keyword) => normalized.includes(keyword));
   if (matchedKeyword) {
     return { inScope: false, reason: 'exclude_keyword', matched: matchedKeyword };
+  }
+
+  // B0-794: a language suffix on the filename stem, for the FR/SP/MX/IT sheets that sit
+  // in ordinary transfer/archive folders no keyword above can see.
+  const matchedSuffix = matchSdsFilenameLanguageSuffix(normalized);
+  if (matchedSuffix) {
+    return { inScope: false, reason: 'language_filename_suffix', matched: matchedSuffix };
   }
 
   const allowedLocales = getSdsPolicyAllowedLocales();
