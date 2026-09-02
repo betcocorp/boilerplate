@@ -21,6 +21,8 @@ const DEFAULT_PAGE_SIZE = 50;
 export interface OrphanQueueQuery {
   dataType: OrphanDataType;
   includeIgnored?: boolean;
+  /** B0-804 — non-English source documents are hidden unless this is true. */
+  includeTranslated?: boolean;
   search?: string;
   page?: number;
   pageSize?: number;
@@ -33,22 +35,57 @@ export interface OrphanQueueResult {
   pageSize: number;
 }
 
+/**
+ * Loosely-typed builders for the orphan views. `translated` (B0-804) exists on the live
+ * views but not yet in `src/types/supabase.public.ts` — those files are generated and the
+ * Supabase CLI is unauthenticated locally, so we cast instead of regenerating (same
+ * pattern as `~/lib/rag/corpus-stats.ts`). The Zod schemas still validate every row.
+ */
+type LooseQueueFilter = {
+  eq: (column: string, value: string | boolean) => LooseQueueFilter;
+  ilike: (column: string, value: string) => LooseQueueFilter;
+  order: (column: string, options: { ascending: boolean }) => LooseQueueFilter;
+  range: (
+    from: number,
+    to: number,
+  ) => Promise<{
+    data: unknown[] | null;
+    error: { message: string } | null;
+    count: number | null;
+  }>;
+};
+
+type LooseQueueClient = {
+  select: (columns: string, options: { count: 'exact' }) => LooseQueueFilter;
+};
+
+type LooseSummaryClient = {
+  select: (
+    columns: string,
+  ) => Promise<{ data: unknown[] | null; error: { message: string } | null }>;
+};
+
 /** Per-check counts across every data type (drives the dashboard + sidebar badges). */
 export async function getOrphanSummary(): Promise<OrphanSummaryRow[]> {
   const supabase = getSupabaseServiceRoleClient();
-  const { data, error } = await supabase
-    .from('orphan_queue_summary_v')
-    .select('data_type, check_key, total, active, ignored');
+  const { data, error } = await (
+    supabase.from('orphan_queue_summary_v') as unknown as LooseSummaryClient
+  ).select('data_type, check_key, total, active, ignored, translated, active_translated');
 
   if (error) throw new Error(`getOrphanSummary failed: ${error.message}`);
   return orphanSummaryRowSchema.array().parse(data ?? []);
 }
 
-/** Paginated orphan rows for a single data type. Hides acknowledged rows unless includeIgnored. */
+/**
+ * Paginated orphan rows for a single data type. Hides acknowledged rows unless
+ * includeIgnored, and hides translated (non-English) documents unless includeTranslated.
+ * The two filters compose independently.
+ */
 export async function getOrphanQueue(query: OrphanQueueQuery): Promise<OrphanQueueResult> {
   const {
     dataType,
     includeIgnored = false,
+    includeTranslated = false,
     search,
     page = 1,
     pageSize = DEFAULT_PAGE_SIZE,
@@ -58,15 +95,15 @@ export async function getOrphanQueue(query: OrphanQueueQuery): Promise<OrphanQue
   const from = (page - 1) * pageSize;
   const to = from + pageSize - 1;
 
-  let q = supabase
-    .from('orphan_queue_v')
+  let q = (supabase.from('orphan_queue_v') as unknown as LooseQueueClient)
     .select(
-      'check_key, data_type, ref_id, ref_label, detail, ignored, ignore_reason, ignored_by, ignored_at',
+      'check_key, data_type, ref_id, ref_label, detail, translated, ignored, ignore_reason, ignored_by, ignored_at',
       { count: 'exact' },
     )
     .eq('data_type', dataType);
 
   if (!includeIgnored) q = q.eq('ignored', false);
+  if (!includeTranslated) q = q.eq('translated', false);
   if (search && search.trim()) q = q.ilike('ref_label', `%${search.trim()}%`);
 
   const { data, error, count } = await q

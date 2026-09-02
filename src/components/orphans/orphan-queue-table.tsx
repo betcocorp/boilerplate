@@ -27,12 +27,24 @@ interface Props {
   page: number;
   pageSize: number;
   includeIgnored: boolean;
+  includeTranslated: boolean;
   search: string;
 }
 
 /**
- * Client table for a single data type's orphan queue. Search, an "include
- * acknowledged" toggle, pagination, and the acknowledge / restore action per row.
+ * The language code carried on document-derived rows (`detail.language_code`), so a
+ * translated row can be badged with the real language rather than a generic label.
+ */
+function translatedBadgeLabel(row: OrphanQueueRow): string {
+  const code = row.detail?.language_code;
+  return typeof code === 'string' && code.trim() ? code.trim().toUpperCase() : 'Translated';
+}
+
+/**
+ * Client table for a single data type's orphan queue. Search, a "show acknowledged"
+ * toggle, a "show translated" toggle (B0-804 — non-English SDS/label documents are
+ * hidden by default because they are never chunked or retrieved), pagination, and the
+ * acknowledge / restore action per row.
  */
 export function OrphanQueueTable({
   dataType,
@@ -41,6 +53,7 @@ export function OrphanQueueTable({
   page,
   pageSize,
   includeIgnored,
+  includeTranslated,
   search,
 }: Props) {
   const router = useRouter();
@@ -116,6 +129,16 @@ export function OrphanQueueTable({
           />
           Show acknowledged
         </label>
+
+        <label className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Checkbox
+            checked={includeTranslated}
+            onCheckedChange={(value) =>
+              pushParams({ includeTranslated: value === true ? '1' : null, page: '1' })
+            }
+          />
+          Show translated
+        </label>
       </div>
 
       <div className="overflow-hidden rounded-2xl border border-border">
@@ -133,14 +156,23 @@ export function OrphanQueueTable({
             {rows.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={5} className="py-10 text-center text-muted-foreground">
-                  Nothing here — no {includeIgnored ? '' : 'active '}orphans for this data type.
+                  {`Nothing here — no ${includeIgnored ? '' : 'active '}orphans for this data type${
+                    includeTranslated ? '' : ' (translated documents are hidden)'
+                  }.`}
                 </TableCell>
               </TableRow>
             ) : (
               rows.map((row) => (
                 <TableRow key={`${row.check_key}:${row.ref_id}`} className={row.ignored ? 'opacity-60' : ''}>
                   <TableCell>
-                    <div className="font-medium">{row.ref_label ?? '(untitled)'}</div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium">{row.ref_label ?? '(untitled)'}</span>
+                      {row.translated ? (
+                        <Badge variant="outline" title="Non-English document — never chunked or retrieved">
+                          {translatedBadgeLabel(row)}
+                        </Badge>
+                      ) : null}
+                    </div>
                     <OrphanRecordDialog
                       dataType={dataType}
                       refId={row.ref_id}

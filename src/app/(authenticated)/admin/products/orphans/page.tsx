@@ -5,7 +5,9 @@ export const dynamic = 'force-dynamic';
 
 export default async function OrphanDashboardPage() {
   const summary = await getOrphanSummary();
-  const totalActive = summary.reduce((n, r) => n + r.active, 0);
+  // Match what the queue tables show by default: active, minus translated (B0-804).
+  const totalTranslated = summary.reduce((n, r) => n + r.active_translated, 0);
+  const totalActive = Math.max(0, summary.reduce((n, r) => n + r.active, 0) - totalTranslated);
 
   return (
     <div className="space-y-6 p-6">
@@ -13,8 +15,11 @@ export default async function OrphanDashboardPage() {
         <h1 className="text-2xl font-semibold">Orphan Monitor</h1>
         <p className="text-sm text-muted-foreground">
           Records that are out of sync — not linked to their parent, missing derived content, or never
-          materialized. {totalActive} active across all data types. Acknowledge anything that is a known,
-          acceptable orphan to hide it from the active queue.
+          materialized.{' '}
+          {totalTranslated > 0
+            ? `${totalActive} active across all data types, plus ${totalTranslated} translated (non-English) documents hidden by default — those are never chunked or retrieved, so they are expected.`
+            : `${totalActive} active across all data types.`}{' '}
+          Acknowledge anything that is a known, acceptable orphan to hide it from the active queue.
         </p>
       </header>
 
