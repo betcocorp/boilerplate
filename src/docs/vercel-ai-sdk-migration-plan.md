@@ -445,6 +445,9 @@ Cutover acceptance criteria have been finalized as pass/fail gates:
 5. **Operational rollback readiness**
    - Toggling `BEX_AI_SDK_STREAMING_ENABLED=false` fully restores legacy chat path without code rollback.
    - No data migration is required to rollback.
+   - **Superseded (B0-68).** This flag no longer exists: the legacy `/api/bex/chat` route is a
+     permanent `410`, so there was no legacy path left for it to restore. Rolling streaming back
+     now means a code rollback.
 
 Phase 0 completion outcome:
 
@@ -546,7 +549,7 @@ Completed in this phase:
 - Added new route:
   - `src/app/api/bex/chat/stream/route.ts`
 - Route behavior currently implemented:
-  - gated by `BEX_AI_SDK_STREAMING_ENABLED`
+  - gated by `BEX_AI_SDK_STREAMING_ENABLED` (retired in B0-68 — the route is now unconditional)
   - enforces `canPostBexChat` auth checks
   - validates request body with `bexChatPostBodySchema`
   - reuses `runBexChatTurn` so persistence and workflow semantics stay consistent
@@ -778,16 +781,13 @@ Manual/API smoke matrix completed:
 
 ### User Perspective Validation (What Should Look Different)
 
-To verify visible changes in the current implementation, enable flags in local env and restart dev server:
-
-- `BEX_AI_SDK_STREAMING_ENABLED=true`
-- `NEXT_PUBLIC_BEX_STREAMING_UI_ENABLED=true`
-- `BEX_AI_SDK_STREAMING_ROLLOUT_MODE=all`
+To verify visible changes in the current implementation, open `/admin/bex` (B0-68: no flags to
+enable — streaming is unconditional; the three flags this step used to list are retired):
 
 What should be visibly different:
 
 - Chat header now shows active mode indicators:
-  - `transport: stream (cohort)`
+  - `transport: stream`
   - `markdown: streamdown`
 - While assistant output is arriving, header shows `streaming live`.
 - Assistant message appears progressively (token deltas) instead of only after full turn completion.
@@ -816,7 +816,8 @@ What should be visibly different:
 
 ### Execution Record (2026-04-21)
 
-Implemented rollout mechanics:
+Implemented rollout mechanics (historical — every gate in this list was retired by B0-68; see
+"Active Runtime Flags" below for what is left):
 
 - Server rollout gate added in `POST /api/bex/chat/stream`:
   - `BEX_AI_SDK_STREAMING_ROLLOUT_MODE=all|internal`
@@ -826,7 +827,9 @@ Implemented rollout mechanics:
   - sends `x-bex-streaming-cohort` on stream requests
 - Stream telemetry added and surfaced:
   - server logs `stream_response_completed` / `stream_response_failed`
-  - metrics: `timeToFirstTokenMs`, `totalMs`, `deltaCount`, `usedFallbackChunking`
+  - metrics: `timeToFirstTokenMs`, `totalMs`, `deltaCount` (B0-66 removed `usedFallbackChunking`
+    along with the 120-char fake-stream fallback; `deltaCount === 0` is the same signal, stated
+    honestly — the turn's answer was canned text no model emitted tokens for)
   - metrics included in `data-bex-meta` and shown in chat header after completion (`ttft` and `total`)
 
 Env flags added/updated in `.env.local`:
@@ -975,12 +978,21 @@ Use this section as the quick operational reference now that migration is comple
 
 ### Active Runtime Flags
 
-- `BEX_AI_SDK_STREAMING_ENABLED=true`
-- `BEX_AI_SDK_STREAMING_ROLLOUT_MODE=all|internal`
-- `NEXT_PUBLIC_BEX_STREAMING_UI_ENABLED=true`
-- `NEXT_PUBLIC_BEX_STREAMING_ROLLOUT_COHORT=all|internal`
-- `NEXT_PUBLIC_BEX_AI_ELEMENTS_UI=false`
-- `BEX_AI_SDK_ROUNDTRIPS_ENABLED=false`
+B0-68 retired every transitional AI SDK rollout gate. They were `settings`-table rows (B0-638), not
+env vars, and both the code branches and the rows are gone:
+
+- ~~`BEX_AI_SDK_STREAMING_ENABLED`~~ — streaming is unconditional.
+- ~~`BEX_AI_SDK_STREAMING_ROLLOUT_MODE`~~ / ~~`NEXT_PUBLIC_BEX_STREAMING_ROLLOUT_COHORT`~~ — cohort
+  gating and the `x-bex-streaming-cohort` header are removed.
+- ~~`NEXT_PUBLIC_BEX_STREAMING_UI_ENABLED`~~ — already unread by any code; row deleted.
+- ~~`NEXT_PUBLIC_BEX_AI_ELEMENTS_UI`~~ — the AI Elements transcript is the only renderer.
+- ~~`BEX_AI_SDK_ROUNDTRIPS_ENABLED`~~ — never wired to behaviour; row deleted.
+
+Still live, and deliberately kept:
+
+- `BEX_AI_SDK_GENERATION_ENABLED=false` — the permanent selector between the OpenAI Responses loop
+  (canonical default) and the AI SDK `streamText` loop. See `src/docs/generation-runtimes.md`
+  (B0-378); this is a runtime choice, not a migration gate.
 
 ### Current Expected Behavior
 
@@ -991,18 +1003,14 @@ Use this section as the quick operational reference now that migration is comple
 
 ### Rollout Control Guidance
 
-- To restrict stream traffic to internal cohort:
-  - set `BEX_AI_SDK_STREAMING_ROLLOUT_MODE=internal`
-  - set `NEXT_PUBLIC_BEX_STREAMING_ROLLOUT_COHORT=internal` for internal clients
-- To allow stream traffic for all:
-  - set `BEX_AI_SDK_STREAMING_ROLLOUT_MODE=all`
-  - set `NEXT_PUBLIC_BEX_STREAMING_ROLLOUT_COHORT=all`
+Removed in B0-68. There are no rollout controls left: streaming serves all traffic and there is no
+cohort or mode to restrict it to.
 
 ### Incident Playbook
 
-1. If stream errors spike, set `BEX_AI_SDK_STREAMING_ROLLOUT_MODE=internal` to reduce exposure.
+1. If stream errors spike there is no traffic-reduction toggle — fix forward or roll back the code.
 2. Capture trace IDs and stream metrics (`timeToFirstTokenMs`, `totalMs`, `deltaCount`) from logs.
-3. Validate `/api/bex/chat/stream` with cohort and non-cohort requests.
+3. Validate `/api/bex/chat/stream` with a normal authenticated request.
 4. Patch and redeploy stream route/workflow integration.
 
 ### Quick Verification Commands

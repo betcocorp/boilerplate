@@ -1,7 +1,6 @@
 'use client';
 
 import {
-  Bot,
   ChevronDown,
   ChevronRight,
   Copy,
@@ -9,16 +8,14 @@ import {
   Sparkles,
   ThumbsDown,
   ThumbsUp,
-  User,
 } from 'lucide-react';
 import Link from 'next/link';
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 
 import { BexMessagesSkeleton } from '~/components/bex/BexChatSkeleton';
 import { BexStreamdown } from '~/components/bex/BexStreamdown';
 import { RagDocumentChunkInspectButtons } from '~/components/rag/RagDocumentChunkInspect';
 import { documentKindLabel } from '~/lib/rag/document-kind';
-import { Avatar, AvatarFallback } from '~/components/ui/avatar';
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
 import {
@@ -66,13 +63,6 @@ type BexChatMessagesProps = {
     reasonCode?: string;
     comment?: string;
   }) => Promise<void>;
-  /**
-   * AISDK-3: gate the AI Elements rendering variant. Default off — the existing custom bubble UI
-   * is unchanged until this flag is flipped and visually QA'd. Resolved server-side from the
-   * `settings` table (`NEXT_PUBLIC_BEX_AI_ELEMENTS_UI`) and passed down, since a client component
-   * cannot read a DB-backed setting itself.
-   */
-  useAiElements?: boolean;
 };
 
 const DOWNVOTE_REASON_OPTIONS = [
@@ -336,9 +326,10 @@ function BexChatMessageBody({
   );
 }
 
-// AISDK-3: AI Elements rendering variant (Conversation + Message/MessageContent).
-// Reuses the existing markdown body, feedback, details, and copy — only the scroll
-// container and bubble shell come from AI Elements. Selected via the `useAiElements` prop.
+// AISDK-3: AI Elements transcript (Conversation + Message/MessageContent). Reuses the existing
+// markdown body, feedback, details, and copy — only the scroll container and bubble shell come
+// from AI Elements. B0-68 made this the only transcript renderer: the `NEXT_PUBLIC_BEX_AI_ELEMENTS_UI`
+// gate and the custom-bubble variant it selected against are retired.
 function BexAiElementsMessages({
   messages,
   isTyping,
@@ -442,22 +433,7 @@ export function BexChatMessages({
   onStartEmptyChat,
   onSuggestion,
   showWelcome,
-  useAiElements = false,
 }: BexChatMessagesProps) {
-  const endRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [messages, isTyping]);
-
-  async function copyText(content: string) {
-    try {
-      await navigator.clipboard.writeText(content);
-    } catch {
-      /* ignore */
-    }
-  }
-
   // B0-345: takes precedence over the welcome/transcript branches so a conversation switch
   // never paints the outgoing thread's messages under the incoming thread's title.
   if (isLoadingHistory) {
@@ -516,147 +492,13 @@ export function BexChatMessages({
     );
   }
 
-  if (useAiElements) {
-    return (
-      <BexAiElementsMessages
-        feedbackSubmittingMessageId={feedbackSubmittingMessageId}
-        isTyping={isTyping}
-        messages={messages}
-        onSubmitFeedback={onSubmitFeedback}
-      />
-    );
-  }
-
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6">
-      <div className="mx-auto flex max-w-3xl flex-col gap-6">
-        {messages.map((m, index) => {
-          const isUser = m.role === 'user';
-          const isMostRecentMessage = index === messages.length - 1;
-          const isStreamingPlaceholder = m.id === '__streaming_assistant__';
-
-          return (
-            <div
-              className={cn(
-                'flex gap-3',
-                isUser ? 'flex-row-reverse' : 'flex-row',
-              )}
-              key={m.id}
-            >
-              <Avatar className="mt-0.5 size-9 shrink-0">
-                <AvatarFallback
-                  className={cn(
-                    'text-xs font-medium',
-                    isUser
-                      ? 'bg-primary/15 text-primary'
-                      : 'bg-muted text-muted-foreground',
-                  )}
-                >
-                  {isUser ? (
-                    <User className="size-4" />
-                  ) : (
-                    <Bot className="size-4" />
-                  )}
-                </AvatarFallback>
-              </Avatar>
-
-              <div
-                className={cn(
-                  'relative min-w-0 max-w-[min(100%,36rem)] overflow-hidden rounded-3xl px-4 py-3 text-sm leading-relaxed shadow-sm ring-1 ring-border/60',
-                  isUser
-                    ? 'bg-primary text-primary-foreground'
-                    : 'bg-card text-card-foreground',
-                )}
-              >
-                <div
-                  aria-hidden
-                  className={cn(
-                    'pointer-events-none absolute inset-0 rounded-[inherit]',
-                    isUser
-                      ? 'bg-[linear-gradient(45deg,rgb(0_0_0/0.18),transparent,rgb(255_255_255/0.14))]'
-                      : 'bg-[linear-gradient(45deg,rgb(0_0_0/0.025),transparent,rgb(255_255_255/0.4))]',
-                  )}
-                />
-                <div className="relative">
-                  <div className="flex items-start justify-between gap-2">
-                    <span className="text-xs font-medium opacity-80">
-                      {isUser ? 'You' : 'Bex'}
-                    </span>
-                    <span
-                      className={cn(
-                        'shrink-0 text-xs opacity-70',
-                        isUser && 'text-primary-foreground/80',
-                      )}
-                    >
-                      {formatTime(m.createdAt)}
-                    </span>
-                  </div>
-                  <BexChatMessageBody
-                    content={m.content}
-                    isStreaming={
-                      !isUser &&
-                      (isStreamingPlaceholder ||
-                        (isTyping && isMostRecentMessage))
-                    }
-                    isUser={isUser}
-                  />
-                  {!isUser && !isStreamingPlaceholder ? (
-                    <div className="mt-3">
-                      <AssistantFeedbackActions
-                        feedback={m.feedback}
-                        isSubmitting={feedbackSubmittingMessageId === m.id}
-                        messageId={m.id}
-                        onSubmitFeedback={onSubmitFeedback}
-                      />
-                    </div>
-                  ) : null}
-                  {!isUser && !isStreamingPlaceholder && m.meta ? (
-                    <AssistantDetails messageId={m.id} meta={m.meta} />
-                  ) : null}
-                  {!isUser && !isStreamingPlaceholder && (
-                    <div className="mt-3">
-                      <Separator className="mb-2 bg-border/40" />
-                      <div className="flex justify-end">
-                        <Button
-                          aria-label="Copy message"
-                          className="h-8 rounded-xl text-xs"
-                          onClick={() => copyText(m.content)}
-                          size="sm"
-                          type="button"
-                          variant="ghost"
-                        >
-                          <Copy className="size-3.5" />
-                          Copy
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          );
-        })}
-
-        {isTyping && (
-          <div className="flex gap-3">
-            <Avatar className="size-9 shrink-0">
-              <AvatarFallback className="bg-muted text-muted-foreground">
-                <Bot className="size-4" />
-              </AvatarFallback>
-            </Avatar>
-            <div className="rounded-3xl bg-muted/80 px-4 py-3 ring-1 ring-border/50">
-              <div className="flex gap-1.5" aria-label="Bex is typing">
-                <span className="size-2 animate-bounce rounded-full bg-muted-foreground/50 [animation-delay:-0.2s]" />
-                <span className="size-2 animate-bounce rounded-full bg-muted-foreground/50 [animation-delay:-0.1s]" />
-                <span className="size-2 animate-bounce rounded-full bg-muted-foreground/50" />
-              </div>
-            </div>
-          </div>
-        )}
-
-        <div ref={endRef} />
-      </div>
-    </div>
+    <BexAiElementsMessages
+      feedbackSubmittingMessageId={feedbackSubmittingMessageId}
+      isTyping={isTyping}
+      messages={messages}
+      onSubmitFeedback={onSubmitFeedback}
+    />
   );
 }
 

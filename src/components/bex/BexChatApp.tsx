@@ -71,24 +71,11 @@ function makeOptimisticMessage(content: string): ChatMessage {
 }
 
 /**
- * Server-resolved `settings`-table values (`NEXT_PUBLIC_BEX_AI_ELEMENTS_UI`,
- * `NEXT_PUBLIC_BEX_STREAMING_ROLLOUT_COHORT`) passed down from the page component, which can
- * await the DB read this client component cannot make itself.
+ * B0-68 — the transitional AI SDK rollout gates are retired, so this component no longer takes
+ * server-resolved `settings` values: streaming is the only transport and the AI Elements renderer
+ * is unconditional. Nothing here reads the `settings` table any more.
  */
-export type BexChatAppSettings = {
-  useAiElements: boolean;
-  streamingRolloutCohort: string;
-};
-
-const DEFAULT_BEX_CHAT_APP_SETTINGS: BexChatAppSettings = {
-  useAiElements: false,
-  streamingRolloutCohort: 'default',
-};
-
-export function BexChatApp({
-  settings = DEFAULT_BEX_CHAT_APP_SETTINGS,
-}: { settings?: BexChatAppSettings } = {}) {
-  const { useAiElements, streamingRolloutCohort } = settings;
+export function BexChatApp() {
   const [hydrated, setHydrated] = useState(false);
   const [sessions, setSessions] = useState<Conversation[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -116,7 +103,6 @@ export function BexChatApp({
     totalMs: number;
     timeToFirstTokenMs: number | null;
     deltaCount: number;
-    usedFallbackChunking: boolean;
   } | null>(null);
   const streamDeltaBufferRef = useRef('');
   const streamFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
@@ -489,7 +475,6 @@ export function BexChatApp({
           model,
           useValidator,
           agentMode,
-          rolloutCohort: streamingRolloutCohort,
           onTextDelta: (delta) => {
             queueStreamingDelta(delta);
           },
@@ -858,7 +843,7 @@ export function BexChatApp({
                       ? 'preview → BEX_RESPONSES_MODEL'
                       : model}
                     {' · transport: '}
-                    {`stream (${streamingRolloutCohort})`}
+                    {'stream'}
                     {' · markdown: '}
                     {'streamdown'}
                     {(() => {
@@ -960,7 +945,6 @@ export function BexChatApp({
               void sendUserText(t);
             }}
             showWelcome={showFullWelcome}
-            useAiElements={useAiElements}
           />
 
           {!showFullWelcome &&

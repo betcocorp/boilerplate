@@ -12,56 +12,20 @@ import { newCorrelationId } from '~/lib/observability/correlation-id';
 import { logInfo } from '~/lib/observability/logger';
 import { PERMISSIONS } from '~/lib/permissions/constants';
 import { gateRoute } from '~/lib/permissions/route-gate';
-import { getBooleanSetting, getStringSetting } from '~/lib/settings/settings-service';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
 
-async function isStreamingEnabled(): Promise<boolean> {
-  return getBooleanSetting('BEX_AI_SDK_STREAMING_ENABLED', false);
-}
-
-async function streamingRolloutMode(): Promise<'all' | 'internal'> {
-  const mode = await getStringSetting('BEX_AI_SDK_STREAMING_ROLLOUT_MODE', 'all');
-  return mode === 'internal' ? 'internal' : 'all';
-}
-
-async function isRequestInStreamingCohort(request: Request): Promise<boolean> {
-  const mode = await streamingRolloutMode();
-  if (mode === 'all') {
-    return true;
-  }
-
-  return request.headers.get('x-bex-streaming-cohort') === 'internal';
-}
-
-function chunkText(input: string, chunkSize = 120): string[] {
-  if (!input) {
-    return [];
-  }
-
-  const chunks: string[] = [];
-  for (let index = 0; index < input.length; index += chunkSize) {
-    chunks.push(input.slice(index, index + chunkSize));
-  }
-  return chunks;
-}
-
+/**
+ * B0-68 — streaming is unconditional. The transitional rollout gates
+ * (`BEX_AI_SDK_STREAMING_ENABLED`, `BEX_AI_SDK_STREAMING_ROLLOUT_MODE` and the
+ * `x-bex-streaming-cohort` header they read) are retired: this is the only Bex chat transport
+ * (`/api/bex/chat` is a permanent 410), so a disabled/out-of-cohort 404 could only ever break the
+ * app. `BEX_AI_SDK_GENERATION_ENABLED` is untouched — that one is a permanent runtime selector
+ * between the Responses and AI SDK generation loops (B0-378), not a rollout gate.
+ */
 export async function POST(request: Request) {
-  if (!(await isStreamingEnabled())) {
-    return NextResponse.json(
-      { error: 'Streaming endpoint is disabled.' },
-      { status: 404 },
-    );
-  }
-  if (!(await isRequestInStreamingCohort(request))) {
-    return NextResponse.json(
-      { error: 'Streaming rollout cohort does not include this request.' },
-      { status: 404 },
-    );
-  }
-
   if (!(await hasBexSession())) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
@@ -131,8 +95,6 @@ export async function POST(request: Request) {
   logInfo('request_received', {
     trace_id: traceId,
     route: 'POST /api/bex/chat/stream',
-    rollout_mode: streamingRolloutMode(),
-    rollout_cohort: request.headers.get('x-bex-streaming-cohort') ?? 'none',
     hasConversationId: Boolean(parsed.data.conversationId),
     useValidator: parsed.data.useValidator ?? false,
     agentMode: parsed.data.agentMode ?? 'orchestrator',
@@ -143,8 +105,13 @@ export async function POST(request: Request) {
     stream: createUIMessageStream({
       execute: async ({ writer }) => {
         const textId = `assistant-${traceId}`;
-        let hasAssistantDelta = false;
         let firstTokenAtMs: number | null = null;
+        /**
+         * B0-66 — count of REAL model token deltas seen on this turn. Never incremented by the
+         * single-delta emission below, so `deltaCount === 0` on a completed turn is an honest
+         * "this answer was not model-generated text" signal (it replaces the removed
+         * `usedFallbackChunking` metric, which said the same thing less precisely).
+         */
         let deltaCount = 0;
 
         writer.write({
@@ -174,7 +141,6 @@ export async function POST(request: Request) {
               });
             },
             onAssistantDelta: (delta) => {
-              hasAssistantDelta = true;
               deltaCount += 1;
               if (firstTokenAtMs === null) {
                 firstTokenAtMs = Date.now();
@@ -199,7 +165,6 @@ export async function POST(request: Request) {
             timeToFirstTokenMs:
               firstTokenAtMs === null ? null : firstTokenAtMs - requestStartedAtMs,
             deltaCount,
-            usedFallbackChunking: !hasAssistantDelta,
           };
           writer.write({
             type: 'data-bex-meta',
@@ -228,7 +193,6 @@ export async function POST(request: Request) {
           timeToFirstTokenMs:
             firstTokenAtMs === null ? null : firstTokenAtMs - requestStartedAtMs,
           deltaCount,
-          usedFallbackChunking: !hasAssistantDelta,
         };
 
         writer.write({
@@ -243,11 +207,22 @@ export async function POST(request: Request) {
           },
         });
 
-        if (!hasAssistantDelta) {
-          const chunks = chunkText(result.answerText);
-          for (const chunk of chunks) {
-            writer.write({ type: 'text-delta', id: textId, delta: chunk });
-          }
+        /**
+         * B0-66 — the 120-char `chunkText` fake stream is gone. Some answer paths legitimately
+         * produce final text that no model ever emitted a token for, so there is nothing to
+         * stream: the pre-model early-decline gate, the regulated-claim guardrail, the
+         * usage/safety-coverage fallback, the generic validator fallback, and the
+         * cross-reference/recommendation decline copy all REPLACE the answer with canned text.
+         * For those, emit the text once so the client still renders something rather than
+         * simulating tokens that never existed. `deltaCount` stays 0 on those turns, which is
+         * what makes it a truthful "no real token streaming" signal.
+         */
+        if (deltaCount === 0 && result.answerText) {
+          writer.write({
+            type: 'text-delta',
+            id: textId,
+            delta: result.answerText,
+          });
         }
         writer.write({ type: 'text-end', id: textId });
         logInfo('stream_response_completed', {
