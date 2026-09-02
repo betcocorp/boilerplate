@@ -124,13 +124,31 @@ describe('requirePermission — shadow mode (BEX_PERMISSIONS_ENFORCED unset)', (
     });
   });
 
-  it('allows when no permissions can be resolved at all', async () => {
+  it('reports no-permissions-granted when the lookup succeeds and the user holds nothing', async () => {
     getCachedPermissions.mockResolvedValue(null);
+    // Default mock already resolves { permissions: [] } — a successful read of an empty grant set.
 
     const result = await requirePermission(PERMISSIONS.BEX_CHAT_USE);
 
     expect(result.allowed).toBe(true);
     expect(result.shadowAllowed).toBe(true);
+    expect(result.permissions).toEqual([]);
+    expect(writeAuditLog.mock.calls[0][1]).toMatchObject({
+      reason: 'no-permissions-granted',
+    });
+  });
+
+  /**
+   * B0-413 — the two used to collapse into one verdict, which told every user holding no grants
+   * to "try signing in again" for a condition signing in cannot change. Under enforcement that
+   * is 90 of 96 active users, so the split has to survive.
+   */
+  it('reports permissions-unavailable only when the lookup itself throws', async () => {
+    getCachedPermissions.mockResolvedValue(null);
+    getPermissionsForUser.mockRejectedValue(new Error('redis down'));
+
+    const result = await requirePermission(PERMISSIONS.BEX_CHAT_USE);
+
     expect(result.permissions).toEqual([]);
     expect(writeAuditLog.mock.calls[0][1]).toMatchObject({
       reason: 'permissions-unavailable',

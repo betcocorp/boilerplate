@@ -51,6 +51,14 @@ export type PermissionVerdictReason =
   | 'granted'
   | 'missing-permission'
   | 'permissions-unavailable'
+  /**
+   * B0-413 — the lookup SUCCEEDED and the user holds no grants at all. Distinct from
+   * `permissions-unavailable` (we could not read them) and from `missing-permission` (they
+   * hold grants, just not this one). Kept separate because the two need opposite advice:
+   * a failed read is worth retrying, an empty grant set never is. Conflating them told 90 of
+   * 96 active users to "try signing in again" for a condition signing in cannot change.
+   */
+  | 'no-permissions-granted'
   | 'user-not-found'
   | 'account-inactive'
   | 'no-identity'
