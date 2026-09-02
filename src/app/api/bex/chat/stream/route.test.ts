@@ -47,12 +47,8 @@ vi.mock('~/lib/observability/correlation-id', () => ({
   newCorrelationId: () => 'trace-test-1',
 }));
 
-vi.mock('~/lib/settings/settings-service', () => ({
-  getBooleanSetting: vi.fn().mockResolvedValue(true),
-  getStringSetting: vi.fn().mockResolvedValue('all'),
-}));
-
-import { getBooleanSetting } from '~/lib/settings/settings-service';
+// B0-68 — the route reads no settings at all now (the streaming enable/rollout-mode gates are
+// retired), so there is deliberately no settings-service mock here.
 
 function makeRequest(body: unknown) {
   return new Request('http://localhost/api/bex/chat/stream', {
@@ -83,9 +79,48 @@ async function readResponseBody(response: Response): Promise<string> {
   return output;
 }
 
+/** Every `text-delta` frame in the SSE body, in order, as it was written by the route. */
+function collectTextDeltas(body: string): string[] {
+  const deltas: string[] = [];
+  for (const line of body.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('data:')) continue;
+    const payload = trimmed.slice(5).trim();
+    if (!payload || payload === '[DONE]') continue;
+    try {
+      const chunk = JSON.parse(payload) as { type?: unknown; delta?: unknown };
+      if (chunk.type === 'text-delta' && typeof chunk.delta === 'string') {
+        deltas.push(chunk.delta);
+      }
+    } catch {
+      /* ignore non-JSON frames */
+    }
+  }
+  return deltas;
+}
+
+/** The `streamMetrics` object off the `data-bex-meta` frame, or null if none was written. */
+function readStreamMetrics(body: string): Record<string, unknown> | null {
+  for (const line of body.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('data:')) continue;
+    const payload = trimmed.slice(5).trim();
+    if (!payload || payload === '[DONE]') continue;
+    try {
+      const chunk = JSON.parse(payload) as { type?: unknown; data?: unknown };
+      if (chunk.type === 'data-bex-meta') {
+        const data = chunk.data as { streamMetrics?: Record<string, unknown> };
+        return data?.streamMetrics ?? null;
+      }
+    } catch {
+      /* ignore non-JSON frames */
+    }
+  }
+  return null;
+}
+
 describe('POST /api/bex/chat/stream', () => {
   beforeEach(() => {
-    vi.mocked(getBooleanSetting).mockReset().mockResolvedValue(true);
     vi.mocked(hasBexSession).mockReset();
     vi.mocked(runBexChatTurn).mockReset();
     vi.mocked(getBexActor).mockReset();
@@ -100,13 +135,24 @@ describe('POST /api/bex/chat/stream', () => {
     vi.mocked(writeAuditLog).mockResolvedValue(undefined);
   });
 
-  it('returns 404 when streaming is disabled', async () => {
-    vi.mocked(getBooleanSetting).mockResolvedValue(false);
+  // B0-68 — streaming is unconditional: there is no enable flag and no rollout cohort left, so an
+  // authenticated request is never turned away with a 404. The retired `x-bex-streaming-cohort`
+  // header is now just an unread request header.
+  it('serves a request that sends no streaming cohort header', async () => {
     vi.mocked(hasBexSession).mockResolvedValue(true);
+    vi.mocked(runBexChatTurn).mockResolvedValue({
+      traceId: 'trace-test-1',
+      conversationId: '7ad779f1-2af3-4a82-ae68-bf1372f6cd99',
+      answerText: 'Hello from stream output.',
+      routingDecision: 'orchestrator',
+      confidence: 0.92,
+      sources: [],
+    } as never);
 
     const response = await POST(makeRequest({ message: 'Hi there' }));
 
-    expect(response.status).toBe(404);
+    expect(response.status).toBe(200);
+    expect(runBexChatTurn).toHaveBeenCalled();
   });
 
   it('returns 401 when auth fails', async () => {
@@ -237,5 +283,103 @@ describe('POST /api/bex/chat/stream', () => {
     expect(body).toContain('"type":"data-bex-meta"');
     expect(body).toContain('"type":"text-delta"');
     expect(body).toContain('Hello from stream output.');
+  });
+
+  /**
+   * B0-66 — the 120-char `chunkText` fake stream is gone. These assert the two real shapes:
+   * a model-generated answer streams the model's OWN deltas verbatim, and an answer with no
+   * model tokens at all (early-decline gate, regulated-claim guardrail, usage/safety fallback,
+   * validator fallback, cross-reference decline) is emitted as exactly one delta — never
+   * re-sliced into fixed-width pieces.
+   */
+  describe('token streaming (B0-66)', () => {
+    // Longer than the retired 120-char chunk size, so a reintroduced slicer would show up as
+    // extra delta frames instead of the single frame asserted below.
+    const LONG_CANNED_ANSWER =
+      'I can’t verify the dilution ratio in this answer against an exact quote from a retrieved label or SDS, so I won’t state it. Please consult the product label or SDS directly.';
+
+    it('forwards real model token deltas verbatim, one frame per delta', async () => {
+      vi.mocked(hasBexSession).mockResolvedValue(true);
+      const modelDeltas = ['Dilute ', 'pH7Q Dual ', 'at 1:64.'];
+      vi.mocked(runBexChatTurn).mockImplementation(async (input) => {
+        for (const delta of modelDeltas) {
+          input.onAssistantDelta?.(delta);
+        }
+        return {
+          traceId: 'trace-test-1',
+          conversationId: '7ad779f1-2af3-4a82-ae68-bf1372f6cd99',
+          answerText: modelDeltas.join(''),
+          workflowRunId: 'f9dc4fb8-a4ce-4b81-8ce8-f4f7f9f16dea',
+          latestOpenaiResponseId: 'resp_123',
+          routingDecision: 'orchestrator',
+          timingBreakdown: { toolRounds: 1, cacheSource: null, searchMs: null },
+          confidence: 0.92,
+          sources: [],
+        } as never;
+      });
+
+      const response = await POST(makeRequest({ message: 'Hello' }));
+      const body = await readResponseBody(response);
+
+      expect(response.status).toBe(200);
+      // Exactly the model's deltas — no trailing re-emission of the final answer on top.
+      expect(collectTextDeltas(body)).toEqual(modelDeltas);
+      expect(readStreamMetrics(body)).toMatchObject({ deltaCount: 3 });
+    });
+
+    it('emits a non-model answer as a single delta and reports deltaCount 0', async () => {
+      vi.mocked(hasBexSession).mockResolvedValue(true);
+      vi.mocked(runBexChatTurn).mockResolvedValue({
+        traceId: 'trace-test-1',
+        conversationId: '7ad779f1-2af3-4a82-ae68-bf1372f6cd99',
+        answerText: LONG_CANNED_ANSWER,
+        workflowRunId: 'f9dc4fb8-a4ce-4b81-8ce8-f4f7f9f16dea',
+        latestOpenaiResponseId: null,
+        routingDecision: 'orchestrator',
+        timingBreakdown: { toolRounds: 0, cacheSource: null, searchMs: null },
+        confidence: 0.92,
+        sources: [],
+      } as never);
+
+      const response = await POST(makeRequest({ message: 'Hello' }));
+      const body = await readResponseBody(response);
+      const deltas = collectTextDeltas(body);
+
+      expect(response.status).toBe(200);
+      expect(deltas).toEqual([LONG_CANNED_ANSWER]);
+      // `deltaCount` counts REAL model deltas only, so it stays 0 here — that is the honest
+      // successor to the removed `usedFallbackChunking` flag.
+      expect(readStreamMetrics(body)).toMatchObject({ deltaCount: 0 });
+    });
+
+    it('no longer reports the removed usedFallbackChunking metric', async () => {
+      vi.mocked(hasBexSession).mockResolvedValue(true);
+      vi.mocked(runBexChatTurn).mockResolvedValue({
+        traceId: 'trace-test-1',
+        conversationId: '7ad779f1-2af3-4a82-ae68-bf1372f6cd99',
+        answerText: LONG_CANNED_ANSWER,
+        routingDecision: 'orchestrator',
+        confidence: 0.92,
+        sources: [],
+      } as never);
+
+      const body = await readResponseBody(await POST(makeRequest({ message: 'Hello' })));
+
+      expect(body).not.toContain('usedFallbackChunking');
+      expect(readStreamMetrics(body)).not.toHaveProperty('usedFallbackChunking');
+    });
+
+    it('emits no text delta when a failing turn produced no answer', async () => {
+      vi.mocked(hasBexSession).mockResolvedValue(true);
+      vi.mocked(runBexChatTurn).mockRejectedValue(new Error('workflow exploded'));
+
+      const response = await POST(makeRequest({ message: 'Hello' }));
+      const body = await readResponseBody(response);
+
+      expect(response.status).toBe(200);
+      expect(collectTextDeltas(body)).toEqual([]);
+      expect(body).toContain('"stage":"request_failed"');
+      expect(readStreamMetrics(body)).toMatchObject({ deltaCount: 0 });
+    });
   });
 });

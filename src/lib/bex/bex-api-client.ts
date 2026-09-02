@@ -11,8 +11,8 @@ export type BexChatStreamResponse = {
   streamMetrics?: {
     totalMs: number;
     timeToFirstTokenMs: number | null;
+    /** B0-66 — real model token deltas only; `0` means the answer was canned/non-model text. */
     deltaCount: number;
-    usedFallbackChunking: boolean;
   };
 };
 
@@ -224,9 +224,7 @@ function extractStreamMeta(
       candidate.streamMetrics &&
       typeof candidate.streamMetrics === 'object' &&
       typeof (candidate.streamMetrics as { totalMs?: unknown }).totalMs === 'number' &&
-      typeof (candidate.streamMetrics as { deltaCount?: unknown }).deltaCount === 'number' &&
-      typeof (candidate.streamMetrics as { usedFallbackChunking?: unknown }).usedFallbackChunking ===
-        'boolean'
+      typeof (candidate.streamMetrics as { deltaCount?: unknown }).deltaCount === 'number'
         ? {
             totalMs: (candidate.streamMetrics as { totalMs: number }).totalMs,
             timeToFirstTokenMs:
@@ -237,9 +235,6 @@ function extractStreamMeta(
                     .timeToFirstTokenMs
                 : null,
             deltaCount: (candidate.streamMetrics as { deltaCount: number }).deltaCount,
-            usedFallbackChunking: (
-              candidate.streamMetrics as { usedFallbackChunking: boolean }
-            ).usedFallbackChunking,
           }
         : undefined,
   };
@@ -251,21 +246,15 @@ export async function apiPostBexChatStream(options: {
   model: string;
   useValidator?: boolean;
   agentMode?: BexChatAgentMode;
-  /**
-   * Sent as `x-bex-streaming-cohort`. Resolved server-side from the `settings` table
-   * (`NEXT_PUBLIC_BEX_STREAMING_ROLLOUT_COHORT`) and threaded down by the caller — this client
-   * module cannot read a DB-backed setting itself.
-   */
-  rolloutCohort?: string;
   onTextDelta?: (delta: string) => void;
   onEvent?: (event: unknown) => void;
 }): Promise<BexChatStreamResponse> {
-  const rolloutCohort = options.rolloutCohort?.trim();
+  // B0-68 — the `x-bex-streaming-cohort` header and its `NEXT_PUBLIC_BEX_STREAMING_ROLLOUT_COHORT`
+  // setting are retired; the stream route no longer gates on a cohort.
   const res = await fetch('/api/bex/chat/stream', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      ...(rolloutCohort ? { 'x-bex-streaming-cohort': rolloutCohort } : {}),
     },
     body: JSON.stringify({
       conversationId: options.conversationId ?? undefined,

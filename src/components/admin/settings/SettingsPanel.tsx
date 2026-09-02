@@ -30,10 +30,9 @@ const BOOLEAN_SETTINGS = [
   // B0-734 — pre-model canned-decline gate (mixing / compliance / shelf-life / broad ask). Off by default.
   'BEX_EARLY_DECLINE_GATE_ENABLED',
   'BEX_PERMISSIONS_ENFORCED',
-  'BEX_AI_SDK_STREAMING_ENABLED',
-  'NEXT_PUBLIC_BEX_STREAMING_UI_ENABLED',
-  'NEXT_PUBLIC_BEX_AI_ELEMENTS_UI',
-  'BEX_AI_SDK_ROUNDTRIPS_ENABLED',
+  // B0-68 — the AI SDK streaming/Elements/roundtrip rollout gates are retired (streaming and the
+  // AI Elements transcript are unconditional). BEX_AI_SDK_GENERATION_ENABLED stays: per B0-378 it
+  // is the permanent selector between the Responses and AI SDK generation loops, not a gate.
   'BEX_AI_SDK_GENERATION_ENABLED',
   'BEX_LLM_ROUTER_ENABLED',
   'BEX_LLM_ROUTER_SHADOW_MODE',
@@ -51,8 +50,6 @@ const BOOLEAN_SETTINGS = [
 const STRING_SETTINGS = [
   'WEBSEARCH_PROVIDER',
   'OPENAI_EMBEDDING_MODEL',
-  'BEX_AI_SDK_STREAMING_ROLLOUT_MODE',
-  'NEXT_PUBLIC_BEX_STREAMING_ROLLOUT_COHORT',
   'XREF_RECOMMENDATION_TIMEOUT_MS',
   'COHERE_RERANK_MODEL',
   'ROUTER_TYPE',

@@ -322,9 +322,9 @@ describe('settings-table coverage does not regress to process.env (B0-638)', () 
     'ALERT_TOOL_FAILURE_RATE_WARNING',
     'ALERT_TOOL_FAILURE_SPIKE_DELTA',
     'ALERT_TOOL_FAILURE_SPIKE_RATIO',
+    // B0-378 — permanent selector between the Responses and AI SDK generation loops. Deliberately
+    // NOT retired by B0-68, which removed only the transitional streaming/Elements rollout gates.
     'BEX_AI_SDK_GENERATION_ENABLED',
-    'BEX_AI_SDK_STREAMING_ENABLED',
-    'BEX_AI_SDK_STREAMING_ROLLOUT_MODE',
     'BEX_DISABLE_CONFIDENCE_GATING',
     // B0-734 — the early-decline gate switch, moved off process.env; defaults to false.
     'BEX_EARLY_DECLINE_GATE_ENABLED',
@@ -333,8 +333,6 @@ describe('settings-table coverage does not regress to process.env (B0-638)', () 
     'BEX_PERMISSIONS_ENFORCED',
     'COHERE_RERANK_MODEL',
     'ENABLE_RERANKER',
-    'NEXT_PUBLIC_BEX_AI_ELEMENTS_UI',
-    'NEXT_PUBLIC_BEX_STREAMING_ROLLOUT_COHORT',
     // B0-686 — read through getRagBoostConfig()/getRagChunkingConfig(); these rows replaced a
     // clipboard "paste this into a migration" panel, never a process.env read.
     'RAG_BOOST_DILUTION_RATIO',
@@ -356,10 +354,13 @@ describe('settings-table coverage does not regress to process.env (B0-638)', () 
     'XREF_RECOMMENDATION_TIMEOUT_MS',
   ];
 
-  // Not wired to any behavior in code as of B0-638 — the settings-table row exists but nothing
-  // reads it, so there is no `process.env.<KEY>` read to guard against regressing to. Remove from
-  // this list (and add to DB_BACKED_KEYS above) once/if a ticket wires one of these up for real.
-  const ORPHANED_KEYS = ['BEX_AI_SDK_ROUNDTRIPS_ENABLED', 'NEXT_PUBLIC_BEX_STREAMING_UI_ENABLED'];
+  // Not wired to any behavior in code — the settings-table row exists but nothing reads it, so
+  // there is no `process.env.<KEY>` read to guard against regressing to. Add a key here (and drop
+  // it from DB_BACKED_KEYS) only for a row that is deliberately kept unread; B0-68 instead DELETED
+  // the two rows that used to sit here (`BEX_AI_SDK_ROUNDTRIPS_ENABLED`,
+  // `NEXT_PUBLIC_BEX_STREAMING_UI_ENABLED`) along with the streaming/Elements rollout gates,
+  // rather than leaving stale config nothing reads.
+  const ORPHANED_KEYS: string[] = [];
 
   const SRC_ROOT = join(__dirname, '..', '..');
   const SKIP_DIRS = new Set(['node_modules', '.next']);
