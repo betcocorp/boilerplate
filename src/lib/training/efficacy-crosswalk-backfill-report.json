@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-09-02T16:03:18.974Z",
+  "generated_at": "2026-09-02T17:13:47.246Z",
   "ticket": "B0-232",
-  "mode": "dry-run",
+  "mode": "write",
   "totals": {
     "efficacy_documents": 146,
     "resolved": 125,
