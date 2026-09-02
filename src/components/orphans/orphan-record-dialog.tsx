@@ -35,7 +35,10 @@ function formatValue(value: unknown): string {
 }
 
 function isMultiline(value: unknown): boolean {
-  return typeof value === 'object' || (typeof value === 'string' && value.includes('\n'));
+  return (
+    typeof value === 'object' ||
+    (typeof value === 'string' && value.includes('\n'))
+  );
 }
 
 /**
@@ -54,7 +57,9 @@ export function OrphanRecordDialog({ dataType, refId, label }: Props) {
       getOrphanRecord({ dataType, refId })
         .then(setResult)
         .catch((err) => {
-          toast.error(err instanceof Error ? err.message : 'Failed to load record');
+          toast.error(
+            err instanceof Error ? err.message : 'Failed to load record',
+          );
           setOpen(false);
         })
         .finally(() => setLoading(false));
@@ -63,10 +68,14 @@ export function OrphanRecordDialog({ dataType, refId, label }: Props) {
 
   const record = result?.record ?? null;
   const bodyEntries = record
-    ? BODY_FIELDS.filter((k) => record[k] != null && record[k] !== '').map((k) => [k, record[k]] as const)
+    ? BODY_FIELDS.filter((k) => record[k] != null && record[k] !== '').map(
+        (k) => [k, record[k]] as const,
+      )
     : [];
   const fieldEntries = record
-    ? Object.entries(record).filter(([k]) => !BODY_FIELDS.includes(k as (typeof BODY_FIELDS)[number]))
+    ? Object.entries(record).filter(
+        ([k]) => !BODY_FIELDS.includes(k as (typeof BODY_FIELDS)[number]),
+      )
     : [];
 
   return (
@@ -80,12 +89,15 @@ export function OrphanRecordDialog({ dataType, refId, label }: Props) {
         {refId}
       </button>
 
-      <DialogContent className="max-h-[85vh] max-w-3xl overflow-hidden">
+      <DialogContent className="max-h-[85vh] w-[50vw] max-w-[50vw] sm:max-w-[50vw] overflow-hidden">
         <DialogHeader>
-          <DialogTitle className="truncate">{label ?? '(untitled)'}</DialogTitle>
+          <DialogTitle className="truncate">
+            {label ?? '(untitled)'}
+          </DialogTitle>
           <DialogDescription>
             {ORPHAN_DATA_TYPE_LABELS[dataType]}
-            {result ? ` · ${result.table}` : ''} · <span className="font-mono">{refId}</span>
+            {result ? ` · ${result.table}` : ''} ·{' '}
+            <span className="font-mono">{refId}</span>
           </DialogDescription>
         </DialogHeader>
 
@@ -114,14 +126,18 @@ export function OrphanRecordDialog({ dataType, refId, label }: Props) {
               <dl className="grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-[minmax(0,12rem)_1fr]">
                 {fieldEntries.map(([key, value]) => (
                   <div key={key} className="contents">
-                    <dt className="font-mono text-xs text-muted-foreground sm:pt-0.5">{key}</dt>
+                    <dt className="font-mono text-xs text-muted-foreground sm:pt-0.5">
+                      {key}
+                    </dt>
                     <dd className="min-w-0">
                       {isMultiline(value) ? (
                         <pre className="whitespace-pre-wrap break-words rounded-lg border border-border bg-muted/40 p-2 text-xs">
                           {formatValue(value)}
                         </pre>
                       ) : (
-                        <span className="break-words text-sm">{formatValue(value)}</span>
+                        <span className="break-words text-sm">
+                          {formatValue(value)}
+                        </span>
                       )}
                     </dd>
                   </div>
