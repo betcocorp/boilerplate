@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 
+import { normalizeRetrievalLanguageCode } from '~/lib/rag/retrieval-language';
 import { withRetry } from '~/lib/utils';
 import { formatEasternTimestamp } from '~/lib/utils/time';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
@@ -107,13 +108,17 @@ export async function runSdsSyncAction(
   formData: FormData,
 ): Promise<SdsSyncActionState> {
   const startedAt = Date.now();
-  const rawLang = formData.get('languageCode');
-  const languageCode =
-    typeof rawLang === 'string' && rawLang.trim()
-      ? rawLang.trim().toUpperCase()
-      : 'EN';
 
   try {
+    // B0-804: the retrievable corpus is EN-only. Reject a non-EN request before the RPC
+    // runs — chunking another language would seed the ANN candidate pool with
+    // untranslated regulated text (see ~/lib/rag/retrieval-language.ts).
+    const language = normalizeRetrievalLanguageCode(formData.get('languageCode'));
+    if (!language.ok) {
+      throw new Error(language.error);
+    }
+    const languageCode = language.languageCode;
+
     const supabase = getSupabaseServiceRoleClient();
     const { data, error } = await withRetry(
       () =>

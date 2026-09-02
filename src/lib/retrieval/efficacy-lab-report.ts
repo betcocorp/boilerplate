@@ -1,3 +1,4 @@
+import { isRetrievableLanguageCode } from '~/lib/rag/retrieval-language';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 /**
@@ -37,6 +38,7 @@ type EfficacyDocumentRow = {
   project_number: string | null;
   summary: string | null;
   body_text: string | null;
+  language_code: string | null;
 };
 
 function readMetadataString(metadata: Record<string, unknown> | null, key: string): string | null {
@@ -107,7 +109,15 @@ async function fetchCurrentEfficacyDocuments(
     p_product_line_key: productLineKey,
   });
   if (error || !data) return [];
-  return (data as unknown as EfficacyDocumentRow[]);
+
+  // B0-804: defence in depth. `rag.get_current_efficacy_for_product` now carries its own
+  // `upper(language_code) = 'EN'` predicate, but this function returns SETOF rag.document
+  // — every column, body_text included — and buildCitation() falls back to that raw body
+  // precisely when a document has no chunks, which is exactly the non-English condition.
+  // An unknown/blank language_code is treated as non-retrievable: never assume English.
+  return (data as unknown as EfficacyDocumentRow[]).filter((doc) =>
+    isRetrievableLanguageCode(doc.language_code),
+  );
 }
 
 async function buildCitation(
