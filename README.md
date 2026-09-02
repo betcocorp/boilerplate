@@ -23,7 +23,7 @@ Open [http://localhost:3000/admin/bex](http://localhost:3000/admin/bex).
 | `SUPABASE_SERVICE_ROLE_KEY` | Service role (server-only) for RAG + agent tables. |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Anon key for server client where used. |
 | `API_TOKEN` (per client) | `/api/v1/*` uses per-client tokens from the project/app/token registry (`Authorization: Bearer bex_<env>_…`); no shared key. Local dev uses the seeded "Local Dev" token in `.env.local`. |
-| `BEX_PERMISSIONS_ENFORCED` | The single switch for the permission system (epic B0-401). Unset/anything but `true` = **shadow mode**: verdicts are logged (`permission.verdict`) and would-be denials recorded in `audit_logs` as `permission.shadow_verdict`, but nothing is denied — no nav is hidden, no route returns 403, no sign-in is rejected, no session is cleared. `true` enforces. |
+| `BEX_PERMISSIONS_ENFORCED` | The single switch for the permission system (epic B0-401). **No longer an env var** — B0-638 moved it to a `public.settings` row, toggled at `/admin/settings` and read by `isPermissionsEnforced()`; setting an env var of this name does nothing. Anything but `true` = **shadow mode**: verdicts are logged (`permission.verdict`) and would-be denials recorded in `audit_logs` as `permission.shadow_verdict`, but nothing is denied — no nav is hidden, no route returns 403, no sign-in is rejected, no session is cleared. `true` enforces. Currently `false`, and **NO-GO** to flip: see `src/docs/permissions-enforcement-cutover.md` for the evidence, blockers and runbook. |
 | `AUTH_SESSION_MAX_AGE_SECONDS` | Session lifetime shared by the NextAuth JWT/session and the auth-user cookie. Defaults to `604800` (7 days); non-numeric or `<= 0` keeps the default. |
 
 ## Database migrations
