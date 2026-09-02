@@ -138,6 +138,8 @@ type ProductAliasRow = {
    * includes them — needed so a successful match can be logged with which alias row produced it. */
   id?: string;
   confidence?: number | null;
+  /** Only populated when the caller's `.select()` includes it (B0-791 EXP- exclusion). */
+  alias?: string;
 };
 
 /** Chainable filter shape for `rag.product_alias`, which isn't in the generated Supabase types. */
@@ -180,6 +182,21 @@ type FuzzyTrgmAliasRpcClient = {
 /** B0-482 fuzzy RPC defaults, mirrored here so the app-layer call is explicit rather than relying on the SQL-side defaults. */
 const FUZZY_TRGM_SIMILARITY_THRESHOLD = 0.35;
 const FUZZY_TRGM_MAX_RESULTS = 5;
+
+/**
+ * B0-791: `EXP-`-prefixed aliases mark experimental/discontinued product lines (confirmed against
+ * live data: 12 such rows, e.g. "EXP-DENSICLEAN", "EXP-DRAIN GEL" — all `verified = true`, so the
+ * existing verified gate doesn't touch them). A short bare product name like "DENSICLEAN" scores
+ * HIGHER trigram similarity against "EXP-DENSICLEAN" (a near-identical, longer superstring) than
+ * against the real, wordier product alias ("DensicleanT Cleaner with Densifier") it should match —
+ * a property of trigram similarity, not a data error. Exclude `EXP-` candidates from the fuzzy
+ * tiers unless the caller's own query is itself an EXP- lookup, so an experimental line stays
+ * findable by its exact/near-exact name but can't silently steal a fuzzy match meant for the real
+ * product line.
+ */
+function isExperimentalAliasMatch(alias: string, query: string): boolean {
+  return /^exp-/i.test(alias) && !/^exp[\s-]/i.test(query);
+}
 
 /**
  * B0-483: candidates within this margin of the top trigram similarity score are treated as
@@ -376,11 +393,16 @@ export async function resolveProductEntityByName(
     try {
       let fuzzyAliasQuery = aliasClient
         .from('product_alias')
-        .select('id, product_line_key, entity_id, verified, confidence');
+        .select('id, alias, product_line_key, entity_id, verified, confidence');
       for (const token of aliasTokens) {
         fuzzyAliasQuery = fuzzyAliasQuery.ilike('alias_norm', `%${token}%`);
       }
-      const { data: fuzzyAliasRows } = await fuzzyAliasQuery.limit(5);
+      const { data: allFuzzyAliasRows } = await fuzzyAliasQuery.limit(5);
+      // B0-791: drop EXP- (experimental/discontinued) candidates before judging uniqueness — see
+      // `isExperimentalAliasMatch`.
+      const fuzzyAliasRows = allFuzzyAliasRows?.filter(
+        (r) => !isExperimentalAliasMatch(r.alias ?? '', trimmed),
+      );
 
       if (fuzzyAliasRows && fuzzyAliasRows.length > 0) {
         const distinctLineKeys = new Set(
@@ -436,13 +458,19 @@ export async function resolveProductEntityByName(
   // candidates — mirroring the exact-match tier's verified-tiebreak policy, just applied over a
   // similarity-margin cluster instead of an identical alias_norm.
   try {
-    const { data: fuzzyTrgmRows } = await (
+    const { data: allFuzzyTrgmRows } = await (
       aliasClient as unknown as FuzzyTrgmAliasRpcClient
     ).rpc('match_product_alias_fuzzy', {
       query: trimmed,
       similarity_threshold: FUZZY_TRGM_SIMILARITY_THRESHOLD,
       max_results: FUZZY_TRGM_MAX_RESULTS,
     });
+    // B0-791: a short bare product name (e.g. "DENSICLEAN") scores higher trigram similarity
+    // against an EXP-prefixed superstring than against the real, wordier product alias it should
+    // match — drop those candidates before ranking. See `isExperimentalAliasMatch`.
+    const fuzzyTrgmRows = allFuzzyTrgmRows?.filter(
+      (r) => !isExperimentalAliasMatch(r.alias, trimmed),
+    );
 
     if (fuzzyTrgmRows && fuzzyTrgmRows.length > 0) {
       const topSimilarity = fuzzyTrgmRows[0].similarity;

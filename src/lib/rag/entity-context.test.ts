@@ -570,6 +570,122 @@ describe('resolveProductEntityByName — trigram fuzzy alias RPC fallback (B0-48
   });
 });
 
+describe('resolveProductEntityByName — EXP- experimental alias exclusion (B0-791)', () => {
+  it('skips an EXP- superstring match in the trigram fuzzy tier for a bare product name, resolving to the real product line instead', async () => {
+    // Real data: "DENSICLEAN" scores 0.73 against "EXP-DENSICLEAN" (a verified but
+    // experimental/discontinued line) and only 0.37 against the real
+    // "DensicleanT Cleaner with Densifier" alias -- without the EXP- exclusion the wrong,
+    // higher-scoring line would win outright (single distinct product line, no ambiguity path).
+    fuzzyTrgmRpcRows = [
+      {
+        alias_norm: 'exp-densiclean',
+        alias: 'EXP-DENSICLEAN',
+        entity_id: 'ent-exp',
+        product_line_key: 'line-exp',
+        verified: true,
+        alias_type: 'title',
+        confidence: 0.9,
+        similarity: 0.733333,
+      },
+      {
+        alias_norm: 'densicleant cleaner with densifier',
+        alias: 'DensicleanT Cleaner with Densifier',
+        entity_id: 'ent-real',
+        product_line_key: 'line-real',
+        verified: true,
+        alias_type: 'title',
+        confidence: 0.9,
+        similarity: 0.37037,
+      },
+    ];
+    entityRows = [{ id: 'ent-real', entity_type: 'product_line', product_line_key: 'line-real' }];
+
+    const result = await resolveProductEntityByName('DENSICLEAN');
+
+    expect(result).toEqual({
+      productLineKey: 'line-real',
+      productKey: null,
+      resolutionSource: 'alias_fuzzy_trgm',
+      ambiguousAlias: false,
+      matchedAliasId: null,
+      matchedAliasConfidence: 0.9,
+    });
+  });
+
+  it('still resolves an EXP- line when the query itself is an EXP- lookup', async () => {
+    fuzzyTrgmRpcRows = [
+      {
+        alias_norm: 'exp-densiclean',
+        alias: 'EXP-DENSICLEAN',
+        entity_id: 'ent-exp',
+        product_line_key: 'line-exp',
+        verified: true,
+        alias_type: 'title',
+        confidence: 0.9,
+        similarity: 0.95,
+      },
+    ];
+    entityRows = [{ id: 'ent-exp', entity_type: 'product_line', product_line_key: 'line-exp' }];
+
+    const result = await resolveProductEntityByName('EXP-DENSICLEAN');
+
+    expect(result.productLineKey).toBe('line-exp');
+    expect(result.resolutionSource).toBe('alias_fuzzy_trgm');
+  });
+
+  it('returns null instead of matching when every trigram candidate is an EXP- line and the query is not', async () => {
+    fuzzyTrgmRpcRows = [
+      {
+        alias_norm: 'exp-drain gel',
+        alias: 'EXP-DRAIN GEL',
+        entity_id: 'ent-exp-2',
+        product_line_key: 'line-exp-2',
+        verified: true,
+        alias_type: 'title',
+        confidence: 0.9,
+        similarity: 0.5,
+      },
+    ];
+    entityRows = [];
+
+    const result = await resolveProductEntityByName('DRAIN GEL');
+
+    expect(result).toEqual({
+      productLineKey: null,
+      productKey: null,
+      resolutionSource: null,
+      ambiguousAlias: false,
+      matchedAliasId: null,
+      matchedAliasConfidence: null,
+    });
+  });
+
+  it('skips an EXP- candidate in the tokenized alias fallback tier too', async () => {
+    productAliasRows = [
+      {
+        alias_norm: 'exp-untouchable sr technology',
+        alias: 'EXP-Untouchable SR Technology',
+        entity_id: 'ent-exp-3',
+        product_line_key: 'line-exp-3',
+        verified: true,
+      },
+      {
+        alias_norm: 'untouchable sr technology floor finish',
+        alias: 'Untouchable SR Technology Floor Finish',
+        entity_id: 'ent-real-3',
+        product_line_key: 'line-real-3',
+        verified: true,
+      },
+    ];
+    entityRows = [{ id: 'ent-real-3', entity_type: 'product_line', product_line_key: 'line-real-3' }];
+
+    const result = await resolveProductEntityByName('untouchable sr technology');
+
+    expect(result.productLineKey).toBe('line-real-3');
+    expect(result.resolutionSource).toBe('alias_fuzzy');
+  });
+});
+
 /**
  * B0-479 — `{ mode: 'freeform' }`: the resolution attempt `search_product_docs` now makes against
  * raw `freeformQuery` text (it previously passed `''` and skipped resolution entirely, letting an
