@@ -96,6 +96,10 @@ export type ParsedCsvRow = {
   expectedSources: string | null;
   shouldCite: boolean | null;
   expectedTool: string | null;
+  /** B0-790 — ground truth for the signals-accuracy harness. Same support level as expectedTool. */
+  expectedSurfaceType: string | null;
+  expectedBrandFamily: string | null;
+  expectedSetting: string | null;
   /** B0-537 — the `multi_turn_json` cell's scenario, or null for an ordinary single-turn row. */
   multiTurnScenario: MultiTurnScenario | null;
   /**

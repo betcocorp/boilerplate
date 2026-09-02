@@ -27,6 +27,7 @@ import { RunItemResultsCsvDownload } from '~/components/admin/tests/RunItemResul
 import { RunReportButton } from '~/components/admin/tests/RunReportButton';
 import { RuntimeConfigBadge } from '~/components/admin/tests/RuntimeConfigBadge';
 import { RunToolRoutingPanel } from '~/components/admin/tests/RunToolRoutingPanel';
+import { SignalAccuracyPanel } from '~/components/admin/tests/SignalAccuracyPanel';
 import {
   TestRunNotesDisplay,
   TestRunNotesProvider,
@@ -61,6 +62,7 @@ import {
   getTestResultById,
   listAgentStepOutputsByWorkflowRunIds,
   listAllResultItemsByResultId,
+  listOrchestrationPlannerStepOutputsByWorkflowRunIds,
 } from '~/lib/tests/repository';
 import {
   extractItemConfidenceProvenance,
@@ -86,6 +88,13 @@ import {
   type RoutingComparisonReportInput,
 } from '~/lib/tests/routing-comparison';
 import { parseTestRunConfig } from '~/lib/tests/run-config';
+import {
+  computeSignalAccuracyReport,
+  extractExpectedGroundTruthString,
+  extractProductMentionFromInputPayload,
+  parseSignalsAnalysisGate,
+  type SignalAccuracyItemInput,
+} from '~/lib/tests/signal-accuracy';
 import {
   computeToolRoutingReport,
   extractExpectedTool,
@@ -318,10 +327,12 @@ export default async function AdminTestRunDetailsPage({
       ),
     ),
   );
-  const [workflowRuns, agentStepOutputs] = await Promise.all([
-    listWorkflowRunsByIds(workflowRunIds),
-    listAgentStepOutputsByWorkflowRunIds(workflowRunIds),
-  ]);
+  const [workflowRuns, agentStepOutputs, orchestrationPlannerStepOutputs] =
+    await Promise.all([
+      listWorkflowRunsByIds(workflowRunIds),
+      listAgentStepOutputsByWorkflowRunIds(workflowRunIds),
+      listOrchestrationPlannerStepOutputsByWorkflowRunIds(workflowRunIds),
+    ]);
   const modelByWorkflowRunId = new Map(
     workflowRuns.map((workflowRun) => {
       const modelTag = extractModelTag(workflowRun.user_input);
@@ -358,6 +369,57 @@ export default async function AdminTestRunDetailsPage({
         toolTrace: workflowRunId
           ? (toolTraceByWorkflowRunId.get(workflowRunId) ?? null)
           : null,
+      };
+    }),
+  );
+
+  /**
+   * B0-790 — per-signal precision/recall. The `signals_analysis` gate lives on the
+   * `orchestration_planner` step (the ONE step every run has), keyed by `workflow_run_id` — same
+   * join shape as `toolTraceByWorkflowRunId` above, different step/gate.
+   */
+  const signalsByWorkflowRunId = new Map(
+    orchestrationPlannerStepOutputs.map(
+      (row) => [row.workflow_run_id, parseSignalsAnalysisGate(row.output)] as const,
+    ),
+  );
+  const expectedProductMentionByTestItemId = new Map(
+    testItems.map(
+      (item) =>
+        [item.id, extractProductMentionFromInputPayload(item.input_payload)] as const,
+    ),
+  );
+  const expectedSurfaceTypeByTestItemId = new Map(
+    testItems.map(
+      (item) => [item.id, extractExpectedGroundTruthString(item.expected_surface_type)] as const,
+    ),
+  );
+  const expectedBrandFamilyByTestItemId = new Map(
+    testItems.map(
+      (item) => [item.id, extractExpectedGroundTruthString(item.expected_brand_family)] as const,
+    ),
+  );
+  const expectedSettingByTestItemId = new Map(
+    testItems.map(
+      (item) => [item.id, extractExpectedGroundTruthString(item.expected_setting)] as const,
+    ),
+  );
+  const signalAccuracyReport = computeSignalAccuracyReport(
+    resultItems.map((row): SignalAccuracyItemInput => {
+      const workflowRunId = workflowRunIdByResultItemId.get(row.id) ?? null;
+      const signals = workflowRunId
+        ? (signalsByWorkflowRunId.get(workflowRunId) ?? null)
+        : null;
+      return {
+        testItemId: row.test_item_id,
+        rowIndex: row.row_index,
+        prompt: promptByItemId.get(row.test_item_id) ?? '',
+        expectedProductMention:
+          expectedProductMentionByTestItemId.get(row.test_item_id) ?? null,
+        expectedSurfaceType: expectedSurfaceTypeByTestItemId.get(row.test_item_id) ?? null,
+        expectedBrandFamily: expectedBrandFamilyByTestItemId.get(row.test_item_id) ?? null,
+        expectedSetting: expectedSettingByTestItemId.get(row.test_item_id) ?? null,
+        signals,
       };
     }),
   );
@@ -621,6 +683,8 @@ export default async function AdminTestRunDetailsPage({
         />
 
         <RunToolRoutingPanel report={toolRoutingReport} testId={test.id} />
+
+        <SignalAccuracyPanel report={signalAccuracyReport} testId={test.id} />
 
         <AliasResolutionPanel report={aliasResolutionReport} />
 

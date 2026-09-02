@@ -1468,6 +1468,37 @@ export async function listAgentStepOutputsByWorkflowRunIds(
   return rows;
 }
 
+/**
+ * B0-790 — the `orchestration_planner` `workflow_steps` row per workflow run (the ONE step every
+ * run has, per `run-product-support-workflow.ts`). `output.gates` may contain a `signals_analysis`
+ * entry — parse it with `parseSignalsAnalysisGate` (`~/lib/tests/signal-accuracy.ts`) rather than
+ * reading `output` directly. Sibling of `listAgentStepOutputsByWorkflowRunIds` above, same
+ * chunked-`.in()` shape, different `step_name`.
+ */
+export async function listOrchestrationPlannerStepOutputsByWorkflowRunIds(
+  workflowRunIds: string[],
+): Promise<AgentStepOutputRow[]> {
+  if (workflowRunIds.length === 0) {
+    return [];
+  }
+
+  const supabase = getSupabaseServiceRoleClient();
+  const rows: AgentStepOutputRow[] = [];
+
+  for (let i = 0; i < workflowRunIds.length; i += IN_FILTER_CHUNK_SIZE) {
+    const chunk = workflowRunIds.slice(i, i + IN_FILTER_CHUNK_SIZE);
+    const result = await supabase
+      .from('workflow_steps')
+      .select('workflow_run_id,output')
+      .eq('step_name', 'orchestration_planner')
+      .in('workflow_run_id', chunk);
+    assertNoError(result);
+    rows.push(...((result.data ?? []) as AgentStepOutputRow[]));
+  }
+
+  return rows;
+}
+
 export type ToolRoutingQueueRow = {
   resultItemId: string;
   testItemId: string;

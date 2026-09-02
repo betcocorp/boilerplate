@@ -1077,10 +1077,13 @@ export type Database = {
           expected_canonical_product: string | null
           expected_concepts: string | null
           expected_criteria: Json
+          expected_brand_family: string | null
           expected_reason_code: string | null
           expected_result_type: string | null
+          expected_setting: string | null
           expected_should_answer: boolean | null
           expected_sources: string | null
+          expected_surface_type: string | null
           expected_tool: string | null
           id: string
           ideal_response: string | null
@@ -1101,10 +1104,13 @@ export type Database = {
           expected_canonical_product?: string | null
           expected_concepts?: string | null
           expected_criteria?: Json
+          expected_brand_family?: string | null
           expected_reason_code?: string | null
           expected_result_type?: string | null
+          expected_setting?: string | null
           expected_should_answer?: boolean | null
           expected_sources?: string | null
+          expected_surface_type?: string | null
           expected_tool?: string | null
           id?: string
           ideal_response?: string | null
@@ -1122,13 +1128,16 @@ export type Database = {
         }
         Update: {
           created_at?: string
+          expected_brand_family?: string | null
           expected_canonical_product?: string | null
           expected_concepts?: string | null
           expected_criteria?: Json
           expected_reason_code?: string | null
           expected_result_type?: string | null
+          expected_setting?: string | null
           expected_should_answer?: boolean | null
           expected_sources?: string | null
+          expected_surface_type?: string | null
           expected_tool?: string | null
           id?: string
           ideal_response?: string | null

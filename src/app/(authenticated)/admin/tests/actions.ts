@@ -299,6 +299,9 @@ export async function uploadTestCsvAction(formData: FormData) {
       expected_sources: row.expectedSources,
       should_cite: row.shouldCite,
       expected_tool: row.expectedTool,
+      expected_surface_type: row.expectedSurfaceType,
+      expected_brand_family: row.expectedBrandFamily,
+      expected_setting: row.expectedSetting,
       input_payload: row.inputPayload,
       metadata: row.metadata,
     }));
