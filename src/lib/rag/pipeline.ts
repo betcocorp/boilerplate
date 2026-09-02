@@ -1,9 +1,11 @@
 import { syncDocumentChunkEmbeddings } from '~/lib/rag/embeddings';
+import { assertRetrievalLanguageCode } from '~/lib/rag/retrieval-language';
 import { withRetry } from '~/lib/utils';
 import { clampPositiveInteger } from '~/lib/utils/params';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
-const DEFAULT_LANGUAGE_CODE = 'EN';
+// B0-804: the default language now lives in ~/lib/rag/retrieval-language.ts, the single
+// chokepoint for what the retrievable corpus is allowed to contain.
 const DEFAULT_BATCH_SIZE = 25;
 const DEFAULT_MAX_BATCHES = 4;
 const MAX_PROFILE_RUNS = 25;
@@ -69,8 +71,14 @@ export type RagPipelineRunResult = {
   status: RagGenerationStatus;
 };
 
+/**
+ * B0-804: blank/missing still defaults to EN exactly as before, but anything else must
+ * be a language the retrievable corpus actually supports. Throws otherwise, so no
+ * `sync_*` RPC runs — chunking another language would seed the ANN candidate pool with
+ * untranslated regulated text (see `~/lib/rag/retrieval-language.ts`).
+ */
 function getLanguageCode(languageCode?: string) {
-  return languageCode?.trim().toUpperCase() || DEFAULT_LANGUAGE_CODE;
+  return assertRetrievalLanguageCode(languageCode);
 }
 
 function ragHeadIdCountQuery(
