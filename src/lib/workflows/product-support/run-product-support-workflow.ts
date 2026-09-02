@@ -54,6 +54,7 @@ import {
   isSignalsAnalysisEnabled,
   toIntentClassification,
 } from '~/lib/orchestrator/signals/analyze-turn-signals';
+import { buildSignalQueryRewrite } from '~/lib/orchestrator/signals/signal-query-rewrite';
 import type { DeclineClass, TurnSignals } from '~/lib/orchestrator/signals/signals-schemas';
 import { hasNamedSurfaceContext } from '~/lib/orchestrator/surface-vocabulary';
 import {
@@ -2643,9 +2644,10 @@ export async function runProductSupportWorkflow(input: {
      *
      * The speculative pre-fetch searches the RAW user message with no product anchor at all, which
      * is why B0-635 had to stop citing its weak hits. When the signals call named a Betco product
-     * AND that name resolved to a real product line, hand the pre-fetch that key so it searches the
-     * right product instead of whatever the message's incidental words match. Model-requested
-     * searches are untouched — they still resolve for themselves.
+     * AND that name resolved to a real product line, hand this key to EVERY `search_product_docs`
+     * call this turn (speculative pre-fetch and model-chosen alike, as of B0-738) so it searches the
+     * right product instead of whatever the message's incidental words match, or whatever this call's
+     * own arguments happen to resolve to. Every other tool case still resolves for itself.
      */
     const speculativeProductLineLock =
       signalsDecided && turnSignals?.resolvedProductLineKey
@@ -2654,6 +2656,16 @@ export async function runProductSupportWorkflow(input: {
             resolutionSource: turnSignals.resolutionSource,
           }
         : null;
+
+    /**
+     * B0-738 — deterministic query augmentation built from this turn's signals (no LLM call; see
+     * `buildSignalQueryRewrite`). Composes with alias resolution rather than duplicating it: it
+     * never resolves a product line itself, it only adds context terms the model's own
+     * `search_product_docs` query may have missed. Gated on `signalsDecided` for the same reason as
+     * the lock above — a degraded turn's signals aren't trustworthy enough to act on.
+     */
+    const signalQueryRewrite =
+      signalsDecided && turnSignals ? buildSignalQueryRewrite(turnSignals) : null;
 
     const executeTool = async ({
       name,
@@ -2711,11 +2723,24 @@ export async function runProductSupportWorkflow(input: {
         callId,
         origin,
         auditCtx: wfCtx,
+        /**
+         * B0-738 — the product-line lock and the signals-derived query rewrite used to apply only
+         * to the speculative pre-fetch (`speculative && speculativeProductLineLock`). They now
+         * apply to EVERY `search_product_docs` call this turn, model-chosen or speculative — a
+         * model-chosen call previously got `turnToolOptions` (answerShape,
+         * regulatedSectionIntent) but never the lock or rewrite, even when the signals call had
+         * already resolved a product line and extra context for this exact turn. Every other tool
+         * name is untouched: it still gets plain `turnToolOptions` (or nothing), exactly as before.
+         */
         ...(turnToolOptions
           ? {
               turnOptions:
-                speculative && speculativeProductLineLock
-                  ? { ...turnToolOptions, productLineLock: speculativeProductLineLock }
+                name === 'search_product_docs'
+                  ? {
+                      ...turnToolOptions,
+                      productLineLock: speculativeProductLineLock ?? undefined,
+                      queryRewrite: signalQueryRewrite,
+                    }
                   : turnToolOptions,
             }
           : {}),
