@@ -11,11 +11,13 @@ import {
   resolveXrefThreshold,
   scoreRecommendation,
 } from '~/lib/recommendations/confidence-scoring';
-import { getBooleanSetting } from '~/lib/settings/settings-service';
+import { getBooleanSetting, getNumberSetting } from '~/lib/settings/settings-service';
 import type { EnrichedCompetitorSpec } from '~/lib/websearch/enrich-competitor-spec';
 
 vi.mock('~/lib/settings/settings-service', () => ({
   getBooleanSetting: vi.fn().mockResolvedValue(false),
+  // Mirrors the real getNumberSetting contract: a missing/unreadable row yields the fallback.
+  getNumberSetting: vi.fn(async (_key: string, fallback: number) => fallback),
 }));
 
 const noProv = {
@@ -82,8 +84,8 @@ describe('scoreRecommendation (B0-88)', () => {
     expect(withoutCompany.overallConfidence).toBeGreaterThan(0.5);
   });
 
-  it('rewards top similarity + completeness + agreement', () => {
-    const strong = scoreRecommendation({ candidates: [cand(0.95), cand(0.9)], spec: fullSpec, brandKnown: true });
+  it('rewards top similarity + completeness + margin', () => {
+    const strong = scoreRecommendation({ candidates: [cand(0.95), cand(0.7)], spec: fullSpec, brandKnown: true });
     const weak = scoreRecommendation({
       candidates: [cand(0.4)],
       spec: { ...fullSpec, epaRegistration: null, productCategory: null, primaryUse: null, formFactor: null, keyClaims: [] },
@@ -95,6 +97,67 @@ describe('scoreRecommendation (B0-88)', () => {
 
   it('scores 0 when there are no candidates', () => {
     expect(scoreRecommendation({ candidates: [], spec: fullSpec, brandKnown: true }).components.topSimilarity).toBe(0);
+  });
+
+  // --- B0-795: candidateAgreement -> candidateMargin ---------------------------------------
+  it('ranks a decisive top candidate above an undifferentiated list of the same top similarity', () => {
+    // The exact failure the old `candidateAgreement` signal inverted: five near-identical
+    // candidates scored HIGHER than one clear leader, because mean similarity was higher.
+    const decisive = scoreRecommendation({
+      candidates: [cand(0.7), cand(0.5), cand(0.48)],
+      spec: fullSpec,
+      brandKnown: true,
+    });
+    const undifferentiated = scoreRecommendation({
+      candidates: [cand(0.7), cand(0.699), cand(0.698)],
+      spec: fullSpec,
+      brandKnown: true,
+    });
+    expect(decisive.components.candidateMargin).toBe(1);
+    expect(undifferentiated.components.candidateMargin).toBe(0.01);
+    expect(decisive.overallConfidence).toBeGreaterThan(undifferentiated.overallConfidence);
+  });
+
+  it('reports candidateMargin as null (not 0) for a single candidate and redistributes its weight', () => {
+    const single = scoreRecommendation({ candidates: [cand(0.6)], spec: fullSpec, brandKnown: true });
+    expect(single.components.candidateMargin).toBeNull();
+    // A lone candidate must not be punished as if it had lost a run-off: with margin excluded the
+    // score is the similarity/completeness mean renormalized to 1, i.e. (0.55*0.6 + 0.25*1) / 0.80.
+    expect(single.overallConfidence).toBeCloseTo((0.55 * 0.6 + 0.25 * 1) / 0.8, 3);
+  });
+
+  // --- B0-795: categoryCompatibility is measured but deliberately unweighted ----------------
+  it('records categoryCompatibility + the kind labels without letting them move the score', () => {
+    const bowlSpec: EnrichedCompetitorSpec = {
+      ...fullSpec,
+      productCategory: 'bowl cleaner',
+      primaryUse: 'toilet bowls and urinals',
+    };
+    const matching = { ...cand(0.7), title: 'Thick Bowl Cleaner' };
+    const mismatched = { ...cand(0.7), title: 'Heavy Duty Degreaser' };
+    const runnerUp = cand(0.6);
+
+    const same = scoreRecommendation({ candidates: [matching, runnerUp], spec: bowlSpec, brandKnown: true });
+    const different = scoreRecommendation({ candidates: [mismatched, runnerUp], spec: bowlSpec, brandKnown: true });
+
+    expect(same.components.categoryCompatibility).toBe(1);
+    expect(different.components.categoryCompatibility).toBe(0);
+    expect(different.components.categoryKinds).toEqual({
+      competitor: 'restroom/bowl_cleaner',
+      candidate: 'industrial/degreaser',
+    });
+    // Same inputs otherwise -> identical confidence. If this ever fails, someone weighted the
+    // diagnostic without re-running scripts/calibrate-xref-threshold.ts (see the module header).
+    expect(different.overallConfidence).toBe(same.overallConfidence);
+  });
+
+  it('leaves categoryCompatibility null when either side cannot be classified', () => {
+    const unclassifiable = scoreRecommendation({
+      candidates: [{ ...cand(0.7), title: 'Betco X', evidence: 'no category words here' }, cand(0.6)],
+      spec: { ...fullSpec, productCategory: null, primaryUse: null },
+      brandKnown: true,
+    });
+    expect(unclassifiable.components.categoryCompatibility).toBeNull();
   });
 });
 
@@ -135,18 +198,27 @@ describe('BEX_DISABLE_CONFIDENCE_GATING kill-switch (B0-452)', () => {
   });
 });
 
-describe('resolveXrefThreshold (B0-88)', () => {
-  const prev = process.env.XREF_RECOMMENDATION_MIN_CONFIDENCE;
+describe('resolveXrefThreshold (B0-88, settings-backed as of B0-795)', () => {
   afterEach(() => {
-    if (prev === undefined) delete process.env.XREF_RECOMMENDATION_MIN_CONFIDENCE;
-    else process.env.XREF_RECOMMENDATION_MIN_CONFIDENCE = prev;
+    vi.mocked(getNumberSetting).mockImplementation(async (_key: string, fallback: number) => fallback);
   });
 
-  it('prefers an explicit override, then env, then the 0.80 default', () => {
-    expect(resolveXrefThreshold(0.7)).toBe(0.7);
+  it('prefers an explicit override, then the settings row, then the 0.80 default', async () => {
+    expect(await resolveXrefThreshold(0.7)).toBe(0.7);
+    expect(await resolveXrefThreshold()).toBe(DEFAULT_XREF_MIN_CONFIDENCE);
+    vi.mocked(getNumberSetting).mockResolvedValueOnce(0.9);
+    expect(await resolveXrefThreshold()).toBe(0.9);
+  });
+
+  it('reads the XREF_RECOMMENDATION_MIN_CONFIDENCE key, not an env var', async () => {
+    // B0-638 compliance: the value must come from the settings table. A stray env var of the old
+    // name must not be able to influence the gate any more.
+    process.env.XREF_RECOMMENDATION_MIN_CONFIDENCE = '0.10';
+    expect(await resolveXrefThreshold()).toBe(DEFAULT_XREF_MIN_CONFIDENCE);
     delete process.env.XREF_RECOMMENDATION_MIN_CONFIDENCE;
-    expect(resolveXrefThreshold()).toBe(DEFAULT_XREF_MIN_CONFIDENCE);
-    process.env.XREF_RECOMMENDATION_MIN_CONFIDENCE = '0.9';
-    expect(resolveXrefThreshold()).toBe(0.9);
+    expect(vi.mocked(getNumberSetting)).toHaveBeenCalledWith(
+      'XREF_RECOMMENDATION_MIN_CONFIDENCE',
+      DEFAULT_XREF_MIN_CONFIDENCE,
+    );
   });
 });

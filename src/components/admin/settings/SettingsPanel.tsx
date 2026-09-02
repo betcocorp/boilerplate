@@ -51,6 +51,10 @@ const STRING_SETTINGS = [
   'WEBSEARCH_PROVIDER',
   'OPENAI_EMBEDDING_MODEL',
   'XREF_RECOMMENDATION_TIMEOUT_MS',
+  // B0-795 — cross-reference answer gate. Numeric 0-1; moved off process.env (B0-638 missed it).
+  // NOT calibrated yet: read src/docs/cross-reference-recommendations.md before changing it, and
+  // note BEX_DISABLE_CONFIDENCE_GATING currently bypasses this gate entirely.
+  'XREF_RECOMMENDATION_MIN_CONFIDENCE',
   'COHERE_RERANK_MODEL',
   'ROUTER_TYPE',
   // B0-786 — model tag + latency ceiling for the intent/signals classifier call; both moved off

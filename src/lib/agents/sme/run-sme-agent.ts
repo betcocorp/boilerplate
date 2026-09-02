@@ -28,13 +28,16 @@ import type {
  * engine on the raw query text is exactly what fabricated "Comparable Betco product" matches in
  * PRO-045/PRO-036. Never persisted: an attempt that never ran isn't a recommendation outcome.
  */
-function unresolvedCompetitorDecline(): Awaited<ReturnType<typeof runCrossReferenceRecommendation>> {
+async function unresolvedCompetitorDecline(): Promise<
+  Awaited<ReturnType<typeof runCrossReferenceRecommendation>>
+> {
   return {
     source: 'web',
     answered: false,
     status: 'declined',
     overallConfidence: 0,
-    thresholdUsed: resolveXrefThreshold(),
+    // B0-795: the threshold now comes from the settings table, so resolving it is async.
+    thresholdUsed: await resolveXrefThreshold(),
     candidates: [],
     evidence: { source: 'web', reason: 'competitor_identity_unresolved' },
     declineReason: XREF_DECLINE_COPY,
@@ -366,7 +369,7 @@ async function runCrossReferenceSmeAgentAnswer(
    * PRO-045/PRO-036 shape that fabricated a "Comparable Betco product" match.
    */
   const result = identityUnresolved
-    ? unresolvedCompetitorDecline()
+    ? await unresolvedCompetitorDecline()
     : await runCrossReferenceRecommendation(
         { competitorProduct: resolvedProduct, competitorBrand: resolvedBrand },
         { traceId },

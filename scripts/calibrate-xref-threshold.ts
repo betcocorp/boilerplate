@@ -26,11 +26,26 @@
  *   # 1. Harvest labeled (confidence, correct) pairs — costs web searches + LLM calls.
  *   npx tsx --env-file=.env.local scripts/calibrate-xref-threshold.ts --harvest --limit 40
  *
- *   # 2. Print the precision/recall/F1 curve from everything labeled so far.
+ *   # 2. Print the discrimination (AUC) + precision/recall/F1 curve from everything labeled so far.
  *   npx tsx --env-file=.env.local scripts/calibrate-xref-threshold.ts
+ *
+ *   # 3. Re-score every stored case with the CURRENT scoreRecommendation — offline, no network.
+ *   npx tsx --env-file=.env.local scripts/calibrate-xref-threshold.ts --rescore
+ *
+ * ## Why --rescore exists (B0-795)
+ *
+ * A stored `overallConfidence` is stale the moment `scoreRecommendation`'s inputs or weights move,
+ * and re-harvesting to measure a scorer change costs web searches, LLM calls and non-determinism —
+ * which makes an honest A/B between candidate signals impractical. So the harvest now persists the
+ * exact inputs the scorer saw (`scoreInputs`: the enriched spec, the grounded candidate list with
+ * similarities, and `brandKnown`). `--rescore` replays those inputs through the current scorer and
+ * rewrites `overallConfidence` in place. The LABEL (`correct`) is never recomputed — it is fixed by
+ * the harvested run's top candidate against the curated key — so a scorer change can move the score
+ * but can never move the ground truth it is being graded against.
  *
  * Flags:
  *   --harvest              Run the forced-web-path harvest before reporting.
+ *   --rescore              Recompute confidences from stored `scoreInputs` (offline).
  *   --limit <n>            Harvest sample size (default 40).
  *   --seed <n>             Deterministic sample selection (default 97).
  *   --cases <path>         Harvest case file (default src/lib/recommendations/eval/xref-threshold-cases.json).
@@ -52,13 +67,31 @@ import {
   recommendCrossReference,
   type RecommendCrossReferenceDeps,
 } from '~/lib/recommendations/recommend-cross-reference';
+import type { BetcoCandidate } from '~/lib/recommendations/candidate-retrieval';
 import { retrieveBetcoCandidates } from '~/lib/recommendations/candidate-retrieval';
 import { filterGroundedCandidates } from '~/lib/recommendations/recommendation-guardrails';
 import { runRecommendationWebSearch } from '~/lib/recommendations/recommendation-web-search';
-import { enrichCompetitorSpec } from '~/lib/websearch/enrich-competitor-spec';
+import {
+  enrichCompetitorSpec,
+  type EnrichedCompetitorSpec,
+} from '~/lib/websearch/enrich-competitor-spec';
 import { runValidatorPass } from '~/lib/workflows/product-support/validator';
 
 const DEFAULT_CASES_PATH = 'src/lib/recommendations/eval/xref-threshold-cases.json';
+
+/**
+ * The exact arguments `scoreRecommendation` was called with on the harvested run, persisted so a
+ * changed scorer can be replayed offline (`--rescore`) instead of re-harvested. Candidate
+ * `evidence` is kept because chemistry/kind signals read it; it is the retrieved Betco chunk text
+ * and is truncated only to keep the case file a reviewable size.
+ */
+type StoredScoreInputs = {
+  brandKnown: boolean;
+  spec: EnrichedCompetitorSpec;
+  candidates: BetcoCandidate[];
+};
+
+const EVIDENCE_CHARS = 1200;
 
 type HarvestedCase = ThresholdCalibrationCase & {
   competitorBrand: string | null;
@@ -71,6 +104,8 @@ type HarvestedCase = ThresholdCalibrationCase & {
   harvestedAt: string;
   /** Why `correct` is what it is, so a reviewer can audit a label without re-running. */
   labelBasis: string;
+  /** B0-795 — replayable scorer inputs. `null` on cases harvested before this was recorded. */
+  scoreInputs: StoredScoreInputs | null;
 };
 
 function parseArgs(argv: string[]) {
@@ -80,6 +115,7 @@ function parseArgs(argv: string[]) {
   };
   return {
     harvest: argv.includes('--harvest'),
+    rescore: argv.includes('--rescore'),
     limit: Number(get('--limit') ?? 40),
     seed: Number(get('--seed') ?? 97),
     casesPath: get('--cases') ?? DEFAULT_CASES_PATH,
@@ -115,7 +151,10 @@ function seededScore(key: string, seed: number): number {
  * takes step 2 without any change to production code. `lookupInternalCached` is deliberately
  * omitted — the engine prefers it when present and it would re-enter the real legacy lookup.
  */
-function forcedWebPathDeps(): RecommendCrossReferenceDeps {
+function forcedWebPathDeps(capture: {
+  spec: EnrichedCompetitorSpec | null;
+  grounded: BetcoCandidate[] | null;
+}): RecommendCrossReferenceDeps {
   return {
     lookupInternal: async (input) => ({
       ok: true,
@@ -128,9 +167,20 @@ function forcedWebPathDeps(): RecommendCrossReferenceDeps {
       matches: [],
     }),
     searchWeb: (input) => runRecommendationWebSearch(input),
-    enrich: (input) => enrichCompetitorSpec(input),
+    // B0-795 — tap the two steps whose outputs ARE the scorer's inputs, so `--rescore` can replay
+    // them. Pass-through only: the real implementations still run and their results are returned
+    // untouched, so the harvested run is identical to one taken without the tap.
+    enrich: async (input) => {
+      const spec = await enrichCompetitorSpec(input);
+      capture.spec = spec;
+      return spec;
+    },
     retrieve: (input) => retrieveBetcoCandidates(input),
-    filterGrounded: (candidates) => filterGroundedCandidates(candidates),
+    filterGrounded: async (candidates) => {
+      const result = await filterGroundedCandidates(candidates);
+      capture.grounded = result.grounded;
+      return result;
+    },
     validate: (input) => runValidatorPass(input),
   };
 }
@@ -184,7 +234,6 @@ async function harvest(options: ReturnType<typeof parseArgs>): Promise<Harvested
     `Harvesting ${sample.length} forced-web-path runs (pool ${pool.length}, seed ${options.seed})…`,
   );
 
-  const deps = forcedWebPathDeps();
   const results: HarvestedCase[] = [];
   let index = 0;
 
@@ -196,10 +245,16 @@ async function harvest(options: ReturnType<typeof parseArgs>): Promise<Harvested
       const row = sample[i]!;
       const product = String(row.ProductDescr).trim();
       const brand = brandById.get(String(row.Competitor)) ?? null;
+      // Per-run capture (deps are built per run, never shared) so concurrent workers cannot
+      // cross-contaminate one another's spec/candidate list.
+      const capture: { spec: EnrichedCompetitorSpec | null; grounded: BetcoCandidate[] | null } = {
+        spec: null,
+        grounded: null,
+      };
       try {
         const result = await recommendCrossReference(
           { competitorProduct: product, competitorBrand: brand },
-          deps,
+          forcedWebPathDeps(capture),
         );
         const top = result.candidates.find((c) => c.rank === 1) ?? result.candidates[0] ?? null;
         const expected = normalizeKey(String(row.ProductKey));
@@ -221,6 +276,17 @@ async function harvest(options: ReturnType<typeof parseArgs>): Promise<Harvested
             actual.length === 0
               ? 'No candidate returned — unlabeled, counts toward coverage only.'
               : `Top candidate productKey ${actual} vs curated legacy.competitor_products ProductKey ${expected}.`,
+          scoreInputs:
+            capture.spec && capture.grounded
+              ? {
+                  brandKnown: (brand ?? '').length > 0,
+                  spec: capture.spec,
+                  candidates: capture.grounded.map((c) => ({
+                    ...c,
+                    evidence: c.evidence.slice(0, EVIDENCE_CHARS),
+                  })),
+                }
+              : null,
         });
         console.log(
           `  [${results.length}/${sample.length}] ${brand ?? '—'} / ${product} → ` +
@@ -267,6 +333,33 @@ async function loadReviewedCases(): Promise<ThresholdCalibrationCase[]> {
     }));
 }
 
+/**
+ * B0-795 — replay stored scorer inputs through the CURRENT `scoreRecommendation`. Offline: no web
+ * search, no LLM, no retrieval. Only `overallConfidence` changes; `correct` is never touched.
+ */
+async function rescore(cases: HarvestedCase[]): Promise<HarvestedCase[]> {
+  const { scoreRecommendation } = await import('~/lib/recommendations/confidence-scoring');
+  let replayed = 0;
+  const out = cases.map((c) => {
+    if (!c.scoreInputs) return c;
+    replayed += 1;
+    const score = scoreRecommendation({
+      candidates: c.scoreInputs.candidates,
+      spec: c.scoreInputs.spec,
+      brandKnown: c.scoreInputs.brandKnown,
+    });
+    return { ...c, overallConfidence: score.overallConfidence };
+  });
+  const stale = cases.length - replayed;
+  console.log(
+    `Re-scored ${replayed}/${cases.length} cases with the current scoreRecommendation` +
+      (stale > 0
+        ? ` (${stale} case(s) predate scoreInputs capture and keep their stored confidence — re-harvest to refresh them).`
+        : '.'),
+  );
+  return out;
+}
+
 async function printCurve(
   cases: ThresholdCalibrationCase[],
   options: ReturnType<typeof parseArgs>,
@@ -282,9 +375,23 @@ async function printCurve(
   // Imported at point of use: the harvest pulls in the whole engine module graph first, and a
   // static import of this small pure module has been observed resolving to a partially-initialized
   // namespace under tsx's CJS interop in that ordering.
-  const { buildThresholdSweep, computeThresholdCalibration, selectThreshold } = await import(
-    '~/lib/recommendations/eval/threshold-calibration'
+  const { buildThresholdSweep, computeDiscrimination, computeThresholdCalibration, selectThreshold } =
+    await import('~/lib/recommendations/eval/threshold-calibration');
+
+  // Discrimination first: it is the precondition for the sweep below meaning anything at all.
+  const d = computeDiscrimination(cases);
+  console.log(
+    `\nDISCRIMINATION (threshold-independent)\n` +
+      `  labeled ${d.labeled}  (correct ${d.positives} / wrong ${d.negatives})\n` +
+      `  mean confidence — correct ${d.meanConfidenceCorrect ?? '—'} | wrong ${d.meanConfidenceWrong ?? '—'}\n` +
+      `  AUC ${d.auc ?? '—'} ${d.auc === null ? '' : d.auc > 0.5 ? '(ranks correct above wrong)' : '(NO usable ranking signal — 0.5 is coin-flip)'}`,
   );
+  if (d.positives > 0 && d.positives < 10) {
+    console.log(
+      `  ! Only ${d.positives} positive case(s): this AUC is a point estimate with very wide\n` +
+        `    uncertainty. Quote it with n, never as an established figure.`,
+    );
+  }
 
   const rows = computeThresholdCalibration(cases, buildThresholdSweep(0.7, 0.9, 0.01));
   console.log(
@@ -335,6 +442,13 @@ async function main() {
     const byId = new Map(harvested.map((c) => [c.id, c]));
     for (const c of fresh) byId.set(c.id, c);
     harvested = [...byId.values()];
+  }
+
+  if (options.rescore) {
+    harvested = await rescore(harvested);
+  }
+
+  if (options.harvest || options.rescore) {
     await mkdir(path.dirname(casesFile), { recursive: true });
     await writeFile(casesFile, `${JSON.stringify(harvested, null, 2)}\n`, 'utf8');
     console.log(`\nWrote ${harvested.length} cases to ${options.casesPath}`);

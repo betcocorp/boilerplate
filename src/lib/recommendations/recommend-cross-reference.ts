@@ -410,7 +410,7 @@ export async function recommendCrossReference(
     // B0-329: a step-1 timeout leaves us with no legacy data at all → decline. A hard legacy/database
     // failure keeps propagating (the tool boundary already reports it as a failed tool call).
     if (error instanceof XrefStepTimeoutError) {
-      return latencyCeilingFallback({
+      return await latencyCeilingFallback({
         error,
         timer,
         policy,
@@ -455,7 +455,7 @@ export async function recommendCrossReference(
   try {
     return await runWebGroundedPath({ input, brand, deps, timer, guard, policy, legacyCacheHit, telemetry });
   } catch (error) {
-    return latencyCeilingFallback({
+    return await latencyCeilingFallback({
       error,
       timer,
       policy,
@@ -509,7 +509,7 @@ async function runWebGroundedPath(ctx: WebGroundedPathContext): Promise<Recommen
       answered: false,
       status: 'declined',
       overallConfidence: 0,
-      thresholdUsed: resolveXrefThreshold(),
+      thresholdUsed: await resolveXrefThreshold(),
       candidates: [],
       evidence: { source: 'web', webSearch, timingBreakdown: buildTiming(timer, webSearch, legacyCacheHit) },
       declineReason: XREF_DECLINE_COPY,
@@ -613,7 +613,7 @@ async function runWebGroundedPath(ctx: WebGroundedPathContext): Promise<Recommen
  * would pollute the queue with merely-slow runs and misstate why they are there. Weak legacy matches
  * are still carried as candidates so a human debugging the run can see what step 1 did find.
  */
-function latencyCeilingFallback(args: {
+async function latencyCeilingFallback(args: {
   error: unknown;
   timer: XrefTimer;
   policy: XrefLatencyPolicy;
@@ -621,7 +621,7 @@ function latencyCeilingFallback(args: {
   legacyMatches: LegacyMatch[];
   legacyCacheHit: boolean;
   webSearch: WebSearchTelemetry | null;
-}): RecommendCrossReferenceResult {
+}): Promise<RecommendCrossReferenceResult> {
   const { error, timer, policy, legacy, legacyMatches, legacyCacheHit, webSearch } = args;
   const timedOut = error instanceof XrefStepTimeoutError;
   const hasLegacy = legacyMatches.length > 0;
@@ -661,7 +661,7 @@ function latencyCeilingFallback(args: {
     // with merely-slow runs and misstate why they are there. Legacy matches are still carried as evidence.
     status: 'declined',
     overallConfidence: hasLegacy ? (legacyMatches[0]?.confidence ?? 0) : 0,
-    thresholdUsed: hasLegacy ? LEGACY_MATCH_THRESHOLD : resolveXrefThreshold(),
+    thresholdUsed: hasLegacy ? LEGACY_MATCH_THRESHOLD : await resolveXrefThreshold(),
     candidates: hasLegacy ? mapLegacyMatches(legacyMatches) : [],
     evidence: {
       source: hasLegacy ? 'legacy' : 'web',

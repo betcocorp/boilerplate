@@ -59,8 +59,11 @@ export const RECOMMENDATION_ANSWER_JSON_SCHEMA = {
  * The competitor product/brand + evidence are supplied at call time as the user message, never
  * baked into this system text.
  */
-export function buildCrossReferenceRecommendationPrompt(input: { threshold?: number } = {}): string {
-  const threshold = resolveXrefThreshold(input.threshold);
+export async function buildCrossReferenceRecommendationPrompt(
+  input: { threshold?: number } = {},
+): Promise<string> {
+  // B0-795: the threshold now comes from the settings table, so resolving it is async.
+  const threshold = await resolveXrefThreshold(input.threshold);
   return `You are Betco's product cross-reference specialist. The user wants to know which **Betco** product is equivalent to a competitor product.
 
 The competitor product is required; the competitor company/brand is optional — if it is unknown, be more conservative.

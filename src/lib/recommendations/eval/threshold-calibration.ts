@@ -107,6 +107,70 @@ export function computeThresholdCalibration(
   });
 }
 
+/**
+ * B0-795 — how well `overallConfidence` RANKS correct answers above wrong ones, independent of any
+ * threshold. This is the metric that matters first: a precision/recall sweep only chooses an
+ * operating point on a curve, and no operating point can rescue a score that does not rank.
+ *
+ * `auc` is the probability that a randomly chosen correct case outranks a randomly chosen wrong one
+ * (ties counted as half), computed as the Mann–Whitney U statistic over midranks. 0.5 is
+ * coin-flip — a score at or below 0.5 carries no usable signal. `null` when either class is empty.
+ *
+ * `positives`/`negatives` are reported alongside because at small n the point estimate is nearly
+ * meaningless: callers MUST quote them together and must not describe an AUC computed on a handful
+ * of positives as established.
+ */
+export type DiscriminationReport = {
+  labeled: number;
+  positives: number;
+  negatives: number;
+  meanConfidenceCorrect: number | null;
+  meanConfidenceWrong: number | null;
+  auc: number | null;
+};
+
+/** Midranks (1-based, ties averaged) for a numeric array, in input order. */
+function midranks(values: number[]): number[] {
+  const order = values.map((v, i) => ({ v, i })).sort((a, b) => a.v - b.v);
+  const ranks = new Array<number>(values.length);
+  let i = 0;
+  while (i < order.length) {
+    let j = i;
+    while (j + 1 < order.length && order[j + 1]!.v === order[i]!.v) j += 1;
+    // Ranks i..j (0-based) share a value → all take the average of their 1-based ranks.
+    const shared = (i + 1 + (j + 1)) / 2;
+    for (let k = i; k <= j; k += 1) ranks[order[k]!.i] = shared;
+    i = j + 1;
+  }
+  return ranks;
+}
+
+const mean = (values: number[]): number | null =>
+  values.length === 0 ? null : round3(values.reduce((s, v) => s + v, 0) / values.length);
+
+export function computeDiscrimination(cases: ThresholdCalibrationCase[]): DiscriminationReport {
+  const labeled = cases.filter((c) => c.correct !== null);
+  const correct = labeled.filter((c) => c.correct === true).map((c) => c.overallConfidence);
+  const wrong = labeled.filter((c) => c.correct === false).map((c) => c.overallConfidence);
+
+  let auc: number | null = null;
+  if (correct.length > 0 && wrong.length > 0) {
+    const ranks = midranks([...correct, ...wrong]);
+    const rankSumCorrect = ranks.slice(0, correct.length).reduce((s, r) => s + r, 0);
+    const u = rankSumCorrect - (correct.length * (correct.length + 1)) / 2;
+    auc = round3(u / (correct.length * wrong.length));
+  }
+
+  return {
+    labeled: labeled.length,
+    positives: correct.length,
+    negatives: wrong.length,
+    meanConfidenceCorrect: mean(correct),
+    meanConfidenceWrong: mean(wrong),
+    auc,
+  };
+}
+
 export type ThresholdSelection =
   | {
       chosen: true;
