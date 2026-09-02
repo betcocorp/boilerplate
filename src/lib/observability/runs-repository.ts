@@ -26,12 +26,15 @@ import {
   deriveRunEmptyState,
   type RunEmptyState,
 } from '~/lib/observability/timeline';
+import { gradeFromScore, WEIGHTS } from '~/lib/tests/report/metrics';
+import { parseReportState, type CaseScore } from '~/lib/tests/report/schemas';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 import type {
   AuditLogRow,
   ListWorkflowRunsFilters,
   RunAttribution,
+  RunScore,
   RunSource,
   TimelineEvent,
   WorkflowRunListRow,
@@ -146,6 +149,7 @@ function toListRow(
   source: RunSource | null,
   harnessTtftMs: number | null,
   attribution: RunAttribution,
+  score: RunScore | null,
 ): WorkflowRunListRow {
   return {
     id: row.id,
@@ -163,6 +167,7 @@ function toListRow(
     ttftMs: readTtftMs(row.final_output) ?? harnessTtftMs,
     userMessagePreview: readUserMessagePreview(row.user_input),
     attribution,
+    score,
   };
 }
 
@@ -205,6 +210,90 @@ export async function indexHarnessTtftByRunIds(
     if (row.workflow_run_id) {
       index.set(row.workflow_run_id, readHarnessTtftMs(row.ttft_ms));
     }
+  }
+
+  return index;
+}
+
+/** Run id → graded score, or `null` when the run was graded but unable to be evaluated. */
+export type HarnessRunScoreIndex = Map<string, RunScore | null>;
+
+/**
+ * The same weighted-average / grade calculation `computeReportMetrics` applies per case
+ * (`~/lib/tests/report/metrics.ts`), applied here to a single case's raw sub-scores. Kept
+ * side-by-side rather than calling `computeReportMetrics` directly: that function also needs the
+ * full case list to compute gating/status/concepts, none of which this table cell shows.
+ */
+function scoreFromSubScores(
+  score: Pick<CaseScore, 'unableToEvaluate' | 'accuracy' | 'completeness' | 'relevance' | 'clarity'>,
+): RunScore | null {
+  if (
+    score.unableToEvaluate ||
+    score.accuracy == null ||
+    score.completeness == null ||
+    score.relevance == null ||
+    score.clarity == null
+  ) {
+    return null;
+  }
+  const overall = Math.round(
+    WEIGHTS.accuracy * score.accuracy +
+      WEIGHTS.completeness * score.completeness +
+      WEIGHTS.relevance * score.relevance +
+      WEIGHTS.clarity * score.clarity,
+  );
+  return { overall, grade: gradeFromScore(overall) };
+}
+
+/**
+ * B0-793 — graded score for a known set of runs, for the runs list's "Score" column. A run only
+ * has a score when it was executed by the test harness as part of a scored test report: this
+ * resolves each `workflow_run_id` to its `test_item_id` + `test_result_id` via
+ * `test_result_items`, then reads that case's raw sub-scores out of the owning
+ * `test_results.report_state.caseScores`. One bounded query per side of the join, same shape as
+ * `indexHarnessTtftByRunIds` above — `runIds` is a single page.
+ */
+export async function indexHarnessScoresByRunIds(
+  runIds: readonly string[],
+): Promise<HarnessRunScoreIndex> {
+  const index: HarnessRunScoreIndex = new Map();
+  if (runIds.length === 0) {
+    return index;
+  }
+
+  const supabase = getSupabaseServiceRoleClient();
+  const { data: items, error: itemsError } = await supabase
+    .from('test_result_items')
+    .select('workflow_run_id, test_item_id, test_result_id')
+    .in('workflow_run_id', [...runIds]);
+
+  if (itemsError) {
+    throw new Error(itemsError.message);
+  }
+  if (!items || items.length === 0) {
+    return index;
+  }
+
+  const testResultIds = [...new Set(items.map((item) => item.test_result_id))];
+  const { data: results, error: resultsError } = await supabase
+    .from('test_results')
+    .select('id, report_state')
+    .in('id', testResultIds);
+
+  if (resultsError) {
+    throw new Error(resultsError.message);
+  }
+
+  const reportStateByResultId = new Map(
+    (results ?? []).map((result) => [result.id, parseReportState(result.report_state)]),
+  );
+
+  for (const item of items) {
+    if (!item.workflow_run_id) {
+      continue;
+    }
+    const caseScore = reportStateByResultId.get(item.test_result_id)?.caseScores[item.test_item_id];
+    index.set(item.workflow_run_id, caseScore ? scoreFromSubScores(caseScore) : null);
   }
 
   return index;
@@ -431,7 +520,7 @@ export async function listWorkflowRuns(
 
   // Only for the "Stream" column's harness fallback (B0-428): one bounded query keyed on the
   // page's run ids. Run origin comes off each row's own `source` column.
-  const [harnessTtft, attributionIndex] = await Promise.all([
+  const [harnessTtft, attributionIndex, harnessScore] = await Promise.all([
     indexHarnessTtftByRunIds(page.map((row) => row.id)),
     // B0-338 — "Asked by" column: resolved for exactly this page, same bound as the TTFT lookup.
     resolveRunAttributions(
@@ -441,6 +530,8 @@ export async function listWorkflowRuns(
         source: readRunSource(row.source),
       })),
     ),
+    // B0-793 — "Score" column: resolved for exactly this page, same bound as the TTFT lookup.
+    indexHarnessScoresByRunIds(page.map((row) => row.id)),
   ]);
 
   const rows = page.map((row) =>
@@ -449,6 +540,7 @@ export async function listWorkflowRuns(
       readRunSource(row.source),
       harnessTtft.get(row.id) ?? null,
       attributionIndex.get(row.id) ?? { kind: 'unknown' },
+      harnessScore.get(row.id) ?? null,
     ),
   );
 

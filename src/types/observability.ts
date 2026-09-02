@@ -10,6 +10,7 @@
  */
 
 import type { ToolCallOrigin, ToolWebSearchParams } from '~/lib/audit/trace';
+import type { Grade } from '~/lib/tests/report/metrics';
 import type { PromptRecord } from '~/lib/workflows/product-support/product-support-schemas';
 import type { Json, Tables } from '~/types/supabase.public';
 
@@ -228,6 +229,9 @@ export type RunSource = 'harness' | 'bex_chat' | 'orchestrator_api';
  */
 export type RunSourceFilter = RunSource | 'unknown';
 
+/** B0-793 — a run's graded score, when one exists (see `WorkflowRunListRow.score`). */
+export type RunScore = { overall: number; grade: Grade };
+
 export type WorkflowRunListRow = {
   id: string;
   conversationId: string;
@@ -250,6 +254,13 @@ export type WorkflowRunListRow = {
   userMessagePreview: string | null;
   /** B0-338 — who asked for this run. See `RunAttribution` below. */
   attribution: RunAttribution;
+  /**
+   * B0-793 — the run's graded score/letter grade, when it was scored as part of a test report
+   * (`test_result_items.workflow_run_id` → `test_results.report_state.caseScores[test_item_id]`).
+   * Null for chat/API runs, ungraded harness runs, and "unable to evaluate" cases — none of which
+   * have a score to show.
+   */
+  score: RunScore | null;
 };
 
 /**
