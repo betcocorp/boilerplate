@@ -6,6 +6,7 @@ import {
 } from '~/lib/workflows/product-support/max-output-tokens';
 import { createAuditLogQueue } from '~/lib/audit/audit-log-queue';
 import type { ProductLineLock, ToolCallOrigin, ToolTraceEntry } from '~/lib/audit/trace';
+import type { RegulatedClaimCategory } from '~/lib/workflows/product-support/validator';
 import {
   DEFAULT_BEX_CHAT_AGENT_MODE,
   type BexChatAgentMode,
@@ -4662,30 +4663,82 @@ export async function runProductSupportWorkflow(input: {
         // exact citation for a regulated value/statement, not general low retrieval coverage.
         const categoryLabels: Record<string, string> = {
           epa_registration: 'EPA registration number',
+          din_registration: 'DIN registration number',
           dilution_ratio: 'dilution ratio',
           contact_time: 'contact/dwell time',
+          cas_number: 'CAS number',
           hazard: 'hazard statement',
           first_aid: 'first-aid instruction',
+          compatibility: 'compatibility statement',
+          efficacy_claim: 'efficacy claim',
         };
-        const flagged = regulatedClaimGrounding.ungroundedCategories
-          .map((c) => categoryLabels[c] ?? c)
-          .join(', ');
-        finalText = [
-          `I can't verify the ${flagged} in this answer against an exact quote from a retrieved label or SDS, so I won't state it.`,
-          '',
-          'Please consult the product label or SDS directly for the exact regulated value, or contact Betco Product Support / EHS to confirm.',
-        ].join('\n');
         /**
-         * B0-391 — recorded as `validator_fallback`. The regulated-claim guardrail is a
-         * validation-time rejection that replaces the answer with canned copy, exactly like the
-         * generic fallback below; it differs only in wording. It is NOT a new provenance value:
-         * the specific cause is already unambiguous elsewhere on the run (the
-         * `regulated_claim_guardrail_rejected` audit row, the `regulated_claim_unverified:*`
-         * validation issues, and the `regulated_claim_unverified` review task), so minting an
-         * eighth enum member would add a second spelling for "the answer was withheld at
-         * validation" without adding information.
+         * B0-829 — which ungrounded categories are safe to surgically redact (an exact literal
+         * snippet -- an EPA/DIN/CAS number, dilution ratio, or contact time -- not reformatted
+         * prose) versus which are safety-critical sentence-shaped claims (`hazard`, `first_aid`,
+         * `compatibility`, `efficacy_claim`) that must always keep the full-decline behavior below.
          */
-        answerProvenance = 'validator_fallback';
+        const TOKEN_SHAPED_REGULATED_CATEGORIES = new Set<RegulatedClaimCategory>([
+          'epa_registration',
+          'din_registration',
+          'dilution_ratio',
+          'contact_time',
+          'cas_number',
+        ]);
+        const allUngroundedAreTokenShaped = regulatedClaimGrounding.ungroundedCategories.every(
+          (c) => TOKEN_SHAPED_REGULATED_CATEGORIES.has(c),
+        );
+        // Something in the draft WAS grounded and is worth preserving -- otherwise there is
+        // nothing left to salvage and the full decline below is the only sensible outcome.
+        const hasGroundedCategoryWorthKeeping = regulatedClaimGrounding.categoriesDetected.some(
+          (c) => !regulatedClaimGrounding.ungroundedCategories.includes(c),
+        );
+
+        if (allUngroundedAreTokenShaped && hasGroundedCategoryWorthKeeping) {
+          /**
+           * B0-829 — partial redaction: keep the grounded content (e.g. a fully-verified dilution
+           * answer) and surgically blank out only the ungrounded token(s), instead of discarding
+           * the whole draft. `detail.snippet` is a LITERAL substring of `draftAnswer` (never a
+           * regex), so every verbatim occurrence is replaced -- never reformatted or invented.
+           */
+          let redactedText = draftAnswer;
+          for (const detail of regulatedClaimGrounding.ungroundedDetails) {
+            redactedText = redactedText.replaceAll(detail.snippet, '(unable to verify)');
+          }
+          const flagged = regulatedClaimGrounding.ungroundedCategories
+            .map((c) => categoryLabels[c] ?? c)
+            .join(', ');
+          finalText = [
+            redactedText,
+            '',
+            `I couldn't verify the ${flagged} above against an exact quote from a retrieved label or SDS, so I withheld it (marked "(unable to verify)").`,
+            'Please consult the product label or SDS directly for the exact regulated value, or contact Betco Product Support / EHS to confirm.',
+          ].join('\n');
+          answerProvenance = 'regulated_claim_partial_redaction';
+        } else {
+          const flagged = regulatedClaimGrounding.ungroundedCategories
+            .map((c) => categoryLabels[c] ?? c)
+            .join(', ');
+          finalText = [
+            `I can't verify the ${flagged} in this answer against an exact quote from a retrieved label or SDS, so I won't state it.`,
+            '',
+            'Please consult the product label or SDS directly for the exact regulated value, or contact Betco Product Support / EHS to confirm.',
+          ].join('\n');
+          /**
+           * B0-391 — recorded as `validator_fallback`. The regulated-claim guardrail is a
+           * validation-time rejection that replaces the answer with canned copy, exactly like the
+           * generic fallback below; it differs only in wording. It is NOT a new provenance value:
+           * the specific cause is already unambiguous elsewhere on the run (the
+           * `regulated_claim_guardrail_rejected` audit row, the `regulated_claim_unverified:*`
+           * validation issues, and the `regulated_claim_unverified` review task), so minting an
+           * eighth enum member would add a second spelling for "the answer was withheld at
+           * validation" without adding information.
+           *
+           * B0-829 — this branch now fires only when partial redaction above did NOT apply (a
+           * sentence-shaped category is ungrounded, or nothing detected was grounded).
+           */
+          answerProvenance = 'validator_fallback';
+        }
       } else if (answerProvenance === 'recommendation_engine_decline') {
         /**
          * B0-356 — the recommendation engine's own `declineReason` is ALREADY the final text (it

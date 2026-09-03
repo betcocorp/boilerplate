@@ -136,6 +136,14 @@ const executeProductToolMock = vi.fn();
 const lookupCrossReferenceMock = vi.fn();
 const runValidatorPassMock = vi.fn();
 const runRevisionPassMock = vi.fn();
+/**
+ * B0-829 — controllable per-test, unlike the other mocks in this file which stub away model
+ * calls. Defaults (reset every `beforeEach` below) to "nothing ungrounded", matching this file's
+ * pre-existing behavior for every test that does not care about the regulated-claim guardrail.
+ * The B0-829 `describe` block below overrides it per test to exercise the guardrail's
+ * partial-redaction vs. full-decline branching in `run-product-support-workflow.ts`.
+ */
+const regulatedClaimGroundingMock = vi.fn();
 
 vi.mock('~/lib/openai/responses-runtime', () => ({
   runResponsesWithToolLoop: (...args: unknown[]) => runResponsesWithToolLoopMock(...args),
@@ -182,11 +190,8 @@ vi.mock('~/lib/workflows/product-support/validator', async (importOriginal) => {
     ...actual,
     runValidatorPass: (...args: unknown[]) => runValidatorPassMock(...args),
     runRevisionPass: (...args: unknown[]) => runRevisionPassMock(...args),
-    evaluateRegulatedClaimGrounding: () => ({
-      categoriesDetected: [],
-      ungroundedCategories: [],
-      ungroundedDetails: [],
-    }),
+    evaluateRegulatedClaimGrounding: (...args: unknown[]) =>
+      regulatedClaimGroundingMock(...args),
   };
 });
 
@@ -369,6 +374,11 @@ beforeEach(() => {
     usage: VALIDATOR_PASS_USAGE,
   });
   runRevisionPassMock.mockResolvedValue({ text: '', usage: VALIDATOR_PASS_USAGE });
+  regulatedClaimGroundingMock.mockReturnValue({
+    categoriesDetected: [],
+    ungroundedCategories: [],
+    ungroundedDetails: [],
+  });
 });
 
 /* -------------------------------------------------------------------------- *
@@ -1443,6 +1453,108 @@ describe('answer provenance (B0-391)', () => {
     const out = await run({ userMessage: XREF_MESSAGE });
 
     expect(out.answerProvenance).toBe('model_generated');
+  });
+});
+
+/* -------------------------------------------------------------------------- *
+ * B0-829 — regulated-claim guardrail: partial redaction vs. full decline
+ * -------------------------------------------------------------------------- */
+
+describe('regulated-claim guardrail partial redaction (B0-829)', () => {
+  it('surgically redacts only the ungrounded token-shaped claim and keeps the grounded content', async () => {
+    runResponsesWithToolLoopMock.mockImplementation(
+      generationCalling(
+        [
+          {
+            name: 'search_product_docs',
+            argumentsJson: JSON.stringify({ productName: 'pH7Q Dual', topic: 'tile floors' }),
+            callId: 'call_1',
+          },
+        ],
+        {
+          assistantText:
+            'Dilute at 2 oz per gallon of water. Allow a 60 second contact time for disinfection.',
+        },
+      ),
+    );
+    regulatedClaimGroundingMock.mockReturnValueOnce({
+      categoriesDetected: ['dilution_ratio', 'contact_time'],
+      ungroundedCategories: ['contact_time'],
+      ungroundedDetails: [{ category: 'contact_time', snippet: '60 second contact time' }],
+    });
+
+    const out = await run();
+
+    expect(out.answerProvenance).toBe('regulated_claim_partial_redaction');
+    // The verified dilution content survives verbatim.
+    expect(out.answerText).toContain('Dilute at 2 oz per gallon of water.');
+    // The ungrounded snippet is gone, replaced by the literal redaction marker.
+    expect(out.answerText).not.toContain('60 second contact time');
+    expect(out.answerText).toContain('(unable to verify)');
+    // Not the full-decline copy.
+    expect(out.answerText).not.toContain("I can't verify the");
+    expect(out.validation.approved).toBe(false);
+    expect(out.validation.requires_human_review).toBe(true);
+    expect(out.confidence).toBeLessThanOrEqual(0.4);
+  });
+
+  it('falls through to the full-decline copy unchanged when a sentence-shaped category (hazard) is ungrounded', async () => {
+    runResponsesWithToolLoopMock.mockImplementation(
+      generationCalling(
+        [
+          {
+            name: 'search_product_docs',
+            argumentsJson: JSON.stringify({ productName: 'pH7Q Dual', topic: 'tile floors' }),
+            callId: 'call_1',
+          },
+        ],
+        {
+          assistantText:
+            'Dilute at 2 oz per gallon of water. Causes severe skin damage on contact.',
+        },
+      ),
+    );
+    regulatedClaimGroundingMock.mockReturnValueOnce({
+      categoriesDetected: ['dilution_ratio', 'hazard'],
+      ungroundedCategories: ['hazard'],
+      ungroundedDetails: [{ category: 'hazard', snippet: 'Causes severe skin damage on contact.' }],
+    });
+
+    const out = await run();
+
+    expect(out.answerProvenance).toBe('validator_fallback');
+    expect(out.answerText).toContain("I can't verify the hazard statement");
+    expect(out.answerText).not.toContain('Dilute at 2 oz per gallon of water.');
+    expect(out.validation.approved).toBe(false);
+    expect(out.validation.requires_human_review).toBe(true);
+  });
+
+  it('falls through to the full-decline copy unchanged when every detected category is ungrounded', async () => {
+    runResponsesWithToolLoopMock.mockImplementation(
+      generationCalling(
+        [
+          {
+            name: 'search_product_docs',
+            argumentsJson: JSON.stringify({ productName: 'pH7Q Dual', topic: 'tile floors' }),
+            callId: 'call_1',
+          },
+        ],
+        { assistantText: 'Dilute at 4 oz per gallon of water for general disinfection.' },
+      ),
+    );
+    regulatedClaimGroundingMock.mockReturnValueOnce({
+      categoriesDetected: ['dilution_ratio'],
+      ungroundedCategories: ['dilution_ratio'],
+      ungroundedDetails: [{ category: 'dilution_ratio', snippet: '4 oz per gallon' }],
+    });
+
+    const out = await run();
+
+    expect(out.answerProvenance).toBe('validator_fallback');
+    expect(out.answerText).toContain("I can't verify the dilution ratio");
+    expect(out.answerText).not.toContain('4 oz per gallon');
+    expect(out.validation.approved).toBe(false);
+    expect(out.validation.requires_human_review).toBe(true);
   });
 });
 

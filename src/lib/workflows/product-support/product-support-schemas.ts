@@ -119,6 +119,21 @@ export const answerProvenanceSchema = z.enum([
    * provenance value untouched.
    */
   'alias_fuzzy_disclosure_prepended',
+  /**
+   * B0-829 — `regulated_claim_guardrail` (`evaluateRegulatedClaimGrounding`,
+   * `~/lib/workflows/product-support/validator.ts`) flagged one or more ungrounded regulated
+   * claims, but every ungrounded category was TOKEN-shaped (`epa_registration`, `din_registration`,
+   * `dilution_ratio`, `contact_time`, `cas_number` — an exact literal snippet, not reformatted
+   * prose) and at least one OTHER detected category on the same draft WAS fully grounded. Instead
+   * of the full-decline `validator_fallback` replacement, the run-product-support-workflow.ts
+   * caller surgically redacts only the ungrounded snippet(s) (each literal occurrence replaced with
+   * `(unable to verify)`) and keeps the rest of the draft — including the grounded regulated
+   * content — intact, appending a note naming what was withheld. Sentence-shaped categories
+   * (`hazard`, `first_aid`, `compatibility`, `efficacy_claim`) never take this path: any of those
+   * being ungrounded, or every detected category being ungrounded, still falls through to
+   * `validator_fallback`'s full decline.
+   */
+  'regulated_claim_partial_redaction',
 ]);
 
 export type AnswerProvenance = z.infer<typeof answerProvenanceSchema>;
