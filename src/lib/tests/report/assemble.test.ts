@@ -16,7 +16,7 @@ import {
 import { splitConcepts } from './case-concepts';
 import { reportDataResponseSchema, type ReportDataReady } from './data-schemas';
 import { NO_EXPECTED_CONCEPTS_UTE_REASON } from './metrics';
-import { caseAnchorId, renderReportMarkdown } from './render';
+import { caseAnchorId, gradingConfigLine, renderReportMarkdown } from './render';
 import type { CaseConcepts, CaseScore, ReportSynthesis } from './schemas';
 
 /**
@@ -337,6 +337,7 @@ const SYNTHESIS: ReportSynthesis = {
 /** B0-825 — what the fixture report was "graded with", as `gradingConfigFromState` would read it. */
 const CONFIG = {
   model: 'gpt-5.6',
+  effort: null as string | null,
   passes: 1,
   spreadThreshold: 10,
   passMark: 60,
@@ -386,6 +387,15 @@ describe('assembleReportData → report data contract', () => {
     expect(payload.runId).toBe(RUN_ID);
     expect(payload.testId).toBe(TEST_ID);
     expect(payload.stale).toBe(false);
+  });
+
+  it('names the grading effort only when the grading model honoured one (B0-806)', () => {
+    expect(gradingConfigLine(CONFIG, 70)).toContain('_Graded by gpt-5.6 · 1 independent pass');
+    expect(gradingConfigLine({ ...CONFIG, model: 'claude-opus-5', effort: 'high' }, 70)).toContain(
+      '_Graded by claude-opus-5 at high effort · 1 independent pass',
+    );
+    const { payload } = buildFixture();
+    expect(payload.config!.effort).toBeNull();
   });
 
   it('walks every field renderReportMarkdown prints and finds it in the data contract', () => {

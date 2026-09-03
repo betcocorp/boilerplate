@@ -41,6 +41,49 @@ export function isBexModelTag(value: string): value is BexModelTag {
 }
 
 /**
+ * B0-806 — Anthropic models, selectable on GRADING surfaces only (the `REPORT_GRADING_MODEL` row).
+ * They are deliberately NOT in `BEX_MODEL_TAGS`: every other model picker (Bex chat, /admin/tests
+ * runs, the validator and router rows) feeds the OpenAI Responses runtime, which cannot call these
+ * ids. Exact Claude API ids — never append a date suffix. Priced in `public.model_pricing` under the
+ * same tag strings.
+ */
+export const ANTHROPIC_GRADING_MODEL_TAGS = ['claude-opus-5', 'claude-sonnet-5'] as const;
+
+export type AnthropicGradingModelTag = (typeof ANTHROPIC_GRADING_MODEL_TAGS)[number];
+
+/** Every tag the run-report grader may be pointed at: the OpenAI tags plus the Anthropic ones. */
+export const GRADING_MODEL_TAGS = [...BEX_MODEL_TAGS, ...ANTHROPIC_GRADING_MODEL_TAGS] as const;
+
+export type GradingModelTag = (typeof GRADING_MODEL_TAGS)[number];
+
+export function isGradingModelTag(value: string): value is GradingModelTag {
+  return (GRADING_MODEL_TAGS as readonly string[]).includes(value);
+}
+
+export type ModelProvider = 'openai' | 'anthropic';
+
+/**
+ * Which API serves a model tag or resolved model id. Every Claude API id starts with `claude-`, so
+ * the prefix — not membership in a list — is the test: a pinned Anthropic id outside
+ * `ANTHROPIC_GRADING_MODEL_TAGS` still routes to Anthropic instead of being sent to OpenAI.
+ */
+export function modelProviderFor(modelOrTag: string): ModelProvider {
+  return modelOrTag.trim().toLowerCase().startsWith('claude-') ? 'anthropic' : 'openai';
+}
+
+/**
+ * B0-806 — Anthropic `output_config.effort` levels: how much the model thinks before it answers.
+ * OpenAI models ignore it. Grading reads the `REPORT_GRADING_EFFORT` settings row (default `high`).
+ */
+export const MODEL_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+
+export type ModelEffort = (typeof MODEL_EFFORTS)[number];
+
+export function isModelEffort(value: string): value is ModelEffort {
+  return (MODEL_EFFORTS as readonly string[]).includes(value);
+}
+
+/**
  * Shown under the model selector so whoever starts a run knows what they are choosing and what it
  * costs. Rates are the published standard $/Mtok input→output seeded in `public.model_pricing`;
  * they are a decision aid, not a billing source — the cost views are.

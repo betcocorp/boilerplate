@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
   buildGraderPayload,
   CASE_SCORING_SYSTEM_PROMPT,
+  GRADER_JSON_SCHEMA,
+  GRADER_MAX_OUTPUT_TOKENS,
   GRADING_PROMPT_HASH,
   graderOutputSchema,
   reconcileConcepts,
@@ -11,6 +13,7 @@ import {
   toCaseScore,
   type CaseScoringInput,
   type GraderOutput,
+  type StructuredCompletion,
 } from './case-scorer';
 import { NO_EXPECTED_CONCEPTS_UTE_REASON } from './metrics';
 
@@ -240,6 +243,40 @@ describe('scoreCase (B0-808)', () => {
     expect(score.completeness).toBeNull();
     expect(score.concepts!.mandatory.missing).toEqual([]);
     expect(score.evalConfidence).toBe(86);
+  });
+
+  it('hands the seam the strict grader schema, the output cap, temperature 0 and the configured effort (B0-819)', async () => {
+    const calls: Array<Parameters<StructuredCompletion>[0]> = [];
+    await scoreCase(
+      { ...INPUT, modelTag: 'claude-opus-5', effort: 'xhigh' },
+      {
+        resolveModel: async (tag) => tag ?? '',
+        complete: async (params) => {
+          calls.push(params);
+          return JSON.stringify(output());
+        },
+      },
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.model).toBe('claude-opus-5');
+    expect(calls[0]!.schema).toBe(GRADER_JSON_SCHEMA);
+    expect(calls[0]!.schemaName).toBe('case_score');
+    expect(calls[0]!.maxOutputTokens).toBe(GRADER_MAX_OUTPUT_TOKENS);
+    expect(calls[0]!.temperature).toBe(0);
+    expect(calls[0]!.effort).toBe('xhigh');
+  });
+
+  it('sends no effort when the input carries none, so OpenAI-graded reports are unchanged', async () => {
+    const calls: Array<Parameters<StructuredCompletion>[0]> = [];
+    await scoreCase(INPUT, {
+      resolveModel: async (tag) => tag ?? '',
+      complete: async (params) => {
+        calls.push(params);
+        return JSON.stringify(output());
+      },
+    });
+    expect(calls[0]!.effort).toBeUndefined();
   });
 
   it('returns Unable to Evaluate without a model call when the item has no concept columns', async () => {

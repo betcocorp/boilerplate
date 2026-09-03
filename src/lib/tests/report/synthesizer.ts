@@ -1,10 +1,13 @@
-import type { Response } from 'openai/resources/responses/responses';
 import { z } from 'zod';
 
-import { getOpenAIClient, resolveResponsesModel } from '~/lib/openai/client';
-import { samplingParamsFor } from '~/lib/openai/model-capabilities';
-import { extractAssistantText } from '~/lib/openai/response-item-parsing';
+import type { ModelEffort } from '~/lib/constants/models';
+import {
+  completeStructured,
+  type StructuredCompletion,
+  type StructuredCompletionRequest,
+} from '~/lib/llm/structured-completion';
 
+import { DEFAULT_GRADING_MODEL_TAG, resolveGradingModel } from './grading-model';
 import type { EvaluatedCase, RateBlock, ReportMetrics } from './metrics';
 import { reportSynthesisSchema, type ReportSynthesis } from './schemas';
 
@@ -243,20 +246,28 @@ function formatMetricsHeaderAsText(
 }
 
 /**
- * Structured outputs (`strict: true`) only ever produce invalid JSON when generation is cut off
- * mid-string by `max_output_tokens` — so checking `incomplete_details` first turns that failure
- * mode into a clear "raise the cap" error instead of a `JSON.parse` message that doesn't say why.
- * Labeled per call site so a future failure names which call (and which chunk) broke.
+ * One structured call, parsed and labeled. Strict structured output only ever produces invalid JSON
+ * when generation is cut off by the output cap, and the seam surfaces that as
+ * `StructuredOutputTruncatedError` (B0-819) — so the failure reads "raise the cap" instead of a
+ * `JSON.parse` message that doesn't say why. Labeled per call site so a future failure names which
+ * call (and which chunk) broke.
  */
-function parseStructuredResponse<T>(res: Response, schema: z.ZodType<T>, label: string): T {
-  if (res.incomplete_details?.reason === 'max_output_tokens') {
-    throw new Error(`${label}: output truncated at max_output_tokens; raise the cap or shrink the input.`);
+async function completeAndParse<T>(
+  complete: StructuredCompletion,
+  request: StructuredCompletionRequest,
+  schema: z.ZodType<T>,
+  label: string,
+): Promise<T> {
+  let text: string;
+  try {
+    text = await complete(request);
+  } catch (error) {
+    throw new Error(`${label}: ${error instanceof Error ? error.message : 'unknown error'}`);
   }
   try {
-    return schema.parse(JSON.parse(extractAssistantText(res)));
+    return schema.parse(JSON.parse(text));
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'unknown error';
-    throw new Error(`${label}: ${message}`);
+    throw new Error(`${label}: ${error instanceof Error ? error.message : 'unknown error'}`);
   }
 }
 
@@ -269,30 +280,27 @@ function mergeDigests(a: BatchDigest, b: BatchDigest): BatchDigest {
 }
 
 async function digestChunkOnce(
-  client: ReturnType<typeof getOpenAIClient>,
+  complete: StructuredCompletion,
   model: string,
   chunk: CaseSummary[],
   label: string,
+  effort: ModelEffort | undefined,
 ): Promise<BatchDigest> {
-  const res = await client.responses.create({
-    model,
-    instructions: DIGEST_SYSTEM_PROMPT,
-    input: [{ role: 'user', content: formatCasesAsText(chunk), type: 'message' }],
-    text: {
-      format: {
-        type: 'json_schema',
-        name: 'batch_digest',
-        strict: true,
-        schema: DIGEST_JSON_SCHEMA,
-      },
+  return completeAndParse(
+    complete,
+    {
+      model,
+      system: DIGEST_SYSTEM_PROMPT,
+      user: formatCasesAsText(chunk),
+      schemaName: 'batch_digest',
+      schema: DIGEST_JSON_SCHEMA,
+      maxOutputTokens: DIGEST_MAX_OUTPUT_TOKENS,
+      temperature: 0.2,
+      effort,
     },
-    store: false,
-    stream: false,
-    ...samplingParamsFor(model, { temperature: 0.2 }),
-    max_output_tokens: DIGEST_MAX_OUTPUT_TOKENS,
-  });
-
-  return parseStructuredResponse(res, batchDigestSchema, label);
+    batchDigestSchema,
+    label,
+  );
 }
 
 /**
@@ -303,21 +311,22 @@ async function digestChunkOnce(
  * a chunk that overflows always has a smaller one under it that won't.
  */
 export async function digestChunkWithRetry(
-  client: ReturnType<typeof getOpenAIClient>,
+  complete: StructuredCompletion,
   model: string,
   chunk: CaseSummary[],
   label: string,
+  effort?: ModelEffort,
 ): Promise<BatchDigest> {
   try {
-    return await digestChunkOnce(client, model, chunk, label);
+    return await digestChunkOnce(complete, model, chunk, label, effort);
   } catch (error) {
     if (chunk.length <= MIN_DIGEST_CHUNK_SIZE) {
       throw error;
     }
     const mid = Math.ceil(chunk.length / 2);
     const [left, right] = await Promise.all([
-      digestChunkWithRetry(client, model, chunk.slice(0, mid), `${label} (split a)`),
-      digestChunkWithRetry(client, model, chunk.slice(mid), `${label} (split b)`),
+      digestChunkWithRetry(complete, model, chunk.slice(0, mid), `${label} (split a)`, effort),
+      digestChunkWithRetry(complete, model, chunk.slice(mid), `${label} (split b)`, effort),
     ]);
     return mergeDigests(left, right);
   }
@@ -325,16 +334,23 @@ export async function digestChunkWithRetry(
 
 /** Runs `digestChunkWithRetry` over every chunk in bounded concurrency, mirroring `scoreRemainingCases`. */
 async function digestAllChunks(
-  client: ReturnType<typeof getOpenAIClient>,
+  complete: StructuredCompletion,
   model: string,
   chunks: CaseSummary[][],
+  effort: ModelEffort | undefined,
 ): Promise<BatchDigest[]> {
   const digests: BatchDigest[] = new Array(chunks.length);
   for (let i = 0; i < chunks.length; i += DIGEST_CONCURRENCY) {
     const batch = chunks.slice(i, i + DIGEST_CONCURRENCY);
     const results = await Promise.all(
       batch.map((chunk, j) =>
-        digestChunkWithRetry(client, model, chunk, `Batch digest ${i + j + 1}/${chunks.length}`),
+        digestChunkWithRetry(
+          complete,
+          model,
+          chunk,
+          `Batch digest ${i + j + 1}/${chunks.length}`,
+          effort,
+        ),
       ),
     );
     results.forEach((result, j) => {
@@ -364,13 +380,22 @@ async function digestAllChunks(
  * fallbacks throws, and the caller (`generateReport` in `orchestrator.ts`) already has a
  * `status: 'failed'` / `state.error` path for exactly that — this no longer bypasses it.
  */
+export type SynthesizeReportDeps = {
+  complete?: StructuredCompletion;
+  resolveModel?: (modelTag: string | undefined) => Promise<string>;
+};
+
 export async function synthesizeReportFindings(
   metrics: ReportMetrics,
   findingsByCaseId: Map<string, { explanation: string; missed: string; incorrect: string }>,
   modelTag?: string,
+  /** B0-806 — Anthropic `output_config.effort`; ignored on OpenAI models. */
+  effort?: ModelEffort,
+  deps: SynthesizeReportDeps = {},
 ): Promise<ReportSynthesis> {
-  const client = getOpenAIClient();
-  const model = await resolveResponsesModel(modelTag ?? 'gpt-4.1');
+  const complete = deps.complete ?? completeStructured;
+  const resolveModel = deps.resolveModel ?? resolveGradingModel;
+  const model = await resolveModel(modelTag ?? DEFAULT_GRADING_MODEL_TAG);
 
   const overallSummary = rateBlockSummary(metrics.overall);
   const tiersSummary = Object.fromEntries(metrics.tiers.map(([k, v]) => [k, rateBlockSummary(v)]));
@@ -394,29 +419,25 @@ export async function synthesizeReportFindings(
   const chunks = chunkCases(casesSummary);
   const contentText =
     chunks.length > 1
-      ? `${metricsHeaderText}${formatDigestsAsText(await digestAllChunks(client, model, chunks))}`
+      ? `${metricsHeaderText}${formatDigestsAsText(await digestAllChunks(complete, model, chunks, effort))}`
       : `${metricsHeaderText}PER-CASE FINDINGS\n${formatCasesAsText(casesSummary)}`;
 
   const runFinalSynthesis = (instructions: string, maxOutputTokens: number) =>
-    client.responses
-      .create({
+    completeAndParse(
+      complete,
+      {
         model,
-        instructions,
-        input: [{ role: 'user', content: contentText, type: 'message' }],
-        text: {
-          format: {
-            type: 'json_schema',
-            name: 'report_synthesis',
-            strict: true,
-            schema: SYNTHESIS_JSON_SCHEMA,
-          },
-        },
-        store: false,
-        stream: false,
-        ...samplingParamsFor(model, { temperature: 0.2 }),
-        max_output_tokens: maxOutputTokens,
-      })
-      .then((res) => parseStructuredResponse(res, reportSynthesisSchema, 'Final synthesis call'));
+        system: instructions,
+        user: contentText,
+        schemaName: 'report_synthesis',
+        schema: SYNTHESIS_JSON_SCHEMA,
+        maxOutputTokens,
+        temperature: 0.2,
+        effort,
+      },
+      reportSynthesisSchema,
+      'Final synthesis call',
+    );
 
   try {
     return await runFinalSynthesis(SYNTHESIS_SYSTEM_PROMPT, SYNTHESIS_MAX_OUTPUT_TOKENS);

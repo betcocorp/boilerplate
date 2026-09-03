@@ -245,7 +245,7 @@ export function orderCasesByTier<T extends { tier: string }>(cases: T[]): T[] {
 /** B0-825 — the one-line statement of what a report was graded with. */
 export function gradingConfigLine(config: ReportGradingConfig, strictPassMark: number): string {
   const parts = [
-    `Graded by ${config.model}`,
+    `Graded by ${config.model}${config.effort ? ` at ${config.effort} effort` : ''}`,
     `${config.passes} independent pass${config.passes === 1 ? '' : 'es'}`,
     config.spreadThreshold != null ? `spread threshold ${config.spreadThreshold}` : null,
     config.passMark != null ? `pass mark ${config.passMark} (strict ${strictPassMark})` : null,

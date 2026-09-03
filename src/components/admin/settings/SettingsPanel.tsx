@@ -93,6 +93,8 @@ const STRING_SETTINGS = [
   'REPORT_CONSISTENCY_SPREAD_THRESHOLD',
   // B0-765 — model tag for run-report case grading + Top-3 findings synthesis.
   'REPORT_GRADING_MODEL',
+  // B0-806 — Anthropic output_config.effort for run-report grading; ignored by OpenAI models.
+  'REPORT_GRADING_EFFORT',
 ];
 
 export function SettingsPanel() {

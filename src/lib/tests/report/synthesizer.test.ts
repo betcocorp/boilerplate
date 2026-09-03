@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { StructuredOutputTruncatedError } from '~/lib/llm/structured-completion';
+
 import { chunkCases, digestChunkWithRetry, formatDigestsAsText } from './synthesizer';
 
 type CaseSummary = Parameters<typeof chunkCases>[0][number];
@@ -67,38 +69,51 @@ describe('formatDigestsAsText', () => {
 describe('digestChunkWithRetry', () => {
   const idsInPrompt = (content: string) => [...content.matchAll(/^Case (\S+)/gm)].map((m) => m[1]);
 
-  /** Simulates `max_output_tokens` truncation for any call whose chunk exceeds `maxCasesOk`. */
-  function fakeClient(maxCasesOk: number) {
-    const create = vi.fn(async ({ input }: { input: Array<{ content: string }> }) => {
-      const ids = idsInPrompt(input[0].content);
+  /**
+   * Simulates the seam's truncation error (B0-819 — what both providers surface when the output cap
+   * cuts generation off) for any call whose chunk exceeds `maxCasesOk`.
+   */
+  function fakeComplete(maxCasesOk: number) {
+    return vi.fn(async ({ user }: { user: string }) => {
+      const ids = idsInPrompt(user);
       if (ids.length > maxCasesOk) {
-        return { incomplete_details: { reason: 'max_output_tokens' }, output_text: '', output: [] };
+        throw new StructuredOutputTruncatedError();
       }
-      return {
-        incomplete_details: null,
-        output_text: JSON.stringify({ failurePatterns: [`fail:${ids.join(',')}`], strengths: [], weaknesses: [] }),
-        output: [],
-      };
-    });
-    return { responses: { create } } as unknown as Parameters<typeof digestChunkWithRetry>[0];
+      return JSON.stringify({ failurePatterns: [`fail:${ids.join(',')}`], strengths: [], weaknesses: [] });
+    }) as unknown as Parameters<typeof digestChunkWithRetry>[0];
   }
 
   it('bisects an overflowing chunk until every half fits, then merges in original order', async () => {
-    const client = fakeClient(3);
+    const complete = fakeComplete(3);
     const chunk = Array.from({ length: 10 }, (_, i) => fakeCase(String(i)));
 
-    const digest = await digestChunkWithRetry(client, 'model', chunk, 'label');
+    const digest = await digestChunkWithRetry(complete, 'model', chunk, 'label');
 
     const citedIds = digest.failurePatterns.flatMap((line) => line.replace('fail:', '').split(','));
     expect(citedIds).toEqual(chunk.map((c) => c.id));
   });
 
   it('rethrows once bisection bottoms out and every half still overflows', async () => {
-    const client = fakeClient(-1); // nothing ever fits
+    const complete = fakeComplete(-1); // nothing ever fits
     const chunk = Array.from({ length: 5 }, (_, i) => fakeCase(String(i)));
 
-    await expect(digestChunkWithRetry(client, 'model', chunk, 'label')).rejects.toThrow(
+    await expect(digestChunkWithRetry(complete, 'model', chunk, 'label')).rejects.toThrow(
       /max_output_tokens/,
     );
+  });
+
+  it('passes the grading effort through to every digest call, splits included', async () => {
+    const complete = fakeComplete(3);
+    const chunk = Array.from({ length: 6 }, (_, i) => fakeCase(String(i)));
+
+    await digestChunkWithRetry(complete, 'claude-opus-5', chunk, 'label', 'xhigh');
+
+    const calls = (complete as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls.length).toBeGreaterThan(1);
+    for (const [request] of calls) {
+      expect(request.effort).toBe('xhigh');
+      expect(request.schemaName).toBe('batch_digest');
+      expect(request.model).toBe('claude-opus-5');
+    }
   });
 });
