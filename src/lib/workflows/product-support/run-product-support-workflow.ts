@@ -66,6 +66,7 @@ import {
 } from '~/lib/recommendations/recommendation-gate';
 import {
   isConfidenceGatingDisabled,
+  isRecommendationConfidenceGatingDisabled,
   XREF_DECLINE_COPY,
 } from '~/lib/recommendations/confidence-scoring';
 import {
@@ -2122,6 +2123,7 @@ export async function runProductSupportWorkflow(input: {
     aiSdkGenerationEnabled: useAiSdkGeneration,
     rerankerActive: PRODUCT_SUPPORT_RERANK_ENABLED && isRerankerConfigured(),
     confidenceGatingDisabled: await isConfidenceGatingDisabled(),
+    recommendationConfidenceGatingDisabled: await isRecommendationConfidenceGatingDisabled(),
     agentMode,
     routedDirectly: agentMode !== 'orchestrator',
     // B0-649 — the semantic-router rollout state this run observed, from the SAME flag reads the
@@ -3613,7 +3615,11 @@ export async function runProductSupportWorkflow(input: {
     const legacyMatchIsAuthoritative = Boolean(
       crossReferenceResult && !crossReferenceResult.fallbackRecommended,
     );
-    const confidenceGatingDisabled = runtimeConfig.confidenceGatingDisabled;
+    // B0-756 — this gate's numeric cap is calibrated against XREF_RECOMMENDATION_MIN_CONFIDENCE,
+    // one of the recommendation-path signals real calibration data showed to be non-predictive;
+    // it reads the split, recommendation-only kill switch, not the general one.
+    const recommendationConfidenceGatingDisabled =
+      runtimeConfig.recommendationConfidenceGatingDisabled ?? true;
     const recommendationEngineGate =
       recommendationEngineOutcome && !legacyMatchIsAuthoritative
         ? evaluateRecommendationEngineGate({
@@ -3624,14 +3630,14 @@ export async function runProductSupportWorkflow(input: {
             confidence: 1,
             approved: true,
             requiresHumanReview: false,
-            confidenceGatingDisabled,
+            confidenceGatingDisabled: recommendationConfidenceGatingDisabled,
             fallbackDeclineCopy: XREF_DECLINE_COPY,
           })
         : null;
     if (recommendationEngineGate?.declineText) {
       // Verbatim, and it outranks whatever the model drafted: there is no grounded equivalent to
-      // state. Enforced even under `BEX_DISABLE_CONFIDENCE_GATING` — see the kill-switch note in
-      // `evaluateRecommendationEngineGate`.
+      // state. Enforced even under `BEX_DISABLE_RECOMMENDATION_CONFIDENCE_GATING` — see the
+      // kill-switch note in `evaluateRecommendationEngineGate`.
       draftAnswer = recommendationEngineGate.declineText;
       answerProvenance = 'recommendation_engine_decline';
     }
@@ -4471,7 +4477,7 @@ export async function runProductSupportWorkflow(input: {
               : 'passed',
         effect:
           gate.bypassedChecks.length > 0
-            ? `BEX_DISABLE_CONFIDENCE_GATING is set: ${gate.bypassedChecks.join(', ')} detected but not enforced. ${
+            ? `BEX_DISABLE_RECOMMENDATION_CONFIDENCE_GATING is set: ${gate.bypassedChecks.join(', ')} detected but not enforced. ${
                 gate.issues.length > 0 ? `Issues: ${gate.issues.join(' | ')}` : ''
               }`
             : validation.confidence < confidenceBeforeGate
@@ -4510,7 +4516,7 @@ export async function runProductSupportWorkflow(input: {
         confidence: validation.confidence,
         approved: validation.approved,
         requiresHumanReview: validation.requires_human_review,
-        confidenceGatingDisabled,
+        confidenceGatingDisabled: recommendationConfidenceGatingDisabled,
         fallbackDeclineCopy: XREF_DECLINE_COPY,
       });
       validation = {
@@ -4566,7 +4572,7 @@ export async function runProductSupportWorkflow(input: {
         },
         verdict: engineVerdict.verdict,
         effect: engineVerdict.capBypassed
-          ? `BEX_DISABLE_CONFIDENCE_GATING is set: the engine's overallConfidence ${recommendationEngineOutcome.overallConfidence} would have capped this run's ${confidenceBeforeEngine}, but the cap was not enforced.${
+          ? `BEX_DISABLE_RECOMMENDATION_CONFIDENCE_GATING is set: the engine's overallConfidence ${recommendationEngineOutcome.overallConfidence} would have capped this run's ${confidenceBeforeEngine}, but the cap was not enforced.${
               recommendationEngineGate.declineText
                 ? ' The decline copy and human-review escalation WERE still enforced (they are the engine\'s final verdict, not a threshold).'
                 : ''

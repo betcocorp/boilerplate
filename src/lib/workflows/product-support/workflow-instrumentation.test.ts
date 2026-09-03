@@ -327,6 +327,11 @@ beforeEach(() => {
   // legacy test in this file keeps exercising the deterministic keyword-routing world it asserts.
   // The router describe block below opts individual tests back in explicitly.
   settingOverrides.set('BEX_LLM_ROUTER_ENABLED', false);
+  // B0-756 — BEX_DISABLE_RECOMMENDATION_CONFIDENCE_GATING now defaults to bypassed (true) in
+  // production pending a scorer fix, but the REC-4 gate-capping tests in this file were written
+  // against the gate-on world (same reasoning as BEX_EARLY_DECLINE_GATE_ENABLED above); pin it off
+  // here so those assertions keep exercising real capping behavior.
+  settingOverrides.set('BEX_DISABLE_RECOMMENDATION_CONFIDENCE_GATING', false);
   // B0-516 — every test gets the same default `client.responses.create` behavior (throws, so
   // extractCompetitorProduct/classifyUserIntent both fall back) unless it opts into the
   // shadow-classifier describe block below, which overrides this per-test.

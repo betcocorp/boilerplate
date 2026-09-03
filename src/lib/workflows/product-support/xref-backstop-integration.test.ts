@@ -267,6 +267,11 @@ beforeEach(() => {
   settingOverrides.set('BEX_LLM_ROUTER_ENABLED', false);
   // B0-734 — settings row, default false; these tests assert the gate-on world.
   settingOverrides.set('BEX_EARLY_DECLINE_GATE_ENABLED', true);
+  // B0-756 — BEX_DISABLE_RECOMMENDATION_CONFIDENCE_GATING now defaults to bypassed (true) in
+  // production pending a scorer fix, but this file's recommendation-engine-verdict tests were
+  // written against the gate-on world; pin it off so the engine's decline/approval enforcement
+  // keeps being exercised.
+  settingOverrides.set('BEX_DISABLE_RECOMMENDATION_CONFIDENCE_GATING', false);
   resetIntentClassifierCache();
 
   // Default: `extractCompetitorProduct` confidently resolves "BNC-15" (no brand named in
@@ -522,7 +527,10 @@ describe('recommendation engine verdict enforcement (B0-356)', () => {
   });
 
   it('under the B0-452 kill switch: cap suppressed, decline + escalation still enforced', async () => {
-    settingOverrides.set('BEX_DISABLE_CONFIDENCE_GATING', true);
+    // B0-756 — the recommendation engine verdict's numeric cap moved to the split,
+    // recommendation-only kill switch; the general BEX_DISABLE_CONFIDENCE_GATING no longer
+    // affects it (that's the whole point of the split).
+    settingOverrides.set('BEX_DISABLE_RECOMMENDATION_CONFIDENCE_GATING', true);
     runCrossReferenceRecommendationMock.mockResolvedValue(
       engineResult({
         answered: false,
@@ -536,7 +544,7 @@ describe('recommendation engine verdict enforcement (B0-356)', () => {
     const out = await run();
 
     // The run stays identifiable as kill-switched.
-    expect(out.runtimeConfig?.confidenceGatingDisabled).toBe(true);
+    expect(out.runtimeConfig?.recommendationConfidenceGatingDisabled).toBe(true);
     expect(out.activeGates?.recommendationEngineVerdict?.state).toBe('bypassed');
     // Cap not enforced...
     expect(out.confidence).toBeGreaterThan(0.2);

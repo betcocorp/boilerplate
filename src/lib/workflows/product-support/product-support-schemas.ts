@@ -367,6 +367,15 @@ export const runtimeConfigSchema = z.object({
   rerankerActive: z.boolean(),
   /** `BEX_DISABLE_CONFIDENCE_GATING === 'true'` — the B0-452 master confidence-gate kill switch. */
   confidenceGatingDisabled: z.boolean(),
+  /**
+   * B0-756 — split off `confidenceGatingDisabled`: `BEX_DISABLE_RECOMMENDATION_CONFIDENCE_GATING`,
+   * the recommendation/cross-reference-only kill switch (defaults to bypassed — real calibration
+   * data showed the REC-4 similarity/brand/category-mismatch caps and the XREF recommendation gate
+   * have an inverted/non-predictive signal). OPTIONAL like the semantic-router fields below:
+   * `runtimeConfigSchema.safeParse` runs against already-persisted payloads that predate this
+   * split, where absent means "this run predates the split", not `false`.
+   */
+  recommendationConfidenceGatingDisabled: z.boolean().optional(),
   /** The agent mode this run actually executed under. */
   agentMode: z.string(),
   /** `agentMode !== 'orchestrator'` — an admin forced direct routing, bypassing the router. */

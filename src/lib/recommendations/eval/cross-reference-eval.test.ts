@@ -1,9 +1,21 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   CROSS_REFERENCE_GOLDEN_SET,
   runCrossReferenceEval,
 } from '~/lib/recommendations/eval/cross-reference-eval';
+
+// B0-756 — BEX_DISABLE_RECOMMENDATION_CONFIDENCE_GATING now defaults to bypassed (true) in
+// production pending a scorer fix, but this eval specifically regression-tests the
+// category-mismatch rejection (the original BNC-15 bug) with gating active, independent of the
+// live default — mock it deterministically rather than depending on a real Supabase read.
+vi.mock('~/lib/settings/settings-service', () => ({
+  getBooleanSetting: vi.fn(async (key: string, fallback: boolean) =>
+    key === 'BEX_DISABLE_RECOMMENDATION_CONFIDENCE_GATING' ? false : fallback,
+  ),
+  getStringSetting: vi.fn(async (_key: string, fallback: string) => fallback),
+  getNumberSetting: vi.fn(async (_key: string, fallback: number) => fallback),
+}));
 
 describe('cross-reference regression eval (REC-8)', () => {
   it('passes the golden set at 100% category-match accuracy (incl. BNC-15 → Triforce #333)', async () => {

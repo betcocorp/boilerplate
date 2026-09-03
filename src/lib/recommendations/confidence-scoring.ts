@@ -184,26 +184,37 @@ export async function resolveXrefThreshold(override?: number | null): Promise<nu
 }
 
 /**
- * B0-452 — temporary master kill-switch for every numeric confidence threshold/cap in the
- * recommendation and product-support answer pipeline (this gate, the validator confidence
- * floor, and the REC-4 similarity/brand confidence caps). The current threshold values are
- * unproven placeholders (see `src/docs/cross-reference-recommendations.md`) and are suppressing
- * correct answers; flip `BEX_DISABLE_CONFIDENCE_GATING` back off once real thresholds are
- * calibrated.
+ * B0-452 — master kill-switch for the product-support pipeline's two non-recommendation
+ * confidence/correctness gates: `usage_safety_coverage` (`USAGE_SAFETY_COVERAGE_CONFIDENCE_CAP`,
+ * `run-product-support-workflow.ts`) and the regulated-claim grounding decline
+ * (`evaluateRegulatedClaimGrounding`, `run-product-support-workflow.ts` / `validator.ts`).
  *
- * B0-452 follow-up (explicit, deliberate widening — not scope creep): while this testing window
- * is open, the flag ALSO suppresses the regulated-claim grounding decline
- * (`evaluateRegulatedClaimGrounding` / `run-product-support-workflow.ts`) and the REC-4
- * category-mismatch rejection (`checkCategoryConsistency` above) — the two correctness/safety
- * checks this flag was originally documented as never touching. Both still run and are always
- * recorded (as a `regulated_claim_guardrail` / `recommendation_confidence` gate with
- * `verdict: 'bypassed'`, plus the untouched draft answer in `final_output.draftAnswer`) so a
- * reviewer can see exactly what would have been withheld and why, without it actually being
- * withheld. Evidence/candidate grounding and validator-not-approved / requires-human-review /
- * unsupported-safety-claim are NOT affected and keep running exactly as before.
+ * B0-756 (2026-09-03) split this flag's scope after real Supabase-backed calibration research:
+ * turning it back to `false` re-enabled BOTH of the above (real, if noisy, separation between
+ * good and bad answers — see the B0-756 Jira comment for the numbers) AND, before this split,
+ * would also have re-enabled the REC-4 similarity/brand/category-mismatch caps and the XREF
+ * recommendation gate — whose signal the same research found to be INVERTED (capped turns
+ * graded better than uncapped ones), i.e. actively counterproductive to re-enable as-is. Those
+ * four now read `isRecommendationConfidenceGatingDisabled` below instead, a SEPARATE flag kept
+ * bypassed until their underlying scorer is fixed (not just its threshold retuned — same lesson
+ * B0-97 already learned for the XREF score specifically). Do not fold recommendation-path gates
+ * back under this flag without re-running that calibration first.
  */
 export async function isConfidenceGatingDisabled(): Promise<boolean> {
   return getBooleanSetting('BEX_DISABLE_CONFIDENCE_GATING', false);
+}
+
+/**
+ * B0-756 — separate kill-switch for the recommendation/cross-reference confidence gates only:
+ * the REC-4 similarity/brand/category-mismatch caps (`recommendation-gate.ts`) and the XREF
+ * recommendation gate + its validator confidence floor (`gateRecommendation` below,
+ * `evaluateValidatorGate` in `recommendation-guardrails.ts`). Split out of
+ * `isConfidenceGatingDisabled` because real calibration data showed these four have an inverted
+ * or non-predictive signal (see that function's doc comment) — defaults to bypassed (`true`)
+ * until the underlying scorer is fixed, independent of `BEX_DISABLE_CONFIDENCE_GATING`'s state.
+ */
+export async function isRecommendationConfidenceGatingDisabled(): Promise<boolean> {
+  return getBooleanSetting('BEX_DISABLE_RECOMMENDATION_CONFIDENCE_GATING', true);
 }
 
 export type RecommendationGate = {
@@ -217,7 +228,7 @@ export async function gateRecommendation(input: {
   thresholdOverride?: number | null;
 }): Promise<RecommendationGate> {
   const thresholdUsed = await resolveXrefThreshold(input.thresholdOverride);
-  if (await isConfidenceGatingDisabled()) {
+  if (await isRecommendationConfidenceGatingDisabled()) {
     return { answered: true, thresholdUsed, declineReason: null };
   }
   const answered = input.overallConfidence >= thresholdUsed;
