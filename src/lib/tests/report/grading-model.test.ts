@@ -36,11 +36,11 @@ describe('resolveGradingModel', () => {
   it('sends an OpenAI tag through resolveResponsesModel exactly as before', async () => {
     expect(await resolveGradingModel('gpt-5.6')).toBe('gpt-5.6');
     expect(await resolveGradingModel('gpt-4.1')).toBe('gpt-4.1');
-    // `preview` still resolves through the BEX_RESPONSES_MODEL row.
+    // `preview` still resolves through the BEX_RESPONSES_MODEL row (a BEX_MODEL_TAGS tag, B0-831).
     vi.mocked(getStringSetting).mockImplementation((key, fallback) =>
-      Promise.resolve(key === 'BEX_RESPONSES_MODEL' ? 'gpt-4o-mini' : fallback),
+      Promise.resolve(key === 'BEX_RESPONSES_MODEL' ? 'gpt-4o' : fallback),
     );
-    expect(await resolveGradingModel('preview')).toBe('gpt-4o-mini');
+    expect(await resolveGradingModel('preview')).toBe('gpt-4o');
   });
 
   it('falls back to the shipped default tag for a missing or blank tag', async () => {

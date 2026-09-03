@@ -67,8 +67,8 @@ const STRING_SETTINGS = [
   // process.env per B0-638. BEX_ROUTER_TIMEOUT_MS is numeric (this list renders string and number).
   'BEX_ROUTER_MODEL',
   'BEX_ROUTER_TIMEOUT_MS',
-  // B0-757 — the concrete model id the "preview" tag resolves to (resolveResponsesModel); free text
-  // (no allowed_values) because it accepts any OpenAI model id, not just BEX_MODEL_TAGS.
+  // B0-757/B0-831 — the BEX_MODEL_TAGS tag the "preview" tag resolves to (resolveResponsesModel).
+  // Renders as a select like BEX_ROUTER_MODEL: allowed_values = the enum minus `preview`.
   'BEX_RESPONSES_MODEL',
   // B0-757 — resolveProductLineFromMatches' lock thresholds, all numeric.
   'BEX_PRODUCT_LINE_LOCK_MIN_SIMILARITY',
