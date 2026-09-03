@@ -2,12 +2,12 @@ import type { ConceptKindCoverage } from './case-concepts';
 import type { EvaluatedCase, RateBlock, SpeedBlock, SubScoreWeights } from './metrics';
 
 /**
- * B0-714 — the report's reconciliation checks (methodology §11), split by severity.
+ * B0-714 / B0-815 — the report's reconciliation checks (methodology §11), split by severity.
  *
- * The manual skill's `compute_metrics.py` exits non-zero and refuses to build the document when a
- * check fails. Ours used to push a string onto `metrics.warnings` and render anyway, which makes a
- * structurally impossible report — a case rated Pass while missing a must-have concept, a rate
- * table whose counts do not add up — look like a finished report with a note attached.
+ * The reference skill's `compute_metrics.py` exits non-zero and refuses to build the document when
+ * a check fails. Ours used to push a string onto `metrics.warnings` and render anyway, which makes
+ * a structurally impossible report — a rate table whose counts do not add up, a Completeness that
+ * is not the coverage it claims — look like a finished report with a note attached.
  *
  * The severity split agreed on B0-714 (Tom Bird, 2026-08-27):
  *
@@ -17,12 +17,16 @@ import type { EvaluatedCase, RateBlock, SpeedBlock, SubScoreWeights } from './me
  *   persists `status: 'failed'` with the message in `state.error` and never reaches
  *   `saveReportMarkdown`, so the report can never be written as `completed`.
  * - **Data-quality notes stay advisory** on `metrics.warnings` and still render: a missing
- *   sub-score coerced to 0, absent concepts, implausible timing. We deliberately diverge from the
- *   Python script on the null sub-score in particular — one flaky grading call should degrade a
- *   report, not destroy it.
+ *   sub-score coerced to 0, implausible timing. We deliberately diverge from the Python script on
+ *   the null sub-score in particular — one flaky grading call should degrade a report, not destroy
+ *   it.
  *
- * The checks are a list, not a run of inline `if`s, so adding one (B0-717 added the ninth,
- * `grade_isolated_from_speed`) is a single entry rather than an edit to control flow.
+ * B0-813 (pure-math scoring) removed every floor/ceiling/gate/auto-Pass check — there is no such
+ * rule left to verify — and added the three that pin the new model: Completeness *is* the
+ * expected-concept coverage, `overall` *is* the weighted sum, and the Result *is* the pass mark.
+ *
+ * The checks are a list, not a run of inline `if`s, so adding one is a single entry rather than
+ * an edit to control flow.
  */
 
 /**
@@ -34,7 +38,7 @@ export const INVARIANT_ERROR_PREFIX = 'INVARIANT:';
 
 /** Thrown by `assertReportInvariants`. Named so a `catch` can identify it after serialization. */
 export class ReportInvariantError extends Error {
-  /** The failing check's `name`, e.g. `mandatory_concept_missing_not_passed`. */
+  /** The failing check's `name`, e.g. `completeness_equals_expected_coverage`. */
   readonly check: string;
 
   constructor(check: string, detail: string) {
@@ -61,10 +65,12 @@ export type ReportInvariantContext = {
   speed: SpeedBlock | null;
   /**
    * The sub-score weighting `computeReportMetrics` used. Handed in rather than imported so
-   * `grade_isolated_from_speed` can recompute a content score from the *same* constant without
-   * this module taking a runtime dependency on `./metrics` (which imports this one).
+   * `overall_recomputes_from_sub_scores` can recompute a content score from the *same* constant
+   * without this module taking a runtime dependency on `./metrics` (which imports this one).
    */
   weights: SubScoreWeights;
+  /** B0-812 — the pass mark every Result was derived from. */
+  passMark: number;
 };
 
 /**
@@ -93,6 +99,17 @@ function sameMultiset(a: readonly string[], b: readonly string[]): boolean {
   return left.every((value, index) => value === right[index]);
 }
 
+/** Order-insensitive multiset inclusion: every phrase of `a` (with multiplicity) is in `b`. */
+function multisetSubset(a: readonly string[], b: readonly string[]): boolean {
+  const remaining = [...b];
+  for (const phrase of a) {
+    const at = remaining.indexOf(phrase);
+    if (at === -1) return false;
+    remaining.splice(at, 1);
+  }
+  return true;
+}
+
 function coverageMismatch(
   kind: string,
   coverage: ConceptKindCoverage,
@@ -102,15 +119,24 @@ function coverageMismatch(
     : `${kind}: required ${coverage.required.length}, satisfied ${coverage.satisfied.length} + missing ${coverage.missing.length}`;
 }
 
+/** The letter a score earns — duplicated from `./metrics` on purpose to avoid the import cycle. */
+function gradeFor(score: number): 'A' | 'B' | 'C' | 'D' | 'F' {
+  if (score >= 90) return 'A';
+  if (score >= 80) return 'B';
+  if (score >= 70) return 'C';
+  if (score >= 60) return 'D';
+  return 'F';
+}
+
 export const REPORT_INVARIANTS: readonly ReportInvariant[] = [
   {
     name: 'status_counts_sum_to_evaluated',
-    describes: 'pass + partial + fail equals the evaluated case count',
+    describes: 'pass + fail equals the evaluated case count',
     failed: (ctx) => {
-      const sum = ctx.overall.pass + ctx.overall.partial + ctx.overall.fail;
+      const sum = ctx.overall.pass + ctx.overall.fail;
       return sum === ctx.evaluated.length
         ? null
-        : `pass+partial+fail = ${sum}, evaluated = ${ctx.evaluated.length}`;
+        : `pass+fail = ${sum}, evaluated = ${ctx.evaluated.length}`;
     },
   },
   {
@@ -142,69 +168,11 @@ export const REPORT_INVARIANTS: readonly ReportInvariant[] = [
     },
   },
   {
-    name: 'mandatory_concept_missing_not_passed',
-    describes: 'no case missing a must-have concept is reported as a Pass',
-    failed: (ctx) => {
-      const offenders = ctx.evaluated.filter(
-        (c) => (c.concepts?.mandatory.missing.length ?? 0) > 0 && c.status === 'Pass',
-      );
-      return offenders.length === 0
-        ? null
-        : `rated Pass while missing a mandatory concept: ${offenders.map((c) => c.id).join(', ')}`;
-    },
-  },
-  {
-    name: 'auto_pass_is_rated_pass',
-    describes: 'a case the automatic-Pass rule fired on ends up rated Pass',
-    failed: (ctx) => {
-      // Cannot legitimately fail: mandatory ⊆ expected, so full expected coverage means nothing
-      // is left for the gate to cap. A hit here means the two concept sets disagree — corrupt
-      // input, not a rule conflict.
-      const offenders = ctx.evaluated.filter((c) => c.autoPassTriggered && c.status !== 'Pass');
-      return offenders.length === 0
-        ? null
-        : `automatic Pass triggered but not rated Pass: ${offenders
-            .map((c) => `${c.id} (${c.status})`)
-            .join(', ')}`;
-    },
-  },
-  {
-    name: 'blocked_auto_pass_not_auto_passed',
-    describes: 'an automatic Pass withheld over a material issue was not granted anyway',
-    failed: (ctx) => {
-      const offenders = ctx.evaluated.filter(
-        (c) => c.autoPassBlocked && (c.autoPassTriggered || c.statusSource === 'auto_pass'),
-      );
-      return offenders.length === 0
-        ? null
-        : `automatic Pass both blocked and granted: ${offenders.map((c) => c.id).join(', ')}`;
-    },
-  },
-  {
-    name: 'concept_coverage_partitions_required',
-    describes: "each case's satisfied + missing concepts equal its required concepts, per kind",
-    failed: (ctx) => {
-      const offenders: string[] = [];
-      for (const c of ctx.evaluated) {
-        if (!c.concepts) continue;
-        const mismatches = [
-          coverageMismatch('mandatory', c.concepts.mandatory),
-          coverageMismatch('expected', c.concepts.expected),
-        ].filter((m): m is string => m !== null);
-        if (mismatches.length > 0) offenders.push(`${c.id} — ${mismatches.join('; ')}`);
-      }
-      return offenders.length === 0 ? null : offenders.join(' | ');
-    },
-  },
-  {
-    name: 'grade_isolated_from_speed',
+    name: 'overall_recomputes_from_sub_scores',
     describes:
-      'every content score recomputes from its four sub-scores alone, and no speed score was invented from a missing timing',
+      'every content score is the weighted sum of its four sub-scores and nothing else — no floor, no cap, no speed, no judged metric',
     failed: (ctx) => {
       const offenders: string[] = [];
-
-      // Half one: the grade is the weighted rubric and nothing else. If speed (or anything else)
-      // ever leaked into `overall`, the four sub-scores would no longer reproduce it.
       for (const c of ctx.evaluated) {
         const recomputed = Math.round(
           ctx.weights.accuracy * c.accuracy +
@@ -216,9 +184,106 @@ export const REPORT_INVARIANTS: readonly ReportInvariant[] = [
           offenders.push(`${c.id} — overall ${c.overall}, sub-scores recompute to ${recomputed}`);
         }
       }
-
-      // Half two: the reverse leak. A speed score may only exist where a timing does, and its
-      // `basis` must name exactly the metrics that were measured.
+      return offenders.length === 0 ? null : offenders.join(' | ');
+    },
+  },
+  {
+    name: 'completeness_equals_expected_coverage',
+    describes:
+      "every evaluated case's Completeness is 100 × expected concepts satisfied ÷ required, and every evaluated case specifies at least one expected concept",
+    failed: (ctx) => {
+      const offenders: string[] = [];
+      for (const c of ctx.evaluated) {
+        const required = c.concepts.expected.required.length;
+        if (required === 0) {
+          offenders.push(`${c.id} — evaluated with no expected concepts`);
+          continue;
+        }
+        const satisfied = c.concepts.expected.satisfied.length;
+        const recomputed = Math.round((100 * satisfied) / required);
+        if (
+          recomputed !== c.completeness ||
+          c.coverage.required !== required ||
+          c.coverage.satisfied !== satisfied
+        ) {
+          offenders.push(
+            `${c.id} — completeness ${c.completeness}, coverage ${satisfied}/${required} recomputes to ${recomputed}`,
+          );
+        }
+      }
+      return offenders.length === 0 ? null : offenders.join(' | ');
+    },
+  },
+  {
+    name: 'status_matches_pass_mark',
+    describes: 'the Result is Pass exactly when overall ≥ the pass mark in force, and nothing else decides it',
+    failed: (ctx) => {
+      const offenders = ctx.evaluated.filter(
+        (c) => c.status !== (c.overall >= ctx.passMark ? 'Pass' : 'Fail'),
+      );
+      return offenders.length === 0
+        ? null
+        : `pass mark ${ctx.passMark}: ${offenders
+            .map((c) => `${c.id} (${c.overall} → ${c.status})`)
+            .join(', ')}`;
+    },
+  },
+  {
+    name: 'grade_recomputes_from_overall',
+    describes: 'every letter grade is the band its own overall falls in',
+    failed: (ctx) => {
+      const offenders = ctx.evaluated.filter((c) => c.grade !== gradeFor(c.overall));
+      return offenders.length === 0
+        ? null
+        : offenders.map((c) => `${c.id} — overall ${c.overall} graded ${c.grade}`).join(' | ');
+    },
+  },
+  {
+    name: 'concept_coverage_partitions_required',
+    describes: "each case's satisfied + missing concepts equal its required concepts, per kind",
+    failed: (ctx) => {
+      const offenders: string[] = [];
+      for (const c of ctx.evaluated) {
+        const mismatches = [
+          coverageMismatch('mandatory', c.concepts.mandatory),
+          coverageMismatch('expected', c.concepts.expected),
+        ].filter((m): m is string => m !== null);
+        if (mismatches.length > 0) offenders.push(`${c.id} — ${mismatches.join('; ')}`);
+      }
+      return offenders.length === 0 ? null : offenders.join(' | ');
+    },
+  },
+  {
+    name: 'mandatory_subset_of_expected',
+    describes:
+      'every mandatory concept is also an expected concept, so a must-have miss is visible in coverage',
+    failed: (ctx) => {
+      const offenders = ctx.evaluated.filter(
+        (c) => !multisetSubset(c.concepts.mandatory.required, c.concepts.expected.required),
+      );
+      return offenders.length === 0
+        ? null
+        : `mandatory concepts absent from the expected set: ${offenders.map((c) => c.id).join(', ')}`;
+    },
+  },
+  {
+    name: 'mandatory_miss_is_reported',
+    describes: 'a case missing a must-have concept carries the reported flag, and only such a case does',
+    failed: (ctx) => {
+      const offenders = ctx.evaluated.filter(
+        (c) => c.mandatoryMissing !== c.concepts.mandatory.missing.length > 0,
+      );
+      return offenders.length === 0
+        ? null
+        : `mandatoryMissing flag disagrees with the concept block: ${offenders.map((c) => c.id).join(', ')}`;
+    },
+  },
+  {
+    name: 'speed_scores_match_timings',
+    describes:
+      'a speed score exists only where a timing does, names exactly the metrics measured, and recomputes from them',
+    failed: (ctx) => {
+      const offenders: string[] = [];
       for (const s of ctx.speed?.perCase ?? []) {
         const present = [s.ttft, s.total].filter((m) => m !== null);
         if (present.length === 0) {
@@ -237,7 +302,6 @@ export const REPORT_INVARIANTS: readonly ReportInvariant[] = [
           );
         }
       }
-
       return offenders.length === 0 ? null : offenders.join(' | ');
     },
   },

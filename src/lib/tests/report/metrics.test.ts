@@ -9,27 +9,34 @@ import {
   type ReportInvariantContext,
 } from './invariants';
 import {
-  applyConceptRules,
+  completenessFromCoverage,
+  computeOverall,
   computeReportMetrics,
+  NO_EXPECTED_CONCEPTS_UTE_REASON,
+  roundScore,
+  round1,
+  statusFromScore,
   WEIGHTS,
   type EvaluatedCase,
   type RateBlock,
   type ReportCaseInput,
 } from './metrics';
 import type { CaseScore } from './schemas';
+import { DEFAULT_PASS_MARK, STRICT_PASS_MARK } from './scoring-config';
 import { speedRating } from './speed-rules';
 
 /**
- * B0-712 / B0-714 — the concept rating rules and the structural invariants.
+ * B0-812 / B0-813 / B0-815 — pure-math scoring and the structural invariants that pin it.
  *
- * Two things these tests exist to pin down:
+ * Three things these tests exist to defend:
  *
- * 1. **The grade never moves.** Every rule below can change a case's Result and nothing else. If a
- *    test ever has to update an `accuracy`/`overall`/`grade` expectation because a concept rule
- *    changed, the rule is wrong, not the test.
- * 2. **Concept phrases are regulated free text.** The fixtures carry real dilution ratios, contact
- *    times, ppm and EPA registration numbers, and are asserted back byte-for-byte — so any
- *    parsing, rounding, unit conversion or re-punctuation shows up here as a failure.
+ * 1. **Completeness is computed, never judged.** It is the expected-concept coverage share, and a
+ *    case with no expected concepts is Unable to Evaluate — never a guessed number.
+ * 2. **Nothing moves the score or the Result but the arithmetic.** A missing must-have concept and a
+ *    material issue are *reported* on the case; the overall is the weighted sum and the Result is
+ *    the pass mark, full stop.
+ * 3. **Concept phrases are regulated free text.** The fixtures carry real dilution ratios, contact
+ *    times, ppm and EPA registration numbers, asserted back byte-for-byte.
  */
 
 const CONCEPT = {
@@ -39,15 +46,15 @@ const CONCEPT = {
   metric: 'Metric equivalent 15.6 mL/L',
 } as const;
 
-function score(overall: number, partial: Partial<CaseScore> = {}): CaseScore {
-  // Equal sub-scores make the weighted roll-up equal to `overall` exactly (0.4+0.3+0.2+0.1 = 1).
+/** Judged sub-scores only — the grader no longer emits Completeness. */
+function score(judged: number, partial: Partial<CaseScore> = {}): CaseScore {
   return {
     unableToEvaluate: false,
     uteReason: null,
-    accuracy: overall,
-    completeness: overall,
-    relevance: overall,
-    clarity: overall,
+    accuracy: judged,
+    completeness: null,
+    relevance: judged,
+    clarity: judged,
     explanation: '',
     missed: '',
     incorrect: '',
@@ -77,7 +84,7 @@ function concepts(params: {
   const bonusMissing = params.bonusMissing ?? [];
   return {
     mandatory: coverage(params.mandatoryRequired, mandatoryMissing),
-    // Mandatory ⊆ expected by construction, exactly as `deriveCaseConcepts` builds it.
+    // Mandatory ⊆ expected — the golden columns are authored that way and B0-815 asserts it.
     expected: coverage(
       [...params.mandatoryRequired, ...bonusRequired],
       [...mandatoryMissing, ...bonusMissing],
@@ -87,9 +94,15 @@ function concepts(params: {
   };
 }
 
+/**
+ * Every expected concept satisfied → Completeness 100, so with equal judged sub-scores `j` the
+ * overall is `0.7·j + 30` (e.g. 90 → 93, 50 → 65, 40 → 58).
+ */
+const FULL = concepts({ mandatoryRequired: [CONCEPT.dilution], bonusRequired: [CONCEPT.metric] });
+
 function input(
   id: string,
-  overall: number,
+  judged: number,
   extra: Partial<ReportCaseInput> = {},
 ): ReportCaseInput {
   return {
@@ -97,9 +110,10 @@ function input(
     question: `Question ${id}`,
     priorityRaw: 1,
     category: 'Dilution',
-    score: score(overall),
+    score: score(judged),
     latencySeconds: null,
     ttftSeconds: null,
+    concepts: FULL,
     ...extra,
   };
 }
@@ -110,10 +124,86 @@ function only(inputs: ReportCaseInput[]): EvaluatedCase {
   return metrics.perCase[0]!;
 }
 
-describe('computeReportMetrics — concept rating rules (B0-712)', () => {
-  it('caps a scored-84 case to Partial Pass when a mandatory concept is missing, keeping grade B', () => {
+describe('arithmetic primitives (B0-813 / B0-814)', () => {
+  it('rounds half-up, in one place', () => {
+    expect(roundScore(72.5)).toBe(73);
+    expect(roundScore(73.5)).toBe(74);
+    expect(roundScore(72.49)).toBe(72);
+    expect(round1(78.95)).toBe(79);
+    expect(round1(33.34)).toBe(33.3);
+  });
+
+  it('weights the four sub-scores 40/30/20/10 and nothing else', () => {
+    expect(computeOverall({ accuracy: 90, completeness: 50, relevance: 90, clarity: 90 })).toBe(78);
+    expect(computeOverall({ accuracy: 100, completeness: 0, relevance: 0, clarity: 0 })).toBe(40);
+    expect(WEIGHTS.accuracy + WEIGHTS.completeness + WEIGHTS.relevance + WEIGHTS.clarity).toBeCloseTo(1, 12);
+  });
+
+  it('computes Completeness as the expected-concept coverage share, rounded once', () => {
+    expect(
+      completenessFromCoverage(
+        concepts({ mandatoryRequired: [CONCEPT.dilution], bonusRequired: [CONCEPT.metric, CONCEPT.epa] }),
+      ),
+    ).toBe(100);
+    expect(
+      completenessFromCoverage(
+        concepts({
+          mandatoryRequired: [CONCEPT.dilution],
+          bonusRequired: [CONCEPT.metric, CONCEPT.epa],
+          bonusMissing: [CONCEPT.epa],
+        }),
+      ),
+    ).toBe(67);
+    // No expected concepts → no data → null, never 0 or 100.
+    expect(completenessFromCoverage(undefined)).toBeNull();
+    expect(
+      completenessFromCoverage({
+        mandatory: coverage([], []),
+        expected: coverage([], []),
+        materialIssue: false,
+        materialIssueNote: null,
+      }),
+    ).toBeNull();
+  });
+
+  it('decides the Result from the pass mark alone', () => {
+    expect(statusFromScore(60)).toBe('Pass');
+    expect(statusFromScore(59)).toBe('Fail');
+    expect(statusFromScore(65, 70)).toBe('Fail');
+    expect(statusFromScore(70, 70)).toBe('Pass');
+    expect(DEFAULT_PASS_MARK).toBe(60);
+    expect(STRICT_PASS_MARK).toBe(70);
+  });
+});
+
+describe('computeReportMetrics — pure-math scoring (B0-813)', () => {
+  it('scores 90 / — / 90 / 90 with 2 of 4 expected satisfied as 76, C, Pass — and reports the must-have miss', () => {
     const c = only([
-      input('gated', 84, {
+      input('half', 90, {
+        concepts: concepts({
+          mandatoryRequired: [CONCEPT.dilution, CONCEPT.contactTime],
+          mandatoryMissing: [CONCEPT.contactTime],
+          bonusRequired: [CONCEPT.metric, CONCEPT.epa],
+          bonusMissing: [CONCEPT.epa],
+        }),
+      }),
+    ]);
+
+    expect(c.completeness).toBe(50);
+    expect(c.coverage).toEqual({ satisfied: 2, required: 4 });
+    // 0.4·90 + 0.3·50 + 0.2·90 + 0.1·90 = 78 — hmm: 36 + 15 + 18 + 9 = 78.
+    expect(c.overall).toBe(78);
+    expect(c.grade).toBe('C');
+    expect(c.status).toBe('Pass');
+    // The miss is a reported fact and changed nothing above.
+    expect(c.mandatoryMissing).toBe(true);
+    expect(c.concepts.mandatory.missing).toEqual([CONCEPT.contactTime]);
+    expect(c.passesOnlyUnderCurrentMark).toBe(false);
+  });
+
+  it('never caps, floors or gates: a missing must-have on an otherwise strong answer still reads B / Pass', () => {
+    const c = only([
+      input('gated-before', 90, {
         concepts: concepts({
           mandatoryRequired: [CONCEPT.dilution, CONCEPT.contactTime],
           mandatoryMissing: [CONCEPT.contactTime],
@@ -121,171 +211,125 @@ describe('computeReportMetrics — concept rating rules (B0-712)', () => {
       }),
     ]);
 
-    expect(c.overall).toBe(84);
-    expect(c.grade).toBe('B');
-    expect(c.rubricStatus).toBe('Pass');
-    expect(c.status).toBe('Partial Pass');
-    expect(c.statusSource).toBe('minimal_gate');
-    expect(c.ratingConstrained).toBe(true);
-    expect(c.gateBlockedAPass).toBe(true);
-    // The concept phrase survives verbatim — no parsing of "600 ppm", no re-punctuation.
-    expect(c.concepts!.mandatory.missing).toEqual([CONCEPT.contactTime]);
+    // Completeness 50 from 1 of 2 expected → 36 + 15 + 18 + 9 = 78.
+    expect(c.completeness).toBe(50);
+    expect(c.overall).toBe(78);
+    expect(c.status).toBe('Pass');
+    expect(c.mandatoryMissing).toBe(true);
   });
 
-  it('raises a scored-74 case to Pass on full expected coverage, keeping grade C', () => {
-    const c = only([
-      input('raised', 74, {
-        concepts: concepts({
-          mandatoryRequired: [CONCEPT.dilution],
-          bonusRequired: [CONCEPT.metric],
-        }),
+  it('scores 60 / — / 60 / 60 with full coverage as 72, C, Pass — no floor involved', () => {
+    const c = only([input('full', 60)]);
+    expect(c.completeness).toBe(100);
+    expect(c.overall).toBe(72);
+    expect(c.grade).toBe('C');
+    expect(c.status).toBe('Pass');
+  });
+
+  it('marks a case with no expected concepts Unable to Evaluate, with the reason, rather than guessing', () => {
+    const metrics = computeReportMetrics([
+      input('no-concepts', 90, { concepts: undefined }),
+      input('blank-cell', 90, {
+        concepts: {
+          mandatory: coverage([], []),
+          expected: coverage([], []),
+          materialIssue: false,
+          materialIssueNote: null,
+        },
       }),
+      input('scored', 90),
     ]);
 
-    expect(c.overall).toBe(74);
-    expect(c.grade).toBe('C');
-    expect(c.rubricStatus).toBe('Partial Pass');
-    expect(c.status).toBe('Pass');
-    expect(c.statusSource).toBe('auto_pass');
-    expect(c.autoPassTriggered).toBe(true);
-    expect(c.autoPassBlocked).toBe(false);
-    expect(c.ratingConstrained).toBe(false);
+    expect(metrics.evaluated).toBe(1);
+    expect(metrics.uteCount).toBe(2);
+    expect(metrics.ute.map((u) => u.id)).toEqual(['no-concepts', 'blank-cell']);
+    expect(metrics.ute[0]!.reason).toBe(NO_EXPECTED_CONCEPTS_UTE_REASON);
+    // Excluded from every average — not folded in as a 0 or a 100.
+    expect(metrics.overall.n).toBe(1);
+    expect(metrics.overall.avg).toBe(93);
   });
 
-  it('applies the gate last, so it wins over an automatic Pass', () => {
-    /**
-     * Deliberately contradictory coverage — full expected coverage *and* a missing mandatory
-     * concept — which real data cannot produce (mandatory ⊆ expected). Exercised through the pure
-     * rule function because `computeReportMetrics` refuses such a case outright: B0-714's
-     * `auto_pass_is_rated_pass` invariant is exactly the detector for this contradiction (asserted
-     * separately below). What matters here is the ordering: the cap runs after the raise.
-     */
-    const ruled = applyConceptRules('Partial Pass', {
-      mandatory: coverage([CONCEPT.contactTime], [CONCEPT.contactTime]),
-      expected: coverage([CONCEPT.contactTime], []),
-      materialIssue: false,
-      materialIssueNote: null,
-    });
-
-    expect(ruled.autoPassTriggered).toBe(true);
-    expect(ruled.status).toBe('Partial Pass');
-    expect(ruled.statusSource).toBe('minimal_gate');
-    expect(ruled.gateBlockedAPass).toBe(true);
-    expect(ruled.ratingConstrained).toBe(true);
+  it('ignores a persisted judged Completeness entirely — coverage is the only source', () => {
+    const c = only([input('legacy-judged', 90, { score: score(90, { completeness: 12 }) })]);
+    expect(c.completeness).toBe(100);
+    expect(c.overall).toBe(93);
   });
 
-  it('withholds the automatic Pass when a material factual issue is on the record', () => {
-    const note = `Exact-match check failed on a regulated value: "${CONCEPT.epa}".`;
+  it('reports a material issue on the case without touching the score', () => {
+    const note = `Stated 4 oz/gal; the label says 2 oz/gal (${CONCEPT.dilution}).`;
     const c = only([
-      input('material', 74, {
+      input('material', 90, {
         concepts: concepts({
           mandatoryRequired: [CONCEPT.dilution],
-          bonusRequired: [CONCEPT.epa],
           materialIssue: true,
           materialIssueNote: note,
         }),
       }),
     ]);
 
-    expect(c.status).toBe('Partial Pass');
-    expect(c.statusSource).toBe('rubric');
-    expect(c.autoPassTriggered).toBe(false);
-    expect(c.autoPassBlocked).toBe(true);
-    expect(c.concepts!.materialIssueNote).toBe(note);
-  });
-
-  it('marks every gated case as ratingConstrained, including one already below Pass', () => {
-    const c = only([
-      input('already-failing', 42, {
-        concepts: concepts({
-          mandatoryRequired: [CONCEPT.dilution],
-          mandatoryMissing: [CONCEPT.dilution],
-        }),
-      }),
-    ]);
-
-    expect(c.rubricStatus).toBe('Fail');
-    expect(c.status).toBe('Fail');
-    // The gate touched the case (constrained), but it did not cost a Pass (blocked) — different
-    // questions, and neither answer may stand in for the other.
-    expect(c.ratingConstrained).toBe(true);
-    expect(c.gateBlockedAPass).toBe(false);
-    expect(c.statusSource).toBe('rubric');
-  });
-
-  it('leaves a case with no concept block exactly as it was before the concept rules existed', () => {
-    const c = only([input('legacy', 84)]);
-
-    expect(c.concepts).toBeNull();
-    expect(c.rubricStatus).toBe('Pass');
+    expect(c.materialIssue).toBe(true);
+    expect(c.concepts.materialIssueNote).toBe(note);
+    expect(c.overall).toBe(93);
     expect(c.status).toBe('Pass');
-    expect(c.statusSource).toBe('rubric');
-    expect(c.ratingConstrained).toBe(false);
-    expect(c.gateBlockedAPass).toBe(false);
-    expect(c.autoPassTriggered).toBe(false);
-    expect(c.autoPassBlocked).toBe(false);
   });
 
-  it('never lets a concept rule touch the sub-scores, the roll-up or the grade', () => {
-    const plain = only([input('plain', 84)]);
-    const gated = only([
-      input('gated', 84, {
-        concepts: concepts({
-          mandatoryRequired: [CONCEPT.dilution],
-          mandatoryMissing: [CONCEPT.dilution],
-        }),
-      }),
-    ]);
+  it('uses the pass mark it is given, and lists the cases that pass only under the current one', () => {
+    // Overalls 93, 65 and 58.
+    const inputs = [input('a', 90), input('b', 50), input('c', 40)];
 
-    for (const key of ['accuracy', 'completeness', 'relevance', 'clarity', 'overall', 'grade'] as const) {
-      expect(gated[key], `${key} must be untouched by the gate`).toEqual(plain[key]);
-    }
-    expect(gated.status).not.toBe(plain.status);
+    const at60 = computeReportMetrics(inputs);
+    expect(at60.perCase.map((c) => c.overall)).toEqual([93, 65, 58]);
+    expect(at60.passMark).toBe(60);
+    expect(at60.strictPassMark).toBe(70);
+    expect(at60.perCase.map((c) => c.status)).toEqual(['Pass', 'Pass', 'Fail']);
+    expect(at60.passOnlyUnderCurrentMark).toEqual(['b']);
+    expect(at60.perCase[1]!.passesOnlyUnderCurrentMark).toBe(true);
+
+    const at70 = computeReportMetrics(inputs, { passMark: 70 });
+    expect(at70.passMark).toBe(70);
+    expect(at70.perCase.map((c) => c.status)).toEqual(['Pass', 'Fail', 'Fail']);
+    expect(at70.passOnlyUnderCurrentMark).toEqual([]);
+  });
+
+  it('coerces a missing judged sub-score to 0 with a warning, never refusing the report', () => {
+    const metrics = computeReportMetrics([input('flaky', 80, { score: score(80, { relevance: null }) })]);
+    expect(metrics.warnings[0]).toContain('missing sub-score(s) relevance');
+    // 0.4·80 + 0.3·100 + 0.2·0 + 0.1·80 = 70.
+    expect(metrics.perCase[0]!.overall).toBe(70);
   });
 });
 
-describe('computeReportMetrics — rate blocks count by final status (B0-712)', () => {
-  it('counts pass/partial/fail from the final status while avg and grade stay weighted', () => {
+describe('computeReportMetrics — rate blocks (B0-812)', () => {
+  it('counts pass and fail only, from the Result, while avg and grade stay weighted', () => {
+    // Overalls 89, 73 and 58.
     const metrics = computeReportMetrics([
-      // Scores 84 (Pass on the rubric) but gated down to Partial Pass.
-      input('a', 84, {
-        priorityRaw: 1,
-        category: 'Dilution',
-        concepts: concepts({
-          mandatoryRequired: [CONCEPT.contactTime],
-          mandatoryMissing: [CONCEPT.contactTime],
-        }),
-      }),
-      // Scores 74 (Partial Pass on the rubric) but raised to Pass on full expected coverage.
-      input('b', 74, {
-        priorityRaw: 2,
-        category: 'Disinfection',
-        concepts: concepts({ mandatoryRequired: [CONCEPT.dilution] }),
-      }),
+      input('a', 84, { priorityRaw: 1, category: 'Dilution' }),
+      input('b', 62, { priorityRaw: 2, category: 'Disinfection' }),
+      input('c', 40, { priorityRaw: 2, category: 'Disinfection' }),
     ]);
 
-    expect(metrics.overall.pass).toBe(1);
-    expect(metrics.overall.partial).toBe(1);
-    expect(metrics.overall.fail).toBe(0);
-    // (84 + 74) / 2 = 79 — from the scores, not the statuses.
-    expect(metrics.overall.avg).toBe(79);
-    expect(metrics.overall.grade).toBe('C');
+    expect(metrics.perCase.map((c) => c.overall)).toEqual([89, 73, 58]);
+    expect(metrics.overall).toEqual<RateBlock>({
+      n: 3,
+      avg: 73.3,
+      grade: 'C',
+      pass: 2,
+      fail: 1,
+      passPct: 66.7,
+      failPct: 33.3,
+    });
 
     const tierOne = metrics.tiers.find(([name]) => name === 'Tier 1')![1];
     const tierTwo = metrics.tiers.find(([name]) => name === 'Tier 2')![1];
-    expect(tierOne.pass).toBe(0);
-    expect(tierOne.partial).toBe(1);
-    expect(tierOne.avg).toBe(84);
+    expect(tierOne.pass).toBe(1);
     expect(tierTwo.pass).toBe(1);
-    expect(tierTwo.avg).toBe(74);
+    expect(tierTwo.fail).toBe(1);
+    expect(tierTwo.avg).toBe(65.5);
 
-    const dilution = metrics.categories.find(([name]) => name === 'Dilution')![1];
     const disinfection = metrics.categories.find(([name]) => name === 'Disinfection')![1];
-    expect(dilution.pass).toBe(0);
-    expect(dilution.partial).toBe(1);
-    expect(dilution.passPct).toBe(0);
-    expect(disinfection.pass).toBe(1);
-    expect(disinfection.passPct).toBe(100);
+    expect(disinfection.passPct).toBe(50);
+    expect(metrics.strongestCategory).toBe('Dilution');
+    expect(metrics.weakestCategory).toBe('Disinfection');
   });
 });
 
@@ -296,7 +340,7 @@ describe('computeReportMetrics — advisory notes stay advisory (B0-714)', () =>
         concepts: concepts({
           mandatoryRequired: [CONCEPT.dilution],
           materialIssue: true,
-          materialIssueNote: `Exact-match check failed on a regulated value: "${CONCEPT.epa}".`,
+          materialIssueNote: `Wrong registration number quoted: not "${CONCEPT.epa}".`,
         }),
       }),
     ]);
@@ -305,20 +349,9 @@ describe('computeReportMetrics — advisory notes stay advisory (B0-714)', () =>
     expect(metrics.warnings[0]).toContain('material factual issue');
     expect(metrics.warnings[0]).toContain('Accuracy is 84');
   });
-
-  it('keeps the missing sub-score note advisory rather than refusing the report', () => {
-    const metrics = computeReportMetrics([
-      input('flaky', 0, { score: score(80, { relevance: null }) }),
-    ]);
-
-    expect(metrics.warnings[0]).toContain('missing sub-score(s) relevance');
-    expect(metrics.evaluated).toBe(1);
-    // Relevance coerced to 0: 0.4*80 + 0.3*80 + 0.2*0 + 0.1*80 = 64.
-    expect(metrics.perCase[0]!.overall).toBe(64);
-  });
 });
 
-describe('computeReportMetrics — concept rollup (B0-713)', () => {
+describe('computeReportMetrics — concept rollup (B0-713 / B0-813)', () => {
   const RUN = [
     input('missing-mandatory', 84, {
       concepts: concepts({
@@ -338,14 +371,18 @@ describe('computeReportMetrics — concept rollup (B0-713)', () => {
         mandatoryMissing: [CONCEPT.contactTime],
         bonusRequired: [CONCEPT.metric],
         bonusMissing: [CONCEPT.metric],
+        materialIssue: true,
+        materialIssueNote: 'Contact time stated as 5 minutes; the label requires 10.',
       }),
     }),
-    input('no-concepts', 90),
+    input('no-concepts', 90, { concepts: undefined }),
   ];
 
-  it('uses cases that specify concepts as the denominator, never the whole run', () => {
-    const rollup = computeReportMetrics(RUN).concepts!;
+  it('uses evaluated cases as the denominator — a concept-less case is UTE, not a zero', () => {
+    const metrics = computeReportMetrics(RUN);
+    const rollup = metrics.concepts!;
 
+    expect(metrics.uteCount).toBe(1);
     expect(rollup.casesWithConcepts).toBe(3);
     expect(rollup.mandatory.casesSpecifying).toBe(3);
     expect(rollup.mandatory.casesSatisfyingAll).toBe(1);
@@ -354,17 +391,21 @@ describe('computeReportMetrics — concept rollup (B0-713)', () => {
     expect(rollup.expected.casesSatisfyingAll).toBe(1);
   });
 
-  it('separates the cases the gate touched from the Passes it actually cost', () => {
+  it('reports the must-have misses and the material issues by case, verbatim', () => {
     const rollup = computeReportMetrics(RUN).concepts!;
 
     expect(rollup.missingMandatory.map((entry) => entry.id)).toEqual([
       'missing-mandatory',
       'also-missing',
     ]);
-    // Both were constrained; only the 84 had a Pass to lose.
-    expect(rollup.gateBlockedPasses).toBe(1);
-    expect(rollup.autoPassed.map((entry) => entry.id)).toEqual(['full-coverage']);
-    expect(rollup.autoPassBlocked).toEqual([]);
+    expect(rollup.missingMandatory[0]!.missing).toEqual([CONCEPT.contactTime]);
+    expect(rollup.materialIssues).toEqual([
+      {
+        id: 'also-missing',
+        question: 'Question also-missing',
+        note: 'Contact time stated as 5 minutes; the label requires 10.',
+      },
+    ]);
   });
 
   it('names recurring missing concepts verbatim with the cases they span', () => {
@@ -379,12 +420,17 @@ describe('computeReportMetrics — concept rollup (B0-713)', () => {
     ]);
   });
 
-  it('returns no rollup at all for a run with no concept data', () => {
-    expect(computeReportMetrics([input('a', 90), input('b', 50)]).concepts).toBeNull();
+  it('returns no rollup at all when nothing could be evaluated', () => {
+    expect(
+      computeReportMetrics([
+        input('a', 90, { concepts: undefined }),
+        input('b', 50, { concepts: undefined }),
+      ]).concepts,
+    ).toBeNull();
   });
 });
 
-describe('report invariants (B0-714)', () => {
+describe('report invariants (B0-714 / B0-815)', () => {
   const PASSING: EvaluatedCase = {
     id: 'ok',
     question: 'Q',
@@ -392,30 +438,26 @@ describe('report invariants (B0-714)', () => {
     priorityRaw: 1,
     category: 'Dilution',
     accuracy: 90,
-    completeness: 90,
+    completeness: 100,
     relevance: 90,
     clarity: 90,
-    overall: 90,
+    overall: 93,
     grade: 'A',
-    rubricStatus: 'Pass',
     status: 'Pass',
-    statusSource: 'rubric',
-    ratingConstrained: false,
-    gateBlockedAPass: false,
-    autoPassTriggered: false,
-    autoPassBlocked: false,
-    concepts: null,
+    coverage: { satisfied: 2, required: 2 },
+    mandatoryMissing: false,
+    materialIssue: false,
+    passesOnlyUnderCurrentMark: false,
+    concepts: FULL,
   };
 
   const BLOCK: RateBlock = {
     n: 1,
-    avg: 90,
+    avg: 93,
     grade: 'A',
     pass: 1,
-    partial: 0,
     fail: 0,
     passPct: 100,
-    partialPct: 0,
     failPct: 0,
   };
 
@@ -429,16 +471,14 @@ describe('report invariants (B0-714)', () => {
       categories: [['Dilution', BLOCK]],
       speed: null,
       weights: WEIGHTS,
+      passMark: DEFAULT_PASS_MARK,
       ...overrides,
     };
   }
 
   /** Every corrupted context below must fail exactly the named check. */
   const CORRUPTIONS: Array<[string, ReportInvariantContext]> = [
-    [
-      'status_counts_sum_to_evaluated',
-      context({ overall: { ...BLOCK, pass: 0, partial: 0, fail: 0 } }),
-    ],
+    ['status_counts_sum_to_evaluated', context({ overall: { ...BLOCK, pass: 0, fail: 0 } })],
     ['evaluated_equals_total_minus_ute', context({ totalCases: 5 })],
     ['tier_counts_sum_to_evaluated', context({ tiers: [['Tier 1', { ...BLOCK, n: 7 }]] })],
     [
@@ -446,35 +486,25 @@ describe('report invariants (B0-714)', () => {
       context({ categories: [['Dilution', { ...BLOCK, n: 7 }]] }),
     ],
     [
-      'mandatory_concept_missing_not_passed',
-      context({
-        evaluated: [
-          {
-            ...PASSING,
-            status: 'Pass',
-            concepts: concepts({
-              mandatoryRequired: [CONCEPT.contactTime],
-              mandatoryMissing: [CONCEPT.contactTime],
-            }),
-          },
-        ],
-      }),
+      // A floor or a cap would show up exactly here: the sub-scores no longer reproduce the overall.
+      'overall_recomputes_from_sub_scores',
+      context({ evaluated: [{ ...PASSING, overall: 70 }] }),
     ],
     [
-      'auto_pass_is_rated_pass',
-      context({
-        evaluated: [{ ...PASSING, autoPassTriggered: true, status: 'Partial Pass' }],
-        overall: { ...BLOCK, pass: 0, partial: 1 },
-        tiers: [['Tier 1', { ...BLOCK, pass: 0, partial: 1 }]],
-        categories: [['Dilution', { ...BLOCK, pass: 0, partial: 1 }]],
-      }),
+      // A judged Completeness that is not the coverage share.
+      'completeness_equals_expected_coverage',
+      context({ evaluated: [{ ...PASSING, completeness: 80, overall: 87, grade: 'B' }] }),
     ],
     [
-      'blocked_auto_pass_not_auto_passed',
+      'status_matches_pass_mark',
       context({
-        evaluated: [{ ...PASSING, autoPassBlocked: true, statusSource: 'auto_pass' }],
+        evaluated: [{ ...PASSING, status: 'Fail' }],
+        overall: { ...BLOCK, pass: 0, fail: 1, passPct: 0, failPct: 100 },
+        tiers: [['Tier 1', { ...BLOCK, pass: 0, fail: 1 }]],
+        categories: [['Dilution', { ...BLOCK, pass: 0, fail: 1 }]],
       }),
     ],
+    ['grade_recomputes_from_overall', context({ evaluated: [{ ...PASSING, grade: 'B' }] })],
     [
       'concept_coverage_partitions_required',
       context({
@@ -496,9 +526,44 @@ describe('report invariants (B0-714)', () => {
       }),
     ],
     [
+      'mandatory_subset_of_expected',
+      context({
+        evaluated: [
+          {
+            ...PASSING,
+            concepts: {
+              mandatory: coverage([CONCEPT.epa], []),
+              expected: coverage([CONCEPT.dilution, CONCEPT.metric], []),
+              materialIssue: false,
+              materialIssueNote: null,
+            },
+          },
+        ],
+      }),
+    ],
+    [
+      'mandatory_miss_is_reported',
+      context({
+        evaluated: [
+          {
+            ...PASSING,
+            completeness: 50,
+            overall: 78,
+            grade: 'C',
+            coverage: { satisfied: 1, required: 2 },
+            mandatoryMissing: false,
+            concepts: concepts({
+              mandatoryRequired: [CONCEPT.dilution, CONCEPT.contactTime],
+              mandatoryMissing: [CONCEPT.contactTime],
+            }),
+          },
+        ],
+      }),
+    ],
+    [
       // B0-717 — the reverse leak: a speed score that no timing supports. `basis` claims both
       // metrics while only one was measured, which is how an imputed timing would look.
-      'grade_isolated_from_speed',
+      'speed_scores_match_timings',
       context({
         speed: {
           unit: 's',
@@ -551,14 +616,13 @@ describe('report invariants (B0-714)', () => {
     expect(() => assertReportInvariants(context())).not.toThrow();
   });
 
-  it('refuses to compute metrics when the two concept sets contradict each other', () => {
+  it('refuses to compute metrics when a mandatory concept is not also an expected one', () => {
     expect(() =>
       computeReportMetrics([
         input('contradictory', 74, {
           concepts: {
-            // Full expected coverage *and* a missing must-have — impossible for real data.
-            mandatory: coverage([CONCEPT.contactTime], [CONCEPT.contactTime]),
-            expected: coverage([CONCEPT.contactTime], []),
+            mandatory: coverage([CONCEPT.contactTime], []),
+            expected: coverage([CONCEPT.dilution], []),
             materialIssue: false,
             materialIssueNote: null,
           },
@@ -578,8 +642,8 @@ describe('report invariants (B0-714)', () => {
     const contradictory = () =>
       input('contradictory', 74, {
         concepts: {
-          mandatory: coverage([CONCEPT.contactTime], [CONCEPT.contactTime]),
-          expected: coverage([CONCEPT.contactTime], []),
+          mandatory: coverage([CONCEPT.contactTime], []),
+          expected: coverage([CONCEPT.dilution], []),
           materialIssue: false,
           materialIssueNote: null,
         },
@@ -592,7 +656,7 @@ describe('report invariants (B0-714)', () => {
       expect(metrics.perCase).toHaveLength(1);
       const invariantWarnings = metrics.warnings.filter((w) => w.startsWith('INVARIANT:'));
       expect(invariantWarnings).toHaveLength(1);
-      expect(invariantWarnings[0]).toContain('auto_pass_is_rated_pass');
+      expect(invariantWarnings[0]).toContain('mandatory_subset_of_expected');
     });
 
     it('keeps the report readable — scores and grades still present alongside the warning', () => {
@@ -601,7 +665,8 @@ describe('report invariants (B0-714)', () => {
         { invariantSeverity: 'warn' },
       );
       expect(metrics.overall.n).toBe(2);
-      expect(metrics.perCase.map((c) => c.grade)).toEqual(['C', 'A']);
+      // 0.7·74 + 30 = 82 → B; 0.7·90 + 30 = 93 → A.
+      expect(metrics.perCase.map((c) => c.grade)).toEqual(['B', 'A']);
       expect(metrics.warnings.some((w) => w.startsWith('INVARIANT:'))).toBe(true);
     });
 
@@ -623,7 +688,7 @@ describe('report invariants (B0-714)', () => {
       expect(failures.every((f) => f.startsWith('INVARIANT:'))).toBe(true);
     });
 
-    it("still throws under the default severity, so generation is unaffected", () => {
+    it('still throws under the default severity, so generation is unaffected', () => {
       expect(() => computeReportMetrics([contradictory()])).toThrow(ReportInvariantError);
       expect(() =>
         computeReportMetrics([contradictory()], { invariantSeverity: 'throw' }),
@@ -700,7 +765,7 @@ describe('computeReportMetrics — speed aggregates (B0-717)', () => {
     const metrics = computeReportMetrics([input('untimed', 90)]);
     expect(metrics.speed).toBeNull();
     // …and the content side is untouched.
-    expect(metrics.overall.avg).toBe(90);
+    expect(metrics.overall.avg).toBe(93);
     expect(metrics.perCase[0].grade).toBe('A');
   });
 

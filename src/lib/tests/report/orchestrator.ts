@@ -15,6 +15,7 @@ import { scoreCase } from './case-scorer';
 import { consolidateCasePasses, loadConsistencyConfig } from './consolidate';
 import { renderReportMarkdown } from './render';
 import { emptyReportState, parseReportState, type CaseScore, type ReportState } from './schemas';
+import { loadPassMark } from './scoring-config';
 import { synthesizeReportFindings } from './synthesizer';
 
 /** B0-765 — fallback only if the `REPORT_GRADING_MODEL` settings row is missing/unreadable. */
@@ -132,12 +133,20 @@ async function scoreRemainingCases(
       const scores = (state.casePassScores[itemId] ??= []);
       scores[passIndex] = score;
       // Consolidated only once every pass for this case is in, so `caseScores` never holds a
-      // half-consolidated verdict that a crash could leave behind as if it were final.
+      // half-consolidated verdict that a crash could leave behind as if it were final. The
+      // consolidated concept block rides on the consolidated score so single-score readers see it.
       if (scores.length >= state.passes) {
-        state.caseScores[itemId] = consolidateCasePasses(
-          scores.map((passScore) => ({ score: passScore })),
-          { spreadThreshold: state.spreadThreshold ?? undefined },
-        ).score;
+        const consolidated = consolidateCasePasses(
+          scores.map((passScore) => ({
+            score: passScore,
+            concepts: passScore.concepts ?? undefined,
+          })),
+          { spreadThreshold: state.spreadThreshold ?? undefined, passMark: state.passMark },
+        );
+        state.caseScores[itemId] = {
+          ...consolidated.score,
+          concepts: consolidated.concepts ?? null,
+        };
       }
     }
     state.completedCases = Object.keys(state.caseScores).length;
@@ -174,8 +183,11 @@ export async function generateReport(testResultId: string): Promise<ReportState>
   // part-way through keeps the pass count and threshold it started with, so changing the setting
   // mid-report can never leave one half of its cases graded three times and the other half once.
   const config = await loadConsistencyConfig();
+  // B0-812 — same contract: the pass mark is resolved once and persisted on a fresh state, so a
+  // settings change mid-report cannot rate one half of its cases at 60 and the other at 70.
+  const passMark = await loadPassMark();
   const fresh = () =>
-    emptyReportState(model, items.length, config.passes, config.spreadThreshold);
+    emptyReportState(model, items.length, config.passes, config.spreadThreshold, passMark);
   let state = parseReportState(run.report_state) ?? fresh();
   if (state.totalCases !== items.length) {
     // The run's item set changed (e.g. items added) since a prior partial report — start fresh.
@@ -224,6 +236,7 @@ export async function generateReport(testResultId: string): Promise<ReportState>
       // score it lands on and the score persisted in `caseScores` cannot disagree.
       casePassScores: state.casePassScores,
       spreadThreshold: state.spreadThreshold,
+      passMark: state.passMark,
     });
 
     const findingsByCaseId = new Map(

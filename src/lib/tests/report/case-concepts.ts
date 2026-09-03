@@ -1,179 +1,117 @@
-import type { CriteriaGradingOutcome } from '~/lib/tests/criteria-schemas';
+import type { CaseConcepts, ConceptKindCoverage } from './schemas';
+
+export type { CaseConcepts, ConceptKindCoverage };
 
 /**
- * B0-711 — the report's per-case concept judgment, sourced from grading the harness already did.
+ * B0-809 — concept blocks come only from the golden concept columns.
  *
- * The manual "agent-evaluation" skill grades each case against two concept sets
- * (`Minimal_Expected_Concepts` and `Expected_Key_Concepts`) and lets that coverage move the
- * case's Result. Our report never saw a per-concept verdict, so the gate could not be applied.
- * It does not need a new grader call: `~/lib/tests/runner.ts` already persists
- * `response_payload.criteriaGrading` for every item that carries `expected_criteria`.
+ * The grader judges each phrase of `test_items.minimum_concepts` (mandatory) and
+ * `test_items.expected_concepts` (expected) semantically on every pass and authors the
+ * `CaseConcepts` block persisted on its `CaseScore` (`./schemas`). Nothing in this module reads a
+ * response or infers a verdict: it holds the deterministic text handling around those columns —
+ * how a cell is split into phrases, how two spellings of one phrase are recognised as the same
+ * phrase when passes vote — and the marks the report prints. The former fallback that derived a
+ * block from the harness's `criteriaGrading` is gone by decision (Tom Bird, 2026-09-03): an item
+ * without concept columns has no concept data, and the report says so rather than inventing any.
  *
- * **The mapping (decided on B0-711, not inferred here):**
- *
- * - **mandatory** (`Minimal_Expected_Concepts`) = criteria with `tier === 1`. Tier 1 already
- *   means "must have — any tier-1 miss fails the item" (`~/lib/tests/criteria-schemas.ts`), so the
- *   gate inherits an existing, tested semantic instead of inventing a second one.
- * - **expected** (`Expected_Key_Concepts`) = the full criteria set (tiers 1, 2 and 3).
- * - **`materialIssue`** = any criterion with `match === 'exact'` whose verdict is `met === false`.
- *   `exact` is the opt-in deterministic substring check reserved for regulated values (dilution
- *   ratios, oz/gal, mL/L, ppm, contact times, CAS/EPA numbers) and is evaluated in code, never by
- *   a model — so a failed one is a *factual* miss on a regulated value, which is precisely the
- *   signal that must withhold an automatic Pass. It is never asked of the grader model.
- *
- * Because mandatory ⊆ expected by construction, "every expected concept satisfied" and "a
- * mandatory concept missing" cannot both be true for the same case. B0-714 asserts that as a
- * structural invariant rather than trusting it.
- *
- * Regulated-data rule: concept phrases are regulated free text. Every string below is copied by
- * reference from the persisted verdict — never parsed for numbers, rounded, unit-converted,
- * re-cased, truncated or re-punctuated.
+ * Regulated-data rule: concept phrases are regulated free text. Every phrase is copied by
+ * reference and re-emitted verbatim — never parsed for numbers, rounded, unit-converted, re-cased
+ * or truncated. `normConcept` produces an *identity key* for set math only; the key is never shown.
  */
 
-/** Required = satisfied ∪ missing, always. B0-714 asserts this per kind, per case. */
-export type ConceptKindCoverage = {
-  required: string[];
-  satisfied: string[];
-  missing: string[];
-};
-
-export type CaseConcepts = {
-  /** Tier-1 criteria — the "must have" set the rating gate reads. */
-  mandatory: ConceptKindCoverage;
-  /** The full criteria set — full coverage is what can raise a Result to Pass. */
-  expected: ConceptKindCoverage;
-  /** A failed deterministic (`match: 'exact'`) check on a regulated value. Derived in code. */
-  materialIssue: boolean;
-  /** Names the failed concept(s) verbatim. Null exactly when `materialIssue` is false. */
-  materialIssueNote: string | null;
-};
+/** Cells that mean "no concepts of this kind were specified" — the reference splitter's set. */
+const EMPTY_CELL_MARKERS = new Set(['n/a', 'na', 'none', '-', '—']);
 
 /**
- * Splits a free-text concept column (`test_items.minimum_concepts` / `expected_concepts`) into
- * individual phrases.
- *
- * Separators are pipe, newline, bullet (`-`/`*`/`•`), numbered list (`1.` / `1)`) and semicolon —
- * **never the comma**, because concept phrases routinely contain one ("dilute at 2 oz/gal, then
- * dwell for 10 minutes"). Splitting on commas would shred a regulated phrase into fragments that
- * no longer say what the label says.
- *
- * Each phrase is returned verbatim apart from the separator itself and surrounding whitespace.
+ * A leading list marker: `-`, `*`, `•`, `‣`, `▪`, `·`, a lone `o`, `1.` / `1)` / `(1)`, or `a.` /
+ * `a)`. Ported from the reference `concept_rules.py` `_BULLET` pattern, including its
+ * case-insensitivity.
  */
-export function splitConceptPhrases(value: string | null | undefined): string[] {
-  if (!value) return [];
-  return value
-    // `m` so a bullet or numbered marker is recognised at the start of every line, not just the
-    // start of the column.
-    .split(/\r?\n|\||;|(?:^|\s)[-*•]\s+|(?:^|\s)\d+[.)]\s+/gm)
-    .map((phrase) => phrase.trim())
-    .filter((phrase) => phrase.length > 0);
-}
-
-function coverage(
-  verdicts: ReadonlyArray<{ concept: string; met: boolean }>,
-): ConceptKindCoverage {
-  return {
-    required: verdicts.map((v) => v.concept),
-    satisfied: verdicts.filter((v) => v.met).map((v) => v.concept),
-    missing: verdicts.filter((v) => !v.met).map((v) => v.concept),
-  };
-}
-
-export type DeriveCaseConceptsParams = {
-  /** `response_payload.criteriaGrading` for this item's latest attempt, already validated. */
-  criteriaGrading: CriteriaGradingOutcome | null;
-  /** `test_items.minimum_concepts` — the free-text fallback for the mandatory set. */
-  minimumConcepts: string | null;
-  /** `test_items.expected_concepts` — the free-text fallback for the expected set. */
-  expectedConcepts: string | null;
-};
+const BULLET = /^\s*(?:[-*•‣▪·o]|\(?\d+[.)]|[a-z][.)])\s+/i;
 
 /**
- * Builds the concept block for one case, or `undefined` when the case has none.
+ * Splits one golden concept cell into an ordered list of phrases — a line-for-line port of the
+ * reference skill's `split_concepts`, so both graders see the same phrases for the same cell.
  *
- * `undefined` (rather than an empty block) is deliberate: a case with no concepts must leave every
- * concept rule a no-op and every downstream number bit-identical to the pre-B0-711 report. A blank
- * concept cell is missing data, not a failed case.
+ * Deterministic text structure only. **Pipe is the primary delimiter**, per line; newlines split;
+ * list markers are stripped; a **semicolon splits only when nothing else delimited the cell**;
+ * commas never split (a phrase routinely contains one: "dilute 2 oz/gal, then dwell"). An empty
+ * cell, or one holding only an empty-cell marker, yields `[]` — no concepts of that kind for this
+ * case, which is not a failure.
  */
-export function deriveCaseConcepts(
-  params: DeriveCaseConceptsParams,
-): CaseConcepts | undefined {
-  const verdicts = params.criteriaGrading?.verdicts ?? [];
-  if (verdicts.length === 0) {
-    /**
-     * Fallback path: the item has no `expected_criteria`, so nothing graded it per concept. The
-     * free-text columns can be split into required phrases (`splitConceptPhrases`) but there are
-     * no verdicts to say which of them the answer satisfied, and satisfaction cannot be inferred
-     * from a rubric sub-score without fabricating a per-concept judgment. `required` on its own is
-     * not a usable concept block — it would make every coverage read "0 of N satisfied" and gate
-     * every legacy case — so the case gets no block at all.
-     */
-    return undefined;
+export function splitConcepts(cell: string | null | undefined): string[] {
+  if (cell == null) return [];
+  const text = String(cell).replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+  if (!text || EMPTY_CELL_MARKERS.has(text.toLowerCase())) return [];
+
+  let parts: string[] = [];
+  for (const line of text.split('\n')) {
+    parts.push(...(line.includes('|') ? line.split('|') : [line]));
+  }
+  // Semicolons only when nothing else delimited the cell. This does split a lone phrase that
+  // happens to contain a semicolon — accepted, as in the reference, because pipes and newlines take
+  // precedence and the split is checked before grading.
+  if (parts.length === 1 && text.includes(';')) {
+    parts = text.split(';');
   }
 
-  const exactMisses = verdicts.filter((v) => v.match === 'exact' && !v.met);
-
-  return {
-    mandatory: coverage(verdicts.filter((v) => v.tier === 1)),
-    expected: coverage(verdicts),
-    materialIssue: exactMisses.length > 0,
-    materialIssueNote:
-      exactMisses.length > 0
-        ? `Exact-match check failed on ${exactMisses.length === 1 ? 'a regulated value' : 'regulated values'}: ${exactMisses
-            .map((v) => `"${v.concept}"`)
-            .join(', ')}.`
-        : null,
-  };
+  const out: string[] = [];
+  for (const raw of parts) {
+    const phrase = raw.replace(BULLET, '').trim().replace(/^;+|;+$/g, '').trim();
+    if (phrase) out.push(phrase);
+  }
+  return out;
 }
 
 /**
- * B0-713 — the two marks the "Results at a glance" table and the ledger rows carry, defined once
- * so the Markdown document and the React ledger cannot label the same case differently.
+ * Identity key for a concept phrase — for set math and cross-pass voting only, never displayed.
+ * Port of the reference `norm_concept`: NFKD, combining marks stripped, lower-cased, every
+ * non-alphanumeric run collapsed to one space.
+ */
+export function normConcept(phrase: string | null | undefined): string {
+  if (phrase == null) return '';
+  return String(phrase)
+    .normalize('NFKD')
+    .replace(/\p{M}+/gu, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+/** True when the case lists at least one must-have concept the answer did not communicate. */
+export function hasMandatoryMiss(concepts: CaseConcepts | null | undefined): boolean {
+  return (concepts?.mandatory.missing.length ?? 0) > 0;
+}
+
+/**
+ * B0-813 — the marks the "Results at a glance" table and the ledger rows carry, defined once so the
+ * Markdown document and the React ledger cannot label the same case differently.
+ *
+ * † says the answer missed a must-have concept. That is a *reported* fact: it lowered Completeness
+ * through coverage like any other expected concept and did not by itself change the Result.
  */
 export const CONCEPT_MARKERS = {
-  /** The concept gate constrained this case's Result. */
-  ratingConstrained: '†',
-  /** Full expected coverage raised this case's Result to Pass. */
-  autoPass: '‡',
+  mandatoryMissing: '†',
 } as const;
 
 export const CONCEPT_MARKER_LEGEND = {
-  ratingConstrained: `${CONCEPT_MARKERS.ratingConstrained} Rating constrained by a missing mandatory concept.`,
-  autoPass: `${CONCEPT_MARKERS.autoPass} Automatic Pass on full expected-concept coverage.`,
+  mandatoryMissing: `${CONCEPT_MARKERS.mandatoryMissing} Missing a must-have (mandatory) concept — reported on the case; it lowers Completeness through coverage and does not by itself change the Result.`,
 } as const;
 
-/** The marks for one rated case, in a stable order. Empty string when neither rule applied. */
-export function conceptMarkers(flags: {
-  ratingConstrained: boolean;
-  autoPassTriggered: boolean;
-}): string {
-  return (
-    (flags.ratingConstrained ? CONCEPT_MARKERS.ratingConstrained : '') +
-    (flags.autoPassTriggered ? CONCEPT_MARKERS.autoPass : '')
-  );
-}
-
 /**
- * B0-721 — the third mark: this case's independent grading passes disagreed and a human should
- * look at the grade.
- *
- * It is defined here, beside the two concept marks, rather than in `./consolidate` where the
- * variance itself lives, because this module is the one place every mark the "Results at a glance"
- * table carries is written down — that is what stops the Markdown document and the React ledger
- * marking the same case with different glyphs. Distinct from † and ‡ on purpose, and appended
- * after them so a case can honestly carry all three.
+ * B0-721 — this case's independent grading passes disagreed and a human should look at the grade.
+ * Distinct from † on purpose, and appended after it so a case can honestly carry both.
  */
 export const REVIEW_MARKER = '⚑';
 
 export const REVIEW_MARKER_LEGEND = `${REVIEW_MARKER} Flagged for human review — the independent grading passes disagreed.`;
 
-/** Every mark one case carries, concept marks first. Empty string when no rule and no flag fired. */
-export function caseMarkers(flags: {
-  ratingConstrained: boolean;
-  autoPassTriggered: boolean;
-  reviewFlagged?: boolean;
-}): string {
-  return conceptMarkers(flags) + (flags.reviewFlagged ? REVIEW_MARKER : '');
+/** Every mark one case carries, concept mark first. Empty string when nothing applies. */
+export function caseMarkers(flags: { mandatoryMissing: boolean; reviewFlagged?: boolean }): string {
+  return (
+    (flags.mandatoryMissing ? CONCEPT_MARKERS.mandatoryMissing : '') +
+    (flags.reviewFlagged ? REVIEW_MARKER : '')
+  );
 }
 
 /** The one-line coverage readout, e.g. `Mandatory 2/3 · Expected 4/6`. */

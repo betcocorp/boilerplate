@@ -13,10 +13,11 @@ import {
   toNotGeneratedPayload,
   toReportDataPayload,
 } from './assemble';
-import { splitConceptPhrases } from './case-concepts';
+import { splitConcepts } from './case-concepts';
 import { reportDataResponseSchema, type ReportDataReady } from './data-schemas';
+import { NO_EXPECTED_CONCEPTS_UTE_REASON } from './metrics';
 import { caseAnchorId, renderReportMarkdown } from './render';
-import type { CaseScore, ReportSynthesis } from './schemas';
+import type { CaseConcepts, CaseScore, ReportSynthesis } from './schemas';
 
 /**
  * B0-586 — the guard that keeps the Markdown report and the structured `/report/data` contract in
@@ -203,36 +204,78 @@ const RESULT_ITEMS: TestResultItemRecord[] = [
   // CASE_D has no result row at all — the Unable-to-Evaluate path.
 ];
 
+/**
+ * B0-809 — the grader's per-concept verdicts, persisted on each score. Completeness is computed
+ * from `expected` coverage (B0-813): A 2/2 → 100, B 1/2 → 50, C 0/2 → 0. Mandatory ⊆ expected.
+ */
+const CONCEPTS_A: CaseConcepts = {
+  mandatory: { required: ['States the 1:64 ratio.'], satisfied: ['States the 1:64 ratio.'], missing: [] },
+  expected: {
+    required: ['States the 1:64 ratio.', REGULATED.metric],
+    satisfied: ['States the 1:64 ratio.', REGULATED.metric],
+    missing: [],
+  },
+  materialIssue: false,
+  materialIssueNote: null,
+};
+const CONCEPTS_B: CaseConcepts = {
+  mandatory: { required: ['Dwell time is 10 minutes.'], satisfied: ['Dwell time is 10 minutes.'], missing: [] },
+  expected: {
+    required: ['Dwell time is 10 minutes.', 'The 600 ppm qualifier.'],
+    satisfied: ['Dwell time is 10 minutes.'],
+    missing: ['The 600 ppm qualifier.'],
+  },
+  materialIssue: false,
+  materialIssueNote: null,
+};
+const CONCEPTS_C: CaseConcepts = {
+  mandatory: {
+    required: ['Names the active ingredient family.'],
+    satisfied: [],
+    missing: ['Names the active ingredient family.'],
+  },
+  expected: {
+    required: ['Names the active ingredient family.', 'States the 5.25% concentration.'],
+    satisfied: [],
+    missing: ['Names the active ingredient family.', 'States the 5.25% concentration.'],
+  },
+  materialIssue: true,
+  materialIssueNote: 'Called the active a phenolic; the label lists a quaternary ammonium at 5.25%.',
+};
+
 const CASE_SCORES: Record<string, CaseScore> = {
+  // 0.4·92 + 0.3·100 + 0.2·95 + 0.1·90 = 94.8 → 95, A, Pass.
   [CASE_A]: score({
     accuracy: 92,
-    completeness: 88,
     relevance: 95,
     clarity: 90,
     explanation: 'Quoted the ratio exactly as printed on the label.',
     missed: 'Did not restate the metric equivalent.',
     incorrect: 'Nothing incorrect.',
     improvement: 'Cite the label section number.',
+    concepts: CONCEPTS_A,
   }),
+  // 0.4·55 + 0.3·50 + 0.2·70 + 0.1·80 = 59, F, Fail.
   [CASE_B]: score({
     accuracy: 55,
-    completeness: 60,
     relevance: 70,
     clarity: 80,
     explanation: 'Gave the dwell time but omitted the concentration it applies at.',
     missed: 'The 600 ppm qualifier.',
     incorrect: 'Implied the time applies at any dilution.',
     improvement: 'Always pair contact time with concentration.',
+    concepts: CONCEPTS_B,
   }),
+  // 0.4·30 + 0.3·0 + 0.2·50 + 0.1·60 = 28, F, Fail — a must-have miss and a material issue, reported.
   [CASE_C]: score({
     accuracy: 30,
-    completeness: 40,
     relevance: 50,
     clarity: 60,
     explanation: 'Named the wrong active ingredient family.',
     missed: 'The 5.25% concentration.',
     incorrect: 'Called it a phenolic.',
     improvement: 'Read actives off the label, not the SDS summary.',
+    concepts: CONCEPTS_C,
   }),
   [CASE_D]: score({
     unableToEvaluate: true,
@@ -350,11 +393,20 @@ describe('assembleReportData → report data contract', () => {
       `| ${m.overall.avg} / 100 | ${m.overall.grade} | ${m.overall.passPct}% (${m.overall.pass} of ${m.evaluated}) | ${m.evaluated} (+${m.uteCount} N/A) |`,
     );
 
+    // --- Pass mark (B0-812) ---
+    check('metrics.passMark', `_Pass mark ${m.passMark}: Pass at ${m.passMark} or above, Fail below.`);
+    check(
+      'metrics.strictPassMark / passOnlyUnderCurrentMark',
+      m.passOnlyUnderCurrentMark.length > 0
+        ? `would Fail at ${m.strictPassMark}: ${m.passOnlyUnderCurrentMark.map((id) => `[${id}](#${caseAnchorId(id)})`).join(', ')}`
+        : `every Pass would still Pass at ${m.strictPassMark}`,
+    );
+
     // --- Tier + category tables (whole row, so every RateBlock field is covered) ---
     for (const { name, block } of [...m.tiers, ...m.categories]) {
       check(
         `rate row: ${name}`,
-        `| ${name} | ${block.n} | ${block.avg} | ${block.grade} | ${block.passPct}% | ${block.partialPct}% | ${block.failPct}% |`,
+        `| ${name} | ${block.n} | ${block.avg} | ${block.grade} | ${block.passPct}% | ${block.failPct}% |`,
       );
     }
     check(
@@ -445,7 +497,27 @@ describe('assembleReportData → report data contract', () => {
         `case[${c.id}].evaluated (sub-score row)`,
         `| ${e.accuracy} | ${e.completeness} | ${e.relevance} | ${e.clarity} | ${e.overall}/100 | ${e.grade} | ${e.status} |`,
       );
-      check(`case[${c.id}] glance row`, `| ${c.tier} | ${e.overall} | ${e.grade} | ${e.status} |`);
+      check(
+        `case[${c.id}] glance row`,
+        `| ${c.tier} | ${e.overall} | ${e.grade} | ${e.status}${e.mandatoryMissing ? '†' : ''} |`,
+      );
+      // B0-813 — Completeness is the coverage, and the report says so on every case.
+      check(
+        `case[${c.id}].evaluated.coverage`,
+        `**Completeness:** ${e.completeness} — ${e.coverage.satisfied} of ${e.coverage.required} expected concept${e.coverage.required === 1 ? '' : 's'} communicated.`,
+      );
+      if (e.mandatoryMissing) {
+        check(
+          `case[${c.id}].concepts.mandatory.missing`,
+          `**Missing mandatory concepts (reported — not enforced):** ${e.concepts.mandatory.missing.map((p) => `"${p}"`).join(', ')}`,
+        );
+      }
+      if (e.materialIssue) {
+        check(
+          `case[${c.id}].concepts.materialIssueNote`,
+          `**Material factual issue (reported — not scored):** ${e.concepts.materialIssueNote}`,
+        );
+      }
       const speed = c.speed!;
       check(
         `case[${c.id}].speed`,
@@ -488,11 +560,7 @@ describe('assembleReportData → report data contract', () => {
     check('metrics.overall.grade (aggregate)', `- Overall letter grade: ${m.overall.grade}`);
     check(
       'metrics.overall.pass',
-      `- Pass: ${m.overall.pass} of ${m.evaluated} (${m.overall.passPct}%)`,
-    );
-    check(
-      'metrics.overall.partial',
-      `- Partial Pass: ${m.overall.partial} of ${m.evaluated} (${m.overall.partialPct}%)`,
+      `- Pass: ${m.overall.pass} of ${m.evaluated} (${m.overall.passPct}%) at pass mark ${m.passMark}`,
     );
     check(
       'metrics.overall.fail',
@@ -560,7 +628,7 @@ describe('assembleReportData → report data contract', () => {
     expect(m.evaluated).toBe(3);
     expect(m.ute.map((u) => u.id)).toEqual([CASE_D]);
     expect(m.overall.n).toBe(3);
-    expect(m.overall.pass + m.overall.partial + m.overall.fail).toBe(3);
+    expect(m.overall.pass + m.overall.fail).toBe(3);
     // The UTE case's tier is "Unspecified" and must not appear as a tier group at all.
     expect(m.tiers.map((t) => t.name)).toEqual(['Tier 1', 'Tier 2']);
     expect(m.tiers.reduce((sum, t) => sum + t.block.n, 0)).toBe(m.evaluated);
@@ -591,9 +659,10 @@ describe('assembleReportData → report data contract', () => {
     expect(c.idealResponse).toBe(REGULATED.concentration);
     expect(c.actual).toContain('5.25%');
 
-    // Sub-scores and latency at source precision.
+    // Sub-scores and latency at source precision; Completeness computed from 2/2 coverage.
     expect(a.score.accuracy).toBe(92);
-    expect(a.evaluated!.overall).toBe(91);
+    expect(a.evaluated!.completeness).toBe(100);
+    expect(a.evaluated!.overall).toBe(95);
     expect(a.latencyMs).toBe(3200);
     expect(a.latencySeconds).toBe(3.2);
     // B0-715 — ms → s exactly once, at the assembly boundary.
@@ -671,41 +740,15 @@ describe('assembleReportData → report data contract', () => {
 });
 
 /**
- * B0-711 — the concept block is threaded in from the criteria grading the *run* persisted
- * (`test_result_items.response_payload.criteriaGrading`), not from a second grader call. These
- * cases use their own fixture so the contract walk above keeps exercising the concept-free path
- * that every legacy run takes.
+ * B0-809 / B0-813 — the concept block is the grader's, persisted on the case's score; nothing is
+ * read from the harness's `criteriaGrading` any more. A case whose grader saw no concept columns
+ * has no block and is Unable to Evaluate. These cases use their own fixture so the contract walk
+ * above stays focused on the wire shape.
  */
-describe('assembleReportCases → per-concept verdicts (B0-711)', () => {
+describe('assembleReportCases → per-concept verdicts (B0-809)', () => {
   const CASE_CRITERIA = '55555555-eeee-4eee-8eee-eeeeeeeeeeee';
   const CASE_NO_CRITERIA = '66666666-ffff-4fff-8fff-ffffffffffff';
   const CASE_EXACT_MISS = '77777777-9999-4999-8999-999999999999';
-
-  /** `criteriaGrading` exactly as `~/lib/tests/runner.ts` writes it onto the payload. */
-  function grading(
-    verdicts: Array<{
-      concept: string;
-      tier: 1 | 2 | 3;
-      match: 'semantic' | 'exact';
-      met: boolean;
-    }>,
-  ) {
-    return {
-      criteriaGrading: {
-        passed: verdicts.every((v) => v.tier !== 1 || v.met),
-        score: 0.5,
-        failureReason: null,
-        verdicts: verdicts.map((v, index) => ({
-          criterionIndex: index,
-          met: v.met,
-          evidence: v.met ? 'quoted' : '',
-          concept: v.concept,
-          tier: v.tier,
-          match: v.match,
-        })),
-      },
-    };
-  }
 
   const CONCEPT_ITEMS: TestItemRecord[] = [
     item({
@@ -714,9 +757,8 @@ describe('assembleReportCases → per-concept verdicts (B0-711)', () => {
       prompt: 'What is the dilution ratio and dwell time?',
       prompt_category: 'Dilution',
       priority: 1,
-      // Free text is present too — the block must still come from the verdicts, not from here.
-      minimum_concepts: 'States the 1:64 ratio | States the 10 minute dwell',
-      expected_concepts: 'States the 1:64 ratio | States the 10 minute dwell | Metric equivalent',
+      minimum_concepts: `Dilute 1:64 (2 oz/gal) | ${REGULATED.contactTime}`,
+      expected_concepts: `Dilute 1:64 (2 oz/gal) | ${REGULATED.contactTime} | ${REGULATED.metric}`,
     }),
     item({
       id: CASE_NO_CRITERIA,
@@ -724,7 +766,6 @@ describe('assembleReportCases → per-concept verdicts (B0-711)', () => {
       prompt: 'Is this product registered in Canada?',
       prompt_category: 'Registration',
       priority: 1,
-      minimum_concepts: 'Names the DIN',
     }),
     item({
       id: CASE_EXACT_MISS,
@@ -732,38 +773,57 @@ describe('assembleReportCases → per-concept verdicts (B0-711)', () => {
       prompt: 'Quote the EPA registration number.',
       prompt_category: 'Registration',
       priority: 2,
+      minimum_concepts: 'Names the product',
+      expected_concepts: `Names the product | ${REGULATED.epa}`,
     }),
   ];
 
   const CONCEPT_RESULT_ITEMS: TestResultItemRecord[] = [
-    resultItem({
-      test_item_id: CASE_CRITERIA,
-      response_text: REGULATED.dilution,
-      response_payload: grading([
-        { concept: 'Dilute 1:64 (2 oz/gal)', tier: 1, match: 'semantic', met: true },
-        { concept: REGULATED.contactTime, tier: 1, match: 'semantic', met: false },
-        { concept: REGULATED.metric, tier: 3, match: 'semantic', met: true },
-      ]),
-    }),
-    resultItem({
-      test_item_id: CASE_NO_CRITERIA,
-      response_text: 'Registered in Canada.',
-      response_payload: { sources: [] },
-    }),
-    resultItem({
-      test_item_id: CASE_EXACT_MISS,
-      response_text: REGULATED.epa,
-      response_payload: grading([
-        { concept: 'Names the product', tier: 1, match: 'semantic', met: true },
-        { concept: REGULATED.epa, tier: 2, match: 'exact', met: false },
-      ]),
-    }),
+    resultItem({ test_item_id: CASE_CRITERIA, response_text: REGULATED.dilution }),
+    resultItem({ test_item_id: CASE_NO_CRITERIA, response_text: 'Registered in Canada.' }),
+    resultItem({ test_item_id: CASE_EXACT_MISS, response_text: 'EPA Reg. No. 6836-140-4171' }),
   ];
 
+  /** Even judged sub-scores; Completeness comes from the coverage the grader recorded. */
   const CONCEPT_SCORES: Record<string, CaseScore> = {
-    [CASE_CRITERIA]: score({ accuracy: 84, completeness: 84, relevance: 84, clarity: 84 }),
-    [CASE_NO_CRITERIA]: score({ accuracy: 84, completeness: 84, relevance: 84, clarity: 84 }),
-    [CASE_EXACT_MISS]: score({ accuracy: 74, completeness: 74, relevance: 74, clarity: 74 }),
+    // 2 of 3 expected → 67: 0.4·84 + 0.3·67 + 0.2·84 + 0.1·84 = 78.9 → 79, C, Pass; must-have missed.
+    [CASE_CRITERIA]: score({
+      accuracy: 84,
+      relevance: 84,
+      clarity: 84,
+      concepts: {
+        mandatory: {
+          required: ['Dilute 1:64 (2 oz/gal)', REGULATED.contactTime],
+          satisfied: ['Dilute 1:64 (2 oz/gal)'],
+          missing: [REGULATED.contactTime],
+        },
+        expected: {
+          required: ['Dilute 1:64 (2 oz/gal)', REGULATED.contactTime, REGULATED.metric],
+          satisfied: ['Dilute 1:64 (2 oz/gal)', REGULATED.metric],
+          missing: [REGULATED.contactTime],
+        },
+        materialIssue: false,
+        materialIssueNote: null,
+      },
+    }),
+    // The grader saw no concept columns → no block → Unable to Evaluate, whatever it judged.
+    [CASE_NO_CRITERIA]: score({ accuracy: 84, relevance: 84, clarity: 84 }),
+    // 1 of 2 expected → 50: 0.4·74 + 0.3·50 + 0.2·74 + 0.1·74 = 66.8 → 67, D, Pass; material issue.
+    [CASE_EXACT_MISS]: score({
+      accuracy: 74,
+      relevance: 74,
+      clarity: 74,
+      concepts: {
+        mandatory: { required: ['Names the product'], satisfied: ['Names the product'], missing: [] },
+        expected: {
+          required: ['Names the product', REGULATED.epa],
+          satisfied: ['Names the product'],
+          missing: [REGULATED.epa],
+        },
+        materialIssue: true,
+        materialIssueNote: `Quoted EPA Reg. No. 6836-140-4171; the label reads "${REGULATED.epa}".`,
+      },
+    }),
   };
 
   function buildConceptFixture() {
@@ -776,12 +836,11 @@ describe('assembleReportCases → per-concept verdicts (B0-711)', () => {
     });
   }
 
-  it('populates the concept block from the persisted criteria verdicts', () => {
+  it('reads the concept block off the persisted score and computes Completeness from its coverage', () => {
     const assembled = buildConceptFixture();
     const c = assembled.cases.find((entry) => entry.id === CASE_CRITERIA)!;
 
     expect(c.concepts).not.toBeNull();
-    // mandatory = tier 1 only; expected = the full criteria set.
     expect(c.concepts!.mandatory.required).toEqual([
       'Dilute 1:64 (2 oz/gal)',
       REGULATED.contactTime,
@@ -793,45 +852,49 @@ describe('assembleReportCases → per-concept verdicts (B0-711)', () => {
       REGULATED.contactTime,
       REGULATED.metric,
     ]);
-    expect(c.concepts!.materialIssue).toBe(false);
-    expect(c.concepts!.materialIssueNote).toBeNull();
 
     // The block is the same object the metrics rated the case with.
     expect(c.evaluated!.concepts).toEqual(c.concepts);
-    expect(c.evaluated!.ratingConstrained).toBe(true);
-    expect(c.evaluated!.grade).toBe('B');
-    expect(c.evaluated!.status).toBe('Partial Pass');
+    expect(c.evaluated!.completeness).toBe(67);
+    expect(c.evaluated!.coverage).toEqual({ satisfied: 2, required: 3 });
+    expect(c.evaluated!.overall).toBe(79);
+    expect(c.evaluated!.grade).toBe('C');
+    // The must-have miss is reported; it did not change the Result.
+    expect(c.evaluated!.status).toBe('Pass');
+    expect(c.evaluated!.mandatoryMissing).toBe(true);
   });
 
-  it('gives a case with no persisted criteria no concept block at all', () => {
+  it('marks a case whose grader saw no concept columns Unable to Evaluate, never scoring it', () => {
     const assembled = buildConceptFixture();
     const c = assembled.cases.find((entry) => entry.id === CASE_NO_CRITERIA)!;
 
-    // Free text in `minimum_concepts` alone is not a usable block — a blank cell is not a failure.
     expect(c.concepts).toBeNull();
-    expect(c.evaluated!.concepts).toBeNull();
-    expect(c.evaluated!.status).toBe('Pass');
-    expect(c.evaluated!.statusSource).toBe('rubric');
-    expect(c.evaluated!.ratingConstrained).toBe(false);
+    expect(c.unableToEvaluate).toBe(true);
+    expect(c.evaluated).toBeNull();
+    // The rendered record says what the metrics decided, with the reason — even though the stored
+    // score itself was not marked UTE by the grader.
+    expect(c.score.unableToEvaluate).toBe(true);
+    expect(c.score.uteReason).toBe(NO_EXPECTED_CONCEPTS_UTE_REASON);
+    expect(assembled.metrics.ute.map((u) => u.id)).toEqual([CASE_NO_CRITERIA]);
   });
 
-  it('flags a failed exact-match check as a material issue and names the concept verbatim', () => {
+  it('reports a material issue verbatim without touching the score', () => {
     const assembled = buildConceptFixture();
     const c = assembled.cases.find((entry) => entry.id === CASE_EXACT_MISS)!;
 
     expect(c.concepts!.materialIssue).toBe(true);
     expect(c.concepts!.materialIssueNote).toContain(REGULATED.epa);
-    // The failed exact criterion is itself part of the expected set, so coverage is not full and
-    // the automatic Pass never had a chance to fire (the withholding branch stays a guard — see
-    // `applyConceptRules`). The case keeps its rubric Result.
-    expect(c.evaluated!.autoPassTriggered).toBe(false);
-    expect(c.evaluated!.statusSource).toBe('rubric');
-    expect(c.evaluated!.status).toBe('Partial Pass');
     expect(c.concepts!.expected.missing).toEqual([REGULATED.epa]);
+    expect(c.evaluated!.materialIssue).toBe(true);
+    expect(c.evaluated!.completeness).toBe(50);
+    expect(c.evaluated!.overall).toBe(67);
+    expect(c.evaluated!.status).toBe('Pass');
+    expect(c.evaluated!.passesOnlyUnderCurrentMark).toBe(true);
   });
 
-  it('rolls the run up with the concept-free case excluded from the denominators', () => {
-    const rollup = buildConceptFixture().metrics.concepts!;
+  it('rolls the run up over the evaluated cases only', () => {
+    const { metrics } = buildConceptFixture();
+    const rollup = metrics.concepts!;
 
     expect(rollup.casesWithConcepts).toBe(2);
     expect(rollup.mandatory.casesSpecifying).toBe(2);
@@ -839,11 +902,11 @@ describe('assembleReportCases → per-concept verdicts (B0-711)', () => {
     expect(rollup.missingMandatory).toEqual([
       { id: CASE_CRITERIA, question: CONCEPT_ITEMS[0].prompt, missing: [REGULATED.contactTime] },
     ]);
-    expect(rollup.gateBlockedPasses).toBe(1);
-    expect(rollup.autoPassBlocked).toEqual([]);
+    expect(rollup.materialIssues.map((entry) => entry.id)).toEqual([CASE_EXACT_MISS]);
+    expect(metrics.passOnlyUnderCurrentMark).toEqual([CASE_EXACT_MISS]);
   });
 
-  it('renders the concept lines and the glance markers into the Markdown', () => {
+  it('renders the concept lines and the glance marker into the Markdown', () => {
     const assembled = buildConceptFixture();
     const markdown = renderReportMarkdown({
       test: assembled.test,
@@ -856,22 +919,46 @@ describe('assembleReportCases → per-concept verdicts (B0-711)', () => {
 
     expect(markdown).toContain('## Concept coverage');
     expect(markdown).toContain('**Concept coverage:** Mandatory 1/2 · Expected 2/3');
-    expect(markdown).toContain(`**Missing mandatory concepts:** "${REGULATED.contactTime}"`);
-    expect(markdown).toContain('**Rating constrained:**');
-    // † on the gated row, and a legend for it.
-    expect(markdown).toContain('| Partial Pass† |');
-    expect(markdown).toContain('† Rating constrained by a missing mandatory concept.');
+    expect(markdown).toContain('**Completeness:** 67 — 2 of 3 expected concepts communicated.');
+    expect(markdown).toContain(
+      `**Missing mandatory concepts (reported — not enforced):** "${REGULATED.contactTime}"`,
+    );
+    expect(markdown).toContain('**Material factual issue (reported — not scored):**');
+    // † on the row with the must-have miss — still a Pass — and a legend for it.
+    expect(markdown).toContain('| Pass† |');
+    expect(markdown).toContain('† Missing a must-have (mandatory) concept');
+    // Nothing from the retired rule set.
+    expect(markdown).not.toContain('Rating constrained');
+    expect(markdown).not.toContain('Automatic Pass');
+    expect(markdown).not.toContain('‡');
     // Concept phrases verbatim.
     expect(markdown).toContain(REGULATED.epa);
   });
 
-  it('leaves a run with no concept data free of every concept section', () => {
-    const { markdown } = buildFixture();
+  it('makes a run whose scores carry no concept data entirely Unable to Evaluate', () => {
+    const assembled = assembleReportCases({
+      test: TEST_RECORD,
+      run: RUN_RECORD,
+      items: ITEMS,
+      resultItems: RESULT_ITEMS,
+      caseScores: Object.fromEntries(
+        Object.entries(CASE_SCORES).map(([id, s]) => [id, { ...s, concepts: null }]),
+      ),
+    });
+    const markdown = renderReportMarkdown({
+      test: assembled.test,
+      run: assembled.run,
+      metrics: assembled.metrics,
+      cases: assembled.cases,
+      synthesis: SYNTHESIS,
+      generatedAt: RUN_RECORD.report_generated_at!,
+    });
+
+    expect(assembled.metrics.evaluated).toBe(0);
+    expect(assembled.metrics.uteCount).toBe(4);
+    expect(assembled.metrics.concepts).toBeNull();
     expect(markdown).not.toContain('## Concept coverage');
-    expect(markdown).not.toContain('**Concept coverage:**');
-    expect(markdown).not.toContain('Rating constrained');
     expect(markdown).not.toContain('†');
-    expect(markdown).not.toContain('‡');
   });
 });
 
@@ -883,24 +970,24 @@ describe('assembleReportCases → multi-pass consolidation and consistency (B0-7
    */
   const CASE_PASS_SCORES: Record<string, CaseScore[]> = {
     [CASE_A]: [
-      score({ accuracy: 92, completeness: 88, relevance: 95, clarity: 90, explanation: 'p1' }),
-      score({ accuracy: 70, completeness: 74, relevance: 80, clarity: 78, explanation: 'p2' }),
-      score({ accuracy: 88, completeness: 84, relevance: 90, clarity: 86, explanation: 'p3' }),
+      score({ accuracy: 92, relevance: 95, clarity: 90, explanation: 'p1', concepts: CONCEPTS_A }),
+      score({ accuracy: 70, relevance: 80, clarity: 78, explanation: 'p2', concepts: CONCEPTS_A }),
+      score({ accuracy: 88, relevance: 90, clarity: 86, explanation: 'p3', concepts: CONCEPTS_A }),
     ],
     [CASE_B]: [
-      score({ accuracy: 55, completeness: 60, relevance: 70, clarity: 80, explanation: 'p1' }),
-      score({ accuracy: 55, completeness: 60, relevance: 70, clarity: 80, explanation: 'p2' }),
-      score({ accuracy: 35, completeness: 40, relevance: 50, clarity: 60, explanation: 'p3' }),
+      score({ accuracy: 55, relevance: 70, clarity: 80, explanation: 'p1', concepts: CONCEPTS_B }),
+      score({ accuracy: 55, relevance: 70, clarity: 80, explanation: 'p2', concepts: CONCEPTS_B }),
+      score({ accuracy: 35, relevance: 50, clarity: 60, explanation: 'p3', concepts: CONCEPTS_B }),
     ],
     [CASE_C]: [
-      score({ accuracy: 30, completeness: 40, relevance: 50, clarity: 60, explanation: 'p1' }),
-      score({ accuracy: 30, completeness: 40, relevance: 50, clarity: 60, explanation: 'p2' }),
-      score({ accuracy: 30, completeness: 40, relevance: 50, clarity: 60, explanation: 'p3' }),
+      score({ accuracy: 30, relevance: 50, clarity: 60, explanation: 'p1', concepts: CONCEPTS_C }),
+      score({ accuracy: 30, relevance: 50, clarity: 60, explanation: 'p2', concepts: CONCEPTS_C }),
+      score({ accuracy: 30, relevance: 50, clarity: 60, explanation: 'p3', concepts: CONCEPTS_C }),
     ],
     [CASE_D]: [
       score({ unableToEvaluate: true, uteReason: 'No result recorded for this item in this run.' }),
       score({ unableToEvaluate: true, uteReason: 'No result recorded for this item in this run.' }),
-      score({ accuracy: 40, completeness: 40, relevance: 40, clarity: 40 }),
+      score({ accuracy: 40, relevance: 40, clarity: 40, concepts: CONCEPTS_A }),
     ],
   };
 
@@ -942,12 +1029,13 @@ describe('assembleReportCases → multi-pass consolidation and consistency (B0-7
     const { metrics } = buildMultiPassFixture();
     const caseA = metrics.perCase.find((c) => c.id === CASE_A)!;
 
-    // Medians of 92/70/88, 88/74/84, 95/80/90, 90/78/86 — not the median of the three totals.
+    // Medians of 92/70/88, 95/80/90, 90/78/86 — not the median of the three totals — and
+    // Completeness from the majority coverage verdict (2 of 2), never a judged number.
     expect(caseA.accuracy).toBe(88);
-    expect(caseA.completeness).toBe(84);
+    expect(caseA.completeness).toBe(100);
     expect(caseA.relevance).toBe(90);
     expect(caseA.clarity).toBe(86);
-    expect(caseA.overall).toBe(Math.round(0.4 * 88 + 0.3 * 84 + 0.2 * 90 + 0.1 * 86));
+    expect(caseA.overall).toBe(Math.round(0.4 * 88 + 0.3 * 100 + 0.2 * 90 + 0.1 * 86));
   });
 
   it('renders the consistency section, the queue and the ⚑ marker into the Markdown', () => {
@@ -970,7 +1058,7 @@ describe('assembleReportCases → multi-pass consolidation and consistency (B0-7
       '⚑ Flagged for human review — the independent grading passes disagreed.',
     );
     // The causes are named with the same words the React report uses.
-    expect(markdown).toContain('Passes disagreed on Pass / Partial Pass / Fail');
+    expect(markdown).toContain('Passes disagreed on Pass / Fail');
     expect(markdown).toContain('Passes disagreed on whether the case could be evaluated');
     // Every flagged case is linked back to its ledger entry.
     for (const entry of assembled.metrics.consistency!.queue) {
@@ -1005,21 +1093,52 @@ describe('assembleReportCases → multi-pass consolidation and consistency (B0-7
   });
 });
 
-describe('splitConceptPhrases (B0-711 fallback splitter)', () => {
-  it('splits on pipes, newlines, bullets, numbered markers and semicolons', () => {
-    expect(splitConceptPhrases('a | b\nc; d')).toEqual(['a', 'b', 'c', 'd']);
-    expect(splitConceptPhrases('- first\n- second')).toEqual(['first', 'second']);
-    expect(splitConceptPhrases('1. first 2. second')).toEqual(['first', 'second']);
+/** B0-809 — a line-for-line port of the reference skill's `split_concepts`, asserted against it. */
+describe('splitConcepts (B0-809)', () => {
+  it('splits on pipes within a line and on newlines', () => {
+    expect(splitConcepts('a | b\nc')).toEqual(['a', 'b', 'c']);
+    expect(splitConcepts('dwell time is non-negotiable | surface must stay visibly wet | reapply if drying')).toEqual([
+      'dwell time is non-negotiable',
+      'surface must stay visibly wet',
+      'reapply if drying',
+    ]);
+  });
+
+  it('splits on semicolons only when nothing else delimited the cell', () => {
+    expect(splitConcepts('a; b')).toEqual(['a', 'b']);
+    // A pipe already delimited this cell, so the semicolon stays inside its phrase.
+    expect(splitConcepts('a | b; c')).toEqual(['a', 'b; c']);
+    expect(splitConcepts('a | b\nc; d')).toEqual(['a', 'b', 'c; d']);
+  });
+
+  it('strips list markers at the start of each line, but does not split inline numbering', () => {
+    expect(splitConcepts('- first\n- second')).toEqual(['first', 'second']);
+    expect(splitConcepts('1. first\n2) second\n(3) third')).toEqual(['first', 'second', 'third']);
+    expect(splitConcepts('• first\no second')).toEqual(['first', 'second']);
+    // One line, no delimiter: the reference keeps it as one phrase after stripping the first marker.
+    expect(splitConcepts('1. first 2. second')).toEqual(['first 2. second']);
   });
 
   it('never splits on a comma — a concept phrase routinely contains one', () => {
-    expect(splitConceptPhrases('Dilute at 2 oz/gal, then dwell for 10 minutes')).toEqual([
+    expect(splitConcepts('Dilute at 2 oz/gal, then dwell for 10 minutes')).toEqual([
       'Dilute at 2 oz/gal, then dwell for 10 minutes',
     ]);
   });
 
-  it('returns nothing for a blank or absent column', () => {
-    expect(splitConceptPhrases(null)).toEqual([]);
-    expect(splitConceptPhrases('   ')).toEqual([]);
+  it('treats a blank cell or an empty-cell marker as no concepts, never a failure', () => {
+    expect(splitConcepts(null)).toEqual([]);
+    expect(splitConcepts(undefined)).toEqual([]);
+    expect(splitConcepts('   ')).toEqual([]);
+    for (const marker of ['n/a', 'N/A', 'na', 'none', 'None', '-', '—']) {
+      expect(splitConcepts(marker)).toEqual([]);
+    }
+  });
+
+  it('keeps regulated phrases byte-for-byte', () => {
+    expect(splitConcepts(`${REGULATED.dilution} | ${REGULATED.contactTime} | ${REGULATED.epa}`)).toEqual([
+      REGULATED.dilution,
+      REGULATED.contactTime,
+      REGULATED.epa,
+    ]);
   });
 });

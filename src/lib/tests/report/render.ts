@@ -5,6 +5,7 @@ import {
   caseMarkers,
   formatConceptCoverage,
   formatConceptList,
+  hasMandatoryMiss,
   REVIEW_MARKER_LEGEND,
 } from './case-concepts';
 import {
@@ -220,7 +221,7 @@ function consistencyQueueRow(entry: ConsistencyRollup['queue'][number]): string 
 }
 
 function rateRow(name: string, block: RateBlock): string {
-  return `| ${mdCell(name)} | ${block.n} | ${block.avg ?? '—'} | ${block.grade} | ${block.passPct}% | ${block.partialPct}% | ${block.failPct}% |`;
+  return `| ${mdCell(name)} | ${block.n} | ${block.avg ?? '—'} | ${block.grade} | ${block.passPct}% | ${block.failPct}% |`;
 }
 
 function bulletList(items: string[]): string {
@@ -297,20 +298,30 @@ export function renderReportMarkdown(params: {
     `| ${m.overall.avg ?? '—'} / 100 | ${m.overall.grade} | ${m.overall.passPct}% (${m.overall.pass} of ${m.evaluated}) | ${m.evaluated}${m.uteCount ? ` (+${m.uteCount} N/A)` : ''} |`,
   );
   blank();
+  // The line a pass rate means nothing without (methodology §2): the mark it was measured against,
+  // and the population that flips the day the mark moves.
+  push(
+    `_Pass mark ${m.passMark}: Pass at ${m.passMark} or above, Fail below.${
+      m.passOnlyUnderCurrentMark.length > 0
+        ? ` ${m.passOnlyUnderCurrentMark.length} case${m.passOnlyUnderCurrentMark.length === 1 ? ' passes' : 's pass'} only under this mark and would Fail at ${m.strictPassMark}: ${m.passOnlyUnderCurrentMark.map(idLink).join(', ')}.`
+        : ` No case passes only under this mark — every Pass would still Pass at ${m.strictPassMark}.`
+    }_`,
+  );
+  blank();
 
   // --- Tier performance ---
   push('## Performance by tier');
   blank();
-  push('| Tier | N | Avg | Grade | Pass | Partial | Fail |');
-  push('|---|---|---|---|---|---|---|');
+  push('| Tier | N | Avg | Grade | Pass | Fail |');
+  push('|---|---|---|---|---|---|');
   for (const [tier, block] of m.tiers) push(rateRow(tier, block));
   blank();
 
   // --- Category performance ---
   push('## Performance by category');
   blank();
-  push('| Category | N | Avg | Grade | Pass | Partial | Fail |');
-  push('|---|---|---|---|---|---|---|');
+  push('| Category | N | Avg | Grade | Pass | Fail |');
+  push('|---|---|---|---|---|---|');
   for (const [category, block] of m.categories) push(rateRow(category, block));
   blank();
   push(
@@ -407,16 +418,13 @@ export function renderReportMarkdown(params: {
   push('## Methodology & scoring');
   blank();
   push(
-    'Cases were matched to this run\'s own test items by ID, not row position. Each response was scored on a weighted 0–100 scale: Accuracy 40%, Completeness 30%, Relevance 20%, Clarity 10%. Grades: A 90–100, B 80–89, C 70–79, D 60–69, F below 60. Result: Pass ≥ 80, Partial Pass 60–79, Fail below 60. The golden dataset (ideal response, expected concepts/sources) is the source of truth; responses were judged on substantive correctness, not wording. Cases that could not be judged are marked "Unable to Evaluate" and excluded from every average, grade, count, and rate.',
+    `Cases were matched to this run's own test items by ID, not row position. Each response was scored on a weighted 0–100 scale: Accuracy 40%, Completeness 30%, Relevance 20%, Clarity 10%. Accuracy, Relevance and Clarity are the grader's judgments; **Completeness is computed** as the share of the case's expected concepts the response communicated (100 × satisfied ÷ required), from the grader's per-concept verdicts. The overall is that weighted sum and nothing else — never raised, never capped. Grades: A 90–100, B 80–89, C 70–79, D 60–69, F below 60. Result: Pass at ${m.passMark} or above, Fail below; nothing else changes a Result. The golden dataset (ideal response, expected and mandatory concepts, expected sources) is the source of truth; responses were judged on substantive correctness, not wording. Cases that could not be judged — including any without expected concepts, which have no data for Completeness — are marked "Unable to Evaluate" and excluded from every average, grade, count, and rate.`,
   );
   blank();
-  // Stated only when the run actually has concept data, so a legacy run's methodology is unchanged.
-  if (m.concepts) {
-    push(
-      'Where a case carries expected criteria, the Grade above stays pure arithmetic and only the Result can move: satisfying every expected concept raises a below-Pass Result to Pass, and missing a mandatory (must-have) concept caps the Result below Pass. The cap is applied last, so it always wins over the automatic Pass, and the automatic Pass is withheld entirely when a deterministic check on a regulated value failed.',
-    );
-    blank();
-  }
+  push(
+    'A missing mandatory (must-have) concept is reported on the case and lowers Completeness through coverage like any other expected concept; it does not by itself change the Result. A material factual issue the grader flagged on a regulated value is likewise reported on the case, not scored.',
+  );
+  blank();
 
   // --- Concept coverage (B0-713) ---
   // Omitted entirely — heading and all — when no case in the run carried concept data, so a
@@ -432,12 +440,9 @@ export function renderReportMarkdown(params: {
       `- Satisfied every expected concept: **${con.expected.casesSatisfyingAll} of ${con.expected.casesSpecifying}** (${con.expected.pct}%) — of the cases that specify one.`,
     );
     push(
-      `- Missing a mandatory concept: **${con.missingMandatory.length}**, of which **${con.gateBlockedPasses}** lost a Pass to the gate.`,
+      `- Missing a mandatory concept: **${con.missingMandatory.length}** — reported on each case; the miss lowered Completeness through coverage and did not by itself change any Result.`,
     );
-    push(`- Qualified for an automatic Pass: **${con.autoPassed.length}**.`);
-    push(
-      `- Automatic Pass withheld over a material factual issue: **${con.autoPassBlocked.length}**.`,
-    );
+    push(`- Material factual issue flagged by the grader: **${con.materialIssues.length}** — reported, not scored.`);
     blank();
 
     if (con.missingMandatory.length > 0) {
@@ -450,10 +455,10 @@ export function renderReportMarkdown(params: {
       blank();
     }
 
-    if (con.autoPassBlocked.length > 0) {
-      push('### Automatic Passes withheld');
+    if (con.materialIssues.length > 0) {
+      push('### Material factual issues');
       blank();
-      for (const entry of con.autoPassBlocked) {
+      for (const entry of con.materialIssues) {
         push(`- ${idLink(entry.id)} — ${entry.note ?? 'material factual issue recorded'}`);
       }
       blank();
@@ -524,36 +529,33 @@ export function renderReportMarkdown(params: {
   blank();
   push('| ID | Question | Tier | Score | Grade | Result |');
   push('|---|---|---|---|---|---|');
-  let anyRatingConstrained = false;
-  let anyAutoPass = false;
+  let anyMandatoryMissing = false;
   let anyReviewFlagged = false;
   for (const c of orderedCases) {
-    // B0-721 — the review mark rides alongside the concept marks rather than replacing them, and
-    // an Unable-to-Evaluate row can carry it too: passes that disagreed about whether a case could
-    // be judged at all is exactly the kind of grade a human has to settle.
+    // B0-721 — the review mark rides alongside the concept mark rather than replacing it, and an
+    // Unable-to-Evaluate row can carry it too: passes that disagreed about whether a case could be
+    // judged at all is exactly the kind of grade a human has to settle.
     const reviewFlagged = c.variance?.flagged ?? false;
     anyReviewFlagged ||= reviewFlagged;
     if (c.score.unableToEvaluate) {
       push(
-        `| ${idLink(c.id)} | ${mdCell(c.question)} | ${mdCell(c.tier)} | — | — | Unable to Evaluate${caseMarkers({ ratingConstrained: false, autoPassTriggered: false, reviewFlagged })} |`,
+        `| ${idLink(c.id)} | ${mdCell(c.question)} | ${mdCell(c.tier)} | — | — | Unable to Evaluate${caseMarkers({ mandatoryMissing: false, reviewFlagged })} |`,
       );
       continue;
     }
     const evaluated = byId.get(c.id) as EvaluatedCase | undefined;
     if (!evaluated) continue;
-    anyRatingConstrained ||= evaluated.ratingConstrained;
-    anyAutoPass ||= evaluated.autoPassTriggered;
+    anyMandatoryMissing ||= evaluated.mandatoryMissing;
     push(
-      `| ${idLink(c.id)} | ${mdCell(c.question)} | ${mdCell(c.tier)} | ${evaluated.overall} | ${evaluated.grade} | ${evaluated.status}${caseMarkers({ ...evaluated, reviewFlagged })} |`,
+      `| ${idLink(c.id)} | ${mdCell(c.question)} | ${mdCell(c.tier)} | ${evaluated.overall} | ${evaluated.grade} | ${evaluated.status}${caseMarkers({ mandatoryMissing: evaluated.mandatoryMissing, reviewFlagged })} |`,
     );
   }
   blank();
-  // Legend only for marks actually used — no orphan footnote on a run with no concept data.
-  if (anyRatingConstrained || anyAutoPass || anyReviewFlagged) {
+  // Legend only for marks actually used — no orphan footnote.
+  if (anyMandatoryMissing || anyReviewFlagged) {
     push(
       `_${[
-        anyRatingConstrained ? CONCEPT_MARKER_LEGEND.ratingConstrained : null,
-        anyAutoPass ? CONCEPT_MARKER_LEGEND.autoPass : null,
+        anyMandatoryMissing ? CONCEPT_MARKER_LEGEND.mandatoryMissing : null,
         anyReviewFlagged ? REVIEW_MARKER_LEGEND : null,
       ]
         .filter(Boolean)
@@ -608,39 +610,33 @@ export function renderReportMarkdown(params: {
       );
       blank();
 
-      // B0-713 — a few lines, only when this case has concept data: the coverage, what is missing
-      // by name, and one sentence for whichever rule moved (or was withheld from) the Result.
-      // Methodology §9 is explicit that this is as much as a reader needs here.
-      if (evaluated.concepts) {
-        const con = evaluated.concepts;
-        push(`**Concept coverage:** ${formatConceptCoverage(con)}`);
-        if (con.mandatory.missing.length > 0) {
-          push(`**Missing mandatory concepts:** ${formatConceptList(con.mandatory.missing)}`);
-        }
-        if (con.expected.missing.length > 0) {
-          push(`**Missing expected concepts:** ${formatConceptList(con.expected.missing)}`);
-        }
-        if (evaluated.ratingConstrained) {
-          push(
-            `**Rating constrained:** mandatory concept(s) missing — ${formatConceptList(con.mandatory.missing)}${
-              evaluated.gateBlockedAPass
-                ? ` (scored ${evaluated.overall}/100, so the gate removed a Pass)`
-                : ''
-            }`,
-          );
-        }
-        if (evaluated.autoPassTriggered) {
-          push(
-            `**Automatic Pass:** every expected concept satisfied, so the ${evaluated.rubricStatus} the rubric scored was raised to Pass.`,
-          );
-        }
-        if (evaluated.autoPassBlocked) {
-          push(
-            `**Automatic Pass blocked:** ${con.materialIssueNote ?? 'a material factual issue was recorded on this case.'}`,
-          );
-        }
-        blank();
+      // B0-813 — where the Completeness came from, the coverage readout, what is missing by name,
+      // and the reported (never scored) facts: a must-have miss, a material issue. Methodology §9
+      // is explicit that this is as much as a reader needs here.
+      const con = evaluated.concepts;
+      push(
+        `**Completeness:** ${evaluated.completeness} — ${evaluated.coverage.satisfied} of ${evaluated.coverage.required} expected concept${evaluated.coverage.required === 1 ? '' : 's'} communicated.`,
+      );
+      push(`**Concept coverage:** ${formatConceptCoverage(con)}`);
+      if (hasMandatoryMiss(con)) {
+        push(
+          `**Missing mandatory concepts (reported — not enforced):** ${formatConceptList(con.mandatory.missing)}`,
+        );
       }
+      if (con.expected.missing.length > 0) {
+        push(`**Missing expected concepts:** ${formatConceptList(con.expected.missing)}`);
+      }
+      if (con.materialIssue) {
+        push(
+          `**Material factual issue (reported — not scored):** ${con.materialIssueNote ?? 'a material factual issue was recorded on this case.'}`,
+        );
+      }
+      if (evaluated.passesOnlyUnderCurrentMark) {
+        push(
+          `**Pass mark:** passes at ${m.passMark}; would Fail at ${m.strictPassMark}.`,
+        );
+      }
+      blank();
     }
 
     // B0-721 — the spread that produced (or did not produce) this case's review flag. Detailed
@@ -686,9 +682,11 @@ export function renderReportMarkdown(params: {
   );
   push(`- Average score: ${m.overall.avg ?? '—'} / 100`);
   push(`- Overall letter grade: ${m.overall.grade}`);
-  push(`- Pass: ${m.overall.pass} of ${m.evaluated} (${m.overall.passPct}%)`);
-  push(`- Partial Pass: ${m.overall.partial} of ${m.evaluated} (${m.overall.partialPct}%)`);
+  push(`- Pass: ${m.overall.pass} of ${m.evaluated} (${m.overall.passPct}%) at pass mark ${m.passMark}`);
   push(`- Fail: ${m.overall.fail} of ${m.evaluated} (${m.overall.failPct}%)`);
+  push(
+    `- Pass only under the current mark (would Fail at ${m.strictPassMark}): ${m.passOnlyUnderCurrentMark.length > 0 ? m.passOnlyUnderCurrentMark.map(idLink).join(', ') : 'none'}`,
+  );
   push(`- Highest scoring: ${m.highest.map((h) => `${idLink(h.id)} (${h.overall})`).join(', ') || '—'}`);
   push(`- Lowest scoring: ${m.lowest.map((h) => `${idLink(h.id)} (${h.overall})`).join(', ') || '—'}`);
   blank();

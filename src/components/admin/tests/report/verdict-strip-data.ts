@@ -17,11 +17,10 @@ import { caseAnchorId } from '~/lib/tests/report/render';
  * EPA/DIN numbers, so it is never sliced, rounded or reformatted here. Truncation is CSS-only.
  */
 
-/** Fails before partial passes; a `Pass` never appears in the exception list. */
+/** Ordering key for the exception list; a `Pass` never appears in it. */
 const STATUS_SEVERITY: Record<ReportCaseStatus, number> = {
   Fail: 0,
-  'Partial Pass': 1,
-  Pass: 2,
+  Pass: 1,
 };
 
 export type ReportExceptionRow = {
@@ -52,8 +51,8 @@ export function exceptionReason(score: ReportCase['score'] | undefined): string 
 }
 
 /**
- * Every non-passing evaluated case, worst first: fails before partial passes, lower score before
- * higher, and dataset order preserved within a tie.
+ * Every failing evaluated case, worst first: lower score before higher, and dataset order preserved
+ * within a tie.
  */
 export function buildExceptionRows(
   perCase: readonly ReportEvaluatedCase[],

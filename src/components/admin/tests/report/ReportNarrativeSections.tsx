@@ -13,12 +13,9 @@ import type {
   ReportMetricsData,
   ReportVarianceCause,
 } from '~/lib/tests/report/data-schemas';
-import {
-  GRADE_BANDS,
-  STATUS_BANDS,
-  WEIGHTS,
-} from '~/lib/tests/report/metrics';
+import { GRADE_BANDS, WEIGHTS } from '~/lib/tests/report/metrics';
 import type { ReportSynthesis } from '~/lib/tests/report/schemas';
+import { DEFAULT_PASS_MARK, STRICT_PASS_MARK } from '~/lib/tests/report/scoring-config';
 import { cn } from '~/lib/utils';
 
 /**
@@ -32,10 +29,11 @@ import { cn } from '~/lib/utils';
  *    numbers. Nothing is re-worded, summarized, sliced, clamped or ellipsized; `whitespace-pre-wrap`
  *    keeps the synthesizer's own line breaks. (The Markdown renderer caps the executive lists at
  *    three items; this UI deliberately does not.)
- * 2. **The stated scoring rule is the applied one.** The weighting, grade bands and result bands in
- *    the methodology are rendered from `WEIGHTS` / `GRADE_BANDS` / `STATUS_BANDS` — the same
- *    constants `computeReportMetrics`, `gradeFromScore` and `statusFromScore` use — so the
- *    methodology can never drift from the arithmetic it describes.
+ * 2. **The stated scoring rule is the applied one.** The weighting and grade bands in the
+ *    methodology are rendered from `WEIGHTS` / `GRADE_BANDS` — the same constants
+ *    `computeReportMetrics` and `gradeFromScore` use — and the pass mark is the one the report was
+ *    graded at (`metrics.passMark`), so the methodology can never drift from the arithmetic it
+ *    describes.
  *
  * The three blocks sit in three different places in the page layout, so they are exported
  * separately rather than as one section stack.
@@ -189,10 +187,9 @@ function ConceptCoverageRollup({ concepts }: { concepts: ReportConceptRollup }) 
     <div className="mt-8 rounded-2xl border border-slate-200 bg-slate-50 p-5">
       <h3 className="text-sm font-semibold text-slate-900">Concept coverage</h3>
       <p className="mt-1 text-xs text-slate-600">
-        Across the {concepts.casesWithConcepts}{' '}
-        {concepts.casesWithConcepts === 1 ? 'case that carries' : 'cases that carry'} expected
-        criteria. Percentages are out of the cases that specify concepts of that kind, not the
-        whole run.
+        Across the {concepts.casesWithConcepts} evaluated{' '}
+        {concepts.casesWithConcepts === 1 ? 'case' : 'cases'}. Percentages are out of the cases
+        that specify concepts of that kind, not the whole run.
       </p>
 
       <dl className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -221,19 +218,14 @@ function ConceptCoverageRollup({ concepts }: { concepts: ReportConceptRollup }) 
           <span className="font-medium text-rose-700 tabular-nums">
             {concepts.missingMandatory.length}
           </span>{' '}
-          missing a mandatory concept, of which{' '}
-          <span className="font-medium tabular-nums">{concepts.gateBlockedPasses}</span> lost a Pass
-          to the gate.
-        </li>
-        <li>
-          <span className="font-medium tabular-nums">{concepts.autoPassed.length}</span> qualified
-          for an automatic Pass on full expected coverage.
+          missing a mandatory concept — reported on each case; the miss lowered Completeness through
+          coverage and did not by itself change any Result.
         </li>
         <li>
           <span className="font-medium text-amber-700 tabular-nums">
-            {concepts.autoPassBlocked.length}
+            {concepts.materialIssues.length}
           </span>{' '}
-          had an automatic Pass withheld over a material factual issue.
+          flagged by the grader with a material factual issue — reported, not scored.
         </li>
       </ul>
 
@@ -256,11 +248,11 @@ function ConceptCoverageRollup({ concepts }: { concepts: ReportConceptRollup }) 
         </div>
       ) : null}
 
-      {concepts.autoPassBlocked.length > 0 ? (
+      {concepts.materialIssues.length > 0 ? (
         <div className="mt-5">
-          <SectionLabel>Automatic Passes withheld</SectionLabel>
+          <SectionLabel>Material factual issues</SectionLabel>
           <ul className="mt-2 space-y-2">
-            {concepts.autoPassBlocked.map((entry) => (
+            {concepts.materialIssues.map((entry) => (
               <li className="text-sm" key={entry.id}>
                 <a className="font-mono text-[0.6875rem] text-sky-700 hover:underline" href={`#case-${entry.id}`}>
                   {entry.id}
@@ -550,11 +542,10 @@ export function ReportAggregateFindings({
 export type ReportMethodologyProps = {
   /** Named in the exclusion sentence when the run has excluded cases. */
   uteCount?: number;
-  /**
-   * B0-713 — whether this run has any concept data. The concept rules are stated only when they
-   * actually applied, so a legacy run's methodology reads exactly as it did before.
-   */
-  hasConcepts?: boolean;
+  /** B0-812 — the pass mark this report's Results were derived from (`metrics.passMark`). */
+  passMark?: number;
+  /** The stricter line the report measures against (`metrics.strictPassMark`). */
+  strictPassMark?: number;
   /** Collapsed by default on screen; B0-592 forces it open for the PDF via `details[open]`. */
   defaultOpen?: boolean;
   className?: string;
@@ -566,7 +557,8 @@ export type ReportMethodologyProps = {
  */
 export function ReportMethodology({
   uteCount,
-  hasConcepts = false,
+  passMark = DEFAULT_PASS_MARK,
+  strictPassMark = STRICT_PASS_MARK,
   defaultOpen = false,
   className,
 }: ReportMethodologyProps) {
@@ -603,8 +595,10 @@ export function ReportMethodology({
             ))}
           </ul>
           <p className="text-xs text-slate-500">
-            Each response is judged on those four sub-scores; the weighted roll-up is the case&apos;s
-            score.
+            Accuracy, Relevance and Clarity are the grader&apos;s judgments. Completeness is
+            computed, never judged: the share of the case&apos;s expected concepts the response
+            communicated (100 × satisfied ÷ required), from the grader&apos;s per-concept verdicts.
+            The weighted roll-up is the case&apos;s score — never raised, never capped.
           </p>
         </div>
 
@@ -622,37 +616,40 @@ export function ReportMethodology({
           </div>
 
           <div className="space-y-2">
-            <SectionLabel>Result bands</SectionLabel>
+            <SectionLabel>Result</SectionLabel>
             <ul className="space-y-1">
-              {STATUS_BANDS.map((band, index) => (
-                <li key={band.status}>
-                  <span className="font-medium text-slate-900">{band.status}</span>{' '}
-                  {bandRangeLabel(STATUS_BANDS, index)}
-                </li>
-              ))}
+              <li>
+                <span className="font-medium text-slate-900">Pass</span> ≥ {passMark}
+              </li>
+              <li>
+                <span className="font-medium text-slate-900">Fail</span> below {passMark}
+              </li>
             </ul>
+            <p className="text-xs text-slate-500">
+              Nothing else changes a Result. Cases that pass only under this mark and would fail at{' '}
+              {strictPassMark} are listed in the scorecard.
+            </p>
           </div>
         </div>
 
         <p>
-          The golden dataset — ideal response, expected concepts and expected sources — is the
-          source of truth. Responses are judged on substantive correctness, not wording.
+          The golden dataset — ideal response, expected and mandatory concepts, expected sources —
+          is the source of truth. Responses are judged on substantive correctness, not wording.
         </p>
 
-        {hasConcepts ? (
-          <div className="space-y-2">
-            <SectionLabel>Concept rules</SectionLabel>
-            <p>
-              Where a case carries expected criteria, the grade above stays pure arithmetic and only
-              the Result can move: satisfying every expected concept raises a below-Pass Result to
-              Pass, and missing a mandatory (must-have) concept caps the Result below Pass.
-            </p>
-            <p className="text-xs text-slate-500">
-              The cap is applied last, so it always wins over the automatic Pass, and the automatic
-              Pass is withheld entirely when a deterministic check on a regulated value failed.
-            </p>
-          </div>
-        ) : null}
+        <div className="space-y-2">
+          <SectionLabel>Reported, not scored</SectionLabel>
+          <p>
+            A missing mandatory (must-have) concept is named on the case and lowers Completeness
+            through coverage like any other expected concept; it does not by itself change the
+            Result. A material factual issue the grader flagged on a regulated value is likewise
+            named on the case, not scored.
+          </p>
+          <p className="text-xs text-slate-500">
+            A case with no expected concepts has no data for Completeness and is Unable to Evaluate
+            — never a guessed number.
+          </p>
+        </div>
 
         <p>
           {UTE_EXCLUSION_RULE}

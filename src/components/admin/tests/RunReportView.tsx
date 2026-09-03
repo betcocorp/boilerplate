@@ -731,7 +731,8 @@ export function RunReportView({
 
           <div data-report-section>
             <ReportMethodology
-              hasConcepts={reportData.metrics.concepts != null}
+              passMark={reportData.metrics.passMark}
+              strictPassMark={reportData.metrics.strictPassMark}
               uteCount={reportData.metrics.uteCount}
             />
           </div>

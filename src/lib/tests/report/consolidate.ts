@@ -1,6 +1,12 @@
 import type { CaseConcepts, ConceptKindCoverage } from './case-concepts';
-import { statusFromScore, WEIGHTS, type CaseStatus } from './metrics';
+import {
+  completenessFromCoverage,
+  computeOverall,
+  statusFromScore,
+  type CaseStatus,
+} from './metrics';
 import type { CaseScore } from './schemas';
+import { DEFAULT_PASS_MARK } from './scoring-config';
 
 /**
  * B0-720 — N independent grading passes in, one reconcilable `CaseScore` out, plus the
@@ -9,11 +15,14 @@ import type { CaseScore } from './schemas';
  * Four rules the whole module hangs on:
  *
  * 1. **The median is taken per sub-score, never on the weighted total.** Downstream,
- *    `computeReportMetrics` recomputes `overall` from the four sub-scores and `WEIGHTS`, and
- *    B0-717's `grade_isolated_from_speed` invariant asserts that recomputation exactly. Median a
+ *    `computeReportMetrics` recomputes `overall` from the four sub-scores and `WEIGHTS`, and the
+ *    `overall_recomputes_from_sub_scores` invariant asserts that recomputation exactly. Median a
  *    weighted total and the four sub-scores no longer reproduce it — the report would refuse to
  *    generate, and rightly so. So the consolidated score is an ordinary `CaseScore` and every
  *    weighted number downstream is computed once, in the one place it was always computed.
+ *    B0-813: Completeness is not a judged sub-score any more — each pass's Completeness is its own
+ *    expected-concept coverage, and the consolidated one is the coverage of the majority verdict —
+ *    so the per-pass overalls in the variance block are computed from each pass's own coverage.
  * 2. **Ties resolve conservatively.** A 1–1 split on whether a concept was satisfied resolves to
  *    *not* satisfied; a 1–1 split on whether a material factual issue exists resolves to *yes, it
  *    exists*. Both readings are the one that withholds a Pass, which is the direction a regulated
@@ -109,7 +118,7 @@ export type VarianceCause = (typeof VARIANCE_CAUSES)[number];
 
 /** One phrase per cause, defined once so the Markdown and the React report cannot word it apart. */
 export const VARIANCE_CAUSE_LABELS: Readonly<Record<VarianceCause, string>> = {
-  band_split: 'Passes disagreed on Pass / Partial Pass / Fail',
+  band_split: 'Passes disagreed on Pass / Fail',
   score_range: 'Score range at or above the spread threshold',
   evaluability: 'Passes disagreed on whether the case could be evaluated',
   concept: 'Passes split on a concept judgment',
@@ -121,7 +130,6 @@ export type ConceptDisagreementKind =
   | 'expected_concept'
   | 'all_mandatory'
   | 'all_expected'
-  | 'auto_pass_eligible'
   | 'material_issue';
 
 export const CONCEPT_DISAGREEMENT_LABELS: Readonly<Record<ConceptDisagreementKind, string>> = {
@@ -129,13 +137,12 @@ export const CONCEPT_DISAGREEMENT_LABELS: Readonly<Record<ConceptDisagreementKin
   expected_concept: 'Expected concept',
   all_mandatory: 'Every mandatory concept satisfied',
   all_expected: 'Every expected concept satisfied',
-  auto_pass_eligible: 'Eligible for an automatic Pass',
   material_issue: 'Material factual issue on a regulated value',
 };
 
 /**
  * One split judgment. `concept` names the phrase **verbatim** for the two per-phrase kinds and is
- * null for the four whole-case judgments, which are about the case rather than any one phrase.
+ * null for the three whole-case judgments, which are about the case rather than any one phrase.
  */
 export type ConceptDisagreement = {
   kind: ConceptDisagreementKind;
@@ -151,9 +158,12 @@ export type ConceptDisagreement = {
  */
 export type CaseGradingVariance = {
   passes: number;
-  /** Each pass's weighted overall, in pass order. Null for a pass that could not evaluate. */
+  /**
+   * Each pass's own weighted overall — from that pass's judged sub-scores and its own coverage-
+   * derived Completeness — in pass order. Null for a pass that could not evaluate the case.
+   */
   passOveralls: Array<number | null>;
-  /** Each pass's rubric band (before any concept rule, which is identical across passes). */
+  /** Each pass's Result at the pass mark in force. */
   passBands: Array<CaseStatus | null>;
   /** max − min across the numeric overalls; null with fewer than two of them. */
   range: number | null;
@@ -198,18 +208,26 @@ function conservativeMedianCount(values: readonly number[]): number {
 }
 
 /**
- * A pass's own weighted overall, computed exactly as `computeReportMetrics` computes it (missing
- * sub-scores coerced to 0 the same way), so a per-pass number in the variance block is the number
- * that pass would have produced on its own. Null when the pass could not evaluate the case.
+ * A pass's own weighted overall, computed exactly as `computeReportMetrics` computes it — Completeness
+ * from that pass's own expected-concept coverage, missing judged sub-scores coerced to 0 the same
+ * way — so a per-pass number in the variance block is the number that pass would have produced on
+ * its own. Null when the pass could not evaluate the case, including when it has no expected
+ * concepts to compute Completeness from.
+ *
+ * A pass persisted before B0-813 carries a judged `completeness` and no concept block; its stored
+ * number is used so a legacy report's variance block still reads. A pass from the current grader
+ * carries a block and `completeness: null`, so coverage is the only source.
  */
-function passOverall(score: CaseScore): number | null {
+function passOverall(score: CaseScore, concepts: CaseConcepts | undefined): number | null {
   if (score.unableToEvaluate) return null;
-  return Math.round(
-    WEIGHTS.accuracy * (score.accuracy ?? 0) +
-      WEIGHTS.completeness * (score.completeness ?? 0) +
-      WEIGHTS.relevance * (score.relevance ?? 0) +
-      WEIGHTS.clarity * (score.clarity ?? 0),
-  );
+  const completeness = completenessFromCoverage(concepts) ?? score.completeness ?? null;
+  if (completeness == null) return null;
+  return computeOverall({
+    accuracy: score.accuracy ?? 0,
+    completeness,
+    relevance: score.relevance ?? 0,
+    clarity: score.clarity ?? 0,
+  });
 }
 
 type SubScoreKey = 'accuracy' | 'completeness' | 'relevance' | 'clarity';
@@ -329,8 +347,8 @@ function consolidateConcepts(passes: readonly ConsolidationPass[]): ConceptConso
 
   const disagreements = [...mandatory.disagreements, ...expected.disagreements];
 
-  // The four whole-case judgments, each recorded separately from the per-phrase splits above: a
-  // reader needs to know the passes disagreed about whether the case cleared the gate at all, not
+  // The three whole-case judgments, each recorded separately from the per-phrase splits above: a
+  // reader needs to know the passes disagreed about whether every must-have was delivered, not
   // only about which phrase moved.
   const allMandatory = voters.map((v) => v.mandatory.missing.length === 0);
   if (splits(allMandatory)) {
@@ -349,15 +367,6 @@ function consolidateConcepts(passes: readonly ConsolidationPass[]): ConceptConso
       kind: 'all_expected',
       concept: null,
       votesFor: allExpected.filter(Boolean).length,
-      voters: voters.length,
-    });
-  }
-  const autoPassEligible = allExpected.map((full, index) => full && !voters[index].materialIssue);
-  if (splits(autoPassEligible)) {
-    disagreements.push({
-      kind: 'auto_pass_eligible',
-      concept: null,
-      votesFor: autoPassEligible.filter(Boolean).length,
       voters: voters.length,
     });
   }
@@ -409,6 +418,8 @@ function timingDisagreements(passes: readonly ConsolidationPass[]): string[] {
 export type ConsolidateOptions = {
   /** Defaults to `DEFAULT_CONSISTENCY_SPREAD_THRESHOLD`. */
   spreadThreshold?: number;
+  /** B0-812 — the pass mark the per-pass bands are judged at. Defaults to `DEFAULT_PASS_MARK`. */
+  passMark?: number | null;
 };
 
 /**
@@ -450,6 +461,7 @@ export function consolidateCasePasses(
   }
 
   const spreadThreshold = options?.spreadThreshold ?? DEFAULT_CONSISTENCY_SPREAD_THRESHOLD;
+  const passMark = options?.passMark ?? DEFAULT_PASS_MARK;
   const scores = passes.map((pass) => pass.score);
   const conceptResult = consolidateConcepts(passes);
 
@@ -479,11 +491,17 @@ export function consolidateCasePasses(
       relevance: medianSubScore(evaluable, 'relevance'),
       clarity: medianSubScore(evaluable, 'clarity'),
     };
-    const consolidatedOverall = passOverall({ ...evaluable[0], ...subScores });
+    const consolidatedOverall = passOverall(
+      { ...evaluable[0], ...subScores },
+      conceptResult.concepts,
+    );
     let representative = evaluable[0];
     let bestDistance = Infinity;
     for (const candidate of evaluable) {
-      const distance = Math.abs((passOverall(candidate) ?? 0) - (consolidatedOverall ?? 0));
+      const candidateConcepts = passes.find((pass) => pass.score === candidate)?.concepts;
+      const distance = Math.abs(
+        (passOverall(candidate, candidateConcepts) ?? 0) - (consolidatedOverall ?? 0),
+      );
       if (distance < bestDistance) {
         bestDistance = distance;
         representative = candidate;
@@ -500,9 +518,9 @@ export function consolidateCasePasses(
     };
   }
 
-  const passOveralls = scores.map(passOverall);
+  const passOveralls = passes.map((pass) => passOverall(pass.score, pass.concepts));
   const passBands = passOveralls.map((overall) =>
-    overall == null ? null : statusFromScore(overall),
+    overall == null ? null : statusFromScore(overall, passMark),
   );
   const numeric = passOveralls.filter((value): value is number => value != null);
   const range = numeric.length > 1 ? Math.max(...numeric) - Math.min(...numeric) : null;

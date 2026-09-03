@@ -5,6 +5,17 @@ import { caseAnchorId } from '~/lib/tests/report/render';
 
 import { buildExceptionRows, exceptionReason } from './verdict-strip-data';
 
+const CONCEPTS = {
+  mandatory: { required: ['States the 1:64 ratio'], satisfied: ['States the 1:64 ratio'], missing: [] },
+  expected: {
+    required: ['States the 1:64 ratio', 'Names the 10-minute dwell'],
+    satisfied: ['States the 1:64 ratio', 'Names the 10-minute dwell'],
+    missing: [],
+  },
+  materialIssue: false,
+  materialIssueNote: null,
+};
+
 function evaluated(overrides: Partial<ReportEvaluatedCase>): ReportEvaluatedCase {
   return {
     id: 'id',
@@ -13,19 +24,17 @@ function evaluated(overrides: Partial<ReportEvaluatedCase>): ReportEvaluatedCase
     priorityRaw: 1,
     category: 'Dilution',
     accuracy: 0,
-    completeness: 0,
+    completeness: 100,
     relevance: 0,
     clarity: 0,
     overall: 0,
     grade: 'F',
-    rubricStatus: 'Fail',
     status: 'Fail',
-    statusSource: 'rubric',
-    ratingConstrained: false,
-    gateBlockedAPass: false,
-    autoPassTriggered: false,
-    autoPassBlocked: false,
-    concepts: null,
+    coverage: { satisfied: 2, required: 2 },
+    mandatoryMissing: false,
+    materialIssue: false,
+    passesOnlyUnderCurrentMark: false,
+    concepts: CONCEPTS,
     ...overrides,
   };
 }
@@ -44,14 +53,14 @@ function detail(overrides: Partial<ReportCase>): ReportCase {
     minimumConcepts: null,
     expectedSources: null,
     expectedShouldAnswer: null,
-    concepts: null,
+    concepts: CONCEPTS,
     actual: '(no response recorded)',
     responseRecorded: false,
     score: {
       unableToEvaluate: false,
       uteReason: null,
       accuracy: 0,
-      completeness: 0,
+      completeness: null,
       relevance: 0,
       clarity: 0,
       explanation: '',
@@ -66,6 +75,7 @@ function detail(overrides: Partial<ReportCase>): ReportCase {
     ttftSeconds: null,
     ttftMs: null,
     speed: null,
+    variance: null,
     harness: null,
     retrievedDocumentIds: [],
     workflowRunId: null,
@@ -97,22 +107,21 @@ describe('exceptionReason', () => {
 describe('buildExceptionRows', () => {
   const perCase = [
     evaluated({ id: 'p1', overall: 91, grade: 'A', status: 'Pass' }),
-    evaluated({ id: 'pp1', overall: 75, grade: 'C', status: 'Partial Pass' }),
+    evaluated({ id: 'p2', overall: 65, grade: 'D', status: 'Pass', passesOnlyUnderCurrentMark: true }),
     evaluated({ id: 'f1', overall: 41, grade: 'F', status: 'Fail' }),
-    evaluated({ id: 'pp2', overall: 61, grade: 'D', status: 'Partial Pass' }),
     evaluated({ id: 'f2', overall: 12, grade: 'F', status: 'Fail' }),
     evaluated({ id: 'f3', overall: 12, grade: 'F', status: 'Fail' }),
   ];
 
-  it('keeps exactly the fails and partial passes, worst first', () => {
+  it('keeps exactly the fails, worst first — a D that passes is not an exception', () => {
     const rows = buildExceptionRows(perCase, []);
-    // Fails ascending (ties in dataset order), then partial passes ascending.
-    expect(rows.map((row) => row.id)).toEqual(['f2', 'f3', 'f1', 'pp2', 'pp1']);
-    expect(rows.every((row) => row.status !== 'Pass')).toBe(true);
+    // Fails ascending, ties in dataset order.
+    expect(rows.map((row) => row.id)).toEqual(['f2', 'f3', 'f1']);
+    expect(rows.every((row) => row.status === 'Fail')).toBe(true);
   });
 
   it('is empty when every case passed', () => {
-    expect(buildExceptionRows([perCase[0]!], [])).toEqual([]);
+    expect(buildExceptionRows([perCase[0]!, perCase[1]!], [])).toEqual([]);
   });
 
   it('joins the ledger case on id for the anchor and the reason', () => {

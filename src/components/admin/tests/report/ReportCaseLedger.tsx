@@ -14,6 +14,7 @@ import {
   caseMarkers,
   formatConceptCoverage,
   formatConceptList,
+  hasMandatoryMiss,
   REVIEW_MARKER_LEGEND,
 } from '~/lib/tests/report/case-concepts';
 import {
@@ -92,9 +93,9 @@ export function ledgerFilterEquals(a: LedgerFilter, b: LedgerFilter): boolean {
 }
 
 /**
- * A graded case that did not pass. Deliberately the same population the verdict strip's
- * "cases needing attention" column uses (B0-587 `buildExceptionRows`): evaluated, non-`Pass`.
- * Unable-to-Evaluate cases are *not* exceptions — they have no grade to fail.
+ * A graded case that failed. Deliberately the same population the verdict strip's "cases needing
+ * attention" column uses (B0-587 `buildExceptionRows`): evaluated, non-`Pass`. Unable-to-Evaluate
+ * cases are *not* exceptions — they have no grade to fail.
  */
 export function isExceptionCase(c: ReportCase): boolean {
   return c.evaluated != null && c.evaluated.status !== 'Pass';
@@ -231,13 +232,11 @@ export function buildLedgerChips(
 
 const STATUS_BAR_CLASS: Record<ReportCaseStatus, string> = {
   Pass: 'bg-emerald-500',
-  'Partial Pass': 'bg-amber-500',
   Fail: 'bg-rose-500',
 };
 
 const STATUS_BADGE_CLASS: Record<ReportCaseStatus, string> = {
   Pass: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
-  'Partial Pass': 'bg-amber-50 text-amber-800 ring-amber-200',
   Fail: 'bg-rose-50 text-rose-700 ring-rose-200',
 };
 
@@ -525,9 +524,10 @@ export function expectedOnlyMissing(concepts: ReportCaseConcepts): string[] {
 }
 
 /**
- * The per-case concept lines: one coverage readout, what is missing by name, and one sentence for
- * whichever rule constrained, raised, or was withheld from the rating. Methodology §9 caps the
- * per-case detail here — the full audit lives in the run-level rollup, not in every row.
+ * The per-case concept lines (B0-813): where the Completeness came from, the coverage readout, what
+ * is missing by name, and the two reported-not-scored facts — a must-have miss and a material
+ * issue. Methodology §9 caps the per-case detail here — the full audit lives in the run-level
+ * rollup, not in every row.
  *
  * Concept phrases are regulated free text and are rendered exactly as stored.
  */
@@ -543,10 +543,18 @@ function ConceptCoverageCard({ c }: { c: ReportCase }) {
       <p className="mt-2 text-sm font-semibold text-slate-900 tabular-nums">
         {formatConceptCoverage(concepts)}
       </p>
+      {evaluated ? (
+        <p className="mt-1 text-xs text-slate-600 tabular-nums">
+          Completeness {evaluated.completeness} — {evaluated.coverage.satisfied} of{' '}
+          {evaluated.coverage.required} expected concept
+          {evaluated.coverage.required === 1 ? '' : 's'} communicated. Computed from the coverage,
+          never judged.
+        </p>
+      ) : null}
 
-      {concepts.mandatory.missing.length > 0 ? (
+      {hasMandatoryMiss(concepts) ? (
         <p className="mt-2 text-sm break-words whitespace-pre-wrap text-rose-700">
-          <span className="font-medium">Missing mandatory:</span>{' '}
+          <span className="font-medium">Missing mandatory (reported — not enforced):</span>{' '}
           {formatConceptList(concepts.mandatory.missing)}
         </p>
       ) : null}
@@ -556,24 +564,9 @@ function ConceptCoverageCard({ c }: { c: ReportCase }) {
         </p>
       ) : null}
 
-      {evaluated?.ratingConstrained ? (
-        <p className="mt-3 rounded-xl bg-rose-50 px-3 py-2 text-sm break-words whitespace-pre-wrap text-rose-800 ring-1 ring-rose-200 ring-inset">
-          Rating constrained: mandatory concept(s) missing —{' '}
-          {formatConceptList(concepts.mandatory.missing)}
-          {evaluated.gateBlockedAPass
-            ? ` (scored ${evaluated.overall}/100, so the gate removed a Pass)`
-            : ''}
-        </p>
-      ) : null}
-      {evaluated?.autoPassTriggered ? (
-        <p className="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-800 ring-1 ring-emerald-200 ring-inset">
-          Automatic Pass: every expected concept satisfied, so the {evaluated.rubricStatus} the
-          rubric scored was raised to Pass.
-        </p>
-      ) : null}
-      {evaluated?.autoPassBlocked ? (
+      {concepts.materialIssue ? (
         <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-sm break-words whitespace-pre-wrap text-amber-900 ring-1 ring-amber-200 ring-inset">
-          Automatic Pass blocked:{' '}
+          Material factual issue (reported — not scored):{' '}
           {concepts.materialIssueNote ?? 'a material factual issue was recorded on this case.'}
         </p>
       ) : null}
@@ -694,10 +687,13 @@ function CaseRow({
               )}
             >
               {evaluated.status}
-              {/* B0-713 — † gate-constrained, ‡ automatic Pass. B0-721 adds ⚑ flagged for human
-                  review, alongside them rather than instead of them; legend above the groups. */}
-              {caseMarkers({ ...evaluated, reviewFlagged: c.variance?.flagged ?? false })} ·{' '}
-              {evaluated.grade}
+              {/* B0-813 — † missing a must-have concept (reported). B0-721 adds ⚑ flagged for
+                  human review, alongside it rather than instead of it; legend above the groups. */}
+              {caseMarkers({
+                mandatoryMissing: evaluated.mandatoryMissing,
+                reviewFlagged: c.variance?.flagged ?? false,
+              })}{' '}
+              · {evaluated.grade}
             </span>
           ) : (
             <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600 ring-1 ring-slate-200 ring-inset">
@@ -705,8 +701,7 @@ function CaseRow({
                   about whether it could be judged at all. */}
               Unable to Evaluate
               {caseMarkers({
-                ratingConstrained: false,
-                autoPassTriggered: false,
+                mandatoryMissing: false,
                 reviewFlagged: c.variance?.flagged ?? false,
               })}
             </span>
@@ -932,10 +927,7 @@ function ReportCaseLedgerContent({
   // and read off every visible case (an Unable-to-Evaluate one can carry it too).
   const visibleCases = visibleGroups.flatMap((group) => group.cases);
   const legendLines = [
-    visibleEvaluated.some((e) => e.ratingConstrained)
-      ? CONCEPT_MARKER_LEGEND.ratingConstrained
-      : null,
-    visibleEvaluated.some((e) => e.autoPassTriggered) ? CONCEPT_MARKER_LEGEND.autoPass : null,
+    visibleEvaluated.some((e) => e.mandatoryMissing) ? CONCEPT_MARKER_LEGEND.mandatoryMissing : null,
     visibleCases.some((c) => c.variance?.flagged) ? REVIEW_MARKER_LEGEND : null,
   ].filter((line) => line != null);
   const bulkAction = bulkDisclosureAction(openIds, visibleCaseIds);

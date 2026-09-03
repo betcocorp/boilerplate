@@ -27,7 +27,12 @@ const CONCEPT = {
   epa: 'EPA Reg. No. 6836-140-4170',
 } as const;
 
-/** Equal sub-scores make the weighted roll-up equal `overall` exactly (0.4+0.3+0.2+0.1 = 1). */
+/**
+ * Equal sub-scores make the weighted roll-up equal `overall` exactly (0.4+0.3+0.2+0.1 = 1). The
+ * `completeness` here stands in for a pass persisted before B0-813 — the current grader writes
+ * null and coverage is the only source; `passOverall` falls back to the stored value only when a
+ * pass carries no concept block, which keeps a legacy report's variance readable.
+ */
 function score(overall: number, partial: Partial<CaseScore> = {}): CaseScore {
   return {
     unableToEvaluate: false,
@@ -121,9 +126,9 @@ describe('consolidateCasePasses — the median (B0-720)', () => {
     expect(result.score.relevance).toBe(70);
     expect(result.score.clarity).toBe(70);
 
-    // The consolidated case survives `computeReportMetrics`, whose `grade_isolated_from_speed`
-    // invariant recomputes `overall` from these four sub-scores alone. Consolidating on the
-    // weighted total instead would make this throw.
+    // The consolidated case survives `computeReportMetrics`, whose `overall_recomputes_from_sub_scores`
+    // invariant recomputes `overall` from the four sub-scores alone — with Completeness taken from
+    // the coverage, not the stored median. Consolidating on the weighted total would make this throw.
     const metrics = computeReportMetrics([
       {
         testItemId: 'median',
@@ -133,10 +138,33 @@ describe('consolidateCasePasses — the median (B0-720)', () => {
         score: result.score,
         latencySeconds: null,
         ttftSeconds: null,
+        concepts: concepts({ mandatoryRequired: [CONCEPT.dilution] }),
         variance: result.variance,
       },
     ]);
-    expect(metrics.perCase[0]!.overall).toBe(Math.round(0.4 * 70 + 0.3 * 60 + 0.2 * 70 + 0.1 * 70));
+    expect(metrics.perCase[0]!.completeness).toBe(100);
+    expect(metrics.perCase[0]!.overall).toBe(Math.round(0.4 * 70 + 0.3 * 100 + 0.2 * 70 + 0.1 * 70));
+  });
+
+  it('computes each pass’s own overall from that pass’s coverage, not from a judged Completeness', () => {
+    // Same judged sub-scores every pass; only the concept verdicts differ.
+    const full = concepts({ mandatoryRequired: [CONCEPT.dilution], bonusRequired: [CONCEPT.epa] });
+    const half = concepts({
+      mandatoryRequired: [CONCEPT.dilution],
+      bonusRequired: [CONCEPT.epa],
+      bonusMissing: [CONCEPT.epa],
+    });
+    const result = consolidateCasePasses([
+      { score: score(80, { completeness: null }), concepts: full },
+      { score: score(80, { completeness: null }), concepts: half },
+      { score: score(80, { completeness: null }), concepts: full },
+    ]);
+
+    // full: 0.4·80 + 0.3·100 + 0.2·80 + 0.1·80 = 86; half: 0.4·80 + 0.3·50 + 0.2·80 + 0.1·80 = 71.
+    expect(result.variance!.passOveralls).toEqual([86, 71, 86]);
+    expect(result.variance!.range).toBe(15);
+    expect(result.variance!.causes).toContain('score_range');
+    expect(result.variance!.causes).toContain('concept');
   });
 
   it('leaves the median untouched when one pass is a wild outlier', () => {
@@ -188,11 +216,11 @@ describe('consolidateCasePasses — flags (B0-720)', () => {
     expect(result.concepts!.mandatory.missing).toEqual([CONCEPT.contactTime]);
   });
 
-  it('flags a 58 / 62 / 60 spread that straddles the Partial Pass boundary', () => {
+  it('flags a 58 / 62 / 60 spread that straddles the pass mark', () => {
     const result = consolidateCasePasses(passes(score(58), score(62), score(60)));
 
     expect(result.variance!.passOveralls).toEqual([58, 62, 60]);
-    expect(result.variance!.passBands).toEqual(['Fail', 'Partial Pass', 'Partial Pass']);
+    expect(result.variance!.passBands).toEqual(['Fail', 'Pass', 'Pass']);
     expect(result.variance!.bandSplit).toBe(true);
     expect(result.variance!.range).toBe(4);
     // 4 points is well under the spread threshold — the band split alone is what flags it.
@@ -213,6 +241,16 @@ describe('consolidateCasePasses — flags (B0-720)', () => {
     const result = consolidateCasePasses(passes(score(85), score(95)));
     expect(result.variance!.spreadThreshold).toBe(DEFAULT_CONSISTENCY_SPREAD_THRESHOLD);
     expect(result.variance!.scoreRangeExceeded).toBe(true);
+  });
+
+  it('judges the per-pass bands at the pass mark it is given (B0-812)', () => {
+    const at60 = consolidateCasePasses(passes(score(65), score(75)));
+    expect(at60.variance!.passBands).toEqual(['Pass', 'Pass']);
+    expect(at60.variance!.bandSplit).toBe(false);
+
+    const at70 = consolidateCasePasses(passes(score(65), score(75)), { passMark: 70 });
+    expect(at70.variance!.passBands).toEqual(['Fail', 'Pass']);
+    expect(at70.variance!.bandSplit).toBe(true);
   });
 });
 
@@ -313,7 +351,8 @@ describe('consolidateCasePasses — concept majority (B0-720)', () => {
     const kinds = result.variance!.conceptDisagreements.map((d) => d.kind);
     expect(kinds).toContain('all_mandatory');
     expect(kinds).toContain('all_expected');
-    expect(kinds).toContain('auto_pass_eligible');
+    // No automatic-Pass rule exists any more (B0-813), so there is no such judgment to split on.
+    expect(kinds).not.toContain('auto_pass_eligible');
   });
 
   it('keeps a repeated concept phrase as a multiset when the passes disagree', () => {
@@ -436,14 +475,17 @@ describe('computeReportMetrics — grading-consistency rollup (B0-721)', () => {
     expect(con.passes).toBe(3);
     expect(con.casesConsolidated).toBe(5);
     expect(con.flagged).toBe(4);
-    expect(con.byCause.band_split).toBe(2);
-    expect(con.byCause.score_range).toBe(1);
+    // B0-813 — a concept split moves the number too: the pass that missed the only expected
+    // concept has Completeness 0 (overall 56, Fail) while the others have 100 (overall 86, Pass),
+    // so the 'concept' case is also a band split and a 30-point score range.
+    expect(con.byCause.band_split).toBe(3);
+    expect(con.byCause.score_range).toBe(2);
     expect(con.byCause.evaluability).toBe(1);
     expect(con.byCause.concept).toBe(1);
     expect(con.conceptDisagreementCases).toBe(1);
-    // One split phrase records five judgments: the phrase under both kinds (mandatory ⊆ expected),
-    // plus all-mandatory, all-expected and auto-Pass eligibility.
-    expect(con.conceptDisagreements).toBe(5);
+    // One split phrase records four judgments: the phrase under both kinds (mandatory ⊆ expected),
+    // plus all-mandatory and all-expected.
+    expect(con.conceptDisagreements).toBe(4);
     expect(con.maxRange).toBe(70);
     expect(con.queue.map((entry) => entry.id)).not.toContain('agree');
     expect(con.queue).toHaveLength(4);
