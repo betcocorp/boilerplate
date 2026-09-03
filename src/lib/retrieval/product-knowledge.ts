@@ -300,6 +300,26 @@ function retrievalElapsedMs(startedAt: number): number {
 const REGULATED_SAFETY_DOCUMENT_KINDS = new Set(['sds']);
 
 /**
+ * B0-700 investigation note: widening this withholding to `label`-kind sources whenever a
+ * claim-like query is unanchored was tried and REVERTED — it regressed two already-hardened,
+ * deliberate regression tests: B0-272 (`b0272-section-type-filter-regression.test.ts`, live-DB —
+ * an unanchored "GE Fight Bac RTU contact time" query must still surface that label chunk even
+ * though nothing locked) and B0-556 (`b0556-cross-line-sds-regression.test.ts`'s "leaves non-SDS
+ * cross-line sources alone" case, whose `SAFETY_QUERY` also matches `isClaimLikeQuery` via
+ * "hazards"/"first aid"/"ppe"). Both encode a deliberate prior decision: unanchored label/profile
+ * content is a relevance problem, not a regulated-data one — label content frequently IS the
+ * right document even when formal resolution doesn't "lock" (e.g. the query names the product
+ * directly and wins on text similarity alone). B0-700's actual reported defect (dilution numbers
+ * transcribed from an unanchored, WRONG product's label) is addressed instead at the generation
+ * layer: the specialist prompts now require a decline/clarify response instead of substituting when
+ * `aliasResolution.outcome` is `no_alias_match`/`ambiguous_alias` for a regulated-value question —
+ * see `product-support-prompts.ts` and `bathroom-specialist-system-prompt.ts` for the added rule.
+ * The structured-facts gate below (`factsForSources`) still gates the OTHER leak vector (a
+ * `rag.product_line_fact`/`rag.product_efficacy` value attributed to an unanchored entity) since
+ * that has no equivalent "still useful even unlocked" case and no test relies on it leaking.
+ */
+
+/**
  * B0-556 — withholds SDS-kind sources that are not provably on the resolved product line.
  *
  * Reported case: "hazards and signal word for SKU 07512-00" was answered with flammable-aerosol
@@ -488,15 +508,40 @@ async function entityContextBlockForSources(sources: CuratedSource[]): Promise<s
   return buildEntityContextBlock(map);
 }
 
+/**
+ * B0-700 — a structured dilution/efficacy fact (`rag.product_line_fact` / `rag.product_efficacy`)
+ * is regulated data exactly like an SDS hazard statement (see `withholdUnanchoredSafetySources`);
+ * it must not be attributed to an entity whose product line wasn't provably the one this query
+ * resolved to. `resolvedProductLineKey` is `retrieval.productLineResolution.lockedProductLineKey`
+ * from the SAME query — null on every unlocked/ambiguous path (`broad_only`, and
+ * `resolution_disabled`), in which case NO source's facts may be surfaced (mirrors
+ * `withholdUnanchoredSafetySources`'s "no resolved line, no regulated content attributable" rule
+ * exactly).
+ *
+ * `sourcesMayBeUnfiltered` must be true only for `anchored_with_broad_fallback`, whose sources come
+ * from the unfiltered broad pass despite a resolved line — there, only sources actually on that
+ * line contribute. `explicit_product_line` and `anchored_only` are already SQL-filtered and are
+ * passed as `false` (the default): per-source filtering there would wrongly drop a legitimately
+ * anchored source whose `productLineKey` is null (the RPC also matches on `source_record.source_pk`
+ * — see `withholdUnanchoredSafetySources`'s same caveat).
+ */
 async function factsForSources(
   sources: CuratedSource[],
+  resolvedProductLineKey: string | null,
+  options: { sourcesMayBeUnfiltered?: boolean } = {},
 ): Promise<{ facts: Map<string, ProductLineFacts>; factsBlock: string | null }> {
-  const entityIds = sources
+  const anchoredSources =
+    resolvedProductLineKey === null
+      ? []
+      : options.sourcesMayBeUnfiltered
+        ? sources.filter((s) => s.productLineKey === resolvedProductLineKey)
+        : sources;
+  const entityIds = anchoredSources
     .map((s) => s.entityId)
     .filter((id): id is string => id != null);
   const facts = await fetchProductLineFacts(entityIds);
   const titles = new Map(
-    sources
+    anchoredSources
       .filter((s) => s.entityId != null)
       .map((s) => [s.entityId as string, s.title] as const),
   );
@@ -600,9 +645,15 @@ export async function ragQueryForProductKnowledgeWithMeta(
   // `runProductKnowledgeQuery` applies the same parallelisation to all four retrieval paths.
   // Rejection behaviour is unchanged: either enrichment failing still fails the whole call, as
   // it did when both were awaited in sequence.
+  // B0-700 — thread the SAME resolved-line outcome `withholdUnanchoredSafetySources` already used
+  // for this query into `factsForSources`, so a structured dilution/efficacy fact gets the same
+  // "no resolved line, no regulated content attributable" treatment as an SDS.
+  const lockedProductLineKey = base.retrieval.productLineResolution?.lockedProductLineKey ?? null;
   const [entityContextBlock, { facts, factsBlock }] = await Promise.all([
     entityContextBlockForSources(base.sources),
-    factsForSources(base.sources),
+    factsForSources(base.sources, lockedProductLineKey, {
+      sourcesMayBeUnfiltered: base.retrieval.strategy === 'anchored_with_broad_fallback',
+    }),
   ]);
   return { ...base, entityContextBlock, facts, factsBlock };
 }

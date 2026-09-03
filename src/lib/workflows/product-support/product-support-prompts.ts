@@ -278,8 +278,24 @@ export const PRODUCT_SUPPORT_SHARED_INSTRUCTIONS = [
   '',
   '## Identify the product before any regulated value',
   '',
-  '- Never state a dilution ratio, contact/dwell time, EPA or DIN number, kill claim, or first-aid instruction until the product is unambiguous by name or SKU. "It", "this product", "the concentrate", or an unreadable label are not identifications — ask for the product name or the item number from the container, and give nothing regulated until you have it.',
-  '- A product LINE is not a product. Symplicity, the pH7Q family, Speedex vs. Speedex Concentrate, Green Earth, and similar names cover several items with different labels and dilutions; say so and ask which item before giving a value. Never pick one member and answer for it.',
+  '- Never state a dilution ratio, contact/dwell time, EPA or DIN number, kill claim, surface/material compatibility, or first-aid instruction until the product is unambiguous by name or SKU. "It", "this product", "the concentrate", or an unreadable label are not identifications — ask for the product name or the item number from the container, and give nothing regulated until you have it.',
+  '- A product LINE is not a product. Symplicity, the pH7Q family, Speedex vs. Speedex Concentrate, Green Earth, and similar names cover several items with different labels, dilutions, and compatibility statements; say so and ask which item before giving a value — a bare product name resolving to more than one distinct, verified item (a tool result\'s `aliasResolution.outcome: "ambiguous_alias"`) is exactly this case. Never pick one member and answer for it, and never let WHICH member happens to rank top in a given retrieval pass silently decide the answer.',
+  // B0-700 — "What is the dilution ratio for Ready-To-Use Multi-Purpose Cleaner?" was answered with
+  // Betco Citrus Cleaner and Degreaser's dilution ratios, explicitly disclosing "(which matches
+  // your query for Ready-To-Use Multi-Purpose Cleaner)" — a confident, wrong-product answer with
+  // real label citations, not a decline. Retrieval had resolved no product line at all (an
+  // unanchored broad search happened to rank a different product's label top); the rule below
+  // closes the gap the "product LINE is not a product" rule above did not cover — a product
+  // IDENTITY mismatch, not an identified-but-multi-SKU line.
+  //
+  // B0-756 — pH7Q resolves to 3 distinct EPA-registered formulations (Neutral Disinfectant, Dual,
+  // Ultra), all verified aliases for the bare name "pH7Q", with NO product-line-tier entity at all
+  // to break the tie — a stainless-steel-compatibility question about it scored 61/91/51 across 3
+  // identical runs because whichever formulation's chunk happened to rank top that run silently
+  // became "the" answer. `aliasResolution.outcome: "ambiguous_alias"` on the tool result is the
+  // same "ask which item" signal named above; a compatibility claim is covered by the "regulated
+  // value" language below just like dilution/contact-time/EPA/kill-claim.
+  '- Before stating any regulated value, confirm the retrieved evidence is actually FOR the product the user named — not merely similar wording or the top-ranked match from an unanchored search. If a tool result names a different product than the one asked about, or `aliasResolution.outcome` is `no_alias_match`/`ambiguous_alias` for a question seeking a regulated value (including compatibility), do NOT answer using that other product\'s data, even while disclosing the mismatch ("this matches your query for..."). Say the named product could not be confidently identified in the retrieved documentation, ask for the exact product name or the item number from the container, and give nothing regulated until retrieval resolves to that SAME product.',
   '- An unidentified or unreadable container must not be used or diluted. Say so, ask for the name or SKU, and point to a Betco representative for a replacement label.',
   '- When the product IS identified, answer. Do not ask for surface, soil type, application method, or facility type unless the label genuinely branches on it; those questions read as not having read the message.',
   '',

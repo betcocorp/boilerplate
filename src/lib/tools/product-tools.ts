@@ -7,8 +7,8 @@ import {
 import { ragQueryForProductKnowledgeWithMeta } from '~/lib/retrieval/product-knowledge';
 import {
   buildFactsBlock,
-  fetchFactsForProductLineKey,
-  fetchFactsForProductLineKeys,
+  fetchFactsForProduct,
+  fetchFactsForProductBatch,
   type ProductLineFacts,
 } from '~/lib/retrieval/product-facts';
 import {
@@ -484,10 +484,11 @@ async function resolveBatchProductIdentifiers(p: {
 /**
  * B0-549 — batch variant of the `get_efficacy_data` single-product path below: collapses what
  * would otherwise be N sequential `get_efficacy_data` tool calls (worst observed case: 27 in one
- * turn) into one call. Facts are fetched for every resolved product line in a SINGLE batched query
- * (`fetchFactsForProductLineKeys`); lab-report citations still require one lookup per product line
- * (no batched RPC exists for that yet) but those lookups run concurrently via `Promise.all` rather
- * than sequentially, so wall-clock time tracks the slowest single lookup, not their sum.
+ * turn) into one call. Facts are fetched for every resolved product in a SINGLE batched query
+ * (`fetchFactsForProductBatch`, B0-792 — pinned per-product, not merged across every entity sharing
+ * a possibly-bogus `product_line_key`); lab-report citations still require one lookup per product
+ * line (no batched RPC exists for that yet) but those lookups run concurrently via `Promise.all`
+ * rather than sequentially, so wall-clock time tracks the slowest single lookup, not their sum.
  */
 async function executeBatchEfficacyData(
   p: {
@@ -532,8 +533,18 @@ async function executeBatchEfficacyData(
     ),
   ];
 
-  const [factsByLineKey, labReportEntries] = await Promise.all([
-    fetchFactsForProductLineKeys(productLineKeys, p.organism),
+  // B0-792 — pin each product's facts to its OWN resolved `productKey` when one is known, rather
+  // than merging in every sibling entity sharing `productLineKey` (see fetchFactsForProductBatch);
+  // aligned by index with `resolutions`, not deduped by line key, since two batch entries can share
+  // a (possibly bogus/over-broad) product_line_key but pin to different specific products.
+  const [factsList, labReportEntries] = await Promise.all([
+    fetchFactsForProductBatch(
+      resolutions.map(({ resolution }) => ({
+        productLineKey: resolution.productLineKey ?? '',
+        productKey: resolution.productKey,
+      })),
+      p.organism,
+    ),
     Promise.all(
       productLineKeys.map(
         async (key) => [key, await fetchCurrentEfficacyLabReport(key, p.organism)] as const,
@@ -543,10 +554,9 @@ async function executeBatchEfficacyData(
   const labReportByLineKey = new Map(labReportEntries);
 
   const sources: Record<string, unknown>[] = [];
-  const results = resolutions.map(({ identifier, resolution }) => {
-    const { productLineKey, aliasResolution } = resolution;
-    const facts: ProductLineFacts | null =
-      (productLineKey && factsByLineKey.get(productLineKey)) || null;
+  const results = resolutions.map(({ identifier, resolution }, index) => {
+    const { productLineKey, productKey, aliasResolution } = resolution;
+    const facts: ProductLineFacts | null = factsList[index] ?? null;
     const labReport: EfficacyLabReportCitation | null =
       (productLineKey && labReportByLineKey.get(productLineKey)) || null;
 
@@ -559,10 +569,14 @@ async function executeBatchEfficacyData(
         // B0-549: each product's facts source needs its own documentId — reusing the single
         // VERIFIED_FACTS_SOURCE_ID sentinel across every product in the batch would collide under
         // `collectSourceMetaFromToolOutputs`'s per-documentId dedupe and silently drop every
-        // product but one from the citable evidence.
+        // product but one from the citable evidence. B0-792: keyed on `productKey` (falling back to
+        // `productLineKey`) rather than `productLineKey` alone — now that facts are pinned per
+        // product, two batch entries sharing one `productLineKey` can carry genuinely different
+        // facts and must not collide onto the same documentId.
+        const sourceKey = productKey ?? productLineKey ?? identifier;
         sources.push({
-          documentId: `${VERIFIED_FACTS_SOURCE_ID}:${productLineKey}`,
-          chunkId: `${VERIFIED_FACTS_SOURCE_ID}:${productLineKey}`,
+          documentId: `${VERIFIED_FACTS_SOURCE_ID}:${sourceKey}`,
+          chunkId: `${VERIFIED_FACTS_SOURCE_ID}:${sourceKey}`,
           title: `Verified Product Facts (structured) — ${identifier}`,
           snippet: factsBlock.slice(0, 900),
           documentBody: factsBlock,
@@ -979,11 +993,15 @@ export async function executeProductTool(
         return executeBatchEfficacyData(p, name, auditCtx);
       }
 
-      // Out of scope for B0-250: fact/efficacy lookups key on product_line_key only.
       const { productLineKey, productKey, aliasResolution } =
         await resolveProductEntityWithAliasTelemetry(p.productId, name, auditCtx);
+      // B0-792 — pin to the specific resolved `productKey` when one was found, so a
+      // product_line_key grouping that (incorrectly) buckets unrelated finished-goods products
+      // together (e.g. the "Drain Maintainer" group) can't leak a sibling product's dilution/
+      // efficacy figure into this answer. Falls back to the line-wide merge only when no specific
+      // product was resolved — see fetchFactsForProduct.
       const [facts, labReport, fastDrawLookup] = await Promise.all([
-        productLineKey ? fetchFactsForProductLineKey(productLineKey, p.organism) : Promise.resolve(null),
+        productLineKey ? fetchFactsForProduct(productLineKey, productKey, p.organism) : Promise.resolve(null),
         productLineKey
           ? fetchCurrentEfficacyLabReport(productLineKey, p.organism)
           : Promise.resolve(null),

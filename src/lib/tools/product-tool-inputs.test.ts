@@ -38,6 +38,8 @@ vi.mock('~/lib/retrieval/product-facts', () => ({
   buildFactsBlock: vi.fn(() => 'facts'),
   fetchFactsForProductLineKey: vi.fn(async () => null),
   fetchFactsForProductLineKeys: vi.fn(async () => new Map()),
+  fetchFactsForProduct: vi.fn(async () => null),
+  fetchFactsForProductBatch: vi.fn(async (requests: unknown[]) => requests.map(() => null)),
 }));
 
 vi.mock('~/lib/retrieval/efficacy-lab-report', () => ({
@@ -78,7 +80,7 @@ import {
   retrieveSafetyConstraints,
   retrieveSurfacesLists,
 } from '~/lib/retrieval/product-guidance';
-import { fetchFactsForProductLineKeys } from '~/lib/retrieval/product-facts';
+import { fetchFactsForProductBatch } from '~/lib/retrieval/product-facts';
 import { getProductsInCategory } from '~/lib/tools/category-lookup';
 import { retrieveKnowledgeAssets } from '~/lib/retrieval/knowledge-assets';
 import { executeProductTool } from '~/lib/tools/product-tools';
@@ -287,10 +289,17 @@ describe('product-fact tools accept `productName` as well as `productId` (B0-364
         'AF315',
         'Kling',
       ]);
-      // All three identifiers resolve to the same mocked productLineKey ('PL-1'), so the batch
-      // facts fetch is deduped to a single resolved line, not one call per identifier.
-      expect(fetchFactsForProductLineKeys).toHaveBeenCalledTimes(1);
-      expect(vi.mocked(fetchFactsForProductLineKeys).mock.calls[0]?.[0]).toEqual(['PL-1']);
+      // B0-792 — the batch facts fetch is called ONCE with one request per identifier, aligned by
+      // index (not deduped by product_line_key), since a shared/bogus product_line_key must not
+      // cause two different products' facts to collapse into one lookup. All three identifiers
+      // resolve to the same mocked {productLineKey, productKey} here, so the three requests happen
+      // to be identical, but the call shape itself is 1-per-identifier.
+      expect(fetchFactsForProductBatch).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(fetchFactsForProductBatch).mock.calls[0]?.[0]).toEqual([
+        { productLineKey: 'PL-1', productKey: 'PK-1' },
+        { productLineKey: 'PL-1', productKey: 'PK-1' },
+        { productLineKey: 'PL-1', productKey: 'PK-1' },
+      ]);
     });
 
     it('resolves the batch set from `category` via getProductsInCategory', async () => {
@@ -329,7 +338,7 @@ describe('product-fact tools accept `productName` as well as `productId` (B0-364
 
       expect(out.batch).toBeUndefined();
       expect(out.productId).toBe('pH7Q');
-      expect(fetchFactsForProductLineKeys).not.toHaveBeenCalled();
+      expect(fetchFactsForProductBatch).not.toHaveBeenCalled();
     });
 
     it('rejects more than EFFICACY_BATCH_MAX_PRODUCTS identifiers', () => {
