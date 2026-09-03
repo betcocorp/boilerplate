@@ -17,6 +17,7 @@ import {
   resolveProductLineFromMatches,
   type ProductLineResolutionResult,
 } from '~/lib/retrieval/product-line-resolution';
+import { getProductLineLockThresholds } from '~/lib/settings/settings-service';
 import {
   DEFAULT_MIN_SIMILARITY,
   selectCuratedMatches,
@@ -905,8 +906,15 @@ async function runProductKnowledgeQuery(input: {
   // a genuinely clear top score: when there is no runner-up, or a wide spread, the margin check
   // passes trivially (see `resolveProductLineFromMatches`'s `spread` default of `1` with no second
   // candidate) -- it only changes the outcome for exactly the thin-margin case this ticket reports.
+  // B0-757 — the three lock thresholds now come from `public.settings` (admin-editable), not the
+  // hardcoded fallbacks baked into `resolveProductLineFromMatches` itself; those stay as the
+  // function's own defaults for its unit tests and for any other caller.
+  const lockThresholds = await getProductLineLockThresholds();
   const resolution = resolveProductLineFromMatches(broadResult.matches, {
     requireMarginForHighConfidence: true,
+    minLockSimilarity: lockThresholds.minLockSimilarity,
+    minLockMargin: lockThresholds.minLockMargin,
+    highConfidenceAbsolute: lockThresholds.highConfidenceAbsolute,
   });
   const requiredDocumentKindsForQuery = resolveRequiredDocumentKinds(input.query, sectionType);
 

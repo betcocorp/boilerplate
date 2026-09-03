@@ -2197,7 +2197,7 @@ export async function runProductSupportWorkflow(input: {
     });
   }
 
-  const model = resolveResponsesModel(input.modelTag);
+  const model = await resolveResponsesModel(input.modelTag);
   const client = getOpenAIClient();
   /** B0-389 — which generation runtime the agent prompt ran on; same flag that picks the branch. */
   const agentRuntime: PromptRecord['runtime'] = useAiSdkGeneration ? 'ai-sdk' : 'responses';
@@ -3757,7 +3757,7 @@ export async function runProductSupportWorkflow(input: {
           ...recordPrompt({
             stage: 'revision',
             instructions: REVISION_SYSTEM_PROMPT,
-            model: resolveRevisionModel(input.modelTag),
+            model: await resolveRevisionModel(input.modelTag),
             runtime: 'responses',
           }),
         }),
@@ -3798,7 +3798,7 @@ export async function runProductSupportWorkflow(input: {
           // instead of leaving it unattributed (it used to be dropped entirely).
           usage: revisionResult.usage,
           // B0-563 — same reasoning as the agent step's `model` field above.
-          model: resolveRevisionModel(input.modelTag),
+          model: await resolveRevisionModel(input.modelTag),
         }),
       });
       markStepClosed(revisionStep.id);

@@ -646,7 +646,7 @@ export const REVISION_SYSTEM_PROMPT = [
 ].join('\n');
 
 /** B0-389 — the model the revision pass calls (no dedicated env override, unlike the validator). */
-export function resolveRevisionModel(modelTag?: string): string {
+export async function resolveRevisionModel(modelTag?: string): Promise<string> {
   return resolveResponsesModel(modelTag ?? 'preview');
 }
 
@@ -660,7 +660,7 @@ export async function runRevisionPass(input: {
   modelTag?: string;
 }): Promise<RevisionPassResult> {
   const client = getOpenAIClient();
-  const model = resolveRevisionModel(input.modelTag);
+  const model = await resolveRevisionModel(input.modelTag);
 
   // B0-550 — same bounded retry + explicit timeout as `runValidatorPass`; see its comment above.
   const res = await retryTransportFaults(

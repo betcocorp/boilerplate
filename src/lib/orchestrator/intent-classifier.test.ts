@@ -333,10 +333,17 @@ describe('B0-786 settings-table resolution', () => {
   });
 
   it('resolveRouterModel resolves the tag to a concrete model id, never the raw tag string', async () => {
+    // B0-757 — BEX_RESPONSES_MODEL (what the router's `preview` tag falls through to) is now a
+    // settings row too, resolved through the same mocked getStringSetting rather than process.env.
     vi.mocked(getStringSetting).mockImplementation((key, fallback) =>
-      Promise.resolve(key === 'BEX_ROUTER_MODEL' ? 'preview' : fallback),
+      Promise.resolve(
+        key === 'BEX_ROUTER_MODEL'
+          ? 'preview'
+          : key === 'BEX_RESPONSES_MODEL'
+            ? 'gpt-4.1-mini-2026-01-01'
+            : fallback,
+      ),
     );
-    process.env.BEX_RESPONSES_MODEL = 'gpt-4.1-mini-2026-01-01';
     expect(await resolveRouterModel()).toBe('gpt-4.1-mini-2026-01-01');
   });
 

@@ -641,13 +641,18 @@ export async function runTestAction(formData: FormData) {
 
   /**
    * Model the run against a specific chat model. Tags map to concrete models in
-   * resolveResponsesModel(); 'preview' is the configured default.
+   * resolveResponsesModel().
    *
    * Read from the SAME `~/lib/constants/models` list the form's <select> renders. This was a
    * hardcoded ['preview','gpt-4o','gpt-4.1'], so any newer model offered by the dropdown fell
    * through to the `: 'preview'` branch — the run silently executed on the preview default while
-   * recording a model the user never picked. An unknown tag still falls back to 'preview' (a
-   * hand-crafted POST is not a reason to 500), but the allow-list can no longer drift from the UI.
+   * recording a model the user never picked. The allow-list can no longer drift from the UI.
+   *
+   * B0-757 — an unrecognized/missing tag now falls back to 'gpt-4.1', not 'preview' (a
+   * hand-crafted POST missing this field is not a reason to 500, but it also should not silently
+   * land on whatever the BEX_RESPONSES_MODEL settings default happens to be). Matches the form's
+   * own default (B0-614, `TestRunModelControls`) and the CI run-creation route's default
+   * (`POST /api/admin/tests/runs`, B0-757).
    */
   const ALLOWED_MODEL_TAGS: readonly string[] = [
     'preview',
@@ -657,7 +662,7 @@ export async function runTestAction(formData: FormData) {
   const modelTag =
     typeof rawModelTag === 'string' && ALLOWED_MODEL_TAGS.includes(rawModelTag)
       ? rawModelTag
-      : 'preview';
+      : 'gpt-4.1';
 
   // B0-600 / B0-603 — opt-in validator pass, so a validator A/B run can be started from the UI.
   // Unchecked box means absent, matching every run created before this field existed.

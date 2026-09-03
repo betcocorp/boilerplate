@@ -73,7 +73,7 @@ Use ONLY the evidence given. Name the specific failure — which criterion, tool
 
 Respond with ONLY the JSON object in the given schema. No markdown, no extra keys.`;
 
-export function resolveFailureRootCauseModel(modelTag?: string): string {
+export async function resolveFailureRootCauseModel(modelTag?: string): Promise<string> {
   return (
     process.env.BEX_FAILURE_ROOT_CAUSE_MODEL?.trim() ||
     resolveResponsesModel(modelTag ?? 'preview')
@@ -151,7 +151,7 @@ async function callRootCauseGrader(
   input: FailureRootCauseInput,
 ): Promise<RootCauseResult | null> {
   const client = getOpenAIClient();
-  const model = resolveFailureRootCauseModel(input.modelTag);
+  const model = await resolveFailureRootCauseModel(input.modelTag);
 
   try {
     const res = await retryTransportFaults(
@@ -204,11 +204,13 @@ export async function analyzeAndPersistFailureRootCause(
     return;
   }
 
+  const model = await resolveFailureRootCauseModel(input.modelTag);
+
   await replaceAiSuggestions(FAILURE_ROOT_CAUSE_ENTITY_TYPE, input.testResultItemId, [
     {
       title: CATEGORY_LABEL[result.category],
       content: `${result.root_cause} ${result.suggested_fix}`,
-      model: resolveFailureRootCauseModel(input.modelTag),
+      model,
       metadata: {
         category: result.category,
         rootCause: result.root_cause,

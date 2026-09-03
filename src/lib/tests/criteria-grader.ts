@@ -22,7 +22,7 @@ import {
  * a dedicated env var wins, otherwise fall back to the standard Responses model
  * resolution so the grader tracks whatever the rest of the harness defaults to.
  */
-export function resolveGraderModel(modelTag?: string): string {
+export async function resolveGraderModel(modelTag?: string): Promise<string> {
   return (
     process.env.BEX_GRADER_MODEL?.trim() || resolveResponsesModel(modelTag ?? 'preview')
   );
@@ -63,7 +63,7 @@ async function gradeSemanticCriteria(params: {
   }
 
   const client = getOpenAIClient();
-  const model = resolveGraderModel(params.modelTag);
+  const model = await resolveGraderModel(params.modelTag);
 
   const res = await retryTransportFaults(
     () =>

@@ -26,23 +26,24 @@ export type ProductLineResolutionResult = {
   explicitKeySource?: string | null;
 };
 
+/**
+ * B0-757 — these three were previously each independently overridable via a
+ * `BEX_PRODUCT_LINE_LOCK_*` env var (none of which was ever actually set in any environment).
+ * They are now sourced from `public.settings` via `getProductLineLockThresholds()`
+ * (~/lib/settings/settings-service.ts), read once by the one production call site
+ * (`~/lib/retrieval/product-knowledge.ts`) and passed in through `options` below. Exported so that
+ * getter can use the exact same numbers as its fallback defaults; kept here (rather than moved to a
+ * config file) so this stays the single source of truth for "what does resolution do when nothing
+ * overrides it" — the underlying lock/margin/high-confidence LOGIC below is unchanged.
+ */
 /** Minimum top-line similarity to consider locking when the runner-up is clearly weaker. */
-const MIN_LOCK_SIMILARITY = 0.5;
+export const DEFAULT_MIN_LOCK_SIMILARITY = 0.5;
 /** Minimum gap between #1 and #2 aggregate scores when both exist. */
-const MIN_LOCK_MARGIN = 0.06;
+export const DEFAULT_MIN_LOCK_MARGIN = 0.06;
 /** Lock even if runner-up is close when the best line is strongly aligned with the query. */
-const HIGH_CONFIDENCE_ABSOLUTE = 0.64;
+export const DEFAULT_HIGH_CONFIDENCE_ABSOLUTE = 0.64;
 
 const MAX_CANDIDATES = 3;
-
-function readResolutionEnvNumber(name: string, fallback: number): number {
-  const raw = process.env[name]?.trim();
-  if (!raw) {
-    return fallback;
-  }
-  const n = Number(raw);
-  return Number.isFinite(n) ? n : fallback;
-}
 
 /**
  * From an unfiltered product similarity result set, derive the top few `product_line_key`
@@ -61,20 +62,19 @@ function readResolutionEnvNumber(name: string, fallback: number): number {
  */
 export function resolveProductLineFromMatches(
   matches: RagSearchMatch[],
-  options: { requireMarginForHighConfidence?: boolean } = {},
+  options: {
+    requireMarginForHighConfidence?: boolean;
+    /** B0-757 — settings-backed override; falls back to `DEFAULT_MIN_LOCK_SIMILARITY`. */
+    minLockSimilarity?: number;
+    /** B0-757 — settings-backed override; falls back to `DEFAULT_MIN_LOCK_MARGIN`. */
+    minLockMargin?: number;
+    /** B0-757 — settings-backed override; falls back to `DEFAULT_HIGH_CONFIDENCE_ABSOLUTE`. */
+    highConfidenceAbsolute?: number;
+  } = {},
 ): ProductLineResolutionResult {
-  const minSim = readResolutionEnvNumber(
-    'BEX_PRODUCT_LINE_LOCK_MIN_SIMILARITY',
-    MIN_LOCK_SIMILARITY,
-  );
-  const margin = readResolutionEnvNumber(
-    'BEX_PRODUCT_LINE_LOCK_MARGIN',
-    MIN_LOCK_MARGIN,
-  );
-  const highAbs = readResolutionEnvNumber(
-    'BEX_PRODUCT_LINE_LOCK_HIGH_CONFIDENCE',
-    HIGH_CONFIDENCE_ABSOLUTE,
-  );
+  const minSim = options.minLockSimilarity ?? DEFAULT_MIN_LOCK_SIMILARITY;
+  const margin = options.minLockMargin ?? DEFAULT_MIN_LOCK_MARGIN;
+  const highAbs = options.highConfidenceAbsolute ?? DEFAULT_HIGH_CONFIDENCE_ABSOLUTE;
 
   const byLine = new Map<
     string,
