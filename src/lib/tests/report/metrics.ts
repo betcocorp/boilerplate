@@ -9,7 +9,12 @@ import type {
 } from './consolidate';
 import { assertReportInvariants, collectInvariantFailures } from './invariants';
 import type { CaseScore } from './schemas';
-import { DEFAULT_PASS_MARK, STRICT_PASS_MARK } from './scoring-config';
+import {
+  DEFAULT_JUDGED_THRESHOLDS,
+  DEFAULT_PASS_MARK,
+  STRICT_PASS_MARK,
+  type JudgedThresholds,
+} from './scoring-config';
 import {
   combineSpeedScores,
   formatP90,
@@ -433,6 +438,40 @@ export type EvaluatedCase = {
   passesOnlyUnderCurrentMark: boolean;
   /** The concept block the case was scored from — every evaluated case has one. */
   concepts: CaseConcepts;
+  /**
+   * B0-811 — the judged metrics (methodology §7c), reported beside the grade and never in it. Null
+   * for a case graded before the grader authored them.
+   */
+  similarity: number | null;
+  similarityNote: string | null;
+  evalConfidence: number | null;
+  confidenceNote: string | null;
+};
+
+/** Five-number summary of a judged metric over the cases that carry it. */
+export type JudgedStats = { n: number; avg: number; median: number; min: number; max: number };
+
+/**
+ * B0-811 — the run-level readout of the two judged metrics, deliberately small (methodology §7c):
+ * the two distributions, the two off-diagonal cells worth naming, the SME review queue, and the
+ * thresholds in force. No average is a verdict, and nothing here touches a grade.
+ */
+export type JudgedRollup = {
+  thresholds: JudgedThresholds;
+  similarity: JudgedStats | null;
+  /** Counts at `simHigh` and above / between / below `simLow`. */
+  similarityBands: { high: number; mid: number; low: number };
+  /** Pearson r between similarity and overall, or null below `corrMinN` cases (or zero variance). */
+  similarityScoreCorrelation: number | null;
+  /** Close to the ideal and still failed — shape right, substance wrong. Highest similarity first. */
+  highSimilarityFailures: Array<{ id: string; question: string; similarity: number; overall: number }>;
+  /** Passed while diverging from the ideal — right by a different route. Lowest similarity first. */
+  lowSimilarityPasses: Array<{ id: string; question: string; similarity: number; overall: number }>;
+  evalConfidence: JudgedStats | null;
+  /** Cases at or below `lowConfidence`, least confident first — the SME review queue. */
+  reviewQueue: Array<{ id: string; question: string; evalConfidence: number; status: CaseStatus }>;
+  nWithSimilarity: number;
+  nWithConfidence: number;
 };
 
 export type UteCase = {
@@ -540,10 +579,92 @@ export type ReportMetrics = {
   speed: SpeedBlock | null;
   /** Null when no evaluated case carried concept data. */
   concepts: ConceptRollup | null;
+  /** B0-811 — null when no evaluated case carries either judged metric. */
+  judged: JudgedRollup | null;
   /** B0-721 — null on a single-pass run, which omits the whole grading-consistency block. */
   consistency: ConsistencyRollup | null;
   warnings: string[];
 };
+
+function judgedStats(values: readonly number[], decimals: number): JudgedStats | null {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const n = sorted.length;
+  const factor = 10 ** decimals;
+  const roundTo = (v: number) => Math.round(v * factor) / factor;
+  const median = n % 2 === 1 ? sorted[(n - 1) / 2] : (sorted[n / 2 - 1] + sorted[n / 2]) / 2;
+  return {
+    n,
+    avg: roundTo(sorted.reduce((a, b) => a + b, 0) / n),
+    median: roundTo(median),
+    min: roundTo(sorted[0]),
+    max: roundTo(sorted[n - 1]),
+  };
+}
+
+function pearson(xs: readonly number[], ys: readonly number[]): number | null {
+  const n = xs.length;
+  if (n < 2) return null;
+  const mx = xs.reduce((a, b) => a + b, 0) / n;
+  const my = ys.reduce((a, b) => a + b, 0) / n;
+  let num = 0;
+  let dx = 0;
+  let dy = 0;
+  for (let i = 0; i < n; i += 1) {
+    num += (xs[i] - mx) * (ys[i] - my);
+    dx += (xs[i] - mx) ** 2;
+    dy += (ys[i] - my) ** 2;
+  }
+  if (dx === 0 || dy === 0) return null;
+  return Math.round((num / Math.sqrt(dx * dy)) * 100) / 100;
+}
+
+/**
+ * B0-811 — rolls the judged metrics up (port of `judged_metrics.judged_block`). Returns null when
+ * no evaluated case carries either metric, so the section is omitted rather than shown as empty.
+ */
+function judgedRollup(
+  cases: readonly EvaluatedCase[],
+  thresholds: JudgedThresholds,
+): JudgedRollup | null {
+  const withSim = cases.filter((c): c is EvaluatedCase & { similarity: number } => c.similarity != null);
+  const withConf = cases.filter(
+    (c): c is EvaluatedCase & { evalConfidence: number } => c.evalConfidence != null,
+  );
+  if (withSim.length === 0 && withConf.length === 0) return null;
+
+  const sims = withSim.map((c) => c.similarity);
+  const band = (v: number) => (v >= thresholds.simHigh ? 'high' : v < thresholds.simLow ? 'low' : 'mid');
+
+  return {
+    thresholds,
+    similarity: judgedStats(sims, 2),
+    similarityBands: {
+      high: sims.filter((v) => band(v) === 'high').length,
+      mid: sims.filter((v) => band(v) === 'mid').length,
+      low: sims.filter((v) => band(v) === 'low').length,
+    },
+    similarityScoreCorrelation:
+      withSim.length >= thresholds.corrMinN
+        ? pearson(sims, withSim.map((c) => c.overall))
+        : null,
+    highSimilarityFailures: withSim
+      .filter((c) => c.similarity >= thresholds.highSimFail && c.status === 'Fail')
+      .sort((a, b) => b.similarity - a.similarity)
+      .map((c) => ({ id: c.id, question: c.question, similarity: c.similarity, overall: c.overall })),
+    lowSimilarityPasses: withSim
+      .filter((c) => c.similarity < thresholds.lowSimPass && c.status === 'Pass')
+      .sort((a, b) => a.similarity - b.similarity)
+      .map((c) => ({ id: c.id, question: c.question, similarity: c.similarity, overall: c.overall })),
+    evalConfidence: judgedStats(withConf.map((c) => c.evalConfidence), 1),
+    reviewQueue: withConf
+      .filter((c) => c.evalConfidence <= thresholds.lowConfidence)
+      .sort((a, b) => a.evalConfidence - b.evalConfidence)
+      .map((c) => ({ id: c.id, question: c.question, evalConfidence: c.evalConfidence, status: c.status })),
+    nWithSimilarity: withSim.length,
+    nWithConfidence: withConf.length,
+  };
+}
 
 function groupBy(
   cases: EvaluatedCase[],
@@ -703,6 +824,8 @@ export type ComputeReportMetricsOptions = {
   invariantSeverity?: InvariantSeverity;
   /** B0-812 — the pass mark in force for this report. Defaults to `DEFAULT_PASS_MARK`. */
   passMark?: number | null;
+  /** B0-811 — the judged-metric thresholds in force. Defaults to `DEFAULT_JUDGED_THRESHOLDS`. */
+  judgedThresholds?: JudgedThresholds | null;
 };
 
 export function computeReportMetrics(
@@ -710,6 +833,7 @@ export function computeReportMetrics(
   options?: ComputeReportMetricsOptions,
 ): ReportMetrics {
   const passMark = options?.passMark ?? DEFAULT_PASS_MARK;
+  const judgedThresholds = options?.judgedThresholds ?? DEFAULT_JUDGED_THRESHOLDS;
   const total = inputs.length;
   const ute: UteCase[] = [];
   const evaluated: EvaluatedCase[] = [];
@@ -811,6 +935,10 @@ export function computeReportMetrics(
       materialIssue: input.concepts.materialIssue,
       passesOnlyUnderCurrentMark: status === 'Pass' && overall < STRICT_PASS_MARK,
       concepts: input.concepts,
+      similarity: input.score.similarity ?? null,
+      similarityNote: input.score.similarityNote ?? null,
+      evalConfidence: input.score.evalConfidence ?? null,
+      confidenceNote: input.score.confidenceNote ?? null,
     });
   }
 
@@ -897,6 +1025,7 @@ export function computeReportMetrics(
     passOnlyUnderCurrentMark: evaluated.filter((e) => e.passesOnlyUnderCurrentMark).map((e) => e.id),
     speed,
     concepts: conceptRollup(evaluated),
+    judged: judgedRollup(evaluated, judgedThresholds),
     consistency: consistencyRollup(varianceEntries),
     warnings,
   };

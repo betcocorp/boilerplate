@@ -390,6 +390,39 @@ function CaseSpeedLine({ c }: { c: ReportCase }) {
 }
 
 /**
+ * B0-811 — the judged metrics, directly beneath the speed line and labelled the same way (§9):
+ * similarity to the Ideal Response and the grader's confidence in the grade, with the grader's own
+ * one-line notes. Reported beside the grade, never in it.
+ */
+function CaseJudgedLine({ c }: { c: ReportCase }) {
+  const e = c.evaluated;
+  if (!e || (e.similarity == null && e.evalConfidence == null)) return null;
+  return (
+    <p className="mt-3 rounded-xl bg-white px-3 py-2 text-xs leading-5 text-slate-600 ring-1 ring-slate-200">
+      <span className="text-[11px] font-semibold tracking-[0.14em] text-slate-500 uppercase">
+        Judged — reported separately; not part of the content grade
+      </span>
+      <br />
+      {e.similarity != null ? (
+        <>
+          <span className="font-medium">Similarity to the Ideal Response:</span>{' '}
+          <span className="tabular-nums">{e.similarity}</span>
+          {e.similarityNote ? <span className="text-slate-500"> — {e.similarityNote}</span> : null}
+        </>
+      ) : null}
+      {e.similarity != null && e.evalConfidence != null ? ' · ' : null}
+      {e.evalConfidence != null ? (
+        <>
+          <span className="font-medium">Evaluator confidence:</span>{' '}
+          <span className="tabular-nums">{e.evalConfidence}/100</span>
+          {e.confidenceNote ? <span className="text-slate-500"> — {e.confidenceNote}</span> : null}
+        </>
+      ) : null}
+    </p>
+  );
+}
+
+/**
  * The harness's own verdict. Kept visually subordinate — smaller, muted, set off behind a rule —
  * because it is a different judgement from the LLM grade and must never read as its equal.
  */
@@ -754,6 +787,7 @@ function CaseRow({
 
           {/* Below the score grid, never inside it. */}
           <CaseSpeedLine c={c} />
+          <CaseJudgedLine c={c} />
 
           {c.harness ? (
             <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">

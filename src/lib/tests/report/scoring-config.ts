@@ -30,11 +30,78 @@ export function clampPassMark(value: number): number {
 }
 
 /**
- * The only async function in this module, and the only place the setting is read — mirroring
- * `loadConsistencyConfig`. Imported lazily because `settings-service` reaches the Supabase
- * service-role client and this module's constants are read by client components.
+ * Imported lazily because `settings-service` reaches the Supabase service-role client and this
+ * module's constants are read by client components.
  */
 export async function loadPassMark(): Promise<number> {
   const { getNumberSetting } = await import('~/lib/settings/settings-service');
   return clampPassMark(await getNumberSetting(PASS_MARK_SETTING_KEY, DEFAULT_PASS_MARK));
+}
+
+/**
+ * B0-811 — reporting thresholds for the two judged metrics (methodology §7c). One source of truth,
+ * mirroring the reference `judged_metrics.py` `THRESHOLDS`; each is a settings row so a run's
+ * report can state exactly what it was cut at.
+ *
+ * - `simHigh` / `simLow` — similarity band edges.
+ * - `lowConfidence` — at or below, the case joins the SME review queue.
+ * - `highSimFail` / `lowSimPass` — the two off-diagonal cells worth naming: close to the ideal and
+ *   still failed (shape right, substance wrong) / passed while diverging from the ideal (correct,
+ *   differently worded).
+ * - `corrMinN` — below this sample, no similarity-vs-score correlation is reported.
+ */
+export type JudgedThresholds = {
+  simHigh: number;
+  simLow: number;
+  lowConfidence: number;
+  highSimFail: number;
+  lowSimPass: number;
+  corrMinN: number;
+};
+
+export const DEFAULT_JUDGED_THRESHOLDS: Readonly<JudgedThresholds> = {
+  simHigh: 0.75,
+  simLow: 0.4,
+  lowConfidence: 70,
+  highSimFail: 0.6,
+  lowSimPass: 0.5,
+  corrMinN: 5,
+};
+
+export const JUDGED_THRESHOLD_SETTING_KEYS: Readonly<Record<keyof JudgedThresholds, string>> = {
+  simHigh: 'REPORT_JUDGED_SIM_HIGH',
+  simLow: 'REPORT_JUDGED_SIM_LOW',
+  lowConfidence: 'REPORT_JUDGED_LOW_CONFIDENCE',
+  highSimFail: 'REPORT_JUDGED_HIGH_SIM_FAIL',
+  lowSimPass: 'REPORT_JUDGED_LOW_SIM_PASS',
+  corrMinN: 'REPORT_JUDGED_CORR_MIN_N',
+};
+
+/** Non-finite or out-of-range values fall back to the shipped default, key by key. */
+export function sanitizeJudgedThresholds(raw: Partial<JudgedThresholds>): JudgedThresholds {
+  const pick = (key: keyof JudgedThresholds, min: number, max: number): number => {
+    const value = raw[key];
+    return typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max
+      ? value
+      : DEFAULT_JUDGED_THRESHOLDS[key];
+  };
+  return {
+    simHigh: pick('simHigh', 0, 1),
+    simLow: pick('simLow', 0, 1),
+    lowConfidence: pick('lowConfidence', 0, 100),
+    highSimFail: pick('highSimFail', 0, 1),
+    lowSimPass: pick('lowSimPass', 0, 1),
+    corrMinN: Math.max(2, Math.floor(pick('corrMinN', 2, 1000))),
+  };
+}
+
+export async function loadJudgedThresholds(): Promise<JudgedThresholds> {
+  const { getNumberSetting } = await import('~/lib/settings/settings-service');
+  const entries = await Promise.all(
+    (Object.keys(JUDGED_THRESHOLD_SETTING_KEYS) as Array<keyof JudgedThresholds>).map(
+      async (key) =>
+        [key, await getNumberSetting(JUDGED_THRESHOLD_SETTING_KEYS[key], DEFAULT_JUDGED_THRESHOLDS[key])] as const,
+    ),
+  );
+  return sanitizeJudgedThresholds(Object.fromEntries(entries) as Partial<JudgedThresholds>);
 }

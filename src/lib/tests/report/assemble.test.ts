@@ -254,6 +254,10 @@ const CASE_SCORES: Record<string, CaseScore> = {
     incorrect: 'Nothing incorrect.',
     improvement: 'Cite the label section number.',
     concepts: CONCEPTS_A,
+    similarity: 0.92,
+    similarityNote: 'Everything the ideal says, plus the metric equivalent.',
+    evalConfidence: 94,
+    confidenceNote: 'Concrete golden; values match the label.',
   }),
   // 0.4·55 + 0.3·50 + 0.2·70 + 0.1·80 = 59, F, Fail.
   [CASE_B]: score({
@@ -265,6 +269,11 @@ const CASE_SCORES: Record<string, CaseScore> = {
     incorrect: 'Implied the time applies at any dilution.',
     improvement: 'Always pair contact time with concentration.',
     concepts: CONCEPTS_B,
+    // Close to the ideal and still failing — the "shape right, substance wrong" cell.
+    similarity: 0.7,
+    similarityNote: 'Has the dwell; missing the concentration it applies at.',
+    evalConfidence: 62,
+    confidenceNote: 'The golden implies the 600 ppm qualifier rather than stating it.',
   }),
   // 0.4·30 + 0.3·0 + 0.2·50 + 0.1·60 = 28, F, Fail — a must-have miss and a material issue, reported.
   [CASE_C]: score({
@@ -325,6 +334,23 @@ const SYNTHESIS: ReportSynthesis = {
   },
 };
 
+/** B0-825 — what the fixture report was "graded with", as `gradingConfigFromState` would read it. */
+const CONFIG = {
+  model: 'gpt-5.6',
+  passes: 1,
+  spreadThreshold: 10,
+  passMark: 60,
+  gradingPromptHash: 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789',
+  judgedThresholds: {
+    simHigh: 0.75,
+    simLow: 0.4,
+    lowConfidence: 70,
+    highSimFail: 0.6,
+    lowSimPass: 0.5,
+    corrMinN: 5,
+  },
+};
+
 function buildFixture() {
   const assembled = assembleReportData({
     test: TEST_RECORD,
@@ -334,6 +360,7 @@ function buildFixture() {
     caseScores: CASE_SCORES,
     synthesis: SYNTHESIS,
     generatedAt: RUN_RECORD.report_generated_at!,
+    config: CONFIG,
   });
 
   const markdown = renderReportMarkdown({
@@ -343,6 +370,7 @@ function buildFixture() {
     cases: assembled.cases,
     synthesis: assembled.synthesis,
     generatedAt: assembled.generatedAt,
+    config: assembled.config,
   });
 
   const parsed = reportDataResponseSchema.parse(toReportDataPayload(assembled));
@@ -377,6 +405,32 @@ describe('assembleReportData → report data contract', () => {
     check('metrics.uteCount', `(+${m.uteCount} unable to evaluate)`);
     check('runId', `Run ${payload.runId}`);
     check('generatedAt', `Generated ${new Date(payload.generatedAt).toLocaleString()}`);
+
+    // --- Grading configuration (B0-825) ---
+    const cfg = payload.config!;
+    check('config.model', `Graded by ${cfg.model}`);
+    check('config.passes', `${cfg.passes} independent pass`);
+    check('config.spreadThreshold', `spread threshold ${cfg.spreadThreshold}`);
+    check('config.passMark', `pass mark ${cfg.passMark} (strict ${m.strictPassMark})`);
+    check('config.judgedThresholds', `sim ≥ ${cfg.judgedThresholds!.simHigh} high / < ${cfg.judgedThresholds!.simLow} low · review ≤ ${cfg.judgedThresholds!.lowConfidence} confidence`);
+    check('config.gradingPromptHash', `grading prompt ${cfg.gradingPromptHash!.slice(0, 12)}`);
+
+    // --- Judged metrics rollup (B0-811) ---
+    const j = m.judged!;
+    check(
+      'metrics.judged.similarity',
+      `- Similarity to the Ideal Response: average **${j.similarity!.avg}**, median ${j.similarity!.median}, range ${j.similarity!.min}–${j.similarity!.max} (n=${j.similarity!.n}) — high (≥ ${j.thresholds.simHigh}) ${j.similarityBands.high} · mid ${j.similarityBands.mid} · low (< ${j.thresholds.simLow}) ${j.similarityBands.low}.`,
+    );
+    check(
+      'metrics.judged.evalConfidence',
+      `- Evaluator confidence: average **${j.evalConfidence!.avg}**, median ${j.evalConfidence!.median}, range ${j.evalConfidence!.min}–${j.evalConfidence!.max} (n=${j.evalConfidence!.n}).`,
+    );
+    for (const entry of j.highSimilarityFailures) {
+      check('metrics.judged.highSimilarityFailures', `[${entry.id}](#${caseAnchorId(entry.id)}) (similarity ${entry.similarity}, scored ${entry.overall})`);
+    }
+    for (const entry of j.reviewQueue) {
+      check('metrics.judged.reviewQueue', `| [${entry.id}](#${caseAnchorId(entry.id)}) | ${entry.question} | ${entry.evalConfidence} | ${entry.status} |`);
+    }
 
     // --- Executive assessment ---
     check('metrics.overall.grade', `**Overall grade:** ${m.overall.grade}`);
@@ -516,6 +570,17 @@ describe('assembleReportData → report data contract', () => {
         check(
           `case[${c.id}].concepts.materialIssueNote`,
           `**Material factual issue (reported — not scored):** ${e.concepts.materialIssueNote}`,
+        );
+      }
+      // B0-811 — the judged line, where the grader authored the metrics.
+      if (e.similarity != null) {
+        check(
+          `case[${c.id}].evaluated.similarity`,
+          `similarity to the Ideal Response ${e.similarity} — ${e.similarityNote}`,
+        );
+        check(
+          `case[${c.id}].evaluated.evalConfidence`,
+          `evaluator confidence ${e.evalConfidence}/100 — ${e.confidenceNote}`,
         );
       }
       const speed = c.speed!;

@@ -15,8 +15,14 @@ import { splitConcepts } from './case-concepts';
 import { GRADING_PROMPT_HASH, scoreCase, unableToEvaluateScore } from './case-scorer';
 import { consolidateCasePasses, loadConsistencyConfig } from './consolidate';
 import { renderReportMarkdown } from './render';
-import { emptyReportState, parseReportState, type CaseScore, type ReportState } from './schemas';
-import { loadPassMark } from './scoring-config';
+import {
+  emptyReportState,
+  gradingConfigFromState,
+  parseReportState,
+  type CaseScore,
+  type ReportState,
+} from './schemas';
+import { loadJudgedThresholds, loadPassMark } from './scoring-config';
 import { synthesizeReportFindings } from './synthesizer';
 
 /** B0-765 — fallback only if the `REPORT_GRADING_MODEL` settings row is missing/unreadable. */
@@ -180,10 +186,13 @@ export async function generateReport(testResultId: string): Promise<ReportState>
   // B0-812 — same contract: the pass mark is resolved once and persisted on a fresh state, so a
   // settings change mid-report cannot rate one half of its cases at 60 and the other at 70.
   const passMark = await loadPassMark();
-  // B0-810 — the prompt that grades this report, so two reports that disagree can be told apart.
+  const judgedThresholds = await loadJudgedThresholds();
+  // B0-810/B0-811 — the prompt that grades this report and the thresholds it is read at, resolved
+  // once and persisted, so two reports that disagree can be told apart.
   const fresh = () => ({
     ...emptyReportState(model, items.length, config.passes, config.spreadThreshold, passMark),
     gradingPromptHash: GRADING_PROMPT_HASH,
+    judgedThresholds,
   });
   let state = parseReportState(run.report_state) ?? fresh();
   if (state.totalCases !== items.length) {
@@ -234,6 +243,7 @@ export async function generateReport(testResultId: string): Promise<ReportState>
       casePassScores: state.casePassScores,
       spreadThreshold: state.spreadThreshold,
       passMark: state.passMark,
+      judgedThresholds: state.judgedThresholds,
     });
 
     const findingsByCaseId = new Map(
@@ -256,6 +266,7 @@ export async function generateReport(testResultId: string): Promise<ReportState>
       cases,
       synthesis,
       generatedAt,
+      config: gradingConfigFromState(state),
     });
 
     // B0-609 — persist the aggregate score/grade alongside the report so the "Recent runs" table

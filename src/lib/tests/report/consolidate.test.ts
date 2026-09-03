@@ -494,9 +494,9 @@ describe('consolidateCasePasses — timings (B0-720)', () => {
   });
 });
 
-describe('clampGradingPasses (B0-719)', () => {
-  it('ships at one pass by default', () => {
-    expect(DEFAULT_GRADING_PASSES).toBe(1);
+describe('clampGradingPasses (B0-719 / B0-818)', () => {
+  it('ships at three passes by default, as the reference methodology does', () => {
+    expect(DEFAULT_GRADING_PASSES).toBe(3);
   });
 
   it('clamps to whole passes within bounds', () => {

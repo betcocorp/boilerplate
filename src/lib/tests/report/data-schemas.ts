@@ -388,8 +388,83 @@ export const reportEvaluatedCaseSchema = z.object({
   passesOnlyUnderCurrentMark: z.boolean(),
   /** The concept block the case was scored from. Every evaluated case has one. */
   concepts: reportCaseConceptsSchema,
+  /** B0-811 — judged similarity to the Ideal Response (0–1). Reported, never graded. */
+  similarity: z.number().nullable(),
+  similarityNote: z.string().nullable(),
+  /** B0-811 — the grader's confidence in this grade (0–100). The low end is the review queue. */
+  evalConfidence: z.number().nullable(),
+  confidenceNote: z.string().nullable(),
 });
 export type ReportEvaluatedCase = z.infer<typeof reportEvaluatedCaseSchema>;
+
+export const reportJudgedThresholdsSchema = z.object({
+  simHigh: z.number(),
+  simLow: z.number(),
+  lowConfidence: z.number(),
+  highSimFail: z.number(),
+  lowSimPass: z.number(),
+  corrMinN: z.number(),
+});
+export type ReportJudgedThresholds = z.infer<typeof reportJudgedThresholdsSchema>;
+
+export const reportJudgedStatsSchema = z.object({
+  n: z.number().int().min(0),
+  avg: z.number(),
+  median: z.number(),
+  min: z.number(),
+  max: z.number(),
+});
+
+const reportJudgedSimilarityCaseSchema = z.object({
+  id: z.string(),
+  question: z.string(),
+  similarity: z.number(),
+  overall: z.number(),
+});
+
+/**
+ * B0-811 — the judged-metrics rollup (methodology §7c). Null when no evaluated case carries either
+ * metric. Nothing here is a grade or an adjustment to one; renderers must present it as reported
+ * beside the grade.
+ */
+export const reportJudgedSchema = z.object({
+  thresholds: reportJudgedThresholdsSchema,
+  similarity: reportJudgedStatsSchema.nullable(),
+  similarityBands: z.object({
+    high: z.number().int().min(0),
+    mid: z.number().int().min(0),
+    low: z.number().int().min(0),
+  }),
+  similarityScoreCorrelation: z.number().nullable(),
+  highSimilarityFailures: z.array(reportJudgedSimilarityCaseSchema),
+  lowSimilarityPasses: z.array(reportJudgedSimilarityCaseSchema),
+  evalConfidence: reportJudgedStatsSchema.nullable(),
+  reviewQueue: z.array(
+    z.object({
+      id: z.string(),
+      question: z.string(),
+      evalConfidence: z.number(),
+      status: reportCaseStatusSchema,
+    }),
+  ),
+  nWithSimilarity: z.number().int().min(0),
+  nWithConfidence: z.number().int().min(0),
+});
+export type ReportJudged = z.infer<typeof reportJudgedSchema>;
+
+/**
+ * B0-825 — what this report was graded with, read off the persisted `report_state`. Null only for
+ * a report whose state predates the field.
+ */
+export const reportGradingConfigSchema = z.object({
+  model: z.string(),
+  passes: z.number().int().min(1),
+  spreadThreshold: z.number().nullable(),
+  passMark: z.number().nullable(),
+  gradingPromptHash: z.string().nullable(),
+  judgedThresholds: reportJudgedThresholdsSchema.nullable(),
+});
+export type ReportGradingConfigData = z.infer<typeof reportGradingConfigSchema>;
 
 /** Everything the Markdown's scorecard, tier/category tables and aggregate findings render. */
 export const reportMetricsSchema = z.object({
@@ -421,6 +496,8 @@ export const reportMetricsSchema = z.object({
   speed: reportSpeedSchema.nullable(),
   /** Null when no evaluated case carried concept data — omit every concept section entirely. */
   concepts: reportConceptRollupSchema.nullable(),
+  /** B0-811 — null when no evaluated case carries a judged metric; omit the section entirely. */
+  judged: reportJudgedSchema.nullable(),
   /**
    * B0-721 — the grading-consistency readout. Null on a single-pass run, which omits the summary,
    * the human-review queue and every per-case spread readout entirely.
@@ -548,6 +625,8 @@ export const reportDataReadySchema = z.object({
    * "regenerate this report" affordance; the numbers are still internally consistent.
    */
   stale: z.boolean(),
+  /** B0-825 — the grading configuration in force for this report. */
+  config: reportGradingConfigSchema.nullable(),
   metrics: reportMetricsSchema,
   synthesis: reportSynthesisSchema,
   /** Ordered exactly as the Markdown orders them: Tier 1 first, "Unspecified" last. */

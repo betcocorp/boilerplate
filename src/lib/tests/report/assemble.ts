@@ -26,7 +26,15 @@ import {
 } from './metrics';
 import type { CaseHarnessAside } from './render';
 import { caseAnchorId, orderCasesByTier } from './render';
-import { parseReportState, type CaseScore, type ReportState, type ReportSynthesis } from './schemas';
+import {
+  gradingConfigFromState,
+  parseReportState,
+  type CaseScore,
+  type ReportGradingConfig,
+  type ReportState,
+  type ReportSynthesis,
+} from './schemas';
+import type { JudgedThresholds } from './scoring-config';
 
 /**
  * B0-586 — the single assembly step that turns a run's raw rows (`tests`, `test_results`,
@@ -101,6 +109,8 @@ export type AssembleReportCasesParams = {
   spreadThreshold?: number | null;
   /** B0-812 — `report_state.passMark`; null falls back to `DEFAULT_PASS_MARK`. */
   passMark?: number | null;
+  /** B0-811 — `report_state.judgedThresholds`; null falls back to `DEFAULT_JUDGED_THRESHOLDS`. */
+  judgedThresholds?: JudgedThresholds | null;
   /**
    * B0-714 — how a failed structural invariant is treated. Defaults to `'throw'`, so the
    * generation path can never persist a report whose numbers contradict each other. `loadReportData`
@@ -124,11 +134,14 @@ export type AssembledReportCases = {
 export type AssembleReportParams = AssembleReportCasesParams & {
   synthesis: ReportSynthesis;
   generatedAt: string;
+  /** B0-825 — what the report was graded with; printed in the header and carried on the wire. */
+  config?: ReportGradingConfig | null;
 };
 
 export type AssembledReport = AssembledReportCases & {
   synthesis: ReportSynthesis;
   generatedAt: string;
+  config: ReportGradingConfig | null;
 };
 
 /**
@@ -216,6 +229,7 @@ export function assembleReportCases(params: AssembleReportCasesParams): Assemble
   const metrics = computeReportMetrics(caseInputs, {
     invariantSeverity: params.invariantSeverity,
     passMark: params.passMark,
+    judgedThresholds: params.judgedThresholds,
   });
   const evaluatedById = new Map(metrics.perCase.map((c) => [c.id, c]));
   // A case the metrics could not evaluate for want of expected concepts carries a stored score that
@@ -290,8 +304,8 @@ export function assembleReportCases(params: AssembleReportCasesParams): Assemble
 
 /** `assembleReportCases` plus the synthesis and timestamp that complete a finished report. */
 export function assembleReportData(params: AssembleReportParams): AssembledReport {
-  const { synthesis, generatedAt, ...rest } = params;
-  return { ...assembleReportCases(rest), synthesis, generatedAt };
+  const { synthesis, generatedAt, config, ...rest } = params;
+  return { ...assembleReportCases(rest), synthesis, generatedAt, config: config ?? null };
 }
 
 /** Projects the tuple-keyed metric groups onto the named-object wire shape. */
@@ -314,6 +328,8 @@ function toMetricsPayload(metrics: ReportMetrics): ReportMetricsData {
     passOnlyUnderCurrentMark: metrics.passOnlyUnderCurrentMark,
     speed: metrics.speed,
     concepts: metrics.concepts,
+    // B0-811 — null when no case carries a judged metric.
+    judged: metrics.judged,
     // B0-721 — null for a single-pass report, so the whole consistency block is omitted.
     consistency: metrics.consistency,
     warnings: metrics.warnings,
@@ -331,6 +347,7 @@ export function toReportDataPayload(assembled: AssembledReport): ReportDataRespo
     intendedAgent: assembled.test.intended_agent,
     generatedAt: assembled.generatedAt,
     stale: assembled.stale,
+    config: assembled.config,
     metrics: toMetricsPayload(assembled.metrics),
     synthesis: assembled.synthesis,
     cases: assembled.cases,
@@ -390,8 +407,10 @@ export async function loadReportData(runId: string): Promise<ReportDataResponse 
       casePassScores: state.casePassScores,
       spreadThreshold: state.spreadThreshold,
       passMark: state.passMark,
+      judgedThresholds: state.judgedThresholds,
       synthesis: state.synthesis,
       generatedAt: run.report_generated_at ?? state.updatedAt,
+      config: gradingConfigFromState(state),
       // Read path: surface a reconciliation failure on `metrics.warnings` rather than throwing.
       // Generation already refused to persist a report that does not reconcile; a report that is
       // nonetheless stored stays viewable, with the violation named.

@@ -430,6 +430,95 @@ describe('computeReportMetrics — concept rollup (B0-713 / B0-813)', () => {
   });
 });
 
+describe('computeReportMetrics — judged metrics rollup (B0-811)', () => {
+  function judged(
+    id: string,
+    judgedScore: number,
+    similarity: number | null,
+    evalConfidence: number | null,
+  ): ReportCaseInput {
+    return input(id, judgedScore, {
+      score: score(judgedScore, {
+        similarity,
+        similarityNote: similarity == null ? null : `sim note ${id}`,
+        evalConfidence,
+        confidenceNote: evalConfidence == null ? null : `conf note ${id}`,
+      }),
+    });
+  }
+
+  it('carries the judged metrics onto the case and never into the score', () => {
+    const c = only([judged('a', 90, 0.42, 65)]);
+    expect(c.similarity).toBe(0.42);
+    expect(c.similarityNote).toBe('sim note a');
+    expect(c.evalConfidence).toBe(65);
+    expect(c.confidenceNote).toBe('conf note a');
+    // Same overall as the same judged sub-scores with no judged metrics at all.
+    expect(c.overall).toBe(only([input('b', 90)]).overall);
+  });
+
+  it('reports the distributions, the two exception cells and the review queue', () => {
+    const metrics = computeReportMetrics([
+      judged('hi-fail', 40, 0.9, 55), // overall 58 Fail, similarity high → shape right, substance wrong
+      judged('lo-pass', 90, 0.3, 95), // overall 93 Pass, similarity low → right by another route
+      judged('mid', 70, 0.6, 72), // overall 79 Pass
+      judged('lo-conf', 80, 0.8, 70), // overall 86 Pass, confidence at the line → queued
+      judged('no-judged', 80, null, null),
+    ]);
+    const j = metrics.judged!;
+
+    expect(j.nWithSimilarity).toBe(4);
+    expect(j.nWithConfidence).toBe(4);
+    expect(j.similarity).toEqual({ n: 4, avg: 0.65, median: 0.7, min: 0.3, max: 0.9 });
+    expect(j.similarityBands).toEqual({ high: 2, mid: 1, low: 1 });
+    // Below the reference's 5-case floor, no correlation is reported.
+    expect(j.similarityScoreCorrelation).toBeNull();
+    expect(j.highSimilarityFailures.map((c) => c.id)).toEqual(['hi-fail']);
+    expect(j.lowSimilarityPasses.map((c) => c.id)).toEqual(['lo-pass']);
+    expect(j.evalConfidence).toEqual({ n: 4, avg: 73, median: 71, min: 55, max: 95 });
+    // Least confident first; at the line counts.
+    expect(j.reviewQueue.map((c) => [c.id, c.evalConfidence, c.status])).toEqual([
+      ['hi-fail', 55, 'Fail'],
+      ['lo-conf', 70, 'Pass'],
+    ]);
+    expect(j.thresholds).toEqual({
+      simHigh: 0.75,
+      simLow: 0.4,
+      lowConfidence: 70,
+      highSimFail: 0.6,
+      lowSimPass: 0.5,
+      corrMinN: 5,
+    });
+  });
+
+  it('reports the similarity-vs-score correlation once the sample is large enough', () => {
+    const metrics = computeReportMetrics([
+      judged('a', 40, 0.2, 80),
+      judged('b', 50, 0.4, 80),
+      judged('c', 60, 0.5, 80),
+      judged('d', 70, 0.7, 80),
+      judged('e', 90, 0.9, 80),
+    ]);
+    const r = metrics.judged!.similarityScoreCorrelation;
+    expect(r).not.toBeNull();
+    expect(r!).toBeGreaterThan(0.95);
+  });
+
+  it('honours the thresholds it is given', () => {
+    const metrics = computeReportMetrics([judged('a', 80, 0.55, 75)], {
+      judgedThresholds: { simHigh: 0.5, simLow: 0.2, lowConfidence: 80, highSimFail: 0.9, lowSimPass: 0.6, corrMinN: 2 },
+    });
+    const j = metrics.judged!;
+    expect(j.similarityBands).toEqual({ high: 1, mid: 0, low: 0 });
+    expect(j.lowSimilarityPasses.map((c) => c.id)).toEqual(['a']);
+    expect(j.reviewQueue.map((c) => c.id)).toEqual(['a']);
+  });
+
+  it('omits the rollup when no case carries either metric', () => {
+    expect(computeReportMetrics([input('a', 90), input('b', 50)]).judged).toBeNull();
+  });
+});
+
 describe('report invariants (B0-714 / B0-815)', () => {
   const PASSING: EvaluatedCase = {
     id: 'ok',
@@ -449,6 +538,10 @@ describe('report invariants (B0-714 / B0-815)', () => {
     materialIssue: false,
     passesOnlyUnderCurrentMark: false,
     concepts: FULL,
+    similarity: 0.8,
+    similarityNote: null,
+    evalConfidence: 90,
+    confidenceNote: null,
   };
 
   const BLOCK: RateBlock = {
@@ -559,6 +652,10 @@ describe('report invariants (B0-714 / B0-815)', () => {
           },
         ],
       }),
+    ],
+    [
+      'judged_metrics_in_range',
+      context({ evaluated: [{ ...PASSING, similarity: 1.2 }] }),
     ],
     [
       // B0-717 — the reverse leak: a speed score that no timing supports. `basis` claims both

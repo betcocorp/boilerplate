@@ -24,7 +24,7 @@ import type {
   ReportMetrics,
   SpeedMetricAggregate,
 } from './metrics';
-import type { CaseScore, ReportSynthesis } from './schemas';
+import type { CaseScore, ReportGradingConfig, ReportSynthesis } from './schemas';
 import {
   P90_MIN_N,
   P90_UNAVAILABLE_LABEL,
@@ -242,6 +242,38 @@ export function orderCasesByTier<T extends { tier: string }>(cases: T[]): T[] {
     .map(([c]) => c);
 }
 
+/** B0-825 — the one-line statement of what a report was graded with. */
+export function gradingConfigLine(config: ReportGradingConfig, strictPassMark: number): string {
+  const parts = [
+    `Graded by ${config.model}`,
+    `${config.passes} independent pass${config.passes === 1 ? '' : 'es'}`,
+    config.spreadThreshold != null ? `spread threshold ${config.spreadThreshold}` : null,
+    config.passMark != null ? `pass mark ${config.passMark} (strict ${strictPassMark})` : null,
+    config.judgedThresholds
+      ? `judged thresholds sim ≥ ${config.judgedThresholds.simHigh} high / < ${config.judgedThresholds.simLow} low · review ≤ ${config.judgedThresholds.lowConfidence} confidence`
+      : null,
+    config.gradingPromptHash ? `grading prompt ${config.gradingPromptHash.slice(0, 12)}` : null,
+  ].filter((part): part is string => part !== null);
+  return `_${parts.join(' · ')}._`;
+}
+
+/** B0-811 — the one line of judged metrics a case gets, beneath the speed line and labelled like it. */
+function caseJudgedLine(evaluated: EvaluatedCase): string | null {
+  const parts: string[] = [];
+  if (evaluated.similarity != null) {
+    parts.push(
+      `similarity to the Ideal Response ${evaluated.similarity}${evaluated.similarityNote ? ` — ${evaluated.similarityNote}` : ''}`,
+    );
+  }
+  if (evaluated.evalConfidence != null) {
+    parts.push(
+      `evaluator confidence ${evaluated.evalConfidence}/100${evaluated.confidenceNote ? ` — ${evaluated.confidenceNote}` : ''}`,
+    );
+  }
+  if (parts.length === 0) return null;
+  return `**Judged (reported separately; not part of the content grade):** ${parts.join(' · ')}`;
+}
+
 export function renderReportMarkdown(params: {
   test: TestRecord;
   run: TestResultRecord;
@@ -249,8 +281,10 @@ export function renderReportMarkdown(params: {
   cases: CaseRenderDetail[];
   synthesis: ReportSynthesis;
   generatedAt: string;
+  /** B0-825 — omitted only for a report whose persisted state predates the field. */
+  config?: ReportGradingConfig | null;
 }): string {
-  const { test, run, metrics: m, synthesis, generatedAt } = params;
+  const { test, run, metrics: m, synthesis, generatedAt, config } = params;
   const orderedCases = orderCasesByTier(params.cases);
   const byId = new Map(m.perCase.map((c) => [c.id, c]));
   const caseIds = orderedCases.map((c) => c.id);
@@ -271,6 +305,11 @@ export function renderReportMarkdown(params: {
   ].filter(Boolean);
   push(subtitleParts.join('  •  '));
   blank();
+  // B0-825 — a reader comparing two reports needs to know whether the agent changed or the rules did.
+  if (config) {
+    push(gradingConfigLine(config, m.strictPassMark));
+    blank();
+  }
 
   // --- Executive assessment ---
   push('## Executive assessment');
@@ -476,6 +515,61 @@ export function renderReportMarkdown(params: {
     }
   }
 
+  // --- Judged metrics (B0-811) ---
+  // Omitted entirely when no case carries either metric. Two distributions, two exception cells and
+  // a review queue — no average presented as a verdict, and nothing here touches a grade (§7c).
+  if (m.judged) {
+    const j = m.judged;
+    const t = j.thresholds;
+    push('## Judged metrics (reported separately — not part of the grade)');
+    blank();
+    push(
+      'Two judgments the grader made while reading each case, reported beside the grade and never folded into it: how much of what the Ideal Response says the answer also says, and how sure the grader was of the grade it gave. The gap between them and the grade is the point.',
+    );
+    blank();
+    if (j.similarity) {
+      push(
+        `- Similarity to the Ideal Response: average **${j.similarity.avg}**, median ${j.similarity.median}, range ${j.similarity.min}–${j.similarity.max} (n=${j.similarity.n}) — high (≥ ${t.simHigh}) ${j.similarityBands.high} · mid ${j.similarityBands.mid} · low (< ${t.simLow}) ${j.similarityBands.low}.`,
+      );
+      push(
+        `- Similarity vs content score: ${j.similarityScoreCorrelation != null ? `r = ${j.similarityScoreCorrelation}` : `not reported (fewer than ${t.corrMinN} cases, or no variance)`}.`,
+      );
+    }
+    if (j.evalConfidence) {
+      push(
+        `- Evaluator confidence: average **${j.evalConfidence.avg}**, median ${j.evalConfidence.median}, range ${j.evalConfidence.min}–${j.evalConfidence.max} (n=${j.evalConfidence.n}).`,
+      );
+    }
+    push(
+      `- Close to the ideal (≥ ${t.highSimFail}) and still failed — shape right, substance wrong: **${j.highSimilarityFailures.length}**${
+        j.highSimilarityFailures.length > 0
+          ? ` — ${j.highSimilarityFailures.map((c) => `${idLink(c.id)} (similarity ${c.similarity}, scored ${c.overall})`).join(', ')}`
+          : ''
+      }.`,
+    );
+    push(
+      `- Passed while diverging from the ideal (< ${t.lowSimPass}) — right by a different route: **${j.lowSimilarityPasses.length}**${
+        j.lowSimilarityPasses.length > 0
+          ? ` — ${j.lowSimilarityPasses.map((c) => `${idLink(c.id)} (similarity ${c.similarity}, scored ${c.overall})`).join(', ')}`
+          : ''
+      }.`,
+    );
+    blank();
+    if (j.reviewQueue.length > 0) {
+      push(`### SME review queue — grades held at ${t.lowConfidence} confidence or below`);
+      blank();
+      push('| ID | Question | Confidence | Result |');
+      push('|---|---|---|---|');
+      for (const entry of j.reviewQueue) {
+        push(`| ${idLink(entry.id)} | ${mdCell(entry.question)} | ${entry.evalConfidence} | ${entry.status} |`);
+      }
+      blank();
+    } else {
+      push(`_No case is held at ${t.lowConfidence} confidence or below — the review queue is empty._`);
+      blank();
+    }
+  }
+
   // --- Grading consistency (B0-721) ---
   // Omitted entirely — heading and all — for a single-pass run: `metrics.consistency` is null when
   // no case was graded more than once, and "0 flags out of 0 comparisons" would read as a clean
@@ -649,6 +743,13 @@ export function renderReportMarkdown(params: {
     // Placed after the score table, never inside it (B0-718).
     if (c.speed) {
       push(caseSpeedLine(c.speed));
+      blank();
+    }
+
+    // B0-811 — directly beneath the speed line, labelled the same way (§9).
+    const judgedLine = evaluated ? caseJudgedLine(evaluated) : null;
+    if (judgedLine) {
+      push(judgedLine);
       blank();
     }
 

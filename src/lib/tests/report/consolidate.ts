@@ -43,8 +43,12 @@ import { DEFAULT_PASS_MARK } from './scoring-config';
  *    the sub-scores; timings are measurements and are never consolidated (rule 3).
  */
 
-/** The shipped pass count. **1, not 3** (Tom Bird, 2026-08-27): multi-pass is opt-in. */
-export const DEFAULT_GRADING_PASSES = 1;
+/**
+ * The shipped pass count. **3** (B0-818, Tom Bird 2026-09-03), matching the reference methodology's
+ * §4b default — grading is a judgment call, and three independent passes are what makes a
+ * flip-prone verdict visible instead of hidden. Was 1 (opt-in) from 2026-08-27 to 2026-09-03.
+ */
+export const DEFAULT_GRADING_PASSES = 3;
 
 /**
  * Upper bound on the configured pass count. Every extra pass is another full grading call per

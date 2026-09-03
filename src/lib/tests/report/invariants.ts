@@ -279,6 +279,23 @@ export const REPORT_INVARIANTS: readonly ReportInvariant[] = [
     },
   },
   {
+    name: 'judged_metrics_in_range',
+    describes:
+      'every judged similarity sits in 0–1 and every evaluator confidence in 0–100 — and neither appears in any content score (asserted by overall_recomputes_from_sub_scores)',
+    failed: (ctx) => {
+      const offenders = ctx.evaluated.filter(
+        (c) =>
+          (c.similarity != null && (c.similarity < 0 || c.similarity > 1)) ||
+          (c.evalConfidence != null && (c.evalConfidence < 0 || c.evalConfidence > 100)),
+      );
+      return offenders.length === 0
+        ? null
+        : offenders
+            .map((c) => `${c.id} — similarity ${c.similarity}, confidence ${c.evalConfidence}`)
+            .join(' | ');
+    },
+  },
+  {
     name: 'speed_scores_match_timings',
     describes:
       'a speed score exists only where a timing does, names exactly the metrics measured, and recomputes from them',

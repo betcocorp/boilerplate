@@ -161,6 +161,19 @@ export const reportStateSchema = z.object({
    * Null on a legacy row. Two reports that disagree can be told apart by this before anything else.
    */
   gradingPromptHash: z.string().nullable().optional().default(null),
+  /** B0-811 — the judged-metric thresholds in force when this report was graded. Null on a legacy row. */
+  judgedThresholds: z
+    .object({
+      simHigh: z.number(),
+      simLow: z.number(),
+      lowConfidence: z.number(),
+      highSimFail: z.number(),
+      lowSimPass: z.number(),
+      corrMinN: z.number(),
+    })
+    .nullable()
+    .optional()
+    .default(null),
   synthesis: reportSynthesisSchema.nullable(),
   error: z.string().nullable(),
   // B0-609 — the report's aggregate score/grade (`computeReportMetrics(...).overall`), persisted
@@ -203,9 +216,35 @@ export function emptyReportState(
     spreadThreshold,
     passMark,
     gradingPromptHash: null,
+    judgedThresholds: null,
     synthesis: null,
     error: null,
     overall: null,
+  };
+}
+
+/**
+ * B0-825 — everything that decided this report's numbers besides the answers themselves, read off
+ * the persisted state so a report always says what it was graded with. Two reports that disagree
+ * can be told apart by this block before anything else is compared.
+ */
+export type ReportGradingConfig = {
+  model: string;
+  passes: number;
+  spreadThreshold: number | null;
+  passMark: number | null;
+  gradingPromptHash: string | null;
+  judgedThresholds: ReportState['judgedThresholds'];
+};
+
+export function gradingConfigFromState(state: ReportState): ReportGradingConfig {
+  return {
+    model: state.model,
+    passes: state.passes,
+    spreadThreshold: state.spreadThreshold,
+    passMark: state.passMark,
+    gradingPromptHash: state.gradingPromptHash,
+    judgedThresholds: state.judgedThresholds,
   };
 }
 
