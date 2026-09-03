@@ -160,6 +160,7 @@ describe('resolveProductEntityByName — exact alias_norm match (B0-200)', () =>
       ambiguousAlias: false,
       matchedAliasId: 'alias-1',
       matchedAliasConfidence: 0.95,
+      matchedTitle: null,
     });
   });
 
@@ -197,6 +198,7 @@ describe('resolveProductEntityByName — exact alias_norm match (B0-200)', () =>
       ambiguousAlias: false,
       matchedAliasId: null,
       matchedAliasConfidence: null,
+      matchedTitle: null,
     });
   });
 
@@ -232,6 +234,7 @@ describe('resolveProductEntityByName — legacy fallback behavior unchanged when
       ambiguousAlias: false,
       matchedAliasId: null,
       matchedAliasConfidence: null,
+      matchedTitle: null,
     });
   });
 
@@ -255,6 +258,7 @@ describe('resolveProductEntityByName — legacy fallback behavior unchanged when
       ambiguousAlias: false,
       matchedAliasId: null,
       matchedAliasConfidence: null,
+      matchedTitle: null,
     });
   });
 
@@ -271,6 +275,7 @@ describe('resolveProductEntityByName — legacy fallback behavior unchanged when
       ambiguousAlias: false,
       matchedAliasId: null,
       matchedAliasConfidence: null,
+      matchedTitle: null,
     });
   });
 });
@@ -300,6 +305,7 @@ describe('resolveProductEntityByName — tokenized fuzzy alias fallback (B0-272)
       ambiguousAlias: false,
       matchedAliasId: 'alias-4',
       matchedAliasConfidence: 0.8,
+      matchedTitle: null,
     });
   });
 
@@ -326,6 +332,7 @@ describe('resolveProductEntityByName — tokenized fuzzy alias fallback (B0-272)
       ambiguousAlias: false,
       matchedAliasId: null,
       matchedAliasConfidence: null,
+      matchedTitle: null,
     });
   });
 
@@ -348,6 +355,7 @@ describe('resolveProductEntityByName — tokenized fuzzy alias fallback (B0-272)
       ambiguousAlias: true,
       matchedAliasId: null,
       matchedAliasConfidence: null,
+      matchedTitle: null,
     });
   });
 });
@@ -380,6 +388,7 @@ describe('resolveProductEntityByName — exact alias_norm match spanning multipl
       ambiguousAlias: false,
       matchedAliasId: 'alias-us',
       matchedAliasConfidence: 1,
+      matchedTitle: null,
     });
   });
 
@@ -399,6 +408,7 @@ describe('resolveProductEntityByName — exact alias_norm match spanning multipl
       ambiguousAlias: true,
       matchedAliasId: null,
       matchedAliasConfidence: null,
+      matchedTitle: null,
     });
   });
 
@@ -418,6 +428,7 @@ describe('resolveProductEntityByName — exact alias_norm match spanning multipl
       ambiguousAlias: true,
       matchedAliasId: null,
       matchedAliasConfidence: null,
+      matchedTitle: null,
     });
   });
 });
@@ -460,6 +471,7 @@ describe('resolveProductEntityByName — trigram fuzzy alias RPC fallback (B0-48
       // The RPC never returns the alias row id.
       matchedAliasId: null,
       matchedAliasConfidence: 0.9,
+      matchedTitle: null,
     });
   });
 
@@ -497,6 +509,7 @@ describe('resolveProductEntityByName — trigram fuzzy alias RPC fallback (B0-48
       ambiguousAlias: true,
       matchedAliasId: null,
       matchedAliasConfidence: null,
+      matchedTitle: null,
     });
   });
 
@@ -534,6 +547,7 @@ describe('resolveProductEntityByName — trigram fuzzy alias RPC fallback (B0-48
       ambiguousAlias: false,
       matchedAliasId: null,
       matchedAliasConfidence: 0.9,
+      matchedTitle: null,
     });
   });
 
@@ -566,6 +580,7 @@ describe('resolveProductEntityByName — trigram fuzzy alias RPC fallback (B0-48
       ambiguousAlias: false,
       matchedAliasId: null,
       matchedAliasConfidence: null,
+      matchedTitle: null,
     });
   });
 });
@@ -609,6 +624,7 @@ describe('resolveProductEntityByName — EXP- experimental alias exclusion (B0-7
       ambiguousAlias: false,
       matchedAliasId: null,
       matchedAliasConfidence: 0.9,
+      matchedTitle: null,
     });
   });
 
@@ -657,6 +673,7 @@ describe('resolveProductEntityByName — EXP- experimental alias exclusion (B0-7
       ambiguousAlias: false,
       matchedAliasId: null,
       matchedAliasConfidence: null,
+      matchedTitle: null,
     });
   });
 
@@ -718,6 +735,7 @@ describe('resolveProductEntityByName — freeform mode restricts resolution to p
       ambiguousAlias: false,
       matchedAliasId: 'alias-kling',
       matchedAliasConfidence: 1,
+      matchedTitle: null,
     });
   });
 
@@ -744,6 +762,7 @@ describe('resolveProductEntityByName — freeform mode restricts resolution to p
       ambiguousAlias: false,
       matchedAliasId: 'alias-4',
       matchedAliasConfidence: 0.8,
+      matchedTitle: null,
     });
   });
 
@@ -775,6 +794,7 @@ describe('resolveProductEntityByName — freeform mode restricts resolution to p
       ambiguousAlias: false,
       matchedAliasId: null,
       matchedAliasConfidence: null,
+      matchedTitle: null,
     });
 
     // Control: the same fixture and query DO reach (and resolve through) the RPC in name mode —
@@ -817,6 +837,7 @@ describe('resolveProductEntityByName — freeform mode restricts resolution to p
       ambiguousAlias: true,
       matchedAliasId: null,
       matchedAliasConfidence: null,
+      matchedTitle: null,
     });
 
     // Control: name mode still applies the verified-tiebreak, unchanged by B0-479.
@@ -863,6 +884,7 @@ describe('resolveProductEntityByName — freeform mode restricts resolution to p
       ambiguousAlias: false,
       matchedAliasId: null,
       matchedAliasConfidence: null,
+      matchedTitle: null,
     });
     expect(
       (await resolveProductEntityByName('SuperClean 500', { mode: 'freeform' })).productLineKey,

@@ -7,6 +7,7 @@ import {
 import { ragQueryForProductKnowledgeWithMeta } from '~/lib/retrieval/product-knowledge';
 import {
   buildFactsBlock,
+  fetchEntityTitle,
   fetchFactsForProduct,
   fetchFactsForProductBatch,
   type ProductLineFacts,
@@ -143,6 +144,16 @@ export type AliasResolutionTelemetry = {
    * (freeform attempts are expected to miss far more often — most freeform queries name no product).
    */
   mode: ProductEntityResolutionMode;
+  /**
+   * B0-700 follow-up: the resolved entity's real `rag.entity.title`, straight off
+   * `ProductEntityResolutionResult.matchedTitle` — null unless `outcome` is `alias_exact` or
+   * `alias_fuzzy`. This is the only reliable "what did we actually match?" display name for an
+   * alias hit (the tool call's own `productId`/`name` argument is the RAW string the model/user
+   * asked for, which is exactly the wrong thing to show back as the resolved product on a fuzzy
+   * hit). Used by `maybeDiscloseAliasFuzzyMatch` (`~/lib/workflows/product-support/run-product-support-workflow.ts`)
+   * to deterministically disclose a fuzzy-alias correction — never invent/reformat this value.
+   */
+  matchedTitle: string | null;
 };
 
 function classifyAliasResolutionOutcome(
@@ -210,7 +221,10 @@ async function resolveProductEntityWithAliasTelemetry(
     );
   }
 
-  return { ...resolution, aliasResolution: { attempted, outcome, mode } };
+  return {
+    ...resolution,
+    aliasResolution: { attempted, outcome, mode, matchedTitle: resolution.matchedTitle },
+  };
 }
 
 /**
@@ -1027,6 +1041,17 @@ export async function executeProductTool(
         };
       }
 
+      // B0-700 follow-up — the facts block's title used to be `p.productId` (the caller's raw,
+      // unverified typed name), which silently relabeled the real product under whatever the
+      // user typed even when resolution only found it via a FUZZY alias match to a differently
+      // named product (e.g. "AG79 Concentrate Disinfectant" typed, "AF79 Concentrate
+      // Disinfectant" actually resolved). That made the mismatch invisible to the model — it saw
+      // a "Verified Product Facts" block confidently headed with its own typed name. Now uses the
+      // entity's own real title when available, falling back to the typed name only on a lookup
+      // miss (never blocks the answer on this).
+      const resolvedTitle = facts ? await fetchEntityTitle(facts.entityId) : null;
+      const factsDisplayTitle = resolvedTitle ?? p.productId;
+
       // B0-196: surface the verified facts as a first-class grounded source so the
       // validator's evidence summary (built from sources[].documentBody) can cite the
       // kill claim. Without this, an efficacy-only answer carries zero evidence and the
@@ -1035,7 +1060,7 @@ export async function executeProductTool(
       const factsBlock = facts
         ? buildFactsBlock(
             new Map([[facts.entityId, facts]]),
-            new Map([[facts.entityId, p.productId]]),
+            new Map([[facts.entityId, factsDisplayTitle]]),
           )
         : null;
 
@@ -1084,6 +1109,11 @@ export async function executeProductTool(
         adapter: 'structured_facts_v1',
         aliasResolution,
         productId: p.productId,
+        // B0-700 follow-up — the ACTUAL product this data belongs to, distinct from `productId`
+        // (what was searched for). When `aliasResolution.outcome` is `alias_fuzzy` and this
+        // differs from `productId`, the answer must disclose the correction — see the
+        // "Identify the product before any regulated value" rule in product-support-prompts.ts.
+        resolvedProductTitle: resolvedTitle,
         productLineKey,
         organism: p.organism ?? null,
         facts,

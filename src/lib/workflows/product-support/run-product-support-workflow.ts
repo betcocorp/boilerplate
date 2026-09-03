@@ -1012,6 +1012,154 @@ export function isUnendorsedSpeculativeToolOutput(trace: ToolTraceEntry): boolea
   );
 }
 
+/**
+ * B0-700 follow-up — a fuzzy-alias resolution the turn's answer actually relies on, ready to be
+ * deterministically disclosed.
+ *
+ * `askedForName` is the RAW string the model/user named (a product tool's own `productId`/
+ * `query`/`productName` field — never the resolved product), and `resolvedTitle` is the real
+ * resolved entity's own `rag.entity.title` (`aliasResolution.matchedTitle`, added alongside this
+ * ticket in `~/lib/rag/entity-context.ts` / `~/lib/tools/product-tools.ts`) — never invented,
+ * reformatted, or guessed.
+ */
+export type AliasFuzzyDisclosureMatch = {
+  askedForName: string;
+  resolvedTitle: string;
+};
+
+/**
+ * Scans this turn's tool outputs, LAST call first, for the fuzzy-alias hit that grounded the final
+ * answer — mirrors the scan order of `extractRecommendationEngineOutcomeFromToolOutputs` /
+ * `extractTopCrossReferenceMatchFromToolOutputs` above (the last relevant call in a turn is the one
+ * that actually fed the drafted answer when more than one ran).
+ *
+ * Deliberately narrow to keep a noisy trace from over-disclosing:
+ *  - `!entry.ok` calls and `isUnendorsedSpeculativeToolOutput` calls are skipped — same "did this
+ *    actually reach the user" filter `collectSourcesFromToolOutputs` uses (B0-635), so an unused
+ *    speculative pre-fetch's fuzzy hit never triggers a disclosure for a product the answer never
+ *    discusses.
+ *  - only `aliasResolution.outcome === 'alias_fuzzy'` fires — `alias_exact` needs no disclosure,
+ *    and `no_alias_match`/`ambiguous_alias` are the existing B0-700 decline path, untouched here.
+ *  - a call with no `matchedTitle` (e.g. an older payload shape, or the alias pointed at a
+ *    title-less entity) is skipped rather than disclosing with a blank/guessed name.
+ *  - skipped when the asked-for string and the resolved title are already the same text — nothing
+ *    to disclose.
+ */
+export function extractAliasFuzzyDisclosureFromToolOutputs(
+  toolOutputs: RuntimeToolOutput[],
+): AliasFuzzyDisclosureMatch | null {
+  for (let i = toolOutputs.length - 1; i >= 0; i -= 1) {
+    const entry = toolOutputs[i];
+    if (!entry || !entry.ok || isUnendorsedSpeculativeToolOutput(entry.trace)) {
+      continue;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(entry.output);
+    } catch {
+      continue;
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      continue;
+    }
+    const payload = parsed as Record<string, unknown>;
+
+    const aliasResolutionRaw = payload.aliasResolution;
+    if (
+      !aliasResolutionRaw ||
+      typeof aliasResolutionRaw !== 'object' ||
+      Array.isArray(aliasResolutionRaw)
+    ) {
+      continue;
+    }
+    const aliasResolution = aliasResolutionRaw as Record<string, unknown>;
+    if (aliasResolution.outcome !== 'alias_fuzzy') {
+      continue;
+    }
+
+    const resolvedTitle =
+      typeof aliasResolution.matchedTitle === 'string' ? aliasResolution.matchedTitle.trim() : '';
+    if (!resolvedTitle) {
+      continue;
+    }
+
+    // Regulated product-tool calls echo the raw input as `productId`; `search_product_docs`
+    // echoes it as `query` instead (see `~/lib/tools/product-tools.ts`). Neither is invented here
+    // — both are the literal string the tool was called with.
+    const askedForRaw =
+      typeof payload.productId === 'string' && payload.productId.trim()
+        ? payload.productId
+        : typeof payload.query === 'string' && payload.query.trim()
+          ? payload.query
+          : typeof payload.productName === 'string' && payload.productName.trim()
+            ? payload.productName
+            : '';
+    const askedForName = askedForRaw.trim();
+    if (!askedForName || askedForName.toLowerCase() === resolvedTitle.toLowerCase()) {
+      continue;
+    }
+
+    return { askedForName, resolvedTitle };
+  }
+  return null;
+}
+
+/**
+ * Cheap heuristic for "the model already disclosed this itself" — the B0-700 prompt rule DOES
+ * sometimes get followed, and this guardrail's whole job is to backstop the cases where it isn't,
+ * not to double up on the cases where it is. Deliberately loose (a handful of phrasings a
+ * disclosure sentence would plausibly use), because a false "already disclosed" (skips the
+ * deterministic prepend) is a silent regression to the exact bug this exists to fix, while a false
+ * "not yet disclosed" (prepends anyway) only ever produces a redundant sentence, never a wrong one.
+ */
+const ALIAS_FUZZY_DISCLOSURE_ALREADY_PRESENT_PATTERN =
+  /couldn.?t find an exact match|could not find an exact match|did you mean|closest match|no exact match|typo|misspell/i;
+
+export function draftAlreadyDisclosesAliasCorrection(draftAnswer: string): boolean {
+  return ALIAS_FUZZY_DISCLOSURE_ALREADY_PRESENT_PATTERN.test(draftAnswer);
+}
+
+/**
+ * The disclosure sentence itself — plain prose, no dilution/EPA/DIN/CAS/contact-time/hazard/
+ * compatibility/efficacy-shaped tokens, so it can pass through `evaluateRegulatedClaimGrounding`
+ * unaffected (verified by `alias-fuzzy-disclosure.test.ts`). Both names are transcribed verbatim
+ * from `AliasFuzzyDisclosureMatch` — never reformatted.
+ */
+export function buildAliasFuzzyDisclosureSentence(match: AliasFuzzyDisclosureMatch): string {
+  return `I couldn't find an exact match for "${match.askedForName}", but found ${match.resolvedTitle} — here is its information:\n\n`;
+}
+
+/**
+ * B0-700 follow-up — the deterministic backstop itself. `gpt-4.1-mini` was confirmed (live, twice)
+ * to ignore the prompt-only disclosure instruction, the same failure class already fixed for a
+ * false-claim rejection in B0-756; this is the equivalent fix for a missing disclosure SENTENCE,
+ * which has no "source" to verify against (it's Bex's own meta-commentary on its resolution
+ * process, not a regulated claim), so it is composed here in code instead of gated by the
+ * regulated-claim guardrail.
+ *
+ * Called once `draftAnswer` is fully settled (after the revision pass, before the regulated-claim
+ * guardrail so the prepended sentence is itself swept through that check) — see the call site in
+ * `runProductSupportWorkflow`. Skipped entirely on an already-declined draft (nothing was actually
+ * answered to disclose a correction for).
+ */
+export function maybeDiscloseAliasFuzzyMatch(
+  draftAnswer: string,
+  toolOutputs: RuntimeToolOutput[],
+): string {
+  if (isDeclineAnswer(draftAnswer)) {
+    return draftAnswer;
+  }
+  const match = extractAliasFuzzyDisclosureFromToolOutputs(toolOutputs);
+  if (!match) {
+    return draftAnswer;
+  }
+  if (draftAlreadyDisclosesAliasCorrection(draftAnswer)) {
+    return draftAnswer;
+  }
+  return buildAliasFuzzyDisclosureSentence(match) + draftAnswer;
+}
+
 export function collectSourcesFromToolOutputs(toolOutputs: RuntimeToolOutput[]): SourceRef[] {
   const map = new Map<string, SourceRef>();
 
@@ -3959,6 +4107,23 @@ export async function runProductSupportWorkflow(input: {
       });
       // B0-358 — the gate ran and PASSED; distinguishable from "the gate never ran".
       usageSafetyCoverageActivation = { state: 'ran', verdict: 'passed' };
+    }
+
+    /**
+     * B0-700 follow-up — deterministic fuzzy-alias disclosure. Applied here: `draftAnswer` is
+     * fully settled (past the revision pass and every answer-replacing branch above), and this
+     * runs BEFORE the regulated-claim guardrail below so the prepended sentence is itself swept
+     * through that verbatim-grounding check (it must never trip it — see
+     * `buildAliasFuzzyDisclosureSentence`'s doc comment and `alias-fuzzy-disclosure.test.ts`).
+     * A no-op (returns `draftAnswer` unchanged) unless this turn actually grounded on an
+     * `alias_fuzzy` resolution the model didn't already disclose itself.
+     */
+    const preDisclosureDraftAnswer = draftAnswer;
+    draftAnswer = maybeDiscloseAliasFuzzyMatch(draftAnswer, toolOutputLog);
+    if (draftAnswer !== preDisclosureDraftAnswer) {
+      // B0-391 — last writer that actually changed the text wins; a no-op prepend (nothing to
+      // disclose, or the model already did) deliberately leaves provenance untouched.
+      answerProvenance = 'alias_fuzzy_disclosure_prepended';
     }
 
     // B0-257: regulated-claim guardrail -- evaluated unconditionally (independent of the

@@ -109,6 +109,16 @@ export const answerProvenanceSchema = z.enum([
    * verdict on a resolved identity — this fires before the engine's verdict is even trusted.
    */
   'competitor_identity_unresolved_decline',
+  /**
+   * B0-700 follow-up — `maybeDiscloseAliasFuzzyMatch` (`~/lib/workflows/product-support/run-product-support-workflow.ts`)
+   * deterministically prepended the "couldn't find an exact match for X, but found Y" disclosure
+   * sentence because this turn's answer grounded on an `alias_fuzzy` resolution the model didn't
+   * already disclose itself. Only set when the prepend actually changed the text (mirrors the
+   * "last writer that actually changed the text wins" rule the other provenance values follow) —
+   * a call that found nothing to disclose, or found the model already had, leaves the prior
+   * provenance value untouched.
+   */
+  'alias_fuzzy_disclosure_prepended',
 ]);
 
 export type AnswerProvenance = z.infer<typeof answerProvenanceSchema>;
