@@ -243,11 +243,14 @@ export async function runValidatorPass(input: {
 
 export type RegulatedClaimCategory =
   | 'epa_registration'
+  | 'din_registration'
   | 'dilution_ratio'
   | 'contact_time'
   | 'hazard'
   | 'first_aid'
-  | 'compatibility';
+  | 'compatibility'
+  | 'cas_number'
+  | 'efficacy_claim';
 
 export type RegulatedClaimSource = {
   documentId: string;
@@ -325,10 +328,26 @@ function splitIntoSentences(text: string): string[] {
 }
 
 const EPA_REG_TOKEN_PATTERN = /\bepa\b[^\n]{0,50}?(\d{1,6}-\d{1,6}(?:-\d{1,6})?)/gi;
+/**
+ * B0-756 audit — the org's regulated-data rule names "DIN" alongside EPA reg numbers as a value
+ * that must be transcribed exactly (see the "Name your sources" section of
+ * `product-support-prompts.ts`, which already tells the model DIN comes from the Canadian label),
+ * but nothing verified it. Same token shape as `EPA_REG_TOKEN_PATTERN`: anchored on a nearby "DIN"
+ * mention so a stray hyphenated/digit-run number elsewhere in the answer isn't swept in. Canadian
+ * DIN numbers are 8 digits; PCP numbers (also Canadian, pesticide-specific) are typically 4-6 --
+ * both anchor on "DIN"/"PCP" so one pattern covers both without guessing which the model wrote.
+ */
+const DIN_REG_TOKEN_PATTERN = /\b(?:din|pcp)\b[^\n]{0,50}?(\d{4,8})/gi;
 /** Inherently dilution-shaped values -- extracted wherever they appear. */
 const DILUTION_TOKEN_PATTERNS = [
   /\d+(?:\.\d+)?\s*(?:fl\.?\s*)?oz\.?s?\s*(?:\/|per)\s*gal(?:lon)?s?\b/gi,
   /\b\d{1,3}\s*:\s*\d{1,5}\b/g,
+  // B0-756 audit -- the org's regulated-data rule lists "mL/L" and "ppm" alongside oz/gal and
+  // ratios as dilution/concentration values that must be transcribed exactly. Both were
+  // completely unextracted before this, so a fabricated ppm or mL/L figure was invisible to this
+  // guardrail no matter how wrong it was.
+  /\d+(?:\.\d+)?\s*ml\.?\s*(?:\/|per)\s*l(?:iter|itre)?s?\b/gi,
+  /\d+(?:\.\d+)?\s*ppm\b/gi,
 ];
 /**
  * B0-366: a bare percentage is only a dilution/concentration claim when dilution context sits
@@ -380,6 +399,20 @@ const COMPATIBILITY_CLAIM_PATTERN =
   /\b(safe (?:for|to use on|on)|approved (?:surface|for use)?(?: on| for)?|compatible with|not compatible with|will not (?:damage|harm|etch|dull|corrode|discolor|degrade|pit|haze)|not (?:recommended|safe|approved) for|should not be used on|suitable for use on|can be used on|recommended for use on|labeled for use on)\b/i;
 
 /**
+ * B0-756 audit — the same failure class as `compatibility` above but for organism/kill claims:
+ * "kills SARS-CoV-2 in one minute", "effective against a broad spectrum of pathogens",
+ * "bactericidal". These are EPA-registered efficacy claims (see B0-760's "kill claims do not
+ * transfer" work on the cross-reference path), yet nothing in this file verified them against a
+ * source before now — a fabricated organism or log-reduction claim was as invisible as the
+ * compatibility gap was. Deliberately narrow to strong, unambiguous efficacy-claim vocabulary
+ * (never a bare "disinfects"/"disinfectant", which appears in nearly every product's generic
+ * marketing description and would blow up false-positive volume) so this doesn't start rejecting
+ * ordinary, already-grounded product descriptions.
+ */
+const EFFICACY_CLAIM_SENTENCE_PATTERN =
+  /\b(kills?\b|kill claims?|eliminat(?:es?|ing)\b|effective against|bactericidal|virucidal|fungicidal|sporicidal|tuberculocidal|\d[\s-]*log reduction|log[\s-]*\d+ reduction|\d+(?:\.\d+)?\s*(?:%|percent)\s*(?:of\s+)?(?:bacteria|viruses|virus|germs|pathogens|microorganisms|microbes)\b)/i;
+
+/**
  * B0-366: sentences that announce or label content rather than assert it -- Markdown headings
  * ("**First aid measures:**"), label field scaffolding with no value, and the model's own framing
  * ("The hazard warnings for X are as follows:"). A heading carries no assertion to verify, and a
@@ -417,6 +450,30 @@ function extractRegexTokens(text: string, pattern: RegExp): string[] {
 function extractEpaRegTokens(text: string): string[] {
   const tokens: string[] = [];
   for (const match of text.matchAll(EPA_REG_TOKEN_PATTERN)) {
+    if (match[1]) tokens.push(match[1]);
+  }
+  return tokens;
+}
+
+/** Extracts the DIN/PCP-shaped token near a "DIN"/"PCP" mention, not just any digit run. */
+function extractDinRegTokens(text: string): string[] {
+  const tokens: string[] = [];
+  for (const match of text.matchAll(DIN_REG_TOKEN_PATTERN)) {
+    if (match[1]) tokens.push(match[1]);
+  }
+  return tokens;
+}
+
+/**
+ * B0-756 audit — CAS Registry Numbers (e.g. "7647-14-5") are on the org's explicit regulated-value
+ * list. Anchored on a nearby "CAS" mention, same shape as `EPA_REG_TOKEN_PATTERN`/`DIN_REG_TOKEN_PATTERN`,
+ * so a citation-page hyphenated number elsewhere in the answer isn't swept in.
+ */
+const CAS_NUMBER_TOKEN_PATTERN = /\bcas\b[^\n]{0,30}?(\d{2,7}-\d{2}-\d)\b/gi;
+
+function extractCasNumberTokens(text: string): string[] {
+  const tokens: string[] = [];
+  for (const match of text.matchAll(CAS_NUMBER_TOKEN_PATTERN)) {
     if (match[1]) tokens.push(match[1]);
   }
   return tokens;
@@ -475,6 +532,10 @@ function isCompatibilityClaimSentence(sentence: string): boolean {
   return (
     COMPATIBILITY_MATERIAL_PATTERN.test(sentence) && COMPATIBILITY_CLAIM_PATTERN.test(sentence)
   );
+}
+
+function isEfficacyClaimSentence(sentence: string): boolean {
+  return EFFICACY_CLAIM_SENTENCE_PATTERN.test(sentence);
 }
 
 function isTokenGrounded(token: string, normalizedSources: string[]): boolean {
@@ -551,8 +612,10 @@ export function evaluateRegulatedClaimGrounding(input: {
   };
 
   checkTokenCategory('epa_registration', extractEpaRegTokens(input.draftAnswer));
+  checkTokenCategory('din_registration', extractDinRegTokens(input.draftAnswer));
   checkTokenCategory('dilution_ratio', extractDilutionTokens(input.draftAnswer));
   checkTokenCategory('contact_time', extractContactTimeTokens(input.draftAnswer));
+  checkTokenCategory('cas_number', extractCasNumberTokens(input.draftAnswer));
   checkSentenceCategory(
     'hazard',
     extractSentenceClaims(input.draftAnswer, isHazardClaimSentence),
@@ -564,6 +627,10 @@ export function evaluateRegulatedClaimGrounding(input: {
   checkSentenceCategory(
     'compatibility',
     extractSentenceClaims(input.draftAnswer, isCompatibilityClaimSentence),
+  );
+  checkSentenceCategory(
+    'efficacy_claim',
+    extractSentenceClaims(input.draftAnswer, isEfficacyClaimSentence),
   );
 
   return {

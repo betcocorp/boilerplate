@@ -219,6 +219,92 @@ describe('evaluateRegulatedClaimGrounding — compatibility (B0-756)', () => {
   });
 });
 
+describe('evaluateRegulatedClaimGrounding — B0-756 audit additions', () => {
+  it('passes for a verbatim efficacy/kill claim and fails for a fabricated one', () => {
+    const grounded = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'Effective against Staphylococcus aureus with a 10 minute contact time.',
+      sources: [LABEL_SOURCE],
+    });
+    expect(grounded.categoriesDetected).toContain('efficacy_claim');
+    expect(grounded.ungroundedCategories).not.toContain('efficacy_claim');
+
+    const fabricated = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'Kills MRSA in 30 seconds.',
+      sources: [LABEL_SOURCE],
+    });
+    expect(fabricated.ungroundedCategories).toContain('efficacy_claim');
+  });
+
+  it('does not flag generic marketing copy ("disinfects, cleans and deodorizes") as an efficacy claim', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer:
+        'This concentrated multi-purpose, germicidal detergent and deodorant, disinfects, cleans and deodorizes in one labor-saving step.',
+      sources: [LABEL_SOURCE],
+    });
+    expect(result.categoriesDetected).not.toContain('efficacy_claim');
+  });
+
+  it('passes for a verbatim CAS number and fails for a fabricated one', () => {
+    const casSource = {
+      documentId: 'doc-sds-2',
+      title: 'Test Disinfectant SDS',
+      documentBody: 'Sodium hypochlorite, CAS No. 7681-52-9, is the active ingredient.',
+    };
+    const grounded = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'The active ingredient is sodium hypochlorite, CAS No. 7681-52-9.',
+      sources: [casSource],
+    });
+    expect(grounded.categoriesDetected).toContain('cas_number');
+    expect(grounded.ungroundedCategories).not.toContain('cas_number');
+
+    const fabricated = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'The active ingredient has CAS No. 1234-56-7.',
+      sources: [casSource],
+    });
+    expect(fabricated.ungroundedCategories).toContain('cas_number');
+  });
+
+  it('passes for a verbatim DIN and fails for a fabricated one', () => {
+    const dinSource = {
+      documentId: 'doc-label-din',
+      title: 'Test Disinfectant Canadian Label',
+      documentBody: 'DIN 02345678',
+    };
+    const grounded = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'The Canadian DIN is 02345678.',
+      sources: [dinSource],
+    });
+    expect(grounded.categoriesDetected).toContain('din_registration');
+    expect(grounded.ungroundedCategories).not.toContain('din_registration');
+
+    const fabricated = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'The Canadian DIN is 09999999.',
+      sources: [dinSource],
+    });
+    expect(fabricated.ungroundedCategories).toContain('din_registration');
+  });
+
+  it('extracts and verifies ppm and mL/L dilution values', () => {
+    const concentrationSource = {
+      documentId: 'doc-label-ppm',
+      title: 'Test Sanitizer Label',
+      documentBody: 'Use at 200 ppm for sanitizing, or 25 mL/L for general cleaning.',
+    };
+    const grounded = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'Use at 200 ppm for sanitizing, or 25 mL/L for general cleaning.',
+      sources: [concentrationSource],
+    });
+    expect(grounded.categoriesDetected).toContain('dilution_ratio');
+    expect(grounded.ungroundedCategories).not.toContain('dilution_ratio');
+
+    const fabricated = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'Use at 500 ppm for sanitizing.',
+      sources: [concentrationSource],
+    });
+    expect(fabricated.ungroundedCategories).toContain('dilution_ratio');
+  });
+});
+
 describe('evaluateRegulatedClaimGrounding — no regulated content', () => {
   it('detects nothing for a plain descriptive answer', () => {
     const result = evaluateRegulatedClaimGrounding({
