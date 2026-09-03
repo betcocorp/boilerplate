@@ -156,6 +156,11 @@ export const reportStateSchema = z.object({
    * falls back to `DEFAULT_PASS_MARK` (`./scoring-config`).
    */
   passMark: z.number().nullable().optional().default(null),
+  /**
+   * B0-810 — SHA-256 of the grading system prompt that scored this report (`GRADING_PROMPT_HASH`).
+   * Null on a legacy row. Two reports that disagree can be told apart by this before anything else.
+   */
+  gradingPromptHash: z.string().nullable().optional().default(null),
   synthesis: reportSynthesisSchema.nullable(),
   error: z.string().nullable(),
   // B0-609 — the report's aggregate score/grade (`computeReportMetrics(...).overall`), persisted
@@ -197,6 +202,7 @@ export function emptyReportState(
     passes,
     spreadThreshold,
     passMark,
+    gradingPromptHash: null,
     synthesis: null,
     error: null,
     overall: null,

@@ -11,7 +11,8 @@ import {
 import type { TestItemRecord, TestResultItemRecord } from '~/lib/tests/types';
 
 import { assembleReportCases, indexLatestResultItems } from './assemble';
-import { scoreCase } from './case-scorer';
+import { splitConcepts } from './case-concepts';
+import { GRADING_PROMPT_HASH, scoreCase, unableToEvaluateScore } from './case-scorer';
 import { consolidateCasePasses, loadConsistencyConfig } from './consolidate';
 import { renderReportMarkdown } from './render';
 import { emptyReportState, parseReportState, type CaseScore, type ReportState } from './schemas';
@@ -26,18 +27,7 @@ const BATCH_SIZE = 5;
 const WALL_CLOCK_BUDGET_MS = 260_000;
 
 function noResponseScore(reason: string): CaseScore {
-  return {
-    unableToEvaluate: true,
-    uteReason: reason,
-    accuracy: null,
-    completeness: null,
-    relevance: null,
-    clarity: null,
-    explanation: '',
-    missed: '',
-    incorrect: '',
-    improvement: '',
-  };
+  return unableToEvaluateScore(reason);
 }
 
 /**
@@ -89,20 +79,24 @@ async function scoreOnePass(
     );
   }
   /**
-   * Every pass sees exactly this — the question, the golden answer and the response. **No pass is
-   * ever told what another pass scored, or shown another pass's narrative**, and the grading
-   * prompt is untouched: passes that could see each other would agree by construction, and their
-   * agreement would measure nothing.
+   * Every pass sees exactly this — the question, the golden answer, the split concept lists and the
+   * response. **No pass is ever told what another pass scored, or shown another pass's narrative**,
+   * and the grading prompt is untouched: passes that could see each other would agree by
+   * construction, and their agreement would measure nothing.
+   *
+   * B0-809 — the concept columns are split here, once, with the same splitter the reference skill
+   * uses, so the grader judges the exact phrases the report will print. An item with neither column
+   * is Unable to Evaluate by rule and `scoreCase` returns that without a model call.
    */
   return scoreCase({
     question: item.prompt,
     category: item.prompt_category,
     priorityRaw: item.priority,
     idealResponse: item.ideal_response,
-    expectedConcepts: item.expected_concepts,
-    minimumConcepts: item.minimum_concepts,
     expectedSources: item.expected_sources,
     expectedShouldAnswer: item.expected_should_answer,
+    mandatoryConcepts: splitConcepts(item.minimum_concepts),
+    expectedConcepts: splitConcepts(item.expected_concepts),
     actualResponseText: responseText,
     modelTag,
   });
@@ -186,8 +180,11 @@ export async function generateReport(testResultId: string): Promise<ReportState>
   // B0-812 — same contract: the pass mark is resolved once and persisted on a fresh state, so a
   // settings change mid-report cannot rate one half of its cases at 60 and the other at 70.
   const passMark = await loadPassMark();
-  const fresh = () =>
-    emptyReportState(model, items.length, config.passes, config.spreadThreshold, passMark);
+  // B0-810 — the prompt that grades this report, so two reports that disagree can be told apart.
+  const fresh = () => ({
+    ...emptyReportState(model, items.length, config.passes, config.spreadThreshold, passMark),
+    gradingPromptHash: GRADING_PROMPT_HASH,
+  });
   let state = parseReportState(run.report_state) ?? fresh();
   if (state.totalCases !== items.length) {
     // The run's item set changed (e.g. items added) since a prior partial report — start fresh.
