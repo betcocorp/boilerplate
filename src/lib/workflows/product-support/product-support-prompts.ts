@@ -296,6 +296,14 @@ export const PRODUCT_SUPPORT_SHARED_INSTRUCTIONS = [
   // same "ask which item" signal named above; a compatibility claim is covered by the "regulated
   // value" language below just like dilution/contact-time/EPA/kill-claim.
   '- Before stating any regulated value, confirm the retrieved evidence is actually FOR the product the user named — not merely similar wording or the top-ranked match from an unanchored search. If a tool result names a different product than the one asked about, or `aliasResolution.outcome` is `no_alias_match`/`ambiguous_alias` for a question seeking a regulated value (including compatibility), do NOT answer using that other product\'s data, even while disclosing the mismatch ("this matches your query for..."). Say the named product could not be confidently identified in the retrieved documentation, ask for the exact product name or the item number from the container, and give nothing regulated until retrieval resolves to that SAME product.',
+  // B0-700 follow-up — the guard above only covers the two "don't answer" outcomes. When
+  // `aliasResolution.outcome` is `alias_fuzzy` (the name/SKU the user typed did NOT match exactly,
+  // but a fuzzy/typo-tolerant match against a verified alias succeeded — e.g. "AG79" resolving to
+  // "AF79 Concentrate Disinfectant"), the prior behavior was to answer as if the typed name were
+  // correct, with no acknowledgement that anything was corrected. That is a silent identity
+  // substitution too, just a confident and probably-correct one instead of a wrong one — the user
+  // still never finds out their product name was reinterpreted, and can't catch it if it's wrong.
+  '- When `aliasResolution.outcome` is `alias_fuzzy`, the product was found by a fuzzy/typo-tolerant match, not an exact one — you MUST open by saying the exact name asked for was not found and naming the product you found instead (e.g. "I couldn\'t find an exact match for \'AG79\', but found AF79 Concentrate Disinfectant — here is its information:"), then answer normally using that product\'s data, and close by asking the user to confirm this is the product they meant or to give the exact name/SKU if not. Never present a fuzzy match as if the user\'s exact wording matched.',
   '- An unidentified or unreadable container must not be used or diluted. Say so, ask for the name or SKU, and point to a Betco representative for a replacement label.',
   '- When the product IS identified, answer. Do not ask for surface, soil type, application method, or facility type unless the label genuinely branches on it; those questions read as not having read the message.',
   '',

@@ -246,7 +246,8 @@ export type RegulatedClaimCategory =
   | 'dilution_ratio'
   | 'contact_time'
   | 'hazard'
-  | 'first_aid';
+  | 'first_aid'
+  | 'compatibility';
 
 export type RegulatedClaimSource = {
   documentId: string;
@@ -358,6 +359,27 @@ const FIRST_AID_SENTENCE_PATTERN =
   /\bfirst aid\b|\bif swallowed\b|\bif inhaled\b|\bif in eyes\b|\bif on skin\b|\bpoison control\b/i;
 
 /**
+ * B0-756 — a surface/material compatibility claim ("safe on stainless steel", "will not etch
+ * marble") is exactly as regulated as a hazard or first-aid statement: it comes off the product's
+ * own label and a wrong answer creates real damage/liability exposure, but until this ticket
+ * `evaluateRegulatedClaimGrounding` had no category for it at all, so a sentence like "stainless
+ * steel is an approved surface for use" sailed through completely unchecked — not epa/dilution/
+ * contact-time-shaped, and matching neither the hazard nor first-aid trigger patterns. Confirmed
+ * live: a pH7Q compatibility question got a confident "yes, safe on stainless steel" answer with
+ * `sources: []` (nothing retrieved actually said so) and a fabricated "Source: pH7Q product label"
+ * citation, and no guardrail in this file was even looking at that sentence.
+ *
+ * Requires BOTH a material/surface noun AND a compatibility-claim verb phrase in the same
+ * sentence (mirrors the hazard category's qualified-trigger + context-pattern approach) so
+ * generic facility/setting language ("recommended for hospitals, schools") doesn't get swept in
+ * as a false positive.
+ */
+const COMPATIBILITY_MATERIAL_PATTERN =
+  /\b(stainless steel|aluminum|brass|chrome|copper|galvanized|marble|granite|terrazzo|vinyl|linoleum|rubber|plastic|glass|porcelain|ceramic tile|grout|wood|hardwood|carpet|upholstery|concrete|powder[-\s]?coated|acrylic|fiberglass|epoxy)\b/i;
+const COMPATIBILITY_CLAIM_PATTERN =
+  /\b(safe (?:for|to use on|on)|approved (?:surface|for use)?(?: on| for)?|compatible with|not compatible with|will not (?:damage|harm|etch|dull|corrode|discolor|degrade|pit|haze)|not (?:recommended|safe|approved) for|should not be used on|suitable for use on|can be used on|recommended for use on|labeled for use on)\b/i;
+
+/**
  * B0-366: sentences that announce or label content rather than assert it -- Markdown headings
  * ("**First aid measures:**"), label field scaffolding with no value, and the model's own framing
  * ("The hazard warnings for X are as follows:"). A heading carries no assertion to verify, and a
@@ -449,6 +471,12 @@ function isFirstAidClaimSentence(sentence: string): boolean {
   return FIRST_AID_SENTENCE_PATTERN.test(sentence);
 }
 
+function isCompatibilityClaimSentence(sentence: string): boolean {
+  return (
+    COMPATIBILITY_MATERIAL_PATTERN.test(sentence) && COMPATIBILITY_CLAIM_PATTERN.test(sentence)
+  );
+}
+
 function isTokenGrounded(token: string, normalizedSources: string[]): boolean {
   const normalized = normalizeUnitToken(token);
   if (!normalized) return false;
@@ -532,6 +560,10 @@ export function evaluateRegulatedClaimGrounding(input: {
   checkSentenceCategory(
     'first_aid',
     extractSentenceClaims(input.draftAnswer, isFirstAidClaimSentence),
+  );
+  checkSentenceCategory(
+    'compatibility',
+    extractSentenceClaims(input.draftAnswer, isCompatibilityClaimSentence),
   );
 
   return {

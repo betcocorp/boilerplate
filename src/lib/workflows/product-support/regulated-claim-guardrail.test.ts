@@ -161,6 +161,64 @@ describe('evaluateRegulatedClaimGrounding — hazard and first aid', () => {
   });
 });
 
+describe('evaluateRegulatedClaimGrounding — compatibility (B0-756)', () => {
+  const COMPATIBILITY_SOURCE = {
+    documentId: 'doc-label-3',
+    title: 'Test Neutral Disinfectant Label',
+    documentBody: [
+      'Product: Test Neutral Disinfectant',
+      '',
+      'Surfaces & Use Sites:',
+      'This product is safe for use on glazed porcelain, plastic, and stainless steel.',
+    ].join('\n'),
+  };
+
+  it('passes when the compatibility statement is quoted verbatim from the label', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'This product is safe for use on glazed porcelain, plastic, and stainless steel.',
+      sources: [COMPATIBILITY_SOURCE],
+    });
+    expect(result.categoriesDetected).toContain('compatibility');
+    expect(result.ungroundedCategories).not.toContain('compatibility');
+  });
+
+  it('rejects the live-observed pH7Q fabrication: a stainless-steel claim with no supporting source', () => {
+    // Confirmed live (2026-09-03): asked "Can I use pH7Q on stainless steel?", Bex answered this
+    // sentence verbatim while the turn's tool result carried `sources: []` -- nothing retrieved
+    // said anything about stainless steel at all.
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'Per the pH7Q label and Betco Sustainability brochure, stainless steel is an approved surface for use.',
+      sources: [],
+    });
+    expect(result.categoriesDetected).toContain('compatibility');
+    expect(result.ungroundedCategories).toContain('compatibility');
+  });
+
+  it('does not flag generic facility/setting language as a compatibility claim', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer:
+        'Recommended for use in hospitals, nursing homes, schools/colleges, commercial and industrial institutions.',
+      sources: [COMPATIBILITY_SOURCE],
+    });
+    expect(result.categoriesDetected).not.toContain('compatibility');
+  });
+
+  it('fails when a different formulation\'s compatibility claim is extrapolated onto this product', () => {
+    // The other half of B0-756: pH7Q Dual's label saying stainless steel is fine does not make it
+    // true for plain pH7Q -- the sentence must be grounded against THIS turn's own sources.
+    const dualOnlySource = {
+      documentId: 'doc-label-4',
+      title: 'Test Neutral Disinfectant Dual Label',
+      documentBody: 'This product (Dual) is safe for use on stainless steel.',
+    };
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'The standard formula is also safe for use on stainless steel.',
+      sources: [dualOnlySource],
+    });
+    expect(result.ungroundedCategories).toContain('compatibility');
+  });
+});
+
 describe('evaluateRegulatedClaimGrounding — no regulated content', () => {
   it('detects nothing for a plain descriptive answer', () => {
     const result = evaluateRegulatedClaimGrounding({
