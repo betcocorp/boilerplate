@@ -1,3 +1,114 @@
+# [3.0.0](https://github.com/betcocorp/bex2.0/compare/v2.19.0...v3.0.0) (2026-09-03)
+
+
+* feat(B0-746)!: split the floor SME agent into four substrate specialists ([e114460](https://github.com/betcocorp/bex2.0/commit/e114460cbc7bce10710a0af496b1414afe1e4685))
+* feat(B0-813,B0-812,B0-815,B0-809)!: pure-math report scoring on the golden concept columns ([b8d7663](https://github.com/betcocorp/bex2.0/commit/b8d7663e0085a0637754b2cd0e2adea5d7663f59))
+* fix(B0-757)!: move generation model default and lock thresholds to settings, show resolved model ([870fac9](https://github.com/betcocorp/bex2.0/commit/870fac909019b53b31fb8b02922ba5008fdeda1f))
+
+
+### Bug Fixes
+
+* **B0-413:** restore bex.chat.use permission row and document cutover NO-GO ([301506e](https://github.com/betcocorp/bex2.0/commit/301506ed25daabe6171bdbc5fdc68fea4a15c9a0))
+* **B0-413:** tell users with no grants the truth instead of "try signing in again" ([1191282](https://github.com/betcocorp/bex2.0/commit/11912828cf98b7771ec241ca00ec09dce84cc9b1))
+* **B0-636:** resolve FastDraw dilution chunks to the product-line entity tier ([04c8b87](https://github.com/betcocorp/bex2.0/commit/04c8b8773d81d359cb61a500d0dde27b109e1942))
+* **B0-655:** stop test-runner import from leaving a phantom empty set ([1f86948](https://github.com/betcocorp/bex2.0/commit/1f86948f5e602862b04ebad1866ef27d3248a9b6))
+* **B0-693:** require corroboration for general-query product-line locks, surface failed runs ([c95c287](https://github.com/betcocorp/bex2.0/commit/c95c287453025fbebf8e5e139cea111227ecbb37))
+* **B0-700:** deterministically disclose fuzzy-alias product corrections ([53deee1](https://github.com/betcocorp/bex2.0/commit/53deee1100daca1e62790a66883e9334d1665849))
+* **B0-755:** grade decline correctness semantically, not by phrase match ([b8cadd2](https://github.com/betcocorp/bex2.0/commit/b8cadd263125edd992fd1d9f2b02aa2f5b3d6242))
+* **B0-756,B0-700:** add compatibility to the regulated-claim guardrail; disclose fuzzy product matches ([aae42b3](https://github.com/betcocorp/bex2.0/commit/aae42b3b3084ff3f5b30fff13fbba82a02cd5ebe))
+* **B0-756:** audit and close remaining gaps in the regulated-claim guardrail ([b759ff5](https://github.com/betcocorp/bex2.0/commit/b759ff51c64f9c0481f050ad6d741ede82f371a3))
+* **B0-756:** split confidence gating so non-predictive recommendation caps stay off ([6317503](https://github.com/betcocorp/bex2.0/commit/6317503a8ade4d2b0559012afdab7f2b3ecd8ed1))
+* **B0-779:** guard cross-reference match template against unresolved competitor identity ([826747b](https://github.com/betcocorp/bex2.0/commit/826747b000f3c273d8ede4ec746463cd5f58d180))
+* **B0-780:** bind knowledge retrieval to product category (wood/VCT/restroom) ([f0e76a5](https://github.com/betcocorp/bex2.0/commit/f0e76a5d1f4d912f80a761758dfc926aa408ce89))
+* **B0-781:** extend enumeration-question detection in classifyRetrievalIntent ([45d6669](https://github.com/betcocorp/bex2.0/commit/45d66694292c97662f4ad9cb86171e29600643d5))
+* **B0-782:** add never-assert-past-the-evidence rule to product and bathroom prompts ([a91b13c](https://github.com/betcocorp/bex2.0/commit/a91b13c996694bbdeb8e487e85d96458f349320a))
+* **B0-783:** defer to a Betco rep unconditionally, forbid a single-product closing summary ([df5bcba](https://github.com/betcocorp/bex2.0/commit/df5bcbae9e8d6ed8a2d96a067e48999dd531b98e))
+* **B0-783:** detect selection-framing questions, lead with criteria not one product ([32fb318](https://github.com/betcocorp/bex2.0/commit/32fb3182ef2dfcb86bf3f7f8b9507c48d7d3d4f0))
+* **B0-783:** forbid product-first framing entirely, require a named rep deferral ([b59e682](https://github.com/betcocorp/bex2.0/commit/b59e682fd8f15ef00d7c79dff6287e11cec617b8))
+* **B0-784:** give a concrete required phrasing for a partial-evidence multi-part answer ([d4a301a](https://github.com/betcocorp/bex2.0/commit/d4a301a60c9788a2e2c47b8ce38649f52463d654))
+* **B0-784:** make multi-part and near-miss questions complete their whole answer ([a8f249e](https://github.com/betcocorp/bex2.0/commit/a8f249ec5a1144f7a60c8655957050816afd0b46))
+* **B0-784:** require per-part retrieved evidence, forbid extending one part's proof to another ([445a32d](https://github.com/betcocorp/bex2.0/commit/445a32dfe001a7e2fcbd36d93b78e9bdc2340f70))
+* **B0-784:** widen retrieval for compound-subject verification questions ([dcf5a12](https://github.com/betcocorp/bex2.0/commit/dcf5a126b5af151f121a965cf4a1e878de736820))
+* **B0-788:** force get_efficacy_data for exact dilution/efficacy/yield questions ([5d0eb68](https://github.com/betcocorp/bex2.0/commit/5d0eb68351e0c84906b85f796c1001ae3520c1fa))
+* **B0-791:** exclude EXP- experimental aliases from fuzzy product-name matching ([c8132a7](https://github.com/betcocorp/bex2.0/commit/c8132a7cf2ff47298c68775bbb3cc97a06e3c80a))
+* **B0-792,B0-700,B0-756:** pin regulated facts to the resolved product, not its product_line_key group ([9ed111c](https://github.com/betcocorp/bex2.0/commit/9ed111c0fbed7107ac5459d21432981243bc439a))
+* **B0-794:** remove 364 content-foreign SDS from the retrievable corpus ([9756164](https://github.com/betcocorp/bex2.0/commit/9756164cfa0681d4f7e5c4d3ed480522716aecb2))
+* **B0-795:** make the xref score discriminate — AUC 0.361 -> 0.728 ([6943b90](https://github.com/betcocorp/bex2.0/commit/6943b90306a9572a059abad443fb2f5b8ea4a9fc))
+* **B0-796:** reconcile efficacy is_current and stop trusting docs[0] ([f10c410](https://github.com/betcocorp/bex2.0/commit/f10c4108e677cf2c7976b833f549ebc74bce3679))
+* **B0-796:** sync efficacy is_current from frontmatter — 55 superseded reports excluded ([80965e3](https://github.com/betcocorp/bex2.0/commit/80965e3569bea820bb8e26fd622297f21c3e312f))
+* **B0-804:** make the English-only retrieval corpus enforced, not incidental ([5186a70](https://github.com/betcocorp/bex2.0/commit/5186a70f43fbf306e3157582d1c1f557f2b45c3b))
+* **B0-829:** redact only ungrounded regulated tokens instead of declining the whole answer ([0b2b09e](https://github.com/betcocorp/bex2.0/commit/0b2b09e2cf5988c3be4837982abe48c19d36b5db))
+* **B0-830:** name the resolved product line correctly and rewrite the misspelled name out of the answer ([2f1be41](https://github.com/betcocorp/bex2.0/commit/2f1be41cf395f9b05f9d265e8283a8de5af27e9f))
+* make OrphanRecordDialog span 50% of screen width ([ec83c71](https://github.com/betcocorp/bex2.0/commit/ec83c7146d20addfb9061a44732b2854c4978d2c))
+
+
+### Features
+
+* **admin:** add last run score column to test runner and update avg score display ([3a4b02a](https://github.com/betcocorp/bex2.0/commit/3a4b02a1dc8a7747c1479b4be24d176ec7a58852))
+* **B0-203:** idempotent orphan-SDS backfill, and correct two stale ticket premises ([93d48f3](https://github.com/betcocorp/bex2.0/commit/93d48f3755bceda74429544ce0e6eb6ade6dff85))
+* **B0-232:** derive the efficacy crosswalk from live data and link 125 documents ([105ac89](https://github.com/betcocorp/bex2.0/commit/105ac89f78b2f05db58f8862a2c132a1f22f0286))
+* **B0-236:** seed 27 efficacy gold eval items and record a baseline ([adec1c8](https://github.com/betcocorp/bex2.0/commit/adec1c85fb4e0bd7f50380c2862ae8e92b58ef87))
+* **B0-636:** add FastDraw dilution ingestion, tool exposure, and golden eval coverage ([a99f2d5](https://github.com/betcocorp/bex2.0/commit/a99f2d5fbb6f35bc85f3474b145f1cbc182b138d))
+* **B0-765:** force GPT-5.6 Sol for run-report grading via settings row ([aa508dc](https://github.com/betcocorp/bex2.0/commit/aa508dc0f8f8dc1e814923d2d0724078df7a871f))
+* **B0-786:** consolidate prompt signal detection into one pre-orchestration call ([ab090d8](https://github.com/betcocorp/bex2.0/commit/ab090d80e59581b9caa8f7edda544fe6db40163b))
+* **B0-786:** move router model/timeout to settings and add signals rollout flag ([e873f75](https://github.com/betcocorp/bex2.0/commit/e873f756f331c53989bb8ccf73d4a8cf95b54aa9))
+* **B0-793:** add Score column to observability Workflow runs table ([aae1250](https://github.com/betcocorp/bex2.0/commit/aae12501c445b4f48026fa2d7414aed14164a24e))
+* **B0-797:** re-convert the 70 hygiene efficacy PDFs — claim tables recovered ([613bf9e](https://github.com/betcocorp/bex2.0/commit/613bf9eabb4cf2c62d8cd60c656df8a4bbfa6805))
+* **B0-804:** hide translated documents in the orphan monitor behind a toggle ([7592dc1](https://github.com/betcocorp/bex2.0/commit/7592dc1f3ab81bc754ec9386a7f42f47e4f6b51a))
+* **B0-808,B0-810:** grader judges concept coverage and judged metrics; methodology prompt with content hash ([d19f6c6](https://github.com/betcocorp/bex2.0/commit/d19f6c61b423c6262e1af414759c0151d6610618))
+* **B0-811,B0-818,B0-825,B0-816:** judged-metrics rollup, three passes by default, grading config in the report ([a7789f5](https://github.com/betcocorp/bex2.0/commit/a7789f5df1c85c32efa642a4d8b8828a04e9a80e))
+* **B0-817,B0-811:** consolidation rules match the reference; judged metrics consolidate by median ([631d5dc](https://github.com/betcocorp/bex2.0/commit/631d5dc3beb910bc93d58ad01767eb610f8566c7))
+* **B0-97:** xref gate calibration harness, and evidence that 0.80 is not the problem ([1089ab1](https://github.com/betcocorp/bex2.0/commit/1089ab128b681d03965cf75e0bb4cfbc1dc7fc61))
+* **B0-XXX:** add view icon button for trace reports in detailed results ([7cdfbaa](https://github.com/betcocorp/bex2.0/commit/7cdfbaa7f2b11d0b6eeac95f74a1934e92414d17))
+
+
+### BREAKING CHANGES
+
+* /api/admin/tests/runs/[runId]/report/data — ReportCaseStatus is
+'Pass' | 'Fail'; RateBlock drops partial/partialPct; EvaluatedCase drops rubricStatus,
+statusSource, ratingConstrained, gateBlockedAPass, autoPassTriggered, autoPassBlocked;
+ConceptRollup drops gateBlockedPasses/autoPassed/autoPassBlocked and adds materialIssues;
+metrics gains passMark/strictPassMark/passOnlyUnderCurrentMark. Reports generated
+before this change re-derive as Unable to Evaluate until regenerated by a grader that
+emits concept verdicts (B0-808, next).
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+* resolveResponsesModel is now async; all callers must
+await it.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+* the single `floor` SME agent id is gone; /api/v1/agents/floor
+no longer exists. Replaced by floor_wood_sport, floor_concrete, floor_stg,
+and floor_vct -- SportZone/wood-sport, concrete, Stone/Tile/Grout
+Cleaner-and-Protectant, and VCT/terrazzo/resilient-tile respectively.
+sportszone/vct knowledge-ingest folders now map to their own specific ids
+(previously both collapsed onto `floor`); floor_concrete/floor_stg have no
+dedicated ingest folder yet, documented as a gap rather than fabricated.
+Every SME-id sync point is updated: agent-registry.ts's enum + registry,
+confidence-thresholds.ts, run-sme-agent.ts, agent-badge.ts,
+endpoints/definitions.ts, sme-routing.ts's per-substrate signal lists and
+tie-break order, intent-classifier.ts's routing rules, semantic-router
+examples, and product-support-prompts.ts/prompt-version.ts's per-agent
+arrays. Applied a companion migration reclassifying existing
+routing_test_items/routing_test_run_items rows and widening both tables'
+expected_agent CHECK constraints to the new id set (verified live via
+Supabase MCP -- shipping the code without it would have broken every
+routing-test insert against the old constraint).
+
+B0-745 (Signal Research): investigated whether dedicated prompt-signal
+detection (e.g. "dilution ratio" as a metric-intent signal, distinct from
+routing) is worth building. Found product lock already exists twice over
+-- live today via the freeform alias-resolution path, and more fully in
+the B0-786 signals-analysis pipeline, currently disabled pending its own
+cost/quality tradeoff. Recommended against building a new, redundant
+signal taxonomy on top of the LLM router that's already the default path;
+recommended against decoupling/enabling the B0-786 slice until B0-693's
+non-regulated-query verification gap (fixed in this same batch) had
+landed. No new code shipped for this ticket -- see the Jira comment for
+the full write-up.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+
 # [2.19.0](https://github.com/betcocorp/bex2.0/compare/v2.18.0...v2.19.0) (2026-09-03)
 
 
