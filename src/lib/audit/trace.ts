@@ -46,6 +46,15 @@ export const productLineLockSchema = z.object({
     'skipped_no_product_line',
     'resolution_disabled',
   ]),
+  /**
+   * B0-693 — mirrors `ProductKnowledgeRetrievalSummary.explicitKeySource`
+   * (`~/lib/retrieval/product-knowledge.ts`), carried onto the lock decision itself so it survives
+   * into `final_output.productLineLock` via the existing `extractProductLineLockFromToolTrace`
+   * extraction — previously this distinction (alias-anchored vs. a bare broad-similarity lock)
+   * was computed per call but never persisted anywhere a run's own trace could show it. Optional:
+   * absent on rows written before this ticket.
+   */
+  explicitKeySource: z.string().nullable().optional(),
 });
 
 export type ProductLineLock = z.infer<typeof productLineLockSchema>;

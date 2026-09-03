@@ -16,6 +16,14 @@ export type ProductLineResolutionResult = {
     | 'skipped_ambiguous'
     | 'skipped_no_product_line'
     | 'resolution_disabled';
+  /**
+   * B0-693 — NOT set by this function itself (it has no visibility into alias resolution, which
+   * happens upstream in the caller). Callers (`~/lib/retrieval/product-knowledge.ts`) attach this
+   * afterward, mirroring their own `explicitKeySource`, so the persisted lock decision itself
+   * records whether it came from an alias match or the bare similarity probe. Absent/undefined
+   * here; present once a caller merges it in.
+   */
+  explicitKeySource?: string | null;
 };
 
 /** Minimum top-line similarity to consider locking when the runner-up is clearly weaker. */
@@ -43,9 +51,13 @@ function readResolutionEnvNumber(name: string, fallback: number): number {
  * B0-693 — `requireMarginForHighConfidence` closes the loophole where the absolute-threshold
  * shortcut below let a high top score lock even with a close, uncorroborated runner-up (reported:
  * a hazard/signal-word question for a 9% HCl SKU was answered with a 23% HCl SKU's hazard
- * profile). Callers set it for queries targeting a specific regulated GHS section (hazard, first
- * aid, dilution/contact-time, EPA reg, etc.) — general "what is this product" queries are
- * unaffected and keep the existing absolute-threshold shortcut.
+ * profile). Originally callers set it only for queries targeting a specific regulated GHS section
+ * — confirmed incomplete: a general query with no explicit section (e.g. "what is the dilution
+ * ratio for DAILY DISINFECT") could still lock a wrong product line with a razor-thin margin. The
+ * one production call site (`ragQueryForProductKnowledgeWithMeta`, `~/lib/retrieval/product-
+ * knowledge.ts`) now passes `true` unconditionally; the option stays a parameter (rather than being
+ * hardwired into this function) so callers/tests can still exercise the old shortcut behavior
+ * explicitly.
  */
 export function resolveProductLineFromMatches(
   matches: RagSearchMatch[],

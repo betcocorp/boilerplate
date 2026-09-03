@@ -60,6 +60,30 @@ function toMillis(iso: string): number {
   return Number.isFinite(t) ? t : Date.now();
 }
 
+/**
+ * B0-693 (part 2) — the route emits `data-bex-event` chunks with `stage: 'request_failed'` for
+ * BOTH a pre-stream failure (thrown before any model call) and a mid-stream one (the model call
+ * itself threw); either way `runBexChatTurn` never inserted an `agent_messages` row, and the SSE
+ * response is still a clean 200 with a closing `data-bex-meta`/`text-end`. `apiPostBexChatStream`
+ * forwards this event to `onEvent` if one is passed, but until this fix nothing did, so the event
+ * was silently dropped and the turn read as a normal (if empty) success — the reported silent hang.
+ *
+ * Deliberately narrow: only `type: 'status'` + `stage: 'request_failed'` matches. The payload also
+ * carries an `error` field (the raw `Error.message` from the failing workflow run) — NEVER surface
+ * that to the user; it can contain provider/credential/internal detail and stays server-side
+ * (`workflow_runs.final_output`, Sentry). `BEX_REQUEST_FAILED_MESSAGE` below is the only text shown.
+ */
+export function isBexRequestFailedEvent(event: unknown): boolean {
+  if (typeof event !== 'object' || event === null) {
+    return false;
+  }
+  const record = event as { type?: unknown; stage?: unknown };
+  return record.type === 'status' && record.stage === 'request_failed';
+}
+
+const BEX_REQUEST_FAILED_MESSAGE =
+  "Bex ran into a problem generating a response for that message. It wasn't answered — you can retry below.";
+
 function makeOptimisticMessage(content: string): ChatMessage {
   const now = Date.now();
   return {
@@ -94,6 +118,10 @@ export function BexChatApp() {
     DEFAULT_BEX_CHAT_AGENT_MODE,
   );
   const [loadError, setLoadError] = useState<string | null>(null);
+  // B0-693 (part 2) — the exact text of a turn that failed (pre-stream or mid-stream), so the
+  // failed-state banner can offer a "Retry" that resends it without the user retyping. Cleared
+  // whenever a new send attempt starts and whenever one succeeds.
+  const [lastFailedMessage, setLastFailedMessage] = useState<string | null>(null);
   // B0-345: id of the conversation whose history fetch is currently in flight (null = none).
   const [historyLoadingId, setHistoryLoadingId] = useState<string | null>(null);
   const [feedbackSubmittingMessageId, setFeedbackSubmittingMessageId] =
@@ -392,6 +420,7 @@ export function BexChatApp() {
 
       setIsTyping(true);
       setLoadError(null);
+      setLastFailedMessage(null);
       setStreamingAssistantText('');
       setLastStreamMetrics(null);
       streamDeltaBufferRef.current = '';
@@ -469,6 +498,11 @@ export function BexChatApp() {
           useValidator,
         });
 
+        // B0-693 (part 2) — set from `onEvent` below when the route signals `request_failed`
+        // mid-stream. `apiPostBexChatStream` does NOT throw for this case (the response still
+        // carries a valid closing `data-bex-meta`), so this is checked explicitly right after the
+        // call resolves, below.
+        let requestFailedDuringStream = false;
         const reply = await apiPostBexChatStream({
           conversationId: convId,
           message: trimmed,
@@ -478,7 +512,19 @@ export function BexChatApp() {
           onTextDelta: (delta) => {
             queueStreamingDelta(delta);
           },
+          onEvent: (event) => {
+            if (isBexRequestFailedEvent(event)) {
+              requestFailedDuringStream = true;
+            }
+          },
         });
+
+        if (requestFailedDuringStream) {
+          // B0-693 (part 2) — reuses the exact same failure handling as a thrown/network error
+          // below (visible banner, retryable, conversation state reconciled from the DB) instead
+          // of a second failure path, so the two can never drift out of sync.
+          throw new Error(BEX_REQUEST_FAILED_MESSAGE);
+        }
 
         const detail = await apiFetchConversation(reply.conversationId);
         flushStreamingDeltaBuffer();
@@ -504,6 +550,9 @@ export function BexChatApp() {
       } catch (err) {
         const detail = getErrorMessage(err, 'Chat request failed.');
         setLoadError(detail);
+        // B0-693 (part 2) — every failure here (this one included) is retryable without retyping:
+        // the original text is still known even though the composer's draft was already cleared.
+        setLastFailedMessage(trimmed);
         if (convId) {
           if (convId.startsWith('local-conv-')) {
             setSessions((prev) =>
@@ -716,7 +765,20 @@ export function BexChatApp() {
   return (
     <main className="box-border flex min-h-0 h-full flex-1 flex-col p-4 sm:p-6">
       {loadError ? (
-        <p className="mb-2 text-center text-sm text-destructive">{loadError}</p>
+        <div className="mb-2 flex flex-wrap items-center justify-center gap-2">
+          <p className="text-center text-sm text-destructive">{loadError}</p>
+          {lastFailedMessage ? (
+            <Button
+              disabled={isTyping}
+              onClick={() => void sendUserText(lastFailedMessage)}
+              size="sm"
+              type="button"
+              variant="outline"
+            >
+              Retry
+            </Button>
+          ) : null}
+        </div>
       ) : null}
       <div
         className={cn(
@@ -895,7 +957,10 @@ export function BexChatApp() {
                   <SelectItem value="product">Product</SelectItem>
                   <SelectItem value="bathroom">Bathroom</SelectItem>
                   <SelectItem value="dilution">Dilution</SelectItem>
-                  <SelectItem value="floor">Floor</SelectItem>
+                  <SelectItem value="floor_wood_sport">Floor — Wood/Sport</SelectItem>
+                  <SelectItem value="floor_concrete">Floor — Concrete</SelectItem>
+                  <SelectItem value="floor_stg">Floor — Stone/Tile/Grout</SelectItem>
+                  <SelectItem value="floor_vct">Floor — VCT</SelectItem>
                   <SelectItem value="recommendations">
                     Recommendations
                   </SelectItem>
