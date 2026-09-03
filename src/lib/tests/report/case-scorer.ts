@@ -1,36 +1,183 @@
+import { createHash } from 'node:crypto';
+
+import { z } from 'zod';
+
 import { getOpenAIClient, resolveResponsesModel } from '~/lib/openai/client';
 import { samplingParamsFor } from '~/lib/openai/model-capabilities';
 import { extractAssistantText } from '~/lib/openai/response-item-parsing';
 
-import { caseScoreSchema, type CaseScore } from './schemas';
+import { normConcept, type CaseConcepts, type ConceptKindCoverage } from './case-concepts';
+import { NO_EXPECTED_CONCEPTS_UTE_REASON } from './metrics';
+import type { CaseScore } from './schemas';
 
 /**
- * Strict json_schema for the grading call (B0-453), mirrored by hand from `caseScoreSchema`
- * rather than generated, matching the pattern in
- * `src/lib/workflows/product-support/validator.ts`. Numeric bounds (0-100) are enforced by the
- * system prompt + post-parse clamping rather than JSON Schema `minimum`/`maximum`, which strict
- * mode does not support.
+ * B0-808 / B0-810 — the per-case grader.
+ *
+ * The grader judges three things and computes nothing:
+ *
+ * 1. **Accuracy, Relevance, Clarity** (0–100). Not Completeness — that is computed downstream as the
+ *    share of expected concepts the grader marks satisfied (`metrics.ts`, B0-813).
+ * 2. **Every concept phrase** in the item's `minimum_concepts` (mandatory) and `expected_concepts`
+ *    (expected) columns: satisfied or missing, semantically, phrase by phrase. Plus whether a material
+ *    factual issue is present.
+ * 3. **Similarity** to the Ideal Response (0–1) and **evaluator confidence** (0–100) — reported
+ *    beside the grade, never in it (methodology §7c).
+ *
+ * The system prompt quotes the reference methodology's grading sections verbatim (marked with their
+ * section numbers) so a Bex report and the colleague's desktop report are graded on the same words;
+ * its SHA-256 (`GRADING_PROMPT_HASH`) is persisted on `report_state` so a report always says which
+ * prompt graded it. Regulated-data rule: concept phrases are copied verbatim in and out; the grader's
+ * satisfied/missing lists are matched back to *our* phrase list by `normConcept` identity and the
+ * phrases re-emitted from our list, so no model re-spelling of a dilution ratio ever reaches a report.
  */
-const CASE_SCORE_JSON_SCHEMA = {
+
+/** Bump when the prompt's meaning changes; the hash below catches every byte change regardless. */
+export const GRADING_PROMPT_VERSION = '2026-09-03.1';
+
+export const CASE_SCORING_SYSTEM_PROMPT = `You are grading one AI agent response against a golden-dataset expected answer, following Betco's agent-evaluation methodology. The Golden Dataset is always the source of truth; judge substantive correctness, not wording.
+
+# What you judge, and what you do not
+
+You judge three sub-scores (Accuracy, Relevance, Clarity — each 0-100), whether the response communicates each listed concept phrase, whether a material factual issue is present, and two reported-only metrics (similarity, evaluator confidence).
+
+You do NOT judge Completeness. Completeness is computed by code as the share of the listed expected concepts you mark satisfied (100 × satisfied ÷ required). You do not compute, cap, floor or gate any score, and you never report an overall score, a grade or a Pass/Fail — code derives every one of those from your judgments alone.
+
+# 1. Scoring framework (methodology §1)
+
+Score each sub-score 0-100 against the Golden Dataset:
+
+- Accuracy — 40% of the overall. Is the answer factually correct against the Golden Dataset?
+- Completeness — 30%. Computed by code from your concept verdicts; do not author a number for it.
+- Relevance — 20%. Did it directly address the question without unrelated filler?
+- Clarity — 10%. Was it clear, understandable, and well structured?
+
+Anchor every sub-score in evidence from the expected and actual text. Do not assign round-number scores out of habit — if Accuracy is 70 rather than 80, the explanation should make clear why. Unsupported, fabricated, or materially incorrect information must significantly reduce Accuracy (and usually Relevance), because a confident wrong answer is worse than an incomplete one, especially for regulated content.
+
+# 2. Judge concepts semantically, never by keyword (methodology §2b)
+
+A concept is present when the actual response clearly communicates the same substantive idea — different wording, synonyms, abbreviations, or sentence structure are all fine. A concept is not present merely because a related word appears without the required meaning ("dilution" appearing in a sentence that never states or sources a dilution does not satisfy a "state the label dilution" concept). This judgment is yours; the scripts never look at the response text.
+
+Treat every phrase listed under minimal_concepts as mandatory (a must-have) and every phrase under expected_concepts as expected (the full success set). Judge each phrase independently as satisfied or missing. Partial coverage, a vague implication, or coverage of a merely related concept does not count unless the required meaning is clearly communicated. List every phrase you were given exactly once, verbatim as given, under either satisfied or missing for its kind — never paraphrase, split, merge, or drop a phrase.
+
+Set material_issue to true ONLY for a material factual error, contradiction, fabrication, unsafe instruction, or wrong regulated value (dilution, oz/gal, mL/L, ppm, %, contact time, CAS, EPA reg no., log reduction), and name the specific value in material_issue_note. A material factual error must also be reflected in Accuracy.
+
+# 3. Unable to Evaluate (methodology §4)
+
+If a case cannot reasonably be judged — no actual response, an empty or corrupted response, or an expected answer too ambiguous to score — set unable_to_evaluate to true and give a one-line ute_reason. Do not invent information to force a score. Flag gaps in the source data plainly. When unable_to_evaluate is true, set every sub-score, similarity and eval_confidence to null, every concept list to empty, and every narrative field to an empty string.
+
+# 4. Regulated-data caveat (methodology §5)
+
+Many golden answers are structural templates with placeholders (e.g. "[insert label-confirmed dilution rate]"). They define expected behavior and sourcing, not literal fact keys. When the agent supplies specific regulated values — dilution ratios, oz/gal, mL/L, ppm, contact times, CAS numbers, EPA registration numbers, log-reduction values — and you cannot verify them against an authoritative source in the material given to you:
+
+- transcribe them exactly as written; never round, convert, or infer,
+- do not reward them as correct nor mark them wrong purely for being unverifiable,
+- grade on whether the agent produced the expected behavior and cited the right source,
+- and call the specific values out under "incorrect" as items to confirm.
+
+An answer that fabricates a regulated value not present in the source (or that contradicts the golden) is a materially incorrect answer — cut Accuracy hard.
+
+# 5. Fairness rules (methodology §6)
+
+Be rigorous but fair. Do not require exact phrase matching. For each response ask: (1) correct information? (2) important expected information included? (3) directly addresses the question? (4) free of incorrect/fabricated content? (5) communicated clearly? Reward a substantively correct answer even if its wording, ordering, or extra helpful detail differs from the golden. Penalize confident wrongness and missing must-have content.
+
+# 6. Judged similarity and evaluator confidence (methodology §7c) — reported, never graded
+
+Both are judgments made while reading the case and are never folded into any sub-score, the weighted score, the letter grade, or Pass/Fail. Do not copy confidence or similarity numbers from anywhere else.
+
+- similarity (0-1, two decimals) — how much of what the Ideal Response says the actual response also says, judged semantically and independent of wording. It is deliberately not the grade. Anchors: 1.00 essentially everything · 0.75 most of the substance · 0.50 about half · 0.25 same topic, little shared substance · 0.00 unrelated or opposite. Judge it separately from the score; do not anchor one to the other. Add a one-line similarity_note.
+- eval_confidence (0-100) — how sure you are of the grade you just assigned. 90-100 unambiguous · 70-89 solid, minor judgment calls · 50-69 real ambiguity · below 50 an SME should review. Lower it when the golden is a behavioural template with "[insert …]" placeholders, when the response supplies regulated values that cannot be verified from the material given, or when the response is too thin to judge. Add a one-line confidence_note.
+
+# 7. Narrative
+
+explanation: why these scores, citing specific evidence from expected vs. actual. missed: important expected information the response omitted. incorrect: incorrect, misleading, unsupported, or unverified information — name specific regulated values that need confirming. improvement: the single most useful fix for this case.
+
+Ground every field in specific evidence from the expected and actual text given to you.`;
+
+export const GRADING_PROMPT_HASH = createHash('sha256')
+  .update(CASE_SCORING_SYSTEM_PROMPT)
+  .digest('hex');
+
+/**
+ * Strict json_schema for the grading call, mirrored by hand from `graderOutputSchema` (strict mode
+ * has no `minimum`/`maximum`/`minItems`; bounds are enforced by the prompt and by Zod after parse).
+ * Field names mirror the reference skill's `eval.json` case shape so the two graders are asked the
+ * same questions in the same words.
+ */
+const GRADER_JSON_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    unableToEvaluate: {
+    unable_to_evaluate: {
       type: 'boolean',
       description:
         'true only if this case cannot reasonably be judged: no actual response, an empty/corrupted response, or an expected answer too ambiguous to score.',
     },
-    uteReason: {
+    ute_reason: {
       type: ['string', 'null'],
-      description: 'One-line reason, required when unableToEvaluate is true; otherwise null.',
+      description: 'One-line reason, required when unable_to_evaluate is true; otherwise null.',
     },
-    accuracy: { type: ['number', 'null'], description: '0-100, or null when unableToEvaluate.' },
-    completeness: { type: ['number', 'null'], description: '0-100, or null when unableToEvaluate.' },
-    relevance: { type: ['number', 'null'], description: '0-100, or null when unableToEvaluate.' },
-    clarity: { type: ['number', 'null'], description: '0-100, or null when unableToEvaluate.' },
+    accuracy: { type: ['number', 'null'], description: '0-100, or null when unable_to_evaluate.' },
+    relevance: { type: ['number', 'null'], description: '0-100, or null when unable_to_evaluate.' },
+    clarity: { type: ['number', 'null'], description: '0-100, or null when unable_to_evaluate.' },
+    concepts: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        minimal_satisfied: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'The minimal_concepts phrases the response substantively communicates, verbatim.',
+        },
+        minimal_missing: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'The minimal_concepts phrases it does not, verbatim.',
+        },
+        expected_satisfied: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'The expected_concepts phrases the response substantively communicates, verbatim.',
+        },
+        expected_missing: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'The expected_concepts phrases it does not, verbatim.',
+        },
+        material_issue: {
+          type: 'boolean',
+          description:
+            'true ONLY for a material factual error, contradiction, fabrication, unsafe instruction, or wrong regulated value.',
+        },
+        material_issue_note: {
+          type: ['string', 'null'],
+          description: 'Names the specific value or error when material_issue is true; otherwise null.',
+        },
+      },
+      required: [
+        'minimal_satisfied',
+        'minimal_missing',
+        'expected_satisfied',
+        'expected_missing',
+        'material_issue',
+        'material_issue_note',
+      ],
+    },
+    similarity: {
+      type: ['number', 'null'],
+      description: '0-1, two decimals: how much of what the Ideal Response says the response also says. Null when unable_to_evaluate.',
+    },
+    similarity_note: { type: 'string', description: 'One short sentence justifying similarity.' },
+    eval_confidence: {
+      type: ['number', 'null'],
+      description: '0-100: how sure you are of the grade you assigned. Null when unable_to_evaluate.',
+    },
+    confidence_note: {
+      type: 'string',
+      description: 'One short sentence on what makes you more or less sure.',
+    },
     explanation: {
       type: 'string',
-      description: 'Why these scores, citing specific evidence from expected vs. actual. Empty string when unableToEvaluate.',
+      description: 'Why these scores, citing specific evidence from expected vs. actual. Empty string when unable_to_evaluate.',
     },
     missed: {
       type: 'string',
@@ -43,16 +190,20 @@ const CASE_SCORE_JSON_SCHEMA = {
     },
     improvement: {
       type: 'string',
-      description: 'The single most useful fix for this case. Empty string when unableToEvaluate.',
+      description: 'The single most useful fix for this case. Empty string when unable_to_evaluate.',
     },
   },
   required: [
-    'unableToEvaluate',
-    'uteReason',
+    'unable_to_evaluate',
+    'ute_reason',
     'accuracy',
-    'completeness',
     'relevance',
     'clarity',
+    'concepts',
+    'similarity',
+    'similarity_note',
+    'eval_confidence',
+    'confidence_note',
     'explanation',
     'missed',
     'incorrect',
@@ -60,104 +211,247 @@ const CASE_SCORE_JSON_SCHEMA = {
   ],
 } as const;
 
-const CASE_SCORING_SYSTEM_PROMPT = `You are grading one AI agent response against a golden-dataset expected answer, following Betco's internal agent-evaluation methodology. The golden dataset is the source of truth; judge substantive correctness, not wording.
+/** What the grader returns, before reconciliation against our own phrase lists. */
+export const graderOutputSchema = z.object({
+  unable_to_evaluate: z.boolean(),
+  ute_reason: z.string().nullable(),
+  accuracy: z.number().nullable(),
+  relevance: z.number().nullable(),
+  clarity: z.number().nullable(),
+  concepts: z.object({
+    minimal_satisfied: z.array(z.string()),
+    minimal_missing: z.array(z.string()),
+    expected_satisfied: z.array(z.string()),
+    expected_missing: z.array(z.string()),
+    material_issue: z.boolean(),
+    material_issue_note: z.string().nullable(),
+  }),
+  similarity: z.number().nullable(),
+  similarity_note: z.string(),
+  eval_confidence: z.number().nullable(),
+  confidence_note: z.string(),
+  explanation: z.string(),
+  missed: z.string(),
+  incorrect: z.string(),
+  improvement: z.string(),
+});
 
-Score four sub-scores, each 0-100:
-- Accuracy (40% weight): is the response factually correct against the expected answer/behavior?
-- Completeness (30%): did it include the important expected information?
-- Relevance (20%): did it directly address the question without unrelated filler?
-- Clarity (10%): was it clear, understandable, and well structured?
-Do not compute or report an overall/weighted score yourself — only the four sub-scores.
-
-Be rigorous but fair: do not require exact phrase matching. Reward a substantively correct answer even if wording, ordering, or extra helpful detail differs from the golden. Penalize confident wrongness and missing must-have content. Unsupported, fabricated, or materially incorrect information must significantly reduce Accuracy (and usually Relevance) — a confident wrong answer is worse than an incomplete one, especially for regulated content.
-
-Regulated-data caveat: many expected answers are structural templates with placeholders like "[insert label-confirmed dilution rate]" — they define expected behavior and sourcing, not a literal fact to match. When the response supplies specific regulated values (dilution ratios, oz/gal, mL/L, ppm, %, contact times, CAS numbers, EPA registration numbers, log-reduction values) that you cannot verify against the expected answer or sources given to you: do not reward them as correct nor mark them wrong purely for being unverifiable; grade on whether the response produced the expected behavior and cited the right source; and call the specific values out under "incorrect" as items to confirm. A response that fabricates a regulated value not present in the source, or that contradicts the golden, is materially incorrect — cut Accuracy hard.
-
-Mark unableToEvaluate=true (with a one-line uteReason, and null for uteReason otherwise) only if the case truly cannot be judged: no actual response was provided, the response is empty or corrupted, or the expected answer is too ambiguous to score. Do not invent information to force a score. When unableToEvaluate is true, set all four sub-scores to null and leave explanation/missed/incorrect/improvement as empty strings.
-
-Ground every sub-score and every field in specific evidence from the expected and actual text given to you.`;
+export type GraderOutput = z.infer<typeof graderOutputSchema>;
 
 export type CaseScoringInput = {
   question: string;
   category: string | null;
   priorityRaw: number | null;
   idealResponse: string | null;
-  expectedConcepts: string | null;
-  minimumConcepts: string | null;
   expectedSources: string | null;
   expectedShouldAnswer: boolean | null;
+  /** `test_items.minimum_concepts`, already split by `splitConcepts`. */
+  mandatoryConcepts: readonly string[];
+  /** `test_items.expected_concepts`, already split by `splitConcepts`. */
+  expectedConcepts: readonly string[];
   actualResponseText: string;
   modelTag?: string;
 };
 
-function buildUserPayload(input: CaseScoringInput): string {
+/**
+ * The phrase lists the case is graded against. Expected is the union of the two columns (first-seen
+ * order, `normConcept` identity): a must-have that the expected column does not also list is added
+ * to it, so a missed must-have is always visible in the coverage Completeness is computed from —
+ * the `mandatory_subset_of_expected` invariant depends on it.
+ */
+export function requiredConcepts(input: Pick<CaseScoringInput, 'mandatoryConcepts' | 'expectedConcepts'>): {
+  mandatory: string[];
+  expected: string[];
+} {
+  const mandatory = [...input.mandatoryConcepts];
+  const expected = [...input.expectedConcepts];
+  const seen = new Set(expected.map(normConcept));
+  for (const phrase of mandatory) {
+    const key = normConcept(phrase);
+    if (!seen.has(key)) {
+      seen.add(key);
+      expected.push(phrase);
+    }
+  }
+  return { mandatory, expected };
+}
+
+/** True when the case has no concept data at all — nothing to compute Completeness from. */
+export function hasNoConcepts(input: Pick<CaseScoringInput, 'mandatoryConcepts' | 'expectedConcepts'>): boolean {
+  return input.mandatoryConcepts.length === 0 && input.expectedConcepts.length === 0;
+}
+
+/**
+ * The user turn, mirroring the `cases.json` a desktop grading run is handed (`inspect_run_export.py`):
+ * the same field names, the concept lists already split, the actual response verbatim.
+ */
+export function buildGraderPayload(input: CaseScoringInput): string {
+  const required = requiredConcepts(input);
   return JSON.stringify(
     {
       question: input.question,
+      priority_raw: input.priorityRaw,
       category: input.category,
-      priority: input.priorityRaw,
-      expected: {
-        ideal_response: input.idealResponse,
-        expected_concepts: input.expectedConcepts,
-        minimum_concepts: input.minimumConcepts,
-        expected_sources: input.expectedSources,
-        expected_should_answer: input.expectedShouldAnswer,
-      },
-      actual_response: input.actualResponseText,
+      expected: input.idealResponse,
+      expected_sources: input.expectedSources,
+      should_cite: input.expectedShouldAnswer,
+      minimal_concepts: required.mandatory,
+      expected_concepts: required.expected,
+      actual: input.actualResponseText,
     },
     null,
     2,
   );
 }
 
-function clampScore(value: number | null): number | null {
-  if (value == null || Number.isNaN(value)) return null;
-  return Math.min(100, Math.max(0, value));
+/**
+ * Matches the grader's satisfied list back to *our* required list for one kind. A required phrase is
+ * satisfied when the grader listed it (by `normConcept` identity) as satisfied and not also as
+ * missing; anything else — listed as missing, or not judged at all — is missing, the conservative
+ * reading the reference `normalize_concepts` takes ("unjudged is treated as not present"). Phrases
+ * are re-emitted from our list, verbatim, so `satisfied ∪ missing === required` holds by construction
+ * and no model re-spelling of a regulated phrase survives.
+ */
+function reconcileKind(
+  required: readonly string[],
+  judgedSatisfied: readonly string[],
+  judgedMissing: readonly string[],
+): ConceptKindCoverage {
+  const satisfiedKeys = new Set(judgedSatisfied.map(normConcept));
+  const missingKeys = new Set(judgedMissing.map(normConcept));
+  const satisfied: string[] = [];
+  const missing: string[] = [];
+  for (const phrase of required) {
+    const key = normConcept(phrase);
+    if (satisfiedKeys.has(key) && !missingKeys.has(key)) satisfied.push(phrase);
+    else missing.push(phrase);
+  }
+  return { required: [...required], satisfied, missing };
 }
 
-export async function scoreCase(input: CaseScoringInput): Promise<CaseScore> {
+export function reconcileConcepts(
+  required: { mandatory: readonly string[]; expected: readonly string[] },
+  judged: GraderOutput['concepts'],
+): CaseConcepts {
+  return {
+    mandatory: reconcileKind(required.mandatory, judged.minimal_satisfied, judged.minimal_missing),
+    expected: reconcileKind(required.expected, judged.expected_satisfied, judged.expected_missing),
+    materialIssue: judged.material_issue,
+    materialIssueNote: judged.material_issue ? judged.material_issue_note : null,
+  };
+}
+
+function clamp(value: number | null, min: number, max: number): number | null {
+  if (value == null || Number.isNaN(value)) return null;
+  return Math.min(max, Math.max(min, value));
+}
+
+/** The Unable-to-Evaluate score, with every judged field empty. */
+export function unableToEvaluateScore(reason: string): CaseScore {
+  return {
+    unableToEvaluate: true,
+    uteReason: reason,
+    accuracy: null,
+    completeness: null,
+    relevance: null,
+    clarity: null,
+    explanation: '',
+    missed: '',
+    incorrect: '',
+    improvement: '',
+    concepts: null,
+    similarity: null,
+    similarityNote: null,
+    evalConfidence: null,
+    confidenceNote: null,
+  };
+}
+
+/** Maps a validated grader output onto the persisted `CaseScore`, reconciling the concept lists. */
+export function toCaseScore(output: GraderOutput, input: CaseScoringInput): CaseScore {
+  if (output.unable_to_evaluate) {
+    return unableToEvaluateScore(output.ute_reason?.trim() || 'The grader could not evaluate this case.');
+  }
+  return {
+    unableToEvaluate: false,
+    uteReason: null,
+    accuracy: clamp(output.accuracy, 0, 100),
+    // Computed downstream from the concept coverage — never the grader's number.
+    completeness: null,
+    relevance: clamp(output.relevance, 0, 100),
+    clarity: clamp(output.clarity, 0, 100),
+    explanation: output.explanation,
+    missed: output.missed,
+    incorrect: output.incorrect,
+    improvement: output.improvement,
+    concepts: reconcileConcepts(requiredConcepts(input), output.concepts),
+    similarity: clamp(output.similarity, 0, 1),
+    similarityNote: output.similarity_note || null,
+    evalConfidence: clamp(output.eval_confidence, 0, 100),
+    confidenceNote: output.confidence_note || null,
+  };
+}
+
+/**
+ * The one seam the grader talks to a model through. The default calls the OpenAI Responses API with
+ * strict structured output; tests inject a fake, and B0-819's provider adapter replaces it.
+ */
+export type StructuredCompletion = (params: {
+  model: string;
+  system: string;
+  user: string;
+}) => Promise<string>;
+
+const completeWithOpenAI: StructuredCompletion = async ({ model, system, user }) => {
   const client = getOpenAIClient();
-  const model = await resolveResponsesModel(input.modelTag ?? 'gpt-4.1');
+  const res = await client.responses.create({
+    model,
+    instructions: system,
+    input: [{ role: 'user', content: user, type: 'message' }],
+    text: {
+      format: {
+        type: 'json_schema',
+        name: 'case_score',
+        strict: true,
+        schema: GRADER_JSON_SCHEMA,
+      },
+    },
+    store: false,
+    stream: false,
+    ...samplingParamsFor(model, { temperature: 0 }),
+  });
+  return extractAssistantText(res);
+};
+
+export type ScoreCaseDeps = {
+  complete?: StructuredCompletion;
+  resolveModel?: (modelTag: string | undefined) => Promise<string>;
+};
+
+/**
+ * Grades one case on one pass. A case with no concept columns is returned Unable to Evaluate without
+ * a model call — there is nothing to compute Completeness from, so there is nothing to pay for.
+ */
+export async function scoreCase(input: CaseScoringInput, deps: ScoreCaseDeps = {}): Promise<CaseScore> {
+  if (hasNoConcepts(input)) {
+    return unableToEvaluateScore(NO_EXPECTED_CONCEPTS_UTE_REASON);
+  }
+
+  const complete = deps.complete ?? completeWithOpenAI;
+  const resolveModel = deps.resolveModel ?? resolveResponsesModel;
 
   try {
-    const res = await client.responses.create({
+    const model = await resolveModel(input.modelTag ?? 'gpt-4.1');
+    const text = await complete({
       model,
-      instructions: CASE_SCORING_SYSTEM_PROMPT,
-      input: [{ role: 'user', content: buildUserPayload(input), type: 'message' }],
-      text: {
-        format: {
-          type: 'json_schema',
-          name: 'case_score',
-          strict: true,
-          schema: CASE_SCORE_JSON_SCHEMA,
-        },
-      },
-      store: false,
-      stream: false,
-      ...samplingParamsFor(model, { temperature: 0 }),
+      system: CASE_SCORING_SYSTEM_PROMPT,
+      user: buildGraderPayload(input),
     });
-
-    const text = extractAssistantText(res);
-    const parsed = caseScoreSchema.parse(JSON.parse(text));
-    return {
-      ...parsed,
-      accuracy: clampScore(parsed.accuracy),
-      completeness: clampScore(parsed.completeness),
-      relevance: clampScore(parsed.relevance),
-      clarity: clampScore(parsed.clarity),
-    };
+    const parsed = graderOutputSchema.parse(JSON.parse(text));
+    return toCaseScore(parsed, input);
   } catch (error) {
-    return {
-      unableToEvaluate: true,
-      uteReason: `Grading call failed: ${error instanceof Error ? error.message : 'unknown error'}`,
-      accuracy: null,
-      completeness: null,
-      relevance: null,
-      clarity: null,
-      explanation: '',
-      missed: '',
-      incorrect: '',
-      improvement: '',
-    };
+    return unableToEvaluateScore(
+      `Grading call failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+    );
   }
 }

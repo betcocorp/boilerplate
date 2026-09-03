@@ -27,6 +27,11 @@ type SettingRecord = {
 const BOOLEAN_SETTINGS = [
   'WEBSEARCH_DB_CACHE_ENABLED',
   'BEX_DISABLE_CONFIDENCE_GATING',
+  // B0-756 — split off BEX_DISABLE_CONFIDENCE_GATING: gates the REC-4 similarity/brand/
+  // category-mismatch caps and the XREF recommendation gate only. Defaults to bypassed (true) —
+  // real calibration data showed these have an inverted/non-predictive signal; leave bypassed
+  // until the underlying scorer is fixed, don't just flip this on to match the main flag.
+  'BEX_DISABLE_RECOMMENDATION_CONFIDENCE_GATING',
   // B0-734 — pre-model canned-decline gate (mixing / compliance / shelf-life / broad ask). Off by default.
   'BEX_EARLY_DECLINE_GATE_ENABLED',
   'BEX_PERMISSIONS_ENFORCED',
@@ -53,7 +58,8 @@ const STRING_SETTINGS = [
   'XREF_RECOMMENDATION_TIMEOUT_MS',
   // B0-795 — cross-reference answer gate. Numeric 0-1; moved off process.env (B0-638 missed it).
   // NOT calibrated yet: read src/docs/cross-reference-recommendations.md before changing it, and
-  // note BEX_DISABLE_CONFIDENCE_GATING currently bypasses this gate entirely.
+  // note BEX_DISABLE_RECOMMENDATION_CONFIDENCE_GATING (split from BEX_DISABLE_CONFIDENCE_GATING
+  // per B0-756) currently bypasses this gate entirely, by design, until it's recalibrated.
   'XREF_RECOMMENDATION_MIN_CONFIDENCE',
   'COHERE_RERANK_MODEL',
   'ROUTER_TYPE',

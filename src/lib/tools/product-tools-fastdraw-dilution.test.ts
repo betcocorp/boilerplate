@@ -15,6 +15,7 @@ vi.mock('~/lib/rag/entity-context', () => ({
     ambiguousAlias: false,
     matchedAliasId: null,
     matchedAliasConfidence: null,
+    matchedTitle: null,
   })),
 }));
 
@@ -24,6 +25,10 @@ vi.mock('~/lib/retrieval/product-facts', () => ({
   fetchFactsForProductLineKeys: vi.fn(async () => new Map()),
   fetchFactsForProduct: vi.fn(async () => null),
   fetchFactsForProductBatch: vi.fn(async () => []),
+  // B0-700 follow-up — `executeProductTool`'s `get_efficacy_data` case now looks this up to label
+  // the facts block with the resolved entity's real title; null here mirrors the DB-miss fallback
+  // (the tests below assert on `facts`/`fastDrawDilution`, not on the facts-block title).
+  fetchEntityTitle: vi.fn(async () => null),
 }));
 
 vi.mock('~/lib/retrieval/efficacy-lab-report', () => ({

@@ -10,15 +10,14 @@ import type {
   ReportConceptDisagreement,
   ReportConceptRollup,
   ReportConsistency,
+  ReportGradingConfigData,
+  ReportJudged,
   ReportMetricsData,
   ReportVarianceCause,
 } from '~/lib/tests/report/data-schemas';
-import {
-  GRADE_BANDS,
-  STATUS_BANDS,
-  WEIGHTS,
-} from '~/lib/tests/report/metrics';
+import { GRADE_BANDS, WEIGHTS } from '~/lib/tests/report/metrics';
 import type { ReportSynthesis } from '~/lib/tests/report/schemas';
+import { DEFAULT_PASS_MARK, STRICT_PASS_MARK } from '~/lib/tests/report/scoring-config';
 import { cn } from '~/lib/utils';
 
 /**
@@ -32,10 +31,11 @@ import { cn } from '~/lib/utils';
  *    numbers. Nothing is re-worded, summarized, sliced, clamped or ellipsized; `whitespace-pre-wrap`
  *    keeps the synthesizer's own line breaks. (The Markdown renderer caps the executive lists at
  *    three items; this UI deliberately does not.)
- * 2. **The stated scoring rule is the applied one.** The weighting, grade bands and result bands in
- *    the methodology are rendered from `WEIGHTS` / `GRADE_BANDS` / `STATUS_BANDS` — the same
- *    constants `computeReportMetrics`, `gradeFromScore` and `statusFromScore` use — so the
- *    methodology can never drift from the arithmetic it describes.
+ * 2. **The stated scoring rule is the applied one.** The weighting and grade bands in the
+ *    methodology are rendered from `WEIGHTS` / `GRADE_BANDS` — the same constants
+ *    `computeReportMetrics` and `gradeFromScore` use — and the pass mark is the one the report was
+ *    graded at (`metrics.passMark`), so the methodology can never drift from the arithmetic it
+ *    describes.
  *
  * The three blocks sit in three different places in the page layout, so they are exported
  * separately rather than as one section stack.
@@ -189,10 +189,9 @@ function ConceptCoverageRollup({ concepts }: { concepts: ReportConceptRollup }) 
     <div className="mt-8 rounded-2xl border border-slate-200 bg-slate-50 p-5">
       <h3 className="text-sm font-semibold text-slate-900">Concept coverage</h3>
       <p className="mt-1 text-xs text-slate-600">
-        Across the {concepts.casesWithConcepts}{' '}
-        {concepts.casesWithConcepts === 1 ? 'case that carries' : 'cases that carry'} expected
-        criteria. Percentages are out of the cases that specify concepts of that kind, not the
-        whole run.
+        Across the {concepts.casesWithConcepts} evaluated{' '}
+        {concepts.casesWithConcepts === 1 ? 'case' : 'cases'}. Percentages are out of the cases
+        that specify concepts of that kind, not the whole run.
       </p>
 
       <dl className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -221,19 +220,14 @@ function ConceptCoverageRollup({ concepts }: { concepts: ReportConceptRollup }) 
           <span className="font-medium text-rose-700 tabular-nums">
             {concepts.missingMandatory.length}
           </span>{' '}
-          missing a mandatory concept, of which{' '}
-          <span className="font-medium tabular-nums">{concepts.gateBlockedPasses}</span> lost a Pass
-          to the gate.
-        </li>
-        <li>
-          <span className="font-medium tabular-nums">{concepts.autoPassed.length}</span> qualified
-          for an automatic Pass on full expected coverage.
+          missing a mandatory concept — reported on each case; the miss lowered Completeness through
+          coverage and did not by itself change any Result.
         </li>
         <li>
           <span className="font-medium text-amber-700 tabular-nums">
-            {concepts.autoPassBlocked.length}
+            {concepts.materialIssues.length}
           </span>{' '}
-          had an automatic Pass withheld over a material factual issue.
+          flagged by the grader with a material factual issue — reported, not scored.
         </li>
       </ul>
 
@@ -256,11 +250,11 @@ function ConceptCoverageRollup({ concepts }: { concepts: ReportConceptRollup }) 
         </div>
       ) : null}
 
-      {concepts.autoPassBlocked.length > 0 ? (
+      {concepts.materialIssues.length > 0 ? (
         <div className="mt-5">
-          <SectionLabel>Automatic Passes withheld</SectionLabel>
+          <SectionLabel>Material factual issues</SectionLabel>
           <ul className="mt-2 space-y-2">
-            {concepts.autoPassBlocked.map((entry) => (
+            {concepts.materialIssues.map((entry) => (
               <li className="text-sm" key={entry.id}>
                 <a className="font-mono text-[0.6875rem] text-sky-700 hover:underline" href={`#case-${entry.id}`}>
                   {entry.id}
@@ -442,6 +436,135 @@ function GradingConsistencyRollup({ consistency }: { consistency: ReportConsiste
   );
 }
 
+/**
+ * B0-811 — the judged-metrics rollup (methodology §7c), under its own heading and explicitly outside
+ * the grade: the two distributions, the two exception cells named case by case (or an explicit
+ * "none"), and the SME review queue. No average is presented as a verdict.
+ */
+function JudgedMetricsRollup({ judged }: { judged: ReportJudged }) {
+  const t = judged.thresholds;
+  const exception = (
+    label: string,
+    entries: ReportJudged['highSimilarityFailures'],
+    none: string,
+  ) => (
+    <li>
+      <span className="font-medium tabular-nums">{entries.length}</span> — {label}
+      {entries.length > 0 ? (
+        <ul className="mt-1 ml-4 space-y-0.5 text-xs text-slate-600">
+          {entries.map((entry) => (
+            <li key={entry.id}>
+              <a className="font-mono text-sky-700 hover:underline" href={`#case-${entry.id}`}>
+                {entry.id.slice(0, 8)}
+              </a>{' '}
+              similarity {entry.similarity}, scored {entry.overall}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <span className="text-slate-500"> ({none})</span>
+      )}
+    </li>
+  );
+
+  return (
+    <div className="mt-8 rounded-2xl border border-slate-200 bg-slate-50 p-5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold text-slate-900">Judged metrics</h3>
+        <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-300 bg-slate-100 px-2.5 py-1 text-[11px] font-bold uppercase tracking-[0.08em] text-slate-700">
+          <span aria-hidden className="inline-block size-1.5 rounded-full bg-slate-500" />
+          Not graded
+        </span>
+      </div>
+      <p className="mt-1 text-xs text-slate-600">
+        Two judgments the grader made while reading each case, reported beside the grade and never
+        folded into it: how much of what the Ideal Response says the answer also says, and how sure
+        the grader was of the grade it gave. The gap between them and the grade is the point.
+      </p>
+
+      <dl className="mt-4 grid gap-3 sm:grid-cols-2">
+        <div className="rounded-xl bg-white p-3 ring-1 ring-slate-200">
+          <dt className="text-[11px] font-semibold tracking-[0.14em] text-slate-500 uppercase">
+            Similarity to the Ideal Response
+          </dt>
+          <dd className="mt-1 text-sm text-slate-900 tabular-nums">
+            {judged.similarity ? (
+              <>
+                avg <span className="font-semibold">{judged.similarity.avg}</span> · median{' '}
+                {judged.similarity.median} · range {judged.similarity.min}–{judged.similarity.max} (n=
+                {judged.similarity.n})
+                <p className="mt-1 text-xs text-slate-600">
+                  high (≥ {t.simHigh}) {judged.similarityBands.high} · mid {judged.similarityBands.mid}{' '}
+                  · low (&lt; {t.simLow}) {judged.similarityBands.low} · vs content score:{' '}
+                  {judged.similarityScoreCorrelation != null
+                    ? `r = ${judged.similarityScoreCorrelation}`
+                    : `not reported (fewer than ${t.corrMinN} cases, or no variance)`}
+                </p>
+              </>
+            ) : (
+              <span className="text-slate-500">not judged on this run</span>
+            )}
+          </dd>
+        </div>
+        <div className="rounded-xl bg-white p-3 ring-1 ring-slate-200">
+          <dt className="text-[11px] font-semibold tracking-[0.14em] text-slate-500 uppercase">
+            Evaluator confidence
+          </dt>
+          <dd className="mt-1 text-sm text-slate-900 tabular-nums">
+            {judged.evalConfidence ? (
+              <>
+                avg <span className="font-semibold">{judged.evalConfidence.avg}</span> · median{' '}
+                {judged.evalConfidence.median} · range {judged.evalConfidence.min}–
+                {judged.evalConfidence.max} (n={judged.evalConfidence.n})
+              </>
+            ) : (
+              <span className="text-slate-500">not judged on this run</span>
+            )}
+          </dd>
+        </div>
+      </dl>
+
+      <ul className="mt-4 space-y-1.5 text-sm text-slate-700">
+        {exception(
+          `close to the ideal (≥ ${t.highSimFail}) and still failed — shape right, substance wrong`,
+          judged.highSimilarityFailures,
+          'none',
+        )}
+        {exception(
+          `passed while diverging from the ideal (< ${t.lowSimPass}) — right by a different route`,
+          judged.lowSimilarityPasses,
+          'none',
+        )}
+      </ul>
+
+      <div className="mt-5">
+        <SectionLabel>SME review queue — confidence ≤ {t.lowConfidence}</SectionLabel>
+        {judged.reviewQueue.length === 0 ? (
+          <p className="mt-2 text-sm text-slate-600">Empty — no grade is held at or below the line.</p>
+        ) : (
+          <ul className="mt-2 space-y-2">
+            {judged.reviewQueue.map((entry) => (
+              <li className="rounded-xl bg-white p-3 ring-1 ring-slate-200" key={entry.id}>
+                <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                  <a className="font-mono text-[0.6875rem] text-sky-700 hover:underline" href={`#case-${entry.id}`}>
+                    {entry.id}
+                  </a>
+                  <span className="text-xs text-slate-500 tabular-nums">
+                    confidence {entry.evalConfidence} · {entry.status}
+                  </span>
+                </div>
+                <p className="mt-1 truncate text-sm text-slate-800" title={entry.question}>
+                  {entry.question}
+                </p>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export type ReportAggregateFindingsProps = {
   synthesis: ReportSynthesis;
   metrics: ReportMetricsData;
@@ -497,6 +620,8 @@ export function ReportAggregateFindings({
 
       {metrics.concepts ? <ConceptCoverageRollup concepts={metrics.concepts} /> : null}
 
+      {metrics.judged ? <JudgedMetricsRollup judged={metrics.judged} /> : null}
+
       {metrics.consistency ? (
         <GradingConsistencyRollup consistency={metrics.consistency} />
       ) : null}
@@ -550,11 +675,12 @@ export function ReportAggregateFindings({
 export type ReportMethodologyProps = {
   /** Named in the exclusion sentence when the run has excluded cases. */
   uteCount?: number;
-  /**
-   * B0-713 — whether this run has any concept data. The concept rules are stated only when they
-   * actually applied, so a legacy run's methodology reads exactly as it did before.
-   */
-  hasConcepts?: boolean;
+  /** B0-812 — the pass mark this report's Results were derived from (`metrics.passMark`). */
+  passMark?: number;
+  /** The stricter line the report measures against (`metrics.strictPassMark`). */
+  strictPassMark?: number;
+  /** B0-825 — what this report was graded with (`payload.config`); null on a legacy report. */
+  config?: ReportGradingConfigData | null;
   /** Collapsed by default on screen; B0-592 forces it open for the PDF via `details[open]`. */
   defaultOpen?: boolean;
   className?: string;
@@ -566,7 +692,9 @@ export type ReportMethodologyProps = {
  */
 export function ReportMethodology({
   uteCount,
-  hasConcepts = false,
+  passMark = DEFAULT_PASS_MARK,
+  strictPassMark = STRICT_PASS_MARK,
+  config = null,
   defaultOpen = false,
   className,
 }: ReportMethodologyProps) {
@@ -588,6 +716,56 @@ export function ReportMethodology({
       </summary>
 
       <div className="mt-4 space-y-4 text-sm text-slate-700">
+        {config ? (
+          <div className="space-y-2">
+            <SectionLabel>Graded with</SectionLabel>
+            <dl className="grid gap-x-6 gap-y-1 text-sm sm:grid-cols-2">
+              <div className="flex gap-2">
+                <dt className="text-slate-500">Model</dt>
+                <dd className="font-mono text-xs text-slate-900">{config.model}</dd>
+              </div>
+              <div className="flex gap-2">
+                <dt className="text-slate-500">Independent passes</dt>
+                <dd className="tabular-nums text-slate-900">{config.passes}</dd>
+              </div>
+              <div className="flex gap-2">
+                <dt className="text-slate-500">Pass mark</dt>
+                <dd className="tabular-nums text-slate-900">
+                  {config.passMark ?? passMark} (strict {strictPassMark})
+                </dd>
+              </div>
+              <div className="flex gap-2">
+                <dt className="text-slate-500">Spread threshold</dt>
+                <dd className="tabular-nums text-slate-900">{config.spreadThreshold ?? '—'}</dd>
+              </div>
+              {config.judgedThresholds ? (
+                <div className="flex gap-2 sm:col-span-2">
+                  <dt className="text-slate-500">Judged thresholds</dt>
+                  <dd className="tabular-nums text-slate-900">
+                    similarity high ≥ {config.judgedThresholds.simHigh} · low &lt;{' '}
+                    {config.judgedThresholds.simLow} · review ≤ {config.judgedThresholds.lowConfidence}{' '}
+                    confidence · exceptions ≥ {config.judgedThresholds.highSimFail} / &lt;{' '}
+                    {config.judgedThresholds.lowSimPass} · correlation from n ≥{' '}
+                    {config.judgedThresholds.corrMinN}
+                  </dd>
+                </div>
+              ) : null}
+              {config.gradingPromptHash ? (
+                <div className="flex gap-2 sm:col-span-2">
+                  <dt className="text-slate-500">Grading prompt</dt>
+                  <dd className="font-mono text-xs break-all text-slate-900" title={config.gradingPromptHash}>
+                    {config.gradingPromptHash.slice(0, 12)}
+                  </dd>
+                </div>
+              ) : null}
+            </dl>
+            <p className="text-xs text-slate-500">
+              Every Result above was derived under exactly these settings; a report graded under
+              different ones shows different values here before anything else differs.
+            </p>
+          </div>
+        ) : null}
+
         <p>
           Cases were matched to this run&apos;s own test items by ID, not row position, so a case
           always carries the expectations of the item it actually ran.
@@ -603,8 +781,10 @@ export function ReportMethodology({
             ))}
           </ul>
           <p className="text-xs text-slate-500">
-            Each response is judged on those four sub-scores; the weighted roll-up is the case&apos;s
-            score.
+            Accuracy, Relevance and Clarity are the grader&apos;s judgments. Completeness is
+            computed, never judged: the share of the case&apos;s expected concepts the response
+            communicated (100 × satisfied ÷ required), from the grader&apos;s per-concept verdicts.
+            The weighted roll-up is the case&apos;s score — never raised, never capped.
           </p>
         </div>
 
@@ -622,37 +802,40 @@ export function ReportMethodology({
           </div>
 
           <div className="space-y-2">
-            <SectionLabel>Result bands</SectionLabel>
+            <SectionLabel>Result</SectionLabel>
             <ul className="space-y-1">
-              {STATUS_BANDS.map((band, index) => (
-                <li key={band.status}>
-                  <span className="font-medium text-slate-900">{band.status}</span>{' '}
-                  {bandRangeLabel(STATUS_BANDS, index)}
-                </li>
-              ))}
+              <li>
+                <span className="font-medium text-slate-900">Pass</span> ≥ {passMark}
+              </li>
+              <li>
+                <span className="font-medium text-slate-900">Fail</span> below {passMark}
+              </li>
             </ul>
+            <p className="text-xs text-slate-500">
+              Nothing else changes a Result. Cases that pass only under this mark and would fail at{' '}
+              {strictPassMark} are listed in the scorecard.
+            </p>
           </div>
         </div>
 
         <p>
-          The golden dataset — ideal response, expected concepts and expected sources — is the
-          source of truth. Responses are judged on substantive correctness, not wording.
+          The golden dataset — ideal response, expected and mandatory concepts, expected sources —
+          is the source of truth. Responses are judged on substantive correctness, not wording.
         </p>
 
-        {hasConcepts ? (
-          <div className="space-y-2">
-            <SectionLabel>Concept rules</SectionLabel>
-            <p>
-              Where a case carries expected criteria, the grade above stays pure arithmetic and only
-              the Result can move: satisfying every expected concept raises a below-Pass Result to
-              Pass, and missing a mandatory (must-have) concept caps the Result below Pass.
-            </p>
-            <p className="text-xs text-slate-500">
-              The cap is applied last, so it always wins over the automatic Pass, and the automatic
-              Pass is withheld entirely when a deterministic check on a regulated value failed.
-            </p>
-          </div>
-        ) : null}
+        <div className="space-y-2">
+          <SectionLabel>Reported, not scored</SectionLabel>
+          <p>
+            A missing mandatory (must-have) concept is named on the case and lowers Completeness
+            through coverage like any other expected concept; it does not by itself change the
+            Result. A material factual issue the grader flagged on a regulated value is likewise
+            named on the case, not scored.
+          </p>
+          <p className="text-xs text-slate-500">
+            A case with no expected concepts has no data for Completeness and is Unable to Evaluate
+            — never a guessed number.
+          </p>
+        </div>
 
         <p>
           {UTE_EXCLUSION_RULE}

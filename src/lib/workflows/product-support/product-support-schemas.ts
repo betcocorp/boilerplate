@@ -109,6 +109,31 @@ export const answerProvenanceSchema = z.enum([
    * verdict on a resolved identity — this fires before the engine's verdict is even trusted.
    */
   'competitor_identity_unresolved_decline',
+  /**
+   * B0-700 follow-up — `maybeDiscloseAliasFuzzyMatch` (`~/lib/workflows/product-support/run-product-support-workflow.ts`)
+   * deterministically prepended the "couldn't find an exact match for X, but found Y" disclosure
+   * sentence because this turn's answer grounded on an `alias_fuzzy` resolution the model didn't
+   * already disclose itself. Only set when the prepend actually changed the text (mirrors the
+   * "last writer that actually changed the text wins" rule the other provenance values follow) —
+   * a call that found nothing to disclose, or found the model already had, leaves the prior
+   * provenance value untouched.
+   */
+  'alias_fuzzy_disclosure_prepended',
+  /**
+   * B0-829 — `regulated_claim_guardrail` (`evaluateRegulatedClaimGrounding`,
+   * `~/lib/workflows/product-support/validator.ts`) flagged one or more ungrounded regulated
+   * claims, but every ungrounded category was TOKEN-shaped (`epa_registration`, `din_registration`,
+   * `dilution_ratio`, `contact_time`, `cas_number` — an exact literal snippet, not reformatted
+   * prose) and at least one OTHER detected category on the same draft WAS fully grounded. Instead
+   * of the full-decline `validator_fallback` replacement, the run-product-support-workflow.ts
+   * caller surgically redacts only the ungrounded snippet(s) (each literal occurrence replaced with
+   * `(unable to verify)`) and keeps the rest of the draft — including the grounded regulated
+   * content — intact, appending a note naming what was withheld. Sentence-shaped categories
+   * (`hazard`, `first_aid`, `compatibility`, `efficacy_claim`) never take this path: any of those
+   * being ungrounded, or every detected category being ungrounded, still falls through to
+   * `validator_fallback`'s full decline.
+   */
+  'regulated_claim_partial_redaction',
 ]);
 
 export type AnswerProvenance = z.infer<typeof answerProvenanceSchema>;
@@ -357,6 +382,15 @@ export const runtimeConfigSchema = z.object({
   rerankerActive: z.boolean(),
   /** `BEX_DISABLE_CONFIDENCE_GATING === 'true'` — the B0-452 master confidence-gate kill switch. */
   confidenceGatingDisabled: z.boolean(),
+  /**
+   * B0-756 — split off `confidenceGatingDisabled`: `BEX_DISABLE_RECOMMENDATION_CONFIDENCE_GATING`,
+   * the recommendation/cross-reference-only kill switch (defaults to bypassed — real calibration
+   * data showed the REC-4 similarity/brand/category-mismatch caps and the XREF recommendation gate
+   * have an inverted/non-predictive signal). OPTIONAL like the semantic-router fields below:
+   * `runtimeConfigSchema.safeParse` runs against already-persisted payloads that predate this
+   * split, where absent means "this run predates the split", not `false`.
+   */
+  recommendationConfidenceGatingDisabled: z.boolean().optional(),
   /** The agent mode this run actually executed under. */
   agentMode: z.string(),
   /** `agentMode !== 'orchestrator'` — an admin forced direct routing, bypassing the router. */

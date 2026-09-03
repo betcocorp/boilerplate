@@ -1,5 +1,5 @@
 import type { ValidatorResult } from '~/lib/workflows/product-support/product-support-schemas';
-import { isConfidenceGatingDisabled } from '~/lib/recommendations/confidence-scoring';
+import { isRecommendationConfidenceGatingDisabled } from '~/lib/recommendations/confidence-scoring';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 /**
@@ -251,9 +251,11 @@ export type ValidatorGateResult = { pass: boolean; reasons: string[] };
  * Decide whether a validated draft may be surfaced. Any of: not approved, requires human review,
  * confidence below the floor, or an unsupported safety claim → gate fails (force human review).
  *
- * B0-452: the confidence-floor check alone is skipped while `BEX_DISABLE_CONFIDENCE_GATING` is
- * set — it's the piece backed by an unproven placeholder threshold. The other checks are
- * correctness/safety signals, not tunable confidence thresholds, and always run.
+ * B0-452 (split B0-756): the confidence-floor check alone is skipped while
+ * `BEX_DISABLE_RECOMMENDATION_CONFIDENCE_GATING` is set — real calibration data showed this
+ * signal doesn't separate good answers from bad ones (see `isRecommendationConfidenceGatingDisabled`'s
+ * doc comment), so it stays bypassed by default until the scorer itself is fixed. The other
+ * checks are correctness/safety signals, not tunable confidence thresholds, and always run.
  */
 export async function evaluateValidatorGate(input: {
   validator: ValidatorResult;
@@ -264,7 +266,7 @@ export async function evaluateValidatorGate(input: {
   const reasons: string[] = [];
   if (!input.validator.approved) reasons.push('validator_not_approved');
   if (input.validator.requires_human_review) reasons.push('requires_human_review');
-  if (!(await isConfidenceGatingDisabled()) && input.validator.confidence < min) {
+  if (!(await isRecommendationConfidenceGatingDisabled()) && input.validator.confidence < min) {
     reasons.push(`validator_confidence_below_${min}`);
   }
   for (const claim of input.unsupportedClaims ?? []) {

@@ -1,3 +1,4 @@
+import { resolveEntityDisplayTitle } from '~/lib/rag/entity-context';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 /**
@@ -146,6 +147,26 @@ function factsWithoutScalarRow(entityId: string, efficacy: ProductEfficacyFact[]
     confidence: 1,
     efficacy,
   };
+}
+
+/**
+ * B0-700 follow-up — the resolved entity's OWN `rag.entity.title`, for callers that need to show
+ * the user which product was actually matched (as opposed to what they typed/searched for).
+ *
+ * Root cause this closes: `get_efficacy_data`'s single-product path used to label its "Verified
+ * Product Facts" block with the caller's raw, unverified `productId` string (e.g. a misspelled
+ * "AG79 Concentrate Disinfectant"), even when resolution only found that data via a FUZZY alias
+ * match to a differently-named real product ("AF79 Concentrate Disinfectant"). That silently
+ * relabeled the real product under the user's typed name, so nothing in the tool output ever
+ * surfaced the correction — the facts block read as if the user's exact spelling had matched.
+ * Returns null (never a fabricated guess) on a miss or DB error; callers must fall back to the
+ * caller-supplied name rather than block on this.
+ */
+export async function fetchEntityTitle(entityId: string): Promise<string | null> {
+  // B0-830 — delegate to the shared resolver so the facts-block header and the fuzzy-alias
+  // disclosure name a product line the same way (`legacy.prod_line.ProdLineDescr`, not the
+  // marketing `rag.entity.title` the product_line tier was ingested with).
+  return resolveEntityDisplayTitle(entityId);
 }
 
 /** Fetch line-level facts + efficacy rows for a set of entity ids. Degrades to an empty map on error. */

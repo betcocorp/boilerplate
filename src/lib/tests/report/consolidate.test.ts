@@ -27,7 +27,12 @@ const CONCEPT = {
   epa: 'EPA Reg. No. 6836-140-4170',
 } as const;
 
-/** Equal sub-scores make the weighted roll-up equal `overall` exactly (0.4+0.3+0.2+0.1 = 1). */
+/**
+ * Equal sub-scores make the weighted roll-up equal `overall` exactly (0.4+0.3+0.2+0.1 = 1). The
+ * `completeness` here stands in for a pass persisted before B0-813 — the current grader writes
+ * null and coverage is the only source; `passOverall` falls back to the stored value only when a
+ * pass carries no concept block, which keeps a legacy report's variance readable.
+ */
 function score(overall: number, partial: Partial<CaseScore> = {}): CaseScore {
   return {
     unableToEvaluate: false,
@@ -121,9 +126,9 @@ describe('consolidateCasePasses — the median (B0-720)', () => {
     expect(result.score.relevance).toBe(70);
     expect(result.score.clarity).toBe(70);
 
-    // The consolidated case survives `computeReportMetrics`, whose `grade_isolated_from_speed`
-    // invariant recomputes `overall` from these four sub-scores alone. Consolidating on the
-    // weighted total instead would make this throw.
+    // The consolidated case survives `computeReportMetrics`, whose `overall_recomputes_from_sub_scores`
+    // invariant recomputes `overall` from the four sub-scores alone — with Completeness taken from
+    // the coverage, not the stored median. Consolidating on the weighted total would make this throw.
     const metrics = computeReportMetrics([
       {
         testItemId: 'median',
@@ -133,10 +138,33 @@ describe('consolidateCasePasses — the median (B0-720)', () => {
         score: result.score,
         latencySeconds: null,
         ttftSeconds: null,
+        concepts: concepts({ mandatoryRequired: [CONCEPT.dilution] }),
         variance: result.variance,
       },
     ]);
-    expect(metrics.perCase[0]!.overall).toBe(Math.round(0.4 * 70 + 0.3 * 60 + 0.2 * 70 + 0.1 * 70));
+    expect(metrics.perCase[0]!.completeness).toBe(100);
+    expect(metrics.perCase[0]!.overall).toBe(Math.round(0.4 * 70 + 0.3 * 100 + 0.2 * 70 + 0.1 * 70));
+  });
+
+  it('computes each pass’s own overall from that pass’s coverage, not from a judged Completeness', () => {
+    // Same judged sub-scores every pass; only the concept verdicts differ.
+    const full = concepts({ mandatoryRequired: [CONCEPT.dilution], bonusRequired: [CONCEPT.epa] });
+    const half = concepts({
+      mandatoryRequired: [CONCEPT.dilution],
+      bonusRequired: [CONCEPT.epa],
+      bonusMissing: [CONCEPT.epa],
+    });
+    const result = consolidateCasePasses([
+      { score: score(80, { completeness: null }), concepts: full },
+      { score: score(80, { completeness: null }), concepts: half },
+      { score: score(80, { completeness: null }), concepts: full },
+    ]);
+
+    // full: 0.4·80 + 0.3·100 + 0.2·80 + 0.1·80 = 86; half: 0.4·80 + 0.3·50 + 0.2·80 + 0.1·80 = 71.
+    expect(result.variance!.passOveralls).toEqual([86, 71, 86]);
+    expect(result.variance!.range).toBe(15);
+    expect(result.variance!.causes).toContain('score_range');
+    expect(result.variance!.causes).toContain('concept');
   });
 
   it('leaves the median untouched when one pass is a wild outlier', () => {
@@ -159,10 +187,39 @@ describe('consolidateCasePasses — the median (B0-720)', () => {
     expect(result2.score.accuracy).toBe(62.5);
   });
 
-  it('takes the narrative verbatim from the pass nearest the consolidated score', () => {
+  it('takes the narrative verbatim from the first evaluable pass (B0-817)', () => {
     const result = consolidateCasePasses(passes(score(40), score(70), score(72)));
-    expect(result.score.explanation).toBe('explanation @70');
-    expect(result.score.improvement).toBe('improvement @70');
+    expect(result.score.explanation).toBe('explanation @40');
+    expect(result.score.improvement).toBe('improvement @40');
+
+    const afterUte = consolidateCasePasses(passes(uteScore('blank'), score(70), score(72)));
+    expect(afterUte.score.explanation).toBe('explanation @70');
+  });
+
+  it('medians the judged metrics like the sub-scores, rounded as the reference rounds them (B0-811)', () => {
+    const result = consolidateCasePasses(
+      passes(
+        score(80, { similarity: 0.62, similarityNote: 'first', evalConfidence: 71, confidenceNote: 'c1' }),
+        score(80, { similarity: 0.9, similarityNote: 'second', evalConfidence: 88, confidenceNote: 'c2' }),
+        score(80, { similarity: 0.75, similarityNote: 'third', evalConfidence: 80, confidenceNote: 'c3' }),
+      ),
+    );
+    expect(result.score.similarity).toBe(0.75);
+    expect(result.score.evalConfidence).toBe(80);
+    // Notes travel with the narrative — pass 1's.
+    expect(result.score.similarityNote).toBe('first');
+    expect(result.score.confidenceNote).toBe('c1');
+
+    const even = consolidateCasePasses(
+      passes(score(80, { similarity: 0.6, evalConfidence: 70 }), score(80, { similarity: 0.71, evalConfidence: 75 })),
+    );
+    // (0.6 + 0.71) / 2 = 0.655 → 0.66 at two decimals; (70 + 75) / 2 = 72.5 → 73 half-up.
+    expect(even.score.similarity).toBe(0.66);
+    expect(even.score.evalConfidence).toBe(73);
+
+    const none = consolidateCasePasses(passes(score(80), score(80)));
+    expect(none.score.similarity).toBeNull();
+    expect(none.score.evalConfidence).toBeNull();
   });
 });
 
@@ -188,11 +245,11 @@ describe('consolidateCasePasses — flags (B0-720)', () => {
     expect(result.concepts!.mandatory.missing).toEqual([CONCEPT.contactTime]);
   });
 
-  it('flags a 58 / 62 / 60 spread that straddles the Partial Pass boundary', () => {
+  it('flags a 58 / 62 / 60 spread that straddles the pass mark', () => {
     const result = consolidateCasePasses(passes(score(58), score(62), score(60)));
 
     expect(result.variance!.passOveralls).toEqual([58, 62, 60]);
-    expect(result.variance!.passBands).toEqual(['Fail', 'Partial Pass', 'Partial Pass']);
+    expect(result.variance!.passBands).toEqual(['Fail', 'Pass', 'Pass']);
     expect(result.variance!.bandSplit).toBe(true);
     expect(result.variance!.range).toBe(4);
     // 4 points is well under the spread threshold — the band split alone is what flags it.
@@ -214,17 +271,39 @@ describe('consolidateCasePasses — flags (B0-720)', () => {
     expect(result.variance!.spreadThreshold).toBe(DEFAULT_CONSISTENCY_SPREAD_THRESHOLD);
     expect(result.variance!.scoreRangeExceeded).toBe(true);
   });
+
+  it('judges the per-pass bands at the pass mark it is given (B0-812)', () => {
+    const at60 = consolidateCasePasses(passes(score(65), score(75)));
+    expect(at60.variance!.passBands).toEqual(['Pass', 'Pass']);
+    expect(at60.variance!.bandSplit).toBe(false);
+
+    const at70 = consolidateCasePasses(passes(score(65), score(75)), { passMark: 70 });
+    expect(at70.variance!.passBands).toEqual(['Fail', 'Pass']);
+    expect(at70.variance!.bandSplit).toBe(true);
+  });
 });
 
-describe('consolidateCasePasses — evaluability (B0-720)', () => {
-  it('calls a case Unable to Evaluate on a strict majority', () => {
+describe('consolidateCasePasses — evaluability (B0-720 / B0-817)', () => {
+  it('calls a case Unable to Evaluate only when every pass said so', () => {
     const result = consolidateCasePasses(
-      passes(uteScore('empty response'), uteScore('empty response'), score(70)),
+      passes(uteScore('empty response'), uteScore('empty response'), uteScore('empty response')),
     );
 
     expect(result.score.unableToEvaluate).toBe(true);
     expect(result.score.uteReason).toBe('empty response');
     expect(result.score.accuracy).toBeNull();
+    expect(result.variance!.evaluabilitySplit).toBe(false);
+    expect(result.variance!.passOveralls).toEqual([null, null, null]);
+  });
+
+  it('grades a case one pass could judge even when the other two could not, flagging the split', () => {
+    const result = consolidateCasePasses(
+      passes(uteScore('empty response'), uteScore('empty response'), score(70)),
+    );
+
+    expect(result.score.unableToEvaluate).toBe(false);
+    expect(result.score.accuracy).toBe(70);
+    expect(result.variance!.passOveralls).toEqual([null, null, 70]);
     expect(result.variance!.evaluabilitySplit).toBe(true);
     expect(result.variance!.causes).toContain('evaluability');
   });
@@ -280,23 +359,67 @@ describe('consolidateCasePasses — concept majority (B0-720)', () => {
     expect(result.variance!.conceptDisagreements[0]!.votesFor).toBe(2);
   });
 
-  it('resolves a 1–1 tie on a material factual issue to "there is one"', () => {
+  it('needs a strict majority for a material factual issue — a 1–1 tie is no issue (B0-817)', () => {
     const clean = concepts({ mandatoryRequired: [CONCEPT.epa] });
     const dirty = concepts({
       mandatoryRequired: [CONCEPT.epa],
       materialIssue: true,
-      materialIssueNote: `Exact-match check failed on a regulated value: "${CONCEPT.epa}".`,
+      materialIssueNote: `Quoted a registration number other than "${CONCEPT.epa}".`,
     });
-    const result = consolidateCasePasses([
+    const tied = consolidateCasePasses([
       { score: score(88), concepts: clean },
       { score: score(88), concepts: dirty },
     ]);
 
-    expect(result.concepts!.materialIssue).toBe(true);
-    expect(result.concepts!.materialIssueNote).toBe(
-      `Exact-match check failed on a regulated value: "${CONCEPT.epa}".`,
+    expect(tied.concepts!.materialIssue).toBe(false);
+    expect(tied.concepts!.materialIssueNote).toBeNull();
+    // The split is still on the record for a human to settle.
+    expect(tied.variance!.conceptDisagreements.map((d) => d.kind)).toContain('material_issue');
+
+    const majority = consolidateCasePasses([
+      { score: score(88), concepts: dirty },
+      { score: score(88), concepts: dirty },
+      { score: score(88), concepts: clean },
+    ]);
+    expect(majority.concepts!.materialIssue).toBe(true);
+    expect(majority.concepts!.materialIssueNote).toBe(
+      `Quoted a registration number other than "${CONCEPT.epa}".`,
     );
-    expect(result.variance!.conceptDisagreements.map((d) => d.kind)).toContain('material_issue');
+  });
+
+  it('unions the required lists across passes and votes by normalized phrase identity (B0-817)', () => {
+    const spelledA: CaseConcepts = {
+      mandatory: { required: ['Dilute 1:64 (2 oz/gal)'], satisfied: ['Dilute 1:64 (2 oz/gal)'], missing: [] },
+      expected: {
+        required: ['Dilute 1:64 (2 oz/gal)', CONCEPT.contactTime],
+        satisfied: ['Dilute 1:64 (2 oz/gal)'],
+        missing: [CONCEPT.contactTime],
+      },
+      materialIssue: false,
+      materialIssueNote: null,
+    };
+    // Same phrase, different punctuation and case; one required phrase this pass did not list.
+    const spelledB: CaseConcepts = {
+      mandatory: { required: ['dilute 1:64 — 2 oz/gal'], satisfied: ['dilute 1:64 — 2 oz/gal'], missing: [] },
+      expected: { required: ['dilute 1:64 — 2 oz/gal'], satisfied: ['dilute 1:64 — 2 oz/gal'], missing: [] },
+      materialIssue: false,
+      materialIssueNote: null,
+    };
+    const result = consolidateCasePasses([
+      { score: score(80), concepts: spelledA },
+      { score: score(80), concepts: spelledB },
+    ]);
+
+    // Both passes agree the dilution is satisfied; first-seen spelling is re-emitted.
+    expect(result.concepts!.mandatory.satisfied).toEqual(['Dilute 1:64 (2 oz/gal)']);
+    // The phrase only pass A required is kept (union) and, judged missing by the one pass that judged
+    // it, is missing.
+    expect(result.concepts!.expected.required).toEqual(['Dilute 1:64 (2 oz/gal)', CONCEPT.contactTime]);
+    expect(result.concepts!.expected.missing).toEqual([CONCEPT.contactTime]);
+    // No disagreement on the dilution — the two spellings were one vote each for "satisfied".
+    expect(
+      result.variance!.conceptDisagreements.filter((d) => d.concept === 'Dilute 1:64 (2 oz/gal)'),
+    ).toEqual([]);
   });
 
   it('records the whole-case concept judgments the passes split on', () => {
@@ -313,7 +436,8 @@ describe('consolidateCasePasses — concept majority (B0-720)', () => {
     const kinds = result.variance!.conceptDisagreements.map((d) => d.kind);
     expect(kinds).toContain('all_mandatory');
     expect(kinds).toContain('all_expected');
-    expect(kinds).toContain('auto_pass_eligible');
+    // No automatic-Pass rule exists any more (B0-813), so there is no such judgment to split on.
+    expect(kinds).not.toContain('auto_pass_eligible');
   });
 
   it('keeps a repeated concept phrase as a multiset when the passes disagree', () => {
@@ -370,9 +494,9 @@ describe('consolidateCasePasses — timings (B0-720)', () => {
   });
 });
 
-describe('clampGradingPasses (B0-719)', () => {
-  it('ships at one pass by default', () => {
-    expect(DEFAULT_GRADING_PASSES).toBe(1);
+describe('clampGradingPasses (B0-719 / B0-818)', () => {
+  it('ships at three passes by default, as the reference methodology does', () => {
+    expect(DEFAULT_GRADING_PASSES).toBe(3);
   });
 
   it('clamps to whole passes within bounds', () => {
@@ -436,14 +560,17 @@ describe('computeReportMetrics — grading-consistency rollup (B0-721)', () => {
     expect(con.passes).toBe(3);
     expect(con.casesConsolidated).toBe(5);
     expect(con.flagged).toBe(4);
-    expect(con.byCause.band_split).toBe(2);
-    expect(con.byCause.score_range).toBe(1);
+    // B0-813 — a concept split moves the number too: the pass that missed the only expected
+    // concept has Completeness 0 (overall 56, Fail) while the others have 100 (overall 86, Pass),
+    // so the 'concept' case is also a band split and a 30-point score range.
+    expect(con.byCause.band_split).toBe(3);
+    expect(con.byCause.score_range).toBe(2);
     expect(con.byCause.evaluability).toBe(1);
     expect(con.byCause.concept).toBe(1);
     expect(con.conceptDisagreementCases).toBe(1);
-    // One split phrase records five judgments: the phrase under both kinds (mandatory ⊆ expected),
-    // plus all-mandatory, all-expected and auto-Pass eligibility.
-    expect(con.conceptDisagreements).toBe(5);
+    // One split phrase records four judgments: the phrase under both kinds (mandatory ⊆ expected),
+    // plus all-mandatory and all-expected.
+    expect(con.conceptDisagreements).toBe(4);
     expect(con.maxRange).toBe(70);
     expect(con.queue.map((entry) => entry.id)).not.toContain('agree');
     expect(con.queue).toHaveLength(4);

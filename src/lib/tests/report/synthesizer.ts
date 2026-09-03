@@ -158,7 +158,6 @@ function rateBlockSummary(block: RateBlock) {
     avg: block.avg,
     grade: block.grade,
     passPct: block.passPct,
-    partialPct: block.partialPct,
     failPct: block.failPct,
   };
 }
@@ -221,7 +220,7 @@ function formatMetricsHeaderAsText(
   const lines: string[] = [];
 
   lines.push('OVERALL METRICS');
-  lines.push(`  Grade: ${overall.grade}, Pass: ${overall.passPct}%, Partial: ${overall.partialPct}%, Fail: ${overall.failPct}%`);
+  lines.push(`  Grade: ${overall.grade}, Pass: ${overall.passPct}%, Fail: ${overall.failPct}%`);
   lines.push(`  UTE Count: ${uteCount}`);
   lines.push('');
 

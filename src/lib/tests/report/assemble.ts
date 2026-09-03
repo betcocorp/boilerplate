@@ -5,7 +5,6 @@ import {
   listAllResultItemsByResultId,
 } from '~/lib/tests/repository';
 import {
-  extractCriteriaGrading,
   extractItemSimilarityScore,
   extractRetrievedDocumentChunks,
 } from '~/lib/tests/response-payload';
@@ -16,7 +15,6 @@ import type {
   TestResultRecord,
 } from '~/lib/tests/types';
 
-import { deriveCaseConcepts } from './case-concepts';
 import { consolidateCasePasses, type CaseGradingVariance } from './consolidate';
 import type { ReportCase, ReportDataResponse, ReportMetricsData } from './data-schemas';
 import {
@@ -28,7 +26,15 @@ import {
 } from './metrics';
 import type { CaseHarnessAside } from './render';
 import { caseAnchorId, orderCasesByTier } from './render';
-import { parseReportState, type CaseScore, type ReportState, type ReportSynthesis } from './schemas';
+import {
+  gradingConfigFromState,
+  parseReportState,
+  type CaseScore,
+  type ReportGradingConfig,
+  type ReportState,
+  type ReportSynthesis,
+} from './schemas';
+import type { JudgedThresholds } from './scoring-config';
 
 /**
  * B0-586 — the single assembly step that turns a run's raw rows (`tests`, `test_results`,
@@ -101,6 +107,10 @@ export type AssembleReportCasesParams = {
   casePassScores?: Record<string, CaseScore[]>;
   /** B0-720 — `report_state.spreadThreshold`; null falls back to the shipped default. */
   spreadThreshold?: number | null;
+  /** B0-812 — `report_state.passMark`; null falls back to `DEFAULT_PASS_MARK`. */
+  passMark?: number | null;
+  /** B0-811 — `report_state.judgedThresholds`; null falls back to `DEFAULT_JUDGED_THRESHOLDS`. */
+  judgedThresholds?: JudgedThresholds | null;
   /**
    * B0-714 — how a failed structural invariant is treated. Defaults to `'throw'`, so the
    * generation path can never persist a report whose numbers contradict each other. `loadReportData`
@@ -124,11 +134,14 @@ export type AssembledReportCases = {
 export type AssembleReportParams = AssembleReportCasesParams & {
   synthesis: ReportSynthesis;
   generatedAt: string;
+  /** B0-825 — what the report was graded with; printed in the header and carried on the wire. */
+  config?: ReportGradingConfig | null;
 };
 
 export type AssembledReport = AssembledReportCases & {
   synthesis: ReportSynthesis;
   generatedAt: string;
+  config: ReportGradingConfig | null;
 };
 
 /**
@@ -169,61 +182,71 @@ export function assembleReportCases(params: AssembleReportCasesParams): Assemble
     const resultItem = resultItemByTestItemId.get(item.id);
     const latencySeconds = latencySecondsOf(resultItem);
     const ttftSeconds = ttftSecondsOf(resultItem);
-    /**
-     * B0-711 — per-concept verdicts come from the criteria grading the *run* already persisted
-     * (`response_payload.criteriaGrading`), not from a second model call: the concepts were
-     * judged once, at run time, and the report reads that judgment. Items without criteria get
-     * `undefined` and behave exactly as they did before the concept rules existed.
-     */
-    const concepts = deriveCaseConcepts({
-      criteriaGrading: extractCriteriaGrading(resultItem?.response_payload),
-      minimumConcepts: item.minimum_concepts,
-      expectedConcepts: item.expected_concepts,
-    });
 
     /**
-     * B0-720 — the passes are consolidated here, through the same pure function the generation
-     * path already ran, so `caseScores` and this can never land on different numbers.
+     * B0-809 — per-concept verdicts are the grader's, authored on every pass and persisted on the
+     * pass's `CaseScore`. When multi-pass, `consolidateCasePasses` takes the majority verdict per
+     * phrase; single-pass, the one pass's block is the block. A case whose grader saw no concept
+     * columns carries none, and `computeReportMetrics` marks it Unable to Evaluate rather than
+     * inventing a Completeness for it. Nothing here reads the harness's `criteriaGrading` any more.
      *
-     * The concepts and both timings are handed to every pass deliberately: they are derived once
-     * per case (from the run's own row), not once per pass, so the agreement checks inside
-     * `consolidateCasePasses` are guards rather than live comparisons. Feeding them through keeps
-     * those guards armed if per-pass concepts or timings ever appear.
+     * The timings are handed to every pass so the agreement check inside `consolidateCasePasses`
+     * stays armed: they are recorded once per case, so passes cannot legitimately disagree.
      */
     const passScores = params.casePassScores?.[item.id];
     const consolidated =
       passScores && passScores.length > 0
         ? consolidateCasePasses(
-            passScores.map((score) => ({ score, concepts, ttftSeconds, totalSeconds: latencySeconds })),
-            { spreadThreshold: params.spreadThreshold ?? undefined },
+            passScores.map((score) => ({
+              score,
+              concepts: score.concepts ?? undefined,
+              ttftSeconds,
+              totalSeconds: latencySeconds,
+            })),
+            {
+              spreadThreshold: params.spreadThreshold ?? undefined,
+              passMark: params.passMark,
+            },
           )
         : null;
     if (consolidated?.variance) varianceByCaseId.set(item.id, consolidated.variance);
+
+    const score = consolidated?.score ?? caseScores[item.id] ?? unscoredPlaceholder();
 
     return {
       testItemId: item.id,
       question: item.prompt,
       priorityRaw: item.priority,
       category: item.prompt_category,
-      score: consolidated?.score ?? caseScores[item.id] ?? unscoredPlaceholder(),
+      score,
       latencySeconds,
       ttftSeconds,
-      concepts: consolidated ? consolidated.concepts : concepts,
+      concepts: consolidated ? consolidated.concepts : (score.concepts ?? undefined),
       variance: consolidated?.variance ?? null,
     };
   });
 
   const metrics = computeReportMetrics(caseInputs, {
     invariantSeverity: params.invariantSeverity,
+    passMark: params.passMark,
+    judgedThresholds: params.judgedThresholds,
   });
   const evaluatedById = new Map(metrics.perCase.map((c) => [c.id, c]));
+  // A case the metrics could not evaluate for want of expected concepts carries a stored score that
+  // says otherwise; the rendered record has to say what the metrics decided, with the reason.
+  const uteReasonById = new Map(metrics.ute.map((u) => [u.id, u.reason]));
   // Looked up, never recomputed — the same objects `computeReportMetrics` built the aggregates
   // from, so a case's speed line and the run's speed table can never disagree.
   const speedById = new Map((metrics.speed?.perCase ?? []).map((c) => [c.id, c]));
 
   const cases: ReportCase[] = items.map((item, index) => {
     const resultItem = resultItemByTestItemId.get(item.id);
-    const score = caseInputs[index].score;
+    const storedScore = caseInputs[index].score;
+    const uteReason = uteReasonById.get(item.id);
+    const score: CaseScore =
+      uteReason != null && !storedScore.unableToEvaluate
+        ? { ...storedScore, unableToEvaluate: true, uteReason }
+        : storedScore;
     const harness: CaseHarnessAside | null = resultItem
       ? {
           passed: resultItem.passed,
@@ -252,7 +275,7 @@ export function assembleReportCases(params: AssembleReportCasesParams): Assemble
       actual: responseText || NO_RESPONSE_PLACEHOLDER,
       responseRecorded: Boolean(responseText),
       score,
-      unableToEvaluate: score.unableToEvaluate,
+      unableToEvaluate: uteReason != null,
       evaluated: evaluatedById.get(item.id) ?? null,
       // The same object `computeReportMetrics` rated this case with — surfaced on the case record
       // so a renderer never has to reach back into `evaluated` (or re-derive) to show coverage.
@@ -281,8 +304,8 @@ export function assembleReportCases(params: AssembleReportCasesParams): Assemble
 
 /** `assembleReportCases` plus the synthesis and timestamp that complete a finished report. */
 export function assembleReportData(params: AssembleReportParams): AssembledReport {
-  const { synthesis, generatedAt, ...rest } = params;
-  return { ...assembleReportCases(rest), synthesis, generatedAt };
+  const { synthesis, generatedAt, config, ...rest } = params;
+  return { ...assembleReportCases(rest), synthesis, generatedAt, config: config ?? null };
 }
 
 /** Projects the tuple-keyed metric groups onto the named-object wire shape. */
@@ -300,8 +323,13 @@ function toMetricsPayload(metrics: ReportMetrics): ReportMetricsData {
     categories: metrics.categories.map(([name, block]) => ({ name, block })),
     strongestCategory: metrics.strongestCategory,
     weakestCategory: metrics.weakestCategory,
+    passMark: metrics.passMark,
+    strictPassMark: metrics.strictPassMark,
+    passOnlyUnderCurrentMark: metrics.passOnlyUnderCurrentMark,
     speed: metrics.speed,
     concepts: metrics.concepts,
+    // B0-811 — null when no case carries a judged metric.
+    judged: metrics.judged,
     // B0-721 — null for a single-pass report, so the whole consistency block is omitted.
     consistency: metrics.consistency,
     warnings: metrics.warnings,
@@ -319,6 +347,7 @@ export function toReportDataPayload(assembled: AssembledReport): ReportDataRespo
     intendedAgent: assembled.test.intended_agent,
     generatedAt: assembled.generatedAt,
     stale: assembled.stale,
+    config: assembled.config,
     metrics: toMetricsPayload(assembled.metrics),
     synthesis: assembled.synthesis,
     cases: assembled.cases,
@@ -377,8 +406,11 @@ export async function loadReportData(runId: string): Promise<ReportDataResponse 
       caseScores: state.caseScores,
       casePassScores: state.casePassScores,
       spreadThreshold: state.spreadThreshold,
+      passMark: state.passMark,
+      judgedThresholds: state.judgedThresholds,
       synthesis: state.synthesis,
       generatedAt: run.report_generated_at ?? state.updatedAt,
+      config: gradingConfigFromState(state),
       // Read path: surface a reconciliation failure on `metrics.warnings` rather than throwing.
       // Generation already refused to persist a report that does not reconcile; a report that is
       // nonetheless stored stays viewable, with the violation named.

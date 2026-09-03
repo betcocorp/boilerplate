@@ -15,7 +15,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('~/supabase/clients/service-role', () => ({ getSupabaseServiceRoleClient: vi.fn() }));
 
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
-import { resolveProductEntityByName, resolveProductLineKeyByName } from '~/lib/rag/entity-context';
+import {
+  resolveEntityDisplayTitle,
+  resolveProductEntityByName,
+  resolveProductLineKeyByName,
+} from '~/lib/rag/entity-context';
 
 type ProductAliasRow = {
   alias_norm: string;
@@ -55,8 +59,12 @@ type Filter =
   | { kind: 'ilike'; column: string; value: string }
   | { kind: 'jsonFilter'; column: string; op: string; value: string };
 
+/** B0-830: `legacy.prod_line` rows — the product LINE display name comes from `ProdLineDescr`. */
+type ProdLineRow = { ProdLineKey: string; ProdLineDescr: string | null };
+
 let productAliasRows: ProductAliasRow[] = [];
 let entityRows: EntityRow[] = [];
+let prodLineRows: ProdLineRow[] = [];
 /** null = simulate the RPC being unavailable (falls through, like a pre-migration environment). */
 let fuzzyTrgmRpcRows: FuzzyTrgmRpcRow[] | null = null;
 /** B0-479: how many times the trigram RPC tier was actually invoked. */
@@ -105,11 +113,15 @@ function createQueryBuilder(getRows: () => Record<string, unknown>[]) {
 const fakeSupabase = {
   schema() {
     return {
-      from(table: 'product_alias' | 'entity') {
+      from(table: 'product_alias' | 'entity' | 'prod_line') {
         return {
           select() {
             return createQueryBuilder(() =>
-              table === 'product_alias' ? productAliasRows : entityRows,
+              table === 'product_alias'
+                ? productAliasRows
+                : table === 'prod_line'
+                  ? prodLineRows
+                  : entityRows,
             );
           },
         };
@@ -131,9 +143,82 @@ const fakeSupabase = {
 beforeEach(() => {
   productAliasRows = [];
   entityRows = [];
+  prodLineRows = [];
   fuzzyTrgmRpcRows = null;
   fuzzyTrgmRpcCalls = 0;
   vi.mocked(getSupabaseServiceRoleClient).mockReturnValue(fakeSupabase as never);
+});
+
+describe('B0-830 — matchedTitle / resolveEntityDisplayTitle name a product LINE by legacy ProdLineDescr', () => {
+  const AF79_ALIAS: ProductAliasRow = {
+    alias_norm: 'af79 concentrate disinfectant',
+    alias: 'AF79 Concentrate Disinfectant',
+    entity_id: 'ent-af79-line',
+    product_line_key: 'line-af79',
+    verified: true,
+    id: 'alias-af79',
+    confidence: 0.98,
+  };
+  /** Real shape confirmed via Supabase: the product_line tier's `rag.entity.title` is the
+   * marketing short_description, not the product name. */
+  const AF79_LINE_ENTITY: EntityRow = {
+    id: 'ent-af79-line',
+    entity_type: 'product_line',
+    product_line_key: 'line-af79',
+    title: 'Concentrated Acid Free Bathroom Disinfectant',
+  };
+
+  it('prefers legacy.prod_line.ProdLineDescr over the marketing entity title for a product_line entity', async () => {
+    productAliasRows = [AF79_ALIAS];
+    entityRows = [AF79_LINE_ENTITY];
+    // Duplicate legacy rows per key are real; the first NON-EMPTY description wins.
+    prodLineRows = [
+      { ProdLineKey: 'line-af79', ProdLineDescr: '   ' },
+      { ProdLineKey: 'line-af79', ProdLineDescr: 'AF79 Concentrate Disinfectant' },
+      { ProdLineKey: 'line-other', ProdLineDescr: 'Some Other Line' },
+    ];
+
+    const result = await resolveProductEntityByName('AF79 Concentrate Disinfectant');
+    expect(result.resolutionSource).toBe('alias_exact');
+    expect(result.matchedTitle).toBe('AF79 Concentrate Disinfectant');
+
+    expect(await resolveEntityDisplayTitle('ent-af79-line')).toBe('AF79 Concentrate Disinfectant');
+  });
+
+  it('falls back to the entity title when the legacy table has no usable description for the key', async () => {
+    productAliasRows = [AF79_ALIAS];
+    entityRows = [AF79_LINE_ENTITY];
+    prodLineRows = [{ ProdLineKey: 'line-af79', ProdLineDescr: null }];
+
+    const result = await resolveProductEntityByName('AF79 Concentrate Disinfectant');
+    expect(result.matchedTitle).toBe('Concentrated Acid Free Bathroom Disinfectant');
+    expect(await resolveEntityDisplayTitle('ent-af79-line')).toBe(
+      'Concentrated Acid Free Bathroom Disinfectant',
+    );
+  });
+
+  it('leaves a SKU-tier product entity on its own title — never relabels it with the line name', async () => {
+    productAliasRows = [{ ...AF79_ALIAS, entity_id: 'ent-af79-sku' }];
+    entityRows = [
+      {
+        id: 'ent-af79-sku',
+        entity_type: 'product',
+        product_line_key: 'line-af79',
+        product_key: '33104',
+        title: 'AF 79Concentrate',
+      },
+    ];
+    prodLineRows = [{ ProdLineKey: 'line-af79', ProdLineDescr: 'AF79 Concentrate Disinfectant' }];
+
+    const result = await resolveProductEntityByName('AF79 Concentrate Disinfectant');
+    expect(result.productKey).toBe('33104');
+    expect(result.matchedTitle).toBe('AF 79Concentrate');
+    expect(await resolveEntityDisplayTitle('ent-af79-sku')).toBe('AF 79Concentrate');
+  });
+
+  it('returns null for an unknown entity id', async () => {
+    expect(await resolveEntityDisplayTitle('ent-missing')).toBeNull();
+  });
 });
 
 describe('resolveProductEntityByName — exact alias_norm match (B0-200)', () => {
@@ -160,6 +245,7 @@ describe('resolveProductEntityByName — exact alias_norm match (B0-200)', () =>
       ambiguousAlias: false,
       matchedAliasId: 'alias-1',
       matchedAliasConfidence: 0.95,
+      matchedTitle: null,
     });
   });
 
@@ -197,6 +283,7 @@ describe('resolveProductEntityByName — exact alias_norm match (B0-200)', () =>
       ambiguousAlias: false,
       matchedAliasId: null,
       matchedAliasConfidence: null,
+      matchedTitle: null,
     });
   });
 
@@ -232,6 +319,7 @@ describe('resolveProductEntityByName — legacy fallback behavior unchanged when
       ambiguousAlias: false,
       matchedAliasId: null,
       matchedAliasConfidence: null,
+      matchedTitle: null,
     });
   });
 
@@ -255,6 +343,7 @@ describe('resolveProductEntityByName — legacy fallback behavior unchanged when
       ambiguousAlias: false,
       matchedAliasId: null,
       matchedAliasConfidence: null,
+      matchedTitle: null,
     });
   });
 
@@ -271,6 +360,7 @@ describe('resolveProductEntityByName — legacy fallback behavior unchanged when
       ambiguousAlias: false,
       matchedAliasId: null,
       matchedAliasConfidence: null,
+      matchedTitle: null,
     });
   });
 });
@@ -300,6 +390,7 @@ describe('resolveProductEntityByName — tokenized fuzzy alias fallback (B0-272)
       ambiguousAlias: false,
       matchedAliasId: 'alias-4',
       matchedAliasConfidence: 0.8,
+      matchedTitle: null,
     });
   });
 
@@ -326,6 +417,7 @@ describe('resolveProductEntityByName — tokenized fuzzy alias fallback (B0-272)
       ambiguousAlias: false,
       matchedAliasId: null,
       matchedAliasConfidence: null,
+      matchedTitle: null,
     });
   });
 
@@ -348,6 +440,7 @@ describe('resolveProductEntityByName — tokenized fuzzy alias fallback (B0-272)
       ambiguousAlias: true,
       matchedAliasId: null,
       matchedAliasConfidence: null,
+      matchedTitle: null,
     });
   });
 });
@@ -380,6 +473,7 @@ describe('resolveProductEntityByName — exact alias_norm match spanning multipl
       ambiguousAlias: false,
       matchedAliasId: 'alias-us',
       matchedAliasConfidence: 1,
+      matchedTitle: null,
     });
   });
 
@@ -399,6 +493,7 @@ describe('resolveProductEntityByName — exact alias_norm match spanning multipl
       ambiguousAlias: true,
       matchedAliasId: null,
       matchedAliasConfidence: null,
+      matchedTitle: null,
     });
   });
 
@@ -418,6 +513,7 @@ describe('resolveProductEntityByName — exact alias_norm match spanning multipl
       ambiguousAlias: true,
       matchedAliasId: null,
       matchedAliasConfidence: null,
+      matchedTitle: null,
     });
   });
 });
@@ -460,6 +556,7 @@ describe('resolveProductEntityByName — trigram fuzzy alias RPC fallback (B0-48
       // The RPC never returns the alias row id.
       matchedAliasId: null,
       matchedAliasConfidence: 0.9,
+      matchedTitle: null,
     });
   });
 
@@ -497,6 +594,7 @@ describe('resolveProductEntityByName — trigram fuzzy alias RPC fallback (B0-48
       ambiguousAlias: true,
       matchedAliasId: null,
       matchedAliasConfidence: null,
+      matchedTitle: null,
     });
   });
 
@@ -534,6 +632,7 @@ describe('resolveProductEntityByName — trigram fuzzy alias RPC fallback (B0-48
       ambiguousAlias: false,
       matchedAliasId: null,
       matchedAliasConfidence: 0.9,
+      matchedTitle: null,
     });
   });
 
@@ -566,6 +665,7 @@ describe('resolveProductEntityByName — trigram fuzzy alias RPC fallback (B0-48
       ambiguousAlias: false,
       matchedAliasId: null,
       matchedAliasConfidence: null,
+      matchedTitle: null,
     });
   });
 });
@@ -609,6 +709,7 @@ describe('resolveProductEntityByName — EXP- experimental alias exclusion (B0-7
       ambiguousAlias: false,
       matchedAliasId: null,
       matchedAliasConfidence: 0.9,
+      matchedTitle: null,
     });
   });
 
@@ -657,6 +758,7 @@ describe('resolveProductEntityByName — EXP- experimental alias exclusion (B0-7
       ambiguousAlias: false,
       matchedAliasId: null,
       matchedAliasConfidence: null,
+      matchedTitle: null,
     });
   });
 
@@ -718,6 +820,7 @@ describe('resolveProductEntityByName — freeform mode restricts resolution to p
       ambiguousAlias: false,
       matchedAliasId: 'alias-kling',
       matchedAliasConfidence: 1,
+      matchedTitle: null,
     });
   });
 
@@ -744,6 +847,7 @@ describe('resolveProductEntityByName — freeform mode restricts resolution to p
       ambiguousAlias: false,
       matchedAliasId: 'alias-4',
       matchedAliasConfidence: 0.8,
+      matchedTitle: null,
     });
   });
 
@@ -775,6 +879,7 @@ describe('resolveProductEntityByName — freeform mode restricts resolution to p
       ambiguousAlias: false,
       matchedAliasId: null,
       matchedAliasConfidence: null,
+      matchedTitle: null,
     });
 
     // Control: the same fixture and query DO reach (and resolve through) the RPC in name mode —
@@ -817,6 +922,7 @@ describe('resolveProductEntityByName — freeform mode restricts resolution to p
       ambiguousAlias: true,
       matchedAliasId: null,
       matchedAliasConfidence: null,
+      matchedTitle: null,
     });
 
     // Control: name mode still applies the verified-tiebreak, unchanged by B0-479.
@@ -863,6 +969,7 @@ describe('resolveProductEntityByName — freeform mode restricts resolution to p
       ambiguousAlias: false,
       matchedAliasId: null,
       matchedAliasConfidence: null,
+      matchedTitle: null,
     });
     expect(
       (await resolveProductEntityByName('SuperClean 500', { mode: 'freeform' })).productLineKey,

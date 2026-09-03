@@ -3,7 +3,7 @@
  * performance by tier, performance by category, and — on its own row since B0-718 — speed.
  *
  * Every figure here is read straight off the B0-586 wire contract (`ReportMetricsData`). Nothing
- * is averaged, re-rated, re-rounded or re-banded in this file: `avg` and the pass/partial/fail
+ * is averaged, re-rated, re-rounded or re-banded in this file: `avg` and the pass/fail
  * percentages arrive already rounded to one decimal, timings and speed scores arrive rounded once
  * at source, and all of them are printed verbatim. The only arithmetic is laying segment widths
  * out along a bar and counting how many cases recorded no timing at all.
@@ -33,10 +33,9 @@ const GRADE_STYLES: Record<ReportRateGrade, string> = {
   '-': 'border-slate-200 bg-slate-50 text-slate-500',
 };
 
-/** Pass / partial / fail, in bar order — colour, label and which percentage field to read. */
+/** Pass / fail, in bar order — colour, label and which percentage field to read. */
 const RATE_SEGMENTS = [
   { key: 'pass', label: 'pass', bar: 'bg-emerald-500', dot: 'bg-emerald-500' },
-  { key: 'partial', label: 'partial', bar: 'bg-amber-400', dot: 'bg-amber-400' },
   { key: 'fail', label: 'fail', bar: 'bg-red-500', dot: 'bg-red-500' },
 ] as const;
 
@@ -51,15 +50,11 @@ const CARD_CLASS = 'flex flex-col rounded-3xl border border-slate-200 bg-white p
 const CARD_TITLE_CLASS = 'text-sm font-semibold text-slate-900';
 
 function pctOf(block: ReportRateBlock, key: (typeof RATE_SEGMENTS)[number]['key']): number {
-  if (key === 'pass') return block.passPct;
-  if (key === 'partial') return block.partialPct;
-  return block.failPct;
+  return key === 'pass' ? block.passPct : block.failPct;
 }
 
 function countOf(block: ReportRateBlock, key: (typeof RATE_SEGMENTS)[number]['key']): number {
-  if (key === 'pass') return block.pass;
-  if (key === 'partial') return block.partial;
-  return block.fail;
+  return key === 'pass' ? block.pass : block.fail;
 }
 
 /** A UUID is too long for a card; show its first segment but keep the full id addressable. */

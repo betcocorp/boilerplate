@@ -52,6 +52,45 @@ describe('parseReportState — backward compatibility (B0-719)', () => {
     expect(state!.casePassScores).toEqual({});
     expect(state!.passes).toBe(1);
     expect(state!.spreadThreshold).toBeNull();
+    // B0-812 — a legacy row carries no pass mark; the reader falls back to the shipped default.
+    expect(state!.passMark).toBeNull();
+    // B0-808 — and no per-concept verdicts or judged metrics; the optional fields stay absent.
+    expect(state!.caseScores['case-a']!.concepts).toBeUndefined();
+    expect(state!.caseScores['case-a']!.similarity).toBeUndefined();
+  });
+
+  it('round-trips a score carrying the grader concept block and judged metrics (B0-808)', () => {
+    const state = parseReportState({
+      ...LEGACY_STATE,
+      caseScores: {
+        'case-a': {
+          ...LEGACY_SCORE,
+          completeness: null,
+          concepts: {
+            mandatory: { required: ['1:64 (2 oz/gal)'], satisfied: ['1:64 (2 oz/gal)'], missing: [] },
+            expected: {
+              required: ['1:64 (2 oz/gal)', '10 minute dwell'],
+              satisfied: ['1:64 (2 oz/gal)'],
+              missing: ['10 minute dwell'],
+            },
+            materialIssue: false,
+            materialIssueNote: null,
+          },
+          similarity: 0.72,
+          similarityNote: 'Most of the substance, missing the dwell.',
+          evalConfidence: 85,
+          confidenceNote: 'Golden is concrete.',
+        },
+      },
+      passMark: 60,
+    });
+
+    expect(state).not.toBeNull();
+    const score = state!.caseScores['case-a']!;
+    expect(score.concepts!.expected.missing).toEqual(['10 minute dwell']);
+    expect(score.similarity).toBe(0.72);
+    expect(score.evalConfidence).toBe(85);
+    expect(state!.passMark).toBe(60);
   });
 
   it('parses a row that predates `overall` as well, so both defaults compose', () => {
@@ -103,10 +142,11 @@ describe('progress counting (B0-719)', () => {
     expect(completedPassCount(state)).toBe(2);
   });
 
-  it('starts a fresh state at the configured pass count', () => {
-    const state = emptyReportState('gpt-4.1', 12, 3, 10);
+  it('starts a fresh state at the configured pass count and pass mark', () => {
+    const state = emptyReportState('gpt-4.1', 12, 3, 10, 60);
     expect(state.passes).toBe(3);
     expect(state.spreadThreshold).toBe(10);
+    expect(state.passMark).toBe(60);
     expect(state.casePassScores).toEqual({});
     expect(totalPassCount(state)).toBe(36);
     expect(completedPassCount(state)).toBe(0);
@@ -116,5 +156,6 @@ describe('progress counting (B0-719)', () => {
     const state = emptyReportState('gpt-4.1', 12);
     expect(state.passes).toBe(1);
     expect(state.spreadThreshold).toBeNull();
+    expect(state.passMark).toBeNull();
   });
 });

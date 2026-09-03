@@ -101,6 +101,15 @@ export function RuntimeConfigBadge({
               confidence gating disabled
             </Badge>
           ) : null}
+          {/* B0-756 — split kill switch; defaults to bypassed until the REC-4/XREF scorer is fixed, so this is expected to show on most runs, not an anomaly. */}
+          {runtimeConfig.recommendationConfidenceGatingDisabled ? (
+            <Badge
+              title="BEX_DISABLE_RECOMMENDATION_CONFIDENCE_GATING was true for this run: the REC-4 similarity/brand/category-mismatch caps and the XREF recommendation gate were detected but not enforced (defaults to bypassed pending a scorer fix — see B0-756)."
+              variant="outline"
+            >
+              recommendation confidence gating disabled
+            </Badge>
+          ) : null}
           {runConfig ? null : (
             <Badge
               title={`useValidator: ${runtimeConfig.useValidator}`}

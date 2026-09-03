@@ -154,6 +154,7 @@ describe.skipIf(!hasSupabaseCreds)(
         ambiguousAlias: false,
         matchedAliasId: null,
         matchedAliasConfidence: null,
+        matchedTitle: null,
       });
     });
   },

@@ -22,6 +22,13 @@ import {
  * component itself is exercised by hand; everything worth asserting is a plain function.
  */
 
+const CONCEPTS = {
+  mandatory: { required: ['States the ratio'], satisfied: ['States the ratio'], missing: [] },
+  expected: { required: ['States the ratio'], satisfied: ['States the ratio'], missing: [] },
+  materialIssue: false,
+  materialIssueNote: null,
+};
+
 function makeCase(overrides: Partial<ReportCase> & Pick<ReportCase, 'id'>): ReportCase {
   const priorityRaw = overrides.priorityRaw ?? 1;
   return {
@@ -62,16 +69,14 @@ function makeCase(overrides: Partial<ReportCase> & Pick<ReportCase, 'id'>): Repo
       clarity: 90,
       overall: 90,
       grade: 'A',
-      rubricStatus: 'Pass',
       status: 'Pass',
-      statusSource: 'rubric',
-      ratingConstrained: false,
-      gateBlockedAPass: false,
-      autoPassTriggered: false,
-      autoPassBlocked: false,
-      concepts: null,
+      coverage: { satisfied: 1, required: 1 },
+      mandatoryMissing: false,
+      materialIssue: false,
+      passesOnlyUnderCurrentMark: false,
+      concepts: CONCEPTS,
     },
-    concepts: null,
+    concepts: CONCEPTS,
     latencySeconds: null,
     latencyMs: null,
     ttftSeconds: null,
@@ -95,7 +100,7 @@ function uteCase(id: string, priorityRaw: number | null, reason: string): Report
 }
 
 function block(n: number, avg: number | null, grade: ReportGroupRate['block']['grade']) {
-  return { n, avg, grade, pass: n, partial: 0, fail: 0, passPct: 100, partialPct: 0, failPct: 0 };
+  return { n, avg, grade, pass: n, fail: 0, passPct: 100, failPct: 0 };
 }
 
 describe('parseLedgerFilter / serializeLedgerFilter', () => {
@@ -149,27 +154,30 @@ describe('isExceptionCase / isDefaultOpenCase', () => {
     id: 'f',
     evaluated: { ...makeCase({ id: 'f' }).evaluated!, overall: 40, grade: 'F', status: 'Fail' },
   });
-  const partial = makeCase({
+  // A D that passes under the mark is a pass, not an exception — even with a must-have missing.
+  const marginal = makeCase({
     id: 'x',
     evaluated: {
       ...makeCase({ id: 'x' }).evaluated!,
-      overall: 70,
-      grade: 'C',
-      status: 'Partial Pass',
+      overall: 65,
+      grade: 'D',
+      status: 'Pass',
+      mandatoryMissing: true,
+      passesOnlyUnderCurrentMark: true,
     },
   });
   const ute = uteCase('u', 1, 'no golden answer recorded');
 
-  it('counts fails and partial passes as exceptions, never a pass or a UTE case', () => {
+  it('counts fails as exceptions, never a pass, a marginal pass or a UTE case', () => {
     expect(isExceptionCase(fail)).toBe(true);
-    expect(isExceptionCase(partial)).toBe(true);
+    expect(isExceptionCase(marginal)).toBe(false);
     expect(isExceptionCase(pass)).toBe(false);
     expect(isExceptionCase(ute)).toBe(false);
   });
 
   it('opens exceptions and UTE cases by default, but not passes', () => {
     expect(isDefaultOpenCase(fail)).toBe(true);
-    expect(isDefaultOpenCase(partial)).toBe(true);
+    expect(isDefaultOpenCase(marginal)).toBe(false);
     expect(isDefaultOpenCase(ute)).toBe(true);
     expect(isDefaultOpenCase(pass)).toBe(false);
   });

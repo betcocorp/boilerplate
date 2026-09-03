@@ -6,6 +6,7 @@ import {
 } from '~/lib/workflows/product-support/max-output-tokens';
 import { createAuditLogQueue } from '~/lib/audit/audit-log-queue';
 import type { ProductLineLock, ToolCallOrigin, ToolTraceEntry } from '~/lib/audit/trace';
+import type { RegulatedClaimCategory } from '~/lib/workflows/product-support/validator';
 import {
   DEFAULT_BEX_CHAT_AGENT_MODE,
   type BexChatAgentMode,
@@ -66,6 +67,7 @@ import {
 } from '~/lib/recommendations/recommendation-gate';
 import {
   isConfidenceGatingDisabled,
+  isRecommendationConfidenceGatingDisabled,
   XREF_DECLINE_COPY,
 } from '~/lib/recommendations/confidence-scoring';
 import {
@@ -1010,6 +1012,240 @@ export function isUnendorsedSpeculativeToolOutput(trace: ToolTraceEntry): boolea
     resolution.lockReason === 'skipped_low_confidence' ||
     resolution.lockReason === 'skipped_ambiguous'
   );
+}
+
+/**
+ * B0-700 follow-up — a fuzzy-alias resolution the turn's answer actually relies on, ready to be
+ * deterministically disclosed.
+ *
+ * `askedForName` is the RAW string the model/user named (a product tool's own `productId`/
+ * `query`/`productName` field — never the resolved product), and `resolvedTitle` is the real
+ * resolved entity's own `rag.entity.title` (`aliasResolution.matchedTitle`, added alongside this
+ * ticket in `~/lib/rag/entity-context.ts` / `~/lib/tools/product-tools.ts`) — never invented,
+ * reformatted, or guessed.
+ */
+export type AliasFuzzyDisclosureMatch = {
+  askedForName: string;
+  resolvedTitle: string;
+};
+
+/**
+ * Scans this turn's tool outputs, LAST call first, for the fuzzy-alias hit that grounded the final
+ * answer — mirrors the scan order of `extractRecommendationEngineOutcomeFromToolOutputs` /
+ * `extractTopCrossReferenceMatchFromToolOutputs` above (the last relevant call in a turn is the one
+ * that actually fed the drafted answer when more than one ran).
+ *
+ * Deliberately narrow to keep a noisy trace from over-disclosing:
+ *  - `!entry.ok` calls and `isUnendorsedSpeculativeToolOutput` calls are skipped — same "did this
+ *    actually reach the user" filter `collectSourcesFromToolOutputs` uses (B0-635), so an unused
+ *    speculative pre-fetch's fuzzy hit never triggers a disclosure for a product the answer never
+ *    discusses.
+ *  - only `aliasResolution.outcome === 'alias_fuzzy'` fires — `alias_exact` needs no disclosure,
+ *    and `no_alias_match`/`ambiguous_alias` are the existing B0-700 decline path, untouched here.
+ *  - a call with no `matchedTitle` (e.g. an older payload shape, or the alias pointed at a
+ *    title-less entity) is skipped rather than disclosing with a blank/guessed name.
+ *  - skipped when the asked-for string and the resolved title are already the same text — nothing
+ *    to disclose.
+ */
+export function extractAliasFuzzyDisclosureFromToolOutputs(
+  toolOutputs: RuntimeToolOutput[],
+): AliasFuzzyDisclosureMatch | null {
+  for (let i = toolOutputs.length - 1; i >= 0; i -= 1) {
+    const entry = toolOutputs[i];
+    if (!entry || !entry.ok || isUnendorsedSpeculativeToolOutput(entry.trace)) {
+      continue;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(entry.output);
+    } catch {
+      continue;
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      continue;
+    }
+    const payload = parsed as Record<string, unknown>;
+
+    const aliasResolutionRaw = payload.aliasResolution;
+    if (
+      !aliasResolutionRaw ||
+      typeof aliasResolutionRaw !== 'object' ||
+      Array.isArray(aliasResolutionRaw)
+    ) {
+      continue;
+    }
+    const aliasResolution = aliasResolutionRaw as Record<string, unknown>;
+    if (aliasResolution.outcome !== 'alias_fuzzy') {
+      continue;
+    }
+
+    const resolvedTitle =
+      typeof aliasResolution.matchedTitle === 'string' ? aliasResolution.matchedTitle.trim() : '';
+    if (!resolvedTitle) {
+      continue;
+    }
+
+    // Regulated product-tool calls echo the raw input as `productId`; `search_product_docs`
+    // echoes it as `query` instead (see `~/lib/tools/product-tools.ts`). Neither is invented here
+    // — both are the literal string the tool was called with.
+    const askedForRaw =
+      typeof payload.productId === 'string' && payload.productId.trim()
+        ? payload.productId
+        : typeof payload.query === 'string' && payload.query.trim()
+          ? payload.query
+          : typeof payload.productName === 'string' && payload.productName.trim()
+            ? payload.productName
+            : '';
+    const askedForName = askedForRaw.trim();
+    if (!askedForName || askedForName.toLowerCase() === resolvedTitle.toLowerCase()) {
+      continue;
+    }
+
+    return { askedForName, resolvedTitle };
+  }
+  return null;
+}
+
+/**
+ * Cheap heuristic for "the model already disclosed this itself" — the B0-700 prompt rule DOES
+ * sometimes get followed, and this guardrail's whole job is to backstop the cases where it isn't,
+ * not to double up on the cases where it is. Deliberately loose (a handful of phrasings a
+ * disclosure sentence would plausibly use), because a false "already disclosed" (skips the
+ * deterministic prepend) is a silent regression to the exact bug this exists to fix, while a false
+ * "not yet disclosed" (prepends anyway) only ever produces a redundant sentence, never a wrong one.
+ */
+const ALIAS_FUZZY_DISCLOSURE_ALREADY_PRESENT_PATTERN =
+  /couldn.?t find an exact match|could not find an exact match|did you mean|closest match|no exact match|typo|misspell/i;
+
+export function draftAlreadyDisclosesAliasCorrection(draftAnswer: string): boolean {
+  return ALIAS_FUZZY_DISCLOSURE_ALREADY_PRESENT_PATTERN.test(draftAnswer);
+}
+
+/**
+ * The disclosure sentence itself — plain prose, no dilution/EPA/DIN/CAS/contact-time/hazard/
+ * compatibility/efficacy-shaped tokens, so it can pass through `evaluateRegulatedClaimGrounding`
+ * unaffected (verified by `alias-fuzzy-disclosure.test.ts`). Both names are transcribed verbatim
+ * from `AliasFuzzyDisclosureMatch` — never reformatted.
+ */
+export function buildAliasFuzzyDisclosureSentence(match: AliasFuzzyDisclosureMatch): string {
+  return `I couldn't find an exact match for "${match.askedForName}", but found ${match.resolvedTitle} — here is its information:\n\n`;
+}
+
+/**
+ * B0-700 follow-up — the deterministic backstop itself. `gpt-4.1-mini` was confirmed (live, twice)
+ * to ignore the prompt-only disclosure instruction, the same failure class already fixed for a
+ * false-claim rejection in B0-756; this is the equivalent fix for a missing disclosure SENTENCE,
+ * which has no "source" to verify against (it's Bex's own meta-commentary on its resolution
+ * process, not a regulated claim), so it is composed here in code instead of gated by the
+ * regulated-claim guardrail.
+ *
+ * Called once `draftAnswer` is fully settled (after the revision pass, before the regulated-claim
+ * guardrail so the prepended sentence is itself swept through that check) — see the call site in
+ * `runProductSupportWorkflow`. Skipped entirely on an already-declined draft (nothing was actually
+ * answered to disclose a correction for).
+ */
+/**
+ * B0-830 — the closing line of the agreed disclosure UX (clarify → answer for the suspected product
+ * → invite correction). Plain prose, no regulated-shaped token, appended only when this code also
+ * prepended the disclosure sentence.
+ */
+export const ALIAS_FUZZY_CORRECTION_INVITE =
+  "\n\nIf that isn't the product you meant, reply with the corrected product name and I'll look it up again.";
+
+/** A product-code-shaped token: 1–4 letters, 1–4 digits, optional trailing letter (AF79, pH7Q, GE1). */
+const PRODUCT_CODE_TOKEN_PATTERN = /^[A-Za-z]{1,4}\d{1,4}[A-Za-z]?$/;
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * B0-830 — rewrite the model's uses of the MISSPELLED asked-for name to the resolved product name.
+ * `gpt-4.1`/`4.1-mini` were confirmed live to keep writing "AG79 Concentrate Disinfectant" — and
+ * even "Source: AG79 Concentrate Disinfectant product label", a label for a product that does not
+ * exist — after the resolver had found AF79. Same failure class as B0-700/B0-756: a prompt rule
+ * alone is not a reliable guardrail on these models, so the correction is applied in code.
+ *
+ * Two deterministic passes, both transcribing `resolvedTitle` verbatim (never reformatted):
+ *  1. every case-insensitive occurrence of the full asked-for name → the resolved name;
+ *  2. when the resolved name contains exactly ONE product-code-shaped token (e.g. `AF79`) and the
+ *     asked-for name contains a code-shaped token that is NOT in the resolved name (e.g. `AG79`),
+ *     that bare token is rewritten too (word-bounded), so "AG79 is diluted…" becomes "AF79 is
+ *     diluted…". Skipped when the resolved name has zero or several code tokens — there is no
+ *     unambiguous substitute, and guessing one would be exactly the inference this code exists to
+ *     prevent.
+ *
+ * The asked-for name is protected wherever it appears QUOTED (`"AG79 …"`, `“AG79 …”`, `'AG79 …'`):
+ * that is the disclosure sentence itself (ours or the model's own), which must keep naming what
+ * the user actually typed.
+ */
+export function rewriteAskedForNameToResolved(
+  draftAnswer: string,
+  match: AliasFuzzyDisclosureMatch,
+): string {
+  const asked = match.askedForName.trim();
+  const resolved = match.resolvedTitle.trim();
+  if (!asked || !resolved || asked.toLowerCase() === resolved.toLowerCase()) {
+    return draftAnswer;
+  }
+
+  // Protect quoted occurrences of the asked-for name with a sentinel, rewrite, then restore.
+  const QUOTED_SENTINEL = ' ALIAS_ASKED_FOR_QUOTED ';
+  const quotedPattern = new RegExp(`(["“'])${escapeRegExp(asked)}(["”'])`, 'gi');
+  const protectedQuotes: string[] = [];
+  let text = draftAnswer.replace(quotedPattern, (whole) => {
+    protectedQuotes.push(whole);
+    return QUOTED_SENTINEL;
+  });
+
+  text = text.replace(new RegExp(escapeRegExp(asked), 'gi'), resolved);
+
+  const tokenize = (value: string) => value.split(/[\s,;:()/]+/).filter(Boolean);
+  const resolvedTokens = tokenize(resolved);
+  const resolvedLower = new Set(resolvedTokens.map((t) => t.toLowerCase()));
+  const resolvedCodes = resolvedTokens.filter((t) => PRODUCT_CODE_TOKEN_PATTERN.test(t));
+  if (resolvedCodes.length === 1) {
+    const askedCodes = tokenize(asked).filter(
+      (t) => PRODUCT_CODE_TOKEN_PATTERN.test(t) && !resolvedLower.has(t.toLowerCase()),
+    );
+    for (const code of new Set(askedCodes.map((t) => t.toLowerCase()))) {
+      text = text.replace(new RegExp(`\\b${escapeRegExp(code)}\\b`, 'gi'), resolvedCodes[0]);
+    }
+  }
+
+  // The rewrite can turn the model's "AG79 … (also known as AF79 …)" into a tautology; drop a
+  // parenthetical that now just repeats the name it follows. Purely cosmetic, name-only text.
+  text = text.replace(
+    new RegExp(
+      `(${escapeRegExp(resolved)})\\s*\\((?:also known as|aka|a\\.k\\.a\\.)\\s+${escapeRegExp(resolved)}\\)`,
+      'gi',
+    ),
+    '$1',
+  );
+
+  let restoreIndex = 0;
+  return text.replace(new RegExp(QUOTED_SENTINEL, 'g'), () => protectedQuotes[restoreIndex++] ?? '');
+}
+
+export function maybeDiscloseAliasFuzzyMatch(
+  draftAnswer: string,
+  toolOutputs: RuntimeToolOutput[],
+): string {
+  if (isDeclineAnswer(draftAnswer)) {
+    return draftAnswer;
+  }
+  const match = extractAliasFuzzyDisclosureFromToolOutputs(toolOutputs);
+  if (!match) {
+    return draftAnswer;
+  }
+  // B0-830 — the body rewrite applies whether or not the model disclosed the correction itself:
+  // a self-disclosed answer that then keeps saying "AG79" is still wrong.
+  const rewritten = rewriteAskedForNameToResolved(draftAnswer, match);
+  if (draftAlreadyDisclosesAliasCorrection(draftAnswer)) {
+    return rewritten;
+  }
+  return buildAliasFuzzyDisclosureSentence(match) + rewritten + ALIAS_FUZZY_CORRECTION_INVITE;
 }
 
 export function collectSourcesFromToolOutputs(toolOutputs: RuntimeToolOutput[]): SourceRef[] {
@@ -1974,6 +2210,7 @@ export async function runProductSupportWorkflow(input: {
     aiSdkGenerationEnabled: useAiSdkGeneration,
     rerankerActive: PRODUCT_SUPPORT_RERANK_ENABLED && isRerankerConfigured(),
     confidenceGatingDisabled: await isConfidenceGatingDisabled(),
+    recommendationConfidenceGatingDisabled: await isRecommendationConfidenceGatingDisabled(),
     agentMode,
     routedDirectly: agentMode !== 'orchestrator',
     // B0-649 — the semantic-router rollout state this run observed, from the SAME flag reads the
@@ -3465,7 +3702,11 @@ export async function runProductSupportWorkflow(input: {
     const legacyMatchIsAuthoritative = Boolean(
       crossReferenceResult && !crossReferenceResult.fallbackRecommended,
     );
-    const confidenceGatingDisabled = runtimeConfig.confidenceGatingDisabled;
+    // B0-756 — this gate's numeric cap is calibrated against XREF_RECOMMENDATION_MIN_CONFIDENCE,
+    // one of the recommendation-path signals real calibration data showed to be non-predictive;
+    // it reads the split, recommendation-only kill switch, not the general one.
+    const recommendationConfidenceGatingDisabled =
+      runtimeConfig.recommendationConfidenceGatingDisabled ?? true;
     const recommendationEngineGate =
       recommendationEngineOutcome && !legacyMatchIsAuthoritative
         ? evaluateRecommendationEngineGate({
@@ -3476,14 +3717,14 @@ export async function runProductSupportWorkflow(input: {
             confidence: 1,
             approved: true,
             requiresHumanReview: false,
-            confidenceGatingDisabled,
+            confidenceGatingDisabled: recommendationConfidenceGatingDisabled,
             fallbackDeclineCopy: XREF_DECLINE_COPY,
           })
         : null;
     if (recommendationEngineGate?.declineText) {
       // Verbatim, and it outranks whatever the model drafted: there is no grounded equivalent to
-      // state. Enforced even under `BEX_DISABLE_CONFIDENCE_GATING` — see the kill-switch note in
-      // `evaluateRecommendationEngineGate`.
+      // state. Enforced even under `BEX_DISABLE_RECOMMENDATION_CONFIDENCE_GATING` — see the
+      // kill-switch note in `evaluateRecommendationEngineGate`.
       draftAnswer = recommendationEngineGate.declineText;
       answerProvenance = 'recommendation_engine_decline';
     }
@@ -3961,6 +4202,23 @@ export async function runProductSupportWorkflow(input: {
       usageSafetyCoverageActivation = { state: 'ran', verdict: 'passed' };
     }
 
+    /**
+     * B0-700 follow-up — deterministic fuzzy-alias disclosure. Applied here: `draftAnswer` is
+     * fully settled (past the revision pass and every answer-replacing branch above), and this
+     * runs BEFORE the regulated-claim guardrail below so the prepended sentence is itself swept
+     * through that verbatim-grounding check (it must never trip it — see
+     * `buildAliasFuzzyDisclosureSentence`'s doc comment and `alias-fuzzy-disclosure.test.ts`).
+     * A no-op (returns `draftAnswer` unchanged) unless this turn actually grounded on an
+     * `alias_fuzzy` resolution the model didn't already disclose itself.
+     */
+    const preDisclosureDraftAnswer = draftAnswer;
+    draftAnswer = maybeDiscloseAliasFuzzyMatch(draftAnswer, toolOutputLog);
+    if (draftAnswer !== preDisclosureDraftAnswer) {
+      // B0-391 — last writer that actually changed the text wins; a no-op prepend (nothing to
+      // disclose, or the model already did) deliberately leaves provenance untouched.
+      answerProvenance = 'alias_fuzzy_disclosure_prepended';
+    }
+
     // B0-257: regulated-claim guardrail -- evaluated unconditionally (independent of the
     // `useValidator` opt-in toggle above, which only gates the LLM semantic-judge pass).
     // EPA registration, dilution/contact-time, hazard, and first-aid claims must be
@@ -4306,7 +4564,7 @@ export async function runProductSupportWorkflow(input: {
               : 'passed',
         effect:
           gate.bypassedChecks.length > 0
-            ? `BEX_DISABLE_CONFIDENCE_GATING is set: ${gate.bypassedChecks.join(', ')} detected but not enforced. ${
+            ? `BEX_DISABLE_RECOMMENDATION_CONFIDENCE_GATING is set: ${gate.bypassedChecks.join(', ')} detected but not enforced. ${
                 gate.issues.length > 0 ? `Issues: ${gate.issues.join(' | ')}` : ''
               }`
             : validation.confidence < confidenceBeforeGate
@@ -4345,7 +4603,7 @@ export async function runProductSupportWorkflow(input: {
         confidence: validation.confidence,
         approved: validation.approved,
         requiresHumanReview: validation.requires_human_review,
-        confidenceGatingDisabled,
+        confidenceGatingDisabled: recommendationConfidenceGatingDisabled,
         fallbackDeclineCopy: XREF_DECLINE_COPY,
       });
       validation = {
@@ -4401,7 +4659,7 @@ export async function runProductSupportWorkflow(input: {
         },
         verdict: engineVerdict.verdict,
         effect: engineVerdict.capBypassed
-          ? `BEX_DISABLE_CONFIDENCE_GATING is set: the engine's overallConfidence ${recommendationEngineOutcome.overallConfidence} would have capped this run's ${confidenceBeforeEngine}, but the cap was not enforced.${
+          ? `BEX_DISABLE_RECOMMENDATION_CONFIDENCE_GATING is set: the engine's overallConfidence ${recommendationEngineOutcome.overallConfidence} would have capped this run's ${confidenceBeforeEngine}, but the cap was not enforced.${
               recommendationEngineGate.declineText
                 ? ' The decline copy and human-review escalation WERE still enforced (they are the engine\'s final verdict, not a threshold).'
                 : ''
@@ -4491,30 +4749,82 @@ export async function runProductSupportWorkflow(input: {
         // exact citation for a regulated value/statement, not general low retrieval coverage.
         const categoryLabels: Record<string, string> = {
           epa_registration: 'EPA registration number',
+          din_registration: 'DIN registration number',
           dilution_ratio: 'dilution ratio',
           contact_time: 'contact/dwell time',
+          cas_number: 'CAS number',
           hazard: 'hazard statement',
           first_aid: 'first-aid instruction',
+          compatibility: 'compatibility statement',
+          efficacy_claim: 'efficacy claim',
         };
-        const flagged = regulatedClaimGrounding.ungroundedCategories
-          .map((c) => categoryLabels[c] ?? c)
-          .join(', ');
-        finalText = [
-          `I can't verify the ${flagged} in this answer against an exact quote from a retrieved label or SDS, so I won't state it.`,
-          '',
-          'Please consult the product label or SDS directly for the exact regulated value, or contact Betco Product Support / EHS to confirm.',
-        ].join('\n');
         /**
-         * B0-391 — recorded as `validator_fallback`. The regulated-claim guardrail is a
-         * validation-time rejection that replaces the answer with canned copy, exactly like the
-         * generic fallback below; it differs only in wording. It is NOT a new provenance value:
-         * the specific cause is already unambiguous elsewhere on the run (the
-         * `regulated_claim_guardrail_rejected` audit row, the `regulated_claim_unverified:*`
-         * validation issues, and the `regulated_claim_unverified` review task), so minting an
-         * eighth enum member would add a second spelling for "the answer was withheld at
-         * validation" without adding information.
+         * B0-829 — which ungrounded categories are safe to surgically redact (an exact literal
+         * snippet -- an EPA/DIN/CAS number, dilution ratio, or contact time -- not reformatted
+         * prose) versus which are safety-critical sentence-shaped claims (`hazard`, `first_aid`,
+         * `compatibility`, `efficacy_claim`) that must always keep the full-decline behavior below.
          */
-        answerProvenance = 'validator_fallback';
+        const TOKEN_SHAPED_REGULATED_CATEGORIES = new Set<RegulatedClaimCategory>([
+          'epa_registration',
+          'din_registration',
+          'dilution_ratio',
+          'contact_time',
+          'cas_number',
+        ]);
+        const allUngroundedAreTokenShaped = regulatedClaimGrounding.ungroundedCategories.every(
+          (c) => TOKEN_SHAPED_REGULATED_CATEGORIES.has(c),
+        );
+        // Something in the draft WAS grounded and is worth preserving -- otherwise there is
+        // nothing left to salvage and the full decline below is the only sensible outcome.
+        const hasGroundedCategoryWorthKeeping = regulatedClaimGrounding.categoriesDetected.some(
+          (c) => !regulatedClaimGrounding.ungroundedCategories.includes(c),
+        );
+
+        if (allUngroundedAreTokenShaped && hasGroundedCategoryWorthKeeping) {
+          /**
+           * B0-829 — partial redaction: keep the grounded content (e.g. a fully-verified dilution
+           * answer) and surgically blank out only the ungrounded token(s), instead of discarding
+           * the whole draft. `detail.snippet` is a LITERAL substring of `draftAnswer` (never a
+           * regex), so every verbatim occurrence is replaced -- never reformatted or invented.
+           */
+          let redactedText = draftAnswer;
+          for (const detail of regulatedClaimGrounding.ungroundedDetails) {
+            redactedText = redactedText.replaceAll(detail.snippet, '(unable to verify)');
+          }
+          const flagged = regulatedClaimGrounding.ungroundedCategories
+            .map((c) => categoryLabels[c] ?? c)
+            .join(', ');
+          finalText = [
+            redactedText,
+            '',
+            `I couldn't verify the ${flagged} above against an exact quote from a retrieved label or SDS, so I withheld it (marked "(unable to verify)").`,
+            'Please consult the product label or SDS directly for the exact regulated value, or contact Betco Product Support / EHS to confirm.',
+          ].join('\n');
+          answerProvenance = 'regulated_claim_partial_redaction';
+        } else {
+          const flagged = regulatedClaimGrounding.ungroundedCategories
+            .map((c) => categoryLabels[c] ?? c)
+            .join(', ');
+          finalText = [
+            `I can't verify the ${flagged} in this answer against an exact quote from a retrieved label or SDS, so I won't state it.`,
+            '',
+            'Please consult the product label or SDS directly for the exact regulated value, or contact Betco Product Support / EHS to confirm.',
+          ].join('\n');
+          /**
+           * B0-391 — recorded as `validator_fallback`. The regulated-claim guardrail is a
+           * validation-time rejection that replaces the answer with canned copy, exactly like the
+           * generic fallback below; it differs only in wording. It is NOT a new provenance value:
+           * the specific cause is already unambiguous elsewhere on the run (the
+           * `regulated_claim_guardrail_rejected` audit row, the `regulated_claim_unverified:*`
+           * validation issues, and the `regulated_claim_unverified` review task), so minting an
+           * eighth enum member would add a second spelling for "the answer was withheld at
+           * validation" without adding information.
+           *
+           * B0-829 — this branch now fires only when partial redaction above did NOT apply (a
+           * sentence-shaped category is ungrounded, or nothing detected was grounded).
+           */
+          answerProvenance = 'validator_fallback';
+        }
       } else if (answerProvenance === 'recommendation_engine_decline') {
         /**
          * B0-356 — the recommendation engine's own `declineReason` is ALREADY the final text (it

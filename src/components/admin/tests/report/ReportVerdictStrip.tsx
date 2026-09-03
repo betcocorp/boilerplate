@@ -14,7 +14,7 @@ import { buildExceptionRows, type ReportExceptionRow } from './verdict-strip-dat
 
 /**
  * B0-587 — the run report's verdict strip (epic B0-571): the exec scorecard collapsed into one
- * strip of three columns — overall grade, result split, and the fails/partials pulled to the top.
+ * strip of three columns — overall grade, result split, and the fails pulled to the top.
  *
  * Presentation only, and deliberately arithmetic-free: every score, grade, count and percentage is
  * read straight off the `ReportDataReady` payload (`assembleReportData`), which is the same object
@@ -39,21 +39,18 @@ const GRADE_STYLES: Record<ReportRateGrade, string> = {
 
 const STATUS_BADGE_STYLES: Record<ReportCaseStatus, string> = {
   Pass: 'border-emerald-200 bg-emerald-50 text-emerald-700',
-  'Partial Pass': 'border-amber-200 bg-amber-50 text-amber-700',
   Fail: 'border-red-200 bg-red-50 text-red-700',
 };
 
-type SegmentTone = 'pass' | 'partial' | 'fail';
+type SegmentTone = 'pass' | 'fail';
 
 const SEGMENT_BAR_STYLES: Record<SegmentTone, string> = {
   pass: 'bg-emerald-500',
-  partial: 'bg-amber-500',
   fail: 'bg-red-500',
 };
 
 const SEGMENT_DOT_STYLES: Record<SegmentTone, string> = {
   pass: 'bg-emerald-500',
-  partial: 'bg-amber-500',
   fail: 'bg-red-500',
 };
 
@@ -148,9 +145,9 @@ export function ReportVerdictStrip({ metrics, cases, className }: ReportVerdictS
 
   const segments: { tone: SegmentTone; label: string; count: number; pct: number }[] = [
     { tone: 'pass', label: 'Pass', count: overall.pass, pct: overall.passPct },
-    { tone: 'partial', label: 'Partial pass', count: overall.partial, pct: overall.partialPct },
     { tone: 'fail', label: 'Fail', count: overall.fail, pct: overall.failPct },
   ];
+  const marginal = metrics.passOnlyUnderCurrentMark.length;
 
   // The same sentence the bar shows, for readers who get no colour at all.
   const splitSentence = segments
@@ -213,6 +210,15 @@ export function ReportVerdictStrip({ metrics, cases, className }: ReportVerdictS
             pass rate · {overall.pass} of {metrics.evaluated}
           </p>
         </div>
+        {/* A pass rate means nothing without the line it was measured against (methodology §2). */}
+        <p className="mt-1 text-xs text-slate-500 tabular-nums">
+          Pass mark {metrics.passMark} — Pass at {metrics.passMark} or above, Fail below.
+          {overall.n > 0
+            ? marginal > 0
+              ? ` ${marginal} ${marginal === 1 ? 'case passes' : 'cases pass'} only under this mark and would fail at ${metrics.strictPassMark}.`
+              : ` Every pass would still pass at ${metrics.strictPassMark}.`
+            : ''}
+        </p>
 
         {overall.n === 0 ? (
           <p className="mt-4 text-sm text-slate-500">No evaluated cases to split.</p>
@@ -273,13 +279,11 @@ export function ReportVerdictStrip({ metrics, cases, className }: ReportVerdictS
           <p className="mt-4 text-sm text-slate-600">
             {metrics.evaluated === 0
               ? 'No cases were evaluated in this run, so nothing is flagged.'
-              : `No fails or partial passes — all ${pluralCases(metrics.evaluated)} evaluated passed.`}
+              : `No fails — all ${pluralCases(metrics.evaluated)} evaluated passed.`}
           </p>
         ) : (
           <>
-            <p className="mt-1 text-xs text-slate-500">
-              Every fail and partial pass, worst first.
-            </p>
+            <p className="mt-1 text-xs text-slate-500">Every fail, worst first.</p>
             <ul className="mt-3 max-h-96 divide-y divide-slate-100 overflow-y-auto pr-1">
               {exceptions.map((row) => (
                 <ExceptionRow key={row.id} row={row} />

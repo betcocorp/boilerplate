@@ -1,10 +1,46 @@
 import { z } from 'zod';
 
 /**
- * Per-case grading output. Mirrors the manual "agent-evaluation" methodology's eval.json case
- * shape (B0-453): the model supplies judgment only — accuracy/completeness/relevance/clarity are
- * raw 0-100 sub-scores. Overall/grade/status are always derived downstream in metrics.ts, never
- * asked of the model, so the two can never drift apart.
+ * Required = satisfied ∪ missing, always (asserted per kind, per case, by `./invariants`). Concept
+ * phrases are regulated free text — copied verbatim from the golden columns, never parsed.
+ */
+export const conceptKindCoverageSchema = z.object({
+  required: z.array(z.string()),
+  satisfied: z.array(z.string()),
+  missing: z.array(z.string()),
+});
+
+export type ConceptKindCoverage = z.infer<typeof conceptKindCoverageSchema>;
+
+/**
+ * B0-808/B0-809 — the grader's per-concept judgment for one case, authored on every pass.
+ *
+ * - `mandatory` — the `minimum_concepts` column (the skill's `Minimal_Excepted_Concepts`).
+ * - `expected` — the `expected_concepts` column (`Expected_Key_Concepts`). Mandatory ⊆ expected.
+ * - `materialIssue` — a material factual error, contradiction, fabrication, unsafe instruction or
+ *   wrong regulated value (dilution, oz/gal, mL/L, ppm, %, contact time, CAS, EPA reg. no., log
+ *   reduction). Reported on the case; it changes no score.
+ */
+export const caseConceptsSchema = z.object({
+  mandatory: conceptKindCoverageSchema,
+  expected: conceptKindCoverageSchema,
+  materialIssue: z.boolean(),
+  materialIssueNote: z.string().nullable(),
+});
+
+export type CaseConcepts = z.infer<typeof caseConceptsSchema>;
+
+/**
+ * Per-case grading output — one pass's judgment, and the shape persisted in `report_state`.
+ *
+ * B0-813 (pure-math scoring): the grader judges Accuracy, Relevance and Clarity and the concept
+ * coverage; **Completeness is computed** downstream as the expected-concept coverage fraction
+ * (`metrics.ts`) and is never asked of the model. The `completeness` field stays on the persisted
+ * shape so `report_state` rows graded before B0-813 still parse; the new grader writes `null` and
+ * the metrics layer ignores the field either way.
+ *
+ * The judged metrics (`similarity`, `evalConfidence`, methodology §7c) are reported beside the
+ * grade and never enter it. Every new field is optional so legacy rows parse unchanged.
  */
 export const caseScoreSchema = z.object({
   unableToEvaluate: z.boolean(),
@@ -17,6 +53,14 @@ export const caseScoreSchema = z.object({
   missed: z.string(),
   incorrect: z.string(),
   improvement: z.string(),
+  /** The grader's per-concept verdicts for this pass; absent on rows graded before B0-808. */
+  concepts: caseConceptsSchema.nullable().optional(),
+  /** 0–1: how much of what the Ideal Response says the answer also says. Reported, not graded. */
+  similarity: z.number().min(0).max(1).nullable().optional(),
+  similarityNote: z.string().nullable().optional(),
+  /** 0–100: how sure the grader is of this grade. The low end is the SME review queue. */
+  evalConfidence: z.number().min(0).max(100).nullable().optional(),
+  confidenceNote: z.string().nullable().optional(),
 });
 
 export type CaseScore = z.infer<typeof caseScoreSchema>;
@@ -106,6 +150,30 @@ export const reportStateSchema = z.object({
    * row (and on any single-pass report), where the reader falls back to the shipped default.
    */
   spreadThreshold: z.number().nullable().optional().default(null),
+  /**
+   * B0-812 — the pass mark this report's Results were derived from, resolved from
+   * `settings.REPORT_PASS_MARK` when the state is created. Null on a legacy row, where the reader
+   * falls back to `DEFAULT_PASS_MARK` (`./scoring-config`).
+   */
+  passMark: z.number().nullable().optional().default(null),
+  /**
+   * B0-810 — SHA-256 of the grading system prompt that scored this report (`GRADING_PROMPT_HASH`).
+   * Null on a legacy row. Two reports that disagree can be told apart by this before anything else.
+   */
+  gradingPromptHash: z.string().nullable().optional().default(null),
+  /** B0-811 — the judged-metric thresholds in force when this report was graded. Null on a legacy row. */
+  judgedThresholds: z
+    .object({
+      simHigh: z.number(),
+      simLow: z.number(),
+      lowConfidence: z.number(),
+      highSimFail: z.number(),
+      lowSimPass: z.number(),
+      corrMinN: z.number(),
+    })
+    .nullable()
+    .optional()
+    .default(null),
   synthesis: reportSynthesisSchema.nullable(),
   error: z.string().nullable(),
   // B0-609 — the report's aggregate score/grade (`computeReportMetrics(...).overall`), persisted
@@ -131,6 +199,8 @@ export function emptyReportState(
   passes = 1,
   /** B0-720 — the configured score-range flag threshold; null leaves the reader's default. */
   spreadThreshold: number | null = null,
+  /** B0-812 — the configured pass mark; null leaves the reader's default. */
+  passMark: number | null = null,
 ): ReportState {
   const now = new Date().toISOString();
   return {
@@ -144,9 +214,37 @@ export function emptyReportState(
     casePassScores: {},
     passes,
     spreadThreshold,
+    passMark,
+    gradingPromptHash: null,
+    judgedThresholds: null,
     synthesis: null,
     error: null,
     overall: null,
+  };
+}
+
+/**
+ * B0-825 — everything that decided this report's numbers besides the answers themselves, read off
+ * the persisted state so a report always says what it was graded with. Two reports that disagree
+ * can be told apart by this block before anything else is compared.
+ */
+export type ReportGradingConfig = {
+  model: string;
+  passes: number;
+  spreadThreshold: number | null;
+  passMark: number | null;
+  gradingPromptHash: string | null;
+  judgedThresholds: ReportState['judgedThresholds'];
+};
+
+export function gradingConfigFromState(state: ReportState): ReportGradingConfig {
+  return {
+    model: state.model,
+    passes: state.passes,
+    spreadThreshold: state.spreadThreshold,
+    passMark: state.passMark,
+    gradingPromptHash: state.gradingPromptHash,
+    judgedThresholds: state.judgedThresholds,
   };
 }
 

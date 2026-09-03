@@ -1,5 +1,5 @@
 import type { CompetitorSpec } from '~/lib/websearch/extract-competitor-spec';
-import { isConfidenceGatingDisabled } from '~/lib/recommendations/confidence-scoring';
+import { isRecommendationConfidenceGatingDisabled } from '~/lib/recommendations/confidence-scoring';
 
 /**
  * REC-4 — Category-consistency gate + confidence calibrated to retrieval strength.
@@ -77,15 +77,16 @@ export function checkCategoryConsistency(
 }
 
 /**
- * B0-452: the two confidence *caps* below (low-similarity, missing-brand) are skipped while
- * `BEX_DISABLE_CONFIDENCE_GATING` is set — both are unproven placeholder thresholds.
- *
- * B0-452 follow-up: the category-consistency check normally rejects a recommendation whose
- * chemistry class actually disagrees with the competitor's regardless of the flag, since that is
- * a correctness check, not a confidence-calibration guess. During the temporary testing window
- * this flag also opens up, a real mismatch is still detected and recorded in `bypassedChecks` +
- * `issues`, but no longer forces `approved: false` / caps confidence — so it can be seen ("this
- * would have been rejected for chemistry mismatch") without actually withholding the answer.
+ * B0-452 (split B0-756): all three checks below — category-consistency, low-similarity,
+ * missing-brand — are skipped while `BEX_DISABLE_RECOMMENDATION_CONFIDENCE_GATING` is set
+ * (defaults to bypassed). Originally the category-consistency check was meant to always run
+ * regardless of the flag, as a correctness check rather than a confidence-calibration guess —
+ * but B0-756's real Supabase-backed calibration research measured all three of these caps
+ * TOGETHER as a bundle and found an INVERTED signal (turns these caps hit graded better, not
+ * worse, than turns that passed through uncapped), so category-consistency is folded into the
+ * same bypassed-by-default flag as the other two rather than assumed safe to re-enable alone —
+ * re-splitting it back out would need its own dedicated measurement first, which this research
+ * did not do. See `isRecommendationConfidenceGatingDisabled`'s doc comment.
  */
 export async function evaluateRecommendationGate(
   input: RecommendationGateInput,
@@ -96,7 +97,7 @@ export async function evaluateRecommendationGate(
   let approved = true;
   let requiresHumanReview = false;
 
-  const gatingDisabled = await isConfidenceGatingDisabled();
+  const gatingDisabled = await isRecommendationConfidenceGatingDisabled();
 
   const category = checkCategoryConsistency(
     input.competitorChemistryClass ?? null,
@@ -106,7 +107,7 @@ export async function evaluateRecommendationGate(
     if (gatingDisabled) {
       bypassedChecks.push('category_mismatch');
       issues.push(
-        `${category.issue} (BEX_DISABLE_CONFIDENCE_GATING is set: not rejected, confidence not capped)`,
+        `${category.issue} (BEX_DISABLE_RECOMMENDATION_CONFIDENCE_GATING is set: not rejected, confidence not capped)`,
       );
     } else {
       approved = false;
