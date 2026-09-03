@@ -1,3 +1,47 @@
+# [2.19.0](https://github.com/betcocorp/bex2.0/compare/v2.18.0...v2.19.0) (2026-09-03)
+
+
+### Bug Fixes
+
+* **B0-413:** restore bex.chat.use permission row and document cutover NO-GO ([da437d8](https://github.com/betcocorp/bex2.0/commit/da437d8c5b512bfec6971925ccde00bf1a9f36c5))
+* **B0-413:** tell users with no grants the truth instead of "try signing in again" ([027cf2e](https://github.com/betcocorp/bex2.0/commit/027cf2eaa636b34cf61a9111769767b9c86a259e))
+* **B0-636:** resolve FastDraw dilution chunks to the product-line entity tier ([32e8533](https://github.com/betcocorp/bex2.0/commit/32e8533145cf7b803e2e6f1ec64e231bfdbcd8b5))
+* **B0-779:** guard cross-reference match template against unresolved competitor identity ([8b44d67](https://github.com/betcocorp/bex2.0/commit/8b44d67dae68605638f531bd50e477b937e3cf98))
+* **B0-780:** bind knowledge retrieval to product category (wood/VCT/restroom) ([b79b48b](https://github.com/betcocorp/bex2.0/commit/b79b48b4899e29d34fe5efaa7e74ed7f12cd049e))
+* **B0-781:** extend enumeration-question detection in classifyRetrievalIntent ([d86a327](https://github.com/betcocorp/bex2.0/commit/d86a32711093e7c007daab1e1b7f20226b5a5e82))
+* **B0-782:** add never-assert-past-the-evidence rule to product and bathroom prompts ([d1fef87](https://github.com/betcocorp/bex2.0/commit/d1fef87359a3d52256324f1840e09dfa9b1b5516))
+* **B0-783:** defer to a Betco rep unconditionally, forbid a single-product closing summary ([8f0cd5a](https://github.com/betcocorp/bex2.0/commit/8f0cd5a4c4ccc2a52ab19f86cbf349a588b94558))
+* **B0-783:** detect selection-framing questions, lead with criteria not one product ([800e583](https://github.com/betcocorp/bex2.0/commit/800e5831c49aa8a433cf4f1f3f71a2647e0b6392))
+* **B0-783:** forbid product-first framing entirely, require a named rep deferral ([74aea42](https://github.com/betcocorp/bex2.0/commit/74aea42c5f2212e94d249d94700543e2a36cb617))
+* **B0-784:** give a concrete required phrasing for a partial-evidence multi-part answer ([31100c4](https://github.com/betcocorp/bex2.0/commit/31100c405e9b21ab80b9e8bc6f359de50dec1d94))
+* **B0-784:** make multi-part and near-miss questions complete their whole answer ([682f0c3](https://github.com/betcocorp/bex2.0/commit/682f0c31fd0c57ff5592d770c303771d51f3eefb))
+* **B0-784:** require per-part retrieved evidence, forbid extending one part's proof to another ([1fd363d](https://github.com/betcocorp/bex2.0/commit/1fd363d9c7d2b10d8fc292c33f875d75348cbe45))
+* **B0-784:** widen retrieval for compound-subject verification questions ([87fff1a](https://github.com/betcocorp/bex2.0/commit/87fff1a74d195f72238cd81f2195fb866ddb0640))
+* **B0-788:** force get_efficacy_data for exact dilution/efficacy/yield questions ([04365b9](https://github.com/betcocorp/bex2.0/commit/04365b9eb615d9ab45071809e73d5582c6981914))
+* **B0-791:** exclude EXP- experimental aliases from fuzzy product-name matching ([474ccc0](https://github.com/betcocorp/bex2.0/commit/474ccc0c56ec20e7174d0f7ca5f014bd915e64e8))
+* **B0-794:** remove 364 content-foreign SDS from the retrievable corpus ([b1039bc](https://github.com/betcocorp/bex2.0/commit/b1039bc6320f6e2f2e10f359cbab778416c53dd7))
+* **B0-795:** make the xref score discriminate — AUC 0.361 -> 0.728 ([34b151f](https://github.com/betcocorp/bex2.0/commit/34b151f33607fc3d1787773d3242deac92cd8a5e))
+* **B0-796:** sync efficacy is_current from frontmatter — 55 superseded reports excluded ([3263826](https://github.com/betcocorp/bex2.0/commit/32638266ba4df77e1fc9f332d4ef2b4d5143ea46))
+* **B0-804:** make the English-only retrieval corpus enforced, not incidental ([df449e4](https://github.com/betcocorp/bex2.0/commit/df449e49558809ab72a8e83f2be76934f961db71))
+* make OrphanRecordDialog span 50% of screen width ([6675afb](https://github.com/betcocorp/bex2.0/commit/6675afbc275af6978dce97131210988ca9981412))
+
+
+### Features
+
+* **admin:** add last run score column to test runner and update avg score display ([aa1d468](https://github.com/betcocorp/bex2.0/commit/aa1d468ed4fe539ea6663f1356c3c4962b9b254d))
+* **B0-203:** idempotent orphan-SDS backfill, and correct two stale ticket premises ([ef77b90](https://github.com/betcocorp/bex2.0/commit/ef77b906524b6a9a732d298ac521f0851a2150cb))
+* **B0-232:** derive the efficacy crosswalk from live data and link 125 documents ([6ad9665](https://github.com/betcocorp/bex2.0/commit/6ad9665323af611b07668245c0c9d6dd239ca7dc))
+* **B0-236:** seed 27 efficacy gold eval items and record a baseline ([8fa0b4a](https://github.com/betcocorp/bex2.0/commit/8fa0b4a14f9ebd227bf4129f9373ce8d3d8b20f1))
+* **B0-636:** add FastDraw dilution ingestion, tool exposure, and golden eval coverage ([8fa122e](https://github.com/betcocorp/bex2.0/commit/8fa122ed697b9d3caba904ed6214cfd1eb596463))
+* **B0-765:** force GPT-5.6 Sol for run-report grading via settings row ([4c2dfb0](https://github.com/betcocorp/bex2.0/commit/4c2dfb0b0947c825b384fe1fbca6aa4c25c70788))
+* **B0-786:** consolidate prompt signal detection into one pre-orchestration call ([b99b774](https://github.com/betcocorp/bex2.0/commit/b99b774a6fcb87f6304d2f037e093846b0531328))
+* **B0-786:** move router model/timeout to settings and add signals rollout flag ([9de8084](https://github.com/betcocorp/bex2.0/commit/9de8084b2b7dbe856807b8e8c30b7107a54d6784))
+* **B0-793:** add Score column to observability Workflow runs table ([c90ea8b](https://github.com/betcocorp/bex2.0/commit/c90ea8b47b2fab05cd815c618fde8876c2364881))
+* **B0-797:** re-convert the 70 hygiene efficacy PDFs — claim tables recovered ([d8042c6](https://github.com/betcocorp/bex2.0/commit/d8042c63b239d35942d212cc12da681a5c729db8))
+* **B0-804:** hide translated documents in the orphan monitor behind a toggle ([3903a5d](https://github.com/betcocorp/bex2.0/commit/3903a5d032231f977b618c473ed795933be2a01d))
+* **B0-97:** xref gate calibration harness, and evidence that 0.80 is not the problem ([43be7d2](https://github.com/betcocorp/bex2.0/commit/43be7d2e9e9fc8f3ad77d6e30d235d726178ccfe))
+* **B0-XXX:** add view icon button for trace reports in detailed results ([73de5fb](https://github.com/betcocorp/bex2.0/commit/73de5fb2f9afb312db0abef3afbba0f6a4335137))
+
 # [2.18.0](https://github.com/betcocorp/bex2.0/compare/v2.17.0...v2.18.0) (2026-08-31)
 
 
