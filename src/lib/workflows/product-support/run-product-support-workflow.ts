@@ -1145,6 +1145,89 @@ export function buildAliasFuzzyDisclosureSentence(match: AliasFuzzyDisclosureMat
  * `runProductSupportWorkflow`. Skipped entirely on an already-declined draft (nothing was actually
  * answered to disclose a correction for).
  */
+/**
+ * B0-830 — the closing line of the agreed disclosure UX (clarify → answer for the suspected product
+ * → invite correction). Plain prose, no regulated-shaped token, appended only when this code also
+ * prepended the disclosure sentence.
+ */
+export const ALIAS_FUZZY_CORRECTION_INVITE =
+  "\n\nIf that isn't the product you meant, reply with the corrected product name and I'll look it up again.";
+
+/** A product-code-shaped token: 1–4 letters, 1–4 digits, optional trailing letter (AF79, pH7Q, GE1). */
+const PRODUCT_CODE_TOKEN_PATTERN = /^[A-Za-z]{1,4}\d{1,4}[A-Za-z]?$/;
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * B0-830 — rewrite the model's uses of the MISSPELLED asked-for name to the resolved product name.
+ * `gpt-4.1`/`4.1-mini` were confirmed live to keep writing "AG79 Concentrate Disinfectant" — and
+ * even "Source: AG79 Concentrate Disinfectant product label", a label for a product that does not
+ * exist — after the resolver had found AF79. Same failure class as B0-700/B0-756: a prompt rule
+ * alone is not a reliable guardrail on these models, so the correction is applied in code.
+ *
+ * Two deterministic passes, both transcribing `resolvedTitle` verbatim (never reformatted):
+ *  1. every case-insensitive occurrence of the full asked-for name → the resolved name;
+ *  2. when the resolved name contains exactly ONE product-code-shaped token (e.g. `AF79`) and the
+ *     asked-for name contains a code-shaped token that is NOT in the resolved name (e.g. `AG79`),
+ *     that bare token is rewritten too (word-bounded), so "AG79 is diluted…" becomes "AF79 is
+ *     diluted…". Skipped when the resolved name has zero or several code tokens — there is no
+ *     unambiguous substitute, and guessing one would be exactly the inference this code exists to
+ *     prevent.
+ *
+ * The asked-for name is protected wherever it appears QUOTED (`"AG79 …"`, `“AG79 …”`, `'AG79 …'`):
+ * that is the disclosure sentence itself (ours or the model's own), which must keep naming what
+ * the user actually typed.
+ */
+export function rewriteAskedForNameToResolved(
+  draftAnswer: string,
+  match: AliasFuzzyDisclosureMatch,
+): string {
+  const asked = match.askedForName.trim();
+  const resolved = match.resolvedTitle.trim();
+  if (!asked || !resolved || asked.toLowerCase() === resolved.toLowerCase()) {
+    return draftAnswer;
+  }
+
+  // Protect quoted occurrences of the asked-for name with a sentinel, rewrite, then restore.
+  const QUOTED_SENTINEL = ' ALIAS_ASKED_FOR_QUOTED ';
+  const quotedPattern = new RegExp(`(["“'])${escapeRegExp(asked)}(["”'])`, 'gi');
+  const protectedQuotes: string[] = [];
+  let text = draftAnswer.replace(quotedPattern, (whole) => {
+    protectedQuotes.push(whole);
+    return QUOTED_SENTINEL;
+  });
+
+  text = text.replace(new RegExp(escapeRegExp(asked), 'gi'), resolved);
+
+  const tokenize = (value: string) => value.split(/[\s,;:()/]+/).filter(Boolean);
+  const resolvedTokens = tokenize(resolved);
+  const resolvedLower = new Set(resolvedTokens.map((t) => t.toLowerCase()));
+  const resolvedCodes = resolvedTokens.filter((t) => PRODUCT_CODE_TOKEN_PATTERN.test(t));
+  if (resolvedCodes.length === 1) {
+    const askedCodes = tokenize(asked).filter(
+      (t) => PRODUCT_CODE_TOKEN_PATTERN.test(t) && !resolvedLower.has(t.toLowerCase()),
+    );
+    for (const code of new Set(askedCodes.map((t) => t.toLowerCase()))) {
+      text = text.replace(new RegExp(`\\b${escapeRegExp(code)}\\b`, 'gi'), resolvedCodes[0]);
+    }
+  }
+
+  // The rewrite can turn the model's "AG79 … (also known as AF79 …)" into a tautology; drop a
+  // parenthetical that now just repeats the name it follows. Purely cosmetic, name-only text.
+  text = text.replace(
+    new RegExp(
+      `(${escapeRegExp(resolved)})\\s*\\((?:also known as|aka|a\\.k\\.a\\.)\\s+${escapeRegExp(resolved)}\\)`,
+      'gi',
+    ),
+    '$1',
+  );
+
+  let restoreIndex = 0;
+  return text.replace(new RegExp(QUOTED_SENTINEL, 'g'), () => protectedQuotes[restoreIndex++] ?? '');
+}
+
 export function maybeDiscloseAliasFuzzyMatch(
   draftAnswer: string,
   toolOutputs: RuntimeToolOutput[],
@@ -1156,10 +1239,13 @@ export function maybeDiscloseAliasFuzzyMatch(
   if (!match) {
     return draftAnswer;
   }
+  // B0-830 — the body rewrite applies whether or not the model disclosed the correction itself:
+  // a self-disclosed answer that then keeps saying "AG79" is still wrong.
+  const rewritten = rewriteAskedForNameToResolved(draftAnswer, match);
   if (draftAlreadyDisclosesAliasCorrection(draftAnswer)) {
-    return draftAnswer;
+    return rewritten;
   }
-  return buildAliasFuzzyDisclosureSentence(match) + draftAnswer;
+  return buildAliasFuzzyDisclosureSentence(match) + rewritten + ALIAS_FUZZY_CORRECTION_INVITE;
 }
 
 export function collectSourcesFromToolOutputs(toolOutputs: RuntimeToolOutput[]): SourceRef[] {

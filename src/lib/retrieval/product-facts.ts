@@ -1,3 +1,4 @@
+import { resolveEntityDisplayTitle } from '~/lib/rag/entity-context';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 /**
@@ -162,12 +163,10 @@ function factsWithoutScalarRow(entityId: string, efficacy: ProductEfficacyFact[]
  * caller-supplied name rather than block on this.
  */
 export async function fetchEntityTitle(entityId: string): Promise<string | null> {
-  const rag = getSupabaseServiceRoleClient().schema('rag');
-  const { data, error } = await rag.from('entity').select('title').eq('id', entityId).maybeSingle();
-  if (error || !data) {
-    return null;
-  }
-  return data.title;
+  // B0-830 — delegate to the shared resolver so the facts-block header and the fuzzy-alias
+  // disclosure name a product line the same way (`legacy.prod_line.ProdLineDescr`, not the
+  // marketing `rag.entity.title` the product_line tier was ingested with).
+  return resolveEntityDisplayTitle(entityId);
 }
 
 /** Fetch line-level facts + efficacy rows for a set of entity ids. Degrades to an empty map on error. */

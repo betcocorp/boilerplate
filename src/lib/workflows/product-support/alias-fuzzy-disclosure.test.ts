@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 
 import type { ToolTraceEntry } from '~/lib/audit/trace';
 import {
+  ALIAS_FUZZY_CORRECTION_INVITE,
   buildAliasFuzzyDisclosureSentence,
   draftAlreadyDisclosesAliasCorrection,
   extractAliasFuzzyDisclosureFromToolOutputs,
   maybeDiscloseAliasFuzzyMatch,
+  rewriteAskedForNameToResolved,
 } from '~/lib/workflows/product-support/run-product-support-workflow';
 import { evaluateRegulatedClaimGrounding } from '~/lib/workflows/product-support/validator';
 
@@ -214,7 +216,10 @@ describe('maybeDiscloseAliasFuzzyMatch (B0-700 follow-up, AG79 -> AF79 repro)', 
     ]);
     expect(result).toContain(AG79_ASKED_FOR);
     expect(result).toContain(AF79_RESOLVED_TITLE);
-    expect(result.endsWith(AF79_DRAFT_ANSWER)).toBe(true);
+    // B0-830: disclosure sentence + (rewritten) body + the correction invite, in that order.
+    expect(result).toContain(AF79_DRAFT_ANSWER);
+    expect(result.endsWith(ALIAS_FUZZY_CORRECTION_INVITE)).toBe(true);
+    expect(result.indexOf(AF79_DRAFT_ANSWER)).toBeGreaterThan(result.indexOf(AG79_ASKED_FOR));
   });
 
   it('is idempotent — leaves the draft untouched when the model already disclosed the correction', () => {
@@ -256,6 +261,128 @@ describe('maybeDiscloseAliasFuzzyMatch (B0-700 follow-up, AG79 -> AF79 repro)', 
   it('is a no-op when no tool call in the trace resolved via alias_fuzzy', () => {
     const result = maybeDiscloseAliasFuzzyMatch(AF79_DRAFT_ANSWER, []);
     expect(result).toBe(AF79_DRAFT_ANSWER);
+  });
+});
+
+describe('rewriteAskedForNameToResolved (B0-830 — the misspelled name must not survive in the body)', () => {
+  /** The real product-line name after B0-830's ProdLineDescr fix (was the marketing title). */
+  const AF79_LINE_NAME = 'AF79 Concentrate Disinfectant';
+  const match = { askedForName: AG79_ASKED_FOR, resolvedTitle: AF79_LINE_NAME };
+
+  it('rewrites the full asked-for name everywhere in the body, including a fabricated Source line', () => {
+    // Verbatim shape from live run a909277f / 9763a3a8 (2026-09-03).
+    const draft = [
+      'The dilution rate for AG79 Concentrate Disinfectant (Concentrated Acid Free Bathroom Disinfectant) is 1:4.',
+      '',
+      'Source: AG79 Concentrate Disinfectant product label; Betco verified efficacy data.',
+    ].join('\n');
+
+    const out = rewriteAskedForNameToResolved(draft, match);
+
+    expect(out).not.toMatch(/AG79/);
+    expect(out).toContain('The dilution rate for AF79 Concentrate Disinfectant (Concentrated');
+    expect(out).toContain('Source: AF79 Concentrate Disinfectant product label');
+    // The regulated value itself is untouched.
+    expect(out).toContain('is 1:4.');
+  });
+
+  it('rewrites the bare misspelled product code when the resolved name has exactly one code token', () => {
+    const out = rewriteAskedForNameToResolved(
+      'AG79 is diluted at 1:4. Use AG79 in restrooms; ag79 is acid-free.',
+      match,
+    );
+    expect(out).toBe('AF79 is diluted at 1:4. Use AF79 in restrooms; AF79 is acid-free.');
+  });
+
+  it('does NOT rewrite a bare code when the resolved name carries no code token to substitute', () => {
+    const marketingTitleMatch = {
+      askedForName: AG79_ASKED_FOR,
+      resolvedTitle: 'Concentrated Acid Free Bathroom Disinfectant',
+    };
+    const out = rewriteAskedForNameToResolved(
+      'AG79 Concentrate Disinfectant is acid-free. AG79 works in restrooms.',
+      marketingTitleMatch,
+    );
+    // Full phrase still rewritten; the bare "AG79" is left alone rather than guessed at.
+    expect(out).toBe(
+      'Concentrated Acid Free Bathroom Disinfectant is acid-free. AG79 works in restrooms.',
+    );
+  });
+
+  it('drops the tautological "(also known as <same name>)" the rewrite can produce', () => {
+    // Live shape from run eb6b99af: the model wrote "AG79 … (also known as AF79 …)"; after the
+    // rewrite both halves name the same product, so the parenthetical carries nothing.
+    const out = rewriteAskedForNameToResolved(
+      'The dilution rate for AG79 Concentrate Disinfectant (also known as AF79 Concentrate Disinfectant) is 1:4.',
+      match,
+    );
+    expect(out).toBe('The dilution rate for AF79 Concentrate Disinfectant is 1:4.');
+    // A parenthetical that adds a DIFFERENT name is kept.
+    const kept = rewriteAskedForNameToResolved(
+      'AG79 Concentrate Disinfectant (also known as Concentrated Acid Free Bathroom Disinfectant) is 1:4.',
+      match,
+    );
+    expect(kept).toBe(
+      'AF79 Concentrate Disinfectant (also known as Concentrated Acid Free Bathroom Disinfectant) is 1:4.',
+    );
+  });
+
+  it('never rewrites a bare token that is part of a longer word', () => {
+    const out = rewriteAskedForNameToResolved('The XAG79Y code is unrelated.', match);
+    expect(out).toBe('The XAG79Y code is unrelated.');
+  });
+
+  it("protects the QUOTED asked-for name — the disclosure must keep naming what the user typed", () => {
+    const selfDisclosed = `I couldn't find an exact match for "AG79 Concentrate Disinfectant", but found AF79 Concentrate Disinfectant. AG79 Concentrate Disinfectant is diluted 1:4.`;
+    const out = rewriteAskedForNameToResolved(selfDisclosed, match);
+    expect(out).toBe(
+      `I couldn't find an exact match for "AG79 Concentrate Disinfectant", but found AF79 Concentrate Disinfectant. AF79 Concentrate Disinfectant is diluted 1:4.`,
+    );
+  });
+
+  it('is a no-op when the asked-for and resolved names are the same text', () => {
+    const draft = 'AF79 Concentrate Disinfectant is diluted 1:4.';
+    expect(
+      rewriteAskedForNameToResolved(draft, {
+        askedForName: 'af79 concentrate disinfectant',
+        resolvedTitle: AF79_LINE_NAME,
+      }),
+    ).toBe(draft);
+  });
+
+  it('maybeDiscloseAliasFuzzyMatch still fixes the body when the model disclosed on its own', () => {
+    const selfDisclosed = `I couldn't find an exact match for "${AG79_ASKED_FOR}", but found ${AF79_LINE_NAME}.\n\nAG79 Concentrate Disinfectant is diluted 1:4.\n\nSource: AG79 Concentrate Disinfectant product label.`;
+    const out = maybeDiscloseAliasFuzzyMatch(selfDisclosed, [
+      efficacyToolOutput({
+        askedFor: AG79_ASKED_FOR,
+        outcome: 'alias_fuzzy',
+        matchedTitle: AF79_LINE_NAME,
+      }),
+    ]);
+    // No second disclosure, no invite (the model already disclosed) — but the body is corrected.
+    expect(out.match(/couldn't find an exact match/g)).toHaveLength(1);
+    expect(out).not.toContain(ALIAS_FUZZY_CORRECTION_INVITE.trim());
+    expect(out).toContain(`"${AG79_ASKED_FOR}"`);
+    expect(out).toContain('AF79 Concentrate Disinfectant is diluted 1:4.');
+    expect(out).toContain('Source: AF79 Concentrate Disinfectant product label.');
+  });
+
+  it('end-to-end AG79 repro: disclosure + corrected body + invite', () => {
+    const draft =
+      'The dilution rate for AG79 Concentrate Disinfectant is 1:4 (32 oz/gal).\n\nSource: AG79 Concentrate Disinfectant product label.';
+    const out = maybeDiscloseAliasFuzzyMatch(draft, [
+      efficacyToolOutput({
+        askedFor: AG79_ASKED_FOR,
+        outcome: 'alias_fuzzy',
+        matchedTitle: AF79_LINE_NAME,
+      }),
+    ]);
+    expect(out.startsWith(`I couldn't find an exact match for "${AG79_ASKED_FOR}", but found ${AF79_LINE_NAME}`)).toBe(true);
+    expect(out).toContain('The dilution rate for AF79 Concentrate Disinfectant is 1:4 (32 oz/gal).');
+    expect(out).toContain('Source: AF79 Concentrate Disinfectant product label.');
+    expect(out.endsWith(ALIAS_FUZZY_CORRECTION_INVITE)).toBe(true);
+    // The only remaining "AG79" is the quoted asked-for name inside the disclosure.
+    expect(out.match(/AG79/g)).toHaveLength(1);
   });
 });
 

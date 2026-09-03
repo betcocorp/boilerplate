@@ -233,6 +233,42 @@ function resolveVerifiedTiebreak<
  * (`resolveProductEntityWithAliasTelemetry` in `~/lib/tools/product-tools.ts`) read it from here;
  * never invent/reformat this value, it must come straight off `rag.entity.title`.
  */
+/**
+ * B0-830 — the human-facing name of a product LINE is `legacy.prod_line.ProdLineDescr` (e.g.
+ * "AF79 Concentrate Disinfectant"), not `rag.entity.title`, which for the product_line tier was
+ * ingested from the marketing `short_description` ("Concentrated Acid Free Bathroom
+ * Disinfectant"). Confirmed live: the B0-700 disclosure read "…but found Concentrated Acid Free
+ * Bathroom Disinfectant", which no customer would recognise as the product they mistyped.
+ * `~/lib/tests/repository.ts` already treats `ProdLineDescr` as the display label per key; this is
+ * the same rule. Read-only, first non-empty value wins (the legacy table carries duplicate rows per
+ * key), degrades to `null` on any error so title resolution never blocks an answer.
+ */
+async function resolveProductLineDisplayName(
+  supabase: ReturnType<typeof getSupabaseServiceRoleClient>,
+  productLineKey: string | null,
+): Promise<string | null> {
+  if (!productLineKey) {
+    return null;
+  }
+  try {
+    const { data: rows } = await supabase
+      .schema('legacy')
+      .from('prod_line')
+      .select('ProdLineDescr')
+      .eq('ProdLineKey', productLineKey)
+      .limit(5);
+    for (const row of (rows ?? []) as Array<{ ProdLineDescr?: string | null }>) {
+      const descr = typeof row.ProdLineDescr === 'string' ? row.ProdLineDescr.trim() : '';
+      if (descr) {
+        return descr;
+      }
+    }
+  } catch {
+    // Legacy table unavailable — fall back to the entity's own title.
+  }
+  return null;
+}
+
 async function resolveProductKeyAndTitleForAliasEntity(
   supabase: ReturnType<typeof getSupabaseServiceRoleClient>,
   entityId: string | null,
@@ -243,14 +279,41 @@ async function resolveProductKeyAndTitleForAliasEntity(
   const { data: entityRows } = await supabase
     .schema('rag')
     .from('entity')
-    .select('entity_type, product_key, title')
+    .select('entity_type, product_key, product_line_key, title')
     .eq('id', entityId)
     .limit(1);
   const row = entityRows?.[0];
+  if (!row) {
+    return { productKey: null, title: null };
+  }
+  // B0-830: a product-LINE entity is named by its legacy `ProdLineDescr`; a SKU-tier `product`
+  // entity keeps its own (label-derived) title.
+  const lineDisplayName =
+    row.entity_type === 'product_line'
+      ? await resolveProductLineDisplayName(supabase, row.product_line_key ?? null)
+      : null;
   return {
-    productKey: row?.entity_type === 'product' ? row.product_key : null,
-    title: row?.title ?? null,
+    productKey: row.entity_type === 'product' ? row.product_key : null,
+    title: lineDisplayName ?? row.title ?? null,
   };
+}
+
+/**
+ * B0-830 — the display title for any `rag.entity` id, using the same product-line naming rule the
+ * alias resolver uses (`ProdLineDescr` for a product line, own title for a SKU). Shared by the
+ * Verified Product Facts block header (`~/lib/retrieval/product-facts.ts` → `fetchEntityTitle`)
+ * and the B0-700 fuzzy-alias disclosure so the two never name the same product differently.
+ */
+export async function resolveEntityDisplayTitle(entityId: string): Promise<string | null> {
+  try {
+    const { title } = await resolveProductKeyAndTitleForAliasEntity(
+      getSupabaseServiceRoleClient(),
+      entityId,
+    );
+    return title;
+  } catch {
+    return null;
+  }
 }
 
 /**
