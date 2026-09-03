@@ -1,8 +1,8 @@
 {
   "set_id": "floor-multi-turn-v1",
   "name": "Floor Care Specialist — Handoff to Product and Program Progression",
-  "intended_agent": "floor",
-  "description": "B0-539. Multi-turn floor care scenarios centred on the handoff out to the Product specialist (SDS, packaging, compatibility) and back, plus Betco-vs-Basic-Coatings brand boundaries, constraints introduced late, machine-vs-chemical pronoun resolution, and negatives (EPA/efficacy claims on coatings, region scope, pricing, status inference). Expectations are structural only — no coat counts, dry times, dilution ratios or log-reduction values are asserted.",
+  "intended_agent": "floor_vct",
+  "description": "B0-539. Multi-turn floor care scenarios centred on the handoff out to the Product specialist (SDS, packaging, compatibility) and back, plus Betco-vs-Basic-Coatings brand boundaries, constraints introduced late, machine-vs-chemical pronoun resolution, and negatives (EPA/efficacy claims on coatings, region scope, pricing, status inference). Expectations are structural only — no coat counts, dry times, dilution ratios or log-reduction values are asserted. B0-746: the underlying `floor` SME agent was split into four substrate specialists (floor_wood_sport, floor_concrete, floor_stg, floor_vct); this fixture deliberately stays ONE shared cross-substrate regression set rather than being split four ways, because several scenarios (e.g. flr-mt-008, flr-mt-014) specifically test that a product/substrate does not migrate when a conversation crosses between wood, VCT, and concrete within one thread — that behavior cannot be exercised if the scenarios are separated by specialist. `intended_agent` is labeled `floor_vct` as the closest single ground-truth value (VCT is the most frequent substrate across scenarios), not a claim every scenario is a VCT question.",
   "scenarios": [
     {
       "version": 1,

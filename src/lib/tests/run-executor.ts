@@ -1,5 +1,6 @@
 import { after } from 'next/server';
 
+import { resolveResponsesModel } from '~/lib/openai/client';
 import { logWarn } from '~/lib/observability/logger';
 import { classifyUserIntent, type IntentClassification } from '~/lib/orchestrator/intent-classifier';
 import {
@@ -188,6 +189,18 @@ export async function executeTestRun(testResultId: string) {
     totalItems > 0 ? Number(((completedItems / totalItems) * 100).toFixed(2)) : 0;
   let itemElapsedSumMs = await sumResultItemsElapsedMsByResultId(testResult.id);
 
+  /**
+   * B0-757 — the CONCRETE model id this run actually executes on, resolved once here (not
+   * re-derived at render time from the raw tag, which drifts the moment the BEX_RESPONSES_MODEL
+   * settings default changes). Every item's `workflow_steps.output.model` is the item-level source
+   * of truth (B0-563); this is the run-level mirror of that same resolution, for the run-list page
+   * where joining every item's workflow run would be expensive. Preserved across a resume (never
+   * re-resolved) so a run's displayed model can't change mid-run if the settings default does.
+   */
+  const resolvedModel =
+    (typeof currentSummary.resolvedModel === 'string' && currentSummary.resolvedModel) ||
+    (await resolveResponsesModel(modelTag));
+
   await updateTestResult(testResult.id, {
     status: 'running',
     elapsed_ms: itemElapsedSumMs,
@@ -199,6 +212,7 @@ export async function executeTestRun(testResultId: string) {
       runner_state: 'running',
       running_since: resumedAt,
       elapsed_accumulated_ms: itemElapsedSumMs,
+      resolvedModel,
     },
   });
 

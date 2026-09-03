@@ -46,7 +46,7 @@ import { routeUserMessageToSme } from '~/lib/orchestrator/sme-routing';
 const USAGE = { promptTokens: 11, completionTokens: 3, totalTokens: 14, cachedPromptTokens: 0 };
 
 const LLM_SIGNALS: LlmTurnSignals = {
-  intent: 'floor',
+  intent: 'floor_vct',
   confidence: 0.9,
   betcoProduct: 'Speedex',
   competitorBrand: null,
@@ -104,7 +104,7 @@ describe('analyzeTurnSignals — one call, then deterministic enrichment', () =>
     expect(turnSignalsSchema.parse(out)).toBeTruthy();
     expect(out.source).toBe('llm');
     expect(out.fallbackReason).toBeNull();
-    expect(out.intent).toBe('floor');
+    expect(out.intent).toBe('floor_vct');
     expect(out.answerShape).toBe('procedure');
     expect(out.regulatedSectionIntent).toBe(true);
     expect(out.usage).toEqual(USAGE);

@@ -23,11 +23,21 @@ import {
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 
-/** Fixture prompts — deliberately tiny so "edit one prompt" is unambiguous. */
+/**
+ * Fixture prompts — deliberately tiny so "edit one prompt" is unambiguous.
+ *
+ * B0-746 — the former single `floor` id was split into four substrate specialists
+ * (`floor_wood_sport`, `floor_concrete`, `floor_stg`, `floor_vct`); `floor_vct` stands in below as
+ * "the floor route" wherever these tests exercise the mechanism generically rather than
+ * floor-specific content.
+ */
 const fixtureSpecialists: SpecialistPromptTexts = {
   bathroom: 'bathroom policy',
   dilution: 'dilution policy',
-  floor: 'floor policy',
+  floor_wood_sport: 'floor wood/sport policy',
+  floor_concrete: 'floor concrete policy',
+  floor_stg: 'floor stg policy',
+  floor_vct: 'floor vct policy',
   product: 'product policy',
   recommendations: 'recommendations policy',
   cross_reference: 'cross reference policy',
@@ -70,29 +80,36 @@ describe('stableStringify (B0-393)', () => {
 
 describe('promptVersion (B0-393)', () => {
   it('is a full-length sha256 hex digest', () => {
-    expect(computePromptVersion('floor')).toMatch(SHA256_HEX);
-    expect(versionFor('floor')).toMatch(SHA256_HEX);
+    expect(computePromptVersion('floor_vct')).toMatch(SHA256_HEX);
+    expect(versionFor('floor_vct')).toMatch(SHA256_HEX);
   });
 
   it('is stable: same inputs produce the same hash on every call', () => {
-    expect(computePromptVersion('floor')).toBe(computePromptVersion('floor'));
-    expect(versionFor('floor')).toBe(versionFor('floor'));
+    expect(computePromptVersion('floor_vct')).toBe(computePromptVersion('floor_vct'));
+    expect(versionFor('floor_vct')).toBe(versionFor('floor_vct'));
   });
 
   it('is deterministic across processes and deploys (pinned digest for a fixed input)', () => {
     // If this literal ever needs changing, the hashing INPUTS or layout changed — which means every
     // previously stored promptVersion has been invalidated. That must be a deliberate decision.
-    expect(versionFor('floor')).toBe(
-      '627cfdc886f393e8ee4ce87fb3b8c692715dbaeb66802bba32a6076455a1bdcb',
+    expect(versionFor('floor_vct')).toBe(
+      'a9d7a162695675c8d78b8df7044893d86ab6ecf322590548f97a96a5742dcbca',
     );
   });
 
   it('gives each specialist route its own hash', () => {
-    const hashes = ['bathroom', 'dilution', 'floor', 'product', 'recommendations'].map((d) =>
-      versionFor(d),
-    );
+    const hashes = [
+      'bathroom',
+      'dilution',
+      'floor_wood_sport',
+      'floor_concrete',
+      'floor_stg',
+      'floor_vct',
+      'product',
+      'recommendations',
+    ].map((d) => versionFor(d));
 
-    expect(new Set(hashes).size).toBe(5);
+    expect(new Set(hashes).size).toBe(8);
   });
 
   it('hashes an ambiguous/unknown decision as the product specialist (fallthrough preserved)', () => {
@@ -104,23 +121,32 @@ describe('promptVersion (B0-393)', () => {
     expect(computePromptVersion('')).toBe(computePromptVersion('product'));
   });
 
-  it('specialist isolation: editing the floor prompt changes ONLY the floor-routed hash', () => {
+  it('specialist isolation: editing the floor_vct prompt changes ONLY the floor_vct-routed hash', () => {
     const edited: SpecialistPromptTexts = {
       ...fixtureSpecialists,
-      floor: 'floor policy (edited)',
+      floor_vct: 'floor vct policy (edited)',
     };
 
-    expect(versionFor('floor', edited)).not.toBe(versionFor('floor'));
+    expect(versionFor('floor_vct', edited)).not.toBe(versionFor('floor_vct'));
 
-    for (const decision of ['bathroom', 'dilution', 'product', 'recommendations', 'ambiguous']) {
+    for (const decision of [
+      'bathroom',
+      'dilution',
+      'floor_wood_sport',
+      'floor_concrete',
+      'floor_stg',
+      'product',
+      'recommendations',
+      'ambiguous',
+    ]) {
       expect(versionFor(decision, edited)).toBe(versionFor(decision));
     }
   });
 
   it('does not normalise whitespace — a trailing space is an edit', () => {
-    const edited: SpecialistPromptTexts = { ...fixtureSpecialists, floor: 'floor policy ' };
+    const edited: SpecialistPromptTexts = { ...fixtureSpecialists, floor_vct: 'floor vct policy ' };
 
-    expect(versionFor('floor', edited)).not.toBe(versionFor('floor'));
+    expect(versionFor('floor_vct', edited)).not.toBe(versionFor('floor_vct'));
   });
 
   it('changes when the shared static instruction text changes (all routes)', () => {
@@ -131,7 +157,16 @@ describe('promptVersion (B0-393)', () => {
         shared: { ...fixtureShared, sharedInstructions: 'shared instruction text (edited)' },
       });
 
-    for (const decision of ['bathroom', 'dilution', 'floor', 'product', 'recommendations']) {
+    for (const decision of [
+      'bathroom',
+      'dilution',
+      'floor_wood_sport',
+      'floor_concrete',
+      'floor_stg',
+      'floor_vct',
+      'product',
+      'recommendations',
+    ]) {
       expect(withEditedShared(decision)).not.toBe(versionFor(decision));
     }
   });
@@ -139,15 +174,15 @@ describe('promptVersion (B0-393)', () => {
   it('excludes per-message routing hint data by construction (decision only selects the policy)', () => {
     // Two items on the same route with different scores/rationale cannot differ: the pure function
     // takes no scores or rationale at all, and equal decisions ⇒ equal hash.
-    expect(versionFor('floor')).toBe(versionFor('floor'));
+    expect(versionFor('floor_vct')).toBe(versionFor('floor_vct'));
     // And a route with no signal at all lands on the product hash rather than a unique one.
     expect(versionFor('ambiguous')).toBe(versionFor('product'));
   });
 
   it('stamps the real workflow prompts (wired to the live constants)', () => {
-    expect(computePromptVersion('floor')).toBe(
+    expect(computePromptVersion('floor_vct')).toBe(
       computePromptVersionFrom({
-        decision: 'floor',
+        decision: 'floor_vct',
         specialists: PRODUCT_SUPPORT_SPECIALIST_PROMPTS,
         shared: {
           preamble: PRODUCT_SUPPORT_PREAMBLE,
@@ -169,7 +204,17 @@ describe('promptBundleVersion (B0-393)', () => {
   });
 
   it('changes when ANY specialist prompt is edited', () => {
-    for (const id of ['bathroom', 'dilution', 'floor', 'product', 'recommendations', 'cross_reference'] as const) {
+    for (const id of [
+      'bathroom',
+      'dilution',
+      'floor_wood_sport',
+      'floor_concrete',
+      'floor_stg',
+      'floor_vct',
+      'product',
+      'recommendations',
+      'cross_reference',
+    ] as const) {
       expect(
         bundle({ specialists: { ...fixtureSpecialists, [id]: `${fixtureSpecialists[id]} (edited)` } }),
       ).not.toBe(bundle());
@@ -236,17 +281,17 @@ describe('promptBundleVersion (B0-393)', () => {
 
 describe('short display form (B0-393)', () => {
   it('is a prefix of the full hash, 6 hex chars by default', () => {
-    const full = computePromptVersion('floor');
+    const full = computePromptVersion('floor_vct');
 
     expect(shortHash(full)).toHaveLength(SHORT_HASH_LENGTH);
     expect(full.startsWith(shortHash(full))).toBe(true);
     expect(shortHash(full, 4)).toHaveLength(4);
-    expect(computePromptVersionShort('floor')).toBe(shortHash(full));
+    expect(computePromptVersionShort('floor_vct')).toBe(shortHash(full));
     expect(PROMPT_BUNDLE_VERSION_SHORT).toBe(shortHash(PROMPT_BUNDLE_VERSION));
   });
 
   it('keeps the full hash available for storage', () => {
-    expect(computePromptVersion('floor')).toHaveLength(64);
+    expect(computePromptVersion('floor_vct')).toHaveLength(64);
     expect(PROMPT_BUNDLE_VERSION).toHaveLength(64);
   });
 });

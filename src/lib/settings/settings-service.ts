@@ -1,4 +1,9 @@
 import {
+  DEFAULT_HIGH_CONFIDENCE_ABSOLUTE,
+  DEFAULT_MIN_LOCK_MARGIN,
+  DEFAULT_MIN_LOCK_SIMILARITY,
+} from '~/lib/retrieval/product-line-resolution';
+import {
   DEFAULT_RAG_BOOST_WEIGHTS,
   DEFAULT_RAG_CHUNK_STRATEGY,
   RAG_BOOST_WEIGHT_BOUNDS,
@@ -216,6 +221,28 @@ export async function getRagBoostWeights(): Promise<Omit<RagBoostConfig, 'enable
     dwellTime: clampWeight(dwellTime, DEFAULT_RAG_BOOST_WEIGHTS.dwellTime),
     dilutionRatio: clampWeight(dilutionRatio, DEFAULT_RAG_BOOST_WEIGHTS.dilutionRatio),
   };
+}
+
+/**
+ * B0-757 — the three `resolveProductLineFromMatches` (~/lib/retrieval/product-line-resolution.ts)
+ * lock thresholds, moved off `process.env.BEX_PRODUCT_LINE_LOCK_*` (never actually set in any
+ * environment). Defaults mirror that module's own fallback consts exactly, so a missing/unreadable
+ * row reproduces today's behavior. The function itself stays synchronous and untouched — this is
+ * read once by the one production call site (`~/lib/retrieval/product-knowledge.ts`) and passed in
+ * as an options override; its unit tests keep exercising the hardcoded defaults directly.
+ */
+export async function getProductLineLockThresholds(): Promise<{
+  minLockSimilarity: number;
+  minLockMargin: number;
+  highConfidenceAbsolute: number;
+}> {
+  const [minLockSimilarity, minLockMargin, highConfidenceAbsolute] = await Promise.all([
+    getNumberSetting('BEX_PRODUCT_LINE_LOCK_MIN_SIMILARITY', DEFAULT_MIN_LOCK_SIMILARITY),
+    getNumberSetting('BEX_PRODUCT_LINE_LOCK_MARGIN', DEFAULT_MIN_LOCK_MARGIN),
+    getNumberSetting('BEX_PRODUCT_LINE_LOCK_HIGH_CONFIDENCE', DEFAULT_HIGH_CONFIDENCE_ABSOLUTE),
+  ]);
+
+  return { minLockSimilarity, minLockMargin, highConfidenceAbsolute };
 }
 
 /** Test seam: clears the per-key value cache so a test can change the mocked DB response. */

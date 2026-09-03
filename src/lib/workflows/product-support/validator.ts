@@ -302,7 +302,7 @@ function normalizeSentenceForGroundingCompare(value: string): string {
 }
 
 /** Additionally normalizes common unit spellings so "2 oz per gallon" and "2 oz/gal" compare equal. Comparison-only. */
-function normalizeUnitToken(value: string): string {
+export function normalizeUnitToken(value: string): string {
   return normalizeForGroundingCompare(value)
     .replace(/\bounces?\b/g, 'oz')
     .replace(/\bfl\.?\s*oz\.?/g, 'oz')
@@ -400,7 +400,7 @@ function extractEpaRegTokens(text: string): string[] {
   return tokens;
 }
 
-function extractDilutionTokens(text: string): string[] {
+export function extractDilutionTokens(text: string): string[] {
   const tokens = DILUTION_TOKEN_PATTERNS.flatMap((pattern) =>
     extractRegexTokens(text, pattern),
   );
@@ -541,6 +541,100 @@ export function evaluateRegulatedClaimGrounding(input: {
   };
 }
 
+// ============================================================================
+// B0-699 — dilution-citation product-identity guardrail
+// ============================================================================
+// `evaluateRegulatedClaimGrounding` above only confirms a dilution figure appears verbatim
+// SOMEWHERE in this turn's retrieved evidence -- a multi-product `verified-facts` block (built
+// from every product line among the turn's broadly-matched search results, not just the one
+// actually asked about) can satisfy that with a REAL row that belongs to a different, unrelated
+// product line. Confirmed live on workflow run 61cc4ce9-bc1b-4d08-9b88-bc7d52c7365b: asked for
+// DAILY DISINFECT's dilution, Bex answered "2 oz/gal (1:64)" citing `[doc:verified-facts]` -- a
+// genuine `rag.product_line_fact` row, just for an unrelated "Disinfectant"/VersiFect product line
+// that rode along in the same broad-probe evidence set, while the product line the broad probe
+// actually locked (and the actual "Daily Disinfectant" fact rows) never carried that value.
+//
+// This check re-fetches the LOCKED product line's OWN fact row fresh (never the shared multi-
+// product block the model saw) and requires any cited dilution figure to match THAT row
+// specifically. It is a narrower, stricter companion to the verbatim check above, not a
+// replacement for it -- both must pass.
+
+/** Matches the verified-facts citation marker, including the per-product batch form
+ * `[doc:verified-facts:<productLineKey>]` (B0-549's `executeBatchEfficacyData`). */
+const VERIFIED_FACTS_CITATION_PATTERN = /\[doc:verified-facts(?::[^\]]+)?\]/i;
+
+export type DilutionCitationGroundingResult = {
+  /** Whether the draft cited `[doc:verified-facts]` alongside a dilution figure at all. When
+   * false, `grounded`/`ungroundedTokens` are meaningless and no rejection should follow. */
+  applicable: boolean;
+  /** True when every cited dilution figure matches the locked product line's own fact row.
+   * Always false when `applicable` is true and there is no locked product line (nothing to
+   * verify the figure against) or the locked line has no dilution fact on file at all. */
+  grounded: boolean;
+  /** Every dilution-shaped token the draft asserted, for the review-task payload. */
+  citedTokens: string[];
+  /** The subset of `citedTokens` that could not be matched to the locked line's own fact row. */
+  ungroundedTokens: string[];
+};
+
+/**
+ * The strings a locked product line's OWN `ProductLineFacts` row could plausibly be quoted as,
+ * mirroring exactly how `renderFacts` (`~/lib/retrieval/product-facts.ts`) writes the `Dilution:`
+ * line so a citation in either the plain or the combined "display (oz/gal)" form still matches.
+ */
+function renderedDilutionStrings(facts: { dilutionDisplay: string | null; dilutionOzPerGal: number | null }): string[] {
+  const out: string[] = [];
+  if (facts.dilutionDisplay) out.push(facts.dilutionDisplay);
+  if (facts.dilutionOzPerGal != null) out.push(`${facts.dilutionOzPerGal} oz/gal`);
+  if (facts.dilutionDisplay && facts.dilutionOzPerGal != null) {
+    out.push(`${facts.dilutionDisplay} (${facts.dilutionOzPerGal} oz/gal)`);
+  }
+  return out;
+}
+
+/**
+ * B0-699 — deliberately takes only the scalar dilution fields (not the full `ProductLineFacts`
+ * import) so this module stays independent of the retrieval layer's types; the caller passes the
+ * locked product line's own freshly-fetched facts (or null when no product line is locked / it
+ * carries no dilution fact).
+ *
+ * Deliberately NOT gated behind `BEX_DISABLE_CONFIDENCE_GATING` by any caller -- see the kill-
+ * switch note on `evaluateRegulatedClaimGrounding`'s call site in `run-product-support-workflow.ts`.
+ * That flag already suppresses the verbatim guardrail above in production; wiring this check to the
+ * same switch would leave today's production config with no working defense against this failure
+ * mode at all.
+ */
+export function evaluateVerifiedFactsDilutionCitation(input: {
+  draftAnswer: string;
+  lockedFacts: { dilutionDisplay: string | null; dilutionOzPerGal: number | null } | null;
+}): DilutionCitationGroundingResult {
+  if (!VERIFIED_FACTS_CITATION_PATTERN.test(input.draftAnswer)) {
+    return { applicable: false, grounded: true, citedTokens: [], ungroundedTokens: [] };
+  }
+  const citedTokens = extractDilutionTokens(input.draftAnswer);
+  if (citedTokens.length === 0) {
+    return { applicable: false, grounded: true, citedTokens: [], ungroundedTokens: [] };
+  }
+
+  const groundedStrings = input.lockedFacts
+    ? renderedDilutionStrings(input.lockedFacts).map(normalizeUnitToken)
+    : [];
+  const ungroundedTokens = citedTokens.filter((token) => {
+    const normalizedToken = normalizeUnitToken(token);
+    if (!normalizedToken) return true;
+    return !groundedStrings.some(
+      (g) => g === normalizedToken || g.includes(normalizedToken) || normalizedToken.includes(g),
+    );
+  });
+
+  return {
+    applicable: true,
+    grounded: ungroundedTokens.length === 0,
+    citedTokens,
+    ungroundedTokens: [...new Set(ungroundedTokens)],
+  };
+}
+
 /**
  * B0-389 — the revision pass's own instructions, lifted out of the call so the workflow can record
  * exactly what the revision model was told on its `revision` step. Text unchanged.
@@ -552,7 +646,7 @@ export const REVISION_SYSTEM_PROMPT = [
 ].join('\n');
 
 /** B0-389 — the model the revision pass calls (no dedicated env override, unlike the validator). */
-export function resolveRevisionModel(modelTag?: string): string {
+export async function resolveRevisionModel(modelTag?: string): Promise<string> {
   return resolveResponsesModel(modelTag ?? 'preview');
 }
 
@@ -566,7 +660,7 @@ export async function runRevisionPass(input: {
   modelTag?: string;
 }): Promise<RevisionPassResult> {
   const client = getOpenAIClient();
-  const model = resolveRevisionModel(input.modelTag);
+  const model = await resolveRevisionModel(input.modelTag);
 
   // B0-550 — same bounded retry + explicit timeout as `runValidatorPass`; see its comment above.
   const res = await retryTransportFaults(

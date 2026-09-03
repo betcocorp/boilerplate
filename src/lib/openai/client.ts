@@ -1,5 +1,7 @@
 import OpenAI from 'openai';
 
+import { getStringSetting } from '~/lib/settings/settings-service';
+
 let cached: OpenAI | null = null;
 
 export function getOpenAIClient(): OpenAI {
@@ -17,15 +19,42 @@ export function getOpenAIClient(): OpenAI {
 }
 
 /**
- * Maps UI / API model tags to OpenAI Responses model IDs. Centralize here — do not branch ad hoc.
+ * B0-757 — real prior default: neither BEX_RESPONSES_MODEL nor OPENAI_BEX_MODEL was ever actually
+ * set as an env var in any environment, so `preview` has always silently resolved to this. Seeded
+ * as the settings row default so this migration is behavior-preserving.
  */
-export function resolveResponsesModel(modelTag: string | undefined): string {
+export const DEFAULT_BEX_RESPONSES_MODEL = 'gpt-4.1-mini';
+
+/**
+ * B0-757 — the `BEX_RESPONSES_MODEL` settings row: the concrete model id `preview` (and any
+ * missing or empty `modelTag`) resolves to.
+ *
+ * Deliberately NOT restricted to `BEX_MODEL_TAGS` the way `resolveValidatorModelTag`/
+ * `resolveRouterModelTag` restrict their rows: the old `BEX_RESPONSES_MODEL`/`OPENAI_BEX_MODEL` env
+ * vars accepted ANY concrete model id (e.g. a dated snapshot like `gpt-4.1-mini-2026-01-01`, the
+ * same "pin an exact id without a deploy" pattern as `BEX_MODEL_GPT55`/`BEX_MODEL_GPT41`), and this
+ * row replaces them one-for-one. The only guard is against the literal string `'preview'`, which
+ * would otherwise make this resolve to itself.
+ */
+export async function resolveGenerationModelDefaultTag(): Promise<string> {
+  const raw = (
+    await getStringSetting('BEX_RESPONSES_MODEL', DEFAULT_BEX_RESPONSES_MODEL)
+  ).trim();
+  return raw && raw !== 'preview' ? raw : DEFAULT_BEX_RESPONSES_MODEL;
+}
+
+/**
+ * Maps UI / API model tags to OpenAI Responses model IDs. Centralize here — do not branch ad hoc.
+ *
+ * Async since B0-757: the `preview` branch now reads the `BEX_RESPONSES_MODEL` settings row
+ * instead of an env var. Every other branch stays a synchronous mapping; only `preview`/empty needs
+ * the settings round trip, cached 30s by `~/lib/settings/settings-service`.
+ */
+export async function resolveResponsesModel(modelTag: string | undefined): Promise<string> {
   const tag = (modelTag ?? 'preview').trim();
-  const previewDefault =
-    process.env.BEX_RESPONSES_MODEL ?? process.env.OPENAI_BEX_MODEL ?? 'gpt-4.1-mini';
 
   if (tag === 'preview' || tag === '') {
-    return previewDefault;
+    return resolveGenerationModelDefaultTag();
   }
 
   if (tag === 'gpt-4o') {
@@ -60,7 +89,7 @@ export function resolveResponsesModel(modelTag: string | undefined): string {
 
   if (tag === 'custom') {
     throw new Error(
-      'Custom model tag is not configured; set BEX_RESPONSES_MODEL or pass a concrete model name.',
+      "Custom model tag is not configured; pass a concrete model name instead of 'custom'.",
     );
   }
 

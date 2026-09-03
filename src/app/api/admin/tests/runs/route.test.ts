@@ -209,10 +209,26 @@ describe('POST /api/admin/tests/runs (B0-465)', () => {
     );
   });
 
-  it('defaults the validator off, matching runs created before the field existed', async () => {
+  it('defaults the validator off, and the model to gpt-4.1 (B0-757), matching runs created before the fields existed', async () => {
     signedIn();
 
     await POST(makeRequest({ testId: TEST_ID }));
+
+    // B0-757 — an omitted modelTag (this is CI's own run-creation call, B0-465) now defaults to
+    // gpt-4.1, not 'preview': the 234-item regression run on 2026-08-29 was invalidated by exactly
+    // this route silently landing on whatever 'preview' resolves to. 'preview' stays selectable
+    // when a caller passes it explicitly (see the next test).
+    expect(createTestResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        run_options: { modelTag: 'gpt-4.1', useValidator: false },
+      }),
+    );
+  });
+
+  it('still accepts an explicit "preview" tag (B0-757 only changed the OMITTED-field default)', async () => {
+    signedIn();
+
+    await POST(makeRequest({ testId: TEST_ID, modelTag: 'preview' }));
 
     expect(createTestResult).toHaveBeenCalledWith(
       expect.objectContaining({

@@ -54,7 +54,10 @@ function keywordResult(item: RoutingTestItemRecord): TimelessItemResult {
         product: decision.productScore,
         bathroom: decision.bathroomScore,
         dilution: decision.dilutionScore,
-        floor: decision.floorScore,
+        floor_wood_sport: decision.floorWoodSportScore,
+        floor_concrete: decision.floorConcreteScore,
+        floor_stg: decision.floorStgScore,
+        floor_vct: decision.floorVctScore,
         recommendations: decision.recommendationScore,
       },
     },
@@ -301,7 +304,7 @@ export async function runRoutingTest(
   // go through, so `gpt-5.5`/`gpt-5.6` resolve correctly instead of being passed to the API as a raw
   // (non-existent) tag string. `undefined` when no tag was chosen — `classifyUserIntent` then falls
   // back to `resolveRouterModel()` exactly as it did before this parameter existed.
-  const resolvedModel = modelTag ? resolveResponsesModel(modelTag) : undefined;
+  const resolvedModel = modelTag ? await resolveResponsesModel(modelTag) : undefined;
 
   const results = await mapWithConcurrency(
     items,

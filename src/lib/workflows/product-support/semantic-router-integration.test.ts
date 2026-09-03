@@ -166,7 +166,7 @@ function semanticDecision(overrides: Partial<SemanticRouteDecision> = {}): Seman
     scores: [
       { route: 'bathroom', similarity: 0.71 },
       { route: 'product', similarity: 0.53 },
-      { route: 'floor', similarity: 0.41 },
+      { route: 'floor_vct', similarity: 0.41 },
     ],
     thresholds: { confidence: 0.5, margin: 0.1 },
     thresholdsPassed: { confidence: true, margin: true },
@@ -281,11 +281,11 @@ describe('semantic router disabled (B0-649 state 3)', () => {
 
   it('is not called for a forced direct agentMode either', async () => {
     settingOverrides.set('BEX_SEMANTIC_ROUTER_ENABLED', true);
-    await run({ agentMode: 'floor' });
+    await run({ agentMode: 'floor_vct' });
 
     expect(classifyUserIntentSemanticMock).not.toHaveBeenCalled();
     expect(classifyUserIntentMock).not.toHaveBeenCalled();
-    expect(routingBlock().decision).toBe('floor');
+    expect(routingBlock().decision).toBe('floor_vct');
   });
 });
 
@@ -341,7 +341,7 @@ describe('semantic router live (B0-649 state 1 / B0-653 cutover)', () => {
     expect(record.inputs.semanticScores).toEqual([
       { route: 'bathroom', similarity: 0.71 },
       { route: 'product', similarity: 0.53 },
-      { route: 'floor', similarity: 0.41 },
+      { route: 'floor_vct', similarity: 0.41 },
     ]);
     expect(record.thresholds).toEqual({
       confidenceThreshold: 0.5,
@@ -382,7 +382,7 @@ describe('semantic router live (B0-649 state 1 / B0-653 cutover)', () => {
       latencyMs: 132,
       embeddingMs: 128,
       scoringMs: 4,
-      scores: { bathroom: 0.71, product: 0.53, floor: 0.41 },
+      scores: { bathroom: 0.71, product: 0.53, floor_vct: 0.41 },
       routingDecision: 'bathroom',
       decidedBy: 'semantic_router',
     });

@@ -117,7 +117,7 @@ function clampScore(value: number | null): number | null {
 
 export async function scoreCase(input: CaseScoringInput): Promise<CaseScore> {
   const client = getOpenAIClient();
-  const model = resolveResponsesModel(input.modelTag ?? 'gpt-4.1');
+  const model = await resolveResponsesModel(input.modelTag ?? 'gpt-4.1');
 
   try {
     const res = await client.responses.create({

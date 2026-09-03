@@ -68,7 +68,7 @@ afterEach(() => {
 });
 
 const llmResult = {
-  intent: 'floor' as const,
+  intent: 'floor_vct' as const,
   confidence: 0.9,
   entities: {
     betcoProduct: null,
@@ -115,7 +115,7 @@ describe('classifyUserIntent — B0-504 fallback behavior', () => {
 
     expect(runLlm).toHaveBeenCalledOnce();
     expect(out.source).toBe('llm');
-    expect(out.intent).toBe('floor');
+    expect(out.intent).toBe('floor_vct');
     // B0-563 — the live call's usage is attributed, tagged with the model that made it.
     expect(out.usage).toEqual(USAGE);
     expect(out.model).toBe(await resolveRouterModel());
@@ -165,7 +165,7 @@ describe('classifyUserIntent — B0-504 fallback behavior', () => {
     });
 
     expect(out.source).toBe('llm');
-    expect(out.intent).toBe('floor');
+    expect(out.intent).toBe('floor_vct');
     expect(out.confidence).toBe(1);
     expect(out.entities.surfaceType).toBe('VCT floor');
   });
@@ -333,10 +333,17 @@ describe('B0-786 settings-table resolution', () => {
   });
 
   it('resolveRouterModel resolves the tag to a concrete model id, never the raw tag string', async () => {
+    // B0-757 — BEX_RESPONSES_MODEL (what the router's `preview` tag falls through to) is now a
+    // settings row too, resolved through the same mocked getStringSetting rather than process.env.
     vi.mocked(getStringSetting).mockImplementation((key, fallback) =>
-      Promise.resolve(key === 'BEX_ROUTER_MODEL' ? 'preview' : fallback),
+      Promise.resolve(
+        key === 'BEX_ROUTER_MODEL'
+          ? 'preview'
+          : key === 'BEX_RESPONSES_MODEL'
+            ? 'gpt-4.1-mini-2026-01-01'
+            : fallback,
+      ),
     );
-    process.env.BEX_RESPONSES_MODEL = 'gpt-4.1-mini-2026-01-01';
     expect(await resolveRouterModel()).toBe('gpt-4.1-mini-2026-01-01');
   });
 
@@ -421,7 +428,7 @@ describe('classifyUserIntent — B0-515 entity extraction', () => {
   it('parses the B0-758 scope, category and carry-over signals', async () => {
     const runLlm = vi.fn().mockResolvedValue({
       parsed: {
-        intent: 'floor' as const,
+        intent: 'floor_vct' as const,
         confidence: 0.71,
         entities: {
           betcoProduct: null,

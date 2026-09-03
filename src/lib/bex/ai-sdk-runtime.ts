@@ -307,7 +307,7 @@ export async function runAiSdkWithToolLoop(opts: AiSdkRuntimeOptions): Promise<A
   let capturedStreamError: unknown;
   const result = streamText({
     model: wrapLanguageModel({
-      model: resolveAiSdkLanguageModel(opts.modelTag),
+      model: await resolveAiSdkLanguageModel(opts.modelTag),
       middleware: createTransportRetryMiddleware(opts.retry),
     }),
     system: opts.instructions,

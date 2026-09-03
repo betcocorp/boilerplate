@@ -151,7 +151,9 @@ async function defaultClassify(
   try {
     const client = getOpenAIClient();
     const res = await client.responses.create({
-      model: process.env.CATEGORY_CLASSIFIER_MODEL?.trim() || resolveResponsesModel('preview'),
+      model:
+        process.env.CATEGORY_CLASSIFIER_MODEL?.trim() ||
+        (await resolveResponsesModel('preview')),
       instructions: buildClassifierPrompt(nodes),
       input: [
         {

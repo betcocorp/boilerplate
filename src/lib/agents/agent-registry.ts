@@ -2,7 +2,12 @@ export const SME_AGENT_IDS = [
   'product',
   'bathroom',
   'dilution',
-  'floor',
+  // B0-746 — the former single `floor` id was split into four substrate specialists. This is a
+  // BREAKING change to the `/api/v1/agents/floor` surface (that route no longer exists).
+  'floor_wood_sport',
+  'floor_concrete',
+  'floor_stg',
+  'floor_vct',
   'recommendations',
   'cross_reference',
 ] as const;
@@ -23,7 +28,10 @@ export const BEX_CHAT_AGENT_MODE_LABELS: Record<BexChatAgentMode, string> = {
   product: 'Product',
   bathroom: 'Bathroom',
   dilution: 'Dilution',
-  floor: 'Floor',
+  floor_wood_sport: 'Floor — Wood/Sport',
+  floor_concrete: 'Floor — Concrete',
+  floor_stg: 'Floor — Stone/Tile/Grout',
+  floor_vct: 'Floor — VCT',
   recommendations: 'Recommendations',
   cross_reference: 'Cross-Reference',
 };
@@ -44,11 +52,32 @@ export const V1_AGENT_REGISTRY = [
       'Dispenser calibration, proportioners, metering tips, and setup from approved charts.',
   },
   {
-    id: 'floor',
-    path: '/api/v1/agents/floor',
-    label: 'Floor Care Specialist',
+    id: 'floor_wood_sport',
+    path: '/api/v1/agents/floor_wood_sport',
+    label: 'Wood/Sport Floor Care Specialist',
     description:
-      'Stripping, finishing, burnishing, and floor maintenance programs.',
+      'Wood (hardwood) sport/gym floor finish and coating: recoating programs and daily/interim maintenance.',
+  },
+  {
+    id: 'floor_concrete',
+    path: '/api/v1/agents/floor_concrete',
+    label: 'Concrete Floor Care Specialist',
+    description:
+      'Concrete floor cleaning, densifying, sealing, coating, stripping, and scrubbing programs.',
+  },
+  {
+    id: 'floor_stg',
+    path: '/api/v1/agents/floor_stg',
+    label: 'Stone, Tile & Grout Specialist',
+    description:
+      'Cleaning and protecting natural stone, tile, and grout surfaces (STG Cleaner and Protectant line).',
+  },
+  {
+    id: 'floor_vct',
+    path: '/api/v1/agents/floor_vct',
+    label: 'VCT & Resilient Tile Floor Care Specialist',
+    description:
+      'VCT, terrazzo, and resilient/hard tile: stripping, finishing, burnishing, and floor maintenance programs.',
   },
   {
     id: 'bathroom',

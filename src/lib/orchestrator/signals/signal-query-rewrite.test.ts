@@ -5,7 +5,7 @@ import type { TurnSignals } from '~/lib/orchestrator/signals/signals-schemas';
 
 /** Full `TurnSignals` fixture with every rewrite-relevant field null; tests override what they need. */
 const BASE: TurnSignals = {
-  intent: 'floor',
+  intent: 'floor_vct',
   confidence: 0.9,
   betcoProduct: null,
   competitorBrand: null,

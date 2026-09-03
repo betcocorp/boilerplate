@@ -199,9 +199,17 @@ describe('B0-556 — cross-product-line SDS must never ground a safety answer', 
     expect(result.retrieval.withheldUnanchoredSdsCount).toBe(2);
   });
 
-  it('withholds a cross-line SDS that arrives via the broad fallback, keeping the resolved line', async () => {
-    // A line resolves off the broad pass, but the anchored pass comes back empty, so the
-    // pre-fix code returned the unfiltered broad set — including the Baseboard Stripper SDS.
+  it('withholds a cross-line SDS on a thin-margin broad match, and (post B0-693) no longer locks a line that close either', async () => {
+    // Kling profile at 0.95 vs. the Baseboard Stripper SDS at 0.92 — a 0.03 spread, under
+    // MIN_LOCK_MARGIN (0.06). Pre-B0-693, general (non-section-scoped) queries locked on absolute
+    // similarity alone with no margin check, so this used to anchor on KLING_LINE despite the wrong
+    // line sitting right behind it at almost the same score — the same class of defect B0-693 Part
+    // 1 fixed for regulated/SDS-section queries, now closed for general queries too: this margin is
+    // exactly the "genuinely ambiguous" case the ticket's AC requires to yield no lock. The safety
+    // property this file is about still holds independent of that: `withholdUnanchoredSafetySources`
+    // withholds SDS-kind sources whenever nothing is locked, regardless of *why* nothing locked, so
+    // the Baseboard Stripper SDS is excluded either way, while the correctly-scored non-SDS profile
+    // match is untouched (only SDS-kind content is safety-gated).
     stubSearches({
       broad: [
         match({
@@ -217,11 +225,12 @@ describe('B0-556 — cross-product-line SDS must never ground a safety answer', 
 
     const result = await ragQueryForProductKnowledgeWithMeta({ query: SAFETY_QUERY });
 
-    expect(result.retrieval.strategy).toBe('anchored_with_broad_fallback');
-    expect(result.retrieval.productLineResolution?.lockedProductLineKey).toBe(KLING_LINE);
+    expect(result.retrieval.strategy).toBe('broad_only');
+    expect(result.retrieval.productLineResolution?.lockReason).toBe('skipped_ambiguous');
+    expect(result.retrieval.productLineResolution?.lockedProductLineKey).toBeNull();
     expect(result.sources.map((s) => s.documentId)).not.toContain(WRONG_SDS_DOC);
     expect(result.retrieval.withheldUnanchoredSdsCount).toBe(1);
-    // The correctly-anchored non-SDS source is untouched.
+    // Non-SDS content is not line-gated by an absent lock — only SDS-kind sources are.
     expect(result.sources.map((s) => s.documentId)).toContain('doc-kling-profile');
   });
 

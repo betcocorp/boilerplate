@@ -11,12 +11,13 @@ export type AuditContext = {
   model?: string | null;
   toolName?: string | null;
   /**
-   * B0-780 — which specialist policy (`EffectivePromptId` in
+   * B0-780/B0-746 — which specialist policy (`EffectivePromptId` in
    * `~/lib/workflows/product-support/product-support-prompts.ts`) is running this turn, e.g.
-   * `'floor'` / `'bathroom'`. Carried as a plain string (not that type) to avoid this low-level
+   * `'floor_vct'` / `'bathroom'`. Carried as a plain string (not that type) to avoid this low-level
    * audit module depending on the workflow layer. Read by `~/lib/tools/product-tools.ts` to bind
-   * knowledge-document retrieval to the right product category (wood vs. VCT, floor vs. bathroom)
-   * — never persisted to the `audit_logs` row itself (see `buildAuditLogRow`, unchanged).
+   * knowledge-document retrieval to the right product category (wood/sport vs. VCT vs. concrete vs.
+   * stone/tile/grout vs. bathroom) — never persisted to the `audit_logs` row itself (see
+   * `buildAuditLogRow`, unchanged).
    */
   specialistId?: string | null;
 };

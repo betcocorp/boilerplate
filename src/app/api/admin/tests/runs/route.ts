@@ -31,8 +31,18 @@ const supportedModelNames = supportedModels.map((m) => m.name);
 const createRunBodySchema = z.object({
   testId: z.string().min(1),
   runMode: z.enum(['full', 'search']).default('full'),
-  /** Maps to a concrete chat model in `resolveResponsesModel()`; `preview` is the configured default. */
-  modelTag: z.enum(['preview', ...supportedModelNames]).default('preview'),
+  /**
+   * Maps to a concrete chat model in `resolveResponsesModel()`.
+   *
+   * B0-757 — defaults to `gpt-4.1`, not `preview`. This route is the CI eval-gate's run-creation
+   * call (B0-465): a caller (CI) that omits `modelTag` entirely used to silently land on whatever
+   * `BEX_RESPONSES_MODEL` resolves `preview` to (gpt-4.1-mini today), invalidating the 234-item
+   * regression run on 2026-08-29 (7fb79091-e93b-4d52-a38b-4283f5cd639f, 64.6/D vs 71.3/C for the
+   * same set on gpt-4.1). `preview` is still selectable when a caller passes it explicitly — this
+   * only changes what an OMITTED field resolves to, matching the "Run dataset" form's own default
+   * (B0-614, `TestRunModelControls`).
+   */
+  modelTag: z.enum(['preview', ...supportedModelNames]).default('gpt-4.1'),
   /**
    * B0-600 / B0-603 — enables the validator pass for a full-mode run so a validator A/B test can be
    * configured. Defaults false, matching every run created before this field existed.

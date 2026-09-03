@@ -47,6 +47,37 @@ export function extractModelTag(userInput: unknown): string | undefined {
 }
 
 /**
+ * B0-757 — the CONCRETE model id actually used, from the `openai_responses_agent`
+ * `workflow_steps.output` (stamped at run time per B0-563 — see `listAgentStepOutputsByWorkflowRunIds`,
+ * `~/lib/tests/repository.ts`). This is ground truth for what ran; prefer it over re-resolving a
+ * stored tag through `resolveResponsesModel` at render time, which only reports TODAY's settings
+ * default and can silently disagree with what actually executed. Returns null when absent (e.g. a
+ * run whose agent step never completed, or one that predates B0-563).
+ */
+export function extractAgentStepModel(output: unknown): string | null {
+  if (!output || typeof output !== 'object' || Array.isArray(output)) {
+    return null;
+  }
+
+  const candidate = (output as Record<string, unknown>).model;
+  return typeof candidate === 'string' && candidate.trim() ? candidate.trim() : null;
+}
+
+/**
+ * B0-757 — the run-level mirror of `extractAgentStepModel`, read off `test_results.summary`
+ * (written once by `executeTestRun`, `~/lib/tests/run-executor.ts`). Cheaper than joining every
+ * item's workflow run for the run-list page; returns null for runs that predate this field.
+ */
+export function extractResolvedModelFromSummary(summary: unknown): string | null {
+  if (!summary || typeof summary !== 'object' || Array.isArray(summary)) {
+    return null;
+  }
+
+  const candidate = (summary as Record<string, unknown>).resolvedModel;
+  return typeof candidate === 'string' && candidate.trim() ? candidate.trim() : null;
+}
+
+/**
  * Pulls every per-source `similarity` value off the response payload's `sources`
  * array and reduces it to {min, max, avg}. Returns null when nothing usable was
  * recorded (e.g. early-decline runs or older payload shapes).

@@ -17,7 +17,14 @@
 export const CONFIDENCE_GATED_PROMPT_IDS = [
   'bathroom',
   'dilution',
-  'floor',
+  // B0-746 — the former single `floor` id was split into four substrate specialists. All four
+  // keep the same 0.9 threshold the flat `floor` prompt used: nothing in the split changed the
+  // basis for that number (no substrate has its own calibration data yet), so a uniform value is
+  // the honest default rather than inventing per-substrate numbers.
+  'floor_wood_sport',
+  'floor_concrete',
+  'floor_stg',
+  'floor_vct',
   'product',
   'recommendations',
 ] as const;
@@ -32,7 +39,10 @@ export type ConfidenceGatedPromptId = (typeof CONFIDENCE_GATED_PROMPT_IDS)[numbe
 export const SME_CONFIDENCE_THRESHOLDS: Record<ConfidenceGatedPromptId, number> = {
   bathroom: 0.8,
   dilution: 0.9,
-  floor: 0.9,
+  floor_wood_sport: 0.9,
+  floor_concrete: 0.9,
+  floor_stg: 0.9,
+  floor_vct: 0.9,
   product: 0.9,
   recommendations: 0.8,
 };

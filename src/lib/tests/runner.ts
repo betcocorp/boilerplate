@@ -11,8 +11,10 @@ import {
 
 import { gradeWithCriteria } from './criteria-grader';
 import { expectedCriteriaSchema } from './criteria-schemas';
+import { gradeSemanticDecline } from './decline-grader';
 import {
   gradeChatTestResponse,
+  gradeChatTestResponseAsync,
   responseIndicatesDeclineStyleAnswer,
   responseIndicatesUnableToAssistOrRefusal,
   UNABLE_TO_ASSIST_FAILURE_REASON,
@@ -40,6 +42,7 @@ import type { NewTestResultItemRecord, TestItemRecord } from './types';
  */
 export {
   gradeChatTestResponse,
+  gradeChatTestResponseAsync,
   responseIndicatesDeclineStyleAnswer,
   responseIndicatesUnableToAssistOrRefusal,
   UNABLE_TO_ASSIST_FAILURE_REASON,
@@ -161,13 +164,28 @@ async function runSingleTurnTestItem(
       modelTag: options?.modelTag,
     }).catch(() => null);
 
+    /**
+     * B0-755 — when this item has no `expected_criteria` (the entire pre-B0-616 golden-set
+     * corpus), a negative-expectation row's decline is judged async: the same fast exact/heuristic
+     * checks `gradeChatTestResponse` always ran, plus an LLM semantic-decline fallback for a
+     * response that expresses a decline in wording the fixed phrase list doesn't cover. Rows with
+     * criteria are unaffected — `gradeWithCriteria`'s own per-criterion semantic judgement already
+     * covers this case, so `gradeChatTestResponseAsync` never runs for them.
+     */
     const outcome =
       criteriaOutcome ??
-      gradeChatTestResponse({
+      (await gradeChatTestResponseAsync({
         item: testItem,
         hasError: false,
         responseText,
-      });
+        context: {
+          prompt: testItem.prompt,
+          idealResponse: testItem.ideal_response,
+          expectedConcepts: testItem.expected_concepts,
+          minimumConcepts: testItem.minimum_concepts,
+        },
+        checkSemanticDecline: gradeSemanticDecline,
+      }));
 
     // Loose `any` (matching the original `JSON.parse(JSON.stringify(result))` call this
     // replaces) — `response_payload` is `Json`, and threading a precise type through would
@@ -176,6 +194,9 @@ async function runSingleTurnTestItem(
     const responsePayload: any = JSON.parse(JSON.stringify(result));
     if (criteriaOutcome) {
       responsePayload.criteriaGrading = criteriaOutcome;
+    }
+    if ('semanticDeclineCheck' in outcome && outcome.semanticDeclineCheck) {
+      responsePayload.semanticDeclineGrading = outcome.semanticDeclineCheck;
     }
 
     return {

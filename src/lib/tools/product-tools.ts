@@ -7,8 +7,8 @@ import {
 import { ragQueryForProductKnowledgeWithMeta } from '~/lib/retrieval/product-knowledge';
 import {
   buildFactsBlock,
-  fetchFactsForProductLineKey,
-  fetchFactsForProductLineKeys,
+  fetchFactsForProduct,
+  fetchFactsForProductBatch,
   type ProductLineFacts,
 } from '~/lib/retrieval/product-facts';
 import {
@@ -75,44 +75,41 @@ const ADAPTER_TAG = 'rag_corpus_full_document' as const;
  * must never ground on a VCT procedure document (and vice versa), and a bathroom-specialist question
  * must never ground on floor-care content at all.
  *
- * Deliberately keyword-based and deliberately narrow: an AMBIGUOUS or neither-signal floor query
- * (e.g. "how do I select a floor finish" with no substrate named) excludes nothing, so it keeps
- * behaving exactly as before this ticket. Only a query that actually names one domain gets bound
- * away from the other.
+ * B0-746 — the single `floor` specialist that used to guess the domain from query wording
+ * (`WOOD_FLOOR_QUERY_PATTERN`/`VCT_FLOOR_QUERY_PATTERN`) was split into four substrate specialists.
+ * The specialist id ITSELF now resolves the domain — routing already decided which substrate this
+ * turn is — so the query-text regex guessing is gone; each floor specialist unconditionally
+ * excludes the categories it does not own. `floor_concrete` and `floor_stg` have no dedicated
+ * ingest folder of their own (see `~/app/(authenticated)/admin/knowledge/manifest.ts`), so they
+ * exclude BOTH foreign folders, same as bathroom.
  */
-const WOOD_FLOOR_QUERY_PATTERN =
-  /\bwood(?:en)?\b|\bhardwood\b|\bgym(?:nasium)?s?\b|\bsport(?:s)?\s*(?:zone|floor|court)\b|\bmaple\b|\bathletic floor\b/i;
-const VCT_FLOOR_QUERY_PATTERN =
-  /\bvct\b|\bvinyl composition tile\b|\bvinyl tile\b|\bresilient tile\b|\bmastic\b/i;
-
-/** B0-780 — a bathroom-specialist call never needs floor-care content, regardless of query wording. */
 const BATHROOM_EXCLUDED_KNOWLEDGE_CATEGORIES = ['vct', 'sportszone'] as const;
 
 /**
- * B0-780 — resolves which `knowledge` document categories (see `deriveKnowledgeCategoryFromS3Key`)
- * to exclude from retrieval for this call, from the specialist policy actually running
- * (`auditCtx.specialistId`, threaded from `run-product-support-workflow.ts`'s `effectivePromptId`
- * via `wfCtx`) and the text of this specific call's query.
+ * B0-780/B0-746 — resolves which `knowledge` document categories (see
+ * `deriveKnowledgeCategoryFromS3Key`) to exclude from retrieval for this call, from the specialist
+ * policy actually running (`auditCtx.specialistId`, threaded from
+ * `run-product-support-workflow.ts`'s `effectivePromptId` via `wfCtx`).
+ *
+ * `queryText` is kept in the signature for compatibility with every call site, but is no longer
+ * consulted: post-B0-746 the specialist id alone resolves the substrate domain (see the doc
+ * comment above).
  *
  * `dilution-control` and `product` are cross-cutting categories and are never excluded here, for
  * any specialist.
  */
 export function resolveKnowledgeCategoryExclusions(
   specialistId: string | null | undefined,
-  queryText: string,
+  _queryText: string,
 ): string[] {
-  if (specialistId === 'bathroom') {
+  if (specialistId === 'bathroom' || specialistId === 'floor_concrete' || specialistId === 'floor_stg') {
     return [...BATHROOM_EXCLUDED_KNOWLEDGE_CATEGORIES];
   }
-  if (specialistId === 'floor') {
-    const isWoodDomain = WOOD_FLOOR_QUERY_PATTERN.test(queryText);
-    const isVctDomain = VCT_FLOOR_QUERY_PATTERN.test(queryText);
-    if (isWoodDomain && !isVctDomain) {
-      return ['vct'];
-    }
-    if (isVctDomain && !isWoodDomain) {
-      return ['sportszone'];
-    }
+  if (specialistId === 'floor_wood_sport') {
+    return ['vct'];
+  }
+  if (specialistId === 'floor_vct') {
+    return ['sportszone'];
   }
   return [];
 }
@@ -487,10 +484,11 @@ async function resolveBatchProductIdentifiers(p: {
 /**
  * B0-549 — batch variant of the `get_efficacy_data` single-product path below: collapses what
  * would otherwise be N sequential `get_efficacy_data` tool calls (worst observed case: 27 in one
- * turn) into one call. Facts are fetched for every resolved product line in a SINGLE batched query
- * (`fetchFactsForProductLineKeys`); lab-report citations still require one lookup per product line
- * (no batched RPC exists for that yet) but those lookups run concurrently via `Promise.all` rather
- * than sequentially, so wall-clock time tracks the slowest single lookup, not their sum.
+ * turn) into one call. Facts are fetched for every resolved product in a SINGLE batched query
+ * (`fetchFactsForProductBatch`, B0-792 — pinned per-product, not merged across every entity sharing
+ * a possibly-bogus `product_line_key`); lab-report citations still require one lookup per product
+ * line (no batched RPC exists for that yet) but those lookups run concurrently via `Promise.all`
+ * rather than sequentially, so wall-clock time tracks the slowest single lookup, not their sum.
  */
 async function executeBatchEfficacyData(
   p: {
@@ -535,8 +533,18 @@ async function executeBatchEfficacyData(
     ),
   ];
 
-  const [factsByLineKey, labReportEntries] = await Promise.all([
-    fetchFactsForProductLineKeys(productLineKeys, p.organism),
+  // B0-792 — pin each product's facts to its OWN resolved `productKey` when one is known, rather
+  // than merging in every sibling entity sharing `productLineKey` (see fetchFactsForProductBatch);
+  // aligned by index with `resolutions`, not deduped by line key, since two batch entries can share
+  // a (possibly bogus/over-broad) product_line_key but pin to different specific products.
+  const [factsList, labReportEntries] = await Promise.all([
+    fetchFactsForProductBatch(
+      resolutions.map(({ resolution }) => ({
+        productLineKey: resolution.productLineKey ?? '',
+        productKey: resolution.productKey,
+      })),
+      p.organism,
+    ),
     Promise.all(
       productLineKeys.map(
         async (key) => [key, await fetchCurrentEfficacyLabReport(key, p.organism)] as const,
@@ -546,10 +554,9 @@ async function executeBatchEfficacyData(
   const labReportByLineKey = new Map(labReportEntries);
 
   const sources: Record<string, unknown>[] = [];
-  const results = resolutions.map(({ identifier, resolution }) => {
-    const { productLineKey, aliasResolution } = resolution;
-    const facts: ProductLineFacts | null =
-      (productLineKey && factsByLineKey.get(productLineKey)) || null;
+  const results = resolutions.map(({ identifier, resolution }, index) => {
+    const { productLineKey, productKey, aliasResolution } = resolution;
+    const facts: ProductLineFacts | null = factsList[index] ?? null;
     const labReport: EfficacyLabReportCitation | null =
       (productLineKey && labReportByLineKey.get(productLineKey)) || null;
 
@@ -562,10 +569,14 @@ async function executeBatchEfficacyData(
         // B0-549: each product's facts source needs its own documentId — reusing the single
         // VERIFIED_FACTS_SOURCE_ID sentinel across every product in the batch would collide under
         // `collectSourceMetaFromToolOutputs`'s per-documentId dedupe and silently drop every
-        // product but one from the citable evidence.
+        // product but one from the citable evidence. B0-792: keyed on `productKey` (falling back to
+        // `productLineKey`) rather than `productLineKey` alone — now that facts are pinned per
+        // product, two batch entries sharing one `productLineKey` can carry genuinely different
+        // facts and must not collide onto the same documentId.
+        const sourceKey = productKey ?? productLineKey ?? identifier;
         sources.push({
-          documentId: `${VERIFIED_FACTS_SOURCE_ID}:${productLineKey}`,
-          chunkId: `${VERIFIED_FACTS_SOURCE_ID}:${productLineKey}`,
+          documentId: `${VERIFIED_FACTS_SOURCE_ID}:${sourceKey}`,
+          chunkId: `${VERIFIED_FACTS_SOURCE_ID}:${sourceKey}`,
           title: `Verified Product Facts (structured) — ${identifier}`,
           snippet: factsBlock.slice(0, 900),
           documentBody: factsBlock,
@@ -982,11 +993,15 @@ export async function executeProductTool(
         return executeBatchEfficacyData(p, name, auditCtx);
       }
 
-      // Out of scope for B0-250: fact/efficacy lookups key on product_line_key only.
       const { productLineKey, productKey, aliasResolution } =
         await resolveProductEntityWithAliasTelemetry(p.productId, name, auditCtx);
+      // B0-792 — pin to the specific resolved `productKey` when one was found, so a
+      // product_line_key grouping that (incorrectly) buckets unrelated finished-goods products
+      // together (e.g. the "Drain Maintainer" group) can't leak a sibling product's dilution/
+      // efficacy figure into this answer. Falls back to the line-wide merge only when no specific
+      // product was resolved — see fetchFactsForProduct.
       const [facts, labReport, fastDrawLookup] = await Promise.all([
-        productLineKey ? fetchFactsForProductLineKey(productLineKey, p.organism) : Promise.resolve(null),
+        productLineKey ? fetchFactsForProduct(productLineKey, productKey, p.organism) : Promise.resolve(null),
         productLineKey
           ? fetchCurrentEfficacyLabReport(productLineKey, p.organism)
           : Promise.resolve(null),

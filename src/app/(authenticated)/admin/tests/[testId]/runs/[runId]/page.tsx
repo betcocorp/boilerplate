@@ -65,6 +65,7 @@ import {
   listOrchestrationPlannerStepOutputsByWorkflowRunIds,
 } from '~/lib/tests/repository';
 import {
+  extractAgentStepModel,
   extractItemConfidenceProvenance,
   extractItemSimilarityScore,
   extractItemValidatorConfidence,
@@ -333,11 +334,27 @@ export default async function AdminTestRunDetailsPage({
       listAgentStepOutputsByWorkflowRunIds(workflowRunIds),
       listOrchestrationPlannerStepOutputsByWorkflowRunIds(workflowRunIds),
     ]);
+  // B0-757 — ground truth for what actually ran (stamped at run time, B0-563), keyed by run id.
+  // Reuses `agentStepOutputs`, already fetched above for the tool-routing trace.
+  const persistedModelByWorkflowRunId = new Map(
+    agentStepOutputs
+      .map((row) => [row.workflow_run_id, extractAgentStepModel(row.output)] as const)
+      .filter((entry): entry is [string, string] => entry[1] !== null),
+  );
   const modelByWorkflowRunId = new Map(
-    workflowRuns.map((workflowRun) => {
-      const modelTag = extractModelTag(workflowRun.user_input);
-      return [workflowRun.id, resolveResponsesModel(modelTag)] as const;
-    }),
+    await Promise.all(
+      workflowRuns.map(async (workflowRun) => {
+        const persisted = persistedModelByWorkflowRunId.get(workflowRun.id);
+        if (persisted) {
+          return [workflowRun.id, persisted] as const;
+        }
+        // Legacy fallback: no B0-563 stamped model for this run (predates it, or the agent step
+        // never completed) — re-resolve from the tag, which may not match what actually executed
+        // if the BEX_RESPONSES_MODEL settings default has since changed.
+        const modelTag = extractModelTag(workflowRun.user_input);
+        return [workflowRun.id, await resolveResponsesModel(modelTag)] as const;
+      }),
+    ),
   );
 
   /**

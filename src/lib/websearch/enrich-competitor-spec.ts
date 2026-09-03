@@ -165,7 +165,8 @@ async function defaultRunLlm(input: EnrichCompetitorSpecInput): Promise<LlmCompe
   try {
     const client = getOpenAIClient();
     const res = await client.responses.create({
-      model: process.env.XREF_SPEC_ENRICH_MODEL?.trim() || resolveResponsesModel('preview'),
+      model:
+        process.env.XREF_SPEC_ENRICH_MODEL?.trim() || (await resolveResponsesModel('preview')),
       instructions: ENRICH_SYSTEM_PROMPT,
       input: [
         {

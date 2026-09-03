@@ -1,5 +1,16 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+/**
+ * B0-757 — `resolveResponsesModel`'s `preview` branch now reads the `BEX_RESPONSES_MODEL` settings
+ * row (via `resolveGenerationModelDefaultTag`) instead of `process.env.BEX_RESPONSES_MODEL` /
+ * `OPENAI_BEX_MODEL`. Only `getStringSetting` is mocked; every other branch is a synchronous
+ * mapping over `process.env.BEX_MODEL_GPT*`, unchanged by this ticket.
+ */
+vi.mock('~/lib/settings/settings-service', () => ({
+  getStringSetting: vi.fn((_key: string, fallback: string) => Promise.resolve(fallback)),
+}));
+
+import { getStringSetting } from '~/lib/settings/settings-service';
 import { resolveResponsesModel } from '~/lib/openai/client';
 import { BEX_MODEL_TAGS, MODEL_DESCRIPTIONS } from '~/lib/constants/models';
 
@@ -14,8 +25,6 @@ import { BEX_MODEL_TAGS, MODEL_DESCRIPTIONS } from '~/lib/constants/models';
  */
 
 const MODEL_ENV_KEYS = [
-  'BEX_RESPONSES_MODEL',
-  'OPENAI_BEX_MODEL',
   'BEX_MODEL_GPT4O',
   'BEX_MODEL_GPT41',
   'BEX_MODEL_GPT55',
@@ -29,6 +38,7 @@ beforeEach(() => {
     saved[key] = process.env[key];
     delete process.env[key];
   }
+  vi.mocked(getStringSetting).mockImplementation((_key, fallback) => Promise.resolve(fallback));
 });
 
 afterEach(() => {
@@ -42,55 +52,67 @@ afterEach(() => {
 });
 
 describe('resolveResponsesModel — gpt-5.5 / gpt-5.6 (B0-598)', () => {
-  it('resolves the new tags to their own model ids by default', () => {
+  it('resolves the new tags to their own model ids by default', async () => {
     // Verified against the live API 2026-08-20: gpt-5.5 -> gpt-5.5-2026-04-23, and gpt-5.6 is a
     // servable alias for gpt-5.6-sol even though it is absent from /v1/models.
-    expect(resolveResponsesModel('gpt-5.5')).toBe('gpt-5.5');
-    expect(resolveResponsesModel('gpt-5.6')).toBe('gpt-5.6');
+    expect(await resolveResponsesModel('gpt-5.5')).toBe('gpt-5.5');
+    expect(await resolveResponsesModel('gpt-5.6')).toBe('gpt-5.6');
   });
 
-  it('honours BEX_MODEL_GPT55 / BEX_MODEL_GPT56 overrides', () => {
+  it('honours BEX_MODEL_GPT55 / BEX_MODEL_GPT56 overrides', async () => {
     process.env.BEX_MODEL_GPT55 = 'gpt-5.5-2026-04-23';
     process.env.BEX_MODEL_GPT56 = 'gpt-5.6-terra';
 
-    expect(resolveResponsesModel('gpt-5.5')).toBe('gpt-5.5-2026-04-23');
-    expect(resolveResponsesModel('gpt-5.6')).toBe('gpt-5.6-terra');
+    expect(await resolveResponsesModel('gpt-5.5')).toBe('gpt-5.5-2026-04-23');
+    expect(await resolveResponsesModel('gpt-5.6')).toBe('gpt-5.6-terra');
   });
 
-  it('keeps the two overrides independent of each other and of the older tags', () => {
+  it('keeps the two overrides independent of each other and of the older tags', async () => {
     process.env.BEX_MODEL_GPT55 = 'pinned-55';
 
-    expect(resolveResponsesModel('gpt-5.5')).toBe('pinned-55');
-    expect(resolveResponsesModel('gpt-5.6')).toBe('gpt-5.6');
-    expect(resolveResponsesModel('gpt-4.1')).toBe('gpt-4.1');
-    expect(resolveResponsesModel('gpt-4o')).toBe('gpt-4o');
+    expect(await resolveResponsesModel('gpt-5.5')).toBe('pinned-55');
+    expect(await resolveResponsesModel('gpt-5.6')).toBe('gpt-5.6');
+    expect(await resolveResponsesModel('gpt-4.1')).toBe('gpt-4.1');
+    expect(await resolveResponsesModel('gpt-4o')).toBe('gpt-4o');
   });
 
-  it('does not let the fleet-wide preview default capture a named tag', () => {
+  it('does not let the fleet-wide preview default capture a named tag', async () => {
     // BEX_RESPONSES_MODEL only moves `preview`; naming a model must still get that model.
-    process.env.BEX_RESPONSES_MODEL = 'gpt-4o-mini';
+    vi.mocked(getStringSetting).mockImplementation((key, fallback) =>
+      Promise.resolve(key === 'BEX_RESPONSES_MODEL' ? 'gpt-4o-mini' : fallback),
+    );
 
-    expect(resolveResponsesModel('preview')).toBe('gpt-4o-mini');
-    expect(resolveResponsesModel('gpt-5.5')).toBe('gpt-5.5');
-    expect(resolveResponsesModel('gpt-5.6')).toBe('gpt-5.6');
+    expect(await resolveResponsesModel('preview')).toBe('gpt-4o-mini');
+    expect(await resolveResponsesModel('gpt-5.5')).toBe('gpt-5.5');
+    expect(await resolveResponsesModel('gpt-5.6')).toBe('gpt-5.6');
   });
 });
 
 describe('resolveResponsesModel — pre-existing behaviour is unchanged', () => {
-  it('resolves preview from BEX_RESPONSES_MODEL, then OPENAI_BEX_MODEL, then gpt-4.1-mini', () => {
-    expect(resolveResponsesModel('preview')).toBe('gpt-4.1-mini');
-    expect(resolveResponsesModel(undefined)).toBe('gpt-4.1-mini');
-    expect(resolveResponsesModel('')).toBe('gpt-4.1-mini');
+  it('resolves preview from the BEX_RESPONSES_MODEL settings row, defaulting to gpt-4.1-mini', async () => {
+    expect(await resolveResponsesModel('preview')).toBe('gpt-4.1-mini');
+    expect(await resolveResponsesModel(undefined)).toBe('gpt-4.1-mini');
+    expect(await resolveResponsesModel('')).toBe('gpt-4.1-mini');
 
-    process.env.OPENAI_BEX_MODEL = 'from-legacy-var';
-    expect(resolveResponsesModel('preview')).toBe('from-legacy-var');
-
-    process.env.BEX_RESPONSES_MODEL = 'from-primary-var';
-    expect(resolveResponsesModel('preview')).toBe('from-primary-var');
+    // B0-757 — the row accepts any concrete model id (e.g. a dated snapshot), same as the env vars
+    // it replaced; it is not restricted to BEX_MODEL_TAGS.
+    vi.mocked(getStringSetting).mockImplementation((key, fallback) =>
+      Promise.resolve(key === 'BEX_RESPONSES_MODEL' ? 'gpt-4.1-mini-2026-01-01' : fallback),
+    );
+    expect(await resolveResponsesModel('preview')).toBe('gpt-4.1-mini-2026-01-01');
   });
 
-  it('still throws for the custom tag, which is why it is not offered in any dropdown', () => {
-    expect(() => resolveResponsesModel('custom')).toThrow(/Custom model tag is not configured/);
+  it('refuses to store "preview" as its own default (would resolve to itself)', async () => {
+    vi.mocked(getStringSetting).mockImplementation((key, fallback) =>
+      Promise.resolve(key === 'BEX_RESPONSES_MODEL' ? 'preview' : fallback),
+    );
+    expect(await resolveResponsesModel('preview')).toBe('gpt-4.1-mini');
+  });
+
+  it('still throws for the custom tag, which is why it is not offered in any dropdown', async () => {
+    await expect(resolveResponsesModel('custom')).rejects.toThrow(
+      /Custom model tag is not configured/,
+    );
   });
 });
 
@@ -100,11 +122,11 @@ describe('BEX_MODEL_TAGS (B0-599)', () => {
     expect(BEX_MODEL_TAGS).toContain('gpt-5.6');
   });
 
-  it('resolves every selectable tag to a non-empty id, and never to the throwing custom path', () => {
+  it('resolves every selectable tag to a non-empty id, and never to the throwing custom path', async () => {
     // The invariant that matters: nothing offered in the UI can fail to resolve.
     for (const tag of BEX_MODEL_TAGS) {
-      expect(() => resolveResponsesModel(tag)).not.toThrow();
-      expect(resolveResponsesModel(tag).length).toBeGreaterThan(0);
+      const resolved = await resolveResponsesModel(tag);
+      expect(resolved.length).toBeGreaterThan(0);
     }
   });
 

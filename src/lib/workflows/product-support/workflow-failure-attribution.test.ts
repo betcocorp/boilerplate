@@ -146,6 +146,15 @@ vi.mock('~/lib/workflows/product-support/validator', () => ({
     ungroundedCategories: [],
     ungroundedDetails: [],
   }),
+  // B0-699 — the workflow now also runs this guardrail unconditionally alongside the one above;
+  // this suite's fixtures never cite [doc:verified-facts], so `applicable: false` is the neutral,
+  // always-passing shape.
+  evaluateVerifiedFactsDilutionCitation: () => ({
+    applicable: false,
+    grounded: true,
+    citedTokens: [],
+    ungroundedTokens: [],
+  }),
   // B0-389 — the workflow now records the validator/revision prompt and model on their steps.
   REVISION_SYSTEM_PROMPT: 'Revise the draft answer to fix validator issues.',
   resolveValidatorModel: () => 'gpt-test',

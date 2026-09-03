@@ -340,6 +340,17 @@ function filterEfficacyByOrganism(facts: ProductLineFacts, needle?: string): Pro
  *
  * B0-634: delegates to the batch resolver so both paths share one tier-aware merge — same two round
  * trips as before (one entity query, one facts/efficacy query).
+ *
+ * B0-792 — this merges product-tier facts from EVERY product sharing `productLineKey`, which is
+ * correct only when `product_line_key` is a trustworthy grouping. At least one grouping
+ * (`product_line_key` "Drain Maintainer", 1FFF1D45-36AC-4D67-9BC5-CDC8626830E3) has been confirmed
+ * to bucket ~10 unrelated finished-goods products together (a source-ERP mapping-gap defect: the
+ * legacy `DSLProdLn`/`prod_line_id` code these were ingested against, "2607", is reused/coincidental
+ * across unrelated legacy SKUs — see the ingestion joins in
+ * `supabase/migrations/20260723120000_backfill_active_product_entities.sql` and
+ * `20260723130000_link_active_product_entities_to_lines.sql`). Callers that have already resolved a
+ * SPECIFIC product (a `productKey`) must call `fetchFactsForProduct` instead, which pins to that
+ * product's own tier rows and only merges the broader group when no specific product was resolved.
  */
 export async function fetchFactsForProductLineKey(
   productLineKey: string,
@@ -347,6 +358,127 @@ export async function fetchFactsForProductLineKey(
 ): Promise<ProductLineFacts | null> {
   const byKey = await fetchFactsForProductLineKeys([productLineKey], organism);
   return byKey.get(productLineKey) ?? null;
+}
+
+/** One {productLineKey, productKey} lookup request for `fetchFactsForProductBatch`. */
+export type ProductFactsRequest = {
+  productLineKey: string;
+  /** The specific resolved SKU/product entity's `product_key`, or null when only a line was resolved. */
+  productKey: string | null;
+};
+
+/**
+ * B0-792 — batched counterpart to `fetchFactsForProduct`: resolves N `{productLineKey, productKey}`
+ * requests in two round trips total (one entity lookup, one facts/efficacy lookup), returning
+ * results ALIGNED BY INDEX with the input array (not deduped/keyed by product_line_key, since two
+ * requests can legitimately share a `productLineKey` but pin to different `productKey`s).
+ *
+ * For each request: when `productKey` is set, product-tier facts are pinned to THAT product's own
+ * entity row only — never every sibling entity sharing `productLineKey`. This is the fix for the
+ * cross-product-citation bug: a bogus/over-broad `product_line_key` grouping can no longer leak one
+ * product's dilution/efficacy figure into another's answer, as long as the caller resolved a
+ * specific product. When `productKey` is null (no specific product resolved), behavior is
+ * unchanged from the pre-B0-792 line-wide merge — this is the documented, intentional fallback.
+ */
+export async function fetchFactsForProductBatch(
+  requests: ProductFactsRequest[],
+  organism?: string,
+): Promise<(ProductLineFacts | null)[]> {
+  if (requests.length === 0) {
+    return [];
+  }
+
+  const rag = getSupabaseServiceRoleClient().schema('rag');
+  const lineKeys = [...new Set(requests.map((r) => r.productLineKey).filter((k) => k && k.trim()))];
+  const productKeys = [
+    ...new Set(requests.map((r) => r.productKey).filter((k): k is string => Boolean(k && k.trim()))),
+  ];
+
+  const [lineEntitiesRes, productEntitiesRes] = await Promise.all([
+    lineKeys.length > 0
+      ? rag
+          .from('entity')
+          .select('id, product_line_key')
+          .eq('entity_type', 'product_line')
+          .in('product_line_key', lineKeys)
+      : Promise.resolve({ data: [] as { id: string; product_line_key: string | null }[], error: null }),
+    productKeys.length > 0
+      ? rag.from('entity').select('id, product_key').eq('entity_type', 'product').in('product_key', productKeys)
+      : Promise.resolve({ data: [] as { id: string; product_key: string | null }[], error: null }),
+  ]);
+
+  const lineEntityIdByKey = new Map<string, string>();
+  for (const row of lineEntitiesRes.data ?? []) {
+    if (row.product_line_key && !lineEntityIdByKey.has(row.product_line_key)) {
+      lineEntityIdByKey.set(row.product_line_key, row.id);
+    }
+  }
+  const productEntityIdByKey = new Map<string, string>();
+  for (const row of productEntitiesRes.data ?? []) {
+    if (row.product_key && !productEntityIdByKey.has(row.product_key)) {
+      productEntityIdByKey.set(row.product_key, row.id);
+    }
+  }
+
+  const entityIds = new Set<string>();
+  for (const id of lineEntityIdByKey.values()) entityIds.add(id);
+  for (const id of productEntityIdByKey.values()) entityIds.add(id);
+
+  const rows = entityIds.size > 0 ? await fetchFactAndEfficacyRows([...entityIds]) : null;
+  const efficacyByEntity = rows ? groupEfficacyByEntity(rows.efficacyRows) : new Map<string, ProductEfficacyFact[]>();
+  const factRowsByEntity = new Map<string, FactRow[]>();
+  if (rows) {
+    for (const row of rows.factRows) {
+      const list = factRowsByEntity.get(row.entity_id) ?? [];
+      list.push(row);
+      factRowsByEntity.set(row.entity_id, list);
+    }
+  }
+
+  const needle = organism?.trim().toLowerCase();
+
+  return requests.map(({ productLineKey, productKey }) => {
+    const lineEntityId = lineEntityIdByKey.get(productLineKey) ?? null;
+    const productEntityId = productKey ? productEntityIdByKey.get(productKey) ?? null : null;
+    if (!lineEntityId && !productEntityId) {
+      return null;
+    }
+
+    // Line tier is the base, exactly as in fetchFactsForProductLineKeys.
+    const lineRow = lineEntityId
+      ? (factRowsByEntity.get(lineEntityId) ?? []).find((row) => row.product_key == null)
+      : undefined;
+    const lineEfficacy = lineEntityId ? efficacyByEntity.get(lineEntityId) ?? [] : [];
+    const base = lineRow
+      ? factsFromRow(lineRow, lineEfficacy)
+      : factsWithoutScalarRow(lineEntityId ?? productEntityId!, lineEfficacy);
+
+    // B0-792 — pinned: only THIS product's own tier rows contribute, never every sibling entity
+    // that happens to share `productLineKey`.
+    const productTierRows = productEntityId ? factRowsByEntity.get(productEntityId) ?? [] : [];
+    const productTierEfficacy = productEntityId ? efficacyByEntity.get(productEntityId) ?? [] : [];
+
+    const merged = mergeProductTierFacts(base, productTierRows, productTierEfficacy);
+    const filtered = filterEfficacyByOrganism(merged, needle);
+    return hasAnyScalar(filtered) ? filtered : null;
+  });
+}
+
+/**
+ * B0-792 — fact-only lookup PINNED to a specific resolved product (SKU), falling back to the
+ * broader `fetchFactsForProductLineKey` line-wide merge only when no `productKey` was resolved.
+ * See `fetchFactsForProductBatch` for the merge rule and why this matters.
+ */
+export async function fetchFactsForProduct(
+  productLineKey: string,
+  productKey: string | null,
+  organism?: string,
+): Promise<ProductLineFacts | null> {
+  if (!productKey) {
+    return fetchFactsForProductLineKey(productLineKey, organism);
+  }
+  const [result] = await fetchFactsForProductBatch([{ productLineKey, productKey }], organism);
+  return result ?? null;
 }
 
 /**

@@ -17,6 +17,7 @@ import {
   resolveProductLineFromMatches,
   type ProductLineResolutionResult,
 } from '~/lib/retrieval/product-line-resolution';
+import { getProductLineLockThresholds } from '~/lib/settings/settings-service';
 import {
   DEFAULT_MIN_SIMILARITY,
   selectCuratedMatches,
@@ -171,10 +172,18 @@ export type ProductKnowledgeRetrievalSummary = {
    * specifically, whether it came from `resolveProductEntityByName`'s alias-table match (exact or
    * tokenized-fuzzy) versus a non-alias resolution path (prod_line_id / title match), versus a
    * caller that supplied a key without going through that resolver at all. Lets eval runs separate
-   * "alias-anchored" retrieval from other explicit-key retrieval. `null` for every other strategy
-   * (broad/anchored-via-similarity paths never have an explicit key to source).
+   * "alias-anchored" retrieval from other explicit-key retrieval.
+   *
+   * B0-693 — also now populated as `'broad_similarity_probe'` when `strategy` is
+   * `'anchored_only'`/`'anchored_with_broad_fallback'` AND `productLineResolution.lockedProductLineKey`
+   * is non-null: the previously-always-`null` value here made it impossible to tell, from a
+   * persisted run, whether a locked line was alias-anchored (high-precision) or came from the
+   * broad-probe similarity lock alone (`resolveProductLineFromMatches`) — exactly the distinction
+   * needed to self-diagnose a wrong-lock regression like this ticket's. Still `null` when no key was
+   * ever supplied/locked at all (`broad_only`, `broad_resolution_disabled`, or a broad probe that
+   * declined to lock).
    */
-  explicitKeySource: ProductEntityResolutionSource | 'unspecified' | null;
+  explicitKeySource: ProductEntityResolutionSource | 'unspecified' | 'broad_similarity_probe' | null;
   /**
    * B0-490 — max `similarity` across the winning search's raw candidates (the matches
    * `searchProductChunks` returned, before `selectCuratedMatches` filtered/deduped/truncated the
@@ -290,6 +299,26 @@ function retrievalElapsedMs(startedAt: number): number {
  * misstatement, not a relevance miss, so they get a stricter rule than everything else.
  */
 const REGULATED_SAFETY_DOCUMENT_KINDS = new Set(['sds']);
+
+/**
+ * B0-700 investigation note: widening this withholding to `label`-kind sources whenever a
+ * claim-like query is unanchored was tried and REVERTED — it regressed two already-hardened,
+ * deliberate regression tests: B0-272 (`b0272-section-type-filter-regression.test.ts`, live-DB —
+ * an unanchored "GE Fight Bac RTU contact time" query must still surface that label chunk even
+ * though nothing locked) and B0-556 (`b0556-cross-line-sds-regression.test.ts`'s "leaves non-SDS
+ * cross-line sources alone" case, whose `SAFETY_QUERY` also matches `isClaimLikeQuery` via
+ * "hazards"/"first aid"/"ppe"). Both encode a deliberate prior decision: unanchored label/profile
+ * content is a relevance problem, not a regulated-data one — label content frequently IS the
+ * right document even when formal resolution doesn't "lock" (e.g. the query names the product
+ * directly and wins on text similarity alone). B0-700's actual reported defect (dilution numbers
+ * transcribed from an unanchored, WRONG product's label) is addressed instead at the generation
+ * layer: the specialist prompts now require a decline/clarify response instead of substituting when
+ * `aliasResolution.outcome` is `no_alias_match`/`ambiguous_alias` for a regulated-value question —
+ * see `product-support-prompts.ts` and `bathroom-specialist-system-prompt.ts` for the added rule.
+ * The structured-facts gate below (`factsForSources`) still gates the OTHER leak vector (a
+ * `rag.product_line_fact`/`rag.product_efficacy` value attributed to an unanchored entity) since
+ * that has no equivalent "still useful even unlocked" case and no test relies on it leaking.
+ */
 
 /**
  * B0-556 — withholds SDS-kind sources that are not provably on the resolved product line.
@@ -480,15 +509,40 @@ async function entityContextBlockForSources(sources: CuratedSource[]): Promise<s
   return buildEntityContextBlock(map);
 }
 
+/**
+ * B0-700 — a structured dilution/efficacy fact (`rag.product_line_fact` / `rag.product_efficacy`)
+ * is regulated data exactly like an SDS hazard statement (see `withholdUnanchoredSafetySources`);
+ * it must not be attributed to an entity whose product line wasn't provably the one this query
+ * resolved to. `resolvedProductLineKey` is `retrieval.productLineResolution.lockedProductLineKey`
+ * from the SAME query — null on every unlocked/ambiguous path (`broad_only`, and
+ * `resolution_disabled`), in which case NO source's facts may be surfaced (mirrors
+ * `withholdUnanchoredSafetySources`'s "no resolved line, no regulated content attributable" rule
+ * exactly).
+ *
+ * `sourcesMayBeUnfiltered` must be true only for `anchored_with_broad_fallback`, whose sources come
+ * from the unfiltered broad pass despite a resolved line — there, only sources actually on that
+ * line contribute. `explicit_product_line` and `anchored_only` are already SQL-filtered and are
+ * passed as `false` (the default): per-source filtering there would wrongly drop a legitimately
+ * anchored source whose `productLineKey` is null (the RPC also matches on `source_record.source_pk`
+ * — see `withholdUnanchoredSafetySources`'s same caveat).
+ */
 async function factsForSources(
   sources: CuratedSource[],
+  resolvedProductLineKey: string | null,
+  options: { sourcesMayBeUnfiltered?: boolean } = {},
 ): Promise<{ facts: Map<string, ProductLineFacts>; factsBlock: string | null }> {
-  const entityIds = sources
+  const anchoredSources =
+    resolvedProductLineKey === null
+      ? []
+      : options.sourcesMayBeUnfiltered
+        ? sources.filter((s) => s.productLineKey === resolvedProductLineKey)
+        : sources;
+  const entityIds = anchoredSources
     .map((s) => s.entityId)
     .filter((id): id is string => id != null);
   const facts = await fetchProductLineFacts(entityIds);
   const titles = new Map(
-    sources
+    anchoredSources
       .filter((s) => s.entityId != null)
       .map((s) => [s.entityId as string, s.title] as const),
   );
@@ -592,9 +646,15 @@ export async function ragQueryForProductKnowledgeWithMeta(
   // `runProductKnowledgeQuery` applies the same parallelisation to all four retrieval paths.
   // Rejection behaviour is unchanged: either enrichment failing still fails the whole call, as
   // it did when both were awaited in sequence.
+  // B0-700 — thread the SAME resolved-line outcome `withholdUnanchoredSafetySources` already used
+  // for this query into `factsForSources`, so a structured dilution/efficacy fact gets the same
+  // "no resolved line, no regulated content attributable" treatment as an SDS.
+  const lockedProductLineKey = base.retrieval.productLineResolution?.lockedProductLineKey ?? null;
   const [entityContextBlock, { facts, factsBlock }] = await Promise.all([
     entityContextBlockForSources(base.sources),
-    factsForSources(base.sources),
+    factsForSources(base.sources, lockedProductLineKey, {
+      sourcesMayBeUnfiltered: base.retrieval.strategy === 'anchored_with_broad_fallback',
+    }),
   ]);
   return { ...base, entityContextBlock, facts, factsBlock };
 }
@@ -747,6 +807,9 @@ async function runProductKnowledgeQuery(input: {
           candidates: [],
           lockedProductLineKey: explicitKey,
           lockReason: 'explicit_filter',
+          // B0-693 — mirrors the sibling `explicitKeySource` above so the distinction survives
+          // into `final_output.productLineLock` (see `productLineLockSchema`'s doc comment).
+          explicitKeySource: input.productLineKeySource ?? 'unspecified',
         },
         rawTopSimilarity: maxSimilarity(rawMatches),
         selectedTopSimilarity: maxSimilarity(curated),
@@ -804,6 +867,7 @@ async function runProductKnowledgeQuery(input: {
           candidates: [],
           lockedProductLineKey: null,
           lockReason: 'resolution_disabled',
+          explicitKeySource: null,
         },
         rawTopSimilarity: maxSimilarity(result.matches),
         selectedTopSimilarity: maxSimilarity(curated),
@@ -827,12 +891,30 @@ async function runProductKnowledgeQuery(input: {
     excludeKnowledgeCategories,
   });
 
-  // B0-693 — a query targeting a specific GHS section (hazard, first aid, dilution/contact-time,
-  // EPA reg, etc.) is regulated content: require the margin-over-runner-up check even when the top
-  // score alone would otherwise clear the absolute confidence bar. General queries (`sectionType ===
-  // null`) are unaffected — see `resolveProductLineFromMatches`'s doc comment.
+  // B0-693 — margin-over-runner-up corroboration is now required UNCONDITIONALLY, not only when
+  // `sectionType !== null`. The `sectionType`-only carve-out was confirmed incomplete: a general
+  // query with no explicit GHS section (e.g. "what is the dilution ratio for DAILY DISINFECT" via
+  // `search_product_docs`'s freeform path, which never sets `sectionType`) still hit the bare
+  // absolute-threshold shortcut with zero corroboration -- a close, uncorroborated runner-up could
+  // silently win (confirmed live: workflow run 61cc4ce9-bc1b-4d08-9b88-bc7d52c7365b locked "Sen
+  // Emerging Storm Con" at 0.6876 over a runner-up at 0.6843, a ~0.003 spread, well under
+  // `MIN_LOCK_MARGIN`). Reaching this broad-probe path at all already means alias resolution
+  // (`resolveProductEntityByName`, upstream in product-tools.ts) found no confident match --
+  // otherwise the `explicitKey` branch above would have anchored retrieval instead -- so alias
+  // resolution having declined is already an intrinsic property of every call that gets here; no
+  // separate signal needs to be threaded through for that. Removing the carve-out costs nothing on
+  // a genuinely clear top score: when there is no runner-up, or a wide spread, the margin check
+  // passes trivially (see `resolveProductLineFromMatches`'s `spread` default of `1` with no second
+  // candidate) -- it only changes the outcome for exactly the thin-margin case this ticket reports.
+  // B0-757 — the three lock thresholds now come from `public.settings` (admin-editable), not the
+  // hardcoded fallbacks baked into `resolveProductLineFromMatches` itself; those stay as the
+  // function's own defaults for its unit tests and for any other caller.
+  const lockThresholds = await getProductLineLockThresholds();
   const resolution = resolveProductLineFromMatches(broadResult.matches, {
-    requireMarginForHighConfidence: sectionType !== null,
+    requireMarginForHighConfidence: true,
+    minLockSimilarity: lockThresholds.minLockSimilarity,
+    minLockMargin: lockThresholds.minLockMargin,
+    highConfidenceAbsolute: lockThresholds.highConfidenceAbsolute,
   });
   const requiredDocumentKindsForQuery = resolveRequiredDocumentKinds(input.query, sectionType);
 
@@ -873,7 +955,9 @@ async function runProductKnowledgeQuery(input: {
         broadCuratedCount: broadCurated.length,
         anchoredCuratedCount: 0,
         explicitKeySource: null,
-        productLineResolution: resolution,
+        // B0-693 — this branch only runs when `resolution.lockedProductLineKey` is null (nothing
+        // locked), so there is genuinely no key source to mirror here.
+        productLineResolution: { ...resolution, explicitKeySource: null },
         rawTopSimilarity: maxSimilarity(broadResult.matches),
         selectedTopSimilarity: maxSimilarity(broadCurated),
         droppedByFilterCount: Math.max(0, broadResult.matches.length - broadCurated.length),
@@ -953,8 +1037,12 @@ async function runProductKnowledgeQuery(input: {
       withheldUnanchoredSdsCount: withheldSds,
       broadCuratedCount: broadSelected.length,
       anchoredCuratedCount: anchoredSelected.length,
-      explicitKeySource: null,
-      productLineResolution: resolution,
+      // B0-693 — this branch only runs when `resolution.lockedProductLineKey` is non-null (the
+      // no-lock case returns earlier above), so a real lock always came from the broad similarity
+      // probe here — never an alias resolution, which would have taken the `explicit_product_line`
+      // branch instead.
+      explicitKeySource: 'broad_similarity_probe',
+      productLineResolution: { ...resolution, explicitKeySource: 'broad_similarity_probe' },
       rawTopSimilarity: maxSimilarity(
         shouldUseBroadFallback ? broadResult.matches : anchoredResult.matches,
       ),

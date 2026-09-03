@@ -169,7 +169,7 @@ export async function generateReport(testResultId: string): Promise<ReportState>
   // B0-765 — read once per call so a report already in flight can't have half its cases graded
   // on one model and the other half on a mid-run settings change.
   const modelTag = await getStringSetting('REPORT_GRADING_MODEL', DEFAULT_MODEL_TAG);
-  const model = resolveResponsesModel(modelTag);
+  const model = await resolveResponsesModel(modelTag);
   // B0-719/B0-720 — read once, and only ever written into a *fresh* state. A report already
   // part-way through keeps the pass count and threshold it started with, so changing the setting
   // mid-report can never leave one half of its cases graded three times and the other half once.

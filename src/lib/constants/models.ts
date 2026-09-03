@@ -45,12 +45,13 @@ export function isBexModelTag(value: string): value is BexModelTag {
  * costs. Rates are the published standard $/Mtok input→output seeded in `public.model_pricing`;
  * they are a decision aid, not a billing source — the cost views are.
  *
- * `custom` is intentionally absent: `resolveResponsesModel` THROWS on that tag unless
- * `BEX_RESPONSES_MODEL` is set, so offering it in a dropdown just produces a failed run.
+ * `custom` is intentionally absent: `resolveResponsesModel` unconditionally THROWS on that tag (a
+ * caller must pass a concrete model id directly instead), so offering it in a dropdown just
+ * produces a failed run.
  */
 export const MODEL_DESCRIPTIONS: Record<BexModelTag, string> = {
   preview:
-    'Environment default (BEX_RESPONSES_MODEL, currently gpt-4.1-mini). Use this as the A/B baseline.',
+    'Settings-table default (BEX_RESPONSES_MODEL row at /admin/settings; gpt-4.1-mini unless changed). Use this as the A/B baseline.',
   'gpt-4o': 'Older general-purpose model. $2.50 → $10.00 per Mtok.',
   'gpt-4.1-mini': 'Cheapest option and what `preview` resolves to today. $0.40 → $1.60 per Mtok.',
   'gpt-4.1': 'Current validator/report default. $2.00 → $8.00 per Mtok.',

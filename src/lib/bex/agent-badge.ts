@@ -13,8 +13,17 @@ export function getAgentBadgeClassName(
       return 'border-purple-600/45 bg-purple-600/12 text-purple-900';
     case 'dilution':
       return 'border-amber-600/45 bg-amber-600/12 text-amber-900';
-    case 'floor':
+    // B0-746 — the former single `floor` badge color is split four ways, in the same green/teal
+    // family so a glance still reads "a floor specialist answered", with a distinct shade per
+    // substrate.
+    case 'floor_vct':
       return 'border-emerald-600/45 bg-emerald-600/12 text-emerald-900';
+    case 'floor_wood_sport':
+      return 'border-lime-600/45 bg-lime-600/12 text-lime-900';
+    case 'floor_concrete':
+      return 'border-teal-600/45 bg-teal-600/12 text-teal-900';
+    case 'floor_stg':
+      return 'border-cyan-600/45 bg-cyan-600/12 text-cyan-900';
     case 'recommendations':
       return 'border-rose-600/45 bg-rose-600/12 text-rose-900';
     case 'cross_reference':

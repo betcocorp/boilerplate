@@ -149,7 +149,7 @@ export async function analyzeRunComparison(params: {
 
   const userContent = buildComparisonAnalysisPayload(params);
   const openai = getOpenAIClient();
-  const model = resolveResponsesModel(undefined);
+  const model = await resolveResponsesModel(undefined);
 
   const completion = await openai.chat.completions.create({
     model,

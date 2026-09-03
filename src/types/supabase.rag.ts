@@ -132,6 +132,8 @@ export type Database = {
           metadata: Json
           product_application: string | null
           profile_summary: string | null
+          project_number: string | null
+          source_lab: string | null
           source_record_id: string
           summary: string | null
           superseded_by_document_id: string | null
@@ -161,6 +163,8 @@ export type Database = {
           metadata?: Json
           product_application?: string | null
           profile_summary?: string | null
+          project_number?: string | null
+          source_lab?: string | null
           source_record_id: string
           summary?: string | null
           superseded_by_document_id?: string | null
@@ -190,6 +194,8 @@ export type Database = {
           metadata?: Json
           product_application?: string | null
           profile_summary?: string | null
+          project_number?: string | null
+          source_lab?: string | null
           source_record_id?: string
           summary?: string | null
           superseded_by_document_id?: string | null
@@ -1016,6 +1022,8 @@ export type Database = {
           metadata: Json
           product_application: string | null
           profile_summary: string | null
+          project_number: string | null
+          source_lab: string | null
           source_record_id: string
           summary: string | null
           superseded_by_document_id: string | null

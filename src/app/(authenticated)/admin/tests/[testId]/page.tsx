@@ -41,6 +41,7 @@ import {
   listTestResultsByTestId,
 } from '~/lib/tests/repository';
 import {
+  extractResolvedModelFromSummary,
   extractSearchRunEmbeddingSource,
   extractSearchRunMaxSimilarity,
   summarizePromptBundleVersions,
@@ -139,15 +140,26 @@ function extractRunModelTag(runOptions: unknown): string | null {
 }
 
 /**
- * B0-632 — the model a run was executed with, from `run_options.modelTag`. A tag is not a model id
- * (see `~/lib/constants/models`), so it is resolved the same way the run-detail page resolves it.
- *
- * `preview` is deliberately badged rather than shown as a bare model name: it resolves against
- * `BEX_RESPONSES_MODEL` at render time, so it reports today's default, not necessarily the model
- * that actually ran. Runs predating the option carry no tag at all and must stay an em dash —
+ * B0-632 / B0-757 — the model a run actually executed with. Prefers the model id persisted at run
+ * time (`summary.resolvedModel`, written once by `executeTestRun`, ~/lib/tests/run-executor.ts) —
+ * ground truth for what ran, immune to a later settings change. Falls back to re-resolving the
+ * stored tag ONLY for runs that predate that field, in which case the resolved id is badged as an
+ * approximation rather than shown as fact: it reports TODAY's `BEX_RESPONSES_MODEL` settings
+ * default, which may differ from what actually ran. Runs with no tag at all stay an em dash —
  * defaulting them to `preview` would invent a fact the row never recorded.
  */
-function RunModelLabel({ runOptions }: { runOptions: unknown }) {
+async function RunModelLabel({
+  runOptions,
+  summary,
+}: {
+  runOptions: unknown;
+  summary: unknown;
+}) {
+  const persisted = extractResolvedModelFromSummary(summary);
+  if (persisted) {
+    return <span title="Model this run actually executed on">{persisted}</span>;
+  }
+
   const tag = extractRunModelTag(runOptions);
 
   if (!tag) {
@@ -165,13 +177,13 @@ function RunModelLabel({ runOptions }: { runOptions: unknown }) {
     );
   }
 
-  const resolved = resolveResponsesModel(tag);
+  const resolved = await resolveResponsesModel(tag);
 
   if (tag === 'preview') {
     return (
       <span
         className="inline-flex items-center gap-1.5"
-        title={`Run recorded the "preview" tag, not a pinned model. "${resolved}" is the current environment default, resolved just now — it may differ from the model that actually ran.`}
+        title={`This run predates per-run model recording. "${resolved}" is today's BEX_RESPONSES_MODEL settings default, resolved just now — it may differ from the model that actually ran.`}
       >
         <span>{resolved}</span>
         <Badge className="px-1 py-0 text-[10px] font-normal" variant="outline">
@@ -585,7 +597,10 @@ export default async function AdminTestDetailsPage({
                         </TableCell>
                         <TableCell className="text-xs text-slate-600">
                           <div className="flex flex-col gap-1.5">
-                            <RunModelLabel runOptions={result.run_options} />
+                            <RunModelLabel
+                              runOptions={result.run_options}
+                              summary={result.summary}
+                            />
                             {/*
                               B0-351 — validator / agent mode / router chips alongside the resolved
                               model, so two runs of the same dataset that differ only in one of them

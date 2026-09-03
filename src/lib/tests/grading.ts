@@ -371,3 +371,100 @@ export function gradeChatTestResponse(params: {
   const base = evaluateTestOutcome(params);
   return withUnableToAssistFailureOverride(params.responseText, base, params.item);
 }
+
+/**
+ * B0-755 — a decline-ness verdict from an LLM judge, independent of any fixed phrase list.
+ * `rationale` is always populated (pass or fail) so a reviewer can see why the row was overridden.
+ */
+export type SemanticDeclineVerdict = {
+  isDecline: boolean;
+  rationale: string;
+};
+
+/**
+ * Injected so `gradeChatTestResponseAsync` stays free of any OpenAI/network dependency and fully
+ * unit-testable with a stub — the real implementation is `gradeSemanticDecline`
+ * (`~/lib/tests/decline-grader.ts`), wired in by the one caller that needs it (`./runner.ts`).
+ */
+export type SemanticDeclineChecker = (input: {
+  prompt: string;
+  responseText: string;
+  idealResponse: string | null;
+  expectedConcepts: string | null;
+  minimumConcepts: string | null;
+}) => Promise<SemanticDeclineVerdict>;
+
+/** Extra context `gradeChatTestResponseAsync` can hand the semantic-decline checker. */
+export type DeclineGradingContext = {
+  prompt: string;
+  idealResponse?: string | null;
+  expectedConcepts?: string | null;
+  minimumConcepts?: string | null;
+};
+
+export type AsyncEvaluationOutcome = EvaluationOutcome & {
+  /** Present only when the semantic-decline fallback below actually ran. */
+  semanticDeclineCheck?: SemanticDeclineVerdict;
+};
+
+/**
+ * B0-755 — async superset of `gradeChatTestResponse`.
+ *
+ * The exact-string fast path (`matchesCanonicalDeclineCopy`) and the phrase/regex heuristics in
+ * `responseIndicatesDeclineStyleAnswer` stay first and are unchanged: a response that already
+ * matches the app's own canonical decline copy, or one of the known phrasings, is unambiguously a
+ * pass and costs nothing extra. This only escalates to an LLM semantic-decline judgement when ALL
+ * of the following hold — i.e. exactly the class of bug B0-755 reports (a real decline in
+ * different words), never a positive-expectation row or a row the heuristics already decided:
+ *
+ *   - the row expects no answer (`expected_should_answer === false`)
+ *   - the model produced a non-empty response
+ *   - the heuristic above did NOT recognize it as a decline (`base.passed === false`)
+ *
+ * A checker failure (network/parse error) falls back to the deterministic verdict rather than
+ * silently passing or failing the row — `gradeSemanticDecline`'s own caller decides how to log it.
+ */
+export async function gradeChatTestResponseAsync(params: {
+  item: GradableExpectations;
+  hasError: boolean;
+  responseText: string;
+  context: DeclineGradingContext;
+  checkSemanticDecline: SemanticDeclineChecker;
+}): Promise<AsyncEvaluationOutcome> {
+  const base = gradeChatTestResponse(params);
+
+  if (base.passed) {
+    return base;
+  }
+
+  if (shouldExpectAnswer(params.item) !== false) {
+    return base;
+  }
+
+  if (!params.responseText.trim()) {
+    return base;
+  }
+
+  let verdict: SemanticDeclineVerdict;
+  try {
+    verdict = await params.checkSemanticDecline({
+      prompt: params.context.prompt,
+      responseText: params.responseText,
+      idealResponse: params.context.idealResponse ?? null,
+      expectedConcepts: params.context.expectedConcepts ?? null,
+      minimumConcepts: params.context.minimumConcepts ?? null,
+    });
+  } catch {
+    return base;
+  }
+
+  if (verdict.isDecline) {
+    return { passed: true, failureReason: null, semanticDeclineCheck: verdict };
+  }
+
+  return {
+    passed: false,
+    failureReason: `${base.failureReason ?? ''} Semantic decline check: ${verdict.rationale}`.trim(),
+    semanticDeclineCheck: verdict,
+  };
+}

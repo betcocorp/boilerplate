@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { resolveKnowledgeCategoryExclusions } from '~/lib/tools/product-tools';
 
-describe('resolveKnowledgeCategoryExclusions (B0-780)', () => {
+describe('resolveKnowledgeCategoryExclusions (B0-780, split B0-746)', () => {
   it('excludes both floor-care categories for the bathroom specialist regardless of wording', () => {
     expect(resolveKnowledgeCategoryExclusions('bathroom', 'what are common restroom mistakes')).toEqual(
       ['vct', 'sportszone'],
@@ -13,30 +13,34 @@ describe('resolveKnowledgeCategoryExclusions (B0-780)', () => {
     ]);
   });
 
-  it('excludes vct for a wood/sport-floor query under the floor specialist', () => {
+  it('excludes vct unconditionally for the wood/sport floor specialist', () => {
     expect(
-      resolveKnowledgeCategoryExclusions('floor', 'humidity levels for a wood gym floor'),
+      resolveKnowledgeCategoryExclusions('floor_wood_sport', 'humidity levels for a wood gym floor'),
     ).toEqual(['vct']);
-    expect(resolveKnowledgeCategoryExclusions('floor', 'hardwood athletic floor finish')).toEqual([
+    // The specialist id itself resolves the domain post-B0-746 — query wording no longer matters.
+    expect(resolveKnowledgeCategoryExclusions('floor_wood_sport', 'vinyl composition tile finish')).toEqual([
       'vct',
     ]);
   });
 
-  it('excludes sportszone for a VCT query under the floor specialist', () => {
+  it('excludes sportszone unconditionally for the VCT specialist', () => {
     expect(
-      resolveKnowledgeCategoryExclusions('floor', 'why did the VCT floor not fully strip'),
+      resolveKnowledgeCategoryExclusions('floor_vct', 'why did the VCT floor not fully strip'),
     ).toEqual(['sportszone']);
-    expect(
-      resolveKnowledgeCategoryExclusions('floor', 'vinyl composition tile finish selection'),
-    ).toEqual(['sportszone']);
+    expect(resolveKnowledgeCategoryExclusions('floor_vct', 'hardwood gym floor finish')).toEqual([
+      'sportszone',
+    ]);
   });
 
-  it('excludes nothing for an ambiguous or substrate-agnostic floor query', () => {
-    expect(resolveKnowledgeCategoryExclusions('floor', 'how do I select the right floor finish')).toEqual(
-      [],
-    );
-    // Both domains named — an actually ambiguous case, not one this ticket resolves.
-    expect(resolveKnowledgeCategoryExclusions('floor', 'wood vs VCT floor finish')).toEqual([]);
+  it('excludes both floor-care categories for concrete and STG (no dedicated ingest folder)', () => {
+    expect(resolveKnowledgeCategoryExclusions('floor_concrete', 'concrete sealer coverage')).toEqual([
+      'vct',
+      'sportszone',
+    ]);
+    expect(resolveKnowledgeCategoryExclusions('floor_stg', 'stone tile and grout cleaner dilution')).toEqual([
+      'vct',
+      'sportszone',
+    ]);
   });
 
   it('excludes nothing for other specialists (product/dilution/recommendations/cross_reference)', () => {

@@ -22,6 +22,8 @@ vi.mock('~/lib/retrieval/product-facts', () => ({
   buildFactsBlock: vi.fn(() => 'Rendered facts block'),
   fetchFactsForProductLineKey: vi.fn(async () => null),
   fetchFactsForProductLineKeys: vi.fn(async () => new Map()),
+  fetchFactsForProduct: vi.fn(async () => null),
+  fetchFactsForProductBatch: vi.fn(async () => []),
 }));
 
 vi.mock('~/lib/retrieval/efficacy-lab-report', () => ({
@@ -34,7 +36,7 @@ vi.mock('~/lib/retrieval/fastdraw-dilution', () => ({
 }));
 
 import { fetchFastDrawDilution } from '~/lib/retrieval/fastdraw-dilution';
-import { fetchFactsForProductLineKey } from '~/lib/retrieval/product-facts';
+import { fetchFactsForProduct } from '~/lib/retrieval/product-facts';
 import { executeProductTool } from '~/lib/tools/product-tools';
 
 function fastDrawLookup(overrides: Partial<Parameters<typeof fetchFastDrawDilution>[0]> = {}) {
@@ -61,7 +63,7 @@ beforeEach(() => {
 describe('get_efficacy_data: fastDrawDilution (B0-636)', () => {
   it('populates fastDrawDilution when a FastDraw chunk exists, without touching facts', async () => {
     vi.mocked(fetchFastDrawDilution).mockResolvedValueOnce(fastDrawLookup());
-    vi.mocked(fetchFactsForProductLineKey).mockResolvedValueOnce(null);
+    vi.mocked(fetchFactsForProduct).mockResolvedValueOnce(null);
 
     const out = await executeProductTool('get_efficacy_data', { productId: 'pH7Q' });
 
@@ -84,7 +86,7 @@ describe('get_efficacy_data: fastDrawDilution (B0-636)', () => {
 
   it('returns fastDrawDilution: null and leaves facts unaffected when no FastDraw chunk exists', async () => {
     vi.mocked(fetchFastDrawDilution).mockResolvedValueOnce(null);
-    vi.mocked(fetchFactsForProductLineKey).mockResolvedValueOnce({
+    vi.mocked(fetchFactsForProduct).mockResolvedValueOnce({
       entityId: 'entity-1',
       dilutionOzPerGal: 2,
       dilutionDisplay: '1:64',
@@ -110,7 +112,7 @@ describe('get_efficacy_data: fastDrawDilution (B0-636)', () => {
 
   it('conflicting SKU: facts.dilutionDisplay and fastDrawDilution.dilution both populate independently, neither overwrites the other', async () => {
     vi.mocked(fetchFastDrawDilution).mockResolvedValueOnce(fastDrawLookup());
-    vi.mocked(fetchFactsForProductLineKey).mockResolvedValueOnce({
+    vi.mocked(fetchFactsForProduct).mockResolvedValueOnce({
       entityId: 'entity-1',
       dilutionOzPerGal: 2.5,
       // Deliberately a DIFFERENT ratio than the FastDraw chunk's "1:256" — general-use vs.

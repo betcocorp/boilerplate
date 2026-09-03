@@ -90,7 +90,8 @@ async function defaultRunLlm(
   const client = getOpenAIClient();
   const res = await client.responses.create({
     model:
-      process.env.XREF_COMPETITOR_EXTRACT_MODEL?.trim() || resolveResponsesModel('preview'),
+      process.env.XREF_COMPETITOR_EXTRACT_MODEL?.trim() ||
+      (await resolveResponsesModel('preview')),
     instructions: SYSTEM_PROMPT,
     input: [{ role: 'user', content: userMessage, type: 'message' }],
     text: {

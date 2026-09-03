@@ -371,7 +371,7 @@ export async function synthesizeReportFindings(
   modelTag?: string,
 ): Promise<ReportSynthesis> {
   const client = getOpenAIClient();
-  const model = resolveResponsesModel(modelTag ?? 'gpt-4.1');
+  const model = await resolveResponsesModel(modelTag ?? 'gpt-4.1');
 
   const overallSummary = rateBlockSummary(metrics.overall);
   const tiersSummary = Object.fromEntries(metrics.tiers.map(([k, v]) => [k, rateBlockSummary(v)]));

@@ -9,10 +9,16 @@ vi.mock('~/supabase/clients/service-role', () => ({
 }));
 
 import {
+  DEFAULT_HIGH_CONFIDENCE_ABSOLUTE,
+  DEFAULT_MIN_LOCK_MARGIN,
+  DEFAULT_MIN_LOCK_SIMILARITY,
+} from '~/lib/retrieval/product-line-resolution';
+import {
   DEFAULT_RAG_CHUNK_STRATEGY,
   DEFAULT_ROUTER_TYPE,
   getBooleanSetting,
   getNumberSetting,
+  getProductLineLockThresholds,
   getRagBoostConfig,
   getRagBoostWeights,
   getRagChunkingConfig,
@@ -97,6 +103,30 @@ describe('getNumberSetting', () => {
     resetSettingsCacheForTest();
     mockRow(null);
     expect(await getNumberSetting('K', 20_000)).toBe(20_000);
+  });
+});
+
+describe('getProductLineLockThresholds (B0-757)', () => {
+  it('returns the DEFAULT_* fallbacks when no rows exist', async () => {
+    mockRows({});
+    expect(await getProductLineLockThresholds()).toEqual({
+      minLockSimilarity: DEFAULT_MIN_LOCK_SIMILARITY,
+      minLockMargin: DEFAULT_MIN_LOCK_MARGIN,
+      highConfidenceAbsolute: DEFAULT_HIGH_CONFIDENCE_ABSOLUTE,
+    });
+  });
+
+  it('returns stored values', async () => {
+    mockRows({
+      BEX_PRODUCT_LINE_LOCK_MIN_SIMILARITY: '0.55',
+      BEX_PRODUCT_LINE_LOCK_MARGIN: '0.1',
+      BEX_PRODUCT_LINE_LOCK_HIGH_CONFIDENCE: '0.7',
+    });
+    expect(await getProductLineLockThresholds()).toEqual({
+      minLockSimilarity: 0.55,
+      minLockMargin: 0.1,
+      highConfidenceAbsolute: 0.7,
+    });
   });
 });
 
@@ -331,6 +361,15 @@ describe('settings-table coverage does not regress to process.env (B0-638)', () 
     'BEX_LLM_ROUTER_ENABLED',
     'BEX_LLM_ROUTER_SHADOW_MODE',
     'BEX_PERMISSIONS_ENFORCED',
+    // B0-757 — read through resolveProductLineFromMatches' callers via
+    // getProductLineLockThresholds(); none of these three was ever actually set as an env var.
+    'BEX_PRODUCT_LINE_LOCK_MIN_SIMILARITY',
+    'BEX_PRODUCT_LINE_LOCK_MARGIN',
+    'BEX_PRODUCT_LINE_LOCK_HIGH_CONFIDENCE',
+    // B0-757 — read through resolveGenerationModelDefaultTag() (~/lib/openai/client.ts);
+    // BEX_RESPONSES_MODEL/OPENAI_BEX_MODEL were never actually set as env vars anywhere, so moving
+    // this here is behavior-preserving, not a model change.
+    'BEX_RESPONSES_MODEL',
     // B0-603 — read through resolveValidatorModelTag(); BEX_VALIDATOR_MODEL was never actually
     // set as an env var anywhere, so moving it here is behavior-preserving, not a model change.
     'BEX_VALIDATOR_MODEL',
