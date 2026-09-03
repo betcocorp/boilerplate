@@ -1,6 +1,9 @@
 import { CROSS_REFERENCE_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/cross-reference-specialist/cross-reference-specialist-system-prompt';
 import { DILUTION_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/dilution-specialist/dilution-specialist-system-prompt';
-import { FLOOR_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/floor-specialist/floor-specialist-system-prompt';
+import { FLOOR_CONCRETE_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/floor-specialist/floor-concrete-specialist-system-prompt';
+import { FLOOR_STG_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/floor-specialist/floor-stg-specialist-system-prompt';
+import { FLOOR_VCT_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/floor-specialist/floor-vct-specialist-system-prompt';
+import { FLOOR_WOOD_SPORT_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/floor-specialist/floor-wood-sport-specialist-system-prompt';
 import { PRODUCT_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/product-specialist/product-specialist-system-prompt';
 import { RECOMMENDATIONS_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/recommendations-specialist/recommendations-specialist-system-prompt';
 import { confidenceGateClause } from '~/lib/agents/sme/confidence-thresholds';
@@ -131,7 +134,11 @@ When retrieval returns no relevant results, fails, or you cannot find specific B
 export const EFFECTIVE_PROMPT_IDS = [
   'bathroom',
   'dilution',
-  'floor',
+  // B0-746 — the former single `floor` id was split into four substrate specialists.
+  'floor_wood_sport',
+  'floor_concrete',
+  'floor_stg',
+  'floor_vct',
   'product',
   'recommendations',
   'cross_reference',
@@ -142,7 +149,10 @@ export type EffectivePromptId = (typeof EFFECTIVE_PROMPT_IDS)[number];
 const SPECIALIST_SYSTEM_PROMPTS: Record<EffectivePromptId, string> = {
   bathroom: BATHROOM_SPECIALIST_SYSTEM_PROMPT,
   dilution: DILUTION_SPECIALIST_SYSTEM_PROMPT,
-  floor: FLOOR_SPECIALIST_SYSTEM_PROMPT,
+  floor_wood_sport: FLOOR_WOOD_SPORT_SPECIALIST_SYSTEM_PROMPT,
+  floor_concrete: FLOOR_CONCRETE_SPECIALIST_SYSTEM_PROMPT,
+  floor_stg: FLOOR_STG_SPECIALIST_SYSTEM_PROMPT,
+  floor_vct: FLOOR_VCT_SPECIALIST_SYSTEM_PROMPT,
   product: PRODUCT_SPECIALIST_SYSTEM_PROMPT,
   recommendations: RECOMMENDATIONS_SPECIALIST_SYSTEM_PROMPT,
   cross_reference: CROSS_REFERENCE_SPECIALIST_SYSTEM_PROMPT,
@@ -222,6 +232,11 @@ export const PRODUCT_SUPPORT_SHARED_INSTRUCTIONS = [
   '- For exact **dilution ratios**, **contact/dwell time**, or **kill-claim / efficacy** ("what does it kill") questions, call `get_efficacy_data` first — it returns structured, verified facts and, when on file, an authoritative lab-report citation (formula, version, lab, Project #, S3 source). Use its exact values, and cite the lab report\'s source document id (`[doc:uuid]`) alongside them when present. If you need this for MORE THAN ONE product (a comparison, a whole category, "which of these kill X") — call `get_efficacy_data` ONCE with `productIds` (array of names/codes) or `category`, never once per product; the batch call returns a `results` array (one entry per product) instead of top-level `facts`/`labReport`.',
   '- If `get_efficacy_data` returns both `facts: null` and `labReport: null`, do NOT decline yet — you MUST call `search_product_docs` (product name + the original question as `topic`/`freeformQuery`) before responding, to check for the same information stated as prose on an approved label/knowledge document. Only after that search also comes back with no clearly relevant chunk may you say the verified value is not on file.',
   '- When answering **contact/dwell-time** from a `search_product_docs` result (no structured facts on file), you may answer ONLY if a returned source explicitly states the value in its `documentBody` (e.g. "remain visibly wet for at least 60 seconds") — quote/transcribe it exactly as printed, cite the source, and never round, convert, or average it with any other figure. Do not extend this prose fallback to **dilution ratios** or **kill-claim/log-reduction** numbers — for those, if `get_efficacy_data` returns null, treat prose hits only as a pointer to escalate (mention the doc exists) and still tell the user the verified structured value is not on file.',
+  // B0-802 — efficacy lab reports can contain several "TABLE n: CALCULATED DATA FOR <product>"
+  // blocks per document (different formulas/versions/concentrations); nothing else in the corpus
+  // forces the model to bind to the right one, and a blank/negative result cell reads dangerously
+  // close to an affirmative claim if skimmed.
+  '- A lab-report excerpt from `get_efficacy_data` may contain more than one "TABLE n: CALCULATED DATA FOR <product>" block for different formulas, versions, or concentrations of the same or related products. Cite ONLY the table whose heading names the exact product/formula/version asked about — never a sibling block from the same document. A "No Reduction" / "NR" / blank log-reduction or percent-reduction cell is never a positive efficacy claim: state the absence of reduction exactly as printed, or decline — never phrase it as "yes, it reduces/kills X."',
   // B0-730 — name variants (a base product and a "Dual"/"Plus" variant) are NOT the same EPA
   // registration — treat them as distinct products requiring their own citation, never assumed-shared.
   '- Every technical claim — dilution ratio, contact/dwell time, EPA/DIN registration number, organism/kill claim, approved surface, rinsing requirement — must be explicitly tied to the specific product label or document it came from: name the product and the document. Never state a technical value without saying which product\'s label or SDS it is from.',
@@ -396,7 +411,11 @@ export function buildProductSupportInstructions(input: {
     productScore: number;
     bathroomScore: number;
     dilutionScore: number;
-    floorScore: number;
+    /** B0-746 — the former single `floorScore` split into one count per substrate specialist. */
+    floorWoodSportScore: number;
+    floorConcreteScore: number;
+    floorStgScore: number;
+    floorVctScore: number;
     /** B0-663 — job/problem-driven recommendation score (renamed from the old competitor-only meaning). */
     recommendationScore: number;
     /** B0-663 — competitor cross-reference score (split out of the old `recommendationScore`). */
@@ -410,7 +429,7 @@ export function buildProductSupportInstructions(input: {
    */
   classification?: IntentClassification;
 }): string {
-  const scores = `product ${input.routing.productScore} · bathroom ${input.routing.bathroomScore} · dilution ${input.routing.dilutionScore} · floor ${input.routing.floorScore} · recommendations ${input.routing.recommendationScore} · cross_reference ${input.routing.crossReferenceScore}`;
+  const scores = `product ${input.routing.productScore} · bathroom ${input.routing.bathroomScore} · dilution ${input.routing.dilutionScore} · floor_wood_sport ${input.routing.floorWoodSportScore} · floor_concrete ${input.routing.floorConcreteScore} · floor_stg ${input.routing.floorStgScore} · floor_vct ${input.routing.floorVctScore} · recommendations ${input.routing.recommendationScore} · cross_reference ${input.routing.crossReferenceScore}`;
   const activePrompt = systemPromptForDecision(input.routing.decision);
   const modeLine =
     input.mode === 'orchestrator'

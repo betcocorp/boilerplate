@@ -52,8 +52,21 @@ const DILUTION_SIGNALS = [
   'on-site mixing system',
 ];
 
-/** Procedural floor maintenance (hand off from product facts). */
-const FLOOR_SIGNALS = [
+/**
+ * B0-746 — the single `floor` specialist was split into four substrate specialists
+ * (`floor_wood_sport`, `floor_concrete`, `floor_stg`, `floor_vct`); the flat `FLOOR_SIGNALS` list
+ * is split the same way. `FLOOR_GENERIC_SIGNALS` holds phrasing that names a floor-care procedure
+ * with NO substrate named — deliberately duplicated into all four substrate lists below (rather
+ * than owned by one) so a substrate-ambiguous floor message still scores in every floor category
+ * and resolves via `SME_ROUTE_TIE_BREAK_ORDER`, exactly as the single `floor` bucket did before
+ * this split.
+ */
+const FLOOR_GENERIC_SIGNALS = ['floor maintenance program'];
+
+/** Procedural VCT / terrazzo / resilient-tile maintenance (hand off from product facts). */
+const FLOOR_VCT_SIGNALS = [
+  ...FLOOR_GENERIC_SIGNALS,
+  'vct program',
   'floor stripping',
   'strip the floor',
   'strip floors',
@@ -65,12 +78,51 @@ const FLOOR_SIGNALS = [
   'scrub and recoat',
   'top scrub',
   'recoat floor',
+  'terrazzo',
+  'resilient tile',
+  'vinyl composition tile',
+  'vinyl tile',
+];
+
+/** Procedural wood/hardwood sport & gym floor finish and coating. */
+const FLOOR_WOOD_SPORT_SIGNALS = [
+  ...FLOOR_GENERIC_SIGNALS,
   'floor finish procedure',
   'applying floor finish',
   'apply finish',
   'multiple coats of finish',
-  'vct program',
-  'floor maintenance program',
+  'gym floor',
+  'gymnasium floor',
+  'sport floor',
+  'sports floor',
+  'sport court',
+  'wood floor',
+  'hardwood floor',
+  'athletic floor',
+];
+
+/** Concrete floor cleaning, densifying, sealing, coating, stripping, and scrubbing. */
+const FLOOR_CONCRETE_SIGNALS = [
+  ...FLOOR_GENERIC_SIGNALS,
+  'concrete floor',
+  'concrete sealer',
+  'concrete coating',
+  'polish concrete',
+  'polished concrete',
+  'densify concrete',
+  'concrete densifier',
+];
+
+/** Stone, tile & grout cleaning and protectant (STG). */
+const FLOOR_STG_SIGNALS = [
+  ...FLOOR_GENERIC_SIGNALS,
+  'stone tile and grout',
+  'stone, tile, and grout',
+  'stg cleaner',
+  'stone floor cleaner',
+  'tile and grout cleaner',
+  'grout protectant',
+  'natural stone floor',
 ];
 
 const PRODUCT_SIGNALS = [
@@ -173,14 +225,15 @@ const CROSS_REFERENCE_SIGNALS = [
 /**
  * B0-663 — job/problem-driven product-recommendation phrasing with NO competitor named, e.g.
  * "What should I use to degrease a kitchen floor?" or "What do you recommend for sticky
- * residue?". Fires the `recommendations` agent, which is ADDITIVE ONLY: bathroom/dilution/floor
- * keep answering their own domain-specific "what should I use" questions exactly as before (their
- * signal lists still win the tie-break — see `SME_ROUTE_TIE_BREAK_ORDER`). Deliberately pure
- * job/problem PHRASING — no surface or product vocabulary — so this never double-counts against
- * `PRODUCT_SIGNALS` / `BATHROOM_SIGNALS` / `DILUTION_SIGNALS` / `FLOOR_SIGNALS`.
+ * residue?". Fires the `recommendations` agent, which is ADDITIVE ONLY: bathroom/dilution/the four
+ * floor specialists keep answering their own domain-specific "what should I use" questions exactly
+ * as before (their signal lists still win the tie-break — see `SME_ROUTE_TIE_BREAK_ORDER`).
+ * Deliberately pure job/problem PHRASING — no surface or product vocabulary — so this never
+ * double-counts against `PRODUCT_SIGNALS` / `BATHROOM_SIGNALS` / `DILUTION_SIGNALS` / the four
+ * `FLOOR_*_SIGNALS` lists.
  *
  * Unlike `CROSS_REFERENCE_SIGNALS`, this category has no decisive-signal short-circuit — it is
- * scored like `product`/`bathroom`/`dilution`/`floor` and can lose ties to any of them.
+ * scored like `product`/`bathroom`/`dilution`/the floor categories and can lose ties to any of them.
  */
 const JOB_RECOMMENDATION_SIGNALS = [
   'what should i use',
@@ -283,7 +336,11 @@ export type SmeRouteScoreKey =
   | 'product'
   | 'bathroom'
   | 'dilution'
-  | 'floor'
+  // B0-746 — the former single `floor` category was split into four substrate categories.
+  | 'floor_wood_sport'
+  | 'floor_concrete'
+  | 'floor_stg'
+  | 'floor_vct'
   | 'cross_reference'
   | 'recommendations';
 
@@ -291,7 +348,7 @@ export type SmeRouteScoreKey =
  * B0-392 — HOW the decision was reached, so a consumer never has to parse `rationale` prose.
  *
  * `no_signal` is the honest name for what the workflow later labels `ambiguous`: zero keyword hits
- * across all six lists, which is NOT a tie — a tie resolves through `SME_ROUTE_TIE_BREAK_ORDER`
+ * across all nine lists, which is NOT a tie — a tie resolves through `SME_ROUTE_TIE_BREAK_ORDER`
  * and reports `tie_break`.
  */
 export type SmeRouteDecisionPath =
@@ -306,7 +363,11 @@ export type SmeRouteDecision = {
   productScore: number;
   bathroomScore: number;
   dilutionScore: number;
-  floorScore: number;
+  /** B0-746 — the former single `floorScore` split into one count per substrate specialist. */
+  floorWoodSportScore: number;
+  floorConcreteScore: number;
+  floorStgScore: number;
+  floorVctScore: number;
   /** B0-663 — competitor→Betco cross-reference signal count (renamed from `recommendationScore`). */
   crossReferenceScore: number;
   /** B0-663 — NEW: job/problem-driven "what should I use" signal count, no competitor named. */
@@ -323,12 +384,19 @@ export type SmeRouteDecision = {
 };
 
 /**
- * When scores tie, prefer system/procedure specialists (dilution/floor/bathroom), then the
- * job-based `recommendations` agent, then `cross_reference`, over broad catalog routing. Exported
- * (B0-392) so a recorded routing decision cites the order actually applied.
+ * When scores tie, prefer system/procedure specialists (dilution/the four floor specialists/
+ * bathroom), then the job-based `recommendations` agent, then `cross_reference`, over broad
+ * catalog routing. Exported (B0-392) so a recorded routing decision cites the order actually
+ * applied.
+ *
+ * B0-746 — the four floor specialists sit where the single `floor` category used to, in this
+ * arbitrary (undocumented-by-data) order: `floor_vct` first, since VCT/resilient-tile was the
+ * flagship content the flat `floor` prompt carried, then wood/sport, concrete, and STG. This only
+ * matters for a substrate-AMBIGUOUS floor message (no substrate keyword at all) — a message naming
+ * a substrate never ties across the four, since only that substrate's list scores it.
  *
  * B0-663 — `recommendations` (job-based, additive-only) is deliberately placed ABOVE
- * `cross_reference` in this list: it still loses ties to the three domain specialists (the
+ * `cross_reference` in this list: it still loses ties to the domain specialists (the
  * additive-only guarantee), but a plain "what should I use for X" with no domain/competitor signal
  * should not lose to a `cross_reference` category that, in practice, almost never reaches a numeric
  * tie anyway (it wins outright via `DECISIVE_CROSS_REFERENCE_SIGNALS` before scoring is even
@@ -336,7 +404,10 @@ export type SmeRouteDecision = {
  */
 export const SME_ROUTE_TIE_BREAK_ORDER: readonly SmeRouteScoreKey[] = [
   'dilution',
-  'floor',
+  'floor_vct',
+  'floor_wood_sport',
+  'floor_concrete',
+  'floor_stg',
   'bathroom',
   'recommendations',
   'cross_reference',
@@ -352,19 +423,39 @@ function emptyMatchedPhrases(): Record<SmeRouteScoreKey, string[]> {
     product: [],
     bathroom: [],
     dilution: [],
-    floor: [],
+    floor_wood_sport: [],
+    floor_concrete: [],
+    floor_stg: [],
+    floor_vct: [],
     cross_reference: [],
     recommendations: [],
   };
 }
 
 /**
+ * B0-392 — renders every category's score as `key n` pairs in `SME_ROUTE_TIE_BREAK_ORDER` order
+ * (plus `product` last), so a new category can never fall out of the rationale text the way a
+ * hand-written literal would.
+ */
+function renderScoresForRationale(scores: Record<SmeRouteScoreKey, number>): string {
+  const order: SmeRouteScoreKey[] = ['product', 'bathroom', 'dilution', ...SME_ROUTE_TIE_BREAK_ORDER];
+  const seen = new Set<SmeRouteScoreKey>();
+  const ordered = order.filter((key) => {
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return ordered.map((key) => `${key} ${scores[key]}`).join(', ');
+}
+
+/**
  * Picks an SME from free text.
  *
  * `agent: null` happens in exactly two cases — an empty message, or zero keyword hits across all
- * six lists (`decisionPath` says which). A TIE is not one of them: it resolves through
- * `SME_ROUTE_TIE_BREAK_ORDER` (dilution > floor > bathroom > recommendations > cross_reference >
- * product) and returns a real agent with `decisionPath: 'tie_break'`.
+ * nine lists (`decisionPath` says which). A TIE is not one of them: it resolves through
+ * `SME_ROUTE_TIE_BREAK_ORDER` (dilution > floor_vct > floor_wood_sport > floor_concrete >
+ * floor_stg > bathroom > recommendations > cross_reference > product) and returns a real agent
+ * with `decisionPath: 'tie_break'`.
  */
 export function routeUserMessageToSme(message: string): SmeRouteDecision {
   const trimmed = message.trim();
@@ -375,7 +466,10 @@ export function routeUserMessageToSme(message: string): SmeRouteDecision {
       productScore: 0,
       bathroomScore: 0,
       dilutionScore: 0,
-      floorScore: 0,
+      floorWoodSportScore: 0,
+      floorConcreteScore: 0,
+      floorStgScore: 0,
+      floorVctScore: 0,
       crossReferenceScore: 0,
       recommendationScore: 0,
       matchedPhrases: emptyMatchedPhrases(),
@@ -389,14 +483,20 @@ export function routeUserMessageToSme(message: string): SmeRouteDecision {
   const bathroom = countSignalHits(trimmed, BATHROOM_SIGNALS);
   const product = countSignalHits(trimmed, PRODUCT_SIGNALS);
   const dilution = countSignalHits(trimmed, DILUTION_SIGNALS);
-  const floor = countSignalHits(trimmed, FLOOR_SIGNALS);
+  const floorWoodSport = countSignalHits(trimmed, FLOOR_WOOD_SPORT_SIGNALS);
+  const floorConcrete = countSignalHits(trimmed, FLOOR_CONCRETE_SIGNALS);
+  const floorStg = countSignalHits(trimmed, FLOOR_STG_SIGNALS);
+  const floorVct = countSignalHits(trimmed, FLOOR_VCT_SIGNALS);
   const crossReference = countSignalHits(trimmed, CROSS_REFERENCE_SIGNALS);
   const jobRecommendation = countSignalHits(trimmed, JOB_RECOMMENDATION_SIGNALS);
 
   const bathroomScore = bathroom.hits;
   const productScore = product.hits;
   const dilutionScore = dilution.hits;
-  const floorScore = floor.hits;
+  const floorWoodSportScore = floorWoodSport.hits;
+  const floorConcreteScore = floorConcrete.hits;
+  const floorStgScore = floorStg.hits;
+  const floorVctScore = floorVct.hits;
   const crossReferenceScore = crossReference.hits;
   const recommendationScore = jobRecommendation.hits;
 
@@ -404,7 +504,10 @@ export function routeUserMessageToSme(message: string): SmeRouteDecision {
     product: product.matched,
     bathroom: bathroom.matched,
     dilution: dilution.matched,
-    floor: floor.matched,
+    floor_wood_sport: floorWoodSport.matched,
+    floor_concrete: floorConcrete.matched,
+    floor_stg: floorStg.matched,
+    floor_vct: floorVct.matched,
     cross_reference: crossReference.matched,
     recommendations: jobRecommendation.matched,
   };
@@ -414,7 +517,10 @@ export function routeUserMessageToSme(message: string): SmeRouteDecision {
     product: productScore,
     bathroom: bathroomScore,
     dilution: dilutionScore,
-    floor: floorScore,
+    floor_wood_sport: floorWoodSportScore,
+    floor_concrete: floorConcreteScore,
+    floor_stg: floorStgScore,
+    floor_vct: floorVctScore,
     cross_reference: crossReferenceScore,
     recommendations: recommendationScore,
   };
@@ -427,7 +533,10 @@ export function routeUserMessageToSme(message: string): SmeRouteDecision {
     productScore,
     bathroomScore,
     dilutionScore,
-    floorScore,
+    floorWoodSportScore,
+    floorConcreteScore,
+    floorStgScore,
+    floorVctScore,
     crossReferenceScore,
     recommendationScore,
     matchedPhrases,
@@ -454,7 +563,7 @@ export function routeUserMessageToSme(message: string): SmeRouteDecision {
       ...common,
       decisionPath: 'decisive_cross_reference_signal',
       tiedCategories: [],
-      rationale: `Decisive cross-reference signal; chose **cross_reference** outright (product ${productScore}, bathroom ${bathroomScore}, dilution ${dilutionScore}, floor ${floorScore}, cross_reference ${crossReferenceScore}, recommendations ${recommendationScore}).`,
+      rationale: `Decisive cross-reference signal; chose **cross_reference** outright (${renderScoresForRationale(scores)}).`,
     };
   }
 
@@ -472,7 +581,7 @@ export function routeUserMessageToSme(message: string): SmeRouteDecision {
   const rationale =
     winners.length > 1
       ? `Tie at ${max} hits between ${winners.map(([k]) => k).join(', ')}; chose **${agent}** by priority (${SME_ROUTE_TIE_BREAK_ORDER.join(' > ')}).`
-      : `${agent} signals (${max}) won (product ${productScore}, bathroom ${bathroomScore}, dilution ${dilutionScore}, floor ${floorScore}, cross_reference ${crossReferenceScore}, recommendations ${recommendationScore}).`;
+      : `${agent} signals (${max}) won (${renderScoresForRationale(scores)}).`;
 
   return {
     agent,

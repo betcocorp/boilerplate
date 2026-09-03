@@ -18,13 +18,13 @@ import {
 
 function decision(overrides: Partial<SemanticRouteDecision> = {}): SemanticRouteDecision {
   return {
-    route: 'floor',
+    route: 'floor_vct',
     confidence: 0.66,
     similarity: 0.66,
     margin: 0.21,
     path: 'semantic',
     scores: [
-      { route: 'floor', similarity: 0.66 },
+      { route: 'floor_vct', similarity: 0.66 },
       { route: 'product', similarity: 0.45 },
     ],
     thresholds: { confidence: 0.5, margin: 0.1 },
@@ -51,7 +51,7 @@ describe('resolveSemanticRouterMode', () => {
 
   it('is off for a forced direct agentMode even when enabled', () => {
     expect(
-      resolveSemanticRouterMode({ enabled: true, shadowMode: false, agentMode: 'floor' }),
+      resolveSemanticRouterMode({ enabled: true, shadowMode: false, agentMode: 'floor_vct' }),
     ).toBe('off');
   });
 
@@ -67,7 +67,7 @@ describe('resolveSemanticRouterMode', () => {
 
 describe('resolveSemanticRoute', () => {
   it('returns the route only on the live + semantic path', () => {
-    expect(resolveSemanticRoute('live', decision())).toBe('floor');
+    expect(resolveSemanticRoute('live', decision())).toBe('floor_vct');
   });
 
   it('returns null on a live fallback, so the caller keeps the old safety net', () => {
@@ -108,7 +108,7 @@ describe('semanticRouterRuntimeConfigFields', () => {
         enabled: true,
         shadowMode: false,
         decision: decision(),
-        decidedRoute: 'floor',
+        decidedRoute: 'floor_vct',
       }),
     ).toMatchObject({ semanticRouterPath: 'semantic', semanticRouterDecided: true });
 
@@ -129,7 +129,7 @@ describe('buildSemanticRouterGate', () => {
     const record = buildSemanticRouterGate({
       mode: 'live',
       decision: decision(),
-      routingDecision: 'floor',
+      routingDecision: 'floor_vct',
       decidedBy: 'semantic_router',
     });
 
@@ -137,7 +137,7 @@ describe('buildSemanticRouterGate', () => {
     expect(record.gate).toBe('semantic_router_live');
     expect(record.verdict).toBe('agrees_with_routing_decision');
     expect(record.inputs).toMatchObject({
-      semanticRoute: 'floor',
+      semanticRoute: 'floor_vct',
       semanticConfidence: 0.66,
       semanticMargin: 0.21,
       semanticPath: 'semantic',
@@ -146,7 +146,7 @@ describe('buildSemanticRouterGate', () => {
       semanticScoringMs: 5,
     });
     expect(record.inputs.semanticScores).toEqual([
-      { route: 'floor', similarity: 0.66 },
+      { route: 'floor_vct', similarity: 0.66 },
       { route: 'product', similarity: 0.45 },
     ]);
     expect(record.thresholds).toMatchObject({
@@ -195,6 +195,6 @@ describe('semanticRouterRationale', () => {
     expect(rationale).toContain('210ms');
     expect(rationale).toContain('embedding 205ms');
     expect(rationale).toContain('scoring 5ms');
-    expect(rationale).toContain('"floor"');
+    expect(rationale).toContain('"floor_vct"');
   });
 });

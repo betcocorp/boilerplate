@@ -66,7 +66,10 @@ describe('classifySpeculativeRetrievalSkip (B0-436)', () => {
       'ambiguous',
       'bathroom',
       'dilution',
-      'floor',
+      'floor_wood_sport',
+      'floor_concrete',
+      'floor_stg',
+      'floor_vct',
       'recommendations',
     ]) {
       expect(

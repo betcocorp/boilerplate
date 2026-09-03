@@ -31,8 +31,14 @@ import { SME_AGENT_IDS, type SmeAgentId } from '~/lib/agents/agent-registry';
  * B0-663 — bumped v1 -> v2: split the old single `recommendations` (competitor) bucket into
  * `cross_reference` (competitor examples, unchanged) and a new `recommendations` bucket (job/problem
  * phrasing, no competitor). Per the cache-key rule above, ANY edit to the utterances requires this.
+ *
+ * B0-746 — bumped v2 -> v3: split the old single `floor` bucket into `floor_wood_sport`,
+ * `floor_concrete`, `floor_stg`, and `floor_vct` (the four substrate specialists that replaced the
+ * flat `floor` SME id). `floor_stg` utterances are newly authored (the old bucket had no stone/
+ * tile/grout content); the rest are the old `floor` utterances reassigned to the substrate they
+ * actually name.
  */
-export const SEMANTIC_ROUTER_EXAMPLES_VERSION = 'v2';
+export const SEMANTIC_ROUTER_EXAMPLES_VERSION = 'v3';
 
 /**
  * Route ownership boundaries, mirroring the LLM classifier's routing rules in
@@ -42,17 +48,23 @@ export const SEMANTIC_ROUTER_EXAMPLES_VERSION = 'v2';
  *                  metering tips, dilution-station setup.
  * - `bathroom`   — restroom fixtures and surfaces: bowls, urinals, partitions, grout, showers,
  *                  drain/uric scale, restroom odor control and disinfection procedure.
- * - `floor`      — VCT, terrazzo, concrete and wood floors: strip, seal, finish, recoat, scrub,
- *                  burnish, screen-and-recoat, maintenance programs (Basic Coatings for wood).
+ * - `floor_vct`  — B0-746: VCT, terrazzo, and other resilient/hard tile: strip, seal, finish,
+ *                  recoat, scrub, burnish, maintenance programs.
+ * - `floor_wood_sport` — B0-746: wood (hardwood) sport/gym floor finish and coating: recoat,
+ *                  screen-and-recoat, sand and finish (Basic Coatings for wood).
+ * - `floor_concrete` — B0-746: concrete floors: seal, densify, coat, strip, scrub.
+ * - `floor_stg`  — B0-746: Stone, Tile & Grout (STG) cleaning and protectant — cleaning and
+ *                  protecting natural stone, tile, and grout surfaces (not a stripped-and-recoated
+ *                  film finish the way the other three floor routes are).
  * - `product`    — catalog attributes: shelf life, packaging and case pack, item numbers,
  *                  certifications, availability, where-to-find-the-SDS, product-vs-product specs.
  * - `cross_reference` — competitor cross-reference ONLY (per B0-511/B0-514/B0-663): the message
  *                  names a NON-Betco product and wants the Betco equivalent.
  * - `recommendations` — B0-663 NEW: job/problem-driven "what should I use / what do you recommend"
- *                  asks with NO competitor named, that do NOT fit bathroom/dilution/floor's own
- *                  domain (those specialists still own their own "what should I use" questions —
- *                  additive-only). A factual/spec lookup ("does Betco make X", "tell me about X")
- *                  is `product`, not `recommendations`.
+ *                  asks with NO competitor named, that do NOT fit bathroom/dilution/one of the four
+ *                  floor specialists' own domain (those specialists still own their own "what
+ *                  should I use" questions — additive-only). A factual/spec lookup ("does Betco
+ *                  make X", "tell me about X") is `product`, not `recommendations`.
  */
 export const SEMANTIC_ROUTER_EXAMPLES: Readonly<Record<SmeAgentId, readonly string[]>> = {
   product: [
@@ -91,17 +103,45 @@ export const SEMANTIC_ROUTER_EXAMPLES: Readonly<Record<SmeAgentId, readonly stri
     'How do I set up a wall-mounted four-product dilution station in the janitor closet?',
     'How much concentrate goes into a 32 oz spray bottle to match the label dilution?',
   ],
-  floor: [
+  floor_vct: [
     'What is the right procedure to strip and recoat a VCT floor?',
-    'How many coats of finish should we apply after stripping a retail entryway?',
-    'Our burnisher is leaving swirl marks in the finish, what are we doing wrong?',
+    'How many coats of finish should we apply after stripping a retail entryway of VCT?',
+    'Our burnisher is leaving swirl marks in the finish on the resilient tile, what are we doing wrong?',
+    'How often should a terrazzo lobby be scrubbed and recoated?',
+    'What pad and machine speed should we use to burnish a high-solids finish on VCT?',
+    'Does a brand new VCT installation need to be sealed before we apply finish?',
+    'What is the top-scrub procedure between full strip-and-refinish cycles on VCT?',
+    'How do we remove black heel marks from a VCT hallway without stripping the whole floor?',
+  ],
+  floor_wood_sport: [
     'Which Basic Coatings system should we use to refinish a gymnasium wood floor?',
     'Can we screen and recoat the hardwood court instead of doing a full sand and finish?',
+    'How many coats of finish should we apply after a full sand and refinish on the gym floor?',
+    'The wood gym floor finish is peeling in front of the entry doors, what is causing the delamination?',
+    'What is the recommended recoat interval for a high school basketball court?',
+    'How do we prep a wood volleyball court floor before applying the first coat of finish?',
+    'Our sport floor finish is tacky days after recoating, what went wrong?',
+    'What is the daily dust-mopping routine for a hardwood gymnasium floor between game nights?',
+  ],
+  floor_concrete: [
     'What sealer do you recommend for polished concrete in a warehouse aisle?',
-    'How often should a terrazzo lobby be scrubbed and recoated?',
-    'What pad and machine speed should we use to burnish a high-solids finish?',
-    'The floor finish is peeling in front of the entry mats, what is causing the delamination?',
-    'Does a brand new VCT installation need to be sealed before we apply finish?',
+    'How do we densify and seal a new concrete slab before opening the space?',
+    'The concrete floor coating is peeling near the loading dock entrance, what is causing the delamination?',
+    'How do we prep an old concrete floor before applying a new coating system?',
+    'What is the right burnishing approach for a polished concrete showroom floor?',
+    'Our concrete floor is showing hot-tire pickup marks in the garage, what caused that?',
+    'How often should a sealed concrete warehouse floor be scrubbed and resealed?',
+    'What is the cure time before we can coat a freshly poured concrete slab?',
+  ],
+  floor_stg: [
+    'What is the right daily cleaner and protectant for our natural stone lobby floor?',
+    'How often do we need to reapply the grout protectant on a high-traffic tile entryway floor?',
+    'Is this stone floor cleaner safe on marble, or will it etch the surface?',
+    'What should we use to keep a ceramic tile floor looking clean between full scrubs?',
+    'How do we remove soap scum buildup from tile and grout without damaging the protectant?',
+    'What is the reapplication schedule for the stone protectant in a busy hotel lobby?',
+    'Our travertine floor is losing its shine between cleanings, what protectant approach fixes that?',
+    'Is the tile and grout cleaner safe to use on porcelain tile in a retail entryway?',
   ],
   cross_reference: [
     'What is the Betco equivalent to Diversey Virex II 256?',
@@ -116,8 +156,9 @@ export const SEMANTIC_ROUTER_EXAMPLES: Readonly<Record<SmeAgentId, readonly stri
     'Is there a Betco equivalent for Spic and Span concentrate?',
   ],
   // B0-663 — starter set only, authored to be discriminative against product/bathroom/dilution/
-  // floor rather than tuned against a real eval; expand/re-tune once B0-652-style routing-accuracy
-  // data exists for this route. TODO(B0-663): revisit once real traffic/eval data is available.
+  // the four floor specialists rather than tuned against a real eval; expand/re-tune once
+  // B0-652-style routing-accuracy data exists for this route. TODO(B0-663): revisit once real
+  // traffic/eval data is available.
   recommendations: [
     'What should I use to degrease a commercial kitchen floor?',
     'I have a problem with sticky residue on tile, what do you recommend?',

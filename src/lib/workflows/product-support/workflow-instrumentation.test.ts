@@ -1041,13 +1041,13 @@ describe('keyword routing gate (B0-391 / B0-392)', () => {
   });
 
   it('says the keyword scores did not decide when an admin forces a direct mode', async () => {
-    await run({ userMessage: USAGE_MESSAGE, agentMode: 'floor' });
+    await run({ userMessage: USAGE_MESSAGE, agentMode: 'floor_vct' });
 
     const record = singleGateRecord('keyword_routing');
     expect(record.verdict).toBe('overridden_by_direct_mode');
-    expect(record.inputs.agentMode).toBe('floor');
+    expect(record.inputs.agentMode).toBe('floor_vct');
     expect((stepOutput('orchestration_planner').routing as Record<string, unknown>).effectivePromptId).toBe(
-      'floor',
+      'floor_vct',
     );
   });
 
@@ -1681,7 +1681,7 @@ describe('shadow-mode LLM intent classifier gate (B0-507 / B0-516 integration)',
   it('records a "disagrees_with_keyword_router" verdict end-to-end, and does not cut over routing while shadow mode is on, when the classifier proposes a different intent', async () => {
     settingOverrides.set('BEX_LLM_ROUTER_ENABLED', true);
     settingOverrides.set('BEX_LLM_ROUTER_SHADOW_MODE', true);
-    mockIntentClassifierResponse(intentClassifierPayload({ intent: 'floor', confidence: 0.62 }));
+    mockIntentClassifierResponse(intentClassifierPayload({ intent: 'floor_vct', confidence: 0.62 }));
 
     await run({ userMessage: XREF_MESSAGE });
 
@@ -1694,7 +1694,7 @@ describe('shadow-mode LLM intent classifier gate (B0-507 / B0-516 integration)',
     const record = singleGateRecord('llm_intent_classifier_shadow');
     expect(record.verdict).toBe('disagrees_with_keyword_router');
     expect(record.inputs).toMatchObject({
-      classifiedIntent: 'floor',
+      classifiedIntent: 'floor_vct',
       keywordRoutingDecision: 'cross_reference',
     });
     expect(record.effect).toContain('Not used to route this turn');
@@ -1705,7 +1705,7 @@ describe('shadow-mode LLM intent classifier gate (B0-507 / B0-516 integration)',
     settingOverrides.set('BEX_LLM_ROUTER_SHADOW_MODE', true);
     settingOverrides.set('BEX_ROUTER_TIMEOUT_MS', 10);
     mockIntentClassifierResponse(
-      intentClassifierPayload({ intent: 'floor', confidence: 0.9 }),
+      intentClassifierPayload({ intent: 'floor_vct', confidence: 0.9 }),
       { delayMs: 100 },
     );
 
@@ -1728,7 +1728,7 @@ describe('shadow-mode LLM intent classifier gate (B0-507 / B0-516 integration)',
   it('B0-511: cuts routingDecision over to the classifier\'s intent when shadow mode is off, even though it disagrees with the keyword router', async () => {
     settingOverrides.set('BEX_LLM_ROUTER_ENABLED', true);
     settingOverrides.set('BEX_LLM_ROUTER_SHADOW_MODE', false);
-    mockIntentClassifierResponse(intentClassifierPayload({ intent: 'floor', confidence: 0.81 }));
+    mockIntentClassifierResponse(intentClassifierPayload({ intent: 'floor_vct', confidence: 0.81 }));
 
     await run({ userMessage: XREF_MESSAGE });
 
@@ -1736,7 +1736,7 @@ describe('shadow-mode LLM intent classifier gate (B0-507 / B0-516 integration)',
     // tests above); the classifier's "floor" now actually decides the turn.
     expect(
       (stepOutput('orchestration_planner').routing as Record<string, unknown>).decision,
-    ).toBe('floor');
+    ).toBe('floor_vct');
 
     // The old shadow gate never fires once shadow mode is off — the live gate replaces it.
     expect(gateRecordsFor('llm_intent_classifier_shadow')).toEqual([]);
@@ -1744,7 +1744,7 @@ describe('shadow-mode LLM intent classifier gate (B0-507 / B0-516 integration)',
     const liveRecord = singleGateRecord('llm_intent_classifier_live');
     expect(liveRecord.verdict).toBe('disagrees_with_keyword_router');
     expect(liveRecord.inputs).toMatchObject({
-      classifiedIntent: 'floor',
+      classifiedIntent: 'floor_vct',
       classifierConfidence: 0.81,
       classifierSource: 'llm',
       keywordRoutingDecision: 'cross_reference',
@@ -1759,7 +1759,7 @@ describe('shadow-mode LLM intent classifier gate (B0-507 / B0-516 integration)',
     settingOverrides.set('BEX_LLM_ROUTER_SHADOW_MODE', false);
     settingOverrides.set('BEX_ROUTER_TIMEOUT_MS', 10);
     mockIntentClassifierResponse(
-      intentClassifierPayload({ intent: 'floor', confidence: 0.9 }),
+      intentClassifierPayload({ intent: 'floor_vct', confidence: 0.9 }),
       { delayMs: 100 },
     );
 
@@ -1787,7 +1787,7 @@ describe('shadow-mode LLM intent classifier gate (B0-507 / B0-516 integration)',
     // cross-reference machinery here before B0-514 retired it from the default path.
     mockIntentClassifierResponse(
       intentClassifierPayload({
-        intent: 'floor',
+        intent: 'floor_vct',
         confidence: 0.9,
         entities: { competitorBrand: null, competitorProduct: null },
         suggestedTool: 'search_product_docs',
@@ -1798,7 +1798,7 @@ describe('shadow-mode LLM intent classifier gate (B0-507 / B0-516 integration)',
 
     expect(
       (stepOutput('orchestration_planner').routing as Record<string, unknown>).decision,
-    ).toBe('floor');
+    ).toBe('floor_vct');
     // No forced lookup_cross_reference call: the resolved trace contains no injected/forced
     // cross-reference lookup for this turn.
     const agentGates = (stepOutput('openai_responses_agent').gates ?? []) as Array<
@@ -2385,8 +2385,8 @@ describe('runtime config and gate activation (B0-494)', () => {
   });
 
   it('records routedDirectly when an admin forces a direct specialist mode', async () => {
-    const out = await run({ agentMode: 'floor' });
-    expect(out.runtimeConfig?.agentMode).toBe('floor');
+    const out = await run({ agentMode: 'floor_vct' });
+    expect(out.runtimeConfig?.agentMode).toBe('floor_vct');
     expect(out.runtimeConfig?.routedDirectly).toBe(true);
   });
 
@@ -2477,21 +2477,21 @@ describe('consolidated signals analysis (B0-786)', () => {
     settingOverrides.set('BEX_SIGNALS_ANALYSIS_ENABLED', true);
     settingOverrides.set('BEX_LLM_ROUTER_ENABLED', true);
     settingOverrides.set('BEX_LLM_ROUTER_SHADOW_MODE', false);
-    mockSignalsResponse(signalsPayload({ intent: 'floor', crossReferenceIntent: false }));
+    mockSignalsResponse(signalsPayload({ intent: 'floor_vct', crossReferenceIntent: false }));
 
     await run({ userMessage: XREF_MESSAGE });
 
     const record = singleGateRecord('signals_analysis');
     expect(record.verdict).toBe('signals_analyzed');
     const signals = record.inputs.signals as Record<string, unknown>;
-    expect(signals.intent).toBe('floor');
+    expect(signals.intent).toBe('floor_vct');
     expect(signals.source).toBe('llm');
     expect(signals.answerShape).toBe('single_value');
     expect(signals.regulatedSectionIntent).toBe(false);
     // The routing decision the turn actually ran on came from the same object.
     expect(
       (stepOutput('orchestration_planner').routing as Record<string, unknown>).decision,
-    ).toBe('floor');
+    ).toBe('floor_vct');
   });
 
   it('makes exactly ONE pre-generation model call — no separate competitor extraction', async () => {

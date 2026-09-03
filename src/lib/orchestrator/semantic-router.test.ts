@@ -178,9 +178,10 @@ describe('B0-647 example corpus', () => {
     expect(Object.keys(SEMANTIC_ROUTER_EXAMPLES).sort()).toEqual([...SME_AGENT_IDS].sort());
   });
 
-  it('defines ~58 examples in total, with no duplicate utterance across the whole corpus', () => {
-    // B0-663 — 5 routes x 10 + `recommendations` (new job-based route) x 8 = 58.
-    expect(SEMANTIC_ROUTER_EXAMPLE_COUNT).toBe(58);
+  it('defines ~80 examples in total, with no duplicate utterance across the whole corpus', () => {
+    // B0-746 — 4 routes (product, bathroom, dilution, cross_reference) x 10 + 5 routes
+    // (recommendations, floor_wood_sport, floor_concrete, floor_stg, floor_vct) x 8 = 80.
+    expect(SEMANTIC_ROUTER_EXAMPLE_COUNT).toBe(80);
     const all = SME_AGENT_IDS.flatMap((route) => [...SEMANTIC_ROUTER_EXAMPLES[route]]);
     expect(new Set(all).size).toBe(all.length);
   });
@@ -243,11 +244,11 @@ describe('B0-648 similarity math', () => {
   });
 
   it('aggregates each route by MAX example similarity, not the mean', () => {
-    // "floor" has one near-perfect example and nine unrelated ones; "product" has ten
-    // moderately-similar examples whose MEAN beats floor's mean but whose MAX does not.
+    // "floor_vct" has one near-perfect example and nine unrelated ones; "product" has ten
+    // moderately-similar examples whose MEAN beats floor_vct's mean but whose MAX does not.
     const message = basis(0);
     const routes: RouteVectors[] = [
-      makeRouteVectors('floor', [basis(0), ...Array.from({ length: 9 }, () => basis(1000))]),
+      makeRouteVectors('floor_vct', [basis(0), ...Array.from({ length: 9 }, () => basis(1000))]),
       makeRouteVectors(
         'product',
         Array.from({ length: 10 }, () => vectorWithSimilarity(0, 0.6)),
@@ -256,7 +257,7 @@ describe('B0-648 similarity math', () => {
 
     const scores = scoreRoutes(message, vectorNorm(message), routes);
 
-    expect(scores[0]?.route).toBe('floor');
+    expect(scores[0]?.route).toBe('floor_vct');
     expect(scores[0]?.similarity).toBeCloseTo(1, 6);
     expect(scores[1]?.similarity).toBeCloseTo(0.6, 6);
   });
@@ -266,12 +267,12 @@ describe('B0-648 similarity math', () => {
     const opposite = basis(0).map((v) => -v);
     const routes: RouteVectors[] = [
       makeRouteVectors('product', [opposite]),
-      makeRouteVectors('floor', [basis(0)]),
+      makeRouteVectors('floor_vct', [basis(0)]),
     ];
 
     const scores = scoreRoutes(message, vectorNorm(message), routes);
 
-    expect(scores.map((s) => s.route)).toEqual(['floor', 'product']);
+    expect(scores.map((s) => s.route)).toEqual(['floor_vct', 'product']);
     expect(scores[1]?.similarity).toBe(0);
   });
 });
@@ -301,12 +302,12 @@ describe('B0-650 threshold gating (pure decision builder)', () => {
     const decision = buildSemanticRouteDecision({
       ...base,
       scores: [
-        { route: 'floor', similarity: 0.72 },
+        { route: 'floor_vct', similarity: 0.72 },
         { route: 'product', similarity: 0.41 },
       ],
     });
 
-    expect(decision.route).toBe('floor');
+    expect(decision.route).toBe('floor_vct');
     expect(decision.path).toBe('semantic');
     expect(decision.confidence).toBeCloseTo(0.72, 6);
     expect(decision.similarity).toBe(decision.confidence);
@@ -318,7 +319,7 @@ describe('B0-650 threshold gating (pure decision builder)', () => {
     const decision = buildSemanticRouteDecision({
       ...base,
       scores: [
-        { route: 'floor', similarity: 0.4 },
+        { route: 'floor_vct', similarity: 0.4 },
         { route: 'product', similarity: 0.05 },
       ],
     });
@@ -332,7 +333,7 @@ describe('B0-650 threshold gating (pure decision builder)', () => {
     const decision = buildSemanticRouteDecision({
       ...base,
       scores: [
-        { route: 'floor', similarity: 0.81 },
+        { route: 'floor_vct', similarity: 0.81 },
         { route: 'bathroom', similarity: 0.78 },
       ],
     });
@@ -349,7 +350,7 @@ describe('B0-650 threshold gating (pure decision builder)', () => {
       ...base,
       thresholds: { confidence: 0.5, margin: 0.25 },
       scores: [
-        { route: 'floor', similarity: 0.5 },
+        { route: 'floor_vct', similarity: 0.5 },
         { route: 'product', similarity: 0.25 },
       ],
     });
@@ -361,7 +362,7 @@ describe('B0-650 threshold gating (pure decision builder)', () => {
   it('treats the runner-up as 0 when only one route scored', () => {
     const decision = buildSemanticRouteDecision({
       ...base,
-      scores: [{ route: 'floor', similarity: 0.6 }],
+      scores: [{ route: 'floor_vct', similarity: 0.6 }],
     });
 
     expect(decision.margin).toBeCloseTo(0.6, 6);
@@ -379,7 +380,7 @@ describe('B0-650 threshold gating (pure decision builder)', () => {
       ...base,
       error: 'openai down',
       scores: [
-        { route: 'floor', similarity: 0.99 },
+        { route: 'floor_vct', similarity: 0.99 },
         { route: 'product', similarity: 0.1 },
       ],
     });
@@ -463,14 +464,14 @@ describe('B0-680 initSemanticRouter (pre-computed embeddings file)', () => {
 
   it('still initializes the routes that validate when one route is missing from the file', async () => {
     const file = buildValidEmbeddingsFile();
-    delete file.routes.floor;
+    delete file.routes.floor_vct;
     setMockEmbeddingsFile(file);
 
     const result = await initSemanticRouter();
 
     expect(result.routeCount).toBe(SME_AGENT_IDS.length - 1);
     expect(result.errors).toHaveLength(1);
-    expect(result.errors[0]).toContain('floor');
+    expect(result.errors[0]).toContain('floor_vct');
     expect(result.errors[0]).toContain('missing from the embeddings file');
   });
 
@@ -552,18 +553,18 @@ describe('B0-680 initSemanticRouter (pre-computed embeddings file)', () => {
 
 describe('B0-648 classifyUserIntentSemantic', () => {
   it('routes a clearly-matching message to its route on the semantic path', async () => {
-    messageVectors.set('strip and recoat this VCT floor', basis(routeAxis('floor')));
+    messageVectors.set('strip and recoat this VCT floor', basis(routeAxis('floor_vct')));
 
     const decision = await classifyUserIntentSemantic('strip and recoat this VCT floor');
 
-    expect(decision.route).toBe('floor');
+    expect(decision.route).toBe('floor_vct');
     expect(decision.path).toBe('semantic');
     expect(decision.confidence).toBeCloseTo(1, 6);
     expect(decision.similarity).toBe(decision.confidence);
     expect(decision.margin).toBeCloseTo(1, 6);
     expect(decision.thresholdsPassed).toEqual({ confidence: true, margin: true });
     expect(decision.scores).toHaveLength(SME_AGENT_IDS.length);
-    expect(decision.scores[0]).toEqual({ route: 'floor', similarity: decision.confidence });
+    expect(decision.scores[0]).toEqual({ route: 'floor_vct', similarity: decision.confidence });
     expect(decision.error).toBeNull();
     expect(decision.thresholds).toEqual({ confidence: 0.5, margin: 0.1 });
     expect(decision.embeddingModel).toBe('text-embedding-3-large');
@@ -571,7 +572,7 @@ describe('B0-648 classifyUserIntentSemantic', () => {
   });
 
   it('falls back when the top score is below the confidence threshold', async () => {
-    messageVectors.set('vague question', vectorWithSimilarity(routeAxis('floor'), 0.4));
+    messageVectors.set('vague question', vectorWithSimilarity(routeAxis('floor_vct'), 0.4));
 
     const decision = await classifyUserIntentSemantic('vague question');
 
@@ -580,14 +581,14 @@ describe('B0-648 classifyUserIntentSemantic', () => {
     expect(decision.confidence).toBeCloseTo(0.4, 6);
     expect(decision.thresholdsPassed).toEqual({ confidence: false, margin: true });
     // The scores are still reported, so the fallback is diagnosable.
-    expect(decision.scores[0]?.route).toBe('floor');
+    expect(decision.scores[0]?.route).toBe('floor_vct');
     expect(decision.error).toBeNull();
   });
 
   it('falls back when two routes tie inside the margin threshold', async () => {
     messageVectors.set(
       'disinfect the locker room floor',
-      tiedVector(routeAxis('floor'), routeAxis('bathroom')),
+      tiedVector(routeAxis('floor_vct'), routeAxis('bathroom')),
     );
 
     const decision = await classifyUserIntentSemantic('disinfect the locker room floor');
@@ -633,10 +634,10 @@ describe('B0-648 classifyUserIntentSemantic', () => {
     expect(failed.error).toContain('embedding api down');
 
     // Next identical call retries rather than serving the cached failure for the TTL.
-    messageVectors.set('a floor question', basis(routeAxis('floor')));
+    messageVectors.set('a floor question', basis(routeAxis('floor_vct')));
     const retried = await classifyUserIntentSemantic('a floor question');
     expect(retried.path).toBe('semantic');
-    expect(retried.route).toBe('floor');
+    expect(retried.route).toBe('floor_vct');
   });
 
   it('degrades when the corpus could not be initialized at all (bad embeddings file)', async () => {
@@ -653,7 +654,7 @@ describe('B0-648 classifyUserIntentSemantic', () => {
   });
 
   it('caches the message embedding in-process: a repeat call makes no API call and reports embeddingMs 0', async () => {
-    messageVectors.set('strip and recoat this VCT floor', basis(routeAxis('floor')));
+    messageVectors.set('strip and recoat this VCT floor', basis(routeAxis('floor_vct')));
 
     const cold = await classifyUserIntentSemantic('strip and recoat this VCT floor');
     const callsAfterCold = embeddingsCreateMock.mock.calls.length;
@@ -667,7 +668,7 @@ describe('B0-648 classifyUserIntentSemantic', () => {
   });
 
   it('resetSemanticRouterForTest clears the corpus and the message cache', async () => {
-    messageVectors.set('strip and recoat this VCT floor', basis(routeAxis('floor')));
+    messageVectors.set('strip and recoat this VCT floor', basis(routeAxis('floor_vct')));
     await classifyUserIntentSemantic('strip and recoat this VCT floor');
     expect(getSemanticRouterCacheStats().size).toBe(1);
 
@@ -698,7 +699,7 @@ describe('B0-648 latency budget', () => {
 
     for (let i = 0; i < 60; i += 1) {
       const message = `distinct latency probe ${i}`;
-      messageVectors.set(message, vectorWithSimilarity(routeAxis('floor'), 0.7));
+      messageVectors.set(message, vectorWithSimilarity(routeAxis('floor_vct'), 0.7));
       const decision = await classifyUserIntentSemantic(message);
       scoringSamples.push(decision.scoringMs);
     }
@@ -709,7 +710,7 @@ describe('B0-648 latency budget', () => {
 
   it('keeps the whole warm (embedding-cached) call under the 10ms budget at p95', async () => {
     const message = 'strip and recoat this VCT floor';
-    messageVectors.set(message, basis(routeAxis('floor')));
+    messageVectors.set(message, basis(routeAxis('floor_vct')));
     await classifyUserIntentSemantic(message); // prime the cache
 
     const warmSamples: number[] = [];
@@ -724,7 +725,7 @@ describe('B0-648 latency budget', () => {
 
   it('reports a cold call\'s embedding time separately from its scoring time', async () => {
     const message = 'a cold floor question';
-    messageVectors.set(message, basis(routeAxis('floor')));
+    messageVectors.set(message, basis(routeAxis('floor_vct')));
     // 40ms stand-in for the real round-trip, so the assertion is about ATTRIBUTION, not speed.
     embeddingsCreateMock.mockImplementation(
       (body: { input: string[] }) =>

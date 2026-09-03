@@ -75,44 +75,41 @@ const ADAPTER_TAG = 'rag_corpus_full_document' as const;
  * must never ground on a VCT procedure document (and vice versa), and a bathroom-specialist question
  * must never ground on floor-care content at all.
  *
- * Deliberately keyword-based and deliberately narrow: an AMBIGUOUS or neither-signal floor query
- * (e.g. "how do I select a floor finish" with no substrate named) excludes nothing, so it keeps
- * behaving exactly as before this ticket. Only a query that actually names one domain gets bound
- * away from the other.
+ * B0-746 — the single `floor` specialist that used to guess the domain from query wording
+ * (`WOOD_FLOOR_QUERY_PATTERN`/`VCT_FLOOR_QUERY_PATTERN`) was split into four substrate specialists.
+ * The specialist id ITSELF now resolves the domain — routing already decided which substrate this
+ * turn is — so the query-text regex guessing is gone; each floor specialist unconditionally
+ * excludes the categories it does not own. `floor_concrete` and `floor_stg` have no dedicated
+ * ingest folder of their own (see `~/app/(authenticated)/admin/knowledge/manifest.ts`), so they
+ * exclude BOTH foreign folders, same as bathroom.
  */
-const WOOD_FLOOR_QUERY_PATTERN =
-  /\bwood(?:en)?\b|\bhardwood\b|\bgym(?:nasium)?s?\b|\bsport(?:s)?\s*(?:zone|floor|court)\b|\bmaple\b|\bathletic floor\b/i;
-const VCT_FLOOR_QUERY_PATTERN =
-  /\bvct\b|\bvinyl composition tile\b|\bvinyl tile\b|\bresilient tile\b|\bmastic\b/i;
-
-/** B0-780 — a bathroom-specialist call never needs floor-care content, regardless of query wording. */
 const BATHROOM_EXCLUDED_KNOWLEDGE_CATEGORIES = ['vct', 'sportszone'] as const;
 
 /**
- * B0-780 — resolves which `knowledge` document categories (see `deriveKnowledgeCategoryFromS3Key`)
- * to exclude from retrieval for this call, from the specialist policy actually running
- * (`auditCtx.specialistId`, threaded from `run-product-support-workflow.ts`'s `effectivePromptId`
- * via `wfCtx`) and the text of this specific call's query.
+ * B0-780/B0-746 — resolves which `knowledge` document categories (see
+ * `deriveKnowledgeCategoryFromS3Key`) to exclude from retrieval for this call, from the specialist
+ * policy actually running (`auditCtx.specialistId`, threaded from
+ * `run-product-support-workflow.ts`'s `effectivePromptId` via `wfCtx`).
+ *
+ * `queryText` is kept in the signature for compatibility with every call site, but is no longer
+ * consulted: post-B0-746 the specialist id alone resolves the substrate domain (see the doc
+ * comment above).
  *
  * `dilution-control` and `product` are cross-cutting categories and are never excluded here, for
  * any specialist.
  */
 export function resolveKnowledgeCategoryExclusions(
   specialistId: string | null | undefined,
-  queryText: string,
+  _queryText: string,
 ): string[] {
-  if (specialistId === 'bathroom') {
+  if (specialistId === 'bathroom' || specialistId === 'floor_concrete' || specialistId === 'floor_stg') {
     return [...BATHROOM_EXCLUDED_KNOWLEDGE_CATEGORIES];
   }
-  if (specialistId === 'floor') {
-    const isWoodDomain = WOOD_FLOOR_QUERY_PATTERN.test(queryText);
-    const isVctDomain = VCT_FLOOR_QUERY_PATTERN.test(queryText);
-    if (isWoodDomain && !isVctDomain) {
-      return ['vct'];
-    }
-    if (isVctDomain && !isWoodDomain) {
-      return ['sportszone'];
-    }
+  if (specialistId === 'floor_wood_sport') {
+    return ['vct'];
+  }
+  if (specialistId === 'floor_vct') {
+    return ['sportszone'];
   }
   return [];
 }

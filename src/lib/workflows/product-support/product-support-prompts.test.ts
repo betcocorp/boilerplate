@@ -21,8 +21,12 @@ const baseRouting = {
   productScore: 0,
   bathroomScore: 0,
   dilutionScore: 0,
-  floorScore: 0,
+  floorWoodSportScore: 0,
+  floorConcreteScore: 0,
+  floorStgScore: 0,
+  floorVctScore: 0,
   recommendationScore: 0,
+  crossReferenceScore: 0,
 };
 
 describe('buildProductSupportInstructions — recommendations routing (B0-98)', () => {
@@ -80,13 +84,17 @@ describe('buildProductSupportInstructions — recommendations routing (B0-98)', 
         productScore: 0,
         bathroomScore: 0,
         dilutionScore: 0,
-        floorScore: 0,
+        floorWoodSportScore: 0,
+        floorConcreteScore: 0,
+        floorStgScore: 0,
+        floorVctScore: 0,
         recommendationScore: 2,
+        crossReferenceScore: 0,
       },
     });
 
     expect(instructions).toContain(
-      'Scores: product 0 · bathroom 0 · dilution 0 · floor 0 · recommendations 2',
+      'Scores: product 0 · bathroom 0 · dilution 0 · floor_wood_sport 0 · floor_concrete 0 · floor_stg 0 · floor_vct 0 · recommendations 2 · cross_reference 0',
     );
   });
 });
@@ -281,7 +289,7 @@ describe('effectivePromptIdForDecision (B0-392)', () => {
   });
 
   it('is the same mapping the assembled instructions and the prompt-version stamp use', () => {
-    for (const decision of ['ambiguous', 'bathroom', 'floor', 'not-a-specialist']) {
+    for (const decision of ['ambiguous', 'bathroom', 'floor_vct', 'not-a-specialist']) {
       const effective = effectivePromptIdForDecision(decision);
 
       // The assembled prompt for the decision equals the assembled prompt for its effective id…

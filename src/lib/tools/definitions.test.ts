@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import { DILUTION_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/dilution-specialist/dilution-specialist-system-prompt';
-import { FLOOR_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/floor-specialist/floor-specialist-system-prompt';
+import { FLOOR_CONCRETE_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/floor-specialist/floor-concrete-specialist-system-prompt';
+import { FLOOR_STG_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/floor-specialist/floor-stg-specialist-system-prompt';
+import { FLOOR_VCT_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/floor-specialist/floor-vct-specialist-system-prompt';
+import { FLOOR_WOOD_SPORT_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/floor-specialist/floor-wood-sport-specialist-system-prompt';
 import { PRODUCT_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/product-specialist/product-specialist-system-prompt';
 import { RECOMMENDATIONS_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/recommendations-specialist/recommendations-specialist-system-prompt';
 import {
@@ -21,7 +24,17 @@ import {
   PRODUCT_SUPPORT_SHARED_INSTRUCTIONS,
 } from '~/lib/workflows/product-support/product-support-prompts';
 
-const ROUTES = ['product', 'ambiguous', 'bathroom', 'dilution', 'floor', 'recommendations'];
+const ROUTES = [
+  'product',
+  'ambiguous',
+  'bathroom',
+  'dilution',
+  'floor_wood_sport',
+  'floor_concrete',
+  'floor_stg',
+  'floor_vct',
+  'recommendations',
+];
 
 /** Every specialist policy the product-support workflow can actually run, by routing decision. */
 const SPECIALIST_PROMPT_BY_ROUTE: Record<string, string> = {
@@ -29,7 +42,10 @@ const SPECIALIST_PROMPT_BY_ROUTE: Record<string, string> = {
   ambiguous: PRODUCT_SPECIALIST_SYSTEM_PROMPT,
   bathroom: BATHROOM_SPECIALIST_SYSTEM_PROMPT,
   dilution: DILUTION_SPECIALIST_SYSTEM_PROMPT,
-  floor: FLOOR_SPECIALIST_SYSTEM_PROMPT,
+  floor_wood_sport: FLOOR_WOOD_SPORT_SPECIALIST_SYSTEM_PROMPT,
+  floor_concrete: FLOOR_CONCRETE_SPECIALIST_SYSTEM_PROMPT,
+  floor_stg: FLOOR_STG_SPECIALIST_SYSTEM_PROMPT,
+  floor_vct: FLOOR_VCT_SPECIALIST_SYSTEM_PROMPT,
   recommendations: RECOMMENDATIONS_SPECIALIST_SYSTEM_PROMPT,
 };
 
@@ -91,7 +107,14 @@ describe('productSupportToolsForRoute (B0-437)', () => {
     }
     // Catalog/filter questions do land on these routes ("what floor strippers do you have?").
     // B0-734 — recommendations joins them: its B0-663 policy names the category tools.
-    for (const route of ['bathroom', 'floor', 'recommendations']) {
+    for (const route of [
+      'bathroom',
+      'floor_wood_sport',
+      'floor_concrete',
+      'floor_stg',
+      'floor_vct',
+      'recommendations',
+    ]) {
       for (const name of category) {
         expect(toolNames(route)).toContain(name);
       }
@@ -148,8 +171,10 @@ describe('get_dispenser_asset / get_floor_asset wiring (B0-529)', () => {
     expect(toolNames('dilution')).toContain('get_dispenser_asset');
     expect(toolNames('dilution')).not.toContain('get_floor_asset');
 
-    expect(toolNames('floor')).toContain('get_floor_asset');
-    expect(toolNames('floor')).not.toContain('get_dispenser_asset');
+    for (const route of ['floor_wood_sport', 'floor_concrete', 'floor_stg', 'floor_vct']) {
+      expect(toolNames(route)).toContain('get_floor_asset');
+      expect(toolNames(route)).not.toContain('get_dispenser_asset');
+    }
 
     for (const route of ['bathroom', 'recommendations']) {
       for (const name of NEW_TOOLS) {
