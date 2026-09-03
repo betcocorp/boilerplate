@@ -179,9 +179,9 @@ export const ROUTING_GOLDEN_SET: RoutingGoldenCase[] = [
     id: 'boundary-recommend-floor-procedure',
     message:
       'What do you recommend to strip and recoat a VCT floor using the floor maintenance program?',
-    expectedRoute: 'floor',
+    expectedRoute: 'floor_vct',
     expectsCrossReferencePostProcessing: false,
-    note: 'The broad "recommend" cross_reference signal, and the job-based "what do you recommend" recommendations signal, must not hijack a floor procedure — a 3-way tie resolves to floor by SME_ROUTE_TIE_BREAK_ORDER (B0-663).',
+    note: 'The broad "recommend" cross_reference signal, and the job-based "what do you recommend" recommendations signal, must not hijack a floor procedure — "floor maintenance program" ties all four floor categories (B0-746) plus recommendations/cross_reference, and floor_vct wins the tie-break (SME_ROUTE_TIE_BREAK_ORDER, B0-663/B0-746).',
   },
   {
     id: 'boundary-dilution-hardware',
@@ -214,7 +214,7 @@ export const ROUTING_GOLDEN_SET: RoutingGoldenCase[] = [
     message: 'What should I use to degrease a commercial kitchen floor?',
     expectedRoute: 'recommendations',
     expectsCrossReferencePostProcessing: false,
-    note: 'Generic job/problem ask ("what should I use") with a bare "degreas" PRODUCT_SIGNALS hit — ties product 1-1 and recommendations wins the tie (additive-only order still keeps it below dilution/floor/bathroom).',
+    note: 'Generic job/problem ask ("what should I use") with a bare "degreas" PRODUCT_SIGNALS hit — ties product 1-1 and recommendations wins the tie (additive-only order still keeps it below dilution/the four floor specialists/bathroom).',
   },
   {
     id: 'job-sticky-residue-tile',
@@ -236,7 +236,7 @@ export const ROUTING_GOLDEN_SET: RoutingGoldenCase[] = [
     message: 'I have an issue with static cling building up on the carpet, what would you recommend?',
     expectedRoute: 'recommendations',
     expectsCrossReferencePostProcessing: false,
-    note: 'Cross-domain problem (carpet is outside bathroom/dilution/floor) with no competitor named — outright win.',
+    note: 'Cross-domain problem (carpet is outside bathroom/dilution/every floor specialist) with no competitor named — outright win.',
   },
   {
     id: 'job-adhesive-residue-need-something',

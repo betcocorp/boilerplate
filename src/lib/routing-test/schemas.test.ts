@@ -23,12 +23,16 @@ describe('routingTestExpectedAgentSchema (B0-657)', () => {
     expect(routingTestExpectedAgentSchema.safeParse('').success).toBe(false);
   });
 
-  it('stays derived from the registry, so the enum and the DB CHECK cover the same six ids', () => {
+  it('stays derived from the registry, so the enum and the DB CHECK cover the same nine ids', () => {
+    // B0-746 — the former single `floor` id was split into four substrate specialists.
     expect([...SME_AGENT_IDS]).toEqual([
       'product',
       'bathroom',
       'dilution',
-      'floor',
+      'floor_wood_sport',
+      'floor_concrete',
+      'floor_stg',
+      'floor_vct',
       'recommendations',
       'cross_reference',
     ]);
@@ -82,7 +86,7 @@ describe('routingTestItemUpdateSchema', () => {
       routingTestItemUpdateSchema.safeParse({
         id: 'not-a-uuid',
         prompt: 'Anything',
-        expectedAgent: 'floor',
+        expectedAgent: 'floor_vct',
       }).success,
     ).toBe(false);
 
@@ -90,7 +94,7 @@ describe('routingTestItemUpdateSchema', () => {
       routingTestItemUpdateSchema.safeParse({
         id: '3f1cf2f6-2c1a-4d3b-9f47-1a0a6ac1a111',
         prompt: 'Anything',
-        expectedAgent: 'floor',
+        expectedAgent: 'floor_vct',
       }).success,
     ).toBe(true);
   });

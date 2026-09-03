@@ -1,7 +1,10 @@
 import { BATHROOM_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/bathroom-specialist/bathroom-specialist-system-prompt';
 import { CROSS_REFERENCE_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/cross-reference-specialist/cross-reference-specialist-system-prompt';
 import { DILUTION_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/dilution-specialist/dilution-specialist-system-prompt';
-import { FLOOR_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/floor-specialist/floor-specialist-system-prompt';
+import { FLOOR_CONCRETE_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/floor-specialist/floor-concrete-specialist-system-prompt';
+import { FLOOR_STG_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/floor-specialist/floor-stg-specialist-system-prompt';
+import { FLOOR_VCT_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/floor-specialist/floor-vct-specialist-system-prompt';
+import { FLOOR_WOOD_SPORT_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/floor-specialist/floor-wood-sport-specialist-system-prompt';
 import { PRODUCT_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/product-specialist/product-specialist-system-prompt';
 import { RECOMMENDATIONS_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/recommendations-specialist/recommendations-specialist-system-prompt';
 import { runBexChatTurn } from '~/lib/bex/run-chat-turn';
@@ -54,11 +57,20 @@ async function unresolvedCompetitorDecline(): Promise<
  * its own tool/engine rather than this forced-routing mechanism; in practice its HTTP route was
  * always a placeholder. `recommendations` now means job/problem-driven product recommendation
  * (no competitor named), which runs through the same RAG/catalog tool loop as `product`/
- * `dilution`/`floor`/`bathroom`, so it is wired in here like them. Competitor cross-reference
+ * `dilution`/the four floor specialists/`bathroom`, so it is wired in here like them. Competitor cross-reference
  * moved to the new `cross_reference` agent, which does NOT go through this real-workflow chat
  * loop — see `runCrossReferenceSmeAgentAnswer` below.
  */
-const REAL_WORKFLOW_AGENT_IDS = ['product', 'dilution', 'floor', 'bathroom', 'recommendations'] as const;
+const REAL_WORKFLOW_AGENT_IDS = [
+  'product',
+  'dilution',
+  'floor_wood_sport',
+  'floor_concrete',
+  'floor_stg',
+  'floor_vct',
+  'bathroom',
+  'recommendations',
+] as const;
 type RealWorkflowAgentId = (typeof REAL_WORKFLOW_AGENT_IDS)[number];
 
 function isRealWorkflowAgent(agentId: SmeAgentId): agentId is RealWorkflowAgentId {
@@ -113,18 +125,60 @@ const AGENTS: Record<SmeAgentId, AgentMeta> = {
       '`productSkuOrName` — chemical tied to the dispenser.',
     ],
   },
-  floor: {
-    label: 'Floor Care Specialist',
+  floor_wood_sport: {
+    label: 'Wood/Sport Floor Care Specialist',
     summary:
-      'Floor maintenance programs: stripping, finishing, burnishing, recoating — procedural guidance with Betco-approved methods.',
+      'Wood (hardwood) sport/gym floor finish and coating: recoating programs and daily/interim maintenance, using Betco-approved methods.',
+    focusAreas: [
+      'Wood/hardwood sport and gym floor finish and coating procedures',
+      'Coat counts, equipment, and safety notes from approved procedures',
+      'Hand back to Product Specialist for pure SKU/SDS fact questions when appropriate',
+    ],
+    systemPrompt: FLOOR_WOOD_SPORT_SPECIALIST_SYSTEM_PROMPT,
+    sessionContextGuide: [
+      '`programGoal` — recoat, daily maintenance, high-gloss burnish.',
+    ],
+  },
+  floor_concrete: {
+    label: 'Concrete Floor Care Specialist',
+    summary:
+      'Concrete floor cleaning, densifying, sealing, coating, stripping, and scrubbing — procedural guidance with Betco-approved methods.',
+    focusAreas: [
+      'Concrete sealing, coating, densifying, stripping, and scrubbing workflows',
+      'Coat counts, equipment, and safety notes from approved procedures',
+      'Hand back to Product Specialist for pure SKU/SDS fact questions when appropriate',
+    ],
+    systemPrompt: FLOOR_CONCRETE_SPECIALIST_SYSTEM_PROMPT,
+    sessionContextGuide: [
+      '`programGoal` — seal, coat, densify, strip, daily maintenance.',
+    ],
+  },
+  floor_stg: {
+    label: 'Stone, Tile & Grout Specialist',
+    summary:
+      'Cleaning and protecting natural stone, tile, and grout surfaces (STG Cleaner and Protectant line), using Betco-approved methods.',
+    focusAreas: [
+      'Daily/periodic cleaning and protectant application for stone, tile, and grout',
+      'Reapplication schedules and safety notes from approved procedures',
+      'Hand back to Product Specialist for pure SKU/SDS fact questions when appropriate',
+    ],
+    systemPrompt: FLOOR_STG_SPECIALIST_SYSTEM_PROMPT,
+    sessionContextGuide: [
+      '`surfaceType` — e.g. natural stone, ceramic/porcelain tile, grout (if known).',
+    ],
+  },
+  floor_vct: {
+    label: 'VCT & Resilient Tile Floor Care Specialist',
+    summary:
+      'VCT, terrazzo, and resilient/hard tile floor maintenance programs: stripping, finishing, burnishing, recoating — procedural guidance with Betco-approved methods.',
     focusAreas: [
       'Stripping, finishing, burnishing, and scrub-and-recoat workflows',
       'Coat counts, equipment, and safety notes from approved procedures',
       'Hand back to Product Specialist for pure SKU/SDS fact questions when appropriate',
     ],
-    systemPrompt: FLOOR_SPECIALIST_SYSTEM_PROMPT,
+    systemPrompt: FLOOR_VCT_SPECIALIST_SYSTEM_PROMPT,
     sessionContextGuide: [
-      '`floorType` — e.g. VCT, terrazzo, concrete (if known).',
+      '`floorType` — e.g. VCT, terrazzo (if known).',
       '`programGoal` — strip, recoat, daily maintenance, high-gloss burnish.',
     ],
   },
@@ -208,7 +262,8 @@ function bathroomContextSummary(
 }
 
 /**
- * B0-520/521/522/523 — runs the real specialist (`product`, `dilution`, `floor`, `bathroom`)
+ * B0-520/521/522/523 — runs the real specialist (`product`, `dilution`, one of the four floor
+ * specialists, `bathroom`)
  * through `runProductSupportWorkflow`, forced to this agent's mode via `runBexChatTurn` —
  * the exact mechanism the Bex chat UI uses for `agentMode !== 'orchestrator'` direct routing
  * (see `run-chat-turn.ts`, `run-orchestration.ts`'s `bex-chat` workflow, and
@@ -314,7 +369,8 @@ async function runRealSmeAgentAnswer(
 
 /**
  * B0-663 — competitor cross-reference SME answer. Unlike `runRealSmeAgentAnswer` (the generic
- * RAG/tool chat loop `product`/`dilution`/`floor`/`bathroom`/`recommendations` all share), this
+ * RAG/tool chat loop `product`/`dilution`/the four floor specialists/`bathroom`/`recommendations`
+ * all share), this
  * agent is driven directly by the dedicated `recommendCrossReference()` engine (legacy lookup +
  * web-grounded fallback + validator gate) via `runCrossReferenceRecommendation` — the same engine
  * the orchestrator's `recommend_cross_reference` tool and the deterministic workflow-level
@@ -435,7 +491,8 @@ async function runCrossReferenceSmeAgentAnswer(
 /**
  * Entry point for every `/api/v1/agents/{id}` route.
  *
- * B0-352 — all six agent ids dispatch to a REAL answer path: `product`, `dilution`, `floor`,
+ * B0-352/B0-746 — all nine agent ids dispatch to a REAL answer path: `product`, `dilution`,
+ * `floor_wood_sport`, `floor_concrete`, `floor_stg`, `floor_vct`,
  * `bathroom` and `recommendations` run the product-support workflow forced to that specialist
  * (`runRealSmeAgentAnswer`, B0-520/521/522/523/663) and `cross_reference` runs the dedicated
  * cross-reference engine (`runCrossReferenceSmeAgentAnswer`, B0-663). None of them is a stub.
@@ -477,7 +534,11 @@ export async function runSmeAgent(
         parts.push(`productSkuOrName: ${pn.trim()}`);
       }
     }
-    if (agentId === 'floor' && typeof ft === 'string' && ft.trim()) {
+    if (
+      (agentId === 'floor_vct' || agentId === 'floor_wood_sport') &&
+      typeof ft === 'string' &&
+      ft.trim()
+    ) {
       parts.push(`floorType: ${ft.trim()}`);
     }
     if (agentId === 'recommendations') {
@@ -541,8 +602,13 @@ export async function runSmeAgent(
           if (agentId === 'dilution') {
             return 'Wire dilution control charts, equipment manuals, and labeled setup data; no fabricated ratios.';
           }
-          if (agentId === 'floor') {
-            return 'Wire floor-care SOPs, finish/stripper bulletins, and procedural RAG scoped to maintenance programs.';
+          if (
+            agentId === 'floor_wood_sport' ||
+            agentId === 'floor_concrete' ||
+            agentId === 'floor_stg' ||
+            agentId === 'floor_vct'
+          ) {
+            return 'Wire floor-care SOPs, finish/stripper bulletins, and procedural RAG scoped to this substrate\'s maintenance programs.';
           }
           if (agentId === 'recommendations') {
             return 'Wire the product catalog/RAG tools (search_product_docs, find_products_by_category, get_products_in_category, get_product_category, get_product_spec) to identify the job/problem and select the single best-fit Betco product; enforce the 0.80 confidence gate before naming a product.';

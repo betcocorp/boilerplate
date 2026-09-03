@@ -27,7 +27,7 @@ export type EfficacyLabReportCitation = {
   excerpt: string;
 };
 
-type EfficacyDocumentRow = {
+export type EfficacyDocumentRow = {
   id: string;
   title: string;
   source_record_id: string;
@@ -39,11 +39,70 @@ type EfficacyDocumentRow = {
   summary: string | null;
   body_text: string | null;
   language_code: string | null;
+  /** B0-796 AC2 tie-break key — see pickMostCurrentDocument(). */
+  created_at: string | null;
 };
 
 function readMetadataString(metadata: Record<string, unknown> | null, key: string): string | null {
   const value = metadata?.[key];
   return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * B0-802 — reduces a formula code to the bare product-code qualifier a
+ * "TABLE n: CALCULATED DATA FOR <qualifier ...>" heading actually names, so a
+ * shared lab report covering several formulas can be disambiguated to the one this
+ * document itself is linked to. M000796 -> "796" (same reduction the B0-232
+ * crosswalk backfill uses for the same corpus); a bare product code (legacy/
+ * disinfectant corpora, whose formula code already IS the product code) is
+ * returned upper-cased unchanged.
+ */
+export function extractProductQualifier(formulaCode: string | null): string | null {
+  if (!formulaCode) return null;
+  const upper = formulaCode.trim().toUpperCase();
+  const match = upper.match(/^M0*(\d+)$/);
+  return match ? match[1] : upper || null;
+}
+
+/**
+ * B0-802 — true only when `chunkText` contains a "TABLE n: CALCULATED DATA FOR
+ * ..." heading whose product/formula description names `qualifier` as a whole
+ * word (word-boundaried so "796" doesn't match inside "17960"). This is the
+ * actual results table (log reduction / percent reduction), not the "TEST
+ * RESULTS FOR" raw-count table or a "CONTROL RESULTS" table that happens to also
+ * list the organism.
+ */
+export function isCalculatedDataTableForQualifier(chunkText: string, qualifier: string | null): boolean {
+  if (!qualifier) return false;
+  const heading = chunkText.match(/table\s+\d+:\s*calculated data for\s+([^\n]+)/i)?.[1];
+  if (!heading) return false;
+  return new RegExp(`\\b${escapeRegExp(qualifier)}\\b`, 'i').test(heading);
+}
+
+/**
+ * B0-796 AC2 — deterministic tie-break when more than one `is_current = true`
+ * efficacy document remains for a product line (still legitimate after the
+ * currency reconciliation: e.g. two genuinely-current formulas, or a sibling
+ * whose frontmatter currency is UNKNOWN and therefore was never touched). Never
+ * rely on the RPC's return order (docs[0]).
+ *
+ * Picks the most recently created row. rag.document carries no authoritative
+ * "effective date" column; `created_at` is the best available signal, and for
+ * this corpus it is a *verified* one — ingestion order tracks each formula's own
+ * version history (e.g. M000796's Version 0 -> Version 6 rows were inserted with
+ * strictly increasing created_at, in step with the version number). Falls back
+ * to `id` for a fully deterministic order on an exact created_at tie.
+ */
+export function pickMostCurrentDocument(docs: EfficacyDocumentRow[]): EfficacyDocumentRow {
+  return [...docs].sort((a, b) => {
+    const byCreatedAt = (b.created_at ?? '').localeCompare(a.created_at ?? '');
+    if (byCreatedAt !== 0) return byCreatedAt;
+    return a.id.localeCompare(b.id);
+  })[0];
 }
 
 /**
@@ -138,9 +197,28 @@ async function buildCitation(
 
   const needle = organism?.trim().toLowerCase();
   const chunkRows = (chunks ?? []) as Array<{ chunk_text: string }>;
-  const matched = needle
-    ? chunkRows.find((c) => c.chunk_text.toLowerCase().includes(needle))
-    : undefined;
+  const qualifier = extractProductQualifier(readMetadataString(doc.metadata, 'formula_code'));
+
+  // B0-802: a lab-report document can carry several "TABLE n: CALCULATED DATA
+  // FOR <formula>" blocks for DIFFERENT formulas sharing one test panel (e.g. the
+  // M000796 document also carries 795's and 797's calculated-data tables) — the
+  // same organism can legitimately appear in more than one of them. Prefer the
+  // table that belongs to THIS document's own formula/product qualifier first;
+  // only fall back to a bare organism match (pre-B0-802 behavior) when no
+  // qualifier is available (single-formula legacy/disinfectant docs) or no
+  // qualifier-scoped table matched at all — never silently accept a different
+  // formula's table when a qualifier match exists.
+  let matched: { chunk_text: string } | undefined;
+  if (qualifier) {
+    matched = chunkRows.find(
+      (c) =>
+        isCalculatedDataTableForQualifier(c.chunk_text, qualifier) &&
+        (!needle || c.chunk_text.toLowerCase().includes(needle)),
+    );
+  }
+  if (!matched && needle) {
+    matched = chunkRows.find((c) => c.chunk_text.toLowerCase().includes(needle));
+  }
   const excerpt =
     (matched ?? chunkRows[0])?.chunk_text ?? doc.summary ?? doc.body_text?.slice(0, 900) ?? '';
 
@@ -187,11 +265,10 @@ export async function fetchCurrentEfficacyLabReport(
 
   if (docs.length === 0) return null;
 
-  // TODO(B0-232): a product can cite multiple formulas over time; today this takes
-  // the first current document returned. Revisit once real crosswalk data exists and
-  // we can tell whether "most recent effective_at" or an explicit primary flag is the
-  // right tie-break.
-  return buildCitation(docs[0], organism);
+  // B0-796 AC2: more than one is_current=true row can legitimately remain for a
+  // product line even after currency reconciliation — never rely on the RPC's
+  // return order. See pickMostCurrentDocument() for the tie-break rule.
+  return buildCitation(pickMostCurrentDocument(docs), organism);
 }
 
 /**
@@ -215,6 +292,16 @@ export function renderEfficacyLabReportCitation(citation: EfficacyLabReportCitat
     );
   }
 
+  // B0-802: the model comprehends this excerpt as free text — there is no structured
+  // log-reduction/NR parser in the pipeline. Without an explicit instruction, a "No
+  // Reduction" / "NR" / blank Log Reduction or Percent Reduction cell has been read as
+  // an affirmative kill claim. This line travels with the excerpt through every path
+  // that renders this citation (single- and batch-product `get_efficacy_data`), so the
+  // guardrail is present wherever the model actually sees the table.
+  lines.push(
+    '',
+    '**Reading this table:** "No Reduction", "NR", or a blank Log Reduction / Percent Reduction cell means the tested product did NOT demonstrate a measurable reduction for that organism at that contact time. State that absence exactly as printed, or say the verified data does not support a reduction claim — never invert it into a positive/affirmative "yes, it kills X" claim.',
+  );
   lines.push('', citation.excerpt);
 
   return lines.join('\n');

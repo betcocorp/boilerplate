@@ -24,8 +24,8 @@ describe('normalizeRoutedAgent (B0-659)', () => {
 
 describe('isRoutingTestItemPass', () => {
   it('passes only on an exact match', () => {
-    expect(isRoutingTestItemPass('floor', 'floor')).toBe(true);
-    expect(isRoutingTestItemPass('floor', 'product')).toBe(false);
+    expect(isRoutingTestItemPass('floor_vct', 'floor_vct')).toBe(true);
+    expect(isRoutingTestItemPass('floor_vct', 'product')).toBe(false);
   });
 
   it('never passes an ambiguous prediction — no expected agent is "ambiguous"', () => {

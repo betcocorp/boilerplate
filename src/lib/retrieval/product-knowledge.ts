@@ -171,10 +171,18 @@ export type ProductKnowledgeRetrievalSummary = {
    * specifically, whether it came from `resolveProductEntityByName`'s alias-table match (exact or
    * tokenized-fuzzy) versus a non-alias resolution path (prod_line_id / title match), versus a
    * caller that supplied a key without going through that resolver at all. Lets eval runs separate
-   * "alias-anchored" retrieval from other explicit-key retrieval. `null` for every other strategy
-   * (broad/anchored-via-similarity paths never have an explicit key to source).
+   * "alias-anchored" retrieval from other explicit-key retrieval.
+   *
+   * B0-693 — also now populated as `'broad_similarity_probe'` when `strategy` is
+   * `'anchored_only'`/`'anchored_with_broad_fallback'` AND `productLineResolution.lockedProductLineKey`
+   * is non-null: the previously-always-`null` value here made it impossible to tell, from a
+   * persisted run, whether a locked line was alias-anchored (high-precision) or came from the
+   * broad-probe similarity lock alone (`resolveProductLineFromMatches`) — exactly the distinction
+   * needed to self-diagnose a wrong-lock regression like this ticket's. Still `null` when no key was
+   * ever supplied/locked at all (`broad_only`, `broad_resolution_disabled`, or a broad probe that
+   * declined to lock).
    */
-  explicitKeySource: ProductEntityResolutionSource | 'unspecified' | null;
+  explicitKeySource: ProductEntityResolutionSource | 'unspecified' | 'broad_similarity_probe' | null;
   /**
    * B0-490 — max `similarity` across the winning search's raw candidates (the matches
    * `searchProductChunks` returned, before `selectCuratedMatches` filtered/deduped/truncated the
@@ -747,6 +755,9 @@ async function runProductKnowledgeQuery(input: {
           candidates: [],
           lockedProductLineKey: explicitKey,
           lockReason: 'explicit_filter',
+          // B0-693 — mirrors the sibling `explicitKeySource` above so the distinction survives
+          // into `final_output.productLineLock` (see `productLineLockSchema`'s doc comment).
+          explicitKeySource: input.productLineKeySource ?? 'unspecified',
         },
         rawTopSimilarity: maxSimilarity(rawMatches),
         selectedTopSimilarity: maxSimilarity(curated),
@@ -804,6 +815,7 @@ async function runProductKnowledgeQuery(input: {
           candidates: [],
           lockedProductLineKey: null,
           lockReason: 'resolution_disabled',
+          explicitKeySource: null,
         },
         rawTopSimilarity: maxSimilarity(result.matches),
         selectedTopSimilarity: maxSimilarity(curated),
@@ -827,12 +839,23 @@ async function runProductKnowledgeQuery(input: {
     excludeKnowledgeCategories,
   });
 
-  // B0-693 — a query targeting a specific GHS section (hazard, first aid, dilution/contact-time,
-  // EPA reg, etc.) is regulated content: require the margin-over-runner-up check even when the top
-  // score alone would otherwise clear the absolute confidence bar. General queries (`sectionType ===
-  // null`) are unaffected — see `resolveProductLineFromMatches`'s doc comment.
+  // B0-693 — margin-over-runner-up corroboration is now required UNCONDITIONALLY, not only when
+  // `sectionType !== null`. The `sectionType`-only carve-out was confirmed incomplete: a general
+  // query with no explicit GHS section (e.g. "what is the dilution ratio for DAILY DISINFECT" via
+  // `search_product_docs`'s freeform path, which never sets `sectionType`) still hit the bare
+  // absolute-threshold shortcut with zero corroboration -- a close, uncorroborated runner-up could
+  // silently win (confirmed live: workflow run 61cc4ce9-bc1b-4d08-9b88-bc7d52c7365b locked "Sen
+  // Emerging Storm Con" at 0.6876 over a runner-up at 0.6843, a ~0.003 spread, well under
+  // `MIN_LOCK_MARGIN`). Reaching this broad-probe path at all already means alias resolution
+  // (`resolveProductEntityByName`, upstream in product-tools.ts) found no confident match --
+  // otherwise the `explicitKey` branch above would have anchored retrieval instead -- so alias
+  // resolution having declined is already an intrinsic property of every call that gets here; no
+  // separate signal needs to be threaded through for that. Removing the carve-out costs nothing on
+  // a genuinely clear top score: when there is no runner-up, or a wide spread, the margin check
+  // passes trivially (see `resolveProductLineFromMatches`'s `spread` default of `1` with no second
+  // candidate) -- it only changes the outcome for exactly the thin-margin case this ticket reports.
   const resolution = resolveProductLineFromMatches(broadResult.matches, {
-    requireMarginForHighConfidence: sectionType !== null,
+    requireMarginForHighConfidence: true,
   });
   const requiredDocumentKindsForQuery = resolveRequiredDocumentKinds(input.query, sectionType);
 
@@ -873,7 +896,9 @@ async function runProductKnowledgeQuery(input: {
         broadCuratedCount: broadCurated.length,
         anchoredCuratedCount: 0,
         explicitKeySource: null,
-        productLineResolution: resolution,
+        // B0-693 — this branch only runs when `resolution.lockedProductLineKey` is null (nothing
+        // locked), so there is genuinely no key source to mirror here.
+        productLineResolution: { ...resolution, explicitKeySource: null },
         rawTopSimilarity: maxSimilarity(broadResult.matches),
         selectedTopSimilarity: maxSimilarity(broadCurated),
         droppedByFilterCount: Math.max(0, broadResult.matches.length - broadCurated.length),
@@ -953,8 +978,12 @@ async function runProductKnowledgeQuery(input: {
       withheldUnanchoredSdsCount: withheldSds,
       broadCuratedCount: broadSelected.length,
       anchoredCuratedCount: anchoredSelected.length,
-      explicitKeySource: null,
-      productLineResolution: resolution,
+      // B0-693 — this branch only runs when `resolution.lockedProductLineKey` is non-null (the
+      // no-lock case returns earlier above), so a real lock always came from the broad similarity
+      // probe here — never an alias resolution, which would have taken the `explicit_product_line`
+      // branch instead.
+      explicitKeySource: 'broad_similarity_probe',
+      productLineResolution: { ...resolution, explicitKeySource: 'broad_similarity_probe' },
       rawTopSimilarity: maxSimilarity(
         shouldUseBroadFallback ? broadResult.matches : anchoredResult.matches,
       ),

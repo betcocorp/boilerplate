@@ -27,7 +27,10 @@ describe('routeUserMessageToSme — cross_reference (REC-7)', () => {
     const route = routeUserMessageToSme(
       'What do you recommend to strip and recoat a VCT floor using the floor maintenance program?',
     );
-    expect(route.agent).toBe('floor');
+    // "floor maintenance program" is the substrate-agnostic generic phrase shared by all four floor
+    // categories (B0-746), so this ties across them plus recommendations/cross_reference; floor_vct
+    // wins the tie-break as the default floor-care specialist.
+    expect(route.agent).toBe('floor_vct');
   });
 
   it('leaves a pure Betco-product spec question on the product agent', () => {
@@ -108,7 +111,7 @@ describe('routeUserMessageToSme — cross-reference intent beats generic product
   });
 
   it('still lets procedure specialists win over a decisive cross-reference phrase', () => {
-    // Guards against the decisive short-circuit stealing turns from dilution/floor/bathroom.
+    // Guards against the decisive short-circuit stealing turns from dilution/the floor specialists/bathroom.
     expect(
       routeUserMessageToSme(
         'How do I calibrate the dispenser and set the metering tip on my dilution control system?',
@@ -164,7 +167,10 @@ describe('routeUserMessageToSme — matched phrases and decision path (B0-392)',
       'comparable',
     ]);
     expect(route.matchedPhrases.product).toEqual(['product', 'disinfect', 'betco']);
-    expect(route.matchedPhrases.floor).toEqual([]);
+    expect(route.matchedPhrases.floor_wood_sport).toEqual([]);
+    expect(route.matchedPhrases.floor_concrete).toEqual([]);
+    expect(route.matchedPhrases.floor_stg).toEqual([]);
+    expect(route.matchedPhrases.floor_vct).toEqual([]);
 
     // The phrases are the score: counts are unchanged, they are just no longer the only record.
     expect(route.matchedPhrases.cross_reference).toHaveLength(route.crossReferenceScore);
@@ -172,7 +178,10 @@ describe('routeUserMessageToSme — matched phrases and decision path (B0-392)',
     expect(route.matchedPhrases.product).toHaveLength(route.productScore);
     expect(route.matchedPhrases.bathroom).toHaveLength(route.bathroomScore);
     expect(route.matchedPhrases.dilution).toHaveLength(route.dilutionScore);
-    expect(route.matchedPhrases.floor).toHaveLength(route.floorScore);
+    expect(route.matchedPhrases.floor_wood_sport).toHaveLength(route.floorWoodSportScore);
+    expect(route.matchedPhrases.floor_concrete).toHaveLength(route.floorConcreteScore);
+    expect(route.matchedPhrases.floor_stg).toHaveLength(route.floorStgScore);
+    expect(route.matchedPhrases.floor_vct).toHaveLength(route.floorVctScore);
   });
 
   it('shows why the counts are not comparable across categories', () => {
@@ -203,12 +212,13 @@ describe('routeUserMessageToSme — matched phrases and decision path (B0-392)',
   });
 
   it('names the tie-break path and the tied categories when a tie is resolved', () => {
-    // floor 1 ("burnish") vs bathroom 1 ("tile") — resolved by priority, not by score.
+    // floor_vct 1 ("burnish", B0-746: burnishing is VCT/resilient-tile-specific) vs bathroom 1
+    // ("tile") — resolved by priority, not by score.
     const route = routeUserMessageToSme('Burnish the tile.');
 
     expect(route.decisionPath).toBe('tie_break');
-    expect(route.tiedCategories).toEqual(['bathroom', 'floor']);
-    expect(route.agent).toBe('floor');
+    expect(route.tiedCategories).toEqual(['bathroom', 'floor_vct']);
+    expect(route.agent).toBe('floor_vct');
     // A tie resolves to a real agent by priority — it is never reported as "ambiguous".
     expect(route.agent).not.toBeNull();
     expect(SME_ROUTE_TIE_BREAK_ORDER.indexOf(route.agent as never)).toBeGreaterThanOrEqual(0);

@@ -2,7 +2,10 @@ import { createHash } from 'node:crypto';
 
 import { CROSS_REFERENCE_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/cross-reference-specialist/cross-reference-specialist-system-prompt';
 import { DILUTION_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/dilution-specialist/dilution-specialist-system-prompt';
-import { FLOOR_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/floor-specialist/floor-specialist-system-prompt';
+import { FLOOR_CONCRETE_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/floor-specialist/floor-concrete-specialist-system-prompt';
+import { FLOOR_STG_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/floor-specialist/floor-stg-specialist-system-prompt';
+import { FLOOR_VCT_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/floor-specialist/floor-vct-specialist-system-prompt';
+import { FLOOR_WOOD_SPORT_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/floor-specialist/floor-wood-sport-specialist-system-prompt';
 import { PRODUCT_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/product-specialist/product-specialist-system-prompt';
 import { RECOMMENDATIONS_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/recommendations-specialist/recommendations-specialist-system-prompt';
 import { productSupportTools } from '~/lib/tools/definitions';
@@ -84,7 +87,11 @@ export type PromptBundleInputs = {
 const SPECIALIST_PROMPT_IDS: readonly SpecialistPromptId[] = [
   'bathroom',
   'dilution',
-  'floor',
+  // B0-746 — the former single `floor` id was split into four substrate specialists.
+  'floor_wood_sport',
+  'floor_concrete',
+  'floor_stg',
+  'floor_vct',
   'product',
   'recommendations',
   'cross_reference',
@@ -204,7 +211,10 @@ export function computePromptBundleVersionFrom(input: PromptBundleInputs): strin
 export const PRODUCT_SUPPORT_SPECIALIST_PROMPTS: SpecialistPromptTexts = {
   bathroom: BATHROOM_SPECIALIST_SYSTEM_PROMPT,
   dilution: DILUTION_SPECIALIST_SYSTEM_PROMPT,
-  floor: FLOOR_SPECIALIST_SYSTEM_PROMPT,
+  floor_wood_sport: FLOOR_WOOD_SPORT_SPECIALIST_SYSTEM_PROMPT,
+  floor_concrete: FLOOR_CONCRETE_SPECIALIST_SYSTEM_PROMPT,
+  floor_stg: FLOOR_STG_SPECIALIST_SYSTEM_PROMPT,
+  floor_vct: FLOOR_VCT_SPECIALIST_SYSTEM_PROMPT,
   product: PRODUCT_SPECIALIST_SYSTEM_PROMPT,
   recommendations: RECOMMENDATIONS_SPECIALIST_SYSTEM_PROMPT,
   cross_reference: CROSS_REFERENCE_SPECIALIST_SYSTEM_PROMPT,

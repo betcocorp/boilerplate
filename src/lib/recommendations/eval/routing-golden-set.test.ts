@@ -52,7 +52,7 @@ describe('routing golden set (B0-339)', () => {
     // B0-663 — `cross_reference` (competitor) and `recommendations` (job-based, new) are now
     // distinct routes; both must be represented.
     expect(new Set(ROUTING_GOLDEN_SET.map((c) => c.expectedRoute))).toEqual(
-      new Set(['cross_reference', 'recommendations', 'product', 'floor', 'dilution', 'bathroom', null]),
+      new Set(['cross_reference', 'recommendations', 'product', 'floor_vct', 'dilution', 'bathroom', null]),
     );
   });
 

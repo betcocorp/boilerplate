@@ -64,6 +64,8 @@ export async function updateTestRecord(testId: string, values: Partial<NewTestRe
   return assertNoError(result) as TestRecord;
 }
 
+const INSERT_TEST_ITEMS_CHUNK_SIZE = 500;
+
 export async function insertTestItems(items: NewTestItemRecord[]) {
   if (items.length === 0) {
     return [] as TestItemRecord[];
@@ -72,11 +74,28 @@ export async function insertTestItems(items: NewTestItemRecord[]) {
   const supabase = getSupabaseServiceRoleClient();
   const inserted: TestItemRecord[] = [];
 
-  for (let i = 0; i < items.length; i += 500) {
-    const slice = items.slice(i, i + 500);
+  for (let i = 0; i < items.length; i += INSERT_TEST_ITEMS_CHUNK_SIZE) {
+    const slice = items.slice(i, i + INSERT_TEST_ITEMS_CHUNK_SIZE);
     const result = await supabase.from('test_items').insert(slice).select('*');
-    const data = assertNoError(result);
-    inserted.push(...((data || []) as TestItemRecord[]));
+    // B0-655 — a bad row anywhere in this chunk aborts the whole insert (never partially, silently
+    // drops rows), but the raw Postgrest error alone doesn't say WHICH rows. Report the row_index
+    // span of the failing chunk so the real cause (a specific malformed row) is findable instead of
+    // just "insert failed". Any rows already inserted from earlier chunks are still left in place —
+    // the caller (`uploadTestCsvAction` via `runCreatedRecordOrCleanup`) is responsible for deleting
+    // the parent `tests` row on failure, which cascades and removes those partial rows too.
+    if (result.error) {
+      const rowIndexes = slice
+        .map((row) => row.row_index)
+        .filter((value): value is number => typeof value === 'number');
+      const span =
+        rowIndexes.length > 0
+          ? `row_index ${Math.min(...rowIndexes)}-${Math.max(...rowIndexes)}`
+          : `items ${i}-${i + slice.length - 1}`;
+      throw new Error(
+        `Failed to insert test items for ${span} (chunk starting at offset ${i} of ${items.length}): ${result.error.message}`,
+      );
+    }
+    inserted.push(...((result.data || []) as TestItemRecord[]));
   }
 
   return inserted;

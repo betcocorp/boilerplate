@@ -165,12 +165,14 @@ import {
 } from '~/lib/workflows/product-support/semantic-router-decision';
 import {
   evaluateRegulatedClaimGrounding,
+  evaluateVerifiedFactsDilutionCitation,
   resolveRevisionModel,
   resolveValidatorModel,
   REVISION_SYSTEM_PROMPT,
   runRevisionPass,
   runValidatorPass,
 } from '~/lib/workflows/product-support/validator';
+import { fetchProductLineFacts } from '~/lib/retrieval/product-facts';
 
 import type { RunSource } from '~/types/observability';
 
@@ -2011,7 +2013,10 @@ export async function runProductSupportWorkflow(input: {
       productScore: route.productScore,
       bathroomScore: route.bathroomScore,
       dilutionScore: route.dilutionScore,
-      floorScore: route.floorScore,
+      floorWoodSportScore: route.floorWoodSportScore,
+      floorConcreteScore: route.floorConcreteScore,
+      floorStgScore: route.floorStgScore,
+      floorVctScore: route.floorVctScore,
       recommendationScore: route.recommendationScore,
       crossReferenceScore: route.crossReferenceScore,
     },
@@ -2060,7 +2065,10 @@ export async function runProductSupportWorkflow(input: {
         product: route.productScore,
         bathroom: route.bathroomScore,
         dilution: route.dilutionScore,
-        floor: route.floorScore,
+        floor_wood_sport: route.floorWoodSportScore,
+        floor_concrete: route.floorConcreteScore,
+        floor_stg: route.floorStgScore,
+        floor_vct: route.floorVctScore,
         cross_reference: route.crossReferenceScore,
         recommendations: route.recommendationScore,
       },
@@ -2319,7 +2327,10 @@ export async function runProductSupportWorkflow(input: {
           product: route.productScore,
           bathroom: route.bathroomScore,
           dilution: route.dilutionScore,
-          floor: route.floorScore,
+          floor_wood_sport: route.floorWoodSportScore,
+          floor_concrete: route.floorConcreteScore,
+          floor_stg: route.floorStgScore,
+          floor_vct: route.floorVctScore,
           cross_reference: route.crossReferenceScore,
           recommendations: route.recommendationScore,
         },
@@ -4089,6 +4100,91 @@ export async function runProductSupportWorkflow(input: {
       regulatedClaimGuardrailActivation = { state: 'ran', verdict: 'passed' };
     }
 
+    // B0-699 — `evaluateVerifiedFactsDilutionCitation`: catches the narrower case
+    // `regulated_claim_guardrail` above cannot — a `[doc:verified-facts]` citation whose dilution
+    // figure is a REAL row from the turn's shared (possibly multi-product) evidence block, but
+    // for a DIFFERENT product line than the one this turn actually locked onto (the live incident
+    // this ticket reproduces: "2 oz/gal (1:64)" cited to verified-facts for DAILY DISINFECT, whose
+    // own locked fact row says "1:256"). Deliberately NOT gated behind
+    // `BEX_DISABLE_CONFIDENCE_GATING` — see the function's own doc comment: that flag already
+    // suppresses the verbatim guardrail's enforcement above, so wiring this one to the same switch
+    // would leave today's production config with no working defense against this failure mode.
+    const dilutionLock = extractProductLineLockFromToolTrace(resolvedToolTrace);
+    const dilutionLockedFactsMap = dilutionLock?.lockedProductLineKey
+      ? await fetchProductLineFacts([dilutionLock.lockedProductLineKey])
+      : null;
+    const dilutionLockedFacts =
+      dilutionLock?.lockedProductLineKey && dilutionLockedFactsMap
+        ? (dilutionLockedFactsMap.get(dilutionLock.lockedProductLineKey) ?? null)
+        : null;
+    const dilutionCitationGrounding = evaluateVerifiedFactsDilutionCitation({
+      draftAnswer,
+      lockedFacts: dilutionLockedFacts
+        ? {
+            dilutionDisplay: dilutionLockedFacts.dilutionDisplay,
+            dilutionOzPerGal: dilutionLockedFacts.dilutionOzPerGal,
+          }
+        : null,
+    });
+
+    let dilutionCitationGuardrailActivation: GateActivationRecord = { state: 'ran' };
+
+    if (dilutionCitationGrounding.applicable && !dilutionCitationGrounding.grounded) {
+      const confidenceBeforeDilutionCap = validation.confidence;
+      validation = {
+        ...validation,
+        approved: false,
+        confidence: Math.min(validation.confidence, 0.4),
+        issues: Array.from(new Set([...validation.issues, 'dilution_citation_unverified'])),
+        requires_human_review: true,
+      };
+      // Same capping-chain rule as the regulated-claim guardrail above.
+      confidenceState = applyConfidenceCap(
+        confidenceState,
+        confidenceBeforeDilutionCap,
+        validation.confidence,
+      );
+      audit.enqueue(
+        'dilution_citation_guardrail_rejected',
+        {
+          citedTokens: dilutionCitationGrounding.citedTokens,
+          ungroundedTokens: dilutionCitationGrounding.ungroundedTokens,
+          lockedProductLineKey: dilutionLock?.lockedProductLineKey ?? null,
+        },
+        { ...wfCtx, stepId: validationStep.id },
+      );
+      validatorStepGates.push({
+        gate: 'dilution_citation_guardrail',
+        inputs: {
+          citedTokens: dilutionCitationGrounding.citedTokens,
+          ungroundedTokens: dilutionCitationGrounding.ungroundedTokens,
+          lockedProductLineKey: dilutionLock?.lockedProductLineKey ?? null,
+        },
+        thresholds: {
+          note: "hard match against the locked product line's own fact row, not a numeric threshold",
+        },
+        verdict: 'rejected',
+        effect: `Cited dilution figure(s) ${dilutionCitationGrounding.ungroundedTokens.join(', ')} for [doc:verified-facts] did not match the locked product line's own dilution fact: approved forced to false, confidence ${confidenceBeforeDilutionCap} → ${validation.confidence}, human review requested.`,
+      });
+      dilutionCitationGuardrailActivation = { state: 'ran', verdict: 'rejected' };
+    } else {
+      validatorStepGates.push({
+        gate: 'dilution_citation_guardrail',
+        inputs: {
+          applicable: dilutionCitationGrounding.applicable,
+          citedTokens: dilutionCitationGrounding.citedTokens,
+        },
+        thresholds: {
+          note: "hard match against the locked product line's own fact row, not a numeric threshold",
+        },
+        verdict: 'passed',
+        effect: dilutionCitationGrounding.applicable
+          ? "Every cited [doc:verified-facts] dilution figure matched the locked product line's own fact row. No cap, no replacement."
+          : 'The draft did not cite [doc:verified-facts] alongside a dilution figure, so there was nothing to verify. No cap, no replacement.',
+      });
+      dilutionCitationGuardrailActivation = { state: 'ran', verdict: 'passed' };
+    }
+
     // REC-4: on the competitive-recommendation route, calibrate confidence to retrieval
     // strength (top-hit similarity < 60% cannot exceed 0.75) and enforce chemistry-class
     // consistency once REC-1 grounding + REC-2/3 structured fields are wired (dormant until then).
@@ -4612,6 +4708,7 @@ export async function runProductSupportWorkflow(input: {
           : { state: 'skipped', reason: 'disabled_by_flag' },
         usageSafetyCoverage: usageSafetyCoverageActivation,
         regulatedClaimGuardrail: regulatedClaimGuardrailActivation,
+        dilutionCitationGuardrail: dilutionCitationGuardrailActivation,
         recommendationConfidence: recommendationConfidenceActivation,
         // B0-356 — absent-vs-not_applicable matters here: a run predating the gate has no key.
         recommendationEngineVerdict:

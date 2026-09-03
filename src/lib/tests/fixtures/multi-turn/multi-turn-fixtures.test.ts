@@ -184,7 +184,20 @@ describe('multi-turn scenario fixtures (B0-539)', () => {
     }
   });
 
-  it('covers every SME agent exactly once', () => {
+  /**
+   * B0-746 — the former single `floor` id was split into four substrate specialists
+   * (`floor_wood_sport`, `floor_concrete`, `floor_stg`, `floor_vct`), but `floor-multi-turn-v1.json`
+   * deliberately stays ONE shared cross-substrate fixture rather than being split four ways: several
+   * of its scenarios (flr-mt-008, flr-mt-014) specifically test that a product/substrate does not
+   * migrate when a conversation crosses between wood, VCT, and concrete within one thread — that
+   * behavior cannot be exercised if the scenarios are separated by specialist. Its `intended_agent`
+   * is labeled `floor_vct` (the most frequent substrate), so the other three floor ids are EXPECTED
+   * to have no dedicated file of their own — exclude them from the "one file per agent" check below
+   * rather than requiring three more thin, low-value fixture files just to satisfy it.
+   */
+  const AGENTS_COVERED_BY_A_SHARED_FLOOR_FIXTURE = ['floor_wood_sport', 'floor_concrete', 'floor_stg'];
+
+  it('covers every SME agent exactly once (floor substrates share one fixture, B0-746)', () => {
     const byAgent = new Map<string, string>();
     for (const fileName of setFileNames) {
       const parsed = multiTurnScenarioSetSchema.safeParse(readSetFile(fileName));
@@ -195,6 +208,9 @@ describe('multi-turn scenario fixtures (B0-539)', () => {
       ).toBe(false);
       byAgent.set(parsed.data.intended_agent, fileName);
     }
-    expect([...byAgent.keys()].sort()).toEqual([...SME_AGENT_IDS].sort());
+    const expectedAgents = SME_AGENT_IDS.filter(
+      (id) => !AGENTS_COVERED_BY_A_SHARED_FLOOR_FIXTURE.includes(id),
+    );
+    expect([...byAgent.keys()].sort()).toEqual([...expectedAgents].sort());
   });
 });

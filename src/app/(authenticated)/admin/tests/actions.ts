@@ -54,6 +54,7 @@ import {
 } from '~/lib/tests/repository';
 import { buildTestRunOptions } from '~/lib/tests/run-config';
 import { uploadTestCsvToS3 } from '~/lib/tests/storage';
+import { runCreatedRecordOrCleanup } from '~/lib/tests/upload-cleanup';
 
 function normalizeReturnPath(value: FormDataEntryValue | null, fallback: string) {
   if (typeof value !== 'string' || !value.trim()) {
@@ -164,32 +165,41 @@ export async function uploadTestCsvAction(formData: FormData) {
     const set = parsed.set;
     let createdTestId: string;
     try {
-      const created = await createTestRecord({
-        name: testName || set.name,
-        source_file_name: file.name,
-        source_bucket: 'ad-hoc',
-        source_key: 'none',
-        row_count: set.scenarios.length,
-        status: 'ready',
-        // The set declares its own intended agent; an explicit form choice still wins.
-        intended_agent: intended_agent ?? set.intended_agent,
-        metadata: {
-          multi_turn_set_id: set.set_id,
-          multi_turn_scenario_count: set.scenarios.length,
-          content_type: file.type || 'application/json',
-          file_size_bytes: file.size,
+      const created = await runCreatedRecordOrCleanup({
+        create: () =>
+          createTestRecord({
+            name: testName || set.name,
+            source_file_name: file.name,
+            source_bucket: 'ad-hoc',
+            source_key: 'none',
+            row_count: set.scenarios.length,
+            status: 'ready',
+            // The set declares its own intended agent; an explicit form choice still wins.
+            intended_agent: intended_agent ?? set.intended_agent,
+            metadata: {
+              multi_turn_set_id: set.set_id,
+              multi_turn_scenario_count: set.scenarios.length,
+              content_type: file.type || 'application/json',
+              file_size_bytes: file.size,
+            },
+          }),
+        run: async (createdTest) => {
+          await insertTestItems(
+            buildTestItemsFromScenarioSet({
+              testId: createdTest.id,
+              set,
+              sourceFileName: file.name,
+            }),
+          );
+          return createdTest;
         },
+        deleteById: deleteTestById,
       });
       createdTestId = created.id;
-
-      await insertTestItems(
-        buildTestItemsFromScenarioSet({
-          testId: created.id,
-          set,
-          sourceFileName: file.name,
-        }),
-      );
     } catch (error) {
+      // B0-655 — insertTestItems threw (or createTestRecord itself did): the parent row from
+      // `create` above, if it was created, has already been deleted by runCreatedRecordOrCleanup,
+      // so this never leaves a phantom empty/unrunnable set behind.
       redirect(encodeMessage('/admin/tests', 'error', describeUploadError(error)));
     }
 
@@ -260,67 +270,75 @@ export async function uploadTestCsvAction(formData: FormData) {
   }
 
   try {
-    const initialTest = await createTestRecord({
-      name: testName || file.name.replace(/\.csv$/i, ''),
-      source_file_name: file.name,
-      source_bucket: 'retool-360',
-      source_key: 'pending',
-      row_count: 0,
-      status: 'uploading',
-      intended_agent,
-      metadata: {
-        column_names: columnNames,
-        content_type: file.type || 'text/csv',
-        file_size_bytes: file.size,
+    await runCreatedRecordOrCleanup({
+      create: () =>
+        createTestRecord({
+          name: testName || file.name.replace(/\.csv$/i, ''),
+          source_file_name: file.name,
+          source_bucket: 'retool-360',
+          source_key: 'pending',
+          row_count: 0,
+          status: 'uploading',
+          intended_agent,
+          metadata: {
+            column_names: columnNames,
+            content_type: file.type || 'text/csv',
+            file_size_bytes: file.size,
+          },
+        }),
+      run: async (initialTest) => {
+        const uploaded = await uploadTestCsvToS3({
+          testId: initialTest.id,
+          fileName: file.name,
+          bytes: fileBytes,
+          contentType: file.type || 'text/csv',
+        });
+
+        const testItems = parsedRows.map((row) => ({
+          test_id: initialTest.id,
+          row_index: row.rowIndex,
+          prompt: row.prompt,
+          expected_should_answer: row.expectedShouldAnswer,
+          expected_result_type: row.expectedResultType,
+          expected_canonical_product: row.expectedCanonicalProduct,
+          expected_reason_code: row.expectedReasonCode,
+          source: row.source,
+          priority: row.priority,
+          ideal_response: row.idealResponse,
+          expected_concepts: row.expectedConcepts,
+          minimum_concepts: row.minimumConcepts,
+          expected_criteria: row.expectedCriteria,
+          expected_sources: row.expectedSources,
+          should_cite: row.shouldCite,
+          expected_tool: row.expectedTool,
+          expected_surface_type: row.expectedSurfaceType,
+          expected_brand_family: row.expectedBrandFamily,
+          expected_setting: row.expectedSetting,
+          input_payload: row.inputPayload,
+          metadata: row.metadata,
+        }));
+
+        await insertTestItems(testItems);
+        await updateTestRecord(initialTest.id, {
+          source_bucket: uploaded.bucket,
+          source_key: uploaded.key,
+          row_count: parsedRows.length,
+          status: 'ready',
+          intended_agent,
+          metadata: {
+            column_names: columnNames,
+            content_type: file.type || 'text/csv',
+            file_size_bytes: file.size,
+            parsed_rows: parsedRows.length,
+          },
+        });
       },
-    });
-
-    const uploaded = await uploadTestCsvToS3({
-      testId: initialTest.id,
-      fileName: file.name,
-      bytes: fileBytes,
-      contentType: file.type || 'text/csv',
-    });
-
-    const testItems = parsedRows.map((row) => ({
-      test_id: initialTest.id,
-      row_index: row.rowIndex,
-      prompt: row.prompt,
-      expected_should_answer: row.expectedShouldAnswer,
-      expected_result_type: row.expectedResultType,
-      expected_canonical_product: row.expectedCanonicalProduct,
-      expected_reason_code: row.expectedReasonCode,
-      source: row.source,
-      priority: row.priority,
-      ideal_response: row.idealResponse,
-      expected_concepts: row.expectedConcepts,
-      minimum_concepts: row.minimumConcepts,
-      expected_criteria: row.expectedCriteria,
-      expected_sources: row.expectedSources,
-      should_cite: row.shouldCite,
-      expected_tool: row.expectedTool,
-      expected_surface_type: row.expectedSurfaceType,
-      expected_brand_family: row.expectedBrandFamily,
-      expected_setting: row.expectedSetting,
-      input_payload: row.inputPayload,
-      metadata: row.metadata,
-    }));
-
-    await insertTestItems(testItems);
-    await updateTestRecord(initialTest.id, {
-      source_bucket: uploaded.bucket,
-      source_key: uploaded.key,
-      row_count: parsedRows.length,
-      status: 'ready',
-      intended_agent,
-      metadata: {
-        column_names: columnNames,
-        content_type: file.type || 'text/csv',
-        file_size_bytes: file.size,
-        parsed_rows: parsedRows.length,
-      },
+      deleteById: deleteTestById,
     });
   } catch (error) {
+    // B0-655 — the S3 upload or insertTestItems threw: the parent row created above has already
+    // been deleted by runCreatedRecordOrCleanup, so no phantom `status: 'uploading'`, zero-item
+    // set survives to block retries or confuse the admin list.
     redirect(
       encodeMessage('/admin/tests', 'error', describeUploadError(error)),
     );

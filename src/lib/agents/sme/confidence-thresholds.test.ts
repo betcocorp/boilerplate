@@ -3,7 +3,10 @@ import { describe, expect, it } from 'vitest';
 import { BATHROOM_SPECIALIST_SYSTEM_PROMPT as SME_BATHROOM_SYSTEM_PROMPT } from '~/lib/agents/bathroom-specialist/bathroom-specialist-system-prompt';
 import { CROSS_REFERENCE_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/cross-reference-specialist/cross-reference-specialist-system-prompt';
 import { DILUTION_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/dilution-specialist/dilution-specialist-system-prompt';
-import { FLOOR_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/floor-specialist/floor-specialist-system-prompt';
+import { FLOOR_CONCRETE_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/floor-specialist/floor-concrete-specialist-system-prompt';
+import { FLOOR_STG_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/floor-specialist/floor-stg-specialist-system-prompt';
+import { FLOOR_VCT_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/floor-specialist/floor-vct-specialist-system-prompt';
+import { FLOOR_WOOD_SPORT_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/floor-specialist/floor-wood-sport-specialist-system-prompt';
 import { PRODUCT_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/product-specialist/product-specialist-system-prompt';
 import { RECOMMENDATIONS_SPECIALIST_SYSTEM_PROMPT } from '~/lib/agents/recommendations-specialist/recommendations-specialist-system-prompt';
 import {
@@ -45,8 +48,23 @@ const EXPECTED_THRESHOLD_SENTENCE: Record<string, { prompt: string; sentence: st
     sentence:
       'If confidence is below **0.9**, say so and arrange human follow-up rather than speculating.',
   },
-  floor: {
-    prompt: FLOOR_SPECIALIST_SYSTEM_PROMPT,
+  floor_wood_sport: {
+    prompt: FLOOR_WOOD_SPORT_SPECIALIST_SYSTEM_PROMPT,
+    sentence:
+      'If confidence is below **0.9**, avoid definitive process guarantees and trigger human follow-up.',
+  },
+  floor_concrete: {
+    prompt: FLOOR_CONCRETE_SPECIALIST_SYSTEM_PROMPT,
+    sentence:
+      'If confidence is below **0.9**, avoid definitive process guarantees and trigger human follow-up.',
+  },
+  floor_stg: {
+    prompt: FLOOR_STG_SPECIALIST_SYSTEM_PROMPT,
+    sentence:
+      'If confidence is below **0.9**, avoid definitive process guarantees and trigger human follow-up.',
+  },
+  floor_vct: {
+    prompt: FLOOR_VCT_SPECIALIST_SYSTEM_PROMPT,
     sentence:
       'If confidence is below **0.9**, avoid definitive process guarantees and trigger human follow-up.',
   },
@@ -97,7 +115,7 @@ describe('SME confidence thresholds (B0-530)', () => {
   it('renders the threshold without trailing-zero padding', () => {
     expect(formatConfidenceThreshold('bathroom')).toBe('**0.8**');
     expect(formatConfidenceThreshold('product')).toBe('**0.9**');
-    expect(confidenceGateClause('floor')).toBe('If confidence is below **0.9**');
+    expect(confidenceGateClause('floor_vct')).toBe('If confidence is below **0.9**');
     expect(confidenceGateClause('product', { lead: 'When' })).toBe(
       'When confidence is below **0.9**',
     );

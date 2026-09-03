@@ -33,7 +33,15 @@ export const orchestrationRoutingSchema = z.object({
   productScore: z.number().finite().int().nonnegative(),
   bathroomScore: z.number().finite().int().nonnegative(),
   dilutionScore: z.number().finite().int().nonnegative(),
-  floorScore: z.number().finite().int().nonnegative(),
+  /**
+   * B0-746 — the former single `floorScore` split into one count per substrate specialist
+   * (`floor_wood_sport`, `floor_concrete`, `floor_stg`, `floor_vct`). BREAKING change to this wire
+   * contract: `floorScore` no longer exists.
+   */
+  floorWoodSportScore: z.number().finite().int().nonnegative(),
+  floorConcreteScore: z.number().finite().int().nonnegative(),
+  floorStgScore: z.number().finite().int().nonnegative(),
+  floorVctScore: z.number().finite().int().nonnegative(),
   recommendationScore: z.number().finite().int().nonnegative(),
   /** B0-663 — competitor cross-reference score (split out of the old `recommendationScore`). */
   crossReferenceScore: z.number().finite().int().nonnegative(),

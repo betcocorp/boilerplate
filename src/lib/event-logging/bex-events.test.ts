@@ -84,7 +84,7 @@ describe('buildBexChatMessageSentEvent', () => {
       conversationId: 'conv-1',
       promptLength: 10,
       model: 'gpt-4o-mini',
-      agentMode: 'floor',
+      agentMode: 'floor_vct',
       useValidator: true,
       extra: { surface: 'bex-composer', model: 'spoofed' },
     });

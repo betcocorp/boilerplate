@@ -127,6 +127,17 @@ const INCLUDE_CANDIDATE_ALIASES = process.argv.includes('--include-candidate-ali
  * `true`/`false` frontmatter is honoured; `UNKNOWN` is left untouched, never assumed.
  */
 const SYNC_CURRENCY = process.argv.includes('--sync-currency');
+/**
+ * B0-796 — explicit alias for "don't pass --write". The script was already dry-run by
+ * default, but the currency-reconciliation PLAN (see planEfficacyCurrencyReconciliation()
+ * below) used to only get computed and logged inside the `if (WRITE)` branch, so there was no
+ * way to preview it without also authorizing every OTHER write this script makes
+ * (crosswalk rows, formula_code metadata stamps, document links). This flag doesn't
+ * change behavior — the currency plan is now always computed and logged when
+ * --sync-currency is passed — it just makes the invocation self-documenting for anyone
+ * reviewing the plan before authorizing --write.
+ */
+const DRY_RUN = process.argv.includes('--dry-run');
 const REPORT_PATH = new URL('../src/lib/training/efficacy-crosswalk-backfill-report.json', import.meta.url);
 
 function log(msg) {
@@ -143,6 +154,98 @@ function frontmatterField(body, field) {
   const raw = m[1].trim().replace(/^['"]|['"]$/g, '').trim();
   if (!raw || raw === 'null' || raw === 'UNKNOWN') return null;
   return raw;
+}
+
+/**
+ * B0-796 — build the full is_current reconciliation plan for EVERY document_kind=
+ * 'efficacy' row with a non-null entity_id, not just the docs this run's S1/S2
+ * resolution strategies happen to resolve. `resolved` (the pre-existing --sync-
+ * currency loop's scope) is producer of the crosswalk, not a description of every
+ * already-linked document — a doc that fails to re-resolve this run (ambiguous code,
+ * revoked alias, etc.) or was linked by some other mechanism entirely would silently
+ * keep a stale is_current forever if the sync only ever looked at `resolved`.
+ *
+ * `docs` is every efficacy row already loaded by loadDocuments() (no entity_id filter
+ * applied there) — this function does its own `entity_id` scoping.
+ *
+ * Honors the same true/false-only, never-guess-UNKNOWN rule as before: a doc whose
+ * frontmatter `is current:` field is missing or literally "UNKNOWN" is reported as
+ * skipped and never written.
+ */
+function planEfficacyCurrencyReconciliation(docs) {
+  const plan = [];
+  for (const doc of docs) {
+    if (!doc.entity_id) continue; // AC scope: linked docs only.
+    const raw = frontmatterField(doc.body_text, 'is current');
+    if (raw !== 'true' && raw !== 'false') {
+      plan.push({
+        document_id: doc.id,
+        title: doc.title,
+        current_is_current: doc.is_current,
+        frontmatter_value: 'UNKNOWN',
+        action: 'skip_unknown',
+      });
+      continue;
+    }
+    const desired = raw === 'true';
+    if (doc.is_current === desired) {
+      plan.push({
+        document_id: doc.id,
+        title: doc.title,
+        current_is_current: doc.is_current,
+        frontmatter_value: raw,
+        action: 'no_op',
+      });
+      continue;
+    }
+    plan.push({
+      document_id: doc.id,
+      title: doc.title,
+      current_is_current: doc.is_current,
+      frontmatter_value: raw,
+      desired_is_current: desired,
+      action: doc.is_current ? 'true_to_false' : 'false_to_true',
+    });
+  }
+  return plan;
+}
+
+/** Logs every row of the plan plus the summary counts the ticket asks for. */
+function logEfficacyCurrencyPlan(plan) {
+  log('\n── is_current reconciliation plan (B0-796, entity_id non-null efficacy docs) ──');
+  for (const row of plan) {
+    log(
+      `  [${row.action}] ${row.document_id} "${row.title}" ` +
+        `live_is_current=${row.current_is_current} frontmatter="${row.frontmatter_value}"` +
+        (row.action.includes('_to_') ? ` -> desired=${row.desired_is_current}` : ''),
+    );
+  }
+  const counts = plan.reduce((acc, row) => {
+    acc[row.action] = (acc[row.action] ?? 0) + 1;
+    return acc;
+  }, {});
+  log('\n── Summary ──');
+  log(`  true_to_false : ${counts.true_to_false ?? 0}`);
+  log(`  false_to_true : ${counts.false_to_true ?? 0}`);
+  log(`  no_op         : ${counts.no_op ?? 0}`);
+  log(`  skip_unknown  : ${counts.skip_unknown ?? 0}`);
+  log(`  TOTAL         : ${plan.length}`);
+}
+
+/** Applies the flips in `plan` (true_to_false / false_to_true only). Never called unless --write. */
+async function applyEfficacyCurrencyReconciliation(plan) {
+  let flipped = 0;
+  for (const row of plan) {
+    if (row.action !== 'true_to_false' && row.action !== 'false_to_true') continue;
+    const { error } = await supabase
+      .schema('rag')
+      .from('document')
+      .update({ is_current: row.desired_is_current })
+      .eq('id', row.document_id);
+    if (error) throw new Error(`sync is_current on ${row.document_id}: ${error.message}`);
+    flipped += 1;
+  }
+  log(`\nSynced is_current on ${flipped} efficacy documents.`);
 }
 
 function tierOf(s3Key) {
@@ -517,11 +620,25 @@ async function main() {
     log(`  CONFLICT ${c.s3_key}: currently ${c.current_entity_id}, resolved ${c.entity_id} — left untouched.`);
   }
 
+  // ── is_current reconciliation plan (B0-796) ───────────────────────────────
+  // Computed and logged whenever --sync-currency is passed, REGARDLESS of --write, so
+  // the plan can be reviewed as a true dry run without also authorizing every other
+  // write this script makes. See planEfficacyCurrencyReconciliation() for scope
+  // (every entity_id-linked efficacy doc, not just `resolved` this run) and the
+  // true/false-only, never-guess-UNKNOWN rule.
+  const currencyPlan = SYNC_CURRENCY ? planEfficacyCurrencyReconciliation(docs) : [];
+  if (SYNC_CURRENCY) {
+    logEfficacyCurrencyPlan(currencyPlan);
+    if (!WRITE) {
+      log('\n(--sync-currency without --write: plan only, nothing written above.)');
+    }
+  }
+
   // ── Report ────────────────────────────────────────────────────────────────
   const report = {
     generated_at: new Date().toISOString(),
     ticket: 'B0-232',
-    mode: WRITE ? 'write' : 'dry-run',
+    mode: WRITE ? 'write' : DRY_RUN ? 'dry-run (explicit)' : 'dry-run',
     totals: {
       efficacy_documents: docs.length,
       resolved: resolved.length,
@@ -542,6 +659,18 @@ async function main() {
     unmatched_report: unmatched,
     crosswalk_rows: [...crosswalk.values()],
     candidate_formula_aliases: candidateAliases,
+    ...(SYNC_CURRENCY
+      ? {
+          currency_reconciliation_b0796: {
+            scope: 'every document_kind=efficacy row with a non-null entity_id',
+            plan: currencyPlan,
+            totals: currencyPlan.reduce(
+              (acc, row) => ({ ...acc, [row.action]: (acc[row.action] ?? 0) + 1 }),
+              { true_to_false: 0, false_to_true: 0, no_op: 0, skip_unknown: 0 },
+            ),
+          },
+        }
+      : {}),
   };
   writeFileSync(REPORT_PATH, `${JSON.stringify(report, null, 2)}\n`);
   log(`\nReport written to src/lib/training/efficacy-crosswalk-backfill-report.json`);
@@ -639,24 +768,11 @@ async function main() {
   log(`Stamped metadata.formula_code on ${stamped} efficacy documents.`);
 
   // ── Write: sync is_current from frontmatter (opt-in) ──────────────────────
+  // B0-796: the plan was already computed and logged above (before the !WRITE early
+  // return) so it is visible in a plain dry run too — this only APPLIES it, and only
+  // for every entity_id-linked efficacy doc's plan row (not just `resolved` this run).
   if (SYNC_CURRENCY) {
-    let flipped = 0;
-    for (const r of resolved) {
-      const doc = docById.get(r.document_id);
-      if (!doc) continue;
-      const raw = frontmatterField(doc.body_text, 'is current');
-      if (raw !== 'true' && raw !== 'false') continue; // UNKNOWN / absent — never assume
-      const desired = raw === 'true';
-      if (doc.is_current === desired) continue;
-      const { error } = await supabase
-        .schema('rag')
-        .from('document')
-        .update({ is_current: desired })
-        .eq('id', r.document_id);
-      if (error) throw new Error(`sync is_current on ${r.document_id}: ${error.message}`);
-      flipped += 1;
-    }
-    log(`Synced is_current from frontmatter on ${flipped} efficacy documents.`);
+    await applyEfficacyCurrencyReconciliation(currencyPlan);
   }
   log('\nDone.\n');
 }

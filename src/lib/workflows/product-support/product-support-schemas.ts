@@ -196,6 +196,13 @@ export const gateIdSchema = z.enum([
   'semantic_router_live',
   'semantic_router_shadow',
   'signals_analysis',
+  /**
+   * B0-699 — `evaluateVerifiedFactsDilutionCitation`: a narrower companion to
+   * `regulated_claim_guardrail` that requires a cited `[doc:verified-facts]` dilution figure to
+   * match the LOCKED product line's own fact row, not merely appear anywhere in the turn's shared
+   * (possibly multi-product) evidence block. Never suppressed by `BEX_DISABLE_CONFIDENCE_GATING`.
+   */
+  'dilution_citation_guardrail',
 ]);
 
 export type GateId = z.infer<typeof gateIdSchema>;
@@ -426,6 +433,14 @@ export const activeGatesSchema = z.object({
    * same reason as `recommendationEngineVerdict`: already-persisted payloads predate the field.
    */
   crossReferenceSelfReference: gateActivationRecordSchema.optional(),
+  /**
+   * B0-699 — `evaluateVerifiedFactsDilutionCitation`'s activation state. OPTIONAL for the same
+   * reason as `recommendationEngineVerdict`: already-persisted payloads predate the gate.
+   * `not_applicable` when the draft never cited `[doc:verified-facts]` alongside a dilution
+   * figure; `ran`/`passed` or `ran`/`rejected` otherwise. Never `bypassed` — this gate is
+   * deliberately not wired to `BEX_DISABLE_CONFIDENCE_GATING`.
+   */
+  dilutionCitationGuardrail: gateActivationRecordSchema.optional(),
 });
 
 export type ActiveGates = z.infer<typeof activeGatesSchema>;
