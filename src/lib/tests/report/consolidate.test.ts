@@ -187,10 +187,39 @@ describe('consolidateCasePasses — the median (B0-720)', () => {
     expect(result2.score.accuracy).toBe(62.5);
   });
 
-  it('takes the narrative verbatim from the pass nearest the consolidated score', () => {
+  it('takes the narrative verbatim from the first evaluable pass (B0-817)', () => {
     const result = consolidateCasePasses(passes(score(40), score(70), score(72)));
-    expect(result.score.explanation).toBe('explanation @70');
-    expect(result.score.improvement).toBe('improvement @70');
+    expect(result.score.explanation).toBe('explanation @40');
+    expect(result.score.improvement).toBe('improvement @40');
+
+    const afterUte = consolidateCasePasses(passes(uteScore('blank'), score(70), score(72)));
+    expect(afterUte.score.explanation).toBe('explanation @70');
+  });
+
+  it('medians the judged metrics like the sub-scores, rounded as the reference rounds them (B0-811)', () => {
+    const result = consolidateCasePasses(
+      passes(
+        score(80, { similarity: 0.62, similarityNote: 'first', evalConfidence: 71, confidenceNote: 'c1' }),
+        score(80, { similarity: 0.9, similarityNote: 'second', evalConfidence: 88, confidenceNote: 'c2' }),
+        score(80, { similarity: 0.75, similarityNote: 'third', evalConfidence: 80, confidenceNote: 'c3' }),
+      ),
+    );
+    expect(result.score.similarity).toBe(0.75);
+    expect(result.score.evalConfidence).toBe(80);
+    // Notes travel with the narrative — pass 1's.
+    expect(result.score.similarityNote).toBe('first');
+    expect(result.score.confidenceNote).toBe('c1');
+
+    const even = consolidateCasePasses(
+      passes(score(80, { similarity: 0.6, evalConfidence: 70 }), score(80, { similarity: 0.71, evalConfidence: 75 })),
+    );
+    // (0.6 + 0.71) / 2 = 0.655 → 0.66 at two decimals; (70 + 75) / 2 = 72.5 → 73 half-up.
+    expect(even.score.similarity).toBe(0.66);
+    expect(even.score.evalConfidence).toBe(73);
+
+    const none = consolidateCasePasses(passes(score(80), score(80)));
+    expect(none.score.similarity).toBeNull();
+    expect(none.score.evalConfidence).toBeNull();
   });
 });
 
@@ -254,15 +283,27 @@ describe('consolidateCasePasses — flags (B0-720)', () => {
   });
 });
 
-describe('consolidateCasePasses — evaluability (B0-720)', () => {
-  it('calls a case Unable to Evaluate on a strict majority', () => {
+describe('consolidateCasePasses — evaluability (B0-720 / B0-817)', () => {
+  it('calls a case Unable to Evaluate only when every pass said so', () => {
     const result = consolidateCasePasses(
-      passes(uteScore('empty response'), uteScore('empty response'), score(70)),
+      passes(uteScore('empty response'), uteScore('empty response'), uteScore('empty response')),
     );
 
     expect(result.score.unableToEvaluate).toBe(true);
     expect(result.score.uteReason).toBe('empty response');
     expect(result.score.accuracy).toBeNull();
+    expect(result.variance!.evaluabilitySplit).toBe(false);
+    expect(result.variance!.passOveralls).toEqual([null, null, null]);
+  });
+
+  it('grades a case one pass could judge even when the other two could not, flagging the split', () => {
+    const result = consolidateCasePasses(
+      passes(uteScore('empty response'), uteScore('empty response'), score(70)),
+    );
+
+    expect(result.score.unableToEvaluate).toBe(false);
+    expect(result.score.accuracy).toBe(70);
+    expect(result.variance!.passOveralls).toEqual([null, null, 70]);
     expect(result.variance!.evaluabilitySplit).toBe(true);
     expect(result.variance!.causes).toContain('evaluability');
   });
@@ -318,23 +359,67 @@ describe('consolidateCasePasses — concept majority (B0-720)', () => {
     expect(result.variance!.conceptDisagreements[0]!.votesFor).toBe(2);
   });
 
-  it('resolves a 1–1 tie on a material factual issue to "there is one"', () => {
+  it('needs a strict majority for a material factual issue — a 1–1 tie is no issue (B0-817)', () => {
     const clean = concepts({ mandatoryRequired: [CONCEPT.epa] });
     const dirty = concepts({
       mandatoryRequired: [CONCEPT.epa],
       materialIssue: true,
-      materialIssueNote: `Exact-match check failed on a regulated value: "${CONCEPT.epa}".`,
+      materialIssueNote: `Quoted a registration number other than "${CONCEPT.epa}".`,
     });
-    const result = consolidateCasePasses([
+    const tied = consolidateCasePasses([
       { score: score(88), concepts: clean },
       { score: score(88), concepts: dirty },
     ]);
 
-    expect(result.concepts!.materialIssue).toBe(true);
-    expect(result.concepts!.materialIssueNote).toBe(
-      `Exact-match check failed on a regulated value: "${CONCEPT.epa}".`,
+    expect(tied.concepts!.materialIssue).toBe(false);
+    expect(tied.concepts!.materialIssueNote).toBeNull();
+    // The split is still on the record for a human to settle.
+    expect(tied.variance!.conceptDisagreements.map((d) => d.kind)).toContain('material_issue');
+
+    const majority = consolidateCasePasses([
+      { score: score(88), concepts: dirty },
+      { score: score(88), concepts: dirty },
+      { score: score(88), concepts: clean },
+    ]);
+    expect(majority.concepts!.materialIssue).toBe(true);
+    expect(majority.concepts!.materialIssueNote).toBe(
+      `Quoted a registration number other than "${CONCEPT.epa}".`,
     );
-    expect(result.variance!.conceptDisagreements.map((d) => d.kind)).toContain('material_issue');
+  });
+
+  it('unions the required lists across passes and votes by normalized phrase identity (B0-817)', () => {
+    const spelledA: CaseConcepts = {
+      mandatory: { required: ['Dilute 1:64 (2 oz/gal)'], satisfied: ['Dilute 1:64 (2 oz/gal)'], missing: [] },
+      expected: {
+        required: ['Dilute 1:64 (2 oz/gal)', CONCEPT.contactTime],
+        satisfied: ['Dilute 1:64 (2 oz/gal)'],
+        missing: [CONCEPT.contactTime],
+      },
+      materialIssue: false,
+      materialIssueNote: null,
+    };
+    // Same phrase, different punctuation and case; one required phrase this pass did not list.
+    const spelledB: CaseConcepts = {
+      mandatory: { required: ['dilute 1:64 — 2 oz/gal'], satisfied: ['dilute 1:64 — 2 oz/gal'], missing: [] },
+      expected: { required: ['dilute 1:64 — 2 oz/gal'], satisfied: ['dilute 1:64 — 2 oz/gal'], missing: [] },
+      materialIssue: false,
+      materialIssueNote: null,
+    };
+    const result = consolidateCasePasses([
+      { score: score(80), concepts: spelledA },
+      { score: score(80), concepts: spelledB },
+    ]);
+
+    // Both passes agree the dilution is satisfied; first-seen spelling is re-emitted.
+    expect(result.concepts!.mandatory.satisfied).toEqual(['Dilute 1:64 (2 oz/gal)']);
+    // The phrase only pass A required is kept (union) and, judged missing by the one pass that judged
+    // it, is missing.
+    expect(result.concepts!.expected.required).toEqual(['Dilute 1:64 (2 oz/gal)', CONCEPT.contactTime]);
+    expect(result.concepts!.expected.missing).toEqual([CONCEPT.contactTime]);
+    // No disagreement on the dilution — the two spellings were one vote each for "satisfied".
+    expect(
+      result.variance!.conceptDisagreements.filter((d) => d.concept === 'Dilute 1:64 (2 oz/gal)'),
+    ).toEqual([]);
   });
 
   it('records the whole-case concept judgments the passes split on', () => {

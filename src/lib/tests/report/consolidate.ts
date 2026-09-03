@@ -1,7 +1,8 @@
-import type { CaseConcepts, ConceptKindCoverage } from './case-concepts';
+import { normConcept, type CaseConcepts, type ConceptKindCoverage } from './case-concepts';
 import {
   completenessFromCoverage,
   computeOverall,
+  roundScore,
   statusFromScore,
   type CaseStatus,
 } from './metrics';
@@ -23,10 +24,11 @@ import { DEFAULT_PASS_MARK } from './scoring-config';
  *    B0-813: Completeness is not a judged sub-score any more — each pass's Completeness is its own
  *    expected-concept coverage, and the consolidated one is the coverage of the majority verdict —
  *    so the per-pass overalls in the variance block are computed from each pass's own coverage.
- * 2. **Ties resolve conservatively.** A 1–1 split on whether a concept was satisfied resolves to
- *    *not* satisfied; a 1–1 split on whether a material factual issue exists resolves to *yes, it
- *    exists*. Both readings are the one that withholds a Pass, which is the direction a regulated
- *    eval has to fail in.
+ * 2. **Ties resolve as the reference does (B0-817).** A concept is satisfied only on a strict
+ *    majority of the passes that judged it, so a 1–1 split resolves to *not* satisfied; a material
+ *    factual issue likewise needs a strict majority, so a 1–1 split resolves to *no* issue. A case is
+ *    Unable to Evaluate only when *every* pass said so — one pass that could judge it is enough to
+ *    grade it, with the disagreement flagged.
  * 3. **Timings are never consolidated.** TTFT and total response time are objective measurements,
  *    not judgments, so this module has no timing output at all — there is no path by which a
  *    timing could be averaged here. It only *checks* per-pass timings for disagreement and emits a
@@ -34,7 +36,11 @@ import { DEFAULT_PASS_MARK } from './scoring-config';
  *    `test_result_items` row once per case, not per pass, so passes cannot disagree. The check is
  *    the guard that keeps it that way if per-pass timings ever appear.)
  * 4. **Concept phrases are regulated free text.** Every phrase is copied by reference, counted and
- *    re-emitted verbatim — never parsed, rounded, unit-converted, re-cased or truncated.
+ *    re-emitted verbatim — never parsed, rounded, unit-converted, re-cased or truncated. Two spellings
+ *    of one phrase are recognised as one phrase for *voting* only (`normConcept`); the first-seen
+ *    spelling is the one re-emitted.
+ * 5. **The judged metrics are judgments** (methodology §7c) and consolidate by median exactly like
+ *    the sub-scores; timings are measurements and are never consolidated (rule 3).
  */
 
 /** The shipped pass count. **1, not 3** (Tom Bird, 2026-08-27): multi-pass is opt-in. */
@@ -240,22 +246,25 @@ function medianSubScore(passes: readonly CaseScore[], key: SubScoreKey): number 
   return values.length === 0 ? null : median(values);
 }
 
-function countOccurrences(values: readonly string[]): Map<string, number> {
-  const counts = new Map<string, number>();
-  for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1);
-  return counts;
+/** Median of a judged metric (§7c) across the evaluable passes that supplied it. */
+function medianJudged(
+  passes: readonly CaseScore[],
+  key: 'similarity' | 'evalConfidence',
+): number | null {
+  const values = passes
+    .map((score) => score[key])
+    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+  return values.length === 0 ? null : median(values);
 }
 
-/** Distinct phrases in first-seen order — concept order is meaningful to a reader. */
-function distinctInOrder(values: readonly string[]): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
+/** Occurrences per `normConcept` key — repeated phrases are a multiset, not a set. */
+function countByKey(values: readonly string[]): Map<string, number> {
+  const counts = new Map<string, number>();
   for (const value of values) {
-    if (seen.has(value)) continue;
-    seen.add(value);
-    out.push(value);
+    const key = normConcept(value);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
   }
-  return out;
+  return counts;
 }
 
 type KindConsolidation = {
@@ -266,57 +275,76 @@ type KindConsolidation = {
 /**
  * Majority verdict per concept phrase, across the passes that carried concept data.
  *
- * `required` is not a judgment — it is what the dataset asked for — so it is taken verbatim from
- * the first pass that has it, in its original order. Only "was it satisfied" is voted on, and a
- * tie loses (`conservativeMedianCount`). Repeated phrases are handled by occurrence count rather
- * than by set membership, because a dataset may legitimately require the same phrase twice.
+ * `required` is not a judgment — it is what the dataset asked for — so it is the **union** of every
+ * pass's required list in first-seen order (B0-817, as `consolidate_runs.py` does): a pass that
+ * omits a phrase is silent about it, not a vote against its existence. Only "was it satisfied" is
+ * voted on, by `normConcept` identity, and a tie loses (`conservativeMedianCount`). Repeated
+ * phrases are handled by occurrence count rather than by set membership, because a dataset may
+ * legitimately require the same phrase twice. The first-seen spelling of a phrase is the one
+ * re-emitted.
  */
 function consolidateKind(
   voters: readonly CaseConcepts[],
   kind: 'mandatory' | 'expected',
   disagreementKind: ConceptDisagreementKind,
 ): KindConsolidation {
-  const required = voters[0][kind].required;
-  const requiredCounts = countOccurrences(required);
-  const satisfiedCounts = voters.map((v) => countOccurrences(v[kind].satisfied));
-  const disagreements: ConceptDisagreement[] = [];
-  const satisfiedByPhrase = new Map<string, number>();
+  // Union of the required lists: for each key, the maximum occurrence count any pass required, in
+  // first-seen order, spelled as first seen.
+  const spelling = new Map<string, string>();
+  const requiredCounts = new Map<string, number>();
+  const order: string[] = [];
+  for (const voter of voters) {
+    const counts = countByKey(voter[kind].required);
+    for (const phrase of voter[kind].required) {
+      const key = normConcept(phrase);
+      if (!spelling.has(key)) {
+        spelling.set(key, phrase);
+        order.push(key);
+      }
+      requiredCounts.set(key, Math.max(requiredCounts.get(key) ?? 0, counts.get(key) ?? 0));
+    }
+  }
 
-  for (const phrase of distinctInOrder(required)) {
-    const requiredCount = requiredCounts.get(phrase) ?? 0;
-    const votes = satisfiedCounts.map((counts) => counts.get(phrase) ?? 0);
+  const satisfiedCounts = voters.map((v) => countByKey(v[kind].satisfied));
+  const disagreements: ConceptDisagreement[] = [];
+  const satisfiedByKey = new Map<string, number>();
+
+  for (const key of order) {
+    const requiredCount = requiredCounts.get(key) ?? 0;
+    const votes = satisfiedCounts.map((counts) => counts.get(key) ?? 0);
     const min = Math.min(...votes);
     const max = Math.max(...votes);
     if (min !== max) {
       disagreements.push({
         kind: disagreementKind,
-        concept: phrase,
+        concept: spelling.get(key)!,
         votesFor: votes.filter((v) => v > 0).length,
         voters: voters.length,
       });
     }
-    satisfiedByPhrase.set(
-      phrase,
-      Math.min(requiredCount, Math.max(0, conservativeMedianCount(votes))),
-    );
+    satisfiedByKey.set(key, Math.min(requiredCount, Math.max(0, conservativeMedianCount(votes))));
   }
 
-  // Rebuilt walking `required` in order, so `satisfied ∪ missing === required` holds as a multiset
-  // — the partition B0-714's `concept_coverage_partitions_required` invariant asserts.
-  const remaining = new Map(satisfiedByPhrase);
+  // Rebuilt walking the union in order, so `satisfied ∪ missing === required` holds as a multiset
+  // — the partition the `concept_coverage_partitions_required` invariant asserts.
+  const required: string[] = [];
   const satisfied: string[] = [];
   const missing: string[] = [];
-  for (const phrase of required) {
-    const left = remaining.get(phrase) ?? 0;
-    if (left > 0) {
-      remaining.set(phrase, left - 1);
-      satisfied.push(phrase);
-    } else {
-      missing.push(phrase);
+  for (const key of order) {
+    const phrase = spelling.get(key)!;
+    let left = satisfiedByKey.get(key) ?? 0;
+    for (let i = 0; i < (requiredCounts.get(key) ?? 0); i += 1) {
+      required.push(phrase);
+      if (left > 0) {
+        left -= 1;
+        satisfied.push(phrase);
+      } else {
+        missing.push(phrase);
+      }
     }
   }
 
-  return { coverage: { required: [...required], satisfied, missing }, disagreements };
+  return { coverage: { required, satisfied, missing }, disagreements };
 }
 
 /** True when the passes split on a boolean judgment (some yes, some no). */
@@ -338,9 +366,9 @@ function consolidateConcepts(passes: readonly ConsolidationPass[]): ConceptConso
   const mandatory = consolidateKind(voters, 'mandatory', 'mandatory_concept');
   const expected = consolidateKind(voters, 'expected', 'expected_concept');
 
-  // A tie means "yes, there is a material issue": the reading that withholds the automatic Pass.
+  // Strict majority, as the reference does: a 1–1 tie is *no* material issue (B0-817).
   const materialVotes = voters.filter((v) => v.materialIssue).length;
-  const materialIssue = materialVotes > 0 && materialVotes * 2 >= voters.length;
+  const materialIssue = materialVotes * 2 > voters.length;
   const materialIssueNote = materialIssue
     ? (voters.find((v) => v.materialIssue)?.materialIssueNote ?? null)
     : null;
@@ -427,19 +455,24 @@ export type ConsolidateOptions = {
  *
  * **Even pass counts** average the two middle sub-scores (e.g. 60 and 70 → 65). That is safe
  * precisely because the median is per sub-score: the weighted total is recomputed downstream from
- * whatever the four sub-scores are, integer or not, so an averaged middle pair still reconciles
- * with `grade_isolated_from_speed`. It is deliberately not rounded — rounding a judgment to hide
- * a `.5` would be inventing precision the passes did not produce.
+ * whatever the sub-scores are, integer or not, so an averaged middle pair still reconciles with
+ * `overall_recomputes_from_sub_scores`. It is deliberately not rounded — rounding a judgment to
+ * hide a `.5` would be inventing precision the passes did not produce. (Bex is the spec here; the
+ * reference Python rounds its even medians and is to follow, B0-814.)
  *
- * **Evaluability** is a strict majority: a case is Unable to Evaluate only when more than half the
- * passes said so. A 1–1 tie keeps the case *evaluable* and raises the evaluability flag instead,
- * because at least one pass did judge it and dropping a case out of every average, rate and grade
- * on a tie distorts the run far more than grading it with the disagreement named.
+ * **Evaluability** (B0-817): a case is Unable to Evaluate only when *every* pass said so. Any pass
+ * that could judge it is enough to grade it — with the evaluability flag raised — because dropping
+ * a case out of every average, rate and grade on the word of a minority distorts the run far more
+ * than grading it with the disagreement named.
  *
- * **The narrative** (explanation / missed / incorrect / improvement) is taken verbatim from one
- * representative pass — the one whose own overall is nearest the consolidated overall, earliest
- * pass winning a tie. It is never stitched together from several passes: a grading rationale is
- * only true of the scores it was written about.
+ * **The narrative** (explanation / missed / incorrect / improvement, and the two judged-metric
+ * notes) is taken verbatim from the first evaluable pass, as the reference keeps its first run's
+ * prose (B0-817). It is never stitched together from several passes: a grading rationale is only
+ * true of the scores it was written about.
+ *
+ * **The judged metrics** — similarity (0–1) and evaluator confidence (0–100) — are judgments and
+ * consolidate by median like the sub-scores, rounded to two decimals and to an integer respectively
+ * as the reference does (methodology §7c).
  *
  * A single pass returns that pass unchanged, with `variance: null`. This is what makes
  * `passes = 1` byte-identical to the report before any of this existed.
@@ -466,11 +499,11 @@ export function consolidateCasePasses(
   const conceptResult = consolidateConcepts(passes);
 
   const uteVotes = scores.filter((score) => score.unableToEvaluate).length;
-  const unableToEvaluate = uteVotes * 2 > passes.length;
   const evaluable = scores.filter((score) => !score.unableToEvaluate);
+  const unableToEvaluate = evaluable.length === 0;
 
   let score: CaseScore;
-  if (unableToEvaluate || evaluable.length === 0) {
+  if (unableToEvaluate) {
     const firstUte = scores.find((s) => s.unableToEvaluate);
     score = {
       unableToEvaluate: true,
@@ -483,38 +516,32 @@ export function consolidateCasePasses(
       missed: '',
       incorrect: '',
       improvement: '',
+      concepts: null,
+      similarity: null,
+      similarityNote: null,
+      evalConfidence: null,
+      confidenceNote: null,
     };
   } else {
-    const subScores = {
+    const narrative = evaluable[0];
+    const similarity = medianJudged(evaluable, 'similarity');
+    const evalConfidence = medianJudged(evaluable, 'evalConfidence');
+    score = {
+      unableToEvaluate: false,
+      uteReason: null,
       accuracy: medianSubScore(evaluable, 'accuracy'),
       completeness: medianSubScore(evaluable, 'completeness'),
       relevance: medianSubScore(evaluable, 'relevance'),
       clarity: medianSubScore(evaluable, 'clarity'),
-    };
-    const consolidatedOverall = passOverall(
-      { ...evaluable[0], ...subScores },
-      conceptResult.concepts,
-    );
-    let representative = evaluable[0];
-    let bestDistance = Infinity;
-    for (const candidate of evaluable) {
-      const candidateConcepts = passes.find((pass) => pass.score === candidate)?.concepts;
-      const distance = Math.abs(
-        (passOverall(candidate, candidateConcepts) ?? 0) - (consolidatedOverall ?? 0),
-      );
-      if (distance < bestDistance) {
-        bestDistance = distance;
-        representative = candidate;
-      }
-    }
-    score = {
-      unableToEvaluate: false,
-      uteReason: null,
-      ...subScores,
-      explanation: representative.explanation,
-      missed: representative.missed,
-      incorrect: representative.incorrect,
-      improvement: representative.improvement,
+      explanation: narrative.explanation,
+      missed: narrative.missed,
+      incorrect: narrative.incorrect,
+      improvement: narrative.improvement,
+      concepts: conceptResult.concepts ?? null,
+      similarity: similarity == null ? null : Math.round(similarity * 100) / 100,
+      similarityNote: narrative.similarityNote ?? null,
+      evalConfidence: evalConfidence == null ? null : roundScore(evalConfidence),
+      confidenceNote: narrative.confidenceNote ?? null,
     };
   }
 
