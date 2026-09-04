@@ -99,77 +99,6 @@ function readStoredVerdict(key: string): Side | null {
   return stored === 'A' || stored === 'B' ? stored : null;
 }
 
-function ThreadColumn({
-  side,
-  thread,
-  verdict,
-  onMarkCorrect,
-}: {
-  side: Side;
-  thread: LoadedThread | null;
-  verdict: Side | null;
-  onMarkCorrect: (side: Side) => void;
-}) {
-  const isCorrect = verdict === side;
-  return (
-    <div
-      className={cn(
-        'flex min-w-0 flex-1 flex-col rounded-2xl border bg-background',
-        isCorrect ? 'border-primary ring-1 ring-primary/40' : 'border-border/60',
-      )}
-    >
-      <div className="flex items-center justify-between gap-2 border-b border-border/50 p-3">
-        <div className="min-w-0">
-          <p className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">
-            Thread {side}
-          </p>
-          <p className="truncate text-sm font-semibold text-foreground">
-            {thread?.title ?? 'Not selected'}
-          </p>
-        </div>
-        <Button
-          className="shrink-0 rounded-xl"
-          disabled={!thread}
-          onClick={() => onMarkCorrect(side)}
-          size="sm"
-          type="button"
-          variant={isCorrect ? 'default' : 'outline'}
-        >
-          <CheckCircle2 className="size-4" />
-          {isCorrect ? 'Correct' : 'Mark correct'}
-        </Button>
-      </div>
-      <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
-        {thread ? (
-          thread.messages.map((m) => (
-            <div
-              className={cn(
-                'rounded-xl border border-border/50 p-2.5 text-sm',
-                m.role === 'user' ? 'bg-muted/40' : 'bg-card',
-              )}
-              key={m.id}
-            >
-              <p className="mb-1 text-[0.65rem] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-                {m.role}
-                {m.meta?.model ? ` · ${m.meta.model}` : ''}
-              </p>
-              <Streamdown
-                className="size-full text-foreground [&>*:first-child]:mt-0 [&>*:last-child]:mb-0"
-                plugins={streamdownPlugins}
-              >
-                {m.content}
-              </Streamdown>
-            </div>
-          ))
-        ) : (
-          <p className="p-4 text-center text-sm text-muted-foreground">
-            Select a conversation to load its thread.
-          </p>
-        )}
-      </div>
-    </div>
-  );
-}
 
 export function BexCompareApp() {
   const [list, setList] = useState<ConversationListItem[]>([]);
@@ -377,16 +306,40 @@ export function BexCompareApp() {
                     </tr>
                   );
                 })}
+                <tr className="border-t border-border/50">
+                  <td className="p-2"></td>
+                  <td className="p-2">
+                    <Button
+                      className="w-full rounded-lg"
+                      disabled={!resolvedA}
+                      onClick={() => markCorrect('A')}
+                      size="sm"
+                      type="button"
+                      variant={verdict === 'A' ? 'default' : 'outline'}
+                    >
+                      <CheckCircle2 className="mr-2 size-4" />
+                      {verdict === 'A' ? 'Marked correct' : 'Mark correct'}
+                    </Button>
+                  </td>
+                  <td className="p-2">
+                    <Button
+                      className="w-full rounded-lg"
+                      disabled={!resolvedB}
+                      onClick={() => markCorrect('B')}
+                      size="sm"
+                      type="button"
+                      variant={verdict === 'B' ? 'default' : 'outline'}
+                    >
+                      <CheckCircle2 className="mr-2 size-4" />
+                      {verdict === 'B' ? 'Marked correct' : 'Mark correct'}
+                    </Button>
+                  </td>
+                </tr>
               </tbody>
             </table>
           </div>
         </div>
       ) : null}
-
-      <div className="flex min-h-96 flex-col gap-3 lg:flex-row">
-        <ThreadColumn onMarkCorrect={markCorrect} side="A" thread={resolvedA} verdict={verdict} />
-        <ThreadColumn onMarkCorrect={markCorrect} side="B" thread={resolvedB} verdict={verdict} />
-      </div>
     </main>
   );
 }
