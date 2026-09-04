@@ -114,6 +114,36 @@ async function scoreOnePass(
   });
 }
 
+/**
+ * Consolidates one case's passes into `state.caseScores` if every pass is in and it hasn't been
+ * consolidated yet. Split out so a resume can retry this for a case whose passes all landed on a
+ * prior call but whose consolidation never got recorded (the call crashed, or the process died,
+ * between the passes being saved and this running) — `pendingPasses` only checks
+ * `casePassScores`, so without this a case in that state is never revisited and generation stalls
+ * forever with nothing left to score and nothing telling the caller why.
+ */
+export function finalizeCaseIfReady(itemId: string, state: ReportState): void {
+  if (state.caseScores[itemId]) return;
+  const scores = state.casePassScores[itemId];
+  if (!scores || scores.length < state.passes) return;
+
+  const consolidated = consolidateCasePasses(
+    scores.map((passScore) => ({
+      score: passScore,
+      concepts: passScore.concepts ?? undefined,
+    })),
+    {
+      spreadThreshold: state.spreadThreshold ?? undefined,
+      passMark: state.passMark,
+      scoringRules: state.scoringRules,
+    },
+  );
+  state.caseScores[itemId] = {
+    ...consolidated.score,
+    concepts: consolidated.concepts ?? null,
+  };
+}
+
 async function scoreRemainingCases(
   resultId: string,
   items: TestItemRecord[],
@@ -123,6 +153,16 @@ async function scoreRemainingCases(
   modelTag: string,
   effort: ModelEffort | undefined,
 ): Promise<ReportState> {
+  // Reconcile before looking at what's still pending: a case can have every pass recorded already
+  // (so `pendingPasses` will never surface it again) and still be missing from `caseScores`.
+  const completedBefore = Object.keys(state.caseScores).length;
+  for (const item of items) finalizeCaseIfReady(item.id, state);
+  if (Object.keys(state.caseScores).length !== completedBefore) {
+    state.completedCases = Object.keys(state.caseScores).length;
+    state.updatedAt = new Date().toISOString();
+    await saveReportState(resultId, state);
+  }
+
   const pending = pendingPasses(items, state);
 
   for (let i = 0; i < pending.length; i += BATCH_SIZE) {
@@ -147,23 +187,7 @@ async function scoreRemainingCases(
       // Consolidated only once every pass for this case is in, so `caseScores` never holds a
       // half-consolidated verdict that a crash could leave behind as if it were final. The
       // consolidated concept block rides on the consolidated score so single-score readers see it.
-      if (scores.length >= state.passes) {
-        const consolidated = consolidateCasePasses(
-          scores.map((passScore) => ({
-            score: passScore,
-            concepts: passScore.concepts ?? undefined,
-          })),
-          {
-            spreadThreshold: state.spreadThreshold ?? undefined,
-            passMark: state.passMark,
-            scoringRules: state.scoringRules,
-          },
-        );
-        state.caseScores[itemId] = {
-          ...consolidated.score,
-          concepts: consolidated.concepts ?? null,
-        };
-      }
+      finalizeCaseIfReady(itemId, state);
     }
     state.completedCases = Object.keys(state.caseScores).length;
     state.updatedAt = new Date().toISOString();
