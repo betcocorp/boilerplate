@@ -10,8 +10,6 @@ import {
   listAllConversations,
   listConversationsForUser,
 } from '~/lib/conversations/conversation-repository';
-import { PERMISSIONS } from '~/lib/permissions/constants';
-import { gateRoute } from '~/lib/permissions/route-gate';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -30,12 +28,6 @@ export async function GET(request: Request) {
   if (!(await hasBexSession())) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
-
-  const denied = await gateRoute(
-    PERMISSIONS.BEX_CHAT_USE,
-    'GET /api/bex/conversations',
-  );
-  if (denied) return denied;
 
   // B0-449 — scoping actor (act-as-aware). A non-view-all user only ever sees their own
   // `source = 'chat'` rows; a service caller or a `bex.chat.view-all` admin sees everything.
@@ -107,12 +99,6 @@ export async function POST(request: Request) {
   if (!(await hasBexSession())) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
-
-  const denied = await gateRoute(
-    PERMISSIONS.BEX_CHAT_USE,
-    'POST /api/bex/conversations',
-  );
-  if (denied) return denied;
 
   const actor = await getBexActor(request);
   if (!actor) {
