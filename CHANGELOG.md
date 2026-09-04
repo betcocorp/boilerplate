@@ -1,3 +1,42 @@
+# [4.0.0](https://github.com/betcocorp/bex2.0/compare/v3.1.0...v4.0.0) (2026-09-04)
+
+
+* feat(B0-835)!: adopt the agent-evaluation concept scoring rules in run reports ([152de3f](https://github.com/betcocorp/bex2.0/commit/152de3feb387c0d732e870969888c5f77ce7e314))
+
+
+### Bug Fixes
+
+* **B0-836:** gate debug/admin chrome in /admin/bex behind it-admin group ([b03f045](https://github.com/betcocorp/bex2.0/commit/b03f045f91ea1064e9844017d3e2be1ddb2e7bb7))
+* **B0-837:** refresh /admin/bex conversation list on Acting-as switch ([4514744](https://github.com/betcocorp/bex2.0/commit/451474413035ad1fef653a331da826481128f019))
+* **B0-838:** stop requiring bex.chat.use for Bex chat API routes ([d35ad37](https://github.com/betcocorp/bex2.0/commit/d35ad378355079c591b1dfc427d1211f0ddd29f6))
+* **B0-841:** let the true session owner reach an act-as-created conversation ([cb07ac3](https://github.com/betcocorp/bex2.0/commit/cb07ac3cd1db9daead16164ca4ce746c62a67e57))
+* **B0-842:** show the acted-as user's identity in the sidebar account menu ([f78e708](https://github.com/betcocorp/bex2.0/commit/f78e708cae9ffd257b309da6d4bb4320464a3655))
+* **B0-844:** remove duplicate sidebar links already in account menu ([113bbd7](https://github.com/betcocorp/bex2.0/commit/113bbd7b082960d60edfc585332766c4b05dcf32))
+* **B0-846:** move reset button to the right of thread selectors ([081f5d4](https://github.com/betcocorp/bex2.0/commit/081f5d42259b802965084947c2ad7f22a4cfc37b))
+* **B0-847:** retry consolidation for a case stuck with all passes but no score ([8cd3b86](https://github.com/betcocorp/bex2.0/commit/8cd3b869d5f7d8ddd309f42d62536bd1d44b1df9))
+* **na:** added link to compare conversation page and removed some minor unnecessary explanation text in app ([7be2564](https://github.com/betcocorp/bex2.0/commit/7be25645db4a8f2bd0087f68fbecaa53cf2d9a1e))
+
+
+### Features
+
+* **B0-828:** read-only audit of mandatory vs expected concept classification across the golden sets ([6f41b27](https://github.com/betcocorp/bex2.0/commit/6f41b27aa37caf0202da197f091c72d7d998b10b))
+* **B0-834:** executive summary view for run reports with report/exec tabs ([a65de9d](https://github.com/betcocorp/bex2.0/commit/a65de9d9a774d6adbfaedb7ba535d6d3c5d90df0))
+* **B0-839:** redirect non-it-admin users off gated admin pages with a toast ([9429aee](https://github.com/betcocorp/bex2.0/commit/9429aeec262384ce12ff140f75374de3852da579))
+* **B0-840:** extract reusable searchable combobox primitive ([20e2efc](https://github.com/betcocorp/bex2.0/commit/20e2efc6f767fc38f7f8b15ecd5d2063114e0c13))
+* **B0-843:** render markdown in compare page diff table and thread messages ([d999e2a](https://github.com/betcocorp/bex2.0/commit/d999e2a0d227ef7de36e4a92819a64bcc5b70366))
+* **B0-844:** add 6 missing protected pages to sidebar navigation ([e96b84b](https://github.com/betcocorp/bex2.0/commit/e96b84bd1b5ab1f732cd729c7516029e5807e561))
+* **B0-845:** simplify compare page — remove thread columns, add mark-correct row to table ([76248f5](https://github.com/betcocorp/bex2.0/commit/76248f56f32bfcdb791eab6c6d1fbdb068a10501))
+* **B0-846:** add reset button to clear thread selections in compare page ([e9f7cec](https://github.com/betcocorp/bex2.0/commit/e9f7cec8bf5e8c99567079750ee8a9a3e31d4e1a))
+
+
+### BREAKING CHANGES
+
+* report numbers move. Reports generated before this change
+re-derive under the default rules when opened, so their pass rates drop until
+regenerated; the stored headline in the runs table keeps the old value.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
 # [3.1.0](https://github.com/betcocorp/bex2.0/compare/v3.0.0...v3.1.0) (2026-09-04)
 
 
