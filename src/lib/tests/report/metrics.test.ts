@@ -14,7 +14,9 @@ import {
   computeReportMetrics,
   NO_EXPECTED_CONCEPTS_UTE_REASON,
   roundScore,
+  roundTo,
   round1,
+  round2,
   statusFromScore,
   WEIGHTS,
   type EvaluatedCase,
@@ -131,6 +133,36 @@ describe('arithmetic primitives (B0-813 / B0-814)', () => {
     expect(roundScore(72.49)).toBe(72);
     expect(round1(78.95)).toBe(79);
     expect(round1(33.34)).toBe(33.3);
+    // One-decimal halves go up too — never the half-even 2.45 → 2.4 the reference Python produced.
+    expect(round1(2.45)).toBe(2.5);
+    expect(round1(2.55)).toBe(2.6);
+    expect(round1(66.65)).toBe(66.7);
+    expect(round1(99.95)).toBe(100);
+  });
+
+  it('rounds two decimals half-up on the scaled double, and the named helpers share one primitive', () => {
+    // Every input here was checked in Node and against `Decimal(str(x * 100)).quantize(1,
+    // ROUND_HALF_UP) / 100` — the Python form the helper's doc comment prescribes.
+    expect(round2(0.665)).toBe(0.67);
+    expect(round2(0.675)).toBe(0.68);
+    expect(round2(0.125)).toBe(0.13);
+    expect(round2(0.625)).toBe(0.63);
+    expect(round2(0.995)).toBe(1);
+    expect(round2(3 / 7)).toBe(0.43);
+    expect(round2(0.4)).toBe(0.4);
+    // The float caveat, pinned so nobody "fixes" it with an epsilon: 1.005 × 100 is
+    // 100.49999999999999 in IEEE-754, so the half-up rounding of the scaled double is 1.00.
+    expect(round2(1.005)).toBe(1);
+    expect(roundTo(72.5, 0)).toBe(73);
+    expect(roundTo(2.45, 1)).toBe(2.5);
+    expect(roundTo(0.665, 2)).toBe(0.67);
+  });
+
+  it('rounds a negative half toward +∞, as Math.round does — only Pearson r can get here', () => {
+    expect(round2(-0.125)).toBe(-0.12);
+    expect(round2(-0.375)).toBe(-0.37);
+    expect(roundScore(-1.5)).toBe(-1);
+    expect(round1(-0.15)).toBe(-0.1);
   });
 
   it('weights the four sub-scores 40/30/20/10 and nothing else', () => {

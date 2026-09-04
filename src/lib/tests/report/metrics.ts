@@ -96,16 +96,61 @@ export function statusFromScore(score: number, passMark: number = DEFAULT_PASS_M
 }
 
 /**
- * B0-814 — the rounding convention, in one place. Half-up (`Math.round`), integers for scores and
- * one decimal for averages and percentages. Bex is the spec; the reference skill's Python (which
- * rounds half-to-even) is to adopt this, not the other way round.
+ * B0-814 — the rounding convention, in one place: **half-up, as JS `Math.round`**, applied once at
+ * the end of each computation. Bex is the spec; the reference skill's Python (whose built-in
+ * `round()` is half-to-even) is to adopt this, not the other way round (B0-827).
+ *
+ * Precision by kind of number — every rounding in this folder goes through one of these:
+ * - `roundScore` (integer): sub-scores, `overall`, Completeness, consolidated evaluator confidence.
+ * - `round1` (one decimal): averages, medians, pass/fail percentages, seconds.
+ * - `round2` (two decimals): similarity (0–1), Pearson r, renormalized speed weights.
+ *
+ * **Python port** (`decimal`, `ROUND_HALF_UP`). Each helper scales in binary floating point, rounds
+ * the *scaled double* half-up to an integer, then divides — so the exact equivalent does the same,
+ * in the same order:
+ *
+ *     from decimal import Decimal, ROUND_HALF_UP
+ *     def round_to(x: float, digits: int) -> float:
+ *         factor = 10 ** digits
+ *         scaled = Decimal(str(x * factor)).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
+ *         return float(scaled) / factor
+ *
+ * For integers there is no scaling, so `Decimal(str(x)).quantize(Decimal('1'), ROUND_HALF_UP)` is
+ * exact for x ≥ 0. For one/two decimals, quantizing the *unscaled* value
+ * (`Decimal(str(x)).quantize(Decimal('0.01'))`) is NOT equivalent: it rounds the shortest decimal
+ * spelling of `x`, not the double that `x * factor` produces. The two agree wherever the scaled
+ * value is an exact half (2.45 → 2.5, 2.55 → 2.6, 0.665 → 0.67, 0.125 → 0.13) and disagree
+ * wherever it is not: `1.005 * 100` is `100.49999999999999` in IEEE-754, so Bex gives 1.00 where
+ * `Decimal('1.005')` gives 1.01 (checked: 0 mismatches across 7,000 sampled values for the scaled
+ * form, 116 for the unscaled form at two decimals). No epsilon is added here to "fix" that — Bex is
+ * the spec, and an epsilon would put the two out of step in the other direction.
+ *
+ * **Sign.** `Math.round` rounds a negative half toward +∞ (−12.5 → −12, −0.4 → −0), whereas
+ * `ROUND_HALF_UP` rounds away from zero (−12.5 → −13). Every value routed here is ≥ 0 — scores,
+ * coverage shares, percentages, similarity, seconds, weights — with one exception: the
+ * similarity-vs-score Pearson r (`round2`) can be negative. That divergence is accepted and named
+ * rather than patched: it can only move r by 0.01, only on an exact negative half. A Python port
+ * that wants Bex's sign handling too uses `math.floor(x * factor + 0.5) / factor`, which matched
+ * `Math.round` on every sampled value of either sign. A `-0` result serialises as `0` in JSON.
  */
-export function roundScore(value: number): number {
-  return Math.round(value);
+export function roundTo(value: number, digits: number): number {
+  const factor = 10 ** digits;
+  return Math.round(value * factor) / factor;
 }
 
+/** Integer scores: sub-scores, `overall`, Completeness, consolidated evaluator confidence. */
+export function roundScore(value: number): number {
+  return roundTo(value, 0);
+}
+
+/** One decimal: averages, medians, percentages, seconds. */
 export function round1(value: number): number {
-  return Math.round(value * 10) / 10;
+  return roundTo(value, 1);
+}
+
+/** Two decimals: similarity, Pearson r, speed weights. */
+export function round2(value: number): number {
+  return roundTo(value, 2);
 }
 
 export type SubScores = {
@@ -335,7 +380,7 @@ function speedBlock(entries: SpeedTimingInput[], warnings: string[]): SpeedBlock
         seconds: m.seconds,
         score,
         band: m.band,
-        weight: Math.round(m.weight * 100) / 100,
+        weight: round2(m.weight),
       };
       samples[m.metric].push({ id: entry.id, seconds: m.seconds, score, band: m.band });
     }
@@ -590,15 +635,13 @@ function judgedStats(values: readonly number[], decimals: number): JudgedStats |
   if (values.length === 0) return null;
   const sorted = [...values].sort((a, b) => a - b);
   const n = sorted.length;
-  const factor = 10 ** decimals;
-  const roundTo = (v: number) => Math.round(v * factor) / factor;
   const median = n % 2 === 1 ? sorted[(n - 1) / 2] : (sorted[n / 2 - 1] + sorted[n / 2]) / 2;
   return {
     n,
-    avg: roundTo(sorted.reduce((a, b) => a + b, 0) / n),
-    median: roundTo(median),
-    min: roundTo(sorted[0]),
-    max: roundTo(sorted[n - 1]),
+    avg: roundTo(sorted.reduce((a, b) => a + b, 0) / n, decimals),
+    median: roundTo(median, decimals),
+    min: roundTo(sorted[0], decimals),
+    max: roundTo(sorted[n - 1], decimals),
   };
 }
 
@@ -616,7 +659,7 @@ function pearson(xs: readonly number[], ys: readonly number[]): number | null {
     dy += (ys[i] - my) ** 2;
   }
   if (dx === 0 || dy === 0) return null;
-  return Math.round((num / Math.sqrt(dx * dy)) * 100) / 100;
+  return round2(num / Math.sqrt(dx * dy));
 }
 
 /**
