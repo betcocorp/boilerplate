@@ -28,8 +28,6 @@ type EditTestItemDialogProps = {
   testItemId: string;
   rowIndex: number;
   prompt: string;
-  expectedShouldAnswer: boolean | null;
-  expectedResultType: string | null;
   expectedCanonicalProduct: string | null;
   expectedReasonCode: string | null;
   source: string | null;
@@ -60,17 +58,6 @@ function payloadString(payload: Json, key: string): string {
   return typeof raw === 'string' ? raw : '';
 }
 
-/** Maps the stored tri-state to the preset label parsed by the update action. */
-function expectedBehaviorLabel(value: boolean | null): string {
-  if (value === true) {
-    return 'Should answer';
-  }
-  if (value === false) {
-    return 'Should decline';
-  }
-  return '';
-}
-
 /** Maps stored `should_cite` to the CSV-style preset the update action parses. */
 function shouldCiteLabel(value: boolean | null): string {
   if (value === true) {
@@ -88,8 +75,6 @@ export function EditTestItemDialog({
   testItemId,
   rowIndex,
   prompt,
-  expectedShouldAnswer,
-  expectedResultType,
   expectedCanonicalProduct,
   expectedReasonCode,
   source,
@@ -124,7 +109,7 @@ export function EditTestItemDialog({
           <DialogDescription>
             Update this prompt and its expected outcome. Structured optional
             fields use the same keys as CSV import and update input_payload;
-            prompt length and expectation mode update metadata automatically.
+            prompt length updates metadata automatically.
           </DialogDescription>
         </DialogHeader>
         {/* Remount fields per open so defaults reflect the latest saved values. */}
@@ -139,8 +124,6 @@ export function EditTestItemDialog({
               idPrefix={`edit-test-item-${testItemId}`}
               initialValues={{
                 prompt,
-                expectedShouldAnswer: expectedBehaviorLabel(expectedShouldAnswer),
-                expectedResultType: expectedResultType ?? '',
                 expectedCanonicalProduct: expectedCanonicalProduct ?? '',
                 expectedReasonCode: expectedReasonCode ?? '',
                 source: source ?? '',

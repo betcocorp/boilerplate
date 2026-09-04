@@ -25,19 +25,6 @@ export const TEST_TEMPLATE_COLUMNS: TestTemplateColumn[] = [
     help: 'The prompt sent to Bex. Required — rows without a question (or a prompt / test_prompt column) are skipped on import.',
   },
   {
-    name: 'should_answer',
-    required: false,
-    example: 'Should the assistant answer? yes/no (stored true/false)',
-    help: 'Whether Bex should answer. yes/true/1 expects an answer; no/false/0 expects a decline; leave blank for no expectation.',
-  },
-  {
-    name: 'expected_result_type',
-    required: false,
-    example:
-      'Expected output type: answer | decline | list | none; SDS types: first_aid, disposal, spill_response, handling_storage, exposure_ppe, hazard',
-    help: "Shape of a correct response. For should_answer=no rows, 'decline' or 'none' makes the grader require a decline-style answer.",
-  },
-  {
     name: 'canonical_product',
     required: false,
     example: 'Official Betco product name it maps to — e.g. pH7Q Neutral Disinfectant',

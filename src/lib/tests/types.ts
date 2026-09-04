@@ -82,8 +82,6 @@ export type RunComparisonFix = {
 export type ParsedCsvRow = {
   rowIndex: number;
   prompt: string;
-  expectedShouldAnswer: boolean | null;
-  expectedResultType: string | null;
   expectedCanonicalProduct: string | null;
   expectedReasonCode: string | null;
   source: string | null;

@@ -45,8 +45,8 @@ export function AddTestItemDialog({
           <DialogDescription>
             Append one row to this dataset. Row number follows the highest
             existing row. Structured optional fields use the same keys as CSV
-            import and populate input_payload; prompt length and expectation
-            mode populate metadata automatically.
+            import and populate input_payload; prompt length populates
+            metadata automatically.
           </DialogDescription>
         </DialogHeader>
         <form action={addTestItemAction} className="grid gap-4">

@@ -12,7 +12,7 @@ function asTrimmedString(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-/** Shared yes/no CSV cell parsing for `should_answer` and `should_cite`. */
+/** Yes/no CSV cell parsing for `should_cite`. */
 function parseBooleanCell(value: string): boolean | null {
   const normalized = value.trim().toLowerCase();
   if (!normalized) {
@@ -27,38 +27,9 @@ function parseBooleanCell(value: string): boolean | null {
   return null;
 }
 
-function parseExpectedShouldAnswer(value: string): boolean | null {
-  return parseBooleanCell(value);
-}
-
 /** Parses the `should_cite` form field / CSV cell. Blank or unrecognized → no expectation. */
 export function parseShouldCiteFromForm(value: string): boolean | null {
   return parseBooleanCell(value);
-}
-
-/** Parses manual add form / combobox values (presets + CSV-style tokens). */
-export function parseExpectedShouldAnswerFromForm(value: string): boolean | null {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  const lower = trimmed.toLowerCase();
-  if (
-    lower === 'na' ||
-    lower === 'n/a' ||
-    lower === 'no expectation (n/a)'
-  ) {
-    return null;
-  }
-  if (lower === 'should answer') {
-    return true;
-  }
-  if (lower === 'should decline') {
-    return false;
-  }
-
-  return parseExpectedShouldAnswer(trimmed);
 }
 
 /**
@@ -85,8 +56,6 @@ const TYPED_CSV_COLUMNS = new Set([
   'question',
   'prompt',
   'test_prompt',
-  'should_answer',
-  'expected_result_type',
   'canonical_product',
   'reason_code',
   'source',
@@ -105,6 +74,13 @@ const TYPED_CSV_COLUMNS = new Set([
   // B0-537 — routed into `input_payload.multi_turn`, not `metadata`, by `parseMultiTurnJsonCell`.
   'multi_turn_json',
 ]);
+
+/**
+ * B0-799 — retired dataset columns. Older CSVs (and sets downloaded before the removal) still
+ * carry them; they are dropped on import rather than falling through to the `metadata`
+ * catch-all (the B0-694 anti-pattern). The `test_items` columns themselves are untouched.
+ */
+const LEGACY_IGNORED_CSV_COLUMNS = new Set(['should_answer', 'expected_result_type']);
 
 /** CSV columns routed into `input_payload` rather than `metadata`. */
 const INPUT_PAYLOAD_CSV_COLUMNS = new Set([
@@ -241,7 +217,7 @@ export function parseTestCsvContent(content: string): ParsedCsvRow[] {
   }) as Record<string, unknown>[];
 
   return records
-    .map((record, index) => {
+    .map((record, index): ParsedCsvRow | null => {
       const prompt =
         asTrimmedString(record.question) ||
         asTrimmedString(record.prompt) ||
@@ -252,10 +228,6 @@ export function parseTestCsvContent(content: string): ParsedCsvRow[] {
       }
 
       const rowIndex = index + 1;
-      const expectedShouldAnswer = parseExpectedShouldAnswer(
-        asTrimmedString(record.should_answer),
-      );
-      const expectedResultType = asTrimmedString(record.expected_result_type) || null;
       const expectedCanonicalProduct =
         asTrimmedString(record.canonical_product) || null;
       const expectedReasonCode = asTrimmedString(record.reason_code) || null;
@@ -290,7 +262,10 @@ export function parseTestCsvContent(content: string): ParsedCsvRow[] {
           continue;
         }
 
-        if (TYPED_CSV_COLUMNS.has(normalizedKey)) {
+        if (
+          TYPED_CSV_COLUMNS.has(normalizedKey) ||
+          LEGACY_IGNORED_CSV_COLUMNS.has(normalizedKey)
+        ) {
           continue;
         }
 
@@ -314,8 +289,6 @@ export function parseTestCsvContent(content: string): ParsedCsvRow[] {
       return {
         rowIndex,
         prompt,
-        expectedShouldAnswer,
-        expectedResultType,
         expectedCanonicalProduct,
         expectedReasonCode,
         source,

@@ -11,8 +11,8 @@ import { TEST_TEMPLATE_COLUMNS, buildTestTemplateCsv } from './template';
 describe('parseTestCsvContent — golden test set format', () => {
   it('reads the concept, source, and citation columns into typed fields', () => {
     const csv = [
-      'question,should_answer,expected_result_type,canonical_product,reason_code,priority,ideal_response,product_mention,question_category,source_style,expected_concepts,minimum_concepts,expected_sources,should_cite',
-      '"How much pH7Q per gallon?",yes,answer,pH7Q Neutral Disinfectant,dilution,1,"Use 2 oz per gallon.",pH7Q,dilution,real_user_pattern,"2 oz/gal or 15 mL/L; 1:64","2 oz/gal","pH7Q TDS, Selector Guide Section 1",yes',
+      'question,canonical_product,reason_code,priority,ideal_response,product_mention,question_category,source_style,expected_concepts,minimum_concepts,expected_sources,should_cite',
+      '"How much pH7Q per gallon?",pH7Q Neutral Disinfectant,dilution,1,"Use 2 oz per gallon.",pH7Q,dilution,real_user_pattern,"2 oz/gal or 15 mL/L; 1:64","2 oz/gal","pH7Q TDS, Selector Guide Section 1",yes',
     ].join('\n');
 
     const [row] = parseTestCsvContent(csv);
@@ -88,13 +88,29 @@ describe('parseTestCsvContent — golden test set format', () => {
     expect(row.shouldCite).toBeNull();
   });
 
+  it('B0-799 — drops the retired should_answer / expected_result_type columns without leaking them into metadata', () => {
+    const csv = [
+      'question,should_answer,expected_result_type,canonical_product,legacy_note',
+      '"How much pH7Q per gallon?",yes,answer,pH7Q Neutral Disinfectant,keep me',
+    ].join('\n');
+
+    const [row] = parseTestCsvContent(csv);
+
+    expect(row.prompt).toBe('How much pH7Q per gallon?');
+    expect(row.expectedCanonicalProduct).toBe('pH7Q Neutral Disinfectant');
+    // The retired columns are dropped: no typed field exists for them any more, and the metadata
+    // catch-all (B0-694 anti-pattern) must not carry them either.
+    expect(row.metadata).not.toHaveProperty('should_answer');
+    expect(row.metadata).not.toHaveProperty('expected_result_type');
+    // Genuinely unknown columns still land in metadata as before.
+    expect(row.metadata).toEqual({ legacy_note: 'keep me' });
+  });
+
   it('parses the downloadable template so the template round-trips through import', () => {
     const [row] = parseTestCsvContent(buildTestTemplateCsv());
 
     expect(TEST_TEMPLATE_COLUMNS.map((column) => column.name)).toEqual([
       'question',
-      'should_answer',
-      'expected_result_type',
       'canonical_product',
       'reason_code',
       'source',

@@ -5,7 +5,6 @@ import type { TestItemRecord } from './types';
 /** Rows used only to derive distinct dropdown values for the “Add prompt” dialog. */
 export type TestItemSuggestionSource = Pick<
   TestItemRecord,
-  | 'expected_result_type'
   | 'expected_canonical_product'
   | 'expected_reason_code'
   | 'source'
@@ -50,7 +49,6 @@ function inputPayloadFieldFirst(payload: Json | null, keys: readonly string[]): 
  * typed columns plus `product_mention`, `question_category`, `source_style` from `input_payload`.
  */
 export function buildSuggestionListsFromTestItems(rows: TestItemSuggestionSource[]) {
-  const resultTypes: string[] = [];
   const canonicalProducts: string[] = [];
   const reasonCodes: string[] = [];
   const sources: string[] = [];
@@ -59,7 +57,6 @@ export function buildSuggestionListsFromTestItems(rows: TestItemSuggestionSource
   const sourceStyles: string[] = [];
 
   for (const row of rows) {
-    resultTypes.push(row.expected_result_type ?? '');
     canonicalProducts.push(row.expected_canonical_product ?? '');
     reasonCodes.push(row.expected_reason_code ?? '');
     sources.push(row.source ?? '');
@@ -85,7 +82,6 @@ export function buildSuggestionListsFromTestItems(rows: TestItemSuggestionSource
   }
 
   return {
-    resultTypes: distinctNonEmptyStrings(resultTypes),
     canonicalProducts: distinctNonEmptyStrings(canonicalProducts),
     reasonCodes: distinctNonEmptyStrings(reasonCodes),
     sources: distinctNonEmptyStrings(sources),
