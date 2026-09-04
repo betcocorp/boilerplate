@@ -2,6 +2,11 @@
 
 import { CheckCircle2, GitCompareArrows } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Streamdown } from 'streamdown';
+import { cjk } from '@streamdown/cjk';
+import { code } from '@streamdown/code';
+import { math } from '@streamdown/math';
+import { mermaid } from '@streamdown/mermaid';
 
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
@@ -10,6 +15,8 @@ import { apiFetchConversation, apiListConversations } from '~/lib/bex/bex-api-cl
 import { mapApiMessageToChatMessage } from '~/lib/bex/map-api-messages';
 import { cn, getErrorMessage } from '~/lib/utils';
 import type { ChatMessage } from '~/types/bex';
+
+const streamdownPlugins = { cjk, code, math, mermaid };
 
 type ConversationListItem = Awaited<ReturnType<typeof apiListConversations>>[number];
 type ConversationOwner = ConversationListItem['owner'];
@@ -146,7 +153,12 @@ function ThreadColumn({
                 {m.role}
                 {m.meta?.model ? ` · ${m.meta.model}` : ''}
               </p>
-              <p className="whitespace-pre-wrap wrap-break-word text-foreground">{m.content}</p>
+              <Streamdown
+                className="size-full text-foreground [&>*:first-child]:mt-0 [&>*:last-child]:mb-0"
+                plugins={streamdownPlugins}
+              >
+                {m.content}
+              </Streamdown>
             </div>
           ))
         ) : (
@@ -325,25 +337,46 @@ export function BexCompareApp() {
                 </tr>
               </thead>
               <tbody>
-                {diff.map((row) => (
-                  <tr
-                    className={cn('border-t border-border/50 align-top', row.differ && 'bg-amber-500/5')}
-                    key={row.label}
-                  >
-                    <td className="p-2 font-medium text-foreground">
-                      {row.label}
-                      {row.differ ? (
-                        <span className="ml-1 text-amber-600 dark:text-amber-400">•</span>
-                      ) : null}
-                    </td>
-                    <td className="whitespace-pre-wrap wrap-break-word p-2 text-muted-foreground">
-                      {row.a}
-                    </td>
-                    <td className="whitespace-pre-wrap wrap-break-word p-2 text-muted-foreground">
-                      {row.b}
-                    </td>
-                  </tr>
-                ))}
+                {diff.map((row) => {
+                  const isMarkdownRow = row.label === 'Final answer';
+                  return (
+                    <tr
+                      className={cn('border-t border-border/50 align-top', row.differ && 'bg-amber-500/5')}
+                      key={row.label}
+                    >
+                      <td className="p-2 font-medium text-foreground">
+                        {row.label}
+                        {row.differ ? (
+                          <span className="ml-1 text-amber-600 dark:text-amber-400">•</span>
+                        ) : null}
+                      </td>
+                      <td className={cn('p-2 text-muted-foreground', !isMarkdownRow && 'whitespace-pre-wrap wrap-break-word')}>
+                        {isMarkdownRow ? (
+                          <Streamdown
+                            className="size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0"
+                            plugins={streamdownPlugins}
+                          >
+                            {row.a || '—'}
+                          </Streamdown>
+                        ) : (
+                          row.a
+                        )}
+                      </td>
+                      <td className={cn('p-2 text-muted-foreground', !isMarkdownRow && 'whitespace-pre-wrap wrap-break-word')}>
+                        {isMarkdownRow ? (
+                          <Streamdown
+                            className="size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0"
+                            plugins={streamdownPlugins}
+                          >
+                            {row.b || '—'}
+                          </Streamdown>
+                        ) : (
+                          row.b
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
