@@ -220,19 +220,6 @@ export function BexCompareApp() {
       ) : null}
 
       <div className="flex items-end gap-3">
-        <Button
-          className="shrink-0 rounded-xl"
-          onClick={() => {
-            setIdA(null);
-            setIdB(null);
-          }}
-          size="icon"
-          type="button"
-          variant="outline"
-          title="Clear selections"
-        >
-          <X className="size-4" />
-        </Button>
         <div className="grid flex-1 gap-3 sm:grid-cols-2">
           {(['A', 'B'] as const).map((side) => {
             const value = side === 'A' ? idA : idB;
@@ -256,6 +243,19 @@ export function BexCompareApp() {
             );
           })}
         </div>
+        <Button
+          className="shrink-0 rounded-xl"
+          onClick={() => {
+            setIdA(null);
+            setIdB(null);
+          }}
+          size="icon"
+          type="button"
+          variant="outline"
+          title="Clear selections"
+        >
+          <X className="size-4" />
+        </Button>
       </div>
 
       {resolvedA && resolvedB ? (
