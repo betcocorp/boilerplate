@@ -4,6 +4,7 @@ import { DELETE, GET } from '~/app/api/bex/conversations/[id]/route';
 import { getBexActor } from '~/lib/api/bex-actor';
 import { hasBexSession } from '~/lib/api/bex-api-auth';
 import { writeAuditLog } from '~/lib/audit/audit-log';
+import { resolveConversationOwnerUserId } from '~/lib/conversations/conversation-owner';
 import {
   deleteConversation,
   getConversationById,
@@ -19,6 +20,10 @@ vi.mock('~/lib/api/bex-api-auth', () => ({
 
 vi.mock('~/lib/api/bex-actor', () => ({
   getBexActor: vi.fn(),
+}));
+
+vi.mock('~/lib/conversations/conversation-owner', () => ({
+  resolveConversationOwnerUserId: vi.fn(),
 }));
 
 vi.mock('~/lib/conversations/conversation-repository', () => ({
@@ -78,6 +83,7 @@ describe('/api/bex/conversations/[id]', () => {
     vi.mocked(listMessageFeedbackForConversation).mockReset();
     vi.mocked(writeAuditLog).mockReset();
     vi.mocked(gateRoute).mockReset();
+    vi.mocked(resolveConversationOwnerUserId).mockReset();
 
     vi.mocked(hasBexSession).mockResolvedValue(true);
     vi.mocked(gateRoute).mockResolvedValue(null);
@@ -89,6 +95,9 @@ describe('/api/bex/conversations/[id]', () => {
       ownerName: 'Owner One',
       ownerEmail: 'owner1@betco.com',
     });
+    // Default: no true-owner fallback available (matches most existing scenarios below, where the
+    // actor's own userId is what's under test).
+    vi.mocked(resolveConversationOwnerUserId).mockResolvedValue(null);
   });
 
   describe('GET', () => {
@@ -129,6 +138,20 @@ describe('/api/bex/conversations/[id]', () => {
         expect.objectContaining({ conversationId: CONVERSATION_ID, requestedByUserId: 'user-2' }),
         expect.anything(),
       );
+    });
+
+    it('allows an it-admin to read an act-as-created conversation via the true-owner fallback (B0-841)', async () => {
+      // The admin is acting-as user-2 (so actor.userId is the acted-as user), but the
+      // conversation was stamped with the true admin id per resolveConversationOwnerUserId's
+      // act-as-blind stamping rule.
+      vi.mocked(getBexActor).mockResolvedValue({ kind: 'user', userId: 'user-2', canViewAll: false });
+      vi.mocked(getConversationById).mockResolvedValue(conversation({ user_id: 'admin-true-1' }));
+      vi.mocked(resolveConversationOwnerUserId).mockResolvedValue('admin-true-1');
+
+      const response = await GET(makeRequest(), routeContext());
+
+      expect(response.status).toBe(200);
+      expect(writeAuditLog).not.toHaveBeenCalled();
     });
 
     it('allows the owner to read their own conversation', async () => {
@@ -222,6 +245,17 @@ describe('/api/bex/conversations/[id]', () => {
         expect.objectContaining({ conversationId: CONVERSATION_ID, requestedByUserId: 'user-2' }),
         expect.anything(),
       );
+    });
+
+    it('allows an it-admin to delete an act-as-created conversation via the true-owner fallback (B0-841)', async () => {
+      vi.mocked(getBexActor).mockResolvedValue({ kind: 'user', userId: 'user-2', canViewAll: false });
+      vi.mocked(getConversationById).mockResolvedValue(conversation({ user_id: 'admin-true-1' }));
+      vi.mocked(resolveConversationOwnerUserId).mockResolvedValue('admin-true-1');
+
+      const response = await DELETE(makeRequest('DELETE'), routeContext());
+
+      expect(response.status).toBe(200);
+      expect(deleteConversation).toHaveBeenCalledWith(CONVERSATION_ID);
     });
 
     it('allows the owner to delete without an admin_delete audit entry', async () => {

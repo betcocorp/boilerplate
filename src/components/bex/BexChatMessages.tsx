@@ -54,6 +54,8 @@ type BexChatMessagesProps = {
   showWelcome: boolean;
   /** B0-345: history for the selected conversation is in flight — render placeholders. */
   isLoadingHistory?: boolean;
+  /** it-admin-only chrome — see `BexChatApp`'s `isAdminChrome` (PERMISSIONS.BEX_CHAT_VIEW_ALL). */
+  isAdminChrome?: boolean;
   onSuggestion: (text: string) => void;
   onStartEmptyChat?: () => void;
   feedbackSubmittingMessageId?: string | null;
@@ -334,10 +336,15 @@ function BexAiElementsMessages({
   messages,
   isTyping,
   feedbackSubmittingMessageId,
+  isAdminChrome = false,
   onSubmitFeedback,
 }: Pick<
   BexChatMessagesProps,
-  'messages' | 'isTyping' | 'feedbackSubmittingMessageId' | 'onSubmitFeedback'
+  | 'messages'
+  | 'isTyping'
+  | 'feedbackSubmittingMessageId'
+  | 'isAdminChrome'
+  | 'onSubmitFeedback'
 >) {
   async function copyText(content: string) {
     try {
@@ -384,7 +391,7 @@ function BexAiElementsMessages({
                       onSubmitFeedback={onSubmitFeedback}
                     />
                   ) : null}
-                  {!isUser && !isStreamingPlaceholder && m.meta ? (
+                  {!isUser && !isStreamingPlaceholder && m.meta && isAdminChrome ? (
                     <AssistantDetails messageId={m.id} meta={m.meta} />
                   ) : null}
                   {!isUser && !isStreamingPlaceholder ? (
@@ -425,6 +432,7 @@ function BexAiElementsMessages({
 }
 
 export function BexChatMessages({
+  isAdminChrome = false,
   isLoadingHistory = false,
   isTyping,
   messages,
@@ -495,6 +503,7 @@ export function BexChatMessages({
   return (
     <BexAiElementsMessages
       feedbackSubmittingMessageId={feedbackSubmittingMessageId}
+      isAdminChrome={isAdminChrome}
       isTyping={isTyping}
       messages={messages}
       onSubmitFeedback={onSubmitFeedback}

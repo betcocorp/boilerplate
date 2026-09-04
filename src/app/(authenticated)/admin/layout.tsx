@@ -21,6 +21,7 @@ import {
   SidebarTrigger,
 } from '~/components/ui/sidebar';
 import { TooltipProvider } from '~/components/ui/tooltip';
+import { getUserOrDefault } from '~/lib/cookies-server';
 import {
   getCurrentUserPermissions,
   userHasSwitcher,
@@ -38,6 +39,8 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
 
   const permissions = await getCurrentUserPermissions();
   const hasSwitcher = await userHasSwitcher();
+  // B0-842 — act-as-aware (effective) user, so the sidebar reflects the acted-as identity.
+  const effectiveUser = await getUserOrDefault();
 
   return (
     <SidebarProvider
@@ -71,7 +74,11 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
           </SidebarContent>
 
           <SidebarFooter className="p-3">
-            <AdminAccountMenu permissions={permissions} />
+            <AdminAccountMenu
+              permissions={permissions}
+              userEmail={effectiveUser?.EMAIL}
+              userName={effectiveUser?.NAME}
+            />
           </SidebarFooter>
         </Sidebar>
 

@@ -1,6 +1,8 @@
 import Link from 'next/link';
 import { connection } from 'next/server';
 
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { requirePagePermission } from '~/lib/permissions/require-page-permission';
 import { getSdsSyncStatus } from '~/lib/rag/sds-sync-actions';
 
 import { SdsControls } from './SdsControls';
@@ -12,6 +14,7 @@ export const metadata = {
 };
 
 export default async function AdminSdsPage() {
+  await requirePagePermission(PERMISSIONS.NAVIGATION_SIDEBAR_SDS, 'GET /admin/sds');
   await connection();
   const [status, syncStatus] = await Promise.all([
     getSdsDashboardStatus(),

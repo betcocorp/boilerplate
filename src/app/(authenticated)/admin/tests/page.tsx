@@ -14,6 +14,8 @@ import {
   TableRow,
 } from '~/components/ui/table';
 import { V1_AGENT_REGISTRY } from '~/lib/agents/agent-registry';
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { requirePagePermission } from '~/lib/permissions/require-page-permission';
 import { gradeFromScore } from '~/lib/tests/report/metrics';
 import { calculateGoldenSetMetrics } from '~/lib/tests/golden-set-metrics';
 import { listArchivedTests, listTests } from '~/lib/tests/repository';
@@ -35,6 +37,7 @@ type PageProps = {
 };
 
 export default async function AdminTestsPage({ searchParams }: PageProps) {
+  await requirePagePermission(PERMISSIONS.NAVIGATION_SIDEBAR_TESTS, 'GET /admin/tests');
   await connection();
   const params = await searchParams;
   const success = typeof params.success === 'string' ? params.success : null;

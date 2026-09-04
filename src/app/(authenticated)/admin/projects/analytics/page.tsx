@@ -20,6 +20,8 @@ import {
   listRequestLog,
   type Rollup,
 } from '~/lib/api/analytics-repository';
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { requirePagePermission } from '~/lib/permissions/require-page-permission';
 
 export const metadata = {
   title: 'API Analytics | Betco BEX',
@@ -56,6 +58,10 @@ function RollupTiles({ rollup }: { rollup: Rollup }) {
 }
 
 export default async function ApiAnalyticsPage({ searchParams }: PageProps) {
+  await requirePagePermission(
+    PERMISSIONS.NAVIGATION_SIDEBAR_USER_API_ACCESS,
+    'GET /admin/projects/analytics',
+  );
   await connection();
   const sp = await searchParams;
 

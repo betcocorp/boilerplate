@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { TestItemRecord } from '~/lib/tests/types';
 
-import { hydrateLegacyPassScores, pendingPasses } from './orchestrator';
+import { finalizeCaseIfReady, hydrateLegacyPassScores, pendingPasses } from './orchestrator';
 import { emptyReportState, type CaseScore, type ReportState } from './schemas';
 
 /**
@@ -90,5 +90,37 @@ describe('hydrateLegacyPassScores (B0-719)', () => {
     current.caseScores = { b: SCORE };
     hydrateLegacyPassScores(current);
     expect(current.casePassScores).toEqual({ a: [SCORE] });
+  });
+});
+
+describe('finalizeCaseIfReady (B0-835 resume gap)', () => {
+  it('consolidates a case whose passes are all in but whose consolidation never ran', () => {
+    // Every pass landed on a prior call; the crash was in consolidation itself, so
+    // `pendingPasses` sees nothing left to score and would otherwise stall here forever.
+    const stuck = state(3, { a: [SCORE, SCORE, SCORE] });
+    expect(pendingPasses(ITEMS, stuck)).toEqual([
+      { item: ITEMS[1], passIndex: 0 },
+      { item: ITEMS[2], passIndex: 0 },
+      { item: ITEMS[1], passIndex: 1 },
+      { item: ITEMS[2], passIndex: 1 },
+      { item: ITEMS[1], passIndex: 2 },
+      { item: ITEMS[2], passIndex: 2 },
+    ]);
+
+    finalizeCaseIfReady('a', stuck);
+    expect(stuck.caseScores.a).toBeDefined();
+  });
+
+  it('is a no-op for a case still missing a pass', () => {
+    const incomplete = state(3, { a: [SCORE, SCORE] });
+    finalizeCaseIfReady('a', incomplete);
+    expect(incomplete.caseScores.a).toBeUndefined();
+  });
+
+  it('is a no-op for a case already consolidated', () => {
+    const done = state(3, { a: [SCORE, SCORE, SCORE] });
+    done.caseScores = { a: SCORE };
+    finalizeCaseIfReady('a', done);
+    expect(done.caseScores.a).toBe(SCORE);
   });
 });

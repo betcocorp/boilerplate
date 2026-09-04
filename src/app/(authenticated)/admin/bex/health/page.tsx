@@ -16,6 +16,8 @@ import { TierCards } from '~/components/admin/bex-health/TierCards';
 import { TokensPerDayPanel } from '~/components/admin/bex-health/TokensPerDayPanel';
 import { VerdictStrip } from '~/components/admin/bex-health/VerdictStrip';
 import { resolveHealthSearchParams } from '~/lib/bex-health/search-params';
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { requirePagePermission } from '~/lib/permissions/require-page-permission';
 
 export const metadata = {
   title: 'Bex health | Betco BEX',
@@ -28,6 +30,10 @@ type PageProps = {
 };
 
 export default async function AdminBexHealthPage({ searchParams }: PageProps) {
+  await requirePagePermission(
+    PERMISSIONS.NAVIGATION_SIDEBAR_OBSERVABILITY,
+    'GET /admin/bex/health',
+  );
   await connection();
   const { window, version } = resolveHealthSearchParams(await searchParams);
 

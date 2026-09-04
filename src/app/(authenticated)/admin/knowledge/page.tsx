@@ -1,5 +1,8 @@
 import { connection } from 'next/server';
 
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { requirePagePermission } from '~/lib/permissions/require-page-permission';
+
 import { KnowledgeControls } from './KnowledgeControls';
 import { getKnowledgeDashboardStatus } from './pipeline';
 
@@ -9,6 +12,7 @@ export const metadata = {
 };
 
 export default async function AdminKnowledgePage() {
+  await requirePagePermission(PERMISSIONS.NAVIGATION_SIDEBAR_KNOWLEDGE, 'GET /admin/knowledge');
   await connection();
   const status = await getKnowledgeDashboardStatus();
 

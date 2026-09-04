@@ -208,6 +208,40 @@ describe('POST /api/bex/chat/stream', () => {
     );
   });
 
+  it('allows an it-admin to continue an act-as-created conversation via the true-owner fallback (B0-841)', async () => {
+    // The admin is acting-as user-2 (actor.userId is the acted-as user), but the conversation was
+    // stamped with the true admin id per resolveConversationOwnerUserId's act-as-blind stamping.
+    vi.mocked(hasBexSession).mockResolvedValue(true);
+    vi.mocked(getBexActor).mockResolvedValue({ kind: 'user', userId: 'user-2', canViewAll: false });
+    vi.mocked(getConversationById).mockResolvedValue({
+      id: '7ad779f1-2af3-4a82-ae68-bf1372f6cd99',
+      user_id: 'admin-true-1',
+    } as never);
+    vi.mocked(resolveConversationOwnerUserId).mockResolvedValue('admin-true-1');
+    vi.mocked(runBexChatTurn).mockResolvedValue({
+      traceId: 'trace-test-1',
+      conversationId: '7ad779f1-2af3-4a82-ae68-bf1372f6cd99',
+      answerText: 'Hello from stream output.',
+      routingDecision: 'orchestrator',
+      confidence: 0.92,
+      sources: [],
+    } as never);
+
+    const response = await POST(
+      makeRequest({
+        message: 'Hello',
+        conversationId: '7ad779f1-2af3-4a82-ae68-bf1372f6cd99',
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(writeAuditLog).not.toHaveBeenCalled();
+    expect(runBexChatTurn).toHaveBeenCalled();
+    // Only resolved once for the whole request, reused for both the access check and (were this a
+    // fresh conversation) the stamping branch — not called twice.
+    expect(resolveConversationOwnerUserId).toHaveBeenCalledTimes(1);
+  });
+
   it('allows a service actor to continue any conversation without an ownership check', async () => {
     // This route's own auth check (above `getBexActor`) is session-only today — the bex UI never
     // sends a service bearer here (that path is `/api/v1/orchestrator`) — so this exercises the

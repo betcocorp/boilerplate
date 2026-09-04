@@ -1,14 +1,18 @@
-import { normConcept, type CaseConcepts, type ConceptKindCoverage } from './case-concepts';
 import {
-  completenessFromCoverage,
   computeOverall,
   round2,
   roundScore,
   statusFromScore,
   type CaseStatus,
-} from './metrics';
+} from './arithmetic';
+import { normConcept, type CaseConcepts, type ConceptKindCoverage } from './case-concepts';
 import type { CaseScore } from './schemas';
-import { DEFAULT_PASS_MARK } from './scoring-config';
+import {
+  DEFAULT_PASS_MARK,
+  DEFAULT_SCORING_RULES,
+  type ScoringRules,
+} from './scoring-config';
+import { deriveCaseScoreline } from './scoring-rules';
 
 /**
  * B0-720 — N independent grading passes in, one reconcilable `CaseScore` out, plus the
@@ -22,9 +26,14 @@ import { DEFAULT_PASS_MARK } from './scoring-config';
  *    weighted total and the four sub-scores no longer reproduce it — the report would refuse to
  *    generate, and rightly so. So the consolidated score is an ordinary `CaseScore` and every
  *    weighted number downstream is computed once, in the one place it was always computed.
- *    B0-813: Completeness is not a judged sub-score any more — each pass's Completeness is its own
- *    expected-concept coverage, and the consolidated one is the coverage of the majority verdict —
- *    so the per-pass overalls in the variance block are computed from each pass's own coverage.
+ *    B0-835: the consolidated `completeness` is the **median of the judged values** (a pass that
+ *    emitted none is simply absent from that median, and if every pass did the consolidated value
+ *    is null and the metrics layer falls back to coverage). Each pass's *own* overall in the
+ *    variance block runs that pass's judged Completeness and that pass's concept verdicts through
+ *    `deriveCaseScoreline` — the same pipeline the headline runs — so per-pass overalls and
+ *    per-pass Results sit on one scale with the consolidated number, exactly as
+ *    `consolidate_runs.py` does. The concept rules are applied to the consolidated verdicts once,
+ *    downstream, by `computeReportMetrics`.
  * 2. **Ties resolve as the reference does (B0-817).** A concept is satisfied only on a strict
  *    majority of the passes that judged it, so a 1–1 split resolves to *not* satisfied; a material
  *    factual issue likewise needs a strict majority, so a 1–1 split resolves to *no* issue. A case is
@@ -174,8 +183,15 @@ export type CaseGradingVariance = {
    * derived Completeness — in pass order. Null for a pass that could not evaluate the case.
    */
   passOveralls: Array<number | null>;
-  /** Each pass's Result at the pass mark in force. */
+  /** Each pass's Result at the pass mark in force, after that pass's own auto-Pass and gate. */
   passBands: Array<CaseStatus | null>;
+  /**
+   * B0-835 — the passes whose own mandatory floor actually raised their score, 1-based, mirroring
+   * the reference's `variance.floor_applied`. Empty when the floor bound on no pass. A non-empty
+   * list is a review signal: full must-have coverage weighting below a C means that pass's
+   * sub-scores and its concept verdicts disagree.
+   */
+  floorApplied: Array<{ pass: number; weighted: number; floor: number }>;
   /** max − min across the numeric overalls; null with fewer than two of them. */
   range: number | null;
   bandSplit: boolean;
@@ -218,27 +234,72 @@ function conservativeMedianCount(values: readonly number[]): number {
   return Math.floor(median(values));
 }
 
+/** One pass's own scoreline, reduced to what the variance block reports. */
+type PassScoreline = {
+  /** The final score after that pass's own coverage cap, floor and ceiling. */
+  overall: number;
+  /** That pass's Result, after the automatic Pass and the mandatory gate. */
+  status: CaseStatus;
+  /** The weighted score before the floor — what the floor detail names. */
+  weighted: number;
+  /** The floor's value, only where it actually raised that pass's score. */
+  floor: number | null;
+};
+
 /**
- * A pass's own weighted overall, computed exactly as `computeReportMetrics` computes it — Completeness
- * from that pass's own expected-concept coverage, missing judged sub-scores coerced to 0 the same
- * way — so a per-pass number in the variance block is the number that pass would have produced on
- * its own. Null when the pass could not evaluate the case, including when it has no expected
- * concepts to compute Completeness from.
+ * A pass's own scoreline, run through the **same** `deriveCaseScoreline` pipeline
+ * `computeReportMetrics` runs on the consolidated verdicts (B0-835) — that pass's judged
+ * Completeness capped at that pass's own coverage, weighted, floored, then capped by that pass's
+ * own mandatory verdicts. This is what puts `passOveralls` and `passBands` on the same scale as
+ * the headline, which is the whole point of reporting them.
  *
- * A pass persisted before B0-813 carries a judged `completeness` and no concept block; its stored
- * number is used so a legacy report's variance block still reads. A pass from the current grader
- * carries a block and `completeness: null`, so coverage is the only source.
+ * Null when the pass could not evaluate the case. A pass with no concept block at all (a report
+ * graded before B0-808) has no concept data for any rule to act on, so its judged sub-scores are
+ * weighted and nothing else — the pre-concept behaviour, preserved so a legacy variance block
+ * still reads.
  */
-function passOverall(score: CaseScore, concepts: CaseConcepts | undefined): number | null {
+function passScoreline(
+  score: CaseScore,
+  concepts: CaseConcepts | undefined,
+  rules: ScoringRules,
+  passMark: number,
+): PassScoreline | null {
   if (score.unableToEvaluate) return null;
-  const completeness = completenessFromCoverage(concepts) ?? score.completeness ?? null;
-  if (completeness == null) return null;
-  return computeOverall({
+
+  if (concepts) {
+    const scoreline = deriveCaseScoreline({
+      accuracy: score.accuracy ?? 0,
+      completenessJudged: score.completeness ?? null,
+      relevance: score.relevance ?? 0,
+      clarity: score.clarity ?? 0,
+      concepts,
+      rules,
+      passMark,
+    });
+    if (scoreline) {
+      return {
+        overall: scoreline.overall,
+        status: scoreline.status,
+        weighted: scoreline.weighted,
+        floor: scoreline.floorApplied ? scoreline.floor : null,
+      };
+    }
+  }
+
+  // No concept block, or one with no expected concepts: fall back to the judged sub-scores alone.
+  if (score.completeness == null) return null;
+  const weighted = computeOverall({
     accuracy: score.accuracy ?? 0,
-    completeness,
+    completeness: score.completeness,
     relevance: score.relevance ?? 0,
     clarity: score.clarity ?? 0,
   });
+  return {
+    overall: weighted,
+    status: statusFromScore(weighted, passMark),
+    weighted,
+    floor: null,
+  };
 }
 
 type SubScoreKey = 'accuracy' | 'completeness' | 'relevance' | 'clarity';
@@ -453,6 +514,12 @@ export type ConsolidateOptions = {
   spreadThreshold?: number;
   /** B0-812 — the pass mark the per-pass bands are judged at. Defaults to `DEFAULT_PASS_MARK`. */
   passMark?: number | null;
+  /**
+   * B0-835 — the concept rules each pass's own scoreline is derived under. Defaults to
+   * `DEFAULT_SCORING_RULES`; must be the rules the headline uses, or the per-pass numbers in the
+   * variance block would sit on a different scale from the consolidated one.
+   */
+  scoringRules?: ScoringRules | null;
 };
 
 /**
@@ -500,6 +567,7 @@ export function consolidateCasePasses(
 
   const spreadThreshold = options?.spreadThreshold ?? DEFAULT_CONSISTENCY_SPREAD_THRESHOLD;
   const passMark = options?.passMark ?? DEFAULT_PASS_MARK;
+  const scoringRules = options?.scoringRules ?? DEFAULT_SCORING_RULES;
   const scores = passes.map((pass) => pass.score);
   const conceptResult = consolidateConcepts(passes);
 
@@ -550,9 +618,18 @@ export function consolidateCasePasses(
     };
   }
 
-  const passOveralls = passes.map((pass) => passOverall(pass.score, pass.concepts));
-  const passBands = passOveralls.map((overall) =>
-    overall == null ? null : statusFromScore(overall, passMark),
+  const scorelines = passes.map((pass) =>
+    passScoreline(pass.score, pass.concepts, scoringRules, passMark),
+  );
+  const passOveralls = scorelines.map((scoreline) => scoreline?.overall ?? null);
+  // Each pass's own Result, after its own automatic Pass and mandatory gate — not `statusFromScore`
+  // on the number, or a pass whose Result a concept rule moved would band differently here than it
+  // does in the headline.
+  const passBands = scorelines.map((scoreline) => scoreline?.status ?? null);
+  const floorApplied = scorelines.flatMap((scoreline, index) =>
+    scoreline?.floor == null
+      ? []
+      : [{ pass: index + 1, weighted: scoreline.weighted, floor: scoreline.floor }],
   );
   const numeric = passOveralls.filter((value): value is number => value != null);
   const range = numeric.length > 1 ? Math.max(...numeric) - Math.min(...numeric) : null;
@@ -575,6 +652,7 @@ export function consolidateCasePasses(
       passes: passes.length,
       passOveralls,
       passBands,
+      floorApplied,
       range,
       bandSplit,
       scoreRangeExceeded,

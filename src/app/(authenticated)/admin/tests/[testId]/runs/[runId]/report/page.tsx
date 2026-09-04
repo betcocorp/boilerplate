@@ -1,6 +1,7 @@
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
 
+import { RunReportTabs } from '~/components/admin/tests/report/RunReportTabs';
 import { RunReportView } from '~/components/admin/tests/RunReportView';
 import { PERMISSIONS } from '~/lib/permissions/constants';
 import { isPermissionsEnforced } from '~/lib/permissions/enforcement';
@@ -52,6 +53,8 @@ export default async function AdminTestRunReportPage({ params }: PageProps) {
   return (
     <div className="flex flex-1 bg-slate-50">
       <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 px-6 py-10 sm:px-8">
+        {/* B0-834 — switch between this detailed report and the executive summary. */}
+        <RunReportTabs runId={result.id} testId={test.id} />
         <RunReportView
           canDownloadTrace={canDownloadTrace}
           fileBase={`${test.name}-run-${result.id}-report`}

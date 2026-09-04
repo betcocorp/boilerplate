@@ -6,6 +6,7 @@ import {
   GRADER_JSON_SCHEMA,
   GRADER_MAX_OUTPUT_TOKENS,
   GRADING_PROMPT_HASH,
+  GRADING_PROMPT_VERSION,
   graderOutputSchema,
   reconcileConcepts,
   requiredConcepts,
@@ -20,8 +21,8 @@ import { NO_EXPECTED_CONCEPTS_UTE_REASON } from './metrics';
 /**
  * B0-808 / B0-810 — the grader contract. Everything with a model behind it is exercised through the
  * injectable `complete` seam with a fake, so these tests cost nothing and pin the parts that matter:
- * what the grader is asked, how its answer is reconciled onto our own phrase lists, and that no
- * Completeness ever comes from it.
+ * what the grader is asked, how its answer is reconciled onto our own phrase lists, and — since
+ * B0-835 — that its judged Completeness comes through untouched for `metrics.ts` to cap.
  */
 
 const REGULATED = {
@@ -49,6 +50,7 @@ function output(partial: Partial<GraderOutput> = {}): GraderOutput {
     unable_to_evaluate: false,
     ute_reason: null,
     accuracy: 88,
+    completeness: 66,
     relevance: 92,
     clarity: 85,
     concepts: {
@@ -71,12 +73,13 @@ function output(partial: Partial<GraderOutput> = {}): GraderOutput {
   };
 }
 
-describe('the grading prompt (B0-810)', () => {
-  it('has a stable content hash', () => {
+describe('the grading prompt (B0-810 / B0-835)', () => {
+  it('has a stable content hash and the version that names this revision', () => {
     expect(GRADING_PROMPT_HASH).toMatch(/^[0-9a-f]{64}$/);
+    expect(GRADING_PROMPT_VERSION).toBe('2026-09-04.1');
   });
 
-  it('quotes the methodology sections it grades by, and asks for no Completeness or overall', () => {
+  it('quotes the methodology sections it grades by, and asks for no derived field', () => {
     for (const section of ['§1', '§2b', '§4', '§5', '§6', '§7c']) {
       expect(CASE_SCORING_SYSTEM_PROMPT).toContain(`methodology ${section}`);
     }
@@ -86,10 +89,46 @@ describe('the grading prompt (B0-810)', () => {
     );
     expect(CASE_SCORING_SYSTEM_PROMPT).toContain('transcribe them exactly as written; never round, convert, or infer');
     expect(CASE_SCORING_SYSTEM_PROMPT).toContain('1.00 essentially everything · 0.75 most of the substance');
-    expect(CASE_SCORING_SYSTEM_PROMPT).toContain('You do NOT judge Completeness');
-    expect(CASE_SCORING_SYSTEM_PROMPT).toContain('never report an overall score, a grade or a Pass/Fail');
+    expect(CASE_SCORING_SYSTEM_PROMPT).toContain(
+      'never author a derived field, an overall score, a grade or a Pass/Fail',
+    );
     // Nothing from the retired rule set (the prompt does tell the grader it must not floor anything).
     expect(CASE_SCORING_SYSTEM_PROMPT).not.toMatch(/capped at 59|raised to (the )?70|automatic Pass|Pre-Gate/i);
+  });
+
+  it('asks for a holistically judged Completeness and forbids pre-applying the caps (B0-835)', () => {
+    expect(CASE_SCORING_SYSTEM_PROMPT).toContain(
+      'You judge four sub-scores (Accuracy, Completeness, Relevance, Clarity — each 0-100)',
+    );
+    expect(CASE_SCORING_SYSTEM_PROMPT).toContain('Completeness — 30%. Did it include the important expected information?');
+    expect(CASE_SCORING_SYSTEM_PROMPT).toContain('Judge Completeness holistically first');
+    expect(CASE_SCORING_SYSTEM_PROMPT).toContain('it only ever lowers a value');
+    expect(CASE_SCORING_SYSTEM_PROMPT).toContain(
+      'A response that satisfied half its must-haves is not 73% complete',
+    );
+    expect(CASE_SCORING_SYSTEM_PROMPT).toMatch(
+      /Do not pre-apply that cap, the mandatory floor, the mandatory ceiling or the gate yourself/,
+    );
+    // The B0-813 instruction is gone: the grader judges Completeness again.
+    expect(CASE_SCORING_SYSTEM_PROMPT).not.toContain('You do NOT judge Completeness');
+    expect(CASE_SCORING_SYSTEM_PROMPT).not.toMatch(/do not author a number for it/i);
+  });
+});
+
+describe('the grader wire contract (B0-835)', () => {
+  it('requires a completeness field in the strict json_schema, with no bounds keywords', () => {
+    expect(GRADER_JSON_SCHEMA.required).toContain('completeness');
+    const completeness = GRADER_JSON_SCHEMA.properties.completeness;
+    expect(completeness.type).toEqual(['number', 'null']);
+    expect(completeness.description).toContain('0-100');
+    expect(Object.keys(completeness)).toEqual(['type', 'description']);
+  });
+
+  it('rejects a grader payload that omits completeness', () => {
+    const withoutCompleteness: Record<string, unknown> = { ...output() };
+    delete withoutCompleteness.completeness;
+    expect(graderOutputSchema.safeParse(withoutCompleteness).success).toBe(false);
+    expect(graderOutputSchema.safeParse({ ...output(), completeness: null }).success).toBe(true);
   });
 });
 
@@ -201,14 +240,21 @@ describe('reconcileConcepts (B0-809)', () => {
 });
 
 describe('toCaseScore (B0-808)', () => {
-  it('never carries a Completeness from the grader, and clamps the judged fields', () => {
+  it('carries the judged Completeness through uncapped, and clamps the judged fields', () => {
     const score = toCaseScore(output({ accuracy: 104, similarity: 1.4, eval_confidence: -3 }), INPUT);
-    expect(score.completeness).toBeNull();
+    // 2 of 3 expected concepts are satisfied, so coverage is 67 — but capping is `metrics.ts`'s job.
+    expect(score.completeness).toBe(66);
     expect(score.accuracy).toBe(100);
     expect(score.similarity).toBe(1);
     expect(score.evalConfidence).toBe(0);
     expect(score.concepts!.expected.missing).toEqual([REGULATED.metric]);
     expect(score.similarityNote).toBe('Both regulated facts present; the metric equivalent is not.');
+  });
+
+  it('clamps an out-of-range Completeness to 0-100 (B0-835)', () => {
+    expect(toCaseScore(output({ completeness: 105 }), INPUT).completeness).toBe(100);
+    expect(toCaseScore(output({ completeness: -3 }), INPUT).completeness).toBe(0);
+    expect(toCaseScore(output({ completeness: null }), INPUT).completeness).toBeNull();
   });
 
   it('maps an Unable-to-Evaluate verdict to the empty score with its reason', () => {
@@ -220,6 +266,8 @@ describe('toCaseScore (B0-808)', () => {
     expect(score.uteReason).toBe('The response is empty.');
     expect(score.concepts).toBeNull();
     expect(score.accuracy).toBeNull();
+    // A UTE case has no judged Completeness either, whatever the grader put in the field.
+    expect(score.completeness).toBeNull();
   });
 });
 
@@ -240,7 +288,7 @@ describe('scoreCase (B0-808)', () => {
     expect(JSON.parse(calls[0]!.user).minimal_concepts).toEqual(INPUT.mandatoryConcepts);
     expect(score.unableToEvaluate).toBe(false);
     expect(score.accuracy).toBe(88);
-    expect(score.completeness).toBeNull();
+    expect(score.completeness).toBe(66);
     expect(score.concepts!.mandatory.missing).toEqual([]);
     expect(score.evalConfidence).toBe(86);
   });

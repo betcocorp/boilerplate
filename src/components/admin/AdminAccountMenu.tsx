@@ -10,7 +10,7 @@ import {
   ShieldCheck,
   Sliders,
 } from 'lucide-react';
-import { signOut, useSession } from 'next-auth/react';
+import { signOut } from 'next-auth/react';
 import Link from 'next/link';
 import { forwardRef, useSyncExternalStore } from 'react';
 
@@ -96,17 +96,18 @@ function hasPermission(permissions: string[], permission: string): boolean {
 
 export function AdminAccountMenu({
   permissions = [],
+  userName,
+  userEmail,
 }: {
   permissions?: string[];
+  userName?: string | null;
+  userEmail?: string | null;
 }) {
-  const { data: session } = useSession();
   const mounted = useSyncExternalStore(
     () => () => {},
     () => true,
     () => false,
   );
-  const userName = session?.user?.name;
-  const userEmail = session?.user?.email;
 
   // B0-761 — application usage dashboard (`event_logging` analytics).
   const showAnalytics = hasPermission(

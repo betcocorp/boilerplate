@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import type { ReportCase, ReportEvaluatedCase } from '~/lib/tests/report/data-schemas';
+import type {
+  ReportCase,
+  ReportEvaluatedCase,
+  ReportMetricsData,
+} from '~/lib/tests/report/data-schemas';
 import { caseAnchorId } from '~/lib/tests/report/render';
 
-import { buildExceptionRows, exceptionReason } from './verdict-strip-data';
+import { buildExceptionRows, exceptionReason, gatedCasesLine } from './verdict-strip-data';
 
 const CONCEPTS = {
   mandatory: { required: ['States the 1:64 ratio'], satisfied: ['States the 1:64 ratio'], missing: [] },
@@ -31,6 +35,24 @@ function evaluated(overrides: Partial<ReportEvaluatedCase>): ReportEvaluatedCase
     grade: 'F',
     status: 'Fail',
     coverage: { satisfied: 2, required: 2 },
+    // B0-835 — the concept-rule scoreline every evaluated case now carries.
+    completenessJudged: 100,
+    coveragePct: 100,
+    coverageApplied: false,
+    weighted: 0,
+    floor: null,
+    floorApplied: false,
+    preGateScore: 0,
+    preGateGrade: 'F',
+    ceiling: null,
+    ceilingApplied: false,
+    rubricStatus: 'Fail',
+    statusSource: 'rubric',
+    ratingConstrained: false,
+    gateBlockedAPass: false,
+    autoPassTriggered: false,
+    autoPassBlocked: false,
+    conceptNote: null,
     mandatoryMissing: false,
     materialIssue: false,
     passesOnlyUnderCurrentMark: false,
@@ -148,5 +170,32 @@ describe('buildExceptionRows', () => {
   it('reads scores off the payload without recomputing them', () => {
     const rows = buildExceptionRows([evaluated({ id: 'f1', overall: 41.5 })], []);
     expect(rows[0]!.overall).toBe(41.5);
+  });
+});
+
+describe('gatedCasesLine (B0-835)', () => {
+  /** Only the two slices the line reads; the rest of the rollup is irrelevant to it. */
+  function metrics(gatedIds: string[] | null, evaluated: number) {
+    return {
+      evaluated,
+      concepts:
+        gatedIds === null
+          ? null
+          : ({ gatedIds } as unknown as NonNullable<ReportMetricsData['concepts']>),
+    } satisfies Pick<ReportMetricsData, 'concepts' | 'evaluated'>;
+  }
+
+  it('says nothing for a run with no concept data', () => {
+    expect(gatedCasesLine(metrics(null, 20))).toBeNull();
+  });
+
+  it('says nothing when no case was gated — never a reassuring "0 of 20"', () => {
+    expect(gatedCasesLine(metrics([], 20))).toBeNull();
+  });
+
+  it('counts gated cases out of the evaluated population, read off the rollup', () => {
+    expect(gatedCasesLine(metrics(['a', 'b', 'c'], 20))).toBe(
+      '3 of 20 evaluated cases gated (missing a must-have concept)',
+    );
   });
 });

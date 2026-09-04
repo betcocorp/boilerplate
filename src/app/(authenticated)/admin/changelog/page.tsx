@@ -2,6 +2,8 @@ import type { Metadata } from 'next';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import ReactMarkdown from 'react-markdown';
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { requirePagePermission } from '~/lib/permissions/require-page-permission';
 import { ChangelogToc, type ChangelogVersion } from './ChangelogToc';
 
 export const metadata: Metadata = {
@@ -45,7 +47,12 @@ function parseChangelogVersions(content: string): ParsedVersion[] {
   return versions;
 }
 
-export default function ChangelogPage() {
+export default async function ChangelogPage() {
+  await requirePagePermission(
+    PERMISSIONS.NAVIGATION_SIDEBAR_USER_CHANGELOG,
+    'GET /admin/changelog',
+  );
+
   const changelogContent = loadChangelog();
   const versions = parseChangelogVersions(changelogContent);
   const idsByLine = new Map(versions.map((version) => [version.line, version.id]));

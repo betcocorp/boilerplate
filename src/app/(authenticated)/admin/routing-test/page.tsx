@@ -4,6 +4,8 @@ import { RoutingTestActionToast } from '~/components/admin/routing-test/RoutingT
 import { RoutingTestRunCharts } from '~/components/admin/routing-test/RoutingTestRunCharts';
 import { RoutingTestWorkbench } from '~/components/admin/routing-test/RoutingTestWorkbench';
 import { ROUTING_TEST_PATH } from '~/lib/routing-test/constants';
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { requirePagePermission } from '~/lib/permissions/require-page-permission';
 import {
   listRoutingTestItems,
   listRoutingTestRuns,
@@ -28,6 +30,7 @@ type PageProps = {
  * effect of that same run.
  */
 export default async function AdminRoutingTestPage({ searchParams }: PageProps) {
+  await requirePagePermission(PERMISSIONS.NAVIGATION_SIDEBAR_TESTS, 'GET /admin/routing-test');
   await connection();
   const params = await searchParams;
   const success = typeof params.success === 'string' ? params.success : null;

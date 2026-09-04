@@ -1,5 +1,7 @@
 import { GoldenSetAndTierTargets } from '~/components/admin/settings/GoldenSetAndTierTargets';
 import { SettingsPanel } from '~/components/admin/settings/SettingsPanel';
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { requirePagePermission } from '~/lib/permissions/require-page-permission';
 
 export const metadata = {
   title: 'Settings | Betco BEX',
@@ -7,6 +9,11 @@ export const metadata = {
 };
 
 export default async function SettingsPage() {
+  await requirePagePermission(
+    PERMISSIONS.NAVIGATION_SIDEBAR_USER_SETTINGS,
+    'GET /admin/settings',
+  );
+
   return (
     <div className="flex flex-col gap-6 p-6">
       <div>

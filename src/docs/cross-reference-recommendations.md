@@ -283,6 +283,12 @@ picks those rows up automatically. Today that queue holds **1** reviewed row.
 
 ### Harness question set (AC1)
 
+> **Purged 2026-09-03 (B0-826).** This test set carried `expected_criteria` but no concept columns,
+> so it was removed with every other concept-less item; the `/admin/tests` harness run is no longer
+> part of the pre-handoff checklist. The seed migration and CSV fixture below still exist, so the set
+> can be re-seeded if it is ever given `minimum_concepts` / `expected_concepts`. The description that
+> follows is historical.
+
 `Cross-Reference Gate Calibration (B0-97)` — test id `3a1c7f52-9d4b-4e18-b6a7-2c95f0e41d83`,
 `intended_agent: cross_reference`, 65 items, seeded by
 `src/supabase/migrations/20260902120000_seed_cross_reference_gate_calibration_b0_97.sql`

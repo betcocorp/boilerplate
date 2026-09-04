@@ -18,6 +18,8 @@ import {
 import { SME_AGENT_IDS } from '~/lib/agents/agent-registry';
 import { resolveUserFilterInput } from '~/lib/observability/run-attribution';
 import { listWorkflowRuns } from '~/lib/observability/runs-repository';
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { requirePagePermission } from '~/lib/permissions/require-page-permission';
 import { listTests } from '~/lib/tests/repository';
 import { PRODUCT_TOOL_NAMES } from '~/lib/tools/tool-schemas';
 import { readSearchParam } from '~/lib/utils/params';
@@ -92,6 +94,10 @@ function readConfidence(value: string): { raw: string; parsed: number | undefine
 }
 
 export default async function AdminObservabilityPage({ searchParams }: PageProps) {
+  await requirePagePermission(
+    PERMISSIONS.NAVIGATION_SIDEBAR_OBSERVABILITY,
+    'GET /admin/observability',
+  );
   await connection();
   const params = await searchParams;
 

@@ -3,6 +3,8 @@ import { Globe, Terminal } from 'lucide-react';
 import { WebSearchApiTester } from '~/components/admin/web-search/WebSearchApiTester';
 import { WebSearchCacheTable } from '~/components/admin/web-search/WebSearchCacheTable';
 import { WebSearchTester } from '~/components/admin/web-search/WebSearchTester';
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { requirePagePermission } from '~/lib/permissions/require-page-permission';
 import { defaultCacheTtlMs } from '~/lib/websearch/cache';
 import { listWebSearchCacheEntries } from '~/lib/websearch/db-cache';
 
@@ -15,6 +17,11 @@ export const metadata = {
 export const dynamic = 'force-dynamic';
 
 export default async function WebSearchTesterPage() {
+  await requirePagePermission(
+    PERMISSIONS.NAVIGATION_SIDEBAR_TOOLS,
+    'GET /admin/tools/web-search',
+  );
+
   const cacheEntries = await listWebSearchCacheEntries(100);
   const cacheTtlMs = defaultCacheTtlMs();
 

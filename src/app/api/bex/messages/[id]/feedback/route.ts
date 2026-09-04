@@ -4,8 +4,6 @@ import { z } from 'zod';
 import { hasBexSession } from '~/lib/api/bex-api-auth';
 import { upsertMessageFeedback } from '~/lib/conversations/message-feedback-repository';
 import { getMessageById } from '~/lib/conversations/message-repository';
-import { PERMISSIONS } from '~/lib/permissions/constants';
-import { gateRoute } from '~/lib/permissions/route-gate';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -32,12 +30,6 @@ export async function POST(request: Request, ctx: RouteParams) {
   if (!(await hasBexSession())) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
-
-  const denied = await gateRoute(
-    PERMISSIONS.BEX_CHAT_USE,
-    'POST /api/bex/messages/[id]/feedback',
-  );
-  if (denied) return denied;
 
   const { id: messageId } = await ctx.params;
 

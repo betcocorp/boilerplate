@@ -24,20 +24,29 @@ import {
   type ReportCaseInput,
 } from './metrics';
 import type { CaseScore } from './schemas';
-import { DEFAULT_PASS_MARK, STRICT_PASS_MARK } from './scoring-config';
+import {
+  DEFAULT_PASS_MARK,
+  DEFAULT_SCORING_RULES,
+  STRICT_PASS_MARK,
+  type ScoringRules,
+} from './scoring-config';
 import { speedRating } from './speed-rules';
 
 /**
- * B0-812 / B0-813 / B0-815 — pure-math scoring and the structural invariants that pin it.
+ * B0-812 / B0-835 / B0-815 — the reference skill's concept scoring rules, and the structural
+ * invariants that pin them.
  *
- * Three things these tests exist to defend:
+ * Four things these tests exist to defend:
  *
- * 1. **Completeness is computed, never judged.** It is the expected-concept coverage share, and a
- *    case with no expected concepts is Unable to Evaluate — never a guessed number.
- * 2. **Nothing moves the score or the Result but the arithmetic.** A missing must-have concept and a
- *    material issue are *reported* on the case; the overall is the weighted sum and the Result is
- *    the pass mark, full stop.
- * 3. **Concept phrases are regulated free text.** The fixtures carry real dilution ratios, contact
+ * 1. **The order is fixed** (methodology §2b Rule 4 step 7): coverage cap on Completeness → weight
+ *    → mandatory floor → Pre-Gate Content Score → mandatory ceiling → round → Result. Each worked
+ *    example below is the skill's own, so a Bex report and a desktop report agree.
+ * 2. **The number, the letter and the Result always agree.** A must-have miss lowers the score
+ *    itself (ceiling 59 → F → Fail), so no row can read "B / Fail"; the one sanctioned departure is
+ *    a named automatic Pass, which is warned about so it can never happen silently.
+ * 3. **A case with no expected concepts is Unable to Evaluate** — never graded on three sub-scores
+ *    out of four, and never a guessed number.
+ * 4. **Concept phrases are regulated free text.** The fixtures carry real dilution ratios, contact
  *    times, ppm and EPA registration numbers, asserted back byte-for-byte.
  */
 
@@ -48,13 +57,17 @@ const CONCEPT = {
   metric: 'Metric equivalent 15.6 mL/L',
 } as const;
 
-/** Judged sub-scores only — the grader no longer emits Completeness. */
+/**
+ * All four judged sub-scores set to `judged` — B0-835 restored the grader's judged Completeness,
+ * which the coverage cap then bounds. Pass `{ completeness: null }` for a pass graded in the
+ * B0-813 window, where the coverage share is the only Completeness there is.
+ */
 function score(judged: number, partial: Partial<CaseScore> = {}): CaseScore {
   return {
     unableToEvaluate: false,
     uteReason: null,
     accuracy: judged,
-    completeness: null,
+    completeness: judged,
     relevance: judged,
     clarity: judged,
     explanation: '',
@@ -97,10 +110,25 @@ function concepts(params: {
 }
 
 /**
- * Every expected concept satisfied → Completeness 100, so with equal judged sub-scores `j` the
- * overall is `0.7·j + 30` (e.g. 90 → 93, 50 → 65, 40 → 58).
+ * Every expected concept satisfied, one of them mandatory. Under the B0-835 rules that means the
+ * coverage cap never binds (coverage is 100%), the mandatory floor raises anything below 70, and
+ * the automatic Pass qualifies — so with equal judged sub-scores `j` the overall is `max(j, 70)`
+ * and the Result is always Pass. The fixture for the floor and the automatic Pass.
  */
 const FULL = concepts({ mandatoryRequired: [CONCEPT.dilution], bonusRequired: [CONCEPT.metric] });
+
+/**
+ * No mandatory concepts, and one of two expected concepts missing: no gate, no ceiling, no floor
+ * and no automatic Pass, so the rubric arithmetic alone decides the Result. The fixture for
+ * anything that needs a Fail to be reachable. Completeness is capped at the 50% coverage, so with
+ * equal judged sub-scores `j` the overall is `0.7·j + 0.3·min(j, 50)` (90 → 78, 80 → 71, 70 → 64,
+ * 62 → 58, 40 → 40).
+ */
+const RUBRIC_ONLY = concepts({
+  mandatoryRequired: [],
+  bonusRequired: [CONCEPT.dilution, CONCEPT.metric],
+  bonusMissing: [CONCEPT.metric],
+});
 
 function input(
   id: string,
@@ -126,7 +154,7 @@ function only(inputs: ReportCaseInput[]): EvaluatedCase {
   return metrics.perCase[0]!;
 }
 
-describe('arithmetic primitives (B0-813 / B0-814)', () => {
+describe('arithmetic primitives (B0-814 / B0-835)', () => {
   it('rounds half-up, in one place', () => {
     expect(roundScore(72.5)).toBe(73);
     expect(roundScore(73.5)).toBe(74);
@@ -198,7 +226,7 @@ describe('arithmetic primitives (B0-813 / B0-814)', () => {
     ).toBeNull();
   });
 
-  it('decides the Result from the pass mark alone', () => {
+  it('decides the rubric Result from the pass mark alone', () => {
     expect(statusFromScore(60)).toBe('Pass');
     expect(statusFromScore(59)).toBe('Fail');
     expect(statusFromScore(65, 70)).toBe('Fail');
@@ -208,34 +236,277 @@ describe('arithmetic primitives (B0-813 / B0-814)', () => {
   });
 });
 
-describe('computeReportMetrics — pure-math scoring (B0-813)', () => {
-  it('scores 90 / — / 90 / 90 with 2 of 4 expected satisfied as 76, C, Pass — and reports the must-have miss', () => {
+describe('computeReportMetrics — concept rules (B0-835)', () => {
+  /**
+   * The skill's own worked example: pre-gate 77 with one of two mandatory concepts missing. The
+   * arithmetic is kept and reported, the ceiling makes the number an F, and the Result is Fail —
+   * all three agreeing, which is the whole point of moving the score rather than the letter.
+   */
+  it('caps a pre-gate 77 with a must-have miss at 59 — F, Fail, and the lost Pass recorded', () => {
     const c = only([
-      input('half', 90, {
+      input('near-miss', 90, {
+        score: score(90, { clarity: 80 }),
         concepts: concepts({
           mandatoryRequired: [CONCEPT.dilution, CONCEPT.contactTime],
           mandatoryMissing: [CONCEPT.contactTime],
+        }),
+      }),
+    ]);
+
+    // Completeness: judged 90, capped at the 50% coverage (1 of 2 expected satisfied).
+    expect(c.completenessJudged).toBe(90);
+    expect(c.coveragePct).toBe(50);
+    expect(c.completeness).toBe(50);
+    expect(c.coverageApplied).toBe(true);
+    // 0.4·90 + 0.3·50 + 0.2·90 + 0.1·80 = 36 + 15 + 18 + 8 = 77.
+    expect(c.weighted).toBe(77);
+    // The floor is withheld from a gated case; the ceiling runs last and outranks everything.
+    expect(c.floorApplied).toBe(false);
+    expect(c.preGateScore).toBe(77);
+    expect(c.preGateGrade).toBe('C');
+    expect(c.ceilingApplied).toBe(true);
+    expect(c.ceiling).toBe(59);
+    expect(c.overall).toBe(59);
+    expect(c.grade).toBe('F');
+    expect(c.rubricStatus).toBe('Fail');
+    expect(c.status).toBe('Fail');
+    expect(c.statusSource).toBe('minimal_gate');
+    expect(c.ratingConstrained).toBe(true);
+    // Judged against the PRE-GATE score: 77 would have passed, so the gate took a Pass away.
+    expect(c.gateBlockedAPass).toBe(true);
+    expect(c.conceptNote).toBe(
+      `Failed on mandatory concepts: ${CONCEPT.contactTime}. A missing mandatory concept caps the score at 59/100 (grade F, Fail). Pre-Gate Content Score: 77/100 — the rubric arithmetic before the cap, shown as a diagnostic so a near miss stays distinguishable from a total one.`,
+    );
+  });
+
+  it('leaves a pre-gate 17 where it is — constrained, but no Pass was taken away', () => {
+    const c = only([
+      input('total-miss', 20, {
+        score: score(20, { completeness: 10, clarity: 20 }),
+        concepts: concepts({
+          mandatoryRequired: [CONCEPT.dilution, CONCEPT.contactTime],
+          mandatoryMissing: [CONCEPT.contactTime],
+        }),
+      }),
+    ]);
+
+    // Judged 10 already sits below the 50% coverage, so the cap does not bind.
+    expect(c.completeness).toBe(10);
+    expect(c.coverageApplied).toBe(false);
+    // 0.4·20 + 0.3·10 + 0.2·20 + 0.1·20 = 8 + 3 + 4 + 2 = 17.
+    expect(c.weighted).toBe(17);
+    expect(c.preGateScore).toBe(17);
+    // The ceiling applies to the case but never bound: 17 is already below 59.
+    expect(c.ceilingApplied).toBe(false);
+    expect(c.ceiling).toBeNull();
+    expect(c.overall).toBe(17);
+    expect(c.status).toBe('Fail');
+    expect(c.statusSource).toBe('minimal_gate');
+    expect(c.ratingConstrained).toBe(true);
+    expect(c.gateBlockedAPass).toBe(false);
+    expect(c.conceptNote).toBe(
+      `Failed on mandatory concepts: ${CONCEPT.contactTime}. The response scored 17/100 on the rubric and failed there as well; the mandatory cap holds it at 17/100.`,
+    );
+  });
+
+  it('floors a fully-covered answer weighting 62 up to 70, and says so on the run', () => {
+    const metrics = computeReportMetrics([input('floored', 62)]);
+    const c = metrics.perCase[0]!;
+
+    expect(c.completeness).toBe(62);
+    expect(c.weighted).toBe(62);
+    expect(c.floorApplied).toBe(true);
+    expect(c.floor).toBe(70);
+    expect(c.overall).toBe(70);
+    expect(c.grade).toBe('C');
+    expect(c.preGateScore).toBe(70);
+    expect(c.ceilingApplied).toBe(false);
+    expect(c.status).toBe('Pass');
+    // The rubric already passed at 70, so the automatic Pass had nothing to raise.
+    expect(c.statusSource).toBe('rubric');
+    expect(c.conceptNote).toBe(
+      'All mandatory concepts satisfied, so the score was raised to the 70 floor. NOTE: the sub-scores placed this below a C despite full mandatory coverage — worth re-checking the sub-scores or the concept judgments.',
+    );
+    // A firing floor is a review signal, never a routine adjustment.
+    expect(metrics.warnings).toHaveLength(1);
+    expect(metrics.warnings[0]).toContain('below the 70 floor');
+    expect(metrics.gateFloor.flooredIds).toEqual(['floored']);
+  });
+
+  it('withholds the floor when a material factual issue is flagged, and names it', () => {
+    const note = `Stated 4 oz/gal; the label says 2 oz/gal (${CONCEPT.dilution}).`;
+    const c = only([
+      input('material', 62, {
+        concepts: concepts({
+          mandatoryRequired: [CONCEPT.dilution],
+          bonusRequired: [CONCEPT.metric],
+          materialIssue: true,
+          materialIssueNote: note,
+        }),
+      }),
+    ]);
+
+    expect(c.floorApplied).toBe(false);
+    expect(c.floor).toBeNull();
+    expect(c.overall).toBe(62);
+    expect(c.grade).toBe('D');
+    // Full expected coverage, but the material issue blocks the automatic Pass too.
+    expect(c.autoPassTriggered).toBe(false);
+    expect(c.autoPassBlocked).toBe(true);
+    expect(c.statusSource).toBe('rubric');
+    expect(c.materialIssue).toBe(true);
+    expect(c.conceptNote).toBe(
+      `Automatic Pass not applied: all expected concepts are present, but ${note}. The mandatory floor is also withheld for the same reason.`,
+    );
+  });
+
+  it('caps a judged Completeness of 66 at the 40% coverage it earned, and shows both numbers', () => {
+    const c = only([
+      input('partial', 90, {
+        score: score(90, { completeness: 66 }),
+        concepts: concepts({
+          mandatoryRequired: [],
+          bonusRequired: [
+            CONCEPT.dilution,
+            CONCEPT.contactTime,
+            CONCEPT.epa,
+            CONCEPT.metric,
+            'Rinse not required on food-contact surfaces',
+          ],
+          bonusMissing: [CONCEPT.epa, CONCEPT.metric, 'Rinse not required on food-contact surfaces'],
+        }),
+      }),
+    ]);
+
+    expect(c.coverage).toEqual({ satisfied: 2, required: 5 });
+    expect(c.coveragePct).toBe(40);
+    expect(c.completenessJudged).toBe(66);
+    expect(c.completeness).toBe(40);
+    expect(c.coverageApplied).toBe(true);
+    // 0.4·90 + 0.3·40 + 0.2·90 + 0.1·90 = 36 + 12 + 18 + 9 = 75.
+    expect(c.weighted).toBe(75);
+    expect(c.overall).toBe(75);
+    expect(c.conceptNote).toBe(
+      "Completeness was set by expected-concept coverage (40%), which is below the grader's judged 66. Expected key concepts are part of the content grade: missing expected content reduces Completeness proportionally.",
+    );
+  });
+
+  it('falls back to the coverage share for a pass whose grader emitted no Completeness', () => {
+    const c = only([
+      input('b0813-window', 90, {
+        score: score(90, { completeness: null }),
+        concepts: concepts({
+          mandatoryRequired: [CONCEPT.dilution],
           bonusRequired: [CONCEPT.metric, CONCEPT.epa],
           bonusMissing: [CONCEPT.epa],
         }),
       }),
     ]);
 
-    expect(c.completeness).toBe(50);
-    expect(c.coverage).toEqual({ satisfied: 2, required: 4 });
-    // 0.4·90 + 0.3·50 + 0.2·90 + 0.1·90 = 78 — hmm: 36 + 15 + 18 + 9 = 78.
-    expect(c.overall).toBe(78);
-    expect(c.grade).toBe('C');
-    expect(c.status).toBe('Pass');
-    // The miss is a reported fact and changed nothing above.
-    expect(c.mandatoryMissing).toBe(true);
-    expect(c.concepts.mandatory.missing).toEqual([CONCEPT.contactTime]);
-    expect(c.passesOnlyUnderCurrentMark).toBe(false);
+    expect(c.completenessJudged).toBeNull();
+    expect(c.coveragePct).toBe(67);
+    expect(c.completeness).toBe(67);
+    // No judged value was moved, so this is not a capped case.
+    expect(c.coverageApplied).toBe(false);
+    // 0.4·90 + 0.3·67 + 0.2·90 + 0.1·90 = 36 + 20.1 + 18 + 9 = 83.1 → 83.
+    expect(c.overall).toBe(83);
+    expect(c.conceptNote).toBeNull();
   });
 
-  it('never caps, floors or gates: a missing must-have on an otherwise strong answer still reads B / Pass', () => {
-    const c = only([
-      input('gated-before', 90, {
+  it('raises a Result to Pass on full expected coverage, and warns that it did', () => {
+    // The automatic Pass can only ever bite where the pass mark sits above the floor, or the floor
+    // is off — otherwise full mandatory coverage has already lifted the score past the mark.
+    const rules: ScoringRules = {
+      ...DEFAULT_SCORING_RULES,
+      minimalFloor: { ...DEFAULT_SCORING_RULES.minimalFloor, enabled: false },
+    };
+    const metrics = computeReportMetrics([input('auto', 62)], { passMark: 75, scoringRules: rules });
+    const c = metrics.perCase[0]!;
+
+    expect(c.floorApplied).toBe(false);
+    expect(c.overall).toBe(62);
+    expect(c.grade).toBe('D');
+    expect(c.rubricStatus).toBe('Fail');
+    expect(c.status).toBe('Pass');
+    expect(c.statusSource).toBe('auto_pass');
+    expect(c.autoPassTriggered).toBe(true);
+    expect(c.conceptNote).toBe(
+      'Automatic Pass: the response communicates all expected key concepts with no material factual issue (weighted score 62/100).',
+    );
+    expect(metrics.warnings).toHaveLength(1);
+    expect(metrics.warnings[0]).toContain('automatic Pass');
+    expect(metrics.concepts?.autoPassIds).toEqual(['auto']);
+    expect(metrics.concepts?.autoPassChangedIds).toEqual(['auto']);
+    // Rule 1 outranks Rule 2 either way: a gated case is never auto-passed.
+    expect(metrics.concepts?.gatedIds).toEqual([]);
+  });
+
+  it('drops the ceiling with the gate: disabling one disables the other', () => {
+    const rules: ScoringRules = {
+      ...DEFAULT_SCORING_RULES,
+      minimalGate: { enabled: false },
+    };
+    const metrics = computeReportMetrics(
+      [
+        input('gate-off', 90, {
+          score: score(90, { clarity: 80 }),
+          concepts: concepts({
+            mandatoryRequired: [CONCEPT.dilution, CONCEPT.contactTime],
+            mandatoryMissing: [CONCEPT.contactTime],
+          }),
+        }),
+      ],
+      { scoringRules: rules },
+    );
+    const c = metrics.perCase[0]!;
+
+    expect(c.weighted).toBe(77);
+    expect(c.ceilingApplied).toBe(false);
+    expect(c.ceiling).toBeNull();
+    expect(c.overall).toBe(77);
+    expect(c.grade).toBe('C');
+    expect(c.status).toBe('Pass');
+    expect(c.statusSource).toBe('rubric');
+    expect(c.ratingConstrained).toBe(false);
+    expect(c.gateBlockedAPass).toBe(false);
+    // Still reported on the case, and the report says the rules were not the defaults.
+    expect(c.mandatoryMissing).toBe(true);
+    expect(metrics.gateFloor.gateEnabled).toBe(false);
+    expect(metrics.gateFloor.cappedIds).toEqual([]);
+    expect(metrics.concepts?.gatedIds).toEqual(['gate-off']);
+    expect(metrics.concepts?.preventedIds).toEqual([]);
+  });
+
+  it('turns the coverage cap off without touching the judged Completeness', () => {
+    const rules: ScoringRules = {
+      ...DEFAULT_SCORING_RULES,
+      expectedCoverage: { enabled: false },
+    };
+    const metrics = computeReportMetrics(
+      [
+        input('holistic', 90, {
+          score: score(90, { completeness: 66 }),
+          concepts: RUBRIC_ONLY,
+        }),
+      ],
+      { scoringRules: rules },
+    );
+    const c = metrics.perCase[0]!;
+
+    expect(c.coveragePct).toBe(50);
+    expect(c.completeness).toBe(66);
+    expect(c.coverageApplied).toBe(false);
+    // 0.4·90 + 0.3·66 + 0.2·90 + 0.1·90 = 36 + 19.8 + 18 + 9 = 82.8 → 83.
+    expect(c.overall).toBe(83);
+    expect(metrics.gateFloor.coverageEnabled).toBe(false);
+    expect(metrics.gateFloor.coverageCappedIds).toEqual([]);
+  });
+
+  it('reports the rules in force and what each one actually did', () => {
+    const metrics = computeReportMetrics([
+      input('floored', 62),
+      input('capped', 90, {
+        score: score(90, { clarity: 80 }),
         concepts: concepts({
           mandatoryRequired: [CONCEPT.dilution, CONCEPT.contactTime],
           mandatoryMissing: [CONCEPT.contactTime],
@@ -243,19 +514,52 @@ describe('computeReportMetrics — pure-math scoring (B0-813)', () => {
       }),
     ]);
 
-    // Completeness 50 from 1 of 2 expected → 36 + 15 + 18 + 9 = 78.
-    expect(c.completeness).toBe(50);
-    expect(c.overall).toBe(78);
-    expect(c.status).toBe('Pass');
-    expect(c.mandatoryMissing).toBe(true);
+    expect(metrics.scoringRules).toEqual(DEFAULT_SCORING_RULES);
+    expect(metrics.gateFloor).toEqual({
+      gateEnabled: true,
+      floorEnabled: true,
+      floorScore: 70,
+      floorRespectsMaterialIssue: true,
+      flooredIds: ['floored'],
+      ceilingEnabled: true,
+      ceilingScore: 59,
+      cappedIds: ['capped'],
+      coverageEnabled: true,
+      coverageCappedIds: ['capped'],
+    });
+    expect(metrics.concepts?.gatedIds).toEqual(['capped']);
+    expect(metrics.concepts?.preventedIds).toEqual(['capped']);
+    expect(metrics.concepts?.autoPassIds).toEqual(['floored']);
+    expect(metrics.concepts?.autoPassChangedIds).toEqual([]);
+    expect(metrics.concepts?.autoPassBlockedIds).toEqual([]);
   });
 
-  it('scores 60 / — / 60 / 60 with full coverage as 72, C, Pass — no floor involved', () => {
-    const c = only([input('full', 60)]);
-    expect(c.completeness).toBe(100);
-    expect(c.overall).toBe(72);
-    expect(c.grade).toBe('C');
-    expect(c.status).toBe('Pass');
+  it('keeps the Pre-Gate Content Score out of every average, rate and rollup', () => {
+    const metrics = computeReportMetrics([
+      input('capped', 90, {
+        score: score(90, { clarity: 80 }),
+        concepts: concepts({
+          mandatoryRequired: [CONCEPT.dilution, CONCEPT.contactTime],
+          mandatoryMissing: [CONCEPT.contactTime],
+        }),
+      }),
+    ]);
+
+    expect(metrics.perCase[0]!.preGateScore).toBe(77);
+    // Every aggregate reads the FINAL 59, never the 77 diagnostic.
+    expect(metrics.overall).toEqual<RateBlock>({
+      n: 1,
+      avg: 59,
+      grade: 'F',
+      pass: 0,
+      fail: 1,
+      passPct: 0,
+      failPct: 100,
+    });
+    expect(metrics.highest).toEqual([{ id: 'capped', question: 'Question capped', overall: 59 }]);
+    expect(metrics.lowest).toEqual([{ id: 'capped', question: 'Question capped', overall: 59 }]);
+    expect(metrics.tiers[0]![1].avg).toBe(59);
+    expect(metrics.categories[0]![1].avg).toBe(59);
   });
 
   it('marks a case with no expected concepts Unable to Evaluate, with the reason, rather than guessing', () => {
@@ -278,39 +582,19 @@ describe('computeReportMetrics — pure-math scoring (B0-813)', () => {
     expect(metrics.ute[0]!.reason).toBe(NO_EXPECTED_CONCEPTS_UTE_REASON);
     // Excluded from every average — not folded in as a 0 or a 100.
     expect(metrics.overall.n).toBe(1);
-    expect(metrics.overall.avg).toBe(93);
-  });
-
-  it('ignores a persisted judged Completeness entirely — coverage is the only source', () => {
-    const c = only([input('legacy-judged', 90, { score: score(90, { completeness: 12 }) })]);
-    expect(c.completeness).toBe(100);
-    expect(c.overall).toBe(93);
-  });
-
-  it('reports a material issue on the case without touching the score', () => {
-    const note = `Stated 4 oz/gal; the label says 2 oz/gal (${CONCEPT.dilution}).`;
-    const c = only([
-      input('material', 90, {
-        concepts: concepts({
-          mandatoryRequired: [CONCEPT.dilution],
-          materialIssue: true,
-          materialIssueNote: note,
-        }),
-      }),
-    ]);
-
-    expect(c.materialIssue).toBe(true);
-    expect(c.concepts.materialIssueNote).toBe(note);
-    expect(c.overall).toBe(93);
-    expect(c.status).toBe('Pass');
+    expect(metrics.overall.avg).toBe(90);
   });
 
   it('uses the pass mark it is given, and lists the cases that pass only under the current one', () => {
-    // Overalls 93, 65 and 58.
-    const inputs = [input('a', 90), input('b', 50), input('c', 40)];
+    // Rubric-only concepts, so the Pass/Fail line is the only thing deciding: overalls 78, 64, 40.
+    const inputs = [
+      input('a', 90, { concepts: RUBRIC_ONLY }),
+      input('b', 70, { concepts: RUBRIC_ONLY }),
+      input('c', 40, { concepts: RUBRIC_ONLY }),
+    ];
 
     const at60 = computeReportMetrics(inputs);
-    expect(at60.perCase.map((c) => c.overall)).toEqual([93, 65, 58]);
+    expect(at60.perCase.map((c) => c.overall)).toEqual([78, 64, 40]);
     expect(at60.passMark).toBe(60);
     expect(at60.strictPassMark).toBe(70);
     expect(at60.perCase.map((c) => c.status)).toEqual(['Pass', 'Pass', 'Fail']);
@@ -324,27 +608,30 @@ describe('computeReportMetrics — pure-math scoring (B0-813)', () => {
   });
 
   it('coerces a missing judged sub-score to 0 with a warning, never refusing the report', () => {
-    const metrics = computeReportMetrics([input('flaky', 80, { score: score(80, { relevance: null }) })]);
+    const metrics = computeReportMetrics([
+      input('flaky', 80, { score: score(80, { relevance: null }), concepts: RUBRIC_ONLY }),
+    ]);
     expect(metrics.warnings[0]).toContain('missing sub-score(s) relevance');
-    // 0.4·80 + 0.3·100 + 0.2·0 + 0.1·80 = 70.
-    expect(metrics.perCase[0]!.overall).toBe(70);
+    // 0.4·80 + 0.3·50 + 0.2·0 + 0.1·80 = 32 + 15 + 0 + 8 = 55.
+    expect(metrics.perCase[0]!.overall).toBe(55);
   });
 });
 
 describe('computeReportMetrics — rate blocks (B0-812)', () => {
-  it('counts pass and fail only, from the Result, while avg and grade stay weighted', () => {
-    // Overalls 89, 73 and 58.
+  it('counts pass and fail from the final Result, while avg and grade stay weighted', () => {
+    // Rubric-only concepts throughout, so nothing but the arithmetic decides: 0.7·j + 0.3·min(j,50)
+    // gives 74, 64 and 40.
     const metrics = computeReportMetrics([
-      input('a', 84, { priorityRaw: 1, category: 'Dilution' }),
-      input('b', 62, { priorityRaw: 2, category: 'Disinfection' }),
-      input('c', 40, { priorityRaw: 2, category: 'Disinfection' }),
+      input('a', 84, { priorityRaw: 1, category: 'Dilution', concepts: RUBRIC_ONLY }),
+      input('b', 70, { priorityRaw: 2, category: 'Disinfection', concepts: RUBRIC_ONLY }),
+      input('c', 40, { priorityRaw: 2, category: 'Disinfection', concepts: RUBRIC_ONLY }),
     ]);
 
-    expect(metrics.perCase.map((c) => c.overall)).toEqual([89, 73, 58]);
+    expect(metrics.perCase.map((c) => c.overall)).toEqual([74, 64, 40]);
     expect(metrics.overall).toEqual<RateBlock>({
       n: 3,
-      avg: 73.3,
-      grade: 'C',
+      avg: 59.3,
+      grade: 'F',
       pass: 2,
       fail: 1,
       passPct: 66.7,
@@ -356,7 +643,7 @@ describe('computeReportMetrics — rate blocks (B0-812)', () => {
     expect(tierOne.pass).toBe(1);
     expect(tierTwo.pass).toBe(1);
     expect(tierTwo.fail).toBe(1);
-    expect(tierTwo.avg).toBe(65.5);
+    expect(tierTwo.avg).toBe(52);
 
     const disinfection = metrics.categories.find(([name]) => name === 'Disinfection')![1];
     expect(disinfection.passPct).toBe(50);
@@ -371,6 +658,7 @@ describe('computeReportMetrics — advisory notes stay advisory (B0-714)', () =>
       input('sharp', 84, {
         concepts: concepts({
           mandatoryRequired: [CONCEPT.dilution],
+          bonusRequired: [CONCEPT.metric],
           materialIssue: true,
           materialIssueNote: `Wrong registration number quoted: not "${CONCEPT.epa}".`,
         }),
@@ -380,6 +668,8 @@ describe('computeReportMetrics — advisory notes stay advisory (B0-714)', () =>
     expect(metrics.warnings).toHaveLength(1);
     expect(metrics.warnings[0]).toContain('material factual issue');
     expect(metrics.warnings[0]).toContain('Accuracy is 84');
+    // Advisory only — the floor was withheld, but the report still rendered.
+    expect(metrics.perCase[0]!.floorApplied).toBe(false);
   });
 });
 
@@ -440,6 +730,21 @@ describe('computeReportMetrics — concept rollup (B0-713 / B0-813)', () => {
     ]);
   });
 
+  it('names the gated, prevented and automatic-Pass populations by id (B0-835)', () => {
+    const rollup = computeReportMetrics(RUN).concepts!;
+
+    // A must-have miss is the gated condition, so these are the same two cases.
+    expect(rollup.gatedIds).toEqual(['missing-mandatory', 'also-missing']);
+    // 'missing-mandatory' weighted 74 before the cap, so the gate took a Pass from it;
+    // 'also-missing' weighted 39 and failed on the rubric as well.
+    expect(rollup.preventedIds).toEqual(['missing-mandatory']);
+    // Only 'full-coverage' has every expected concept and no material issue.
+    expect(rollup.autoPassIds).toEqual(['full-coverage']);
+    // Its rubric already passed at 74, so the automatic Pass changed nothing.
+    expect(rollup.autoPassChangedIds).toEqual([]);
+    expect(rollup.autoPassBlockedIds).toEqual([]);
+  });
+
   it('names recurring missing concepts verbatim with the cases they span', () => {
     const rollup = computeReportMetrics(RUN).concepts!;
 
@@ -469,7 +774,9 @@ describe('computeReportMetrics — judged metrics rollup (B0-811)', () => {
     similarity: number | null,
     evalConfidence: number | null,
   ): ReportCaseInput {
+    // Rubric-only concepts, so a Fail stays reachable: no gate, no floor, no automatic Pass.
     return input(id, judgedScore, {
+      concepts: RUBRIC_ONLY,
       score: score(judgedScore, {
         similarity,
         similarityNote: similarity == null ? null : `sim note ${id}`,
@@ -486,15 +793,15 @@ describe('computeReportMetrics — judged metrics rollup (B0-811)', () => {
     expect(c.evalConfidence).toBe(65);
     expect(c.confidenceNote).toBe('conf note a');
     // Same overall as the same judged sub-scores with no judged metrics at all.
-    expect(c.overall).toBe(only([input('b', 90)]).overall);
+    expect(c.overall).toBe(only([input('b', 90, { concepts: RUBRIC_ONLY })]).overall);
   });
 
   it('reports the distributions, the two exception cells and the review queue', () => {
     const metrics = computeReportMetrics([
-      judged('hi-fail', 40, 0.9, 55), // overall 58 Fail, similarity high → shape right, substance wrong
-      judged('lo-pass', 90, 0.3, 95), // overall 93 Pass, similarity low → right by another route
-      judged('mid', 70, 0.6, 72), // overall 79 Pass
-      judged('lo-conf', 80, 0.8, 70), // overall 86 Pass, confidence at the line → queued
+      judged('hi-fail', 40, 0.9, 55), // overall 40 Fail, similarity high → shape right, substance wrong
+      judged('lo-pass', 90, 0.3, 95), // overall 78 Pass, similarity low → right by another route
+      judged('mid', 70, 0.6, 72), // overall 64 Pass
+      judged('lo-conf', 80, 0.8, 70), // overall 71 Pass, confidence at the line → queued
       judged('no-judged', 80, null, null),
     ]);
     const j = metrics.judged!;
@@ -547,11 +854,17 @@ describe('computeReportMetrics — judged metrics rollup (B0-811)', () => {
   });
 
   it('omits the rollup when no case carries either metric', () => {
-    expect(computeReportMetrics([input('a', 90), input('b', 50)]).judged).toBeNull();
+    expect(
+      computeReportMetrics([
+        input('a', 90, { concepts: RUBRIC_ONLY }),
+        input('b', 50, { concepts: RUBRIC_ONLY }),
+      ]).judged,
+    ).toBeNull();
   });
 });
 
-describe('report invariants (B0-714 / B0-815)', () => {
+describe('report invariants (B0-714 / B0-815 / B0-835)', () => {
+  /** A clean case under the default rules: full coverage, nothing capped, nothing floored. */
   const PASSING: EvaluatedCase = {
     id: 'ok',
     question: 'Q',
@@ -559,13 +872,30 @@ describe('report invariants (B0-714 / B0-815)', () => {
     priorityRaw: 1,
     category: 'Dilution',
     accuracy: 90,
-    completeness: 100,
+    completeness: 90,
     relevance: 90,
     clarity: 90,
-    overall: 93,
+    overall: 90,
     grade: 'A',
     status: 'Pass',
     coverage: { satisfied: 2, required: 2 },
+    completenessJudged: 90,
+    coveragePct: 100,
+    coverageApplied: false,
+    weighted: 90,
+    floor: null,
+    floorApplied: false,
+    preGateScore: 90,
+    preGateGrade: 'A',
+    ceiling: null,
+    ceilingApplied: false,
+    rubricStatus: 'Pass',
+    statusSource: 'rubric',
+    ratingConstrained: false,
+    gateBlockedAPass: false,
+    autoPassTriggered: true,
+    autoPassBlocked: false,
+    conceptNote: null,
     mandatoryMissing: false,
     materialIssue: false,
     passesOnlyUnderCurrentMark: false,
@@ -576,15 +906,47 @@ describe('report invariants (B0-714 / B0-815)', () => {
     confidenceNote: null,
   };
 
+  /** A gated case, correctly capped: 1 of 2 expected covered, weighted 78, ceiling 59, F / Fail. */
+  const GATED_CONCEPTS = concepts({
+    mandatoryRequired: [CONCEPT.dilution, CONCEPT.contactTime],
+    mandatoryMissing: [CONCEPT.contactTime],
+  });
+  const GATED: EvaluatedCase = {
+    ...PASSING,
+    id: 'gated',
+    completeness: 50,
+    coverage: { satisfied: 1, required: 2 },
+    coveragePct: 50,
+    coverageApplied: true,
+    weighted: 78,
+    preGateScore: 78,
+    preGateGrade: 'C',
+    ceiling: 59,
+    ceilingApplied: true,
+    overall: 59,
+    grade: 'F',
+    rubricStatus: 'Fail',
+    status: 'Fail',
+    statusSource: 'minimal_gate',
+    ratingConstrained: true,
+    gateBlockedAPass: true,
+    autoPassTriggered: false,
+    mandatoryMissing: true,
+    concepts: GATED_CONCEPTS,
+  };
+
   const BLOCK: RateBlock = {
     n: 1,
-    avg: 93,
+    avg: 90,
     grade: 'A',
     pass: 1,
     fail: 0,
     passPct: 100,
     failPct: 0,
   };
+
+  /** The same block with the one case failing, for corruptions that flip a Result. */
+  const FAILING_BLOCK: RateBlock = { ...BLOCK, pass: 0, fail: 1, passPct: 0, failPct: 100 };
 
   function context(overrides: Partial<ReportInvariantContext> = {}): ReportInvariantContext {
     return {
@@ -597,11 +959,26 @@ describe('report invariants (B0-714 / B0-815)', () => {
       speed: null,
       weights: WEIGHTS,
       passMark: DEFAULT_PASS_MARK,
+      scoringRules: DEFAULT_SCORING_RULES,
       ...overrides,
     };
   }
 
-  /** Every corrupted context below must fail exactly the named check. */
+  /** One evaluated case, with the rate blocks moved to match a failing Result. */
+  function failing(overrides: Partial<EvaluatedCase>): ReportInvariantContext {
+    return context({
+      evaluated: [{ ...PASSING, ...overrides }],
+      overall: FAILING_BLOCK,
+      tiers: [['Tier 1', FAILING_BLOCK]],
+      categories: [['Dilution', FAILING_BLOCK]],
+    });
+  }
+
+  /**
+   * Every corrupted context below must fail **exactly** the named check, and fail it before any
+   * other — `assertReportInvariants` stops at the first violation, so a corruption that also trips
+   * an earlier check would silently test the wrong thing.
+   */
   const CORRUPTIONS: Array<[string, ReportInvariantContext]> = [
     ['status_counts_sum_to_evaluated', context({ overall: { ...BLOCK, pass: 0, fail: 0 } })],
     ['evaluated_equals_total_minus_ute', context({ totalCases: 5 })],
@@ -611,23 +988,232 @@ describe('report invariants (B0-714 / B0-815)', () => {
       context({ categories: [['Dilution', { ...BLOCK, n: 7 }]] }),
     ],
     [
-      // A floor or a cap would show up exactly here: the sub-scores no longer reproduce the overall.
-      'overall_recomputes_from_sub_scores',
-      context({ evaluated: [{ ...PASSING, overall: 70 }] }),
+      // Speed, a judged metric or a stray adjustment reaching the roll-up would land exactly here.
+      'weighted_recomputes_from_sub_scores',
+      context({ evaluated: [{ ...PASSING, weighted: 80 }] }),
     ],
     [
-      // A judged Completeness that is not the coverage share.
-      'completeness_equals_expected_coverage',
-      context({ evaluated: [{ ...PASSING, completeness: 80, overall: 87, grade: 'B' }] }),
+      // A score that is neither the weighted value nor a bound that fired.
+      'overall_equals_weighted_or_floor_or_ceiling',
+      context({ evaluated: [{ ...PASSING, overall: 80 }] }),
     ],
     [
-      'status_matches_pass_mark',
+      // The floor needs full must-have coverage and the ceiling needs a miss, so both is impossible.
+      'floor_and_ceiling_never_both',
       context({
-        evaluated: [{ ...PASSING, status: 'Fail' }],
-        overall: { ...BLOCK, pass: 0, fail: 1, passPct: 0, failPct: 100 },
-        tiers: [['Tier 1', { ...BLOCK, pass: 0, fail: 1 }]],
-        categories: [['Dilution', { ...BLOCK, pass: 0, fail: 1 }]],
+        evaluated: [
+          {
+            ...PASSING,
+            floorApplied: true,
+            floor: 95,
+            ceilingApplied: true,
+            ceiling: 59,
+            overall: 59,
+            grade: 'F',
+            preGateScore: 95,
+            preGateGrade: 'A',
+            rubricStatus: 'Fail',
+            status: 'Fail',
+            statusSource: 'minimal_gate',
+          },
+        ],
+        overall: FAILING_BLOCK,
+        tiers: [['Tier 1', FAILING_BLOCK]],
+        categories: [['Dilution', FAILING_BLOCK]],
       }),
+    ],
+    [
+      // A "floor" below the weighted score, i.e. one that lowered it.
+      'floor_only_raised',
+      context({
+        evaluated: [
+          {
+            ...PASSING,
+            floorApplied: true,
+            floor: 70,
+            overall: 70,
+            grade: 'C',
+            preGateScore: 70,
+            preGateGrade: 'C',
+          },
+        ],
+      }),
+    ],
+    [
+      // A "ceiling" above the weighted score, i.e. one that raised it.
+      'ceiling_only_lowered',
+      context({
+        evaluated: [
+          {
+            ...PASSING,
+            ceilingApplied: true,
+            ceiling: 95,
+            overall: 95,
+            grade: 'A',
+            preGateScore: 90,
+            mandatoryMissing: true,
+            concepts: GATED_CONCEPTS,
+            completeness: 50,
+            weighted: 78,
+            coverage: { satisfied: 1, required: 2 },
+            coveragePct: 50,
+            coverageApplied: true,
+          },
+        ],
+      }),
+    ],
+    [
+      // The diagnostic lost: a capped case whose pre-gate score reads below the capped one.
+      'pre_gate_preserved_where_capped',
+      failing({ ...GATED, preGateScore: 50, preGateGrade: 'F' }),
+    ],
+    [
+      // Coverage counts that are not the case's own concept block.
+      'completeness_never_exceeds_coverage',
+      context({ evaluated: [{ ...PASSING, coverage: { satisfied: 1, required: 2 } }] }),
+    ],
+    [
+      // The cap raising a judged Completeness instead of lowering it.
+      'coverage_cap_only_lowered_completeness',
+      context({ evaluated: [{ ...PASSING, completenessJudged: 80 }] }),
+    ],
+    [
+      // Completeness moved without the cap binding.
+      'completeness_is_judged_where_cap_unbound',
+      context({ evaluated: [{ ...PASSING, completenessJudged: 100 }] }),
+    ],
+    [
+      // The floor protecting a case that missed a must-have concept.
+      'no_floor_on_gated_case',
+      context({
+        evaluated: [
+          {
+            ...PASSING,
+            accuracy: 40,
+            relevance: 40,
+            clarity: 40,
+            completeness: 50,
+            completenessJudged: 90,
+            coverage: { satisfied: 1, required: 2 },
+            coveragePct: 50,
+            coverageApplied: true,
+            weighted: 43,
+            floorApplied: true,
+            floor: 70,
+            overall: 70,
+            grade: 'C',
+            preGateScore: 70,
+            preGateGrade: 'C',
+            mandatoryMissing: true,
+            autoPassTriggered: false,
+            concepts: GATED_CONCEPTS,
+          },
+        ],
+      }),
+    ],
+    [
+      // The floor protecting a wrong regulated value.
+      'no_floor_on_material_issue',
+      context({
+        evaluated: [
+          {
+            ...PASSING,
+            accuracy: 40,
+            completeness: 40,
+            completenessJudged: 40,
+            relevance: 40,
+            clarity: 40,
+            weighted: 40,
+            floorApplied: true,
+            floor: 70,
+            overall: 70,
+            grade: 'C',
+            preGateScore: 70,
+            preGateGrade: 'C',
+            materialIssue: true,
+            autoPassTriggered: false,
+            autoPassBlocked: true,
+          },
+        ],
+      }),
+    ],
+    [
+      // A Result off the pass mark with no named rule behind it.
+      'status_matches_pass_mark_except_concept_rule',
+      failing({ status: 'Fail' }),
+    ],
+    [
+      // The rubric Result not recomputing from the score it was taken on.
+      'rubric_status_recomputes_from_pass_mark',
+      failing({ status: 'Fail', rubricStatus: 'Fail' }),
+    ],
+    [
+      // The "B / Fail" row the whole model exists to make impossible.
+      'score_grade_result_agree_except_auto_pass',
+      failing({ status: 'Fail', statusSource: 'minimal_gate', ratingConstrained: true }),
+    ],
+    [
+      // The pre-B0-835 behaviour: a must-have miss reported beside a Pass.
+      'gated_cases_fail_when_gate_on',
+      context({
+        evaluated: [
+          {
+            ...GATED,
+            overall: 78,
+            grade: 'C',
+            ceiling: null,
+            ceilingApplied: false,
+            rubricStatus: 'Pass',
+            status: 'Pass',
+            statusSource: 'rubric',
+            ratingConstrained: false,
+            gateBlockedAPass: false,
+          },
+        ],
+      }),
+    ],
+    [
+      // Gated and failing, but the letter does not say so.
+      'gated_cases_capped_and_F_when_ceiling_on',
+      failing({ ...GATED, grade: 'D' }),
+    ],
+    [
+      // A qualified automatic Pass that did not produce a Pass.
+      'auto_pass_triggered_is_pass',
+      failing({
+        accuracy: 40,
+        completeness: 40,
+        completenessJudged: 40,
+        relevance: 40,
+        clarity: 40,
+        weighted: 40,
+        overall: 40,
+        grade: 'F',
+        preGateScore: 40,
+        preGateGrade: 'F',
+        rubricStatus: 'Fail',
+        status: 'Fail',
+      }),
+    ],
+    [
+      // A material issue blocked the automatic Pass, and it fired anyway.
+      'auto_pass_blocked_never_auto_passed',
+      context({
+        evaluated: [
+          {
+            ...PASSING,
+            materialIssue: true,
+            autoPassTriggered: false,
+            autoPassBlocked: true,
+            statusSource: 'auto_pass',
+          },
+        ],
+      }),
+    ],
+    [
+      // The gate credited with removing a Pass from a case it never gated.
+      'prevented_le_gated',
+      context({ evaluated: [{ ...PASSING, gateBlockedAPass: true }] }),
     ],
     ['grade_recomputes_from_overall', context({ evaluated: [{ ...PASSING, grade: 'B' }] })],
     [
@@ -667,20 +1253,22 @@ describe('report invariants (B0-714 / B0-815)', () => {
       }),
     ],
     [
+      // The flag the gate and the ceiling are keyed off, out of step with the concept block.
       'mandatory_miss_is_reported',
       context({
         evaluated: [
           {
-            ...PASSING,
-            completeness: 50,
+            ...GATED,
+            mandatoryMissing: false,
             overall: 78,
             grade: 'C',
-            coverage: { satisfied: 1, required: 2 },
-            mandatoryMissing: false,
-            concepts: concepts({
-              mandatoryRequired: [CONCEPT.dilution, CONCEPT.contactTime],
-              mandatoryMissing: [CONCEPT.contactTime],
-            }),
+            ceiling: null,
+            ceilingApplied: false,
+            rubricStatus: 'Pass',
+            status: 'Pass',
+            statusSource: 'rubric',
+            ratingConstrained: false,
+            gateBlockedAPass: false,
           },
         ],
       }),
@@ -745,6 +1333,39 @@ describe('report invariants (B0-714 / B0-815)', () => {
     expect(() => assertReportInvariants(context())).not.toThrow();
   });
 
+  it('passes a correctly gated, correctly capped case', () => {
+    expect(() =>
+      assertReportInvariants(
+        context({
+          evaluated: [GATED],
+          overall: FAILING_BLOCK,
+          tiers: [['Tier 1', FAILING_BLOCK]],
+          categories: [['Dilution', FAILING_BLOCK]],
+        }),
+      ),
+    ).not.toThrow();
+  });
+
+  it('lets a run with the gate switched off reconcile — a supported configuration', () => {
+    const rules: ScoringRules = { ...DEFAULT_SCORING_RULES, minimalGate: { enabled: false } };
+    // Gate off ⇒ ceiling off, so the gated case keeps its 78 and its Pass.
+    const uncapped: EvaluatedCase = {
+      ...GATED,
+      overall: 78,
+      grade: 'C',
+      ceiling: null,
+      ceilingApplied: false,
+      rubricStatus: 'Pass',
+      status: 'Pass',
+      statusSource: 'rubric',
+      ratingConstrained: false,
+      gateBlockedAPass: false,
+    };
+    expect(() =>
+      assertReportInvariants(context({ evaluated: [uncapped], scoringRules: rules })),
+    ).not.toThrow();
+  });
+
   it('refuses to compute metrics when a mandatory concept is not also an expected one', () => {
     expect(() =>
       computeReportMetrics([
@@ -794,8 +1415,8 @@ describe('report invariants (B0-714 / B0-815)', () => {
         { invariantSeverity: 'warn' },
       );
       expect(metrics.overall.n).toBe(2);
-      // 0.7·74 + 30 = 82 → B; 0.7·90 + 30 = 93 → A.
-      expect(metrics.perCase.map((c) => c.grade)).toEqual(['B', 'A']);
+      // Both have full coverage, so Completeness is the judged value: 74 → C, 90 → A.
+      expect(metrics.perCase.map((c) => c.grade)).toEqual(['C', 'A']);
       expect(metrics.warnings.some((w) => w.startsWith('INVARIANT:'))).toBe(true);
     });
 
@@ -894,7 +1515,7 @@ describe('computeReportMetrics — speed aggregates (B0-717)', () => {
     const metrics = computeReportMetrics([input('untimed', 90)]);
     expect(metrics.speed).toBeNull();
     // …and the content side is untouched.
-    expect(metrics.overall.avg).toBe(93);
+    expect(metrics.overall.avg).toBe(90);
     expect(metrics.perCase[0].grade).toBe('A');
   });
 
@@ -983,10 +1604,13 @@ describe('computeReportMetrics — speed aggregates (B0-717)', () => {
   });
 
   it('leaves every content score identical whether or not timings are present', () => {
-    const withoutTimings = computeReportMetrics([input('a', 84), input('b', 62)]);
+    const withoutTimings = computeReportMetrics([
+      input('a', 84, { concepts: RUBRIC_ONLY }),
+      input('b', 62, { concepts: RUBRIC_ONLY }),
+    ]);
     const withTimings = computeReportMetrics([
-      input('a', 84, { ttftSeconds: 1, latencySeconds: 3.2 }),
-      input('b', 62, { latencySeconds: 30 }),
+      input('a', 84, { concepts: RUBRIC_ONLY, ttftSeconds: 1, latencySeconds: 3.2 }),
+      input('b', 62, { concepts: RUBRIC_ONLY, latencySeconds: 30 }),
     ]);
 
     expect(withTimings.perCase).toEqual(withoutTimings.perCase);

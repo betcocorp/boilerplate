@@ -13,6 +13,7 @@ import {
   getPermissionsList,
   getPermissionsUsersList,
 } from '~/lib/permissions/repository';
+import { requirePagePermission } from '~/lib/permissions/require-page-permission';
 
 export const metadata: Metadata = {
   title: 'Permissions | Betco BEX Admin',
@@ -20,6 +21,11 @@ export const metadata: Metadata = {
 };
 
 export default async function PermissionsPage() {
+  await requirePagePermission(
+    PERMISSIONS.ADMIN_CARD_PERMISSIONS,
+    'GET /admin/permissions',
+  );
+
   await connection();
 
   const [permissionsRes, groupsRes, usersRes] = await Promise.all([

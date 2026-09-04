@@ -1,30 +1,36 @@
 import { z } from 'zod';
 
 import { normConcept, type CaseConcepts } from './case-concepts';
+import { gradeFromScore, NO_EXPECTED_CONCEPTS_UTE_REASON, round1, round2, type CaseStatus, type Grade } from './metrics';
 import {
-  completenessFromCoverage,
-  computeOverall,
-  gradeFromScore,
-  NO_EXPECTED_CONCEPTS_UTE_REASON,
-  round1,
-  round2,
-  statusFromScore,
-  type CaseStatus,
-  type Grade,
-} from './metrics';
-import { DEFAULT_JUDGED_THRESHOLDS, DEFAULT_PASS_MARK } from './scoring-config';
+  DEFAULT_JUDGED_THRESHOLDS,
+  DEFAULT_PASS_MARK,
+  DEFAULT_SCORING_RULES,
+  sanitizeScoringRules,
+  type ScoringRules,
+} from './scoring-config';
+import { deriveCaseScoreline, type StatusSource } from './scoring-rules';
 
 /**
- * B0-824 — judgment-variance study: Bex's run-report grader vs the desktop agent-evaluation flow
- * on the SAME run, from two consolidated `eval.json` files in the skill's schema
- * (`~/.claude/skills/agent-evaluation/references/eval_schema.json`).
+ * B0-824 / B0-835 — judgment-variance study: Bex's run-report grader vs the desktop
+ * agent-evaluation flow on the SAME run, from two consolidated `eval.json` files in the skill's
+ * schema (`~/.claude/skills/agent-evaluation/references/eval_schema.json`).
  *
- * Bex is the spec. Each side's `overall` and Result are recomputed HERE the Bex way from the judged
- * sub-scores and the per-concept verdicts — `completenessFromCoverage` → `computeOverall` →
- * `statusFromScore` — and every derived number a file may carry (a judged `completeness`, a
- * weighted score, a grade, a status) is ignored. What is being compared is therefore judgment
- * alone: the three judged sub-scores and which concepts each grader found. A side with no expected
+ * Bex is the spec. Each side's `overall` and Result are recomputed HERE, through the one shared
+ * pipeline `deriveCaseScoreline` (`./scoring-rules`) — coverage cap on Completeness → weight →
+ * mandatory floor → Pre-Gate Content Score → mandatory ceiling → round → Result (rubric, then the
+ * automatic Pass, then the mandatory gate). A file's judged `completeness` IS read, because it is
+ * an input to the pipeline (Rule 3 caps it at coverage); a missing one means coverage is the only
+ * Completeness that side has. Every *derived* number a file may carry (a weighted score, a grade,
+ * a status, a pre-gate score) is still ignored. What is being compared is therefore judgment
+ * alone: the four judged sub-scores and which concepts each grader found. A side with no expected
  * concepts for a case is Unable to Evaluate, exactly as in `metrics.ts`.
+ *
+ * **Both sides are always recomputed under ONE set of rules** — a comparison run under two
+ * different rule sets measures the rules, not the judgment, so it is refused rather than reported.
+ * The rules come from either file's `scoring_config` block (`applyScoringOverrides`, the port of
+ * the reference `concept_rules.apply_scoring_overrides`) and default to `DEFAULT_SCORING_RULES`;
+ * two files that declare *different* blocks make `compareEvalRuns` throw, naming both.
  *
  * Concept phrases are regulated free text: they are compared by `normConcept` identity key only
  * and never parsed, re-cased or displayed from here.
@@ -58,6 +64,7 @@ export const evalCaseSchema = z.looseObject({
   tier: z.string().nullable().optional(),
   category: z.string().nullable().optional(),
   accuracy: scoreSchema,
+  /** The grader's judged Completeness — an INPUT to the scoring pipeline (B0-835), not a derived value. */
   completeness: scoreSchema,
   relevance: scoreSchema,
   clarity: scoreSchema,
@@ -86,6 +93,12 @@ export const evalFileSchema = z.looseObject({
     })
     .nullable()
     .optional(),
+  /**
+   * The run's `scoring_config`, read by `applyScoringOverrides`. Deliberately `unknown`: the
+   * reference `apply_scoring_overrides` *warns* on a malformed block and keeps the defaults, so a
+   * bad one must not fail the whole file's parse.
+   */
+  scoring_config: z.unknown().optional(),
   cases: z.array(evalCaseSchema),
 });
 
@@ -106,6 +119,226 @@ export function parseEvalFile(input: unknown): ParseEvalFileResult {
   };
 }
 
+// ---- scoring_config -----------------------------------------------------------------------------
+
+/**
+ * The recognised `scoring_config` sections and their keys, mirroring the reference
+ * `concept_rules.SCORING_DEFAULTS`. Anything else is ignored with a warning, never honoured.
+ */
+export const SCORING_CONFIG_KEYS: Readonly<Record<string, readonly string[]>> = {
+  pass_mark: ['score'],
+  minimal_gate: ['enabled'],
+  minimal_floor: ['enabled', 'score', 'respect_material_issue'],
+  minimal_ceiling: ['enabled', 'score'],
+  expected_coverage: ['enabled'],
+};
+
+/** What one file's `scoring_config` resolved to, plus every complaint made along the way. */
+export type ScoringConfigResolution = {
+  rules: ScoringRules;
+  passMark: number;
+  /** True when the file declared a `scoring_config` block at all (even an empty one). */
+  declared: boolean;
+  /** True only when that block set a valid `pass_mark.score`. */
+  passMarkDeclared: boolean;
+  warnings: string[];
+};
+
+function describeType(value: unknown): string {
+  if (value === null) return 'null';
+  return Array.isArray(value) ? 'array' : typeof value;
+}
+
+function inspect(value: unknown): string {
+  const text = JSON.stringify(value);
+  return text === undefined ? String(value) : text;
+}
+
+function isScoreValue(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100;
+}
+
+/**
+ * Port of the reference `concept_rules.apply_scoring_overrides`: an eval.json `scoring_config`
+ * object laid over `DEFAULT_SCORING_RULES` + `DEFAULT_PASS_MARK`, key by key. Recognised shape —
+ *
+ *     {"pass_mark":         {"score": 60},
+ *      "minimal_gate":      {"enabled": true},
+ *      "minimal_floor":     {"enabled": true, "score": 70, "respect_material_issue": true},
+ *      "minimal_ceiling":   {"enabled": true, "score": 59},
+ *      "expected_coverage": {"enabled": true}}
+ *
+ * — and, as in the reference, an unknown key, a non-object section or an out-of-range score is
+ * **ignored with a warning** rather than silently honoured or fatal, so one typo cannot quietly
+ * disable a safety rule. The result goes through `sanitizeScoringRules` for the same reason the
+ * settings path does.
+ */
+export function applyScoringOverrides(cfg: unknown, label = 'scoring config'): ScoringConfigResolution {
+  const warnings: string[] = [];
+  const draft: ScoringRules = {
+    minimalGate: { ...DEFAULT_SCORING_RULES.minimalGate },
+    minimalFloor: { ...DEFAULT_SCORING_RULES.minimalFloor },
+    minimalCeiling: { ...DEFAULT_SCORING_RULES.minimalCeiling },
+    expectedCoverage: { ...DEFAULT_SCORING_RULES.expectedCoverage },
+  };
+  let passMark = DEFAULT_PASS_MARK;
+  let passMarkDeclared = false;
+
+  const done = (declared: boolean): ScoringConfigResolution => ({
+    rules: sanitizeScoringRules(draft),
+    passMark,
+    declared,
+    passMarkDeclared,
+    warnings,
+  });
+
+  if (cfg == null) return done(false);
+  if (typeof cfg !== 'object' || Array.isArray(cfg)) {
+    warnings.push(`${label}: expected an object, got ${describeType(cfg)}; ignored`);
+    return done(false);
+  }
+
+  const bool = (section: string, key: string, value: unknown, current: boolean): boolean => {
+    if (typeof value === 'boolean') return value;
+    warnings.push(
+      `${label}: ${section}.${key} must be true or false (got ${inspect(value)}); kept ${current}`,
+    );
+    return current;
+  };
+  const score = (section: string, value: unknown, current: number): number => {
+    if (isScoreValue(value)) return value;
+    warnings.push(
+      `${label}: ${section}.score must be a number 0-100 (got ${inspect(value)}); kept ${current}`,
+    );
+    return current;
+  };
+
+  for (const [section, keys] of Object.entries(SCORING_CONFIG_KEYS)) {
+    const sub = (cfg as Record<string, unknown>)[section];
+    if (sub == null) continue;
+    if (typeof sub !== 'object' || Array.isArray(sub)) {
+      warnings.push(`${label}: '${section}' expected an object, got ${describeType(sub)}; ignored`);
+      continue;
+    }
+    for (const [key, value] of Object.entries(sub as Record<string, unknown>)) {
+      if (!keys.includes(key)) {
+        warnings.push(
+          `${label}: unknown key '${section}.${key}' ignored (known: ${[...keys].sort().join(', ')})`,
+        );
+        continue;
+      }
+      if (section === 'pass_mark') {
+        const next = score('pass_mark', value, passMark);
+        if (isScoreValue(value)) passMarkDeclared = true;
+        passMark = next;
+      } else if (section === 'minimal_gate') {
+        draft.minimalGate.enabled = bool(section, key, value, draft.minimalGate.enabled);
+      } else if (section === 'minimal_floor') {
+        if (key === 'score') draft.minimalFloor.score = score(section, value, draft.minimalFloor.score);
+        else if (key === 'enabled') draft.minimalFloor.enabled = bool(section, key, value, draft.minimalFloor.enabled);
+        else {
+          draft.minimalFloor.respectMaterialIssue = bool(
+            section,
+            key,
+            value,
+            draft.minimalFloor.respectMaterialIssue,
+          );
+        }
+      } else if (section === 'minimal_ceiling') {
+        if (key === 'score') draft.minimalCeiling.score = score(section, value, draft.minimalCeiling.score);
+        else draft.minimalCeiling.enabled = bool(section, key, value, draft.minimalCeiling.enabled);
+      } else {
+        draft.expectedCoverage.enabled = bool(section, key, value, draft.expectedCoverage.enabled);
+      }
+    }
+  }
+
+  return done(true);
+}
+
+/** One line naming every rule in force, for the mismatch error and the report's method paragraph. */
+export function describeScoringRules(rules: ScoringRules, passMark: number): string {
+  const floor = rules.minimalFloor.enabled
+    ? `floor on at ${rules.minimalFloor.score}${rules.minimalFloor.respectMaterialIssue ? ' (withheld on a material factual issue)' : ''}`
+    : 'floor off';
+  return [
+    `pass mark ${passMark}`,
+    rules.minimalGate.enabled ? 'mandatory gate on' : 'mandatory gate off',
+    rules.minimalCeiling.enabled ? `ceiling on at ${rules.minimalCeiling.score}` : 'ceiling off',
+    floor,
+    rules.expectedCoverage.enabled ? 'expected-coverage cap on' : 'expected-coverage cap off',
+  ].join('; ');
+}
+
+/** The rules both sides are recomputed under, and where they came from. */
+export type ResolvedScoringConfig = {
+  rules: ScoringRules;
+  passMark: number;
+  declaredA: boolean;
+  declaredB: boolean;
+  /** Every complaint either file's block earned, plus any note about a caller override. */
+  warnings: string[];
+};
+
+/**
+ * Resolves ONE scoring configuration for both sides.
+ *
+ * A declared `pass_mark.score` wins over `options.passMark`, because the declaration says what the
+ * grades in that file were produced under and the CLI always passes a mark; the override is
+ * reported as overridden rather than dropped silently. **Throws** when the two files' effective
+ * configurations differ: the sides would then be measured by different rulers.
+ */
+export function resolveScoringConfig(
+  a: EvalFile,
+  b: EvalFile,
+  options: { labelA: string; labelB: string; passMark?: number | null },
+): ResolvedScoringConfig {
+  const fallback = options.passMark ?? DEFAULT_PASS_MARK;
+  const sides = ([
+    [options.labelA, a],
+    [options.labelB, b],
+  ] as const).map(([label, file]) => {
+    const resolved = applyScoringOverrides(file.scoring_config, `${label}: scoring_config`);
+    const passMark = resolved.passMarkDeclared ? resolved.passMark : fallback;
+    const warnings = [...resolved.warnings];
+    if (resolved.passMarkDeclared && options.passMark != null && resolved.passMark !== options.passMark) {
+      warnings.push(
+        `${label}: scoring_config declares pass_mark.score ${resolved.passMark}, which overrides the ` +
+          `pass mark ${options.passMark} given by the caller.`,
+      );
+    }
+    return { label, resolved, passMark, warnings };
+  });
+
+  const [sideA, sideB] = sides;
+  const key = (side: (typeof sides)[number]) => JSON.stringify({ rules: side.resolved.rules, passMark: side.passMark });
+  if (key(sideA) !== key(sideB)) {
+    const line = (side: (typeof sides)[number]) =>
+      `  ${side.label}: ${describeScoringRules(side.resolved.rules, side.passMark)} ` +
+      `[${side.resolved.declared ? 'declared in the file' : 'shipped defaults'}]`;
+    throw new Error(
+      'Cannot compare: the two eval.json files resolve to different scoring_config rules, so each ' +
+        "side's numbers would come from a different ruler and the comparison would measure the rules " +
+        'rather than the judgment.\n' +
+        `${line(sideA)}\n${line(sideB)}\n` +
+        'Re-export or re-consolidate both sides under one scoring_config, or drop the block from ' +
+        'both to use the shipped defaults.',
+    );
+  }
+
+  return {
+    rules: sideA.resolved.rules,
+    passMark: sideA.passMark,
+    declaredA: sideA.resolved.declared,
+    declaredB: sideB.resolved.declared,
+    // Both sides resolved identically, so B's complaints about its own block are the only ones
+    // A's do not already cover; deduplicated by text, keeping A's order.
+    warnings: [...sideA.warnings, ...sideB.warnings.filter((w) => !sideA.warnings.includes(w))],
+  };
+}
+
+// ---- per-side scoring ---------------------------------------------------------------------------
+
 /** One kind's verdicts as `normConcept` identity keys — for set equality only, never displayed. */
 export type ConceptVerdicts = {
   satisfied: ReadonlySet<string>;
@@ -120,12 +353,31 @@ export type SideEvaluation = {
   unableToEvaluate: boolean;
   uteReason: string | null;
   accuracy: number | null;
-  /** Computed from expected-concept coverage; a judged value in the file is never read. */
+  /** The grader's judged Completeness as the file carries it; null when it carries none. */
+  completenessJudged: number | null;
+  /** The expected-concept coverage share the cap is taken from. */
+  coveragePct: number | null;
+  /** What fed the weighted score: `min(judged, coverage)`, or the coverage share on its own. */
   completeness: number | null;
   relevance: number | null;
   clarity: number | null;
+  /** The weighted score before the floor and the ceiling. */
+  weighted: number | null;
+  /** The mandatory floor's value, only where it actually raised the score. */
+  floor: number | null;
+  floorApplied: boolean;
+  /** The Pre-Gate Content Score — the arithmetic before the ceiling. Diagnostic, never averaged. */
+  preGateScore: number | null;
+  /** The mandatory ceiling's value, only where it actually lowered the score. */
+  ceiling: number | null;
+  ceilingApplied: boolean;
+  /** True only where the coverage cap actually lowered the grader's judged Completeness. */
+  coverageApplied: boolean;
   overall: number | null;
+  grade: Grade | null;
   status: CaseStatus | null;
+  /** Where the Result came from: the pass mark, the automatic Pass, or the mandatory gate. */
+  statusSource: StatusSource | null;
   /** `null` when the side recorded no concepts block for the case. */
   mandatory: ConceptVerdicts | null;
   expected: ConceptVerdicts | null;
@@ -134,7 +386,7 @@ export type SideEvaluation = {
   inReviewQueue: boolean;
 };
 
-export type SideOptions = { passMark: number; reviewThreshold: number };
+export type SideOptions = { passMark: number; reviewThreshold: number; rules: ScoringRules };
 
 const UNSPECIFIED = 'Unspecified';
 
@@ -185,7 +437,12 @@ function label(value: string | null | undefined): string {
   return trimmed ? trimmed : UNSPECIFIED;
 }
 
-/** Scores one side of one case the Bex way. */
+/** A judged Completeness only where the file actually carries a number; otherwise null (coverage). */
+function judgedCompleteness(c: EvalCase): number | null {
+  return typeof c.completeness === 'number' && Number.isFinite(c.completeness) ? c.completeness : null;
+}
+
+/** Scores one side of one case through `deriveCaseScoreline`, under the rules in force. */
 export function evaluateSide(c: EvalCase, options: SideOptions): SideEvaluation {
   const concepts = conceptsOf(c.concepts);
   const evalConfidence = c.eval_confidence ?? null;
@@ -208,11 +465,22 @@ export function evaluateSide(c: EvalCase, options: SideOptions): SideEvaluation 
     unableToEvaluate: true,
     uteReason: reason,
     accuracy: null,
+    completenessJudged: null,
+    coveragePct: null,
     completeness: null,
     relevance: null,
     clarity: null,
+    weighted: null,
+    floor: null,
+    floorApplied: false,
+    preGateScore: null,
+    ceiling: null,
+    ceilingApplied: false,
+    coverageApplied: false,
     overall: null,
+    grade: null,
     status: null,
+    statusSource: null,
     inReviewQueue: false,
   });
 
@@ -225,23 +493,65 @@ export function evaluateSide(c: EvalCase, options: SideOptions): SideEvaluation 
   if (accuracy == null || relevance == null || clarity == null) {
     return ute('Missing a judged sub-score (accuracy, relevance or clarity).');
   }
-  const completeness = completenessFromCoverage(concepts);
-  if (completeness == null) return ute(NO_EXPECTED_CONCEPTS_UTE_REASON);
+  if (!concepts) return ute(NO_EXPECTED_CONCEPTS_UTE_REASON);
 
-  const overall = computeOverall({ accuracy, completeness, relevance, clarity });
+  // The whole pipeline, from the one place it exists: coverage cap → weight → floor → pre-gate →
+  // ceiling → Result. Null only for a case with no expected concepts, which is Unable to Evaluate.
+  const scoreline = deriveCaseScoreline({
+    accuracy,
+    completenessJudged: judgedCompleteness(c),
+    relevance,
+    clarity,
+    concepts,
+    rules: options.rules,
+    passMark: options.passMark,
+  });
+  if (!scoreline) return ute(NO_EXPECTED_CONCEPTS_UTE_REASON);
+
   return {
     ...base,
     unableToEvaluate: false,
     uteReason: null,
     accuracy,
-    completeness,
+    completenessJudged: scoreline.completenessJudged,
+    coveragePct: scoreline.coveragePct,
+    completeness: scoreline.completeness,
     relevance,
     clarity,
-    overall,
-    status: statusFromScore(overall, options.passMark),
+    weighted: scoreline.weighted,
+    floor: scoreline.floor,
+    floorApplied: scoreline.floorApplied,
+    preGateScore: scoreline.preGateScore,
+    ceiling: scoreline.ceiling,
+    ceilingApplied: scoreline.ceilingApplied,
+    coverageApplied: scoreline.coverageApplied,
+    overall: scoreline.overall,
+    grade: scoreline.grade,
+    status: scoreline.status,
+    statusSource: scoreline.statusSource,
     // Bex's SME review queue is "at or below" the low-confidence threshold (metrics.ts), not below.
     inReviewQueue: evalConfidence != null && evalConfidence <= options.reviewThreshold,
   };
+}
+
+/**
+ * The named rules that actually moved this side's number or its Result — the "why" behind a spread.
+ * Empty when the plain weighted arithmetic and the pass mark decided everything.
+ */
+export function sideRuleNotes(side: SideEvaluation): string[] {
+  const notes: string[] = [];
+  if (side.coverageApplied && side.coveragePct != null) notes.push(`coverage cap ${side.coveragePct}`);
+  if (side.floorApplied && side.floor != null) notes.push(`floor ${side.floor}`);
+  if (side.ceilingApplied && side.ceiling != null) notes.push(`ceiling ${side.ceiling}`);
+  if (side.statusSource === 'minimal_gate') notes.push('gate');
+  if (side.statusSource === 'auto_pass') notes.push('auto-Pass');
+  return notes;
+}
+
+/** `sideRuleNotes` as one cell; an em dash when no rule moved the side. */
+export function formatSideRules(side: SideEvaluation): string {
+  const notes = sideRuleNotes(side);
+  return notes.length === 0 ? '—' : notes.join(', ');
 }
 
 export type CaseComparison = {
@@ -320,7 +630,19 @@ export type GroupRow = {
   agreementPct: number | null;
 };
 
-export type SpreadCase = { id: string; overallA: number; overallB: number; delta: number; explained: boolean };
+export type SpreadCase = {
+  id: string;
+  overallA: number;
+  overallB: number;
+  delta: number;
+  explained: boolean;
+  /** The Pre-Gate Content Score behind each side's number — a near miss vs a total one. */
+  preGateA: number | null;
+  preGateB: number | null;
+  /** `formatSideRules` per side, so the row says WHY the two differ (e.g. one side gated). */
+  rulesA: string;
+  rulesB: string;
+};
 
 export type TargetCheck = {
   name: string;
@@ -332,6 +654,13 @@ export type TargetCheck = {
 
 export type ParityRollup = {
   passMark: number;
+  /** B0-835 — the four concept rules both sides were recomputed under. */
+  scoringRules: ScoringRules;
+  /** Whether each file declared the `scoring_config` the rules came from. */
+  scoringConfigDeclaredA: boolean;
+  scoringConfigDeclaredB: boolean;
+  /** Complaints either file's `scoring_config` earned, and any caller override it displaced. */
+  scoringConfigWarnings: string[];
   spreadThreshold: number;
   reviewThreshold: number;
   /** Ids present in both files. */
@@ -360,6 +689,7 @@ export type ParityComparison = {
 };
 
 export type CompareOptions = {
+  /** The Pass/Fail line, unless a file's `scoring_config` declares one — a declaration wins. */
   passMark?: number;
   spreadThreshold?: number;
   reviewThreshold?: number;
@@ -411,12 +741,22 @@ function groupRows(cases: readonly CaseComparison[], keyOf: (c: CaseComparison) 
     });
 }
 
-/** Pairs cases by `id` and computes every per-case row and rollup. */
+/**
+ * Pairs cases by `id` and computes every per-case row and rollup, both sides recomputed under the
+ * one configuration `resolveScoringConfig` settled on. **Throws** when the two files declare
+ * configurations that resolve differently.
+ */
 export function compareEvalRuns(a: EvalFile, b: EvalFile, options: CompareOptions = {}): ParityComparison {
-  const passMark = options.passMark ?? DEFAULT_PASS_MARK;
+  const labels = { a: options.labelA ?? 'Bex', b: options.labelB ?? 'Desktop' };
+  const config = resolveScoringConfig(a, b, {
+    labelA: labels.a,
+    labelB: labels.b,
+    passMark: options.passMark,
+  });
+  const passMark = config.passMark;
   const spreadThreshold = options.spreadThreshold ?? DEFAULT_SPREAD_THRESHOLD;
   const reviewThreshold = options.reviewThreshold ?? DEFAULT_JUDGED_THRESHOLDS.lowConfidence;
-  const sideOptions: SideOptions = { passMark, reviewThreshold };
+  const sideOptions: SideOptions = { passMark, reviewThreshold, rules: config.rules };
 
   const byIdB = new Map(b.cases.map((c) => [c.id, c] as const));
   const idsA = new Set(a.cases.map((c) => c.id));
@@ -438,7 +778,19 @@ export function compareEvalRuns(a: EvalFile, b: EvalFile, options: CompareOption
   const statusAgreement = { agree, of: compared.length, pct: pct(agree, compared.length) };
   const spreadCases: SpreadCase[] = compared.flatMap((c) =>
     c.spread && c.delta != null && c.a.overall != null && c.b.overall != null
-      ? [{ id: c.id, overallA: c.a.overall, overallB: c.b.overall, delta: c.delta, explained: c.conceptDisagreement }]
+      ? [
+          {
+            id: c.id,
+            overallA: c.a.overall,
+            overallB: c.b.overall,
+            delta: c.delta,
+            explained: c.conceptDisagreement,
+            preGateA: c.a.preGateScore,
+            preGateB: c.b.preGateScore,
+            rulesA: formatSideRules(c.a),
+            rulesB: formatSideRules(c.b),
+          },
+        ]
       : [],
   );
   const explained = spreadCases.filter((s) => s.explained).length;
@@ -477,10 +829,14 @@ export function compareEvalRuns(a: EvalFile, b: EvalFile, options: CompareOption
   ];
 
   return {
-    labels: { a: options.labelA ?? 'Bex', b: options.labelB ?? 'Desktop' },
+    labels,
     cases,
     rollup: {
       passMark,
+      scoringRules: config.rules,
+      scoringConfigDeclaredA: config.declaredA,
+      scoringConfigDeclaredB: config.declaredB,
+      scoringConfigWarnings: config.warnings,
       spreadThreshold,
       reviewThreshold,
       matched: cases.length,
@@ -523,26 +879,89 @@ function mdTable(headers: readonly string[], rows: readonly (readonly string[])[
 const num = (value: number | null | undefined): string => (value == null ? '—' : String(value));
 const yn = (value: boolean | null | undefined): string => (value == null ? 'n/a' : value ? 'yes' : 'no');
 const list = (ids: readonly string[]): string => (ids.length === 0 ? 'none' : ids.join(', '));
+const onOff = (enabled: boolean): string => (enabled ? 'on' : 'off');
 
+/** `overall Result`, plus the named rules that moved it — a cell that explains its own number. */
 function sideCell(side: SideEvaluation): string {
-  return side.unableToEvaluate ? 'UTE' : `${num(side.overall)} ${side.status ?? ''}`.trim();
+  if (side.unableToEvaluate) return 'UTE';
+  const notes = sideRuleNotes(side);
+  const head = `${num(side.overall)} ${side.status ?? ''}`.trim();
+  return notes.length === 0 ? head : `${head} (${notes.join(', ')})`;
 }
 
 /** The whole study as one Markdown document: rollups, targets, spread cases, tables, per-case rows. */
 export function renderParityMarkdown(result: ParityComparison): string {
   const { labels, rollup: r, cases } = result;
+  const rules = r.scoringRules;
   const out: string[] = [];
+
+  const source = r.scoringConfigDeclaredA
+    ? r.scoringConfigDeclaredB
+      ? 'declared in both files'
+      : `declared in ${labels.a} only`
+    : r.scoringConfigDeclaredB
+      ? `declared in ${labels.b} only`
+      : 'the shipped defaults (neither file declares a scoring_config)';
 
   out.push(`# Grading parity — ${labels.a} vs ${labels.b} (B0-824)`, '');
   out.push(
-    `Both sides are re-scored the Bex way from their judged sub-scores and concept verdicts: ` +
-      `Completeness = 100 × expected satisfied / required; overall = 0.40·A + 0.30·C + 0.20·R + 0.10·Cl (half-up); ` +
-      `Pass at ≥ ${r.passMark}. Any derived number carried in either file is ignored. ` +
+    `Both sides are re-scored from their judged sub-scores and concept verdicts through the same ` +
+      `deterministic pipeline (B0-835), in this fixed order: Completeness = min(judged Completeness, ` +
+      `expected-concept coverage)${rules.expectedCoverage.enabled ? '' : ' — coverage cap DISABLED here, so the judged value stands'}` +
+      `, and the coverage share alone where a file carries no judged value; ` +
+      `overall = 0.40·A + 0.30·C + 0.20·R + 0.10·Cl (half-up); ` +
+      (rules.minimalFloor.enabled
+        ? `a case satisfying every mandatory concept is raised to at least ${rules.minimalFloor.score}` +
+          `${rules.minimalFloor.respectMaterialIssue ? ', unless a material factual issue is flagged' : ''}; `
+        : 'the mandatory floor is disabled; ') +
+      `the Pre-Gate Content Score is captured there, before the cap; ` +
+      (rules.minimalCeiling.enabled
+        ? `a case missing any mandatory concept is capped at ${rules.minimalCeiling.score}; `
+        : 'the mandatory ceiling is disabled; ') +
+      (rules.minimalGate.enabled
+        ? 'and that case is rated Fail whatever its score, which outranks the automatic Pass full ' +
+          'expected coverage earns. '
+        : 'the mandatory gate is disabled, so a missing must-have concept does not by itself fail a case. ') +
+      `Pass at ≥ ${r.passMark}. The rules in force are ${source}. ` +
+      `Only the *derived* numbers a file carries (a weighted score, a grade, a status) are ignored — a ` +
+      `judged Completeness is an input, not a derived value. ` +
       `Δ is |overall ${labels.a} − overall ${labels.b}|; spread = Δ ≥ ${r.spreadThreshold}; ` +
       `review queue = eval_confidence ≤ ${r.reviewThreshold}. ` +
       `Rollups are over the ${r.compared} matched cases both sides could evaluate (like-for-like), so they will not equal either side's own report.`,
     '',
   );
+
+  out.push('## Rules in force', '');
+  out.push(
+    mdTable(
+      ['Rule', 'Setting'],
+      [
+        ['Pass mark', `≥ ${r.passMark} rates Pass`],
+        ['Mandatory gate (Rule 1)', onOff(rules.minimalGate.enabled)],
+        [
+          'Mandatory ceiling',
+          rules.minimalCeiling.enabled ? `on — capped at ${rules.minimalCeiling.score}` : 'off',
+        ],
+        [
+          'Mandatory floor (Rule 1b)',
+          rules.minimalFloor.enabled
+            ? `on — raised to ${rules.minimalFloor.score}` +
+              (rules.minimalFloor.respectMaterialIssue ? ', withheld on a material factual issue' : '')
+            : 'off',
+        ],
+        ['Expected-coverage cap (Rule 3)', onOff(rules.expectedCoverage.enabled)],
+        ['Source', source],
+      ],
+    ),
+    '',
+  );
+  if (r.scoringConfigWarnings.length > 0) {
+    out.push(
+      `Warnings from the declared \`scoring_config\`:`,
+      ...r.scoringConfigWarnings.map((w) => `- ${w}`),
+      '',
+    );
+  }
 
   out.push('## Rollups', '');
   out.push(
@@ -606,8 +1025,28 @@ export function renderParityMarkdown(result: ParityComparison): string {
     r.spreadCases.length === 0
       ? 'None.'
       : mdTable(
-          ['Case', labels.a, labels.b, 'Δ', 'Explained by concept disagreement'],
-          r.spreadCases.map((s) => [s.id, String(s.overallA), String(s.overallB), String(s.delta), yn(s.explained)]),
+          [
+            'Case',
+            labels.a,
+            labels.b,
+            'Δ',
+            `Pre-gate ${labels.a}`,
+            `Pre-gate ${labels.b}`,
+            `Rules ${labels.a}`,
+            `Rules ${labels.b}`,
+            'Explained by concept disagreement',
+          ],
+          r.spreadCases.map((s) => [
+            s.id,
+            String(s.overallA),
+            String(s.overallB),
+            String(s.delta),
+            num(s.preGateA),
+            num(s.preGateB),
+            s.rulesA,
+            s.rulesB,
+            yn(s.explained),
+          ]),
         ),
     '',
   );

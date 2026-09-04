@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { getBexActor, type BexActor } from '~/lib/api/bex-actor';
 import { hasBexSession } from '~/lib/api/bex-api-auth';
 import { writeAuditLog } from '~/lib/audit/audit-log';
+import { resolveConversationOwnerUserId } from '~/lib/conversations/conversation-owner';
 import { resolveConversationOwnerAttribution } from '~/lib/conversations/conversation-owner-view';
 import {
   deleteConversation,
@@ -12,23 +13,29 @@ import {
 import { listMessageFeedbackForConversation } from '~/lib/conversations/message-feedback-repository';
 import { listMessagesForConversation } from '~/lib/conversations/message-repository';
 import { newCorrelationId } from '~/lib/observability/correlation-id';
-import { PERMISSIONS } from '~/lib/permissions/constants';
-import { gateRoute } from '~/lib/permissions/route-gate';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 type RouteParams = { params: Promise<{ id: string }> };
 
-/** True when `actor` may read/manage `ownerUserId` (a conversation's `user_id`): owner, view-all, or service. */
+/**
+ * True when `actor` may read/manage `ownerUserId` (a conversation's `user_id`): owner, view-all,
+ * service, or — B0-841 — the true (act-as-blind) session owner. A conversation created while
+ * acting-as is always stamped with the true admin's id (see `resolveConversationOwnerUserId`), so
+ * without this fallback the same admin's later act-as-aware `actor.userId` (the acted-as user) can
+ * never match `ownerUserId` and the admin gets locked out of a conversation they just created.
+ */
 function actorMayAccessConversation(
   actor: Exclude<BexActor, null>,
   ownerUserId: string | null,
+  trueOwnerUserId: string | null,
 ): boolean {
   return (
     actor.kind === 'service' ||
     actor.canViewAll ||
-    (actor.kind === 'user' && ownerUserId === actor.userId)
+    (actor.kind === 'user' && ownerUserId === actor.userId) ||
+    (actor.kind === 'user' && trueOwnerUserId !== null && ownerUserId === trueOwnerUserId)
   );
 }
 
@@ -53,12 +60,6 @@ export async function GET(request: Request, ctx: RouteParams) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const denied = await gateRoute(
-    PERMISSIONS.BEX_CHAT_USE,
-    'GET /api/bex/conversations/[id]',
-  );
-  if (denied) return denied;
-
   const actor = await getBexActor(request);
   if (!actor) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -72,7 +73,12 @@ export async function GET(request: Request, ctx: RouteParams) {
       return NextResponse.json({ error: 'Not found' }, { status: 404 });
     }
 
-    if (!actorMayAccessConversation(actor, conversation.user_id)) {
+    // B0-841 — a conversation created via act-as is stamped with the true session owner (never
+    // the acted-as actor), so the access check must also allow that true owner through.
+    const trueOwnerUserId =
+      actor.kind === 'user' ? await resolveConversationOwnerUserId() : null;
+
+    if (!actorMayAccessConversation(actor, conversation.user_id, trueOwnerUserId)) {
       await auditAccessDenied({
         conversationId: id,
         actor,
@@ -148,12 +154,6 @@ export async function DELETE(request: Request, ctx: RouteParams) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const denied = await gateRoute(
-    PERMISSIONS.BEX_CHAT_USE,
-    'DELETE /api/bex/conversations/[id]',
-  );
-  if (denied) return denied;
-
   const actor = await getBexActor(request);
   if (!actor) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -167,7 +167,12 @@ export async function DELETE(request: Request, ctx: RouteParams) {
       return NextResponse.json({ error: 'Not found' }, { status: 404 });
     }
 
-    if (!actorMayAccessConversation(actor, existing.user_id)) {
+    // B0-841 — a conversation created via act-as is stamped with the true session owner (never
+    // the acted-as actor), so the access check must also allow that true owner through.
+    const trueOwnerUserId =
+      actor.kind === 'user' ? await resolveConversationOwnerUserId() : null;
+
+    if (!actorMayAccessConversation(actor, existing.user_id, trueOwnerUserId)) {
       await auditAccessDenied({
         conversationId: id,
         actor,

@@ -14,6 +14,8 @@ import {
   TableRow,
 } from '~/components/ui/table';
 import { listProjectsWithApps } from '~/lib/api/registry-repository';
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { requirePagePermission } from '~/lib/permissions/require-page-permission';
 
 export const metadata = {
   title: 'API Projects | Betco BEX',
@@ -21,6 +23,7 @@ export const metadata = {
 };
 
 export default async function ApiProjectsPage() {
+  await requirePagePermission(PERMISSIONS.NAVIGATION_SIDEBAR_USER_API_ACCESS, 'GET /admin/projects');
   await connection();
   const projects = await listProjectsWithApps();
 

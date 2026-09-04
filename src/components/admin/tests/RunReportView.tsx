@@ -733,6 +733,8 @@ export function RunReportView({
             <ReportMethodology
               config={reportData.config}
               passMark={reportData.metrics.passMark}
+              // B0-835 — the concept rules this report's numbers were derived under.
+              scoringRules={reportData.metrics.scoringRules}
               strictPassMark={reportData.metrics.strictPassMark}
               uteCount={reportData.metrics.uteCount}
             />

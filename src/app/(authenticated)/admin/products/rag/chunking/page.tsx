@@ -4,6 +4,8 @@ import { connection } from 'next/server';
 import { BoostRulesCard } from '~/components/admin/rag/BoostRulesCard';
 import { ChunkingConfigCard } from '~/components/admin/rag/ChunkingConfigCard';
 import { DomainMetadataCard } from '~/components/admin/rag/DomainMetadataCard';
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { requirePagePermission } from '~/lib/permissions/require-page-permission';
 import {
   getBoostFieldCoverage,
   getChunkTokenStats,
@@ -34,6 +36,11 @@ type PageProps = {
 const PAGE_SIZE = 25;
 
 export default async function RagChunkingPage({ searchParams }: PageProps) {
+  await requirePagePermission(
+    PERMISSIONS.NAVIGATION_SIDEBAR_PRODUCTS,
+    'GET /admin/products/rag/chunking',
+  );
+
   await connection();
 
   const params = await searchParams;

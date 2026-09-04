@@ -10,11 +10,11 @@ import {
   CaseTraceViewButton,
 } from '~/components/admin/tests/report/CaseTraceDownloadButton';
 import {
-  CONCEPT_MARKER_LEGEND,
   caseMarkers,
   formatConceptCoverage,
   formatConceptList,
   hasMandatoryMiss,
+  mandatoryMissingLegend,
   REVIEW_MARKER_LEGEND,
 } from '~/lib/tests/report/case-concepts';
 import {
@@ -273,12 +273,26 @@ function FieldLabel({ children }: { children: ReactNode }) {
   );
 }
 
-function SubScore({ label, value }: { label: string; value: number }) {
+function SubScore({
+  label,
+  value,
+  aside,
+}: {
+  label: string;
+  value: number;
+  /** B0-835 — the judged value beside a capped one ("40 (judged 66)"); omitted otherwise. */
+  aside?: string;
+}) {
   return (
     <div className="rounded-xl bg-white px-3 py-2 ring-1 ring-slate-200">
       <p className="text-[11px] font-medium tracking-wide text-slate-500 uppercase">{label}</p>
       {/* Raw grader sub-score — printed exactly as stored, never rounded. */}
-      <p className="mt-0.5 text-base font-semibold text-slate-900 tabular-nums">{value}</p>
+      <p className="mt-0.5 text-base font-semibold text-slate-900 tabular-nums">
+        {value}
+        {aside ? (
+          <span className="ml-1 text-xs font-normal text-slate-500">{aside}</span>
+        ) : null}
+      </p>
     </div>
   );
 }
@@ -557,10 +571,13 @@ export function expectedOnlyMissing(concepts: ReportCaseConcepts): string[] {
 }
 
 /**
- * The per-case concept lines (B0-813): where the Completeness came from, the coverage readout, what
- * is missing by name, and the two reported-not-scored facts — a must-have miss and a material
- * issue. Methodology §9 caps the per-case detail here — the full audit lives in the run-level
- * rollup, not in every row.
+ * The per-case concept lines (B0-813 / B0-835): where the Completeness came from, the coverage
+ * readout, what each concept rule did to this case, and what is missing by name. Methodology §9
+ * caps the per-case detail here — the full audit lives in the run-level rollup, not in every row.
+ *
+ * `conceptNote` is the skill's own one-sentence explanation. The floor, automatic-Pass and
+ * withheld-Pass lines below state it word for word for those three outcomes, so it is printed only
+ * where it is not already a duplicate — the same rule `renderReportMarkdown` follows.
  *
  * Concept phrases are regulated free text and are rendered exactly as stored.
  */
@@ -569,6 +586,11 @@ function ConceptCoverageCard({ c }: { c: ReportCase }) {
   if (!concepts) return null;
   const evaluated = c.evaluated;
   const alsoExpected = expectedOnlyMissing(concepts);
+  const noteIsDuplicate =
+    evaluated != null &&
+    (evaluated.floorApplied ||
+      evaluated.statusSource === 'auto_pass' ||
+      evaluated.autoPassBlocked);
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4">
@@ -578,16 +600,53 @@ function ConceptCoverageCard({ c }: { c: ReportCase }) {
       </p>
       {evaluated ? (
         <p className="mt-1 text-xs text-slate-600 tabular-nums">
-          Completeness {evaluated.completeness} — {evaluated.coverage.satisfied} of{' '}
-          {evaluated.coverage.required} expected concept
-          {evaluated.coverage.required === 1 ? '' : 's'} communicated. Computed from the coverage,
-          never judged.
+          {evaluated.coverageApplied ? (
+            <>
+              Completeness judged {evaluated.completenessJudged}, capped at coverage{' '}
+              {evaluated.completeness}
+            </>
+          ) : (
+            <>Completeness {evaluated.completeness}</>
+          )}{' '}
+          — {evaluated.coverage.satisfied} of {evaluated.coverage.required} expected concept
+          {evaluated.coverage.required === 1 ? '' : 's'} communicated.
+          {!evaluated.coverageApplied && evaluated.completenessJudged === null
+            ? ' (no judged value on this pass; coverage used)'
+            : ''}
+        </p>
+      ) : null}
+
+      {/* B0-835 — the diagnostic that keeps a near miss distinguishable from a total one. */}
+      {evaluated?.ceilingApplied ? (
+        <p className="mt-2 text-xs text-slate-600 tabular-nums">
+          <span className="font-medium">Pre-Gate Content Score:</span> {evaluated.preGateScore}/100
+          ({evaluated.preGateGrade}) — the rubric arithmetic before the mandatory cap; diagnostic
+          only.
+        </p>
+      ) : null}
+      {evaluated?.floorApplied ? (
+        <p className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-900 ring-1 ring-amber-200 ring-inset">
+          <span className="font-medium">Mandatory floor:</span> raised from {evaluated.weighted} to{' '}
+          {evaluated.floor} — every mandatory concept satisfied. NOTE: the sub-scores placed this
+          below a C despite full mandatory coverage — re-check.
+        </p>
+      ) : null}
+      {evaluated?.statusSource === 'auto_pass' ? (
+        <p className="mt-2 text-xs text-emerald-700">
+          <span className="font-medium">Automatic Pass:</span> all expected concepts communicated,
+          no material issue.
+        </p>
+      ) : null}
+      {evaluated?.autoPassBlocked ? (
+        <p className="mt-2 text-xs break-words whitespace-pre-wrap text-amber-800">
+          <span className="font-medium">Automatic Pass withheld:</span>{' '}
+          {concepts.materialIssueNote ?? 'a material factual issue was recorded on this case.'}
         </p>
       ) : null}
 
       {hasMandatoryMiss(concepts) ? (
         <p className="mt-2 text-sm break-words whitespace-pre-wrap text-rose-700">
-          <span className="font-medium">Missing mandatory (reported — not enforced):</span>{' '}
+          <span className="font-medium">Missing mandatory:</span>{' '}
           {formatConceptList(concepts.mandatory.missing)}
         </p>
       ) : null}
@@ -599,8 +658,14 @@ function ConceptCoverageCard({ c }: { c: ReportCase }) {
 
       {concepts.materialIssue ? (
         <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-sm break-words whitespace-pre-wrap text-amber-900 ring-1 ring-amber-200 ring-inset">
-          Material factual issue (reported — not scored):{' '}
+          Material factual issue:{' '}
           {concepts.materialIssueNote ?? 'a material factual issue was recorded on this case.'}
+        </p>
+      ) : null}
+
+      {evaluated?.conceptNote && !noteIsDuplicate ? (
+        <p className="mt-3 text-xs break-words whitespace-pre-wrap text-slate-600">
+          <span className="font-medium">Concept rules:</span> {evaluated.conceptNote}
         </p>
       ) : null}
     </div>
@@ -632,6 +697,13 @@ function GradingConsistencyCard({ c }: { c: ReportCase }) {
           .map((overall) => (overall == null ? 'n/a' : String(overall)))
           .join(' / ')}
         {variance.range == null ? '' : ` · range ${variance.range}`}
+        {/* B0-835 — a floor that bound on a pass is a review signal in its own right: that pass's
+            sub-scores and its concept verdicts disagree. */}
+        {variance.floorApplied.length > 0
+          ? ` · the mandatory floor raised the score of ${variance.floorApplied
+              .map((entry) => `pass ${entry.pass} (${entry.weighted} → ${entry.floor})`)
+              .join(', ')}`
+          : ''}
       </p>
       {variance.flagged ? (
         <ul className="mt-2 space-y-1 text-sm text-amber-900">
@@ -720,8 +792,9 @@ function CaseRow({
               )}
             >
               {evaluated.status}
-              {/* B0-813 — † missing a must-have concept (reported). B0-721 adds ⚑ flagged for
-                  human review, alongside it rather than instead of it; legend above the groups. */}
+              {/* B0-835 — † missing a must-have concept, so the score shown is a capped one.
+                  B0-721 adds ⚑ flagged for human review, alongside it rather than instead of it;
+                  the legend above the groups is written from the rules actually in force. */}
               {caseMarkers({
                 mandatoryMissing: evaluated.mandatoryMissing,
                 reviewFlagged: c.variance?.flagged ?? false,
@@ -760,7 +833,15 @@ function CaseRow({
           {evaluated ? (
             <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
               <SubScore label="Accuracy" value={evaluated.accuracy} />
-              <SubScore label="Completeness" value={evaluated.completeness} />
+              <SubScore
+                aside={
+                  evaluated.coverageApplied
+                    ? `(judged ${evaluated.completenessJudged})`
+                    : undefined
+                }
+                label="Completeness"
+                value={evaluated.completeness}
+              />
               <SubScore label="Relevance" value={evaluated.relevance} />
               <SubScore label="Clarity" value={evaluated.clarity} />
             </div>
@@ -848,8 +929,12 @@ function TierGroupHeader({ group }: { group: ReportTierGroup }) {
   );
 }
 
-/** `metrics`, narrowed to the slices the ledger reads. Passing the whole object satisfies it. */
-export type ReportCaseLedgerMetrics = Pick<ReportMetricsData, 'tiers'>;
+/**
+ * `metrics`, narrowed to the slices the ledger reads. Passing the whole object satisfies it.
+ * `scoringRules` (B0-835) is what the † legend is written from, so a report scored with the gate or
+ * the ceiling off never claims a cap that did not happen.
+ */
+export type ReportCaseLedgerMetrics = Pick<ReportMetricsData, 'tiers' | 'scoringRules'>;
 
 export type ReportCaseLedgerProps = {
   /** `ReportDataReady.cases`, already ordered Tier 1 → Tier N → "Unspecified". Not re-sorted. */
@@ -961,7 +1046,9 @@ function ReportCaseLedgerContent({
   // and read off every visible case (an Unable-to-Evaluate one can carry it too).
   const visibleCases = visibleGroups.flatMap((group) => group.cases);
   const legendLines = [
-    visibleEvaluated.some((e) => e.mandatoryMissing) ? CONCEPT_MARKER_LEGEND.mandatoryMissing : null,
+    visibleEvaluated.some((e) => e.mandatoryMissing)
+      ? mandatoryMissingLegend(metrics.scoringRules)
+      : null,
     visibleCases.some((c) => c.variance?.flagged) ? REVIEW_MARKER_LEGEND : null,
   ].filter((line) => line != null);
   const bulkAction = bulkDisclosureAction(openIds, visibleCaseIds);

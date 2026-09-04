@@ -28,7 +28,7 @@ import {
   type CaseScore,
   type ReportState,
 } from './schemas';
-import { loadJudgedThresholds, loadPassMark } from './scoring-config';
+import { loadJudgedThresholds, loadPassMark, loadScoringRules } from './scoring-config';
 import { synthesizeReportFindings } from './synthesizer';
 
 /** Concurrent grading calls in flight, counted in (case, pass) units — not in cases. */
@@ -114,6 +114,36 @@ async function scoreOnePass(
   });
 }
 
+/**
+ * Consolidates one case's passes into `state.caseScores` if every pass is in and it hasn't been
+ * consolidated yet. Split out so a resume can retry this for a case whose passes all landed on a
+ * prior call but whose consolidation never got recorded (the call crashed, or the process died,
+ * between the passes being saved and this running) — `pendingPasses` only checks
+ * `casePassScores`, so without this a case in that state is never revisited and generation stalls
+ * forever with nothing left to score and nothing telling the caller why.
+ */
+export function finalizeCaseIfReady(itemId: string, state: ReportState): void {
+  if (state.caseScores[itemId]) return;
+  const scores = state.casePassScores[itemId];
+  if (!scores || scores.length < state.passes) return;
+
+  const consolidated = consolidateCasePasses(
+    scores.map((passScore) => ({
+      score: passScore,
+      concepts: passScore.concepts ?? undefined,
+    })),
+    {
+      spreadThreshold: state.spreadThreshold ?? undefined,
+      passMark: state.passMark,
+      scoringRules: state.scoringRules,
+    },
+  );
+  state.caseScores[itemId] = {
+    ...consolidated.score,
+    concepts: consolidated.concepts ?? null,
+  };
+}
+
 async function scoreRemainingCases(
   resultId: string,
   items: TestItemRecord[],
@@ -123,6 +153,16 @@ async function scoreRemainingCases(
   modelTag: string,
   effort: ModelEffort | undefined,
 ): Promise<ReportState> {
+  // Reconcile before looking at what's still pending: a case can have every pass recorded already
+  // (so `pendingPasses` will never surface it again) and still be missing from `caseScores`.
+  const completedBefore = Object.keys(state.caseScores).length;
+  for (const item of items) finalizeCaseIfReady(item.id, state);
+  if (Object.keys(state.caseScores).length !== completedBefore) {
+    state.completedCases = Object.keys(state.caseScores).length;
+    state.updatedAt = new Date().toISOString();
+    await saveReportState(resultId, state);
+  }
+
   const pending = pendingPasses(items, state);
 
   for (let i = 0; i < pending.length; i += BATCH_SIZE) {
@@ -147,19 +187,7 @@ async function scoreRemainingCases(
       // Consolidated only once every pass for this case is in, so `caseScores` never holds a
       // half-consolidated verdict that a crash could leave behind as if it were final. The
       // consolidated concept block rides on the consolidated score so single-score readers see it.
-      if (scores.length >= state.passes) {
-        const consolidated = consolidateCasePasses(
-          scores.map((passScore) => ({
-            score: passScore,
-            concepts: passScore.concepts ?? undefined,
-          })),
-          { spreadThreshold: state.spreadThreshold ?? undefined, passMark: state.passMark },
-        );
-        state.caseScores[itemId] = {
-          ...consolidated.score,
-          concepts: consolidated.concepts ?? null,
-        };
-      }
+      finalizeCaseIfReady(itemId, state);
     }
     state.completedCases = Object.keys(state.caseScores).length;
     state.updatedAt = new Date().toISOString();
@@ -201,11 +229,22 @@ export async function generateReport(testResultId: string): Promise<ReportState>
   // B0-812 — same contract: the pass mark is resolved once and persisted on a fresh state, so a
   // settings change mid-report cannot rate one half of its cases at 60 and the other at 70.
   const passMark = await loadPassMark();
+  // B0-835 — same contract again: the four concept rules are resolved once and persisted on a fresh
+  // state, so flipping the gate or the floor mid-report can never score one half of its cases under
+  // one rulebook and the other half under another.
+  const scoringRules = await loadScoringRules();
   const judgedThresholds = await loadJudgedThresholds();
   // B0-810/B0-811 — the prompt that grades this report and the thresholds it is read at, resolved
   // once and persisted, so two reports that disagree can be told apart.
   const fresh = () => ({
-    ...emptyReportState(model, items.length, config.passes, config.spreadThreshold, passMark),
+    ...emptyReportState(
+      model,
+      items.length,
+      config.passes,
+      config.spreadThreshold,
+      passMark,
+      scoringRules,
+    ),
     gradingPromptHash: GRADING_PROMPT_HASH,
     judgedThresholds,
     gradingEffort,
@@ -261,6 +300,7 @@ export async function generateReport(testResultId: string): Promise<ReportState>
       spreadThreshold: state.spreadThreshold,
       passMark: state.passMark,
       judgedThresholds: state.judgedThresholds,
+      scoringRules: state.scoringRules,
     });
 
     const findingsByCaseId = new Map(

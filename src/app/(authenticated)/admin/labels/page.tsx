@@ -1,5 +1,8 @@
 import { connection } from 'next/server';
 
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { requirePagePermission } from '~/lib/permissions/require-page-permission';
+
 import { LabelControls } from './LabelControls';
 import { getLabelDashboardStatus } from './pipeline';
 
@@ -9,6 +12,7 @@ export const metadata = {
 };
 
 export default async function AdminLabelsPage() {
+  await requirePagePermission(PERMISSIONS.NAVIGATION_SIDEBAR_LABELS, 'GET /admin/labels');
   await connection();
   const status = await getLabelDashboardStatus();
 

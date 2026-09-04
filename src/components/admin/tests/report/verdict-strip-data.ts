@@ -2,6 +2,7 @@ import type {
   ReportCase,
   ReportCaseStatus,
   ReportEvaluatedCase,
+  ReportMetricsData,
 } from '~/lib/tests/report/data-schemas';
 import { caseAnchorId } from '~/lib/tests/report/render';
 
@@ -82,4 +83,19 @@ export function buildExceptionRows(
         reason: exceptionReason(detail?.score),
       };
     });
+}
+
+/**
+ * B0-835 — the one line the strip carries about the mandatory gate, or **null when there is nothing
+ * to say**: the run has no concept data, or no case was gated.
+ *
+ * The denominator is the evaluated cases, the same population every rate on the strip is out of.
+ * Both counts are read off `metrics`, never re-derived from `perCase`.
+ */
+export function gatedCasesLine(
+  metrics: Pick<ReportMetricsData, 'concepts' | 'evaluated'>,
+): string | null {
+  const gated = metrics.concepts?.gatedIds.length ?? 0;
+  if (gated === 0) return null;
+  return `${gated} of ${metrics.evaluated} evaluated cases gated (missing a must-have concept)`;
 }
