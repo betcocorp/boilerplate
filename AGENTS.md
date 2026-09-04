@@ -105,9 +105,11 @@ Fix any new diagnostics in files you touched.
 - **Recommendations / cross-reference changes:** if you touch the recommendations prompt
   (`recommendations-specialist-system-prompt.ts`), `sme-routing.ts` recommendation signals,
   `scoreRecommendation`/`gateRecommendation`, or `XREF_RECOMMENDATION_MIN_CONFIDENCE`, also run the
-  recommendations regression suite, the threshold curve, and the `/admin/tests`
-  "Cross-Reference Gate Calibration (B0-97)" harness run before merging
-  (see `src/docs/cross-reference-recommendations.md` → "Pre-handoff checklist"):
+  recommendations regression suite and the threshold curve before merging (see
+  `src/docs/cross-reference-recommendations.md` → "Pre-handoff checklist"). The `/admin/tests`
+  "Cross-Reference Gate Calibration (B0-97)" harness set no longer exists — B0-826 purged every test
+  item without concept columns on 2026-09-03 and that set was one of them (its seed migration and
+  CSV fixture remain if it is ever re-seeded with concept columns):
 
   ```bash
   pnpm exec vitest run src/lib/recommendations
