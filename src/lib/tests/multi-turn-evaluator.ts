@@ -16,9 +16,12 @@ import type { MultiTurnScenario, ScenarioAssertion } from './multi-turn';
  *
  * REGULATED-DATA RULE (org policy, non-negotiable): no LLM judge, no fuzzy matching, and no unit
  * conversion ever touches a regulated value. Any expectation term that *looks* like one (see
- * {@link looksLikeRegulatedValue}) is matched with {@link gradeExactCriterion} — a literal,
- * case-SENSITIVE `includes()` — so "4 oz/gal" can never be satisfied by "4.0 oz/gal" or
- * "40 oz/gal". Ordinary prose terms (product names, brands, surfaces) stay case-insensitive.
+ * {@link looksLikeRegulatedValue}) is matched with {@link gradeExactCriterion} — a literal
+ * substring check that normalises case and whitespace runs ONLY (B0-803), so digits, units and
+ * punctuation must appear exactly as printed: "4 oz/gal" can never be satisfied by "4.0 oz/gal" or
+ * "40 oz/gal". Ordinary prose terms (product names, brands, surfaces) are a plain case-insensitive
+ * substring check. The term and response are handed to `gradeExactCriterion` untouched — it owns
+ * the normalisation, nothing here pre-processes either side.
  */
 
 /** How a term was matched against a response — surfaced on every verdict for auditability. */

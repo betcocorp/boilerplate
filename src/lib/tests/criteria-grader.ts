@@ -110,18 +110,36 @@ async function gradeSemanticCriteria(params: {
 }
 
 /**
- * Literal substring check for `match: 'exact'` criteria — case-insensitive on whitespace
- * only, never on digits/units/punctuation, so "4 oz/gal" does not accidentally match
- * "4.0 oz/gal" or "40 oz/gal". This is the deterministic guardrail the business case calls
- * out as the highest-stakes payoff: a judge that "mostly" catches a wrong dilution ratio is
- * not an acceptable control.
+ * The ONLY normalisation an `exact` match applies, to both sides: lower-case, collapse every
+ * whitespace run (spaces, tabs, newlines) to one space, trim. Digits, units and punctuation are
+ * left exactly as written — the regulated-data rule (transcribe exactly, never round/convert/infer)
+ * depends on that.
+ */
+function normalizeForExactMatch(text: string): string {
+  return text.toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Literal substring check for `match: 'exact'` criteria. Concept and response are both passed
+ * through {@link normalizeForExactMatch} (case + whitespace runs) and nothing else, so the check
+ * is insensitive to capitalisation and line-wrapping while every digit, unit and punctuation mark
+ * must still appear exactly as printed: "4 oz/gal" does not match "4.0 oz/gal" or "40 oz/gal",
+ * and "EPA Reg. No. 1839-83" does not match "EPA Reg No 1839-83". This is the deterministic
+ * guardrail the business case calls out as the highest-stakes payoff: a judge that "mostly"
+ * catches a wrong dilution ratio is not an acceptable control.
+ *
+ * B0-803 — this used to be a raw `String.prototype.includes`, fully case-sensitive despite the
+ * comment above, so a correct "2 minutes" answer failed a "2 Minutes" criterion. An empty or
+ * whitespace-only concept never matches (it would otherwise match everything). `evidence` is the
+ * original criterion text when met, never the normalised form.
  *
  * B0-538 — exported so the multi-turn evaluator routes every regulated-looking expectation term
  * (dilution ratios, oz/gal, mL/L, ppm, %, contact times, CAS/EPA numbers, log reductions) through
  * this exact same literal check rather than its own case-insensitive `mentions` matching.
  */
 export function gradeExactCriterion(concept: string, responseText: string): CriterionVerdict {
-  const found = responseText.includes(concept);
+  const needle = normalizeForExactMatch(concept);
+  const found = needle.length > 0 && normalizeForExactMatch(responseText).includes(needle);
   return {
     criterionIndex: -1, // caller overwrites with the real index
     met: found,

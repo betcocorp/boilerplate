@@ -74,8 +74,20 @@ describe('matchTerm / looksLikeRegulatedValue', () => {
     });
     expect(matchTerm('4 oz/gal', 'Use 4.0 oz/gal.')).toMatchObject({ found: false });
     expect(matchTerm('4 oz/gal', 'Use 40 oz/gal.')).toMatchObject({ found: false });
-    // Case-sensitive too — never normalised.
+  });
+
+  it('inherits the shared exact rule (B0-803): case and whitespace runs normalise, punctuation does not', () => {
+    // Same rule as criteria-grader.ts — the multi-turn path must never diverge from it.
     expect(matchTerm('EPA Reg. No. 1839-83', 'epa reg. no. 1839-83')).toMatchObject({
+      found: true,
+      mode: 'exact_literal',
+    });
+    expect(matchTerm('10 minutes', 'Keep wet for 10\nminutes.')).toMatchObject({
+      found: true,
+      mode: 'exact_literal',
+    });
+    // Dropping the periods is a different identifier, not a formatting variant.
+    expect(matchTerm('EPA Reg. No. 1839-83', 'EPA Reg No 1839-83')).toMatchObject({
       found: false,
       mode: 'exact_literal',
     });
