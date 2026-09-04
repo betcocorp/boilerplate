@@ -1,6 +1,6 @@
 'use client';
 
-import { CheckCircle2, GitCompareArrows } from 'lucide-react';
+import { CheckCircle2, GitCompareArrows, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Streamdown } from 'streamdown';
 import { cjk } from '@streamdown/cjk';
@@ -219,28 +219,43 @@ export function BexCompareApp() {
         </p>
       ) : null}
 
-      <div className="grid gap-3 sm:grid-cols-2">
-        {(['A', 'B'] as const).map((side) => {
-          const value = side === 'A' ? idA : idB;
-          const setValue = side === 'A' ? setIdA : setIdB;
-          const otherId = side === 'A' ? idB : idA;
-          return (
-            <div className="flex items-center gap-2" key={side}>
-              <span className="w-16 shrink-0 text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-                Thread {side}
-              </span>
-              <LabeledCombobox
-                className="flex-1 bg-muted/40"
-                emptyText="No conversation matches that search."
-                onValueChange={setValue}
-                options={options(otherId)}
-                placeholder="Select a conversation"
-                searchPlaceholder="Search by title…"
-                value={value}
-              />
-            </div>
-          );
-        })}
+      <div className="flex items-end gap-3">
+        <Button
+          className="shrink-0 rounded-xl"
+          onClick={() => {
+            setIdA(null);
+            setIdB(null);
+          }}
+          size="icon"
+          type="button"
+          variant="outline"
+          title="Clear selections"
+        >
+          <X className="size-4" />
+        </Button>
+        <div className="grid flex-1 gap-3 sm:grid-cols-2">
+          {(['A', 'B'] as const).map((side) => {
+            const value = side === 'A' ? idA : idB;
+            const setValue = side === 'A' ? setIdA : setIdB;
+            const otherId = side === 'A' ? idB : idA;
+            return (
+              <div className="flex items-center gap-2" key={side}>
+                <span className="w-16 shrink-0 text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                  Thread {side}
+                </span>
+                <LabeledCombobox
+                  className="flex-1 bg-muted/40"
+                  emptyText="No conversation matches that search."
+                  onValueChange={setValue}
+                  options={options(otherId)}
+                  placeholder="Select a conversation"
+                  searchPlaceholder="Search by title…"
+                  value={value}
+                />
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       {resolvedA && resolvedB ? (
