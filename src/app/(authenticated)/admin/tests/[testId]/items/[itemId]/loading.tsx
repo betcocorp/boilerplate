@@ -54,7 +54,7 @@ export default function Loading() {
         {/* Historical outcomes */}
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <Skeleton className="h-6 w-60 rounded-md" />
-          <TableSkeleton className="mt-4" columns={7} rows={8} />
+          <TableSkeleton className="mt-4" columns={6} rows={8} />
         </section>
       </main>
     </div>
