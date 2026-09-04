@@ -850,7 +850,7 @@ export function BexChatApp() {
                 <h1 className="truncate text-sm font-semibold text-foreground sm:text-base">
                   {activeConversation?.title ?? 'Bex'}
                 </h1>
-                {conversationId ? (
+                {conversationId && isAdminChrome ? (
                   <button
                     className="mt-0.5 flex min-w-0 max-w-full items-center gap-1 font-mono text-[0.65rem] text-muted-foreground/80 hover:text-foreground"
                     onClick={() => void copyConversationId()}
@@ -868,139 +868,142 @@ export function BexChatApp() {
               </div>
             </div>
 
-            <div className="flex w-full items-center gap-2 sm:w-auto">
-              <Button
-                aria-label="Download conversation as JSON"
-                className="rounded-2xl"
-                disabled={!canDownloadConversation}
-                onClick={downloadConversationJson}
-                size="icon-sm"
-                title="Download conversation (JSON)"
-                type="button"
-                variant="outline"
-              >
-                <Download className="size-4" />
-              </Button>
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button
-                    aria-label="Conversation details"
-                    className="rounded-2xl"
-                    size="icon-sm"
-                    title="Conversation details"
-                    type="button"
-                    variant="outline"
+            {isAdminChrome ? (
+              <div className="flex w-full items-center gap-2 sm:w-auto">
+                <Button
+                  aria-label="Download conversation as JSON"
+                  className="rounded-2xl"
+                  disabled={!canDownloadConversation}
+                  onClick={downloadConversationJson}
+                  size="icon-sm"
+                  title="Download conversation (JSON)"
+                  type="button"
+                  variant="outline"
+                >
+                  <Download className="size-4" />
+                </Button>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button
+                      aria-label="Conversation details"
+                      className="rounded-2xl"
+                      size="icon-sm"
+                      title="Conversation details"
+                      type="button"
+                      variant="outline"
+                    >
+                      <Info className="size-4" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent
+                    align="end"
+                    className="w-80 text-xs leading-relaxed"
                   >
-                    <Info className="size-4" />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent
-                  align="end"
-                  className="w-80 text-xs leading-relaxed"
+                    <p className="text-muted-foreground">
+                      {headerSubtitle}
+                      {' · UI tag: '}
+                      {model === 'preview'
+                        ? 'preview → BEX_RESPONSES_MODEL'
+                        : model}
+                      {' · transport: '}
+                      {'stream'}
+                      {' · markdown: '}
+                      {'streamdown'}
+                      {(() => {
+                        const lastModel = [
+                          ...(activeConversation?.messages ?? []),
+                        ]
+                          .reverse()
+                          .find((m) => m.meta?.model)?.meta?.model;
+                        return lastModel ? (
+                          <> · last resolved: {lastModel}</>
+                        ) : null;
+                      })()}
+                      {isTyping && streamingAssistantText ? (
+                        <> · streaming live</>
+                      ) : null}
+                      {!isTyping && lastStreamMetrics ? (
+                        <>
+                          {' '}
+                          · ttft:{' '}
+                          {lastStreamMetrics.timeToFirstTokenMs === null
+                            ? 'n/a'
+                            : `${lastStreamMetrics.timeToFirstTokenMs}ms`}{' '}
+                          · total: {lastStreamMetrics.totalMs}ms
+                        </>
+                      ) : null}
+                    </p>
+                  </PopoverContent>
+                </Popover>
+                <Label className="sr-only" htmlFor="bex-agent-mode">
+                  Agent mode
+                </Label>
+                <Select
+                  onValueChange={(value) => {
+                    if (isBexChatAgentMode(value)) {
+                      setAgentMode(value);
+                    }
+                  }}
+                  value={agentMode}
                 >
-                  <p className="text-muted-foreground">
-                    {headerSubtitle}
-                    {' · UI tag: '}
-                    {model === 'preview'
-                      ? 'preview → BEX_RESPONSES_MODEL'
-                      : model}
-                    {' · transport: '}
-                    {'stream'}
-                    {' · markdown: '}
-                    {'streamdown'}
-                    {(() => {
-                      const lastModel = [
-                        ...(activeConversation?.messages ?? []),
-                      ]
-                        .reverse()
-                        .find((m) => m.meta?.model)?.meta?.model;
-                      return lastModel ? (
-                        <> · last resolved: {lastModel}</>
-                      ) : null;
-                    })()}
-                    {isTyping && streamingAssistantText ? (
-                      <> · streaming live</>
-                    ) : null}
-                    {!isTyping && lastStreamMetrics ? (
-                      <>
-                        {' '}
-                        · ttft:{' '}
-                        {lastStreamMetrics.timeToFirstTokenMs === null
-                          ? 'n/a'
-                          : `${lastStreamMetrics.timeToFirstTokenMs}ms`}{' '}
-                        · total: {lastStreamMetrics.totalMs}ms
-                      </>
-                    ) : null}
-                  </p>
-                </PopoverContent>
-              </Popover>
-              <Label className="sr-only" htmlFor="bex-agent-mode">
-                Agent mode
-              </Label>
-              <Select
-                onValueChange={(value) => {
-                  if (isBexChatAgentMode(value)) {
-                    setAgentMode(value);
-                  }
-                }}
-                value={agentMode}
-              >
-                <SelectTrigger
-                  className="w-full min-w-40 bg-muted/40 sm:w-auto"
-                  id="bex-agent-mode"
-                  size="default"
-                >
-                  <SelectValue placeholder="Agent mode" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="orchestrator">Orchestrator</SelectItem>
-                  <SelectItem value="product">Product</SelectItem>
-                  <SelectItem value="bathroom">Bathroom</SelectItem>
-                  <SelectItem value="dilution">Dilution</SelectItem>
-                  <SelectItem value="floor_wood_sport">Floor — Wood/Sport</SelectItem>
-                  <SelectItem value="floor_concrete">Floor — Concrete</SelectItem>
-                  <SelectItem value="floor_stg">Floor — Stone/Tile/Grout</SelectItem>
-                  <SelectItem value="floor_vct">Floor — VCT</SelectItem>
-                  <SelectItem value="recommendations">
-                    Recommendations
-                  </SelectItem>
-                  <SelectItem value="cross_reference">
-                    Cross-Reference
-                  </SelectItem>
-                </SelectContent>
-              </Select>
-              <Label className="sr-only" htmlFor="bex-model">
-                Model
-              </Label>
-              <Select onValueChange={setModel} value={model}>
-                <SelectTrigger
-                  className="w-full min-w-40 bg-muted/40 sm:w-auto"
-                  id="bex-model"
-                  size="default"
-                >
-                  <SelectValue placeholder="Model" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="preview">
-                    Model: preview (env default)
-                  </SelectItem>
-                  {supportedModels.map((m: SupportedModel) => (
-                    <SelectItem key={m.name} value={m.name}>
-                      {m.label}
+                  <SelectTrigger
+                    className="w-full min-w-40 bg-muted/40 sm:w-auto"
+                    id="bex-agent-mode"
+                    size="default"
+                  >
+                    <SelectValue placeholder="Agent mode" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="orchestrator">Orchestrator</SelectItem>
+                    <SelectItem value="product">Product</SelectItem>
+                    <SelectItem value="bathroom">Bathroom</SelectItem>
+                    <SelectItem value="dilution">Dilution</SelectItem>
+                    <SelectItem value="floor_wood_sport">Floor — Wood/Sport</SelectItem>
+                    <SelectItem value="floor_concrete">Floor — Concrete</SelectItem>
+                    <SelectItem value="floor_stg">Floor — Stone/Tile/Grout</SelectItem>
+                    <SelectItem value="floor_vct">Floor — VCT</SelectItem>
+                    <SelectItem value="recommendations">
+                      Recommendations
                     </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {/* B0-602 — what the selected model is and what it costs, so picking one in chat is
-                  an informed choice rather than a guess at an opaque tag. */}
-              <p className="mt-1 max-w-xs text-xs leading-snug text-muted-foreground">
-                {MODEL_DESCRIPTIONS[model as BexModelTag] ?? null}
-              </p>
-            </div>
+                    <SelectItem value="cross_reference">
+                      Cross-Reference
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+                <Label className="sr-only" htmlFor="bex-model">
+                  Model
+                </Label>
+                <Select onValueChange={setModel} value={model}>
+                  <SelectTrigger
+                    className="w-full min-w-40 bg-muted/40 sm:w-auto"
+                    id="bex-model"
+                    size="default"
+                  >
+                    <SelectValue placeholder="Model" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="preview">
+                      Model: preview (env default)
+                    </SelectItem>
+                    {supportedModels.map((m: SupportedModel) => (
+                      <SelectItem key={m.name} value={m.name}>
+                        {m.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {/* B0-602 — what the selected model is and what it costs, so picking one in chat is
+                    an informed choice rather than a guess at an opaque tag. */}
+                <p className="mt-1 max-w-xs text-xs leading-snug text-muted-foreground">
+                  {MODEL_DESCRIPTIONS[model as BexModelTag] ?? null}
+                </p>
+              </div>
+            ) : null}
           </header>
 
           <BexChatMessages
             feedbackSubmittingMessageId={feedbackSubmittingMessageId}
+            isAdminChrome={isAdminChrome}
             isLoadingHistory={isLoadingHistory}
             isTyping={isTyping && streamingAssistantText.length === 0}
             messages={renderedMessages}
@@ -1049,6 +1052,7 @@ export function BexChatApp() {
           {!showFullWelcome ? (
             <BexChatComposer
               disabled={isTyping || activeConversation?.isOwner === false}
+              isAdminChrome={isAdminChrome}
               onChange={setDraft}
               onSend={() => {
                 const text = draft;

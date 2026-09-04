@@ -17,10 +17,13 @@ type BexChatComposerProps = {
   onUseValidatorChange: (value: boolean) => void;
   disabled?: boolean;
   placeholder?: string;
+  /** it-admin-only chrome — see `BexChatApp`'s `isAdminChrome` (PERMISSIONS.BEX_CHAT_VIEW_ALL). */
+  isAdminChrome?: boolean;
 };
 
 export function BexChatComposer({
   disabled,
+  isAdminChrome = false,
   onChange,
   onSend,
   onUseValidatorChange,
@@ -102,19 +105,21 @@ export function BexChatComposer({
               <span className="hidden sm:inline">Attach</span>
             </Button>
             <div className="flex items-center gap-2">
-              <Label
-                className="mr-1 inline-flex items-center gap-2 text-xs text-muted-foreground"
-                htmlFor="bex-use-validator"
-              >
-                <Switch
-                  checked={useValidator}
-                  disabled={disabled}
-                  id="bex-use-validator"
-                  onCheckedChange={onUseValidatorChange}
-                  size="sm"
-                />
-                Use validator
-              </Label>
+              {isAdminChrome ? (
+                <Label
+                  className="mr-1 inline-flex items-center gap-2 text-xs text-muted-foreground"
+                  htmlFor="bex-use-validator"
+                >
+                  <Switch
+                    checked={useValidator}
+                    disabled={disabled}
+                    id="bex-use-validator"
+                    onCheckedChange={onUseValidatorChange}
+                    size="sm"
+                  />
+                  Use validator
+                </Label>
+              ) : null}
               <span className="hidden text-xs text-muted-foreground sm:inline">
                 Enter to send · Shift+Enter for newline
               </span>
