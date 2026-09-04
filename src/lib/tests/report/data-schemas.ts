@@ -458,6 +458,8 @@ export type ReportJudged = z.infer<typeof reportJudgedSchema>;
  */
 export const reportGradingConfigSchema = z.object({
   model: z.string(),
+  /** B0-806 — Anthropic effort the report was graded at; null on OpenAI and on reports predating it. */
+  effort: z.string().nullable().optional().default(null),
   passes: z.number().int().min(1),
   spreadThreshold: z.number().nullable(),
   passMark: z.number().nullable(),

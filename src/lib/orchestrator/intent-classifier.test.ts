@@ -333,18 +333,19 @@ describe('B0-786 settings-table resolution', () => {
   });
 
   it('resolveRouterModel resolves the tag to a concrete model id, never the raw tag string', async () => {
-    // B0-757 — BEX_RESPONSES_MODEL (what the router's `preview` tag falls through to) is now a
-    // settings row too, resolved through the same mocked getStringSetting rather than process.env.
+    // B0-757 — BEX_RESPONSES_MODEL (what the router's `preview` tag falls through to) is a settings
+    // row too, resolved through the same mocked getStringSetting rather than process.env. B0-831
+    // made that row a BEX_MODEL_TAGS tag, so the fixture stores a tag, not a raw model id.
     vi.mocked(getStringSetting).mockImplementation((key, fallback) =>
       Promise.resolve(
         key === 'BEX_ROUTER_MODEL'
           ? 'preview'
           : key === 'BEX_RESPONSES_MODEL'
-            ? 'gpt-4.1-mini-2026-01-01'
+            ? 'gpt-4o'
             : fallback,
       ),
     );
-    expect(await resolveRouterModel()).toBe('gpt-4.1-mini-2026-01-01');
+    expect(await resolveRouterModel()).toBe('gpt-4o');
   });
 
   it('resolveRouterTimeoutMs defaults and rejects a non-positive stored value', async () => {

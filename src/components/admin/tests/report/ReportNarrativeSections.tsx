@@ -724,6 +724,12 @@ export function ReportMethodology({
                 <dt className="text-slate-500">Model</dt>
                 <dd className="font-mono text-xs text-slate-900">{config.model}</dd>
               </div>
+              {config.effort ? (
+                <div className="flex gap-2">
+                  <dt className="text-slate-500">Effort</dt>
+                  <dd className="text-slate-900">{config.effort}</dd>
+                </div>
+              ) : null}
               <div className="flex gap-2">
                 <dt className="text-slate-500">Independent passes</dt>
                 <dd className="tabular-nums text-slate-900">{config.passes}</dd>

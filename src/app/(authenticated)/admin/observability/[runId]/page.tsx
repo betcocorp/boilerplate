@@ -3,9 +3,9 @@ import { connection } from 'next/server';
 
 import { HarnessVerdictBand } from '~/components/admin/observability/HarnessVerdictBand';
 import { PromptHistoryStrip } from '~/components/admin/observability/PromptHistoryStrip';
-import { RunAttributionBadge } from '~/components/admin/observability/RunAttributionBadge';
-import { RunAnswerPanel } from '~/components/admin/observability/RunAnswerPanel';
 import { RunInsightsProvider } from '~/components/admin/observability/run-insights-context';
+import { RunAnswerPanel } from '~/components/admin/observability/RunAnswerPanel';
+import { RunAttributionBadge } from '~/components/admin/observability/RunAttributionBadge';
 import { RunIntegrityPanel } from '~/components/admin/observability/RunIntegrityPanel';
 import { RunPayloadSummary } from '~/components/admin/observability/RunPayloadSummary';
 import { RunPromptInsightsPanel } from '~/components/admin/observability/RunPromptInsightsPanel';
@@ -41,7 +41,8 @@ import { shortHash } from '~/lib/workflows/product-support/prompt-version';
 
 export const metadata = {
   title: 'Run Trace | Betco BEX',
-  description: 'Single workflow run trace: steps, tool calls, and confidence gates.',
+  description:
+    'Single workflow run trace: steps, tool calls, and confidence gates.',
 };
 
 type PageProps = {
@@ -118,7 +119,9 @@ export default async function AdminRunTracePage({ params }: PageProps) {
   // B0-463 — run-level prompt stamps (B0-393), for the "view persisted prompts" UI.
   const promptVersion = extractPromptVersion(run?.final_output);
   const promptBundleVersion = extractPromptBundleVersion(run?.final_output);
-  const totalDurationMs = run ? durationMsBetween(run.created_at, run.updated_at) : null;
+  const totalDurationMs = run
+    ? durationMsBetween(run.created_at, run.updated_at)
+    : null;
   /**
    * B0-473 — same precedence as the dashboard's avg-TTFT tile (B0-430) and the runs list "Stream"
    * column (B0-416/B0-428): prefer the run's own `timingBreakdown.ttftMs`, falling back to the
@@ -127,7 +130,9 @@ export default async function AdminRunTracePage({ params }: PageProps) {
    */
   const ttftMs =
     readTtftMs(run?.final_output) ??
-    (run ? (await indexHarnessTtftByRunIds([runId])).get(runId) ?? null : null);
+    (run
+      ? ((await indexHarnessTtftByRunIds([runId])).get(runId) ?? null)
+      : null);
   // B0-418 — the run's own payload (answer, chunks, similarity, timing, validation,
   // usage). Tolerates a null `final_output` and error-only payloads.
   const payload = readRunPayloadView(run?.final_output, run?.user_input);
@@ -147,9 +152,13 @@ export default async function AdminRunTracePage({ params }: PageProps) {
    * on this run's retrieved chunks, for the "Product line id" column on the chunks panel.
    * Admin-display lookup only — see `~/lib/rag/product-line-lookup`.
    */
-  const prodLineIdByProductLineKey = await getProdLineIdsByProductLineKeys(
-    [...new Set(payload.chunks.map((c) => c.product_line_key).filter((v): v is string => Boolean(v)))],
-  );
+  const prodLineIdByProductLineKey = await getProdLineIdsByProductLineKeys([
+    ...new Set(
+      payload.chunks
+        .map((c) => c.product_line_key)
+        .filter((v): v is string => Boolean(v)),
+    ),
+  ]);
   /**
    * B0-421 — where this cell sits in its column: the prompt's recent pass/fail outcomes. Necessarily
    * sequential, since the prompt's identity only exists once the harness lookup has resolved, and
@@ -172,9 +181,11 @@ export default async function AdminRunTracePage({ params }: PageProps) {
                   Prompt observability
                 </p>
                 <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">
-                  Run trace
+                  Trace report
                 </h1>
-                <p className="mt-2 break-all font-mono text-xs text-slate-500">{runId}</p>
+                <p className="mt-2 break-all font-mono text-xs text-slate-500">
+                  {runId}
+                </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 {trace ? <RunTraceExportButton runId={runId} /> : null}
@@ -212,18 +223,26 @@ export default async function AdminRunTracePage({ params }: PageProps) {
             {run ? (
               <>
                 <div className="mt-6 flex flex-wrap items-center gap-2">
-                  <Badge className={statusBadgeClassName(run.status)} variant="outline">
+                  <Badge
+                    className={statusBadgeClassName(run.status)}
+                    variant="outline"
+                  >
                     {run.status}
                   </Badge>
                   <Badge variant="outline">{run.workflow_name}</Badge>
                   {routingDecision ? (
-                    <Badge className={getAgentBadgeClassName(routingDecision)} variant="outline">
+                    <Badge
+                      className={getAgentBadgeClassName(routingDecision)}
+                      variant="outline"
+                    >
                       {routingDecision}
                     </Badge>
                   ) : null}
                   <Badge className="tabular-nums" variant="outline">
                     confidence{' '}
-                    {typeof run.confidence === 'number' ? run.confidence.toFixed(2) : 'n/a'}
+                    {typeof run.confidence === 'number'
+                      ? run.confidence.toFixed(2)
+                      : 'n/a'}
                   </Badge>
                   <Badge className="tabular-nums" variant="outline">
                     {formatDurationSeconds(totalDurationMs)}
@@ -261,19 +280,27 @@ export default async function AdminRunTracePage({ params }: PageProps) {
                 <dl className="mt-6 grid gap-3 text-sm sm:grid-cols-4">
                   <div className="flex flex-col gap-0.5">
                     {/* B0-338 — who asked for this run. */}
-                    <dt className="text-xs uppercase tracking-wide text-slate-500">Asked by</dt>
+                    <dt className="text-xs uppercase tracking-wide text-slate-500">
+                      Asked by
+                    </dt>
                     <dd className="text-sm">
-                      <RunAttributionBadge attribution={trace?.attribution ?? { kind: 'unknown' }} />
+                      <RunAttributionBadge
+                        attribution={trace?.attribution ?? { kind: 'unknown' }}
+                      />
                     </dd>
                   </div>
                   <div className="flex flex-col gap-0.5">
-                    <dt className="text-xs uppercase tracking-wide text-slate-500">Created</dt>
+                    <dt className="text-xs uppercase tracking-wide text-slate-500">
+                      Created
+                    </dt>
                     <dd className="font-mono text-xs text-slate-800">
                       {formatEasternTimestamp(run.created_at)}
                     </dd>
                   </div>
                   <div className="flex flex-col gap-0.5">
-                    <dt className="text-xs uppercase tracking-wide text-slate-500">Updated</dt>
+                    <dt className="text-xs uppercase tracking-wide text-slate-500">
+                      Updated
+                    </dt>
                     <dd className="font-mono text-xs text-slate-800">
                       {formatEasternTimestamp(run.updated_at)}
                     </dd>
@@ -353,7 +380,10 @@ export default async function AdminRunTracePage({ params }: PageProps) {
               ideal response it is being judged against, so this panel would render the same
               text a second time. Live and orphan runs have no band and keep it. */}
           {trace && !harness ? (
-            <RunAnswerPanel answerText={payload.answerText} error={payload.error} />
+            <RunAnswerPanel
+              answerText={payload.answerText}
+              error={payload.error}
+            />
           ) : null}
 
           {/* AI analysis — on-demand, so it renders as soon as the run resolves. */}
@@ -363,7 +393,9 @@ export default async function AdminRunTracePage({ params }: PageProps) {
           {trace ? (
             <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
               <div className="mb-6 flex flex-wrap items-center gap-3">
-                <h2 className="text-lg font-semibold text-slate-900">Timeline</h2>
+                <h2 className="text-lg font-semibold text-slate-900">
+                  Timeline
+                </h2>
                 <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-sm font-medium text-slate-500">
                   {trace.timeline.length}
                 </span>
@@ -385,7 +417,9 @@ export default async function AdminRunTracePage({ params }: PageProps) {
           {trace ? (
             <RunRetrievedChunksPanel
               chunks={payload.chunks}
-              prodLineIdByProductLineKey={Object.fromEntries(prodLineIdByProductLineKey)}
+              prodLineIdByProductLineKey={Object.fromEntries(
+                prodLineIdByProductLineKey,
+              )}
             />
           ) : null}
         </main>

@@ -23,26 +23,6 @@ export default function Loading() {
           </div>
         </section>
 
-        {/* Historical performance trends */}
-        <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-          <div className="mb-5 flex items-end justify-between gap-3">
-            <Skeleton className="h-6 w-64 rounded-md" />
-            <Skeleton className="h-4 w-40 rounded-md" />
-          </div>
-          <div className="grid gap-6 lg:grid-cols-2 xl:grid-cols-4">
-            {Array.from({ length: 4 }, (_, index) => (
-              <article
-                className="min-w-0 rounded-2xl border border-slate-200 p-5"
-                key={index}
-              >
-                <Skeleton className="h-4 w-32 rounded-md" />
-                <Skeleton className="mt-1 h-3 w-24 rounded-md" />
-                <Skeleton className="mt-4 h-56 w-full rounded-xl" />
-              </article>
-            ))}
-          </div>
-        </section>
-
         {/* Recent runs */}
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <Skeleton className="h-6 w-36 rounded-md" />

@@ -3,8 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 /**
  * B0-757 — `resolveResponsesModel`'s `preview` branch now reads the `BEX_RESPONSES_MODEL` settings
  * row (via `resolveGenerationModelDefaultTag`) instead of `process.env.BEX_RESPONSES_MODEL` /
- * `OPENAI_BEX_MODEL`. Only `getStringSetting` is mocked; every other branch is a synchronous
- * mapping over `process.env.BEX_MODEL_GPT*`, unchanged by this ticket.
+ * `OPENAI_BEX_MODEL`. B0-831 made that row a `BEX_MODEL_TAGS` tag that is re-resolved through the
+ * same function, so the `BEX_MODEL_GPT*` env pins apply to `preview` too. Only `getStringSetting`
+ * is mocked; every other branch is a synchronous mapping over `process.env.BEX_MODEL_GPT*`.
  */
 vi.mock('~/lib/settings/settings-service', () => ({
   getStringSetting: vi.fn((_key: string, fallback: string) => Promise.resolve(fallback)),
@@ -79,10 +80,10 @@ describe('resolveResponsesModel — gpt-5.5 / gpt-5.6 (B0-598)', () => {
   it('does not let the fleet-wide preview default capture a named tag', async () => {
     // BEX_RESPONSES_MODEL only moves `preview`; naming a model must still get that model.
     vi.mocked(getStringSetting).mockImplementation((key, fallback) =>
-      Promise.resolve(key === 'BEX_RESPONSES_MODEL' ? 'gpt-4o-mini' : fallback),
+      Promise.resolve(key === 'BEX_RESPONSES_MODEL' ? 'gpt-4o' : fallback),
     );
 
-    expect(await resolveResponsesModel('preview')).toBe('gpt-4o-mini');
+    expect(await resolveResponsesModel('preview')).toBe('gpt-4o');
     expect(await resolveResponsesModel('gpt-5.5')).toBe('gpt-5.5');
     expect(await resolveResponsesModel('gpt-5.6')).toBe('gpt-5.6');
   });
@@ -94,12 +95,13 @@ describe('resolveResponsesModel — pre-existing behaviour is unchanged', () => 
     expect(await resolveResponsesModel(undefined)).toBe('gpt-4.1-mini');
     expect(await resolveResponsesModel('')).toBe('gpt-4.1-mini');
 
-    // B0-757 — the row accepts any concrete model id (e.g. a dated snapshot), same as the env vars
-    // it replaced; it is not restricted to BEX_MODEL_TAGS.
+    // B0-831 — the row is a BEX_MODEL_TAGS tag now, like BEX_ROUTER_MODEL: allowed_values is
+    // advisory, not a DB constraint, so an unrecognised stored value (a dated snapshot, a typo)
+    // falls back to the default tag instead of reaching OpenAI as a non-existent model id.
     vi.mocked(getStringSetting).mockImplementation((key, fallback) =>
       Promise.resolve(key === 'BEX_RESPONSES_MODEL' ? 'gpt-4.1-mini-2026-01-01' : fallback),
     );
-    expect(await resolveResponsesModel('preview')).toBe('gpt-4.1-mini-2026-01-01');
+    expect(await resolveResponsesModel('preview')).toBe('gpt-4.1-mini');
   });
 
   it('refuses to store "preview" as its own default (would resolve to itself)', async () => {
@@ -107,6 +109,16 @@ describe('resolveResponsesModel — pre-existing behaviour is unchanged', () => 
       Promise.resolve(key === 'BEX_RESPONSES_MODEL' ? 'preview' : fallback),
     );
     expect(await resolveResponsesModel('preview')).toBe('gpt-4.1-mini');
+  });
+
+  it('resolves preview through the stored tag so the BEX_MODEL_* pins apply, exactly like resolveRouterModel (B0-831)', async () => {
+    vi.mocked(getStringSetting).mockImplementation((key, fallback) =>
+      Promise.resolve(key === 'BEX_RESPONSES_MODEL' ? 'gpt-4.1' : fallback),
+    );
+    process.env.BEX_MODEL_GPT41 = 'gpt-4.1-2026-01-01';
+
+    expect(await resolveResponsesModel('preview')).toBe('gpt-4.1-2026-01-01');
+    expect(await resolveResponsesModel(undefined)).toBe('gpt-4.1-2026-01-01');
   });
 
   it('still throws for the custom tag, which is why it is not offered in any dropdown', async () => {

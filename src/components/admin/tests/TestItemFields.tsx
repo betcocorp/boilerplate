@@ -10,16 +10,6 @@ import { Label } from '~/components/ui/label';
 import { Textarea } from '~/components/ui/textarea';
 import { cn } from '~/lib/utils';
 
-/** Aligns with common CSV / runner evaluation rules in `~/lib/tests/runner`. */
-const RESULT_TYPE_PRESETS = ['decline', 'none'] as const;
-
-/** Labels match `parseExpectedShouldAnswerFromForm` in `~/lib/tests/csv`. */
-const EXPECTED_BEHAVIOR_PRESETS = [
-  'No expectation (n/a)',
-  'Should answer',
-  'Should decline',
-] as const;
-
 /** Values match the `should_cite` CSV cell / `parseShouldCiteFromForm` in `~/lib/tests/csv`. */
 const SHOULD_CITE_PRESETS = ['yes', 'no'] as const;
 
@@ -39,7 +29,6 @@ const MULTI_TURN_PLACEHOLDER = `{
 }`;
 
 export type TestItemSuggestionLists = {
-  resultTypes: string[];
   canonicalProducts: string[];
   reasonCodes: string[];
   sources: string[];
@@ -51,8 +40,6 @@ export type TestItemSuggestionLists = {
 /** Pre-fill values when editing an existing row. All optional / default empty. */
 export type TestItemFieldsInitialValues = {
   prompt?: string;
-  expectedShouldAnswer?: string;
-  expectedResultType?: string;
   expectedCanonicalProduct?: string;
   expectedReasonCode?: string;
   source?: string;
@@ -112,33 +99,6 @@ export function TestItemFields({
           rows={4}
         />
       </div>
-
-      <FilterableSuggestionField
-        id={`${idPrefix}-expected`}
-        initialValue={initialValues?.expectedShouldAnswer}
-        label="Expected behavior"
-        name="expectedShouldAnswer"
-        placeholder="Choose or type expected behavior"
-        presetSuggestions={EXPECTED_BEHAVIOR_PRESETS}
-        suggestionsFromDataset={[]}
-      />
-
-      <FilterableSuggestionField
-        id={`${idPrefix}-result-type`}
-        initialValue={initialValues?.expectedResultType}
-        label={
-          <>
-            Expected result type{' '}
-            <span className="font-normal text-muted-foreground">
-              (optional)
-            </span>
-          </>
-        }
-        name="expectedResultType"
-        placeholder="Choose or type a result type"
-        presetSuggestions={RESULT_TYPE_PRESETS}
-        suggestionsFromDataset={suggestionLists.resultTypes}
-      />
 
       <FilterableSuggestionField
         id={`${idPrefix}-canonical`}

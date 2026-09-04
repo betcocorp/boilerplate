@@ -401,7 +401,6 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
               <TableHeader className="sticky top-0 z-10 bg-white shadow-[0_1px_0_0_rgb(226_232_240)] [&_tr]:border-b-0">
                 <TableRow>
                   <TableHead>Run</TableHead>
-                  <TableHead>Passed</TableHead>
                   <TableHead
                     className="whitespace-nowrap"
                     title="Per-source similarity min / max / avg for this item run"
@@ -427,7 +426,7 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
               <TableBody>
                 {historyRows.length === 0 ? (
                   <TableRow>
-                    <TableCell className="text-slate-500" colSpan={9}>
+                    <TableCell className="text-slate-500" colSpan={6}>
                       This item has no completed results yet.
                     </TableCell>
                   </TableRow>
@@ -468,7 +467,6 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
                             </>
                           ) : null}
                         </TableCell>
-                        <TableCell>{result.passed ? 'yes' : 'no'}</TableCell>
                         <TableCell className="whitespace-nowrap tabular-nums text-slate-700">
                           {formatSimilarityValue(similarityStats?.min)}/
                           {formatSimilarityValue(similarityStats?.max)}/

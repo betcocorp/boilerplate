@@ -691,8 +691,6 @@ export function TestPromptsSection({
                             criteriaFromJson(item.expected_criteria),
                           )}
                           expectedReasonCode={item.expected_reason_code}
-                          expectedResultType={item.expected_result_type}
-                          expectedShouldAnswer={item.expected_should_answer}
                           expectedSources={item.expected_sources}
                           idealResponse={item.ideal_response}
                           inputPayload={item.input_payload}

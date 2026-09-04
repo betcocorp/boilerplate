@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   completedPassCount,
   emptyReportState,
+  gradingConfigFromState,
   parseReportState,
   totalPassCount,
   type CaseScore,
@@ -157,5 +158,17 @@ describe('progress counting (B0-719)', () => {
     expect(state.passes).toBe(1);
     expect(state.spreadThreshold).toBeNull();
     expect(state.passMark).toBeNull();
+  });
+
+  it('carries no grading effort until the orchestrator records one, and a legacy row parses with none (B0-806)', () => {
+    const fresh = emptyReportState('gpt-4.1', 12);
+    expect(fresh.gradingEffort).toBeNull();
+    expect(gradingConfigFromState(fresh).effort).toBeNull();
+
+    expect(parseReportState(LEGACY_STATE)!.gradingEffort).toBeNull();
+
+    const graded = { ...fresh, model: 'claude-opus-5', gradingEffort: 'high' };
+    expect(parseReportState(graded)!.gradingEffort).toBe('high');
+    expect(gradingConfigFromState(graded).effort).toBe('high');
   });
 });

@@ -20,7 +20,6 @@ import type { RouterTypeOverride } from '~/lib/workflows/product-support/run-pro
 import {
   parseCsvColumnNames,
   parseExpectedCriteriaFromForm,
-  parseExpectedShouldAnswerFromForm,
   parsePriority,
   parseMultiTurnJsonFromForm,
   parseShouldCiteFromForm,
@@ -298,8 +297,6 @@ export async function uploadTestCsvAction(formData: FormData) {
           test_id: initialTest.id,
           row_index: row.rowIndex,
           prompt: row.prompt,
-          expected_should_answer: row.expectedShouldAnswer,
-          expected_result_type: row.expectedResultType,
           expected_canonical_product: row.expectedCanonicalProduct,
           expected_reason_code: row.expectedReasonCode,
           source: row.source,
@@ -379,18 +376,6 @@ export async function addTestItemAction(formData: FormData) {
     redirect(encodeMessage(returnPath, 'error', 'Test not found.'));
   }
 
-  const expectedModeRaw = formData.get('expectedShouldAnswer');
-  const expected_should_answer =
-    typeof expectedModeRaw === 'string'
-      ? parseExpectedShouldAnswerFromForm(expectedModeRaw)
-      : null;
-
-  const expectedResultTypeRaw = formData.get('expectedResultType');
-  const expected_result_type =
-    typeof expectedResultTypeRaw === 'string' && expectedResultTypeRaw.trim()
-      ? expectedResultTypeRaw.trim()
-      : null;
-
   const expectedCanonicalRaw = formData.get('expectedCanonicalProduct');
   const expected_canonical_product =
     typeof expectedCanonicalRaw === 'string' && expectedCanonicalRaw.trim()
@@ -434,7 +419,6 @@ export async function addTestItemAction(formData: FormData) {
 
   const { input_payload, metadata } = buildManualAddTestItemPayload({
     prompt,
-    expected_should_answer,
     multiTurnScenario: multiTurnParsed.scenario,
     productMention:
       typeof productMentionRaw === 'string' && productMentionRaw.trim()
@@ -458,8 +442,6 @@ export async function addTestItemAction(formData: FormData) {
       test_id: testId,
       row_index,
       prompt,
-      expected_should_answer,
-      expected_result_type,
       expected_canonical_product,
       expected_reason_code,
       source,
@@ -522,18 +504,6 @@ export async function updateTestItemAction(formData: FormData) {
     );
   }
 
-  const expectedModeRaw = formData.get('expectedShouldAnswer');
-  const expected_should_answer =
-    typeof expectedModeRaw === 'string'
-      ? parseExpectedShouldAnswerFromForm(expectedModeRaw)
-      : null;
-
-  const expectedResultTypeRaw = formData.get('expectedResultType');
-  const expected_result_type =
-    typeof expectedResultTypeRaw === 'string' && expectedResultTypeRaw.trim()
-      ? expectedResultTypeRaw.trim()
-      : null;
-
   const expectedCanonicalRaw = formData.get('expectedCanonicalProduct');
   const expected_canonical_product =
     typeof expectedCanonicalRaw === 'string' && expectedCanonicalRaw.trim()
@@ -578,7 +548,6 @@ export async function updateTestItemAction(formData: FormData) {
 
   const { input_payload, metadata } = buildEditedTestItemPayload({
     prompt,
-    expected_should_answer,
     multiTurnScenario: multiTurnParsed.scenario,
     productMention:
       typeof productMentionRaw === 'string' && productMentionRaw.trim()
@@ -596,10 +565,10 @@ export async function updateTestItemAction(formData: FormData) {
     existingMetadata: existing.metadata,
   });
 
+  // B0-799 — `expected_should_answer` / `expected_result_type` are deliberately omitted from the
+  // patch: the dialog no longer edits them, so a save must never null a stored value.
   const updated = await updateTestItemForTest(testItemId, testId, {
     prompt,
-    expected_should_answer,
-    expected_result_type,
     expected_canonical_product,
     expected_reason_code,
     source,

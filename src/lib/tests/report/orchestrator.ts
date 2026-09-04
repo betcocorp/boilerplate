@@ -1,5 +1,3 @@
-import { resolveResponsesModel } from '~/lib/openai/client';
-import { getStringSetting } from '~/lib/settings/settings-service';
 import {
   getTestById,
   getTestItemsByTestId,
@@ -8,12 +6,20 @@ import {
   saveReportMarkdown,
   saveReportState,
 } from '~/lib/tests/repository';
+import type { ModelEffort } from '~/lib/constants/models';
 import type { TestItemRecord, TestResultItemRecord } from '~/lib/tests/types';
 
 import { assembleReportCases, indexLatestResultItems } from './assemble';
 import { splitConcepts } from './case-concepts';
 import { GRADING_PROMPT_HASH, scoreCase, unableToEvaluateScore } from './case-scorer';
 import { consolidateCasePasses, loadConsistencyConfig } from './consolidate';
+import {
+  effortForModel,
+  effortFromState,
+  loadGradingEffort,
+  loadGradingModelTag,
+  resolveGradingModel,
+} from './grading-model';
 import { renderReportMarkdown } from './render';
 import {
   emptyReportState,
@@ -25,8 +31,6 @@ import {
 import { loadJudgedThresholds, loadPassMark } from './scoring-config';
 import { synthesizeReportFindings } from './synthesizer';
 
-/** B0-765 — fallback only if the `REPORT_GRADING_MODEL` settings row is missing/unreadable. */
-const DEFAULT_MODEL_TAG = 'gpt-4.1';
 /** Concurrent grading calls in flight, counted in (case, pass) units — not in cases. */
 const BATCH_SIZE = 5;
 /** Leaves headroom under the route's `maxDuration = 300` for the final save + response. */
@@ -72,6 +76,7 @@ async function scoreOnePass(
   item: TestItemRecord,
   resultItem: TestResultItemRecord | undefined,
   modelTag: string,
+  effort: ModelEffort | undefined,
 ): Promise<CaseScore> {
   const responseText = resultItem?.response_text?.trim();
   if (!resultItem) {
@@ -105,6 +110,7 @@ async function scoreOnePass(
     expectedConcepts: splitConcepts(item.expected_concepts),
     actualResponseText: responseText,
     modelTag,
+    effort,
   });
 }
 
@@ -115,6 +121,7 @@ async function scoreRemainingCases(
   state: ReportState,
   deadline: number,
   modelTag: string,
+  effort: ModelEffort | undefined,
 ): Promise<ReportState> {
   const pending = pendingPasses(items, state);
 
@@ -124,7 +131,12 @@ async function scoreRemainingCases(
     const batch = pending.slice(i, i + BATCH_SIZE);
     const results = await Promise.all(
       batch.map(async ({ item, passIndex }) => {
-        const score = await scoreOnePass(item, resultItemByTestItemId.get(item.id), modelTag);
+        const score = await scoreOnePass(
+          item,
+          resultItemByTestItemId.get(item.id),
+          modelTag,
+          effort,
+        );
         return { itemId: item.id, passIndex, score } as const;
       }),
     );
@@ -177,8 +189,11 @@ export async function generateReport(testResultId: string): Promise<ReportState>
 
   // B0-765 — read once per call so a report already in flight can't have half its cases graded
   // on one model and the other half on a mid-run settings change.
-  const modelTag = await getStringSetting('REPORT_GRADING_MODEL', DEFAULT_MODEL_TAG);
-  const model = await resolveResponsesModel(modelTag);
+  const modelTag = await loadGradingModelTag();
+  const model = await resolveGradingModel(modelTag);
+  // B0-806 — how hard an Anthropic grader thinks; recorded only when the model honours it, and
+  // persisted on the state like everything else here so a resume grades at the same effort.
+  const gradingEffort = effortForModel(model, await loadGradingEffort());
   // B0-719/B0-720 — read once, and only ever written into a *fresh* state. A report already
   // part-way through keeps the pass count and threshold it started with, so changing the setting
   // mid-report can never leave one half of its cases graded three times and the other half once.
@@ -193,6 +208,7 @@ export async function generateReport(testResultId: string): Promise<ReportState>
     ...emptyReportState(model, items.length, config.passes, config.spreadThreshold, passMark),
     gradingPromptHash: GRADING_PROMPT_HASH,
     judgedThresholds,
+    gradingEffort,
   });
   let state = parseReportState(run.report_state) ?? fresh();
   if (state.totalCases !== items.length) {
@@ -212,6 +228,7 @@ export async function generateReport(testResultId: string): Promise<ReportState>
       state,
       deadline,
       modelTag,
+      effortFromState(state.gradingEffort),
     );
 
     if (state.completedCases < state.totalCases) {
@@ -255,7 +272,12 @@ export async function generateReport(testResultId: string): Promise<ReportState>
         ] as const;
       }),
     );
-    const synthesis = await synthesizeReportFindings(metrics, findingsByCaseId, modelTag);
+    const synthesis = await synthesizeReportFindings(
+      metrics,
+      findingsByCaseId,
+      modelTag,
+      effortFromState(state.gradingEffort),
+    );
     state.synthesis = synthesis;
 
     const generatedAt = new Date().toISOString();

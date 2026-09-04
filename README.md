@@ -16,7 +16,8 @@ Open [http://localhost:3000/admin/bex](http://localhost:3000/admin/bex).
 | Variable | Purpose |
 |----------|---------|
 | `OPENAI_API_KEY` | OpenAI API (Responses + embeddings for RAG search). |
-| `BEX_RESPONSES_MODEL` | Default model when the UI sends `preview` (fallback: `gpt-4.1-mini`). |
+| `ANTHROPIC_API_KEY` | Anthropic API — run-report grading when the `REPORT_GRADING_MODEL` settings row names a `claude-*` tag (B0-806). A secret, so env rather than settings; nothing else calls Anthropic. |
+| `BEX_RESPONSES_MODEL` | **No longer an env var** — a `public.settings` row (B0-757) holding the `BEX_MODEL_TAGS` tag that `preview` and a missing `modelTag` resolve to. A select at `/admin/settings`, validated like `BEX_ROUTER_MODEL` (B0-831). Default `gpt-4.1-mini`. |
 | `BEX_MODEL_GPT4O` / `BEX_MODEL_GPT41` | Overrides for UI tags `gpt-4o` / `gpt-4.1`. |
 | `BEX_VALIDATOR_MODEL` | Optional separate model for the validator pass. |
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL. |

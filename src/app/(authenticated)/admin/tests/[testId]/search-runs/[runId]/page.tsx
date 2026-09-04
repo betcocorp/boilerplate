@@ -87,10 +87,6 @@ export default async function AdminSearchRunDetailsPage({
     testItems.map((item) => [item.id, item.expected_should_answer]),
   );
 
-  const passCount = result.passed_items ?? 0;
-  const failCount = result.failed_items ?? allResultItems.filter((item) => !item.passed).length;
-  const incompleteCount = Math.max(0, result.total_items - passCount - failCount);
-
   type ItemCategory = 'negative' | 'unconstrained' | 'product_only' | 'section_only' | 'both_constraints';
   function categorizeItem(item: (typeof testItems)[number]): ItemCategory {
     if (item.expected_should_answer === false) return 'negative';
@@ -210,10 +206,7 @@ export default async function AdminSearchRunDetailsPage({
           initialTotalItems={initialTotalItems}
           runId={result.id}
           stats={{
-            passCount,
-            failCount,
             erroredCount: 0,
-            incompleteCount,
             started_at: result.started_at ?? '',
           }}
         />

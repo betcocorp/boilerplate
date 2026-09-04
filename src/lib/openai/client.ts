@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 
+import { isBexModelTag, type ExplicitBexModelTag } from '~/lib/constants/models';
 import { getStringSetting } from '~/lib/settings/settings-service';
 
 let cached: OpenAI | null = null;
@@ -23,38 +24,41 @@ export function getOpenAIClient(): OpenAI {
  * set as an env var in any environment, so `preview` has always silently resolved to this. Seeded
  * as the settings row default so this migration is behavior-preserving.
  */
-export const DEFAULT_BEX_RESPONSES_MODEL = 'gpt-4.1-mini';
+export const DEFAULT_BEX_RESPONSES_MODEL_TAG: ExplicitBexModelTag = 'gpt-4.1-mini';
 
 /**
- * B0-757 — the `BEX_RESPONSES_MODEL` settings row: the concrete model id `preview` (and any
- * missing or empty `modelTag`) resolves to.
- *
- * Deliberately NOT restricted to `BEX_MODEL_TAGS` the way `resolveValidatorModelTag`/
- * `resolveRouterModelTag` restrict their rows: the old `BEX_RESPONSES_MODEL`/`OPENAI_BEX_MODEL` env
- * vars accepted ANY concrete model id (e.g. a dated snapshot like `gpt-4.1-mini-2026-01-01`, the
- * same "pin an exact id without a deploy" pattern as `BEX_MODEL_GPT55`/`BEX_MODEL_GPT41`), and this
- * row replaces them one-for-one. The only guard is against the literal string `'preview'`, which
- * would otherwise make this resolve to itself.
+ * B0-831 — the `BEX_RESPONSES_MODEL` settings row: the `BEX_MODEL_TAGS` TAG that `preview` (and any
+ * missing or empty `modelTag`) resolves to, re-validated against the enum before use exactly like
+ * `resolveRouterModelTag` / `resolveValidatorModelTag`. `settings.allowed_values` is advisory
+ * metadata the admin API validates writes against, NOT a database constraint, so an unrecognized
+ * stored value falls back to the default tag rather than being handed to the API as a non-existent
+ * model id. `preview` is excluded because it would resolve to itself. Pinning an exact id (a dated
+ * snapshot, a `-sol`/`-terra` variant) is what the `BEX_MODEL_*` env overrides are for — and since
+ * the tag goes back through `resolveResponsesModel`, those pins now apply to `preview` too.
  */
-export async function resolveGenerationModelDefaultTag(): Promise<string> {
+export async function resolveGenerationModelDefaultTag(): Promise<ExplicitBexModelTag> {
   const raw = (
-    await getStringSetting('BEX_RESPONSES_MODEL', DEFAULT_BEX_RESPONSES_MODEL)
+    await getStringSetting('BEX_RESPONSES_MODEL', DEFAULT_BEX_RESPONSES_MODEL_TAG)
   ).trim();
-  return raw && raw !== 'preview' ? raw : DEFAULT_BEX_RESPONSES_MODEL;
+  return isBexModelTag(raw) && raw !== 'preview' ? raw : DEFAULT_BEX_RESPONSES_MODEL_TAG;
 }
 
 /**
  * Maps UI / API model tags to OpenAI Responses model IDs. Centralize here — do not branch ad hoc.
  *
- * Async since B0-757: the `preview` branch now reads the `BEX_RESPONSES_MODEL` settings row
- * instead of an env var. Every other branch stays a synchronous mapping; only `preview`/empty needs
- * the settings round trip, cached 30s by `~/lib/settings/settings-service`.
+ * Async since B0-757: the `preview` branch reads the `BEX_RESPONSES_MODEL` settings row instead of
+ * an env var. Since B0-831 that row holds a tag, which is resolved by recursing into this function
+ * so `preview` picks up the same env pins every explicit tag does. Every other branch stays a
+ * synchronous mapping; only `preview`/empty needs the settings round trip, cached 30s by
+ * `~/lib/settings/settings-service`.
  */
 export async function resolveResponsesModel(modelTag: string | undefined): Promise<string> {
   const tag = (modelTag ?? 'preview').trim();
 
   if (tag === 'preview' || tag === '') {
-    return resolveGenerationModelDefaultTag();
+    // B0-831 — the row holds a tag (never `preview`, so this cannot loop); sending it back through
+    // here applies the same BEX_MODEL_* env pins every explicit tag gets, like resolveRouterModel.
+    return resolveResponsesModel(await resolveGenerationModelDefaultTag());
   }
 
   if (tag === 'gpt-4o') {

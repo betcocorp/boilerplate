@@ -30,14 +30,14 @@ export default function Loading() {
           </div>
           <Skeleton className="mt-2 h-4 w-64 rounded-md" />
           <Skeleton className="mt-4 h-3 w-full rounded-full" />
-          <div className="mt-2 grid grid-cols-4 items-center gap-4">
-            {Array.from({ length: 4 }, (_, index) => (
+          <div className="mt-2 grid grid-cols-3 items-center gap-4">
+            {Array.from({ length: 3 }, (_, index) => (
               <Skeleton className="h-3 w-full rounded-md" key={index} />
             ))}
           </div>
         </section>
 
-        {/* At-a-glance charts: two full-width trends, then four half-width panels */}
+        {/* At-a-glance charts: two full-width trends, then two half-width panels */}
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <Skeleton className="h-6 w-48 rounded-md" />
           <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-4">
@@ -50,7 +50,7 @@ export default function Loading() {
                 <Skeleton className="mt-4 h-56 w-full rounded-xl" />
               </article>
             ))}
-            {Array.from({ length: 4 }, (_, index) => (
+            {Array.from({ length: 2 }, (_, index) => (
               <article
                 className="col-span-4 min-w-0 rounded-2xl border border-slate-200 p-5 lg:col-span-2"
                 key={`half-${index}`}

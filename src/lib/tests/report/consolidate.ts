@@ -2,6 +2,7 @@ import { normConcept, type CaseConcepts, type ConceptKindCoverage } from './case
 import {
   completenessFromCoverage,
   computeOverall,
+  round2,
   roundScore,
   statusFromScore,
   type CaseStatus,
@@ -542,7 +543,7 @@ export function consolidateCasePasses(
       incorrect: narrative.incorrect,
       improvement: narrative.improvement,
       concepts: conceptResult.concepts ?? null,
-      similarity: similarity == null ? null : Math.round(similarity * 100) / 100,
+      similarity: similarity == null ? null : round2(similarity),
       similarityNote: narrative.similarityNote ?? null,
       evalConfidence: evalConfidence == null ? null : roundScore(evalConfidence),
       confidenceNote: narrative.confidenceNote ?? null,

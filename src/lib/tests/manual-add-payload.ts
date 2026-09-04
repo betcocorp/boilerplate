@@ -7,7 +7,6 @@ import type { Json } from '~/types/supabase.public';
  */
 export function buildManualAddTestItemPayload(input: {
   prompt: string;
-  expected_should_answer: boolean | null;
   /** Same keys as CSV columns routed into `input_payload`. */
   productMention: string | null;
   questionCategory: string | null;
@@ -41,14 +40,6 @@ export function buildManualAddTestItemPayload(input: {
   metadata.prompt_word_count = String(words.length);
   metadata.prompt_char_count = String([...input.prompt].length);
 
-  if (input.expected_should_answer === true) {
-    metadata.expectation_mode = 'should_answer';
-  } else if (input.expected_should_answer === false) {
-    metadata.expectation_mode = 'should_decline';
-  } else {
-    metadata.expectation_mode = 'na';
-  }
-
   return { input_payload, metadata };
 }
 
@@ -67,7 +58,6 @@ function toJsonRecord(value: unknown): Record<string, Json> {
  */
 export function buildEditedTestItemPayload(input: {
   prompt: string;
-  expected_should_answer: boolean | null;
   productMention: string | null;
   questionCategory: string | null;
   sourceStyle: string | null;
@@ -108,14 +98,6 @@ export function buildEditedTestItemPayload(input: {
   const words = input.prompt.trim().split(/\s+/).filter(Boolean);
   metadata.prompt_word_count = String(words.length);
   metadata.prompt_char_count = String([...input.prompt].length);
-
-  if (input.expected_should_answer === true) {
-    metadata.expectation_mode = 'should_answer';
-  } else if (input.expected_should_answer === false) {
-    metadata.expectation_mode = 'should_decline';
-  } else {
-    metadata.expectation_mode = 'na';
-  }
 
   return { input_payload, metadata };
 }

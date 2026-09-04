@@ -161,6 +161,12 @@ export const reportStateSchema = z.object({
    * Null on a legacy row. Two reports that disagree can be told apart by this before anything else.
    */
   gradingPromptHash: z.string().nullable().optional().default(null),
+  /**
+   * B0-806 — the Anthropic `effort` this report was graded at (`REPORT_GRADING_EFFORT`), resolved
+   * once when the state is created. Null on a legacy row and on every OpenAI-graded report, where
+   * effort has no effect. A plain string so a future effort level never fails a legacy parse.
+   */
+  gradingEffort: z.string().nullable().optional().default(null),
   /** B0-811 — the judged-metric thresholds in force when this report was graded. Null on a legacy row. */
   judgedThresholds: z
     .object({
@@ -216,6 +222,7 @@ export function emptyReportState(
     spreadThreshold,
     passMark,
     gradingPromptHash: null,
+    gradingEffort: null,
     judgedThresholds: null,
     synthesis: null,
     error: null,
@@ -230,6 +237,8 @@ export function emptyReportState(
  */
 export type ReportGradingConfig = {
   model: string;
+  /** B0-806 — Anthropic effort the model was graded at; null when the model has no such knob. */
+  effort: string | null;
   passes: number;
   spreadThreshold: number | null;
   passMark: number | null;
@@ -240,6 +249,7 @@ export type ReportGradingConfig = {
 export function gradingConfigFromState(state: ReportState): ReportGradingConfig {
   return {
     model: state.model,
+    effort: state.gradingEffort,
     passes: state.passes,
     spreadThreshold: state.spreadThreshold,
     passMark: state.passMark,

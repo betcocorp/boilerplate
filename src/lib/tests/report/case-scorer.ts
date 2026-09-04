@@ -2,11 +2,11 @@ import { createHash } from 'node:crypto';
 
 import { z } from 'zod';
 
-import { getOpenAIClient, resolveResponsesModel } from '~/lib/openai/client';
-import { samplingParamsFor } from '~/lib/openai/model-capabilities';
-import { extractAssistantText } from '~/lib/openai/response-item-parsing';
+import type { ModelEffort } from '~/lib/constants/models';
+import { completeStructured, type StructuredCompletion } from '~/lib/llm/structured-completion';
 
 import { normConcept, type CaseConcepts, type ConceptKindCoverage } from './case-concepts';
+import { DEFAULT_GRADING_MODEL_TAG, resolveGradingModel } from './grading-model';
 import { NO_EXPECTED_CONCEPTS_UTE_REASON } from './metrics';
 import type { CaseScore } from './schemas';
 
@@ -103,7 +103,7 @@ export const GRADING_PROMPT_HASH = createHash('sha256')
  * Field names mirror the reference skill's `eval.json` case shape so the two graders are asked the
  * same questions in the same words.
  */
-const GRADER_JSON_SCHEMA = {
+export const GRADER_JSON_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   properties: {
@@ -251,6 +251,8 @@ export type CaseScoringInput = {
   expectedConcepts: readonly string[];
   actualResponseText: string;
   modelTag?: string;
+  /** B0-806 — Anthropic `output_config.effort` for this grade; ignored by OpenAI models. */
+  effort?: ModelEffort;
 };
 
 /**
@@ -393,35 +395,18 @@ export function toCaseScore(output: GraderOutput, input: CaseScoringInput): Case
 }
 
 /**
- * The one seam the grader talks to a model through. The default calls the OpenAI Responses API with
- * strict structured output; tests inject a fake, and B0-819's provider adapter replaces it.
+ * B0-819 — the one seam the grader talks to a model through (`~/lib/llm/structured-completion.ts`).
+ * Production routes on the resolved model id — `claude-*` to Anthropic, everything else to the
+ * OpenAI Responses API — and hands both the same prompt and the same `GRADER_JSON_SCHEMA` bytes;
+ * tests inject a fake.
  */
-export type StructuredCompletion = (params: {
-  model: string;
-  system: string;
-  user: string;
-}) => Promise<string>;
+export type { StructuredCompletion };
 
-const completeWithOpenAI: StructuredCompletion = async ({ model, system, user }) => {
-  const client = getOpenAIClient();
-  const res = await client.responses.create({
-    model,
-    instructions: system,
-    input: [{ role: 'user', content: user, type: 'message' }],
-    text: {
-      format: {
-        type: 'json_schema',
-        name: 'case_score',
-        strict: true,
-        schema: GRADER_JSON_SCHEMA,
-      },
-    },
-    store: false,
-    stream: false,
-    ...samplingParamsFor(model, { temperature: 0 }),
-  });
-  return extractAssistantText(res);
-};
+/**
+ * Output cap for one grade. Anthropic counts thinking tokens against it, so it is sized for a
+ * high-effort think plus the JSON, not for the JSON alone; on OpenAI it is a far ceiling.
+ */
+export const GRADER_MAX_OUTPUT_TOKENS = 16_000;
 
 export type ScoreCaseDeps = {
   complete?: StructuredCompletion;
@@ -437,15 +422,20 @@ export async function scoreCase(input: CaseScoringInput, deps: ScoreCaseDeps = {
     return unableToEvaluateScore(NO_EXPECTED_CONCEPTS_UTE_REASON);
   }
 
-  const complete = deps.complete ?? completeWithOpenAI;
-  const resolveModel = deps.resolveModel ?? resolveResponsesModel;
+  const complete = deps.complete ?? completeStructured;
+  const resolveModel = deps.resolveModel ?? resolveGradingModel;
 
   try {
-    const model = await resolveModel(input.modelTag ?? 'gpt-4.1');
+    const model = await resolveModel(input.modelTag ?? DEFAULT_GRADING_MODEL_TAG);
     const text = await complete({
       model,
       system: CASE_SCORING_SYSTEM_PROMPT,
       user: buildGraderPayload(input),
+      schemaName: 'case_score',
+      schema: GRADER_JSON_SCHEMA,
+      maxOutputTokens: GRADER_MAX_OUTPUT_TOKENS,
+      temperature: 0,
+      effort: input.effort,
     });
     const parsed = graderOutputSchema.parse(JSON.parse(text));
     return toCaseScore(parsed, input);

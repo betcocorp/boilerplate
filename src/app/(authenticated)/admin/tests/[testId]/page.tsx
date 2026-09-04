@@ -51,17 +51,12 @@ import {
   distinctNonEmptyStrings,
 } from '~/lib/tests/suggestion-lists';
 
-import { TestHistoricalTrendsCharts } from '~/components/admin/tests/TestHistoricalTrendsCharts';
 import {
   formatPercentDelta,
   formatScoreDelta,
   formatSimilarityDelta,
 } from '~/lib/tests/format';
-import {
-  formatDate,
-  formatDurationSeconds,
-  formatRunChartAxisLabel,
-} from '~/lib/utils/time';
+import { formatDate, formatDurationSeconds } from '~/lib/utils/time';
 
 import { TestRunModelControls } from '~/components/admin/tests/TestRunModelControls';
 import {
@@ -232,7 +227,7 @@ export default async function AdminTestDetailsPage({
     getLegacyProductLineSuggestionMeta(),
   ]);
   const trendRuns = [...results].reverse();
-  /** One IN-query for every result item across every recent run feeds both the trend chart and the per-prompt aggregation. */
+  /** One IN-query for every result item across every recent run feeds the Recent runs metrics and the per-prompt aggregation. */
   const [allRecentResultItems, searchRunItems, goldenOrigins] = await Promise.all([
     listAllResultItemsByResultIds(trendRuns.map((run) => run.id)),
     listAllResultItemsByResultIds(searchResults.map((run) => run.id)),
@@ -264,14 +259,8 @@ export default async function AdminTestDetailsPage({
         : null;
     return {
       avgSimilarity,
-      elapsedSeconds:
-        typeof run.elapsed_ms === 'number'
-          ? Number((run.elapsed_ms / 1000).toFixed(2))
-          : 0,
       passRate:
         run.total_items > 0 ? (run.passed_items / run.total_items) * 100 : 0,
-      startedAtLabel: formatRunChartAxisLabel(run.started_at),
-      status: run.status || 'unknown',
     };
   });
 
@@ -290,7 +279,7 @@ export default async function AdminTestDetailsPage({
 
   /**
    * B0-398 — per-run `promptBundleVersion` chip for the "Recent runs" list. Reuses
-   * `resultItemsByRunId` (already fetched above for the trend chart / prompt aggregations) rather
+   * `resultItemsByRunId` (already fetched above for the run metrics / prompt aggregations) rather
    * than issuing a new query — every listed run's items are already loaded.
    */
   const promptBundleVersionSummaryByRunId = new Map(
@@ -446,8 +435,6 @@ export default async function AdminTestDetailsPage({
           </div>
         </section>
 
-        <TestHistoricalTrendsCharts runs={trendData} />
-
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <h2 className="text-lg font-semibold text-slate-900">Recent runs</h2>
           <div className="relative mt-4 max-h-[min(48vh,32rem)] overflow-auto overscroll-contain rounded-2xl border border-slate-200">
@@ -463,10 +450,10 @@ export default async function AdminTestDetailsPage({
                     Score
                   </TableHead>
                   <TableHead>Pass/fail</TableHead>
-                  <TableHead title="Share of items marked passed for this run (same basis as the pass rate trend chart)">
+                  <TableHead title="Share of items marked passed for this run">
                     Pass %
                   </TableHead>
-                  <TableHead title="Mean max retrieval similarity across items with scores (same basis as the historical chart)">
+                  <TableHead title="Mean max retrieval similarity across items with scores">
                     Similarity
                   </TableHead>
                   <TableHead title="Total answer time: sum of each prompt's elapsed time for this run">
