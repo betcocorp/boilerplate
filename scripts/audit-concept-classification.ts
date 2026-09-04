@@ -3,9 +3,10 @@
  * B0-828 — audit of mandatory (`minimum_concepts`) vs expected (`expected_concepts`) concept
  * classification across every test set that carries concept columns.
  *
- * Under Bex's pure-math scoring model (B0-813) a missing must-have concept only lowers Completeness
- * through expected-concept coverage, but it is REPORTED on the case — so the mandatory/expected
- * split still decides what leadership sees flagged. This script exports every `public.test_items`
+ * Under Bex's concept scoring rules (B0-835 — the agent-evaluation skill's) a missing must-have
+ * concept gates the case (Result Fail, score capped at 59) while a missing expected concept only
+ * lowers Completeness through coverage — so the mandatory/expected split decides both what fails
+ * outright and what leadership sees flagged. This script exports every `public.test_items`
  * row that has either concept cell, splits both cells exactly as the grader does (`splitConcepts`
  * from `~/lib/tests/report/case-concepts`), and flags review candidates for the business owners
  * (work items 1–2 of B0-828). Items 3–4 (the agreed lists and the change log) are theirs.
@@ -33,7 +34,7 @@
  *                                     value is unreadable as stored — say so, never guess the character.
  * Per-ITEM flags (concept-audit-items.csv):
  *   mandatory_gt_expected             more mandatory phrases than expected phrases.
- *   no_expected                       no expected phrases — Unable to Evaluate under pure-math scoring.
+ *   no_expected                       no expected phrases — Unable to Evaluate (a concept-less case is never graded).
  *   no_mandatory                      no mandatory phrases.
  *
  * Both files are sorted deterministically (test name, question, item id; then column and phrase

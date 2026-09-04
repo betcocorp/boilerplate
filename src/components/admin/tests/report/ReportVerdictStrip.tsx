@@ -10,7 +10,11 @@ import type {
 import { caseAnchorId } from '~/lib/tests/report/render';
 import { cn } from '~/lib/utils';
 
-import { buildExceptionRows, type ReportExceptionRow } from './verdict-strip-data';
+import {
+  buildExceptionRows,
+  gatedCasesLine,
+  type ReportExceptionRow,
+} from './verdict-strip-data';
 
 /**
  * B0-587 — the run report's verdict strip (epic B0-571): the exec scorecard collapsed into one
@@ -142,6 +146,7 @@ export type ReportVerdictStripProps = {
 export function ReportVerdictStrip({ metrics, cases, className }: ReportVerdictStripProps) {
   const { overall } = metrics;
   const exceptions = buildExceptionRows(metrics.perCase, cases);
+  const gatedLine = gatedCasesLine(metrics);
 
   const segments: { tone: SegmentTone; label: string; count: number; pct: number }[] = [
     { tone: 'pass', label: 'Pass', count: overall.pass, pct: overall.passPct },
@@ -219,6 +224,20 @@ export function ReportVerdictStrip({ metrics, cases, className }: ReportVerdictS
               : ` Every pass would still pass at ${metrics.strictPassMark}.`
             : ''}
         </p>
+        {/* B0-835 — the score reaches the Result through the concept rules, so the strip says so
+            rather than leaving "the weighted score decides" standing. */}
+        {metrics.scoringRules.minimalGate.enabled ? (
+          <p className="mt-1 text-xs text-slate-500">
+            A case missing a must-have (mandatory) concept is rated Fail
+            {metrics.scoringRules.minimalCeiling.enabled
+              ? ` and capped at ${metrics.scoringRules.minimalCeiling.score}`
+              : ''}
+            , whatever the rest of the rubric says.
+          </p>
+        ) : null}
+        {gatedLine ? (
+          <p className="mt-1 text-xs text-rose-700 tabular-nums">{gatedLine}</p>
+        ) : null}
 
         {overall.n === 0 ? (
           <p className="mt-4 text-sm text-slate-500">No evaluated cases to split.</p>

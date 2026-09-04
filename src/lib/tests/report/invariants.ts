@@ -1,5 +1,7 @@
+import { gradeFromScore } from './arithmetic';
 import type { ConceptKindCoverage } from './case-concepts';
 import type { EvaluatedCase, RateBlock, SpeedBlock, SubScoreWeights } from './metrics';
+import type { ScoringRules } from './scoring-config';
 
 /**
  * B0-714 / B0-815 — the report's reconciliation checks (methodology §11), split by severity.
@@ -21,9 +23,17 @@ import type { EvaluatedCase, RateBlock, SpeedBlock, SubScoreWeights } from './me
  *   the null sub-score in particular — one flaky grading call should degrade a report, not destroy
  *   it.
  *
- * B0-813 (pure-math scoring) removed every floor/ceiling/gate/auto-Pass check — there is no such
- * rule left to verify — and added the three that pin the new model: Completeness *is* the
- * expected-concept coverage, `overall` *is* the weighted sum, and the Result *is* the pass mark.
+ * B0-835 restored the concept rules, so the checks that pin them are back and are the bulk of this
+ * list: the coverage cap only ever lowers Completeness, the floor only ever raises a score, the
+ * ceiling only ever lowers one, the two never fire on the same case, the Pre-Gate Content Score
+ * survives wherever the ceiling bound, a gated case Fails and grades F while the gate is on, a
+ * triggered automatic Pass is a Pass and a blocked one never became one, and a Result only ever
+ * departs from the pass mark through a *named* rule (`statusSource`). Every one of them is a port
+ * of a `check(...)` in the reference `compute_metrics.py`.
+ *
+ * The checks that assert what a rule *did* read `ctx.scoringRules`, so a run with a rule switched
+ * off — a supported configuration — still reconciles instead of failing on a rule that was never
+ * meant to fire.
  *
  * The checks are a list, not a run of inline `if`s, so adding one is a single entry rather than
  * an edit to control flow.
@@ -38,7 +48,7 @@ export const INVARIANT_ERROR_PREFIX = 'INVARIANT:';
 
 /** Thrown by `assertReportInvariants`. Named so a `catch` can identify it after serialization. */
 export class ReportInvariantError extends Error {
-  /** The failing check's `name`, e.g. `completeness_equals_expected_coverage`. */
+  /** The failing check's `name`, e.g. `completeness_never_exceeds_coverage`. */
   readonly check: string;
 
   constructor(check: string, detail: string) {
@@ -71,6 +81,12 @@ export type ReportInvariantContext = {
   weights: SubScoreWeights;
   /** B0-812 — the pass mark every Result was derived from. */
   passMark: number;
+  /**
+   * B0-835 — the concept rules the metrics were computed under. Handed in for the same reason
+   * `weights` is, and read by every check that asserts what the gate, the floor, the ceiling or
+   * the coverage cap did: a report with a rule disabled must reconcile, not fail.
+   */
+  scoringRules: ScoringRules;
 };
 
 /**
@@ -119,13 +135,14 @@ function coverageMismatch(
     : `${kind}: required ${coverage.required.length}, satisfied ${coverage.satisfied.length} + missing ${coverage.missing.length}`;
 }
 
-/** The letter a score earns — duplicated from `./metrics` on purpose to avoid the import cycle. */
-function gradeFor(score: number): 'A' | 'B' | 'C' | 'D' | 'F' {
-  if (score >= 90) return 'A';
-  if (score >= 80) return 'B';
-  if (score >= 70) return 'C';
-  if (score >= 60) return 'D';
-  return 'F';
+/** Every offender, or null when the check holds. Saves repeating the join at 20 call sites. */
+function offendersOf(
+  cases: readonly EvaluatedCase[],
+  broken: (c: EvaluatedCase) => boolean,
+  describe: (c: EvaluatedCase) => string,
+): string | null {
+  const offenders = cases.filter(broken).map(describe);
+  return offenders.length === 0 ? null : offenders.join(' | ');
 }
 
 export const REPORT_INVARIANTS: readonly ReportInvariant[] = [
@@ -168,29 +185,92 @@ export const REPORT_INVARIANTS: readonly ReportInvariant[] = [
     },
   },
   {
-    name: 'overall_recomputes_from_sub_scores',
+    name: 'weighted_recomputes_from_sub_scores',
     describes:
-      'every content score is the weighted sum of its four sub-scores and nothing else — no floor, no cap, no speed, no judged metric',
+      'every weighted score is the weighted sum of its four sub-scores and nothing else — no floor, no cap, no speed, no judged metric',
+    failed: (ctx) =>
+      offendersOf(
+        ctx.evaluated,
+        (c) =>
+          Math.round(
+            ctx.weights.accuracy * c.accuracy +
+              ctx.weights.completeness * c.completeness +
+              ctx.weights.relevance * c.relevance +
+              ctx.weights.clarity * c.clarity,
+          ) !== c.weighted,
+        (c) =>
+          `${c.id} — weighted ${c.weighted}, sub-scores recompute to ${Math.round(
+            ctx.weights.accuracy * c.accuracy +
+              ctx.weights.completeness * c.completeness +
+              ctx.weights.relevance * c.relevance +
+              ctx.weights.clarity * c.clarity,
+          )}`,
+      ),
+  },
+  {
+    name: 'overall_equals_weighted_or_floor_or_ceiling',
+    describes:
+      'the final score is the weighted score, or the floor or the ceiling wherever one of them applied — nothing else ever moved it',
     failed: (ctx) => {
-      const offenders: string[] = [];
-      for (const c of ctx.evaluated) {
-        const recomputed = Math.round(
-          ctx.weights.accuracy * c.accuracy +
-            ctx.weights.completeness * c.completeness +
-            ctx.weights.relevance * c.relevance +
-            ctx.weights.clarity * c.clarity,
-        );
-        if (recomputed !== c.overall) {
-          offenders.push(`${c.id} — overall ${c.overall}, sub-scores recompute to ${recomputed}`);
-        }
-      }
-      return offenders.length === 0 ? null : offenders.join(' | ');
+      const expected = (c: EvaluatedCase): number => {
+        let value = c.weighted;
+        if (c.floorApplied && c.floor != null) value = c.floor;
+        if (c.ceilingApplied && c.ceiling != null) value = c.ceiling;
+        return Math.round(value);
+      };
+      return offendersOf(
+        ctx.evaluated,
+        (c) => c.overall !== expected(c),
+        (c) => `${c.id} — overall ${c.overall}, the pipeline gives ${expected(c)}`,
+      );
     },
   },
   {
-    name: 'completeness_equals_expected_coverage',
+    name: 'floor_and_ceiling_never_both',
     describes:
-      "every evaluated case's Completeness is 100 × expected concepts satisfied ÷ required, and every evaluated case specifies at least one expected concept",
+      'the mandatory floor and the mandatory ceiling never fired on one case — the floor needs full must-have coverage and the ceiling needs a miss',
+    failed: (ctx) =>
+      offendersOf(
+        ctx.evaluated,
+        (c) => c.floorApplied && c.ceilingApplied,
+        (c) => `${c.id} — floored to ${c.floor} and capped at ${c.ceiling}`,
+      ),
+  },
+  {
+    name: 'floor_only_raised',
+    describes: 'the mandatory floor only ever raised a score, never lowered one',
+    failed: (ctx) =>
+      offendersOf(
+        ctx.evaluated,
+        (c) => !c.ceilingApplied && c.overall < c.weighted,
+        (c) => `${c.id} — weighted ${c.weighted} became ${c.overall} with no ceiling applied`,
+      ),
+  },
+  {
+    name: 'ceiling_only_lowered',
+    describes: 'the mandatory ceiling only ever lowered a score',
+    failed: (ctx) =>
+      offendersOf(
+        ctx.evaluated,
+        (c) => c.ceilingApplied && c.overall >= c.weighted,
+        (c) => `${c.id} — capped at ${c.overall} from a weighted ${c.weighted}`,
+      ),
+  },
+  {
+    name: 'pre_gate_preserved_where_capped',
+    describes:
+      'the Pre-Gate Content Score survives wherever the ceiling bound, so a near miss stays distinguishable from a total one',
+    failed: (ctx) =>
+      offendersOf(
+        ctx.evaluated,
+        (c) => c.ceilingApplied && !(Number.isFinite(c.preGateScore) && c.preGateScore >= c.overall),
+        (c) => `${c.id} — capped to ${c.overall} but the pre-gate score reads ${c.preGateScore}`,
+      ),
+  },
+  {
+    name: 'completeness_never_exceeds_coverage',
+    describes:
+      "every evaluated case specifies at least one expected concept, its coverage counts are its own concept block's, `coveragePct` recomputes from them, and (while the cap is on) Completeness never exceeds that share",
     failed: (ctx) => {
       const offenders: string[] = [];
       for (const c of ctx.evaluated) {
@@ -201,13 +281,21 @@ export const REPORT_INVARIANTS: readonly ReportInvariant[] = [
         }
         const satisfied = c.concepts.expected.satisfied.length;
         const recomputed = Math.round((100 * satisfied) / required);
-        if (
-          recomputed !== c.completeness ||
-          c.coverage.required !== required ||
-          c.coverage.satisfied !== satisfied
-        ) {
+        if (c.coverage.required !== required || c.coverage.satisfied !== satisfied) {
           offenders.push(
-            `${c.id} — completeness ${c.completeness}, coverage ${satisfied}/${required} recomputes to ${recomputed}`,
+            `${c.id} — coverage ${c.coverage.satisfied}/${c.coverage.required}, concept block says ${satisfied}/${required}`,
+          );
+          continue;
+        }
+        if (c.coveragePct !== recomputed) {
+          offenders.push(
+            `${c.id} — coveragePct ${c.coveragePct}, ${satisfied}/${required} recomputes to ${recomputed}`,
+          );
+          continue;
+        }
+        if (ctx.scoringRules.expectedCoverage.enabled && c.completeness > c.coveragePct) {
+          offenders.push(
+            `${c.id} — completeness ${c.completeness} exceeds coverage ${c.coveragePct}`,
           );
         }
       }
@@ -215,28 +303,162 @@ export const REPORT_INVARIANTS: readonly ReportInvariant[] = [
     },
   },
   {
-    name: 'status_matches_pass_mark',
-    describes: 'the Result is Pass exactly when overall ≥ the pass mark in force, and nothing else decides it',
+    name: 'coverage_cap_only_lowered_completeness',
+    describes:
+      "the expected-coverage cap only ever lowered the grader's judged Completeness, never raised it",
+    failed: (ctx) =>
+      offendersOf(
+        ctx.evaluated,
+        (c) => c.completenessJudged != null && c.completeness > c.completenessJudged,
+        (c) => `${c.id} — completeness ${c.completeness} above the judged ${c.completenessJudged}`,
+      ),
+  },
+  {
+    name: 'completeness_is_judged_where_cap_unbound',
+    describes:
+      "Completeness is the grader's judged value wherever the coverage cap did not bind, and the coverage share wherever the grader emitted none",
+    failed: (ctx) =>
+      offendersOf(
+        ctx.evaluated,
+        (c) =>
+          c.completenessJudged == null
+            ? c.completeness !== c.coveragePct
+            : !c.coverageApplied && c.completeness !== c.completenessJudged,
+        (c) =>
+          `${c.id} — completeness ${c.completeness}, judged ${c.completenessJudged}, coverage ${c.coveragePct}, capped ${c.coverageApplied}`,
+      ),
+  },
+  {
+    name: 'no_floor_on_gated_case',
+    describes: 'no mandatory floor was applied to a case missing a mandatory concept',
+    failed: (ctx) =>
+      offendersOf(
+        ctx.evaluated,
+        (c) => c.floorApplied && c.mandatoryMissing,
+        (c) => `${c.id} — floored to ${c.floor} while missing a must-have concept`,
+      ),
+  },
+  {
+    name: 'no_floor_on_material_issue',
+    describes:
+      'no mandatory floor was applied to a case flagged with a material issue, while the floor respects one',
+    failed: (ctx) =>
+      ctx.scoringRules.minimalFloor.respectMaterialIssue
+        ? offendersOf(
+            ctx.evaluated,
+            (c) => c.floorApplied && c.materialIssue,
+            (c) => `${c.id} — floored to ${c.floor} with a material factual issue flagged`,
+          )
+        : null,
+  },
+  {
+    name: 'status_matches_pass_mark_except_concept_rule',
+    describes:
+      'every Result sits on the pass mark in force, except where a *named* concept rule moved it — the automatic Pass or the mandatory gate',
     failed: (ctx) => {
       const offenders = ctx.evaluated.filter(
-        (c) => c.status !== (c.overall >= ctx.passMark ? 'Pass' : 'Fail'),
+        (c) => c.status !== c.rubricStatus && c.statusSource === 'rubric',
       );
       return offenders.length === 0
         ? null
         : `pass mark ${ctx.passMark}: ${offenders
-            .map((c) => `${c.id} (${c.overall} → ${c.status})`)
+            .map((c) => `${c.id} (${c.overall} → ${c.status}, rubric ${c.rubricStatus})`)
             .join(', ')}`;
+    },
+  },
+  {
+    name: 'rubric_status_recomputes_from_pass_mark',
+    describes: "every case's rubric Result is Pass exactly when its final score ≥ the pass mark",
+    failed: (ctx) =>
+      offendersOf(
+        ctx.evaluated,
+        (c) => c.rubricStatus !== (c.overall >= ctx.passMark ? 'Pass' : 'Fail'),
+        (c) => `${c.id} — overall ${c.overall}, rubric status ${c.rubricStatus}`,
+      ),
+  },
+  {
+    name: 'score_grade_result_agree_except_auto_pass',
+    describes:
+      'no row can read "B / Fail": the number, the letter and the Result are three views of one score, and the only sanctioned departure is a named automatic Pass',
+    failed: (ctx) =>
+      offendersOf(
+        ctx.evaluated,
+        (c) =>
+          (c.status === 'Pass') !== c.overall >= ctx.passMark && c.statusSource !== 'auto_pass',
+        (c) => `${c.id} — ${c.overall}/100 grade ${c.grade} reads ${c.status}`,
+      ),
+  },
+  {
+    name: 'gated_cases_fail_when_gate_on',
+    describes: 'every case missing a mandatory concept is rated Fail while the gate is on',
+    failed: (ctx) =>
+      ctx.scoringRules.minimalGate.enabled
+        ? offendersOf(
+            ctx.evaluated,
+            (c) => c.mandatoryMissing && c.status !== 'Fail',
+            (c) => `${c.id} — missing a must-have concept and rated ${c.status}`,
+          )
+        : null,
+  },
+  {
+    name: 'gated_cases_capped_and_F_when_ceiling_on',
+    describes:
+      "the gate's verdict is visible in the number: while the ceiling is on, every gated case scores at or below it and grades F",
+    failed: (ctx) =>
+      ctx.scoringRules.minimalGate.enabled && ctx.scoringRules.minimalCeiling.enabled
+        ? offendersOf(
+            ctx.evaluated,
+            (c) =>
+              c.mandatoryMissing &&
+              (c.overall > ctx.scoringRules.minimalCeiling.score || c.grade !== 'F'),
+            (c) => `${c.id} — gated but scores ${c.overall}, grade ${c.grade}`,
+          )
+        : null,
+  },
+  {
+    name: 'auto_pass_triggered_is_pass',
+    describes: 'every triggered automatic Pass is rated Pass',
+    failed: (ctx) =>
+      offendersOf(
+        ctx.evaluated,
+        (c) => c.autoPassTriggered && c.status !== 'Pass',
+        (c) => `${c.id} — automatic Pass triggered but rated ${c.status}`,
+      ),
+  },
+  {
+    name: 'auto_pass_blocked_never_auto_passed',
+    describes:
+      'no automatic Pass blocked by a material factual issue was nonetheless the source of a Pass',
+    failed: (ctx) =>
+      offendersOf(
+        ctx.evaluated,
+        (c) => c.autoPassBlocked && c.statusSource === 'auto_pass',
+        (c) => `${c.id} — blocked automatic Pass recorded as the Result's source`,
+      ),
+  },
+  {
+    name: 'prevented_le_gated',
+    describes:
+      'the gate cannot have removed more Passes than there are gated cases — the prevented set is a subset of the gated set',
+    failed: (ctx) => {
+      const gated = ctx.evaluated.filter((c) => c.mandatoryMissing).length;
+      const prevented = ctx.evaluated.filter((c) => c.gateBlockedAPass).length;
+      const strays = ctx.evaluated.filter((c) => c.gateBlockedAPass && !c.mandatoryMissing);
+      if (prevented <= gated && strays.length === 0) return null;
+      return `prevented ${prevented} of ${gated} gated${
+        strays.length > 0 ? `; not gated: ${strays.map((c) => c.id).join(', ')}` : ''
+      }`;
     },
   },
   {
     name: 'grade_recomputes_from_overall',
     describes: 'every letter grade is the band its own overall falls in',
-    failed: (ctx) => {
-      const offenders = ctx.evaluated.filter((c) => c.grade !== gradeFor(c.overall));
-      return offenders.length === 0
-        ? null
-        : offenders.map((c) => `${c.id} — overall ${c.overall} graded ${c.grade}`).join(' | ');
-    },
+    failed: (ctx) =>
+      offendersOf(
+        ctx.evaluated,
+        (c) => c.grade !== gradeFromScore(c.overall),
+        (c) => `${c.id} — overall ${c.overall} graded ${c.grade}`,
+      ),
   },
   {
     name: 'concept_coverage_partitions_required',
@@ -268,7 +490,8 @@ export const REPORT_INVARIANTS: readonly ReportInvariant[] = [
   },
   {
     name: 'mandatory_miss_is_reported',
-    describes: 'a case missing a must-have concept carries the reported flag, and only such a case does',
+    describes:
+      'a case missing a must-have concept carries the flag the gate and the ceiling are keyed off, and only such a case does',
     failed: (ctx) => {
       const offenders = ctx.evaluated.filter(
         (c) => c.mandatoryMissing !== c.concepts.mandatory.missing.length > 0,
@@ -281,7 +504,7 @@ export const REPORT_INVARIANTS: readonly ReportInvariant[] = [
   {
     name: 'judged_metrics_in_range',
     describes:
-      'every judged similarity sits in 0–1 and every evaluator confidence in 0–100 — and neither appears in any content score (asserted by overall_recomputes_from_sub_scores)',
+      'every judged similarity sits in 0–1 and every evaluator confidence in 0–100 — and neither appears in any content score (asserted by weighted_recomputes_from_sub_scores)',
     failed: (ctx) => {
       const offenders = ctx.evaluated.filter(
         (c) =>

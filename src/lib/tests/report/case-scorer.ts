@@ -13,10 +13,15 @@ import type { CaseScore } from './schemas';
 /**
  * B0-808 / B0-810 — the per-case grader.
  *
- * The grader judges three things and computes nothing:
+ * The grader judges the four sub-scores, the per-concept verdicts and two reported-only metrics, and
+ * computes nothing — no overall score, no letter grade, no Pass/Fail, and none of the deterministic
+ * rules (coverage cap, mandatory floor, mandatory ceiling, gate) that `metrics.ts` applies on top:
  *
- * 1. **Accuracy, Relevance, Clarity** (0–100). Not Completeness — that is computed downstream as the
- *    share of expected concepts the grader marks satisfied (`metrics.ts`, B0-813).
+ * 1. **Accuracy, Completeness, Relevance, Clarity** (0–100), judged holistically against the Ideal
+ *    Response and both concept lists together (B0-835, reference SKILL.md §3 / methodology §2b
+ *    Rule 4). Completeness is a *judgment* here and is never computed here: `metrics.ts` caps it
+ *    downstream at expected-concept coverage — `min(judged, round(100 × satisfied ÷ required))` —
+ *    a ceiling that only ever lowers it.
  * 2. **Every concept phrase** in the item's `minimum_concepts` (mandatory) and `expected_concepts`
  *    (expected) columns: satisfied or missing, semantically, phrase by phrase. Plus whether a material
  *    factual issue is present.
@@ -32,24 +37,26 @@ import type { CaseScore } from './schemas';
  */
 
 /** Bump when the prompt's meaning changes; the hash below catches every byte change regardless. */
-export const GRADING_PROMPT_VERSION = '2026-09-03.1';
+export const GRADING_PROMPT_VERSION = '2026-09-04.1';
 
 export const CASE_SCORING_SYSTEM_PROMPT = `You are grading one AI agent response against a golden-dataset expected answer, following Betco's agent-evaluation methodology. The Golden Dataset is always the source of truth; judge substantive correctness, not wording.
 
 # What you judge, and what you do not
 
-You judge three sub-scores (Accuracy, Relevance, Clarity — each 0-100), whether the response communicates each listed concept phrase, whether a material factual issue is present, and two reported-only metrics (similarity, evaluator confidence).
+You judge four sub-scores (Accuracy, Completeness, Relevance, Clarity — each 0-100), whether the response communicates each listed concept phrase, whether a material factual issue is present, and two reported-only metrics (similarity, evaluator confidence).
 
-You do NOT judge Completeness. Completeness is computed by code as the share of the listed expected concepts you mark satisfied (100 × satisfied ÷ required). You do not compute, cap, floor or gate any score, and you never report an overall score, a grade or a Pass/Fail — code derives every one of those from your judgments alone.
+Score all four sub-scores holistically against the Ideal Response, the expected concepts and the mandatory concepts together (methodology §2b Rule 4) — judge first, and let code apply the caps afterwards. A response that satisfied half its must-haves is not 73% complete, and with both concept lists in front of you it should not be scored as though it were. Judge Completeness holistically first; the coverage cap is a ceiling on that judgment, not a substitute for it, and it only ever lowers a value (methodology §2b Rule 3). Do not pre-apply that cap, the mandatory floor, the mandatory ceiling or the gate yourself, and never author a derived field, an overall score, a grade or a Pass/Fail — code derives every one of those from your judgments alone.
 
 # 1. Scoring framework (methodology §1)
 
 Score each sub-score 0-100 against the Golden Dataset:
 
 - Accuracy — 40% of the overall. Is the answer factually correct against the Golden Dataset?
-- Completeness — 30%. Computed by code from your concept verdicts; do not author a number for it.
+- Completeness — 30%. Did it include the important expected information?
 - Relevance — 20%. Did it directly address the question without unrelated filler?
 - Clarity — 10%. Was it clear, understandable, and well structured?
+
+Judge all four against the Ideal Response, the expected concepts and the mandatory concepts together (§2b Rule 4), in this order: is the case evaluable at all; read all three sources together; decide which mandatory concepts are satisfied; decide which expected concepts are satisfied; identify material factual errors or contradictions; then assign the four sub-scores with all of the above in view. Code takes it from there — it caps Completeness at expected-concept coverage, weights the four sub-scores, then applies the floor and the ceiling.
 
 Anchor every sub-score in evidence from the expected and actual text. Do not assign round-number scores out of habit — if Accuracy is 70 rather than 80, the explanation should make clear why. Unsupported, fabricated, or materially incorrect information must significantly reduce Accuracy (and usually Relevance), because a confident wrong answer is worse than an incomplete one, especially for regulated content.
 
@@ -117,6 +124,7 @@ export const GRADER_JSON_SCHEMA = {
       description: 'One-line reason, required when unable_to_evaluate is true; otherwise null.',
     },
     accuracy: { type: ['number', 'null'], description: '0-100, or null when unable_to_evaluate.' },
+    completeness: { type: ['number', 'null'], description: '0-100, or null when unable_to_evaluate.' },
     relevance: { type: ['number', 'null'], description: '0-100, or null when unable_to_evaluate.' },
     clarity: { type: ['number', 'null'], description: '0-100, or null when unable_to_evaluate.' },
     concepts: {
@@ -197,6 +205,7 @@ export const GRADER_JSON_SCHEMA = {
     'unable_to_evaluate',
     'ute_reason',
     'accuracy',
+    'completeness',
     'relevance',
     'clarity',
     'concepts',
@@ -216,6 +225,7 @@ export const graderOutputSchema = z.object({
   unable_to_evaluate: z.boolean(),
   ute_reason: z.string().nullable(),
   accuracy: z.number().nullable(),
+  completeness: z.number().nullable(),
   relevance: z.number().nullable(),
   clarity: z.number().nullable(),
   concepts: z.object({
@@ -258,7 +268,7 @@ export type CaseScoringInput = {
 /**
  * The phrase lists the case is graded against. Expected is the union of the two columns (first-seen
  * order, `normConcept` identity): a must-have that the expected column does not also list is added
- * to it, so a missed must-have is always visible in the coverage Completeness is computed from —
+ * to it, so a missed must-have is always visible in the coverage Completeness is capped at —
  * the `mandatory_subset_of_expected` invariant depends on it.
  */
 export function requiredConcepts(input: Pick<CaseScoringInput, 'mandatoryConcepts' | 'expectedConcepts'>): {
@@ -278,7 +288,7 @@ export function requiredConcepts(input: Pick<CaseScoringInput, 'mandatoryConcept
   return { mandatory, expected };
 }
 
-/** True when the case has no concept data at all — nothing to compute Completeness from. */
+/** True when the case has no concept data at all — nothing to grade the response against. */
 export function hasNoConcepts(input: Pick<CaseScoringInput, 'mandatoryConcepts' | 'expectedConcepts'>): boolean {
   return input.mandatoryConcepts.length === 0 && input.expectedConcepts.length === 0;
 }
@@ -378,8 +388,8 @@ export function toCaseScore(output: GraderOutput, input: CaseScoringInput): Case
     unableToEvaluate: false,
     uteReason: null,
     accuracy: clamp(output.accuracy, 0, 100),
-    // Computed downstream from the concept coverage — never the grader's number.
-    completeness: null,
+    // Judged, not computed — `metrics.ts` caps it at expected-concept coverage downstream (B0-835).
+    completeness: clamp(output.completeness, 0, 100),
     relevance: clamp(output.relevance, 0, 100),
     clarity: clamp(output.clarity, 0, 100),
     explanation: output.explanation,
@@ -415,7 +425,7 @@ export type ScoreCaseDeps = {
 
 /**
  * Grades one case on one pass. A case with no concept columns is returned Unable to Evaluate without
- * a model call — there is nothing to compute Completeness from, so there is nothing to pay for.
+ * a model call — there is no concept data to grade against, so there is nothing to pay for.
  */
 export async function scoreCase(input: CaseScoringInput, deps: ScoreCaseDeps = {}): Promise<CaseScore> {
   if (hasNoConcepts(input)) {

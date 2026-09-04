@@ -1,7 +1,16 @@
+import {
+  gradeFromScore,
+  round1,
+  round2,
+  roundScore,
+  roundTo,
+  WEIGHTS,
+  type CaseStatus,
+  type Grade,
+} from './arithmetic';
 import type { CaseConcepts } from './case-concepts';
-// Type-only, and deliberately so: `./consolidate` imports this module's `WEIGHTS` and
-// `statusFromScore` at runtime, and a type import is erased, so the two files cannot form a
-// runtime cycle.
+// Type-only, and deliberately so: `./consolidate` imports `./arithmetic` and `./scoring-rules` at
+// runtime and this module's types only as types, so the two files cannot form a runtime cycle.
 import type {
   CaseGradingVariance,
   ConceptDisagreement,
@@ -12,9 +21,12 @@ import type { CaseScore } from './schemas';
 import {
   DEFAULT_JUDGED_THRESHOLDS,
   DEFAULT_PASS_MARK,
+  DEFAULT_SCORING_RULES,
   STRICT_PASS_MARK,
   type JudgedThresholds,
+  type ScoringRules,
 } from './scoring-config';
+import { deriveCaseScoreline, type StatusSource } from './scoring-rules';
 import {
   combineSpeedScores,
   formatP90,
@@ -35,140 +47,48 @@ import {
  * Every number in the rendered report is derived here from the raw case scores, never asked of
  * the model, so the executive scorecard and the case-by-case detail can never disagree.
  *
- * B0-813 — **pure-math scoring** (Tom Bird, 2026-09-03: "No capping period, just pure numbers and
- * calculations, every cap goes"):
+ * B0-835 — **the reference skill's concept rules, verbatim** (Tom Bird, 2026-09-04), reversing the
+ * B0-813 "pure math" decision so a Bex report and a desktop report of the same run read the same:
  *
- * - Accuracy, Relevance and Clarity are the grader's judged 0–100 sub-scores.
- * - **Completeness is computed**, never judged: the share of expected concepts the answer
- *   communicated, `100 × satisfied / required`, from the grader's per-concept verdicts.
- * - `overall` is the weighted sum and nothing else — never raised, never capped.
- * - `status` is Pass at the pass mark or above, Fail below. No other rule touches it. A missing
- *   must-have concept is reported on the case; it lowered Completeness through coverage and does
- *   not by itself fail the case.
- * - A case with no expected concepts has no data for Completeness and is **Unable to Evaluate**,
- *   never a guessed or renormalized number.
+ * - All four sub-scores are the grader's judged 0–100 values. Completeness is then **capped at the
+ *   expected-concept coverage share** (Rule 3); a pass graded between 2026-09-03 and 2026-09-04
+ *   emitted no Completeness at all, and for those the coverage share *is* the Completeness.
+ * - `weighted` is the weighted sum. `overall` is that, then the **mandatory floor** (Rule 1b: full
+ *   must-have coverage is worth at least a C, withheld on a material issue), then the **mandatory
+ *   ceiling** (Rule 1: any must-have miss caps at 59, so the letter is F and the Result Fail by
+ *   arithmetic). Floor and ceiling are mutually exclusive by construction.
+ * - `preGateScore` is the arithmetic before the ceiling — a **per-case diagnostic only**. It never
+ *   enters an average, a rate block, a tier, a category or a rollup.
+ * - `status` is the rubric at the pass mark, which full expected coverage can raise to Pass
+ *   (Rule 2, `statusSource: 'auto_pass'`) and a must-have miss overrides to Fail
+ *   (`'minimal_gate'`) — the gate runs last and outranks the automatic Pass.
+ * - A case with no expected concepts is **Unable to Evaluate** and is never graded holistically.
  *
- * Bex is the reference implementation of this model; the colleague-maintained agent-evaluation
- * skill is expected to adopt it (B0-827).
+ * The rules themselves live in `./scoring-rules` (the port) and `./scoring-config` (the config and
+ * the decision record); this module applies them once per case through `deriveCaseScoreline` and
+ * turns the results into the run's aggregates.
  */
 
 /**
- * Sub-score weighting for the 0-100 roll-up. Exported (B0-591) so the report UI can state the
- * weighting from the same constant the computation uses, rather than restating it as prose.
+ * B0-835 — the pure arithmetic primitives now live in `./arithmetic` so `./scoring-rules` can read
+ * the weighting, the grade bands and the rounding convention without an import cycle back through
+ * this module. Every one of them is re-exported here, so no importer of `./metrics` changed.
  */
-export const WEIGHTS = {
-  accuracy: 0.4,
-  completeness: 0.3,
-  relevance: 0.2,
-  clarity: 0.1,
-} as const;
-
-/** The shape of `WEIGHTS`, so `./invariants` can be handed them without importing this module. */
-export type SubScoreWeights = typeof WEIGHTS;
-
-export type Grade = 'A' | 'B' | 'C' | 'D' | 'F';
-/** Binary by design (methodology §2): a middle category invites "is that good or bad?". */
-export type CaseStatus = 'Pass' | 'Fail';
-
-/**
- * Letter-grade bands, highest first, each as the inclusive minimum weighted score that earns it.
- * Exported (B0-591) so the report's stated methodology reads the same numbers `gradeFromScore`
- * applies and the two can never drift apart. The last band is the 0 floor.
- */
-export const GRADE_BANDS: ReadonlyArray<{ grade: Grade; min: number }> = [
-  { grade: 'A', min: 90 },
-  { grade: 'B', min: 80 },
-  { grade: 'C', min: 70 },
-  { grade: 'D', min: 60 },
-  { grade: 'F', min: 0 },
-];
-
-export function gradeFromScore(score: number): Grade {
-  for (const band of GRADE_BANDS) {
-    if (score >= band.min) return band.grade;
-  }
-  return 'F';
-}
-
-/** Pass at the mark or above, Fail below. The one place the Result is decided. */
-export function statusFromScore(score: number, passMark: number = DEFAULT_PASS_MARK): CaseStatus {
-  return score >= passMark ? 'Pass' : 'Fail';
-}
-
-/**
- * B0-814 — the rounding convention, in one place: **half-up, as JS `Math.round`**, applied once at
- * the end of each computation. Bex is the spec; the reference skill's Python (whose built-in
- * `round()` is half-to-even) is to adopt this, not the other way round (B0-827).
- *
- * Precision by kind of number — every rounding in this folder goes through one of these:
- * - `roundScore` (integer): sub-scores, `overall`, Completeness, consolidated evaluator confidence.
- * - `round1` (one decimal): averages, medians, pass/fail percentages, seconds.
- * - `round2` (two decimals): similarity (0–1), Pearson r, renormalized speed weights.
- *
- * **Python port** (`decimal`, `ROUND_HALF_UP`). Each helper scales in binary floating point, rounds
- * the *scaled double* half-up to an integer, then divides — so the exact equivalent does the same,
- * in the same order:
- *
- *     from decimal import Decimal, ROUND_HALF_UP
- *     def round_to(x: float, digits: int) -> float:
- *         factor = 10 ** digits
- *         scaled = Decimal(str(x * factor)).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
- *         return float(scaled) / factor
- *
- * For integers there is no scaling, so `Decimal(str(x)).quantize(Decimal('1'), ROUND_HALF_UP)` is
- * exact for x ≥ 0. For one/two decimals, quantizing the *unscaled* value
- * (`Decimal(str(x)).quantize(Decimal('0.01'))`) is NOT equivalent: it rounds the shortest decimal
- * spelling of `x`, not the double that `x * factor` produces. The two agree wherever the scaled
- * value is an exact half (2.45 → 2.5, 2.55 → 2.6, 0.665 → 0.67, 0.125 → 0.13) and disagree
- * wherever it is not: `1.005 * 100` is `100.49999999999999` in IEEE-754, so Bex gives 1.00 where
- * `Decimal('1.005')` gives 1.01 (checked: 0 mismatches across 7,000 sampled values for the scaled
- * form, 116 for the unscaled form at two decimals). No epsilon is added here to "fix" that — Bex is
- * the spec, and an epsilon would put the two out of step in the other direction.
- *
- * **Sign.** `Math.round` rounds a negative half toward +∞ (−12.5 → −12, −0.4 → −0), whereas
- * `ROUND_HALF_UP` rounds away from zero (−12.5 → −13). Every value routed here is ≥ 0 — scores,
- * coverage shares, percentages, similarity, seconds, weights — with one exception: the
- * similarity-vs-score Pearson r (`round2`) can be negative. That divergence is accepted and named
- * rather than patched: it can only move r by 0.01, only on an exact negative half. A Python port
- * that wants Bex's sign handling too uses `math.floor(x * factor + 0.5) / factor`, which matched
- * `Math.round` on every sampled value of either sign. A `-0` result serialises as `0` in JSON.
- */
-export function roundTo(value: number, digits: number): number {
-  const factor = 10 ** digits;
-  return Math.round(value * factor) / factor;
-}
-
-/** Integer scores: sub-scores, `overall`, Completeness, consolidated evaluator confidence. */
-export function roundScore(value: number): number {
-  return roundTo(value, 0);
-}
-
-/** One decimal: averages, medians, percentages, seconds. */
-export function round1(value: number): number {
-  return roundTo(value, 1);
-}
-
-/** Two decimals: similarity, Pearson r, speed weights. */
-export function round2(value: number): number {
-  return roundTo(value, 2);
-}
-
-export type SubScores = {
-  accuracy: number;
-  completeness: number;
-  relevance: number;
-  clarity: number;
-};
-
-/** `0.40·A + 0.30·C + 0.20·R + 0.10·Cl`, rounded once. The whole of the content score. */
-export function computeOverall(subs: SubScores): number {
-  return roundScore(
-    WEIGHTS.accuracy * subs.accuracy +
-      WEIGHTS.completeness * subs.completeness +
-      WEIGHTS.relevance * subs.relevance +
-      WEIGHTS.clarity * subs.clarity,
-  );
-}
+export {
+  computeOverall,
+  GRADE_BANDS,
+  gradeFromScore,
+  round1,
+  round2,
+  roundScore,
+  roundTo,
+  statusFromScore,
+  WEIGHTS,
+  type CaseStatus,
+  type Grade,
+  type SubScores,
+  type SubScoreWeights,
+} from './arithmetic';
 
 /**
  * Completeness as the expected-concept coverage share, 0–100, or null when the case specifies no
@@ -183,9 +103,17 @@ export function completenessFromCoverage(
   return roundScore((100 * expected.satisfied.length) / expected.required.length);
 }
 
-/** The Unable-to-Evaluate reason a case gets when it has no expected concepts to measure against. */
+/**
+ * The Unable-to-Evaluate reason a case gets when it has no expected concepts to measure against.
+ *
+ * Unchanged in force by B0-835: a concept-less item is legacy data and is never graded
+ * holistically, whatever the scoring rules say. Without expected concepts there is no coverage to
+ * cap Completeness at, no expected set to earn an automatic Pass, and nothing for a must-have
+ * miss to be visible in — so the case is reported as unevaluable rather than scored on three
+ * sub-scores out of four.
+ */
 export const NO_EXPECTED_CONCEPTS_UTE_REASON =
-  'No expected concepts recorded for this case — Completeness is the share of expected concepts communicated and cannot be computed without them (pure-math scoring, B0-813). Add expected concepts to the item, or regenerate the report if the item has them.';
+  'No expected concepts recorded for this case — the expected-concept set is what Completeness is measured against and what a must-have miss is judged from, so the case cannot be graded without it (B0-835). Add expected concepts to the item, or regenerate the report if the item has them.';
 
 /** Lower priority number = higher priority, matching the harness's existing UI tooltips. */
 export function tierLabel(priority: number | null): string {
@@ -464,20 +392,58 @@ export type EvaluatedCase = {
   priorityRaw: number | null;
   category: string;
   accuracy: number;
-  /** `100 × coverage.satisfied / coverage.required`, rounded once. Computed, never judged. */
+  /**
+   * The Completeness that fed the weighted score: `min(judged, coveragePct)` under Rule 3, or the
+   * coverage share alone where the grader emitted no judged value. Print it beside
+   * `completenessJudged` wherever `coverageApplied` — "40 (judged 66)".
+   */
   completeness: number;
   relevance: number;
   clarity: number;
-  /** The weighted sum of the four sub-scores. Never raised, never capped. */
+  /** The weighted sum, then the mandatory floor, then the mandatory ceiling (B0-835). */
   overall: number;
   grade: Grade;
-  /** Pass at the pass mark or above, Fail below. Nothing else decides it. */
+  /** The rubric Result, which the automatic Pass or the mandatory gate may have moved. */
   status: CaseStatus;
-  /** Expected-concept counts Completeness was computed from. */
+  /** Expected-concept counts the coverage share was computed from. */
   coverage: ExpectedCoverageCounts;
-  /** Reported fact: at least one must-have concept was not communicated. Changes no number. */
+  /** B0-835 — the grader's judged Completeness; null on a pass graded 2026-09-03 → 2026-09-04. */
+  completenessJudged: number | null;
+  /** `100 × coverage.satisfied ÷ coverage.required`, rounded once. Always reported. */
+  coveragePct: number;
+  /** True only where the coverage cap actually lowered the grader's judged Completeness. */
+  coverageApplied: boolean;
+  /** `0.40·A + 0.30·C + 0.20·R + 0.10·Cl`, rounded once — before floor and ceiling. */
+  weighted: number;
+  /** The mandatory floor's value, only where it actually raised the score; null otherwise. */
+  floor: number | null;
+  floorApplied: boolean;
+  /**
+   * The Pre-Gate Content Score: the arithmetic before the mandatory ceiling. A **diagnostic
+   * only** — never averaged, never rolled up, never presented as the score.
+   */
+  preGateScore: number;
+  preGateGrade: Grade;
+  /** The mandatory ceiling's value, only where it actually lowered the score; null otherwise. */
+  ceiling: number | null;
+  ceilingApplied: boolean;
+  /** The Result `overall` earns from the pass mark alone, before any concept rule. */
+  rubricStatus: CaseStatus;
+  /** Which rule decided `status`: the rubric, the automatic Pass, or the mandatory gate. */
+  statusSource: StatusSource;
+  /** True for every gated case, whether or not the gate actually removed a Pass. */
+  ratingConstrained: boolean;
+  /** The narrower fact: the gate took a Pass away, judged on `preGateScore`. */
+  gateBlockedAPass: boolean;
+  /** Full expected coverage, no material issue, not gated — the automatic Pass fired. */
+  autoPassTriggered: boolean;
+  /** Full expected coverage, but a material factual issue withheld the automatic Pass. */
+  autoPassBlocked: boolean;
+  /** One sentence explaining the concept-driven outcome, or null when no rule had anything to say. */
+  conceptNote: string | null;
+  /** At least one must-have concept was not communicated — under B0-835 this also caps the score. */
   mandatoryMissing: boolean;
-  /** Reported fact: the grader flagged a material factual issue on a regulated value. */
+  /** The grader flagged a material factual issue on a regulated value. */
   materialIssue: boolean;
   /** Passes under the current mark but would Fail at `STRICT_PASS_MARK`. */
   passesOnlyUnderCurrentMark: boolean;
@@ -541,18 +507,53 @@ export type ConceptKindRollup = {
 };
 
 /**
- * B0-713 / B0-813 — the run-level concept readout. Null when no evaluated case carried concept
- * data, which lets every concept section be omitted rather than rendered as "0 of 0".
+ * B0-713 / B0-835 — the run-level concept readout (port of `compute_metrics.concepts_block`). Null
+ * when no evaluated case carried concept data, which lets every concept section be omitted rather
+ * than rendered as "0 of 0".
  */
 export type ConceptRollup = {
   casesWithConcepts: number;
   mandatory: ConceptKindRollup;
   expected: ConceptKindRollup;
-  /** Cases missing at least one mandatory concept, with the concepts named verbatim. Reported. */
+  /** Cases missing at least one mandatory concept, with the concepts named verbatim. */
   missingMandatory: Array<{ id: string; question: string; missing: string[] }>;
   /** Cases the grader flagged with a material factual issue, with its note. Reported. */
   materialIssues: Array<{ id: string; question: string; note: string | null }>;
+  /** Every gated case — missing at least one must-have concept, so rated Fail by the gate. */
+  gatedIds: string[];
+  /** The subset where the gate actually removed a Pass, judged on the Pre-Gate Content Score. */
+  preventedIds: string[];
+  /** Cases that qualified for the automatic Pass and were not gated. */
+  autoPassIds: string[];
+  /** The subset where the automatic Pass actually changed the Result (`statusSource: 'auto_pass'`). */
+  autoPassChangedIds: string[];
+  /** Full expected coverage, but a material factual issue withheld the automatic Pass. */
+  autoPassBlockedIds: string[];
   recurringMissing: RecurringMissingConcept[];
+};
+
+/**
+ * B0-835 — what the concept rules were configured to do and what they actually did (port of
+ * `compute_metrics.gate_floor_block`, minus its pass-mark section, which `ReportMetrics` already
+ * carries as `passMark` / `strictPassMark` / `passOnlyUnderCurrentMark`).
+ *
+ * Present on every report, rules on or off: a reader comparing two runs has to be able to see
+ * whether a number moved because the agent changed or because the rules did.
+ */
+export type GateFloorBlock = {
+  gateEnabled: boolean;
+  floorEnabled: boolean;
+  floorScore: number;
+  floorRespectsMaterialIssue: boolean;
+  /** Cases the mandatory floor actually raised, in dataset order. */
+  flooredIds: string[];
+  ceilingEnabled: boolean;
+  ceilingScore: number;
+  /** Cases the mandatory ceiling actually lowered, in dataset order. */
+  cappedIds: string[];
+  coverageEnabled: boolean;
+  /** Cases where the coverage cap actually lowered the grader's judged Completeness. */
+  coverageCappedIds: string[];
 };
 
 /** One case in the human-review queue. Every field is read off its `variance`, never re-derived. */
@@ -617,6 +618,10 @@ export type ReportMetrics = {
   strictPassMark: number;
   /** Cases that Pass under `passMark` but would Fail at `strictPassMark`, in dataset order. */
   passOnlyUnderCurrentMark: string[];
+  /** B0-835 — the four concept rules in force when this report's numbers were derived. */
+  scoringRules: ScoringRules;
+  /** B0-835 — what the gate, the floor, the ceiling and the coverage cap actually did. */
+  gateFloor: GateFloorBlock;
   /**
    * B0-717 — the run's speed readout, replacing the old single-metric `latency` block. Null when
    * no case recorded either timing. Never part of any grade.
@@ -777,7 +782,36 @@ function conceptRollup(cases: readonly EvaluatedCase[]): ConceptRollup | null {
     materialIssues: cases
       .filter((c) => c.materialIssue)
       .map((c) => ({ id: c.id, question: c.question, note: c.concepts.materialIssueNote })),
+    // A must-have miss *is* the gated condition (`missing` non-empty implies `required` non-empty),
+    // so the two are the same population by construction and are not counted twice.
+    gatedIds: cases.filter((c) => c.mandatoryMissing).map((c) => c.id),
+    preventedIds: cases.filter((c) => c.gateBlockedAPass).map((c) => c.id),
+    autoPassIds: cases.filter((c) => c.autoPassTriggered).map((c) => c.id),
+    autoPassChangedIds: cases.filter((c) => c.statusSource === 'auto_pass').map((c) => c.id),
+    autoPassBlockedIds: cases.filter((c) => c.autoPassBlocked).map((c) => c.id),
     recurringMissing,
+  };
+}
+
+/**
+ * B0-835 — port of `compute_metrics.gate_floor_block`: what each rule was configured to do and
+ * which cases it actually moved. Built from the evaluated cases in dataset order.
+ */
+function gateFloorBlock(
+  cases: readonly EvaluatedCase[],
+  rules: ScoringRules,
+): GateFloorBlock {
+  return {
+    gateEnabled: rules.minimalGate.enabled,
+    floorEnabled: rules.minimalFloor.enabled,
+    floorScore: rules.minimalFloor.score,
+    floorRespectsMaterialIssue: rules.minimalFloor.respectMaterialIssue,
+    flooredIds: cases.filter((c) => c.floorApplied).map((c) => c.id),
+    ceilingEnabled: rules.minimalCeiling.enabled,
+    ceilingScore: rules.minimalCeiling.score,
+    cappedIds: cases.filter((c) => c.ceilingApplied).map((c) => c.id),
+    coverageEnabled: rules.expectedCoverage.enabled,
+    coverageCappedIds: cases.filter((c) => c.coverageApplied).map((c) => c.id),
   };
 }
 
@@ -869,6 +903,8 @@ export type ComputeReportMetricsOptions = {
   passMark?: number | null;
   /** B0-811 — the judged-metric thresholds in force. Defaults to `DEFAULT_JUDGED_THRESHOLDS`. */
   judgedThresholds?: JudgedThresholds | null;
+  /** B0-835 — the concept rules in force. Defaults to `DEFAULT_SCORING_RULES` (every rule on). */
+  scoringRules?: ScoringRules | null;
 };
 
 export function computeReportMetrics(
@@ -877,6 +913,7 @@ export function computeReportMetrics(
 ): ReportMetrics {
   const passMark = options?.passMark ?? DEFAULT_PASS_MARK;
   const judgedThresholds = options?.judgedThresholds ?? DEFAULT_JUDGED_THRESHOLDS;
+  const scoringRules = options?.scoringRules ?? DEFAULT_SCORING_RULES;
   const total = inputs.length;
   const ute: UteCase[] = [];
   const evaluated: EvaluatedCase[] = [];
@@ -886,11 +923,12 @@ export function computeReportMetrics(
 
   for (const input of inputs) {
     // Decided here, once, so the variance and speed entries below see the same verdict the rate
-    // blocks do: a case with no expected concepts cannot be evaluated under pure-math scoring.
-    const completeness = input.score.unableToEvaluate
+    // blocks do: a case with no expected concepts is never graded holistically (B0-835), which is
+    // exactly when `completenessFromCoverage` has nothing to compute from.
+    const coverageShare = input.score.unableToEvaluate
       ? null
       : completenessFromCoverage(input.concepts);
-    const unableToEvaluate = input.score.unableToEvaluate || completeness == null;
+    const unableToEvaluate = input.score.unableToEvaluate || coverageShare == null;
 
     // B0-720/B0-721 — collected before the Unable-to-Evaluate branch, for the same reason the
     // speed entries are: passes that disagreed about whether a case could be judged at all is the
@@ -920,7 +958,7 @@ export function computeReportMetrics(
       });
     }
 
-    if (unableToEvaluate || completeness == null || !input.concepts) {
+    if (unableToEvaluate || coverageShare == null || !input.concepts) {
       ute.push({
         id: input.testItemId,
         question: input.question,
@@ -942,21 +980,51 @@ export function computeReportMetrics(
         `${input.testItemId}: missing sub-score(s) ${missing.map(([k]) => k).join(', ')}`,
       );
     }
-    const subs: SubScores = {
+    // B0-835 — the whole per-case pipeline, in the fixed order of methodology §2b Rule 4 step 7,
+    // and in exactly one place: coverage cap on Completeness → weight → mandatory floor →
+    // Pre-Gate Content Score → mandatory ceiling → round → Result. `deriveCaseScoreline` returns
+    // null only for a case with no expected concepts, which the branch above already sent to UTE.
+    const scoreline = deriveCaseScoreline({
       accuracy: rawSubs.accuracy ?? 0,
-      completeness,
+      // The grader's judged Completeness, capped by coverage below. Null on a pass graded between
+      // the B0-813 rewrite and B0-835, where the coverage share is the only Completeness there is.
+      completenessJudged: input.score.completeness ?? null,
       relevance: rawSubs.relevance ?? 0,
       clarity: rawSubs.clarity ?? 0,
-    };
-    const overall = computeOverall(subs);
-    const status = statusFromScore(overall, passMark);
+      concepts: input.concepts,
+      rules: scoringRules,
+      passMark,
+    });
+    if (!scoreline) {
+      ute.push({
+        id: input.testItemId,
+        question: input.question,
+        reason: NO_EXPECTED_CONCEPTS_UTE_REASON,
+      });
+      continue;
+    }
 
-    if (input.concepts.materialIssue && subs.accuracy >= 80) {
+    if (scoreline.floorApplied && scoreline.floor != null) {
+      // In a healthy run the floor binds nothing: an answer that delivered every must-have
+      // normally scores in the 80s on its own. A firing floor means the sub-scores and the concept
+      // judgments disagree with each other, and one of them is wrong.
+      warnings.push(
+        `${input.testItemId}: every mandatory concept is satisfied, but the sub-scores weighted to ${scoreline.weighted}/100 — below the ${scoreline.floor} floor, so the floor was applied. The sub-scores and the concept judgments disagree; re-check both`,
+      );
+    }
+    if (scoreline.statusSource === 'auto_pass' && scoreline.overall < passMark) {
+      // The one remaining way a grade and a Result can read differently, so it can never happen
+      // silently: full expected coverage raised the Result while the number still says otherwise.
+      warnings.push(
+        `${input.testItemId}: the automatic Pass (all expected concepts communicated, no material issue) raised the Result to Pass while the score is ${scoreline.overall}/100, grade ${scoreline.grade} — check that the sub-scores are not understating a response that in fact delivered the full expected content`,
+      );
+    }
+    if (input.concepts.materialIssue && (rawSubs.accuracy ?? 0) >= 80) {
       // Advisory, not structural: a material factual error on a regulated value that did not also
       // cut Accuracy leaves the case able to pass on its weighted score alone. That is a grading
       // problem to fix upstream, not a reason to refuse the report.
       warnings.push(
-        `${input.testItemId}: material factual issue recorded but Accuracy is ${subs.accuracy} (≥ 80) — a material error should also reduce Accuracy`,
+        `${input.testItemId}: material factual issue recorded but Accuracy is ${rawSubs.accuracy ?? 0} (≥ 80) — a material error should also reduce Accuracy`,
       );
     }
 
@@ -966,17 +1034,40 @@ export function computeReportMetrics(
       tier: tierLabel(input.priorityRaw),
       priorityRaw: input.priorityRaw,
       category: input.category?.trim() || 'Uncategorized',
-      ...subs,
-      overall,
-      grade: gradeFromScore(overall),
-      status,
+      accuracy: rawSubs.accuracy ?? 0,
+      completeness: scoreline.completeness,
+      relevance: rawSubs.relevance ?? 0,
+      clarity: rawSubs.clarity ?? 0,
+      overall: scoreline.overall,
+      grade: scoreline.grade,
+      status: scoreline.status,
       coverage: {
         satisfied: input.concepts.expected.satisfied.length,
         required: input.concepts.expected.required.length,
       },
+      completenessJudged: scoreline.completenessJudged,
+      coveragePct: scoreline.coveragePct,
+      coverageApplied: scoreline.coverageApplied,
+      weighted: scoreline.weighted,
+      floor: scoreline.floor,
+      floorApplied: scoreline.floorApplied,
+      preGateScore: scoreline.preGateScore,
+      preGateGrade: scoreline.preGateGrade,
+      ceiling: scoreline.ceiling,
+      ceilingApplied: scoreline.ceilingApplied,
+      rubricStatus: scoreline.rubricStatus,
+      statusSource: scoreline.statusSource,
+      ratingConstrained: scoreline.ratingConstrained,
+      gateBlockedAPass: scoreline.gateBlockedAPass,
+      autoPassTriggered: scoreline.flags.autoPassTriggered,
+      autoPassBlocked: scoreline.flags.autoPassBlocked,
+      conceptNote: scoreline.conceptNote,
       mandatoryMissing: input.concepts.mandatory.missing.length > 0,
       materialIssue: input.concepts.materialIssue,
-      passesOnlyUnderCurrentMark: status === 'Pass' && overall < STRICT_PASS_MARK,
+      // Judged on the FINAL score, as every rate block is: the Pre-Gate Content Score is a
+      // diagnostic and never decides anything.
+      passesOnlyUnderCurrentMark:
+        scoreline.status === 'Pass' && scoreline.overall < STRICT_PASS_MARK,
       concepts: input.concepts,
       similarity: input.score.similarity ?? null,
       similarityNote: input.score.similarityNote ?? null,
@@ -1043,6 +1134,9 @@ export function computeReportMetrics(
     // introducing a runtime import cycle between the two modules.
     weights: WEIGHTS,
     passMark,
+    // B0-835 — the checks that assert what the floor, the ceiling and the coverage cap did have to
+    // read the same rules the computation ran under, including where a rule was switched off.
+    scoringRules,
   };
   if (options?.invariantSeverity === 'warn') {
     warnings.push(...collectInvariantFailures(invariantContext));
@@ -1066,6 +1160,8 @@ export function computeReportMetrics(
     passMark,
     strictPassMark: STRICT_PASS_MARK,
     passOnlyUnderCurrentMark: evaluated.filter((e) => e.passesOnlyUnderCurrentMark).map((e) => e.id),
+    scoringRules,
+    gateFloor: gateFloorBlock(evaluated, scoringRules),
     speed,
     concepts: conceptRollup(evaluated),
     judged: judgedRollup(evaluated, judgedThresholds),

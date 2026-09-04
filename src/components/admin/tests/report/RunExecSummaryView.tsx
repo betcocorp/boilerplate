@@ -20,15 +20,18 @@ import { VARIANCE_CAUSE_LABELS } from '~/lib/tests/report/consolidate';
 import type {
   ReportConceptRollup,
   ReportConsistency,
+  ReportGateFloor,
   ReportGroupRate,
   ReportJudged,
   ReportRateBlock,
   ReportRateGrade,
+  ReportScoringRules,
   ReportSpeed,
   ReportSpeedMetricAggregate,
   ReportSpeedRating,
 } from '~/lib/tests/report/data-schemas';
 import {
+  categoryMarkerLegend,
   formatGradingConfig,
   formatRatingDistribution,
   gradeBandsAtPassMark,
@@ -36,9 +39,9 @@ import {
   plural,
   resolveCaseIdMentions,
   type ReportExecSummaryData,
+  scoringRulesSentence,
   weightPercent,
 } from '~/lib/tests/report/exec-summary';
-import { WEIGHTS } from '~/lib/tests/report/metrics';
 import { caseAnchorId } from '~/lib/tests/report/render';
 import { SPEED_METRIC_LABELS } from '~/lib/tests/report/speed-rules';
 import { cn } from '~/lib/utils';
@@ -480,9 +483,25 @@ function JudgedSection({ judged }: { judged: ReportJudged }) {
   );
 }
 
-/** B0-713 — at most three lines. Never claims a cap, a floor or an automatic Pass (B0-813). */
-function ConceptSection({ concepts }: { concepts: ReportConceptRollup }) {
+/**
+ * B0-713 / B0-835 — at most three lines, the skill's `build_summary.js` concept block: coverage
+ * shares; the gate, automatic-Pass and material-issue counts with the rules in force; recurring
+ * gaps. Every count is read off `concepts` / `gateFloor`, and every rule statement is written from
+ * `rules`, so a report scored with a rule off never claims it fired.
+ */
+function ConceptSection({
+  concepts,
+  gateFloor,
+  rules,
+}: {
+  concepts: ReportConceptRollup;
+  gateFloor: ReportGateFloor;
+  rules: ReportScoringRules;
+}) {
   const recurring = concepts.recurringMissing.slice(0, 3);
+  const gateOn = rules.minimalGate.enabled;
+  // Under the gate every mandatory miss is a gated case; with the gate off the miss is reported only.
+  const missingIds = gateOn ? concepts.gatedIds : concepts.missingMandatory.map((c) => c.id);
   return (
     <Section title="Concept coverage">
       <Line>
@@ -492,28 +511,47 @@ function ConceptSection({ concepts }: { concepts: ReportConceptRollup }) {
         {concepts.expected.casesSatisfyingAll}/{concepts.expected.casesSpecifying}).
       </Line>
       <Line>
-        {concepts.missingMandatory.length}{' '}
-        {plural(concepts.missingMandatory.length, 'response')} missing a mandatory concept
-        {concepts.missingMandatory.length > 0 ? (
+        <span
+          className={cn(
+            'font-semibold',
+            missingIds.length > 0 ? 'text-red-700' : 'text-emerald-700',
+          )}
+        >
+          {missingIds.length}
+        </span>{' '}
+        {plural(missingIds.length, 'response')} missing a mandatory concept
+        {missingIds.length > 0 ? (
           <>
             {' '}
-            (
-            <IdList
-              ids={concepts.missingMandatory.map((c) => c.id)}
-              max={MISSING_MANDATORY_ID_CAP}
-            />
-            )
+            (<IdList ids={missingIds} max={MISSING_MANDATORY_ID_CAP} />)
           </>
         ) : null}
-        ; {concepts.materialIssues.length} flagged with a material factual issue.{' '}
-        <span className="text-slate-600">
-          Scoring rules: a missing mandatory concept is reported on the case and lowers Completeness
-          through coverage — it does not by itself change the Result; Completeness = share of
-          expected concepts communicated; the overall is the weighted sum (Accuracy{' '}
-          {weightPercent(WEIGHTS.accuracy)} / Completeness {weightPercent(WEIGHTS.completeness)} /
-          Relevance {weightPercent(WEIGHTS.relevance)} / Clarity {weightPercent(WEIGHTS.clarity)}),
-          never raised or capped.
-        </span>
+        {gateOn ? (
+          <>
+            ,{' '}
+            <span
+              className={cn(
+                'font-semibold',
+                concepts.preventedIds.length > 0 ? 'text-red-700' : 'text-slate-600',
+              )}
+            >
+              {concepts.preventedIds.length}
+            </span>{' '}
+            of them blocked from a Pass they would otherwise have earned.
+          </>
+        ) : (
+          <> — reported only; the mandatory gate is off for this report.</>
+        )}{' '}
+        <span className="font-semibold text-slate-900">{concepts.autoPassIds.length}</span>{' '}
+        qualified for automatic Pass on full expected coverage
+        {concepts.autoPassBlockedIds.length > 0 ? (
+          <>
+            ; {concepts.autoPassBlockedIds.length} withheld over a material factual issue (
+            <IdList ids={concepts.autoPassBlockedIds} max={MISSING_MANDATORY_ID_CAP} />)
+          </>
+        ) : null}
+        . {concepts.materialIssues.length} flagged with a material factual issue.{' '}
+        <span className="text-slate-600">{scoringRulesSentence(rules, gateFloor)}</span>
       </Line>
       {recurring.length > 0 ? (
         <Line>
@@ -746,10 +784,10 @@ export function RunExecSummaryView({
           <Section title="Performance by category">
             <RateTable firstColumn="Category" markers={markers} rows={m.categories} />
             {anyMarker ? (
+              /* B0-835 — written from the rules in force: cap, gate-only, or reported-only. */
               <p className="mt-2 text-xs leading-5 text-slate-600">
-                <span className="font-semibold text-red-700">†</span> the number of cases in that
-                category that missed a mandatory concept — reported on the case; the miss lowered
-                Completeness through coverage and did not by itself change any Result.
+                <span className="font-semibold text-red-700">†</span>{' '}
+                {categoryMarkerLegend(m.scoringRules)}
               </p>
             ) : null}
             <Line className="italic">
@@ -782,7 +820,9 @@ export function RunExecSummaryView({
           {m.judged ? <JudgedSection judged={m.judged} /> : null}
 
           {/* 7 — Concept coverage */}
-          {m.concepts ? <ConceptSection concepts={m.concepts} /> : null}
+          {m.concepts ? (
+            <ConceptSection concepts={m.concepts} gateFloor={m.gateFloor} rules={m.scoringRules} />
+          ) : null}
 
           {/* 8 — Grading consistency */}
           {m.consistency ? <ConsistencySection consistency={m.consistency} /> : null}

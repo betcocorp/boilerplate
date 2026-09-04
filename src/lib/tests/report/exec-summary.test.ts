@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { ReportDataReady, ReportEvaluatedCase } from './data-schemas';
 import {
+  categoryMarkerLegend,
   formatGradingConfig,
   formatRatingDistribution,
   gradeBandsAtPassMark,
@@ -9,9 +10,11 @@ import {
   plural,
   reportExecSummarySchema,
   resolveCaseIdMentions,
+  scoringRulesSentence,
   toExecSummaryData,
   weightPercent,
 } from './exec-summary';
+import { DEFAULT_SCORING_RULES } from './scoring-config';
 
 const CONCEPTS = {
   mandatory: { required: ['States the 1:64 ratio'], satisfied: ['States the 1:64 ratio'], missing: [] },
@@ -39,6 +42,24 @@ function evaluated(overrides: Partial<ReportEvaluatedCase>): ReportEvaluatedCase
     grade: 'F',
     status: 'Fail',
     coverage: { satisfied: 2, required: 2 },
+    // B0-835 — the concept-rule scoreline every evaluated case now carries.
+    completenessJudged: 100,
+    coveragePct: 100,
+    coverageApplied: false,
+    weighted: 0,
+    floor: null,
+    floorApplied: false,
+    preGateScore: 0,
+    preGateGrade: 'F',
+    ceiling: null,
+    ceilingApplied: false,
+    rubricStatus: 'Fail',
+    statusSource: 'rubric',
+    ratingConstrained: false,
+    gateBlockedAPass: false,
+    autoPassTriggered: false,
+    autoPassBlocked: false,
+    conceptNote: null,
     mandatoryMissing: false,
     materialIssue: false,
     passesOnlyUnderCurrentMark: false,
@@ -87,6 +108,20 @@ function readyFixture(): ReportDataReady {
       passMark: 60,
       strictPassMark: 70,
       passOnlyUnderCurrentMark: [],
+      // B0-835 — the concept rules in force, and what each one did.
+      scoringRules: DEFAULT_SCORING_RULES,
+      gateFloor: {
+        gateEnabled: true,
+        floorEnabled: true,
+        floorScore: 70,
+        floorRespectsMaterialIssue: true,
+        flooredIds: [],
+        ceilingEnabled: true,
+        ceilingScore: 59,
+        cappedIds: [],
+        coverageEnabled: true,
+        coverageCappedIds: [],
+      },
       speed: null,
       concepts: null,
       judged: null,
@@ -220,7 +255,7 @@ describe('resolveCaseIdMentions', () => {
 });
 
 describe('formatGradingConfig', () => {
-  it('renders every part in render.ts order, plain text', () => {
+  it('renders every part in render.ts order, plain text, rules included (B0-835)', () => {
     expect(
       formatGradingConfig(
         {
@@ -229,17 +264,18 @@ describe('formatGradingConfig', () => {
           passes: 3,
           spreadThreshold: 10,
           passMark: 60,
+          scoringRules: DEFAULT_SCORING_RULES,
           gradingPromptHash: 'abcdef0123456789abcdef',
           judgedThresholds: null,
         },
         70,
       ),
     ).toBe(
-      'Graded by claude-opus-5 at high effort · 3 independent passes · pass mark 60 (strict 70) · grading prompt abcdef012345',
+      'Graded by claude-opus-5 at high effort · 3 independent passes · pass mark 60 (strict 70) · ceiling 59 · floor 70 (withheld on material issue) · coverage cap on · gate on · grading prompt abcdef012345',
     );
   });
 
-  it('omits the parts a legacy state does not carry and singularizes one pass', () => {
+  it('omits the parts a legacy state does not carry, singularizes one pass, and marks default rules', () => {
     expect(
       formatGradingConfig(
         {
@@ -248,12 +284,105 @@ describe('formatGradingConfig', () => {
           passes: 1,
           spreadThreshold: null,
           passMark: null,
+          scoringRules: null,
           gradingPromptHash: null,
           judgedThresholds: null,
         },
         70,
       ),
-    ).toBe('Graded by gpt-4.1 · 1 independent pass');
+    ).toBe(
+      'Graded by gpt-4.1 · 1 independent pass · ceiling 59 · floor 70 (withheld on material issue) · coverage cap on · gate on (default)',
+    );
+  });
+});
+
+describe('categoryMarkerLegend (B0-835)', () => {
+  it('states the cap, at the configured ceiling, when the gate and the ceiling are on', () => {
+    expect(categoryMarkerLegend(DEFAULT_SCORING_RULES)).toBe(
+      "the number of cases in that category capped at 59 (F, Fail) for missing a mandatory concept — each case's Pre-Gate Content Score is shown in the detailed report.",
+    );
+    expect(
+      categoryMarkerLegend({
+        ...DEFAULT_SCORING_RULES,
+        minimalCeiling: { enabled: true, score: 49 },
+      }),
+    ).toContain('capped at 49 (F, Fail)');
+  });
+
+  it('never claims a cap when the ceiling is off', () => {
+    expect(
+      categoryMarkerLegend({
+        ...DEFAULT_SCORING_RULES,
+        minimalCeiling: { enabled: false, score: 59 },
+      }),
+    ).toBe(
+      'the number of cases in that category rated Fail by the mandatory gate for missing a mandatory concept, whatever their score.',
+    );
+  });
+
+  it('says reported only when the gate is off', () => {
+    expect(
+      categoryMarkerLegend({ ...DEFAULT_SCORING_RULES, minimalGate: { enabled: false } }),
+    ).toBe(
+      'the number of cases in that category that missed a mandatory concept — reported only; the mandatory gate is off for this report.',
+    );
+  });
+});
+
+describe('scoringRulesSentence (B0-835)', () => {
+  const gateFloor = {
+    gateEnabled: true,
+    floorEnabled: true,
+    floorScore: 70,
+    floorRespectsMaterialIssue: true,
+    flooredIds: [] as string[],
+    ceilingEnabled: true,
+    ceilingScore: 59,
+    cappedIds: [] as string[],
+    coverageEnabled: true,
+    coverageCappedIds: [] as string[],
+  };
+
+  it('states every rule at the defaults, and that score, grade and Result agree', () => {
+    expect(scoringRulesSentence(DEFAULT_SCORING_RULES, gateFloor)).toBe(
+      'Scoring rules: a missing mandatory concept caps the score at 59 (F, Fail); full mandatory coverage floors the score at 70; Completeness is capped at expected-concept coverage. Score, grade and Result always agree.',
+    );
+  });
+
+  it('counts the cases each rule actually moved', () => {
+    expect(
+      scoringRulesSentence(DEFAULT_SCORING_RULES, {
+        ...gateFloor,
+        flooredIds: ['a'],
+        coverageCappedIds: ['b', 'c', 'd'],
+      }),
+    ).toBe(
+      'Scoring rules: a missing mandatory concept caps the score at 59 (F, Fail); full mandatory coverage floors the score at 70 (raised 1 case); Completeness is capped at expected-concept coverage (lowered 3 cases). Score, grade and Result always agree.',
+    );
+  });
+
+  it('says OFF for each disabled rule and drops the agreement claim without the ceiling', () => {
+    expect(
+      scoringRulesSentence(
+        {
+          minimalGate: { enabled: false },
+          minimalFloor: { enabled: false, score: 70, respectMaterialIssue: true },
+          minimalCeiling: { enabled: false, score: 59 },
+          expectedCoverage: { enabled: false },
+        },
+        { ...gateFloor, gateEnabled: false, floorEnabled: false, ceilingEnabled: false, coverageEnabled: false },
+      ),
+    ).toBe(
+      'Scoring rules: mandatory gate OFF; mandatory floor OFF; expected-coverage cap OFF.',
+    );
+    expect(
+      scoringRulesSentence(
+        { ...DEFAULT_SCORING_RULES, minimalCeiling: { enabled: false, score: 59 } },
+        { ...gateFloor, ceilingEnabled: false },
+      ),
+    ).toBe(
+      'Scoring rules: a missing mandatory concept rates the case Fail (score cap off); full mandatory coverage floors the score at 70; Completeness is capped at expected-concept coverage.',
+    );
   });
 });
 

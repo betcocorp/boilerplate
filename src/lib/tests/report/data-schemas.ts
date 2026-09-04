@@ -1,6 +1,38 @@
 import { z } from 'zod';
 
 import { REPORT_STATUSES, caseScoreSchema, reportSynthesisSchema } from './schemas';
+import { scoringRulesSchema } from './scoring-config';
+
+/**
+ * B0-835 — the four concept rules a report's numbers were derived under, on the wire. Re-exported
+ * from the one definition in `./scoring-config` rather than restated, so the persisted shape, the
+ * wire shape and the shape the computation reads can never drift apart.
+ */
+export const reportScoringRulesSchema = scoringRulesSchema;
+export type ReportScoringRules = z.infer<typeof reportScoringRulesSchema>;
+
+/**
+ * B0-835 — what the gate, the floor, the ceiling and the coverage cap were configured to do and
+ * which cases each actually moved (port of `gate_floor_block`). Present on every report, rules on
+ * or off: a reader comparing two runs must be able to see whether a number moved because the agent
+ * changed or because the rules did.
+ */
+export const reportGateFloorSchema = z.object({
+  gateEnabled: z.boolean(),
+  floorEnabled: z.boolean(),
+  floorScore: z.number(),
+  floorRespectsMaterialIssue: z.boolean(),
+  /** Cases the mandatory floor actually raised, in dataset order. */
+  flooredIds: z.array(z.string()),
+  ceilingEnabled: z.boolean(),
+  ceilingScore: z.number(),
+  /** Cases the mandatory ceiling actually lowered, in dataset order. */
+  cappedIds: z.array(z.string()),
+  coverageEnabled: z.boolean(),
+  /** Cases where the coverage cap actually lowered the grader's judged Completeness. */
+  coverageCappedIds: z.array(z.string()),
+});
+export type ReportGateFloor = z.infer<typeof reportGateFloorSchema>;
 
 /**
  * B0-586 — the structured wire contract for `GET /api/admin/tests/runs/[runId]/report/data`.
@@ -247,7 +279,7 @@ export const reportConceptRollupSchema = z.object({
   casesWithConcepts: z.number().int().min(0),
   mandatory: reportConceptKindRollupSchema,
   expected: reportConceptKindRollupSchema,
-  /** Cases missing at least one must-have concept. Reported; the miss changed no Result. */
+  /** Cases missing at least one must-have concept, named verbatim. Under B0-835 each is gated. */
   missingMandatory: z.array(
     z.object({ id: z.string(), question: z.string(), missing: z.array(z.string()) }),
   ),
@@ -255,6 +287,16 @@ export const reportConceptRollupSchema = z.object({
   materialIssues: z.array(
     z.object({ id: z.string(), question: z.string(), note: z.string().nullable() }),
   ),
+  /** B0-835 — every gated case: missing a must-have concept, so rated Fail by the gate. */
+  gatedIds: z.array(z.string()),
+  /** The subset where the gate actually removed a Pass, judged on the Pre-Gate Content Score. */
+  preventedIds: z.array(z.string()),
+  /** Cases that qualified for the automatic Pass and were not gated. */
+  autoPassIds: z.array(z.string()),
+  /** The subset where the automatic Pass actually changed the Result. */
+  autoPassChangedIds: z.array(z.string()),
+  /** Full expected coverage, but a material factual issue withheld the automatic Pass. */
+  autoPassBlockedIds: z.array(z.string()),
   recurringMissing: z.array(reportRecurringMissingConceptSchema),
 });
 export type ReportConceptRollup = z.infer<typeof reportConceptRollupSchema>;
@@ -302,8 +344,15 @@ export const reportCaseVarianceSchema = z.object({
   passes: z.number().int().min(1),
   /** Each pass's own weighted overall, in pass order; null for a pass that could not evaluate. */
   passOveralls: z.array(z.number().nullable()),
-  /** Each pass's Result at the pass mark in force. */
+  /** Each pass's Result at the pass mark in force, after that pass's own auto-Pass and gate. */
   passBands: z.array(reportCaseStatusSchema.nullable()),
+  /**
+   * B0-835 — the passes whose own mandatory floor actually raised their score (1-based). Empty when
+   * the floor bound on no pass; a non-empty list is a review signal, not a routine adjustment.
+   */
+  floorApplied: z.array(
+    z.object({ pass: z.number().int().min(1), weighted: z.number(), floor: z.number() }),
+  ),
   /** max − min of the numeric overalls; null with fewer than two of them. */
   range: z.number().nullable(),
   bandSplit: z.boolean(),
@@ -358,11 +407,16 @@ export const reportConsistencySchema = z.object({
 export type ReportConsistency = z.infer<typeof reportConsistencySchema>;
 
 /**
- * The derived scoreline for one evaluated case (B0-813, pure-math scoring). Accuracy, Relevance
- * and Clarity are the grader's judged 0–100 sub-scores; **Completeness is computed** as the
- * expected-concept coverage share (`coverage`); `overall` is the weighted roll-up (Accuracy 40 /
- * Completeness 30 / Relevance 20 / Clarity 10), never raised or capped; `grade` and `status` are
- * derived from `overall` alone. Absent for Unable-to-Evaluate cases.
+ * The derived scoreline for one evaluated case (B0-835 — the reference skill's concept rules).
+ *
+ * All four sub-scores are the grader's judged 0–100 values; `completeness` is that judgment capped
+ * at the expected-concept coverage share (`coveragePct`, from `coverage`), with the uncapped value
+ * kept as `completenessJudged`. `weighted` is the roll-up (Accuracy 40 / Completeness 30 /
+ * Relevance 20 / Clarity 10); `overall` is `weighted` after the **mandatory floor** and then the
+ * **mandatory ceiling**, and `grade` is the band `overall` falls in. `preGateScore` is the
+ * arithmetic before the ceiling — a per-case diagnostic that never enters an average or a rollup.
+ * `status` is the rubric Result at `metrics.passMark`, which `statusSource` says whether the
+ * automatic Pass or the mandatory gate moved. Absent for Unable-to-Evaluate cases.
  */
 export const reportEvaluatedCaseSchema = z.object({
   id: z.string(),
@@ -376,11 +430,42 @@ export const reportEvaluatedCaseSchema = z.object({
   clarity: z.number(),
   overall: z.number(),
   grade: reportGradeSchema,
-  /** Pass at `metrics.passMark` or above, Fail below. Nothing else decides it. */
+  /** The final Result — the rubric at `metrics.passMark`, as moved by `statusSource`. */
   status: reportCaseStatusSchema,
-  /** The expected-concept counts Completeness was computed from — print as "satisfied of required". */
+  /** The expected-concept counts the coverage share came from — print as "satisfied of required". */
   coverage: z.object({ satisfied: z.number().int().min(0), required: z.number().int().min(1) }),
-  /** Reported fact: at least one must-have concept was missed. Changes no number by itself. */
+  /** B0-835 — the grader's judged Completeness; null on a pass graded 2026-09-03 → 2026-09-04. */
+  completenessJudged: z.number().nullable(),
+  /** `100 × coverage.satisfied ÷ coverage.required`, rounded once. Always reported. */
+  coveragePct: z.number(),
+  /** True only where the coverage cap actually lowered the judged Completeness ("40 (judged 66)"). */
+  coverageApplied: z.boolean(),
+  /** The weighted roll-up before the floor and the ceiling. */
+  weighted: z.number(),
+  /** The mandatory floor's value, only where it actually raised the score; null otherwise. */
+  floor: z.number().nullable(),
+  floorApplied: z.boolean(),
+  /** The Pre-Gate Content Score — a diagnostic only: never averaged, never rolled up. */
+  preGateScore: z.number(),
+  preGateGrade: reportGradeSchema,
+  /** The mandatory ceiling's value, only where it actually lowered the score; null otherwise. */
+  ceiling: z.number().nullable(),
+  ceilingApplied: z.boolean(),
+  /** The Result the pass mark alone gives `overall`, before any concept rule. */
+  rubricStatus: reportCaseStatusSchema,
+  /** Which rule decided `status`: the rubric, the automatic Pass, or the mandatory gate. */
+  statusSource: z.enum(['rubric', 'auto_pass', 'minimal_gate']),
+  /** True for every gated case, whether or not the gate actually removed a Pass. */
+  ratingConstrained: z.boolean(),
+  /** The narrower fact: the gate took a Pass away, judged on `preGateScore`. */
+  gateBlockedAPass: z.boolean(),
+  /** Full expected coverage, no material issue, not gated — the automatic Pass fired. */
+  autoPassTriggered: z.boolean(),
+  /** Full expected coverage, but a material factual issue withheld the automatic Pass. */
+  autoPassBlocked: z.boolean(),
+  /** One sentence explaining the concept-driven outcome; null when no rule had anything to say. */
+  conceptNote: z.string().nullable(),
+  /** At least one must-have concept was missed — under B0-835 this also caps the score at 59. */
   mandatoryMissing: z.boolean(),
   /** Reported fact: the grader flagged a material factual issue on a regulated value. */
   materialIssue: z.boolean(),
@@ -463,6 +548,8 @@ export const reportGradingConfigSchema = z.object({
   passes: z.number().int().min(1),
   spreadThreshold: z.number().nullable(),
   passMark: z.number().nullable(),
+  /** B0-835 — the concept rules the Results were derived under; null on a report predating them. */
+  scoringRules: reportScoringRulesSchema.nullable().optional().default(null),
   gradingPromptHash: z.string().nullable(),
   judgedThresholds: reportJudgedThresholdsSchema.nullable(),
 });
@@ -491,6 +578,10 @@ export const reportMetricsSchema = z.object({
   strictPassMark: z.number(),
   /** Case ids that Pass under `passMark` but would Fail at `strictPassMark`, in dataset order. */
   passOnlyUnderCurrentMark: z.array(z.string()),
+  /** B0-835 — the four concept rules in force when every number above was derived. */
+  scoringRules: reportScoringRulesSchema,
+  /** B0-835 — what the gate, the floor, the ceiling and the coverage cap actually did. */
+  gateFloor: reportGateFloorSchema,
   /**
    * B0-717 — the run's speed readout, replacing the old single-metric `latency` block. Null when
    * no case recorded a timing. Reported beside the grade and never part of it.

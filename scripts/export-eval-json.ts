@@ -7,10 +7,13 @@
  * Bex is the spec (Tom Bird, 2026-09-03). This script therefore never re-derives a number: every
  * case-level field comes out of `assembleReportCases` — the same assembly the report and
  * `/report/data` are built from — and every per-pass field is read verbatim off
- * `report_state.casePassScores`. The one derived value is per-pass Completeness, which Bex's grader
- * does not emit (it is `100 × expected_satisfied / expected_required`, `completenessFromCoverage`);
- * it is written so the skill's `consolidate_runs.py` has the four sub-scores it requires, and the
- * `meta.$comment` says so.
+ * `report_state.casePassScores`. Completeness is exported as the grader judged it, uncapped
+ * (B0-835); a pass graded in the B0-813 window (2026-09-03 → 2026-09-04) emitted none, and for it
+ * the expected-concept coverage share is written instead — the same fallback `deriveCaseScoreline`
+ * applies, and the `meta.$comment` says so. `scoring_config` declares the concept rules the run was
+ * scored under (`report_state.scoringRules`, or the shipped defaults for a report that predates the
+ * field) in the skill's own `SCORING_DEFAULTS` shape, so `consolidate_runs.py` /
+ * `compute_metrics.py` reproduce Bex's numbers instead of re-scoring under their own.
  *
  * ## Usage
  *
@@ -59,7 +62,11 @@ import {
 import { hydrateLegacyPassScores } from '~/lib/tests/report/orchestrator';
 import type { CaseScore, ReportState } from '~/lib/tests/report/schemas';
 import { parseReportState } from '~/lib/tests/report/schemas';
-import { DEFAULT_PASS_MARK } from '~/lib/tests/report/scoring-config';
+import {
+  DEFAULT_PASS_MARK,
+  DEFAULT_SCORING_RULES,
+  type ScoringRules,
+} from '~/lib/tests/report/scoring-config';
 import {
   getTestById,
   getTestItemsByTestId,
@@ -130,6 +137,7 @@ async function loadRun(runId: string): Promise<LoadedRun> {
     spreadThreshold: state.spreadThreshold,
     passMark: state.passMark,
     judgedThresholds: state.judgedThresholds,
+    scoringRules: state.scoringRules,
   });
 
   return { run, test, items, state, assembled, resultItems };
@@ -178,6 +186,25 @@ function synthesisBlock(state: ReportState) {
   };
 }
 
+/**
+ * B0-835 — `scoring_config` in the skill's `concept_rules.py` `SCORING_DEFAULTS` shape, key for
+ * key, from the rules this run was actually scored under. Every rule is declared, on or off, so the
+ * skill's per-run overalls are computed under the rulebook these grades were produced by.
+ */
+function toSkillScoringConfig(rules: ScoringRules, passMark: number) {
+  return {
+    pass_mark: { score: passMark },
+    minimal_gate: { enabled: rules.minimalGate.enabled },
+    minimal_floor: {
+      enabled: rules.minimalFloor.enabled,
+      score: rules.minimalFloor.score,
+      respect_material_issue: rules.minimalFloor.respectMaterialIssue,
+    },
+    minimal_ceiling: { enabled: rules.minimalCeiling.enabled, score: rules.minimalCeiling.score },
+    expected_coverage: { enabled: rules.expectedCoverage.enabled },
+  };
+}
+
 function buildEvalRun(loaded: LoadedRun, passIndex: number, exportedAt: string) {
   const { run, test, items, state, assembled } = loaded;
   const caseById = new Map(assembled.cases.map((c) => [c.id, c]));
@@ -191,9 +218,14 @@ function buildEvalRun(loaded: LoadedRun, passIndex: number, exportedAt: string) 
     if (!rc) throw new Error(`assembly produced no case for item ${item.id}`);
 
     // Evaluability under Bex's rules for THIS pass: the grader said so, or the pass has no
-    // expected concepts to compute Completeness from (pure-math scoring, B0-813).
-    const completeness = pass.unableToEvaluate ? null : completenessFromCoverage(pass.concepts);
-    const unableToEvaluate = pass.unableToEvaluate || completeness == null;
+    // expected concepts — a concept-less case is never graded holistically (B0-826 / B0-835).
+    const coverage = pass.unableToEvaluate ? null : completenessFromCoverage(pass.concepts);
+    const unableToEvaluate = pass.unableToEvaluate || coverage == null;
+    // B0-835 — Completeness as the grader judged it, uncapped: the skill's own expected-coverage
+    // rule caps it under `scoring_config`, exactly as `deriveCaseScoreline` does here. A pass graded
+    // in the B0-813 window emitted no judged value; coverage is then its only Completeness — the
+    // same fallback the report applies.
+    const completeness = unableToEvaluate ? null : (pass.completeness ?? coverage);
     const uteReason = pass.unableToEvaluate
       ? (pass.uteReason ?? 'unspecified')
       : unableToEvaluate
@@ -245,12 +277,15 @@ function buildEvalRun(loaded: LoadedRun, passIndex: number, exportedAt: string) 
       prepared_for: 'Betco / Bex',
       run_url: `/admin/tests/${test.id}/runs/${run.id}`,
       $comment:
-        'Exported from Bex (scripts/export-eval-json.ts, B0-823). Bex’s grader judges Accuracy, ' +
-        'Relevance, Clarity and the per-concept verdicts; it emits NO Completeness. The `completeness` ' +
-        'on every evaluable case here is derived as 100 × expected_satisfied / expected_required ' +
-        '(half-up), which is exactly how Bex computes it (pure-math scoring, B0-813), and is written ' +
-        'only so consolidate_runs.py has four sub-scores. A pass with no expected concepts is ' +
-        'unable_to_evaluate under Bex’s rules and is exported as such. Bex is the spec.',
+        'Exported from Bex (scripts/export-eval-json.ts, B0-823 / B0-835). Bex’s grader judges all ' +
+        'four sub-scores — Accuracy, Completeness, Relevance, Clarity — plus the per-concept verdicts. ' +
+        '`completeness` is the judged value, UNCAPPED: apply `scoring_config` (expected-coverage cap, ' +
+        'weights 40/30/20/10, mandatory floor, mandatory ceiling, automatic Pass, mandatory gate) to ' +
+        'reproduce Bex’s numbers. A pass graded between 2026-09-03 and 2026-09-04 (the B0-813 window) ' +
+        'carries no judged Completeness; its `completeness` is the expected-concept coverage share ' +
+        '(100 × expected_satisfied / expected_required, half-up), exactly as Bex scores such a pass. ' +
+        'A pass with no expected concepts is unable_to_evaluate under Bex’s rules and is exported as ' +
+        'such. Bex is the spec.',
       bex: {
         run_id: run.id,
         test_id: test.id,
@@ -264,19 +299,17 @@ function buildEvalRun(loaded: LoadedRun, passIndex: number, exportedAt: string) 
           spread_threshold: state.spreadThreshold,
           grading_prompt_hash: state.gradingPromptHash,
           judged_thresholds: state.judgedThresholds,
+          // B0-835 — Bex's own record of the rules; null on a report_state that predates the field.
+          scoring_rules: state.scoringRules,
         },
         exported_at: exportedAt,
       },
     },
     tier_labels: tierLabels,
-    // Bex has no mandatory gate, floor or ceiling (B0-813). Declared, not defaulted, so the
-    // skill's per-run overalls are computed under the rules these grades were actually produced by.
-    scoring_config: {
-      pass_mark: { score: passMark },
-      minimal_gate: { enabled: false },
-      minimal_floor: { enabled: false },
-      minimal_ceiling: { enabled: false },
-    },
+    // B0-835 — the concept rules these grades were actually scored under, declared explicitly
+    // (never left to the skill's defaults). A report_state persisted before the field existed was
+    // produced under the shipped defaults, which is what the read path applies to it too.
+    scoring_config: toSkillScoringConfig(state.scoringRules ?? DEFAULT_SCORING_RULES, passMark),
     cases,
     ...synthesisBlock(state),
   };
@@ -326,7 +359,11 @@ function rebuildCaseInputs(loaded: LoadedRun): ReportCaseInput[] {
               ttftSeconds,
               totalSeconds: latencySeconds,
             })),
-            { spreadThreshold: state.spreadThreshold ?? undefined, passMark: state.passMark },
+            {
+              spreadThreshold: state.spreadThreshold ?? undefined,
+              passMark: state.passMark,
+              scoringRules: state.scoringRules,
+            },
           )
         : null;
 
@@ -362,6 +399,9 @@ async function writeFixture(loaded: LoadedRun, fixtureDir: string): Promise<Repo
   const options: ComputeReportMetricsOptions = {
     passMark: state.passMark,
     judgedThresholds: state.judgedThresholds,
+    // B0-835 — only when the state recorded rules: a legacy run's fixture keeps the key absent, so
+    // `computeReportMetrics` falls back to the defaults exactly as the read path does for that run.
+    ...(state.scoringRules ? { scoringRules: state.scoringRules } : {}),
   };
   const inputs = viaJson(rebuildCaseInputs(loaded));
   const expected = viaJson(computeReportMetrics(inputs, options));
@@ -396,6 +436,7 @@ async function writeFixture(loaded: LoadedRun, fixtureDir: string): Promise<Repo
       passMark: state.passMark,
       spreadThreshold: state.spreadThreshold,
       judgedThresholds: state.judgedThresholds,
+      scoringRules: state.scoringRules,
     },
     options,
     inputs,

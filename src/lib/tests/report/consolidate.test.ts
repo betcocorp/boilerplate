@@ -11,6 +11,7 @@ import {
 } from './consolidate';
 import { computeReportMetrics, type ReportCaseInput } from './metrics';
 import type { CaseScore } from './schemas';
+import { DEFAULT_SCORING_RULES, type ScoringRules } from './scoring-config';
 
 /**
  * B0-720 / B0-721 — consolidation of N independent grading passes, and the consistency rollup
@@ -28,10 +29,10 @@ const CONCEPT = {
 } as const;
 
 /**
- * Equal sub-scores make the weighted roll-up equal `overall` exactly (0.4+0.3+0.2+0.1 = 1). The
- * `completeness` here stands in for a pass persisted before B0-813 — the current grader writes
- * null and coverage is the only source; `passOverall` falls back to the stored value only when a
- * pass carries no concept block, which keeps a legacy report's variance readable.
+ * Equal sub-scores make the weighted roll-up equal `overall` exactly (0.4+0.3+0.2+0.1 = 1). Under
+ * B0-835 the grader judges all four, so `completeness` is a real judged value; a pass supplied with
+ * no concept block at all falls back to weighting those four and nothing else, which keeps a
+ * pre-B0-808 report's variance block readable.
  */
 function score(overall: number, partial: Partial<CaseScore> = {}): CaseScore {
   return {
@@ -126,9 +127,9 @@ describe('consolidateCasePasses — the median (B0-720)', () => {
     expect(result.score.relevance).toBe(70);
     expect(result.score.clarity).toBe(70);
 
-    // The consolidated case survives `computeReportMetrics`, whose `overall_recomputes_from_sub_scores`
-    // invariant recomputes `overall` from the four sub-scores alone — with Completeness taken from
-    // the coverage, not the stored median. Consolidating on the weighted total would make this throw.
+    // The consolidated case survives `computeReportMetrics`, whose
+    // `weighted_recomputes_from_sub_scores` invariant recomputes the weighted score from the four
+    // sub-scores alone. Consolidating on the weighted total instead would make this throw.
     const metrics = computeReportMetrics([
       {
         testItemId: 'median',
@@ -142,11 +143,16 @@ describe('consolidateCasePasses — the median (B0-720)', () => {
         variance: result.variance,
       },
     ]);
-    expect(metrics.perCase[0]!.completeness).toBe(100);
-    expect(metrics.perCase[0]!.overall).toBe(Math.round(0.4 * 70 + 0.3 * 100 + 0.2 * 70 + 0.1 * 70));
+    // Coverage is 100%, so the cap leaves the median judged Completeness alone.
+    expect(metrics.perCase[0]!.coveragePct).toBe(100);
+    expect(metrics.perCase[0]!.completeness).toBe(60);
+    expect(metrics.perCase[0]!.weighted).toBe(Math.round(0.4 * 70 + 0.3 * 60 + 0.2 * 70 + 0.1 * 70));
+    // …and the one mandatory concept is satisfied, so the floor lifts the 67 to a C.
+    expect(metrics.perCase[0]!.floorApplied).toBe(true);
+    expect(metrics.perCase[0]!.overall).toBe(70);
   });
 
-  it('computes each pass’s own overall from that pass’s coverage, not from a judged Completeness', () => {
+  it('caps each pass’s judged Completeness at that pass’s own coverage (B0-835)', () => {
     // Same judged sub-scores every pass; only the concept verdicts differ.
     const full = concepts({ mandatoryRequired: [CONCEPT.dilution], bonusRequired: [CONCEPT.epa] });
     const half = concepts({
@@ -160,11 +166,89 @@ describe('consolidateCasePasses — the median (B0-720)', () => {
       { score: score(80, { completeness: null }), concepts: full },
     ]);
 
-    // full: 0.4·80 + 0.3·100 + 0.2·80 + 0.1·80 = 86; half: 0.4·80 + 0.3·50 + 0.2·80 + 0.1·80 = 71.
+    // These passes emitted no judged Completeness (the B0-813 window), so coverage is the only
+    // source: full → 0.4·80 + 0.3·100 + 0.2·80 + 0.1·80 = 86; half → …+ 0.3·50… = 71.
     expect(result.variance!.passOveralls).toEqual([86, 71, 86]);
     expect(result.variance!.range).toBe(15);
     expect(result.variance!.causes).toContain('score_range');
     expect(result.variance!.causes).toContain('concept');
+    // Every pass emitted null, so the consolidated median is null and metrics falls back to coverage.
+    expect(result.score.completeness).toBeNull();
+
+    // With a judged Completeness of 90, the cap bites only on the pass that covered half the set.
+    const judged = consolidateCasePasses([
+      { score: score(80, { completeness: 90 }), concepts: full },
+      { score: score(80, { completeness: 90 }), concepts: half },
+      { score: score(80, { completeness: 90 }), concepts: full },
+    ]);
+    // full: 0.3·90 = 27 → 83; half: capped to 50 → 71.
+    expect(judged.variance!.passOveralls).toEqual([83, 71, 83]);
+    expect(judged.score.completeness).toBe(90);
+  });
+
+  it('bands each pass after its own automatic Pass and mandatory gate (B0-835)', () => {
+    const full = concepts({ mandatoryRequired: [CONCEPT.dilution], bonusRequired: [CONCEPT.epa] });
+    const gated = concepts({
+      mandatoryRequired: [CONCEPT.dilution, CONCEPT.contactTime],
+      mandatoryMissing: [CONCEPT.contactTime],
+      bonusRequired: [CONCEPT.epa],
+    });
+    const result = consolidateCasePasses([
+      { score: score(90), concepts: full },
+      { score: score(90), concepts: gated },
+      { score: score(90), concepts: full },
+    ]);
+
+    // Pass 2 judged the same sub-scores but missed a must-have: 2 of 3 expected → Completeness 67,
+    // weighted 83, then the ceiling takes it to 59. The band follows the gate, not the arithmetic.
+    expect(result.variance!.passOveralls).toEqual([90, 59, 90]);
+    expect(result.variance!.passBands).toEqual(['Pass', 'Fail', 'Pass']);
+    expect(result.variance!.bandSplit).toBe(true);
+    expect(result.variance!.range).toBe(31);
+    expect(result.variance!.causes).toContain('band_split');
+    expect(result.variance!.causes).toContain('concept');
+    // `required` is the union of the passes' lists, and no pass judged the contact time satisfied,
+    // so the consolidated verdict is a miss — which is what gates the consolidated case downstream.
+    expect(result.concepts!.mandatory.required).toEqual([CONCEPT.dilution, CONCEPT.contactTime]);
+    expect(result.concepts!.mandatory.missing).toEqual([CONCEPT.contactTime]);
+  });
+
+  it('records the passes whose own mandatory floor raised their score (B0-835)', () => {
+    const full = concepts({ mandatoryRequired: [CONCEPT.dilution], bonusRequired: [CONCEPT.epa] });
+    const result = consolidateCasePasses([
+      { score: score(62), concepts: full },
+      { score: score(90), concepts: full },
+      { score: score(62), concepts: full },
+    ]);
+
+    // Passes 1 and 3 weighted 62 — below the 70 floor with every must-have satisfied, so the floor
+    // fired on each. Pass 2 weighted 90 and needed nothing. Pass numbers are 1-based.
+    expect(result.variance!.passOveralls).toEqual([70, 90, 70]);
+    expect(result.variance!.floorApplied).toEqual([
+      { pass: 1, weighted: 62, floor: 70 },
+      { pass: 3, weighted: 62, floor: 70 },
+    ]);
+  });
+
+  it('derives every pass under the rules it is handed, so the bands stay on one scale', () => {
+    const gated = concepts({
+      mandatoryRequired: [CONCEPT.dilution, CONCEPT.contactTime],
+      mandatoryMissing: [CONCEPT.contactTime],
+      bonusRequired: [CONCEPT.epa],
+    });
+    const gateOff: ScoringRules = { ...DEFAULT_SCORING_RULES, minimalGate: { enabled: false } };
+    const result = consolidateCasePasses(
+      [
+        { score: score(90), concepts: gated },
+        { score: score(90), concepts: gated },
+      ],
+      { scoringRules: gateOff },
+    );
+
+    // Gate off ⇒ ceiling off, so the same passes keep their 83 and their Pass.
+    expect(result.variance!.passOveralls).toEqual([83, 83]);
+    expect(result.variance!.passBands).toEqual(['Pass', 'Pass']);
+    expect(result.variance!.floorApplied).toEqual([]);
   });
 
   it('leaves the median untouched when one pass is a wild outlier', () => {
@@ -241,6 +325,7 @@ describe('consolidateCasePasses — flags (B0-720)', () => {
     expect(result.variance!.bandSplit).toBe(false);
     expect(result.variance!.conceptDisagreements).toEqual([]);
     expect(result.variance!.timingWarnings).toEqual([]);
+    expect(result.variance!.floorApplied).toEqual([]);
     // The concept verdict is unchanged, phrases verbatim.
     expect(result.concepts!.mandatory.missing).toEqual([CONCEPT.contactTime]);
   });

@@ -18,6 +18,7 @@ import { reportDataResponseSchema, type ReportDataReady } from './data-schemas';
 import { NO_EXPECTED_CONCEPTS_UTE_REASON } from './metrics';
 import { caseAnchorId, gradingConfigLine, renderReportMarkdown } from './render';
 import type { CaseConcepts, CaseScore, ReportSynthesis } from './schemas';
+import { DEFAULT_SCORING_RULES } from './scoring-config';
 
 /**
  * B0-586 — the guard that keeps the Markdown report and the structured `/report/data` contract in
@@ -218,8 +219,17 @@ const CONCEPTS_A: CaseConcepts = {
   materialIssue: false,
   materialIssueNote: null,
 };
+/**
+ * The 600 ppm qualifier is a must-have here, and it was missed — so under B0-835 this case is
+ * gated: the ceiling would cap it at 59, which its own arithmetic already reaches, and the Result
+ * is Fail. It is the "close to the ideal and still failing" cell in the judged-metrics rollup.
+ */
 const CONCEPTS_B: CaseConcepts = {
-  mandatory: { required: ['Dwell time is 10 minutes.'], satisfied: ['Dwell time is 10 minutes.'], missing: [] },
+  mandatory: {
+    required: ['Dwell time is 10 minutes.', 'The 600 ppm qualifier.'],
+    satisfied: ['Dwell time is 10 minutes.'],
+    missing: ['The 600 ppm qualifier.'],
+  },
   expected: {
     required: ['Dwell time is 10 minutes.', 'The 600 ppm qualifier.'],
     satisfied: ['Dwell time is 10 minutes.'],
@@ -259,7 +269,8 @@ const CASE_SCORES: Record<string, CaseScore> = {
     evalConfidence: 94,
     confidenceNote: 'Concrete golden; values match the label.',
   }),
-  // 0.4·55 + 0.3·50 + 0.2·70 + 0.1·80 = 59, F, Fail.
+  // 0.4·55 + 0.3·50 + 0.2·70 + 0.1·80 = 59; the must-have miss gates it — F, Fail (the 59 ceiling
+  // is not reached from below, so the arithmetic stands and the gate takes no Pass away).
   [CASE_B]: score({
     accuracy: 55,
     relevance: 70,
@@ -275,7 +286,8 @@ const CASE_SCORES: Record<string, CaseScore> = {
     evalConfidence: 62,
     confidenceNote: 'The golden implies the 600 ppm qualifier rather than stating it.',
   }),
-  // 0.4·30 + 0.3·0 + 0.2·50 + 0.1·60 = 28, F, Fail — a must-have miss and a material issue, reported.
+  // 0.4·30 + 0.3·0 + 0.2·50 + 0.1·60 = 28, F, Fail — gated on a must-have miss, with a material
+  // issue that would have withheld the floor anyway. Already below the ceiling, so it stands at 28.
   [CASE_C]: score({
     accuracy: 30,
     relevance: 50,
@@ -341,6 +353,7 @@ const CONFIG = {
   passes: 1,
   spreadThreshold: 10,
   passMark: 60,
+  scoringRules: DEFAULT_SCORING_RULES,
   gradingPromptHash: 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789',
   judgedThresholds: {
     simHigh: 0.75,
@@ -557,30 +570,61 @@ describe('assembleReportData → report data contract', () => {
       }
 
       const e = c.evaluated!;
+      // B0-835 — where the coverage cap bound, the Completeness cell carries both numbers.
+      const completenessCell = e.coverageApplied
+        ? `${e.completeness} (judged ${e.completenessJudged})`
+        : String(e.completeness);
       check(
         `case[${c.id}].evaluated (sub-score row)`,
-        `| ${e.accuracy} | ${e.completeness} | ${e.relevance} | ${e.clarity} | ${e.overall}/100 | ${e.grade} | ${e.status} |`,
+        `| ${e.accuracy} | ${completenessCell} | ${e.relevance} | ${e.clarity} | ${e.overall}/100 | ${e.grade} | ${e.status} |`,
       );
       check(
         `case[${c.id}] glance row`,
         `| ${c.tier} | ${e.overall} | ${e.grade} | ${e.status}${e.mandatoryMissing ? '†' : ''} |`,
       );
-      // B0-813 — Completeness is the coverage, and the report says so on every case.
+      // B0-835 — the Completeness line says where the number came from: the coverage share, or the
+      // judged value capped at it.
+      const coverageCounts = `${e.coverage.satisfied} of ${e.coverage.required} expected concept${e.coverage.required === 1 ? '' : 's'} communicated`;
       check(
         `case[${c.id}].evaluated.coverage`,
-        `**Completeness:** ${e.completeness} — ${e.coverage.satisfied} of ${e.coverage.required} expected concept${e.coverage.required === 1 ? '' : 's'} communicated.`,
+        e.coverageApplied
+          ? `**Completeness:** judged ${e.completenessJudged}, capped at coverage ${e.completeness} (${coverageCounts}).`
+          : `**Completeness:** ${e.completeness} — ${coverageCounts}.`,
       );
+      // B0-835 — the diagnostic a gated case keeps: the arithmetic before the ceiling.
+      if (e.ceilingApplied) {
+        check(
+          `case[${c.id}].evaluated.preGateScore`,
+          `**Pre-Gate Content Score:** ${e.preGateScore}/100 (${e.preGateGrade})`,
+        );
+      }
+      if (e.floorApplied) {
+        check(
+          `case[${c.id}].evaluated.floor`,
+          `**Mandatory floor:** raised from ${e.weighted} to ${e.floor}`,
+        );
+      }
       if (e.mandatoryMissing) {
         check(
           `case[${c.id}].concepts.mandatory.missing`,
-          `**Missing mandatory concepts (reported — not enforced):** ${e.concepts.mandatory.missing.map((p) => `"${p}"`).join(', ')}`,
+          `**Missing mandatory concepts:** ${e.concepts.mandatory.missing.map((p) => `"${p}"`).join(', ')}`,
         );
       }
       if (e.materialIssue) {
         check(
           `case[${c.id}].concepts.materialIssueNote`,
-          `**Material factual issue (reported — not scored):** ${e.concepts.materialIssueNote}`,
+          `**Material factual issue:** ${e.concepts.materialIssueNote}`,
         );
+      }
+      // B0-835 — the skill's one-sentence explanation, printed where the labelled lines above have
+      // not already said it (the same de-duplication rule `renderReportMarkdown` applies).
+      if (
+        e.conceptNote &&
+        !e.floorApplied &&
+        e.statusSource !== 'auto_pass' &&
+        !e.autoPassBlocked
+      ) {
+        check(`case[${c.id}].evaluated.conceptNote`, `**Concept rules:** ${e.conceptNote}`);
       }
       // B0-811 — the judged line, where the grader authored the metrics.
       if (e.similarity != null) {
@@ -859,9 +903,13 @@ describe('assembleReportCases → per-concept verdicts (B0-809)', () => {
     resultItem({ test_item_id: CASE_EXACT_MISS, response_text: 'EPA Reg. No. 6836-140-4171' }),
   ];
 
-  /** Even judged sub-scores; Completeness comes from the coverage the grader recorded. */
+  /**
+   * Even judged sub-scores and no judged Completeness — these stand in for passes graded in the
+   * B0-813 window, where the coverage share is the only Completeness there is.
+   */
   const CONCEPT_SCORES: Record<string, CaseScore> = {
-    // 2 of 3 expected → 67: 0.4·84 + 0.3·67 + 0.2·84 + 0.1·84 = 78.9 → 79, C, Pass; must-have missed.
+    // 2 of 3 expected → 67: 0.4·84 + 0.3·67 + 0.2·84 + 0.1·84 = 78.9 → 79 pre-gate; the must-have
+    // miss then caps it at 59 — F, Fail (B0-835).
     [CASE_CRITERIA]: score({
       accuracy: 84,
       relevance: 84,
@@ -930,13 +978,21 @@ describe('assembleReportCases → per-concept verdicts (B0-809)', () => {
 
     // The block is the same object the metrics rated the case with.
     expect(c.evaluated!.concepts).toEqual(c.concepts);
+    expect(c.evaluated!.completenessJudged).toBeNull();
+    expect(c.evaluated!.coveragePct).toBe(67);
     expect(c.evaluated!.completeness).toBe(67);
     expect(c.evaluated!.coverage).toEqual({ satisfied: 2, required: 3 });
-    expect(c.evaluated!.overall).toBe(79);
-    expect(c.evaluated!.grade).toBe('C');
-    // The must-have miss is reported; it did not change the Result.
-    expect(c.evaluated!.status).toBe('Pass');
+    // The arithmetic is kept as the Pre-Gate Content Score; the ceiling decides the score.
+    expect(c.evaluated!.weighted).toBe(79);
+    expect(c.evaluated!.preGateScore).toBe(79);
+    expect(c.evaluated!.preGateGrade).toBe('C');
+    expect(c.evaluated!.ceilingApplied).toBe(true);
+    expect(c.evaluated!.overall).toBe(59);
+    expect(c.evaluated!.grade).toBe('F');
+    expect(c.evaluated!.status).toBe('Fail');
+    expect(c.evaluated!.statusSource).toBe('minimal_gate');
     expect(c.evaluated!.mandatoryMissing).toBe(true);
+    expect(c.evaluated!.gateBlockedAPass).toBe(true);
   });
 
   it('marks a case whose grader saw no concept columns Unable to Evaluate, never scoring it', () => {
@@ -953,7 +1009,7 @@ describe('assembleReportCases → per-concept verdicts (B0-809)', () => {
     expect(assembled.metrics.ute.map((u) => u.id)).toEqual([CASE_NO_CRITERIA]);
   });
 
-  it('reports a material issue verbatim without touching the score', () => {
+  it('reports a material issue verbatim and withholds the floor for it', () => {
     const assembled = buildConceptFixture();
     const c = assembled.cases.find((entry) => entry.id === CASE_EXACT_MISS)!;
 
@@ -962,8 +1018,15 @@ describe('assembleReportCases → per-concept verdicts (B0-809)', () => {
     expect(c.concepts!.expected.missing).toEqual([REGULATED.epa]);
     expect(c.evaluated!.materialIssue).toBe(true);
     expect(c.evaluated!.completeness).toBe(50);
+    // Every must-have satisfied, so the floor would have lifted this to 70 — the material issue on
+    // a regulated value withholds it. (The automatic Pass was never in play: an expected concept
+    // is missing too, so full expected coverage was not achieved.)
+    expect(c.evaluated!.floorApplied).toBe(false);
+    expect(c.evaluated!.autoPassBlocked).toBe(false);
+    expect(c.evaluated!.autoPassTriggered).toBe(false);
     expect(c.evaluated!.overall).toBe(67);
     expect(c.evaluated!.status).toBe('Pass');
+    expect(c.evaluated!.statusSource).toBe('rubric');
     expect(c.evaluated!.passesOnlyUnderCurrentMark).toBe(true);
   });
 
@@ -979,9 +1042,46 @@ describe('assembleReportCases → per-concept verdicts (B0-809)', () => {
     ]);
     expect(rollup.materialIssues.map((entry) => entry.id)).toEqual([CASE_EXACT_MISS]);
     expect(metrics.passOnlyUnderCurrentMark).toEqual([CASE_EXACT_MISS]);
+    // B0-835 — the rules that produced those numbers, and what each one did, travel with the run.
+    expect(rollup.gatedIds).toEqual([CASE_CRITERIA]);
+    expect(rollup.preventedIds).toEqual([CASE_CRITERIA]);
+    // Neither case has full expected coverage, so no automatic Pass was in play either way.
+    expect(rollup.autoPassIds).toEqual([]);
+    expect(rollup.autoPassBlockedIds).toEqual([]);
+    expect(metrics.scoringRules).toEqual(DEFAULT_SCORING_RULES);
+    expect(metrics.gateFloor).toMatchObject({
+      gateEnabled: true,
+      cappedIds: [CASE_CRITERIA],
+      flooredIds: [],
+      coverageCappedIds: [],
+    });
   });
 
-  it('renders the concept lines and the glance marker into the Markdown', () => {
+  it('threads the persisted concept rules through assembly rather than defaulting them', () => {
+    const assembled = assembleReportCases({
+      test: TEST_RECORD,
+      run: RUN_RECORD,
+      items: CONCEPT_ITEMS,
+      resultItems: CONCEPT_RESULT_ITEMS,
+      caseScores: CONCEPT_SCORES,
+      scoringRules: { ...DEFAULT_SCORING_RULES, minimalGate: { enabled: false } },
+    });
+    const c = assembled.cases.find((entry) => entry.id === CASE_CRITERIA)!;
+
+    // Gate off ⇒ ceiling off, so the same case keeps its 79 and its Pass.
+    expect(c.evaluated!.overall).toBe(79);
+    expect(c.evaluated!.status).toBe('Pass');
+    expect(assembled.metrics.scoringRules.minimalGate.enabled).toBe(false);
+    expect(assembled.metrics.gateFloor.gateEnabled).toBe(false);
+  });
+
+  /**
+   * Reachability, not wording: the *phrasing* of every concept line and legend belongs to
+   * `render.ts` (rewritten for B0-835 alongside this). What this test defends is that the concept
+   * block, the coverage counts, the glance marker and the regulated phrases all reach the document
+   * at all — and that the marker sits on the row whose Result the gate decided.
+   */
+  it('renders the concept coverage, the glance marker and the phrases into the Markdown', () => {
     const assembled = buildConceptFixture();
     const markdown = renderReportMarkdown({
       test: assembled.test,
@@ -994,19 +1094,11 @@ describe('assembleReportCases → per-concept verdicts (B0-809)', () => {
 
     expect(markdown).toContain('## Concept coverage');
     expect(markdown).toContain('**Concept coverage:** Mandatory 1/2 · Expected 2/3');
-    expect(markdown).toContain('**Completeness:** 67 — 2 of 3 expected concepts communicated.');
-    expect(markdown).toContain(
-      `**Missing mandatory concepts (reported — not enforced):** "${REGULATED.contactTime}"`,
-    );
-    expect(markdown).toContain('**Material factual issue (reported — not scored):**');
-    // † on the row with the must-have miss — still a Pass — and a legend for it.
-    expect(markdown).toContain('| Pass† |');
-    expect(markdown).toContain('† Missing a must-have (mandatory) concept');
-    // Nothing from the retired rule set.
-    expect(markdown).not.toContain('Rating constrained');
-    expect(markdown).not.toContain('Automatic Pass');
-    expect(markdown).not.toContain('‡');
-    // Concept phrases verbatim.
+    // † on the gated row, whose Result is now Fail, and the marker legend with it.
+    expect(markdown).toContain('| Fail† |');
+    expect(markdown).toContain('†');
+    // Concept phrases verbatim, both kinds.
+    expect(markdown).toContain(REGULATED.contactTime);
     expect(markdown).toContain(REGULATED.epa);
   });
 

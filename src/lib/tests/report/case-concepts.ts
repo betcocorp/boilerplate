@@ -1,4 +1,5 @@
 import type { CaseConcepts, ConceptKindCoverage } from './schemas';
+import { DEFAULT_SCORING_RULES, type ScoringRules } from './scoring-config';
 
 export type { CaseConcepts, ConceptKindCoverage };
 
@@ -84,18 +85,39 @@ export function hasMandatoryMiss(concepts: CaseConcepts | null | undefined): boo
 }
 
 /**
- * B0-813 — the marks the "Results at a glance" table and the ledger rows carry, defined once so the
- * Markdown document and the React ledger cannot label the same case differently.
+ * B0-813 / B0-835 — the marks the "Results at a glance" table and the ledger rows carry, defined
+ * once so the Markdown document and the React ledger cannot label the same case differently.
  *
- * † says the answer missed a must-have concept. That is a *reported* fact: it lowered Completeness
- * through coverage like any other expected concept and did not by itself change the Result.
+ * † says the answer missed a must-have concept. Under B0-835 that is no longer a merely reported
+ * fact: the mandatory gate rates the case Fail and the mandatory ceiling caps its score, so the
+ * mark now says "the score you are reading is a capped one" (methodology §9).
  */
 export const CONCEPT_MARKERS = {
   mandatoryMissing: '†',
 } as const;
 
+/**
+ * B0-835 — the † legend, written from the rules the report was actually scored under, so a report
+ * generated with the gate or the ceiling off never claims a cap that did not happen.
+ */
+export function mandatoryMissingLegend(rules: ScoringRules): string {
+  const marker = CONCEPT_MARKERS.mandatoryMissing;
+  const subject = `${marker} Missing a must-have (mandatory) concept`;
+  if (!rules.minimalGate.enabled) {
+    return `${subject} — reported only; the mandatory gate is off for this report.`;
+  }
+  if (!rules.minimalCeiling.enabled) {
+    return `${subject} — rated Fail by the mandatory gate whatever its score.`;
+  }
+  return `${subject} — the score is capped at ${rules.minimalCeiling.score} (grade F, Fail); the case shows its Pre-Gate Content Score.`;
+}
+
+/**
+ * The legend at the shipped defaults. Kept for callers with no `ScoringRules` to hand; anything
+ * rendering a specific report should call `mandatoryMissingLegend(metrics.scoringRules)` instead.
+ */
 export const CONCEPT_MARKER_LEGEND = {
-  mandatoryMissing: `${CONCEPT_MARKERS.mandatoryMissing} Missing a must-have (mandatory) concept — reported on the case; it lowers Completeness through coverage and does not by itself change the Result.`,
+  mandatoryMissing: mandatoryMissingLegend(DEFAULT_SCORING_RULES),
 } as const;
 
 /**

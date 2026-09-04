@@ -34,7 +34,7 @@ import {
   type ReportState,
   type ReportSynthesis,
 } from './schemas';
-import type { JudgedThresholds } from './scoring-config';
+import type { JudgedThresholds, ScoringRules } from './scoring-config';
 
 /**
  * B0-586 — the single assembly step that turns a run's raw rows (`tests`, `test_results`,
@@ -111,6 +111,12 @@ export type AssembleReportCasesParams = {
   passMark?: number | null;
   /** B0-811 — `report_state.judgedThresholds`; null falls back to `DEFAULT_JUDGED_THRESHOLDS`. */
   judgedThresholds?: JudgedThresholds | null;
+  /**
+   * B0-835 — `report_state.scoringRules`; null falls back to `DEFAULT_SCORING_RULES`. Handed to the
+   * consolidation and the metrics computation alike, so a pass's own overall in the variance block
+   * and the consolidated headline are derived under the same rules.
+   */
+  scoringRules?: ScoringRules | null;
   /**
    * B0-714 — how a failed structural invariant is treated. Defaults to `'throw'`, so the
    * generation path can never persist a report whose numbers contradict each other. `loadReportData`
@@ -206,6 +212,7 @@ export function assembleReportCases(params: AssembleReportCasesParams): Assemble
             {
               spreadThreshold: params.spreadThreshold ?? undefined,
               passMark: params.passMark,
+              scoringRules: params.scoringRules,
             },
           )
         : null;
@@ -230,6 +237,7 @@ export function assembleReportCases(params: AssembleReportCasesParams): Assemble
     invariantSeverity: params.invariantSeverity,
     passMark: params.passMark,
     judgedThresholds: params.judgedThresholds,
+    scoringRules: params.scoringRules,
   });
   const evaluatedById = new Map(metrics.perCase.map((c) => [c.id, c]));
   // A case the metrics could not evaluate for want of expected concepts carries a stored score that
@@ -326,6 +334,9 @@ function toMetricsPayload(metrics: ReportMetrics): ReportMetricsData {
     passMark: metrics.passMark,
     strictPassMark: metrics.strictPassMark,
     passOnlyUnderCurrentMark: metrics.passOnlyUnderCurrentMark,
+    // B0-835 — the rules the numbers were derived under, and what each one actually did.
+    scoringRules: metrics.scoringRules,
+    gateFloor: metrics.gateFloor,
     speed: metrics.speed,
     concepts: metrics.concepts,
     // B0-811 — null when no case carries a judged metric.
@@ -408,6 +419,7 @@ export async function loadReportData(runId: string): Promise<ReportDataResponse 
       spreadThreshold: state.spreadThreshold,
       passMark: state.passMark,
       judgedThresholds: state.judgedThresholds,
+      scoringRules: state.scoringRules,
       synthesis: state.synthesis,
       generatedAt: run.report_generated_at ?? state.updatedAt,
       config: gradingConfigFromState(state),

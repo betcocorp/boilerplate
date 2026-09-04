@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { scoringRulesSchema, type ScoringRules } from './scoring-config';
+
 /**
  * Required = satisfied ∪ missing, always (asserted per kind, per case, by `./invariants`). Concept
  * phrases are regulated free text — copied verbatim from the golden columns, never parsed.
@@ -33,11 +35,11 @@ export type CaseConcepts = z.infer<typeof caseConceptsSchema>;
 /**
  * Per-case grading output — one pass's judgment, and the shape persisted in `report_state`.
  *
- * B0-813 (pure-math scoring): the grader judges Accuracy, Relevance and Clarity and the concept
- * coverage; **Completeness is computed** downstream as the expected-concept coverage fraction
- * (`metrics.ts`) and is never asked of the model. The `completeness` field stays on the persisted
- * shape so `report_state` rows graded before B0-813 still parse; the new grader writes `null` and
- * the metrics layer ignores the field either way.
+ * B0-835: the grader judges **all four** sub-scores, Completeness included, plus the per-concept
+ * coverage. `metrics.ts` then caps the judged Completeness at the expected-concept coverage share
+ * (methodology §2b Rule 3) rather than replacing it. `completeness` is therefore `null` only on a
+ * pass graded in the B0-813 window (2026-09-03 → 2026-09-04), when the grader was told not to emit
+ * one; for those the coverage share *is* the Completeness, which is all the data such a pass has.
  *
  * The judged metrics (`similarity`, `evalConfidence`, methodology §7c) are reported beside the
  * grade and never enter it. Every new field is optional so legacy rows parse unchanged.
@@ -167,6 +169,12 @@ export const reportStateSchema = z.object({
    * effort has no effect. A plain string so a future effort level never fails a legacy parse.
    */
   gradingEffort: z.string().nullable().optional().default(null),
+  /**
+   * B0-835 — the four concept rules in force when this report's numbers were derived, resolved from
+   * the settings table once when the state is created. Null on a row that predates the field, where
+   * the reader falls back to `DEFAULT_SCORING_RULES` (`./scoring-config`).
+   */
+  scoringRules: scoringRulesSchema.nullable().optional().default(null),
   /** B0-811 — the judged-metric thresholds in force when this report was graded. Null on a legacy row. */
   judgedThresholds: z
     .object({
@@ -207,6 +215,8 @@ export function emptyReportState(
   spreadThreshold: number | null = null,
   /** B0-812 — the configured pass mark; null leaves the reader's default. */
   passMark: number | null = null,
+  /** B0-835 — the configured concept rules; null leaves the reader's default. */
+  scoringRules: ScoringRules | null = null,
 ): ReportState {
   const now = new Date().toISOString();
   return {
@@ -221,6 +231,7 @@ export function emptyReportState(
     passes,
     spreadThreshold,
     passMark,
+    scoringRules,
     gradingPromptHash: null,
     gradingEffort: null,
     judgedThresholds: null,
@@ -242,6 +253,8 @@ export type ReportGradingConfig = {
   passes: number;
   spreadThreshold: number | null;
   passMark: number | null;
+  /** B0-835 — the concept rules the report's Results were derived under; null on a legacy row. */
+  scoringRules: ScoringRules | null;
   gradingPromptHash: string | null;
   judgedThresholds: ReportState['judgedThresholds'];
 };
@@ -253,6 +266,7 @@ export function gradingConfigFromState(state: ReportState): ReportGradingConfig 
     passes: state.passes,
     spreadThreshold: state.spreadThreshold,
     passMark: state.passMark,
+    scoringRules: state.scoringRules,
     gradingPromptHash: state.gradingPromptHash,
     judgedThresholds: state.judgedThresholds,
   };

@@ -3,11 +3,14 @@ import type { z } from 'zod';
 import {
   reportDataReadySchema,
   type ReportDataReady,
+  type ReportGateFloor,
   type ReportGradingConfigData,
   type ReportMetricsData,
   type ReportSpeedRating,
 } from './data-schemas';
 import { GRADE_BANDS, type Grade } from './metrics';
+import { formatScoringRules } from './render';
+import { DEFAULT_SCORING_RULES, type ScoringRules } from './scoring-config';
 
 /**
  * B0-834 — the executive one-pager's data contract and its pure helpers.
@@ -129,10 +132,12 @@ export function resolveCaseIdMentions(
 }
 
 /**
- * B0-825 — the grading configuration as one plain-text line for the one-pager's header. Mirrors
- * the parts and order of `gradingConfigLine` (`./render`) without its Markdown italics, and drops
- * the spread threshold and judged thresholds — the one-pager states those beside the numbers they
- * govern. `passMark` mirrors the Markdown: omitted when the persisted state predates the field.
+ * B0-825 / B0-835 — the grading configuration as one plain-text line for the one-pager's header.
+ * Mirrors the parts and order of `gradingConfigLine` (`./render`) without its Markdown italics, and
+ * drops the spread threshold and judged thresholds — the one-pager states those beside the numbers
+ * they govern. `passMark` mirrors the Markdown: omitted when the persisted state predates the
+ * field. The concept rules are always stated: a report persisted before B0-835 was produced under
+ * the shipped defaults, and says so rather than leaving the reader to assume it.
  */
 export function formatGradingConfig(
   config: ReportGradingConfigData,
@@ -142,9 +147,61 @@ export function formatGradingConfig(
     `Graded by ${config.model}${config.effort ? ` at ${config.effort} effort` : ''}`,
     `${config.passes} independent pass${config.passes === 1 ? '' : 'es'}`,
     config.passMark != null ? `pass mark ${config.passMark} (strict ${strictPassMark})` : null,
+    config.scoringRules
+      ? formatScoringRules(config.scoringRules)
+      : `${formatScoringRules(DEFAULT_SCORING_RULES)} (default)`,
     config.gradingPromptHash ? `grading prompt ${config.gradingPromptHash.slice(0, 12)}` : null,
   ].filter((part): part is string => part !== null);
   return parts.join(' · ');
+}
+
+/**
+ * B0-835 — the sentence under the category table's `†n` markers, minus the marker itself (the
+ * renderer paints that in red). Written from the rules in force, so a report scored with the gate
+ * or the ceiling off never claims a cap that did not happen — the same three states
+ * `mandatoryMissingLegend` (`./case-concepts`) distinguishes, phrased for a per-category count.
+ */
+export function categoryMarkerLegend(rules: ScoringRules): string {
+  if (!rules.minimalGate.enabled) {
+    return 'the number of cases in that category that missed a mandatory concept — reported only; the mandatory gate is off for this report.';
+  }
+  if (!rules.minimalCeiling.enabled) {
+    return 'the number of cases in that category rated Fail by the mandatory gate for missing a mandatory concept, whatever their score.';
+  }
+  return `the number of cases in that category capped at ${rules.minimalCeiling.score} (F, Fail) for missing a mandatory concept — each case's Pre-Gate Content Score is shown in the detailed report.`;
+}
+
+/**
+ * B0-835 — the "Scoring rules:" clause of the one-pager's concept-coverage block (the skill's
+ * `build_summary.js` line, rule for rule): which rules were in force and how many cases each one
+ * actually moved, so a reader comparing two summaries can tell a change in the agent from a change
+ * in the rules. Counts are read off `gateFloor`, never re-derived.
+ */
+export function scoringRulesSentence(rules: ScoringRules, gateFloor: ReportGateFloor): string {
+  const gate = !rules.minimalGate.enabled
+    ? 'mandatory gate OFF'
+    : rules.minimalCeiling.enabled
+      ? `a missing mandatory concept caps the score at ${rules.minimalCeiling.score} (F, Fail)`
+      : 'a missing mandatory concept rates the case Fail (score cap off)';
+  const floored = gateFloor.flooredIds.length;
+  const floor = rules.minimalFloor.enabled
+    ? `full mandatory coverage floors the score at ${rules.minimalFloor.score}${
+        floored > 0 ? ` (raised ${floored} ${plural(floored, 'case')})` : ''
+      }`
+    : 'mandatory floor OFF';
+  const lowered = gateFloor.coverageCappedIds.length;
+  const coverage = rules.expectedCoverage.enabled
+    ? `Completeness is capped at expected-concept coverage${
+        lowered > 0 ? ` (lowered ${lowered} ${plural(lowered, 'case')})` : ''
+      }`
+    : 'expected-coverage cap OFF';
+  // The agreement claim holds by construction only while the ceiling expresses the gate's verdict
+  // in the score; without it a gated case can read "B / Fail" and the sentence would be false.
+  const agree =
+    rules.minimalGate.enabled && rules.minimalCeiling.enabled
+      ? ' Score, grade and Result always agree.'
+      : '';
+  return `Scoring rules: ${gate}; ${floor}; ${coverage}.${agree}`;
 }
 
 /**

@@ -28,7 +28,7 @@ import {
   type CaseScore,
   type ReportState,
 } from './schemas';
-import { loadJudgedThresholds, loadPassMark } from './scoring-config';
+import { loadJudgedThresholds, loadPassMark, loadScoringRules } from './scoring-config';
 import { synthesizeReportFindings } from './synthesizer';
 
 /** Concurrent grading calls in flight, counted in (case, pass) units — not in cases. */
@@ -153,7 +153,11 @@ async function scoreRemainingCases(
             score: passScore,
             concepts: passScore.concepts ?? undefined,
           })),
-          { spreadThreshold: state.spreadThreshold ?? undefined, passMark: state.passMark },
+          {
+            spreadThreshold: state.spreadThreshold ?? undefined,
+            passMark: state.passMark,
+            scoringRules: state.scoringRules,
+          },
         );
         state.caseScores[itemId] = {
           ...consolidated.score,
@@ -201,11 +205,22 @@ export async function generateReport(testResultId: string): Promise<ReportState>
   // B0-812 — same contract: the pass mark is resolved once and persisted on a fresh state, so a
   // settings change mid-report cannot rate one half of its cases at 60 and the other at 70.
   const passMark = await loadPassMark();
+  // B0-835 — same contract again: the four concept rules are resolved once and persisted on a fresh
+  // state, so flipping the gate or the floor mid-report can never score one half of its cases under
+  // one rulebook and the other half under another.
+  const scoringRules = await loadScoringRules();
   const judgedThresholds = await loadJudgedThresholds();
   // B0-810/B0-811 — the prompt that grades this report and the thresholds it is read at, resolved
   // once and persisted, so two reports that disagree can be told apart.
   const fresh = () => ({
-    ...emptyReportState(model, items.length, config.passes, config.spreadThreshold, passMark),
+    ...emptyReportState(
+      model,
+      items.length,
+      config.passes,
+      config.spreadThreshold,
+      passMark,
+      scoringRules,
+    ),
     gradingPromptHash: GRADING_PROMPT_HASH,
     judgedThresholds,
     gradingEffort,
@@ -261,6 +276,7 @@ export async function generateReport(testResultId: string): Promise<ReportState>
       spreadThreshold: state.spreadThreshold,
       passMark: state.passMark,
       judgedThresholds: state.judgedThresholds,
+      scoringRules: state.scoringRules,
     });
 
     const findingsByCaseId = new Map(

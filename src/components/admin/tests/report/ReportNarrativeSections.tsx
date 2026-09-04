@@ -10,14 +10,21 @@ import type {
   ReportConceptDisagreement,
   ReportConceptRollup,
   ReportConsistency,
+  ReportGateFloor,
   ReportGradingConfigData,
   ReportJudged,
   ReportMetricsData,
+  ReportScoringRules,
   ReportVarianceCause,
 } from '~/lib/tests/report/data-schemas';
 import { GRADE_BANDS, WEIGHTS } from '~/lib/tests/report/metrics';
+import { formatScoringRules } from '~/lib/tests/report/render';
 import type { ReportSynthesis } from '~/lib/tests/report/schemas';
-import { DEFAULT_PASS_MARK, STRICT_PASS_MARK } from '~/lib/tests/report/scoring-config';
+import {
+  DEFAULT_PASS_MARK,
+  DEFAULT_SCORING_RULES,
+  STRICT_PASS_MARK,
+} from '~/lib/tests/report/scoring-config';
 import { cn } from '~/lib/utils';
 
 /**
@@ -184,7 +191,13 @@ export function ReportExecutiveAssessment({
  * - The whole block is absent when `metrics.concepts` is null, so a run with no concept data
  *   shows no heading and no "0 of 0".
  */
-function ConceptCoverageRollup({ concepts }: { concepts: ReportConceptRollup }) {
+function ConceptCoverageRollup({
+  concepts,
+  gateFloor,
+}: {
+  concepts: ReportConceptRollup;
+  gateFloor: ReportGateFloor;
+}) {
   return (
     <div className="mt-8 rounded-2xl border border-slate-200 bg-slate-50 p-5">
       <h3 className="text-sm font-semibold text-slate-900">Concept coverage</h3>
@@ -215,19 +228,84 @@ function ConceptCoverageRollup({ concepts }: { concepts: ReportConceptRollup }) 
         </div>
       </dl>
 
+      {/* B0-835 — what each rule actually did to this run, rule by rule. A rule that was off says
+          so rather than reporting a zero that would read as "nothing to see here". */}
       <ul className="mt-4 space-y-1.5 text-sm text-slate-700">
+        {gateFloor.gateEnabled ? (
+          <li>
+            <span className="font-medium text-rose-700 tabular-nums">
+              {concepts.gatedIds.length}
+            </span>{' '}
+            gated — missing a mandatory concept, so rated Fail. Of those, the gate actually removed
+            a Pass (Pre-Gate Content Score at or above the pass mark) on{' '}
+            <span className="font-medium tabular-nums">{concepts.preventedIds.length}</span>.
+          </li>
+        ) : (
+          <li>
+            <span className="font-medium text-rose-700 tabular-nums">
+              {concepts.missingMandatory.length}
+            </span>{' '}
+            missing a mandatory concept — the mandatory gate is off for this report, so no Result
+            was changed by it.
+          </li>
+        )}
         <li>
-          <span className="font-medium text-rose-700 tabular-nums">
-            {concepts.missingMandatory.length}
+          <span className="font-medium text-emerald-700 tabular-nums">
+            {concepts.autoPassIds.length}
           </span>{' '}
-          missing a mandatory concept — reported on each case; the miss lowered Completeness through
-          coverage and did not by itself change any Result.
+          automatic Pass on full expected coverage — changed a rating on{' '}
+          <span className="font-medium tabular-nums">{concepts.autoPassChangedIds.length}</span>,
+          withheld over a material factual issue on{' '}
+          <span className="font-medium tabular-nums">{concepts.autoPassBlockedIds.length}</span>.
         </li>
+        {gateFloor.floorEnabled ? (
+          <li>
+            <span className="font-medium tabular-nums text-slate-900">
+              {gateFloor.flooredIds.length}
+            </span>{' '}
+            raised by the mandatory floor to {gateFloor.floorScore}
+            {gateFloor.flooredIds.length > 0
+              ? ' — the sub-scores and the concept judgments disagree on those cases; re-check them rather than treating the floor as a routine adjustment.'
+              : ' — as expected in a healthy run.'}
+          </li>
+        ) : (
+          <li>The mandatory floor is off for this report — full mandatory coverage earned no minimum score.</li>
+        )}
+        {gateFloor.ceilingEnabled && gateFloor.gateEnabled ? (
+          <li>
+            <span className="font-medium tabular-nums text-slate-900">
+              {gateFloor.cappedIds.length}
+            </span>{' '}
+            capped at {gateFloor.ceilingScore} by the mandatory ceiling — each of those cases shows
+            its Pre-Gate Content Score.
+          </li>
+        ) : (
+          <li>The mandatory ceiling is off for this report — no score was capped for a missing must-have.</li>
+        )}
+        {gateFloor.coverageEnabled ? (
+          <li>
+            <span className="font-medium tabular-nums text-slate-900">
+              {gateFloor.coverageCappedIds.length}
+            </span>{' '}
+            had Completeness bound by the expected-coverage cap
+            {gateFloor.coverageCappedIds.length > 0
+              ? ' — each shows the judged value beside the capped one.'
+              : ' — no judged Completeness sat above its coverage share.'}
+          </li>
+        ) : (
+          <li>
+            The expected-coverage cap on Completeness is off for this report — Completeness is the
+            judged value alone.
+          </li>
+        )}
         <li>
           <span className="font-medium text-amber-700 tabular-nums">
             {concepts.materialIssues.length}
           </span>{' '}
-          flagged by the grader with a material factual issue — reported, not scored.
+          flagged by the grader with a material factual issue — not a sub-score of its own
+          {gateFloor.floorEnabled && gateFloor.floorRespectsMaterialIssue
+            ? '; it withholds the mandatory floor and blocks the automatic Pass.'
+            : '; it blocks the automatic Pass.'}
         </li>
       </ul>
 
@@ -618,7 +696,9 @@ export function ReportAggregateFindings({
         ))}
       </div>
 
-      {metrics.concepts ? <ConceptCoverageRollup concepts={metrics.concepts} /> : null}
+      {metrics.concepts ? (
+        <ConceptCoverageRollup concepts={metrics.concepts} gateFloor={metrics.gateFloor} />
+      ) : null}
 
       {metrics.judged ? <JudgedMetricsRollup judged={metrics.judged} /> : null}
 
@@ -679,6 +759,11 @@ export type ReportMethodologyProps = {
   passMark?: number;
   /** The stricter line the report measures against (`metrics.strictPassMark`). */
   strictPassMark?: number;
+  /**
+   * B0-835 — the concept rules this report's numbers were derived under (`metrics.scoringRules`).
+   * The section is written from these, so a report scored with a rule off says so.
+   */
+  scoringRules?: ReportScoringRules;
   /** B0-825 — what this report was graded with (`payload.config`); null on a legacy report. */
   config?: ReportGradingConfigData | null;
   /** Collapsed by default on screen; B0-592 forces it open for the PDF via `details[open]`. */
@@ -694,10 +779,13 @@ export function ReportMethodology({
   uteCount,
   passMark = DEFAULT_PASS_MARK,
   strictPassMark = STRICT_PASS_MARK,
+  scoringRules = DEFAULT_SCORING_RULES,
   config = null,
   defaultOpen = false,
   className,
 }: ReportMethodologyProps) {
+  const gateOn = scoringRules.minimalGate.enabled;
+  const ceilingOn = gateOn && scoringRules.minimalCeiling.enabled;
   return (
     <details
       className={cn(
@@ -744,6 +832,16 @@ export function ReportMethodology({
                 <dt className="text-slate-500">Spread threshold</dt>
                 <dd className="tabular-nums text-slate-900">{config.spreadThreshold ?? '—'}</dd>
               </div>
+              {/* B0-835 — the concept rules in force. A report generated before the field existed
+                  was produced under the shipped defaults, and says so rather than being assumed. */}
+              <div className="flex gap-2 sm:col-span-2">
+                <dt className="text-slate-500">Concept rules</dt>
+                <dd className="tabular-nums text-slate-900">
+                  {config.scoringRules
+                    ? formatScoringRules(config.scoringRules)
+                    : `${formatScoringRules(DEFAULT_SCORING_RULES)} (default)`}
+                </dd>
+              </div>
               {config.judgedThresholds ? (
                 <div className="flex gap-2 sm:col-span-2">
                   <dt className="text-slate-500">Judged thresholds</dt>
@@ -787,10 +885,100 @@ export function ReportMethodology({
             ))}
           </ul>
           <p className="text-xs text-slate-500">
-            Accuracy, Relevance and Clarity are the grader&apos;s judgments. Completeness is
-            computed, never judged: the share of the case&apos;s expected concepts the response
-            communicated (100 × satisfied ÷ required), from the grader&apos;s per-concept verdicts.
-            The weighted roll-up is the case&apos;s score — never raised, never capped.
+            All four are the grader&apos;s holistic judgments, made against the Ideal Response, the
+            expected concepts and the mandatory concepts together. The deterministic concept rules
+            below then act on those judgments — they shape them, they do not replace them.
+          </p>
+        </div>
+
+        {/* B0-835 — the reference skill's concept rules, stated from the rules this report was
+            actually scored under, in the order `deriveCaseScoreline` runs them. */}
+        <div className="space-y-2">
+          <SectionLabel>Concept rules ({formatScoringRules(scoringRules)})</SectionLabel>
+          <ul className="space-y-1.5">
+            <li>
+              {scoringRules.expectedCoverage.enabled ? (
+                <>
+                  <span className="font-medium text-slate-900">
+                    Completeness is capped at expected-concept coverage
+                  </span>{' '}
+                  — the lower of the judged value and 100 × satisfied ÷ required. Missing expected
+                  content lowers the grade proportionally, and where the cap binds the case shows
+                  both numbers (&ldquo;40 (judged 66)&rdquo;).
+                </>
+              ) : (
+                <>
+                  <span className="font-medium text-slate-900">
+                    The expected-coverage cap on Completeness is off
+                  </span>{' '}
+                  for this report — Completeness is the grader&apos;s holistic judgment alone.
+                </>
+              )}
+            </li>
+            <li>
+              <span className="font-medium text-slate-900">The four sub-scores are weighted</span>{' '}
+              40 / 30 / 20 / 10.
+            </li>
+            <li>
+              {scoringRules.minimalFloor.enabled ? (
+                <>
+                  <span className="font-medium text-slate-900">
+                    Satisfying every mandatory concept floors the score at{' '}
+                    {scoringRules.minimalFloor.score}
+                  </span>{' '}
+                  — a C, because the must-have content was delivered
+                  {scoringRules.minimalFloor.respectMaterialIssue
+                    ? ', unless the grader flagged a material factual issue, which withholds the floor'
+                    : ''}
+                  . It only ever raises a score, and in a healthy run it binds nothing.
+                </>
+              ) : (
+                <>
+                  <span className="font-medium text-slate-900">The mandatory floor is off</span> for
+                  this report — full mandatory coverage earns no minimum score.
+                </>
+              )}
+            </li>
+            <li>
+              <span className="font-medium text-slate-900">
+                Full expected coverage with no material factual issue is an automatic Pass
+              </span>
+              , even where the wording diverges from the Ideal Response: substance outranks
+              similarity.
+            </li>
+            <li>
+              {!gateOn ? (
+                <>
+                  <span className="font-medium text-slate-900">The mandatory gate is off</span> for
+                  this report — a missing must-have concept is reported on the case and changes
+                  neither its score nor its Result.
+                </>
+              ) : ceilingOn ? (
+                <>
+                  <span className="font-medium text-slate-900">
+                    Missing any mandatory concept caps the score at{' '}
+                    {scoringRules.minimalCeiling.score}
+                  </span>{' '}
+                  — grade F, Result Fail. The uncapped arithmetic survives on the case as the
+                  Pre-Gate Content Score, a diagnostic that never enters an average or a rollup.
+                </>
+              ) : (
+                <>
+                  <span className="font-medium text-slate-900">
+                    Missing any mandatory concept rates the case Fail
+                  </span>{' '}
+                  whatever its score — the score cap is off for this report, so the case keeps its
+                  own arithmetic.
+                </>
+              )}
+            </li>
+          </ul>
+          <p className="text-xs text-slate-500">
+            {ceilingOn
+              ? 'The ceiling runs last and outranks both the floor and the automatic Pass, so the score, the grade and the Result agree by construction — no case reads “B / Fail”. '
+              : ''}
+            The one sanctioned exception is an automatic Pass that lands below the pass mark; every
+            such case is named in the data-quality notes.
           </p>
         </div>
 
@@ -818,8 +1006,10 @@ export function ReportMethodology({
               </li>
             </ul>
             <p className="text-xs text-slate-500">
-              Nothing else changes a Result. Cases that pass only under this mark and would fail at{' '}
-              {strictPassMark} are listed in the scorecard.
+              The concept rules above reach a Result through the score, not around it
+              {gateOn ? ', with the mandatory gate as the one safety rule that rates a case Fail outright' : ''}
+              . Cases that pass only under this mark and would fail at {strictPassMark} are listed
+              in the scorecard.
             </p>
           </div>
         </div>
@@ -830,16 +1020,19 @@ export function ReportMethodology({
         </p>
 
         <div className="space-y-2">
-          <SectionLabel>Reported, not scored</SectionLabel>
+          <SectionLabel>Material factual issues</SectionLabel>
           <p>
-            A missing mandatory (must-have) concept is named on the case and lowers Completeness
-            through coverage like any other expected concept; it does not by itself change the
-            Result. A material factual issue the grader flagged on a regulated value is likewise
-            named on the case, not scored.
+            A material factual issue the grader flagged on a regulated value — a wrong dilution,
+            contact time, ppm, CAS number or EPA registration number — is not a fifth sub-score
+            {scoringRules.minimalFloor.enabled && scoringRules.minimalFloor.respectMaterialIssue
+              ? ', but it withholds the mandatory floor'
+              : ''}{' '}
+            and it blocks the automatic Pass. It must also be reflected in Accuracy, which is where
+            a confidently wrong answer is actually paid for.
           </p>
           <p className="text-xs text-slate-500">
-            A case with no expected concepts has no data for Completeness and is Unable to Evaluate
-            — never a guessed number.
+            A case with no expected concepts has no concept data to be judged against and is Unable
+            to Evaluate — never a guessed number.
           </p>
         </div>
 

@@ -5,6 +5,12 @@ import { toast } from 'sonner';
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '~/components/ui/card';
 import { Skeleton } from '~/components/ui/skeleton';
+// B0-835 — the key names come from the module that reads them, never retyped here. Safe for a
+// client component: `scoring-config` imports `settings-service` lazily, inside its loaders.
+import {
+  PASS_MARK_SETTING_KEY,
+  SCORING_RULE_SETTING_KEYS,
+} from '~/lib/tests/report/scoring-config';
 
 import { BooleanToggleSetting } from './BooleanToggleSetting';
 import { StringSelectSetting } from './StringSelectSetting';
@@ -50,6 +56,14 @@ const BOOLEAN_SETTINGS = [
   // B0-466 — observability alerting (tool-failure rate / golden-set pass rate).
   'ALERT_SENTRY_ENABLED',
   'ALERT_GOLDEN_GATE_MISS_ENABLED',
+  // B0-835 — the concept scoring rules' switches (mandatory gate, mandatory floor, floor-respects-
+  // material-issue, mandatory ceiling, expected-coverage cap). Read once per report by
+  // loadScoringRules() and persisted on it, so a flip here changes new reports only.
+  SCORING_RULE_SETTING_KEYS.minimalGateEnabled,
+  SCORING_RULE_SETTING_KEYS.minimalFloorEnabled,
+  SCORING_RULE_SETTING_KEYS.minimalFloorRespectMaterialIssue,
+  SCORING_RULE_SETTING_KEYS.minimalCeilingEnabled,
+  SCORING_RULE_SETTING_KEYS.expectedCoverageEnabled,
 ];
 
 const STRING_SETTINGS = [
@@ -95,6 +109,10 @@ const STRING_SETTINGS = [
   'REPORT_GRADING_MODEL',
   // B0-806 — Anthropic output_config.effort for run-report grading; ignored by OpenAI models.
   'REPORT_GRADING_EFFORT',
+  // B0-812 / B0-835 — the Pass/Fail line and the two concept-rule scores. All numeric, 0-100.
+  PASS_MARK_SETTING_KEY,
+  SCORING_RULE_SETTING_KEYS.minimalFloorScore,
+  SCORING_RULE_SETTING_KEYS.minimalCeilingScore,
 ];
 
 export function SettingsPanel() {

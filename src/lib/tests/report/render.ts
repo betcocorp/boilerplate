@@ -1,11 +1,11 @@
 import type { TestRecord, TestResultRecord } from '~/lib/tests/types';
 
 import {
-  CONCEPT_MARKER_LEGEND,
   caseMarkers,
   formatConceptCoverage,
   formatConceptList,
   hasMandatoryMiss,
+  mandatoryMissingLegend,
   REVIEW_MARKER_LEGEND,
 } from './case-concepts';
 import {
@@ -25,6 +25,7 @@ import type {
   SpeedMetricAggregate,
 } from './metrics';
 import type { CaseScore, ReportGradingConfig, ReportSynthesis } from './schemas';
+import { DEFAULT_SCORING_RULES, type ScoringRules } from './scoring-config';
 import {
   P90_MIN_N,
   P90_UNAVAILABLE_LABEL,
@@ -206,6 +207,17 @@ function caseVarianceLine(variance: CaseGradingVariance): string {
     variance.range == null ? null : `range ${variance.range}`,
   ].filter((part): part is string => part !== null);
 
+  // B0-835 — a floor that bound on a pass is a review signal in its own right, whether or not the
+  // spread flagged the case: full must-have coverage weighting below a C means that pass's
+  // sub-scores and its concept verdicts disagree.
+  if (variance.floorApplied.length > 0) {
+    parts.push(
+      `the mandatory floor raised the score of ${variance.floorApplied
+        .map((entry) => `pass ${entry.pass} (${entry.weighted} → ${entry.floor})`)
+        .join(', ')}`,
+    );
+  }
+
   if (variance.flagged) {
     parts.push(
       `flagged for human review — ${varianceCauseText(variance.causes, variance.conceptDisagreements)}`,
@@ -242,19 +254,68 @@ export function orderCasesByTier<T extends { tier: string }>(cases: T[]): T[] {
     .map(([c]) => c);
 }
 
-/** B0-825 — the one-line statement of what a report was graded with. */
+/**
+ * B0-835 — the four concept rules in force, in one phrase, shared by the Markdown grading-config
+ * line and the React "Graded with" block so the two can never state different rules.
+ *
+ * A rule that is off says `off` rather than being omitted: a reader comparing two reports has to be
+ * able to see whether a number moved because the agent changed or because a rule was switched.
+ */
+export function formatScoringRules(rules: ScoringRules): string {
+  return [
+    rules.minimalCeiling.enabled ? `ceiling ${rules.minimalCeiling.score}` : 'ceiling off',
+    rules.minimalFloor.enabled
+      ? `floor ${rules.minimalFloor.score}${rules.minimalFloor.respectMaterialIssue ? ' (withheld on material issue)' : ''}`
+      : 'floor off',
+    rules.expectedCoverage.enabled ? 'coverage cap on' : 'coverage cap off',
+    rules.minimalGate.enabled ? 'gate on' : 'gate off',
+  ].join(' · ');
+}
+
+/** B0-825 / B0-835 — the one-line statement of what a report was graded with. */
 export function gradingConfigLine(config: ReportGradingConfig, strictPassMark: number): string {
   const parts = [
     `Graded by ${config.model}${config.effort ? ` at ${config.effort} effort` : ''}`,
     `${config.passes} independent pass${config.passes === 1 ? '' : 'es'}`,
     config.spreadThreshold != null ? `spread threshold ${config.spreadThreshold}` : null,
     config.passMark != null ? `pass mark ${config.passMark} (strict ${strictPassMark})` : null,
+    // A report generated before B0-835 persisted no rules; it was produced under the shipped
+    // defaults, and says so rather than leaving the reader to assume it.
+    config.scoringRules
+      ? formatScoringRules(config.scoringRules)
+      : `${formatScoringRules(DEFAULT_SCORING_RULES)} (default)`,
     config.judgedThresholds
       ? `judged thresholds sim ≥ ${config.judgedThresholds.simHigh} high / < ${config.judgedThresholds.simLow} low · review ≤ ${config.judgedThresholds.lowConfidence} confidence`
       : null,
     config.gradingPromptHash ? `grading prompt ${config.gradingPromptHash.slice(0, 12)}` : null,
   ].filter((part): part is string => part !== null);
   return `_${parts.join(' · ')}._`;
+}
+
+/**
+ * B0-835 — the concept rules as the "Methodology & scoring" section states them, written from the
+ * rules actually in force so a report generated with one switched off says so rather than
+ * describing behaviour it never applied.
+ *
+ * The order is the one `deriveCaseScoreline` runs (methodology §2b Rule 4 step 7); the ceiling is
+ * last because it outranks the floor and the automatic Pass both.
+ */
+function conceptRuleLines(rules: ScoringRules): string[] {
+  return [
+    rules.expectedCoverage.enabled
+      ? '- **Completeness is capped at expected-concept coverage** — `min(judged, 100 × satisfied ÷ required)`. Missing expected content lowers the grade proportionally rather than sitting beside it as a note, and where the cap binds the case shows both numbers ("40 (judged 66)").'
+      : "- **The expected-coverage cap on Completeness is off for this report** — Completeness is the grader's holistic judgment alone.",
+    '- **The four sub-scores are then weighted** 40 / 30 / 20 / 10.',
+    rules.minimalFloor.enabled
+      ? `- **Satisfying every mandatory concept floors the score at ${rules.minimalFloor.score}** — a C, because the must-have content was delivered${rules.minimalFloor.respectMaterialIssue ? ', unless the grader flagged a material factual issue, which withholds the floor' : ''}. It only ever raises a score, and in a healthy run it binds nothing.`
+      : '- **The mandatory floor is off for this report** — full mandatory coverage earns no minimum score.',
+    '- **Full expected coverage with no material factual issue is an automatic Pass**, even where the wording diverges from the Ideal Response: substance outranks similarity.',
+    !rules.minimalGate.enabled
+      ? '- **The mandatory gate is off for this report** — a missing must-have concept is reported on the case and changes neither its score nor its Result.'
+      : rules.minimalCeiling.enabled
+        ? `- **Missing any mandatory concept caps the score at ${rules.minimalCeiling.score}** — grade F, Result Fail. The uncapped arithmetic survives on the case as the **Pre-Gate Content Score**, a diagnostic that never enters an average or a rollup.`
+        : '- **Missing any mandatory concept rates the case Fail** whatever its score — the score cap is off for this report, so the case keeps its own arithmetic.',
+  ];
 }
 
 /** B0-811 — the one line of judged metrics a case gets, beneath the speed line and labelled like it. */
@@ -457,11 +518,31 @@ export function renderReportMarkdown(params: {
   push('## Methodology & scoring');
   blank();
   push(
-    `Cases were matched to this run's own test items by ID, not row position. Each response was scored on a weighted 0–100 scale: Accuracy 40%, Completeness 30%, Relevance 20%, Clarity 10%. Accuracy, Relevance and Clarity are the grader's judgments; **Completeness is computed** as the share of the case's expected concepts the response communicated (100 × satisfied ÷ required), from the grader's per-concept verdicts. The overall is that weighted sum and nothing else — never raised, never capped. Grades: A 90–100, B 80–89, C 70–79, D 60–69, F below 60. Result: Pass at ${m.passMark} or above, Fail below; nothing else changes a Result. The golden dataset (ideal response, expected and mandatory concepts, expected sources) is the source of truth; responses were judged on substantive correctness, not wording. Cases that could not be judged — including any without expected concepts, which have no data for Completeness — are marked "Unable to Evaluate" and excluded from every average, grade, count, and rate.`,
+    `Cases were matched to this run's own test items by ID, not row position. Each response was scored on a weighted 0–100 scale: Accuracy 40%, Completeness 30%, Relevance 20%, Clarity 10%. **All four are the grader's holistic judgments**, made against the Ideal Response, the expected concepts and the mandatory concepts together. Grades: A 90–100, B 80–89, C 70–79, D 60–69, F below 60. Result: Pass at ${m.passMark} or above, Fail below. The golden dataset (ideal response, expected and mandatory concepts, expected sources) is the source of truth; responses were judged on substantive correctness, not wording. Cases that could not be judged — including any without expected concepts, which have no concept data to be judged against — are marked "Unable to Evaluate" and excluded from every average, grade, count, and rate.`,
+  );
+  blank();
+  // B0-835 — the four rules the reference agent-evaluation skill applies, stated from the rules
+  // this report was actually scored under (`metrics.scoringRules`), never from the defaults.
+  push(
+    'Deterministic concept rules then act on those judgments, in this fixed order (methodology §2b):',
+  );
+  blank();
+  for (const line of conceptRuleLines(m.scoringRules)) push(line);
+  blank();
+  push(
+    `${
+      m.scoringRules.minimalGate.enabled && m.scoringRules.minimalCeiling.enabled
+        ? 'The ceiling runs last and outranks both the floor and the automatic Pass, so the score, the grade and the Result agree by construction — no case reads "B / Fail". '
+        : ''
+    }The one sanctioned exception is an automatic Pass that lands below the pass mark; every such case is named in the data-quality notes rather than left to be noticed.`,
   );
   blank();
   push(
-    'A missing mandatory (must-have) concept is reported on the case and lowers Completeness through coverage like any other expected concept; it does not by itself change the Result. A material factual issue the grader flagged on a regulated value is likewise reported on the case, not scored.',
+    `A material factual issue the grader flagged on a regulated value is not a fifth sub-score${
+      m.scoringRules.minimalFloor.enabled && m.scoringRules.minimalFloor.respectMaterialIssue
+        ? ', but it withholds the mandatory floor'
+        : ''
+    } and it blocks the automatic Pass. It must also be reflected in Accuracy, which is where a confidently wrong answer is actually paid for.`,
   );
   blank();
 
@@ -478,10 +559,59 @@ export function renderReportMarkdown(params: {
     push(
       `- Satisfied every expected concept: **${con.expected.casesSatisfyingAll} of ${con.expected.casesSpecifying}** (${con.expected.pct}%) — of the cases that specify one.`,
     );
+    // B0-835 — what each rule actually did to this run, rule by rule. A rule that was off says so
+    // instead of reporting a zero that would read as "nothing to see here".
+    const gf = m.gateFloor;
+    if (gf.gateEnabled) {
+      push(
+        `- Gated (missing a mandatory concept, rated Fail): **${con.gatedIds.length}** — of which the gate actually removed a Pass (Pre-Gate Content Score at or above the pass mark): **${con.preventedIds.length}**.`,
+      );
+    } else {
+      push(
+        `- Missing a mandatory concept: **${con.missingMandatory.length}** — the mandatory gate is off for this report, so no Result was changed by it.`,
+      );
+    }
     push(
-      `- Missing a mandatory concept: **${con.missingMandatory.length}** — reported on each case; the miss lowered Completeness through coverage and did not by itself change any Result.`,
+      `- Automatic Pass (full expected coverage, no material factual issue): **${con.autoPassIds.length}** — changed a rating: **${con.autoPassChangedIds.length}** · withheld over a material factual issue: **${con.autoPassBlockedIds.length}**.`,
     );
-    push(`- Material factual issue flagged by the grader: **${con.materialIssues.length}** — reported, not scored.`);
+    if (gf.floorEnabled) {
+      push(
+        `- Mandatory floor raised a score: **${gf.flooredIds.length}**${
+          gf.flooredIds.length > 0
+            ? ` (${gf.flooredIds.map(idLink).join(', ')}) — the sub-scores and the concept judgments disagree on these cases; re-check them rather than treating the floor as a routine adjustment.`
+            : ' — as expected in a healthy run.'
+        }`,
+      );
+    } else {
+      push('- Mandatory floor: **off** for this report — full mandatory coverage earned no minimum score.');
+    }
+    if (gf.ceilingEnabled && gf.gateEnabled) {
+      push(
+        `- Mandatory ceiling capped a score: **${gf.cappedIds.length}**${
+          gf.cappedIds.length > 0 ? ` (${gf.cappedIds.map(idLink).join(', ')})` : ''
+        } — each of those cases shows its Pre-Gate Content Score.`,
+      );
+    } else {
+      push('- Mandatory ceiling: **off** for this report — no score was capped for a missing must-have.');
+    }
+    if (gf.coverageEnabled) {
+      push(
+        `- Expected-coverage cap bound on Completeness: **${gf.coverageCappedIds.length}**${
+          gf.coverageCappedIds.length > 0
+            ? ` (${gf.coverageCappedIds.map(idLink).join(', ')}) — each shows the judged value beside the capped one.`
+            : ' — no judged Completeness sat above its coverage share.'
+        }`,
+      );
+    } else {
+      push(
+        '- Expected-coverage cap on Completeness: **off** for this report — Completeness is the judged value alone.',
+      );
+    }
+    push(
+      `- Material factual issue flagged by the grader: **${con.materialIssues.length}** — not a sub-score of its own${
+        gf.floorEnabled && gf.floorRespectsMaterialIssue ? '; it withholds the mandatory floor and' : '; it'
+      } blocks the automatic Pass.`,
+    );
     blank();
 
     if (con.missingMandatory.length > 0) {
@@ -649,7 +779,7 @@ export function renderReportMarkdown(params: {
   if (anyMandatoryMissing || anyReviewFlagged) {
     push(
       `_${[
-        anyMandatoryMissing ? CONCEPT_MARKER_LEGEND.mandatoryMissing : null,
+        anyMandatoryMissing ? mandatoryMissingLegend(m.scoringRules) : null,
         anyReviewFlagged ? REVIEW_MARKER_LEGEND : null,
       ]
         .filter(Boolean)
@@ -699,31 +829,75 @@ export function renderReportMarkdown(params: {
     if (evaluated) {
       push('| Accuracy | Completeness | Relevance | Clarity | Overall | Grade | Result |');
       push('|---|---|---|---|---|---|---|');
+      // B0-835 — where the cap bound, the cell carries both numbers so the arithmetic reconciles
+      // without a second headline score (methodology §2b Rule 3).
+      const completenessCell = evaluated.coverageApplied
+        ? `${evaluated.completeness} (judged ${evaluated.completenessJudged})`
+        : String(evaluated.completeness);
       push(
-        `| ${evaluated.accuracy} | ${evaluated.completeness} | ${evaluated.relevance} | ${evaluated.clarity} | ${evaluated.overall}/100 | ${evaluated.grade} | ${evaluated.status} |`,
+        `| ${evaluated.accuracy} | ${completenessCell} | ${evaluated.relevance} | ${evaluated.clarity} | ${evaluated.overall}/100 | ${evaluated.grade} | ${evaluated.status} |`,
       );
       blank();
 
-      // B0-813 — where the Completeness came from, the coverage readout, what is missing by name,
-      // and the reported (never scored) facts: a must-have miss, a material issue. Methodology §9
-      // is explicit that this is as much as a reader needs here.
+      // B0-813 / B0-835 — where the Completeness came from, the coverage readout, what each concept
+      // rule did to this case, and what is missing by name. Methodology §9 is explicit that this is
+      // as much as a reader needs here: the numbers on labelled lines, the reasoning in one
+      // sentence, and no fact stated twice.
       const con = evaluated.concepts;
-      push(
-        `**Completeness:** ${evaluated.completeness} — ${evaluated.coverage.satisfied} of ${evaluated.coverage.required} expected concept${evaluated.coverage.required === 1 ? '' : 's'} communicated.`,
-      );
-      push(`**Concept coverage:** ${formatConceptCoverage(con)}`);
-      if (hasMandatoryMiss(con)) {
+      const coverageCounts = `${evaluated.coverage.satisfied} of ${evaluated.coverage.required} expected concept${evaluated.coverage.required === 1 ? '' : 's'} communicated`;
+      if (evaluated.coverageApplied) {
         push(
-          `**Missing mandatory concepts (reported — not enforced):** ${formatConceptList(con.mandatory.missing)}`,
+          `**Completeness:** judged ${evaluated.completenessJudged}, capped at coverage ${evaluated.completeness} (${coverageCounts}).`,
         );
+      } else {
+        push(
+          `**Completeness:** ${evaluated.completeness} — ${coverageCounts}.${
+            evaluated.completenessJudged === null
+              ? ' (no judged value on this pass; coverage used)'
+              : ''
+          }`,
+        );
+      }
+      push(`**Concept coverage:** ${formatConceptCoverage(con)}`);
+      if (evaluated.ceilingApplied) {
+        push(
+          `**Pre-Gate Content Score:** ${evaluated.preGateScore}/100 (${evaluated.preGateGrade}) — the rubric arithmetic before the mandatory cap; diagnostic only.`,
+        );
+      }
+      if (evaluated.floorApplied) {
+        push(
+          `**Mandatory floor:** raised from ${evaluated.weighted} to ${evaluated.floor} — every mandatory concept satisfied. NOTE: the sub-scores placed this below a C despite full mandatory coverage — re-check.`,
+        );
+      }
+      if (evaluated.statusSource === 'auto_pass') {
+        push('**Automatic Pass:** all expected concepts communicated, no material issue.');
+      }
+      if (evaluated.autoPassBlocked) {
+        push(
+          `**Automatic Pass withheld:** ${con.materialIssueNote ?? 'a material factual issue was recorded on this case.'}`,
+        );
+      }
+      if (hasMandatoryMiss(con)) {
+        push(`**Missing mandatory concepts:** ${formatConceptList(con.mandatory.missing)}`);
       }
       if (con.expected.missing.length > 0) {
         push(`**Missing expected concepts:** ${formatConceptList(con.expected.missing)}`);
       }
       if (con.materialIssue) {
         push(
-          `**Material factual issue (reported — not scored):** ${con.materialIssueNote ?? 'a material factual issue was recorded on this case.'}`,
+          `**Material factual issue:** ${con.materialIssueNote ?? 'a material factual issue was recorded on this case.'}`,
         );
+      }
+      // The skill's own sentence, printed once. The floor, automatic-Pass and withheld-Pass lines
+      // above already state it word for word for those three outcomes, so it would be a duplicate
+      // there; for a gated or coverage-capped case it carries reasoning the numbers do not.
+      if (
+        evaluated.conceptNote &&
+        !evaluated.floorApplied &&
+        evaluated.statusSource !== 'auto_pass' &&
+        !evaluated.autoPassBlocked
+      ) {
+        push(`**Concept rules:** ${evaluated.conceptNote}`);
       }
       if (evaluated.passesOnlyUnderCurrentMark) {
         push(

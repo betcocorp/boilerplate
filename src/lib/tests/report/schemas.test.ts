@@ -8,6 +8,7 @@ import {
   totalPassCount,
   type CaseScore,
 } from './schemas';
+import { DEFAULT_SCORING_RULES } from './scoring-config';
 
 /**
  * B0-719 — the persisted `report_state` shape, and specifically its backward compatibility.
@@ -55,6 +56,8 @@ describe('parseReportState — backward compatibility (B0-719)', () => {
     expect(state!.spreadThreshold).toBeNull();
     // B0-812 — a legacy row carries no pass mark; the reader falls back to the shipped default.
     expect(state!.passMark).toBeNull();
+    // B0-835 — nor any concept rules; the reader falls back to `DEFAULT_SCORING_RULES`.
+    expect(state!.scoringRules).toBeNull();
     // B0-808 — and no per-concept verdicts or judged metrics; the optional fields stay absent.
     expect(state!.caseScores['case-a']!.concepts).toBeUndefined();
     expect(state!.caseScores['case-a']!.similarity).toBeUndefined();
@@ -143,11 +146,12 @@ describe('progress counting (B0-719)', () => {
     expect(completedPassCount(state)).toBe(2);
   });
 
-  it('starts a fresh state at the configured pass count and pass mark', () => {
-    const state = emptyReportState('gpt-4.1', 12, 3, 10, 60);
+  it('starts a fresh state at the configured pass count, pass mark and concept rules', () => {
+    const state = emptyReportState('gpt-4.1', 12, 3, 10, 60, DEFAULT_SCORING_RULES);
     expect(state.passes).toBe(3);
     expect(state.spreadThreshold).toBe(10);
     expect(state.passMark).toBe(60);
+    expect(state.scoringRules).toEqual(DEFAULT_SCORING_RULES);
     expect(state.casePassScores).toEqual({});
     expect(totalPassCount(state)).toBe(36);
     expect(completedPassCount(state)).toBe(0);
@@ -158,6 +162,28 @@ describe('progress counting (B0-719)', () => {
     expect(state.passes).toBe(1);
     expect(state.spreadThreshold).toBeNull();
     expect(state.passMark).toBeNull();
+    expect(state.scoringRules).toBeNull();
+  });
+
+  it('round-trips the concept rules a report was scored under, and reports them (B0-835)', () => {
+    const gateOff = {
+      ...DEFAULT_SCORING_RULES,
+      minimalGate: { enabled: false },
+      minimalFloor: { enabled: true, score: 65, respectMaterialIssue: false },
+    };
+    const state = parseReportState({ ...LEGACY_STATE, scoringRules: gateOff });
+
+    expect(state).not.toBeNull();
+    expect(state!.scoringRules).toEqual(gateOff);
+    // B0-825 — the grading-config block a report prints is read straight off the state.
+    expect(gradingConfigFromState(state!).scoringRules).toEqual(gateOff);
+    expect(gradingConfigFromState(parseReportState(LEGACY_STATE)!).scoringRules).toBeNull();
+  });
+
+  it('rejects a scoringRules block that is not the full shape, rather than half-honouring it', () => {
+    // A partial or mistyped block would otherwise leave the report claiming rules it never ran
+    // under; `sanitizeScoringRules` is for repairing settings rows, not persisted state.
+    expect(parseReportState({ ...LEGACY_STATE, scoringRules: { minimalGate: { enabled: 'yes' } } })).toBeNull();
   });
 
   it('carries no grading effort until the orchestrator records one, and a legacy row parses with none (B0-806)', () => {
