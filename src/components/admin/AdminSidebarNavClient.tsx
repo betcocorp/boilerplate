@@ -165,6 +165,42 @@ const sidebarSections: NavSectionModel[] = [
           },
         ],
       },
+      {
+        type: 'link',
+        label: 'Settings',
+        href: '/admin/settings',
+        permission: PERMISSIONS.NAVIGATION_SIDEBAR_USER_SETTINGS,
+      },
+      {
+        type: 'link',
+        label: 'Projects',
+        href: '/admin/projects',
+        permission: PERMISSIONS.NAVIGATION_SIDEBAR_USER_API_ACCESS,
+      },
+      {
+        type: 'link',
+        label: 'Cost',
+        href: '/admin/cost',
+        permission: PERMISSIONS.NAVIGATION_SIDEBAR_COST,
+      },
+      {
+        type: 'link',
+        label: 'Analytics',
+        href: '/admin/analytics',
+        permission: PERMISSIONS.NAVIGATION_SIDEBAR_USER_ANALYTICS,
+      },
+      {
+        type: 'link',
+        label: 'Changelog',
+        href: '/admin/changelog',
+        permission: PERMISSIONS.NAVIGATION_SIDEBAR_USER_CHANGELOG,
+      },
+      {
+        type: 'link',
+        label: 'Permissions',
+        href: '/admin/permissions',
+        permission: PERMISSIONS.ADMIN_CARD_PERMISSIONS,
+      },
     ],
   },
   {
