@@ -1,6 +1,8 @@
 import { connection } from 'next/server';
 
 import { RoutingComparisonDashboard } from '~/components/admin/tests/RoutingComparisonDashboard';
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { requirePagePermission } from '~/lib/permissions/require-page-permission';
 import { listRoutingComparisonRows } from '~/lib/tests/repository';
 import {
   buildRouterDisagreementMatrix,
@@ -28,6 +30,10 @@ export const metadata = {
  * back to `test_items`/`tests` is needed for the comparison math itself.
  */
 export default async function AdminRoutingComparisonPage() {
+  await requirePagePermission(
+    PERMISSIONS.NAVIGATION_SIDEBAR_TESTS,
+    'GET /admin/tests/routing-comparison',
+  );
   await connection();
 
   const rows = await listRoutingComparisonRows();

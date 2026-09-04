@@ -2,6 +2,8 @@ import Link from 'next/link';
 import { connection } from 'next/server';
 
 import { GenerateControls } from '~/components/admin/GenerateControls';
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { requirePagePermission } from '~/lib/permissions/require-page-permission';
 import { getRagGenerationStatus } from '~/lib/rag/pipeline';
 import { formatEasternTimestamp } from '~/lib/utils/time';
 
@@ -21,6 +23,11 @@ function formatTimestamp(value: string | null) {
 }
 
 export default async function RagGeneratePage() {
+  await requirePagePermission(
+    PERMISSIONS.NAVIGATION_SIDEBAR_INGESTION_PRODUCTS,
+    'GET /admin/products/rag/generate',
+  );
+
   await connection();
 
   const status = await getRagGenerationStatus();

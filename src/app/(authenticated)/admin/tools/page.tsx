@@ -8,6 +8,8 @@ import {
   CardHeader,
   CardTitle,
 } from '~/components/ui/card';
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { requirePagePermission } from '~/lib/permissions/require-page-permission';
 
 export const metadata = {
   title: 'Tools | Betco BEX Admin',
@@ -52,7 +54,9 @@ const tools = [
   },
 ];
 
-export default function AdminToolsPage() {
+export default async function AdminToolsPage() {
+  await requirePagePermission(PERMISSIONS.NAVIGATION_SIDEBAR_TOOLS, 'GET /admin/tools');
+
   return (
     <main className="min-w-0 p-4 sm:p-6">
       <div className="rounded-[2rem] border border-border/60 bg-background p-6 shadow-sm sm:p-8">

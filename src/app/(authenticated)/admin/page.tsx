@@ -22,6 +22,7 @@
 
 import { connection } from 'next/server';
 
+import { AdminAccessDeniedToast } from '~/components/admin/AdminAccessDeniedToast';
 import { DashboardHeader } from '~/components/admin/dashboard/DashboardHeader';
 import { HealthBar } from '~/components/admin/dashboard/HealthBar';
 import { KpiRow } from '~/components/admin/dashboard/KpiRow';
@@ -43,10 +44,14 @@ type PageProps = {
 
 export default async function AdminDashboardPage({ searchParams }: PageProps) {
   await connection();
-  const { window, version } = resolveHealthSearchParams(await searchParams);
+  const resolvedSearchParams = await searchParams;
+  const { window, version } = resolveHealthSearchParams(resolvedSearchParams);
+  // B0-839 — redirect target for `requirePagePermission`'s it-admin-only page guard.
+  const accessDenied = resolvedSearchParams.accessDenied === '1';
 
   return (
     <main className="flex min-w-0 flex-1 flex-col gap-5 p-4 sm:p-6">
+      <AdminAccessDeniedToast show={accessDenied} />
       <DashboardHeader version={version} window={window} />
 
       <HealthBar version={version} window={window} />

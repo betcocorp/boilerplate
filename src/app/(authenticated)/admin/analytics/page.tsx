@@ -17,6 +17,8 @@ import {
   getEventAnalytics,
   parseGroupFilter,
 } from '~/lib/event-logging/analytics-repository';
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { requirePagePermission } from '~/lib/permissions/require-page-permission';
 
 export const metadata = {
   title: 'Analytics | Betco BEX',
@@ -28,6 +30,7 @@ type PageProps = {
 };
 
 export default async function AdminAnalyticsPage({ searchParams }: PageProps) {
+  await requirePagePermission(PERMISSIONS.NAVIGATION_SIDEBAR_USER_ANALYTICS, 'GET /admin/analytics');
   await connection();
   const params = await searchParams;
   const rawDays = params.days;

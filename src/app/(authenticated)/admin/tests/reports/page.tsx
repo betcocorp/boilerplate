@@ -16,6 +16,8 @@ import {
   TableHeader,
   TableRow,
 } from '~/components/ui/table';
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { requirePagePermission } from '~/lib/permissions/require-page-permission';
 import type { ReportScoreChange } from '~/lib/tests/report-trend';
 import {
   buildReportScoreTrend,
@@ -141,6 +143,10 @@ function ReportChangeCell({
 }
 
 export default async function AdminTestReportsPage({ searchParams }: PageProps) {
+  await requirePagePermission(
+    PERMISSIONS.NAVIGATION_SIDEBAR_TESTS,
+    'GET /admin/tests/reports',
+  );
   await connection();
   const params = await searchParams;
 

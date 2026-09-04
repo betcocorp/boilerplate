@@ -20,6 +20,8 @@ import {
   PROMPT_CATEGORY_BY_SLUG,
   type PromptCategorySlug,
 } from '~/lib/constants/prompt-categories';
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { requirePagePermission } from '~/lib/permissions/require-page-permission';
 import { FAILURE_ROOT_CAUSE_PENDING_COPY } from '~/lib/tests/failure-queue';
 import {
   listAllLatestFailedItemsForGroupedView,
@@ -57,6 +59,10 @@ function buildFailureQueueHref(
 }
 
 export default async function AdminFailureQueuePage({ searchParams }: PageProps) {
+  await requirePagePermission(
+    PERMISSIONS.NAVIGATION_SIDEBAR_TESTS,
+    'GET /admin/tests/failure-queue',
+  );
   await connection();
   const params = await searchParams;
   const query = readSearchParam(params.q);

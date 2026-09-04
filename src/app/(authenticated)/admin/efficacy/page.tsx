@@ -1,6 +1,8 @@
 import Link from 'next/link';
 import { connection } from 'next/server';
 
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { requirePagePermission } from '~/lib/permissions/require-page-permission';
 import { getEfficacySyncStatus } from '~/lib/rag/efficacy-sync-actions';
 
 import { EfficacyIngestionPanel } from './EfficacyIngestionPanel';
@@ -12,6 +14,7 @@ export const metadata = {
 };
 
 export default async function AdminEfficacyPage() {
+  await requirePagePermission(PERMISSIONS.NAVIGATION_SIDEBAR_EFFICACY, 'GET /admin/efficacy');
   await connection();
   const [status, syncStatus] = await Promise.all([
     getEfficacyDashboardStatus(),

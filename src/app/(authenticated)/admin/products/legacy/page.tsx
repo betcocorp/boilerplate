@@ -5,6 +5,8 @@ import { connection } from 'next/server';
 import { Button } from '~/components/ui/button';
 import { Input } from '~/components/ui/input';
 
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { requirePagePermission } from '~/lib/permissions/require-page-permission';
 import { fetchIngestedProductLineCodes } from '~/lib/rag/corpus-ingestion';
 import { getSupabaseServerClient } from '~/supabase/clients/server';
 import type { Tables } from '~/types/supabase.legacy';
@@ -147,6 +149,11 @@ type ProductsPageProps = {
 export default async function ProductsPage({
   searchParams,
 }: ProductsPageProps) {
+  await requirePagePermission(
+    PERMISSIONS.NAVIGATION_SIDEBAR_PRODUCTS,
+    'GET /admin/products/legacy',
+  );
+
   await connection();
 
   const resolvedSearchParams = await searchParams;

@@ -6,6 +6,8 @@
 
 import { CostDashboard } from '~/components/admin/cost/CostDashboard';
 import { getCostMetrics } from '~/lib/observability/cost-metrics';
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { requirePagePermission } from '~/lib/permissions/require-page-permission';
 
 export const metadata = {
   title: 'Cost monitoring | Betco BEX',
@@ -13,6 +15,11 @@ export const metadata = {
 };
 
 export default async function CostMonitoringPage() {
+  await requirePagePermission(
+    PERMISSIONS.NAVIGATION_SIDEBAR_COST,
+    'GET /admin/cost',
+  );
+
   const initial = await getCostMetrics({
     timeRange: '1d',
     groupBy: 'day',

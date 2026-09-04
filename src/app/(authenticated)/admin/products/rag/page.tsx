@@ -4,6 +4,8 @@ import { RagSearchControls } from '~/components/admin/rag/RagSearchControls';
 import type { RagSearchSettingsValues } from '~/components/admin/rag/RagSearchControls';
 import { RagSearchResultCard } from '~/components/admin/rag/RagSearchResultCard';
 import { RagSearchTimingPanel } from '~/components/admin/RagSearchTimingPanel';
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { requirePagePermission } from '~/lib/permissions/require-page-permission';
 import { searchProductChunks } from '~/lib/rag/search';
 import type { SearchScope } from '~/lib/rag/search';
 import { formatDurationMs } from '~/lib/utils/time';
@@ -238,6 +240,8 @@ function parseMinSimilarity(value: string | string[] | undefined) {
 }
 
 export default async function RagSearchPage({ searchParams }: SearchPageProps) {
+  await requirePagePermission(PERMISSIONS.NAVIGATION_SIDEBAR_TOOLS, 'GET /admin/products/rag');
+
   await connection();
 
   const resolvedSearchParams = await searchParams;

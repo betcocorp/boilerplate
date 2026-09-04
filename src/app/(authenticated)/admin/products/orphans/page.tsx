@@ -1,9 +1,16 @@
 import { OrphanSummaryCards } from '~/components/orphans/orphan-summary-cards';
 import { getOrphanSummary } from '~/lib/orphans/orphan-queue-actions';
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { requirePagePermission } from '~/lib/permissions/require-page-permission';
 
 export const dynamic = 'force-dynamic';
 
 export default async function OrphanDashboardPage() {
+  await requirePagePermission(
+    PERMISSIONS.NAVIGATION_SIDEBAR_PRODUCTS,
+    'GET /admin/products/orphans',
+  );
+
   const summary = await getOrphanSummary();
   // Match what the queue tables show by default: active, minus translated (B0-804).
   const totalTranslated = summary.reduce((n, r) => n + r.active_translated, 0);
