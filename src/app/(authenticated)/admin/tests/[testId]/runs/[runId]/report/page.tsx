@@ -1,5 +1,6 @@
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
+import type { Metadata } from 'next';
 
 import { RunReportTabs } from '~/components/admin/tests/report/RunReportTabs';
 import { RunReportView } from '~/components/admin/tests/RunReportView';
@@ -13,10 +14,15 @@ import { completedPassCount, parseReportState } from '~/lib/tests/report/schemas
 import { getTestById, getTestResultById } from '~/lib/tests/repository';
 import { isCompletedRunStatus } from '~/lib/tests/types';
 
-export const metadata = {
-  title: 'Run Report | Betco BEX',
-  description: 'LLM-graded agent-evaluation report for a test run.',
-};
+export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
+  const { testId } = await params;
+  const test = await getTestById(testId).catch(() => null);
+
+  return {
+    title: test ? `${test.name} | Betco Bex` : 'Run Report | Betco Bex',
+    description: 'LLM-graded agent-evaluation report for a test run.',
+  };
+}
 
 type PageProps = {
   params: Promise<{ testId: string; runId: string }>;
