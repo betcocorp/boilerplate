@@ -9,8 +9,18 @@ import { getPermissionsForUser } from '~/lib/permissions/repository';
  * B0-449 — the effective/act-as-aware actor for a `/api/bex/*` request, used for *authorization and
  * scoping* ("what can this request see/do"). Deliberately independent from
  * `~/lib/conversations/conversation-owner.ts`'s `resolveConversationOwnerUserId`, which resolves the
- * true authenticated owner (ignoring act-as) used only for stamping ownership on newly created rows.
- * Never conflate the two.
+ * true authenticated owner (ignoring act-as).
+ *
+ * Ownership STAMPING on newly created conversation rows still always uses that true owner
+ * exclusively, never this actor — that is unchanged, and remains the guard against an RLS leak (see
+ * that function's JSDoc). What changed (B0-841): conversation ACCESS checks (read/continue/delete on
+ * an *existing* conversation) now allow a match against either this act-as-aware actor's `userId` OR
+ * the true session owner — specifically so an admin who created a conversation while acting-as a
+ * non-admin user (which stamps that conversation with the admin's true id) can still read/continue/
+ * delete it in the same or a later act-as session, where `userId` here resolves to the acted-as user
+ * and would otherwise never match. See `actorMayAccessConversation` in
+ * `~/app/api/bex/conversations/[id]/route.ts` and the `allowed` check in
+ * `~/app/api/bex/chat/stream/route.ts`.
  */
 export type BexActor =
   | { kind: 'user'; userId: string; canViewAll: boolean }

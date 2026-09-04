@@ -48,6 +48,14 @@ export async function POST(request: Request) {
     );
   }
 
+  // B0-841 — resolved once, up front: an act-as conversation is always stamped with the true
+  // session owner (never the acted-as actor), so both the continuation access check below and the
+  // fresh-conversation stamping further down need this same value. The two uses are mutually
+  // exclusive per request (continuing an existing conversationId vs. starting fresh), so a single
+  // resolved value is correct for both.
+  const trueOwnerUserId =
+    actor.kind === 'user' ? await resolveConversationOwnerUserId() : null;
+
   // B0-449 — a supplied conversationId must belong to this actor (owner, view-all, or service)
   // before spending a model call on it. A conversationId that does not resolve to any row is not a
   // privacy question (nothing exists to leak) and is left to `runBexChatTurn`, which starts a fresh
@@ -58,7 +66,10 @@ export async function POST(request: Request) {
       const allowed =
         actor.kind === 'service' ||
         actor.canViewAll ||
-        (actor.kind === 'user' && existing.user_id === actor.userId);
+        (actor.kind === 'user' && existing.user_id === actor.userId) ||
+        // B0-841 — also allow the true session owner (e.g. an it-admin who created this
+        // conversation while acting-as a non-admin user) to continue it.
+        (actor.kind === 'user' && trueOwnerUserId !== null && existing.user_id === trueOwnerUserId);
       if (!allowed) {
         await writeAuditLog(
           'bex.conversation.access_denied',
@@ -77,11 +88,9 @@ export async function POST(request: Request) {
   // B0-449 — ownership stamping for a brand-new conversation always uses the true authenticated
   // owner (ignoring act-as), never the scoping `actor` above; a service caller gets no owner.
   // Only relevant when no conversationId was supplied — continuing turns never re-stamp an existing
-  // conversation (see `runBexChatTurn`'s `owner` param doc).
-  const ownerUserId =
-    !parsed.data.conversationId && actor.kind === 'user'
-      ? await resolveConversationOwnerUserId()
-      : null;
+  // conversation (see `runBexChatTurn`'s `owner` param doc). Reuses `trueOwnerUserId` resolved above
+  // rather than looking it up again — the two branches are mutually exclusive per request.
+  const ownerUserId = !parsed.data.conversationId ? trueOwnerUserId : null;
 
   const traceId = newCorrelationId();
   logInfo('request_received', {
