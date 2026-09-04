@@ -60,6 +60,23 @@ function toMillis(iso: string): number {
   return Number.isFinite(t) ? t : Date.now();
 }
 
+// B0-837 — shared by the mount fetch, the sidebar filter re-fetch, and the "Acting as" re-fetch
+// below; all three turn a raw `/api/bex/conversations` row into a sidebar `Conversation` stub
+// (transcript loaded separately via `refreshConversation`).
+function mapConversationRows(
+  rows: Awaited<ReturnType<typeof apiListConversations>>,
+): Conversation[] {
+  return rows.map((row) => ({
+    id: row.id,
+    title: row.title,
+    updatedAt: toMillis(row.updatedAt),
+    messages: [],
+    owner: row.owner,
+    source: row.source,
+    isOwner: row.isOwner,
+  }));
+}
+
 /**
  * B0-693 (part 2) — the route emits `data-bex-event` chunks with `stage: 'request_failed'` for
  * BOTH a pre-stream failure (thrown before any model call) and a mid-stream one (the model call
@@ -166,6 +183,12 @@ export function BexChatApp() {
   const permissionsLoaded = usePermissionsStore((s) => s.loaded);
   const hasPermission = usePermissionsStore((s) => s.hasPermission);
   const isAdminChrome = hasPermission(PERMISSIONS.BEX_CHAT_VIEW_ALL);
+  // B0-837 — the effective (acted-as) identity, so the sidebar-refresh effect below can detect
+  // an "Acting as" switch. Falls back to email only for parity with how `getUserOrDefault()`
+  // itself treats a missing USER_ID; either field flipping means the actor changed.
+  const effectiveUserId = usePermissionsStore(
+    (s) => s.user?.USER_ID ?? s.user?.EMAIL ?? null,
+  );
 
   /**
    * `?conversationId=` deep link, captured at mount: `useRef`'s initial value is only honored
@@ -247,15 +270,7 @@ export function BexChatApp() {
           showTestRuns: cache.showTestRuns,
           userFilter: cache.userFilter,
         });
-        const mapped: Conversation[] = list.map((row) => ({
-          id: row.id,
-          title: row.title,
-          updatedAt: toMillis(row.updatedAt),
-          messages: [],
-          owner: row.owner,
-          source: row.source,
-          isOwner: row.isOwner,
-        }));
+        const mapped: Conversation[] = mapConversationRows(list);
 
         /**
          * The sidebar list is capped (80 rows) and narrowed by the source/user filters, so a
@@ -342,15 +357,7 @@ export function BexChatApp() {
     async (filters: { showTestRuns: boolean; userFilter: string | null }) => {
       try {
         const list = await fetchConversationList(filters);
-        const mapped: Conversation[] = list.map((row) => ({
-          id: row.id,
-          title: row.title,
-          updatedAt: toMillis(row.updatedAt),
-          messages: [],
-          owner: row.owner,
-          source: row.source,
-          isOwner: row.isOwner,
-        }));
+        const mapped: Conversation[] = mapConversationRows(list);
         setSessions(mapped);
       } catch (e) {
         setLoadError(
@@ -360,6 +367,62 @@ export function BexChatApp() {
     },
     [fetchConversationList],
   );
+
+  // B0-837 — switching "Acting as" (`UserSwitcherClient`) updates `usePermissionsStore`'s
+  // effective user via `router.refresh()` + `/api/me`, but nothing in this component's own
+  // `sessions`/`activeId` state depended on that identity, so the sidebar kept showing the
+  // previous actor's conversations until a manual reload. Re-fetches under the current filters
+  // once the effective user changes after the initial hydration has already picked a baseline.
+  const effectiveUserBaselineRef = useRef<string | null | undefined>(undefined);
+
+  useEffect(() => {
+    if (!permissionsLoaded) {
+      return;
+    }
+    if (effectiveUserBaselineRef.current === undefined) {
+      // First resolved identity — matches whatever the initial mount fetch already used.
+      effectiveUserBaselineRef.current = effectiveUserId;
+      return;
+    }
+    if (effectiveUserBaselineRef.current === effectiveUserId) {
+      return;
+    }
+    effectiveUserBaselineRef.current = effectiveUserId;
+    if (!hydrated) {
+      return;
+    }
+
+    setSessions([]);
+    setActiveId(null);
+
+    void (async () => {
+      try {
+        const list = await fetchConversationList({
+          showTestRuns,
+          userFilter: userFilterId,
+        });
+        const mapped = mapConversationRows(list);
+        setSessions(mapped);
+        const pick = mapped[0]?.id ?? null;
+        setActiveId(pick);
+        if (pick) {
+          await refreshConversation(pick);
+        }
+      } catch (e) {
+        setLoadError(
+          e instanceof Error ? e.message : 'Failed to load conversations.',
+        );
+      }
+    })();
+  }, [
+    effectiveUserId,
+    permissionsLoaded,
+    hydrated,
+    fetchConversationList,
+    refreshConversation,
+    showTestRuns,
+    userFilterId,
+  ]);
 
   const handleShowTestRunsChange = useCallback(
     (value: boolean) => {
