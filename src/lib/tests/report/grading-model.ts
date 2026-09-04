@@ -1,6 +1,7 @@
 import {
   isModelEffort,
   modelProviderFor,
+  type GradingModelTag,
   type ModelEffort,
 } from '~/lib/constants/models';
 import { resolveResponsesModel } from '~/lib/openai/client';
@@ -16,8 +17,14 @@ import { getStringSetting } from '~/lib/settings/settings-service';
 export const GRADING_MODEL_SETTING_KEY = 'REPORT_GRADING_MODEL';
 export const GRADING_EFFORT_SETTING_KEY = 'REPORT_GRADING_EFFORT';
 
-/** B0-765 — fallback only if the `REPORT_GRADING_MODEL` row is missing/unreadable (it is seeded `gpt-5.6`). */
-export const DEFAULT_GRADING_MODEL_TAG = 'gpt-4.1';
+/**
+ * B0-822 — Claude Opus 5 (Tom Bird, 2026-09-03), matching the desktop agent-evaluation flow. Used
+ * only if the `REPORT_GRADING_MODEL` row is missing/unreadable; the row is seeded to the same tag
+ * (`flip_report_grading_model_default_b0822`), so a missing row behaves identically. An Anthropic
+ * tag needs `ANTHROPIC_API_KEY` and account credits — there is no fallback provider. The row is
+ * switchable back to any `GRADING_MODEL_TAGS` tag (e.g. `gpt-5.6`) in /admin/settings.
+ */
+export const DEFAULT_GRADING_MODEL_TAG: GradingModelTag = 'claude-opus-5';
 
 /** Anthropic's own default; `xhigh`/`max` buy depth for cost, `low`/`medium` the reverse. */
 export const DEFAULT_GRADING_EFFORT: ModelEffort = 'high';

@@ -97,7 +97,8 @@ export const MODEL_DESCRIPTIONS: Record<BexModelTag, string> = {
     'Settings-table default (BEX_RESPONSES_MODEL row at /admin/settings; gpt-4.1-mini unless changed). Use this as the A/B baseline.',
   'gpt-4o': 'Older general-purpose model. $2.50 → $10.00 per Mtok.',
   'gpt-4.1-mini': 'Cheapest option and what `preview` resolves to today. $0.40 → $1.60 per Mtok.',
-  'gpt-4.1': 'Current validator/report default. $2.00 → $8.00 per Mtok.',
+  'gpt-4.1':
+    'Former report-grading default (gpt-5.6 from B0-765, claude-opus-5 from B0-822). $2.00 → $8.00 per Mtok.',
   'gpt-5.5':
     'Resolves to gpt-5.5-2026-04-23. Candidate validator model (B0-603). $5.00 → $30.00 per Mtok — ~2.5x gpt-4.1 in, ~3.75x out.',
   'gpt-5.6':
