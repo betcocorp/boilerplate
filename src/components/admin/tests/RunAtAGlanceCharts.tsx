@@ -1,6 +1,6 @@
 'use client';
 
-import { type MouseEvent, useEffect, useMemo, useState } from 'react';
+import { type MouseEvent, useMemo } from 'react';
 import type { ActiveDotProps, DotItemDotProps } from 'recharts';
 import {
   Bar,
@@ -23,7 +23,6 @@ import {
   ChartTooltip,
   ChartTooltipContent,
 } from '~/components/ui/chart';
-import { isTerminalRunStatus } from '~/lib/tests/types';
 import { cn } from '~/lib/utils';
 
 type ElapsedTrendDatum = {
@@ -60,29 +59,10 @@ type SimilarityBuckets = {
 };
 
 type RunAtAGlanceChartsProps = {
-  runId: string;
-  initialStatus: string;
-  totalItems: number;
-  passCount: number;
-  failCount: number;
-  slowOverTenSecondsCount: number;
-  notPassedItemCount: number;
   elapsedTrendData: ElapsedTrendDatum[];
   similarityTrendData: SimilarityTrendDatum[];
   similarityStatsData: SimilarityStatDatum[];
   similarityBuckets: SimilarityBuckets;
-};
-
-type RunStatusResponse = {
-  ok: boolean;
-  runId: string;
-  status: string;
-  completedItems: number;
-  totalItems: number;
-  progressPercent: number;
-  passedItems: number;
-  failedItems: number;
-  notRunItems: number;
 };
 
 const chartConfig = {
@@ -185,80 +165,11 @@ function ElapsedTrendActiveDatumDot(dotProps: ActiveDotProps) {
 }
 
 export function RunAtAGlanceCharts({
-  runId,
-  initialStatus,
-  totalItems,
-  passCount,
-  failCount,
-  slowOverTenSecondsCount,
-  notPassedItemCount,
   elapsedTrendData,
   similarityTrendData,
   similarityStatsData,
   similarityBuckets,
 }: RunAtAGlanceChartsProps) {
-  const [liveStatus, setLiveStatus] = useState(initialStatus);
-  const [livePassCount, setLivePassCount] = useState(passCount);
-  const [liveFailCount, setLiveFailCount] = useState(failCount);
-  const [liveNotRunCount, setLiveNotRunCount] = useState(
-    Math.max(0, totalItems - passCount - failCount),
-  );
-
-  useEffect(() => {
-    setLiveStatus(initialStatus);
-    setLivePassCount(passCount);
-    setLiveFailCount(failCount);
-    setLiveNotRunCount(Math.max(0, totalItems - passCount - failCount));
-  }, [initialStatus, totalItems, passCount, failCount]);
-
-  useEffect(() => {
-    if (isTerminalRunStatus(liveStatus)) {
-      return;
-    }
-
-    const poll = async () => {
-      try {
-        const response = await fetch(`/api/admin/tests/runs/${runId}`, {
-          method: 'GET',
-          cache: 'no-store',
-        });
-        if (!response.ok) {
-          return;
-        }
-
-        const data = (await response.json()) as RunStatusResponse;
-        setLiveStatus(data.status);
-        setLivePassCount(data.passedItems);
-        setLiveFailCount(data.failedItems);
-        setLiveNotRunCount(data.notRunItems);
-      } catch {
-        // Keep polling during long test runs even if one request fails.
-      }
-    };
-
-    void poll();
-    const intervalId = window.setInterval(() => {
-      void poll();
-    }, 10000);
-
-    return () => {
-      window.clearInterval(intervalId);
-    };
-  }, [runId, liveStatus]);
-
-  const completedCount = livePassCount + liveFailCount;
-  const passRate = useMemo(
-    () => (completedCount > 0 ? (livePassCount / completedCount) * 100 : 0),
-    [completedCount, livePassCount],
-  );
-  const passFailData = useMemo(
-    () => [
-      { label: 'Pass', count: livePassCount, fill: '#16a34a' },
-      { label: 'Fail', count: liveFailCount, fill: '#dc2626' },
-      { label: 'Not run', count: liveNotRunCount, fill: '#94a3b8' },
-    ],
-    [livePassCount, liveFailCount, liveNotRunCount],
-  );
   const similarityCoverageData = useMemo(() => {
     const withScore = similarityTrendData.filter(
       (d) => d.similarity !== null,
@@ -275,22 +186,6 @@ export function RunAtAGlanceCharts({
       (similarityCoverageData[0]!.count / similarityTrendData.length) * 100
     );
   }, [similarityTrendData, similarityCoverageData]);
-
-  const slowFailSignalsData = useMemo(
-    () => [
-      {
-        label: '>10s elapsed',
-        count: slowOverTenSecondsCount,
-        fill: '#f59e0b',
-      },
-      { label: 'Did not pass', count: notPassedItemCount, fill: '#dc2626' },
-    ],
-    [slowOverTenSecondsCount, notPassedItemCount],
-  );
-  const slowFailSignalTotal = useMemo(
-    () => slowOverTenSecondsCount + notPassedItemCount,
-    [slowOverTenSecondsCount, notPassedItemCount],
-  );
 
   return (
     <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
@@ -422,36 +317,6 @@ export function RunAtAGlanceCharts({
 
         <article className="min-w-0 rounded-2xl border border-slate-200 p-5 col-span-4 lg:col-span-2">
           <h3 className="text-sm font-semibold text-slate-900">
-            Pass vs fail vs not run
-          </h3>
-          <ChartContainer
-            className="mt-4 h-56 w-full min-w-0"
-            config={chartConfig}
-          >
-            <PieChart>
-              <Pie
-                cx="50%"
-                cy="50%"
-                data={passFailData}
-                dataKey="count"
-                innerRadius={50}
-                nameKey="label"
-                outerRadius={82}
-              >
-                {passFailData.map((entry) => (
-                  <Cell fill={entry.fill} key={entry.label} />
-                ))}
-              </Pie>
-              <ChartTooltip content={<ChartTooltipContent />} />
-            </PieChart>
-          </ChartContainer>
-          <p className="mt-2 text-xs text-slate-500">
-            Pass rate (completed items): {passRate.toFixed(1)}%
-          </p>
-        </article>
-
-        <article className="min-w-0 rounded-2xl border border-slate-200 p-5 col-span-4 lg:col-span-2">
-          <h3 className="text-sm font-semibold text-slate-900">
             Similarity coverage
           </h3>
           <ChartContainer
@@ -479,37 +344,6 @@ export function RunAtAGlanceCharts({
             {similarityCoverageData[0]!.count} of {similarityTrendData.length}{' '}
             items returned a similarity score (
             {similarityCoverageRate.toFixed(1)}%).
-          </p>
-        </article>
-
-        <article className="min-w-0 rounded-2xl border border-slate-200 p-5 col-span-4 lg:col-span-2">
-          <h3 className="text-sm font-semibold text-slate-900">
-            Slow or not-passed signal counts
-          </h3>
-          <ChartContainer
-            className="mt-4 h-56 w-full min-w-0"
-            config={chartConfig}
-          >
-            <PieChart>
-              <Pie
-                cx="50%"
-                cy="50%"
-                data={slowFailSignalsData}
-                dataKey="count"
-                innerRadius={50}
-                nameKey="label"
-                outerRadius={82}
-              >
-                {slowFailSignalsData.map((entry) => (
-                  <Cell fill={entry.fill} key={entry.label} />
-                ))}
-              </Pie>
-              <ChartTooltip content={<ChartTooltipContent />} />
-            </PieChart>
-          </ChartContainer>
-          <p className="mt-2 text-xs text-slate-500">
-            Combined signal total: {slowFailSignalTotal} (counts may overlap by
-            item).
           </p>
         </article>
 

@@ -12,10 +12,7 @@ type RunExecutionProgressProps = {
   initialTotalItems: number;
   initialElapsedMs: number;
   stats: {
-    passCount: number;
-    failCount: number;
     erroredCount: number;
-    incompleteCount: number;
     started_at: string;
   };
 };
@@ -172,14 +169,6 @@ export function RunExecutionProgress({
     return Math.min(100, Math.max(0, progressPercent));
   }, [progressPercent]);
 
-  /** Among items with a definitive pass/fail outcome (excludes incomplete). */
-  const runningPassPercentLabel = useMemo(() => {
-    const decided = stats.passCount + stats.failCount;
-    if (decided <= 0) {
-      return null;
-    }
-    return Number(((stats.passCount / decided) * 100).toFixed(1));
-  }, [stats.passCount, stats.failCount]);
   const elapsedLabel = useMemo(
     () => formatDurationSeconds(elapsedMs),
     [elapsedMs],
@@ -255,21 +244,12 @@ export function RunExecutionProgress({
           style={{ width: `${clampedPercent}%` }}
         />
       </div>
-      <div className="mt-2 grid grid-cols-4 items-center text-xs text-slate-500">
+      <div className="mt-2 grid grid-cols-3 items-center text-xs text-slate-500">
         <span>Status: {status}</span>
         <span className="text-center leading-snug">
           <span className="block">
             Elapsed / avg: {elapsedLabel} / {avgPromptLabel}
           </span>
-        </span>
-        <span className="text-center">
-          <p>
-            <span className="mr-2">Pass/fail/incomplete · Pass %:</span>{' '}
-            {stats.passCount}/{stats.failCount}/{stats.incompleteCount}
-            {runningPassPercentLabel != null ? (
-              <> · {runningPassPercentLabel}%</>
-            ) : null}
-          </p>
         </span>
         <span className="text-right">{clampedPercent.toFixed(2)}% done</span>
       </div>

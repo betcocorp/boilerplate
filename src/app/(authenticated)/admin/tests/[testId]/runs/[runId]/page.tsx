@@ -213,10 +213,6 @@ export default async function AdminTestRunDetailsPage({
   const passCount = result.passed_items ?? 0;
   const failCount =
     result.failed_items ?? resultItems.filter((item) => !item.passed).length;
-  const incompleteCount = Math.max(
-    0,
-    result.total_items - passCount - failCount,
-  );
   const erroredCount = resultItems.filter((item) => {
     if (item.status === 'failed') return true;
     const p = item.response_payload;
@@ -274,10 +270,6 @@ export default async function AdminTestRunDetailsPage({
     minThreshold: similarityMin,
     maxThreshold: similarityMax,
   };
-  const slowOverTenSecondsCount = resultItems.filter(
-    (item) => item.elapsed_ms > 10_000,
-  ).length;
-  const notPassedItemCount = resultItems.filter((item) => !item.passed).length;
   /**
    * B0-398 — run-level `promptBundleVersion` chip. The field is a build-time constant, identical
    * across every item in a run, so reading it off `resultItems` (already fetched) needs no new
@@ -677,26 +669,16 @@ export default async function AdminTestRunDetailsPage({
           initialTotalItems={initialTotalItems}
           runId={result.id}
           stats={{
-            passCount,
-            failCount,
             erroredCount,
-            incompleteCount,
             started_at: result?.started_at ?? '',
           }}
         />
 
         <RunAtAGlanceCharts
           elapsedTrendData={elapsedTrendData}
-          failCount={failCount}
-          initialStatus={result.status}
-          notPassedItemCount={notPassedItemCount}
-          passCount={passCount}
-          runId={result.id}
           similarityBuckets={similarityBuckets}
           similarityStatsData={similarityStatsData}
           similarityTrendData={similarityTrendData}
-          slowOverTenSecondsCount={slowOverTenSecondsCount}
-          totalItems={result.total_items}
         />
 
         <RunToolRoutingPanel report={toolRoutingReport} testId={test.id} />
