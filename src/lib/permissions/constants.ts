@@ -18,8 +18,10 @@ export const PERMISSIONS = {
   NAVIGATION_SIDEBAR_OBSERVABILITY: 'navigation.sidebar.observability',
   NAVIGATION_SIDEBAR_TOOLS: 'navigation.sidebar.tools',
   NAVIGATION_SIDEBAR_PRODUCTS: 'navigation.sidebar.products',
-  NAVIGATION_SIDEBAR_INGESTION_PRODUCTS: 'navigation.sidebar.ingestion.products',
+  NAVIGATION_SIDEBAR_INGESTION_PRODUCTS:
+    'navigation.sidebar.ingestion.products',
   NAVIGATION_SIDEBAR_SDS: 'navigation.sidebar.sds',
+  NAVIGATION_SIDEBAR_COMPARE: 'navigation.sidebar.compare',
   NAVIGATION_SIDEBAR_EFFICACY: 'navigation.sidebar.efficacy',
   NAVIGATION_SIDEBAR_KNOWLEDGE: 'navigation.sidebar.knowledge',
   NAVIGATION_SIDEBAR_LABELS: 'navigation.sidebar.labels',

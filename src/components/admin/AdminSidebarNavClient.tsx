@@ -107,6 +107,11 @@ const sidebarSections: NavSectionModel[] = [
             permission: PERMISSIONS.NAVIGATION_SIDEBAR_OBSERVABILITY,
           },
           {
+            label: 'Compare conversations',
+            href: '/admin/bex/compare',
+            permission: PERMISSIONS.NAVIGATION_SIDEBAR_COMPARE,
+          },
+          {
             label: 'Failure Queue',
             href: '/admin/tests/failure-queue',
             permission: PERMISSIONS.NAVIGATION_SIDEBAR_TESTS,
