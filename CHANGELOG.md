@@ -1,3 +1,24 @@
+# [3.1.0](https://github.com/betcocorp/bex2.0/compare/v3.0.0...v3.1.0) (2026-09-04)
+
+
+### Bug Fixes
+
+* **B0-803:** normalise case and whitespace runs in gradeExactCriterion, keep digits/units/punctuation literal ([7670c6b](https://github.com/betcocorp/bex2.0/commit/7670c6b701527a93c8dfc9ec420b26a739242e21))
+
+
+### Features
+
+* **B0-798:** remove the historical performance trend charts from /admin/tests/[testId] ([974b306](https://github.com/betcocorp/bex2.0/commit/974b30674bbae2306c6482f1e1228a0e2967fa0f))
+* **B0-799:** stop collecting should_answer / expected_result_type in the create-or-upload dataset flow ([65ab2fa](https://github.com/betcocorp/bex2.0/commit/65ab2facd8ca643fd755efd28db19e4b6e0551e9))
+* **B0-800:** remove the Run progress pass/fail summary and the two pass/fail charts from the run page ([271a4b6](https://github.com/betcocorp/bex2.0/commit/271a4b6bd4943d6d2893936c4d95afe41f8dafba))
+* **B0-801:** remove the "Passed" column from the item historical outcomes table ([433d4f0](https://github.com/betcocorp/bex2.0/commit/433d4f0a53e26929ca2fe09ebcc73616f6d10a33))
+* **B0-814:** route every report rounding through one half-up helper and document the Python port ([e4d64fd](https://github.com/betcocorp/bex2.0/commit/e4d64fd7654831497162a0d1ded2a667d88bec69))
+* **B0-819,B0-820,B0-821:** Anthropic as a run-report grading provider behind one structured-completion seam ([f56f7fc](https://github.com/betcocorp/bex2.0/commit/f56f7fc46e89a79d8b69be8566bdb7deff23d1ac))
+* **B0-822:** REPORT_GRADING_MODEL defaults to claude-opus-5 ([0f15beb](https://github.com/betcocorp/bex2.0/commit/0f15beb6ae1060e50ed14215f352f50070fd734d))
+* **B0-823:** export Bex judgments as eval_run{n}.json and freeze computeReportMetrics on a real run ([90d9064](https://github.com/betcocorp/bex2.0/commit/90d90645f45568c23591501e60263625ed057aa8))
+* **B0-824:** parity comparison tool for the Bex-vs-desktop judgment variance study ([86d5221](https://github.com/betcocorp/bex2.0/commit/86d5221a2e2a0ee91082dcf078c7d28a389e6017))
+* **B0-831:** BEX_RESPONSES_MODEL is a tag-validated select like BEX_ROUTER_MODEL ([d1083dd](https://github.com/betcocorp/bex2.0/commit/d1083ddefbdcc5be52a40a965d5be6538f101b0c))
+
 # [3.0.0](https://github.com/betcocorp/bex2.0/compare/v2.19.0...v3.0.0) (2026-09-03)
 
 
