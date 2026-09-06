@@ -30,7 +30,7 @@ import { readSearchParam } from '~/lib/utils/params';
 import { formatDate } from '~/lib/utils/time';
 
 export const metadata = {
-  title: 'Eval Reports | Betco BEX',
+  title: 'Eval Reports | Betco Bex',
   description:
     'Every LLM-graded eval report generated across all test datasets.',
 };
