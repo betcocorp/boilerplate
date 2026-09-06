@@ -11,7 +11,7 @@ import {
 } from '~/components/ui/card';
 import { Input } from '~/components/ui/input';
 import { Label } from '~/components/ui/label';
-import { NativeSelect } from '~/components/ui/native-select';
+import { FormSelectField } from '~/components/admin/FormSelectField';
 import { RecommendationRowPanel } from '~/components/admin/RecommendationRowPanel';
 import type { RecommendationMetrics } from '~/lib/recommendations/repository';
 import type {
@@ -141,14 +141,16 @@ export function RecommendationsQueue({
           <form action={ROUTE} method="get" className="flex flex-wrap items-end gap-4">
             <div className="space-y-2">
               <Label htmlFor="rec-status">Status</Label>
-              <NativeSelect id="rec-status" name="status" defaultValue={statusValue} className="w-40">
-                <option value="">All statuses</option>
-                {STATUS_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </NativeSelect>
+              <FormSelectField
+                className="w-40"
+                defaultValue={statusValue}
+                id="rec-status"
+                name="status"
+                options={[
+                  { value: '', label: 'All statuses' },
+                  ...STATUS_OPTIONS.map((opt) => ({ value: opt.value, label: opt.label })),
+                ]}
+              />
             </div>
             <div className="space-y-2">
               <Label htmlFor="rec-min-confidence">Min confidence</Label>

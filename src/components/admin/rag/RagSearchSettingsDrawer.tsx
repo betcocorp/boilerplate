@@ -2,10 +2,17 @@
 
 import { X } from 'lucide-react';
 
+import { FormSelectField } from '~/components/admin/FormSelectField';
 import { Button } from '~/components/ui/button';
 import { Input } from '~/components/ui/input';
 import { Label } from '~/components/ui/label';
-import { NativeSelect } from '~/components/ui/native-select';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '~/components/ui/select';
 
 import type { RagSearchSettingsValues } from '~/components/admin/rag/RagSearchControls';
 
@@ -69,30 +76,40 @@ export function RagSearchSettingsDrawer({
 
         <div className="flex flex-col gap-2">
           <Label>Scope</Label>
-          <NativeSelect
+          <Select
             name="scope"
-            onChange={(event) => onChange({ scope: event.target.value })}
+            onValueChange={(value) => onChange({ scope: value })}
             value={settings.scope}
           >
-            <option value="all">All</option>
-            <option value="label">Labels</option>
-            <option value="efficacy">Efficacy</option>
-            <option value="sds">SDS</option>
-          </NativeSelect>
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All</SelectItem>
+              <SelectItem value="label">Labels</SelectItem>
+              <SelectItem value="efficacy">Efficacy</SelectItem>
+              <SelectItem value="sds">SDS</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
 
         <div className="flex flex-col gap-2">
           <Label>Retrieval</Label>
-          <NativeSelect
+          <Select
             name="retrieval"
-            onChange={(event) =>
-              onChange({ retrieval: event.target.value === 'vector' ? 'vector' : 'hybrid' })
+            onValueChange={(value) =>
+              onChange({ retrieval: value === 'vector' ? 'vector' : 'hybrid' })
             }
             value={settings.retrieval}
           >
-            <option value="hybrid">Hybrid (vector + keyword)</option>
-            <option value="vector">Vector only</option>
-          </NativeSelect>
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="hybrid">Hybrid (vector + keyword)</SelectItem>
+              <SelectItem value="vector">Vector only</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
 
         <div className="flex flex-col gap-2">
@@ -123,18 +140,16 @@ export function RagSearchSettingsDrawer({
 
         <div className="flex flex-col gap-2">
           <Label>Section type</Label>
-          <NativeSelect
+          <FormSelectField
+            className="w-full"
             name="sectionType"
-            onChange={(event) => onChange({ sectionType: event.target.value })}
+            onValueChange={(value) => onChange({ sectionType: value })}
+            options={[
+              { value: '', label: 'Any' },
+              ...sectionTypeOptions.map((option) => ({ value: option, label: option })),
+            ]}
             value={settings.sectionType}
-          >
-            <option value="">Any</option>
-            {sectionTypeOptions.map((option) => (
-              <option key={option} value={option}>
-                {option}
-              </option>
-            ))}
-          </NativeSelect>
+          />
         </div>
 
         <div className="flex flex-col gap-2">

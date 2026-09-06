@@ -2,7 +2,14 @@
 
 import { useState } from 'react';
 
-import { NativeSelect } from '~/components/ui/native-select';
+import { FormSelectField } from '~/components/admin/FormSelectField';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '~/components/ui/select';
 import {
   BEX_CHAT_AGENT_MODES,
   BEX_CHAT_AGENT_MODE_LABELS,
@@ -47,53 +54,55 @@ export function TestRunModelControls() {
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center gap-2">
-        <NativeSelect
-          aria-label="Chat model for this run"
-          className="h-9 w-44"
+        <Select
           name="modelTag"
-          onChange={(event) => setModelTag(event.target.value as BexModelTag)}
+          onValueChange={(v) => setModelTag(v as BexModelTag)}
           value={modelTag}
         >
-          <option value="preview">Model: preview</option>
-          {supportedModels.map((m: SupportedModel) => (
-            <option key={m.name} value={m.name}>
-              {m.label}
-            </option>
-          ))}
-        </NativeSelect>
+          <SelectTrigger aria-label="Chat model for this run" className="h-9 w-44">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="preview">Model: preview</SelectItem>
+            {supportedModels.map((m: SupportedModel) => (
+              <SelectItem key={m.name} value={m.name}>
+                {m.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
 
-        <NativeSelect
-          aria-label="Router for this run"
+        <FormSelectField
+          ariaLabel="Router for this run"
           className="h-9 w-40"
           name="routerType"
-          onChange={(event) =>
-            setRouterType(event.target.value as RouterTypeOverride | '')
-          }
+          onValueChange={(v) => setRouterType(v as RouterTypeOverride | '')}
+          options={[
+            { value: '', label: 'Router: default' },
+            ...ROUTER_TYPE_OPTIONS.map((type) => ({
+              value: type,
+              label: `Router: ${ROUTING_TEST_ROUTER_LABELS[type]}`,
+            })),
+          ]}
           value={routerType}
-        >
-          <option value="">Router: default</option>
-          {ROUTER_TYPE_OPTIONS.map((type) => (
-            <option key={type} value={type}>
-              Router: {ROUTING_TEST_ROUTER_LABELS[type]}
-            </option>
-          ))}
-        </NativeSelect>
+        />
 
-        <NativeSelect
-          aria-label="Agent mode for this run"
-          className="h-9 w-48"
+        <Select
           name="agentMode"
-          onChange={(event) =>
-            setAgentMode(event.target.value as BexChatAgentMode)
-          }
+          onValueChange={(v) => setAgentMode(v as BexChatAgentMode)}
           value={agentMode}
         >
-          {BEX_CHAT_AGENT_MODES.map((mode) => (
-            <option key={mode} value={mode}>
-              Agent: {BEX_CHAT_AGENT_MODE_LABELS[mode]}
-            </option>
-          ))}
-        </NativeSelect>
+          <SelectTrigger aria-label="Agent mode for this run" className="h-9 w-48">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {BEX_CHAT_AGENT_MODES.map((mode) => (
+              <SelectItem key={mode} value={mode}>
+                Agent: {BEX_CHAT_AGENT_MODE_LABELS[mode]}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
 
         <label
           className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground"

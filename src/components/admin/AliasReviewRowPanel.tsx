@@ -19,7 +19,13 @@ import {
   DialogTrigger,
 } from '~/components/ui/dialog';
 import { Label } from '~/components/ui/label';
-import { NativeSelect } from '~/components/ui/native-select';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '~/components/ui/select';
 import {
   approveProductAlias,
   editProductAlias,
@@ -162,17 +168,21 @@ export function AliasReviewRowPanel({ row }: { row: ProductAliasReviewRow }) {
             />
             <div className="space-y-1">
               <Label htmlFor={`alias-type-${row.id}`}>Alias type</Label>
-              <NativeSelect
-                id={`alias-type-${row.id}`}
-                onChange={(e) => setAliasType(e.target.value as ProductAliasType)}
+              <Select
+                onValueChange={(v) => setAliasType(v as ProductAliasType)}
                 value={aliasType}
               >
-                {PRODUCT_ALIAS_TYPES.map((t) => (
-                  <option key={t} value={t}>
-                    {ALIAS_TYPE_LABELS[t]}
-                  </option>
-                ))}
-              </NativeSelect>
+                <SelectTrigger id={`alias-type-${row.id}`}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {PRODUCT_ALIAS_TYPES.map((t) => (
+                    <SelectItem key={t} value={t}>
+                      {ALIAS_TYPE_LABELS[t]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div className="flex gap-2">
               <Button disabled={isPending} onClick={handleSaveEdit} size="sm" type="button">

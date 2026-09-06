@@ -20,8 +20,8 @@
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useTransition } from 'react';
 
+import { FormSelectField } from '~/components/admin/FormSelectField';
 import { Label } from '~/components/ui/label';
-import { NativeSelect } from '~/components/ui/native-select';
 
 export type ReportDatasetOption = {
   testId: string;
@@ -68,19 +68,19 @@ export function ReportDatasetFilter({
       <Label className="text-sm text-slate-600" htmlFor="reports-dataset">
         Dataset
       </Label>
-      <NativeSelect
+      <FormSelectField
         className="h-8 w-auto max-w-[22rem] bg-slate-50"
         id="reports-dataset"
-        onChange={(event) => selectDataset(event.target.value)}
+        onValueChange={selectDataset}
+        options={[
+          { value: '', label: 'All datasets' },
+          ...options.map((option) => ({
+            value: option.testId,
+            label: `${option.testName} (${option.reportCount})`,
+          })),
+        ]}
         value={selectedTestId}
-      >
-        <option value="">All datasets</option>
-        {options.map((option) => (
-          <option key={option.testId} value={option.testId}>
-            {option.testName} ({option.reportCount})
-          </option>
-        ))}
-      </NativeSelect>
+      />
       {selectedTestId ? (
         <button
           className="text-sm text-sky-700 underline-offset-2 hover:underline"

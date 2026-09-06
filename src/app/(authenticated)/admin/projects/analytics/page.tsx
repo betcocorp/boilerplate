@@ -1,12 +1,12 @@
 import { connection } from 'next/server';
 
 import { ApiUsageCharts } from '~/components/admin/projects/ApiUsageCharts';
+import { FormSelectField } from '~/components/admin/FormSelectField';
 import { formatInt, formatMs, formatPercent } from '~/components/admin/projects/format';
 import { formatLastUsed } from '~/components/admin/projects/ui';
 import { Card, CardContent, CardHeader, CardTitle } from '~/components/ui/card';
 import { Input } from '~/components/ui/input';
 import { Label } from '~/components/ui/label';
-import { NativeSelect } from '~/components/ui/native-select';
 import {
   Table,
   TableBody,
@@ -176,23 +176,31 @@ export default async function ApiAnalyticsPage({ searchParams }: PageProps) {
         <form method="get" className="flex flex-wrap items-end gap-3 rounded-2xl border border-border/60 p-3">
           <div className="space-y-1">
             <Label htmlFor="projectId" className="text-xs">Project</Label>
-            <NativeSelect id="projectId" name="projectId" defaultValue={projectId} className="h-9 min-w-[160px]">
-              <option value="">All</option>
-              {analytics.projects.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </NativeSelect>
+            <FormSelectField
+              className="h-9 min-w-[160px]"
+              defaultValue={projectId}
+              id="projectId"
+              name="projectId"
+              options={[
+                { value: '', label: 'All' },
+                ...analytics.projects.map((p) => ({ value: p.id, label: p.name })),
+              ]}
+            />
           </div>
           <div className="space-y-1">
             <Label htmlFor="appId" className="text-xs">App</Label>
-            <NativeSelect id="appId" name="appId" defaultValue={appId} className="h-9 min-w-[160px]">
-              <option value="">All</option>
-              {analytics.projects.flatMap((p) =>
-                p.apps.map((a) => (
-                  <option key={a.id} value={a.id}>{p.name} → {a.name}</option>
-                )),
-              )}
-            </NativeSelect>
+            <FormSelectField
+              className="h-9 min-w-[160px]"
+              defaultValue={appId}
+              id="appId"
+              name="appId"
+              options={[
+                { value: '', label: 'All' },
+                ...analytics.projects.flatMap((p) =>
+                  p.apps.map((a) => ({ value: a.id, label: `${p.name} → ${a.name}` })),
+                ),
+              ]}
+            />
           </div>
           <div className="space-y-1">
             <Label htmlFor="path" className="text-xs">Path contains</Label>

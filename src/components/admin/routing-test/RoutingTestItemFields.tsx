@@ -1,7 +1,13 @@
 'use client';
 
 import { Label } from '~/components/ui/label';
-import { NativeSelect } from '~/components/ui/native-select';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '~/components/ui/select';
 import { Textarea } from '~/components/ui/textarea';
 import { ROUTING_TEST_AGENT_OPTIONS } from '~/lib/routing-test/agent-options';
 
@@ -40,21 +46,18 @@ export function RoutingTestItemFields({
 
       <div className="flex flex-col gap-2">
         <Label htmlFor={agentId}>Expected agent</Label>
-        <NativeSelect
-          defaultValue={defaultExpectedAgent}
-          id={agentId}
-          name="expectedAgent"
-          required
-        >
-          <option disabled value="">
-            Select the agent this prompt should route to…
-          </option>
-          {ROUTING_TEST_AGENT_OPTIONS.map((option) => (
-            <option key={option.id} value={option.id}>
-              {option.label} ({option.id})
-            </option>
-          ))}
-        </NativeSelect>
+        <Select defaultValue={defaultExpectedAgent || undefined} name="expectedAgent" required>
+          <SelectTrigger id={agentId}>
+            <SelectValue placeholder="Select the agent this prompt should route to…" />
+          </SelectTrigger>
+          <SelectContent>
+            {ROUTING_TEST_AGENT_OPTIONS.map((option) => (
+              <SelectItem key={option.id} value={option.id}>
+                {option.label} ({option.id})
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
     </>
   );

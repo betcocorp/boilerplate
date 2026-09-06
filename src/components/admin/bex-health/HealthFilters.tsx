@@ -21,8 +21,15 @@ import {
   useWindowVersionParams,
   type WindowVersionOption,
 } from '~/components/admin/filters/use-window-version-params';
+import { FormSelectField } from '~/components/admin/FormSelectField';
 import { Label } from '~/components/ui/label';
-import { NativeSelect } from '~/components/ui/native-select';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '~/components/ui/select';
 
 /** Trailing inclusive-day presets; values are the day count as a string. */
 const WINDOW_PRESETS = [
@@ -69,39 +76,38 @@ export function HealthFilters({
         <Label className="text-xs text-slate-500" htmlFor="bex-health-window">
           Window
         </Label>
-        <NativeSelect
-          id="bex-health-window"
-          onChange={(event) => setWindowDays(event.target.value)}
-          value={windowValue}
-        >
-          {WINDOW_PRESETS.map((preset) => (
-            <option key={preset.value} value={preset.value}>
-              {preset.label}
-            </option>
-          ))}
-          {isCustomWindow ? (
-            <option disabled value={CUSTOM_WINDOW_VALUE}>
-              Custom ({windowDays}d from URL)
-            </option>
-          ) : null}
-        </NativeSelect>
+        <Select onValueChange={setWindowDays} value={windowValue}>
+          <SelectTrigger id="bex-health-window">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {WINDOW_PRESETS.map((preset) => (
+              <SelectItem key={preset.value} value={preset.value}>
+                {preset.label}
+              </SelectItem>
+            ))}
+            {isCustomWindow ? (
+              <SelectItem disabled value={CUSTOM_WINDOW_VALUE}>
+                Custom ({windowDays}d from URL)
+              </SelectItem>
+            ) : null}
+          </SelectContent>
+        </Select>
       </div>
 
       <div className="flex min-w-0 flex-col gap-1.5">
         <Label className="text-xs text-slate-500" htmlFor="bex-health-version">
           Version
         </Label>
-        <NativeSelect
+        <FormSelectField
           id="bex-health-version"
-          onChange={(event) => setVersion(event.target.value)}
+          onValueChange={setVersion}
+          options={versionOptions.map((option) => ({
+            value: option.value,
+            label: option.label,
+          }))}
           value={selectedVersion}
-        >
-          {versionOptions.map((option) => (
-            <option key={option.value || 'all'} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </NativeSelect>
+        />
       </div>
     </div>
   );

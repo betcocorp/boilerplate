@@ -14,10 +14,10 @@ import { ChevronDownIcon, ChevronUpIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useState } from 'react';
 
+import { FormSelectField } from '~/components/admin/FormSelectField';
 import { Button } from '~/components/ui/button';
 import { Input } from '~/components/ui/input';
 import { Label } from '~/components/ui/label';
-import { NativeSelect } from '~/components/ui/native-select';
 import { SME_AGENT_IDS } from '~/lib/agents/agent-registry';
 import { PRODUCT_TOOL_NAMES } from '~/lib/tools/tool-schemas';
 
@@ -140,18 +140,15 @@ export function RunsFilters({
               >
                 Status
               </Label>
-              <NativeSelect
+              <FormSelectField
                 defaultValue={filters.status}
                 id="observability-status"
                 name="status"
-              >
-                <option value="">All statuses</option>
-                {RUN_STATUSES.map((status) => (
-                  <option key={status} value={status}>
-                    {status}
-                  </option>
-                ))}
-              </NativeSelect>
+                options={[
+                  { value: '', label: 'All statuses' },
+                  ...RUN_STATUSES.map((status) => ({ value: status, label: status })),
+                ]}
+              />
             </div>
 
             <div className="flex min-w-0 flex-col gap-2">
@@ -161,18 +158,15 @@ export function RunsFilters({
               >
                 Agent / routing
               </Label>
-              <NativeSelect
+              <FormSelectField
                 defaultValue={filters.routingDecision}
                 id="observability-agent"
                 name="agent"
-              >
-                <option value="">All agents</option>
-                {ROUTING_FILTER_OPTIONS.map((agent) => (
-                  <option key={agent} value={agent}>
-                    {agent}
-                  </option>
-                ))}
-              </NativeSelect>
+                options={[
+                  { value: '', label: 'All agents' },
+                  ...ROUTING_FILTER_OPTIONS.map((agent) => ({ value: agent, label: agent })),
+                ]}
+              />
             </div>
 
             <div className="flex min-w-0 flex-col gap-2">
@@ -220,18 +214,18 @@ export function RunsFilters({
               >
                 Source
               </Label>
-              <NativeSelect
+              <FormSelectField
                 defaultValue={filters.source}
                 id="observability-source"
                 name="source"
-              >
-                <option value="">All sources</option>
-                {RUN_SOURCE_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </NativeSelect>
+                options={[
+                  { value: '', label: 'All sources' },
+                  ...RUN_SOURCE_OPTIONS.map((option) => ({
+                    value: option.value,
+                    label: option.label,
+                  })),
+                ]}
+              />
             </div>
 
             <div className="flex min-w-0 flex-col gap-2">
@@ -257,18 +251,15 @@ export function RunsFilters({
               >
                 Test
               </Label>
-              <NativeSelect
+              <FormSelectField
                 defaultValue={filters.testId}
                 id="observability-test"
                 name="testId"
-              >
-                <option value="">All tests</option>
-                {testOptions.map((test) => (
-                  <option key={test.id} value={test.id}>
-                    {test.name}
-                  </option>
-                ))}
-              </NativeSelect>
+                options={[
+                  { value: '', label: 'All tests' },
+                  ...testOptions.map((test) => ({ value: test.id, label: test.name })),
+                ]}
+              />
             </div>
 
             <div className="flex min-w-0 flex-col gap-2">
@@ -278,18 +269,15 @@ export function RunsFilters({
               >
                 Tool call
               </Label>
-              <NativeSelect
+              <FormSelectField
                 defaultValue={filters.toolName}
                 id="observability-tool"
                 name="tool"
-              >
-                <option value="">All tools</option>
-                {PRODUCT_TOOL_NAMES.map((tool) => (
-                  <option key={tool} value={tool}>
-                    {tool}
-                  </option>
-                ))}
-              </NativeSelect>
+                options={[
+                  { value: '', label: 'All tools' },
+                  ...PRODUCT_TOOL_NAMES.map((tool) => ({ value: tool, label: tool })),
+                ]}
+              />
             </div>
 
             <div className="flex items-end gap-2">

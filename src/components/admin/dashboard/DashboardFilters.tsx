@@ -17,8 +17,15 @@ import {
   useWindowVersionParams,
   type WindowVersionOption,
 } from '~/components/admin/filters/use-window-version-params';
+import { FormSelectField } from '~/components/admin/FormSelectField';
 import { Label } from '~/components/ui/label';
-import { NativeSelect } from '~/components/ui/native-select';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '~/components/ui/select';
 
 /**
  * Trailing inclusive-day presets. Labelled "Today (UTC)" rather than the mockup's "Last 24 hours"
@@ -76,39 +83,37 @@ export function DashboardFilters({
       <Label className="sr-only" htmlFor="admin-dashboard-window">
         Window
       </Label>
-      <NativeSelect
-        className={CHIP_CLASS}
-        id="admin-dashboard-window"
-        onChange={(event) => setWindowDays(event.target.value)}
-        value={windowValue}
-      >
-        {WINDOW_PRESETS.map((preset) => (
-          <option key={preset.value} value={preset.value}>
-            {preset.label}
-          </option>
-        ))}
-        {isCustomWindow ? (
-          <option disabled value={CUSTOM_WINDOW_VALUE}>
-            Custom ({windowDays}d from URL)
-          </option>
-        ) : null}
-      </NativeSelect>
+      <Select onValueChange={setWindowDays} value={windowValue}>
+        <SelectTrigger className={CHIP_CLASS} id="admin-dashboard-window">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {WINDOW_PRESETS.map((preset) => (
+            <SelectItem key={preset.value} value={preset.value}>
+              {preset.label}
+            </SelectItem>
+          ))}
+          {isCustomWindow ? (
+            <SelectItem disabled value={CUSTOM_WINDOW_VALUE}>
+              Custom ({windowDays}d from URL)
+            </SelectItem>
+          ) : null}
+        </SelectContent>
+      </Select>
 
       <Label className="sr-only" htmlFor="admin-dashboard-version">
         Version
       </Label>
-      <NativeSelect
+      <FormSelectField
         className={CHIP_CLASS}
         id="admin-dashboard-version"
-        onChange={(event) => setVersion(event.target.value)}
+        onValueChange={setVersion}
+        options={versionOptions.map((option) => ({
+          value: option.value,
+          label: option.label,
+        }))}
         value={selectedVersion}
-      >
-        {versionOptions.map((option) => (
-          <option key={option.value || 'all'} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </NativeSelect>
+      />
     </div>
   );
 }

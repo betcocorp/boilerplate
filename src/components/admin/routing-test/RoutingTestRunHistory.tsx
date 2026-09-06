@@ -5,7 +5,13 @@ import { PlayIcon } from 'lucide-react';
 
 import { Button } from '~/components/ui/button';
 import { Label } from '~/components/ui/label';
-import { NativeSelect } from '~/components/ui/native-select';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '~/components/ui/select';
 import { Spinner } from '~/components/ui/spinner';
 import { DeleteRoutingTestRunDialog } from '~/components/admin/routing-test/DeleteRoutingTestRunDialog';
 import supportedModels, {
@@ -86,24 +92,25 @@ export function RoutingTestRunHistory({
             <Label htmlFor="routing-test-router-type" className="sr-only">
               Router
             </Label>
-            <NativeSelect
-              id="routing-test-router-type"
-              onChange={(event) =>
-                onRouterTypeChange(event.target.value as RoutingTestRouterType)
-              }
+            <Select
+              onValueChange={(v) => onRouterTypeChange(v as RoutingTestRouterType)}
               value={routerType}
-              className="min-w-32"
             >
-              {ROUTER_TYPES.map((type) => {
-                const unavailable = type !== 'keyword' && unavailableByRouter[type] !== undefined;
-                return (
-                  <option disabled={unavailable} key={type} value={type}>
-                    {ROUTING_TEST_ROUTER_LABELS[type]}
-                    {unavailable ? ' (unavailable)' : ''}
-                  </option>
-                );
-              })}
-            </NativeSelect>
+              <SelectTrigger className="min-w-32" id="routing-test-router-type">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {ROUTER_TYPES.map((type) => {
+                  const unavailable = type !== 'keyword' && unavailableByRouter[type] !== undefined;
+                  return (
+                    <SelectItem disabled={unavailable} key={type} value={type}>
+                      {ROUTING_TEST_ROUTER_LABELS[type]}
+                      {unavailable ? ' (unavailable)' : ''}
+                    </SelectItem>
+                  );
+                })}
+              </SelectContent>
+            </Select>
           </div>
 
           {routerType === 'llm' ? (
@@ -111,20 +118,21 @@ export function RoutingTestRunHistory({
               <Label htmlFor="routing-test-model-tag" className="sr-only">
                 Model
               </Label>
-              <NativeSelect
-                id="routing-test-model-tag"
-                onChange={(event) =>
-                  onModelTagChange(event.target.value as ExplicitBexModelTag)
-                }
+              <Select
+                onValueChange={(v) => onModelTagChange(v as ExplicitBexModelTag)}
                 value={modelTag}
-                className="min-w-32"
               >
-                {supportedModels.map((m: SupportedModel) => (
-                  <option key={m.name} value={m.name}>
-                    {m.label}
-                  </option>
-                ))}
-              </NativeSelect>
+                <SelectTrigger className="min-w-32" id="routing-test-model-tag">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {supportedModels.map((m: SupportedModel) => (
+                    <SelectItem key={m.name} value={m.name}>
+                      {m.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           ) : null}
 

@@ -4,7 +4,13 @@ import { CardGridSkeleton } from '~/components/admin/skeletons';
 import { Button } from '~/components/ui/button';
 import { Input } from '~/components/ui/input';
 import { Label } from '~/components/ui/label';
-import { NativeSelect } from '~/components/ui/native-select';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '~/components/ui/select';
 
 export default function Loading() {
   return (
@@ -36,11 +42,16 @@ export default function Loading() {
             </div>
             <div className="flex flex-col gap-2">
               <Label className="text-sm font-medium text-slate-700">Scope</Label>
-              <NativeSelect className="h-12 rounded-2xl px-4" disabled defaultValue="all">
-                <option value="all">All</option>
-                <option value="products">Products</option>
-                <option value="sds">SDS</option>
-              </NativeSelect>
+              <Select defaultValue="all" disabled>
+                <SelectTrigger className="h-12 w-full rounded-2xl px-4">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All</SelectItem>
+                  <SelectItem value="products">Products</SelectItem>
+                  <SelectItem value="sds">SDS</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div className="flex flex-col gap-2">
               <Label className="text-sm font-medium text-slate-700">
