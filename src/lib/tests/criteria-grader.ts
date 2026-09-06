@@ -32,7 +32,9 @@ const GRADER_SYSTEM_PROMPT = `You are grading a single AI assistant response aga
 
 For EACH criterion, decide only: does the response state this concept? Semantic equivalence and paraphrasing count as met — the wording does not need to match verbatim. If the response contradicts the concept, or never addresses it, it is not met.
 
-Do not judge overall quality, tone, or completeness beyond the listed criteria. Do not invent criteria. Return a verdict for every criterion index given, even if the answer is obviously not met.`;
+Do not judge overall quality, tone, or completeness beyond the listed criteria. Do not invent criteria. Return a verdict for every criterion given.
+
+The criteria list below is numbered; each line reads "<number>. <criterion>". For \`criterionIndex\` in your response, copy that exact number as printed — it may skip values or not start at 0, because some criteria in the full item are graded elsewhere and are not shown to you. Do NOT renumber the criteria you were shown starting from 0.`;
 
 function buildUserMessage(params: {
   prompt: string;
@@ -43,7 +45,7 @@ function buildUserMessage(params: {
     .map((c) => `${c.index}. ${c.concept}`)
     .join('\n');
 
-  return `Original prompt:\n${params.prompt}\n\nAssistant response:\n${params.responseText}\n\nCriteria to check:\n${criteriaList}`;
+  return `Original prompt:\n${params.prompt}\n\nAssistant response:\n${params.responseText}\n\nCriteria to check (criterionIndex = the number shown before each one):\n${criteriaList}`;
 }
 
 /**
@@ -168,18 +170,40 @@ export async function gradeWithCriteria(params: {
 
   params.criteria.forEach((criterion, index) => {
     if (criterion.match === 'exact') {
-      exactVerdicts.push({ ...gradeExactCriterion(criterion.concept, params.responseText), criterionIndex: index });
+      exactVerdicts.push({
+        ...gradeExactCriterion(criterion.concept, params.responseText),
+        criterionIndex: index,
+        source: 'exact', // B0-832 — provenance tag; aggregateCriteriaVerdicts never lets this lose a collision
+      });
     } else {
       semanticCriteria.push({ index, criterion });
     }
   });
 
-  const semanticVerdicts = await gradeSemanticCriteria({
+  const rawSemanticVerdicts = await gradeSemanticCriteria({
     prompt: params.prompt,
     responseText: params.responseText,
     semanticCriteria,
     modelTag: params.modelTag,
   });
+
+  // B0-832 — the model is only ever shown the semantic subset, but it can still answer with a
+  // criterionIndex that collides with an `exact`-mode criterion's real index (or with any index
+  // outside what it was shown). An exact verdict must never be silently overwritten by a semantic
+  // one, so discard (and log) any semantic verdict that doesn't land on an actual semantic index.
+  const semanticIndexSet = new Set(semanticCriteria.map((c) => c.index));
+  const semanticVerdicts: CriterionVerdict[] = [];
+  for (const verdict of rawSemanticVerdicts) {
+    if (!semanticIndexSet.has(verdict.criterionIndex)) {
+      console.warn(
+        `[criteria-grader] B0-832: discarding semantic verdict with criterionIndex=${verdict.criterionIndex} — ` +
+          `not one of the semantic-criteria indices shown to the model (${[...semanticIndexSet].join(', ') || 'none'}). ` +
+          `This likely collided with an exact-criterion index and would have silently overwritten a deterministic verdict.`,
+      );
+      continue;
+    }
+    semanticVerdicts.push({ ...verdict, source: 'semantic' });
+  }
 
   return aggregateCriteriaVerdicts(params.criteria, [...exactVerdicts, ...semanticVerdicts]);
 }

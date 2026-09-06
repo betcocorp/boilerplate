@@ -61,4 +61,35 @@ describe('aggregateCriteriaVerdicts — B0-616 deterministic tier aggregation', 
     expect(outcome.passed).toBe(false);
     expect(outcome.verdicts[0]).toMatchObject({ met: false, concept: 'a' });
   });
+
+  /**
+   * B0-832 — an exact-mode criterion's verdict must never be overwritten by another verdict
+   * claiming the same `criterionIndex`, regardless of array order. This is the structural
+   * guardrail underneath `gradeWithCriteria`'s upstream filtering (criteria-grader.ts): even if a
+   * colliding semantic verdict somehow reached this function, the exact verdict must win.
+   */
+  it('never lets a second verdict at an exact criterion\'s index overwrite it, in either order', () => {
+    const criteria: ExpectedCriterion[] = [
+      { concept: '4 oz/gal', tier: 1, match: 'exact' },
+      { concept: 'dwell time', tier: 2, match: 'semantic' },
+    ];
+
+    const exactVerdict = { criterionIndex: 0, met: false, evidence: '', source: 'exact' as const };
+    const collidingSemanticVerdict = {
+      criterionIndex: 0,
+      met: true,
+      evidence: 'fabricated',
+      source: 'semantic' as const,
+    };
+
+    // exact first, colliding semantic second (the real call order in gradeWithCriteria)
+    const outcomeA = aggregateCriteriaVerdicts(criteria, [exactVerdict, collidingSemanticVerdict]);
+    expect(outcomeA.verdicts[0]).toMatchObject({ met: false, match: 'exact' });
+    expect(outcomeA.passed).toBe(false);
+
+    // colliding semantic first, exact second — still must not flip the outcome
+    const outcomeB = aggregateCriteriaVerdicts(criteria, [collidingSemanticVerdict, exactVerdict]);
+    expect(outcomeB.verdicts[0]).toMatchObject({ met: false, match: 'exact' });
+    expect(outcomeB.passed).toBe(false);
+  });
 });

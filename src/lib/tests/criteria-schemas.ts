@@ -32,11 +32,20 @@ export type ExpectedCriterion = z.infer<typeof expectedCriterionSchema>;
 export const expectedCriteriaSchema = z.array(expectedCriterionSchema);
 export type ExpectedCriteria = z.infer<typeof expectedCriteriaSchema>;
 
-/** One grader verdict per criterion, keyed by its index in the item's `expected_criteria` array. */
+/**
+ * One grader verdict per criterion, keyed by its index in the item's `expected_criteria` array.
+ *
+ * `source` is optional and NOT part of the model's structured-output contract (the model never
+ * sets it — see `GRADER_JSON_SCHEMA`, which has no such property). It is stamped on by
+ * `gradeWithCriteria` (criteria-grader.ts) after the fact, to record whether a verdict came from
+ * the deterministic exact-match check or the semantic/LLM grader, so `aggregateCriteriaVerdicts`
+ * below can resolve an index collision by provenance rather than by array order (B0-832).
+ */
 export const criterionVerdictSchema = z.object({
   criterionIndex: z.number().int().min(0),
   met: z.boolean(),
   evidence: z.string(),
+  source: z.enum(['exact', 'semantic']).optional(),
 });
 export type CriterionVerdict = z.infer<typeof criterionVerdictSchema>;
 
@@ -59,7 +68,8 @@ export const GRADER_JSON_SCHEMA = {
         properties: {
           criterionIndex: {
             type: 'integer',
-            description: 'Index of the criterion in the input list, 0-based.',
+            description:
+              'The number shown before the criterion in the list (e.g. for "3. must mention X", criterionIndex is 3). Copy it exactly as given — do not renumber the criteria you were shown starting from 0.',
           },
           met: {
             type: 'boolean',
@@ -116,6 +126,15 @@ export const TIER_WEIGHT: Record<CriteriaTier, number> = { 1: 3, 2: 2, 3: 1 };
  * coverage. Pure function so scoring rules can be re-tuned and historical verdicts
  * re-aggregated without re-running a single model call (per the business case's
  * "aggregation is code, not vibes" argument).
+ *
+ * B0-832 — merging is order-independent-safe: a verdict stamped `source: 'exact'` can never be
+ * overwritten by another verdict claiming the same `criterionIndex` (e.g. a semantic/LLM verdict
+ * that collided with an exact criterion's index due to an upstream index-numbering ambiguity).
+ * `gradeWithCriteria` already filters such collisions out before they get here (and stamps
+ * `source` on every verdict it produces), so this is a second, structural guardrail — regulated
+ * exact-match verdicts must never be silently replaced by a model's judgment, regardless of array
+ * order. Verdicts without a `source` tag (e.g. re-aggregating verdicts persisted before B0-832)
+ * fall back to plain last-write-wins, matching the pre-existing behavior.
  */
 export function aggregateCriteriaVerdicts(
   criteria: ExpectedCriterion[],
@@ -125,7 +144,15 @@ export function aggregateCriteriaVerdicts(
     return { passed: true, score: null, verdicts: [], failureReason: null };
   }
 
-  const verdictByIndex = new Map(verdicts.map((v) => [v.criterionIndex, v]));
+  const verdictByIndex = new Map<number, CriterionVerdict>();
+  for (const v of verdicts) {
+    const existing = verdictByIndex.get(v.criterionIndex);
+    if (existing?.source === 'exact' && v.source !== 'exact') {
+      // An exact verdict already claimed this index — a non-exact verdict can never displace it.
+      continue;
+    }
+    verdictByIndex.set(v.criterionIndex, v);
+  }
   const enriched = criteria.map((criterion, index) => {
     const verdict = verdictByIndex.get(index) ?? {
       criterionIndex: index,

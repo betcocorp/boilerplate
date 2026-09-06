@@ -1,6 +1,31 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { gradeExactCriterion } from './criteria-grader';
+/**
+ * B0-832 — mocks for `gradeWithCriteria`'s OpenAI dependencies, so the collision-guardrail test
+ * below can drive the real `gradeSemanticCriteria` → `aggregateCriteriaVerdicts` path with a
+ * scripted model response, without a live API call.
+ */
+const mockCreate = vi.fn();
+vi.mock('~/lib/openai/client', () => ({
+  getOpenAIClient: () => ({ responses: { create: mockCreate } }),
+  resolveResponsesModel: () => 'gpt-test',
+}));
+vi.mock('~/lib/openai/model-capabilities', () => ({
+  samplingParamsFor: () => ({}),
+}));
+vi.mock('~/lib/openai/response-item-parsing', () => ({
+  extractAssistantText: (res: { output_text: string }) => res.output_text,
+}));
+vi.mock('~/lib/openai/transport-retry', () => ({
+  resolveOpenAiRequestTimeoutMs: () => 1000,
+  retryTransportFaults: (fn: () => unknown) => fn(),
+}));
+vi.mock('~/lib/workflows/product-support/max-output-tokens', () => ({
+  resolveMaxOutputTokens: () => 1024,
+}));
+
+import { gradeExactCriterion, gradeWithCriteria } from './criteria-grader';
+import type { ExpectedCriterion } from './criteria-schemas';
 
 /**
  * B0-803 — `gradeExactCriterion` is the deterministic guardrail for `match: 'exact'` criteria and,
@@ -90,5 +115,80 @@ describe('gradeExactCriterion — B0-803 case/whitespace normalisation', () => {
 
   it('never matches anything against an empty response', () => {
     expect(gradeExactCriterion('2 minutes', '').met).toBe(false);
+  });
+});
+
+/**
+ * B0-832 — reproduces the index-collision bug: an `exact` criterion at index 0 (checked
+ * deterministically, never by the model) and a semantic criterion at index 1, where the grader
+ * model mis-numbers its answer and claims `criterionIndex: 0` for the semantic verdict too. Before
+ * the fix, `aggregateCriteriaVerdicts`'s `Map` silently let the later (semantic) entry win,
+ * overwriting the deterministic exact verdict with the model's judgment — a false pass on
+ * regulated content. The AC: the exact verdict must win, and the colliding semantic verdict must
+ * be discarded (logged), never silently merged in.
+ */
+describe('gradeWithCriteria — B0-832 exact verdict cannot be overwritten on index collision', () => {
+  beforeEach(() => {
+    mockCreate.mockReset();
+  });
+
+  it('keeps the exact verdict at index 0 when a semantic verdict also claims index 0', async () => {
+    // The response text does NOT contain "4 oz/gal" (the exact criterion), so the deterministic
+    // check must fail it. The scripted model reply — mis-numbering its one semantic criterion as
+    // index 0 instead of the real index 1 — must not be allowed to flip that to met:true.
+    mockCreate.mockResolvedValue({
+      output_text: JSON.stringify({
+        verdicts: [{ criterionIndex: 0, met: true, evidence: 'mentions dwell time' }],
+      }),
+    });
+
+    const criteria: ExpectedCriterion[] = [
+      { concept: '4 oz/gal', tier: 1, match: 'exact' },
+      { concept: 'mentions dwell time', tier: 2, match: 'semantic' },
+    ];
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const outcome = await gradeWithCriteria({
+      prompt: 'How do I dilute this?',
+      responseText: 'Leave the solution to dwell for 10 minutes before rinsing.',
+      criteria,
+    });
+
+    expect(outcome).not.toBeNull();
+    // The exact verdict (met:false, since "4 oz/gal" never appears in the response) must win —
+    // not the colliding semantic verdict claiming met:true at the same index.
+    expect(outcome!.verdicts[0]).toMatchObject({ criterionIndex: 0, met: false, match: 'exact' });
+    // The real semantic criterion (index 1) never got a matching verdict from the model (it only
+    // returned one for the colliding index 0), so it's treated as not-met rather than fabricated.
+    expect(outcome!.verdicts[1]).toMatchObject({ criterionIndex: 1, met: false, match: 'semantic' });
+    expect(outcome!.passed).toBe(false);
+    // Logged, not silently merged in — the AC's explicit requirement.
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('B0-832'));
+
+    warnSpy.mockRestore();
+  });
+
+  it('applies a correctly-numbered semantic verdict normally (no collision)', async () => {
+    mockCreate.mockResolvedValue({
+      output_text: JSON.stringify({
+        verdicts: [{ criterionIndex: 1, met: true, evidence: 'dwell for 10 minutes' }],
+      }),
+    });
+
+    const criteria: ExpectedCriterion[] = [
+      { concept: '4 oz/gal', tier: 1, match: 'exact' },
+      { concept: 'mentions dwell time', tier: 2, match: 'semantic' },
+    ];
+
+    const outcome = await gradeWithCriteria({
+      prompt: 'How do I dilute this?',
+      responseText: 'Dilute at 4 oz/gal and let it dwell for 10 minutes before rinsing.',
+      criteria,
+    });
+
+    expect(outcome).not.toBeNull();
+    expect(outcome!.verdicts[0]).toMatchObject({ met: true, match: 'exact' });
+    expect(outcome!.verdicts[1]).toMatchObject({ met: true, match: 'semantic' });
+    expect(outcome!.passed).toBe(true);
   });
 });
