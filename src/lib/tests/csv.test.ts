@@ -1,12 +1,64 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  decodeCsvBytes,
   formatExpectedCriteriaCell,
   parseExpectedCriteriaCell,
   parseShouldCiteFromForm,
   parseTestCsvContent,
 } from './csv';
 import { TEST_TEMPLATE_COLUMNS, buildTestTemplateCsv } from './template';
+
+/**
+ * B0-833 — regression test for the import-encoding bug: uploaded CSVs are frequently
+ * Windows-1252 (Excel's Windows "CSV" export), not UTF-8. Decoding a Windows-1252 en dash
+ * (0x96) or degree sign (0xB0) as strict UTF-8 previously used a non-fatal `TextDecoder('utf-8')`
+ * that silently swapped every such byte for U+FFFD — the exact corruption found in
+ * `test_items.expected_concepts` / `minimum_concepts` (111 phrases across 47 items, 9 tests).
+ * `decodeCsvBytes` must recover the real character via a Windows-1252 fallback, and this fixture
+ * must never produce U+FFFD.
+ */
+describe('decodeCsvBytes — B0-833 Windows-1252 import fallback', () => {
+  it('decodes a Windows-1252 CSV (en dash + degree sign) without introducing U+FFFD', () => {
+    // Windows-1252 bytes for: "20–45 min" (en dash, 0x96) and "60–80°F" (en dash +
+    // degree sign, 0xB0) — both invalid as standalone UTF-8, which is exactly what triggers the
+    // silent-replacement bug in a plain `TextDecoder('utf-8')`.
+    const header = Buffer.from('question,minimum_concepts\n', 'ascii');
+    const row = Buffer.concat([
+      Buffer.from('"Cure time?","', 'ascii'),
+      Buffer.from('20', 'ascii'),
+      Buffer.from([0x96]), // Windows-1252 en dash –
+      Buffer.from('45 min at ', 'ascii'),
+      Buffer.from([0x96]), // Windows-1252 en dash – again, inside the same cell
+      Buffer.from('60', 'ascii'),
+      Buffer.from([0xb0]), // Windows-1252 degree sign °
+      Buffer.from('F"\n', 'ascii'),
+    ]);
+    const bytes = new Uint8Array(Buffer.concat([header, row]));
+
+    const decoded = decodeCsvBytes(bytes);
+
+    expect(decoded).not.toContain('�');
+    expect(decoded).toContain('20–45 min at –60°F');
+
+    const [parsedRow] = parseTestCsvContent(decoded);
+    expect(parsedRow.minimumConcepts).not.toContain('�');
+    expect(parsedRow.minimumConcepts).toBe('20–45 min at –60°F');
+  });
+
+  it('leaves a genuine UTF-8 file (including one with a BOM) unaffected', () => {
+    const withBom = Buffer.concat([
+      Buffer.from([0xef, 0xbb, 0xbf]), // UTF-8 BOM
+      Buffer.from('question,minimum_concepts\n"Cure time?","20–45 min"\n', 'utf-8'),
+    ]);
+
+    const decoded = decodeCsvBytes(new Uint8Array(withBom));
+
+    expect(decoded).not.toContain('�');
+    const [parsedRow] = parseTestCsvContent(decoded);
+    expect(parsedRow.minimumConcepts).toBe('20–45 min');
+  });
+});
 
 describe('parseTestCsvContent — golden test set format', () => {
   it('reads the concept, source, and citation columns into typed fields', () => {

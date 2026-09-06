@@ -12,6 +12,30 @@ function asTrimmedString(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+/**
+ * B0-833 — decodes uploaded CSV/dataset bytes as text, tolerating non-UTF-8 exports. Excel's
+ * "CSV" export on Windows is frequently Windows-1252 (cp1252), not UTF-8: a Windows-1252 en dash
+ * (–, 0x96) or degree sign (°, 0xB0) is not valid UTF-8 on its own, so a naive
+ * `new TextDecoder('utf-8').decode(bytes)` — non-fatal by default — silently swaps each one for
+ * U+FFFD (the replacement character) instead of erroring. That is exactly the corruption found in
+ * `test_items.expected_concepts` / `minimum_concepts` (111 phrases across 47 items, 9 tests —
+ * e.g. "20�45 min", "35�50% RH"): the source CSVs were Windows-1252, imported as if UTF-8.
+ *
+ * Decoding strictly (`fatal: true`) first and falling back to Windows-1252 only when that throws
+ * fixes the common case without guessing at any specific character: Windows-1252 is a superset of
+ * ISO-8859-1 and maps every byte 0x00-0xFF to a real character (never U+FFFD), so the fallback
+ * itself can never reintroduce the bug it's fixing. A genuinely UTF-8 file (the common case,
+ * including one with a UTF-8 BOM) is completely unaffected — it still decodes on the first,
+ * strict pass.
+ */
+export function decodeCsvBytes(bytes: Uint8Array): string {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    return new TextDecoder('windows-1252').decode(bytes);
+  }
+}
+
 /** Yes/no CSV cell parsing for `should_cite`. */
 function parseBooleanCell(value: string): boolean | null {
   const normalized = value.trim().toLowerCase();

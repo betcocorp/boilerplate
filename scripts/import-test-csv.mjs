@@ -58,7 +58,27 @@ function parsePriority(value) {
   return parsed;
 }
 
-const csvContent = readFileSync(csvPath, 'utf-8');
+/**
+ * B0-833 — `readFileSync(csvPath, 'utf-8')` decodes leniently: any byte sequence that isn't
+ * valid UTF-8 gets silently swapped for U+FFFD (the replacement character) rather than erroring.
+ * CSVs authored/exported on Windows (see the usage example above) are frequently Windows-1252,
+ * not UTF-8 — a Windows-1252 en dash (–, 0x96) or degree sign (°, 0xB0) is not valid UTF-8 on its
+ * own, so importing one of those files silently corrupted `expected_concepts` /
+ * `minimum_concepts` cells like "20–45 min" into "20�45 min". Decode strictly first and fall back
+ * to Windows-1252 (a superset of ISO-8859-1 — every byte maps to a real character, never U+FFFD)
+ * only when the strict decode fails, so a genuine UTF-8 file is unaffected.
+ */
+function decodeCsvFile(path) {
+  const bytes = readFileSync(path);
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    console.warn(`⚠ ${path} is not valid UTF-8 — decoding as Windows-1252 instead (B0-833).`);
+    return new TextDecoder('windows-1252').decode(bytes);
+  }
+}
+
+const csvContent = decodeCsvFile(csvPath);
 const records = parse(csvContent, {
   columns: true,
   skip_empty_lines: true,

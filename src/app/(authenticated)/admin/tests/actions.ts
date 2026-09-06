@@ -18,6 +18,7 @@ import { updateTierTarget } from '~/lib/tests/tier-targets';
 import supportedModels from '~/lib/constants/models';
 import type { RouterTypeOverride } from '~/lib/workflows/product-support/run-product-support-workflow';
 import {
+  decodeCsvBytes,
   parseCsvColumnNames,
   parseExpectedCriteriaFromForm,
   parsePriority,
@@ -68,10 +69,6 @@ function encodeMessage(path: string, kind: 'success' | 'error', text: string) {
   const url = new URL(path, 'http://localhost');
   url.searchParams.set(kind, text);
   return `${url.pathname}${url.search}`;
-}
-
-function toUtf8Text(bytes: Uint8Array) {
-  return new TextDecoder('utf-8').decode(bytes);
 }
 
 /** Surfaces a failed dataset create/upload as a toast message instead of an unhandled 500. */
@@ -150,7 +147,7 @@ export async function uploadTestCsvAction(formData: FormData) {
    * `multi_turn_json` escape-hatch column — is the primary authoring path.
    */
   if (hasCsvFile && /\.json$/i.test(file.name)) {
-    const parsed = parseMultiTurnScenarioSetJson(toUtf8Text(new Uint8Array(await file.arrayBuffer())));
+    const parsed = parseMultiTurnScenarioSetJson(decodeCsvBytes(new Uint8Array(await file.arrayBuffer())));
     if (!parsed.ok) {
       redirect(
         encodeMessage(
@@ -254,7 +251,7 @@ export async function uploadTestCsvAction(formData: FormData) {
   }
 
   const fileBytes = new Uint8Array(await file.arrayBuffer());
-  const content = toUtf8Text(fileBytes);
+  const content = decodeCsvBytes(fileBytes);
   const parsedRows = parseTestCsvContent(content);
   const columnNames = parseCsvColumnNames(content);
 
