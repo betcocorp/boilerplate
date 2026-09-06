@@ -1,5 +1,6 @@
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
+import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 
 import {
@@ -13,11 +14,16 @@ import { toExecSummaryData } from '~/lib/tests/report/exec-summary';
 import { getTestById, getTestResultById } from '~/lib/tests/repository';
 import { isCompletedRunStatus } from '~/lib/tests/types';
 
-export const metadata = {
-  title: 'Executive Summary | Betco BEX',
-  description:
-    'One-page executive summary of the LLM-graded agent-evaluation report for a test run.',
-};
+export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
+  const { testId } = await params;
+  const test = await getTestById(testId).catch(() => null);
+
+  return {
+    title: test ? `${test.name} | Betco Bex` : 'Executive Summary | Betco Bex',
+    description:
+      'One-page executive summary of the LLM-graded agent-evaluation report for a test run.',
+  };
+}
 
 type PageProps = {
   params: Promise<{ testId: string; runId: string }>;
