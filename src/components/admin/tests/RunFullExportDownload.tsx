@@ -25,6 +25,8 @@ export type RunExportItem = {
   /** B0-492 — which mechanism produced `confidence` ('unknown' for a pre-B0-492 payload). */
   confidence_provenance: string;
   elapsed_ms: number;
+  /** B0-850 — harness time-to-first-token, in milliseconds; null when not recorded. */
+  ttft_ms: number | null;
   model: string | null;
   agent: string | null;
   response_text: string | null;

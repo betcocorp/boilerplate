@@ -565,6 +565,7 @@ export default async function AdminTestRunDetailsPage({
               row.response_payload,
             ),
             elapsed_ms: row.elapsed_ms,
+            ttft_ms: row.ttft_ms ?? null,
             model: modelTag ?? null,
             agent: extractRoutingDecision(row.response_payload),
             response_text: row.response_text,
