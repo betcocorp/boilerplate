@@ -22,6 +22,7 @@ import {
   type FastDrawDilutionLookup,
 } from '~/lib/retrieval/fastdraw-dilution';
 import { VERIFIED_FACTS_SOURCE_ID } from '~/lib/rag/document-chunk-types';
+import { createWebSearchService } from '~/lib/websearch/web-search-service';
 import {
   resolveProductEntityByName,
   type ProductEntityResolutionMode,
@@ -60,6 +61,7 @@ import {
   lookupCrossReferenceInputSchema,
   recommendCrossReferenceInputSchema,
   searchProductDocsInputSchema,
+  webSearchToolInputSchema,
   type ProductToolName,
 } from '~/lib/tools/tool-schemas';
 import { lookupCrossReferenceDeduped } from '~/lib/recommendations/legacy-lookup-cache';
@@ -1174,6 +1176,46 @@ export async function executeProductTool(
         procedure: p.procedure ?? null,
         sources: result.sources,
         retrieval: result.retrieval,
+      };
+    }
+    /**
+     * B0-595 — general-purpose web search, reachable from any specialist route (see the
+     * `BASE_ROUTE_TOOL_NAMES` doc comment in `~/lib/tools/definitions.ts`). Dispatches straight to
+     * `WebSearchService.search()` — the exact same caching, source-trust ranking, and rate-limit/
+     * cost guardrails `/api/v1/tools/web-search` uses — so this is never a second implementation of
+     * web search, just a second entry point into the one service.
+     */
+    case 'web_search': {
+      const p = webSearchToolInputSchema.parse(args);
+      const service = await createWebSearchService();
+      const result = await service.search(p);
+
+      // B0-595 — mirrors the audit trail `/api/v1/tools/web-search`'s route writes
+      // (`writeAuditLog('web_search', ...)`), so a model-invoked call is traceable the same way
+      // regardless of entry point. Only written on success, matching that route (a thrown error
+      // propagates to `executeToolCall`'s catch, which serializes the failure but logs nothing —
+      // same as the route's own catch block).
+      if (auditCtx) {
+        await writeAuditLog(
+          'web_search',
+          {
+            source: 'model_tool',
+            specialist_id: auditCtx.specialistId ?? null,
+            query: p.query,
+            provider: result.provider,
+            depth: p.depth ?? 'basic',
+            result_count: result.metrics.resultCount,
+            latency_ms: result.metrics.latencyMs,
+            estimated_cost_usd: result.metrics.estimatedCostUsd,
+          },
+          { ...auditCtx, toolName: name },
+        );
+      }
+
+      return {
+        ok: true,
+        adapter: 'web_search_v1',
+        ...result,
       };
     }
   }

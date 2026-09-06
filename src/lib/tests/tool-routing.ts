@@ -15,7 +15,7 @@ import { PRODUCT_TOOL_NAMES, type ProductToolName } from '~/lib/tools/tool-schem
 
 const KNOWN_TOOL_NAME_SET: ReadonlySet<string> = new Set(PRODUCT_TOOL_NAMES);
 
-/** True when `name` is one of the 14 live function tools in `~/lib/tools/tool-schemas.ts`. */
+/** True when `name` is one of the live function tools in `PRODUCT_TOOL_NAMES` (`~/lib/tools/tool-schemas.ts`). */
 export function isKnownToolName(name: string): name is ProductToolName {
   return KNOWN_TOOL_NAME_SET.has(name);
 }

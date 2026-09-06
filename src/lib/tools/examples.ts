@@ -81,6 +81,12 @@ export const TOOL_EXAMPLES: Record<string, Record<string, unknown>> = {
     procedure: 'coat count',
     maxResults: 3,
   },
+  web_search: {
+    query: 'Spartan Chemical Company headquarters',
+    depth: 'basic',
+    domains: [],
+    maxResults: 5,
+  },
 };
 
 export function getToolExample(toolName: string): Record<string, unknown> {

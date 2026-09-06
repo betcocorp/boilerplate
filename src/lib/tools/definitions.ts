@@ -381,6 +381,37 @@ export const productSupportTools: Tool[] = [
       required: [],
     },
   },
+  {
+    type: 'function',
+    name: 'web_search',
+    strict: false,
+    description:
+      'General-purpose live web search — NOT a Betco data source. Use it only for things that cannot be on file in Betco\'s own corpus: confirming a competitor company/product\'s identity, general industry or regulatory-body background, or other current external information the user asked about. Do NOT use this for any Betco product fact — dilution ratio, EPA/DIN registration, kill claim, contact time, SDS/PPE data, spec, or compatibility rule — those must come from `get_efficacy_data`, `search_product_docs`, or the other approved-document tools; a web result is never a substitute for the approved corpus and must never be cited as one. Returns the same normalized shape as `/api/v1/tools/web-search`: `results[]` (title, url, snippet, score) plus `answer` and `metrics`. Pass `depth: "advanced"` only when a first `basic` search came back thin.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'The search query.',
+        },
+        depth: {
+          type: 'string',
+          enum: ['basic', 'advanced'],
+          description: 'Search depth. Defaults to "basic"; use "advanced" only when basic is insufficient.',
+        },
+        domains: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional domain allowlist to restrict results to (e.g. ["epa.gov"]).',
+        },
+        maxResults: {
+          type: 'number',
+          description: 'Max results to return (default 5, max 20).',
+        },
+      },
+      required: ['query'],
+    },
+  },
 ];
 
 /* -------------------------------------------------------------------------- *
@@ -408,7 +439,20 @@ export const productSupportTools: Tool[] = [
  * Any route NOT listed here falls back to the full set.
  */
 
-/** Rule 1 + rule 2: usable from any route. */
+/**
+ * B0-595 — `web_search` joins BASE even though it fits none of rules 1-3 by their letter: no
+ * specialist prompt names it yet and it is too new to have production traces. It follows the
+ * precedent those rules already concede, though — `recommend_cross_reference` is ALSO entirely
+ * web-search-backed and already sits in BASE for every route. Scoping `web_search` any narrower
+ * would leave the bathroom/dilution/floor/recommendations specialists able to research a
+ * competitor or a non-Betco fact only indirectly, through `recommend_cross_reference`'s internal
+ * search, but never directly — an arbitrary asymmetry with no basis in what those routes actually
+ * need. The regulated-data boundary this tool requires (never ground a Betco dilution ratio, EPA
+ * registration, kill claim, or contact time in a web result — that must still come from
+ * `get_efficacy_data` / `search_product_docs` / the approved-document tools) is enforced in the
+ * tool's own description above, not by withholding it from any route.
+ */
+/** Rule 1 + rule 2 (+ B0-595 web_search, see above): usable from any route. */
 const BASE_ROUTE_TOOL_NAMES: readonly ProductToolName[] = [
   'search_product_docs',
   'get_efficacy_data',
@@ -421,6 +465,7 @@ const BASE_ROUTE_TOOL_NAMES: readonly ProductToolName[] = [
   'list_allowed_surfaces',
   'list_disallowed_uses',
   'get_escalation_policy',
+  'web_search',
 ];
 
 /** Website-taxonomy navigation — only meaningful for "what products do you have" style questions. */

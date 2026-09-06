@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { MAX_KNOWLEDGE_ASSET_RESULTS } from '~/lib/retrieval/knowledge-assets';
+import { webSearchDepthSchema } from '~/lib/websearch/websearch-schemas';
 
 /**
  * B0-362: `topic` is optional. The tool prose (and the product-support prompt) tells the
@@ -233,6 +234,20 @@ export const getFloorAssetInputSchema = z
     },
   );
 
+/**
+ * B0-595 — general-purpose web search, callable mid-turn by any SME agent / the orchestrator
+ * (not just the cross-reference-scoped search buried inside `recommend_cross_reference`).
+ * Deliberately reuses `webSearchRequestSchema`'s exact shape, flattened onto this tool's own
+ * input, rather than inventing a third divergent "settings" shape — `executeProductTool` hands
+ * the parsed args straight to `WebSearchService.search()` unchanged.
+ */
+export const webSearchToolInputSchema = z.object({
+  query: z.string().min(1).max(2000),
+  depth: webSearchDepthSchema.optional(),
+  domains: z.array(z.string().min(1).max(253)).max(50).optional(),
+  maxResults: z.number().int().min(1).max(20).optional(),
+});
+
 export const PRODUCT_TOOL_NAMES = [
   'search_product_docs',
   'get_product_spec',
@@ -250,6 +265,7 @@ export const PRODUCT_TOOL_NAMES = [
   'get_efficacy_data',
   'get_dispenser_asset',
   'get_floor_asset',
+  'web_search',
 ] as const;
 
 export type ProductToolName = (typeof PRODUCT_TOOL_NAMES)[number];
