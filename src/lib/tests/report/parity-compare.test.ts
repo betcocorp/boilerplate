@@ -986,3 +986,90 @@ describe('renderParityMarkdown', () => {
     expect(out).not.toContain(long);
   });
 });
+
+describe('question-text fallback matching (B0-852)', () => {
+  const conceptsFallback = {
+    minimal_required: ['Dilute 1:64'],
+    minimal_satisfied: ['Dilute 1:64'],
+    minimal_missing: [],
+    expected_required: ['Dilute 1:64'],
+    expected_satisfied: ['Dilute 1:64'],
+    expected_missing: [],
+    material_issue: false,
+  };
+
+  function fallbackCase(id: string, question: string) {
+    return {
+      id,
+      question,
+      accuracy: 80,
+      completeness: 80,
+      relevance: 80,
+      clarity: 80,
+      concepts: conceptsFallback,
+      unable_to_evaluate: false,
+      eval_confidence: 90,
+    };
+  }
+
+  it('pairs cases whose ids differ but whose normalized question text is identical, tolerant of case, punctuation and U+FFFD', () => {
+    // Bex uses a test_items.id uuid; the external file uses its own PS-xx style id. A stray U+FFFD
+    // stands in for the apostrophe on the B side — normalization must still see these as the same
+    // question.
+    const a = load({
+      cases: [fallbackCase('11111111-2222-3333-4444-555555555555', "What's the dilution for pH7Q?")],
+    });
+    const b = load({
+      cases: [fallbackCase('PS-01', 'What�s the dilution for pH7Q?')],
+    });
+
+    const result = compareEvalRuns(a, b);
+
+    expect(result.rollup.unmatchedA).toEqual([]);
+    expect(result.rollup.unmatchedB).toEqual([]);
+    expect(result.rollup.matched).toBe(1);
+    expect(result.rollup.matchedById).toBe(0);
+    expect(result.rollup.matchedByQuestion).toBe(1);
+    expect(result.rollup.ambiguousQuestionMatches).toEqual([]);
+    expect(result.cases).toHaveLength(1);
+    expect(result.cases[0]!.id).toBe('11111111-2222-3333-4444-555555555555');
+
+    const md = renderParityMarkdown(result);
+    expect(md).toContain('| Cases matched | 1 (0 by id, 1 by question text) |');
+  });
+
+  it('reports two still-unmatched cases that normalize to the same question text as ambiguous, not silently paired', () => {
+    // Both sides have TWO leftover cases whose questions normalize identically — there is no way to
+    // tell which pairs with which, so neither pair is guessed at.
+    const a = load({
+      cases: [
+        fallbackCase('A-ID-1', 'Can I use this on VCT flooring?'),
+        fallbackCase('A-ID-2', 'Can I use this on VCT flooring?'),
+      ],
+    });
+    const b = load({
+      cases: [
+        fallbackCase('B-ID-1', 'can i use this on vct flooring'),
+        fallbackCase('B-ID-2', 'CAN I USE THIS ON VCT FLOORING!!'),
+      ],
+    });
+
+    const result = compareEvalRuns(a, b);
+
+    expect(result.cases).toHaveLength(0);
+    expect(result.rollup.matched).toBe(0);
+    expect(result.rollup.matchedById).toBe(0);
+    expect(result.rollup.matchedByQuestion).toBe(0);
+    expect(result.rollup.ambiguousQuestionMatches).toHaveLength(1);
+    expect(result.rollup.ambiguousQuestionMatches[0]!.idsA.sort()).toEqual(['A-ID-1', 'A-ID-2']);
+    expect(result.rollup.ambiguousQuestionMatches[0]!.idsB.sort()).toEqual(['B-ID-1', 'B-ID-2']);
+    // Still reported as unmatched — the ambiguous group is surfaced, never silently dropped either.
+    expect(result.rollup.unmatchedA.sort()).toEqual(['A-ID-1', 'A-ID-2']);
+    expect(result.rollup.unmatchedB.sort()).toEqual(['B-ID-1', 'B-ID-2']);
+
+    const md = renderParityMarkdown(result);
+    expect(md).toContain('question-text fallback match left unresolved');
+    expect(md).toContain('A-ID-1');
+    expect(md).toContain('B-ID-1');
+  });
+});

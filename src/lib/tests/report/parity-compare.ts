@@ -50,6 +50,17 @@ export const PROPOSED_TARGETS = {
 
 export const PROPOSED_TARGET_NOTE = 'proposed — confirm with Tom';
 
+/**
+ * B0-852 — the id-based pairing pass misses cases whose ids don't line up across the two files (Bex
+ * uses `test_items.id` uuids; an external skill export may use `R01`/`PS-01` style ids). Question
+ * text is the fallback identity: letters and digits only, lowercased, so punctuation, whitespace and
+ * a stray U+FFFD replacement character (one side's mojibake for an apostrophe or similar) never
+ * block a match that would otherwise be exact.
+ */
+export function normalizeQuestionText(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
 const conceptListSchema = z.array(z.string()).optional();
 const scoreSchema = z.number().min(0).max(100).nullable().optional();
 
@@ -663,8 +674,18 @@ export type ParityRollup = {
   scoringConfigWarnings: string[];
   spreadThreshold: number;
   reviewThreshold: number;
-  /** Ids present in both files. */
+  /** Total pairs formed — by id, then by fallback question-text match. */
   matched: number;
+  /** B0-852 — of `matched`, how many paired by `id` vs. by the question-text fallback. */
+  matchedById: number;
+  matchedByQuestion: number;
+  /**
+   * B0-852 — normalized question-text keys where the fallback pass found more than one
+   * still-unmatched case on either side sharing that text: genuinely ambiguous, so left unpaired
+   * rather than guessed at. Every id in here also appears in `unmatchedA`/`unmatchedB`.
+   */
+  ambiguousQuestionMatches: { normalizedQuestion: string; idsA: string[]; idsB: string[] }[];
+  /** Ids never paired by either pass — includes ids caught in an ambiguous question-text group. */
   unmatchedA: string[];
   unmatchedB: string[];
   /** Matched cases both sides could evaluate — the basis of every number below. */
@@ -742,9 +763,31 @@ function groupRows(cases: readonly CaseComparison[], keyOf: (c: CaseComparison) 
 }
 
 /**
+ * Groups cases by normalized question text, dropping any with no (or blank) question — there is
+ * nothing to fall back to for those, so they stay unmatched rather than joining an empty-key group.
+ */
+function groupByNormalizedQuestion(cases: readonly EvalCase[]): Map<string, EvalCase[]> {
+  const groups = new Map<string, EvalCase[]>();
+  for (const c of cases) {
+    const question = c.question;
+    if (!question) continue;
+    const key = normalizeQuestionText(question);
+    if (!key) continue;
+    groups.set(key, [...(groups.get(key) ?? []), c]);
+  }
+  return groups;
+}
+
+/**
  * Pairs cases by `id` and computes every per-case row and rollup, both sides recomputed under the
  * one configuration `resolveScoringConfig` settled on. **Throws** when the two files declare
  * configurations that resolve differently.
+ *
+ * B0-852 — a case left unmatched by id gets one more chance: any still-unmatched case on the other
+ * side whose question, normalized (letters/digits only, lowercased), is identical is paired as a
+ * fallback match. When more than one still-unmatched case on either side shares that normalized
+ * text, the match is ambiguous and none of them are paired — they are reported in
+ * `ambiguousQuestionMatches` instead of being guessed at.
  */
 export function compareEvalRuns(a: EvalFile, b: EvalFile, options: CompareOptions = {}): ParityComparison {
   const labels = { a: options.labelA ?? 'Bex', b: options.labelB ?? 'Desktop' };
@@ -758,19 +801,51 @@ export function compareEvalRuns(a: EvalFile, b: EvalFile, options: CompareOption
   const reviewThreshold = options.reviewThreshold ?? DEFAULT_JUDGED_THRESHOLDS.lowConfidence;
   const sideOptions: SideOptions = { passMark, reviewThreshold, rules: config.rules };
 
+  // Pass 1: pair by id.
   const byIdB = new Map(b.cases.map((c) => [c.id, c] as const));
   const idsA = new Set(a.cases.map((c) => c.id));
   const cases: CaseComparison[] = [];
-  const unmatchedA: string[] = [];
+  const unmatchedCasesA: EvalCase[] = [];
+  let matchedById = 0;
   for (const ca of a.cases) {
     const cb = byIdB.get(ca.id);
     if (!cb) {
-      unmatchedA.push(ca.id);
+      unmatchedCasesA.push(ca);
       continue;
     }
+    matchedById += 1;
     cases.push(compareCase(evaluateSide(ca, sideOptions), evaluateSide(cb, sideOptions), spreadThreshold));
   }
-  const unmatchedB = b.cases.filter((c) => !idsA.has(c.id)).map((c) => c.id);
+  const unmatchedCasesB = b.cases.filter((c) => !idsA.has(c.id));
+
+  // Pass 2: pair whatever's left by normalized question text.
+  const groupsA = groupByNormalizedQuestion(unmatchedCasesA);
+  const groupsB = groupByNormalizedQuestion(unmatchedCasesB);
+  let matchedByQuestion = 0;
+  const ambiguousQuestionMatches: { normalizedQuestion: string; idsA: string[]; idsB: string[] }[] = [];
+  const pairedIdsA = new Set<string>();
+  const pairedIdsB = new Set<string>();
+  for (const [key, groupA] of groupsA) {
+    const groupB = groupsB.get(key);
+    if (!groupB || groupB.length === 0) continue;
+    if (groupA.length > 1 || groupB.length > 1) {
+      ambiguousQuestionMatches.push({
+        normalizedQuestion: key,
+        idsA: groupA.map((c) => c.id),
+        idsB: groupB.map((c) => c.id),
+      });
+      continue;
+    }
+    const [ca] = groupA;
+    const [cb] = groupB;
+    cases.push(compareCase(evaluateSide(ca, sideOptions), evaluateSide(cb, sideOptions), spreadThreshold));
+    matchedByQuestion += 1;
+    pairedIdsA.add(ca.id);
+    pairedIdsB.add(cb.id);
+  }
+
+  const unmatchedA = unmatchedCasesA.filter((c) => !pairedIdsA.has(c.id)).map((c) => c.id);
+  const unmatchedB = unmatchedCasesB.filter((c) => !pairedIdsB.has(c.id)).map((c) => c.id);
 
   const compared = cases.filter((c) => c.compared);
   const deltas = compared.flatMap((c) => (c.delta == null ? [] : [c.delta]));
@@ -840,6 +915,9 @@ export function compareEvalRuns(a: EvalFile, b: EvalFile, options: CompareOption
       spreadThreshold,
       reviewThreshold,
       matched: cases.length,
+      matchedById,
+      matchedByQuestion,
+      ambiguousQuestionMatches,
       unmatchedA,
       unmatchedB,
       compared: compared.length,
@@ -968,7 +1046,10 @@ export function renderParityMarkdown(result: ParityComparison): string {
     mdTable(
       ['Metric', 'Value'],
       [
-        ['Cases matched by id', String(r.matched)],
+        [
+          'Cases matched',
+          `${r.matched} (${r.matchedById} by id, ${r.matchedByQuestion} by question text)`,
+        ],
         [`Only in ${labels.a}`, list(r.unmatchedA)],
         [`Only in ${labels.b}`, list(r.unmatchedB)],
         ['Compared (both evaluable)', String(r.compared)],
@@ -993,6 +1074,16 @@ export function renderParityMarkdown(result: ParityComparison): string {
     ),
     '',
   );
+
+  if (r.ambiguousQuestionMatches.length > 0) {
+    out.push(
+      `${r.ambiguousQuestionMatches.length} question-text fallback match${r.ambiguousQuestionMatches.length === 1 ? '' : 'es'} left unresolved — more than one still-unmatched case shared the same normalized question, so none of them were paired:`,
+      ...r.ambiguousQuestionMatches.map(
+        (m) => `- \`${m.normalizedQuestion}\` — ${labels.a}: ${list(m.idsA)}; ${labels.b}: ${list(m.idsB)}`,
+      ),
+      '',
+    );
+  }
 
   out.push(
     mdTable(
