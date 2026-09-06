@@ -1,0 +1,292 @@
+{
+  "generated_at": "2026-09-05T20:50:23.615Z",
+  "ticket": "B0-199",
+  "mode": "write",
+  "excluded_documents": [
+    {
+      "id": "43fc66ec-461a-40b1-8b60-d4d78a93f576",
+      "reason": "duplicate",
+      "detail": "af79-efficacy-sheet.md — byte-identical to Efficacy_Data_079_AF79.md per B0-225 reconciliation."
+    },
+    {
+      "id": "2efef2ed-fa31-4fb4-8a3a-1eb65e71dd1c",
+      "reason": "duplicate",
+      "detail": "070-efficacy-sheet.md — byte-identical to Efficacy_Data_070_Rest_Stop.md per B0-225 reconciliation."
+    },
+    {
+      "id": "af8946de-2645-4f00-8348-d6393dd9a618",
+      "reason": "sanitizer_only",
+      "detail": "Efficacy_Data_237_Sanibet_Multi_Range.md — only ppm-based food-contact \"Sanitizer Efficacy\" claims; no bactericidal/virucidal/fungicidal/tuberculocidal content."
+    },
+    {
+      "id": "c321e633-f9ad-44d6-b553-693d7a5d1c1b",
+      "reason": "sanitizer_only",
+      "detail": "Efficacy_Data_342_Sanibet_RTU.md — only ppm-based food-contact \"Sanitizer Efficacy\" claims; no bactericidal/virucidal/fungicidal/tuberculocidal content."
+    }
+  ],
+  "per_document": [
+    {
+      "document_id": "9953c191-47b9-4167-8784-452c688f6a9e",
+      "formula": "333",
+      "product_name": "Triforce",
+      "epa_registration": "6836 349 4170",
+      "rows_parsed": 44,
+      "by_claim_type": {
+        "bactericidal": 28,
+        "virucidal": 14,
+        "fungicidal": 2
+      }
+    },
+    {
+      "document_id": "1f0d1d94-b59b-469b-9436-4e0f19a1d82d",
+      "formula": "341",
+      "product_name": "Quat-Stat 5",
+      "epa_registration": "6836 361 4170",
+      "rows_parsed": 39,
+      "by_claim_type": {
+        "bactericidal": 21,
+        "virucidal": 16,
+        "fungicidal": 2
+      }
+    },
+    {
+      "document_id": "737f13a0-209c-46c2-b762-32c4776eb785",
+      "formula": "079",
+      "product_name": "AF79",
+      "epa_registration": "6836 193 4170",
+      "rows_parsed": 7,
+      "by_claim_type": {
+        "bactericidal": 3,
+        "virucidal": 3,
+        "fungicidal": 1
+      }
+    },
+    {
+      "document_id": "df277054-4186-49ea-b31b-2946ad7e33f3",
+      "formula": "1086",
+      "product_name": "Betco Glybet III",
+      "epa_registration": "67603 4 4170",
+      "rows_parsed": 14,
+      "by_claim_type": {
+        "bactericidal": 7,
+        "tuberculocidal": 1,
+        "virucidal": 5,
+        "fungicidal": 1
+      }
+    },
+    {
+      "document_id": "cbb72d77-5f55-4e2e-ba81-20dbc5155faa",
+      "formula": "311",
+      "product_name": "Betco Disinfectant Fight Bac RTU (US)",
+      "epa_registration": "1839 83 4170",
+      "rows_parsed": 36,
+      "by_claim_type": {
+        "bactericidal": 17,
+        "virucidal": 17,
+        "fungicidal": 1,
+        "tuberculocidal": 1
+      }
+    },
+    {
+      "document_id": "67d02956-3d0f-474d-9e80-1160f871fc98",
+      "formula": "311",
+      "product_name": "Fight Bac RTU Disinfectant Cleaner (Canada)",
+      "epa_registration": null,
+      "rows_parsed": 35,
+      "by_claim_type": {
+        "bactericidal": 18,
+        "virucidal": 16,
+        "tuberculocidal": 1
+      }
+    },
+    {
+      "document_id": "6c2ef512-8ad1-439d-954c-a2c01ffbe45d",
+      "formula": "331",
+      "product_name": "AF79 Concentrate",
+      "epa_registration": "6836 73 4170",
+      "rows_parsed": 28,
+      "by_claim_type": {
+        "bactericidal": 18,
+        "virucidal": 8,
+        "fungicidal": 2
+      }
+    },
+    {
+      "document_id": "6280871e-428b-46c8-b710-2966facb0a74",
+      "formula": "355",
+      "product_name": "pH7Q Dual (US)",
+      "epa_registration": "10324 141 4170",
+      "rows_parsed": 90,
+      "by_claim_type": {
+        "bactericidal": 57,
+        "virucidal": 30,
+        "fungicidal": 3
+      }
+    },
+    {
+      "document_id": "c5d1f7d0-4281-4220-af66-b6acdad16c24",
+      "formula": "355",
+      "product_name": "Daily Disinfectant Dual (Canada)",
+      "epa_registration": null,
+      "rows_parsed": 84,
+      "by_claim_type": {
+        "bactericidal": 58,
+        "virucidal": 23,
+        "fungicidal": 3
+      }
+    },
+    {
+      "document_id": "0d44ac20-8931-4a91-b0d1-d48d40ecc593",
+      "formula": "3820",
+      "product_name": "VersiFect",
+      "epa_registration": "1839 224 4170",
+      "rows_parsed": 14,
+      "by_claim_type": {
+        "bactericidal": 8,
+        "virucidal": 5,
+        "fungicidal": 1
+      }
+    },
+    {
+      "document_id": "f42e7404-76d7-4ba7-a60d-5d35c64aa5e7",
+      "formula": "392",
+      "product_name": "GE Fight Bac Wipes (US)",
+      "epa_registration": "34810 36 4170",
+      "rows_parsed": 28,
+      "by_claim_type": {
+        "bactericidal": 10,
+        "virucidal": 15,
+        "fungicidal": 2,
+        "tuberculocidal": 1
+      }
+    },
+    {
+      "document_id": "ef595017-95a2-472a-b45a-27757f5167c9",
+      "formula": "392",
+      "product_name": "GE Fight Bac Wipes (Canada)",
+      "epa_registration": null,
+      "rows_parsed": 24,
+      "by_claim_type": {
+        "bactericidal": 9,
+        "virucidal": 13,
+        "fungicidal": 1,
+        "tuberculocidal": 1
+      }
+    },
+    {
+      "document_id": "eaef02ee-6a68-4f86-9ca0-6a7ba58dbab7",
+      "formula": "087",
+      "product_name": "Betco Cide-bet II",
+      "epa_registration": "706 65 4170",
+      "rows_parsed": 17,
+      "by_claim_type": {
+        "bactericidal": 9,
+        "virucidal": 5,
+        "fungicidal": 3
+      }
+    },
+    {
+      "document_id": "719fddff-bc0b-4058-ac54-960058e2358f",
+      "formula": "316",
+      "product_name": "pH7Q",
+      "epa_registration": "47371 131 4170",
+      "rows_parsed": 60,
+      "by_claim_type": {
+        "bactericidal": 33,
+        "virucidal": 25,
+        "fungicidal": 2
+      }
+    },
+    {
+      "document_id": "a33a3d0d-62e2-4220-8720-0d7244a548b4",
+      "formula": "315",
+      "product_name": "AF315",
+      "epa_registration": "6836 165 4170",
+      "rows_parsed": 13,
+      "by_claim_type": {
+        "bactericidal": 8,
+        "virucidal": 3,
+        "fungicidal": 2
+      }
+    },
+    {
+      "document_id": "f2ccc9d5-d443-449e-9d3f-4ddfc8a74fe0",
+      "formula": "390",
+      "product_name": "GE Fight Bac RTU (US)",
+      "epa_registration": "34810 35 4170",
+      "rows_parsed": 30,
+      "by_claim_type": {
+        "bactericidal": 11,
+        "virucidal": 16,
+        "fungicidal": 2,
+        "tuberculocidal": 1
+      }
+    },
+    {
+      "document_id": "b3d31cac-7203-445d-8fb2-5e861c962e79",
+      "formula": "390",
+      "product_name": "GE Fight Bac RTU (Canada)",
+      "epa_registration": null,
+      "rows_parsed": 18,
+      "by_claim_type": {
+        "bactericidal": 8,
+        "virucidal": 9,
+        "fungicidal": 1
+      }
+    },
+    {
+      "document_id": "4629d646-6b68-4511-8795-cc221c91fbb3",
+      "formula": "304",
+      "product_name": "Betco Pine Quat",
+      "epa_registration": "47371 192 4170",
+      "rows_parsed": 55,
+      "by_claim_type": {
+        "bactericidal": 28,
+        "virucidal": 25,
+        "fungicidal": 2
+      }
+    },
+    {
+      "document_id": "747d25c7-9fcd-440f-951a-51cdb81e006a",
+      "formula": "314",
+      "product_name": "Sure Bet II",
+      "epa_registration": "6836 86 4170",
+      "rows_parsed": 16,
+      "by_claim_type": {
+        "bactericidal": 12,
+        "virucidal": 3,
+        "fungicidal": 1
+      }
+    },
+    {
+      "document_id": "1055f9bb-10a9-45d2-9683-d570daa1009e",
+      "formula": "070",
+      "product_name": "Rest Stop",
+      "epa_registration": "47371 97 4170",
+      "rows_parsed": 9,
+      "by_claim_type": {
+        "bactericidal": 4,
+        "virucidal": 3,
+        "fungicidal": 2
+      }
+    }
+  ],
+  "totals": {
+    "parsed_raw": 661,
+    "after_dedupe": 638,
+    "by_claim_type": {
+      "bactericidal": 344,
+      "virucidal": 254,
+      "fungicidal": 34,
+      "tuberculocidal": 6
+    },
+    "distinct_entities": 16
+  },
+  "flags": [
+    {
+      "document_id": "c5d1f7d0-4281-4220-af66-b6acdad16c24",
+      "organism": "Avian Influenza A virus (H3N2)",
+      "flag": "blank_contact_time"
+    }
+  ]
+}
