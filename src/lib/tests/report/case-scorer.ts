@@ -255,6 +255,8 @@ export type CaseScoringInput = {
   idealResponse: string | null;
   expectedSources: string | null;
   expectedShouldAnswer: boolean | null;
+  /** `test_items.should_cite` — whether the answer is expected to cite sources. Null = no expectation. */
+  shouldCite: boolean | null;
   /** `test_items.minimum_concepts`, already split by `splitConcepts`. */
   mandatoryConcepts: readonly string[];
   /** `test_items.expected_concepts`, already split by `splitConcepts`. */
@@ -306,7 +308,8 @@ export function buildGraderPayload(input: CaseScoringInput): string {
       category: input.category,
       expected: input.idealResponse,
       expected_sources: input.expectedSources,
-      should_cite: input.expectedShouldAnswer,
+      should_cite: input.shouldCite,
+      expected_should_answer: input.expectedShouldAnswer,
       minimal_concepts: required.mandatory,
       expected_concepts: required.expected,
       actual: input.actualResponseText,

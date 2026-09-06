@@ -38,7 +38,8 @@ const INPUT: CaseScoringInput = {
   priorityRaw: 1,
   idealResponse: `${REGULATED.dilution}; ${REGULATED.contactTime}.`,
   expectedSources: `Product label — ${REGULATED.epa}`,
-  expectedShouldAnswer: true,
+  expectedShouldAnswer: false,
+  shouldCite: true,
   mandatoryConcepts: [REGULATED.dilution, REGULATED.contactTime],
   expectedConcepts: [REGULATED.dilution, REGULATED.contactTime, REGULATED.metric],
   actualResponseText: 'Dilute at 2 oz per gallon (1:64) and keep the surface wet for ten minutes.',
@@ -142,10 +143,16 @@ describe('buildGraderPayload / requiredConcepts (B0-809)', () => {
       'expected',
       'expected_sources',
       'should_cite',
+      'expected_should_answer',
       'minimal_concepts',
       'expected_concepts',
       'actual',
     ]);
+    // B0-849 — `should_cite` (test_items.should_cite) and `expected_should_answer`
+    // (test_items.expected_should_answer) are distinct expectations; pin both values so a
+    // regression that swaps them back is caught.
+    expect(payload.should_cite).toBe(true);
+    expect(payload.expected_should_answer).toBe(false);
     expect(payload.minimal_concepts).toEqual([REGULATED.dilution, REGULATED.contactTime]);
     expect(payload.expected_concepts).toEqual([
       REGULATED.dilution,

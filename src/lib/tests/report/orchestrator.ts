@@ -106,6 +106,7 @@ async function scoreOnePass(
     idealResponse: item.ideal_response,
     expectedSources: item.expected_sources,
     expectedShouldAnswer: item.expected_should_answer,
+    shouldCite: item.should_cite,
     mandatoryConcepts: splitConcepts(item.minimum_concepts),
     expectedConcepts: splitConcepts(item.expected_concepts),
     actualResponseText: responseText,
