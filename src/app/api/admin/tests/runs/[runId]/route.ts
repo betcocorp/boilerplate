@@ -10,10 +10,13 @@ import { authorizeAdminTestsRoute } from '~/lib/api/admin-tests-auth';
 import { authOptions } from '~/lib/auth';
 import { PERMISSIONS } from '~/lib/permissions/constants';
 import { gateRoute } from '~/lib/permissions/route-gate';
+import {
+  claimAndExecuteQueuedRun,
+  executeQueuedTestRun,
+} from '~/lib/tests/execute-queued-run';
 import { executeSearchRun } from '~/lib/tests/search-run-executor';
 import { executeTestRun } from '~/lib/tests/run-executor';
 import {
-  claimQueuedTestResultForExecution,
   countPassedAndFailedByResultId,
   countResultItemsByResultId,
   deleteErroredResultItems,
@@ -119,30 +122,15 @@ export async function POST(
   if (denied) return denied;
 
   const { runId } = await context.params;
-  const run = await getTestResultById(runId).catch(() => null);
+  // B0-883 — load/terminal-check/claim/dispatch lives in `executeQueuedTestRun` so the "Run Golden"
+  // fan-out executes runs through exactly the same path as this handler.
+  const { state } = await executeQueuedTestRun(runId);
 
-  if (!run) {
+  if (state === 'not_found') {
     return NextResponse.json({ error: 'Run not found' }, { status: 404 });
   }
 
-  if (isTerminalRunStatus(run.status)) {
-    return NextResponse.json({ ok: true, state: 'already_finished' });
-  }
-
-  if (run.status === 'queued') {
-    const claimed = await claimQueuedTestResultForExecution(run.id);
-    if (claimed) {
-      if (run.run_mode === 'search') {
-        await executeSearchRun(run.id);
-      } else {
-        await executeTestRun(run.id);
-      }
-      return NextResponse.json({ ok: true, state: 'started' });
-    }
-    return NextResponse.json({ ok: true, state: 'already_running' });
-  }
-
-  return NextResponse.json({ ok: true, state: 'already_running' });
+  return NextResponse.json({ ok: true, state });
 }
 
 export async function PATCH(
@@ -244,13 +232,8 @@ export async function PATCH(
     });
     await updateTestRecord(run.test_id, { status: 'ready' });
 
-    const claimed = await claimQueuedTestResultForExecution(run.id);
+    const claimed = await claimAndExecuteQueuedRun(run);
     if (claimed) {
-      if (run.run_mode === 'search') {
-        await executeSearchRun(run.id);
-      } else {
-        await executeTestRun(run.id);
-      }
       return NextResponse.json({ ok: true, state: 'restarted' });
     }
     return NextResponse.json({ ok: true, state: 'queued_for_restart' });
@@ -289,13 +272,8 @@ export async function PATCH(
     });
     await updateTestRecord(run.test_id, { status: 'ready' });
 
-    const claimed = await claimQueuedTestResultForExecution(run.id);
+    const claimed = await claimAndExecuteQueuedRun(run);
     if (claimed) {
-      if (run.run_mode === 'search') {
-        await executeSearchRun(run.id);
-      } else {
-        await executeTestRun(run.id);
-      }
       return NextResponse.json({ ok: true, state: 'retrying_failed' });
     }
     return NextResponse.json({ ok: true, state: 'queued_for_retry' });

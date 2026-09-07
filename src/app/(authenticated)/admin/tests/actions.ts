@@ -3,6 +3,7 @@
 import { getServerSession } from 'next-auth';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
+import { after } from 'next/server';
 
 import {
   DEFAULT_BEX_CHAT_AGENT_MODE,
@@ -13,7 +14,11 @@ import { APP_VERSION } from '~/lib/app-version';
 import { writeAuditLog } from '~/lib/audit/audit-log';
 import { authOptions } from '~/lib/auth';
 import { newCorrelationId } from '~/lib/observability/correlation-id';
-import { GOLDEN_TIERS, type GoldenTier } from '~/lib/tests/golden-set';
+import { logError, logWarn } from '~/lib/observability/logger';
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { requirePermission } from '~/lib/permissions/require-permission';
+import { executeQueuedTestRun } from '~/lib/tests/execute-queued-run';
+import { GOLDEN_TIERS, listGoldenTests, type GoldenTier } from '~/lib/tests/golden-set';
 import { updateTierTarget } from '~/lib/tests/tier-targets';
 import supportedModels from '~/lib/constants/models';
 import type { RouterTypeOverride } from '~/lib/workflows/product-support/run-product-support-workflow';
@@ -702,19 +707,122 @@ export async function runTestAction(formData: FormData) {
 }
 
 /**
- * B0-882 — "Run Golden" dialog submission. Parses the same `TestRunModelControls` fields as
- * `runTestAction`; the per-golden-test fan-out lands in B0-883, so for now this only reports
- * that the wiring is pending.
+ * B0-882 / B0-883 — "Run Golden" dialog submission: one queued full-mode run per ACTIVE golden test
+ * set (`listGoldenTests({ includeArchived: false })`, B0-881 — archived-but-golden sets get none),
+ * every row carrying the dialog's model / router / agent / validator choice through the same
+ * `parseTestRunOptionFields` + `buildTestRunOptions` pair `runTestAction` uses.
+ *
+ * Non-blocking by design: rows are inserted, then execution is scheduled with `after()` and the
+ * action redirects at once, so the dialog closes while the runs are still `queued`/`running`.
+ * Execution is in-process (`executeQueuedTestRun`, the same load/claim/dispatch the single-run
+ * `POST /api/admin/tests/runs/[runId]` handler runs) rather than the nightly sweep's self-HTTP
+ * choreography: that sweep forwards the cron's bearer token, and a browser session has no bearer
+ * token to forward. `after()` runs within this segment's `maxDuration` (300 s, set on
+ * `admin/tests/page.tsx`); a run whose execution is cut off by that budget is left `running` and
+ * recovered by the existing hourly `/api/v1/observability/sweep-stalled-runs` cron — there is
+ * deliberately no second recovery mechanism here.
  */
 export async function runGoldenTestsAction(formData: FormData) {
   const returnPath = normalizeReturnPath(formData.get('returnPath'), '/admin/tests');
-  parseTestRunOptionFields(formData);
 
+  // Server actions are reachable by any POST that knows the action id, so the page gate alone
+  // (`requirePagePermission` on /admin/tests) is not enough: re-check the same permission here.
+  // No session → denied outright (before the enforcement flag is consulted), same as the page.
+  const permission = await requirePermission(PERMISSIONS.NAVIGATION_SIDEBAR_TESTS, {
+    route: 'action runGoldenTestsAction',
+  });
+  if (!permission.allowed) {
+    redirect(
+      encodeMessage(returnPath, 'error', 'You are not allowed to start golden-set runs.'),
+    );
+  }
+
+  const { modelTag, useValidator, routerType, agentMode } =
+    parseTestRunOptionFields(formData);
+
+  const goldenTests = await listGoldenTests({ includeArchived: false });
+  if (goldenTests.length === 0) {
+    redirect(
+      encodeMessage(returnPath, 'error', 'No active golden test sets to run.'),
+    );
+  }
+
+  const triggeredBy = await currentRunActor();
+  const runOptions = buildTestRunOptions({ modelTag, useValidator, agentMode, routerType });
+  const createdRunIds: string[] = [];
+  const skippedEmpty: string[] = [];
+
+  for (const test of goldenTests) {
+    const items = await getTestItemsByTestId(test.id);
+    if (items.length === 0) {
+      // A run needs total_items > 0; an empty set is skipped and reported, never a hard failure.
+      skippedEmpty.push(test.name);
+      continue;
+    }
+
+    const testResult = await createTestResult({
+      test_id: test.id,
+      status: 'queued',
+      run_mode: 'full',
+      total_items: items.length,
+      passed_items: 0,
+      failed_items: 0,
+      started_at: new Date().toISOString(),
+      run_options: runOptions,
+      app_version: APP_VERSION,
+      triggered_by: triggeredBy,
+      summary: {
+        completed_items: 0,
+        total_items: items.length,
+        progress_percent: 0,
+        runner_state: 'queued',
+      },
+    });
+    await updateTestRecord(test.id, { status: 'running' });
+    createdRunIds.push(testResult.id);
+  }
+
+  if (createdRunIds.length > 0) {
+    after(async () => {
+      const outcomes = await Promise.allSettled(
+        createdRunIds.map(async (runId) => {
+          try {
+            const { state } = await executeQueuedTestRun(runId);
+            if (state !== 'started') {
+              logWarn('golden_run_fanout_not_started', { runId, state });
+            }
+          } catch (error) {
+            logError('golden_run_fanout_execute_failed', {
+              runId,
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }),
+      );
+      const rejected = outcomes.filter((o) => o.status === 'rejected').length;
+      if (rejected > 0) {
+        logError('golden_run_fanout_settled_with_rejections', { rejected, total: outcomes.length });
+      }
+    });
+  }
+
+  revalidatePath('/admin/tests');
+  for (const test of goldenTests) {
+    revalidatePath(`/admin/tests/${test.id}`);
+  }
+
+  const started = createdRunIds.length;
+  const skippedNote =
+    skippedEmpty.length > 0
+      ? ` Skipped ${skippedEmpty.length} empty set${skippedEmpty.length === 1 ? '' : 's'}: ${skippedEmpty.join(', ')}.`
+      : '';
   redirect(
     encodeMessage(
       returnPath,
-      'error',
-      'Run Golden is not wired to the fan-out yet (B0-883).',
+      started > 0 ? 'success' : 'error',
+      started > 0
+        ? `Started ${started} golden run${started === 1 ? '' : 's'} (${modelTag}). Archived golden sets were skipped.${skippedNote}`
+        : `No golden runs started — every active golden set is empty.${skippedNote}`,
     ),
   );
 }

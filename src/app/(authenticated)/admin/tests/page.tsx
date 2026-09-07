@@ -29,6 +29,10 @@ import {
   setTestGoldenAction,
 } from './actions';
 
+// B0-883 — `runGoldenTestsAction` is invoked from this segment and executes the fan-out in
+// `after()`, which runs within the segment's max duration; match `api/admin/tests/runs/[runId]`.
+export const maxDuration = 300;
+
 export const metadata = {
   title: 'Test Runner | Betco BEX',
   description:
