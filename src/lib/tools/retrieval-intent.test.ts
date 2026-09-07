@@ -14,7 +14,9 @@ import { classifyRetrievalIntent } from '~/lib/tools/product-tools';
  */
 describe('classifyRetrievalIntent procedural depth branch', () => {
   // Width only — see the B0-759 note in classifyRetrievalIntent for why depth was measured and dropped.
-  const DEPTH = { limit: 6 };
+  // B0-873/B0-874 — the shape is also flagged `procedural` so retrieval can merge unlocked
+  // knowledge documents and widen the top knowledge source; still no `maxPerDocument`.
+  const DEPTH = { limit: 6, procedural: true };
 
   describe('widens for the shapes that graded F', () => {
     const widened = [
@@ -93,7 +95,7 @@ describe('classifyRetrievalIntent — B0-786 answerShape overrides the regexes',
   it('widens for procedure/enumeration WITHOUT raising maxPerDocument', () => {
     for (const shape of ['procedure', 'enumeration'] as const) {
       const out = classifyRetrievalIntent('a query with no depth phrasing at all', undefined, shape);
-      expect(out).toEqual({ limit: 6 });
+      expect(out).toEqual({ limit: 6, procedural: true });
       expect(out.maxPerDocument).toBeUndefined();
     }
   });
@@ -120,7 +122,10 @@ describe('classifyRetrievalIntent — B0-786 answerShape overrides the regexes',
   });
 
   it('falls back to the regexes when no shape is supplied (degraded/standalone callers)', () => {
-    expect(classifyRetrievalIntent('how often should I recoat?')).toEqual({ limit: 6 });
+    expect(classifyRetrievalIntent('how often should I recoat?')).toEqual({
+      limit: 6,
+      procedural: true,
+    });
     expect(classifyRetrievalIntent('what is the dilution ratio')).toEqual({});
   });
 });

@@ -45,6 +45,8 @@ export const productLineLockSchema = z.object({
     'skipped_ambiguous',
     'skipped_no_product_line',
     'resolution_disabled',
+    // B0-873 — mirrors `ProductLineResolutionResult.lockReason` (product-line-resolution.ts).
+    'skipped_knowledge_top_hit',
   ]),
   /**
    * B0-693 — mirrors `ProductKnowledgeRetrievalSummary.explicitKeySource`

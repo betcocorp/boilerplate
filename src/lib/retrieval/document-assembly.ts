@@ -323,3 +323,56 @@ export async function assembleNeighborChunkBodies(
 
   return result;
 }
+
+/**
+ * B0-874 — ONE stitched body for a SINGLE document covering every index in `chunkIndexes` plus
+ * `radius` chunks on either side of each (union, deduplicated, chunk order). Unlike
+ * `assembleNeighborChunkBodies` (one window per matched chunk, keyed per request) this produces a
+ * single evidence block, which is what a source that is being widened to its sibling chunks needs:
+ * the FAQ-style knowledge documents behind the B0-874 items are short (typically 8–15 chunks of
+ * 30–200 tokens), and the mandated detail sits in a sibling of the chunk similarity picked (SZ#11
+ * matched the "Avoid" chunk while the humidity range lives in chunk 1 of the same guide).
+ *
+ * Reads `rag.document_chunk` directly (like the two assemblers above), so it applies the same
+ * `NON_ENGLISH_CHUNK_MARKER` exclusion via `stitchChunkRows`. Both filter values are
+ * system-generated (a uuid and integers), never user text.
+ */
+export async function assembleChunkIndexSetBody(
+  request: { documentId: string; chunkIndexes: number[] },
+  options?: { maxChars?: number; radius?: number },
+): Promise<AssembledDocumentBody> {
+  const radius = options?.radius ?? NEIGHBOR_CHUNK_RADIUS;
+  const maxChars = options?.maxChars ?? DEFAULT_MAX_CHARS_PER_DOCUMENT;
+
+  const wanted = new Set<number>();
+  for (const index of request.chunkIndexes) {
+    if (!Number.isInteger(index) || index < 0) {
+      continue;
+    }
+    for (let i = Math.max(0, index - radius); i <= index + radius; i += 1) {
+      wanted.add(i);
+    }
+  }
+
+  if (!request.documentId || wanted.size === 0) {
+    return stitchChunkRows(request.documentId, [], maxChars);
+  }
+
+  const supabase = getSupabaseServiceRoleClient();
+  const { data, error } = await supabase
+    .schema('rag')
+    .from('document_chunk')
+    .select('id, document_id, chunk_index, heading, chunk_text, token_count')
+    .eq('document_id', request.documentId)
+    .in('chunk_index', [...wanted].sort((a, b) => a - b))
+    .order('chunk_index', { ascending: true });
+
+  if (error) {
+    throw new Error(`Failed to load sibling chunks for knowledge expansion: ${error.message}`);
+  }
+
+  const rows = ((data ?? []) as DocumentChunkRow[])
+    .slice()
+    .sort((a, b) => a.chunk_index - b.chunk_index);
+  return stitchChunkRows(request.documentId, rows, maxChars);
+}

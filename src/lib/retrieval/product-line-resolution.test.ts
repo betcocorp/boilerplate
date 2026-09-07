@@ -112,3 +112,74 @@ describe('resolveProductLineFromMatches', () => {
     expect(result.lockedProductLineKey).toBeNull();
   });
 });
+
+/**
+ * B0-873 — a `knowledge` document carries no `product_line_key`, so it can never be a candidate;
+ * when it is nonetheless the probe's best match, locking would filter it (and every other
+ * knowledge document) out of the anchored search in SQL. `skipLockWhenKnowledgeOutranks` refuses
+ * the lock in that case. Opt-in, so every B0-693 case above still exercises the bare rules.
+ */
+describe('resolveProductLineFromMatches — B0-873 knowledge-top-hit guard', () => {
+  const knowledge = (similarity: number) =>
+    match({ productLineKey: '', similarity, document_kind: 'knowledge', document_title: 'VCT Green Certified' });
+
+  it('refuses to lock when a knowledge chunk outranks the top product-line candidate', () => {
+    const result = resolveProductLineFromMatches(
+      [
+        match({ productLineKey: 'line-a', similarity: 0.7 }),
+        knowledge(0.75),
+        match({ productLineKey: 'line-b', similarity: 0.4 }),
+      ],
+      { requireMarginForHighConfidence: true, skipLockWhenKnowledgeOutranks: true },
+    );
+    expect(result.lockReason).toBe('skipped_knowledge_top_hit');
+    expect(result.lockedProductLineKey).toBeNull();
+    // Candidates are still reported so the persisted lock decision stays diagnosable.
+    expect(result.candidates.map((c) => c.productLineKey)).toEqual(['line-a', 'line-b']);
+  });
+
+  it('treats an exact tie as the knowledge document winning (>=, never >)', () => {
+    const result = resolveProductLineFromMatches(
+      [match({ productLineKey: 'line-a', similarity: 0.7 }), knowledge(0.7)],
+      { requireMarginForHighConfidence: true, skipLockWhenKnowledgeOutranks: true },
+    );
+    expect(result.lockReason).toBe('skipped_knowledge_top_hit');
+  });
+
+  it('still locks when the product document outranks every knowledge chunk (B0-438 fixture shape)', () => {
+    const result = resolveProductLineFromMatches(
+      [match({ productLineKey: 'line-a', similarity: 0.71 }), knowledge(0.41)],
+      { requireMarginForHighConfidence: true, skipLockWhenKnowledgeOutranks: true },
+    );
+    expect(result.lockReason).toBe('high_confidence');
+    expect(result.lockedProductLineKey).toBe('line-a');
+  });
+
+  it('is opt-in: without the option the same matches lock exactly as before', () => {
+    const result = resolveProductLineFromMatches(
+      [match({ productLineKey: 'line-a', similarity: 0.7 }), knowledge(0.75)],
+      { requireMarginForHighConfidence: true },
+    );
+    expect(result.lockReason).toBe('high_confidence');
+    expect(result.lockedProductLineKey).toBe('line-a');
+  });
+
+  /**
+   * Live VCT#17 numbers (2026-09-07, "what stripping and finish products should I use for my VCT
+   * floor?"): the probe locked "Hard Film Floor Finish" at 0.578 while the best knowledge chunk
+   * ("VCT Green Certified" chunk 7) scored 0.666 and every returned VCT knowledge chunk outscored
+   * the lock. The anchored search then returned only Hard As Nails documents.
+   */
+  it('VCT#17 live numbers: the knowledge document wins and the lock is declined', () => {
+    const result = resolveProductLineFromMatches(
+      [
+        match({ productLineKey: 'DBF2B1E5-FD1A-4E42-A3A5-D7C8F5C3B671', document_title: 'Hard Film Floor Finish', document_kind: 'product_line_profile', similarity: 0.578 }),
+        knowledge(0.666),
+        knowledge(0.664),
+      ],
+      { requireMarginForHighConfidence: true, skipLockWhenKnowledgeOutranks: true },
+    );
+    expect(result.lockReason).toBe('skipped_knowledge_top_hit');
+    expect(result.lockedProductLineKey).toBeNull();
+  });
+});
