@@ -1,3 +1,24 @@
+# [4.1.0](https://github.com/betcocorp/bex2.0/compare/v4.0.0...v4.1.0) (2026-09-07)
+
+
+### Bug Fixes
+
+* **B0-832:** stop semantic grader verdicts overwriting exact-criterion verdicts ([ef44d12](https://github.com/betcocorp/bex2.0/commit/ef44d1219c31b6b07b355f87e1241ca131ea6623))
+* **B0-833:** decode CSV/dataset uploads as Windows-1252 fallback, not lenient UTF-8 ([cdd327c](https://github.com/betcocorp/bex2.0/commit/cdd327c0d7eff02ecf9561c4c84966189cfd1b40))
+* **B0-849:** grader payload sends expected_should_answer under its own key ([2c2222c](https://github.com/betcocorp/bex2.0/commit/2c2222c2ad08c4a06d66ff00c3d99b9e8ba015d8))
+* **B0-852:** match parity-compare cases by question text when ids differ ([d1105cd](https://github.com/betcocorp/bex2.0/commit/d1105cd1bb5bce61282b006a3aad4b59fdeba752))
+* **na:** correct Eval Reports tab title to Betco Bex ([654b1bd](https://github.com/betcocorp/bex2.0/commit/654b1bd927dbb995774c5303c5f7919a3b2cb62a))
+* **na:** show test name in exec summary tab title, correct Betco Bex casing ([b23de2b](https://github.com/betcocorp/bex2.0/commit/b23de2be60888ba129b96809c41d520d5ed4303e))
+
+
+### Features
+
+* **B0-199:** parse disinfectant efficacy documents into product_efficacy rows ([4132346](https://github.com/betcocorp/bex2.0/commit/4132346569f225b486957ed274c89b389f0e6dc5))
+* **B0-595:** add web_search as a general-purpose tool for SME agents & orchestrator ([5271d0b](https://github.com/betcocorp/bex2.0/commit/5271d0b2c0b7b0ef7b34c76f000f536da4eb75a0))
+* **B0-676:** convert all NativeSelect components to shadcn Select ([f46fd6d](https://github.com/betcocorp/bex2.0/commit/f46fd6dd73b5b98742d961c70161e5b8d7c9c218))
+* **B0-766:** create an automated test runner that runs daily at midnight ([a246a3b](https://github.com/betcocorp/bex2.0/commit/a246a3b3cf9d6b25b952f6932e73f9b01ddbd548))
+* **B0-850:** add ttft_ms to run full-export items ([3c1d136](https://github.com/betcocorp/bex2.0/commit/3c1d1365d2048dcefe0487bd4189ec7b8e41f920))
+
 # [4.0.0](https://github.com/betcocorp/bex2.0/compare/v3.1.0...v4.0.0) (2026-09-04)
 
 
