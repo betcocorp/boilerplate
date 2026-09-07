@@ -454,9 +454,17 @@ async function loadEntities() {
   return { entities, invtIdToEntity };
 }
 
+// 'knowledge' is listed here for backward compatibility with earlier runs but is a no-op today:
+// every rag.document row with document_kind='knowledge' has entity_id=null (it's general
+// Dilution Control Q&A content, not tied to a single product), so the entity_id filter below
+// always excludes it. 'efficacy' and 'fastdraw_dilution' added (B0-878 follow-up): both kinds
+// do carry entity-linked rows and fit the same per-entity attribution model as label/
+// product_line_profile. 'sds' remains deliberately excluded -- see the SDS note above main().
 async function loadDocuments() {
   const rows = await fetchAllRows('rag', 'document', 'id,entity_id,document_kind,title,body_text', (q) =>
-    q.in('document_kind', ['label', 'product_line_profile', 'knowledge']).not('entity_id', 'is', null),
+    q
+      .in('document_kind', ['label', 'product_line_profile', 'knowledge', 'efficacy', 'fastdraw_dilution'])
+      .not('entity_id', 'is', null),
   );
   return rows;
 }
