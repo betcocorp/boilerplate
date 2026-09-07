@@ -4,7 +4,7 @@
  * B0-690 — dataset picker for the cross-dataset report index (`/admin/tests/reports`).
  *
  * The index is one row per RUN, so a handful of datasets with near-identical names (four VCT
- * sets today) read as though the page contains test sets that are not in "Uploaded tests". The
+ * sets today) read as though the page contains test sets that are not in "Test sets". The
  * fix is narrowing, not collapsing: the per-run history stays, and this control scopes it to one
  * dataset.
  *

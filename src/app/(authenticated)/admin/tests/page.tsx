@@ -1,3 +1,4 @@
+import { TrendingDown, TrendingUp } from 'lucide-react';
 import Link from 'next/link';
 import { connection } from 'next/server';
 
@@ -16,6 +17,7 @@ import {
 import { V1_AGENT_REGISTRY } from '~/lib/agents/agent-registry';
 import { PERMISSIONS } from '~/lib/permissions/constants';
 import { requirePagePermission } from '~/lib/permissions/require-page-permission';
+import { formatScoreDelta } from '~/lib/tests/format';
 import { gradeFromScore } from '~/lib/tests/report/metrics';
 import { calculateGoldenSetMetrics } from '~/lib/tests/golden-set-metrics';
 import { listArchivedTests, listTests } from '~/lib/tests/repository';
@@ -87,7 +89,7 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
           <div className="mb-4 flex items-center justify-between">
             <div className="flex flex-col gap-1">
               <h2 className="text-lg font-semibold text-slate-900">
-                Uploaded tests
+                Test sets
               </h2>
             </div>
             <div className="flex items-center gap-2">
@@ -179,14 +181,42 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
                       title={
                         test.latest_run_score === null
                           ? 'No run has a completed report score yet'
-                          : `Latest run score`
+                          : test.latest_run_score_delta === null
+                            ? 'Latest run score'
+                            : 'Latest run score vs. the previous scored run'
                       }
                     >
-                      {test.latest_run_score === null
-                        ? '—'
-                        : `${test.latest_run_score.toFixed(1)} (${gradeFromScore(
+                      {test.latest_run_score === null ? (
+                        '—'
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5">
+                          {`${test.latest_run_score.toFixed(1)} (${gradeFromScore(
                             test.latest_run_score,
                           )})`}
+                          {test.latest_run_score_delta !== null &&
+                            (() => {
+                              const delta = test.latest_run_score_delta;
+                              const isUp = delta > 0;
+                              const isFlat = delta === 0;
+                              const Icon = isUp ? TrendingUp : TrendingDown;
+                              const colorClass = isFlat
+                                ? 'text-slate-500'
+                                : isUp
+                                  ? 'text-emerald-600'
+                                  : 'text-red-600';
+                              const sign = delta > 0 ? '+' : delta < 0 ? '−' : '';
+                              return (
+                                <span
+                                  className={`inline-flex items-center gap-0.5 text-xs font-medium ${colorClass}`}
+                                >
+                                  {sign}
+                                  {formatScoreDelta(Math.abs(delta))}
+                                  {!isFlat && <Icon aria-hidden className="h-3.5 w-3.5" />}
+                                </span>
+                              );
+                            })()}
+                        </span>
+                      )}
                     </TableCell>
                     <TableCell
                       className="whitespace-nowrap tabular-nums text-slate-700"

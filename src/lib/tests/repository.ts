@@ -156,29 +156,37 @@ export async function listTests(includeArchived = false) {
     scoreTotalsByTestId.set(row.test_id, totals);
   }
 
-  // Latest run score per test (first result after ordering by created_at DESC)
+  // Latest and previous run scores per test (first two results after ordering by created_at
+  // DESC). The previous score is only used to derive `latest_run_score_delta` below — never
+  // rendered on its own.
   const latestRunScoreByTestId = new Map<string, number | null>();
+  const previousRunScoreByTestId = new Map<string, number>();
   const latestScoreData = assertNoError(latestRunScores) || [];
-  const seenTestIds = new Set<string>();
+  const seenCountByTestId = new Map<string, number>();
   for (const row of latestScoreData as Array<{ test_id: string; overall_avg: string | null }>) {
-    if (seenTestIds.has(row.test_id)) {
-      continue; // Already found the latest for this test
+    const seenCount = seenCountByTestId.get(row.test_id) ?? 0;
+    seenCountByTestId.set(row.test_id, seenCount + 1);
+    if (seenCount >= 2) {
+      continue; // Already found the latest and previous scores for this test
     }
-    seenTestIds.add(row.test_id);
-    if (typeof row.overall_avg !== 'string' || row.overall_avg.trim() === '') {
-      latestRunScoreByTestId.set(row.test_id, null);
-      continue;
+
+    const avg =
+      typeof row.overall_avg === 'string' && row.overall_avg.trim() !== ''
+        ? Number(row.overall_avg)
+        : NaN;
+    const roundedAvg = Number.isFinite(avg) ? Math.round(avg * 10) / 10 : null;
+
+    if (seenCount === 0) {
+      latestRunScoreByTestId.set(row.test_id, roundedAvg);
+    } else if (roundedAvg !== null) {
+      previousRunScoreByTestId.set(row.test_id, roundedAvg);
     }
-    const avg = Number(row.overall_avg);
-    if (!Number.isFinite(avg)) {
-      latestRunScoreByTestId.set(row.test_id, null);
-      continue;
-    }
-    latestRunScoreByTestId.set(row.test_id, Math.round(avg * 10) / 10);
   }
 
   return tests.map((test) => {
     const totals = scoreTotalsByTestId.get(test.id);
+    const latestRunScore = latestRunScoreByTestId.get(test.id) ?? null;
+    const previousRunScore = previousRunScoreByTestId.get(test.id);
     return {
       ...test,
       completed_runs_count: countsByTestId.get(test.id) ?? 0,
@@ -190,7 +198,11 @@ export async function listTests(includeArchived = false) {
           ? Math.round((totals.sum / totals.count) * 10) / 10
           : null,
       scored_runs_count: totals?.count ?? 0,
-      latest_run_score: latestRunScoreByTestId.get(test.id) ?? null,
+      latest_run_score: latestRunScore,
+      latest_run_score_delta:
+        latestRunScore !== null && previousRunScore !== undefined
+          ? Math.round((latestRunScore - previousRunScore) * 10) / 10
+          : null,
     };
   }) as TestRecordWithCompletionCount[];
 }
