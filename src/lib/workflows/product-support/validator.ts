@@ -370,10 +370,27 @@ const CONTACT_TIME_CONTEXT_PATTERN = /\b(contact|dwell|kill time|wet time|remain
  * "Signal word: CAUTION", "Warning: H314"), which is a real transcribed label value.
  */
 const HAZARD_SENTENCE_PATTERN =
-  /\b(hazard|corrosive|flammable|combustible|causes? (severe )?(skin|eye) (burns?|damage|irritation)|\bdanger\b)\b/i;
-const HAZARD_QUALIFIED_TRIGGER_PATTERN = /\b(warning|caution|ppe|personal protective)\b/i;
+  /\b(corrosive|flammable|combustible|causes? (severe )?(skin|eye) (burns?|damage|irritation)|\bdanger\b)\b/i;
+/**
+ * B0-870: bare `hazard` joins `warning` / `caution` / `ppe` as a QUALIFIED trigger. On its own it
+ * is topic vocabulary, not a transcribed statement -- "I can provide ... hazard classification ...
+ * if needed" is an offer, and "hazard" in a citation line names a document. It only counts next to
+ * a GHS token (as B0-366 did for `warning`) or an imperative label precaution ("do not mix",
+ * "do not use with"), both of which mark real label/SDS content.
+ */
+const HAZARD_QUALIFIED_TRIGGER_PATTERN = /\b(hazard|warning|caution|ppe|personal protective)\b/i;
 const GHS_CONTEXT_PATTERN =
-  /\b(signal word|ghs|pictogram|hazard statements?|precautionary statements?|h[23]\d{2}|p\d{3})\b/i;
+  /\b(signal word|ghs|pictogram|hazard statements?|precautionary statements?|hazard class(?:es)?\b|transport hazard|h[23]\d{2}|p\d{3})\b/i;
+const HAZARD_IMPERATIVE_PATTERN =
+  /\b(do not (?:mix|combine|use with)|never mix|keep (?:out of reach|away from)|avoid (?:contact with|breathing|release))\b/i;
+/**
+ * B0-870: "Non Corrosive" is part of a real product name (Concentrated Non Corrosive Heavy Duty
+ * Restroom Cleaner) and "non-flammable" is a safe-direction property, not a hazard statement.
+ * Negated hazard adjectives are blanked before the trigger test so the product name alone can't
+ * pull a sentence into the hazard category. Comparison/detection only -- never applied to text
+ * shown to the user.
+ */
+const HAZARD_NEGATED_TRIGGER_PATTERN = /\bnon[-\s]?(?:corrosive|flammable|combustible|hazardous)\b/gi;
 const FIRST_AID_SENTENCE_PATTERN =
   /\bfirst aid\b|\bif swallowed\b|\bif inhaled\b|\bif in eyes\b|\bif on skin\b|\bpoison control\b/i;
 
@@ -395,8 +412,89 @@ const FIRST_AID_SENTENCE_PATTERN =
  */
 const COMPATIBILITY_MATERIAL_PATTERN =
   /\b(stainless steel|aluminum|brass|chrome|copper|galvanized|marble|granite|terrazzo|vinyl|linoleum|rubber|plastic|glass|porcelain|ceramic tile|grout|wood|hardwood|carpet|upholstery|concrete|powder[-\s]?coated|acrylic|fiberglass|epoxy)\b/i;
+/**
+ * B0-869: `approved` always needs its object now. The B0-756 form `approved (?:surface|for use)?
+ * (?: on| for)?` made every group optional, so the bare word matched and "an approved wood floor
+ * cleaner" / "both methods are approved" became compatibility claims. The negative forms B0-756
+ * listed here ("not recommended for", "should not be used on", "not compatible with") moved to
+ * `COMPATIBILITY_CONSERVATIVE_PATTERN` below -- they are still recognised, but as warnings that
+ * are allowed through unverified rather than as claims that must be quoted.
+ */
 const COMPATIBILITY_CLAIM_PATTERN =
-  /\b(safe (?:for|to use on|on)|approved (?:surface|for use)?(?: on| for)?|compatible with|not compatible with|will not (?:damage|harm|etch|dull|corrode|discolor|degrade|pit|haze)|not (?:recommended|safe|approved) for|should not be used on|suitable for use on|can be used on|recommended for use on|labeled for use on)\b/i;
+  /\b(safe (?:for|to use on|on)|approved (?:surface|for(?: use)?(?: on| with)?|on)\b|compatible with|will not (?:damage|harm|etch|dull|corrode|discolor|degrade|pit|haze)|suitable for use on|can be used on|recommended for use on|labeled for use on|labelled for use on)\b/i;
+/**
+ * B0-869: a negated or hedged compatibility statement ("not specifically labeled for use on
+ * stainless steel", "not recommended for linoleum", "not an approved application") tells the user
+ * NOT to do something. A wrong one costs a use case, not a damaged surface, so it is the
+ * conservative direction and is let through without the verbatim-quote requirement. `will not
+ * damage/etch/...` is deliberately NOT here -- that is a positive safety claim phrased negatively
+ * and stays in `COMPATIBILITY_CLAIM_PATTERN`. "not only/just/merely ..." is an intensifier, not a
+ * negation, and is excluded so "not only safe on stainless steel" stays a claim.
+ */
+const COMPATIBILITY_CONSERVATIVE_PATTERN =
+  /\b(?:not|never|isn't|aren't|cannot|can't)\s+(?!(?:only|just|merely)\b)(?:[\w-]+\s+){0,3}(?:labeled|labelled|approved|recommended|safe|suitable|intended|compatible|listed|cleared|rated|designed)\b|\bshould not be used on\b|\bdo not use (?:[\w-]+\s+){0,2}on\b|\bnot for use on\b/i;
+
+/**
+ * B0-868 / B0-869: the product-subject heuristic both sentence categories share. The guardrail's
+ * input is `{ draftAnswer, sources }` only -- the workflow's product lock never reaches it -- so
+ * "is a named product the subject of this sentence" has to be read off the sentence itself:
+ *
+ *  - a product-code token (pH7Q, AF79, GE1 -- same shape `run-product-support-workflow.ts` uses);
+ *  - an explicit self-reference ("this product", "the standard formula", "our disinfectant");
+ *  - a sentence-initial capitalised name followed by a copula/modal ("Push is safe on ...",
+ *    "Game Time is ..."), excluding pronouns, determiners, imperative verbs and generic process /
+ *    product-class nouns ("It is ...", "Disinfecting kills ...", "Disinfectants are ...");
+ *  - a mid-sentence Capitalised mixed-case word ("... such as Squeaky ...", "Neutral pH
+ *    Disinfectant: ..."), excluding the bare brand names and all-caps acronyms (VCT, EPA, MRSA).
+ *
+ * Imperative or generic advice ("Ensure all cleaning products are approved for sealed wood
+ * floors", "Use only products labeled for use on ...") has none of these and is not a claim about
+ * a product. Detection only -- nothing here alters displayed text.
+ */
+const PRODUCT_CODE_TOKEN_PATTERN = /\b[A-Za-z]{1,4}\d{1,4}[A-Za-z]?\b/;
+const PRODUCT_SELF_REFERENCE_PATTERN =
+  /\b(?:this|our|its) (?:[\w-]+ ){0,2}(?:product|formula|formulation|disinfectant|sanitizer|cleaner|concentrate|finish|sealer|stripper|solution)\b|\bthe (?:[\w-]+ ){0,2}(?:product|formula|formulation)\b/i;
+const SENTENCE_INITIAL_SUBJECT_PATTERN =
+  /^([A-Z][\w'-]*(?:\s+[A-Z][\w'-]*)*)\s+(?:is|are|was|were|can|may|will|should|has|have|remains?)\b/;
+const SENTENCE_INITIAL_NON_PRODUCT_WORDS = new Set([
+  'it', 'this', 'that', 'these', 'those', 'they', 'there', 'here', 'both', 'all', 'each', 'which',
+  'what', 'who', 'the', 'a', 'an', 'our', 'your', 'its', 'their', 'most', 'many', 'some', 'none',
+  'no', 'products', 'product', 'chemicals', 'disinfectants', 'sanitizers', 'cleaners', 'quats',
+  'disinfection', 'sanitization', 'sterilization',
+]);
+const MID_SENTENCE_CAPITALISED_WORD_PATTERN = /(?<=\s)[A-Z][a-z][\w'-]*/g;
+const BRAND_ONLY_TOKENS = new Set(['betco', 'envirozyme']);
+
+/** Case-preserving twin of the `base` prep in `isNonClaimScaffolding` (emphasis, bullets, headings). */
+function stripSentenceMarkup(sentence: string): string {
+  return sentence
+    .replace(/[*_`]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^(?:#{1,6}\s*)+/, '')
+    .replace(/^(?:[-–—•>+]\s+|\d{1,2}[.)]\s+)+/, '')
+    .trim();
+}
+
+function hasProductSubject(sentence: string): boolean {
+  const text = stripSentenceMarkup(sentence);
+  if (PRODUCT_CODE_TOKEN_PATTERN.test(text)) return true;
+  if (PRODUCT_SELF_REFERENCE_PATTERN.test(text)) return true;
+
+  const initial = SENTENCE_INITIAL_SUBJECT_PATTERN.exec(text);
+  if (initial) {
+    const firstWord = initial[1].split(/\s+/)[0].toLowerCase();
+    // Gerund subjects ("Cleaning removes", "Disinfecting kills") are processes, not products.
+    if (!SENTENCE_INITIAL_NON_PRODUCT_WORDS.has(firstWord) && !firstWord.endsWith('ing')) {
+      return true;
+    }
+  }
+
+  for (const match of text.matchAll(MID_SENTENCE_CAPITALISED_WORD_PATTERN)) {
+    if (!BRAND_ONLY_TOKENS.has(match[0].toLowerCase())) return true;
+  }
+  return false;
+}
 
 /**
  * B0-756 audit — the same failure class as `compatibility` above but for organism/kill claims:
@@ -408,9 +506,41 @@ const COMPATIBILITY_CLAIM_PATTERN =
  * (never a bare "disinfects"/"disinfectant", which appears in nearly every product's generic
  * marketing description and would blow up false-positive volume) so this doesn't start rejecting
  * ordinary, already-grounded product descriptions.
+ *
+ * B0-868: split into two parts. `EFFICACY_STRONG_PATTERN` is claim vocabulary on its own
+ * (-cidal, log reduction, "99.9% of germs"). `EFFICACY_VERB_PATTERN` (kills, eliminates, effective
+ * against) is only a claim when an organism/pathogen noun sits in the same sentence AND the
+ * sentence is about a product -- either the verb opens the sentence label-style ("Kills MRSA in
+ * 30 seconds.") or `hasProductSubject` finds a named product. The unqualified B0-756 form fired on
+ * "eliminate guesswork", "does not kill germs" (a textbook definition) and "regulatory requirements
+ * for pathogen kill", replacing whole knowledge-base answers with the canned decline.
  */
-const EFFICACY_CLAIM_SENTENCE_PATTERN =
-  /\b(kills?\b|kill claims?|eliminat(?:es?|ing)\b|effective against|bactericidal|virucidal|fungicidal|sporicidal|tuberculocidal|\d[\s-]*log reduction|log[\s-]*\d+ reduction|\d+(?:\.\d+)?\s*(?:%|percent)\s*(?:of\s+)?(?:bacteria|viruses|virus|germs|pathogens|microorganisms|microbes)\b)/i;
+const EFFICACY_STRONG_PATTERN =
+  /\b(bactericidal|virucidal|fungicidal|sporicidal|tuberculocidal|\d[\s-]*log reduction|log[\s-]*\d+ reduction|\d+(?:\.\d+)?\s*(?:%|percent)\s*(?:of\s+)?(?:bacteria|viruses|virus|germs|pathogens|microorganisms|microbes)\b)/i;
+const EFFICACY_VERB_PATTERN =
+  /\b(kills?|killing|kill claims?|eliminat(?:es?|ing)|effective against|efficacy against|inactivat(?:es?|ing)|destroys?)\b/i;
+const EFFICACY_SENTENCE_INITIAL_VERB_PATTERN =
+  /^(?:kills?|eliminates?|effective against|inactivates?|destroys?)\b/i;
+const EFFICACY_ORGANISM_PATTERN =
+  /\b(norovirus|hiv(?:-1)?|sars[-\s]?cov[-\s]?2|covid(?:-19)?|coronavirus|mrsa|vre|influenza|h1n1|rhinovirus|rotavirus|adenovirus|hepatitis|hbv|hcv|bacteri(?:a|um|al)|virus(?:es)?|viral|pathogens?|germs?|spores?|fungi|fungus|fungal|mold|mould|mildew|tuberculosis|mycobacterium|e\.?\s?coli|escherichia|salmonella|staph\w*|pseudomonas|listeria|c\.?\s?diff(?:icile)?|clostridi\w*|candida|enterococcus|klebsiella|legionella|streptococcus|trichophyton|micro-?organisms?|microbes?|organisms?)\b/i;
+/**
+ * B0-868: "does not kill", "is not intended to kill", "may not meet their kill claims", "not
+ * effective against" -- negated forms tell the user what a product or process does NOT do. They
+ * are conservative statements, not registered efficacy claims, and pass through unverified.
+ */
+const EFFICACY_NEGATED_PATTERN =
+  /\b(?:not|never|cannot|can't|won't|doesn't|don't|isn't|aren't|no)\s+(?!(?:only|just|merely)\b)(?:[\w-]+\s+){0,3}(?:kills?|killing|eliminat\w*|effective|efficacy|inactivat\w*|destroy\w*|meet|meets|claim|claims)\b/i;
+
+/**
+ * B0-870: citation lines ("Source: ...", "[doc:...]") name documents and assert nothing; first-
+ * person offers ("I can provide the SDS hazard classification ... if needed") announce what Bex
+ * COULD say. Neither can ever be a verbatim label quote, so requiring one is a false positive by
+ * construction. Anchored at the sentence start on purpose -- a bare "if needed" inside a real
+ * first-aid instruction ("... seek medical attention if needed") must still be verified.
+ */
+const CITATION_LINE_PATTERN = /^(?:\(?sources?:|\[doc:)/i;
+const META_OFFER_PATTERN =
+  /^(?:(?:i|we)(?:'d| would| can| could| am able to| are able to| will)(?: be (?:happy|glad) to| also)? (?:provide|share|pull(?: up)?|look up|retrieve|summari[sz]e|list|give|send|check|help|walk)\b|let me know if\b|would you like me to\b|if (?:needed|you(?:'d| would) like),? i can\b)/i;
 
 /**
  * B0-366: sentences that announce or label content rather than assert it -- Markdown headings
@@ -433,6 +563,8 @@ function isNonClaimScaffolding(sentence: string): boolean {
     .trim();
 
   if (!/[a-z]/.test(base)) return true;
+  // B0-870: citation line or a first-person offer -- names documents / announces an option.
+  if (CITATION_LINE_PATTERN.test(base) || META_OFFER_PATTERN.test(base)) return true;
   // Ends with a colon => heading / announcement, or a label field with an empty value.
   if (/:[\s.]*$/.test(base)) return true;
   // No alphabetic content after the last colon => "signal word: 2)" style scaffolding.
@@ -518,9 +650,12 @@ function extractSentenceClaims(
 }
 
 function isHazardClaimSentence(sentence: string): boolean {
-  if (HAZARD_SENTENCE_PATTERN.test(sentence)) return true;
+  // B0-870: "Non Corrosive" (a product name) / "non-flammable" are not hazard statements.
+  const text = sentence.replace(HAZARD_NEGATED_TRIGGER_PATTERN, ' ');
+  if (HAZARD_SENTENCE_PATTERN.test(text)) return true;
   return (
-    HAZARD_QUALIFIED_TRIGGER_PATTERN.test(sentence) && GHS_CONTEXT_PATTERN.test(sentence)
+    HAZARD_QUALIFIED_TRIGGER_PATTERN.test(text) &&
+    (GHS_CONTEXT_PATTERN.test(text) || HAZARD_IMPERATIVE_PATTERN.test(text))
   );
 }
 
@@ -528,14 +663,27 @@ function isFirstAidClaimSentence(sentence: string): boolean {
   return FIRST_AID_SENTENCE_PATTERN.test(sentence);
 }
 
+/**
+ * B0-869: a compatibility claim needs a material noun, a positive claim verb AND a product subject
+ * in the same sentence. Negated/hedged statements are conservative and never claims.
+ */
 function isCompatibilityClaimSentence(sentence: string): boolean {
-  return (
-    COMPATIBILITY_MATERIAL_PATTERN.test(sentence) && COMPATIBILITY_CLAIM_PATTERN.test(sentence)
-  );
+  if (!COMPATIBILITY_MATERIAL_PATTERN.test(sentence)) return false;
+  if (!COMPATIBILITY_CLAIM_PATTERN.test(sentence)) return false;
+  if (COMPATIBILITY_CONSERVATIVE_PATTERN.test(sentence)) return false;
+  return hasProductSubject(sentence);
 }
 
+/** B0-868: see the `EFFICACY_*` pattern comments for the two-part structure. */
 function isEfficacyClaimSentence(sentence: string): boolean {
-  return EFFICACY_CLAIM_SENTENCE_PATTERN.test(sentence);
+  if (EFFICACY_NEGATED_PATTERN.test(sentence)) return false;
+  if (EFFICACY_STRONG_PATTERN.test(sentence)) return true;
+  if (!EFFICACY_VERB_PATTERN.test(sentence)) return false;
+  if (!EFFICACY_ORGANISM_PATTERN.test(sentence)) return false;
+  return (
+    EFFICACY_SENTENCE_INITIAL_VERB_PATTERN.test(stripSentenceMarkup(sentence)) ||
+    hasProductSubject(sentence)
+  );
 }
 
 function isTokenGrounded(token: string, normalizedSources: string[]): boolean {
@@ -544,10 +692,34 @@ function isTokenGrounded(token: string, normalizedSources: string[]): boolean {
   return normalizedSources.some((body) => body.includes(normalized));
 }
 
-function isSentenceGrounded(sentence: string, normalizedSources: string[]): boolean {
+/**
+ * B0-870: a quoted span the model attributed to a document ('The label states: "Contains acids, do
+ * not use with bleach, ammonia or any other chemicals."'). The regulated content is the quote; the
+ * attribution and any trailing "(Source: ...)" are Bex's framing and can never appear verbatim in
+ * the source, so the whole-sentence compare fails on a correctly transcribed line. Short quotes
+ * (a single word like "Danger") are not enough to ground a sentence on their own.
+ */
+const QUOTED_SPAN_PATTERN = /["“”]([^"“”]{24,})["“”]/g;
+
+function isSentenceGrounded(
+  sentence: string,
+  normalizedSources: string[],
+  isClaimTrigger?: (sentence: string) => boolean,
+): boolean {
   const normalized = normalizeSentenceForGroundingCompare(sentence);
   if (!normalized) return false;
-  return normalizedSources.some((body) => body.includes(normalized));
+  if (normalizedSources.some((body) => body.includes(normalized))) return true;
+
+  // B0-870: fall back to the quoted span, provided the framing left outside the quotes is not a
+  // claim in its own right (so a fabricated tail can't ride along on a genuine quote).
+  const quotedSpans = Array.from(sentence.matchAll(QUOTED_SPAN_PATTERN), (m) => m[1]);
+  if (quotedSpans.length === 0) return false;
+  const framing = sentence.replace(QUOTED_SPAN_PATTERN, ' ');
+  if (isClaimTrigger && isClaimTrigger(framing) && !isNonClaimScaffolding(framing)) return false;
+  return quotedSpans.every((span) => {
+    const normalizedSpan = normalizeSentenceForGroundingCompare(span);
+    return normalizedSpan.length > 0 && normalizedSources.some((body) => body.includes(normalizedSpan));
+  });
 }
 
 /**
@@ -596,12 +768,13 @@ export function evaluateRegulatedClaimGrounding(input: {
 
   const checkSentenceCategory = (
     category: RegulatedClaimCategory,
-    sentences: string[],
+    isClaimTrigger: (sentence: string) => boolean,
   ) => {
+    const sentences = extractSentenceClaims(input.draftAnswer, isClaimTrigger);
     if (sentences.length === 0) return;
     categoriesDetected.push(category);
     const ungroundedSentences = sentences.filter(
-      (s) => !isSentenceGrounded(s, normalizedSourceBodiesPlain),
+      (s) => !isSentenceGrounded(s, normalizedSourceBodiesPlain, isClaimTrigger),
     );
     if (ungroundedSentences.length > 0) {
       ungroundedCategories.push(category);
@@ -616,22 +789,10 @@ export function evaluateRegulatedClaimGrounding(input: {
   checkTokenCategory('dilution_ratio', extractDilutionTokens(input.draftAnswer));
   checkTokenCategory('contact_time', extractContactTimeTokens(input.draftAnswer));
   checkTokenCategory('cas_number', extractCasNumberTokens(input.draftAnswer));
-  checkSentenceCategory(
-    'hazard',
-    extractSentenceClaims(input.draftAnswer, isHazardClaimSentence),
-  );
-  checkSentenceCategory(
-    'first_aid',
-    extractSentenceClaims(input.draftAnswer, isFirstAidClaimSentence),
-  );
-  checkSentenceCategory(
-    'compatibility',
-    extractSentenceClaims(input.draftAnswer, isCompatibilityClaimSentence),
-  );
-  checkSentenceCategory(
-    'efficacy_claim',
-    extractSentenceClaims(input.draftAnswer, isEfficacyClaimSentence),
-  );
+  checkSentenceCategory('hazard', isHazardClaimSentence);
+  checkSentenceCategory('first_aid', isFirstAidClaimSentence);
+  checkSentenceCategory('compatibility', isCompatibilityClaimSentence);
+  checkSentenceCategory('efficacy_claim', isEfficacyClaimSentence);
 
   return {
     categoriesDetected: [...new Set(categoriesDetected)],
