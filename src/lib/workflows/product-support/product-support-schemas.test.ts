@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   answerProvenanceSchema,
+  gateActivationRecordSchema,
   gateRecordSchema,
   productSupportFinalOutputSchema,
   productSupportStepInputSchema,
@@ -92,6 +93,25 @@ describe('answerProvenanceSchema', () => {
       // B0-829 — the regulated-claim guardrail's surgical partial-redaction provenance value.
       'regulated_claim_partial_redaction',
     ]);
+  });
+});
+
+describe('gateActivationRecordSchema', () => {
+  it('B0-871: accepts the regulated-claim guardrail\'s "redacted" verdict alongside "rejected"', () => {
+    for (const verdict of ['passed', 'rejected', 'redacted', 'capped']) {
+      expect(gateActivationRecordSchema.safeParse({ state: 'ran', verdict }).success).toBe(true);
+    }
+  });
+
+  it('B0-872: accepts a not_applicable record carrying the no_product_subject reason', () => {
+    expect(
+      gateActivationRecordSchema.safeParse({
+        state: 'not_applicable',
+        reason: 'no_product_subject',
+      }).success,
+    ).toBe(true);
+    // The plain form (no reason) still parses — it is what every other not_applicable gate writes.
+    expect(gateActivationRecordSchema.safeParse({ state: 'not_applicable' }).success).toBe(true);
   });
 });
 
