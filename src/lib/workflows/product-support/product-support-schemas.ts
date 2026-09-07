@@ -120,6 +120,16 @@ export const answerProvenanceSchema = z.enum([
    */
   'alias_fuzzy_disclosure_prepended',
   /**
+   * B0-875 — the competitor self-reference check (`classifyCompetitorSelfReference`) found that
+   * what the user offered in place of a competitor product was a chemistry-class description
+   * ("Diversey quat disinfectant", "peroxide cleaner"), so the cross-reference path was withdrawn
+   * and `buildGenericChemistryClarification` (`~/lib/recommendations/cross-reference-decline.ts`)
+   * replaced the draft with the clarifying question (which product — label name + EPA registration
+   * number — and why it matters). Distinct from `competitor_identity_unresolved_decline`: an
+   * identity WAS extracted, it just names a kind of product rather than a product.
+   */
+  'generic_chemistry_clarification',
+  /**
    * B0-829 — `regulated_claim_guardrail` (`evaluateRegulatedClaimGrounding`,
    * `~/lib/workflows/product-support/validator.ts`) flagged one or more ungrounded regulated
    * claims, but every ungrounded category was TOKEN-shaped (`epa_registration`, `din_registration`,

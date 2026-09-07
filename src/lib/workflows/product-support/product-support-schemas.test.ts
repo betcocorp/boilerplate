@@ -75,7 +75,7 @@ describe('productSupportFinalOutputSchema — B0-388 additions are backward comp
 describe('answerProvenanceSchema', () => {
   // B0-356 added `recommendation_engine_decline` (the recommendation engine's own decline, which is
   // NOT this workflow's validator fallback).
-  it('covers exactly the twelve answer branches', () => {
+  it('covers exactly the thirteen answer branches', () => {
     expect(answerProvenanceSchema.options).toEqual([
       'model_generated',
       'template_override',
@@ -90,6 +90,8 @@ describe('answerProvenanceSchema', () => {
       'competitor_identity_unresolved_decline',
       // B0-700 follow-up — the deterministic fuzzy-alias disclosure prepend's own provenance value.
       'alias_fuzzy_disclosure_prepended',
+      // B0-875 — the generic-chemistry clarifying question's own provenance value.
+      'generic_chemistry_clarification',
       // B0-829 — the regulated-claim guardrail's surgical partial-redaction provenance value.
       'regulated_claim_partial_redaction',
     ]);

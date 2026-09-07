@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   classifyCompetitorSelfReference,
+  findBetcoSelfReferenceWebResult,
+  isBetcoHost,
   isConversionListAsk,
+  isGenericChemistryDescription,
+  splitBetcoLinePrefix,
   type BetcoEntityResolution,
 } from '~/lib/recommendations/competitor-self-reference';
 
@@ -216,5 +220,190 @@ describe('classifyCompetitorSelfReference (B0-751)', () => {
       await classify({ userMessage: message, competitorProduct: message, resolveBetcoEntity: resolver }),
     ).toEqual({ suppressed: false });
     expect(resolver).toHaveBeenCalledWith(message.toLowerCase());
+  });
+});
+
+/**
+ * B0-875 — P#8: "a Diversey quat disinfectant" was cross-referenced to a fuzzy legacy row. A
+ * chemistry class plus product-class words is a description, not a product identity, whether or
+ * not a brand accompanies it.
+ */
+describe('generic chemistry description (B0-875)', () => {
+  it.each([
+    'quat disinfectant',
+    'quaternary disinfectant',
+    'neutral quat disinfectant',
+    'bleach cleaner',
+    'peroxide cleaner',
+    'hydrogen peroxide disinfectant',
+    'enzyme digester',
+    'acid bowl cleaner',
+    'a quat based disinfectant',
+  ])('recognises "%s"', (product) => {
+    expect(isGenericChemistryDescription(product)).toBe(true);
+  });
+
+  it.each(['bleach', 'quats', 'spartan quat disinfectant', 'virex ii 256', 'bnc-15', 'glass cleaner'])(
+    'does NOT recognise "%s" (bare chemistry, a named product, or a non-chemistry category)',
+    (product) => {
+      expect(isGenericChemistryDescription(product)).toBe(false);
+    },
+  );
+
+  it('suppresses "Diversey" + "quat disinfectant" with the description as the matched text, no lookup', async () => {
+    const resolver = resolverReturning(NO_MATCH);
+    const verdict = await classify({
+      userMessage: 'I need a Betco replacement for a Diversey quat disinfectant. Which one?',
+      competitorBrand: 'Diversey',
+      competitorProduct: 'quat disinfectant',
+      resolveBetcoEntity: resolver,
+    });
+    expect(verdict).toEqual({
+      suppressed: true,
+      reason: 'generic_chemistry_description',
+      productLineKey: null,
+      matched: 'diversey quat disinfectant',
+    });
+    expect(resolver).not.toHaveBeenCalled();
+  });
+
+  it('is NOT vetoed by a false B0-786 bare-chemistry signal — a different question than the signal answers', async () => {
+    const verdict = await classify({
+      competitorBrand: 'Diversey',
+      competitorProduct: 'quat disinfectant',
+      competitorIsGenericChemistry: false,
+    });
+    expect(verdict).toMatchObject({ suppressed: true, reason: 'generic_chemistry_description' });
+  });
+
+  it('still lets the signal decide the BARE chemistry case', async () => {
+    expect(
+      await classify({ competitorProduct: 'bleach', competitorIsGenericChemistry: false }),
+    ).toEqual({ suppressed: false });
+    expect(
+      await classify({ competitorProduct: 'sodium hypochlorite solution', competitorIsGenericChemistry: true }),
+    ).toMatchObject({ suppressed: true, reason: 'chemistry_term' });
+  });
+
+  it('keeps "Spartan Quat Disinfectant" (brand inside the product string) on the cross-reference path', async () => {
+    expect(
+      await classify({
+        competitorBrand: 'Spartan',
+        competitorProduct: 'Spartan Quat Disinfectant',
+      }),
+    ).toEqual({ suppressed: false });
+  });
+});
+
+/**
+ * B0-876 — P#19: "GE Fight Bac RTU" resolved as competitor brand "GE", product "Fight Bac RTU".
+ * GE is Betco's Green Earth product line (28 document / 26 entity titles start with "GE ").
+ */
+describe('Betco line prefix (B0-876)', () => {
+  it('splits the prefix off the brand slot or the product string, never past a real brand', () => {
+    expect(splitBetcoLinePrefix('ge', 'fight bac rtu')).toEqual({
+      prefix: 'ge',
+      name: 'fight bac rtu',
+      full: 'ge fight bac rtu',
+    });
+    expect(splitBetcoLinePrefix('', 'ge fight bac rtu')).toEqual({
+      prefix: 'ge',
+      name: 'fight bac rtu',
+      full: 'ge fight bac rtu',
+    });
+    expect(splitBetcoLinePrefix('green earth', 'green earth daily disinfectant')).toEqual({
+      prefix: 'green earth',
+      name: 'daily disinfectant',
+      full: 'green earth daily disinfectant',
+    });
+    expect(splitBetcoLinePrefix('spartan', 'ge something')).toBeNull();
+    expect(splitBetcoLinePrefix('', 'gentle cleaner')).toBeNull();
+  });
+
+  it('suppresses "GE" + "Fight Bac RTU" via the catalog when the rest of the name resolves', async () => {
+    const resolver = resolverReturning({ catalogMatch: true, catalogProductLineKey: null });
+    const verdict = await classify({
+      userMessage: 'Is GE Fight Bac RTU approved for use in my state?',
+      competitorBrand: 'GE',
+      competitorProduct: 'Fight Bac RTU',
+      resolveBetcoEntity: resolver,
+    });
+    expect(verdict).toEqual({
+      suppressed: true,
+      reason: 'betco_catalog',
+      productLineKey: null,
+      matched: 'ge fight bac rtu',
+    });
+    expect(resolver).toHaveBeenCalledWith('fight bac rtu');
+  });
+
+  it('suppresses on the prefix alone when the alias/catalog lookups miss or fail', async () => {
+    expect(
+      await classify({
+        competitorBrand: null,
+        competitorProduct: 'GE Fight Bac RTU',
+        resolveBetcoEntity: resolverReturning(NO_MATCH),
+      }),
+    ).toEqual({
+      suppressed: true,
+      reason: 'betco_catalog',
+      productLineKey: null,
+      matched: 'ge fight bac rtu',
+    });
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    expect(
+      await classify({
+        competitorBrand: 'Green Earth',
+        competitorProduct: 'Daily Disinfectant',
+        resolveBetcoEntity: vi.fn(async () => {
+          throw new Error('alias table unavailable');
+        }),
+      }),
+    ).toMatchObject({ suppressed: true, reason: 'betco_catalog', matched: 'green earth daily disinfectant' });
+    warn.mockRestore();
+  });
+
+  it('reports the product line when the rest of the name resolves unambiguously', async () => {
+    expect(
+      await classify({
+        competitorBrand: 'GE',
+        competitorProduct: 'Fight Bac RTU',
+        resolveBetcoEntity: resolverReturning({ productLineKey: 'B332DBA3', ambiguousAlias: false }),
+      }),
+    ).toEqual({
+      suppressed: true,
+      reason: 'betco_product',
+      productLineKey: 'B332DBA3',
+      matched: 'ge fight bac rtu',
+    });
+  });
+
+  it('does NOT treat a genuine competitor as Betco', async () => {
+    expect(
+      await classify({
+        competitorBrand: 'Spartan',
+        competitorProduct: 'BNC-15',
+        resolveBetcoEntity: resolverReturning({ catalogMatch: true }),
+      }),
+    ).toEqual({ suppressed: false });
+  });
+});
+
+describe('betco.com self-reference in web results (B0-876)', () => {
+  it('recognises betco.com and its subdomains only', () => {
+    expect(isBetcoHost('https://www.betco.com/products/ge-fight-bac-rtu-canada')).toBe(true);
+    expect(isBetcoHost('https://betco.com/')).toBe(true);
+    expect(isBetcoHost('https://www.spartanchemical.com/betco-comparison')).toBe(false);
+    expect(isBetcoHost('https://notbetco.com/')).toBe(false);
+    expect(isBetcoHost('not a url')).toBe(false);
+  });
+
+  it('flags only the TOP result', () => {
+    const betco = { url: 'https://www.betco.com/products/ge-fight-bac-rtu-canada', title: 'GE Fight Bac™ RTU Disinfectant (Canada)' };
+    const other = { url: 'https://example.com/spec', title: 'Spec' };
+    expect(findBetcoSelfReferenceWebResult([betco, other])).toBe(betco);
+    expect(findBetcoSelfReferenceWebResult([other, betco])).toBeNull();
+    expect(findBetcoSelfReferenceWebResult([])).toBeNull();
   });
 });

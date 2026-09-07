@@ -67,7 +67,13 @@ const {
   detectCooccurrence,
   detectNounPhraseVariants,
   significantTitleTokens,
+  stripTrademarkMarks,
+  normalizeAlias,
+  deriveHeadPhrase,
 } = scriptModule as unknown as {
+  stripTrademarkMarks: (value: string) => string;
+  normalizeAlias: (value: string) => string;
+  deriveHeadPhrase: (title: string) => string;
   maskIdentifiers: (text: string) => string;
   matchesTitleInitials: (token: string, title: string) => boolean;
   detectParenthetical: (
@@ -292,5 +298,56 @@ describe('detectNounPhraseVariants (B0-484 guard: region/status + catalog-bucket
       source: 'corpus_scan_noun_phrase',
       confidence: 0.45,
     });
+  });
+});
+
+/**
+ * B0-876 — `rag.entity.title` carries a transliteration artefact from the upstream product master
+ * (™ → trailing "T", ® → trailing "r": "Fight BacT RTU", "GREEN EARTHr"; 58 entity titles live on
+ * 2026-09-07). The miner must strip trademark marks AND that artefact, so it can never re-emit the
+ * "Fight BacT" alias B0-878 purged.
+ */
+describe('stripTrademarkMarks (B0-876 guard: symbols stripped, artefact removed, never letter-mapped)', () => {
+  it('removes ™ / ® / ℠ and their ASCII spellings', () => {
+    expect(stripTrademarkMarks('GE Fight Bac™ RTU')).toBe('GE Fight Bac RTU');
+    expect(stripTrademarkMarks('Green Earth® Daily Disinfectant')).toBe('Green Earth Daily Disinfectant');
+    expect(stripTrademarkMarks('Defender℠ Linoleum')).toBe('Defender Linoleum');
+    expect(stripTrademarkMarks('Fight Bac(TM) RTU (R)')).toBe('Fight Bac RTU ');
+  });
+
+  it('removes the live "T" / "r" artefact shapes', () => {
+    expect(stripTrademarkMarks('Fight BacT RTU Disinfectant Cleaner (4 - 1 Gal. Bottles)')).toBe(
+      'Fight Bac RTU Disinfectant Cleaner (4 - 1 Gal. Bottles)',
+    );
+    expect(stripTrademarkMarks('DefenderT Linoleum System Stripper')).toBe(
+      'Defender Linoleum System Stripper',
+    );
+    expect(stripTrademarkMarks('Fast Curing Floor Finish - Max-CureT Technology')).toBe(
+      'Fast Curing Floor Finish - Max-Cure Technology',
+    );
+    expect(stripTrademarkMarks('SymplicityT SanibetT Multi-Range')).toBe('Symplicity Sanibet Multi-Range');
+    expect(stripTrademarkMarks('GREEN EARTHr ALL PURPOSE')).toBe('GREEN EARTH ALL PURPOSE');
+  });
+
+  it('leaves real product codes and ordinary words alone', () => {
+    for (const title of [
+      'StealthT DRS26BT w/ 4-6V 200 AH AGM Bat',
+      'pH7Q Dual Neutral Disinfectant Cleaner',
+      'Hard As Nails - Satin',
+      'AF79 Concentrate Disinfectant',
+    ]) {
+      const cleaned = stripTrademarkMarks(title);
+      // Only the artefact "T" after "Stealth" may go; DRS26BT (digit before the T) and every other
+      // token survive verbatim.
+      expect(cleaned).toBe(title.replace('StealthT', 'Stealth'));
+    }
+  });
+
+  it('flows through normalizeAlias and deriveHeadPhrase, so "Fight BacT" can never be emitted as an alias', () => {
+    expect(normalizeAlias('Fight BacT RTU')).toBe('fight bac rtu');
+    expect(deriveHeadPhrase('Fight BacT RTU Disinfectant Cleaner (4 - 1 Gal. Bottles)')).toBe(
+      'Fight Bac RTU Disinfectant Cleaner',
+    );
+    expect(significantTitleTokens('GE Fight BacT RTU Disinfectant')).not.toContain('bact');
   });
 });

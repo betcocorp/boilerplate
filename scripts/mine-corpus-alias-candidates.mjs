@@ -92,12 +92,34 @@ const JSON_OUT = args.find((a) => a.startsWith('--json='))?.slice('--json='.leng
 // Text helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * B0-876 — trademark marks are STRIPPED, never letter-mapped. The source titles this script mines
+ * (`rag.entity.title`, synced from the legacy product master) already carry a transliteration
+ * artefact where ™ arrived as a trailing "T" and ® as a trailing "r" — "Fight BacT RTU",
+ * "DefenderT Linoleum System Stripper", "GREEN EARTHr ALL PURPOSE" (58 entity titles and 249
+ * chunks live on 2026-09-07). Left alone, Pattern 3 would re-mine "Fight BacT" as a common-name
+ * alias, which is exactly the row B0-878 purged. So this removes:
+ *   - the real symbols U+2122 ™, U+00AE ®, U+2120 ℠ (and their ASCII "(TM)" / "(R)" spellings);
+ *   - the artefact shapes: a lowercase letter followed by a capital "T" at a word end
+ *     ("BacT", "DefenderT", "Max-CureT"), and a run of capitals followed by a lowercase "r" at a
+ *     word end ("EARTHr"). Neither shape occurs in an English word or a Betco product code.
+ */
+const TRADEMARK_SYMBOL_RE = /[™®℠]|\((?:tm|r|sm)\)/gi;
+const TRADEMARK_T_ARTEFACT_RE = /(?<=[a-z])T(?=\s|$|[),.;:])/g;
+const REGISTERED_R_ARTEFACT_RE = /(?<=[A-Z]{2})r(?=\s|$|[),.;:])/g;
+
+export function stripTrademarkMarks(value) {
+  return value
+    .replace(TRADEMARK_SYMBOL_RE, '')
+    .replace(TRADEMARK_T_ARTEFACT_RE, '')
+    .replace(REGISTERED_R_ARTEFACT_RE, '');
+}
+
 /** Mirrors normalizeAlias in ~/lib/rag/entity-context.ts (B0-200) — duplicated
  * here deliberately, same reasoning as scripts/b0243-sds-scope-audit.mjs: this
  * script runs as plain `node`, not through the Next.js/TS module graph. */
 export function normalizeAlias(value) {
-  return value
-    .replace(/[®™]/g, '')
+  return stripTrademarkMarks(value)
     .toLowerCase()
     .replace(/\s+/g, ' ')
     .trim();
@@ -112,8 +134,7 @@ const STOPWORDS = new Set([
 ]);
 
 export function significantTitleTokens(title) {
-  return title
-    .replace(/[®™]/g, '')
+  return stripTrademarkMarks(title)
     .toLowerCase()
     .split(/[^a-z0-9]+/)
     .filter((tok) => tok.length >= 4 && !STOPWORDS.has(tok));
@@ -245,7 +266,7 @@ export function maskIdentifiers(text) {
  * body (ASTM, NWFA), and unit (GPM, PSI, CFU) that legitimately appears in
  * product copy but is never a name for the product. */
 export function matchesTitleInitials(token, title) {
-  const words = title.replace(/[®™]/g, '').split(/[^A-Za-z0-9]+/).filter(Boolean);
+  const words = stripTrademarkMarks(title).split(/[^A-Za-z0-9]+/).filter(Boolean);
   const n = token.length;
   if (n < 2 || words.length < n) return false;
   for (let i = 0; i + n <= words.length; i++) {
@@ -339,7 +360,7 @@ export function detectCooccurrence(records, entityTitleTokens, excludeKeys, enti
 const TITLE_SUFFIX_SEPARATORS = [' — ', ' – ', ' - ', ' (', ', '];
 
 export function deriveHeadPhrase(title) {
-  const cleaned = title.replace(/[®™]/g, '').trim();
+  const cleaned = stripTrademarkMarks(title).trim();
   let cut = cleaned.length;
   for (const sep of TITLE_SUFFIX_SEPARATORS) {
     const idx = cleaned.indexOf(sep);

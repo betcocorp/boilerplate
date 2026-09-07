@@ -83,6 +83,11 @@ import {
   isConversionListAsk,
   type CompetitorSelfReferenceVerdict,
 } from '~/lib/recommendations/competitor-self-reference';
+import {
+  buildCompetitorIdentityClarification,
+  buildGenericChemistryClarification,
+  buildRecommendationEngineDeclineCopy,
+} from '~/lib/recommendations/cross-reference-decline';
 import { matchBetcoProductName } from '~/lib/rag/betco-product-name';
 import { resolveProductEntityByName } from '~/lib/rag/entity-context';
 import { runCrossReferenceRecommendation } from '~/lib/recommendations/persist-recommendation';
@@ -1056,6 +1061,17 @@ export function extractAliasFuzzyDisclosureFromToolOutputs(
   for (let i = toolOutputs.length - 1; i >= 0; i -= 1) {
     const entry = toolOutputs[i];
     if (!entry || !entry.ok || isUnendorsedSpeculativeToolOutput(entry.trace)) {
+      continue;
+    }
+    /**
+     * B0-875 — a `workflow_injected` call was seeded by the workflow, not by the user: the enforced
+     * `search_product_docs` after a cross-reference hit takes its `productName` from the legacy
+     * match's Betco title (`buildCrossReferenceSearchArgs`), and a FUZZY legacy row
+     * (`fallbackRecommended: true`, 0.675 on P#8) fed "AF79 …" into the alias resolver, whose
+     * fuzzy hit was then disclosed as if the user had typed it. The disclosure may only echo a
+     * name the user actually asked for, never a cross-reference candidate.
+     */
+    if (entry.trace?.origin === 'workflow_injected') {
       continue;
     }
 
@@ -4049,7 +4065,14 @@ export async function runProductSupportWorkflow(input: {
       // Verbatim, and it outranks whatever the model drafted: there is no grounded equivalent to
       // state. Enforced even under `BEX_DISABLE_RECOMMENDATION_CONFIDENCE_GATING` — see the
       // kill-switch note in `evaluateRecommendationEngineGate`.
-      draftAnswer = recommendationEngineGate.declineText;
+      //
+      // B0-875 — the engine text stays verbatim; for a claim-equivalence question ("kills
+      // everything X does, right?") the regulatory non-transfer statement is placed IN FRONT of
+      // it, because the decline alone answers nothing about the claim the user assumed.
+      draftAnswer = buildRecommendationEngineDeclineCopy({
+        userMessage: input.userMessage,
+        engineDeclineText: recommendationEngineGate.declineText,
+      });
       answerProvenance = 'recommendation_engine_decline';
     }
 
@@ -4082,8 +4105,27 @@ export async function runProductSupportWorkflow(input: {
       resolvedCompetitor &&
       isCompetitorIdentityUnresolved(resolvedCompetitor)
     ) {
-      draftAnswer = XREF_DECLINE_COPY;
+      // B0-875 — no competitor identity means there is nothing to decline ABOUT: ask for the brand
+      // and exact product name instead of the fixed sales-rep copy (P#10), and say what a
+      // cross-reference finds (comparable, never "identical").
+      draftAnswer = buildCompetitorIdentityClarification({ userMessage: input.userMessage });
       answerProvenance = 'competitor_identity_unresolved_decline';
+    }
+
+    /**
+     * B0-875 — the self-reference check found a chemistry-class DESCRIPTION in place of a product
+     * ("Diversey quat disinfectant", P#8). The turn was withdrawn from the cross-reference path at
+     * routing time (no forced lookup, no backstop, no engine gate), so whatever the product
+     * specialist drafted is replaced with the clarifying question: which product (label name +
+     * EPA registration number) and why it matters. Deterministic, like the two guards above, so a
+     * model draft can never name a Betco product for an unnamed competitor.
+     */
+    if (
+      selfReferenceVerdict?.suppressed &&
+      selfReferenceVerdict.reason === 'generic_chemistry_description'
+    ) {
+      draftAnswer = buildGenericChemistryClarification({ described: selfReferenceVerdict.matched });
+      answerProvenance = 'generic_chemistry_clarification';
     }
 
     // B0-349 — frozen snapshot of the fully-composed answer before the validator, revision pass,
