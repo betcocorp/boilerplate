@@ -5,6 +5,7 @@ import { connection } from 'next/server';
 import { AdminTestsActionToast } from '~/components/admin/tests/AdminTestsActionToast';
 import { CreateOrUploadTestDatasetDialog } from '~/components/admin/tests/CreateOrUploadTestDatasetDialog';
 import { GoldenSetMetricsCards } from '~/components/admin/tests/GoldenSetMetricsCards';
+import { RunGoldenTestsDialog } from '~/components/admin/tests/RunGoldenTestsDialog';
 import { Button } from '~/components/ui/button';
 import {
   Table,
@@ -78,6 +79,7 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
               <Button asChild variant="outline">
                 <Link href="/admin/tests/reports">View reports</Link>
               </Button>
+              <RunGoldenTestsDialog returnPath="/admin/tests" />
               <CreateOrUploadTestDatasetDialog returnPath="/admin/tests" />
             </div>
           </div>

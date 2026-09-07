@@ -594,6 +594,63 @@ export async function updateTestItemAction(formData: FormData) {
   );
 }
 
+/**
+ * The `TestRunModelControls` field set (`modelTag` / `useValidator` / `routerType` / `agentMode`),
+ * parsed the one way every run-creating action must parse it. B0-882 factored this out of
+ * `runTestAction` so the "Run Golden" fan-out (`runGoldenTestsAction`) cannot drift from the
+ * single-run button; the per-field rules below are unchanged.
+ *
+ * `modelTag` — model the run against a specific chat model. Tags map to concrete models in
+ * resolveResponsesModel(). Read from the SAME `~/lib/constants/models` list the form's <select>
+ * renders. This was a hardcoded ['preview','gpt-4o','gpt-4.1'], so any newer model offered by the
+ * dropdown fell through to the `: 'preview'` branch — the run silently executed on the preview
+ * default while recording a model the user never picked. The allow-list can no longer drift from
+ * the UI. B0-757 — an unrecognized/missing tag now falls back to 'gpt-4.1', not 'preview' (a
+ * hand-crafted POST missing this field is not a reason to 500, but it also should not silently
+ * land on whatever the BEX_RESPONSES_MODEL settings default happens to be). Matches the form's
+ * own default (B0-614, `TestRunModelControls`) and the CI run-creation route's default
+ * (`POST /api/admin/tests/runs`, B0-757).
+ *
+ * `useValidator` — B0-600 / B0-603 opt-in validator pass, so a validator A/B run can be started
+ * from the UI. Unchecked box means absent, matching every run created before this field existed.
+ *
+ * `routerType` — B0-681 opt-in router override; "Router: default" submits an empty string, which
+ * leaves `routerType` out of `run_options` entirely so the run falls back to the settings-driven
+ * router, matching every run created before this field existed.
+ *
+ * `agentMode` — B0-351 opt-in forced specialist, same shape as the Bex chat composer's agent-mode
+ * picker. Anything unrecognised (or absent, i.e. every run created before this ticket) falls back
+ * to `orchestrator`, which is what `runSingleTestItem` hardcoded until now.
+ */
+function parseTestRunOptionFields(formData: FormData) {
+  const ALLOWED_MODEL_TAGS: readonly string[] = [
+    'preview',
+    ...supportedModels.map((m) => m.name),
+  ];
+  const rawModelTag = formData.get('modelTag');
+  const modelTag =
+    typeof rawModelTag === 'string' && ALLOWED_MODEL_TAGS.includes(rawModelTag)
+      ? rawModelTag
+      : 'gpt-4.1';
+
+  const useValidator = formData.get('useValidator') === 'on';
+
+  const ROUTER_TYPE_OVERRIDES: readonly RouterTypeOverride[] = ['keyword', 'semantic', 'llm'];
+  const rawRouterType = formData.get('routerType');
+  const routerType =
+    typeof rawRouterType === 'string' &&
+    (ROUTER_TYPE_OVERRIDES as readonly string[]).includes(rawRouterType)
+      ? (rawRouterType as RouterTypeOverride)
+      : undefined;
+
+  const rawAgentMode = formData.get('agentMode');
+  const agentMode = isBexChatAgentMode(rawAgentMode)
+    ? rawAgentMode
+    : DEFAULT_BEX_CHAT_AGENT_MODE;
+
+  return { modelTag, useValidator, routerType, agentMode };
+}
+
 export async function runTestAction(formData: FormData) {
   const testId = formData.get('testId');
   if (typeof testId !== 'string' || !testId.trim()) {
@@ -605,53 +662,8 @@ export async function runTestAction(formData: FormData) {
     redirect(encodeMessage(`/admin/tests/${testId}`, 'error', 'This test has no items to run.'));
   }
 
-  /**
-   * Model the run against a specific chat model. Tags map to concrete models in
-   * resolveResponsesModel().
-   *
-   * Read from the SAME `~/lib/constants/models` list the form's <select> renders. This was a
-   * hardcoded ['preview','gpt-4o','gpt-4.1'], so any newer model offered by the dropdown fell
-   * through to the `: 'preview'` branch — the run silently executed on the preview default while
-   * recording a model the user never picked. The allow-list can no longer drift from the UI.
-   *
-   * B0-757 — an unrecognized/missing tag now falls back to 'gpt-4.1', not 'preview' (a
-   * hand-crafted POST missing this field is not a reason to 500, but it also should not silently
-   * land on whatever the BEX_RESPONSES_MODEL settings default happens to be). Matches the form's
-   * own default (B0-614, `TestRunModelControls`) and the CI run-creation route's default
-   * (`POST /api/admin/tests/runs`, B0-757).
-   */
-  const ALLOWED_MODEL_TAGS: readonly string[] = [
-    'preview',
-    ...supportedModels.map((m) => m.name),
-  ];
-  const rawModelTag = formData.get('modelTag');
-  const modelTag =
-    typeof rawModelTag === 'string' && ALLOWED_MODEL_TAGS.includes(rawModelTag)
-      ? rawModelTag
-      : 'gpt-4.1';
-
-  // B0-600 / B0-603 — opt-in validator pass, so a validator A/B run can be started from the UI.
-  // Unchecked box means absent, matching every run created before this field existed.
-  const useValidator = formData.get('useValidator') === 'on';
-
-  // B0-681 — opt-in router override; "Router: default" submits an empty string, which leaves
-  // `routerType` out of `run_options` entirely so the run falls back to the settings-driven router,
-  // matching every run created before this field existed.
-  const ROUTER_TYPE_OVERRIDES: readonly RouterTypeOverride[] = ['keyword', 'semantic', 'llm'];
-  const rawRouterType = formData.get('routerType');
-  const routerType =
-    typeof rawRouterType === 'string' &&
-    (ROUTER_TYPE_OVERRIDES as readonly string[]).includes(rawRouterType)
-      ? (rawRouterType as RouterTypeOverride)
-      : undefined;
-
-  // B0-351 — opt-in forced specialist, same shape as the Bex chat composer's agent-mode picker.
-  // Anything unrecognised (or absent, i.e. every run created before this ticket) falls back to
-  // `orchestrator`, which is what `runSingleTestItem` hardcoded until now.
-  const rawAgentMode = formData.get('agentMode');
-  const agentMode = isBexChatAgentMode(rawAgentMode)
-    ? rawAgentMode
-    : DEFAULT_BEX_CHAT_AGENT_MODE;
+  const { modelTag, useValidator, routerType, agentMode } =
+    parseTestRunOptionFields(formData);
 
   const testResult = await createTestResult({
     test_id: testId,
@@ -685,6 +697,24 @@ export async function runTestAction(formData: FormData) {
       `/admin/tests/${testId}/runs/${testResult.id}`,
       'success',
       `Run started for ${items.length} prompts.`,
+    ),
+  );
+}
+
+/**
+ * B0-882 — "Run Golden" dialog submission. Parses the same `TestRunModelControls` fields as
+ * `runTestAction`; the per-golden-test fan-out lands in B0-883, so for now this only reports
+ * that the wiring is pending.
+ */
+export async function runGoldenTestsAction(formData: FormData) {
+  const returnPath = normalizeReturnPath(formData.get('returnPath'), '/admin/tests');
+  parseTestRunOptionFields(formData);
+
+  redirect(
+    encodeMessage(
+      returnPath,
+      'error',
+      'Run Golden is not wired to the fan-out yet (B0-883).',
     ),
   );
 }
