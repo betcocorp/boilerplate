@@ -1456,13 +1456,120 @@ export function collectSourceMetaFromToolOutputs(
   return [...map.values()];
 }
 
-function queryNeedsUsageAndSafetyCoverage(userMessage: string) {
+/**
+ * B0-872 — the ORIGINAL usage/safety lexical predicate, kept byte-for-byte for
+ * `isSafetySensitiveRoute` (B0-546) only. That consumer wants the broad, conservative reading —
+ * a message that so much as mentions `dilution` must never skip the validator's LLM pass on
+ * similarity grounds — so the bare `dilution` / `application` terms are deliberately still here.
+ * The usage/safety coverage GATE no longer uses this; see `hasUsageSafetyQuestionShape` and
+ * `queryNeedsUsageAndSafetyCoverage` below.
+ */
+function hasUsageSafetyLexicalSignal(userMessage: string) {
   const text = userMessage.toLowerCase();
   return (
     /\b(how do i use|how to use|how should i use|directions|procedure|application|dilution|safe|safety|hazard|ppe|precaution|first aid)\b/.test(
       text,
     ) || /\b(can i use|is it safe)\b/.test(text)
   );
+}
+
+/**
+ * B0-872 — does the message READ like a product-usage / safety question? Narrower than
+ * `hasUsageSafetyLexicalSignal`: bare `dilution` and `application` are gone. Those two words made
+ * every dilution-control knowledge question ("Do dilution control systems require plumbing or
+ * electrical work?") a usage/safety question, which then demanded SDS-kind safety evidence that a
+ * question naming no product can never retrieve, and replaced a 1,200–2,400 char knowledge-base
+ * draft with the "Exact Betco product name or SKU" template.
+ *
+ * This is only HALF of the gate's trigger — see `queryNeedsUsageAndSafetyCoverage`. Exported for
+ * `usage-safety-coverage.test.ts`.
+ */
+export function hasUsageSafetyQuestionShape(userMessage: string): boolean {
+  const text = userMessage.toLowerCase();
+  return (
+    /\b(how do i use|how to use|how should i use|directions|procedure|safe|safety|hazard|ppe|precaution|first aid)\b/.test(
+      text,
+    ) || /\b(can i use|is it safe)\b/.test(text)
+  );
+}
+
+/**
+ * B0-872 — where the gate found the product the question is about, when it found one at all.
+ * - `product_line_lock` — the turn's retrieval resolved and LOCKED a product line (B0-619
+ *   `productLineResolution.lockedProductLineKey`), i.e. an alias / SKU / product-line name in the
+ *   message resolved deterministically. `skipped_no_product_line` and `skipped_ambiguous` (SZ#21's
+ *   "a disinfectant or bleach") do NOT count — only a non-null lock does.
+ * - `turn_signals` — the B0-786 signals pass resolved a Betco product entity for this turn.
+ * - `tool_arguments` — a search-backed tool call this turn named a product (`productName`), the
+ *   same argument `search_product_docs` itself treats as "this is a product-specific search"
+ *   (a `freeformQuery` call is, by that tool's own contract, NOT one).
+ */
+export type UsageSafetyProductSubjectSource =
+  | 'product_line_lock'
+  | 'turn_signals'
+  | 'tool_arguments';
+
+export type UsageSafetyProductSubject = {
+  hasProductSubject: boolean;
+  source: UsageSafetyProductSubjectSource | null;
+};
+
+/**
+ * B0-872 — resolve whether the turn concerns an identifiable Betco product at all. A usage/safety
+ * question with NO product subject cannot have SDS-backed safety evidence by construction (there
+ * is no SDS to retrieve), so requiring it would only ever fail; the gate therefore does not apply.
+ */
+export function resolveUsageSafetyProductSubject(input: {
+  productLineLock: ProductLineLock | null;
+  signalsProductLineKey: string | null | undefined;
+  toolTrace: readonly ToolTraceEntry[];
+}): UsageSafetyProductSubject {
+  if (input.productLineLock?.lockedProductLineKey) {
+    return { hasProductSubject: true, source: 'product_line_lock' };
+  }
+  if (input.signalsProductLineKey) {
+    return { hasProductSubject: true, source: 'turn_signals' };
+  }
+  for (const entry of input.toolTrace) {
+    if (!/^(search_product_docs|get_product_spec|get_approved_usage_guidance|get_safety_constraints|get_compatibility_rules|list_allowed_surfaces|list_disallowed_uses|get_efficacy_data)$/.test(entry.toolName)) {
+      continue;
+    }
+    // `argumentsPreview` is a (possibly truncated) JSON preview; an unparseable one is simply not
+    // evidence of a product subject — never a reason to guess one.
+    try {
+      const args = JSON.parse(entry.argumentsPreview) as unknown;
+      if (
+        args &&
+        typeof args === 'object' &&
+        typeof (args as { productName?: unknown }).productName === 'string' &&
+        (args as { productName: string }).productName.trim().length > 0
+      ) {
+        return { hasProductSubject: true, source: 'tool_arguments' };
+      }
+    } catch {
+      // Not JSON (truncated preview) — fall through.
+    }
+  }
+  return { hasProductSubject: false, source: null };
+}
+
+/**
+ * B0-872 — the usage/safety coverage gate's trigger: the message must READ like a usage/safety
+ * question (`hasUsageSafetyQuestionShape`) AND concern an identifiable product
+ * (`resolveUsageSafetyProductSubject`). Either alone is not enough:
+ * - "Can I use a disinfectant or bleach to sanitize our wood gym floor?" has the shape but names no
+ *   product → a knowledge answer, kept as drafted.
+ * - "What is the EPA reg number for Fight Bac RTU?" names a product but is not a usage question.
+ * - "How do I use pH7Q on a hospital floor?" has both → the gate runs, and with no label/SDS
+ *   retrieved it still caps and replaces the draft with the usage/safety template.
+ *
+ * Exported for `usage-safety-coverage.test.ts`.
+ */
+export function queryNeedsUsageAndSafetyCoverage(
+  userMessage: string,
+  productSubject: Pick<UsageSafetyProductSubject, 'hasProductSubject'>,
+): boolean {
+  return hasUsageSafetyQuestionShape(userMessage) && productSubject.hasProductSubject;
 }
 
 function hasUsageSignal(text: string) {
@@ -1783,14 +1890,15 @@ export function isValidatorSkipEnabled(): boolean {
 /**
  * B0-546 — routes considered safety-sensitive enough that the validator pass must never be
  * skipped purely on retrieval-similarity grounds: usage/safety/dilution-shaped questions
- * (`queryNeedsUsageAndSafetyCoverage`, already used by the usage/safety coverage gate above), the
- * dedicated `dilution` SME (dilution ratios are inherently regulated per the org's regulated-data
- * rule), and `cross_reference` (an equivalence claim between an EPA-registered competitor product
- * and a Betco one).
+ * (`hasUsageSafetyLexicalSignal` — B0-872 split this off from the usage/safety coverage gate's own
+ * trigger so that narrowing the gate did not also let dilution-shaped questions skip validation;
+ * this predicate is the pre-B0-872 one, unchanged), the dedicated `dilution` SME (dilution ratios
+ * are inherently regulated per the org's regulated-data rule), and `cross_reference` (an
+ * equivalence claim between an EPA-registered competitor product and a Betco one).
  */
 export function isSafetySensitiveRoute(userMessage: string, decision: string): boolean {
   return (
-    queryNeedsUsageAndSafetyCoverage(userMessage) ||
+    hasUsageSafetyLexicalSignal(userMessage) ||
     decision === 'dilution' ||
     decision === 'cross_reference'
   );
@@ -3773,8 +3881,21 @@ export async function runProductSupportWorkflow(input: {
     // B0-490 — raw (pre-curation) vs. post-selection top retrieval similarity for this turn.
     const similarityRollup = extractSimilarityRollupFromToolOutputs(toolOutputLog);
     const usageSafetyCoverage = evaluateUsageSafetyCoverage(sourceMeta);
+    /**
+     * B0-872 — the gate now needs BOTH a usage/safety-shaped question and an identifiable product
+     * subject (see `queryNeedsUsageAndSafetyCoverage`). `resolvedToolTrace` is complete here (the
+     * tool loop has returned), so the B0-619 product-line lock is readable from it; the same
+     * `extractProductLineLockFromToolTrace` call is repeated for the final-output rollup below.
+     */
+    const usageSafetyQuestionShape = hasUsageSafetyQuestionShape(input.userMessage);
+    const usageSafetyProductSubject = resolveUsageSafetyProductSubject({
+      productLineLock: extractProductLineLockFromToolTrace(resolvedToolTrace),
+      signalsProductLineKey: signalsDecided ? turnSignals?.resolvedProductLineKey : null,
+      toolTrace: resolvedToolTrace,
+    });
     const needsUsageSafetyCoverage = queryNeedsUsageAndSafetyCoverage(
       input.userMessage,
+      usageSafetyProductSubject,
     );
     /**
      * B0-546 — gate for skipping the validator's LLM pass entirely: retrieval already found a
@@ -4101,6 +4222,11 @@ export async function runProductSupportWorkflow(input: {
     };
     const usageSafetyInputs = {
       queryNeedsUsageAndSafetyCoverage: needsUsageSafetyCoverage,
+      // B0-872 — the two halves of that trigger, recorded separately so a trace reader can tell
+      // "not a usage question" from "a usage question about no identifiable product".
+      usageSafetyQuestionShape,
+      hasProductSubject: usageSafetyProductSubject.hasProductSubject,
+      productSubjectSource: usageSafetyProductSubject.source,
       hasUsageEvidence: usageSafetyCoverage.hasUsageEvidence,
       hasSafetyEvidence: usageSafetyCoverage.hasSafetyEvidence,
       retrievedSourceCount: sourceMeta.length,
@@ -4108,7 +4234,14 @@ export async function runProductSupportWorkflow(input: {
 
     // B0-494 — this gate's own activation state, set in every branch below (including the
     // `not_applicable` case, when `needsUsageSafetyCoverage` is false and none of them run).
-    let usageSafetyCoverageActivation: GateActivationRecord = { state: 'not_applicable' };
+    // B0-872 — a usage/safety-SHAPED question that names no product is `not_applicable` too (no
+    // cap, no fallback copy: the knowledge-base draft reaches the user), but carries a `reason` so
+    // the timeline can show WHY the gate stood down instead of leaving it indistinguishable from
+    // "not a usage question at all".
+    let usageSafetyCoverageActivation: GateActivationRecord =
+      usageSafetyQuestionShape && !usageSafetyProductSubject.hasProductSubject
+        ? { state: 'not_applicable', reason: 'no_product_subject' }
+        : { state: 'not_applicable' };
 
     if (
       needsUsageSafetyCoverage &&
@@ -4844,6 +4977,14 @@ export async function runProductSupportWorkflow(input: {
         (!usageSafetyCoverage.hasUsageEvidence ||
           !usageSafetyCoverage.hasSafetyEvidence)
       ) {
+        /**
+         * B0-872 — reachable only for a usage/safety-shaped question about an IDENTIFIED product
+         * (`needsUsageSafetyCoverage` now requires a product subject). A knowledge question with
+         * the same shape but no product ("Can I use a disinfectant or bleach on our wood gym
+         * floor?") never gets here: its gate is `not_applicable` (`reason: 'no_product_subject'`)
+         * and the draft is kept. This template is for "how do I use <product>" with no label/SDS
+         * retrieved — the one case where asking for the exact product/SKU is the right answer.
+         */
         finalText = [
           'I do not have enough retrieved evidence to provide a reliable usage and safety answer yet.',
           '',
