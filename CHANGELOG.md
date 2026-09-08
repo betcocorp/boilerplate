@@ -1,3 +1,10 @@
+## [4.2.1](https://github.com/betcocorp/bex2.0/compare/v4.2.0...v4.2.1) (2026-09-08)
+
+
+### Bug Fixes
+
+* **B0-896:** match Failing prompts card total to the Fails column ([a4dc498](https://github.com/betcocorp/bex2.0/commit/a4dc4983a105424849e23e412c75fae3fa2d66d6))
+
 # [4.2.0](https://github.com/betcocorp/bex2.0/compare/v4.1.0...v4.2.0) (2026-09-08)
 
 
