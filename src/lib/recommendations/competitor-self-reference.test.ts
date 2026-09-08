@@ -285,6 +285,29 @@ describe('generic chemistry description (B0-875)', () => {
     ).toMatchObject({ suppressed: true, reason: 'chemistry_term' });
   });
 
+  /**
+   * B0-887 — the actual reported bug: `analyzeTurnSignals`'s `competitorIsGenericChemistry` field is
+   * documented as "a bare chemistry rather than a product", but was observed coming back `true` for
+   * "quat disinfectant" too. Before the fix, a TRUE signal short-circuited straight to
+   * `reason: 'chemistry_term'` (`chemistry = product`) without ever reaching this deterministic
+   * shape check, so "Diversey quat disinfectant" recommended a specific Betco product (with a
+   * dilution ratio) instead of asking which competitor product was meant.
+   */
+  it('is not short-circuited to chemistry_term by a TRUE B0-786 signal for a "<chemistry> <product class>" shape', async () => {
+    const verdict = await classify({
+      userMessage: 'I need a Betco replacement for a Diversey quat disinfectant. Which one?',
+      competitorBrand: 'Diversey',
+      competitorProduct: 'quat disinfectant',
+      competitorIsGenericChemistry: true,
+    });
+    expect(verdict).toEqual({
+      suppressed: true,
+      reason: 'generic_chemistry_description',
+      productLineKey: null,
+      matched: 'diversey quat disinfectant',
+    });
+  });
+
   it('keeps "Spartan Quat Disinfectant" (brand inside the product string) on the cross-reference path', async () => {
     expect(
       await classify({

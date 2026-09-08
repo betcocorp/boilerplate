@@ -160,9 +160,16 @@ function hasDistinctiveToken(product: string): boolean {
  * least one other token, and EVERY token drawn from the chemistry or product-class vocabularies.
  * A bare chemistry ("bleach", "quats") is deliberately NOT this shape — that stays with the B0-786
  * signal / `CHEMISTRY_TERMS` rule, so the signal keeps deciding the bare case.
+ *
+ * B0-887 — a leading article is stripped first (mirroring `chemistryTermMatch`'s own stripping) so
+ * "a quat" tokenises to the single word "quat" and correctly falls short of the 2-token floor,
+ * instead of counting "a" as a second (product-class) token and misreading a bare chemistry plus an
+ * article as this "<chemistry> <product class>" shape. This is now checked BEFORE the bare-chemistry
+ * check in `classifyCompetitorSelfReference`, so this floor is what keeps "a quat" as `chemistry_term`.
  */
 export function isGenericChemistryDescription(product: string): boolean {
-  const tokens = product.split(/[^a-z0-9]+/).filter(Boolean);
+  const stripped = product.replace(/^(a|an|the)\s+/, '');
+  const tokens = stripped.split(/[^a-z0-9]+/).filter(Boolean);
   if (tokens.length < 2) return false;
   let chemistry = 0;
   for (const token of tokens) {
@@ -320,6 +327,33 @@ export async function classifyCompetitorSelfReference(
   }
   const brand = normalizeProductText(input.competitorBrand);
 
+  /**
+   * B0-875 — "<chemistry> <product class>" is a description, not an identity, whether or not a
+   * brand accompanies it ("Diversey" + "quat disinfectant" was cross-referenced to a fuzzy legacy
+   * row at 0.675 on the golden run). Checked BEFORE the named-brand rule below because the brand
+   * does not identify the product either.
+   *
+   * B0-887 — also checked BEFORE the `chemistry_term` block below, not after. The B0-786 signal's
+   * `competitorIsGenericChemistry` is documented as "a bare chemistry rather than a product", but
+   * verified live it also comes back `true` for "quat disinfectant" — a chemistry-class word plus a
+   * product-class word, not a bare chemistry. Trusting that signal first (the old order) meant
+   * `chemistry = product` fired unconditionally and returned `reason: 'chemistry_term'` before this
+   * deterministic shape check ever ran, so "Diversey quat disinfectant" never got the clarifying
+   * question and a specific Betco product (with a dilution ratio) was recommended for an unnamed
+   * competitor product instead. `isGenericChemistryDescription` requires at least 2 tokens with at
+   * least one — but not all — drawn from the chemistry vocabulary, so a truly bare chemistry
+   * ("quat", "quats", "chlorine bleach", "hydrogen peroxide", "quaternary ammonium") still returns
+   * `false` here and falls through to the `chemistry_term` check unaffected.
+   */
+  if (isGenericChemistryDescription(product)) {
+    return {
+      suppressed: true,
+      reason: 'generic_chemistry_description',
+      productLineKey: null,
+      matched: [brand, product].filter(Boolean).join(' '),
+    };
+  }
+
   // B0-786 — the signal says WHETHER it is a bare chemistry; the matched text is then the product
   // string itself (there is no keyword term to report).
   const chemistry =
@@ -330,23 +364,6 @@ export async function classifyCompetitorSelfReference(
         : null;
   if (chemistry) {
     return { suppressed: true, reason: 'chemistry_term', productLineKey: null, matched: chemistry };
-  }
-
-  /**
-   * B0-875 — "<chemistry> <product class>" is a description, not an identity, whether or not a
-   * brand accompanies it ("Diversey" + "quat disinfectant" was cross-referenced to a fuzzy legacy
-   * row at 0.675 on the golden run). Checked BEFORE the named-brand rule below because the brand
-   * does not identify the product either. Deterministic on purpose: the B0-786 signal is defined
-   * as the BARE-chemistry question ("bleach", "quat") and is left to decide exactly that; this
-   * shape is a different question the signal was never asked, so a `false` signal does not veto it.
-   */
-  if (isGenericChemistryDescription(product)) {
-    return {
-      suppressed: true,
-      reason: 'generic_chemistry_description',
-      productLineKey: null,
-      matched: [brand, product].filter(Boolean).join(' '),
-    };
   }
 
   /**

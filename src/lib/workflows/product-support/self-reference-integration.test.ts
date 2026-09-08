@@ -393,6 +393,51 @@ describe('competitor self-reference check (B0-751)', () => {
     expect(resolveProductEntityByNameMock).not.toHaveBeenCalled();
   });
 
+  it('B0-887: "Diversey quat disinfectant" is suppressed as generic_chemistry_description and the draft is replaced with the clarifying question', async () => {
+    mockLlmCalls({
+      classifier: classifierPayload('cross_reference', {
+        competitorBrand: 'Diversey',
+        competitorProduct: 'quat disinfectant',
+      }),
+    });
+
+    const out = await run('I need a Betco replacement for a Diversey quat disinfectant. Which one?');
+
+    expect(out.routingDecision).toBe('product');
+    expect(firstToolChoice()).not.toEqual(PINNED_XREF_TOOL_CHOICE);
+    expect(runCrossReferenceRecommendationMock).not.toHaveBeenCalled();
+    expect(out.activeGates?.crossReferenceSelfReference).toEqual({
+      state: 'ran',
+      verdict: 'suppressed',
+      reason: 'generic_chemistry_description:diversey quat disinfectant',
+    });
+    // The draft is REPLACED with the clarifying question — never a specific Betco product
+    // recommendation (with a regulated dilution ratio) for an unnamed competitor product.
+    expect(out.answerProvenance).toBe('generic_chemistry_clarification');
+    expect(out.answerText).not.toBe('Both are Betco products; here is how they differ.');
+    // Chemistry-class shape is decided before the resolver is consulted.
+    expect(resolveProductEntityByNameMock).not.toHaveBeenCalled();
+  });
+
+  it('regression: "what replaces quats?" (no brand) stays chemistry_term / product policy, not a clarification', async () => {
+    mockLlmCalls({
+      classifier: classifierPayload('cross_reference', { competitorProduct: 'quats' }),
+    });
+
+    const out = await run('What replaces quats?');
+
+    expect(out.routingDecision).toBe('product');
+    expect(firstToolChoice()).not.toEqual(PINNED_XREF_TOOL_CHOICE);
+    expect(out.activeGates?.crossReferenceSelfReference).toEqual({
+      state: 'ran',
+      verdict: 'suppressed',
+      reason: 'chemistry_term:quats',
+    });
+    // Not the B0-887 clarification path — a bare chemistry with no brand keeps answering with the
+    // product specialist's alternative-chemistry list (product-support-prompts.ts).
+    expect(out.answerProvenance).not.toBe('generic_chemistry_clarification');
+  });
+
   it('a whole-catalog conversion-list ask is suppressed without paying for an extraction call', async () => {
     mockLlmCalls({
       classifier: classifierPayload('cross_reference', { competitorBrand: 'Spartan' }),
