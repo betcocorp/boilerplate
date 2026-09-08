@@ -176,12 +176,25 @@ const RESULT_ITEMS: TestResultItemRecord[] = [
     passed: true,
     status: 'ok',
     response_text: `  ${REGULATED.dilution} ${REGULATED.metric}  `,
+    // B0-863 — plain generated columns on `test_result_items`, exercised alongside the
+    // `response_payload` fields the harness aside now also reads (activeGates, draftAnswer).
+    answer_provenance: 'model_generated',
+    routing_decision: 'llm',
     response_payload: {
       sources: [
         { documentId: 'doc-label-1', chunkId: 'chunk-1', similarity: 0.83 },
         { documentId: 'doc-label-1', chunkId: 'chunk-2', similarity: 0.71 },
         { documentId: 'doc-sds-9', chunkId: 'chunk-3', similarity: 0.64 },
       ],
+      activeGates: {
+        validator: { state: 'skipped', reason: 'disabled_by_flag' },
+        earlyDeclineGate: { state: 'not_applicable' },
+        usageSafetyCoverage: { state: 'not_applicable' },
+        regulatedClaimGuardrail: { state: 'ran', verdict: 'rejected' },
+        recommendationConfidence: { state: 'not_applicable' },
+      },
+      // Differs from `response_text` above — exercises `draftDiscarded`.
+      draftAnswer: `Draft: ${REGULATED.dilution} plus an unverified off-label claim.`,
     },
     workflow_run_id: 'wf-aaa',
   }),
@@ -654,12 +667,19 @@ describe('assembleReportData → report data contract', () => {
           .join(' · ')}`,
       );
       if (c.harness) {
-        check(
-          `case[${c.id}].harness`,
-          `**Harness signal:** harness result: ${c.harness.passed ? 'passed' : 'failed'}${
-            c.harness.similarity != null ? ` · similarity ${c.harness.similarity.toFixed(2)}` : ''
-          }`,
-        );
+        const h = c.harness;
+        const bits = [
+          `harness result: ${h.passed ? 'passed' : 'failed'}`,
+          h.similarity != null ? `similarity ${h.similarity.toFixed(2)}` : null,
+          h.answerProvenance ? `answer provenance: ${h.answerProvenance}` : null,
+          h.routingDecision ? `routing: ${h.routingDecision}` : null,
+          h.gates.length > 0
+            ? `gates fired: ${h.gates.map((g) => `${g.name}: ${g.verdict}`).join(', ')}`
+            : null,
+          h.draftDiscarded ? 'draft discarded' : null,
+          h.chunkCount > 0 ? `retrieved chunks: ${h.chunkCount}` : null,
+        ].filter(Boolean);
+        check(`case[${c.id}].harness`, `**Harness signal:** ${bits.join(' · ')}`);
       }
       check(`case[${c.id}].score.explanation`, `**Explanation of the grade:** ${c.score.explanation}`);
       check(`case[${c.id}].score.missed`, `**Important information missed:** ${c.score.missed}`);
@@ -787,7 +807,19 @@ describe('assembleReportData → report data contract', () => {
     // B0-715 — ms → s exactly once, at the assembly boundary.
     expect(a.ttftMs).toBe(1200);
     expect(a.ttftSeconds).toBe(1.2);
-    expect(a.harness).toEqual({ passed: true, status: 'ok', similarity: 0.83 });
+    expect(a.harness).toEqual({
+      passed: true,
+      status: 'ok',
+      similarity: 0.83,
+      answerProvenance: 'model_generated',
+      routingDecision: 'llm',
+      gates: [{ name: 'regulatedClaimGuardrail', verdict: 'rejected' }],
+      draftDiscarded: true,
+      chunkCount: 3,
+    });
+    // B0-863 — top-level mirrors, so a report-export consumer need not dig into `harness`.
+    expect(a.answerProvenance).toBe('model_generated');
+    expect(a.routingDecision).toBe('llm');
     expect(a.retrievedDocumentIds).toEqual(['doc-label-1', 'doc-sds-9']);
     expect(a.workflowRunId).toBe('wf-aaa');
     expect(a.speed!.total!.band).toBe('good');
@@ -803,6 +835,35 @@ describe('assembleReportData → report data contract', () => {
     expect(byId.get(CASE_C)!.speed!.total!.band).toBe('slow');
     // CASE_D has no result row at all, so it has no speed entry — not a zero-scored one.
     expect(byId.get(CASE_D)!.speed).toBeNull();
+  });
+
+  it('B0-863 — harness provenance defaults cleanly when a run predates or never triggered it', () => {
+    const { payload } = buildFixture();
+    const byId = new Map(payload.cases.map((c) => [c.id, c]));
+
+    // CASE_B/CASE_C have a result row but no `answer_provenance`/`routing_decision` columns and no
+    // `activeGates`/`draftAnswer` in `response_payload` — every new field defaults rather than
+    // throwing or inventing a value.
+    const b = byId.get(CASE_B)!;
+    expect(b.harness).toEqual({
+      passed: false,
+      status: 'failed',
+      similarity: null,
+      answerProvenance: null,
+      routingDecision: null,
+      gates: [],
+      draftDiscarded: false,
+      chunkCount: 0,
+    });
+    expect(b.answerProvenance).toBeNull();
+    expect(b.routingDecision).toBeNull();
+
+    // CASE_D has no result row at all: harness (and its top-level mirrors) stay null, not a
+    // zero-valued/empty harness object standing in for "no data".
+    const d = byId.get(CASE_D)!;
+    expect(d.harness).toBeNull();
+    expect(d.answerProvenance).toBeNull();
+    expect(d.routingDecision).toBeNull();
   });
 
   it('marks a report stale when the dataset gained items after generation', () => {

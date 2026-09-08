@@ -44,6 +44,28 @@ export type CaseHarnessAside = {
   passed: boolean | null;
   status: string | null;
   similarity: number | null;
+  /**
+   * B0-863 — `test_result_items.answer_provenance` (generated from
+   * `response_payload.answerProvenance`): which stage produced the final answer text (e.g.
+   * `model_generated`, `validator_fallback`, `regulated_claim_partial_redaction`). Reported for
+   * reference beside the harness signal, never part of the grade.
+   */
+  answerProvenance: string | null;
+  /** B0-863 — `test_result_items.routing_decision`. */
+  routingDecision: string | null;
+  /**
+   * B0-863 — gates that actually acted this turn (`state: 'ran'` with a `verdict` other than
+   * `'passed'`), e.g. `{ name: 'regulatedClaimGuardrail', verdict: 'rejected' }`. Empty when none
+   * fired or the run predates gate activation instrumentation.
+   */
+  gates: { name: string; verdict: string }[];
+  /**
+   * B0-863 — true when `response_payload.draftAnswer` is present and differs from the final
+   * response text, i.e. the validator/revision pass rewrote or discarded the model's first draft.
+   */
+  draftDiscarded: boolean;
+  /** B0-863 — retrieved chunks this turn, before document-level de-duplication. */
+  chunkCount: number;
 };
 
 export type CaseRenderDetail = {
@@ -931,6 +953,13 @@ export function renderReportMarkdown(params: {
       const bits = [
         c.harness.passed != null ? `harness result: ${c.harness.passed ? 'passed' : 'failed'}` : null,
         c.harness.similarity != null ? `similarity ${c.harness.similarity.toFixed(2)}` : null,
+        c.harness.answerProvenance ? `answer provenance: ${c.harness.answerProvenance}` : null,
+        c.harness.routingDecision ? `routing: ${c.harness.routingDecision}` : null,
+        c.harness.gates.length > 0
+          ? `gates fired: ${c.harness.gates.map((g) => `${g.name}: ${g.verdict}`).join(', ')}`
+          : null,
+        c.harness.draftDiscarded ? 'draft discarded' : null,
+        c.harness.chunkCount > 0 ? `retrieved chunks: ${c.harness.chunkCount}` : null,
       ].filter(Boolean);
       if (bits.length > 0) {
         push(`**Harness signal:** ${bits.join(' · ')}`);

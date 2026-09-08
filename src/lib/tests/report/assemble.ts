@@ -5,6 +5,8 @@ import {
   listAllResultItemsByResultId,
 } from '~/lib/tests/repository';
 import {
+  extractDraftAnswer,
+  extractFiredGates,
   extractItemSimilarityScore,
   extractRetrievedDocumentChunks,
 } from '~/lib/tests/response-payload';
@@ -255,18 +257,32 @@ export function assembleReportCases(params: AssembleReportCasesParams): Assemble
       uteReason != null && !storedScore.unableToEvaluate
         ? { ...storedScore, unableToEvaluate: true, uteReason }
         : storedScore;
+    const responseText = resultItem?.response_text?.trim();
+    const chunks = extractRetrievedDocumentChunks(resultItem?.response_payload);
+    const documentIds = new Set(chunks.map((c) => c.document_id));
+
+    // B0-863 — plain generated columns on `test_result_items` (see B0-394/B0-500), not re-derived
+    // from `response_payload` here: the DB column is already the single source of truth for both.
+    const answerProvenance = resultItem?.answer_provenance ?? null;
+    const routingDecision = resultItem?.routing_decision ?? null;
+    // The pre-validation draft the workflow composed before any gate/validator/revision pass could
+    // rewrite it. "Discarded" means the final response text is not that same draft — never means
+    // the draft looked wrong, and never gets rendered itself (methodology stays snippet-free here).
+    const draftAnswer = extractDraftAnswer(resultItem?.response_payload);
+    const draftDiscarded = draftAnswer != null && draftAnswer.trim() !== (responseText ?? '');
+
     const harness: CaseHarnessAside | null = resultItem
       ? {
           passed: resultItem.passed,
           status: resultItem.status,
           similarity: extractItemSimilarityScore(resultItem.response_payload),
+          answerProvenance,
+          routingDecision,
+          gates: extractFiredGates(resultItem.response_payload),
+          draftDiscarded,
+          chunkCount: chunks.length,
         }
       : null;
-
-    const responseText = resultItem?.response_text?.trim();
-    const documentIds = new Set(
-      extractRetrievedDocumentChunks(resultItem?.response_payload).map((c) => c.document_id),
-    );
 
     return {
       id: item.id,
@@ -298,6 +314,10 @@ export function assembleReportCases(params: AssembleReportCasesParams): Assemble
       harness,
       retrievedDocumentIds: [...documentIds],
       workflowRunId: resultItem?.workflow_run_id ?? null,
+      // B0-863 — top-level mirrors of the harness fields, for a consumer of the full report export
+      // that doesn't want to reach into `harness` (or raw `response_payload`) for them.
+      answerProvenance,
+      routingDecision,
     };
   });
 

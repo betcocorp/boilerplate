@@ -85,6 +85,8 @@ function makeCase(overrides: Partial<ReportCase> & Pick<ReportCase, 'id'>): Repo
     harness: null,
     retrievedDocumentIds: [],
     workflowRunId: null,
+    answerProvenance: null,
+    routingDecision: null,
     ...overrides,
   };
 }

@@ -612,6 +612,20 @@ export const reportCaseHarnessSchema = z.object({
   passed: z.boolean().nullable(),
   status: z.string().nullable(),
   similarity: z.number().nullable(),
+  /**
+   * B0-863 — which stage produced the final answer text (`test_result_items.answer_provenance`,
+   * generated from `response_payload.answerProvenance`). Reported for reference, never part of
+   * the grade.
+   */
+  answerProvenance: z.string().nullable(),
+  /** B0-863 — `test_result_items.routing_decision`. */
+  routingDecision: z.string().nullable(),
+  /** B0-863 — gates that fired this turn (`state: 'ran'`, `verdict` other than `'passed'`). */
+  gates: z.array(z.object({ name: z.string(), verdict: z.string() })),
+  /** B0-863 — true when the pre-validation draft answer differs from the final response text. */
+  draftDiscarded: z.boolean(),
+  /** B0-863 — retrieved chunks this turn, before document-level de-duplication. */
+  chunkCount: z.number().int().min(0),
 });
 export type ReportCaseHarness = z.infer<typeof reportCaseHarnessSchema>;
 
@@ -684,6 +698,14 @@ export const reportCaseSchema = z.object({
   /** `rag.document` ids retrieved for this answer, de-duplicated, in payload order. */
   retrievedDocumentIds: z.array(z.string()),
   workflowRunId: z.string().nullable(),
+  /**
+   * B0-863 — mirrors `harness.answerProvenance`, promoted to the case's top level so a downstream
+   * consumer of the full report export can filter/group by it without digging into the harness
+   * aside (or raw `response_payload`). Null exactly when `harness` is null or carries no value.
+   */
+  answerProvenance: z.string().nullable(),
+  /** B0-863 — mirrors `harness.routingDecision`, promoted to the case's top level. */
+  routingDecision: z.string().nullable(),
 });
 export type ReportCase = z.infer<typeof reportCaseSchema>;
 
