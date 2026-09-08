@@ -12,6 +12,7 @@ import {
 } from 'ai';
 
 import { resolveAiSdkLanguageModel } from '~/lib/bex/ai-sdk-adapters';
+import { modelProviderFor } from '~/lib/constants/models';
 import { formatPreloadedEvidence } from '~/lib/openai/responses-runtime';
 import type {
   ExecuteToolFn,
@@ -59,7 +60,10 @@ export type AiSdkRuntimeOptions = {
    * Defaults to the full `productSupportTools`.
    */
   tools?: Tool[];
-  /** B0-324 — see `ResponsesRuntimeOptions.promptCacheKey`; forwarded as the OpenAI `promptCacheKey`. */
+  /**
+   * B0-324 — see `ResponsesRuntimeOptions.promptCacheKey`; forwarded as the OpenAI `promptCacheKey`.
+   * B0-908 — OpenAI-only: Anthropic has no equivalent request field, so it is not sent there.
+   */
   promptCacheKey?: string;
   /**
    * B0-436 — see `ResponsesRuntimeOptions.preloadedEvidence`. This runtime is stateless, so the
@@ -305,9 +309,18 @@ export async function runAiSdkWithToolLoop(opts: AiSdkRuntimeOptions): Promise<A
    * exhausted `UpstreamTransportError` — reach the workflow instead of that placeholder.
    */
   let capturedStreamError: unknown;
+  /**
+   * B0-908 — provider-aware: the resolved model decides which provider serves it (`claude-*` →
+   * Anthropic, else OpenAI), read off the model's own id so it cannot disagree with the adapter.
+   * Anthropic models get NO sampling controls (Opus 5 / Sonnet 5 reject `temperature`/`top_p`) and
+   * NO thinking config (adaptive is the Opus 5 default; Haiku 4.5 rejects it) — provider defaults
+   * apply, and every OpenAI-only request field below is gated on `provider`.
+   */
+  const languageModel = await resolveAiSdkLanguageModel(opts.modelTag);
+  const provider = modelProviderFor(languageModel.modelId);
   const result = streamText({
     model: wrapLanguageModel({
-      model: await resolveAiSdkLanguageModel(opts.modelTag),
+      model: languageModel,
       middleware: createTransportRetryMiddleware(opts.retry),
     }),
     system: opts.instructions,
@@ -323,8 +336,9 @@ export async function runAiSdkWithToolLoop(opts: AiSdkRuntimeOptions): Promise<A
     // caller that does not pass one gets the AI SDK/provider default, matching the Responses runtime.
     ...(opts.maxOutputTokens ? { maxOutputTokens: opts.maxOutputTokens } : {}),
     // B0-324 — pin every step of the loop to the same prompt cache pool so the stable
-    // system + tool-schema prefix is read from cache on the 2nd+ step.
-    ...(opts.promptCacheKey
+    // system + tool-schema prefix is read from cache on the 2nd+ step. OpenAI-only (B0-908):
+    // Anthropic caches by prefix with no key, so the option is simply not sent there.
+    ...(opts.promptCacheKey && provider === 'openai'
       ? { providerOptions: { openai: { promptCacheKey: opts.promptCacheKey } } }
       : {}),
     stopWhen: stepCountIs(opts.maxToolRounds ?? 16),

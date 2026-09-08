@@ -641,3 +641,78 @@ describe('runAiSdkWithToolLoop — prior-turn tool context replay (B0-378)', () 
     expect(nonSystem.map((message) => message.role)).toEqual(['assistant', 'user']);
   });
 });
+
+/* -------------------------------------------------------------------------- *
+ * B0-908 — provider-aware request options
+ * -------------------------------------------------------------------------- */
+
+describe('provider-aware request options (B0-908)', () => {
+  type DoStreamParams = Parameters<NonNullable<MockLanguageModelV3['doStream']>>[0];
+
+  function capturingModel(modelId: string, seen: DoStreamParams[]): MockLanguageModelV3 {
+    return new MockLanguageModelV3({
+      modelId,
+      doStream: async (params) => {
+        seen.push(params);
+        return {
+          stream: simulateReadableStream({
+            chunks: [
+              { type: 'text-start', id: '0' },
+              { type: 'text-delta', id: '0', delta: 'ok' },
+              { type: 'text-end', id: '0' },
+              {
+                type: 'finish',
+                finishReason: 'stop',
+                usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+              },
+            ] as const,
+          }),
+        };
+      },
+    });
+  }
+
+  it('sends the OpenAI promptCacheKey providerOption for an OpenAI model', async () => {
+    const seen: DoStreamParams[] = [];
+    modelRef.current = capturingModel('gpt-4.1-mini', seen);
+
+    await runAiSdkWithToolLoop({
+      modelTag: 'gpt-4.1-mini',
+      instructions: 'You are Bex.',
+      history: [],
+      userMessage: 'hi',
+      promptCacheKey: 'bex:v1',
+      executeTool: noopExecuteTool,
+    });
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0].providerOptions).toEqual({ openai: { promptCacheKey: 'bex:v1' } });
+  });
+
+  it('sends no openai providerOptions and no sampling/thinking controls for a claude-* model', async () => {
+    const seen: DoStreamParams[] = [];
+    modelRef.current = capturingModel('claude-sonnet-5', seen);
+
+    const result = await runAiSdkWithToolLoop({
+      modelTag: 'claude-sonnet-5',
+      instructions: 'You are Bex.',
+      history: [{ role: 'user', content: 'earlier' }],
+      userMessage: 'hi',
+      promptCacheKey: 'bex:v1',
+      executeTool: noopExecuteTool,
+    });
+
+    expect(result.assistantText).toBe('ok');
+    expect(seen).toHaveLength(1);
+    const params = seen[0];
+    expect(params.providerOptions?.openai).toBeUndefined();
+    // Opus 5 / Sonnet 5 reject temperature/top_p (400) and budget_tokens; nothing is sent so the
+    // provider defaults (adaptive thinking on Opus 5, none on Haiku 4.5) apply untouched.
+    expect(params.temperature).toBeUndefined();
+    expect(params.topP).toBeUndefined();
+    expect(params.topK).toBeUndefined();
+    expect(params.providerOptions?.anthropic).toBeUndefined();
+    // History replay is provider-independent and byte-identical to the OpenAI path.
+    expect(params.prompt.filter((message) => message.role === 'user')).toHaveLength(2);
+  });
+});

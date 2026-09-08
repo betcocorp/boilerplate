@@ -1,4 +1,18 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const { mockComplete, mockResolveModel } = vi.hoisted(() => ({
+  mockComplete: vi.fn(),
+  mockResolveModel: vi.fn(async () => 'gpt-test'),
+}));
+vi.mock('~/lib/llm/structured-completion', () => ({
+  completeStructuredWithUsage: mockComplete,
+}));
+vi.mock('~/lib/openai/client', () => ({
+  resolveResponsesModel: mockResolveModel,
+}));
+vi.mock('~/lib/workflows/product-support/max-output-tokens', () => ({
+  resolveMaxOutputTokens: () => 1200,
+}));
 
 import {
   extractCompetitorProduct,
@@ -141,6 +155,72 @@ describe('extractCompetitorProduct', () => {
       otherCompetitorProduct: null,
       usage: USAGE,
       resolved: true,
+    });
+  });
+});
+
+/**
+ * B0-908 — the default `runLlm` goes through the provider-neutral `completeStructuredWithUsage`, so
+ * a `claude-*` id resolved for the `preview` tag is sent as-is with the same prompt + schema bytes,
+ * and the helper's usage is what lands on the result.
+ */
+describe('extractCompetitorProduct — default runLlm (B0-908)', () => {
+  beforeEach(() => {
+    mockComplete.mockReset();
+    mockResolveModel.mockReset();
+    mockResolveModel.mockResolvedValue('claude-sonnet-5');
+    delete process.env.XREF_COMPETITOR_EXTRACT_MODEL;
+  });
+
+  it('calls completeStructuredWithUsage with the resolved claude id and the competitor_extract schema', async () => {
+    mockComplete.mockResolvedValue({
+      text: JSON.stringify({ brand: 'Spartan', product: 'BNC-15', otherCompetitorProduct: null }),
+      usage: USAGE,
+    });
+
+    const out = await extractCompetitorProduct('betco equivalent to spartan bnc-15');
+
+    expect(mockResolveModel).toHaveBeenCalledWith('preview');
+    expect(mockComplete).toHaveBeenCalledOnce();
+    const request = mockComplete.mock.calls[0][0];
+    expect(request).toMatchObject({
+      model: 'claude-sonnet-5',
+      user: 'betco equivalent to spartan bnc-15',
+      schemaName: 'competitor_extract',
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          brand: { type: ['string', 'null'] },
+          product: { type: ['string', 'null'] },
+          otherCompetitorProduct: { type: ['string', 'null'] },
+        },
+        required: ['brand', 'product', 'otherCompetitorProduct'],
+      },
+      maxOutputTokens: 1200,
+      temperature: 0,
+    });
+    expect(request.system).toContain('You extract the competitor cleaning/chemical product');
+    expect(out).toEqual({
+      brand: 'Spartan',
+      product: 'BNC-15',
+      otherCompetitorProduct: null,
+      usage: USAGE,
+      resolved: true,
+    });
+  });
+
+  it('degrades to the raw message when the helper throws (truncation, refusal, transport)', async () => {
+    mockComplete.mockRejectedValue(new Error('output truncated at max_output_tokens'));
+
+    const out = await extractCompetitorProduct('spartan bnc-15');
+
+    expect(out).toEqual({
+      brand: null,
+      product: 'spartan bnc-15',
+      otherCompetitorProduct: null,
+      usage: ZERO_USAGE,
+      resolved: false,
     });
   });
 });

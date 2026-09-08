@@ -1,6 +1,5 @@
-import { getOpenAIClient, resolveResponsesModel } from '~/lib/openai/client';
-import { samplingParamsFor } from '~/lib/openai/model-capabilities';
-import { extractAssistantText } from '~/lib/openai/response-item-parsing';
+import { completeStructuredWithUsage } from '~/lib/llm/structured-completion';
+import { resolveResponsesModel } from '~/lib/openai/client';
 import {
   resolveOpenAiRequestTimeoutMs,
   retryTransportFaults,
@@ -20,7 +19,8 @@ import {
  * B0-616 — model tag for the criteria grader, following the same env-override
  * convention as `resolveValidatorModel` (~/lib/workflows/product-support/validator.ts):
  * a dedicated env var wins, otherwise fall back to the standard Responses model
- * resolution so the grader tracks whatever the rest of the harness defaults to.
+ * resolution so the grader tracks whatever the rest of the harness defaults to. A `claude-*`
+ * id is fine here — the call below routes by provider (B0-908).
  */
 export async function resolveGraderModel(modelTag?: string): Promise<string> {
   return (
@@ -49,7 +49,8 @@ function buildUserMessage(params: {
 }
 
 /**
- * One structured-output Responses API call per item, judging only the `semantic`-tagged
+ * One structured-output call per item through `completeStructuredWithUsage` (B0-908: routes by
+ * provider on the resolved model id), judging only the `semantic`-tagged
  * criteria. `exact`-tagged criteria never reach the model — they are checked deterministically
  * in `gradeWithCriteria` below, per the org's regulated-data rule (never trust an LLM's judgment
  * on a dilution ratio, contact time, or EPA registration number).
@@ -64,48 +65,30 @@ async function gradeSemanticCriteria(params: {
     return [];
   }
 
-  const client = getOpenAIClient();
   const model = await resolveGraderModel(params.modelTag);
 
-  const res = await retryTransportFaults(
+  const { text } = await retryTransportFaults(
     () =>
-      client.responses.create(
-        {
-          model,
-          instructions: GRADER_SYSTEM_PROMPT,
-          input: [
-            {
-              role: 'user',
-              type: 'message',
-              content: buildUserMessage({
-                prompt: params.prompt,
-                responseText: params.responseText,
-                criteria: params.semanticCriteria.map(({ index, criterion }) => ({
-                  index,
-                  concept: criterion.concept,
-                })),
-              }),
-            },
-          ],
-          text: {
-            format: {
-              type: 'json_schema',
-              name: 'criteria_grading_result',
-              strict: true,
-              schema: GRADER_JSON_SCHEMA,
-            },
-          },
-          store: false,
-          stream: false,
-          ...samplingParamsFor(model, { temperature: 0 }),
-          max_output_tokens: resolveMaxOutputTokens(),
-        },
-        { maxRetries: 0, timeout: resolveOpenAiRequestTimeoutMs() },
-      ),
+      completeStructuredWithUsage({
+        model,
+        system: GRADER_SYSTEM_PROMPT,
+        user: buildUserMessage({
+          prompt: params.prompt,
+          responseText: params.responseText,
+          criteria: params.semanticCriteria.map(({ index, criterion }) => ({
+            index,
+            concept: criterion.concept,
+          })),
+        }),
+        schemaName: 'criteria_grading_result',
+        schema: GRADER_JSON_SCHEMA,
+        maxOutputTokens: resolveMaxOutputTokens(),
+        temperature: 0,
+        requestOptions: { maxRetries: 0, timeoutMs: resolveOpenAiRequestTimeoutMs() },
+      }),
     { runtime: 'responses', label: 'criteria-grader.create' },
   );
 
-  const text = extractAssistantText(res);
   const parsedJson = JSON.parse(text) as unknown;
   const parsed = graderResponseSchema.parse(parsedJson);
   return parsed.verdicts;

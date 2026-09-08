@@ -1,21 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * B0-515 — a controllable `client.responses.create`, used only by the "context carry" describe
- * block below to exercise the REAL `defaultRunLlm` (i.e. calling `classifyUserIntent` with its
- * default deps, not an injected `runLlm`) and inspect exactly what gets sent to the model. Every
- * other describe block in this file injects its own `runLlm` and never touches this mock.
+ * B0-515 — a controllable model call, used only by the "context carry" and B0-908 describe blocks
+ * below to exercise the REAL `defaultRunLlm` (i.e. calling `classifyUserIntent` with its default
+ * deps, not an injected `runLlm`) and inspect exactly what gets sent to the model. Every other
+ * describe block in this file injects its own `runLlm` and never touches this mock.
+ *
+ * B0-908 — the seam is `completeStructuredWithUsage` (`~/lib/llm/structured-completion`), which
+ * routes on the resolved model id, not `client.responses.create`; the classifier itself never
+ * touches a provider SDK any more.
  */
-const responsesCreateMock = vi.fn();
-vi.mock('~/lib/openai/client', async (importOriginal) => {
-  // B0-786 — `resolveRouterModel` puts the settings TAG through the real `resolveResponsesModel`,
-  // so that export must stay genuine here; only the client itself is stubbed.
-  const actual = await importOriginal<typeof import('~/lib/openai/client')>();
+const completeStructuredMock = vi.fn();
+vi.mock('~/lib/llm/structured-completion', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('~/lib/llm/structured-completion')>();
   return {
     ...actual,
-    getOpenAIClient: () => ({
-      responses: { create: (...args: unknown[]) => responsesCreateMock(...args) },
-    }),
+    completeStructuredWithUsage: (...args: unknown[]) => completeStructuredMock(...args),
   };
 });
 
@@ -42,6 +42,7 @@ import {
   DEFAULT_BEX_ROUTER_MODEL_TAG,
   DEFAULT_BEX_ROUTER_TIMEOUT_MS,
   getIntentClassifierCacheStats,
+  INTENT_CLASSIFIER_MAX_OUTPUT_TOKENS,
   intentClassificationSchema,
   isLlmRouterEnabled,
   isLlmRouterShadowMode,
@@ -56,7 +57,7 @@ const ORIGINAL_ENV = { ...process.env };
 
 beforeEach(() => {
   resetIntentClassifierCache();
-  responsesCreateMock.mockReset();
+  completeStructuredMock.mockReset();
   vi.mocked(getBooleanSetting).mockImplementation((_key, fallback) => Promise.resolve(fallback));
   vi.mocked(getStringSetting).mockImplementation((_key, fallback) => Promise.resolve(fallback));
   vi.mocked(getNumberSetting).mockImplementation((_key, fallback) => Promise.resolve(fallback));
@@ -523,21 +524,40 @@ describe('classifyUserIntent — B0-515 entity extraction', () => {
   });
 });
 
+/** The request object `defaultRunLlm` hands to `completeStructuredWithUsage`. */
+type StructuredRequest = {
+  model: string;
+  system: string;
+  user: string;
+  priorMessages?: ReadonlyArray<{ role: 'user' | 'assistant'; content: string }>;
+  schemaName: string;
+  schema: Record<string, unknown>;
+  maxOutputTokens: number;
+  temperature?: number;
+  requestOptions?: { maxRetries?: number; timeoutMs?: number; signal?: AbortSignal };
+};
+
+function structuredCall(index = 0): StructuredRequest {
+  return completeStructuredMock.mock.calls[index]?.[0] as StructuredRequest;
+}
+
 /**
  * B0-515 — conversational context carry. The tests above always inject their own `runLlm`, which
  * proves `priorMessages` reaches the DEPS INTERFACE but never proves the real implementation
  * (`defaultRunLlm`) actually forwards prior turns to the model, or how it shapes them. These tests
- * call `classifyUserIntent` with its default deps and inspect the real `client.responses.create`
- * payload built by `defaultRunLlm`.
+ * call `classifyUserIntent` with its default deps and inspect the real request built by
+ * `defaultRunLlm`.
+ *
+ * B0-908 — prior turns travel as the helper's `priorMessages` (`{ role, content }`), which the
+ * helper emits as `{ role, content, type: 'message' }` Responses `input` items ahead of `user` —
+ * the same bytes the classifier's own `client.responses.create` call sent before.
  */
 describe('classifyUserIntent — B0-515 conversational context carry (default deps)', () => {
   beforeEach(() => {
-    responsesCreateMock.mockResolvedValue({
-      output_text: JSON.stringify(llmResult),
-    });
+    completeStructuredMock.mockResolvedValue({ text: JSON.stringify(llmResult), usage: USAGE });
   });
 
-  it('replays prior turns to the model, oldest-first, ending with the current message', async () => {
+  it('replays prior turns to the model, oldest-first, with the current message as `user`', async () => {
     const priorMessages: PriorTurnMessage[] = [
       { id: 'm1', role: 'user', content: 'What do you recommend for a locker room floor?' },
       { id: 'm2', role: 'assistant', content: 'A neutral disinfectant cleaner works well there.' },
@@ -545,26 +565,21 @@ describe('classifyUserIntent — B0-515 conversational context carry (default de
 
     await classifyUserIntent('And what about the shower stalls specifically?', priorMessages);
 
-    expect(responsesCreateMock).toHaveBeenCalledTimes(1);
-    const call = responsesCreateMock.mock.calls[0]?.[0] as { input: unknown[] };
-    expect(call.input).toEqual([
-      { role: 'user', content: 'What do you recommend for a locker room floor?', type: 'message' },
-      {
-        role: 'assistant',
-        content: 'A neutral disinfectant cleaner works well there.',
-        type: 'message',
-      },
-      { role: 'user', content: 'And what about the shower stalls specifically?', type: 'message' },
+    expect(completeStructuredMock).toHaveBeenCalledTimes(1);
+    const call = structuredCall();
+    expect(call.priorMessages).toEqual([
+      { role: 'user', content: 'What do you recommend for a locker room floor?' },
+      { role: 'assistant', content: 'A neutral disinfectant cleaner works well there.' },
     ]);
+    expect(call.user).toBe('And what about the shower stalls specifically?');
   });
 
   it('sends only the current message when no prior turns are supplied', async () => {
     await classifyUserIntent('What is the dilution ratio for Fight Bac RTU?', []);
 
-    const call = responsesCreateMock.mock.calls[0]?.[0] as { input: unknown[] };
-    expect(call.input).toEqual([
-      { role: 'user', content: 'What is the dilution ratio for Fight Bac RTU?', type: 'message' },
-    ]);
+    const call = structuredCall();
+    expect(call.priorMessages).toEqual([]);
+    expect(call.user).toBe('What is the dilution ratio for Fight Bac RTU?');
   });
 
   it('caps replayed history to the most recent 8 prior turns (MAX_PRIOR_MESSAGES)', async () => {
@@ -576,11 +591,11 @@ describe('classifyUserIntent — B0-515 conversational context carry (default de
 
     await classifyUserIntent('current turn', priorMessages);
 
-    const call = responsesCreateMock.mock.calls[0]?.[0] as { input: Array<{ content: string }> };
-    // 8 capped prior turns + the current message = 9. The two oldest ("turn 0", "turn 1") are
-    // dropped, proving this is a genuine cap and not an accidental no-op.
-    expect(call.input).toHaveLength(9);
-    expect(call.input.map((m) => m.content)).toEqual([
+    const call = structuredCall();
+    // The two oldest ("turn 0", "turn 1") are dropped, proving this is a genuine cap and not an
+    // accidental no-op; roles survive the mapping.
+    expect(call.priorMessages).toHaveLength(8);
+    expect(call.priorMessages?.map((m) => m.content)).toEqual([
       'turn 2',
       'turn 3',
       'turn 4',
@@ -589,8 +604,18 @@ describe('classifyUserIntent — B0-515 conversational context carry (default de
       'turn 7',
       'turn 8',
       'turn 9',
-      'current turn',
     ]);
+    expect(call.priorMessages?.map((m) => m.role)).toEqual([
+      'user',
+      'assistant',
+      'user',
+      'assistant',
+      'user',
+      'assistant',
+      'user',
+      'assistant',
+    ]);
+    expect(call.user).toBe('current turn');
   });
 
   it('filters out blank/whitespace-only prior turns before replaying them', async () => {
@@ -602,23 +627,110 @@ describe('classifyUserIntent — B0-515 conversational context carry (default de
 
     await classifyUserIntent('the current question', priorMessages);
 
-    const call = responsesCreateMock.mock.calls[0]?.[0] as { input: Array<{ content: string }> };
-    expect(call.input.map((m) => m.content)).toEqual(['a real question', 'the current question']);
+    const call = structuredCall();
+    expect(call.priorMessages).toEqual([{ role: 'user', content: 'a real question' }]);
+    expect(call.user).toBe('the current question');
   });
 
   it('changes what the model receives when priorMessages changes, for an otherwise identical current message', async () => {
     await classifyUserIntent('follow-up question', [
       { id: 'a', role: 'user', content: 'context A' },
     ]);
-    const firstCallInput = responsesCreateMock.mock.calls[0]?.[0] as { input: unknown[] };
-
     await classifyUserIntent('follow-up question', [
       { id: 'b', role: 'user', content: 'context B' },
     ]);
-    const secondCallInput = responsesCreateMock.mock.calls[1]?.[0] as { input: unknown[] };
 
     // Same current message, different prior turn — the payload sent to the model differs, which
     // is the mechanism by which a follow-up question actually inherits earlier context.
-    expect(firstCallInput.input).not.toEqual(secondCallInput.input);
+    expect(structuredCall(0).user).toBe(structuredCall(1).user);
+    expect(structuredCall(0).priorMessages).not.toEqual(structuredCall(1).priorMessages);
+  });
+});
+
+/**
+ * B0-908 — the classifier is provider-neutral: it hands `completeStructuredWithUsage` the resolved
+ * model id and the helper decides which API to call. What the classifier owns is that the SAME
+ * system prompt, schema, cap and transport knobs go out regardless of provider.
+ */
+describe('classifyUserIntent — B0-908 provider-neutral call (default deps)', () => {
+  beforeEach(() => {
+    completeStructuredMock.mockResolvedValue({ text: JSON.stringify(llmResult), usage: USAGE });
+  });
+
+  it('calls the helper with the resolved claude-sonnet-5 id when BEX_ROUTER_MODEL holds that tag', async () => {
+    vi.mocked(getStringSetting).mockImplementation((key, fallback) =>
+      Promise.resolve(key === 'BEX_ROUTER_MODEL' ? 'claude-sonnet-5' : fallback),
+    );
+
+    const out = await classifyUserIntent('strip and recoat this VCT floor', []);
+
+    expect(completeStructuredMock).toHaveBeenCalledTimes(1);
+    const call = structuredCall();
+    // An Anthropic tag IS the model id (`resolveResponsesModel` passes it through), so the helper's
+    // `modelProviderFor` sees `claude-sonnet-5` and takes the Anthropic Messages path.
+    expect(call.model).toBe('claude-sonnet-5');
+    expect(out.source).toBe('llm');
+    expect(out.model).toBe('claude-sonnet-5');
+    expect(out.usage).toEqual(USAGE);
+  });
+
+  it('sends the same prompt bytes, strict schema, cap and transport options for every provider', async () => {
+    await classifyUserIntent('strip and recoat this VCT floor', []);
+    const openai = structuredCall(0);
+
+    resetIntentClassifierCache();
+    vi.mocked(getStringSetting).mockImplementation((key, fallback) =>
+      Promise.resolve(key === 'BEX_ROUTER_MODEL' ? 'claude-sonnet-5' : fallback),
+    );
+    await classifyUserIntent('strip and recoat this VCT floor', []);
+    const anthropic = structuredCall(1);
+
+    expect(openai.model).toBe('gpt-4.1');
+    expect(anthropic.model).toBe('claude-sonnet-5');
+    for (const call of [openai, anthropic]) {
+      expect(call.system).toContain('Routing rules (apply in order):');
+      expect(call.schemaName).toBe('intent_classification');
+      expect(call.schema).toMatchObject({ type: 'object', additionalProperties: false });
+      expect(call.maxOutputTokens).toBe(INTENT_CLASSIFIER_MAX_OUTPUT_TOKENS);
+      expect(call.temperature).toBe(0);
+      expect(call.requestOptions).toMatchObject({ maxRetries: 0, timeoutMs: DEFAULT_BEX_ROUTER_TIMEOUT_MS });
+      expect(call.requestOptions?.signal).toBeInstanceOf(AbortSignal);
+    }
+    expect(openai.system).toBe(anthropic.system);
+    expect(openai.user).toBe(anthropic.user);
+    expect(openai.priorMessages).toEqual(anthropic.priorMessages);
+    expect(openai.schema).toEqual(anthropic.schema);
+  });
+
+  it("forwards withRouterTimeout's abort signal, so a raced-out request is cancelled at the SDK", async () => {
+    vi.mocked(getNumberSetting).mockImplementation((key, fallback) =>
+      Promise.resolve(key === 'BEX_ROUTER_TIMEOUT_MS' ? 10 : fallback),
+    );
+    let seen: AbortSignal | undefined;
+    completeStructuredMock.mockImplementation(
+      (request: StructuredRequest) =>
+        new Promise((resolve) => {
+          seen = request.requestOptions?.signal;
+          setTimeout(() => resolve({ text: JSON.stringify(llmResult), usage: USAGE }), 100);
+        }),
+    );
+
+    const out = await classifyUserIntent('calibrate the dispenser tip chart', []);
+
+    expect(out.source).toBe('keyword_fallback');
+    expect(out.fallbackReason).toContain('router timeout');
+    expect(seen).toBeInstanceOf(AbortSignal);
+    expect(seen?.aborted).toBe(true);
+  });
+
+  it('routes a truncated structured answer to the keyword fallback, like any unparseable payload', async () => {
+    const { StructuredOutputTruncatedError } = await import('~/lib/llm/structured-completion');
+    completeStructuredMock.mockRejectedValue(new StructuredOutputTruncatedError());
+
+    const out = await classifyUserIntent('what is the SDS hazard rating for this cleaner', []);
+
+    expect(out.source).toBe('keyword_fallback');
+    expect(out.intent).toBe('ambiguous');
+    expect(out.fallbackReason).toContain('max_output_tokens');
   });
 });

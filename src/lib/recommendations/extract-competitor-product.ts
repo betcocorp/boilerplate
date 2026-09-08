@@ -1,8 +1,9 @@
 import { z } from 'zod';
 
-import { getOpenAIClient, resolveResponsesModel } from '~/lib/openai/client';
-import { extractAssistantText } from '~/lib/openai/response-item-parsing';
-import { usageFromResponse, type LlmTokenUsage } from '~/lib/openai/responses-runtime';
+import { completeStructuredWithUsage } from '~/lib/llm/structured-completion';
+import { resolveResponsesModel } from '~/lib/openai/client';
+import type { LlmTokenUsage } from '~/lib/openai/responses-runtime';
+import { resolveMaxOutputTokens } from '~/lib/workflows/product-support/max-output-tokens';
 
 /** B0-563 — zero usage for the fallback (no-model-call) path; never null so callers can sum unconditionally. */
 const ZERO_USAGE: LlmTokenUsage = {
@@ -84,31 +85,33 @@ const JSON_SCHEMA = {
   required: ['brand', 'product', 'otherCompetitorProduct'],
 } as const;
 
+/** Resolved model id: dedicated env override, else whatever the `preview` tag resolves to. */
+export async function resolveCompetitorExtractModel(): Promise<string> {
+  return process.env.XREF_COMPETITOR_EXTRACT_MODEL?.trim() || resolveResponsesModel('preview');
+}
+
+/**
+ * B0-908 — goes through `completeStructuredWithUsage`, which routes on the resolved model id
+ * (`claude-*` → Anthropic, otherwise OpenAI Responses). The previous direct call sent no output cap;
+ * the shared `resolveMaxOutputTokens()` ceiling is far above what three short strings need. A
+ * truncated or refused answer throws, which `extractCompetitorProduct` turns into its raw-message
+ * fallback exactly as a parse failure was before.
+ */
 async function defaultRunLlm(
   userMessage: string,
 ): Promise<{ parsed: z.infer<typeof extractedCompetitorSchema>; usage: LlmTokenUsage }> {
-  const client = getOpenAIClient();
-  const res = await client.responses.create({
-    model:
-      process.env.XREF_COMPETITOR_EXTRACT_MODEL?.trim() ||
-      (await resolveResponsesModel('preview')),
-    instructions: SYSTEM_PROMPT,
-    input: [{ role: 'user', content: userMessage, type: 'message' }],
-    text: {
-      format: {
-        type: 'json_schema',
-        name: 'competitor_extract',
-        strict: true,
-        schema: JSON_SCHEMA,
-      },
-    },
-    store: false,
-    stream: false,
+  const { text, usage } = await completeStructuredWithUsage({
+    model: await resolveCompetitorExtractModel(),
+    system: SYSTEM_PROMPT,
+    user: userMessage,
+    schemaName: 'competitor_extract',
+    schema: JSON_SCHEMA,
+    maxOutputTokens: resolveMaxOutputTokens(),
     temperature: 0,
   });
   return {
-    parsed: extractedCompetitorSchema.parse(JSON.parse(extractAssistantText(res))),
-    usage: usageFromResponse(res),
+    parsed: extractedCompetitorSchema.parse(JSON.parse(text)),
+    usage,
   };
 }
 

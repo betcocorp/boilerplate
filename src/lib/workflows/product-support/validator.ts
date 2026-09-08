@@ -1,7 +1,12 @@
 import { isBexModelTag, type BexModelTag } from '~/lib/constants/models';
-import { getOpenAIClient, resolveResponsesModel } from '~/lib/openai/client';
-import { samplingParamsFor } from '~/lib/openai/model-capabilities';
-import { extractAssistantText } from '~/lib/openai/response-item-parsing';
+import {
+  completeStructuredWithUsage,
+  completeTextWithUsage,
+  StructuredOutputRefusedError,
+  StructuredOutputTruncatedError,
+  type CompletionResult,
+} from '~/lib/llm/structured-completion';
+import { resolveResponsesModel } from '~/lib/openai/client';
 import type { LlmTokenUsage } from '~/lib/openai/responses-runtime';
 import {
   resolveOpenAiRequestTimeoutMs,
@@ -17,25 +22,26 @@ import {
 import { VALIDATOR_SYSTEM_PROMPT } from '~/lib/workflows/product-support/product-support-prompts';
 
 /**
- * B0-550 — the OpenAI SDK response shape's `usage` field, extracted into the shared
- * `LlmTokenUsage` shape (the same fields `~/lib/openai/responses-runtime.ts`'s `accumulateUsage`
- * reads). Kept loose/duck-typed rather than importing the SDK's `Response` type here, since both
- * call sites below already type their `res` via inference from `client.responses.create`.
+ * B0-908 — both model calls in this file (`runValidatorPass`, `runRevisionPass`) go through
+ * `~/lib/llm/structured-completion`, which routes on the resolved model id: a `claude-*` id is
+ * served by the Anthropic Messages API, anything else by the OpenAI Responses API (`store: false`,
+ * `samplingParamsFor` temperature gating preserved). Usage comes back already in the shared
+ * `LlmTokenUsage` shape, so the B0-550 `extractLlmUsage` adapter is gone.
  */
-function extractLlmUsage(res: {
-  usage?: {
-    input_tokens?: number | null;
-    output_tokens?: number | null;
-    total_tokens?: number | null;
-    input_tokens_details?: { cached_tokens?: number | null } | null;
-  } | null;
-}): LlmTokenUsage {
-  return {
-    promptTokens: res.usage?.input_tokens ?? 0,
-    completionTokens: res.usage?.output_tokens ?? 0,
-    totalTokens: res.usage?.total_tokens ?? 0,
-    cachedPromptTokens: res.usage?.input_tokens_details?.cached_tokens ?? 0,
-  };
+
+/** B0-908 — usage for a call the helper aborted before returning a payload (truncated/refused). */
+const ZERO_USAGE: LlmTokenUsage = {
+  promptTokens: 0,
+  completionTokens: 0,
+  totalTokens: 0,
+  cachedPromptTokens: 0,
+};
+
+/** A structured answer the helper refused to hand back: cut off at the cap, or refused by the model. */
+function isUnusableStructuredOutput(error: unknown): boolean {
+  return (
+    error instanceof StructuredOutputTruncatedError || error instanceof StructuredOutputRefusedError
+  );
 }
 
 // B0-369: `issues` is an UNSUPPORTED-findings-only channel -- it feeds the revision pass, so a
@@ -110,6 +116,9 @@ export const DEFAULT_BEX_VALIDATOR_MODEL_TAG: BexModelTag = 'preview';
  * use. `settings.allowed_values` is advisory metadata the admin API validates writes against, NOT
  * a database constraint, so an unrecognized stored value falls back to the default tag rather
  * than being handed to the API as a non-existent model id.
+ *
+ * B0-908 — `claude-*` tags are valid here: the validator call routes by provider, so the row may
+ * hold either an OpenAI or an Anthropic tag.
  */
 export async function resolveValidatorModelTag(): Promise<BexModelTag> {
   const raw = (
@@ -143,7 +152,6 @@ export async function runValidatorPass(input: {
   evidenceSummary: string;
   modelTag?: string;
 }): Promise<ValidatorPassResult> {
-  const client = getOpenAIClient();
   const model = await resolveValidatorModel(input.modelTag);
 
   const payload = {
@@ -158,47 +166,50 @@ export async function runValidatorPass(input: {
    * `maxRetries: 2` -- see `resolveOpenAiRequestTimeoutMs`'s doc comment). `maxRetries: 0` disables
    * the SDK's own retry in favor of this one. This call previously had NEITHER a timeout NOR any
    * retry policy at all, which is exactly the shape of the observed 2,000-6,200-second stalls.
+   *
+   * B0-908 — the call itself is `completeStructuredWithUsage` (provider-routed, see the module
+   * comment). A truncated or refused structured answer is the same unusable payload an unparseable
+   * one always was, so it takes the parse-failure path below rather than failing the turn; the
+   * `runtime: 'responses'` label on the retry wrapper is a log tag only.
    */
-  const res = await retryTransportFaults(
-    () =>
-      client.responses.create(
-        {
+  let completion: CompletionResult;
+  try {
+    completion = await retryTransportFaults(
+      () =>
+        completeStructuredWithUsage({
           model,
-          instructions: VALIDATOR_SYSTEM_PROMPT,
-          input: [
-            {
-              role: 'user',
-              content: JSON.stringify(payload),
-              type: 'message',
-            },
-          ],
-          text: {
-            format: {
-              type: 'json_schema',
-              name: 'validation_result',
-              strict: true,
-              schema: VALIDATION_JSON_SCHEMA,
-            },
-          },
-          store: false,
-          stream: false,
-          // B0-606 — omitted for models that reject it (gpt-5.5/gpt-5.6/o-series). Determinism
-          // still matters here, so every model that DOES accept it keeps temperature 0.
-          ...samplingParamsFor(model, { temperature: 0 }),
-          max_output_tokens: resolveMaxOutputTokens(),
-        },
-        { maxRetries: 0, timeout: resolveOpenAiRequestTimeoutMs() },
-      ),
-    { runtime: 'responses', label: 'validator.create' },
-  );
+          system: VALIDATOR_SYSTEM_PROMPT,
+          user: JSON.stringify(payload),
+          schemaName: 'validation_result',
+          schema: VALIDATION_JSON_SCHEMA,
+          // B0-606 — the helper omits temperature for models that reject it (gpt-5.5/gpt-5.6/
+          // o-series, every Anthropic id). Determinism still matters here, so every model that
+          // DOES accept it keeps temperature 0.
+          temperature: 0,
+          maxOutputTokens: resolveMaxOutputTokens(),
+          requestOptions: { maxRetries: 0, timeoutMs: resolveOpenAiRequestTimeoutMs() },
+        }),
+      { runtime: 'responses', label: 'validator.create' },
+    );
+  } catch (error) {
+    if (isUnusableStructuredOutput(error)) {
+      return {
+        approved: false,
+        confidence: 0,
+        issues: ['validator_output_parse_failed'],
+        requires_human_review: true,
+        usage: ZERO_USAGE,
+      };
+    }
+    throw error;
+  }
 
   // B0-554 — captured before the parse try/catch: the API call itself succeeded either way, so
   // usage is real even on the parse-failure fallback below.
-  const usage = extractLlmUsage(res);
+  const usage = completion.usage;
 
   try {
-    const text = extractAssistantText(res);
-    const parsed = JSON.parse(text) as unknown;
+    const parsed = JSON.parse(completion.text) as unknown;
     const result = validatorResultSchema.parse(parsed);
     // B0-369: keep `issues` to genuine findings even if the model narrates a confirmation there.
     const partitioned = partitionValidatorIssues(result.issues);
@@ -919,40 +930,35 @@ export async function runRevisionPass(input: {
   evidenceSummary: string;
   modelTag?: string;
 }): Promise<RevisionPassResult> {
-  const client = getOpenAIClient();
   const model = await resolveRevisionModel(input.modelTag);
 
   // B0-550 — same bounded retry + explicit timeout as `runValidatorPass`; see its comment above.
-  const res = await retryTransportFaults(
-    () =>
-      client.responses.create(
-        {
+  // B0-908 — free-text call through `completeTextWithUsage` (provider-routed). A cut-off revision
+  // is still returned, as before; a model refusal comes back as empty text, which the workflow
+  // already treats as "revision refused, keep the draft" (`revisionRefused`).
+  try {
+    const completion = await retryTransportFaults(
+      () =>
+        completeTextWithUsage({
           model,
-          instructions: REVISION_SYSTEM_PROMPT,
-          input: [
-            {
-              role: 'user',
-              content: JSON.stringify({
-                draft: input.draftAnswer,
-                issues: input.validatorIssues,
-                evidence_summary: input.evidenceSummary,
-              }),
-              type: 'message',
-            },
-          ],
-          store: false,
-          stream: false,
+          system: REVISION_SYSTEM_PROMPT,
+          user: JSON.stringify({
+            draft: input.draftAnswer,
+            issues: input.validatorIssues,
+            evidence_summary: input.evidenceSummary,
+          }),
           // B0-606 — same gating as the validator pass above.
-          ...samplingParamsFor(model, { temperature: 0.2 }),
-          max_output_tokens: resolveMaxOutputTokens(),
-        },
-        { maxRetries: 0, timeout: resolveOpenAiRequestTimeoutMs() },
-      ),
-    { runtime: 'responses', label: 'revision.create' },
-  );
-
-  return {
-    text: extractAssistantText(res),
-    usage: extractLlmUsage(res),
-  };
+          temperature: 0.2,
+          maxOutputTokens: resolveMaxOutputTokens(),
+          requestOptions: { maxRetries: 0, timeoutMs: resolveOpenAiRequestTimeoutMs() },
+        }),
+      { runtime: 'responses', label: 'revision.create' },
+    );
+    return { text: completion.text, usage: completion.usage };
+  } catch (error) {
+    if (error instanceof StructuredOutputRefusedError) {
+      return { text: '', usage: ZERO_USAGE };
+    }
+    throw error;
+  }
 }

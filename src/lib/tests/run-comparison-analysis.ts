@@ -9,7 +9,12 @@
  */
 import { z } from 'zod';
 
-import { getOpenAIClient, resolveResponsesModel } from '~/lib/openai/client';
+import {
+  completeStructuredWithUsage,
+  StructuredOutputRefusedError,
+  StructuredOutputTruncatedError,
+} from '~/lib/llm/structured-completion';
+import { resolveResponsesModel } from '~/lib/openai/client';
 
 import type { RunComparisonDiff } from './run-comparison-diff';
 import type { RunComparisonVerdict } from './types';
@@ -64,6 +69,38 @@ export const runComparisonAnalysisSchema = z.object({
 
 export type RunComparisonFailureAnalysis = z.infer<typeof runComparisonFailureAnalysisSchema>;
 export type RunComparisonAnalysis = z.infer<typeof runComparisonAnalysisSchema>;
+
+/**
+ * B0-908 — strict JSON schema mirroring `runComparisonAnalysisSchema`, hand-written because strict
+ * structured output takes no `minLength`; the Zod `safeParse` below still enforces non-empty
+ * strings. Replaces the old `response_format: json_object` chat-completions call so the same
+ * request can go to either provider.
+ */
+export const RUN_COMPARISON_ANALYSIS_JSON_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    verdict: { type: 'string', enum: ['improved', 'regressed', 'flat'] },
+    verdictSummary: { type: 'string' },
+    failures: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          testItemId: { type: 'string' },
+          cause: { type: 'string' },
+          fix: { type: 'string' },
+        },
+        required: ['testItemId', 'cause', 'fix'],
+      },
+    },
+  },
+  required: ['verdict', 'verdictSummary', 'failures'],
+} as const;
+
+/** Same cap the previous chat-completions call sent as `max_tokens`. */
+const ANALYSIS_MAX_OUTPUT_TOKENS = 3000;
 
 export type AnalyzeRunComparisonResult =
   | { ok: true; analysis: RunComparisonAnalysis }
@@ -135,6 +172,10 @@ function deterministicVerdict(diff: RunComparisonDiff): { verdict: RunComparison
  * Runs the cause/fix analysis for one comparison. Skips the LLM call entirely when there are no new
  * failures to explain — the verdict in that case is unambiguous from the diff alone, so spending a
  * model call on it would be pure cost with no judgment to add.
+ *
+ * B0-908 — the model call goes through `completeStructuredWithUsage`, which routes on the resolved
+ * model id (`claude-*` → Anthropic, otherwise OpenAI Responses). A truncated or refused answer is
+ * reported as `parse_error`, the same outcome an unparseable body produced before.
  */
 export async function analyzeRunComparison(params: {
   diff: RunComparisonDiff;
@@ -148,21 +189,31 @@ export async function analyzeRunComparison(params: {
   }
 
   const userContent = buildComparisonAnalysisPayload(params);
-  const openai = getOpenAIClient();
   const model = await resolveResponsesModel(undefined);
 
-  const completion = await openai.chat.completions.create({
-    model,
-    response_format: { type: 'json_object' },
-    messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
-      { role: 'user', content: userContent },
-    ],
-    temperature: 0.2,
-    max_tokens: 3000,
-  });
+  let raw: string;
+  try {
+    raw = (
+      await completeStructuredWithUsage({
+        model,
+        system: SYSTEM_PROMPT,
+        user: userContent,
+        schemaName: 'run_comparison_analysis',
+        schema: RUN_COMPARISON_ANALYSIS_JSON_SCHEMA,
+        maxOutputTokens: ANALYSIS_MAX_OUTPUT_TOKENS,
+        temperature: 0.2,
+      })
+    ).text;
+  } catch (error) {
+    if (
+      error instanceof StructuredOutputTruncatedError ||
+      error instanceof StructuredOutputRefusedError
+    ) {
+      return { ok: false, reason: 'parse_error' };
+    }
+    throw error;
+  }
 
-  const raw = completion.choices[0]?.message?.content ?? '{}';
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);

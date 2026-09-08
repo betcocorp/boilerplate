@@ -1,6 +1,5 @@
-import { getOpenAIClient, resolveResponsesModel } from '~/lib/openai/client';
-import { samplingParamsFor } from '~/lib/openai/model-capabilities';
-import { extractAssistantText } from '~/lib/openai/response-item-parsing';
+import { completeStructuredWithUsage } from '~/lib/llm/structured-completion';
+import { resolveResponsesModel } from '~/lib/openai/client';
 import {
   resolveOpenAiRequestTimeoutMs,
   retryTransportFaults,
@@ -18,7 +17,7 @@ import {
  * in `./grading.ts`) when a negative-expectation row's response matched neither the app's own
  * canonical decline copy nor the phrase/regex heuristics. Same model-resolution convention as the
  * criteria grader (`~/lib/tests/criteria-grader.ts`): a dedicated env var wins, otherwise the
- * standard Responses model resolution.
+ * standard Responses model resolution. A `claude-*` id works — the call routes by provider (B0-908).
  */
 export async function resolveDeclineGraderModel(modelTag?: string): Promise<string> {
   return (
@@ -72,54 +71,37 @@ export type SemanticDeclineCheckInput = {
 };
 
 /**
- * One structured-output Responses API call judging whether `responseText` is substantively a
- * decline. Throws on transport/parse failure — callers (`gradeChatTestResponseAsync`) decide how
+ * One structured-output call through `completeStructuredWithUsage` (B0-908: routes by provider on
+ * the resolved model id) judging whether `responseText` is substantively a
+ * decline. Throws on transport/parse failure (a truncated or refused answer throws too) — callers (`gradeChatTestResponseAsync`) decide how
  * to fall back, rather than this function silently guessing a verdict.
  */
 export async function gradeSemanticDecline(
   input: SemanticDeclineCheckInput,
 ): Promise<SemanticDeclineVerdict> {
-  const client = getOpenAIClient();
   const model = await resolveDeclineGraderModel(input.modelTag);
 
-  const res = await retryTransportFaults(
+  const { text } = await retryTransportFaults(
     () =>
-      client.responses.create(
-        {
-          model,
-          instructions: DECLINE_GRADER_SYSTEM_PROMPT,
-          input: [
-            {
-              role: 'user',
-              type: 'message',
-              content: buildUserMessage({
-                prompt: input.prompt,
-                responseText: input.responseText,
-                idealResponse: input.idealResponse,
-                expectedConcepts: input.expectedConcepts,
-                minimumConcepts: input.minimumConcepts,
-              }),
-            },
-          ],
-          text: {
-            format: {
-              type: 'json_schema',
-              name: 'semantic_decline_grading_result',
-              strict: true,
-              schema: DECLINE_GRADER_JSON_SCHEMA,
-            },
-          },
-          store: false,
-          stream: false,
-          ...samplingParamsFor(model, { temperature: 0 }),
-          max_output_tokens: resolveMaxOutputTokens(),
-        },
-        { maxRetries: 0, timeout: resolveOpenAiRequestTimeoutMs() },
-      ),
+      completeStructuredWithUsage({
+        model,
+        system: DECLINE_GRADER_SYSTEM_PROMPT,
+        user: buildUserMessage({
+          prompt: input.prompt,
+          responseText: input.responseText,
+          idealResponse: input.idealResponse,
+          expectedConcepts: input.expectedConcepts,
+          minimumConcepts: input.minimumConcepts,
+        }),
+        schemaName: 'semantic_decline_grading_result',
+        schema: DECLINE_GRADER_JSON_SCHEMA,
+        maxOutputTokens: resolveMaxOutputTokens(),
+        temperature: 0,
+        requestOptions: { maxRetries: 0, timeoutMs: resolveOpenAiRequestTimeoutMs() },
+      }),
     { runtime: 'responses', label: 'decline-grader.create' },
   );
 
-  const text = extractAssistantText(res);
   const parsedJson = JSON.parse(text) as unknown;
   return semanticDeclineVerdictSchema.parse(parsedJson);
 }

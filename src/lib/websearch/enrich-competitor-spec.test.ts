@@ -1,5 +1,20 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+const { mockComplete, mockResolveModel } = vi.hoisted(() => ({
+  mockComplete: vi.fn(),
+  mockResolveModel: vi.fn(async () => 'gpt-test'),
+}));
+vi.mock('~/lib/llm/structured-completion', () => ({
+  completeStructuredWithUsage: mockComplete,
+}));
+vi.mock('~/lib/openai/client', () => ({
+  resolveResponsesModel: mockResolveModel,
+}));
+vi.mock('~/lib/workflows/product-support/max-output-tokens', () => ({
+  resolveMaxOutputTokens: () => 1200,
+}));
+
+import { wrapUntrustedWebEvidence } from '~/lib/recommendations/recommendation-guardrails';
 import {
   enrichCompetitorSpec,
   type LlmCompetitorSpecFill,
@@ -79,5 +94,68 @@ describe('enrichCompetitorSpec (B0-86)', () => {
     expect(spec.provenance.formFactor).toBeNull();
     expect(spec.dilutionOzPerGal).toBeNull();
     expect(spec.provenance.dilutionOzPerGal).toBeNull();
+  });
+});
+
+/**
+ * B0-908 — the default `runLlm` goes through the provider-neutral `completeStructuredWithUsage`, so
+ * a `claude-*` id resolved for the `preview` tag is sent as-is, with the same fenced (B0-91) user
+ * payload and strict schema the OpenAI call carried. Any failure still degrades to heuristic-only.
+ */
+describe('enrichCompetitorSpec — default runLlm (B0-908)', () => {
+  const USAGE = { promptTokens: 1, completionTokens: 1, totalTokens: 2, cachedPromptTokens: 0 };
+  const TEXT = 'Some product page with no chemistry terms.';
+  const SOURCES = [{ url: 'https://a', title: 'A' }];
+
+  beforeEach(() => {
+    mockComplete.mockReset();
+    mockResolveModel.mockReset();
+    mockResolveModel.mockResolvedValue('claude-sonnet-5');
+    delete process.env.XREF_SPEC_ENRICH_MODEL;
+  });
+
+  it('calls completeStructuredWithUsage with the resolved claude id, fenced content and the fill schema', async () => {
+    mockComplete.mockResolvedValue({
+      text: JSON.stringify({ ...EMPTY, productCategory: 'disinfectant', sourceUrl: 'https://a' }),
+      usage: USAGE,
+    });
+
+    const spec = await enrichCompetitorSpec({ text: TEXT, sources: SOURCES });
+
+    expect(mockResolveModel).toHaveBeenCalledWith('preview');
+    expect(mockComplete).toHaveBeenCalledOnce();
+    const request = mockComplete.mock.calls[0][0];
+    expect(request).toMatchObject({
+      model: 'claude-sonnet-5',
+      user: JSON.stringify({ content: wrapUntrustedWebEvidence(TEXT), sources: SOURCES }),
+      schemaName: 'competitor_spec_fill',
+      maxOutputTokens: 1200,
+      temperature: 0,
+    });
+    expect(request.system).toContain('You extract a structured cleaning-product spec');
+    expect(request.schema.required).toEqual([
+      'chemistryClass',
+      'epaRegistration',
+      'contactTimeSeconds',
+      'dilutionOzPerGal',
+      'productCategory',
+      'primaryUse',
+      'formFactor',
+      'keyClaims',
+      'sourceUrl',
+    ]);
+    expect(request.schema.additionalProperties).toBe(false);
+    expect(spec.productCategory).toBe('disinfectant');
+    expect(spec.provenance.productCategory).toEqual({ source: 'llm', sourceUrl: 'https://a' });
+  });
+
+  it('degrades to heuristic-only when the helper throws', async () => {
+    mockComplete.mockRejectedValue(new Error('model refused the request'));
+
+    const spec = await enrichCompetitorSpec({ text: HEURISTIC_TEXT, sources: SOURCES });
+
+    expect(spec.chemistryClass).toBe('quat');
+    expect(spec.productCategory).toBeNull();
+    expect(spec.keyClaims).toEqual([]);
   });
 });

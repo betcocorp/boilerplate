@@ -81,6 +81,9 @@ const STRING_SETTINGS = [
   // process.env per B0-638. BEX_ROUTER_TIMEOUT_MS is numeric (this list renders string and number).
   'BEX_ROUTER_MODEL',
   'BEX_ROUTER_TIMEOUT_MS',
+  // B0-908 — validator model tag (row seeded by B0-603 but never registered here). Renders as a
+  // select over allowed_values, which now includes the claude-* equivalents.
+  'BEX_VALIDATOR_MODEL',
   // B0-757/B0-831 — the BEX_MODEL_TAGS tag the "preview" tag resolves to (resolveResponsesModel).
   // Renders as a select like BEX_ROUTER_MODEL: allowed_values = the enum minus `preview`.
   'BEX_RESPONSES_MODEL',

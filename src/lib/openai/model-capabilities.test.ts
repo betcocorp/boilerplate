@@ -40,6 +40,21 @@ describe('supportsSamplingControls (B0-606)', () => {
     }
   });
 
+  it('rejects every Anthropic id, since Opus 5 / Sonnet 5 400 on any sampling control (B0-908)', () => {
+    for (const model of [
+      'claude-haiku-4-5',
+      'claude-sonnet-4-6',
+      'claude-sonnet-5',
+      'claude-opus-4-8',
+      'claude-opus-5',
+      'claude-sonnet-5-20260101',
+      ' Claude-Opus-5 ',
+    ]) {
+      expect(supportsSamplingControls(model), model).toBe(false);
+      expect(samplingParamsFor(model, { temperature: 0 })).toEqual({});
+    }
+  });
+
   it('still allows the gpt-5.x versions that DO accept temperature', () => {
     // The whole reason this is a denylist and not a version regex.
     for (const model of [

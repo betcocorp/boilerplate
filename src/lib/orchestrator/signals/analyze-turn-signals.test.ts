@@ -5,14 +5,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * `ClassifyUserIntentDeps` / `ExtractCompetitorProductDeps` pattern this module follows), so the
  * suite runs with no OpenAI key.
  */
-const responsesCreateMock = vi.fn();
-vi.mock('~/lib/openai/client', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('~/lib/openai/client')>();
+// B0-908 — the one provider seam `defaultRunLlm` uses. Only the "default deps" describe block
+// below reaches it; every other test injects `runLlm`.
+const completeStructuredMock = vi.fn();
+vi.mock('~/lib/llm/structured-completion', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('~/lib/llm/structured-completion')>();
   return {
     ...actual,
-    getOpenAIClient: () => ({
-      responses: { create: (...args: unknown[]) => responsesCreateMock(...args) },
-    }),
+    completeStructuredWithUsage: (...args: unknown[]) => completeStructuredMock(...args),
   };
 });
 
@@ -86,7 +86,7 @@ function deps(overrides: Partial<AnalyzeTurnSignalsDeps> = {}): AnalyzeTurnSigna
 
 beforeEach(() => {
   resetTurnSignalsCache();
-  responsesCreateMock.mockReset();
+  completeStructuredMock.mockReset();
   settingOverrides.clear();
   settingOverrides.set('BEX_SIGNALS_ANALYSIS_ENABLED', true);
 });
@@ -368,6 +368,55 @@ describe('adapters', () => {
     expect(identity.product).toBe('some message');
     expect(identity.resolved).toBe(false);
     expect(identity.brand).toBeNull();
+  });
+});
+
+/**
+ * B0-908 — the real `defaultRunLlm` hands `completeStructuredWithUsage` the resolved
+ * `BEX_ROUTER_MODEL` id; the helper routes on it. These are the only tests in the file that run
+ * without an injected `runLlm`.
+ */
+describe('analyzeTurnSignals — B0-908 provider-neutral call (default deps)', () => {
+  it('calls the helper with claude-sonnet-5 when BEX_ROUTER_MODEL holds that tag, and reports it as the model', async () => {
+    settingOverrides.set('BEX_ROUTER_MODEL', 'claude-sonnet-5');
+    // No Betco product and no cross-reference signal, so the default deps' enrichment resolvers
+    // (which would reach the database) are never invoked — this test is about the model call.
+    completeStructuredMock.mockResolvedValue({
+      text: JSON.stringify({ ...LLM_SIGNALS, betcoProduct: null }),
+      usage: USAGE,
+    });
+
+    const out = await analyzeTurnSignals('strip and recoat this VCT floor', [
+      { id: 'p1', role: 'user', content: 'earlier question' },
+      { id: 'p2', role: 'assistant', content: '  ' },
+      { id: 'p3', role: 'assistant', content: 'earlier answer' },
+    ]);
+
+    expect(completeStructuredMock).toHaveBeenCalledTimes(1);
+    const call = completeStructuredMock.mock.calls[0]?.[0] as {
+      model: string;
+      system: string;
+      user: string;
+      priorMessages?: ReadonlyArray<{ role: string; content: string }>;
+      schemaName: string;
+      temperature?: number;
+      requestOptions?: { maxRetries?: number; timeoutMs?: number; signal?: AbortSignal };
+    };
+    expect(call.model).toBe('claude-sonnet-5');
+    expect(call.schemaName).toBe('turn_signals');
+    expect(call.system).toBe(buildSignalsInstructions());
+    expect(call.user).toBe('strip and recoat this VCT floor');
+    // Same prior-turn items the old Responses `input` carried: blank turn dropped, roles kept.
+    expect(call.priorMessages).toEqual([
+      { role: 'user', content: 'earlier question' },
+      { role: 'assistant', content: 'earlier answer' },
+    ]);
+    expect(call.temperature).toBe(0);
+    expect(call.requestOptions).toMatchObject({ maxRetries: 0, timeoutMs: 5000 });
+    expect(call.requestOptions?.signal).toBeInstanceOf(AbortSignal);
+    expect(out.source).toBe('llm');
+    expect(out.model).toBe('claude-sonnet-5');
+    expect(out.usage).toEqual(USAGE);
   });
 });
 

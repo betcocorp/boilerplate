@@ -127,7 +127,10 @@ vi.mock('~/lib/openai/client', () => ({
   getOpenAIClient: () => ({
     responses: { create: (...args: unknown[]) => openaiResponsesCreateMock(...args) },
   }),
-  resolveResponsesModel: () => 'gpt-test',
+  // B0-908 — tag-aware only for Claude ids so the provider-driven runtime selection is testable;
+  // every OpenAI tag (and no tag) still resolves to the fixed 'gpt-test' the older tests assert.
+  resolveResponsesModel: (tag?: string) =>
+    tag && tag.startsWith('claude-') ? tag : 'gpt-test',
 }));
 
 const runResponsesWithToolLoopMock = vi.fn();
@@ -226,6 +229,7 @@ import {
 import { REVISION_SYSTEM_PROMPT } from '~/lib/workflows/product-support/validator';
 import {
   EARLY_DECLINE_CONFIDENCE,
+  isResponsesApiResponseId,
   runProductSupportWorkflow,
   VALIDATOR_BYPASS_REASON,
 } from '~/lib/workflows/product-support/run-product-support-workflow';
@@ -3110,5 +3114,100 @@ describe('consolidated signals analysis (B0-786)', () => {
     const record = singleGateRecord('signals_analysis');
     expect(record.verdict).toBe('degraded_to_keyword_router');
     expect((record.inputs.signals as Record<string, unknown>).source).toBe('keyword_fallback');
+  });
+});
+
+/* -------------------------------------------------------------------------- *
+ * B0-908 — provider-aware generation runtime selection
+ * -------------------------------------------------------------------------- */
+
+describe('provider-aware runtime selection (B0-908)', () => {
+  it('runs a claude-* model on the AI SDK loop with the flag off, and reports that runtime', async () => {
+    settingOverrides.set('BEX_AI_SDK_GENERATION_ENABLED', false);
+    // Like the real AI SDK runtime, report no OpenAI response id (`generationCalling` fakes the
+    // Responses shape, `resp_final` included).
+    runAiSdkWithToolLoopMock.mockImplementation(async (opts: unknown) => ({
+      ...(await generationCalling([])(opts)),
+      finalResponseId: null,
+    }));
+
+    const out = await run({ modelTag: 'claude-sonnet-5' });
+
+    expect(runAiSdkWithToolLoopMock).toHaveBeenCalledTimes(1);
+    expect(runResponsesWithToolLoopMock).not.toHaveBeenCalled();
+    const call = runAiSdkWithToolLoopMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(call.modelTag).toBe('claude-sonnet-5');
+
+    const prompt = promptRecordSchema.parse(stepInput('openai_responses_agent').prompt);
+    expect(prompt.model).toBe('claude-sonnet-5');
+    expect(prompt.runtime).toBe('ai-sdk');
+    expect(stepInput('openai_responses_agent')).toMatchObject({ model: 'claude-sonnet-5' });
+    // The persisted run config reports the runtime that ran, not the raw settings row.
+    expect(out.runtimeConfig?.aiSdkGenerationEnabled).toBe(true);
+    // No OpenAI response id exists on this path; the synthetic marker keeps the chain populated.
+    expect(out.latestOpenaiResponseId).toBe(`ai_sdk:${out.workflowRunId}`);
+  });
+
+  it('keeps OpenAI models on the Responses loop when the flag is off', async () => {
+    settingOverrides.set('BEX_AI_SDK_GENERATION_ENABLED', false);
+
+    const out = await run({ modelTag: 'gpt-4.1' });
+
+    expect(runResponsesWithToolLoopMock).toHaveBeenCalledTimes(1);
+    expect(runAiSdkWithToolLoopMock).not.toHaveBeenCalled();
+    expect(promptRecordSchema.parse(stepInput('openai_responses_agent').prompt).runtime).toBe(
+      'responses',
+    );
+    expect(out.runtimeConfig?.aiSdkGenerationEnabled).toBe(false);
+  });
+
+  it('never hands a prior OpenAI response id to the AI SDK loop on a Claude turn', async () => {
+    process.env.BEX_HISTORY_MAX_MESSAGES = '10';
+    runAiSdkWithToolLoopMock.mockImplementation(generationCalling([]));
+
+    await run({
+      modelTag: 'claude-sonnet-5',
+      priorMessages: [{ role: 'user', content: 'earlier question' }],
+      previousOpenaiResponseId: 'resp_prev',
+    });
+
+    const call = runAiSdkWithToolLoopMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(call).not.toHaveProperty('previousResponseId');
+    expect(call.history).toEqual([{ role: 'user', content: 'earlier question' }]);
+    // The agent step describes the call that was made: the chain was not used.
+    expect(stepInput('openai_responses_agent')).toMatchObject({
+      hasPreviousResponse: false,
+      historyCapApplied: false,
+    });
+  });
+
+  it('breaks the Responses chain and replays history when the stored id is an ai_sdk: marker', async () => {
+    process.env.BEX_HISTORY_MAX_MESSAGES = '10';
+    const priorMessages = [
+      { role: 'user' as const, content: 'claude turn user' },
+      { role: 'assistant' as const, content: 'claude turn assistant' },
+    ];
+
+    const out = await run({
+      modelTag: 'gpt-4.1',
+      priorMessages,
+      previousOpenaiResponseId: 'ai_sdk:00000000-0000-0000-0000-000000000000',
+    });
+
+    const call = runResponsesWithToolLoopMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    // A synthetic marker is never sent upstream as previous_response_id (it would 400).
+    expect(call.previousResponseId).toBeNull();
+    expect(call.history).toEqual(priorMessages);
+    expect(out.historyCapApplied).toBe(false);
+    expect(stepInput('openai_responses_agent')).toMatchObject({ hasPreviousResponse: false });
+  });
+
+  it('isResponsesApiResponseId accepts resp_ ids and rejects the synthetic markers', () => {
+    expect(isResponsesApiResponseId('resp_abc123')).toBe(true);
+    expect(isResponsesApiResponseId('ai_sdk:run-1')).toBe(false);
+    expect(isResponsesApiResponseId('cross-reference:trace-1')).toBe(false);
+    expect(isResponsesApiResponseId('')).toBe(false);
+    expect(isResponsesApiResponseId(null)).toBe(false);
+    expect(isResponsesApiResponseId(undefined)).toBe(false);
   });
 });

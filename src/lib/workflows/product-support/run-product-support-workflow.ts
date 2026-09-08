@@ -28,6 +28,7 @@ import {
   updateWorkflowRun,
 } from '~/lib/conversations/workflow-repository';
 import { logError, logInfo } from '~/lib/observability/logger';
+import { modelProviderFor } from '~/lib/constants/models';
 import { getOpenAIClient, resolveResponsesModel } from '~/lib/openai/client';
 import { runResponsesWithToolLoop } from '~/lib/openai/responses-runtime';
 import type { LlmTokenUsage } from '~/lib/openai/responses-runtime';
@@ -602,6 +603,20 @@ export function capConversationHistory(
     cappedHistory: historyCapApplied ? priorMessages.slice(-maxMessages) : [...priorMessages],
     historyCapApplied,
   };
+}
+
+/**
+ * B0-908 — whether a stored `latest_openai_response_id` can be handed back to the OpenAI Responses
+ * API as `previous_response_id`. The column also carries the synthetic markers the non-Responses
+ * paths write (`ai_sdk:<runId>` from the AI SDK runtime, `cross-reference:<traceId>` from the SME
+ * endpoint) — all namespaced with a colon, which a real `resp_…` id never contains. Now that the
+ * runtime is chosen per model, a conversation can alternate between a Claude turn (AI SDK) and an
+ * OpenAI turn (Responses), so the Responses loop has to treat such a marker as a broken chain and
+ * replay the capped history instead of sending it upstream (a guaranteed 400).
+ */
+export function isResponsesApiResponseId(id: string | null | undefined): id is string {
+  const trimmed = id?.trim() ?? '';
+  return trimmed.length > 0 && !/^[a-z_-]+:/i.test(trimmed);
 }
 
 /** Closed set of early-decline reasons, in the order `classifyEarlyDecline` tests them. */
@@ -2199,7 +2214,18 @@ export async function runProductSupportWorkflow(input: {
   onEvent?: (event: ProductSupportWorkflowEvent) => void;
   onAssistantDelta?: (delta: string) => void;
 }): Promise<ProductSupportFinalOutput> {
-  const useAiSdkGeneration = await getBooleanSetting('BEX_AI_SDK_GENERATION_ENABLED', false);
+  /**
+   * B0-908 — the model is resolved FIRST because the generation runtime is now chosen per model,
+   * not per deploy: a `claude-*` id can only be served by the AI SDK loop (the Responses loop is
+   * the OpenAI Responses API), so `modelProviderFor` decides before the settings flag is even
+   * consulted. The flag keeps its B0-378 meaning for OpenAI models — an opt-in to run them on the
+   * AI SDK loop, off by default — and `useAiSdkGeneration` is the EFFECTIVE decision, which is what
+   * `agentRuntime`, `runtimeConfig.aiSdkGenerationEnabled` and the recorded prompt all report.
+   */
+  const model = await resolveResponsesModel(input.modelTag);
+  const modelProvider = modelProviderFor(model);
+  const aiSdkGenerationSetting = await getBooleanSetting('BEX_AI_SDK_GENERATION_ENABLED', false);
+  const useAiSdkGeneration = modelProvider === 'anthropic' || aiSdkGenerationSetting;
   /**
    * B0-519 — capped once, up front, so every consumer (the `hasPreviousResponse` step record below,
    * and both generation runtimes further down) agrees on the same decision for this turn. See
@@ -2212,10 +2238,19 @@ export async function runProductSupportWorkflow(input: {
    * conversation is over the cap, stop resuming it and fall back to the same bounded, explicit
    * replay the AI SDK runtime already does. Below the cap this is just `input.previousOpenaiResponseId`,
    * unchanged from before this ticket.
+   *
+   * B0-908 — a second chain-break: the stored id is a synthetic marker from a prior non-Responses
+   * turn (`ai_sdk:<runId>` after a Claude turn or an AI SDK opt-in turn) — see
+   * `isResponsesApiResponseId`. And when THIS turn runs on the AI SDK loop the chain is simply not
+   * used: the id is nulled so `hasPreviousResponse` describes the call that was actually made, and a
+   * real `resp_…` id from a prior OpenAI turn is never handed to the stateless loop.
    */
-  const effectivePreviousResponseId = historyCapApplied
-    ? null
-    : (input.previousOpenaiResponseId ?? null);
+  const responsesChainBroken =
+    historyCapApplied ||
+    (input.previousOpenaiResponseId != null &&
+      !isResponsesApiResponseId(input.previousOpenaiResponseId));
+  const effectivePreviousResponseId =
+    responsesChainBroken || useAiSdkGeneration ? null : (input.previousOpenaiResponseId ?? null);
   const agentMode = input.agentMode ?? DEFAULT_BEX_CHAT_AGENT_MODE;
   const route = routeUserMessageToSme(input.userMessage);
   // B0-389 — read once so the flag recorded as run config is the same value the gate below used.
@@ -2774,9 +2809,15 @@ export async function runProductSupportWorkflow(input: {
     });
   }
 
-  const model = await resolveResponsesModel(input.modelTag);
+  // `model` was resolved at the top of this function (B0-908) so the runtime decision could see it.
+  // The OpenAI client is still constructed on a Claude turn for the Responses-only helpers below
+  // (it only needs OPENAI_API_KEY present); the validator, revision pass and intent classifier now
+  // route by model id through `~/lib/llm/structured-completion`, so they follow the selected provider.
   const client = getOpenAIClient();
-  /** B0-389 — which generation runtime the agent prompt ran on; same flag that picks the branch. */
+  /**
+   * B0-389 — which generation runtime the agent prompt ran on; same decision that picks the branch
+   * (B0-908: provider-derived for `claude-*`, flag-derived for OpenAI models).
+   */
   const agentRuntime: PromptRecord['runtime'] = useAiSdkGeneration ? 'ai-sdk' : 'responses';
 
   /**
@@ -3549,8 +3590,9 @@ export async function runProductSupportWorkflow(input: {
       ? createAgentConfidenceStreamFilter(input.onAssistantDelta)
       : null;
 
-    // Generation runtime: AI SDK (`streamText`) when BEX_AI_SDK_GENERATION_ENABLED, else the
-    // OpenAI Responses tool loop. Both return the same { assistantText, finalResponseId,
+    // Generation runtime: AI SDK (`streamText`) for every Anthropic model and for OpenAI models
+    // when BEX_AI_SDK_GENERATION_ENABLED, else the OpenAI Responses tool loop (B0-908 — see
+    // `useAiSdkGeneration` at the top). Both return the same { assistantText, finalResponseId,
     // toolTrace, responseIds } shape consumed below.
     const agentResult = useAiSdkGeneration
       ? await runAiSdkWithToolLoop({
@@ -3576,9 +3618,10 @@ export async function runProductSupportWorkflow(input: {
           userMessage: input.userMessage,
           // B0-519 — null once `historyCapApplied` breaks the chain; `history` then supplies the
           // capped tail as explicit messages so this call still opens with recent context instead
-          // of none, same as a stateless AI SDK call would.
+          // of none, same as a stateless AI SDK call would. B0-908 — the same replay when the
+          // stored id is a synthetic `ai_sdk:` marker from a prior Claude / AI SDK turn.
           previousResponseId: effectivePreviousResponseId,
-          history: historyCapApplied ? cappedHistory : undefined,
+          history: responsesChainBroken ? cappedHistory : undefined,
           toolChoice,
           promptCacheKey,
           preloadedEvidence,

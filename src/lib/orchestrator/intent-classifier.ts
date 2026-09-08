@@ -5,9 +5,8 @@ import { z } from 'zod';
 import { SME_AGENT_IDS, V1_AGENT_REGISTRY } from '~/lib/agents/agent-registry';
 import { logError } from '~/lib/observability/logger';
 import { isBexModelTag, type BexModelTag } from '~/lib/constants/models';
-import { getOpenAIClient, resolveResponsesModel } from '~/lib/openai/client';
-import { extractAssistantText } from '~/lib/openai/response-item-parsing';
-import { usageFromResponse } from '~/lib/openai/responses-runtime';
+import { completeStructuredWithUsage, type PriorMessage } from '~/lib/llm/structured-completion';
+import { resolveResponsesModel } from '~/lib/openai/client';
 import {
   getBooleanSetting,
   getNumberSetting,
@@ -249,6 +248,30 @@ const clamp01 = (n: number): number => Math.max(0, Math.min(1, n));
 /** Caps how much prior conversation is replayed into the classifier call — a router should stay cheap. */
 const MAX_PRIOR_MESSAGES = 8;
 
+/**
+ * B0-908 — output cap for the router-class structured calls (this classifier and the consolidated
+ * signals call). `completeStructuredWithUsage` requires one; the Responses calls it replaced set
+ * none (SDK default, i.e. the model's own maximum). The strict-schema answer is a few hundred tokens
+ * at most, so this is headroom, not a constraint — the helper adds its own thinking allowance on top
+ * for Anthropic models, so the cap never has to account for reasoning tokens.
+ */
+export const INTENT_CLASSIFIER_MAX_OUTPUT_TOKENS = 2048;
+
+/**
+ * B0-908 — the prior turns replayed to the model, as the helper's `priorMessages`: most recent
+ * `MAX_PRIOR_MESSAGES` only, blank turns dropped, oldest first, `{ role, content }` exactly as the
+ * Responses `input` items carried them before. On OpenAI the helper turns each into a
+ * `{ role, content, type: 'message' }` item ahead of the current message, so the request bytes are
+ * identical to the pre-B0-908 call; on Anthropic they become `messages`. Shared with the
+ * consolidated signals call (`analyze-turn-signals.ts`) so the two never diverge.
+ */
+export function classifierPriorMessages(priorMessages: PriorTurnMessage[]): PriorMessage[] {
+  return priorMessages
+    .slice(-MAX_PRIOR_MESSAGES)
+    .filter((m) => m.content.trim().length > 0)
+    .map((m) => ({ role: m.role, content: m.content }));
+}
+
 // ---------------------------------------------------------------------------------------------
 // B0-506 — rollout knobs. B0-786 moved the model and the timeout off `process.env` and into
 // `public.settings` (the B0-638 rule: env is for secrets and runtime-required values; flags,
@@ -268,7 +291,7 @@ export const DEFAULT_BEX_ROUTER_MODEL_TAG: BexModelTag = 'gpt-4.1';
 /**
  * Default 5000ms. B0-506 originally set this to 800ms based on the ticket's stated 150-2000ms
  * range, but that range was never measured against a real call — B0-511's cutover rollout found
- * live `client.responses.create` structured-output calls on `gpt-4o-mini` for this classifier
+ * live Responses structured-output calls on `gpt-4o-mini` for this classifier
  * take ~1.2-1.9s warm (5/5 sampled), with server-runtime tails past 2.5s (a 2500ms interim ceiling
  * still produced fallbacks on real turns). 800ms therefore made the classifier time out and fall
  * back to the keyword router on nearly every turn once cutover made the call synchronous and
@@ -286,6 +309,9 @@ export const DEFAULT_BEX_ROUTER_TIMEOUT_MS = 5000;
  * `settings.allowed_values` is advisory metadata the admin API validates writes against, NOT a
  * database constraint, so an unrecognized stored value falls back to the default tag rather than
  * being handed to the API as a non-existent model id.
+ *
+ * B0-908 — `claude-*` tags are valid here: the call below routes by provider, so the row may hold
+ * either an OpenAI or an Anthropic tag.
  */
 export async function resolveRouterModelTag(): Promise<BexModelTag> {
   const raw = (await getStringSetting('BEX_ROUTER_MODEL', DEFAULT_BEX_ROUTER_MODEL_TAG)).trim();
@@ -411,6 +437,18 @@ export type ClassifyUserIntentDeps = {
   now: () => number;
 };
 
+/**
+ * B0-908 — the one model call, through `completeStructuredWithUsage`, which routes on the resolved
+ * model id: a `claude-*` id goes to the Anthropic Messages API, anything else to the OpenAI
+ * Responses API (same `store: false`, strict json_schema, temperature-gating as before). A
+ * truncated or refused structured answer surfaces from the helper as an error, which
+ * `classifyUserIntent` treats exactly like the JSON/Zod parse failure it used to be: the keyword
+ * fallback route.
+ *
+ * `signal` is `withRouterTimeout`'s abort signal, forwarded to the SDK through
+ * `requestOptions.signal` so a raced-out request is cancelled, exactly as before; `timeoutMs` at the
+ * same router budget is belt-and-braces for the SDK's own deadline.
+ */
 async function defaultRunLlm(
   message: string,
   priorMessages: PriorTurnMessage[],
@@ -420,41 +458,24 @@ async function defaultRunLlm(
   parsed: z.infer<typeof llmIntentClassificationSchema>;
   usage: z.infer<typeof llmTokenUsageSchema>;
 }> {
-  const client = getOpenAIClient();
-  const input = [
-    ...priorMessages
-      .slice(-MAX_PRIOR_MESSAGES)
-      .filter((m) => m.content.trim().length > 0)
-      .map((m) => ({ role: m.role, content: m.content, type: 'message' as const })),
-    { role: 'user' as const, content: message, type: 'message' as const },
-  ];
-
-  const res = await client.responses.create(
-    {
-      model: model ?? (await resolveRouterModel()),
-      instructions: buildInstructions(),
-      input,
-      text: {
-        format: {
-          type: 'json_schema',
-          name: 'intent_classification',
-          strict: true,
-          schema: JSON_SCHEMA,
-        },
-      },
-      store: false,
-      stream: false,
-      temperature: 0,
-    },
+  const result = await completeStructuredWithUsage({
+    model: model ?? (await resolveRouterModel()),
+    system: buildInstructions(),
+    priorMessages: classifierPriorMessages(priorMessages),
+    user: message,
+    schemaName: 'intent_classification',
+    schema: JSON_SCHEMA,
+    maxOutputTokens: INTENT_CLASSIFIER_MAX_OUTPUT_TOKENS,
+    temperature: 0,
     // maxRetries 0: the SDK's default 2 retries back off ~0.5s+ then replay the full ~1.2-1.9s
     // call — that can never finish inside `withRouterTimeout`'s budget, so a transient 429/500
     // just converts into a guaranteed timeout. Our keyword fallback owns resilience here.
-    { signal, maxRetries: 0 },
-  );
+    requestOptions: { maxRetries: 0, timeoutMs: await resolveRouterTimeoutMs(), signal },
+  });
 
   return {
-    parsed: llmIntentClassificationSchema.parse(JSON.parse(extractAssistantText(res))),
-    usage: usageFromResponse(res),
+    parsed: llmIntentClassificationSchema.parse(JSON.parse(result.text)),
+    usage: result.usage,
   };
 }
 

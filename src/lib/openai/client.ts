@@ -1,6 +1,10 @@
 import OpenAI from 'openai';
 
-import { isBexModelTag, type ExplicitBexModelTag } from '~/lib/constants/models';
+import {
+  isBexModelTag,
+  modelProviderFor,
+  type ExplicitBexModelTag,
+} from '~/lib/constants/models';
 import { getStringSetting } from '~/lib/settings/settings-service';
 
 let cached: OpenAI | null = null;
@@ -51,6 +55,10 @@ export async function resolveGenerationModelDefaultTag(): Promise<ExplicitBexMod
  * so `preview` picks up the same env pins every explicit tag does. Every other branch stays a
  * synchronous mapping; only `preview`/empty needs the settings round trip, cached 30s by
  * `~/lib/settings/settings-service`.
+ *
+ * B0-908 — despite the name, this also resolves Anthropic tags (`claude-*`): the return value is
+ * whatever id the provider chosen by `modelProviderFor` is called with, so a `BEX_RESPONSES_MODEL`
+ * row set to `claude-sonnet-5` makes `preview` resolve to `claude-sonnet-5`.
  */
 export async function resolveResponsesModel(modelTag: string | undefined): Promise<string> {
   const tag = (modelTag ?? 'preview').trim();
@@ -97,5 +105,26 @@ export async function resolveResponsesModel(modelTag: string | undefined): Promi
     );
   }
 
+  /**
+   * B0-908 — Anthropic tags. An Anthropic tag IS the exact Claude API id (`claude-sonnet-5`,
+   * `claude-opus-5`, …) and is called on the Anthropic Messages API (or the AI SDK Anthropic
+   * provider for chat), never on OpenAI Responses — so the default is the tag itself. The env pin
+   * mirrors the gpt branches above, keyed by the upper-snake tag: `BEX_MODEL_CLAUDE_SONNET_5`,
+   * `BEX_MODEL_CLAUDE_OPUS_4_8`, `BEX_MODEL_CLAUDE_HAIKU_4_5`, … Use it to pin a dated snapshot
+   * or repoint a tier without a deploy.
+   *
+   * SAME COST CAVEAT as the gpt pins: `public.model_pricing` is keyed to the string this function
+   * returns, so pinning to an id with no pricing row silently drops those steps from the B0-565
+   * cost views (INNER lateral join). Add a matching `model_pricing` row alongside any override.
+   */
+  if (modelProviderFor(tag) === 'anthropic') {
+    return process.env[anthropicModelPinEnvKey(tag)] ?? tag;
+  }
+
   return tag;
+}
+
+/** `claude-sonnet-5` → `BEX_MODEL_CLAUDE_SONNET_5`; `claude-opus-4-8` → `BEX_MODEL_CLAUDE_OPUS_4_8`. */
+export function anthropicModelPinEnvKey(tag: string): string {
+  return `BEX_MODEL_${tag.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_')}`;
 }

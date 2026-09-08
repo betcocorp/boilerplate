@@ -15,8 +15,9 @@ import {
 } from '~/lib/category/classifier-repository';
 import type { TaxonomyNode } from '~/lib/category/category-resolver';
 import { loadTaxonomyNodes } from '~/lib/category/taxonomy-repository';
-import { getOpenAIClient, resolveResponsesModel } from '~/lib/openai/client';
-import { extractAssistantText } from '~/lib/openai/response-item-parsing';
+import { completeStructuredWithUsage } from '~/lib/llm/structured-completion';
+import { resolveResponsesModel } from '~/lib/openai/client';
+import { resolveMaxOutputTokens } from '~/lib/workflows/product-support/max-output-tokens';
 
 /**
  * B0-35 — LLM classifier for prod-lines the deterministic linker (B0-34) could not place.
@@ -143,38 +144,34 @@ export async function classifyUnplacedProdLines(
   return runProductClassifier(inputs, deps, opts);
 }
 
-/** Default LLM classification: Responses API, node keys enumerated in a strict json_schema. */
-async function defaultClassify(
+/** Resolved model id: dedicated env override, else whatever the `preview` tag resolves to. */
+export async function resolveCategoryClassifierModel(): Promise<string> {
+  return process.env.CATEGORY_CLASSIFIER_MODEL?.trim() || resolveResponsesModel('preview');
+}
+
+/**
+ * Default LLM classification: node keys enumerated in a strict json_schema. B0-908 — the call goes
+ * through `completeStructuredWithUsage`, which routes on the resolved model id (`claude-*` →
+ * Anthropic, otherwise OpenAI Responses). The previous direct call sent no output cap; the shared
+ * `resolveMaxOutputTokens()` ceiling covers a key + confidence + one-line rationale. Truncation or
+ * refusal throws into the same `classifier_failed` fallback a parse failure did. Exported so the
+ * request shape can be asserted without a live model.
+ */
+export async function defaultClassify(
   input: { title: string | null; description: string | null },
   nodes: TaxonomyNode[],
 ): Promise<ClassifierResult> {
   try {
-    const client = getOpenAIClient();
-    const res = await client.responses.create({
-      model:
-        process.env.CATEGORY_CLASSIFIER_MODEL?.trim() ||
-        (await resolveResponsesModel('preview')),
-      instructions: buildClassifierPrompt(nodes),
-      input: [
-        {
-          role: 'user',
-          content: JSON.stringify({ title: input.title, description: input.description }),
-          type: 'message',
-        },
-      ],
-      text: {
-        format: {
-          type: 'json_schema',
-          name: 'category_classification',
-          strict: true,
-          schema: buildClassifierJsonSchema(nodes.map((n) => n.key)),
-        },
-      },
-      store: false,
-      stream: false,
+    const { text } = await completeStructuredWithUsage({
+      model: await resolveCategoryClassifierModel(),
+      system: buildClassifierPrompt(nodes),
+      user: JSON.stringify({ title: input.title, description: input.description }),
+      schemaName: 'category_classification',
+      schema: buildClassifierJsonSchema(nodes.map((n) => n.key)),
+      maxOutputTokens: resolveMaxOutputTokens(),
       temperature: 0,
     });
-    return classifierResultSchema.parse(JSON.parse(extractAssistantText(res)));
+    return classifierResultSchema.parse(JSON.parse(text));
   } catch {
     return { category_key: CLASSIFIER_NONE, confidence: 0, rationale: 'classifier_failed' };
   }

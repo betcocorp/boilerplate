@@ -1,12 +1,13 @@
 import { z } from 'zod';
 
-import { getOpenAIClient, resolveResponsesModel } from '~/lib/openai/client';
-import { extractAssistantText } from '~/lib/openai/response-item-parsing';
+import { completeStructuredWithUsage } from '~/lib/llm/structured-completion';
+import { resolveResponsesModel } from '~/lib/openai/client';
 import { wrapUntrustedWebEvidence } from '~/lib/recommendations/recommendation-guardrails';
 import {
   competitorSpecSchema,
   extractCompetitorSpec,
 } from '~/lib/websearch/extract-competitor-spec';
+import { resolveMaxOutputTokens } from '~/lib/workflows/product-support/max-output-tokens';
 
 /**
  * B0-86 — LLM competitor-spec enrichment on top of the deterministic heuristic extractor.
@@ -161,37 +162,33 @@ const ENRICH_JSON_SCHEMA = {
   ],
 } as const;
 
+/** Resolved model id: dedicated env override, else whatever the `preview` tag resolves to. */
+export async function resolveSpecEnrichModel(): Promise<string> {
+  return process.env.XREF_SPEC_ENRICH_MODEL?.trim() || resolveResponsesModel('preview');
+}
+
+/**
+ * B0-908 — goes through `completeStructuredWithUsage`, which routes on the resolved model id
+ * (`claude-*` → Anthropic, otherwise OpenAI Responses). The previous direct call sent no output cap;
+ * the shared `resolveMaxOutputTokens()` ceiling covers this short fill. Truncation/refusal throw and
+ * land in the same heuristic-only fallback a parse failure did.
+ */
 async function defaultRunLlm(input: EnrichCompetitorSpecInput): Promise<LlmCompetitorSpecFill> {
   try {
-    const client = getOpenAIClient();
-    const res = await client.responses.create({
-      model:
-        process.env.XREF_SPEC_ENRICH_MODEL?.trim() || (await resolveResponsesModel('preview')),
-      instructions: ENRICH_SYSTEM_PROMPT,
-      input: [
-        {
-          role: 'user',
-          // B0-91: web content is untrusted — fence + instruction-guard it before the model reads it.
-          content: JSON.stringify({
-            content: wrapUntrustedWebEvidence(input.text),
-            sources: input.sources ?? [],
-          }),
-          type: 'message',
-        },
-      ],
-      text: {
-        format: {
-          type: 'json_schema',
-          name: 'competitor_spec_fill',
-          strict: true,
-          schema: ENRICH_JSON_SCHEMA,
-        },
-      },
-      store: false,
-      stream: false,
+    const { text } = await completeStructuredWithUsage({
+      model: await resolveSpecEnrichModel(),
+      system: ENRICH_SYSTEM_PROMPT,
+      // B0-91: web content is untrusted — fence + instruction-guard it before the model reads it.
+      user: JSON.stringify({
+        content: wrapUntrustedWebEvidence(input.text),
+        sources: input.sources ?? [],
+      }),
+      schemaName: 'competitor_spec_fill',
+      schema: ENRICH_JSON_SCHEMA,
+      maxOutputTokens: resolveMaxOutputTokens(),
       temperature: 0,
     });
-    return llmCompetitorSpecFillSchema.parse(JSON.parse(extractAssistantText(res)));
+    return llmCompetitorSpecFillSchema.parse(JSON.parse(text));
   } catch {
     // degrade to heuristic-only rather than fail the whole recommendation
     return EMPTY_LLM_FILL;

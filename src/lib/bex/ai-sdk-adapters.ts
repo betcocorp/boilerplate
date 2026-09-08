@@ -1,5 +1,7 @@
+import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 
+import { modelProviderFor, type ModelProvider } from '~/lib/constants/models';
 import type { AssistantMessageContent, SourceRef } from '~/lib/conversations/conversation-schemas';
 import { resolveResponsesModel } from '~/lib/openai/client';
 import type { ValidatorResult } from '~/lib/workflows/product-support/product-support-schemas';
@@ -23,8 +25,30 @@ const openai = createOpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
+/**
+ * B0-908 — the Anthropic provider, sitting next to the OpenAI one. Both providers read their key
+ * lazily (at request time, inside the headers builder), so a missing `ANTHROPIC_API_KEY` fails the
+ * first Claude call, not this module's import — an OpenAI-only deploy keeps working untouched.
+ */
+const anthropic = createAnthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY,
+});
+
+/**
+ * B0-908 — which AI SDK provider serves a resolved model id. Thin alias over `modelProviderFor` so
+ * the runtime and the resolver agree by construction: the `claude-` prefix, never a flag, decides.
+ */
+export function aiSdkProviderFor(model: string): ModelProvider {
+  return modelProviderFor(model);
+}
+
+/**
+ * Resolves a UI/API model tag to an AI SDK language model. The tag → id mapping (env pins, the
+ * `preview` settings row) stays in `resolveResponsesModel`; only the provider choice lives here.
+ */
 export async function resolveAiSdkLanguageModel(modelTag: string | undefined) {
-  return openai(await resolveResponsesModel(modelTag));
+  const model = await resolveResponsesModel(modelTag);
+  return aiSdkProviderFor(model) === 'anthropic' ? anthropic(model) : openai(model);
 }
 
 export function extractTextFromAiSdkParts(parts: unknown): string {

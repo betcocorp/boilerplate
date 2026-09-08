@@ -1,9 +1,8 @@
 import { z } from 'zod';
 
 import { replaceAiSuggestions } from '~/lib/ai-suggestions/repository';
-import { getOpenAIClient, resolveResponsesModel } from '~/lib/openai/client';
-import { samplingParamsFor } from '~/lib/openai/model-capabilities';
-import { extractAssistantText } from '~/lib/openai/response-item-parsing';
+import { completeStructuredWithUsage } from '~/lib/llm/structured-completion';
+import { resolveResponsesModel } from '~/lib/openai/client';
 import {
   resolveOpenAiRequestTimeoutMs,
   retryTransportFaults,
@@ -147,39 +146,33 @@ function buildEvidenceBlock(input: FailureRootCauseInput): string {
   return parts.join('\n\n');
 }
 
+/**
+ * B0-908 — one structured call through `completeStructuredWithUsage`, which routes on the resolved
+ * model id (`claude-*` → Anthropic, otherwise OpenAI Responses), so a Claude `BEX_RESPONSES_MODEL`
+ * or run `modelTag` works here too. A truncated or refused answer is caught below exactly like an
+ * unparseable one was: the row simply gets no root cause this attempt.
+ */
 async function callRootCauseGrader(
   input: FailureRootCauseInput,
 ): Promise<RootCauseResult | null> {
-  const client = getOpenAIClient();
   const model = await resolveFailureRootCauseModel(input.modelTag);
 
   try {
-    const res = await retryTransportFaults(
+    const { text } = await retryTransportFaults(
       () =>
-        client.responses.create(
-          {
-            model,
-            instructions: ROOT_CAUSE_SYSTEM_PROMPT,
-            input: [{ role: 'user', type: 'message', content: buildEvidenceBlock(input) }],
-            text: {
-              format: {
-                type: 'json_schema',
-                name: 'failure_root_cause',
-                strict: true,
-                schema: ROOT_CAUSE_JSON_SCHEMA,
-              },
-            },
-            store: false,
-            stream: false,
-            ...samplingParamsFor(model, { temperature: 0.2 }),
-            max_output_tokens: resolveMaxOutputTokens(),
-          },
-          { maxRetries: 0, timeout: resolveOpenAiRequestTimeoutMs() },
-        ),
+        completeStructuredWithUsage({
+          model,
+          system: ROOT_CAUSE_SYSTEM_PROMPT,
+          user: buildEvidenceBlock(input),
+          schemaName: 'failure_root_cause',
+          schema: ROOT_CAUSE_JSON_SCHEMA,
+          maxOutputTokens: resolveMaxOutputTokens(),
+          temperature: 0.2,
+          requestOptions: { maxRetries: 0, timeoutMs: resolveOpenAiRequestTimeoutMs() },
+        }),
       { runtime: 'responses', label: 'failure-root-cause.create' },
     );
 
-    const text = extractAssistantText(res);
     return rootCauseResultSchema.parse(JSON.parse(text));
   } catch (error) {
     logWarn('failure_root_cause_generation_failed', {

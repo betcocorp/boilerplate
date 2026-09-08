@@ -388,7 +388,11 @@ export const runtimeConfigSchema = z.object({
   useValidator: z.boolean(),
   /** `settings.BEX_EARLY_DECLINE_GATE_ENABLED === 'true'` (B0-734: a settings row, default false). */
   earlyDeclineGateEnabled: z.boolean(),
-  /** `BEX_AI_SDK_GENERATION_ENABLED === 'true'` — selects the AI SDK vs Responses generation runtime. */
+  /**
+   * Whether the AI SDK generation runtime ran this turn (vs the OpenAI Responses loop). The EFFECTIVE
+   * decision, not the raw flag: `true` for every Anthropic model regardless of the
+   * `BEX_AI_SDK_GENERATION_ENABLED` row, and the row's value for OpenAI models (B0-908).
+   */
   aiSdkGenerationEnabled: z.boolean(),
   /**
    * Whether cross-encoder reranking actually ran this turn's retrieval, i.e.
