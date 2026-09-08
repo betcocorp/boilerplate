@@ -42,6 +42,8 @@ export type TestRecordWithCompletionCount = TestRecord & {
    * or only one scored run exists.
    */
   latest_run_score_delta: number | null;
+  /** `test_results.failed_items` for the latest completed report run; `null` when there is none. */
+  latest_run_failed_items: number | null;
 };
 export type TestItemRecord = Tables<'test_items'>;
 export type TestResultRecord = Tables<'test_results'>;

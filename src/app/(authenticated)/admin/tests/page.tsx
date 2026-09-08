@@ -6,6 +6,7 @@ import { AdminTestsActionToast } from '~/components/admin/tests/AdminTestsAction
 import { CreateOrUploadTestDatasetDialog } from '~/components/admin/tests/CreateOrUploadTestDatasetDialog';
 import { GoldenSetMetricsCards } from '~/components/admin/tests/GoldenSetMetricsCards';
 import { RunGoldenTestsDialog } from '~/components/admin/tests/RunGoldenTestsDialog';
+import { OnlyGoldenToggle } from '~/components/admin/tests/OnlyGoldenToggle';
 import { Button } from '~/components/ui/button';
 import {
   Table,
@@ -49,15 +50,18 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
   const params = await searchParams;
   const success = typeof params.success === 'string' ? params.success : null;
   const error = typeof params.error === 'string' ? params.error : null;
+  // Absent, or anything other than the literal "false", reads as ON — the toggle defaults true.
+  const onlyGolden = params.onlyGolden !== 'false';
 
   // B0-585 — the per-test latest-result and cross-run similarity roll-up that used to fan out
   // over 20 runs per test on every load is decommissioned: run-level figures live on
   // /admin/tests/[testId], golden-set health on /admin/bex/health.
-  const [tests, archivedTests, goldenSetMetrics] = await Promise.all([
+  const [allTests, archivedTests, goldenSetMetrics] = await Promise.all([
     listTests(),
     listArchivedTests(),
     calculateGoldenSetMetrics(),
   ]);
+  const tests = onlyGolden ? allTests.filter((test) => test.is_golden) : allTests;
 
   return (
     <div className="flex flex-1 bg-slate-50">
@@ -98,10 +102,11 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
                 Test sets
               </h2>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-4">
               <span className="text-sm text-slate-600">
                 {tests.length} datasets
               </span>
+              <OnlyGoldenToggle onlyGolden={onlyGolden} />
               {archivedTests.length > 0 && (
                 <Link
                   href="/admin/tests/archived"
@@ -119,7 +124,8 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
                 <TableHead>Golden</TableHead>
                 <TableHead>Intended agent</TableHead>
                 <TableHead>Last Run</TableHead>
-                <TableHead>Avg Score</TableHead>
+                <TableHead>Avg</TableHead>
+                <TableHead>Fails</TableHead>
                 <TableHead>Rows</TableHead>
                 <TableHead>Runs</TableHead>
                 <TableHead>Status</TableHead>
@@ -129,7 +135,7 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
             <TableBody>
               {tests.length === 0 ? (
                 <TableRow>
-                  <TableCell className="text-slate-500" colSpan={9}>
+                  <TableCell className="text-slate-500" colSpan={10}>
                     No datasets uploaded yet.
                   </TableCell>
                 </TableRow>
@@ -237,6 +243,18 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
                       {test.avg_report_score === null
                         ? '—'
                         : `${test.avg_report_score.toFixed(1)}`}
+                    </TableCell>
+                    <TableCell
+                      className="whitespace-nowrap tabular-nums text-slate-700"
+                      title={
+                        test.latest_run_failed_items === null
+                          ? 'No completed run to count failing prompts from'
+                          : 'Failing prompts in the latest run'
+                      }
+                    >
+                      {test.latest_run_failed_items === null
+                        ? '—'
+                        : test.latest_run_failed_items}
                     </TableCell>
                     <TableCell>{test.row_count}</TableCell>
                     <TableCell>{test.completed_runs_count}</TableCell>

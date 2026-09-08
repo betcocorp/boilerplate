@@ -128,7 +128,7 @@ export async function listTests(includeArchived = false) {
       .eq('report_state->>status', 'completed'),
     supabase
       .from('test_results')
-      .select('test_id, overall_avg:report_state->overall->>avg, created_at')
+      .select('test_id, overall_avg:report_state->overall->>avg, failed_items, created_at')
       .eq('report_state->>status', 'completed')
       .order('created_at', { ascending: false }),
   ]);
@@ -160,10 +160,15 @@ export async function listTests(includeArchived = false) {
   // DESC). The previous score is only used to derive `latest_run_score_delta` below — never
   // rendered on its own.
   const latestRunScoreByTestId = new Map<string, number | null>();
+  const latestRunFailedItemsByTestId = new Map<string, number | null>();
   const previousRunScoreByTestId = new Map<string, number>();
   const latestScoreData = assertNoError(latestRunScores) || [];
   const seenCountByTestId = new Map<string, number>();
-  for (const row of latestScoreData as Array<{ test_id: string; overall_avg: string | null }>) {
+  for (const row of latestScoreData as Array<{
+    test_id: string;
+    overall_avg: string | null;
+    failed_items: number | null;
+  }>) {
     const seenCount = seenCountByTestId.get(row.test_id) ?? 0;
     seenCountByTestId.set(row.test_id, seenCount + 1);
     if (seenCount >= 2) {
@@ -178,6 +183,7 @@ export async function listTests(includeArchived = false) {
 
     if (seenCount === 0) {
       latestRunScoreByTestId.set(row.test_id, roundedAvg);
+      latestRunFailedItemsByTestId.set(row.test_id, row.failed_items ?? null);
     } else if (roundedAvg !== null) {
       previousRunScoreByTestId.set(row.test_id, roundedAvg);
     }
@@ -203,6 +209,7 @@ export async function listTests(includeArchived = false) {
         latestRunScore !== null && previousRunScore !== undefined
           ? Math.round((latestRunScore - previousRunScore) * 10) / 10
           : null,
+      latest_run_failed_items: latestRunFailedItemsByTestId.get(test.id) ?? null,
     };
   }) as TestRecordWithCompletionCount[];
 }

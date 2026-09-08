@@ -33,7 +33,13 @@ export function RunGoldenTestsDialog({
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button type="button" size="sm" variant="secondary">
+        {/* Same amber palette as the "Golden" badge in the test-sets table. */}
+        <Button
+          className="bg-amber-100 text-amber-800 ring-1 ring-amber-300 hover:bg-amber-200"
+          size="sm"
+          type="button"
+          variant="outline"
+        >
           Run Golden
         </Button>
       </DialogTrigger>
