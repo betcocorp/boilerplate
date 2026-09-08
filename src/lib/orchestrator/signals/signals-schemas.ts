@@ -103,6 +103,8 @@ export const COMPETITOR_SELF_REFERENCE_REASONS = [
   'betco_product',
   'betco_catalog',
   'chemistry_term',
+  // B0-875 — "<chemistry> <product class>" offered in place of a product (see competitor-self-reference.ts).
+  'generic_chemistry_description',
   'conversion_list_ask',
 ] as const;
 export type AssertSelfReferenceReasonsMatch = MutuallyAssignable<

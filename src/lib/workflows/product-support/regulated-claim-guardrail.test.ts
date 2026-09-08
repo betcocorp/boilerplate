@@ -479,3 +479,211 @@ describe('evaluateRegulatedClaimGrounding — fabrications still hard-rejected a
     expect(result.ungroundedCategories).toContain('first_aid');
   });
 });
+
+/**
+ * B0-868 — `efficacy_claim` over-fired on knowledge-base prose. Each "not detected" sentence below
+ * is a live golden-item sentence that was classified `efficacy_claim`, failed the verbatim check
+ * (it is a paraphrase, not a label line) and replaced the whole answer with the canned decline.
+ * None of them asserts an organism/kill claim about a product.
+ */
+describe('evaluateRegulatedClaimGrounding — B0-868 efficacy_claim precision', () => {
+  const NOT_EFFICACY_CLAIMS = [
+    'Dilution control systems eliminate guesswork by automatically blending concentrate with water.',
+    'mixed with water every time, eliminating guesswork and overpouring.',
+    'If dilution is inconsistent, disinfectants may not meet their kill claims.',
+    'regulatory requirements for pathogen kill',
+    'Cleaning removes dirt and soil from surfaces but does not kill or reduce germs.',
+    'Disinfecting kills both viruses and bacteria.',
+    'Eliminate odors at the source: clean drains, fixtures, and trash.',
+    'Betco offers several EPA-registered disinfectants that are labeled as effective against norovirus.',
+  ];
+
+  for (const sentence of NOT_EFFICACY_CLAIMS) {
+    it(`does not classify as efficacy_claim: "${sentence}"`, () => {
+      const result = evaluateRegulatedClaimGrounding({ draftAnswer: sentence, sources: [] });
+      expect(result.categoriesDetected).not.toContain('efficacy_claim');
+      expect(result.ungroundedCategories).not.toContain('efficacy_claim');
+    });
+  }
+
+  const STILL_EFFICACY_CLAIMS = [
+    // Product name + organism: the right kind of catch, kept detected on purpose.
+    'Neutral pH Disinfectant: Labeled to kill HIV-1 on pre-cleaned surfaces.',
+    'Kills SARS-CoV-2 in one minute.',
+    'pH7Q not only kills norovirus but also cleans in one step.',
+    'pH7Q is effective against norovirus.',
+    'This product achieves a 3-log reduction on hard non-porous surfaces.',
+    'This product is bactericidal.',
+    '- Kills MRSA in 30 seconds.',
+  ];
+
+  for (const sentence of STILL_EFFICACY_CLAIMS) {
+    it(`still classifies as efficacy_claim and requires grounding: "${sentence}"`, () => {
+      const result = evaluateRegulatedClaimGrounding({ draftAnswer: sentence, sources: [] });
+      expect(result.categoriesDetected).toContain('efficacy_claim');
+      expect(result.ungroundedCategories).toContain('efficacy_claim');
+    });
+  }
+
+  it('still grounds a verbatim kill claim when the label is among the sources', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'Effective against Staphylococcus aureus with a 10 minute contact time.',
+      sources: [LABEL_SOURCE],
+    });
+    expect(result.categoriesDetected).toContain('efficacy_claim');
+    expect(result.ungroundedCategories).not.toContain('efficacy_claim');
+  });
+});
+
+/**
+ * B0-869 — `compatibility` over-fired on procedural wood-floor guidance (every SportsZone decline)
+ * and on hedged negatives. Only a sentence asserting that a NAMED product is safe/approved/
+ * compatible on a NAMED surface is held to the verbatim-quote rule.
+ */
+describe('evaluateRegulatedClaimGrounding — B0-869 compatibility precision', () => {
+  const NOT_COMPATIBILITY_CLAIMS = [
+    'Clean the floor with an approved wood floor cleaner, such as Squeaky or Game Time.',
+    'Ensure all cleaning products are approved for sealed wood athletic floors.',
+    'Use only products labeled for use on sealed wood athletic floors.',
+    "Use low-tack painter's tape or tape labeled as safe for finished wood/gym floors.",
+    'Both methods are approved and commonly used for water-based wood floor finishes.',
+    'Always pair water with an approved wood floor cleaner.',
+    'Confirm that mats used are non-staining and suitable for use on wood floors.',
+    'The Urethane Gloss Finish label specifies: Not recommended for floors previously maintained with oil-modified or solvent-based finishes.',
+    'pH7Q is not specifically labeled for use on stainless steel; this is not an approved or documented application.',
+    'Not recommended for linoleum, sheet vinyl, rubber, LVT (Per the LiquiStrip product line profile).',
+    'It is suitable for use on all types of resilient tile (vinyl, VCT).',
+    'It is recommended for use on floors, walls, toilets, sinks, glazed porcelain, and plastic.',
+    'It is not recommended for linoleum or sheet vinyl.',
+  ];
+
+  for (const sentence of NOT_COMPATIBILITY_CLAIMS) {
+    it(`does not classify as compatibility: "${sentence}"`, () => {
+      const result = evaluateRegulatedClaimGrounding({ draftAnswer: sentence, sources: [] });
+      expect(result.categoriesDetected).not.toContain('compatibility');
+      expect(result.ungroundedCategories).not.toContain('compatibility');
+    });
+  }
+
+  const STILL_COMPATIBILITY_CLAIMS = [
+    'pH7Q is safe to use on stainless steel.',
+    'Per the pH7Q label and Betco Sustainability brochure, stainless steel is an approved surface for use.',
+    'The standard formula is also safe for use on stainless steel.',
+    'Push will not etch marble or dull terrazzo.',
+    // "not only" is an intensifier, not a negation -- must not slip through the conservative rule.
+    'pH7Q is not only safe on stainless steel but also on brass.',
+  ];
+
+  for (const sentence of STILL_COMPATIBILITY_CLAIMS) {
+    it(`still classifies as compatibility and rejects without a source: "${sentence}"`, () => {
+      const result = evaluateRegulatedClaimGrounding({ draftAnswer: sentence, sources: [] });
+      expect(result.categoriesDetected).toContain('compatibility');
+      expect(result.ungroundedCategories).toContain('compatibility');
+    });
+  }
+});
+
+/**
+ * B0-870 — hazard / first_aid fired on an offer sentence and on a "Source:" citation line, and the
+ * `corrosive` trigger fired on a PRODUCT NAME ("Concentrated Non Corrosive Heavy Duty Restroom
+ * Cleaner"). Sentences are the live P#17 / R#18 drafts verbatim.
+ */
+describe('evaluateRegulatedClaimGrounding — B0-870 offer sentences, citation lines, attributed quotes', () => {
+  /** Body text of rag.document 8dd51230 (product_line_profile) around the quoted line, verbatim. */
+  const RESTROOM_CLEANER_PROFILE_SOURCE = {
+    documentId: '8dd51230-bcd6-4632-8928-3a16a4a78528',
+    title: 'Concentrated Non Corrosive Heavy Duty Restroom Cleaner',
+    documentBody:
+      'acid resistant surfaces only. Do not use this product on marble, aluminum, terrazzo, Formicar or carpeting. Test in an inconspicuous area before use. Contains acids, do not use with bleach, ammonia or any other chemicals. Spray product on surface to be cleaned.',
+  };
+
+  it('does not treat a first-person offer to provide SDS sections as a hazard or first-aid claim (P#17)', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer:
+        'I can provide information from the current SDS for Push, including hazard classification, first aid, handling, and storage details, if needed.',
+      sources: [],
+    });
+    expect(result.categoriesDetected).not.toContain('hazard');
+    expect(result.categoriesDetected).not.toContain('first_aid');
+    expect(result.ungroundedCategories).toHaveLength(0);
+  });
+
+  it('never treats a "Source:" citation line as a claim, even when a cited title contains a trigger word (R#18b)', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer:
+        'Source: Betco disinfection and chemical best practices; Concentrated Non Corrosive Heavy Duty Restroom Cleaner product label; Betco dilution control safety guidelines. [doc:17ebbaab-c6a1-4f3c-91ca-549db575a274] [doc:8dd51230-bcd6-4632-8928-3a16a4a78528]',
+      sources: [],
+    });
+    expect(result.categoriesDetected).toHaveLength(0);
+    expect(result.ungroundedCategories).toHaveLength(0);
+  });
+
+  it('does not let "Non Corrosive" in a product name trigger the hazard category (R#18a, live bullet verbatim)', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer:
+        '- Never mix acids with ammonia or bleach, as stated on the Concentrated Non Corrosive Heavy Duty Restroom Cleaner label: "Contains acids, do not use with bleach, ammonia or any other chemicals." (Source: Concentrated Non Corrosive Heavy Duty Restroom Cleaner label)',
+      sources: [RESTROOM_CLEANER_PROFILE_SOURCE],
+    });
+    expect(result.categoriesDetected).not.toContain('hazard');
+    expect(result.ungroundedCategories).toHaveLength(0);
+  });
+
+  it('grounds an attributed label quote via the quoted span when the label body is among the sources', () => {
+    const draftAnswer =
+      "- The label's hazard precaution reads: \"Contains acids, do not use with bleach, ammonia or any other chemicals.\"";
+    const grounded = evaluateRegulatedClaimGrounding({
+      draftAnswer,
+      sources: [RESTROOM_CLEANER_PROFILE_SOURCE],
+    });
+    expect(grounded.categoriesDetected).toContain('hazard');
+    expect(grounded.ungroundedCategories).not.toContain('hazard');
+
+    const notRetrieved = evaluateRegulatedClaimGrounding({ draftAnswer, sources: [] });
+    expect(notRetrieved.ungroundedCategories).toContain('hazard');
+  });
+
+  it('does not let a genuine quote carry a fabricated hazard tail in the same sentence', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer:
+        'The SDS states "Causes severe skin burns and eye damage" and the product is also highly flammable.',
+      sources: [SDS_SOURCE],
+    });
+    expect(result.categoriesDetected).toContain('hazard');
+    expect(result.ungroundedCategories).toContain('hazard');
+  });
+
+  it('does not treat bare "hazard" topic vocabulary as a claim', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'Refer to the current SDS for hazard information before handling.',
+      sources: [],
+    });
+    expect(result.categoriesDetected).not.toContain('hazard');
+  });
+
+  it('still treats "hazard" next to an imperative label precaution as a claim', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'Hazard note: do not mix this product with bleach or ammonia.',
+      sources: [],
+    });
+    expect(result.categoriesDetected).toContain('hazard');
+    expect(result.ungroundedCategories).toContain('hazard');
+  });
+
+  it('still requires grounding for a real GHS hazard transcription with no source (AC)', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'Signal word: DANGER. H314 Causes severe skin burns and eye damage.',
+      sources: [],
+    });
+    expect(result.categoriesDetected).toContain('hazard');
+    expect(result.ungroundedCategories).toContain('hazard');
+  });
+
+  it('still verifies a first-aid instruction that merely ends in "if needed"', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'If in eyes: rinse for 5 minutes and call a physician if needed.',
+      sources: [SDS_SOURCE],
+    });
+    expect(result.categoriesDetected).toContain('first_aid');
+    expect(result.ungroundedCategories).toContain('first_aid');
+  });
+});

@@ -166,7 +166,9 @@ vi.mock('~/lib/workflows/product-support/validator', async (importOriginal) => {
   };
 });
 
+import { CROSS_REFERENCE_CLAIMS_NON_TRANSFER_STATEMENT } from '~/lib/agents/cross-reference-specialist/cross-reference-specialist-system-prompt';
 import { XREF_DECLINE_COPY } from '~/lib/recommendations/confidence-scoring';
+import { buildCompetitorIdentityClarification } from '~/lib/recommendations/cross-reference-decline';
 import { resetIntentClassifierCache } from '~/lib/orchestrator/intent-classifier';
 import { runProductSupportWorkflow } from '~/lib/workflows/product-support/run-product-support-workflow';
 import { readStepGateRecords } from '~/lib/workflows/product-support/product-support-schemas';
@@ -591,7 +593,11 @@ describe('competitor identity guard against a fabricated match (B0-779)', () => 
     const out = await run({ userMessage: UNRESOLVED_XREF_MESSAGE });
 
     expect(runCrossReferenceRecommendationMock).not.toHaveBeenCalled();
-    expect(out.answerText).toBe(XREF_DECLINE_COPY);
+    // B0-875 — the clarifying ask for brand + product name, not the fixed sales-rep copy.
+    expect(out.answerText).toBe(
+      buildCompetitorIdentityClarification({ userMessage: UNRESOLVED_XREF_MESSAGE }),
+    );
+    expect(out.answerText).toContain('brand and the exact product name');
     expect(out.answerText).not.toContain('Comparable Betco product');
     expect(out.answerProvenance).toBe('competitor_identity_unresolved_decline');
   });
@@ -643,7 +649,9 @@ describe('competitor identity guard against a fabricated match (B0-779)', () => 
     // The backstop never fires (model called the engine itself)...
     expect(runCrossReferenceRecommendationMock).not.toHaveBeenCalled();
     // ...but the unresolved-identity guard still overrides whatever the model drafted.
-    expect(out.answerText).toBe(XREF_DECLINE_COPY);
+    expect(out.answerText).toBe(
+      buildCompetitorIdentityClarification({ userMessage: UNRESOLVED_XREF_MESSAGE }),
+    );
     expect(out.answerText).not.toContain('Comparable Betco product');
     expect(out.answerProvenance).toBe('competitor_identity_unresolved_decline');
   });
@@ -665,5 +673,102 @@ describe('competitor identity guard against a fabricated match (B0-779)', () => 
 
     expect(runCrossReferenceRecommendationMock).toHaveBeenCalledTimes(1);
     expect(out.answerProvenance).not.toBe('competitor_identity_unresolved_decline');
+  });
+});
+
+/* ---------------------------------------------------------------- B0-875 -- */
+
+describe('question-aware cross-reference declines (B0-875)', () => {
+  it('P#8: a chemistry-class description withdraws the cross-reference path and asks which product', async () => {
+    mockCompetitorExtraction({ brand: 'Diversey', product: 'quat disinfectant' });
+
+    const out = await run({
+      userMessage: 'What is the Betco equivalent to a Diversey quat disinfectant?',
+    });
+
+    // No forced legacy lookup, no web backstop — nothing to look up until a product is named.
+    expect(lookupCrossReferenceMock).not.toHaveBeenCalled();
+    expect(runCrossReferenceRecommendationMock).not.toHaveBeenCalled();
+    expect(out.answerProvenance).toBe('generic_chemistry_clarification');
+    expect(out.answerText).toContain('"diversey quat disinfectant" describes a chemistry class');
+    expect(out.answerText).toContain('EPA registration number');
+    expect(out.answerText).toContain('dilution, contact time and organism claims');
+    expect(out.answerText).not.toContain('Comparable Betco product');
+    expect(out.answerText).not.toMatch(/AF79|Triforce/);
+    expect(auditRows('cross_reference_self_reference_suppressed')[0]).toMatchObject({
+      reason: 'generic_chemistry_description',
+      matched: 'diversey quat disinfectant',
+    });
+  });
+
+  it('P#9: a claim-equivalence question leads with the non-transfer statement, engine decline verbatim after it', async () => {
+    runCrossReferenceRecommendationMock.mockResolvedValue(
+      engineResult({
+        answered: false,
+        status: 'declined',
+        overallConfidence: 0.35,
+        declineReason: XREF_DECLINE_COPY,
+        candidates: [],
+      }),
+    );
+
+    // The golden P#9 phrasing ("Betco's version of BNC-15 kills everything BNC-15 does, right?")
+    // is routed to cross-reference by the LLM router live; this harness runs the keyword router
+    // only, so the claim question is carried on a phrase the keyword router treats as decisive.
+    const out = await run({
+      userMessage: 'Does the Betco equivalent to BNC-15 have the same kill claims as BNC-15?',
+    });
+
+    expect(out.answerProvenance).toBe('recommendation_engine_decline');
+    expect(out.answerText.startsWith('Kill claims do not transfer between products.')).toBe(true);
+    expect(out.answerText).toContain(CROSS_REFERENCE_CLAIMS_NON_TRANSFER_STATEMENT);
+    expect(out.answerText.endsWith(XREF_DECLINE_COPY)).toBe(true);
+  });
+
+  it('a resolved competitor the engine simply cannot match keeps the sales-rep copy unchanged', async () => {
+    runCrossReferenceRecommendationMock.mockResolvedValue(
+      engineResult({
+        answered: false,
+        status: 'declined',
+        overallConfidence: 0.35,
+        declineReason: XREF_DECLINE_COPY,
+        candidates: [],
+      }),
+    );
+
+    const out = await run();
+
+    expect(out.answerText).toBe(XREF_DECLINE_COPY);
+    expect(out.answerProvenance).toBe('recommendation_engine_decline');
+  });
+});
+
+/* ---------------------------------------------------------------- B0-876 -- */
+
+describe('Betco line-prefix self-reference (B0-876)', () => {
+  it('P#19: "GE Fight Bac RTU" is Betco\'s — no forced lookup, no backstop, no cross-reference decline', async () => {
+    mockCompetitorExtraction({ brand: 'GE', product: 'Fight Bac RTU' });
+
+    const out = await run({ userMessage: 'What is the Betco equivalent to GE Fight Bac RTU?' });
+
+    expect(lookupCrossReferenceMock).not.toHaveBeenCalled();
+    expect(runCrossReferenceRecommendationMock).not.toHaveBeenCalled();
+    expect(out.answerProvenance).not.toBe('recommendation_engine_decline');
+    expect(out.answerProvenance).not.toBe('competitor_identity_unresolved_decline');
+    expect(out.answerText).not.toBe(XREF_DECLINE_COPY);
+    expect(auditRows('cross_reference_self_reference_suppressed')[0]).toMatchObject({
+      reason: 'betco_catalog',
+      matched: 'ge fight bac rtu',
+      final_route: 'product',
+    });
+  });
+
+  it('a genuine competitor (Spartan BNC-15) still routes to cross-reference and reaches the backstop', async () => {
+    mockCompetitorExtraction({ brand: 'Spartan', product: 'BNC-15' });
+
+    await run();
+
+    expect(runCrossReferenceRecommendationMock).toHaveBeenCalledTimes(1);
+    expect(auditRows('cross_reference_self_reference_suppressed')).toHaveLength(0);
   });
 });

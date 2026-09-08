@@ -36,6 +36,14 @@ export type TestRecordWithCompletionCount = TestRecord & {
   scored_runs_count: number;
   /** Latest run's report score, rounded to one decimal. */
   latest_run_score: number | null;
+  /**
+   * `latest_run_score` minus the score of the completed run immediately before it, rounded to
+   * one decimal. `null` when there's no latest score, no scored previous run to compare against,
+   * or only one scored run exists.
+   */
+  latest_run_score_delta: number | null;
+  /** `test_results.failed_items` for the latest completed report run; `null` when there is none. */
+  latest_run_failed_items: number | null;
 };
 export type TestItemRecord = Tables<'test_items'>;
 export type TestResultRecord = Tables<'test_results'>;

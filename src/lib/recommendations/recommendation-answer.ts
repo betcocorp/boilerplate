@@ -5,6 +5,8 @@
  * so the output never depends on the model choosing the product or inventing specifics.
  */
 
+import { CROSS_REFERENCE_CLAIMS_NON_TRANSFER_STATEMENT } from '~/lib/agents/cross-reference-specialist/cross-reference-specialist-system-prompt';
+
 const NOT_ESTABLISHED = 'Not established';
 
 function registrant(epa: string | null | undefined): string | null {
@@ -84,12 +86,15 @@ export function buildCompetitiveRecommendationAnswer(
    * registration and label, and neither matching chemistry nor a shared registrant carries them
    * across. This block is unconditional because every answer this composer builds is a
    * disinfectant substitution, which is exactly where an assumed claim transfer does harm.
+   *
+   * B0-875 — the statement itself is the shared `CROSS_REFERENCE_CLAIMS_NON_TRANSFER_STATEMENT`
+   * (same wording as the specialist prompt and the decline builder), never a local paraphrase.
    */
   const competitorLabel = input.competitorLabel?.trim() || 'the competitor product';
   parts.push(
     '',
     '**Kill claims do not transfer**',
-    `Organism claims are specific to each product's own EPA registration and label. ${input.recommendedTitle} covers only the organisms listed on its own label and efficacy data — a matching chemistry${
+    `${CROSS_REFERENCE_CLAIMS_NON_TRANSFER_STATEMENT} ${input.recommendedTitle} covers only the organisms listed on its own label and efficacy data — a matching chemistry${
       shared ? ', or a shared registrant,' : ''
     } does not carry ${competitorLabel}'s claims across. Confirm every organism you need against ${input.recommendedTitle}'s label before substituting.`,
   );

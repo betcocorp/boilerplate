@@ -252,6 +252,76 @@ describe('recommendCrossReference (B0-85)', () => {
     expect(result.candidates).toHaveLength(1); // decline still carries the (weak) candidates
   });
 
+  it('B0-876: a betco.com TOP web result is a self-reference verdict — declined, no candidates, no enrich/retrieve', async () => {
+    const enrich = vi.fn();
+    const retrieve = vi.fn();
+    const betcoTopResult = {
+      title: 'GE Fight Bac™ RTU Disinfectant (Canada)',
+      url: 'https://www.betco.com/products/ge-fight-bac-rtu-canada',
+      snippet: 'Betco product page.',
+      score: 0.9,
+    };
+    const result = await recommendCrossReference(
+      { competitorProduct: 'Fight Bac RTU', competitorBrand: 'GE' },
+      {
+        lookupInternal: async () => legacyMiss,
+        searchWeb: async () => ({
+          response: {
+            query: 'GE Fight Bac RTU',
+            provider: 'mock',
+            answer: null,
+            results: [betcoTopResult, { ...betcoTopResult, url: 'https://example.com/other', title: 'Other' }],
+            metrics: { latencyMs: 1, resultCount: 2, estimatedCostUsd: 0, cached: false },
+          },
+          searchesUsed: 1,
+          estimatedCostUsd: 0,
+          budgetExceeded: false,
+          escalated: false,
+        }),
+        enrich,
+        retrieve,
+        filterGrounded: async (cands) => ({ grounded: cands, dropped: [] }),
+        validate: async () => APPROVED_VALIDATOR,
+      },
+    );
+    expect(result.status).toBe('declined');
+    expect(result.answered).toBe(false);
+    expect(result.candidates).toEqual([]);
+    expect(result.declineReason).toContain('GE Fight Bac RTU appears to be a Betco product');
+    expect(result.declineReason).toContain('GE Fight Bac™ RTU Disinfectant (Canada)');
+    expect(result.evidence.selfReference).toEqual({
+      url: betcoTopResult.url,
+      title: betcoTopResult.title,
+    });
+    expect(enrich).not.toHaveBeenCalled();
+    expect(retrieve).not.toHaveBeenCalled();
+  });
+
+  it('B0-876: a betco.com result that is NOT the top result changes nothing', async () => {
+    const result = await recommendCrossReference(
+      { competitorProduct: 'Unknown Cleaner X', competitorBrand: 'Acme' },
+      {
+        lookupInternal: async () => legacyMiss,
+        ...webVia([candidate(0.95, 'A')]),
+        searchWeb: async () => {
+          const ok = await webSearchOk();
+          return {
+            ...ok,
+            response: {
+              ...ok.response,
+              results: [
+                ...ok.response.results,
+                { title: 'Betco', url: 'https://www.betco.com/', snippet: 'Betco', score: 0.1 },
+              ],
+            },
+          };
+        },
+      },
+    );
+    expect(result.answered).toBe(true);
+    expect(result.evidence.selfReference).toBeUndefined();
+  });
+
   it('B0-91: drops ungrounded candidates so a fabricated match cannot inflate confidence', async () => {
     // Two strong candidates, but grounding resolves only 'A' to a real legacy row.
     const result = await recommendCrossReference(

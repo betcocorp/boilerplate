@@ -1558,6 +1558,475 @@ describe('regulated-claim guardrail partial redaction (B0-829)', () => {
   });
 });
 
+/* -------------------------------------------------------------------------- *
+ * B0-871 — regulated-claim guardrail: sentence-level redaction for compatibility / efficacy_claim
+ * on knowledge answers (extends B0-829). PROPOSED RULE, pending Tom's confirmation.
+ * -------------------------------------------------------------------------- */
+
+describe('regulated-claim guardrail sentence-level redaction (B0-871)', () => {
+  const DC_QUESTION = 'Do dilution control systems require plumbing or electrical work?';
+  const GROUNDED_PARA =
+    'Dilution control systems usually need a water connection but not electrical work. A licensed plumber is typically required for new lines, backflow prevention, or hard-plumbed runs. Local code and the authority having jurisdiction decide whether an approved backflow preventer or an air gap is required.';
+  const COMPAT_SENTENCE =
+    'The dispenser tubing is compatible with chlorinated bleach concentrates at any strength.';
+  const EFFICACY_SENTENCE = 'Diluted through the unit, the product kills 99.9% of bacteria on contact.';
+
+  /** A freeformQuery-only search over knowledge docs with no product-line lock — the golden shape. */
+  function arrangeKnowledgeTurn(draft: string, lock?: { lockedProductLineKey: string }) {
+    runResponsesWithToolLoopMock.mockImplementation(
+      generationCalling(
+        [
+          {
+            name: 'search_product_docs',
+            argumentsJson: JSON.stringify({ freeformQuery: DC_QUESTION }),
+            callId: 'call_1',
+          },
+        ],
+        { assistantText: draft },
+      ),
+    );
+    executeProductToolMock.mockResolvedValue({
+      sources: [
+        {
+          documentId: 'doc-kb-1',
+          chunkId: 'chunk-1',
+          title: 'Dilution Control Systems — Installation Overview',
+          snippet: 'Installation involves a water connection and chemical setup.',
+          documentBody: GROUNDED_PARA,
+          documentKind: 'knowledge',
+        },
+      ],
+      retrieval: {
+        search: {
+          model: 'text-embedding-3-large',
+          limit: 40,
+          scope: 'betco_us',
+          productLineKey: lock?.lockedProductLineKey ?? null,
+          productKey: null,
+          sectionType: null,
+          minSimilarity: null,
+          retrievalStrategy: 'hybrid_rrf',
+          embeddingSource: 'fresh',
+          timings: {
+            totalMs: 100,
+            queryEmbeddingMs: 10,
+            queryRewriteMs: 0,
+            cacheLookupMs: 1,
+            embeddingCreateMs: 9,
+            cachePersistMs: 1,
+            similaritySearchMs: 50,
+            rerankMs: 30,
+          },
+        },
+        selection: { limit: 8, minSimilarity: 0.2, maxPerDocument: 3, requiredDocumentKinds: [] },
+        productLineResolution: lock
+          ? {
+              candidates: [{ productLineKey: lock.lockedProductLineKey, label: null, maxSimilarity: 0.9 }],
+              lockedProductLineKey: lock.lockedProductLineKey,
+              lockReason: 'explicit_filter',
+            }
+          : { candidates: [], lockedProductLineKey: null, lockReason: 'skipped_no_product_line' },
+      },
+    });
+  }
+
+  function regulatedGateRecord() {
+    const record = singleGateRecord('regulated_claim_guardrail');
+    return record;
+  }
+
+  it('withholds ONE ungrounded compatibility sentence from a knowledge answer and keeps the rest verbatim', async () => {
+    const draft = `${GROUNDED_PARA} ${COMPAT_SENTENCE}`;
+    arrangeKnowledgeTurn(draft);
+    regulatedClaimGroundingMock.mockReturnValueOnce({
+      categoriesDetected: ['compatibility'],
+      ungroundedCategories: ['compatibility'],
+      ungroundedDetails: [{ category: 'compatibility', snippet: COMPAT_SENTENCE }],
+    });
+
+    const out = await run({ userMessage: DC_QUESTION });
+
+    expect(out.answerProvenance).toBe('regulated_claim_partial_redaction');
+    // Grounded content survives verbatim.
+    expect(out.answerText).toContain(GROUNDED_PARA);
+    // The withheld sentence — and every regulated token from it — is gone, replaced by the marker.
+    expect(out.answerText).not.toContain(COMPAT_SENTENCE);
+    expect(out.answerText).not.toContain('chlorinated bleach');
+    expect(out.answerText).not.toContain('any strength');
+    expect(out.answerText).toContain(
+      '[one compatibility statement withheld — not verifiable against a retrieved label]',
+    );
+    expect(out.answerText).toContain("I couldn't verify the compatibility statement above");
+    // Not the full-decline copy.
+    expect(out.answerText).not.toContain("I can't verify the");
+    // Validation is exactly what B0-829 applies.
+    expect(out.validation.approved).toBe(false);
+    expect(out.validation.requires_human_review).toBe(true);
+    expect(out.confidence).toBeLessThanOrEqual(0.4);
+    expect(out.validation.issues).toContain('regulated_claim_unverified:compatibility');
+    // The gate record + activation distinguish redaction from decline.
+    const record = regulatedGateRecord();
+    expect(record.verdict).toBe('redacted');
+    expect(record.inputs).toMatchObject({ redactionMode: 'sentence_redaction' });
+    expect(out.activeGates?.regulatedClaimGuardrail).toEqual({ state: 'ran', verdict: 'redacted' });
+  });
+
+  it('re-derives the WHOLE sentence when the validator reported a 240-char-truncated snippet', async () => {
+    const longEfficacy = `Independent testing shows that when the concentrate is dispensed through the proportioner at the factory-set ratio it kills 99.99% of Staphylococcus aureus, Pseudomonas aeruginosa and Salmonella enterica on hard non-porous surfaces in healthcare, school and food-service settings within the stated dwell period.`;
+    expect(longEfficacy.length).toBeGreaterThan(240);
+    const draft = `${GROUNDED_PARA} ${longEfficacy} Always confirm the setting with your distributor.`;
+    arrangeKnowledgeTurn(draft);
+    regulatedClaimGroundingMock.mockReturnValueOnce({
+      categoriesDetected: ['efficacy_claim'],
+      ungroundedCategories: ['efficacy_claim'],
+      ungroundedDetails: [{ category: 'efficacy_claim', snippet: longEfficacy.slice(0, 240) }],
+    });
+
+    const out = await run({ userMessage: DC_QUESTION });
+
+    expect(out.answerProvenance).toBe('regulated_claim_partial_redaction');
+    expect(out.answerText).not.toContain(longEfficacy);
+    // The tail past the 240-char cut is removed too — no orphaned fragment of the claim remains.
+    expect(out.answerText).not.toContain('within the stated dwell period');
+    expect(out.answerText).not.toContain('99.99%');
+    expect(out.answerText).toContain('[one efficacy claim withheld — not verifiable against a retrieved label]');
+    expect(out.answerText).toContain('Always confirm the setting with your distributor.');
+    expect(out.answerText).toContain(GROUNDED_PARA);
+  });
+
+  it('never redacts an ungrounded hazard or first_aid sentence — full decline, even on a knowledge answer', async () => {
+    for (const [category, sentence] of [
+      ['hazard', 'Causes severe skin burns and eye damage.'],
+      ['first_aid', 'If swallowed, rinse mouth and call a poison center immediately.'],
+    ] as const) {
+      arrangeKnowledgeTurn(`${GROUNDED_PARA} ${sentence}`);
+      regulatedClaimGroundingMock.mockReturnValueOnce({
+        categoriesDetected: [category],
+        ungroundedCategories: [category],
+        ungroundedDetails: [{ category, snippet: sentence }],
+      });
+
+      const out = await run({ userMessage: DC_QUESTION });
+
+      expect(out.answerProvenance).toBe('validator_fallback');
+      expect(out.answerText).toContain("I can't verify the");
+      expect(out.answerText).not.toContain(GROUNDED_PARA);
+      expect(out.answerText).not.toContain(sentence);
+      expect(regulatedGateRecord().verdict).toBe('rejected');
+      expect(regulatedGateRecord().inputs).toMatchObject({
+        declineReason: 'safety_critical_sentence_category',
+      });
+      expect(out.activeGates?.regulatedClaimGuardrail).toEqual({ state: 'ran', verdict: 'rejected' });
+      fake = createFakeSupabase();
+    }
+  });
+
+  it('falls back to the full decline when nothing substantive would remain after withholding', async () => {
+    // The draft IS the ungrounded claim, plus a few words of scaffolding.
+    arrangeKnowledgeTurn(`Short answer: ${EFFICACY_SENTENCE}`);
+    regulatedClaimGroundingMock.mockReturnValueOnce({
+      categoriesDetected: ['efficacy_claim'],
+      ungroundedCategories: ['efficacy_claim'],
+      ungroundedDetails: [{ category: 'efficacy_claim', snippet: EFFICACY_SENTENCE }],
+    });
+
+    const out = await run({ userMessage: DC_QUESTION });
+
+    expect(out.answerProvenance).toBe('validator_fallback');
+    expect(out.answerText).toContain("I can't verify the efficacy claim");
+    expect(out.answerText).not.toContain('99.9%');
+    expect(regulatedGateRecord().inputs).toMatchObject({ declineReason: 'nothing_substantive_remains' });
+  });
+
+  it('keeps the full decline for a product-usage-specific question (locked product line, label-led sources)', async () => {
+    runResponsesWithToolLoopMock.mockImplementation(
+      generationCalling(
+        [
+          {
+            name: 'search_product_docs',
+            argumentsJson: JSON.stringify({ productName: 'pH7Q Dual', topic: 'compatibility' }),
+            callId: 'call_1',
+          },
+        ],
+        { assistantText: `Dilute at 2 oz per gallon of water. ${COMPAT_SENTENCE} ${GROUNDED_PARA}` },
+      ),
+    );
+    executeProductToolMock.mockResolvedValue({
+      sources: [
+        {
+          documentId: 'doc-1',
+          chunkId: 'chunk-1',
+          title: 'pH7Q Dual label',
+          snippet: 'Use 2 oz per gallon of water. Safety: wear gloves.',
+          documentBody: 'Use 2 oz per gallon of water. Safety: wear gloves.',
+          documentKind: 'label',
+        },
+      ],
+      retrieval: {
+        search: {
+          model: 'text-embedding-3-large',
+          limit: 40,
+          scope: 'betco_us',
+          productLineKey: 'ph7q-dual',
+          productKey: null,
+          sectionType: null,
+          minSimilarity: null,
+          retrievalStrategy: 'hybrid_rrf',
+          embeddingSource: 'fresh',
+          timings: {
+            totalMs: 100,
+            queryEmbeddingMs: 10,
+            queryRewriteMs: 0,
+            cacheLookupMs: 1,
+            embeddingCreateMs: 9,
+            cachePersistMs: 1,
+            similaritySearchMs: 50,
+            rerankMs: 30,
+          },
+        },
+        selection: { limit: 8, minSimilarity: 0.2, maxPerDocument: 3, requiredDocumentKinds: [] },
+        productLineResolution: {
+          candidates: [{ productLineKey: 'ph7q-dual', label: 'pH7Q Dual', maxSimilarity: 0.93 }],
+          lockedProductLineKey: 'ph7q-dual',
+          lockReason: 'explicit_filter',
+        },
+      },
+    });
+    regulatedClaimGroundingMock.mockReturnValueOnce({
+      categoriesDetected: ['dilution_ratio', 'compatibility'],
+      ungroundedCategories: ['compatibility'],
+      ungroundedDetails: [{ category: 'compatibility', snippet: COMPAT_SENTENCE }],
+    });
+
+    const out = await run({ userMessage: 'Is pH7Q Dual compatible with bleach in the dispenser?' });
+
+    expect(out.answerProvenance).toBe('validator_fallback');
+    expect(out.answerText).not.toContain(COMPAT_SENTENCE);
+    expect(out.answerText).not.toContain('Dilute at 2 oz per gallon');
+    expect(regulatedGateRecord().verdict).toBe('rejected');
+    expect(regulatedGateRecord().inputs).toMatchObject({
+      declineReason: 'product_usage_specific_question',
+    });
+  });
+
+  it('a locked product line with knowledge-dominated sources still redacts (knowledge answer about a product)', async () => {
+    arrangeKnowledgeTurn(`${GROUNDED_PARA} ${COMPAT_SENTENCE}`, { lockedProductLineKey: 'fastdraw' });
+    regulatedClaimGroundingMock.mockReturnValueOnce({
+      categoriesDetected: ['compatibility'],
+      ungroundedCategories: ['compatibility'],
+      ungroundedDetails: [{ category: 'compatibility', snippet: COMPAT_SENTENCE }],
+    });
+
+    const out = await run({ userMessage: DC_QUESTION });
+
+    expect(out.answerProvenance).toBe('regulated_claim_partial_redaction');
+    expect(out.answerText).toContain(GROUNDED_PARA);
+    expect(out.answerText).not.toContain(COMPAT_SENTENCE);
+  });
+
+  it('B0-829 token redaction now also reports verdict "redacted" (was "rejected")', async () => {
+    regulatedClaimGroundingMock.mockReturnValueOnce({
+      categoriesDetected: ['dilution_ratio', 'contact_time'],
+      ungroundedCategories: ['contact_time'],
+      ungroundedDetails: [{ category: 'contact_time', snippet: '60 second contact time' }],
+    });
+    runResponsesWithToolLoopMock.mockImplementation(
+      generationCalling(
+        [
+          {
+            name: 'search_product_docs',
+            argumentsJson: JSON.stringify({ productName: 'pH7Q Dual', topic: 'tile floors' }),
+            callId: 'call_1',
+          },
+        ],
+        {
+          assistantText:
+            'Dilute at 2 oz per gallon of water. Allow a 60 second contact time for disinfection.',
+        },
+      ),
+    );
+
+    const out = await run();
+
+    expect(out.answerProvenance).toBe('regulated_claim_partial_redaction');
+    expect(regulatedGateRecord().verdict).toBe('redacted');
+    expect(regulatedGateRecord().inputs).toMatchObject({ redactionMode: 'token_redaction' });
+    expect(out.activeGates?.regulatedClaimGuardrail).toEqual({ state: 'ran', verdict: 'redacted' });
+  });
+});
+
+/* -------------------------------------------------------------------------- *
+ * B0-872 — usage/safety coverage gate: requires a product subject, not just the words
+ * -------------------------------------------------------------------------- */
+
+describe('usage/safety coverage gate requires a product subject (B0-872)', () => {
+  /** SportsZone #21 — verbatim from `public.test_items`. Names no Betco product. */
+  const SZ21 = 'Can I use a disinfectant or bleach to sanitize our wood gym floor?';
+  /** Dilution Control #10 — verbatim. No usage/safety shape at all after B0-872 (bare `dilution` is gone). */
+  const DC10 = 'Do dilution control systems require plumbing or electrical work?';
+
+  const KNOWLEDGE_DRAFT =
+    'Dilution control systems usually need a water connection but not electrical work. A licensed plumber is typically required for new lines, backflow prevention, or hard-plumbed runs.';
+
+  /** The live shape of the five golden misses: a freeformQuery-only search over knowledge docs. */
+  function arrangeKnowledgeTurn(message: string) {
+    runResponsesWithToolLoopMock.mockImplementation(
+      generationCalling(
+        [
+          {
+            name: 'search_product_docs',
+            argumentsJson: JSON.stringify({ freeformQuery: message }),
+            callId: 'call_1',
+          },
+        ],
+        { assistantText: KNOWLEDGE_DRAFT },
+      ),
+    );
+    executeProductToolMock.mockResolvedValue({
+      sources: [
+        {
+          documentId: 'doc-kb-1',
+          chunkId: 'chunk-1',
+          title: 'Dilution Control Systems — Installation Overview',
+          snippet: 'Installation involves a water connection and chemical setup.',
+          documentBody:
+            'Installation involves a water connection with backflow prevention, chemical setup, and an operational rollout. Use the correct product and setting.',
+          documentKind: 'knowledge',
+        },
+      ],
+      retrieval: {
+        search: {
+          model: 'text-embedding-3-large',
+          limit: 40,
+          scope: 'betco_us',
+          productLineKey: null,
+          productKey: null,
+          sectionType: null,
+          minSimilarity: null,
+          retrievalStrategy: 'hybrid_rrf',
+          embeddingSource: 'fresh',
+          timings: {
+            totalMs: 100,
+            queryEmbeddingMs: 10,
+            queryRewriteMs: 0,
+            cacheLookupMs: 1,
+            embeddingCreateMs: 9,
+            cachePersistMs: 1,
+            similaritySearchMs: 50,
+            rerankMs: 30,
+          },
+        },
+        selection: { limit: 8, minSimilarity: 0.2, maxPerDocument: 3, requiredDocumentKinds: [] },
+        productLineResolution: {
+          candidates: [],
+          lockedProductLineKey: null,
+          lockReason: 'skipped_no_product_line',
+        },
+      },
+    });
+  }
+
+  it('SZ#21: usage-shaped but product-less — keeps the knowledge draft, no cap, gate not_applicable with a reason', async () => {
+    arrangeKnowledgeTurn(SZ21);
+
+    const out = await run({ userMessage: SZ21 });
+
+    expect(out.answerProvenance).toBe('model_generated');
+    expect(out.answerText).toBe(KNOWLEDGE_DRAFT);
+    expect(out.answerText).not.toContain('do not have enough retrieved evidence');
+    expect(out.validation.approved).toBe(true);
+    expect(out.confidence).toBe(0.9);
+    expect(out.validation.issues).not.toContain('insufficient_safety_evidence');
+    expect(out.activeGates?.usageSafetyCoverage).toEqual({
+      state: 'not_applicable',
+      reason: 'no_product_subject',
+    });
+    // Not applicable ⇒ no gate record on the validator step (B0-391 convention).
+    expect(gateRecordsFor('usage_safety_coverage')).toEqual([]);
+  });
+
+  it('DC#10: no usage/safety shape at all — plain not_applicable, draft kept', async () => {
+    arrangeKnowledgeTurn(DC10);
+
+    const out = await run({ userMessage: DC10 });
+
+    expect(out.answerProvenance).toBe('model_generated');
+    expect(out.answerText).toBe(KNOWLEDGE_DRAFT);
+    expect(out.activeGates?.usageSafetyCoverage).toEqual({ state: 'not_applicable' });
+  });
+
+  it('a usage question about a NAMED product with no label/SDS retrieved still gets the template (B0-367 row unchanged)', async () => {
+    // The model named the product in its search call; only usage text came back, no safety text.
+    runResponsesWithToolLoopMock.mockImplementation(
+      generationCalling(
+        [
+          {
+            name: 'search_product_docs',
+            argumentsJson: JSON.stringify({ productName: 'pH7Q', topic: 'hospital floor' }),
+            callId: 'call_1',
+          },
+        ],
+        { assistantText: 'Apply pH7Q to the floor with a mop and let it dwell.' },
+      ),
+    );
+    executeProductToolMock.mockResolvedValue({
+      sources: [
+        {
+          documentId: 'doc-1',
+          chunkId: 'chunk-1',
+          title: 'pH7Q Dual label',
+          snippet: 'Usage: apply to the floor with a mop.',
+          documentBody: 'Usage: apply to the floor with a mop.',
+        },
+      ],
+    });
+
+    const out = await run({ userMessage: 'How do I use pH7Q on a hospital floor?' });
+
+    expect(out.answerProvenance).toBe('usage_safety_fallback');
+    expect(out.answerText).toContain('do not have enough retrieved evidence');
+    expect(out.confidence).toBeLessThanOrEqual(0.55);
+    const record = singleGateRecord('usage_safety_coverage');
+    expect(record.verdict).toBe('capped');
+    expect(record.inputs).toMatchObject({
+      usageSafetyQuestionShape: true,
+      hasProductSubject: true,
+      productSubjectSource: 'tool_arguments',
+      missingEvidence: ['safety'],
+    });
+    expect(record.thresholds).toMatchObject({ confidenceCap: 0.55 });
+    expect(out.activeGates?.usageSafetyCoverage).toEqual({ state: 'ran', verdict: 'capped' });
+  });
+
+  it('a product-line LOCK counts as the product subject even when the search was freeform', async () => {
+    arrangeKnowledgeTurn(SZ21);
+    // Same knowledge-only retrieval, but this time the turn's retrieval locked a product line.
+    const base = (await executeProductToolMock.getMockImplementation()!()) as Record<string, unknown>;
+    const retrieval = base.retrieval as Record<string, unknown>;
+    executeProductToolMock.mockResolvedValue({
+      ...base,
+      retrieval: {
+        ...retrieval,
+        productLineResolution: {
+          candidates: [{ productLineKey: 'ph7q-dual', label: 'pH7Q Dual', maxSimilarity: 0.91 }],
+          lockedProductLineKey: 'ph7q-dual',
+          lockReason: 'explicit_filter',
+          explicitKeySource: 'alias_exact',
+        },
+      },
+    });
+
+    const out = await run({ userMessage: 'Can I use pH7Q Dual to sanitize our wood gym floor?' });
+
+    expect(out.answerProvenance).toBe('usage_safety_fallback');
+    const record = singleGateRecord('usage_safety_coverage');
+    expect(record.inputs).toMatchObject({
+      hasProductSubject: true,
+      productSubjectSource: 'product_line_lock',
+    });
+  });
+});
+
 describe('prompt identity on the final output (B0-393 wiring)', () => {
   it('stamps the prompt version, bundle version and chat context on an answered run', async () => {
     const out = await run({

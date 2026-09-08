@@ -15,7 +15,15 @@ export type ProductLineResolutionResult = {
     | 'skipped_low_confidence'
     | 'skipped_ambiguous'
     | 'skipped_no_product_line'
-    | 'resolution_disabled';
+    | 'resolution_disabled'
+    /**
+     * B0-873 — the broad probe's best-scoring chunk was a `knowledge` document (which carries no
+     * `product_line_key` and so can never be a candidate), and it scored at least as high as the
+     * top product-line candidate. The question is about a procedure/topic, not a product; locking
+     * would filter every knowledge document out of retrieval in SQL. Only emitted when the caller
+     * passes `skipLockWhenKnowledgeOutranks` — see `resolveProductLineFromMatches`.
+     */
+    | 'skipped_knowledge_top_hit';
   /**
    * B0-693 — NOT set by this function itself (it has no visibility into alias resolution, which
    * happens upstream in the caller). Callers (`~/lib/retrieval/product-knowledge.ts`) attach this
@@ -45,6 +53,20 @@ export const DEFAULT_HIGH_CONFIDENCE_ABSOLUTE = 0.64;
 
 const MAX_CANDIDATES = 3;
 
+/** B0-873 — highest `similarity` among `knowledge`-kind matches, or null when there are none. */
+function maxKnowledgeSimilarity(matches: RagSearchMatch[]): number | null {
+  let best: number | null = null;
+  for (const m of matches) {
+    if (m.document_kind !== 'knowledge') {
+      continue;
+    }
+    if (best === null || m.similarity > best) {
+      best = m.similarity;
+    }
+  }
+  return best;
+}
+
 /**
  * From an unfiltered product similarity result set, derive the top few `product_line_key`
  * candidates and optionally lock retrieval to one line when confidence is high enough.
@@ -70,6 +92,16 @@ export function resolveProductLineFromMatches(
     minLockMargin?: number;
     /** B0-757 — settings-backed override; falls back to `DEFAULT_HIGH_CONFIDENCE_ABSOLUTE`. */
     highConfidenceAbsolute?: number;
+    /**
+     * B0-873 — refuse to lock when a `knowledge`-kind chunk is the probe's best match (its
+     * `similarity` >= the top product-line candidate's `maxSimilarity`). Knowledge documents have no
+     * `product_line_key`, so they are invisible to the candidate ranking below and a lock would
+     * drop every one of them from the line-filtered search that follows (VCT#17 locked "Hard Film
+     * Floor Finish" at 0.578 while eighteen of the twenty probe hits were VCT knowledge documents
+     * scoring 0.61–0.67). Opt-in so the B0-693 unit tests keep exercising the bare lock rules; the
+     * one production call site passes `true`.
+     */
+    skipLockWhenKnowledgeOutranks?: boolean;
   } = {},
 ): ProductLineResolutionResult {
   const minSim = options.minLockSimilarity ?? DEFAULT_MIN_LOCK_SIMILARITY;
@@ -125,6 +157,20 @@ export function resolveProductLineFromMatches(
   const spread =
     second != null ? first.maxSimilarity - second.maxSimilarity : 1;
   const requireMargin = options.requireMarginForHighConfidence === true;
+
+  // B0-873 — checked before every lock path (including the absolute-threshold shortcut) so no
+  // score, however high, can push aside a knowledge document that outranked it. Uses the raw
+  // cosine `similarity`, the same measure `maxSimilarity` is built from above.
+  if (options.skipLockWhenKnowledgeOutranks === true) {
+    const topKnowledge = maxKnowledgeSimilarity(matches);
+    if (topKnowledge !== null && topKnowledge >= first.maxSimilarity) {
+      return {
+        candidates,
+        lockedProductLineKey: null,
+        lockReason: 'skipped_knowledge_top_hit',
+      };
+    }
+  }
 
   if (first.maxSimilarity >= highAbs && !requireMargin) {
     return {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { CROSS_REFERENCE_CLAIMS_NON_TRANSFER_STATEMENT } from '~/lib/agents/cross-reference-specialist/cross-reference-specialist-system-prompt';
 import { buildCompetitiveRecommendationAnswer } from '~/lib/recommendations/recommendation-answer';
 
 describe('buildCompetitiveRecommendationAnswer', () => {
@@ -55,7 +56,8 @@ describe('buildCompetitiveRecommendationAnswer', () => {
     it('always states that kill claims do not transfer, naming both products', () => {
       const out = buildCompetitiveRecommendationAnswer(base);
       expect(out).toContain('**Kill claims do not transfer**');
-      expect(out).toContain("each product's own EPA registration and label");
+      // B0-875 — the shared regulatory statement, verbatim, not a local paraphrase.
+      expect(out).toContain(CROSS_REFERENCE_CLAIMS_NON_TRANSFER_STATEMENT);
       expect(out).toContain('Triforce Disinfectant covers only the organisms listed on its own');
       expect(out).toContain("Spartan BNC-15's claims");
     });

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   answerProvenanceSchema,
+  gateActivationRecordSchema,
   gateRecordSchema,
   productSupportFinalOutputSchema,
   productSupportStepInputSchema,
@@ -74,7 +75,7 @@ describe('productSupportFinalOutputSchema — B0-388 additions are backward comp
 describe('answerProvenanceSchema', () => {
   // B0-356 added `recommendation_engine_decline` (the recommendation engine's own decline, which is
   // NOT this workflow's validator fallback).
-  it('covers exactly the twelve answer branches', () => {
+  it('covers exactly the thirteen answer branches', () => {
     expect(answerProvenanceSchema.options).toEqual([
       'model_generated',
       'template_override',
@@ -89,9 +90,30 @@ describe('answerProvenanceSchema', () => {
       'competitor_identity_unresolved_decline',
       // B0-700 follow-up — the deterministic fuzzy-alias disclosure prepend's own provenance value.
       'alias_fuzzy_disclosure_prepended',
+      // B0-875 — the generic-chemistry clarifying question's own provenance value.
+      'generic_chemistry_clarification',
       // B0-829 — the regulated-claim guardrail's surgical partial-redaction provenance value.
       'regulated_claim_partial_redaction',
     ]);
+  });
+});
+
+describe('gateActivationRecordSchema', () => {
+  it('B0-871: accepts the regulated-claim guardrail\'s "redacted" verdict alongside "rejected"', () => {
+    for (const verdict of ['passed', 'rejected', 'redacted', 'capped']) {
+      expect(gateActivationRecordSchema.safeParse({ state: 'ran', verdict }).success).toBe(true);
+    }
+  });
+
+  it('B0-872: accepts a not_applicable record carrying the no_product_subject reason', () => {
+    expect(
+      gateActivationRecordSchema.safeParse({
+        state: 'not_applicable',
+        reason: 'no_product_subject',
+      }).success,
+    ).toBe(true);
+    // The plain form (no reason) still parses — it is what every other not_applicable gate writes.
+    expect(gateActivationRecordSchema.safeParse({ state: 'not_applicable' }).success).toBe(true);
   });
 });
 

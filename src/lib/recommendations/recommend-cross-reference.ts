@@ -2,6 +2,8 @@ import {
   retrieveBetcoCandidates,
   type BetcoCandidate,
 } from '~/lib/recommendations/candidate-retrieval';
+import { findBetcoSelfReferenceWebResult } from '~/lib/recommendations/competitor-self-reference';
+import { buildBetcoSelfReferenceDecline } from '~/lib/recommendations/cross-reference-decline';
 import { lookupCrossReferenceRunScoped } from '~/lib/recommendations/legacy-lookup-cache';
 import {
   gateRecommendation,
@@ -517,6 +519,41 @@ async function runWebGroundedPath(ctx: WebGroundedPathContext): Promise<Recommen
   }
 
   const web = search.response;
+
+  /**
+   * B0-876 — the top web result for the "competitor" is a betco.com page: the product is Betco's
+   * own (P#19: "GE Fight Bac RTU" → betco.com/products/ge-fight-bac-rtu-canada), so there is no
+   * competitor to cross-reference and nothing downstream may treat it as a candidate. Declined with
+   * the self-reference copy rather than `XREF_DECLINE_COPY`, and recorded on the evidence so the
+   * audit row says WHY. The competitor self-reference check (`classifyCompetitorSelfReference`) is
+   * the primary defence upstream; this is the backstop for a name it did not recognise.
+   */
+  const betcoSelfReference = findBetcoSelfReferenceWebResult(web.results);
+  if (betcoSelfReference) {
+    return {
+      source: 'web',
+      answered: false,
+      status: 'declined',
+      overallConfidence: 0,
+      thresholdUsed: await resolveXrefThreshold(),
+      candidates: [],
+      evidence: {
+        source: 'web',
+        webSearch,
+        selfReference: { url: betcoSelfReference.url, title: betcoSelfReference.title },
+        webSearchResults: {
+          query: web.query,
+          results: web.results.map((r) => ({ url: r.url, title: r.title, snippet: r.snippet ?? null })),
+        },
+        timingBreakdown: buildTiming(timer, webSearch, legacyCacheHit),
+      },
+      declineReason: buildBetcoSelfReferenceDecline({
+        label: [brand, input.competitorProduct].filter(Boolean).join(' '),
+        pageTitle: betcoSelfReference.title,
+      }),
+    };
+  }
+
   const text = web.results
     .map((r) => r.rawContent ?? r.snippet ?? '')
     .filter(Boolean)

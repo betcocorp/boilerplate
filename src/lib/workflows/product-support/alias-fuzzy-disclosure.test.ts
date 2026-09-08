@@ -107,6 +107,38 @@ describe('extractAliasFuzzyDisclosureFromToolOutputs (B0-700 follow-up)', () => 
     expect(match).toBeNull();
   });
 
+  /**
+   * B0-875 (P#8) — the enforced `search_product_docs` after a cross-reference hit is seeded with the
+   * LEGACY match's Betco title, not anything the user typed; when that match was a fuzzy row
+   * (`fallbackRecommended: true`) its title alias-resolved fuzzily and the disclosure quoted a
+   * cross-reference candidate back at the user as if they had asked for it.
+   */
+  it('does NOT fire for a workflow_injected call — the disclosure only echoes a name the user asked for', () => {
+    const match = extractAliasFuzzyDisclosureFromToolOutputs([
+      {
+        toolName: 'search_product_docs',
+        ok: true,
+        output: JSON.stringify({
+          ok: true,
+          query: 'AF79 Concentrate Disinfectant',
+          aliasResolution: {
+            attempted: true,
+            outcome: 'alias_fuzzy',
+            mode: 'name',
+            matchedTitle: AF79_RESOLVED_TITLE,
+          },
+          sources: [],
+        }),
+        trace: trace({
+          toolName: 'search_product_docs',
+          callId: 'forced-search-1',
+          origin: 'workflow_injected',
+        }),
+      },
+    ]);
+    expect(match).toBeNull();
+  });
+
   it('does NOT fire for an unendorsed speculative call whose product-line resolution never locked (B0-635)', () => {
     const match = extractAliasFuzzyDisclosureFromToolOutputs([
       efficacyToolOutput({

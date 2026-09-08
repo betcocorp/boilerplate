@@ -7,6 +7,7 @@ import {
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 import {
+  assembleChunkIndexSetBody,
   assembleNeighborChunkBodies,
   chunkWindowKey,
   fetchDocumentSourceRefs,
@@ -158,6 +159,37 @@ export type ProductKnowledgeRetrievalSummary = {
    * `productLineKey`, so the merge can never introduce a cross-line document.
    */
   usedLineKindSupplement: boolean;
+  /**
+   * B0-873 — true when a procedural/knowledge-shaped question (`proceduralIntent`) reached a
+   * LINE-FILTERED path (`explicit_product_line`, or `anchored_only` after a broad-probe lock) and
+   * an UNLOCKED `scope: 'knowledge'` search was merged into that pass's candidate pool before
+   * curation. `knowledge`-kind documents carry no `product_line_key` (verified live: every one of
+   * them has `entity_id IS NULL`), so the SQL line filter can only ever drop them — "How long does
+   * it take to get FastDraw Pro up and running?" alias-locked the FastDraw Pro line and reached the
+   * model with one product-profile chunk while the knowledge document answering it was never
+   * searched. Never set for a label-governed question (`isLabelGovernedQuery`): regulated values
+   * stay grounded on the locked line's label/SDS only. False on every unlocked path, where the
+   * broad pass already sees knowledge documents.
+   */
+  usedKnowledgeSupplement: boolean;
+  /** B0-873 — final sources that came from the unlocked knowledge pass. 0 when it did not run. */
+  knowledgeSupplementCuratedCount: number;
+  /**
+   * B0-874 — when the highest-similarity curated source is a `knowledge` document AND either the
+   * question is procedural (`proceduralIntent`) or the ranking itself corroborates the document
+   * (two or more of its chunks in the winning candidate pool), that ONE source's `documentBody` is
+   * re-assembled from every chunk of the same document present in the pool plus
+   * `KNOWLEDGE_SIBLING_RADIUS` chunks around each (`assembleChunkIndexSetBody`), instead of the
+   * default ±1 window around the single matched chunk. Records which document and which pool chunk
+   * indexes seeded the expansion; null when no expansion happened. Other sources' slots are
+   * untouched — this is depth for one document, not a `maxPerDocument` increase (B0-759 measured
+   * that and rejected it).
+   */
+  knowledgeSiblingExpansion: {
+    documentId: string;
+    title: string;
+    chunkIndexes: number[];
+  } | null;
   /**
    * B0-556 — SDS-kind sources withheld because they were not provably on the resolved product
    * line. Non-zero means the answer was deliberately denied regulated safety evidence rather than
@@ -618,19 +650,165 @@ export function isClaimLikeQuery(query: string): boolean {
  * miss must only be able to WIDEN label-first grounding, never narrow it. `isClaimLikeQuery` and
  * `inferSectionTypeFromQuery` remain the floor under this decision.
  */
+function isLabelGovernedQuery(
+  query: string,
+  sectionType: string | null,
+  regulatedSectionIntent?: boolean,
+): boolean {
+  return (
+    isClaimLikeQuery(query) ||
+    (sectionType !== null && CLAIM_LIKE_SECTION_TYPES.has(sectionType)) ||
+    regulatedSectionIntent === true
+  );
+}
+
 function resolveRequiredDocumentKinds(
   query: string,
   sectionType: string | null,
   regulatedSectionIntent?: boolean,
 ): string[] {
-  if (
-    isClaimLikeQuery(query) ||
-    (sectionType && CLAIM_LIKE_SECTION_TYPES.has(sectionType)) ||
-    regulatedSectionIntent === true
-  ) {
+  if (isLabelGovernedQuery(query, sectionType, regulatedSectionIntent)) {
     return LABEL_FIRST_REQUIRED_DOCUMENT_KINDS;
   }
   return DEFAULT_REQUIRED_DOCUMENT_KINDS;
+}
+
+/**
+ * B0-873 — candidate count for the unlocked knowledge pass. `scope: 'knowledge'` is an app-layer
+ * kind filter over `filter_scope: 'all'` (see `resolveSearchScope` in `~/lib/rag/search.ts`), so
+ * `searchProductChunks` over-fetches `max(limit * 10, 100)` RPC rows for it; 10 keeps that at the
+ * 100 floor while still yielding several distinct knowledge documents under `maxPerDocument: 1`.
+ */
+const KNOWLEDGE_SUPPLEMENT_FETCH_LIMIT = 10;
+
+/** B0-874 — chunks on either side of each pooled sibling folded into the expanded knowledge body. */
+const KNOWLEDGE_SIBLING_RADIUS = 2;
+
+/**
+ * B0-874 — char cap for the ONE expanded knowledge body. Matches the model-facing per-source cap
+ * (`MODEL_DOCUMENT_BODY_MAX_CHARS`, `~/lib/tools/model-tool-payload.ts`) so the expansion never
+ * produces text the model would not see anyway.
+ */
+const KNOWLEDGE_SIBLING_MAX_CHARS = 8_000;
+
+/** B0-873 — the unlocked, knowledge-only pass merged into a line-filtered retrieval. */
+function searchKnowledgeSupplement(
+  query: string,
+  excludeKnowledgeCategories: string[],
+): Promise<RagSearchResult> {
+  return searchProductChunks({
+    query,
+    limit: KNOWLEDGE_SUPPLEMENT_FETCH_LIMIT,
+    scope: 'knowledge',
+    useHybrid: true,
+    useReranker: PRODUCT_SUPPORT_RERANK_ENABLED,
+    excludeKnowledgeCategories,
+  });
+}
+
+/**
+ * B0-873 — line-filtered matches first, then knowledge matches not already present (by
+ * `chunk_id`). Order only matters for tie-breaks: `selectCuratedMatches` re-sorts by `similarity`
+ * and the two passes report the same raw cosine measure (both come from the same
+ * `match_corpus_chunks_hybrid` RPC against the same query embedding), so the merged pool ranks
+ * honestly across kinds.
+ */
+function mergeKnowledgeSupplement(
+  primary: RagSearchMatch[],
+  supplement: RagSearchMatch[],
+): RagSearchMatch[] {
+  if (supplement.length === 0) {
+    return primary;
+  }
+  const seen = new Set(primary.map((m) => m.chunk_id));
+  return [...primary, ...supplement.filter((m) => !seen.has(m.chunk_id))];
+}
+
+/** B0-873 — final sources whose matched chunk came from the supplement pass only. */
+function countSupplementSources(
+  sources: CuratedSource[],
+  primary: RagSearchMatch[],
+  supplement: RagSearchMatch[],
+): number {
+  if (supplement.length === 0) {
+    return 0;
+  }
+  const primaryIds = new Set(primary.map((m) => m.chunk_id));
+  const supplementOnly = new Set(
+    supplement.map((m) => m.chunk_id).filter((id) => !primaryIds.has(id)),
+  );
+  return sources.filter((s) => supplementOnly.has(s.chunkId)).length;
+}
+
+/**
+ * B0-874 — widen the single highest-similarity source to its sibling chunks, ONLY when that source
+ * is a `knowledge` document. A label/SDS/profile outranking every knowledge hit means the question
+ * is product-centric and the default ±1 window stays.
+ *
+ * The seed set is every chunk of that document in the winning pass's raw candidate pool (`pool`):
+ * these are chunks similarity already ranked as relevant but `maxPerDocument: 1` dropped (SZ#11:
+ * "Wood Gym Floor Environmental FAQ Guide" chunk 10 won the slot at 0.609 while chunk 1 — the
+ * humidity/temperature range the question asks for — sat at 0.601, one place below it). Each seed
+ * is padded by `KNOWLEDGE_SIBLING_RADIUS`, and the whole body is capped at
+ * `KNOWLEDGE_SIBLING_MAX_CHARS`. `documentBodyChunkIds` lists every chunk actually stitched, so the
+ * audit trail stays truthful. Left untouched when the expansion would not add a chunk.
+ *
+ * Trigger: `proceduralIntent`, OR at least two pooled chunks of the top document. The second arm
+ * exists because most of the B0-874 items match no depth pattern at all ("What humidity and
+ * temperature should the gym be at…", "…what should I check first?", "How are dilution systems kept
+ * secure…" all classify as the bare default) yet fail identically: the ranking put several sections
+ * of one document in the pool and `maxPerDocument: 1` let exactly one 30–200-token section through.
+ * Two pooled siblings is the ranking's own statement that the document — not one paragraph of it —
+ * is the answer; a single pooled chunk never expands on its own.
+ */
+async function expandTopKnowledgeSource(
+  sources: CuratedSource[],
+  pool: RagSearchMatch[],
+  options: { proceduralIntent: boolean },
+): Promise<{
+  sources: CuratedSource[];
+  expansion: ProductKnowledgeRetrievalSummary['knowledgeSiblingExpansion'];
+}> {
+  const top = sources.reduce<CuratedSource | null>(
+    (best, s) => (best === null || s.similarity > best.similarity ? s : best),
+    null,
+  );
+  if (!top || top.documentKind !== 'knowledge') {
+    return { sources, expansion: null };
+  }
+
+  const seeds = new Set<number>();
+  for (const m of pool) {
+    if (m.document_id === top.documentId) {
+      seeds.add(m.chunk_index);
+    }
+  }
+  if (seeds.size === 0 || (!options.proceduralIntent && seeds.size < 2)) {
+    return { sources, expansion: null };
+  }
+  const chunkIndexes = [...seeds].sort((a, b) => a - b);
+
+  const body = await assembleChunkIndexSetBody(
+    { documentId: top.documentId, chunkIndexes },
+    { radius: KNOWLEDGE_SIBLING_RADIUS, maxChars: KNOWLEDGE_SIBLING_MAX_CHARS },
+  );
+  if (body.chunkCount === 0 || body.chunkIds.length <= top.documentBodyChunkIds.length) {
+    return { sources, expansion: null };
+  }
+
+  const expanded: CuratedSource = {
+    ...top,
+    documentBody: body.body,
+    documentBodyChars: body.body.length,
+    documentBodyChunkCount: body.chunkCount,
+    documentBodyTruncated: body.truncated,
+    documentBodyTokenEstimate: body.estimatedTokens,
+    documentBodyChunkIds: body.chunkIds,
+  };
+  return {
+    sources: sources.map((s) => (s === top ? expanded : s)),
+    expansion: { documentId: top.documentId, title: top.title, chunkIndexes },
+  };
 }
 
 /**
@@ -713,6 +891,13 @@ async function runProductKnowledgeQuery(input: {
    * passes an explicit `requiredDocumentKinds`, exactly like the deterministic checks are.
    */
   regulatedSectionIntent?: boolean;
+  /**
+   * B0-873/B0-874 — the question is procedural/enumeration-shaped (`classifyRetrievalIntent`'s
+   * `procedural`, `~/lib/tools/product-tools.ts`). Enables the unlocked knowledge supplement on
+   * line-filtered paths (`usedKnowledgeSupplement`) and the top-knowledge-source sibling expansion
+   * (`knowledgeSiblingExpansion`). Omitted by every other caller, whose retrieval is unchanged.
+   */
+  proceduralIntent?: boolean;
 }): Promise<ProductKnowledgeQueryBase> {
   const retrievalStartedAt = performance.now();
   const limit = input.limit ?? DEFAULT_UNIQUE_DOCUMENT_LIMIT;
@@ -724,6 +909,13 @@ async function runProductKnowledgeQuery(input: {
     input.requiredDocumentKinds ??
     resolveRequiredDocumentKinds(input.query, sectionType, input.regulatedSectionIntent);
   const excludeKnowledgeCategories = input.excludeKnowledgeCategories ?? [];
+  const proceduralIntent = input.proceduralIntent === true;
+  // B0-873 — a regulated (label-governed) question never gets unlocked knowledge merged into a
+  // locked retrieval, whatever its shape: "how long is the contact time for <SKU>" is procedural
+  // by phrasing but its answer must come from the locked line's label/SDS alone (B0-693).
+  const knowledgeSupplementEligible =
+    proceduralIntent &&
+    !isLabelGovernedQuery(input.query, sectionType, input.regulatedSectionIntent);
 
   if (explicitKey) {
     // B0-272 follow-up: `filter_section_type` is a hard SQL-level filter against
@@ -736,18 +928,29 @@ async function runProductKnowledgeQuery(input: {
     // store" -- all common label phrasing too), which is exactly what broke the
     // B0-272 prose fallback in practice. Do not filter scope:'all' searches by
     // section type; let curation/reranking do the narrowing instead.
-    const result = await searchProductChunks({
-      query: input.query,
-      limit: SIMILARITY_CANDIDATE_FETCH_LIMIT,
-      productLineKey: explicitKey,
-      productKey: explicitProductKey ?? undefined,
-      scope: 'all',
-      useHybrid: true,
-      useReranker: PRODUCT_SUPPORT_RERANK_ENABLED,
-      excludeKnowledgeCategories,
-    });
+    // B0-873 — the unlocked knowledge pass runs alongside the line-filtered search (it depends only
+    // on the query), so a procedural question pays wall clock for one search, not two.
+    const [result, knowledgeResult] = await Promise.all([
+      searchProductChunks({
+        query: input.query,
+        limit: SIMILARITY_CANDIDATE_FETCH_LIMIT,
+        productLineKey: explicitKey,
+        productKey: explicitProductKey ?? undefined,
+        scope: 'all',
+        useHybrid: true,
+        useReranker: PRODUCT_SUPPORT_RERANK_ENABLED,
+        excludeKnowledgeCategories,
+      }),
+      knowledgeSupplementEligible
+        ? searchKnowledgeSupplement(input.query, excludeKnowledgeCategories)
+        : Promise.resolve(null),
+    ]);
+    const supplementMatches = knowledgeResult?.matches ?? [];
 
-    let curated = await curateUniqueDocumentSources(result.matches, {
+    // Selection over the LINE-FILTERED matches only. The B0-250 fallback decision below must keep
+    // reading the locked line's own evidence: if it looked at the merged pool, a knowledge hit
+    // would mask an empty product-key search and the line-level retry would never run.
+    let lineSelected = await selectCuratedSourceMatches(result.matches, {
       limit,
       requiredDocumentKinds,
       maxPerDocument,
@@ -759,13 +962,14 @@ async function runProductKnowledgeQuery(input: {
     let usedProductKeyFallback = false;
     // Every similarity search performed on this path, so `searchMs` below counts the B0-250
     // fallback search too instead of silently under-reporting it.
-    let searchMsTotal = result.timings.similaritySearchMs;
+    let searchMsTotal =
+      result.timings.similaritySearchMs + (knowledgeResult?.timings.similaritySearchMs ?? 0);
     // B0-490 — raw candidates behind the winning pass (starts as the explicit-key search's
     // matches; replaced wholesale if the B0-250 product-key fallback below actually ran).
     let rawMatches = result.matches;
     // B0-493 — the winning `RagSearchResult`, same replacement rule as `rawMatches` above.
     let winningResult: RagSearchResult = result;
-    if (curated.length === 0 && explicitProductKey) {
+    if (lineSelected.length === 0 && explicitProductKey) {
       const lineResult = await searchProductChunks({
         query: input.query,
         limit: SIMILARITY_CANDIDATE_FETCH_LIMIT,
@@ -778,7 +982,7 @@ async function runProductKnowledgeQuery(input: {
       searchMsTotal += lineResult.timings.similaritySearchMs;
       rawMatches = lineResult.matches;
       winningResult = lineResult;
-      curated = await curateUniqueDocumentSources(lineResult.matches, {
+      lineSelected = await selectCuratedSourceMatches(lineResult.matches, {
         limit,
         requiredDocumentKinds,
         maxPerDocument,
@@ -786,8 +990,24 @@ async function runProductKnowledgeQuery(input: {
       usedProductKeyFallback = true;
     }
 
+    // Without a supplement this is exactly the previous `curateUniqueDocumentSources` (select ->
+    // hydrate). With one, the line pool and the knowledge pool are curated TOGETHER under the same
+    // limit / kinds / per-document cap, so a knowledge document earns a slot on similarity like any
+    // other candidate rather than being bolted on.
+    const explicitPool = mergeKnowledgeSupplement(rawMatches, supplementMatches);
+    const curated =
+      supplementMatches.length === 0
+        ? await hydrateCuratedSources(lineSelected)
+        : await curateUniqueDocumentSources(explicitPool, {
+            limit,
+            requiredDocumentKinds,
+            maxPerDocument,
+          });
+    const { sources: explicitSources, expansion: explicitExpansion } =
+      await expandTopKnowledgeSource(curated, explicitPool, { proceduralIntent });
+
     return {
-      sources: curated,
+      sources: explicitSources,
       retrieval: {
         strategy: 'explicit_product_line',
         cacheSource: result.embeddingSource,
@@ -798,6 +1018,13 @@ async function runProductKnowledgeQuery(input: {
         usedBroadFallback: false,
         usedProductKeyFallback,
         usedLineKindSupplement: false,
+        usedKnowledgeSupplement: knowledgeResult !== null,
+        knowledgeSupplementCuratedCount: countSupplementSources(
+          curated,
+          rawMatches,
+          supplementMatches,
+        ),
+        knowledgeSiblingExpansion: explicitExpansion,
         // Line-filtered in SQL; nothing to withhold.
         withheldUnanchoredSdsCount: 0,
         broadCuratedCount: curated.length,
@@ -811,9 +1038,11 @@ async function runProductKnowledgeQuery(input: {
           // into `final_output.productLineLock` (see `productLineLockSchema`'s doc comment).
           explicitKeySource: input.productLineKeySource ?? 'unspecified',
         },
+        // Line-only on purpose (the score `evaluateRecommendationGate` was calibrated against);
+        // the supplement's candidates are reported through `knowledgeSupplementCuratedCount`.
         rawTopSimilarity: maxSimilarity(rawMatches),
         selectedTopSimilarity: maxSimilarity(curated),
-        droppedByFilterCount: Math.max(0, rawMatches.length - curated.length),
+        droppedByFilterCount: Math.max(0, explicitPool.length - curated.length),
         search: buildSearchDetails(winningResult, { productLineKey: explicitKey }),
         selection: buildSelectionDetails({ limit, maxPerDocument, requiredDocumentKinds }),
       },
@@ -859,6 +1088,11 @@ async function runProductKnowledgeQuery(input: {
         usedBroadFallback: false,
         usedProductKeyFallback: false,
         usedLineKindSupplement: false,
+        // Unlocked `scope: 'products'` search: no line filter to supplement, and no knowledge
+        // documents in the pool to expand.
+        usedKnowledgeSupplement: false,
+        knowledgeSupplementCuratedCount: 0,
+        knowledgeSiblingExpansion: null,
         withheldUnanchoredSdsCount: withheldSds,
         broadCuratedCount: curated.length,
         anchoredCuratedCount: 0,
@@ -915,6 +1149,13 @@ async function runProductKnowledgeQuery(input: {
     minLockSimilarity: lockThresholds.minLockSimilarity,
     minLockMargin: lockThresholds.minLockMargin,
     highConfidenceAbsolute: lockThresholds.highConfidenceAbsolute,
+    // B0-873 — a knowledge document that outranks every product-line candidate must never be
+    // pushed aside by a lock (which would filter it out of the anchored search entirely). Applied
+    // for every query shape, not only procedural ones: VCT#17 ("what stripping and finish products
+    // should I use for my VCT floor?") matched no depth pattern yet locked "Hard Film Floor Finish"
+    // at 0.578 under eighteen higher-scoring VCT knowledge chunks. The B0-693 margin rule is
+    // untouched — this only ADDS a reason to decline, never a reason to lock.
+    skipLockWhenKnowledgeOutranks: true,
   });
   const requiredDocumentKindsForQuery = resolveRequiredDocumentKinds(input.query, sectionType);
 
@@ -939,8 +1180,15 @@ async function runProductKnowledgeQuery(input: {
       broadHydrated,
       null,
     );
+    // B0-874 — unlocked pass: knowledge documents are already in the pool, so only the sibling
+    // expansion applies here (no supplement to merge).
+    const { sources: broadSources, expansion: broadExpansion } = await expandTopKnowledgeSource(
+      broadCurated,
+      broadResult.matches,
+      { proceduralIntent },
+    );
     return {
-      sources: broadCurated,
+      sources: broadSources,
       retrieval: {
         strategy: 'broad_only',
         cacheSource: broadResult.embeddingSource,
@@ -951,6 +1199,9 @@ async function runProductKnowledgeQuery(input: {
         usedBroadFallback: false,
         usedProductKeyFallback: false,
         usedLineKindSupplement: false,
+        usedKnowledgeSupplement: false,
+        knowledgeSupplementCuratedCount: 0,
+        knowledgeSiblingExpansion: broadExpansion,
         withheldUnanchoredSdsCount: withheldSds,
         broadCuratedCount: broadCurated.length,
         anchoredCuratedCount: 0,
@@ -971,7 +1222,7 @@ async function runProductKnowledgeQuery(input: {
     };
   }
 
-  const [broadSelected, anchoredResult] = await Promise.all([
+  const [broadSelected, anchoredResult, anchoredKnowledgeResult] = await Promise.all([
     broadSelectedPromise,
     searchProductChunks({
       query: input.query,
@@ -982,9 +1233,18 @@ async function runProductKnowledgeQuery(input: {
       useReranker: PRODUCT_SUPPORT_RERANK_ENABLED,
       excludeKnowledgeCategories,
     }),
+    // B0-873 — the anchored search below is line-filtered in SQL exactly like the explicit-key
+    // path, so a broad-probe lock starves knowledge documents the same way; same remedy, run
+    // concurrently with the anchored search. Only reached once a line actually locked, so an
+    // unlocked query never pays for it.
+    knowledgeSupplementEligible
+      ? searchKnowledgeSupplement(input.query, excludeKnowledgeCategories)
+      : Promise.resolve(null),
   ]);
+  const anchoredSupplementMatches = anchoredKnowledgeResult?.matches ?? [];
+  const anchoredPool = mergeKnowledgeSupplement(anchoredResult.matches, anchoredSupplementMatches);
 
-  const anchoredSelected = await selectCuratedSourceMatches(anchoredResult.matches, {
+  const anchoredSelected = await selectCuratedSourceMatches(anchoredPool, {
     limit,
     // B0-759 follow-up — same omission as the broad pass above; both must agree or the fallback
     // comparison below would weigh two passes curated under different rules.
@@ -1021,21 +1281,40 @@ async function runProductKnowledgeQuery(input: {
     ? withholdUnanchoredSafetySources(finalHydrated, resolution.lockedProductLineKey)
     : { sources: finalHydrated, withheldCount: 0 };
 
+  // B0-874 — expansion seeds come from whichever pool actually produced `finalCurated`.
+  const winningPool = shouldUseBroadFallback ? broadResult.matches : anchoredPool;
+  const { sources: finalSources, expansion: finalExpansion } = await expandTopKnowledgeSource(
+    finalCurated,
+    winningPool,
+    { proceduralIntent },
+  );
+
   return {
-    sources: finalCurated,
+    sources: finalSources,
     retrieval: {
       strategy,
       cacheSource: anchoredResult.embeddingSource,
       searchMs:
-        broadResult.timings.similaritySearchMs + anchoredResult.timings.similaritySearchMs,
+        broadResult.timings.similaritySearchMs +
+        anchoredResult.timings.similaritySearchMs +
+        (anchoredKnowledgeResult?.timings.similaritySearchMs ?? 0),
       retrievalPhaseMs: retrievalElapsedMs(retrievalStartedAt),
       initialSearchMs: broadResult.timings.similaritySearchMs,
       anchoredSearchMs: anchoredResult.timings.similaritySearchMs,
       usedBroadFallback: shouldUseBroadFallback,
       usedProductKeyFallback: false,
       usedLineKindSupplement: false,
+      // The supplement only reaches the model when the anchored pass wins; on a broad fallback the
+      // sources come from the unfiltered broad pool, which already contained knowledge documents.
+      usedKnowledgeSupplement: anchoredKnowledgeResult !== null && !shouldUseBroadFallback,
+      knowledgeSupplementCuratedCount: shouldUseBroadFallback
+        ? 0
+        : countSupplementSources(finalCurated, anchoredResult.matches, anchoredSupplementMatches),
+      knowledgeSiblingExpansion: finalExpansion,
       withheldUnanchoredSdsCount: withheldSds,
       broadCuratedCount: broadSelected.length,
+      // Includes supplement-sourced knowledge selections when the supplement ran (see
+      // `knowledgeSupplementCuratedCount` for how many).
       anchoredCuratedCount: anchoredSelected.length,
       // B0-693 — this branch only runs when `resolution.lockedProductLineKey` is non-null (the
       // no-lock case returns earlier above), so a real lock always came from the broad similarity
@@ -1047,11 +1326,7 @@ async function runProductKnowledgeQuery(input: {
         shouldUseBroadFallback ? broadResult.matches : anchoredResult.matches,
       ),
       selectedTopSimilarity: maxSimilarity(finalCurated),
-      droppedByFilterCount: Math.max(
-        0,
-        (shouldUseBroadFallback ? broadResult.matches.length : anchoredResult.matches.length) -
-          finalCurated.length,
-      ),
+      droppedByFilterCount: Math.max(0, winningPool.length - finalCurated.length),
       search: buildSearchDetails(shouldUseBroadFallback ? broadResult : anchoredResult),
       selection: buildSelectionDetails({
         limit,

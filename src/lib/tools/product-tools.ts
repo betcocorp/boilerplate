@@ -431,7 +431,20 @@ export function classifyRetrievalIntent(
    * exactly as they did before B0-786. The tunings themselves are unchanged either way.
    */
   answerShape?: AnswerShape,
-): { limit?: number; maxPerDocument?: number; requiredDocumentKinds?: string[] } {
+): {
+  limit?: number;
+  maxPerDocument?: number;
+  requiredDocumentKinds?: string[];
+  /**
+   * B0-873/B0-874 — true for the procedural/enumeration shape below. Threaded to
+   * `runProductKnowledgeQuery` as `proceduralIntent`, where it (a) merges an UNLOCKED
+   * `knowledge`-kind search into a line-filtered retrieval so a product-line lock can no longer
+   * starve the knowledge documents that answer "how long / how often / what steps" questions, and
+   * (b) widens the single best knowledge source to its sibling chunks. Neither raises
+   * `maxPerDocument` — the B0-759 finding below stands.
+   */
+  procedural?: boolean;
+} {
   const q = query.toLowerCase();
   if (
     answerShape === 'comparison' ||
@@ -465,7 +478,7 @@ export function classifyRetrievalIntent(
       ? PROCEDURAL_DEPTH_PATTERNS.some((pattern) => pattern.test(q))
       : answerShape === 'procedure' || answerShape === 'enumeration'
   ) {
-    return { limit: 6 };
+    return { limit: 6, procedural: true };
   }
   return {};
 }
@@ -745,6 +758,8 @@ export async function executeProductTool(
         maxPerDocument: intent.maxPerDocument,
         requiredDocumentKinds: intent.requiredDocumentKinds,
         regulatedSectionIntent: turnOptions?.regulatedSectionIntent,
+        // B0-873/B0-874 — see `classifyRetrievalIntent`'s `procedural` field.
+        proceduralIntent: intent.procedural,
         excludeKnowledgeCategories: resolveKnowledgeCategoryExclusions(auditCtx?.specialistId, q),
       });
       return {

@@ -133,3 +133,47 @@ follow-up that would let the flag be flipped with evidence rather than judgement
 5. Flip `BEX_AI_SDK_GENERATION_ENABLED` on in production, soak, then delete.
 
 Until step 3 exists, "which runtime answers better" is an opinion, and the default stays Responses.
+
+## Post-generation gate: regulated-claim guardrail — redact vs. decline (B0-829 / B0-871)
+
+Both runtimes feed the same post-generation gates in
+`~/lib/workflows/product-support/run-product-support-workflow.ts`. When `evaluateRegulatedClaimGrounding`
+(`validator.ts`) reports an ungrounded regulated claim, `validation` is always forced to
+`approved: false`, `confidence ≤ 0.4`, `requires_human_review: true`. What the USER sees is decided by
+`planRegulatedClaimRedaction`, in this order:
+
+1. Any ungrounded `hazard` or `first_aid` → full decline (`answerProvenance: validator_fallback`). Always.
+2. Every ungrounded category token-shaped (`epa_registration`, `din_registration`, `dilution_ratio`,
+   `contact_time`, `cas_number`) → **B0-829 token redaction**: each snippet is `replaceAll`'d with
+   `(unable to verify)`, provided at least one other detected category on the draft was grounded;
+   otherwise decline (`nothing_grounded_to_keep`).
+3. Otherwise (`compatibility` / `efficacy_claim` ungrounded) → **B0-871 sentence redaction**, ONLY when
+   the question is not product-usage-specific — no `productLineLock.lockedProductLineKey`, OR
+   knowledge-kind sources are strictly more than half of the retrieved sources with a known
+   `documentKind` — AND substantive content remains (≥ 120 letters/digits outside the markers). Each
+   ungrounded sentence is replaced verbatim by
+   `[one <category label> withheld — not verifiable against a retrieved label]`; a snippet the
+   validator cut at 240 chars is first expanded to the whole sentence using the validator's own
+   sentence boundary (`(?<=[.!?])\s+(?=[A-Z0-9])` or newline), so no tail of the claim survives. A
+   snippet that is not a verbatim substring of the draft → decline (`snippet_not_found_in_draft`);
+   the removed sentence is never rephrased.
+
+Both redaction shapes report `answerProvenance: regulated_claim_partial_redaction`,
+`activeGates.regulatedClaimGuardrail = { state: 'ran', verdict: 'redacted' }` and
+`gates[regulated_claim_guardrail].inputs.redactionMode` (`token_redaction` | `sentence_redaction`);
+a decline reports `verdict: 'rejected'` with `inputs.declineReason`. The
+`regulated_claim_guardrail_rejected` audit row carries the same `outcome` / `declineReason`.
+
+**Status: the B0-871 rule (step 3) is the ticket's PROPOSED policy, implemented as the default pending
+Tom Bird's confirmation.** B0-829 had excluded all four sentence-shaped categories by design, decided
+against a contact-time example and never tested on knowledge answers; 34 of the 57 F-graded golden items
+were the same 255-char decline replacing a draft that held the golden's mandatory concepts because of one
+unverifiable compatibility/efficacy sentence. To revert to B0-829 behaviour, empty
+`REDACTABLE_SENTENCE_REGULATED_CATEGORIES`.
+
+Related: the usage/safety coverage gate (B0-872) now requires an identifiable product subject
+(`resolveUsageSafetyProductSubject`: product-line lock, signals-resolved product, or a `productName` tool
+argument) in addition to a usage/safety-shaped question, and its lexical predicate no longer fires on bare
+`dilution` / `application`. A usage-shaped question naming no product is recorded as
+`usageSafetyCoverage: { state: 'not_applicable', reason: 'no_product_subject' }` and the draft is kept.
+`isSafetySensitiveRoute` (B0-546 validator-skip) deliberately keeps the broad pre-B0-872 predicate.

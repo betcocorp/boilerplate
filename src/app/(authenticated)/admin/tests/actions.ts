@@ -3,6 +3,7 @@
 import { getServerSession } from 'next-auth';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
+import { after } from 'next/server';
 
 import {
   DEFAULT_BEX_CHAT_AGENT_MODE,
@@ -13,7 +14,11 @@ import { APP_VERSION } from '~/lib/app-version';
 import { writeAuditLog } from '~/lib/audit/audit-log';
 import { authOptions } from '~/lib/auth';
 import { newCorrelationId } from '~/lib/observability/correlation-id';
-import { GOLDEN_TIERS, type GoldenTier } from '~/lib/tests/golden-set';
+import { logError, logWarn } from '~/lib/observability/logger';
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { requirePermission } from '~/lib/permissions/require-permission';
+import { executeQueuedTestRun } from '~/lib/tests/execute-queued-run';
+import { GOLDEN_TIERS, listGoldenTests, type GoldenTier } from '~/lib/tests/golden-set';
 import { updateTierTarget } from '~/lib/tests/tier-targets';
 import supportedModels from '~/lib/constants/models';
 import type { RouterTypeOverride } from '~/lib/workflows/product-support/run-product-support-workflow';
@@ -594,6 +599,63 @@ export async function updateTestItemAction(formData: FormData) {
   );
 }
 
+/**
+ * The `TestRunModelControls` field set (`modelTag` / `useValidator` / `routerType` / `agentMode`),
+ * parsed the one way every run-creating action must parse it. B0-882 factored this out of
+ * `runTestAction` so the "Run Golden" fan-out (`runGoldenTestsAction`) cannot drift from the
+ * single-run button; the per-field rules below are unchanged.
+ *
+ * `modelTag` — model the run against a specific chat model. Tags map to concrete models in
+ * resolveResponsesModel(). Read from the SAME `~/lib/constants/models` list the form's <select>
+ * renders. This was a hardcoded ['preview','gpt-4o','gpt-4.1'], so any newer model offered by the
+ * dropdown fell through to the `: 'preview'` branch — the run silently executed on the preview
+ * default while recording a model the user never picked. The allow-list can no longer drift from
+ * the UI. B0-757 — an unrecognized/missing tag now falls back to 'gpt-4.1', not 'preview' (a
+ * hand-crafted POST missing this field is not a reason to 500, but it also should not silently
+ * land on whatever the BEX_RESPONSES_MODEL settings default happens to be). Matches the form's
+ * own default (B0-614, `TestRunModelControls`) and the CI run-creation route's default
+ * (`POST /api/admin/tests/runs`, B0-757).
+ *
+ * `useValidator` — B0-600 / B0-603 opt-in validator pass, so a validator A/B run can be started
+ * from the UI. Unchecked box means absent, matching every run created before this field existed.
+ *
+ * `routerType` — B0-681 opt-in router override; "Router: default" submits an empty string, which
+ * leaves `routerType` out of `run_options` entirely so the run falls back to the settings-driven
+ * router, matching every run created before this field existed.
+ *
+ * `agentMode` — B0-351 opt-in forced specialist, same shape as the Bex chat composer's agent-mode
+ * picker. Anything unrecognised (or absent, i.e. every run created before this ticket) falls back
+ * to `orchestrator`, which is what `runSingleTestItem` hardcoded until now.
+ */
+function parseTestRunOptionFields(formData: FormData) {
+  const ALLOWED_MODEL_TAGS: readonly string[] = [
+    'preview',
+    ...supportedModels.map((m) => m.name),
+  ];
+  const rawModelTag = formData.get('modelTag');
+  const modelTag =
+    typeof rawModelTag === 'string' && ALLOWED_MODEL_TAGS.includes(rawModelTag)
+      ? rawModelTag
+      : 'gpt-4.1';
+
+  const useValidator = formData.get('useValidator') === 'on';
+
+  const ROUTER_TYPE_OVERRIDES: readonly RouterTypeOverride[] = ['keyword', 'semantic', 'llm'];
+  const rawRouterType = formData.get('routerType');
+  const routerType =
+    typeof rawRouterType === 'string' &&
+    (ROUTER_TYPE_OVERRIDES as readonly string[]).includes(rawRouterType)
+      ? (rawRouterType as RouterTypeOverride)
+      : undefined;
+
+  const rawAgentMode = formData.get('agentMode');
+  const agentMode = isBexChatAgentMode(rawAgentMode)
+    ? rawAgentMode
+    : DEFAULT_BEX_CHAT_AGENT_MODE;
+
+  return { modelTag, useValidator, routerType, agentMode };
+}
+
 export async function runTestAction(formData: FormData) {
   const testId = formData.get('testId');
   if (typeof testId !== 'string' || !testId.trim()) {
@@ -605,53 +667,8 @@ export async function runTestAction(formData: FormData) {
     redirect(encodeMessage(`/admin/tests/${testId}`, 'error', 'This test has no items to run.'));
   }
 
-  /**
-   * Model the run against a specific chat model. Tags map to concrete models in
-   * resolveResponsesModel().
-   *
-   * Read from the SAME `~/lib/constants/models` list the form's <select> renders. This was a
-   * hardcoded ['preview','gpt-4o','gpt-4.1'], so any newer model offered by the dropdown fell
-   * through to the `: 'preview'` branch — the run silently executed on the preview default while
-   * recording a model the user never picked. The allow-list can no longer drift from the UI.
-   *
-   * B0-757 — an unrecognized/missing tag now falls back to 'gpt-4.1', not 'preview' (a
-   * hand-crafted POST missing this field is not a reason to 500, but it also should not silently
-   * land on whatever the BEX_RESPONSES_MODEL settings default happens to be). Matches the form's
-   * own default (B0-614, `TestRunModelControls`) and the CI run-creation route's default
-   * (`POST /api/admin/tests/runs`, B0-757).
-   */
-  const ALLOWED_MODEL_TAGS: readonly string[] = [
-    'preview',
-    ...supportedModels.map((m) => m.name),
-  ];
-  const rawModelTag = formData.get('modelTag');
-  const modelTag =
-    typeof rawModelTag === 'string' && ALLOWED_MODEL_TAGS.includes(rawModelTag)
-      ? rawModelTag
-      : 'gpt-4.1';
-
-  // B0-600 / B0-603 — opt-in validator pass, so a validator A/B run can be started from the UI.
-  // Unchecked box means absent, matching every run created before this field existed.
-  const useValidator = formData.get('useValidator') === 'on';
-
-  // B0-681 — opt-in router override; "Router: default" submits an empty string, which leaves
-  // `routerType` out of `run_options` entirely so the run falls back to the settings-driven router,
-  // matching every run created before this field existed.
-  const ROUTER_TYPE_OVERRIDES: readonly RouterTypeOverride[] = ['keyword', 'semantic', 'llm'];
-  const rawRouterType = formData.get('routerType');
-  const routerType =
-    typeof rawRouterType === 'string' &&
-    (ROUTER_TYPE_OVERRIDES as readonly string[]).includes(rawRouterType)
-      ? (rawRouterType as RouterTypeOverride)
-      : undefined;
-
-  // B0-351 — opt-in forced specialist, same shape as the Bex chat composer's agent-mode picker.
-  // Anything unrecognised (or absent, i.e. every run created before this ticket) falls back to
-  // `orchestrator`, which is what `runSingleTestItem` hardcoded until now.
-  const rawAgentMode = formData.get('agentMode');
-  const agentMode = isBexChatAgentMode(rawAgentMode)
-    ? rawAgentMode
-    : DEFAULT_BEX_CHAT_AGENT_MODE;
+  const { modelTag, useValidator, routerType, agentMode } =
+    parseTestRunOptionFields(formData);
 
   const testResult = await createTestResult({
     test_id: testId,
@@ -685,6 +702,127 @@ export async function runTestAction(formData: FormData) {
       `/admin/tests/${testId}/runs/${testResult.id}`,
       'success',
       `Run started for ${items.length} prompts.`,
+    ),
+  );
+}
+
+/**
+ * B0-882 / B0-883 — "Run Golden" dialog submission: one queued full-mode run per ACTIVE golden test
+ * set (`listGoldenTests({ includeArchived: false })`, B0-881 — archived-but-golden sets get none),
+ * every row carrying the dialog's model / router / agent / validator choice through the same
+ * `parseTestRunOptionFields` + `buildTestRunOptions` pair `runTestAction` uses.
+ *
+ * Non-blocking by design: rows are inserted, then execution is scheduled with `after()` and the
+ * action redirects at once, so the dialog closes while the runs are still `queued`/`running`.
+ * Execution is in-process (`executeQueuedTestRun`, the same load/claim/dispatch the single-run
+ * `POST /api/admin/tests/runs/[runId]` handler runs) rather than the nightly sweep's self-HTTP
+ * choreography: that sweep forwards the cron's bearer token, and a browser session has no bearer
+ * token to forward. `after()` runs within this segment's `maxDuration` (300 s, set on
+ * `admin/tests/page.tsx`); a run whose execution is cut off by that budget is left `running` and
+ * recovered by the existing hourly `/api/v1/observability/sweep-stalled-runs` cron — there is
+ * deliberately no second recovery mechanism here.
+ */
+export async function runGoldenTestsAction(formData: FormData) {
+  const returnPath = normalizeReturnPath(formData.get('returnPath'), '/admin/tests');
+
+  // Server actions are reachable by any POST that knows the action id, so the page gate alone
+  // (`requirePagePermission` on /admin/tests) is not enough: re-check the same permission here.
+  // No session → denied outright (before the enforcement flag is consulted), same as the page.
+  const permission = await requirePermission(PERMISSIONS.NAVIGATION_SIDEBAR_TESTS, {
+    route: 'action runGoldenTestsAction',
+  });
+  if (!permission.allowed) {
+    redirect(
+      encodeMessage(returnPath, 'error', 'You are not allowed to start golden-set runs.'),
+    );
+  }
+
+  const { modelTag, useValidator, routerType, agentMode } =
+    parseTestRunOptionFields(formData);
+
+  const goldenTests = await listGoldenTests({ includeArchived: false });
+  if (goldenTests.length === 0) {
+    redirect(
+      encodeMessage(returnPath, 'error', 'No active golden test sets to run.'),
+    );
+  }
+
+  const triggeredBy = await currentRunActor();
+  const runOptions = buildTestRunOptions({ modelTag, useValidator, agentMode, routerType });
+  const createdRunIds: string[] = [];
+  const skippedEmpty: string[] = [];
+
+  for (const test of goldenTests) {
+    const items = await getTestItemsByTestId(test.id);
+    if (items.length === 0) {
+      // A run needs total_items > 0; an empty set is skipped and reported, never a hard failure.
+      skippedEmpty.push(test.name);
+      continue;
+    }
+
+    const testResult = await createTestResult({
+      test_id: test.id,
+      status: 'queued',
+      run_mode: 'full',
+      total_items: items.length,
+      passed_items: 0,
+      failed_items: 0,
+      started_at: new Date().toISOString(),
+      run_options: runOptions,
+      app_version: APP_VERSION,
+      triggered_by: triggeredBy,
+      summary: {
+        completed_items: 0,
+        total_items: items.length,
+        progress_percent: 0,
+        runner_state: 'queued',
+      },
+    });
+    await updateTestRecord(test.id, { status: 'running' });
+    createdRunIds.push(testResult.id);
+  }
+
+  if (createdRunIds.length > 0) {
+    after(async () => {
+      const outcomes = await Promise.allSettled(
+        createdRunIds.map(async (runId) => {
+          try {
+            const { state } = await executeQueuedTestRun(runId);
+            if (state !== 'started') {
+              logWarn('golden_run_fanout_not_started', { runId, state });
+            }
+          } catch (error) {
+            logError('golden_run_fanout_execute_failed', {
+              runId,
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }),
+      );
+      const rejected = outcomes.filter((o) => o.status === 'rejected').length;
+      if (rejected > 0) {
+        logError('golden_run_fanout_settled_with_rejections', { rejected, total: outcomes.length });
+      }
+    });
+  }
+
+  revalidatePath('/admin/tests');
+  for (const test of goldenTests) {
+    revalidatePath(`/admin/tests/${test.id}`);
+  }
+
+  const started = createdRunIds.length;
+  const skippedNote =
+    skippedEmpty.length > 0
+      ? ` Skipped ${skippedEmpty.length} empty set${skippedEmpty.length === 1 ? '' : 's'}: ${skippedEmpty.join(', ')}.`
+      : '';
+  redirect(
+    encodeMessage(
+      returnPath,
+      started > 0 ? 'success' : 'error',
+      started > 0
+        ? `Started ${started} golden run${started === 1 ? '' : 's'} (${modelTag}). Archived golden sets were skipped.${skippedNote}`
+        : `No golden runs started — every active golden set is empty.${skippedNote}`,
     ),
   );
 }

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 import {
+  assembleChunkIndexSetBody,
   assembleNeighborChunkBodies,
   chunkWindowKey,
   NEIGHBOR_CHUNK_RADIUS,
@@ -172,5 +173,112 @@ describe('assembleNeighborChunkBodies (B0-547)', () => {
     mockChunkQuery([]);
     const result = await assembleNeighborChunkBodies([{ documentId: '', chunkIndex: 0 }]);
     expect(result.size).toBe(0);
+  });
+});
+
+/** Mocks the `.schema('rag').from('document_chunk').select().eq().in().order()` chain. */
+function mockIndexSetQuery(rows: ChunkRow[], error: { message: string } | null = null) {
+  const eqSpy = vi.fn();
+  const inSpy = vi.fn();
+  // Simulate the DB honouring the IN filter, so the test proves the requested set is right.
+  let requestedIndexes: number[] | null = null;
+  const builder: {
+    eq: (column: string, value: string) => typeof builder;
+    in: (column: string, values: number[]) => typeof builder;
+    order: () => typeof builder;
+    then: (resolve: (value: { data: ChunkRow[] | null; error: typeof error }) => unknown) => unknown;
+  } = {
+    eq: (column, value) => {
+      eqSpy(column, value);
+      return builder;
+    },
+    in: (column, values) => {
+      inSpy(column, values);
+      requestedIndexes = values;
+      return builder;
+    },
+    order: () => builder,
+    then: (resolve) =>
+      resolve({
+        data: error
+          ? null
+          : rows.filter((r) => requestedIndexes === null || requestedIndexes.includes(r.chunk_index)),
+        error,
+      }),
+  };
+  vi.mocked(getSupabaseServiceRoleClient).mockReturnValue({
+    schema: () => ({
+      from: () => ({
+        select: () => builder,
+      }),
+    }),
+  } as unknown as ReturnType<typeof getSupabaseServiceRoleClient>);
+  return { eqSpy, inSpy };
+}
+
+/**
+ * B0-874 — one body for one document, seeded by several chunk indexes (the pooled siblings of the
+ * top knowledge hit) and padded by a radius around each.
+ */
+describe('assembleChunkIndexSetBody (B0-874)', () => {
+  const docRows = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((i) =>
+    row({ id: `c${i}`, document_id: 'doc-1', chunk_index: i, chunk_text: `chunk ${i}` }),
+  );
+
+  it('unions the radius window around every seed, clamped at 0, in chunk order', async () => {
+    const { eqSpy, inSpy } = mockIndexSetQuery(docRows);
+
+    const body = await assembleChunkIndexSetBody(
+      { documentId: 'doc-1', chunkIndexes: [10, 1] },
+      { radius: 2 },
+    );
+
+    expect(eqSpy).toHaveBeenCalledWith('document_id', 'doc-1');
+    expect(inSpy).toHaveBeenCalledWith('chunk_index', [0, 1, 2, 3, 8, 9, 10, 11, 12]);
+    expect(body.chunkIds).toEqual(['c0', 'c1', 'c2', 'c3', 'c8', 'c9', 'c10', 'c11', 'c12']);
+    expect(body.chunkCount).toBe(9);
+    expect(body.body.startsWith('chunk 0\n\nchunk 1')).toBe(true);
+  });
+
+  it('defaults to NEIGHBOR_CHUNK_RADIUS and deduplicates overlapping seeds', async () => {
+    const { inSpy } = mockIndexSetQuery(docRows);
+
+    const body = await assembleChunkIndexSetBody({ documentId: 'doc-1', chunkIndexes: [4, 5, 5] });
+
+    expect(NEIGHBOR_CHUNK_RADIUS).toBe(1);
+    expect(inSpy).toHaveBeenCalledWith('chunk_index', [3, 4, 5, 6]);
+    expect(body.chunkIds).toEqual(['c3', 'c4', 'c5', 'c6']);
+  });
+
+  it('returns an empty body without querying for an empty seed set or documentId', async () => {
+    mockIndexSetQuery(docRows);
+
+    const noSeeds = await assembleChunkIndexSetBody({ documentId: 'doc-1', chunkIndexes: [] });
+    const noDoc = await assembleChunkIndexSetBody({ documentId: '', chunkIndexes: [1] });
+
+    expect(noSeeds.chunkCount).toBe(0);
+    expect(noDoc.chunkCount).toBe(0);
+    expect(getSupabaseServiceRoleClient).not.toHaveBeenCalled();
+  });
+
+  it('honours the char cap and reports truncation', async () => {
+    mockIndexSetQuery(docRows);
+
+    const body = await assembleChunkIndexSetBody(
+      { documentId: 'doc-1', chunkIndexes: [5] },
+      { radius: 2, maxChars: 20 },
+    );
+
+    expect(body.truncated).toBe(true);
+    expect(body.body.length).toBeLessThanOrEqual(20);
+    expect(body.chunkIds.length).toBeLessThan(5);
+  });
+
+  it('throws when the query errors, rather than silently returning an empty body', async () => {
+    mockIndexSetQuery([], { message: 'boom' });
+
+    await expect(
+      assembleChunkIndexSetBody({ documentId: 'doc-1', chunkIndexes: [1] }),
+    ).rejects.toThrow(/boom/);
   });
 });

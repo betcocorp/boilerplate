@@ -120,6 +120,16 @@ export const answerProvenanceSchema = z.enum([
    */
   'alias_fuzzy_disclosure_prepended',
   /**
+   * B0-875 — the competitor self-reference check (`classifyCompetitorSelfReference`) found that
+   * what the user offered in place of a competitor product was a chemistry-class description
+   * ("Diversey quat disinfectant", "peroxide cleaner"), so the cross-reference path was withdrawn
+   * and `buildGenericChemistryClarification` (`~/lib/recommendations/cross-reference-decline.ts`)
+   * replaced the draft with the clarifying question (which product — label name + EPA registration
+   * number — and why it matters). Distinct from `competitor_identity_unresolved_decline`: an
+   * identity WAS extracted, it just names a kind of product rather than a product.
+   */
+  'generic_chemistry_clarification',
+  /**
    * B0-829 — `regulated_claim_guardrail` (`evaluateRegulatedClaimGrounding`,
    * `~/lib/workflows/product-support/validator.ts`) flagged one or more ungrounded regulated
    * claims, but every ungrounded category was TOKEN-shaped (`epa_registration`, `din_registration`,
@@ -129,9 +139,17 @@ export const answerProvenanceSchema = z.enum([
    * caller surgically redacts only the ungrounded snippet(s) (each literal occurrence replaced with
    * `(unable to verify)`) and keeps the rest of the draft — including the grounded regulated
    * content — intact, appending a note naming what was withheld. Sentence-shaped categories
-   * (`hazard`, `first_aid`, `compatibility`, `efficacy_claim`) never take this path: any of those
-   * being ungrounded, or every detected category being ungrounded, still falls through to
-   * `validator_fallback`'s full decline.
+   * `hazard` and `first_aid` never take this path: either being ungrounded still falls through to
+   * `validator_fallback`'s full decline, as does every detected category being ungrounded.
+   *
+   * B0-871 — the same value also covers SENTENCE-level redaction of `compatibility` /
+   * `efficacy_claim` (`planRegulatedClaimRedaction`, `mode: 'sentence_redaction'`): on a knowledge
+   * answer (no locked product line, or knowledge-kind sources dominate) each ungrounded sentence is
+   * replaced verbatim by a `[one … withheld — not verifiable against a retrieved label]` marker,
+   * provided substantive content remains. Not a new enum member: "the draft was kept with the
+   * ungrounded claim(s) removed" is one fact; which shape was removed is on the gate record
+   * (`inputs.redactionMode`). Both redaction shapes set `activeGates.regulatedClaimGuardrail`
+   * to `verdict: 'redacted'` (vs. `'rejected'` for the full decline).
    */
   'regulated_claim_partial_redaction',
 ]);
@@ -439,6 +457,12 @@ export const gateActivationRecordSchema = z.object({
    * "the guardrail ran and passed" and "the guardrail ran and fired" were both just `ran`, so a
    * reader could not tell "nothing fired" from "nothing ran". Absent when `state !== 'ran'` (the
    * `state` already says what happened) and on runs written before this ticket.
+   *
+   * B0-871 — `regulatedClaimGuardrail` additionally uses `'redacted'`: the guardrail fired, but
+   * the draft was kept with only the ungrounded claim(s) removed (`answerProvenance:
+   * regulated_claim_partial_redaction`) rather than replaced with the decline copy (`'rejected'`).
+   * `usageSafetyCoverage` (B0-872) may carry `reason: 'no_product_subject'` on a `not_applicable`
+   * record: the question read like a usage/safety question but named no identifiable product.
    */
   verdict: z.string().max(64).optional(),
 });

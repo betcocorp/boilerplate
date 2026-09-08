@@ -48,6 +48,20 @@ export interface ConvertedLabel {
 }
 
 /**
+ * B0-876 — trademark marks (U+2122 ™, U+00AE ®, U+2120 ℠, and the ASCII "(TM)"/"(R)"/"(SM)"
+ * spellings) are STRIPPED from an emitted product title, never mapped to a letter. The live corpus
+ * carries a transliteration artefact from an upstream source ("Fight BacT RTU", "GREEN EARTHr") that
+ * a letter-mapped symbol would reproduce; the H1 this converter emits is what downstream title and
+ * alias tooling reads, so the guard sits at the point of emission. Only the marks are removed —
+ * surrounding text, spacing and regulated values are untouched.
+ */
+const TRADEMARK_MARK_PATTERN = /[™®℠]|\((?:tm|r|sm)\)/gi;
+
+export function stripTrademarkSymbols(value: string): string {
+  return value.replace(TRADEMARK_MARK_PATTERN, '').replace(/[ \t]{2,}/g, ' ').trim();
+}
+
+/**
  * Convert label HTML/text to structured markdown.
  *
  * @param content HTML or text content of the label
@@ -61,9 +75,10 @@ export function convertLabelToMarkdown(
   const sections: string[] = [];
   const markdown: string[] = [];
 
-  // Add product name as H1
-  if (options.productTitle) {
-    markdown.push(`# ${options.productTitle}\n`);
+  // Add product name as H1 (trademark marks stripped — see `stripTrademarkSymbols`).
+  const productTitle = options.productTitle ? stripTrademarkSymbols(options.productTitle) : undefined;
+  if (productTitle) {
+    markdown.push(`# ${productTitle}\n`);
     sections.push('Product Name');
   }
 
@@ -169,7 +184,7 @@ export function convertLabelToMarkdown(
     markdown: markdown.join(''),
     metadata: {
       productKey: options.productKey,
-      productTitle: options.productTitle,
+      productTitle,
       brand: options.brand,
       epaRegNo: options.epaRegNo,
       dinNo: options.dinNo,

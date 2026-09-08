@@ -394,13 +394,28 @@ async function fetchAllPages<T>(
   return all;
 }
 
-export async function listGoldenTests(): Promise<GoldenTestRow[]> {
+/**
+ * Golden-set roster (`is_golden = true`). Archiving a test never clears `is_golden`, so a test
+ * can be golden AND archived.
+ *
+ * - Default (`includeArchived: true`) returns archived and active golden tests alike — this is
+ *   the historical behavior every existing caller (membership, tier rollups, trends, the nightly
+ *   sweep) relies on; do not change it under them.
+ * - `{ includeArchived: false }` (B0-881) is the path bulk-run triggers (B0-883 "Run Golden") use
+ *   so an archived-but-golden set never gets a new run burned on it.
+ *
+ * Naming note: this deliberately differs from `repository.ts`'s `listTests(includeArchived)`,
+ * whose `true` means "archived ONLY". Here `true` means "archived too".
+ */
+export async function listGoldenTests(
+  options: { includeArchived?: boolean } = {},
+): Promise<GoldenTestRow[]> {
   const supabase = getSupabaseServiceRoleClient();
-  const result = await supabase
-    .from('tests')
-    .select('id, name, row_count')
-    .eq('is_golden', true)
-    .order('name', { ascending: true });
+  let query = supabase.from('tests').select('id, name, row_count').eq('is_golden', true);
+  if (options.includeArchived === false) {
+    query = query.eq('is_archived', false);
+  }
+  const result = await query.order('name', { ascending: true });
   return (assertNoError(result) ?? []) as GoldenTestRow[];
 }
 

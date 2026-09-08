@@ -6,7 +6,10 @@ import {
 } from '~/lib/workflows/product-support/max-output-tokens';
 import { createAuditLogQueue } from '~/lib/audit/audit-log-queue';
 import type { ProductLineLock, ToolCallOrigin, ToolTraceEntry } from '~/lib/audit/trace';
-import type { RegulatedClaimCategory } from '~/lib/workflows/product-support/validator';
+import type {
+  RegulatedClaimCategory,
+  RegulatedClaimGroundingResult,
+} from '~/lib/workflows/product-support/validator';
 import {
   DEFAULT_BEX_CHAT_AGENT_MODE,
   type BexChatAgentMode,
@@ -80,6 +83,11 @@ import {
   isConversionListAsk,
   type CompetitorSelfReferenceVerdict,
 } from '~/lib/recommendations/competitor-self-reference';
+import {
+  buildCompetitorIdentityClarification,
+  buildGenericChemistryClarification,
+  buildRecommendationEngineDeclineCopy,
+} from '~/lib/recommendations/cross-reference-decline';
 import { matchBetcoProductName } from '~/lib/rag/betco-product-name';
 import { resolveProductEntityByName } from '~/lib/rag/entity-context';
 import { runCrossReferenceRecommendation } from '~/lib/recommendations/persist-recommendation';
@@ -1055,6 +1063,17 @@ export function extractAliasFuzzyDisclosureFromToolOutputs(
     if (!entry || !entry.ok || isUnendorsedSpeculativeToolOutput(entry.trace)) {
       continue;
     }
+    /**
+     * B0-875 — a `workflow_injected` call was seeded by the workflow, not by the user: the enforced
+     * `search_product_docs` after a cross-reference hit takes its `productName` from the legacy
+     * match's Betco title (`buildCrossReferenceSearchArgs`), and a FUZZY legacy row
+     * (`fallbackRecommended: true`, 0.675 on P#8) fed "AF79 …" into the alias resolver, whose
+     * fuzzy hit was then disclosed as if the user had typed it. The disclosure may only echo a
+     * name the user actually asked for, never a cross-reference candidate.
+     */
+    if (entry.trace?.origin === 'workflow_injected') {
+      continue;
+    }
 
     let parsed: unknown;
     try {
@@ -1456,13 +1475,120 @@ export function collectSourceMetaFromToolOutputs(
   return [...map.values()];
 }
 
-function queryNeedsUsageAndSafetyCoverage(userMessage: string) {
+/**
+ * B0-872 — the ORIGINAL usage/safety lexical predicate, kept byte-for-byte for
+ * `isSafetySensitiveRoute` (B0-546) only. That consumer wants the broad, conservative reading —
+ * a message that so much as mentions `dilution` must never skip the validator's LLM pass on
+ * similarity grounds — so the bare `dilution` / `application` terms are deliberately still here.
+ * The usage/safety coverage GATE no longer uses this; see `hasUsageSafetyQuestionShape` and
+ * `queryNeedsUsageAndSafetyCoverage` below.
+ */
+function hasUsageSafetyLexicalSignal(userMessage: string) {
   const text = userMessage.toLowerCase();
   return (
     /\b(how do i use|how to use|how should i use|directions|procedure|application|dilution|safe|safety|hazard|ppe|precaution|first aid)\b/.test(
       text,
     ) || /\b(can i use|is it safe)\b/.test(text)
   );
+}
+
+/**
+ * B0-872 — does the message READ like a product-usage / safety question? Narrower than
+ * `hasUsageSafetyLexicalSignal`: bare `dilution` and `application` are gone. Those two words made
+ * every dilution-control knowledge question ("Do dilution control systems require plumbing or
+ * electrical work?") a usage/safety question, which then demanded SDS-kind safety evidence that a
+ * question naming no product can never retrieve, and replaced a 1,200–2,400 char knowledge-base
+ * draft with the "Exact Betco product name or SKU" template.
+ *
+ * This is only HALF of the gate's trigger — see `queryNeedsUsageAndSafetyCoverage`. Exported for
+ * `usage-safety-coverage.test.ts`.
+ */
+export function hasUsageSafetyQuestionShape(userMessage: string): boolean {
+  const text = userMessage.toLowerCase();
+  return (
+    /\b(how do i use|how to use|how should i use|directions|procedure|safe|safety|hazard|ppe|precaution|first aid)\b/.test(
+      text,
+    ) || /\b(can i use|is it safe)\b/.test(text)
+  );
+}
+
+/**
+ * B0-872 — where the gate found the product the question is about, when it found one at all.
+ * - `product_line_lock` — the turn's retrieval resolved and LOCKED a product line (B0-619
+ *   `productLineResolution.lockedProductLineKey`), i.e. an alias / SKU / product-line name in the
+ *   message resolved deterministically. `skipped_no_product_line` and `skipped_ambiguous` (SZ#21's
+ *   "a disinfectant or bleach") do NOT count — only a non-null lock does.
+ * - `turn_signals` — the B0-786 signals pass resolved a Betco product entity for this turn.
+ * - `tool_arguments` — a search-backed tool call this turn named a product (`productName`), the
+ *   same argument `search_product_docs` itself treats as "this is a product-specific search"
+ *   (a `freeformQuery` call is, by that tool's own contract, NOT one).
+ */
+export type UsageSafetyProductSubjectSource =
+  | 'product_line_lock'
+  | 'turn_signals'
+  | 'tool_arguments';
+
+export type UsageSafetyProductSubject = {
+  hasProductSubject: boolean;
+  source: UsageSafetyProductSubjectSource | null;
+};
+
+/**
+ * B0-872 — resolve whether the turn concerns an identifiable Betco product at all. A usage/safety
+ * question with NO product subject cannot have SDS-backed safety evidence by construction (there
+ * is no SDS to retrieve), so requiring it would only ever fail; the gate therefore does not apply.
+ */
+export function resolveUsageSafetyProductSubject(input: {
+  productLineLock: ProductLineLock | null;
+  signalsProductLineKey: string | null | undefined;
+  toolTrace: readonly ToolTraceEntry[];
+}): UsageSafetyProductSubject {
+  if (input.productLineLock?.lockedProductLineKey) {
+    return { hasProductSubject: true, source: 'product_line_lock' };
+  }
+  if (input.signalsProductLineKey) {
+    return { hasProductSubject: true, source: 'turn_signals' };
+  }
+  for (const entry of input.toolTrace) {
+    if (!/^(search_product_docs|get_product_spec|get_approved_usage_guidance|get_safety_constraints|get_compatibility_rules|list_allowed_surfaces|list_disallowed_uses|get_efficacy_data)$/.test(entry.toolName)) {
+      continue;
+    }
+    // `argumentsPreview` is a (possibly truncated) JSON preview; an unparseable one is simply not
+    // evidence of a product subject — never a reason to guess one.
+    try {
+      const args = JSON.parse(entry.argumentsPreview) as unknown;
+      if (
+        args &&
+        typeof args === 'object' &&
+        typeof (args as { productName?: unknown }).productName === 'string' &&
+        (args as { productName: string }).productName.trim().length > 0
+      ) {
+        return { hasProductSubject: true, source: 'tool_arguments' };
+      }
+    } catch {
+      // Not JSON (truncated preview) — fall through.
+    }
+  }
+  return { hasProductSubject: false, source: null };
+}
+
+/**
+ * B0-872 — the usage/safety coverage gate's trigger: the message must READ like a usage/safety
+ * question (`hasUsageSafetyQuestionShape`) AND concern an identifiable product
+ * (`resolveUsageSafetyProductSubject`). Either alone is not enough:
+ * - "Can I use a disinfectant or bleach to sanitize our wood gym floor?" has the shape but names no
+ *   product → a knowledge answer, kept as drafted.
+ * - "What is the EPA reg number for Fight Bac RTU?" names a product but is not a usage question.
+ * - "How do I use pH7Q on a hospital floor?" has both → the gate runs, and with no label/SDS
+ *   retrieved it still caps and replaces the draft with the usage/safety template.
+ *
+ * Exported for `usage-safety-coverage.test.ts`.
+ */
+export function queryNeedsUsageAndSafetyCoverage(
+  userMessage: string,
+  productSubject: Pick<UsageSafetyProductSubject, 'hasProductSubject'>,
+): boolean {
+  return hasUsageSafetyQuestionShape(userMessage) && productSubject.hasProductSubject;
 }
 
 function hasUsageSignal(text: string) {
@@ -1534,6 +1660,219 @@ export function evaluateUsageSafetyCoverage(
   }
 
   return { hasUsageEvidence, hasSafetyEvidence };
+}
+
+/* -------------------------------------------------------------------------- *
+ * B0-829 / B0-871 — regulated-claim guardrail: redact vs. decline
+ * -------------------------------------------------------------------------- */
+
+/** Reviewer-facing labels for the regulated categories `evaluateRegulatedClaimGrounding` detects. */
+export const REGULATED_CLAIM_CATEGORY_LABELS: Record<RegulatedClaimCategory, string> = {
+  epa_registration: 'EPA registration number',
+  din_registration: 'DIN registration number',
+  dilution_ratio: 'dilution ratio',
+  contact_time: 'contact/dwell time',
+  cas_number: 'CAS number',
+  hazard: 'hazard statement',
+  first_aid: 'first-aid instruction',
+  compatibility: 'compatibility statement',
+  efficacy_claim: 'efficacy claim',
+};
+
+/**
+ * B0-829 — categories whose ungrounded snippet is an exact literal token (an EPA/DIN/CAS number,
+ * a dilution ratio, a contact time), safe to blank out in place with `(unable to verify)`.
+ */
+const TOKEN_SHAPED_REGULATED_CATEGORIES: ReadonlySet<RegulatedClaimCategory> = new Set<
+  RegulatedClaimCategory
+>(['epa_registration', 'din_registration', 'dilution_ratio', 'contact_time', 'cas_number']);
+
+/**
+ * B0-871 — sentence-shaped categories that MAY be withheld sentence-by-sentence on a KNOWLEDGE
+ * answer (see `planRegulatedClaimRedaction`). `hazard` and `first_aid` are deliberately absent:
+ * an ungrounded GHS hazard statement or first-aid instruction always keeps the full decline.
+ *
+ * PROPOSED RULE IMPLEMENTED, PENDING TOM'S CONFIRMATION (B0-871). B0-829 excluded every
+ * sentence-shaped category from partial redaction by design, decided against a contact-time
+ * example and never tested on knowledge answers; 34 of the 57 F-graded golden items were the
+ * same 255-char decline replacing a draft that held the golden's mandatory concepts because of
+ * one unverifiable compatibility/efficacy sentence.
+ */
+const REDACTABLE_SENTENCE_REGULATED_CATEGORIES: ReadonlySet<RegulatedClaimCategory> = new Set<
+  RegulatedClaimCategory
+>(['compatibility', 'efficacy_claim']);
+
+/**
+ * B0-871 — `evaluateRegulatedClaimGrounding` (`validator.ts`) reports a sentence-shaped claim as
+ * `snippet: sentence.slice(0, 240)`. Mirrored here (NOT imported — that file is owned elsewhere and
+ * the cap is a local literal there) so `expandRegulatedClaimSnippetToSentence` can tell "this
+ * snippet may have been cut" from "this is the whole sentence".
+ */
+export const REGULATED_CLAIM_SENTENCE_SNIPPET_CAP = 240;
+
+/**
+ * B0-871 — what must be left of the draft, after every withheld sentence and marker is removed,
+ * for the redaction to be worth showing instead of the full decline. Letters only count: a
+ * remainder of markdown scaffolding, bullets or bare numbers is not "substantive content".
+ */
+export const REGULATED_CLAIM_REDACTION_MIN_REMAINING_CHARS = 120;
+
+/** B0-871 — the literal marker one withheld sentence is replaced with. Never paraphrases the sentence. */
+export function regulatedClaimWithheldMarker(category: RegulatedClaimCategory): string {
+  return `[one ${REGULATED_CLAIM_CATEGORY_LABELS[category]} withheld — not verifiable against a retrieved label]`;
+}
+
+/**
+ * B0-871 — "knowledge-kind sources dominate": strictly more than half of the retrieved sources
+ * with a known `documentKind` are `knowledge` documents (dilution-control guides, program
+ * literature), as opposed to a product's label / SDS / efficacy / facts. Sources with no kind are
+ * not counted either way; no known kinds at all ⇒ false (never assume a knowledge answer).
+ */
+export function knowledgeKindSourcesDominate(
+  sources: readonly Pick<RetrievedSourceMeta, 'documentKind'>[],
+): boolean {
+  let known = 0;
+  let knowledge = 0;
+  for (const source of sources) {
+    const kind = source.documentKind?.toLowerCase();
+    if (!kind) continue;
+    known += 1;
+    if (kind === 'knowledge') knowledge += 1;
+  }
+  return known > 0 && knowledge * 2 > known;
+}
+
+/**
+ * B0-871 — re-derive the WHOLE sentence a (possibly 240-char-truncated) snippet came from, so the
+ * redaction removes the full sentence and never leaves its tail behind. Uses the same sentence
+ * boundary `validator.ts`'s `splitIntoSentences` uses (`(?<=[.!?])\s+(?=[A-Z0-9])` or a newline).
+ * The snippet is located as a LITERAL substring of the current text; `null` when it is not there
+ * (the caller must then decline — a sentence that cannot be found verbatim cannot be removed
+ * verbatim, and rephrasing is not an option).
+ */
+export function expandRegulatedClaimSnippetToSentence(text: string, snippet: string): string | null {
+  const start = text.indexOf(snippet);
+  if (start < 0 || snippet.length === 0) return null;
+  if (snippet.length < REGULATED_CLAIM_SENTENCE_SNIPPET_CAP) return snippet;
+  const boundary = /(?<=[.!?])\s+(?=[A-Z0-9])|\n/g;
+  boundary.lastIndex = start + snippet.length;
+  const match = boundary.exec(text);
+  const end = match ? match.index : text.length;
+  return text.slice(start, end).trimEnd();
+}
+
+export type RegulatedClaimRedactionPlan =
+  | {
+      mode: 'decline';
+      /** Why redaction was not applied; recorded on the gate's `effect`. */
+      reason:
+        | 'safety_critical_sentence_category'
+        | 'nothing_grounded_to_keep'
+        | 'product_usage_specific_question'
+        | 'snippet_not_found_in_draft'
+        | 'nothing_substantive_remains';
+    }
+  | {
+      /** `token_redaction` is B0-829's path; `sentence_redaction` is B0-871's. */
+      mode: 'token_redaction' | 'sentence_redaction';
+      redactedText: string;
+      withheldCategories: RegulatedClaimCategory[];
+    };
+
+/**
+ * B0-829 / B0-871 — decide whether the guardrail's rejection can be honoured by REDACTING the
+ * ungrounded claim(s) out of the draft (keeping the rest) or must replace the whole draft with the
+ * decline copy. Pure; the caller applies `validation` (approved=false, confidence ≤ 0.4,
+ * requires_human_review=true) identically for both outcomes.
+ *
+ * Policy, in evaluation order:
+ * 1. Any ungrounded `hazard` or `first_aid` ⇒ decline. Always.
+ * 2. Every ungrounded category token-shaped (B0-829) ⇒ blank each snippet with `(unable to verify)`,
+ *    provided at least one OTHER detected category on the draft was grounded; otherwise decline.
+ * 3. Otherwise (some ungrounded `compatibility` / `efficacy_claim`, B0-871) ⇒ withhold each such
+ *    sentence, ONLY when the question is not product-usage-specific — no locked product line, OR
+ *    knowledge-kind sources dominate the retrieval — AND substantive content remains afterwards
+ *    (≥ `REGULATED_CLAIM_REDACTION_MIN_REMAINING_CHARS` letters/digits outside the markers).
+ *    Token-shaped snippets ungrounded on the same draft are blanked as in (2). A snippet that is
+ *    not a verbatim substring of the draft ⇒ decline (never rephrase).
+ *
+ * Every replacement is `replaceAll` of a LITERAL substring; nothing in the removed text is
+ * paraphrased, rounded or re-stated in the output.
+ */
+export function planRegulatedClaimRedaction(input: {
+  draftAnswer: string;
+  grounding: RegulatedClaimGroundingResult;
+  productLineLock: ProductLineLock | null;
+  sources: readonly Pick<RetrievedSourceMeta, 'documentKind'>[];
+}): RegulatedClaimRedactionPlan {
+  const { grounding } = input;
+  const ungrounded = grounding.ungroundedCategories;
+
+  if (
+    ungrounded.some(
+      (c) => !TOKEN_SHAPED_REGULATED_CATEGORIES.has(c) && !REDACTABLE_SENTENCE_REGULATED_CATEGORIES.has(c),
+    )
+  ) {
+    return { mode: 'decline', reason: 'safety_critical_sentence_category' };
+  }
+
+  const allUngroundedAreTokenShaped = ungrounded.every((c) => TOKEN_SHAPED_REGULATED_CATEGORIES.has(c));
+  if (allUngroundedAreTokenShaped) {
+    // B0-829 — something in the draft WAS grounded and is worth preserving; otherwise there is
+    // nothing left to salvage and the full decline is the only sensible outcome.
+    const hasGroundedCategoryWorthKeeping = grounding.categoriesDetected.some(
+      (c) => !ungrounded.includes(c),
+    );
+    if (!hasGroundedCategoryWorthKeeping) {
+      return { mode: 'decline', reason: 'nothing_grounded_to_keep' };
+    }
+    let redactedText = input.draftAnswer;
+    for (const detail of grounding.ungroundedDetails) {
+      redactedText = redactedText.replaceAll(detail.snippet, '(unable to verify)');
+    }
+    return { mode: 'token_redaction', redactedText, withheldCategories: [...ungrounded] };
+  }
+
+  // B0-871 — sentence redaction is for KNOWLEDGE answers only. A question about an identified
+  // product whose retrieval is label/SDS-led keeps the full decline: there, a compatibility or
+  // efficacy sentence is a claim about that product's own label.
+  const productUsageSpecific =
+    Boolean(input.productLineLock?.lockedProductLineKey) && !knowledgeKindSourcesDominate(input.sources);
+  if (productUsageSpecific) {
+    return { mode: 'decline', reason: 'product_usage_specific_question' };
+  }
+
+  let redactedText = input.draftAnswer;
+  const markers: string[] = [];
+  const removedSentences: string[] = [];
+  for (const detail of grounding.ungroundedDetails) {
+    if (TOKEN_SHAPED_REGULATED_CATEGORIES.has(detail.category)) {
+      redactedText = redactedText.replaceAll(detail.snippet, '(unable to verify)');
+      continue;
+    }
+    const sentence = expandRegulatedClaimSnippetToSentence(redactedText, detail.snippet);
+    if (!sentence) {
+      // One sentence can be reported under two categories (compatibility AND efficacy_claim on
+      // P#1); the first pass already withheld it, so a repeat is not a missing snippet.
+      if (removedSentences.some((removed) => removed.startsWith(detail.snippet))) continue;
+      return { mode: 'decline', reason: 'snippet_not_found_in_draft' };
+    }
+    const marker = regulatedClaimWithheldMarker(detail.category);
+    markers.push(marker);
+    removedSentences.push(sentence);
+    redactedText = redactedText.replaceAll(sentence, marker);
+  }
+
+  let remaining = redactedText.replaceAll('(unable to verify)', ' ');
+  for (const marker of markers) {
+    remaining = remaining.replaceAll(marker, ' ');
+  }
+  const substantiveChars = remaining.replace(/[^A-Za-z0-9]/g, '').length;
+  if (substantiveChars < REGULATED_CLAIM_REDACTION_MIN_REMAINING_CHARS) {
+    return { mode: 'decline', reason: 'nothing_substantive_remains' };
+  }
+
+  return { mode: 'sentence_redaction', redactedText, withheldCategories: [...ungrounded] };
 }
 
 /**
@@ -1783,14 +2122,15 @@ export function isValidatorSkipEnabled(): boolean {
 /**
  * B0-546 — routes considered safety-sensitive enough that the validator pass must never be
  * skipped purely on retrieval-similarity grounds: usage/safety/dilution-shaped questions
- * (`queryNeedsUsageAndSafetyCoverage`, already used by the usage/safety coverage gate above), the
- * dedicated `dilution` SME (dilution ratios are inherently regulated per the org's regulated-data
- * rule), and `cross_reference` (an equivalence claim between an EPA-registered competitor product
- * and a Betco one).
+ * (`hasUsageSafetyLexicalSignal` — B0-872 split this off from the usage/safety coverage gate's own
+ * trigger so that narrowing the gate did not also let dilution-shaped questions skip validation;
+ * this predicate is the pre-B0-872 one, unchanged), the dedicated `dilution` SME (dilution ratios
+ * are inherently regulated per the org's regulated-data rule), and `cross_reference` (an
+ * equivalence claim between an EPA-registered competitor product and a Betco one).
  */
 export function isSafetySensitiveRoute(userMessage: string, decision: string): boolean {
   return (
-    queryNeedsUsageAndSafetyCoverage(userMessage) ||
+    hasUsageSafetyLexicalSignal(userMessage) ||
     decision === 'dilution' ||
     decision === 'cross_reference'
   );
@@ -3725,7 +4065,14 @@ export async function runProductSupportWorkflow(input: {
       // Verbatim, and it outranks whatever the model drafted: there is no grounded equivalent to
       // state. Enforced even under `BEX_DISABLE_RECOMMENDATION_CONFIDENCE_GATING` — see the
       // kill-switch note in `evaluateRecommendationEngineGate`.
-      draftAnswer = recommendationEngineGate.declineText;
+      //
+      // B0-875 — the engine text stays verbatim; for a claim-equivalence question ("kills
+      // everything X does, right?") the regulatory non-transfer statement is placed IN FRONT of
+      // it, because the decline alone answers nothing about the claim the user assumed.
+      draftAnswer = buildRecommendationEngineDeclineCopy({
+        userMessage: input.userMessage,
+        engineDeclineText: recommendationEngineGate.declineText,
+      });
       answerProvenance = 'recommendation_engine_decline';
     }
 
@@ -3758,8 +4105,27 @@ export async function runProductSupportWorkflow(input: {
       resolvedCompetitor &&
       isCompetitorIdentityUnresolved(resolvedCompetitor)
     ) {
-      draftAnswer = XREF_DECLINE_COPY;
+      // B0-875 — no competitor identity means there is nothing to decline ABOUT: ask for the brand
+      // and exact product name instead of the fixed sales-rep copy (P#10), and say what a
+      // cross-reference finds (comparable, never "identical").
+      draftAnswer = buildCompetitorIdentityClarification({ userMessage: input.userMessage });
       answerProvenance = 'competitor_identity_unresolved_decline';
+    }
+
+    /**
+     * B0-875 — the self-reference check found a chemistry-class DESCRIPTION in place of a product
+     * ("Diversey quat disinfectant", P#8). The turn was withdrawn from the cross-reference path at
+     * routing time (no forced lookup, no backstop, no engine gate), so whatever the product
+     * specialist drafted is replaced with the clarifying question: which product (label name +
+     * EPA registration number) and why it matters. Deterministic, like the two guards above, so a
+     * model draft can never name a Betco product for an unnamed competitor.
+     */
+    if (
+      selfReferenceVerdict?.suppressed &&
+      selfReferenceVerdict.reason === 'generic_chemistry_description'
+    ) {
+      draftAnswer = buildGenericChemistryClarification({ described: selfReferenceVerdict.matched });
+      answerProvenance = 'generic_chemistry_clarification';
     }
 
     // B0-349 — frozen snapshot of the fully-composed answer before the validator, revision pass,
@@ -3773,8 +4139,21 @@ export async function runProductSupportWorkflow(input: {
     // B0-490 — raw (pre-curation) vs. post-selection top retrieval similarity for this turn.
     const similarityRollup = extractSimilarityRollupFromToolOutputs(toolOutputLog);
     const usageSafetyCoverage = evaluateUsageSafetyCoverage(sourceMeta);
+    /**
+     * B0-872 — the gate now needs BOTH a usage/safety-shaped question and an identifiable product
+     * subject (see `queryNeedsUsageAndSafetyCoverage`). `resolvedToolTrace` is complete here (the
+     * tool loop has returned), so the B0-619 product-line lock is readable from it; the same
+     * `extractProductLineLockFromToolTrace` call is repeated for the final-output rollup below.
+     */
+    const usageSafetyQuestionShape = hasUsageSafetyQuestionShape(input.userMessage);
+    const usageSafetyProductSubject = resolveUsageSafetyProductSubject({
+      productLineLock: extractProductLineLockFromToolTrace(resolvedToolTrace),
+      signalsProductLineKey: signalsDecided ? turnSignals?.resolvedProductLineKey : null,
+      toolTrace: resolvedToolTrace,
+    });
     const needsUsageSafetyCoverage = queryNeedsUsageAndSafetyCoverage(
       input.userMessage,
+      usageSafetyProductSubject,
     );
     /**
      * B0-546 — gate for skipping the validator's LLM pass entirely: retrieval already found a
@@ -4101,6 +4480,11 @@ export async function runProductSupportWorkflow(input: {
     };
     const usageSafetyInputs = {
       queryNeedsUsageAndSafetyCoverage: needsUsageSafetyCoverage,
+      // B0-872 — the two halves of that trigger, recorded separately so a trace reader can tell
+      // "not a usage question" from "a usage question about no identifiable product".
+      usageSafetyQuestionShape,
+      hasProductSubject: usageSafetyProductSubject.hasProductSubject,
+      productSubjectSource: usageSafetyProductSubject.source,
       hasUsageEvidence: usageSafetyCoverage.hasUsageEvidence,
       hasSafetyEvidence: usageSafetyCoverage.hasSafetyEvidence,
       retrievedSourceCount: sourceMeta.length,
@@ -4108,7 +4492,14 @@ export async function runProductSupportWorkflow(input: {
 
     // B0-494 — this gate's own activation state, set in every branch below (including the
     // `not_applicable` case, when `needsUsageSafetyCoverage` is false and none of them run).
-    let usageSafetyCoverageActivation: GateActivationRecord = { state: 'not_applicable' };
+    // B0-872 — a usage/safety-SHAPED question that names no product is `not_applicable` too (no
+    // cap, no fallback copy: the knowledge-base draft reaches the user), but carries a `reason` so
+    // the timeline can show WHY the gate stood down instead of leaving it indistinguishable from
+    // "not a usage question at all".
+    let usageSafetyCoverageActivation: GateActivationRecord =
+      usageSafetyQuestionShape && !usageSafetyProductSubject.hasProductSubject
+        ? { state: 'not_applicable', reason: 'no_product_subject' }
+        : { state: 'not_applicable' };
 
     if (
       needsUsageSafetyCoverage &&
@@ -4264,6 +4655,14 @@ export async function runProductSupportWorkflow(input: {
     // (whether or not it found anything to reject) or `bypassed` by the kill switch — never
     // `skipped`/`not_applicable`.
     let regulatedClaimGuardrailActivation: GateActivationRecord = { state: 'ran' };
+    /**
+     * B0-829 / B0-871 — how the enforced rejection below will be honoured: redact the ungrounded
+     * claim(s) out of the draft, or replace the whole draft with the decline copy. Decided HERE
+     * (not in the answer-composition block further down) so the gate record persisted on this step
+     * and `activeGates.regulatedClaimGuardrail` can say `redacted` vs `rejected` — the step row is
+     * written before that block runs. Null when the guardrail passed or was bypassed.
+     */
+    let regulatedClaimRedactionPlan: RegulatedClaimRedactionPlan | null = null;
 
     if (regulatedClaimGrounding.ungroundedCategories.length > 0) {
       if (await isConfidenceGatingDisabled()) {
@@ -4305,12 +4704,25 @@ export async function runProductSupportWorkflow(input: {
           confidenceBeforeRegulatedCap,
           validation.confidence,
         );
+        // B0-829 / B0-871 — redact or decline; see `planRegulatedClaimRedaction` for the policy.
+        regulatedClaimRedactionPlan = planRegulatedClaimRedaction({
+          draftAnswer,
+          grounding: regulatedClaimGrounding,
+          productLineLock: extractProductLineLockFromToolTrace(resolvedToolTrace),
+          sources: sourceMeta,
+        });
+        const redactionApplied = regulatedClaimRedactionPlan.mode !== 'decline';
+        const redactionDeclineReason =
+          regulatedClaimRedactionPlan.mode === 'decline' ? regulatedClaimRedactionPlan.reason : null;
         audit.enqueue(
           'regulated_claim_guardrail_rejected',
           {
             categoriesDetected: regulatedClaimGrounding.categoriesDetected,
             ungroundedCategories: regulatedClaimGrounding.ungroundedCategories,
             ungroundedDetails: regulatedClaimGrounding.ungroundedDetails,
+            // B0-871 — `token_redaction` | `sentence_redaction` | `decline` (+ why, for decline).
+            outcome: regulatedClaimRedactionPlan.mode,
+            ...(redactionDeclineReason ? { declineReason: redactionDeclineReason } : {}),
           },
           { ...wfCtx, stepId: validationStep.id },
         );
@@ -4319,6 +4731,11 @@ export async function runProductSupportWorkflow(input: {
          * record was the `bypassed` branch above, so a persisted step showed this gate exclusively
          * on runs where it did NOT act. Recorded here too, so the step row carries the rejection
          * as a first-class gate evaluation rather than only an audit row.
+         *
+         * B0-871 — `verdict` is `redacted` when the draft is kept minus the ungrounded claim(s)
+         * (B0-829 token blanking or B0-871 sentence withholding), `rejected` when the whole draft is
+         * replaced with the decline copy, so the timeline and the eval export can tell the two
+         * apart. `validation` (approved=false, cap 0.4, human review) is identical for both.
          */
         validatorStepGates.push({
           gate: 'regulated_claim_guardrail',
@@ -4326,12 +4743,22 @@ export async function runProductSupportWorkflow(input: {
             categoriesDetected: regulatedClaimGrounding.categoriesDetected,
             ungroundedCategories: regulatedClaimGrounding.ungroundedCategories,
             ungroundedDetails: regulatedClaimGrounding.ungroundedDetails,
+            redactionMode: regulatedClaimRedactionPlan.mode,
+            ...(redactionDeclineReason ? { declineReason: redactionDeclineReason } : {}),
           },
-          thresholds: { note: 'hard verbatim-match requirement, not a numeric threshold' },
-          verdict: 'rejected',
-          effect: `${regulatedClaimGrounding.ungroundedCategories.join(', ')} could not be verified verbatim against a retrieved source: approved forced to false, confidence ${confidenceBeforeRegulatedCap} → ${validation.confidence}, human review requested, and the draft answer replaced with the regulated-claim decline copy.`,
+          thresholds: {
+            note: 'hard verbatim-match requirement, not a numeric threshold',
+            sentenceRedactionMinRemainingChars: REGULATED_CLAIM_REDACTION_MIN_REMAINING_CHARS,
+          },
+          verdict: redactionApplied ? 'redacted' : 'rejected',
+          effect: redactionApplied
+            ? `${regulatedClaimGrounding.ungroundedCategories.join(', ')} could not be verified verbatim against a retrieved source: approved forced to false, confidence ${confidenceBeforeRegulatedCap} → ${validation.confidence}, human review requested; the draft was KEPT with the ungrounded claim(s) redacted (${regulatedClaimRedactionPlan.mode}). See answerProvenance regulated_claim_partial_redaction.`
+            : `${regulatedClaimGrounding.ungroundedCategories.join(', ')} could not be verified verbatim against a retrieved source: approved forced to false, confidence ${confidenceBeforeRegulatedCap} → ${validation.confidence}, human review requested, and the draft answer replaced with the regulated-claim decline copy (redaction not applied: ${redactionDeclineReason ?? 'unknown'}).`,
         });
-        regulatedClaimGuardrailActivation = { state: 'ran', verdict: 'rejected' };
+        regulatedClaimGuardrailActivation = {
+          state: 'ran',
+          verdict: redactionApplied ? 'redacted' : 'rejected',
+        };
       }
     } else {
       /**
@@ -4747,64 +5174,46 @@ export async function runProductSupportWorkflow(input: {
         // B0-257: dedicated fallback for the regulated-claim guardrail -- distinct from the
         // generic "could not verify" message so it's clear the specific blocker is a missing
         // exact citation for a regulated value/statement, not general low retrieval coverage.
-        const categoryLabels: Record<string, string> = {
-          epa_registration: 'EPA registration number',
-          din_registration: 'DIN registration number',
-          dilution_ratio: 'dilution ratio',
-          contact_time: 'contact/dwell time',
-          cas_number: 'CAS number',
-          hazard: 'hazard statement',
-          first_aid: 'first-aid instruction',
-          compatibility: 'compatibility statement',
-          efficacy_claim: 'efficacy claim',
-        };
-        /**
-         * B0-829 — which ungrounded categories are safe to surgically redact (an exact literal
-         * snippet -- an EPA/DIN/CAS number, dilution ratio, or contact time -- not reformatted
-         * prose) versus which are safety-critical sentence-shaped claims (`hazard`, `first_aid`,
-         * `compatibility`, `efficacy_claim`) that must always keep the full-decline behavior below.
-         */
-        const TOKEN_SHAPED_REGULATED_CATEGORIES = new Set<RegulatedClaimCategory>([
-          'epa_registration',
-          'din_registration',
-          'dilution_ratio',
-          'contact_time',
-          'cas_number',
-        ]);
-        const allUngroundedAreTokenShaped = regulatedClaimGrounding.ungroundedCategories.every(
-          (c) => TOKEN_SHAPED_REGULATED_CATEGORIES.has(c),
-        );
-        // Something in the draft WAS grounded and is worth preserving -- otherwise there is
-        // nothing left to salvage and the full decline below is the only sensible outcome.
-        const hasGroundedCategoryWorthKeeping = regulatedClaimGrounding.categoriesDetected.some(
-          (c) => !regulatedClaimGrounding.ungroundedCategories.includes(c),
-        );
+        const flagged = regulatedClaimGrounding.ungroundedCategories
+          .map((c) => REGULATED_CLAIM_CATEGORY_LABELS[c] ?? c)
+          .join(', ');
+        // The plan was decided alongside the gate record above (same rejection, same turn); a
+        // kill-switch bypass never reaches this branch because `validation.approved` stays true.
+        const plan = regulatedClaimRedactionPlan;
 
-        if (allUngroundedAreTokenShaped && hasGroundedCategoryWorthKeeping) {
+        if (plan && plan.mode === 'token_redaction') {
           /**
            * B0-829 — partial redaction: keep the grounded content (e.g. a fully-verified dilution
            * answer) and surgically blank out only the ungrounded token(s), instead of discarding
            * the whole draft. `detail.snippet` is a LITERAL substring of `draftAnswer` (never a
            * regex), so every verbatim occurrence is replaced -- never reformatted or invented.
            */
-          let redactedText = draftAnswer;
-          for (const detail of regulatedClaimGrounding.ungroundedDetails) {
-            redactedText = redactedText.replaceAll(detail.snippet, '(unable to verify)');
-          }
-          const flagged = regulatedClaimGrounding.ungroundedCategories
-            .map((c) => categoryLabels[c] ?? c)
-            .join(', ');
           finalText = [
-            redactedText,
+            plan.redactedText,
             '',
             `I couldn't verify the ${flagged} above against an exact quote from a retrieved label or SDS, so I withheld it (marked "(unable to verify)").`,
             'Please consult the product label or SDS directly for the exact regulated value, or contact Betco Product Support / EHS to confirm.',
           ].join('\n');
           answerProvenance = 'regulated_claim_partial_redaction';
+        } else if (plan && plan.mode === 'sentence_redaction') {
+          /**
+           * B0-871 — sentence-level redaction for `compatibility` / `efficacy_claim` on a KNOWLEDGE
+           * answer (no locked product line, or knowledge-kind sources dominate), with substantive
+           * content left. Each ungrounded sentence was replaced VERBATIM by
+           * `regulatedClaimWithheldMarker` — the removed sentence is never rephrased, summarised
+           * or hinted at. `hazard` / `first_aid` never take this path (see the planner).
+           *
+           * PROPOSED RULE IMPLEMENTED, PENDING TOM'S CONFIRMATION — see
+           * `REDACTABLE_SENTENCE_REGULATED_CATEGORIES` and `src/docs/generation-runtimes.md`.
+           */
+          finalText = [
+            plan.redactedText,
+            '',
+            `I couldn't verify the ${flagged} above against an exact quote from a retrieved label or SDS, so I withheld it (marked "withheld" in brackets).`,
+            'Please consult the product label or SDS directly for the exact regulated value, or contact Betco Product Support / EHS to confirm.',
+          ].join('\n');
+          answerProvenance = 'regulated_claim_partial_redaction';
         } else {
-          const flagged = regulatedClaimGrounding.ungroundedCategories
-            .map((c) => categoryLabels[c] ?? c)
-            .join(', ');
           finalText = [
             `I can't verify the ${flagged} in this answer against an exact quote from a retrieved label or SDS, so I won't state it.`,
             '',
@@ -4820,8 +5229,11 @@ export async function runProductSupportWorkflow(input: {
            * eighth enum member would add a second spelling for "the answer was withheld at
            * validation" without adding information.
            *
-           * B0-829 — this branch now fires only when partial redaction above did NOT apply (a
-           * sentence-shaped category is ungrounded, or nothing detected was grounded).
+           * B0-829 / B0-871 — this branch now fires only when the planner chose `decline`: an
+           * ungrounded `hazard` / `first_aid`, a product-usage-specific question with an ungrounded
+           * compatibility/efficacy sentence, nothing grounded left to keep, a snippet that is not a
+           * verbatim substring of the draft, or too little substantive content after redaction.
+           * The exact reason is on the gate record (`inputs.declineReason`).
            */
           answerProvenance = 'validator_fallback';
         }
@@ -4844,6 +5256,14 @@ export async function runProductSupportWorkflow(input: {
         (!usageSafetyCoverage.hasUsageEvidence ||
           !usageSafetyCoverage.hasSafetyEvidence)
       ) {
+        /**
+         * B0-872 — reachable only for a usage/safety-shaped question about an IDENTIFIED product
+         * (`needsUsageSafetyCoverage` now requires a product subject). A knowledge question with
+         * the same shape but no product ("Can I use a disinfectant or bleach on our wood gym
+         * floor?") never gets here: its gate is `not_applicable` (`reason: 'no_product_subject'`)
+         * and the draft is kept. This template is for "how do I use <product>" with no label/SDS
+         * retrieved — the one case where asking for the exact product/SKU is the right answer.
+         */
         finalText = [
           'I do not have enough retrieved evidence to provide a reliable usage and safety answer yet.',
           '',

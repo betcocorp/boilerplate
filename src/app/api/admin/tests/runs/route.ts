@@ -1,17 +1,17 @@
 import { getServerSession } from 'next-auth';
 import { NextResponse } from 'next/server';
-import { z } from 'zod';
 
 import { authorizeAdminTestsRoute } from '~/lib/api/admin-tests-auth';
 import { APP_VERSION } from '~/lib/app-version';
 import { authOptions } from '~/lib/auth';
-import supportedModels from '~/lib/constants/models';
+import { createRunBodySchema } from '~/lib/tests/create-run-body';
 import {
   createTestResult,
   getTestById,
   getTestItemsByTestId,
   updateTestRecord,
 } from '~/lib/tests/repository';
+import { buildTestRunOptions } from '~/lib/tests/run-config';
 
 const ROUTE = 'POST /api/admin/tests/runs';
 
@@ -20,39 +20,13 @@ const ROUTE = 'POST /api/admin/tests/runs';
  * instead of re-reading one pinned `BEX_GATE_LATEST_RUN_ID` secret forever.
  *
  * Mirrors `runTestAction` / `runSearchEvalAction` (`app/(authenticated)/admin/tests/actions.ts`)
- * exactly — same `queued` status, same `run_options` shape, same summary seed — because
- * `POST /api/admin/tests/runs/[runId]` and both executors read those fields. This route only
- * CREATES the run; execution stays with that existing endpoint.
+ * exactly — same `queued` status, same `run_options` shape (full-mode runs go through the same
+ * `buildTestRunOptions`, including the optional `agentMode` / `routerType` added by B0-880), same
+ * summary seed — because `POST /api/admin/tests/runs/[runId]` and both executors read those fields.
+ * This route only CREATES the run; execution stays with that existing endpoint.
  *
- * The search-mode flags default to `false`, matching an unchecked checkbox in the admin form, so a
- * caller that omits them gets the same run the UI would produce. CI passes them explicitly.
+ * The request contract is `createRunBodySchema` (`~/lib/tests/create-run-body`).
  */
-const supportedModelNames = supportedModels.map((m) => m.name);
-const createRunBodySchema = z.object({
-  testId: z.string().min(1),
-  runMode: z.enum(['full', 'search']).default('full'),
-  /**
-   * Maps to a concrete chat model in `resolveResponsesModel()`.
-   *
-   * B0-757 — defaults to `gpt-4.1`, not `preview`. This route is the CI eval-gate's run-creation
-   * call (B0-465): a caller (CI) that omits `modelTag` entirely used to silently land on whatever
-   * `BEX_RESPONSES_MODEL` resolves `preview` to (gpt-4.1-mini today), invalidating the 234-item
-   * regression run on 2026-08-29 (7fb79091-e93b-4d52-a38b-4283f5cd639f, 64.6/D vs 71.3/C for the
-   * same set on gpt-4.1). `preview` is still selectable when a caller passes it explicitly — this
-   * only changes what an OMITTED field resolves to, matching the "Run dataset" form's own default
-   * (B0-614, `TestRunModelControls`).
-   */
-  modelTag: z.enum(['preview', ...supportedModelNames]).default('gpt-4.1'),
-  /**
-   * B0-600 / B0-603 — enables the validator pass for a full-mode run so a validator A/B test can be
-   * configured. Defaults false, matching every run created before this field existed.
-   */
-  useValidator: z.boolean().default(false),
-  useHybrid: z.boolean().default(false),
-  useReranker: z.boolean().default(false),
-  useMultiIntent: z.boolean().default(false),
-});
-
 export async function POST(request: Request) {
   const denied = await authorizeAdminTestsRoute(request, ROUTE);
   if (denied) return denied;
@@ -71,6 +45,8 @@ export async function POST(request: Request) {
     runMode,
     modelTag,
     useValidator,
+    agentMode,
+    routerType,
     useHybrid,
     useReranker,
     useMultiIntent,
@@ -109,7 +85,7 @@ export async function POST(request: Request) {
     run_options:
       runMode === 'search'
         ? { useHybrid, useReranker, useMultiIntent }
-        : { modelTag, useValidator },
+        : buildTestRunOptions({ modelTag, useValidator, agentMode, routerType }),
     app_version: APP_VERSION,
     triggered_by: triggeredBy,
     summary: {
