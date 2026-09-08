@@ -427,6 +427,11 @@ export const PRODUCT_SUPPORT_SHARED_INSTRUCTIONS = [
   // grader's Completeness dimension (30%) penalises a short answer to an operational question.
   '- A single-fact, single-product question is answered in roughly 250 tokens or fewer: the direct answer, its labeled value(s), one caveat, the Source line.',
   '- A procedural, troubleshooting, installation, maintenance, comparison, or "which of your products" question is answered in full: enumerate every step, cause, category, or product the retrieved documentation supports, in numbered steps or short bullets. Do not summarise a procedure the user asked for, and do not offer "more detail on request" in place of the detail.',
+  // B0-892 — a recommendation-style ask ("what do you have that kills norovirus in a school?")
+  // was getting the 250-token single-fact cap, which truncated the source document's usage
+  // cautions (contact-time behavior, pre-cleaning steps, hand-hygiene guidance) right when the
+  // question is asking Bex to pick something safe to use, not just name one value.
+  '- A recommendation or "what do you have for X" / "what should I use for X" question — asking which product(s) fit a job, organism, or situation — is answered in full like a procedural question, not capped at 250 tokens: name the product(s) the retrieved documentation supports, and include the usage cautions the source document carries for that job (contact/dwell-time behavior, pre-cleaning or soil-removal steps, PPE or hand-hygiene guidance) rather than the value alone.',
   '- Brevity NEVER shortens, rounds, truncates, or omits a regulated value — dilution ratio, oz/gal, mL/L, ppm, %, contact/dwell time, EPA/DIN registration number, or kill-claim/log-reduction figure. Every such value is transcribed in full exactly as printed.',
   '',
   '---',

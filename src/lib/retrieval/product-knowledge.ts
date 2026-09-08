@@ -812,6 +812,87 @@ async function expandTopKnowledgeSource(
 }
 
 /**
+ * B0-892 — a knowledge document small enough that its ENTIRE `body_text` is cheaper than the
+ * narrower neighbour window B0-547 assembles by default. VCT#run-343c1918 ("how soon can people
+ * walk on the VCT floor after the last coat?") retrieved a correct-topic-adjacent-but-wrong
+ * document ("vct finish dry time between coats", the BETWEEN-coats rule) instead of the two
+ * correct reopening-to-traffic knowledge documents that exist in the corpus
+ * ("VCT Reopening to Traffic", 3,281 chars; "vct finish open to traffic timing", 610 chars — both
+ * confirmed live, both well under this threshold). B0-874 already gives the whole body to the
+ * SINGLE top-ranked knowledge source when it is corroborated by 2+ pooled chunks or the question is
+ * procedural; this extends the same "cheap because the whole doc is small" logic to every knowledge
+ * source in the top 3, unconditionally, so a correct document that ranked #2 or #3 — and so never
+ * qualified for B0-874's narrower trigger — still reaches the model whole instead of as a
+ * possibly-irrelevant ±1-chunk snippet.
+ */
+const SMALL_KNOWLEDGE_DOCUMENT_MAX_CHARS = 4_000;
+/** B0-892 — "top 3 retrieved sources", matching the model's own `search_product_docs` cap. */
+const SMALL_KNOWLEDGE_DOCUMENT_TOP_N = 3;
+
+/**
+ * B0-892 — for knowledge-kind sources ranking in the top 3, swap in the document's FULL
+ * `body_text` when the whole document is under `SMALL_KNOWLEDGE_DOCUMENT_MAX_CHARS` and doing so
+ * actually adds content over what B0-547/B0-874 already assembled. Does not touch `maxPerDocument`
+ * (B0-759 explicitly refuted raising that lever) — this only widens the ONE source slot's own body.
+ */
+export async function expandSmallTopKnowledgeSources(
+  sources: CuratedSource[],
+): Promise<CuratedSource[]> {
+  const ranked = [...sources]
+    .sort((a, b) => b.similarity - a.similarity)
+    .slice(0, SMALL_KNOWLEDGE_DOCUMENT_TOP_N);
+  const candidateIds = [
+    ...new Set(
+      ranked.filter((s) => s.documentKind === 'knowledge').map((s) => s.documentId),
+    ),
+  ];
+  if (candidateIds.length === 0) {
+    return sources;
+  }
+
+  // Fails open (empty map) on any error, same contract as `fetchEntityContexts` — a lookup outage
+  // here must never fail the whole retrieval, only forgo the small-doc widening for this call.
+  let bodyById = new Map<string, string>();
+  try {
+    const { data } = await getSupabaseServiceRoleClient()
+      .schema('rag')
+      .from('document')
+      .select('id, body_text')
+      .in('id', candidateIds)
+      .limit(candidateIds.length);
+    bodyById = new Map(
+      (data ?? [])
+        .filter((d): d is { id: string; body_text: string } => typeof d.body_text === 'string')
+        .map((d) => [d.id, d.body_text]),
+    );
+  } catch {
+    return sources;
+  }
+  const topIds = new Set(ranked.map((s) => s.documentId));
+
+  return sources.map((source) => {
+    if (source.documentKind !== 'knowledge' || !topIds.has(source.documentId)) {
+      return source;
+    }
+    const fullBody = bodyById.get(source.documentId);
+    if (
+      !fullBody ||
+      fullBody.length === 0 ||
+      fullBody.length > SMALL_KNOWLEDGE_DOCUMENT_MAX_CHARS ||
+      fullBody.length <= source.documentBodyChars
+    ) {
+      return source;
+    }
+    return {
+      ...source,
+      documentBody: fullBody,
+      documentBodyChars: fullBody.length,
+      documentBodyTruncated: false,
+    };
+  });
+}
+
+/**
  * Public entry: run the curated document query, then enrich the result with
  * structured product facts (dilution/efficacy) joined on the resolved entities.
  */
@@ -828,13 +909,16 @@ export async function ragQueryForProductKnowledgeWithMeta(
   // for this query into `factsForSources`, so a structured dilution/efficacy fact gets the same
   // "no resolved line, no regulated content attributable" treatment as an SDS.
   const lockedProductLineKey = base.retrieval.productLineResolution?.lockedProductLineKey ?? null;
-  const [entityContextBlock, { facts, factsBlock }] = await Promise.all([
+  // B0-892 — independent of entity context / facts (neither reads `documentBody`), so it runs
+  // concurrently with them rather than stacking another round trip after.
+  const [entityContextBlock, { facts, factsBlock }, expandedSources] = await Promise.all([
     entityContextBlockForSources(base.sources),
     factsForSources(base.sources, lockedProductLineKey, {
       sourcesMayBeUnfiltered: base.retrieval.strategy === 'anchored_with_broad_fallback',
     }),
+    expandSmallTopKnowledgeSources(base.sources),
   ]);
-  return { ...base, entityContextBlock, facts, factsBlock };
+  return { ...base, sources: expandedSources, entityContextBlock, facts, factsBlock };
 }
 
 export async function ragQueryForProductKnowledge(input: {
