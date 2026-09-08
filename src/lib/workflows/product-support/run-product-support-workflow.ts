@@ -129,6 +129,7 @@ import {
   buildPreloadedEvidence,
   buildSpeculativeCallId,
   createSpeculativeReuseExecutor,
+  looksLikeCategoryListOrSuperlativeAsk,
   looksLikeExactEfficacyQuestion,
   runSpeculativeRetrieval,
 } from '~/lib/workflows/product-support/speculative-retrieval';
@@ -3551,15 +3552,34 @@ export async function runProductSupportWorkflow(input: {
       looksLikeExactEfficacyQuestion(input.userMessage) &&
       routeTools.some((tool) => 'name' in tool && tool.name === 'get_efficacy_data');
 
+    /**
+     * B0-889 — same fix shape as B0-788 immediately above: "best glass cleaner" named 2 of 13
+     * documented lines, "strongest wood floor stripper" listed 4 with no item numbers, "what should
+     * I use for greasy kitchen floors" named one degreaser with no item number. The prompt already
+     * requires calling the category tool for these (`product-support-prompts.ts` "Best/strongest…"
+     * and "Lists of products" sections), but the model kept answering from whichever chunks the
+     * speculative `search_product_docs` call happened to rank top instead. Not checked when
+     * `forceEfficacyLookup` already fired — an exact dilution/contact-time/EPA-registration question
+     * takes priority when a message somehow matches both shapes. `dilution` is the one route with no
+     * category tool (see `ROUTE_TOOL_NAMES`), so this never forces a tool that route doesn't have.
+     */
+    const forceCategoryList =
+      !forceEfficacyLookup &&
+      Boolean(usableSpeculation) &&
+      looksLikeCategoryListOrSuperlativeAsk(input.userMessage) &&
+      routeTools.some((tool) => 'name' in tool && tool.name === 'get_products_in_category');
+
     const toolChoice = forcedCrossReference
       ? ({ type: 'function', name: 'lookup_cross_reference' } as const)
       : forceEfficacyLookup
         ? ({ type: 'function', name: 'get_efficacy_data' } as const)
-        : usableSpeculation
-          ? // Round 1 already holds retrieved evidence, so forcing another tool call would re-create
-            // the wasted round this ticket removes.
-            ('auto' as const)
-          : ('required' as const);
+        : forceCategoryList
+          ? ({ type: 'function', name: 'get_products_in_category' } as const)
+          : usableSpeculation
+            ? // Round 1 already holds retrieved evidence, so forcing another tool call would re-create
+              // the wasted round this ticket removes.
+              ('auto' as const)
+            : ('required' as const);
 
     const preloadedEvidence = usableSpeculation
       ? buildPreloadedEvidence({

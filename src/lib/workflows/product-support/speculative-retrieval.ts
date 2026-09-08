@@ -60,6 +60,27 @@ export function looksLikeExactEfficacyQuestion(userMessage: string): boolean {
   return EXACT_EFFICACY_QUESTION_PATTERN.test(userMessage);
 }
 
+/**
+ * B0-889 — same fix shape as B0-788 above, for a different question: "best glass cleaner",
+ * "strongest wood floor stripper", and "what should I use for greasy kitchen floors" all named 2-4
+ * of a category's actual products instead of the full documented list. The prompt rules
+ * (`product-support-prompts.ts` "Best/strongest…" and "Lists of products" sections) already say to
+ * call the category tool and list every match — verified live, the model kept answering from
+ * whatever `search_product_docs`/speculative-retrieval chunks happened to rank top instead, the same
+ * failure mode `looksLikeExactEfficacyQuestion` exists to prevent for dilution questions. Deliberately
+ * broad and deterministic (a keyword match, not an LLM call — this must run before the first model
+ * call): a false positive costs one extra, cheap, informative category-tool call; a false negative
+ * silently reproduces the bug.
+ */
+const SUPERLATIVE_RANKING_PATTERN = /\b(best|strongest|most effective|top\s*\d*)\b/i;
+
+const TASK_RECOMMENDATION_PATTERN =
+  /\bwhat\s+(?:should|do|would|can)\s+(?:i|you|we)\s+use\b|\bwhat\s+(?:do|would)\s+you\s+recommend\b|\brecommend\s+(?:a|an|something)\s+for\b/i;
+
+export function looksLikeCategoryListOrSuperlativeAsk(userMessage: string): boolean {
+  return SUPERLATIVE_RANKING_PATTERN.test(userMessage) || TASK_RECOMMENDATION_PATTERN.test(userMessage);
+}
+
 export const SPECULATIVE_SEARCH_TOOL_NAME = 'search_product_docs';
 
 /**

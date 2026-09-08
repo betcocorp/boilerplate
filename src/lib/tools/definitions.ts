@@ -174,7 +174,7 @@ export const productSupportTools: Tool[] = [
     name: 'get_products_in_category',
     strict: false,
     description:
-      'Return Betco product lines that belong to a given website category (e.g. "Floor Care", "Disinfectants", "Odor Management"). Use this for filter-style questions like "what floor care products do you have?" or "show me all disinfectants". Pass the exact or approximate category name; set categoryLevel to narrow to prod_type, sub_prod_type, sub_child_prod_type, or prod_class.',
+      'Return EVERY Betco product line that belongs to a given website category (e.g. "Floor Care", "Disinfectants", "Odor Management", "glass cleaner", "floor stripper", "degreaser"), each with its item number(s)/SKU. Use this for filter-style questions ("what floor care products do you have?", "show me all disinfectants") and for "best/strongest/most effective X" or "what should I use for X" asks — Betco product data has no cross-product ranking, so the correct answer to those is the full category list, not a single pick. Pass the exact or approximate category name; set categoryLevel to narrow to prod_type, sub_prod_type, sub_child_prod_type, or prod_class.',
     parameters: {
       type: 'object',
       properties: {
