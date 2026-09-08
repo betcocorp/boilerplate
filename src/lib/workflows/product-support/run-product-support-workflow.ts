@@ -91,6 +91,7 @@ import {
 } from '~/lib/recommendations/cross-reference-decline';
 import { matchBetcoProductName } from '~/lib/rag/betco-product-name';
 import { resolveProductEntityByName } from '~/lib/rag/entity-context';
+import type { ProductEntityResolutionSource } from '~/lib/rag/entity-context';
 import { runCrossReferenceRecommendation } from '~/lib/recommendations/persist-recommendation';
 import { loadXrefLatencyPolicy } from '~/lib/recommendations/recommend-cross-reference';
 import {
@@ -128,11 +129,17 @@ import {
 import {
   buildPreloadedEvidence,
   buildSpeculativeCallId,
+  classifySpeculativeRetrievalSkip,
   createSpeculativeReuseExecutor,
   looksLikeCategoryListOrSuperlativeAsk,
   looksLikeExactEfficacyQuestion,
   runSpeculativeRetrieval,
 } from '~/lib/workflows/product-support/speculative-retrieval';
+import {
+  buildComparisonPreloadedEvidence,
+  resolveComparisonEntities,
+  runComparisonRetrieval,
+} from '~/lib/workflows/product-support/comparison-retrieval';
 import {
   createAgentConfidenceStreamFilter,
   extractAgentSelfConfidence,
@@ -3302,12 +3309,22 @@ export async function runProductSupportWorkflow(input: {
       argumentsJson,
       callId,
       speculative,
+      productLineLockOverride,
     }: {
       name: string;
       argumentsJson: string;
       callId: string;
       /** B0-436 — this call was fired before the first model call, not requested by the model. */
       speculative?: boolean;
+      /**
+       * B0-890 — forces `search_product_docs` to resolve THIS product line rather than the shared
+       * B0-786 `speculativeProductLineLock` (or its own argument-based resolution). Used by the
+       * two-product comparison fan-out (`runComparisonRetrieval`) so each scoped call anchors to its
+       * OWN resolved entity instead of collapsing onto whichever single product line the turn's
+       * signals happened to resolve. `undefined` (the default, for every other call) leaves the
+       * existing lock behaviour completely unchanged; `null` explicitly clears any lock.
+       */
+      productLineLockOverride?: { productLineKey: string; resolutionSource: ProductEntityResolutionSource } | null;
     }) => {
       input.onEvent?.({
         type: 'tool',
@@ -3362,13 +3379,19 @@ export async function runProductSupportWorkflow(input: {
          * already resolved a product line and extra context for this exact turn. Every other tool
          * name is untouched: it still gets plain `turnToolOptions` (or nothing), exactly as before.
          */
-        ...(turnToolOptions
+        ...(turnToolOptions || productLineLockOverride !== undefined
           ? {
               turnOptions:
                 name === 'search_product_docs'
                   ? {
-                      ...turnToolOptions,
-                      productLineLock: speculativeProductLineLock ?? undefined,
+                      ...(turnToolOptions ?? {}),
+                      // B0-890 — an explicit per-call override (the comparison fan-out) always wins
+                      // over the turn-wide B0-786 signals lock; `undefined` (every other call) falls
+                      // back to that existing behaviour exactly as before this ticket.
+                      productLineLock:
+                        productLineLockOverride !== undefined
+                          ? (productLineLockOverride ?? undefined)
+                          : (speculativeProductLineLock ?? undefined),
                       queryRewrite: signalQueryRewrite,
                     }
                   : turnToolOptions,
@@ -3515,17 +3538,52 @@ export async function runProductSupportWorkflow(input: {
     audit.flushDetached();
 
     /**
+     * B0-890 — two-product comparison detection. A comparison question ("what's the difference
+     * between pH7Q and pH7Q Dual?") named two DIFFERENT products, but the single speculative search
+     * below only ever anchors to one product line — the other product's evidence never reaches the
+     * generator, and the validator then rejects the half of the draft it can't support. Detected and
+     * resolved deterministically (comparison phrasing + `resolveProductEntityByName` on each side, no
+     * LLM call), and skipped under the exact same conditions the ordinary speculative retrieval skips
+     * (flag off, forced/route cross-reference, empty message) — a comparison is always Betco-to-Betco
+     * so those gates would never legitimately fire for one, but honouring them keeps this addition
+     * inert wherever speculative retrieval itself is inert.
+     */
+    const speculativeSkipReason = classifySpeculativeRetrievalSkip({
+      userMessage: input.userMessage,
+      forcedCrossReference,
+      routingDecision,
+    });
+    const comparisonEntities =
+      speculativeSkipReason === null ? await resolveComparisonEntities(input.userMessage) : null;
+
+    /**
      * B0-436 — speculative retrieval. Runs the obvious `search_product_docs` call ourselves so the
      * first model call can be the answering call. Placed after the early-decline gate (which returns
      * long before here) so no run ever pays for a search whose result is discarded.
+     *
+     * B0-890 — a validated two-product comparison instead runs ONE scoped call per resolved product
+     * line (see `runComparisonRetrieval`) rather than the single unanchored search, so both labels
+     * reach the generator/validator/guardrail.
      */
-    const speculation = await runSpeculativeRetrieval({
-      userMessage: input.userMessage,
-      routingDecision,
-      forcedCrossReference,
-      callId: buildSpeculativeCallId(run.id),
-      execute: executeTool,
-    });
+    let comparisonResults: Awaited<ReturnType<typeof runComparisonRetrieval>>['results'] | null = null;
+    const speculation = comparisonEntities
+      ? await (async () => {
+          const { results } = await runComparisonRetrieval({
+            entities: comparisonEntities,
+            runId: run.id,
+            execute: executeTool,
+          });
+          comparisonResults = results;
+          const okResult = results.find((r) => r.trace.ok) ?? results[0];
+          return { skippedReason: null, result: okResult };
+        })()
+      : await runSpeculativeRetrieval({
+          userMessage: input.userMessage,
+          routingDecision,
+          forcedCrossReference,
+          callId: buildSpeculativeCallId(run.id),
+          execute: executeTool,
+        });
     // A failed speculative search is no evidence at all: keep `tool_choice: 'required'` so the model
     // still has to retrieve before answering, and never present the error payload as evidence.
     const usableSpeculation =
@@ -3581,14 +3639,19 @@ export async function runProductSupportWorkflow(input: {
               ('auto' as const)
             : ('required' as const);
 
-    const preloadedEvidence = usableSpeculation
-      ? buildPreloadedEvidence({
-          userMessage: input.userMessage,
-          // B0-437 — the model gets the slimmed variant when the tool produced one; the FULL
-          // payload is what `toolOutputLog` (validator + regulated-claim guardrail) already holds.
-          output: usableSpeculation.modelOutput ?? usableSpeculation.output,
-        })
-      : undefined;
+    // B0-890 — a validated comparison gets the COMBINED two-product block (both labels) instead of
+    // the single-search block, whenever at least one of the two scoped calls actually succeeded.
+    const preloadedEvidence =
+      comparisonEntities && comparisonResults && usableSpeculation
+        ? buildComparisonPreloadedEvidence({ entities: comparisonEntities, results: comparisonResults })
+        : usableSpeculation
+          ? buildPreloadedEvidence({
+              userMessage: input.userMessage,
+              // B0-437 — the model gets the slimmed variant when the tool produced one; the FULL
+              // payload is what `toolOutputLog` (validator + regulated-claim guardrail) already holds.
+              output: usableSpeculation.modelOutput ?? usableSpeculation.output,
+            })
+          : undefined;
 
     // B0-439 — the speculative call's rows go out DURING the model call, not before it: nothing
     // between here and the first token waits on `audit_logs` any more.

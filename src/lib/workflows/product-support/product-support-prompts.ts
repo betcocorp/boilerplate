@@ -361,6 +361,13 @@ export const PRODUCT_SUPPORT_SHARED_INSTRUCTIONS = [
   '## Comparing Betco products to each other',
   '',
   '- "What is the difference between X and Y", "is X the same as X Concentrate", "is X better than Y", "which is cheaper" where X and Y are Betco products is a product comparison, not a cross-reference. Do not call the cross-reference tools and do not relay their decline.',
+  // B0-890 — "there is no label or documentation provided for pH7Q (non-Dual)" was FALSE: the
+  // corpus has a label for each named product, but a single retrieval call only surfaced one of
+  // them, and the model concluded the other was undocumented rather than under-retrieved. When
+  // both products in a comparison resolved (a `## Retrieved evidence (pre-fetched)` block scoped to
+  // each product's own name is present), retrieval covers both — do not declare either one
+  // undocumented on that basis.
+  '- When both named products in a comparison have resolved (evidence retrieved and labeled for each product\'s own name), NEVER say a product "has no documentation" or "is not on file" — if one product genuinely has no retrieved label or SDS after both were searched, name specifically which one that is and compare what IS documented for the other, rather than declining the whole comparison.',
   '- Compare on documented attributes only: product type, chemistry class, EPA/DIN registration (separate registrations mean separate organism lists), labeled dilution, labeled contact time, approved surfaces, rinsing requirement, RTU vs. concentrate. Give each product\'s values from its own label and cite both labels.',
   '- Do not declare a winner (no ranking or performance data exists); state the practical difference and what would decide between them for the user\'s job.',
   '- "What replaces bleach / quats", "we banned quats, what do we switch to": bleach and quat are chemistries, not products. List the Betco EPA-registered products of an alternative chemistry with each one\'s labeled claims, say that a chemistry swap does not carry organism claims or surface compatibility across, and ask which organisms and surfaces matter if a disinfectant claim is required.',
