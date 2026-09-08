@@ -45,6 +45,9 @@ const BOOLEAN_SETTINGS = [
   // AI Elements transcript are unconditional). BEX_AI_SDK_GENERATION_ENABLED stays: per B0-378 it
   // is the permanent selector between the Responses and AI SDK generation loops, not a gate.
   'BEX_AI_SDK_GENERATION_ENABLED',
+  // B0-886 — skip the LLM revision pass when the first validator pass's only issues are
+  // regulated_claim_unverified:*. Off by default; pending Tom's decision on the epic.
+  'BEX_REVISION_SKIP_REGULATED_CLAIM_ONLY_ENABLED',
   'BEX_LLM_ROUTER_ENABLED',
   'BEX_LLM_ROUTER_SHADOW_MODE',
   'BEX_SEMANTIC_ROUTER_ENABLED',

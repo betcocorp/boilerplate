@@ -391,6 +391,9 @@ describe('settings-table coverage does not regress to process.env (B0-638)', () 
     'BEX_DISABLE_CONFIDENCE_GATING',
     // B0-734 — the early-decline gate switch, moved off process.env; defaults to false.
     'BEX_EARLY_DECLINE_GATE_ENABLED',
+    // B0-886 — read through isRevisionSkipForRegulatedClaimOnlyEnabled(); never had a process.env
+    // read (new flag, not a migrated one), added here for the same audit-trail reason.
+    'BEX_REVISION_SKIP_REGULATED_CLAIM_ONLY_ENABLED',
     'BEX_LLM_ROUTER_ENABLED',
     'BEX_LLM_ROUTER_SHADOW_MODE',
     'BEX_PERMISSIONS_ENFORCED',

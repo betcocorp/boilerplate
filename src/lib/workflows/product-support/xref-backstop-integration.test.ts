@@ -162,6 +162,8 @@ vi.mock('~/lib/workflows/product-support/validator', async (importOriginal) => {
       categoriesDetected: [],
       ungroundedCategories: [],
       ungroundedDetails: [],
+      // B0-888 — the workflow now reads this field to record `groundingMode` on the gate record.
+      keyTermGroundedCategories: [],
     }),
   };
 });

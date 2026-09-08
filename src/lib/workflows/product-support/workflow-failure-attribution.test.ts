@@ -145,6 +145,8 @@ vi.mock('~/lib/workflows/product-support/validator', () => ({
     categoriesDetected: [],
     ungroundedCategories: [],
     ungroundedDetails: [],
+    // B0-888 — the workflow now reads this field to record `groundingMode` on the gate record.
+    keyTermGroundedCategories: [],
   }),
   // B0-699 — the workflow now also runs this guardrail unconditionally alongside the one above;
   // this suite's fixtures never cite [doc:verified-facts], so `applicable: false` is the neutral,
@@ -156,9 +158,18 @@ vi.mock('~/lib/workflows/product-support/validator', () => ({
     ungroundedTokens: [],
   }),
   // B0-389 — the workflow now records the validator/revision prompt and model on their steps.
-  REVISION_SYSTEM_PROMPT: 'Revise the draft answer to fix validator issues.',
+  // B0-886 — updated to a fixture of the new edit-only instruction wording (not asserted verbatim
+  // anywhere in this file; only needs to exist for the recorded-prompt step input to parse).
+  REVISION_SYSTEM_PROMPT:
+    'Edit ONLY the sentence(s), list item(s), or claim(s) the issues actually flag.',
   resolveValidatorModel: () => 'gpt-test',
   resolveRevisionModel: () => 'gpt-test',
+  // B0-886 — new validator.ts exports the workflow now imports; must exist on this full mock or
+  // calling them throws "is not a function".
+  isOnlyRegulatedClaimIssues: (issues: string[]) =>
+    issues.length > 0 && issues.every((issue) => issue.startsWith('regulated_claim_unverified:')),
+  isRevisionSkipForRegulatedClaimOnlyEnabled: async () => false,
+  stripRevisionPreamble: (text: string) => text,
 }));
 
 import { completeWorkflowStep } from '~/lib/conversations/workflow-repository';

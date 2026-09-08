@@ -185,6 +185,8 @@ import {
 import {
   evaluateRegulatedClaimGrounding,
   evaluateVerifiedFactsDilutionCitation,
+  isOnlyRegulatedClaimIssues,
+  isRevisionSkipForRegulatedClaimOnlyEnabled,
   resolveRevisionModel,
   resolveValidatorModel,
   REVISION_SYSTEM_PROMPT,
@@ -278,22 +280,24 @@ export function buildToolCallAuditPayload(
 }
 
 /**
- * B0-546 — the validator's LLM pass sees CHUNK-level evidence (each source's retrieved
- * `snippet`) rather than the reassembled full-document body: far fewer tokens per source (a
- * ~900-char matched chunk vs. a whole label/SDS), so the pass is cheaper and faster, and it is
- * sufficient for the validator's actual job (does the draft's claim appear in evidence retrieved
- * for this turn?). Falls back to `documentBody` only when a source carries no snippet.
+ * B0-885 — the validator's LLM pass (and the revision pass that shares this summary) must see the
+ * SAME evidence window the generator actually read, not the ~900-char retrieval-preview `snippet`
+ * (`~/lib/tools/product-tools.ts`). A grounded draft was being rejected as "not supported by the
+ * evidence" and rewritten thinner purely because the validator's evidence was thinner than the
+ * generator's. `documentBody` (the matched-chunk-plus-neighbours window from B0-547) is preferred
+ * for every source; `snippet` is now only a last-resort fallback when `documentBody` is empty.
  *
- * This is deliberately separate from the B0-257 regulated-claim guardrail
- * (`evaluateRegulatedClaimGrounding`), which needs the whole approved document to catch a
- * regulated value quoted from elsewhere in it, not just the top-matching chunk. Post-B0-547,
- * `RetrievedSourceMeta.documentBody` here is itself only the narrowed matched-chunk-plus-neighbors
- * window (the same one the model sees) — it is NOT the full document — so the guardrail call site
- * below re-fetches the full body per source via `assembleDocumentBodies` specifically for its own
- * check, rather than reusing this narrowed value. That re-fetch never reaches the model or the
- * persisted tool payload, so it costs an extra DB read but not extra prompt tokens.
+ * `fullDocumentBodies`, when passed, is the SAME map the B0-257 regulated-claim guardrail builds
+ * via `assembleDocumentBodies` (re-fetched whole documents, keyed by document id) — reusing it here
+ * means the validator grounds against exactly what the guardrail grounds against, still bounded by
+ * the existing 60k/24k budgets below (this can legitimately reach those budgets now, unlike the
+ * pre-B0-885 snippet-only input which almost never did). Sources are read in as-retrieved
+ * (top-ranked-first) order so budget truncation drops the WEAKEST source, not the strongest.
  */
-function buildEvidenceSummary(sources: RetrievedSourceMeta[]): string {
+export function buildEvidenceSummary(
+  sources: RetrievedSourceMeta[],
+  fullDocumentBodies?: Map<string, { body: string }>,
+): string {
   if (sources.length === 0) {
     return '(no retrieved documents)';
   }
@@ -302,10 +306,9 @@ function buildEvidenceSummary(sources: RetrievedSourceMeta[]): string {
   let total = 0;
 
   for (const source of sources) {
+    const preferredBody = fullDocumentBodies?.get(source.documentId)?.body ?? source.documentBody;
     const body =
-      (source.snippet && source.snippet.length > 0
-        ? source.snippet
-        : source.documentBody) ?? '';
+      (preferredBody && preferredBody.length > 0 ? preferredBody : source.snippet) ?? '';
     const trimmed = body.slice(0, VALIDATOR_PER_DOCUMENT_CHAR_BUDGET);
     const truncatedSuffix =
       body.length > trimmed.length ? '\n…(truncated for evidence summary)' : '';
@@ -1821,6 +1824,14 @@ export type RegulatedClaimRedactionPlan =
  *
  * Every replacement is `replaceAll` of a LITERAL substring; nothing in the removed text is
  * paraphrased, rounded or re-stated in the output.
+ *
+ * B0-888 — the "consult the label or SDS" disclaimer appended below at this function's call site
+ * is safe to append UNCONDITIONALLY whenever this planner returns `token_redaction` or
+ * `sentence_redaction`: `evaluateRegulatedClaimGrounding`'s key-term/adjacent-quote fallback
+ * (`validator.ts`) filters a sentence OUT of `ungroundedDetails` entirely before it ever reaches
+ * `grounding.ungroundedCategories`/`ungroundedDetails`, so by construction this function is only
+ * ever called with at least one detail that WILL be replaced below -- there is no path where a
+ * redaction mode is chosen but zero markers end up in `redactedText`.
  */
 export function planRegulatedClaimRedaction(input: {
   draftAnswer: string;
@@ -4262,6 +4273,26 @@ export async function runProductSupportWorkflow(input: {
     const retrieved_document_chunks =
       collectRetrievedDocumentChunksFromToolOutputs(toolOutputLog);
     const sourceMeta = collectSourceMetaFromToolOutputs(toolOutputLog);
+    /**
+     * B0-885 — re-fetch the full (unwindowed) document body per distinct real source so both the
+     * validator/revision evidence summary below and the regulated-claim guardrail further down
+     * ground against the same thing. `sourceMeta[].documentBody` is only the narrowed
+     * matched-chunk-plus-neighbors window shown to the generator (B0-547); this is the whole
+     * approved document. Never reaches the model or the persisted tool payload directly — it costs
+     * one extra DB read, not extra prompt tokens (the evidence summary below is still capped at the
+     * existing 60k/24k budgets). Synthetic sources (e.g. `VERIFIED_FACTS_SOURCE_ID`,
+     * `'verified-facts'`, and its batch composite form `verified-facts:<productLineKey>`) are not
+     * `rag.document` rows and are not valid uuids — `document_id` is a uuid column, so passing one
+     * through to `assembleDocumentBodies`'s `.in('document_id', ...)` filter throws a hard Postgres
+     * error rather than just omitting that row. Filter to real-looking document ids first; a
+     * synthetic source's `documentBody` (already the full facts/lab-report block, not a chunk
+     * window) is used as-is via `buildEvidenceSummary`'s fallback.
+     */
+    const UUID_PATTERN =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const fullDocumentBodies = await assembleDocumentBodies(
+      sourceMeta.map((s) => s.documentId).filter((id) => UUID_PATTERN.test(id)),
+    );
     // B0-490 — raw (pre-curation) vs. post-selection top retrieval similarity for this turn.
     const similarityRollup = extractSimilarityRollupFromToolOutputs(toolOutputLog);
     const usageSafetyCoverage = evaluateUsageSafetyCoverage(sourceMeta);
@@ -4296,7 +4327,7 @@ export async function runProductSupportWorkflow(input: {
       sources.length > 0 &&
       topSourceSimilarity >= resolveValidatorSkipMinSimilarity() &&
       !isSafetySensitiveRoute(input.userMessage, routingDecision);
-    let evidenceSummary = buildEvidenceSummary(sourceMeta);
+    let evidenceSummary = buildEvidenceSummary(sourceMeta, fullDocumentBodies);
     // A competitive recommendation is grounded by its cross-reference match, not by RAG chunks.
     // Feed that match to the validator as evidence so it doesn't reject the recommendation as
     // "unsupported" (a curated/legacy cross-reference IS the support for the equivalence claim).
@@ -4420,6 +4451,27 @@ export async function runProductSupportWorkflow(input: {
     // B0-368 — set when the revision pass refused to re-ground, so the eventual
     // human-review escalation is distinguishable from a plain validator rejection.
     let revisionPassRefused = false;
+    /**
+     * B0-886 — whether `draftAnswer` at any later point in this turn is the REVISION pass's text
+     * (possibly recomposed by `composeCrossReferenceUserFacingAnswer`) rather than the untouched
+     * original draft. Used at the final "keep it visible" branch below to pick between
+     * `validator_rejected_draft_retained` (original) and `revised_answer_retained` (revised) —
+     * collapsing the two lost exactly which text the user saw whenever the second validator pass
+     * also rejected a successfully-revised answer.
+     */
+    let draftReplacedByRevision = false;
+    /**
+     * B0-886 — the first validator pass's own result, snapshotted before the revision pass (or the
+     * second validator pass it can trigger) can overwrite `validation`. Persisted alongside
+     * `validation` so a rewritten answer's original rejection reason is never lost.
+     */
+    let validationFirstPass: ValidatorResult | null = null;
+    /**
+     * B0-886 — the revision pass's raw (preamble-stripped) output, captured before any later
+     * redaction or cross-reference recomposition can change it further. Null when no revision pass
+     * ran, or it ran and was refused.
+     */
+    let revisedAnswerRecord: string | null = null;
     // B0-554 — per-model-call usage for every call this step makes (0, 1, or 2: the validator can
     // run twice when the revision pass produces a re-check), summed onto the step's output below.
     const validatorUsageByCall: LlmTokenUsage[] = [];
@@ -4488,106 +4540,137 @@ export async function runProductSupportWorkflow(input: {
     );
 
     if (useValidator && !validation.approved && validation.issues.length > 0) {
-      /**
-       * B0-389 — the revision pass is its own model call, with its own prompt, model and output, so
-       * it gets its own step. Filing it under the validator step (as it was) made a rewritten answer
-       * look like the validator had produced it.
-       */
-      const revisionStep = await insertWorkflowStep({
-        workflow_run_id: run.id,
-        step_name: 'revision',
-        status: 'running',
-        input: jsonContent({
-          modelTag: input.modelTag ?? 'preview',
-          validatorIssues: validation.issues,
-          ...recordPrompt({
-            stage: 'revision',
-            instructions: REVISION_SYSTEM_PROMPT,
-            model: await resolveRevisionModel(input.modelTag),
-            runtime: 'responses',
-          }),
-        }),
-      });
-      markStepOpen(revisionStep.id);
+      // B0-886 — snapshot the first pass BEFORE anything below can overwrite `validation`.
+      validationFirstPass = validation;
 
-      const revisionResult = await runRevisionPass({
-        draftAnswer,
-        validatorIssues: validation.issues,
-        evidenceSummary,
-        modelTag: input.modelTag,
-      });
-      const revised = revisionResult.text.trim();
-      // The revision pass is told to refuse / ask for docs when it can't ground the flagged
-      // claims. Never let such a refusal OVERWRITE a substantive answer the user already saw —
-      // keep the draft and flag it for review instead. This matters most for cross_reference,
-      // whose helpful usage/safety detail often isn't in the retrieved marketing profile.
-      const revisionRefused =
-        !revised ||
-        isDeclineAnswer(revised) ||
-        /clarification needed|could not (fully )?verify|cannot (revise|fix|provide|answer)|no( supporting)? evidence (was |has been )?provided|no( supporting)? evidence (is |was )?available|please (supply|provide) (approved )?(documentation|references|evidence)|supply (approved )?documentation/i.test(
-          revised,
+      /**
+       * B0-886 — optional skip: when every first-pass issue is already a
+       * `regulated_claim_unverified:*` marker, the deterministic redaction planner
+       * (`planRegulatedClaimRedaction`, evaluated later this turn) handles the rejection without an
+       * LLM rewrite, and running the revision pass on top risks paraphrasing away the exact
+       * verbatim citation that planner needs. Gated behind a settings flag (default OFF) pending
+       * Tom's decision on the epic — see `isRevisionSkipForRegulatedClaimOnlyEnabled`'s doc comment
+       * for why this condition cannot yet be true given the current call order (the guardrail that
+       * produces this issue shape runs AFTER this gate, not before).
+       */
+      const skipRevisionForRegulatedClaimOnly =
+        isOnlyRegulatedClaimIssues(validation.issues) &&
+        (await isRevisionSkipForRegulatedClaimOnlyEnabled());
+
+      if (skipRevisionForRegulatedClaimOnly) {
+        validation = { ...validation, requires_human_review: true };
+        audit.enqueue(
+          'revision_skipped_regulated_claim_only',
+          { issues: validation.issues },
+          { ...wfCtx, stepId: validationStep.id },
         );
+      } else {
+        /**
+         * B0-389 — the revision pass is its own model call, with its own prompt, model and output,
+         * so it gets its own step. Filing it under the validator step (as it was) made a rewritten
+         * answer look like the validator had produced it.
+         */
+        const revisionStep = await insertWorkflowStep({
+          workflow_run_id: run.id,
+          step_name: 'revision',
+          status: 'running',
+          input: jsonContent({
+            modelTag: input.modelTag ?? 'preview',
+            validatorIssues: validation.issues,
+            ...recordPrompt({
+              stage: 'revision',
+              instructions: REVISION_SYSTEM_PROMPT,
+              model: await resolveRevisionModel(input.modelTag),
+              runtime: 'responses',
+            }),
+          }),
+        });
+        markStepOpen(revisionStep.id);
 
-      /**
-       * B0-389 — closed before the (optional) second validator pass, which is a VALIDATOR call and
-       * stays on the validator step. The output says what the revision produced and whether it was
-       * taken: a refusal deliberately keeps the original draft, so `outcome` records that the answer
-       * the user saw is still the draft.
-       */
-      await completeWorkflowStep(revisionStep.id, {
-        status: 'completed',
-        output: jsonContent({
-          refused: revisionRefused,
-          outcome: revisionRefused ? 'refused_draft_retained' : 'draft_replaced',
-          revisedAnswer: revised,
-          // B0-554 — the revision pass is its own model call; capture its usage on its own step
-          // instead of leaving it unattributed (it used to be dropped entirely).
-          usage: revisionResult.usage,
-          // B0-563 — same reasoning as the agent step's `model` field above.
-          model: await resolveRevisionModel(input.modelTag),
-        }),
-      });
-      markStepClosed(revisionStep.id);
-
-      if (revised && !revisionRefused) {
-        draftAnswer = revised;
-        // B0-391 — the revision model wrote this text, replacing whatever the earlier branches had.
-        answerProvenance = 'revision_pass';
-        if (crossReferenceResult?.match.productUrl?.trim()) {
-          draftAnswer = composeCrossReferenceUserFacingAnswer({
-            match: crossReferenceResult.match,
-            assistantText: revised,
-          });
-          // Last writer that changed the text wins: the composer prepends the comparable-product
-          // headline on top of the revised body, so the composition is what the user saw.
-          if (draftAnswer.trim() !== revised.trim()) {
-            answerProvenance = 'cross_reference_composed';
-          }
-        }
-        const secondPass = await runValidatorPass({
+        const revisionResult = await runRevisionPass({
           draftAnswer,
+          validatorIssues: validation.issues,
           evidenceSummary,
           modelTag: input.modelTag,
         });
-        validatorUsageByCall.push(secondPass.usage);
-        validation = secondPass;
-        audit.enqueue(
-          'validation_completed',
-          { pass: 'second', ...validation, validatorMode },
-          {
-            ...wfCtx,
-            stepId: validationStep.id,
-          },
-        );
-      } else {
-        revisionPassRefused = true;
-        validation = { ...validation, requires_human_review: true };
-        audit.enqueue(
-          'revision_skipped_refusal',
-          { issues: validation.issues },
-          // B0-389 — re-attributed from the validator step to the revision step that refused.
-          { ...wfCtx, stepId: revisionStep.id },
-        );
+        // B0-886 — `runRevisionPass` already stripped a leaked "Revised Answer:"-style preamble.
+        const revised = revisionResult.text.trim();
+        // The revision pass is told to refuse / ask for docs when it can't ground the flagged
+        // claims. Never let such a refusal OVERWRITE a substantive answer the user already saw —
+        // keep the draft and flag it for review instead. This matters most for cross_reference,
+        // whose helpful usage/safety detail often isn't in the retrieved marketing profile.
+        const revisionRefused =
+          !revised ||
+          isDeclineAnswer(revised) ||
+          /clarification needed|could not (fully )?verify|cannot (revise|fix|provide|answer)|no( supporting)? evidence (was |has been )?provided|no( supporting)? evidence (is |was )?available|please (supply|provide) (approved )?(documentation|references|evidence)|supply (approved )?documentation/i.test(
+            revised,
+          );
+
+        /**
+         * B0-389 — closed before the (optional) second validator pass, which is a VALIDATOR call and
+         * stays on the validator step. The output says what the revision produced and whether it was
+         * taken: a refusal deliberately keeps the original draft, so `outcome` records that the
+         * answer the user saw is still the draft.
+         */
+        await completeWorkflowStep(revisionStep.id, {
+          status: 'completed',
+          output: jsonContent({
+            refused: revisionRefused,
+            outcome: revisionRefused ? 'refused_draft_retained' : 'draft_replaced',
+            revisedAnswer: revised,
+            // B0-554 — the revision pass is its own model call; capture its usage on its own step
+            // instead of leaving it unattributed (it used to be dropped entirely).
+            usage: revisionResult.usage,
+            // B0-563 — same reasoning as the agent step's `model` field above.
+            model: await resolveRevisionModel(input.modelTag),
+          }),
+        });
+        markStepClosed(revisionStep.id);
+
+        if (revised && !revisionRefused) {
+          draftAnswer = revised;
+          // B0-391 — the revision model wrote this text, replacing whatever the earlier branches had.
+          answerProvenance = 'revision_pass';
+          // B0-886 — the raw revision output, before any later redaction/composition step. Also
+          // marks `draftAnswer` as revision-derived for the final "keep it visible" branch below.
+          revisedAnswerRecord = revised;
+          draftReplacedByRevision = true;
+          if (crossReferenceResult?.match.productUrl?.trim()) {
+            draftAnswer = composeCrossReferenceUserFacingAnswer({
+              match: crossReferenceResult.match,
+              assistantText: revised,
+            });
+            // Last writer that changed the text wins: the composer prepends the comparable-product
+            // headline on top of the revised body, so the composition is what the user saw.
+            if (draftAnswer.trim() !== revised.trim()) {
+              answerProvenance = 'cross_reference_composed';
+            }
+          }
+          const secondPass = await runValidatorPass({
+            draftAnswer,
+            evidenceSummary,
+            modelTag: input.modelTag,
+          });
+          validatorUsageByCall.push(secondPass.usage);
+          validation = secondPass;
+          audit.enqueue(
+            'validation_completed',
+            { pass: 'second', ...validation, validatorMode },
+            {
+              ...wfCtx,
+              stepId: validationStep.id,
+            },
+          );
+        } else {
+          revisionPassRefused = true;
+          validation = { ...validation, requires_human_review: true };
+          audit.enqueue(
+            'revision_skipped_refusal',
+            { issues: validation.issues },
+            // B0-389 — re-attributed from the validator step to the revision step that refused.
+            { ...wfCtx, stepId: revisionStep.id },
+          );
+        }
       }
     }
 
@@ -4753,20 +4836,24 @@ export async function runProductSupportWorkflow(input: {
     // neighbors window shown to the model, not the whole approved document -- reusing it here
     // would silently shrink this guardrail's grounding pool and could reject (or, just as bad,
     // fail to catch) a genuinely correct regulated claim quoted from a part of the document
-    // outside that window. Re-fetch the full body per distinct real document id instead; this
-    // never reaches the model or the persisted tool payload, so it costs one extra DB read, not
-    // extra prompt tokens. Synthetic sources (e.g. `VERIFIED_FACTS_SOURCE_ID`, `'verified-facts'`,
-    // and its batch composite form `verified-facts:<productLineKey>`) are NOT `rag.document` rows
-    // and are not valid uuids -- `document_id` is a uuid column, so passing one through to
-    // `assembleDocumentBodies`'s `.in('document_id', ...)` filter throws a hard Postgres error
-    // (`invalid input syntax for type uuid`) rather than just omitting that row, taking down the
-    // whole request. Filter to real-looking document ids first; a synthetic source's `documentBody`
-    // (already the full facts/lab-report block, not a chunk window) is used as-is via the fallback
-    // below.
-    const UUID_PATTERN =
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    const fullDocumentBodies = await assembleDocumentBodies(
-      sourceMeta.map((s) => s.documentId).filter((id) => UUID_PATTERN.test(id)),
+    // outside that window.
+    //
+    // B0-885: `fullDocumentBodies` is now fetched once, above (alongside `sourceMeta`), and reused
+    // by both `buildEvidenceSummary` (validator/revision evidence) and this guardrail, so both
+    // ground against the identical whole-document window instead of re-fetching it twice.
+    //
+    // B0-888: `isLockedProductLineSource` marks the source(s) whose `product_line_key` (read off
+    // `retrieved_document_chunks`, computed above) matches this turn's locked product line -- one
+    // of the three attribution channels the compatibility/efficacy_claim key-term fallback accepts
+    // (see `attributedSources` in `validator.ts`). Null/no lock ⇒ every source is `false`.
+    const lockedProductLineKeyForGrounding =
+      extractProductLineLockFromToolTrace(resolvedToolTrace)?.lockedProductLineKey ?? null;
+    const lockedProductLineDocumentIds = new Set(
+      lockedProductLineKeyForGrounding
+        ? retrieved_document_chunks
+            .filter((c) => c.product_line_key === lockedProductLineKeyForGrounding)
+            .map((c) => c.document_id)
+        : [],
     );
     const regulatedClaimGrounding = evaluateRegulatedClaimGrounding({
       draftAnswer,
@@ -4774,6 +4861,7 @@ export async function runProductSupportWorkflow(input: {
         documentId: s.documentId,
         title: s.title,
         documentBody: fullDocumentBodies.get(s.documentId)?.body ?? s.documentBody,
+        isLockedProductLineSource: lockedProductLineDocumentIds.has(s.documentId),
       })),
     });
 
@@ -4870,6 +4958,12 @@ export async function runProductSupportWorkflow(input: {
             ungroundedCategories: regulatedClaimGrounding.ungroundedCategories,
             ungroundedDetails: regulatedClaimGrounding.ungroundedDetails,
             redactionMode: regulatedClaimRedactionPlan.mode,
+            // B0-888 — 'key_term' when at least one OTHER (still-grounded) compatibility/
+            // efficacy_claim sentence on this draft was saved by the key-term/adjacent-quote
+            // fallback rather than a plain verbatim match; 'verbatim' otherwise. Distinguishes the
+            // two grounding paths for audits even on a turn that also has a genuine rejection.
+            groundingMode:
+              regulatedClaimGrounding.keyTermGroundedCategories.length > 0 ? 'key_term' : 'verbatim',
             ...(redactionDeclineReason ? { declineReason: redactionDeclineReason } : {}),
           },
           thresholds: {
@@ -4900,6 +4994,11 @@ export async function runProductSupportWorkflow(input: {
           categoriesDetected: regulatedClaimGrounding.categoriesDetected,
           ungroundedCategories: [],
           groundedSourceCount: sourceMeta.length,
+          // B0-888 — 'key_term' when at least one compatibility/efficacy_claim sentence on this
+          // draft was grounded via the key-term/adjacent-quote fallback rather than a plain
+          // verbatim match; 'verbatim' otherwise (including when nothing regulated was detected).
+          groundingMode:
+            regulatedClaimGrounding.keyTermGroundedCategories.length > 0 ? 'key_term' : 'verbatim',
         },
         thresholds: { note: 'hard verbatim-match requirement, not a numeric threshold' },
         verdict: 'passed',
@@ -5237,6 +5336,19 @@ export async function runProductSupportWorkflow(input: {
          */
         validatorMode,
         /**
+         * B0-886 — the first validator pass's own result (issues, confidence, approved,
+         * requires_human_review), preserved even though `validation`/`...validation` above is the
+         * SECOND pass's result whenever a revision ran. Absent when no revision pass ran this turn
+         * (the first pass IS `validation`, so recording it twice would add nothing).
+         */
+        ...(validationFirstPass ? { validationFirstPass } : {}),
+        /**
+         * B0-886 — the revision pass's raw (preamble-stripped) output, before any later redaction
+         * or cross-reference recomposition. Absent when no revision pass ran, or it ran and was
+         * refused (the original draft was kept, so there is nothing distinct to record).
+         */
+        ...(revisedAnswerRecord !== null ? { revisedAnswer: revisedAnswerRecord } : {}),
+        /**
          * B0-554 — usage from every model call this step made (0 on either bypass path, 1 for a
          * plain approval/rejection, 2 when the revision pass triggered a re-check). Placed after
          * `...validation` so it wins over any single-call `usage` that a `ValidatorPassResult`
@@ -5428,7 +5540,13 @@ export async function runProductSupportWorkflow(input: {
          * still clobbered `finalText` with the canned fallback whenever no safety gate fired.
          */
         finalText = draftAnswer;
-        answerProvenance = 'validator_rejected_draft_retained';
+        // B0-886 — `draftAnswer` here is either the untouched original draft, or the revision
+        // pass's text (recomposed by the cross-reference headline or not) when the SECOND validator
+        // pass also rejected it. Distinguishing the two means a reviewer/observability reader can
+        // tell which text the user actually saw without cross-referencing the revision step.
+        answerProvenance = draftReplacedByRevision
+          ? 'revised_answer_retained'
+          : 'validator_rejected_draft_retained';
         // Force the flag even when the validator's own judgment didn't request review: a kept
         // (non-hard-replaced) rejection must always surface for a human, never just silently ride
         // through as if nothing happened.
@@ -5467,7 +5585,11 @@ export async function runProductSupportWorkflow(input: {
           type: 'answer_flagged_for_review',
           reason: reviewReason,
           issues: validation.issues,
-          answerRetained: answerProvenance === 'validator_rejected_draft_retained',
+          // B0-886 — both `validator_rejected_draft_retained` and `revised_answer_retained` mean
+          // "the streamed text was kept, not hard-replaced"; only which TEXT differs.
+          answerRetained:
+            answerProvenance === 'validator_rejected_draft_retained' ||
+            answerProvenance === 'revised_answer_retained',
         });
       }
     }
@@ -5489,6 +5611,12 @@ export async function runProductSupportWorkflow(input: {
       workflowRunId: run.id,
       latestOpenaiResponseId: finalResponseId,
       validation,
+      // B0-886 — the first validator pass's own result, preserved even when a revision pass ran
+      // and overwrote `validation` above with a second pass's result. Absent when no revision ran.
+      ...(validationFirstPass ? { validationFirstPass } : {}),
+      // B0-886 — the revision pass's raw output, before any later redaction/composition. Absent
+      // when no revision pass ran, or it ran and was refused.
+      ...(revisedAnswerRecord !== null ? { revisedAnswer: revisedAnswerRecord } : {}),
       routingDecision,
       timingBreakdown,
       usage: agentResult.usage,

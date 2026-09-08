@@ -382,6 +382,7 @@ beforeEach(() => {
     categoriesDetected: [],
     ungroundedCategories: [],
     ungroundedDetails: [],
+    keyTermGroundedCategories: [],
   });
 });
 
@@ -655,7 +656,7 @@ describe('validator high-similarity skip gate (B0-546)', () => {
     expect(runValidatorPassMock).toHaveBeenCalledTimes(1);
   });
 
-  it('feeds the validator chunk-level snippets rather than the full document body', async () => {
+  it('feeds the validator the fuller documentBody window rather than the short snippet (B0-885)', async () => {
     executeProductToolMock.mockResolvedValue({
       sources: [
         {
@@ -664,7 +665,7 @@ describe('validator high-similarity skip gate (B0-546)', () => {
           title: 'pH7Q Dual label',
           snippet: 'Use 2 oz per gallon of water.',
           documentBody:
-            'Use 2 oz per gallon of water. FULL_DOCUMENT_ONLY_MARKER: unrelated boilerplate repeated many times.',
+            'Use 2 oz per gallon of water. FULL_DOCUMENT_WINDOW_MARKER: the generator-visible neighbours the old snippet-only evidence summary used to drop, causing grounded drafts to be rejected as unsupported.',
         },
       ],
     });
@@ -675,8 +676,9 @@ describe('validator high-similarity skip gate (B0-546)', () => {
     const [{ evidenceSummary }] = runValidatorPassMock.mock.calls[0] as [
       { evidenceSummary: string },
     ];
-    expect(evidenceSummary).toContain('Use 2 oz per gallon of water.');
-    expect(evidenceSummary).not.toContain('FULL_DOCUMENT_ONLY_MARKER');
+    // B0-885: the validator must see the same fuller evidence window the generator read, not
+    // just the ~900-char retrieval-preview snippet.
+    expect(evidenceSummary).toContain('FULL_DOCUMENT_WINDOW_MARKER');
   });
 });
 
@@ -1485,6 +1487,7 @@ describe('regulated-claim guardrail partial redaction (B0-829)', () => {
       categoriesDetected: ['dilution_ratio', 'contact_time'],
       ungroundedCategories: ['contact_time'],
       ungroundedDetails: [{ category: 'contact_time', snippet: '60 second contact time' }],
+      keyTermGroundedCategories: [],
     });
 
     const out = await run();
@@ -1522,6 +1525,7 @@ describe('regulated-claim guardrail partial redaction (B0-829)', () => {
       categoriesDetected: ['dilution_ratio', 'hazard'],
       ungroundedCategories: ['hazard'],
       ungroundedDetails: [{ category: 'hazard', snippet: 'Causes severe skin damage on contact.' }],
+      keyTermGroundedCategories: [],
     });
 
     const out = await run();
@@ -1550,6 +1554,7 @@ describe('regulated-claim guardrail partial redaction (B0-829)', () => {
       categoriesDetected: ['dilution_ratio'],
       ungroundedCategories: ['dilution_ratio'],
       ungroundedDetails: [{ category: 'dilution_ratio', snippet: '4 oz per gallon' }],
+      keyTermGroundedCategories: [],
     });
 
     const out = await run();
@@ -1646,6 +1651,7 @@ describe('regulated-claim guardrail sentence-level redaction (B0-871)', () => {
       categoriesDetected: ['compatibility'],
       ungroundedCategories: ['compatibility'],
       ungroundedDetails: [{ category: 'compatibility', snippet: COMPAT_SENTENCE }],
+      keyTermGroundedCategories: [],
     });
 
     const out = await run({ userMessage: DC_QUESTION });
@@ -1684,6 +1690,7 @@ describe('regulated-claim guardrail sentence-level redaction (B0-871)', () => {
       categoriesDetected: ['efficacy_claim'],
       ungroundedCategories: ['efficacy_claim'],
       ungroundedDetails: [{ category: 'efficacy_claim', snippet: longEfficacy.slice(0, 240) }],
+      keyTermGroundedCategories: [],
     });
 
     const out = await run({ userMessage: DC_QUESTION });
@@ -1708,6 +1715,7 @@ describe('regulated-claim guardrail sentence-level redaction (B0-871)', () => {
         categoriesDetected: [category],
         ungroundedCategories: [category],
         ungroundedDetails: [{ category, snippet: sentence }],
+        keyTermGroundedCategories: [],
       });
 
       const out = await run({ userMessage: DC_QUESTION });
@@ -1732,6 +1740,7 @@ describe('regulated-claim guardrail sentence-level redaction (B0-871)', () => {
       categoriesDetected: ['efficacy_claim'],
       ungroundedCategories: ['efficacy_claim'],
       ungroundedDetails: [{ category: 'efficacy_claim', snippet: EFFICACY_SENTENCE }],
+      keyTermGroundedCategories: [],
     });
 
     const out = await run({ userMessage: DC_QUESTION });
@@ -1800,6 +1809,7 @@ describe('regulated-claim guardrail sentence-level redaction (B0-871)', () => {
       categoriesDetected: ['dilution_ratio', 'compatibility'],
       ungroundedCategories: ['compatibility'],
       ungroundedDetails: [{ category: 'compatibility', snippet: COMPAT_SENTENCE }],
+      keyTermGroundedCategories: [],
     });
 
     const out = await run({ userMessage: 'Is pH7Q Dual compatible with bleach in the dispenser?' });
@@ -1819,6 +1829,7 @@ describe('regulated-claim guardrail sentence-level redaction (B0-871)', () => {
       categoriesDetected: ['compatibility'],
       ungroundedCategories: ['compatibility'],
       ungroundedDetails: [{ category: 'compatibility', snippet: COMPAT_SENTENCE }],
+      keyTermGroundedCategories: [],
     });
 
     const out = await run({ userMessage: DC_QUESTION });
@@ -1833,6 +1844,7 @@ describe('regulated-claim guardrail sentence-level redaction (B0-871)', () => {
       categoriesDetected: ['dilution_ratio', 'contact_time'],
       ungroundedCategories: ['contact_time'],
       ungroundedDetails: [{ category: 'contact_time', snippet: '60 second contact time' }],
+      keyTermGroundedCategories: [],
     });
     runResponsesWithToolLoopMock.mockImplementation(
       generationCalling(

@@ -169,6 +169,7 @@ vi.mock('~/lib/workflows/product-support/validator', async (importOriginal) => {
       categoriesDetected: [],
       ungroundedCategories: [],
       ungroundedDetails: [],
+      keyTermGroundedCategories: [],
     }),
   };
 });
