@@ -91,23 +91,25 @@ export async function calculateGoldenSetMetrics(): Promise<GoldenSetMetrics> {
 
   const supabase = getSupabaseServiceRoleClient();
 
-  // Fetch report_state (for scores) and failed_items (for the failing-prompt count) for the
-  // latest run of every golden test, plus report_state for the previous run of every golden
-  // test that has one (for the score-change comparison).
+  // Fetch report_state (for scores) for the latest run of every golden test, plus the previous
+  // run of every golden test that has one (for the score-change comparison).
   const allRelevantRunIds = Array.from(new Set([...latestRunIds, ...previousRunIds]));
-  const testResults: Array<{ id: string; report_state: unknown; failed_items: number | null }> =
-    await supabase
-      .from('test_results')
-      .select('id, report_state, failed_items')
-      .in('id', allRelevantRunIds)
-      .then((result) => (result.error ? [] : result.data ?? []));
+  const testResults: Array<{ id: string; report_state: unknown }> = await supabase
+    .from('test_results')
+    .select('id, report_state')
+    .in('id', allRelevantRunIds)
+    .then((result) => (result.error ? [] : result.data ?? []));
   const testResultById = new Map(testResults.map((r) => [r.id, r]));
 
-  // Failing prompts: sum of failed_items from ONLY the latest run of each golden test.
-  let totalFailingPrompts = 0;
-  for (const runId of latestRunIds) {
-    totalFailingPrompts += testResultById.get(runId)?.failed_items ?? 0;
-  }
+  // Failing prompts: sum of `latest_run_failed_items` (B0-896) — the same field the "Test sets"
+  // table's Fails column renders, resolved from each test's true latest completed run regardless
+  // of run_mode. Must NOT be resolved via the full-mode-only `listGoldenCandidateRuns()` above, or
+  // this total silently diverges from the visible Fails column whenever a golden test's real
+  // latest completed run isn't run_mode = 'full'.
+  const totalFailingPrompts = goldenTests.reduce(
+    (sum, t) => sum + (t.latest_run_failed_items ?? 0),
+    0,
+  );
 
   // Fetch result items scoped to the latest runs only, for pass % / elapsed / TTFT.
   const resultItems: Array<{ passed: boolean }> = await supabase
