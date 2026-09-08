@@ -39,15 +39,15 @@ export function OnlyGoldenToggle({ onlyGolden }: { onlyGolden: boolean }) {
         isPending ? 'opacity-60' : ''
       }`}
     >
+      <Label className="text-sm text-slate-600" htmlFor="only-golden-toggle">
+        Only Golden
+      </Label>
       <Switch
         checked={onlyGolden}
         id="only-golden-toggle"
         onCheckedChange={toggle}
         size="sm"
       />
-      <Label className="text-sm text-slate-600" htmlFor="only-golden-toggle">
-        Only Golden
-      </Label>
     </div>
   );
 }
