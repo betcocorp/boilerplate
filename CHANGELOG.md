@@ -1,3 +1,25 @@
+# [4.2.0](https://github.com/betcocorp/bex2.0/compare/v4.1.0...v4.2.0) (2026-09-08)
+
+
+### Bug Fixes
+
+* **B0-868,B0-869,B0-870:** make regulated-claim sentence detectors precise ([83eca80](https://github.com/betcocorp/bex2.0/commit/83eca804c4950572a09506afbc6f0cd2174f01a1))
+* **B0-872:** require a product subject before the usage/safety coverage gate fires ([8022f4b](https://github.com/betcocorp/bex2.0/commit/8022f4b233b0b743ed10b6973abf6998e4d5e95f))
+* **B0-875,B0-876:** stop cross-referencing chemistry descriptions and Betco's own GE line ([d142e91](https://github.com/betcocorp/bex2.0/commit/d142e91b9b99d2d5d809e84e705fa64f156cd8b0))
+
+
+### Features
+
+* **B0-871:** redact ungrounded compatibility/efficacy sentences on knowledge answers ([7a6cbba](https://github.com/betcocorp/bex2.0/commit/7a6cbba528e280e9120e60513a06cfbe34f9f141))
+* **B0-873,B0-874:** let knowledge documents reach line-locked and one-chunk retrievals ([54c41f3](https://github.com/betcocorp/bex2.0/commit/54c41f35ce90b28eba9511ecae03fa8a138902b7)), closes [SZ#11](https://github.com/SZ/issues/11) [VCT#8](https://github.com/VCT/issues/8) [D#8](https://github.com/D/issues/8) [VCT#17](https://github.com/VCT/issues/17) [SZ#12](https://github.com/SZ/issues/12)
+* **B0-878:** reset rag.product_alias to corpus-grounded aliases only ([6f79711](https://github.com/betcocorp/bex2.0/commit/6f797116d173e33f58e4682d997a8f86e3a07a84))
+* **B0-878:** scan efficacy and fastdraw_dilution chunks in alias miner ([b6ed5ad](https://github.com/betcocorp/bex2.0/commit/b6ed5ad2ce07f2a710a7164387c96e6359873c8a))
+* **B0-880:** accept and persist agentMode/routerType on the run-creation API ([bc85bfb](https://github.com/betcocorp/bex2.0/commit/bc85bfb17e9bfd29a8310a51bc190b7e70b74ea4))
+* **B0-881:** add includeArchived option to the golden-roster reader ([82f1c97](https://github.com/betcocorp/bex2.0/commit/82f1c97e33b68cb610facc68212331772dd78124))
+* **B0-882:** add Run Golden dialog to /admin/tests ([6c25872](https://github.com/betcocorp/bex2.0/commit/6c25872fecf8ed1203d2c2d08bc3dfe07088374d))
+* **B0-883:** fan Run Golden out across the active golden roster in after() ([a0c977f](https://github.com/betcocorp/bex2.0/commit/a0c977f52d9bcfb80c77b0af407aca93c861aae2))
+* **na:** rename Uploaded tests to Test sets, show run score delta ([aec159d](https://github.com/betcocorp/bex2.0/commit/aec159d257cf2d8d36bbcfb43487ba030e51b22f))
+
 # [4.1.0](https://github.com/betcocorp/bex2.0/compare/v4.0.0...v4.1.0) (2026-09-07)
 
 
