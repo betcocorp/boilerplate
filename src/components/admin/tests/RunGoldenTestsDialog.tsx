@@ -35,7 +35,7 @@ export function RunGoldenTestsDialog({
       <DialogTrigger asChild>
         {/* Same amber palette as the "Golden" badge in the test-sets table. */}
         <Button
-          className="bg-amber-100 text-amber-800 ring-1 ring-amber-300 hover:bg-amber-200"
+          className="border-amber-300 bg-amber-100 text-amber-800 hover:bg-amber-200 hover:text-amber-900 aria-expanded:bg-amber-200 aria-expanded:text-amber-900"
           size="sm"
           type="button"
           variant="outline"
