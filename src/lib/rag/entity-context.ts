@@ -14,6 +14,25 @@ export type ProductEntityResolutionSource =
   | 'title_exact'
   | 'title_fuzzy'
   /**
+   * B0-891 — the bare product-line-tier `entity.title` tiers above are ingested from a marketing
+   * `short_description` (e.g. "Concentrated Neutral Disinfectant Cleaner"), NOT the commercial name
+   * a user or label actually uses — confirmed live: two entirely different product lines
+   * (pH7Q Dual and pH7Q Ultra) share that exact product-line title, and "No-rinse Floor Cleaner"'s
+   * product-line-tier title match resolves to the WRONG sibling line ("No Rinse Floor Cleaner 5X")
+   * because that is the only product-line row containing all four tokens. Product-TIER
+   * (`entity_type = 'product'`) titles carry the real commercial name instead (SKU rows like
+   * "pH7Q Dual", "No-Rinse Floor Cleaner (5 GAL Pail)"), so these two tiers are tried BEFORE the
+   * legacy product-line title tiers below, not after — see `resolveProductEntityByName`'s doc
+   * comment for why the ordering deviates from a literal "runs after title_fuzzy".
+   */
+  | 'product_tier_title_exact'
+  | 'product_tier_title_fuzzy'
+  /**
+   * B0-891 — a match against `rag.document.title` (label/SDS documents only), for a name that
+   * appears on a document but was never given its own alias or product-tier entity title match.
+   */
+  | 'document_title'
+  /**
    * B0-479: the two `freeform` variants are the same alias tiers, reached with
    * `{ mode: 'freeform' }` — i.e. the input was a raw user question/phrase rather than a
    * model-asserted product name, so only the high-precision alias tiers were allowed to run.
@@ -597,6 +616,124 @@ export async function resolveProductEntityByName(
     }
   } catch {
     // RPC unavailable (e.g. pre-migration environment) — fall through to legacy resolution.
+  }
+
+  /**
+   * B0-891 — product-TIER title match, tried BEFORE the legacy product-line title tiers below
+   * (deliberately out of the "runs after title_fuzzy" order named in the ticket — see the doc
+   * comment on `ProductEntityResolutionSource`'s `product_tier_title_exact`/`_fuzzy` for why:
+   * verified live, the product-line-tier title tiers below already resolve "No-rinse Floor
+   * Cleaner" to the WRONG sibling product line before ever reaching a tier placed strictly after
+   * them, because that wrong line is the only product-line row whose title contains every query
+   * token). A product-tier (`entity_type = 'product'`) row's title is the actual commercial name
+   * (e.g. "pH7Q Dual", "No-Rinse Floor Cleaner (5 GAL Pail)"), so it is both a more precise AND a
+   * higher-confidence signal than the product-line tier's marketing short_description — two
+   * completely different product lines can share the identical product-line title (confirmed
+   * live: "Concentrated Neutral Disinfectant Cleaner" names both the pH7Q Dual and pH7Q Ultra
+   * lines), so that tier alone can never disambiguate a bare product name at all.
+   *
+   * `normalize` collapses hyphens/underscores to spaces before tokenizing so "No-Rinse" and
+   * "No Rinse" tokenize identically (`tokenizeProductName` already drops punctuation as a
+   * separator, so this only matters for the substring EXACT tier below).
+   */
+  const normalizedTrimmed = trimmed.replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim();
+  try {
+    const { data: exactProductRows } = await supabase
+      .schema('rag')
+      .from('entity')
+      .select('product_line_key, product_key, title')
+      .eq('entity_type', 'product')
+      .ilike('title', normalizedTrimmed)
+      .limit(10);
+    const linedExact = (exactProductRows ?? []).filter(
+      (r): r is { product_line_key: string; product_key: string | null; title: string | null } =>
+        Boolean(r.product_line_key),
+    );
+    const distinctExactLines = new Set(linedExact.map((r) => r.product_line_key));
+    if (distinctExactLines.size === 1 && linedExact[0]) {
+      return {
+        productLineKey: linedExact[0].product_line_key,
+        productKey: linedExact[0].product_key,
+        resolutionSource: 'product_tier_title_exact',
+        ambiguousAlias: false,
+        matchedAliasId: null,
+        matchedAliasConfidence: null,
+        matchedTitle: linedExact[0].title,
+      };
+    }
+
+    const productTierTokens = tokenizeProductName(normalizedTrimmed);
+    if (productTierTokens.length >= 2) {
+      let productTierQuery = supabase
+        .schema('rag')
+        .from('entity')
+        .select('product_line_key, product_key, title')
+        .eq('entity_type', 'product');
+      for (const token of productTierTokens) {
+        productTierQuery = productTierQuery.ilike('title', `%${token}%`);
+      }
+      const { data: fuzzyProductRows } = await productTierQuery.limit(10);
+      const linedFuzzy = (fuzzyProductRows ?? []).filter(
+        (r): r is { product_line_key: string; product_key: string | null; title: string | null } =>
+          Boolean(r.product_line_key),
+      );
+      const distinctFuzzyLines = new Set(linedFuzzy.map((r) => r.product_line_key));
+      if (distinctFuzzyLines.size === 1 && linedFuzzy[0]) {
+        return {
+          productLineKey: linedFuzzy[0].product_line_key,
+          productKey: linedFuzzy[0].product_key,
+          resolutionSource: 'product_tier_title_fuzzy',
+          ambiguousAlias: false,
+          matchedAliasId: null,
+          matchedAliasConfidence: null,
+          matchedTitle: linedFuzzy[0].title,
+        };
+      }
+    }
+  } catch {
+    // Entity table unavailable — fall through to the document-title tier / legacy resolution.
+  }
+
+  /**
+   * B0-891 — `rag.document.title` match on label/SDS documents only: the last resort for a name
+   * that appears on an approved document but was never given its own alias row or product-tier
+   * entity title (e.g. a name variant printed only on the label itself).
+   */
+  try {
+    const { data: docRows } = await supabase
+      .schema('rag')
+      .from('document')
+      .select('entity_id, title')
+      .in('document_kind', ['label', 'sds'])
+      .ilike('title', `%${normalizedTrimmed}%`)
+      .limit(10);
+    const entityIds = [...new Set((docRows ?? []).map((d) => d.entity_id).filter(Boolean))] as string[];
+    if (entityIds.length > 0) {
+      const { data: docEntityRows } = await supabase
+        .schema('rag')
+        .from('entity')
+        .select('id, product_line_key, product_key, title')
+        .in('id', entityIds)
+        .limit(entityIds.length);
+      const linedDocs = (docEntityRows ?? []).filter(
+        (r): r is { id: string; product_line_key: string; product_key: string | null; title: string | null } =>
+          Boolean(r.product_line_key),
+      );
+      const distinctDocLines = new Set(linedDocs.map((r) => r.product_line_key));
+      if (distinctDocLines.size === 1 && linedDocs[0]) {
+        return {
+          productLineKey: linedDocs[0].product_line_key,
+          productKey: linedDocs[0].product_key,
+          resolutionSource: 'document_title',
+          ambiguousAlias: false,
+          matchedAliasId: null,
+          matchedAliasConfidence: null,
+          matchedTitle: linedDocs[0].title,
+        };
+      }
+    }
+  } catch {
+    // Document table unavailable — fall through to legacy resolution.
   }
 
   // Try exact prod_line_id match (e.g. "4020")
