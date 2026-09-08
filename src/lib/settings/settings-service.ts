@@ -1,3 +1,4 @@
+import type { ModelProvider } from '~/lib/constants/models';
 import {
   DEFAULT_HIGH_CONFIDENCE_ABSOLUTE,
   DEFAULT_MIN_LOCK_MARGIN,
@@ -109,6 +110,33 @@ export async function getRouterType(): Promise<RouterType> {
   return (ROUTER_TYPES as readonly string[]).includes(normalized)
     ? (normalized as RouterType)
     : DEFAULT_ROUTER_TYPE;
+}
+
+/**
+ * B0-897 — which LLM vendor Bex should prefer, as selected on /admin/settings (`BEX_LLM_PROVIDER`).
+ *
+ * `'openai'` is today's behavior everywhere and the safe fallback for every failure mode: missing
+ * row, DB error, or a stored string outside the allowed set. As with `getRouterType`,
+ * `settings.allowed_values` is advisory metadata the admin API validates against — it is NOT a
+ * database constraint — so the stored value is re-validated here rather than trusted, and this
+ * getter can never throw or return an unrecognized provider.
+ *
+ * NOT YET WIRED: as of B0-897 nothing on the request path calls this getter — the ticket seeds the
+ * row and renders the select only. Selecting `'anthropic'` is inert until a follow-up connects a
+ * consumer (chat generation, grading, validator or router). The type is `ModelProvider` from
+ * `~/lib/constants/models` so a future consumer shares the one provider type with
+ * `modelProviderFor` instead of growing a second one.
+ */
+export const LLM_PROVIDERS = ['openai', 'anthropic'] as const satisfies readonly ModelProvider[];
+
+export const DEFAULT_LLM_PROVIDER: ModelProvider = 'openai';
+
+export async function getLlmProvider(): Promise<ModelProvider> {
+  const value = await getStringSetting('BEX_LLM_PROVIDER', DEFAULT_LLM_PROVIDER);
+  const normalized = value.trim().toLowerCase();
+  return (LLM_PROVIDERS as readonly string[]).includes(normalized)
+    ? (normalized as ModelProvider)
+    : DEFAULT_LLM_PROVIDER;
 }
 
 /**

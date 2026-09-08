@@ -84,6 +84,9 @@ const STRING_SETTINGS = [
   // B0-757/B0-831 — the BEX_MODEL_TAGS tag the "preview" tag resolves to (resolveResponsesModel).
   // Renders as a select like BEX_ROUTER_MODEL: allowed_values = the enum minus `preview`.
   'BEX_RESPONSES_MODEL',
+  // B0-897 — preferred LLM vendor, 'openai' | 'anthropic'. Row + select only: nothing reads it yet
+  // (see getLlmProvider), so flipping it is inert until a follow-up wires a consumer.
+  'BEX_LLM_PROVIDER',
   // B0-757 — resolveProductLineFromMatches' lock thresholds, all numeric.
   'BEX_PRODUCT_LINE_LOCK_MIN_SIMILARITY',
   'BEX_PRODUCT_LINE_LOCK_MARGIN',
