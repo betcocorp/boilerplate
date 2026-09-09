@@ -1,20 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * B0-832 — mocks for `gradeWithCriteria`'s OpenAI dependencies, so the collision-guardrail test
+ * B0-832 — mocks for `gradeWithCriteria`'s model dependencies, so the collision-guardrail test
  * below can drive the real `gradeSemanticCriteria` → `aggregateCriteriaVerdicts` path with a
- * scripted model response, without a live API call.
+ * scripted model response, without a live API call. B0-908 — the seam is now the provider-neutral
+ * `completeStructuredWithUsage`, not the OpenAI client.
  */
-const mockCreate = vi.fn();
+const { mockComplete, mockResolveModel } = vi.hoisted(() => ({
+  mockComplete: vi.fn(),
+  mockResolveModel: vi.fn(async () => 'gpt-test'),
+}));
+const USAGE = { promptTokens: 1, completionTokens: 1, totalTokens: 2, cachedPromptTokens: 0 };
+vi.mock('~/lib/llm/structured-completion', () => ({
+  completeStructuredWithUsage: mockComplete,
+}));
 vi.mock('~/lib/openai/client', () => ({
-  getOpenAIClient: () => ({ responses: { create: mockCreate } }),
-  resolveResponsesModel: () => 'gpt-test',
-}));
-vi.mock('~/lib/openai/model-capabilities', () => ({
-  samplingParamsFor: () => ({}),
-}));
-vi.mock('~/lib/openai/response-item-parsing', () => ({
-  extractAssistantText: (res: { output_text: string }) => res.output_text,
+  resolveResponsesModel: mockResolveModel,
 }));
 vi.mock('~/lib/openai/transport-retry', () => ({
   resolveOpenAiRequestTimeoutMs: () => 1000,
@@ -25,7 +26,7 @@ vi.mock('~/lib/workflows/product-support/max-output-tokens', () => ({
 }));
 
 import { gradeExactCriterion, gradeWithCriteria } from './criteria-grader';
-import type { ExpectedCriterion } from './criteria-schemas';
+import { GRADER_JSON_SCHEMA, type ExpectedCriterion } from './criteria-schemas';
 
 /**
  * B0-803 — `gradeExactCriterion` is the deterministic guardrail for `match: 'exact'` criteria and,
@@ -129,17 +130,20 @@ describe('gradeExactCriterion — B0-803 case/whitespace normalisation', () => {
  */
 describe('gradeWithCriteria — B0-832 exact verdict cannot be overwritten on index collision', () => {
   beforeEach(() => {
-    mockCreate.mockReset();
+    mockComplete.mockReset();
+    mockResolveModel.mockReset();
+    mockResolveModel.mockResolvedValue('gpt-test');
   });
 
   it('keeps the exact verdict at index 0 when a semantic verdict also claims index 0', async () => {
     // The response text does NOT contain "4 oz/gal" (the exact criterion), so the deterministic
     // check must fail it. The scripted model reply — mis-numbering its one semantic criterion as
     // index 0 instead of the real index 1 — must not be allowed to flip that to met:true.
-    mockCreate.mockResolvedValue({
-      output_text: JSON.stringify({
+    mockComplete.mockResolvedValue({
+      text: JSON.stringify({
         verdicts: [{ criterionIndex: 0, met: true, evidence: 'mentions dwell time' }],
       }),
+      usage: USAGE,
     });
 
     const criteria: ExpectedCriterion[] = [
@@ -169,10 +173,11 @@ describe('gradeWithCriteria — B0-832 exact verdict cannot be overwritten on in
   });
 
   it('applies a correctly-numbered semantic verdict normally (no collision)', async () => {
-    mockCreate.mockResolvedValue({
-      output_text: JSON.stringify({
+    mockComplete.mockResolvedValue({
+      text: JSON.stringify({
         verdicts: [{ criterionIndex: 1, met: true, evidence: 'dwell for 10 minutes' }],
       }),
+      usage: USAGE,
     });
 
     const criteria: ExpectedCriterion[] = [
@@ -190,5 +195,40 @@ describe('gradeWithCriteria — B0-832 exact verdict cannot be overwritten on in
     expect(outcome!.verdicts[0]).toMatchObject({ met: true, match: 'exact' });
     expect(outcome!.verdicts[1]).toMatchObject({ met: true, match: 'semantic' });
     expect(outcome!.passed).toBe(true);
+  });
+
+  /**
+   * B0-908 — a `claude-*` id resolved from `BEX_RESPONSES_MODEL` / the run's `modelTag` must reach
+   * the provider-neutral helper unchanged, with the same prompt + schema bytes and the same
+   * transport knobs the OpenAI call carried (`maxRetries: 0`, per-attempt timeout).
+   */
+  it('passes a resolved claude id through to completeStructuredWithUsage with the grader schema', async () => {
+    mockResolveModel.mockResolvedValue('claude-sonnet-5');
+    mockComplete.mockResolvedValue({
+      text: JSON.stringify({ verdicts: [{ criterionIndex: 0, met: true, evidence: 'ok' }] }),
+      usage: USAGE,
+    });
+
+    const outcome = await gradeWithCriteria({
+      prompt: 'What is this for?',
+      responseText: 'It is a neutral floor cleaner.',
+      criteria: [{ concept: 'says it is a floor cleaner', tier: 1, match: 'semantic' }],
+      modelTag: 'claude-sonnet-5',
+    });
+
+    expect(mockResolveModel).toHaveBeenCalledWith('claude-sonnet-5');
+    expect(mockComplete).toHaveBeenCalledOnce();
+    const request = mockComplete.mock.calls[0][0];
+    expect(request).toMatchObject({
+      model: 'claude-sonnet-5',
+      schemaName: 'criteria_grading_result',
+      schema: GRADER_JSON_SCHEMA,
+      maxOutputTokens: 1024,
+      temperature: 0,
+      requestOptions: { maxRetries: 0, timeoutMs: 1000 },
+    });
+    expect(request.system).toContain('You are grading a single AI assistant response');
+    expect(request.user).toContain('0. says it is a floor cleaner');
+    expect(outcome?.passed).toBe(true);
   });
 });

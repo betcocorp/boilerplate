@@ -6,6 +6,7 @@ import type {
 } from 'openai/resources/responses/responses';
 import type { ResponseInputItem } from 'openai/resources/responses/responses';
 
+import { modelProviderFor } from '~/lib/constants/models';
 import { extractAssistantText, extractFunctionCalls } from '~/lib/openai/response-item-parsing';
 import {
   isTemperatureUnsupportedError,
@@ -361,7 +362,12 @@ export const TOOL_ROUNDS_EXHAUSTED_TOOL_OUTPUT = JSON.stringify({
     'Tool-call limit reached for this turn; this call was not executed. Answer from the evidence already gathered.',
 });
 
-const TOOL_ROUNDS_EXHAUSTED_INSTRUCTION =
+/**
+ * B0-381 — the user-role message that accompanies the synthetic outputs on the forced final request.
+ * Exported (B0-901) so the AI SDK loop injects the identical text; there is deliberately no second
+ * copy of it anywhere.
+ */
+export const TOOL_ROUNDS_EXHAUSTED_INSTRUCTION =
   'You have reached the tool-call limit for this turn — no further tool calls will be executed. ' +
   'Answer the user\'s question NOW using only the evidence already gathered above. ' +
   'If the gathered evidence is not sufficient for a complete verified answer, say plainly which part ' +
@@ -527,6 +533,19 @@ export function isCorpusSearchPayload(payloadJson: string): boolean {
 export async function runResponsesWithToolLoop(
   opts: ResponsesRuntimeOptions,
 ): Promise<ResponsesRuntimeResult> {
+  /**
+   * B0-899 — this loop IS the OpenAI Responses API; a Claude id has no route through it. The
+   * workflow already forks on `modelProviderFor` before choosing a runtime (B0-908), so this is a
+   * guard against a caller that resolved a model and picked the loop by hand — failing here, before
+   * any request or tool call is paid for, beats a 404 from OpenAI for an unknown model id.
+   */
+  if (modelProviderFor(opts.model) === 'anthropic') {
+    throw new Error(
+      `Model "${opts.model}" is an Anthropic (claude-*) id and cannot run on the OpenAI Responses ` +
+        'loop; claude ids must run on the AI SDK loop (runAiSdkWithToolLoop, ~/lib/bex/ai-sdk-runtime).',
+    );
+  }
+
   const maxRounds = opts.maxToolRounds ?? 16;
   const toolTrace: ToolTraceEntry[] = [];
   const responseIds: string[] = [];

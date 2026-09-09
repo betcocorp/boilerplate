@@ -4,7 +4,7 @@ import {
   type GradingModelTag,
   type ModelEffort,
 } from '~/lib/constants/models';
-import { resolveResponsesModel } from '~/lib/openai/client';
+import { resolveModel } from '~/lib/llm/resolve-model';
 import { getStringSetting } from '~/lib/settings/settings-service';
 
 /**
@@ -30,17 +30,15 @@ export const DEFAULT_GRADING_MODEL_TAG: GradingModelTag = 'claude-opus-5';
 export const DEFAULT_GRADING_EFFORT: ModelEffort = 'high';
 
 /**
- * Resolves a grading tag to the model id the provider is called with. An Anthropic tag IS the exact
- * Claude API id and has no alias/env-override layer; an OpenAI tag goes through
- * `resolveResponsesModel` exactly as before, so `preview`, the `BEX_MODEL_*` pins and the
- * `BEX_RESPONSES_MODEL` row all still apply to grading on OpenAI.
+ * Resolves a grading tag to the model id the provider is called with, through the vendor-neutral
+ * `resolveModel` (B0-899/B0-902): an explicit tag — OpenAI or `claude-*` — gets the `BEX_MODEL_*`
+ * env pins (`resolveResponsesModel` passes a Claude tag through as the exact Claude API id, B0-908),
+ * and `preview` resolves to the default row of the vendor in `BEX_LLM_PROVIDER` rather than
+ * always the OpenAI row.
  */
 export async function resolveGradingModel(modelTag: string | undefined): Promise<string> {
   const tag = (modelTag ?? '').trim() || DEFAULT_GRADING_MODEL_TAG;
-  if (modelProviderFor(tag) === 'anthropic') {
-    return tag;
-  }
-  return resolveResponsesModel(tag);
+  return resolveModel(tag);
 }
 
 export async function loadGradingModelTag(): Promise<string> {

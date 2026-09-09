@@ -6,7 +6,9 @@ import { FormSelectField } from '~/components/admin/FormSelectField';
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from '~/components/ui/select';
@@ -21,6 +23,7 @@ import supportedModels, {
   type BexModelTag,
   type SupportedModel,
 } from '~/lib/constants/models';
+import { groupModelsByProvider } from '~/lib/llm/provider-label';
 import { ROUTING_TEST_ROUTER_LABELS } from '~/lib/routing-test/constants';
 import type { RouterTypeOverride } from '~/lib/workflows/product-support/run-product-support-workflow';
 
@@ -62,12 +65,19 @@ export function TestRunModelControls() {
           <SelectTrigger aria-label="Chat model for this run" className="h-9 w-44">
             <SelectValue />
           </SelectTrigger>
+          {/* B0-905 — grouped by vendor: the list carries both OpenAI and Anthropic tags since
+              B0-908, and an ungrouped flat list gave no clue which vendor a run would bill. */}
           <SelectContent>
             <SelectItem value="preview">Model: preview</SelectItem>
-            {supportedModels.map((m: SupportedModel) => (
-              <SelectItem key={m.name} value={m.name}>
-                {m.label}
-              </SelectItem>
+            {groupModelsByProvider(supportedModels).map((group) => (
+              <SelectGroup key={group.provider}>
+                <SelectLabel>{group.label}</SelectLabel>
+                {group.models.map((m: SupportedModel) => (
+                  <SelectItem key={m.name} value={m.name}>
+                    {m.label}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
             ))}
           </SelectContent>
         </Select>

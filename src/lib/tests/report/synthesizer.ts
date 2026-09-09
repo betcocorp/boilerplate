@@ -9,6 +9,7 @@ import {
 
 import { DEFAULT_GRADING_MODEL_TAG, resolveGradingModel } from './grading-model';
 import type { EvaluatedCase, RateBlock, ReportMetrics } from './metrics';
+import type { CaseHarnessAside } from './render';
 import { reportSynthesisSchema, type ReportSynthesis } from './schemas';
 
 /**
@@ -79,7 +80,9 @@ Then produce exactly 3 "Top 3 recommended agent improvements", ranked Priority #
 
 Each recommendation needs: what to improve, why it should be fixed first, evidence (cite case IDs and scores), affected tiers/categories, and a one-line plain-English "change" summary precise enough for an engineer to act on without another round of questions.
 
-Finally produce an executive assessment: 2-3 strongest areas, 2-3 areas needing improvement, the single most significant failure pattern, any major risk discovered, and a short plain-English readiness recommendation for broader testing — written for business stakeholders.`;
+Finally produce an executive assessment: 2-3 strongest areas, 2-3 areas needing improvement, the single most significant failure pattern, any major risk discovered, and a short plain-English readiness recommendation for broader testing — written for business stakeholders.
+
+Some cases carry a "Harness provenance" line (answer provenance, routing decision, gates that fired, whether the draft answer was discarded, retrieved chunk count). You MAY cite these as evidence for a recommendation — e.g. naming the specific gate that fired instead of describing a generic refusal — but they are reference signals only: NEVER treat them as a metric, and NEVER fold them into Accuracy, Completeness, Relevance, or Clarity scoring.`;
 
 /**
  * B0-735 — this batch is a SLICE of a larger run; the digest is an intermediate summary that will
@@ -90,7 +93,9 @@ Finally produce an executive assessment: 2-3 strongest areas, 2-3 areas needing 
  */
 const DIGEST_SYSTEM_PROMPT = `You are summarizing ONE BATCH of cases from a larger agent-evaluation run, following Betco's internal agent-evaluation methodology. This batch is a slice of a bigger run — your output will be merged with digests from other batches into a final report.
 
-From only the cases in this batch, list AT MOST 5 of the clearest failure patterns (cite case IDs), AT MOST 5 of the clearest strengths (cite case IDs), and AT MOST 5 of the clearest recurring weaknesses (cite case IDs). Do not write one bullet per case — merge similar cases into a single bullet citing all their IDs.`;
+From only the cases in this batch, list AT MOST 5 of the clearest failure patterns (cite case IDs), AT MOST 5 of the clearest strengths (cite case IDs), and AT MOST 5 of the clearest recurring weaknesses (cite case IDs). Do not write one bullet per case — merge similar cases into a single bullet citing all their IDs.
+
+Some cases carry a "Harness provenance" line (answer provenance, routing decision, gates that fired, whether the draft answer was discarded, retrieved chunk count). You MAY cite these as evidence — e.g. naming the specific gate that fired — but they are reference signals only: NEVER treat them as a metric, and NEVER fold them into Accuracy, Completeness, Relevance, or Clarity scoring.`;
 
 const DIGEST_JSON_SCHEMA = {
   type: 'object',
@@ -139,7 +144,19 @@ function truncate(text: string, max = 240): string {
   return trimmed.length > max ? `${trimmed.slice(0, max)}…` : trimmed;
 }
 
-function caseSummary(c: EvaluatedCase, findings: { explanation: string; missed: string; incorrect: string }) {
+/**
+ * B0-863 — the harness provenance a case's findings may carry, alongside `explanation`/`missed`/
+ * `incorrect`. Optional: a run that predates this ticket (or a case with no result row) has none.
+ */
+export type CaseFindings = {
+  explanation: string;
+  missed: string;
+  incorrect: string;
+  harness?: CaseHarnessAside | null;
+};
+
+function caseSummary(c: EvaluatedCase, findings: CaseFindings) {
+  const harness = findings.harness ?? null;
   return {
     id: c.id,
     tier: c.tier,
@@ -150,6 +167,16 @@ function caseSummary(c: EvaluatedCase, findings: { explanation: string; missed: 
     explanation: truncate(findings.explanation),
     missed: truncate(findings.missed),
     incorrect: truncate(findings.incorrect),
+    // B0-863 — provenance evidence ONLY: never a metric, never folded into a sub-score. See the
+    // system prompts' explicit instruction to that effect.
+    answerProvenance: harness?.answerProvenance ?? null,
+    routingDecision: harness?.routingDecision ?? null,
+    gatesFired:
+      harness && harness.gates.length > 0
+        ? harness.gates.map((g) => `${g.name}: ${g.verdict}`).join(', ')
+        : null,
+    draftDiscarded: harness?.draftDiscarded ?? false,
+    chunkCount: harness ? harness.chunkCount : null,
   };
 }
 
@@ -182,6 +209,18 @@ function formatCasesAsText(cases: CaseSummary[]): string {
     lines.push(`  Explanation: ${c.explanation}`);
     lines.push(`  Missed: ${c.missed}`);
     lines.push(`  Incorrect: ${c.incorrect}`);
+    // B0-863 — reference-only signals. See the system prompt: evidence for a recommendation, never
+    // a metric input.
+    const provenanceBits = [
+      c.answerProvenance ? `answer provenance: ${c.answerProvenance}` : null,
+      c.routingDecision ? `routing: ${c.routingDecision}` : null,
+      c.gatesFired ? `gates fired: ${c.gatesFired}` : null,
+      c.draftDiscarded ? 'draft discarded' : null,
+      c.chunkCount != null ? `retrieved chunks: ${c.chunkCount}` : null,
+    ].filter(Boolean);
+    if (provenanceBits.length > 0) {
+      lines.push(`  Harness provenance (evidence only, not a metric): ${provenanceBits.join(' · ')}`);
+    }
     lines.push('');
   }
   return lines.join('\n');
@@ -387,7 +426,7 @@ export type SynthesizeReportDeps = {
 
 export async function synthesizeReportFindings(
   metrics: ReportMetrics,
-  findingsByCaseId: Map<string, { explanation: string; missed: string; incorrect: string }>,
+  findingsByCaseId: Map<string, CaseFindings>,
   modelTag?: string,
   /** B0-806 — Anthropic `output_config.effort`; ignored on OpenAI models. */
   effort?: ModelEffort,

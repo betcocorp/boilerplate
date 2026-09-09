@@ -1,6 +1,7 @@
 import { after } from 'next/server';
 
-import { resolveResponsesModel } from '~/lib/openai/client';
+import { modelProviderFor } from '~/lib/constants/models';
+import { resolveModel } from '~/lib/llm/resolve-model';
 import { logWarn } from '~/lib/observability/logger';
 import { classifyUserIntent, type IntentClassification } from '~/lib/orchestrator/intent-classifier';
 import {
@@ -199,7 +200,15 @@ export async function executeTestRun(testResultId: string) {
    */
   const resolvedModel =
     (typeof currentSummary.resolvedModel === 'string' && currentSummary.resolvedModel) ||
-    (await resolveResponsesModel(modelTag));
+    (await resolveModel(modelTag));
+
+  /**
+   * B0-905 — which VENDOR answered, alongside the model id. Derived from `resolvedModel` rather
+   * than stored independently, so the two can never disagree and a run written before this field
+   * existed still badges correctly from its persisted model (`ModelProviderBadge` re-derives the
+   * same way). Preserved across a resume for the same reason `resolvedModel` is.
+   */
+  const resolvedProvider = modelProviderFor(resolvedModel);
 
   await updateTestResult(testResult.id, {
     status: 'running',
@@ -213,6 +222,7 @@ export async function executeTestRun(testResultId: string) {
       running_since: resumedAt,
       elapsed_accumulated_ms: itemElapsedSumMs,
       resolvedModel,
+      resolvedProvider,
     },
   });
 

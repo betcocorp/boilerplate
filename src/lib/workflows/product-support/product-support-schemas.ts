@@ -83,7 +83,14 @@ export type RetrievedDocumentChunkRef = z.infer<typeof retrievedDocumentChunkRef
  * - `validator_rejected_draft_retained` — B0-350 (resolves B0-262): the validator disapproved a
  *   substantive, non-decline draft with no flagged safety problem, so the streamed answer was kept
  *   visible instead of being hard-replaced; `requires_human_review` is always forced true alongside
- *   this value.
+ *   this value. B0-886: this value now means SPECIFICALLY that the ORIGINAL draft (never touched by
+ *   the revision pass) was what got kept -- see `revised_answer_retained` for the other case.
+ * - `revised_answer_retained` — B0-886: the revision pass replaced the draft (first-pass rejection,
+ *   successful re-grounding), but the SECOND validator pass on the revised text also disapproved it
+ *   with no flagged safety problem. Same "never overwrite what the user already watched stream in"
+ *   reasoning as `validator_rejected_draft_retained`, but the text kept is the REVISED answer, not
+ *   the original draft -- collapsing the two into one value would make it impossible to tell which
+ *   text the user actually saw from `answerProvenance` alone.
  * - `recommendation_engine_decline` — B0-356: the `recommend_cross_reference` engine did not answer
  *   (sub-threshold score, validator-forced `escalated`, or a B0-329 latency-ceiling trip), so its
  *   `declineReason` replaced the draft VERBATIM. A distinct value, not `validator_fallback`,
@@ -152,6 +159,8 @@ export const answerProvenanceSchema = z.enum([
    * to `verdict: 'redacted'` (vs. `'rejected'` for the full decline).
    */
   'regulated_claim_partial_redaction',
+  /** B0-886 — see the doc comment above `validator_rejected_draft_retained`. */
+  'revised_answer_retained',
 ]);
 
 export type AnswerProvenance = z.infer<typeof answerProvenanceSchema>;
@@ -388,7 +397,11 @@ export const runtimeConfigSchema = z.object({
   useValidator: z.boolean(),
   /** `settings.BEX_EARLY_DECLINE_GATE_ENABLED === 'true'` (B0-734: a settings row, default false). */
   earlyDeclineGateEnabled: z.boolean(),
-  /** `BEX_AI_SDK_GENERATION_ENABLED === 'true'` — selects the AI SDK vs Responses generation runtime. */
+  /**
+   * Whether the AI SDK generation runtime ran this turn (vs the OpenAI Responses loop). The EFFECTIVE
+   * decision, not the raw flag: `true` for every Anthropic model regardless of the
+   * `BEX_AI_SDK_GENERATION_ENABLED` row, and the row's value for OpenAI models (B0-908).
+   */
   aiSdkGenerationEnabled: z.boolean(),
   /**
    * Whether cross-encoder reranking actually ran this turn's retrieval, i.e.
@@ -550,6 +563,23 @@ export const productSupportFinalOutputSchema = z.object({
   workflowRunId: z.string().uuid(),
   latestOpenaiResponseId: z.string(),
   validation: validatorResultSchema,
+  /**
+   * B0-886 — the FIRST validator pass's result (issues + confidence + approved/requires_human_review),
+   * captured before the revision pass could run and before `validation` above was overwritten by a
+   * second pass. Previously the second pass's result silently replaced the first, so the exact
+   * issues that triggered a rewrite were unrecoverable once the revision succeeded. Present only
+   * when a revision pass actually ran this turn (i.e. the first pass disapproved with issues);
+   * absent otherwise, including on all historical payloads written before this ticket.
+   */
+  validationFirstPass: validatorResultSchema.optional(),
+  /**
+   * B0-886 — the revision pass's own LLM output (already preamble-stripped by
+   * `stripRevisionPreamble`), captured before any later redaction/composition step (alias
+   * disclosure, cross-reference headline, regulated-claim redaction) could further change it.
+   * Present only when a revision pass actually ran and produced a usable (non-refused) rewrite;
+   * absent otherwise, including on all historical payloads written before this ticket.
+   */
+  revisedAnswer: z.string().optional(),
   routingDecision: z.string().optional(),
   timingBreakdown: z
     .object({

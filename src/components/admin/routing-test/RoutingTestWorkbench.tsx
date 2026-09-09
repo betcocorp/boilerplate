@@ -21,7 +21,14 @@ import type {
   RoutingTestRunRecord,
 } from '~/lib/routing-test/types';
 
-/** B0-671 — default selection for the LLM router's model picker; mirrors `TestRunModelControls`. */
+/**
+ * B0-671 — default selection for the LLM router's model picker; mirrors `TestRunModelControls`.
+ *
+ * B0-905 — deliberately left on an OpenAI tag. The picker offers the Anthropic tags too since
+ * B0-908, and B0-903 put the router on the provider seam, so a claude-* selection here runs the
+ * routing test on the Anthropic Messages API. Changing this default would silently move every
+ * routing-test baseline to another vendor, so it stays where the recorded runs were measured.
+ */
 const DEFAULT_ROUTING_TEST_MODEL_TAG: ExplicitBexModelTag = 'gpt-4.1-mini';
 
 type RoutingTestWorkbenchProps = {

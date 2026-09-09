@@ -19,6 +19,10 @@
  * `top_p` is likewise rejected by the same models, and `temperature: 1` (the API default) is
  * accepted by all of them — but this codebase never sends `top_p` and never sends 1, so
  * `temperature` is the entire blast radius.
+ *
+ * B0-908 — every `claude-*` id is denied too. Claude Opus 5 / Sonnet 5 return 400 on ANY sampling
+ * control (`temperature`, `top_p`, `top_k` were removed alongside `budget_tokens`), and the older
+ * 4.x ids only tolerate them; we never send a sampling control to Anthropic on any tier.
  */
 
 import { logWarn } from '~/lib/observability/logger';
@@ -38,6 +42,8 @@ const SAMPLING_UNSUPPORTED_PREFIXES = [
   'o1',
   'o3',
   'o4',
+  // B0-908 — every Anthropic id. Opus 5 / Sonnet 5 400 on any sampling control; never send one.
+  'claude-',
 ] as const;
 
 /** Exact ids that reject sampling but whose bare name would over-match as a prefix. */

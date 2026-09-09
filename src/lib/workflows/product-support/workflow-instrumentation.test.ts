@@ -109,6 +109,16 @@ vi.mock('~/lib/settings/settings-service', () => ({
   getNumberSetting: vi.fn((key: string, fallback: number) =>
     Promise.resolve(settingOverrides.has(key) ? (settingOverrides.get(key) as number) : fallback),
   ),
+  // B0-899 — resolveModel resolves the `preview` tag through this getter. Defaults to 'openai' so
+  // these fixtures keep resolving preview to the BEX_RESPONSES_MODEL (OpenAI) row as they always
+  // have; a test that wants the Anthropic path sets BEX_LLM_PROVIDER in settingOverrides.
+  getLlmProvider: vi.fn(() =>
+    Promise.resolve(
+      settingOverrides.has('BEX_LLM_PROVIDER')
+        ? (settingOverrides.get('BEX_LLM_PROVIDER') as 'openai' | 'anthropic')
+        : 'openai',
+    ),
+  ),
 }));
 
 /**
@@ -127,7 +137,10 @@ vi.mock('~/lib/openai/client', () => ({
   getOpenAIClient: () => ({
     responses: { create: (...args: unknown[]) => openaiResponsesCreateMock(...args) },
   }),
-  resolveResponsesModel: () => 'gpt-test',
+  // B0-908 — tag-aware only for Claude ids so the provider-driven runtime selection is testable;
+  // every OpenAI tag (and no tag) still resolves to the fixed 'gpt-test' the older tests assert.
+  resolveResponsesModel: (tag?: string) =>
+    tag && tag.startsWith('claude-') ? tag : 'gpt-test',
 }));
 
 const runResponsesWithToolLoopMock = vi.fn();
@@ -226,6 +239,7 @@ import {
 import { REVISION_SYSTEM_PROMPT } from '~/lib/workflows/product-support/validator';
 import {
   EARLY_DECLINE_CONFIDENCE,
+  isResponsesApiResponseId,
   runProductSupportWorkflow,
   VALIDATOR_BYPASS_REASON,
 } from '~/lib/workflows/product-support/run-product-support-workflow';
@@ -378,6 +392,7 @@ beforeEach(() => {
     categoriesDetected: [],
     ungroundedCategories: [],
     ungroundedDetails: [],
+    keyTermGroundedCategories: [],
   });
 });
 
@@ -651,7 +666,7 @@ describe('validator high-similarity skip gate (B0-546)', () => {
     expect(runValidatorPassMock).toHaveBeenCalledTimes(1);
   });
 
-  it('feeds the validator chunk-level snippets rather than the full document body', async () => {
+  it('feeds the validator the fuller documentBody window rather than the short snippet (B0-885)', async () => {
     executeProductToolMock.mockResolvedValue({
       sources: [
         {
@@ -660,7 +675,7 @@ describe('validator high-similarity skip gate (B0-546)', () => {
           title: 'pH7Q Dual label',
           snippet: 'Use 2 oz per gallon of water.',
           documentBody:
-            'Use 2 oz per gallon of water. FULL_DOCUMENT_ONLY_MARKER: unrelated boilerplate repeated many times.',
+            'Use 2 oz per gallon of water. FULL_DOCUMENT_WINDOW_MARKER: the generator-visible neighbours the old snippet-only evidence summary used to drop, causing grounded drafts to be rejected as unsupported.',
         },
       ],
     });
@@ -671,8 +686,9 @@ describe('validator high-similarity skip gate (B0-546)', () => {
     const [{ evidenceSummary }] = runValidatorPassMock.mock.calls[0] as [
       { evidenceSummary: string },
     ];
-    expect(evidenceSummary).toContain('Use 2 oz per gallon of water.');
-    expect(evidenceSummary).not.toContain('FULL_DOCUMENT_ONLY_MARKER');
+    // B0-885: the validator must see the same fuller evidence window the generator read, not
+    // just the ~900-char retrieval-preview snippet.
+    expect(evidenceSummary).toContain('FULL_DOCUMENT_WINDOW_MARKER');
   });
 });
 
@@ -1481,6 +1497,7 @@ describe('regulated-claim guardrail partial redaction (B0-829)', () => {
       categoriesDetected: ['dilution_ratio', 'contact_time'],
       ungroundedCategories: ['contact_time'],
       ungroundedDetails: [{ category: 'contact_time', snippet: '60 second contact time' }],
+      keyTermGroundedCategories: [],
     });
 
     const out = await run();
@@ -1518,6 +1535,7 @@ describe('regulated-claim guardrail partial redaction (B0-829)', () => {
       categoriesDetected: ['dilution_ratio', 'hazard'],
       ungroundedCategories: ['hazard'],
       ungroundedDetails: [{ category: 'hazard', snippet: 'Causes severe skin damage on contact.' }],
+      keyTermGroundedCategories: [],
     });
 
     const out = await run();
@@ -1546,6 +1564,7 @@ describe('regulated-claim guardrail partial redaction (B0-829)', () => {
       categoriesDetected: ['dilution_ratio'],
       ungroundedCategories: ['dilution_ratio'],
       ungroundedDetails: [{ category: 'dilution_ratio', snippet: '4 oz per gallon' }],
+      keyTermGroundedCategories: [],
     });
 
     const out = await run();
@@ -1642,6 +1661,7 @@ describe('regulated-claim guardrail sentence-level redaction (B0-871)', () => {
       categoriesDetected: ['compatibility'],
       ungroundedCategories: ['compatibility'],
       ungroundedDetails: [{ category: 'compatibility', snippet: COMPAT_SENTENCE }],
+      keyTermGroundedCategories: [],
     });
 
     const out = await run({ userMessage: DC_QUESTION });
@@ -1680,6 +1700,7 @@ describe('regulated-claim guardrail sentence-level redaction (B0-871)', () => {
       categoriesDetected: ['efficacy_claim'],
       ungroundedCategories: ['efficacy_claim'],
       ungroundedDetails: [{ category: 'efficacy_claim', snippet: longEfficacy.slice(0, 240) }],
+      keyTermGroundedCategories: [],
     });
 
     const out = await run({ userMessage: DC_QUESTION });
@@ -1704,6 +1725,7 @@ describe('regulated-claim guardrail sentence-level redaction (B0-871)', () => {
         categoriesDetected: [category],
         ungroundedCategories: [category],
         ungroundedDetails: [{ category, snippet: sentence }],
+        keyTermGroundedCategories: [],
       });
 
       const out = await run({ userMessage: DC_QUESTION });
@@ -1728,6 +1750,7 @@ describe('regulated-claim guardrail sentence-level redaction (B0-871)', () => {
       categoriesDetected: ['efficacy_claim'],
       ungroundedCategories: ['efficacy_claim'],
       ungroundedDetails: [{ category: 'efficacy_claim', snippet: EFFICACY_SENTENCE }],
+      keyTermGroundedCategories: [],
     });
 
     const out = await run({ userMessage: DC_QUESTION });
@@ -1796,6 +1819,7 @@ describe('regulated-claim guardrail sentence-level redaction (B0-871)', () => {
       categoriesDetected: ['dilution_ratio', 'compatibility'],
       ungroundedCategories: ['compatibility'],
       ungroundedDetails: [{ category: 'compatibility', snippet: COMPAT_SENTENCE }],
+      keyTermGroundedCategories: [],
     });
 
     const out = await run({ userMessage: 'Is pH7Q Dual compatible with bleach in the dispenser?' });
@@ -1815,6 +1839,7 @@ describe('regulated-claim guardrail sentence-level redaction (B0-871)', () => {
       categoriesDetected: ['compatibility'],
       ungroundedCategories: ['compatibility'],
       ungroundedDetails: [{ category: 'compatibility', snippet: COMPAT_SENTENCE }],
+      keyTermGroundedCategories: [],
     });
 
     const out = await run({ userMessage: DC_QUESTION });
@@ -1829,6 +1854,7 @@ describe('regulated-claim guardrail sentence-level redaction (B0-871)', () => {
       categoriesDetected: ['dilution_ratio', 'contact_time'],
       ungroundedCategories: ['contact_time'],
       ungroundedDetails: [{ category: 'contact_time', snippet: '60 second contact time' }],
+      keyTermGroundedCategories: [],
     });
     runResponsesWithToolLoopMock.mockImplementation(
       generationCalling(
@@ -3110,5 +3136,100 @@ describe('consolidated signals analysis (B0-786)', () => {
     const record = singleGateRecord('signals_analysis');
     expect(record.verdict).toBe('degraded_to_keyword_router');
     expect((record.inputs.signals as Record<string, unknown>).source).toBe('keyword_fallback');
+  });
+});
+
+/* -------------------------------------------------------------------------- *
+ * B0-908 — provider-aware generation runtime selection
+ * -------------------------------------------------------------------------- */
+
+describe('provider-aware runtime selection (B0-908)', () => {
+  it('runs a claude-* model on the AI SDK loop with the flag off, and reports that runtime', async () => {
+    settingOverrides.set('BEX_AI_SDK_GENERATION_ENABLED', false);
+    // Like the real AI SDK runtime, report no OpenAI response id (`generationCalling` fakes the
+    // Responses shape, `resp_final` included).
+    runAiSdkWithToolLoopMock.mockImplementation(async (opts: unknown) => ({
+      ...(await generationCalling([])(opts)),
+      finalResponseId: null,
+    }));
+
+    const out = await run({ modelTag: 'claude-sonnet-5' });
+
+    expect(runAiSdkWithToolLoopMock).toHaveBeenCalledTimes(1);
+    expect(runResponsesWithToolLoopMock).not.toHaveBeenCalled();
+    const call = runAiSdkWithToolLoopMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(call.modelTag).toBe('claude-sonnet-5');
+
+    const prompt = promptRecordSchema.parse(stepInput('openai_responses_agent').prompt);
+    expect(prompt.model).toBe('claude-sonnet-5');
+    expect(prompt.runtime).toBe('ai-sdk');
+    expect(stepInput('openai_responses_agent')).toMatchObject({ model: 'claude-sonnet-5' });
+    // The persisted run config reports the runtime that ran, not the raw settings row.
+    expect(out.runtimeConfig?.aiSdkGenerationEnabled).toBe(true);
+    // No OpenAI response id exists on this path; the synthetic marker keeps the chain populated.
+    expect(out.latestOpenaiResponseId).toBe(`ai_sdk:${out.workflowRunId}`);
+  });
+
+  it('keeps OpenAI models on the Responses loop when the flag is off', async () => {
+    settingOverrides.set('BEX_AI_SDK_GENERATION_ENABLED', false);
+
+    const out = await run({ modelTag: 'gpt-4.1' });
+
+    expect(runResponsesWithToolLoopMock).toHaveBeenCalledTimes(1);
+    expect(runAiSdkWithToolLoopMock).not.toHaveBeenCalled();
+    expect(promptRecordSchema.parse(stepInput('openai_responses_agent').prompt).runtime).toBe(
+      'responses',
+    );
+    expect(out.runtimeConfig?.aiSdkGenerationEnabled).toBe(false);
+  });
+
+  it('never hands a prior OpenAI response id to the AI SDK loop on a Claude turn', async () => {
+    process.env.BEX_HISTORY_MAX_MESSAGES = '10';
+    runAiSdkWithToolLoopMock.mockImplementation(generationCalling([]));
+
+    await run({
+      modelTag: 'claude-sonnet-5',
+      priorMessages: [{ role: 'user', content: 'earlier question' }],
+      previousOpenaiResponseId: 'resp_prev',
+    });
+
+    const call = runAiSdkWithToolLoopMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(call).not.toHaveProperty('previousResponseId');
+    expect(call.history).toEqual([{ role: 'user', content: 'earlier question' }]);
+    // The agent step describes the call that was made: the chain was not used.
+    expect(stepInput('openai_responses_agent')).toMatchObject({
+      hasPreviousResponse: false,
+      historyCapApplied: false,
+    });
+  });
+
+  it('breaks the Responses chain and replays history when the stored id is an ai_sdk: marker', async () => {
+    process.env.BEX_HISTORY_MAX_MESSAGES = '10';
+    const priorMessages = [
+      { role: 'user' as const, content: 'claude turn user' },
+      { role: 'assistant' as const, content: 'claude turn assistant' },
+    ];
+
+    const out = await run({
+      modelTag: 'gpt-4.1',
+      priorMessages,
+      previousOpenaiResponseId: 'ai_sdk:00000000-0000-0000-0000-000000000000',
+    });
+
+    const call = runResponsesWithToolLoopMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    // A synthetic marker is never sent upstream as previous_response_id (it would 400).
+    expect(call.previousResponseId).toBeNull();
+    expect(call.history).toEqual(priorMessages);
+    expect(out.historyCapApplied).toBe(false);
+    expect(stepInput('openai_responses_agent')).toMatchObject({ hasPreviousResponse: false });
+  });
+
+  it('isResponsesApiResponseId accepts resp_ ids and rejects the synthetic markers', () => {
+    expect(isResponsesApiResponseId('resp_abc123')).toBe(true);
+    expect(isResponsesApiResponseId('ai_sdk:run-1')).toBe(false);
+    expect(isResponsesApiResponseId('cross-reference:trace-1')).toBe(false);
+    expect(isResponsesApiResponseId('')).toBe(false);
+    expect(isResponsesApiResponseId(null)).toBe(false);
+    expect(isResponsesApiResponseId(undefined)).toBe(false);
   });
 });

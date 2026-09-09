@@ -10,6 +10,7 @@ import {
   canReuseSpeculativeSearch,
   classifySpeculativeRetrievalSkip,
   createSpeculativeReuseExecutor,
+  looksLikeCategoryListOrSuperlativeAsk,
   looksLikeExactEfficacyQuestion,
   runSpeculativeRetrieval,
 } from '~/lib/workflows/product-support/speculative-retrieval';
@@ -56,6 +57,29 @@ describe('looksLikeExactEfficacyQuestion (B0-788)', () => {
     'Tell me about your green cleaning products.',
   ])('does not match a non-fact-shaped question: %s', (message) => {
     expect(looksLikeExactEfficacyQuestion(message)).toBe(false);
+  });
+});
+
+describe('looksLikeCategoryListOrSuperlativeAsk (B0-889)', () => {
+  it.each([
+    'What is the best glass cleaner?',
+    'What is your strongest floor stripper?',
+    'What is the most effective disinfectant you carry?',
+    'What are your top 3 degreasers?',
+    'What should I use for greasy kitchen floors?',
+    'What do you recommend for a grease trap?',
+    'What would you recommend for a scuffed gym floor?',
+  ])('matches a superlative or task-recommendation ask: %s', (message) => {
+    expect(looksLikeCategoryListOrSuperlativeAsk(message)).toBe(true);
+  });
+
+  it.each([
+    // Named-product questions must NOT be forced into a category-tool call.
+    'What is the dilution for Kitchen Cleaner & Degreaser?',
+    'How do I install a FastDraw dispenser?',
+    'What surfaces is Green Earth Floor Finish approved for?',
+  ])('does not match a named-product or unrelated question: %s', (message) => {
+    expect(looksLikeCategoryListOrSuperlativeAsk(message)).toBe(false);
   });
 });
 

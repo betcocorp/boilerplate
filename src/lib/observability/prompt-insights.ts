@@ -116,6 +116,38 @@ export const promptInsightsResponseSchema = z.object({
   insights: z.array(promptInsightSchema).min(1),
 });
 
+/**
+ * B0-906 — JSON Schema mirror of `promptInsightsResponseSchema` for the provider seam's strict
+ * structured output (`~/lib/llm/structured-completion`), which replaces the looser
+ * `response_format: { type: 'json_object' }` this call used on the OpenAI Chat Completions API.
+ * Strict on both providers: `additionalProperties: false`, every property required.
+ */
+export const PROMPT_INSIGHTS_JSON_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['insights'],
+  properties: {
+    insights: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['rank', 'title', 'description', 'category', 'impact'],
+        properties: {
+          rank: { type: 'integer' },
+          title: { type: 'string' },
+          description: { type: 'string' },
+          category: {
+            type: 'string',
+            enum: ['prompt', 'routing', 'tools', 'grounding', 'confidence'],
+          },
+          impact: { type: 'string', enum: ['high', 'medium', 'low'] },
+        },
+      },
+    },
+  },
+} as const satisfies Record<string, unknown>;
+
 export type PromptInsight = z.infer<typeof promptInsightSchema>;
 
 /** How many recommendations the UI renders. */
@@ -333,8 +365,13 @@ export function normalizePromptInsights(insights: PromptInsight[]): PromptInsigh
  */
 export const PROMPT_INSIGHT_ENTITY_TYPE = 'workflow_run';
 
-/** The model these insights are generated with; stored on the row for provenance. */
-export const PROMPT_INSIGHT_MODEL = 'gpt-4.1-mini';
+/**
+ * B0-906 — the model these insights are generated with is no longer a constant here: it comes from
+ * the `HARNESS_INSIGHTS_MODEL` settings row via `resolveHarnessInsightsModel`
+ * (`~/lib/tests/harness-insights-model`), and the resolved id is passed into
+ * `toStoredPromptInsights` so the stored provenance matches what answered. The row is seeded
+ * `gpt-4.1-mini`, which is what this call hardcoded before.
+ */
 
 /**
  * `ai_suggestions` has columns for the title, the body and the ordering, but not for
@@ -368,10 +405,16 @@ export type StoredPromptInsights = {
   gradingContext: boolean;
 };
 
-/** Encodes a generated set into `replaceAiSuggestions` input. */
+/**
+ * Encodes a generated set into `replaceAiSuggestions` input.
+ *
+ * B0-906 — `model` is passed in rather than read from a constant: the call site resolves the
+ * HARNESS_INSIGHTS_MODEL row, so the provenance stored on the row is the id that actually answered
+ * (a Claude id when the row names one), not a hardcoded guess.
+ */
 export function toStoredPromptInsights(
   insights: PromptInsight[],
-  options: { gradingContext: boolean },
+  options: { gradingContext: boolean; model: string },
 ): Array<{
   title: string;
   content: string;
@@ -381,7 +424,7 @@ export function toStoredPromptInsights(
   return insights.map((insight) => ({
     title: insight.title,
     content: insight.description,
-    model: PROMPT_INSIGHT_MODEL,
+    model: options.model,
     metadata: {
       gradingContext: options.gradingContext,
       category: insight.category,

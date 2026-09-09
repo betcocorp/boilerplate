@@ -5,8 +5,8 @@ import { connection } from 'next/server';
 import { AdminTestsActionToast } from '~/components/admin/tests/AdminTestsActionToast';
 import { CreateOrUploadTestDatasetDialog } from '~/components/admin/tests/CreateOrUploadTestDatasetDialog';
 import { GoldenSetMetricsCards } from '~/components/admin/tests/GoldenSetMetricsCards';
-import { RunGoldenTestsDialog } from '~/components/admin/tests/RunGoldenTestsDialog';
 import { OnlyGoldenToggle } from '~/components/admin/tests/OnlyGoldenToggle';
+import { RunGoldenTestsDialog } from '~/components/admin/tests/RunGoldenTestsDialog';
 import { Button } from '~/components/ui/button';
 import {
   Table,
@@ -20,10 +20,11 @@ import { V1_AGENT_REGISTRY } from '~/lib/agents/agent-registry';
 import { PERMISSIONS } from '~/lib/permissions/constants';
 import { requirePagePermission } from '~/lib/permissions/require-page-permission';
 import { formatScoreDelta } from '~/lib/tests/format';
-import { gradeFromScore } from '~/lib/tests/report/metrics';
 import { calculateGoldenSetMetrics } from '~/lib/tests/golden-set-metrics';
+import { gradeFromScore } from '~/lib/tests/report/metrics';
 import { listArchivedTests, listTests } from '~/lib/tests/repository';
 
+import { Separator } from '~/components/ui/separator';
 import {
   archiveTestAction,
   runTestAction,
@@ -45,7 +46,10 @@ type PageProps = {
 };
 
 export default async function AdminTestsPage({ searchParams }: PageProps) {
-  await requirePagePermission(PERMISSIONS.NAVIGATION_SIDEBAR_TESTS, 'GET /admin/tests');
+  await requirePagePermission(
+    PERMISSIONS.NAVIGATION_SIDEBAR_TESTS,
+    'GET /admin/tests',
+  );
   await connection();
   const params = await searchParams;
   const success = typeof params.success === 'string' ? params.success : null;
@@ -61,7 +65,9 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
     listArchivedTests(),
     calculateGoldenSetMetrics(),
   ]);
-  const tests = onlyGolden ? allTests.filter((test) => test.is_golden) : allTests;
+  const tests = onlyGolden
+    ? allTests.filter((test) => test.is_golden)
+    : allTests;
 
   return (
     <div className="flex flex-1 bg-slate-50">
@@ -104,9 +110,8 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
             </div>
             <div className="flex items-center gap-4">
               <span className="text-sm text-slate-600">
-                {tests.length} datasets
+                {tests.length} test sets
               </span>
-              <OnlyGoldenToggle onlyGolden={onlyGolden} />
               {archivedTests.length > 0 && (
                 <Link
                   href="/admin/tests/archived"
@@ -115,6 +120,8 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
                   Archived ({archivedTests.length})
                 </Link>
               )}
+              <Separator orientation="vertical" />
+              <OnlyGoldenToggle onlyGolden={onlyGolden} />
             </div>
           </div>
           <Table>
@@ -216,14 +223,17 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
                                 : isUp
                                   ? 'text-emerald-600'
                                   : 'text-red-600';
-                              const sign = delta > 0 ? '+' : delta < 0 ? '−' : '';
+                              const sign =
+                                delta > 0 ? '+' : delta < 0 ? '−' : '';
                               return (
                                 <span
                                   className={`inline-flex items-center gap-0.5 text-xs font-medium ${colorClass}`}
                                 >
                                   {sign}
                                   {formatScoreDelta(Math.abs(delta))}
-                                  {!isFlat && <Icon aria-hidden className="h-3.5 w-3.5" />}
+                                  {!isFlat && (
+                                    <Icon aria-hidden className="h-3.5 w-3.5" />
+                                  )}
                                 </span>
                               );
                             })()}

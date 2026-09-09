@@ -17,7 +17,7 @@ import {
 } from '~/components/ui/table';
 import { listAiSuggestions } from '~/lib/ai-suggestions/repository';
 import { listWorkflowRunsByIds } from '~/lib/conversations/workflow-repository';
-import { resolveResponsesModel } from '~/lib/openai/client';
+import { resolveModel } from '~/lib/llm/resolve-model';
 import {
   formatExpectedShouldAnswerLabel,
   formatSimilarityValue,
@@ -130,9 +130,9 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
         }
         // Legacy fallback: no B0-563 stamped model for this run (predates it, or the agent step
         // never completed) — re-resolve from the tag, which may not match what actually executed
-        // if the BEX_RESPONSES_MODEL settings default has since changed.
+        // if the per-vendor default the preview tag reads has since changed (B0-899).
         const modelTag = extractModelTag(workflowRun.user_input);
-        return [workflowRun.id, await resolveResponsesModel(modelTag)] as const;
+        return [workflowRun.id, await resolveModel(modelTag)] as const;
       }),
     ),
   );

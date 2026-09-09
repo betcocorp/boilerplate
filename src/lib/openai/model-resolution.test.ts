@@ -12,8 +12,19 @@ vi.mock('~/lib/settings/settings-service', () => ({
 }));
 
 import { getStringSetting } from '~/lib/settings/settings-service';
-import { resolveResponsesModel } from '~/lib/openai/client';
-import { BEX_MODEL_TAGS, MODEL_DESCRIPTIONS } from '~/lib/constants/models';
+import {
+  anthropicModelPinEnvKey,
+  DEFAULT_BEX_RESPONSES_MODEL_TAG,
+  resolveGenerationModelDefaultTag,
+  resolveResponsesModel,
+} from '~/lib/openai/client';
+import {
+  ANTHROPIC_MODEL_TAGS,
+  BEX_MODEL_TAGS,
+  MODEL_DESCRIPTIONS,
+  modelProviderFor,
+  OPENAI_MODEL_TAGS,
+} from '~/lib/constants/models';
 
 /**
  * B0-598 / B0-599 — tag → concrete-model-id resolution, and the invariant that every selectable
@@ -30,7 +41,8 @@ const MODEL_ENV_KEYS = [
   'BEX_MODEL_GPT41',
   'BEX_MODEL_GPT55',
   'BEX_MODEL_GPT56',
-] as const;
+  ...ANTHROPIC_MODEL_TAGS.map(anthropicModelPinEnvKey),
+];
 
 const saved: Record<string, string | undefined> = {};
 
@@ -89,6 +101,61 @@ describe('resolveResponsesModel — gpt-5.5 / gpt-5.6 (B0-598)', () => {
   });
 });
 
+describe('resolveResponsesModel — Anthropic tags (B0-908)', () => {
+  it('derives the pin env key from the tag the same way the gpt pins are named', () => {
+    expect(anthropicModelPinEnvKey('claude-sonnet-5')).toBe('BEX_MODEL_CLAUDE_SONNET_5');
+    expect(anthropicModelPinEnvKey('claude-opus-4-8')).toBe('BEX_MODEL_CLAUDE_OPUS_4_8');
+    expect(anthropicModelPinEnvKey('claude-haiku-4-5')).toBe('BEX_MODEL_CLAUDE_HAIKU_4_5');
+  });
+
+  it('resolves every Anthropic tag to itself — the tag IS the Claude API id', async () => {
+    for (const tag of ANTHROPIC_MODEL_TAGS) {
+      expect(await resolveResponsesModel(tag)).toBe(tag);
+      expect(modelProviderFor(await resolveResponsesModel(tag))).toBe('anthropic');
+    }
+  });
+
+  it('honours a BEX_MODEL_CLAUDE_* pin for that tag only', async () => {
+    process.env.BEX_MODEL_CLAUDE_SONNET_5 = 'claude-sonnet-5-20260101';
+
+    expect(await resolveResponsesModel('claude-sonnet-5')).toBe('claude-sonnet-5-20260101');
+    expect(await resolveResponsesModel('claude-opus-5')).toBe('claude-opus-5');
+    expect(await resolveResponsesModel('gpt-4.1')).toBe('gpt-4.1');
+  });
+
+  it('honours an Anthropic tag stored in BEX_RESPONSES_MODEL (B0-899)', async () => {
+    // B0-908 let this row hold a claude tag; B0-899 briefly restricted it to OpenAI tags and that
+    // was reverted 2026-09-08, because setting a Claude model here is the established way to move
+    // the fleet. The row is the fleet-default MODEL, whatever vendor it names.
+    vi.mocked(getStringSetting).mockImplementation((key, fallback) =>
+      Promise.resolve(key === 'BEX_RESPONSES_MODEL' ? 'claude-sonnet-5' : fallback),
+    );
+
+    expect(await resolveGenerationModelDefaultTag()).toBe('claude-sonnet-5');
+    expect(await resolveResponsesModel('preview')).toBe('claude-sonnet-5');
+    expect(await resolveResponsesModel(undefined)).toBe('claude-sonnet-5');
+    // Naming a tag must still get that model, on either vendor.
+    expect(await resolveResponsesModel('gpt-4.1-mini')).toBe('gpt-4.1-mini');
+    expect(await resolveResponsesModel('claude-sonnet-5')).toBe('claude-sonnet-5');
+  });
+
+  it('accepts every tag of either vendor as the preview default, but never preview itself (B0-899)', async () => {
+    for (const tag of [...OPENAI_MODEL_TAGS, ...ANTHROPIC_MODEL_TAGS]) {
+      vi.mocked(getStringSetting).mockImplementation((key, fallback) =>
+        Promise.resolve(key === 'BEX_RESPONSES_MODEL' ? tag : fallback),
+      );
+      expect(await resolveGenerationModelDefaultTag()).toBe(tag);
+    }
+    // `preview` would resolve to itself, and an unknown id would reach a provider as a bad model.
+    for (const stored of ['preview', '', 'claude-imaginary-9', 'gpt-9']) {
+      vi.mocked(getStringSetting).mockImplementation((key, fallback) =>
+        Promise.resolve(key === 'BEX_RESPONSES_MODEL' ? stored : fallback),
+      );
+      expect(await resolveGenerationModelDefaultTag()).toBe(DEFAULT_BEX_RESPONSES_MODEL_TAG);
+    }
+  });
+});
+
 describe('resolveResponsesModel — pre-existing behaviour is unchanged', () => {
   it('resolves preview from the BEX_RESPONSES_MODEL settings row, defaulting to gpt-4.1-mini', async () => {
     expect(await resolveResponsesModel('preview')).toBe('gpt-4.1-mini');
@@ -128,10 +195,13 @@ describe('resolveResponsesModel — pre-existing behaviour is unchanged', () => 
   });
 });
 
-describe('BEX_MODEL_TAGS (B0-599)', () => {
-  it('includes both new tags', () => {
+describe('BEX_MODEL_TAGS (B0-599 / B0-908)', () => {
+  it('includes both new gpt tags and every Anthropic tag', () => {
     expect(BEX_MODEL_TAGS).toContain('gpt-5.5');
     expect(BEX_MODEL_TAGS).toContain('gpt-5.6');
+    for (const tag of ANTHROPIC_MODEL_TAGS) {
+      expect(BEX_MODEL_TAGS).toContain(tag);
+    }
   });
 
   it('resolves every selectable tag to a non-empty id, and never to the throwing custom path', async () => {

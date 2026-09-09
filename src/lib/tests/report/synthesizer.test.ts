@@ -1,8 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { StructuredOutputTruncatedError } from '~/lib/llm/structured-completion';
+import { StructuredOutputTruncatedError, type StructuredCompletion } from '~/lib/llm/structured-completion';
 
-import { chunkCases, digestChunkWithRetry, formatDigestsAsText } from './synthesizer';
+import type { EvaluatedCase, ReportMetrics } from './metrics';
+import type { CaseHarnessAside } from './render';
+import {
+  chunkCases,
+  digestChunkWithRetry,
+  formatDigestsAsText,
+  synthesizeReportFindings,
+  type CaseFindings,
+} from './synthesizer';
 
 type CaseSummary = Parameters<typeof chunkCases>[0][number];
 
@@ -16,6 +24,12 @@ const fakeCase = (id: string): CaseSummary => ({
   explanation: '',
   missed: '',
   incorrect: '',
+  // B0-863 — harness provenance, absent for these chunking-only fixtures.
+  answerProvenance: null,
+  routingDecision: null,
+  gatesFired: null,
+  draftDiscarded: false,
+  chunkCount: null,
 });
 
 /**
@@ -115,5 +129,124 @@ describe('digestChunkWithRetry', () => {
       expect(request.schemaName).toBe('batch_digest');
       expect(request.model).toBe('claude-opus-5');
     }
+  });
+});
+
+/**
+ * B0-863 — the synthesizer now sees each case's harness provenance (answer provenance, routing
+ * decision, fired gates, draft-discarded, retrieved chunk count) alongside its explanation/missed/
+ * incorrect findings, so its Top-3 recommendations can cite a specific mechanism instead of a
+ * generic complaint. This only proves the text the model reads carries that evidence — it does not
+ * (and cannot, without a live model) prove the model uses it well.
+ */
+describe('synthesizeReportFindings — harness provenance (B0-863)', () => {
+  const RATE_BLOCK = { n: 1, avg: 40, grade: 'F', pass: 0, fail: 1, passPct: 0, failPct: 100 } as const;
+
+  function fakeMetrics(evaluated: EvaluatedCase): ReportMetrics {
+    return {
+      overall: RATE_BLOCK,
+      tiers: [['Tier 1', RATE_BLOCK]],
+      categories: [['Dilution', RATE_BLOCK]],
+      strongestCategory: null,
+      weakestCategory: 'Dilution',
+      uteCount: 0,
+      perCase: [evaluated],
+      // Every other field of `ReportMetrics` is untouched by `synthesizeReportFindings`.
+    } as unknown as ReportMetrics;
+  }
+
+  const TOP3 = Array.from({ length: 3 }, (_, i) => ({
+    priority: i + 1,
+    what: 'x',
+    whyFirst: 'x',
+    evidence: 'x',
+    affected: 'x',
+    change: 'x',
+    impact: 'x',
+  }));
+
+  function fakeSynthesisComplete() {
+    let capturedUser = '';
+    const complete = vi.fn(async (request: { user: string }) => {
+      capturedUser = request.user;
+      return JSON.stringify({
+        failurePatterns: [],
+        strengths: [],
+        weaknesses: [],
+        top3: TOP3,
+        exec: {
+          strongestAreas: [],
+          improvementAreas: [],
+          mostSignificantFailure: 'x',
+          majorRisk: 'x',
+          readiness: 'x',
+        },
+      });
+    });
+    return { complete, getCapturedUser: () => capturedUser };
+  }
+
+  it('includes answer provenance, routing, fired gates, draft-discarded and chunk count as an evidence line', async () => {
+    const evaluated = {
+      id: 'case-1',
+      tier: 'Tier 1',
+      category: 'Dilution',
+      overall: 20,
+      grade: 'F',
+      status: 'Fail',
+    } as unknown as EvaluatedCase;
+
+    const harness: CaseHarnessAside = {
+      passed: false,
+      status: 'failed',
+      similarity: null,
+      answerProvenance: 'regulated_claim_partial_redaction',
+      routingDecision: 'llm',
+      gates: [{ name: 'regulatedClaimGuardrail', verdict: 'rejected' }],
+      draftDiscarded: true,
+      chunkCount: 2,
+    };
+
+    const findingsByCaseId = new Map<string, CaseFindings>([
+      ['case-1', { explanation: 'Declined entirely.', missed: 'Everything.', incorrect: '', harness }],
+    ]);
+
+    const { complete, getCapturedUser } = fakeSynthesisComplete();
+
+    await synthesizeReportFindings(fakeMetrics(evaluated), findingsByCaseId, undefined, undefined, {
+      complete: complete as unknown as StructuredCompletion,
+      resolveModel: async () => 'fake-model',
+    });
+
+    const user = getCapturedUser();
+    expect(user).toContain('answer provenance: regulated_claim_partial_redaction');
+    expect(user).toContain('routing: llm');
+    expect(user).toContain('gates fired: regulatedClaimGuardrail: rejected');
+    expect(user).toContain('draft discarded');
+    expect(user).toContain('retrieved chunks: 2');
+  });
+
+  it('omits the provenance line entirely when a case carries no harness (no result row)', async () => {
+    const evaluated = {
+      id: 'case-2',
+      tier: 'Tier 1',
+      category: 'Dilution',
+      overall: 90,
+      grade: 'A',
+      status: 'Pass',
+    } as unknown as EvaluatedCase;
+
+    const findingsByCaseId = new Map<string, CaseFindings>([
+      ['case-2', { explanation: 'Fine.', missed: '', incorrect: '', harness: null }],
+    ]);
+
+    const { complete, getCapturedUser } = fakeSynthesisComplete();
+
+    await synthesizeReportFindings(fakeMetrics(evaluated), findingsByCaseId, undefined, undefined, {
+      complete: complete as unknown as StructuredCompletion,
+      resolveModel: async () => 'fake-model',
+    });
+
+    expect(getCapturedUser()).not.toContain('Harness provenance');
   });
 });

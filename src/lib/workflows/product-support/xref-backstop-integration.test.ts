@@ -94,6 +94,16 @@ vi.mock('~/lib/settings/settings-service', () => ({
   getNumberSetting: vi.fn((key: string, fallback: number) =>
     Promise.resolve(settingOverrides.has(key) ? (settingOverrides.get(key) as number) : fallback),
   ),
+  // B0-899 — resolveModel resolves the `preview` tag through this getter. Defaults to 'openai' so
+  // these fixtures keep resolving preview to the BEX_RESPONSES_MODEL (OpenAI) row as they always
+  // have; a test that wants the Anthropic path sets BEX_LLM_PROVIDER in settingOverrides.
+  getLlmProvider: vi.fn(() =>
+    Promise.resolve(
+      settingOverrides.has('BEX_LLM_PROVIDER')
+        ? (settingOverrides.get('BEX_LLM_PROVIDER') as 'openai' | 'anthropic')
+        : 'openai',
+    ),
+  ),
 }));
 
 /**
@@ -162,6 +172,8 @@ vi.mock('~/lib/workflows/product-support/validator', async (importOriginal) => {
       categoriesDetected: [],
       ungroundedCategories: [],
       ungroundedDetails: [],
+      // B0-888 — the workflow now reads this field to record `groundingMode` on the gate record.
+      keyTermGroundedCategories: [],
     }),
   };
 });

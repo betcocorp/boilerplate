@@ -304,14 +304,20 @@ export async function generateReport(testResultId: string): Promise<ReportState>
       scoringRules: state.scoringRules,
     });
 
+    // B0-863 — sourced from the already-assembled `cases` (not `items`/`state.caseScores` alone)
+    // so the synthesis call sees the same harness provenance (`answerProvenance`, `routingDecision`,
+    // fired gates, draft-discarded, retrieved-chunk count) the per-case "Harness signal" line
+    // renders — evidence for a recommendation, never a metric input (see the synthesis prompt).
     const findingsByCaseId = new Map(
-      items.map((item) => {
-        const score = state.caseScores[item.id];
-        return [
-          item.id,
-          { explanation: score.explanation, missed: score.missed, incorrect: score.incorrect },
-        ] as const;
-      }),
+      cases.map((c) => [
+        c.id,
+        {
+          explanation: c.score.explanation,
+          missed: c.score.missed,
+          incorrect: c.score.incorrect,
+          harness: c.harness,
+        },
+      ]),
     );
     const synthesis = await synthesizeReportFindings(
       metrics,

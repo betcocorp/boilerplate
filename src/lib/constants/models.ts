@@ -7,24 +7,66 @@
  * action silently coerce newer models to `preview` (B0-564). `~/types/bex.ts` re-exports these
  * symbols so the ticket's stated import path works without a second source of truth.
  *
- * A tag is NOT an OpenAI model id — `resolveResponsesModel` (`~/lib/openai/client`) maps tags to
- * concrete ids and applies env overrides. Adding a tag here requires two follow-ups or it will
- * misbehave silently:
- *   1. a branch in `resolveResponsesModel` if the tag needs an env override (B0-598);
+ * A tag is NOT necessarily a model id — `resolveModel` (`~/lib/llm/resolve-model`, B0-899) is the
+ * resolver every call site goes through: it sends `preview` to the default row of the vendor in
+ * `BEX_LLM_PROVIDER` (`BEX_RESPONSES_MODEL` for OpenAI, `BEX_ANTHROPIC_MODEL` for Anthropic) and
+ * every explicit tag to `resolveResponsesModel` (`~/lib/openai/client`), which owns the per-tag
+ * mapping and the `BEX_MODEL_*` env pins. `modelProviderFor` decides which API is called (OpenAI
+ * Responses for gpt tags, Anthropic Messages / AI SDK Anthropic provider for `claude-*` tags,
+ * B0-908). Adding a tag here requires two follow-ups or it will misbehave silently:
+ *   1. a branch in `resolveResponsesModel` if the tag needs an env override (B0-598; Anthropic tags
+ *      share one generic `BEX_MODEL_CLAUDE_*` branch);
  *   2. a `public.model_pricing` row keyed to the TAG STRING, because B0-563 stamps
  *      `workflow_steps.output.model` from our resolver, and the B0-565 cost views join it with an
  *      INNER lateral — an unpriced model is dropped from cost reporting entirely, not zeroed.
  */
 
-/** Every selectable tag, including the env-configured `preview` default. */
-export const BEX_MODEL_TAGS = [
-  'preview',
-  'gpt-4o',
-  'gpt-4.1-mini',
-  'gpt-4.1',
-  'gpt-5.5',
-  'gpt-5.6',
+/**
+ * B0-899 — the OpenAI tags, as their own list so the OpenAI default row (`BEX_RESPONSES_MODEL`) can
+ * be validated against exactly this subset: that row must never hold `preview` (it would resolve to
+ * itself) and, since B0-899, never a `claude-*` tag either — the Anthropic default lives in its own
+ * row (`BEX_ANTHROPIC_MODEL`, validated against `ANTHROPIC_MODEL_TAGS`) and `BEX_LLM_PROVIDER`
+ * picks which of the two `preview` reads. Same order as they appear in `BEX_MODEL_TAGS`.
+ */
+export const OPENAI_MODEL_TAGS = ['gpt-4o', 'gpt-4.1-mini', 'gpt-4.1', 'gpt-5.5', 'gpt-5.6'] as const;
+
+export type OpenAiModelTag = (typeof OPENAI_MODEL_TAGS)[number];
+
+export function isOpenAiModelTag(value: string): value is OpenAiModelTag {
+  return (OPENAI_MODEL_TAGS as readonly string[]).includes(value);
+}
+
+/**
+ * B0-908 — the Anthropic tier-for-tier equivalents of the OpenAI tags. Exact Claude API ids — never
+ * append a date suffix. Unlike a gpt tag, an Anthropic tag IS the model id the Messages API is
+ * called with (`resolveResponsesModel` only layers the optional `BEX_MODEL_CLAUDE_*` env pin on it).
+ *
+ *   gpt-4.1-mini → claude-haiku-4-5
+ *   gpt-4o       → claude-sonnet-4-6
+ *   gpt-4.1      → claude-sonnet-5
+ *   gpt-5.5      → claude-opus-4-8
+ *   gpt-5.6      → claude-opus-5
+ */
+export const ANTHROPIC_MODEL_TAGS = [
+  'claude-haiku-4-5',
+  'claude-sonnet-4-6',
+  'claude-sonnet-5',
+  'claude-opus-4-8',
+  'claude-opus-5',
 ] as const;
+
+export type AnthropicModelTag = (typeof ANTHROPIC_MODEL_TAGS)[number];
+
+export function isAnthropicModelTag(value: string): value is AnthropicModelTag {
+  return (ANTHROPIC_MODEL_TAGS as readonly string[]).includes(value);
+}
+
+/**
+ * Every selectable tag, including the settings-driven `preview` default. `preview` first, then the
+ * OpenAI tags, then their Anthropic equivalents (B0-908). This is the union list every picker
+ * renders; the two per-vendor subsets above are what the two default rows validate against (B0-899).
+ */
+export const BEX_MODEL_TAGS = ['preview', ...OPENAI_MODEL_TAGS, ...ANTHROPIC_MODEL_TAGS] as const;
 
 export type BexModelTag = (typeof BEX_MODEL_TAGS)[number];
 
@@ -41,18 +83,19 @@ export function isBexModelTag(value: string): value is BexModelTag {
 }
 
 /**
- * B0-806 — Anthropic models, selectable on GRADING surfaces only (the `REPORT_GRADING_MODEL` row).
- * They are deliberately NOT in `BEX_MODEL_TAGS`: every other model picker (Bex chat, /admin/tests
- * runs, the validator and router rows) feeds the OpenAI Responses runtime, which cannot call these
- * ids. Exact Claude API ids — never append a date suffix. Priced in `public.model_pricing` under the
- * same tag strings.
+ * B0-806 introduced the Anthropic tags as GRADING-only (`REPORT_GRADING_MODEL`), because every other
+ * picker fed the OpenAI Responses runtime. As of B0-908 they are selectable everywhere: every
+ * consumer routes on `modelProviderFor` — single-shot call sites (router, validator, grader) go
+ * through `~/lib/llm/structured-completion` (OpenAI Responses vs Anthropic Messages), and the chat
+ * loop uses the AI SDK with `@ai-sdk/anthropic` for a `claude-*` tag. These aliases are kept so
+ * existing imports keep compiling; both now equal the unified lists (no duplicates).
  */
-export const ANTHROPIC_GRADING_MODEL_TAGS = ['claude-opus-5', 'claude-sonnet-5'] as const;
+export const ANTHROPIC_GRADING_MODEL_TAGS = ANTHROPIC_MODEL_TAGS;
 
 export type AnthropicGradingModelTag = (typeof ANTHROPIC_GRADING_MODEL_TAGS)[number];
 
-/** Every tag the run-report grader may be pointed at: the OpenAI tags plus the Anthropic ones. */
-export const GRADING_MODEL_TAGS = [...BEX_MODEL_TAGS, ...ANTHROPIC_GRADING_MODEL_TAGS] as const;
+/** Every tag the run-report grader may be pointed at — since B0-908, the same list as every other picker. */
+export const GRADING_MODEL_TAGS = BEX_MODEL_TAGS;
 
 export type GradingModelTag = (typeof GRADING_MODEL_TAGS)[number];
 
@@ -65,7 +108,7 @@ export type ModelProvider = 'openai' | 'anthropic';
 /**
  * Which API serves a model tag or resolved model id. Every Claude API id starts with `claude-`, so
  * the prefix — not membership in a list — is the test: a pinned Anthropic id outside
- * `ANTHROPIC_GRADING_MODEL_TAGS` still routes to Anthropic instead of being sent to OpenAI.
+ * `ANTHROPIC_MODEL_TAGS` still routes to Anthropic instead of being sent to OpenAI.
  */
 export function modelProviderFor(modelOrTag: string): ModelProvider {
   return modelOrTag.trim().toLowerCase().startsWith('claude-') ? 'anthropic' : 'openai';
@@ -94,15 +137,27 @@ export function isModelEffort(value: string): value is ModelEffort {
  */
 export const MODEL_DESCRIPTIONS: Record<BexModelTag, string> = {
   preview:
-    'Settings-table default (BEX_RESPONSES_MODEL row at /admin/settings; gpt-4.1-mini unless changed). Use this as the A/B baseline.',
+    'Settings-table default: resolves via the BEX_LLM_PROVIDER row at /admin/settings to BEX_RESPONSES_MODEL (OpenAI; gpt-4.1-mini unless changed) or BEX_ANTHROPIC_MODEL (Anthropic; claude-sonnet-5 unless changed). Use this as the A/B baseline.',
   'gpt-4o': 'Older general-purpose model. $2.50 → $10.00 per Mtok.',
-  'gpt-4.1-mini': 'Cheapest option and what `preview` resolves to today. $0.40 → $1.60 per Mtok.',
+  'gpt-4.1-mini':
+    'Cheapest option and the OpenAI default `preview` resolves to when BEX_LLM_PROVIDER is openai. $0.40 → $1.60 per Mtok.',
   'gpt-4.1':
     'Former report-grading default (gpt-5.6 from B0-765, claude-opus-5 from B0-822). $2.00 → $8.00 per Mtok.',
   'gpt-5.5':
     'Resolves to gpt-5.5-2026-04-23. Candidate validator model (B0-603). $5.00 → $30.00 per Mtok — ~2.5x gpt-4.1 in, ~3.75x out.',
   'gpt-5.6':
     'Alias for gpt-5.6-sol. Candidate orchestrator/routing model (B0-604). $5.00 → $30.00 per Mtok. Pin an explicit -sol/-terra/-luna id if the alias target matters.',
+  // B0-908 — Anthropic first-party Claude API standard rates (model table cached 2026-06-24).
+  'claude-haiku-4-5':
+    'Anthropic equivalent of gpt-4.1-mini. Cheapest Claude tier; 200K context. $1.00 → $5.00 per Mtok. Called on the Anthropic Messages API; needs ANTHROPIC_API_KEY.',
+  'claude-sonnet-4-6':
+    'Anthropic equivalent of gpt-4o. Previous-generation Sonnet. $3.00 → $15.00 per Mtok. Called on the Anthropic Messages API; needs ANTHROPIC_API_KEY.',
+  'claude-sonnet-5':
+    'Anthropic equivalent of gpt-4.1. Current Sonnet; cheaper than sonnet-4-6. $2.00 → $10.00 per Mtok. Called on the Anthropic Messages API; needs ANTHROPIC_API_KEY.',
+  'claude-opus-4-8':
+    'Anthropic equivalent of gpt-5.5. Previous-generation Opus. $5.00 → $25.00 per Mtok. Called on the Anthropic Messages API; needs ANTHROPIC_API_KEY.',
+  'claude-opus-5':
+    'Anthropic equivalent of gpt-5.6. Current Opus and the report-grading default since B0-822. $5.00 → $25.00 per Mtok. Called on the Anthropic Messages API; needs ANTHROPIC_API_KEY.',
 };
 
 const supportedModels: SupportedModel[] = [
@@ -120,6 +175,12 @@ const supportedModels: SupportedModel[] = [
   },
   { name: 'gpt-5.5', label: 'Model: gpt-5.5' },
   { name: 'gpt-5.6', label: 'Model: gpt-5.6' },
+  // B0-908 — Anthropic equivalents, same order as ANTHROPIC_MODEL_TAGS.
+  { name: 'claude-haiku-4-5', label: 'Model: claude-haiku-4-5' },
+  { name: 'claude-sonnet-4-6', label: 'Model: claude-sonnet-4-6' },
+  { name: 'claude-sonnet-5', label: 'Model: claude-sonnet-5' },
+  { name: 'claude-opus-4-8', label: 'Model: claude-opus-4-8' },
+  { name: 'claude-opus-5', label: 'Model: claude-opus-5' },
 ];
 
 export default supportedModels;

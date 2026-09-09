@@ -198,6 +198,11 @@ async function runSingleTurnTestItem(
     if ('semanticDeclineCheck' in outcome && outcome.semanticDeclineCheck) {
       responsePayload.semanticDeclineGrading = outcome.semanticDeclineCheck;
     }
+    // B0-902 — the LLM decline check was needed but could not run (refusal/truncation/transport);
+    // persisted so the row reads "unable to evaluate", not "the model said this was an answer".
+    if ('semanticDeclineUnavailable' in outcome && outcome.semanticDeclineUnavailable) {
+      responsePayload.semanticDeclineUnavailable = outcome.semanticDeclineUnavailable;
+    }
 
     return {
       passed: outcome.passed,

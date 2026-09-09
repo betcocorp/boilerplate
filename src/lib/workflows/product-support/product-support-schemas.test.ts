@@ -75,7 +75,7 @@ describe('productSupportFinalOutputSchema — B0-388 additions are backward comp
 describe('answerProvenanceSchema', () => {
   // B0-356 added `recommendation_engine_decline` (the recommendation engine's own decline, which is
   // NOT this workflow's validator fallback).
-  it('covers exactly the thirteen answer branches', () => {
+  it('covers exactly the fourteen answer branches', () => {
     expect(answerProvenanceSchema.options).toEqual([
       'model_generated',
       'template_override',
@@ -94,6 +94,8 @@ describe('answerProvenanceSchema', () => {
       'generic_chemistry_clarification',
       // B0-829 — the regulated-claim guardrail's surgical partial-redaction provenance value.
       'regulated_claim_partial_redaction',
+      // B0-886 — the revised (not original) draft retained after a second-pass rejection.
+      'revised_answer_retained',
     ]);
   });
 });

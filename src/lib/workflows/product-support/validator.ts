@@ -1,13 +1,18 @@
 import { isBexModelTag, type BexModelTag } from '~/lib/constants/models';
-import { getOpenAIClient, resolveResponsesModel } from '~/lib/openai/client';
-import { samplingParamsFor } from '~/lib/openai/model-capabilities';
-import { extractAssistantText } from '~/lib/openai/response-item-parsing';
+import {
+  completeStructuredWithUsage,
+  completeTextWithUsage,
+  StructuredOutputRefusedError,
+  StructuredOutputTruncatedError,
+  type CompletionResult,
+} from '~/lib/llm/structured-completion';
+import { resolveModel } from '~/lib/llm/resolve-model';
 import type { LlmTokenUsage } from '~/lib/openai/responses-runtime';
 import {
   resolveOpenAiRequestTimeoutMs,
   retryTransportFaults,
 } from '~/lib/openai/transport-retry';
-import { getStringSetting } from '~/lib/settings/settings-service';
+import { getBooleanSetting, getStringSetting } from '~/lib/settings/settings-service';
 import { resolveMaxOutputTokens } from '~/lib/workflows/product-support/max-output-tokens';
 
 import {
@@ -17,25 +22,26 @@ import {
 import { VALIDATOR_SYSTEM_PROMPT } from '~/lib/workflows/product-support/product-support-prompts';
 
 /**
- * B0-550 — the OpenAI SDK response shape's `usage` field, extracted into the shared
- * `LlmTokenUsage` shape (the same fields `~/lib/openai/responses-runtime.ts`'s `accumulateUsage`
- * reads). Kept loose/duck-typed rather than importing the SDK's `Response` type here, since both
- * call sites below already type their `res` via inference from `client.responses.create`.
+ * B0-908 — both model calls in this file (`runValidatorPass`, `runRevisionPass`) go through
+ * `~/lib/llm/structured-completion`, which routes on the resolved model id: a `claude-*` id is
+ * served by the Anthropic Messages API, anything else by the OpenAI Responses API (`store: false`,
+ * `samplingParamsFor` temperature gating preserved). Usage comes back already in the shared
+ * `LlmTokenUsage` shape, so the B0-550 `extractLlmUsage` adapter is gone.
  */
-function extractLlmUsage(res: {
-  usage?: {
-    input_tokens?: number | null;
-    output_tokens?: number | null;
-    total_tokens?: number | null;
-    input_tokens_details?: { cached_tokens?: number | null } | null;
-  } | null;
-}): LlmTokenUsage {
-  return {
-    promptTokens: res.usage?.input_tokens ?? 0,
-    completionTokens: res.usage?.output_tokens ?? 0,
-    totalTokens: res.usage?.total_tokens ?? 0,
-    cachedPromptTokens: res.usage?.input_tokens_details?.cached_tokens ?? 0,
-  };
+
+/** B0-908 — usage for a call the helper aborted before returning a payload (truncated/refused). */
+const ZERO_USAGE: LlmTokenUsage = {
+  promptTokens: 0,
+  completionTokens: 0,
+  totalTokens: 0,
+  cachedPromptTokens: 0,
+};
+
+/** A structured answer the helper refused to hand back: cut off at the cap, or refused by the model. */
+function isUnusableStructuredOutput(error: unknown): boolean {
+  return (
+    error instanceof StructuredOutputTruncatedError || error instanceof StructuredOutputRefusedError
+  );
 }
 
 // B0-369: `issues` is an UNSUPPORTED-findings-only channel -- it feeds the revision pass, so a
@@ -110,6 +116,9 @@ export const DEFAULT_BEX_VALIDATOR_MODEL_TAG: BexModelTag = 'preview';
  * use. `settings.allowed_values` is advisory metadata the admin API validates writes against, NOT
  * a database constraint, so an unrecognized stored value falls back to the default tag rather
  * than being handed to the API as a non-existent model id.
+ *
+ * B0-908 — `claude-*` tags are valid here: the validator call routes by provider, so the row may
+ * hold either an OpenAI or an Anthropic tag.
  */
 export async function resolveValidatorModelTag(): Promise<BexModelTag> {
   const raw = (
@@ -129,10 +138,12 @@ export async function resolveValidatorModelTag(): Promise<BexModelTag> {
  * behavior-preserving, not a model change.
  */
 export async function resolveValidatorModel(modelTag?: string): Promise<string> {
+  // B0-903 — `resolveModel` rather than `resolveResponsesModel`: an explicit tag resolves exactly
+  // as before, and the `preview` tag now follows the `BEX_LLM_PROVIDER` row's per-vendor default.
   if (modelTag) {
-    return resolveResponsesModel(modelTag);
+    return resolveModel(modelTag);
   }
-  return resolveResponsesModel(await resolveValidatorModelTag());
+  return resolveModel(await resolveValidatorModelTag());
 }
 
 /** B0-554 — `runValidatorPass`'s result plus the token usage from its one model call. */
@@ -143,7 +154,6 @@ export async function runValidatorPass(input: {
   evidenceSummary: string;
   modelTag?: string;
 }): Promise<ValidatorPassResult> {
-  const client = getOpenAIClient();
   const model = await resolveValidatorModel(input.modelTag);
 
   const payload = {
@@ -158,47 +168,50 @@ export async function runValidatorPass(input: {
    * `maxRetries: 2` -- see `resolveOpenAiRequestTimeoutMs`'s doc comment). `maxRetries: 0` disables
    * the SDK's own retry in favor of this one. This call previously had NEITHER a timeout NOR any
    * retry policy at all, which is exactly the shape of the observed 2,000-6,200-second stalls.
+   *
+   * B0-908 — the call itself is `completeStructuredWithUsage` (provider-routed, see the module
+   * comment). A truncated or refused structured answer is the same unusable payload an unparseable
+   * one always was, so it takes the parse-failure path below rather than failing the turn; the
+   * `runtime: 'responses'` label on the retry wrapper is a log tag only.
    */
-  const res = await retryTransportFaults(
-    () =>
-      client.responses.create(
-        {
+  let completion: CompletionResult;
+  try {
+    completion = await retryTransportFaults(
+      () =>
+        completeStructuredWithUsage({
           model,
-          instructions: VALIDATOR_SYSTEM_PROMPT,
-          input: [
-            {
-              role: 'user',
-              content: JSON.stringify(payload),
-              type: 'message',
-            },
-          ],
-          text: {
-            format: {
-              type: 'json_schema',
-              name: 'validation_result',
-              strict: true,
-              schema: VALIDATION_JSON_SCHEMA,
-            },
-          },
-          store: false,
-          stream: false,
-          // B0-606 — omitted for models that reject it (gpt-5.5/gpt-5.6/o-series). Determinism
-          // still matters here, so every model that DOES accept it keeps temperature 0.
-          ...samplingParamsFor(model, { temperature: 0 }),
-          max_output_tokens: resolveMaxOutputTokens(),
-        },
-        { maxRetries: 0, timeout: resolveOpenAiRequestTimeoutMs() },
-      ),
-    { runtime: 'responses', label: 'validator.create' },
-  );
+          system: VALIDATOR_SYSTEM_PROMPT,
+          user: JSON.stringify(payload),
+          schemaName: 'validation_result',
+          schema: VALIDATION_JSON_SCHEMA,
+          // B0-606 — the helper omits temperature for models that reject it (gpt-5.5/gpt-5.6/
+          // o-series, every Anthropic id). Determinism still matters here, so every model that
+          // DOES accept it keeps temperature 0.
+          temperature: 0,
+          maxOutputTokens: resolveMaxOutputTokens(),
+          requestOptions: { maxRetries: 0, timeoutMs: resolveOpenAiRequestTimeoutMs() },
+        }),
+      { runtime: 'responses', label: 'validator.create' },
+    );
+  } catch (error) {
+    if (isUnusableStructuredOutput(error)) {
+      return {
+        approved: false,
+        confidence: 0,
+        issues: ['validator_output_parse_failed'],
+        requires_human_review: true,
+        usage: ZERO_USAGE,
+      };
+    }
+    throw error;
+  }
 
   // B0-554 — captured before the parse try/catch: the API call itself succeeded either way, so
   // usage is real even on the parse-failure fallback below.
-  const usage = extractLlmUsage(res);
+  const usage = completion.usage;
 
   try {
-    const text = extractAssistantText(res);
-    const parsed = JSON.parse(text) as unknown;
+    const parsed = JSON.parse(completion.text) as unknown;
     const result = validatorResultSchema.parse(parsed);
     // B0-369: keep `issues` to genuine findings even if the model narrates a confirmation there.
     const partitioned = partitionValidatorIssues(result.issues);
@@ -256,6 +269,14 @@ export type RegulatedClaimSource = {
   documentId: string;
   title: string;
   documentBody: string;
+  /**
+   * B0-888 — true when this source is the turn's LOCKED product line's own document (per
+   * `extractProductLineLockFromToolTrace`), one of the three attribution channels the
+   * `compatibility` / `efficacy_claim` key-term fallback accepts. Optional and defaults to
+   * "not locked" for every caller that doesn't thread it through (e.g. every pre-existing test
+   * fixture in `regulated-claim-guardrail.test.ts`).
+   */
+  isLockedProductLineSource?: boolean;
 };
 
 export type RegulatedClaimGroundingResult = {
@@ -265,6 +286,16 @@ export type RegulatedClaimGroundingResult = {
   ungroundedCategories: RegulatedClaimCategory[];
   /** One entry per ungrounded claim, for the review-task payload. */
   ungroundedDetails: Array<{ category: RegulatedClaimCategory; snippet: string }>;
+  /**
+   * B0-888 — `compatibility` / `efficacy_claim` categories where at least one sentence was grounded
+   * via the KEY-TERM fallback (paraphrase attributed to a source whose body carries the same
+   * material/organism term + claim verb) or the adjacent-verbatim-quote exemption, rather than a
+   * plain whole-sentence/quoted-span verbatim match. Empty when every grounded sentence in the
+   * draft matched verbatim — callers use this to record `groundingMode: 'key_term'` vs `'verbatim'`
+   * on the gate record for audit purposes. Never affects `hazard`/`first_aid`/token categories,
+   * which have no key-term path and can never appear here.
+   */
+  keyTermGroundedCategories: RegulatedClaimCategory[];
 };
 
 /**
@@ -465,6 +496,25 @@ const SENTENCE_INITIAL_NON_PRODUCT_WORDS = new Set([
 const MID_SENTENCE_CAPITALISED_WORD_PATTERN = /(?<=\s)[A-Z][a-z][\w'-]*/g;
 const BRAND_ONLY_TOKENS = new Set(['betco', 'envirozyme']);
 
+/**
+ * B0-888 — a leading label word ("Caveat:", "Note:", "Important:", "Tip:") is scaffolding, not a
+ * product name, but stripping the label pushes whatever comes next (often an imperative verb like
+ * "Always"/"Confirm") into a position `MID_SENTENCE_CAPITALISED_WORD_PATTERN` treats as a possible
+ * mid-sentence product name (e.g. "... such as Squeaky ..."). At the true start of a sentence that
+ * same word is already excluded (the pattern requires a PRECEDING whitespace); a label prefix is
+ * the only thing that artificially creates one. Stripped before every `hasProductSubject` check.
+ */
+const LABEL_PREFIX_PATTERN = /^(?:caveat|note|important|tip)\s*:\s*/i;
+/**
+ * B0-888 — imperative openers that read as generic advice/disclaimers, not a claim about a named
+ * product, when they are the sentence's true first word (post label-prefix stripping). Reuses the
+ * same exclusion spirit as `SENTENCE_INITIAL_NON_PRODUCT_WORDS` (which this set is checked
+ * alongside, never instead of).
+ */
+const IMPERATIVE_OPENER_WORDS = new Set([
+  'always', 'never', 'confirm', 'ensure', 'test', 'verify', 'check', 'avoid', 'consult', 'review',
+]);
+
 /** Case-preserving twin of the `base` prep in `isNonClaimScaffolding` (emphasis, bullets, headings). */
 function stripSentenceMarkup(sentence: string): string {
   return sentence
@@ -477,7 +527,21 @@ function stripSentenceMarkup(sentence: string): string {
 }
 
 function hasProductSubject(sentence: string): boolean {
-  const text = stripSentenceMarkup(sentence);
+  let text = stripSentenceMarkup(sentence);
+
+  // B0-888 — strip a leading label so the word right after it is judged as the sentence's true
+  // first token; short-circuit to "no product subject" when that word is generic/imperative
+  // advice rather than a name (e.g. "Caveat: Always confirm mats are compatible with wood
+  // floors..." is a disclaimer, not a claim about a product called "Always").
+  const labelMatch = LABEL_PREFIX_PATTERN.exec(text);
+  if (labelMatch) {
+    text = text.slice(labelMatch[0].length);
+    const firstWord = text.split(/\s+/)[0]?.toLowerCase().replace(/[^a-z']/g, '') ?? '';
+    if (SENTENCE_INITIAL_NON_PRODUCT_WORDS.has(firstWord) || IMPERATIVE_OPENER_WORDS.has(firstWord)) {
+      return false;
+    }
+  }
+
   if (PRODUCT_CODE_TOKEN_PATTERN.test(text)) return true;
   if (PRODUCT_SELF_REFERENCE_PATTERN.test(text)) return true;
 
@@ -635,20 +699,6 @@ function extractContactTimeTokens(text: string): string[] {
   return extractRegexTokens(text, CONTACT_TIME_TOKEN_PATTERN);
 }
 
-/**
- * Hazard/first-aid claims are prose, not single values -- the "token" to verify is the whole
- * sentence. B0-366: headings / label scaffolding / framing sentences are skipped, since they
- * assert nothing that could be verified against a source.
- */
-function extractSentenceClaims(
-  text: string,
-  isClaimTrigger: (sentence: string) => boolean,
-): string[] {
-  return splitIntoSentences(text).filter(
-    (sentence) => isClaimTrigger(sentence) && !isNonClaimScaffolding(sentence),
-  );
-}
-
 function isHazardClaimSentence(sentence: string): boolean {
   // B0-870: "Non Corrosive" (a product name) / "non-flammable" are not hazard statements.
   const text = sentence.replace(HAZARD_NEGATED_TRIGGER_PATTERN, ' ');
@@ -723,6 +773,108 @@ function isSentenceGrounded(
 }
 
 /**
+ * B0-888 — categories with a KEY-TERM fallback grounding path (below), on top of the plain
+ * verbatim/quoted-span match every category gets from `isSentenceGrounded`. Deliberately just
+ * these two: `hazard`/`first_aid` and every token category (`epa_registration`, `din_registration`,
+ * `dilution_ratio`, `contact_time`, `cas_number`) stay exact/verbatim, no exceptions -- weakening
+ * those would violate the org's regulated-data rule.
+ */
+const KEY_TERM_FALLBACK_CATEGORIES: ReadonlySet<RegulatedClaimCategory> = new Set<
+  RegulatedClaimCategory
+>(['compatibility', 'efficacy_claim']);
+
+/** An explicit `[doc:<id>]` marker, or its per-product-line batch form `[doc:<id>:<key>]`. */
+const DOC_CITATION_PATTERN = /\[doc:([^\]]+)\]/gi;
+/** "per the X label", "according to the X SDS", "as stated on/in the X label/profile/sheet". */
+const PER_LABEL_ATTRIBUTION_PATTERN =
+  /\b(?:per|according to|as (?:stated|noted|indicated) (?:on|in))\s+the\s+([a-z0-9][\w'&-]*(?:\s+[a-z0-9][\w'&-]*){0,4})\s+(?:label|sds|profile|sheet)\b/i;
+
+/**
+ * B0-888 — the specific source(s) a sentence (or its immediate surrounding context, standing in
+ * for "its containing bullet") attributes, per the ticket's three channels: an explicit
+ * `[doc:<id>]` marker naming one of `sources`, a "per/according to the X label" phrase
+ * fuzzy-matching a source's title, or -- only when nothing else names a source AND exactly one
+ * candidate is the turn's locked product line's own document -- that one document (no ambiguity to
+ * guess through with more than one).
+ */
+function attributedSources(
+  contextText: string,
+  sources: readonly RegulatedClaimSource[],
+): RegulatedClaimSource[] {
+  const attributed: RegulatedClaimSource[] = [];
+
+  for (const match of contextText.matchAll(DOC_CITATION_PATTERN)) {
+    const cited = match[1]?.trim();
+    if (!cited) continue;
+    const source = sources.find(
+      (s) => cited === s.documentId || cited.endsWith(`:${s.documentId}`),
+    );
+    if (source && !attributed.includes(source)) attributed.push(source);
+  }
+
+  const perLabel = PER_LABEL_ATTRIBUTION_PATTERN.exec(contextText);
+  if (perLabel?.[1]) {
+    const fragment = perLabel[1].toLowerCase().trim();
+    for (const source of sources) {
+      const title = source.title.toLowerCase();
+      if ((title.includes(fragment) || fragment.includes(title)) && !attributed.includes(source)) {
+        attributed.push(source);
+      }
+    }
+  }
+
+  if (attributed.length === 0) {
+    const locked = sources.filter((s) => s.isLockedProductLineSource);
+    if (locked.length === 1) attributed.push(locked[0]);
+  }
+
+  return attributed;
+}
+
+/**
+ * B0-888 — key-term fallback grounding for `compatibility` / `efficacy_claim` ONLY: a PARAPHRASE of
+ * a verbatim source line ("Labeled to kill HIV-1 on pre-cleaned environmental surfaces" vs. the
+ * label's own wording) never passes `isSentenceGrounded`'s whole-sentence/quoted-span compare, but
+ * IS grounded when the sentence (or its containing context) attributes a specific source (see
+ * `attributedSources`) AND that source's body carries the same material/organism key term together
+ * with a claim verb. Restricting this to an ATTRIBUTED source -- and only these two categories --
+ * keeps the fabrication check intact: a claim naming a material/organism the attributed source
+ * never mentions still fails, and `hazard`/`first_aid`/token categories never take this path at all.
+ */
+function isKeyTermGrounded(
+  sentence: string,
+  contextText: string,
+  category: 'compatibility' | 'efficacy_claim',
+  sources: readonly RegulatedClaimSource[],
+): boolean {
+  const candidates = attributedSources(contextText, sources);
+  if (candidates.length === 0) return false;
+
+  const keyTermPattern =
+    category === 'compatibility' ? COMPATIBILITY_MATERIAL_PATTERN : EFFICACY_ORGANISM_PATTERN;
+  const verbPattern = category === 'compatibility' ? COMPATIBILITY_CLAIM_PATTERN : EFFICACY_VERB_PATTERN;
+
+  const keyTermMatch = sentence.match(keyTermPattern)?.[0];
+  if (!keyTermMatch) return false;
+  const hasClaimVerb =
+    verbPattern.test(sentence) ||
+    (category === 'efficacy_claim' && EFFICACY_STRONG_PATTERN.test(sentence));
+  if (!hasClaimVerb) return false;
+
+  const normalizedKeyTerm = normalizeSentenceForGroundingCompare(keyTermMatch);
+  if (!normalizedKeyTerm) return false;
+
+  return candidates.some((source) => {
+    const normalizedBody = normalizeSentenceForGroundingCompare(source.documentBody);
+    if (!normalizedBody.includes(normalizedKeyTerm)) return false;
+    return (
+      verbPattern.test(source.documentBody) ||
+      (category === 'efficacy_claim' && EFFICACY_STRONG_PATTERN.test(source.documentBody))
+    );
+  });
+}
+
+/**
  * Deterministically checks whether every regulated claim (EPA reg no., dilution ratio,
  * contact/dwell time, hazard statement, first-aid instruction) in `draftAnswer` can be
  * traced to an exact quote in one of `sources`. Returns which categories were detected
@@ -745,6 +897,10 @@ export function evaluateRegulatedClaimGrounding(input: {
   const categoriesDetected: RegulatedClaimCategory[] = [];
   const ungroundedCategories: RegulatedClaimCategory[] = [];
   const ungroundedDetails: Array<{ category: RegulatedClaimCategory; snippet: string }> = [];
+  // B0-888 — categories where at least one sentence was grounded via the key-term fallback or the
+  // adjacent-verbatim-quote exemption rather than a plain verbatim match; see the gate record at
+  // this function's call site for how this is surfaced (`inputs.groundingMode`).
+  const keyTermGroundedCategories: RegulatedClaimCategory[] = [];
 
   const checkTokenCategory = (
     category: RegulatedClaimCategory,
@@ -766,16 +922,71 @@ export function evaluateRegulatedClaimGrounding(input: {
     }
   };
 
+  /**
+   * B0-888 — `hazard`/`first_aid` walk this unchanged (full sentence list, filtered by the trigger,
+   * verbatim/quoted-span grounding only). `compatibility`/`efficacy_claim` additionally try the
+   * key-term fallback, then a check on the textually NEXT sentence: a grounded verbatim quote
+   * immediately following an ungrounded paraphrase is sufficient grounding for that paraphrase too.
+   * Both need the FULL (unfiltered) sentence list -- not just the claim sentences -- to know what is
+   * textually adjacent in the original draft.
+   */
   const checkSentenceCategory = (
     category: RegulatedClaimCategory,
     isClaimTrigger: (sentence: string) => boolean,
   ) => {
-    const sentences = extractSentenceClaims(input.draftAnswer, isClaimTrigger);
-    if (sentences.length === 0) return;
+    const allSentences = splitIntoSentences(input.draftAnswer);
+    const claimIndices: number[] = [];
+    for (let i = 0; i < allSentences.length; i += 1) {
+      if (isClaimTrigger(allSentences[i]) && !isNonClaimScaffolding(allSentences[i])) {
+        claimIndices.push(i);
+      }
+    }
+    if (claimIndices.length === 0) return;
     categoriesDetected.push(category);
-    const ungroundedSentences = sentences.filter(
-      (s) => !isSentenceGrounded(s, normalizedSourceBodiesPlain, isClaimTrigger),
-    );
+
+    const useKeyTermFallback = KEY_TERM_FALLBACK_CATEGORIES.has(category);
+    const keyTermPattern =
+      category === 'compatibility' ? COMPATIBILITY_MATERIAL_PATTERN : EFFICACY_ORGANISM_PATTERN;
+    let groundedViaKeyTermPath = false;
+    const ungroundedSentences: string[] = [];
+
+    for (const idx of claimIndices) {
+      const sentence = allSentences[idx];
+      if (isSentenceGrounded(sentence, normalizedSourceBodiesPlain, isClaimTrigger)) {
+        continue;
+      }
+
+      if (useKeyTermFallback && (category === 'compatibility' || category === 'efficacy_claim')) {
+        // "Its containing bullet": a window of the sentence plus its immediate neighbours, since
+        // attribution ("per the X label", "[doc:uuid]") is often stated once for the whole bullet
+        // rather than repeated on every sentence inside it.
+        const contextText = [allSentences[idx - 1], sentence, allSentences[idx + 1]]
+          .filter((s): s is string => Boolean(s))
+          .join(' ');
+        if (isKeyTermGrounded(sentence, contextText, category, input.sources)) {
+          groundedViaKeyTermPath = true;
+          continue;
+        }
+
+        // B0-888 — an ungrounded PARAPHRASE immediately followed by a grounded verbatim quote that
+        // names the same material/organism is sufficiently grounded by that adjacent quote.
+        const next = allSentences[idx + 1];
+        if (
+          next &&
+          keyTermPattern.test(next) &&
+          isSentenceGrounded(next, normalizedSourceBodiesPlain, isClaimTrigger)
+        ) {
+          groundedViaKeyTermPath = true;
+          continue;
+        }
+      }
+
+      ungroundedSentences.push(sentence);
+    }
+
+    if (groundedViaKeyTermPath) {
+      keyTermGroundedCategories.push(category);
+    }
     if (ungroundedSentences.length > 0) {
       ungroundedCategories.push(category);
       for (const s of ungroundedSentences) {
@@ -798,6 +1009,7 @@ export function evaluateRegulatedClaimGrounding(input: {
     categoriesDetected: [...new Set(categoriesDetected)],
     ungroundedCategories: [...new Set(ungroundedCategories)],
     ungroundedDetails,
+    keyTermGroundedCategories: [...new Set(keyTermGroundedCategories)],
   };
 }
 
@@ -896,18 +1108,83 @@ export function evaluateVerifiedFactsDilutionCitation(input: {
 }
 
 /**
- * B0-389 — the revision pass's own instructions, lifted out of the call so the workflow can record
- * exactly what the revision model was told on its `revision` step. Text unchanged.
+ * B0-886 — the revision pass's own instructions, lifted out of the call so the workflow can record
+ * exactly what the revision model was told on its `revision` step.
+ *
+ * Rewritten from a general "revise the whole answer" instruction to a targeted EDIT instruction:
+ * the pre-B0-886 prompt let the model rewrite the entire draft to fix one flagged sentence, which
+ * routinely dropped grounded content the validator never objected to (21 of 32 failing golden
+ * items had the mandatory concept in the pre-validator draft but lost it after revision). It also
+ * left the model free to preface its answer with meta-commentary ("Revised Answer:", "Here is a
+ * revised answer based only on the provided evidence:"), which leaked into the user-facing text.
+ * `stripRevisionPreamble` below is a deterministic backstop for that; this prompt is the primary
+ * fix.
  */
 export const REVISION_SYSTEM_PROMPT = [
-  'Revise the draft answer to fix validator issues.',
+  'You are given a draft answer and a list of validator issues, each describing a specific problem with specific sentence(s), list item(s), or claim(s) in the draft.',
+  'Edit ONLY the sentence(s), list item(s), or claim(s) the issues actually flag. Preserve every other sentence, list item, number, and "Source:" line verbatim -- do not rewrite, reorder, summarize, or drop anything the issues did not flag.',
   'Do not add new factual claims beyond the evidence summary.',
-  'If you cannot fix safely, reply with a short clarification request only.',
+  'Never add a heading, preamble, or meta-commentary of any kind (e.g. "Revised Answer:", "Here is a revised answer..."). Return the answer text only, exactly as it should appear to the user.',
+  'If you cannot fix the flagged issue(s) safely without fabricating support, reply with a short clarification request only.',
 ].join('\n');
 
-/** B0-389 — the model the revision pass calls (no dedicated env override, unlike the validator). */
+/**
+ * B0-389 — the model the revision pass calls (no dedicated settings row, unlike the validator).
+ * B0-903 — through `resolveModel`, so `preview` follows the `BEX_LLM_PROVIDER` per-vendor default.
+ */
 export async function resolveRevisionModel(modelTag?: string): Promise<string> {
-  return resolveResponsesModel(modelTag ?? 'preview');
+  return resolveModel(modelTag ?? 'preview');
+}
+
+/**
+ * B0-886 — a leading meta-commentary line the revision model sometimes emits despite
+ * `REVISION_SYSTEM_PROMPT` now explicitly forbidding it (e.g. "Revised Answer:\n\n...", "Here is a
+ * revised answer based only on the provided evidence:\n..."). Matched at the START of the text
+ * only, case-insensitively, with an optional markdown bold wrapper -- never anywhere else in the
+ * body, so a legitimate sentence that happens to start with "Revised" further down is never
+ * touched (there is no such further-down case: this only ever matches the first line).
+ */
+const REVISION_PREAMBLE_LINE_PATTERN =
+  /^\s*\*{0,2}(?:revised answer|here is (?:a|the) revised answer\b[^\n]*)\*{0,2}\s*:\s*\n+/i;
+
+/**
+ * B0-886 — deterministic backstop that strips a leading "Revised Answer:" / "Here is a revised
+ * answer...:" preamble line from the revision model's output before it is used as `draftAnswer`.
+ * Mirrors `isDeclineAnswer`'s pattern-match style (a small, directly testable, exported function)
+ * rather than relying on the prompt alone -- six delivered answers leaked this preamble into the
+ * user-facing text before this ticket, hurting Clarity scoring.
+ */
+export function stripRevisionPreamble(text: string): string {
+  return text.replace(REVISION_PREAMBLE_LINE_PATTERN, '').trimStart();
+}
+
+/**
+ * B0-886 — every issue string this validator run produced is one the deterministic B0-257
+ * regulated-claim guardrail added (`regulated_claim_unverified:<category>`, see
+ * `run-product-support-workflow.ts`'s `evaluateRegulatedClaimGrounding` call site). When true (and
+ * gated on `isRevisionSkipForRegulatedClaimOnlyEnabled`), the caller may skip the LLM revision pass
+ * entirely: `planRegulatedClaimRedaction` already handles this rejection deterministically, and
+ * running an LLM rewrite on top risks paraphrasing away the exact verbatim citation the redaction
+ * step needs to find.
+ */
+const REGULATED_CLAIM_ISSUE_PREFIX = 'regulated_claim_unverified:';
+
+export function isOnlyRegulatedClaimIssues(issues: string[]): boolean {
+  return issues.length > 0 && issues.every((issue) => issue.startsWith(REGULATED_CLAIM_ISSUE_PREFIX));
+}
+
+/**
+ * B0-886 — settings-table flag (default OFF) gating the skip above. Tom Bird has not yet decided
+ * whether skipping the LLM revision pass for a regulated-claim-only rejection is the right
+ * behavior for the epic, so this exists as a lever rather than a hardcoded change. NOTE: as
+ * currently ordered, `run-product-support-workflow.ts` evaluates the regulated-claim guardrail
+ * AFTER the revision-pass gate this flag guards, so `validation.issues` at that gate never yet
+ * contains `regulated_claim_unverified:*` -- enabling this flag today is a no-op until/unless the
+ * guardrail's evaluation is moved earlier in the turn. Documented here rather than silently
+ * papering over the discrepancy; see B0-886 grounded context vs. the actual call order.
+ */
+export async function isRevisionSkipForRegulatedClaimOnlyEnabled(): Promise<boolean> {
+  return getBooleanSetting('BEX_REVISION_SKIP_REGULATED_CLAIM_ONLY_ENABLED', false);
 }
 
 /** B0-554 — `runRevisionPass`'s result plus the token usage from its one model call. */
@@ -919,40 +1196,37 @@ export async function runRevisionPass(input: {
   evidenceSummary: string;
   modelTag?: string;
 }): Promise<RevisionPassResult> {
-  const client = getOpenAIClient();
   const model = await resolveRevisionModel(input.modelTag);
 
   // B0-550 — same bounded retry + explicit timeout as `runValidatorPass`; see its comment above.
-  const res = await retryTransportFaults(
-    () =>
-      client.responses.create(
-        {
+  // B0-908 — free-text call through `completeTextWithUsage` (provider-routed). A cut-off revision
+  // is still returned, as before; a model refusal comes back as empty text, which the workflow
+  // already treats as "revision refused, keep the draft" (`revisionRefused`).
+  try {
+    const completion = await retryTransportFaults(
+      () =>
+        completeTextWithUsage({
           model,
-          instructions: REVISION_SYSTEM_PROMPT,
-          input: [
-            {
-              role: 'user',
-              content: JSON.stringify({
-                draft: input.draftAnswer,
-                issues: input.validatorIssues,
-                evidence_summary: input.evidenceSummary,
-              }),
-              type: 'message',
-            },
-          ],
-          store: false,
-          stream: false,
+          system: REVISION_SYSTEM_PROMPT,
+          user: JSON.stringify({
+            draft: input.draftAnswer,
+            issues: input.validatorIssues,
+            evidence_summary: input.evidenceSummary,
+          }),
           // B0-606 — same gating as the validator pass above.
-          ...samplingParamsFor(model, { temperature: 0.2 }),
-          max_output_tokens: resolveMaxOutputTokens(),
-        },
-        { maxRetries: 0, timeout: resolveOpenAiRequestTimeoutMs() },
-      ),
-    { runtime: 'responses', label: 'revision.create' },
-  );
-
-  return {
-    text: extractAssistantText(res),
-    usage: extractLlmUsage(res),
-  };
+          temperature: 0.2,
+          maxOutputTokens: resolveMaxOutputTokens(),
+          requestOptions: { maxRetries: 0, timeoutMs: resolveOpenAiRequestTimeoutMs() },
+        }),
+      { runtime: 'responses', label: 'revision.create' },
+    );
+    // B0-886 — strip a leaked meta-commentary preamble before this text is ever treated as the
+    // answer (persisted as `revisedAnswer`, or promoted to `draftAnswer`).
+    return { text: stripRevisionPreamble(completion.text), usage: completion.usage };
+  } catch (error) {
+    if (error instanceof StructuredOutputRefusedError) {
+      return { text: '', usage: ZERO_USAGE };
+    }
+    throw error;
+  }
 }

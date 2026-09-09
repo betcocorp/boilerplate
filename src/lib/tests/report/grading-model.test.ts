@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('~/lib/settings/settings-service', () => ({
   getStringSetting: vi.fn((_key: string, fallback: string) => Promise.resolve(fallback)),
+  // B0-899 — resolveGradingModel now goes through resolveModel, whose `preview` branch reads this.
+  getLlmProvider: vi.fn(() => Promise.resolve('openai' as const)),
 }));
 
 import { isGradingModelTag, modelProviderFor } from '~/lib/constants/models';

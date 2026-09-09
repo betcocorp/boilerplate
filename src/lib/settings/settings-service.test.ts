@@ -14,9 +14,11 @@ import {
   DEFAULT_MIN_LOCK_SIMILARITY,
 } from '~/lib/retrieval/product-line-resolution';
 import {
+  DEFAULT_LLM_PROVIDER,
   DEFAULT_RAG_CHUNK_STRATEGY,
   DEFAULT_ROUTER_TYPE,
   getBooleanSetting,
+  getLlmProvider,
   getNumberSetting,
   getProductLineLockThresholds,
   getRagBoostConfig,
@@ -158,6 +160,37 @@ describe('getRouterType (B0-656)', () => {
     resetSettingsCacheForTest();
     mockRow(null, { message: 'db down' });
     await expect(getRouterType()).resolves.toBe('keyword');
+  });
+});
+
+describe('getLlmProvider (B0-897)', () => {
+  it('returns each allowed provider as stored', async () => {
+    mockRow('openai');
+    expect(await getLlmProvider()).toBe('openai');
+    resetSettingsCacheForTest();
+    mockRow('anthropic');
+    expect(await getLlmProvider()).toBe('anthropic');
+  });
+
+  it('normalizes surrounding whitespace and casing', async () => {
+    mockRow('  Anthropic ');
+    expect(await getLlmProvider()).toBe('anthropic');
+  });
+
+  it('coerces an unrecognized stored value back to openai (allowed_values is not a DB constraint)', async () => {
+    for (const stored of ['claude', 'azure', 'gemini', '', 'true']) {
+      resetSettingsCacheForTest();
+      mockRow(stored);
+      expect(await getLlmProvider(), stored).toBe('openai');
+    }
+  });
+
+  it('falls back to openai when the row is missing or the query errors', async () => {
+    mockRow(null);
+    expect(await getLlmProvider()).toBe(DEFAULT_LLM_PROVIDER);
+    resetSettingsCacheForTest();
+    mockRow(null, { message: 'db down' });
+    await expect(getLlmProvider()).resolves.toBe('openai');
   });
 });
 
@@ -358,6 +391,9 @@ describe('settings-table coverage does not regress to process.env (B0-638)', () 
     'BEX_DISABLE_CONFIDENCE_GATING',
     // B0-734 — the early-decline gate switch, moved off process.env; defaults to false.
     'BEX_EARLY_DECLINE_GATE_ENABLED',
+    // B0-886 — read through isRevisionSkipForRegulatedClaimOnlyEnabled(); never had a process.env
+    // read (new flag, not a migrated one), added here for the same audit-trail reason.
+    'BEX_REVISION_SKIP_REGULATED_CLAIM_ONLY_ENABLED',
     'BEX_LLM_ROUTER_ENABLED',
     'BEX_LLM_ROUTER_SHADOW_MODE',
     'BEX_PERMISSIONS_ENFORCED',
@@ -402,7 +438,11 @@ describe('settings-table coverage does not regress to process.env (B0-638)', () 
   // the two rows that used to sit here (`BEX_AI_SDK_ROUNDTRIPS_ENABLED`,
   // `NEXT_PUBLIC_BEX_STREAMING_UI_ENABLED`) along with the streaming/Elements rollout gates,
   // rather than leaving stale config nothing reads.
-  const ORPHANED_KEYS: string[] = [];
+  const ORPHANED_KEYS: string[] = [
+    // B0-897 — seeded with its select and `getLlmProvider()` typed getter, but deliberately unread
+    // until a follow-up ticket wires a consumer. Move to DB_BACKED_KEYS when that lands.
+    'BEX_LLM_PROVIDER',
+  ];
 
   const SRC_ROOT = join(__dirname, '..', '..');
   const SKIP_DIRS = new Set(['node_modules', '.next']);

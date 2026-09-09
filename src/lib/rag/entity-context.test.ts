@@ -54,9 +54,17 @@ type EntityRow = {
   metadata?: Record<string, unknown>;
 };
 
+/** B0-891 — `rag.document` rows for the label/SDS title-match tier. */
+type DocumentRow = {
+  entity_id: string | null;
+  title: string | null;
+  document_kind: string;
+};
+
 type Filter =
   | { kind: 'eq'; column: string; value: string }
   | { kind: 'ilike'; column: string; value: string }
+  | { kind: 'in'; column: string; values: string[] }
   | { kind: 'jsonFilter'; column: string; op: string; value: string };
 
 /** B0-830: `legacy.prod_line` rows — the product LINE display name comes from `ProdLineDescr`. */
@@ -65,6 +73,7 @@ type ProdLineRow = { ProdLineKey: string; ProdLineDescr: string | null };
 let productAliasRows: ProductAliasRow[] = [];
 let entityRows: EntityRow[] = [];
 let prodLineRows: ProdLineRow[] = [];
+let documentRows: DocumentRow[] = [];
 /** null = simulate the RPC being unavailable (falls through, like a pre-migration environment). */
 let fuzzyTrgmRpcRows: FuzzyTrgmRpcRow[] | null = null;
 /** B0-479: how many times the trigram RPC tier was actually invoked. */
@@ -77,8 +86,18 @@ function matchesFilter(row: Record<string, unknown>, filter: Filter): boolean {
   if (filter.kind === 'ilike') {
     const raw = row[filter.column];
     if (typeof raw !== 'string') return false;
+    // No wildcards at all (the exact-title tiers) means case-insensitive full equality; otherwise
+    // strip leading/trailing `%` and treat as substring, matching real ILIKE semantics closely
+    // enough for these fixtures.
+    if (!filter.value.includes('%')) {
+      return raw.toLowerCase() === filter.value.toLowerCase();
+    }
     const inner = filter.value.replace(/^%/, '').replace(/%$/, '').toLowerCase();
     return raw.toLowerCase().includes(inner);
+  }
+  if (filter.kind === 'in') {
+    const raw = row[filter.column];
+    return typeof raw === 'string' && filter.values.includes(raw);
   }
   // jsonFilter: column like "metadata->>prod_line_id"
   const key = filter.column.split('->>')[1];
@@ -98,6 +117,10 @@ function createQueryBuilder(getRows: () => Record<string, unknown>[]) {
       filters.push({ kind: 'ilike', column, value });
       return builder;
     },
+    in(column: string, values: string[]) {
+      filters.push({ kind: 'in', column, values });
+      return builder;
+    },
     filter(column: string, op: string, value: string) {
       filters.push({ kind: 'jsonFilter', column, op, value });
       return builder;
@@ -113,7 +136,7 @@ function createQueryBuilder(getRows: () => Record<string, unknown>[]) {
 const fakeSupabase = {
   schema() {
     return {
-      from(table: 'product_alias' | 'entity' | 'prod_line') {
+      from(table: 'product_alias' | 'entity' | 'prod_line' | 'document') {
         return {
           select() {
             return createQueryBuilder(() =>
@@ -121,7 +144,9 @@ const fakeSupabase = {
                 ? productAliasRows
                 : table === 'prod_line'
                   ? prodLineRows
-                  : entityRows,
+                  : table === 'document'
+                    ? documentRows
+                    : entityRows,
             );
           },
         };
@@ -144,6 +169,7 @@ beforeEach(() => {
   productAliasRows = [];
   entityRows = [];
   prodLineRows = [];
+  documentRows = [];
   fuzzyTrgmRpcRows = null;
   fuzzyTrgmRpcCalls = 0;
   vi.mocked(getSupabaseServiceRoleClient).mockReturnValue(fakeSupabase as never);
@@ -785,6 +811,120 @@ describe('resolveProductEntityByName — EXP- experimental alias exclusion (B0-7
 
     expect(result.productLineKey).toBe('line-real-3');
     expect(result.resolutionSource).toBe('alias_fuzzy');
+  });
+});
+
+/**
+ * B0-891 — product-tier title match, tried BEFORE the legacy product-line title tiers. Fixtures
+ * mirror LIVE data verified via Supabase on 2026-09-08: `rag.product_alias` currently has ZERO rows
+ * for "ph7q" / "ph7q dual" (B0-878 truncated the table), and NO `product_line`-tier entity title
+ * contains "pH7Q" at all — the product_line rows are generic marketing text ("Neutral pH
+ * disinfectant", "Concentrated Neutral Disinfectant Cleaner", the LATTER shared verbatim by both
+ * the pH7Q Dual and pH7Q Ultra lines). Only the `product`-tier entities carry the real name.
+ */
+describe('resolveProductEntityByName — product-tier title match (B0-891)', () => {
+  it('resolves "pH7Q Dual" via an exact product-tier title match when no alias or product-line title exists', async () => {
+    entityRows = [
+      // The two live product_line rows: generic, SHARED marketing titles, no "pH7Q" substring at all.
+      { id: 'line-dual', entity_type: 'product_line', product_line_key: 'line-dual', title: 'Concentrated Neutral Disinfectant Cleaner' },
+      { id: 'line-ultra', entity_type: 'product_line', product_line_key: 'line-ultra', title: 'Concentrated Neutral Disinfectant Cleaner' },
+      // The live product-tier row: the base, un-suffixed "pH7Q Dual" entity.
+      { id: 'prod-dual', entity_type: 'product', product_line_key: 'line-dual', product_key: 'sku-dual', title: 'pH7Q Dual' },
+      { id: 'prod-dual-pack', entity_type: 'product', product_line_key: 'line-dual', product_key: 'sku-dual-pack', title: 'pH7Q Dual (4 - 1 GAL Bottles)' },
+    ];
+
+    const result = await resolveProductEntityByName('pH7Q Dual');
+
+    expect(result.productLineKey).toBe('line-dual');
+    expect(result.resolutionSource).toBe('product_tier_title_exact');
+    expect(result.matchedTitle).toBe('pH7Q Dual');
+  });
+
+  it('would have picked the WRONG line via title_fuzzy alone — demonstrates the fix, not just the happy path', async () => {
+    // Same fixture as the live "No-rinse Floor Cleaner" bug: only ONE product_line-tier entity
+    // contains every query token, and it is the WRONG sibling line.
+    entityRows = [
+      { id: 'line-5x', entity_type: 'product_line', product_line_key: 'line-5x', title: 'No Rinse Floor Cleaner 5X' },
+      { id: 'line-real', entity_type: 'product_line', product_line_key: 'line-real', title: 'Concentrated Floor Cleaner' },
+      { id: 'prod-real-1', entity_type: 'product', product_line_key: 'line-real', product_key: 'sku-1', title: 'No-Rinse Floor Cleaner (5 GAL Pail)' },
+      { id: 'prod-real-2', entity_type: 'product', product_line_key: 'line-real', product_key: 'sku-2', title: 'No-Rinse Floor Cleaner (4-1 GAL Bottles)' },
+    ];
+
+    const result = await resolveProductEntityByName('No-rinse Floor Cleaner');
+
+    // The product-tier tokenized tier resolves to the REAL line, not "No Rinse Floor Cleaner 5X".
+    expect(result.productLineKey).toBe('line-real');
+    expect(result.resolutionSource).toBe('product_tier_title_fuzzy');
+  });
+
+  it('normalizes hyphens so "No-Rinse" matches a product-tier title written "No Rinse"', async () => {
+    entityRows = [
+      { id: 'prod-1', entity_type: 'product', product_line_key: 'line-a', product_key: 'sku-a', title: 'No Rinse Floor Cleaner' },
+    ];
+
+    const result = await resolveProductEntityByName('No-Rinse Floor Cleaner');
+
+    expect(result.productLineKey).toBe('line-a');
+    expect(result.resolutionSource).toBe('product_tier_title_exact');
+  });
+
+  it('does not resolve when the product-tier tokenized match spans more than one product line', async () => {
+    entityRows = [
+      { id: 'prod-1', entity_type: 'product', product_line_key: 'line-a', product_key: 'sku-a', title: 'Green Earth Glass Cleaner (32 oz)' },
+      { id: 'prod-2', entity_type: 'product', product_line_key: 'line-b', product_key: 'sku-b', title: 'Green Earth Glass and Surface Cleaner' },
+    ];
+
+    const result = await resolveProductEntityByName('Green Earth Glass Cleaner');
+
+    expect(result.productLineKey).toBeNull();
+    expect(result.resolutionSource).toBeNull();
+  });
+
+  it('does not run the product-tier tier in freeform mode', async () => {
+    entityRows = [
+      { id: 'prod-dual', entity_type: 'product', product_line_key: 'line-dual', product_key: 'sku-dual', title: 'pH7Q Dual' },
+    ];
+
+    const result = await resolveProductEntityByName('pH7Q Dual', { mode: 'freeform' });
+
+    expect(result.productLineKey).toBeNull();
+    expect(result.resolutionSource).toBeNull();
+  });
+});
+
+describe('resolveProductEntityByName — rag.document.title fallback tier (B0-891)', () => {
+  it('resolves via a label document title when no alias or entity title matches at all', async () => {
+    documentRows = [{ entity_id: 'ent-doc-1', title: 'Zynex Plus Label', document_kind: 'label' }];
+    entityRows = [{ id: 'ent-doc-1', entity_type: 'product_line', product_line_key: 'line-zynex' }];
+
+    const result = await resolveProductEntityByName('Zynex Plus');
+
+    expect(result.productLineKey).toBe('line-zynex');
+    expect(result.resolutionSource).toBe('document_title');
+  });
+
+  it('ignores a knowledge-kind document title match (label/sds only)', async () => {
+    documentRows = [{ entity_id: 'ent-doc-2', title: 'Zynex Plus care guide', document_kind: 'knowledge' }];
+    entityRows = [{ id: 'ent-doc-2', entity_type: 'product_line', product_line_key: 'line-zynex-2' }];
+
+    const result = await resolveProductEntityByName('Zynex Plus');
+
+    expect(result.productLineKey).toBeNull();
+  });
+
+  it('does not resolve when matching document titles span more than one product line', async () => {
+    documentRows = [
+      { entity_id: 'ent-doc-a', title: 'Zynex Plus Label', document_kind: 'label' },
+      { entity_id: 'ent-doc-b', title: 'Zynex Plus SDS', document_kind: 'sds' },
+    ];
+    entityRows = [
+      { id: 'ent-doc-a', entity_type: 'product_line', product_line_key: 'line-a' },
+      { id: 'ent-doc-b', entity_type: 'product_line', product_line_key: 'line-b' },
+    ];
+
+    const result = await resolveProductEntityByName('Zynex Plus');
+
+    expect(result.productLineKey).toBeNull();
   });
 });
 

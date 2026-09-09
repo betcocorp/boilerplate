@@ -91,6 +91,10 @@ export const PRODUCT_ENTITY_RESOLUTION_SOURCES = [
   'title_fuzzy',
   'alias_exact_freeform',
   'alias_fuzzy_freeform',
+  // B0-891
+  'product_tier_title_exact',
+  'product_tier_title_fuzzy',
+  'document_title',
 ] as const;
 export type AssertResolutionSourcesMatch = MutuallyAssignable<
   (typeof PRODUCT_ENTITY_RESOLUTION_SOURCES)[number] | null,

@@ -18,8 +18,12 @@ vi.mock('~/lib/observability/logger', () => ({
 import {
   ANTHROPIC_THINKING_HEADROOM_TOKENS,
   completeStructured,
+  completeStructuredWithUsage,
+  completeText,
+  completeTextWithUsage,
   StructuredOutputRefusedError,
   StructuredOutputTruncatedError,
+  supportsAnthropicAdaptiveThinking,
   type StructuredCompletionRequest,
 } from './structured-completion';
 
@@ -192,5 +196,129 @@ describe('completeStructured — OpenAI', () => {
     await expect(completeStructured({ ...REQUEST, model: 'gpt-4.1' })).rejects.toBeInstanceOf(
       StructuredOutputTruncatedError,
     );
+  });
+});
+
+describe('B0-908 — usage, request options, text mode and Haiku gating', () => {
+  it('returns the call usage in the runtime LlmTokenUsage shape for both providers', async () => {
+    anthropicStream.mockReturnValue({
+      finalMessage: async () =>
+        anthropicMessage({ usage: { input_tokens: 100, output_tokens: 20, cache_read_input_tokens: 40 } }),
+    });
+    expect((await completeStructuredWithUsage(REQUEST)).usage).toEqual({
+      promptTokens: 100,
+      completionTokens: 20,
+      totalTokens: 120,
+      cachedPromptTokens: 40,
+    });
+
+    openaiCreate.mockResolvedValue(
+      openaiResponse({ usage: { input_tokens: 7, output_tokens: 3, input_tokens_details: { cached_tokens: 2 } } }),
+    );
+    expect((await completeStructuredWithUsage({ ...REQUEST, model: 'gpt-4.1' })).usage).toEqual({
+      promptTokens: 7,
+      completionTokens: 3,
+      totalTokens: 10,
+      cachedPromptTokens: 2,
+    });
+  });
+
+  it('forwards timeout/maxRetries to the SDK as the second argument, and sends nothing when absent', async () => {
+    openaiCreate.mockResolvedValue(openaiResponse());
+    await completeStructured({ ...REQUEST, model: 'gpt-4.1', requestOptions: { maxRetries: 0, timeoutMs: 1234 } });
+    expect(openaiCreate.mock.calls[0]![1]).toEqual({ maxRetries: 0, timeout: 1234 });
+
+    anthropicStream.mockReturnValue({ finalMessage: async () => anthropicMessage() });
+    await completeStructured({ ...REQUEST, requestOptions: { timeoutMs: 999 } });
+    expect(anthropicStream.mock.calls[0]![1]).toEqual({ timeout: 999 });
+
+    openaiCreate.mockReset();
+    openaiCreate.mockResolvedValue(openaiResponse());
+    await completeStructured({ ...REQUEST, model: 'gpt-4.1' });
+    expect(openaiCreate.mock.calls[0]![1]).toBeUndefined();
+  });
+
+  it('text mode sends no schema/format and returns a cut-off answer instead of throwing', async () => {
+    const textRequest = { model: 'gpt-4.1', system: 'Revise.', user: 'draft', maxOutputTokens: 500, temperature: 0.2 };
+    openaiCreate.mockResolvedValue(
+      openaiResponse({ output_text: 'partial', incomplete_details: { reason: 'max_output_tokens' } }),
+    );
+    expect(await completeText(textRequest)).toBe('partial');
+    expect('text' in openaiCreate.mock.calls[0]![0]).toBe(false);
+
+    anthropicStream.mockReturnValue({
+      finalMessage: async () =>
+        anthropicMessage({ stop_reason: 'max_tokens', content: [{ type: 'text', text: 'cut' }] }),
+    });
+    const result = await completeTextWithUsage({ ...textRequest, model: 'claude-sonnet-5', effort: 'low' });
+    expect(result.text).toBe('cut');
+    const params = anthropicStream.mock.calls[0]![0];
+    expect(params.output_config).toEqual({ effort: 'low' });
+    expect(params.thinking).toEqual({ type: 'adaptive' });
+  });
+
+  it('text mode still surfaces an Anthropic refusal', async () => {
+    anthropicStream.mockReturnValue({
+      finalMessage: async () =>
+        anthropicMessage({ stop_reason: 'refusal', stop_details: { type: 'refusal', category: null, explanation: null }, content: [] }),
+    });
+    await expect(
+      completeText({ model: 'claude-opus-5', system: 's', user: 'u', maxOutputTokens: 10 }),
+    ).rejects.toBeInstanceOf(StructuredOutputRefusedError);
+  });
+
+  it('omits adaptive thinking, effort and the thinking headroom for Haiku-class ids', async () => {
+    expect(supportsAnthropicAdaptiveThinking('claude-haiku-4-5')).toBe(false);
+    expect(supportsAnthropicAdaptiveThinking('claude-sonnet-4-6')).toBe(true);
+    expect(supportsAnthropicAdaptiveThinking('claude-opus-4-8')).toBe(true);
+    expect(supportsAnthropicAdaptiveThinking('claude-sonnet-4-5')).toBe(false);
+
+    anthropicStream.mockReturnValue({ finalMessage: async () => anthropicMessage() });
+    await completeStructured({ ...REQUEST, model: 'claude-haiku-4-5' });
+    const params = anthropicStream.mock.calls[0]![0];
+    expect('thinking' in params).toBe(false);
+    expect(params.output_config).toEqual({ format: { type: 'json_schema', schema: SCHEMA } });
+    expect(params.max_tokens).toBe(16_000);
+    expect('temperature' in params).toBe(false);
+  });
+});
+
+describe('B0-908 — prior messages and abort signal', () => {
+  const prior = [
+    { role: 'assistant' as const, content: 'earlier answer' },
+    { role: 'user' as const, content: 'earlier question' },
+    { role: 'assistant' as const, content: 'earlier answer 2' },
+  ];
+
+  it('sends prior turns as real input items ahead of the user turn on OpenAI, verbatim', async () => {
+    openaiCreate.mockResolvedValue(openaiResponse());
+    await completeStructured({ ...REQUEST, model: 'gpt-4.1', priorMessages: prior });
+    expect(openaiCreate.mock.calls[0]![0].input).toEqual([
+      { role: 'assistant', content: 'earlier answer', type: 'message' },
+      { role: 'user', content: 'earlier question', type: 'message' },
+      { role: 'assistant', content: 'earlier answer 2', type: 'message' },
+      { role: 'user', content: '{"question":"q"}', type: 'message' },
+    ]);
+  });
+
+  it('sends prior turns as messages on Anthropic, dropping a leading assistant turn the API would reject', async () => {
+    anthropicStream.mockReturnValue({ finalMessage: async () => anthropicMessage() });
+    await completeStructured({ ...REQUEST, priorMessages: prior });
+    expect(anthropicStream.mock.calls[0]![0].messages).toEqual([
+      { role: 'user', content: 'earlier question' },
+      { role: 'assistant', content: 'earlier answer 2' },
+      { role: 'user', content: '{"question":"q"}' },
+    ]);
+  });
+
+  it('forwards an AbortSignal to both SDKs', async () => {
+    const controller = new AbortController();
+    openaiCreate.mockResolvedValue(openaiResponse());
+    await completeStructured({ ...REQUEST, model: 'gpt-4.1', requestOptions: { signal: controller.signal } });
+    expect(openaiCreate.mock.calls[0]![1]).toEqual({ signal: controller.signal });
+
+    anthropicStream.mockReturnValue({ finalMessage: async () => anthropicMessage() });
+    await completeStructured({ ...REQUEST, requestOptions: { signal: controller.signal, maxRetries: 0 } });
+    expect(anthropicStream.mock.calls[0]![1]).toEqual({ signal: controller.signal, maxRetries: 0 });
   });
 });

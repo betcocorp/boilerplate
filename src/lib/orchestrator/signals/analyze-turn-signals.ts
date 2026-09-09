@@ -1,12 +1,12 @@
 import { V1_AGENT_REGISTRY } from '~/lib/agents/agent-registry';
+import { completeStructuredWithUsage } from '~/lib/llm/structured-completion';
 import { logError } from '~/lib/observability/logger';
-import { getOpenAIClient } from '~/lib/openai/client';
-import { extractAssistantText } from '~/lib/openai/response-item-parsing';
-import { usageFromResponse } from '~/lib/openai/responses-runtime';
 import {
   BRAND_FAMILIES,
+  classifierPriorMessages,
   computeIntentClassifierCacheKey,
   INTENT_CLASSIFIER_CACHE_TTL_MS,
+  INTENT_CLASSIFIER_MAX_OUTPUT_TOKENS,
   INTENT_VALUES,
   resolveRouterModel,
   resolveRouterTimeoutMs,
@@ -65,9 +65,6 @@ export const DEFAULT_SIGNALS_ANALYSIS_ENABLED = false;
 export async function isSignalsAnalysisEnabled(): Promise<boolean> {
   return getBooleanSetting('BEX_SIGNALS_ANALYSIS_ENABLED', DEFAULT_SIGNALS_ANALYSIS_ENABLED);
 }
-
-/** Caps how much prior conversation is replayed — same ceiling the intent classifier uses. */
-const MAX_PRIOR_MESSAGES = 8;
 
 const SIGNALS_JSON_SCHEMA = {
   type: 'object',
@@ -175,45 +172,39 @@ export type AnalyzeTurnSignalsDeps = {
   now: () => number;
 };
 
+/**
+ * B0-908 — the one model call, through `completeStructuredWithUsage`, which routes on the resolved
+ * `BEX_ROUTER_MODEL` id: `claude-*` to the Anthropic Messages API, anything else to the OpenAI
+ * Responses API. Prior turns go out as the helper's `priorMessages` via the classifier's shared
+ * `classifierPriorMessages` (same cap, blank-turn filter and roles as before, so the OpenAI request
+ * bytes are unchanged). A truncated or refused structured answer is thrown by the helper and lands
+ * in `analyzeTurnSignals`'s catch — the same keyword-router degradation a parse failure always took.
+ *
+ * `signal` is `withRouterTimeout`'s abort signal, forwarded through `requestOptions.signal`;
+ * `timeoutMs` at the router budget is belt-and-braces.
+ */
 async function defaultRunLlm(
   message: string,
   priorMessages: PriorTurnMessage[],
   signal: AbortSignal,
 ): Promise<SignalsRunLlmResult> {
-  const client = getOpenAIClient();
-  const input = [
-    ...priorMessages
-      .slice(-MAX_PRIOR_MESSAGES)
-      .filter((m) => m.content.trim().length > 0)
-      .map((m) => ({ role: m.role, content: m.content, type: 'message' as const })),
-    { role: 'user' as const, content: message, type: 'message' as const },
-  ];
-
-  const res = await client.responses.create(
-    {
-      model: await resolveRouterModel(),
-      instructions: buildSignalsInstructions(),
-      input,
-      text: {
-        format: {
-          type: 'json_schema',
-          name: 'turn_signals',
-          strict: true,
-          schema: SIGNALS_JSON_SCHEMA,
-        },
-      },
-      store: false,
-      stream: false,
-      temperature: 0,
-    },
+  const result = await completeStructuredWithUsage({
+    model: await resolveRouterModel(),
+    system: buildSignalsInstructions(),
+    priorMessages: classifierPriorMessages(priorMessages),
+    user: message,
+    schemaName: 'turn_signals',
+    schema: SIGNALS_JSON_SCHEMA,
+    maxOutputTokens: INTENT_CLASSIFIER_MAX_OUTPUT_TOKENS,
+    temperature: 0,
     // maxRetries 0 for the same reason as the intent classifier: a retry can never finish inside
     // the router timeout budget, so it only converts a transient error into a guaranteed timeout.
-    { signal, maxRetries: 0 },
-  );
+    requestOptions: { maxRetries: 0, timeoutMs: await resolveRouterTimeoutMs(), signal },
+  });
 
   return {
-    parsed: llmTurnSignalsSchema.parse(JSON.parse(extractAssistantText(res))),
-    usage: usageFromResponse(res),
+    parsed: llmTurnSignalsSchema.parse(JSON.parse(result.text)),
+    usage: result.usage,
   };
 }
 
@@ -548,5 +539,8 @@ export function competitorIdentityFromSignals(
     otherCompetitorProduct: (signals.otherCompetitorProduct ?? '').trim() || null,
     usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0, cachedPromptTokens: 0 },
     resolved: Boolean(product),
+    // B0-904 — the signals call IS the extraction on this path, so its (router) model is the ground
+    // truth for the `competitor_identity_resolution` gate; null on a degraded (keyword) turn.
+    model: signals.model,
   };
 }

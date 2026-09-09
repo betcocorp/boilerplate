@@ -1,5 +1,28 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+// B0-904 — the model comes from the XREF_SPEC_ENRICH_MODEL settings row (default `preview`) through
+// `resolveModel`; both are mocked so no test touches Supabase or a provider.
+const { mockComplete, mockResolveModel, settingOverrides } = vi.hoisted(() => ({
+  mockComplete: vi.fn(),
+  mockResolveModel: vi.fn(async (tag: string) => (tag === 'preview' ? 'gpt-test' : tag)),
+  settingOverrides: new Map<string, string>(),
+}));
+vi.mock('~/lib/llm/structured-completion', () => ({
+  completeStructuredWithUsage: mockComplete,
+}));
+vi.mock('~/lib/llm/resolve-model', () => ({
+  resolveModel: mockResolveModel,
+}));
+vi.mock('~/lib/settings/settings-service', () => ({
+  getStringSetting: vi.fn((key: string, fallback: string) =>
+    Promise.resolve(settingOverrides.get(key) ?? fallback),
+  ),
+}));
+vi.mock('~/lib/workflows/product-support/max-output-tokens', () => ({
+  resolveMaxOutputTokens: () => 1200,
+}));
+
+import { wrapUntrustedWebEvidence } from '~/lib/recommendations/recommendation-guardrails';
 import {
   enrichCompetitorSpec,
   type LlmCompetitorSpecFill,
@@ -79,5 +102,88 @@ describe('enrichCompetitorSpec (B0-86)', () => {
     expect(spec.provenance.formFactor).toBeNull();
     expect(spec.dilutionOzPerGal).toBeNull();
     expect(spec.provenance.dilutionOzPerGal).toBeNull();
+  });
+});
+
+/**
+ * B0-908 — the default `runLlm` goes through the provider-neutral `completeStructuredWithUsage`, so
+ * a `claude-*` id resolved for the `preview` tag is sent as-is, with the same fenced (B0-91) user
+ * payload and strict schema the OpenAI call carried. Any failure still degrades to heuristic-only.
+ */
+describe('enrichCompetitorSpec — default runLlm (B0-908)', () => {
+  const USAGE = { promptTokens: 1, completionTokens: 1, totalTokens: 2, cachedPromptTokens: 0 };
+  const TEXT = 'Some product page with no chemistry terms.';
+  const SOURCES = [{ url: 'https://a', title: 'A' }];
+
+  beforeEach(() => {
+    mockComplete.mockReset();
+    mockResolveModel.mockReset();
+    mockResolveModel.mockResolvedValue('claude-sonnet-5');
+    settingOverrides.clear();
+  });
+
+  it('B0-904 — reads the model tag from the XREF_SPEC_ENRICH_MODEL settings row and resolves it through resolveModel', async () => {
+    settingOverrides.set('XREF_SPEC_ENRICH_MODEL', 'claude-haiku-4-5');
+    mockResolveModel.mockImplementation(async (tag: string) => tag);
+    mockComplete.mockResolvedValue({ text: JSON.stringify(EMPTY), usage: USAGE });
+
+    await enrichCompetitorSpec({ text: TEXT, sources: SOURCES });
+
+    expect(mockResolveModel).toHaveBeenCalledWith('claude-haiku-4-5');
+    expect(mockComplete.mock.calls[0][0].model).toBe('claude-haiku-4-5');
+  });
+
+  it('B0-904 — a stored value outside BEX_MODEL_TAGS falls back to the preview tag (allowed_values is advisory)', async () => {
+    settingOverrides.set('XREF_SPEC_ENRICH_MODEL', 'gpt-4o-mini');
+    mockComplete.mockResolvedValue({ text: JSON.stringify(EMPTY), usage: USAGE });
+
+    await enrichCompetitorSpec({ text: TEXT, sources: SOURCES });
+
+    expect(mockResolveModel).toHaveBeenCalledWith('preview');
+  });
+
+  it('calls completeStructuredWithUsage with the resolved claude id, fenced content and the fill schema', async () => {
+    mockComplete.mockResolvedValue({
+      text: JSON.stringify({ ...EMPTY, productCategory: 'disinfectant', sourceUrl: 'https://a' }),
+      usage: USAGE,
+    });
+
+    const spec = await enrichCompetitorSpec({ text: TEXT, sources: SOURCES });
+
+    expect(mockResolveModel).toHaveBeenCalledWith('preview');
+    expect(mockComplete).toHaveBeenCalledOnce();
+    const request = mockComplete.mock.calls[0][0];
+    expect(request).toMatchObject({
+      model: 'claude-sonnet-5',
+      user: JSON.stringify({ content: wrapUntrustedWebEvidence(TEXT), sources: SOURCES }),
+      schemaName: 'competitor_spec_fill',
+      maxOutputTokens: 1200,
+      temperature: 0,
+    });
+    expect(request.system).toContain('You extract a structured cleaning-product spec');
+    expect(request.schema.required).toEqual([
+      'chemistryClass',
+      'epaRegistration',
+      'contactTimeSeconds',
+      'dilutionOzPerGal',
+      'productCategory',
+      'primaryUse',
+      'formFactor',
+      'keyClaims',
+      'sourceUrl',
+    ]);
+    expect(request.schema.additionalProperties).toBe(false);
+    expect(spec.productCategory).toBe('disinfectant');
+    expect(spec.provenance.productCategory).toEqual({ source: 'llm', sourceUrl: 'https://a' });
+  });
+
+  it('degrades to heuristic-only when the helper throws', async () => {
+    mockComplete.mockRejectedValue(new Error('model refused the request'));
+
+    const spec = await enrichCompetitorSpec({ text: HEURISTIC_TEXT, sources: SOURCES });
+
+    expect(spec.chemistryClass).toBe('quat');
+    expect(spec.productCategory).toBeNull();
+    expect(spec.keyClaims).toEqual([]);
   });
 });

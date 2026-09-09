@@ -4,6 +4,7 @@ import { getAnthropicClient } from '~/lib/anthropic/client';
 import { modelProviderFor, type ModelEffort, type ModelProvider } from '~/lib/constants/models';
 import { logInfo } from '~/lib/observability/logger';
 import { getOpenAIClient } from '~/lib/openai/client';
+import type { LlmTokenUsage } from '~/lib/openai/responses-runtime';
 import { samplingParamsFor } from '~/lib/openai/model-capabilities';
 import { extractAssistantText } from '~/lib/openai/response-item-parsing';
 
@@ -29,6 +30,12 @@ export type StructuredCompletionRequest = {
   model: string;
   system: string;
   user: string;
+  /**
+   * B0-908 — earlier conversation turns, oldest first, sent as real message items ahead of `user`
+   * on both providers (OpenAI `input` items / Anthropic `messages`), so a multi-turn classifier
+   * prompt keeps the exact shape it had on the Responses API rather than being flattened into text.
+   */
+  priorMessages?: ReadonlyArray<PriorMessage>;
   /** Name for the schema (OpenAI requires one; Anthropic ignores it). */
   schemaName: string;
   /** Strict JSON schema: `additionalProperties: false`, every property required. Sent verbatim to both providers. */
@@ -39,6 +46,35 @@ export type StructuredCompletionRequest = {
   temperature?: number;
   /** Anthropic only (`output_config.effort`); OpenAI ignores it. */
   effort?: ModelEffort;
+  /** B0-908 — per-call transport knobs, forwarded to whichever SDK is called. */
+  requestOptions?: CompletionRequestOptions;
+};
+
+/**
+ * B0-908 — per-call SDK transport options. Both SDKs accept `{ maxRetries, timeout }` as the second
+ * argument; callers that wrap the call in `retryTransportFaults` pass `maxRetries: 0` so the SDK's
+ * own retry does not stack on top of theirs.
+ */
+export type CompletionRequestOptions = {
+  timeoutMs?: number;
+  maxRetries?: number;
+  /** Cancels the in-flight HTTP request; both SDKs accept it as a request option. */
+  signal?: AbortSignal;
+};
+
+export type PriorMessage = { role: 'user' | 'assistant'; content: string };
+
+/**
+ * B0-908 — a free-text single-shot call: same request minus the schema. For the OpenAI-only call
+ * sites that were migrated off `client.responses.create` (revision pass etc.) so a `claude-*` tag can
+ * serve them too.
+ */
+export type TextCompletionRequest = Omit<StructuredCompletionRequest, 'schemaName' | 'schema'>;
+
+/** B0-908 — the answer text plus the usage of the one model call, in the runtime's `LlmTokenUsage` shape. */
+export type CompletionResult = {
+  text: string;
+  usage: LlmTokenUsage;
 };
 
 /** The seam every caller talks to a model through. Tests inject a fake; production uses `completeStructured`. */
@@ -77,7 +113,7 @@ export class StructuredOutputRefusedError extends Error {
 
 function logUsage(
   provider: ModelProvider,
-  request: StructuredCompletionRequest,
+  request: TextCompletionRequest & { schemaName?: string },
   usage: { inputTokens?: number | null; outputTokens?: number | null; cachedInputTokens?: number | null },
 ): void {
   // Grading calls are not `workflow_steps`, so the B0-565 cost views never see them; this line is the
@@ -85,7 +121,7 @@ function logUsage(
   logInfo('llm_structured_completion', {
     provider,
     model: request.model,
-    schema: request.schemaName,
+    schema: request.schemaName ?? null,
     effort: provider === 'anthropic' ? (request.effort ?? null) : null,
     inputTokens: usage.inputTokens ?? null,
     outputTokens: usage.outputTokens ?? null,
@@ -93,34 +129,62 @@ function logUsage(
   });
 }
 
-const completeWithOpenAI: StructuredCompletion = async (request) => {
-  const res = await getOpenAIClient().responses.create({
-    model: request.model,
-    instructions: request.system,
-    input: [{ role: 'user', content: request.user, type: 'message' }],
-    text: {
-      format: {
-        type: 'json_schema',
-        name: request.schemaName,
-        strict: true,
-        schema: request.schema,
-      },
-    },
-    store: false,
-    stream: false,
-    max_output_tokens: request.maxOutputTokens,
-    ...samplingParamsFor(request.model, { temperature: request.temperature }),
-  });
-  if (res.incomplete_details?.reason === 'max_output_tokens') {
-    throw new StructuredOutputTruncatedError();
+function toUsage(usage: {
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  cachedInputTokens?: number | null;
+}): LlmTokenUsage {
+  const promptTokens = usage.inputTokens ?? 0;
+  const completionTokens = usage.outputTokens ?? 0;
+  return {
+    promptTokens,
+    completionTokens,
+    totalTokens: promptTokens + completionTokens,
+    cachedPromptTokens: usage.cachedInputTokens ?? 0,
+  };
+}
+
+function sdkRequestOptions(options: CompletionRequestOptions | undefined) {
+  if (!options) return undefined;
+  return {
+    ...(options.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {}),
+    ...(options.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
+    ...(options.signal ? { signal: options.signal } : {}),
+  };
+}
+
+/**
+ * Anthropic requires `messages[0]` to be a user turn (consecutive same-role turns are fine — the API
+ * merges them). A history that opens on an assistant turn (a capped tail) has that lead dropped for
+ * Anthropic only; OpenAI accepts any ordering and gets the history verbatim.
+ */
+function anthropicHistory(prior: ReadonlyArray<PriorMessage> | undefined): PriorMessage[] {
+  const turns = [...(prior ?? [])];
+  while (turns.length > 0 && turns[0]!.role !== 'user') {
+    turns.shift();
   }
-  logUsage('openai', request, {
-    inputTokens: res.usage?.input_tokens,
-    outputTokens: res.usage?.output_tokens,
-    cachedInputTokens: res.usage?.input_tokens_details?.cached_tokens,
-  });
-  return extractAssistantText(res);
-};
+  return turns;
+}
+
+/**
+ * B0-908 — Claude ids that do NOT take `thinking: { type: 'adaptive' }` or `output_config.effort`.
+ * Haiku 4.5 still uses the legacy `budget_tokens` form and rejects both; this codebase does not
+ * think on Haiku at all, it just omits the parameters. Prefix-matched so dated snapshots are covered.
+ */
+const ANTHROPIC_ADAPTIVE_UNSUPPORTED_PREFIXES = [
+  'claude-haiku-',
+  'claude-3',
+  'claude-opus-4-0',
+  'claude-opus-4-1',
+  'claude-opus-4-5',
+  'claude-sonnet-4-0',
+  'claude-sonnet-4-5',
+] as const;
+
+export function supportsAnthropicAdaptiveThinking(model: string): boolean {
+  const id = model.trim().toLowerCase();
+  return !ANTHROPIC_ADAPTIVE_UNSUPPORTED_PREFIXES.some((prefix) => id.startsWith(prefix));
+}
 
 /**
  * Anthropic counts thinking tokens against `max_tokens`; the callers' caps were sized for the JSON
@@ -130,23 +194,86 @@ const completeWithOpenAI: StructuredCompletion = async (request) => {
  */
 export const ANTHROPIC_THINKING_HEADROOM_TOKENS = 16_000;
 
-const completeWithAnthropic: StructuredCompletion = async (request) => {
-  const res = await getAnthropicClient()
-    .messages.stream({
+type JsonSchemaFormat = { schemaName: string; schema: Record<string, unknown> } | null;
+
+async function runOpenAI(
+  request: TextCompletionRequest,
+  format: JsonSchemaFormat,
+): Promise<CompletionResult> {
+  const res = await getOpenAIClient().responses.create(
+    {
       model: request.model,
-      max_tokens: request.maxOutputTokens + ANTHROPIC_THINKING_HEADROOM_TOKENS,
-      system: request.system,
-      messages: [{ role: 'user', content: request.user }],
-      // Opus 5 / Sonnet 5: adaptive is the only on-mode; `budget_tokens` and any sampling control
-      // (`temperature`, `top_p`) are rejected with a 400, which is why neither appears here.
-      thinking: { type: 'adaptive' },
-      output_config: {
-        ...(request.effort ? { effort: request.effort } : {}),
-        format: { type: 'json_schema', schema: request.schema },
+      instructions: request.system,
+      input: [
+        ...(request.priorMessages ?? []).map((m) => ({
+          role: m.role,
+          content: m.content,
+          type: 'message' as const,
+        })),
+        { role: 'user', content: request.user, type: 'message' },
+      ],
+      ...(format
+        ? {
+            text: {
+              format: {
+                type: 'json_schema',
+                name: format.schemaName,
+                strict: true,
+                schema: format.schema,
+              },
+            },
+          }
+        : {}),
+      store: false,
+      stream: false,
+      max_output_tokens: request.maxOutputTokens,
+      ...samplingParamsFor(request.model, { temperature: request.temperature }),
+    },
+    sdkRequestOptions(request.requestOptions),
+  );
+  // Strict structured output can only ever be invalid JSON when cut off, so that is surfaced as its
+  // own error; a free-text answer that hits the cap is still the model's answer and is returned.
+  if (format && res.incomplete_details?.reason === 'max_output_tokens') {
+    throw new StructuredOutputTruncatedError();
+  }
+  const usage = {
+    inputTokens: res.usage?.input_tokens,
+    outputTokens: res.usage?.output_tokens,
+    cachedInputTokens: res.usage?.input_tokens_details?.cached_tokens,
+  };
+  logUsage('openai', { ...request, schemaName: format?.schemaName }, usage);
+  return { text: extractAssistantText(res), usage: toUsage(usage) };
+}
+
+async function runAnthropic(
+  request: TextCompletionRequest,
+  format: JsonSchemaFormat,
+): Promise<CompletionResult> {
+  const adaptive = supportsAnthropicAdaptiveThinking(request.model);
+  const outputConfig = {
+    ...(adaptive && request.effort ? { effort: request.effort } : {}),
+    ...(format ? { format: { type: 'json_schema' as const, schema: format.schema } } : {}),
+  };
+  const res = await getAnthropicClient()
+    .messages.stream(
+      {
+        model: request.model,
+        // Thinking headroom only matters when the model thinks; Haiku-class ids get the bare cap.
+        max_tokens: request.maxOutputTokens + (adaptive ? ANTHROPIC_THINKING_HEADROOM_TOKENS : 0),
+        system: request.system,
+        messages: [
+          ...anthropicHistory(request.priorMessages),
+          { role: 'user', content: request.user },
+        ],
+        // Opus 5 / Sonnet 5: adaptive is the only on-mode; `budget_tokens` and any sampling control
+        // (`temperature`, `top_p`) are rejected with a 400, which is why neither appears here.
+        ...(adaptive ? { thinking: { type: 'adaptive' as const } } : {}),
+        ...(Object.keys(outputConfig).length > 0 ? { output_config: outputConfig } : {}),
       },
-    })
+      sdkRequestOptions(request.requestOptions),
+    )
     .finalMessage();
-  if (res.stop_reason === 'max_tokens') {
+  if (format && res.stop_reason === 'max_tokens') {
     throw new StructuredOutputTruncatedError();
   }
   if (res.stop_reason === 'refusal') {
@@ -155,20 +282,50 @@ const completeWithAnthropic: StructuredCompletion = async (request) => {
       res.stop_details?.explanation ?? null,
     );
   }
-  logUsage('anthropic', request, {
+  const usage = {
     inputTokens: res.usage.input_tokens,
     outputTokens: res.usage.output_tokens,
     cachedInputTokens: res.usage.cache_read_input_tokens,
-  });
-  // Thinking blocks (empty under the default `display`) are skipped; the structured answer is the text.
-  return res.content
+  };
+  logUsage('anthropic', { ...request, schemaName: format?.schemaName }, usage);
+  // Thinking blocks (empty under the default `display`) are skipped; the answer is the text.
+  const text = res.content
     .filter((block): block is Anthropic.TextBlock => block.type === 'text')
     .map((block) => block.text)
     .join('');
-};
+  return { text, usage: toUsage(usage) };
+}
+
+function dispatch(request: TextCompletionRequest, format: JsonSchemaFormat): Promise<CompletionResult> {
+  return modelProviderFor(request.model) === 'anthropic'
+    ? runAnthropic(request, format)
+    : runOpenAI(request, format);
+}
+
+/**
+ * B0-908 — structured call returning the answer AND its token usage, for call sites that account
+ * usage per step (`LlmTokenUsage`). Routes on the model id: `claude-*` to Anthropic, everything else
+ * to the OpenAI Responses API.
+ */
+export function completeStructuredWithUsage(
+  request: StructuredCompletionRequest,
+): Promise<CompletionResult> {
+  return dispatch(request, { schemaName: request.schemaName, schema: request.schema });
+}
 
 /** Routes on the model id: `claude-*` to Anthropic, everything else to the OpenAI Responses API. */
-export const completeStructured: StructuredCompletion = (request) =>
-  modelProviderFor(request.model) === 'anthropic'
-    ? completeWithAnthropic(request)
-    : completeWithOpenAI(request);
+export const completeStructured: StructuredCompletion = async (request) =>
+  (await completeStructuredWithUsage(request)).text;
+
+/**
+ * B0-908 — free-text single-shot call, same routing as `completeStructured`. Truncation at the output
+ * cap is NOT an error here (a cut-off prose answer is still returned, matching what the OpenAI-only
+ * callers did before); a refusal still is.
+ */
+export function completeTextWithUsage(request: TextCompletionRequest): Promise<CompletionResult> {
+  return dispatch(request, null);
+}
+
+export async function completeText(request: TextCompletionRequest): Promise<string> {
+  return (await completeTextWithUsage(request)).text;
+}

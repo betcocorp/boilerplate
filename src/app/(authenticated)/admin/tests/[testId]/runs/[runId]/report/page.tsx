@@ -12,6 +12,10 @@ import {
 } from '~/lib/permissions/permissions-server';
 import { completedPassCount, parseReportState } from '~/lib/tests/report/schemas';
 import { getTestById, getTestResultById } from '~/lib/tests/repository';
+import {
+  extractResolvedModelFromSummary,
+  extractResolvedProviderFromSummary,
+} from '~/lib/tests/response-payload';
 import { isCompletedRunStatus } from '~/lib/tests/types';
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
@@ -73,6 +77,11 @@ export default async function AdminTestRunReportPage({ params }: PageProps) {
           initialTotalCases={state?.totalCases ?? result.total_items}
           isRunCompleted={isCompletedRunStatus(result.status)}
           isGolden={test.is_golden}
+          // B0-905 — the model that ANSWERED this run, so the methodology block can name both
+          // sides: answered by X, graded by Y. Null on a run predating summary.resolvedModel; the
+          // block then omits the answering line rather than guessing.
+          answeringModel={extractResolvedModelFromSummary(result.summary)}
+          answeringProvider={extractResolvedProviderFromSummary(result.summary)}
           runId={result.id}
           testId={test.id}
           testName={test.name}

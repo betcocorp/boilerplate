@@ -1,3 +1,4 @@
+import type { ModelProvider } from '~/lib/constants/models';
 import {
   DEFAULT_HIGH_CONFIDENCE_ABSOLUTE,
   DEFAULT_MIN_LOCK_MARGIN,
@@ -109,6 +110,35 @@ export async function getRouterType(): Promise<RouterType> {
   return (ROUTER_TYPES as readonly string[]).includes(normalized)
     ? (normalized as RouterType)
     : DEFAULT_ROUTER_TYPE;
+}
+
+/**
+ * B0-897 — which LLM vendor Bex should prefer, as selected on /admin/settings (`BEX_LLM_PROVIDER`).
+ *
+ * `'openai'` is today's behavior everywhere and the safe fallback for every failure mode: missing
+ * row, DB error, or a stored string outside the allowed set. As with `getRouterType`,
+ * `settings.allowed_values` is advisory metadata the admin API validates against — it is NOT a
+ * database constraint — so the stored value is re-validated here rather than trusted, and this
+ * getter can never throw or return an unrecognized provider.
+ *
+ * WIRED since B0-899: `resolveModel` (`~/lib/llm/resolve-model`) reads this to decide which default
+ * row the `preview` tag resolves to — `BEX_RESPONSES_MODEL` (OpenAI tags) or `BEX_ANTHROPIC_MODEL`
+ * (Anthropic tags). That is its ONLY consumer and its only effect: an explicit tag (`gpt-4.1`,
+ * `claude-sonnet-5`, …) bypasses it entirely, because the vendor is implied by the tag
+ * (`modelProviderFor`), never by this flag. The type is `ModelProvider` from
+ * `~/lib/constants/models` so the consumer shares the one provider type with `modelProviderFor`
+ * instead of growing a second one.
+ */
+export const LLM_PROVIDERS = ['openai', 'anthropic'] as const satisfies readonly ModelProvider[];
+
+export const DEFAULT_LLM_PROVIDER: ModelProvider = 'openai';
+
+export async function getLlmProvider(): Promise<ModelProvider> {
+  const value = await getStringSetting('BEX_LLM_PROVIDER', DEFAULT_LLM_PROVIDER);
+  const normalized = value.trim().toLowerCase();
+  return (LLM_PROVIDERS as readonly string[]).includes(normalized)
+    ? (normalized as ModelProvider)
+    : DEFAULT_LLM_PROVIDER;
 }
 
 /**

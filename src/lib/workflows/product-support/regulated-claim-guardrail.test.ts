@@ -687,3 +687,131 @@ describe('evaluateRegulatedClaimGrounding — B0-870 offer sentences, citation l
     expect(result.ungroundedCategories).toContain('first_aid');
   });
 });
+
+/**
+ * B0-888 — the B0-871 sentence-redaction marker was firing on sentences that ARE supported by a
+ * retrieved document but are paraphrased (not verbatim), and on sentences that are not product
+ * claims at all (imperative caveats like "Caveat: Always confirm..."). These tests cover the three
+ * fixes: (1) `hasProductSubject` no longer treats an imperative word right after a "Caveat:"/
+ * "Note:"-style label as a product name; (2)/(3) a key-term-attributed or textually-adjacent
+ * verbatim quote is sufficient grounding for a paraphrase of the same claim; and a regression proving
+ * neither change weakens the guardrail against a genuinely fabricated claim.
+ */
+describe('evaluateRegulatedClaimGrounding — B0-888 label-prefixed imperatives are not product claims', () => {
+  it('does not classify "Caveat: Always confirm..." as a compatibility claim', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'Caveat: Always confirm mats are compatible with wood floors before use.',
+      sources: [],
+    });
+    expect(result.categoriesDetected).not.toContain('compatibility');
+    expect(result.ungroundedCategories).not.toContain('compatibility');
+  });
+
+  it('does not classify other label + imperative-opener combinations as a compatibility claim', () => {
+    const NOT_CLAIMS = [
+      'Note: Never mix this cleaner with bleach on stainless steel surfaces.',
+      'Important: Ensure mats are compatible with wood floors before installation.',
+      'Tip: Test a small area of wood flooring before use.',
+    ];
+    for (const draftAnswer of NOT_CLAIMS) {
+      const result = evaluateRegulatedClaimGrounding({ draftAnswer, sources: [] });
+      expect(result.categoriesDetected, draftAnswer).not.toContain('compatibility');
+    }
+  });
+
+  it('still classifies a compatibility claim when the label prefix is followed by a real product name, not an imperative', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'Note: Push is safe for use on stainless steel.',
+      sources: [],
+    });
+    expect(result.categoriesDetected).toContain('compatibility');
+    expect(result.ungroundedCategories).toContain('compatibility');
+  });
+});
+
+describe('evaluateRegulatedClaimGrounding — B0-888 key-term fallback and adjacent-quote grounding', () => {
+  const HIV_LABEL_SOURCE = {
+    documentId: 'doc-label-hiv',
+    title: 'Test Disinfectant Label',
+    documentBody: 'Kills HIV-1 on pre-cleaned environmental surfaces in 1 minute.',
+  };
+
+  it('grounds an ungrounded efficacy paraphrase immediately followed by a grounded verbatim quote of the same claim', () => {
+    const draftAnswer =
+      'This product is labeled to kill HIV-1 on pre-cleaned environmental surfaces. ' +
+      'The label states: "Kills HIV-1 on pre-cleaned environmental surfaces in 1 minute."';
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer,
+      sources: [HIV_LABEL_SOURCE],
+    });
+    expect(result.categoriesDetected).toContain('efficacy_claim');
+    expect(result.ungroundedCategories).not.toContain('efficacy_claim');
+    expect(result.keyTermGroundedCategories).toContain('efficacy_claim');
+  });
+
+  it('still redacts the same efficacy paraphrase when no supporting source exists anywhere (regression)', () => {
+    const draftAnswer = 'This product is labeled to kill HIV-1 on pre-cleaned environmental surfaces.';
+    const result = evaluateRegulatedClaimGrounding({ draftAnswer, sources: [] });
+    expect(result.categoriesDetected).toContain('efficacy_claim');
+    expect(result.ungroundedCategories).toContain('efficacy_claim');
+  });
+
+  it('grounds a paraphrase attributed to a specific source via the key-term fallback ("per the X label")', () => {
+    const PH7Q_LABEL_SOURCE = {
+      documentId: 'doc-label-ph7q-compat',
+      title: 'pH7Q Dual Label',
+      documentBody: 'pH7Q Dual is safe for use on stainless steel and other acid-resistant surfaces.',
+    };
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'Per the pH7Q Dual label, stainless steel surfaces are compatible with this cleaner.',
+      sources: [PH7Q_LABEL_SOURCE],
+    });
+    expect(result.categoriesDetected).toContain('compatibility');
+    expect(result.ungroundedCategories).not.toContain('compatibility');
+    expect(result.keyTermGroundedCategories).toContain('compatibility');
+  });
+
+  it('does NOT ground a fabricated organism claim against a source that never mentions it (regression, proves the guardrail was not weakened)', () => {
+    const UNRELATED_SOURCE = {
+      documentId: 'doc-label-unrelated',
+      title: 'Test Neutral Cleaner Label',
+      documentBody: 'Dilute at 2 oz per gallon of water. Safe for use on sealed floors.',
+    };
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'This product kills Ebola virus on contact.',
+      sources: [UNRELATED_SOURCE],
+    });
+    expect(result.categoriesDetected).toContain('efficacy_claim');
+    expect(result.ungroundedCategories).toContain('efficacy_claim');
+    expect(result.keyTermGroundedCategories).not.toContain('efficacy_claim');
+  });
+
+  it('does NOT ground a fabricated compatibility claim merely because an unrelated source is retrieved (regression)', () => {
+    const UNRELATED_SOURCE = {
+      documentId: 'doc-label-unrelated-2',
+      title: 'Test Neutral Cleaner Label',
+      documentBody: 'Dilute at 2 oz per gallon of water for daily use.',
+    };
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'This product is safe for use on stainless steel.',
+      sources: [UNRELATED_SOURCE],
+    });
+    expect(result.categoriesDetected).toContain('compatibility');
+    expect(result.ungroundedCategories).toContain('compatibility');
+  });
+
+  it('never applies the key-term fallback to hazard claims -- verbatim is still required', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'This product causes severe skin burns per the label.',
+      sources: [
+        {
+          documentId: 'doc-label-hazard',
+          title: 'Test Label',
+          documentBody: 'Causes irreversible eye damage. Wear protective gloves.',
+        },
+      ],
+    });
+    expect(result.categoriesDetected).toContain('hazard');
+    expect(result.ungroundedCategories).toContain('hazard');
+  });
+});

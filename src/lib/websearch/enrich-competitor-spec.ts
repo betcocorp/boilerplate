@@ -1,12 +1,15 @@
 import { z } from 'zod';
 
-import { getOpenAIClient, resolveResponsesModel } from '~/lib/openai/client';
-import { extractAssistantText } from '~/lib/openai/response-item-parsing';
+import { isBexModelTag } from '~/lib/constants/models';
+import { resolveModel } from '~/lib/llm/resolve-model';
+import { completeStructuredWithUsage } from '~/lib/llm/structured-completion';
 import { wrapUntrustedWebEvidence } from '~/lib/recommendations/recommendation-guardrails';
+import { getStringSetting } from '~/lib/settings/settings-service';
 import {
   competitorSpecSchema,
   extractCompetitorSpec,
 } from '~/lib/websearch/extract-competitor-spec';
+import { resolveMaxOutputTokens } from '~/lib/workflows/product-support/max-output-tokens';
 
 /**
  * B0-86 — LLM competitor-spec enrichment on top of the deterministic heuristic extractor.
@@ -161,37 +164,50 @@ const ENRICH_JSON_SCHEMA = {
   ],
 } as const;
 
+/** B0-904 — the `settings` row holding this call's `BEX_MODEL_TAGS` tag (replaces the env var of the same name, B0-638). */
+export const SPEC_ENRICH_MODEL_SETTING_KEY = 'XREF_SPEC_ENRICH_MODEL';
+
+/**
+ * B0-904 — the model tag for the spec-enrichment call, from the `XREF_SPEC_ENRICH_MODEL` settings
+ * row, re-validated against `BEX_MODEL_TAGS` (`allowed_values` is advisory, not a DB constraint);
+ * an unrecognised value falls back to `preview`.
+ */
+export async function resolveSpecEnrichModelTag(): Promise<string> {
+  const raw = (await getStringSetting(SPEC_ENRICH_MODEL_SETTING_KEY, 'preview')).trim();
+  return isBexModelTag(raw) ? raw : 'preview';
+}
+
+/**
+ * Resolved model id for the spec-enrichment call: the settings tag through `resolveModel`, so
+ * `preview` follows the `BEX_LLM_PROVIDER` row's per-vendor default and an explicit tag (including
+ * `claude-*`) resolves as everywhere else.
+ */
+export async function resolveSpecEnrichModel(): Promise<string> {
+  return resolveModel(await resolveSpecEnrichModelTag());
+}
+
+/**
+ * B0-908 — goes through `completeStructuredWithUsage`, which routes on the resolved model id
+ * (`claude-*` → Anthropic, otherwise OpenAI Responses). The previous direct call sent no output cap;
+ * the shared `resolveMaxOutputTokens()` ceiling covers this short fill. Truncation/refusal throw and
+ * land in the same heuristic-only fallback a parse failure did.
+ */
 async function defaultRunLlm(input: EnrichCompetitorSpecInput): Promise<LlmCompetitorSpecFill> {
   try {
-    const client = getOpenAIClient();
-    const res = await client.responses.create({
-      model:
-        process.env.XREF_SPEC_ENRICH_MODEL?.trim() || (await resolveResponsesModel('preview')),
-      instructions: ENRICH_SYSTEM_PROMPT,
-      input: [
-        {
-          role: 'user',
-          // B0-91: web content is untrusted — fence + instruction-guard it before the model reads it.
-          content: JSON.stringify({
-            content: wrapUntrustedWebEvidence(input.text),
-            sources: input.sources ?? [],
-          }),
-          type: 'message',
-        },
-      ],
-      text: {
-        format: {
-          type: 'json_schema',
-          name: 'competitor_spec_fill',
-          strict: true,
-          schema: ENRICH_JSON_SCHEMA,
-        },
-      },
-      store: false,
-      stream: false,
+    const { text } = await completeStructuredWithUsage({
+      model: await resolveSpecEnrichModel(),
+      system: ENRICH_SYSTEM_PROMPT,
+      // B0-91: web content is untrusted — fence + instruction-guard it before the model reads it.
+      user: JSON.stringify({
+        content: wrapUntrustedWebEvidence(input.text),
+        sources: input.sources ?? [],
+      }),
+      schemaName: 'competitor_spec_fill',
+      schema: ENRICH_JSON_SCHEMA,
+      maxOutputTokens: resolveMaxOutputTokens(),
       temperature: 0,
     });
-    return llmCompetitorSpecFillSchema.parse(JSON.parse(extractAssistantText(res)));
+    return llmCompetitorSpecFillSchema.parse(JSON.parse(text));
   } catch {
     // degrade to heuristic-only rather than fail the whole recommendation
     return EMPTY_LLM_FILL;

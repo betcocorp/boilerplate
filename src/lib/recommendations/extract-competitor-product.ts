@@ -1,8 +1,11 @@
 import { z } from 'zod';
 
-import { getOpenAIClient, resolveResponsesModel } from '~/lib/openai/client';
-import { extractAssistantText } from '~/lib/openai/response-item-parsing';
-import { usageFromResponse, type LlmTokenUsage } from '~/lib/openai/responses-runtime';
+import { isBexModelTag } from '~/lib/constants/models';
+import { resolveModel } from '~/lib/llm/resolve-model';
+import { completeStructuredWithUsage } from '~/lib/llm/structured-completion';
+import type { LlmTokenUsage } from '~/lib/openai/responses-runtime';
+import { getStringSetting } from '~/lib/settings/settings-service';
+import { resolveMaxOutputTokens } from '~/lib/workflows/product-support/max-output-tokens';
 
 /** B0-563 — zero usage for the fallback (no-model-call) path; never null so callers can sum unconditionally. */
 const ZERO_USAGE: LlmTokenUsage = {
@@ -52,12 +55,22 @@ export type ExtractedCompetitor = {
    * `product: null` (it found no product name in the message).
    */
   resolved: boolean;
+  /**
+   * B0-904 — the resolved model id the identity actually came from, so the workflow's
+   * `competitor_identity_resolution` gate records ground truth rather than re-resolving the
+   * setting (which could differ mid-turn). `null` when no model call produced this identity: the
+   * LLM/parse-failure fallback, or a signals-path degraded turn.
+   */
+  model: string | null;
 };
 
 export type ExtractCompetitorProductDeps = {
-  runLlm: (
-    userMessage: string,
-  ) => Promise<{ parsed: z.infer<typeof extractedCompetitorSchema>; usage: LlmTokenUsage }>;
+  runLlm: (userMessage: string) => Promise<{
+    parsed: z.infer<typeof extractedCompetitorSchema>;
+    usage: LlmTokenUsage;
+    /** B0-904 — the resolved model id the call was made with; omitted by legacy fakes → `null`. */
+    model?: string | null;
+  }>;
 };
 
 const SYSTEM_PROMPT = `You extract the competitor cleaning/chemical product a user wants cross-referenced to a Betco equivalent.
@@ -84,31 +97,55 @@ const JSON_SCHEMA = {
   required: ['brand', 'product', 'otherCompetitorProduct'],
 } as const;
 
-async function defaultRunLlm(
-  userMessage: string,
-): Promise<{ parsed: z.infer<typeof extractedCompetitorSchema>; usage: LlmTokenUsage }> {
-  const client = getOpenAIClient();
-  const res = await client.responses.create({
-    model:
-      process.env.XREF_COMPETITOR_EXTRACT_MODEL?.trim() ||
-      (await resolveResponsesModel('preview')),
-    instructions: SYSTEM_PROMPT,
-    input: [{ role: 'user', content: userMessage, type: 'message' }],
-    text: {
-      format: {
-        type: 'json_schema',
-        name: 'competitor_extract',
-        strict: true,
-        schema: JSON_SCHEMA,
-      },
-    },
-    store: false,
-    stream: false,
+/** B0-904 — the `settings` row holding this call's `BEX_MODEL_TAGS` tag (replaces the env var of the same name, B0-638). */
+export const COMPETITOR_EXTRACT_MODEL_SETTING_KEY = 'XREF_COMPETITOR_EXTRACT_MODEL';
+
+/**
+ * B0-904 — the model tag for the competitor-extraction call, from the `XREF_COMPETITOR_EXTRACT_MODEL`
+ * settings row. `allowed_values` is advisory (the admin API validates writes, the DB does not), so
+ * the stored value is re-validated against `BEX_MODEL_TAGS` and anything unrecognised falls back to
+ * `preview` rather than reaching a provider as a non-existent model id.
+ */
+export async function resolveCompetitorExtractModelTag(): Promise<string> {
+  const raw = (await getStringSetting(COMPETITOR_EXTRACT_MODEL_SETTING_KEY, 'preview')).trim();
+  return isBexModelTag(raw) ? raw : 'preview';
+}
+
+/**
+ * Resolved model id for the competitor-extraction call: the settings tag through `resolveModel`, so
+ * `preview` follows the `BEX_LLM_PROVIDER` row's per-vendor default and an explicit tag (including
+ * `claude-*`) resolves as everywhere else. Exported so the workflow can reuse it.
+ */
+export async function resolveCompetitorExtractModel(): Promise<string> {
+  return resolveModel(await resolveCompetitorExtractModelTag());
+}
+
+/**
+ * B0-908 — goes through `completeStructuredWithUsage`, which routes on the resolved model id
+ * (`claude-*` → Anthropic, otherwise OpenAI Responses). The previous direct call sent no output cap;
+ * the shared `resolveMaxOutputTokens()` ceiling is far above what three short strings need. A
+ * truncated or refused answer throws, which `extractCompetitorProduct` turns into its raw-message
+ * fallback exactly as a parse failure was before.
+ */
+async function defaultRunLlm(userMessage: string): Promise<{
+  parsed: z.infer<typeof extractedCompetitorSchema>;
+  usage: LlmTokenUsage;
+  model: string;
+}> {
+  const model = await resolveCompetitorExtractModel();
+  const { text, usage } = await completeStructuredWithUsage({
+    model,
+    system: SYSTEM_PROMPT,
+    user: userMessage,
+    schemaName: 'competitor_extract',
+    schema: JSON_SCHEMA,
+    maxOutputTokens: resolveMaxOutputTokens(),
     temperature: 0,
   });
   return {
-    parsed: extractedCompetitorSchema.parse(JSON.parse(extractAssistantText(res))),
-    usage: usageFromResponse(res),
+    parsed: extractedCompetitorSchema.parse(JSON.parse(text)),
+    usage,
+    model,
   };
 }
 
@@ -127,9 +164,10 @@ export async function extractCompetitorProduct(
     otherCompetitorProduct: null,
     usage: ZERO_USAGE,
     resolved: false,
+    model: null,
   };
   try {
-    const { parsed: out, usage } = await deps.runLlm(userMessage);
+    const { parsed: out, usage, model } = await deps.runLlm(userMessage);
     const brand = normalize(out.brand) || null;
     const product = normalize(out.product);
     const otherCompetitorProduct = normalize(out.otherCompetitorProduct) || null;
@@ -141,6 +179,7 @@ export async function extractCompetitorProduct(
       otherCompetitorProduct,
       usage,
       resolved: Boolean(product),
+      model: model ?? null,
     };
   } catch {
     return fallback;

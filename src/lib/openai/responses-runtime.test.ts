@@ -1154,6 +1154,63 @@ describe('runResponsesWithToolLoop — concurrent tool execution (B0-379)', () =
   });
 });
 
+/**
+ * B0-899 — this loop is the OpenAI Responses API. A Claude id must be refused before any request
+ * or tool call is made; the workflow routes `claude-*` to `runAiSdkWithToolLoop` (B0-908).
+ */
+describe('runResponsesWithToolLoop — refuses Anthropic model ids (B0-899)', () => {
+  it('throws for a claude-* id, naming the model and the AI SDK loop, before any request is sent', async () => {
+    const { client, create } = stubClient([{ id: 'resp_1', output: [], output_text: 'never' }]);
+    const executeTool = vi.fn();
+
+    await expect(
+      runResponsesWithToolLoop({
+        client,
+        model: 'claude-sonnet-5',
+        instructions: 'stable prefix',
+        tools: [],
+        userMessage: 'what dilution?',
+        executeTool,
+      }),
+    ).rejects.toThrow(/"claude-sonnet-5".*runAiSdkWithToolLoop/);
+
+    expect(create).not.toHaveBeenCalled();
+    expect(executeTool).not.toHaveBeenCalled();
+  });
+
+  it('refuses a pinned Anthropic id outside ANTHROPIC_MODEL_TAGS too — the claude- prefix decides', async () => {
+    const { client, create } = stubClient([]);
+
+    await expect(
+      runResponsesWithToolLoop({
+        client,
+        model: 'claude-sonnet-5-20260101',
+        instructions: 'stable prefix',
+        tools: [],
+        userMessage: 'what dilution?',
+        executeTool: async ({ name }) => ({ output: '{}', trace: trace(name) }),
+      }),
+    ).rejects.toThrow(/Anthropic/);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('still serves every OpenAI id', async () => {
+    const { client, create } = stubClient([{ id: 'resp_1', output: [], output_text: 'ok' }]);
+
+    const result = await runResponsesWithToolLoop({
+      client,
+      model: 'gpt-4.1-mini',
+      instructions: 'stable prefix',
+      tools: [],
+      userMessage: 'what dilution?',
+      executeTool: async ({ name }) => ({ output: '{}', trace: trace(name) }),
+    });
+
+    expect(result.assistantText).toBe('ok');
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('runResponsesWithToolLoop — temperature gating (B0-606)', () => {
   beforeEach(() => {
     __resetLearnedSamplingSupport();

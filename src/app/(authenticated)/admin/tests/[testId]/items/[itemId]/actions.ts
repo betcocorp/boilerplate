@@ -2,7 +2,12 @@
 
 import { getErrorMessage } from '~/lib/utils';
 import { replaceAiSuggestions } from '~/lib/ai-suggestions/repository';
-import { getOpenAIClient } from '~/lib/openai/client';
+import {
+  completeStructured,
+  StructuredOutputRefusedError,
+  StructuredOutputTruncatedError,
+} from '~/lib/llm/structured-completion';
+import { resolveHarnessInsightsModel } from '~/lib/tests/harness-insights-model';
 
 export type ItemHistoryRow = {
   passed: boolean;
@@ -74,13 +79,35 @@ function formatHistoryForPrompt(rows: ItemHistoryRow[]): string {
     .join('\n\n');
 }
 
-const MODEL = 'gpt-4.1-mini';
+/**
+ * B0-906 — strict JSON Schema for the seam's structured output, mirroring the shape the system
+ * prompt already asks for. It replaces `response_format: { type: 'json_object' }`, so the tolerant
+ * wrapper-key parser below now only ever sees the `{ suggestions: [...] }` shape — it is kept as-is
+ * because it also guards a hand-edited or legacy response.
+ */
+const ITEM_SUGGESTIONS_JSON_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['suggestions'],
+  properties: {
+    suggestions: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['title', 'content'],
+        properties: {
+          title: { type: 'string' },
+          content: { type: 'string' },
+        },
+      },
+    },
+  },
+} as const satisfies Record<string, unknown>;
 
 export async function analyzeTestItem(
   payload: AnalyzeTestItemPayload,
 ): Promise<AiSuggestion[]> {
-  const client = getOpenAIClient();
-
   const totalRuns = payload.historyRows.length;
   const passCount = payload.historyRows.filter((r) => r.passed).length;
   const failCount = totalRuns - passCount;
@@ -108,18 +135,40 @@ ${formatHistoryForPrompt(payload.historyRows)}
 
 Provide the top 3 specific, actionable recommendations to make this test item reliably pass.`;
 
-  const response = await client.chat.completions.create({
-    model: MODEL,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userMessage },
-    ],
-    temperature: 0.3,
-    max_tokens: 800,
-    response_format: { type: 'json_object' },
-  });
+  /**
+   * B0-906 — one structured call through the provider seam, on the model named by the
+   * `HARNESS_INSIGHTS_MODEL` settings row: a `claude-*` tag runs on the Anthropic Messages API,
+   * anything else on the OpenAI Responses API. Replaces a hardcoded `gpt-4.1-mini` on the legacy
+   * Chat Completions API. The resolved id is stored on each saved row below, so a suggestion always
+   * says which model wrote it.
+   */
+  const model = await resolveHarnessInsightsModel();
 
-  const raw = response.choices[0]?.message?.content;
+  let raw: string;
+  try {
+    raw = await completeStructured({
+      model,
+      system: systemPrompt,
+      user: userMessage,
+      schemaName: 'item_review_suggestions',
+      schema: ITEM_SUGGESTIONS_JSON_SCHEMA,
+      maxOutputTokens: 800,
+      temperature: 0.3,
+    });
+  } catch (error) {
+    // This action's contract is to throw a user-facing message the dialog renders; truncation and
+    // refusal both mean "no suggestions", so they join the existing bad-format path.
+    if (
+      error instanceof StructuredOutputTruncatedError ||
+      error instanceof StructuredOutputRefusedError
+    ) {
+      throw new Error(
+        `AI analysis did not return usable suggestions — ${getErrorMessage(error)}. Please try again.`,
+      );
+    }
+    throw error;
+  }
+
   if (!raw) {
     throw new Error('No response from AI analysis.');
   }
@@ -163,7 +212,7 @@ Provide the top 3 specific, actionable recommendations to make this test item re
   const saved = await replaceAiSuggestions(
     'item',
     payload.itemId,
-    parsed.map((s) => ({ title: s.title, content: s.content, model: MODEL })),
+    parsed.map((s) => ({ title: s.title, content: s.content, model })),
   );
 
   return saved;

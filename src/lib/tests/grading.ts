@@ -379,6 +379,9 @@ export function gradeChatTestResponse(params: {
 export type SemanticDeclineVerdict = {
   isDecline: boolean;
   rationale: string;
+  /** B0-902 — the resolved model id / provider that produced the verdict, stamped by `gradeSemanticDecline`. */
+  gradingModel?: string | null;
+  gradingProvider?: 'openai' | 'anthropic' | null;
 };
 
 /**
@@ -405,6 +408,13 @@ export type DeclineGradingContext = {
 export type AsyncEvaluationOutcome = EvaluationOutcome & {
   /** Present only when the semantic-decline fallback below actually ran. */
   semanticDeclineCheck?: SemanticDeclineVerdict;
+  /**
+   * B0-902 — present only when the semantic-decline fallback was NEEDED but the grader model could
+   * not judge it (refusal, truncation at the output cap, transport failure after retries). The row
+   * stays failed on the deterministic verdict, and this carries why the LLM check never happened so
+   * the failure is not misread as "the model confirmed this was not a decline".
+   */
+  semanticDeclineUnavailable?: { reason: string };
 };
 
 /**
@@ -421,8 +431,10 @@ export type AsyncEvaluationOutcome = EvaluationOutcome & {
  *   - the model produced a non-empty response
  *   - the heuristic above did NOT recognize it as a decline (`base.passed === false`)
  *
- * A checker failure (network/parse error) falls back to the deterministic verdict rather than
- * silently passing or failing the row — `gradeSemanticDecline`'s own caller decides how to log it.
+ * A checker failure (refusal, truncation, network/parse error) falls back to the deterministic
+ * verdict rather than silently passing the row — and, since B0-902, says so: the reason rides on
+ * `semanticDeclineUnavailable` and is appended to `failureReason`, so an "unable to evaluate" is
+ * never mistaken for a model verdict that the response answered the question.
  */
 export async function gradeChatTestResponseAsync(params: {
   item: GradableExpectations;
@@ -454,8 +466,14 @@ export async function gradeChatTestResponseAsync(params: {
       expectedConcepts: params.context.expectedConcepts ?? null,
       minimumConcepts: params.context.minimumConcepts ?? null,
     });
-  } catch {
-    return base;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return {
+      passed: false,
+      failureReason:
+        `${base.failureReason ?? ''} Semantic decline check could not be evaluated: ${reason}`.trim(),
+      semanticDeclineUnavailable: { reason },
+    };
   }
 
   if (verdict.isDecline) {

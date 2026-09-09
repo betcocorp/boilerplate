@@ -78,6 +78,26 @@ export function extractResolvedModelFromSummary(summary: unknown): string | null
 }
 
 /**
+ * B0-905 — the vendor that answered a run, read off `test_results.summary` next to
+ * `resolvedModel`. Returns null for a run that predates the field; the caller then derives the
+ * vendor from the persisted model id instead (`ModelProviderBadge`), which is the same answer,
+ * because the writer derives it that way too. Only `'openai'` and `'anthropic'` are accepted, so a
+ * stray value cannot badge a run with a vendor that does not exist.
+ */
+export function extractResolvedProviderFromSummary(summary: unknown): string | null {
+  if (!summary || typeof summary !== 'object' || Array.isArray(summary)) {
+    return null;
+  }
+
+  const candidate = (summary as Record<string, unknown>).resolvedProvider;
+  if (typeof candidate !== 'string') {
+    return null;
+  }
+  const normalized = candidate.trim().toLowerCase();
+  return normalized === 'openai' || normalized === 'anthropic' ? normalized : null;
+}
+
+/**
  * Pulls every per-source `similarity` value off the response payload's `sources`
  * array and reduces it to {min, max, avg}. Returns null when nothing usable was
  * recorded (e.g. early-decline runs or older payload shapes).
@@ -511,6 +531,38 @@ export function extractActiveGates(responsePayload: unknown): ActiveGates | null
     (responsePayload as Record<string, unknown>).activeGates,
   );
   return parsed.success ? parsed.data : null;
+}
+
+/** Every key `activeGatesSchema` defines, in the order the harness aside renders them. */
+const ACTIVE_GATE_NAMES: readonly (keyof ActiveGates)[] = [
+  'validator',
+  'earlyDeclineGate',
+  'usageSafetyCoverage',
+  'regulatedClaimGuardrail',
+  'recommendationConfidence',
+  'recommendationEngineVerdict',
+  'crossReferenceSelfReference',
+  'dilutionCitationGuardrail',
+];
+
+/**
+ * B0-863 — the gates that actually acted on this turn: `state === 'ran'` with a `verdict` other
+ * than `'passed'` (e.g. `{ name: 'regulatedClaimGuardrail', verdict: 'rejected' }`). A gate that
+ * ran and found nothing to act on (`verdict: 'passed'`), or one that never ran / was skipped /
+ * bypassed / not applicable, did not fire. Reported for reference beside the harness signal —
+ * never folded into a metric or the content grade.
+ */
+export function extractFiredGates(responsePayload: unknown): { name: string; verdict: string }[] {
+  const activeGates = extractActiveGates(responsePayload);
+  if (!activeGates) return [];
+  const fired: { name: string; verdict: string }[] = [];
+  for (const name of ACTIVE_GATE_NAMES) {
+    const record = activeGates[name];
+    if (record && record.state === 'ran' && record.verdict && record.verdict !== 'passed') {
+      fired.push({ name, verdict: record.verdict });
+    }
+  }
+  return fired;
 }
 
 /**

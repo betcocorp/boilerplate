@@ -1,6 +1,38 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+// B0-904 — the model comes from the CATEGORY_CLASSIFIER_MODEL settings row (default `preview`)
+// through `resolveModel`; both are mocked so no test touches Supabase or a provider.
+const { mockComplete, mockResolveModel, settingOverrides } = vi.hoisted(() => ({
+  mockComplete: vi.fn(),
+  mockResolveModel: vi.fn(async (tag: string) => (tag === 'preview' ? 'gpt-test' : tag)),
+  settingOverrides: new Map<string, string>(),
+}));
+vi.mock('~/lib/llm/structured-completion', () => ({
+  completeStructuredWithUsage: mockComplete,
+}));
+vi.mock('~/lib/llm/resolve-model', () => ({
+  resolveModel: mockResolveModel,
+}));
+vi.mock('~/lib/settings/settings-service', () => ({
+  getStringSetting: vi.fn((key: string, fallback: string) =>
+    Promise.resolve(settingOverrides.get(key) ?? fallback),
+  ),
+}));
+vi.mock('~/lib/workflows/product-support/max-output-tokens', () => ({
+  resolveMaxOutputTokens: () => 1200,
+}));
+// The default deps reach Supabase; neither repository is exercised here but both must not connect on import.
+vi.mock('~/lib/category/classifier-repository', () => ({
+  CLASSIFIER_LINK_SOURCE: 'classifier',
+  loadProdLineClassifierInputs: vi.fn(),
+  upsertClassifierLink: vi.fn(),
+}));
+vi.mock('~/lib/category/taxonomy-repository', () => ({
+  loadTaxonomyNodes: vi.fn(),
+}));
 
 import {
+  buildClassifierJsonSchema,
   buildClassifierPrompt,
   CLASSIFIER_PROMPT_VERSION,
   formatNodeOptions,
@@ -9,6 +41,7 @@ import {
 import type { ClassifierLink } from '~/lib/category/classifier-repository';
 import type { TaxonomyNode } from '~/lib/category/category-resolver';
 import {
+  defaultClassify,
   resolveClassifierOutcome,
   runProductClassifier,
   type ClassifyDeps,
@@ -95,6 +128,78 @@ describe('runProductClassifier (B0-35)', () => {
     const { summary } = await runProductClassifier([inputs[0]], deps);
     expect(summary.unclassified).toBe(1);
     expect(persist).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * B0-908 — the default classifier goes through the provider-neutral `completeStructuredWithUsage`,
+ * so a `claude-*` id resolved for the `preview` tag is sent as-is with the same prompt + enumerated
+ * key schema. A failure still returns the `classifier_failed` sentinel.
+ */
+describe('defaultClassify (B0-908)', () => {
+  const USAGE = { promptTokens: 1, completionTokens: 1, totalTokens: 2, cachedPromptTokens: 0 };
+
+  beforeEach(() => {
+    mockComplete.mockReset();
+    mockResolveModel.mockReset();
+    mockResolveModel.mockResolvedValue('claude-sonnet-5');
+    settingOverrides.clear();
+  });
+
+  it('B0-904 — reads the model tag from the CATEGORY_CLASSIFIER_MODEL settings row and resolves it through resolveModel', async () => {
+    settingOverrides.set('CATEGORY_CLASSIFIER_MODEL', 'claude-haiku-4-5');
+    mockResolveModel.mockImplementation(async (tag: string) => tag);
+    mockComplete.mockResolvedValue({
+      text: JSON.stringify({ category_key: 'floor-care', confidence: 0.8, rationale: 'finish' }),
+      usage: USAGE,
+    });
+
+    await defaultClassify({ title: 'Floor Finish', description: null }, NODES);
+
+    expect(mockResolveModel).toHaveBeenCalledWith('claude-haiku-4-5');
+    expect(mockComplete.mock.calls[0][0].model).toBe('claude-haiku-4-5');
+  });
+
+  it('B0-904 — a stored value outside BEX_MODEL_TAGS falls back to the preview tag (allowed_values is advisory)', async () => {
+    settingOverrides.set('CATEGORY_CLASSIFIER_MODEL', 'gpt-4o-mini');
+    mockComplete.mockResolvedValue({
+      text: JSON.stringify({ category_key: 'floor-care', confidence: 0.8, rationale: 'finish' }),
+      usage: USAGE,
+    });
+
+    await defaultClassify({ title: 'Floor Finish', description: null }, NODES);
+
+    expect(mockResolveModel).toHaveBeenCalledWith('preview');
+  });
+
+  it('calls completeStructuredWithUsage with the resolved claude id and the enumerated-key schema', async () => {
+    mockComplete.mockResolvedValue({
+      text: JSON.stringify({ category_key: 'floor-care', confidence: 0.8, rationale: 'finish' }),
+      usage: USAGE,
+    });
+
+    const out = await defaultClassify({ title: 'Floor Finish', description: null }, NODES);
+
+    expect(mockResolveModel).toHaveBeenCalledWith('preview');
+    expect(mockComplete).toHaveBeenCalledOnce();
+    expect(mockComplete.mock.calls[0][0]).toMatchObject({
+      model: 'claude-sonnet-5',
+      system: buildClassifierPrompt(NODES),
+      user: JSON.stringify({ title: 'Floor Finish', description: null }),
+      schemaName: 'category_classification',
+      schema: buildClassifierJsonSchema(['disinfectants', 'floor-care']),
+      maxOutputTokens: 1200,
+      temperature: 0,
+    });
+    expect(out).toEqual({ category_key: 'floor-care', confidence: 0.8, rationale: 'finish' });
+  });
+
+  it('returns the classifier_failed sentinel when the helper throws', async () => {
+    mockComplete.mockRejectedValue(new Error('output truncated at max_output_tokens'));
+
+    const out = await defaultClassify({ title: 'Floor Finish', description: null }, NODES);
+
+    expect(out).toEqual({ category_key: 'none', confidence: 0, rationale: 'classifier_failed' });
   });
 });
 

@@ -25,6 +25,11 @@ import {
   DEFAULT_SCORING_RULES,
   STRICT_PASS_MARK,
 } from '~/lib/tests/report/scoring-config';
+import {
+  isModelProvider,
+  providerLabel,
+  providerLabelForModel,
+} from '~/lib/llm/provider-label';
 import { cn } from '~/lib/utils';
 
 /**
@@ -766,6 +771,14 @@ export type ReportMethodologyProps = {
   scoringRules?: ReportScoringRules;
   /** B0-825 — what this report was graded with (`payload.config`); null on a legacy report. */
   config?: ReportGradingConfigData | null;
+  /**
+   * B0-905 — the model that ANSWERED the run (`summary.resolvedModel`) and its vendor. Rendered
+   * beside the grading model so a dual-provider A/B report says both halves: answered by one
+   * vendor, graded by another. Null on a run that predates the field, and then the row is omitted
+   * rather than filled with a re-resolved guess.
+   */
+  answeringModel?: string | null;
+  answeringProvider?: string | null;
   /** Collapsed by default on screen; B0-592 forces it open for the PDF via `details[open]`. */
   defaultOpen?: boolean;
   className?: string;
@@ -781,6 +794,8 @@ export function ReportMethodology({
   strictPassMark = STRICT_PASS_MARK,
   scoringRules = DEFAULT_SCORING_RULES,
   config = null,
+  answeringModel = null,
+  answeringProvider = null,
   defaultOpen = false,
   className,
 }: ReportMethodologyProps) {
@@ -808,9 +823,25 @@ export function ReportMethodology({
           <div className="space-y-2">
             <SectionLabel>Graded with</SectionLabel>
             <dl className="grid gap-x-6 gap-y-1 text-sm sm:grid-cols-2">
+              {/* B0-905 — who answered, then who graded. On a dual-provider A/B these are two
+                  different vendors, and a report that named only one of them was ambiguous about
+                  which half of the comparison it described. */}
+              {answeringModel ? (
+                <div className="flex gap-2">
+                  <dt className="text-slate-500">Answered by</dt>
+                  <dd className="font-mono text-xs text-slate-900">
+                    {answeringProvider && isModelProvider(answeringProvider)
+                      ? providerLabel(answeringProvider)
+                      : providerLabelForModel(answeringModel)}{' '}
+                    {answeringModel}
+                  </dd>
+                </div>
+              ) : null}
               <div className="flex gap-2">
-                <dt className="text-slate-500">Model</dt>
-                <dd className="font-mono text-xs text-slate-900">{config.model}</dd>
+                <dt className="text-slate-500">Graded by</dt>
+                <dd className="font-mono text-xs text-slate-900">
+                  {providerLabelForModel(config.model)} {config.model}
+                </dd>
               </div>
               {config.effort ? (
                 <div className="flex gap-2">
