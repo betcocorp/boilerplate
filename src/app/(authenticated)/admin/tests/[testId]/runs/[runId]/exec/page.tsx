@@ -3,6 +3,7 @@ import { connection } from 'next/server';
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 
+import { DegradedRunBanner } from '~/components/admin/tests/DegradedRunBanner';
 import {
   ExecSummaryUnavailable,
   RunExecSummaryView,
@@ -11,7 +12,12 @@ import { RunReportTabs } from '~/components/admin/tests/report/RunReportTabs';
 import { loadReportData } from '~/lib/tests/report/assemble';
 import type { ReportDataNotGenerated } from '~/lib/tests/report/data-schemas';
 import { toExecSummaryData } from '~/lib/tests/report/exec-summary';
-import { getTestById, getTestResultById } from '~/lib/tests/repository';
+import {
+  getTestById,
+  getTestResultById,
+  listRoutingHealthRowsByResultId,
+} from '~/lib/tests/repository';
+import { computeRunRoutingHealth } from '~/lib/tests/run-health';
 import { isCompletedRunStatus } from '~/lib/tests/types';
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
@@ -46,9 +52,11 @@ export default async function AdminTestRunExecSummaryPage({ params }: PageProps)
   await connection();
   const { testId, runId } = await params;
 
-  const [test, result] = await Promise.all([
+  const [test, result, routingHealthRows] = await Promise.all([
     getTestById(testId).catch(() => null),
     getTestResultById(runId).catch(() => null),
+    // B0-911 — same narrow two-column read the detailed report does; a failure means "no verdict".
+    listRoutingHealthRowsByResultId(runId).catch(() => []),
   ]);
 
   if (!test || !result || result.test_id !== test.id) {
@@ -91,6 +99,8 @@ export default async function AdminTestRunExecSummaryPage({ params }: PageProps)
       <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 px-6 py-10 sm:px-8">
         {/* B0-834 — switch between the detailed report and this executive summary. */}
         <RunReportTabs runId={result.id} testId={test.id} />
+        {/* B0-911 — above the exec grade, for the same reason it sits above the detailed one. */}
+        <DegradedRunBanner health={computeRunRoutingHealth(routingHealthRows)} />
         {body}
       </main>
     </div>

@@ -1,6 +1,11 @@
 import { ChevronRight, TriangleAlert } from 'lucide-react';
 import type { ReactNode } from 'react';
 
+import {
+  generationRuntimeLabel,
+  generationRuntimeRationale,
+  type GenerationRuntime,
+} from '~/lib/llm/generation-runtime';
 import { formatConceptList } from '~/lib/tests/report/case-concepts';
 import {
   CONCEPT_DISAGREEMENT_LABELS,
@@ -779,6 +784,13 @@ export type ReportMethodologyProps = {
    */
   answeringModel?: string | null;
   answeringProvider?: string | null;
+  /**
+   * B0-912 — which generation loop served the answers (`summary.generationRuntime`). Reported right
+   * under "Answered by", because the loop is decided by the model, not chosen: a `claude-*` run can
+   * only be served by the AI SDK loop, so an OpenAI-vs-Anthropic comparison is a runtime comparison
+   * too. Null on a run predating the field — the row is then omitted rather than guessed.
+   */
+  answeringRuntime?: GenerationRuntime | null;
   /** Collapsed by default on screen; B0-592 forces it open for the PDF via `details[open]`. */
   defaultOpen?: boolean;
   className?: string;
@@ -796,6 +808,7 @@ export function ReportMethodology({
   config = null,
   answeringModel = null,
   answeringProvider = null,
+  answeringRuntime = null,
   defaultOpen = false,
   className,
 }: ReportMethodologyProps) {
@@ -834,6 +847,19 @@ export function ReportMethodology({
                       ? providerLabel(answeringProvider)
                       : providerLabelForModel(answeringModel)}{' '}
                     {answeringModel}
+                  </dd>
+                </div>
+              ) : null}
+              {answeringRuntime ? (
+                <div className="flex gap-2">
+                  <dt className="text-slate-500">Generation runtime</dt>
+                  <dd className="text-slate-900">
+                    {generationRuntimeLabel(answeringRuntime)}
+                    {answeringModel ? (
+                      <span className="block text-xs text-slate-500">
+                        {generationRuntimeRationale(answeringModel)}
+                      </span>
+                    ) : null}
                   </dd>
                 </div>
               ) : null}

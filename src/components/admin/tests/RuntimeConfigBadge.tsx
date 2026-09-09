@@ -1,5 +1,10 @@
 import { Badge } from '~/components/ui/badge';
 import { BEX_CHAT_AGENT_MODE_LABELS } from '~/lib/agents/agent-registry';
+import {
+  GENERATION_RUNTIME_SHORT_LABELS,
+  generationRuntimeLabel,
+  type GenerationRuntime,
+} from '~/lib/llm/generation-runtime';
 import type { TestRunConfig } from '~/lib/tests/run-config';
 import type { RuntimeConfig } from '~/lib/workflows/product-support/product-support-schemas';
 
@@ -80,17 +85,34 @@ export function RunConfigBadges({
 export function RuntimeConfigBadge({
   runtimeConfig,
   runConfig = null,
+  generationRuntime = null,
 }: {
   runtimeConfig: RuntimeConfig | null;
   runConfig?: TestRunConfig | null;
+  /**
+   * B0-912 — the RUN-level generation loop, from `test_results.summary.generationRuntime` (written
+   * once by `executeTestRun`). When supplied it replaces the per-item `aiSdkGenerationEnabled`
+   * chip below: both report the same fact, and the run-level value covers the whole run rather than
+   * whichever item's payload the page happened to sample. Null for runs predating the field, which
+   * fall back to that per-item chip.
+   */
+  generationRuntime?: GenerationRuntime | null;
 }) {
-  if (!runtimeConfig && !runConfig) {
+  if (!runtimeConfig && !runConfig && !generationRuntime) {
     return null;
   }
 
   return (
     <>
       <RunConfigBadges runConfig={runConfig} />
+      {generationRuntime ? (
+        <Badge
+          title={`summary.generationRuntime: ${generationRuntime} — ${generationRuntimeLabel(generationRuntime)}. Which loop served the run (B0-912); an Anthropic model can only be served by the AI SDK loop, an OpenAI model follows BEX_AI_SDK_GENERATION_ENABLED.`}
+          variant="outline"
+        >
+          {GENERATION_RUNTIME_SHORT_LABELS[generationRuntime]} runtime
+        </Badge>
+      ) : null}
       {runtimeConfig ? (
         <>
           {runtimeConfig.confidenceGatingDisabled ? (
@@ -124,12 +146,16 @@ export function RuntimeConfigBadge({
           >
             decline gate {runtimeConfig.earlyDeclineGateEnabled ? 'on' : 'off'}
           </Badge>
-          <Badge
-            title={`aiSdkGenerationEnabled: ${runtimeConfig.aiSdkGenerationEnabled}`}
-            variant="outline"
-          >
-            {runtimeConfig.aiSdkGenerationEnabled ? 'ai-sdk' : 'responses'} runtime
-          </Badge>
+          {/* B0-912 — suppressed when the run-level `generationRuntime` chip above already says
+              this; showing both would read as a bug (same rule the runConfig/observed pairs use). */}
+          {generationRuntime ? null : (
+            <Badge
+              title={`aiSdkGenerationEnabled: ${runtimeConfig.aiSdkGenerationEnabled}`}
+              variant="outline"
+            >
+              {runtimeConfig.aiSdkGenerationEnabled ? 'ai-sdk' : 'responses'} runtime
+            </Badge>
+          )}
           <Badge title={`rerankerActive: ${runtimeConfig.rerankerActive}`} variant="outline">
             reranker {runtimeConfig.rerankerActive ? 'on' : 'off'}
           </Badge>

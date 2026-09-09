@@ -21,6 +21,12 @@ import {
 } from '~/components/ui/table';
 import { V1_AGENT_REGISTRY } from '~/lib/agents/agent-registry';
 import { isBexModelTag } from '~/lib/constants/models';
+import {
+  GENERATION_RUNTIME_SHORT_LABELS,
+  certainGenerationRuntimeForModel,
+  generationRuntimeLabel,
+  generationRuntimeRationale,
+} from '~/lib/llm/generation-runtime';
 import { resolveModel } from '~/lib/llm/resolve-model';
 import {
   buildPromptAggregations,
@@ -42,6 +48,7 @@ import {
   listTestResultsByTestId,
 } from '~/lib/tests/repository';
 import {
+  extractGenerationRuntimeFromSummary,
   extractResolvedModelFromSummary,
   extractResolvedProviderFromSummary,
   extractSearchRunEmbeddingSource,
@@ -154,6 +161,11 @@ async function RunModelLabel({
 }) {
   const persisted = extractResolvedModelFromSummary(summary);
   if (persisted) {
+    // B0-912 — persisted run-level value, else what the model id settles on its own (a `claude-*`
+    // run can only have been the AI SDK loop). Null for an OpenAI run predating the field: its loop
+    // followed a settings value from the time, which is not recoverable.
+    const generationRuntime =
+      extractGenerationRuntimeFromSummary(summary) ?? certainGenerationRuntimeForModel(persisted);
     return (
       <span className="inline-flex items-center gap-1.5">
         <span title="Model this run actually executed on">{persisted}</span>
@@ -164,6 +176,19 @@ async function RunModelLabel({
           model={persisted}
           provider={extractResolvedProviderFromSummary(summary)}
         />
+        {/* B0-912 — which generation loop served the run, beside the model that served it: the
+            loop follows the model (an Anthropic id can only run on the AI SDK loop), so a
+            vendor-vs-vendor row is also a runtime-vs-runtime row. Omitted on runs predating the
+            field rather than guessed. */}
+        {generationRuntime ? (
+          <Badge
+            className="px-1 py-0 text-[10px] font-normal"
+            title={`${generationRuntimeLabel(generationRuntime)}. ${generationRuntimeRationale(persisted)}`}
+            variant="outline"
+          >
+            {GENERATION_RUNTIME_SHORT_LABELS[generationRuntime]}
+          </Badge>
+        ) : null}
       </span>
     );
   }

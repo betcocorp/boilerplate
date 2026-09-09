@@ -8,6 +8,7 @@ import {
   extractSearchRunMaxSimilarity,
 } from './response-payload';
 import { parseReportState } from './report/schemas';
+import type { RunRoutingHealthInput } from './run-health';
 import { extractExpectedTool, parseAgentStepToolTrace } from './tool-routing';
 import { COMPLETED_RUN_STATUSES } from './types';
 import type { ReportOverall, ReportStatus } from './report/schemas';
@@ -1734,6 +1735,41 @@ export async function listRoutingComparisonRows(): Promise<RoutingComparisonAggr
             semanticEmbeddingMs: row.semantic_embedding_ms,
             semanticScoringMs: row.semantic_scoring_ms,
             routingAgreement: row.routing_agreement,
+          }),
+        );
+      }),
+  );
+}
+
+const ROUTING_HEALTH_PAGE_SIZE = 500;
+
+/**
+ * B0-911 — the two columns `computeRunRoutingHealth` (`~/lib/tests/run-health.ts`) needs, for ONE
+ * run. Deliberately its own narrow query rather than reusing `listAllResultItemsByResultId`
+ * (`select('*')`, which pulls every `response_payload` blob): the report and executive-summary
+ * pages need this verdict and otherwise load no items at all, and dragging a run's worth of
+ * payloads into those pages to read two scalars would be a real regression. The run DETAIL page
+ * already has every row in memory and reduces them directly instead of calling this.
+ *
+ * Paged for the same reason every other item query here is: PostgREST's `db-max-rows` is 1000.
+ */
+export async function listRoutingHealthRowsByResultId(
+  testResultId: string,
+): Promise<RunRoutingHealthInput[]> {
+  const supabase = getSupabaseServiceRoleClient();
+  return fetchAllPages<RunRoutingHealthInput>(ROUTING_HEALTH_PAGE_SIZE, (from, to) =>
+    supabase
+      .from('test_result_items')
+      .select('routing_confidence, routing_fallback_reason')
+      .eq('test_result_id', testResultId)
+      .order('row_index', { ascending: true })
+      .range(from, to)
+      .then((result) => {
+        const rows = assertNoError(result) ?? [];
+        return rows.map(
+          (row): RunRoutingHealthInput => ({
+            routingConfidence: row.routing_confidence,
+            routingFallbackReason: row.routing_fallback_reason,
           }),
         );
       }),

@@ -28,8 +28,8 @@ import {
   updateWorkflowRun,
 } from '~/lib/conversations/workflow-repository';
 import { logError, logInfo } from '~/lib/observability/logger';
-import { modelProviderFor } from '~/lib/constants/models';
 import { getOpenAIClient } from '~/lib/openai/client';
+import { selectGenerationRuntime } from '~/lib/llm/generation-runtime';
 import { resolveModel } from '~/lib/llm/resolve-model';
 import { runResponsesWithToolLoop } from '~/lib/openai/responses-runtime';
 import type { LlmTokenUsage } from '~/lib/openai/responses-runtime';
@@ -2243,9 +2243,15 @@ export async function runProductSupportWorkflow(input: {
    * `agentRuntime`, `runtimeConfig.aiSdkGenerationEnabled` and the recorded prompt all report.
    */
   const model = await resolveModel(input.modelTag);
-  const modelProvider = modelProviderFor(model);
   const aiSdkGenerationSetting = await getBooleanSetting('BEX_AI_SDK_GENERATION_ENABLED', false);
-  const useAiSdkGeneration = modelProvider === 'anthropic' || aiSdkGenerationSetting;
+  /**
+   * B0-912 — the same expression as before, moved behind `selectGenerationRuntime`
+   * (`~/lib/llm/generation-runtime.ts`) so the eval harness can label a RUN with the loop that
+   * served it without re-deriving the rule. Selection behaviour is unchanged by that ticket
+   * (visibility only — converging on one loop is B0-914).
+   */
+  const useAiSdkGeneration =
+    selectGenerationRuntime({ model, aiSdkGenerationSetting }) === 'ai_sdk';
   /**
    * B0-519 — capped once, up front, so every consumer (the `hasPreviousResponse` step record below,
    * and both generation runtimes further down) agrees on the same decision for this turn. See
