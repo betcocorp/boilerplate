@@ -134,6 +134,11 @@ const STRING_SETTINGS = [
   // B0-906 — model tag for the harness insight calls (run insights, run comparison, item summary,
   // observability prompt insights); replaces the hardcoded gpt-4.1-mini.
   'HARNESS_INSIGHTS_MODEL',
+  // B0-913 — Anthropic output_config.effort for ANSWER GENERATION (the counterpart of the two
+  // grading-effort rows above). `provider_default` sends no effort field at all, which is the
+  // pre-B0-913 behaviour; low/medium cut Anthropic's thinking-token output volume. OpenAI models
+  // never see it.
+  'BEX_GENERATION_EFFORT',
   // B0-812 / B0-835 — the Pass/Fail line and the two concept-rule scores. All numeric, 0-100.
   PASS_MARK_SETTING_KEY,
   SCORING_RULE_SETTING_KEYS.minimalFloorScore,
