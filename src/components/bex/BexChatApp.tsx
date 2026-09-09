@@ -14,10 +14,13 @@ import {
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from '~/components/ui/select';
+import { groupModelsByProvider } from '~/lib/llm/provider-label';
 import { cn, getErrorMessage } from '~/lib/utils';
 
 import { BexChatComposer } from '~/components/bex/BexChatComposer';
@@ -1044,14 +1047,21 @@ export function BexChatApp() {
                   >
                     <SelectValue placeholder="Model" />
                   </SelectTrigger>
+                  {/* B0-905 — grouped by vendor, because the list carries both OpenAI and
+                      Anthropic tags since B0-908 and a flat list hid which vendor would answer. */}
                   <SelectContent>
                     <SelectItem value="preview">
-                      Model: preview (env default)
+                      Model: preview (settings default)
                     </SelectItem>
-                    {supportedModels.map((m: SupportedModel) => (
-                      <SelectItem key={m.name} value={m.name}>
-                        {m.label}
-                      </SelectItem>
+                    {groupModelsByProvider(supportedModels).map((group) => (
+                      <SelectGroup key={group.provider}>
+                        <SelectLabel>{group.label}</SelectLabel>
+                        {group.models.map((m: SupportedModel) => (
+                          <SelectItem key={m.name} value={m.name}>
+                            {m.label}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
                     ))}
                   </SelectContent>
                 </Select>

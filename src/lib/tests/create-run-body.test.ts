@@ -69,4 +69,32 @@ describe('createRunBodySchema', () => {
       expect(result.error.issues.map((issue) => issue.path)).toContainEqual(['routerType']);
     }
   });
+
+  /**
+   * B0-905 — the run-creation API accepts an Anthropic tag, because the enum is built from
+   * `supportedModels` and that list carries the Claude tags since B0-908. Pinned here so a future
+   * narrowing of the enum (back to the OpenAI subset, say) fails loudly instead of silently making
+   * every Claude run un-startable over HTTP. The `.default` stays `gpt-4.1` (B0-465).
+   */
+  it('accepts an Anthropic model tag and keeps gpt-4.1 as the default', () => {
+    const parsed = createRunBodySchema.parse({
+      testId: 'test-1',
+      modelTag: 'claude-sonnet-5',
+    });
+
+    expect(parsed.modelTag).toBe('claude-sonnet-5');
+    expect(createRunBodySchema.parse({ testId: 'test-1' }).modelTag).toBe('gpt-4.1');
+  });
+
+  it('still rejects a model tag that is in neither vendor list', () => {
+    const result = createRunBodySchema.safeParse({
+      testId: 'test-1',
+      modelTag: 'claude-imaginary-9',
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.map((issue) => issue.path)).toContainEqual(['modelTag']);
+    }
+  });
 });

@@ -223,6 +223,13 @@ type RunReportViewProps = {
    */
   canDownloadTrace: boolean;
   isGolden: boolean;
+  /**
+   * B0-905 — the model that ANSWERED this run (`summary.resolvedModel`) and its vendor, so the
+   * methodology block can name both sides of the report. Null for a run that predates the field;
+   * the block then omits the answering line rather than re-resolving a tag and stating a guess.
+   */
+  answeringModel?: string | null;
+  answeringProvider?: string | null;
 };
 
 export function RunReportView({
@@ -240,6 +247,8 @@ export function RunReportView({
   isRunCompleted,
   canDownloadTrace,
   isGolden,
+  answeringModel = null,
+  answeringProvider = null,
 }: RunReportViewProps) {
   const [status, setStatus] = useState<ReportStatus>(initialStatus);
   const [totalCases, setTotalCases] = useState(initialTotalCases);
@@ -731,6 +740,8 @@ export function RunReportView({
 
           <div data-report-section>
             <ReportMethodology
+              answeringModel={answeringModel}
+              answeringProvider={answeringProvider}
               config={reportData.config}
               passMark={reportData.metrics.passMark}
               // B0-835 — the concept rules this report's numbers were derived under.

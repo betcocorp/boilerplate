@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
 import { Badge } from '~/components/ui/badge';
+import { ModelProviderBadge } from '~/components/admin/ModelProviderBadge';
 
 import { AddTestItemDialog } from '~/components/admin/tests/AddTestItemDialog';
 import { AdminTestsActionToast } from '~/components/admin/tests/AdminTestsActionToast';
@@ -20,7 +21,7 @@ import {
 } from '~/components/ui/table';
 import { V1_AGENT_REGISTRY } from '~/lib/agents/agent-registry';
 import { isBexModelTag } from '~/lib/constants/models';
-import { resolveResponsesModel } from '~/lib/openai/client';
+import { resolveModel } from '~/lib/llm/resolve-model';
 import {
   buildPromptAggregations,
   extractItemMaxSimilarity,
@@ -42,6 +43,7 @@ import {
 } from '~/lib/tests/repository';
 import {
   extractResolvedModelFromSummary,
+  extractResolvedProviderFromSummary,
   extractSearchRunEmbeddingSource,
   extractSearchRunMaxSimilarity,
   summarizePromptBundleVersions,
@@ -152,7 +154,18 @@ async function RunModelLabel({
 }) {
   const persisted = extractResolvedModelFromSummary(summary);
   if (persisted) {
-    return <span title="Model this run actually executed on">{persisted}</span>;
+    return (
+      <span className="inline-flex items-center gap-1.5">
+        <span title="Model this run actually executed on">{persisted}</span>
+        {/* B0-905 — vendor chip. `resolvedProvider` when the run recorded one; otherwise derived
+            from the persisted model id, which is how the writer derives it too, so a run from
+            before the field still badges correctly rather than not at all. */}
+        <ModelProviderBadge
+          model={persisted}
+          provider={extractResolvedProviderFromSummary(summary)}
+        />
+      </span>
+    );
   }
 
   const tag = extractRunModelTag(runOptions);
@@ -165,22 +178,23 @@ async function RunModelLabel({
     );
   }
 
-  // `resolveResponsesModel` throws on unknown tags that need an env override, so never hand it one.
+  // `resolveModel` throws on unknown tags that need an env override, so never hand it one.
   if (!isBexModelTag(tag)) {
     return (
       <span title={`Unrecognised model tag: ${tag}`}>{tag}</span>
     );
   }
 
-  const resolved = await resolveResponsesModel(tag);
+  const resolved = await resolveModel(tag);
 
   if (tag === 'preview') {
     return (
       <span
         className="inline-flex items-center gap-1.5"
-        title={`This run predates per-run model recording. "${resolved}" is today's BEX_RESPONSES_MODEL settings default, resolved just now — it may differ from the model that actually ran.`}
+        title={`This run predates per-run model recording. "${resolved}" is what the preview tag resolves to right now — the per-vendor default row BEX_LLM_PROVIDER selects (B0-899). It may differ from the model that actually ran.`}
       >
         <span>{resolved}</span>
+        <ModelProviderBadge model={resolved} />
         <Badge className="px-1 py-0 text-[10px] font-normal" variant="outline">
           preview
         </Badge>
@@ -188,7 +202,12 @@ async function RunModelLabel({
     );
   }
 
-  return <span title={`Model tag: ${tag}`}>{resolved}</span>;
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span title={`Model tag: ${tag}`}>{resolved}</span>
+      <ModelProviderBadge model={resolved} />
+    </span>
+  );
 }
 
 type PageProps = {
