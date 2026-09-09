@@ -25,14 +25,25 @@ vi.mock('~/lib/llm/structured-completion', async (importOriginal) => {
 // non-default value override with `mockResolvedValueOnce`/`mockImplementationOnce` below.
 // B0-786 — BEX_ROUTER_MODEL/BEX_ROUTER_TIMEOUT_MS moved to the table too; same echo-the-fallback
 // default so every test that never cared about them keeps the documented defaults.
+// B0-903 — `resolveModel` reads BEX_LLM_PROVIDER for the `preview` tag; default `openai`.
 vi.mock('~/lib/settings/settings-service', () => ({
   getBooleanSetting: vi.fn((_key: string, fallback: boolean) => Promise.resolve(fallback)),
   getStringSetting: vi.fn((_key: string, fallback: string) => Promise.resolve(fallback)),
   getNumberSetting: vi.fn((_key: string, fallback: number) => Promise.resolve(fallback)),
+  getLlmProvider: vi.fn(() => Promise.resolve('openai')),
 }));
 
+// B0-903 — the real resolver, wrapped so tests can assert the router goes THROUGH it (rather than
+// straight to `resolveResponsesModel`) without changing what it returns.
+vi.mock('~/lib/llm/resolve-model', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('~/lib/llm/resolve-model')>();
+  return { ...actual, resolveModel: vi.fn(actual.resolveModel) };
+});
+
+import { resolveModel } from '~/lib/llm/resolve-model';
 import {
   getBooleanSetting,
+  getLlmProvider,
   getNumberSetting,
   getStringSetting,
 } from '~/lib/settings/settings-service';
@@ -61,6 +72,8 @@ beforeEach(() => {
   vi.mocked(getBooleanSetting).mockImplementation((_key, fallback) => Promise.resolve(fallback));
   vi.mocked(getStringSetting).mockImplementation((_key, fallback) => Promise.resolve(fallback));
   vi.mocked(getNumberSetting).mockImplementation((_key, fallback) => Promise.resolve(fallback));
+  vi.mocked(getLlmProvider).mockResolvedValue('openai');
+  vi.mocked(resolveModel).mockClear();
 });
 
 afterEach(() => {
@@ -732,5 +745,31 @@ describe('classifyUserIntent — B0-908 provider-neutral call (default deps)', (
     expect(out.source).toBe('keyword_fallback');
     expect(out.intent).toBe('ambiguous');
     expect(out.fallbackReason).toContain('max_output_tokens');
+  });
+
+  it('B0-903 — resolves the BEX_ROUTER_MODEL tag through resolveModel, and the claude tag from the row reaches the seam', async () => {
+    vi.mocked(getStringSetting).mockImplementation((key, fallback) =>
+      Promise.resolve(key === 'BEX_ROUTER_MODEL' ? 'claude-haiku-4-5' : fallback),
+    );
+
+    const out = await classifyUserIntent('how do I set up the dispenser', []);
+
+    expect(resolveModel).toHaveBeenCalledWith('claude-haiku-4-5');
+    expect(structuredCall().model).toBe('claude-haiku-4-5');
+    expect(out.model).toBe('claude-haiku-4-5');
+  });
+
+  it('B0-903 — a `preview` router tag follows the BEX_LLM_PROVIDER per-vendor default row', async () => {
+    vi.mocked(getStringSetting).mockImplementation((key, fallback) => {
+      if (key === 'BEX_ROUTER_MODEL') return Promise.resolve('preview');
+      if (key === 'BEX_ANTHROPIC_MODEL') return Promise.resolve('claude-opus-5');
+      return Promise.resolve(fallback);
+    });
+    vi.mocked(getLlmProvider).mockResolvedValue('anthropic');
+
+    await classifyUserIntent('how do I set up the dispenser', []);
+
+    expect(resolveModel).toHaveBeenCalledWith('preview');
+    expect(structuredCall().model).toBe('claude-opus-5');
   });
 });

@@ -6,7 +6,7 @@ import {
   StructuredOutputTruncatedError,
   type CompletionResult,
 } from '~/lib/llm/structured-completion';
-import { resolveResponsesModel } from '~/lib/openai/client';
+import { resolveModel } from '~/lib/llm/resolve-model';
 import type { LlmTokenUsage } from '~/lib/openai/responses-runtime';
 import {
   resolveOpenAiRequestTimeoutMs,
@@ -138,10 +138,12 @@ export async function resolveValidatorModelTag(): Promise<BexModelTag> {
  * behavior-preserving, not a model change.
  */
 export async function resolveValidatorModel(modelTag?: string): Promise<string> {
+  // B0-903 — `resolveModel` rather than `resolveResponsesModel`: an explicit tag resolves exactly
+  // as before, and the `preview` tag now follows the `BEX_LLM_PROVIDER` row's per-vendor default.
   if (modelTag) {
-    return resolveResponsesModel(modelTag);
+    return resolveModel(modelTag);
   }
-  return resolveResponsesModel(await resolveValidatorModelTag());
+  return resolveModel(await resolveValidatorModelTag());
 }
 
 /** B0-554 — `runValidatorPass`'s result plus the token usage from its one model call. */
@@ -1126,9 +1128,12 @@ export const REVISION_SYSTEM_PROMPT = [
   'If you cannot fix the flagged issue(s) safely without fabricating support, reply with a short clarification request only.',
 ].join('\n');
 
-/** B0-389 — the model the revision pass calls (no dedicated env override, unlike the validator). */
+/**
+ * B0-389 — the model the revision pass calls (no dedicated settings row, unlike the validator).
+ * B0-903 — through `resolveModel`, so `preview` follows the `BEX_LLM_PROVIDER` per-vendor default.
+ */
 export async function resolveRevisionModel(modelTag?: string): Promise<string> {
-  return resolveResponsesModel(modelTag ?? 'preview');
+  return resolveModel(modelTag ?? 'preview');
 }
 
 /**

@@ -25,8 +25,18 @@ vi.mock('~/lib/settings/settings-service', () => ({
   getStringSetting: vi.fn((key: string, fallback: string) =>
     Promise.resolve(settingOverrides.get(key) ?? fallback),
   ),
+  // B0-903 — `resolveModel` reads this for the `preview` tag; default `openai`.
+  getLlmProvider: vi.fn(() => Promise.resolve(settingOverrides.get('BEX_LLM_PROVIDER') ?? 'openai')),
 }));
 
+// B0-903 — the real resolver, wrapped so tests can assert both passes go THROUGH it (rather than
+// straight to `resolveResponsesModel`) without changing what it returns.
+vi.mock('~/lib/llm/resolve-model', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('~/lib/llm/resolve-model')>();
+  return { ...actual, resolveModel: vi.fn(actual.resolveModel) };
+});
+
+import { resolveModel } from '~/lib/llm/resolve-model';
 import {
   StructuredOutputRefusedError,
   StructuredOutputTruncatedError,
@@ -73,6 +83,7 @@ function textCall(index = 0): Omit<StructuredRequest, 'schemaName' | 'schema'> {
 beforeEach(() => {
   completeStructuredMock.mockReset();
   completeTextMock.mockReset();
+  vi.mocked(resolveModel).mockClear();
   settingOverrides.clear();
   // `preview` resolves through the BEX_RESPONSES_MODEL row; pin it so the default path is stable.
   settingOverrides.set('BEX_RESPONSES_MODEL', 'gpt-4.1-mini');
@@ -137,6 +148,28 @@ describe('runValidatorPass — provider-neutral structured call', () => {
     await runValidatorPass({ draftAnswer: 'draft', evidenceSummary: 'evidence', modelTag: 'gpt-4.1' });
 
     expect(structuredCall().model).toBe('gpt-4.1');
+  });
+
+  it('B0-903 — resolves the BEX_VALIDATOR_MODEL tag through resolveModel, and the claude tag from the row reaches the seam', async () => {
+    settingOverrides.set('BEX_VALIDATOR_MODEL', 'claude-haiku-4-5');
+    completeStructuredMock.mockResolvedValue({ text: JSON.stringify(APPROVED), usage: USAGE });
+
+    await runValidatorPass({ draftAnswer: 'draft', evidenceSummary: 'evidence' });
+
+    expect(resolveModel).toHaveBeenCalledWith('claude-haiku-4-5');
+    expect(structuredCall().model).toBe('claude-haiku-4-5');
+  });
+
+  it('B0-903 — a `preview` validator tag follows the BEX_LLM_PROVIDER per-vendor default row', async () => {
+    settingOverrides.set('BEX_VALIDATOR_MODEL', 'preview');
+    settingOverrides.set('BEX_LLM_PROVIDER', 'anthropic');
+    settingOverrides.set('BEX_ANTHROPIC_MODEL', 'claude-opus-5');
+    completeStructuredMock.mockResolvedValue({ text: JSON.stringify(APPROVED), usage: USAGE });
+
+    await runValidatorPass({ draftAnswer: 'draft', evidenceSummary: 'evidence' });
+
+    expect(resolveModel).toHaveBeenCalledWith('preview');
+    expect(structuredCall().model).toBe('claude-opus-5');
   });
 
   it('keeps the parse-failure fallback (hard fail, human review) with the call usage on an unparseable answer', async () => {
@@ -217,6 +250,18 @@ describe('runRevisionPass — provider-neutral free-text call', () => {
     });
 
     expect(textCall().model).toBe('claude-sonnet-5');
+    expect(resolveModel).toHaveBeenCalledWith('claude-sonnet-5');
+  });
+
+  it('B0-903 — with no modelTag the revision pass resolves `preview` through resolveModel, following BEX_LLM_PROVIDER', async () => {
+    settingOverrides.set('BEX_LLM_PROVIDER', 'anthropic');
+    settingOverrides.set('BEX_ANTHROPIC_MODEL', 'claude-opus-5');
+    completeTextMock.mockResolvedValue({ text: 'revised', usage: USAGE });
+
+    await runRevisionPass({ draftAnswer: 'draft', validatorIssues: [], evidenceSummary: 'evidence' });
+
+    expect(resolveModel).toHaveBeenCalledWith('preview');
+    expect(textCall().model).toBe('claude-opus-5');
   });
 
   it('returns empty text on a refusal, which the workflow already reads as "revision refused, keep the draft"', async () => {

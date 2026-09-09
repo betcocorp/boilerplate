@@ -27,8 +27,20 @@ vi.mock('~/lib/settings/settings-service', () => ({
   getNumberSetting: vi.fn((key: string, fallback: number) =>
     Promise.resolve(settingOverrides.has(key) ? (settingOverrides.get(key) as number) : fallback),
   ),
+  // B0-903 — `resolveModel` reads this for the `preview` tag; default `openai`.
+  getLlmProvider: vi.fn(() =>
+    Promise.resolve(settingOverrides.has('BEX_LLM_PROVIDER') ? settingOverrides.get('BEX_LLM_PROVIDER') : 'openai'),
+  ),
 }));
 
+// B0-903 — the real resolver, wrapped so the default-deps tests can assert the signals call goes
+// THROUGH it without changing what it returns.
+vi.mock('~/lib/llm/resolve-model', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('~/lib/llm/resolve-model')>();
+  return { ...actual, resolveModel: vi.fn(actual.resolveModel) };
+});
+
+import { resolveModel } from '~/lib/llm/resolve-model';
 import {
   analyzeTurnSignals,
   buildSignalsInstructions,
@@ -87,6 +99,7 @@ function deps(overrides: Partial<AnalyzeTurnSignalsDeps> = {}): AnalyzeTurnSigna
 beforeEach(() => {
   resetTurnSignalsCache();
   completeStructuredMock.mockReset();
+  vi.mocked(resolveModel).mockClear();
   settingOverrides.clear();
   settingOverrides.set('BEX_SIGNALS_ANALYSIS_ENABLED', true);
 });
@@ -352,7 +365,10 @@ describe('adapters', () => {
       otherCompetitorProduct: 'Virex II 256',
       usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0, cachedPromptTokens: 0 },
       resolved: true,
+      // B0-904 — the signals call's model is the extraction model on this path.
+      model: signals.model,
     });
+    expect(signals.model).not.toBeNull();
   });
 
   it('competitorIdentityFromSignals falls back to the raw message with resolved=false (B0-779)', () => {
@@ -417,6 +433,36 @@ describe('analyzeTurnSignals — B0-908 provider-neutral call (default deps)', (
     expect(out.source).toBe('llm');
     expect(out.model).toBe('claude-sonnet-5');
     expect(out.usage).toEqual(USAGE);
+  });
+
+  it('B0-903 — resolves the BEX_ROUTER_MODEL tag through resolveModel, and the claude tag from the row reaches the seam', async () => {
+    settingOverrides.set('BEX_ROUTER_MODEL', 'claude-haiku-4-5');
+    completeStructuredMock.mockResolvedValue({
+      text: JSON.stringify({ ...LLM_SIGNALS, betcoProduct: null }),
+      usage: USAGE,
+    });
+
+    const out = await analyzeTurnSignals('strip and recoat this VCT floor', []);
+
+    expect(resolveModel).toHaveBeenCalledWith('claude-haiku-4-5');
+    expect((completeStructuredMock.mock.calls[0]?.[0] as { model: string }).model).toBe('claude-haiku-4-5');
+    expect(out.model).toBe('claude-haiku-4-5');
+  });
+
+  it('B0-903 — a `preview` router tag follows the BEX_LLM_PROVIDER per-vendor default row', async () => {
+    settingOverrides.set('BEX_ROUTER_MODEL', 'preview');
+    settingOverrides.set('BEX_LLM_PROVIDER', 'anthropic');
+    settingOverrides.set('BEX_ANTHROPIC_MODEL', 'claude-opus-5');
+    completeStructuredMock.mockResolvedValue({
+      text: JSON.stringify({ ...LLM_SIGNALS, betcoProduct: null }),
+      usage: USAGE,
+    });
+
+    const out = await analyzeTurnSignals('strip and recoat this VCT floor', []);
+
+    expect(resolveModel).toHaveBeenCalledWith('preview');
+    expect((completeStructuredMock.mock.calls[0]?.[0] as { model: string }).model).toBe('claude-opus-5');
+    expect(out.model).toBe('claude-opus-5');
   });
 });
 

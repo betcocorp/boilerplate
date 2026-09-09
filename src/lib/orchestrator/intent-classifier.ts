@@ -5,8 +5,8 @@ import { z } from 'zod';
 import { SME_AGENT_IDS, V1_AGENT_REGISTRY } from '~/lib/agents/agent-registry';
 import { logError } from '~/lib/observability/logger';
 import { isBexModelTag, type BexModelTag } from '~/lib/constants/models';
+import { resolveModel } from '~/lib/llm/resolve-model';
 import { completeStructuredWithUsage, type PriorMessage } from '~/lib/llm/structured-completion';
-import { resolveResponsesModel } from '~/lib/openai/client';
 import {
   getBooleanSetting,
   getNumberSetting,
@@ -280,9 +280,9 @@ export function classifierPriorMessages(priorMessages: PriorTurnMessage[]): Prio
 
 /**
  * B0-786 — a `BEX_MODEL_TAGS` TAG, not a raw OpenAI model id: `resolveRouterModel` puts it through
- * `resolveResponsesModel` exactly like `REPORT_GRADING_MODEL` does, so the router picks up the same
- * env-override/alias layer every other model selection goes through (and so its resolved id keeps
- * matching a `public.model_pricing` row for the B0-565 cost views).
+ * `resolveModel` (`~/lib/llm/resolve-model`, B0-903) exactly like `REPORT_GRADING_MODEL` does, so
+ * the router picks up the same env-override/alias layer every other model selection goes through
+ * (and so its resolved id keeps matching a `public.model_pricing` row for the B0-565 cost views).
  *
  * The default moved from `gpt-4o-mini` to `gpt-4.1` (product owner, 2026-09-01): ~5x the input and
  * ~13x the output rate, on a per-turn call, bought for routing/signal accuracy.
@@ -318,9 +318,13 @@ export async function resolveRouterModelTag(): Promise<BexModelTag> {
   return isBexModelTag(raw) ? raw : DEFAULT_BEX_ROUTER_MODEL_TAG;
 }
 
-/** Which concrete model id `classifyUserIntent` calls: the settings tag through `resolveResponsesModel`. */
+/**
+ * Which concrete model id `classifyUserIntent` calls: the settings tag through `resolveModel`
+ * (B0-903). An explicit tag resolves exactly as before (`BEX_MODEL_*` env pins, `claude-*`
+ * passthrough); the `preview` tag follows the `BEX_LLM_PROVIDER` row's per-vendor default.
+ */
 export async function resolveRouterModel(): Promise<string> {
-  return resolveResponsesModel(await resolveRouterModelTag());
+  return resolveModel(await resolveRouterModelTag());
 }
 
 /** Router call latency ceiling in ms. Invalid/absent/non-positive → `DEFAULT_BEX_ROUTER_TIMEOUT_MS`. */
@@ -579,7 +583,7 @@ async function runLlmClassification(
  *
  * B0-671 — the optional `model` param overrides `resolveRouterModel()` for this call only (used by
  * the routing-test workbench to compare LLM router accuracy across models). It is a resolved model
- * id (e.g. what `resolveResponsesModel` returns for a `BexModelTag`), NOT a tag itself — this
+ * id (e.g. what `resolveModel` returns for a `BexModelTag`), NOT a tag itself — this
  * function does no tag resolution. Every existing caller omits it and sees byte-for-byte the same
  * behavior as before this parameter existed.
  */

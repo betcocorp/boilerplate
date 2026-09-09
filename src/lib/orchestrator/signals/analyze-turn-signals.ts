@@ -539,5 +539,8 @@ export function competitorIdentityFromSignals(
     otherCompetitorProduct: (signals.otherCompetitorProduct ?? '').trim() || null,
     usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0, cachedPromptTokens: 0 },
     resolved: Boolean(product),
+    // B0-904 — the signals call IS the extraction on this path, so its (router) model is the ground
+    // truth for the `competitor_identity_resolution` gate; null on a degraded (keyword) turn.
+    model: signals.model,
   };
 }
