@@ -1,5 +1,5 @@
 import { MockLanguageModelV3, simulateReadableStream } from 'ai/test';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ToolTraceEntry } from '~/lib/audit/trace';
 import type { Tool as OpenAiTool } from 'openai/resources/responses/responses';
@@ -10,6 +10,23 @@ const modelRef = vi.hoisted(() => ({ current: null as MockLanguageModelV3 | null
 vi.mock('~/lib/bex/ai-sdk-adapters', () => ({
   resolveAiSdkLanguageModel: () => modelRef.current,
 }));
+
+/**
+ * B0-913 — the Anthropic path reads the `BEX_GENERATION_EFFORT` row. Mocked so no test touches
+ * Supabase and the default stays the `provider_default` sentinel (send nothing) unless a case
+ * overrides it.
+ */
+const { mockGetStringSetting } = vi.hoisted(() => ({
+  mockGetStringSetting: vi.fn(async (_key: string, fallback: string) => fallback),
+}));
+vi.mock('~/lib/settings/settings-service', () => ({
+  getStringSetting: mockGetStringSetting,
+}));
+
+beforeEach(() => {
+  mockGetStringSetting.mockReset();
+  mockGetStringSetting.mockImplementation(async (_key: string, fallback: string) => fallback);
+});
 
 import { runAiSdkWithToolLoop } from '~/lib/bex/ai-sdk-runtime';
 import {
@@ -716,8 +733,9 @@ describe('provider-aware request options (B0-908)', () => {
     expect(params.temperature).toBeUndefined();
     expect(params.topP).toBeUndefined();
     expect(params.topK).toBeUndefined();
-    // B0-900 — the only Anthropic provider option ever sent is the cache breakpoint; in particular
-    // no `thinking`, `effort` or sampling control rides along with it.
+    // B0-900 / B0-913 — with BEX_GENERATION_EFFORT at its `provider_default` sentinel the only
+    // request-level Anthropic provider option is the automatic cache breakpoint; in particular no
+    // `thinking`, `effort` or sampling control rides along with it.
     expect(params.providerOptions?.anthropic).toEqual({ cacheControl: { type: 'ephemeral' } });
     // History replay is provider-independent and byte-identical to the OpenAI path.
     expect(params.prompt.filter((message) => message.role === 'user')).toHaveLength(2);
@@ -762,6 +780,230 @@ describe('provider-aware request options (B0-908)', () => {
     });
 
     expect(seen[0].providerOptions).toBeUndefined();
+    // No caching → the instructions go as a plain system message with no breakpoint.
+    const system = seen[0].prompt.find((message) => message.role === 'system');
+    expect(system?.providerOptions).toBeUndefined();
+  });
+
+  /**
+   * B0-913 — the explicit, NON-TERMINAL cache breakpoint. Anthropic renders `tools` → `system` →
+   * `messages`, so `cache_control` on the system text block ends the cacheable prefix after the two
+   * parts that are constant for a route, which is what makes the cache readable across turns and
+   * eval items rather than only across steps within one turn.
+   */
+  it('places an explicit 1h cache breakpoint on the system message for a claude-* model', async () => {
+    const seen: DoStreamParams[] = [];
+    modelRef.current = capturingModel('claude-opus-5', seen);
+
+    await runAiSdkWithToolLoop({
+      modelTag: 'claude-opus-5',
+      instructions: 'You are Bex.',
+      history: [],
+      userMessage: 'hi',
+      promptCacheKey: 'bex:v1',
+      executeTool: noopExecuteTool,
+    });
+
+    const prompt = seen[0].prompt;
+    expect(prompt[0]?.role).toBe('system');
+    expect(prompt[0]?.content).toBe('You are Bex.');
+    expect(prompt[0]?.providerOptions).toEqual({
+      anthropic: { cacheControl: { type: 'ephemeral', ttl: '1h' } },
+    });
+    // ...alongside, not instead of, the request-level automatic breakpoint that covers the
+    // growing per-step tail. Two of Anthropic's four allowed breakpoints.
+    expect(seen[0].providerOptions).toEqual({
+      anthropic: { cacheControl: { type: 'ephemeral' } },
+    });
+  });
+
+  /**
+   * B0-913 — the breakpoint has to survive `prepareStep`, which rewrites `messages` on the
+   * exhaustion/withdrawal paths. `system` is a separate top-level option, so every step of the loop
+   * re-sends the same marked prefix — that is what makes the prefix readable rather than rewritten.
+   */
+  it('keeps the system breakpoint on every step of a multi-step run', async () => {
+    const seen: DoStreamParams[] = [];
+    let call = 0;
+    modelRef.current = new MockLanguageModelV3({
+      modelId: 'claude-opus-5',
+      doStream: async (params) => {
+        seen.push(params);
+        call += 1;
+        if (call === 1) {
+          return {
+            stream: simulateReadableStream({
+              chunks: [
+                {
+                  type: 'tool-call',
+                  toolCallId: 't1',
+                  toolName: 'lookup_cross_reference',
+                  input: JSON.stringify({ brand: 'Spartan', productName: 'BNC-15' }),
+                },
+                {
+                  type: 'finish',
+                  finishReason: 'tool-calls',
+                  usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+                },
+              ] as const,
+            }),
+          };
+        }
+        return {
+          stream: simulateReadableStream({
+            chunks: [
+              { type: 'text-start', id: '0' },
+              { type: 'text-delta', id: '0', delta: 'ok' },
+              { type: 'text-end', id: '0' },
+              {
+                type: 'finish',
+                finishReason: 'stop',
+                usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+              },
+            ] as const,
+          }),
+        };
+      },
+    });
+
+    await runAiSdkWithToolLoop({
+      modelTag: 'claude-opus-5',
+      instructions: 'You are Bex.',
+      history: [],
+      userMessage: 'hi',
+      promptCacheKey: 'bex:v1',
+      executeTool: noopExecuteTool,
+    });
+
+    expect(seen.length).toBeGreaterThanOrEqual(2);
+    for (const params of seen) {
+      expect(params.prompt[0]?.role).toBe('system');
+      expect(params.prompt[0]?.providerOptions).toEqual({
+        anthropic: { cacheControl: { type: 'ephemeral', ttl: '1h' } },
+      });
+    }
+  });
+
+  it('leaves the OpenAI system message a plain string with no breakpoint', async () => {
+    const seen: DoStreamParams[] = [];
+    modelRef.current = capturingModel('gpt-4.1', seen);
+
+    await runAiSdkWithToolLoop({
+      modelTag: 'gpt-4.1',
+      instructions: 'You are Bex.',
+      history: [],
+      userMessage: 'hi',
+      promptCacheKey: 'bex:v1',
+      executeTool: noopExecuteTool,
+    });
+
+    const system = seen[0].prompt.find((message) => message.role === 'system');
+    expect(system?.content).toBe('You are Bex.');
+    expect(system?.providerOptions).toBeUndefined();
+  });
+
+  /**
+   * B0-913 — the settings-driven generation effort. `provider_default` (the seeded row value) must
+   * send nothing at all; an explicit level rides in `providerOptions.anthropic.effort`, which
+   * `@ai-sdk/anthropic` emits as `output_config.effort`.
+   */
+  it('sends no effort for a claude-* model while BEX_GENERATION_EFFORT is provider_default', async () => {
+    const seen: DoStreamParams[] = [];
+    modelRef.current = capturingModel('claude-opus-5', seen);
+
+    await runAiSdkWithToolLoop({
+      modelTag: 'claude-opus-5',
+      instructions: 'You are Bex.',
+      history: [],
+      userMessage: 'hi',
+      promptCacheKey: 'bex:v1',
+      executeTool: noopExecuteTool,
+    });
+
+    expect(seen[0].providerOptions?.anthropic).not.toHaveProperty('effort');
+  });
+
+  it('forwards an explicit BEX_GENERATION_EFFORT level to a claude-* model', async () => {
+    mockGetStringSetting.mockImplementation(async (key: string, fallback: string) =>
+      key === 'BEX_GENERATION_EFFORT' ? 'low' : fallback,
+    );
+    const seen: DoStreamParams[] = [];
+    modelRef.current = capturingModel('claude-opus-5', seen);
+
+    await runAiSdkWithToolLoop({
+      modelTag: 'claude-opus-5',
+      instructions: 'You are Bex.',
+      history: [],
+      userMessage: 'hi',
+      promptCacheKey: 'bex:v1',
+      executeTool: noopExecuteTool,
+    });
+
+    expect(seen[0].providerOptions).toEqual({
+      anthropic: { cacheControl: { type: 'ephemeral' }, effort: 'low' },
+    });
+  });
+
+  it('sends the effort with no caching option when the caller asks for no caching', async () => {
+    mockGetStringSetting.mockImplementation(async (key: string, fallback: string) =>
+      key === 'BEX_GENERATION_EFFORT' ? 'max' : fallback,
+    );
+    const seen: DoStreamParams[] = [];
+    modelRef.current = capturingModel('claude-opus-5', seen);
+
+    await runAiSdkWithToolLoop({
+      modelTag: 'claude-opus-5',
+      instructions: 'You are Bex.',
+      history: [],
+      userMessage: 'hi',
+      executeTool: noopExecuteTool,
+    });
+
+    expect(seen[0].providerOptions).toEqual({ anthropic: { effort: 'max' } });
+  });
+
+  /**
+   * `supportsAnthropicAdaptiveThinking` (~/lib/llm/structured-completion.ts) excludes Haiku-class
+   * and older Claude ids, which 400 on `output_config.effort`. The row is never even read for them.
+   */
+  it('never sends effort to a Claude model that rejects output_config.effort', async () => {
+    mockGetStringSetting.mockImplementation(async (key: string, fallback: string) =>
+      key === 'BEX_GENERATION_EFFORT' ? 'low' : fallback,
+    );
+    const seen: DoStreamParams[] = [];
+    modelRef.current = capturingModel('claude-haiku-4-5', seen);
+
+    await runAiSdkWithToolLoop({
+      modelTag: 'claude-haiku-4-5',
+      instructions: 'You are Bex.',
+      history: [],
+      userMessage: 'hi',
+      promptCacheKey: 'bex:v1',
+      executeTool: noopExecuteTool,
+    });
+
+    expect(seen[0].providerOptions).toEqual({
+      anthropic: { cacheControl: { type: 'ephemeral' } },
+    });
+  });
+
+  it('never sends effort to an OpenAI model even when the row names a level', async () => {
+    mockGetStringSetting.mockImplementation(async (key: string, fallback: string) =>
+      key === 'BEX_GENERATION_EFFORT' ? 'low' : fallback,
+    );
+    const seen: DoStreamParams[] = [];
+    modelRef.current = capturingModel('gpt-5.6', seen);
+
+    await runAiSdkWithToolLoop({
+      modelTag: 'gpt-5.6',
+      instructions: 'You are Bex.',
+      history: [],
+      userMessage: 'hi',
+      promptCacheKey: 'bex:v1',
+      executeTool: noopExecuteTool,
+    });
+
+    expect(seen[0].providerOptions).toEqual({ openai: { promptCacheKey: 'bex:v1' } });
   });
 
   it('keeps the OpenAI branch byte-identical: no anthropic providerOptions for a gpt model', async () => {
@@ -806,8 +1048,10 @@ describe('provider-aware request options (B0-908)', () => {
     expect(JSON.stringify(nonSystem[2]?.content)).toContain(PRIOR_TURN_TOOL_CONTEXT_HEADER);
     expect(JSON.stringify(nonSystem[2]?.content)).toContain('pH7Q Dual Label (US)');
     expect(JSON.stringify(nonSystem.at(-1)?.content)).toContain('And what dilution did that use?');
-    // The cache breakpoint is request-level: no per-message providerOptions are fabricated.
-    expect(JSON.stringify(seen[0].prompt)).not.toContain('cacheControl');
+    // B0-913 — the explicit breakpoint lives on the SYSTEM message only. No history or user
+    // message is given providerOptions, so the replayed conversation stays byte-identical to the
+    // OpenAI path (and to the pre-B0-913 Anthropic path).
+    expect(JSON.stringify(nonSystem)).not.toContain('cacheControl');
   });
 });
 

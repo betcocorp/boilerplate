@@ -1,4 +1,5 @@
 import { V1_AGENT_REGISTRY } from '~/lib/agents/agent-registry';
+import { nullableEnum } from '~/lib/llm/json-schema';
 import { completeStructuredWithUsage } from '~/lib/llm/structured-completion';
 import { logError } from '~/lib/observability/logger';
 import {
@@ -66,7 +67,7 @@ export async function isSignalsAnalysisEnabled(): Promise<boolean> {
   return getBooleanSetting('BEX_SIGNALS_ANALYSIS_ENABLED', DEFAULT_SIGNALS_ANALYSIS_ENABLED);
 }
 
-const SIGNALS_JSON_SCHEMA = {
+export const SIGNALS_JSON_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   properties: {
@@ -78,16 +79,16 @@ const SIGNALS_JSON_SCHEMA = {
     otherCompetitorProduct: { type: ['string', 'null'] },
     surfaceType: { type: ['string', 'null'] },
     taskDescription: { type: ['string', 'null'] },
-    brandFamily: { type: ['string', 'null'], enum: [...BRAND_FAMILIES, null] },
-    setting: { type: ['string', 'null'], enum: [...USE_SETTINGS, null] },
+    brandFamily: nullableEnum(BRAND_FAMILIES),
+    setting: nullableEnum(USE_SETTINGS),
     productCategory: { type: ['string', 'null'] },
     carriedProduct: { type: ['string', 'null'] },
-    suggestedTool: { type: ['string', 'null'], enum: [...PRODUCT_TOOL_NAMES, null] },
+    suggestedTool: nullableEnum(PRODUCT_TOOL_NAMES),
     crossReferenceIntent: { type: 'boolean' },
     competitorIsGenericChemistry: { type: 'boolean' },
     isConversionListAsk: { type: 'boolean' },
     answerShape: { type: 'string', enum: [...ANSWER_SHAPES] },
-    declineClass: { type: ['string', 'null'], enum: [...DECLINE_CLASSES, null] },
+    declineClass: nullableEnum(DECLINE_CLASSES),
     regulatedSectionIntent: { type: 'boolean' },
   },
   // `strict: true` requires EVERY property to be listed here — a field added above without a line

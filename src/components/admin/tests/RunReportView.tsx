@@ -14,6 +14,7 @@ import {
 } from 'react';
 
 import { version as appVersion } from '~/../package.json';
+import { DegradedRunBanner } from '~/components/admin/tests/DegradedRunBanner';
 import { ReportBreakdownCards } from '~/components/admin/tests/report/ReportBreakdownCards';
 import { ReportCaseLedger } from '~/components/admin/tests/report/ReportCaseLedger';
 import {
@@ -25,9 +26,11 @@ import { ReportTopFixes } from '~/components/admin/tests/report/ReportTopFixes';
 import { ReportVerdictStrip } from '~/components/admin/tests/report/ReportVerdictStrip';
 import { BexStreamdown } from '~/components/bex/BexStreamdown';
 import { Button } from '~/components/ui/button';
+import type { GenerationRuntime } from '~/lib/llm/generation-runtime';
 import type { ReportDataReady } from '~/lib/tests/report/data-schemas';
 import { isInvariantErrorMessage } from '~/lib/tests/report/invariants';
 import { caseAnchorId } from '~/lib/tests/report/render';
+import type { RunRoutingHealth } from '~/lib/tests/run-health';
 import { cn } from '~/lib/utils';
 
 /** Matches a UUID anywhere in a case's heading blockquote text (`**question**` + `` `id` ``). */
@@ -230,6 +233,18 @@ type RunReportViewProps = {
    */
   answeringModel?: string | null;
   answeringProvider?: string | null;
+  /**
+   * B0-912 — which generation loop served this run (`summary.generationRuntime`). Named beside the
+   * answering model in the methodology block, because the loop is not a free choice: an Anthropic
+   * model can only run on the AI SDK loop, so a vendor comparison is also a runtime comparison
+   * unless someone says otherwise. Null for a run predating the field.
+   */
+  answeringRuntime?: GenerationRuntime | null;
+  /**
+   * B0-911 — this run's routing-pipeline health. When degraded, the banner renders ABOVE the
+   * verdict strip: a grade produced on a degraded run must not be readable without that context.
+   */
+  routingHealth?: RunRoutingHealth | null;
 };
 
 export function RunReportView({
@@ -249,6 +264,8 @@ export function RunReportView({
   isGolden,
   answeringModel = null,
   answeringProvider = null,
+  answeringRuntime = null,
+  routingHealth = null,
 }: RunReportViewProps) {
   const [status, setStatus] = useState<ReportStatus>(initialStatus);
   const [totalCases, setTotalCases] = useState(initialTotalCases);
@@ -697,6 +714,9 @@ export function RunReportView({
             .report-pdf-capture [data-report-section]:first-of-type { break-before: auto; page-break-before: auto; }
           `}</style>
 
+          {/* B0-911 — first, and above the grade, by design. */}
+          <DegradedRunBanner health={routingHealth} />
+
           <ReportVerdictStrip
             cases={reportData.cases}
             metrics={reportData.metrics}
@@ -742,6 +762,7 @@ export function RunReportView({
             <ReportMethodology
               answeringModel={answeringModel}
               answeringProvider={answeringProvider}
+              answeringRuntime={answeringRuntime}
               config={reportData.config}
               passMark={reportData.metrics.passMark}
               // B0-835 — the concept rules this report's numbers were derived under.

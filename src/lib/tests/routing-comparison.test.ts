@@ -20,6 +20,7 @@ import {
   computeSemanticRoutingAccuracyByRoute,
   computeSemanticRoutingReport,
   computeThreeWayAgreement,
+  describeRoutingFallback,
   normalizeKeywordRoute,
   resolveIntendedAgentLabel,
   type RoutingComparisonReportInput,
@@ -75,6 +76,8 @@ describe('buildRoutingComparisonFields', () => {
       intended_agent_label: 'dilution',
       keyword_route_latency_ms: null,
       llm_route_latency_ms: null,
+      // B0-911 — always written, null when neither routing pass fell back.
+      routing_fallback_reason: null,
     });
   });
 
@@ -823,5 +826,75 @@ describe('computeSemanticRoutingReport', () => {
     expect(report.falsePositives.falsePositiveRate).toBeCloseTo(0.5);
     expect(report.fallback.fallbackRate).toBe(0);
     expect(report.latency.scoring.p95Ms).toBe(5);
+  });
+});
+
+describe('describeRoutingFallback (B0-911)', () => {
+  const llmOk = { source: 'llm' as const, fallbackReason: null };
+
+  it('returns null when neither pass fell back — the happy path stores nothing', () => {
+    expect(describeRoutingFallback({ signals: llmOk, llmRouter: llmOk })).toBeNull();
+    expect(describeRoutingFallback({})).toBeNull();
+  });
+
+  it('names the LLM router pass and keeps the provider error verbatim', () => {
+    const reason = '400 {"error":{"message":"model claude-opus-5 not found"}}';
+    expect(
+      describeRoutingFallback({
+        signals: llmOk,
+        llmRouter: { source: 'keyword_fallback', fallbackReason: reason },
+      }),
+    ).toBe(`llm_router: ${reason}`);
+  });
+
+  it('prefers the live signals pass when both fell back', () => {
+    expect(
+      describeRoutingFallback({
+        signals: { source: 'keyword_fallback', fallbackReason: 'signals timeout' },
+        llmRouter: { source: 'keyword_fallback', fallbackReason: 'router timeout' },
+      }),
+    ).toBe('signals: signals timeout');
+  });
+
+  it('still records the fact of a fallback when the reason is missing or blank', () => {
+    expect(
+      describeRoutingFallback({
+        llmRouter: { source: 'keyword_fallback', fallbackReason: null },
+      }),
+    ).toBe('llm_router: unknown reason');
+    expect(
+      describeRoutingFallback({
+        signals: { source: 'keyword_fallback', fallbackReason: '  ' },
+      }),
+    ).toBe('signals: unknown reason');
+  });
+
+  it('records the disabled-flag fallback too — a keyword-routed run is degraded either way', () => {
+    expect(
+      describeRoutingFallback({
+        llmRouter: { source: 'keyword_fallback', fallbackReason: 'llm_router_disabled' },
+      }),
+    ).toBe('llm_router: llm_router_disabled');
+  });
+});
+
+describe('buildRoutingComparisonFields — routing_fallback_reason (B0-911)', () => {
+  const base = {
+    keywordDecision: { agent: 'bathroom' as const },
+    llmClassification: { intent: 'bathroom' as const, confidence: 0.91 },
+    intendedAgentLabel: 'bathroom',
+  };
+
+  it('is null on the happy path, so a healthy item is a positive record', () => {
+    expect(buildRoutingComparisonFields(base).routing_fallback_reason).toBeNull();
+  });
+
+  it('carries the reason through when one was resolved', () => {
+    expect(
+      buildRoutingComparisonFields({
+        ...base,
+        routingFallbackReason: 'llm_router: 400 bad request',
+      }).routing_fallback_reason,
+    ).toBe('llm_router: 400 bad request');
   });
 });

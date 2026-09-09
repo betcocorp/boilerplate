@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { SME_AGENT_IDS, V1_AGENT_REGISTRY } from '~/lib/agents/agent-registry';
 import { logError } from '~/lib/observability/logger';
 import { isBexModelTag, type BexModelTag } from '~/lib/constants/models';
+import { nullableEnum } from '~/lib/llm/json-schema';
 import { resolveModel } from '~/lib/llm/resolve-model';
 import { completeStructuredWithUsage, type PriorMessage } from '~/lib/llm/structured-completion';
 import {
@@ -106,7 +107,10 @@ export const intentEntitiesSchema = z.object({
 
 export type IntentEntities = z.infer<typeof intentEntitiesSchema>;
 
-/** The raw shape the LLM is constrained to emit (see `JSON_SCHEMA` below); no `source` tag yet. */
+/**
+ * The raw shape the LLM is constrained to emit (see `INTENT_CLASSIFICATION_JSON_SCHEMA` below); no
+ * `source` tag yet.
+ */
 const llmIntentClassificationSchema = z.object({
   intent: z.enum(INTENT_VALUES),
   confidence: z.number().min(0).max(1),
@@ -150,7 +154,7 @@ export const intentClassificationSchema = llmIntentClassificationSchema.extend({
 
 export type IntentClassification = z.infer<typeof intentClassificationSchema>;
 
-const JSON_SCHEMA = {
+export const INTENT_CLASSIFICATION_JSON_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   properties: {
@@ -165,8 +169,8 @@ const JSON_SCHEMA = {
         competitorProduct: { type: ['string', 'null'] },
         surfaceType: { type: ['string', 'null'] },
         taskDescription: { type: ['string', 'null'] },
-        brandFamily: { type: ['string', 'null'], enum: [...BRAND_FAMILIES, null] },
-        setting: { type: ['string', 'null'], enum: [...USE_SETTINGS, null] },
+        brandFamily: nullableEnum(BRAND_FAMILIES),
+        setting: nullableEnum(USE_SETTINGS),
         productCategory: { type: ['string', 'null'] },
         carriedProduct: { type: ['string', 'null'] },
       },
@@ -184,7 +188,7 @@ const JSON_SCHEMA = {
         'carriedProduct',
       ],
     },
-    suggestedTool: { type: ['string', 'null'], enum: [...PRODUCT_TOOL_NAMES, null] },
+    suggestedTool: nullableEnum(PRODUCT_TOOL_NAMES),
   },
   required: ['intent', 'confidence', 'entities', 'suggestedTool'],
 } as const;
@@ -468,7 +472,7 @@ async function defaultRunLlm(
     priorMessages: classifierPriorMessages(priorMessages),
     user: message,
     schemaName: 'intent_classification',
-    schema: JSON_SCHEMA,
+    schema: INTENT_CLASSIFICATION_JSON_SCHEMA,
     maxOutputTokens: INTENT_CLASSIFIER_MAX_OUTPUT_TOKENS,
     temperature: 0,
     // maxRetries 0: the SDK's default 2 retries back off ~0.5s+ then replay the full ~1.2-1.9s

@@ -1,6 +1,10 @@
 import { after } from 'next/server';
 
 import { modelProviderFor } from '~/lib/constants/models';
+import {
+  isGenerationRuntime,
+  selectGenerationRuntime,
+} from '~/lib/llm/generation-runtime';
 import { resolveModel } from '~/lib/llm/resolve-model';
 import { logWarn } from '~/lib/observability/logger';
 import { classifyUserIntent, type IntentClassification } from '~/lib/orchestrator/intent-classifier';
@@ -9,6 +13,7 @@ import {
   type SemanticRouteDecision,
 } from '~/lib/orchestrator/semantic-router';
 import { routeUserMessageToSme, type SmeRouteDecision } from '~/lib/orchestrator/sme-routing';
+import { getBooleanSetting } from '~/lib/settings/settings-service';
 
 import {
   getExistingResultItemIds,
@@ -16,6 +21,7 @@ import {
   getTestItemsByTestId,
   getTestResultById,
   insertTestResultItems,
+  listOrchestrationPlannerStepOutputsByWorkflowRunIds,
   sumResultItemsElapsedMsByResultId,
   updateTestRecord,
   updateTestResult,
@@ -29,11 +35,13 @@ import { generateAndSaveRunInsights } from './run-insights';
 import { runRunComparisonAnalysis, startRunComparison } from './run-comparison';
 import {
   buildRoutingComparisonFields,
+  describeRoutingFallback,
   normalizeKeywordRoute,
   resolveIntendedAgentLabel,
   type RoutingComparisonFields,
   type SemanticRouteInstrumentation,
 } from './routing-comparison';
+import { parseSignalsAnalysisGate } from './signal-accuracy';
 import { isTerminalRunStatus } from './types';
 import type { NewTestResultItemRecord, TestItemRecord, TestRecord } from './types';
 
@@ -73,6 +81,12 @@ import type { NewTestResultItemRecord, TestItemRecord, TestRecord } from './type
 async function computeRoutingComparisonForItem(
   item: TestItemRecord,
   test: TestRecord,
+  /**
+   * B0-911 — this item's `workflow_run_id`, so the LIVE `signals_analysis` gate can be read for the
+   * fallback reason. `null` when the item errored before a workflow run existed; the router
+   * instrumentation reason below then stands alone.
+   */
+  workflowRunId: string | null,
 ): Promise<RoutingComparisonFields> {
   const intendedAgentLabel = resolveIntendedAgentLabel({
     itemIntendedAgent: item.intended_agent_item,
@@ -83,18 +97,33 @@ async function computeRoutingComparisonForItem(
   const keywordDecision: SmeRouteDecision = routeUserMessageToSme(item.prompt);
   const keywordRouteLatencyMs = Math.round(performance.now() - keywordStartedAt);
 
-  let llmClassification: Pick<IntentClassification, 'intent' | 'confidence'>;
+  /**
+   * B0-911 — the classification is kept WHOLE (not narrowed to `intent`/`confidence` as it was)
+   * because `source`/`fallbackReason` are the point: `classifyUserIntent` never throws, so a
+   * provider outage arrives as an ordinary-looking result whose only tell is
+   * `source: 'keyword_fallback'`. Read at the call site by design — the classifier module itself is
+   * unchanged.
+   */
+  let llmClassification: Pick<
+    IntentClassification,
+    'intent' | 'confidence' | 'source' | 'fallbackReason'
+  >;
   const llmStartedAt = performance.now();
   try {
     llmClassification = await classifyUserIntent(item.prompt, []);
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
     logWarn('test_run_dual_router_llm_classification_failed', {
       testItemId: item.id,
-      message: error instanceof Error ? error.message : String(error),
+      message,
     });
     llmClassification = {
       intent: normalizeKeywordRoute(keywordDecision),
       confidence: keywordDecision.agent ? 0.5 : 0,
+      // This stand-in IS a fallback, and a contract-breaking throw is the most serious kind — so it
+      // is recorded as one rather than passed off as a clean classification.
+      source: 'keyword_fallback',
+      fallbackReason: `classifyUserIntent threw: ${message}`,
     };
   }
   // B0-524 — measured even on the fallback path above: a fast keyword-fallback is still a real,
@@ -135,6 +164,21 @@ async function computeRoutingComparisonForItem(
     });
   }
 
+  /**
+   * B0-911 — the LIVE half of the fallback record: `analyzeTurnSignals` is what actually routed the
+   * answer this item was graded on, and it degrades the same silent way the classifier does. Its
+   * `source`/`fallbackReason` are already persisted on the `signals_analysis` gate of the
+   * `orchestration_planner` step (B0-786), so they are READ here rather than recomputed — no second
+   * model call, and no edit to `analyze-turn-signals.ts`.
+   *
+   * Best-effort by design: a failure to read the gate must never take down a run that just
+   * answered successfully, and `null` simply means "the live pass could not be inspected", which
+   * leaves the router-instrumentation reason as the record.
+   */
+  const signalsClassification = workflowRunId
+    ? await readSignalsFallbackForWorkflowRun(workflowRunId, item.id)
+    : null;
+
   return buildRoutingComparisonFields({
     keywordDecision,
     llmClassification,
@@ -142,7 +186,37 @@ async function computeRoutingComparisonForItem(
     keywordRouteLatencyMs,
     llmRouteLatencyMs,
     semanticDecision,
+    routingFallbackReason: describeRoutingFallback({
+      signals: signalsClassification,
+      llmRouter: llmClassification,
+    }),
   });
+}
+
+/**
+ * B0-911 — `source` + `fallbackReason` off this item's persisted `signals_analysis` gate, or `null`
+ * when there is no gate to read (a run that took a non-signals path, a step row not yet written, or
+ * a read failure). Never throws.
+ */
+async function readSignalsFallbackForWorkflowRun(
+  workflowRunId: string,
+  testItemId: string,
+): Promise<Pick<IntentClassification, 'source' | 'fallbackReason'> | null> {
+  try {
+    const rows = await listOrchestrationPlannerStepOutputsByWorkflowRunIds([workflowRunId]);
+    const signals = parseSignalsAnalysisGate(rows[0]?.output);
+    if (!signals) {
+      return null;
+    }
+    return { source: signals.source, fallbackReason: signals.fallbackReason };
+  } catch (error) {
+    logWarn('test_run_signals_fallback_read_failed', {
+      testItemId,
+      workflowRunId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
 }
 
 function asSummaryObject(value: unknown): Record<string, unknown> {
@@ -210,6 +284,28 @@ export async function executeTestRun(testResultId: string) {
    */
   const resolvedProvider = modelProviderFor(resolvedModel);
 
+  /**
+   * B0-912 — WHICH GENERATION LOOP served this run. On 2026-09-08 a paired OpenAI-vs-Anthropic
+   * comparison was read as a vendor verdict, when the Anthropic arm had in fact run on the AI SDK
+   * `streamText` loop (forced: the OpenAI Responses loop rejects a `claude-*` id by design) and the
+   * OpenAI arm on the canonical Responses loop (`BEX_AI_SDK_GENERATION_ENABLED` defaults false) —
+   * two different runtimes, and no report said so.
+   *
+   * Persisted in `summary`, the SAME jsonb blob (and the same write) that already carries
+   * `resolvedModel`/`resolvedProvider` (B0-757/B0-905), rather than `run_options`: `run_options` is
+   * written by `runTestAction` when the row is created and is immutable by design, but a queued run
+   * can execute much later, and the runtime depends on a settings row that may move in between —
+   * writing it there would record an intention, not a fact. Resolved through the very same
+   * `selectGenerationRuntime` seam the workflow uses per turn, so the label cannot disagree with
+   * the loop that ran. Preserved across a resume for the same reason `resolvedModel` is.
+   */
+  const generationRuntime =
+    (isGenerationRuntime(currentSummary.generationRuntime) && currentSummary.generationRuntime) ||
+    selectGenerationRuntime({
+      model: resolvedModel,
+      aiSdkGenerationSetting: await getBooleanSetting('BEX_AI_SDK_GENERATION_ENABLED', false),
+    });
+
   await updateTestResult(testResult.id, {
     status: 'running',
     elapsed_ms: itemElapsedSumMs,
@@ -223,6 +319,7 @@ export async function executeTestRun(testResultId: string) {
       elapsed_accumulated_ms: itemElapsedSumMs,
       resolvedModel,
       resolvedProvider,
+      generationRuntime,
     },
   });
 
@@ -292,7 +389,11 @@ export async function executeTestRun(testResultId: string) {
     // B0-501 — dual-router instrumentation, independent of the answer `runSingleTestItem` already
     // produced above: never changes `itemResult.item`'s pass/fail or response fields, only adds the
     // B0-500 comparison columns before the single insert below.
-    const routingComparisonFields = await computeRoutingComparisonForItem(item, test);
+    const routingComparisonFields = await computeRoutingComparisonForItem(
+      item,
+      test,
+      itemResult.item.workflow_run_id ?? null,
+    );
     const itemToInsert: NewTestResultItemRecord = {
       ...itemResult.item,
       ...routingComparisonFields,

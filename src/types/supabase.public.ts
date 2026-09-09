@@ -1253,6 +1253,7 @@ export type Database = {
           routing_agreement: string | null
           routing_confidence: number | null
           routing_decision: string | null
+          routing_fallback_reason: string | null
           row_index: number
           semantic_confidence: number | null
           semantic_embedding_ms: number | null
@@ -1290,6 +1291,7 @@ export type Database = {
           routing_agreement?: string | null
           routing_confidence?: number | null
           routing_decision?: string | null
+          routing_fallback_reason?: string | null
           row_index: number
           semantic_confidence?: number | null
           semantic_embedding_ms?: number | null
@@ -1327,6 +1329,7 @@ export type Database = {
           routing_agreement?: string | null
           routing_confidence?: number | null
           routing_decision?: string | null
+          routing_fallback_reason?: string | null
           row_index?: number
           semantic_confidence?: number | null
           semantic_embedding_ms?: number | null

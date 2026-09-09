@@ -4,6 +4,7 @@ import { connection } from 'next/server';
 
 import { AdminTestsActionToast } from '~/components/admin/tests/AdminTestsActionToast';
 import { AliasResolutionPanel } from '~/components/admin/tests/AliasResolutionPanel';
+import { DegradedRunBanner } from '~/components/admin/tests/DegradedRunBanner';
 import { AppVersionBadge } from '~/components/admin/tests/AppVersionBadge';
 import { MultiTurnRunPanel } from '~/components/admin/tests/MultiTurnRunPanel';
 import { PromptBundleVersionBadge } from '~/components/admin/tests/PromptBundleVersionBadge';
@@ -66,6 +67,7 @@ import {
 } from '~/lib/tests/repository';
 import {
   extractAgentStepModel,
+  extractGenerationRuntimeFromSummary,
   extractItemConfidenceProvenance,
   extractItemSimilarityScore,
   extractItemValidatorConfidence,
@@ -89,6 +91,7 @@ import {
   type RoutingComparisonReportInput,
 } from '~/lib/tests/routing-comparison';
 import { parseTestRunConfig } from '~/lib/tests/run-config';
+import { computeRunRoutingHealth } from '~/lib/tests/run-health';
 import {
   computeSignalAccuracyReport,
   extractExpectedGroundTruthString,
@@ -482,6 +485,18 @@ export default async function AdminTestRunDetailsPage({
     resultItems.map((row) => row.routing_confidence),
   );
 
+  /**
+   * B0-911 — degraded-pipeline verdict for this run. Reduced from the rows already in memory
+   * (`select('*')` above) rather than calling `listRoutingHealthRowsByResultId`, which exists for
+   * the report/exec pages that load no items at all.
+   */
+  const routingHealth = computeRunRoutingHealth(
+    resultItems.map((row) => ({
+      routingConfidence: row.routing_confidence,
+      routingFallbackReason: row.routing_fallback_reason,
+    })),
+  );
+
   const itemLevelCsvRows = chronologicalItems.map((row) => {
     const expectedRaw = expectedShouldAnswerByItemId.get(row.test_item_id);
     const expectedForCell: boolean | null =
@@ -598,6 +613,8 @@ export default async function AdminTestRunDetailsPage({
     <div className="flex flex-1 bg-slate-50">
       <AdminTestsActionToast error={error} success={success} />
       <main className="flex w-full flex-1 flex-col gap-8 px-6 py-10 sm:px-8">
+        {/* B0-911 — first thing on the page, before any number this run produced. */}
+        <DegradedRunBanner health={routingHealth} />
         <TestRunNotesProvider
           initialNotes={result.notes}
           runId={result.id}
@@ -624,6 +641,9 @@ export default async function AdminTestRunDetailsPage({
                     summary={promptBundleVersionSummary}
                   />
                   <RuntimeConfigBadge
+                    // B0-912 — the run-level loop, so a claude-* run reads as the AI SDK loop and a
+                    // gpt-* run with the flag off reads as the Responses loop.
+                    generationRuntime={extractGenerationRuntimeFromSummary(result.summary)}
                     runConfig={runConfigForRun}
                     runtimeConfig={runtimeConfigForRun}
                   />

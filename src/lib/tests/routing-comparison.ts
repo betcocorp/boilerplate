@@ -145,7 +145,52 @@ export type RoutingComparisonFields = {
   semantic_embedding_ms?: number | null;
   semantic_scoring_ms?: number | null;
   routing_agreement?: RoutingAgreement | null;
+  /**
+   * B0-911 — WHY this item's routing pipeline degraded, or `null` on the happy path. Always
+   * written (never omitted), because "no fallback" is a real, positive fact worth recording on a
+   * row that has the rest of the routing instrumentation: `routing_confidence is not null and
+   * routing_fallback_reason is null` is how a healthy item is told apart from a pre-B0-911 row.
+   */
+  routing_fallback_reason?: string | null;
 };
+
+/**
+ * B0-911 — composes the persisted `routing_fallback_reason` from the two passes that can silently
+ * degrade a turn's routing. Both `classifyUserIntent` and `analyzeTurnSignals` are contracted never
+ * to throw: on any provider failure they log, return `source: 'keyword_fallback'`, and carry the
+ * reason (the full provider error body, e.g. a 400) on `fallbackReason`. Nothing read that, so a
+ * run could 400 on every item and still report a letter grade (the 2026-09-08 vendor comparison).
+ *
+ * The pass is named in the stored string because the two are different facts: `signals` is the LIVE
+ * pass on the answer path (it decided how the item was actually answered), while `llm_router` is
+ * the harness's own instrumentation call — the one `routing_confidence`/`llm_route` come from. When
+ * both fell back, `signals` wins: the live pass is the one that shaped the graded answer.
+ *
+ * Returns `null` when neither pass fell back, so the happy path stores nothing. A fallback with an
+ * empty/absent reason still returns a string — the fact that it fell back must survive even when
+ * the reason did not.
+ */
+export function describeRoutingFallback(params: {
+  /** The live `analyzeTurnSignals` result for this item's answer, when it could be read. */
+  signals?: Pick<IntentClassification, 'source' | 'fallbackReason'> | null;
+  /** The harness's own `classifyUserIntent` instrumentation result. */
+  llmRouter?: Pick<IntentClassification, 'source' | 'fallbackReason'> | null;
+}): string | null {
+  const passes: ReadonlyArray<[string, Pick<IntentClassification, 'source' | 'fallbackReason'> | null | undefined]> = [
+    ['signals', params.signals],
+    ['llm_router', params.llmRouter],
+  ];
+
+  for (const [label, pass] of passes) {
+    if (!pass || pass.source !== 'keyword_fallback') {
+      continue;
+    }
+    const reason = pass.fallbackReason?.trim();
+    return `${label}: ${reason || 'unknown reason'}`;
+  }
+
+  return null;
+}
 
 /**
  * Builds the B0-501-computed `test_result_items` columns (`routing_decision` is not among
@@ -161,6 +206,12 @@ export function buildRoutingComparisonFields(params: {
   llmRouteLatencyMs?: number | null;
   /** B0-652 — omit (or pass null) when the semantic router was not consulted for this item. */
   semanticDecision?: SemanticRouteInstrumentation | null;
+  /**
+   * B0-911 — from `describeRoutingFallback`. Passed in rather than derived here so this reducer
+   * stays a pure field-builder and the call site keeps ownership of reading BOTH passes (the live
+   * signals gate is only reachable there, via the item's workflow run).
+   */
+  routingFallbackReason?: string | null;
 }): RoutingComparisonFields {
   const fields: RoutingComparisonFields = {
     keyword_route: normalizeKeywordRoute(params.keywordDecision),
@@ -169,6 +220,7 @@ export function buildRoutingComparisonFields(params: {
     intended_agent_label: params.intendedAgentLabel,
     keyword_route_latency_ms: params.keywordRouteLatencyMs ?? null,
     llm_route_latency_ms: params.llmRouteLatencyMs ?? null,
+    routing_fallback_reason: params.routingFallbackReason ?? null,
   };
 
   const semantic = params.semanticDecision;

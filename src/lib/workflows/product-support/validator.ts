@@ -426,6 +426,111 @@ const FIRST_AID_SENTENCE_PATTERN =
   /\bfirst aid\b|\bif swallowed\b|\bif inhaled\b|\bif in eyes\b|\bif on skin\b|\bpoison control\b/i;
 
 /**
+ * B0-915 — completes the B0-870 offer/pointer exclusion for `hazard` / `first_aid`. Three classes
+ * of Bex's OWN meta-commentary were still being classified as regulated claims; because prose Bex
+ * wrote about itself can never be verified verbatim against a retrieved label, every one of them
+ * escalated the guardrail to `redactionMode: decline` and replaced the whole answer with refusal
+ * copy. All four snippets below are live `ungroundedDetails` entries from five eval runs (the
+ * first-aid emergency case fired on BOTH answering vendors, so it is not model-specific):
+ *
+ *  1. OFFER to retrieve content -- "I can supply the current Push SDS content instead - hazard
+ *     identification (Section 2), first aid (Section 4), ...". B0-870's `META_OFFER_PATTERN` misses
+ *     it: the verb "supply" is not in its list, and the sentence is a MENU of SDS sections.
+ *  2. POINTER to the product's own label/SDS as the governing source -- "the governing PPE and
+ *     ventilation instructions are the product label's precautionary statements and SDS Section 8
+ *     ... follow those over any general guidance". This is the safest possible answer; the guardrail
+ *     declined it because "PPE" co-occurred with the words "precautionary statements".
+ *  3. GENERIC safety / training / emergency prose transcribing no label value -- "proper dilution,
+ *     PPE use, never mix chemicals, clear written SOPs" and "evacuate and ventilate the area, then
+ *     call Poison Control ... with the label and SDS in hand".
+ *
+ * Same spirit as B0-870: bare `hazard`/`warning`/`caution`/`ppe` plus a topic noun is vocabulary,
+ * not a transcribed statement. The exclusion is hard-gated by `carriesTranscribedLabelValue` --
+ * anything carrying an actual label value is never excluded, however much offer/pointer framing
+ * surrounds it. Detection only; verbatim matching itself is untouched.
+ */
+const RETRIEVAL_OFFER_PATTERN =
+  /\b(?:i|we)(?:'d| would| can| could| am able to| are able to| will)(?: be (?:happy|glad) to| also)? (?:supply|surface|offer|fetch|quote|read out|show|provide|share|pull(?: up)?|look up|retrieve|summari[sz]e|list|give|send)\b/i;
+/** Two or more "(Section N)" references in one sentence = an index of what could be fetched. */
+const SDS_SECTION_REFERENCE_PATTERN = /\bsections?\s*\d{1,2}\b/gi;
+/** Mentions the product's own label/SDS (or one of its sections) as a place content lives. */
+const LABEL_SOURCE_MENTION_PATTERN =
+  /\b(?:label|labels|labelled|labeled|sds|safety data sheet|section\s*\d{1,2})\b/i;
+/** Defers to that source rather than asserting a value ("governing ...", "follow those"). */
+const SOURCE_DEFERENCE_PATTERN =
+  /\b(?:refer to|see the|consult|check the|review the|read the|defer to|rely on|govern(?:s|ing|ed)?|takes? precedence|authoritative|final (?:word|authority|say)|source of truth|in hand|over any general guidance|always follow|follow (?:those|these|them|it|the label|the sds|your))\b/i;
+/** Generic safety/training prose ("Train for safety ... clear written SOPs"), not a label line. */
+const GENERIC_SAFETY_ADVICE_PATTERN =
+  /\b(?:train(?:s|ed|ing)?|sops?|standard operating procedures?|best practices?|good practice|general (?:guidance|rule|practice|safety|housekeeping)|as a general|written procedures?|policies|policy)\b/i;
+/** Generic emergency referral -- points at outside help, transcribes nothing off the label. */
+const EMERGENCY_REFERRAL_PATTERN =
+  /\b(?:poison control|poison cent(?:er|re)|emergency services|emergency responders|911|seek medical|medical attention|call (?:a|your) (?:physician|doctor))\b/i;
+/**
+ * The object that separates a real label precaution from generic safety advice: "Do not mix with
+ * chlorinated products" / "Keep away from heat, sparks and open flame" name a specific
+ * incompatibility or ignition source off the label, while "never mix chemicals" names nothing.
+ */
+const PRECAUTION_OBJECT_PATTERN =
+  /\b(?:chlorinat\w*|bleach|hypochlorite|ammonia|acids?|alkalis?|caustics?|oxidi[sz]\w*|peroxide|quats?|solvents?|heat|sparks?|open flame|flames?|ignition|reach of children|food|drink|eyes?|skin|clothing|drains?)\b/i;
+/**
+ * GHS tokens that carry (or immediately precede) a transcribed VALUE, as opposed to the bare
+ * category nouns in `GHS_CONTEXT_PATTERN` ("hazard statements", "precautionary statements", "GHS")
+ * which name a label section the way a table of contents does. Deliberately keeps "hazard
+ * class(es)"/"transport hazard" -- SDS section 14 lines are real transcriptions (B0-366).
+ */
+const GHS_VALUE_TOKEN_PATTERN =
+  /\b(?:signal word|pictogram|hazard class(?:es)?\b|transport hazard|h[23]\d{2}|p\d{3})\b/i;
+/**
+ * B0-915 review — a prescribed medical/treatment ACTION, which is regulated first-aid content even
+ * when it rides along with a generic referral. Without this, `EMERGENCY_REFERRAL_PATTERN` excluded
+ * the whole sentence on the words "Poison Control" alone, so "call Poison Control and administer
+ * 2 oz of activated charcoal" escaped a category that detected it before B0-915: the fabricated
+ * action names no exposure route, so `FIRST_AID_PROCEDURE_PATTERN` misses it, and "2 oz" with no
+ * "/gal" is not a dilution token either. Referral wording must never buy an unverified instruction.
+ */
+const TREATMENT_DIRECTIVE_PATTERN =
+  /\b(?:administer|activated charcoal|antidote|neutrali[sz]\w*|dosage|\bdose\b|ipecac|emetic|ointment|salve|antiseptic|epinephrine|atropine|inducing vomiting|do not induce)\b/i;
+/** Real SDS section 4 content: an exposure route or an actual first-aid procedure. */
+const FIRST_AID_PROCEDURE_PATTERN =
+  /\b(?:if swallowed|if inhaled|if in eyes|if on skin|in case of (?:contact|ingestion|inhalation|exposure)|after (?:contact|inhalation|ingestion)|rinse|rinsing|flush|irrigate|induce vomiting|remove contact lenses|give (?:water|milk|oxygen)|artificial respiration|fresh air|wash with (?:soap|water)|for (?:at least )?\d+\s*(?:minutes?|mins?)\b)/i;
+
+/**
+ * B0-915 — the hard gate on the offer/pointer/generic exclusion below. Returns true when the
+ * sentence carries something that IS transcribed regulated content: an explicit hazard statement
+ * ("corrosive", "causes severe skin burns", "DANGER"), a value-bearing GHS token (signal word,
+ * H/P-code, transport hazard class), a product-specific imperative precaution ("do not mix with
+ * chlorinated products") or a real first-aid route/procedure ("IF IN EYES: rinse cautiously ...").
+ * Any of those and the sentence stays a regulated claim requiring verbatim grounding.
+ */
+function carriesTranscribedLabelValue(sentence: string): boolean {
+  // Negated hazard adjectives are blanked first for the same reason as B0-870: "Non Corrosive" is
+  // part of a product name and "non-flammable" is a safe-direction property.
+  const text = sentence.replace(HAZARD_NEGATED_TRIGGER_PATTERN, ' ');
+  if (HAZARD_SENTENCE_PATTERN.test(text)) return true;
+  if (GHS_VALUE_TOKEN_PATTERN.test(text)) return true;
+  if (HAZARD_IMPERATIVE_PATTERN.test(text) && PRECAUTION_OBJECT_PATTERN.test(text)) return true;
+  if (TREATMENT_DIRECTIVE_PATTERN.test(text)) return true;
+  return FIRST_AID_PROCEDURE_PATTERN.test(text);
+}
+
+/**
+ * B0-915 — true when the sentence is Bex talking ABOUT label/SDS content rather than transcribing
+ * it: an offer to retrieve it, a menu of SDS sections, a pointer deferring to the product's own
+ * label/SDS, or generic safety/training/emergency prose. Gated by `carriesTranscribedLabelValue`,
+ * so a sentence carrying a real label value is never excluded. Applied to `hazard`/`first_aid`
+ * only -- the token categories and `compatibility`/`efficacy_claim` do not consult it.
+ */
+function isMetaOrPointerSafetySentence(sentence: string): boolean {
+  const text = stripSentenceMarkup(sentence);
+  if (carriesTranscribedLabelValue(text)) return false;
+
+  if (RETRIEVAL_OFFER_PATTERN.test(text)) return true;
+  if (Array.from(text.matchAll(SDS_SECTION_REFERENCE_PATTERN)).length >= 2) return true;
+  if (LABEL_SOURCE_MENTION_PATTERN.test(text) && SOURCE_DEFERENCE_PATTERN.test(text)) return true;
+  return GENERIC_SAFETY_ADVICE_PATTERN.test(text) || EMERGENCY_REFERRAL_PATTERN.test(text);
+}
+
+/**
  * B0-756 — a surface/material compatibility claim ("safe on stainless steel", "will not etch
  * marble") is exactly as regulated as a hazard or first-aid statement: it comes off the product's
  * own label and a wrong answer creates real damage/liability exposure, but until this ticket
@@ -700,6 +805,8 @@ function extractContactTimeTokens(text: string): string[] {
 }
 
 function isHazardClaimSentence(sentence: string): boolean {
+  // B0-915: an offer/pointer/generic-safety sentence is not a transcribed hazard statement.
+  if (isMetaOrPointerSafetySentence(sentence)) return false;
   // B0-870: "Non Corrosive" (a product name) / "non-flammable" are not hazard statements.
   const text = sentence.replace(HAZARD_NEGATED_TRIGGER_PATTERN, ' ');
   if (HAZARD_SENTENCE_PATTERN.test(text)) return true;
@@ -710,6 +817,8 @@ function isHazardClaimSentence(sentence: string): boolean {
 }
 
 function isFirstAidClaimSentence(sentence: string): boolean {
+  // B0-915: same offer/pointer/generic-safety exclusion as the hazard category.
+  if (isMetaOrPointerSafetySentence(sentence)) return false;
   return FIRST_AID_SENTENCE_PATTERN.test(sentence);
 }
 

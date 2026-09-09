@@ -12,7 +12,9 @@ import {
 } from 'ai';
 
 import { resolveAiSdkLanguageModel } from '~/lib/bex/ai-sdk-adapters';
+import { loadGenerationEffort } from '~/lib/bex/generation-effort';
 import { modelProviderFor } from '~/lib/constants/models';
+import { supportsAnthropicAdaptiveThinking } from '~/lib/llm/structured-completion';
 import {
   collectRetrievalEvidenceIds,
   formatPreloadedEvidence,
@@ -75,10 +77,16 @@ export type AiSdkRuntimeOptions = {
    * whichever mechanism the provider has:
    *   - OpenAI: forwarded verbatim as `providerOptions.openai.promptCacheKey` (B0-908).
    *   - Anthropic (B0-900): the Anthropic API has no cache KEY — caching is by exact prefix — so the
-   *     key's VALUE is never sent. Its presence turns on `providerOptions.anthropic.cacheControl`
-   *     (`{ type: 'ephemeral' }`), which `@ai-sdk/anthropic` 3.0.116 emits as the request-level
-   *     `cache_control` (automatic caching: Anthropic places the breakpoint at the end of the prompt
-   *     itself, so on the 2nd+ step the whole tools + system + prior-steps prefix is a cache read).
+   *     key's VALUE is never sent. Its presence turns on TWO breakpoints (B0-913):
+   *       1. `providerOptions.anthropic.cacheControl` (`{ type: 'ephemeral' }`), which
+   *          `@ai-sdk/anthropic` 3.0.116 emits as the request-level `cache_control` — automatic
+   *          placement at the end of the prompt, so on the 2nd+ step of ONE turn the whole
+   *          tools + system + prior-steps prefix is a cache read.
+   *       2. an explicit `{ type: 'ephemeral', ttl: '1h' }` marker on the `system` message, which
+   *          the provider emits as `cache_control` on the system text block. Anthropic renders
+   *          `tools` → `system` → `messages`, so that marker ends the prefix after the parts that
+   *          are constant for a route — earning reuse ACROSS turns and eval items, which (1) alone
+   *          cannot do because its breakpoint always lands after the per-request tail.
    * Omitted entirely → nothing cache-related is sent to either provider.
    */
   promptCacheKey?: string;
@@ -419,12 +427,71 @@ export async function runAiSdkWithToolLoop(opts: AiSdkRuntimeOptions): Promise<A
    */
   const languageModel = await resolveAiSdkLanguageModel(opts.modelTag);
   const provider = modelProviderFor(languageModel.modelId);
+  /**
+   * B0-913 — the `BEX_GENERATION_EFFORT` settings row, forwarded as
+   * `providerOptions.anthropic.effort` (which `@ai-sdk/anthropic` emits as `output_config.effort`).
+   * Read only on the Anthropic path, so an OpenAI run makes no extra settings round-trip, and only
+   * for a model that accepts it: `supportsAnthropicAdaptiveThinking` excludes Haiku-class and older
+   * Claude ids, which 400 on both adaptive thinking and `output_config.effort`. The row's default is
+   * the `provider_default` sentinel → `undefined` → nothing is sent, exactly as before this ticket.
+   */
+  const generationEffort =
+    provider === 'anthropic' && supportsAnthropicAdaptiveThinking(languageModel.modelId)
+      ? await loadGenerationEffort()
+      : undefined;
+  /**
+   * B0-913 — Anthropic provider options, assembled once because the cache breakpoint and the effort
+   * level share one `providerOptions.anthropic` object; omitted entirely when both are absent so the
+   * "no caching, no effort" request stays byte-identical to the B0-900 shape.
+   *
+   * `cacheControl` here is Anthropic's REQUEST-LEVEL (automatic) breakpoint, which the API places on
+   * the last cacheable block and moves forward as the step's message list grows — that is what earns
+   * reuse on the 2nd+ step inside one turn. It composes with the explicit prefix breakpoint on the
+   * `system` message below; between them the stable prefix and the growing tail each get a read
+   * point. Anthropic allows 4 breakpoints per request and these are 2 of them.
+   */
+  const anthropicProviderOptions =
+    provider === 'anthropic'
+      ? {
+          ...(opts.promptCacheKey ? { cacheControl: { type: 'ephemeral' as const } } : {}),
+          ...(generationEffort ? { effort: generationEffort } : {}),
+        }
+      : {};
   const result = streamText({
     model: wrapLanguageModel({
       model: languageModel,
       middleware: createTransportRetryMiddleware(opts.retry),
     }),
-    system: opts.instructions,
+    /**
+     * B0-913 — the instructions, carrying an EXPLICIT Anthropic cache breakpoint when caching is on.
+     *
+     * Anthropic renders a request as `tools` → `system` → `messages`, so a breakpoint on the system
+     * text block ends the cacheable prefix exactly after the two parts that do not vary within a
+     * route: the tool schemas and the system prompt. That prefix is identical across every turn and
+     * every eval item on the same route, so it is read from cache instead of re-written each time —
+     * the request-level automatic breakpoint alone could not do this, because it lands after the
+     * per-request tail (user message + preloaded evidence) and therefore only ever matched within a
+     * single turn. Measured on 2026-09-08: 23% of Anthropic prompt tokens were cache reads against
+     * 38% on the OpenAI path.
+     *
+     * `ttl: '1h'` because the point is spanning items and turns: a 5-minute window expires between
+     * two chat turns and across a slow eval item, which is precisely the reuse this is buying. The
+     * automatic breakpoint above keeps its 5-minute default; differing TTLs are only rejected when
+     * the explicit marker sits on the LAST block, which the system message never is (a request
+     * always has at least the user message after it).
+     *
+     * A plain string when caching is off, so that path is unchanged.
+     */
+    system:
+      opts.promptCacheKey && provider === 'anthropic'
+        ? {
+            role: 'system' as const,
+            content: opts.instructions,
+            providerOptions: {
+              anthropic: { cacheControl: { type: 'ephemeral', ttl: '1h' } },
+            },
+          }
+        : opts.instructions,
     messages,
     tools,
     /**
@@ -440,11 +507,12 @@ export async function runAiSdkWithToolLoop(opts: AiSdkRuntimeOptions): Promise<A
     // system + tool-schema prefix is read from cache on the 2nd+ step. Provider-specific (B0-908 /
     // B0-900): OpenAI takes the key itself; Anthropic has no key, so the key's presence enables the
     // request-level `cache_control` breakpoint instead (see `promptCacheKey`'s doc comment).
+    // The OpenAI branch is unchanged by B0-913.
     ...(opts.promptCacheKey && provider === 'openai'
       ? { providerOptions: { openai: { promptCacheKey: opts.promptCacheKey } } }
       : {}),
-    ...(opts.promptCacheKey && provider === 'anthropic'
-      ? { providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } } }
+    ...(Object.keys(anthropicProviderOptions).length > 0
+      ? { providerOptions: { anthropic: anthropicProviderOptions } }
       : {}),
     /**
      * B0-901 / B0-381 — `maxToolRounds` tool-calling steps PLUS one forced-answer step, mirroring
