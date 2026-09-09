@@ -815,3 +815,171 @@ describe('evaluateRegulatedClaimGrounding — B0-888 key-term fallback and adjac
     expect(result.ungroundedCategories).toContain('hazard');
   });
 });
+
+/**
+ * B0-915 — the `hazard` / `first_aid` detectors classified Bex's OWN meta-commentary as regulated
+ * claims. Because that prose can never be verified verbatim against a retrieved label, each one
+ * escalated the guardrail to `redactionMode: decline` and replaced the entire answer with refusal
+ * copy (the grader scored those non-answers at clarity 35 and 50 against 93/94 for the same
+ * question answered by the other vendor). Every "must not flag" draft below is a live
+ * `ungroundedDetails` snippet, verbatim, from five eval runs across both answering vendors.
+ *
+ * The second half is the important half: the offer/pointer/generic exclusion is hard-gated, so a
+ * real GHS statement, H-code, product-specific precaution or SDS first-aid procedure is still a
+ * regulated claim requiring verbatim grounding no matter how much framing surrounds it.
+ */
+describe('evaluateRegulatedClaimGrounding — B0-915 offer / pointer / generic-safety prose', () => {
+  it('does not flag generic safety-and-training advice that transcribes no label value', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer:
+        '1. **Train for safety and consistency** - proper dilution, PPE use, never mix chemicals, clear written SOPs.',
+      sources: [SDS_SOURCE],
+    });
+    expect(result.categoriesDetected).not.toContain('hazard');
+    expect(result.ungroundedCategories).toHaveLength(0);
+  });
+
+  it('does not flag a pointer naming the product label / SDS as the governing source', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer:
+        "For any specific Betco product in use, the governing PPE and ventilation instructions are the product label's precautionary statements and **SDS Section 8 (Exposure Controls / Personal Protection)** - follow those over any general guidance",
+      sources: [SDS_SOURCE],
+    });
+    expect(result.categoriesDetected).not.toContain('hazard');
+    expect(result.ungroundedCategories).toHaveLength(0);
+  });
+
+  it('does not flag an offer to supply SDS content listed as a menu of sections', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer:
+        '- I can supply the current Push SDS content instead - hazard identification (Section 2), first aid (Section 4), handling and storage (Section 7), PPE (Section 8), or incompatible materials (Section 10) - as well as current label facts such',
+      sources: [],
+    });
+    expect(result.categoriesDetected).not.toContain('first_aid');
+    expect(result.categoriesDetected).not.toContain('hazard');
+    expect(result.ungroundedCategories).toHaveLength(0);
+  });
+
+  it('does not flag generic emergency guidance that points back at the label and SDS', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer:
+        'If a mix occurs and anyone is exposed, evacuate and ventilate the area, then call Poison Control (1-800-222-1222 in the US) or emergency services immediately, with the label and SDS in hand.',
+      sources: [],
+    });
+    expect(result.categoriesDetected).not.toContain('first_aid');
+    expect(result.ungroundedCategories).toHaveLength(0);
+  });
+});
+
+/**
+ * B0-915 severity guard — every one of these must still be detected and, with no source carrying
+ * it, still land in `ungroundedCategories`. Several deliberately wrap the regulated content in the
+ * exact offer/pointer/training framing the exclusion above looks for, proving the gate wins.
+ */
+describe('evaluateRegulatedClaimGrounding — B0-915 real statements are still caught', () => {
+  it('still catches a prescribed treatment action riding along with an emergency referral', () => {
+    // Review guard on B0-915: `EMERGENCY_REFERRAL_PATTERN` excludes a sentence on the words
+    // "Poison Control" alone. A fabricated treatment instruction must not inherit that exemption --
+    // it names no exposure route, so the first-aid procedure pattern misses it, and "2 oz" with no
+    // "/gal" is not a dilution token, so this category is the only thing standing in front of it.
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer:
+        'Call Poison Control immediately and administer 2 oz of activated charcoal while you wait.',
+      sources: [],
+    });
+    expect(result.categoriesDetected).toContain('first_aid');
+    expect(result.ungroundedCategories).toContain('first_aid');
+  });
+
+  it('still catches a transcribed GHS signal word', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'Signal word: DANGER',
+      sources: [],
+    });
+    expect(result.categoriesDetected).toContain('hazard');
+    expect(result.ungroundedCategories).toContain('hazard');
+  });
+
+  it('still catches an explicit hazard statement', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'Causes severe skin burns and eye damage.',
+      sources: [],
+    });
+    expect(result.categoriesDetected).toContain('hazard');
+    expect(result.ungroundedCategories).toContain('hazard');
+  });
+
+  it('still catches an H-code even inside label/SDS pointer framing', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer:
+        'Per the label, hazard statement H314 applies; refer to the SDS for the full precautionary statements.',
+      sources: [],
+    });
+    expect(result.categoriesDetected).toContain('hazard');
+    expect(result.ungroundedCategories).toContain('hazard');
+  });
+
+  it('still catches a product-specific imperative precaution', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'Hazard note: do not mix with chlorinated products.',
+      sources: [],
+    });
+    expect(result.categoriesDetected).toContain('hazard');
+    expect(result.ungroundedCategories).toContain('hazard');
+  });
+
+  it('still catches a product-specific precaution wrapped in training framing', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'Training note: always wear PPE and never mix with chlorinated products.',
+      sources: [],
+    });
+    expect(result.categoriesDetected).toContain('hazard');
+    expect(result.ungroundedCategories).toContain('hazard');
+  });
+
+  it('still classifies a first-aid instruction transcribed from SDS section 4, and rejects a fabricated one', () => {
+    const grounded = evaluateRegulatedClaimGrounding({
+      draftAnswer:
+        'If in eyes: Rinse cautiously with water for several minutes. Remove contact lenses, if present and easy to do. Continue rinsing.',
+      sources: [SDS_SOURCE],
+    });
+    expect(grounded.categoriesDetected).toContain('first_aid');
+    expect(grounded.ungroundedCategories).not.toContain('first_aid');
+
+    const fabricated = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'If in eyes, flush with warm milk and apply an antibiotic ointment.',
+      sources: [SDS_SOURCE],
+    });
+    expect(fabricated.categoriesDetected).toContain('first_aid');
+    expect(fabricated.ungroundedCategories).toContain('first_aid');
+  });
+
+  it('still catches an exposure-route first-aid line even though it only refers the user to Poison Control', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'If swallowed, call a poison control center or doctor immediately.',
+      sources: [SDS_SOURCE],
+    });
+    expect(result.categoriesDetected).toContain('first_aid');
+    expect(result.ungroundedCategories).toContain('first_aid');
+  });
+
+  it('leaves the token categories untouched inside offer / pointer framing', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer:
+        'I can supply the current Push SDS content instead. Per the label, dilute at 6 oz. per gallon (1:21), allow a 45 second contact time, and it is registered under EPA Reg. No. 1677-321.',
+      sources: [LABEL_SOURCE, SDS_SOURCE],
+    });
+    expect(result.ungroundedCategories).toContain('dilution_ratio');
+    expect(result.ungroundedCategories).toContain('contact_time');
+    expect(result.ungroundedCategories).toContain('epa_registration');
+  });
+
+  it('leaves compatibility detection untouched inside training framing', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'Training note: this product is safe for use on stainless steel.',
+      sources: [SDS_SOURCE],
+    });
+    expect(result.categoriesDetected).toContain('compatibility');
+    expect(result.ungroundedCategories).toContain('compatibility');
+  });
+});
