@@ -21,7 +21,7 @@ import {
   normalizePromptInsights,
   parseStoredPromptInsights,
   PROMPT_INSIGHT_ENTITY_TYPE,
-  PROMPT_INSIGHT_MODEL,
+  PROMPT_INSIGHTS_JSON_SCHEMA,
   promptInsightsResponseSchema,
   toStoredPromptInsights,
   type PromptGradingContext,
@@ -29,7 +29,12 @@ import {
   type WorkflowRunTrace,
 } from '~/lib/observability/prompt-insights';
 import { getWorkflowRunTrace } from '~/lib/observability/runs-repository';
-import { getOpenAIClient } from '~/lib/openai/client';
+import {
+  completeStructured,
+  StructuredOutputRefusedError,
+  StructuredOutputTruncatedError,
+} from '~/lib/llm/structured-completion';
+import { resolveHarnessInsightsModel } from '~/lib/tests/harness-insights-model';
 
 /**
  * Single-prompt AI analysis for the Prompt Observability trace page (epic B0-330).
@@ -76,19 +81,37 @@ async function generateAndPersist(
   trace: WorkflowRunTrace,
   grading: PromptGradingContext | null,
 ): Promise<GeneratedInsights | { error: string; issues?: unknown }> {
-  const openai = getOpenAIClient();
-  const completion = await openai.chat.completions.create({
-    model: PROMPT_INSIGHT_MODEL,
-    response_format: { type: 'json_object' },
-    messages: [
-      { role: 'system', content: buildPromptInsightSystemPrompt(grading) },
-      { role: 'user', content: buildPromptAnalysisPayload(trace, grading) },
-    ],
-    temperature: 0.3,
-    max_tokens: 1200,
-  });
+  /**
+   * B0-906 — one structured call through the provider seam, on the model named by the
+   * `HARNESS_INSIGHTS_MODEL` settings row: a `claude-*` tag runs on the Anthropic Messages API,
+   * anything else on the OpenAI Responses API. Replaces a hardcoded `gpt-4.1-mini` on the legacy
+   * Chat Completions API. The resolved id is also what gets stored as the row's provenance below.
+   */
+  const model = await resolveHarnessInsightsModel();
 
-  const raw = completion.choices[0]?.message?.content ?? '{}';
+  let raw: string;
+  try {
+    raw = await completeStructured({
+      model,
+      system: buildPromptInsightSystemPrompt(grading),
+      user: buildPromptAnalysisPayload(trace, grading),
+      schemaName: 'prompt_insights',
+      schema: PROMPT_INSIGHTS_JSON_SCHEMA,
+      maxOutputTokens: 1200,
+      temperature: 0.3,
+    });
+  } catch (error) {
+    // Truncation and refusal are both "no trustworthy analysis"; the caller already turns an
+    // error result into a 500 (POST) or a fall-back to the stored set (GET).
+    if (
+      error instanceof StructuredOutputTruncatedError ||
+      error instanceof StructuredOutputRefusedError
+    ) {
+      return { error: 'Failed to parse analysis response.' };
+    }
+    throw error;
+  }
+
   let parsedJson: unknown;
   try {
     parsedJson = JSON.parse(raw);
@@ -111,7 +134,7 @@ async function generateAndPersist(
   const saved = await replaceAiSuggestions(
     PROMPT_INSIGHT_ENTITY_TYPE,
     runId,
-    toStoredPromptInsights(insights, { gradingContext: grading !== null }),
+    toStoredPromptInsights(insights, { gradingContext: grading !== null, model }),
   ).catch((error: unknown) => {
     logWarn('prompt_insights_persist_failed', {
       runId,

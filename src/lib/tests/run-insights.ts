@@ -17,7 +17,12 @@
  */
 import { z } from 'zod';
 
-import { getOpenAIClient } from '~/lib/openai/client';
+import {
+  completeStructuredWithUsage,
+  StructuredOutputRefusedError,
+  StructuredOutputTruncatedError,
+} from '~/lib/llm/structured-completion';
+import { resolveHarnessInsightsModel } from '~/lib/tests/harness-insights-model';
 
 import {
   getTestItemsByTestId,
@@ -71,6 +76,36 @@ export const runInsightSchema = z.object({
 export const runInsightsResponseSchema = z.object({
   insights: z.array(runInsightSchema).min(1),
 });
+
+/**
+ * B0-906 — JSON Schema mirror of `runInsightsResponseSchema` for the provider seam's strict
+ * structured output. Strict means `additionalProperties: false` with every property required, on
+ * both providers. It replaces the looser `response_format: { type: 'json_object' }` this call used
+ * on the OpenAI Chat Completions API, so a malformed shape is now impossible rather than caught by
+ * the `invalid_shape` branch below.
+ */
+export const RUN_INSIGHTS_JSON_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['insights'],
+  properties: {
+    insights: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['rank', 'title', 'description', 'category', 'impact'],
+        properties: {
+          rank: { type: 'integer' },
+          title: { type: 'string' },
+          description: { type: 'string' },
+          category: { type: 'string', enum: ['agent', 'corpus', 'retrieval', 'evaluation'] },
+          impact: { type: 'string', enum: ['high', 'medium', 'low'] },
+        },
+      },
+    },
+  },
+} as const satisfies Record<string, unknown>;
 
 export type RunInsight = z.infer<typeof runInsightSchema>;
 
@@ -184,19 +219,40 @@ export async function generateAndSaveRunInsights(
 
   const userContent = buildAnalysisPayload(items, stats);
 
-  const openai = getOpenAIClient();
-  const completion = await openai.chat.completions.create({
-    model: 'gpt-4.1-mini',
-    response_format: { type: 'json_object' },
-    messages: [
-      { role: 'system', content: INSIGHT_SYSTEM_PROMPT },
-      { role: 'user', content: userContent },
-    ],
-    temperature: 0.3,
-    max_tokens: 1200,
-  });
+  /**
+   * B0-906 — one structured call through the provider seam (`~/lib/llm/structured-completion`),
+   * which routes on the resolved model id: a `claude-*` tag from the `HARNESS_INSIGHTS_MODEL` row
+   * goes to the Anthropic Messages API, anything else to the OpenAI Responses API. Replaces a
+   * hardcoded `gpt-4.1-mini` on the legacy Chat Completions API. `temperature` is still 0.3 for
+   * OpenAI and is dropped for Claude models, which reject sampling controls.
+   */
+  const model = await resolveHarnessInsightsModel();
 
-  const raw = completion.choices[0]?.message?.content ?? '{}';
+  let raw: string;
+  try {
+    raw = (
+      await completeStructuredWithUsage({
+        model,
+        system: INSIGHT_SYSTEM_PROMPT,
+        user: userContent,
+        schemaName: 'run_insights',
+        schema: RUN_INSIGHTS_JSON_SCHEMA,
+        maxOutputTokens: 1200,
+        temperature: 0.3,
+      })
+    ).text;
+  } catch (error) {
+    // A truncated or refused answer is not an insight set; surface it the same way an unparseable
+    // one already was, so the caller keeps its existing two failure branches.
+    if (
+      error instanceof StructuredOutputTruncatedError ||
+      error instanceof StructuredOutputRefusedError
+    ) {
+      return { ok: false, reason: 'parse_error' };
+    }
+    throw error;
+  }
+
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);

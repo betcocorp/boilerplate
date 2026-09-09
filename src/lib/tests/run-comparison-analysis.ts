@@ -14,7 +14,7 @@ import {
   StructuredOutputRefusedError,
   StructuredOutputTruncatedError,
 } from '~/lib/llm/structured-completion';
-import { resolveResponsesModel } from '~/lib/openai/client';
+import { resolveHarnessInsightsModel } from '~/lib/tests/harness-insights-model';
 
 import type { RunComparisonDiff } from './run-comparison-diff';
 import type { RunComparisonVerdict } from './types';
@@ -189,7 +189,10 @@ export async function analyzeRunComparison(params: {
   }
 
   const userContent = buildComparisonAnalysisPayload(params);
-  const model = await resolveResponsesModel(undefined);
+  // B0-906 — the HARNESS_INSIGHTS_MODEL row instead of the fleet chat default: this analysis is a
+  // narrative for a human triaging new failures, not a graded judgment, so it is priced and
+  // repointed with the other three insight calls.
+  const model = await resolveHarnessInsightsModel();
 
   let raw: string;
   try {
