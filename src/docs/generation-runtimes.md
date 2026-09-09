@@ -123,8 +123,9 @@ follow-up that would let the flag be flipped with evidence rather than judgement
 
 ## Before the Responses loop can be deleted
 
-1. Port the Responses-only loop behaviours: B0-635 unproductive-retrieval withdrawal, B0-381
-   tool-rounds-exhausted forced answer, B0-606 temperature-rejection replay.
+1. ~~Port the Responses-only loop behaviours: B0-635 unproductive-retrieval withdrawal, B0-381
+   tool-rounds-exhausted forced answer, B0-606 temperature-rejection replay.~~ **Done (B0-901,
+   2026-09-08)** — see "Ported loop behaviours" below.
 2. Decide what replaces `previous_response_id` chaining — the AI SDK path pays full prompt cost per
    turn, so the cost/latency delta has to be measured on real conversations, not assumed.
 3. Run the `/admin/tests` parity eval above and hold it green across the golden sets.
@@ -133,6 +134,38 @@ follow-up that would let the flag be flipped with evidence rather than judgement
 5. Flip `BEX_AI_SDK_GENERATION_ENABLED` on in production, soak, then delete.
 
 Until step 3 exists, "which runtime answers better" is an opinion, and the default stays Responses.
+
+## Ported loop behaviours (B0-901)
+
+B0-898 made the AI SDK loop the only path a Claude model can answer on, which turned the fidelity
+gap above into a measurement problem: with OpenAI on the Responses loop and Anthropic on the AI SDK
+loop, a score difference mixed the model with the runtime. All three behaviours are now on both
+loops, from **one** copy of each string — they are exported from `responses-runtime.ts` and imported
+by `ai-sdk-runtime.ts`, the same rule `formatPreloadedEvidence` and `formatPriorTurnToolContext`
+already follow.
+
+| Behaviour | Responses loop | AI SDK loop |
+| --- | --- | --- |
+| B0-635 withdrawal | per-round scoring, `roundTools` filter, notice with the tool outputs | scored in the tool `execute` closure, `prepareStep` returns `activeTools` minus `RETRIEVAL_TOOL_NAMES` + the notice |
+| B0-381 forced answer | post-loop request with `tool_choice: 'none'` | `stopWhen: stepCountIs(maxToolRounds + 1)`, final step forced to `toolChoice: 'none'` |
+| B0-606 temperature replay | replay without `temperature` on rejection | not reachable: this loop never sends a sampling control (asserted in its tests) |
+
+Shared strings: `RETRIEVAL_EXHAUSTED_INSTRUCTION`, `TOOL_ROUNDS_EXHAUSTED_INSTRUCTION`,
+`TOOL_ROUNDS_EXHAUSTED_FALLBACK_TEXT`. Shared scoring: `collectRetrievalEvidenceIds`,
+`isCorpusSearchPayload`, `RETRIEVAL_TOOL_NAMES`, `UNPRODUCTIVE_RETRIEVAL_CALL_LIMIT`.
+
+**One deliberate divergence, in B0-381.** The Responses loop does not execute the tools requested on
+the final round; it answers each pending call with `TOOL_ROUNDS_EXHAUSTED_TOOL_OUTPUT` ("this call
+was not executed") to keep the `previous_response_id` chain valid, then forces the answer. The AI SDK
+owns tool execution inside the step, so by the time `prepareStep` can intervene those calls have
+already run and their real outputs are in the message list. The model-visible INSTRUCTION is
+byte-identical either way — which is what an A/B compares — and the divergence costs a pathological
+run one extra round of tool work it did not need. `TOOL_ROUNDS_EXHAUSTED_TOOL_OUTPUT` therefore has
+no AI SDK equivalent and is not exported for one.
+
+Parity tests: `ai-sdk-runtime.test.ts` → "ported loop behaviours (B0-901)", mirroring the fixtures in
+`responses-runtime.test.ts` → "tool-round exhaustion (B0-381)", "unproductive-retrieval early stop
+(B0-635)" and "temperature gating (B0-606)".
 
 ## Post-generation gate: regulated-claim guardrail — redact vs. decline (B0-829 / B0-871)
 

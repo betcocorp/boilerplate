@@ -121,11 +121,13 @@ export async function getRouterType(): Promise<RouterType> {
  * database constraint — so the stored value is re-validated here rather than trusted, and this
  * getter can never throw or return an unrecognized provider.
  *
- * NOT YET WIRED: as of B0-897 nothing on the request path calls this getter — the ticket seeds the
- * row and renders the select only. Selecting `'anthropic'` is inert until a follow-up connects a
- * consumer (chat generation, grading, validator or router). The type is `ModelProvider` from
- * `~/lib/constants/models` so a future consumer shares the one provider type with
- * `modelProviderFor` instead of growing a second one.
+ * WIRED since B0-899: `resolveModel` (`~/lib/llm/resolve-model`) reads this to decide which default
+ * row the `preview` tag resolves to — `BEX_RESPONSES_MODEL` (OpenAI tags) or `BEX_ANTHROPIC_MODEL`
+ * (Anthropic tags). That is its ONLY consumer and its only effect: an explicit tag (`gpt-4.1`,
+ * `claude-sonnet-5`, …) bypasses it entirely, because the vendor is implied by the tag
+ * (`modelProviderFor`), never by this flag. The type is `ModelProvider` from
+ * `~/lib/constants/models` so the consumer shares the one provider type with `modelProviderFor`
+ * instead of growing a second one.
  */
 export const LLM_PROVIDERS = ['openai', 'anthropic'] as const satisfies readonly ModelProvider[];
 

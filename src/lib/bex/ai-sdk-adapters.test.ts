@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
-// The tag → id mapping is `resolveResponsesModel`'s job (env pins, the `preview` settings row);
-// here it is a passthrough so the test exercises only the provider choice.
-vi.mock('~/lib/openai/client', () => ({
-  resolveResponsesModel: (tag?: string) => Promise.resolve(tag ?? 'gpt-4.1-mini'),
+// The tag → id mapping is `resolveModel`'s job (B0-899: the per-vendor `preview` default rows, then
+// `resolveResponsesModel`'s env pins); here it is a passthrough so the test exercises only the
+// provider choice.
+vi.mock('~/lib/llm/resolve-model', () => ({
+  resolveModel: (tag?: string) => Promise.resolve(tag ?? 'gpt-4.1-mini'),
 }));
 
 import { aiSdkProviderFor, resolveAiSdkLanguageModel } from '~/lib/bex/ai-sdk-adapters';

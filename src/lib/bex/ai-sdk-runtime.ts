@@ -13,7 +13,16 @@ import {
 
 import { resolveAiSdkLanguageModel } from '~/lib/bex/ai-sdk-adapters';
 import { modelProviderFor } from '~/lib/constants/models';
-import { formatPreloadedEvidence } from '~/lib/openai/responses-runtime';
+import {
+  collectRetrievalEvidenceIds,
+  formatPreloadedEvidence,
+  isCorpusSearchPayload,
+  RETRIEVAL_EXHAUSTED_INSTRUCTION,
+  RETRIEVAL_TOOL_NAMES,
+  TOOL_ROUNDS_EXHAUSTED_FALLBACK_TEXT,
+  TOOL_ROUNDS_EXHAUSTED_INSTRUCTION,
+  UNPRODUCTIVE_RETRIEVAL_CALL_LIMIT,
+} from '~/lib/openai/responses-runtime';
 import type {
   ExecuteToolFn,
   LlmTokenUsage,
@@ -26,7 +35,7 @@ import {
   retryTransportFaults,
   type TransportRetryTuning,
 } from '~/lib/openai/transport-retry';
-import { logError } from '~/lib/observability/logger';
+import { logError, logWarn } from '~/lib/observability/logger';
 import { productSupportTools } from '~/lib/tools/definitions';
 import { getErrorMessage } from '~/lib/utils';
 import type { ToolTraceEntry } from '~/lib/audit/trace';
@@ -61,8 +70,16 @@ export type AiSdkRuntimeOptions = {
    */
   tools?: Tool[];
   /**
-   * B0-324 — see `ResponsesRuntimeOptions.promptCacheKey`; forwarded as the OpenAI `promptCacheKey`.
-   * B0-908 — OpenAI-only: Anthropic has no equivalent request field, so it is not sent there.
+   * B0-324 — see `ResponsesRuntimeOptions.promptCacheKey`. The caller's statement that this loop's
+   * stable prefix (instructions + tool schemas) should be prompt-cached across steps, mapped to
+   * whichever mechanism the provider has:
+   *   - OpenAI: forwarded verbatim as `providerOptions.openai.promptCacheKey` (B0-908).
+   *   - Anthropic (B0-900): the Anthropic API has no cache KEY — caching is by exact prefix — so the
+   *     key's VALUE is never sent. Its presence turns on `providerOptions.anthropic.cacheControl`
+   *     (`{ type: 'ephemeral' }`), which `@ai-sdk/anthropic` 3.0.116 emits as the request-level
+   *     `cache_control` (automatic caching: Anthropic places the breakpoint at the end of the prompt
+   *     itself, so on the 2nd+ step the whole tools + system + prior-steps prefix is a cache read).
+   * Omitted entirely → nothing cache-related is sent to either provider.
    */
   promptCacheKey?: string;
   /**
@@ -86,6 +103,14 @@ export type AiSdkRuntimeOptions = {
    * option exists so the workflow can record TTFT identically on both runtimes.
    */
   observeAssistantDelta?: (delta: string) => void;
+  /** B0-901 — see `ResponsesRuntimeOptions.onToolRoundsExhausted`. Same contract on both loops. */
+  onToolRoundsExhausted?: (info: { maxToolRounds: number; pendingCallCount: number }) => void;
+  /** B0-901 — see `ResponsesRuntimeOptions.onRetrievalExhausted`. Same contract on both loops. */
+  onRetrievalExhausted?: (info: {
+    unproductiveCallCount: number;
+    seenEvidenceIdCount: number;
+    round: number;
+  }) => void;
   executeTool: ExecuteToolFn;
 };
 
@@ -102,14 +127,77 @@ export type AiSdkRuntimeResult = Pick<
 };
 
 /**
+ * B0-901 — the B0-635 unproductive-retrieval state, mutated as each tool result lands and read by
+ * `prepareStep` when it prepares the next step. Same three facts the Responses loop keeps in local
+ * variables; an object because the scoring happens inside the tool `execute` closures.
+ */
+type RetrievalProductivityState = {
+  /** Every evidence id the run has already been given, across all retrieval calls. */
+  seenEvidenceIds: Set<string>;
+  /** Consecutive retrieval calls that returned nothing new; reset by any productive call. */
+  consecutiveUnproductiveCalls: number;
+  /** Latched once the limit is hit; retrieval tools stay withdrawn for the rest of the run. */
+  withdrawn: boolean;
+  /** Set with `withdrawn`, consumed by the very next step so the model is told exactly once. */
+  noticePending: boolean;
+};
+
+function newRetrievalProductivityState(): RetrievalProductivityState {
+  return {
+    seenEvidenceIds: new Set<string>(),
+    consecutiveUnproductiveCalls: 0,
+    withdrawn: false,
+    noticePending: false,
+  };
+}
+
+/**
+ * B0-901 / B0-635 — scores one retrieval call exactly as the Responses loop does
+ * (`responses-runtime.ts`, "productivity of THIS retrieval call"): reads the FULL tool payload, not
+ * the slimmed `modelOutput` the model sees, because the projection drops
+ * `documentBodyChunkIds` when it truncates a body and this decision must be made on what was
+ * actually retrieved. Ids are added to the run-wide set as each call is scored, so within a
+ * parallel round the second of two calls returning the same documents scores as adding nothing.
+ */
+function scoreRetrievalCall(
+  state: RetrievalProductivityState,
+  toolName: string,
+  fullOutput: string,
+): void {
+  if (state.withdrawn || !RETRIEVAL_TOOL_NAMES.has(toolName)) {
+    return;
+  }
+
+  const ids = collectRetrievalEvidenceIds(fullOutput);
+  const producedSomethingNew = ids.some((id) => !state.seenEvidenceIds.has(id));
+  for (const id of ids) {
+    state.seenEvidenceIds.add(id);
+  }
+
+  if (producedSomethingNew) {
+    state.consecutiveUnproductiveCalls = 0;
+  } else if (isCorpusSearchPayload(fullOutput)) {
+    // Only a fruitless corpus SEARCH counts toward exhaustion. An empty structured-fact lookup is
+    // neutral — see `isCorpusSearchPayload`.
+    state.consecutiveUnproductiveCalls += 1;
+  }
+}
+
+/**
  * Build the AI SDK tool set from the same `productSupportTools` JSON Schema the model already sees,
  * reusing the existing `executeTool` boundary (`executeToolCall` → `executeProductTool`). Each tool's
  * trace is pushed into `toolTrace` to mirror `runResponsesWithToolLoop`.
+ *
+ * B0-901 — also scores each retrieval result into `retrieval` on the way past. The scoring lives
+ * here rather than in `prepareStep` because this is the only place the FULL payload exists: the
+ * step results `prepareStep` can see carry the slimmed `modelOutput`, and the `toolTrace` preview is
+ * truncated at 4,000 chars.
  */
 function buildAiSdkTools(
   executeTool: ExecuteToolFn,
   toolTrace: ToolTraceEntry[],
   definitions: Tool[],
+  retrieval: RetrievalProductivityState,
 ): ToolSet {
   const tools: ToolSet = {};
 
@@ -132,6 +220,9 @@ function buildAiSdkTools(
           callId: toolCallId,
         });
         toolTrace.push(executed.trace);
+        // B0-901 — scored on the full payload, in the model's own call order, before the slimmed
+        // variant is handed back. Mirrors the ordering in the Responses loop (trace, then score).
+        scoreRetrievalCall(retrieval, definition.name, executed.output);
         // B0-437 — the model gets the slimmed variant when the tool produced one; the caller's
         // closure has already logged the full payload for the validator / guardrail.
         return executed.modelOutput ?? executed.output;
@@ -262,7 +353,17 @@ function mapToolChoice(toolChoice: ResponsesToolChoice | undefined): ToolChoice<
  */
 export async function runAiSdkWithToolLoop(opts: AiSdkRuntimeOptions): Promise<AiSdkRuntimeResult> {
   const toolTrace: ToolTraceEntry[] = [];
-  const tools = buildAiSdkTools(opts.executeTool, toolTrace, opts.tools ?? productSupportTools);
+  // B0-901 — the tool budget, resolved once; the stop condition allows one extra forced-answer
+  // step on top of it, mirroring the Responses loop's post-loop final request.
+  const maxToolRounds = opts.maxToolRounds ?? 16;
+  const retrieval = newRetrievalProductivityState();
+  let toolRoundsExhaustedReported = false;
+  const tools = buildAiSdkTools(
+    opts.executeTool,
+    toolTrace,
+    opts.tools ?? productSupportTools,
+    retrieval,
+  );
 
   const messages: ModelMessage[] = [
     ...opts.history
@@ -336,15 +437,103 @@ export async function runAiSdkWithToolLoop(opts: AiSdkRuntimeOptions): Promise<A
     // caller that does not pass one gets the AI SDK/provider default, matching the Responses runtime.
     ...(opts.maxOutputTokens ? { maxOutputTokens: opts.maxOutputTokens } : {}),
     // B0-324 — pin every step of the loop to the same prompt cache pool so the stable
-    // system + tool-schema prefix is read from cache on the 2nd+ step. OpenAI-only (B0-908):
-    // Anthropic caches by prefix with no key, so the option is simply not sent there.
+    // system + tool-schema prefix is read from cache on the 2nd+ step. Provider-specific (B0-908 /
+    // B0-900): OpenAI takes the key itself; Anthropic has no key, so the key's presence enables the
+    // request-level `cache_control` breakpoint instead (see `promptCacheKey`'s doc comment).
     ...(opts.promptCacheKey && provider === 'openai'
       ? { providerOptions: { openai: { promptCacheKey: opts.promptCacheKey } } }
       : {}),
-    stopWhen: stepCountIs(opts.maxToolRounds ?? 16),
-    prepareStep: ({ stepNumber }) => ({
-      toolChoice: stepNumber === 0 ? forcedToolChoice : 'auto',
-    }),
+    ...(opts.promptCacheKey && provider === 'anthropic'
+      ? { providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } } }
+      : {}),
+    /**
+     * B0-901 / B0-381 — `maxToolRounds` tool-calling steps PLUS one forced-answer step, mirroring
+     * the Responses loop, whose `for` runs `maxRounds` times and then makes one extra
+     * `tool_choice: 'none'` request when the model is still asking for tools. The extra step only
+     * materialises on that pathological path: a run that produces text inside its budget ends when
+     * the model stops calling tools, exactly as before.
+     */
+    stopWhen: stepCountIs(maxToolRounds + 1),
+    prepareStep: ({ stepNumber, messages: stepMessages }) => {
+      /**
+       * B0-901 / B0-381 — the budget is spent and the model is still calling tools (any step that
+       * produced text would have ended the loop). Force the answer with `toolChoice: 'none'` and
+       * the same instruction the Responses loop sends.
+       *
+       * One documented divergence: the Responses loop skips executing the tools requested on the
+       * final round and answers each pending call with `TOOL_ROUNDS_EXHAUSTED_TOOL_OUTPUT`. Here the
+       * AI SDK owns tool execution inside the step, so by the time this hook runs those calls have
+       * already executed and their real outputs are in the message list. The model-visible
+       * INSTRUCTION is byte-identical, which is what an A/B compares; the pathological run just
+       * pays for one extra round of tools it did not need.
+       */
+      if (stepNumber >= maxToolRounds) {
+        if (!toolRoundsExhaustedReported) {
+          toolRoundsExhaustedReported = true;
+          logWarn('tool_rounds_exhausted', {
+            model: languageModel.modelId,
+            max_tool_rounds: maxToolRounds,
+            runtime: 'ai_sdk',
+          });
+          opts.onToolRoundsExhausted?.({ maxToolRounds, pendingCallCount: 0 });
+        }
+        return {
+          toolChoice: 'none',
+          messages: [
+            ...stepMessages,
+            { role: 'user' as const, content: TOOL_ROUNDS_EXHAUSTED_INSTRUCTION },
+          ],
+        };
+      }
+
+      /**
+       * B0-901 / B0-635 — retrieval has stopped producing information. Withdraw the retrieval tools
+       * for the rest of the run (`activeTools` = everything else) and tell the model why, once, in
+       * the same words the Responses loop uses. Round 0 can never be withdrawn: nothing has been
+       * retrieved yet, so the forced first-step tool choice is always still honoured.
+       */
+      if (!retrieval.withdrawn && retrieval.consecutiveUnproductiveCalls >= UNPRODUCTIVE_RETRIEVAL_CALL_LIMIT) {
+        retrieval.withdrawn = true;
+        retrieval.noticePending = true;
+        logWarn('retrieval_exhausted_early_stop', {
+          model: languageModel.modelId,
+          runtime: 'ai_sdk',
+          step: stepNumber,
+          unproductive_call_count: retrieval.consecutiveUnproductiveCalls,
+          seen_evidence_id_count: retrieval.seenEvidenceIds.size,
+        });
+        opts.onRetrievalExhausted?.({
+          unproductiveCallCount: retrieval.consecutiveUnproductiveCalls,
+          seenEvidenceIdCount: retrieval.seenEvidenceIds.size,
+          round: stepNumber,
+        });
+      }
+
+      if (!retrieval.withdrawn) {
+        return { toolChoice: stepNumber === 0 ? forcedToolChoice : 'auto' };
+      }
+
+      const remainingTools = Object.keys(tools).filter(
+        (name) => !RETRIEVAL_TOOL_NAMES.has(name),
+      );
+      const noticeDue = retrieval.noticePending;
+      retrieval.noticePending = false;
+
+      return {
+        activeTools: remainingTools,
+        // Nothing left to call (every offered tool was a retrieval tool) — say so explicitly rather
+        // than sending 'auto' against an empty tool list, matching the Responses loop.
+        toolChoice: remainingTools.length === 0 ? 'none' : 'auto',
+        ...(noticeDue
+          ? {
+              messages: [
+                ...stepMessages,
+                { role: 'user' as const, content: RETRIEVAL_EXHAUSTED_INSTRUCTION },
+              ],
+            }
+          : {}),
+      };
+    },
     onError: ({ error }) => {
       capturedStreamError = error;
       // Replaces the AI SDK's default console.error so the fault stays in the structured log.
@@ -388,7 +577,15 @@ export async function runAiSdkWithToolLoop(opts: AiSdkRuntimeOptions): Promise<A
   });
 
   return {
-    assistantText,
+    /**
+     * B0-901 / B0-381 — exhaustion must never surface an empty answer. Only substituted on the
+     * exhausted path (and only when the forced final step still produced no text), so a normal run
+     * that legitimately returns empty text is unchanged. Same string the Responses loop uses.
+     */
+    assistantText:
+      toolRoundsExhaustedReported && !assistantText.trim()
+        ? TOOL_ROUNDS_EXHAUSTED_FALLBACK_TEXT
+        : assistantText,
     finalResponseId: null,
     toolTrace,
     responseIds: steps.map((_step, index) => `ai_sdk_step_${index}`),

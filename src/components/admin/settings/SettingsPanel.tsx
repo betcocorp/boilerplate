@@ -90,9 +90,18 @@ const STRING_SETTINGS = [
   // B0-757/B0-831 — the BEX_MODEL_TAGS tag the "preview" tag resolves to (resolveResponsesModel).
   // Renders as a select like BEX_ROUTER_MODEL: allowed_values = the enum minus `preview`.
   'BEX_RESPONSES_MODEL',
-  // B0-897 — preferred LLM vendor, 'openai' | 'anthropic'. Row + select only: nothing reads it yet
-  // (see getLlmProvider), so flipping it is inert until a follow-up wires a consumer.
+  // B0-897/B0-899 — preferred LLM vendor, 'openai' | 'anthropic'. Read by resolveModel
+  // (~/lib/llm/resolve-model) to decide which per-vendor default row the `preview` tag resolves to.
   'BEX_LLM_PROVIDER',
+  // B0-899 — the ANTHROPIC_MODEL_TAGS tag `preview` resolves to when BEX_LLM_PROVIDER = anthropic
+  // (the Anthropic counterpart of BEX_RESPONSES_MODEL). Renders as a select over allowed_values.
+  'BEX_ANTHROPIC_MODEL',
+  // B0-904 — per-call model tags for the competitor cross-reference extraction / spec enrichment
+  // and the product-category classifier; moved off process.env per B0-638. `preview` follows the
+  // fleet default; a claude-* tag routes the call to Anthropic.
+  'XREF_COMPETITOR_EXTRACT_MODEL',
+  'XREF_SPEC_ENRICH_MODEL',
+  'CATEGORY_CLASSIFIER_MODEL',
   // B0-757 — resolveProductLineFromMatches' lock thresholds, all numeric.
   'BEX_PRODUCT_LINE_LOCK_MIN_SIMILARITY',
   'BEX_PRODUCT_LINE_LOCK_MARGIN',
@@ -118,6 +127,13 @@ const STRING_SETTINGS = [
   'REPORT_GRADING_MODEL',
   // B0-806 — Anthropic output_config.effort for run-report grading; ignored by OpenAI models.
   'REPORT_GRADING_EFFORT',
+  // B0-902 — model tag + Anthropic effort for the per-item graders (semantic criteria, semantic
+  // decline, failure root cause). `run` = follow the run's chat model (the pre-B0-902 behaviour).
+  'TEST_ITEM_GRADING_MODEL',
+  'TEST_ITEM_GRADING_EFFORT',
+  // B0-906 — model tag for the harness insight calls (run insights, run comparison, item summary,
+  // observability prompt insights); replaces the hardcoded gpt-4.1-mini.
+  'HARNESS_INSIGHTS_MODEL',
   // B0-812 / B0-835 — the Pass/Fail line and the two concept-rule scores. All numeric, 0-100.
   PASS_MARK_SETTING_KEY,
   SCORING_RULE_SETTING_KEYS.minimalFloorScore,

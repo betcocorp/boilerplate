@@ -1,9 +1,9 @@
 import OpenAI from 'openai';
 
 import {
-  isBexModelTag,
+  isOpenAiModelTag,
   modelProviderFor,
-  type ExplicitBexModelTag,
+  type OpenAiModelTag,
 } from '~/lib/constants/models';
 import { getStringSetting } from '~/lib/settings/settings-service';
 
@@ -28,23 +28,31 @@ export function getOpenAIClient(): OpenAI {
  * set as an env var in any environment, so `preview` has always silently resolved to this. Seeded
  * as the settings row default so this migration is behavior-preserving.
  */
-export const DEFAULT_BEX_RESPONSES_MODEL_TAG: ExplicitBexModelTag = 'gpt-4.1-mini';
+export const DEFAULT_BEX_RESPONSES_MODEL_TAG: OpenAiModelTag = 'gpt-4.1-mini';
 
 /**
- * B0-831 — the `BEX_RESPONSES_MODEL` settings row: the `BEX_MODEL_TAGS` TAG that `preview` (and any
- * missing or empty `modelTag`) resolves to, re-validated against the enum before use exactly like
- * `resolveRouterModelTag` / `resolveValidatorModelTag`. `settings.allowed_values` is advisory
- * metadata the admin API validates writes against, NOT a database constraint, so an unrecognized
- * stored value falls back to the default tag rather than being handed to the API as a non-existent
- * model id. `preview` is excluded because it would resolve to itself. Pinning an exact id (a dated
- * snapshot, a `-sol`/`-terra` variant) is what the `BEX_MODEL_*` env overrides are for — and since
- * the tag goes back through `resolveResponsesModel`, those pins now apply to `preview` too.
+ * B0-831 — the `BEX_RESPONSES_MODEL` settings row: the OpenAI TAG that `preview` (and any missing
+ * or empty `modelTag`) resolves to when the fleet provider is OpenAI, re-validated against the enum
+ * before use exactly like `resolveRouterModelTag` / `resolveValidatorModelTag`.
+ * `settings.allowed_values` is advisory metadata the admin API validates writes against, NOT a
+ * database constraint, so an unrecognized stored value falls back to the default tag rather than
+ * being handed to the API as a non-existent model id. `preview` is excluded because it would
+ * resolve to itself. Pinning an exact id (a dated snapshot, a `-sol`/`-terra` variant) is what the
+ * `BEX_MODEL_*` env overrides are for — and since the tag goes back through
+ * `resolveResponsesModel`, those pins now apply to `preview` too.
+ *
+ * B0-899 — validated against `OPENAI_MODEL_TAGS`, not `BEX_MODEL_TAGS`: this row is the OpenAI
+ * default ONLY. A `claude-*` value stored here (B0-908 briefly allowed one) is ignored and falls
+ * back to `gpt-4.1-mini`; the Anthropic default is its own row, `BEX_ANTHROPIC_MODEL`
+ * (`resolveAnthropicModelDefaultTag`, `~/lib/llm/resolve-model`), and `BEX_LLM_PROVIDER` decides
+ * which of the two rows `preview` reads. The B0-899 migration moved any claude value that was here
+ * into that row, so the live `preview` behaviour did not change.
  */
-export async function resolveGenerationModelDefaultTag(): Promise<ExplicitBexModelTag> {
+export async function resolveGenerationModelDefaultTag(): Promise<OpenAiModelTag> {
   const raw = (
     await getStringSetting('BEX_RESPONSES_MODEL', DEFAULT_BEX_RESPONSES_MODEL_TAG)
   ).trim();
-  return isBexModelTag(raw) && raw !== 'preview' ? raw : DEFAULT_BEX_RESPONSES_MODEL_TAG;
+  return isOpenAiModelTag(raw) ? raw : DEFAULT_BEX_RESPONSES_MODEL_TAG;
 }
 
 /**
@@ -57,8 +65,13 @@ export async function resolveGenerationModelDefaultTag(): Promise<ExplicitBexMod
  * `~/lib/settings/settings-service`.
  *
  * B0-908 — despite the name, this also resolves Anthropic tags (`claude-*`): the return value is
- * whatever id the provider chosen by `modelProviderFor` is called with, so a `BEX_RESPONSES_MODEL`
- * row set to `claude-sonnet-5` makes `preview` resolve to `claude-sonnet-5`.
+ * whatever id the provider chosen by `modelProviderFor` is called with.
+ *
+ * B0-899 — the `preview` branch HERE is the OpenAI-only half of the story: it reads
+ * `BEX_RESPONSES_MODEL`, which now holds OpenAI tags only. Provider-aware `preview` resolution
+ * (`BEX_LLM_PROVIDER` → `BEX_RESPONSES_MODEL` or `BEX_ANTHROPIC_MODEL`) lives one layer up in
+ * `resolveModel` (`~/lib/llm/resolve-model`), which is what call sites use; it delegates every
+ * explicit tag straight back here so the env pins apply exactly once.
  */
 export async function resolveResponsesModel(modelTag: string | undefined): Promise<string> {
   const tag = (modelTag ?? 'preview').trim();

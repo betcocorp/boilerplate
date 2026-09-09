@@ -7,16 +7,34 @@
  * action silently coerce newer models to `preview` (B0-564). `~/types/bex.ts` re-exports these
  * symbols so the ticket's stated import path works without a second source of truth.
  *
- * A tag is NOT necessarily a model id — `resolveResponsesModel` (`~/lib/openai/client`) maps tags
- * to concrete ids and applies env overrides, and `modelProviderFor` decides which API is called
- * (OpenAI Responses for gpt tags, Anthropic Messages / AI SDK Anthropic provider for `claude-*`
- * tags, B0-908). Adding a tag here requires two follow-ups or it will misbehave silently:
+ * A tag is NOT necessarily a model id — `resolveModel` (`~/lib/llm/resolve-model`, B0-899) is the
+ * resolver every call site goes through: it sends `preview` to the default row of the vendor in
+ * `BEX_LLM_PROVIDER` (`BEX_RESPONSES_MODEL` for OpenAI, `BEX_ANTHROPIC_MODEL` for Anthropic) and
+ * every explicit tag to `resolveResponsesModel` (`~/lib/openai/client`), which owns the per-tag
+ * mapping and the `BEX_MODEL_*` env pins. `modelProviderFor` decides which API is called (OpenAI
+ * Responses for gpt tags, Anthropic Messages / AI SDK Anthropic provider for `claude-*` tags,
+ * B0-908). Adding a tag here requires two follow-ups or it will misbehave silently:
  *   1. a branch in `resolveResponsesModel` if the tag needs an env override (B0-598; Anthropic tags
  *      share one generic `BEX_MODEL_CLAUDE_*` branch);
  *   2. a `public.model_pricing` row keyed to the TAG STRING, because B0-563 stamps
  *      `workflow_steps.output.model` from our resolver, and the B0-565 cost views join it with an
  *      INNER lateral — an unpriced model is dropped from cost reporting entirely, not zeroed.
  */
+
+/**
+ * B0-899 — the OpenAI tags, as their own list so the OpenAI default row (`BEX_RESPONSES_MODEL`) can
+ * be validated against exactly this subset: that row must never hold `preview` (it would resolve to
+ * itself) and, since B0-899, never a `claude-*` tag either — the Anthropic default lives in its own
+ * row (`BEX_ANTHROPIC_MODEL`, validated against `ANTHROPIC_MODEL_TAGS`) and `BEX_LLM_PROVIDER`
+ * picks which of the two `preview` reads. Same order as they appear in `BEX_MODEL_TAGS`.
+ */
+export const OPENAI_MODEL_TAGS = ['gpt-4o', 'gpt-4.1-mini', 'gpt-4.1', 'gpt-5.5', 'gpt-5.6'] as const;
+
+export type OpenAiModelTag = (typeof OPENAI_MODEL_TAGS)[number];
+
+export function isOpenAiModelTag(value: string): value is OpenAiModelTag {
+  return (OPENAI_MODEL_TAGS as readonly string[]).includes(value);
+}
 
 /**
  * B0-908 — the Anthropic tier-for-tier equivalents of the OpenAI tags. Exact Claude API ids — never
@@ -39,19 +57,16 @@ export const ANTHROPIC_MODEL_TAGS = [
 
 export type AnthropicModelTag = (typeof ANTHROPIC_MODEL_TAGS)[number];
 
+export function isAnthropicModelTag(value: string): value is AnthropicModelTag {
+  return (ANTHROPIC_MODEL_TAGS as readonly string[]).includes(value);
+}
+
 /**
- * Every selectable tag, including the env-configured `preview` default. `preview` first, then the
- * OpenAI tags, then their Anthropic equivalents (B0-908).
+ * Every selectable tag, including the settings-driven `preview` default. `preview` first, then the
+ * OpenAI tags, then their Anthropic equivalents (B0-908). This is the union list every picker
+ * renders; the two per-vendor subsets above are what the two default rows validate against (B0-899).
  */
-export const BEX_MODEL_TAGS = [
-  'preview',
-  'gpt-4o',
-  'gpt-4.1-mini',
-  'gpt-4.1',
-  'gpt-5.5',
-  'gpt-5.6',
-  ...ANTHROPIC_MODEL_TAGS,
-] as const;
+export const BEX_MODEL_TAGS = ['preview', ...OPENAI_MODEL_TAGS, ...ANTHROPIC_MODEL_TAGS] as const;
 
 export type BexModelTag = (typeof BEX_MODEL_TAGS)[number];
 
@@ -122,9 +137,10 @@ export function isModelEffort(value: string): value is ModelEffort {
  */
 export const MODEL_DESCRIPTIONS: Record<BexModelTag, string> = {
   preview:
-    'Settings-table default (BEX_RESPONSES_MODEL row at /admin/settings; gpt-4.1-mini unless changed). Use this as the A/B baseline.',
+    'Settings-table default: resolves via the BEX_LLM_PROVIDER row at /admin/settings to BEX_RESPONSES_MODEL (OpenAI; gpt-4.1-mini unless changed) or BEX_ANTHROPIC_MODEL (Anthropic; claude-sonnet-5 unless changed). Use this as the A/B baseline.',
   'gpt-4o': 'Older general-purpose model. $2.50 → $10.00 per Mtok.',
-  'gpt-4.1-mini': 'Cheapest option and what `preview` resolves to today. $0.40 → $1.60 per Mtok.',
+  'gpt-4.1-mini':
+    'Cheapest option and the OpenAI default `preview` resolves to when BEX_LLM_PROVIDER is openai. $0.40 → $1.60 per Mtok.',
   'gpt-4.1':
     'Former report-grading default (gpt-5.6 from B0-765, claude-opus-5 from B0-822). $2.00 → $8.00 per Mtok.',
   'gpt-5.5':

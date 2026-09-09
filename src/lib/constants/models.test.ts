@@ -5,12 +5,15 @@ import supportedModels, {
   ANTHROPIC_MODEL_TAGS,
   BEX_MODEL_TAGS,
   GRADING_MODEL_TAGS,
+  isAnthropicModelTag,
   isBexModelTag,
   isGradingModelTag,
   isModelEffort,
+  isOpenAiModelTag,
   MODEL_DESCRIPTIONS,
   MODEL_EFFORTS,
   modelProviderFor,
+  OPENAI_MODEL_TAGS,
 } from './models';
 
 /**
@@ -49,6 +52,37 @@ describe('model tags (B0-806 / B0-908)', () => {
     for (const tag of ANTHROPIC_MODEL_TAGS) {
       expect(isBexModelTag(tag)).toBe(true);
     }
+  });
+
+  /**
+   * B0-899 — the two per-vendor subsets are what the two `preview` default rows validate against
+   * (BEX_RESPONSES_MODEL → OPENAI_MODEL_TAGS, BEX_ANTHROPIC_MODEL → ANTHROPIC_MODEL_TAGS). They must
+   * partition the explicit tags exactly: no tag in both, no explicit tag in neither.
+   */
+  it('splits the explicit tags into disjoint OpenAI and Anthropic subsets that cover BEX_MODEL_TAGS (B0-899)', () => {
+    expect(OPENAI_MODEL_TAGS).toEqual(['gpt-4o', 'gpt-4.1-mini', 'gpt-4.1', 'gpt-5.5', 'gpt-5.6']);
+    expect([...OPENAI_MODEL_TAGS, ...ANTHROPIC_MODEL_TAGS]).toEqual(
+      BEX_MODEL_TAGS.filter((tag) => tag !== 'preview'),
+    );
+    for (const tag of OPENAI_MODEL_TAGS) {
+      expect(isOpenAiModelTag(tag)).toBe(true);
+      expect(isAnthropicModelTag(tag)).toBe(false);
+      expect(modelProviderFor(tag)).toBe('openai');
+    }
+    for (const tag of ANTHROPIC_MODEL_TAGS) {
+      expect(isAnthropicModelTag(tag)).toBe(true);
+      expect(isOpenAiModelTag(tag)).toBe(false);
+    }
+    // `preview` is a member of neither: it is what the rows resolve, never what they hold.
+    expect(isOpenAiModelTag('preview')).toBe(false);
+    expect(isAnthropicModelTag('preview')).toBe(false);
+    expect(isOpenAiModelTag('gpt-4o-mini')).toBe(false);
+  });
+
+  it('tells the picker that preview is provider-routed, naming both default rows (B0-899)', () => {
+    expect(MODEL_DESCRIPTIONS.preview).toContain('BEX_LLM_PROVIDER');
+    expect(MODEL_DESCRIPTIONS.preview).toContain('BEX_RESPONSES_MODEL');
+    expect(MODEL_DESCRIPTIONS.preview).toContain('BEX_ANTHROPIC_MODEL');
   });
 
   it('collapses the grading lists onto the unified lists (compat aliases, B0-908)', () => {

@@ -3,7 +3,7 @@ import { createOpenAI } from '@ai-sdk/openai';
 
 import { modelProviderFor, type ModelProvider } from '~/lib/constants/models';
 import type { AssistantMessageContent, SourceRef } from '~/lib/conversations/conversation-schemas';
-import { resolveResponsesModel } from '~/lib/openai/client';
+import { resolveModel } from '~/lib/llm/resolve-model';
 import type { ValidatorResult } from '~/lib/workflows/product-support/product-support-schemas';
 import type { ChatMessage } from '~/types/bex';
 
@@ -44,10 +44,10 @@ export function aiSdkProviderFor(model: string): ModelProvider {
 
 /**
  * Resolves a UI/API model tag to an AI SDK language model. The tag → id mapping (env pins, the
- * `preview` settings row) stays in `resolveResponsesModel`; only the provider choice lives here.
+ * per-vendor `preview` default rows, B0-899) lives in `resolveModel`; only the provider choice lives here.
  */
 export async function resolveAiSdkLanguageModel(modelTag: string | undefined) {
-  const model = await resolveResponsesModel(modelTag);
+  const model = await resolveModel(modelTag);
   return aiSdkProviderFor(model) === 'anthropic' ? anthropic(model) : openai(model);
 }
 

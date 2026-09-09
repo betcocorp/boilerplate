@@ -30,6 +30,8 @@ vi.mock('~/lib/workflows/product-support/max-output-tokens', () => ({
 vi.mock('~/lib/settings/settings-service', () => ({
   getStringSetting: async (_key: string, fallback: string) => fallback,
   getBooleanSetting: async (_key: string, fallback: boolean) => fallback,
+  // B0-899 — resolveRevisionModel goes through resolveModel, whose `preview` branch reads this.
+  getLlmProvider: async () => 'openai' as const,
 }));
 
 import {

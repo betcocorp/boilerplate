@@ -2,6 +2,7 @@ import { MockLanguageModelV3, simulateReadableStream } from 'ai/test';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ToolTraceEntry } from '~/lib/audit/trace';
+import type { Tool as OpenAiTool } from 'openai/resources/responses/responses';
 
 // The runtime resolves its model via resolveAiSdkLanguageModel; swap in a mock model per test.
 const modelRef = vi.hoisted(() => ({ current: null as MockLanguageModelV3 | null }));
@@ -14,6 +15,10 @@ import { runAiSdkWithToolLoop } from '~/lib/bex/ai-sdk-runtime';
 import {
   formatPriorTurnToolContext,
   PRIOR_TURN_TOOL_CONTEXT_HEADER,
+  RETRIEVAL_EXHAUSTED_INSTRUCTION,
+  TOOL_ROUNDS_EXHAUSTED_FALLBACK_TEXT,
+  TOOL_ROUNDS_EXHAUSTED_INSTRUCTION,
+  UNPRODUCTIVE_RETRIEVAL_CALL_LIMIT,
 } from '~/lib/openai/responses-runtime';
 import {
   isUpstreamTransportError,
@@ -711,8 +716,363 @@ describe('provider-aware request options (B0-908)', () => {
     expect(params.temperature).toBeUndefined();
     expect(params.topP).toBeUndefined();
     expect(params.topK).toBeUndefined();
-    expect(params.providerOptions?.anthropic).toBeUndefined();
+    // B0-900 — the only Anthropic provider option ever sent is the cache breakpoint; in particular
+    // no `thinking`, `effort` or sampling control rides along with it.
+    expect(params.providerOptions?.anthropic).toEqual({ cacheControl: { type: 'ephemeral' } });
     // History replay is provider-independent and byte-identical to the OpenAI path.
     expect(params.prompt.filter((message) => message.role === 'user')).toHaveLength(2);
+  });
+
+  /**
+   * B0-900 — `promptCacheKey` is the caller's "cache the stable prefix" statement; Anthropic has no
+   * cache key, so its presence maps to the request-level `cacheControl` breakpoint instead.
+   */
+  it('maps promptCacheKey to the Anthropic cacheControl provider option for a claude-* model', async () => {
+    const seen: DoStreamParams[] = [];
+    modelRef.current = capturingModel('claude-opus-5', seen);
+
+    await runAiSdkWithToolLoop({
+      modelTag: 'claude-opus-5',
+      instructions: 'You are Bex.',
+      history: [],
+      userMessage: 'hi',
+      promptCacheKey: 'bex-product-support:orchestrator:product',
+      executeTool: noopExecuteTool,
+    });
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0].providerOptions).toEqual({
+      anthropic: { cacheControl: { type: 'ephemeral' } },
+    });
+    // The OpenAI key's VALUE never reaches Anthropic — there is no field for it.
+    expect(JSON.stringify(seen[0].providerOptions)).not.toContain('bex-product-support');
+    expect(seen[0].providerOptions?.openai).toBeUndefined();
+  });
+
+  it('sends no cache option at all to a claude-* model when the caller asks for no caching', async () => {
+    const seen: DoStreamParams[] = [];
+    modelRef.current = capturingModel('claude-sonnet-5', seen);
+
+    await runAiSdkWithToolLoop({
+      modelTag: 'claude-sonnet-5',
+      instructions: 'You are Bex.',
+      history: [],
+      userMessage: 'hi',
+      executeTool: noopExecuteTool,
+    });
+
+    expect(seen[0].providerOptions).toBeUndefined();
+  });
+
+  it('keeps the OpenAI branch byte-identical: no anthropic providerOptions for a gpt model', async () => {
+    const seen: DoStreamParams[] = [];
+    modelRef.current = capturingModel('gpt-4.1', seen);
+
+    await runAiSdkWithToolLoop({
+      modelTag: 'gpt-4.1',
+      instructions: 'You are Bex.',
+      history: [],
+      userMessage: 'hi',
+      promptCacheKey: 'bex:v1',
+      executeTool: noopExecuteTool,
+    });
+
+    expect(seen[0].providerOptions).toEqual({ openai: { promptCacheKey: 'bex:v1' } });
+    expect(seen[0].providerOptions?.anthropic).toBeUndefined();
+  });
+
+  it('replays the prior-turn tool-context block in the same position for a claude-* model (B0-378 parity)', async () => {
+    const seen: DoStreamParams[] = [];
+    modelRef.current = capturingModel('claude-sonnet-5', seen);
+    const toolContext = formatPriorTurnToolContext({
+      toolNames: ['search_product_docs'],
+      sourceTitles: ['pH7Q Dual Label (US)'],
+    });
+
+    await runAiSdkWithToolLoop({
+      modelTag: 'claude-sonnet-5',
+      instructions: 'You are Bex.',
+      history: [
+        { role: 'user', content: 'Is pH7Q effective against norovirus?' },
+        { role: 'assistant', content: 'Yes — see the label.', toolContext: toolContext! },
+      ],
+      userMessage: 'And what dilution did that use?',
+      promptCacheKey: 'bex:v1',
+      executeTool: noopExecuteTool,
+    });
+
+    const nonSystem = seen[0].prompt.filter((message) => message.role !== 'system');
+    expect(nonSystem.map((message) => message.role)).toEqual(['user', 'assistant', 'user', 'user']);
+    expect(JSON.stringify(nonSystem[2]?.content)).toContain(PRIOR_TURN_TOOL_CONTEXT_HEADER);
+    expect(JSON.stringify(nonSystem[2]?.content)).toContain('pH7Q Dual Label (US)');
+    expect(JSON.stringify(nonSystem.at(-1)?.content)).toContain('And what dilution did that use?');
+    // The cache breakpoint is request-level: no per-message providerOptions are fabricated.
+    expect(JSON.stringify(seen[0].prompt)).not.toContain('cacheControl');
+  });
+});
+
+/**
+ * B0-901 — the three Responses-only loop behaviours, ported. Each case below mirrors the
+ * corresponding `responses-runtime.test.ts` case (`— tool-round exhaustion (B0-381)`,
+ * `— unproductive-retrieval early stop (B0-635)`, `— temperature gating (B0-606)`) and asserts the
+ * same MODEL-VISIBLE text, because the point of the port is that a provider A/B compares models
+ * rather than runtimes.
+ */
+describe('runAiSdkWithToolLoop — ported loop behaviours (B0-901)', () => {
+  const functionTool = (name: string): OpenAiTool => ({
+    type: 'function',
+    name,
+    description: name,
+    parameters: { type: 'object', properties: {}, required: [] },
+    strict: false,
+  });
+
+  /** One retrieval tool + one non-retrieval tool, the shape `productSupportToolsForRoute` returns. */
+  const offeredTools: OpenAiTool[] = [
+    functionTool('search_product_docs'),
+    functionTool('lookup_cross_reference'),
+  ];
+
+  /**
+   * A corpus-SEARCH payload citing exactly these documents (one chunk each), carrying the real
+   * `adapter` discriminator — only a search payload can count toward exhaustion. Same fixture text
+   * as the Responses case.
+   */
+  const retrieved = (...documentIds: string[]) =>
+    JSON.stringify({
+      ok: true,
+      adapter: 'rag_corpus_full_document',
+      sources: documentIds.map((documentId) => ({
+        documentId,
+        chunkId: `${documentId}#c1`,
+        documentBody: 'FastDraw dilution guidance…',
+      })),
+    });
+
+  /** A structured point lookup with no facts on file — neutral, never counts toward exhaustion. */
+  const noFactsOnFile = () =>
+    JSON.stringify({ ok: true, adapter: 'structured_facts_v1', facts: null });
+
+  const searchCallChunks = (id: string) =>
+    [
+      {
+        type: 'tool-call',
+        toolCallId: id,
+        toolName: 'search_product_docs',
+        input: JSON.stringify({ freeformQuery: 'cartridge yield' }),
+      },
+      {
+        type: 'finish',
+        finishReason: 'tool-calls',
+        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+      },
+    ] as const;
+
+  const answerChunks = (text: string) =>
+    [
+      { type: 'text-start', id: '0' },
+      { type: 'text-delta', id: '0', delta: text },
+      { type: 'text-end', id: '0' },
+      {
+        type: 'finish',
+        finishReason: 'stop',
+        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+      },
+    ] as const;
+
+  /** Records every prepared request so the injected instructions and tool set can be inspected. */
+  function recordingModel(
+    perCall: Array<ReadonlyArray<Record<string, unknown>>>,
+    seen: Array<Record<string, unknown>>,
+  ): MockLanguageModelV3 {
+    let call = 0;
+    return new MockLanguageModelV3({
+      doStream: async (options) => {
+        seen.push(options as unknown as Record<string, unknown>);
+        const chunks = perCall[Math.min(call, perCall.length - 1)]!;
+        call += 1;
+        return {
+          stream: simulateReadableStream({
+            chunks: chunks as unknown as Parameters<typeof simulateReadableStream>[0]['chunks'],
+          }),
+        };
+      },
+    });
+  }
+
+  const promptText = (request: Record<string, unknown>): string =>
+    JSON.stringify(request.prompt ?? '');
+
+  const activeToolNames = (request: Record<string, unknown>): string[] =>
+    ((request.tools ?? []) as Array<Record<string, unknown>>).map((tool) => String(tool.name));
+
+  it('withdraws retrieval tools after two consecutive calls that surface no new document, and says why', async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    modelRef.current = recordingModel(
+      [
+        searchCallChunks('t1'),
+        searchCallChunks('t2'),
+        searchCallChunks('t3'),
+        answerChunks('The cartridge volume is not on file.'),
+      ],
+      seen,
+    );
+
+    // t1 finds doc-a (productive); t2 and t3 re-find only doc-a — the repro pattern from run 5b13095f.
+    const outputs = [retrieved('doc-a'), retrieved('doc-a'), retrieved('doc-a')];
+    let call = 0;
+    const executeTool = vi.fn(async ({ name }: { name: string }) => {
+      const output = outputs[call++] ?? '{}';
+      return {
+        output,
+        trace: {
+          toolName: name,
+          callId: `t${call}`,
+          argumentsPreview: '',
+          outputPreview: '',
+          ok: true,
+          durationMs: 0,
+        } as ToolTraceEntry,
+      };
+    });
+
+    const onRetrievalExhausted = vi.fn();
+    const result = await runAiSdkWithToolLoop({
+      instructions: 'You are Bex.',
+      history: [],
+      userMessage: 'How much does one FastDraw cartridge yield?',
+      tools: offeredTools,
+      executeTool,
+      onRetrievalExhausted,
+    });
+
+    // Two unproductive calls trip the limit; the step prepared after them carries the notice…
+    const withdrawnRequest = seen.find((request) =>
+      promptText(request).includes('Retrieval is exhausted for this turn.'),
+    );
+    expect(withdrawnRequest).toBeDefined();
+    // …with the byte-identical text the Responses loop sends.
+    expect(promptText(withdrawnRequest!)).toContain(RETRIEVAL_EXHAUSTED_INSTRUCTION.slice(0, 120));
+    // …and retrieval tools gone from that step, every other tool still offered.
+    expect(activeToolNames(withdrawnRequest!)).not.toContain('search_product_docs');
+    expect(activeToolNames(withdrawnRequest!)).toContain('lookup_cross_reference');
+    // The hook fires exactly once, reporting the limit it tripped on.
+    expect(onRetrievalExhausted).toHaveBeenCalledTimes(1);
+    expect(onRetrievalExhausted.mock.calls[0]?.[0]).toMatchObject({
+      unproductiveCallCount: UNPRODUCTIVE_RETRIEVAL_CALL_LIMIT,
+    });
+    expect(result.assistantText).toBe('The cartridge volume is not on file.');
+  });
+
+  it('never counts an empty structured-fact lookup toward withdrawal', async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    modelRef.current = recordingModel(
+      [
+        searchCallChunks('t1'),
+        searchCallChunks('t2'),
+        searchCallChunks('t3'),
+        answerChunks('Answer.'),
+      ],
+      seen,
+    );
+
+    // Three point lookups with nothing on file: neutral, so search is never withdrawn.
+    const executeTool = vi.fn(async ({ name }: { name: string }) => ({
+      output: noFactsOnFile(),
+      trace: {
+        toolName: name,
+        callId: 't',
+        argumentsPreview: '',
+        outputPreview: '',
+        ok: true,
+        durationMs: 0,
+      } as ToolTraceEntry,
+    }));
+
+    const onRetrievalExhausted = vi.fn();
+    await runAiSdkWithToolLoop({
+      instructions: 'You are Bex.',
+      history: [],
+      userMessage: 'Efficacy for Push?',
+      tools: offeredTools,
+      executeTool,
+      onRetrievalExhausted,
+    });
+
+    expect(onRetrievalExhausted).not.toHaveBeenCalled();
+    for (const request of seen) {
+      expect(promptText(request)).not.toContain('Retrieval is exhausted for this turn.');
+      expect(activeToolNames(request)).toContain('search_product_docs');
+    }
+  });
+
+  it('forces a final answer with the tool-limit instruction once the tool budget is spent', async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    // A model that never stops asking for tools, so the budget is always spent.
+    modelRef.current = recordingModel([searchCallChunks('t1')], seen);
+
+    const executeTool = vi.fn(async ({ name }: { name: string }) => ({
+      // Fresh document each call, so B0-635 never fires and only the round cap can stop this.
+      output: retrieved(`doc-${Math.random().toString(36).slice(2, 8)}`),
+      trace: {
+        toolName: name,
+        callId: 't',
+        argumentsPreview: '',
+        outputPreview: '',
+        ok: true,
+        durationMs: 0,
+      } as ToolTraceEntry,
+    }));
+
+    const onToolRoundsExhausted = vi.fn();
+    const result = await runAiSdkWithToolLoop({
+      instructions: 'You are Bex.',
+      history: [],
+      userMessage: 'Compare everything.',
+      tools: offeredTools,
+      maxToolRounds: 2,
+      executeTool,
+      onToolRoundsExhausted,
+    });
+
+    // Two tool rounds, then exactly one forced-answer step: three model calls in total.
+    expect(seen).toHaveLength(3);
+    const finalRequest = seen.at(-1)!;
+    expect(promptText(finalRequest)).toContain(
+      'You have reached the tool-call limit for this turn',
+    );
+    expect(promptText(finalRequest)).toContain(TOOL_ROUNDS_EXHAUSTED_INSTRUCTION.slice(0, 120));
+    expect(finalRequest.toolChoice).toEqual({ type: 'none' });
+    expect(onToolRoundsExhausted).toHaveBeenCalledTimes(1);
+    expect(onToolRoundsExhausted.mock.calls[0]?.[0]).toMatchObject({ maxToolRounds: 2 });
+    // The forced step still produced no text, so the shared last-resort answer is returned rather
+    // than an empty string.
+    expect(result.assistantText).toBe(TOOL_ROUNDS_EXHAUSTED_FALLBACK_TEXT);
+  });
+
+  /**
+   * B0-606 — the Responses loop replays a request without `temperature` when a model rejects it.
+   * This loop is satisfied by construction: it never sends a sampling control on EITHER provider,
+   * so there is nothing for a rejection to be triggered by. Asserted rather than assumed, because
+   * adding a `temperature` here would silently break every Claude call (Opus 5 / Sonnet 5 return
+   * 400 on any sampling control).
+   */
+  it('sends no sampling control on either provider, so a temperature rejection cannot arise', async () => {
+    for (const modelTag of ['gpt-4.1-mini', 'claude-sonnet-5']) {
+      const seen: Array<Record<string, unknown>> = [];
+      modelRef.current = recordingModel([answerChunks('ok')], seen);
+
+      await runAiSdkWithToolLoop({
+        modelTag,
+        instructions: 'You are Bex.',
+        history: [],
+        userMessage: 'hi',
+        executeTool: noopExecuteTool,
+      });
+
+      expect(seen).toHaveLength(1);
+      expect(seen[0]!.temperature).toBeUndefined();
+      expect(seen[0]!.topP).toBeUndefined();
+    }
   });
 });
