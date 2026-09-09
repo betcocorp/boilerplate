@@ -1,3 +1,17 @@
+# [4.4.0](https://github.com/betcocorp/bex2.0/compare/v4.3.0...v4.4.0) (2026-09-09)
+
+
+### Bug Fixes
+
+* **B0-910:** accept nullable enums on both providers via a shared anyOf helper ([eb46e74](https://github.com/betcocorp/bex2.0/commit/eb46e74ce22bbb5812b7db9888f777563e23cb1c))
+* **B0-915:** stop the regulated-claim guardrail declining Bex's own offers and label pointers ([6e50231](https://github.com/betcocorp/bex2.0/commit/6e502313e5aecc2515402cb9a0dfb96cd0672469))
+
+
+### Features
+
+* **B0-911,B0-912:** surface degraded routing runs and the generation runtime that served them ([0b23386](https://github.com/betcocorp/bex2.0/commit/0b233867c76329da6a515efa751272a6739fdb4c))
+* **B0-913:** add a generation-effort settings row and an explicit Anthropic cache breakpoint ([7e88a1e](https://github.com/betcocorp/bex2.0/commit/7e88a1e97d78ebf0c6406c888f75c3891e9a096e))
+
 # [4.3.0](https://github.com/betcocorp/bex2.0/compare/v4.2.1...v4.3.0) (2026-09-09)
 
 
