@@ -1,3 +1,29 @@
+# [4.3.0](https://github.com/betcocorp/bex2.0/compare/v4.2.1...v4.3.0) (2026-09-09)
+
+
+### Bug Fixes
+
+* **B0-887:** check generic-chemistry description before the bare-chemistry gate ([4d6f176](https://github.com/betcocorp/bex2.0/commit/4d6f1764d96a76d5c68d9dad1f5322e52154af90))
+* **B0-899:** let BEX_RESPONSES_MODEL hold a Claude model again ([6882d4e](https://github.com/betcocorp/bex2.0/commit/6882d4ed9b0981287ff999e8c7b898ab2e3c7ef9))
+
+
+### Features
+
+* **B0-863:** feed harness provenance into eval report per-case aside and Top-3 synthesis ([d10f766](https://github.com/betcocorp/bex2.0/commit/d10f766fd2ddb5ac7e0acb15f24bd21b465a3ab9))
+* **B0-885,B0-886,B0-888:** widen validator evidence, make revision a targeted edit, ground key-term paraphrases ([3c2945b](https://github.com/betcocorp/bex2.0/commit/3c2945baed5935273cc81e3bc8bcaa03f2a7f856))
+* **B0-889:** answer superlative and task-recommendation product asks with the full catalog list ([635d3f9](https://github.com/betcocorp/bex2.0/commit/635d3f91aa65fe1707ce8067571378e47755c516))
+* **B0-890:** retrieve every named product on a two-product comparison question ([6e32631](https://github.com/betcocorp/bex2.0/commit/6e32631317d7ce77510fe6a4536b54aec94f3623))
+* **B0-891:** resolve product names against product-tier entities and document titles ([25a6d8f](https://github.com/betcocorp/bex2.0/commit/25a6d8f3c5dc7c3d79e9647bd27d0068a58276bd))
+* **B0-892:** surface full body of small top-ranked knowledge documents ([01a8a3d](https://github.com/betcocorp/bex2.0/commit/01a8a3d9b6cfe96b20a634b2cd657692576ac988)), closes [#8](https://github.com/betcocorp/bex2.0/issues/8)
+* **B0-897:** add BEX_LLM_PROVIDER select setting to /admin/settings ([303d50d](https://github.com/betcocorp/bex2.0/commit/303d50d34ca936ddad0e1ee4eca48fbbe948d55b))
+* **B0-899,B0-900,B0-901:** resolve preview per vendor, cache Anthropic chat prefixes, port the three Responses-only loop behaviours ([7f9a393](https://github.com/betcocorp/bex2.0/commit/7f9a393cb468006dd5c1a209a5b87e5aa13e529e))
+* **B0-902:** grade eval items on the provider seam with a TEST_ITEM_GRADING_MODEL row ([86d5191](https://github.com/betcocorp/bex2.0/commit/86d5191d484faaae64ded8521d665eeca51a7407))
+* **B0-903:** route the intent/signals router, validator and revision passes through the vendor-neutral resolver ([dc63b15](https://github.com/betcocorp/bex2.0/commit/dc63b15ee909eb94da0059ef567e606c06881e94))
+* **B0-904:** move the cross-reference and category model overrides from env to settings rows ([e5ed011](https://github.com/betcocorp/bex2.0/commit/e5ed0113f8d2c9c1787757cab1a7fa051ae9d534))
+* **B0-905:** group the model pickers by vendor and name the answering vendor on runs and reports ([6cdb962](https://github.com/betcocorp/bex2.0/commit/6cdb9622ab213215b1eac64370a80a8ac36e4abc))
+* **B0-906:** move the harness insight calls off hardcoded gpt-4.1-mini onto the provider seam ([71ef223](https://github.com/betcocorp/bex2.0/commit/71ef22333eabaf54e77e1b5588dfdd3dfc60fe8d))
+* **B0-908:** offer Anthropic model equivalents in every model selector and route by provider ([68aad9b](https://github.com/betcocorp/bex2.0/commit/68aad9b52d50d5eab9e06c10b4fd52f996944f6d))
+
 ## [4.2.1](https://github.com/betcocorp/bex2.0/compare/v4.2.0...v4.2.1) (2026-09-08)
 
 
