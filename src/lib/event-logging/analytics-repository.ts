@@ -191,9 +191,9 @@ export function parseGroupFilter(raw: string | string[] | undefined): string[] {
 /**
  * The `YYYY-MM-DD` keys for the window, oldest first, ending on the `now` day.
  *
- * UTC rather than local time: the RPC buckets with `date_trunc('day', created_at)` in the database
- * session's timezone (UTC), so densifying on local days would misalign the join near midnight.
- * bex has no `date-fns`, and plain `Date` arithmetic on UTC midnights is exact — no DST drift.
+ * EST rather than local time: the RPC buckets with `date_trunc('day', created_at)` in the database
+ * session's timezone (EST), so densifying on local days would misalign the join near midnight.
+ * bex has no `date-fns`, and plain `Date` arithmetic on EST midnights is exact — no DST drift.
  */
 function buildDayKeys(dayCount: number, now: Date): string[] {
   const count = Math.max(0, Math.trunc(dayCount));

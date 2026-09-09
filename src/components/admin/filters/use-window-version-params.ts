@@ -15,7 +15,7 @@
  * transition's pending flag, which is why a pasted URL reproduces the view and browser
  * back/forward works.
  *
- * `from`/`to` are written as `YYYY-MM-DD` UTC, which is precisely what
+ * `from`/`to` are written as `YYYY-MM-DD` EST, which is precisely what
  * `resolveHealthSearchParams` (`~/lib/bex-health/search-params`) reads back. Keep the two in step.
  */
 
@@ -41,7 +41,7 @@ export function useWindowVersionParams({
 }: {
   /** Inclusive span of the resolved window, in days. */
   windowDays: number;
-  /** True when the window ends on the current UTC day — only then can it be a trailing preset. */
+  /** True when the window ends on the current EST day — only then can it be a trailing preset. */
   windowEndsToday: boolean;
   /** The day counts this surface offers, e.g. `[1, 7, 14, 30]`. */
   presetDays: readonly number[];

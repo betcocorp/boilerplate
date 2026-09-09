@@ -47,9 +47,9 @@ const UNKNOWN_RUN_SOURCE_BADGE = {
 } as const;
 
 export type RunsTableFilters = {
-  /** `YYYY-MM-DD` (UTC), as typed into the date inputs. */
+  /** `YYYY-MM-DD` (EST), as typed into the date inputs. */
   from: string;
-  /** `YYYY-MM-DD` (UTC), as typed into the date inputs. */
+  /** `YYYY-MM-DD` (EST), as typed into the date inputs. */
   to: string;
   status: string;
   routingDecision: string;

@@ -26,7 +26,7 @@ import {
  *          how a tester forces an alert on demand without retuning the shared `settings` rows.
  *
  * ## Wiring
- * `vercel.json` schedules the GET daily at 07:10 UTC. As with the sweeper, `CRON_SECRET` must be a
+ * `vercel.json` schedules the GET daily at 07:10 EST. As with the sweeper, `CRON_SECRET` must be a
  * real provisioned API token (`bex_<env>_…`) from the client registry; without it the cron simply
  * receives the uniform 401 and nothing is evaluated — which is why the persisted evaluation trail
  * (`observability_alert_evaluations`) is the thing to check when confirming the alerter is alive.

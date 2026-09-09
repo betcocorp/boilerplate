@@ -22,7 +22,7 @@ import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
  * a NULL priority are a B0-572 data error surfaced by the golden-set reader's validation
  * list; the trend skips their rows (they belong to no tier) rather than inventing a bucket.
  *
- * Days are UTC calendar days of the RUN's `created_at`, so all rows of one run land on one
+ * Days are EST calendar days of the RUN's `created_at`, so all rows of one run land on one
  * day even when item rows straddle midnight.
  *
  * ## Why this folds rows in Node instead of a Postgres RPC
@@ -44,7 +44,7 @@ const DEFAULT_WINDOW_DAYS = 14;
 
 export type TierTrendPoint = {
   tier: GoldenTier;
-  /** UTC calendar day, `YYYY-MM-DD`. */
+  /** EST calendar day, `YYYY-MM-DD`. */
   day: string;
   passed: number;
   total: number;

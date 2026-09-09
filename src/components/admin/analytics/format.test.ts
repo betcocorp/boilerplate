@@ -93,7 +93,7 @@ describe('truncateEvent', () => {
 
 describe('formatEventTimestamp', () => {
   it('renders a readable local timestamp', () => {
-    const rendered = formatEventTimestamp('2026-08-30T15:04:00.000Z', 'UTC');
+    const rendered = formatEventTimestamp('2026-08-30T15:04:00.000Z', 'EST');
     expect(rendered).toContain('Aug 30');
     expect(rendered).toContain('3:04');
     expect(rendered).toContain('PM');

@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * B0-583 — client half of the "Tokens per day" panel: one stacked bar per UTC day, split
+ * B0-583 — client half of the "Tokens per day" panel: one stacked bar per EST day, split
  * prompt (uncached) / cached prompt / completion. `cached` is carved OUT of the prompt segment
  * (prompt − cached), so a bar's height is the day's true total tokens with no double counting.
  *
@@ -28,7 +28,7 @@ import {
 } from '~/components/ui/chart';
 
 export type TokensPerDayDatum = {
-  /** UTC day, `YYYY-MM-DD`. */
+  /** EST day, `YYYY-MM-DD`. */
   day: string;
   /** `prompt_tokens − cached_prompt_tokens`, clamped at 0. */
   promptUncached: number;
@@ -58,7 +58,7 @@ function formatDayLabel(day: string): string {
   const date = new Date(`${day}T00:00:00.000Z`);
   return Number.isNaN(date.getTime())
     ? day
-    : date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+    : date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'EST' });
 }
 
 type TooltipPayloadEntry = {

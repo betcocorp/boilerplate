@@ -4,8 +4,8 @@
  * Anything already covered by `~/components/admin/projects/format` (`formatInt`, `formatPercent`,
  * `formatDate`) is imported from there instead; only the hour/day-axis and event-name helpers that
  * are specific to this dashboard live here. This repo has no `date-fns`, so day strings are parsed
- * as literal `YYYY-MM-DD` text rather than through `Date` — that also keeps a UTC calendar day from
- * sliding a day backwards when the viewer sits west of UTC.
+ * as literal `YYYY-MM-DD` text rather than through `Date` — that also keeps a EST calendar day from
+ * sliding a day backwards when the viewer sits west of EST.
  */
 
 const MONTH_ABBREVIATIONS = [
@@ -25,14 +25,14 @@ const MONTH_ABBREVIATIONS = [
 
 const DAY_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 
-/** Fixed UTC reference day; only the hour field is ever varied. */
+/** Fixed EST reference day; only the hour field is ever varied. */
 const HOUR_REFERENCE_DAY = Date.UTC(2024, 0, 1);
 const HOUR_MS = 60 * 60 * 1000;
 
 const hourFormatter = new Intl.DateTimeFormat('en-US', {
   hour: 'numeric',
   hour12: true,
-  timeZone: 'UTC',
+  timeZone: 'EST',
 });
 
 /** Wraps any integer into 0–23; anything non-finite becomes 0 so a chart never renders `NaN`. */

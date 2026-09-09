@@ -16,8 +16,8 @@
  *  2. The p95 card carries NO sparkline. `RunKpiSummary.buckets` counts runs per bucket; there is
  *     no per-bucket latency series anywhere in the reader, so drawing a line there would be a
  *     picture of run volume mislabelled as latency. The sample size is shown as text instead.
- *  3. The spend card is labelled "· window", not "· 24h": `cost_by_model_per_day` is UTC-day
- *     grained and cannot express a rolling 24 hours. Its sparkline IS real — one point per UTC
+ *  3. The spend card is labelled "· window", not "· 24h": `cost_by_model_per_day` is EST-day
+ *     grained and cannot express a rolling 24 hours. Its sparkline IS real — one point per EST
  *     day of `estimatedCostUsd`, which is exactly what the view stores.
  */
 
@@ -52,7 +52,7 @@ export const KPI_ROW_SOURCES = [
   'Runs, failure rate & elapsed percentiles: workflow_runs (status, created_at, updated_at) via scanWorkflowRuns — failure rate’s denominator is TERMINAL runs (completed + failed), and elapsed excludes in-flight runs rather than counting them as fast',
   'Failure-rate delta: a second scan of the preceding equal-length window; absent (never zero) when that window has no terminal runs',
   'TTFT: workflow_runs.final_output plus the harness first-token index, via getAggregateDashboardData',
-  'Spend: cost_by_model_per_day view (UTC-day grained, so it cannot express a rolling 24h) — steps with no output->>\'model\' are NOT in the view, so window spend is understated rather than zero-filled; per-run divides by the cost_covered_run_count RPC',
+  'Spend: cost_by_model_per_day view (EST-day grained, so it cannot express a rolling 24h) — steps with no output->>\'model\' are NOT in the view, so window spend is understated rather than zero-filled; per-run divides by the cost_covered_run_count RPC',
 ];
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -168,7 +168,7 @@ export async function KpiRow({ window, version }: HealthPanelProps) {
   };
 
   // Preceding window of equal length, ending the day before this one starts — the same day
-  // arithmetic `TokensPerDayPanel` uses, expressed back as inclusive UTC-day bounds.
+  // arithmetic `TokensPerDayPanel` uses, expressed back as inclusive EST-day bounds.
   const dayCount =
     Math.floor(
       (Date.parse(`${toDay}T00:00:00.000Z`) - Date.parse(`${fromDay}T00:00:00.000Z`)) / DAY_MS,
@@ -200,7 +200,7 @@ export async function KpiRow({ window, version }: HealthPanelProps) {
     costTotalUsd = points.reduce((sum, point) => sum + point.estimatedCostUsd, 0);
     costRunCount = runCount;
 
-    // One point per UTC day the view covers, summed across models.
+    // One point per EST day the view covers, summed across models.
     const byDay = new Map<string, number>();
     for (const point of points) {
       const day = point.bucket.slice(0, 10);
@@ -254,7 +254,7 @@ export async function KpiRow({ window, version }: HealthPanelProps) {
       />
 
       <KpiCard
-        // UTC-day grained view — "window", never "24h".
+        // EST-day grained view — "window", never "24h".
         label="Spend · window"
         note="Steps with no model recorded are absent from cost_by_model_per_day, so this is a floor, not a total."
         sub={`${formatUsdPerRun(costPerRun)} per run · ${formatCount(costRunCount)} cost-tracked runs`}

@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * B0-749 — client half of the golden-set report-score trend panel: one line, one point per UTC
+ * B0-749 — client half of the golden-set report-score trend panel: one line, one point per EST
  * day, y-axis fixed 0-100. Days with no scored golden run are explicit gaps — `connectNulls={false}`
  * breaks the line rather than dropping to 0, and a shaded `ReferenceArea` band marks the day
  * (same convention as `TokensPerDayChart`), so "no data" reads differently from "score was 0".
@@ -24,7 +24,7 @@ function formatDayLabel(day: string): string {
   const date = new Date(`${day}T00:00:00.000Z`);
   return Number.isNaN(date.getTime())
     ? day
-    : date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+    : date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'EST' });
 }
 
 function formatChangePct(changePct: number): string {

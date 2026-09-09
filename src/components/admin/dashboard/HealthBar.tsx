@@ -37,7 +37,6 @@ import { GOLDEN_TIERS, getGoldenSetTierRollup } from '~/lib/tests/golden-set';
 import { getTierTargets } from '~/lib/tests/tier-targets';
 import { PROMPT_BUNDLE_VERSION_SHORT } from '~/lib/workflows/product-support/prompt-version';
 
-import { Badge } from '~/components/ui/badge';
 import { EM_DASH } from './format';
 
 /**
@@ -78,7 +77,7 @@ const sweepFormatter = new Intl.DateTimeFormat('en-US', {
   hour: '2-digit',
   minute: '2-digit',
   hour12: false,
-  timeZone: 'UTC',
+  timeZone: 'EST',
 });
 
 export async function HealthBar({ window, version }: HealthPanelProps) {
@@ -155,22 +154,16 @@ export async function HealthBar({ window, version }: HealthPanelProps) {
               Bundle {PROMPT_BUNDLE_VERSION_SHORT} · Last sweep{' '}
               <span className="tabular-nums">
                 {verdict.lastSweepAt
-                  ? `${sweepFormatter.format(new Date(verdict.lastSweepAt))} UTC`
+                  ? `${sweepFormatter.format(new Date(verdict.lastSweepAt))} EST`
                   : 'none in this selection'}
               </span>{' '}
-              · {utcDay(window.from)} → {utcDay(window.to)} (UTC) ·{' '}
+              · {utcDay(window.from)} → {utcDay(window.to)} (EST) ·{' '}
               {describeVersionSelection(version)}
             </p>
           </div>
         </div>
 
         <div className="flex shrink-0 items-center gap-4">
-          {verdict.totalFailingCount > 0 && (
-            <Badge variant="destructive" className="text-right">
-              {verdict.totalFailingCount} failing prompt
-              {verdict.totalFailingCount === 1 ? '' : 's'}
-            </Badge>
-          )}
           <div className="flex items-center gap-3">
             <Link
               className="inline-flex items-center rounded-full bg-slate-100 px-4 py-2 text-sm font-medium text-slate-900 hover:bg-white"

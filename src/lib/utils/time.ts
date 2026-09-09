@@ -20,16 +20,16 @@ function getPart(parts: Intl.DateTimeFormatPart[], type: string) {
   return parts.find((p) => p.type === type)?.value ?? '';
 }
 
-/** `YYYY-MM-DD HH:mm:ss ET` in Eastern Time (handles EST/EDT). */
+/** `YYYY-MM-DD HH:mm:ss EST` in Eastern Time (handles EST/EDT). */
 export function formatEasternTimestamp(value: number | string): string {
   const p = easternParts(value);
-  return `${getPart(p, 'year')}-${getPart(p, 'month')}-${getPart(p, 'day')} ${getPart(p, 'hour')}:${getPart(p, 'minute')}:${getPart(p, 'second')} ET`;
+  return `${getPart(p, 'year')}-${getPart(p, 'month')}-${getPart(p, 'day')} ${getPart(p, 'hour')}:${getPart(p, 'minute')}:${getPart(p, 'second')} EST`;
 }
 
-/** `HH:mm:ss ET` in Eastern Time (handles EST/EDT). */
+/** `HH:mm:ss EST` in Eastern Time (handles EST/EDT). */
 export function formatEasternTime(value: number | string): string {
   const p = easternParts(value);
-  return `${getPart(p, 'hour')}:${getPart(p, 'minute')}:${getPart(p, 'second')} ET`;
+  return `${getPart(p, 'hour')}:${getPart(p, 'minute')}:${getPart(p, 'second')} EST`;
 }
 
 export function formatDate(value: string): string {

@@ -51,7 +51,7 @@ export function HealthFilters({
 }: {
   /** Inclusive span of the resolved window, in days. */
   windowDays: number;
-  /** True when the window ends on the current UTC day — i.e. it can be a trailing preset. */
+  /** True when the window ends on the current EST day — i.e. it can be a trailing preset. */
   windowEndsToday: boolean;
   /** `''` = all traffic; otherwise the `?version=` value in force. */
   selectedVersion: string;

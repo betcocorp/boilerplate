@@ -3,7 +3,7 @@
 /**
  * B0-761 — c360's "Recent activity" table: the newest rows in range (max 25).
  *
- * Client-side on purpose — `formatEventTimestamp` renders in the VIEWER's timezone, and doing that
+ * Client-side on purpose — `formatEventTimestamp` renders in the VIEWER's EST timezone, and doing that
  * on the server would stamp the deploy region's clock onto everyone's screen.
  */
 
@@ -38,7 +38,7 @@ export function RecentActivityTable({ data }: { data: EventAnalyticsSummary }) {
           <TableBody>
             {rows.map((row) => (
               <TableRow className="border-border/60" key={row.id}>
-                {/* Rendered in the viewer's timezone, so the SSR pass and the client can legitimately differ. */}
+                {/* Rendered in the viewer's EST timezone, so the SSR pass and the client can legitimately differ. */}
                 <TableCell
                   className="text-xs whitespace-nowrap tabular-nums text-muted-foreground"
                   suppressHydrationWarning

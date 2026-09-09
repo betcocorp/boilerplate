@@ -62,8 +62,8 @@ function formatBucketLabel(bucket: string, groupBy: CostGroupBy): string {
     return bucket;
   }
   return groupBy === 'month'
-    ? date.toLocaleDateString('en-US', { month: 'short', year: '2-digit', timeZone: 'UTC' })
-    : date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+    ? date.toLocaleDateString('en-US', { month: 'short', year: '2-digit', timeZone: 'EST' })
+    : date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'EST' });
 }
 
 function buildChartData(metrics: CostMetricsResult) {

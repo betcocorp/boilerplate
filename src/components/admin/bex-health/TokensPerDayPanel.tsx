@@ -3,7 +3,7 @@
  *
  * Async server component. All bars come from the `cost_by_model_per_day` view (B0-565) via the
  * additive `fetchDailyCostPoints` export in `~/lib/observability/cost-metrics` — no new scan of
- * `workflow_steps` or `final_output`. Points are aggregated ACROSS models per UTC day.
+ * `workflow_steps` or `final_output`. Points are aggregated ACROSS models per EST day.
  *
  * The cache-hit rate is `Σ cached_prompt_tokens / Σ prompt_tokens` over the window — the same
  * definition the live-traffic card uses, so the two agree for the same window. Its delta is
@@ -26,7 +26,7 @@ import type { HealthPanelProps } from '~/lib/bex-health/search-params';
 
 /** B0-584 — verified against `fetchDailyCostPoints` / `fetchCostCoveredRunCount`; keep in sync with them. */
 const TOKENS_SOURCES = [
-  'Bars & cache-hit rate: cost_by_model_per_day view, summed per UTC day across models',
+  'Bars & cache-hit rate: cost_by_model_per_day view, summed per EST day across models',
   'Tokens-per-run denominator: cost_covered_run_count RPC — runs with ≥1 cost-tracked step, exactly the runs the view aggregates',
   'The version selector does NOT apply to this panel — the cost view has no version dimension',
 ];
@@ -44,7 +44,7 @@ function utcDay(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
 
-/** Every UTC day from `fromDay` to `toDay` inclusive, as `YYYY-MM-DD`. */
+/** Every EST day from `fromDay` to `toDay` inclusive, as `YYYY-MM-DD`. */
 function enumerateDays(fromDay: string, toDay: string): string[] {
   const days: string[] = [];
   const end = Date.parse(`${toDay}T00:00:00.000Z`);
@@ -56,7 +56,7 @@ function enumerateDays(fromDay: string, toDay: string): string[] {
 
 type DayTotals = { prompt: number; cached: number; completion: number; total: number };
 
-/** Collapses per-model view rows into per-day totals, keyed by UTC day. */
+/** Collapses per-model view rows into per-day totals, keyed by EST day. */
 function aggregateByDay(points: CostMetricsPoint[]): Map<string, DayTotals> {
   const byDay = new Map<string, DayTotals>();
   for (const point of points) {
@@ -146,7 +146,7 @@ export async function TokensPerDayPanel(props: HealthPanelProps) {
         <div>
           <h2 className="text-lg font-semibold tracking-tight text-slate-950">Tokens per day</h2>
           <p className="mt-1 text-sm text-slate-600">
-            One stacked bar per UTC day — prompt (uncached), cached prompt, and completion tokens,
+            One stacked bar per EST day — prompt (uncached), cached prompt, and completion tokens,
             from <code>cost_by_model_per_day</code> across all models.
           </p>
         </div>

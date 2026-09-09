@@ -1,7 +1,7 @@
 /**
  * B0-577 / B0-578 — Bex Health page header (epic B0-569). Async server component: names the
  * SELECTION in force (all traffic / a specific version / the unversioned bucket), the running
- * app version, the prompt bundle, and the UTC window — so a screenshot is self-describing —
+ * app version, the prompt bundle, and the EST window — so a screenshot is self-describing —
  * and hosts the searchParams-driven window/version selectors.
  *
  * The version option list is derived from data every render: `listAvailableVersions()` (an RPC
@@ -23,7 +23,7 @@ const dayFormatter = new Intl.DateTimeFormat('en-US', {
   month: 'short',
   day: 'numeric',
   year: 'numeric',
-  timeZone: 'UTC',
+  timeZone: 'EST',
 });
 
 export async function HealthHeader({ window, version }: HealthPanelProps) {
@@ -69,7 +69,7 @@ export async function HealthHeader({ window, version }: HealthPanelProps) {
             <code className="rounded bg-slate-100 px-1.5 py-0.5 text-sm">
               {PROMPT_BUNDLE_VERSION_SHORT}
             </code>{' '}
-            · {dayFormatter.format(window.from)} – {dayFormatter.format(window.to)} (UTC)
+            · {dayFormatter.format(window.from)} – {dayFormatter.format(window.to)} (EST)
           </p>
         </div>
         <HealthFilters

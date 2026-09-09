@@ -34,7 +34,7 @@ import { TierSparkline, type TierSparklinePoint } from './TierSparkline';
 const TIER_CARD_SOURCES = [
   'Pass rates & failing counts: test_result_items.passed × test_items.priority, scoped to golden-set membership (tests.is_golden), from each golden test’s latest completed full-mode run (test_results) in the selected window/version',
   'Targets, gate flags & tier labels: tier_targets',
-  'Sparklines & deltas: the same tables, folded per UTC day of test_results.created_at; delta is vs the preceding equal-length window',
+  'Sparklines & deltas: the same tables, folded per EST day of test_results.created_at; delta is vs the preceding equal-length window',
 ];
 
 const FAILURE_QUEUE_HREF = '/admin/tests/failure-queue';
@@ -54,7 +54,7 @@ const STATUS_DOT_STYLES: Record<TierStatusTone, string> = {
   neutral: 'bg-slate-400',
 };
 
-/** Every UTC day from `fromDay` to `toDay` inclusive, as `YYYY-MM-DD`. */
+/** Every EST day from `fromDay` to `toDay` inclusive, as `YYYY-MM-DD`. */
 function enumerateDays(fromDay: string, toDay: string): string[] {
   const days: string[] = [];
   const end = Date.parse(`${toDay}T00:00:00.000Z`);

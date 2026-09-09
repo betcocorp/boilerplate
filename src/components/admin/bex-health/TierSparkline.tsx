@@ -11,7 +11,7 @@ import { Line, LineChart, YAxis } from 'recharts';
 import { ChartContainer, type ChartConfig } from '~/components/ui/chart';
 
 export type TierSparklinePoint = {
-  /** UTC day, `YYYY-MM-DD`. */
+  /** EST day, `YYYY-MM-DD`. */
   day: string;
   /** Pass rate in percent (0–100), or null on a gap day (no golden-set run). */
   rate: number | null;

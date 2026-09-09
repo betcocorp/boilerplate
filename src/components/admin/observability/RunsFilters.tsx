@@ -108,7 +108,7 @@ export function RunsFilters({
                 className="text-sm text-slate-700"
                 htmlFor="observability-from"
               >
-                From (UTC)
+                From (EST)
               </Label>
               <Input
                 defaultValue={filters.from}
@@ -123,7 +123,7 @@ export function RunsFilters({
                 className="text-sm text-slate-700"
                 htmlFor="observability-to"
               >
-                To (UTC)
+                To (EST)
               </Label>
               <Input
                 defaultValue={filters.to}

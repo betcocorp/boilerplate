@@ -29,7 +29,6 @@ import { getGoldenSetTierRollup } from '~/lib/tests/golden-set';
 import { getTierTargets } from '~/lib/tests/tier-targets';
 import { PROMPT_BUNDLE_VERSION_SHORT } from '~/lib/workflows/product-support/prompt-version';
 
-import { Badge } from '~/components/ui/badge';
 import { ProvenanceFooter } from './ProvenanceFooter';
 
 /** B0-584 — verified against `getGoldenSetTierRollup` / `getTierTargets`; keep in sync with them. */
@@ -58,7 +57,7 @@ const sweepFormatter = new Intl.DateTimeFormat('en-US', {
   hour: '2-digit',
   minute: '2-digit',
   hour12: false,
-  timeZone: 'UTC',
+  timeZone: 'EST',
 });
 
 export async function VerdictStrip({ window, version }: HealthPanelProps) {
@@ -119,22 +118,16 @@ export async function VerdictStrip({ window, version }: HealthPanelProps) {
               · Last sweep{' '}
               <span className="tabular-nums">
                 {verdict.lastSweepAt
-                  ? `${sweepFormatter.format(new Date(verdict.lastSweepAt))} UTC`
+                  ? `${sweepFormatter.format(new Date(verdict.lastSweepAt))} EST`
                   : 'none in this selection'}
               </span>{' '}
-              · {utcDay(window.from)} → {utcDay(window.to)} (UTC) ·{' '}
+              · {utcDay(window.from)} → {utcDay(window.to)} (EST) ·{' '}
               {describeVersionSelection(version)}
             </p>
           </div>
         </div>
 
         <div className="flex shrink-0 items-center gap-4">
-          {verdict.totalFailingCount > 0 && (
-            <Badge variant="destructive">
-              {verdict.totalFailingCount}&nbsp; failing prompt
-              {verdict.totalFailingCount === 1 ? '' : 's'}
-            </Badge>
-          )}
           <Link
             className="inline-flex items-center rounded-full border border-slate-600 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
             href="/admin/tests"

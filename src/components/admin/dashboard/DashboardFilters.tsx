@@ -28,8 +28,8 @@ import {
 } from '~/components/ui/select';
 
 /**
- * Trailing inclusive-day presets. Labelled "Today (UTC)" rather than the mockup's "Last 24 hours"
- * because the window this writes is a whole UTC day (`from === to`), not a rolling 24 hours — the
+ * Trailing inclusive-day presets. Labelled "Today (EST)" rather than the mockup's "Last 24 hours"
+ * because the window this writes is a whole EST day (`from === to`), not a rolling 24 hours — the
  * label has to describe what the query actually does.
  *
  * `/admin` opens on the same 7-day default as `/admin/bex/health` (see `resolveHealthSearchParams`):
@@ -37,7 +37,7 @@ import {
  * window would leave the health bar's gate verdict empty on most days.
  */
 const WINDOW_PRESETS = [
-  { value: '1', label: 'Today (UTC)' },
+  { value: '1', label: 'Today (EST)' },
   { value: '7', label: 'Last 7 days' },
   { value: '14', label: 'Last 14 days' },
   { value: '30', label: 'Last 30 days' },
@@ -59,7 +59,7 @@ export function DashboardFilters({
 }: {
   /** Inclusive span of the resolved window, in days. */
   windowDays: number;
-  /** True when the window ends on the current UTC day — i.e. it can be a trailing preset. */
+  /** True when the window ends on the current EST day — i.e. it can be a trailing preset. */
   windowEndsToday: boolean;
   /** `''` = all traffic; otherwise the `?version=` value in force. */
   selectedVersion: string;

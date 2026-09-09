@@ -8,7 +8,7 @@
  * the layout chrome.
  *
  * What it adds beyond the chips is a self-describing line, for the same reason `HealthHeader`
- * carries one: a screenshot of this dashboard should say which selection, prompt bundle and UTC
+ * carries one: a screenshot of this dashboard should say which selection, prompt bundle and EST
  * window produced its numbers, rather than being undatable.
  *
  * The version option list is derived from data every render — `listAvailableVersions()` (an RPC
@@ -74,7 +74,7 @@ export async function DashboardHeader({ window, version }: HealthPanelProps) {
           {PROMPT_BUNDLE_VERSION_SHORT}
         </code>{' '}
         · <span className="tabular-nums">{fromDay}</span> →{' '}
-        <span className="tabular-nums">{toDay}</span> (UTC)
+        <span className="tabular-nums">{toDay}</span> (EST)
       </p>
       <DashboardFilters
         selectedVersion={selectedVersion}

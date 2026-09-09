@@ -33,7 +33,7 @@ export const metadata = {
 
 const ROUTE = '/admin/observability';
 const PAGE_SIZE = 50;
-/** Inclusive default window: today plus the previous 6 UTC days. */
+/** Inclusive default window: today plus the previous 6 EST days. */
 const DEFAULT_WINDOW_DAYS = 7;
 const RUN_STATUSES = new Set(['running', 'completed', 'failed']);
 /**
@@ -53,7 +53,7 @@ type PageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 };
 
-/** `YYYY-MM-DD` in UTC. */
+/** `YYYY-MM-DD` in EST. */
 function utcDay(date: Date): string {
   return date.toISOString().slice(0, 10);
 }

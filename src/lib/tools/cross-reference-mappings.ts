@@ -27,7 +27,7 @@ export type CrossReferenceMappingRow = {
  *
  * Deliberately string-only: the source column is `timestamp without time zone`, a naive legacy
  * wall-clock value with no offset to convert *from*. Running it through `Date`/`toLocaleString`/
- * `Intl` would reinterpret it in the server's timezone and can shift it across a day boundary, so
+ * `Intl` would reinterpret it in the server's EST timezone and can shift it across a day boundary, so
  * we read the parts straight off the stored string and show exactly what is stored.
  */
 export function formatMappingTimestamp(value: string | null | undefined): string {
