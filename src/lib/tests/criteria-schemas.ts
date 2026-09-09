@@ -115,6 +115,23 @@ export const criteriaGradingOutcomeSchema = z.object({
   verdicts: z.array(criterionOutcomeSchema),
   /** Human-readable explanation when `passed` is false — names the missed tier-1 concept(s). */
   failureReason: z.string().nullable(),
+  /**
+   * B0-902 — the resolved model id that judged the `semantic` criteria (`TEST_ITEM_GRADING_MODEL`
+   * row, or the run's own model when that row is `run`), and which API served it. `null` when no
+   * model was called (every criterion was `exact`); absent on rows persisted before B0-902.
+   */
+  gradingModel: z.string().nullable().optional(),
+  gradingProvider: z.enum(['openai', 'anthropic']).nullable().optional(),
+  /**
+   * B0-902 — `true` when the grader model could not judge the semantic criteria (a refusal, an
+   * answer truncated at the output cap, or a transport failure after retries). The item is then
+   * NOT passed — `passed` is false and every semantic verdict reads not-met — but the reason is
+   * carried here and in `failureReason` so it is never mistaken for a substantive fail, and never
+   * silently falls through to the behaviour-only heuristic as a pass. Mirrors the run-report
+   * grader's Unable-to-Evaluate outcome (`./report/case-scorer.ts`).
+   */
+  unableToEvaluate: z.boolean().optional(),
+  uteReason: z.string().nullable().optional(),
 });
 export type CriteriaGradingOutcome = z.infer<typeof criteriaGradingOutcomeSchema>;
 

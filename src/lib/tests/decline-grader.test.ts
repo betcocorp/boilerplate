@@ -33,7 +33,6 @@ describe('gradeSemanticDecline (B0-755 / B0-908)', () => {
     mockComplete.mockReset();
     mockResolveModel.mockReset();
     mockResolveModel.mockResolvedValue('gpt-test');
-    delete process.env.BEX_GRADER_MODEL;
   });
 
   it('passes a resolved claude id through to completeStructuredWithUsage with the decline schema', async () => {

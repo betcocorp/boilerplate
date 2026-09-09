@@ -1,5 +1,4 @@
 import { completeStructuredWithUsage } from '~/lib/llm/structured-completion';
-import { resolveResponsesModel } from '~/lib/openai/client';
 import {
   resolveOpenAiRequestTimeoutMs,
   retryTransportFaults,
@@ -14,18 +13,17 @@ import {
   type CriterionVerdict,
   type ExpectedCriterion,
 } from './criteria-schemas';
+import { resolveItemGradingConfig, type ItemGradingConfig } from './item-grading-model';
 
 /**
- * B0-616 — model tag for the criteria grader, following the same env-override
- * convention as `resolveValidatorModel` (~/lib/workflows/product-support/validator.ts):
- * a dedicated env var wins, otherwise fall back to the standard Responses model
- * resolution so the grader tracks whatever the rest of the harness defaults to. A `claude-*`
- * id is fine here — the call below routes by provider (B0-908).
+ * B0-902 — the grader model is the shared per-item resolver (`./item-grading-model.ts`): the
+ * `TEST_ITEM_GRADING_MODEL` settings row, which by default (`run`) follows the run's own model tag
+ * exactly as B0-616's `resolveResponsesModel(modelTag ?? 'preview')` did. The former
+ * `BEX_GRADER_MODEL` env override is gone (config lives in the settings table, never env).
+ * Kept as an export because it is the grader's public resolver name.
  */
 export async function resolveGraderModel(modelTag?: string): Promise<string> {
-  return (
-    process.env.BEX_GRADER_MODEL?.trim() || resolveResponsesModel(modelTag ?? 'preview')
-  );
+  return (await resolveItemGradingConfig(modelTag)).model;
 }
 
 const GRADER_SYSTEM_PROMPT = `You are grading a single AI assistant response against a fixed list of criteria.
@@ -49,6 +47,17 @@ function buildUserMessage(params: {
 }
 
 /**
+ * What the semantic grader call produced: the verdicts plus the model that produced them, or —
+ * when the model could not judge (refusal, truncation at the output cap, transport failure after
+ * retries) — the reason, so `gradeWithCriteria` can return an explicit unable-to-evaluate outcome
+ * instead of throwing (which the runner turned into a silent fall-through to behaviour-only
+ * grading, i.e. a possible silent pass).
+ */
+type SemanticGradingResult =
+  | { ok: true; verdicts: CriterionVerdict[]; grading: ItemGradingConfig }
+  | { ok: false; reason: string; grading: ItemGradingConfig };
+
+/**
  * One structured-output call per item through `completeStructuredWithUsage` (B0-908: routes by
  * provider on the resolved model id), judging only the `semantic`-tagged
  * criteria. `exact`-tagged criteria never reach the model — they are checked deterministically
@@ -60,38 +69,58 @@ async function gradeSemanticCriteria(params: {
   responseText: string;
   semanticCriteria: Array<{ index: number; criterion: ExpectedCriterion }>;
   modelTag?: string;
-}): Promise<CriterionVerdict[]> {
+}): Promise<SemanticGradingResult | null> {
   if (params.semanticCriteria.length === 0) {
-    return [];
+    return null;
   }
 
-  const model = await resolveGraderModel(params.modelTag);
+  const grading = await resolveItemGradingConfig(params.modelTag);
 
-  const { text } = await retryTransportFaults(
-    () =>
-      completeStructuredWithUsage({
-        model,
-        system: GRADER_SYSTEM_PROMPT,
-        user: buildUserMessage({
-          prompt: params.prompt,
-          responseText: params.responseText,
-          criteria: params.semanticCriteria.map(({ index, criterion }) => ({
-            index,
-            concept: criterion.concept,
-          })),
+  let text: string;
+  try {
+    ({ text } = await retryTransportFaults(
+      () =>
+        completeStructuredWithUsage({
+          model: grading.model,
+          effort: grading.effort,
+          system: GRADER_SYSTEM_PROMPT,
+          user: buildUserMessage({
+            prompt: params.prompt,
+            responseText: params.responseText,
+            criteria: params.semanticCriteria.map(({ index, criterion }) => ({
+              index,
+              concept: criterion.concept,
+            })),
+          }),
+          schemaName: 'criteria_grading_result',
+          schema: GRADER_JSON_SCHEMA,
+          maxOutputTokens: resolveMaxOutputTokens(),
+          temperature: 0,
+          requestOptions: { maxRetries: 0, timeoutMs: resolveOpenAiRequestTimeoutMs() },
         }),
-        schemaName: 'criteria_grading_result',
-        schema: GRADER_JSON_SCHEMA,
-        maxOutputTokens: resolveMaxOutputTokens(),
-        temperature: 0,
-        requestOptions: { maxRetries: 0, timeoutMs: resolveOpenAiRequestTimeoutMs() },
-      }),
-    { runtime: 'responses', label: 'criteria-grader.create' },
-  );
+      { runtime: 'responses', label: 'criteria-grader.create' },
+    ));
+  } catch (error) {
+    // `StructuredOutputRefusedError` / `StructuredOutputTruncatedError` and exhausted transport
+    // retries all land here: the model gave no usable judgment, so say so rather than guess.
+    return {
+      ok: false,
+      grading,
+      reason: `Grading call failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+    };
+  }
 
-  const parsedJson = JSON.parse(text) as unknown;
-  const parsed = graderResponseSchema.parse(parsedJson);
-  return parsed.verdicts;
+  let parsed: CriterionVerdict[];
+  try {
+    parsed = graderResponseSchema.parse(JSON.parse(text) as unknown).verdicts;
+  } catch (error) {
+    return {
+      ok: false,
+      grading,
+      reason: `Grader returned an unparseable answer: ${error instanceof Error ? error.message : 'unknown error'}`,
+    };
+  }
+  return { ok: true, verdicts: parsed, grading };
 }
 
 /**
@@ -163,12 +192,45 @@ export async function gradeWithCriteria(params: {
     }
   });
 
-  const rawSemanticVerdicts = await gradeSemanticCriteria({
+  const semanticResult = await gradeSemanticCriteria({
     prompt: params.prompt,
     responseText: params.responseText,
     semanticCriteria,
     modelTag: params.modelTag,
   });
+
+  // B0-902 — no model call happened (every criterion is `exact`): purely deterministic outcome.
+  if (semanticResult === null) {
+    return {
+      ...aggregateCriteriaVerdicts(params.criteria, exactVerdicts),
+      gradingModel: null,
+      gradingProvider: null,
+    };
+  }
+
+  // B0-902 — the model could not judge. The exact verdicts still stand; every semantic criterion
+  // reads not-met (nothing is fabricated), the item is NOT passed, and the reason is carried on the
+  // outcome so a reviewer sees "unable to evaluate", not a substantive fail — and the runner never
+  // falls through to the behaviour-only heuristic, which could have passed the item silently.
+  if (!semanticResult.ok) {
+    const aggregated = aggregateCriteriaVerdicts(params.criteria, exactVerdicts);
+    return {
+      ...aggregated,
+      passed: false,
+      failureReason: [
+        `Unable to evaluate ${semanticCriteria.length} semantic criterion${semanticCriteria.length > 1 ? 'ia' : ''}: ${semanticResult.reason}`,
+        aggregated.failureReason,
+      ]
+        .filter(Boolean)
+        .join(' '),
+      gradingModel: semanticResult.grading.model,
+      gradingProvider: semanticResult.grading.provider,
+      unableToEvaluate: true,
+      uteReason: semanticResult.reason,
+    };
+  }
+
+  const rawSemanticVerdicts = semanticResult.verdicts;
 
   // B0-832 — the model is only ever shown the semantic subset, but it can still answer with a
   // criterionIndex that collides with an `exact`-mode criterion's real index (or with any index
@@ -188,5 +250,9 @@ export async function gradeWithCriteria(params: {
     semanticVerdicts.push({ ...verdict, source: 'semantic' });
   }
 
-  return aggregateCriteriaVerdicts(params.criteria, [...exactVerdicts, ...semanticVerdicts]);
+  return {
+    ...aggregateCriteriaVerdicts(params.criteria, [...exactVerdicts, ...semanticVerdicts]),
+    gradingModel: semanticResult.grading.model,
+    gradingProvider: semanticResult.grading.provider,
+  };
 }

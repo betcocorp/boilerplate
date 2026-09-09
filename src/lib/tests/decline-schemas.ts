@@ -17,6 +17,18 @@ export const semanticDeclineVerdictSchema = z.object({
 });
 export type SemanticDeclineVerdict = z.infer<typeof semanticDeclineVerdictSchema>;
 
+/**
+ * B0-902 — what `gradeSemanticDecline` returns and `response_payload.semanticDeclineGrading`
+ * persists: the model's verdict plus which resolved model / provider produced it. The model never
+ * sets these two — `DECLINE_GRADER_JSON_SCHEMA` below has no such properties — they are stamped on
+ * after the call, so a row always says which model judged it.
+ */
+export const semanticDeclineGradingSchema = semanticDeclineVerdictSchema.extend({
+  gradingModel: z.string().nullable().optional(),
+  gradingProvider: z.enum(['openai', 'anthropic']).nullable().optional(),
+});
+export type SemanticDeclineGrading = z.infer<typeof semanticDeclineGradingSchema>;
+
 /** JSON Schema mirror of `semanticDeclineVerdictSchema` for `client.responses.create({ text: { format } })`. */
 export const DECLINE_GRADER_JSON_SCHEMA = {
   type: 'object',

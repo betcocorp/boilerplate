@@ -209,15 +209,22 @@ describe('gradeChatTestResponseAsync (B0-755)', () => {
         checkSemanticDecline,
       });
 
-      // Same as the plain sync grade — no silent pass, no silent fail invented.
+      // Same verdict as the plain sync grade — no silent pass, no silent fail invented — but,
+      // since B0-902, the row says WHY the LLM check never happened instead of reading as if the
+      // model judged the response to be an answer.
       const syncOutcome = gradeChatTestResponse({
         item: NEGATIVE_ITEM,
         hasError: false,
         responseText: 'Pricing is not something I have on hand for this item.',
       });
+      expect(outcome.passed).toBe(false);
       expect(outcome.passed).toBe(syncOutcome.passed);
-      expect(outcome.failureReason).toBe(syncOutcome.failureReason);
+      expect(outcome.failureReason).toContain(syncOutcome.failureReason ?? '');
+      expect(outcome.failureReason).toContain(
+        'Semantic decline check could not be evaluated: network blip',
+      );
       expect(outcome.semanticDeclineCheck).toBeUndefined();
+      expect(outcome.semanticDeclineUnavailable).toEqual({ reason: 'network blip' });
     });
   });
 

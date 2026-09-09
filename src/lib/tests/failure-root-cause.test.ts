@@ -53,7 +53,6 @@ describe('analyzeAndPersistFailureRootCause (B0-617 / B0-908)', () => {
     mockReplace.mockClear();
     mockResolveModel.mockReset();
     mockResolveModel.mockResolvedValue('claude-sonnet-5');
-    delete process.env.BEX_FAILURE_ROOT_CAUSE_MODEL;
   });
 
   it('sends the evidence + schema to completeStructuredWithUsage with the resolved claude id and persists it', async () => {

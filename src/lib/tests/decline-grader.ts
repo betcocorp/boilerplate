@@ -1,5 +1,4 @@
 import { completeStructuredWithUsage } from '~/lib/llm/structured-completion';
-import { resolveResponsesModel } from '~/lib/openai/client';
 import {
   resolveOpenAiRequestTimeoutMs,
   retryTransportFaults,
@@ -9,20 +8,19 @@ import { resolveMaxOutputTokens } from '~/lib/workflows/product-support/max-outp
 import {
   DECLINE_GRADER_JSON_SCHEMA,
   semanticDeclineVerdictSchema,
-  type SemanticDeclineVerdict,
+  type SemanticDeclineGrading,
 } from './decline-schemas';
+import { resolveItemGradingConfig } from './item-grading-model';
 
 /**
  * B0-755 — LLM semantic-decline grader, called only as a fallback (see `gradeChatTestResponseAsync`
  * in `./grading.ts`) when a negative-expectation row's response matched neither the app's own
- * canonical decline copy nor the phrase/regex heuristics. Same model-resolution convention as the
- * criteria grader (`~/lib/tests/criteria-grader.ts`): a dedicated env var wins, otherwise the
- * standard Responses model resolution. A `claude-*` id works — the call routes by provider (B0-908).
+ * canonical decline copy nor the phrase/regex heuristics. B0-902 — same model resolution as the
+ * criteria grader: the shared `TEST_ITEM_GRADING_MODEL` row (`./item-grading-model.ts`), which by
+ * default follows the run's own model tag. The former `BEX_GRADER_MODEL` env override is gone.
  */
 export async function resolveDeclineGraderModel(modelTag?: string): Promise<string> {
-  return (
-    process.env.BEX_GRADER_MODEL?.trim() || resolveResponsesModel(modelTag ?? 'preview')
-  );
+  return (await resolveItemGradingConfig(modelTag)).model;
 }
 
 const DECLINE_GRADER_SYSTEM_PROMPT = `You are grading whether an AI assistant's response is a "decline" — the correct outcome for a question this assistant is not supposed to answer directly (e.g. pricing, or a state-by-state regulatory approval it cannot verify).
@@ -73,18 +71,21 @@ export type SemanticDeclineCheckInput = {
 /**
  * One structured-output call through `completeStructuredWithUsage` (B0-908: routes by provider on
  * the resolved model id) judging whether `responseText` is substantively a
- * decline. Throws on transport/parse failure (a truncated or refused answer throws too) — callers (`gradeChatTestResponseAsync`) decide how
- * to fall back, rather than this function silently guessing a verdict.
+ * decline. Throws on transport/parse failure (a truncated or refused answer throws too) — the one
+ * caller, `gradeChatTestResponseAsync`, turns that into an explicit "could not be evaluated" on the
+ * row (B0-902) rather than this function guessing a verdict. The verdict carries the resolved model
+ * id and provider that produced it, which the runner persists as `semanticDeclineGrading`.
  */
 export async function gradeSemanticDecline(
   input: SemanticDeclineCheckInput,
-): Promise<SemanticDeclineVerdict> {
-  const model = await resolveDeclineGraderModel(input.modelTag);
+): Promise<SemanticDeclineGrading> {
+  const grading = await resolveItemGradingConfig(input.modelTag);
 
   const { text } = await retryTransportFaults(
     () =>
       completeStructuredWithUsage({
-        model,
+        model: grading.model,
+        effort: grading.effort,
         system: DECLINE_GRADER_SYSTEM_PROMPT,
         user: buildUserMessage({
           prompt: input.prompt,
@@ -103,5 +104,9 @@ export async function gradeSemanticDecline(
   );
 
   const parsedJson = JSON.parse(text) as unknown;
-  return semanticDeclineVerdictSchema.parse(parsedJson);
+  return {
+    ...semanticDeclineVerdictSchema.parse(parsedJson),
+    gradingModel: grading.model,
+    gradingProvider: grading.provider,
+  };
 }

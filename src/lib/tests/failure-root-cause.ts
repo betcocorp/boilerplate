@@ -2,7 +2,6 @@ import { z } from 'zod';
 
 import { replaceAiSuggestions } from '~/lib/ai-suggestions/repository';
 import { completeStructuredWithUsage } from '~/lib/llm/structured-completion';
-import { resolveResponsesModel } from '~/lib/openai/client';
 import {
   resolveOpenAiRequestTimeoutMs,
   retryTransportFaults,
@@ -11,6 +10,7 @@ import { resolveMaxOutputTokens } from '~/lib/workflows/product-support/max-outp
 import { logWarn } from '~/lib/observability/logger';
 
 import type { CriteriaGradingOutcome } from './criteria-schemas';
+import { resolveItemGradingConfig } from './item-grading-model';
 
 /**
  * B0-617 — the entity_type scope this feature owns in the generic
@@ -72,11 +72,13 @@ Use ONLY the evidence given. Name the specific failure — which criterion, tool
 
 Respond with ONLY the JSON object in the given schema. No markdown, no extra keys.`;
 
+/**
+ * B0-902 — the root-cause analyst is one of the three per-item graders, so it shares their model
+ * resolution: the `TEST_ITEM_GRADING_MODEL` row (`./item-grading-model.ts`), which by default (`run`)
+ * follows the run's own model tag. The former `BEX_FAILURE_ROOT_CAUSE_MODEL` env override is gone.
+ */
 export async function resolveFailureRootCauseModel(modelTag?: string): Promise<string> {
-  return (
-    process.env.BEX_FAILURE_ROOT_CAUSE_MODEL?.trim() ||
-    resolveResponsesModel(modelTag ?? 'preview')
-  );
+  return (await resolveItemGradingConfig(modelTag)).model;
 }
 
 export type FailureRootCauseInput = {
@@ -154,14 +156,15 @@ function buildEvidenceBlock(input: FailureRootCauseInput): string {
  */
 async function callRootCauseGrader(
   input: FailureRootCauseInput,
-): Promise<RootCauseResult | null> {
-  const model = await resolveFailureRootCauseModel(input.modelTag);
+): Promise<{ result: RootCauseResult; model: string } | null> {
+  const grading = await resolveItemGradingConfig(input.modelTag);
 
   try {
     const { text } = await retryTransportFaults(
       () =>
         completeStructuredWithUsage({
-          model,
+          model: grading.model,
+          effort: grading.effort,
           system: ROOT_CAUSE_SYSTEM_PROMPT,
           user: buildEvidenceBlock(input),
           schemaName: 'failure_root_cause',
@@ -173,10 +176,13 @@ async function callRootCauseGrader(
       { runtime: 'responses', label: 'failure-root-cause.create' },
     );
 
-    return rootCauseResultSchema.parse(JSON.parse(text));
+    return { result: rootCauseResultSchema.parse(JSON.parse(text)), model: grading.model };
   } catch (error) {
+    // Refusal, truncation, transport and parse failures alike: the row gets no root cause this
+    // attempt (the queue shows "pending"), and the reason is logged — never a fabricated cause.
     logWarn('failure_root_cause_generation_failed', {
       testResultItemId: input.testResultItemId,
+      model: grading.model,
       message: error instanceof Error ? error.message : String(error),
     });
     return null;
@@ -192,12 +198,13 @@ async function callRootCauseGrader(
 export async function analyzeAndPersistFailureRootCause(
   input: FailureRootCauseInput,
 ): Promise<void> {
-  const result = await callRootCauseGrader(input);
-  if (!result) {
+  const graded = await callRootCauseGrader(input);
+  if (!graded) {
     return;
   }
 
-  const model = await resolveFailureRootCauseModel(input.modelTag);
+  // The model stamped on the suggestion is the one that actually produced it — resolved once.
+  const { result, model } = graded;
 
   await replaceAiSuggestions(FAILURE_ROOT_CAUSE_ENTITY_TYPE, input.testResultItemId, [
     {
