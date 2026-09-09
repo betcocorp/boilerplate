@@ -1,14 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockComplete, mockResolveModel } = vi.hoisted(() => ({
+// B0-904 — the model comes from the XREF_COMPETITOR_EXTRACT_MODEL settings row (default `preview`)
+// through `resolveModel`; both are mocked so no test touches Supabase or a provider.
+const { mockComplete, mockResolveModel, settingOverrides } = vi.hoisted(() => ({
   mockComplete: vi.fn(),
-  mockResolveModel: vi.fn(async () => 'gpt-test'),
+  mockResolveModel: vi.fn(async (tag: string) => (tag === 'preview' ? 'gpt-test' : tag)),
+  settingOverrides: new Map<string, string>(),
 }));
 vi.mock('~/lib/llm/structured-completion', () => ({
   completeStructuredWithUsage: mockComplete,
 }));
-vi.mock('~/lib/openai/client', () => ({
-  resolveResponsesModel: mockResolveModel,
+vi.mock('~/lib/llm/resolve-model', () => ({
+  resolveModel: mockResolveModel,
+}));
+vi.mock('~/lib/settings/settings-service', () => ({
+  getStringSetting: vi.fn((key: string, fallback: string) =>
+    Promise.resolve(settingOverrides.get(key) ?? fallback),
+  ),
 }));
 vi.mock('~/lib/workflows/product-support/max-output-tokens', () => ({
   resolveMaxOutputTokens: () => 1200,
@@ -44,6 +52,7 @@ describe('extractCompetitorProduct', () => {
       otherCompetitorProduct: null,
       usage: USAGE,
       resolved: true,
+      model: null,
     });
     expect(runLlm).toHaveBeenCalledOnce();
   });
@@ -59,6 +68,7 @@ describe('extractCompetitorProduct', () => {
       otherCompetitorProduct: null,
       usage: ZERO_USAGE,
       resolved: false,
+      model: null,
     });
   });
 
@@ -76,6 +86,7 @@ describe('extractCompetitorProduct', () => {
       otherCompetitorProduct: null,
       usage: USAGE,
       resolved: false,
+      model: null,
     });
     expect(isCompetitorIdentityUnresolved(out)).toBe(true);
   });
@@ -94,6 +105,7 @@ describe('extractCompetitorProduct', () => {
       otherCompetitorProduct: null,
       usage: USAGE,
       resolved: true,
+      model: null,
     });
     // A confidently-extracted product with no brand is still resolved (AC: no change to the
     // confident-match path) — only "no brand AND no resolved product" counts as unresolved.
@@ -114,6 +126,7 @@ describe('extractCompetitorProduct', () => {
       otherCompetitorProduct: null,
       usage: USAGE,
       resolved: true,
+      model: null,
     });
   });
 
@@ -138,6 +151,7 @@ describe('extractCompetitorProduct', () => {
       otherCompetitorProduct: 'Diversey Virex II 256',
       usage: USAGE,
       resolved: true,
+      model: null,
     });
   });
 
@@ -155,6 +169,7 @@ describe('extractCompetitorProduct', () => {
       otherCompetitorProduct: null,
       usage: USAGE,
       resolved: true,
+      model: null,
     });
   });
 });
@@ -169,7 +184,7 @@ describe('extractCompetitorProduct — default runLlm (B0-908)', () => {
     mockComplete.mockReset();
     mockResolveModel.mockReset();
     mockResolveModel.mockResolvedValue('claude-sonnet-5');
-    delete process.env.XREF_COMPETITOR_EXTRACT_MODEL;
+    settingOverrides.clear();
   });
 
   it('calls completeStructuredWithUsage with the resolved claude id and the competitor_extract schema', async () => {
@@ -201,13 +216,42 @@ describe('extractCompetitorProduct — default runLlm (B0-908)', () => {
       temperature: 0,
     });
     expect(request.system).toContain('You extract the competitor cleaning/chemical product');
+    // B0-904 — the identity carries the id the call was actually made with, for the workflow gate.
     expect(out).toEqual({
       brand: 'Spartan',
       product: 'BNC-15',
       otherCompetitorProduct: null,
       usage: USAGE,
       resolved: true,
+      model: 'claude-sonnet-5',
     });
+  });
+
+  it('B0-904 — reads the model tag from the XREF_COMPETITOR_EXTRACT_MODEL settings row and resolves it through resolveModel', async () => {
+    settingOverrides.set('XREF_COMPETITOR_EXTRACT_MODEL', 'claude-haiku-4-5');
+    mockResolveModel.mockImplementation(async (tag: string) => tag);
+    mockComplete.mockResolvedValue({
+      text: JSON.stringify({ brand: null, product: 'BNC-15', otherCompetitorProduct: null }),
+      usage: USAGE,
+    });
+
+    const out = await extractCompetitorProduct('spartan bnc-15');
+
+    expect(mockResolveModel).toHaveBeenCalledWith('claude-haiku-4-5');
+    expect(mockComplete.mock.calls[0][0].model).toBe('claude-haiku-4-5');
+    expect(out.model).toBe('claude-haiku-4-5');
+  });
+
+  it('B0-904 — a stored value outside BEX_MODEL_TAGS falls back to the preview tag (allowed_values is advisory)', async () => {
+    settingOverrides.set('XREF_COMPETITOR_EXTRACT_MODEL', 'gpt-4o-mini');
+    mockComplete.mockResolvedValue({
+      text: JSON.stringify({ brand: null, product: 'BNC-15', otherCompetitorProduct: null }),
+      usage: USAGE,
+    });
+
+    await extractCompetitorProduct('spartan bnc-15');
+
+    expect(mockResolveModel).toHaveBeenCalledWith('preview');
   });
 
   it('degrades to the raw message when the helper throws (truncation, refusal, transport)', async () => {
@@ -221,6 +265,7 @@ describe('extractCompetitorProduct — default runLlm (B0-908)', () => {
       otherCompetitorProduct: null,
       usage: ZERO_USAGE,
       resolved: false,
+      model: null,
     });
   });
 });

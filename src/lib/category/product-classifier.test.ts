@@ -1,14 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockComplete, mockResolveModel } = vi.hoisted(() => ({
+// B0-904 — the model comes from the CATEGORY_CLASSIFIER_MODEL settings row (default `preview`)
+// through `resolveModel`; both are mocked so no test touches Supabase or a provider.
+const { mockComplete, mockResolveModel, settingOverrides } = vi.hoisted(() => ({
   mockComplete: vi.fn(),
-  mockResolveModel: vi.fn(async () => 'gpt-test'),
+  mockResolveModel: vi.fn(async (tag: string) => (tag === 'preview' ? 'gpt-test' : tag)),
+  settingOverrides: new Map<string, string>(),
 }));
 vi.mock('~/lib/llm/structured-completion', () => ({
   completeStructuredWithUsage: mockComplete,
 }));
-vi.mock('~/lib/openai/client', () => ({
-  resolveResponsesModel: mockResolveModel,
+vi.mock('~/lib/llm/resolve-model', () => ({
+  resolveModel: mockResolveModel,
+}));
+vi.mock('~/lib/settings/settings-service', () => ({
+  getStringSetting: vi.fn((key: string, fallback: string) =>
+    Promise.resolve(settingOverrides.get(key) ?? fallback),
+  ),
 }));
 vi.mock('~/lib/workflows/product-support/max-output-tokens', () => ({
   resolveMaxOutputTokens: () => 1200,
@@ -135,7 +143,33 @@ describe('defaultClassify (B0-908)', () => {
     mockComplete.mockReset();
     mockResolveModel.mockReset();
     mockResolveModel.mockResolvedValue('claude-sonnet-5');
-    delete process.env.CATEGORY_CLASSIFIER_MODEL;
+    settingOverrides.clear();
+  });
+
+  it('B0-904 — reads the model tag from the CATEGORY_CLASSIFIER_MODEL settings row and resolves it through resolveModel', async () => {
+    settingOverrides.set('CATEGORY_CLASSIFIER_MODEL', 'claude-haiku-4-5');
+    mockResolveModel.mockImplementation(async (tag: string) => tag);
+    mockComplete.mockResolvedValue({
+      text: JSON.stringify({ category_key: 'floor-care', confidence: 0.8, rationale: 'finish' }),
+      usage: USAGE,
+    });
+
+    await defaultClassify({ title: 'Floor Finish', description: null }, NODES);
+
+    expect(mockResolveModel).toHaveBeenCalledWith('claude-haiku-4-5');
+    expect(mockComplete.mock.calls[0][0].model).toBe('claude-haiku-4-5');
+  });
+
+  it('B0-904 — a stored value outside BEX_MODEL_TAGS falls back to the preview tag (allowed_values is advisory)', async () => {
+    settingOverrides.set('CATEGORY_CLASSIFIER_MODEL', 'gpt-4o-mini');
+    mockComplete.mockResolvedValue({
+      text: JSON.stringify({ category_key: 'floor-care', confidence: 0.8, rationale: 'finish' }),
+      usage: USAGE,
+    });
+
+    await defaultClassify({ title: 'Floor Finish', description: null }, NODES);
+
+    expect(mockResolveModel).toHaveBeenCalledWith('preview');
   });
 
   it('calls completeStructuredWithUsage with the resolved claude id and the enumerated-key schema', async () => {

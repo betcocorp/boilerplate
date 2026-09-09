@@ -1,8 +1,10 @@
 import { z } from 'zod';
 
+import { isBexModelTag } from '~/lib/constants/models';
+import { resolveModel } from '~/lib/llm/resolve-model';
 import { completeStructuredWithUsage } from '~/lib/llm/structured-completion';
-import { resolveResponsesModel } from '~/lib/openai/client';
 import { wrapUntrustedWebEvidence } from '~/lib/recommendations/recommendation-guardrails';
+import { getStringSetting } from '~/lib/settings/settings-service';
 import {
   competitorSpecSchema,
   extractCompetitorSpec,
@@ -162,9 +164,26 @@ const ENRICH_JSON_SCHEMA = {
   ],
 } as const;
 
-/** Resolved model id: dedicated env override, else whatever the `preview` tag resolves to. */
+/** B0-904 — the `settings` row holding this call's `BEX_MODEL_TAGS` tag (replaces the env var of the same name, B0-638). */
+export const SPEC_ENRICH_MODEL_SETTING_KEY = 'XREF_SPEC_ENRICH_MODEL';
+
+/**
+ * B0-904 — the model tag for the spec-enrichment call, from the `XREF_SPEC_ENRICH_MODEL` settings
+ * row, re-validated against `BEX_MODEL_TAGS` (`allowed_values` is advisory, not a DB constraint);
+ * an unrecognised value falls back to `preview`.
+ */
+export async function resolveSpecEnrichModelTag(): Promise<string> {
+  const raw = (await getStringSetting(SPEC_ENRICH_MODEL_SETTING_KEY, 'preview')).trim();
+  return isBexModelTag(raw) ? raw : 'preview';
+}
+
+/**
+ * Resolved model id for the spec-enrichment call: the settings tag through `resolveModel`, so
+ * `preview` follows the `BEX_LLM_PROVIDER` row's per-vendor default and an explicit tag (including
+ * `claude-*`) resolves as everywhere else.
+ */
 export async function resolveSpecEnrichModel(): Promise<string> {
-  return process.env.XREF_SPEC_ENRICH_MODEL?.trim() || resolveResponsesModel('preview');
+  return resolveModel(await resolveSpecEnrichModelTag());
 }
 
 /**

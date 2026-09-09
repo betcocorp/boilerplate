@@ -15,8 +15,10 @@ import {
 } from '~/lib/category/classifier-repository';
 import type { TaxonomyNode } from '~/lib/category/category-resolver';
 import { loadTaxonomyNodes } from '~/lib/category/taxonomy-repository';
+import { isBexModelTag } from '~/lib/constants/models';
+import { resolveModel } from '~/lib/llm/resolve-model';
 import { completeStructuredWithUsage } from '~/lib/llm/structured-completion';
-import { resolveResponsesModel } from '~/lib/openai/client';
+import { getStringSetting } from '~/lib/settings/settings-service';
 import { resolveMaxOutputTokens } from '~/lib/workflows/product-support/max-output-tokens';
 
 /**
@@ -144,9 +146,26 @@ export async function classifyUnplacedProdLines(
   return runProductClassifier(inputs, deps, opts);
 }
 
-/** Resolved model id: dedicated env override, else whatever the `preview` tag resolves to. */
+/** B0-904 — the `settings` row holding this call's `BEX_MODEL_TAGS` tag (replaces the env var of the same name, B0-638). */
+export const CATEGORY_CLASSIFIER_MODEL_SETTING_KEY = 'CATEGORY_CLASSIFIER_MODEL';
+
+/**
+ * B0-904 — the model tag for the category-classifier call, from the `CATEGORY_CLASSIFIER_MODEL`
+ * settings row, re-validated against `BEX_MODEL_TAGS` (`allowed_values` is advisory, not a DB
+ * constraint); an unrecognised value falls back to `preview`.
+ */
+export async function resolveCategoryClassifierModelTag(): Promise<string> {
+  const raw = (await getStringSetting(CATEGORY_CLASSIFIER_MODEL_SETTING_KEY, 'preview')).trim();
+  return isBexModelTag(raw) ? raw : 'preview';
+}
+
+/**
+ * Resolved model id for the category-classifier call: the settings tag through `resolveModel`, so
+ * `preview` follows the `BEX_LLM_PROVIDER` row's per-vendor default and an explicit tag (including
+ * `claude-*`) resolves as everywhere else.
+ */
 export async function resolveCategoryClassifierModel(): Promise<string> {
-  return process.env.CATEGORY_CLASSIFIER_MODEL?.trim() || resolveResponsesModel('preview');
+  return resolveModel(await resolveCategoryClassifierModelTag());
 }
 
 /**

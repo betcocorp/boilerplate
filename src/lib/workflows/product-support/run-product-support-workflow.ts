@@ -29,7 +29,8 @@ import {
 } from '~/lib/conversations/workflow-repository';
 import { logError, logInfo } from '~/lib/observability/logger';
 import { modelProviderFor } from '~/lib/constants/models';
-import { getOpenAIClient, resolveResponsesModel } from '~/lib/openai/client';
+import { getOpenAIClient } from '~/lib/openai/client';
+import { resolveModel } from '~/lib/llm/resolve-model';
 import { runResponsesWithToolLoop } from '~/lib/openai/responses-runtime';
 import type { LlmTokenUsage } from '~/lib/openai/responses-runtime';
 import { runAiSdkWithToolLoop } from '~/lib/bex/ai-sdk-runtime';
@@ -2241,7 +2242,7 @@ export async function runProductSupportWorkflow(input: {
    * AI SDK loop, off by default — and `useAiSdkGeneration` is the EFFECTIVE decision, which is what
    * `agentRuntime`, `runtimeConfig.aiSdkGenerationEnabled` and the recorded prompt all report.
    */
-  const model = await resolveResponsesModel(input.modelTag);
+  const model = await resolveModel(input.modelTag);
   const modelProvider = modelProviderFor(model);
   const aiSdkGenerationSetting = await getBooleanSetting('BEX_AI_SDK_GENERATION_ENABLED', false);
   const useAiSdkGeneration = modelProvider === 'anthropic' || aiSdkGenerationSetting;
@@ -4049,7 +4050,10 @@ export async function runProductSupportWorkflow(input: {
               routingDecision === 'cross_reference' ? 'cross_reference_route' : 'cross_reference_intent',
           },
           thresholds: {
-            extractionModel: process.env.XREF_COMPETITOR_EXTRACT_MODEL?.trim() || 'default_preview_model',
+            // B0-904 — the resolved model id the identity actually came from (`null` when no model
+            // call produced it: the extraction fallback or a degraded signals turn), never a re-read
+            // of the XREF_COMPETITOR_EXTRACT_MODEL setting, which could differ from what ran.
+            extractionModel: resolvedCompetitor?.model ?? null,
           },
           verdict: resolvedCompetitor?.otherCompetitorProduct ? 'resolved_with_alternate' : 'resolved',
           effect: resolvedCompetitor?.otherCompetitorProduct
