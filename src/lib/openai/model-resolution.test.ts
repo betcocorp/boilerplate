@@ -123,34 +123,35 @@ describe('resolveResponsesModel — Anthropic tags (B0-908)', () => {
     expect(await resolveResponsesModel('gpt-4.1')).toBe('gpt-4.1');
   });
 
-  it('ignores an Anthropic tag stored in BEX_RESPONSES_MODEL — the OpenAI default row is OpenAI-only (B0-899)', async () => {
-    // B0-908 briefly let this row hold a claude tag; B0-899 split the Anthropic default into its
-    // own row (BEX_ANTHROPIC_MODEL) read by `resolveModel`, so here a claude value is out-of-set
-    // and falls back exactly like any other unrecognised value.
+  it('honours an Anthropic tag stored in BEX_RESPONSES_MODEL (B0-899)', async () => {
+    // B0-908 let this row hold a claude tag; B0-899 briefly restricted it to OpenAI tags and that
+    // was reverted 2026-09-08, because setting a Claude model here is the established way to move
+    // the fleet. The row is the fleet-default MODEL, whatever vendor it names.
     vi.mocked(getStringSetting).mockImplementation((key, fallback) =>
       Promise.resolve(key === 'BEX_RESPONSES_MODEL' ? 'claude-sonnet-5' : fallback),
     );
 
-    expect(await resolveGenerationModelDefaultTag()).toBe(DEFAULT_BEX_RESPONSES_MODEL_TAG);
-    expect(await resolveResponsesModel('preview')).toBe('gpt-4.1-mini');
-    expect(await resolveResponsesModel(undefined)).toBe('gpt-4.1-mini');
+    expect(await resolveGenerationModelDefaultTag()).toBe('claude-sonnet-5');
+    expect(await resolveResponsesModel('preview')).toBe('claude-sonnet-5');
+    expect(await resolveResponsesModel(undefined)).toBe('claude-sonnet-5');
     // Naming a tag must still get that model, on either vendor.
     expect(await resolveResponsesModel('gpt-4.1-mini')).toBe('gpt-4.1-mini');
     expect(await resolveResponsesModel('claude-sonnet-5')).toBe('claude-sonnet-5');
   });
 
-  it('accepts every OpenAI tag as the preview default and nothing else (B0-899)', async () => {
-    for (const tag of OPENAI_MODEL_TAGS) {
+  it('accepts every tag of either vendor as the preview default, but never preview itself (B0-899)', async () => {
+    for (const tag of [...OPENAI_MODEL_TAGS, ...ANTHROPIC_MODEL_TAGS]) {
       vi.mocked(getStringSetting).mockImplementation((key, fallback) =>
         Promise.resolve(key === 'BEX_RESPONSES_MODEL' ? tag : fallback),
       );
       expect(await resolveGenerationModelDefaultTag()).toBe(tag);
     }
-    for (const tag of ANTHROPIC_MODEL_TAGS) {
+    // `preview` would resolve to itself, and an unknown id would reach a provider as a bad model.
+    for (const stored of ['preview', '', 'claude-imaginary-9', 'gpt-9']) {
       vi.mocked(getStringSetting).mockImplementation((key, fallback) =>
-        Promise.resolve(key === 'BEX_RESPONSES_MODEL' ? tag : fallback),
+        Promise.resolve(key === 'BEX_RESPONSES_MODEL' ? stored : fallback),
       );
-      expect(await resolveGenerationModelDefaultTag()).toBe('gpt-4.1-mini');
+      expect(await resolveGenerationModelDefaultTag()).toBe(DEFAULT_BEX_RESPONSES_MODEL_TAG);
     }
   });
 });

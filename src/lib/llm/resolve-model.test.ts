@@ -118,14 +118,28 @@ describe('resolveModel — preview under BEX_LLM_PROVIDER = openai (B0-899)', ()
     expect(await resolveModel('preview')).toBe(await resolveResponsesModel('preview'));
   });
 
-  it('ignores a claude value stored in BEX_RESPONSES_MODEL — that row is the OpenAI default only', async () => {
+  /**
+   * Step 1 of the precedence rule. B0-899 first made this row OpenAI-only, which removed the
+   * established way of moving the fleet to Claude (set `claude-opus-5` here) and made the Anthropic
+   * options vanish from the /admin/settings select. Reverted per Tom 2026-09-08: a NAMED model is
+   * more specific than the vendor switch, so it wins even while the switch says `openai`.
+   */
+  it('honours a claude value stored in BEX_RESPONSES_MODEL and lets it beat the vendor switch', async () => {
     vi.mocked(getLlmProvider).mockResolvedValue('openai');
     stubSettings({ BEX_RESPONSES_MODEL: 'claude-sonnet-5' });
 
-    expect(await resolveGenerationModelDefaultTag()).toBe(DEFAULT_BEX_RESPONSES_MODEL_TAG);
-    expect(await resolveModel('preview')).toBe('gpt-4.1-mini');
-    expect(await resolveResponsesModel('preview')).toBe('gpt-4.1-mini');
-    expect(modelProviderFor(await resolveModel('preview'))).toBe('openai');
+    expect(await resolveGenerationModelDefaultTag()).toBe('claude-sonnet-5');
+    expect(await resolveModel('preview')).toBe('claude-sonnet-5');
+    expect(modelProviderFor(await resolveModel('preview'))).toBe('anthropic');
+  });
+
+  it('still falls back to the default tag for a value in neither vendor list', async () => {
+    vi.mocked(getLlmProvider).mockResolvedValue('openai');
+    for (const stored of ['claude-imaginary-9', 'gpt-9', 'preview', '']) {
+      stubSettings({ BEX_RESPONSES_MODEL: stored });
+      expect(await resolveGenerationModelDefaultTag()).toBe(DEFAULT_BEX_RESPONSES_MODEL_TAG);
+      expect(await resolveModel('preview')).toBe('gpt-4.1-mini');
+    }
   });
 
   it('never reads BEX_ANTHROPIC_MODEL while the provider is openai', async () => {
@@ -187,9 +201,23 @@ describe('resolveModel — preview under BEX_LLM_PROVIDER = anthropic (B0-899)',
     process.env.BEX_MODEL_CLAUDE_SONNET_5 = 'claude-sonnet-5-20260101';
 
     expect(await resolveModel('preview')).toBe('claude-sonnet-5-20260101');
-    // The OpenAI row is untouched by the pin and still never consulted.
+  });
+
+  /**
+   * Step 1 beats step 2: both rows name a Claude model and they disagree. The one an operator typed
+   * a model into wins, so the vendor switch can never silently override an explicit choice.
+   */
+  it('lets a claude BEX_RESPONSES_MODEL win over a different BEX_ANTHROPIC_MODEL', async () => {
+    vi.mocked(getLlmProvider).mockResolvedValue('anthropic');
+    stubSettings({
+      BEX_RESPONSES_MODEL: 'claude-opus-5',
+      [ANTHROPIC_MODEL_SETTING_KEY]: 'claude-haiku-4-5',
+    });
+
+    expect(await resolveModel('preview')).toBe('claude-opus-5');
+    // The vendor-switch row is not even read once the model row has named a Claude model.
     expect(vi.mocked(getStringSetting).mock.calls.map(([key]) => key)).not.toContain(
-      'BEX_RESPONSES_MODEL',
+      ANTHROPIC_MODEL_SETTING_KEY,
     );
   });
 

@@ -1,8 +1,9 @@
 import OpenAI from 'openai';
 
 import {
-  isOpenAiModelTag,
+  isBexModelTag,
   modelProviderFor,
+  type ExplicitBexModelTag,
   type OpenAiModelTag,
 } from '~/lib/constants/models';
 import { getStringSetting } from '~/lib/settings/settings-service';
@@ -41,18 +42,20 @@ export const DEFAULT_BEX_RESPONSES_MODEL_TAG: OpenAiModelTag = 'gpt-4.1-mini';
  * `BEX_MODEL_*` env overrides are for — and since the tag goes back through
  * `resolveResponsesModel`, those pins now apply to `preview` too.
  *
- * B0-899 — validated against `OPENAI_MODEL_TAGS`, not `BEX_MODEL_TAGS`: this row is the OpenAI
- * default ONLY. A `claude-*` value stored here (B0-908 briefly allowed one) is ignored and falls
- * back to `gpt-4.1-mini`; the Anthropic default is its own row, `BEX_ANTHROPIC_MODEL`
- * (`resolveAnthropicModelDefaultTag`, `~/lib/llm/resolve-model`), and `BEX_LLM_PROVIDER` decides
- * which of the two rows `preview` reads. The B0-899 migration moved any claude value that was here
- * into that row, so the live `preview` behaviour did not change.
+ * B0-899 — this row is the FLEET DEFAULT MODEL and accepts any explicit tag, OpenAI or `claude-*`.
+ * B0-899 first narrowed it to OpenAI tags only, on the theory that the Anthropic default belonged
+ * solely in `BEX_ANTHROPIC_MODEL`; that removed a working control (setting `claude-opus-5` here was
+ * how the fleet was put on Claude) and is reverted. Both controls now work, with this one taking
+ * precedence — see `resolveModel` (`~/lib/llm/resolve-model`) for the precedence rule, which is the
+ * one place it is defined.
+ *
+ * `preview` itself is still excluded, because it would resolve to itself.
  */
-export async function resolveGenerationModelDefaultTag(): Promise<OpenAiModelTag> {
+export async function resolveGenerationModelDefaultTag(): Promise<ExplicitBexModelTag> {
   const raw = (
     await getStringSetting('BEX_RESPONSES_MODEL', DEFAULT_BEX_RESPONSES_MODEL_TAG)
   ).trim();
-  return isOpenAiModelTag(raw) ? raw : DEFAULT_BEX_RESPONSES_MODEL_TAG;
+  return isBexModelTag(raw) && raw !== 'preview' ? raw : DEFAULT_BEX_RESPONSES_MODEL_TAG;
 }
 
 /**
@@ -67,11 +70,11 @@ export async function resolveGenerationModelDefaultTag(): Promise<OpenAiModelTag
  * B0-908 — despite the name, this also resolves Anthropic tags (`claude-*`): the return value is
  * whatever id the provider chosen by `modelProviderFor` is called with.
  *
- * B0-899 — the `preview` branch HERE is the OpenAI-only half of the story: it reads
- * `BEX_RESPONSES_MODEL`, which now holds OpenAI tags only. Provider-aware `preview` resolution
- * (`BEX_LLM_PROVIDER` → `BEX_RESPONSES_MODEL` or `BEX_ANTHROPIC_MODEL`) lives one layer up in
+ * B0-899 — the `preview` branch HERE reads `BEX_RESPONSES_MODEL` and nothing else, so it ignores
+ * `BEX_LLM_PROVIDER` entirely. Provider-aware `preview` resolution lives one layer up in
  * `resolveModel` (`~/lib/llm/resolve-model`), which is what call sites use; it delegates every
- * explicit tag straight back here so the env pins apply exactly once.
+ * explicit tag straight back here so the env pins apply exactly once. Call this directly only when
+ * you specifically want the OpenAI-side mapping without the provider row.
  */
 export async function resolveResponsesModel(modelTag: string | undefined): Promise<string> {
   const tag = (modelTag ?? 'preview').trim();
