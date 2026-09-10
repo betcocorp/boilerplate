@@ -1075,14 +1075,12 @@ export type Database = {
         Row: {
           created_at: string
           expected_canonical_product: string | null
-          expected_concepts: string | null
-          expected_criteria: Json
+          expected_concepts: string[]
+          expected_criteria: string[]
           expected_brand_family: string | null
           expected_reason_code: string | null
-          expected_result_type: string | null
           expected_setting: string | null
-          expected_should_answer: boolean | null
-          expected_sources: string | null
+          expected_sources: string[]
           expected_surface_type: string | null
           expected_tool: string | null
           id: string
@@ -1090,7 +1088,7 @@ export type Database = {
           input_payload: Json
           intended_agent_item: string | null
           metadata: Json
-          minimum_concepts: string | null
+          minimum_concepts: string[]
           priority: number | null
           prompt: string
           prompt_category: string | null
@@ -1102,14 +1100,12 @@ export type Database = {
         Insert: {
           created_at?: string
           expected_canonical_product?: string | null
-          expected_concepts?: string | null
-          expected_criteria?: Json
+          expected_concepts?: string[]
+          expected_criteria?: string[]
           expected_brand_family?: string | null
           expected_reason_code?: string | null
-          expected_result_type?: string | null
           expected_setting?: string | null
-          expected_should_answer?: boolean | null
-          expected_sources?: string | null
+          expected_sources?: string[]
           expected_surface_type?: string | null
           expected_tool?: string | null
           id?: string
@@ -1117,7 +1113,7 @@ export type Database = {
           input_payload?: Json
           intended_agent_item?: string | null
           metadata?: Json
-          minimum_concepts?: string | null
+          minimum_concepts?: string[]
           priority?: number | null
           prompt: string
           prompt_category?: string | null
@@ -1130,13 +1126,11 @@ export type Database = {
           created_at?: string
           expected_brand_family?: string | null
           expected_canonical_product?: string | null
-          expected_concepts?: string | null
-          expected_criteria?: Json
+          expected_concepts?: string[]
+          expected_criteria?: string[]
           expected_reason_code?: string | null
-          expected_result_type?: string | null
           expected_setting?: string | null
-          expected_should_answer?: boolean | null
-          expected_sources?: string | null
+          expected_sources?: string[]
           expected_surface_type?: string | null
           expected_tool?: string | null
           id?: string
@@ -1144,7 +1138,7 @@ export type Database = {
           input_payload?: Json
           intended_agent_item?: string | null
           metadata?: Json
-          minimum_concepts?: string | null
+          minimum_concepts?: string[]
           priority?: number | null
           prompt?: string
           prompt_category?: string | null
