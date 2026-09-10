@@ -531,6 +531,70 @@ function isMetaOrPointerSafetySentence(sentence: string): boolean {
 }
 
 /**
+ * B0-928 — a comparison between two GENERIC chemistry/material classes is not a transcribed hazard
+ * statement. Live `ungroundedDetails` snippet (golden set, 2026-09-10, app_version 4.4.0):
+ * "Solvent-based oil-modified urethanes are described as flammable, higher-VOC coatings with
+ * fumes/odors; water-based coatings are described as nonflammable, low-odor, and low-VOC."
+ * `HAZARD_NEGATED_TRIGGER_PATTERN` already blanks "nonflammable", but the bare adjective
+ * "flammable" on the other side of the contrast still matched `HAZARD_SENTENCE_PATTERN`, so the
+ * sentence became a `hazard` claim that no label can ground verbatim — and one ungrounded `hazard`
+ * sentence replaces the whole answer with the decline copy. It names no product (that run had
+ * `lockedProductLineKey: null`); it contrasts two coating chemistries, which is exactly what the
+ * golden answer asks for.
+ *
+ * The load-bearing constraint is TWO DISTINCT class terms, at least one of them a CHEMISTRY class:
+ * a real GHS hazard statement transcribed off one product's label does not contrast two generic
+ * classes, and requiring a chemistry term stops two bare form nouns ("the sealer and the coating
+ * are corrosive") from buying the exclusion. Hard-gated the same way B0-915
+ * gated its exclusion — a value-bearing GHS token (signal word, pictogram, hazard class, H/P code),
+ * a product-specific imperative precaution (imperative + a named incompatibility/ignition source),
+ * or real first-aid/treatment content anywhere in the sentence and the exclusion does not apply.
+ * `hazard` only: `first_aid`, the token categories and `compatibility`/`efficacy_claim` never
+ * consult it. Detection only; verbatim matching itself is untouched.
+ */
+/**
+ * A CHEMISTRY class -- what the product is made of. At least one of these must be present: it is
+ * what makes the sentence a statement about a class of chemistry rather than about a thing.
+ */
+const GENERIC_CHEMISTRY_CLASS_PATTERNS: readonly RegExp[] = [
+  /\b(?:water[-\s]?based|water[-\s]?borne|waterborne)\b/i,
+  /\b(?:solvent[-\s]?based|solvent[-\s]?borne|solventborne)\b/i,
+  /\boil[-\s]?(?:based|modified)\b/i,
+  /\bacid[-\s]?based\b/i,
+  /\bchlorine[-\s]?based\b/i,
+  /\bquats?\b|\bquaternar(?:y|ies)\b/i,
+  /\benzyme[-\s]?based\b|\bprobiotics?\b/i,
+  /\b(?:poly)?urethanes?\b/i,
+];
+/**
+ * A PRODUCT-FORM class -- what kind of thing it is. On its own this is just a noun ("the sealer is
+ * corrosive" is a hazard claim about a specific thing), so a form term only ever counts towards the
+ * two-term total ALONGSIDE a chemistry term above; two form terms never qualify a sentence.
+ */
+const GENERIC_PRODUCT_FORM_CLASS_PATTERNS: readonly RegExp[] = [
+  /\bcoatings?\b/i,
+  /\bfinish(?:es)?\b/i,
+  /\bsealers?\b/i,
+  /\bchemistr(?:y|ies)\b/i,
+  /\bformulations?\b/i,
+];
+
+function countDistinctMatches(text: string, patterns: readonly RegExp[]): number {
+  return patterns.reduce((count, pattern) => (pattern.test(text) ? count + 1 : count), 0);
+}
+
+function isGenericMaterialClassComparison(sentence: string): boolean {
+  const text = stripSentenceMarkup(sentence);
+  if (GHS_VALUE_TOKEN_PATTERN.test(text)) return false;
+  if (HAZARD_IMPERATIVE_PATTERN.test(text) && PRECAUTION_OBJECT_PATTERN.test(text)) return false;
+  if (FIRST_AID_PROCEDURE_PATTERN.test(text) || TREATMENT_DIRECTIVE_PATTERN.test(text)) return false;
+
+  const chemistryClasses = countDistinctMatches(text, GENERIC_CHEMISTRY_CLASS_PATTERNS);
+  if (chemistryClasses === 0) return false;
+  return chemistryClasses + countDistinctMatches(text, GENERIC_PRODUCT_FORM_CLASS_PATTERNS) >= 2;
+}
+
+/**
  * B0-756 — a surface/material compatibility claim ("safe on stainless steel", "will not etch
  * marble") is exactly as regulated as a hazard or first-aid statement: it comes off the product's
  * own label and a wrong answer creates real damage/liability exposure, but until this ticket
@@ -807,12 +871,21 @@ function extractContactTimeTokens(text: string): string[] {
 function isHazardClaimSentence(sentence: string): boolean {
   // B0-915: an offer/pointer/generic-safety sentence is not a transcribed hazard statement.
   if (isMetaOrPointerSafetySentence(sentence)) return false;
+  // B0-928: a contrast between two generic chemistry classes is not a transcribed hazard statement.
+  if (isGenericMaterialClassComparison(sentence)) return false;
   // B0-870: "Non Corrosive" (a product name) / "non-flammable" are not hazard statements.
   const text = sentence.replace(HAZARD_NEGATED_TRIGGER_PATTERN, ' ');
   if (HAZARD_SENTENCE_PATTERN.test(text)) return true;
+  // B0-928: the imperative half of this disjunction now needs the same `PRECAUTION_OBJECT_PATTERN`
+  // that `carriesTranscribedLabelValue` requires of it. Without the object the two functions
+  // disagreed about the same imperative: "Wear the PPE required by each product label/SDS ... and
+  // never mix chemicals" was ungroundable safe-work boilerplate to one and a transcribed GHS
+  // statement to the other, and the hazard classification won and declined the whole answer.
+  // "never mix chemicals" names no incompatibility; "do not mix with chlorinated products" does.
   return (
     HAZARD_QUALIFIED_TRIGGER_PATTERN.test(text) &&
-    (GHS_CONTEXT_PATTERN.test(text) || HAZARD_IMPERATIVE_PATTERN.test(text))
+    (GHS_CONTEXT_PATTERN.test(text) ||
+      (HAZARD_IMPERATIVE_PATTERN.test(text) && PRECAUTION_OBJECT_PATTERN.test(text)))
   );
 }
 

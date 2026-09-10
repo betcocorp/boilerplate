@@ -983,3 +983,92 @@ describe('evaluateRegulatedClaimGrounding — B0-915 real statements are still c
     expect(result.ungroundedCategories).toContain('compatibility');
   });
 });
+
+/**
+ * B0-928 — three more live `ungroundedDetails` snippets (golden set, gpt-5.6, 2026-09-10,
+ * app_version 4.4.0) classified `hazard` and, being unquotable, escalated to `redactionMode:
+ * decline`, replacing each whole answer with 257 characters of refusal copy. Two root causes:
+ *
+ *  1. IMPERATIVE WITHOUT AN OBJECT -- `isHazardClaimSentence` accepted a bare
+ *     `HAZARD_IMPERATIVE_PATTERN` hit next to "PPE"/"caution", while `carriesTranscribedLabelValue`
+ *     (B0-915) required the same imperative to name an incompatibility or ignition source. Generic
+ *     safe-work boilerplate ("never mix chemicals") satisfied the first and not the second.
+ *  2. CLASS-LEVEL CHEMISTRY COMPARISON -- the un-negated "flammable" in a solvent-based vs.
+ *     water-based coating contrast is not a transcribed label value.
+ */
+describe('evaluateRegulatedClaimGrounding — B0-928 safe-work boilerplate and class comparisons', () => {
+  it('does not flag safe-work boilerplate whose only imperative names no incompatibility', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer:
+        'Wear the PPE required by each product label/SDS, ventilate the area, post wet-floor signs, and never mix chemicals.',
+      sources: [SDS_SOURCE],
+    });
+    expect(result.categoriesDetected).not.toContain('hazard');
+    expect(result.ungroundedCategories).toHaveLength(0);
+  });
+
+  it('does not flag the same boilerplate under a bolded "Safety:" lead-in', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer:
+        '**Safety:** Wear the PPE specified by each product label and SDS, post caution signs before beginning, maintain ventilation, and never mix cleaning chemicals.',
+      sources: [SDS_SOURCE],
+    });
+    expect(result.categoriesDetected).not.toContain('hazard');
+    expect(result.ungroundedCategories).toHaveLength(0);
+  });
+
+  it('does not flag a generic solvent-based vs. water-based coating comparison', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer:
+        'Solvent-based oil-modified urethanes are described as flammable, higher-VOC coatings with fumes/odors; water-based coatings are described as nonflammable, low-odor, and low-VOC.',
+      sources: [SDS_SOURCE],
+    });
+    expect(result.categoriesDetected).not.toContain('hazard');
+    expect(result.ungroundedCategories).toHaveLength(0);
+  });
+});
+
+/**
+ * B0-928 severity guard — neither fix may soften a real transcription. The last case is the one
+ * that matters most: a class comparison that ALSO carries a GHS value token is still a hazard
+ * claim, because the exclusion is hard-gated on `GHS_VALUE_TOKEN_PATTERN`.
+ */
+describe('evaluateRegulatedClaimGrounding — B0-928 real hazard statements are still caught', () => {
+  const STILL_HAZARD = [
+    'Signal word: DANGER.',
+    'Causes severe skin burns and eye damage.',
+    'H314 — causes severe skin burns.',
+    // Both imperative precautions name an object, so the tightened conjunction still fires. They
+    // carry a qualified trigger word because `isHazardClaimSentence` has always required one for
+    // the imperative branch -- see the bare-imperative test below.
+    'Hazard note: do not mix with chlorinated products or bleach.',
+    'Warning: keep away from heat, sparks and open flame.',
+    'Solvent-based and water-based coatings differ; the solvent-based product carries signal word DANGER.',
+    // Two PRODUCT-FORM nouns and no chemistry class: "the sealer and the coating" names two things,
+    // it does not contrast two chemistries, so the class-comparison exclusion must not apply.
+    'Warning: the sealer and the coating are corrosive.',
+  ];
+
+  for (const draftAnswer of STILL_HAZARD) {
+    it(`still detects and rejects: ${draftAnswer}`, () => {
+      const result = evaluateRegulatedClaimGrounding({ draftAnswer, sources: [] });
+      expect(result.categoriesDetected, draftAnswer).toContain('hazard');
+      expect(result.ungroundedCategories, draftAnswer).toContain('hazard');
+    });
+  }
+
+  // Pre-existing and unchanged by B0-928: the imperative branch of `isHazardClaimSentence` sits
+  // behind `HAZARD_QUALIFIED_TRIGGER_PATTERN`, so a bare label precaution with no
+  // hazard/warning/caution/PPE word and no hazard adjective was never in this category -- B0-928
+  // only added `PRECAUTION_OBJECT_PATTERN` to a branch these sentences never reached. Pinned so a
+  // future change to that trigger gate is a deliberate decision, not a silent one.
+  it('leaves the pre-existing bare-imperative gap exactly as it was', () => {
+    for (const draftAnswer of [
+      'Do not mix with chlorinated products or bleach.',
+      'Keep away from heat, sparks and open flame.',
+    ]) {
+      const result = evaluateRegulatedClaimGrounding({ draftAnswer, sources: [] });
+      expect(result.categoriesDetected, draftAnswer).not.toContain('hazard');
+    }
+  });
+});

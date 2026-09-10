@@ -6,6 +6,11 @@ import {
   EARLY_DECLINE_LEGAL_COMPLIANCE_COPY,
   EARLY_DECLINE_STORAGE_EXPIRATION_COPY,
 } from '~/lib/workflows/product-support/run-product-support-workflow';
+import {
+  countSubstantiveContentChars,
+  REGULATED_CLAIM_REDACTION_MIN_REMAINING_CHARS,
+  stripRegulatedClaimRedactionArtifacts,
+} from '~/lib/workflows/product-support/regulated-claim-redaction-copy';
 
 import type { TestItemRecord } from './types';
 
@@ -49,6 +54,49 @@ const CANONICAL_DECLINE_COPY = [
 
 function matchesCanonicalDeclineCopy(responseText: string): boolean {
   return CANONICAL_DECLINE_COPY.some((copy) => responseText.includes(copy));
+}
+
+/** Shared "is there enough here to be an answer" bar — letters and digits only, the guardrail's own notion. */
+function hasSubstantiveContent(text: string): boolean {
+  return countSubstantiveContentChars(text) >= REGULATED_CLAIM_REDACTION_MIN_REMAINING_CHARS;
+}
+
+/**
+ * B0-928 (RC4) — true when one of the app's canonical decline strings is a TRAILING addendum to a
+ * turn that already answered, so the turn should not be failed for containing it.
+ *
+ * The cross-reference engine appends `XREF_DECLINE_COPY` whenever its own sub-task (finding a Betco
+ * equivalent) lands under threshold, even when the model answered the question that was actually
+ * asked first — "Betco's version of BNC-15 kills everything BNC-15 does, right?" got a correct,
+ * complete "kill claims do not transfer" answer followed by that copy, and the plain substring test
+ * failed the whole row.
+ *
+ * Deliberately conservative: the copy has to be at the very END, what precedes it has to clear the
+ * substantive-content bar, and that remainder must not itself be decline-shaped by any of the
+ * existing heuristics.
+ *
+ * Accepted tradeoff, stated honestly: this can now pass a turn whose substantive content did NOT
+ * address the specific question asked while its decline covered only a sub-task. That is the price
+ * of not failing turns that answered; judging whether the substance is right is the concept
+ * grader's job, not this phrase detector's.
+ */
+function answeredBeforeTrailingCanonicalDecline(responseText: string): boolean {
+  const trimmed = responseText.trimEnd();
+  const trailingCopy = CANONICAL_DECLINE_COPY.find((copy) => trimmed.endsWith(copy));
+  if (!trailingCopy) {
+    return false;
+  }
+
+  const remainder = trimmed.slice(0, trimmed.length - trailingCopy.length);
+  if (!hasSubstantiveContent(remainder)) {
+    return false;
+  }
+
+  return (
+    !matchesCanonicalDeclineCopy(remainder) &&
+    !matchesUnableToAssistPhrase(remainder.trim().toLowerCase()) &&
+    !responseIndicatesDeclineStyleAnswer(remainder)
+  );
 }
 
 function shouldExpectAnswer(item: GradableExpectations) {
@@ -97,10 +145,20 @@ export function responseIndicatesUnableToAssistOrRefusal(responseText: string): 
     return false;
   }
 
+  // B0-928 (RC4) — an answered turn with the canonical decline copy appended is not a decline.
+  if (answeredBeforeTrailingCanonicalDecline(responseText)) {
+    return false;
+  }
+
   if (matchesCanonicalDeclineCopy(responseText)) {
     return true;
   }
 
+  return matchesUnableToAssistPhrase(t);
+}
+
+/** The phrase/regex half of `responseIndicatesUnableToAssistOrRefusal`, on already-lowercased text. */
+function matchesUnableToAssistPhrase(t: string): boolean {
   const phrases = [
     "can't provide",
     'cannot provide',
@@ -348,7 +406,24 @@ function withUnableToAssistFailureOverride(
     return outcome;
   }
 
-  if (!responseIndicatesUnableToAssistOrRefusal(responseText)) {
+  /**
+   * B0-928 (RC3) — judge decline-ness on the answer text with the guardrail's OWN redaction
+   * artifacts removed. `(unable to verify)`, the `[one … withheld — …]` markers and both redaction
+   * footers are copy the app writes, not the model refusing: two golden rows (Product Specialist
+   * #6/#15) returned substantively complete answers where a single unverifiable EPA number was
+   * blanked in place, and failed only because that copy matches `DECLINE_REGEXES`.
+   *
+   * When stripping leaves nothing substantive the row keeps failing — an answer that was ENTIRELY
+   * redaction copy is a genuine non-answer — so in that case the raw text is judged, exactly as
+   * before. `evaluateTestOutcome`'s emptiness check still reads the raw response text.
+   */
+  const strippedText = stripRegulatedClaimRedactionArtifacts(responseText);
+  const declineSourceText =
+    strippedText !== responseText && hasSubstantiveContent(strippedText)
+      ? strippedText
+      : responseText;
+
+  if (!responseIndicatesUnableToAssistOrRefusal(declineSourceText)) {
     return outcome;
   }
 

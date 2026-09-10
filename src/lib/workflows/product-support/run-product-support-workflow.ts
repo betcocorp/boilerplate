@@ -10,6 +10,18 @@ import type {
   RegulatedClaimCategory,
   RegulatedClaimGroundingResult,
 } from '~/lib/workflows/product-support/validator';
+// B0-928 — the guardrail's redaction/decline copy lives in one module the grader can import
+// without the workflow stack; re-exported below so existing importers are unaffected.
+import {
+  buildRegulatedClaimDeclineCopy,
+  buildRegulatedClaimSentenceRedactionFooter,
+  buildRegulatedClaimTokenRedactionFooter,
+  countSubstantiveContentChars,
+  REGULATED_CLAIM_CATEGORY_LABELS,
+  REGULATED_CLAIM_REDACTION_MIN_REMAINING_CHARS,
+  REGULATED_CLAIM_UNVERIFIED_TOKEN_MARKER,
+  regulatedClaimWithheldMarker,
+} from '~/lib/workflows/product-support/regulated-claim-redaction-copy';
 import {
   DEFAULT_BEX_CHAT_AGENT_MODE,
   type BexChatAgentMode,
@@ -1693,17 +1705,16 @@ export function evaluateUsageSafetyCoverage(
  * B0-829 / B0-871 — regulated-claim guardrail: redact vs. decline
  * -------------------------------------------------------------------------- */
 
-/** Reviewer-facing labels for the regulated categories `evaluateRegulatedClaimGrounding` detects. */
-export const REGULATED_CLAIM_CATEGORY_LABELS: Record<RegulatedClaimCategory, string> = {
-  epa_registration: 'EPA registration number',
-  din_registration: 'DIN registration number',
-  dilution_ratio: 'dilution ratio',
-  contact_time: 'contact/dwell time',
-  cas_number: 'CAS number',
-  hazard: 'hazard statement',
-  first_aid: 'first-aid instruction',
-  compatibility: 'compatibility statement',
-  efficacy_claim: 'efficacy claim',
+/**
+ * B0-928 — `REGULATED_CLAIM_CATEGORY_LABELS`, `regulatedClaimWithheldMarker` and
+ * `REGULATED_CLAIM_REDACTION_MIN_REMAINING_CHARS` moved to
+ * `~/lib/workflows/product-support/regulated-claim-redaction-copy` (one spelling of the copy, and
+ * importable from the grader without this module). Re-exported so existing importers keep working.
+ */
+export {
+  REGULATED_CLAIM_CATEGORY_LABELS,
+  REGULATED_CLAIM_REDACTION_MIN_REMAINING_CHARS,
+  regulatedClaimWithheldMarker,
 };
 
 /**
@@ -1736,18 +1747,6 @@ const REDACTABLE_SENTENCE_REGULATED_CATEGORIES: ReadonlySet<RegulatedClaimCatego
  * snippet may have been cut" from "this is the whole sentence".
  */
 export const REGULATED_CLAIM_SENTENCE_SNIPPET_CAP = 240;
-
-/**
- * B0-871 — what must be left of the draft, after every withheld sentence and marker is removed,
- * for the redaction to be worth showing instead of the full decline. Letters only count: a
- * remainder of markdown scaffolding, bullets or bare numbers is not "substantive content".
- */
-export const REGULATED_CLAIM_REDACTION_MIN_REMAINING_CHARS = 120;
-
-/** B0-871 — the literal marker one withheld sentence is replaced with. Never paraphrases the sentence. */
-export function regulatedClaimWithheldMarker(category: RegulatedClaimCategory): string {
-  return `[one ${REGULATED_CLAIM_CATEGORY_LABELS[category]} withheld — not verifiable against a retrieved label]`;
-}
 
 /**
  * B0-871 — "knowledge-kind sources dominate": strictly more than half of the retrieved sources
@@ -1863,7 +1862,10 @@ export function planRegulatedClaimRedaction(input: {
     }
     let redactedText = input.draftAnswer;
     for (const detail of grounding.ungroundedDetails) {
-      redactedText = redactedText.replaceAll(detail.snippet, '(unable to verify)');
+      redactedText = redactedText.replaceAll(
+        detail.snippet,
+        REGULATED_CLAIM_UNVERIFIED_TOKEN_MARKER,
+      );
     }
     return { mode: 'token_redaction', redactedText, withheldCategories: [...ungrounded] };
   }
@@ -1882,7 +1884,10 @@ export function planRegulatedClaimRedaction(input: {
   const removedSentences: string[] = [];
   for (const detail of grounding.ungroundedDetails) {
     if (TOKEN_SHAPED_REGULATED_CATEGORIES.has(detail.category)) {
-      redactedText = redactedText.replaceAll(detail.snippet, '(unable to verify)');
+      redactedText = redactedText.replaceAll(
+        detail.snippet,
+        REGULATED_CLAIM_UNVERIFIED_TOKEN_MARKER,
+      );
       continue;
     }
     const sentence = expandRegulatedClaimSnippetToSentence(redactedText, detail.snippet);
@@ -1898,12 +1903,11 @@ export function planRegulatedClaimRedaction(input: {
     redactedText = redactedText.replaceAll(sentence, marker);
   }
 
-  let remaining = redactedText.replaceAll('(unable to verify)', ' ');
+  let remaining = redactedText.replaceAll(REGULATED_CLAIM_UNVERIFIED_TOKEN_MARKER, ' ');
   for (const marker of markers) {
     remaining = remaining.replaceAll(marker, ' ');
   }
-  const substantiveChars = remaining.replace(/[^A-Za-z0-9]/g, '').length;
-  if (substantiveChars < REGULATED_CLAIM_REDACTION_MIN_REMAINING_CHARS) {
+  if (countSubstantiveContentChars(remaining) < REGULATED_CLAIM_REDACTION_MIN_REMAINING_CHARS) {
     return { mode: 'decline', reason: 'nothing_substantive_remains' };
   }
 
@@ -5439,8 +5443,7 @@ export async function runProductSupportWorkflow(input: {
           finalText = [
             plan.redactedText,
             '',
-            `I couldn't verify the ${flagged} above against an exact quote from a retrieved label or SDS, so I withheld it (marked "(unable to verify)").`,
-            'Please consult the product label or SDS directly for the exact regulated value, or contact Betco Product Support / EHS to confirm.',
+            buildRegulatedClaimTokenRedactionFooter(flagged),
           ].join('\n');
           answerProvenance = 'regulated_claim_partial_redaction';
         } else if (plan && plan.mode === 'sentence_redaction') {
@@ -5457,16 +5460,21 @@ export async function runProductSupportWorkflow(input: {
           finalText = [
             plan.redactedText,
             '',
-            `I couldn't verify the ${flagged} above against an exact quote from a retrieved label or SDS, so I withheld it (marked "withheld" in brackets).`,
-            'Please consult the product label or SDS directly for the exact regulated value, or contact Betco Product Support / EHS to confirm.',
+            buildRegulatedClaimSentenceRedactionFooter(flagged),
           ].join('\n');
           answerProvenance = 'regulated_claim_partial_redaction';
         } else {
-          finalText = [
-            `I can't verify the ${flagged} in this answer against an exact quote from a retrieved label or SDS, so I won't state it.`,
-            '',
-            'Please consult the product label or SDS directly for the exact regulated value, or contact Betco Product Support / EHS to confirm.',
-          ].join('\n');
+          /**
+           * B0-928 (RC5) — the decline now carries the one-sentence GENERAL governing rule for each
+           * flagged category (where the approved answer lives, and that it never transfers between
+           * products), so a withheld answer is not informationally empty. The rules are
+           * product-independent by construction: no value, dilution, contact time, or registration
+           * number appears in any of them — see `REGULATED_CLAIM_GOVERNING_RULES`.
+           */
+          finalText = buildRegulatedClaimDeclineCopy({
+            flagged,
+            categories: regulatedClaimGrounding.ungroundedCategories,
+          });
           /**
            * B0-391 — recorded as `validator_fallback`. The regulated-claim guardrail is a
            * validation-time rejection that replaces the answer with canned copy, exactly like the

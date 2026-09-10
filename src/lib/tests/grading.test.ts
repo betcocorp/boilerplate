@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { XREF_DECLINE_COPY } from '~/lib/recommendations/confidence-scoring';
+
 import {
   gradeChatTestResponse,
   gradeChatTestResponseAsync,
@@ -271,6 +273,146 @@ describe('gradeChatTestResponseAsync (B0-755)', () => {
       });
 
       expect(outcome.passed).toBe(false);
+    });
+  });
+});
+
+/**
+ * B0-928 — two of the seven golden-set failures on the 2026-09-10 gpt-5.6 run (app_version 4.4.0)
+ * were the harness failing turns that ANSWERED, both via `withUnableToAssistFailureOverride`:
+ *
+ * - RC3: the regulated-claim guardrail's own redaction copy ("(unable to verify)", the
+ *   "I couldn't verify … so I withheld it" footer) matches `DECLINE_REGEXES`, so the app's
+ *   transparency note failed the answer it was attached to.
+ * - RC4: `XREF_DECLINE_COPY` appended after a complete answer (the cross-reference sub-task
+ *   escalated at 0.542 against the 0.80 gate) failed the whole turn via a plain substring test.
+ *
+ * Both response strings below are verbatim from `test_result_items` for that run.
+ */
+describe('answered turns that carry app-authored decline copy (B0-928)', () => {
+  const REDACTION_FOOTER_TOKEN_MODE = [
+    `I couldn't verify the EPA registration number above against an exact quote from a retrieved label or SDS, so I withheld it (marked "(unable to verify)").`,
+    'Please consult the product label or SDS directly for the exact regulated value, or contact Betco Product Support / EHS to confirm.',
+  ].join('\n');
+
+  describe('RC3 — a token-redacted answer is not a decline', () => {
+    // Product Specialist row 15: gate verdict `redacted` / `token_redaction` — only pH7Q Dual's
+    // EPA registration number could not be verified verbatim, so it was blanked in place.
+    const responseText = `There is no documented “best” ranking; choose by required contact time and ready-to-use versus concentrate.
+
+- **GE Fight Bac RTU:** ready-to-use; its efficacy record lists **feline calicivirus (surrogate for norovirus)** with a **3-minute contact time**, EPA Reg. **34810-35-4170**. [doc:f2ccc9d5-d443-449e-9d3f-4ddfc8a74fe0]
+- **Quat-Stat 5:** concentrate at **1:256 (0.5 oz/gal)**; verified **Norwalk virus/norovirus** claim requires **5 minutes wet**, EPA Reg. **6836-361-4170**. [doc:1f0d1d94-b59b-469b-9436-4e0f19a1d82d]
+- **pH7Q Dual:** concentrate at **1:256 (0.5 oz/gal)**; verified **norovirus** claim requires **10 minutes wet**, EPA Reg. **(unable to verify)**. [doc:verified-facts:BB13F08B-607A-4B3E-8B43-D3E98532AC64]
+
+Pre-clean heavy soil, dilute concentrates exactly as labeled, and keep the surface visibly wet for the full organism-specific time. Confirm the current container label before use.
+
+**Sources:** Betco verified efficacy data for GE Fight Bac RTU, Quat-Stat 5, and pH7Q Dual; *Norovirus Outbreaks: Betco Cleaning and Hand Hygiene Solutions*. [doc:5466397a-41a4-430d-8bb0-0116f4de8da6]
+
+I couldn't verify the EPA registration number above against an exact quote from a retrieved label or SDS, so I withheld it (marked "(unable to verify)").
+Please consult the product label or SDS directly for the exact regulated value, or contact Betco Product Support / EHS to confirm.`;
+
+    it('passes an expected_should_answer = true row', () => {
+      const outcome = gradeChatTestResponse({
+        item: POSITIVE_ITEM,
+        hasError: false,
+        responseText,
+      });
+
+      expect(outcome.passed).toBe(true);
+      expect(outcome.failureReason).toBeNull();
+    });
+
+    it('still fails a response that is nothing BUT redaction copy', () => {
+      const outcome = gradeChatTestResponse({
+        item: POSITIVE_ITEM,
+        hasError: false,
+        responseText: `(unable to verify)\n\n${REDACTION_FOOTER_TOKEN_MODE}`,
+      });
+
+      expect(outcome.passed).toBe(false);
+      expect(outcome.failureReason).toContain('could not answer');
+    });
+
+    it('still fails a genuine decline that happens to sit next to redaction copy', () => {
+      const outcome = gradeChatTestResponse({
+        item: POSITIVE_ITEM,
+        hasError: false,
+        responseText: [
+          "I don't have the information needed to answer that. The retrieved label and SDS do not",
+          'state a contact time for this organism, and I will not supply one from memory. A Betco',
+          'representative can confirm the labeled value for the product in hand before you use it.',
+          '',
+          REDACTION_FOOTER_TOKEN_MODE,
+        ].join('\n'),
+      });
+
+      expect(outcome.passed).toBe(false);
+    });
+  });
+
+  describe('RC4 — a canonical decline appended after an answer is not a decline', () => {
+    // Product Specialist row 9: "Betco's version of BNC-15 kills everything BNC-15 does, right?"
+    const responseText = `Kill claims do not transfer between products. EPA-registered efficacy claims do NOT automatically carry over from the competitor product to the Betco equivalent (or vice versa) — being a matched equivalent does not mean the two products share the same registered claims. Only the claims printed on the Betco product's own current EPA-registered label are valid. Check every organism you need against that Betco label before substituting.
+
+${XREF_DECLINE_COPY}`;
+
+    it('passes an expected_should_answer = true row', () => {
+      const outcome = gradeChatTestResponse({
+        item: POSITIVE_ITEM,
+        hasError: false,
+        responseText,
+      });
+
+      expect(outcome.passed).toBe(true);
+      expect(outcome.failureReason).toBeNull();
+    });
+
+    it('still fails a bare canonical decline with no substantive content', () => {
+      const outcome = gradeChatTestResponse({
+        item: POSITIVE_ITEM,
+        hasError: false,
+        responseText: XREF_DECLINE_COPY,
+      });
+
+      expect(outcome.passed).toBe(false);
+      expect(outcome.failureReason).toContain('could not answer');
+    });
+
+    it('still fails the canonical decline behind a token preamble', () => {
+      const outcome = gradeChatTestResponse({
+        item: POSITIVE_ITEM,
+        hasError: false,
+        responseText: `Here is what I found.\n\n${XREF_DECLINE_COPY}`,
+      });
+
+      expect(outcome.passed).toBe(false);
+    });
+
+    it('still fails when the content before the decline is itself decline-shaped', () => {
+      const outcome = gradeChatTestResponse({
+        item: POSITIVE_ITEM,
+        hasError: false,
+        responseText: [
+          'I could not find a verified cross-reference record for that competitor product in the',
+          'retrieved documentation, and I will not guess at an equivalent from memory. Your Betco',
+          'representative keeps the current cross-reference list for competitor conversions.',
+          '',
+          XREF_DECLINE_COPY,
+        ].join('\n'),
+      });
+
+      expect(outcome.passed).toBe(false);
+    });
+
+    it('keeps scoring a bare decline on an expected_should_answer = false row as a PASS', () => {
+      const outcome = gradeChatTestResponse({
+        item: NEGATIVE_ITEM,
+        hasError: false,
+        responseText: XREF_DECLINE_COPY,
+      });
+
+      expect(outcome.passed).toBe(true);
+      expect(outcome.failureReason).toBeNull();
     });
   });
 });
