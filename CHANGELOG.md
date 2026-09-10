@@ -1,3 +1,39 @@
+# [5.0.0](https://github.com/betcocorp/bex2.0/compare/v4.6.0...v5.0.0) (2026-09-10)
+
+
+* feat(B0-930)!: retype test_items concepts to arrays, drop behaviour-expectation columns ([e9e37ba](https://github.com/betcocorp/bex2.0/commit/e9e37baf71fa4cbaf051ca0b5d603d791175c391))
+* feat(B0-932)!: grade harness runs on mandatory concept coverage, not a should-answer flag ([abdda69](https://github.com/betcocorp/bex2.0/commit/abdda69a1d1658d20a9ea6044ff68d35048ab660))
+* feat(B0-933)!: remove the Expected column and read concept arrays straight through ([9bcef13](https://github.com/betcocorp/bex2.0/commit/9bcef136914f4b936f72bd0f243a83fce381e3bd))
+
+
+### Bug Fixes
+
+* **B0-928:** stop hazard-guardrail and grader false positives failing 7 golden items ([8a63943](https://github.com/betcocorp/bex2.0/commit/8a63943af4816badf21d09136ccd811349fe50fc))
+
+
+### Features
+
+* **B0-931:** parse concept and source columns as arrays through CSV and the write path ([8028bf9](https://github.com/betcocorp/bex2.0/commit/8028bf9060de51145ae2f7b9f4559d1defc0fcbd))
+* **B0-934:** rebuild the test-item form with concept badge lists and a document picker ([5a1d8a9](https://github.com/betcocorp/bex2.0/commit/5a1d8a996292491afbbb4c24046720990ef91bb9))
+
+
+### BREAKING CHANGES
+
+* CSV and JSON run exports no longer contain `should_answer`,
+`expected_should_answer` or `expected_result_type` columns.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+* harness pass/fail semantics changed for every test item, and
+multi-turn scenario JSON no longer accepts per-turn `should_answer` or
+`expected_result_type`.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+* `test_items.expected_should_answer` and
+`test_items.expected_result_type` no longer exist, and the four remaining
+expectation columns changed type.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
 # [4.6.0](https://github.com/betcocorp/bex2.0/compare/v4.5.0...v4.6.0) (2026-09-10)
 
 
