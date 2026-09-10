@@ -61,11 +61,14 @@ export function ReportDatasetFilter({
 
   return (
     <div
-      className={`flex items-center gap-2 transition-opacity ${
+      className={`flex shrink-0 items-center gap-2 transition-opacity ${
         isPending ? 'opacity-60' : ''
       }`}
     >
-      <Label className="text-sm text-slate-600" htmlFor="reports-dataset">
+      <Label
+        className="whitespace-nowrap text-sm text-slate-600"
+        htmlFor="reports-dataset"
+      >
         Dataset
       </Label>
       <FormSelectField
@@ -81,15 +84,6 @@ export function ReportDatasetFilter({
         ]}
         value={selectedTestId}
       />
-      {selectedTestId ? (
-        <button
-          className="text-sm text-sky-700 underline-offset-2 hover:underline"
-          onClick={() => selectDataset('')}
-          type="button"
-        >
-          Clear
-        </button>
-      ) : null}
     </div>
   );
 }

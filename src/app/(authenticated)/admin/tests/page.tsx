@@ -130,6 +130,9 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
                 <TableHead>Name</TableHead>
                 <TableHead>Golden</TableHead>
                 <TableHead>Intended agent</TableHead>
+                <TableHead title="Generation model used for the latest completed report run">
+                  Model
+                </TableHead>
                 <TableHead>Last Run</TableHead>
                 <TableHead>Avg</TableHead>
                 <TableHead>Fails</TableHead>
@@ -142,7 +145,7 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
             <TableBody>
               {tests.length === 0 ? (
                 <TableRow>
-                  <TableCell className="text-slate-500" colSpan={10}>
+                  <TableCell className="text-slate-500" colSpan={11}>
                     No datasets uploaded yet.
                   </TableCell>
                 </TableRow>
@@ -194,6 +197,14 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
                             (a) => a.id === test.intended_agent,
                           )?.label ?? test.intended_agent)
                         : '—'}
+                    </TableCell>
+                    <TableCell
+                      className="whitespace-nowrap text-sm text-slate-600"
+                      title={
+                        test.latest_run_model_tag ?? 'Not recorded for the latest run'
+                      }
+                    >
+                      {test.latest_run_model_tag ?? '—'}
                     </TableCell>
                     <TableCell
                       className="whitespace-nowrap tabular-nums text-slate-700"

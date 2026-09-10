@@ -338,14 +338,9 @@ export async function generateReport(testResultId: string): Promise<ReportState>
       config: gradingConfigFromState(state),
     });
 
-    // B0-609 — persist the aggregate score/grade/fail-count alongside the report so the "Recent
-    // runs" table can render it without recomputing metrics from per-item data it doesn't
-    // otherwise load.
-    state.overall = {
-      avg: metrics.overall.avg,
-      grade: metrics.overall.grade,
-      fail: metrics.overall.fail,
-    };
+    // B0-609 — persist the aggregate score/grade alongside the report so the "Recent runs" table
+    // can render it without recomputing metrics from per-item data it doesn't otherwise load.
+    state.overall = { avg: metrics.overall.avg, grade: metrics.overall.grade };
     state.status = 'completed';
     state.error = null;
     state.updatedAt = generatedAt;
