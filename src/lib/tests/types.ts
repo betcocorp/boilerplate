@@ -1,5 +1,4 @@
 import type { Json, Tables, TablesInsert } from '~/types/supabase.public';
-import type { ExpectedCriterion } from './criteria-schemas';
 import type { MultiTurnScenario } from './multi-turn';
 
 export const TERMINAL_RUN_STATUSES = [
@@ -97,11 +96,16 @@ export type ParsedCsvRow = {
   source: string | null;
   priority: number | null;
   idealResponse: string | null;
-  expectedConcepts: string | null;
-  minimumConcepts: string | null;
-  /** B0-615 — parsed from the `expected_criteria` CSV cell's tiered mini-syntax. Empty array when absent. */
-  expectedCriteria: ExpectedCriterion[];
-  expectedSources: string | null;
+  /**
+   * B0-931 — `expected_concepts` / `minimum_concepts` / `expected_criteria` are `text[]` columns.
+   * One element per phrase, split structurally by `splitPhraseCell` (`./csv`) and stored verbatim.
+   * Empty array when the cell is absent, blank, or an empty-cell marker.
+   */
+  expectedConcepts: string[];
+  minimumConcepts: string[];
+  expectedCriteria: string[];
+  /** B0-931 — `rag.document.id` uuids. Non-uuid tokens land in {@link ParsedCsvRow.warnings}. */
+  expectedSources: string[];
   shouldCite: boolean | null;
   expectedTool: string | null;
   /** B0-790 — ground truth for the signals-accuracy harness. Same support level as expectedTool. */
@@ -116,4 +120,10 @@ export type ParsedCsvRow = {
    */
   inputPayload: Record<string, Json>;
   metadata: Record<string, string>;
+  /**
+   * B0-931 — row-level import problems the uploader must see (currently: `expected_sources`
+   * tokens that are not `rag.document.id` uuids). Empty when the row parsed cleanly. A warning
+   * never rejects the row — the rest of it still imports.
+   */
+  warnings: string[];
 };

@@ -25,7 +25,8 @@ import type { RouterTypeOverride } from '~/lib/workflows/product-support/run-pro
 import {
   decodeCsvBytes,
   parseCsvColumnNames,
-  parseExpectedCriteriaFromForm,
+  parseExpectedSourceIdsFromForm,
+  parsePhraseListFromForm,
   parsePriority,
   parseMultiTurnJsonFromForm,
   parseShouldCiteFromForm,
@@ -89,27 +90,44 @@ function optionalFormText(formData: FormData, name: string): string | null {
 }
 
 /**
- * The golden-set expectation fields shared by the add and edit prompt dialogs
- * (same names as the CSV columns in `~/lib/tests/template`).
+ * The golden-set expectation fields shared by the add and edit prompt dialogs.
+ *
+ * B0-931 — `expected_concepts` / `minimum_concepts` / `expected_criteria` are `text[]` and
+ * `expected_sources` is `uuid[]`, so the dialog submits a REPEATED input per value (one per
+ * phrase, one per document id) and these are read with `getAll`. Phrases are trimmed and blanks
+ * dropped, otherwise stored verbatim — regulated values (dilution ratios, oz/gal, mL/L, ppm,
+ * contact times, CAS and EPA numbers) are never rounded, converted or re-cased. No submitted
+ * value means an empty array, i.e. the row's expectations are cleared.
+ *
+ * `expected_sources` values that are not uuids are rejected rather than coerced; the caller
+ * redirects with the message instead of writing a row that silently lost a source.
  */
 function readConceptExpectationFields(formData: FormData) {
   const shouldCiteRaw = formData.get('shouldCite');
-  const expectedCriteriaRaw = formData.get('expectedCriteria');
+  const expectedSources = parseExpectedSourceIdsFromForm(
+    formData.getAll('expectedSources'),
+  );
+
   return {
-    expected_concepts: optionalFormText(formData, 'expectedConcepts'),
-    minimum_concepts: optionalFormText(formData, 'minimumConcepts'),
-    // B0-615 — blank clears the row back to legacy behavior-only grading (empty array),
-    // matching how every other field here treats a cleared input.
-    expected_criteria:
-      typeof expectedCriteriaRaw === 'string'
-        ? parseExpectedCriteriaFromForm(expectedCriteriaRaw)
-        : [],
-    expected_sources: optionalFormText(formData, 'expectedSources'),
-    should_cite:
-      typeof shouldCiteRaw === 'string'
-        ? parseShouldCiteFromForm(shouldCiteRaw)
-        : null,
+    values: {
+      expected_concepts: parsePhraseListFromForm(formData.getAll('expectedConcepts')),
+      minimum_concepts: parsePhraseListFromForm(formData.getAll('minimumConcepts')),
+      expected_criteria: parsePhraseListFromForm(formData.getAll('expectedCriteria')),
+      expected_sources: expectedSources.documentIds,
+      should_cite:
+        typeof shouldCiteRaw === 'string'
+          ? parseShouldCiteFromForm(shouldCiteRaw)
+          : null,
+    },
+    invalidExpectedSources: expectedSources.invalidTokens,
   };
+}
+
+/** The error shown when the dialog submits an `expectedSources` value that is not a document id. */
+function describeInvalidExpectedSources(tokens: string[]) {
+  return `Expected sources must be RAG document ids (UUIDs). Not a document id: ${tokens
+    .map((token) => `"${token}"`)
+    .join(', ')}.`;
 }
 
 function parseIntendedAgentField(
@@ -344,11 +362,25 @@ export async function uploadTestCsvAction(formData: FormData) {
   }
 
   revalidatePath('/admin/tests');
+  /**
+   * B0-931 — row-level import problems (currently `expected_sources` tokens that are not
+   * `rag.document.id` uuids) are reported back with the success toast rather than swallowed: the
+   * rows still import, but the uploader is told exactly which cells lost a value.
+   */
+  const rowWarnings = parsedRows.flatMap((row) =>
+    row.warnings.map((warning) => `row ${row.rowIndex}: ${warning}`),
+  );
+  const warningSuffix =
+    rowWarnings.length > 0
+      ? ` ${rowWarnings.length} row${rowWarnings.length === 1 ? '' : 's'} had import warnings — ${rowWarnings
+          .slice(0, 3)
+          .join(' ')}${rowWarnings.length > 3 ? ` (+${rowWarnings.length - 3} more)` : ''}`
+      : '';
   redirect(
     encodeMessage(
       '/admin/tests',
       'success',
-      `Uploaded ${file.name} and stored ${parsedRows.length} test prompts.`,
+      `Uploaded ${file.name} and stored ${parsedRows.length} test prompts.${warningSuffix}`,
     ),
   );
 }
@@ -405,10 +437,15 @@ export async function addTestItemAction(formData: FormData) {
       : null;
 
   const conceptExpectations = readConceptExpectationFields(formData);
-
-  const productMentionRaw = formData.get('productMention');
-  const questionCategoryRaw = formData.get('questionCategory');
-  const sourceStyleRaw = formData.get('sourceStyle');
+  if (conceptExpectations.invalidExpectedSources.length > 0) {
+    redirect(
+      encodeMessage(
+        returnPath,
+        'error',
+        describeInvalidExpectedSources(conceptExpectations.invalidExpectedSources),
+      ),
+    );
+  }
 
   // B0-537 — strict: an invalid scenario in an interactive dialog is reported, never dropped.
   const multiTurnRaw = formData.get('multiTurnJson');
@@ -419,21 +456,16 @@ export async function addTestItemAction(formData: FormData) {
     redirect(encodeMessage(returnPath, 'error', multiTurnParsed.message));
   }
 
+  /**
+   * B0-931 — the dialog no longer offers `productMention` / `sourceStyle`, so a new row simply
+   * has neither. `questionCategory` is unchanged and still writes `input_payload.question_category`.
+   */
   const { input_payload, metadata } = buildManualAddTestItemPayload({
     prompt,
     multiTurnScenario: multiTurnParsed.scenario,
-    productMention:
-      typeof productMentionRaw === 'string' && productMentionRaw.trim()
-        ? productMentionRaw.trim()
-        : null,
-    questionCategory:
-      typeof questionCategoryRaw === 'string' && questionCategoryRaw.trim()
-        ? questionCategoryRaw.trim()
-        : null,
-    sourceStyle:
-      typeof sourceStyleRaw === 'string' && sourceStyleRaw.trim()
-        ? sourceStyleRaw.trim()
-        : null,
+    productMention: null,
+    questionCategory: optionalFormText(formData, 'questionCategory'),
+    sourceStyle: null,
   });
 
   const maxRow = await getMaxRowIndexForTest(testId);
@@ -449,7 +481,7 @@ export async function addTestItemAction(formData: FormData) {
       source,
       priority,
       ideal_response,
-      ...conceptExpectations,
+      ...conceptExpectations.values,
       input_payload,
       metadata,
     },
@@ -534,10 +566,15 @@ export async function updateTestItemAction(formData: FormData) {
       : null;
 
   const conceptExpectations = readConceptExpectationFields(formData);
-
-  const productMentionRaw = formData.get('productMention');
-  const questionCategoryRaw = formData.get('questionCategory');
-  const sourceStyleRaw = formData.get('sourceStyle');
+  if (conceptExpectations.invalidExpectedSources.length > 0) {
+    redirect(
+      encodeMessage(
+        returnPath,
+        'error',
+        describeInvalidExpectedSources(conceptExpectations.invalidExpectedSources),
+      ),
+    );
+  }
 
   // B0-537 — see the add action; a cleared field turns the row back into a single-turn prompt.
   const multiTurnRaw = formData.get('multiTurnJson');
@@ -548,27 +585,33 @@ export async function updateTestItemAction(formData: FormData) {
     redirect(encodeMessage(returnPath, 'error', multiTurnParsed.message));
   }
 
+  /**
+   * B0-931 — the dialog no longer offers `productMention` / `sourceStyle`. They are read back off
+   * the stored row and passed through unchanged so an edit never deletes a value the form can no
+   * longer show (90 rows carry `product_mention`, 538 carry `source_style`). Every other
+   * `input_payload` key is preserved by `buildEditedTestItemPayload` itself.
+   */
+  const existingPayloadText = (key: string) => {
+    const payload = existing.input_payload;
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      return null;
+    }
+    const raw = (payload as Record<string, unknown>)[key];
+    return typeof raw === 'string' && raw.trim() ? raw : null;
+  };
+
   const { input_payload, metadata } = buildEditedTestItemPayload({
     prompt,
     multiTurnScenario: multiTurnParsed.scenario,
-    productMention:
-      typeof productMentionRaw === 'string' && productMentionRaw.trim()
-        ? productMentionRaw.trim()
-        : null,
-    questionCategory:
-      typeof questionCategoryRaw === 'string' && questionCategoryRaw.trim()
-        ? questionCategoryRaw.trim()
-        : null,
-    sourceStyle:
-      typeof sourceStyleRaw === 'string' && sourceStyleRaw.trim()
-        ? sourceStyleRaw.trim()
-        : null,
+    productMention: existingPayloadText('product_mention'),
+    questionCategory: optionalFormText(formData, 'questionCategory'),
+    sourceStyle: existingPayloadText('source_style'),
     existingInputPayload: existing.input_payload,
     existingMetadata: existing.metadata,
   });
 
-  // B0-799 — `expected_should_answer` / `expected_result_type` are deliberately omitted from the
-  // patch: the dialog no longer edits them, so a save must never null a stored value.
+  // B0-799 / B0-931 — `expected_should_answer` and `expected_result_type` no longer exist on
+  // `test_items`; the archived values live in `metadata.legacy_*` and are never written back.
   const updated = await updateTestItemForTest(testItemId, testId, {
     prompt,
     expected_canonical_product,
@@ -576,7 +619,7 @@ export async function updateTestItemAction(formData: FormData) {
     source,
     priority,
     ideal_response,
-    ...conceptExpectations,
+    ...conceptExpectations.values,
     input_payload,
     metadata,
   });
@@ -1001,8 +1044,6 @@ export async function createTestFromPromptsAction(formData: FormData) {
     test_id: newTest.id,
     row_index: index + 1,
     prompt: item.prompt,
-    expected_should_answer: item.expected_should_answer,
-    expected_result_type: item.expected_result_type,
     expected_canonical_product: item.expected_canonical_product,
     expected_reason_code: item.expected_reason_code,
     source: item.source,

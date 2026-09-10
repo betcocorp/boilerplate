@@ -7,8 +7,9 @@
  * concept gates the case (Result Fail, score capped at 59) while a missing expected concept only
  * lowers Completeness through coverage — so the mandatory/expected split decides both what fails
  * outright and what leadership sees flagged. This script exports every `public.test_items`
- * row that has either concept cell, splits both cells exactly as the grader does (`splitConcepts`
- * from `~/lib/tests/report/case-concepts`), and flags review candidates for the business owners
+ * row that carries either concept array (B0-930 retyped both columns from free text to `text[]`,
+ * so the phrases arrive already split and no splitter is involved), and flags review candidates
+ * for the business owners
  * (work items 1–2 of B0-828). Items 3–4 (the agreed lists and the change log) are theirs.
  *
  * READ-ONLY: nothing here writes to the database. Output is two CSVs plus a stdout summary.
@@ -47,7 +48,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import { normConcept, splitConcepts } from '~/lib/tests/report/case-concepts';
+import { normConcept } from '~/lib/tests/report/case-concepts';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 /** PostgREST caps a single request at 1000 rows (db-max-rows), so the export pages. */
@@ -59,8 +60,9 @@ type ItemRow = {
   id: string;
   test_id: string;
   prompt: string;
-  minimum_concepts: string | null;
-  expected_concepts: string | null;
+  /** B0-930 — `text[]`, one concept phrase per element. */
+  minimum_concepts: string[];
+  expected_concepts: string[];
 };
 
 type Column = 'mandatory' | 'expected';
@@ -138,10 +140,6 @@ const PROCEDURAL_CUES =
   /\b(?:recommends?|recommended|mentions?|mentioned|explains?|explained|describes?|described|tone|friendly|polite|politely|format|formatted|bullets?|bulleted|lists?|listed|summari[sz]e[sd]?|summary|suggests?|suggested|asks?|asked|clarif(?:y|ies|ied|ying)|follow[\s-]?up|links?|linked|contact|contacts|refers?|referred|referral|offers?|offered|emphasi[sz]es?|emphasi[sz]ed|note that|reminds?|reminded)\b/i;
 
 /** Cells with a non-blank trimmed value — the same predicate the SQL selection uses. */
-function hasText(cell: string | null | undefined): cell is string {
-  return typeof cell === 'string' && cell.trim() !== '';
-}
-
 function isRegulated(phrase: string): boolean {
   return REGULATED_PATTERNS.some((re) => re.test(phrase));
 }
@@ -217,7 +215,6 @@ async function loadItems(): Promise<ItemRow[]> {
     const { data, error } = await supabase
       .from('test_items')
       .select('id, test_id, prompt, minimum_concepts, expected_concepts')
-      .or('minimum_concepts.not.is.null,expected_concepts.not.is.null')
       .order('id')
       .range(from, from + PAGE_SIZE - 1);
     if (error) throw new Error(`test_items page @${from}: ${error.message}`);
@@ -225,7 +222,7 @@ async function loadItems(): Promise<ItemRow[]> {
     rows.push(...page);
     if (page.length < PAGE_SIZE) break;
   }
-  return rows.filter((row) => hasText(row.minimum_concepts) || hasText(row.expected_concepts));
+  return rows.filter((row) => row.minimum_concepts.length > 0 || row.expected_concepts.length > 0);
 }
 
 function compareText(a: string, b: string): number {
@@ -239,8 +236,8 @@ function analyse(items: ItemRow[], tests: Map<string, TestRow>) {
   for (const item of items) {
     const test = tests.get(item.test_id);
     const testName = test?.name ?? `(unknown test ${item.test_id})`;
-    const mandatory = splitConcepts(item.minimum_concepts);
-    const expected = splitConcepts(item.expected_concepts);
+    const mandatory = item.minimum_concepts;
+    const expected = item.expected_concepts;
 
     const make = (column: Column, list: string[]): PhraseRecord[] =>
       list.map((phrase, index) => ({
@@ -317,8 +314,9 @@ function analyse(items: ItemRow[], tests: Map<string, TestRow>) {
       regulatedInMandatory,
       regulatedInExpectedOnly,
       itemFlags,
-      rawMinimum: item.minimum_concepts ?? '',
-      rawExpected: item.expected_concepts ?? '',
+      // Re-joined for the CSV cell only; each phrase is still emitted verbatim.
+      rawMinimum: item.minimum_concepts.join(' | '),
+      rawExpected: item.expected_concepts.join(' | '),
     });
   }
 

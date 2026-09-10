@@ -89,7 +89,7 @@ const records = parse(csvContent, {
 // Keep in sync with TYPED_CSV_COLUMNS in src/lib/tests/csv.ts.
 const PRIMARY_COLS = new Set([
   'question', 'prompt', 'test_prompt',
-  'should_answer', 'expected_result_type', 'canonical_product', 'reason_code',
+  'canonical_product', 'reason_code',
   'source', 'priority', 'ideal_response',
   'expected_concepts', 'minimum_concepts', 'expected_sources', 'should_cite',
   // B0-264: these two were missing, so a CSV carrying them imported them into the
@@ -97,37 +97,76 @@ const PRIMARY_COLS = new Set([
   // `expected_criteria` arrived with B0-615 and `expected_tool` with B0-694; this file
   // was never updated to match, despite the "keep in sync" note above.
   'expected_criteria', 'expected_tool',
+  // B0-930 retired these two columns. Still consumed here (rather than falling through to
+  // the `metadata` catch-all, the B0-694 anti-pattern) so an older CSV imports cleanly.
+  'should_answer', 'expected_result_type',
 ]);
 const PAYLOAD_COLS = new Set(['product_mention', 'question_category', 'source_style']);
 
 /**
- * Mirror of `parseExpectedCriteriaCell` in src/lib/tests/csv.ts (B0-615). Segments split on
- * `;`, each `t<tier>[x]: <concept>`; a trailing `x` marks `match: 'exact'` for regulated
- * values (dilution ratios, oz/gal, mL/L, ppm, contact times, CAS/EPA numbers), which are
- * compared as a literal substring and never rounded, converted, or inferred. Malformed
- * segments are dropped rather than thrown so one typo cannot fail a whole import.
+ * B0-930 — mirror of `splitPhraseCell` in src/lib/tests/csv.ts, itself a port of the reference
+ * agent-evaluation skill's `concept_rules.py` `split_concepts`. One CSV cell holds every phrase;
+ * this splits it into the `text[]` the column now stores.
+ *
+ * Deterministic text structure only. Pipe is the primary delimiter, per line; newlines split; a
+ * semicolon splits only when nothing else delimited the cell; commas never split (a phrase
+ * routinely contains one: "dilute 2 oz/gal, then dwell"). Leading list markers are stripped.
+ *
+ * Regulated-data rule: the split is structural. Phrases are re-emitted verbatim — dilution ratios,
+ * oz/gal, mL/L, ppm, contact times, CAS numbers and EPA registration numbers pass through
+ * byte-for-byte, never rounded, converted or inferred.
  *
  * Reimplemented rather than imported because this is a plain .mjs script and the canonical
- * parser is TypeScript. Keep the two in sync.
+ * splitter is TypeScript. Keep the two in sync.
  */
-const CRITERION_SEGMENT_PATTERN = /^t([123])(x)?\s*:\s*(.+)$/i;
+const EMPTY_CELL_MARKERS = new Set(['n/a', 'na', 'none', '-', '\u2014']);
+const BULLET = /^\s*(?:[-*\u2022\u2023\u25aa\u00b7o]|\(?\d+[.)]|[a-z][.)])\s+/i;
 
-function parseExpectedCriteriaCell(value) {
-  const trimmed = asTrimmedString(value);
-  if (!trimmed) return [];
-  return trimmed
-    .split(';')
-    .map((segment) => segment.trim())
-    .filter(Boolean)
-    .map((segment) => {
-      const match = CRITERION_SEGMENT_PATTERN.exec(segment);
-      if (!match) return null;
-      const concept = (match[3] ?? '').trim();
-      if (!concept) return null;
-      return { concept, tier: Number(match[1]), match: match[2] ? 'exact' : 'semantic' };
-    })
-    .filter(Boolean);
+function splitPhraseCell(value) {
+  if (typeof value !== 'string') return [];
+  const text = value.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+  if (!text || EMPTY_CELL_MARKERS.has(text.toLowerCase())) return [];
+
+  let parts = [];
+  for (const line of text.split('\n')) {
+    parts.push(...(line.includes('|') ? line.split('|') : [line]));
+  }
+  if (parts.length === 1 && text.includes(';')) {
+    parts = text.split(';');
+  }
+
+  const out = [];
+  for (const raw of parts) {
+    const phrase = raw.replace(BULLET, '').trim().replace(/^;+|;+$/g, '').trim();
+    if (phrase) out.push(phrase);
+  }
+  return out;
 }
+
+/**
+ * B0-930 — `expected_sources` is `uuid[]` of `rag.document.id`. Non-uuid tokens (the old prose
+ * categories, e.g. "Product Label") are dropped with a warning rather than written, since the
+ * column can no longer hold them.
+ */
+const DOCUMENT_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function parseExpectedSourcesCell(value, rowIndex, warnings) {
+  if (typeof value !== 'string') return [];
+  const ids = [];
+  for (const token of value.split(/[,|\n]/)) {
+    const trimmed = token.trim();
+    if (!trimmed) continue;
+    if (DOCUMENT_ID_PATTERN.test(trimmed)) {
+      ids.push(trimmed);
+    } else {
+      warnings.push(`row ${rowIndex}: expected_sources value ${JSON.stringify(trimmed)} is not a rag.document.id — dropped`);
+    }
+  }
+  return ids;
+}
+
+const importWarnings = [];
 
 const rows = records
   .map((record, index) => {
@@ -150,19 +189,17 @@ const rows = records
     return {
       row_index: index + 1,
       prompt,
-      expected_should_answer: parseShouldAnswer(record.should_answer),
-      expected_result_type: asTrimmedString(record.expected_result_type) || null,
       expected_canonical_product: asTrimmedString(record.canonical_product) || null,
       expected_reason_code: asTrimmedString(record.reason_code) || null,
       source: asTrimmedString(record.source) || null,
       priority: parsePriority(record.priority),
       ideal_response: asTrimmedString(record.ideal_response) || null,
-      // Stored verbatim — never split or reformatted (oz/gal, mL/L, ppm, contact times).
-      expected_concepts: asTrimmedString(record.expected_concepts) || null,
-      minimum_concepts: asTrimmedString(record.minimum_concepts) || null,
-      expected_sources: asTrimmedString(record.expected_sources) || null,
+      // Split into phrases, each stored verbatim — never reformatted (oz/gal, mL/L, ppm, contact times).
+      expected_concepts: splitPhraseCell(record.expected_concepts),
+      minimum_concepts: splitPhraseCell(record.minimum_concepts),
+      expected_sources: parseExpectedSourcesCell(record.expected_sources, index + 1, importWarnings),
       should_cite: parseShouldAnswer(record.should_cite),
-      expected_criteria: parseExpectedCriteriaCell(record.expected_criteria),
+      expected_criteria: splitPhraseCell(record.expected_criteria),
       expected_tool: asTrimmedString(record.expected_tool) || null,
       input_payload: inputPayload,
       metadata,
@@ -171,6 +208,10 @@ const rows = records
   .filter(Boolean);
 
 console.log(`Parsed ${rows.length} rows from CSV.`);
+if (importWarnings.length > 0) {
+  console.warn(`${importWarnings.length} expected_sources value(s) dropped:`);
+  for (const warning of importWarnings) console.warn(`  - ${warning}`);
+}
 
 // ── Create test record ────────────────────────────────────────────────────────
 const fileName = csvPath.split(/[\\/]/).pop();

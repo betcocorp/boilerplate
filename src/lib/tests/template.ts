@@ -79,28 +79,28 @@ export const TEST_TEMPLATE_COLUMNS: TestTemplateColumn[] = [
     name: 'expected_concepts',
     required: false,
     example:
-      'Key concepts the ideal answer should contain, as a single string — e.g. 13 oz/gal or 100 mL/L; 1:10 with water',
-    help: 'Key concepts a complete answer should contain, as one string. Stored verbatim — dilution ratios, ppm, and contact times are never reformatted.',
+      'Key concepts the ideal answer should contain, one per phrase, separated by | — e.g. 13 oz/gal or 100 mL/L | 1:10 with water | 10 minute contact time',
+    help: 'Key concepts a complete answer should contain, pipe-separated (one phrase per concept). Each phrase is stored verbatim — dilution ratios, ppm, and contact times are never reformatted. Use n/a for none.',
   },
   {
     name: 'minimum_concepts',
     required: false,
-    example: 'Minimum concepts required for a passing answer, as a single string — e.g. 13 oz/gal',
-    help: 'The subset of expected_concepts a reviewer must see to pass the row, as one string. Stored verbatim.',
+    example: 'Must-have concepts for a passing answer, pipe-separated — e.g. 13 oz/gal | 10 minute contact time',
+    help: 'The subset of expected_concepts a reviewer must see to pass the row, pipe-separated. Each phrase is stored verbatim. Use n/a for none.',
   },
   {
     name: 'expected_criteria',
     required: false,
-    example: 't1: dilution 4 oz/gal; t1x: EPA Reg. No. 12345-67; t2: dwell time',
+    example: 'Extra grading criteria, pipe-separated — e.g. names the EPA registration number | states the PPE required',
     help:
-      'Optional tiered grading (B0-615): semicolon-separated "t1"/"t2"/"t3" (must-have/should-have/bonus) criteria the grader checks individually, instead of the behavior-only pass/fail rules. Trailing "x" on the tier (e.g. "t1x:") marks an exact, literal match — for regulated values that must never be rounded or paraphrased. Leave blank to keep this row on the legacy rules.',
+      'Optional additional criteria the grader checks, pipe-separated (one phrase each), same format as expected_concepts. Leave blank when the concept columns are enough.',
   },
   {
     name: 'expected_sources',
     required: false,
     example:
-      'Comma-separated sources the answer should draw from — e.g. Ax-It Plus TDS, Selector Guide Section 1',
-    help: 'Sources the answer should be grounded in, comma-separated. Stored as typed for reviewer reference.',
+      'Comma-separated rag.document.id values the answer should be grounded in — e.g. 6f0c3f1a-6b2a-4a1e-9d3c-2f5b8e7a1c40, 3a91f2de-11c4-4c6f-9f2b-7d0e5a4c8b13',
+    help: 'Document ids (rag.document.id UUIDs) the answer should be grounded in, comma- or pipe-separated. Values that are not UUIDs are reported as an import warning and not stored — look the id up on the RAG documents admin page.',
   },
   {
     name: 'should_cite',

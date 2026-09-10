@@ -1,6 +1,5 @@
 import { parse } from 'csv-parse/sync';
 
-import type { CriteriaTier, ExpectedCriterion } from './criteria-schemas';
 import {
   MULTI_TURN_PAYLOAD_KEY,
   multiTurnScenarioSchema,
@@ -104,7 +103,13 @@ const TYPED_CSV_COLUMNS = new Set([
  * carry them; they are dropped on import rather than falling through to the `metadata`
  * catch-all (the B0-694 anti-pattern). The `test_items` columns themselves are untouched.
  */
-const LEGACY_IGNORED_CSV_COLUMNS = new Set(['should_answer', 'expected_result_type']);
+const LEGACY_IGNORED_CSV_COLUMNS = new Set([
+  'should_answer',
+  'expected_result_type',
+  // B0-931 — `expected_should_answer` was dropped from `test_items` with the array retype; older
+  // CSVs (and every set exported before it) still carry the column.
+  'expected_should_answer',
+]);
 
 /** CSV columns routed into `input_payload` rather than `metadata`. */
 const INPUT_PAYLOAD_CSV_COLUMNS = new Set([
@@ -114,57 +119,155 @@ const INPUT_PAYLOAD_CSV_COLUMNS = new Set([
 ]);
 
 /**
- * B0-615 — mini-syntax for `expected_criteria`, so test authors keep a flat CSV cell
- * instead of a JSON blob (per the business case's CSV-authoring mitigation): segments
- * separated by `;`, each `t<tier>[x]: <concept>` — tier is 1 (must-have) / 2 (should-have)
- * / 3 (bonus); a trailing `x` on the tier marks `match: 'exact'` (regulated values —
- * dilution ratios, oz/gal, mL/L, ppm, contact times, CAS/EPA numbers — checked as a
- * literal substring, never rounded/converted/inferred).
- *
- * Example: `t1: dilution 4 oz/gal; t1x: EPA Reg. No. 12345-67; t2: dwell time`
- *
- * Malformed segments (no `t<1|2|3>[x]:` prefix, or an empty concept) are dropped rather
- * than throwing, so one typo in a 200-row CSV upload does not fail the whole import —
- * authors see the parsed result on the review step before it is saved.
+ * Cells that mean "no phrases of this kind were specified" — the reference splitter's set.
  */
-const CRITERION_SEGMENT_PATTERN = /^t([123])(x)?\s*:\s*(.+)$/i;
+const EMPTY_PHRASE_CELL_MARKERS = new Set(['n/a', 'na', 'none', '-', '—']);
 
-export function parseExpectedCriteriaCell(value: string): ExpectedCriterion[] {
-  const trimmed = value.trim();
-  if (!trimmed) {
+/**
+ * A leading list marker: `-`, `*`, `•`, `‣`, `▪`, `·`, a lone `o`, `1.` / `1)` / `(1)`, or
+ * `a.` / `a)`. Mirrors the reference skill's `concept_rules.py` `_BULLET` pattern, including its
+ * case-insensitivity.
+ */
+const PHRASE_BULLET = /^\s*(?:[-*•‣▪·o]|\(?\d+[.)]|[a-z][.)])\s+/i;
+
+/**
+ * B0-931 — splits one phrase cell (`expected_concepts`, `minimum_concepts`, `expected_criteria`,
+ * now `text[]` columns) into an ordered list of phrases. Mirrors the reference skill's
+ * `concept_rules.py` `split_concepts` — the same rules the B0-930 retype used on the live rows —
+ * so a CSV round-trip through import/export is lossless.
+ *
+ * **Pipe is the primary delimiter**, per line; newlines also split; list markers are stripped; a
+ * **semicolon splits only when nothing else delimited the cell**; commas never split (a phrase
+ * routinely contains one: "dilute 2 oz/gal, then dwell"). An empty cell, or one holding only an
+ * empty-cell marker, yields `[]`.
+ *
+ * Deliberately a local copy rather than an import of `./report/case-concepts` — that module is the
+ * report pipeline's and its exports are free to change; the importer keeps its own copy of the
+ * rules and the tests below pin them.
+ *
+ * Regulated-data rule: the split is structural only. Phrases are re-emitted verbatim — dilution
+ * ratios, oz/gal, mL/L, ppm, contact times, CAS numbers and EPA registration numbers are never
+ * rounded, unit-converted, re-cased, reflowed or truncated here.
+ */
+export function splitPhraseCell(cell: string | null | undefined): string[] {
+  if (cell == null) {
+    return [];
+  }
+  const text = String(cell).replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+  if (!text || EMPTY_PHRASE_CELL_MARKERS.has(text.toLowerCase())) {
     return [];
   }
 
-  return trimmed
-    .split(';')
-    .map((segment) => segment.trim())
-    .filter(Boolean)
-    .map((segment): ExpectedCriterion | null => {
-      const match = CRITERION_SEGMENT_PATTERN.exec(segment);
-      if (!match) {
-        return null;
-      }
-      const tier = Number(match[1]) as CriteriaTier;
-      const isExact = Boolean(match[2]);
-      const concept = (match[3] ?? '').trim();
-      if (!concept) {
-        return null;
-      }
-      return { concept, tier, match: isExact ? 'exact' : 'semantic' };
-    })
-    .filter((c): c is ExpectedCriterion => c !== null);
+  let parts: string[] = [];
+  for (const line of text.split('\n')) {
+    parts.push(...(line.includes('|') ? line.split('|') : [line]));
+  }
+  // Semicolons only when nothing else delimited the cell — pipes and newlines take precedence.
+  if (parts.length === 1 && text.includes(';')) {
+    parts = text.split(';');
+  }
+
+  const out: string[] = [];
+  for (const raw of parts) {
+    const phrase = raw.replace(PHRASE_BULLET, '').trim().replace(/^;+|;+$/g, '').trim();
+    if (phrase) {
+      out.push(phrase);
+    }
+  }
+  return out;
 }
 
-/** Inverse of `parseExpectedCriteriaCell` — for pre-filling the manual-entry textarea and CSV export. */
-export function formatExpectedCriteriaCell(criteria: ExpectedCriterion[]): string {
-  return criteria
-    .map((c) => `t${c.tier}${c.match === 'exact' ? 'x' : ''}: ${c.concept}`)
-    .join('; ');
+/** Inverse of {@link splitPhraseCell} — the pipe-delimited cell CSV export writes. */
+export function formatPhraseCell(phrases: readonly string[]): string {
+  return phrases.join(' | ');
 }
 
-/** Parses the `expectedCriteria` manual-entry / edit form field (same mini-syntax as the CSV cell). */
-export function parseExpectedCriteriaFromForm(value: string): ExpectedCriterion[] {
-  return parseExpectedCriteriaCell(value);
+/** Parses a repeated phrase form field (`formData.getAll(...)`): trimmed, verbatim, no blanks. */
+export function parsePhraseListFromForm(values: readonly FormDataEntryValue[]): string[] {
+  const out: string[] = [];
+  for (const value of values) {
+    if (typeof value !== 'string') {
+      continue;
+    }
+    const phrase = value.trim();
+    if (phrase) {
+      out.push(phrase);
+    }
+  }
+  return out;
+}
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** True when `value` is a uuid — i.e. storable in the `expected_sources` `uuid[]` column. */
+export function isDocumentId(value: string): boolean {
+  return UUID_PATTERN.test(value.trim());
+}
+
+export type ParsedExpectedSources = {
+  /** Tokens that are uuids, kept verbatim and in author order. */
+  documentIds: string[];
+  /** Tokens that are not uuids — surfaced as an import warning, never coerced or silently dropped. */
+  invalidTokens: string[];
+};
+
+/**
+ * B0-931 — `expected_sources` is now `uuid[]` holding `rag.document.id` values (the old prose
+ * category labels are archived in `metadata.legacy_expected_sources`). Authors write a comma- or
+ * pipe-separated list. A token that is not a uuid cannot be stored, so it is reported back to the
+ * uploader as a row-level warning rather than coerced into something else or dropped in silence.
+ */
+export function parseExpectedSourcesCell(cell: string | null | undefined): ParsedExpectedSources {
+  const documentIds: string[] = [];
+  const invalidTokens: string[] = [];
+
+  if (cell == null) {
+    return { documentIds, invalidTokens };
+  }
+  const text = String(cell).replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+  if (!text || EMPTY_PHRASE_CELL_MARKERS.has(text.toLowerCase())) {
+    return { documentIds, invalidTokens };
+  }
+
+  for (const token of text.split(/[,|\n]/)) {
+    const trimmed = token.trim();
+    if (!trimmed) {
+      continue;
+    }
+    if (UUID_PATTERN.test(trimmed)) {
+      documentIds.push(trimmed);
+    } else {
+      invalidTokens.push(trimmed);
+    }
+  }
+
+  return { documentIds, invalidTokens };
+}
+
+/** Parses the repeated `expectedSources` form field — each value one `rag.document.id`. */
+export function parseExpectedSourceIdsFromForm(
+  values: readonly FormDataEntryValue[],
+): ParsedExpectedSources {
+  const documentIds: string[] = [];
+  const invalidTokens: string[] = [];
+
+  for (const value of values) {
+    if (typeof value !== 'string') {
+      continue;
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+      continue;
+    }
+    if (UUID_PATTERN.test(trimmed)) {
+      documentIds.push(trimmed);
+    } else {
+      invalidTokens.push(trimmed);
+    }
+  }
+
+  return { documentIds, invalidTokens };
 }
 
 /**
@@ -173,7 +276,7 @@ export function parseExpectedCriteriaFromForm(value: string): ExpectedCriterion[
  * the JSON scenario-set importer (`./multi-turn-import.ts`); this exists so a single scenario can
  * ride along in an otherwise-normal CSV.
  *
- * Tolerant like `parseExpectedCriteriaCell`: a blank, unparseable, or schema-invalid cell yields
+ * Tolerant like {@link splitPhraseCell}: a blank, unparseable, or schema-invalid cell yields
  * `null` (the row imports as an ordinary single-turn prompt) rather than failing a 200-row upload.
  * The runner is the backstop — a scenario that IS stored but invalid is reported as a failed row,
  * never silently downgraded.
@@ -258,12 +361,28 @@ export function parseTestCsvContent(content: string): ParsedCsvRow[] {
       const source = asTrimmedString(record.source) || null;
       const priority = parsePriority(asTrimmedString(record.priority));
       const idealResponse = asTrimmedString(record.ideal_response) || null;
-      // Concept/source expectations are stored verbatim (never split or normalized) so
-      // regulated values — oz/gal, mL/L, ppm, contact times — survive the round trip.
-      const expectedConcepts = asTrimmedString(record.expected_concepts) || null;
-      const minimumConcepts = asTrimmedString(record.minimum_concepts) || null;
-      const expectedCriteria = parseExpectedCriteriaCell(asTrimmedString(record.expected_criteria));
-      const expectedSources = asTrimmedString(record.expected_sources) || null;
+      // B0-931 — concept/criteria cells become `text[]`. The split is structural only: each
+      // phrase is stored verbatim, so regulated values — oz/gal, mL/L, ppm, contact times, CAS
+      // and EPA numbers — survive the round trip byte-for-byte.
+      const expectedConcepts = splitPhraseCell(asTrimmedString(record.expected_concepts));
+      const minimumConcepts = splitPhraseCell(asTrimmedString(record.minimum_concepts));
+      const expectedCriteria = splitPhraseCell(asTrimmedString(record.expected_criteria));
+      const parsedExpectedSources = parseExpectedSourcesCell(
+        asTrimmedString(record.expected_sources),
+      );
+      const expectedSources = parsedExpectedSources.documentIds;
+      const warnings: string[] =
+        parsedExpectedSources.invalidTokens.length > 0
+          ? [
+              `expected_sources: ${parsedExpectedSources.invalidTokens
+                .map((token) => `"${token}"`)
+                .join(', ')} ${
+                parsedExpectedSources.invalidTokens.length === 1 ? 'is not a' : 'are not'
+              } document id${
+                parsedExpectedSources.invalidTokens.length === 1 ? '' : 's'
+              } (rag.document.id uuid) and could not be imported.`,
+            ]
+          : [];
       const shouldCite = parseBooleanCell(asTrimmedString(record.should_cite));
       const expectedTool = asTrimmedString(record.expected_tool) || null;
       // B0-790 — ground truth for the signals-accuracy harness; validated only in app code
@@ -330,6 +449,7 @@ export function parseTestCsvContent(content: string): ParsedCsvRow[] {
         multiTurnScenario,
         inputPayload,
         metadata,
+        warnings,
       } satisfies ParsedCsvRow;
     })
     .filter((row): row is ParsedCsvRow => row !== null);

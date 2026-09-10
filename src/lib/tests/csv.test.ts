@@ -2,10 +2,14 @@ import { describe, expect, it } from 'vitest';
 
 import {
   decodeCsvBytes,
-  formatExpectedCriteriaCell,
-  parseExpectedCriteriaCell,
+  formatPhraseCell,
+  isDocumentId,
+  parseExpectedSourceIdsFromForm,
+  parseExpectedSourcesCell,
+  parsePhraseListFromForm,
   parseShouldCiteFromForm,
   parseTestCsvContent,
+  splitPhraseCell,
 } from './csv';
 import { TEST_TEMPLATE_COLUMNS, buildTestTemplateCsv } from './template';
 
@@ -42,8 +46,7 @@ describe('decodeCsvBytes — B0-833 Windows-1252 import fallback', () => {
     expect(decoded).toContain('20–45 min at –60°F');
 
     const [parsedRow] = parseTestCsvContent(decoded);
-    expect(parsedRow.minimumConcepts).not.toContain('�');
-    expect(parsedRow.minimumConcepts).toBe('20–45 min at –60°F');
+    expect(parsedRow.minimumConcepts).toEqual(['20–45 min at –60°F']);
   });
 
   it('leaves a genuine UTF-8 file (including one with a BOM) unaffected', () => {
@@ -56,22 +59,27 @@ describe('decodeCsvBytes — B0-833 Windows-1252 import fallback', () => {
 
     expect(decoded).not.toContain('�');
     const [parsedRow] = parseTestCsvContent(decoded);
-    expect(parsedRow.minimumConcepts).toBe('20–45 min');
+    expect(parsedRow.minimumConcepts).toEqual(['20–45 min']);
   });
 });
 
 describe('parseTestCsvContent — golden test set format', () => {
-  it('reads the concept, source, and citation columns into typed fields', () => {
+  it('reads the concept, source, and citation columns into typed array fields', () => {
     const csv = [
       'question,canonical_product,reason_code,priority,ideal_response,product_mention,question_category,source_style,expected_concepts,minimum_concepts,expected_sources,should_cite',
-      '"How much pH7Q per gallon?",pH7Q Neutral Disinfectant,dilution,1,"Use 2 oz per gallon.",pH7Q,dilution,real_user_pattern,"2 oz/gal or 15 mL/L; 1:64","2 oz/gal","pH7Q TDS, Selector Guide Section 1",yes',
+      '"How much pH7Q per gallon?",pH7Q Neutral Disinfectant,dilution,1,"Use 2 oz per gallon.",pH7Q,dilution,real_user_pattern,"2 oz/gal or 15 mL/L | 1:64","2 oz/gal","6f0c3f1a-6b2a-4a1e-9d3c-2f5b8e7a1c40, 3a91f2de-11c4-4c6f-9f2b-7d0e5a4c8b13",yes',
     ].join('\n');
 
     const [row] = parseTestCsvContent(csv);
 
-    expect(row.expectedConcepts).toBe('2 oz/gal or 15 mL/L; 1:64');
-    expect(row.minimumConcepts).toBe('2 oz/gal');
-    expect(row.expectedSources).toBe('pH7Q TDS, Selector Guide Section 1');
+    // Pipe-delimited phrases; each element verbatim, so "15 mL/L" is never converted or rounded.
+    expect(row.expectedConcepts).toEqual(['2 oz/gal or 15 mL/L', '1:64']);
+    expect(row.minimumConcepts).toEqual(['2 oz/gal']);
+    expect(row.expectedSources).toEqual([
+      '6f0c3f1a-6b2a-4a1e-9d3c-2f5b8e7a1c40',
+      '3a91f2de-11c4-4c6f-9f2b-7d0e5a4c8b13',
+    ]);
+    expect(row.warnings).toEqual([]);
     expect(row.shouldCite).toBe(true);
     // Typed columns must not leak into the metadata catch-all.
     expect(row.metadata).not.toHaveProperty('expected_concepts');
@@ -126,7 +134,7 @@ describe('parseTestCsvContent — golden test set format', () => {
     ]);
   });
 
-  it('leaves the new fields null for legacy CSVs without those columns', () => {
+  it('leaves the array fields empty for legacy CSVs without those columns', () => {
     const csv = [
       'question,should_answer,expected_result_type',
       'Legacy row,yes,answer',
@@ -134,10 +142,35 @@ describe('parseTestCsvContent — golden test set format', () => {
 
     const [row] = parseTestCsvContent(csv);
 
-    expect(row.expectedConcepts).toBeNull();
-    expect(row.minimumConcepts).toBeNull();
-    expect(row.expectedSources).toBeNull();
+    expect(row.expectedConcepts).toEqual([]);
+    expect(row.minimumConcepts).toEqual([]);
+    expect(row.expectedCriteria).toEqual([]);
+    expect(row.expectedSources).toEqual([]);
     expect(row.shouldCite).toBeNull();
+  });
+
+  it('B0-931 — drops the retired expected_should_answer column without leaking it into metadata', () => {
+    const csv = [
+      'question,expected_should_answer,expected_result_type,should_answer,legacy_note',
+      '"How much pH7Q per gallon?",yes,answer,yes,keep me',
+    ].join('\n');
+
+    const [row] = parseTestCsvContent(csv);
+
+    expect(row.metadata).toEqual({ legacy_note: 'keep me' });
+  });
+
+  it('B0-931 — reports non-uuid expected_sources tokens as a row warning instead of storing them', () => {
+    const csv = [
+      'question,expected_sources',
+      '"How much pH7Q per gallon?","6f0c3f1a-6b2a-4a1e-9d3c-2f5b8e7a1c40, pH7Q TDS"',
+    ].join('\n');
+
+    const [row] = parseTestCsvContent(csv);
+
+    expect(row.expectedSources).toEqual(['6f0c3f1a-6b2a-4a1e-9d3c-2f5b8e7a1c40']);
+    expect(row.warnings).toHaveLength(1);
+    expect(row.warnings[0]).toContain('pH7Q TDS');
   });
 
   it('B0-799 — drops the retired should_answer / expected_result_type columns without leaking them into metadata', () => {
@@ -186,7 +219,13 @@ describe('parseTestCsvContent — golden test set format', () => {
     ]);
     // The template's example row is prose, so only the prompt is expected to survive typed parsing.
     expect(row.prompt).toContain('Enter the prompt/question to test');
-    expect(row.expectedConcepts).toContain('13 oz/gal');
+    // The example cell is pipe-delimited, so it splits into phrases like a real one.
+    expect(row.expectedConcepts.some((phrase) => phrase.includes('13 oz/gal'))).toBe(true);
+    // No retired column may appear in the downloadable template.
+    const templateColumnNames = TEST_TEMPLATE_COLUMNS.map((column) => column.name);
+    expect(templateColumnNames).not.toContain('should_answer');
+    expect(templateColumnNames).not.toContain('expected_should_answer');
+    expect(templateColumnNames).not.toContain('expected_result_type');
   });
 });
 
@@ -199,48 +238,110 @@ describe('parseShouldCiteFromForm', () => {
   });
 });
 
-describe('parseExpectedCriteriaCell — B0-615 tiered mini-syntax', () => {
-  it('parses tiered, exact, and semantic segments', () => {
-    const criteria = parseExpectedCriteriaCell(
-      't1: dilution 4 oz/gal; t1x: EPA Reg. No. 12345-67; t2: dwell time; t3: mentions PPE',
-    );
-
-    expect(criteria).toEqual([
-      { concept: 'dilution 4 oz/gal', tier: 1, match: 'semantic' },
-      { concept: 'EPA Reg. No. 12345-67', tier: 1, match: 'exact' },
-      { concept: 'dwell time', tier: 2, match: 'semantic' },
-      { concept: 'mentions PPE', tier: 3, match: 'semantic' },
+describe('splitPhraseCell — B0-931 phrase splitting (mirror of concept_rules.py split_concepts)', () => {
+  it('splits on pipes as the primary delimiter, verbatim', () => {
+    expect(splitPhraseCell('4 oz/gal | 10 minute contact time | EPA Reg. No. 1839-95')).toEqual([
+      '4 oz/gal',
+      '10 minute contact time',
+      'EPA Reg. No. 1839-95',
     ]);
   });
 
-  it('drops malformed segments instead of throwing', () => {
-    expect(parseExpectedCriteriaCell('t1: fine; not a criterion; t4: bad tier; t2:')).toEqual([
-      { concept: 'fine', tier: 1, match: 'semantic' },
+  it('never splits on a comma', () => {
+    expect(splitPhraseCell('dilute 2 oz/gal, then dwell')).toEqual(['dilute 2 oz/gal, then dwell']);
+  });
+
+  it('splits on semicolons only when nothing else delimited the cell', () => {
+    expect(splitPhraseCell('a; b')).toEqual(['a', 'b']);
+    expect(splitPhraseCell('a; b | c')).toEqual(['a; b', 'c']);
+  });
+
+  it('splits on newlines and strips list markers', () => {
+    expect(splitPhraseCell('- 4 oz/gal\r\n* 1:32\n1. 100 ppm\no PPE required')).toEqual([
+      '4 oz/gal',
+      '1:32',
+      '100 ppm',
+      'PPE required',
     ]);
   });
 
-  it('treats blank input as no criteria (legacy behavior-only grading)', () => {
-    expect(parseExpectedCriteriaCell('')).toEqual([]);
-    expect(parseExpectedCriteriaCell('   ')).toEqual([]);
+  it('treats blank cells and empty-cell markers as no phrases', () => {
+    for (const cell of ['', '   ', 'n/a', 'NA', 'none', '-', '—', null, undefined]) {
+      expect(splitPhraseCell(cell)).toEqual([]);
+    }
   });
 
-  it('round-trips through formatExpectedCriteriaCell', () => {
-    const original = 't1: dilution 4 oz/gal; t1x: EPA Reg. No. 12345-67; t2: dwell time';
-    expect(parseExpectedCriteriaCell(formatExpectedCriteriaCell(parseExpectedCriteriaCell(original)))).toEqual(
-      parseExpectedCriteriaCell(original),
-    );
+  it('re-emits regulated values byte-for-byte', () => {
+    const cell = '1:64 | 13 oz/gal or 100 mL/L | 600 ppm | 10 minutes | CAS 7681-52-9 | EPA Reg. No. 1839-95';
+    expect(splitPhraseCell(cell)).toEqual([
+      '1:64',
+      '13 oz/gal or 100 mL/L',
+      '600 ppm',
+      '10 minutes',
+      'CAS 7681-52-9',
+      'EPA Reg. No. 1839-95',
+    ]);
   });
 
-  it('parses expected_criteria out of a full CSV row', () => {
+  it('round-trips through formatPhraseCell', () => {
+    const phrases = ['13 oz/gal or 100 mL/L', '10 minute contact time', 'EPA Reg. No. 1839-95'];
+    expect(splitPhraseCell(formatPhraseCell(phrases))).toEqual(phrases);
+  });
+
+  it('parses expected_criteria as a plain phrase list out of a full CSV row', () => {
     const csv = [
       'question,expected_criteria',
-      '"How much pH7Q per gallon?","t1: dilution 4 oz/gal; t2: dwell time"',
+      '"How much pH7Q per gallon?","names the dilution 4 oz/gal | states the dwell time"',
     ].join('\n');
 
     const [row] = parseTestCsvContent(csv);
     expect(row.expectedCriteria).toEqual([
-      { concept: 'dilution 4 oz/gal', tier: 1, match: 'semantic' },
-      { concept: 'dwell time', tier: 2, match: 'semantic' },
+      'names the dilution 4 oz/gal',
+      'states the dwell time',
     ]);
+  });
+});
+
+describe('expected_sources — B0-931 rag.document.id uuids', () => {
+  it('accepts a comma- or pipe-separated uuid list', () => {
+    const ids = ['6f0c3f1a-6b2a-4a1e-9d3c-2f5b8e7a1c40', '3A91F2DE-11C4-4C6F-9F2B-7D0E5A4C8B13'];
+    expect(parseExpectedSourcesCell(ids.join(', ')).documentIds).toEqual(ids);
+    expect(parseExpectedSourcesCell(ids.join(' | ')).documentIds).toEqual(ids);
+  });
+
+  it('separates non-uuid tokens instead of coercing or dropping them silently', () => {
+    const parsed = parseExpectedSourcesCell(
+      '6f0c3f1a-6b2a-4a1e-9d3c-2f5b8e7a1c40, Ax-It Plus TDS, Selector Guide Section 1',
+    );
+    expect(parsed.documentIds).toEqual(['6f0c3f1a-6b2a-4a1e-9d3c-2f5b8e7a1c40']);
+    expect(parsed.invalidTokens).toEqual(['Ax-It Plus TDS', 'Selector Guide Section 1']);
+  });
+
+  it('treats a blank cell and empty-cell markers as no sources', () => {
+    expect(parseExpectedSourcesCell('')).toEqual({ documentIds: [], invalidTokens: [] });
+    expect(parseExpectedSourcesCell('n/a')).toEqual({ documentIds: [], invalidTokens: [] });
+  });
+
+  it('validates a single token with isDocumentId', () => {
+    expect(isDocumentId('6f0c3f1a-6b2a-4a1e-9d3c-2f5b8e7a1c40')).toBe(true);
+    expect(isDocumentId('pH7Q TDS')).toBe(false);
+  });
+});
+
+describe('form field readers — B0-931 repeated inputs', () => {
+  it('parsePhraseListFromForm trims, drops blanks, and keeps the rest verbatim', () => {
+    expect(
+      parsePhraseListFromForm(['  4 oz/gal ', '', '   ', '10 minute contact time']),
+    ).toEqual(['4 oz/gal', '10 minute contact time']);
+  });
+
+  it('parseExpectedSourceIdsFromForm rejects non-uuid values', () => {
+    const parsed = parseExpectedSourceIdsFromForm([
+      '6f0c3f1a-6b2a-4a1e-9d3c-2f5b8e7a1c40',
+      'not-a-uuid',
+      '',
+    ]);
+    expect(parsed.documentIds).toEqual(['6f0c3f1a-6b2a-4a1e-9d3c-2f5b8e7a1c40']);
+    expect(parsed.invalidTokens).toEqual(['not-a-uuid']);
   });
 });

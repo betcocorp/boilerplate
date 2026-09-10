@@ -25,7 +25,6 @@ export type AnalyzeTestItemPayload = {
   itemId: string;
   testName: string;
   prompt: string;
-  expectedShouldAnswer: boolean | null;
   historyRows: ItemHistoryRow[];
 };
 
@@ -125,9 +124,11 @@ Rules:
 - "content": 2-4 sentences of actionable explanation, plain text, no markdown.
 - No other keys, no extra text outside the JSON object.`;
 
+  // B0-931 — `expected_should_answer` was dropped from `test_items` (archived in
+  // `metadata.legacy_expected_should_answer`), so the prompt no longer states an answer/decline
+  // expectation it can no longer read.
   const userMessage = `Test: ${payload.testName}
 Prompt: ${payload.prompt}
-Expected should-answer: ${payload.expectedShouldAnswer === null ? 'Not set' : payload.expectedShouldAnswer ? 'Yes (the AI should answer)' : 'No (the AI should decline)'}
 Pass rate: ${passRate}% (${passCount} passed / ${failCount} failed out of ${totalRuns} total runs)
 
 Historical Outcomes (newest first):
