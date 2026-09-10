@@ -1,3 +1,10 @@
+# [4.6.0](https://github.com/betcocorp/bex2.0/compare/v4.5.0...v4.6.0) (2026-09-10)
+
+
+### Features
+
+* **B0-927:** Adding additional filters to reports and ui enhancements ([2166ba6](https://github.com/betcocorp/bex2.0/commit/2166ba6431ba21aa6d63f5edda023b3dc34c860a))
+
 # [4.5.0](https://github.com/betcocorp/bex2.0/compare/v4.4.0...v4.5.0) (2026-09-10)
 
 
