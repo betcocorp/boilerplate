@@ -32,7 +32,13 @@ export type WorkflowRunTrace = NonNullable<
  */
 export type PromptGradingContext = {
   passed: boolean;
-  expectedShouldAnswer: boolean | null;
+  /**
+   * B0-932 — `test_items.minimum_concepts`, one phrase per element, verbatim. Replaces the dropped
+   * `expected_should_answer` flag: covering every one of these is what a harness PASS now means,
+   * so they are the recorded expectation the analysis reasons against. Empty when the item
+   * declares none — stated as such, never as "the agent was expected to answer".
+   */
+  mandatoryConcepts: string[];
   /** `test_items.ideal_response`, currently null for every row in the database. */
   idealResponse: string | null;
   similarity: number | null;
@@ -78,9 +84,12 @@ impact must be one of: high, medium, low`;
  *  - **failed with an ideal response** — there is a target, so rank fixes by the
  *    divergence from it. This is the branch the ticket is really about, and it is
  *    dormant today: `test_items.ideal_response` is null for all 3,212 rows.
- *  - **failed with no ideal response** — say so plainly and redirect the model to the
- *    signals that do exist. Never hand it "compare against: null" or ask it to explain
- *    a divergence from nothing; it would invent the missing half.
+ *  - **failed with mandatory concepts but no ideal response** (B0-932, the common case) —
+ *    the concepts ARE the statement of what a correct answer contains, so the model is
+ *    pointed at which of them the answer missed.
+ *  - **failed with neither** — say so plainly and redirect the model to the signals that
+ *    do exist. Never hand it "compare against: null" or ask it to explain a divergence
+ *    from nothing; it would invent the missing half.
  *  - **passed** — the analysis must not manufacture a failure to have something to say.
  */
 function gradingClause(grading: PromptGradingContext): string {
@@ -92,7 +101,11 @@ function gradingClause(grading: PromptGradingContext): string {
     return `\n\nGRADING CONTEXT: this run is one item of an automated test run, and it FAILED. The expected answer is given to you under "## Ideal response". Your first task is to explain concretely how the answer produced diverged from it — what it got wrong, omitted, or added — and then rank all 3 recommendations by how much each would close that specific gap. Cite the divergence, not a generic quality concern. Do not treat wording differences as failures: the ideal response is prose guidance, not a string to match.`;
   }
 
-  return `\n\nGRADING CONTEXT: this run is one item of an automated test run, and it FAILED. No ideal response was recorded for this prompt, so you have NO reference answer — do not guess at what the expected answer said, and do not claim the answer diverged from something you cannot see. Diagnose the failure from the evidence you do have: the recorded expectation of whether the agent should have answered at all, the retrieval similarity, the validator verdict, and the trace. Rank your recommendations by how likely each is to flip this item to a pass.`;
+  if (grading.mandatoryConcepts.length > 0) {
+    return `\n\nGRADING CONTEXT: this run is one item of an automated test run, and it FAILED. No ideal response was recorded, but the item DOES list the mandatory concepts a correct answer had to cover — they are given under "## Mandatory concepts", and the item fails when any one of them is missing. Work out which of them the answer failed to cover, and rank all 3 recommendations by how much each would close that specific gap. Do not treat wording differences as failures: a concept counts as covered when the answer states it in any words.`;
+  }
+
+  return `\n\nGRADING CONTEXT: this run is one item of an automated test run, and it FAILED. It records NO ideal response and NO mandatory concepts, so you have no statement of what a correct answer contains — do not guess at one, and do not claim the answer diverged from something you cannot see. Diagnose the failure from the evidence you do have: the harness's own failure reason, the retrieval similarity, the validator verdict, and the trace. Note that an item with no recorded concepts cannot be graded on content at all, which may itself be the finding worth reporting.`;
 }
 
 /** System prompt for one analysis, with the grading clause when the run was graded. */
@@ -255,24 +268,28 @@ const IDEAL_RESPONSE_MAX_CHARS = 1500;
  * section is not emitted at all without grading context.
  */
 function describeGradingContext(grading: PromptGradingContext): string {
-  const expectation =
-    grading.expectedShouldAnswer === null
-      ? 'not recorded'
-      : grading.expectedShouldAnswer
-        ? 'yes — the agent was expected to answer this'
-        : 'no — the agent was expected to decline or refuse this';
-
   const header = `\n\n## Harness grading
 Verdict: ${grading.passed ? 'PASSED' : 'FAILED'}
-Expected the agent to answer: ${expectation}
+Pass rule: the item passes when it answered without erroring AND every mandatory concept below was covered; an item with no mandatory concepts is not graded on content.
 Retrieval similarity: ${grading.similarity !== null ? grading.similarity.toFixed(3) : 'none recorded (retrieval may not have run)'}`;
 
+  // Concept phrases are regulated free text: printed verbatim, one per line, never re-cased,
+  // re-joined or truncated.
+  const concepts =
+    grading.mandatoryConcepts.length > 0
+      ? `
+
+## Mandatory concepts
+${grading.mandatoryConcepts.map((concept) => `- ${concept}`).join('\n')}`
+      : `
+Mandatory concepts: none recorded for this prompt — nothing was declared as required, so the harness could only check that an answer was produced.`;
+
   if (!grading.idealResponse) {
-    return `${header}
+    return `${header}${concepts}
 Ideal response: none recorded for this prompt — there is no reference answer to compare against.`;
   }
 
-  return `${header}
+  return `${header}${concepts}
 
 ## Ideal response
 ${clip(grading.idealResponse, IDEAL_RESPONSE_MAX_CHARS)}`;

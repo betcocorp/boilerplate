@@ -111,9 +111,10 @@ export async function loadMultiTurnScenarioSetsFromDisk(
  * TURN 1 (so every existing list/search/routing surface keeps working), and the whole scenario goes
  * under `input_payload.multi_turn`.
  *
- * `expected_should_answer` / `expected_result_type` are deliberately left NULL: a multi-turn row is
- * graded by `multi-turn-evaluator.ts` against its PER-TURN expectations, and copying the final
- * turn's expectation into the row's own columns would imply the single-turn grader ran.
+ * B0-932 — the row's own concept columns are deliberately left EMPTY: a multi-turn row is graded
+ * by `multi-turn-evaluator.ts` against its PER-TURN expectations, and copying the final turn's
+ * concepts into the row's own columns would double-grade them (the runner already applies any
+ * item-level criteria to the final turn on top of the scenario verdict).
  */
 export function buildTestItemFromScenario(params: {
   testId: string;
@@ -129,8 +130,9 @@ export function buildTestItemFromScenario(params: {
     test_id: params.testId,
     row_index: params.rowIndex,
     prompt: scenario.turns[0].prompt,
-    expected_should_answer: null,
-    expected_result_type: null,
+    expected_concepts: [],
+    minimum_concepts: [],
+    expected_criteria: [],
     intended_agent_item: params.intendedAgent ?? null,
     input_payload: {
       [MULTI_TURN_PAYLOAD_KEY]: JSON.parse(JSON.stringify(scenario)),

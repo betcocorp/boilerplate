@@ -46,7 +46,7 @@ const FULL_ROW = {
     id: 'ti-1',
     row_index: 7,
     prompt: 'What is the dilution for Green Earth Peroxide Cleaner?',
-    expected_should_answer: true,
+    minimum_concepts: ['states the labeled dilution', 'cites the product label'],
     priority: 2,
     ideal_response: '2 oz/gal for general cleaning.',
   },
@@ -80,7 +80,7 @@ describe('mapHarnessContextRow', () => {
       testItemId: 'ti-1',
       rowIndex: 7,
       prompt: 'What is the dilution for Green Earth Peroxide Cleaner?',
-      expectedShouldAnswer: true,
+      mandatoryConcepts: ['states the labeled dilution', 'cites the product label'],
       priority: 2,
       idealResponse: '2 oz/gal for general cleaning.',
       passed: false,
@@ -115,19 +115,45 @@ describe('mapHarnessContextRow', () => {
     expect(context?.idealResponse).toBeNull();
   });
 
-  it('keeps an unset expectation distinct from an explicit false', () => {
+  /**
+   * B0-932 — `expected_should_answer` is gone; `minimum_concepts` is the prompt's expectation.
+   * An item that declares none must read as an empty list, never as a fabricated expectation, and
+   * a malformed value must degrade the same way rather than throwing.
+   */
+  it('reports an item with no mandatory concepts as an empty list', () => {
     expect(
       mapHarnessContextRow({
         ...FULL_ROW,
-        test_items: { ...FULL_ROW.test_items, expected_should_answer: false },
-      })?.expectedShouldAnswer,
-    ).toBe(false);
+        test_items: { ...FULL_ROW.test_items, minimum_concepts: [] },
+      })?.mandatoryConcepts,
+    ).toEqual([]);
+  });
+
+  it('degrades a missing or malformed minimum_concepts to an empty list', () => {
     expect(
       mapHarnessContextRow({
         ...FULL_ROW,
-        test_items: { ...FULL_ROW.test_items, expected_should_answer: null },
-      })?.expectedShouldAnswer,
-    ).toBeNull();
+        test_items: { ...FULL_ROW.test_items, minimum_concepts: null },
+      })?.mandatoryConcepts,
+    ).toEqual([]);
+    expect(
+      mapHarnessContextRow({
+        ...FULL_ROW,
+        test_items: { ...FULL_ROW.test_items, minimum_concepts: 'not an array' },
+      })?.mandatoryConcepts,
+    ).toEqual([]);
+  });
+
+  it('copies every concept phrase verbatim and drops only blanks', () => {
+    expect(
+      mapHarnessContextRow({
+        ...FULL_ROW,
+        test_items: {
+          ...FULL_ROW.test_items,
+          minimum_concepts: ['4 oz/gal per the label', '   ', 'EPA Reg. No. 1839-83'],
+        },
+      })?.mandatoryConcepts,
+    ).toEqual(['4 oz/gal per the label', 'EPA Reg. No. 1839-83']);
   });
 
   it('prefers the prompt row index but falls back to the per-run copy', () => {

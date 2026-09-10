@@ -4,12 +4,16 @@ import { z } from 'zod';
  * B0-755 — structured-output contract for the semantic decline grader
  * (`~/lib/tests/decline-grader.ts`).
  *
- * The harness's `expected_should_answer = false` rows used to be graded by matching the
- * response's wording against a fixed phrase/regex list (`responseIndicatesDeclineStyleAnswer` in
- * `./grading.ts`). That list catches "I can't provide…" but misses the model's actual paraphrased
- * declines ("Pricing is not published… please contact your Betco distributor"), so the SAME
- * response flips pass/fail across identical runs purely on wording. This schema is the shape of
- * the model's judgement of whether a response is *substantively* a decline, independent of vocabulary.
+ * Rows whose correct outcome is a refusal used to be graded by matching the response's wording
+ * against a fixed phrase/regex list (`responseIndicatesDeclineStyleAnswer` in `./grading.ts`).
+ * That list catches "I can't provide…" but misses the model's actual paraphrased declines
+ * ("Pricing is not published… please contact your Betco distributor"), so the SAME response flips
+ * pass/fail across identical runs purely on wording. This schema is the shape of the model's
+ * judgement of whether a response is *substantively* a decline, independent of vocabulary.
+ *
+ * B0-932 — "a refusal is the correct outcome here" is no longer a column
+ * (`expected_should_answer` was dropped); it is expressed by the item's `minimum_concepts`
+ * phrases, which describe the refusal and are handed to this grader as context.
  */
 export const semanticDeclineVerdictSchema = z.object({
   isDecline: z.boolean(),

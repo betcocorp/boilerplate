@@ -2,6 +2,7 @@ import { APP_VERSION } from '~/lib/app-version';
 import { searchProductChunks, type RagSearchMatch } from '~/lib/rag/search';
 
 import { analyzeAndPersistFailureRootCause } from './failure-root-cause';
+import { mandatoryConceptPhrases } from './grading';
 import {
   computeAvgSimilarityForResult,
   countPassedAndFailedByResultId,
@@ -16,40 +17,35 @@ import {
 } from './repository';
 import { isTerminalRunStatus, type TestItemRecord } from './types';
 
-/** Similarity floor below which a match is not considered relevant for negative-test evaluation. */
-const NEGATIVE_SIMILARITY_CAP = 0.45;
-
 /**
- * Gold eval pass/fail logic:
- * - Negative test (expected_should_answer = false): pass if no match exceeds the similarity cap.
- * - Positive test with expected_canonical_product and/or expected_result_type: pass if at least
- *   one match satisfies BOTH constraints in the same chunk.
- * - Positive test with no constraints: pass if any result was returned.
+ * Retrieval eval pass/fail logic.
+ *
+ * B0-932 — the two behaviour columns this used to branch on are gone from `test_items`:
+ *
+ *  - `expected_should_answer = false` selected a NEGATIVE retrieval test ("nothing relevant should
+ *    come back above the similarity cap"). There is no replacement signal on the row — a search
+ *    run has no answer text, so mandatory concept coverage, the new chat pass axis, cannot stand
+ *    in for it. The branch is therefore removed rather than reconstructed from
+ *    `metadata.legacy_expected_should_answer`, which would be resurrecting a dropped column
+ *    through a side door. Any negative retrieval row now grades as an ordinary positive one.
+ *  - `expected_result_type` constrained the matched chunk's `section_type` (16 rows repo-wide).
+ *    Removed for the same reason.
+ *
+ * What remains:
+ * - `expected_canonical_product` set: pass if at least one match is that product line.
+ * - no constraint: pass if any result was returned.
  */
 function evaluateSearchPass(matches: RagSearchMatch[], item: TestItemRecord): boolean {
-  if (item.expected_should_answer === false) {
-    return !matches.some((m) => m.similarity >= NEGATIVE_SIMILARITY_CAP);
-  }
-
   const expectedKey =
     typeof item.expected_canonical_product === 'string' && item.expected_canonical_product.trim()
       ? item.expected_canonical_product.trim().toLowerCase()
       : null;
 
-  const expectedSection =
-    typeof item.expected_result_type === 'string' && item.expected_result_type.trim()
-      ? item.expected_result_type.trim()
-      : null;
-
-  if (!expectedKey && !expectedSection) {
+  if (!expectedKey) {
     return matches.length > 0;
   }
 
-  return matches.some((m) => {
-    const keyMatch = !expectedKey || (m.product_line_key?.toLowerCase() ?? '') === expectedKey;
-    const sectionMatch = !expectedSection || m.section_type === expectedSection;
-    return keyMatch && sectionMatch;
-  });
+  return matches.some((m) => (m.product_line_key?.toLowerCase() ?? '') === expectedKey);
 }
 
 function asSummaryObject(value: unknown): Record<string, unknown> {
@@ -175,9 +171,7 @@ export async function executeSearchRun(testResultId: string) {
         queryRewritten: result.query !== item.prompt.trim() ? result.query : null,
         model: result.model,
         matchCount: result.matches.length,
-        passReason: passed
-          ? (item.expected_should_answer === false ? 'no_relevant_match_above_cap' : 'constraint_satisfied')
-          : (item.expected_should_answer === false ? 'unexpected_relevant_match' : 'constraint_not_satisfied'),
+        passReason: passed ? 'constraint_satisfied' : 'constraint_not_satisfied',
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Search failed.';
@@ -214,7 +208,7 @@ export async function executeSearchRun(testResultId: string) {
         testResultItemId: insertedItem.id,
         testName: test.name,
         prompt: item.prompt,
-        expectedShouldAnswer: item.expected_should_answer,
+        mandatoryConcepts: mandatoryConceptPhrases(item),
         responseText: null,
         errorMessage:
           typeof (responsePayload as { error?: unknown }).error === 'string'

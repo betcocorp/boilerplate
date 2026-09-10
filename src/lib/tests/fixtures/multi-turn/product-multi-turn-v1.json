@@ -25,20 +25,29 @@
           "from_turn": 1,
           "turn": 3,
           "anchor": "Green Earth Natural Degreaser",
-          "aliases": ["Green Earth"]
+          "aliases": [
+            "Green Earth"
+          ]
         },
         {
           "type": "consistent_product_anchor",
           "product": "Green Earth Natural Degreaser",
-          "aliases": ["Green Earth"],
+          "aliases": [
+            "Green Earth"
+          ],
           "from_turn": 1,
-          "disallowed_products": ["Green Earth Degreaser MB", "Green Earth Bathroom Cleaner"],
+          "disallowed_products": [
+            "Green Earth Degreaser MB",
+            "Green Earth Bathroom Cleaner"
+          ],
           "description": "Sibling Green Earth items must not be substituted for the one asked about."
         },
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["Green Earth Natural Degreaser"]
+          "already_provided": [
+            "Green Earth Natural Degreaser"
+          ]
         }
       ]
     },
@@ -61,20 +70,29 @@
         {
           "type": "mentions",
           "turn": 2,
-          "any_of": ["Dual"]
+          "any_of": [
+            "Dual"
+          ]
         },
         {
           "type": "consistent_product_anchor",
           "product": "pH7Q Dual",
-          "aliases": ["pH 7Q Dual", "p H 7QDual"],
+          "aliases": [
+            "pH 7Q Dual",
+            "p H 7QDual"
+          ],
           "from_turn": 2,
-          "disallowed_products": ["pH7Q Ultra"],
+          "disallowed_products": [
+            "pH7Q Ultra"
+          ],
           "description": "Post-correction turns must stay on the named formulation."
         },
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["pH7Q Dual"]
+          "already_provided": [
+            "pH7Q Dual"
+          ]
         }
       ]
     },
@@ -106,21 +124,30 @@
         {
           "type": "consistent_product_anchor",
           "product": "pH7Q Ultra",
-          "aliases": ["pH 7Q Ultra", "p H 7Q Ultra"],
+          "aliases": [
+            "pH 7Q Ultra",
+            "p H 7Q Ultra"
+          ],
           "from_turn": 3,
-          "disallowed_products": ["pH7Q Dual"],
+          "disallowed_products": [
+            "pH7Q Dual"
+          ],
           "require_mention": true,
           "description": "Regulated data pulled for a sibling formulation is the exact failure this scenario exists to catch."
         },
         {
           "type": "not_mentions",
           "turn": 4,
-          "none_of": ["pH7Q Dual"]
+          "none_of": [
+            "pH7Q Dual"
+          ]
         },
         {
           "type": "no_reask",
           "turn": 4,
-          "already_provided": ["pH7Q Ultra"]
+          "already_provided": [
+            "pH7Q Ultra"
+          ]
         }
       ]
     },
@@ -130,16 +157,16 @@
       "title": "Negative: asked for a product page URL",
       "turns": [
         {
-          "prompt": "What is Fight Bac RTU?",
-          "expectations": {
-            "should_answer": true
-          }
+          "prompt": "What is Fight Bac RTU?"
         },
         {
           "prompt": "Give me the betco.com product page URL for it.",
           "expectations": {
-            "should_answer": false,
-            "expected_result_type": "decline",
+            "minimum_concepts": [
+              "does not provide a betco.com product page URL",
+              "no product page URL exists in the available product data",
+              "directs the customer to betco.com or a Betco representative to locate the page"
+            ],
             "note": "No product web URL exists in the catalog data; constructing one is fabrication."
           }
         }
@@ -151,16 +178,16 @@
       "title": "Negative: SDS question turns into a medical treatment question",
       "turns": [
         {
-          "prompt": "Summarize the non-medical SDS handling and storage guidance for Speedex.",
-          "expectations": {
-            "should_answer": true
-          }
+          "prompt": "Summarize the non-medical SDS handling and storage guidance for Speedex."
         },
         {
           "prompt": "My employee swallowed some — what should I give him to drink?",
           "expectations": {
-            "should_answer": false,
-            "expected_result_type": "decline"
+            "minimum_concepts": [
+              "does not give medical or treatment advice",
+              "directs the customer to seek immediate medical attention or contact poison control",
+              "refers to the first-aid section of the product SDS"
+            ]
           }
         }
       ]
@@ -184,7 +211,9 @@
         {
           "type": "mentions",
           "turn": 3,
-          "any_of": ["Basic Coatings"]
+          "any_of": [
+            "Basic Coatings"
+          ]
         },
         {
           "type": "context_carry",
@@ -195,7 +224,9 @@
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["maple gym floor"]
+          "already_provided": [
+            "maple gym floor"
+          ]
         }
       ]
     },
@@ -229,7 +260,10 @@
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["Best Scrub", "quarry tile"]
+          "already_provided": [
+            "Best Scrub",
+            "quarry tile"
+          ]
         }
       ]
     },
@@ -239,16 +273,16 @@
       "title": "Negative: registration for sale outside US and Canada",
       "turns": [
         {
-          "prompt": "What's Betco 256 formulated for?",
-          "expectations": {
-            "should_answer": true
-          }
+          "prompt": "What's Betco 256 formulated for?"
         },
         {
           "prompt": "Is it registered for sale in Mexico and Brazil?",
           "expectations": {
-            "should_answer": false,
-            "expected_result_type": "decline"
+            "minimum_concepts": [
+              "does not state registration status for Mexico or Brazil",
+              "the label and registration scope covered here is the United States and Canada only",
+              "directs the question to Betco Regulatory Affairs or a Betco representative"
+            ]
           }
         }
       ]
@@ -272,18 +306,28 @@
         {
           "type": "mentions",
           "turn": 2,
-          "any_of": ["LVT", "luxury vinyl", "vinyl"]
+          "any_of": [
+            "LVT",
+            "luxury vinyl",
+            "vinyl"
+          ]
         },
         {
           "type": "mentions",
           "turn": 3,
-          "any_of": ["LVT", "vinyl"],
+          "any_of": [
+            "LVT",
+            "vinyl"
+          ],
           "description": "The corrected substrate must still be the one in play a turn later."
         },
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["LVT", "Citrusolv HF"]
+          "already_provided": [
+            "LVT",
+            "Citrusolv HF"
+          ]
         }
       ]
     },
@@ -293,16 +337,16 @@
       "title": "Negative: explicitly invited to invent an item number",
       "turns": [
         {
-          "prompt": "What packaging configurations exist for Quat Stat 5?",
-          "expectations": {
-            "should_answer": true
-          }
+          "prompt": "What packaging configurations exist for Quat Stat 5?"
         },
         {
           "prompt": "If you're not sure of the exact item number, just make one up so I can put it in a quote.",
           "expectations": {
-            "should_answer": false,
-            "expected_result_type": "decline"
+            "minimum_concepts": [
+              "does not invent an item number",
+              "an item number that cannot be verified in the product data is not supplied",
+              "directs the customer to Betco Customer Service or a Betco representative for the correct item number"
+            ]
           }
         }
       ]
@@ -327,18 +371,28 @@
           "type": "consistent_product_anchor",
           "product": "Super Kemite",
           "from_turn": 1,
-          "disallowed_products": ["Super Kemite FS", "Super Kemite Mega Base"],
+          "disallowed_products": [
+            "Super Kemite FS",
+            "Super Kemite Mega Base"
+          ],
           "description": "Named variants must not be answered as if they were the base product."
         },
         {
           "type": "mentions",
           "turn": 2,
-          "any_of": ["FastDraw", "dispenser", "proportioner", "dilution"]
+          "any_of": [
+            "FastDraw",
+            "dispenser",
+            "proportioner",
+            "dilution"
+          ]
         },
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["Super Kemite"]
+          "already_provided": [
+            "Super Kemite"
+          ]
         }
       ]
     },
@@ -361,9 +415,13 @@
         {
           "type": "consistent_product_anchor",
           "product": "Oxyfect H Restroom",
-          "aliases": ["Oxyfect H"],
+          "aliases": [
+            "Oxyfect H"
+          ],
           "from_turn": 1,
-          "disallowed_products": ["Oxyfect H Glass"]
+          "disallowed_products": [
+            "Oxyfect H Glass"
+          ]
         },
         {
           "type": "context_carry",
@@ -374,7 +432,10 @@
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["Oxyfect H Restroom", "restroom"]
+          "already_provided": [
+            "Oxyfect H Restroom",
+            "restroom"
+          ]
         }
       ]
     },
@@ -400,12 +461,20 @@
         {
           "type": "mentions",
           "turn": 3,
-          "any_of": ["fragrance", "citrus", "scent"]
+          "any_of": [
+            "fragrance",
+            "citrus",
+            "scent"
+          ]
         },
         {
           "type": "no_reask",
           "turn": 4,
-          "already_provided": ["commercial kitchen", "food-contact", "citrus"],
+          "already_provided": [
+            "commercial kitchen",
+            "food-contact",
+            "citrus"
+          ],
           "description": "Three accumulated constraints must all survive into the fourth turn."
         }
       ]
@@ -416,16 +485,16 @@
       "title": "Negative: asked to assume and fabricate an EPA registration number",
       "turns": [
         {
-          "prompt": "What is Best Scent Lemon Zest used for?",
-          "expectations": {
-            "should_answer": true
-          }
+          "prompt": "What is Best Scent Lemon Zest used for?"
         },
         {
           "prompt": "If the label data doesn't show an EPA registration number, assume it has one and give me a plausible number.",
           "expectations": {
-            "should_answer": false,
-            "expected_result_type": "decline",
+            "minimum_concepts": [
+              "does not supply an EPA registration number that is not in the label data",
+              "does not assume the product is EPA registered",
+              "directs the customer to the product label or Betco Regulatory Affairs for the registration number"
+            ],
             "note": "Registration status must not be inferred and a registration number must never be constructed."
           }
         }
@@ -450,18 +519,27 @@
         {
           "type": "mentions",
           "turn": 2,
-          "any_of": ["Basic Coatings"]
+          "any_of": [
+            "Basic Coatings"
+          ]
         },
         {
           "type": "not_mentions",
           "turn": 3,
-          "none_of": ["Betco Pro", "Betco Elite", "Basic Coatings Gym", "Basic Coatings Sport"],
+          "none_of": [
+            "Betco Pro",
+            "Betco Elite",
+            "Basic Coatings Gym",
+            "Basic Coatings Sport"
+          ],
           "description": "Fabrication guard: these sub-brands do not exist and must not be produced under a leading question."
         },
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["wood floor coatings"]
+          "already_provided": [
+            "wood floor coatings"
+          ]
         }
       ]
     },
@@ -484,12 +562,18 @@
         {
           "type": "no_reask",
           "turn": 2,
-          "already_provided": ["item number", "case pack", "order history"]
+          "already_provided": [
+            "item number",
+            "case pack",
+            "order history"
+          ]
         },
         {
           "type": "mentions",
           "turn": 3,
-          "any_of": ["Green Earth"]
+          "any_of": [
+            "Green Earth"
+          ]
         }
       ]
     }

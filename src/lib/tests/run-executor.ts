@@ -28,6 +28,7 @@ import {
 } from './repository';
 import type { CriteriaGradingOutcome } from './criteria-schemas';
 import { analyzeAndPersistFailureRootCause } from './failure-root-cause';
+import { mandatoryConceptPhrases } from './grading';
 import { generateReport } from './report/orchestrator';
 import { parseTestRunConfig } from './run-config';
 import { runSingleTestItem } from './runner';
@@ -415,7 +416,7 @@ export async function executeTestRun(testResultId: string) {
         testResultItemId: insertedItem.id,
         testName: test.name,
         prompt: item.prompt,
-        expectedShouldAnswer: item.expected_should_answer,
+        mandatoryConcepts: mandatoryConceptPhrases(item),
         responseText: insertedItem.response_text,
         errorMessage: insertedItem.error_message,
         criteriaGrading: payload?.criteriaGrading ?? null,

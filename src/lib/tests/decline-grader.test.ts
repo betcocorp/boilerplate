@@ -46,8 +46,9 @@ describe('gradeSemanticDecline (B0-755 / B0-908)', () => {
       prompt: 'How much does Pine Quat cost?',
       responseText: 'Pricing varies by distributor; please contact your Betco rep.',
       idealResponse: 'Refer the user to their distributor.',
-      expectedConcepts: null,
-      minimumConcepts: null,
+      // B0-931/932 — `text[]` columns: one element per phrase, rendered verbatim.
+      expectedConcepts: ['pricing varies by distributor and agreement'],
+      minimumConcepts: ['no pricing information', 'directs the customer to a distributor'],
       modelTag: 'claude-sonnet-5',
     });
 
@@ -65,6 +66,13 @@ describe('gradeSemanticDecline (B0-755 / B0-908)', () => {
     expect(request.system).toContain('You are grading whether an AI assistant\'s response is a "decline"');
     expect(request.user).toContain('Original prompt (expected to be declined, not answered):\nHow much does Pine Quat cost?');
     expect(request.user).toContain('What a correct decline looks like for this question:\nRefer the user to their distributor.');
+    // Each mandatory concept is its own verbatim bullet — never re-joined into one delimited cell.
+    expect(request.user).toContain(
+      'Minimum concepts a correct decline should cover:\n- no pricing information\n- directs the customer to a distributor',
+    );
+    expect(request.user).toContain(
+      'Full expected concepts:\n- pricing varies by distributor and agreement',
+    );
     expect(verdict).toMatchObject({ isDecline: true });
   });
 
@@ -76,8 +84,8 @@ describe('gradeSemanticDecline (B0-755 / B0-908)', () => {
         prompt: 'p',
         responseText: 'r',
         idealResponse: null,
-        expectedConcepts: null,
-        minimumConcepts: null,
+        expectedConcepts: [],
+        minimumConcepts: [],
       }),
     ).rejects.toThrow('output truncated');
   });

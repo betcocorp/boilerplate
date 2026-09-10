@@ -12,6 +12,7 @@ import {
   stripRegulatedClaimRedactionArtifacts,
 } from '~/lib/workflows/product-support/regulated-claim-redaction-copy';
 
+import { conceptPhrases, type CriteriaGradingOutcome } from './criteria-schemas';
 import type { TestItemRecord } from './types';
 
 /**
@@ -19,16 +20,36 @@ import type { TestItemRecord } from './types';
  * evaluator (`multi-turn-evaluator.ts`) can reuse per-turn grading without importing the runner
  * (which pulls in the live workflow/conversation stack). `runner.ts` re-exports
  * `gradeChatTestResponse`, so existing imports are unaffected.
+ *
+ * B0-932 — the behaviour axis is gone. `expected_should_answer` / `expected_result_type` were
+ * dropped from `test_items`, and with them the rule that made "the row wanted an answer and the
+ * model said something" a PASS regardless of whether the something was correct. **Mandatory
+ * concept coverage is now the pass/fail axis** (mirroring the reference agent-evaluation skill's
+ * `minimal_gate`):
+ *
+ *   an item passes when the run produced a non-empty answer without erroring AND every
+ *   `minimum_concepts` phrase was judged satisfied — an item with no mandatory concepts has
+ *   nothing to gate on and passes on having answered.
+ *
+ * The phrases themselves are judged by `gradeWithCriteria` (`./criteria-grader.ts`), which is
+ * async and calls a model; this module stays pure and takes that verdict as an input
+ * (`conceptGrading`). Items with no mandatory concepts are marked Unable to Evaluate by the
+ * report pipeline (B0-826) — that is the report's call, not a fail here.
  */
 
 /**
- * The grader only reads these two expectation fields off a test item, so per-turn expectations in
+ * The grader only reads the concept columns off a test item, so per-turn expectations in
  * multi-turn scenarios can be graded with the exact same rules without fabricating a full DB row.
  */
 export type GradableExpectations = Pick<
   TestItemRecord,
-  'expected_should_answer' | 'expected_result_type'
+  'expected_concepts' | 'minimum_concepts' | 'expected_criteria'
 >;
+
+/** The item's mandatory phrases, `exact:` prefixes stripped. Empty = nothing to gate on. */
+export function mandatoryConceptPhrases(item: GradableExpectations): string[] {
+  return conceptPhrases(item.minimum_concepts).map((parsed) => parsed.concept);
+}
 
 /**
  * The app's own canonical "no confident equivalent" decline strings (B0-300 follow-up). Checked
@@ -99,10 +120,6 @@ function answeredBeforeTrailingCanonicalDecline(responseText: string): boolean {
   );
 }
 
-function shouldExpectAnswer(item: GradableExpectations) {
-  return item.expected_should_answer;
-}
-
 export type EvaluationOutcome = {
   passed: boolean;
   /** Human-readable explanation when `passed` is false (stored on `error_message`). */
@@ -135,9 +152,8 @@ const DECLINE_REGEXES: RegExp[] = [
  * B0-518 — checks the same canonical decline copy as `responseIndicatesDeclineStyleAnswer` first,
  * so the two "is this actually a decline" detectors agree: the chemical-mixing and
  * broad-recommendation early-decline copies use vocabulary ("advise", no decline words at all) that
- * the phrase/regex heuristics below don't cover, which previously meant a POSITIVE row
- * (`expected_should_answer = true`) that got one of those two exact declines back was scored a false
- * PASS instead of being flagged for review.
+ * the phrase/regex heuristics below don't cover, which previously meant a row that got one of those
+ * two exact declines back was scored a false PASS instead of being flagged for review.
  */
 export function responseIndicatesUnableToAssistOrRefusal(responseText: string): boolean {
   const t = responseText.trim().toLowerCase();
@@ -189,7 +205,7 @@ function matchesUnableToAssistPhrase(t: string): boolean {
     'unable to locate',
     'could not locate',
     // Clarification-seeking responses — the model is asking for more info instead of answering.
-    // For expected_should_answer=true items these are failures, not passes.
+    // These are failures, not passes, unless the item's mandatory concepts were covered anyway.
     'need a bit more detail',
     'need more detail',
     'need more specific',
@@ -305,104 +321,122 @@ export function responseIndicatesDeclineStyleAnswer(responseText: string): boole
 }
 
 /**
- * Rows expecting a decline-style outcome should not be failed by the "unable to assist" visibility
- * override below — `evaluateTestOutcome` already scored a decline response as a legitimate PASS for
- * these, and the override exists to catch a decline where an ANSWER was expected, not to re-litigate
- * one the base evaluator already approved.
+ * B0-932 — how the mandatory concepts of one item were judged, as far as this pure module knows.
  *
- * B0-518 — this used to ALSO require `expected_result_type` to literally be `'decline'`/`'none'`
- * before exempting the row, on top of `expected_should_answer === false`. Confirmed against the live
- * "Product Golden Test Set" run (`6203d34f-…`) and every other negative-expectation row in the
- * database: `expected_result_type` is null on every single one, so that second condition never once
- * matched in production — the exemption was effectively dead, and every correctly-triggered decline
- * on a negative row was being re-failed by the override with "The assistant indicated it could not
- * answer…", even though `evaluateTestOutcome` had already scored it a pass one line earlier.
- * `expected_should_answer === false` is already the row's own "a decline is the correct outcome here"
- * signal (it is the exact condition `evaluateTestOutcome` tests), so requiring a second field to
- * separately agree was redundant, not an extra safety check.
+ *  - `'satisfied'`    — every `minimum_concepts` phrase was met (`gradeWithCriteria` passed).
+ *  - `'missed'`       — at least one mandatory phrase was not met, or the grader could not judge.
+ *  - `'none'`         — the item declares no mandatory concepts: nothing to gate on.
+ *  - `'unevaluated'`  — the item declares mandatory concepts but no verdict reached us.
  */
-function expectsDeclineStyleOutcome(item: GradableExpectations): boolean {
-  return shouldExpectAnswer(item) === false;
+export type MandatoryConceptState = 'satisfied' | 'missed' | 'none' | 'unevaluated';
+
+export function resolveMandatoryConceptState(
+  item: GradableExpectations,
+  conceptGrading: CriteriaGradingOutcome | null | undefined,
+): MandatoryConceptState {
+  if (mandatoryConceptPhrases(item).length === 0) {
+    return 'none';
+  }
+  if (!conceptGrading) {
+    return 'unevaluated';
+  }
+  return conceptGrading.passed ? 'satisfied' : 'missed';
 }
 
 /**
- * Same pass/fail rules as the historical boolean helper; adds `failureReason` for failed assertions.
+ * B0-932 — the pass rule, in code.
+ *
+ * A hard error or an empty response fails first (same two human-readable reasons as before,
+ * reworded now that no column is named). Everything after that is mandatory concept coverage: an
+ * item with mandatory concepts passes only when every one of them was judged satisfied, and an
+ * item with none passes on having answered.
  */
 function evaluateTestOutcome(params: {
   item: GradableExpectations;
   hasError: boolean;
   responseText: string;
+  conceptGrading?: CriteriaGradingOutcome | null;
 }): EvaluationOutcome {
-  const expectedShouldAnswer = shouldExpectAnswer(params.item);
-  const expectedResultType = (params.item.expected_result_type || '')
-    .trim()
-    .toLowerCase();
-
-  const hasResponse = !params.hasError && params.responseText.trim().length > 0;
-
-  if (expectedShouldAnswer === null) {
-    const passed = !params.hasError;
+  if (params.hasError) {
     return {
-      passed,
-      failureReason: passed
-        ? null
-        : 'This row has no expectation (expected_should_answer is null) but the run reported an error before a final answer.',
+      passed: false,
+      failureReason: 'The run reported an error before producing a final answer.',
     };
   }
 
-  if (expectedShouldAnswer === true) {
-    if (hasResponse) {
-      return { passed: true, failureReason: null };
-    }
+  if (params.responseText.trim().length === 0) {
+    return {
+      passed: false,
+      failureReason: 'The response text was empty, so no expected concept could be covered.',
+    };
+  }
+
+  /**
+   * B0-902 — the grader model could not judge this item (refusal, truncation at the output cap,
+   * transport failure after retries). It is never a pass, even when the item declares nothing
+   * mandatory: an item with only tier-2 concepts would otherwise fall through to "it answered".
+   */
+  if (params.conceptGrading?.unableToEvaluate) {
     return {
       passed: false,
       failureReason:
-        'This row expects an assistant answer (expected_should_answer = true) but the response text was empty.',
+        params.conceptGrading.failureReason ??
+        `Concept grading was unable to evaluate this item: ${
+          params.conceptGrading.uteReason ?? 'the grader model returned no usable judgement.'
+        }`,
     };
   }
 
-  if (expectedShouldAnswer === false) {
-    if (!hasResponse) {
-      return { passed: true, failureReason: null };
-    }
+  const state = resolveMandatoryConceptState(params.item, params.conceptGrading);
 
-    // A proper decline is always a pass for negative tests, regardless of expected_result_type.
-    if (responseIndicatesDeclineStyleAnswer(params.responseText)) {
+  switch (state) {
+    case 'none':
+      // Nothing to gate on. The run report marks these Unable to Evaluate (B0-826); the harness
+      // does not invent a failure for an item that never said what a correct answer contains.
       return { passed: true, failureReason: null };
-    }
 
-    if (expectedResultType === 'decline' || expectedResultType === 'none') {
+    case 'satisfied':
+      return { passed: true, failureReason: null };
+
+    case 'missed':
       return {
         passed: false,
-        failureReason: `This row expects a decline-style answer (expected_result_type "${expectedResultType}") — e.g. inability to verify, no verified information, or phrasing with "can't"/"cannot" or "outside the scope"; the response did not match decline-style criteria.`,
+        failureReason:
+          params.conceptGrading?.failureReason ??
+          'At least one mandatory concept (minimum_concepts) was not covered by the answer.',
       };
-    }
 
-    return {
-      passed: false,
-      failureReason:
-        'This row expects no assistant answer (expected_should_answer = false) but the model returned a non-empty response without a recognizable decline.',
-    };
+    case 'unevaluated':
+      return {
+        passed: false,
+        failureReason:
+          'Mandatory concept coverage could not be evaluated for this item, so it cannot be scored as a pass.',
+      };
   }
-
-  return {
-    passed: false,
-    failureReason:
-      'expected_should_answer is not true, false, or null, so this item cannot be evaluated with the current rules.',
-  };
 }
 
 function withUnableToAssistFailureOverride(
   responseText: string,
   outcome: EvaluationOutcome,
-  item: GradableExpectations,
+  mandatoryConceptState: MandatoryConceptState,
 ): EvaluationOutcome {
   const hasText = responseText.trim().length > 0;
   if (!hasText || !outcome.passed) {
     return outcome;
   }
 
-  if (expectsDeclineStyleOutcome(item)) {
+  /**
+   * B0-932 — an item whose mandatory concepts were all satisfied is exempt from the visibility
+   * override. This is the honest version of what `expected_should_answer === false` was
+   * approximating: the row said what a correct answer must contain, the answer contained it, and
+   * a phrase list has no business re-failing a verdict the concept grader already approved —
+   * least of all for a refusal the mandatory concepts themselves describe ("a cross-reference
+   * match does not transfer claims between products").
+   *
+   * The override otherwise stays exactly as it was: a decline on an item whose mandatory concepts
+   * were NOT covered — or which has none to cover — is still surfaced as a failure for review.
+   */
+  if (mandatoryConceptState === 'satisfied') {
     return outcome;
   }
 
@@ -434,17 +468,27 @@ function withUnableToAssistFailureOverride(
 }
 
 /**
- * Full pass/fail decision for a single chat test item: applies the expectation rules and the
- * "unable to assist" decline override. Exported so the grading behavior can be unit-tested
- * independently of the live workflow.
+ * Full pass/fail decision for a single chat test item: the error/emptiness gate, mandatory
+ * concept coverage, and the "unable to assist" decline override. Exported so the grading behavior
+ * can be unit-tested independently of the live workflow.
+ *
+ * `conceptGrading` is the `gradeWithCriteria` verdict for this item's criteria (built from the
+ * three concept columns by `buildExpectedCriteria`). Omit it only when the item declares no
+ * mandatory concepts — otherwise the item cannot be scored a pass and is failed as unevaluated,
+ * rather than silently passing on "it said something", which is the exact bug B0-932 fixes.
  */
 export function gradeChatTestResponse(params: {
   item: GradableExpectations;
   hasError: boolean;
   responseText: string;
+  conceptGrading?: CriteriaGradingOutcome | null;
 }): EvaluationOutcome {
   const base = evaluateTestOutcome(params);
-  return withUnableToAssistFailureOverride(params.responseText, base, params.item);
+  return withUnableToAssistFailureOverride(
+    params.responseText,
+    base,
+    resolveMandatoryConceptState(params.item, params.conceptGrading),
+  );
 }
 
 /**
@@ -468,16 +512,17 @@ export type SemanticDeclineChecker = (input: {
   prompt: string;
   responseText: string;
   idealResponse: string | null;
-  expectedConcepts: string | null;
-  minimumConcepts: string | null;
+  /** B0-931/932 — the concept columns are `text[]`; one element per phrase, verbatim. */
+  expectedConcepts: string[];
+  minimumConcepts: string[];
 }) => Promise<SemanticDeclineVerdict>;
 
 /** Extra context `gradeChatTestResponseAsync` can hand the semantic-decline checker. */
 export type DeclineGradingContext = {
   prompt: string;
   idealResponse?: string | null;
-  expectedConcepts?: string | null;
-  minimumConcepts?: string | null;
+  expectedConcepts?: readonly string[] | null;
+  minimumConcepts?: readonly string[] | null;
 };
 
 export type AsyncEvaluationOutcome = EvaluationOutcome & {
@@ -493,18 +538,22 @@ export type AsyncEvaluationOutcome = EvaluationOutcome & {
 };
 
 /**
- * B0-755 — async superset of `gradeChatTestResponse`.
+ * B0-755 — async superset of `gradeChatTestResponse`, and the last-resort path for an item whose
+ * mandatory concepts could not be judged by `gradeWithCriteria`.
  *
- * The exact-string fast path (`matchesCanonicalDeclineCopy`) and the phrase/regex heuristics in
- * `responseIndicatesDeclineStyleAnswer` stay first and are unchanged: a response that already
- * matches the app's own canonical decline copy, or one of the known phrasings, is unambiguously a
- * pass and costs nothing extra. This only escalates to an LLM semantic-decline judgement when ALL
- * of the following hold — i.e. exactly the class of bug B0-755 reports (a real decline in
- * different words), never a positive-expectation row or a row the heuristics already decided:
+ * B0-932 rewired the escalation. It used to be gated on `expected_should_answer === false` (a row
+ * that wanted a decline); that column is gone, and the mandatory concepts now describe the correct
+ * answer — a refusal included ("a cross-reference match does not transfer claims between
+ * products"). So this escalates when, and only when, ALL of:
  *
- *   - the row expects no answer (`expected_should_answer === false`)
+ *   - the item declares mandatory concepts but no concept verdict reached the grader
+ *     (`resolveMandatoryConceptState` → `'unevaluated'`; normally the criteria grader threw)
  *   - the model produced a non-empty response
- *   - the heuristic above did NOT recognize it as a decline (`base.passed === false`)
+ *   - the deterministic grade above failed the item (`base.passed === false`)
+ *
+ * An item whose concepts WERE judged is never escalated: `gradeWithCriteria` already made a
+ * per-phrase semantic judgement, which is strictly better evidence than a decline/not-decline
+ * verdict, and an item with no mandatory concepts has no ground truth for the checker to use.
  *
  * A checker failure (refusal, truncation, network/parse error) falls back to the deterministic
  * verdict rather than silently passing the row — and, since B0-902, says so: the reason rides on
@@ -517,6 +566,7 @@ export async function gradeChatTestResponseAsync(params: {
   responseText: string;
   context: DeclineGradingContext;
   checkSemanticDecline: SemanticDeclineChecker;
+  conceptGrading?: CriteriaGradingOutcome | null;
 }): Promise<AsyncEvaluationOutcome> {
   const base = gradeChatTestResponse(params);
 
@@ -524,7 +574,7 @@ export async function gradeChatTestResponseAsync(params: {
     return base;
   }
 
-  if (shouldExpectAnswer(params.item) !== false) {
+  if (resolveMandatoryConceptState(params.item, params.conceptGrading) !== 'unevaluated') {
     return base;
   }
 
@@ -538,8 +588,8 @@ export async function gradeChatTestResponseAsync(params: {
       prompt: params.context.prompt,
       responseText: params.responseText,
       idealResponse: params.context.idealResponse ?? null,
-      expectedConcepts: params.context.expectedConcepts ?? null,
-      minimumConcepts: params.context.minimumConcepts ?? null,
+      expectedConcepts: [...(params.context.expectedConcepts ?? [])],
+      minimumConcepts: [...(params.context.minimumConcepts ?? [])],
     });
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);

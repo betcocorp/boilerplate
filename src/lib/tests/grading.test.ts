@@ -2,9 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { XREF_DECLINE_COPY } from '~/lib/recommendations/confidence-scoring';
 
+import type { CriteriaGradingOutcome } from './criteria-schemas';
 import {
   gradeChatTestResponse,
   gradeChatTestResponseAsync,
+  type GradableExpectations,
   type SemanticDeclineChecker,
 } from './grading';
 
@@ -25,14 +27,194 @@ import {
  * assert the ORCHESTRATION logic (grading.ts) does with a matching verdict.
  */
 
-const NEGATIVE_ITEM = { expected_should_answer: false, expected_result_type: null } as const;
-const POSITIVE_ITEM = { expected_should_answer: true, expected_result_type: null } as const;
+/**
+ * B0-932 — the two item shapes that replace the retired behaviour flags.
+ *
+ * `DECLINE_CONCEPT_ITEM` is what a former `expected_should_answer = false` row looks like now: the
+ * mandatory concepts describe the refusal, so nothing has to declare "a decline is correct here".
+ * `NO_MANDATORY_ITEM` is a row that declares nothing required — the run report marks these Unable
+ * to Evaluate (B0-826), and the harness passes them on having answered.
+ */
+const DECLINE_CONCEPT_ITEM: GradableExpectations = {
+  minimum_concepts: [
+    'no pricing information',
+    'Betco representative or distributor can quote it',
+  ],
+  expected_concepts: [
+    'no pricing information',
+    'pricing varies by distributor and agreement so any figure would be unreliable',
+    'Betco representative or distributor can quote it',
+  ],
+  expected_criteria: [],
+};
+
+const NO_MANDATORY_ITEM: GradableExpectations = {
+  minimum_concepts: [],
+  expected_concepts: [],
+  expected_criteria: [],
+};
+
+/** A `gradeWithCriteria` verdict stub — only `passed` feeds the mandatory-coverage decision. */
+function conceptVerdict(passed: boolean): CriteriaGradingOutcome {
+  return {
+    passed,
+    score: passed ? 1 : 0.5,
+    verdicts: [],
+    failureReason: passed
+      ? null
+      : 'Missed 1 tier-1 (must-have) criterion: "Betco representative or distributor can quote it".',
+  };
+}
 
 function throwingChecker(): SemanticDeclineChecker {
   return vi.fn(async () => {
     throw new Error('checkSemanticDecline should not have been called for this row');
   });
 }
+
+/**
+ * B0-932 — the pass rule itself. `expected_should_answer` is gone; an item now passes when it
+ * answered without erroring AND every `minimum_concepts` phrase was judged satisfied.
+ */
+describe('gradeChatTestResponse — mandatory concept coverage is the pass axis (B0-932)', () => {
+  const ANSWER = 'Dilute at the labeled ratio and keep the surface wet for the labeled time.';
+
+  it('passes when every mandatory concept was judged satisfied', () => {
+    const outcome = gradeChatTestResponse({
+      item: DECLINE_CONCEPT_ITEM,
+      hasError: false,
+      responseText: ANSWER,
+      conceptGrading: conceptVerdict(true),
+    });
+
+    expect(outcome.passed).toBe(true);
+    expect(outcome.failureReason).toBeNull();
+  });
+
+  it('fails when a mandatory concept was missed, and says which one', () => {
+    const outcome = gradeChatTestResponse({
+      item: DECLINE_CONCEPT_ITEM,
+      hasError: false,
+      responseText: ANSWER,
+      conceptGrading: conceptVerdict(false),
+    });
+
+    expect(outcome.passed).toBe(false);
+    expect(outcome.failureReason).toContain(
+      'Betco representative or distributor can quote it',
+    );
+  });
+
+  it('fails an item that declares mandatory concepts but got no verdict, rather than passing it', () => {
+    // The old rule passed this: "the row wanted an answer and the model said something". That is
+    // precisely the false pass B0-932 removes.
+    const outcome = gradeChatTestResponse({
+      item: DECLINE_CONCEPT_ITEM,
+      hasError: false,
+      responseText: ANSWER,
+    });
+
+    expect(outcome.passed).toBe(false);
+    expect(outcome.failureReason).toContain('could not be evaluated');
+  });
+
+  it('never passes an item the grader could not judge, even with nothing mandatory (B0-902)', () => {
+    const outcome = gradeChatTestResponse({
+      item: NO_MANDATORY_ITEM,
+      hasError: false,
+      responseText: ANSWER,
+      conceptGrading: {
+        passed: false,
+        score: null,
+        verdicts: [],
+        failureReason: 'Unable to evaluate 3 semantic criteria: Grading call failed: timeout.',
+        unableToEvaluate: true,
+        uteReason: 'Grading call failed: timeout.',
+      },
+    });
+
+    expect(outcome.passed).toBe(false);
+    expect(outcome.failureReason).toContain('Unable to evaluate');
+  });
+
+  it('passes an item with no mandatory concepts on having answered (B0-826 marks it UTE, not failed)', () => {
+    const outcome = gradeChatTestResponse({
+      item: NO_MANDATORY_ITEM,
+      hasError: false,
+      responseText: ANSWER,
+    });
+
+    expect(outcome.passed).toBe(true);
+    expect(outcome.failureReason).toBeNull();
+  });
+
+  it('fails a hard error before looking at any concept', () => {
+    const outcome = gradeChatTestResponse({
+      item: DECLINE_CONCEPT_ITEM,
+      hasError: true,
+      responseText: '',
+      conceptGrading: conceptVerdict(true),
+    });
+
+    expect(outcome.passed).toBe(false);
+    expect(outcome.failureReason).toContain('error');
+  });
+
+  it('fails an empty response before looking at any concept', () => {
+    const outcome = gradeChatTestResponse({
+      item: NO_MANDATORY_ITEM,
+      hasError: false,
+      responseText: '   ',
+      conceptGrading: conceptVerdict(true),
+    });
+
+    expect(outcome.passed).toBe(false);
+    expect(outcome.failureReason).toContain('empty');
+  });
+
+  it('ignores an `exact:` prefix when counting whether an item has mandatory concepts', () => {
+    const outcome = gradeChatTestResponse({
+      item: {
+        minimum_concepts: ['exact: EPA Reg. No. 1839-83'],
+        expected_concepts: [],
+        expected_criteria: [],
+      },
+      hasError: false,
+      responseText: ANSWER,
+    });
+
+    // It has one mandatory concept, so it cannot pass without a verdict.
+    expect(outcome.passed).toBe(false);
+    expect(outcome.failureReason).toContain('could not be evaluated');
+  });
+
+  describe('the "unable to assist" visibility override', () => {
+    const DECLINE_TEXT = "I'm sorry, but I cannot provide that information.";
+
+    it('still fails a decline on an item with no mandatory concepts to cover', () => {
+      const outcome = gradeChatTestResponse({
+        item: NO_MANDATORY_ITEM,
+        hasError: false,
+        responseText: DECLINE_TEXT,
+      });
+
+      expect(outcome.passed).toBe(false);
+      expect(outcome.failureReason).toContain('could not answer');
+    });
+
+    it('exempts an item whose mandatory concepts were satisfied', () => {
+      const outcome = gradeChatTestResponse({
+        item: DECLINE_CONCEPT_ITEM,
+        hasError: false,
+        responseText: DECLINE_TEXT,
+        conceptGrading: conceptVerdict(true),
+      });
+
+      expect(outcome.passed).toBe(true);
+      expect(outcome.failureReason).toBeNull();
+    });
+  });
+});
 
 describe('gradeChatTestResponseAsync (B0-755)', () => {
   describe('real known-bad transcripts (B0-755 evidence, run c6ad57e5-…)', () => {
@@ -50,9 +232,10 @@ describe('gradeChatTestResponseAsync (B0-755)', () => {
         '- I can provide product usage, dilution, and safety information from the label or SDS if needed.\n\n' +
         'Source: Betco Sustainability in Action brochure; Solid Industrial Degreaser product line profile.';
 
-      // Confirm the OLD heuristic really does fail this transcript, i.e. this is the bug.
+      // B0-932 — with no concept verdict in hand the deterministic grade cannot pass this item;
+      // the LLM decline check below is the last-resort path that decides it.
       const syncOutcome = gradeChatTestResponse({
-        item: NEGATIVE_ITEM,
+        item: DECLINE_CONCEPT_ITEM,
         hasError: false,
         responseText,
       });
@@ -65,16 +248,23 @@ describe('gradeChatTestResponseAsync (B0-755)', () => {
       }));
 
       const outcome = await gradeChatTestResponseAsync({
-        item: NEGATIVE_ITEM,
+        item: DECLINE_CONCEPT_ITEM,
         hasError: false,
         responseText,
         context: {
           prompt: 'How much does Grease Solv cost?',
           idealResponse:
             "I don't have pricing. Pricing varies by distributor and agreement, so any figure I gave you would be unreliable.\n\nYour Betco representative or distributor can quote it.",
-          expectedConcepts:
-            'no pricing information | pricing varies by distributor and agreement so any figure would be unreliable | Betco representative or distributor can quote it | can provide the item numbers and pack sizes to quote against',
-          minimumConcepts: 'no pricing information | Betco representative or distributor can quote it',
+          expectedConcepts: [
+            'no pricing information',
+            'pricing varies by distributor and agreement so any figure would be unreliable',
+            'Betco representative or distributor can quote it',
+            'can provide the item numbers and pack sizes to quote against',
+          ],
+          minimumConcepts: [
+            'no pricing information',
+            'Betco representative or distributor can quote it',
+          ],
         },
         checkSemanticDecline,
       });
@@ -94,7 +284,7 @@ describe('gradeChatTestResponseAsync (B0-755)', () => {
         'Source: GE Fight Bac RTU product label; Betco product catalog.';
 
       const syncOutcome = gradeChatTestResponse({
-        item: NEGATIVE_ITEM,
+        item: DECLINE_CONCEPT_ITEM,
         hasError: false,
         responseText,
       });
@@ -107,16 +297,18 @@ describe('gradeChatTestResponseAsync (B0-755)', () => {
       }));
 
       const outcome = await gradeChatTestResponseAsync({
-        item: NEGATIVE_ITEM,
+        item: DECLINE_CONCEPT_ITEM,
         hasError: false,
         responseText,
         context: {
           prompt: 'Is GE Fight Bac RTU approved for use in my state?',
           idealResponse:
             'Betco registers all of their disinfectants in every state. For state registration in a specific jurisdiction, contact Betco Regulatory Affairs or your Betco representative.',
-          expectedConcepts: null,
-          minimumConcepts:
-            'Betco registers its disinfectants in every state | for state registration in a specific jurisdiction, contact Betco Regulatory Affairs or your Betco representative',
+          expectedConcepts: [],
+          minimumConcepts: [
+            'Betco registers its disinfectants in every state',
+            'for state registration in a specific jurisdiction, contact Betco Regulatory Affairs or your Betco representative',
+          ],
         },
         checkSemanticDecline,
       });
@@ -128,14 +320,16 @@ describe('gradeChatTestResponseAsync (B0-755)', () => {
   });
 
   describe('the fast path still short-circuits (no LLM call, no added cost)', () => {
-    it('never calls the checker when the phrase heuristic already recognizes the decline', async () => {
+    it('never calls the checker when the concept grader already judged the mandatory concepts met', async () => {
       const checkSemanticDecline = throwingChecker();
 
       const outcome = await gradeChatTestResponseAsync({
-        item: NEGATIVE_ITEM,
+        item: DECLINE_CONCEPT_ITEM,
         hasError: false,
-        responseText: "I'm sorry, but I cannot provide that information.",
-        context: { prompt: 'Some question' },
+        responseText:
+          "I don't have pricing — it varies by distributor and agreement. Your Betco representative or distributor can quote it.",
+        conceptGrading: conceptVerdict(true),
+        context: { prompt: 'How much does Grease Solv cost?' },
         checkSemanticDecline,
       });
 
@@ -144,11 +338,30 @@ describe('gradeChatTestResponseAsync (B0-755)', () => {
       expect(checkSemanticDecline).not.toHaveBeenCalled();
     });
 
-    it('never calls the checker for a positive-expectation row, even with a hedge-y answer', async () => {
+    it('never calls the checker when the concept grader judged a mandatory concept MISSED', async () => {
       const checkSemanticDecline = throwingChecker();
 
       const outcome = await gradeChatTestResponseAsync({
-        item: POSITIVE_ITEM,
+        item: DECLINE_CONCEPT_ITEM,
+        hasError: false,
+        responseText: 'Grease Solv costs $42.99 per gallon.',
+        conceptGrading: conceptVerdict(false),
+        context: { prompt: 'How much does Grease Solv cost?' },
+        checkSemanticDecline,
+      });
+
+      // The per-phrase verdict is strictly better evidence than a decline/not-decline judgement,
+      // so a judged miss is final — no second opinion, no second model call.
+      expect(outcome.passed).toBe(false);
+      expect(outcome.failureReason).toContain('Missed 1 tier-1');
+      expect(checkSemanticDecline).not.toHaveBeenCalled();
+    });
+
+    it('never calls the checker for an item with no mandatory concepts', async () => {
+      const checkSemanticDecline = throwingChecker();
+
+      const outcome = await gradeChatTestResponseAsync({
+        item: NO_MANDATORY_ITEM,
         hasError: false,
         responseText: 'Here is the dilution ratio: 4 oz/gal, per the label.',
         context: { prompt: 'What is the dilution ratio?' },
@@ -159,18 +372,21 @@ describe('gradeChatTestResponseAsync (B0-755)', () => {
       expect(checkSemanticDecline).not.toHaveBeenCalled();
     });
 
-    it('never calls the checker when the response is empty on a negative-expectation row (already a pass)', async () => {
+    it('never calls the checker when the response is empty (there is nothing to judge)', async () => {
       const checkSemanticDecline = throwingChecker();
 
       const outcome = await gradeChatTestResponseAsync({
-        item: NEGATIVE_ITEM,
+        item: DECLINE_CONCEPT_ITEM,
         hasError: false,
         responseText: '',
         context: { prompt: 'Some question' },
         checkSemanticDecline,
       });
 
-      expect(outcome.passed).toBe(true);
+      // B0-932 — an empty response fails first, whatever the item expected. It used to be a PASS
+      // for a negative row; that only made sense while "expected no answer" was a column.
+      expect(outcome.passed).toBe(false);
+      expect(outcome.failureReason).toContain('empty');
       expect(checkSemanticDecline).not.toHaveBeenCalled();
     });
   });
@@ -183,7 +399,7 @@ describe('gradeChatTestResponseAsync (B0-755)', () => {
       }));
 
       const outcome = await gradeChatTestResponseAsync({
-        item: NEGATIVE_ITEM,
+        item: DECLINE_CONCEPT_ITEM,
         hasError: false,
         responseText: 'Grease Solv costs $42.99 per gallon.',
         context: { prompt: 'How much does Grease Solv cost?' },
@@ -204,7 +420,7 @@ describe('gradeChatTestResponseAsync (B0-755)', () => {
       });
 
       const outcome = await gradeChatTestResponseAsync({
-        item: NEGATIVE_ITEM,
+        item: DECLINE_CONCEPT_ITEM,
         hasError: false,
         responseText: 'Pricing is not something I have on hand for this item.',
         context: { prompt: 'How much does Grease Solv cost?' },
@@ -215,7 +431,7 @@ describe('gradeChatTestResponseAsync (B0-755)', () => {
       // since B0-902, the row says WHY the LLM check never happened instead of reading as if the
       // model judged the response to be an answer.
       const syncOutcome = gradeChatTestResponse({
-        item: NEGATIVE_ITEM,
+        item: DECLINE_CONCEPT_ITEM,
         hasError: false,
         responseText: 'Pricing is not something I have on hand for this item.',
       });
@@ -245,11 +461,11 @@ describe('gradeChatTestResponseAsync (B0-755)', () => {
     it.each(paraphrases)('flips a paraphrased decline to pass: %s', async (responseText) => {
       // Every one of these must already be failing the OLD heuristic, or the test proves nothing.
       expect(
-        gradeChatTestResponse({ item: NEGATIVE_ITEM, hasError: false, responseText }).passed,
+        gradeChatTestResponse({ item: DECLINE_CONCEPT_ITEM, hasError: false, responseText }).passed,
       ).toBe(false);
 
       const outcome = await gradeChatTestResponseAsync({
-        item: NEGATIVE_ITEM,
+        item: DECLINE_CONCEPT_ITEM,
         hasError: false,
         responseText,
         context: { prompt: 'Some regulated/pricing question' },
@@ -262,7 +478,7 @@ describe('gradeChatTestResponseAsync (B0-755)', () => {
     it('does not flip a paraphrase the checker itself judges as a non-decline', async () => {
       const responseText = 'Grease Solv runs about $40 a gallon in most territories.';
       const outcome = await gradeChatTestResponseAsync({
-        item: NEGATIVE_ITEM,
+        item: DECLINE_CONCEPT_ITEM,
         hasError: false,
         responseText,
         context: { prompt: 'How much does Grease Solv cost?' },
@@ -311,9 +527,9 @@ Pre-clean heavy soil, dilute concentrates exactly as labeled, and keep the surfa
 I couldn't verify the EPA registration number above against an exact quote from a retrieved label or SDS, so I withheld it (marked "(unable to verify)").
 Please consult the product label or SDS directly for the exact regulated value, or contact Betco Product Support / EHS to confirm.`;
 
-    it('passes an expected_should_answer = true row', () => {
+    it('passes an item with nothing mandatory to cover', () => {
       const outcome = gradeChatTestResponse({
-        item: POSITIVE_ITEM,
+        item: NO_MANDATORY_ITEM,
         hasError: false,
         responseText,
       });
@@ -324,7 +540,7 @@ Please consult the product label or SDS directly for the exact regulated value, 
 
     it('still fails a response that is nothing BUT redaction copy', () => {
       const outcome = gradeChatTestResponse({
-        item: POSITIVE_ITEM,
+        item: NO_MANDATORY_ITEM,
         hasError: false,
         responseText: `(unable to verify)\n\n${REDACTION_FOOTER_TOKEN_MODE}`,
       });
@@ -335,7 +551,7 @@ Please consult the product label or SDS directly for the exact regulated value, 
 
     it('still fails a genuine decline that happens to sit next to redaction copy', () => {
       const outcome = gradeChatTestResponse({
-        item: POSITIVE_ITEM,
+        item: NO_MANDATORY_ITEM,
         hasError: false,
         responseText: [
           "I don't have the information needed to answer that. The retrieved label and SDS do not",
@@ -356,9 +572,9 @@ Please consult the product label or SDS directly for the exact regulated value, 
 
 ${XREF_DECLINE_COPY}`;
 
-    it('passes an expected_should_answer = true row', () => {
+    it('passes an item with nothing mandatory to cover', () => {
       const outcome = gradeChatTestResponse({
-        item: POSITIVE_ITEM,
+        item: NO_MANDATORY_ITEM,
         hasError: false,
         responseText,
       });
@@ -369,7 +585,7 @@ ${XREF_DECLINE_COPY}`;
 
     it('still fails a bare canonical decline with no substantive content', () => {
       const outcome = gradeChatTestResponse({
-        item: POSITIVE_ITEM,
+        item: NO_MANDATORY_ITEM,
         hasError: false,
         responseText: XREF_DECLINE_COPY,
       });
@@ -380,7 +596,7 @@ ${XREF_DECLINE_COPY}`;
 
     it('still fails the canonical decline behind a token preamble', () => {
       const outcome = gradeChatTestResponse({
-        item: POSITIVE_ITEM,
+        item: NO_MANDATORY_ITEM,
         hasError: false,
         responseText: `Here is what I found.\n\n${XREF_DECLINE_COPY}`,
       });
@@ -390,7 +606,7 @@ ${XREF_DECLINE_COPY}`;
 
     it('still fails when the content before the decline is itself decline-shaped', () => {
       const outcome = gradeChatTestResponse({
-        item: POSITIVE_ITEM,
+        item: NO_MANDATORY_ITEM,
         hasError: false,
         responseText: [
           'I could not find a verified cross-reference record for that competitor product in the',
@@ -404,11 +620,15 @@ ${XREF_DECLINE_COPY}`;
       expect(outcome.passed).toBe(false);
     });
 
-    it('keeps scoring a bare decline on an expected_should_answer = false row as a PASS', () => {
+    it('keeps scoring a bare decline as a PASS once its mandatory concepts are covered', () => {
+      // B0-932 — the exemption that used to key off `expected_should_answer === false` now keys
+      // off the honest thing it was approximating: the row said what a correct answer contains,
+      // and the concept grader confirmed the answer contains it.
       const outcome = gradeChatTestResponse({
-        item: NEGATIVE_ITEM,
+        item: DECLINE_CONCEPT_ITEM,
         hasError: false,
         responseText: XREF_DECLINE_COPY,
+        conceptGrading: conceptVerdict(true),
       });
 
       expect(outcome.passed).toBe(true);

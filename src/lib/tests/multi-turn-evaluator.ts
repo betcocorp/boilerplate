@@ -1,4 +1,5 @@
 import { gradeExactCriterion } from './criteria-grader';
+import type { CriteriaGradingOutcome } from './criteria-schemas';
 import { gradeChatTestResponse, responseIndicatesDeclineStyleAnswer } from './grading';
 import type { MultiTurnScenario, ScenarioAssertion } from './multi-turn';
 
@@ -8,9 +9,10 @@ import type { MultiTurnScenario, ScenarioAssertion } from './multi-turn';
  * Two layers, both pure and deterministic:
  *
  *  1. **Per-turn grading** — each turn's own `expectations` are graded by the SAME
- *     `gradeChatTestResponse` the single-turn harness uses (`./grading`), so `should_answer` /
- *     `expected_result_type` can never drift between the two formats. `must_mention` /
- *     `must_not_mention` are graded here, because they are not part of `GradableExpectations`.
+ *     `gradeChatTestResponse` the single-turn harness uses (`./grading`), so the B0-932 pass rule
+ *     (error/emptiness gate, then mandatory concept coverage) can never drift between the two
+ *     formats. `must_mention` / `must_not_mention` are graded here, because they are not part of
+ *     `GradableExpectations`.
  *  2. **Scenario assertions** — the cross-turn checks per-turn expectations cannot express
  *     (`context_carry`, `no_reask`, `consistent_product_anchor`, `mentions`, `not_mentions`).
  *
@@ -108,6 +110,13 @@ export type ExecutedTurn = {
   ttftMs?: number | null;
   conversationId?: string | null;
   workflowRunId?: string | null;
+  /**
+   * B0-932 — `gradeWithCriteria`'s verdict on this turn's own `minimum_concepts` /
+   * `expected_concepts`, computed by the runner (the model call cannot happen inside this pure
+   * evaluator). Absent when the turn declares no concepts; absent WITH declared concepts means
+   * the coverage was never judged, and the turn fails as unevaluated rather than passing.
+   */
+  conceptGrading?: CriteriaGradingOutcome | null;
 };
 
 /** Verdict for one turn's own expectations. */
@@ -116,7 +125,12 @@ export type TurnVerdict = {
   passed: boolean;
   /** Null when the turn passed. */
   failureReason: string | null;
-  /** `gradeChatTestResponse`'s own outcome for `should_answer` / `expected_result_type`. */
+  /**
+   * `gradeChatTestResponse`'s own outcome for this turn — since B0-932 that is the error/emptiness
+   * gate plus mandatory concept coverage, not a behaviour flag. The field name is kept because it
+   * is persisted on `response_payload.multiTurn.turns[].behaviorPassed` and rendered by the run
+   * detail UI; renaming it would orphan every stored payload.
+   */
   behaviorPassed: boolean;
   mustMention: TermMatch[];
   mustNotMention: TermMatch[];
@@ -175,20 +189,22 @@ function expectationsFor(scenario: MultiTurnScenario, turnIndex: number) {
 }
 
 /**
- * Grades one turn. `should_answer` / `expected_result_type` are delegated verbatim to
- * `gradeChatTestResponse`; a turn with no expectations therefore behaves exactly like a
- * `expected_should_answer = null` single-turn row (passes unless the turn errored).
+ * Grades one turn. The turn's concept expectations are delegated verbatim to
+ * `gradeChatTestResponse`, so a turn is judged by the same B0-932 rule as a single-turn item: a
+ * turn with no mandatory concepts passes as long as it answered without erroring.
  */
 function evaluateTurn(scenario: MultiTurnScenario, turn: ExecutedTurn): TurnVerdict {
   const expectations = expectationsFor(scenario, turn.turnIndex);
 
   const behavior = gradeChatTestResponse({
     item: {
-      expected_should_answer: expectations?.should_answer ?? null,
-      expected_result_type: expectations?.expected_result_type ?? null,
+      minimum_concepts: expectations?.minimum_concepts ?? [],
+      expected_concepts: expectations?.expected_concepts ?? [],
+      expected_criteria: [],
     },
     hasError: turn.hasError,
     responseText: turn.responseText,
+    conceptGrading: turn.conceptGrading ?? null,
   });
 
   const mustMention = matchAnyTerm(expectations?.must_mention ?? [], turn.responseText);

@@ -145,7 +145,7 @@ function grading(
 ): PromptGradingContext {
   return {
     passed: false,
-    expectedShouldAnswer: true,
+    mandatoryConcepts: [],
     idealResponse: null,
     similarity: 0.42,
     ...overrides,
@@ -176,11 +176,27 @@ describe('grading-aware prompt insights (B0-420)', () => {
     expect(prompt).not.toContain('NO reference answer');
   });
 
-  it('forbids inventing a divergence when no ideal response was recorded', () => {
-    const prompt = buildPromptInsightSystemPrompt(grading({ idealResponse: null }));
+  it('forbids inventing a divergence when neither an ideal response nor concepts were recorded', () => {
+    const prompt = buildPromptInsightSystemPrompt(
+      grading({ idealResponse: null, mandatoryConcepts: [] }),
+    );
 
-    expect(prompt).toContain('NO reference answer');
+    expect(prompt).toContain('NO ideal response and NO mandatory concepts');
     expect(prompt).toContain('do not claim the answer diverged');
+  });
+
+  /**
+   * B0-932 — the common failed case now: no ideal response, but the item DOES say what a correct
+   * answer must cover. The model is pointed at the missed concepts instead of being told it has
+   * no reference at all.
+   */
+  it('points a failed run at its mandatory concepts when there is no ideal response', () => {
+    const prompt = buildPromptInsightSystemPrompt(
+      grading({ idealResponse: null, mandatoryConcepts: ['states the labeled contact time'] }),
+    );
+
+    expect(prompt).toContain('mandatory concepts');
+    expect(prompt).not.toContain('NO ideal response and NO mandatory concepts');
   });
 
   it('omits the grading section entirely from an ungraded payload', () => {
@@ -198,17 +214,19 @@ describe('grading-aware prompt insights (B0-420)', () => {
     expect(payload).not.toContain('null');
   });
 
-  it('keeps an unset expected-should-answer distinct from false', () => {
-    const unset = buildPromptAnalysisPayload(
+  it('prints every mandatory concept verbatim, and says so plainly when there are none', () => {
+    const withConcepts = buildPromptAnalysisPayload(
       trace({}),
-      grading({ expectedShouldAnswer: null }),
+      grading({ mandatoryConcepts: ['4 oz/gal per the label', 'EPA Reg. No. 1839-83'] }),
     );
-    const explicitlyFalse = buildPromptAnalysisPayload(
-      trace({}),
-      grading({ expectedShouldAnswer: false }),
-    );
+    expect(withConcepts).toContain('## Mandatory concepts');
+    expect(withConcepts).toContain('- 4 oz/gal per the label');
+    expect(withConcepts).toContain('- EPA Reg. No. 1839-83');
 
-    expect(unset).not.toBe(explicitlyFalse);
+    const withNone = buildPromptAnalysisPayload(trace({}), grading({ mandatoryConcepts: [] }));
+    expect(withNone).not.toContain('## Mandatory concepts');
+    expect(withNone).toContain('none recorded for this prompt');
+    expect(withNone).not.toBe(withConcepts);
   });
 });
 

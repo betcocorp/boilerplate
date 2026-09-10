@@ -1,23 +1,47 @@
 import { describe, expect, it } from 'vitest';
 
+import type { CriteriaGradingOutcome } from './criteria-schemas';
 import { gradeChatTestResponse as gradeFromGradingModule } from './grading';
 import { parseMultiTurnFromInputPayload } from './multi-turn';
 import { gradeChatTestResponse } from './runner';
 import type { TestItemRecord } from './types';
 
-/** Minimal item factory — the grader only reads these two expectation fields. */
-function item(
-  overrides: Partial<TestItemRecord> = {},
-): TestItemRecord {
+/**
+ * B0-932 — minimal item factory. The grader reads only the three concept columns now; the
+ * default is an item that declares nothing mandatory, which is what the old
+ * `expected_should_answer = true` row effectively was: it passes on having answered.
+ */
+function item(overrides: Partial<TestItemRecord> = {}): TestItemRecord {
   return {
-    expected_should_answer: true,
-    expected_result_type: null,
+    expected_concepts: [],
+    minimum_concepts: [],
+    expected_criteria: [],
     ...overrides,
   } as TestItemRecord;
 }
 
+/** An item whose mandatory concepts describe the refusal — the old "negative row". */
+function declineItem(): TestItemRecord {
+  return item({
+    minimum_concepts: [
+      'says the requested information is not available or cannot be verified',
+      'directs the customer to a Betco representative',
+    ],
+  });
+}
+
+/** A `gradeWithCriteria` verdict stub; only `passed` feeds the mandatory-coverage decision. */
+function conceptVerdict(passed: boolean): CriteriaGradingOutcome {
+  return {
+    passed,
+    score: passed ? 1 : 0.5,
+    verdicts: [],
+    failureReason: passed ? null : 'Missed 1 tier-1 (must-have) criterion: "…".',
+  };
+}
+
 describe('gradeChatTestResponse', () => {
-  it('fails a positive row when the assistant declines with "don\'t have the verified information" phrasing', () => {
+  it('fails an item with nothing mandatory when the assistant declines with "don\'t have the verified information" phrasing', () => {
     // Regression: this exact response was previously scored Passed because the fixed substring
     // list ("don't have verified") missed the inserted "the".
     const responseText =
@@ -26,7 +50,7 @@ describe('gradeChatTestResponse', () => {
       'or official Betco documentation.';
 
     const outcome = gradeChatTestResponse({
-      item: item({ expected_should_answer: true }),
+      item: item(),
       hasError: false,
       responseText,
     });
@@ -35,12 +59,12 @@ describe('gradeChatTestResponse', () => {
     expect(outcome.failureReason).toBeTruthy();
   });
 
-  it('passes a positive row for a genuine substantive answer', () => {
+  it('passes an item with nothing mandatory for a genuine substantive answer', () => {
     const responseText =
       'GE Fight Bac RTU must remain visibly wet on the surface for at least 60 seconds to disinfect.';
 
     const outcome = gradeChatTestResponse({
-      item: item({ expected_should_answer: true }),
+      item: item(),
       hasError: false,
       responseText,
     });
@@ -53,7 +77,7 @@ describe('gradeChatTestResponse', () => {
       'Per the product label, dilute at 2 oz per gallon; refer to the product label for the full directions.';
 
     const outcome = gradeChatTestResponse({
-      item: item({ expected_should_answer: true }),
+      item: item(),
       hasError: false,
       responseText,
     });
@@ -61,9 +85,9 @@ describe('gradeChatTestResponse', () => {
     expect(outcome.passed).toBe(true);
   });
 
-  it('fails a positive row on an empty response', () => {
+  it('fails on an empty response', () => {
     const outcome = gradeChatTestResponse({
-      item: item({ expected_should_answer: true }),
+      item: item(),
       hasError: false,
       responseText: '   ',
     });
@@ -71,17 +95,26 @@ describe('gradeChatTestResponse', () => {
     expect(outcome.passed).toBe(false);
   });
 
-  it('passes a negative row when the assistant declines', () => {
+  it('passes a decline whose mandatory concepts the concept grader judged covered', () => {
     const outcome = gradeChatTestResponse({
-      item: item({
-        expected_should_answer: false,
-        expected_result_type: 'decline',
-      }),
+      item: declineItem(),
       hasError: false,
       responseText: "I don't have the verified information needed to answer that.",
+      conceptGrading: conceptVerdict(true),
     });
 
     expect(outcome.passed).toBe(true);
+  });
+
+  it('fails a decline whose mandatory concepts the concept grader judged missed', () => {
+    const outcome = gradeChatTestResponse({
+      item: declineItem(),
+      hasError: false,
+      responseText: "I don't have the verified information needed to answer that.",
+      conceptGrading: conceptVerdict(false),
+    });
+
+    expect(outcome.passed).toBe(false);
   });
 
   describe('B0-300 follow-up — canonical "no confident equivalent" decline copy', () => {
@@ -93,97 +126,110 @@ describe('gradeChatTestResponse', () => {
     const recommendationsDeclineCopyResponse =
       "I'm sorry, but I don't have enough information to provide that answer. Please contact a Betco sales representative directly.";
 
-    it('passes a negative row when the product agent returns XREF_DECLINE_COPY verbatim', () => {
+    it.each([
+      ['XREF_DECLINE_COPY (product / cross-reference agent)', xrefDeclineCopyResponse],
+      ['the recommendations agent canonical copy', recommendationsDeclineCopyResponse],
+    ])('recognizes %s as a decline and surfaces it on an item with nothing mandatory', (_label, responseText) => {
       const outcome = gradeChatTestResponse({
-        item: item({ expected_should_answer: false, expected_result_type: 'decline' }),
+        item: item(),
         hasError: false,
-        responseText: xrefDeclineCopyResponse,
+        responseText,
       });
 
-      expect(outcome.passed).toBe(true);
+      expect(outcome.passed).toBe(false);
+      expect(outcome.failureReason).toContain('could not answer');
     });
 
-    it('passes a negative row when the recommendations agent returns its canonical decline copy verbatim', () => {
+    it.each([
+      ['XREF_DECLINE_COPY (product / cross-reference agent)', xrefDeclineCopyResponse],
+      ['the recommendations agent canonical copy', recommendationsDeclineCopyResponse],
+    ])('passes %s once its mandatory concepts are judged covered (B0-932 exemption)', (_label, responseText) => {
       const outcome = gradeChatTestResponse({
-        item: item({ expected_should_answer: false, expected_result_type: 'decline' }),
+        item: declineItem(),
         hasError: false,
-        responseText: recommendationsDeclineCopyResponse,
+        responseText,
+        conceptGrading: conceptVerdict(true),
       });
 
       expect(outcome.passed).toBe(true);
     });
   });
 
-  describe('B0-518 — early-decline gate copy and the missing expected_result_type tag', () => {
-    // Regression: the "Product Golden Test Set" run (6203d34f-…) showed 0/13 early-decline rows
-    // passing — all 199 rows in that set have expected_result_type = null (like every other
-    // negative-expectation row in the database), which used to defeat the "unable to assist"
-    // override's exemption entirely.
-    it('passes a negative row with NO expected_result_type when the assistant declines', () => {
-      const outcome = gradeChatTestResponse({
-        item: item({ expected_should_answer: false, expected_result_type: null }),
-        hasError: false,
-        responseText: "I don't have the verified information needed to answer that.",
-      });
+  describe('B0-518 — early-decline gate copy is still recognized as a decline', () => {
+    /**
+     * The four canned early-decline copies use vocabulary the phrase/regex heuristics did not
+     * cover ("advise"; the broad-recommendation copy has no decline words at all). Each must be
+     * recognized so it is SURFACED on an item with nothing mandatory to cover, and each must be
+     * exempted once the item's mandatory concepts are judged covered.
+     *
+     * B0-932 — the exemption used to key off `expected_should_answer === false` with a second,
+     * always-null `expected_result_type` condition. Both columns are gone; concept coverage is
+     * the condition now, and it is the thing the old flag was standing in for.
+     */
+    const EARLY_DECLINE_COPIES: ReadonlyArray<[string, string]> = [
+      [
+        'chemical-mixing ("advise" is not in the decline vocabulary)',
+        "I'm not able to advise on chemical mixing. Follow the product label and SDS, and involve your EHS lead.",
+      ],
+      [
+        'legal/compliance',
+        "I'm not able to provide legal or compliance guidance. Please use your official compliance process.",
+      ],
+      [
+        'storage/expiration',
+        "I'm not able to verify safety for expired or stored products. Follow the product label and SDS before use.",
+      ],
+      [
+        'broad-recommendation-without-context (no decline vocabulary at all)',
+        'I need more details to make a specific recommendation. Please share your surface, soil type, and application method.',
+      ],
+      [
+        'the canonical "no verified information" phrasing',
+        "I don't have the verified information needed to answer that.",
+      ],
+    ];
 
-      expect(outcome.passed).toBe(true);
-    });
+    it.each(EARLY_DECLINE_COPIES)(
+      'surfaces the %s copy as a failure when the item has nothing mandatory to cover',
+      (_label, responseText) => {
+        const outcome = gradeChatTestResponse({
+          item: item(),
+          hasError: false,
+          responseText,
+        });
 
-    it('recognizes the chemical-mixing early-decline copy verbatim ("advise" is not in the decline vocabulary)', () => {
+        expect(outcome.passed).toBe(false);
+      },
+    );
+
+    it.each(EARLY_DECLINE_COPIES)(
+      'exempts the %s copy once the mandatory concepts are judged covered',
+      (_label, responseText) => {
+        const outcome = gradeChatTestResponse({
+          item: declineItem(),
+          hasError: false,
+          responseText,
+          conceptGrading: conceptVerdict(true),
+        });
+
+        expect(outcome.passed).toBe(true);
+      },
+    );
+
+    it('still fails a decline when the mandatory concepts were NOT covered', () => {
+      // The override must still do its job when content was genuinely required.
       const outcome = gradeChatTestResponse({
-        item: item({ expected_should_answer: false, expected_result_type: null }),
+        item: declineItem(),
         hasError: false,
         responseText:
           "I'm not able to advise on chemical mixing. Follow the product label and SDS, and involve your EHS lead.",
-      });
-
-      expect(outcome.passed).toBe(true);
-    });
-
-    it('recognizes the legal/compliance early-decline copy verbatim', () => {
-      const outcome = gradeChatTestResponse({
-        item: item({ expected_should_answer: false, expected_result_type: null }),
-        hasError: false,
-        responseText:
-          "I'm not able to provide legal or compliance guidance. Please use your official compliance process.",
-      });
-
-      expect(outcome.passed).toBe(true);
-    });
-
-    it('recognizes the storage/expiration early-decline copy verbatim', () => {
-      const outcome = gradeChatTestResponse({
-        item: item({ expected_should_answer: false, expected_result_type: null }),
-        hasError: false,
-        responseText:
-          "I'm not able to verify safety for expired or stored products. Follow the product label and SDS before use.",
-      });
-
-      expect(outcome.passed).toBe(true);
-    });
-
-    it('recognizes the broad-recommendation-without-context early-decline copy, which carries no decline vocabulary at all', () => {
-      const outcome = gradeChatTestResponse({
-        item: item({ expected_should_answer: false, expected_result_type: null }),
-        hasError: false,
-        responseText:
-          'I need more details to make a specific recommendation. Please share your surface, soil type, and application method.',
-      });
-
-      expect(outcome.passed).toBe(true);
-    });
-
-    it('still fails a POSITIVE row (expected_should_answer = true) that declines instead of answering', () => {
-      // The override must still do its job when an answer was actually expected.
-      const outcome = gradeChatTestResponse({
-        item: item({ expected_should_answer: true, expected_result_type: null }),
-        hasError: false,
-        responseText: "I'm not able to advise on chemical mixing. Follow the product label and SDS, and involve your EHS lead.",
+        conceptGrading: conceptVerdict(false),
       });
 
       expect(outcome.passed).toBe(false);
     });
   });
+
   /**
    * B0-537 / B0-538 — single-turn grading must be BYTE-IDENTICAL after (a) the runner/grading
    * dedupe and (b) the multi-turn dispatch. The identity assertion is the strongest available

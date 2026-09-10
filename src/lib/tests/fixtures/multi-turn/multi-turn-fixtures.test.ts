@@ -64,8 +64,14 @@ function collectAssertedTerms(set: MultiTurnScenarioSet): Array<{ where: string;
       for (const term of expectations.must_not_mention ?? []) {
         terms.push({ where: `${turnLabel} must_not_mention`, term });
       }
-      if (expectations.expected_result_type) {
-        terms.push({ where: `${turnLabel} expected_result_type`, term: expectations.expected_result_type });
+      // B0-932 — the retired `should_answer` / `expected_result_type` pair is replaced by concept
+      // phrases, which ARE matched against the response (semantically) and so must obey the same
+      // regulated-value rule as `must_mention`.
+      for (const term of expectations.minimum_concepts ?? []) {
+        terms.push({ where: `${turnLabel} minimum_concepts`, term });
+      }
+      for (const term of expectations.expected_concepts ?? []) {
+        terms.push({ where: `${turnLabel} expected_concepts`, term });
       }
     });
 

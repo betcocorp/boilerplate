@@ -14,8 +14,11 @@ import { resolveItemGradingConfig } from './item-grading-model';
 
 /**
  * B0-755 — LLM semantic-decline grader, called only as a fallback (see `gradeChatTestResponseAsync`
- * in `./grading.ts`) when a negative-expectation row's response matched neither the app's own
- * canonical decline copy nor the phrase/regex heuristics. B0-902 — same model resolution as the
+ * in `./grading.ts`) when an item's mandatory concepts could not be judged by the criteria grader
+ * and its response matched neither the app's own canonical decline copy nor the phrase/regex
+ * heuristics. B0-932 — it no longer needs a behaviour flag to know a decline was the expected
+ * outcome: the item's `minimum_concepts` phrases describe the refusal, and are handed to the model
+ * below as exactly that. B0-902 — same model resolution as the
  * criteria grader: the shared `TEST_ITEM_GRADING_MODEL` row (`./item-grading-model.ts`), which by
  * default follows the run's own model tag. The former `BEX_GRADER_MODEL` env override is gone.
  */
@@ -35,23 +38,30 @@ A response is NOT a decline (isDecline: false) when it states the specific reque
 
 Judge the substance, not the vocabulary: the wording does not need to match any fixed phrase, and a bulleted, multi-sentence, or hedged response that never actually gives the requested answer and points elsewhere is still a decline. When given the item's own expected/ideal answer, use it only to understand what a decline looks like for this question — do not require the wording to match it. Ground your rationale in specific text from the response.`;
 
+/** One phrase per line, `- ` bulleted, verbatim — never re-joined, re-cased, or truncated. */
+function renderConceptPhrases(phrases: readonly string[]): string {
+  return phrases.map((phrase) => `- ${phrase}`).join('\n');
+}
+
 function buildUserMessage(params: {
   prompt: string;
   responseText: string;
   idealResponse: string | null;
-  expectedConcepts: string | null;
-  minimumConcepts: string | null;
+  expectedConcepts: readonly string[];
+  minimumConcepts: readonly string[];
 }): string {
   const lines = [`Original prompt (expected to be declined, not answered):\n${params.prompt}`];
 
   if (params.idealResponse) {
     lines.push(`What a correct decline looks like for this question:\n${params.idealResponse}`);
   }
-  if (params.minimumConcepts) {
-    lines.push(`Minimum concepts a correct decline should cover:\n${params.minimumConcepts}`);
+  if (params.minimumConcepts.length > 0) {
+    lines.push(
+      `Minimum concepts a correct decline should cover:\n${renderConceptPhrases(params.minimumConcepts)}`,
+    );
   }
-  if (params.expectedConcepts) {
-    lines.push(`Full expected concepts:\n${params.expectedConcepts}`);
+  if (params.expectedConcepts.length > 0) {
+    lines.push(`Full expected concepts:\n${renderConceptPhrases(params.expectedConcepts)}`);
   }
 
   lines.push(`Assistant response to grade:\n${params.responseText}`);
@@ -63,8 +73,13 @@ export type SemanticDeclineCheckInput = {
   prompt: string;
   responseText: string;
   idealResponse: string | null;
-  expectedConcepts: string | null;
-  minimumConcepts: string | null;
+  /**
+   * B0-931/932 — `test_items.expected_concepts` / `minimum_concepts` are `text[]`: one element per
+   * concept phrase. They arrive already split, so nothing here parses a delimiter, and each phrase
+   * is rendered verbatim (regulated free text — never re-cased, rounded, or truncated).
+   */
+  expectedConcepts: readonly string[];
+  minimumConcepts: readonly string[];
   modelTag?: string;
 };
 

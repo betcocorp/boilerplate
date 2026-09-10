@@ -41,7 +41,10 @@ const INPUT = {
   testResultItemId: 'tri-1',
   testName: 'Restroom set',
   prompt: 'What is the contact time for Pine Quat?',
-  expectedShouldAnswer: true,
+  mandatoryConcepts: [
+    'states the labeled contact time',
+    'cites the product label or SDS as the source',
+  ],
   responseText: 'I cannot help with that.',
   errorMessage: 'criteria not met',
   modelTag: 'claude-sonnet-5',
@@ -81,6 +84,11 @@ describe('analyzeAndPersistFailureRootCause (B0-617 / B0-908)', () => {
     expect(request.schema.properties.category.enum).toEqual(['agent', 'corpus', 'retrieval', 'evaluation']);
     expect(request.system).toContain('You are a QA analyst diagnosing why a single AI agent test item failed.');
     expect(request.user).toContain('Test: Restroom set');
+    // B0-932 — the evidence block names the mandatory concepts, verbatim, in place of the
+    // retired expected-should-answer flag.
+    expect(request.user).toContain('- states the labeled contact time');
+    expect(request.user).toContain('- cites the product label or SDS as the source');
+    expect(request.user).not.toContain('Expected should-answer');
     expect(request.user).toContain('Failure reason recorded by the harness: criteria not met');
     expect(request.user).toContain('Response: I cannot help with that.');
 

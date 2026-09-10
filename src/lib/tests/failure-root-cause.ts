@@ -64,7 +64,7 @@ const ROOT_CAUSE_JSON_SCHEMA = {
 
 const ROOT_CAUSE_SYSTEM_PROMPT = `You are a QA analyst diagnosing why a single AI agent test item failed.
 
-Use ONLY the evidence given. Name the specific failure — which criterion, tool call, or expectation — never a generic restatement of "the answer was wrong". Pick exactly one category:
+Use ONLY the evidence given. Name the specific failure — which mandatory concept, tool call, or expectation — never a generic restatement of "the answer was wrong". Pick exactly one category:
 - agent: the agent refused, skipped tool calls, or misrouted, independent of whether the corpus had the answer.
 - corpus: the retrieved/available source documents are missing or insufficient for a correct answer.
 - retrieval: relevant sources likely exist but were not surfaced (embedding, ranking, or query issue).
@@ -85,10 +85,15 @@ export type FailureRootCauseInput = {
   testResultItemId: string;
   testName: string;
   prompt: string;
-  expectedShouldAnswer: boolean | null;
+  /**
+   * B0-932 — replaces `expectedShouldAnswer`. `test_items.minimum_concepts`, one phrase per
+   * element, verbatim: the mandatory concepts a correct answer had to cover. Empty means the item
+   * declares none, which is itself the explanation for a lot of harness verdicts.
+   */
+  mandatoryConcepts: string[];
   responseText: string | null;
   errorMessage: string | null;
-  /** Present only for chat-eval items graded against `expected_criteria` (B0-616). */
+  /** Present only for chat-eval items graded against concept criteria (B0-616/932). */
   criteriaGrading?: CriteriaGradingOutcome | null;
   /** Present only for search/retrieval-eval items (search-run-executor.ts). */
   retrieval?: {
@@ -103,13 +108,11 @@ function buildEvidenceBlock(input: FailureRootCauseInput): string {
   const parts: string[] = [
     `Test: ${input.testName}`,
     `Prompt: ${input.prompt}`,
-    `Expected should-answer: ${
-      input.expectedShouldAnswer === null
-        ? 'not set'
-        : input.expectedShouldAnswer
-          ? 'yes'
-          : 'no (should decline)'
-    }`,
+    input.mandatoryConcepts.length > 0
+      ? `Mandatory concepts a correct answer had to cover (every one of them; a miss fails the item):\n${input.mandatoryConcepts
+          .map((concept) => `- ${concept}`)
+          .join('\n')}`
+      : 'Mandatory concepts: none recorded for this item — nothing was declared as required, so the harness could only check that an answer was produced at all.',
   ];
 
   if (input.errorMessage) {

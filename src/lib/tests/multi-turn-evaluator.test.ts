@@ -95,13 +95,10 @@ describe('matchTerm / looksLikeRegulatedValue', () => {
 });
 
 describe('per-turn expectations', () => {
-  it('delegates should_answer to the shared grader (a decline fails a positive turn)', () => {
+  it('delegates to the shared grader (a decline fails a turn with nothing mandatory)', () => {
     const result = evaluateMultiTurnScenario({
       scenario: scenario({
-        turns: [
-          { prompt: 'a' },
-          { prompt: 'b', expectations: { should_answer: true } },
-        ],
+        turns: [{ prompt: 'a' }, { prompt: 'b' }],
       }),
       turns: [
         turn({ turnIndex: 1, responseText: 'pH7Q is a neutral disinfectant cleaner.' }),
@@ -117,6 +114,79 @@ describe('per-turn expectations', () => {
     expect(result.passed).toBe(false);
   });
 
+  /**
+   * B0-932 — per-turn `should_answer` / `expected_result_type` are retired; a turn declares
+   * `minimum_concepts` instead, judged by `gradeWithCriteria` in the runner and handed to this
+   * pure evaluator as `ExecutedTurn.conceptGrading`.
+   */
+  describe('per-turn mandatory concepts (B0-932)', () => {
+    const declineScenario = scenario({
+      turns: [
+        { prompt: 'a' },
+        {
+          prompt: 'b',
+          expectations: {
+            minimum_concepts: ['does not state a price', 'directs the customer to a distributor'],
+          },
+        },
+      ],
+    });
+
+    const conceptVerdict = (passed: boolean) => ({
+      passed,
+      score: passed ? 1 : 0.5,
+      verdicts: [],
+      failureReason: passed ? null : 'Missed 1 tier-1 (must-have) criterion: "does not state a price".',
+    });
+
+    it('passes the turn when the runner\'s concept verdict says every mandatory concept was met', () => {
+      const result = evaluateMultiTurnScenario({
+        scenario: declineScenario,
+        turns: [
+          turn({ turnIndex: 1, responseText: 'ok' }),
+          turn({
+            turnIndex: 2,
+            responseText: 'Pricing is not published; your Betco distributor can quote it.',
+            conceptGrading: conceptVerdict(true),
+          }),
+        ],
+      });
+
+      expect(result.turnVerdicts[1].passed).toBe(true);
+      expect(result.passed).toBe(true);
+    });
+
+    it('fails the turn, naming the missed concept, when the verdict says one was missed', () => {
+      const result = evaluateMultiTurnScenario({
+        scenario: declineScenario,
+        turns: [
+          turn({ turnIndex: 1, responseText: 'ok' }),
+          turn({
+            turnIndex: 2,
+            responseText: 'It runs about $40 a gallon.',
+            conceptGrading: conceptVerdict(false),
+          }),
+        ],
+      });
+
+      expect(result.turnVerdicts[1].passed).toBe(false);
+      expect(result.turnVerdicts[1].failureReason).toContain('does not state a price');
+    });
+
+    it('fails a turn that declares mandatory concepts but got no verdict, rather than passing it', () => {
+      const result = evaluateMultiTurnScenario({
+        scenario: declineScenario,
+        turns: [
+          turn({ turnIndex: 1, responseText: 'ok' }),
+          turn({ turnIndex: 2, responseText: 'Pricing is not published.' }),
+        ],
+      });
+
+      expect(result.turnVerdicts[1].passed).toBe(false);
+      expect(result.turnVerdicts[1].failureReason).toContain('could not be evaluated');
+    });
+  });
+
   it('passes must_mention / must_not_mention when satisfied', () => {
     const result = evaluateMultiTurnScenario({
       scenario: scenario({
@@ -125,7 +195,6 @@ describe('per-turn expectations', () => {
           {
             prompt: 'b',
             expectations: {
-              should_answer: true,
               must_mention: ['pH7Q'],
               must_not_mention: ['Bleach'],
             },
@@ -178,7 +247,7 @@ describe('per-turn expectations', () => {
     expect(result.turnVerdicts[1].failureReason).toContain('forbidden');
   });
 
-  it('passes a turn with no expectations at all (mirrors expected_should_answer = null)', () => {
+  it('passes a turn with no expectations at all (nothing mandatory to gate on)', () => {
     const result = evaluateMultiTurnScenario({
       scenario: scenario(),
       turns: [
@@ -468,8 +537,8 @@ describe('scenario aggregation', () => {
     scenario_id: 'ph7q-carry',
     title: 'Follow-up keeps the product',
     turns: [
-      { prompt: 'What is pH7Q used for?', expectations: { should_answer: true } },
-      { prompt: 'Is it safe on that surface?', expectations: { should_answer: true } },
+      { prompt: 'What is pH7Q used for?' },
+      { prompt: 'Is it safe on that surface?' },
     ],
     assertions: [
       { type: 'context_carry', from_turn: 1, turn: 2, anchor: 'pH7Q' },
@@ -546,7 +615,7 @@ describe('scenario aggregation', () => {
       scenario: scenario({
         turns: [
           { prompt: 'a', expectations: { must_mention: ['pH7Q'] } },
-          { prompt: 'b', expectations: { should_answer: true } },
+          { prompt: 'b' },
         ],
       }),
       turns: [

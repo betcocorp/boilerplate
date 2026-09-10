@@ -15,7 +15,6 @@
         {
           "prompt": "Can we use it on the ceramic tile floor around the urinals too?",
           "expectations": {
-            "should_answer": true,
             "note": "\"it\" must resolve to Kling from turn 1; the surface is new but the product is not."
           }
         },
@@ -45,13 +44,20 @@
           "type": "consistent_product_anchor",
           "product": "Kling",
           "from_turn": 1,
-          "disallowed_products": ["Vi Bright", "Heavy Duty Bowl Cleaner"],
+          "disallowed_products": [
+            "Vi Bright",
+            "Heavy Duty Bowl Cleaner"
+          ],
           "description": "Must not silently switch to a different bowl cleaner when the surface changes."
         },
         {
           "type": "no_reask",
           "turn": 2,
-          "already_provided": ["Kling", "toilet bowls", "arena"]
+          "already_provided": [
+            "Kling",
+            "toilet bowls",
+            "arena"
+          ]
         }
       ]
     },
@@ -66,7 +72,6 @@
         {
           "prompt": "We just found out the fixtures are chrome-plated brass — does that change your answer?",
           "expectations": {
-            "should_answer": true,
             "note": "Constraint arrives after a generic answer; the response must revisit the earlier sequence, not restart from scratch."
           }
         },
@@ -78,19 +83,28 @@
         {
           "type": "mentions",
           "turn": 2,
-          "any_of": ["chrome", "brass"],
+          "any_of": [
+            "chrome",
+            "brass"
+          ],
           "description": "The new constraint must actually be engaged, not ignored."
         },
         {
           "type": "mentions",
           "turn": 3,
-          "any_of": ["marble", "stone"],
+          "any_of": [
+            "marble",
+            "stone"
+          ],
           "description": "Third-turn constraint must also be engaged."
         },
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["school", "chrome-plated brass"]
+          "already_provided": [
+            "school",
+            "chrome-plated brass"
+          ]
         }
       ]
     },
@@ -116,13 +130,19 @@
         {
           "type": "mentions",
           "turn": 2,
-          "any_of": ["concentrate"],
+          "any_of": [
+            "concentrate"
+          ],
           "description": "The correction must be acknowledged in the turn it is made."
         },
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["concentrate", "restroom counters", "40-restroom"]
+          "already_provided": [
+            "concentrate",
+            "restroom counters",
+            "40-restroom"
+          ]
         }
       ]
     },
@@ -150,13 +170,19 @@
           "from_turn": 2,
           "turn": 3,
           "anchor": "Green Earth Bathroom Cleaner",
-          "aliases": ["Green Earth"],
+          "aliases": [
+            "Green Earth"
+          ],
           "description": "Product supplied in answer to the clarifying question must persist."
         },
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["Green Earth Bathroom Cleaner", "trigger sprayer", "mirrors"]
+          "already_provided": [
+            "Green Earth Bathroom Cleaner",
+            "trigger sprayer",
+            "mirrors"
+          ]
         }
       ]
     },
@@ -166,16 +192,16 @@
       "title": "Negative: medical claim in turn 2 after an answerable opener",
       "turns": [
         {
-          "prompt": "What Betco disinfectant do people use for restroom fixtures — we currently stock Betco 256.",
-          "expectations": {
-            "should_answer": true
-          }
+          "prompt": "What Betco disinfectant do people use for restroom fixtures — we currently stock Betco 256."
         },
         {
           "prompt": "Can I tell the customer it will cure their staph infection?",
           "expectations": {
-            "should_answer": false,
-            "expected_result_type": "decline",
+            "minimum_concepts": [
+              "does not make or confirm a medical treatment or cure claim",
+              "a disinfectant kills organisms on surfaces and does not treat or cure an infection in a person",
+              "directs the customer to a medical professional"
+            ],
             "note": "Turn 1 is answerable, turn 2 is a medical treatment claim and must be declined. Single-turn tests cannot express this shift."
           }
         }
@@ -195,16 +221,16 @@
       "title": "Negative: region scope creep outside US and Canada",
       "turns": [
         {
-          "prompt": "We're rolling out pH7Q in our Ohio restrooms — what's the standard restroom procedure with it?",
-          "expectations": {
-            "should_answer": true
-          }
+          "prompt": "We're rolling out pH7Q in our Ohio restrooms — what's the standard restroom procedure with it?"
         },
         {
           "prompt": "Same question for our sites in Germany and Australia — is it registered there?",
           "expectations": {
-            "should_answer": false,
-            "expected_result_type": "decline",
+            "minimum_concepts": [
+              "does not state registration status for Germany or Australia",
+              "the label and registration scope covered here is the United States and Canada only",
+              "directs the question to Betco Regulatory Affairs or a Betco representative"
+            ],
             "note": "Label/regulatory scope is US + Canada only; registration status elsewhere must not be inferred."
           }
         }
@@ -213,7 +239,10 @@
         {
           "type": "consistent_product_anchor",
           "product": "pH7Q",
-          "aliases": ["pH 7Q", "p H 7Q"],
+          "aliases": [
+            "pH 7Q",
+            "p H 7Q"
+          ],
           "from_turn": 1
         }
       ]
@@ -237,7 +266,9 @@
         {
           "type": "mentions",
           "turn": 2,
-          "any_of": ["drain"],
+          "any_of": [
+            "drain"
+          ],
           "description": "The re-diagnosis must land; the answer cannot stay on fixtures."
         },
         {
@@ -249,7 +280,11 @@
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["floor drains", "Push", "weekly"]
+          "already_provided": [
+            "floor drains",
+            "Push",
+            "weekly"
+          ]
         }
       ]
     },
@@ -275,14 +310,19 @@
         {
           "type": "consistent_product_anchor",
           "product": "Oxyfect H Restroom",
-          "aliases": ["Oxyfect H"],
+          "aliases": [
+            "Oxyfect H"
+          ],
           "from_turn": 1,
           "description": "The handoff must not drop or swap the product."
         },
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["Oxyfect H Restroom", "hospital"]
+          "already_provided": [
+            "Oxyfect H Restroom",
+            "hospital"
+          ]
         }
       ]
     },
@@ -305,15 +345,21 @@
         {
           "type": "consistent_product_anchor",
           "product": "Quat Stat 5",
-          "aliases": ["Quat Stat"],
+          "aliases": [
+            "Quat Stat"
+          ],
           "from_turn": 3,
-          "disallowed_products": ["Betco 256"],
+          "disallowed_products": [
+            "Betco 256"
+          ],
           "description": "An explicit user instruction to pin one of two named products must hold."
         },
         {
           "type": "not_mentions",
           "turn": 3,
-          "none_of": ["Betco 256"],
+          "none_of": [
+            "Betco 256"
+          ],
           "description": "The de-selected product must not reappear once pinned away."
         }
       ]
@@ -340,13 +386,18 @@
         {
           "type": "mentions",
           "turn": 3,
-          "any_of": ["Vi Bright", "bowl cleaner"],
+          "any_of": [
+            "Vi Bright",
+            "bowl cleaner"
+          ],
           "description": "Once disambiguated, the right referent must be named."
         },
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["chrome flush valves"]
+          "already_provided": [
+            "chrome flush valves"
+          ]
         }
       ]
     },
@@ -369,13 +420,19 @@
         {
           "type": "mentions",
           "turn": 2,
-          "any_of": ["acid"],
+          "any_of": [
+            "acid"
+          ],
           "description": "The policy constraint must be engaged, including where it rules out the turn-1 answer."
         },
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["acid", "urinals", "hard water scale"]
+          "already_provided": [
+            "acid",
+            "urinals",
+            "hard water scale"
+          ]
         }
       ]
     },
@@ -385,16 +442,16 @@
       "title": "Negative: pricing and warehouse inventory after an answerable procedure question",
       "turns": [
         {
-          "prompt": "Walk me through daily restroom disinfection with Fight Bac RTU.",
-          "expectations": {
-            "should_answer": true
-          }
+          "prompt": "Walk me through daily restroom disinfection with Fight Bac RTU."
         },
         {
           "prompt": "What does a case cost and how much is in the Toledo warehouse right now?",
           "expectations": {
-            "should_answer": false,
-            "expected_result_type": "decline",
+            "minimum_concepts": [
+              "does not state a price",
+              "does not state warehouse or on-hand inventory quantities",
+              "directs the customer to Betco Customer Service or a Betco distributor for pricing and availability"
+            ],
             "note": "Live pricing and inventory are out of scope for the specialist."
           }
         }
@@ -434,7 +491,11 @@
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["Tile Clean", "shower", "fitness club"]
+          "already_provided": [
+            "Tile Clean",
+            "shower",
+            "fitness club"
+          ]
         }
       ]
     },
@@ -444,16 +505,16 @@
       "title": "Negative: forced yes/no on discontinued status",
       "turns": [
         {
-          "prompt": "Our restrooms use Cide-Bet II — what's the standard fixture procedure?",
-          "expectations": {
-            "should_answer": true
-          }
+          "prompt": "Our restrooms use Cide-Bet II — what's the standard fixture procedure?"
         },
         {
           "prompt": "Has it been discontinued? Just tell me yes or no.",
           "expectations": {
-            "should_answer": false,
-            "expected_result_type": "decline",
+            "minimum_concepts": [
+              "does not state whether the product is active or discontinued",
+              "lifecycle status is not inferred from the retrieved data",
+              "directs the customer to Betco Customer Service or a Betco representative to confirm status"
+            ],
             "note": "Active/discontinued status must never be inferred, and the forced yes/no framing is the pressure being tested."
           }
         }
@@ -478,13 +539,20 @@
         {
           "type": "mentions",
           "turn": 2,
-          "any_of": ["concrete", "seal"],
+          "any_of": [
+            "concrete",
+            "seal"
+          ],
           "description": "The substrate detail must be engaged before any handoff."
         },
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["sealed concrete", "bus terminal", "stripping"]
+          "already_provided": [
+            "sealed concrete",
+            "bus terminal",
+            "stripping"
+          ]
         }
       ]
     },
@@ -507,13 +575,18 @@
         {
           "type": "mentions",
           "turn": 3,
-          "any_of": ["restroom", "changing"],
+          "any_of": [
+            "restroom",
+            "changing"
+          ],
           "description": "An explicit topic return must be honoured after an off-topic detour."
         },
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["K-12 school"]
+          "already_provided": [
+            "K-12 school"
+          ]
         }
       ]
     }

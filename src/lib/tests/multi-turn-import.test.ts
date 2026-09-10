@@ -18,8 +18,8 @@ const VALID_SET = JSON.stringify({
       scenario_id: 'carry-1',
       title: 'Follow-up keeps the product',
       turns: [
-        { prompt: 'What is pH7Q used for?', expectations: { should_answer: true } },
-        { prompt: 'Is it safe on sealed concrete?', expectations: { should_answer: true } },
+        { prompt: 'What is pH7Q used for?', expectations: { must_mention: ['pH7Q'] } },
+        { prompt: 'Is it safe on sealed concrete?', expectations: { minimum_concepts: ['states whether the surface is covered by the label'] } },
       ],
       assertions: [{ type: 'context_carry', from_turn: 1, turn: 2, anchor: 'pH7Q' }],
     },
@@ -100,7 +100,10 @@ describe('buildTestItemsFromScenarioSet', () => {
     expect(items[1].row_index).toBe(2);
     expect(items[0].prompt).toBe('What is pH7Q used for?');
     // Graded by the multi-turn evaluator against per-turn expectations, not these columns.
-    expect(items[0].expected_should_answer).toBeNull();
+    // B0-932 — a multi-turn row carries no item-level concepts; the per-turn expectations grade it.
+    expect(items[0].minimum_concepts).toEqual([]);
+    expect(items[0].expected_concepts).toEqual([]);
+    expect(items[0].expected_criteria).toEqual([]);
     expect(items[0].intended_agent_item).toBe('product');
 
     const roundTripped = parseMultiTurnFromInputPayload(items[0].input_payload);

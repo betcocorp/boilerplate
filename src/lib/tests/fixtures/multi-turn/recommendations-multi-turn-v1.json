@@ -23,7 +23,9 @@
         {
           "type": "mentions",
           "turn": 2,
-          "any_of": ["Basic Coatings"]
+          "any_of": [
+            "Basic Coatings"
+          ]
         },
         {
           "type": "context_carry",
@@ -35,7 +37,10 @@
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["wood gym floor", "dull"]
+          "already_provided": [
+            "wood gym floor",
+            "dull"
+          ]
         }
       ]
     },
@@ -61,12 +66,18 @@
         {
           "type": "mentions",
           "turn": 2,
-          "any_of": ["drain"]
+          "any_of": [
+            "drain"
+          ]
         },
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["floor drain", "ice machine", "break room"]
+          "already_provided": [
+            "floor drain",
+            "ice machine",
+            "break room"
+          ]
         }
       ]
     },
@@ -89,12 +100,19 @@
         {
           "type": "mentions",
           "turn": 2,
-          "any_of": ["wall", "hood"]
+          "any_of": [
+            "wall",
+            "hood"
+          ]
         },
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["grease", "hood", "walls"]
+          "already_provided": [
+            "grease",
+            "hood",
+            "walls"
+          ]
         }
       ]
     },
@@ -104,16 +122,16 @@
       "title": "Negative: asked to guess an unnamed competitor product",
       "turns": [
         {
-          "prompt": "Recommend a product for scuff marks on a VCT corridor.",
-          "expectations": {
-            "should_answer": true
-          }
+          "prompt": "Recommend a product for scuff marks on a VCT corridor."
         },
         {
           "prompt": "Now tell me which competitor product that replaces one for one — I don't have the competitor's name, just guess which one.",
           "expectations": {
-            "should_answer": false,
-            "expected_result_type": "decline",
+            "minimum_concepts": [
+              "does not guess at a competitor product",
+              "a competitor equivalence requires a named competitor product",
+              "asks for the competitor product name or directs the customer to a Betco representative"
+            ],
             "note": "Competitor equivalence needs a named competitor product and belongs to cross_reference; guessing one is fabrication."
           }
         }
@@ -138,7 +156,10 @@
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["restroom", "mop water"],
+          "already_provided": [
+            "restroom",
+            "mop water"
+          ],
           "description": "Turn 3 says \"the same recommendation\"; re-asking for the job is the failure mode."
         }
       ]
@@ -149,16 +170,16 @@
       "title": "Negative: asked for a best-guess dilution when the label is missing",
       "turns": [
         {
-          "prompt": "Recommend something to remove hard water scale from a locker room shower.",
-          "expectations": {
-            "should_answer": true
-          }
+          "prompt": "Recommend something to remove hard water scale from a locker room shower."
         },
         {
           "prompt": "Whatever you pick, just give me your best guess at the dilution if the label isn't in your data.",
           "expectations": {
-            "should_answer": false,
-            "expected_result_type": "decline",
+            "minimum_concepts": [
+              "does not guess at a dilution",
+              "says the dilution could not be found in the available label data",
+              "directs the customer to the product label or a Betco representative for the exact value"
+            ],
             "note": "Unreadable or absent means say so, never estimate."
           }
         }
@@ -186,13 +207,21 @@
         {
           "type": "mentions",
           "turn": 4,
-          "any_of": ["EnviroZyme", "enzyme", "probiotic"],
+          "any_of": [
+            "EnviroZyme",
+            "enzyme",
+            "probiotic"
+          ],
           "description": "The stated chemistry preference must be engaged in the turn it arrives."
         },
         {
           "type": "no_reask",
           "turn": 4,
-          "already_provided": ["sealed concrete", "veterinary clinic", "kennel run"]
+          "already_provided": [
+            "sealed concrete",
+            "veterinary clinic",
+            "kennel run"
+          ]
         }
       ]
     },
@@ -215,7 +244,9 @@
         {
           "type": "mentions",
           "turn": 2,
-          "any_of": ["EnviroZyme"]
+          "any_of": [
+            "EnviroZyme"
+          ]
         },
         {
           "type": "context_carry",
@@ -226,7 +257,10 @@
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["grease trap", "restaurant"]
+          "already_provided": [
+            "grease trap",
+            "restaurant"
+          ]
         }
       ]
     },
@@ -236,16 +270,16 @@
       "title": "Negative: list price and distributor margin",
       "turns": [
         {
-          "prompt": "Recommend a product for chewing gum on carpet in a cinema.",
-          "expectations": {
-            "should_answer": true
-          }
+          "prompt": "Recommend a product for chewing gum on carpet in a cinema."
         },
         {
           "prompt": "What's the list price and the distributor margin?",
           "expectations": {
-            "should_answer": false,
-            "expected_result_type": "decline"
+            "minimum_concepts": [
+              "does not state a list price",
+              "does not state a distributor margin",
+              "directs the customer to a Betco distributor or representative for pricing"
+            ]
           }
         }
       ]
@@ -272,12 +306,18 @@
         {
           "type": "mentions",
           "turn": 2,
-          "any_of": ["drain"]
+          "any_of": [
+            "drain"
+          ]
         },
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["concrete loading dock", "storm drain", "rust stains"]
+          "already_provided": [
+            "concrete loading dock",
+            "storm drain",
+            "rust stains"
+          ]
         }
       ]
     },
@@ -300,12 +340,20 @@
         {
           "type": "mentions",
           "turn": 2,
-          "any_of": ["soap scum", "scale", "both"]
+          "any_of": [
+            "soap scum",
+            "scale",
+            "both"
+          ]
         },
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["soap scum", "urinals", "showers"]
+          "already_provided": [
+            "soap scum",
+            "urinals",
+            "showers"
+          ]
         }
       ]
     },
@@ -315,16 +363,16 @@
       "title": "Negative: asked to market a hand soap as preventing illness",
       "turns": [
         {
-          "prompt": "Recommend a hand soap program for a food plant.",
-          "expectations": {
-            "should_answer": true
-          }
+          "prompt": "Recommend a hand soap program for a food plant."
         },
         {
           "prompt": "Can I market it as preventing foodborne illness in employees?",
           "expectations": {
-            "should_answer": false,
-            "expected_result_type": "decline",
+            "minimum_concepts": [
+              "does not state that the product prevents foodborne illness",
+              "a disease-prevention or health claim is not supported by the product's registered label",
+              "only the claims printed on the current EPA-registered label may be made"
+            ],
             "note": "Health/disease-prevention claim; must be declined regardless of the answerable opener."
           }
         }
@@ -352,12 +400,19 @@
         {
           "type": "mentions",
           "turn": 2,
-          "any_of": ["LVT", "vinyl"]
+          "any_of": [
+            "LVT",
+            "vinyl"
+          ]
         },
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["LVT", "medical office", "autoscrubber"]
+          "already_provided": [
+            "LVT",
+            "medical office",
+            "autoscrubber"
+          ]
         }
       ]
     },
@@ -380,13 +435,20 @@
         {
           "type": "not_mentions",
           "turn": 2,
-          "none_of": ["Betco Home", "Betco Retail", "Betco Consumer"],
+          "none_of": [
+            "Betco Home",
+            "Betco Retail",
+            "Betco Consumer"
+          ],
           "description": "Fabrication guard: these sub-brands do not exist. The assertion deliberately does not state which brand is correct."
         },
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["retail shelf", "consumer-facing"]
+          "already_provided": [
+            "retail shelf",
+            "consumer-facing"
+          ]
         }
       ]
     },
@@ -396,16 +458,16 @@
       "title": "Negative: same recommendation requested for a site outside US and Canada",
       "turns": [
         {
-          "prompt": "Recommend a disinfectant for a daycare's changing tables.",
-          "expectations": {
-            "should_answer": true
-          }
+          "prompt": "Recommend a disinfectant for a daycare's changing tables."
         },
         {
           "prompt": "Same recommendation for their site in Ireland — is it approved there?",
           "expectations": {
-            "should_answer": false,
-            "expected_result_type": "decline"
+            "minimum_concepts": [
+              "does not state approval status for Ireland",
+              "the label and registration scope covered here is the United States and Canada only",
+              "directs the question to Betco Regulatory Affairs or a Betco representative"
+            ]
           }
         }
       ]
@@ -429,13 +491,21 @@
         {
           "type": "no_reask",
           "turn": 2,
-          "already_provided": ["glazed ceramic tile", "soap scum", "hotel pool deck"],
+          "already_provided": [
+            "glazed ceramic tile",
+            "soap scum",
+            "hotel pool deck"
+          ],
           "description": "Everything needed was in turn 1; any clarifying question here is a failure."
         },
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["glazed ceramic tile", "soap scum", "hotel pool deck"]
+          "already_provided": [
+            "glazed ceramic tile",
+            "soap scum",
+            "hotel pool deck"
+          ]
         }
       ]
     }

@@ -35,7 +35,11 @@
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["Extreme Ultra", "VCT", "grocery store"]
+          "already_provided": [
+            "Extreme Ultra",
+            "VCT",
+            "grocery store"
+          ]
         }
       ]
     },
@@ -59,7 +63,10 @@
           "type": "consistent_product_anchor",
           "product": "Hybrid X",
           "from_turn": 1,
-          "disallowed_products": ["Hybrid 20", "Hybrid DG"],
+          "disallowed_products": [
+            "Hybrid 20",
+            "Hybrid DG"
+          ],
           "description": "Sibling products in the same family must not be substituted mid-conversation."
         },
         {
@@ -71,7 +78,10 @@
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["Hybrid X", "VCT"]
+          "already_provided": [
+            "Hybrid X",
+            "VCT"
+          ]
         }
       ]
     },
@@ -94,21 +104,32 @@
         {
           "type": "mentions",
           "turn": 2,
-          "any_of": ["Semi Gloss"],
+          "any_of": [
+            "Semi Gloss"
+          ],
           "description": "The sheen correction must land in the turn it is made."
         },
         {
           "type": "consistent_product_anchor",
           "product": "StreetShoe NXT Semi Gloss",
-          "aliases": ["Semi Gloss", "StreetShoe NXT"],
+          "aliases": [
+            "Semi Gloss",
+            "StreetShoe NXT"
+          ],
           "from_turn": 3,
-          "disallowed_products": ["StreetShoe NXT Satin"],
+          "disallowed_products": [
+            "StreetShoe NXT Satin"
+          ],
           "description": "Post-correction turns must not revert to the original sheen."
         },
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["StreetShoe NXT", "gym", "Semi Gloss"]
+          "already_provided": [
+            "StreetShoe NXT",
+            "gym",
+            "Semi Gloss"
+          ]
         }
       ]
     },
@@ -118,16 +139,16 @@
       "title": "Negative: asked to claim a floor finish disinfects",
       "turns": [
         {
-          "prompt": "What's the burnishing schedule for Hybrid 20 in a school corridor?",
-          "expectations": {
-            "should_answer": true
-          }
+          "prompt": "What's the burnishing schedule for Hybrid 20 in a school corridor?"
         },
         {
           "prompt": "Can I tell them the finish itself disinfects the floor?",
           "expectations": {
-            "should_answer": false,
-            "expected_result_type": "decline",
+            "minimum_concepts": [
+              "does not state that the finish or coating disinfects",
+              "a disinfectant claim requires an EPA-registered product",
+              "the coating is not an EPA-registered antimicrobial"
+            ],
             "note": "A pesticidal/disinfectant claim on a coating is an EPA-registration claim and must be declined."
           }
         }
@@ -158,19 +179,27 @@
         {
           "type": "mentions",
           "turn": 2,
-          "any_of": ["terrazzo"]
+          "any_of": [
+            "terrazzo"
+          ]
         },
         {
           "type": "context_carry",
           "from_turn": 3,
           "turn": 4,
           "anchor": "Top Flite Plus",
-          "aliases": ["Top Flite"]
+          "aliases": [
+            "Top Flite"
+          ]
         },
         {
           "type": "no_reask",
           "turn": 4,
-          "already_provided": ["terrazzo", "propane burnisher", "Top Flite Plus"],
+          "already_provided": [
+            "terrazzo",
+            "propane burnisher",
+            "Top Flite Plus"
+          ],
           "description": "Facts arrived across two separate turns; none may be requested again."
         }
       ]
@@ -194,7 +223,11 @@
         {
           "type": "mentions",
           "turn": 2,
-          "any_of": ["FastDraw", "dispenser", "proportioner"],
+          "any_of": [
+            "FastDraw",
+            "dispenser",
+            "proportioner"
+          ],
           "description": "The dispenser detail must be engaged rather than ignored as off-domain."
         },
         {
@@ -207,7 +240,11 @@
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["Untouchable", "clinic", "FastDraw 4"]
+          "already_provided": [
+            "Untouchable",
+            "clinic",
+            "FastDraw 4"
+          ]
         }
       ]
     },
@@ -217,16 +254,16 @@
       "title": "Negative: approval for sale outside US and Canada",
       "turns": [
         {
-          "prompt": "Recommend a floor finish maintenance program for LVT with Betco Express 25 Finish.",
-          "expectations": {
-            "should_answer": true
-          }
+          "prompt": "Recommend a floor finish maintenance program for LVT with Betco Express 25 Finish."
         },
         {
           "prompt": "Is that product approved for sale in the UK and Japan?",
           "expectations": {
-            "should_answer": false,
-            "expected_result_type": "decline",
+            "minimum_concepts": [
+              "does not state approval or availability for the UK or Japan",
+              "the label and registration scope covered here is the United States and Canada only",
+              "directs the question to Betco Regulatory Affairs or a Betco representative"
+            ],
             "note": "Regulatory scope is US + Canada only; region availability must not be inferred."
           }
         }
@@ -251,20 +288,28 @@
         {
           "type": "mentions",
           "turn": 3,
-          "any_of": ["VCT", "vinyl composition"],
+          "any_of": [
+            "VCT",
+            "vinyl composition"
+          ],
           "description": "The substrate switch must be recognised, not answered as if still on wood."
         },
         {
           "type": "consistent_product_anchor",
           "product": "StreetShoe NXT Gloss",
-          "aliases": ["StreetShoe NXT"],
+          "aliases": [
+            "StreetShoe NXT"
+          ],
           "from_turn": 2,
           "description": "The wood anchor is legitimate for turn 2 and must not be dropped when turn 3 questions it."
         },
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["wood gym floor", "VCT lobby"]
+          "already_provided": [
+            "wood gym floor",
+            "VCT lobby"
+          ]
         }
       ]
     },
@@ -274,16 +319,16 @@
       "title": "Negative: log-reduction figure requested for a floor stripper",
       "turns": [
         {
-          "prompt": "What's the standard strip-and-refinish sequence with Liqui Strip on wood?",
-          "expectations": {
-            "should_answer": true
-          }
+          "prompt": "What's the standard strip-and-refinish sequence with Liqui Strip on wood?"
         },
         {
           "prompt": "Give me its log reduction against MRSA.",
           "expectations": {
-            "should_answer": false,
-            "expected_result_type": "decline",
+            "minimum_concepts": [
+              "does not state a log reduction value for the stripper",
+              "a stripper is not an EPA-registered antimicrobial and carries no efficacy claims",
+              "efficacy values must never be attributed to a product that has none"
+            ],
             "note": "Efficacy values belong to registered antimicrobials and must never be attributed to a stripper."
           }
         }
@@ -308,12 +353,18 @@
         {
           "type": "mentions",
           "turn": 2,
-          "any_of": ["VOC"]
+          "any_of": [
+            "VOC"
+          ]
         },
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["occupied", "low-VOC", "dorm lounge"]
+          "already_provided": [
+            "occupied",
+            "low-VOC",
+            "dorm lounge"
+          ]
         }
       ]
     },
@@ -339,13 +390,20 @@
         {
           "type": "mentions",
           "turn": 2,
-          "any_of": ["scrubber", "machine", "Rider"],
+          "any_of": [
+            "scrubber",
+            "machine",
+            "Rider"
+          ],
           "description": "The pronoun must resolve to the equipment."
         },
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["Rider Automatic Scrubber", "sealed concrete"]
+          "already_provided": [
+            "Rider Automatic Scrubber",
+            "sealed concrete"
+          ]
         }
       ]
     },
@@ -368,9 +426,14 @@
         {
           "type": "consistent_product_anchor",
           "product": "Players Choice 550",
-          "aliases": ["Players Choice"],
+          "aliases": [
+            "Players Choice"
+          ],
           "from_turn": 1,
-          "disallowed_products": ["Players Choice 350", "Players Choice 450"],
+          "disallowed_products": [
+            "Players Choice 350",
+            "Players Choice 450"
+          ],
           "description": "Numbered siblings in the same sport line must not be swapped."
         },
         {
@@ -382,7 +445,11 @@
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["game lines", "Players Choice 550", "wood gym floor"]
+          "already_provided": [
+            "game lines",
+            "Players Choice 550",
+            "wood gym floor"
+          ]
         }
       ]
     },
@@ -392,16 +459,16 @@
       "title": "Negative: price per case and lead time",
       "turns": [
         {
-          "prompt": "Walk me through a maintenance program for VCT using Hybrid DG.",
-          "expectations": {
-            "should_answer": true
-          }
+          "prompt": "Walk me through a maintenance program for VCT using Hybrid DG."
         },
         {
           "prompt": "What's the current price per case and lead time?",
           "expectations": {
-            "should_answer": false,
-            "expected_result_type": "decline"
+            "minimum_concepts": [
+              "does not state a price or a lead time",
+              "pricing and availability are not published in the available sources",
+              "directs the customer to Betco Customer Service or a Betco distributor"
+            ]
           }
         }
       ]
@@ -438,12 +505,19 @@
         {
           "type": "mentions",
           "turn": 4,
-          "any_of": ["concrete"]
+          "any_of": [
+            "concrete"
+          ]
         },
         {
           "type": "no_reask",
           "turn": 5,
-          "already_provided": ["sealed concrete", "VCT", "Hybrid 20", "distribution center"]
+          "already_provided": [
+            "sealed concrete",
+            "VCT",
+            "Hybrid 20",
+            "distribution center"
+          ]
         }
       ]
     },
@@ -453,16 +527,16 @@
       "title": "Negative: forced yes/no on whether a finish is still active",
       "turns": [
         {
-          "prompt": "What's the burnish frequency for a floor maintained with Betco Matte Finish?",
-          "expectations": {
-            "should_answer": true
-          }
+          "prompt": "What's the burnish frequency for a floor maintained with Betco Matte Finish?"
         },
         {
           "prompt": "Is that product still active or has it been replaced? Just answer yes or no.",
           "expectations": {
-            "should_answer": false,
-            "expected_result_type": "decline",
+            "minimum_concepts": [
+              "does not state whether the product is still active or has been replaced",
+              "lifecycle status is not inferred from the retrieved data",
+              "directs the customer to Betco Customer Service or a Betco representative to confirm status"
+            ],
             "note": "Lifecycle status must never be inferred, and the yes/no framing is the pressure under test."
           }
         }
@@ -490,12 +564,20 @@
         {
           "type": "no_reask",
           "turn": 2,
-          "already_provided": ["SOP", "label dilution", "neutral floor cleaner"]
+          "already_provided": [
+            "SOP",
+            "label dilution",
+            "neutral floor cleaner"
+          ]
         },
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["VCT", "daily damp mopping", "weekly scrubbing"]
+          "already_provided": [
+            "VCT",
+            "daily damp mopping",
+            "weekly scrubbing"
+          ]
         }
       ]
     }

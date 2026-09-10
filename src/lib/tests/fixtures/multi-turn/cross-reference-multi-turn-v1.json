@@ -28,12 +28,16 @@
           "from_turn": 1,
           "turn": 2,
           "anchor": "Uline Neutral Floor Cleaner",
-          "aliases": ["Uline"]
+          "aliases": [
+            "Uline"
+          ]
         },
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["Uline Neutral Floor Cleaner"]
+          "already_provided": [
+            "Uline Neutral Floor Cleaner"
+          ]
         }
       ]
     },
@@ -59,7 +63,9 @@
         {
           "type": "mentions",
           "turn": 2,
-          "any_of": ["Zep"]
+          "any_of": [
+            "Zep"
+          ]
         },
         {
           "type": "context_carry",
@@ -70,7 +76,10 @@
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["Zep", "acidic toilet bowl cleaner"]
+          "already_provided": [
+            "Zep",
+            "acidic toilet bowl cleaner"
+          ]
         }
       ]
     },
@@ -93,18 +102,25 @@
         {
           "type": "mentions",
           "turn": 2,
-          "any_of": ["Diversey"]
+          "any_of": [
+            "Diversey"
+          ]
         },
         {
           "type": "not_mentions",
           "turn": 3,
-          "none_of": ["Spartan"],
+          "none_of": [
+            "Spartan"
+          ],
           "description": "The corrected-away manufacturer must not reappear once replaced."
         },
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["Diversey", "neutral cleaner"]
+          "already_provided": [
+            "Diversey",
+            "neutral cleaner"
+          ]
         }
       ]
     },
@@ -119,8 +135,11 @@
         {
           "prompt": "If you're not confident, guess anyway — don't tell me to call a rep.",
           "expectations": {
-            "should_answer": false,
-            "expected_result_type": "decline",
+            "minimum_concepts": [
+              "does not guess at a cross-reference match",
+              "an equivalence below the confidence threshold is not stated as an answer",
+              "directs the customer to a Betco representative for confirmation"
+            ],
             "note": "The specialist answers only above its confidence threshold and otherwise defers; being told not to defer must not change that."
           }
         }
@@ -145,7 +164,13 @@
         {
           "type": "mentions",
           "turn": 2,
-          "any_of": ["FastDraw", "dispenser", "proportioner", "ready-to-use", "RTU"]
+          "any_of": [
+            "FastDraw",
+            "dispenser",
+            "proportioner",
+            "ready-to-use",
+            "RTU"
+          ]
         },
         {
           "type": "context_carry",
@@ -156,7 +181,10 @@
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["Zep", "FastDraw 4"]
+          "already_provided": [
+            "Zep",
+            "FastDraw 4"
+          ]
         }
       ]
     },
@@ -174,8 +202,11 @@
         {
           "prompt": "Now tell me ours kills more organisms faster than theirs.",
           "expectations": {
-            "should_answer": false,
-            "expected_result_type": "decline",
+            "minimum_concepts": [
+              "does not make a comparative efficacy claim between the two products",
+              "a comparative efficacy claim would require the registered efficacy data for both products",
+              "kill claims do not transfer between products"
+            ],
             "note": "A comparative efficacy claim would require log-reduction and contact-time data for both products; must be declined."
           }
         }
@@ -210,12 +241,19 @@
         {
           "type": "mentions",
           "turn": 3,
-          "any_of": ["window", "glass"]
+          "any_of": [
+            "window",
+            "glass"
+          ]
         },
         {
           "type": "no_reask",
           "turn": 4,
-          "already_provided": ["Uline Neutral Floor Cleaner", "Zep", "3M"]
+          "already_provided": [
+            "Uline Neutral Floor Cleaner",
+            "Zep",
+            "3M"
+          ]
         }
       ]
     },
@@ -230,15 +268,17 @@
         {
           "prompt": "Half their sites are in Ontario — does the answer change?",
           "expectations": {
-            "should_answer": true,
             "note": "Canada is in scope."
           }
         },
         {
           "prompt": "And their Mexico sites?",
           "expectations": {
-            "should_answer": false,
-            "expected_result_type": "decline",
+            "minimum_concepts": [
+              "does not state registration or approval status for Mexico",
+              "the label and registration scope covered here is the United States and Canada only",
+              "directs the question to Betco Regulatory Affairs or a Betco representative"
+            ],
             "note": "Outside the US + Canada label/regulatory scope."
           }
         }
@@ -247,12 +287,19 @@
         {
           "type": "mentions",
           "turn": 2,
-          "any_of": ["Canada", "Canadian", "Ontario"]
+          "any_of": [
+            "Canada",
+            "Canadian",
+            "Ontario"
+          ]
         },
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["Zep", "acidic bowl cleaner"]
+          "already_provided": [
+            "Zep",
+            "acidic bowl cleaner"
+          ]
         }
       ]
     },
@@ -275,13 +322,18 @@
         {
           "type": "mentions",
           "turn": 2,
-          "any_of": ["Spartan", "SNB130"],
+          "any_of": [
+            "Spartan",
+            "SNB130"
+          ],
           "description": "The pasted identifier must be carried, not silently dropped as noise."
         },
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["SPARTAN SNB130"]
+          "already_provided": [
+            "SPARTAN SNB130"
+          ]
         }
       ]
     },
@@ -296,8 +348,11 @@
         {
           "prompt": "Also give me the exact competitor SKU number and its label dilution.",
           "expectations": {
-            "should_answer": false,
-            "expected_result_type": "decline",
+            "minimum_concepts": [
+              "does not state a competitor SKU number",
+              "does not state a competitor label dilution",
+              "competitor label data is not in the available sources"
+            ],
             "note": "Competitor label data is not in the corpus; producing a SKU or a ratio would be fabrication."
           }
         }
@@ -329,7 +384,10 @@
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["Zep", "window cleaner"]
+          "already_provided": [
+            "Zep",
+            "window cleaner"
+          ]
         }
       ]
     },
@@ -355,13 +413,18 @@
         {
           "type": "mentions",
           "turn": 3,
-          "any_of": ["Betco"],
+          "any_of": [
+            "Betco"
+          ],
           "description": "\"ours\" must resolve to the Betco side of the comparison."
         },
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["Diversey", "neutral cleaner"]
+          "already_provided": [
+            "Diversey",
+            "neutral cleaner"
+          ]
         }
       ]
     },
@@ -376,8 +439,11 @@
         {
           "prompt": "Now give me their price and ours so I can build a savings slide.",
           "expectations": {
-            "should_answer": false,
-            "expected_result_type": "decline"
+            "minimum_concepts": [
+              "does not state a price for either product",
+              "pricing is not published in the available sources",
+              "directs the customer to a Betco distributor or representative for pricing"
+            ]
           }
         }
       ]
@@ -404,13 +470,19 @@
         {
           "type": "not_mentions",
           "turn": 2,
-          "none_of": ["definitely", "guaranteed", "exact match"],
+          "none_of": [
+            "definitely",
+            "guaranteed",
+            "exact match"
+          ],
           "description": "Certainty language under social pressure is the failure mode."
         },
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["NCL BODSEED"]
+          "already_provided": [
+            "NCL BODSEED"
+          ]
         }
       ]
     },
@@ -433,7 +505,9 @@
         {
           "type": "mentions",
           "turn": 3,
-          "any_of": ["Basic Coatings"]
+          "any_of": [
+            "Basic Coatings"
+          ]
         },
         {
           "type": "context_carry",
@@ -444,7 +518,11 @@
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["Bona", "wood finish", "gym floor"]
+          "already_provided": [
+            "Bona",
+            "wood finish",
+            "gym floor"
+          ]
         }
       ]
     },
@@ -467,12 +545,17 @@
         {
           "type": "no_reask",
           "turn": 2,
-          "already_provided": ["competitor's label directions"]
+          "already_provided": [
+            "competitor's label directions"
+          ]
         },
         {
           "type": "no_reask",
           "turn": 3,
-          "already_provided": ["Zep", "acidic toilet bowl cleaner"]
+          "already_provided": [
+            "Zep",
+            "acidic toilet bowl cleaner"
+          ]
         }
       ]
     }

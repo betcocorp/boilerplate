@@ -24,17 +24,26 @@ const termSchema = z.string().trim().min(1);
  * Per-turn expectations. Only fields the deterministic grader/evaluator actually enforces are
  * allowed (strict), so authors can't write expectations that silently do nothing.
  *
- * REGULATED-DATA NOTE: expectations here are structural on purpose ("mentions the product",
- * "does not decline"). Never author dilution ratios, contact times, EPA reg numbers, or efficacy
- * values into `must_mention` unless the exact string already exists verbatim in a printed
- * label/SDS source — see AGENTS.md / org rules.
+ * B0-932 — `should_answer` / `expected_result_type` are RETIRED, mirroring the drop of
+ * `test_items.expected_should_answer` / `expected_result_type`. A turn no longer declares a
+ * behaviour; it declares what a correct answer must say. `minimum_concepts` is the mandatory set
+ * (a miss fails the turn, exactly as `minimum_concepts` fails an item) and `expected_concepts` is
+ * the scored-but-not-gating set. Both are judged semantically by `gradeWithCriteria`, which the
+ * runner calls per turn and hands to the pure evaluator as `ExecutedTurn.conceptGrading` — a turn
+ * that declares mandatory concepts and gets no verdict is failed as unevaluated, never passed.
+ *
+ * REGULATED-DATA NOTE: `must_mention` / `must_not_mention` are structural on purpose ("mentions
+ * the product"). Never author dilution ratios, contact times, EPA reg numbers, or efficacy values
+ * into them unless the exact string already exists verbatim in a printed label/SDS source — see
+ * AGENTS.md / org rules. A concept phrase may carry an `exact:` prefix to pin it to the literal
+ * check (`EXACT_MATCH_PREFIX`, `~/lib/tests/criteria-schemas`).
  */
 export const multiTurnTurnExpectationsSchema = z
   .object({
-    /** Same semantics as `test_items.expected_should_answer` (null/omitted = no expectation). */
-    should_answer: z.boolean().nullish(),
-    /** Same semantics as `test_items.expected_result_type` (only decline/none change grading). */
-    expected_result_type: z.string().trim().nullish(),
+    /** Mandatory concepts for this turn — every one must be covered or the turn fails. */
+    minimum_concepts: z.array(termSchema).min(1).optional(),
+    /** Additional expected concepts — scored, but a miss alone does not fail the turn. */
+    expected_concepts: z.array(termSchema).min(1).optional(),
     /** Every listed term must appear (case-insensitive) in this turn's response. */
     must_mention: z.array(termSchema).min(1).optional(),
     /** None of the listed terms may appear (case-insensitive) in this turn's response. */

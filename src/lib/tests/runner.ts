@@ -10,7 +10,7 @@ import {
 } from '~/lib/workflows/product-support/run-product-support-workflow';
 
 import { gradeWithCriteria } from './criteria-grader';
-import { expectedCriteriaSchema } from './criteria-schemas';
+import { buildExpectedCriteria } from './criteria-schemas';
 import { gradeSemanticDecline } from './decline-grader';
 import {
   gradeChatTestResponse,
@@ -150,13 +150,17 @@ async function runSingleTurnTestItem(
     const responseText = result.answerText || '';
 
     /**
-     * B0-616 — when this item carries `expected_criteria`, per-criterion grading is the
-     * pass/fail signal (tier-1-must-all-pass), not the legacy behavior-only heuristic below.
-     * Items without criteria are completely unaffected — `gradeWithCriteria` returns `null`
-     * and `gradeChatTestResponse` decides, exactly as before (zero migration required).
+     * B0-932 — the item's three concept columns ARE the criteria: `minimum_concepts` become
+     * tier-1 (a miss fails the item), `expected_concepts` and `expected_criteria` tier-2, deduped
+     * by concept identity so a phrase in both the mandatory and expected sets is scored once.
+     * `gradeWithCriteria` judges each phrase; `gradeChatTestResponse` turns that verdict into the
+     * item's pass/fail alongside the error/emptiness gate and the decline visibility override.
      */
-    const parsedCriteria = expectedCriteriaSchema.safeParse(testItem.expected_criteria);
-    const criteria = parsedCriteria.success ? parsedCriteria.data : [];
+    const criteria = buildExpectedCriteria({
+      minimumConcepts: testItem.minimum_concepts,
+      expectedConcepts: testItem.expected_concepts,
+      expectedCriteria: testItem.expected_criteria,
+    });
     const criteriaOutcome = await gradeWithCriteria({
       prompt: testItem.prompt,
       responseText,
@@ -165,27 +169,24 @@ async function runSingleTurnTestItem(
     }).catch(() => null);
 
     /**
-     * B0-755 — when this item has no `expected_criteria` (the entire pre-B0-616 golden-set
-     * corpus), a negative-expectation row's decline is judged async: the same fast exact/heuristic
-     * checks `gradeChatTestResponse` always ran, plus an LLM semantic-decline fallback for a
-     * response that expresses a decline in wording the fixed phrase list doesn't cover. Rows with
-     * criteria are unaffected — `gradeWithCriteria`'s own per-criterion semantic judgement already
-     * covers this case, so `gradeChatTestResponseAsync` never runs for them.
+     * B0-755/932 — the async superset only matters when the item declares mandatory concepts but
+     * `gradeWithCriteria` produced no verdict at all (it threw). Then, and only then, the LLM
+     * semantic-decline grader gets a last look, with the mandatory concepts as its description of
+     * what a correct refusal says. Every other item is decided synchronously above.
      */
-    const outcome =
-      criteriaOutcome ??
-      (await gradeChatTestResponseAsync({
-        item: testItem,
-        hasError: false,
-        responseText,
-        context: {
-          prompt: testItem.prompt,
-          idealResponse: testItem.ideal_response,
-          expectedConcepts: testItem.expected_concepts,
-          minimumConcepts: testItem.minimum_concepts,
-        },
-        checkSemanticDecline: gradeSemanticDecline,
-      }));
+    const outcome = await gradeChatTestResponseAsync({
+      item: testItem,
+      hasError: false,
+      responseText,
+      conceptGrading: criteriaOutcome,
+      context: {
+        prompt: testItem.prompt,
+        idealResponse: testItem.ideal_response,
+        expectedConcepts: testItem.expected_concepts,
+        minimumConcepts: testItem.minimum_concepts,
+      },
+      checkSemanticDecline: gradeSemanticDecline,
+    });
 
     // Loose `any` (matching the original `JSON.parse(JSON.stringify(result))` call this
     // replaces) — `response_payload` is `Json`, and threading a precise type through would
@@ -305,16 +306,35 @@ async function runMultiTurnTestItem(
         firstTurnTtftMs = ttftMs;
       }
 
+      /**
+       * B0-932 — this turn's own concept expectations are judged the same way an item's are:
+       * `minimum_concepts` → tier 1, `expected_concepts` → tier 2, judged by `gradeWithCriteria`.
+       * It happens here rather than in `evaluateMultiTurnScenario` because that evaluator is pure
+       * and this is a model call; the verdict rides on the executed turn.
+       */
+      const turnResponseText = result.answerText || '';
+      const turnCriteria = buildExpectedCriteria({
+        minimumConcepts: turn.expectations?.minimum_concepts,
+        expectedConcepts: turn.expectations?.expected_concepts,
+      });
+      const turnConceptGrading = await gradeWithCriteria({
+        prompt: turn.prompt,
+        responseText: turnResponseText,
+        criteria: turnCriteria,
+        modelTag: options?.modelTag,
+      }).catch(() => null);
+
       executedTurns.push({
         turnIndex,
         prompt: turn.prompt,
-        responseText: result.answerText || '',
+        responseText: turnResponseText,
         hasError: false,
         errorMessage: null,
         elapsedMs: Math.max(0, Date.now() - turnStartedAt),
         ttftMs,
         conversationId: result.conversationId,
         workflowRunId: result.workflowRunId ?? null,
+        conceptGrading: turnConceptGrading,
       });
     } catch (error) {
       const message =
@@ -338,14 +358,17 @@ async function runMultiTurnTestItem(
   const evaluation = evaluateMultiTurnScenario({ scenario, turns: executedTurns });
 
   /**
-   * A multi-turn row that ALSO carries `expected_criteria` is graded by BOTH: the criteria are
-   * applied to the FINAL turn's answer (the turn the scenario is driving toward) and folded in as
-   * an additional required check, so criteria authored on a scenario row can't silently do nothing.
-   * Rows without criteria are unaffected — `gradeWithCriteria` returns null.
+   * A multi-turn row that ALSO carries item-level concepts is graded by BOTH: the item's criteria
+   * are applied to the FINAL turn's answer (the turn the scenario is driving toward) and folded in
+   * as an additional required check, so concepts authored on a scenario row can't silently do
+   * nothing. Rows without any concepts are unaffected — `gradeWithCriteria` returns null.
    */
   const finalTurn = executedTurns.find((turn) => turn.turnIndex === scenario.turns.length);
-  const parsedCriteria = expectedCriteriaSchema.safeParse(testItem.expected_criteria);
-  const criteria = parsedCriteria.success ? parsedCriteria.data : [];
+  const criteria = buildExpectedCriteria({
+    minimumConcepts: testItem.minimum_concepts,
+    expectedConcepts: testItem.expected_concepts,
+    expectedCriteria: testItem.expected_criteria,
+  });
   const criteriaOutcome =
     finalTurn && !finalTurn.hasError
       ? await gradeWithCriteria({
@@ -425,7 +448,8 @@ async function runMultiTurnTestItem(
       fatalError,
       evaluation.failureReason,
       criteriaOutcome && !criteriaOutcome.passed
-        ? 'Final-turn expected_criteria were not met.'
+        ? (criteriaOutcome.failureReason ??
+          "The item's mandatory concepts were not covered by the final turn.")
         : null,
     ]
       .filter(Boolean)

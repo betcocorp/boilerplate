@@ -14,7 +14,7 @@
  *
  * Consumed by:
  *  - the trace page verdict band + `↑` breadcrumbs (B0-419)
- *  - the AI insights payload — `passed` / `expectedShouldAnswer` / `idealResponse` / `similarity` (B0-420)
+ *  - the AI insights payload — `passed` / `mandatoryConcepts` / `idealResponse` / `similarity` (B0-420)
  *  - the prompt-history strip, keyed off `testItemId` and excluding `testResultId` (B0-421)
  */
 
@@ -47,7 +47,14 @@ export type HarnessRunContext = {
   /* Prompt expectations ---------------------------------------------------- */
   rowIndex: number;
   prompt: string;
-  expectedShouldAnswer: boolean | null;
+  /**
+   * B0-932 — `test_items.minimum_concepts`, one phrase per element, verbatim. Replaces the dropped
+   * `expected_should_answer` flag as the prompt's recorded expectation: these are the concepts a
+   * correct answer had to cover, and covering all of them is what a harness PASS now means. Empty
+   * array when the item declares none — the honest "no expectation was recorded", which the report
+   * pipeline surfaces as Unable to Evaluate (B0-826).
+   */
+  mandatoryConcepts: string[];
   priority: number | null;
   /**
    * `test_items.ideal_response` — free-form prose, shown beside the answer and never
@@ -74,7 +81,7 @@ export type HarnessRunContext = {
 const RESULT_ITEM_COLUMNS =
   'id, workflow_run_id, test_item_id, test_result_id, row_index, passed, status, elapsed_ms, response_text, error_message, response_payload';
 const TEST_ITEM_COLUMNS =
-  'id, row_index, prompt, expected_should_answer, priority, ideal_response';
+  'id, row_index, prompt, minimum_concepts, priority, ideal_response';
 
 /**
  * PostgREST returns an embedded resource as an object or as a single-element array depending on how
@@ -104,13 +111,21 @@ function readNumber(
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
-/** `boolean | null` expectation flags must never be coerced — "unset" is a distinct verdict. */
-function readNullableBoolean(
+/**
+ * B0-932 — a `text[]` column, read defensively: PostgREST gives an array, but a row written before
+ * the retype (or a malformed embed) must degrade to "no concepts recorded", never to a crash or a
+ * fabricated expectation. Non-string elements and blank phrases are dropped; every surviving
+ * phrase is copied verbatim (regulated free text).
+ */
+function readStringArray(
   record: Record<string, unknown> | null,
   key: string,
-): boolean | null {
+): string[] {
   const value = record?.[key];
-  return typeof value === 'boolean' ? value : null;
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((entry): entry is string => typeof entry === 'string' && entry.trim() !== '');
 }
 
 /**
@@ -167,7 +182,7 @@ export function mapHarnessContextRow(row: unknown): HarnessRunContext | null {
     testItemId,
     rowIndex,
     prompt,
-    expectedShouldAnswer: readNullableBoolean(testItem, 'expected_should_answer'),
+    mandatoryConcepts: readStringArray(testItem, 'minimum_concepts'),
     priority: readNumber(testItem, 'priority'),
     idealResponse: readString(testItem, 'ideal_response'),
     passed: item.passed === true,

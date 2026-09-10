@@ -14,6 +14,12 @@ import { z } from 'zod';
  * never round/convert/infer. Exact criteria are checked as a literal substring match in
  * code (~/lib/tests/criteria-grader.ts), never left to an LLM's judgment. `semantic`
  * (the default) is judged by the grader model.
+ *
+ * B0-931/932 — criteria are no longer stored as tiered objects. `test_items.expected_concepts`,
+ * `minimum_concepts` and `expected_criteria` are `text[]` columns of plain phrases, and
+ * {@link buildExpectedCriteria} below turns those three arrays into the tiered
+ * `ExpectedCriterion[]` this module's grading machinery consumes. An entry opts into the
+ * deterministic literal check with an `exact:` prefix ({@link EXACT_MATCH_PREFIX}).
  */
 export const criteriaTierSchema = z.union([z.literal(1), z.literal(2), z.literal(3)]);
 export type CriteriaTier = z.infer<typeof criteriaTierSchema>;
@@ -28,9 +34,124 @@ export const expectedCriterionSchema = z.object({
 });
 export type ExpectedCriterion = z.infer<typeof expectedCriterionSchema>;
 
-/** The full shape of `test_items.expected_criteria`. Empty array = legacy behavior-only grading. */
-export const expectedCriteriaSchema = z.array(expectedCriterionSchema);
-export type ExpectedCriteria = z.infer<typeof expectedCriteriaSchema>;
+/**
+ * The in-memory shape of a built criteria list. Since B0-931 this is NOT the column shape —
+ * `test_items.expected_criteria` is a `text[]` of phrases; {@link buildExpectedCriteria} turns the
+ * three concept columns into this. Still exported because the admin item form renders a criteria
+ * list in this shape.
+ */
+
+/* -------------------------------------------------------------------------------------------- *
+ * B0-932 — building criteria from the three concept columns.
+ * -------------------------------------------------------------------------------------------- */
+
+/**
+ * Opt-in prefix on a single array entry that pins it to the deterministic literal check instead of
+ * the LLM's semantic judgement — e.g. `exact: EPA Reg. No. 12345-67`.
+ *
+ * The columns are plain `text[]`, so there is nowhere else to carry the flag, and the org's
+ * regulated-data rule makes that flag load-bearing: a dilution ratio, oz/gal, mL/L, ppm, contact
+ * time, CAS number, EPA registration number or log-reduction value must never be paraphrased into
+ * a pass by a grader model. The prefix is stripped from the stored concept, so the phrase that is
+ * judged, quoted in evidence and displayed is the real phrase — never the marked-up entry.
+ *
+ * Case-insensitive on the marker only; everything after it is copied verbatim (trimmed).
+ * Zero live rows use it today, so it costs nothing and keeps `gradeExactCriterion` reachable.
+ */
+export const EXACT_MATCH_PREFIX = 'exact:';
+
+/** One concept-column entry, split into the phrase itself and how it should be matched. */
+export type ParsedConceptPhrase = { concept: string; match: CriteriaMatchMode };
+
+/**
+ * Parses one `text[]` entry. Returns `null` for a blank entry (or one that is nothing but the
+ * `exact:` marker), which the callers drop — an empty phrase would otherwise match everything.
+ */
+export function parseConceptPhrase(entry: string): ParsedConceptPhrase | null {
+  const raw = entry.trim();
+  if (!raw) {
+    return null;
+  }
+
+  if (raw.slice(0, EXACT_MATCH_PREFIX.length).toLowerCase() === EXACT_MATCH_PREFIX) {
+    const concept = raw.slice(EXACT_MATCH_PREFIX.length).trim();
+    return concept ? { concept, match: 'exact' } : null;
+  }
+
+  return { concept: raw, match: 'semantic' };
+}
+
+/**
+ * Identity key for a concept phrase — set math only, never displayed.
+ *
+ * Ported (deliberately, not imported) from `normConcept` in
+ * `~/lib/tests/report/case-concepts.ts`, which is the report grader's cross-pass voting key: the
+ * two graders must agree on when two spellings are the same phrase, and that module belongs to the
+ * report pipeline. Keep the two in step if either changes.
+ *
+ * NFKD, combining marks stripped, lower-cased, every non-alphanumeric run collapsed to one space.
+ */
+export function conceptIdentityKey(phrase: string | null | undefined): string {
+  if (phrase == null) return '';
+  return String(phrase)
+    .normalize('NFKD')
+    .replace(/\p{M}+/gu, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+/** The phrases of one concept column, prefix-stripped and blank-filtered, order preserved. */
+export function conceptPhrases(
+  column: readonly string[] | null | undefined,
+): ParsedConceptPhrase[] {
+  if (!column) return [];
+  return column
+    .map((entry) => parseConceptPhrase(entry))
+    .filter((parsed): parsed is ParsedConceptPhrase => parsed !== null);
+}
+
+/**
+ * B0-932 — the single place `ExpectedCriterion[]` is derived from a test item's three concept
+ * columns. This is what makes mandatory concept coverage the pass/fail axis: `minimum_concepts`
+ * become tier-1 criteria, and a tier-1 miss fails the item in `aggregateCriteriaVerdicts`.
+ *
+ *   `minimum_concepts`  → tier 1 (mandatory — a miss fails the item)
+ *   `expected_concepts` → tier 2 (scored, does not fail the item on its own)
+ *   `expected_criteria` → tier 2 (same; the column is empty on every live row)
+ *
+ * **De-duplicated by {@link conceptIdentityKey}, first occurrence wins.** The mandatory set is
+ * usually a literal subset of the expected set, so without this a phrase in both columns would
+ * produce a tier-1 AND a tier-2 criterion and double-count in the weighted score (and be judged
+ * twice by the grader model). Because `minimum_concepts` is walked first, the survivor is always
+ * the tier-1 copy.
+ *
+ * `match` comes from the surviving entry's own `exact:` prefix (see {@link EXACT_MATCH_PREFIX}).
+ */
+export function buildExpectedCriteria(input: {
+  minimumConcepts?: readonly string[] | null;
+  expectedConcepts?: readonly string[] | null;
+  expectedCriteria?: readonly string[] | null;
+}): ExpectedCriterion[] {
+  const criteria: ExpectedCriterion[] = [];
+  const seen = new Set<string>();
+
+  const push = (parsed: ParsedConceptPhrase, tier: CriteriaTier) => {
+    const key = conceptIdentityKey(parsed.concept);
+    // A phrase whose identity key is empty (punctuation only) still gets one slot, keyed by its
+    // raw text, rather than collapsing every such phrase into one.
+    const dedupeKey = key || `raw:${parsed.concept}`;
+    if (seen.has(dedupeKey)) return;
+    seen.add(dedupeKey);
+    criteria.push({ concept: parsed.concept, tier, match: parsed.match });
+  };
+
+  for (const parsed of conceptPhrases(input.minimumConcepts)) push(parsed, 1);
+  for (const parsed of conceptPhrases(input.expectedConcepts)) push(parsed, 2);
+  for (const parsed of conceptPhrases(input.expectedCriteria)) push(parsed, 2);
+
+  return criteria;
+}
 
 /**
  * One grader verdict per criterion, keyed by its index in the item's `expected_criteria` array.
