@@ -652,11 +652,21 @@ describe('assembleReportData → report data contract', () => {
           `**Mandatory floor:** raised from ${e.weighted} to ${e.floor}`,
         );
       }
+      // B0-938 — the whole golden list is now rendered as a ticked/crossed checklist, so every
+      // required phrase must be reachable, not just the missed ones.
       if (e.mandatoryMissing) {
-        check(
-          `case[${c.id}].concepts.mandatory.missing`,
-          `**Missing mandatory concepts:** ${e.concepts.mandatory.missing.map((p) => `"${p}"`).join(', ')}`,
-        );
+        for (const phrase of e.concepts.mandatory.missing) {
+          check(`case[${c.id}].concepts.mandatory.missing`, `- ✗ "${phrase}"`);
+        }
+      }
+      for (const phrase of e.concepts.mandatory.satisfied) {
+        check(`case[${c.id}].concepts.mandatory.satisfied`, `- ✓ "${phrase}"`);
+      }
+      for (const phrase of e.concepts.expected.satisfied) {
+        check(`case[${c.id}].concepts.expected.satisfied`, `- ✓ "${phrase}"`);
+      }
+      for (const phrase of e.concepts.expected.missing) {
+        check(`case[${c.id}].concepts.expected.missing`, `- ✗ "${phrase}"`);
       }
       if (e.materialIssue) {
         check(

@@ -9,7 +9,6 @@ import {
   groupCasesByTier,
   isDefaultOpenCase,
   isExceptionCase,
-  expectedOnlyMissing,
   ledgerFilterEquals,
   matchesLedgerFilter,
   parseLedgerFilter,
@@ -318,49 +317,3 @@ describe('bulkDisclosureAction / applyBulkDisclosure', () => {
   });
 });
 
-describe('expectedOnlyMissing (B0-713)', () => {
-  /** Regulated phrases — asserted back verbatim, never re-punctuated or split on the comma. */
-  const MANDATORY = 'Dilute 1:64 (2 oz/gal), then dwell';
-  const BONUS = 'Metric equivalent 15.6 mL/L';
-
-  it('names a missing must-have once, leaving only the non-mandatory remainder in amber', () => {
-    expect(
-      expectedOnlyMissing({
-        mandatory: { required: [MANDATORY], satisfied: [], missing: [MANDATORY] },
-        expected: {
-          required: [MANDATORY, BONUS],
-          satisfied: [],
-          missing: [MANDATORY, BONUS],
-        },
-        materialIssue: false,
-        materialIssueNote: null,
-      }),
-    ).toEqual([BONUS]);
-  });
-
-  it('keeps a repeated phrase that is missing more times than it is mandatory', () => {
-    expect(
-      expectedOnlyMissing({
-        mandatory: { required: [MANDATORY], satisfied: [], missing: [MANDATORY] },
-        expected: {
-          required: [MANDATORY, MANDATORY],
-          satisfied: [],
-          missing: [MANDATORY, MANDATORY],
-        },
-        materialIssue: false,
-        materialIssueNote: null,
-      }),
-    ).toEqual([MANDATORY]);
-  });
-
-  it('returns nothing when the only expected misses are the mandatory ones', () => {
-    expect(
-      expectedOnlyMissing({
-        mandatory: { required: [MANDATORY], satisfied: [], missing: [MANDATORY] },
-        expected: { required: [MANDATORY], satisfied: [], missing: [MANDATORY] },
-        materialIssue: false,
-        materialIssueNote: null,
-      }),
-    ).toEqual([]);
-  });
-});

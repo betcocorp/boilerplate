@@ -1,6 +1,6 @@
 'use client';
 
-import { ChevronRight, ChevronsDownUp, ChevronsUpDown } from 'lucide-react';
+import { Check, ChevronRight, ChevronsDownUp, ChevronsUpDown, X } from 'lucide-react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { type ReactNode, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 
@@ -11,9 +11,9 @@ import {
 } from '~/components/admin/tests/report/CaseTraceDownloadButton';
 import {
   caseMarkers,
+  conceptChecklist,
   formatConceptCoverage,
   formatConceptList,
-  hasMandatoryMiss,
   MANDATORY_CONCEPTS_LABEL,
   mandatoryMissingLegend,
   NO_MANDATORY_CONCEPTS_NOTE,
@@ -566,24 +566,6 @@ function ActualColumn({ c }: { c: ReportCase }) {
 }
 
 /**
- * B0-713 — the expected-concept misses that are *not* also mandatory misses.
- *
- * Mandatory ⊆ expected, so a missing must-have appears in both lists. It is named once, in red,
- * and the amber line carries only the should-have/bonus remainder — otherwise the same regulated
- * phrase is printed twice in two colours and the reader has to work out that it is one miss.
- * Multiset-aware because a dataset may legitimately repeat a phrase.
- */
-export function expectedOnlyMissing(concepts: ReportCaseConcepts): string[] {
-  const remaining = [...concepts.mandatory.missing];
-  return concepts.expected.missing.filter((concept) => {
-    const at = remaining.indexOf(concept);
-    if (at === -1) return true;
-    remaining.splice(at, 1);
-    return false;
-  });
-}
-
-/**
  * The per-case concept lines (B0-813 / B0-835): where the Completeness came from, the coverage
  * readout, what each concept rule did to this case, and what is missing by name. Methodology §9
  * caps the per-case detail here — the full audit lives in the run-level rollup, not in every row.
@@ -594,11 +576,79 @@ export function expectedOnlyMissing(concepts: ReportCaseConcepts): string[] {
  *
  * Concept phrases are regulated free text and are rendered exactly as stored.
  */
+/**
+ * The concept checklist: every required phrase, in authored order, ticked or crossed.
+ *
+ * Regulated-data rule: a phrase is rendered verbatim and never truncated — long phrases wrap.
+ * The icon is decorative; each row carries a text label for screen readers, so the verdict is
+ * never conveyed by colour alone.
+ */
+function ConceptChecklist({
+  title,
+  coverage,
+  emphasis,
+}: {
+  title: string;
+  coverage: ReportCaseConcepts['mandatory'];
+  emphasis: 'mandatory' | 'expected';
+}) {
+  const entries = conceptChecklist(coverage);
+  if (entries.length === 0) return null;
+  const satisfied = entries.filter((entry) => entry.met).length;
+
+  return (
+    <div className="mt-3">
+      <p className="text-xs font-medium text-slate-700">
+        {title}{' '}
+        <span className="font-normal text-slate-500 tabular-nums">
+          {satisfied}/{entries.length}
+        </span>
+      </p>
+      <ul className="mt-1.5 space-y-1">
+        {entries.map((entry, index) => (
+          <li
+            className="flex items-start gap-2 text-sm break-words whitespace-pre-wrap"
+            key={`${emphasis}-${index}`}
+          >
+            {entry.met ? (
+              <Check
+                aria-hidden
+                className="mt-0.5 size-4 shrink-0 text-emerald-600"
+                strokeWidth={2.5}
+              />
+            ) : (
+              <X
+                aria-hidden
+                className={cn(
+                  'mt-0.5 size-4 shrink-0',
+                  emphasis === 'mandatory' ? 'text-rose-600' : 'text-amber-600',
+                )}
+                strokeWidth={2.5}
+              />
+            )}
+            <span className="sr-only">{entry.met ? 'Communicated:' : 'Missed:'}</span>
+            <span
+              className={cn(
+                entry.met
+                  ? 'text-slate-700'
+                  : emphasis === 'mandatory'
+                    ? 'font-medium text-rose-800'
+                    : 'text-amber-800',
+              )}
+            >
+              {entry.phrase}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function ConceptCoverageCard({ c }: { c: ReportCase }) {
   const concepts = c.concepts;
   if (!concepts) return null;
   const evaluated = c.evaluated;
-  const alsoExpected = expectedOnlyMissing(concepts);
   const noteIsDuplicate =
     evaluated != null &&
     (evaluated.floorApplied ||
@@ -657,17 +707,21 @@ function ConceptCoverageCard({ c }: { c: ReportCase }) {
         </p>
       ) : null}
 
-      {hasMandatoryMiss(concepts) ? (
-        <p className="mt-2 text-sm break-words whitespace-pre-wrap text-rose-700">
-          <span className="font-medium">Missing mandatory:</span>{' '}
-          {formatConceptList(concepts.mandatory.missing)}
-        </p>
-      ) : null}
-      {alsoExpected.length > 0 ? (
-        <p className="mt-1.5 text-sm break-words whitespace-pre-wrap text-amber-700">
-          <span className="font-medium">Missing expected:</span> {formatConceptList(alsoExpected)}
-        </p>
-      ) : null}
+      {/*
+        B0-938 — the per-concept checklist replaces the former "Missing mandatory / Missing
+        expected" prose lines. Those named only what was missed; this shows the whole golden list
+        so a reader can see what was asked for as well as what was delivered.
+      */}
+      <ConceptChecklist
+        coverage={concepts.mandatory}
+        emphasis="mandatory"
+        title="Must-have concepts"
+      />
+      <ConceptChecklist
+        coverage={concepts.expected}
+        emphasis="expected"
+        title="Expected concepts"
+      />
 
       {concepts.materialIssue ? (
         <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-sm break-words whitespace-pre-wrap text-amber-900 ring-1 ring-amber-200 ring-inset">

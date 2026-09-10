@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  CONCEPT_CHECK_MARKS,
   CONCEPT_MARKER_LEGEND,
   CONCEPT_MARKERS,
+  conceptChecklist,
+  formatConceptChecklistLine,
   mandatoryMissingLegend,
 } from './case-concepts';
 import { DEFAULT_SCORING_RULES, type ScoringRules } from './scoring-config';
@@ -44,6 +47,69 @@ describe('mandatoryMissingLegend', () => {
   it('keeps the default legend equal to the legend at the shipped defaults', () => {
     expect(CONCEPT_MARKER_LEGEND.mandatoryMissing).toBe(
       mandatoryMissingLegend(DEFAULT_SCORING_RULES),
+    );
+  });
+});
+
+/**
+ * B0-938 — the per-case concept checklist the ledger and the Markdown report both render. Both
+ * surfaces call `conceptChecklist`, so these cases pin what a reader sees in either one.
+ */
+describe('conceptChecklist (B0-938)', () => {
+  /** Regulated phrases — asserted back verbatim, never re-punctuated, re-cased or split. */
+  const DILUTION = 'Dilute 1:64 (2 oz/gal), then dwell';
+  const CONTACT = 'Keep the surface visibly wet for 10 minutes';
+  const EPA = 'EPA Reg. No. 1839-95';
+
+  it('returns every required concept in authored order, marked satisfied or missed', () => {
+    expect(
+      conceptChecklist({
+        required: [DILUTION, CONTACT, EPA],
+        satisfied: [CONTACT],
+        missing: [DILUTION, EPA],
+      }),
+    ).toEqual([
+      { phrase: DILUTION, met: false },
+      { phrase: CONTACT, met: true },
+      { phrase: EPA, met: false },
+    ]);
+  });
+
+  it('emits phrases verbatim — regulated values survive byte-for-byte', () => {
+    const entries = conceptChecklist({
+      required: [DILUTION, EPA],
+      satisfied: [DILUTION, EPA],
+      missing: [],
+    });
+    expect(entries.map((entry) => entry.phrase)).toEqual([DILUTION, EPA]);
+  });
+
+  it('matches on identity key, so a re-cased or re-punctuated vote still counts as satisfied', () => {
+    expect(
+      conceptChecklist({
+        required: [CONTACT],
+        satisfied: ['keep the surface visibly wet for 10 minutes.'],
+        missing: [],
+      }),
+    ).toEqual([{ phrase: CONTACT, met: true }]);
+  });
+
+  it('marks a phrase that reached neither bucket as missed rather than dropping it', () => {
+    expect(conceptChecklist({ required: [DILUTION], satisfied: [], missing: [] })).toEqual([
+      { phrase: DILUTION, met: false },
+    ]);
+  });
+
+  it('is empty when the case specified no concepts of that kind', () => {
+    expect(conceptChecklist({ required: [], satisfied: [], missing: [] })).toEqual([]);
+  });
+
+  it('renders a Markdown line per entry, quoting the phrase verbatim', () => {
+    expect(formatConceptChecklistLine({ phrase: DILUTION, met: true })).toBe(
+      `- ${CONCEPT_CHECK_MARKS.met} "${DILUTION}"`,
+    );
+    expect(formatConceptChecklistLine({ phrase: EPA, met: false })).toBe(
+      `- ${CONCEPT_CHECK_MARKS.missed} "${EPA}"`,
     );
   });
 });
