@@ -1,3 +1,10 @@
+# [4.5.0](https://github.com/betcocorp/bex2.0/compare/v4.4.0...v4.5.0) (2026-09-10)
+
+
+### Features
+
+* **B0-925:** add TTFT and elapsed-time charts to eval reports page ([41ae0ae](https://github.com/betcocorp/bex2.0/commit/41ae0aebb5c60e4b8325012e2125affc7a4ab7c0))
+
 # [4.4.0](https://github.com/betcocorp/bex2.0/compare/v4.3.0...v4.4.0) (2026-09-09)
 
 
