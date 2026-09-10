@@ -33,11 +33,14 @@ type EditTestItemDialogProps = {
   source: string | null;
   priority: number | null;
   idealResponse: string | null;
-  expectedConcepts: string | null;
-  minimumConcepts: string | null;
-  /** Mini-syntax string (~/lib/tests/csv formatExpectedCriteriaCell), e.g. "t1: dilution 4 oz/gal". */
-  expectedCriteria: string;
-  expectedSources: string | null;
+  /** `test_items.expected_concepts` — one verbatim phrase per element (B0-934). */
+  expectedConcepts: string[];
+  /** `test_items.minimum_concepts` — the mandatory subset. */
+  minimumConcepts: string[];
+  /** `test_items.expected_criteria` — plain phrases; the tiered mini-syntax is retired. */
+  expectedCriteria: string[];
+  /** `test_items.expected_sources` — `rag.document.id` uuids. */
+  expectedSources: string[];
   shouldCite: boolean | null;
   inputPayload: Json;
   /** `ProdLineKey` → display name (`ProdLineDescr`) for canonical product suggestions. */
@@ -107,8 +110,8 @@ export function EditTestItemDialog({
         <DialogHeader>
           <DialogTitle>Edit prompt (row {rowIndex})</DialogTitle>
           <DialogDescription>
-            Update this prompt and its expected outcome. Structured optional
-            fields use the same keys as CSV import and update input_payload;
+            Update this prompt and its expected outcome. Optional fields use the
+            same keys as CSV import; question category updates input_payload and
             prompt length updates metadata automatically.
           </DialogDescription>
         </DialogHeader>
@@ -129,14 +132,12 @@ export function EditTestItemDialog({
                 source: source ?? '',
                 priority: priority === null ? '' : String(priority),
                 idealResponse: idealResponse ?? '',
-                expectedConcepts: expectedConcepts ?? '',
-                minimumConcepts: minimumConcepts ?? '',
+                expectedConcepts,
+                minimumConcepts,
                 expectedCriteria,
-                expectedSources: expectedSources ?? '',
+                expectedSources,
                 shouldCite: shouldCiteLabel(shouldCite),
-                productMention: payloadString(inputPayload, 'product_mention'),
                 questionCategory: payloadString(inputPayload, 'question_category'),
-                sourceStyle: payloadString(inputPayload, 'source_style'),
                 // B0-537 — pretty-printed so the scenario is actually editable in a textarea.
                 multiTurnJson: formatMultiTurnScenarioForEditing(inputPayload),
               }}

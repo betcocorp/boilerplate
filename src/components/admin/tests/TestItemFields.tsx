@@ -1,19 +1,19 @@
 'use client';
 
-import { ChevronDownIcon, ChevronUpIcon } from 'lucide-react';
-import { useState } from 'react';
+import { PlusIcon, XIcon } from 'lucide-react';
+import { type ReactNode, useState } from 'react';
 
+import { DocumentPickerField } from '~/components/admin/tests/DocumentPickerField';
 import { FilterableSuggestionField } from '~/components/admin/tests/FilterableSuggestionField';
 import { Button } from '~/components/ui/button';
 import { Input } from '~/components/ui/input';
 import { Label } from '~/components/ui/label';
 import { Textarea } from '~/components/ui/textarea';
-import { cn } from '~/lib/utils';
 
 /** Values match the `should_cite` CSV cell / `parseShouldCiteFromForm` in `~/lib/tests/csv`. */
 const SHOULD_CITE_PRESETS = ['yes', 'no'] as const;
 
-/** Common origins for a test prompt — distinct from `sourceStyle` (how it was authored). */
+/** Common origins for a test prompt. */
 const SOURCE_PRESETS = ['bex', 'email', 'contact-us'] as const;
 
 /** B0-537 — shape hint for the multi-turn field, matching `multiTurnScenarioSchema`. */
@@ -32,6 +32,10 @@ export type TestItemSuggestionLists = {
   canonicalProducts: string[];
   reasonCodes: string[];
   sources: string[];
+  /**
+   * Still built by `[testId]/page.tsx` even though the form no longer renders product-mention or
+   * source-style fields (B0-934 removed both). Kept so that page keeps type-checking.
+   */
   productMentions: string[];
   questionCategories: string[];
   sourceStyles: string[];
@@ -45,15 +49,17 @@ export type TestItemFieldsInitialValues = {
   source?: string;
   priority?: string;
   idealResponse?: string;
-  expectedConcepts?: string;
-  minimumConcepts?: string;
-  expectedCriteria?: string;
-  expectedSources?: string;
+  /** One phrase per element — `test_items.expected_concepts` is `text[]` (B0-934). */
+  expectedConcepts?: string[];
+  /** The mandatory subset — `test_items.minimum_concepts` `text[]`. */
+  minimumConcepts?: string[];
+  /** `test_items.expected_criteria` `text[]`; the old `t1:`/`t1x:`/`t2:` mini-syntax is retired. */
+  expectedCriteria?: string[];
+  /** `rag.document.id` uuids — `test_items.expected_sources` `uuid[]`. */
+  expectedSources?: string[];
   /** `'yes'` / `'no'` / `''` — matches the CSV cell vocabulary. */
   shouldCite?: string;
-  productMention?: string;
   questionCategory?: string;
-  sourceStyle?: string;
   /** B0-537 — pretty-printed `input_payload.multi_turn` scenario, or '' for a single-turn row. */
   multiTurnJson?: string;
 };
@@ -68,10 +74,135 @@ type TestItemFieldsProps = {
   initialValues?: TestItemFieldsInitialValues;
 };
 
+type PhraseListFieldProps = {
+  id: string;
+  /** Form field name repeated once per phrase — read with `formData.getAll(name)`. */
+  name: string;
+  label: ReactNode;
+  description: ReactNode;
+  placeholder: string;
+  initialPhrases: readonly string[];
+};
+
+/**
+ * Add-one-at-a-time list of verbatim phrases (B0-934).
+ *
+ * Regulated-data rule: a phrase is stored exactly as typed. The only change ever applied is
+ * stripping leading/trailing whitespace on add — never inside the phrase, never re-cased, never
+ * re-punctuated, so a dilution ratio, ppm value, contact time, CAS number or EPA registration
+ * number survives a round-trip byte for byte.
+ *
+ * The submitted payload is repeated hidden inputs rendered from state, not controlled visible
+ * fields: React 19 resets uncontrolled form fields when a `<form action>` succeeds, so the typed
+ * draft input is kept deliberately separate from the inputs that carry the data.
+ */
+function PhraseListField({
+  id,
+  name,
+  label,
+  description,
+  placeholder,
+  initialPhrases,
+}: PhraseListFieldProps) {
+  const [phrases, setPhrases] = useState<string[]>(() => [...initialPhrases]);
+  const [draft, setDraft] = useState('');
+
+  const addDraft = () => {
+    // Trimming the ends is the only permitted normalisation — see the doc comment above.
+    const phrase = draft.trim();
+    if (!phrase || phrases.includes(phrase)) {
+      setDraft('');
+      return;
+    }
+    setPhrases((current) => [...current, phrase]);
+    setDraft('');
+  };
+
+  const removeAt = (index: number) => {
+    setPhrases((current) => current.filter((_, i) => i !== index));
+  };
+
+  return (
+    <div className="grid gap-2">
+      <Label htmlFor={id}>{label}</Label>
+      <div className="flex gap-2">
+        <Input
+          id={id}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              // Otherwise Enter submits the surrounding dialog form.
+              event.preventDefault();
+              addDraft();
+            }
+          }}
+          placeholder={placeholder}
+          value={draft}
+        />
+        <Button
+          className="shrink-0"
+          disabled={draft.trim().length === 0}
+          onClick={addDraft}
+          type="button"
+          variant="outline"
+        >
+          <PlusIcon className="size-4" />
+          Add
+        </Button>
+      </div>
+
+      {phrases.length > 0 ? (
+        <ul className="flex flex-wrap gap-1.5">
+          {phrases.map((phrase, index) => (
+            <li key={`${phrase}-${index}`}>
+              <span className="inline-flex max-w-full items-center gap-1 rounded-2xl border border-border bg-muted/60 py-1 pl-2.5 pr-1 text-xs">
+                <span className="break-words whitespace-pre-wrap text-foreground">
+                  {phrase}
+                </span>
+                <Button
+                  aria-label={`Remove “${phrase}”`}
+                  className="size-5 shrink-0 rounded-full"
+                  onClick={() => removeAt(index)}
+                  size="icon-sm"
+                  type="button"
+                  variant="ghost"
+                >
+                  <XIcon className="size-3" />
+                </Button>
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      {phrases.map((phrase, index) => (
+        <input
+          key={`${name}-${index}`}
+          name={name}
+          type="hidden"
+          value={phrase}
+        />
+      ))}
+
+      <p className="text-xs text-muted-foreground">{description}</p>
+    </div>
+  );
+}
+
+/** Shared regulated-data caveat under every phrase list. */
+const VERBATIM_NOTE = (
+  <>
+    {' '}
+    Each phrase is stored exactly as typed — dilution ratios, oz/gal, mL/L, ppm,
+    contact times, CAS numbers and EPA registration numbers are never rounded,
+    converted or reformatted.
+  </>
+);
+
 /**
  * Shared form body for the admin "Add prompt" / "Edit prompt" dialogs. Renders
- * the prompt + expected/structured fields; the surrounding `<form>` (action and
- * hidden ids) lives in the dialog component.
+ * the prompt + expected fields; the surrounding `<form>` (action and hidden ids)
+ * lives in the dialog component.
  */
 export function TestItemFields({
   idPrefix,
@@ -79,13 +210,6 @@ export function TestItemFields({
   suggestionLists,
   initialValues,
 }: TestItemFieldsProps) {
-  const hasStructured = Boolean(
-    initialValues?.productMention ||
-      initialValues?.questionCategory ||
-      initialValues?.sourceStyle,
-  );
-  const [structuredOpen, setStructuredOpen] = useState(hasStructured);
-
   return (
     <>
       <div className="grid gap-2">
@@ -150,10 +274,24 @@ export function TestItemFields({
         suggestionsFromDataset={suggestionLists.sources}
       />
       <p className="text-xs text-muted-foreground">
-        Where the prompt originated — e.g. email, bex, contact-us. Different
-        from Source style below, which describes how the question was
-        authored.
+        Where the prompt originated — e.g. email, bex, contact-us.
       </p>
+
+      <FilterableSuggestionField
+        id={`${idPrefix}-question-category`}
+        initialValue={initialValues?.questionCategory}
+        label={
+          <>
+            Question category{' '}
+            <span className="font-normal text-muted-foreground">
+              (optional)
+            </span>
+          </>
+        }
+        name="questionCategory"
+        placeholder="Choose from dataset or type a value"
+        suggestionsFromDataset={suggestionLists.questionCategories}
+      />
 
       <div className="grid gap-2">
         <Label htmlFor={`${idPrefix}-priority`}>
@@ -190,77 +328,78 @@ export function TestItemFields({
         />
       </div>
 
-      <div className="grid gap-2">
-        <Label htmlFor={`${idPrefix}-expected-concepts`}>
-          Expected concepts{' '}
-          <span className="font-normal text-muted-foreground">(optional)</span>
-        </Label>
-        <Textarea
-          defaultValue={initialValues?.expectedConcepts}
-          id={`${idPrefix}-expected-concepts`}
-          name="expectedConcepts"
-          placeholder="e.g. 13 oz/gal or 100 mL/L; 1:10 with water"
-          rows={3}
-        />
-        <p className="text-xs text-muted-foreground">
-          Key concepts a complete answer should contain. Stored exactly as typed
-          — dilution ratios, ppm, and contact times are never reformatted.
-        </p>
-      </div>
+      <PhraseListField
+        description={
+          <>
+            Key concepts a complete answer should contain — should-haves. Add one
+            phrase at a time (Enter or Add).{VERBATIM_NOTE}
+          </>
+        }
+        id={`${idPrefix}-expected-concepts`}
+        initialPhrases={initialValues?.expectedConcepts ?? []}
+        label={
+          <>
+            Expected concepts{' '}
+            <span className="font-normal text-muted-foreground">(optional)</span>
+          </>
+        }
+        name="expectedConcepts"
+        placeholder="e.g. 13 oz/gal or 100 mL/L"
+      />
 
-      <div className="grid gap-2">
-        <Label htmlFor={`${idPrefix}-minimum-concepts`}>
-          Minimum concepts{' '}
-          <span className="font-normal text-muted-foreground">(optional)</span>
-        </Label>
-        <Textarea
-          defaultValue={initialValues?.minimumConcepts}
-          id={`${idPrefix}-minimum-concepts`}
-          name="minimumConcepts"
-          placeholder="e.g. 13 oz/gal"
-          rows={2}
-        />
-        <p className="text-xs text-muted-foreground">
-          The subset of the above a reviewer must see for this row to pass.
-        </p>
-      </div>
+      <PhraseListField
+        description={
+          <>
+            The must-have subset a reviewer has to see for this row to pass.
+            {VERBATIM_NOTE}
+          </>
+        }
+        id={`${idPrefix}-minimum-concepts`}
+        initialPhrases={initialValues?.minimumConcepts ?? []}
+        label={
+          <>
+            Minimum concepts{' '}
+            <span className="font-normal text-muted-foreground">(optional)</span>
+          </>
+        }
+        name="minimumConcepts"
+        placeholder="e.g. 13 oz/gal"
+      />
 
-      <div className="grid gap-2">
-        <Label htmlFor={`${idPrefix}-expected-criteria`}>
-          Expected criteria (tiered){' '}
-          <span className="font-normal text-muted-foreground">(optional)</span>
-        </Label>
-        <Textarea
-          defaultValue={initialValues?.expectedCriteria}
-          id={`${idPrefix}-expected-criteria`}
-          name="expectedCriteria"
-          placeholder="t1: dilution 4 oz/gal; t1x: EPA Reg. No. 12345-67; t2: dwell time"
-          rows={2}
-        />
-        <p className="text-xs text-muted-foreground">
-          Semicolon-separated <code>t1</code>/<code>t2</code>/<code>t3</code> (must-have /
-          should-have / bonus) criteria the grader checks individually. Trailing{' '}
-          <code>x</code> (e.g. <code>t1x:</code>) marks an exact, literal match for regulated
-          values — never rounded or paraphrased. Leave blank to keep this row on today&rsquo;s
-          behavior-only grading.
-        </p>
-      </div>
+      <PhraseListField
+        description={
+          <>
+            Additional criteria the grader checks individually — should-haves,
+            same tier as Expected concepts. Tier now comes from the field a phrase
+            lives in (Minimum concepts are the must-haves), so the old{' '}
+            <code>t1:</code> / <code>t1x:</code> / <code>t2:</code> prefixes are
+            retired — type the criterion itself.{VERBATIM_NOTE}
+          </>
+        }
+        id={`${idPrefix}-expected-criteria`}
+        initialPhrases={initialValues?.expectedCriteria ?? []}
+        label={
+          <>
+            Expected criteria{' '}
+            <span className="font-normal text-muted-foreground">(optional)</span>
+          </>
+        }
+        name="expectedCriteria"
+        placeholder="e.g. EPA Reg. No. 1839-83-4170"
+      />
 
-      <div className="grid gap-2">
-        <Label htmlFor={`${idPrefix}-expected-sources`}>
-          Expected sources{' '}
-          <span className="font-normal text-muted-foreground">(optional)</span>
-        </Label>
-        <Input
-          defaultValue={initialValues?.expectedSources}
-          id={`${idPrefix}-expected-sources`}
-          name="expectedSources"
-          placeholder="e.g. Ax-It Plus TDS, Selector Guide Section 1"
-        />
-        <p className="text-xs text-muted-foreground">
-          Comma-separated sources the answer should be grounded in.
-        </p>
-      </div>
+      <DocumentPickerField
+        description="Betco documents the answer should be grounded in. Search by product or document title; the row stores each document's id, so a renamed document keeps matching."
+        id={`${idPrefix}-expected-sources`}
+        initialDocumentIds={initialValues?.expectedSources ?? []}
+        label={
+          <>
+            Expected sources{' '}
+            <span className="font-normal text-muted-foreground">(optional)</span>
+          </>
+        }
+        name="expectedSources"
+      />
 
       <FilterableSuggestionField
         id={`${idPrefix}-should-cite`}
@@ -304,73 +443,6 @@ export function TestItemFields({
           row back. Keep expectations structural — never author dilution ratios, contact times, or
           EPA numbers you have not read verbatim off a label.
         </p>
-      </div>
-
-      <div className="rounded-2xl border border-slate-200 bg-slate-50/80">
-        <Button
-          aria-expanded={structuredOpen}
-          className="h-auto w-full justify-start rounded-2xl p-4 text-left font-normal hover:bg-slate-100/80"
-          onClick={() => setStructuredOpen((open) => !open)}
-          type="button"
-          variant="ghost"
-        >
-          <span
-            aria-hidden
-            className="size-2.5 shrink-0 rounded-full bg-red-500 ring-2 ring-red-500/25"
-          />
-          <span className="min-w-0 flex-1 text-sm font-medium text-slate-800">
-            Structured inputs{' '}
-            <span className="font-normal text-muted-foreground">
-              (optional — CSV columns → input_payload)
-            </span>
-          </span>
-          {structuredOpen ? (
-            <ChevronUpIcon
-              aria-hidden
-              className="size-5 shrink-0 text-slate-600"
-            />
-          ) : (
-            <ChevronDownIcon
-              aria-hidden
-              className="size-5 shrink-0 text-slate-600"
-            />
-          )}
-        </Button>
-        <div
-          className={cn(
-            'grid transition-[grid-template-rows] duration-300 ease-out',
-            structuredOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]',
-          )}
-        >
-          <div className="min-h-0 overflow-hidden">
-            <div className="grid gap-3 border-t border-slate-200/80 px-4 pb-4 pt-4">
-              <FilterableSuggestionField
-                id={`${idPrefix}-product-mention`}
-                initialValue={initialValues?.productMention}
-                label="Product mention"
-                name="productMention"
-                placeholder="Choose from dataset or type a value"
-                suggestionsFromDataset={suggestionLists.productMentions}
-              />
-              <FilterableSuggestionField
-                id={`${idPrefix}-question-category`}
-                initialValue={initialValues?.questionCategory}
-                label="Question category"
-                name="questionCategory"
-                placeholder="Choose from dataset or type a value"
-                suggestionsFromDataset={suggestionLists.questionCategories}
-              />
-              <FilterableSuggestionField
-                id={`${idPrefix}-source-style`}
-                initialValue={initialValues?.sourceStyle}
-                label="Source style"
-                name="sourceStyle"
-                placeholder="Choose from dataset or type a value"
-                suggestionsFromDataset={suggestionLists.sourceStyles}
-              />
-            </div>
-          </div>
-        </div>
       </div>
     </>
   );
