@@ -45,13 +45,11 @@ const DECLINE_CONCEPT_ITEM: GradableExpectations = {
     'pricing varies by distributor and agreement so any figure would be unreliable',
     'Betco representative or distributor can quote it',
   ],
-  expected_criteria: [],
 };
 
 const NO_MANDATORY_ITEM: GradableExpectations = {
   minimum_concepts: [],
   expected_concepts: [],
-  expected_criteria: [],
 };
 
 /** A `gradeWithCriteria` verdict stub — only `passed` feeds the mandatory-coverage decision. */
@@ -177,7 +175,6 @@ describe('gradeChatTestResponse — mandatory concept coverage is the pass axis 
       item: {
         minimum_concepts: ['exact: EPA Reg. No. 1839-83'],
         expected_concepts: [],
-        expected_criteria: [],
       },
       hasError: false,
       responseText: ANSWER,

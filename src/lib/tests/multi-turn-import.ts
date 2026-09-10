@@ -132,7 +132,6 @@ export function buildTestItemFromScenario(params: {
     prompt: scenario.turns[0].prompt,
     expected_concepts: [],
     minimum_concepts: [],
-    expected_criteria: [],
     intended_agent_item: params.intendedAgent ?? null,
     input_payload: {
       [MULTI_TURN_PAYLOAD_KEY]: JSON.parse(JSON.stringify(scenario)),

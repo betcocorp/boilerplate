@@ -48,7 +48,6 @@ export type TestPromptRow = {
   /** B0-933 — one concept phrase per element; rendered and exported verbatim. */
   expected_concepts: string[];
   minimum_concepts: string[];
-  expected_criteria: string[];
   /** B0-933 — `rag.document.id` uuids, resolved to titles for display by the server component. */
   expected_sources: string[];
   should_cite: boolean | null;
@@ -126,7 +125,6 @@ function rowMatchesQuery(
     [
       ...item.expected_concepts,
       ...item.minimum_concepts,
-      ...item.expected_criteria,
       // Match what the cell shows (document titles), not the raw uuids behind it.
       ...item.expected_sources.map((id) => formatExpectedSource(id, documentTitlesById)),
     ].some((value) => value.toLowerCase().includes(q))
@@ -155,7 +153,6 @@ function ConceptExpectationsCell({
 }) {
   const usesMinimum = item.minimum_concepts.length > 0;
   const concepts = usesMinimum ? item.minimum_concepts : item.expected_concepts;
-  const criteriaLabel = joinPhrases(item.expected_criteria);
   const conceptsLabel = joinPhrases(concepts);
   const sourceLabels = item.expected_sources.map((id) =>
     formatExpectedSource(id, documentTitlesById),
@@ -163,8 +160,7 @@ function ConceptExpectationsCell({
   const hasAny =
     concepts.length > 0 ||
     sourceLabels.length > 0 ||
-    item.should_cite !== null ||
-    item.expected_criteria.length > 0;
+    item.should_cite !== null;
 
   if (!hasAny) {
     return <span className="text-slate-400">—</span>;
@@ -172,14 +168,6 @@ function ConceptExpectationsCell({
 
   return (
     <div className="flex flex-col gap-1">
-      {item.expected_criteria.length > 0 ? (
-        <span
-          className="line-clamp-2 whitespace-normal font-medium text-sky-700"
-          title={criteriaLabel}
-        >
-          Criteria: {criteriaLabel}
-        </span>
-      ) : null}
       {concepts.length > 0 ? (
         <span className="line-clamp-2 whitespace-normal" title={conceptsLabel}>
           {usesMinimum ? 'Min: ' : 'Expected: '}
@@ -412,7 +400,6 @@ export function TestPromptsSection({
       'source_style',
       'expected_concepts',
       'minimum_concepts',
-      'expected_criteria',
       'expected_sources',
       'should_cite',
       // B0-537 — so a downloaded set round-trips its scenarios on re-upload.
@@ -434,7 +421,6 @@ export function TestPromptsSection({
           payloadString(item.input_payload, 'source_style'),
           joinPhrases(item.expected_concepts),
           joinPhrases(item.minimum_concepts),
-          joinPhrases(item.expected_criteria),
           // Round-trips as ids — the importer resolves `expected_sources` to `rag.document.id`.
           joinPhrases(item.expected_sources),
           formatYesNoExport(item.should_cite),
@@ -711,7 +697,6 @@ export function TestPromptsSection({
                             item.expected_canonical_product
                           }
                           expectedConcepts={item.expected_concepts}
-                          expectedCriteria={item.expected_criteria}
                           expectedReasonCode={item.expected_reason_code}
                           expectedSources={item.expected_sources}
                           idealResponse={item.ideal_response}

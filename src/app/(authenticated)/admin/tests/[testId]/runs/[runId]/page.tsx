@@ -218,7 +218,6 @@ export default async function AdminTestRunDetailsPage({
       {
         expected_concepts: item.expected_concepts,
         minimum_concepts: item.minimum_concepts,
-        expected_criteria: item.expected_criteria,
         expected_sources: item.expected_sources,
         should_cite: item.should_cite,
       },
@@ -529,7 +528,6 @@ export default async function AdminTestRunDetailsPage({
       ideal_response: idealResponseByItemId.get(row.test_item_id) ?? '',
       expected_concepts: joinPhrases(expectations?.expected_concepts),
       minimum_concepts: joinPhrases(expectations?.minimum_concepts),
-      expected_criteria: joinPhrases(expectations?.expected_criteria),
       expected_sources: joinPhrases(expectations?.expected_sources),
       should_cite: formatYesNoExport(expectations?.should_cite ?? null),
       item_detail_path: `/admin/tests/${test.id}/items/${row.test_item_id}`,
@@ -598,10 +596,6 @@ export default async function AdminTestRunDetailsPage({
             minimum_concepts: joinPhrases(
               conceptExpectationsByItemId.get(row.test_item_id)
                 ?.minimum_concepts,
-            ),
-            expected_criteria: joinPhrases(
-              conceptExpectationsByItemId.get(row.test_item_id)
-                ?.expected_criteria,
             ),
             expected_sources: joinPhrases(
               conceptExpectationsByItemId.get(row.test_item_id)

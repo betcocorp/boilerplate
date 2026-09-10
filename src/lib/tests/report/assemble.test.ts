@@ -104,7 +104,6 @@ function item(partial: Partial<TestItemRecord> & Pick<TestItemRecord, 'id' | 'pr
     should_cite: null,
     source: null,
     intended_agent_item: null,
-    expected_criteria: [],
     expected_tool: null,
     ...partial,
   } as unknown as TestItemRecord;

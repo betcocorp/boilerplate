@@ -97,13 +97,12 @@ export type ParsedCsvRow = {
   priority: number | null;
   idealResponse: string | null;
   /**
-   * B0-931 — `expected_concepts` / `minimum_concepts` / `expected_criteria` are `text[]` columns.
+   * B0-931 — `expected_concepts` and `minimum_concepts` are `text[]` columns.
    * One element per phrase, split structurally by `splitPhraseCell` (`./csv`) and stored verbatim.
    * Empty array when the cell is absent, blank, or an empty-cell marker.
    */
   expectedConcepts: string[];
   minimumConcepts: string[];
-  expectedCriteria: string[];
   /** B0-931 — `rag.document.id` uuids. Non-uuid tokens land in {@link ParsedCsvRow.warnings}. */
   expectedSources: string[];
   shouldCite: boolean | null;

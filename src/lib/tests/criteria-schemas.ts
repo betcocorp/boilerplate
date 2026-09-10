@@ -15,10 +15,10 @@ import { z } from 'zod';
  * code (~/lib/tests/criteria-grader.ts), never left to an LLM's judgment. `semantic`
  * (the default) is judged by the grader model.
  *
- * B0-931/932 — criteria are no longer stored as tiered objects. `test_items.expected_concepts`,
- * `minimum_concepts` and `expected_criteria` are `text[]` columns of plain phrases, and
- * {@link buildExpectedCriteria} below turns those three arrays into the tiered
- * `ExpectedCriterion[]` this module's grading machinery consumes. An entry opts into the
+ * B0-931/932 — criteria are no longer stored as tiered objects. `test_items.expected_concepts`
+ * and `minimum_concepts` are `text[]` columns of plain phrases, and {@link buildExpectedCriteria}
+ * below turns those two arrays into the tiered `ExpectedCriterion[]` this module's grading
+ * machinery consumes. An entry opts into the
  * deterministic literal check with an `exact:` prefix ({@link EXACT_MATCH_PREFIX}).
  */
 export const criteriaTierSchema = z.union([z.literal(1), z.literal(2), z.literal(3)]);
@@ -33,13 +33,6 @@ export const expectedCriterionSchema = z.object({
   match: criteriaMatchModeSchema.default('semantic'),
 });
 export type ExpectedCriterion = z.infer<typeof expectedCriterionSchema>;
-
-/**
- * The in-memory shape of a built criteria list. Since B0-931 this is NOT the column shape —
- * `test_items.expected_criteria` is a `text[]` of phrases; {@link buildExpectedCriteria} turns the
- * three concept columns into this. Still exported because the admin item form renders a criteria
- * list in this shape.
- */
 
 /* -------------------------------------------------------------------------------------------- *
  * B0-932 — building criteria from the three concept columns.
@@ -112,13 +105,16 @@ export function conceptPhrases(
 }
 
 /**
- * B0-932 — the single place `ExpectedCriterion[]` is derived from a test item's three concept
- * columns. This is what makes mandatory concept coverage the pass/fail axis: `minimum_concepts`
- * become tier-1 criteria, and a tier-1 miss fails the item in `aggregateCriteriaVerdicts`.
+ * B0-932 — the single place `ExpectedCriterion[]` is derived from a test item's concept columns.
+ * This is what makes mandatory concept coverage the pass/fail axis: `minimum_concepts` become
+ * tier-1 criteria, and a tier-1 miss fails the item in `aggregateCriteriaVerdicts`.
  *
  *   `minimum_concepts`  → tier 1 (mandatory — a miss fails the item)
  *   `expected_concepts` → tier 2 (scored, does not fail the item on its own)
- *   `expected_criteria` → tier 2 (same; the column is empty on every live row)
+ *
+ * B0-940 dropped a third column, `expected_criteria`. It also landed at tier 2, so it was
+ * indistinguishable from `expected_concepts` and had never held a value. Tier 3 stays defined in
+ * {@link TIER_WEIGHT} but nothing produces one today.
  *
  * **De-duplicated by {@link conceptIdentityKey}, first occurrence wins.** The mandatory set is
  * usually a literal subset of the expected set, so without this a phrase in both columns would
@@ -131,7 +127,6 @@ export function conceptPhrases(
 export function buildExpectedCriteria(input: {
   minimumConcepts?: readonly string[] | null;
   expectedConcepts?: readonly string[] | null;
-  expectedCriteria?: readonly string[] | null;
 }): ExpectedCriterion[] {
   const criteria: ExpectedCriterion[] = [];
   const seen = new Set<string>();
@@ -148,13 +143,12 @@ export function buildExpectedCriteria(input: {
 
   for (const parsed of conceptPhrases(input.minimumConcepts)) push(parsed, 1);
   for (const parsed of conceptPhrases(input.expectedConcepts)) push(parsed, 2);
-  for (const parsed of conceptPhrases(input.expectedCriteria)) push(parsed, 2);
 
   return criteria;
 }
 
 /**
- * One grader verdict per criterion, keyed by its index in the item's `expected_criteria` array.
+ * One grader verdict per criterion, keyed by its index in the built `ExpectedCriterion[]`.
  *
  * `source` is optional and NOT part of the model's structured-output contract (the model never
  * sets it — see `GRADER_JSON_SCHEMA`, which has no such property). It is stamped on by

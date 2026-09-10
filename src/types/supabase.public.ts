@@ -1076,7 +1076,6 @@ export type Database = {
           created_at: string
           expected_canonical_product: string | null
           expected_concepts: string[]
-          expected_criteria: string[]
           expected_brand_family: string | null
           expected_reason_code: string | null
           expected_setting: string | null
@@ -1101,7 +1100,6 @@ export type Database = {
           created_at?: string
           expected_canonical_product?: string | null
           expected_concepts?: string[]
-          expected_criteria?: string[]
           expected_brand_family?: string | null
           expected_reason_code?: string | null
           expected_setting?: string | null
@@ -1127,7 +1125,6 @@ export type Database = {
           expected_brand_family?: string | null
           expected_canonical_product?: string | null
           expected_concepts?: string[]
-          expected_criteria?: string[]
           expected_reason_code?: string | null
           expected_setting?: string | null
           expected_sources?: string[]

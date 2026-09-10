@@ -47,9 +47,10 @@ const supabase = createClient(supabaseUrl, serviceRoleKey, {
 });
 
 // ── Golden rows ──────────────────────────────────────────────────────────────
-// Each `expected_criteria` entry mirrors the tier-1 exact-match jsonb shape
-// already used for regulated dilution values in public.test_items, e.g.
-// [{ "tier": 1, "match": "exact", "concept": "6 oz" }].
+// Each entry below is a tier-1 expectation in the pre-B0-940 `expected_criteria` jsonb shape,
+// e.g. [{ "tier": 1, "match": "exact", "concept": "6 oz" }]. That column is gone; the literal is
+// kept in this shape ON PURPOSE and converted at insert time (see `toMinimumConcepts`) so no
+// regulated dilution value or gallon yield is ever retyped by hand during the migration.
 const SOURCE_NOTE = 'FastDraw dispensing seed (B0-636) — "fastdraw_dilutions_final (Barry version).xlsx"';
 
 const ROWS = [
@@ -180,14 +181,32 @@ const testId = testRecord.id;
 console.log(`Created test record "${testName}" id=${testId}`);
 
 // ── Insert test items ──────────────────────────────────────────────────────────
+/**
+ * B0-940 — the tiered `expected_criteria` column is gone, and B0-930 dropped
+ * `expected_should_answer`. Tier is now expressed by which column a phrase lives in, and every
+ * entry in ROWS is tier 1, so they all become `minimum_concepts` — the must-have list that gates
+ * the case. `match: 'exact'` survives as the `exact:` prefix, which routes the phrase to the
+ * deterministic literal check in `~/lib/tests/criteria-grader.ts` instead of an LLM's judgement.
+ * That matters here: every value in this file is a regulated dilution ratio or gallon yield.
+ */
+function toMinimumConcepts(criteria) {
+  return criteria.map((criterion) => {
+    if (criterion.tier !== 1) {
+      throw new Error(
+        `Only tier-1 entries are supported here; got tier ${criterion.tier} for "${criterion.concept}".`,
+      );
+    }
+    return criterion.match === 'exact' ? `exact: ${criterion.concept}` : criterion.concept;
+  });
+}
+
 const items = ROWS.map((row, index) => ({
   test_id: testId,
   row_index: index + 1,
   prompt: row.prompt,
-  expected_should_answer: true,
   prompt_category: 'dispensing-systems',
   intended_agent_item: 'dilution',
-  expected_criteria: row.expected_criteria,
+  minimum_concepts: toMinimumConcepts(row.expected_criteria),
   source: SOURCE_NOTE,
   metadata: {},
   input_payload: {},

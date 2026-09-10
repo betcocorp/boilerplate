@@ -144,7 +144,6 @@ describe('parseTestCsvContent — golden test set format', () => {
 
     expect(row.expectedConcepts).toEqual([]);
     expect(row.minimumConcepts).toEqual([]);
-    expect(row.expectedCriteria).toEqual([]);
     expect(row.expectedSources).toEqual([]);
     expect(row.shouldCite).toBeNull();
   });
@@ -206,7 +205,6 @@ describe('parseTestCsvContent — golden test set format', () => {
       'source_style',
       'expected_concepts',
       'minimum_concepts',
-      'expected_criteria',
       'expected_sources',
       'should_cite',
       'expected_tool',
@@ -288,17 +286,15 @@ describe('splitPhraseCell — B0-931 phrase splitting (mirror of concept_rules.p
     expect(splitPhraseCell(formatPhraseCell(phrases))).toEqual(phrases);
   });
 
-  it('parses expected_criteria as a plain phrase list out of a full CSV row', () => {
+  it('B0-940 — drops a retired expected_criteria column without leaking it into metadata', () => {
     const csv = [
-      'question,expected_criteria',
-      '"How much pH7Q per gallon?","names the dilution 4 oz/gal | states the dwell time"',
+      'question,expected_concepts,expected_criteria',
+      '"How much pH7Q per gallon?","names the dilution 4 oz/gal","states the dwell time"',
     ].join('\n');
 
     const [row] = parseTestCsvContent(csv);
-    expect(row.expectedCriteria).toEqual([
-      'names the dilution 4 oz/gal',
-      'states the dwell time',
-    ]);
+    expect(row.expectedConcepts).toEqual(['names the dilution 4 oz/gal']);
+    expect(row.metadata).not.toHaveProperty('expected_criteria');
   });
 });
 

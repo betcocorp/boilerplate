@@ -103,7 +103,6 @@ describe('buildTestItemsFromScenarioSet', () => {
     // B0-932 — a multi-turn row carries no item-level concepts; the per-turn expectations grade it.
     expect(items[0].minimum_concepts).toEqual([]);
     expect(items[0].expected_concepts).toEqual([]);
-    expect(items[0].expected_criteria).toEqual([]);
     expect(items[0].intended_agent_item).toBe('product');
 
     const roundTripped = parseMultiTurnFromInputPayload(items[0].input_payload);

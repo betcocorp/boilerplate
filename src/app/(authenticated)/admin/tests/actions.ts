@@ -92,7 +92,7 @@ function optionalFormText(formData: FormData, name: string): string | null {
 /**
  * The golden-set expectation fields shared by the add and edit prompt dialogs.
  *
- * B0-931 — `expected_concepts` / `minimum_concepts` / `expected_criteria` are `text[]` and
+ * B0-931/940 — `expected_concepts` and `minimum_concepts` are `text[]` and
  * `expected_sources` is `uuid[]`, so the dialog submits a REPEATED input per value (one per
  * phrase, one per document id) and these are read with `getAll`. Phrases are trimmed and blanks
  * dropped, otherwise stored verbatim — regulated values (dilution ratios, oz/gal, mL/L, ppm,
@@ -112,7 +112,6 @@ function readConceptExpectationFields(formData: FormData) {
     values: {
       expected_concepts: parsePhraseListFromForm(formData.getAll('expectedConcepts')),
       minimum_concepts: parsePhraseListFromForm(formData.getAll('minimumConcepts')),
-      expected_criteria: parsePhraseListFromForm(formData.getAll('expectedCriteria')),
       expected_sources: expectedSources.documentIds,
       should_cite:
         typeof shouldCiteRaw === 'string'
@@ -324,7 +323,6 @@ export async function uploadTestCsvAction(formData: FormData) {
           ideal_response: row.idealResponse,
           expected_concepts: row.expectedConcepts,
           minimum_concepts: row.minimumConcepts,
-          expected_criteria: row.expectedCriteria,
           expected_sources: row.expectedSources,
           should_cite: row.shouldCite,
           expected_tool: row.expectedTool,
@@ -1051,7 +1049,6 @@ export async function createTestFromPromptsAction(formData: FormData) {
     ideal_response: item.ideal_response,
     expected_concepts: item.expected_concepts,
     minimum_concepts: item.minimum_concepts,
-    expected_criteria: item.expected_criteria,
     expected_sources: item.expected_sources,
     should_cite: item.should_cite,
     input_payload: item.input_payload,

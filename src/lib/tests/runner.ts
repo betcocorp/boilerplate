@@ -151,7 +151,7 @@ async function runSingleTurnTestItem(
 
     /**
      * B0-932 — the item's three concept columns ARE the criteria: `minimum_concepts` become
-     * tier-1 (a miss fails the item), `expected_concepts` and `expected_criteria` tier-2, deduped
+     * tier-1 (a miss fails the item) and `expected_concepts` tier-2, deduped
      * by concept identity so a phrase in both the mandatory and expected sets is scored once.
      * `gradeWithCriteria` judges each phrase; `gradeChatTestResponse` turns that verdict into the
      * item's pass/fail alongside the error/emptiness gate and the decline visibility override.
@@ -159,7 +159,6 @@ async function runSingleTurnTestItem(
     const criteria = buildExpectedCriteria({
       minimumConcepts: testItem.minimum_concepts,
       expectedConcepts: testItem.expected_concepts,
-      expectedCriteria: testItem.expected_criteria,
     });
     const criteriaOutcome = await gradeWithCriteria({
       prompt: testItem.prompt,
@@ -367,7 +366,6 @@ async function runMultiTurnTestItem(
   const criteria = buildExpectedCriteria({
     minimumConcepts: testItem.minimum_concepts,
     expectedConcepts: testItem.expected_concepts,
-    expectedCriteria: testItem.expected_criteria,
   });
   const criteriaOutcome =
     finalTurn && !finalTurn.hasError

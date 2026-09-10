@@ -200,7 +200,6 @@ function evaluateTurn(scenario: MultiTurnScenario, turn: ExecutedTurn): TurnVerd
     item: {
       minimum_concepts: expectations?.minimum_concepts ?? [],
       expected_concepts: expectations?.expected_concepts ?? [],
-      expected_criteria: [],
     },
     hasError: turn.hasError,
     responseText: turn.responseText,

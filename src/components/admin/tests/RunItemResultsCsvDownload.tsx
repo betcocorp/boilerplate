@@ -34,7 +34,6 @@ export type RunResultCsvRow = {
    */
   expected_concepts: string;
   minimum_concepts: string;
-  expected_criteria: string;
   /** Pipe-delimited `rag.document.id` uuids, in author order. */
   expected_sources: string;
   /** `yes` / `no` / empty when unset. */
@@ -98,7 +97,6 @@ export function RunItemResultsCsvDownload({
       'ideal_response',
       'expected_concepts',
       'minimum_concepts',
-      'expected_criteria',
       'expected_sources',
       'should_cite',
       'item_detail_path',
@@ -127,7 +125,6 @@ export function RunItemResultsCsvDownload({
           row.ideal_response,
           row.expected_concepts,
           row.minimum_concepts,
-          row.expected_criteria,
           row.expected_sources,
           row.should_cite,
           row.item_detail_path,
