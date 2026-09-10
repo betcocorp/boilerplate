@@ -47,73 +47,73 @@ const supabase = createClient(supabaseUrl, serviceRoleKey, {
 });
 
 // ── Golden rows ──────────────────────────────────────────────────────────────
-// Each entry below is a tier-1 expectation in the pre-B0-940 `expected_criteria` jsonb shape,
-// e.g. [{ "tier": 1, "match": "exact", "concept": "6 oz" }]. That column is gone; the literal is
-// kept in this shape ON PURPOSE and converted at insert time (see `toMinimumConcepts`) so no
-// regulated dilution value or gallon yield is ever retyped by hand during the migration.
+// `minimum_concepts` is the must-have list that gates each case: a miss fails the item. Every
+// value here is a regulated dilution ratio or gallon yield, so each carries the `exact:` prefix,
+// which routes it to the deterministic literal check in `~/lib/tests/criteria-grader.ts` instead
+// of an LLM's judgement. The two unprefixed phrases are judged semantically on purpose.
 const SOURCE_NOTE = 'FastDraw dispensing seed (B0-636) — "fastdraw_dilutions_final (Barry version).xlsx"';
 
 const ROWS = [
   // ── Dilution-only ──────────────────────────────────────────────────────────
   {
     prompt: "What's the dilution ratio for AF79 Concentrate Restroom Cleaner in FastDraw?",
-    expected_criteria: [{ tier: 1, match: 'exact', concept: '1:64' }],
+    minimum_concepts: ['exact: 1:64'],
   },
   {
     prompt: 'What is the FastDraw dilution ratio for pH7 ULTRA Floor Cleaner?',
-    expected_criteria: [{ tier: 1, match: 'exact', concept: '1:256' }],
+    minimum_concepts: ['exact: 1:256'],
   },
   {
     prompt: "What's the dilution ratio for AF315 Disinfectant in the FastDraw system?",
-    expected_criteria: [{ tier: 1, match: 'exact', concept: '1:32' }],
+    minimum_concepts: ['exact: 1:32'],
   },
   {
     prompt: 'In FastDraw, what dilution ratio does TOP FLITE All Purpose Cleaner use?',
-    expected_criteria: [{ tier: 1, match: 'exact', concept: '1:64' }],
+    minimum_concepts: ['exact: 1:64'],
   },
   {
     prompt: "What's the FastDraw dilution ratio for GREEN EARTH VELOCITY Degreaser?",
-    expected_criteria: [{ tier: 1, match: 'exact', concept: '1:20' }],
+    minimum_concepts: ['exact: 1:20'],
   },
   // ── Yield-only ─────────────────────────────────────────────────────────────
   {
     prompt: 'How many gallons do I get from a 2-liter FastDraw bottle of pH7 ULTRA?',
-    expected_criteria: [{ tier: 1, match: 'exact', concept: '136 gallons' }],
+    minimum_concepts: ['exact: 136 gallons'],
   },
   {
     prompt: 'How many gallons of RTU solution does a 2-liter FastDraw bottle of AF315 Disinfectant yield?',
-    expected_criteria: [{ tier: 1, match: 'exact', concept: '17 gallons' }],
+    minimum_concepts: ['exact: 17 gallons'],
   },
   {
     prompt: "What's the gallon yield from a 2-liter FastDraw bottle of SYMPLICITY CITRUSUDS Dish and Pan Detergent?",
-    expected_criteria: [{ tier: 1, match: 'exact', concept: '338 gallons' }],
+    minimum_concepts: ['exact: 338 gallons'],
   },
   {
     prompt: 'How many gallons does a 2-liter FastDraw bottle of EXTREME ULTRA Floor Stripper make?',
-    expected_criteria: [{ tier: 1, match: 'exact', concept: '11 gallons' }],
+    minimum_concepts: ['exact: 11 gallons'],
   },
   // ── Combined (dilution + yield) ──────────────────────────────────────────
   {
     prompt:
       "What's the dilution ratio and gallon yield for a 2-liter FastDraw bottle of pH7Q DUAL Disinfectant Cleaner Deodorizer?",
-    expected_criteria: [
-      { tier: 1, match: 'exact', concept: '1:256' },
-      { tier: 1, match: 'exact', concept: '136 gallons' },
+    minimum_concepts: [
+      'exact: 1:256',
+      'exact: 136 gallons',
     ],
   },
   {
     prompt:
       "For DENSICLEAN Polished Concrete Cleaner in FastDraw, what's the dilution ratio and how many gallons does a 2-liter bottle yield?",
-    expected_criteria: [
-      { tier: 1, match: 'exact', concept: '1:256' },
-      { tier: 1, match: 'exact', concept: '136 gallons' },
+    minimum_concepts: [
+      'exact: 1:256',
+      'exact: 136 gallons',
     ],
   },
   {
     prompt: 'What dilution ratio and yield does TRIFORCE Disinfectant use in a FastDraw dispenser?',
-    expected_criteria: [
-      { tier: 1, match: 'exact', concept: '1:256' },
-      { tier: 1, match: 'exact', concept: '136 gallons' },
+    minimum_concepts: [
+      'exact: 1:256',
+      'exact: 136 gallons',
     ],
   },
   // ── Dual-ratio SKUs (general dilution vs. spray_dilution both present in the
@@ -123,28 +123,18 @@ const ROWS = [
   // confirmed against that flag — see report for the flagged gap. ──────────
   {
     prompt: "What's the spray dilution for PUSH Lemon & Sage?",
-    expected_criteria: [
-      { tier: 1, match: 'exact', concept: '1:20' },
-      {
-        tier: 1,
-        match: 'semantic',
-        concept:
-          'the answer gives the FastDraw spray dilution (1:20), not the general FastDraw dilution ratio (1:64) for the same product',
-      },
+    minimum_concepts: [
+      'exact: 1:20',
+      'the answer gives the FastDraw spray dilution (1:20), not the general FastDraw dilution ratio (1:64) for the same product',
     ],
   },
   {
     prompt:
       "In FastDraw, what's the spray dilution ratio for CITRUS CHISEL Degreaser, and how is that different from its general dilution?",
-    expected_criteria: [
-      { tier: 1, match: 'exact', concept: '1:20' },
-      { tier: 1, match: 'exact', concept: '1:64' },
-      {
-        tier: 1,
-        match: 'semantic',
-        concept:
-          'the answer distinguishes the spray dilution (1:20, 11 gallon yield per 2L) from the general dilution (1:64, 34 gallon yield per 2L)',
-      },
+    minimum_concepts: [
+      'exact: 1:20',
+      'exact: 1:64',
+      'the answer distinguishes the spray dilution (1:20, 11 gallon yield per 2L) from the general dilution (1:64, 34 gallon yield per 2L)',
     ],
   },
 ];
@@ -181,32 +171,13 @@ const testId = testRecord.id;
 console.log(`Created test record "${testName}" id=${testId}`);
 
 // ── Insert test items ──────────────────────────────────────────────────────────
-/**
- * B0-940 — the tiered `expected_criteria` column is gone, and B0-930 dropped
- * `expected_should_answer`. Tier is now expressed by which column a phrase lives in, and every
- * entry in ROWS is tier 1, so they all become `minimum_concepts` — the must-have list that gates
- * the case. `match: 'exact'` survives as the `exact:` prefix, which routes the phrase to the
- * deterministic literal check in `~/lib/tests/criteria-grader.ts` instead of an LLM's judgement.
- * That matters here: every value in this file is a regulated dilution ratio or gallon yield.
- */
-function toMinimumConcepts(criteria) {
-  return criteria.map((criterion) => {
-    if (criterion.tier !== 1) {
-      throw new Error(
-        `Only tier-1 entries are supported here; got tier ${criterion.tier} for "${criterion.concept}".`,
-      );
-    }
-    return criterion.match === 'exact' ? `exact: ${criterion.concept}` : criterion.concept;
-  });
-}
-
 const items = ROWS.map((row, index) => ({
   test_id: testId,
   row_index: index + 1,
   prompt: row.prompt,
   prompt_category: 'dispensing-systems',
   intended_agent_item: 'dilution',
-  minimum_concepts: toMinimumConcepts(row.expected_criteria),
+  minimum_concepts: row.minimum_concepts,
   source: SOURCE_NOTE,
   metadata: {},
   input_payload: {},

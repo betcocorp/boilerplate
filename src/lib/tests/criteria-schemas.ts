@@ -112,9 +112,7 @@ export function conceptPhrases(
  *   `minimum_concepts`  → tier 1 (mandatory — a miss fails the item)
  *   `expected_concepts` → tier 2 (scored, does not fail the item on its own)
  *
- * B0-940 dropped a third column, `expected_criteria`. It also landed at tier 2, so it was
- * indistinguishable from `expected_concepts` and had never held a value. Tier 3 stays defined in
- * {@link TIER_WEIGHT} but nothing produces one today.
+ * Tier 3 stays defined in {@link TIER_WEIGHT} but nothing produces one today.
  *
  * **De-duplicated by {@link conceptIdentityKey}, first occurrence wins.** The mandatory set is
  * usually a literal subset of the expected set, so without this a phrase in both columns would

@@ -286,16 +286,6 @@ describe('splitPhraseCell — B0-931 phrase splitting (mirror of concept_rules.p
     expect(splitPhraseCell(formatPhraseCell(phrases))).toEqual(phrases);
   });
 
-  it('B0-940 — drops a retired expected_criteria column without leaking it into metadata', () => {
-    const csv = [
-      'question,expected_concepts,expected_criteria',
-      '"How much pH7Q per gallon?","names the dilution 4 oz/gal","states the dwell time"',
-    ].join('\n');
-
-    const [row] = parseTestCsvContent(csv);
-    expect(row.expectedConcepts).toEqual(['names the dilution 4 oz/gal']);
-    expect(row.metadata).not.toHaveProperty('expected_criteria');
-  });
 });
 
 describe('expected_sources — B0-931 rag.document.id uuids', () => {

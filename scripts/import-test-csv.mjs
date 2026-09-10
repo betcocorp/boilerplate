@@ -95,11 +95,11 @@ const PRIMARY_COLS = new Set([
   // B0-264: these two were missing, so a CSV carrying them imported them into the
   // `metadata` catch-all and the typed columns stayed empty — silently, with no error.
   // `expected_tool` arrived with B0-694; this file was never updated to match, despite the
-  // "keep in sync" note above. `expected_criteria` was dropped by B0-940.
+  // "keep in sync" note above.
   'expected_tool',
   // B0-930 retired these two columns. Still consumed here (rather than falling through to
   // the `metadata` catch-all, the B0-694 anti-pattern) so an older CSV imports cleanly.
-  'should_answer', 'expected_result_type', 'expected_criteria',
+  'should_answer', 'expected_result_type',
 ]);
 const PAYLOAD_COLS = new Set(['product_mention', 'question_category', 'source_style']);
 

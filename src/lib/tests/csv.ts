@@ -108,9 +108,6 @@ const LEGACY_IGNORED_CSV_COLUMNS = new Set([
   // B0-931 — `expected_should_answer` was dropped from `test_items` with the array retype; older
   // CSVs (and every set exported before it) still carry the column.
   'expected_should_answer',
-  // B0-940 — `expected_criteria` duplicated `expected_concepts` at tier 2 and was dropped. Older
-  // CSVs still carry it; ignore rather than letting it reach the `metadata` catch-all.
-  'expected_criteria',
 ]);
 
 /** CSV columns routed into `input_payload` rather than `metadata`. */
