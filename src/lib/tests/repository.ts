@@ -761,9 +761,14 @@ export type ReportRunRow = {
   routerType: string | null;
   /** App version recorded at run time (B0-733). */
   appVersion: string | null;
+  /** Average `test_result_items.ttft_ms` across the run's items; null if none recorded. */
+  averageTtftMs: number | null;
+  /** Average `test_result_items.elapsed_ms` across the run's items; null if none recorded. */
+  averageElapsedMs: number | null;
 };
 
 const REPORT_RUNS_PAGE_SIZE = 500;
+const REPORT_RUN_ITEM_METRICS_PAGE_SIZE = 1000;
 
 /**
  * B0-687 — every run that has an eval report, across all datasets, newest run first.
@@ -851,10 +856,53 @@ export async function listAllReportRuns(): Promise<ReportRunRow[]> {
     }
   }
 
+  // Per-run TTFT/elapsed averages, straight from test_result_items — same source columns as
+  // GoldenSetMetrics, but folded across every reported run rather than only each dataset's latest.
+  const runIds = rows.map((row) => row.id);
+  const itemMetricsByRun = new Map<
+    string,
+    { ttftSum: number; ttftCount: number; elapsedSum: number; elapsedCount: number }
+  >();
+  if (runIds.length > 0) {
+    const itemMetrics = await fetchAllPages<{
+      test_result_id: string;
+      ttft_ms: number | null;
+      elapsed_ms: number | null;
+    }>(REPORT_RUN_ITEM_METRICS_PAGE_SIZE, async (from, to) => {
+      const result = await supabase
+        .from('test_result_items')
+        .select('test_result_id, ttft_ms, elapsed_ms')
+        .in('test_result_id', runIds)
+        .range(from, to);
+      return (assertNoError(result) || []) as unknown as Array<{
+        test_result_id: string;
+        ttft_ms: number | null;
+        elapsed_ms: number | null;
+      }>;
+    });
+
+    for (const item of itemMetrics) {
+      let bucket = itemMetricsByRun.get(item.test_result_id);
+      if (!bucket) {
+        bucket = { ttftSum: 0, ttftCount: 0, elapsedSum: 0, elapsedCount: 0 };
+        itemMetricsByRun.set(item.test_result_id, bucket);
+      }
+      if (typeof item.ttft_ms === 'number') {
+        bucket.ttftSum += item.ttft_ms;
+        bucket.ttftCount += 1;
+      }
+      if (typeof item.elapsed_ms === 'number') {
+        bucket.elapsedSum += item.elapsed_ms;
+        bucket.elapsedCount += 1;
+      }
+    }
+  }
+
   return rows.map((row) => {
     const test = Array.isArray(row.tests) ? row.tests[0] : row.tests;
     const state = parseReportState(row.report_state);
     const overall = state?.status === 'completed' ? state.overall : null;
+    const itemMetrics = itemMetricsByRun.get(row.id) ?? null;
 
     const runOptions =
       row.run_options && typeof row.run_options === 'object' && !Array.isArray(row.run_options)
@@ -881,6 +929,14 @@ export async function listAllReportRuns(): Promise<ReportRunRow[]> {
       modelTag,
       routerType,
       appVersion: row.app_version,
+      averageTtftMs:
+        itemMetrics && itemMetrics.ttftCount > 0
+          ? itemMetrics.ttftSum / itemMetrics.ttftCount
+          : null,
+      averageElapsedMs:
+        itemMetrics && itemMetrics.elapsedCount > 0
+          ? itemMetrics.elapsedSum / itemMetrics.elapsedCount
+          : null,
     };
   });
 }

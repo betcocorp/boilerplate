@@ -6,6 +6,7 @@ import {
   ReportDatasetFilter,
   type ReportDatasetOption,
 } from '~/components/admin/tests/ReportDatasetFilter';
+import { ReportMetricTrendChart } from '~/components/admin/tests/ReportMetricTrendChart';
 import { ReportScoreTrendChart } from '~/components/admin/tests/ReportScoreTrendChart';
 import { Button } from '~/components/ui/button';
 import {
@@ -18,6 +19,7 @@ import {
 } from '~/components/ui/table';
 import { PERMISSIONS } from '~/lib/permissions/constants';
 import { requirePagePermission } from '~/lib/permissions/require-page-permission';
+import { buildReportMetricTrend } from '~/lib/tests/report-metric-trend';
 import type { ReportScoreChange } from '~/lib/tests/report-trend';
 import {
   buildReportScoreTrend,
@@ -171,6 +173,8 @@ export default async function AdminTestReportsPage({ searchParams }: PageProps) 
   // Chart and table are always fed the same filtered rows. Narrowing to one dataset cannot change
   // any run-over-run number: `buildReportScoreTrend` only ever compares runs within a dataset.
   const trend = buildReportScoreTrend(reports);
+  const ttftTrend = buildReportMetricTrend(reports, 'averageTtftMs');
+  const elapsedTrend = buildReportMetricTrend(reports, 'averageElapsedMs');
 
   return (
     <div className="flex flex-1 bg-slate-50">
@@ -199,6 +203,18 @@ export default async function AdminTestReportsPage({ searchParams }: PageProps) 
         </section>
 
         <ReportScoreTrendChart trend={trend} />
+
+        <ReportMetricTrendChart
+          emptyMessage="No runs have recorded a time-to-first-token yet, so there is nothing to plot."
+          title="Time to first token over time"
+          trend={ttftTrend}
+        />
+
+        <ReportMetricTrendChart
+          emptyMessage="No runs have recorded an elapsed time yet, so there is nothing to plot."
+          title="Elapsed time over time"
+          trend={elapsedTrend}
+        />
 
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
