@@ -40,8 +40,8 @@ export default async function AdminBexHealthPage({ searchParams }: PageProps) {
   return (
     <div className="flex flex-1 bg-slate-50">
       <main className="flex w-full flex-1 flex-col gap-8 px-6 py-10 sm:px-8">
-        <HealthHeader version={version} window={window} />
         <VerdictStrip version={version} window={window} />
+        <HealthHeader version={version} window={window} />
         <TierCards version={version} window={window} />
         <LiveTrafficCard version={version} window={window} />
         <PipelineStageStrip version={version} window={window} />

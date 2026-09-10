@@ -753,6 +753,8 @@ export type ReportRunRow = {
   /** Overall 0–100 score, present only once the report finished scoring (B0-609). */
   score: number | null;
   grade: ReportOverall['grade'] | null;
+  /** Evaluated cases graded Fail (`report_state.overall.fail`); null on a report that predates it. */
+  failCount: number | null;
   /** Session email of whoever started the run, `api-client` for a service-token run, or null. */
   triggeredBy: string | null;
   /** Model tag from run_options (e.g., 'gpt-4.1', 'gpt-4o-mini', null for unrecorded runs). */
@@ -925,6 +927,7 @@ export async function listAllReportRuns(): Promise<ReportRunRow[]> {
       reportStatus: state?.status ?? null,
       score: typeof overall?.avg === 'number' ? overall.avg : null,
       grade: overall?.grade ?? null,
+      failCount: typeof overall?.fail === 'number' ? overall.fail : null,
       triggeredBy: row.triggered_by,
       modelTag,
       routerType,

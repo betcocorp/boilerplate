@@ -112,6 +112,12 @@ const reportOverallGradeSchema = z.enum(['A', 'B', 'C', 'D', 'F', '-']);
 export const reportOverallSchema = z.object({
   avg: z.number().nullable(),
   grade: reportOverallGradeSchema,
+  /**
+   * Count of evaluated (non-UTE) cases whose Result is Fail (`RateBlock.fail`). `.optional()` +
+   * `.default(null)` for the same legacy-row reason `overall` itself got them in B0-609: a
+   * `report_state` persisted before this field existed must still `safeParse`.
+   */
+  fail: z.number().int().min(0).nullable().optional().default(null),
 });
 
 export type ReportOverall = z.infer<typeof reportOverallSchema>;

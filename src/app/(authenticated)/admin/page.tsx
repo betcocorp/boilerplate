@@ -52,9 +52,9 @@ export default async function AdminDashboardPage({ searchParams }: PageProps) {
   return (
     <main className="flex min-w-0 flex-1 flex-col gap-5 p-4 sm:p-6">
       <AdminAccessDeniedToast show={accessDenied} />
-      <DashboardHeader version={version} window={window} />
-
       <HealthBar version={version} window={window} />
+
+      <DashboardHeader version={version} window={window} />
       <ReportScoreTrendPanel version={version} window={window} />
       <KpiRow version={version} window={window} />
       <PipelinePanel version={version} window={window} />

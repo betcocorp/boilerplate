@@ -6,7 +6,13 @@ import {
   ReportDatasetFilter,
   type ReportDatasetOption,
 } from '~/components/admin/tests/ReportDatasetFilter';
+import { ReportFailTrendChart } from '~/components/admin/tests/ReportFailTrendChart';
 import { ReportMetricTrendChart } from '~/components/admin/tests/ReportMetricTrendChart';
+import {
+  ReportRunByFilter,
+  UNATTRIBUTED_RUN_BY,
+  type ReportRunByOption,
+} from '~/components/admin/tests/ReportRunByFilter';
 import { ReportScoreTrendChart } from '~/components/admin/tests/ReportScoreTrendChart';
 import { Button } from '~/components/ui/button';
 import {
@@ -19,6 +25,7 @@ import {
 } from '~/components/ui/table';
 import { PERMISSIONS } from '~/lib/permissions/constants';
 import { requirePagePermission } from '~/lib/permissions/require-page-permission';
+import { buildReportFailTrend } from '~/lib/tests/report-fail-trend';
 import { buildReportMetricTrend } from '~/lib/tests/report-metric-trend';
 import type { ReportScoreChange } from '~/lib/tests/report-trend';
 import {
@@ -65,6 +72,29 @@ function buildDatasetOptions(
   return [...byTestId.values()].sort((a, b) =>
     a.testName.localeCompare(b.testName),
   );
+}
+
+/**
+ * One option per distinct `triggeredBy`, plus an explicit "unattributed" bucket for the `null`
+ * rows that predate B0-687 attribution. Same has-rows-only guarantee as `buildDatasetOptions`.
+ */
+function buildRunByOptions(rows: readonly ReportRunRow[]): ReportRunByOption[] {
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    const key = row.triggeredBy ?? UNATTRIBUTED_RUN_BY;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  const unattributedCount = counts.get(UNATTRIBUTED_RUN_BY);
+  counts.delete(UNATTRIBUTED_RUN_BY);
+
+  const options = [...counts.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([value, reportCount]) => ({ value, reportCount }));
+
+  if (unattributedCount !== undefined) {
+    options.push({ value: UNATTRIBUTED_RUN_BY, reportCount: unattributedCount });
+  }
+  return options;
 }
 
 /**
@@ -154,6 +184,7 @@ export default async function AdminTestReportsPage({ searchParams }: PageProps) 
 
   const allReports = await listAllReportRuns();
   const datasetOptions = buildDatasetOptions(allReports);
+  const runByOptions = buildRunByOptions(allReports);
 
   // An unknown, malformed, or array-valued `testId` degrades to "all datasets" rather than
   // erroring or rendering an empty page.
@@ -167,14 +198,27 @@ export default async function AdminTestReportsPage({ searchParams }: PageProps) 
     (option) => option.testId === selectedTestId,
   );
 
-  const reports = selectedTestId
-    ? allReports.filter((row) => row.testId === selectedTestId)
-    : allReports;
+  // Same degrade-to-"anyone" treatment as the dataset filter for an unknown/malformed `runBy`.
+  const runByParam = readSearchParam(params.runBy).trim();
+  const selectedRunBy = runByOptions.some(
+    (option) => option.value === runByParam,
+  )
+    ? runByParam
+    : '';
+
+  const reports = allReports
+    .filter((row) => !selectedTestId || row.testId === selectedTestId)
+    .filter((row) => {
+      if (!selectedRunBy) return true;
+      if (selectedRunBy === UNATTRIBUTED_RUN_BY) return row.triggeredBy === null;
+      return row.triggeredBy === selectedRunBy;
+    });
   // Chart and table are always fed the same filtered rows. Narrowing to one dataset cannot change
   // any run-over-run number: `buildReportScoreTrend` only ever compares runs within a dataset.
   const trend = buildReportScoreTrend(reports);
   const ttftTrend = buildReportMetricTrend(reports, 'averageTtftMs');
   const elapsedTrend = buildReportMetricTrend(reports, 'averageElapsedMs');
+  const failTrend = buildReportFailTrend(reports);
 
   return (
     <div className="flex flex-1 bg-slate-50">
@@ -216,6 +260,12 @@ export default async function AdminTestReportsPage({ searchParams }: PageProps) 
           trend={elapsedTrend}
         />
 
+        <ReportFailTrendChart
+          emptyMessage="No runs have a recorded fail count yet, so there is nothing to plot."
+          title="Fail count over time"
+          trend={failTrend}
+        />
+
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-lg font-semibold text-slate-900">Reports</h2>
@@ -224,9 +274,13 @@ export default async function AdminTestReportsPage({ searchParams }: PageProps) 
                 options={datasetOptions}
                 selectedTestId={selectedTestId}
               />
+              <ReportRunByFilter
+                options={runByOptions}
+                selectedRunBy={selectedRunBy}
+              />
               <span className="text-sm text-slate-600">
                 {/* Filtered shows both numbers, so the narrowing is never mistaken for a shrinking history. */}
-                {selectedTestId
+                {selectedTestId || selectedRunBy
                   ? `${reports.length} of ${allReports.length} reports`
                   : `${reports.length} report${reports.length === 1 ? '' : 's'}`}
               </span>
@@ -243,6 +297,9 @@ export default async function AdminTestReportsPage({ searchParams }: PageProps) 
                 </TableHead>
                 <TableHead title="Change from this dataset's previous scored run (B0-689)">
                   Change
+                </TableHead>
+                <TableHead title="Evaluated cases graded Fail; not recorded for a report generated before this column existed">
+                  Fail count
                 </TableHead>
                 <TableHead title="LLM model used in this run (B0-733)">
                   Model
@@ -262,9 +319,9 @@ export default async function AdminTestReportsPage({ searchParams }: PageProps) 
             <TableBody>
               {reports.length === 0 ? (
                 <TableRow>
-                  <TableCell className="text-slate-500" colSpan={10}>
-                    {selectedTestId
-                      ? `No reports for ${selectedDataset?.testName ?? 'this dataset'}. Choose "All datasets" to see every report.`
+                  <TableCell className="text-slate-500" colSpan={11}>
+                    {selectedTestId || selectedRunBy
+                      ? `No reports match the current filters${selectedDataset ? ` for ${selectedDataset.testName}` : ''}. Clear a filter to see every report.`
                       : 'No reports generated yet. Open a completed run and choose “Generate report”.'}
                   </TableCell>
                 </TableRow>
@@ -301,6 +358,16 @@ export default async function AdminTestReportsPage({ searchParams }: PageProps) 
                         change={trend.changeByRunId.get(row.runId)}
                         row={row}
                       />
+                    </TableCell>
+                    <TableCell
+                      className="whitespace-nowrap tabular-nums text-slate-700"
+                      title={
+                        row.failCount === null
+                          ? 'Not recorded for this run'
+                          : `${row.failCount} of the run's evaluated cases graded Fail`
+                      }
+                    >
+                      {row.failCount ?? '—'}
                     </TableCell>
                     <TableCell
                       className="whitespace-nowrap text-slate-600"
