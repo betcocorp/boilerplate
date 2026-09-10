@@ -25,6 +25,9 @@ import { NO_EXPECTED_CONCEPTS_UTE_REASON } from './metrics';
  * B0-835 — that its judged Completeness comes through untouched for `metrics.ts` to cap.
  */
 
+const DOC_ID = '11111111-2222-4333-8444-555555555555';
+const PURGED_DOC_ID = '99999999-8888-4777-8666-555555555555';
+
 const REGULATED = {
   dilution: 'Dilute 1:64 (2 oz/gal)',
   contactTime: '10 minutes contact time at 600 ppm active quat',
@@ -37,8 +40,12 @@ const INPUT: CaseScoringInput = {
   category: 'Dilution',
   priorityRaw: 1,
   idealResponse: `${REGULATED.dilution}; ${REGULATED.contactTime}.`,
-  expectedSources: `Product label — ${REGULATED.epa}`,
-  expectedShouldAnswer: false,
+  // B0-933 — `expected_sources` is a `uuid[]` of `rag.document.id`, resolved to titles before it
+  // reaches the grader. One resolved row and one purged uuid, so both renderings are pinned.
+  expectedSources: [
+    { id: DOC_ID, title: `pH7Q Dual label — ${REGULATED.epa}`, documentKind: 'label', resolved: true },
+    { id: PURGED_DOC_ID, title: null, documentKind: null, resolved: false },
+  ],
   shouldCite: true,
   mandatoryConcepts: [REGULATED.dilution, REGULATED.contactTime],
   expectedConcepts: [REGULATED.dilution, REGULATED.contactTime, REGULATED.metric],
@@ -143,16 +150,21 @@ describe('buildGraderPayload / requiredConcepts (B0-809)', () => {
       'expected',
       'expected_sources',
       'should_cite',
-      'expected_should_answer',
       'minimal_concepts',
       'expected_concepts',
       'actual',
     ]);
-    // B0-849 — `should_cite` (test_items.should_cite) and `expected_should_answer`
-    // (test_items.expected_should_answer) are distinct expectations; pin both values so a
-    // regression that swaps them back is caught.
+    // B0-849/B0-933 — `should_cite` (test_items.should_cite) is its own expectation and must not
+    // be confused with the source list; `expected_should_answer` is gone with its column, and the
+    // grader's behavioural expectation is now `minimal_concepts`.
     expect(payload.should_cite).toBe(true);
-    expect(payload.expected_should_answer).toBe(false);
+    expect(payload).not.toHaveProperty('expected_should_answer');
+    // B0-933 — the grader sees document titles, never raw uuids; a purged id is still listed,
+    // marked, rather than silently dropped.
+    expect(payload.expected_sources).toEqual([
+      `pH7Q Dual label — ${REGULATED.epa} (label)`,
+      `${PURGED_DOC_ID} — unresolved document`,
+    ]);
     expect(payload.minimal_concepts).toEqual([REGULATED.dilution, REGULATED.contactTime]);
     expect(payload.expected_concepts).toEqual([
       REGULATED.dilution,

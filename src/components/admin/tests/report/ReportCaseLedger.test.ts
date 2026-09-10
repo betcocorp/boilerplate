@@ -38,10 +38,9 @@ function makeCase(overrides: Partial<ReportCase> & Pick<ReportCase, 'id'>): Repo
     priorityRaw,
     category: 'General',
     idealResponse: null,
-    expectedConcepts: null,
-    minimumConcepts: null,
-    expectedSources: null,
-    expectedShouldAnswer: null,
+    expectedConcepts: [],
+    minimumConcepts: [],
+    expectedSources: [],
     actual: '(no response recorded)',
     responseRecorded: false,
     score: {

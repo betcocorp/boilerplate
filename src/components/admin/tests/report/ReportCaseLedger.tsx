@@ -14,7 +14,9 @@ import {
   formatConceptCoverage,
   formatConceptList,
   hasMandatoryMiss,
+  MANDATORY_CONCEPTS_LABEL,
   mandatoryMissingLegend,
+  NO_MANDATORY_CONCEPTS_NOTE,
   REVIEW_MARKER_LEGEND,
 } from '~/lib/tests/report/case-concepts';
 import {
@@ -29,6 +31,8 @@ import type {
   ReportMetricsData,
   ReportSpeedBand,
 } from '~/lib/tests/report/data-schemas';
+import { formatExpectedSourceRef } from '~/lib/tests/report/expected-sources';
+import { hasExpectation } from '~/lib/tests/report/render';
 import { SPEED_METRIC_LABELS } from '~/lib/tests/report/speed-rules';
 import { cn } from '~/lib/utils';
 
@@ -457,15 +461,15 @@ function HarnessAside({ harness }: { harness: NonNullable<ReportCase['harness']>
   );
 }
 
+/**
+ * B0-933 — the expectation block. `expectedShouldAnswer` is gone; the run-time pass/fail axis is
+ * mandatory concept coverage (B0-932), so the must-have list carries that statement and is always
+ * printed once the case records any expectation at all. Concept phrases and document titles are
+ * rendered verbatim — dilution ratios, contact times and EPA registration numbers survive intact.
+ */
 function ExpectedColumn({ c }: { c: ReportCase }) {
   // Same truthiness test the Markdown's `formatExpected` uses, so both agree on "nothing recorded".
-  const hasAny = Boolean(
-    c.idealResponse ||
-      c.expectedConcepts ||
-      c.minimumConcepts ||
-      c.expectedSources ||
-      c.expectedShouldAnswer != null,
-  );
+  const hasAny = hasExpectation(c);
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4">
@@ -473,29 +477,38 @@ function ExpectedColumn({ c }: { c: ReportCase }) {
       {hasAny ? (
         <div className="mt-2 flex flex-col gap-3">
           {c.idealResponse ? <Verbatim value={c.idealResponse} /> : null}
-          {c.expectedConcepts ? (
+          {c.expectedConcepts.length > 0 ? (
             <div>
               <FieldLabel>Expected concepts</FieldLabel>
-              <Verbatim className="mt-1" value={c.expectedConcepts} />
+              <Verbatim className="mt-1" value={formatConceptList(c.expectedConcepts)} />
             </div>
           ) : null}
-          {c.minimumConcepts ? (
-            <div>
-              <FieldLabel>Minimum concepts</FieldLabel>
-              <Verbatim className="mt-1" value={c.minimumConcepts} />
-            </div>
-          ) : null}
-          {c.expectedSources ? (
+          <div>
+            <FieldLabel>{MANDATORY_CONCEPTS_LABEL}</FieldLabel>
+            {c.minimumConcepts.length > 0 ? (
+              <Verbatim className="mt-1" value={formatConceptList(c.minimumConcepts)} />
+            ) : (
+              <p className="mt-1 text-sm text-slate-400 italic">{NO_MANDATORY_CONCEPTS_NOTE}</p>
+            )}
+          </div>
+          {c.expectedSources.length > 0 ? (
             <div>
               <FieldLabel>Expected sources</FieldLabel>
-              <Verbatim className="mt-1" value={c.expectedSources} />
+              <ul className="mt-1 flex flex-col gap-0.5">
+                {c.expectedSources.map((source) => (
+                  <li
+                    key={source.id}
+                    className={cn(
+                      'text-sm leading-relaxed break-words',
+                      source.resolved ? 'text-slate-700' : 'text-amber-700',
+                    )}
+                    title={source.id}
+                  >
+                    {formatExpectedSourceRef(source)}
+                  </li>
+                ))}
+              </ul>
             </div>
-          ) : null}
-          {c.expectedShouldAnswer != null ? (
-            <p className="text-sm text-slate-700">
-              <span className="font-medium">Should answer:</span>{' '}
-              {c.expectedShouldAnswer ? 'Yes' : 'No'}
-            </p>
           ) : null}
         </div>
       ) : (

@@ -48,10 +48,9 @@ import { listWorkflowRunsByIds } from '~/lib/conversations/workflow-repository';
 import { resolveModel } from '~/lib/llm/resolve-model';
 import { computeAliasResolutionReport } from '~/lib/tests/alias-routing';
 import {
-  formatExpectedShouldAnswerLabel as formatExpectedShouldAnswerCell,
   formatItemSimilarityConfidenceLabel,
   formatRetrievedChunksForCsv,
-  formatShouldAnswerExport,
+  formatYesNoExport,
   formatTimingBreakdownLabel,
 } from '~/lib/tests/format';
 import { extractMultiTurnResult } from '~/lib/tests/multi-turn-result';
@@ -114,6 +113,16 @@ export const metadata = {
   title: 'Run Details | Betco BEX',
   description: 'Inspect item-level outcomes for a specific test run.',
 };
+
+/**
+ * B0-933 — the importer splits phrase cells on `|`, so array-valued expectations are exported
+ * pipe-delimited to round-trip. Structural join only: phrases are emitted verbatim, never
+ * rounded, unit-converted, re-cased or truncated (they carry oz/gal, ppm, contact times, CAS and
+ * EPA numbers).
+ */
+function joinPhrases(phrases: readonly string[] | undefined): string {
+  return (phrases ?? []).join(' | ');
+}
 
 type PageProps = {
   params: Promise<{ testId: string; runId: string }>;
@@ -192,22 +201,24 @@ export default async function AdminTestRunDetailsPage({
   const promptByItemId = new Map(
     testItems.map((item) => [item.id, item.prompt]),
   );
-  const expectedShouldAnswerByItemId = new Map(
-    testItems.map((item) => [item.id, item.expected_should_answer]),
-  );
   const priorityByItemId = new Map(
     testItems.map((item) => [item.id, item.priority]),
   );
   const idealResponseByItemId = new Map(
     testItems.map((item) => [item.id, item.ideal_response]),
   );
-  /** Golden-set concept/source/citation expectations, keyed by test item id. */
+  /**
+   * Golden-set concept/source/citation expectations, keyed by test item id. B0-933 — the concept,
+   * criteria and source columns are arrays now; exports join them on `PHRASE_DELIMITER` so a
+   * download round-trips through the pipe-delimited CSV importer.
+   */
   const conceptExpectationsByItemId = new Map(
     testItems.map((item) => [
       item.id,
       {
         expected_concepts: item.expected_concepts,
         minimum_concepts: item.minimum_concepts,
+        expected_criteria: item.expected_criteria,
         expected_sources: item.expected_sources,
         should_cite: item.should_cite,
       },
@@ -498,10 +509,6 @@ export default async function AdminTestRunDetailsPage({
   );
 
   const itemLevelCsvRows = chronologicalItems.map((row) => {
-    const expectedRaw = expectedShouldAnswerByItemId.get(row.test_item_id);
-    const expectedForCell: boolean | null =
-      expectedRaw === undefined ? null : expectedRaw;
-
     const priority = priorityByItemId.get(row.test_item_id) ?? null;
     const expectations = conceptExpectationsByItemId.get(row.test_item_id);
 
@@ -509,7 +516,6 @@ export default async function AdminTestRunDetailsPage({
       row_index: row.row_index,
       prompt: promptByItemId.get(row.test_item_id) ?? '',
       priority: priority === null ? '' : String(priority),
-      expected_answer: formatExpectedShouldAnswerCell(expectedForCell),
       passed: row.passed ? 'Yes' : 'No',
       sim_conf: formatItemSimilarityConfidenceLabel(row.response_payload),
       elapsed: formatDurationSeconds(row.elapsed_ms),
@@ -521,10 +527,11 @@ export default async function AdminTestRunDetailsPage({
       rounds_cache_search: formatTimingBreakdownLabel(row.response_payload),
       message: row.error_message || row.response_text || 'n/a',
       ideal_response: idealResponseByItemId.get(row.test_item_id) ?? '',
-      expected_concepts: expectations?.expected_concepts ?? '',
-      minimum_concepts: expectations?.minimum_concepts ?? '',
-      expected_sources: expectations?.expected_sources ?? '',
-      should_cite: formatShouldAnswerExport(expectations?.should_cite ?? null),
+      expected_concepts: joinPhrases(expectations?.expected_concepts),
+      minimum_concepts: joinPhrases(expectations?.minimum_concepts),
+      expected_criteria: joinPhrases(expectations?.expected_criteria),
+      expected_sources: joinPhrases(expectations?.expected_sources),
+      should_cite: formatYesNoExport(expectations?.should_cite ?? null),
       item_detail_path: `/admin/tests/${test.id}/items/${row.test_item_id}`,
       retrieved_chunks: formatRetrievedChunksForCsv(
         extractRetrievedDocumentChunks(row.response_payload),
@@ -570,8 +577,6 @@ export default async function AdminTestRunDetailsPage({
             test_item_id: row.test_item_id,
             prompt: promptByItemId.get(row.test_item_id) ?? '',
             priority: priorityByItemId.get(row.test_item_id) ?? null,
-            expected_should_answer:
-              expectedShouldAnswerByItemId.get(row.test_item_id) ?? null,
             passed: row.passed,
             status: row.status,
             similarity: extractItemSimilarityScore(row.response_payload),
@@ -586,15 +591,22 @@ export default async function AdminTestRunDetailsPage({
             response_text: row.response_text,
             error_message: row.error_message,
             ideal_response: idealResponseByItemId.get(row.test_item_id) ?? null,
-            expected_concepts:
+            expected_concepts: joinPhrases(
               conceptExpectationsByItemId.get(row.test_item_id)
-                ?.expected_concepts ?? null,
-            minimum_concepts:
+                ?.expected_concepts,
+            ),
+            minimum_concepts: joinPhrases(
               conceptExpectationsByItemId.get(row.test_item_id)
-                ?.minimum_concepts ?? null,
-            expected_sources:
+                ?.minimum_concepts,
+            ),
+            expected_criteria: joinPhrases(
               conceptExpectationsByItemId.get(row.test_item_id)
-                ?.expected_sources ?? null,
+                ?.expected_criteria,
+            ),
+            expected_sources: joinPhrases(
+              conceptExpectationsByItemId.get(row.test_item_id)
+                ?.expected_sources,
+            ),
             should_cite:
               conceptExpectationsByItemId.get(row.test_item_id)?.should_cite ??
               null,
@@ -811,7 +823,6 @@ export default async function AdminTestRunDetailsPage({
                 <TableRow>
                   <TableHead>Row</TableHead>
                   <TableHead>Prompt</TableHead>
-                  <TableHead className="whitespace-nowrap">Answer?</TableHead>
                   <TableHead>Passed</TableHead>
                   <TableHead>Sim / conf</TableHead>
                   <TableHead>Elapsed</TableHead>
@@ -826,7 +837,7 @@ export default async function AdminTestRunDetailsPage({
               <TableBody>
                 {displayResultItems.length === 0 ? (
                   <TableRow>
-                    <TableCell className="text-slate-500" colSpan={12}>
+                    <TableCell className="text-slate-500" colSpan={11}>
                       No item-level results yet.
                     </TableCell>
                   </TableRow>
@@ -840,9 +851,6 @@ export default async function AdminTestRunDetailsPage({
                           : true,
                     )
                     .map((row) => {
-                      const expectedShouldAnswer =
-                        expectedShouldAnswerByItemId.get(row.test_item_id) ??
-                        null;
                       const itemPriority =
                         priorityByItemId.get(row.test_item_id) ?? null;
                       const rowWorkflowRunId =
@@ -898,26 +906,6 @@ export default async function AdminTestRunDetailsPage({
                             >
                               {promptByItemId.get(row.test_item_id) || 'n/a'}
                             </Link>
-                          </TableCell>
-                          <TableCell className="whitespace-nowrap">
-                            <Badge
-                              className={
-                                expectedShouldAnswer === true
-                                  ? 'border-emerald-600/45 bg-emerald-600/12 text-emerald-900 dark:border-emerald-500/40 dark:bg-emerald-500/15 dark:text-emerald-50'
-                                  : undefined
-                              }
-                              variant={
-                                expectedShouldAnswer === null
-                                  ? 'secondary'
-                                  : expectedShouldAnswer === true
-                                    ? 'outline'
-                                    : 'destructive'
-                              }
-                            >
-                              {formatExpectedShouldAnswerCell(
-                                expectedShouldAnswer,
-                              )}
-                            </Badge>
                           </TableCell>
                           <TableCell>
                             <Badge

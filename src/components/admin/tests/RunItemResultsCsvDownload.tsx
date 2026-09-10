@@ -14,8 +14,6 @@ export type RunResultCsvRow = {
   prompt: string;
   /** Formatted item priority (lower = more important); empty when unset. */
   priority: string;
-  /** Table “Answer?” — `Unset` / `Yes` / `No`. */
-  expected_answer: string;
   /** Table “Passed” — `Yes` / `No`. */
   passed: string;
   /** Table “Sim / conf”. */
@@ -30,9 +28,14 @@ export type RunResultCsvRow = {
   message: string;
   /** Gold-standard answer for this item; empty when unset. */
   ideal_response: string;
-  /** Golden-set expectations, verbatim as authored; empty when unset. */
+  /**
+   * B0-933 — golden-set expectations, pipe-delimited (`a | b`) so the export round-trips through
+   * the CSV importer. Phrases verbatim as authored; empty when unset.
+   */
   expected_concepts: string;
   minimum_concepts: string;
+  expected_criteria: string;
+  /** Pipe-delimited `rag.document.id` uuids, in author order. */
   expected_sources: string;
   /** `yes` / `no` / empty when unset. */
   should_cite: string;
@@ -85,7 +88,6 @@ export function RunItemResultsCsvDownload({
       'row_index',
       'prompt',
       'priority',
-      'expected_answer',
       'passed',
       'sim_conf',
       'elapsed',
@@ -96,6 +98,7 @@ export function RunItemResultsCsvDownload({
       'ideal_response',
       'expected_concepts',
       'minimum_concepts',
+      'expected_criteria',
       'expected_sources',
       'should_cite',
       'item_detail_path',
@@ -114,7 +117,6 @@ export function RunItemResultsCsvDownload({
           String(row.row_index),
           row.prompt,
           row.priority,
-          row.expected_answer,
           row.passed,
           row.sim_conf,
           row.elapsed,
@@ -125,6 +127,7 @@ export function RunItemResultsCsvDownload({
           row.ideal_response,
           row.expected_concepts,
           row.minimum_concepts,
+          row.expected_criteria,
           row.expected_sources,
           row.should_cite,
           row.item_detail_path,

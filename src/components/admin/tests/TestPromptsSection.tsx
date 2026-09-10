@@ -22,15 +22,14 @@ import {
 import {
   formatElapsed,
   formatPercent,
-  formatShouldAnswerExport,
+  formatYesNoExport,
   formatSimilarityPercent,
 } from '~/lib/tests/format';
 import type { GoldenSetItemOrigin } from '~/lib/tests/golden-set';
 import { escapeCsvCell, sanitizeCsvFilename } from '~/lib/utils/csv';
 import type { Json } from '~/types/supabase.public';
 
-import { formatExpectedCriteriaCell, formatMultiTurnJsonCell } from '~/lib/tests/csv';
-import { expectedCriteriaSchema, type ExpectedCriterion } from '~/lib/tests/criteria-schemas';
+import { formatMultiTurnJsonCell } from '~/lib/tests/csv';
 import {
   formatMultiTurnBadgeLabel,
   formatMultiTurnTurnsTooltip,
@@ -41,26 +40,44 @@ export type TestPromptRow = {
   id: string;
   row_index: number;
   prompt: string;
-  expected_should_answer: boolean | null;
-  expected_result_type: string | null;
   expected_canonical_product: string | null;
   expected_reason_code: string | null;
   source: string | null;
   priority: number | null;
   ideal_response: string | null;
-  expected_concepts: string | null;
-  minimum_concepts: string | null;
-  expected_criteria: Json;
-  expected_sources: string | null;
+  /** B0-933 — one concept phrase per element; rendered and exported verbatim. */
+  expected_concepts: string[];
+  minimum_concepts: string[];
+  expected_criteria: string[];
+  /** B0-933 — `rag.document.id` uuids, resolved to titles for display by the server component. */
+  expected_sources: string[];
   should_cite: boolean | null;
   input_payload: Json;
 };
 
-/** `test_items.expected_criteria` is untyped `Json` at the DB boundary; parse defensively so a
- * malformed row degrades to "no criteria" (legacy grading) instead of crashing the page. */
-function criteriaFromJson(value: Json): ExpectedCriterion[] {
-  const parsed = expectedCriteriaSchema.safeParse(value);
-  return parsed.success ? parsed.data : [];
+/** The importer splits phrase cells on `|`, so display and export both join on it (B0-933). */
+const PHRASE_DELIMITER = ' | ';
+
+/**
+ * Regulated free text: phrases are joined structurally and never reformatted — no rounding,
+ * unit conversion, re-casing or string truncation of a ratio, ppm, contact time, CAS or EPA
+ * number. Clamping is CSS-only, with the full value in `title`.
+ */
+function joinPhrases(phrases: readonly string[]): string {
+  return phrases.join(PHRASE_DELIMITER);
+}
+
+/**
+ * `expected_sources` holds `rag.document.id` uuids. A bare uuid tells a reviewer nothing, so the
+ * document title is shown instead; an id with no live document is marked rather than dropped —
+ * silently omitting it would read as "this row expects no source".
+ */
+function formatExpectedSource(
+  documentId: string,
+  documentTitlesById: Record<string, string>,
+): string {
+  const title = documentTitlesById[documentId];
+  return title ? title : `Unresolved document (${documentId})`;
 }
 
 /** Aggregated history for a single `test_item` across the recent runs surfaced on this page. */
@@ -89,20 +106,11 @@ function payloadString(payload: Json, key: string): string {
   return typeof raw === 'string' ? raw : '';
 }
 
-function expectedSummary(item: TestPromptRow): string {
-  const mode =
-    item.expected_should_answer === null
-      ? 'n/a'
-      : item.expected_should_answer
-        ? 'should answer'
-        : 'should decline';
-  const type = item.expected_result_type
-    ? ` (${item.expected_result_type})`
-    : '';
-  return `${mode}${type}`;
-}
-
-function rowMatchesQuery(item: TestPromptRow, raw: string): boolean {
+function rowMatchesQuery(
+  item: TestPromptRow,
+  raw: string,
+  documentTitlesById: Record<string, string>,
+): boolean {
   const q = raw.trim().toLowerCase();
   if (!q) {
     return true;
@@ -113,18 +121,16 @@ function rowMatchesQuery(item: TestPromptRow, raw: string): boolean {
   if (String(item.row_index).includes(q)) {
     return true;
   }
-  if (expectedSummary(item).toLowerCase().includes(q)) {
-    return true;
-  }
   // Concept/source expectations are the main reason to hunt for a row (e.g. "13 oz/gal").
   if (
-    [item.expected_concepts, item.minimum_concepts, item.expected_sources].some((value) =>
-      (value ?? '').toLowerCase().includes(q),
-    )
+    [
+      ...item.expected_concepts,
+      ...item.minimum_concepts,
+      ...item.expected_criteria,
+      // Match what the cell shows (document titles), not the raw uuids behind it.
+      ...item.expected_sources.map((id) => formatExpectedSource(id, documentTitlesById)),
+    ].some((value) => value.toLowerCase().includes(q))
   ) {
-    return true;
-  }
-  if (criteriaFromJson(item.expected_criteria).some((c) => c.concept.toLowerCase().includes(q))) {
     return true;
   }
   // B0-537 — only turn 1 lives in `prompt`, so later turns are otherwise unsearchable.
@@ -140,12 +146,25 @@ function rowMatchesQuery(item: TestPromptRow, raw: string): boolean {
  * verbatim (clamped, with the full text in `title`) — never reformatted, since they
  * carry regulated figures such as oz/gal, mL/L, ppm, and contact times.
  */
-function ConceptExpectationsCell({ item }: { item: TestPromptRow }) {
-  const concepts = item.minimum_concepts || item.expected_concepts;
-  const criteria = criteriaFromJson(item.expected_criteria);
-  const hasAny = Boolean(
-    concepts || item.expected_sources || item.should_cite !== null || criteria.length > 0,
+function ConceptExpectationsCell({
+  item,
+  documentTitlesById,
+}: {
+  item: TestPromptRow;
+  documentTitlesById: Record<string, string>;
+}) {
+  const usesMinimum = item.minimum_concepts.length > 0;
+  const concepts = usesMinimum ? item.minimum_concepts : item.expected_concepts;
+  const criteriaLabel = joinPhrases(item.expected_criteria);
+  const conceptsLabel = joinPhrases(concepts);
+  const sourceLabels = item.expected_sources.map((id) =>
+    formatExpectedSource(id, documentTitlesById),
   );
+  const hasAny =
+    concepts.length > 0 ||
+    sourceLabels.length > 0 ||
+    item.should_cite !== null ||
+    item.expected_criteria.length > 0;
 
   if (!hasAny) {
     return <span className="text-slate-400">—</span>;
@@ -153,26 +172,26 @@ function ConceptExpectationsCell({ item }: { item: TestPromptRow }) {
 
   return (
     <div className="flex flex-col gap-1">
-      {criteria.length > 0 ? (
+      {item.expected_criteria.length > 0 ? (
         <span
           className="line-clamp-2 whitespace-normal font-medium text-sky-700"
-          title={formatExpectedCriteriaCell(criteria)}
+          title={criteriaLabel}
         >
-          {criteria.filter((c) => c.tier === 1).length} tier-1 · {criteria.length} total criteria
+          Criteria: {criteriaLabel}
         </span>
       ) : null}
-      {concepts ? (
-        <span className="line-clamp-2 whitespace-normal" title={concepts}>
-          {item.minimum_concepts ? 'Min: ' : 'Expected: '}
-          {concepts}
+      {concepts.length > 0 ? (
+        <span className="line-clamp-2 whitespace-normal" title={conceptsLabel}>
+          {usesMinimum ? 'Min: ' : 'Expected: '}
+          {conceptsLabel}
         </span>
       ) : null}
-      {item.expected_sources ? (
+      {sourceLabels.length > 0 ? (
         <span
           className="line-clamp-2 whitespace-normal text-slate-500"
-          title={item.expected_sources}
+          title={sourceLabels.join(PHRASE_DELIMITER)}
         >
-          Sources: {item.expected_sources}
+          Sources: {sourceLabels.join(PHRASE_DELIMITER)}
         </span>
       ) : null}
       {item.should_cite !== null ? (
@@ -272,6 +291,12 @@ type TestPromptsSectionProps = {
   suggestionLists: TestItemSuggestionLists;
   /** B0-750 — golden-set origin keyed by `test_item.id`; items with no golden origin are absent. */
   goldenOriginsByItemId: Record<string, GoldenSetItemOrigin>;
+  /**
+   * B0-933 — `rag.document.id` → title for every id referenced by `expected_sources` on this
+   * page. Resolved in one batched query by the server component; ids with no live document are
+   * simply absent and render as unresolved.
+   */
+  documentTitlesById: Record<string, string>;
 };
 
 export function TestPromptsSection({
@@ -284,13 +309,14 @@ export function TestPromptsSection({
   canonicalProductLabels,
   suggestionLists,
   goldenOriginsByItemId,
+  documentTitlesById,
 }: TestPromptsSectionProps) {
   const [query, setQuery] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
 
   const filtered = useMemo(
-    () => items.filter((item) => rowMatchesQuery(item, query)),
-    [items, query],
+    () => items.filter((item) => rowMatchesQuery(item, query, documentTitlesById)),
+    [items, query, documentTitlesById],
   );
 
   const total = items.length;
@@ -376,8 +402,6 @@ export function TestPromptsSection({
     // Column order matches TEST_TEMPLATE_COLUMNS so a download can be re-uploaded as-is.
     const headers = [
       'question',
-      'should_answer',
-      'expected_result_type',
       'canonical_product',
       'reason_code',
       'source',
@@ -400,8 +424,6 @@ export function TestPromptsSection({
       ...sorted.map((item) =>
         [
           item.prompt,
-          formatShouldAnswerExport(item.expected_should_answer),
-          item.expected_result_type ?? '',
           item.expected_canonical_product ?? '',
           item.expected_reason_code ?? '',
           item.source ?? '',
@@ -410,11 +432,12 @@ export function TestPromptsSection({
           payloadString(item.input_payload, 'product_mention'),
           payloadString(item.input_payload, 'question_category'),
           payloadString(item.input_payload, 'source_style'),
-          item.expected_concepts ?? '',
-          item.minimum_concepts ?? '',
-          formatExpectedCriteriaCell(criteriaFromJson(item.expected_criteria)),
-          item.expected_sources ?? '',
-          formatShouldAnswerExport(item.should_cite),
+          joinPhrases(item.expected_concepts),
+          joinPhrases(item.minimum_concepts),
+          joinPhrases(item.expected_criteria),
+          // Round-trips as ids — the importer resolves `expected_sources` to `rag.document.id`.
+          joinPhrases(item.expected_sources),
+          formatYesNoExport(item.should_cite),
           (() => {
             const view = readMultiTurnItemView(item.input_payload);
             return view.kind === 'multi_turn'
@@ -469,7 +492,7 @@ export function TestPromptsSection({
             className="min-w-0 flex-1 rounded-2xl"
             id="test-prompts-filter"
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Filter by prompt text, row number, or expected…"
+            placeholder="Filter by prompt text, row number, concepts, or sources…"
             type="search"
             value={query}
           />
@@ -547,8 +570,7 @@ export function TestPromptsSection({
               </TableHead>
               <TableHead>Row</TableHead>
               <TableHead>Prompt</TableHead>
-              <TableHead>Expected</TableHead>
-              <TableHead title="Concept, source, and citation expectations for this prompt (minimum concepts, expected sources, should_cite).">
+              <TableHead title="Concept, source, and citation expectations for this prompt: expected/minimum concept phrases, expected criteria, the rag documents listed in expected_sources, and should_cite.">
                 Concepts / sources
               </TableHead>
               <TableHead title="Number of recent runs that included this prompt (and the passed/failed counts).">
@@ -586,7 +608,7 @@ export function TestPromptsSection({
           <TableBody>
             {filtered.length === 0 ? (
               <TableRow>
-                <TableCell className="text-slate-500" colSpan={11}>
+                <TableCell className="text-slate-500" colSpan={10}>
                   {total === 0
                     ? 'No prompts in this dataset yet.'
                     : 'No prompts match your search.'}
@@ -626,9 +648,11 @@ export function TestPromptsSection({
                       <MultiTurnRowBadge item={item} />
                       {item.prompt}
                     </TableCell>
-                    <TableCell>{expectedSummary(item)}</TableCell>
                     <TableCell className="max-w-65 align-top text-xs text-slate-600">
-                      <ConceptExpectationsCell item={item} />
+                      <ConceptExpectationsCell
+                        documentTitlesById={documentTitlesById}
+                        item={item}
+                      />
                     </TableCell>
                     <TableCell
                       className="whitespace-nowrap tabular-nums text-slate-700"
@@ -687,9 +711,7 @@ export function TestPromptsSection({
                             item.expected_canonical_product
                           }
                           expectedConcepts={item.expected_concepts}
-                          expectedCriteria={formatExpectedCriteriaCell(
-                            criteriaFromJson(item.expected_criteria),
-                          )}
+                          expectedCriteria={item.expected_criteria}
                           expectedReasonCode={item.expected_reason_code}
                           expectedSources={item.expected_sources}
                           idealResponse={item.ideal_response}

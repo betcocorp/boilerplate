@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { splitConcepts } from './case-concepts';
 import { REPORT_STATUSES, caseScoreSchema, reportSynthesisSchema } from './schemas';
 import { scoringRulesSchema } from './scoring-config';
 
@@ -630,6 +631,47 @@ export const reportCaseHarnessSchema = z.object({
 export type ReportCaseHarness = z.infer<typeof reportCaseHarnessSchema>;
 
 /**
+ * B0-933 — one resolved entry of `test_items.expected_sources`. The column stores `rag.document`
+ * uuids; the wire carries the document's own title (and kind) so a reader can see *which document*
+ * was expected. `resolved: false` means the uuid matched no live `rag.document` row — it is still
+ * carried, marked, rather than dropped, because a silently vanished expectation reads as "no
+ * source was expected here", which is a different claim about the golden dataset.
+ */
+export const reportExpectedSourceSchema = z.object({
+  id: z.string(),
+  /** `rag.document.title`, verbatim — titles carry EPA registration numbers and product names. */
+  title: z.string().nullable(),
+  documentKind: z.string().nullable(),
+  resolved: z.boolean(),
+});
+export type ReportExpectedSource = z.infer<typeof reportExpectedSourceSchema>;
+
+/**
+ * B0-933 — the concept columns are `text[]` now. A payload produced before the retype carried a
+ * single free-text cell instead, so a legacy string is accepted here and split with the CSV-cell
+ * splitter (the rule that authored those cells in the first place) rather than rejected. Nothing in
+ * the live path takes this branch: assembly passes the stored array straight through.
+ */
+const legacyConceptCellTolerantArray = z.preprocess(
+  (value) => (typeof value === 'string' ? splitConcepts(value) : value),
+  z.array(z.string()).default([]),
+);
+
+/**
+ * B0-933 — same tolerance for `expectedSources`: a legacy payload's prose cell becomes one
+ * unresolved entry carrying the original text verbatim, so an old report still renders.
+ */
+const legacyExpectedSourcesTolerantArray = z.preprocess(
+  (value) =>
+    typeof value === 'string'
+      ? value.trim()
+        ? [{ id: value, title: value, documentKind: null, resolved: false }]
+        : []
+      : value,
+  z.array(reportExpectedSourceSchema).default([]),
+);
+
+/**
  * The full per-case ledger record (B0-590 consumes every field of this).
  *
  * `idealResponse`, `expectedConcepts`, `minimumConcepts`, `expectedSources` and `actual` are the
@@ -649,10 +691,16 @@ export const reportCaseSchema = z.object({
 
   // --- Expected answer / behavior (verbatim) ---
   idealResponse: z.string().nullable(),
-  expectedConcepts: z.string().nullable(),
-  minimumConcepts: z.string().nullable(),
-  expectedSources: z.string().nullable(),
-  expectedShouldAnswer: z.boolean().nullable(),
+  /** `test_items.expected_concepts` — the full success set, one phrase per element. */
+  expectedConcepts: legacyConceptCellTolerantArray,
+  /**
+   * `test_items.minimum_concepts` — the must-have subset, one phrase per element. B0-932 makes
+   * covering every one of these the run-time pass/fail axis, so this is the case's stated
+   * expectation of behaviour: the retired `expectedShouldAnswer` said nothing this does not.
+   */
+  minimumConcepts: legacyConceptCellTolerantArray,
+  /** `test_items.expected_sources`, resolved to `rag.document` titles. */
+  expectedSources: legacyExpectedSourcesTolerantArray,
 
   // --- What the agent actually said ---
   /** Trimmed `response_text`, or the literal `(no response recorded)` placeholder. */

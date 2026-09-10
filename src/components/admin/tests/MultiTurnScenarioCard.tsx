@@ -54,10 +54,10 @@ function TurnExpectations({ scenario, index }: { scenario: MultiTurnScenario; in
     return <span className="text-xs text-slate-400">No per-turn expectation</span>;
   }
 
+  // B0-933 — per-turn `should_answer` / `expected_result_type` expectations were retired from the
+  // multi-turn schema along with the `test_items` columns they mirrored; only the mention
+  // expectations remain gradeable.
   const chips: string[] = [];
-  if (expectations.should_answer === true) chips.push('should answer');
-  if (expectations.should_answer === false) chips.push('should decline');
-  if (expectations.expected_result_type) chips.push(expectations.expected_result_type);
   if (expectations.must_mention?.length) {
     chips.push(`must mention: ${expectations.must_mention.join(', ')}`);
   }

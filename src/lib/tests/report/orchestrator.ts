@@ -10,9 +10,10 @@ import type { ModelEffort } from '~/lib/constants/models';
 import type { TestItemRecord, TestResultItemRecord } from '~/lib/tests/types';
 
 import { assembleReportCases, indexLatestResultItems } from './assemble';
-import { splitConcepts } from './case-concepts';
 import { GRADING_PROMPT_HASH, scoreCase, unableToEvaluateScore } from './case-scorer';
 import { consolidateCasePasses, loadConsistencyConfig } from './consolidate';
+import { resolveExpectedSourceRefs, type ExpectedSourceIndex } from './expected-sources';
+import { loadExpectedSourceIndexForItems } from './expected-sources-repository';
 import {
   effortForModel,
   effortFromState,
@@ -77,6 +78,7 @@ async function scoreOnePass(
   resultItem: TestResultItemRecord | undefined,
   modelTag: string,
   effort: ModelEffort | undefined,
+  expectedSourceIndex: ExpectedSourceIndex,
 ): Promise<CaseScore> {
   const responseText = resultItem?.response_text?.trim();
   if (!resultItem) {
@@ -95,20 +97,21 @@ async function scoreOnePass(
    * and the grading prompt is untouched: passes that could see each other would agree by
    * construction, and their agreement would measure nothing.
    *
-   * B0-809 — the concept columns are split here, once, with the same splitter the reference skill
-   * uses, so the grader judges the exact phrases the report will print. An item with neither column
-   * is Unable to Evaluate by rule and `scoreCase` returns that without a model call.
+   * B0-933 — both concept columns are `text[]`, one phrase per element, so the grader is handed the
+   * stored phrases directly: no splitting, no re-spelling, and the exact phrases the report prints.
+   * An item with neither column is Unable to Evaluate by rule and `scoreCase` returns that without
+   * a model call. `expected_sources` is a `uuid[]`; it is resolved to `rag.document` titles from the
+   * index built once for the whole run, never looked up here per case.
    */
   return scoreCase({
     question: item.prompt,
     category: item.prompt_category,
     priorityRaw: item.priority,
     idealResponse: item.ideal_response,
-    expectedSources: item.expected_sources,
-    expectedShouldAnswer: item.expected_should_answer,
+    expectedSources: resolveExpectedSourceRefs(item.expected_sources, expectedSourceIndex),
     shouldCite: item.should_cite,
-    mandatoryConcepts: splitConcepts(item.minimum_concepts),
-    expectedConcepts: splitConcepts(item.expected_concepts),
+    mandatoryConcepts: item.minimum_concepts,
+    expectedConcepts: item.expected_concepts,
     actualResponseText: responseText,
     modelTag,
     effort,
@@ -153,6 +156,7 @@ async function scoreRemainingCases(
   deadline: number,
   modelTag: string,
   effort: ModelEffort | undefined,
+  expectedSourceIndex: ExpectedSourceIndex,
 ): Promise<ReportState> {
   // Reconcile before looking at what's still pending: a case can have every pass recorded already
   // (so `pendingPasses` will never surface it again) and still be missing from `caseScores`.
@@ -177,6 +181,7 @@ async function scoreRemainingCases(
           resultItemByTestItemId.get(item.id),
           modelTag,
           effort,
+          expectedSourceIndex,
         );
         return { itemId: item.id, passIndex, score } as const;
       }),
@@ -215,6 +220,11 @@ export async function generateReport(testResultId: string): Promise<ReportState>
   ]);
 
   const resultItemByTestItemId = indexLatestResultItems(resultItems);
+
+  // B0-933 — one batched `rag.document` read for every `expected_sources` uuid in the dataset, so
+  // the grader payload and the rendered report both name documents rather than uuids, and neither
+  // the per-pass loop nor assembly ever queries per case.
+  const expectedSourceIndex = await loadExpectedSourceIndexForItems(items);
 
   // B0-765 — read once per call so a report already in flight can't have half its cases graded
   // on one model and the other half on a mid-run settings change.
@@ -269,6 +279,7 @@ export async function generateReport(testResultId: string): Promise<ReportState>
       deadline,
       modelTag,
       effortFromState(state.gradingEffort),
+      expectedSourceIndex,
     );
 
     if (state.completedCases < state.totalCases) {
@@ -302,6 +313,7 @@ export async function generateReport(testResultId: string): Promise<ReportState>
       passMark: state.passMark,
       judgedThresholds: state.judgedThresholds,
       scoringRules: state.scoringRules,
+      expectedSourceIndex,
     });
 
     // B0-863 — sourced from the already-assembled `cases` (not `items`/`state.caseScores` alone)

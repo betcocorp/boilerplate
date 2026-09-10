@@ -57,14 +57,21 @@ type GeneratedInsights = {
   generatedAt: string;
 };
 
-/** Narrows the harness row to the four fields the analysis is allowed to see. */
+/**
+ * Narrows the harness row to the four fields the analysis is allowed to see.
+ *
+ * B0-933 — `expectedShouldAnswer` is gone (the column was dropped). Its place is taken by the
+ * item's **mandatory concepts**: under B0-932 covering every one of them is the run-time pass/fail
+ * axis, so they are what actually explains the verdict the panel is reasoning about. Passed
+ * verbatim — the phrases are regulated free text (dilution ratios, contact times, EPA reg. nos.).
+ */
 function toGradingContext(
   harness: HarnessRunContext | null,
 ): PromptGradingContext | null {
   return harness
     ? {
         passed: harness.passed,
-        expectedShouldAnswer: harness.expectedShouldAnswer,
+        mandatoryConcepts: harness.mandatoryConcepts,
         idealResponse: harness.idealResponse,
         similarity: harness.similarity,
       }

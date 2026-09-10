@@ -19,6 +19,8 @@ import type {
 
 import { consolidateCasePasses, type CaseGradingVariance } from './consolidate';
 import type { ReportCase, ReportDataResponse, ReportMetricsData } from './data-schemas';
+import { resolveExpectedSourceRefs, type ExpectedSourceIndex } from './expected-sources';
+import { loadExpectedSourceIndexForItems } from './expected-sources-repository';
 import {
   computeReportMetrics,
   tierLabel,
@@ -119,6 +121,13 @@ export type AssembleReportCasesParams = {
    * and the consolidated headline are derived under the same rules.
    */
   scoringRules?: ScoringRules | null;
+  /**
+   * B0-933 — `rag.document.id` → title/kind for every `expected_sources` uuid in this dataset,
+   * loaded once by the async caller (`loadExpectedSourceIndexForItems`). Assembly stays pure and
+   * synchronous. Omitted (or null) resolves nothing: every uuid renders marked "unresolved
+   * document" rather than being dropped, which is the same contract as a purged document.
+   */
+  expectedSourceIndex?: ExpectedSourceIndex | null;
   /**
    * B0-714 — how a failed structural invariant is treated. Defaults to `'throw'`, so the
    * generation path can never persist a report whose numbers contradict each other. `loadReportData`
@@ -292,10 +301,11 @@ export function assembleReportCases(params: AssembleReportCasesParams): Assemble
       priorityRaw: item.priority,
       category: item.prompt_category ?? 'Uncategorized',
       idealResponse: item.ideal_response,
+      // B0-933 — `text[]` columns, one phrase per element, copied by reference and never re-split.
       expectedConcepts: item.expected_concepts,
       minimumConcepts: item.minimum_concepts,
-      expectedSources: item.expected_sources,
-      expectedShouldAnswer: item.expected_should_answer,
+      // B0-933 — `uuid[]` of `rag.document.id`, resolved to titles from the batched index.
+      expectedSources: resolveExpectedSourceRefs(item.expected_sources, params.expectedSourceIndex),
       actual: responseText || NO_RESPONSE_PLACEHOLDER,
       responseRecorded: Boolean(responseText),
       score,
@@ -428,6 +438,10 @@ export async function loadReportData(runId: string): Promise<ReportDataResponse 
     listAllResultItemsByResultId(run.id),
   ]);
 
+  // B0-933 — one batched `rag.document` read for the whole dataset's `expected_sources` uuids, so
+  // the read path names documents rather than uuids without querying per case.
+  const expectedSourceIndex = await loadExpectedSourceIndexForItems(items);
+
   return toReportDataPayload(
     assembleReportData({
       test,
@@ -440,6 +454,7 @@ export async function loadReportData(runId: string): Promise<ReportDataResponse 
       passMark: state.passMark,
       judgedThresholds: state.judgedThresholds,
       scoringRules: state.scoringRules,
+      expectedSourceIndex,
       synthesis: state.synthesis,
       generatedAt: run.report_generated_at ?? state.updatedAt,
       config: gradingConfigFromState(state),

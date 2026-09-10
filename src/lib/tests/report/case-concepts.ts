@@ -10,10 +10,13 @@ export type { CaseConcepts, ConceptKindCoverage };
  * `test_items.expected_concepts` (expected) semantically on every pass and authors the
  * `CaseConcepts` block persisted on its `CaseScore` (`./schemas`). Nothing in this module reads a
  * response or infers a verdict: it holds the deterministic text handling around those columns —
- * how a cell is split into phrases, how two spellings of one phrase are recognised as the same
- * phrase when passes vote — and the marks the report prints. The former fallback that derived a
- * block from the harness's `criteriaGrading` is gone by decision (Tom Bird, 2026-09-03): an item
- * without concept columns has no concept data, and the report says so rather than inventing any.
+ * how two spellings of one phrase are recognised as the same phrase when passes vote — and the
+ * marks the report prints. The former fallback that derived a block from the harness's
+ * `criteriaGrading` is gone by decision (Tom Bird, 2026-09-03): an item without concept columns has
+ * no concept data, and the report says so rather than inventing any.
+ *
+ * B0-933 — both columns are `text[]` in the database now, one phrase per element, so the report
+ * reads them straight through. `splitConcepts` below is **no longer part of the DB read path**.
  *
  * Regulated-data rule: concept phrases are regulated free text. Every phrase is copied by
  * reference and re-emitted verbatim — never parsed for numbers, rounded, unit-converted, re-cased
@@ -31,14 +34,20 @@ const EMPTY_CELL_MARKERS = new Set(['n/a', 'na', 'none', '-', '—']);
 const BULLET = /^\s*(?:[-*•‣▪·o]|\(?\d+[.)]|[a-z][.)])\s+/i;
 
 /**
- * Splits one golden concept cell into an ordered list of phrases — a line-for-line port of the
- * reference skill's `split_concepts`, so both graders see the same phrases for the same cell.
+ * **The CSV-cell splitter — not the database reader (B0-933).**
  *
- * Deterministic text structure only. **Pipe is the primary delimiter**, per line; newlines split;
- * list markers are stripped; a **semicolon splits only when nothing else delimited the cell**;
- * commas never split (a phrase routinely contains one: "dilute 2 oz/gal, then dwell"). An empty
- * cell, or one holding only an empty-cell marker, yields `[]` — no concepts of that kind for this
- * case, which is not a failure.
+ * `test_items.minimum_concepts` / `expected_concepts` are `text[]` columns, already one phrase per
+ * element, and the report path reads them straight through. This function exists for the one place
+ * a concept list still arrives as a single free-text cell: an imported CSV (or the equivalent
+ * manual-entry field), where the author types every phrase into one cell. Call it on a *cell*;
+ * never on a value that came out of the database.
+ *
+ * A line-for-line port of the reference skill's `split_concepts`, so an imported cell yields the
+ * exact phrases the reference grader would see. Deterministic text structure only. **Pipe is the
+ * primary delimiter**, per line; newlines split; list markers are stripped; a **semicolon splits
+ * only when nothing else delimited the cell**; commas never split (a phrase routinely contains
+ * one: "dilute 2 oz/gal, then dwell"). An empty cell, or one holding only an empty-cell marker,
+ * yields `[]` — no concepts of that kind, which is not a failure.
  */
 export function splitConcepts(cell: string | null | undefined): string[] {
   if (cell == null) return [];
@@ -119,6 +128,17 @@ export function mandatoryMissingLegend(rules: ScoringRules): string {
 export const CONCEPT_MARKER_LEGEND = {
   mandatoryMissing: mandatoryMissingLegend(DEFAULT_SCORING_RULES),
 } as const;
+
+/**
+ * B0-932/B0-933 — how the must-have list is labelled wherever a report states a case's expectation
+ * of behaviour. It replaces the retired `expected_should_answer` line: the run-time pass/fail axis
+ * is mandatory concept coverage, so the must-have phrases *are* the behavioural expectation.
+ * Defined once so the Markdown document and the React ledger cannot word it differently.
+ */
+export const MANDATORY_CONCEPTS_LABEL = 'Must-have concepts (the pass/fail axis)';
+
+/** What that line says when the case lists no must-haves — stated, never left blank. */
+export const NO_MANDATORY_CONCEPTS_NOTE = 'none recorded — no must-have concept gates this case.';
 
 /**
  * B0-721 — this case's independent grading passes disagreed and a human should look at the grade.

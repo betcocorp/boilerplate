@@ -19,7 +19,7 @@ import { listAiSuggestions } from '~/lib/ai-suggestions/repository';
 import { listWorkflowRunsByIds } from '~/lib/conversations/workflow-repository';
 import { resolveModel } from '~/lib/llm/resolve-model';
 import {
-  formatExpectedShouldAnswerLabel,
+  formatYesNoLabel,
   formatSimilarityValue,
 } from '~/lib/tests/format';
 import {
@@ -29,6 +29,7 @@ import {
   listResultItemsByTestItemId,
   listTestResultsByTestId,
 } from '~/lib/tests/repository';
+import { loadDocumentTitlesByIds } from '~/lib/tests/report/expected-sources-repository';
 import {
   extractAgentStepModel,
   extractDraftAnswer,
@@ -47,6 +48,26 @@ export const metadata = {
   description: 'View historical item outcomes across all runs.',
 };
 
+/**
+ * B0-933 — concept/criteria columns are `text[]`. Phrases are printed verbatim, one per line: they
+ * carry regulated figures (oz/gal, mL/L, ppm, contact times, CAS and EPA numbers) that must never
+ * be rounded, converted, re-cased or string-truncated.
+ */
+function PhraseList({ phrases }: { phrases: string[] }) {
+  if (phrases.length === 0) {
+    return <p className="mt-1 text-slate-400">—</p>;
+  }
+  return (
+    <ul className="mt-1 flex flex-col gap-1">
+      {phrases.map((phrase, index) => (
+        <li className="whitespace-pre-wrap" key={`${index}-${phrase}`}>
+          {phrase}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 type PageProps = {
   params: Promise<{ testId: string; itemId: string }>;
 };
@@ -64,11 +85,13 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
     notFound();
   }
 
-  const [runs, itemRunResults, existingSuggestions] = await Promise.all([
-    listTestResultsByTestId(test.id, 200),
-    listResultItemsByTestItemId(item.id, 500),
-    listAiSuggestions('item', item.id).catch(() => []),
-  ]);
+  const [runs, itemRunResults, existingSuggestions, documentTitlesById] =
+    await Promise.all([
+      listTestResultsByTestId(test.id, 200),
+      listResultItemsByTestItemId(item.id, 500),
+      listAiSuggestions('item', item.id).catch(() => []),
+      loadDocumentTitlesByIds(item.expected_sources ?? []),
+    ]);
 
   const runById = new Map(runs.map((run) => [run.id, run]));
   const historyRows = itemRunResults
@@ -258,7 +281,6 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
     itemId: item.id,
     testName: test.name,
     prompt: item.prompt,
-    expectedShouldAnswer: item.expected_should_answer,
     historyRows: historyRows.map(({ result }) => {
       const similarityStats = extractSimilarityStats(result.response_payload);
       const ragSearchMs = extractRagSearchMs(result.response_payload);
@@ -308,11 +330,7 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
               <p className="mt-1 whitespace-pre-wrap">{item.prompt}</p>
             </div>
             <div className="shrink-0 border-l border-slate-200 pl-4 text-right">
-              <p className="font-semibold text-slate-900">Should answer</p>
-              <p className="mt-1 text-slate-800">
-                {formatExpectedShouldAnswerLabel(item.expected_should_answer)}
-              </p>
-              <p className="mt-3 font-semibold text-slate-900">Priority</p>
+              <p className="font-semibold text-slate-900">Priority</p>
               <p className="mt-1 text-slate-800">
                 {item.priority === null ? (
                   <span className="text-slate-400">—</span>
@@ -334,30 +352,30 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
             {/* Rendered verbatim — these carry regulated figures (oz/gal, mL/L, ppm, contact times). */}
             <div className="border-t border-slate-200 pt-4">
               <p className="font-semibold text-slate-900">Expected concepts</p>
-              {item.expected_concepts ? (
-                <p className="mt-1 whitespace-pre-wrap">
-                  {item.expected_concepts}
-                </p>
-              ) : (
-                <p className="mt-1 text-slate-400">—</p>
-              )}
+              <PhraseList phrases={item.expected_concepts} />
             </div>
             <div className="border-t border-slate-200 pt-4">
               <p className="font-semibold text-slate-900">Minimum concepts</p>
-              {item.minimum_concepts ? (
-                <p className="mt-1 whitespace-pre-wrap">
-                  {item.minimum_concepts}
-                </p>
-              ) : (
-                <p className="mt-1 text-slate-400">—</p>
-              )}
+              <PhraseList phrases={item.minimum_concepts} />
+            </div>
+            <div className="border-t border-slate-200 pt-4">
+              <p className="font-semibold text-slate-900">Expected criteria</p>
+              <PhraseList phrases={item.expected_criteria} />
             </div>
             <div className="border-t border-slate-200 pt-4">
               <p className="font-semibold text-slate-900">Expected sources</p>
-              {item.expected_sources ? (
-                <p className="mt-1 whitespace-pre-wrap">
-                  {item.expected_sources}
-                </p>
+              {item.expected_sources.length > 0 ? (
+                <ul className="mt-1 flex flex-col gap-1">
+                  {item.expected_sources.map((documentId) => (
+                    <li key={documentId} title={documentId}>
+                      {documentTitlesById[documentId] ?? (
+                        <span className="text-amber-700">
+                          Unresolved document ({documentId})
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
               ) : (
                 <p className="mt-1 text-slate-400">—</p>
               )}
@@ -365,7 +383,7 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
             <div className="border-t border-slate-200 pt-4">
               <p className="font-semibold text-slate-900">Should cite sources</p>
               <p className="mt-1 text-slate-800">
-                {formatExpectedShouldAnswerLabel(item.should_cite)}
+                {formatYesNoLabel(item.should_cite)}
               </p>
             </div>
           </div>

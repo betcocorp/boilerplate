@@ -6,6 +6,7 @@ import type { ModelEffort } from '~/lib/constants/models';
 import { completeStructured, type StructuredCompletion } from '~/lib/llm/structured-completion';
 
 import { normConcept, type CaseConcepts, type ConceptKindCoverage } from './case-concepts';
+import { formatExpectedSourceRef, type ExpectedSourceRef } from './expected-sources';
 import { DEFAULT_GRADING_MODEL_TAG, resolveGradingModel } from './grading-model';
 import { NO_EXPECTED_CONCEPTS_UTE_REASON } from './metrics';
 import type { CaseScore } from './schemas';
@@ -253,13 +254,17 @@ export type CaseScoringInput = {
   category: string | null;
   priorityRaw: number | null;
   idealResponse: string | null;
-  expectedSources: string | null;
-  expectedShouldAnswer: boolean | null;
+  /**
+   * B0-933 — `test_items.expected_sources` (a `uuid[]` of `rag.document.id`) resolved to document
+   * titles by `./expected-sources`. The grader is shown the titles, never the uuids: a uuid is not
+   * something a source expectation can be judged against.
+   */
+  expectedSources: readonly ExpectedSourceRef[];
   /** `test_items.should_cite` — whether the answer is expected to cite sources. Null = no expectation. */
   shouldCite: boolean | null;
-  /** `test_items.minimum_concepts`, already split by `splitConcepts`. */
+  /** `test_items.minimum_concepts` — a `text[]`, one phrase per element, read straight through. */
   mandatoryConcepts: readonly string[];
-  /** `test_items.expected_concepts`, already split by `splitConcepts`. */
+  /** `test_items.expected_concepts` — a `text[]`, one phrase per element, read straight through. */
   expectedConcepts: readonly string[];
   actualResponseText: string;
   modelTag?: string;
@@ -307,9 +312,9 @@ export function buildGraderPayload(input: CaseScoringInput): string {
       priority_raw: input.priorityRaw,
       category: input.category,
       expected: input.idealResponse,
-      expected_sources: input.expectedSources,
+      // B0-933 — resolved document titles, not `rag.document` uuids.
+      expected_sources: input.expectedSources.map(formatExpectedSourceRef),
       should_cite: input.shouldCite,
-      expected_should_answer: input.expectedShouldAnswer,
       minimal_concepts: required.mandatory,
       expected_concepts: required.expected,
       actual: input.actualResponseText,

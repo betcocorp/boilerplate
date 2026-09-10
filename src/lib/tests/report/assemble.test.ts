@@ -13,8 +13,14 @@ import {
   toNotGeneratedPayload,
   toReportDataPayload,
 } from './assemble';
-import { splitConcepts } from './case-concepts';
+import {
+  formatConceptList,
+  MANDATORY_CONCEPTS_LABEL,
+  NO_MANDATORY_CONCEPTS_NOTE,
+  splitConcepts,
+} from './case-concepts';
 import { reportDataResponseSchema, type ReportDataReady } from './data-schemas';
+import { formatExpectedSourceRef } from './expected-sources';
 import { NO_EXPECTED_CONCEPTS_UTE_REASON } from './metrics';
 import { caseAnchorId, gradingConfigLine, renderReportMarkdown } from './render';
 import type { CaseConcepts, CaseScore, ReportSynthesis } from './schemas';
@@ -37,6 +43,9 @@ const CASE_A = '11111111-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const CASE_B = '22222222-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const CASE_C = '33333333-cccc-4ccc-8ccc-cccccccccccc';
 const CASE_D = '44444444-dddd-4ddd-8ddd-dddddddddddd';
+/** B0-933 — `test_items.expected_sources` is a `uuid[]` of `rag.document.id`. */
+const LABEL_DOC_ID = '55555555-1111-4111-8111-aaaaaaaaaaaa';
+const PURGED_DOC_ID = '66666666-2222-4222-8222-bbbbbbbbbbbb';
 
 /** Regulated strings that must survive assembly and serialization byte-for-byte. */
 const REGULATED = {
@@ -46,6 +55,19 @@ const REGULATED = {
   concentration: 'Active: n-Alkyl dimethyl benzyl ammonium chloride 5.25%',
   metric: 'Metric equivalent as printed: 15.6 mL/L',
 } as const;
+
+/**
+ * B0-933 — the batched `rag.document` lookup the async callers do, as data. `LABEL_DOC_ID`
+ * resolves; `PURGED_DOC_ID` deliberately does not, so the "unresolved, still listed" contract is
+ * exercised on the same fixture as the happy path. The title carries an EPA registration number so
+ * a re-cased or reformatted title fails here.
+ */
+const EXPECTED_SOURCE_INDEX = new Map([
+  [
+    LABEL_DOC_ID,
+    { title: `pH7Q Dual product label — ${REGULATED.epa}`, documentKind: 'label' },
+  ],
+]);
 
 function score(partial: Partial<CaseScore>): CaseScore {
   return {
@@ -67,8 +89,6 @@ function item(partial: Partial<TestItemRecord> & Pick<TestItemRecord, 'id' | 'pr
   return {
     test_id: TEST_ID,
     row_index: 0,
-    expected_should_answer: null,
-    expected_result_type: null,
     expected_canonical_product: null,
     expected_reason_code: null,
     input_payload: {},
@@ -77,13 +97,14 @@ function item(partial: Partial<TestItemRecord> & Pick<TestItemRecord, 'id' | 'pr
     prompt_category: null,
     priority: null,
     ideal_response: null,
-    expected_concepts: null,
-    minimum_concepts: null,
-    expected_sources: null,
+    // B0-933 — every one of these is a NOT NULL array column now, defaulting to '{}'.
+    expected_concepts: [],
+    minimum_concepts: [],
+    expected_sources: [],
     should_cite: null,
     source: null,
     intended_agent_item: null,
-    expected_criteria: {},
+    expected_criteria: [],
     expected_tool: null,
     ...partial,
   } as unknown as TestItemRecord;
@@ -130,10 +151,10 @@ const ITEMS: TestItemRecord[] = [
     prompt_category: 'Dilution',
     priority: 1,
     ideal_response: REGULATED.dilution,
-    expected_concepts: REGULATED.metric,
-    minimum_concepts: 'States the 1:64 ratio.',
-    expected_sources: `Product label — ${REGULATED.epa}`,
-    expected_should_answer: true,
+    expected_concepts: [REGULATED.metric],
+    minimum_concepts: ['States the 1:64 ratio.'],
+    // B0-933 — one live `rag.document` id and one that no longer resolves.
+    expected_sources: [LABEL_DOC_ID, PURGED_DOC_ID],
   }),
   item({
     id: CASE_B,
@@ -142,10 +163,9 @@ const ITEMS: TestItemRecord[] = [
     prompt_category: 'Dilution',
     priority: 1,
     ideal_response: REGULATED.contactTime,
-    expected_concepts: 'Dwell time is 10 minutes.',
-    minimum_concepts: null,
-    expected_sources: null,
-    expected_should_answer: true,
+    expected_concepts: ['Dwell time is 10 minutes.'],
+    minimum_concepts: [],
+    expected_sources: [],
   }),
   item({
     id: CASE_C,
@@ -154,10 +174,9 @@ const ITEMS: TestItemRecord[] = [
     prompt_category: 'Disinfection',
     priority: 2,
     ideal_response: REGULATED.concentration,
-    expected_concepts: null,
-    minimum_concepts: null,
-    expected_sources: null,
-    expected_should_answer: false,
+    expected_concepts: [],
+    minimum_concepts: [],
+    expected_sources: [],
   }),
   item({
     id: CASE_D,
@@ -385,6 +404,7 @@ function buildFixture() {
     items: ITEMS,
     resultItems: RESULT_ITEMS,
     caseScores: CASE_SCORES,
+    expectedSourceIndex: EXPECTED_SOURCE_INDEX,
     synthesis: SYNTHESIS,
     generatedAt: RUN_RECORD.report_generated_at!,
     config: CONFIG,
@@ -559,19 +579,34 @@ describe('assembleReportData → report data contract', () => {
       check(`case[${c.id}].actual`, c.actual);
 
       if (c.idealResponse) check(`case[${c.id}].idealResponse`, c.idealResponse);
-      if (c.expectedConcepts) {
-        check(`case[${c.id}].expectedConcepts`, `**Expected concepts:** ${c.expectedConcepts}`);
-      }
-      if (c.minimumConcepts) {
-        check(`case[${c.id}].minimumConcepts`, `**Minimum concepts:** ${c.minimumConcepts}`);
-      }
-      if (c.expectedSources) {
-        check(`case[${c.id}].expectedSources`, `**Expected sources:** ${c.expectedSources}`);
-      }
-      if (c.expectedShouldAnswer != null) {
+      // B0-933 — the concept columns are arrays; the document prints each phrase quoted, verbatim.
+      if (c.expectedConcepts.length > 0) {
         check(
-          `case[${c.id}].expectedShouldAnswer`,
-          `**Should answer:** ${c.expectedShouldAnswer ? 'Yes' : 'No'}`,
+          `case[${c.id}].expectedConcepts`,
+          `**Expected concepts:** ${formatConceptList(c.expectedConcepts)}`,
+        );
+      }
+      // B0-933 — the must-have line replaces `expectedShouldAnswer` and is ALWAYS printed once the
+      // case records any expectation, so the reader is never left without the pass/fail axis.
+      if (
+        c.idealResponse ||
+        c.expectedConcepts.length > 0 ||
+        c.minimumConcepts.length > 0 ||
+        c.expectedSources.length > 0
+      ) {
+        check(
+          `case[${c.id}].minimumConcepts`,
+          `**${MANDATORY_CONCEPTS_LABEL}:** ${
+            c.minimumConcepts.length > 0
+              ? formatConceptList(c.minimumConcepts)
+              : NO_MANDATORY_CONCEPTS_NOTE
+          }`,
+        );
+      }
+      if (c.expectedSources.length > 0) {
+        check(
+          `case[${c.id}].expectedSources`,
+          `**Expected sources:** ${c.expectedSources.map(formatExpectedSourceRef).join('; ')}`,
         );
       }
 
@@ -781,8 +816,19 @@ describe('assembleReportData → report data contract', () => {
 
     const a = byId.get(CASE_A)!;
     expect(a.idealResponse).toBe(REGULATED.dilution);
-    expect(a.expectedConcepts).toBe(REGULATED.metric);
-    expect(a.expectedSources).toBe(`Product label — ${REGULATED.epa}`);
+    expect(a.expectedConcepts).toEqual([REGULATED.metric]);
+    expect(a.minimumConcepts).toEqual(['States the 1:64 ratio.']);
+    // B0-933 — uuids resolved to titles; the EPA number in the title survives byte-for-byte, and
+    // the purged id is still listed rather than dropped.
+    expect(a.expectedSources).toEqual([
+      {
+        id: LABEL_DOC_ID,
+        title: `pH7Q Dual product label — ${REGULATED.epa}`,
+        documentKind: 'label',
+        resolved: true,
+      },
+      { id: PURGED_DOC_ID, title: null, documentKind: null, resolved: false },
+    ]);
     // response_text was stored with surrounding whitespace; only that is stripped.
     expect(a.actual).toBe(`${REGULATED.dilution} ${REGULATED.metric}`);
     expect(a.actual).toContain('1:64');
@@ -937,8 +983,8 @@ describe('assembleReportCases → per-concept verdicts (B0-809)', () => {
       prompt: 'What is the dilution ratio and dwell time?',
       prompt_category: 'Dilution',
       priority: 1,
-      minimum_concepts: `Dilute 1:64 (2 oz/gal) | ${REGULATED.contactTime}`,
-      expected_concepts: `Dilute 1:64 (2 oz/gal) | ${REGULATED.contactTime} | ${REGULATED.metric}`,
+      minimum_concepts: ['Dilute 1:64 (2 oz/gal)', REGULATED.contactTime],
+      expected_concepts: ['Dilute 1:64 (2 oz/gal)', REGULATED.contactTime, REGULATED.metric],
     }),
     item({
       id: CASE_NO_CRITERIA,
@@ -953,8 +999,8 @@ describe('assembleReportCases → per-concept verdicts (B0-809)', () => {
       prompt: 'Quote the EPA registration number.',
       prompt_category: 'Registration',
       priority: 2,
-      minimum_concepts: 'Names the product',
-      expected_concepts: `Names the product | ${REGULATED.epa}`,
+      minimum_concepts: ['Names the product'],
+      expected_concepts: ['Names the product', REGULATED.epa],
     }),
   ];
 
@@ -1227,6 +1273,7 @@ describe('assembleReportCases → multi-pass consolidation and consistency (B0-7
       resultItems: RESULT_ITEMS,
       caseScores: CASE_SCORES,
       casePassScores: CASE_PASS_SCORES,
+      expectedSourceIndex: EXPECTED_SOURCE_INDEX,
       spreadThreshold: 10,
       synthesis: SYNTHESIS,
       generatedAt: RUN_RECORD.report_generated_at!,
@@ -1322,7 +1369,7 @@ describe('assembleReportCases → multi-pass consolidation and consistency (B0-7
 });
 
 /** B0-809 — a line-for-line port of the reference skill's `split_concepts`, asserted against it. */
-describe('splitConcepts (B0-809)', () => {
+describe('splitConcepts — the CSV-cell splitter, not the DB reader (B0-809/B0-933)', () => {
   it('splits on pipes within a line and on newlines', () => {
     expect(splitConcepts('a | b\nc')).toEqual(['a', 'b', 'c']);
     expect(splitConcepts('dwell time is non-negotiable | surface must stay visibly wet | reapply if drying')).toEqual([
@@ -1368,5 +1415,52 @@ describe('splitConcepts (B0-809)', () => {
       REGULATED.contactTime,
       REGULATED.epa,
     ]);
+  });
+});
+
+/**
+ * B0-933 — the wire contract has to keep opening a payload produced before `test_items` was
+ * retyped, where the concept columns were one free-text cell and `expected_sources` was prose. The
+ * live path never takes these branches (assembly passes arrays through), but a stored or cached
+ * older payload must render rather than throw at the boundary.
+ */
+describe('reportCaseSchema — tolerance for pre-retype payload shapes (B0-933)', () => {
+  function legacyCase(overrides: Record<string, unknown>) {
+    const { payload } = buildFixture();
+    if (payload.status !== 'ready') throw new Error('fixture should assemble a ready report');
+    return { ...payload, cases: [{ ...payload.cases[0], ...overrides }] };
+  }
+
+  it('splits a legacy free-text concept cell with the CSV-cell rules', () => {
+    const parsed = reportDataResponseSchema.parse(
+      legacyCase({
+        expectedConcepts: `${REGULATED.metric} | ${REGULATED.epa}`,
+        minimumConcepts: REGULATED.metric,
+      }),
+    );
+    if (parsed.status !== 'ready') throw new Error('legacy payload should still parse');
+    expect(parsed.cases[0]!.expectedConcepts).toEqual([REGULATED.metric, REGULATED.epa]);
+    expect(parsed.cases[0]!.minimumConcepts).toEqual([REGULATED.metric]);
+  });
+
+  it('keeps a legacy prose source cell verbatim, marked unresolved', () => {
+    const parsed = reportDataResponseSchema.parse(
+      legacyCase({ expectedSources: `Product label — ${REGULATED.epa}` }),
+    );
+    if (parsed.status !== 'ready') throw new Error('legacy payload should still parse');
+    expect(parsed.cases[0]!.expectedSources).toEqual([
+      {
+        id: `Product label — ${REGULATED.epa}`,
+        title: `Product label — ${REGULATED.epa}`,
+        documentKind: null,
+        resolved: false,
+      },
+    ]);
+  });
+
+  it('ignores a legacy expectedShouldAnswer key instead of rejecting the payload', () => {
+    const parsed = reportDataResponseSchema.parse(legacyCase({ expectedShouldAnswer: false }));
+    if (parsed.status !== 'ready') throw new Error('legacy payload should still parse');
+    expect(parsed.cases[0]).not.toHaveProperty('expectedShouldAnswer');
   });
 });

@@ -5,7 +5,9 @@ import {
   formatConceptCoverage,
   formatConceptList,
   hasMandatoryMiss,
+  MANDATORY_CONCEPTS_LABEL,
   mandatoryMissingLegend,
+  NO_MANDATORY_CONCEPTS_NOTE,
   REVIEW_MARKER_LEGEND,
 } from './case-concepts';
 import {
@@ -15,6 +17,7 @@ import {
   type ConceptDisagreement,
   type VarianceCause,
 } from './consolidate';
+import { formatExpectedSourceRefs, type ExpectedSourceRef } from './expected-sources';
 import { normalizeAgentMarkdownLists } from './markdown-normalize';
 import type {
   CaseSpeed,
@@ -75,10 +78,12 @@ export type CaseRenderDetail = {
   priorityRaw: number | null;
   category: string;
   idealResponse: string | null;
-  expectedConcepts: string | null;
-  minimumConcepts: string | null;
-  expectedSources: string | null;
-  expectedShouldAnswer: boolean | null;
+  /** B0-933 — `test_items.expected_concepts`, one phrase per element. Printed verbatim. */
+  expectedConcepts: readonly string[];
+  /** B0-933 — `test_items.minimum_concepts`: the must-haves, and the run-time pass/fail axis. */
+  minimumConcepts: readonly string[];
+  /** B0-933 — `test_items.expected_sources` resolved to `rag.document` titles. */
+  expectedSources: readonly ExpectedSourceRef[];
   actual: string;
   score: CaseScore;
   /** B0-717 — null when this case recorded no timing at all. Read, never re-derived. */
@@ -143,16 +148,52 @@ function mdBlock(value: string | null | undefined): string {
   return trimmed.length > 0 ? trimmed : '_(none noted)_';
 }
 
+/**
+ * True when the case records any expectation at all. Shared with the React ledger (B0-590 keeps the
+ * two renderings identical), which is why it is exported rather than inlined.
+ */
+export function hasExpectation(c: {
+  idealResponse: string | null;
+  expectedConcepts: readonly string[];
+  minimumConcepts: readonly string[];
+  expectedSources: readonly { id: string }[];
+}): boolean {
+  return Boolean(
+    c.idealResponse ||
+      c.expectedConcepts.length > 0 ||
+      c.minimumConcepts.length > 0 ||
+      c.expectedSources.length > 0,
+  );
+}
+
+/**
+ * B0-933 — the expectation block. `expectedShouldAnswer` is gone: the run-time pass/fail axis is
+ * mandatory concept coverage (B0-932), so the must-have list *is* the behavioural expectation and
+ * is labelled as such. A case that records some expectation but no must-haves says so explicitly
+ * rather than leaving the reader to guess whether the axis is absent or merely unprinted.
+ *
+ * Phrases and document titles are emitted verbatim — they carry dilution ratios, contact times and
+ * EPA registration numbers.
+ */
 function formatExpected(c: CaseRenderDetail): string {
+  if (!hasExpectation(c)) return '_(no expected answer recorded)_';
+
   const parts: string[] = [];
   if (c.idealResponse) parts.push(normalizeAgentMarkdownLists(c.idealResponse.trim()));
-  if (c.expectedConcepts) parts.push(`**Expected concepts:** ${c.expectedConcepts.trim()}`);
-  if (c.minimumConcepts) parts.push(`**Minimum concepts:** ${c.minimumConcepts.trim()}`);
-  if (c.expectedSources) parts.push(`**Expected sources:** ${c.expectedSources.trim()}`);
-  if (c.expectedShouldAnswer != null) {
-    parts.push(`**Should answer:** ${c.expectedShouldAnswer ? 'Yes' : 'No'}`);
+  if (c.expectedConcepts.length > 0) {
+    parts.push(`**Expected concepts:** ${formatConceptList(c.expectedConcepts)}`);
   }
-  return parts.length > 0 ? parts.join('\n\n') : '_(no expected answer recorded)_';
+  parts.push(
+    `**${MANDATORY_CONCEPTS_LABEL}:** ${
+      c.minimumConcepts.length > 0
+        ? formatConceptList(c.minimumConcepts)
+        : NO_MANDATORY_CONCEPTS_NOTE
+    }`,
+  );
+  if (c.expectedSources.length > 0) {
+    parts.push(`**Expected sources:** ${formatExpectedSourceRefs(c.expectedSources)}`);
+  }
+  return parts.join('\n\n');
 }
 
 /**

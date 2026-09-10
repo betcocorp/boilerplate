@@ -36,22 +36,22 @@ export function formatPercent(value: number | null | undefined): string {
 }
 
 /**
- * Formats a `boolean | null` expected-answer flag as a human-readable label.
- * Used in UI badges and table cells.
+ * Formats a `boolean | null` expectation flag as a human-readable label for UI badges and table
+ * cells. B0-932 retired `expected_should_answer`, so `should_cite` is now its only subject.
  */
-export function formatExpectedShouldAnswerLabel(
-  value: boolean | null,
-): string {
+export function formatYesNoLabel(value: boolean | null): string {
   if (value === null) return 'Unset';
   return value ? 'Yes' : 'No';
 }
 
 /**
- * Formats a `boolean | null` expectation flag (`should_answer`, `should_cite`) for CSV
- * export. Returns lowercase "yes" / "no" / "" (empty for unset) — the same vocabulary the
- * importer in `~/lib/tests/csv` accepts, so exports re-import unchanged.
+ * Formats a `boolean | null` expectation flag for CSV export. Returns lowercase "yes" / "no" / ""
+ * (empty for unset) — the same vocabulary the importer in `~/lib/tests/csv` accepts, so exports
+ * re-import unchanged.
+ *
+ * B0-932 retired `expected_should_answer`, so `should_cite` is now the only flag of this shape.
  */
-export function formatShouldAnswerExport(value: boolean | null): string {
+export function formatYesNoExport(value: boolean | null): string {
   if (value === true) return 'yes';
   if (value === false) return 'no';
   return '';

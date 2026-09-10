@@ -32,6 +32,7 @@ import {
   buildPromptAggregations,
   extractItemMaxSimilarity,
 } from '~/lib/tests/prompt-aggregations';
+import { loadDocumentTitlesByIds } from '~/lib/tests/report/expected-sources-repository';
 import { parseReportState } from '~/lib/tests/report/schemas';
 import {
   resolveGoldenSetItemOrigins,
@@ -282,6 +283,10 @@ export default async function AdminTestDetailsPage({
   ]);
   const goldenOriginsByItemId: Record<string, GoldenSetItemOrigin> =
     Object.fromEntries(goldenOrigins);
+  // B0-933 — one batched lookup for every `expected_sources` id on the page.
+  const documentTitlesById = await loadDocumentTitlesByIds(
+    items.flatMap((item) => item.expected_sources ?? []),
+  );
   const resultItemsByRunId = new Map<string, typeof allRecentResultItems>();
   for (const item of allRecentResultItems) {
     const list = resultItemsByRunId.get(item.test_result_id);
@@ -710,7 +715,7 @@ export default async function AdminTestDetailsPage({
                 <TableRow>
                   <TableHead>Run id</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead title="Gold eval pass rate — items that satisfy expected_should_answer, expected_canonical_product, and expected_result_type constraints. For unconstrained items, pass = any match returned.">
+                  <TableHead title="Gold eval pass rate — items that satisfy their expected_canonical_product constraint. For unconstrained items, pass = any match returned.">
                     Gold pass %
                   </TableHead>
                   <TableHead title="Average of each prompt's highest similarity score — the primary quality signal when tuning retrieval.">
@@ -867,13 +872,12 @@ export default async function AdminTestDetailsPage({
             aggregationsByItemId={aggregationsForClient}
             canonicalProductLabels={legacyProductLines.labelByKey}
             datasetName={test.name}
+            documentTitlesById={documentTitlesById}
             goldenOriginsByItemId={goldenOriginsByItemId}
             items={items.map((item) => ({
               id: item.id,
               row_index: item.row_index,
               prompt: item.prompt,
-              expected_should_answer: item.expected_should_answer,
-              expected_result_type: item.expected_result_type,
               expected_canonical_product: item.expected_canonical_product,
               expected_reason_code: item.expected_reason_code,
               source: item.source,

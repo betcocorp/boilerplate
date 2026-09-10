@@ -20,7 +20,6 @@ import {
   getTestResultById,
   listAllResultItemsByResultId,
 } from '~/lib/tests/repository';
-import { formatExpectedShouldAnswerLabel } from '~/lib/tests/format';
 import { formatDate, formatDurationSeconds } from '~/lib/utils/time';
 import {
   extractProgress,
@@ -83,27 +82,20 @@ export default async function AdminSearchRunDetailsPage({
       : initialCompletedItemsRaw;
 
   const promptByItemId = new Map(testItems.map((item) => [item.id, item.prompt]));
-  const shouldAnswerByItemId = new Map(
-    testItems.map((item) => [item.id, item.expected_should_answer]),
-  );
-
-  type ItemCategory = 'negative' | 'unconstrained' | 'product_only' | 'section_only' | 'both_constraints';
+  /**
+   * B0-933 — `expected_should_answer` and `expected_result_type` are gone, so the only remaining
+   * gold constraint on a search-eval item is its expected product line. The negative/OOD and
+   * section-type buckets went with the columns that defined them.
+   */
+  type ItemCategory = 'unconstrained' | 'product_only';
   function categorizeItem(item: (typeof testItems)[number]): ItemCategory {
-    if (item.expected_should_answer === false) return 'negative';
     const hasProduct = typeof item.expected_canonical_product === 'string' && item.expected_canonical_product.trim() !== '';
-    const hasSection = typeof item.expected_result_type === 'string' && item.expected_result_type.trim() !== '';
-    if (hasProduct && hasSection) return 'both_constraints';
-    if (hasProduct) return 'product_only';
-    if (hasSection) return 'section_only';
-    return 'unconstrained';
+    return hasProduct ? 'product_only' : 'unconstrained';
   }
 
   const categoryMeta: Record<ItemCategory, { label: string; description: string }> = {
-    negative: { label: 'Negative / OOD', description: 'Out-of-domain queries that should return no relevant match' },
-    unconstrained: { label: 'Unconstrained', description: 'Any match is a pass — no product or section constraint' },
+    unconstrained: { label: 'Unconstrained', description: 'Any match is a pass — no product constraint' },
     product_only: { label: 'Product match', description: 'Must match expected product line' },
-    section_only: { label: 'Section match', description: 'Must match expected document section type' },
-    both_constraints: { label: 'Product + section', description: 'Must satisfy both product line and section type in the same chunk' },
   };
 
   const categoryItemIds = new Map<ItemCategory, Set<string>>();
@@ -270,10 +262,7 @@ export default async function AdminSearchRunDetailsPage({
                 <TableRow>
                   <TableHead>Row</TableHead>
                   <TableHead>Prompt</TableHead>
-                  <TableHead title="Whether this prompt is expected to be answered (from test item metadata)">
-                    Should answer?
-                  </TableHead>
-                  <TableHead title="Whether this item passed the gold eval criteria (product line, section type, negative test threshold)">
+                  <TableHead title="Whether this item passed the gold eval criteria (expected product line; unconstrained items pass on any match)">
                     Pass?
                   </TableHead>
                   <TableHead title="Query sent to vector search after rewrite">
@@ -293,7 +282,7 @@ export default async function AdminSearchRunDetailsPage({
               <TableBody>
                 {chronologicalItems.length === 0 ? (
                   <TableRow>
-                    <TableCell className="text-slate-500" colSpan={10}>
+                    <TableCell className="text-slate-500" colSpan={9}>
                       No results yet — run is still in progress.
                     </TableCell>
                   </TableRow>
@@ -311,7 +300,6 @@ export default async function AdminSearchRunDetailsPage({
                     const displayQuery = queryRewritten ?? queryUsed;
                     const isRewritten = Boolean(queryRewritten);
 
-                    const shouldAnswer = shouldAnswerByItemId.get(row.test_item_id);
                     const passReason = extractSearchRunPassReason(row.response_payload);
                     return (
                       <TableRow key={row.id}>
@@ -320,24 +308,6 @@ export default async function AdminSearchRunDetailsPage({
                         </TableCell>
                         <TableCell className="max-w-[280px] whitespace-normal text-xs text-slate-700">
                           {prompt}
-                        </TableCell>
-                        <TableCell className="whitespace-nowrap">
-                          <Badge
-                            className={
-                              shouldAnswer === true
-                                ? 'border-emerald-600/45 bg-emerald-600/12 text-emerald-900'
-                                : undefined
-                            }
-                            variant={
-                              shouldAnswer === null || shouldAnswer === undefined
-                                ? 'secondary'
-                                : shouldAnswer === true
-                                  ? 'outline'
-                                  : 'destructive'
-                            }
-                          >
-                            {formatExpectedShouldAnswerLabel(shouldAnswer ?? null)}
-                          </Badge>
                         </TableCell>
                         <TableCell className="whitespace-nowrap">
                           <Badge

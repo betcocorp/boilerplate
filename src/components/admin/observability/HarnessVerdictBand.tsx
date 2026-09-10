@@ -14,13 +14,21 @@
  * row is a flat list of independent badges (dropping one leaves no gap or dangling separator) and the
  * ideal-response pane states its own absence instead of collapsing to blank space.
  *
- * Prompt, answer and ideal response are rendered verbatim and untruncated — they can carry regulated
- * figures (oz/gal, ppm, contact times) that must not be reformatted.
+ * B0-933 — the "Expected answer: yes/no" badge is gone with the `expected_should_answer` column.
+ * What replaced it is the thing that now actually decides Passed/Failed: the item's **mandatory
+ * concepts** (`test_items.minimum_concepts`). Under B0-932 an item passes only when every one of
+ * them is covered, so listing them is what makes the verdict above legible. A badge alone would not
+ * do that — the phrases themselves are the expectation — so they get their own pane beside the
+ * ideal response.
+ *
+ * Prompt, answer, ideal response and every concept phrase are rendered verbatim and untruncated —
+ * they can carry regulated figures (oz/gal, ppm, contact times, EPA reg. nos.) that must not be
+ * reformatted.
  */
 
 import { BexStreamdown } from '~/components/bex/BexStreamdown';
 import { Badge } from '~/components/ui/badge';
-import { formatExpectedShouldAnswerLabel, formatSimilarityValue } from '~/lib/tests/format';
+import { formatSimilarityValue } from '~/lib/tests/format';
 import { formatDurationSeconds } from '~/lib/utils/time';
 
 import type { HarnessRunContext } from '~/lib/observability/harness-linkage';
@@ -39,7 +47,7 @@ export function HarnessVerdictBand({
   const {
     elapsedMs,
     errorMessage,
-    expectedShouldAnswer,
+    mandatoryConcepts,
     idealResponse,
     passed,
     priority,
@@ -72,8 +80,13 @@ export function HarnessVerdictBand({
           >
             {passed ? 'Passed' : 'Failed'}
           </Badge>
-          <Badge variant="outline">
-            Expected answer: {formatExpectedShouldAnswerLabel(expectedShouldAnswer)}
+          <Badge
+            title="Covering every must-have concept is what makes this row pass (B0-932)."
+            variant="outline"
+          >
+            {mandatoryConcepts.length > 0
+              ? `${mandatoryConcepts.length} must-have concept${mandatoryConcepts.length === 1 ? '' : 's'}`
+              : 'No must-have concepts'}
           </Badge>
           <Badge variant="outline">Row {rowIndex}</Badge>
           {priority !== null ? (
@@ -102,6 +115,25 @@ export function HarnessVerdictBand({
         <p className="mt-1.5 whitespace-pre-wrap break-words text-sm text-slate-800">
           {prompt}
         </p>
+      </div>
+
+      <div className="mt-4 rounded-2xl border border-slate-100 bg-slate-50/70 p-4">
+        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+          Must-have concepts (the pass/fail axis)
+        </p>
+        {mandatoryConcepts.length > 0 ? (
+          <ul className="mt-1.5 list-disc space-y-1 pl-5 text-sm text-slate-800">
+            {mandatoryConcepts.map((concept) => (
+              <li key={concept} className="whitespace-pre-wrap break-words">
+                {concept}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-1.5 text-sm text-slate-400">
+            This prompt records no must-have concepts, so nothing gates its verdict on coverage.
+          </p>
+        )}
       </div>
 
       <div className="mt-4 grid gap-4 sm:grid-cols-2">

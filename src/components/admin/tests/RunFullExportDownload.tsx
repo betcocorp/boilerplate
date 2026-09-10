@@ -17,7 +17,6 @@ export type RunExportItem = {
   prompt: string;
   /** Item priority rank (lower = more important); null when unset. */
   priority: number | null;
-  expected_should_answer: boolean | null;
   passed: boolean;
   status: string;
   similarity: number | null;
@@ -33,10 +32,16 @@ export type RunExportItem = {
   error_message: string | null;
   /** Gold-standard answer for this item; null when unset. */
   ideal_response: string | null;
-  /** Golden-set expectations, verbatim as authored; null when unset. */
-  expected_concepts: string | null;
-  minimum_concepts: string | null;
-  expected_sources: string | null;
+  /**
+   * B0-933 — golden-set expectations. The underlying columns are arrays; they are emitted as
+   * pipe-delimited cells (`a | b`) so an export round-trips through the CSV importer. Phrases are
+   * verbatim as authored — never rounded, unit-converted, re-cased or truncated. Empty when unset.
+   */
+  expected_concepts: string;
+  minimum_concepts: string;
+  expected_criteria: string;
+  /** Pipe-delimited `rag.document.id` uuids, in author order. */
+  expected_sources: string;
   should_cite: boolean | null;
   timing: {
     toolRounds: number;
