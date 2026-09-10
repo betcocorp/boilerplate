@@ -129,7 +129,9 @@ export async function listTests(includeArchived = false) {
       .eq('report_state->>status', 'completed'),
     supabase
       .from('test_results')
-      .select('test_id, overall_avg:report_state->overall->>avg, failed_items, created_at')
+      .select(
+        'test_id, overall_avg:report_state->overall->>avg, failed_items, model_tag:run_options->>modelTag, created_at',
+      )
       .eq('report_state->>status', 'completed')
       .order('created_at', { ascending: false }),
   ]);
@@ -162,6 +164,7 @@ export async function listTests(includeArchived = false) {
   // rendered on its own.
   const latestRunScoreByTestId = new Map<string, number | null>();
   const latestRunFailedItemsByTestId = new Map<string, number | null>();
+  const latestRunModelTagByTestId = new Map<string, string | null>();
   const previousRunScoreByTestId = new Map<string, number>();
   const latestScoreData = assertNoError(latestRunScores) || [];
   const seenCountByTestId = new Map<string, number>();
@@ -169,6 +172,7 @@ export async function listTests(includeArchived = false) {
     test_id: string;
     overall_avg: string | null;
     failed_items: number | null;
+    model_tag: string | null;
   }>) {
     const seenCount = seenCountByTestId.get(row.test_id) ?? 0;
     seenCountByTestId.set(row.test_id, seenCount + 1);
@@ -185,6 +189,7 @@ export async function listTests(includeArchived = false) {
     if (seenCount === 0) {
       latestRunScoreByTestId.set(row.test_id, roundedAvg);
       latestRunFailedItemsByTestId.set(row.test_id, row.failed_items ?? null);
+      latestRunModelTagByTestId.set(row.test_id, row.model_tag ?? null);
     } else if (roundedAvg !== null) {
       previousRunScoreByTestId.set(row.test_id, roundedAvg);
     }
@@ -211,6 +216,7 @@ export async function listTests(includeArchived = false) {
           ? Math.round((latestRunScore - previousRunScore) * 10) / 10
           : null,
       latest_run_failed_items: latestRunFailedItemsByTestId.get(test.id) ?? null,
+      latest_run_model_tag: latestRunModelTagByTestId.get(test.id) ?? null,
     };
   }) as TestRecordWithCompletionCount[];
 }
@@ -753,7 +759,8 @@ export type ReportRunRow = {
   /** Overall 0–100 score, present only once the report finished scoring (B0-609). */
   score: number | null;
   grade: ReportOverall['grade'] | null;
-  /** Evaluated cases graded Fail (`report_state.overall.fail`); null on a report that predates it. */
+  /** Failing prompts in this run (`test_results.failed_items`) — the same harness-computed count
+   * the "Fails" column on `/admin/tests` shows for a test's latest run. Null if never recorded. */
   failCount: number | null;
   /** Session email of whoever started the run, `api-client` for a service-token run, or null. */
   triggeredBy: string | null;
@@ -800,6 +807,9 @@ export async function listAllReportRuns(): Promise<ReportRunRow[]> {
     triggered_by: string | null;
     run_options: unknown;
     app_version: string | null;
+    /** Harness-computed failing-prompt count for this run (same field the "Fails" column on
+     * `/admin/tests` reads for a test's latest run — B0-585/B0-630). */
+    failed_items: number | null;
     tests: EmbeddedTest | EmbeddedTest[] | null;
   };
 
@@ -809,7 +819,7 @@ export async function listAllReportRuns(): Promise<ReportRunRow[]> {
     const result = await supabase
       .from('test_results')
       .select(
-        'id, test_id, started_at, report_generated_at, report_state, triggered_by, run_options, app_version, tests!inner(id, name, is_archived)',
+        'id, test_id, started_at, report_generated_at, report_state, triggered_by, run_options, app_version, failed_items, tests!inner(id, name, is_archived)',
       )
       .not('report_state', 'is', null)
       .eq('tests.is_archived', false)
@@ -927,7 +937,7 @@ export async function listAllReportRuns(): Promise<ReportRunRow[]> {
       reportStatus: state?.status ?? null,
       score: typeof overall?.avg === 'number' ? overall.avg : null,
       grade: overall?.grade ?? null,
-      failCount: typeof overall?.fail === 'number' ? overall.fail : null,
+      failCount: typeof row.failed_items === 'number' ? row.failed_items : null,
       triggeredBy: row.triggered_by,
       modelTag,
       routerType,

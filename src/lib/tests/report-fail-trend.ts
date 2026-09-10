@@ -6,9 +6,10 @@ import type { ReportRunRow } from '~/lib/tests/repository';
  * SAME DATASET that recorded a fail count), but over a plain integer count rather than a
  * millisecond-valued metric, so values are never divided or scaled into seconds.
  *
- * A run whose report predates the persisted fail count (`ReportRunRow.failCount === null`) is
- * dropped from the series — neither a plotted point nor either side of a comparison — same
- * "no data, not zero" rule the score and metric trends use.
+ * `ReportRunRow.failCount` is `test_results.failed_items` — the same harness-computed count the
+ * "Fails" column on `/admin/tests` shows for a test's latest run. A run that never recorded one
+ * (`failCount === null`) is dropped from the series — neither a plotted point nor either side of
+ * a comparison — same "no data, not zero" rule the score and metric trends use.
  */
 
 const MINUS = '−';

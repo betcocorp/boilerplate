@@ -44,6 +44,8 @@ export type TestRecordWithCompletionCount = TestRecord & {
   latest_run_score_delta: number | null;
   /** `test_results.failed_items` for the latest completed report run; `null` when there is none. */
   latest_run_failed_items: number | null;
+  /** `run_options.modelTag` (generation model) for the latest completed report run; `null` when unrecorded or there is none. */
+  latest_run_model_tag: string | null;
 };
 export type TestItemRecord = Tables<'test_items'>;
 export type TestResultRecord = Tables<'test_results'>;

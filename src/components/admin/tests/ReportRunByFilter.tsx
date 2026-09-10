@@ -55,11 +55,14 @@ export function ReportRunByFilter({
 
   return (
     <div
-      className={`flex items-center gap-2 transition-opacity ${
+      className={`flex shrink-0 items-center gap-2 transition-opacity ${
         isPending ? 'opacity-60' : ''
       }`}
     >
-      <Label className="text-sm text-slate-600" htmlFor="reports-run-by">
+      <Label
+        className="whitespace-nowrap text-sm text-slate-600"
+        htmlFor="reports-run-by"
+      >
         Run by
       </Label>
       <FormSelectField
@@ -78,15 +81,6 @@ export function ReportRunByFilter({
         ]}
         value={selectedRunBy}
       />
-      {selectedRunBy ? (
-        <button
-          className="text-sm text-sky-700 underline-offset-2 hover:underline"
-          onClick={() => selectRunBy('')}
-          type="button"
-        >
-          Clear
-        </button>
-      ) : null}
     </div>
   );
 }
