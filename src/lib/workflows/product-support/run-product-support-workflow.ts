@@ -4486,6 +4486,17 @@ export async function runProductSupportWorkflow(input: {
      * ran, or it ran and was refused.
      */
     let revisedAnswerRecord: string | null = null;
+    /**
+     * B0-923 — the draft exactly as it stood IMMEDIATELY BEFORE the revision pass overwrote it:
+     * the text that would have shipped had the revision pass not run. Deliberately not
+     * `strippedAssistantText` — the cross-reference branches above legitimately recompose
+     * `draftAnswer` before this point, and this snapshot must carry those.
+     *
+     * Read only by the regulated-claim guardrail below, to separate a regulated claim the MODEL
+     * asserted from safety framing OUR revision pass added on top of it. Null when no revision pass
+     * replaced the draft this turn.
+     */
+    let preRevisionDraftAnswer: string | null = null;
     // B0-554 — per-model-call usage for every call this step makes (0, 1, or 2: the validator can
     // run twice when the revision pass produces a re-check), summed onto the step's output below.
     const validatorUsageByCall: LlmTokenUsage[] = [];
@@ -4642,6 +4653,9 @@ export async function runProductSupportWorkflow(input: {
         markStepClosed(revisionStep.id);
 
         if (revised && !revisionRefused) {
+          // B0-923 — snapshot the text the revision pass is about to replace; see
+          // `preRevisionDraftAnswer`'s doc comment above.
+          preRevisionDraftAnswer = draftAnswer;
           draftAnswer = revised;
           // B0-391 — the revision model wrote this text, replacing whatever the earlier branches had.
           answerProvenance = 'revision_pass';
@@ -4832,6 +4846,12 @@ export async function runProductSupportWorkflow(input: {
       // disclose, or the model already did) deliberately leaves provenance untouched.
       answerProvenance = 'alias_fuzzy_disclosure_prepended';
     }
+    // B0-923 — the pre-revision fallback draft gets the identical deterministic disclosure, so if
+    // it is restored below it is byte-for-byte the text that would have shipped without the
+    // revision pass, disclosure included — and it is swept through the guardrail the same way.
+    if (preRevisionDraftAnswer !== null) {
+      preRevisionDraftAnswer = maybeDiscloseAliasFuzzyMatch(preRevisionDraftAnswer, toolOutputLog);
+    }
 
     // B0-257: regulated-claim guardrail -- evaluated unconditionally (independent of the
     // `useValidator` opt-in toggle above, which only gates the LLM semantic-judge pass).
@@ -4869,15 +4889,73 @@ export async function runProductSupportWorkflow(input: {
             .map((c) => c.document_id)
         : [],
     );
-    const regulatedClaimGrounding = evaluateRegulatedClaimGrounding({
+    const regulatedClaimGroundingSources = sourceMeta.map((s) => ({
+      documentId: s.documentId,
+      title: s.title,
+      documentBody: fullDocumentBodies.get(s.documentId)?.body ?? s.documentBody,
+      isLockedProductLineSource: lockedProductLineDocumentIds.has(s.documentId),
+    }));
+    const servedDraftRegulatedClaimGrounding = evaluateRegulatedClaimGrounding({
       draftAnswer,
-      sources: sourceMeta.map((s) => ({
-        documentId: s.documentId,
-        title: s.title,
-        documentBody: fullDocumentBodies.get(s.documentId)?.body ?? s.documentBody,
-        isLockedProductLineSource: lockedProductLineDocumentIds.has(s.documentId),
-      })),
+      sources: regulatedClaimGroundingSources,
     });
+
+    /**
+     * B0-923 — judge the model's OWN draft too, not only the revised one.
+     *
+     * The guardrail runs after the revision pass, so on a revised turn it judges text the revision
+     * pass wrote. That pass is instructed to tighten grounding and it adds safety framing of its
+     * own ("handle and dispose of oily rags accordingly", "always maintain adequate ventilation").
+     * Attributing that prose to the model and declining on it is our own second pass manufacturing
+     * a rejection: in the 2026-09-09 eval run `regulated_claim_unverified:hazard` fired 21 times on
+     * 106 items with the validator on, against 2 with it off, each time replacing a ~2,000-char
+     * grounded answer with 264 characters of decline copy.
+     *
+     * So: when the REVISED draft is rejected and the PRE-REVISION draft is clean, serve the
+     * pre-revision draft. Fail-closed is preserved, and this is narrower than it may look:
+     *
+     * - The pre-revision draft must be ENTIRELY clean (`ungroundedCategories.length === 0`), not
+     *   merely clean for the rejecting categories — a pre-revision draft carrying its own
+     *   different ungrounded regulated claim is never served.
+     * - What ships is text this guardrail INDEPENDENTLY PASSED. The revised text's rejection is
+     *   never waived, and the revised text is never served with the objection ignored.
+     * - Nothing about verbatim matching, what counts as grounding, or which sentences are
+     *   classified as claims changes; only which of two candidate drafts is judged and served.
+     * - If the pre-revision draft is also rejected, behaviour is byte-identical to today: the
+     *   redaction/decline path below runs on the revised draft exactly as before.
+     */
+    let preRevisionDraftRestored = false;
+    let regulatedClaimGrounding = servedDraftRegulatedClaimGrounding;
+    if (
+      servedDraftRegulatedClaimGrounding.ungroundedCategories.length > 0 &&
+      preRevisionDraftAnswer !== null &&
+      preRevisionDraftAnswer.trim().length > 0 &&
+      preRevisionDraftAnswer !== draftAnswer
+    ) {
+      const preRevisionGrounding = evaluateRegulatedClaimGrounding({
+        draftAnswer: preRevisionDraftAnswer,
+        sources: regulatedClaimGroundingSources,
+      });
+      if (preRevisionGrounding.ungroundedCategories.length === 0) {
+        draftAnswer = preRevisionDraftAnswer;
+        // From here on the served text IS the pre-revision draft, so every downstream consumer
+        // (the decline branch, the dilution-citation guardrail, the review task payload) reads the
+        // grounding result for the text that actually ships.
+        regulatedClaimGrounding = preRevisionGrounding;
+        answerProvenance = 'pre_revision_draft_restored';
+        preRevisionDraftRestored = true;
+        audit.enqueue(
+          'regulated_claim_pre_revision_draft_restored',
+          {
+            revisedDraftUngroundedCategories:
+              servedDraftRegulatedClaimGrounding.ungroundedCategories,
+            revisedDraftUngroundedDetails: servedDraftRegulatedClaimGrounding.ungroundedDetails,
+            preRevisionCategoriesDetected: preRevisionGrounding.categoriesDetected,
+          },
+          { ...wfCtx, stepId: validationStep.id },
+        );
+      }
+    }
 
     // B0-494 — this gate is evaluated unconditionally (see comment above), so it is either `ran`
     // (whether or not it found anything to reject) or `bypassed` by the kill switch — never
@@ -4994,6 +5072,39 @@ export async function runProductSupportWorkflow(input: {
           verdict: redactionApplied ? 'redacted' : 'rejected',
         };
       }
+    } else if (preRevisionDraftRestored) {
+      /**
+       * B0-923 — the guardrail RAN and REJECTED the revised draft, the pre-revision draft was
+       * clean, and the pre-revision draft was served. Recorded as its own verdict (not `passed`)
+       * so the run trace shows the guardrail acted: `extractFiredGates` reports any verdict other
+       * than `passed` as a gate that fired, which is exactly right here — the revision pass's text
+       * was discarded on this gate's objection.
+       */
+      validatorStepGates.push({
+        gate: 'regulated_claim_guardrail',
+        inputs: {
+          // The SERVED (pre-revision) draft's own grounding result.
+          categoriesDetected: regulatedClaimGrounding.categoriesDetected,
+          ungroundedCategories: [],
+          groundedSourceCount: sourceMeta.length,
+          groundingMode:
+            regulatedClaimGrounding.keyTermGroundedCategories.length > 0 ? 'key_term' : 'verbatim',
+          // What the guardrail rejected on the REVISED draft, i.e. what our own revision pass
+          // introduced. Kept verbatim from the rejection so a reviewer can read the exact snippets.
+          revisedDraftUngroundedCategories:
+            servedDraftRegulatedClaimGrounding.ungroundedCategories,
+          revisedDraftUngroundedDetails: servedDraftRegulatedClaimGrounding.ungroundedDetails,
+          preRevisionDraftClean: true,
+          servedDraft: 'pre_revision',
+        },
+        thresholds: { note: 'hard verbatim-match requirement, not a numeric threshold' },
+        verdict: 'restored_pre_revision_draft',
+        effect: `${servedDraftRegulatedClaimGrounding.ungroundedCategories.join(', ')} could not be verified verbatim against a retrieved source ON THE REVISED DRAFT, but the pre-revision draft contained nothing ungrounded — the rejection came from the revision pass's own added prose, not from the model's answer. The revised text was discarded and the pre-revision draft (which this guardrail passed) was served; no cap, no decline copy. See answerProvenance pre_revision_draft_restored, and revisedAnswer for the text that was rejected.`,
+      });
+      regulatedClaimGuardrailActivation = {
+        state: 'ran',
+        verdict: 'restored_pre_revision_draft',
+      };
     } else {
       /**
        * B0-358 — the guardrail RAN and found nothing ungrounded. Previously this produced no record
@@ -5562,9 +5673,14 @@ export async function runProductSupportWorkflow(input: {
         // pass's text (recomposed by the cross-reference headline or not) when the SECOND validator
         // pass also rejected it. Distinguishing the two means a reviewer/observability reader can
         // tell which text the user actually saw without cross-referencing the revision step.
-        answerProvenance = draftReplacedByRevision
-          ? 'revised_answer_retained'
-          : 'validator_rejected_draft_retained';
+        // B0-923 — a restored pre-revision draft is neither of those two: the revision pass DID
+        // replace the draft, and then the regulated-claim guardrail put the pre-revision text
+        // back. Claiming `revised_answer_retained` here would name the wrong text.
+        answerProvenance = preRevisionDraftRestored
+          ? 'pre_revision_draft_restored'
+          : draftReplacedByRevision
+            ? 'revised_answer_retained'
+            : 'validator_rejected_draft_retained';
         // Force the flag even when the validator's own judgment didn't request review: a kept
         // (non-hard-replaced) rejection must always surface for a human, never just silently ride
         // through as if nothing happened.
@@ -5605,9 +5721,12 @@ export async function runProductSupportWorkflow(input: {
           issues: validation.issues,
           // B0-886 — both `validator_rejected_draft_retained` and `revised_answer_retained` mean
           // "the streamed text was kept, not hard-replaced"; only which TEXT differs.
+          // B0-923 — `pre_revision_draft_restored` is the same fact: the pre-revision draft (what
+          // the user watched stream in) is what shipped, not canned decline copy.
           answerRetained:
             answerProvenance === 'validator_rejected_draft_retained' ||
-            answerProvenance === 'revised_answer_retained',
+            answerProvenance === 'revised_answer_retained' ||
+            answerProvenance === 'pre_revision_draft_restored',
         });
       }
     }
