@@ -55,6 +55,20 @@ describe('buildCompetitorIdentityClarification (P#10)', () => {
     expectGuardrailClean(copy);
   });
 
+  it('B0-955 — says the Betco label values come back with the match and must be checked before converting', () => {
+    const copy = buildCompetitorIdentityClarification({ userMessage: IDENTICAL_QUESTION });
+    expect(copy).toContain("that Betco product's own label values");
+    expect(copy).toContain('dilution, contact time, approved surfaces and registration number');
+    expect(copy).toContain('before converting');
+    expect(copy).toContain('never carry across');
+    // Still the P#10 ask and the P#10 correction.
+    expect(copy).toContain('brand and the exact product name');
+    expect(copy).toContain('comparable products for the same application, not chemically identical ones');
+    // No regulated value is quoted — only the names of the fields the match will carry.
+    expect(copy).not.toMatch(/\d/);
+    expectGuardrailClean(copy);
+  });
+
   it('adds the "not chemically identical" clause only when the user asked for "identical"', () => {
     expect(asksForIdenticalProduct(IDENTICAL_QUESTION)).toBe(true);
     const copy = buildCompetitorIdentityClarification({ userMessage: IDENTICAL_QUESTION });

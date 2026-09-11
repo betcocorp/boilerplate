@@ -8,9 +8,10 @@ import { CROSS_REFERENCE_CLAIMS_NON_TRANSFER_STATEMENT } from '~/lib/agents/cros
  * (`XREF_DECLINE_COPY`). The golden set expects three different replies for three different
  * shapes, none of which the fixed copy can give:
  *
- *  (a) no competitor identified → ask for the brand and exact product name, and say what a
+ *  (a) no competitor identified → ask for the brand and exact product name, say what a
  *      cross-reference actually finds (comparable products for the same application, never an
- *      "identical" one);
+ *      "identical" one), and — B0-955 — what comes back with the match: the Betco product's own
+ *      label values, to be verified against the current use before converting;
  *  (b) a claim-equivalence question ("kills everything X does, right?") → lead with the
  *      regulatory non-transfer statement and point to the Betco label, THEN the engine's decline;
  *  (c) a chemistry class offered in place of a product ("a Diversey quat disinfectant") → ask
@@ -58,7 +59,8 @@ export function buildCompetitorIdentityClarification(input: { userMessage: strin
   return [
     "To look up a Betco cross-reference I need the competitor product's brand and the exact product name as printed on its label — the EPA registration number, if the label shows one, helps too.",
     scope,
-    "Reply with the brand and product name and I'll look up the documented match.",
+    "Reply with the brand and product name and I'll look up the documented match along with that Betco product's own label values — dilution, contact time, approved surfaces and registration number.",
+    "Check those against your current use before converting: a competitor product's claims stay with its own label and never carry across to another one.",
   ].join(' ');
 }
 
