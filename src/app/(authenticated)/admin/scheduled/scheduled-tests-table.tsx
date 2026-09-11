@@ -13,6 +13,7 @@ import {
 } from '~/components/ui/table';
 import { Badge } from '~/components/ui/badge';
 import {
+  computeScheduledRunAggregates,
   isTerminalScheduledItemStatus,
   type ScheduledRunStatus,
   type ScheduledTestRunWithItems,
@@ -55,6 +56,31 @@ function getRunDisplayStatus(run: ScheduledTestRunWithItems): ScheduledRunStatus
   return hasOpenItems ? 'in_progress' : run.status;
 }
 
+/**
+ * Counts lag for the same reason the status does, so they are derived from the children the page
+ * already has rather than read off the parent — otherwise a sweep with a dispatch failure shows
+ * 0 failed until the reconciler catches up. The stored columns are the fallback for a sweep whose
+ * children were never written.
+ */
+function getRunDisplayCounts(run: ScheduledTestRunWithItems) {
+  if (run.items.length === 0) {
+    return {
+      successful: run.successful_tests,
+      failed: run.failed_tests,
+      timedOut: run.timed_out_tests,
+      successRate: run.success_rate,
+    };
+  }
+
+  const derived = computeScheduledRunAggregates(run.items);
+  return {
+    successful: derived.successful_tests,
+    failed: derived.failed_tests,
+    timedOut: derived.timed_out_tests,
+    successRate: derived.success_rate,
+  };
+}
+
 function formatRate(rate: number | null): string {
   // Null is "nothing terminal to measure yet" — never the same claim as 0%.
   return rate === null ? '—' : `${Math.round(rate * 100)}%`;
@@ -72,6 +98,7 @@ function ScheduledTestRunRow({
   onExpandChange,
 }: ScheduledTestRunRowProps) {
   const displayStatus = getRunDisplayStatus(run);
+  const counts = getRunDisplayCounts(run);
 
   return (
     <>
@@ -101,16 +128,16 @@ function ScheduledTestRunRow({
         </TableCell>
         <TableCell className="text-center text-sm text-slate-600">
           <span className="font-medium text-green-700">
-            {run.successful_tests}
+            {counts.successful}
           </span>
           /
-          <span className="font-medium text-red-700">{run.failed_tests}</span>/
+          <span className="font-medium text-red-700">{counts.failed}</span>/
           <span className="font-medium text-orange-700">
-            {run.timed_out_tests}
+            {counts.timedOut}
           </span>
         </TableCell>
         <TableCell className="text-center text-sm text-slate-600">
-          {formatRate(run.success_rate)}
+          {formatRate(counts.successRate)}
         </TableCell>
         <TableCell className="text-sm text-slate-600">
           {run.elapsed_ms ? formatDurationMs(run.elapsed_ms) : '—'}
