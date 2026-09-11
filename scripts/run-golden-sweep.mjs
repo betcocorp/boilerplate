@@ -9,6 +9,7 @@
  *                 Required. Set in .env.local or pass via CLI.
  *   BASE_URL — Base URL for the API (default: http://localhost:3000)
  *   DRY_RUN — Set to "true" to preview without executing (default: false)
+ *   TIMEOUT_SECONDS — How long to wait for sweep to complete (default: 900 = 15 minutes)
  *
  * Examples:
  *   # Run locally with CRON_SECRET from .env.local
@@ -19,6 +20,9 @@
  *
  *   # Dry run (preview only, don't actually execute tests)
  *   DRY_RUN=true pnpm run:golden-sweep
+ *
+ *   # Custom timeout (e.g., 30 minutes for very large test sets)
+ *   TIMEOUT_SECONDS=1800 pnpm run:golden-sweep
  */
 
 import process from 'node:process';
@@ -26,6 +30,7 @@ import process from 'node:process';
 const CRON_SECRET = process.env.CRON_SECRET;
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
 const DRY_RUN = process.env.DRY_RUN === 'true';
+const TIMEOUT_SECONDS = parseInt(process.env.TIMEOUT_SECONDS || '900', 10); // Default 15 minutes
 
 if (!CRON_SECRET) {
   console.error('❌ Error: CRON_SECRET environment variable is not set');
@@ -41,12 +46,12 @@ if (!CRON_SECRET) {
 
 const endpoint = `${BASE_URL}/api/v1/observability/run-golden-test-sweep`;
 const payload = DRY_RUN ? { dryRun: true } : {};
-const TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes — golden tests run concurrently and can be slow
+const TIMEOUT_MS = TIMEOUT_SECONDS * 1000;
 
 console.log('🔄 Triggering golden test sweep...');
 console.log(`   Endpoint: ${endpoint}`);
 console.log(`   Dry run: ${DRY_RUN ? 'yes (preview only)' : 'no (will execute)'}`);
-console.log(`   Timeout: ${TIMEOUT_MS / 1000 / 60} minutes`);
+console.log(`   Timeout: ${TIMEOUT_SECONDS} seconds (~${Math.round(TIMEOUT_SECONDS / 60)} minutes)`);
 console.log('');
 console.log('⏳ Sending request to server...');
 
