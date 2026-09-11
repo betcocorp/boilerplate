@@ -55,6 +55,11 @@ import {
 } from '~/lib/tests/format';
 import { extractMultiTurnResult } from '~/lib/tests/multi-turn-result';
 import {
+  completedPassCount,
+  parseReportState,
+  totalPassCount,
+} from '~/lib/tests/report/schemas';
+import {
   countResultItemsByResultId,
   getRunComparisonByResultId,
   getTestById,
@@ -310,6 +315,22 @@ export default async function AdminTestRunDetailsPage({
    * items all errored and therefore carry no observed runtime config at all.
    */
   const runConfigForRun = parseTestRunConfig(result.run_options);
+  /**
+   * B0-943 — a compact, serializable report snapshot for `RunReportButton`'s first paint, so the
+   * button is correct before its poll lands. Never pass the whole `report_state` blob: it holds
+   * every case's full grading narrative and would bloat the RSC payload enormously.
+   */
+  const reportStateForButton = parseReportState(result.report_state);
+  const initialReportForButton = reportStateForButton
+    ? {
+        status: reportStateForButton.status,
+        completedCases: reportStateForButton.completedCases,
+        totalCases: reportStateForButton.totalCases,
+        completedPasses: completedPassCount(reportStateForButton),
+        totalPasses: totalPassCount(reportStateForButton),
+        error: reportStateForButton.error ?? null,
+      }
+    : null;
   /**
    * B0-419 — the run each execution produced. Prefer the real `workflow_run_id` column (B0-416,
    * backfilled) over re-extracting it from `response_payload`; the payload read stays only as a
@@ -663,6 +684,7 @@ export default async function AdminTestRunDetailsPage({
                 <RunReportButton
                   enabled={isCompletedRunStatus(result.status)}
                   hasExistingReport={Boolean(result.report)}
+                  initialReport={initialReportForButton}
                   runId={result.id}
                   testId={test.id}
                 />
