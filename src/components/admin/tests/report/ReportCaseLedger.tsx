@@ -463,34 +463,52 @@ function HarnessAside({ harness }: { harness: NonNullable<ReportCase['harness']>
 
 /**
  * B0-933 — the expectation block. `expectedShouldAnswer` is gone; the run-time pass/fail axis is
- * mandatory concept coverage (B0-932), so the must-have list carries that statement and is always
- * printed once the case records any expectation at all. Concept phrases and document titles are
- * rendered verbatim — dilution ratios, contact times and EPA registration numbers survive intact.
+ * mandatory concept coverage (B0-932). Document titles are rendered verbatim — dilution ratios,
+ * contact times and EPA registration numbers survive intact.
+ *
+ * The expected/must-have concept phrases are NOT repeated here: the Concept coverage card above
+ * prints the same golden lists as a per-concept checklist with met/missed state, which strictly
+ * dominates the comma-separated quoted strings this block used to carry. They are still printed
+ * here when a case has no concept grading at all (no coverage card), so the phrases are never
+ * silently dropped.
  */
 function ExpectedColumn({ c }: { c: ReportCase }) {
   // Same truthiness test the Markdown's `formatExpected` uses, so both agree on "nothing recorded".
   const hasAny = hasExpectation(c);
+  // Mirrors `ConceptCoverageCard`'s own guard — when it renders nothing, this block is the only
+  // place the golden phrases would appear.
+  const coverageCardShown = c.concepts != null;
+  // With the concept lists moved to the coverage card, a case whose only expectation *was* those
+  // concepts would otherwise render an empty panel — say where they went instead.
+  const conceptsOnly =
+    hasAny && coverageCardShown && !c.idealResponse && c.expectedSources.length === 0;
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4">
       <FieldLabel>Expected answer / behavior</FieldLabel>
-      {hasAny ? (
+      {conceptsOnly ? (
+        <p className="mt-2 text-sm text-slate-400 italic">
+          (expectation is the concept lists — see Concept coverage above)
+        </p>
+      ) : hasAny ? (
         <div className="mt-2 flex flex-col gap-3">
           {c.idealResponse ? <Verbatim value={c.idealResponse} /> : null}
-          {c.expectedConcepts.length > 0 ? (
+          {!coverageCardShown && c.expectedConcepts.length > 0 ? (
             <div>
               <FieldLabel>Expected concepts</FieldLabel>
               <Verbatim className="mt-1" value={formatConceptList(c.expectedConcepts)} />
             </div>
           ) : null}
-          <div>
-            <FieldLabel>{MANDATORY_CONCEPTS_LABEL}</FieldLabel>
-            {c.minimumConcepts.length > 0 ? (
-              <Verbatim className="mt-1" value={formatConceptList(c.minimumConcepts)} />
-            ) : (
-              <p className="mt-1 text-sm text-slate-400 italic">{NO_MANDATORY_CONCEPTS_NOTE}</p>
-            )}
-          </div>
+          {!coverageCardShown ? (
+            <div>
+              <FieldLabel>{MANDATORY_CONCEPTS_LABEL}</FieldLabel>
+              {c.minimumConcepts.length > 0 ? (
+                <Verbatim className="mt-1" value={formatConceptList(c.minimumConcepts)} />
+              ) : (
+                <p className="mt-1 text-sm text-slate-400 italic">{NO_MANDATORY_CONCEPTS_NOTE}</p>
+              )}
+            </div>
+          ) : null}
           {c.expectedSources.length > 0 ? (
             <div>
               <FieldLabel>Expected sources</FieldLabel>

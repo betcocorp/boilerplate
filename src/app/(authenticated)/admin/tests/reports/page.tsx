@@ -23,7 +23,6 @@ import { ReportScoreTrendChart } from '~/components/admin/tests/ReportScoreTrend
 import { Button } from '~/components/ui/button';
 import { Separator } from '~/components/ui/separator';
 import {
-  Table,
   TableBody,
   TableCell,
   TableHead,
@@ -42,6 +41,7 @@ import {
 } from '~/lib/tests/report-trend';
 import type { ReportRunRow } from '~/lib/tests/repository';
 import { listAllReportRuns } from '~/lib/tests/repository';
+import { parseReportState } from '~/lib/tests/report/schemas';
 import { readSearchParam } from '~/lib/utils/params';
 import { formatDate, formatDurationMs } from '~/lib/utils/time';
 
@@ -152,6 +152,34 @@ function describeScore(row: ReportRunRow): string {
     default:
       return '—';
   }
+}
+
+/**
+ * Calculate percentage of mandatory concepts satisfied across all evaluated cases.
+ * Looks at all mandatory concepts in the report and calculates what percentage are satisfied.
+ */
+function calculateConceptPercentage(reportState: ReturnType<typeof parseReportState>): number | null {
+  if (!reportState?.caseScores || Object.keys(reportState.caseScores).length === 0) {
+    return null;
+  }
+
+  let totalRequired = 0;
+  let totalSatisfied = 0;
+
+  for (const caseScore of Object.values(reportState.caseScores)) {
+    if (caseScore.concepts?.mandatory) {
+      const required = caseScore.concepts.mandatory.required || [];
+      const satisfied = caseScore.concepts.mandatory.satisfied || [];
+      totalRequired += required.length;
+      totalSatisfied += satisfied.length;
+    }
+  }
+
+  if (totalRequired === 0) {
+    return null;
+  }
+
+  return Math.round((totalSatisfied / totalRequired) * 100);
 }
 
 /**
@@ -332,7 +360,7 @@ export default async function AdminTestReportsPage({
             </ReportFiltersToggle>
           </div>
           <div className="relative max-h-[50vh] overflow-auto overscroll-contain rounded-2xl border border-slate-200">
-            <Table>
+            <table className="w-full min-w-[1100px] caption-bottom text-sm">
               <TableHeader className="sticky top-0 z-10 bg-white shadow-[0_1px_0_0_rgb(226,232,240)] [&_tr]:border-b-0">
                 <TableRow>
                   <TableHead></TableHead>
@@ -345,16 +373,16 @@ export default async function AdminTestReportsPage({
                     Change
                   </TableHead>
                   <TableHead title="Failing prompts in this run — same count as the 'Fails' column on /admin/tests">
-                    Fail count
+                    Fails
+                  </TableHead>
+                  <TableHead title="Percentage of criteria met across all evaluated cases">
+                    Concept %
                   </TableHead>
                   <TableHead title="Average time-to-first-token / average elapsed time across this run's items">
                     TTFT/ELAP
                   </TableHead>
                   <TableHead title="LLM model used in this run (B0-733)">
                     Model
-                  </TableHead>
-                  <TableHead title="Routing method used in this run (B0-733)">
-                    Router
                   </TableHead>
                   <TableHead title="App version at run time (B0-733)">
                     Version
@@ -375,7 +403,11 @@ export default async function AdminTestReportsPage({
                     </TableCell>
                   </TableRow>
                 ) : (
-                  reports.map((row, index) => (
+                  reports.map((row, index) => {
+                    const conceptPercentage = row.reportState
+                      ? calculateConceptPercentage(row.reportState)
+                      : null;
+                    return (
                     <TableRow key={row.runId}>
                       <TableCell className="whitespace-nowrap text-slate-600">
                         {index + 1}
@@ -419,6 +451,16 @@ export default async function AdminTestReportsPage({
                         {row.failCount ?? '—'}
                       </TableCell>
                       <TableCell
+                        className="whitespace-nowrap tabular-nums text-slate-700"
+                        title={
+                          conceptPercentage !== null
+                            ? 'Percentage of mandatory concepts satisfied'
+                            : 'No report data available'
+                        }
+                      >
+                        {conceptPercentage !== null ? conceptPercentage + '%' : '—'}
+                      </TableCell>
+                      <TableCell
                         className="whitespace-nowrap tabular-nums text-slate-600"
                         title="Average TTFT / average elapsed time across this run's items"
                       >
@@ -435,22 +477,6 @@ export default async function AdminTestReportsPage({
                         title={row.modelTag ?? 'Not recorded for this run'}
                       >
                         {row.modelTag ?? '—'}
-                      </TableCell>
-                      <TableCell
-                        className="whitespace-nowrap text-slate-600"
-                        title={
-                          row.routerType
-                            ? `Routing method: ${row.routerType}`
-                            : 'Not recorded for this run'
-                        }
-                      >
-                        {row.routerType ? (
-                          <span className="inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
-                            {row.routerType}
-                          </span>
-                        ) : (
-                          '—'
-                        )}
                       </TableCell>
                       <TableCell
                         className="whitespace-nowrap text-slate-600"
@@ -474,10 +500,11 @@ export default async function AdminTestReportsPage({
                         </Button>
                       </TableCell>
                     </TableRow>
-                  ))
+                    );
+                  })
                 )}
               </TableBody>
-            </Table>
+            </table>
           </div>
         </section>
 

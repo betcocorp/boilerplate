@@ -12,71 +12,78 @@ import {
   TableRow,
 } from '~/components/ui/table';
 import { Badge } from '~/components/ui/badge';
+import {
+  computeScheduledRunAggregates,
+  isTerminalScheduledItemStatus,
+  type ScheduledRunStatus,
+  type ScheduledTestRunWithItems,
+} from '~/lib/observability/scheduled-test-types';
 import { formatDurationMs, formatEasternTime } from '~/lib/utils/time';
-
-type ScheduledTestItem = {
-  id: string;
-  scheduled_run_id: string;
-  test_id: string;
-  test_name: string;
-  test_run_id: string | null;
-  status: string;
-  started_at: string | null;
-  completed_at: string | null;
-  elapsed_ms: number | null;
-  items_total: number | null;
-  items_passed: number | null;
-  items_failed: number | null;
-  pass_rate: number | null;
-  grade: string | null;
-  confidence: number | null;
-  error_code: string | null;
-  error_message: string | null;
-  error_details: Record<string, unknown> | null;
-  retry_count: number;
-  last_retry_at: string | null;
-  claimed_by: string | null;
-  created_at: string;
-  updated_at: string;
-};
-
-type ScheduledTestRun = {
-  id: string;
-  sweep_name: string;
-  sweep_triggered_at: string;
-  status: string;
-  error_message: string | null;
-  started_at: string | null;
-  completed_at: string | null;
-  elapsed_ms: number | null;
-  total_tests: number;
-  successful_tests: number;
-  failed_tests: number;
-  timed_out_tests: number;
-  success_rate: number | null;
-  avg_elapsed_ms: number | null;
-  metadata: Record<string, unknown>;
-  created_at: string;
-  updated_at: string;
-};
-
-type ScheduledTestRunWithItems = ScheduledTestRun & {
-  items: ScheduledTestItem[];
-};
 
 function getStatusBadgeColor(status: string): string {
   switch (status) {
     case 'queued':
       return 'border-slate-400 bg-slate-100 text-slate-900';
     case 'in_progress':
+    case 'claimed':
+    case 'running':
       return 'border-blue-400 bg-blue-100 text-blue-900';
     case 'completed':
       return 'border-green-400 bg-green-100 text-green-900';
     case 'failed':
       return 'border-red-400 bg-red-100 text-red-900';
+    case 'timed_out':
+      return 'border-orange-400 bg-orange-100 text-orange-900';
     default:
       return 'border-slate-300 bg-slate-50 text-slate-600';
   }
+}
+
+/**
+ * The parent's stored status lags its children: the sweep writes it at dispatch time and only the
+ * hourly reconciler closes it out, so a row can read `completed` while children are still running.
+ * Children win unless the sweep itself failed.
+ */
+function getRunDisplayStatus(run: ScheduledTestRunWithItems): ScheduledRunStatus {
+  if (run.status === 'failed') {
+    return 'failed';
+  }
+
+  const hasOpenItems = run.items.some(
+    (item) => !isTerminalScheduledItemStatus(item.status),
+  );
+
+  return hasOpenItems ? 'in_progress' : run.status;
+}
+
+/**
+ * Counts lag for the same reason the status does, so they are derived from the children the page
+ * already has rather than read off the parent — otherwise a sweep with a dispatch failure shows
+ * 0 failed until the reconciler catches up. The stored columns are the fallback for a sweep whose
+ * children were never written.
+ */
+function getRunDisplayCounts(run: ScheduledTestRunWithItems) {
+  if (run.items.length === 0) {
+    return {
+      successful: run.successful_tests,
+      failed: run.failed_tests,
+      timedOut: run.timed_out_tests,
+      successRate: run.success_rate,
+    };
+  }
+
+  const derived = computeScheduledRunAggregates(run.items);
+  return {
+    successful: derived.successful_tests,
+    failed: derived.failed_tests,
+    timedOut: derived.timed_out_tests,
+    successRate: derived.success_rate,
+  };
+}
+
+function formatRate(rate: number | null): string {
+  // Null is "nothing terminal to measure yet" — never the same claim as 0%.
+  return rate === null ? '—' : `${Math.round(rate * 100)}%`;
 }
 
 type ScheduledTestRunRowProps = {
@@ -90,8 +97,8 @@ function ScheduledTestRunRow({
   isExpanded,
   onExpandChange,
 }: ScheduledTestRunRowProps) {
-  const successRate = run.success_rate ?? 0;
-  const successRatePercent = Math.round(successRate * 100);
+  const displayStatus = getRunDisplayStatus(run);
+  const counts = getRunDisplayCounts(run);
 
   return (
     <>
@@ -112,28 +119,25 @@ function ScheduledTestRunRow({
           {formatEasternTime(run.sweep_triggered_at)}
         </TableCell>
         <TableCell>
-          <Badge className={`border ${getStatusBadgeColor(run.status)}`}>
-            {run.status}
+          <Badge className={`border ${getStatusBadgeColor(displayStatus)}`}>
+            {displayStatus}
           </Badge>
         </TableCell>
         <TableCell className="text-center text-sm text-slate-600">
-          {run.total_tests ?? 0}
+          {run.total_tests}
         </TableCell>
         <TableCell className="text-center text-sm text-slate-600">
           <span className="font-medium text-green-700">
-            {run.successful_tests ?? 0}
+            {counts.successful}
           </span>
           /
-          <span className="font-medium text-red-700">
-            {run.failed_tests ?? 0}
-          </span>
-          /
+          <span className="font-medium text-red-700">{counts.failed}</span>/
           <span className="font-medium text-orange-700">
-            {run.timed_out_tests ?? 0}
+            {counts.timedOut}
           </span>
         </TableCell>
         <TableCell className="text-center text-sm text-slate-600">
-          {successRatePercent}%
+          {formatRate(counts.successRate)}
         </TableCell>
         <TableCell className="text-sm text-slate-600">
           {run.elapsed_ms ? formatDurationMs(run.elapsed_ms) : '—'}
@@ -172,12 +176,14 @@ function ScheduledTestRunRow({
                 </TableHeader>
                 <TableBody>
                   {run.items.map((item) => {
+                    // Counts stay null until the reconciler folds the run's grades back in;
+                    // an unscored item must read "—", not "0 / 0 / 0" at "0%".
+                    const hasCounts = typeof item.items_total === 'number';
                     const itemPassRate =
-                      item.items_total && item.items_total > 0
-                        ? Math.round(
-                            ((item.items_passed ?? 0) / item.items_total) * 100,
-                          )
-                        : 0;
+                      item.pass_rate ??
+                      (item.items_total && item.items_total > 0
+                        ? (item.items_passed ?? 0) / item.items_total
+                        : null);
 
                     return (
                       <TableRow
@@ -196,20 +202,26 @@ function ScheduledTestRunRow({
                           </Badge>
                         </TableCell>
                         <TableCell className="py-2 text-center text-slate-600">
-                          <span className="font-medium text-green-700">
-                            {item.items_passed ?? 0}
-                          </span>
-                          /
-                          <span className="font-medium text-red-700">
-                            {item.items_failed ?? 0}
-                          </span>
-                          /
-                          <span className="text-slate-700">
-                            {item.items_total ?? 0}
-                          </span>
+                          {hasCounts ? (
+                            <>
+                              <span className="font-medium text-green-700">
+                                {item.items_passed ?? 0}
+                              </span>
+                              /
+                              <span className="font-medium text-red-700">
+                                {item.items_failed ?? 0}
+                              </span>
+                              /
+                              <span className="text-slate-700">
+                                {item.items_total}
+                              </span>
+                            </>
+                          ) : (
+                            '—'
+                          )}
                         </TableCell>
                         <TableCell className="py-2 text-center text-slate-600">
-                          {itemPassRate}%
+                          {formatRate(itemPassRate)}
                         </TableCell>
                         <TableCell className="py-2 text-slate-600">
                           {item.error_code ? (

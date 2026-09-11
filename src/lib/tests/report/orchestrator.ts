@@ -36,6 +36,54 @@ import { synthesizeReportFindings } from './synthesizer';
 const BATCH_SIZE = 5;
 /** Leaves headroom under the route's `maxDuration = 300` for the final save + response. */
 const WALL_CLOCK_BUDGET_MS = 260_000;
+/**
+ * B0-943 — how long a worker's claim on a report is honoured: one invocation's worth. A worker that
+ * dies mid-slice therefore blocks the next one for at most this long.
+ */
+const LEASE_TTL_MS = 300_000;
+
+/**
+ * B0-943 — options for one invocation of {@link generateReport}.
+ *
+ * `skipIfLeased` is what the background hop chain and the stalled-run sweeper pass so they never
+ * fight a human sitting on the report page. The interactive path deliberately does NOT pass it: a
+ * person clicking "Generate report" is allowed to take the lease over.
+ */
+export type GenerateReportOptions = {
+  /** Opaque id for this worker; a fresh uuid is minted when omitted. */
+  workerId?: string;
+  /** Return immediately (no grading, no status write) if another worker's lease is still live. */
+  skipIfLeased?: boolean;
+};
+
+/**
+ * True when `state` is held by a *different* worker whose lease has not yet expired.
+ *
+ * This is an ADVISORY lease, not an atomic one: the read and the write are separate round-trips, so
+ * a narrow race can still let two workers in. That is accepted — the TTL bounds a stuck lease, and
+ * `pendingPasses` re-derives correctly from `casePassScores` either way, so the worst case is a few
+ * duplicated grading calls rather than a corrupt report. What it actually prevents is the common
+ * and expensive case: an open report page and the background chain overlapping for minutes, each
+ * paying for three `claude-opus-5` passes per case and overwriting the other's `saveReportState`.
+ */
+export function isLeasedByAnother(state: ReportState, workerId: string): boolean {
+  if (!state.activeUntil || !state.activeWorker) return false;
+  if (state.activeWorker === workerId) return false;
+  const expiry = Date.parse(state.activeUntil);
+  return Number.isFinite(expiry) && expiry > Date.now();
+}
+
+/** Stamps this worker's claim (and its refreshed expiry) onto the state about to be persisted. */
+function takeLease(state: ReportState, workerId: string): void {
+  state.activeWorker = workerId;
+  state.activeUntil = new Date(Date.now() + LEASE_TTL_MS).toISOString();
+}
+
+/** Releases the claim so the next worker (or a human) can pick the report up immediately. */
+function clearLease(state: ReportState): void {
+  state.activeWorker = null;
+  state.activeUntil = null;
+}
 
 function noResponseScore(reason: string): CaseScore {
   return unableToEvaluateScore(reason);
@@ -157,6 +205,7 @@ async function scoreRemainingCases(
   modelTag: string,
   effort: ModelEffort | undefined,
   expectedSourceIndex: ExpectedSourceIndex,
+  workerId: string,
 ): Promise<ReportState> {
   // Reconcile before looking at what's still pending: a case can have every pass recorded already
   // (so `pendingPasses` will never surface it again) and still be missing from `caseScores`.
@@ -165,6 +214,7 @@ async function scoreRemainingCases(
   if (Object.keys(state.caseScores).length !== completedBefore) {
     state.completedCases = Object.keys(state.caseScores).length;
     state.updatedAt = new Date().toISOString();
+    takeLease(state, workerId);
     await saveReportState(resultId, state);
   }
 
@@ -197,6 +247,9 @@ async function scoreRemainingCases(
     }
     state.completedCases = Object.keys(state.caseScores).length;
     state.updatedAt = new Date().toISOString();
+    // B0-943 — every checkpoint also renews the lease, so a long slice never lets its own claim
+    // expire underneath it and invite a second worker in mid-grading.
+    takeLease(state, workerId);
     await saveReportState(resultId, state);
   }
 
@@ -210,7 +263,11 @@ async function scoreRemainingCases(
  * the next call instead of restarting. Once every case is scored, synthesizes the Top-3
  * recommendations and renders the final Markdown report.
  */
-export async function generateReport(testResultId: string): Promise<ReportState> {
+export async function generateReport(
+  testResultId: string,
+  options?: GenerateReportOptions,
+): Promise<ReportState> {
+  const workerId = options?.workerId ?? crypto.randomUUID();
   const deadline = Date.now() + WALL_CLOCK_BUDGET_MS;
   const run = await getTestResultById(testResultId);
   const test = await getTestById(run.test_id);
@@ -265,9 +322,17 @@ export async function generateReport(testResultId: string): Promise<ReportState>
     // The run's item set changed (e.g. items added) since a prior partial report — start fresh.
     state = fresh();
   }
+  // B0-943 — before any grading (and before any status write): stand down if another worker is
+  // already on this report and we were told not to fight it. Returning the state unchanged leaves
+  // the incumbent's lease, status and scores exactly as they were.
+  if (options?.skipIfLeased && isLeasedByAnother(state, workerId)) {
+    return state;
+  }
+
   hydrateLegacyPassScores(state);
   state.status = 'scoring';
   state.updatedAt = new Date().toISOString();
+  takeLease(state, workerId);
   await saveReportState(testResultId, state);
 
   try {
@@ -280,17 +345,22 @@ export async function generateReport(testResultId: string): Promise<ReportState>
       modelTag,
       effortFromState(state.gradingEffort),
       expectedSourceIndex,
+      workerId,
     );
 
     if (state.completedCases < state.totalCases) {
       // Time budget exhausted with cases still pending — leave status 'scoring' so the caller
-      // (or the report page's auto-continue) re-invokes generateReport to pick up where we left off.
+      // (the B0-943 background hop chain, or the report page's auto-continue) re-invokes
+      // generateReport to pick up where we left off. The lease is released here so the next hop
+      // does not have to wait out its TTL.
+      clearLease(state);
       await saveReportState(testResultId, state);
       return state;
     }
 
     state.status = 'synthesizing';
     state.updatedAt = new Date().toISOString();
+    takeLease(state, workerId);
     await saveReportState(testResultId, state);
 
     // B0-586 — one shared assembly for both the Markdown below and `/report/data`.
@@ -356,6 +426,7 @@ export async function generateReport(testResultId: string): Promise<ReportState>
     state.status = 'completed';
     state.error = null;
     state.updatedAt = generatedAt;
+    clearLease(state);
     await saveReportState(testResultId, state);
     await saveReportMarkdown(testResultId, markdown, generatedAt);
 
@@ -364,6 +435,7 @@ export async function generateReport(testResultId: string): Promise<ReportState>
     state.status = 'failed';
     state.error = error instanceof Error ? error.message : 'Report generation failed.';
     state.updatedAt = new Date().toISOString();
+    clearLease(state);
     await saveReportState(testResultId, state);
     return state;
   }

@@ -29,7 +29,7 @@ import {
 import type { CriteriaGradingOutcome } from './criteria-schemas';
 import { analyzeAndPersistFailureRootCause } from './failure-root-cause';
 import { mandatoryConceptPhrases } from './grading';
-import { generateReport } from './report/orchestrator';
+import { scheduleReportGeneration } from './report/schedule-report-generation';
 import { parseTestRunConfig } from './run-config';
 import { runSingleTestItem } from './runner';
 import { generateAndSaveRunInsights } from './run-insights';
@@ -501,15 +501,19 @@ export async function executeTestRun(testResultId: string) {
   }
 
   // B0-608 — auto-generate the eval report on every terminal chat run so the run detail page
-  // can show "View report" without anyone clicking "Generate report" first. Scheduled via
-  // `after()` (not awaited inline) because `generateReport` can take minutes on large runs and
-  // this function is called from a route that shares its own `maxDuration = 300` budget with the
-  // run execution itself; `generateReport` is checkpointed/resumable via `report_state`, so a
-  // background run that gets cut off (or errors) is picked up again by the report page's own
-  // auto-continue POSTs. Best-effort: never let a report failure affect the run's own success.
+  // can show "View report" without anyone clicking "Generate report" first.
+  //
+  // B0-943 — generation runs in its OWN invocation chain, NOT here. This function is called from
+  // `POST /api/admin/tests/runs/[runId]`, which has already spent most of its `maxDuration = 300`
+  // executing the run itself (real runs take 170–350 s), so an `after()` that graded inline
+  // inherited 0–130 s and was killed before finishing even one slice — which is why 24 of 154
+  // completed runs in a 30-day window ended up with no report at all. `scheduleReportGeneration`
+  // instead POSTs the report route, which answers 202 immediately and grades under its own fresh
+  // 300 s, re-scheduling itself until the report is complete. Best-effort and non-throwing: a
+  // report failure must never affect the run's own success.
   after(async () => {
     try {
-      await generateReport(testResult.id);
+      await scheduleReportGeneration({ testResultId: testResult.id, hop: 1 });
     } catch (error) {
       logWarn('test_run_report_auto_generate_error', {
         testResultId: testResult.id,

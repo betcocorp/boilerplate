@@ -19,7 +19,14 @@
  */
 
 import { connection } from 'next/server';
+import { z } from 'zod';
 
+import {
+  scheduledTestItemSchema,
+  scheduledTestRunSchema,
+  type ScheduledTestItem,
+  type ScheduledTestRunWithItems,
+} from '~/lib/observability/scheduled-test-types';
 import { PERMISSIONS } from '~/lib/permissions/constants';
 import { requirePagePermission } from '~/lib/permissions/require-page-permission';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
@@ -33,84 +40,80 @@ export const metadata = {
 
 const PAGE_SIZE = 50;
 
-type ScheduledTestRun = {
-  id: string;
-  sweep_name: string;
-  sweep_triggered_at: string;
-  status: string;
-  error_message: string | null;
-  started_at: string | null;
-  completed_at: string | null;
-  elapsed_ms: number | null;
-  total_tests: number;
-  successful_tests: number;
-  failed_tests: number;
-  timed_out_tests: number;
-  success_rate: number | null;
-  avg_elapsed_ms: number | null;
-  metadata: Record<string, unknown>;
-  created_at: string;
-  updated_at: string;
+type UnknownRowsResult = {
+  data: unknown[] | null;
+  error: { message: string } | null;
 };
 
-type ScheduledTestItem = {
-  id: string;
-  scheduled_run_id: string;
-  test_id: string;
-  test_name: string;
-  test_run_id: string | null;
-  status: string;
-  started_at: string | null;
-  completed_at: string | null;
-  elapsed_ms: number | null;
-  items_total: number | null;
-  items_passed: number | null;
-  items_failed: number | null;
-  pass_rate: number | null;
-  grade: string | null;
-  confidence: number | null;
-  error_code: string | null;
-  error_message: string | null;
-  error_details: Record<string, unknown> | null;
-  retry_count: number;
-  last_retry_at: string | null;
-  claimed_by: string | null;
-  created_at: string;
-  updated_at: string;
+/**
+ * The narrowest shape this page needs from PostgREST. `scheduled_test_runs` /
+ * `scheduled_test_items` exist in Postgres but are absent from the generated Supabase types
+ * (B0-941) because regenerating them needs CLI auth that is not available here — so one cast is
+ * unavoidable. Keeping it to this interface means rows arrive as `unknown` and must go through
+ * the Zod schemas below rather than being blind-cast. Re-running `pnpm types:supabase:public`
+ * puts the tables in `Database['public']` and this whole escape hatch can be deleted.
+ */
+type ScheduledTablesReader = {
+  from: (table: 'scheduled_test_runs' | 'scheduled_test_items') => {
+    select: (columns: string) => {
+      order: (
+        column: string,
+        options: { ascending: boolean },
+      ) => {
+        limit: (count: number) => PromiseLike<UnknownRowsResult>;
+      };
+      in: (column: string, values: string[]) => PromiseLike<UnknownRowsResult>;
+    };
+  };
 };
 
-type ScheduledTestRunWithItems = ScheduledTestRun & {
-  items: ScheduledTestItem[];
-};
+function getScheduledTablesReader(): ScheduledTablesReader {
+  return getSupabaseServiceRoleClient() as unknown as ScheduledTablesReader;
+}
 
-async function getRecentScheduledRuns(limit: number = PAGE_SIZE) {
-  // Note: scheduled_test_runs and scheduled_test_items tables are real but not yet
-  // in the generated Supabase types (B0-941), so we cast to any for now.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const client = getSupabaseServiceRoleClient() as any;
-  const { data: runs, error: runsError } = await client
+function parseRows<T>(
+  schema: z.ZodType<T>,
+  rows: unknown[],
+  label: string,
+): T[] {
+  const parsed = z.array(schema).safeParse(rows);
+
+  if (!parsed.success) {
+    throw new Error(
+      `Unexpected ${label} row shape: ${z.prettifyError(parsed.error)}`,
+    );
+  }
+
+  return parsed.data;
+}
+
+async function getRecentScheduledRuns(
+  limit: number = PAGE_SIZE,
+): Promise<ScheduledTestRunWithItems[]> {
+  const client = getScheduledTablesReader();
+
+  const { data: runRows, error: runsError } = await client
     .from('scheduled_test_runs')
     .select('*')
     .order('sweep_triggered_at', { ascending: false })
     .limit(limit);
 
   if (runsError) {
-    throw new Error(
-      `Failed to fetch scheduled test runs: ${runsError.message}`,
-    );
+    throw new Error(`Failed to fetch scheduled test runs: ${runsError.message}`);
   }
 
-  if (!runs || runs.length === 0) {
+  if (!runRows || runRows.length === 0) {
     return [];
   }
 
-  // Fetch test items for all runs
-  const { data: items, error: itemsError } = await client
+  const runs = parseRows(scheduledTestRunSchema, runRows, 'scheduled test run');
+
+  const { data: itemRows, error: itemsError } = await client
     .from('scheduled_test_items')
     .select('*')
     .in(
       'scheduled_run_id',
-      (runs as ScheduledTestRun[]).map((r) => r.id),
+      runs.map((run) => run.id),
     );
 
   if (itemsError) {
@@ -119,24 +122,26 @@ async function getRecentScheduledRuns(limit: number = PAGE_SIZE) {
     );
   }
 
-  // Group items by scheduled_run_id
+  const items = parseRows(
+    scheduledTestItemSchema,
+    itemRows ?? [],
+    'scheduled test item',
+  );
+
   const itemsByRunId = new Map<string, ScheduledTestItem[]>();
-  if (items) {
-    for (const item of items as ScheduledTestItem[]) {
-      if (!itemsByRunId.has(item.scheduled_run_id)) {
-        itemsByRunId.set(item.scheduled_run_id, []);
-      }
-      itemsByRunId.get(item.scheduled_run_id)!.push(item);
+  for (const item of items) {
+    const existing = itemsByRunId.get(item.scheduled_run_id);
+    if (existing) {
+      existing.push(item);
+    } else {
+      itemsByRunId.set(item.scheduled_run_id, [item]);
     }
   }
 
-  // Combine runs with their items
-  return (runs as ScheduledTestRun[]).map(
-    (run): ScheduledTestRunWithItems => ({
-      ...run,
-      items: itemsByRunId.get(run.id) || [],
-    }),
-  );
+  return runs.map((run) => ({
+    ...run,
+    items: itemsByRunId.get(run.id) ?? [],
+  }));
 }
 
 export default async function AdminScheduledTestsPage() {
@@ -186,8 +191,13 @@ export default async function AdminScheduledTestsPage() {
         {runs.length === 0 && !loadError ? (
           <section className="rounded-3xl border border-slate-200 bg-white p-8 text-center">
             <p className="text-slate-600">
-              No scheduled test sweeps yet. Scheduled sweeps will appear here
-              once they begin executing.
+              No scheduled test sweeps yet. A sweep appears here as soon as the
+              nightly cron dispatches one at 00:00 UTC, or immediately after you
+              trigger one by hand with{' '}
+              <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-sm text-slate-800">
+                pnpm run:golden-sweep
+              </code>
+              .
             </p>
           </section>
         ) : null}
