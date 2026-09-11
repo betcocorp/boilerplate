@@ -163,7 +163,7 @@ export function gradeExactCriterion(concept: string, responseText: string): Crit
 
 /**
  * Full per-criterion grading for one item. Returns `null` when the item carries no
- * `expected_criteria` — callers fall back to the existing behavior-only
+ * no concepts — callers fall back to the existing behavior-only
  * `gradeChatTestResponse` (~/lib/tests/runner.ts), so test sets without criteria are
  * completely unaffected (zero migration required, per the business case).
  */

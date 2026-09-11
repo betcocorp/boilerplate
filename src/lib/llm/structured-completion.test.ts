@@ -15,6 +15,8 @@ vi.mock('~/lib/observability/logger', () => ({
   logError: vi.fn(),
 }));
 
+import { logError, logInfo, logWarn } from '~/lib/observability/logger';
+
 import {
   ANTHROPIC_THINKING_HEADROOM_TOKENS,
   completeStructured,
@@ -79,6 +81,9 @@ function openaiResponse(partial: Record<string, unknown> = {}) {
 beforeEach(() => {
   anthropicStream.mockReset();
   openaiCreate.mockReset();
+  vi.mocked(logError).mockClear();
+  vi.mocked(logWarn).mockClear();
+  vi.mocked(logInfo).mockClear();
 });
 
 describe('completeStructured — Anthropic', () => {
@@ -280,6 +285,111 @@ describe('B0-908 — usage, request options, text mode and Haiku gating', () => 
     expect(params.output_config).toEqual({ format: { type: 'json_schema', schema: SCHEMA } });
     expect(params.max_tokens).toBe(16_000);
     expect('temperature' in params).toBe(false);
+  });
+});
+
+/**
+ * B0-922 — before this, the seam logged only successes, so B0-910's 400 on every one of 106 items
+ * left no log line anywhere and the run still reported a letter grade. Every failure is now recorded
+ * exactly once, here, whatever the caller then does with the error.
+ */
+describe('B0-922 — provider failures are logged centrally', () => {
+  it('logs one error line carrying provider, model, schema and the error, then re-throws untouched', async () => {
+    const badRequest = new Error(
+      "output_config.format.schema: Invalid schema: Enum value 'betco' does not match declared type '['string', 'null']'",
+    );
+    anthropicStream.mockReturnValue({
+      finalMessage: async () => {
+        throw badRequest;
+      },
+    });
+
+    await expect(completeStructured(REQUEST)).rejects.toBe(badRequest);
+
+    expect(logError).toHaveBeenCalledTimes(1);
+    expect(logError).toHaveBeenCalledWith('llm_structured_completion_failed', {
+      provider: 'anthropic',
+      model: 'claude-opus-5',
+      schema: 'case_score',
+      effort: 'high',
+      errorName: 'Error',
+      error: badRequest.message,
+    });
+    expect(logWarn).not.toHaveBeenCalled();
+  });
+
+  it('logs an OpenAI failure with provider openai and a null effort', async () => {
+    const boom = new Error('429 rate_limit_exceeded');
+    openaiCreate.mockRejectedValue(boom);
+
+    await expect(completeStructured({ ...REQUEST, model: 'gpt-4.1' })).rejects.toBe(boom);
+
+    expect(logError).toHaveBeenCalledTimes(1);
+    expect(logError).toHaveBeenCalledWith(
+      'llm_structured_completion_failed',
+      expect.objectContaining({ provider: 'openai', model: 'gpt-4.1', schema: 'case_score', effort: null }),
+    );
+  });
+
+  it('logs a truncation, which callers turn into a retry or an Unable to Evaluate case', async () => {
+    anthropicStream.mockReturnValue({
+      finalMessage: async () => anthropicMessage({ stop_reason: 'max_tokens', content: [] }),
+    });
+
+    await expect(completeStructured(REQUEST)).rejects.toBeInstanceOf(StructuredOutputTruncatedError);
+    expect(logError).toHaveBeenCalledTimes(1);
+    expect(logError).toHaveBeenCalledWith(
+      'llm_structured_completion_failed',
+      expect.objectContaining({ errorName: 'StructuredOutputTruncatedError' }),
+    );
+  });
+
+  // A refusal is a surfaced, documented outcome with no fallback model, not a broken call — warn so
+  // it is countable without reading as an incident.
+  it('logs a refusal at warn, with its category, and never as an error', async () => {
+    anthropicStream.mockReturnValue({
+      finalMessage: async () =>
+        anthropicMessage({
+          stop_reason: 'refusal',
+          stop_details: { type: 'refusal', category: 'cyber', explanation: 'declined' },
+          content: [],
+        }),
+    });
+
+    await expect(completeStructured(REQUEST)).rejects.toBeInstanceOf(StructuredOutputRefusedError);
+
+    expect(logError).not.toHaveBeenCalled();
+    expect(logWarn).toHaveBeenCalledTimes(1);
+    expect(logWarn).toHaveBeenCalledWith(
+      'llm_structured_completion_refused',
+      expect.objectContaining({
+        provider: 'anthropic',
+        schema: 'case_score',
+        errorName: 'StructuredOutputRefusedError',
+        refusalCategory: 'cyber',
+      }),
+    );
+  });
+
+  it('logs a failure in text mode too, with a null schema', async () => {
+    const boom = new Error('socket hang up');
+    openaiCreate.mockRejectedValue(boom);
+
+    await expect(
+      completeText({ model: 'gpt-4.1', system: 's', user: 'u', maxOutputTokens: 100 }),
+    ).rejects.toBe(boom);
+    expect(logError).toHaveBeenCalledWith(
+      'llm_structured_completion_failed',
+      expect.objectContaining({ schema: null }),
+    );
+  });
+
+  it('logs nothing but the usage line on success', async () => {
+    anthropicStream.mockReturnValue({ finalMessage: async () => anthropicMessage() });
+    await completeStructured(REQUEST);
+    expect(logError).not.toHaveBeenCalled();
+    expect(logWarn).not.toHaveBeenCalled();
+    expect(logInfo).toHaveBeenCalledTimes(1);
   });
 });
 

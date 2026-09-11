@@ -53,8 +53,6 @@ export type TestItemFieldsInitialValues = {
   expectedConcepts?: string[];
   /** The mandatory subset — `test_items.minimum_concepts` `text[]`. */
   minimumConcepts?: string[];
-  /** `test_items.expected_criteria` `text[]`; the old `t1:`/`t1x:`/`t2:` mini-syntax is retired. */
-  expectedCriteria?: string[];
   /** `rag.document.id` uuids — `test_items.expected_sources` `uuid[]`. */
   expectedSources?: string[];
   /** `'yes'` / `'no'` / `''` — matches the CSV cell vocabulary. */
@@ -364,28 +362,6 @@ export function TestItemFields({
         }
         name="minimumConcepts"
         placeholder="e.g. 13 oz/gal"
-      />
-
-      <PhraseListField
-        description={
-          <>
-            Additional criteria the grader checks individually — should-haves,
-            same tier as Expected concepts. Tier now comes from the field a phrase
-            lives in (Minimum concepts are the must-haves), so the old{' '}
-            <code>t1:</code> / <code>t1x:</code> / <code>t2:</code> prefixes are
-            retired — type the criterion itself.{VERBATIM_NOTE}
-          </>
-        }
-        id={`${idPrefix}-expected-criteria`}
-        initialPhrases={initialValues?.expectedCriteria ?? []}
-        label={
-          <>
-            Expected criteria{' '}
-            <span className="font-normal text-muted-foreground">(optional)</span>
-          </>
-        }
-        name="expectedCriteria"
-        placeholder="e.g. EPA Reg. No. 1839-83-4170"
       />
 
       <DocumentPickerField

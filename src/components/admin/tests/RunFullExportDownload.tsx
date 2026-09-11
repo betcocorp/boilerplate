@@ -39,7 +39,6 @@ export type RunExportItem = {
    */
   expected_concepts: string;
   minimum_concepts: string;
-  expected_criteria: string;
   /** Pipe-delimited `rag.document.id` uuids, in author order. */
   expected_sources: string;
   should_cite: boolean | null;

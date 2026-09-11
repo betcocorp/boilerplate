@@ -359,10 +359,6 @@ export default async function AdminTestItemHistoryPage({ params }: PageProps) {
               <PhraseList phrases={item.minimum_concepts} />
             </div>
             <div className="border-t border-slate-200 pt-4">
-              <p className="font-semibold text-slate-900">Expected criteria</p>
-              <PhraseList phrases={item.expected_criteria} />
-            </div>
-            <div className="border-t border-slate-200 pt-4">
               <p className="font-semibold text-slate-900">Expected sources</p>
               {item.expected_sources.length > 0 ? (
                 <ul className="mt-1 flex flex-col gap-1">

@@ -10,7 +10,7 @@ import { scenarioAssertionSchema, type ScenarioAssertion } from './multi-turn';
  * detail table, `./report/metrics.ts`, `./run-comparison-diff.ts` and the
  * `latest_failed_test_result_items` view all assume that. So a scenario stays ONE row: `passed` and
  * `elapsed_ms` are scenario-level rollups, and the per-turn detail lives here on the payload. This
- * is exactly how `expected_criteria` / `criteriaGrading` was landed (B0-616) and it needs no
+ * is exactly how `criteriaGrading` was landed (B0-616) and it needs no
  * migration.
  *
  * The row's other payload fields are the **final** turn's workflow result, so every existing

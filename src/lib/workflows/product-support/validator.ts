@@ -47,7 +47,7 @@ function isUnusableStructuredOutput(error: unknown): boolean {
 // B0-369: `issues` is an UNSUPPORTED-findings-only channel -- it feeds the revision pass, so a
 // confirmation in there asks the revision model to repair a claim that verified fine. Positive
 // confirmations go in `supported_claims`, which is trace-only.
-const VALIDATION_JSON_SCHEMA = {
+export const VALIDATION_JSON_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   properties: {

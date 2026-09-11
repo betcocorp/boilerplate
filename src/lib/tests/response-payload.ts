@@ -636,7 +636,7 @@ export function extractProductLineLock(responsePayload: unknown): ProductLineLoc
 /**
  * B0-711 — the per-criterion grading the harness already persisted for this item
  * (`response_payload.criteriaGrading`, written by `~/lib/tests/runner.ts` whenever the test item
- * carries `expected_criteria`). This is the report's *only* source of per-concept verdicts: the
+ * carries concepts). This is the report's *only* source of per-concept verdicts: the
  * concept gate never re-asks a model for a judgment the criteria grader already made.
  *
  * Validated with `criteriaGradingOutcomeSchema` rather than probed field-by-field, so a payload

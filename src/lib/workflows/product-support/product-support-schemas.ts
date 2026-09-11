@@ -161,6 +161,26 @@ export const answerProvenanceSchema = z.enum([
   'regulated_claim_partial_redaction',
   /** B0-886 — see the doc comment above `validator_rejected_draft_retained`. */
   'revised_answer_retained',
+  /**
+   * B0-923 — the regulated-claim guardrail REJECTED the revised draft, but re-evaluating it against
+   * the pre-revision draft (the text that would have shipped had the revision pass not run) found
+   * NOTHING ungrounded, so the rejection was manufactured by our own second pass rather than by
+   * anything the model asserted. The pre-revision draft — the text the guardrail verified — is what
+   * was served; the revision pass's text was discarded, and the decline copy never ran.
+   *
+   * Deliberately NOT `revised_answer_retained` (the opposite: the revision's text is the one thrown
+   * away) and NOT a "guardrail waived" value: no waiver exists. The guardrail's objection stands
+   * against the revised text, and only a draft it independently passed can reach the user. The
+   * revised text it rejected is still persisted (`revisedAnswer` on the validator step and the final
+   * output) and the rejected categories are on the gate record
+   * (`inputs.revisedDraftUngroundedCategories`, `verdict: 'restored_pre_revision_draft'`).
+   *
+   * Rescue requires the pre-revision draft to be ENTIRELY clean, not merely clean for the categories
+   * that rejected the revised draft: a pre-revision draft carrying its own different ungrounded
+   * regulated claim is never served, and the normal redaction/decline path runs on the revised draft
+   * exactly as it does today.
+   */
+  'pre_revision_draft_restored',
 ]);
 
 export type AnswerProvenance = z.infer<typeof answerProvenanceSchema>;

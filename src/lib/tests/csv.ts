@@ -86,7 +86,6 @@ const TYPED_CSV_COLUMNS = new Set([
   'ideal_response',
   'expected_concepts',
   'minimum_concepts',
-  'expected_criteria',
   'expected_sources',
   'should_cite',
   'expected_tool',
@@ -131,7 +130,7 @@ const EMPTY_PHRASE_CELL_MARKERS = new Set(['n/a', 'na', 'none', '-', '—']);
 const PHRASE_BULLET = /^\s*(?:[-*•‣▪·o]|\(?\d+[.)]|[a-z][.)])\s+/i;
 
 /**
- * B0-931 — splits one phrase cell (`expected_concepts`, `minimum_concepts`, `expected_criteria`,
+ * B0-931 — splits one phrase cell (`expected_concepts`, `minimum_concepts`,
  * now `text[]` columns) into an ordered list of phrases. Mirrors the reference skill's
  * `concept_rules.py` `split_concepts` — the same rules the B0-930 retype used on the live rows —
  * so a CSV round-trip through import/export is lossless.
@@ -366,7 +365,6 @@ export function parseTestCsvContent(content: string): ParsedCsvRow[] {
       // and EPA numbers — survive the round trip byte-for-byte.
       const expectedConcepts = splitPhraseCell(asTrimmedString(record.expected_concepts));
       const minimumConcepts = splitPhraseCell(asTrimmedString(record.minimum_concepts));
-      const expectedCriteria = splitPhraseCell(asTrimmedString(record.expected_criteria));
       const parsedExpectedSources = parseExpectedSourcesCell(
         asTrimmedString(record.expected_sources),
       );
@@ -439,7 +437,6 @@ export function parseTestCsvContent(content: string): ParsedCsvRow[] {
         idealResponse,
         expectedConcepts,
         minimumConcepts,
-        expectedCriteria,
         expectedSources,
         shouldCite,
         expectedTool,

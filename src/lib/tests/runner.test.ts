@@ -15,7 +15,6 @@ function item(overrides: Partial<TestItemRecord> = {}): TestItemRecord {
   return {
     expected_concepts: [],
     minimum_concepts: [],
-    expected_criteria: [],
     ...overrides,
   } as TestItemRecord;
 }

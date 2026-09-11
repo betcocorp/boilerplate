@@ -1882,6 +1882,251 @@ describe('regulated-claim guardrail sentence-level redaction (B0-871)', () => {
 });
 
 /* -------------------------------------------------------------------------- *
+ * B0-923 — the regulated-claim guardrail judged the REVISED draft only, so safety framing the
+ * revision pass added on its own escalated to a full decline. The guardrail now also judges the
+ * pre-revision draft, and serves that (guardrail-verified) text when our own second pass is what
+ * manufactured the rejection.
+ * -------------------------------------------------------------------------- */
+
+describe('regulated-claim guardrail: revision-pass-manufactured rejection (B0-923)', () => {
+  const WOOD_QUESTION =
+    "What's the difference between a wood floor sealer and a wood floor finish?";
+  /** The model's own draft: substantive, and it asserts nothing regulated the guardrail rejects. */
+  const MODEL_DRAFT =
+    'A sealer penetrates the wood and blocks the grain so the finish above it stays uniform. A finish is the wear layer that takes the traffic and carries the gloss level. Basic Coatings systems pair one sealer coat with two or more finish coats.';
+  /** The revision pass's output: the same answer plus safety framing IT added. */
+  const REVISION_ADDED_HAZARD =
+    'Linseed oil reacts with oxygen in air and generates heat, which can ignite a flammable object such as a rag at temperatures as low as 120F without a spark — handle and dispose of rags accordingly.';
+  const REVISED_DRAFT = `${MODEL_DRAFT} ${REVISION_ADDED_HAZARD}`;
+
+  const CLEAN_GROUNDING = {
+    categoriesDetected: [],
+    ungroundedCategories: [],
+    ungroundedDetails: [],
+    keyTermGroundedCategories: [],
+  };
+  const HAZARD_REJECTION = {
+    categoriesDetected: ['hazard'],
+    ungroundedCategories: ['hazard'],
+    ungroundedDetails: [{ category: 'hazard', snippet: REVISION_ADDED_HAZARD }],
+    keyTermGroundedCategories: [],
+  };
+
+  /**
+   * Drives the real revision branch: the FIRST validator pass rejects with an issue (which is what
+   * triggers the revision pass), the revision pass succeeds, and the SECOND pass approves — so the
+   * `!validation.approved` block never runs and the assertions isolate the guardrail's own effect.
+   */
+  function arrangeRevisedTurn(revisedText = REVISED_DRAFT) {
+    runResponsesWithToolLoopMock.mockImplementation(
+      generationCalling(
+        [
+          {
+            name: 'search_product_docs',
+            argumentsJson: JSON.stringify({ freeformQuery: WOOD_QUESTION }),
+            callId: 'call_1',
+          },
+        ],
+        { assistantText: MODEL_DRAFT },
+      ),
+    );
+    executeProductToolMock.mockResolvedValue({
+      sources: [
+        {
+          documentId: 'doc-kb-wood',
+          chunkId: 'chunk-1',
+          title: 'Floor Care 101 — Wood',
+          snippet: 'Sealers penetrate; finishes wear.',
+          documentBody: 'Sealers penetrate the grain. Finishes are the wear layer.',
+          documentKind: 'knowledge',
+        },
+      ],
+    });
+    runValidatorPassMock
+      .mockResolvedValueOnce({
+        approved: false,
+        confidence: 0.5,
+        issues: ['tighten grounding on the sealer/finish distinction'],
+        requires_human_review: false,
+        usage: VALIDATOR_PASS_USAGE,
+      })
+      .mockResolvedValue({
+        approved: true,
+        confidence: 0.9,
+        issues: [],
+        requires_human_review: false,
+        usage: VALIDATOR_PASS_USAGE,
+      });
+    runRevisionPassMock.mockResolvedValue({ text: revisedText, usage: VALIDATOR_PASS_USAGE });
+  }
+
+  /** Grounding verdicts keyed off the draft under test, so neither call order nor count matters. */
+  function groundingByDraft(map: Array<[string, unknown]>, fallback: unknown = CLEAN_GROUNDING) {
+    regulatedClaimGroundingMock.mockImplementation((input: unknown) => {
+      const draft = (input as { draftAnswer: string }).draftAnswer;
+      for (const [needle, verdict] of map) {
+        if (draft.includes(needle)) return verdict;
+      }
+      return fallback;
+    });
+  }
+
+  it('(a) serves the pre-revision draft when the guardrail rejects only text the revision pass added', async () => {
+    arrangeRevisedTurn();
+    groundingByDraft([[REVISION_ADDED_HAZARD, HAZARD_REJECTION]]);
+
+    const out = await run({ userMessage: WOOD_QUESTION, useValidator: true });
+
+    // The model's own answer ships — not the decline copy, not the revised text.
+    expect(out.answerText).toBe(MODEL_DRAFT);
+    expect(out.answerText).not.toContain(REVISION_ADDED_HAZARD);
+    expect(out.answerText).not.toContain("I can't verify the");
+    expect(out.answerProvenance).toBe('pre_revision_draft_restored');
+    // No guardrail cap, no guardrail issue: the served text passed the guardrail outright.
+    expect(out.validation.issues).not.toContain('regulated_claim_unverified:hazard');
+    expect(out.confidence).toBeGreaterThan(0.4);
+    // The revision pass's rejected text is still persisted for review.
+    expect(out.revisedAnswer).toBe(REVISED_DRAFT);
+  });
+
+  it('(a) records the rejected revised draft and the served draft on the gate output', async () => {
+    arrangeRevisedTurn();
+    groundingByDraft([[REVISION_ADDED_HAZARD, HAZARD_REJECTION]]);
+
+    const out = await run({ userMessage: WOOD_QUESTION, useValidator: true });
+
+    const record = singleGateRecord('regulated_claim_guardrail');
+    expect(record.verdict).toBe('restored_pre_revision_draft');
+    expect(record.inputs).toMatchObject({
+      ungroundedCategories: [],
+      revisedDraftUngroundedCategories: ['hazard'],
+      preRevisionDraftClean: true,
+      servedDraft: 'pre_revision',
+    });
+    expect(record.effect).toContain('pre-revision draft');
+    expect(out.activeGates?.regulatedClaimGuardrail).toEqual({
+      state: 'ran',
+      verdict: 'restored_pre_revision_draft',
+    });
+  });
+
+  it('(b) both drafts rejected: the existing decline path runs unchanged', async () => {
+    arrangeRevisedTurn();
+    // Every draft this turn is rejected for hazard, pre-revision included.
+    groundingByDraft([], HAZARD_REJECTION);
+
+    const out = await run({ userMessage: WOOD_QUESTION, useValidator: true });
+
+    expect(out.answerProvenance).toBe('validator_fallback');
+    expect(out.answerText).toContain("I can't verify the");
+    expect(out.answerText).not.toContain(MODEL_DRAFT);
+    expect(out.answerText).not.toContain(REVISION_ADDED_HAZARD);
+    expect(out.validation.approved).toBe(false);
+    expect(out.validation.requires_human_review).toBe(true);
+    expect(out.confidence).toBeLessThanOrEqual(0.4);
+    expect(out.validation.issues).toContain('regulated_claim_unverified:hazard');
+    const record = singleGateRecord('regulated_claim_guardrail');
+    expect(record.verdict).toBe('rejected');
+    expect(record.inputs).toMatchObject({ declineReason: 'safety_critical_sentence_category' });
+    expect(out.activeGates?.regulatedClaimGuardrail).toEqual({ state: 'ran', verdict: 'rejected' });
+  });
+
+  it('(b) fail-closed: a pre-revision draft with its OWN ungrounded claim is never served', async () => {
+    const MODEL_DRAFT_WITH_DILUTION = `${MODEL_DRAFT} Dilute the finish at 4 oz per gallon.`;
+    runResponsesWithToolLoopMock.mockImplementation(
+      generationCalling(
+        [
+          {
+            name: 'search_product_docs',
+            argumentsJson: JSON.stringify({ freeformQuery: WOOD_QUESTION }),
+            callId: 'call_1',
+          },
+        ],
+        { assistantText: MODEL_DRAFT_WITH_DILUTION },
+      ),
+    );
+    runValidatorPassMock
+      .mockResolvedValueOnce({
+        approved: false,
+        confidence: 0.5,
+        issues: ['tighten grounding'],
+        requires_human_review: false,
+        usage: VALIDATOR_PASS_USAGE,
+      })
+      .mockResolvedValue({
+        approved: true,
+        confidence: 0.9,
+        issues: [],
+        requires_human_review: false,
+        usage: VALIDATOR_PASS_USAGE,
+      });
+    runRevisionPassMock.mockResolvedValue({
+      text: `${MODEL_DRAFT} ${REVISION_ADDED_HAZARD}`,
+      usage: VALIDATOR_PASS_USAGE,
+    });
+    // The revised draft is rejected for hazard; the pre-revision draft is clean for hazard but
+    // carries its own ungrounded dilution ratio. Serving it would ship an unverified oz/gal figure.
+    groundingByDraft([
+      [REVISION_ADDED_HAZARD, HAZARD_REJECTION],
+      [
+        '4 oz per gallon',
+        {
+          categoriesDetected: ['dilution_ratio'],
+          ungroundedCategories: ['dilution_ratio'],
+          ungroundedDetails: [{ category: 'dilution_ratio', snippet: '4 oz per gallon' }],
+          keyTermGroundedCategories: [],
+        },
+      ],
+    ]);
+
+    const out = await run({ userMessage: WOOD_QUESTION, useValidator: true });
+
+    expect(out.answerProvenance).not.toBe('pre_revision_draft_restored');
+    expect(out.answerText).not.toContain('4 oz per gallon');
+    expect(out.validation.issues).toContain('regulated_claim_unverified:hazard');
+    expect(singleGateRecord('regulated_claim_guardrail').verdict).toBe('rejected');
+  });
+
+  it('(c) a clean revised draft is untouched — the pre-revision draft is never even evaluated', async () => {
+    arrangeRevisedTurn();
+    groundingByDraft([], CLEAN_GROUNDING);
+
+    const out = await run({ userMessage: WOOD_QUESTION, useValidator: true });
+
+    expect(out.answerText).toBe(REVISED_DRAFT);
+    expect(out.answerProvenance).toBe('revision_pass');
+    expect(singleGateRecord('regulated_claim_guardrail').verdict).toBe('passed');
+    expect(out.activeGates?.regulatedClaimGuardrail).toEqual({ state: 'ran', verdict: 'passed' });
+    // Exactly one guardrail evaluation: the rescue re-check only runs on a rejection.
+    expect(regulatedClaimGroundingMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('(c) a turn with no revision pass is unaffected — one evaluation, unchanged decline', async () => {
+    runResponsesWithToolLoopMock.mockImplementation(
+      generationCalling(
+        [
+          {
+            name: 'search_product_docs',
+            argumentsJson: JSON.stringify({ freeformQuery: WOOD_QUESTION }),
+            callId: 'call_1',
+          },
+        ],
+        { assistantText: `${MODEL_DRAFT} ${REVISION_ADDED_HAZARD}` },
+      ),
+    );
+    groundingByDraft([], HAZARD_REJECTION);
+
+    const out = await run({ userMessage: WOOD_QUESTION });
+
+    expect(runRevisionPassMock).not.toHaveBeenCalled();
+    expect(regulatedClaimGroundingMock).toHaveBeenCalledTimes(1);
+    expect(out.answerProvenance).toBe('validator_fallback');
+    expect(out.answerText).toContain("I can't verify the");
+    expect(singleGateRecord('regulated_claim_guardrail').verdict).toBe('rejected');
+  });
+});
+
+/* -------------------------------------------------------------------------- *
  * B0-872 — usage/safety coverage gate: requires a product subject, not just the words
  * -------------------------------------------------------------------------- */
 

@@ -37,8 +37,6 @@ type EditTestItemDialogProps = {
   expectedConcepts: string[];
   /** `test_items.minimum_concepts` — the mandatory subset. */
   minimumConcepts: string[];
-  /** `test_items.expected_criteria` — plain phrases; the tiered mini-syntax is retired. */
-  expectedCriteria: string[];
   /** `test_items.expected_sources` — `rag.document.id` uuids. */
   expectedSources: string[];
   shouldCite: boolean | null;
@@ -85,7 +83,6 @@ export function EditTestItemDialog({
   idealResponse,
   expectedConcepts,
   minimumConcepts,
-  expectedCriteria,
   expectedSources,
   shouldCite,
   inputPayload,
@@ -134,7 +131,6 @@ export function EditTestItemDialog({
                 idealResponse: idealResponse ?? '',
                 expectedConcepts,
                 minimumConcepts,
-                expectedCriteria,
                 expectedSources,
                 shouldCite: shouldCiteLabel(shouldCite),
                 questionCategory: payloadString(inputPayload, 'question_category'),

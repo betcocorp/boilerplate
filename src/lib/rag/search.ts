@@ -1,10 +1,10 @@
 import { createEmbedding, EMBEDDING_MODEL } from '~/lib/rag/embeddings';
 import { isRerankerConfigured, rerankChunks } from '~/lib/rag/rerank';
-import { getOpenAIClient } from '~/lib/openai/client';
+import { completeText } from '~/lib/llm/structured-completion';
+import { resolveQueryRewriteModel } from '~/lib/rag/query-rewrite-model';
 import { getBooleanSetting } from '~/lib/settings/settings-service';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 import { fetchDocumentSourceRefs } from '~/lib/retrieval/document-assembly';
-const DEFAULT_REWRITE_MODEL = 'gpt-4.1-mini';
 const APPROX_QUERY_THRESHOLD_SHORT = 0.95;
 const APPROX_QUERY_THRESHOLD_LONG = 0.9;
 const APPROX_REWRITTEN_SIMILARITY_THRESHOLD = 0.88;
@@ -501,42 +501,40 @@ function getApproximateQueryThreshold(query: string) {
   return query.length < 12 ? APPROX_QUERY_THRESHOLD_SHORT : APPROX_QUERY_THRESHOLD_LONG;
 }
 
-async function rewriteQueryWithOpenAI(query: string) {
+/**
+ * B0-921 — goes through `~/lib/llm/structured-completion`, which routes on the resolved model id
+ * (`claude-*` → Anthropic Messages, otherwise the OpenAI Responses API), instead of building an
+ * OpenAI client and calling chat completions on a hardcoded model. The model tag is the
+ * `BEX_QUERY_REWRITE_MODEL` settings row (`./query-rewrite-model`). Any failure — unreadable
+ * setting, provider error, refusal, empty answer — still returns the normalized input, so retrieval
+ * degrades to the unrewritten query rather than throwing into the RAG path.
+ */
+async function rewriteQueryWithLlm(query: string) {
   const normalizedInput = normalizeRewrittenQuery(query);
 
   if (!normalizedInput) {
     return normalizedInput;
   }
 
-  const openai = getOpenAIClient();
-
   try {
-    const response = await openai.chat.completions.create({
-      model: process.env.OPENAI_QUERY_REWRITE_MODEL || DEFAULT_REWRITE_MODEL,
-      temperature: 0,
-      max_completion_tokens: 80,
-      messages: [
-        {
-          role: 'system',
-          content:
-            'You rewrite search queries for Betco, a commercial cleaning products company. ' +
-            'Rules: preserve all product names, SKUs, and chemical names exactly. ' +
-            'Expand abbreviations: RTU → ready to use, VCT → vinyl composition tile, LVT → luxury vinyl tile, ' +
-            'SDS → safety data sheet, GHS → globally harmonized system, EPA → EPA registered, ' +
-            'RTU → ready to use, HCS → hazard communication standard. ' +
-            'Add domain synonyms where they clarify intent: "use on" → application surface, ' +
-            '"safe for" → compatible surfaces, "mix ratio" / "dilution" → dilution ratio concentrate. ' +
-            'Strip conversational filler: "how do I", "can you tell me", "what is the". ' +
-            'Output exactly one plain-text retrieval query under 20 words — no explanation, no trailing punctuation.',
-        },
-        {
-          role: 'user',
-          content: query,
-        },
-      ],
-    });
-
-    const rewritten = response.choices[0]?.message?.content?.trim();
+    const rewritten = (
+      await completeText({
+        model: await resolveQueryRewriteModel(),
+        temperature: 0,
+        maxOutputTokens: 80,
+        system:
+          'You rewrite search queries for Betco, a commercial cleaning products company. ' +
+          'Rules: preserve all product names, SKUs, and chemical names exactly. ' +
+          'Expand abbreviations: RTU → ready to use, VCT → vinyl composition tile, LVT → luxury vinyl tile, ' +
+          'SDS → safety data sheet, GHS → globally harmonized system, EPA → EPA registered, ' +
+          'RTU → ready to use, HCS → hazard communication standard. ' +
+          'Add domain synonyms where they clarify intent: "use on" → application surface, ' +
+          '"safe for" → compatible surfaces, "mix ratio" / "dilution" → dilution ratio concentrate. ' +
+          'Strip conversational filler: "how do I", "can you tell me", "what is the". ' +
+          'Output exactly one plain-text retrieval query under 20 words — no explanation, no trailing punctuation.',
+        user: query,
+      })
+    ).trim();
 
     if (!rewritten) {
       return normalizedInput;
@@ -548,33 +546,33 @@ async function rewriteQueryWithOpenAI(query: string) {
   }
 }
 
+/**
+ * B0-921 — same seam and same `BEX_QUERY_REWRITE_MODEL` row as `rewriteQueryWithLlm`. Still a
+ * free-text call parsed as a JSON array (the answer's top level is an array, which strict
+ * structured output cannot express), and every failure path — bad JSON included — still falls back
+ * to the single original query.
+ */
 async function expandQueryIntents(query: string): Promise<string[]> {
   const normalized = query.trim();
   if (!normalized) return [normalized];
 
-  const openai = getOpenAIClient();
   try {
-    const response = await openai.chat.completions.create({
-      model: process.env.OPENAI_QUERY_REWRITE_MODEL || DEFAULT_REWRITE_MODEL,
-      temperature: 0,
-      max_completion_tokens: 200,
-      messages: [
-        {
-          role: 'system',
-          content:
-            'You decompose user questions about Betco commercial cleaning products into focused retrieval sub-queries. ' +
-            'If the input contains 2–3 distinct questions or intents, split it into that many self-contained sub-queries. ' +
-            'If it is a single intent, return it as a one-element array unchanged. ' +
-            'Respond with a JSON array of strings only — no markdown, no explanation. ' +
-            'Preserve product names, SKUs, and technical terms exactly. ' +
-            'Example input: "what is the dilution for Green Earth and is it safe on VCT floors?" ' +
-            'Example output: ["Green Earth dilution ratio concentrate", "Green Earth VCT vinyl tile floor application safety"]',
-        },
-        { role: 'user', content: normalized },
-      ],
-    });
-
-    const content = response.choices[0]?.message?.content?.trim();
+    const content = (
+      await completeText({
+        model: await resolveQueryRewriteModel(),
+        temperature: 0,
+        maxOutputTokens: 200,
+        system:
+          'You decompose user questions about Betco commercial cleaning products into focused retrieval sub-queries. ' +
+          'If the input contains 2–3 distinct questions or intents, split it into that many self-contained sub-queries. ' +
+          'If it is a single intent, return it as a one-element array unchanged. ' +
+          'Respond with a JSON array of strings only — no markdown, no explanation. ' +
+          'Preserve product names, SKUs, and technical terms exactly. ' +
+          'Example input: "what is the dilution for Green Earth and is it safe on VCT floors?" ' +
+          'Example output: ["Green Earth dilution ratio concentrate", "Green Earth VCT vinyl tile floor application safety"]',
+        user: normalized,
+      })
+    ).trim();
     if (!content) return [normalized];
 
     const parsed = JSON.parse(content) as unknown;
@@ -777,7 +775,7 @@ async function getCachedOrNewEmbedding(
 
   if (!existing) {
     const rewriteStartedAt = nowMs();
-    rewrittenQuery = await rewriteQueryWithOpenAI(query);
+    rewrittenQuery = await rewriteQueryWithLlm(query);
     queryRewriteMs = elapsedMs(rewriteStartedAt);
 
     const rewrittenLookupStartedAt = nowMs();

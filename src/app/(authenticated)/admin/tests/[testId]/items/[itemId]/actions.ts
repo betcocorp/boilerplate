@@ -1,6 +1,7 @@
 'use server';
 
 import { getErrorMessage } from '~/lib/utils';
+import { ITEM_SUGGESTIONS_JSON_SCHEMA } from '~/lib/ai-suggestions/item-suggestions-schema';
 import { replaceAiSuggestions } from '~/lib/ai-suggestions/repository';
 import {
   completeStructured,
@@ -77,32 +78,6 @@ function formatHistoryForPrompt(rows: ItemHistoryRow[]): string {
     })
     .join('\n\n');
 }
-
-/**
- * B0-906 — strict JSON Schema for the seam's structured output, mirroring the shape the system
- * prompt already asks for. It replaces `response_format: { type: 'json_object' }`, so the tolerant
- * wrapper-key parser below now only ever sees the `{ suggestions: [...] }` shape — it is kept as-is
- * because it also guards a hand-edited or legacy response.
- */
-const ITEM_SUGGESTIONS_JSON_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['suggestions'],
-  properties: {
-    suggestions: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['title', 'content'],
-        properties: {
-          title: { type: 'string' },
-          content: { type: 'string' },
-        },
-      },
-    },
-  },
-} as const satisfies Record<string, unknown>;
 
 export async function analyzeTestItem(
   payload: AnalyzeTestItemPayload,

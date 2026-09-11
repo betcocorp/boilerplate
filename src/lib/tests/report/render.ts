@@ -2,9 +2,10 @@ import type { TestRecord, TestResultRecord } from '~/lib/tests/types';
 
 import {
   caseMarkers,
+  conceptChecklist,
+  formatConceptChecklistLine,
   formatConceptCoverage,
   formatConceptList,
-  hasMandatoryMiss,
   MANDATORY_CONCEPTS_LABEL,
   mandatoryMissingLegend,
   NO_MANDATORY_CONCEPTS_NOTE,
@@ -940,11 +941,17 @@ export function renderReportMarkdown(params: {
           `**Automatic Pass withheld:** ${con.materialIssueNote ?? 'a material factual issue was recorded on this case.'}`,
         );
       }
-      if (hasMandatoryMiss(con)) {
-        push(`**Missing mandatory concepts:** ${formatConceptList(con.mandatory.missing)}`);
-      }
-      if (con.expected.missing.length > 0) {
-        push(`**Missing expected concepts:** ${formatConceptList(con.expected.missing)}`);
+      // B0-938 — the whole golden list, ticked or crossed, rather than only what was missed. Same
+      // entries and same order as the React ledger's checklist: both call `conceptChecklist`.
+      for (const [label, coverage] of [
+        ['Must-have concepts', con.mandatory],
+        ['Expected concepts', con.expected],
+      ] as const) {
+        const entries = conceptChecklist(coverage);
+        if (entries.length === 0) continue;
+        const satisfied = entries.filter((entry) => entry.met).length;
+        push(`**${label}** (${satisfied}/${entries.length}):`);
+        for (const entry of entries) push(formatConceptChecklistLine(entry));
       }
       if (con.materialIssue) {
         push(

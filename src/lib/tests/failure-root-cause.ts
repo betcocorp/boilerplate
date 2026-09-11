@@ -40,7 +40,7 @@ const rootCauseResultSchema = z.object({
 });
 type RootCauseResult = z.infer<typeof rootCauseResultSchema>;
 
-const ROOT_CAUSE_JSON_SCHEMA = {
+export const ROOT_CAUSE_JSON_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   properties: {

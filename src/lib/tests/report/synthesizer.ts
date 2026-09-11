@@ -17,7 +17,7 @@ import { reportSynthesisSchema, type ReportSynthesis } from './schemas';
  * `reportSynthesisSchema`. `top3` is instructed (not schema-enforced) to be exactly 3 entries —
  * strict mode doesn't support `minItems`/`maxItems` — and validated by Zod after parsing.
  */
-const SYNTHESIS_JSON_SCHEMA = {
+export const SYNTHESIS_JSON_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   properties: {
@@ -97,7 +97,7 @@ From only the cases in this batch, list AT MOST 5 of the clearest failure patter
 
 Some cases carry a "Harness provenance" line (answer provenance, routing decision, gates that fired, whether the draft answer was discarded, retrieved chunk count). You MAY cite these as evidence — e.g. naming the specific gate that fired — but they are reference signals only: NEVER treat them as a metric, and NEVER fold them into Accuracy, Completeness, Relevance, or Clarity scoring.`;
 
-const DIGEST_JSON_SCHEMA = {
+export const DIGEST_JSON_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   properties: {

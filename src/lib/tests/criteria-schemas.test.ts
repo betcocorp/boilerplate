@@ -101,16 +101,15 @@ describe('aggregateCriteriaVerdicts — B0-616 deterministic tier aggregation', 
 });
 
 /**
- * B0-932 — the three `text[]` concept columns are the only source of criteria now, and
+ * B0-932/940 — the two `text[]` concept columns are the only source of criteria now, and
  * `minimum_concepts` is what makes an item pass or fail. These pin the tiering, the de-dupe that
- * stops a phrase in two columns from double-counting, and the `exact:` regulated-value opt-in.
+ * stops a phrase in both columns from double-counting, and the `exact:` regulated-value opt-in.
  */
 describe('buildExpectedCriteria (B0-932)', () => {
-  it('tiers minimum_concepts as 1 and the other two columns as 2', () => {
+  it('tiers minimum_concepts as 1 and expected_concepts as 2, in that order', () => {
     const criteria = buildExpectedCriteria({
       minimumConcepts: ['must state the labeled dilution'],
-      expectedConcepts: ['mentions pre-cleaning heavy soil'],
-      expectedCriteria: ['names the source document'],
+      expectedConcepts: ['mentions pre-cleaning heavy soil', 'names the source document'],
     });
 
     expect(criteria).toEqual([

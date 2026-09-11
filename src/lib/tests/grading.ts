@@ -43,7 +43,7 @@ import type { TestItemRecord } from './types';
  */
 export type GradableExpectations = Pick<
   TestItemRecord,
-  'expected_concepts' | 'minimum_concepts' | 'expected_criteria'
+  'expected_concepts' | 'minimum_concepts'
 >;
 
 /** The item's mandatory phrases, `exact:` prefixes stripped. Empty = nothing to gate on. */

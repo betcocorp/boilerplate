@@ -89,13 +89,6 @@ export const TEST_TEMPLATE_COLUMNS: TestTemplateColumn[] = [
     help: 'The subset of expected_concepts a reviewer must see to pass the row, pipe-separated. Each phrase is stored verbatim. Use n/a for none.',
   },
   {
-    name: 'expected_criteria',
-    required: false,
-    example: 'Extra grading criteria, pipe-separated — e.g. names the EPA registration number | states the PPE required',
-    help:
-      'Optional additional criteria the grader checks, pipe-separated (one phrase each), same format as expected_concepts. Leave blank when the concept columns are enough.',
-  },
-  {
     name: 'expected_sources',
     required: false,
     example:

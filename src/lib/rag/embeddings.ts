@@ -1,3 +1,12 @@
+/**
+ * B0-921 — the OpenAI calls in this file are a PERMANENT, deliberate vendor dependency, and the one
+ * exception to the B0-898..908 provider seam (`~/lib/llm/structured-completion`, `resolveModel`):
+ * Anthropic ships no embeddings API, and the entire pgvector corpus (`rag.document_chunk.
+ * embedding_large`, halfvec 3072) is embedded with `text-embedding-3-large` under an HNSW index
+ * built on those vectors. A query embedded by any other model is not comparable to them, so
+ * switching providers here is not a config change — it is re-embedding and re-indexing the whole
+ * corpus. Do not plan a vendor migration that assumes this file moves with the rest.
+ */
 import { getOpenAIClient } from '~/lib/openai/client';
 import { withRetry } from '~/lib/utils';
 import { clampPositiveInteger } from '~/lib/utils/params';

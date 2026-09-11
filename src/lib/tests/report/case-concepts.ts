@@ -167,3 +167,40 @@ export function formatConceptCoverage(concepts: CaseConcepts): string {
 export function formatConceptList(concepts: readonly string[]): string {
   return concepts.map((concept) => `"${concept}"`).join(', ');
 }
+
+/**
+ * One concept phrase with the verdict the grader reached on it.
+ *
+ * `phrase` is the authored text, verbatim — never the identity key, never re-cased or truncated.
+ */
+export type ConceptChecklistEntry = {
+  phrase: string;
+  met: boolean;
+};
+
+/**
+ * The per-kind checklist the report renders: every required concept, in the order it was
+ * authored, each marked satisfied or missed.
+ *
+ * Derived from `required` rather than from `satisfied` ∪ `missing` so the reader sees the golden
+ * list in its authored order, and so a phrase that somehow reached neither bucket still appears
+ * (as missed) instead of vanishing from the list — `./invariants` asserts that cannot happen, and
+ * silently dropping a concept would be the worse failure if it ever did.
+ *
+ * Membership is decided on `normConcept` identity keys, not raw equality, because cross-pass
+ * voting can carry two spellings of one phrase; the key is used for the comparison only and the
+ * authored `phrase` is what comes back out.
+ */
+export function conceptChecklist(coverage: ConceptKindCoverage): ConceptChecklistEntry[] {
+  const satisfied = new Set(coverage.satisfied.map(normConcept));
+  return coverage.required.map((phrase) => ({ phrase, met: satisfied.has(normConcept(phrase)) }));
+}
+
+/** Markdown checklist marks. Plain glyphs so the exported document needs no icon font. */
+export const CONCEPT_CHECK_MARKS = { met: '✓', missed: '✗' } as const;
+
+/** One Markdown checklist line, e.g. `- ✓ "keep the surface visibly wet"`. */
+export function formatConceptChecklistLine(entry: ConceptChecklistEntry): string {
+  const mark = entry.met ? CONCEPT_CHECK_MARKS.met : CONCEPT_CHECK_MARKS.missed;
+  return `- ${mark} "${entry.phrase}"`;
+}
