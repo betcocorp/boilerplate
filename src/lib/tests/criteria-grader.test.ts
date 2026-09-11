@@ -25,7 +25,7 @@ vi.mock('~/lib/workflows/product-support/max-output-tokens', () => ({
   resolveMaxOutputTokens: () => 1024,
 }));
 
-import { gradeExactCriterion, gradeWithCriteria } from './criteria-grader';
+import { findDilutionEquivalence, gradeExactCriterion, gradeWithCriteria } from './criteria-grader';
 import { GRADER_JSON_SCHEMA, type ExpectedCriterion } from './criteria-schemas';
 
 /**
@@ -230,5 +230,185 @@ describe('gradeWithCriteria — B0-832 exact verdict cannot be overwritten on in
     expect(request.system).toContain('You are grading a single AI assistant response');
     expect(request.user).toContain('0. says it is a floor cleaner');
     expect(outcome?.passed).toBe(true);
+  });
+});
+
+/**
+ * B0-953 — dilution-unit equivalence. `ANSWER_PH7Q` below is the verbatim assistant response from
+ * golden run 61e80e45-80fb-4207-a299-36c60cd62e6a, row 1, which was scored not-met on the concept
+ * "pH7Q dilutes at 1:64" while stating the identical value as "2 oz per gallon" / "2 oz/gal".
+ * The figures are the run's own transcription of the label; nothing here converts or rounds them.
+ */
+const ANSWER_PH7Q = [
+  'The main differences between Betco pH7Q and pH7Q Dual are their dilution rates, EPA registration numbers, and some aspects of their kill claims and usage.',
+  '',
+  '**pH7Q:**',
+  '- Labeled as a one-step disinfectant, germicidal detergent, and deodorizer.',
+  '- EPA Registration Number: 47371-131-4170.',
+  '- Active ingredients: Didecyl dimethyl ammonium chloride (2.54%) and n-Alkyl dimethyl benzyl ammonium chloride (1.69%).',
+  '- Labeled dilution: 2 oz per gallon of water for general disinfection.',
+  '- Contact time: 10 minutes for most organisms; 1 minute for SARS-CoV-2 and Human Coronavirus.',
+  '- Approved for use on hard, nonporous surfaces such as floors, walls, metal, stainless steel, glazed porcelain, and plastics.',
+  '',
+  '**pH7Q Dual:**',
+  '- Labeled as a concentrated neutral disinfectant cleaner.',
+  '- EPA Registration Number: 10324-141-4170.',
+  '- Labeled dilution: 1:256 (0.5 oz per gallon of water).',
+  '- Contact time: 10 minutes for most organisms; 2 minutes for SARS-CoV-2.',
+  '- Coverage: 500 sq ft/gal.',
+  '',
+  '**Key differences:**',
+  '- **Dilution:** pH7Q uses 2 oz/gal; pH7Q Dual uses 0.5 oz/gal (more concentrated).',
+  '- **Contact time for SARS-CoV-2:** pH7Q is 1 minute; pH7Q Dual is 2 minutes.',
+  '- **EPA Registration:** Each has a different EPA registration number, meaning claims and directions are not interchangeable.',
+  '',
+  'Always confirm the product in hand matches the intended use and review the label for the specific organism and surface.',
+].join('\n');
+
+describe('findDilutionEquivalence — B0-953 exact unit identity only', () => {
+  it('treats 1:64 and the response’s own oz/gal wording as the same concept', () => {
+    const match = findDilutionEquivalence('pH7Q dilutes at 1:64', ANSWER_PH7Q);
+    expect(match).not.toBeNull();
+    expect(match!.matched).toBe('2 oz/gal');
+    expect(match!.evidence).toContain('pH7Q uses 2 oz/gal');
+  });
+
+  it('does NOT accept 2.5 oz/gal for 1:64 — close is wrong on a regulated value', () => {
+    expect(
+      findDilutionEquivalence('pH7Q dilutes at 1:64', 'pH7Q uses 2.5 oz/gal for disinfection.'),
+    ).toBeNull();
+  });
+
+  it.each([
+    ['1:64 ↔ 2 oz/gal', 'pH7Q dilutes at 1:64', 'pH7Q uses 2 oz/gal.'],
+    ['1:64 ↔ 2 fl. oz. per gallon', 'pH7Q dilutes at 1:64', 'pH7Q: 2 fl. oz. per gallon.'],
+    ['1:256 ↔ 0.5 oz/gal', 'pH7Q Dual dilutes at 1:256', 'pH7Q Dual uses 0.5 oz/gal.'],
+    ['1:128 ↔ 1 ounce per gallon', 'Sanibet dilutes at 1:128', 'Sanibet: 1 ounce per gallon.'],
+    ['1:64 ↔ 15.625 mL/L', 'dilutes at 1:64', 'Mix at 15.625 mL/L.'],
+    // The post-B0-953 fixture wording (both forms spelled) still resolves to the one value.
+    ['both forms spelled in the concept', 'pH7Q dilutes at 1:64 (2 oz/gal)', ANSWER_PH7Q],
+    ['1:100 ↔ 10 mL per litre', 'dilutes at 1:100', 'Mix at 10 mL per litre.'],
+  ])('%s is met', (_label, concept, response) => {
+    expect(findDilutionEquivalence(concept, response)).not.toBeNull();
+  });
+
+  it.each([
+    ['a near miss the other way', 'pH7Q dilutes at 1:64', 'pH7Q uses 1.9 oz/gal.'],
+    ['1:64 is not 1:65', 'pH7Q dilutes at 1:64', 'pH7Q dilutes at 1:65.'],
+    ['mL/L is not oz/gal', 'dilutes at 1:64', 'Mix at 2 mL/L.'],
+    ['a percentage is never converted', 'dilutes at 1:64', 'Use a 1.5% solution.'],
+    ['no dilution in the concept at all', 'both are neutral pH cleaners', 'pH7Q uses 2 oz/gal.'],
+    ['no dilution in the response', 'pH7Q dilutes at 1:64', 'pH7Q is a neutral disinfectant.'],
+  ])('%s is not met', (_label, concept, response) => {
+    expect(findDilutionEquivalence(concept, response)).toBeNull();
+  });
+
+  it('will not borrow a sibling product’s value', () => {
+    expect(
+      findDilutionEquivalence(
+        'pH7Q dilutes at 1:64',
+        'pH7Q is a neutral disinfectant. Fastdraw 6 uses 2 oz/gal.',
+      ),
+    ).toBeNull();
+  });
+
+  it('will not borrow from a sibling whose NAME CONTAINS the criterion’s subject', () => {
+    // "pH7Q Dual" satisfies a naive subject check for a "pH7Q" criterion, because "pH7Q" is a
+    // prefix of it. Dual's labeled rate is 1:256, so crediting this would certify 1:64 for pH7Q
+    // off a clause that never mentions pH7Q on its own — and would do so even when the sibling's
+    // own rate is stated wrongly. The extra identifier ("dual") is what disqualifies the clause.
+    expect(findDilutionEquivalence('pH7Q dilutes at 1:64', 'pH7Q Dual uses 2 oz/gal.')).toBeNull();
+    // Same clause set, but pH7Q now speaks for itself — that one is legitimate evidence.
+    expect(
+      findDilutionEquivalence(
+        'pH7Q dilutes at 1:64',
+        'pH7Q uses 2 oz/gal; pH7Q Dual uses 0.5 oz/gal.',
+      ),
+    ).not.toBeNull();
+  });
+
+  it('stays out of it when the response states a different value for the same product', () => {
+    expect(
+      findDilutionEquivalence(
+        'pH7Q dilutes at 1:64',
+        'pH7Q dilutes at 1:32. Elsewhere the guide lists 2 oz/gal.',
+      ),
+    ).toBeNull();
+  });
+
+  it('declines an unsubjected concept when the response states several dilutions', () => {
+    expect(findDilutionEquivalence('dilutes at 1:64', 'Use 2 oz/gal, or 4 oz/gal for heavy soil.')).toBeNull();
+  });
+
+  it('reports nothing when the concept’s own two forms disagree (a fixture bug to report)', () => {
+    expect(findDilutionEquivalence('pH7Q dilutes at 1:64 (3 oz/gal)', ANSWER_PH7Q)).toBeNull();
+  });
+});
+
+describe('gradeWithCriteria — B0-953 dilution equivalence is settled in code', () => {
+  beforeEach(() => {
+    mockComplete.mockReset();
+    mockResolveModel.mockReset();
+    mockResolveModel.mockResolvedValue('gpt-test');
+  });
+
+  it('flips the golden-run row-1 concept to met without asking the model', async () => {
+    mockComplete.mockResolvedValue({
+      text: JSON.stringify({
+        verdicts: [{ criterionIndex: 1, met: true, evidence: 'neutral pH' }],
+      }),
+      usage: USAGE,
+    });
+
+    const outcome = await gradeWithCriteria({
+      prompt: "What's the difference between pH7Q and pH7Q Dual?",
+      responseText: ANSWER_PH7Q,
+      criteria: [
+        { concept: 'pH7Q dilutes at 1:64', tier: 1, match: 'semantic' },
+        { concept: 'both are neutral pH disinfectant cleaners', tier: 2, match: 'semantic' },
+      ],
+    });
+
+    expect(outcome!.verdicts[0]).toMatchObject({
+      met: true,
+      source: 'dilution_equivalence',
+      match: 'semantic',
+    });
+    expect(outcome!.verdicts[0].evidence).toContain('2 oz/gal');
+    expect(outcome!.passed).toBe(true);
+    // The criterion never reached the model: only the second one was listed for it.
+    const user = mockComplete.mock.calls[0][0].user as string;
+    expect(user).not.toContain('0. pH7Q dilutes at 1:64');
+    expect(user).toContain('1. both are neutral pH disinfectant cleaners');
+  });
+
+  it('falls through to the semantic grader when the values are not exactly equal', async () => {
+    mockComplete.mockResolvedValue({
+      text: JSON.stringify({ verdicts: [{ criterionIndex: 0, met: false, evidence: '' }] }),
+      usage: USAGE,
+    });
+
+    const outcome = await gradeWithCriteria({
+      prompt: 'How do I dilute pH7Q?',
+      responseText: 'pH7Q uses 2.5 oz/gal.',
+      criteria: [{ concept: 'pH7Q dilutes at 1:64', tier: 1, match: 'semantic' }],
+    });
+
+    expect(mockComplete).toHaveBeenCalledOnce();
+    expect(mockComplete.mock.calls[0][0].user).toContain('0. pH7Q dilutes at 1:64');
+    expect(outcome!.verdicts[0]).toMatchObject({ met: false, source: 'semantic' });
+    expect(outcome!.passed).toBe(false);
+  });
+
+  it('leaves an exact-tagged criterion deterministic — no unit conversion is ever applied to it', async () => {
+    const outcome = await gradeWithCriteria({
+      prompt: 'How do I dilute pH7Q?',
+      responseText: 'pH7Q uses 2 oz/gal.',
+      criteria: [{ concept: '1:64', tier: 1, match: 'exact' }],
+    });
+
+    expect(mockComplete).not.toHaveBeenCalled();
+    expect(outcome!.verdicts[0]).toMatchObject({ met: false, source: 'exact' });
+    expect(outcome!.passed).toBe(false);
   });
 });

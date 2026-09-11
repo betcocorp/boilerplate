@@ -153,12 +153,17 @@ export function buildExpectedCriteria(input: {
  * `gradeWithCriteria` (criteria-grader.ts) after the fact, to record whether a verdict came from
  * the deterministic exact-match check or the semantic/LLM grader, so `aggregateCriteriaVerdicts`
  * below can resolve an index collision by provenance rather than by array order (B0-832).
+ *
+ * B0-953 — `dilution_equivalence` is the third, also-deterministic provenance: a `semantic`
+ * criterion settled in code because the response states its dilution in the other unit at exactly
+ * the same value (1:N === 128/N oz/gal === 1000/N mL/L). Tagged distinctly rather than folded into
+ * `exact` so an auditor can tell a literal substring match from a computed unit conversion.
  */
 export const criterionVerdictSchema = z.object({
   criterionIndex: z.number().int().min(0),
   met: z.boolean(),
   evidence: z.string(),
-  source: z.enum(['exact', 'semantic']).optional(),
+  source: z.enum(['exact', 'semantic', 'dilution_equivalence']).optional(),
 });
 export type CriterionVerdict = z.infer<typeof criterionVerdictSchema>;
 
@@ -275,10 +280,12 @@ export function aggregateCriteriaVerdicts(
   }
 
   const verdictByIndex = new Map<number, CriterionVerdict>();
+  const isDeterministic = (source: CriterionVerdict['source']) =>
+    source === 'exact' || source === 'dilution_equivalence';
   for (const v of verdicts) {
     const existing = verdictByIndex.get(v.criterionIndex);
-    if (existing?.source === 'exact' && v.source !== 'exact') {
-      // An exact verdict already claimed this index — a non-exact verdict can never displace it.
+    if (isDeterministic(existing?.source) && !isDeterministic(v.source)) {
+      // A deterministic verdict already claimed this index — a model verdict can never displace it.
       continue;
     }
     verdictByIndex.set(v.criterionIndex, v);
