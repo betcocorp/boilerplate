@@ -188,6 +188,17 @@ export const reportStateSchema = z.object({
     .nullable()
     .optional()
     .default(null),
+  /**
+   * B0-943 — advisory TTL lease over this report's grading, so an open report page and the
+   * background hop chain don't grade (and pay for) the same (case, pass) twice. `activeWorker` is
+   * the opaque id of the worker that currently holds it; `activeUntil` is when the lease expires.
+   *
+   * Legacy-safe for the same reason `passMark`/`gradingPromptHash` are: a `report_state` persisted
+   * before these fields existed MUST still `safeParse`, because a parse failure drops every
+   * already-scored case to the orchestrator's "start fresh" path and throws away real grading spend.
+   */
+  activeWorker: z.string().nullable().optional().default(null),
+  activeUntil: z.string().nullable().optional().default(null),
   synthesis: reportSynthesisSchema.nullable(),
   error: z.string().nullable(),
   // B0-609 — the report's aggregate score/grade (`computeReportMetrics(...).overall`), persisted
@@ -235,6 +246,8 @@ export function emptyReportState(
     gradingPromptHash: null,
     gradingEffort: null,
     judgedThresholds: null,
+    activeWorker: null,
+    activeUntil: null,
     synthesis: null,
     error: null,
     overall: null,
