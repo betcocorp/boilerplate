@@ -272,6 +272,47 @@ describe('buildProductSupportInstructions — classifier-driven orchestrator hin
   });
 });
 
+describe('shared instructions — answer-completeness rules (B0-949/951/954/956/957)', () => {
+  const instructions = buildProductSupportInstructions({
+    mode: 'orchestrator',
+    routing: { ...baseRouting, decision: 'product' },
+  });
+
+  it('B0-949: requires pre-clean, visibly-wet dwell and hand-hygiene carry-through with a disinfectant pick', () => {
+    expect(instructions).toContain('## Disinfectant recommendations — the conditions that make the claim valid');
+    expect(instructions).toContain('Clean visible soil before disinfecting');
+    expect(instructions).toContain('stay visibly wet for the entire labeled contact time');
+    expect(instructions).toContain('alcohol hand sanitizer is not a substitute for handwashing');
+    // The never-from-memory guarantee on the regulated values must survive this rule.
+    expect(instructions).toContain('Never supply one from memory.');
+  });
+
+  it('B0-951: bans a warranty-as-shelf-life substitution and any fitness-for-use verdict', () => {
+    expect(instructions).toContain('A warranty, guarantee, or product-support period is NOT a shelf life');
+    expect(instructions).toContain('Never issue a fitness-for-use verdict');
+    // The pre-existing escalation target still stands.
+    expect(instructions).toContain('**Betco Technical Services**');
+  });
+
+  it('B0-954: points at the adjacent floor-care stages without expanding into them', () => {
+    expect(instructions).toContain('## Floor care — name the adjacent stages');
+    expect(instructions).toContain('interim scrub-and-recoat → full strip-and-refinish');
+    expect(instructions).toContain('That is a pointer, not an expansion');
+  });
+
+  it('B0-956: names label AND SDS as controlling, and blocks a product citation on a general-policy ask', () => {
+    expect(instructions).toContain('**label and SDS are the controlling documents**');
+    expect(instructions).toContain('do not present a single product\'s label as the source of the general rule');
+    expect(instructions).toContain('This never applies to a product-specific question');
+  });
+
+  it('B0-957: enumerates from the catalog, not a marketing guide, and says when the category is empty', () => {
+    expect(instructions).toContain('The catalog is the roster; a guide is not.');
+    expect(instructions).toContain('`get_products_in_category`');
+    expect(instructions).toContain('never imply a substrate is approved when no retrieved label says so');
+  });
+});
+
 describe('effectivePromptIdForDecision (B0-392)', () => {
   it('maps each specialist decision to its own prompt id', () => {
     for (const id of EFFECTIVE_PROMPT_IDS) {
