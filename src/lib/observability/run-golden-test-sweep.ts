@@ -1,6 +1,15 @@
 import { z } from 'zod';
 
+import { logWarn } from '~/lib/observability/logger';
+import {
+  closeScheduledRunAfterDispatch,
+  insertScheduledTestItems,
+  insertScheduledTestRun,
+  updateScheduledTestItem,
+} from '~/lib/observability/scheduled-test-repository';
 import { listGoldenTests } from '~/lib/tests/golden-set';
+
+import type { ScheduledTestItem } from '~/lib/observability/scheduled-test-types';
 
 const ADMIN_RUNS_PATH = '/api/admin/tests/runs';
 
@@ -35,6 +44,11 @@ export const runGoldenTestSweepResultSchema = z.object({
   started: z.number().int().nonnegative(),
   failed: z.number().int().nonnegative(),
   outcomes: z.array(goldenTestSweepOutcomeSchema),
+  /**
+   * B0-941 — `scheduled_test_runs.id` for this sweep's ledger row. Absent on a dry run, and also
+   * when persistence failed: the ledger is observability, never a precondition for dispatching.
+   */
+  scheduledRunId: z.string().optional(),
 });
 export type RunGoldenTestSweepResult = z.infer<typeof runGoldenTestSweepResultSchema>;
 
@@ -122,6 +136,119 @@ async function queueAndRunGoldenTest(
   };
 }
 
+/* -------------------------------------------------------------------------- *
+ * B0-941 — durable sweep ledger
+ * -------------------------------------------------------------------------- */
+
+type SweepLedger = {
+  scheduledRunId: string;
+  startedAtIso: string;
+  /** Child row plus its current in-memory state, keyed by golden test id. */
+  itemsByTestId: Map<string, ScheduledTestItem>;
+};
+
+/**
+ * Writes the parent + one child per golden test BEFORE anything is dispatched, so a sweep that
+ * dies mid-flight still leaves a visible record of what it was doing.
+ *
+ * Returns `null` on any failure: the ledger is observability and must never be able to take down
+ * the thing it observes, so a broken write is logged and the sweep dispatches regardless.
+ */
+async function openSweepLedger(
+  goldenTests: { id: string; name: string }[],
+  context: { origin: string },
+): Promise<SweepLedger | null> {
+  const startedAtIso = new Date().toISOString();
+
+  try {
+    const run = await insertScheduledTestRun({
+      sweepTriggeredAt: startedAtIso,
+      totalTests: goldenTests.length,
+      metadata: { origin: context.origin },
+    });
+
+    const items = await insertScheduledTestItems({
+      scheduledRunId: run.id,
+      startedAt: startedAtIso,
+      tests: goldenTests,
+    });
+
+    return {
+      scheduledRunId: run.id,
+      startedAtIso,
+      itemsByTestId: new Map(items.map((item) => [item.test_id, item])),
+    };
+  } catch (error) {
+    logWarn('scheduled_test_ledger_open_failed', {
+      golden_test_count: goldenTests.length,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+}
+
+/**
+ * Folds one dispatch outcome onto its child row.
+ *
+ * A successful dispatch only records `test_run_id` and stays `running` — the run is still
+ * executing, and `~/lib/observability/reconcile-scheduled-tests.ts` is what closes it.
+ */
+async function recordDispatchOutcome(
+  ledger: SweepLedger | null,
+  outcome: GoldenTestSweepOutcome,
+): Promise<void> {
+  const item = ledger?.itemsByTestId.get(outcome.testId);
+  if (!ledger || !item) {
+    return;
+  }
+
+  const patch = outcome.ok
+    ? { test_run_id: outcome.runId }
+    : {
+        test_run_id: outcome.runId,
+        status: 'failed' as const,
+        completed_at: new Date().toISOString(),
+        error_code: outcome.step ? `dispatch_${outcome.step}` : 'dispatch_failed',
+        error_message: outcome.error,
+      };
+
+  try {
+    await updateScheduledTestItem(item.id, patch);
+    ledger.itemsByTestId.set(outcome.testId, { ...item, ...patch });
+  } catch (error) {
+    logWarn('scheduled_test_item_write_failed', {
+      scheduled_test_item_id: item.id,
+      test_id: outcome.testId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/**
+ * Closes the parent once dispatch is done. Only an all-dispatch-failed sweep is terminal here —
+ * any run that actually started is still executing, so the parent stays `in_progress` for the
+ * reconciler rather than being called "completed" on the strength of an HTTP 200.
+ */
+async function closeSweepLedger(ledger: SweepLedger | null): Promise<void> {
+  if (!ledger) {
+    return;
+  }
+
+  try {
+    await closeScheduledRunAfterDispatch({
+      scheduledRunId: ledger.scheduledRunId,
+      items: Array.from(ledger.itemsByTestId.values()),
+      startedAtIso: ledger.startedAtIso,
+      completedAtIso: new Date().toISOString(),
+    });
+  } catch (error) {
+    logWarn('scheduled_test_ledger_close_failed', {
+      scheduled_run_id: ledger.scheduledRunId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 /**
  * B0-766 — nightly "run every golden test" sweep.
  *
@@ -156,6 +283,7 @@ export async function runGoldenTestSweep(
   // behind it) on a set nobody maintains any more. Matches what B0-883's "Run Golden" trigger does.
   const goldenTests = await listGoldenTests({ includeArchived: false });
 
+  // A dry run is a preview: it deliberately persists NOTHING to the scheduled-test ledger.
   if (options.dryRun || goldenTests.length === 0) {
     return {
       dryRun: options.dryRun,
@@ -174,14 +302,23 @@ export async function runGoldenTestSweep(
     };
   }
 
+  const ledger = await openSweepLedger(
+    goldenTests.map((test) => ({ id: test.id, name: test.name })),
+    { origin: context.origin },
+  );
+
   const outcomes = await Promise.all(
-    goldenTests.map((test) =>
-      queueAndRunGoldenTest(context.origin, context.authorization, {
+    goldenTests.map(async (test) => {
+      const outcome = await queueAndRunGoldenTest(context.origin, context.authorization, {
         id: test.id,
         name: test.name,
-      }),
-    ),
+      });
+      await recordDispatchOutcome(ledger, outcome);
+      return outcome;
+    }),
   );
+
+  await closeSweepLedger(ledger);
 
   return {
     dryRun: false,
@@ -189,5 +326,6 @@ export async function runGoldenTestSweep(
     started: outcomes.filter((outcome) => outcome.ok).length,
     failed: outcomes.filter((outcome) => !outcome.ok).length,
     outcomes,
+    ...(ledger ? { scheduledRunId: ledger.scheduledRunId } : {}),
   };
 }

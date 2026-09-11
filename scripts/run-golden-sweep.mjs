@@ -1,6 +1,9 @@
 /**
  * Manual trigger for the golden test sweep.
  *
+ * This DISPATCHES a run for every golden test and returns; the runs themselves continue executing
+ * server-side, and `/admin/scheduled` fills in as the hourly reconciler closes them out.
+ *
  * Usage:
  *   pnpm run:golden-sweep [options]
  *
@@ -9,7 +12,7 @@
  *                 Required. Set in .env.local or pass via CLI.
  *   BASE_URL — Base URL for the API (default: http://localhost:3000)
  *   DRY_RUN — Set to "true" to preview without executing (default: false)
- *   TIMEOUT_SECONDS — How long to wait for sweep to complete (default: 900 = 15 minutes)
+ *   TIMEOUT_SECONDS — How long to wait for the dispatch call to return (default: 900 = 15 minutes)
  *
  * Examples:
  *   # Run locally with CRON_SECRET from .env.local
@@ -99,28 +102,57 @@ try {
     process.exit(1);
   }
 
-  console.log(`\n✅ Golden test sweep completed successfully (${elapsed}s)`);
+  // Response shape is `{ ok: true, result: RunGoldenTestSweepResult }` — see
+  // src/lib/observability/run-golden-test-sweep.ts.
+  const result = data?.result;
+
+  if (!result || typeof result !== 'object') {
+    console.log(`\n⚠️  Unexpected response shape (after ${elapsed}s):`);
+    console.log(JSON.stringify(data, null, 2));
+    console.log('');
+    console.log(`🔍 View sweeps at: ${BASE_URL}/admin/scheduled`);
+    process.exit(0);
+  }
+
+  const outcomes = Array.isArray(result.outcomes) ? result.outcomes : [];
+  const failedOutcomes = outcomes.filter((outcome) => outcome?.ok === false);
+
+  if (result.dryRun) {
+    console.log(`\n✅ Dry run finished — nothing was dispatched (${elapsed}s)`);
+  } else {
+    console.log(`\n📤 Golden test runs dispatched (${elapsed}s)`);
+  }
   console.log('');
 
-  // Extract key metrics from response
-  if (data.runsCreated !== undefined) {
-    console.log('📊 Results:');
-    console.log(`   Tests initiated: ${data.runsCreated}`);
-    if (data.successful !== undefined) {
-      console.log(`   Successful: ${data.successful}`);
+  console.log('📊 Dispatch summary:');
+  console.log(`   Golden tests found: ${result.goldenTestCount ?? 0}`);
+  console.log(`   Dispatched:         ${result.started ?? 0}`);
+  console.log(`   Failed to dispatch: ${result.failed ?? 0}`);
+  if (result.scheduledRunId) {
+    console.log(`   Sweep ledger row:   ${result.scheduledRunId}`);
+  }
+
+  if (failedOutcomes.length > 0) {
+    console.log('');
+    console.log('❌ Failed to dispatch:');
+    for (const outcome of failedOutcomes) {
+      const step = outcome.step ? ` [${outcome.step}]` : '';
+      console.log(
+        `   • ${outcome.testName ?? outcome.testId ?? 'unknown test'}${step}: ${outcome.error ?? 'unknown error'}`,
+      );
     }
-    if (data.failed !== undefined) {
-      console.log(`   Failed: ${data.failed}`);
-    }
-    if (data.dryRun) {
-      console.log(`   (Dry run — no tests actually executed)`);
-    }
-  } else {
-    console.log('Response:', JSON.stringify(data, null, 2));
+  }
+
+  if (!result.dryRun) {
+    console.log('');
+    console.log('⚠️  Dispatched is NOT finished. This call only starts each golden test;');
+    console.log('   the runs keep executing server-side well after this command returns.');
+    console.log('   Results appear on /admin/scheduled as the hourly reconciler closes');
+    console.log('   each run out, so expect the page to fill in over the next hour or two.');
   }
 
   console.log('');
-  console.log(`🔍 View all runs at: ${BASE_URL}/admin/scheduled`);
+  console.log(`🔍 View sweeps at: ${BASE_URL}/admin/scheduled`);
   process.exit(0);
 } catch (error) {
   clearInterval(progressInterval);
