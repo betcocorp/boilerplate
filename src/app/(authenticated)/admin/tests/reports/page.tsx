@@ -42,6 +42,7 @@ import {
 } from '~/lib/tests/report-trend';
 import type { ReportRunRow } from '~/lib/tests/repository';
 import { listAllReportRuns } from '~/lib/tests/repository';
+import { parseReportState } from '~/lib/tests/report/schemas';
 import { readSearchParam } from '~/lib/utils/params';
 import { formatDate, formatDurationMs } from '~/lib/utils/time';
 
@@ -152,6 +153,34 @@ function describeScore(row: ReportRunRow): string {
     default:
       return '—';
   }
+}
+
+/**
+ * Calculate percentage of mandatory concepts satisfied across all evaluated cases.
+ * Looks at all mandatory concepts in the report and calculates what percentage are satisfied.
+ */
+function calculateConceptPercentage(reportState: ReturnType<typeof parseReportState>): number | null {
+  if (!reportState?.caseScores || Object.keys(reportState.caseScores).length === 0) {
+    return null;
+  }
+
+  let totalRequired = 0;
+  let totalSatisfied = 0;
+
+  for (const caseScore of Object.values(reportState.caseScores)) {
+    if (caseScore.concepts?.mandatory) {
+      const required = caseScore.concepts.mandatory.required || [];
+      const satisfied = caseScore.concepts.mandatory.satisfied || [];
+      totalRequired += required.length;
+      totalSatisfied += satisfied.length;
+    }
+  }
+
+  if (totalRequired === 0) {
+    return null;
+  }
+
+  return Math.round((totalSatisfied / totalRequired) * 100);
 }
 
 /**
@@ -345,7 +374,10 @@ export default async function AdminTestReportsPage({
                     Change
                   </TableHead>
                   <TableHead title="Failing prompts in this run — same count as the 'Fails' column on /admin/tests">
-                    Fail count
+                    Fails
+                  </TableHead>
+                  <TableHead title="Percentage of criteria met across all evaluated cases">
+                    Concept %
                   </TableHead>
                   <TableHead title="Average time-to-first-token / average elapsed time across this run's items">
                     TTFT/ELAP
@@ -375,7 +407,11 @@ export default async function AdminTestReportsPage({
                     </TableCell>
                   </TableRow>
                 ) : (
-                  reports.map((row, index) => (
+                  reports.map((row, index) => {
+                    const conceptPercentage = row.reportState
+                      ? calculateConceptPercentage(row.reportState)
+                      : null;
+                    return (
                     <TableRow key={row.runId}>
                       <TableCell className="whitespace-nowrap text-slate-600">
                         {index + 1}
@@ -417,6 +453,16 @@ export default async function AdminTestReportsPage({
                         }
                       >
                         {row.failCount ?? '—'}
+                      </TableCell>
+                      <TableCell
+                        className="whitespace-nowrap tabular-nums text-slate-700"
+                        title={
+                          conceptPercentage !== null
+                            ? 'Percentage of mandatory concepts satisfied'
+                            : 'No report data available'
+                        }
+                      >
+                        {conceptPercentage !== null ? conceptPercentage + '%' : '—'}
                       </TableCell>
                       <TableCell
                         className="whitespace-nowrap tabular-nums text-slate-600"
@@ -474,7 +520,8 @@ export default async function AdminTestReportsPage({
                         </Button>
                       </TableCell>
                     </TableRow>
-                  ))
+                    );
+                  })
                 )}
               </TableBody>
             </Table>

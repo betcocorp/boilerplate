@@ -773,6 +773,8 @@ export type ReportRunRow = {
   averageTtftMs: number | null;
   /** Average `test_result_items.elapsed_ms` across the run's items; null if none recorded. */
   averageElapsedMs: number | null;
+  /** The parsed report state, for calculating metrics like concept percentage. */
+  reportState: ReturnType<typeof parseReportState> | null;
 };
 
 const REPORT_RUNS_PAGE_SIZE = 500;
@@ -841,7 +843,8 @@ export async function listAllReportRuns(): Promise<ReportRunRow[]> {
     })
     .map((row) => row.id);
 
-  // Fetch one routing_decision per run (we just need to know what method was used, not count them)
+  // Fetch one routing_decision per run (we just need to know what method was used, not count them).
+  // Multiply by 5 to ensure we fetch enough items to cover all runs, accounting for items without routing_decision.
   const actualRoutingByRunId = new Map<string, string>();
   if (runIdsNeedingRoutingDecision.length > 0) {
     const result = await supabase
@@ -849,7 +852,7 @@ export async function listAllReportRuns(): Promise<ReportRunRow[]> {
       .select('test_result_id, routing_decision')
       .in('test_result_id', runIdsNeedingRoutingDecision)
       .not('routing_decision', 'is', null)
-      .limit(runIdsNeedingRoutingDecision.length); // One per run is enough
+      .limit(runIdsNeedingRoutingDecision.length * 5);
 
     const items = (assertNoError(result) || []) as Array<{
       test_result_id: string;
@@ -949,6 +952,7 @@ export async function listAllReportRuns(): Promise<ReportRunRow[]> {
         itemMetrics && itemMetrics.elapsedCount > 0
           ? itemMetrics.elapsedSum / itemMetrics.elapsedCount
           : null,
+      reportState: state ?? null,
     };
   });
 }
