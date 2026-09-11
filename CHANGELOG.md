@@ -1,3 +1,28 @@
+# [6.0.0](https://github.com/betcocorp/bex2.0/compare/v5.0.0...v6.0.0) (2026-09-11)
+
+
+* feat(B0-940)!: drop the redundant expected_criteria column ([47cc8e3](https://github.com/betcocorp/bex2.0/commit/47cc8e30adfc0f335165a37775df81ad9425a3a2))
+
+
+### Bug Fixes
+
+* **B0-921:** route RAG query rewrite and decomposition through the provider seam ([c04264d](https://github.com/betcocorp/bex2.0/commit/c04264dabae347512e233c8e614b8015f461319f))
+* **B0-922:** log provider failures centrally and walk every seam schema in the guard ([88d02c9](https://github.com/betcocorp/bex2.0/commit/88d02c9bca17d82ceb48d64f017bdf12c484cfb9))
+* **B0-923:** stop the revision pass manufacturing regulated-claim declines ([dbea0ca](https://github.com/betcocorp/bex2.0/commit/dbea0ca7311066e7b5ecef66e07db35578e0e525))
+
+
+### Features
+
+* **B0-938:** show the full concept checklist with met/missed marks in Concept coverage ([c43b478](https://github.com/betcocorp/bex2.0/commit/c43b478dd30c24b90f0850e1ec62b21cc5d6ae38))
+
+
+### BREAKING CHANGES
+
+* `test_items.expected_criteria` no longer exists, and CSV
+exports no longer carry an `expected_criteria` column.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
 # [5.0.0](https://github.com/betcocorp/bex2.0/compare/v4.6.0...v5.0.0) (2026-09-10)
 
 
