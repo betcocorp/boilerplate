@@ -14,6 +14,10 @@
       "schedule": "0 0 * * *"
     },
     {
+      "path": "/api/v1/observability/reconcile-scheduled-tests",
+      "schedule": "30 * * * *"
+    },
+    {
       "path": "/api/v1/observability/sweep-pending-reports",
       "schedule": "*/10 * * * *"
     }
