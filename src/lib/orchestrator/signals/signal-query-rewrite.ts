@@ -2,7 +2,7 @@ import type { TurnSignals } from '~/lib/orchestrator/signals/signals-schemas';
 
 /**
  * B0-738 — deterministic query augmentation built from an already-extracted, already-persisted
- * `TurnSignals` (B0-786). This is NOT the `rewriteQueryWithOpenAI` mechanism in `~/lib/rag/search.ts`
+ * `TurnSignals` (B0-786). This is NOT the `rewriteQueryWithLlm` mechanism in `~/lib/rag/search.ts`
  * (a separate LLM call over the raw query string for BM25/hybrid lexeme text) — no model call runs
  * here, and this module must never call one. It exists because the model's own `search_product_docs`
  * query terms can miss context the signals call already resolved (e.g. a user asks "what do you use

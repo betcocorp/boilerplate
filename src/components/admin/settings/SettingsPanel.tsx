@@ -134,6 +134,11 @@ const STRING_SETTINGS = [
   // B0-906 — model tag for the harness insight calls (run insights, run comparison, item summary,
   // observability prompt insights); replaces the hardcoded gpt-4.1-mini.
   'HARNESS_INSIGHTS_MODEL',
+  // B0-921 — model tag for RAG query rewriting and intent decomposition (~/lib/rag/search.ts);
+  // replaces a hardcoded gpt-4.1-mini plus an OPENAI_QUERY_REWRITE_MODEL env var. Seeded
+  // gpt-4.1-mini as a deliberate mixed-fleet pin (cheapest/fastest tier, fires on every
+  // retrieval) — changing it here moves both calls, including to a claude-* tag.
+  'BEX_QUERY_REWRITE_MODEL',
   // B0-913 — Anthropic output_config.effort for ANSWER GENERATION (the counterpart of the two
   // grading-effort rows above). `provider_default` sends no effort field at all, which is the
   // pre-B0-913 behaviour; low/medium cut Anthropic's thinking-token output volume. OpenAI models
