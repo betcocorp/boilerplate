@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import type { ProductLineLock } from '~/lib/audit/trace';
+import { planRegulatedClaimRedaction } from '~/lib/workflows/product-support/run-product-support-workflow';
 import { evaluateRegulatedClaimGrounding } from '~/lib/workflows/product-support/validator';
 
 /**
@@ -1070,5 +1072,119 @@ describe('evaluateRegulatedClaimGrounding — B0-928 real hazard statements are 
       const result = evaluateRegulatedClaimGrounding({ draftAnswer, sources: [] });
       expect(result.categoriesDetected, draftAnswer).not.toContain('hazard');
     }
+  });
+});
+
+/**
+ * B0-947 — `planRegulatedClaimRedaction`'s product-usage-specific test. Before this ticket the
+ * test was a two-term proxy (locked product line AND label-led retrieval) with no question-shape
+ * term at all, so a catalog-identity question — which resolves a product line by construction and
+ * retrieves that product's label — scored as product-usage-specific and took the full decline.
+ * Golden run 61e80e45 row 2 ("Do you have a product called Hard as Nailz?") scored 0.00 that way.
+ */
+describe('planRegulatedClaimRedaction — product-usage-specific requires a usage-shaped question (B0-947)', () => {
+  const COMPAT_SENTENCE =
+    'The product is suitable for use on all types of resilient tile, including vinyl composition, vinyl, and linoleum.';
+  const IDENTITY_ANSWER =
+    'The closest match in the Betco catalog is Hard As Nails, spelled without a "z" at the end. It is a Basic Coatings wood floor product, and no separate item named "Hard as Nailz" exists in the catalog today.';
+
+  const LOCKED: ProductLineLock = {
+    candidates: [{ productLineKey: 'hard-as-nails', label: 'Hard As Nails', maxSimilarity: 0.94 }],
+    lockedProductLineKey: 'hard-as-nails',
+    lockReason: 'explicit_filter',
+  };
+
+  /** Label-led retrieval: knowledge-kind sources do NOT dominate. */
+  const LABEL_LED_SOURCES = [{ documentKind: 'label' }, { documentKind: 'label' }];
+
+  function planFor(userMessage: string, draftAnswer = `${IDENTITY_ANSWER} ${COMPAT_SENTENCE}`) {
+    return planRegulatedClaimRedaction({
+      draftAnswer,
+      userMessage,
+      grounding: {
+        categoriesDetected: ['compatibility'],
+        ungroundedCategories: ['compatibility'],
+        ungroundedDetails: [{ category: 'compatibility', snippet: COMPAT_SENTENCE }],
+        keyTermGroundedCategories: [],
+      },
+      productLineLock: LOCKED,
+      sources: LABEL_LED_SOURCES,
+    });
+  }
+
+  it('withholds the sentence for an identity question even with a lock and label-led sources', () => {
+    const plan = planFor('Do you have a product called Hard as Nailz?');
+    expect(plan.mode).toBe('sentence_redaction');
+    if (plan.mode === 'decline') return;
+    expect(plan.redactedText).toContain(IDENTITY_ANSWER);
+    expect(plan.redactedText).not.toContain(COMPAT_SENTENCE);
+    // The removed text is replaced by a marker, never rephrased.
+    expect(plan.redactedText).toContain(
+      '[one compatibility statement withheld — not verifiable against a retrieved label]',
+    );
+    expect(plan.withheldCategories).toEqual(['compatibility']);
+  });
+
+  it('still declines for a usage-shaped question on the same lock and sources', () => {
+    for (const question of [
+      'How do I use pH7Q on a hospital floor?',
+      'Can I use Hard As Nails on linoleum?',
+      'Is it safe to use Hard As Nails over a wax finish?',
+      'What PPE does Hard As Nails require?',
+    ]) {
+      const plan = planFor(question);
+      expect(plan.mode, question).toBe('decline');
+      if (plan.mode !== 'decline') continue;
+      expect(plan.reason, question).toBe('product_usage_specific_question');
+    }
+  });
+
+  it('still declines for a question about this product’s own label claims', () => {
+    // B0-872's `hasUsageSafetyQuestionShape` is tuned for "how do I use / is it safe" and matches
+    // none of these, so the usage-shape term alone would have let them REDACT — losing exactly the
+    // compatibility sentence the user asked about. These ask what this product's label approves,
+    // which is the case B0-871 kept on the full decline; the chemical-mixing ones most of all.
+    for (const question of [
+      'Is pH7Q Dual compatible with bleach in the dispenser?',
+      'Can I mix pH7Q with bleach?',
+      'What surfaces is Hard As Nails approved for?',
+      'Is Hard As Nails rated for use over epoxy?',
+    ]) {
+      const plan = planFor(question);
+      expect(plan.mode, question).toBe('decline');
+      if (plan.mode !== 'decline') continue;
+      expect(plan.reason, question).toBe('product_usage_specific_question');
+    }
+  });
+
+  it('still declines outright for an ungrounded hazard sentence, whatever the question shape', () => {
+    const hazard = 'Causes severe skin burns and eye damage.';
+    for (const question of [
+      'Do you have a product called Hard as Nailz?',
+      'How do I use Hard As Nails safely?',
+    ]) {
+      const plan = planRegulatedClaimRedaction({
+        draftAnswer: `${IDENTITY_ANSWER} ${hazard}`,
+        userMessage: question,
+        grounding: {
+          categoriesDetected: ['hazard'],
+          ungroundedCategories: ['hazard'],
+          ungroundedDetails: [{ category: 'hazard', snippet: hazard }],
+          keyTermGroundedCategories: [],
+        },
+        productLineLock: LOCKED,
+        sources: LABEL_LED_SOURCES,
+      });
+      expect(plan.mode, question).toBe('decline');
+      if (plan.mode !== 'decline') continue;
+      expect(plan.reason, question).toBe('safety_critical_sentence_category');
+    }
+  });
+
+  it('still applies the substantive-content guard to an identity question', () => {
+    const plan = planFor('Do you have a product called Hard as Nailz?', `Yes. ${COMPAT_SENTENCE}`);
+    expect(plan.mode).toBe('decline');
+    if (plan.mode !== 'decline') return;
+    expect(plan.reason).toBe('nothing_substantive_remains');
   });
 });

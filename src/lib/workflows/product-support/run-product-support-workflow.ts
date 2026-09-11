@@ -1816,11 +1816,19 @@ export type RegulatedClaimRedactionPlan =
  * 2. Every ungrounded category token-shaped (B0-829) ⇒ blank each snippet with `(unable to verify)`,
  *    provided at least one OTHER detected category on the draft was grounded; otherwise decline.
  * 3. Otherwise (some ungrounded `compatibility` / `efficacy_claim`, B0-871) ⇒ withhold each such
- *    sentence, ONLY when the question is not product-usage-specific — no locked product line, OR
- *    knowledge-kind sources dominate the retrieval — AND substantive content remains afterwards
- *    (≥ `REGULATED_CLAIM_REDACTION_MIN_REMAINING_CHARS` letters/digits outside the markers).
- *    Token-shaped snippets ungrounded on the same draft are blanked as in (2). A snippet that is
- *    not a verbatim substring of the draft ⇒ decline (never rephrase).
+ *    sentence, ONLY when the question is not product-usage-specific — AND substantive content
+ *    remains afterwards (≥ `REGULATED_CLAIM_REDACTION_MIN_REMAINING_CHARS` letters/digits outside
+ *    the markers). Token-shaped snippets ungrounded on the same draft are blanked as in (2). A
+ *    snippet that is not a verbatim substring of the draft ⇒ decline (never rephrase).
+ *
+ *    B0-947 — "product-usage-specific" needs ALL THREE of: a locked product line, retrieval that is
+ *    NOT knowledge-kind dominated, and a message that actually READS like a usage/safety question
+ *    (`hasUsageSafetyQuestionShape`). The first two alone were a broken proxy: a catalog-identity
+ *    question ("Do you have a product called Hard as Nailz?") resolves a product line by
+ *    construction and retrieves that product's label, so it scored as product-usage-specific and
+ *    took the harshest outcome — one unverifiable compatibility sentence wiped an otherwise correct
+ *    identity answer (golden run 61e80e45, row 2, scored 0.00). The question-shape term is what the
+ *    B0-871 doc text always described and the implementation never checked.
  *
  * Every replacement is `replaceAll` of a LITERAL substring; nothing in the removed text is
  * paraphrased, rounded or re-stated in the output.
@@ -1835,6 +1843,8 @@ export type RegulatedClaimRedactionPlan =
  */
 export function planRegulatedClaimRedaction(input: {
   draftAnswer: string;
+  /** B0-947 — the turn's user message; the third term of the product-usage-specific test. */
+  userMessage: string;
   grounding: RegulatedClaimGroundingResult;
   productLineLock: ProductLineLock | null;
   sources: readonly Pick<RetrievedSourceMeta, 'documentKind'>[];
@@ -1870,11 +1880,23 @@ export function planRegulatedClaimRedaction(input: {
     return { mode: 'token_redaction', redactedText, withheldCategories: [...ungrounded] };
   }
 
-  // B0-871 — sentence redaction is for KNOWLEDGE answers only. A question about an identified
-  // product whose retrieval is label/SDS-led keeps the full decline: there, a compatibility or
-  // efficacy sentence is a claim about that product's own label.
+  // B0-871 — sentence redaction is for KNOWLEDGE answers only. A USAGE question about an
+  // identified product whose retrieval is label/SDS-led keeps the full decline: there, a
+  // compatibility or efficacy sentence is a claim about that product's own label.
+  // B0-947 — the question-shape term; without it an identity/catalog question qualified too.
+  // `hasUsageSafetyQuestionShape` alone is too narrow here: it is B0-872's predicate, tuned for
+  // "how do I use / is it safe", and it does NOT match "is X compatible with bleach", "can I mix
+  // X with bleach", or "what surfaces is X approved for" — all of which ask about this product's
+  // own label claims and must keep the full decline, not lose one sentence to a redaction.
+  const asksAboutThisProductsLabelClaims = (userMessage: string) =>
+    /\b(compatible|compatibility|mix|mixed|mixing|approved for|approved surfaces|what surfaces|rated for|listed for)\b/.test(
+      userMessage.toLowerCase(),
+    );
   const productUsageSpecific =
-    Boolean(input.productLineLock?.lockedProductLineKey) && !knowledgeKindSourcesDominate(input.sources);
+    Boolean(input.productLineLock?.lockedProductLineKey) &&
+    !knowledgeKindSourcesDominate(input.sources) &&
+    (hasUsageSafetyQuestionShape(input.userMessage) ||
+      asksAboutThisProductsLabelClaims(input.userMessage));
   if (productUsageSpecific) {
     return { mode: 'decline', reason: 'product_usage_specific_question' };
   }
@@ -5013,6 +5035,7 @@ export async function runProductSupportWorkflow(input: {
         // B0-829 / B0-871 — redact or decline; see `planRegulatedClaimRedaction` for the policy.
         regulatedClaimRedactionPlan = planRegulatedClaimRedaction({
           draftAnswer,
+          userMessage: input.userMessage,
           grounding: regulatedClaimGrounding,
           productLineLock: extractProductLineLockFromToolTrace(resolvedToolTrace),
           sources: sourceMeta,
