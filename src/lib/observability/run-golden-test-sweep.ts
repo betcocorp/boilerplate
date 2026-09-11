@@ -152,7 +152,9 @@ export async function runGoldenTestSweep(
   options: RunGoldenTestSweepOptions,
   context: { origin: string; authorization: string },
 ): Promise<RunGoldenTestSweepResult> {
-  const goldenTests = await listGoldenTests();
+  // B0-942 — archived golden sets are excluded: the sweep must not burn a run (and the LLM spend
+  // behind it) on a set nobody maintains any more. Matches what B0-883's "Run Golden" trigger does.
+  const goldenTests = await listGoldenTests({ includeArchived: false });
 
   if (options.dryRun || goldenTests.length === 0) {
     return {
