@@ -86,7 +86,7 @@ Identify the competitor BRAND/manufacturer (e.g. "Spartan", "Diversey") and the 
   mentioned in reading order. Put the other product's name (brand + product if known) in
   otherCompetitorProduct, else null. Never combine two different products into one brand/product pair.`;
 
-const JSON_SCHEMA = {
+export const COMPETITOR_EXTRACT_JSON_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   properties: {
@@ -138,7 +138,7 @@ async function defaultRunLlm(userMessage: string): Promise<{
     system: SYSTEM_PROMPT,
     user: userMessage,
     schemaName: 'competitor_extract',
-    schema: JSON_SCHEMA,
+    schema: COMPETITOR_EXTRACT_JSON_SCHEMA,
     maxOutputTokens: resolveMaxOutputTokens(),
     temperature: 0,
   });

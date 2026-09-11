@@ -18,7 +18,9 @@ import { loadTaxonomyNodes } from '~/lib/category/taxonomy-repository';
 import { isBexModelTag } from '~/lib/constants/models';
 import { resolveModel } from '~/lib/llm/resolve-model';
 import { completeStructuredWithUsage } from '~/lib/llm/structured-completion';
+import { logError } from '~/lib/observability/logger';
 import { getStringSetting } from '~/lib/settings/settings-service';
+import { getErrorMessage } from '~/lib/utils';
 import { resolveMaxOutputTokens } from '~/lib/workflows/product-support/max-output-tokens';
 
 /**
@@ -175,23 +177,50 @@ export async function resolveCategoryClassifierModel(): Promise<string> {
  * `resolveMaxOutputTokens()` ceiling covers a key + confidence + one-line rationale. Truncation or
  * refusal throws into the same `classifier_failed` fallback a parse failure did. Exported so the
  * request shape can be asserted without a live model.
+ *
+ * B0-922 — the `classifier_failed` sentinel is a plausible-looking result (a real key shape, a real
+ * confidence) that only a string match can tell apart from a genuine "none". It now always leaves a
+ * trace: a provider failure is logged once by the seam itself, and the model-answered-but-unusable
+ * path — valid HTTP, JSON that does not parse or does not satisfy `classifierResultSchema` — is
+ * logged here, because the seam never sees it.
  */
 export async function defaultClassify(
   input: { title: string | null; description: string | null },
   nodes: TaxonomyNode[],
 ): Promise<ClassifierResult> {
+  const failed: ClassifierResult = {
+    category_key: CLASSIFIER_NONE,
+    confidence: 0,
+    rationale: 'classifier_failed',
+  };
+
+  let model: string | null = null;
+  let text: string;
   try {
-    const { text } = await completeStructuredWithUsage({
-      model: await resolveCategoryClassifierModel(),
+    model = await resolveCategoryClassifierModel();
+    ({ text } = await completeStructuredWithUsage({
+      model,
       system: buildClassifierPrompt(nodes),
       user: JSON.stringify({ title: input.title, description: input.description }),
       schemaName: 'category_classification',
       schema: buildClassifierJsonSchema(nodes.map((n) => n.key)),
       maxOutputTokens: resolveMaxOutputTokens(),
       temperature: 0,
-    });
-    return classifierResultSchema.parse(JSON.parse(text));
+    }));
   } catch {
-    return { category_key: CLASSIFIER_NONE, confidence: 0, rationale: 'classifier_failed' };
+    // Already logged once, centrally, by the seam — do not double-log it here.
+    return failed;
+  }
+
+  try {
+    return classifierResultSchema.parse(JSON.parse(text));
+  } catch (error) {
+    logError('category_classifier_unusable_output', {
+      model,
+      schema: 'category_classification',
+      optionCount: nodes.length,
+      error: getErrorMessage(error),
+    });
+    return failed;
   }
 }

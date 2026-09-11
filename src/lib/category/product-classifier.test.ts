@@ -2,13 +2,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // B0-904 — the model comes from the CATEGORY_CLASSIFIER_MODEL settings row (default `preview`)
 // through `resolveModel`; both are mocked so no test touches Supabase or a provider.
-const { mockComplete, mockResolveModel, settingOverrides } = vi.hoisted(() => ({
+const { mockComplete, mockResolveModel, mockLogError, settingOverrides } = vi.hoisted(() => ({
   mockComplete: vi.fn(),
   mockResolveModel: vi.fn(async (tag: string) => (tag === 'preview' ? 'gpt-test' : tag)),
+  mockLogError: vi.fn(),
   settingOverrides: new Map<string, string>(),
 }));
 vi.mock('~/lib/llm/structured-completion', () => ({
   completeStructuredWithUsage: mockComplete,
+}));
+vi.mock('~/lib/observability/logger', () => ({
+  logInfo: vi.fn(),
+  logWarn: vi.fn(),
+  logError: mockLogError,
 }));
 vi.mock('~/lib/llm/resolve-model', () => ({
   resolveModel: mockResolveModel,
@@ -143,6 +149,7 @@ describe('defaultClassify (B0-908)', () => {
     mockComplete.mockReset();
     mockResolveModel.mockReset();
     mockResolveModel.mockResolvedValue('claude-sonnet-5');
+    mockLogError.mockClear();
     settingOverrides.clear();
   });
 
@@ -200,6 +207,39 @@ describe('defaultClassify (B0-908)', () => {
     const out = await defaultClassify({ title: 'Floor Finish', description: null }, NODES);
 
     expect(out).toEqual({ category_key: 'none', confidence: 0, rationale: 'classifier_failed' });
+  });
+
+  /**
+   * B0-922 — `classifier_failed` is a plausible-looking result only a string match can distinguish
+   * from a genuine "none", so it must never be silent. A provider failure is logged once by the seam
+   * itself; the model-answered-but-unusable path never reaches the seam's catch, so it logs here.
+   */
+  it('does not double-log a provider failure the seam already recorded', async () => {
+    mockComplete.mockRejectedValue(new Error('400 invalid schema'));
+
+    await defaultClassify({ title: 'Floor Finish', description: null }, NODES);
+
+    expect(mockLogError).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['unparseable JSON', 'not json at all'],
+    ['JSON that fails the result schema', JSON.stringify({ category_key: 'floor-care' })],
+  ])('logs the sentinel when the model answers with %s', async (_label, text) => {
+    mockComplete.mockResolvedValue({ text, usage: USAGE });
+
+    const out = await defaultClassify({ title: 'Floor Finish', description: null }, NODES);
+
+    expect(out).toEqual({ category_key: 'none', confidence: 0, rationale: 'classifier_failed' });
+    expect(mockLogError).toHaveBeenCalledOnce();
+    expect(mockLogError).toHaveBeenCalledWith(
+      'category_classifier_unusable_output',
+      expect.objectContaining({
+        model: 'claude-sonnet-5',
+        schema: 'category_classification',
+        optionCount: NODES.length,
+      }),
+    );
   });
 });
 

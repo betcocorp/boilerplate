@@ -2,11 +2,12 @@ import type Anthropic from '@anthropic-ai/sdk';
 
 import { getAnthropicClient } from '~/lib/anthropic/client';
 import { modelProviderFor, type ModelEffort, type ModelProvider } from '~/lib/constants/models';
-import { logInfo } from '~/lib/observability/logger';
+import { logError, logInfo, logWarn } from '~/lib/observability/logger';
 import { getOpenAIClient } from '~/lib/openai/client';
 import type { LlmTokenUsage } from '~/lib/openai/responses-runtime';
 import { samplingParamsFor } from '~/lib/openai/model-capabilities';
 import { extractAssistantText } from '~/lib/openai/response-item-parsing';
+import { getErrorMessage } from '~/lib/utils';
 
 /**
  * B0-819 — one structured-output call, provider-neutral.
@@ -127,6 +128,42 @@ function logUsage(
     outputTokens: usage.outputTokens ?? null,
     cachedInputTokens: usage.cachedInputTokens ?? null,
   });
+}
+
+/**
+ * B0-922 — the one place a failed call on this seam is recorded.
+ *
+ * Every caller catches, and none of them logged: when B0-910's nullable enums 400'd on Anthropic the
+ * router and the turn-signals pass failed on all 106 items of a run, fell back to keyword routing at
+ * confidence 0, and the run still reported a clean letter grade with no log line anywhere. Logging
+ * centrally rather than per caller means the next call site cannot forget, and the payload matches
+ * `logUsage` above so a failure is attributable to the same provider/model/schema triple as a success.
+ *
+ * Level: a refusal is a *surfaced*, documented outcome — the caller turns it into an Unable to
+ * Evaluate case carrying the reason, and there is deliberately no fallback model — so it is `warn`
+ * (countable, not alarming). Everything else, including truncation and provider HTTP errors, is
+ * `error`. This is observability only: the original error is re-thrown untouched.
+ */
+function logFailure(
+  provider: ModelProvider,
+  request: TextCompletionRequest & { schemaName?: string },
+  error: unknown,
+): void {
+  const refusal = error instanceof StructuredOutputRefusedError ? error : null;
+  const fields = {
+    provider,
+    model: request.model,
+    schema: request.schemaName ?? null,
+    effort: provider === 'anthropic' ? (request.effort ?? null) : null,
+    errorName: error instanceof Error ? error.name : typeof error,
+    error: getErrorMessage(error),
+    ...(refusal ? { refusalCategory: refusal.category } : {}),
+  };
+  if (refusal) {
+    logWarn('llm_structured_completion_refused', fields);
+    return;
+  }
+  logError('llm_structured_completion_failed', fields);
 }
 
 function toUsage(usage: {
@@ -296,10 +333,20 @@ async function runAnthropic(
   return { text, usage: toUsage(usage) };
 }
 
-function dispatch(request: TextCompletionRequest, format: JsonSchemaFormat): Promise<CompletionResult> {
-  return modelProviderFor(request.model) === 'anthropic'
-    ? runAnthropic(request, format)
-    : runOpenAI(request, format);
+async function dispatch(
+  request: TextCompletionRequest,
+  format: JsonSchemaFormat,
+): Promise<CompletionResult> {
+  const provider = modelProviderFor(request.model);
+  try {
+    return await (provider === 'anthropic'
+      ? runAnthropic(request, format)
+      : runOpenAI(request, format));
+  } catch (error) {
+    // B0-922 — log once here, then re-throw exactly what was thrown: caller behaviour is unchanged.
+    logFailure(provider, { ...request, schemaName: format?.schemaName }, error);
+    throw error;
+  }
 }
 
 /**

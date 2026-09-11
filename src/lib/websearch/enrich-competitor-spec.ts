@@ -137,7 +137,7 @@ export function mergeCompetitorSpec(
   });
 }
 
-const ENRICH_JSON_SCHEMA = {
+export const ENRICH_JSON_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   properties: {
