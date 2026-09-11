@@ -229,10 +229,22 @@ export function buildScheduledRunPatch(
     return { patch, completed: false };
   }
 
-  const completedAt = new Date(nowMs).toISOString();
+  // A sweep ended when its LAST CHILD ended, not when the reconciler happened to notice. Stamping
+  // `nowMs` inflates every sweep by however long the cron took to come round — up to an hour in
+  // production, and unbounded for a locally triggered sweep (no cron fires against localhost, so
+  // one observed sweep read 7.96h for 4.7 minutes of work). `nowMs` is the fallback only when no
+  // child carries a completion stamp at all.
+  const latestChildCompletionMs = items.reduce<number | null>((latest, item) => {
+    if (item.completed_at === null) return latest;
+    const parsed = Date.parse(item.completed_at);
+    if (Number.isNaN(parsed)) return latest;
+    return latest === null || parsed > latest ? parsed : latest;
+  }, null);
+
+  const completedMs = latestChildCompletionMs ?? nowMs;
   patch.status = 'completed';
-  patch.completed_at = completedAt;
-  patch.elapsed_ms = stalledForMs(run.started_at ?? run.sweep_triggered_at, nowMs);
+  patch.completed_at = new Date(completedMs).toISOString();
+  patch.elapsed_ms = stalledForMs(run.started_at ?? run.sweep_triggered_at, completedMs);
 
   return { patch, completed: true };
 }

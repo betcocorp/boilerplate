@@ -274,6 +274,35 @@ describe('buildScheduledRunPatch', () => {
     });
   });
 
+  it('ends the sweep when its last child ended, not when the reconciler ran', () => {
+    // Regression: the parent used to stamp the reconciliation time, so a sweep whose runs finished
+    // in 5 minutes read as hours whenever the cron came round late (7.96h observed locally, where
+    // no cron fires at all).
+    const { patch } = buildScheduledRunPatch(
+      parentRun({ total_tests: 2 }),
+      [
+        item({ id: 'a', status: 'completed', completed_at: isoAgo(26 * 60 * 1000) }),
+        item({ id: 'b', status: 'completed', completed_at: isoAgo(25 * 60 * 1000) }),
+      ],
+      NOW_MS,
+    );
+
+    // Sweep was triggered 30 minutes ago and its last child finished 25 minutes ago.
+    expect(patch.completed_at).toBe(isoAgo(25 * 60 * 1000));
+    expect(patch.elapsed_ms).toBe(5 * 60 * 1000);
+  });
+
+  it('falls back to the reconciliation time when no child carries a completion stamp', () => {
+    const { patch } = buildScheduledRunPatch(
+      parentRun({ total_tests: 1 }),
+      [item({ id: 'a', status: 'failed', completed_at: null })],
+      NOW_MS,
+    );
+
+    expect(patch.completed_at).toBe(NOW_ISO);
+    expect(patch.elapsed_ms).toBe(30 * 60 * 1000);
+  });
+
   it('leaves the parent in progress while any child is still running', () => {
     const { patch, completed } = buildScheduledRunPatch(
       parentRun({ total_tests: 2 }),
