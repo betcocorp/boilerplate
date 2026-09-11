@@ -765,8 +765,6 @@ export type ReportRunRow = {
   triggeredBy: string | null;
   /** Model tag from run_options (e.g., 'gpt-4.1', 'gpt-4o-mini', null for unrecorded runs). */
   modelTag: string | null;
-  /** Router type from run_options ('llm', 'semantic', 'keyword', or null for settings-driven). */
-  routerType: string | null;
   /** App version recorded at run time (B0-733). */
   appVersion: string | null;
   /** Average `test_result_items.ttft_ms` across the run's items; null if none recorded. */
@@ -830,46 +828,6 @@ export async function listAllReportRuns(): Promise<ReportRunRow[]> {
     return (assertNoError(result) || []) as unknown as RawRow[];
   });
 
-  // B0-733: For runs where routerType is null (settings-driven), query the items to find the
-  // actual routing method used. Collect run IDs where we need this data.
-  const runIdsNeedingRoutingDecision = rows
-    .filter((row) => {
-      const runOptions =
-        row.run_options && typeof row.run_options === 'object' && !Array.isArray(row.run_options)
-          ? (row.run_options as Record<string, unknown>)
-          : {};
-      const routerType = typeof runOptions.routerType === 'string' ? runOptions.routerType : null;
-      return routerType === null;
-    })
-    .map((row) => row.id);
-
-  // Fetch one routing_decision per run (we just need to know what method was used, not count them).
-  // Multiply by 5 to ensure we fetch enough items to cover all runs, accounting for items without routing_decision.
-  const actualRoutingByRunId = new Map<string, string>();
-  if (runIdsNeedingRoutingDecision.length > 0) {
-    const result = await supabase
-      .from('test_result_items')
-      .select('test_result_id, routing_decision')
-      .in('test_result_id', runIdsNeedingRoutingDecision)
-      .not('routing_decision', 'is', null)
-      .limit(runIdsNeedingRoutingDecision.length * 5);
-
-    const items = (assertNoError(result) || []) as Array<{
-      test_result_id: string;
-      routing_decision: string | null;
-    }>;
-
-    for (const item of items) {
-      if (
-        item.routing_decision &&
-        typeof item.routing_decision === 'string' &&
-        !actualRoutingByRunId.has(item.test_result_id)
-      ) {
-        actualRoutingByRunId.set(item.test_result_id, item.routing_decision);
-      }
-    }
-  }
-
   // Per-run TTFT/elapsed averages, straight from test_result_items — same source columns as
   // GoldenSetMetrics, but folded across every reported run rather than only each dataset's latest.
   const runIds = rows.map((row) => row.id);
@@ -923,12 +881,6 @@ export async function listAllReportRuns(): Promise<ReportRunRow[]> {
         ? (row.run_options as Record<string, unknown>)
         : {};
     const modelTag = typeof runOptions.modelTag === 'string' ? runOptions.modelTag : null;
-    let routerType = typeof runOptions.routerType === 'string' ? runOptions.routerType : null;
-
-    // If routerType is null (settings-driven), use the actual routing method from items
-    if (routerType === null && actualRoutingByRunId.has(row.id)) {
-      routerType = actualRoutingByRunId.get(row.id) ?? null;
-    }
 
     return {
       runId: row.id,
@@ -942,7 +894,6 @@ export async function listAllReportRuns(): Promise<ReportRunRow[]> {
       failCount: typeof row.failed_items === 'number' ? row.failed_items : null,
       triggeredBy: row.triggered_by,
       modelTag,
-      routerType,
       appVersion: row.app_version,
       averageTtftMs:
         itemMetrics && itemMetrics.ttftCount > 0

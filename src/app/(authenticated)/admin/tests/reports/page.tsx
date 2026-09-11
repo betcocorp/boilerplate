@@ -23,7 +23,6 @@ import { ReportScoreTrendChart } from '~/components/admin/tests/ReportScoreTrend
 import { Button } from '~/components/ui/button';
 import { Separator } from '~/components/ui/separator';
 import {
-  Table,
   TableBody,
   TableCell,
   TableHead,
@@ -361,7 +360,7 @@ export default async function AdminTestReportsPage({
             </ReportFiltersToggle>
           </div>
           <div className="relative max-h-[50vh] overflow-auto overscroll-contain rounded-2xl border border-slate-200">
-            <Table>
+            <table className="w-full min-w-[1100px] caption-bottom text-sm">
               <TableHeader className="sticky top-0 z-10 bg-white shadow-[0_1px_0_0_rgb(226,232,240)] [&_tr]:border-b-0">
                 <TableRow>
                   <TableHead></TableHead>
@@ -384,9 +383,6 @@ export default async function AdminTestReportsPage({
                   </TableHead>
                   <TableHead title="LLM model used in this run (B0-733)">
                     Model
-                  </TableHead>
-                  <TableHead title="Routing method used in this run (B0-733)">
-                    Router
                   </TableHead>
                   <TableHead title="App version at run time (B0-733)">
                     Version
@@ -484,22 +480,6 @@ export default async function AdminTestReportsPage({
                       </TableCell>
                       <TableCell
                         className="whitespace-nowrap text-slate-600"
-                        title={
-                          row.routerType
-                            ? `Routing method: ${row.routerType}`
-                            : 'Not recorded for this run'
-                        }
-                      >
-                        {row.routerType ? (
-                          <span className="inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
-                            {row.routerType}
-                          </span>
-                        ) : (
-                          '—'
-                        )}
-                      </TableCell>
-                      <TableCell
-                        className="whitespace-nowrap text-slate-600"
                         title={row.appVersion ?? 'Not recorded for this run'}
                       >
                         {row.appVersion ?? '—'}
@@ -524,7 +504,7 @@ export default async function AdminTestReportsPage({
                   })
                 )}
               </TableBody>
-            </Table>
+            </table>
           </div>
         </section>
 
