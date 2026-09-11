@@ -44,7 +44,11 @@ import { getOpenAIClient } from '~/lib/openai/client';
 import { selectGenerationRuntime } from '~/lib/llm/generation-runtime';
 import { resolveModel } from '~/lib/llm/resolve-model';
 import { runResponsesWithToolLoop } from '~/lib/openai/responses-runtime';
-import type { LlmTokenUsage } from '~/lib/openai/responses-runtime';
+import type {
+  FactToolEnforcementOutcome,
+  LlmTokenUsage,
+} from '~/lib/openai/responses-runtime';
+import { requireFactToolForDraft } from '~/lib/workflows/product-support/fact-tool-enforcement';
 import { runAiSdkWithToolLoop } from '~/lib/bex/ai-sdk-runtime';
 import {
   hasDecisiveCrossReferenceSignal,
@@ -3717,6 +3721,22 @@ export async function runProductSupportWorkflow(input: {
       ? createAgentConfidenceStreamFilter(input.onAssistantDelta)
       : null;
 
+    /**
+     * B0-948 — fact-tool enforcement. `requireFactToolForDraft` is consulted once, on the model's
+     * first finished draft: if the draft asserts a fact category whose OWNING tool was never called
+     * this turn, the runtime forces that one call and re-drafts. The outcome is captured here so
+     * the agent step can persist it as a gate — a run report must be able to show that the
+     * requirement fired (or did not) rather than leaving it invisible.
+     */
+    // A holder rather than a bare `let`: the runtime writes it from a callback, and TypeScript's
+    // control-flow analysis would otherwise narrow the variable to `null` at every read below.
+    const factToolEnforcementSink: { outcome: FactToolEnforcementOutcome | null } = {
+      outcome: null,
+    };
+    const onFactToolEnforced = (outcome: FactToolEnforcementOutcome) => {
+      factToolEnforcementSink.outcome = outcome;
+    };
+
     // Generation runtime: AI SDK (`streamText`) for every Anthropic model and for OpenAI models
     // when BEX_AI_SDK_GENERATION_ENABLED, else the OpenAI Responses tool loop (B0-908 — see
     // `useAiSdkGeneration` at the top). Both return the same { assistantText, finalResponseId,
@@ -3735,6 +3755,8 @@ export async function runProductSupportWorkflow(input: {
           maxOutputTokens,
           onAssistantDelta: confidenceStreamFilter?.onDelta,
           observeAssistantDelta,
+          requireFactTool: requireFactToolForDraft,
+          onFactToolEnforced,
           executeTool: executeToolForGeneration,
         })
       : await runResponsesWithToolLoop({
@@ -3755,6 +3777,8 @@ export async function runProductSupportWorkflow(input: {
           maxOutputTokens,
           onAssistantDelta: confidenceStreamFilter?.onDelta,
           observeAssistantDelta,
+          requireFactTool: requireFactToolForDraft,
+          onFactToolEnforced,
           executeTool: executeToolForGeneration,
         });
 
@@ -4407,6 +4431,46 @@ export async function runProductSupportWorkflow(input: {
       ? sumLlmUsage(agentStepUsageByCall)
       : agentResult.usage;
 
+    /**
+     * B0-948 — the enforcement outcome, as a gate record on the agent step and as an
+     * `activeGates` entry on the run. Without this the forced call is invisible: it looks like an
+     * ordinary tool call in the trace and the run report cannot tell a turn that needed no
+     * enforcement from one where the requirement fired.
+     */
+    const factToolEnforcement = factToolEnforcementSink.outcome;
+    const factToolEnforcementActivation: GateActivationRecord = !factToolEnforcement
+      ? { state: 'not_applicable' }
+      : !factToolEnforcement.requiredTool
+        ? { state: 'ran', verdict: 'passed' }
+        : factToolEnforcement.enforced
+          ? { state: 'ran', verdict: 'enforced' }
+          : {
+              state: 'ran',
+              verdict: 'not_enforced',
+              ...(factToolEnforcement.reason ? { reason: factToolEnforcement.reason } : {}),
+            };
+    const factToolEnforcementGate: GateRecord | null = factToolEnforcement
+      ? {
+          gate: 'fact_tool_enforcement',
+          inputs: {
+            requiredTool: factToolEnforcement.requiredTool,
+            toolNamesCalled: agentResult.toolTrace.map((entry) => entry.toolName),
+            toolSucceeded: factToolEnforcement.toolSucceeded,
+            ...(factToolEnforcement.reason ? { reason: factToolEnforcement.reason } : {}),
+          },
+          thresholds: {
+            note: 'category-driven, not count-driven: every fact category the draft asserts must have its owning tool in this turn\'s trace',
+            maxForcedRoundTripsPerTurn: 1,
+          },
+          verdict: factToolEnforcementActivation.verdict ?? 'not_applicable',
+          effect: !factToolEnforcement.requiredTool
+            ? 'Every fact category the draft asserts already had its owning tool in this turn\'s trace; the draft was finalized unchanged.'
+            : factToolEnforcement.enforced
+              ? `The draft asserted a fact owned by ${factToolEnforcement.requiredTool}, which had not been called; that call was forced (ok=${String(factToolEnforcement.toolSucceeded)}) and the answer re-drafted against its result.`
+              : `The draft asserted a fact owned by ${factToolEnforcement.requiredTool}, which had not been called, but the call could not be forced (${factToolEnforcement.reason ?? 'unknown'}); the draft stands as written and the regulated-claim guardrail still judges it.`,
+        }
+      : null;
+
     await completeWorkflowStep(agentStep.id, {
       status: 'completed',
       output: jsonContent({
@@ -4448,6 +4512,8 @@ export async function runProductSupportWorkflow(input: {
         ...recordGates([
           ...(competitorIdentityGate ? [competitorIdentityGate] : []),
           ...(intentClassifierShadowGate ? [intentClassifierShadowGate] : []),
+          // B0-948 — what the fact-tool requirement did on this turn.
+          ...(factToolEnforcementGate ? [factToolEnforcementGate] : []),
         ]),
       }),
     });
@@ -5859,6 +5925,8 @@ export async function runProductSupportWorkflow(input: {
           recommendationEngineVerdictActivation ?? { state: 'not_applicable' },
         // B0-751 — absent-vs-not_applicable matters here too: a run predating the check has no key.
         crossReferenceSelfReference: crossReferenceSelfReferenceActivation,
+        // B0-948 — absent means the run predates the gate, not that nothing was required.
+        factToolEnforcement: factToolEnforcementActivation,
       },
       // B0-358 — the run's actual verification level, first-class rather than a magic string.
       validatorMode,

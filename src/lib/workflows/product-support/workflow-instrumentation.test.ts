@@ -1761,7 +1761,11 @@ describe('regulated-claim guardrail sentence-level redaction (B0-871)', () => {
     expect(regulatedGateRecord().inputs).toMatchObject({ declineReason: 'nothing_substantive_remains' });
   });
 
-  it('keeps the full decline for a product-usage-specific question (locked product line, label-led sources)', async () => {
+  /**
+   * A label-led turn with a hard product-line lock — the other side of the B0-947 test. The only
+   * thing that varies between the two cases below is the SHAPE of the user's question.
+   */
+  function arrangeLabelLedLockedTurn(draft: string) {
     runResponsesWithToolLoopMock.mockImplementation(
       generationCalling(
         [
@@ -1771,7 +1775,7 @@ describe('regulated-claim guardrail sentence-level redaction (B0-871)', () => {
             callId: 'call_1',
           },
         ],
-        { assistantText: `Dilute at 2 oz per gallon of water. ${COMPAT_SENTENCE} ${GROUNDED_PARA}` },
+        { assistantText: draft },
       ),
     );
     executeProductToolMock.mockResolvedValue({
@@ -1815,6 +1819,10 @@ describe('regulated-claim guardrail sentence-level redaction (B0-871)', () => {
         },
       },
     });
+  }
+
+  it('keeps the full decline for a product-usage-specific question (locked product line, label-led sources, usage-shaped ask)', async () => {
+    arrangeLabelLedLockedTurn(`Dilute at 2 oz per gallon of water. ${COMPAT_SENTENCE} ${GROUNDED_PARA}`);
     regulatedClaimGroundingMock.mockReturnValueOnce({
       categoriesDetected: ['dilution_ratio', 'compatibility'],
       ungroundedCategories: ['compatibility'],
@@ -1822,7 +1830,7 @@ describe('regulated-claim guardrail sentence-level redaction (B0-871)', () => {
       keyTermGroundedCategories: [],
     });
 
-    const out = await run({ userMessage: 'Is pH7Q Dual compatible with bleach in the dispenser?' });
+    const out = await run({ userMessage: 'How do I use pH7Q Dual on a hospital floor?' });
 
     expect(out.answerProvenance).toBe('validator_fallback');
     expect(out.answerText).not.toContain(COMPAT_SENTENCE);
@@ -1831,6 +1839,34 @@ describe('regulated-claim guardrail sentence-level redaction (B0-871)', () => {
     expect(regulatedGateRecord().inputs).toMatchObject({
       declineReason: 'product_usage_specific_question',
     });
+  });
+
+  /**
+   * B0-947 — same lock, same label-led sources, only the question shape differs: an identity /
+   * catalog ask is NOT a usage question, so one unverifiable compatibility sentence must be
+   * withheld rather than wiping the whole (correct) identity answer.
+   */
+  it('redacts instead of declining for a catalog-identity question on a locked product line', async () => {
+    const IDENTITY_ANSWER =
+      'The closest match in the Betco catalog is Hard As Nails, spelled without a "z" at the end. It is a Basic Coatings wood floor product, and no separate item named "Hard as Nailz" exists in the catalog today.';
+    arrangeLabelLedLockedTurn(`${IDENTITY_ANSWER} ${COMPAT_SENTENCE}`);
+    regulatedClaimGroundingMock.mockReturnValueOnce({
+      categoriesDetected: ['compatibility'],
+      ungroundedCategories: ['compatibility'],
+      ungroundedDetails: [{ category: 'compatibility', snippet: COMPAT_SENTENCE }],
+      keyTermGroundedCategories: [],
+    });
+
+    const out = await run({ userMessage: 'Do you have a product called Hard as Nailz?' });
+
+    expect(out.answerProvenance).toBe('regulated_claim_partial_redaction');
+    expect(out.answerText).toContain(IDENTITY_ANSWER);
+    expect(out.answerText).not.toContain(COMPAT_SENTENCE);
+    expect(out.answerText).toContain(
+      '[one compatibility statement withheld — not verifiable against a retrieved label]',
+    );
+    expect(regulatedGateRecord().verdict).toBe('redacted');
+    expect(regulatedGateRecord().inputs).toMatchObject({ redactionMode: 'sentence_redaction' });
   });
 
   it('a locked product line with knowledge-dominated sources still redacts (knowledge answer about a product)', async () => {
@@ -3476,5 +3512,93 @@ describe('provider-aware runtime selection (B0-908)', () => {
     expect(isResponsesApiResponseId('')).toBe(false);
     expect(isResponsesApiResponseId(null)).toBe(false);
     expect(isResponsesApiResponseId(undefined)).toBe(false);
+  });
+});
+
+/* -------------------------------------------------------------------------- *
+ * B0-948 — fact-tool enforcement: the requirement is fact-category driven, and whatever the
+ * runtime did about it must be visible in the run payload rather than looking like an ordinary
+ * tool call in the trace.
+ * -------------------------------------------------------------------------- */
+
+describe('fact-tool enforcement observability (B0-948)', () => {
+  /** Runs a normal turn, but has the generation runtime report the given enforcement outcome. */
+  function arrangeEnforcementOutcome(outcome: Record<string, unknown> | null) {
+    runResponsesWithToolLoopMock.mockImplementation(async (opts: unknown) => {
+      const typed = opts as {
+        executeTool: ExecuteTool;
+        onFactToolEnforced?: (value: Record<string, unknown>) => void;
+      };
+      await typed.executeTool({
+        name: 'search_product_docs',
+        argumentsJson: JSON.stringify({ freeformQuery: 'wood floor stripper substrates' }),
+        callId: 'call_1',
+      });
+      if (outcome) {
+        typed.onFactToolEnforced?.(outcome);
+      }
+      return {
+        lastResponse: {},
+        finalResponseId: 'resp_final',
+        assistantText: 'Rewritten against the approved-surface list.',
+        toolTrace: [],
+        responseIds: ['resp_1'],
+        usage: AGENT_USAGE,
+        usageByCall: [AGENT_USAGE],
+      };
+    });
+  }
+
+  it('passes the policy to the generation runtime', async () => {
+    await run();
+    const call = runResponsesWithToolLoopMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(typeof call.requireFactTool).toBe('function');
+    expect(typeof call.onFactToolEnforced).toBe('function');
+  });
+
+  it('records a forced call as a gate on the agent step and on activeGates', async () => {
+    arrangeEnforcementOutcome({
+      requiredTool: 'list_allowed_surfaces',
+      enforced: true,
+      toolSucceeded: true,
+    });
+
+    const out = await run({ userMessage: 'What is the strongest wood floor stripper?' });
+
+    const record = singleGateRecord('fact_tool_enforcement');
+    expect(record.verdict).toBe('enforced');
+    expect(record.inputs).toMatchObject({
+      requiredTool: 'list_allowed_surfaces',
+      toolSucceeded: true,
+    });
+    expect(record.thresholds).toMatchObject({ maxForcedRoundTripsPerTurn: 1 });
+    expect(out.activeGates?.factToolEnforcement).toEqual({ state: 'ran', verdict: 'enforced' });
+  });
+
+  it('records a requirement that could not be forced, with the reason', async () => {
+    arrangeEnforcementOutcome({
+      requiredTool: 'get_efficacy_data',
+      enforced: false,
+      reason: 'tool_not_offered',
+      toolSucceeded: null,
+    });
+
+    const out = await run({ userMessage: 'How long is the contact time?' });
+
+    expect(singleGateRecord('fact_tool_enforcement').verdict).toBe('not_enforced');
+    expect(out.activeGates?.factToolEnforcement).toEqual({
+      state: 'ran',
+      verdict: 'not_enforced',
+      reason: 'tool_not_offered',
+    });
+  });
+
+  it('records a turn that needed nothing as passed, not as silence', async () => {
+    arrangeEnforcementOutcome({ requiredTool: null, enforced: false, toolSucceeded: null });
+
+    const out = await run();
+
+    expect(singleGateRecord('fact_tool_enforcement').verdict).toBe('passed');
+    expect(out.activeGates?.factToolEnforcement).toEqual({ state: 'ran', verdict: 'passed' });
   });
 });

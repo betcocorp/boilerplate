@@ -169,6 +169,40 @@ export function formatPriorTurnToolContext(context: PriorTurnToolContext): strin
   return lines.join('\n');
 }
 
+/**
+ * B0-948 — the caller's fact-category → tool policy, evaluated ONCE per run on the model's first
+ * finished draft (the first response that requests no tools).
+ *
+ * The runtime deliberately knows nothing about product-support fact categories or tool names — the
+ * same rule `RETRIEVAL_TOOL_NAMES` follows, and for the same reason: this loop is generic over
+ * whatever `opts.tools` it is handed. It only supplies the mechanism (classify → pin `tool_choice`
+ * → re-draft, at most once). The policy lives in
+ * `~/lib/workflows/product-support/fact-tool-enforcement`.
+ *
+ * Return the ONE tool that must be called before the draft may stand, together with the
+ * model-visible instruction to send with it, or null to finalise the draft as-is.
+ */
+export type FactToolRequirementCheck = (input: {
+  draftAnswer: string;
+  /** Tool names executed through this runtime so far, in execution order. */
+  toolNames: string[];
+}) => { toolName: string; instruction: string } | null;
+
+/**
+ * B0-948 — what the run did about the fact-tool requirement, reported once so the workflow can
+ * persist it as a gate and it is visible in the run report.
+ */
+export type FactToolEnforcementOutcome = {
+  /** The tool the policy demanded, or null when it demanded nothing. */
+  requiredTool: string | null;
+  /** Whether the forced round actually happened. */
+  enforced: boolean;
+  /** Why it did not. Absent when `enforced`, or when nothing was required. */
+  reason?: 'tool_not_offered' | 'retrieval_withdrawn' | 'no_rounds_remaining' | 'model_declined_call';
+  /** Whether the forced call executed successfully. Null when nothing was forced. */
+  toolSucceeded: boolean | null;
+};
+
 export type ResponsesRuntimeOptions = {
   client: OpenAI;
   model: string;
@@ -270,6 +304,10 @@ export type ResponsesRuntimeOptions = {
     /** 1-based tool round the withdrawal was decided on. */
     round: number;
   }) => void;
+  /** B0-948 — see `FactToolRequirementCheck`. Omitted → this runtime behaves exactly as before. */
+  requireFactTool?: FactToolRequirementCheck;
+  /** B0-948 — fires exactly once per run when `requireFactTool` is supplied. */
+  onFactToolEnforced?: (outcome: FactToolEnforcementOutcome) => void;
   executeTool: ExecuteToolFn;
 };
 
@@ -571,6 +609,25 @@ export async function runResponsesWithToolLoop(
   /** Set with `retrievalWithdrawn`, consumed by the very next request so the model is told why. */
   let retrievalExhaustedNoticePending = false;
 
+  /**
+   * B0-948 — fact-tool enforcement state. `factToolCheckUsed` latches on the FIRST finished draft,
+   * so the policy is consulted at most once and the loop can never re-force: one extra round-trip
+   * per turn, never a loop.
+   */
+  let factToolCheckUsed = false;
+  /** The forced call to make on the NEXT request; consumed by it (same shape as the notice above). */
+  let pendingFactToolEnforcement: { toolName: string; instruction: string } | null = null;
+  /** The forcing whose round is executing right now; consumed when that round's tools return. */
+  let activeFactToolEnforcement: { toolName: string } | null = null;
+  /**
+   * B0-948 — latched with the forcing: the first draft has already been streamed to the caller and
+   * cannot be retracted, so the re-draft that replaces it must NOT be appended to the visible
+   * stream. The turn's returned/persisted `assistantText` is the re-draft — the same
+   * streamed-text-vs-final-answer reconciliation the regulated-claim guardrail's decline already
+   * relies on. The measurement-only observer keeps seeing everything.
+   */
+  let suppressVisibleDeltas = false;
+
   const usage: LlmTokenUsage = {
     promptTokens: 0,
     completionTokens: 0,
@@ -669,7 +726,8 @@ export async function runResponsesWithToolLoop(
           );
           for await (const event of stream) {
             if (event.type === 'response.output_text.delta') {
-              if (opts.onAssistantDelta) {
+              // B0-948 — `suppressVisibleDeltas` silences the caller-visible sink for the re-draft.
+              if (opts.onAssistantDelta && !suppressVisibleDeltas) {
                 visibleDeltaEmittedThisAttempt = true;
                 opts.onAssistantDelta(event.delta);
               }
@@ -700,8 +758,18 @@ export async function runResponsesWithToolLoop(
   const transport = wantsTokenEvents ? 'stream' : 'create';
 
   for (let i = 0; i < maxRounds; i += 1) {
-    const input: ResponseInputItem[] =
-      (toolOutputs
+    const input: ResponseInputItem[] = pendingFactToolEnforcement
+      ? // B0-948 — the forced round carries ONLY the instruction: the chain (or, on a chain-broken
+        // run, the round-1 input already sent) still holds the user message and every tool output,
+        // so re-sending them here would duplicate them inside the conversation.
+        [
+          {
+            role: 'user' as const,
+            content: pendingFactToolEnforcement.instruction,
+            type: 'message' as const,
+          },
+        ]
+      : (toolOutputs
         ? [
             ...toolOutputs,
             // B0-635 — the withdrawal notice rides along with the tool outputs of the round that
@@ -778,8 +846,10 @@ export async function runResponsesWithToolLoop(
       model: opts.model,
       instructions: opts.instructions,
       tools: roundTools,
-      tool_choice:
-        i === 0
+      tool_choice: pendingFactToolEnforcement
+        ? // B0-948 — pinned to the one tool the draft's claims needed and never called.
+          { type: 'function', name: pendingFactToolEnforcement.toolName }
+        : i === 0
           ? resolveRoundZeroToolChoice(opts)
           : // Nothing left to call (every offered tool was a retrieval tool) — say so explicitly
             // rather than sending 'auto' against an empty tool list.
@@ -809,10 +879,72 @@ export async function runResponsesWithToolLoop(
     // B0-635 — consumed by the request above; mutated only after it succeeded, so a transport
     // replay (which re-sends the identical `params`) still carries the notice exactly once.
     retrievalExhaustedNoticePending = false;
+    // B0-948 — same rule: the pin is consumed by the request that just succeeded, and the round it
+    // opened is now the active one.
+    activeFactToolEnforcement = pendingFactToolEnforcement
+      ? { toolName: pendingFactToolEnforcement.toolName }
+      : null;
+    pendingFactToolEnforcement = null;
 
     const calls = extractFunctionCalls(response.output);
 
     if (calls.length === 0) {
+      /**
+       * B0-948 — the model has finished a draft. Before it stands, check whether it asserts a fact
+       * whose owning tool was never called this turn, and if so force that ONE call and re-draft.
+       * `factToolCheckUsed` latches here, so this can happen at most once per run; a model that
+       * ignores the pin, a tool this run was not offered, withdrawn retrieval (B0-635) and a
+       * budget with no room for the extra round all fall through to the draft as-is — the
+       * regulated-claim guardrail still judges whatever is returned.
+       */
+      if (activeFactToolEnforcement) {
+        opts.onFactToolEnforced?.({
+          requiredTool: activeFactToolEnforcement.toolName,
+          enforced: false,
+          reason: 'model_declined_call',
+          toolSucceeded: null,
+        });
+        activeFactToolEnforcement = null;
+      } else if (opts.requireFactTool && !factToolCheckUsed) {
+        factToolCheckUsed = true;
+        const required = opts.requireFactTool({
+          draftAnswer: extractAssistantText(response),
+          toolNames: toolTrace.map((entry) => entry.toolName),
+        });
+        if (required) {
+          const offered = roundTools.some(
+            (tool) => 'name' in tool && tool.name === required.toolName,
+          );
+          // The forced call needs a round to execute in AND a round to re-draft in.
+          const roundsRemaining = maxRounds - 1 - i;
+          const blockedReason = !offered
+            ? ('tool_not_offered' as const)
+            : retrievalWithdrawn
+              ? ('retrieval_withdrawn' as const)
+              : roundsRemaining < 2
+                ? ('no_rounds_remaining' as const)
+                : null;
+          if (blockedReason) {
+            opts.onFactToolEnforced?.({
+              requiredTool: required.toolName,
+              enforced: false,
+              reason: blockedReason,
+              toolSucceeded: null,
+            });
+          } else {
+            pendingFactToolEnforcement = required;
+            suppressVisibleDeltas = true;
+            continue;
+          }
+        } else {
+          opts.onFactToolEnforced?.({
+            requiredTool: null,
+            enforced: false,
+            toolSucceeded: null,
+          });
+        }
+      }
+
       return {
         lastResponse: response,
         finalResponseId: response.id,
@@ -950,6 +1082,20 @@ export async function runResponsesWithToolLoop(
         // B0-437 — the model gets the slimmed variant when the tool produced one.
         output: result.modelOutput ?? result.output,
       });
+    }
+
+    // B0-948 — the forced round has executed; report what the pinned tool actually did. Reported
+    // once, from the round the pin opened, so a later round can never re-trigger it.
+    if (activeFactToolEnforcement) {
+      const forcedIndex = calls.findIndex(
+        (call) => call.name === activeFactToolEnforcement?.toolName,
+      );
+      opts.onFactToolEnforced?.({
+        requiredTool: activeFactToolEnforcement.toolName,
+        enforced: true,
+        toolSucceeded: forcedIndex >= 0 ? (executed[forcedIndex]?.trace.ok ?? false) : false,
+      });
+      activeFactToolEnforcement = null;
     }
 
     // B0-635 — trip the early stop once, after the whole round has been scored.

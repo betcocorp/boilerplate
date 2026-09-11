@@ -27,6 +27,8 @@ import {
 } from '~/lib/openai/responses-runtime';
 import type {
   ExecuteToolFn,
+  FactToolEnforcementOutcome,
+  FactToolRequirementCheck,
   LlmTokenUsage,
   PreloadedEvidence,
   ReplayedHistoryMessage,
@@ -42,6 +44,14 @@ import { productSupportTools } from '~/lib/tools/definitions';
 import { getErrorMessage } from '~/lib/utils';
 import type { ToolTraceEntry } from '~/lib/audit/trace';
 import type { Tool } from 'openai/resources/responses/responses';
+
+/**
+ * B0-948 — `streamText`'s own `providerOptions` type, derived from its parameter rather than
+ * imported from `@ai-sdk/provider-utils` (not a direct dependency of this app). Needed because the
+ * value is now assembled into a variable, and an unannotated ternary of two object literals widens
+ * to a union carrying `anthropic?: undefined`, which the parameter rejects.
+ */
+type StreamTextProviderOptions = NonNullable<Parameters<typeof streamText>[0]['providerOptions']>;
 
 /**
  * A prior conversation turn replayed to the model. The AI SDK is stateless, so
@@ -119,6 +129,10 @@ export type AiSdkRuntimeOptions = {
     seenEvidenceIdCount: number;
     round: number;
   }) => void;
+  /** B0-948 — see `FactToolRequirementCheck`. Same contract on both loops. */
+  requireFactTool?: FactToolRequirementCheck;
+  /** B0-948 — see `ResponsesRuntimeOptions.onFactToolEnforced`. Same contract on both loops. */
+  onFactToolEnforced?: (outcome: FactToolEnforcementOutcome) => void;
   executeTool: ExecuteToolFn;
 };
 
@@ -457,7 +471,24 @@ export async function runAiSdkWithToolLoop(opts: AiSdkRuntimeOptions): Promise<A
           ...(generationEffort ? { effort: generationEffort } : {}),
         }
       : {};
-  const result = streamText({
+  /**
+   * B0-324 / B0-900 / B0-913 — the one `providerOptions` value for this turn: OpenAI takes the
+   * prompt-cache key itself, Anthropic takes the cache breakpoint + effort object assembled above,
+   * and a run with neither sends nothing.
+   */
+  const resolvedProviderOptions: StreamTextProviderOptions | undefined =
+    opts.promptCacheKey && provider === 'openai'
+      ? { openai: { promptCacheKey: opts.promptCacheKey } }
+      : Object.keys(anthropicProviderOptions).length > 0
+        ? { anthropic: anthropicProviderOptions }
+        : undefined;
+
+  /**
+   * B0-948 — every request field that is constant for the turn, so the post-draft enforcement pass
+   * below re-issues an IDENTICAL request apart from its messages, stop condition and step
+   * preparation. Assembling it once is what keeps the two passes from drifting.
+   */
+  const sharedRequest = {
     model: wrapLanguageModel({
       model: languageModel,
       middleware: createTransportRetryMiddleware(opts.retry),
@@ -492,7 +523,6 @@ export async function runAiSdkWithToolLoop(opts: AiSdkRuntimeOptions): Promise<A
             },
           }
         : opts.instructions,
-    messages,
     tools,
     /**
      * B0-370 — the middleware above owns the retry policy. The AI SDK's own default is 2 retries
@@ -508,12 +538,20 @@ export async function runAiSdkWithToolLoop(opts: AiSdkRuntimeOptions): Promise<A
     // B0-900): OpenAI takes the key itself; Anthropic has no key, so the key's presence enables the
     // request-level `cache_control` breakpoint instead (see `promptCacheKey`'s doc comment).
     // The OpenAI branch is unchanged by B0-913.
-    ...(opts.promptCacheKey && provider === 'openai'
-      ? { providerOptions: { openai: { promptCacheKey: opts.promptCacheKey } } }
-      : {}),
-    ...(Object.keys(anthropicProviderOptions).length > 0
-      ? { providerOptions: { anthropic: anthropicProviderOptions } }
-      : {}),
+    // B0-948 — the two provider branches are now ONE conditional spread (`resolvedProviderOptions`
+    // above) rather than two: hoisting this object into `sharedRequest` made the two-spread form a
+    // union carrying `anthropic?: undefined`, which `streamText` rejects. Same request either way.
+    ...(resolvedProviderOptions ? { providerOptions: resolvedProviderOptions } : {}),
+    onError: ({ error }: { error: unknown }) => {
+      capturedStreamError = error;
+      // Replaces the AI SDK's default console.error so the fault stays in the structured log.
+      logError('ai_sdk_stream_error', { message: getErrorMessage(error) });
+    },
+  };
+
+  const result = streamText({
+    ...sharedRequest,
+    messages,
     /**
      * B0-901 / B0-381 — `maxToolRounds` tool-calling steps PLUS one forced-answer step, mirroring
      * the Responses loop, whose `for` runs `maxRounds` times and then makes one extra
@@ -602,31 +640,115 @@ export async function runAiSdkWithToolLoop(opts: AiSdkRuntimeOptions): Promise<A
           : {}),
       };
     },
-    onError: ({ error }) => {
-      capturedStreamError = error;
-      // Replaces the AI SDK's default console.error so the fault stays in the structured log.
-      logError('ai_sdk_stream_error', { message: getErrorMessage(error) });
-    },
   });
 
-  let assistantText: string;
-  let steps: Awaited<typeof result.steps>;
-  let totalUsage: LanguageModelUsage;
-  try {
-    // Always drain the stream so the result promises resolve; forward deltas when a sink is provided.
-    for await (const delta of result.textStream) {
-      opts.onAssistantDelta?.(delta);
-      opts.observeAssistantDelta?.(delta);
-    }
+  /**
+   * Always drain the stream so the result promises resolve; forward deltas when a sink is provided.
+   *
+   * B0-948 — `showToCaller` is false for the post-enforcement re-draft: the first draft has already
+   * been streamed to the caller and cannot be retracted, so its replacement must not be appended to
+   * the visible stream. The measurement-only observer keeps seeing everything. Same rule as
+   * `suppressVisibleDeltas` in the Responses loop.
+   */
+  const drainStream = async (
+    streamResult: typeof result,
+    showToCaller: boolean,
+  ): Promise<[string, Awaited<typeof result.steps>, LanguageModelUsage]> => {
+    try {
+      for await (const delta of streamResult.textStream) {
+        if (showToCaller) {
+          opts.onAssistantDelta?.(delta);
+        }
+        opts.observeAssistantDelta?.(delta);
+      }
 
-    [assistantText, steps, totalUsage] = await Promise.all([
-      result.text,
-      result.steps,
-      result.totalUsage,
-    ]);
-  } catch (err) {
-    // Prefer the captured provider error over `NoOutputGeneratedError` (see `capturedStreamError`).
-    throw capturedStreamError ?? err;
+      return await Promise.all([
+        streamResult.text,
+        streamResult.steps,
+        streamResult.totalUsage,
+      ]);
+    } catch (err) {
+      // Prefer the captured provider error over `NoOutputGeneratedError` (see `capturedStreamError`).
+      throw capturedStreamError ?? err;
+    }
+  };
+
+  let [assistantText, steps, totalUsage] = await drainStream(result, true);
+
+  /**
+   * B0-948 — the draft is finished; before it stands, check whether it asserts a fact whose owning
+   * tool was never called this turn, and if so force that ONE call and re-draft.
+   *
+   * The Responses loop can do this inside its own `for`; `streamText` ends as soon as a step
+   * produces text with no tool calls, so here it is a SECOND `streamText` over the same shared
+   * request, continuing the conversation from the first pass's own response messages. Its budget is
+   * exactly two steps — the pinned call, then a `toolChoice: 'none'` answer — so this can never
+   * become a loop, and it runs at most once because there is no third pass.
+   */
+  if (opts.requireFactTool) {
+    const required = opts.requireFactTool({
+      draftAnswer: assistantText,
+      toolNames: toolTrace.map((entry) => entry.toolName),
+    });
+    if (!required) {
+      opts.onFactToolEnforced?.({ requiredTool: null, enforced: false, toolSucceeded: null });
+    } else {
+      const blockedReason = !Object.prototype.hasOwnProperty.call(tools, required.toolName)
+        ? ('tool_not_offered' as const)
+        : retrieval.withdrawn
+          ? ('retrieval_withdrawn' as const)
+          : toolRoundsExhaustedReported
+            ? ('no_rounds_remaining' as const)
+            : null;
+      if (blockedReason) {
+        opts.onFactToolEnforced?.({
+          requiredTool: required.toolName,
+          enforced: false,
+          reason: blockedReason,
+          toolSucceeded: null,
+        });
+      } else {
+        const traceLengthBeforeEnforcement = toolTrace.length;
+        const enforcedRun = streamText({
+          ...sharedRequest,
+          messages: [
+            ...messages,
+            ...(steps[steps.length - 1]?.response.messages ?? []),
+            { role: 'user' as const, content: required.instruction },
+          ],
+          stopWhen: stepCountIs(2),
+          prepareStep: ({ stepNumber }: { stepNumber: number }) =>
+            stepNumber === 0
+              ? {
+                  toolChoice: { type: 'tool' as const, toolName: required.toolName },
+                  activeTools: [required.toolName],
+                }
+              : { toolChoice: 'none' as const },
+        });
+        const [enforcedText, enforcedSteps, enforcedUsage] = await drainStream(enforcedRun, false);
+        const forcedTrace = toolTrace
+          .slice(traceLengthBeforeEnforcement)
+          .find((entry) => entry.toolName === required.toolName);
+        opts.onFactToolEnforced?.({
+          requiredTool: required.toolName,
+          enforced: Boolean(forcedTrace),
+          ...(forcedTrace ? {} : { reason: 'model_declined_call' as const }),
+          toolSucceeded: forcedTrace ? forcedTrace.ok : null,
+        });
+        // A forced call that returned nothing (or a re-draft that produced no text) leaves the
+        // original draft standing — the turn is never blocked on enforcement.
+        if (enforcedText.trim()) {
+          assistantText = enforcedText;
+        }
+        steps = [...steps, ...enforcedSteps];
+        totalUsage = {
+          ...totalUsage,
+          inputTokens: (totalUsage.inputTokens ?? 0) + (enforcedUsage.inputTokens ?? 0),
+          outputTokens: (totalUsage.outputTokens ?? 0) + (enforcedUsage.outputTokens ?? 0),
+          totalTokens: (totalUsage.totalTokens ?? 0) + (enforcedUsage.totalTokens ?? 0),
+        };
+      }
+    }
   }
 
   const promptTokens = totalUsage.inputTokens ?? 0;

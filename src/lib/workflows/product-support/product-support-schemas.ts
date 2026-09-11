@@ -275,6 +275,12 @@ export const gateIdSchema = z.enum([
    * (possibly multi-product) evidence block. Never suppressed by `BEX_DISABLE_CONFIDENCE_GATING`.
    */
   'dilution_citation_guardrail',
+  /**
+   * B0-948 — `requireFactToolForDraft`: before a draft may stand, the tool that OWNS each fact
+   * category the draft asserts must have been called this turn. One forced call + re-draft per
+   * turn at most; see `~/lib/workflows/product-support/fact-tool-enforcement`.
+   */
+  'fact_tool_enforcement',
 ]);
 
 export type GateId = z.infer<typeof gateIdSchema>;
@@ -532,6 +538,14 @@ export const activeGatesSchema = z.object({
    * deliberately not wired to `BEX_DISABLE_CONFIDENCE_GATING`.
    */
   dilutionCitationGuardrail: gateActivationRecordSchema.optional(),
+  /**
+   * B0-948 — the fact-tool enforcement pass's activation state. OPTIONAL for the same reason as
+   * `recommendationEngineVerdict`: already-persisted payloads predate the gate. `not_applicable`
+   * when the draft asserted no fact category whose owning tool was missing; `ran`/`enforced` when
+   * the forced call was made and the answer re-drafted; `ran`/`not_enforced` (with `reason`) when
+   * a requirement was found but could not be forced.
+   */
+  factToolEnforcement: gateActivationRecordSchema.optional(),
 });
 
 export type ActiveGates = z.infer<typeof activeGatesSchema>;
