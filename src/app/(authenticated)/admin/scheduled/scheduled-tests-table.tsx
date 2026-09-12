@@ -1,6 +1,7 @@
 'use client';
 
 import { ChevronDown, ChevronRight } from 'lucide-react';
+import Link from 'next/link';
 import { useState } from 'react';
 
 import {
@@ -191,7 +192,19 @@ function ScheduledTestRunRow({
                         className="border-b border-slate-100 hover:bg-slate-100"
                       >
                         <TableCell className="py-2 text-slate-900">
-                          {item.test_name}
+                          {/* B0-963 — `test_run_id` is null when the dispatch create call itself
+                              failed, so there is no run to open; those rows stay plain text and
+                              explain themselves in the Error code column. */}
+                          {item.test_run_id ? (
+                            <Link
+                              href={`/admin/tests/${item.test_id}/runs/${item.test_run_id}/report`}
+                              className="text-sky-700 underline underline-offset-4 hover:text-sky-900"
+                            >
+                              {item.test_name}
+                            </Link>
+                          ) : (
+                            item.test_name
+                          )}
                         </TableCell>
                         <TableCell className="py-2">
                           <Badge
