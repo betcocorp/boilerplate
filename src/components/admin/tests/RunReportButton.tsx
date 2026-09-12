@@ -1,9 +1,9 @@
 'use client';
 
-import { FileText } from 'lucide-react';
+import { FileText, Loader2 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { Button } from '~/components/ui/button';
 import {
@@ -175,6 +175,12 @@ export function resolveRunReportButtonView({
  * scoped tightly (run finished, no report yet, report status not terminal) and stops as soon as the
  * report completes or fails; on completion it fires a single `router.refresh()` so the rest of the
  * server-rendered page, which reads `result.report`, catches up too.
+ *
+ * A failed report (`destructive`) does not link — it POSTs the same regeneration endpoint the
+ * report page's own "Retry" button calls, then navigates to `/report` so the (now non-terminal)
+ * state can drive itself forward there. Just linking would land on the report page still showing
+ * `status: 'failed'`, which its mount effect treats as terminal and does not auto-retry — the user
+ * would have had to click "Retry" a second time.
  */
 export function RunReportButton({
   testId,
@@ -185,6 +191,7 @@ export function RunReportButton({
 }: RunReportButtonProps) {
   const router = useRouter();
   const [report, setReport] = useState<RunReportProgress | null>(initialReport);
+  const [retrying, setRetrying] = useState(false);
   const hasRefreshedRef = useRef(false);
 
   const reportStatus = report?.status;
@@ -242,6 +249,18 @@ export function RunReportButton({
     };
   }, [router, runId, shouldPoll]);
 
+  const retryReport = useCallback(async () => {
+    setRetrying(true);
+    try {
+      await fetch(`/api/admin/tests/runs/${runId}/report`, { method: 'POST' });
+    } catch {
+      // Navigate regardless — the report page will show whatever state resulted (including the
+      // same failure re-surfacing), and it can keep polling/retrying from there.
+    } finally {
+      router.push(`/admin/tests/${testId}/runs/${runId}/report`);
+    }
+  }, [router, runId, testId]);
+
   const view = resolveRunReportButtonView({
     enabled,
     hasExistingReport,
@@ -253,17 +272,23 @@ export function RunReportButton({
       <FileText className="size-4" />
       {view.label}
     </Button>
-  ) : (
+  ) : view.destructive ? (
     <Button
-      asChild
-      className={
-        view.destructive
-          ? 'border-destructive/40 text-destructive hover:bg-destructive/10'
-          : undefined
-      }
+      className="border-destructive/40 text-destructive hover:bg-destructive/10"
+      disabled={retrying}
+      onClick={() => void retryReport()}
       size="sm"
       variant="outline"
     >
+      {retrying ? (
+        <Loader2 className="size-4 animate-spin" />
+      ) : (
+        <FileText className="size-4" />
+      )}
+      {retrying ? 'Retrying…' : view.label}
+    </Button>
+  ) : (
+    <Button asChild size="sm" variant="outline">
       <Link href={`/admin/tests/${testId}/runs/${runId}/report`}>
         <FileText className="size-4" />
         {view.label}
