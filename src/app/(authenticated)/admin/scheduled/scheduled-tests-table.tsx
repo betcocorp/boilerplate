@@ -19,7 +19,7 @@ import {
   type ScheduledRunStatus,
   type ScheduledTestRunWithItems,
 } from '~/lib/observability/scheduled-test-types';
-import { formatDurationMs, formatEasternTime } from '~/lib/utils/time';
+import { formatDurationMs, formatEasternTimestamp } from '~/lib/utils/time';
 
 function getStatusBadgeColor(status: string): string {
   switch (status) {
@@ -117,7 +117,9 @@ function ScheduledTestRunRow({
           </button>
         </TableCell>
         <TableCell className="font-medium text-slate-900">
-          {formatEasternTime(run.sweep_triggered_at)}
+          {/* B0-964 — the date matters: this table lists recent sweeps, not today's, so a bare
+              clock time cannot distinguish an hour ago from last week. */}
+          {formatEasternTimestamp(run.sweep_triggered_at)}
         </TableCell>
         <TableCell>
           <Badge className={`border ${getStatusBadgeColor(displayStatus)}`}>
