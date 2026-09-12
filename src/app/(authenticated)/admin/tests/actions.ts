@@ -42,6 +42,7 @@ import {
 } from '~/lib/tests/multi-turn-import';
 import {
   archiveTest,
+  clearTestResultReport,
   createTestRecord,
   createTestResult,
   deleteTestById,
@@ -1145,6 +1146,48 @@ export async function deleteTestRunAction(formData: FormData) {
   revalidatePath(`/admin/tests/${testId}`);
   revalidatePath(`/admin/tests/${testId}/runs/${runId}`);
   redirect(encodeMessage(returnPath, 'success', 'Run deleted.'));
+}
+
+/**
+ * B0-965 — clears only the generated report for a run (`report`, `report_state`,
+ * `report_generated_at`), leaving the run and its `test_result_items` untouched. This is
+ * deliberately narrower than `deleteTestRunAction`: it just makes the row drop out of
+ * `listAllReportRuns()` (`/admin/tests/reports`) while the run stays viewable/re-reportable at
+ * `/admin/tests/[testId]/runs/[runId]`.
+ */
+export async function deleteTestReportAction(formData: FormData) {
+  const returnPath = normalizeReturnPath(
+    formData.get('returnPath'),
+    '/admin/tests/reports',
+  );
+
+  // Server actions are reachable by any POST that knows the action id, so the page gate alone
+  // (`requirePagePermission` on /admin/tests/reports) is not enough: re-check the same permission
+  // here, same pattern as `runGoldenTestsAction`.
+  const permission = await requirePermission(PERMISSIONS.NAVIGATION_SIDEBAR_TESTS, {
+    route: 'action deleteTestReportAction',
+  });
+  if (!permission.allowed) {
+    redirect(encodeMessage(returnPath, 'error', 'You are not allowed to delete reports.'));
+  }
+
+  const runId = formData.get('runId');
+  if (typeof runId !== 'string' || !runId.trim()) {
+    redirect(encodeMessage(returnPath, 'error', 'Missing run id.'));
+  }
+
+  const run = await getTestResultById(runId).catch(() => null);
+  if (!run) {
+    redirect(encodeMessage(returnPath, 'error', 'Run not found.'));
+  }
+
+  await clearTestResultReport(runId);
+
+  revalidatePath('/admin/tests/reports');
+  revalidatePath(`/admin/tests/${run.test_id}`);
+  revalidatePath(`/admin/tests/${run.test_id}/runs/${runId}`);
+  revalidatePath(`/admin/tests/${run.test_id}/runs/${runId}/report`);
+  redirect(encodeMessage(returnPath, 'success', 'Report deleted.'));
 }
 
 /** Same actor convention as `~/lib/recommendations/review-actions.ts`. */

@@ -2,6 +2,8 @@ import { ArrowDown, ArrowUp, Minus, XIcon } from 'lucide-react';
 import Link from 'next/link';
 import { connection } from 'next/server';
 
+import { AdminTestsActionToast } from '~/components/admin/tests/AdminTestsActionToast';
+import { DeleteTestReportDialog } from '~/components/admin/tests/DeleteTestReportDialog';
 import {
   ReportDatasetFilter,
   type ReportDatasetOption,
@@ -245,6 +247,9 @@ export default async function AdminTestReportsPage({
   await connection();
   const params = await searchParams;
 
+  const success = typeof params.success === 'string' ? params.success : null;
+  const error = typeof params.error === 'string' ? params.error : null;
+
   const allReports = await listAllReportRuns();
   const datasetOptions = buildDatasetOptions(allReports);
   const runByOptions = buildRunByOptions(allReports);
@@ -300,6 +305,7 @@ export default async function AdminTestReportsPage({
 
   return (
     <div className="flex flex-1 bg-slate-50">
+      <AdminTestsActionToast error={error} success={success} />
       <main className="flex w-full flex-1 flex-col gap-8 px-6 py-10 sm:px-8">
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <div className="flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center">
@@ -491,13 +497,21 @@ export default async function AdminTestReportsPage({
                         {row.triggeredBy ?? '—'}
                       </TableCell>
                       <TableCell>
-                        <Button asChild size="sm" variant="outline">
-                          <Link
-                            href={`/admin/tests/${row.testId}/runs/${row.runId}/report`}
-                          >
-                            View report
-                          </Link>
-                        </Button>
+                        <div className="flex items-center gap-2">
+                          <Button asChild size="sm" variant="outline">
+                            <Link
+                              href={`/admin/tests/${row.testId}/runs/${row.runId}/report`}
+                            >
+                              View report
+                            </Link>
+                          </Button>
+                          <DeleteTestReportDialog
+                            returnPath="/admin/tests/reports"
+                            runId={row.runId}
+                            testId={row.testId}
+                            testName={row.testName}
+                          />
+                        </div>
                       </TableCell>
                     </TableRow>
                     );

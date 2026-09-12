@@ -528,6 +528,15 @@ export async function saveReportMarkdown(
   });
 }
 
+/** Deletes only the generated report for a run — the run and its item results are untouched. */
+export async function clearTestResultReport(resultId: string) {
+  return updateTestResult(resultId, {
+    report: null,
+    report_state: null,
+    report_generated_at: null,
+  });
+}
+
 /** Reads back the post-mortem comparison for a run (B0-312). Null when none has been started. */
 export async function getRunComparisonByResultId(resultId: string) {
   const supabase = getSupabaseServiceRoleClient();
