@@ -415,7 +415,7 @@ export default async function AdminTestReportsPage({
                       <TableCell className="max-w-[280px] truncate font-medium">
                         <Link
                           className="text-sky-700 underline-offset-2 hover:underline"
-                          href={`/admin/tests/${row.testId}`}
+                          href={`/admin/tests/${row.testId}/runs/${row.runId}`}
                           title={row.testName}
                         >
                           {row.testName}
