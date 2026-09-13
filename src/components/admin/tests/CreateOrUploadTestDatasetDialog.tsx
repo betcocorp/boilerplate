@@ -159,6 +159,8 @@ export function CreateOrUploadTestDatasetDialog({
                     <TableRow>
                       <TableHead className="w-24">Name</TableHead>
                       <TableHead className="w-16">Req.</TableHead>
+                      <TableHead className="w-32">Format</TableHead>
+                      <TableHead className="w-32">Examples</TableHead>
                       <TableHead>Description</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -170,6 +172,12 @@ export function CreateOrUploadTestDatasetDialog({
                         </TableCell>
                         <TableCell className="w-16 text-slate-600">
                           {column.required ? 'Yes' : 'No'}
+                        </TableCell>
+                        <TableCell className="w-32 font-mono text-slate-600 text-xs">
+                          {column.format}
+                        </TableCell>
+                        <TableCell className="w-32 text-slate-600 text-xs">
+                          {column.examples}
                         </TableCell>
                         <TableCell className="text-slate-600 leading-snug">
                           {column.help}
