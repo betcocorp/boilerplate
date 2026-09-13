@@ -1,3 +1,24 @@
+# [6.2.0](https://github.com/betcocorp/bex2.0/compare/v6.1.0...v6.2.0) (2026-09-13)
+
+
+### Bug Fixes
+
+* **B0-946:** close five answer-completeness gaps in the product-support prompt ([8057d7c](https://github.com/betcocorp/bex2.0/commit/8057d7c2ecad6e16b52ae6c7017dd38f4e771917))
+* **B0-947:** require a usage-shaped question before the guardrail full-declines ([1c9a229](https://github.com/betcocorp/bex2.0/commit/1c9a2290264c2996570b6aaa70a937fd490a0f70))
+* **B0-953:** grade a dilution stated in the other unit as the same concept ([a1531a2](https://github.com/betcocorp/bex2.0/commit/a1531a28f599565b2a9f67e3d9f0b8c37f8bda8a))
+* **B0-955:** say what a cross-reference match returns and what to check first ([26af6a5](https://github.com/betcocorp/bex2.0/commit/26af6a5a4eb72b1f0f8b8e38b2f560774baf91fd))
+* **B0-966:** send the Vercel protection bypass on cron self-calls ([ac089b7](https://github.com/betcocorp/bex2.0/commit/ac089b7b97383f813f5199f795ff282c10c54555))
+* **reports:** link the test name to its run, not the dataset page ([d3bc536](https://github.com/betcocorp/bex2.0/commit/d3bc536bfa3dff38d851f00ae9fb28049569f879))
+* **reports:** retry a failed report from its button instead of just linking ([4e752e9](https://github.com/betcocorp/bex2.0/commit/4e752e97064f431f8f3fa90d9a8894904a9dcbdb))
+
+
+### Features
+
+* **B0-948:** enforce the fact-owning retrieval tool before a draft is final ([3f843ef](https://github.com/betcocorp/bex2.0/commit/3f843ef86419eb42525986f71ec659f735ce5aeb))
+* **B0-963:** link each scheduled-run test item to its run report ([f468926](https://github.com/betcocorp/bex2.0/commit/f4689260e0831261dcdd292931f65567a211b60e))
+* **B0-964:** show the date alongside the time in the Triggered column ([0404632](https://github.com/betcocorp/bex2.0/commit/040463202b462a3277d28fab0fb4b5c57ebe03fb))
+* **B0-965:** add a delete-report action to the reports table ([4b1d5fd](https://github.com/betcocorp/bex2.0/commit/4b1d5fde11518142550d670f6bae4656714b1c16))
+
 # [6.1.0](https://github.com/betcocorp/bex2.0/compare/v6.0.0...v6.1.0) (2026-09-11)
 
 
