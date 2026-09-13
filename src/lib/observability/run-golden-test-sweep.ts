@@ -1,5 +1,9 @@
 import { z } from 'zod';
 
+import {
+  describeDeploymentProtectionFailure,
+  resolveDeploymentProtectionBypass,
+} from '~/lib/api/deployment-protection-bypass';
 import { logWarn } from '~/lib/observability/logger';
 import {
   closeScheduledRunAfterDispatch,
@@ -59,11 +63,19 @@ async function queueAndRunGoldenTest(
 ): Promise<GoldenTestSweepOutcome> {
   const base = { testId: test.id, testName: test.name };
 
+  // B0-966 — this is a self-call into our own deployment, so it has to clear Vercel Deployment
+  // Protection on its own: the cron's signed inbound request confers nothing on an outbound fetch.
+  const bypass = resolveDeploymentProtectionBypass(origin);
+
   let createResponse: Response;
   try {
     createResponse = await fetch(`${origin}${ADMIN_RUNS_PATH}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: authorization },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: authorization,
+        ...bypass.headers,
+      },
       body: JSON.stringify({ testId: test.id }),
     });
   } catch (error) {
@@ -88,7 +100,9 @@ async function queueAndRunGoldenTest(
       runId: createBody?.runId ?? null,
       state: null,
       step: 'create',
-      error: createBody?.error ?? `HTTP ${createResponse.status}`,
+      // A red row should name the thing to check. Only a 401 gets a protection hint — see
+      // `describeDeploymentProtectionFailure`.
+      error: `${createBody?.error ?? `HTTP ${createResponse.status}`}${describeDeploymentProtectionFailure(createResponse.status, bypass)}`,
     };
   }
 
@@ -98,7 +112,7 @@ async function queueAndRunGoldenTest(
   try {
     executeResponse = await fetch(`${origin}${ADMIN_RUNS_PATH}/${runId}`, {
       method: 'POST',
-      headers: { Authorization: authorization },
+      headers: { Authorization: authorization, ...bypass.headers },
     });
   } catch (error) {
     return {
@@ -122,7 +136,7 @@ async function queueAndRunGoldenTest(
       runId,
       state: executeBody?.state ?? null,
       step: 'execute',
-      error: executeBody?.error ?? `HTTP ${executeResponse.status}`,
+      error: `${executeBody?.error ?? `HTTP ${executeResponse.status}`}${describeDeploymentProtectionFailure(executeResponse.status, bypass)}`,
     };
   }
 

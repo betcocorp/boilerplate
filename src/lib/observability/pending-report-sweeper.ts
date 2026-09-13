@@ -38,6 +38,10 @@
 import { z } from 'zod';
 
 import {
+  describeDeploymentProtectionFailure,
+  resolveDeploymentProtectionBypass,
+} from '~/lib/api/deployment-protection-bypass';
+import {
   listPendingReportCandidates,
   type PendingReportCandidate,
   type PendingReportSweeperPort,
@@ -120,6 +124,12 @@ async function scheduleBackgroundReport(
 ): Promise<PendingReportSweepOutcome> {
   const base = baseOutcome(candidate);
 
+  // B0-966 — a self-call into our own deployment must clear Vercel Deployment Protection on its
+  // own; the cron's signed inbound request confers nothing on this outbound fetch. This sweep is
+  // the one that fails INVISIBLY when it does not (its 401 lands only in the outcome below, with
+  // no red row anywhere), so the missing-secret hint matters more here than on the golden sweep.
+  const bypass = resolveDeploymentProtectionBypass(context.origin);
+
   let response: Response;
   try {
     response = await fetchImpl(`${context.origin}${REPORT_PATH(candidate.runId)}`, {
@@ -129,6 +139,7 @@ async function scheduleBackgroundReport(
         Authorization: context.authorization,
         [REPORT_MODE_HEADER]: BACKGROUND_MODE,
         [REPORT_HOP_HEADER]: FIRST_HOP,
+        ...bypass.headers,
       },
     });
   } catch (error) {
@@ -141,7 +152,11 @@ async function scheduleBackgroundReport(
 
   if (!response.ok) {
     const body = (await response.json().catch(() => null)) as { error?: string } | null;
-    return { ...base, ok: false, error: body?.error ?? `HTTP ${response.status}` };
+    return {
+      ...base,
+      ok: false,
+      error: `${body?.error ?? `HTTP ${response.status}`}${describeDeploymentProtectionFailure(response.status, bypass)}`,
+    };
   }
 
   return { ...base, ok: true, error: null };
