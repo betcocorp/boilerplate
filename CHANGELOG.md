@@ -1,3 +1,23 @@
+# [6.1.0](https://github.com/betcocorp/bex2.0/compare/v6.0.0...v6.1.0) (2026-09-11)
+
+
+### Bug Fixes
+
+* **B0-941:** derive sweep counts from children instead of the lagging parent ([b39adc9](https://github.com/betcocorp/bex2.0/commit/b39adc9087ecb1d67b9eef9ee59453ced176f746))
+* **B0-941:** end a sweep when its last child ended, not when the reconciler ran ([7552406](https://github.com/betcocorp/bex2.0/commit/75524062158339f3b6f46e4d4d151a1a71cfc8f5))
+* **B0-942:** stop the nightly golden sweep running archived sets ([aa1e45b](https://github.com/betcocorp/bex2.0/commit/aa1e45b962db3ad1333e09feec93867ccfdfc954))
+* **B0-943:** generate eval reports in their own invocation chain ([4b55fc1](https://github.com/betcocorp/bex2.0/commit/4b55fc1f7cc0df6f9b8d91d0037af476e8b313a1))
+* **B0-943:** show live report state on the run detail page ([0f08755](https://github.com/betcocorp/bex2.0/commit/0f0875551f981d51e6bd151fae80dc33dc1aa7ed))
+* **reports:** remove misleading Router column, fix sticky table header ([d00dfef](https://github.com/betcocorp/bex2.0/commit/d00dfefdaea9896543272aa8b913944e3a328beb))
+
+
+### Features
+
+* **B0-941:** persist golden sweep runs and reconcile them hourly ([1b45e7c](https://github.com/betcocorp/bex2.0/commit/1b45e7c4fe3ff60f092dcf293e88d225077a0ce3))
+* **B0-941:** schedule the scheduled-test reconciler hourly ([5c44a11](https://github.com/betcocorp/bex2.0/commit/5c44a11057a57d88373f2f599aff4a9170596f91))
+* **B0-943:** add a recovery cron for reports left without a driver ([897b85e](https://github.com/betcocorp/bex2.0/commit/897b85eb7c82317c0ab4f0e2b05ab0e037c87fc6))
+* **B0:** add Concept % column to reports, fix router populating issue ([7e4e84c](https://github.com/betcocorp/bex2.0/commit/7e4e84ccc5f539750aa75ecd9688c633a8ba1c14))
+
 # [6.0.0](https://github.com/betcocorp/bex2.0/compare/v5.0.0...v6.0.0) (2026-09-11)
 
 
