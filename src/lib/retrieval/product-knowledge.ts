@@ -30,6 +30,7 @@ import {
   type ProductLineFacts,
 } from '~/lib/retrieval/product-facts';
 import { suppressNearDuplicateMatches } from '~/lib/retrieval/near-duplicate-suppression';
+import { MODEL_DOCUMENT_BODY_MAX_CHARS } from '~/lib/tools/model-tool-payload';
 
 /**
  * The new RAG strategy returns at most this many sources, where each source is a
@@ -824,8 +825,14 @@ async function expandTopKnowledgeSource(
  * source in the top 3, unconditionally, so a correct document that ranked #2 or #3 — and so never
  * qualified for B0-874's narrower trigger — still reaches the model whole instead of as a
  * possibly-irrelevant ±1-chunk snippet.
+ *
+ * B0-973 — the threshold is the model-facing body cap (`MODEL_DOCUMENT_BODY_MAX_CHARS`, 8k), not a
+ * separate 4k. The 4k cut left both Dilution Control golden failures (`084f0b3a`, `ce445e69`) with
+ * chunks 0–2 of a 6,060-char / 4,417-char top document while the mandatory concept sat in chunk 4–7;
+ * `buildModelDocumentPayload` already truncates anything over 8k, so widening to that cap adds no
+ * new context ceiling.
  */
-const SMALL_KNOWLEDGE_DOCUMENT_MAX_CHARS = 4_000;
+const SMALL_KNOWLEDGE_DOCUMENT_MAX_CHARS = MODEL_DOCUMENT_BODY_MAX_CHARS;
 /** B0-892 — "top 3 retrieved sources", matching the model's own `search_product_docs` cap. */
 const SMALL_KNOWLEDGE_DOCUMENT_TOP_N = 3;
 

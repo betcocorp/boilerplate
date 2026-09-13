@@ -2,20 +2,21 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * B0-892 — for `knowledge`-kind sources ranking in the top 3, pass the document's FULL `body_text`
- * as `documentBody` when the whole document is small (under ~4k chars), instead of the narrower
+ * as `documentBody` when the whole document is small (under the 8k model body cap, B0-973 — was 4k), instead of the narrower
  * B0-547 neighbour window (or leaving a source that never qualified for the B0-874 single-source
  * sibling expansion at its narrow default).
  *
  * Grounded in run `343c1918` ("how soon can people walk on the VCT floor after the last coat?"):
  * the corpus has two correct knowledge documents for this question — "VCT Reopening to Traffic"
  * (3,281 chars) and "vct finish open to traffic timing" (610 chars), both confirmed live via
- * Supabase and both well under the 4,000-char threshold used here.
+ * Supabase and both well under the threshold used here.
  */
 
 vi.mock('~/supabase/clients/service-role', () => ({ getSupabaseServiceRoleClient: vi.fn() }));
 
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 import { expandSmallTopKnowledgeSources, type CuratedSource } from '~/lib/retrieval/product-knowledge';
+import { MODEL_DOCUMENT_BODY_MAX_CHARS } from '~/lib/tools/model-tool-payload';
 
 let documentRows: Array<{ id: string; body_text: string | null }> = [];
 
@@ -94,14 +95,26 @@ describe('expandSmallTopKnowledgeSources (B0-892)', () => {
     );
   });
 
-  it('does not widen a knowledge document at or over the 4,000-char threshold', async () => {
-    const bigBody = 'x'.repeat(4001);
+  it('does not widen a knowledge document over the 8,000-char model body cap (B0-973)', async () => {
+    const bigBody = 'x'.repeat(MODEL_DOCUMENT_BODY_MAX_CHARS + 1);
     documentRows = [{ id: 'doc-big', body_text: bigBody }];
     const sources = [source({ documentId: 'doc-big' })];
 
     const result = await expandSmallTopKnowledgeSources(sources);
 
     expect(result[0]?.documentBody).toBe('narrow ±1-chunk window text');
+  });
+
+  it('widens a 6,060-char knowledge document that the former 4,000-char threshold skipped (B0-973, Dilution 084f0b3a)', async () => {
+    const midBody = 'd'.repeat(6060);
+    documentRows = [{ id: 'doc-mid', body_text: midBody }];
+    const sources = [source({ documentId: 'doc-mid' })];
+
+    const result = await expandSmallTopKnowledgeSources(sources);
+
+    expect(result[0]?.documentBody).toBe(midBody);
+    expect(result[0]?.documentBodyChars).toBe(6060);
+    expect(result[0]?.documentBodyTruncated).toBe(false);
   });
 
   it('does not widen a source ranking outside the top 3', async () => {
