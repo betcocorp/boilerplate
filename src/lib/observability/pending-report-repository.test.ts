@@ -150,6 +150,37 @@ describe('listPendingReportCandidates — jsonb predicate', () => {
     expect(await listPendingReportCandidates(DEFAULTS)).toEqual([]);
   });
 
+  // B0-991 — 20 reports failed 2026-09-11 → 09-14 only because the Vercel host had no
+  // ANTHROPIC_API_KEY. Nothing was graded, so once the host is fixed they are lost-driver cases.
+  it('selects a failed report classed provider_unconfigured, and only that class', async () => {
+    rows = [
+      row({
+        id: 'run-no-key',
+        report_state: reportState({ status: 'failed', failureClass: 'provider_unconfigured' }),
+      }),
+      row({
+        id: 'run-real-failure',
+        report_state: reportState({ status: 'failed', failureClass: null }),
+      }),
+      // A row tagged by hand (see the B0-991 data fix) that does not otherwise parse still counts.
+      row({
+        id: 'run-tagged-raw',
+        report_state: {
+          status: 'failed',
+          failureClass: 'provider_unconfigured',
+          updatedAt: isoAgo(60_000 * 30),
+        },
+      }),
+    ];
+
+    const candidates = await listPendingReportCandidates(DEFAULTS);
+
+    expect(candidates.map((candidate) => candidate.runId)).toEqual([
+      'run-no-key',
+      'run-tagged-raw',
+    ]);
+  });
+
   it('does NOT select a report touched inside the staleness window', async () => {
     rows = [
       row({

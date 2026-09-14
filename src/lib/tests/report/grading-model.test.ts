@@ -12,6 +12,7 @@ import { getStringSetting } from '~/lib/settings/settings-service';
 import {
   DEFAULT_GRADING_EFFORT,
   DEFAULT_GRADING_MODEL_TAG,
+  describeGradingProviderGap,
   effortForModel,
   effortFromState,
   GRADING_EFFORT_SETTING_KEY,
@@ -40,6 +41,48 @@ describe('DEFAULT_GRADING_MODEL_TAG (B0-822)', () => {
     expect(DEFAULT_GRADING_MODEL_TAG).toBe('claude-opus-5');
     expect(isGradingModelTag(DEFAULT_GRADING_MODEL_TAG)).toBe(true);
     expect(modelProviderFor(DEFAULT_GRADING_MODEL_TAG)).toBe('anthropic');
+  });
+});
+
+describe('describeGradingProviderGap (B0-991)', () => {
+  const original = {
+    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+    VERCEL_URL: process.env.VERCEL_URL,
+  };
+  const restore = () => {
+    for (const [key, value] of Object.entries(original)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  };
+
+  it('names the model and the host when an Anthropic model has no key on this host', () => {
+    delete process.env.ANTHROPIC_API_KEY;
+    process.env.VERCEL_URL = 'bex2-0-abc123-betco.vercel.app';
+    try {
+      const gap = describeGradingProviderGap('claude-opus-5');
+      expect(gap).toContain('claude-opus-5');
+      expect(gap).toContain('ANTHROPIC_API_KEY');
+      expect(gap).toContain('bex2-0-abc123-betco.vercel.app');
+    } finally {
+      restore();
+    }
+  });
+
+  it('is null when the key is present, and always null for an OpenAI model', () => {
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-test';
+    try {
+      expect(describeGradingProviderGap('claude-opus-5')).toBeNull();
+    } finally {
+      restore();
+    }
+
+    delete process.env.ANTHROPIC_API_KEY;
+    try {
+      expect(describeGradingProviderGap('gpt-5.6')).toBeNull();
+    } finally {
+      restore();
+    }
   });
 });
 

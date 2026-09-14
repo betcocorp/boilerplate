@@ -2,8 +2,18 @@ import { describe, expect, it } from 'vitest';
 
 import type { TestItemRecord } from '~/lib/tests/types';
 
-import { finalizeCaseIfReady, hydrateLegacyPassScores, pendingPasses } from './orchestrator';
-import { emptyReportState, type CaseScore, type ReportState } from './schemas';
+import {
+  finalizeCaseIfReady,
+  hydrateLegacyPassScores,
+  pendingPasses,
+  stripFailedGradingPasses,
+} from './orchestrator';
+import {
+  GRADING_CALL_FAILED_PREFIX,
+  emptyReportState,
+  type CaseScore,
+  type ReportState,
+} from './schemas';
 
 /**
  * B0-719 — the resumption unit. `generateReport` itself needs a database and a grading model, so
@@ -33,6 +43,54 @@ const ITEMS = [item('a'), item('b'), item('c')];
 function state(passes: number, casePassScores: Record<string, CaseScore[]> = {}): ReportState {
   return { ...emptyReportState('gpt-4.1', ITEMS.length, passes), casePassScores };
 }
+
+describe('stripFailedGradingPasses (B0-991)', () => {
+  const CALL_FAILED: CaseScore = {
+    ...SCORE,
+    unableToEvaluate: true,
+    uteReason: `${GRADING_CALL_FAILED_PREFIX}: ANTHROPIC_API_KEY is not configured.`,
+    accuracy: null,
+    completeness: null,
+    relevance: null,
+    clarity: null,
+  };
+  const JUDGED_UTE: CaseScore = {
+    ...CALL_FAILED,
+    uteReason: 'The response is empty.',
+  };
+
+  it('drops only call-failure passes, un-consolidates those cases, and re-owes the calls', () => {
+    const s = state(3, {
+      a: [SCORE, SCORE, SCORE],
+      b: [SCORE, CALL_FAILED, CALL_FAILED],
+      c: [CALL_FAILED, CALL_FAILED, CALL_FAILED],
+    });
+    s.caseScores = { a: SCORE, b: SCORE, c: CALL_FAILED };
+    s.completedCases = 3;
+
+    expect(stripFailedGradingPasses(s)).toBe(5);
+    expect(s.casePassScores).toEqual({ a: [SCORE, SCORE, SCORE], b: [SCORE], c: [] });
+    expect(Object.keys(s.caseScores)).toEqual(['a']);
+    expect(s.completedCases).toBe(1);
+    expect(pendingPasses(ITEMS, s)).toEqual([
+      { item: ITEMS[2], passIndex: 0 },
+      { item: ITEMS[1], passIndex: 1 },
+      { item: ITEMS[2], passIndex: 1 },
+      { item: ITEMS[1], passIndex: 2 },
+      { item: ITEMS[2], passIndex: 2 },
+    ]);
+  });
+
+  it('keeps a judged Unable to Evaluate — that is a verdict, not a failed call', () => {
+    const s = state(1, { a: [JUDGED_UTE], b: [SCORE], c: [SCORE] });
+    s.caseScores = { a: JUDGED_UTE, b: SCORE, c: SCORE };
+    s.completedCases = 3;
+
+    expect(stripFailedGradingPasses(s)).toBe(0);
+    expect(s.caseScores).toEqual({ a: JUDGED_UTE, b: SCORE, c: SCORE });
+    expect(s.completedCases).toBe(3);
+  });
+});
 
 describe('pendingPasses (B0-719)', () => {
   it('owes one grading call per case at a single pass', () => {

@@ -18,7 +18,12 @@
  * the orchestrator resumes from, never a second hand-rolled copy of it.
  */
 
-import { parseReportState, type ReportStatus } from '~/lib/tests/report/schemas';
+import {
+  isResumableFailure,
+  parseReportState,
+  type ReportFailureClass,
+  type ReportStatus,
+} from '~/lib/tests/report/schemas';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 /** Run statuses that mean "the run itself finished, so a report is owed". */
@@ -28,6 +33,10 @@ const COMPLETED_RUN_STATUSES = ['completed', 'completed_with_failures'] as const
  * `report_state.status` values that still owe work. `completed` and `failed` are terminal:
  * a genuinely failed report is a grading problem, not a lost-driver problem, and re-firing it on a
  * 10-minute cron would burn grading spend on something a human needs to look at.
+ *
+ * B0-991 — the one exception is a `failed` state classed `provider_unconfigured`: nothing was
+ * graded (the host had no credentials for the grading provider), so once the host is fixed it is
+ * exactly a lost-driver case. `isResumableFailure` (the orchestrator's own rule) decides that.
  */
 const RESUMABLE_REPORT_STATUSES: readonly ReportStatus[] = ['idle', 'scoring', 'synthesizing'];
 
@@ -71,7 +80,13 @@ type ReportStateProbe = {
   updatedAt: string | null;
   completedCases: number | null;
   totalCases: number | null;
+  /** B0-991 — only read on a `failed` state; null for anything else or a legacy row. */
+  failureClass: ReportFailureClass | null;
 };
+
+function readFailureClass(value: unknown): ReportFailureClass | null {
+  return value === 'provider_unconfigured' ? value : null;
+}
 
 /**
  * Read the three fields the predicate needs out of a persisted `report_state`.
@@ -93,11 +108,18 @@ function probeReportState(value: unknown): ReportStateProbe | null {
       updatedAt: parsed.updatedAt,
       completedCases: parsed.completedCases,
       totalCases: parsed.totalCases,
+      failureClass: parsed.failureClass,
     };
   }
 
   if (typeof value !== 'object' || Array.isArray(value)) {
-    return { status: null, updatedAt: null, completedCases: null, totalCases: null };
+    return {
+      status: null,
+      updatedAt: null,
+      completedCases: null,
+      totalCases: null,
+      failureClass: null,
+    };
   }
 
   const raw = value as Record<string, unknown>;
@@ -106,15 +128,19 @@ function probeReportState(value: unknown): ReportStateProbe | null {
     updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : null,
     completedCases: typeof raw.completedCases === 'number' ? raw.completedCases : null,
     totalCases: typeof raw.totalCases === 'number' ? raw.totalCases : null,
+    failureClass: readFailureClass(raw.failureClass),
   };
 }
 
 /** True when this `report_state` still owes work (including "there is no state yet"). */
-function isResumableStatus(status: string | null): boolean {
-  if (status === null) {
+function isResumableProbe(probe: ReportStateProbe): boolean {
+  if (probe.status === null) {
     return true;
   }
-  return (RESUMABLE_REPORT_STATUSES as readonly string[]).includes(status);
+  if (probe.status === 'failed') {
+    return isResumableFailure({ status: 'failed', failureClass: probe.failureClass });
+  }
+  return (RESUMABLE_REPORT_STATUSES as readonly string[]).includes(probe.status);
 }
 
 /**
@@ -140,7 +166,8 @@ function isStaleEnough(updatedAt: string | null, nowMs: number, stalenessMs: num
  * - `status in ('completed','completed_with_failures')` (Postgres)
  * - `report is null` (Postgres)
  * - `completed_at > now() - lookbackHours` (Postgres)
- * - `report_state` is null OR `report_state.status in ('idle','scoring','synthesizing')` (here)
+ * - `report_state` is null OR `report_state.status in ('idle','scoring','synthesizing')` OR
+ *   `status = 'failed' AND failureClass = 'provider_unconfigured'` (here)
  * - `report_state.updatedAt` is null/unreadable OR older than `stalenessMinutes` (here)
  *
  * Newest first, capped at `limit`.
@@ -171,7 +198,7 @@ export async function listPendingReportCandidates(
   for (const row of data ?? []) {
     const probe = probeReportState(row.report_state);
 
-    if (probe && !isResumableStatus(probe.status)) {
+    if (probe && !isResumableProbe(probe)) {
       continue;
     }
     if (probe && !isStaleEnough(probe.updatedAt, nowMs, stalenessMs)) {

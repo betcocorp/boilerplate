@@ -104,6 +104,26 @@ export const REPORT_STATUSES = [
 ] as const;
 export type ReportStatus = (typeof REPORT_STATUSES)[number];
 
+/**
+ * B0-991 — WHY a report is `failed`, for the failures that are not about the run's data.
+ *
+ * - `provider_unconfigured` — the grading model's provider has no credentials on the host that
+ *   tried to grade (2026-09-11 → 09-14: `ANTHROPIC_API_KEY` missing on the Vercel deploy). Nothing
+ *   was graded; the report is complete-able as soon as the host is fixed, so the pending-report
+ *   sweep treats this one `failed` class as resumable and the orchestrator starts it fresh.
+ *
+ * A `failed` state with no class is a genuine grading/invariant failure and stays terminal.
+ */
+export const REPORT_FAILURE_CLASSES = ['provider_unconfigured'] as const;
+export type ReportFailureClass = (typeof REPORT_FAILURE_CLASSES)[number];
+
+/**
+ * `uteReason` prefix `case-scorer.ts` writes when the grading CALL itself threw (provider down, no
+ * key, timeout) — as opposed to the grader judging the case un-evaluable. B0-991 reads it back to
+ * tell "not a verdict, re-grade" from "a verdict of Unable to Evaluate".
+ */
+export const GRADING_CALL_FAILED_PREFIX = 'Grading call failed';
+
 // Mirrors `Grade` from `./metrics.ts` plus the '-' sentinel `RateBlock.grade` uses when there are
 // no evaluated cases; kept as an inline literal enum (rather than importing `Grade`) so this
 // persisted-data schema doesn't need to depend on the metrics module's types.
@@ -201,6 +221,8 @@ export const reportStateSchema = z.object({
   activeUntil: z.string().nullable().optional().default(null),
   synthesis: reportSynthesisSchema.nullable(),
   error: z.string().nullable(),
+  /** B0-991 — see {@link REPORT_FAILURE_CLASSES}. Null (the legacy default) means a real failure. */
+  failureClass: z.enum(REPORT_FAILURE_CLASSES).nullable().optional().default(null),
   // B0-609 — the report's aggregate score/grade (`computeReportMetrics(...).overall`), persisted
   // once generation completes so the "Recent runs" table can render it without recomputing
   // metrics from per-item data it doesn't otherwise load. `.optional()` so `report_state` rows
@@ -250,8 +272,16 @@ export function emptyReportState(
     activeUntil: null,
     synthesis: null,
     error: null,
+    failureClass: null,
     overall: null,
   };
+}
+
+/** B0-991 — a `failed` state that only needs a correctly configured host to be regenerated. */
+export function isResumableFailure(
+  state: Pick<ReportState, 'status' | 'failureClass'>,
+): boolean {
+  return state.status === 'failed' && state.failureClass === 'provider_unconfigured';
 }
 
 /**
