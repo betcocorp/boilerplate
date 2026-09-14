@@ -7,6 +7,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { CreateTestFromPromptsDialog } from '~/components/admin/tests/CreateTestFromPromptsDialog';
 import { DeleteTestPromptDialog } from '~/components/admin/tests/DeleteTestPromptDialog';
 import { EditTestItemDialog } from '~/components/admin/tests/EditTestItemDialog';
+import { ExpectedSourcesDialog } from '~/components/admin/tests/ExpectedSourcesDialog';
 import type { TestItemSuggestionLists } from '~/components/admin/tests/TestItemFields';
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
@@ -176,12 +177,15 @@ function ConceptExpectationsCell({
         </span>
       ) : null}
       {sourceLabels.length > 0 ? (
-        <span
-          className="line-clamp-2 whitespace-normal text-slate-500"
-          title={sourceLabels.join(PHRASE_DELIMITER)}
-        >
-          Sources: {sourceLabels.join(PHRASE_DELIMITER)}
-        </span>
+        // B0-994 — the whole string is the trigger; the dialog shows each document as a card.
+        <ExpectedSourcesDialog
+          label={sourceLabels.join(PHRASE_DELIMITER)}
+          rowIndex={item.row_index}
+          sources={item.expected_sources.map((id) => ({
+            id,
+            title: documentTitlesById[id] ?? null,
+          }))}
+        />
       ) : null}
       {item.should_cite !== null ? (
         <Badge
@@ -557,7 +561,7 @@ export function TestPromptsSection({
               </TableHead>
               <TableHead>Row</TableHead>
               <TableHead>Prompt</TableHead>
-              <TableHead title="Concept, source, and citation expectations for this prompt: expected/minimum concept phrases, expected criteria, the rag documents listed in expected_sources, and should_cite.">
+              <TableHead title="Concept, source, and citation expectations for this prompt: expected/minimum concept phrases, the rag documents listed in expected_sources (click Sources to read them), and should_cite.">
                 Concepts / sources
               </TableHead>
               <TableHead title="Number of recent runs that included this prompt (and the passed/failed counts).">
