@@ -1,3 +1,17 @@
+# [6.3.0](https://github.com/betcocorp/bex2.0/compare/v6.2.0...v6.3.0) (2026-09-14)
+
+
+### Bug Fixes
+
+* **B0-973:** widen the small-knowledge-document expansion to the 8k model body cap ([7f576f2](https://github.com/betcocorp/bex2.0/commit/7f576f232ee8093e58b41f96f98afc3e4b919311))
+* **B0-982:** sum each golden set's last-run change on the Score change card ([bc15176](https://github.com/betcocorp/bex2.0/commit/bc15176790808cc3f8dc0309a8a2728fb009952d))
+
+
+### Features
+
+* **admin:** title the test and run detail pages with the test name ([66d1b23](https://github.com/betcocorp/bex2.0/commit/66d1b23a9e9054129c29a0b54a1d66b6ea8c3f80))
+* **B0-983:** rewrite the product-support tool descriptions so each tool owns one question shape ([c352240](https://github.com/betcocorp/bex2.0/commit/c352240bca0fbfb2d3f04211b41548e9c5288e64))
+
 # [6.2.0](https://github.com/betcocorp/bex2.0/compare/v6.1.0...v6.2.0) (2026-09-13)
 
 
