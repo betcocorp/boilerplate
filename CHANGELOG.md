@@ -1,3 +1,24 @@
+# [6.5.0](https://github.com/betcocorp/bex2.0/compare/v6.4.0...v6.5.0) (2026-09-14)
+
+
+### Bug Fixes
+
+* **B0-984:** gate fact-tool enforcement behind a flag and make the forced round additive ([2260444](https://github.com/betcocorp/bex2.0/commit/2260444c93f003130812b6b8e117c084d6a55107))
+* **B0-984:** register the fact-tool enforcement flag on the settings page ([88e6de1](https://github.com/betcocorp/bex2.0/commit/88e6de129d53c770a1d062f12714578d665c2ad4))
+* **B0-989:** link sweep ledger rows to their run before execution is awaited ([bea00b6](https://github.com/betcocorp/bex2.0/commit/bea00b6b030a442ff9817e11cf66c7a75ea08c6f))
+* **B0-991:** preflight the grading provider and re-arm reports that failed for a missing key ([19ddbbc](https://github.com/betcocorp/bex2.0/commit/19ddbbcf11af708f4f9413311b52c658156af78e))
+* **B0-991:** re-owe failed grading calls on every report entry, not only after a classed failure ([8c26648](https://github.com/betcocorp/bex2.0/commit/8c26648a7d3fff2b8e1a18594e6b5c615101f396))
+* **B0-992:** compare numeric and boolean settings by value before offering a reset ([fbf3d31](https://github.com/betcocorp/bex2.0/commit/fbf3d3188d7f56f7d7182cb001a88418cef51ae8))
+
+
+### Features
+
+* **B0-990:** yield test-run execution before the 300s ceiling and recover stalled runs ([1aabf96](https://github.com/betcocorp/bex2.0/commit/1aabf96e099b6f768343e29521efc46d67e39050))
+* **B0-992:** render /admin/settings from the settings table with per-row defaults ([bdaa122](https://github.com/betcocorp/bex2.0/commit/bdaa122767530db430cf5cfc201d433875b7042a))
+* **B0-993:** allow multiple expected canonical products per test item ([41dcc6e](https://github.com/betcocorp/bex2.0/commit/41dcc6e520ff8f49e4ca3c4f4623b7405be1b829))
+* **B0-994:** open expected sources as markdown cards from the test prompts table ([2a8fb9b](https://github.com/betcocorp/bex2.0/commit/2a8fb9b280f54e4ea09d995aefbb5e2bc10dc2b0))
+* commit current unstaged dev updates ([0e64aa3](https://github.com/betcocorp/bex2.0/commit/0e64aa3f1c2ecc7a13c8575d6a60c20cbcc5622f))
+
 # [6.4.0](https://github.com/betcocorp/bex2.0/compare/v6.3.0...v6.4.0) (2026-09-14)
 
 
