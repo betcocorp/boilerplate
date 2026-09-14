@@ -50,6 +50,7 @@ export const TOOL_EXAMPLES: Record<string, Record<string, unknown>> = {
   },
   get_product_category: {
     productId: 'pH7Q',
+    productName: '',
   },
   find_products_by_category: {
     query: 'disinfectants',

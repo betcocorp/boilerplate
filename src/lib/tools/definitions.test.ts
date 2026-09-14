@@ -217,3 +217,23 @@ describe('get_dispenser_asset / get_floor_asset wiring (B0-529)', () => {
     }
   });
 });
+
+/**
+ * B0-983 — the descriptions were rewritten for disambiguation, which grew the serialized tool set
+ * from ~18k to ~28.5k chars. These schemas ride on every model call (B0-437), so pin a ceiling: a
+ * new tool or a longer description must consciously raise this number, not drift past it.
+ */
+describe('tool schema size budget (B0-983)', () => {
+  it('keeps the full serialized tool set under the ceiling', () => {
+    expect(JSON.stringify(productSupportTools).length).toBeLessThan(30_000);
+  });
+
+  it('gives every tool a description with the shared USE WHEN / NOT FOR skeleton', () => {
+    for (const tool of productSupportTools) {
+      if (tool.type !== 'function') continue;
+      const description = tool.description ?? '';
+      expect(description, `${tool.name} names when to use it`).toMatch(/USE WHEN:/);
+      expect(description, `${tool.name} names the neighbouring tool to use instead`).toMatch(/NOT FOR:/);
+    }
+  });
+});

@@ -3,6 +3,19 @@ import type { Tool } from 'openai/resources/responses/responses';
 import type { ProductToolName } from '~/lib/tools/tool-schemas';
 
 /**
+ * B0-983 — every description below follows one shape so the model compares tools the same way:
+ * one sentence on what the tool does and at what grain (one product / a category / a competitor /
+ * a knowledge procedure); USE WHEN — the question shapes that belong here; NOT FOR — the
+ * neighbouring tool that owns each adjacent shape; RETURNS — the fields to read plus any
+ * regulated-data rule. Tool NAMES are stable identifiers (prompts, `RETRIEVAL_TOOL_NAMES`,
+ * timeouts, persisted `toolSummary`, the eval harness) and are deliberately unchanged.
+ *
+ * Size budget: these schemas ride on every model call (B0-437; the prompt cache holds them as
+ * part of the static prefix). B0-983 grew the serialized set from ~18k to ~28.5k chars for the
+ * disambiguation text — `definitions.test.ts` pins a 30k ceiling so it cannot creep further.
+ */
+
+/**
  * B0-364: on the product-fact tools the `productId` parameter is really a product NAME
  * (it is resolved by name, never used as a database id). Models naturally send
  * `productName` instead — the spelling the prose uses — so both keys are accepted and
@@ -11,13 +24,24 @@ import type { ProductToolName } from '~/lib/tools/tool-schemas';
 const PRODUCT_REF_PARAM = {
   type: 'string',
   description:
-    'Betco product or product-line NAME or code (e.g. "pH7Q", "AF315", "4020"). Resolved by name — this is not a database id. Equivalent to `productName`.',
+    'BETCO product or product-line name or code (e.g. "pH7Q", "AF315", "4020"). Resolved by name, not a database id. Alias: `productName` — send one of the two.',
 } as const;
 
 const PRODUCT_NAME_ALIAS_PARAM = {
   type: 'string',
-  description: 'Alias for `productId` — pass the product name here or there, not both.',
+  description: 'Alias for `productId` — send one of the two, not both.',
 } as const;
+
+/**
+ * B0-547/B0-983 — what a `sources[]` entry from the approved-document retrieval tools is. The
+ * previous copy said "a full approved document", contradicting the shared prompt (and the 8k model
+ * body cap in `~/lib/tools/model-tool-payload`) inside the same request.
+ */
+const SOURCES_EXCERPT_NOTE =
+  'RETURNS `sources[]` (up to 3) — approved-document EXCERPTS, not whole documents: read the full `documentBody`, cite `documentId` as `[doc:uuid]`; `documentBodyTruncated: true` means more exists — re-query rather than assume a fact is absent.';
+
+const REGULATED_TRANSCRIPTION_RULE =
+  'Transcribe ratios, oz/gal, mL/L, ppm, %, contact times, temperatures, EPA/DIN numbers, and log reductions exactly as written — never round, convert, average, or infer.';
 
 /**
  * OpenAI Responses function tools — parameters are JSON Schema objects (strict mode off for flexibility).
@@ -27,32 +51,36 @@ export const productSupportTools: Tool[] = [
     type: 'function',
     name: 'search_product_docs',
     strict: false,
-    description:
-      'Search Betco product documentation (RAG). Use for general product + topic questions. Returns up to 3 sources where each source is a full approved document (read `documentBody`, not just `snippet`). Provide `topic` or `freeformQuery` — pass `freeformQuery` alone (and leave `productName` empty) when the product name is unknown. By default the "Size and package variants" section (SKUs, inventory IDs, web availability, MSRPs) is collapsed to a one-line note; set `includeVariants: true` when the question actually asks about sizes, SKUs, package options, or pricing.',
+    description: [
+      'Semantic search over Betco\'s approved product documents (labels, SDS, product-line profiles, knowledge bulletins). The DEFAULT retrieval tool when no more specific tool owns the question.',
+      'USE WHEN: any product, label, SDS, feature, or procedure question; a described job with no product named; a follow-up after another tool returned nothing.',
+      'HOW: product known → `productName` + `topic` (+ `surfaceType` if named). Product unknown → `freeformQuery` ALONE, `productName` empty.',
+      'NOT FOR: dilution ratio, contact time, EPA registration, kill claim → `get_efficacy_data` first; every product in a category → `get_products_in_category`; competitor product → `lookup_cross_reference`; dispenser procedures → `get_dispenser_asset`; floor coat/coverage charts → `get_floor_asset`; non-Betco facts → `web_search`.',
+      SOURCES_EXCERPT_NOTE,
+      'The "Size and package variants" section (SKUs, inventory IDs, web availability, MSRPs) is collapsed to one line unless `includeVariants: true`.',
+    ].join(' '),
     parameters: {
       type: 'object',
       properties: {
         productName: {
           type: 'string',
-          description: 'Specific Betco product name when known (e.g. "Green Earth All Purpose"). Leave empty when using freeformQuery.',
+          description: 'The BETCO product name or code when known (e.g. "Green Earth All Purpose", "pH7Q"). Leave empty when using `freeformQuery`.',
         },
         topic: {
           type: 'string',
-          description:
-            'Topic or question type (e.g. "dilution", "kill claims", "PPE"). Optional when `freeformQuery` is provided.',
+          description: 'What is being asked about the product (e.g. "dilution", "kill claims", "PPE", "directions for use"). Pair with `productName`; optional with `freeformQuery`.',
         },
         surfaceType: {
           type: 'string',
-          description: 'Optional surface context.',
+          description: 'Optional surface the user named (e.g. "VCT", "stainless steel", "grout").',
         },
         freeformQuery: {
           type: 'string',
-          description: 'Use instead of productName + topic for broad searches where the product is not yet known (e.g. "best product for removing mineral scale from toilet bowls").',
+          description: 'The question in natural language, used INSTEAD OF `productName` + `topic` when the product is unknown (e.g. "best product for mineral scale in toilet bowls").',
         },
         includeVariants: {
           type: 'boolean',
-          description:
-            'Set true ONLY when the question asks about sizes, SKUs, package options, or pricing — returns the full "Size and package variants" section instead of the default one-line note.',
+          description: 'Set true ONLY when the question asks about sizes, SKUs, package options, or pricing — returns the full "Size and package variants" section.',
         },
       },
       // B0-362: `topic` is NOT required — the model is told to call this with `freeformQuery`
@@ -64,8 +92,12 @@ export const productSupportTools: Tool[] = [
     type: 'function',
     name: 'get_product_spec',
     strict: false,
-    description:
-      'Retrieve spec-oriented excerpts for a Betco product, identified by product NAME or code (e.g. "pH7Q", "AF315"). Pass it as `productId` or `productName` — both keys are accepted.',
+    description: [
+      'Retrieve technical-specification excerpts (spec sheet, technical data, performance data — pH, coverage, dilution range as printed, form, color, scent) for ONE named Betco product. A fixed spec-focused variant of `search_product_docs`.',
+      'USE WHEN: the user asks for a product\'s specs or technical data, or you need to confirm a candidate\'s stated properties before recommending or comparing it.',
+      'NOT FOR: verified dilution/contact-time/EPA/kill-claim values → `get_efficacy_data`; hazards, PPE, first aid, storage → `get_safety_constraints`; unknown product or a general question → `search_product_docs`.',
+      SOURCES_EXCERPT_NOTE,
+    ].join(' '),
     parameters: {
       type: 'object',
       properties: {
@@ -79,16 +111,30 @@ export const productSupportTools: Tool[] = [
     type: 'function',
     name: 'get_approved_usage_guidance',
     strict: false,
-    description:
-      'Retrieve approved usage / procedure documentation for a product (by NAME, as `productId` or `productName`) on a given task and surface. Returns up to 3 full approved documents in `sources[].documentBody`.',
+    description: [
+      'Retrieve the label\'s approved directions for use for ONE named Betco product on ONE stated task and surface (e.g. AF315 / "daily damp mopping" / "VCT").',
+      'USE WHEN: "how do I use <product> for <task> on <surface>?" and the user actually gave a task AND a surface.',
+      '`task` and `surfaceType` are REQUIRED — if either is missing, call `search_product_docs` with `topic: "directions for use"` instead of inventing one.',
+      'NOT FOR: the exact dilution figure → `get_efficacy_data`; "is it safe on <surface>?" → `get_compatibility_rules`; dispenser setup → `get_dispenser_asset`.',
+      SOURCES_EXCERPT_NOTE,
+    ].join(' '),
     parameters: {
       type: 'object',
       properties: {
         productId: PRODUCT_REF_PARAM,
         productName: PRODUCT_NAME_ALIAS_PARAM,
-        task: { type: 'string' },
-        surfaceType: { type: 'string' },
-        environment: { type: 'string' },
+        task: {
+          type: 'string',
+          description: 'The cleaning task in the user\'s words (e.g. "daily damp mopping"). Required.',
+        },
+        surfaceType: {
+          type: 'string',
+          description: 'The surface the user named (e.g. "VCT", "stainless steel"). Required — do not guess one.',
+        },
+        environment: {
+          type: 'string',
+          description: 'Optional facility or setting when stated (e.g. "healthcare", "food service").',
+        },
       },
       required: ['task', 'surfaceType'],
     },
@@ -97,8 +143,13 @@ export const productSupportTools: Tool[] = [
     type: 'function',
     name: 'get_safety_constraints',
     strict: false,
-    description:
-      'Retrieve safety / SDS-oriented documentation (PPE, hazards, precautions) for a product identified by NAME. Pass it as `productId` or `productName` — both keys are accepted. Returns up to 3 full approved documents in `sources[].documentBody`.',
+    description: [
+      'Retrieve safety documentation (SDS and label hazard content: hazard statements, PPE, precautions, first aid, handling and storage conditions, shelf-life figures where printed) for ONE named Betco product.',
+      'USE WHEN: "what PPE", "is it hazardous/corrosive/flammable", "what if it gets on skin or in eyes", "how should it be stored", "what is the shelf life", "is it still good after freezing".',
+      'NOT FOR: whether it may be used on a surface → `get_compatibility_rules` (named surface) or `list_disallowed_uses` (what it must not touch); dilution, contact time, kill claims → `get_efficacy_data`; the steps for an actual exposure incident → `get_escalation_policy`.',
+      SOURCES_EXCERPT_NOTE,
+      'Transcribe hazard statements, PPE, and storage temperatures exactly as printed and name the SDS section.',
+    ].join(' '),
     parameters: {
       type: 'object',
       properties: {
@@ -112,15 +163,26 @@ export const productSupportTools: Tool[] = [
     type: 'function',
     name: 'get_compatibility_rules',
     strict: false,
-    description:
-      'Retrieve compatibility guidance for product (by NAME, as `productId` or `productName`) + surface (+ optional material).',
+    description: [
+      'Answer "can <Betco product> be used on <this specific surface>?" — the label\'s compatibility statements for ONE named product paired with ONE surface the user named (`surfaceType`), optionally narrowed by `materialType`.',
+      'USE WHEN: the user named BOTH a product and a specific surface or material and asks whether the pairing is approved.',
+      '`surfaceType` is REQUIRED. No surface named → do not invent one; use `list_allowed_surfaces` ("what can I use it on?") or `list_disallowed_uses` ("what must I not use it on?").',
+      'NOT FOR: how to apply it → `get_approved_usage_guidance`; hazards or PPE → `get_safety_constraints`.',
+      SOURCES_EXCERPT_NOTE,
+    ].join(' '),
     parameters: {
       type: 'object',
       properties: {
         productId: PRODUCT_REF_PARAM,
         productName: PRODUCT_NAME_ALIAS_PARAM,
-        surfaceType: { type: 'string' },
-        materialType: { type: 'string' },
+        surfaceType: {
+          type: 'string',
+          description: 'The specific surface asked about (e.g. "marble", "LVT"). Required.',
+        },
+        materialType: {
+          type: 'string',
+          description: 'Optional material class (e.g. "natural stone", "soft metal").',
+        },
       },
       required: ['surfaceType'],
     },
@@ -129,8 +191,13 @@ export const productSupportTools: Tool[] = [
     type: 'function',
     name: 'list_allowed_surfaces',
     strict: false,
-    description:
-      'Find documentation excerpts that describe allowed / compatible surfaces for a product identified by NAME. Pass it as `productId` or `productName` — both keys are accepted.',
+    description: [
+      'List the surfaces and substrates ONE named Betco product is APPROVED for per its label — the open question "what can I use <product> on?" with no particular surface in mind.',
+      'USE WHEN: the user asks which surfaces, materials, or substrates a product is approved or recommended for.',
+      'NOT FOR: a specific surface the user named → `get_compatibility_rules`; what it must NOT be used on → `list_disallowed_uses`; step-by-step directions → `get_approved_usage_guidance`.',
+      SOURCES_EXCERPT_NOTE,
+      'Report only surfaces the excerpt lists; an unlisted surface is "not stated on the label", not "not allowed".',
+    ].join(' '),
     parameters: {
       type: 'object',
       properties: {
@@ -144,8 +211,13 @@ export const productSupportTools: Tool[] = [
     type: 'function',
     name: 'list_disallowed_uses',
     strict: false,
-    description:
-      'Find documentation excerpts about prohibited uses, incompatibility, or warnings for a product identified by NAME. Pass it as `productId` or `productName` — both keys are accepted.',
+    description: [
+      'List the prohibited uses, incompatible surfaces, and "do not use on / do not mix with" warnings printed for ONE named Betco product — "what must I NOT use <product> on or for?".',
+      'USE WHEN: the user asks what a product should not be used on, what it damages, or what it must not be mixed with.',
+      'NOT FOR: a specific surface the user named → `get_compatibility_rules`; the approved surfaces → `list_allowed_surfaces`; PPE, hazards, first aid, storage → `get_safety_constraints`.',
+      SOURCES_EXCERPT_NOTE,
+      'Report only prohibitions the excerpt states — never extend a warning to a surface the label does not mention.',
+    ].join(' '),
     parameters: {
       type: 'object',
       properties: {
@@ -159,12 +231,19 @@ export const productSupportTools: Tool[] = [
     type: 'function',
     name: 'get_escalation_policy',
     strict: false,
-    description:
-      'Returns internal escalation guidance by issue type (policy text, not customer-specific data).',
+    description: [
+      'Return Betco\'s INTERNAL escalation checklist (summary + steps) for one of three issue types: safety/exposure/SDS incident, unsettled surface/material compatibility, or the default product-support escalation. Static policy text — reads no product data.',
+      'USE WHEN: you have already decided the question must go to a human and need the steps to state.',
+      'NOT FOR: any product fact, document, or safety statement → the retrieval tools.',
+      'RETURNS `policy` with `summary` and `steps[]`.',
+    ].join(' '),
     parameters: {
       type: 'object',
       properties: {
-        issueType: { type: 'string' },
+        issueType: {
+          type: 'string',
+          description: 'Free-text issue label. Containing "safety", "exposure", or "sds" → safety policy; "compat", "surface", or "material" → compatibility policy; anything else → default policy.',
+        },
       },
       required: ['issueType'],
     },
@@ -173,23 +252,29 @@ export const productSupportTools: Tool[] = [
     type: 'function',
     name: 'get_products_in_category',
     strict: false,
-    description:
-      'Return EVERY Betco product line that belongs to a given website category (e.g. "Floor Care", "Disinfectants", "Odor Management", "glass cleaner", "floor stripper", "degreaser"), each with its item number(s)/SKU. Use this for filter-style questions ("what floor care products do you have?", "show me all disinfectants") and for "best/strongest/most effective X" or "what should I use for X" asks — Betco product data has no cross-product ranking, so the correct answer to those is the full category list, not a single pick. Pass the exact or approximate category name; set categoryLevel to narrow to prod_type, sub_prod_type, sub_child_prod_type, or prod_class.',
+    description: [
+      'List every Betco PRODUCT LINE in a website category, each with its item numbers (SKUs). The DEFAULT tool for catalog-list questions.',
+      'USE WHEN: "what floor care products do you have?", "show me all disinfectants"; and "best / strongest / most effective X" or "what should I use for X" — Betco data has no cross-product ranking, so the correct answer is the FULL category list, not a single pick.',
+      'HOW: `categoryName` may be the exact website category ("Floor Care") or an approximate product-type phrase ("glass cleaner", "degreaser") — matching is tolerant. Set `categoryLevel` only to pin one hierarchy level.',
+      'Product lines are the grain labels and `get_efficacy_data` use — pass the same `categoryName` as `get_efficacy_data` `category` for verified facts across the list in ONE call. Zero products → retry with `find_products_by_category` (a stricter resolver that knows some shopper phrasings) before calling the category empty.',
+      'NOT FOR: one named product → `get_product_category` or `search_product_docs`; a competitor product → `lookup_cross_reference`; the web-catalog SKU listing → `find_products_by_category`.',
+      'RETURNS `products[]` (productLineName, category values per level, `items[]` item numbers) and `totalFound`.',
+    ].join(' '),
     parameters: {
       type: 'object',
       properties: {
         categoryName: {
           type: 'string',
-          description: 'Category name to search for (e.g. "Floor Care", "Deodorizers", "Glass", "Air Care").',
+          description: 'Website category name or product-type phrase (e.g. "Floor Care", "Deodorizers", "glass cleaner", "degreaser"). Tolerant, case-insensitive match.',
         },
         categoryLevel: {
           type: 'string',
           enum: ['prod_type', 'sub_prod_type', 'sub_child_prod_type', 'prod_class', 'any'],
-          description: 'Which level of the category hierarchy to match against. Defaults to "any".',
+          description: 'Hierarchy level to match against. Defaults to "any"; set only when the user named that level.',
         },
         maxResults: {
           type: 'number',
-          description: 'Max products to return (default 20, max 50).',
+          description: 'Max product lines to return (default 20, max 50). `totalFound` still reports the full count.',
         },
       },
       required: ['categoryName'],
@@ -199,36 +284,44 @@ export const productSupportTools: Tool[] = [
     type: 'function',
     name: 'get_product_category',
     strict: false,
-    description:
-      'Return the website category (prod_type → sub_prod_type → sub_child_prod_type) for a specific Betco product. Use when the user asks what category a product falls under, or to find related products in the same category.',
+    description: [
+      'Look up which website category ONE named Betco product belongs to — the reverse of `get_products_in_category`. Returns the category chain (prod_type → sub_prod_type → sub_child_prod_type) and prod_class for its product line.',
+      'USE WHEN: the user asks what category or type a product is; or as step one of "what is similar to / an alternative to <Betco product>" — pass the returned category to `get_products_in_category` to list its siblings.',
+      'NOT FOR: listing products directly → `get_products_in_category`; a product\'s own facts → `search_product_docs`, `get_efficacy_data`; a competitor product → `lookup_cross_reference`.',
+      'Accepts the product name or code as `productId` (or `productName`).',
+      'RETURNS `productLineName` and `category` (`hasCategory: false`, `category: null` when the profile carries none).',
+    ].join(' '),
     parameters: {
       type: 'object',
       properties: {
-        productId: {
-          type: 'string',
-          description: 'Betco product name (e.g. "AF315") or product code (e.g. "315").',
-        },
+        productId: PRODUCT_REF_PARAM,
+        productName: PRODUCT_NAME_ALIAS_PARAM,
       },
-      required: ['productId'],
+      required: [],
     },
   },
   {
     type: 'function',
     name: 'find_products_by_category',
     strict: false,
-    description:
-      "Deterministically map a category query (e.g. \"floor strippers\", \"glass cleaner\", \"disinfectants\", \"hand soap\") to Betco's website product taxonomy and return the actual web products in that category — SKU, title, and canonical betco.com URL — with NO semantic search. Prefer this for filter-style questions like \"what floor strippers do you have?\" or \"show me all disinfectants\". If the query does not confidently match a category, the tool returns path:\"semantic\"; in that case fall back to search_product_docs.",
+    description: [
+      'Resolve a product-type phrase to ONE node of the betco.com taxonomy and return the sellable WEB CATALOG items under it (SKU, title, short description, web status). Deterministic — no semantic search.',
+      'USE WHEN: the user wants the web-catalog listing for a product type ("which floor strippers are on your website?"), or as the fallback after `get_products_in_category` returned zero products. Otherwise `get_products_in_category` is the default list tool (product LINES with item numbers).',
+      'Strict confidence gate: no confident match → `path: "semantic"` with `reason` and `topCandidate`; then call `get_products_in_category` or `search_product_docs` — do not retry with rewordings.',
+      '`url` is DERIVED from legacy catalog fields and not verified to resolve — do not present it as a confirmed link.',
+      'NOT FOR: a named Betco product → `get_product_category`; a competitor product → `lookup_cross_reference`.',
+      'RETURNS `path: "category"` with `node`, `confidence`, `productCount`, `products[]`.',
+    ].join(' '),
     parameters: {
       type: 'object',
       properties: {
         query: {
           type: 'string',
-          description:
-            'Category or product-type phrase, e.g. "floor strippers", "glass cleaner", "warewashing detergents".',
+          description: 'The product-type phrase in the user\'s words (e.g. "floor strippers", "glass cleaner", "warewashing detergents"). Not a product name.',
         },
         maxResults: {
           type: 'number',
-          description: 'Max products to return (default 25, max 50).',
+          description: 'Max web products to return (default 25, max 50). `productCount` still reports the full count.',
         },
       },
       required: ['query'],
@@ -238,22 +331,28 @@ export const productSupportTools: Tool[] = [
     type: 'function',
     name: 'lookup_cross_reference',
     strict: false,
-    description:
-      'Find Betco equivalent products from legacy cross-reference tables using a competitor brand and product name.',
+    description: [
+      'Look up a COMPETITOR product in Betco\'s cross-reference tables and return the Betco equivalent(s). Step ONE of every competitor cross-reference.',
+      'Both parameters describe the COMPETITOR, not a Betco product: `brand` = competitor manufacturer ("Spartan", "Diversey"), `productName` = the competitor\'s product ("#1 Laundry Break", "Virex II 256").',
+      'USE WHEN: the user asks for Betco\'s equivalent to or replacement for a named competitor product — call this FIRST, before any other search.',
+      'Both fields are REQUIRED and non-empty — never send empty strings. Competitor product named but no brand → `recommend_cross_reference` instead (brand optional there). No competitor product named → this tool does not apply.',
+      'NOT FOR: Betco-to-Betco alternatives → `get_product_category` then `get_products_in_category`; Betco product facts → `search_product_docs`.',
+      'RETURNS `matches[]` (Betco equivalents with confidence) and `fallbackRecommended`. Empty `matches` or `fallbackRecommended: true` → call `recommend_cross_reference` next.',
+    ].join(' '),
     parameters: {
       type: 'object',
       properties: {
         brand: {
           type: 'string',
-          description: 'Competitor brand, for example "Spartan".',
+          description: 'The COMPETITOR manufacturer or brand (e.g. "Spartan", "Diversey"). Required, non-empty. Never "Betco".',
         },
         productName: {
           type: 'string',
-          description: 'Competitor product name, for example "#1 Laundry Break".',
+          description: 'The COMPETITOR\'s product name (e.g. "#1 Laundry Break"). Required, non-empty. Here `productName` is NOT a Betco product.',
         },
         maxResults: {
           type: 'number',
-          description: 'Optional max number of returned matches (default 3, max 10).',
+          description: 'Optional max number of Betco matches (default 3, max 10).',
         },
       },
       required: ['brand', 'productName'],
@@ -263,18 +362,23 @@ export const productSupportTools: Tool[] = [
     type: 'function',
     name: 'recommend_cross_reference',
     strict: false,
-    description:
-      "Web-grounded fallback for competitor cross-reference. Given a competitor product (and optional brand) that `lookup_cross_reference` could NOT confidently match, this researches it via web search, extracts its spec, and recommends the closest Betco equivalent product(s) with an overall confidence and evidence. Call this ONLY after `lookup_cross_reference` returns no match or `fallbackRecommended: true`. It returns `answered` or a decline — if declined, relay the decline reason verbatim and do NOT invent a product, SKU, or claim.",
+    description: [
+      'Web-grounded competitor cross-reference — step TWO, only when the cross-reference tables could not answer. Researches the competitor product via web search, extracts its spec, and recommends the closest Betco equivalent(s) with `overallConfidence` and `evidence`.',
+      'USE WHEN: `lookup_cross_reference` returned empty `matches` or `fallbackRecommended: true`; or the user named a competitor product but no brand, so `lookup_cross_reference` cannot be called.',
+      '`competitorProduct` = the COMPETITOR\'s product (required); `competitorBrand` = its manufacturer when known (optional, improves confidence).',
+      'RETURNS `answered: true` with `candidates[]`, or a decline (`answered: false`, `declineReason`). Treat `answered`, `declineReason`, and `overallConfidence` as authoritative: relay a decline verbatim and NEVER invent a Betco product, SKU, or claim.',
+      'NOT FOR: a competitor not yet looked up when brand and product are both known → `lookup_cross_reference` first; Betco product facts → `search_product_docs`; general research → `web_search`.',
+    ].join(' '),
     parameters: {
       type: 'object',
       properties: {
         competitorProduct: {
           type: 'string',
-          description: 'Competitor product name (required), e.g. "BNC-15".',
+          description: 'The COMPETITOR\'s product name (required), e.g. "BNC-15", "Virex II 256".',
         },
         competitorBrand: {
           type: 'string',
-          description: 'Competitor brand/company if known (optional but improves confidence), e.g. "Spartan".',
+          description: 'The competitor manufacturer or brand when known (optional, improves confidence), e.g. "Spartan".',
         },
         maxResults: {
           type: 'number',
@@ -288,8 +392,17 @@ export const productSupportTools: Tool[] = [
     type: 'function',
     name: 'get_efficacy_data',
     strict: false,
-    description:
-      'Return VERIFIED structured facts for a product from the fact tables — dilution (oz/gal), contact/dwell time, EPA registration, and per-organism kill claims — plus, when available, the authoritative lab-report citation (formula, version, lab, Project #, and the raw PDF\'s S3 source) from the efficacy document corpus. This does NOT run prose/semantic retrieval; it reads the typed dilution/contact-time/EPA columns directly, so it is an EXACT lookup, not a paraphrase. Use it for dilution ratio questions and any efficacy / "what does it kill" / kill-claim / contact-time question. Returns `facts` and/or `labReport` with the verified values — each fact row carries its own `confidence` (default 1.0 = source-of-record; below 1.0 means treat it as less certain and say so) — cite the lab report`s source document id (see `sources`) per the standard `[doc:uuid]` convention when present, citing the specific version that generated the numbers even if a newer formula reuses that data. When a lab-report excerpt shows a table with multiple organisms or multiple product/formula/version blocks, cite ONLY the row and table that name the exact product/formula/version asked about — never a sibling block in the same document. A "No Reduction" / "NR" / blank log-reduction cell is NEVER a positive kill claim: state the absence exactly as printed, or decline — never invert it into "yes, it reduced X" (B0-802). Returns `facts: null` (and `labReport: null`) plus a `note` only when NEITHER is on file — in that case do NOT estimate or infer a value; tell the user the data is not verified. Also returns `fastDrawDilution` (nullable, single-product form only) — dilution/yield figures specific to the FastDraw dispenser, kept as its OWN field rather than folded into `facts`: for some products it legitimately disagrees with `facts.dilutionDisplay` because the two describe different dilution contexts (general use vs. FastDraw). Match whichever field the question is actually asking about and never blend the two into one number. BATCH FORM: whenever you need this data for MORE THAN ONE product in the same turn (e.g. "compare the kill claims of these 5 disinfectants", or any per-category/per-line sweep), do NOT call this once per product — pass `productIds` (array of names/codes) or `category` instead of `productId`/`productName` to get every product\'s facts in ONE call. The batch response returns `results` (one entry per resolved product, each shaped like the single-product response) instead of top-level `facts`/`labReport`.',
+    description: [
+      'Return VERIFIED structured facts for a Betco product from the fact tables — dilution (oz/gal), contact/dwell time, EPA registration, per-organism kill claims — plus, when on file, the authoritative lab-report citation (formula, version, lab, Project #, raw PDF S3 source). An EXACT lookup of typed columns, not a paraphrase of prose; runs no semantic search.',
+      'USE WHEN: any dilution-ratio question, and any efficacy / "what does it kill" / kill-claim / log-reduction / contact-time / EPA-registration question — call it FIRST, before `search_product_docs`.',
+      'SINGLE PRODUCT: `productId` (or `productName`), plus `organism` to filter kill claims. BATCH: for MORE THAN ONE product in the same turn (a comparison, a whole category, "which of these kill X") do NOT call once per product — send `productIds` (array of names/codes) or `category` (website category, resolved like `get_products_in_category`); the batch response returns `results[]` (one entry per product, each shaped like the single-product response) instead of top-level `facts`/`labReport`.',
+      'NOT FOR: how to apply the product → `get_approved_usage_guidance`; dispenser or ratio-calculation procedures → `get_dispenser_asset`; hazards or PPE → `get_safety_constraints`.',
+      'RETURNS `facts` and/or `labReport` plus `sources[]`. Each fact row carries its own `confidence` (1.0 = source of record; below 1.0 → say it is less certain). `resolvedProductTitle` is the product the data actually belongs to — if it differs from what you asked for, tell the user. Cite the lab report\'s `documentId` as `[doc:uuid]`, naming the specific formula/version that generated the numbers even if a newer formula reuses them.',
+      'A lab-report excerpt may hold several organisms or product/formula/version blocks: cite ONLY the row and table naming the exact product/formula/version asked about — never a sibling block. A "No Reduction" / "NR" / blank log-reduction cell is NEVER a positive kill claim: state the absence exactly as printed or decline — never invert it into "yes, it reduced X" (B0-802).',
+      '`fastDrawDilution` (nullable, single-product form only) holds FastDraw-dispenser-specific dilution/yield figures, kept as its OWN field because for some products it legitimately differs from `facts.dilutionDisplay` (general use vs. the FastDraw dispenser). Answer with whichever field the question is about; never blend the two into one number.',
+      '`facts: null` and `labReport: null` plus a `note` means NEITHER is on file — do NOT estimate or infer; after the `search_product_docs` follow-up the shared rules require, tell the user the verified value is not on file.',
+      REGULATED_TRANSCRIPTION_RULE,
+    ].join(' '),
     parameters: {
       type: 'object',
       properties: {
@@ -298,22 +411,20 @@ export const productSupportTools: Tool[] = [
         productIds: {
           type: 'array',
           items: { type: 'string' },
-          description:
-            'BATCH FORM: array of product names/codes to fetch efficacy data for in ONE call, instead of one `get_efficacy_data` call per product. Use this OR `productId`/`productName`, not both.',
+          description: 'BATCH FORM: Betco product names/codes to fetch in ONE call. Use exactly one of `productId`/`productName`, `productIds`, `category`.',
         },
         category: {
           type: 'string',
-          description:
-            'BATCH FORM: fetch efficacy data for every product in this website category (e.g. "Disinfectants") in ONE call, instead of one `get_efficacy_data` call per product. Use this OR `productId`/`productIds`, not multiple.',
+          description: 'BATCH FORM: every product line in this website category (e.g. "Disinfectants") in ONE call; same matching as `get_products_in_category`.',
         },
         categoryLevel: {
           type: 'string',
           enum: ['prod_type', 'sub_prod_type', 'sub_child_prod_type', 'prod_class', 'any'],
-          description: 'Only used with `category` — which level of the category hierarchy to match against. Defaults to "any".',
+          description: 'Only with `category` — which hierarchy level to match. Defaults to "any".',
         },
         organism: {
           type: 'string',
-          description: 'Optional organism/pathogen to filter kill claims, e.g. "Norovirus".',
+          description: 'Optional organism or pathogen to filter kill claims to (e.g. "Norovirus", "C. difficile"). Omit for every claim on file.',
         },
       },
       required: [],
@@ -323,23 +434,27 @@ export const productSupportTools: Tool[] = [
     type: 'function',
     name: 'get_dispenser_asset',
     strict: false,
-    description:
-      'Retrieve Betco dispenser / dilution-control reference documents from the approved knowledge corpus — proportioner and dispenser setup guides, metering-tip selection, calibration procedures, and dilution-ratio calculation guides. Use this for "how is the dispenser set up / which tip / how do I calculate the ratio" questions, where the answer is a documented PROCEDURE rather than a per-product fact. For the exact verified dilution ratio of a specific product, call `get_efficacy_data` instead — this tool returns procedure text, not the fact tables. Returns up to 5 full knowledge documents in `sources[].documentBody`; transcribe any ratio, oz/gal, mL/L, or dwell time exactly as written and cite the source document id.',
+    description: [
+      'Retrieve Betco DISPENSER and dilution-control PROCEDURE documents from the approved knowledge corpus — proportioner/dispenser setup, metering-tip selection, calibration, installation, maintenance, troubleshooting, backflow, and dilution-ratio calculation guides.',
+      'USE WHEN: "how is the <dispenser> set up", "which metering tip", "how do I calibrate it", "how do I calculate the ratio from a tip", "how do I install/troubleshoot it" — answers that are a documented PROCEDURE, not a per-product fact.',
+      'NOT FOR: a product\'s verified dilution ratio → `get_efficacy_data` (this returns procedure text, not the fact tables); floor charts → `get_floor_asset`; label directions → `search_product_docs`.',
+      'Send at least one of `dispenserModel`, `productName`, `topic`. Not anchored to a product line — a product name is only query text.',
+      'RETURNS up to 5 knowledge documents in `sources[].documentBody`; cite `documentId` as `[doc:uuid]`. Transcribe any ratio, oz/gal, mL/L, dwell time, or standard number exactly as written.',
+    ].join(' '),
     parameters: {
       type: 'object',
       properties: {
         dispenserModel: {
           type: 'string',
-          description: 'Dispenser, proportioner, or dilution-control system name/model when the user named one.',
+          description: 'Dispenser, proportioner, or dilution-control system name/model when the user named one (e.g. "FastDraw", "Clario").',
         },
         productName: {
           type: 'string',
-          description: 'Betco product the dispenser is being set up for, when known.',
+          description: 'The BETCO product the dispenser is set up for, when known. Query text only.',
         },
         topic: {
           type: 'string',
-          description:
-            'What is being asked, e.g. "metering tip selection", "calibration", "dilution ratio chart", "installation".',
+          description: 'The procedure asked for, e.g. "metering tip selection", "calibration", "dilution ratio chart", "installation", "troubleshooting".',
         },
         maxResults: {
           type: 'number',
@@ -354,23 +469,27 @@ export const productSupportTools: Tool[] = [
     type: 'function',
     name: 'get_floor_asset',
     strict: false,
-    description:
-      'Retrieve Betco floor-care reference documents from the approved knowledge corpus — coat-count and coverage/yield charts, finish application and dry/cure guidance, top-scrub and recoat procedures, stripping procedures, and pad/equipment guides. Use this for "how many coats", "what coverage should I expect", "what is the top-scrub procedure" style questions on a named surface (VCT, terrazzo, concrete, wood). Returns up to 5 full knowledge documents in `sources[].documentBody`; transcribe coat counts, coverage figures, dry times, and dilution values exactly as written — never round, convert, or average them — and cite the source document id.',
+    description: [
+      'Retrieve Betco FLOOR-CARE PROCEDURE documents from the approved knowledge corpus — coat-count and coverage/yield charts, finish application and dry/cure guidance, top-scrub and recoat, stripping, burnishing, and pad/equipment guides.',
+      'USE WHEN: "how many coats", "what coverage per gallon", "how long between coats", "what is the top-scrub and recoat procedure", "how do I strip this floor" — on a named floor surface (VCT, terrazzo, sealed concrete, hardwood, sport floor).',
+      'NOT FOR: a product\'s verified dilution ratio or contact time → `get_efficacy_data`; dispenser setup → `get_dispenser_asset`; label directions or SDS → `search_product_docs`; which finish products exist → `get_products_in_category`.',
+      'Send at least one of `surfaceType`, `productName`, `procedure`. Not anchored to a product line — a product name is only query text.',
+      'RETURNS up to 5 knowledge documents in `sources[].documentBody`; cite `documentId` as `[doc:uuid]`. Transcribe coat counts, coverage figures, dry times, and dilution values exactly as written — never round, convert, or average them.',
+    ].join(' '),
     parameters: {
       type: 'object',
       properties: {
         surfaceType: {
           type: 'string',
-          description: 'Floor surface named by the user, e.g. "VCT", "terrazzo", "sealed concrete", "hardwood".',
+          description: 'Floor surface named by the user, e.g. "VCT", "terrazzo", "sealed concrete", "hardwood", "gym floor".',
         },
         productName: {
           type: 'string',
-          description: 'Betco or Basic Coatings product when the question names one.',
+          description: 'The Betco or Basic Coatings product when the question names one. Query text only.',
         },
         procedure: {
           type: 'string',
-          description:
-            'Procedure or chart wanted, e.g. "coat count", "coverage yield", "top scrub recoat", "stripping", "burnishing".',
+          description: 'Procedure or chart wanted, e.g. "coat count", "coverage yield", "top scrub recoat", "stripping", "burnishing", "dry time between coats".',
         },
         maxResults: {
           type: 'number',
@@ -385,24 +504,28 @@ export const productSupportTools: Tool[] = [
     type: 'function',
     name: 'web_search',
     strict: false,
-    description:
-      'General-purpose live web search — NOT a Betco data source. Use it only for things that cannot be on file in Betco\'s own corpus: confirming a competitor company/product\'s identity, general industry or regulatory-body background, or other current external information the user asked about. Do NOT use this for any Betco product fact — dilution ratio, EPA/DIN registration, kill claim, contact time, SDS/PPE data, spec, or compatibility rule — those must come from `get_efficacy_data`, `search_product_docs`, or the other approved-document tools; a web result is never a substitute for the approved corpus and must never be cited as one. Returns the same normalized shape as `/api/v1/tools/web-search`: `results[]` (title, url, snippet, score) plus `answer` and `metrics`. Pass `depth: "advanced"` only when a first `basic` search came back thin.',
+    description: [
+      'General-purpose live web search. NOT a Betco data source — nothing it returns is an approved document.',
+      'USE WHEN: the fact cannot be on file at Betco — confirming a competitor company or product\'s identity, regulatory-body or industry background (EPA, Health Canada, ASSE, OSHA), or other current external information the user asked about.',
+      'NOT FOR: any Betco product fact — dilution ratio, EPA/DIN registration, kill claim, contact time, SDS/PPE, spec, compatibility — those come only from the approved-document tools; a web result is never a substitute for the approved corpus and must never be cited as one. Competitor-to-Betco matching → `lookup_cross_reference` then `recommend_cross_reference`.',
+      'RETURNS `results[]` (title, url, snippet, score) plus `answer` and `metrics`. Start with `depth: "basic"`; use "advanced" only when basic came back thin.',
+    ].join(' '),
     parameters: {
       type: 'object',
       properties: {
         query: {
           type: 'string',
-          description: 'The search query.',
+          description: 'The web search query.',
         },
         depth: {
           type: 'string',
           enum: ['basic', 'advanced'],
-          description: 'Search depth. Defaults to "basic"; use "advanced" only when basic is insufficient.',
+          description: 'Search depth. Defaults to "basic"; use "advanced" only when basic was insufficient.',
         },
         domains: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Optional domain allowlist to restrict results to (e.g. ["epa.gov"]).',
+          description: 'Optional domain allowlist (e.g. ["epa.gov"]).',
         },
         maxResults: {
           type: 'number',
