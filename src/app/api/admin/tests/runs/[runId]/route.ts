@@ -1,5 +1,5 @@
 import { getServerSession } from 'next-auth';
-import { NextResponse } from 'next/server';
+import { NextResponse, after } from 'next/server';
 
 // Allow up to 5 minutes — sequential search evals over large gold sets
 // can take 60–120 s, which exceeds the default Vercel function timeout.
@@ -8,12 +8,20 @@ export const maxDuration = 300;
 import { authorizeAdminTestsRoute } from '~/lib/api/admin-tests-auth';
 // PATCH stays session-only: pausing/resuming a run is a UI action, not something the CI gate does.
 import { authOptions } from '~/lib/auth';
+import { logWarn } from '~/lib/observability/logger';
 import { PERMISSIONS } from '~/lib/permissions/constants';
 import { gateRoute } from '~/lib/permissions/route-gate';
 import {
   claimAndExecuteQueuedRun,
+  claimQueuedTestRun,
+  executeClaimedRun,
   executeQueuedTestRun,
 } from '~/lib/tests/execute-queued-run';
+import {
+  RUN_BACKGROUND_MODE,
+  RUN_HOP_HEADER,
+  RUN_MODE_HEADER,
+} from '~/lib/tests/schedule-run-continuation';
 import { executeSearchRun } from '~/lib/tests/search-run-executor';
 import { executeTestRun } from '~/lib/tests/run-executor';
 import {
@@ -122,6 +130,39 @@ export async function POST(
   if (denied) return denied;
 
   const { runId } = await context.params;
+
+  /**
+   * B0-990 — background mode: claim now, answer 202, execute in `after()` under THIS invocation's
+   * fresh `maxDuration`. This is how a yielded run's continuation hop and the stalled-test-run
+   * sweep pick a run up: the caller is released the moment the claim is won rather than waiting on
+   * the execution, and a lost claim (someone else got there first) is reported, never fought.
+   */
+  if (request.headers.get(RUN_MODE_HEADER) === RUN_BACKGROUND_MODE) {
+    const hop = parseHop(request.headers.get(RUN_HOP_HEADER));
+    const claim = await claimQueuedTestRun(runId);
+
+    if (claim.state === 'not_found') {
+      return NextResponse.json({ error: 'Run not found' }, { status: 404 });
+    }
+    if (claim.state !== 'claimed') {
+      return NextResponse.json({ ok: true, state: claim.state, hop });
+    }
+
+    after(async () => {
+      try {
+        await executeClaimedRun(claim.run, { hop });
+      } catch (error) {
+        logWarn('test_run_background_hop_error', {
+          testResultId: runId,
+          hop,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    });
+
+    return NextResponse.json({ ok: true, runId, state: 'scheduled', hop }, { status: 202 });
+  }
+
   // B0-883 — load/terminal-check/claim/dispatch lives in `executeQueuedTestRun` so the "Run Golden"
   // fan-out executes runs through exactly the same path as this handler.
   const { state } = await executeQueuedTestRun(runId);
@@ -131,6 +172,13 @@ export async function POST(
   }
 
   return NextResponse.json({ ok: true, state });
+}
+
+/** B0-990 — `x-bex-run-hop` is advisory; anything unparseable is treated as the first hop. */
+function parseHop(raw: string | null): number {
+  const parsed = Number.parseInt(raw ?? '', 10);
+  if (!Number.isFinite(parsed) || parsed < 1) return 1;
+  return Math.min(parsed, 1_000);
 }
 
 export async function PATCH(
