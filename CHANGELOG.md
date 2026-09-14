@@ -1,3 +1,16 @@
+# [6.4.0](https://github.com/betcocorp/bex2.0/compare/v6.3.0...v6.4.0) (2026-09-14)
+
+
+### Bug Fixes
+
+* **B0-991:** preflight the grading provider and re-arm reports that failed for a missing key ([911e50c](https://github.com/betcocorp/bex2.0/commit/911e50cc30ccfcb96cff78492eb292e0851da106))
+* **B0-991:** re-owe failed grading calls on every report entry, not only after a classed failure ([af10878](https://github.com/betcocorp/bex2.0/commit/af10878b071db6b1dfa7d44a007fe0bda05025c6))
+
+
+### Features
+
+* **B0-990:** yield test-run execution before the 300s ceiling and recover stalled runs ([6918187](https://github.com/betcocorp/bex2.0/commit/6918187d9b63dee46433a846bc322dcbf962fd4b))
+
 # [6.3.0](https://github.com/betcocorp/bex2.0/compare/v6.2.0...v6.3.0) (2026-09-14)
 
 
