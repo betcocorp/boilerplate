@@ -58,6 +58,30 @@ export async function loadGradingEffort(): Promise<ModelEffort> {
 }
 
 /**
+ * B0-991 — preflight for the grading provider. Returns a human-readable reason when the resolved
+ * model's provider cannot be called from THIS host, or null when grading can proceed.
+ *
+ * Without this, a missing `ANTHROPIC_API_KEY` was only discovered one grading call at a time:
+ * every (case, pass) threw, was recorded as Unable to Evaluate, and the report finally failed at
+ * synthesis — 60 wasted calls per 20-case report and a state that looked graded but was not. The
+ * host is named because the same database is read from several hosts (local dev, the Vercel
+ * deploy), and a failure stored by one is displayed by all of them.
+ */
+export function describeGradingProviderGap(model: string): string | null {
+  if (modelProviderFor(model) !== 'anthropic') return null;
+  if (process.env.ANTHROPIC_API_KEY?.trim()) return null;
+
+  const host =
+    process.env.VERCEL_URL?.trim() || process.env.VERCEL_BRANCH_URL?.trim() || 'local dev server';
+  return (
+    `Grading provider not configured: REPORT_GRADING_MODEL resolves to ${model} (Anthropic) ` +
+    `but ANTHROPIC_API_KEY is not set on the host that tried to grade (${host}). ` +
+    'No grading calls were made. Add the key to that environment and redeploy; the pending-report ' +
+    'sweep will regenerate this report, or use Retry from a host that has it.'
+  );
+}
+
+/**
  * The effort a report should RECORD: only an Anthropic model honours it, so on OpenAI the report
  * stores null rather than a number that had no effect on its grades.
  */

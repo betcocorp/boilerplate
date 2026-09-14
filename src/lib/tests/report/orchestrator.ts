@@ -15,6 +15,7 @@ import { consolidateCasePasses, loadConsistencyConfig } from './consolidate';
 import { resolveExpectedSourceRefs, type ExpectedSourceIndex } from './expected-sources';
 import { loadExpectedSourceIndexForItems } from './expected-sources-repository';
 import {
+  describeGradingProviderGap,
   effortForModel,
   effortFromState,
   loadGradingEffort,
@@ -23,8 +24,10 @@ import {
 } from './grading-model';
 import { renderReportMarkdown } from './render';
 import {
+  GRADING_CALL_FAILED_PREFIX,
   emptyReportState,
   gradingConfigFromState,
+  isResumableFailure,
   parseReportState,
   type CaseScore,
   type ReportState,
@@ -99,6 +102,32 @@ export function hydrateLegacyPassScores(state: ReportState): void {
   for (const [itemId, score] of Object.entries(state.caseScores)) {
     state.casePassScores[itemId] = [score];
   }
+}
+
+/**
+ * B0-991 — drops every pass that is Unable to Evaluate because the grading CALL failed (no key,
+ * provider down, timeout), and un-consolidates the cases that lost one, so `pendingPasses` owes
+ * those calls again. A pass the grader actually judged — including a judged Unable to Evaluate — is
+ * kept: on the 2026-09-11 reports all 20 cases were graded before the key vanished and only the
+ * synthesis failed; throwing those away to "start fresh" would have re-paid for 60 Opus calls.
+ *
+ * Returns how many passes were dropped.
+ */
+export function stripFailedGradingPasses(state: ReportState): number {
+  let removed = 0;
+  for (const [itemId, passes] of Object.entries(state.casePassScores)) {
+    const kept = passes.filter(
+      (pass) => !(pass.unableToEvaluate && pass.uteReason?.startsWith(GRADING_CALL_FAILED_PREFIX)),
+    );
+    if (kept.length === passes.length) continue;
+    removed += passes.length - kept.length;
+    state.casePassScores[itemId] = kept;
+    delete state.caseScores[itemId];
+  }
+  if (removed > 0) {
+    state.completedCases = Object.keys(state.caseScores).length;
+  }
+  return removed;
 }
 
 /** One grading call still owed: this case, this pass index. */
@@ -322,10 +351,34 @@ export async function generateReport(
     // The run's item set changed (e.g. items added) since a prior partial report — start fresh.
     state = fresh();
   }
+  // B0-991 — a report that failed only because its host had no provider credentials is resumed,
+  // not restarted: passes the grader really judged are kept, passes that are UTE because the call
+  // itself failed are dropped and re-owed, and the failure is cleared so the loop below runs.
+  if (isResumableFailure(state)) {
+    hydrateLegacyPassScores(state);
+    stripFailedGradingPasses(state);
+    state.error = null;
+    state.failureClass = null;
+  }
   // B0-943 — before any grading (and before any status write): stand down if another worker is
   // already on this report and we were told not to fight it. Returning the state unchanged leaves
   // the incumbent's lease, status and scores exactly as they were.
   if (options?.skipIfLeased && isLeasedByAnother(state, workerId)) {
+    return state;
+  }
+
+  // B0-991 — preflight the provider BEFORE any grading call or `scoring` write. A missing key used
+  // to surface as one thrown call per (case, pass), each recorded as UTE, with the report failing
+  // only at synthesis; now it fails at once, names the host, and is classed so the pending-report
+  // sweep can regenerate it once the host is fixed.
+  const providerGap = describeGradingProviderGap(model);
+  if (providerGap) {
+    state.status = 'failed';
+    state.error = providerGap;
+    state.failureClass = 'provider_unconfigured';
+    state.updatedAt = new Date().toISOString();
+    clearLease(state);
+    await saveReportState(testResultId, state);
     return state;
   }
 
@@ -425,6 +478,7 @@ export async function generateReport(
     state.overall = { avg: metrics.overall.avg, grade: metrics.overall.grade };
     state.status = 'completed';
     state.error = null;
+    state.failureClass = null;
     state.updatedAt = generatedAt;
     clearLease(state);
     await saveReportState(testResultId, state);
@@ -434,6 +488,8 @@ export async function generateReport(
   } catch (error) {
     state.status = 'failed';
     state.error = error instanceof Error ? error.message : 'Report generation failed.';
+    // A failure that got this far is about the grading or the data, never the host's config.
+    state.failureClass = null;
     state.updatedAt = new Date().toISOString();
     clearLease(state);
     await saveReportState(testResultId, state);

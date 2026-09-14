@@ -9,7 +9,7 @@ import { normConcept, type CaseConcepts, type ConceptKindCoverage } from './case
 import { formatExpectedSourceRef, type ExpectedSourceRef } from './expected-sources';
 import { DEFAULT_GRADING_MODEL_TAG, resolveGradingModel } from './grading-model';
 import { NO_EXPECTED_CONCEPTS_UTE_REASON } from './metrics';
-import type { CaseScore } from './schemas';
+import { GRADING_CALL_FAILED_PREFIX, type CaseScore } from './schemas';
 
 /**
  * B0-808 / B0-810 — the per-case grader.
@@ -459,7 +459,7 @@ export async function scoreCase(input: CaseScoringInput, deps: ScoreCaseDeps = {
     return toCaseScore(parsed, input);
   } catch (error) {
     return unableToEvaluateScore(
-      `Grading call failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+      `${GRADING_CALL_FAILED_PREFIX}: ${error instanceof Error ? error.message : 'unknown error'}`,
     );
   }
 }

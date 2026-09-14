@@ -47,6 +47,7 @@ vi.mock('./expected-sources-repository', () => ({
 }));
 
 vi.mock('./grading-model', () => ({
+  describeGradingProviderGap: () => null,
   effortForModel: () => undefined,
   effortFromState: () => undefined,
   loadGradingEffort: vi.fn(async () => undefined),
