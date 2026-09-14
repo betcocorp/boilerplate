@@ -48,6 +48,11 @@ const BOOLEAN_SETTINGS = [
   // B0-886 — skip the LLM revision pass when the first validator pass's only issues are
   // regulated_claim_unverified:*. Off by default; pending Tom's decision on the epic.
   'BEX_REVISION_SKIP_REGULATED_CLAIM_ONLY_ENABLED',
+  // B0-984 — the B0-948 fact-tool enforcement step (force the owning fact tool on a finished draft
+  // and re-draft). Seeded off: the forced re-draft was rewriting answers against empty or wrong
+  // tool results. Key retyped here (not imported) because the module that reads it pulls in the
+  // server-only validator; keep in sync with FACT_TOOL_ENFORCEMENT_SETTING_KEY.
+  'BEX_FACT_TOOL_ENFORCEMENT_ENABLED',
   'BEX_LLM_ROUTER_ENABLED',
   'BEX_LLM_ROUTER_SHADOW_MODE',
   'BEX_SEMANTIC_ROUTER_ENABLED',
