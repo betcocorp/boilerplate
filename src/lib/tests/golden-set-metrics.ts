@@ -8,7 +8,6 @@
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 import { listTests } from '~/lib/tests/repository';
 import { listGoldenCandidateRuns, type GoldenRunRow } from '~/lib/tests/golden-set';
-import { parseReportState } from '~/lib/tests/report/schemas';
 
 export type GoldenSetMetrics = {
   totalFailingPrompts: number;
@@ -30,36 +29,17 @@ const EMPTY_METRICS: Omit<GoldenSetMetrics, 'goldenSetCount'> = {
   averageElapsed: null,
 };
 
-/** The latest and (if any) second-latest completed run per test_id, from a desc-sorted run list. */
-function resolveLatestAndPreviousRuns(
-  runs: GoldenRunRow[],
-): Map<string, { latest: GoldenRunRow; previous: GoldenRunRow | null }> {
-  const byTestId = new Map<string, GoldenRunRow[]>();
+/** The latest completed run per test_id, from a desc-sorted run list. */
+function resolveLatestRuns(runs: GoldenRunRow[]): Map<string, GoldenRunRow> {
+  const latestByTestId = new Map<string, GoldenRunRow>();
   for (const run of runs) {
-    const existing = byTestId.get(run.test_id);
-    if (existing) {
-      existing.push(run);
-    } else {
-      byTestId.set(run.test_id, [run]);
+    const existing = latestByTestId.get(run.test_id);
+    // `listGoldenCandidateRuns` orders by created_at desc, but compare defensively.
+    if (!existing || run.created_at > existing.created_at) {
+      latestByTestId.set(run.test_id, run);
     }
   }
-
-  const result = new Map<string, { latest: GoldenRunRow; previous: GoldenRunRow | null }>();
-  for (const [testId, testRuns] of byTestId) {
-    // `listGoldenCandidateRuns` orders by created_at desc, but sort defensively.
-    const sorted = [...testRuns].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
-    result.set(testId, { latest: sorted[0], previous: sorted[1] ?? null });
-  }
-  return result;
-}
-
-/** `report_state.overall.avg` for a completed run's report, else null. */
-function extractRunScore(reportStateValue: unknown): number | null {
-  const reportState = parseReportState(reportStateValue);
-  if (!reportState || reportState.status !== 'completed' || !reportState.overall) {
-    return null;
-  }
-  return reportState.overall.avg;
+  return latestByTestId;
 }
 
 export async function calculateGoldenSetMetrics(): Promise<GoldenSetMetrics> {
@@ -73,33 +53,16 @@ export async function calculateGoldenSetMetrics(): Promise<GoldenSetMetrics> {
   const goldenTestIds = goldenTests.map((t) => t.id);
 
   // Every completed, full-mode run of every golden test — used only to resolve, per test, its
-  // latest run and the run immediately before it. Never aggregated over directly.
+  // latest run (pass %, elapsed, TTFT). Never aggregated over directly.
   const runs = await listGoldenCandidateRuns(goldenTestIds);
 
   if (runs.length === 0) {
     return { ...EMPTY_METRICS, goldenSetCount: goldenTests.length };
   }
 
-  const latestAndPreviousByTestId = resolveLatestAndPreviousRuns(runs);
-  const latestRuns = Array.from(latestAndPreviousByTestId.values()).map((r) => r.latest);
-  const previousRuns = Array.from(latestAndPreviousByTestId.values())
-    .map((r) => r.previous)
-    .filter((r): r is GoldenRunRow => r !== null);
-
-  const latestRunIds = latestRuns.map((r) => r.id);
-  const previousRunIds = previousRuns.map((r) => r.id);
+  const latestRunIds = Array.from(resolveLatestRuns(runs).values()).map((r) => r.id);
 
   const supabase = getSupabaseServiceRoleClient();
-
-  // Fetch report_state (for scores) for the latest run of every golden test, plus the previous
-  // run of every golden test that has one (for the score-change comparison).
-  const allRelevantRunIds = Array.from(new Set([...latestRunIds, ...previousRunIds]));
-  const testResults: Array<{ id: string; report_state: unknown }> = await supabase
-    .from('test_results')
-    .select('id, report_state')
-    .in('id', allRelevantRunIds)
-    .then((result) => (result.error ? [] : result.data ?? []));
-  const testResultById = new Map(testResults.map((r) => [r.id, r]));
 
   // Failing prompts: sum of `latest_run_failed_items` (B0-896) — the same field the "Test sets"
   // table's Fails column renders, resolved from each test's true latest completed run regardless
@@ -152,35 +115,18 @@ export async function calculateGoldenSetMetrics(): Promise<GoldenSetMetrics> {
       ? itemsWithTtft.reduce((sum, r) => sum + (Number(r.ttft_ms) || 0), 0) / itemsWithTtft.length
       : null;
 
-  // Score change: avg(latest-run score) vs avg(previous-run score), one score per golden test,
-  // only over tests that have a scored report on BOTH sides of the comparison — a test with no
-  // previous run (or an unscored one) is excluded from both averages, not treated as a 0.
-  const latestScoresByTestId = new Map<string, number>();
-  for (const [testId, { latest }] of latestAndPreviousByTestId) {
-    const score = extractRunScore(testResultById.get(latest.id)?.report_state);
-    if (score !== null) latestScoresByTestId.set(testId, score);
-  }
-  const previousScoresByTestId = new Map<string, number>();
-  for (const [testId, { previous }] of latestAndPreviousByTestId) {
-    if (!previous) continue;
-    const score = extractRunScore(testResultById.get(previous.id)?.report_state);
-    if (score !== null) previousScoresByTestId.set(testId, score);
-  }
-
-  const comparableTestIds = Array.from(latestScoresByTestId.keys()).filter((testId) =>
-    previousScoresByTestId.has(testId),
-  );
-
-  let scoreChangePoints: number | null = null;
-  if (comparableTestIds.length > 0) {
-    const currentAvg =
-      comparableTestIds.reduce((sum, id) => sum + (latestScoresByTestId.get(id) ?? 0), 0) /
-      comparableTestIds.length;
-    const previousAvg =
-      comparableTestIds.reduce((sum, id) => sum + (previousScoresByTestId.get(id) ?? 0), 0) /
-      comparableTestIds.length;
-    scoreChangePoints = currentAvg - previousAvg;
-  }
+  // Score change: the SUM of every golden set's "Last run" change — the same
+  // `latest_run_score_delta` the Test sets table renders per row (latest scored run vs. the scored
+  // run before it, unscored runs skipped; see `listTests`). Summing keeps the card reconcilable
+  // with the table by eye: add the column, get the card. A set with no comparable previous run
+  // contributes nothing rather than 0. Previously this averaged only sets whose two most recent
+  // COMPLETED runs were both scored, which — after a burst of runs whose reports failed to grade —
+  // reduced the card to whichever single set happened to qualify.
+  const deltas = goldenTests
+    .map((t) => t.latest_run_score_delta)
+    .filter((d): d is number => typeof d === 'number' && Number.isFinite(d));
+  const scoreChangePoints =
+    deltas.length > 0 ? Math.round(deltas.reduce((sum, d) => sum + d, 0) * 10) / 10 : null;
 
   return {
     totalFailingPrompts,
