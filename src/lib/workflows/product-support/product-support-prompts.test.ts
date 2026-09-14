@@ -345,3 +345,74 @@ describe('effectivePromptIdForDecision (B0-392)', () => {
     }
   });
 });
+
+describe('shared instructions — disinfectant-use procedure whenever dwell time is discussed (B0-978)', () => {
+  // Any route: the block lives in the shared instructions, so read it through the product prompt.
+  const shared = buildProductSupportInstructions({
+    mode: 'orchestrator',
+    routing: { ...baseRouting, decision: 'dilution' },
+  });
+
+  it('triggers on any mention of disinfectant dwell/contact time or disinfectant use, not only a pathogen recommendation', () => {
+    expect(shared).toContain(
+      'WHENEVER the answer mentions disinfectant dwell or contact time, or describes using a disinfectant at all',
+    );
+    expect(shared).toContain('a dilution-control or employee-training answer');
+    expect(shared).toContain('the bullets below are the behaviour, and the behaviour is what must appear');
+  });
+
+  it('states pre-clean, visibly wet for the entire labeled contact time, and spray-and-wipe-does-not-qualify as general procedure', () => {
+    expect(shared).toContain('Clean visible soil before disinfecting');
+    expect(shared).toContain('The surface must stay visibly wet for the entire labeled contact time');
+    expect(shared).toContain('Spraying and immediately wiping does not qualify as disinfection');
+    expect(shared).toContain(
+      'need no per-product label quote or label value — state them even when no contact-time or dilution value was retrieved, and even when no product is named',
+    );
+  });
+
+  it('still never supplies a contact time from memory', () => {
+    expect(shared).toContain('say plainly when that value was not retrieved. Never supply one from memory.');
+  });
+});
+
+describe('bathroom specialist (regulated copy) — retrieved label incompatibility warnings (B0-978)', () => {
+  const bathroom = SPECIALIST_PROMPT_TEXTS.bathroom;
+
+  it('repeats a retrieved label "Do not mix" statement verbatim, attributed to that label, with the SDS Section 10 reference', () => {
+    expect(bathroom).toContain('carries a "Do not mix", "Do not use with", or other incompatibility statement');
+    expect(bathroom).toContain('repeat that statement **verbatim** in the answer, attributed to that label');
+    expect(bathroom).toContain('SDS Section 10 incompatible-materials reference');
+  });
+
+  it('applies to bowl-cleaning and stain answers, not only mixing questions, and never fabricates a warning', () => {
+    expect(bathroom).toContain('a stain-removal or bowl-cleaning answer included — not only when the user asks about mixing');
+    expect(bathroom).toContain('never invent one for a label that does not print it');
+  });
+
+  it('keeps the B0-352 mandatory-retrieval guardrail on the regulated copy', () => {
+    expect(bathroom).toContain('# Tool use (mandatory)');
+    expect(bathroom).toContain('You MUST call at least one retrieval tool before answering');
+    expect(bathroom).toContain('**Critical rules for this decline:**');
+  });
+});
+
+describe('shared instructions — storage answers cite the label and SDS by name (B0-988)', () => {
+  const shared = buildProductSupportInstructions({
+    mode: 'orchestrator',
+    routing: { ...baseRouting, decision: 'product' },
+  });
+
+  it('cites the retrieved label and SDS by name and points at Section 7 when the storage text was not retrieved', () => {
+    expect(shared).toContain('still cite the retrieved **label and SDS by name** as the documents that govern storage');
+    expect(shared).toContain('Section 7, Handling and Storage, of that SDS is where the storage conditions are printed');
+    expect(shared).toContain('Never substitute a product-line profile, "Verified Product Facts", or any other summary');
+  });
+
+  it('bans dilution / coverage padding in a shelf-life answer', () => {
+    expect(shared).toContain('A shelf-life or storage answer contains no dilution, coverage, yield, or use-direction figures');
+  });
+
+  it('reinforces the B0-951 no-fitness-verdict rule for storage-duration questions', () => {
+    expect(shared).toContain('"may still be usable", or any equivalent — including for a storage question that names a duration');
+  });
+});

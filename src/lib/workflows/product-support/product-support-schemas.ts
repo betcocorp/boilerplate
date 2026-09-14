@@ -429,6 +429,8 @@ export const runtimeConfigSchema = z.object({
    * `BEX_AI_SDK_GENERATION_ENABLED` row, and the row's value for OpenAI models (B0-908).
    */
   aiSdkGenerationEnabled: z.boolean(),
+  /** B0-984 — `BEX_FACT_TOOL_ENFORCEMENT_ENABLED` as this run read it; absent on earlier runs. */
+  factToolEnforcementEnabled: z.boolean().optional(),
   /**
    * Whether cross-encoder reranking actually ran this turn's retrieval, i.e.
    * `BEX_PRODUCT_SUPPORT_RERANKER !== 'false'` AND `isRerankerConfigured()` (COHERE_API_KEY

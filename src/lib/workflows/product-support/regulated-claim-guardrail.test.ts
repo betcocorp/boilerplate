@@ -721,6 +721,39 @@ describe('evaluateRegulatedClaimGrounding — B0-888 label-prefixed imperatives 
     }
   });
 
+  // B0-984 — live sentence from SportsZone golden item 22b61cfb (game-line tape): read as a
+  // compatibility claim about a product called "Use", which forced `list_allowed_surfaces("3M Game
+  // Line Tape")` and then got redacted. A generic-guidance label plus an imperative is advice.
+  it('does not classify "General guidance: Use only low tack…" as a compatibility claim (B0-984)', () => {
+    const NOT_CLAIMS = [
+      "**General guidance:** Use only low tack painter's tape or tape labeled/approved for finished wood/gym floors, and remove it as soon as possible.",
+      'Recommendation: Apply only finishes labeled for wood gym floors.',
+      'Best practice: Keep mats compatible with wood floors under every entry.',
+    ];
+    for (const draftAnswer of NOT_CLAIMS) {
+      const result = evaluateRegulatedClaimGrounding({ draftAnswer, sources: [] });
+      expect(result.categoriesDetected, draftAnswer).not.toContain('compatibility');
+    }
+  });
+
+  // B0-984 — a capitalised word right after a colon or dash starts a clause; it is not a product.
+  it('does not treat the capitalised first word after a colon or dash as a product name (B0-984)', () => {
+    const NOT_CLAIMS = [
+      'Step 1 — Apply the finish only to surfaces approved for wood floors.',
+      'Before coating: Confirm the tape is approved for finished gym floors.',
+    ];
+    for (const draftAnswer of NOT_CLAIMS) {
+      const result = evaluateRegulatedClaimGrounding({ draftAnswer, sources: [] });
+      expect(result.categoriesDetected, draftAnswer).not.toContain('compatibility');
+    }
+    // …while a real mid-sentence product name still counts.
+    const claim = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'For gym floors, GymShoe is approved for use on finished wood.',
+      sources: [],
+    });
+    expect(claim.categoriesDetected).toContain('compatibility');
+  });
+
   it('still classifies a compatibility claim when the label prefix is followed by a real product name, not an imperative', () => {
     const result = evaluateRegulatedClaimGrounding({
       draftAnswer: 'Note: Push is safe for use on stainless steel.',
@@ -1186,5 +1219,465 @@ describe('planRegulatedClaimRedaction — product-usage-specific requires a usag
     expect(plan.mode).toBe('decline');
     if (plan.mode !== 'decline') return;
     expect(plan.reason).toBe('nothing_substantive_remains');
+  });
+});
+
+/**
+ * B0-985 — the redaction planner blanked ungrounded TOKENS before locating ungrounded SENTENCES,
+ * so a sentence that was both an ungrounded efficacy claim and contained an ungrounded contact
+ * time could never be found again and the whole answer hard-declined
+ * (`declineReason: snippet_not_found_in_draft`). Fixture: item c175d99e ("Is GE Fight Bac RTU
+ * approved for use in my state?") on golden run 63d4dba3 — draft verbatim from the run's
+ * `response_payload.draftAnswer`, gate record `ungroundedCategories: [contact_time, efficacy_claim]`.
+ */
+describe('planRegulatedClaimRedaction — sentence details are located before token replacement (B0-985)', () => {
+  const C175D99E_KILL_CLAIM_BULLET =
+    '- The product carries a wide range of kill claims, including SARS-CoV-2 (cause of COVID-19) with a 60-second contact time, and many bacteria and viruses with contact times ranging from 60 to 600 seconds.';
+  const C175D99E_DRAFT = [
+    'GE Fight Bac RTU is EPA-registered under EPA Reg. No. 34810-35-4170, but the retrieved documentation does not specify approval for individual states.',
+    '',
+    '- GE Fight Bac RTU is a ready-to-use disinfectant (no dilution required).',
+    '- EPA Reg. No.: 34810-35-4170, per the verified product facts and product label.',
+    C175D99E_KILL_CLAIM_BULLET,
+    '- State-level approval is not listed in the retrieved documentation; some states require additional registration beyond EPA approval.',
+    '',
+    'To confirm approval for use in your specific state, please contact Betco Regulatory Affairs or your state’s pesticide regulatory agency. I can provide the full product label and SDS if needed.',
+    '',
+    'Source: GE Fight Bac RTU verified product facts; GE Fight Bac RTU product label. [doc:verified-facts] [doc:3d46dbf6-76fe-41a1-8c62-5dfc09c7e298]',
+  ].join('\n');
+
+  const NO_LOCK: ProductLineLock = {
+    candidates: [],
+    lockedProductLineKey: null,
+    lockReason: 'skipped_ambiguous',
+  };
+
+  function plan(draftAnswer: string, details: Array<{ category: 'contact_time' | 'efficacy_claim'; snippet: string }>) {
+    return planRegulatedClaimRedaction({
+      draftAnswer,
+      userMessage: 'Is GE Fight Bac RTU approved for use in my state?',
+      grounding: {
+        categoriesDetected: ['epa_registration', 'contact_time', 'efficacy_claim'],
+        ungroundedCategories: [...new Set(details.map((d) => d.category))],
+        ungroundedDetails: details,
+        keyTermGroundedCategories: [],
+      },
+      productLineLock: NO_LOCK,
+      sources: [{ documentKind: 'facts' }, { documentKind: 'label' }, { documentKind: 'sds' }],
+    });
+  }
+
+  it('withholds the sentence that also contains the ungrounded token instead of declining (c175d99e)', () => {
+    const result = plan(C175D99E_DRAFT, [
+      { category: 'contact_time', snippet: '600 seconds' },
+      { category: 'efficacy_claim', snippet: C175D99E_KILL_CLAIM_BULLET.slice(0, 240) },
+    ]);
+    expect(result.mode).toBe('sentence_redaction');
+    if (result.mode === 'decline') return;
+    expect(result.redactedText).not.toContain('600 seconds');
+    expect(result.redactedText).not.toContain('kill claims');
+    expect(result.redactedText).toContain('[one efficacy claim withheld — not verifiable against a retrieved label]');
+    // Everything the guardrail did NOT object to is kept verbatim.
+    expect(result.redactedText).toContain('EPA Reg. No.: 34810-35-4170, per the verified product facts and product label.');
+    expect(result.redactedText).toContain('please contact Betco Regulatory Affairs or your state’s pesticide regulatory agency.');
+    expect(result.unlocatedSnippets).toBeUndefined();
+  });
+
+  it('is order-independent: the token detail listed first yields the same plan', () => {
+    const tokenFirst = plan(C175D99E_DRAFT, [
+      { category: 'contact_time', snippet: '600 seconds' },
+      { category: 'efficacy_claim', snippet: C175D99E_KILL_CLAIM_BULLET },
+    ]);
+    const sentenceFirst = plan(C175D99E_DRAFT, [
+      { category: 'efficacy_claim', snippet: C175D99E_KILL_CLAIM_BULLET },
+      { category: 'contact_time', snippet: '600 seconds' },
+    ]);
+    expect(tokenFirst).toEqual(sentenceFirst);
+  });
+
+  it('still blanks the token where it appears OUTSIDE the withheld sentence', () => {
+    const draft = `${C175D99E_DRAFT}\n\nNote: the longest contact time listed is 600 seconds.`;
+    const result = plan(draft, [
+      { category: 'contact_time', snippet: '600 seconds' },
+      { category: 'efficacy_claim', snippet: C175D99E_KILL_CLAIM_BULLET },
+    ]);
+    expect(result.mode).toBe('sentence_redaction');
+    if (result.mode === 'decline') return;
+    expect(result.redactedText).toContain('the longest contact time listed is (unable to verify).');
+  });
+
+  it('never declines for a sentence snippet it cannot locate: token redaction still applies and the miss is recorded', () => {
+    const result = plan(C175D99E_DRAFT, [
+      { category: 'contact_time', snippet: '600 seconds' },
+      { category: 'efficacy_claim', snippet: 'This sentence is not in the draft at all.' },
+    ]);
+    expect(result.mode).toBe('sentence_redaction');
+    if (result.mode === 'decline') return;
+    expect(result.redactedText).toContain('ranging from 60 to (unable to verify).');
+    expect(result.unlocatedSnippets).toEqual(['This sentence is not in the draft at all.']);
+  });
+
+  it('declines only when nothing at all could be redacted (the footer would otherwise misstate what was done)', () => {
+    const result = plan(C175D99E_DRAFT, [
+      { category: 'efficacy_claim', snippet: 'This sentence is not in the draft at all.' },
+    ]);
+    expect(result.mode).toBe('decline');
+    if (result.mode !== 'decline') return;
+    expect(result.reason).toBe('snippet_not_found_in_draft');
+  });
+});
+
+/**
+ * B0-986 — typed contact times. `renderFacts` writes `contact_time_seconds` as `60 sec` (historic
+ * runs: `60s`), the label prints "1 minute", and the model quotes "60 seconds". The comparator now
+ * reads the `Ns` shorthand as seconds and treats N min ≡ 60·N sec — for EQUALITY ONLY. Nothing here
+ * rewrites displayed text: the last case proves the served draft is byte-identical.
+ */
+describe('evaluateRegulatedClaimGrounding — contact-time unit equivalence is comparison-only (B0-986)', () => {
+  const FACTS_BLOCK_LEGACY = {
+    documentId: 'verified-facts',
+    title: 'Verified Product Facts (structured)',
+    documentBody: [
+      '### GE Fight Bac RTU',
+      '- **Contact time:** 60s',
+      '- **Efficacy (verified kill claims):**',
+      '  - Listeria monocytogenes — claim: bactericidal, 600s contact, EPA 34810 35 4170 (confidence 0.9)',
+    ].join('\n'),
+  };
+  const FACTS_BLOCK_CURRENT = {
+    ...FACTS_BLOCK_LEGACY,
+    documentBody: FACTS_BLOCK_LEGACY.documentBody.replace('60s', '60 sec').replace('600s contact', '600 sec contact'),
+  };
+  const LABEL_MINUTES = {
+    documentId: 'doc-label-minutes',
+    title: 'GE Fight Bac RTU',
+    documentBody:
+      'Treated surfaces must remain visibly wet for 1 minute. For Listeria monocytogenes allow a contact time of a minimum of 10 minutes.',
+  };
+
+  const cases: Array<{ quoted: string; against: typeof FACTS_BLOCK_LEGACY; label: string }> = [
+    { quoted: '60s', against: FACTS_BLOCK_LEGACY, label: 'facts block (60s)' },
+    { quoted: '60s', against: LABEL_MINUTES, label: 'label (1 minute)' },
+    { quoted: '60 seconds', against: FACTS_BLOCK_LEGACY, label: 'facts block (60s)' },
+    { quoted: '60 seconds', against: FACTS_BLOCK_CURRENT, label: 'facts block (60 sec)' },
+    { quoted: '60 seconds', against: LABEL_MINUTES, label: 'label (1 minute)' },
+    { quoted: '1 minute', against: FACTS_BLOCK_LEGACY, label: 'facts block (60s)' },
+    { quoted: '1 minute', against: LABEL_MINUTES, label: 'label (1 minute)' },
+    { quoted: '600s', against: LABEL_MINUTES, label: 'label (10 minutes)' },
+    { quoted: '600 seconds', against: FACTS_BLOCK_LEGACY, label: 'facts block (600s contact)' },
+    { quoted: '600 seconds', against: LABEL_MINUTES, label: 'label (10 minutes)' },
+    { quoted: '10 minutes', against: FACTS_BLOCK_LEGACY, label: 'facts block (600s contact)' },
+    { quoted: '10 minutes', against: FACTS_BLOCK_CURRENT, label: 'facts block (600 sec contact)' },
+  ];
+
+  for (const { quoted, against, label } of cases) {
+    it(`grounds a contact time quoted as "${quoted}" against the ${label}`, () => {
+      const result = evaluateRegulatedClaimGrounding({
+        draftAnswer: `The surface must remain wet for a ${quoted} contact time.`,
+        sources: [against],
+      });
+      expect(result.categoriesDetected).toContain('contact_time');
+      expect(result.ungroundedCategories).not.toContain('contact_time');
+    });
+  }
+
+  it('still rejects a contact time that matches neither form (no rounding to the nearest minute)', () => {
+    for (const fabricated of ['90 seconds', '2 minutes', '30s', '5 minutes']) {
+      const result = evaluateRegulatedClaimGrounding({
+        draftAnswer: `The surface must remain wet for a ${fabricated} contact time.`,
+        sources: [FACTS_BLOCK_LEGACY, LABEL_MINUTES],
+      });
+      expect(result.ungroundedCategories, fabricated).toContain('contact_time');
+    }
+  });
+
+  it('does not read a trailing "s" that is not a unit as seconds', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'Allow a 5 minute contact time; coverage is 3,200 sq ft/gal.',
+      sources: [{ documentId: 'doc-x', title: 'X', documentBody: 'Contact time: 300 s. Coverage 3,200 sq ft/gal.' }],
+    });
+    expect(result.ungroundedCategories).not.toContain('contact_time');
+  });
+
+  it('never rewrites the answer text: a grounded "60 seconds" is served byte-identical and an ungrounded token elsewhere is blanked, not converted', () => {
+    const draft =
+      'GE Fight Bac RTU kills SARS-CoV-2 with a 60 seconds contact time. Some bacteria need a 45 seconds contact time. Source: GE Fight Bac RTU product label [doc:doc-label-minutes].';
+    const grounding = evaluateRegulatedClaimGrounding({ draftAnswer: draft, sources: [LABEL_MINUTES, FACTS_BLOCK_CURRENT] });
+    expect(grounding.ungroundedDetails.filter((d) => d.category === 'contact_time').map((d) => d.snippet)).toEqual([
+      '45 seconds',
+    ]);
+    const plan = planRegulatedClaimRedaction({
+      draftAnswer: draft,
+      userMessage: 'How long does GE Fight Bac RTU need to stay wet?',
+      grounding: {
+        ...grounding,
+        // Only the token category is exercised here; the efficacy sentence's grounding is B0-971's concern.
+        ungroundedCategories: ['contact_time'],
+        ungroundedDetails: grounding.ungroundedDetails.filter((d) => d.category === 'contact_time'),
+      },
+      productLineLock: null,
+      sources: [{ documentKind: 'label' }],
+    });
+    expect(plan.mode).toBe('token_redaction');
+    if (plan.mode === 'decline') return;
+    expect(plan.redactedText).toBe(draft.replace('45 seconds', '(unable to verify)'));
+    expect(plan.redactedText).toContain('60 seconds contact time');
+    expect(plan.redactedText).not.toContain('1 minute');
+  });
+});
+
+/**
+ * B0-971 — two Product golden items (run 6d0f3c89) lost grounded efficacy bullets to redaction.
+ * Drafts are verbatim from `response_payload.draftAnswer`; source bodies are the retrieved chunks'
+ * `rag.document_chunk.chunk_text` verbatim (including the corpus's own mangled "« oz." glyph).
+ */
+describe('evaluateRegulatedClaimGrounding — bullet-head attribution and abbreviation-safe sentences (B0-971)', () => {
+  const REST_STOP_LABEL = {
+    documentId: '7117c7a4-2558-473f-9063-4bd25229bbdc',
+    title: 'Rest Stop',
+    documentBody: [
+      'Rest Stop™',
+      '*Virucidal • Ready-To-Use Germicide • Cleaner',
+      'Streptococcus pyogenes, *Influenza Type A/Brazil Virus, and',
+      'Trichophyton mentagrophytes',
+      '(Athlete’s Foot Fungus)',
+      'READY-TO-USE',
+      'EPA REG. NO. 47371-97-4170',
+      'n-alkyl (C14 60%, C16 30%, C12 5%, C18 5%)',
+      'dimethyl benzyl ammonium chloride ........ 0.09%',
+      'Disinfectant • Deodorant',
+      'Kills Pseudomonas aeruginosa, Staphylococcus aureus, *HIV-1,',
+      'DISINFECTANT 070',
+    ].join('\n'),
+  };
+  const HOSPITAL_DISINFECTANT_PROFILE = {
+    documentId: '987d994b-75fb-4f7d-8e3e-4b0dfa15cb04',
+    title: 'Hospital disinfectant',
+    documentBody: [
+      'Product line: CIDE-BET FRESH & CLEAN',
+      'Product line ID: 088',
+      'Summary: Hospital disinfectant',
+      'Description: This easy-to-use foaming germicidal detergent clings, cleans, disinfects and deodorizes in one quick operation.  **Its quaternary formulation features residual activity that controls germs for up to five days after surface is cleaned.  A Hospital Type disinfectant, this product kills a broad range of microorganisms including staph, salmonella and pseudomonas.  Virucidal against HIV-1 (AIDS Virus) and Herpes Simplex 1 & 2.  Effective fungicidal activity against pathogenic fungi, mold and mildew.',
+    ].join('\n'),
+  };
+  const VERSIFECT_EFFICACY = {
+    documentId: '0d44ac20-8931-4a91-b0d1-d48d40ecc593',
+    title: 'Efficacy Data 3820 VersiFect',
+    documentBody:
+      '3820 — VersiFect™ — Version null > Virucidal Activity\n| Organism | ATCC/Source | Contact Time |\n| Human Immunodeficiency Virus Type 1, (Strain HTLV-IIIB)(HIV-1) |  | 1 Minute |',
+  };
+  const FORMULA_315_EFFICACY = {
+    documentId: 'f1ab17b1-0a3e-4c96-b6ba-3914855f13d1',
+    title: '315 137b1f74 97bd 468d a91c d65f96a3b1af',
+    documentBody:
+      'Product/Formula: 315 137b1f74 97bd 468d a91c d65f96a3b1af\nVirucidal Efficacy\n| Organism | ATCC | Contact Time | Log Reduction | Percent Reduction |\n| HIV-1 (AIDS Virus) | HTLV-IIIB | 10 Minutes | [ILLEGIBLE] | [ILLEGIBLE] |',
+  };
+  const FORMULA_311_EFFICACY = {
+    documentId: '96bc7189-05e2-4368-bb2d-f7383bc6044b',
+    title: '311 2d091f83 7d62 48e9 9b04 2496b3dc7dc1',
+    documentBody:
+      'Virucidal Efficacy\n| Human Immunodeficiency virus HIV-1 (AIDS) | Clinical Isolate | 1 Minute | [ILLEGIBLE] | [ILLEGIBLE] |',
+  };
+  const FORMULA_314_EFFICACY = {
+    documentId: '71708cba-66f7-4442-9caf-c289b0b5981a',
+    title: '314 65808d51 06f5 4c38 8c9a cd69d34837e8',
+    documentBody: 'Virucidal Efficacy\n| HIV-1 (AIDS Virus) HTLV-III RF, | NCI | 1 Minute | [ILLEGIBLE] | [ILLEGIBLE] |',
+  };
+
+  const CA39CD2E_DRAFT = [
+    'Several Betco disinfectants are documented to kill HIV-1 (Human Immunodeficiency Virus Type 1):',
+    '',
+    '- Rest Stop™: The label explicitly states it kills HIV-1. (EPA Reg. No. 47371-97-4170)',
+    '- CIDE-BET FRESH & CLEAN (Hospital disinfectant): The product line profile states it is virucidal against HIV-1 (AIDS Virus) and Herpes Simplex 1 & 2.',
+    '- VersiFect™: Efficacy data confirms activity against Human Immunodeficiency Virus Type 1 (HIV-1) with a 1-minute contact time.',
+    '- Product/Formula 315: Efficacy data shows activity against HIV-1 (AIDS Virus) with a 10-minute contact time.',
+    '- Product/Formula 311: Efficacy data shows activity against Human Immunodeficiency virus HIV-1 (AIDS) with a 1-minute contact time.',
+    '- Product/Formula 314: Efficacy data shows activity against HIV-1 (AIDS Virus) HTLV-III RF with a 1-minute contact time.',
+    '',
+    'Key facts:',
+    "- Each product's label or efficacy data confirms HIV-1 as a kill claim.",
+    '- Contact times vary: VersiFect™, 311, and 314 show 1-minute contact times; 315 shows 10 minutes.',
+    '- Always follow the labeled directions for dilution, application, and contact time for HIV-1 efficacy.',
+    '',
+    'Confirm the product label in hand for the exact contact time and directions, as formulations and claims may vary by product and revision.',
+    '',
+    'Source: Rest Stop product label [doc:7117c7a4-2558-473f-9063-4bd25229bbdc]; CIDE-BET FRESH & CLEAN product line profile [doc:987d994b-75fb-4f7d-8e3e-4b0dfa15cb04]; VersiFect efficacy data [doc:0d44ac20-8931-4a91-b0d1-d48d40ecc593]; 311 efficacy data [doc:96bc7189-05e2-4368-bb2d-f7383bc6044b]; 314 efficacy data [doc:71708cba-66f7-4442-9caf-c289b0b5981a]; 315 efficacy data [doc:f1ab17b1-0a3e-4c96-b6ba-3914855f13d1].',
+  ].join('\n');
+  const CA39CD2E_SOURCES = [
+    REST_STOP_LABEL,
+    HOSPITAL_DISINFECTANT_PROFILE,
+    VERSIFECT_EFFICACY,
+    FORMULA_315_EFFICACY,
+    FORMULA_311_EFFICACY,
+    FORMULA_314_EFFICACY,
+  ];
+
+  const FIVE_MINUTE_PROFILE = {
+    documentId: 'dace1b56-e3d2-4f5c-b63c-7dafa7d8d76c',
+    title: '5 Minute Alkaline Disinfectant',
+    documentBody: [
+      'Product: 5 Minute Alkaline Disinfectant',
+      '- 5-minute dwell time',
+      '- Effective yet economical; « oz. per gallon dilution (1:256)',
+      '- Efficacy against Norovirus',
+      '- Save labor cost with 5-minute dwell time',
+      '- Can be used through an auto-scrubber',
+    ].join('\n'),
+  };
+  const NOROVIRUS_GUIDANCE = {
+    documentId: '5466397a-41a4-430d-8bb0-0116f4de8da6',
+    title: 'Norovirus Outbreaks: Betco® Cleaning and Hand Hygiene Solutions',
+    documentBody: [
+      'Preventing norovirus requires a multi-faceted approach, including targeted cleaning solutions and strict hand hygiene protocols. Unlike cold and flu viruses, which are easily neutralized by alcohol-based cleaners, norovirus lacks an outer lipid envelope, making it resistant to common disinfectants. It can survive on surfaces for up to two weeks, necessitating the use of powerful norovirus disinfectants.',
+      '',
+      'To effectively prevent norovirus, the following EPA-registered Betco® disinfectants are recommended for hard surfaces:',
+      '',
+      '- Quat-Stat™ 5',
+      '- Fight Bac™ RTU',
+      '- GE Fight Bac™ RTU',
+      '- pH7Q Dual',
+    ].join('\n'),
+  };
+  const FIVE_MINUTE_BULLET =
+    '- The 5 Minute Alkaline Disinfectant is also labeled as effective against norovirus, with a 5-minute dwell time at a 1:256 dilution (½ oz. per gallon of water), and must remain wet for 5 minutes to achieve disinfection.';
+  const B4291663F_DRAFT = [
+    'Several Betco disinfectants are EPA-registered and documented as effective against norovirus on hard, nonporous surfaces. There is no documented ranking of "best," but the following products are specifically recommended for norovirus disinfection:',
+    '',
+    '- **Quat-Stat™ 5**',
+    '- **Fight Bac™ RTU**',
+    '- **GE Fight Bac™ RTU**',
+    '- **pH7Q Dual**',
+    '',
+    '**Supporting facts:**',
+    "- These products are listed in Betco's norovirus outbreak guidance as EPA-registered disinfectants effective against norovirus for hard surfaces.",
+    FIVE_MINUTE_BULLET,
+    '- Norovirus is highly resistant to many common disinfectants, so it is critical to use a product with a specific norovirus claim and to follow the labeled contact time and dilution exactly.',
+    '',
+    '**Caveat/confirmation:**',
+    '- Always confirm the product label in hand for the exact organism claim, dilution, and contact time, as EPA registrations and label instructions may change.',
+    '- For food-contact surfaces, rinse with potable water after disinfection as directed on the label.',
+    '',
+    'Source: Norovirus Outbreaks: Betco® Cleaning and Hand Hygiene Solutions knowledge document; 5 Minute Alkaline Disinfectant product label [doc:5466397a-41a4-430d-8bb0-0116f4de8da6]; [doc:dace1b56-e3d2-4f5c-b63c-7dafa7d8d76c]',
+  ].join('\n');
+
+  it('ca39cd2e: "The label explicitly states it kills HIV-1" / "The product line profile states it is virucidal against HIV-1" are grounded via the bullet-head product ↔ Source-line citation', () => {
+    const result = evaluateRegulatedClaimGrounding({ draftAnswer: CA39CD2E_DRAFT, sources: CA39CD2E_SOURCES });
+    expect(result.categoriesDetected).toEqual(expect.arrayContaining(['epa_registration', 'contact_time', 'efficacy_claim']));
+    expect(result.ungroundedDetails).toEqual([]);
+    expect(result.ungroundedCategories).toEqual([]);
+    expect(result.keyTermGroundedCategories).toContain('efficacy_claim');
+  });
+
+  it('4291663f: the 5 Minute Alkaline Disinfectant norovirus bullet is grounded by its Source-line citation, with its dilution and contact time intact', () => {
+    const result = evaluateRegulatedClaimGrounding({
+      draftAnswer: B4291663F_DRAFT,
+      sources: [FIVE_MINUTE_PROFILE, NOROVIRUS_GUIDANCE],
+    });
+    expect(result.categoriesDetected).toEqual(expect.arrayContaining(['dilution_ratio', 'contact_time', 'efficacy_claim']));
+    expect(result.ungroundedDetails).toEqual([]);
+    expect(result.ungroundedCategories).toEqual([]);
+  });
+
+  it('a genuinely unsourced claim in the same bullet shape is still redacted: the attributed source never mentions the organism', () => {
+    const draft = [
+      '- Rest Stop™: The label explicitly states it kills Ebola virus. (EPA Reg. No. 47371-97-4170)',
+      '',
+      'Source: Rest Stop product label [doc:7117c7a4-2558-473f-9063-4bd25229bbdc].',
+    ].join('\n');
+    const result = evaluateRegulatedClaimGrounding({ draftAnswer: draft, sources: [REST_STOP_LABEL] });
+    expect(result.ungroundedCategories).toContain('efficacy_claim');
+    // The EPA token on the same bullet is real and stays grounded.
+    expect(result.ungroundedCategories).not.toContain('epa_registration');
+  });
+
+  it('a bullet naming a product that no retrieved source title matches, with no citation, is still redacted', () => {
+    const draft = '- Quat-Stat™ 5: The label explicitly states it kills HIV-1.';
+    const result = evaluateRegulatedClaimGrounding({ draftAnswer: draft, sources: [REST_STOP_LABEL] });
+    expect(result.ungroundedCategories).toContain('efficacy_claim');
+  });
+
+  it('the bullet-head channel needs the named source to be cited somewhere OR the sentence to attribute a source kind', () => {
+    // Named + cited on the Source line, no "the label states" phrase → attributed.
+    const cited = evaluateRegulatedClaimGrounding({
+      draftAnswer: '- Rest Stop™ is labeled to kill HIV-1 on hard surfaces.\n\nSource: [doc:7117c7a4-2558-473f-9063-4bd25229bbdc]',
+      sources: [REST_STOP_LABEL],
+    });
+    expect(cited.ungroundedCategories).not.toContain('efficacy_claim');
+    // Named + "the label states", no citation anywhere → attributed.
+    const asserted = evaluateRegulatedClaimGrounding({
+      draftAnswer: '- Rest Stop™: The label states it kills HIV-1.',
+      sources: [REST_STOP_LABEL],
+    });
+    expect(asserted.ungroundedCategories).not.toContain('efficacy_claim');
+    // Named only, neither → NOT attributed.
+    const bare = evaluateRegulatedClaimGrounding({
+      draftAnswer: '- Rest Stop™ is labeled to kill HIV-1 on hard surfaces.',
+      sources: [REST_STOP_LABEL],
+    });
+    expect(bare.ungroundedCategories).toContain('efficacy_claim');
+  });
+
+  it('never splits a sentence after "Reg." / "No." / "oz." / "fl." / "min." / "vs.", so a withheld bullet leaves no orphan fragment', () => {
+    const bullet = '- Quat-Stat™ 5: The label explicitly states it kills Ebola virus. (EPA Reg. No. 47371-97-4170)';
+    const draft = [
+      'Several Betco disinfectants are documented for hard-surface disinfection, each with its own registration.',
+      bullet,
+      '- Dilute at 2 oz. per gallon (0.5 fl. oz. per quart); allow 10 min. dwell vs. the 5 min. many labels require.',
+      '',
+      'Source: Rest Stop product label [doc:7117c7a4-2558-473f-9063-4bd25229bbdc].',
+    ].join('\n');
+    const grounding = evaluateRegulatedClaimGrounding({ draftAnswer: draft, sources: [REST_STOP_LABEL] });
+    const efficacySnippets = grounding.ungroundedDetails.filter((d) => d.category === 'efficacy_claim').map((d) => d.snippet);
+    expect(efficacySnippets).toEqual([bullet]);
+    for (const snippet of grounding.ungroundedDetails.map((d) => d.snippet)) {
+      expect(snippet, snippet).not.toMatch(/(?:Reg|No|oz|fl|min|vs)\.$/);
+      expect(snippet, snippet).not.toMatch(/^(?:No\.|\d{4,}-)/);
+    }
+
+    const plan = planRegulatedClaimRedaction({
+      draftAnswer: draft,
+      userMessage: 'Which of your disinfectants kill Ebola?',
+      grounding: {
+        categoriesDetected: grounding.categoriesDetected,
+        ungroundedCategories: ['efficacy_claim'],
+        ungroundedDetails: grounding.ungroundedDetails.filter((d) => d.category === 'efficacy_claim'),
+        keyTermGroundedCategories: [],
+      },
+      productLineLock: null,
+      sources: [{ documentKind: 'label' }],
+    });
+    expect(plan.mode).toBe('sentence_redaction');
+    if (plan.mode === 'decline') return;
+    expect(plan.redactedText).not.toContain('47371-97-4170');
+    expect(plan.redactedText).not.toContain('No. ');
+    expect(plan.redactedText).toContain('[one efficacy claim withheld — not verifiable against a retrieved label]');
+    expect(plan.redactedText).toContain('2 oz. per gallon (0.5 fl. oz. per quart); allow 10 min. dwell vs. the 5 min.');
+  });
+
+  it('two consecutive withheld bullets collapse into one pluralised marker', () => {
+    const first = '- Quat-Stat™ 5: The label explicitly states it kills Ebola virus.';
+    const second = '- pH7Q Dual: The label explicitly states it kills Marburg virus.';
+    const draft = [
+      'Several Betco disinfectants are documented for hard-surface disinfection; confirm the label in hand for the exact organism claim before use.',
+      first,
+      second,
+      '- Rest Stop™: The label explicitly states it kills HIV-1.',
+      '',
+      'Source: Rest Stop product label [doc:7117c7a4-2558-473f-9063-4bd25229bbdc].',
+    ].join('\n');
+    const grounding = evaluateRegulatedClaimGrounding({ draftAnswer: draft, sources: [REST_STOP_LABEL] });
+    expect(grounding.ungroundedDetails.map((d) => d.snippet)).toEqual([first, second]);
+    const plan = planRegulatedClaimRedaction({
+      draftAnswer: draft,
+      userMessage: 'Which of your disinfectants kill Ebola?',
+      grounding,
+      productLineLock: null,
+      sources: [{ documentKind: 'label' }],
+    });
+    expect(plan.mode).toBe('sentence_redaction');
+    if (plan.mode === 'decline') return;
+    expect(plan.redactedText).toContain('[two efficacy claims withheld — not verifiable against a retrieved label]');
+    expect(plan.redactedText).not.toContain('[one efficacy claim withheld');
+    expect(plan.redactedText).toContain('- Rest Stop™: The label explicitly states it kills HIV-1.');
   });
 });

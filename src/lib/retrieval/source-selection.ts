@@ -48,6 +48,17 @@ export function selectCuratedMatches(
     requiredDocumentKinds?: string[];
     /** Diversity limit so a single document cannot dominate the context. */
     maxPerDocument?: number;
+    /**
+     * B0-974 — `false` when the question is NOT product-anchored (no product named, no line
+     * locked: the unfiltered broad pass). Then a `product_line_profile` required-kind slot is not
+     * reserved when the best profile candidate ranks below the best `knowledge` candidate: on
+     * "How often should a wood sport floor be recoated?" the reservation handed a slot to
+     * "Oil-Based Wood Sport Finish" (raw rank 12) and displaced the rank-2 knowledge chunk holding
+     * the only "annual recoats" sentence in the corpus. Default `true` keeps every existing caller's
+     * reservation exactly as before; a profile that genuinely outranks the knowledge pool is still
+     * reserved either way.
+     */
+    productAnchored?: boolean;
   },
 ): RagSearchMatch[] {
   const min = options.minSimilarity ?? DEFAULT_MIN_SIMILARITY;
@@ -55,6 +66,10 @@ export function selectCuratedMatches(
   const filtered = sorted.filter((m) => m.similarity >= min);
   const requiredKinds = options.requiredDocumentKinds ?? [];
   const maxPerDocument = options.maxPerDocument ?? Number.POSITIVE_INFINITY;
+  const bestKnowledge =
+    options.productAnchored === false
+      ? filtered.find((match) => kindEquals(match, 'knowledge'))
+      : undefined;
 
   const selected: RagSearchMatch[] = [];
   const selectedKeys = new Set<string>();
@@ -85,9 +100,19 @@ export function selectCuratedMatches(
 
   for (const kind of requiredKinds) {
     const candidate = filtered.find((match) => kindEquals(match, kind));
-    if (candidate) {
-      trySelect(candidate);
+    if (!candidate) {
+      continue;
     }
+    // B0-974 — see `productAnchored`: an unanchored question's profile slot yields to a knowledge
+    // chunk that similarity ranked above it. The profile still competes in the plain pass below.
+    if (
+      bestKnowledge &&
+      kindEquals(candidate, 'product_line_profile') &&
+      bestKnowledge.similarity > candidate.similarity
+    ) {
+      continue;
+    }
+    trySelect(candidate);
   }
 
   for (const candidate of filtered) {

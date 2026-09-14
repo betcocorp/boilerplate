@@ -414,6 +414,13 @@ const PROCEDURAL_DEPTH_PATTERNS: readonly RegExp[] = [
    * candidate pool so the actually-relevant generic document has a chance to surface.
    */
   /\b(?:do|does|did)\b[^.?!]{0,40}\band\b[^.?!]{0,60}\b(?:work|perform|hold up|clean(?:s)?\s+as\s+well|last(?:s)?\s+as\s+long)\b/,
+  /**
+   * B0-974 — reopening/timing questions phrased with "when" rather than "how soon/long" ("when
+   * can carts go back on the floor", "when is it safe to walk on it"). The answer is a schedule
+   * (light foot traffic / normal traffic / rolling loads each with its own window), not one value,
+   * and the document holding it ("VCT Reopening to Traffic") only surfaces at the widened width.
+   */
+  /\bwhen\s+(?:can|is\s+it\s+(?:safe|ok|okay))\b[^.?!]{0,60}\b(?:walk|walking|reopen|re-open|traffic|carts?)\b/,
 ];
 
 /**
@@ -473,8 +480,17 @@ export function classifyRetrievalIntent(
    * Net: `limit 6` with the default `maxPerDocument` graded 79.6 with no F; adding depth graded
    * 79.1 with two. Raise width here; do not raise depth without evidence for the specific shape.
    */
+  /**
+   * B0-974 — `single_value` no longer bypasses the depth regexes for a PRODUCT-LESS question (a
+   * named product already returned above, so everything here is product-less). The signals call
+   * labelled "how soon can people walk on the VCT floor after the last coat?" and "How often should
+   * a wood sport floor be recoated?" `single_value`, which collapsed both to `limit 3`: the first's
+   * answer is a traffic schedule at raw rank 6, the second's only "annual recoats" sentence sat at
+   * raw rank 2 behind a reserved profile slot. `procedure`/`enumeration` still widen without any
+   * phrasing, and a `single_value` question with no depth phrasing keeps the default breadth.
+   */
   if (
-    answerShape === undefined
+    answerShape === undefined || answerShape === 'single_value'
       ? PROCEDURAL_DEPTH_PATTERNS.some((pattern) => pattern.test(q))
       : answerShape === 'procedure' || answerShape === 'enumeration'
   ) {

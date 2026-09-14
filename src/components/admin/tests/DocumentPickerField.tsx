@@ -39,7 +39,7 @@ const DOCUMENT_KIND_LABELS: Record<string, string> = {
   fastdraw_dilution: 'FastDraw Dilution',
 };
 
-function kindLabel(kind: string): string {
+export function documentKindLabel(kind: string): string {
   return DOCUMENT_KIND_LABELS[kind] ?? kind;
 }
 
@@ -311,7 +311,7 @@ export function DocumentPickerField({
                       <div className="flex min-w-0 flex-col gap-0.5 py-0.5">
                         <span className="font-medium">{document.title}</span>
                         <span className="text-xs text-muted-foreground">
-                          {kindLabel(document.document_kind)}
+                          {documentKindLabel(document.document_kind)}
                           {document.language_code
                             ? ` · ${document.language_code}`
                             : ''}
@@ -339,7 +339,7 @@ export function DocumentPickerField({
                   </span>
                   <span className="truncate text-[0.6875rem] text-muted-foreground">
                     {document.document_kind
-                      ? kindLabel(document.document_kind)
+                      ? documentKindLabel(document.document_kind)
                       : document.id}
                   </span>
                 </span>

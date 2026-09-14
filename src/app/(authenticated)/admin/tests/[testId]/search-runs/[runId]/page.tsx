@@ -89,13 +89,13 @@ export default async function AdminSearchRunDetailsPage({
    */
   type ItemCategory = 'unconstrained' | 'product_only';
   function categorizeItem(item: (typeof testItems)[number]): ItemCategory {
-    const hasProduct = typeof item.expected_canonical_product === 'string' && item.expected_canonical_product.trim() !== '';
+    const hasProduct = (item.expected_canonical_products ?? []).some((key) => key.trim() !== '');
     return hasProduct ? 'product_only' : 'unconstrained';
   }
 
   const categoryMeta: Record<ItemCategory, { label: string; description: string }> = {
     unconstrained: { label: 'Unconstrained', description: 'Any match is a pass — no product constraint' },
-    product_only: { label: 'Product match', description: 'Must match expected product line' },
+    product_only: { label: 'Product match', description: 'Must match every expected product line' },
   };
 
   const categoryItemIds = new Map<ItemCategory, Set<string>>();

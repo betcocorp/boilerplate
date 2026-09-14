@@ -83,3 +83,52 @@ const NAMED_SURFACE_PATTERN = buildNamedSurfacePattern();
 export function hasNamedSurfaceContext(text: string): boolean {
   return NAMED_SURFACE_PATTERN.test(text);
 }
+
+/**
+ * B0-977 — which floor specialist OWNS a named floor substrate, per `SME_ROUTING_RULES_PROMPT`
+ * rule 2 (B0-746 split). The LLM classifier violated that rule on the VCT golden item ("what
+ * stripping and finish products should I use for my VCT floor?" → `recommendations` 0.85 with
+ * `surfaceType: "vct"`), and nothing deterministic re-checked `surfaceType` afterwards. This is the
+ * deterministic mirror the routers apply AFTER the model call — see
+ * `applyFloorSurfaceRoutingOverride` in `intent-classifier.ts`.
+ *
+ * Order matters: resilient terms first so "vinyl tile" / "terrazzo tile" never fall through to the
+ * bare `tile` in the stone/tile/grout group. Non-floor surfaces (stainless, carpet, brick, drywall,
+ * upholstery, laminate, epoxy) deliberately resolve to `null` — no floor specialist owns them.
+ */
+export type FloorSpecialistId = 'floor_wood_sport' | 'floor_concrete' | 'floor_stg' | 'floor_vct';
+
+const FLOOR_SURFACE_OWNERS: ReadonlyArray<{ specialist: FloorSpecialistId; pattern: RegExp }> = [
+  {
+    specialist: 'floor_vct',
+    pattern:
+      /\b(?:vct|vinyl\s*composition\s*tiles?|vinyl\s*tiles?|vinyl\s*floor\w*|lvt|luxury\s*vinyl\s*tiles?|terrazzo|linoleum|rubber\s*floor\w*|resilient\s*(?:tile|floor)\w*)\b/i,
+  },
+  {
+    specialist: 'floor_wood_sport',
+    pattern:
+      /\b(?:hardwood|wood(?:en)?\s*floor\w*|wood\s*flooring|wood|gym(?:nasium)?(?:\s*floor\w*)?|sports?\s*floor\w*|basketball\s*courts?|maple)\b/i,
+  },
+  { specialist: 'floor_concrete', pattern: /\bconcrete\b/i },
+  {
+    specialist: 'floor_stg',
+    pattern:
+      /\b(?:grout|ceramic\s*tiles?|porcelain\s*tiles?|quarry\s*tiles?|marble|granite|natural\s*stone|stone\s*floor\w*|stone|tiles?)\b/i,
+  },
+];
+
+/**
+ * The floor specialist that owns `surfaceType` (the classifier's free-text entity, e.g. "vct",
+ * "VCT floor", "gym floor"), or `null` when the surface is not a floor substrate any specialist
+ * owns. Pure and deterministic; never guesses from an empty or unknown value.
+ */
+export function resolveFloorSpecialistForSurface(
+  surfaceType: string | null | undefined,
+): FloorSpecialistId | null {
+  const text = (surfaceType ?? '').trim();
+  if (!text) return null;
+  for (const owner of FLOOR_SURFACE_OWNERS) {
+    if (owner.pattern.test(text)) return owner.specialist;
+  }
+  return null;
+}

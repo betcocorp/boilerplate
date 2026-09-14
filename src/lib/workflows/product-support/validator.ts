@@ -336,14 +336,27 @@ function normalizeSentenceForGroundingCompare(value: string): string {
     .trim();
 }
 
-/** Additionally normalizes common unit spellings so "2 oz per gallon" and "2 oz/gal" compare equal. Comparison-only. */
+/**
+ * Additionally normalizes common unit spellings so "2 oz per gallon" and "2 oz/gal" compare equal.
+ * Comparison-only.
+ *
+ * B0-986 — two contact-time equivalences, COMPARISON ONLY (the displayed answer is never rewritten;
+ * `regulated-claim-guardrail.test.ts` asserts the rendered text is byte-identical):
+ *  - the `60s` / `600 s` shorthand `renderFacts` (`~/lib/retrieval/product-facts.ts`) historically
+ *    wrote for `contact_time_seconds` is read as seconds;
+ *  - `N min` ≡ `60·N sec`, so a draft quoting "60 seconds" grounds against a label that prints
+ *    "1 minute" and a facts row stored as 60 seconds. This is a unit equivalence inside the
+ *    comparator, decided for B0-986; it never changes what the user sees.
+ */
 export function normalizeUnitToken(value: string): string {
   return normalizeForGroundingCompare(value)
     .replace(/\bounces?\b/g, 'oz')
     .replace(/\bfl\.?\s*oz\.?/g, 'oz')
     .replace(/\bgallons?\b/g, 'gal')
+    .replace(/\b(\d+(?:\.\d+)?)\s*s\b/g, '$1 sec')
     .replace(/\bseconds?\b|\bsecs?\b/g, 'sec')
     .replace(/\bminutes?\b|\bmins?\b/g, 'min')
+    .replace(/\b(\d+(?:\.\d+)?)\s*min\b/g, (_, n: string) => `${Math.round(Number(n) * 60 * 1000) / 1000} sec`)
     .replace(/\bper\b/g, '/')
     .replace(/[.,]/g, '')
     .replace(/\s*\/\s*/g, '/') // "oz / gal" and "oz/gal" must compare equal
@@ -351,9 +364,27 @@ export function normalizeUnitToken(value: string): string {
     .trim();
 }
 
+/**
+ * B0-971 — abbreviations that end in a period mid-sentence. Without this guard the sentence
+ * boundary below split "(EPA Reg. No. 47371-97-4170)" into three "sentences", so a withheld
+ * efficacy sentence left the orphan fragment `No. 47371-97-4170)` behind in the answer.
+ */
+const SENTENCE_ABBREVIATIONS = ['[Rr]eg', '[Nn]o', '[Oo]z', '[Ff]l', '[Mm]in', '[Vv]s', '[Ee]\\.g', '[Ii]\\.e', '[Aa]pprox'];
+
+/**
+ * The ONE sentence boundary every regulated-claim path uses: end punctuation, whitespace, then a
+ * capital/digit — unless the "sentence" ends in one of `SENTENCE_ABBREVIATIONS`. Exported as a
+ * pattern SOURCE (no flags) so `splitIntoSentences` here and
+ * `expandRegulatedClaimSnippetToSentence` (`run-product-support-workflow.ts`) build their regexes
+ * from the same definition instead of two copies that can drift.
+ */
+export const REGULATED_CLAIM_SENTENCE_BOUNDARY_SOURCE = `(?<=[.!?])(?<!\\b(?:${SENTENCE_ABBREVIATIONS.join('|')})\\.)\\s+(?=[A-Z0-9])`;
+
+const SENTENCE_SPLIT_PATTERN = new RegExp(`${REGULATED_CLAIM_SENTENCE_BOUNDARY_SOURCE}|\\n+`);
+
 function splitIntoSentences(text: string): string[] {
   return text
-    .split(/(?<=[.!?])\s+(?=[A-Z0-9])|\n+/)
+    .split(SENTENCE_SPLIT_PATTERN)
     .map((s) => s.trim())
     .filter(Boolean);
 }
@@ -392,7 +423,7 @@ const DILUTION_PERCENT_CONTEXT_PATTERN =
   /\b(dilut\w*|concentrat\w*|solution|mix(?:\w*)?|ratio|per gal(?:lon)?s?|oz\s*(?:\/|per)\s*gal|by volume|v\s*\/\s*v|ready[-\s]?to[-\s]?use|rtu|use at|at a rate of|strength)\b/i;
 const DILUTION_PERCENT_CONTEXT_WINDOW = 60;
 const CONTACT_TIME_TOKEN_PATTERN =
-  /\b\d+(?:\.\d+)?\s*(?:seconds?|secs?|minutes?|mins?)\b/gi;
+  /\b\d+(?:\.\d+)?\s*(?:seconds?|secs?|minutes?|mins?|s)\b/gi;
 const CONTACT_TIME_CONTEXT_PATTERN = /\b(contact|dwell|kill time|wet time|remain wet)\b/i;
 /**
  * B0-366: bare `warning` / `caution` / `ppe` are NOT standalone hazard triggers any more --
@@ -658,12 +689,15 @@ const SENTENCE_INITIAL_SUBJECT_PATTERN =
   /^([A-Z][\w'-]*(?:\s+[A-Z][\w'-]*)*)\s+(?:is|are|was|were|can|may|will|should|has|have|remains?)\b/;
 const SENTENCE_INITIAL_NON_PRODUCT_WORDS = new Set([
   'it', 'this', 'that', 'these', 'those', 'they', 'there', 'here', 'both', 'all', 'each', 'which',
-  'what', 'who', 'the', 'a', 'an', 'our', 'your', 'its', 'their', 'most', 'many', 'some', 'none',
+  'what', 'who', 'the', 'a', 'an', 'our', 'your', 'its', 'their', 'most', 'many', 'several', 'some', 'none',
   'no', 'products', 'product', 'chemicals', 'disinfectants', 'sanitizers', 'cleaners', 'quats',
   'disinfection', 'sanitization', 'sterilization',
 ]);
-const MID_SENTENCE_CAPITALISED_WORD_PATTERN = /(?<=\s)[A-Z][a-z][\w'-]*/g;
+// B0-984 — a capitalised word right after a colon or dash ("General guidance: Use only…",
+// "Step 1 — Apply…") is the start of a clause, not a mid-sentence product name.
+const MID_SENTENCE_CAPITALISED_WORD_PATTERN = /(?<=\s)(?<![:\-–—]\s)[A-Z][a-z][\w'-]*/g;
 const BRAND_ONLY_TOKENS = new Set(['betco', 'envirozyme']);
+const BULLET_HEAD_PRODUCT_SUBJECT_PATTERN = /^(?:[Tt]he\s+)?([A-Z0-9][^:—–]{1,80}?)\s*(?::|—|–)/;
 
 /**
  * B0-888 — a leading label word ("Caveat:", "Note:", "Important:", "Tip:") is scaffolding, not a
@@ -673,7 +707,8 @@ const BRAND_ONLY_TOKENS = new Set(['betco', 'envirozyme']);
  * same word is already excluded (the pattern requires a PRECEDING whitespace); a label prefix is
  * the only thing that artificially creates one. Stripped before every `hasProductSubject` check.
  */
-const LABEL_PREFIX_PATTERN = /^(?:caveat|note|important|tip)\s*:\s*/i;
+const LABEL_PREFIX_PATTERN =
+  /^(?:caveat|note|important|tip|general guidance|guidance|recommendation|best practice|rule of thumb)\s*:\s*/i;
 /**
  * B0-888 — imperative openers that read as generic advice/disclaimers, not a claim about a named
  * product, when they are the sentence's true first word (post label-prefix stripping). Reuses the
@@ -682,6 +717,8 @@ const LABEL_PREFIX_PATTERN = /^(?:caveat|note|important|tip)\s*:\s*/i;
  */
 const IMPERATIVE_OPENER_WORDS = new Set([
   'always', 'never', 'confirm', 'ensure', 'test', 'verify', 'check', 'avoid', 'consult', 'review',
+  // B0-984 — "General guidance: Use only low tack painter's tape…" read as a claim about "Use".
+  'use', 'apply', 'keep', 'remove', 'follow', 'start', 'step', 'do', 'clean', 'wipe', 'rinse',
 ]);
 
 /** Case-preserving twin of the `base` prep in `isNonClaimScaffolding` (emphasis, bullets, headings). */
@@ -713,18 +750,37 @@ function hasProductSubject(sentence: string): boolean {
 
   if (PRODUCT_CODE_TOKEN_PATTERN.test(text)) return true;
   if (PRODUCT_SELF_REFERENCE_PATTERN.test(text)) return true;
+  // Bullet-style product heads ("Quat-Stat 5: ...", "Rest Stop: ...") are explicit product subjects.
+  const bulletHead = BULLET_HEAD_PRODUCT_SUBJECT_PATTERN.exec(text)?.[1];
+  if (bulletHead) {
+    const normalizedHead = normalizeProductNameForCompare(bulletHead);
+    const firstWord = normalizedHead.split(' ')[0] ?? '';
+    if (
+      normalizedHead.length >= 3 &&
+      !SENTENCE_INITIAL_NON_PRODUCT_WORDS.has(firstWord) &&
+      !IMPERATIVE_OPENER_WORDS.has(firstWord) &&
+      !BRAND_ONLY_TOKENS.has(firstWord)
+    ) {
+      return true;
+    }
+  }
 
   const initial = SENTENCE_INITIAL_SUBJECT_PATTERN.exec(text);
   if (initial) {
     const firstWord = initial[1].split(/\s+/)[0].toLowerCase();
     // Gerund subjects ("Cleaning removes", "Disinfecting kills") are processes, not products.
-    if (!SENTENCE_INITIAL_NON_PRODUCT_WORDS.has(firstWord) && !firstWord.endsWith('ing')) {
+    if (
+      !SENTENCE_INITIAL_NON_PRODUCT_WORDS.has(firstWord) &&
+      !BRAND_ONLY_TOKENS.has(firstWord) &&
+      !firstWord.endsWith('ing')
+    ) {
       return true;
     }
   }
 
   for (const match of text.matchAll(MID_SENTENCE_CAPITALISED_WORD_PATTERN)) {
-    if (!BRAND_ONLY_TOKENS.has(match[0].toLowerCase())) return true;
+    const normalized = match[0].toLowerCase().replace(/[’']/g, "'").replace(/['’]s$/, '');
+    if (!BRAND_ONLY_TOKENS.has(normalized)) return true;
   }
   return false;
 }
@@ -755,7 +811,7 @@ const EFFICACY_VERB_PATTERN =
 const EFFICACY_SENTENCE_INITIAL_VERB_PATTERN =
   /^(?:kills?|eliminates?|effective against|inactivates?|destroys?)\b/i;
 const EFFICACY_ORGANISM_PATTERN =
-  /\b(norovirus|hiv(?:-1)?|sars[-\s]?cov[-\s]?2|covid(?:-19)?|coronavirus|mrsa|vre|influenza|h1n1|rhinovirus|rotavirus|adenovirus|hepatitis|hbv|hcv|bacteri(?:a|um|al)|virus(?:es)?|viral|pathogens?|germs?|spores?|fungi|fungus|fungal|mold|mould|mildew|tuberculosis|mycobacterium|e\.?\s?coli|escherichia|salmonella|staph\w*|pseudomonas|listeria|c\.?\s?diff(?:icile)?|clostridi\w*|candida|enterococcus|klebsiella|legionella|streptococcus|trichophyton|micro-?organisms?|microbes?|organisms?)\b/i;
+  /\b(norovirus|hiv(?:-1)?|sars[-\s]?cov[-\s]?2|covid(?:-19)?|coronavirus|ebola|mrsa|vre|influenza|h1n1|rhinovirus|rotavirus|adenovirus|hepatitis|hbv|hcv|bacteri(?:a|um|al)|virus(?:es)?|viral|pathogens?|germs?|spores?|fungi|fungus|fungal|mold|mould|mildew|tuberculosis|mycobacterium|e\.?\s?coli|escherichia|salmonella|staph\w*|pseudomonas|listeria|c\.?\s?diff(?:icile)?|clostridi\w*|candida|enterococcus|klebsiella|legionella|streptococcus|trichophyton|micro-?organisms?|microbes?|organisms?)\b/i;
 /**
  * B0-868: "does not kill", "is not intended to kill", "may not meet their kill claims", "not
  * effective against" -- negated forms tell the user what a product or process does NOT do. They
@@ -970,6 +1026,58 @@ const DOC_CITATION_PATTERN = /\[doc:([^\]]+)\]/gi;
 /** "per the X label", "according to the X SDS", "as stated on/in the X label/profile/sheet". */
 const PER_LABEL_ATTRIBUTION_PATTERN =
   /\b(?:per|according to|as (?:stated|noted|indicated) (?:on|in))\s+the\s+([a-z0-9][\w'&-]*(?:\s+[a-z0-9][\w'&-]*){0,4})\s+(?:label|sds|profile|sheet)\b/i;
+/**
+ * B0-971 — "the label (explicitly) states …", "its product line profile says …", "the SDS lists …",
+ * "the guidance shows …". Names a source KIND but not a product, so it only attributes together
+ * with the product named at the head of the bullet (see `bulletHeadProductName`).
+ */
+const SOURCE_ASSERTION_ATTRIBUTION_PATTERN =
+  /\b(?:the|its|this)\s+(?:product(?:'s)?\s+)?(?:(?:product\s+)?line\s+)?(?:label|sds|safety data sheet|profile|sheet|guidance|efficacy data)\s+(?:\w+\s+){0,2}?(?:states?|says?|lists?|shows?|confirms?|indicates?|notes?|specif(?:y|ies))\b/i;
+/**
+ * B0-971 — the product a list bullet is ABOUT: "Rest Stop™: The label states …",
+ * "CIDE-BET FRESH & CLEAN (Hospital disinfectant): The product line profile states …",
+ * "The 5 Minute Alkaline Disinfectant is also labeled …". Runs on the markup-stripped sentence.
+ */
+const BULLET_HEAD_PRODUCT_PATTERN = /^(?:[Tt]he\s+)?([A-Z0-9][^:—–]{1,80}?)\s*(?::|—|–|\s+(?:is|are|has|was|were)\b)/;
+
+/** Lowercase, no trademark glyphs/emphasis, single-spaced — for title ↔ bullet-head comparisons only. */
+function normalizeProductNameForCompare(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[™®©*_`]/g, '')
+    .replace(/\s+/g, ' ')
+    .replace(/[\s:;,.]+$/, '')
+    .trim();
+}
+
+/**
+ * B0-971 — the normalised product name at the head of a bullet-shaped sentence, or null when the
+ * sentence does not open with one (pronoun/determiner heads such as "This product is …" and
+ * "These products are …" are excluded, exactly as `hasProductSubject` excludes them).
+ */
+export function bulletHeadProductName(sentence: string): string | null {
+  const match = BULLET_HEAD_PRODUCT_PATTERN.exec(stripSentenceMarkup(sentence));
+  if (!match?.[1]) return null;
+  const head = normalizeProductNameForCompare(match[1]);
+  if (head.length < 3) return null;
+  const firstWord = head.split(' ')[0] ?? '';
+  if (SENTENCE_INITIAL_NON_PRODUCT_WORDS.has(firstWord) || IMPERATIVE_OPENER_WORDS.has(firstWord)) {
+    return null;
+  }
+  return head;
+}
+
+/** Whether a source title names the product at the head of a bullet (either contains the other). */
+function titleNamesBulletHead(title: string, head: string): boolean {
+  const normalizedTitle = normalizeProductNameForCompare(title);
+  if (normalizedTitle.length < 3) return false;
+  return normalizedTitle.includes(head) || head.includes(normalizedTitle);
+}
+
+/** Every document id (plain or batch `<id>:<key>` form) cited by a `[doc:…]` marker anywhere in `text`. */
+function citedDocumentIds(text: string): string[] {
+  return Array.from(text.matchAll(DOC_CITATION_PATTERN), (m) => m[1]?.trim() ?? '').filter(Boolean);
+}
 
 /**
  * B0-888 — the specific source(s) a sentence (or its immediate surrounding context, standing in
@@ -978,10 +1086,19 @@ const PER_LABEL_ATTRIBUTION_PATTERN =
  * fuzzy-matching a source's title, or -- only when nothing else names a source AND exactly one
  * candidate is the turn's locked product line's own document -- that one document (no ambiguity to
  * guess through with more than one).
+ *
+ * B0-971 — a fourth channel, tried before the locked-line fallback: the bullet names a product at
+ * its head ("Rest Stop™: …") AND a source whose TITLE names that product is either cited by a
+ * `[doc:…]` marker anywhere in the draft (the trailing `Source:` line, in practice) or the sentence
+ * itself says "the label/profile/SDS states/says/lists/shows". Attribution only: the key-term check
+ * in `isKeyTermGrounded` still has to find the organism/material and a claim verb in THAT source's
+ * body, so a claim the named source never makes is still redacted.
  */
 function attributedSources(
+  sentence: string,
   contextText: string,
   sources: readonly RegulatedClaimSource[],
+  draftAnswer: string,
 ): RegulatedClaimSource[] {
   const attributed: RegulatedClaimSource[] = [];
 
@@ -1001,6 +1118,22 @@ function attributedSources(
       const title = source.title.toLowerCase();
       if ((title.includes(fragment) || fragment.includes(title)) && !attributed.includes(source)) {
         attributed.push(source);
+      }
+    }
+  }
+
+  if (attributed.length === 0) {
+    const head = bulletHeadProductName(sentence);
+    if (head) {
+      const cited = citedDocumentIds(draftAnswer);
+      const sentenceAssertsSource = SOURCE_ASSERTION_ATTRIBUTION_PATTERN.test(sentence);
+      for (const source of sources) {
+        if (!titleNamesBulletHead(source.title, head)) continue;
+        const citedAnywhere = cited.some(
+          (id) => id === source.documentId || id.endsWith(`:${source.documentId}`),
+        );
+        if (!citedAnywhere && !sentenceAssertsSource) continue;
+        if (!attributed.includes(source)) attributed.push(source);
       }
     }
   }
@@ -1028,8 +1161,9 @@ function isKeyTermGrounded(
   contextText: string,
   category: 'compatibility' | 'efficacy_claim',
   sources: readonly RegulatedClaimSource[],
+  draftAnswer: string,
 ): boolean {
-  const candidates = attributedSources(contextText, sources);
+  const candidates = attributedSources(sentence, contextText, sources, draftAnswer);
   if (candidates.length === 0) return false;
 
   const keyTermPattern =
@@ -1145,7 +1279,7 @@ export function evaluateRegulatedClaimGrounding(input: {
         const contextText = [allSentences[idx - 1], sentence, allSentences[idx + 1]]
           .filter((s): s is string => Boolean(s))
           .join(' ');
-        if (isKeyTermGrounded(sentence, contextText, category, input.sources)) {
+        if (isKeyTermGrounded(sentence, contextText, category, input.sources, input.draftAnswer)) {
           groundedViaKeyTermPath = true;
           continue;
         }
@@ -1216,19 +1350,37 @@ export function evaluateRegulatedClaimGrounding(input: {
 /** Matches the verified-facts citation marker, including the per-product batch form
  * `[doc:verified-facts:<productLineKey>]` (B0-549's `executeBatchEfficacyData`). */
 const VERIFIED_FACTS_CITATION_PATTERN = /\[doc:verified-facts(?::[^\]]+)?\]/i;
+/** B0-987 — the keyed batch form only, capturing `<key>` exactly as the model wrote it. */
+const VERIFIED_FACTS_KEYED_CITATION_PATTERN = /\[doc:verified-facts:([^\]]+)\]/gi;
+
+/** B0-987 — every distinct `<key>` cited as `[doc:verified-facts:<key>]` in `text`, in order of first appearance. */
+export function extractVerifiedFactsCitationKeys(text: string): string[] {
+  const keys: string[] = [];
+  for (const match of text.matchAll(VERIFIED_FACTS_KEYED_CITATION_PATTERN)) {
+    const key = match[1]?.trim();
+    if (key && !keys.includes(key)) keys.push(key);
+  }
+  return keys;
+}
+
+/** The two scalar dilution fields of a `ProductLineFacts` row this guardrail compares against. */
+export type DilutionFactScalars = { dilutionDisplay: string | null; dilutionOzPerGal: number | null };
 
 export type DilutionCitationGroundingResult = {
   /** Whether the draft cited `[doc:verified-facts]` alongside a dilution figure at all. When
    * false, `grounded`/`ungroundedTokens` are meaningless and no rejection should follow. */
   applicable: boolean;
-  /** True when every cited dilution figure matches the locked product line's own fact row.
-   * Always false when `applicable` is true and there is no locked product line (nothing to
-   * verify the figure against) or the locked line has no dilution fact on file at all. */
+  /** True when every cited dilution figure matches the fact row it is attached to (B0-987: the
+   * row of the `[doc:verified-facts:<key>]` citation on its line / named for its bullet, else the
+   * locked product line's own row). Always false when `applicable` is true and a figure has
+   * neither a citation row nor a locked line to verify against, or that row carries no dilution. */
   grounded: boolean;
   /** Every dilution-shaped token the draft asserted, for the review-task payload. */
   citedTokens: string[];
-  /** The subset of `citedTokens` that could not be matched to the locked line's own fact row. */
+  /** The subset of `citedTokens` that could not be matched to its own cited/locked fact row. */
   ungroundedTokens: string[];
+  /** B0-987 — the `<key>`s cited as `[doc:verified-facts:<key>]` anywhere in the draft. */
+  citedProductLineKeys: string[];
 };
 
 /**
@@ -1260,33 +1412,122 @@ function renderedDilutionStrings(facts: { dilutionDisplay: string | null; diluti
  */
 export function evaluateVerifiedFactsDilutionCitation(input: {
   draftAnswer: string;
-  lockedFacts: { dilutionDisplay: string | null; dilutionOzPerGal: number | null } | null;
+  lockedFacts: DilutionFactScalars | null;
+  /**
+   * B0-987 — the freshly re-fetched row for each `<key>` cited as `[doc:verified-facts:<key>]`,
+   * keyed by that `<key>` exactly as written (`null` when the key resolved to no row). A dilution
+   * figure is checked against the row(s) of the citation(s) on ITS OWN line, or — when its bullet
+   * carries none inline — the row whose `Source:`-line citation is labelled with the product named
+   * at the head of that bullet. Only a figure attached to no citation falls back to `lockedFacts`.
+   */
+  citedFacts?: ReadonlyMap<string, DilutionFactScalars | null>;
 }): DilutionCitationGroundingResult {
+  const citedProductLineKeys = extractVerifiedFactsCitationKeys(input.draftAnswer);
+  const notApplicable: DilutionCitationGroundingResult = {
+    applicable: false,
+    grounded: true,
+    citedTokens: [],
+    ungroundedTokens: [],
+    citedProductLineKeys,
+  };
   if (!VERIFIED_FACTS_CITATION_PATTERN.test(input.draftAnswer)) {
-    return { applicable: false, grounded: true, citedTokens: [], ungroundedTokens: [] };
+    return notApplicable;
   }
   const citedTokens = extractDilutionTokens(input.draftAnswer);
   if (citedTokens.length === 0) {
-    return { applicable: false, grounded: true, citedTokens: [], ungroundedTokens: [] };
+    return notApplicable;
   }
 
-  const groundedStrings = input.lockedFacts
+  const lockedStrings = input.lockedFacts
     ? renderedDilutionStrings(input.lockedFacts).map(normalizeUnitToken)
     : [];
-  const ungroundedTokens = citedTokens.filter((token) => {
+  // Only keys that resolved to a row get an entry; a key with no row falls back to the locked line
+  // below (the pre-B0-987 behaviour for that figure), while a row WITHOUT a dilution on file yields
+  // an empty list — quoting a dilution for a product whose own row has none is ungrounded.
+  const citedStringsByKey = new Map<string, string[]>();
+  for (const key of citedProductLineKeys) {
+    const facts = input.citedFacts?.get(key);
+    if (facts) citedStringsByKey.set(key, renderedDilutionStrings(facts).map(normalizeUnitToken));
+  }
+  const citationLabels = verifiedFactsCitationLabels(input.draftAnswer);
+
+  const matches = (token: string, groundedStrings: readonly string[]) => {
     const normalizedToken = normalizeUnitToken(token);
-    if (!normalizedToken) return true;
-    return !groundedStrings.some(
+    if (!normalizedToken) return false;
+    return groundedStrings.some(
       (g) => g === normalizedToken || g.includes(normalizedToken) || normalizedToken.includes(g),
     );
-  });
+  };
+
+  const ungroundedTokens: string[] = [];
+  for (const line of input.draftAnswer.split('\n')) {
+    // Source-line product labels are emitted as bullets; free prose lines should not be keyed by
+    // incidental colons (e.g. "1:256") that can appear before a later keyed citation.
+    const head = /^\s*[-–—•*+]/.test(line) ? bulletHeadProductName(line) : null;
+    const headKeys = head
+      ? citationLabels
+          .filter(({ label }) => label.includes(head) || head.includes(label))
+          .map(({ key }) => key)
+      : [];
+
+    // A keyed citation in one sentence on the line should not "capture" figures from another sentence.
+    for (const clause of line.split(/(?<=[.;])\s+/)) {
+      const clauseTokens = extractDilutionTokens(clause);
+      if (clauseTokens.length === 0) continue;
+
+      let clauseKeys = extractVerifiedFactsCitationKeys(clause);
+      if (clauseKeys.length === 0) {
+        clauseKeys = headKeys;
+      }
+      const citedRows = clauseKeys
+        .map((key) => citedStringsByKey.get(key))
+        .filter((strings): strings is string[] => strings != null);
+      const groundedStrings = citedRows.length > 0 ? citedRows.flat() : lockedStrings;
+
+      for (const token of clauseTokens) {
+        if (!matches(token, groundedStrings)) ungroundedTokens.push(token);
+      }
+    }
+  }
 
   return {
     applicable: true,
     grounded: ungroundedTokens.length === 0,
     citedTokens,
     ungroundedTokens: [...new Set(ungroundedTokens)],
+    citedProductLineKeys,
   };
+}
+
+/**
+ * B0-987 — the product each `[doc:verified-facts:<key>]` citation is labelled with, read off the
+ * text between the previous separator (`;`, a line start, or the previous marker) and the marker:
+ * `Sources: Verified Product Facts (structured) — Citrus Chisel [doc:verified-facts:16704]` ⇒
+ * `{ key: '16704', label: 'citrus chisel' }`. Labels are normalised with the same routine as bullet
+ * heads so the two compare directly.
+ */
+function verifiedFactsCitationLabels(text: string): Array<{ key: string; label: string }> {
+  const out: Array<{ key: string; label: string }> = [];
+  for (const line of text.split('\n')) {
+    let cursor = 0;
+    for (const match of line.matchAll(VERIFIED_FACTS_KEYED_CITATION_PATTERN)) {
+      const key = match[1]?.trim();
+      const start = match.index ?? 0;
+      if (key) {
+        const segment = line.slice(cursor, start);
+        const label = normalizeProductNameForCompare(
+          (segment.split(';').pop() ?? '')
+            .replace(/^\s*sources?\s*:/i, '')
+            .replace(/verified product facts(?:\s*\(structured\))?/i, '')
+            .replace(/[—–-]\s*/g, ' ')
+            .replace(/\[doc:[^\]]*\]/gi, ''),
+        );
+        if (label.length >= 3) out.push({ key, label });
+      }
+      cursor = start + match[0].length;
+    }
+  }
+  return out;
 }
 
 /**

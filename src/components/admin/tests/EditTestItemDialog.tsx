@@ -28,7 +28,8 @@ type EditTestItemDialogProps = {
   testItemId: string;
   rowIndex: number;
   prompt: string;
-  expectedCanonicalProduct: string | null;
+  /** `test_items.expected_canonical_products` — product line keys, one per element (B0-993). */
+  expectedCanonicalProducts: string[];
   expectedReasonCode: string | null;
   source: string | null;
   priority: number | null;
@@ -76,7 +77,7 @@ export function EditTestItemDialog({
   testItemId,
   rowIndex,
   prompt,
-  expectedCanonicalProduct,
+  expectedCanonicalProducts,
   expectedReasonCode,
   source,
   priority,
@@ -124,7 +125,7 @@ export function EditTestItemDialog({
               idPrefix={`edit-test-item-${testItemId}`}
               initialValues={{
                 prompt,
-                expectedCanonicalProduct: expectedCanonicalProduct ?? '',
+                expectedCanonicalProducts,
                 expectedReasonCode: expectedReasonCode ?? '',
                 source: source ?? '',
                 priority: priority === null ? '' : String(priority),

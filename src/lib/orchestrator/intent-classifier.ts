@@ -13,7 +13,10 @@ import {
   getNumberSetting,
   getStringSetting,
 } from '~/lib/settings/settings-service';
-import { SURFACE_VOCABULARY_PROMPT_EXAMPLES } from '~/lib/orchestrator/surface-vocabulary';
+import {
+  resolveFloorSpecialistForSurface,
+  SURFACE_VOCABULARY_PROMPT_EXAMPLES,
+} from '~/lib/orchestrator/surface-vocabulary';
 import { PRODUCT_TOOL_NAMES } from '~/lib/tools/tool-schemas';
 
 /**
@@ -144,6 +147,14 @@ export const intentClassificationSchema = llmIntentClassificationSchema.extend({
   source: z.enum(['llm', 'keyword_fallback']),
   fallbackReason: z.string().nullable(),
   /**
+   * B0-977 — non-null when `applyFloorSurfaceRoutingOverride` deterministically re-routed the
+   * model's `intent` (a `recommendations` verdict for a named floor substrate → the owning floor
+   * specialist). Distinct from `fallbackReason` on purpose: the model call succeeded and this is
+   * not a degradation, so `describeRoutingFallback` must never report it as one. Absent
+   * (`undefined`) on results built before the override existed or on paths that never evaluate it.
+   */
+  routingOverrideReason: z.string().nullable().optional(),
+  /**
    * B0-563 — this call's token usage, so the `orchestration_planner` step can attribute cost.
    * Null on the `keyword_fallback` path (no model call was made).
    */
@@ -208,6 +219,7 @@ export const SME_ROUTING_RULES_PROMPT = `Routing rules (apply in order):
    Examples:
    - "What is the best glass cleaner?" → product (names an existing category and asks which wins; no job/problem described; no domain specialist owns "glass cleaner")
    - "What is the strongest floor stripper you have for VCT?" → floor_vct (floor-care category comparison naming a resilient-tile substrate; stays with the domain specialist, never "recommendations", even though "strongest" appears)
+   - "What stripping and finish products should I use for my VCT floor?" → floor_vct (a product-selection ask for a NAMED resilient-tile substrate; floor_vct owns VCT stripping and finishing, so this is never "recommendations" even though it asks what to use — the answer enumerates the documented strippers and finishes per category)
    - "What disinfectant works best against norovirus?" → bathroom (disinfection category narrowed by a pathogen claim — still a catalog/spec filter within bathroom's domain, not an open-ended job)
    - "What should I use to get grease off a kitchen floor?" → recommendations (describes a job/problem; no product category named up front; kitchen degreasing is not any floor specialist's stripping/finishing/cleaning domain)
    - "I need something for a gym floor that keeps getting scuffed" → floor_wood_sport (a gym/sports floor problem is the wood/sport floor specialist's domain per this rule; "recommendations" is only for jobs no domain specialist owns)
@@ -248,6 +260,33 @@ Output rules:
 }
 
 const clamp01 = (n: number): number => Math.max(0, Math.min(1, n));
+
+/**
+ * B0-977 — deterministic safety net applied to the model's routing verdict AFTER the call, on both
+ * the classifier path (`runLlmClassification`) and the consolidated signals path
+ * (`analyzeTurnSignals`). Rule 2 of `SME_ROUTING_RULES_PROMPT` says a floor substrate's stripping/
+ * finishing/maintenance asks belong to the owning floor specialist, never `recommendations` (which
+ * since B0-497/511/663 handles job asks no domain specialist owns); the model violated it on the
+ * VCT golden item at confidence 0.85. Only `recommendations` is ever overridden, and only when the
+ * model ITSELF extracted a floor substrate into `surfaceType` — nothing is inferred from the message
+ * text here, so a turn with no surface entity is untouched.
+ */
+export function applyFloorSurfaceRoutingOverride(input: {
+  intent: IntentValue;
+  surfaceType: string | null | undefined;
+}): { intent: IntentValue; routingOverrideReason: string | null } {
+  if (input.intent !== 'recommendations') {
+    return { intent: input.intent, routingOverrideReason: null };
+  }
+  const owner = resolveFloorSpecialistForSurface(input.surfaceType);
+  if (!owner) {
+    return { intent: input.intent, routingOverrideReason: null };
+  }
+  return {
+    intent: owner,
+    routingOverrideReason: `floor_surface_override: classifier chose "recommendations" but surfaceType "${(input.surfaceType ?? '').trim()}" is a floor substrate owned by "${owner}" (routing rule 2)`,
+  };
+}
 
 /** Caps how much prior conversation is replayed into the classifier call — a router should stay cheap. */
 const MAX_PRIOR_MESSAGES = 8;
@@ -564,11 +603,19 @@ async function runLlmClassification(
     deps.runLlm(message, priorMessages, signal, model),
   );
 
+  // B0-977 — deterministic floor-substrate override on the model's verdict; see the function doc.
+  const override = applyFloorSurfaceRoutingOverride({
+    intent: raw.intent,
+    surfaceType: raw.entities.surfaceType,
+  });
+
   return {
     ...raw,
+    intent: override.intent,
     confidence: clamp01(raw.confidence),
     source: 'llm',
     fallbackReason: null,
+    routingOverrideReason: override.routingOverrideReason,
     usage,
     model: model ?? (await resolveRouterModel()),
   };

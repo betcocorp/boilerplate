@@ -57,6 +57,16 @@ export const SCHEDULED_ITEM_TIMED_OUT_ERROR = 'timed_out';
 export const DEFAULT_RECONCILE_LIMIT = 200;
 export const MAX_RECONCILE_LIMIT = 1000;
 
+/**
+ * B0-989 — backfill window for a child with no `test_run_id`. The sweep creates every run within
+ * seconds of the child row, so a matching `test_results` row created inside this window after the
+ * child's `started_at` is the sweep's own run for that test; anything later is somebody else's.
+ */
+export const ORPHAN_BACKFILL_WINDOW_MS = 15 * 60 * 1000;
+
+/** Clock skew tolerance in the other direction (`started_at` is Postgres `now()`, the run's `created_at` too, but written by a different statement). */
+export const ORPHAN_BACKFILL_SKEW_MS = 60 * 1000;
+
 /* -------------------------------------------------------------------------- *
  * Contracts (Zod first, per AGENTS.md)
  * -------------------------------------------------------------------------- */
@@ -83,6 +93,8 @@ export const reconcileScheduledTestsResultSchema = z.object({
   dryRun: z.boolean(),
   /** Non-terminal children the query returned. */
   itemsExamined: z.number().int().nonnegative(),
+  /** B0-989 — children with no `test_run_id` that were linked to the sweep's run this pass. */
+  itemsBackfilled: z.number().int().nonnegative().default(0),
   itemsCompleted: z.number().int().nonnegative(),
   itemsFailed: z.number().int().nonnegative(),
   itemsTimedOut: z.number().int().nonnegative(),
@@ -110,6 +122,16 @@ export type ReconcilerTestRun = {
   elapsed_ms: number | null;
 };
 
+/**
+ * B0-989 — a `test_results` row the sweep created, as needed to re-link an orphaned child. Only
+ * rows with `triggered_by = 'api-client'` qualify (the repository filters), so a human's run started
+ * in the same minute can never be mistaken for the sweep's.
+ */
+export type ReconcilerSweepRun = ReconcilerTestRun & {
+  test_id: string;
+  created_at: string;
+};
+
 /** Pass/fail counts for one `test_results` row, tallied from its `test_result_items`. */
 export type ScheduledItemTally = {
   test_run_id: string;
@@ -121,6 +143,8 @@ export type ScheduledItemTally = {
 export type ScheduledTestReconcilerPort = {
   listNonTerminalItems(limit: number): Promise<ScheduledTestItem[]>;
   listTestRuns(testRunIds: string[]): Promise<ReconcilerTestRun[]>;
+  /** B0-989 — sweep-created runs for these tests created at/after `sinceIso`, oldest first. */
+  listSweepTestRunsForTests(testIds: string[], sinceIso: string): Promise<ReconcilerSweepRun[]>;
   listItemTallies(testRunIds: string[]): Promise<ScheduledItemTally[]>;
   updateItem(id: string, patch: ScheduledTestItemPatch): Promise<void>;
   listItemsForScheduledRuns(scheduledRunIds: string[]): Promise<ScheduledTestItem[]>;
@@ -207,6 +231,38 @@ export function resolveScheduledItemPatch(input: {
 }
 
 /**
+ * B0-989 — the sweep run an orphaned child (no `test_run_id`) belongs to, or `null`.
+ *
+ * The child's `started_at` is the instant the sweep opened its ledger, a few seconds before it
+ * created any run, so the match is the EARLIEST run for the same test created inside
+ * [`started_at` − skew, `started_at` + window]. Runs are consumed as they are matched so two
+ * children of two sweeps for the same test cannot both claim one run.
+ */
+export function matchOrphanToSweepRun(
+  item: Pick<ScheduledTestItem, 'test_id' | 'started_at' | 'created_at'>,
+  runs: ReconcilerSweepRun[],
+  consumed: Set<string> = new Set(),
+): ReconcilerSweepRun | null {
+  const anchor = Date.parse(item.started_at ?? item.created_at);
+  if (Number.isNaN(anchor)) return null;
+
+  const candidates = runs
+    .filter((run) => run.test_id === item.test_id && !consumed.has(run.id))
+    .map((run) => ({ run, createdMs: Date.parse(run.created_at) }))
+    .filter(
+      ({ createdMs }) =>
+        !Number.isNaN(createdMs) &&
+        createdMs >= anchor - ORPHAN_BACKFILL_SKEW_MS &&
+        createdMs <= anchor + ORPHAN_BACKFILL_WINDOW_MS,
+    )
+    .sort((a, b) => a.createdMs - b.createdMs);
+
+  const match = candidates[0]?.run ?? null;
+  if (match) consumed.add(match.id);
+  return match;
+}
+
+/**
  * The parent patch implied by its children. Aggregates come from the shared pure helper so the
  * sweep, the reconciler and `/admin/scheduled` can never disagree on the arithmetic.
  */
@@ -275,6 +331,7 @@ export async function reconcileScheduledTests(
     staleAfterMs: options.staleAfterMs,
     dryRun: options.dryRun,
     itemsExamined: 0,
+    itemsBackfilled: 0,
     itemsCompleted: 0,
     itemsFailed: 0,
     itemsTimedOut: 0,
@@ -291,6 +348,36 @@ export async function reconcileScheduledTests(
   if (items.length === 0) {
     log?.('scheduled_test_reconcile_completed', { items_examined: 0 });
     return result;
+  }
+
+  /**
+   * B0-989 — re-link children the sweep never got to stamp. A child arrives here with no
+   * `test_run_id` when the sweep invocation died (or stopped listening) before the execute call
+   * returned; the run it created is still in `test_results`, so find it by test and time and fold
+   * it in exactly as if the sweep had recorded it. The id is written alongside whatever patch the
+   * child gets below — even a still-`running` child gets the link, so `/admin/scheduled` can show it.
+   */
+  const backfilledRunIds = new Map<string, string>();
+  const orphans = items.filter((item) => !item.test_run_id);
+  if (orphans.length > 0) {
+    const anchors = orphans
+      .map((item) => Date.parse(item.started_at ?? item.created_at))
+      .filter((value) => !Number.isNaN(value));
+    if (anchors.length > 0) {
+      const sinceIso = new Date(Math.min(...anchors) - ORPHAN_BACKFILL_SKEW_MS).toISOString();
+      const sweepRuns = await deps.port.listSweepTestRunsForTests(
+        Array.from(new Set(orphans.map((item) => item.test_id))),
+        sinceIso,
+      );
+      const consumed = new Set<string>();
+      for (const orphan of orphans) {
+        const match = matchOrphanToSweepRun(orphan, sweepRuns, consumed);
+        if (match) {
+          orphan.test_run_id = match.id;
+          backfilledRunIds.set(orphan.id, match.id);
+        }
+      }
+    }
   }
 
   const testRunIds = Array.from(
@@ -317,13 +404,19 @@ export async function reconcileScheduledTests(
     const run = item.test_run_id ? (runById.get(item.test_run_id) ?? null) : null;
     const tally = item.test_run_id ? (tallyByRunId.get(item.test_run_id) ?? null) : null;
 
-    const patch = resolveScheduledItemPatch({
+    const resolved = resolveScheduledItemPatch({
       item,
       run,
       tally,
       nowMs,
       staleAfterMs: options.staleAfterMs,
     });
+
+    const backfilledRunId = backfilledRunIds.get(item.id);
+    const patch: ScheduledTestItemPatch | null =
+      resolved || backfilledRunId
+        ? { ...(resolved ?? {}), ...(backfilledRunId ? { test_run_id: backfilledRunId } : {}) }
+        : null;
 
     if (!patch) {
       result.itemsPending += 1;
@@ -342,6 +435,16 @@ export async function reconcileScheduledTests(
         });
         continue;
       }
+    }
+
+    if (backfilledRunId) {
+      result.itemsBackfilled += 1;
+    }
+
+    // A link-only patch (the run is still executing) changes nothing the parent aggregates read.
+    if (!resolved) {
+      result.itemsPending += 1;
+      continue;
     }
 
     touchedParentIds.add(item.scheduled_run_id);
@@ -409,6 +512,7 @@ export async function reconcileScheduledTests(
 
   log?.('scheduled_test_reconcile_completed', {
     items_examined: result.itemsExamined,
+    items_backfilled: result.itemsBackfilled,
     items_completed: result.itemsCompleted,
     items_failed: result.itemsFailed,
     items_timed_out: result.itemsTimedOut,

@@ -471,7 +471,7 @@ export const productSupportTools: Tool[] = [
     strict: false,
     description: [
       'Retrieve Betco FLOOR-CARE PROCEDURE documents from the approved knowledge corpus — coat-count and coverage/yield charts, finish application and dry/cure guidance, top-scrub and recoat, stripping, burnishing, and pad/equipment guides.',
-      'USE WHEN: "how many coats", "what coverage per gallon", "how long between coats", "what is the top-scrub and recoat procedure", "how do I strip this floor" — on a named floor surface (VCT, terrazzo, sealed concrete, hardwood, sport floor).',
+      'USE WHEN: "how many coats", "what coverage per gallon", "how long between coats", "when can we reopen / walk on the floor / put carts back after the final coat", "what is the top-scrub and recoat procedure", "how do I strip this floor" — on a named floor surface (VCT, terrazzo, sealed concrete, hardwood, sport floor). A reopening-to-traffic question needs no product name: pass procedure "reopening to traffic after final coat".',
       'NOT FOR: a product\'s verified dilution ratio or contact time → `get_efficacy_data`; dispenser setup → `get_dispenser_asset`; label directions or SDS → `search_product_docs`; which finish products exist → `get_products_in_category`.',
       'Send at least one of `surfaceType`, `productName`, `procedure`. Not anchored to a product line — a product name is only query text.',
       'RETURNS up to 5 knowledge documents in `sources[].documentBody`; cite `documentId` as `[doc:uuid]`. Transcribe coat counts, coverage figures, dry times, and dilution values exactly as written — never round, convert, or average them.',

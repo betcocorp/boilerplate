@@ -7,6 +7,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { CreateTestFromPromptsDialog } from '~/components/admin/tests/CreateTestFromPromptsDialog';
 import { DeleteTestPromptDialog } from '~/components/admin/tests/DeleteTestPromptDialog';
 import { EditTestItemDialog } from '~/components/admin/tests/EditTestItemDialog';
+import { ExpectedSourcesDialog } from '~/components/admin/tests/ExpectedSourcesDialog';
 import type { TestItemSuggestionLists } from '~/components/admin/tests/TestItemFields';
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
@@ -40,7 +41,8 @@ export type TestPromptRow = {
   id: string;
   row_index: number;
   prompt: string;
-  expected_canonical_product: string | null;
+  /** B0-993 — product line keys, one per element; exported pipe-delimited under `canonical_product`. */
+  expected_canonical_products: string[];
   expected_reason_code: string | null;
   source: string | null;
   priority: number | null;
@@ -175,12 +177,15 @@ function ConceptExpectationsCell({
         </span>
       ) : null}
       {sourceLabels.length > 0 ? (
-        <span
-          className="line-clamp-2 whitespace-normal text-slate-500"
-          title={sourceLabels.join(PHRASE_DELIMITER)}
-        >
-          Sources: {sourceLabels.join(PHRASE_DELIMITER)}
-        </span>
+        // B0-994 — the whole string is the trigger; the dialog shows each document as a card.
+        <ExpectedSourcesDialog
+          label={sourceLabels.join(PHRASE_DELIMITER)}
+          rowIndex={item.row_index}
+          sources={item.expected_sources.map((id) => ({
+            id,
+            title: documentTitlesById[id] ?? null,
+          }))}
+        />
       ) : null}
       {item.should_cite !== null ? (
         <Badge
@@ -411,7 +416,7 @@ export function TestPromptsSection({
       ...sorted.map((item) =>
         [
           item.prompt,
-          item.expected_canonical_product ?? '',
+          joinPhrases(item.expected_canonical_products),
           item.expected_reason_code ?? '',
           item.source ?? '',
           item.priority === null ? '' : String(item.priority),
@@ -556,7 +561,7 @@ export function TestPromptsSection({
               </TableHead>
               <TableHead>Row</TableHead>
               <TableHead>Prompt</TableHead>
-              <TableHead title="Concept, source, and citation expectations for this prompt: expected/minimum concept phrases, expected criteria, the rag documents listed in expected_sources, and should_cite.">
+              <TableHead title="Concept, source, and citation expectations for this prompt: expected/minimum concept phrases, the rag documents listed in expected_sources (click Sources to read them), and should_cite.">
                 Concepts / sources
               </TableHead>
               <TableHead title="Number of recent runs that included this prompt (and the passed/failed counts).">
@@ -693,8 +698,8 @@ export function TestPromptsSection({
                       <div className="flex items-center gap-2">
                         <EditTestItemDialog
                           canonicalProductLabels={canonicalProductLabels}
-                          expectedCanonicalProduct={
-                            item.expected_canonical_product
+                          expectedCanonicalProducts={
+                            item.expected_canonical_products
                           }
                           expectedConcepts={item.expected_concepts}
                           expectedReasonCode={item.expected_reason_code}

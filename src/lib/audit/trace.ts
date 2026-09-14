@@ -83,6 +83,12 @@ export const toolRetrievalParamsSchema = z.object({
   minSimilarity: z.number().nullable(),
   retrievalStrategy: z.string(),
   embeddingSource: z.string(),
+  /**
+   * B0-975 — hybrid RPC candidates returned by the lexical leg with a NULL `similarity` (no
+   * embedding) and therefore excluded from ranking instead of being scored 0. Optional: absent on
+   * rows written before this ticket.
+   */
+  lexicalOnlyCandidateCount: z.number().int().nonnegative().optional(),
   timings: z.object({
     totalMs: z.number(),
     queryEmbeddingMs: z.number(),

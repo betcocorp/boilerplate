@@ -201,6 +201,12 @@ export type FactToolEnforcementOutcome = {
   reason?: 'tool_not_offered' | 'retrieval_withdrawn' | 'no_rounds_remaining' | 'model_declined_call';
   /** Whether the forced call executed successfully. Null when nothing was forced. */
   toolSucceeded: boolean | null;
+  /**
+   * B0-984 — the draft the model had finished BEFORE the forced round, so a run report can diff
+   * what enforcement changed. Present whenever a forced round was opened (enforced, or the model
+   * declined the pinned call); absent when nothing was required or the pin could not be placed.
+   */
+  preEnforcementDraft?: string;
 };
 
 export type ResponsesRuntimeOptions = {
@@ -617,6 +623,8 @@ export async function runResponsesWithToolLoop(
   let factToolCheckUsed = false;
   /** The forced call to make on the NEXT request; consumed by it (same shape as the notice above). */
   let pendingFactToolEnforcement: { toolName: string; instruction: string } | null = null;
+  // B0-984 — the finished draft that opened the forced round, reported on its outcome.
+  let preEnforcementDraft: string | null = null;
   /** The forcing whose round is executing right now; consumed when that round's tools return. */
   let activeFactToolEnforcement: { toolName: string } | null = null;
   /**
@@ -903,12 +911,14 @@ export async function runResponsesWithToolLoop(
           enforced: false,
           reason: 'model_declined_call',
           toolSucceeded: null,
+          ...(preEnforcementDraft !== null ? { preEnforcementDraft } : {}),
         });
         activeFactToolEnforcement = null;
       } else if (opts.requireFactTool && !factToolCheckUsed) {
         factToolCheckUsed = true;
+        const draftAnswer = extractAssistantText(response);
         const required = opts.requireFactTool({
-          draftAnswer: extractAssistantText(response),
+          draftAnswer,
           toolNames: toolTrace.map((entry) => entry.toolName),
         });
         if (required) {
@@ -933,6 +943,7 @@ export async function runResponsesWithToolLoop(
             });
           } else {
             pendingFactToolEnforcement = required;
+            preEnforcementDraft = draftAnswer;
             suppressVisibleDeltas = true;
             continue;
           }
@@ -1094,6 +1105,7 @@ export async function runResponsesWithToolLoop(
         requiredTool: activeFactToolEnforcement.toolName,
         enforced: true,
         toolSucceeded: forcedIndex >= 0 ? (executed[forcedIndex]?.trace.ok ?? false) : false,
+        ...(preEnforcementDraft !== null ? { preEnforcementDraft } : {}),
       });
       activeFactToolEnforcement = null;
     }

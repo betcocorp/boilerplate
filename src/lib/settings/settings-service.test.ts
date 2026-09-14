@@ -28,6 +28,7 @@ import {
   getRouterType,
   getStringSetting,
   resetSettingsCacheForTest,
+  resolveSettingValue,
 } from '~/lib/settings/settings-service';
 
 function mockRow(value: string | null, error: { message: string } | null = null) {
@@ -53,6 +54,26 @@ function mockRows(values: Record<string, string>) {
 beforeEach(() => {
   resetSettingsCacheForTest();
   from.mockReset();
+});
+
+describe('resolveSettingValue (B0-992)', () => {
+  it('prefers the stored value, then default_value, then null', () => {
+    expect(resolveSettingValue({ value: 'true', default_value: 'false' })).toBe('true');
+    expect(resolveSettingValue({ value: null, default_value: 'false' })).toBe('false');
+    expect(resolveSettingValue({ value: null, default_value: null })).toBeNull();
+    expect(resolveSettingValue({ value: null })).toBeNull();
+    expect(resolveSettingValue(null)).toBeNull();
+  });
+
+  it('lets a row with a null value fall back to default_value before the caller fallback', async () => {
+    const maybeSingle = vi
+      .fn()
+      .mockResolvedValue({ data: { value: null, default_value: 'false' }, error: null });
+    const eq = vi.fn().mockReturnValue({ maybeSingle });
+    from.mockReturnValue({ select: vi.fn().mockReturnValue({ eq }) });
+    // default_value 'false' wins over the caller's `true`.
+    await expect(getBooleanSetting('BEX_FACT_TOOL_ENFORCEMENT_ENABLED', true)).resolves.toBe(false);
+  });
 });
 
 describe('getBooleanSetting', () => {
@@ -391,6 +412,8 @@ describe('settings-table coverage does not regress to process.env (B0-638)', () 
     'BEX_DISABLE_CONFIDENCE_GATING',
     // B0-734 — the early-decline gate switch, moved off process.env; defaults to false.
     'BEX_EARLY_DECLINE_GATE_ENABLED',
+    // B0-984 — read through isFactToolEnforcementEnabled(); new flag, never a process.env read.
+    'BEX_FACT_TOOL_ENFORCEMENT_ENABLED',
     // B0-886 — read through isRevisionSkipForRegulatedClaimOnlyEnabled(); never had a process.env
     // read (new flag, not a migrated one), added here for the same audit-trail reason.
     'BEX_REVISION_SKIP_REGULATED_CLAIM_ONLY_ENABLED',

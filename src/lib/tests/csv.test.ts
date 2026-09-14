@@ -181,13 +181,29 @@ describe('parseTestCsvContent — golden test set format', () => {
     const [row] = parseTestCsvContent(csv);
 
     expect(row.prompt).toBe('How much pH7Q per gallon?');
-    expect(row.expectedCanonicalProduct).toBe('pH7Q Neutral Disinfectant');
+    expect(row.expectedCanonicalProducts).toEqual(['pH7Q Neutral Disinfectant']);
     // The retired columns are dropped: no typed field exists for them any more, and the metadata
     // catch-all (B0-694 anti-pattern) must not carry them either.
     expect(row.metadata).not.toHaveProperty('should_answer');
     expect(row.metadata).not.toHaveProperty('expected_result_type');
     // Genuinely unknown columns still land in metadata as before.
     expect(row.metadata).toEqual({ legacy_note: 'keep me' });
+  });
+
+  it('B0-993 — splits a pipe-delimited canonical_product cell into one product line per element', () => {
+    const csv = [
+      'question,canonical_product',
+      '"Can I use pH7Q after Fight Bac RTU on the same surface?","pH7Q Neutral Disinfectant | GE Fight Bac RTU"',
+      '"Unconstrained prompt",',
+    ].join('\n');
+
+    const [multi, none] = parseTestCsvContent(csv);
+
+    expect(multi.expectedCanonicalProducts).toEqual([
+      'pH7Q Neutral Disinfectant',
+      'GE Fight Bac RTU',
+    ]);
+    expect(none.expectedCanonicalProducts).toEqual([]);
   });
 
   it('parses the downloadable template so the template round-trips through import', () => {

@@ -189,7 +189,8 @@ const rows = records
     return {
       row_index: index + 1,
       prompt,
-      expected_canonical_product: asTrimmedString(record.canonical_product) || null,
+      // B0-993 — pipe-delimited list of product line keys, each stored verbatim.
+      expected_canonical_products: splitPhraseCell(record.canonical_products || record.canonical_product),
       expected_reason_code: asTrimmedString(record.reason_code) || null,
       source: asTrimmedString(record.source) || null,
       priority: parsePriority(record.priority),

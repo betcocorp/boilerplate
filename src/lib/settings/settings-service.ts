@@ -38,6 +38,20 @@ type CacheEntry = { value: string | null; expiresAt: number };
 
 const cache = new Map<string, CacheEntry>();
 
+/**
+ * B0-992 — a row's effective value is `value` when set, else its `default_value` (the reader's
+ * own code fallback, mirrored into the table so /admin/settings can show it and "Reset to
+ * default" can restore it). Null only when the row is missing, unreadable, or has neither — in
+ * which case the caller's `fallback` still applies, exactly as before.
+ */
+export function resolveSettingValue(row: {
+  value: string | null;
+  default_value?: string | null;
+} | null | undefined): string | null {
+  if (!row) return null;
+  return row.value ?? row.default_value ?? null;
+}
+
 async function fetchSettingValue(key: string): Promise<string | null> {
   const cached = cache.get(key);
   if (cached && cached.expiresAt > Date.now()) {
@@ -49,12 +63,12 @@ async function fetchSettingValue(key: string): Promise<string | null> {
     const supabase = getSupabaseServiceRoleClient();
     const { data, error } = await supabase
       .from('settings')
-      .select('value')
+      .select('value, default_value')
       .eq('key', key)
       .maybeSingle();
 
     if (error) throw error;
-    value = data?.value ?? null;
+    value = resolveSettingValue(data);
   } catch (err) {
     console.error(`Error reading setting "${key}":`, err);
     value = null;

@@ -74,8 +74,15 @@ export function looksLikeExactEfficacyQuestion(userMessage: string): boolean {
  */
 const SUPERLATIVE_RANKING_PATTERN = /\b(best|strongest|most effective|top\s*\d*)\b/i;
 
+/**
+ * B0-977 — the first alternation also admits a noun phrase between "what" and "should I/we use":
+ * "what stripping and finish products should I use for my VCT floor?" was `false` here (the
+ * contiguous "what should I use" never occurs), so the B0-889 category-tool forcing never ran and
+ * the answer collapsed to whichever two products the speculative search ranked top. Bounded to 60
+ * non-`?` characters so it stays within one question.
+ */
 const TASK_RECOMMENDATION_PATTERN =
-  /\bwhat\s+(?:should|do|would|can)\s+(?:i|you|we)\s+use\b|\bwhat\s+(?:do|would)\s+you\s+recommend\b|\brecommend\s+(?:a|an|something)\s+for\b/i;
+  /\bwhat\b[^?]{0,60}?\bshould\s+(?:i|we)\s+use\b|\bwhat\s+(?:should|do|would|can)\s+(?:i|you|we)\s+use\b|\bwhat\s+(?:do|would)\s+you\s+recommend\b|\brecommend\s+(?:a|an|something)\s+for\b/i;
 
 export function looksLikeCategoryListOrSuperlativeAsk(userMessage: string): boolean {
   return SUPERLATIVE_RANKING_PATTERN.test(userMessage) || TASK_RECOMMENDATION_PATTERN.test(userMessage);
@@ -301,5 +308,43 @@ export function buildPreloadedEvidence(input: {
       input.userMessage,
     )})`,
     text: input.output,
+  };
+}
+
+export const CATEGORY_LIST_TOOL_NAME = 'get_products_in_category';
+
+export function buildCategoryListArgumentsJson(categoryTerm: string): string {
+  return JSON.stringify({ categoryName: categoryTerm });
+}
+
+export function buildCategoryListCallId(runId: string, categoryTerm: string): string {
+  return `category-list-${categoryTerm.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-${runId}`;
+}
+
+/**
+ * B0-977 — a multi-category ask ("what stripping and finish products should I use for my VCT
+ * floor?") gets ONE workflow-run `get_products_in_category` call per detected category (see
+ * `detectCategorySearchTerms`), because a single pinned `tool_choice` yields one model call whose
+ * `categoryName` normalises to its FIRST category token only ('strip…' → 'stripper'; the finishes
+ * were never listed). Their payloads are appended to the speculative search's evidence block so the
+ * same round-1 message carries every documented lineup, labelled call by call so the model can cite
+ * which category each list came from. Payloads are carried verbatim — never summarised.
+ */
+export function appendCategoryListEvidence(
+  base: PreloadedEvidence,
+  categoryResults: ReadonlyArray<{ categoryTerm: string; output: string }>,
+): PreloadedEvidence {
+  if (categoryResults.length === 0) {
+    return base;
+  }
+  const labels = categoryResults.map(
+    (result) => `${CATEGORY_LIST_TOOL_NAME}(${buildCategoryListArgumentsJson(result.categoryTerm)})`,
+  );
+  const blocks = categoryResults.map(
+    (result, index) => `### ${labels[index]}\n${result.output}`,
+  );
+  return {
+    label: [base.label, ...labels].join(' + '),
+    text: [`### ${base.label}\n${base.text}`, ...blocks].join('\n\n'),
   };
 }

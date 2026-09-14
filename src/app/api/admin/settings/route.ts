@@ -7,10 +7,15 @@ import { PERMISSIONS } from '~/lib/permissions/constants';
 import { gateRoute } from '~/lib/permissions/route-gate';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
-const updateSettingSchema = z.object({
-  key: z.string(),
-  value: z.string(),
-});
+/**
+ * `{ key, value }` writes a value; `{ key, reset: true }` clears it so the row falls back to its
+ * `default_value` (B0-992). A reset on a row with no default is refused rather than leaving the
+ * reader with nothing.
+ */
+const updateSettingSchema = z.union([
+  z.object({ key: z.string(), value: z.string() }),
+  z.object({ key: z.string(), reset: z.literal(true) }),
+]);
 
 /**
  * GET /api/admin/settings — fetch all settings
@@ -20,7 +25,7 @@ export async function GET() {
     const supabase = getSupabaseServiceRoleClient();
     const { data, error } = await supabase
       .from('settings')
-      .select('key, value, value_type, description, allowed_values')
+      .select('key, value, value_type, description, allowed_values, default_value, ui_group')
       .order('key');
 
     if (error) {
@@ -63,14 +68,15 @@ export async function POST(request: NextRequest) {
     if (denied) return denied;
 
     const body = await request.json();
-    const { key, value } = updateSettingSchema.parse(body);
+    const parsed = updateSettingSchema.parse(body);
+    const { key } = parsed;
 
     const supabase = getSupabaseServiceRoleClient();
 
     // Fetch the setting to validate value_type
     const { data: setting, error: fetchError } = await supabase
       .from('settings')
-      .select('value_type, allowed_values')
+      .select('value_type, allowed_values, default_value')
       .eq('key', key)
       .single();
 
@@ -80,6 +86,27 @@ export async function POST(request: NextRequest) {
         { status: 404 },
       );
     }
+
+    // B0-992 — reset: clear the stored value so the reader falls back to default_value.
+    if ('reset' in parsed) {
+      if (setting.default_value === null) {
+        return NextResponse.json(
+          { error: `Setting ${key} has no default to reset to` },
+          { status: 400 },
+        );
+      }
+      const { error: resetError } = await supabase
+        .from('settings')
+        .update({ value: null, updated_at: new Date().toISOString() })
+        .eq('key', key);
+      if (resetError) {
+        console.error('Error resetting setting:', resetError);
+        return NextResponse.json({ error: 'Failed to reset setting' }, { status: 500 });
+      }
+      return NextResponse.json({ success: true, key, value: null, reset: true });
+    }
+
+    const { value } = parsed;
 
     // Validate the value based on type
     if (setting.value_type === 'boolean') {

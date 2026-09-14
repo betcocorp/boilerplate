@@ -39,6 +39,14 @@ describe('classifyRetrievalIntent procedural depth branch', () => {
       // Green Certified") was being crowded out of the default-width candidate set by
       // narrower, higher-lexical-overlap per-product stripper documents.
       'Do green-certified finishes and strippers actually work as well on VCT?',
+      // B0-974 — the two golden prompts whose answer document sat outside `limit 3`: VCT
+      // 339b3004 (traffic schedule in "VCT Reopening to Traffic") and SportsZone 6eeebab8 (the
+      // only "annual recoats" sentence in "Gym Floor Sanding Lifetime Guidelines").
+      'how soon can people walk on the VCT floor after the last coat?',
+      'How often should a wood sport floor be recoated?',
+      // B0-974 — the "when can …" reopening phrasing with no "how soon/long".
+      'When can carts go back on the floor after the final coat?',
+      'When is it safe to walk on the gym floor after recoating?',
     ];
 
     for (const query of widened) {
@@ -100,10 +108,44 @@ describe('classifyRetrievalIntent — B0-786 answerShape overrides the regexes',
     }
   });
 
-  it('returns the pipeline default for single_value even when a depth regex would have matched', () => {
+  /**
+   * B0-974 — REVERSES the original B0-786 rule for product-less questions: `single_value` no longer
+   * bypasses the depth regexes. The signals call labelled both golden prompts below `single_value`,
+   * which collapsed them to `limit 3` and lost the answer document (raw ranks 6 and 2).
+   */
+  it('lets the depth regexes decide a product-less single_value question', () => {
     expect(classifyRetrievalIntent('how often should I recoat?', undefined, 'single_value')).toEqual(
+      { limit: 6, procedural: true },
+    );
+    expect(
+      classifyRetrievalIntent(
+        'how soon can people walk on the VCT floor after the last coat?',
+        undefined,
+        'single_value',
+      ),
+    ).toEqual({ limit: 6, procedural: true });
+    expect(
+      classifyRetrievalIntent(
+        'How often should a wood sport floor be recoated?',
+        undefined,
+        'single_value',
+      ),
+    ).toEqual({ limit: 6, procedural: true });
+  });
+
+  it('keeps the default breadth for a single_value question with no depth phrasing', () => {
+    expect(classifyRetrievalIntent('what is the dilution ratio', undefined, 'single_value')).toEqual(
       {},
     );
+    expect(
+      classifyRetrievalIntent('What product should I use on VCT floors?', undefined, 'single_value'),
+    ).toEqual({});
+  });
+
+  it('keeps the named-product tuning for a single_value question that names a product', () => {
+    expect(
+      classifyRetrievalIntent('how often should I recoat?', 'StreetShoe', 'single_value'),
+    ).toEqual({ limit: 4, maxPerDocument: 2 });
   });
 
   it('returns the comparison tuning for comparison even with no comparison phrasing', () => {
