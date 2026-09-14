@@ -91,7 +91,8 @@ export type RunComparisonFix = {
 export type ParsedCsvRow = {
   rowIndex: number;
   prompt: string;
-  expectedCanonicalProduct: string | null;
+  /** B0-993 — product line keys, one per element and stored verbatim; empty when unconstrained. */
+  expectedCanonicalProducts: string[];
   expectedReasonCode: string | null;
   source: string | null;
   priority: number | null;

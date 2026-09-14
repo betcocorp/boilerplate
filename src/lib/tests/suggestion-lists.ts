@@ -5,7 +5,7 @@ import type { TestItemRecord } from './types';
 /** Rows used only to derive distinct dropdown values for the “Add prompt” dialog. */
 export type TestItemSuggestionSource = Pick<
   TestItemRecord,
-  | 'expected_canonical_product'
+  | 'expected_canonical_products'
   | 'expected_reason_code'
   | 'source'
   | 'input_payload'
@@ -57,7 +57,7 @@ export function buildSuggestionListsFromTestItems(rows: TestItemSuggestionSource
   const sourceStyles: string[] = [];
 
   for (const row of rows) {
-    canonicalProducts.push(row.expected_canonical_product ?? '');
+    canonicalProducts.push(...(row.expected_canonical_products ?? []));
     reasonCodes.push(row.expected_reason_code ?? '');
     sources.push(row.source ?? '');
 

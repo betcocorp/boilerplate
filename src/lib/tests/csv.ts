@@ -80,6 +80,7 @@ const TYPED_CSV_COLUMNS = new Set([
   'prompt',
   'test_prompt',
   'canonical_product',
+  'canonical_products',
   'reason_code',
   'source',
   'priority',
@@ -354,8 +355,11 @@ export function parseTestCsvContent(content: string): ParsedCsvRow[] {
       }
 
       const rowIndex = index + 1;
-      const expectedCanonicalProduct =
-        asTrimmedString(record.canonical_product) || null;
+      // B0-993 — `canonical_product` (or `canonical_products`) is a pipe-delimited list, split the
+      // same structural way as the concept cells; each product line key is stored verbatim.
+      const expectedCanonicalProducts = splitPhraseCell(
+        asTrimmedString(record.canonical_products) || asTrimmedString(record.canonical_product),
+      );
       const expectedReasonCode = asTrimmedString(record.reason_code) || null;
       const source = asTrimmedString(record.source) || null;
       const priority = parsePriority(asTrimmedString(record.priority));
@@ -430,7 +434,7 @@ export function parseTestCsvContent(content: string): ParsedCsvRow[] {
       return {
         rowIndex,
         prompt,
-        expectedCanonicalProduct,
+        expectedCanonicalProducts,
         expectedReasonCode,
         source,
         priority,

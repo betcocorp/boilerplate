@@ -317,7 +317,7 @@ export async function uploadTestCsvAction(formData: FormData) {
           test_id: initialTest.id,
           row_index: row.rowIndex,
           prompt: row.prompt,
-          expected_canonical_product: row.expectedCanonicalProduct,
+          expected_canonical_products: row.expectedCanonicalProducts,
           expected_reason_code: row.expectedReasonCode,
           source: row.source,
           priority: row.priority,
@@ -409,11 +409,10 @@ export async function addTestItemAction(formData: FormData) {
     redirect(encodeMessage(returnPath, 'error', 'Test not found.'));
   }
 
-  const expectedCanonicalRaw = formData.get('expectedCanonicalProduct');
-  const expected_canonical_product =
-    typeof expectedCanonicalRaw === 'string' && expectedCanonicalRaw.trim()
-      ? expectedCanonicalRaw.trim()
-      : null;
+  // B0-993 — one hidden input per selected product line; keys are verbatim, blanks dropped.
+  const expected_canonical_products = parsePhraseListFromForm(
+    formData.getAll('expectedCanonicalProducts'),
+  );
 
   const expectedReasonRaw = formData.get('expectedReasonCode');
   const expected_reason_code =
@@ -475,7 +474,7 @@ export async function addTestItemAction(formData: FormData) {
       test_id: testId,
       row_index,
       prompt,
-      expected_canonical_product,
+      expected_canonical_products,
       expected_reason_code,
       source,
       priority,
@@ -537,11 +536,10 @@ export async function updateTestItemAction(formData: FormData) {
     );
   }
 
-  const expectedCanonicalRaw = formData.get('expectedCanonicalProduct');
-  const expected_canonical_product =
-    typeof expectedCanonicalRaw === 'string' && expectedCanonicalRaw.trim()
-      ? expectedCanonicalRaw.trim()
-      : null;
+  // B0-993 — one hidden input per selected product line; keys are verbatim, blanks dropped.
+  const expected_canonical_products = parsePhraseListFromForm(
+    formData.getAll('expectedCanonicalProducts'),
+  );
 
   const expectedReasonRaw = formData.get('expectedReasonCode');
   const expected_reason_code =
@@ -613,7 +611,7 @@ export async function updateTestItemAction(formData: FormData) {
   // `test_items`; the archived values live in `metadata.legacy_*` and are never written back.
   const updated = await updateTestItemForTest(testItemId, testId, {
     prompt,
-    expected_canonical_product,
+    expected_canonical_products,
     expected_reason_code,
     source,
     priority,
@@ -1043,7 +1041,7 @@ export async function createTestFromPromptsAction(formData: FormData) {
     test_id: newTest.id,
     row_index: index + 1,
     prompt: item.prompt,
-    expected_canonical_product: item.expected_canonical_product,
+    expected_canonical_products: item.expected_canonical_products,
     expected_reason_code: item.expected_reason_code,
     source: item.source,
     priority: item.priority,

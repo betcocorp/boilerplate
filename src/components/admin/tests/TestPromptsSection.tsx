@@ -40,7 +40,8 @@ export type TestPromptRow = {
   id: string;
   row_index: number;
   prompt: string;
-  expected_canonical_product: string | null;
+  /** B0-993 — product line keys, one per element; exported pipe-delimited under `canonical_product`. */
+  expected_canonical_products: string[];
   expected_reason_code: string | null;
   source: string | null;
   priority: number | null;
@@ -411,7 +412,7 @@ export function TestPromptsSection({
       ...sorted.map((item) =>
         [
           item.prompt,
-          item.expected_canonical_product ?? '',
+          joinPhrases(item.expected_canonical_products),
           item.expected_reason_code ?? '',
           item.source ?? '',
           item.priority === null ? '' : String(item.priority),
@@ -693,8 +694,8 @@ export function TestPromptsSection({
                       <div className="flex items-center gap-2">
                         <EditTestItemDialog
                           canonicalProductLabels={canonicalProductLabels}
-                          expectedCanonicalProduct={
-                            item.expected_canonical_product
+                          expectedCanonicalProducts={
+                            item.expected_canonical_products
                           }
                           expectedConcepts={item.expected_concepts}
                           expectedReasonCode={item.expected_reason_code}

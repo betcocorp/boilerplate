@@ -33,9 +33,10 @@ export const TEST_TEMPLATE_COLUMNS: TestTemplateColumn[] = [
   {
     name: 'canonical_product',
     required: false,
-    example: 'Official Betco product name it maps to — e.g. pH7Q Neutral Disinfectant',
-    help: 'Official Betco product this question is about.',
-    format: 'string | null',
+    example:
+      'Official Betco product line(s) it maps to — separate several with | e.g. pH7Q Neutral Disinfectant',
+    help: 'Official Betco product line(s) this question is about. Separate several with a pipe (|).',
+    format: 'pipe-delimited list | null',
     examples: 'pH7Q Neutral Disinfectant | Basic Coatings Hard Wax Oil',
   },
   {

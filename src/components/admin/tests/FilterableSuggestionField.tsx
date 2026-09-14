@@ -76,8 +76,16 @@ export type FilterableSuggestionFieldProps = {
   presetSuggestions?: readonly string[];
   /** When set, dropdown and trigger show these strings instead of raw option values (submitted value stays the option key). */
   optionLabels?: Record<string, string>;
-  /** Pre-selected value (e.g. when editing an existing row). */
+  /** Pre-selected value (e.g. when editing an existing row). Ignored when `multiple` is set. */
   initialValue?: string;
+  /**
+   * B0-993 — multi-select mode: every chosen option is kept as a chip and submitted as one repeated
+   * hidden `<input name={name}>` per value (read with `formData.getAll(name)`). The popover stays
+   * open after a pick so several values can be added in one visit.
+   */
+  multiple?: boolean;
+  /** Pre-selected values for `multiple` mode (e.g. when editing an existing row). */
+  initialValues?: readonly string[];
 };
 
 export function FilterableSuggestionField({
@@ -89,9 +97,35 @@ export function FilterableSuggestionField({
   presetSuggestions = [],
   optionLabels,
   initialValue = '',
+  multiple = false,
+  initialValues,
 }: FilterableSuggestionFieldProps) {
   const [open, setOpen] = useState(false);
-  const [value, setValue] = useState(initialValue);
+  // One state shape for both modes: single mode is simply a list of at most one value. The hidden
+  // inputs are rendered from this state rather than as controlled visible fields because React 19
+  // resets uncontrolled form fields when a `<form action>` succeeds.
+  const [values, setValues] = useState<string[]>(() =>
+    multiple
+      ? [...new Set((initialValues ?? []).map((v) => v.trim()).filter((v) => v !== ''))]
+      : initialValue.trim()
+        ? [initialValue]
+        : [],
+  );
+  const value = multiple ? '' : values[0] ?? '';
+  const selectedSet = useMemo(() => new Set(values), [values]);
+
+  const pick = (option: string) => {
+    if (multiple) {
+      setValues((current) => (current.includes(option) ? current : [...current, option]));
+      return;
+    }
+    setValues([option]);
+    setOpen(false);
+  };
+
+  const removeValue = (option: string) => {
+    setValues((current) => current.filter((v) => v !== option));
+  };
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
@@ -215,26 +249,24 @@ export function FilterableSuggestionField({
               <CommandGroup>
                 {visibleOptions.map((opt) => {
                   const shown = optionLabels?.[opt] ?? opt;
+                  const alreadySelected = multiple && selectedSet.has(opt);
                   return (
                     <CommandItem
                       key={opt}
                       keywords={[opt, shown]}
-                      onSelect={() => {
-                        setValue(opt);
-                        setOpen(false);
-                      }}
+                      onSelect={() => pick(opt)}
                       value={opt}
                     >
-                      {shown}
+                      <span className="min-w-0 flex-1">{shown}</span>
+                      {alreadySelected ? (
+                        <span className="shrink-0 text-xs text-muted-foreground">added</span>
+                      ) : null}
                     </CommandItem>
                   );
                 })}
                 <UseTypedValueItem
                   filter={search}
-                  onUse={(text) => {
-                    setValue(text);
-                    setOpen(false);
-                  }}
+                  onUse={(text) => pick(text)}
                   options={options}
                 />
               </CommandGroup>
@@ -289,19 +321,60 @@ export function FilterableSuggestionField({
           </Command>
         </PopoverContent>
       </Popover>
-      <input name={name} type="hidden" value={value} />
-      {value ? (
-        <Button
-          className="h-8 w-fit text-xs"
-          onClick={() => setValue('')}
-          size="sm"
-          type="button"
-          variant="ghost"
-        >
-          <XIcon className="mr-1 size-3.5" />
-          Clear
-        </Button>
-      ) : null}
+      {multiple ? (
+        <>
+          {values.length > 0 ? (
+            <ul className="flex flex-wrap gap-1.5">
+              {values.map((selected) => {
+                const shown = optionLabels?.[selected] ?? selected;
+                return (
+                  <li key={selected}>
+                    <span className="inline-flex max-w-full items-center gap-1 rounded-2xl border border-border bg-muted/60 py-1 pl-2.5 pr-1 text-xs">
+                      <span className="flex min-w-0 flex-col text-left">
+                        <span className="break-words font-medium text-foreground">{shown}</span>
+                        {shown !== selected ? (
+                          <span className="truncate text-[0.6875rem] text-muted-foreground">
+                            {selected}
+                          </span>
+                        ) : null}
+                      </span>
+                      <Button
+                        aria-label={`Remove ${shown}`}
+                        className="size-5 shrink-0 rounded-full"
+                        onClick={() => removeValue(selected)}
+                        size="icon-sm"
+                        type="button"
+                        variant="ghost"
+                      >
+                        <XIcon className="size-3" />
+                      </Button>
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : null}
+          {values.map((selected) => (
+            <input key={`${name}-${selected}`} name={name} type="hidden" value={selected} />
+          ))}
+        </>
+      ) : (
+        <>
+          <input name={name} type="hidden" value={value} />
+          {value ? (
+            <Button
+              className="h-8 w-fit text-xs"
+              onClick={() => setValues([])}
+              size="sm"
+              type="button"
+              variant="ghost"
+            >
+              <XIcon className="mr-1 size-3.5" />
+              Clear
+            </Button>
+          ) : null}
+        </>
+      )}
     </div>
   );
 }

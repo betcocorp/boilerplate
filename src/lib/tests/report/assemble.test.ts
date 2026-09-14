@@ -89,7 +89,7 @@ function item(partial: Partial<TestItemRecord> & Pick<TestItemRecord, 'id' | 'pr
   return {
     test_id: TEST_ID,
     row_index: 0,
-    expected_canonical_product: null,
+    expected_canonical_products: [],
     expected_reason_code: null,
     input_payload: {},
     metadata: {},

@@ -723,7 +723,7 @@ export default async function AdminTestDetailsPage({
                 <TableRow>
                   <TableHead>Run id</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead title="Gold eval pass rate — items that satisfy their expected_canonical_product constraint. For unconstrained items, pass = any match returned.">
+                  <TableHead title="Gold eval pass rate — items that satisfy their expected_canonical_products constraint. For unconstrained items, pass = any match returned.">
                     Gold pass %
                   </TableHead>
                   <TableHead title="Average of each prompt's highest similarity score — the primary quality signal when tuning retrieval.">
@@ -886,7 +886,7 @@ export default async function AdminTestDetailsPage({
               id: item.id,
               row_index: item.row_index,
               prompt: item.prompt,
-              expected_canonical_product: item.expected_canonical_product,
+              expected_canonical_products: item.expected_canonical_products,
               expected_reason_code: item.expected_reason_code,
               source: item.source,
               priority: item.priority,

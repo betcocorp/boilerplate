@@ -44,7 +44,8 @@ export type TestItemSuggestionLists = {
 /** Pre-fill values when editing an existing row. All optional / default empty. */
 export type TestItemFieldsInitialValues = {
   prompt?: string;
-  expectedCanonicalProduct?: string;
+  /** B0-993 — one product line key per element (`test_items.expected_canonical_products` `text[]`). */
+  expectedCanonicalProducts?: string[];
   expectedReasonCode?: string;
   source?: string;
   priority?: string;
@@ -224,20 +225,25 @@ export function TestItemFields({
 
       <FilterableSuggestionField
         id={`${idPrefix}-canonical`}
-        initialValue={initialValues?.expectedCanonicalProduct}
+        initialValues={initialValues?.expectedCanonicalProducts ?? []}
         label={
           <>
-            Expected canonical product{' '}
+            Expected canonical products{' '}
             <span className="font-normal text-muted-foreground">
-              (product line · optional)
+              (product lines · optional)
             </span>
           </>
         }
-        name="expectedCanonicalProduct"
+        multiple
+        name="expectedCanonicalProducts"
         optionLabels={canonicalProductLabels}
-        placeholder="Choose a product line or type a catalog key"
+        placeholder="Add a product line or type a catalog key"
         suggestionsFromDataset={suggestionLists.canonicalProducts}
       />
+      <p className="text-xs text-muted-foreground">
+        Every product line the prompt is about — add more than one when a question compares or
+        combines products. A search eval passes only when each listed line is retrieved.
+      </p>
 
       <FilterableSuggestionField
         id={`${idPrefix}-reason`}

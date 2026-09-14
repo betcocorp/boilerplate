@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS public.test_items (
   prompt text NOT NULL,
   expected_should_answer boolean,
   expected_result_type text,
-  expected_canonical_product text,
+  expected_canonical_products text[] not null default '{}',
   expected_reason_code text,
   input_payload jsonb NOT NULL DEFAULT '{}'::jsonb,
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,

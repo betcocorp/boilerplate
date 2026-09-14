@@ -32,20 +32,28 @@ import { isTerminalRunStatus, type TestItemRecord } from './types';
  *    Removed for the same reason.
  *
  * What remains:
- * - `expected_canonical_product` set: pass if at least one match is that product line.
+ * - `expected_canonical_products` non-empty (B0-993): pass only when EVERY listed product line
+ *   has at least one match — a prompt about two products expects retrieval to cover both. A
+ *   single-value row therefore grades exactly as it did when the column was scalar.
  * - no constraint: pass if any result was returned.
  */
 function evaluateSearchPass(matches: RagSearchMatch[], item: TestItemRecord): boolean {
-  const expectedKey =
-    typeof item.expected_canonical_product === 'string' && item.expected_canonical_product.trim()
-      ? item.expected_canonical_product.trim().toLowerCase()
-      : null;
+  const expectedKeys = [
+    ...new Set(
+      (item.expected_canonical_products ?? [])
+        .map((key) => key.trim().toLowerCase())
+        .filter((key) => key !== ''),
+    ),
+  ];
 
-  if (!expectedKey) {
+  if (expectedKeys.length === 0) {
     return matches.length > 0;
   }
 
-  return matches.some((m) => (m.product_line_key?.toLowerCase() ?? '') === expectedKey);
+  const matchedKeys = new Set(
+    matches.map((m) => m.product_line_key?.toLowerCase() ?? '').filter((key) => key !== ''),
+  );
+  return expectedKeys.every((key) => matchedKeys.has(key));
 }
 
 function asSummaryObject(value: unknown): Record<string, unknown> {

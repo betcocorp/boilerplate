@@ -1080,7 +1080,7 @@ export type Database = {
       test_items: {
         Row: {
           created_at: string
-          expected_canonical_product: string | null
+          expected_canonical_products: string[]
           expected_concepts: string[]
           expected_brand_family: string | null
           expected_reason_code: string | null
@@ -1104,7 +1104,7 @@ export type Database = {
         }
         Insert: {
           created_at?: string
-          expected_canonical_product?: string | null
+          expected_canonical_products?: string[]
           expected_concepts?: string[]
           expected_brand_family?: string | null
           expected_reason_code?: string | null
@@ -1129,7 +1129,7 @@ export type Database = {
         Update: {
           created_at?: string
           expected_brand_family?: string | null
-          expected_canonical_product?: string | null
+          expected_canonical_products?: string[]
           expected_concepts?: string[]
           expected_reason_code?: string | null
           expected_setting?: string | null
