@@ -1039,34 +1039,40 @@ export type Database = {
         Row: {
           allowed_values: string[] | null
           created_at: string
+          default_value: string | null
           description: string | null
           id: string
           key: string
+          ui_group: string | null
           updated_at: string
           updated_by: string | null
-          value: string
+          value: string | null
           value_type: string
         }
         Insert: {
           allowed_values?: string[] | null
           created_at?: string
+          default_value?: string | null
           description?: string | null
           id?: string
           key: string
+          ui_group?: string | null
           updated_at?: string
           updated_by?: string | null
-          value: string
+          value?: string | null
           value_type: string
         }
         Update: {
           allowed_values?: string[] | null
           created_at?: string
+          default_value?: string | null
           description?: string | null
           id?: string
           key?: string
+          ui_group?: string | null
           updated_at?: string
           updated_by?: string | null
-          value?: string
+          value?: string | null
           value_type?: string
         }
         Relationships: []

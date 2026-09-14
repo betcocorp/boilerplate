@@ -28,6 +28,7 @@ import {
   getRouterType,
   getStringSetting,
   resetSettingsCacheForTest,
+  resolveSettingValue,
 } from '~/lib/settings/settings-service';
 
 function mockRow(value: string | null, error: { message: string } | null = null) {
@@ -53,6 +54,26 @@ function mockRows(values: Record<string, string>) {
 beforeEach(() => {
   resetSettingsCacheForTest();
   from.mockReset();
+});
+
+describe('resolveSettingValue (B0-992)', () => {
+  it('prefers the stored value, then default_value, then null', () => {
+    expect(resolveSettingValue({ value: 'true', default_value: 'false' })).toBe('true');
+    expect(resolveSettingValue({ value: null, default_value: 'false' })).toBe('false');
+    expect(resolveSettingValue({ value: null, default_value: null })).toBeNull();
+    expect(resolveSettingValue({ value: null })).toBeNull();
+    expect(resolveSettingValue(null)).toBeNull();
+  });
+
+  it('lets a row with a null value fall back to default_value before the caller fallback', async () => {
+    const maybeSingle = vi
+      .fn()
+      .mockResolvedValue({ data: { value: null, default_value: 'false' }, error: null });
+    const eq = vi.fn().mockReturnValue({ maybeSingle });
+    from.mockReturnValue({ select: vi.fn().mockReturnValue({ eq }) });
+    // default_value 'false' wins over the caller's `true`.
+    await expect(getBooleanSetting('BEX_FACT_TOOL_ENFORCEMENT_ENABLED', true)).resolves.toBe(false);
+  });
 });
 
 describe('getBooleanSetting', () => {
