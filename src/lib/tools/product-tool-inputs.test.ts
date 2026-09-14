@@ -307,10 +307,11 @@ describe('product-fact tools accept `productName` as well as `productId` (B0-364
         ok: true,
         adapter: 'test',
         categoryName: 'Disinfectants',
+        categoriesSearched: ['disinfect'],
         totalFound: 2,
         products: [
-          { productLineId: '100', productLineName: 'pH7Q', documentKey: 'd1', prodTypes: [], subProdTypes: [], subChildProdTypes: [], prodClasses: [] },
-          { productLineId: '200', productLineName: 'Kling', documentKey: 'd2', prodTypes: [], subProdTypes: [], subChildProdTypes: [], prodClasses: [] },
+          { productLineId: '100', productLineName: 'pH7Q', documentKey: 'd1', prodTypes: [], subProdTypes: [], subChildProdTypes: [], prodClasses: [], matchedCategoryTerms: ['disinfect'], items: [], labeledDilution: null },
+          { productLineId: '200', productLineName: 'Kling', documentKey: 'd2', prodTypes: [], subProdTypes: [], subChildProdTypes: [], prodClasses: [], matchedCategoryTerms: ['disinfect'], items: [], labeledDilution: null },
         ],
       });
 

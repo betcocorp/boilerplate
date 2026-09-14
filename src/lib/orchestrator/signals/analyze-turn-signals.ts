@@ -3,6 +3,7 @@ import { nullableEnum } from '~/lib/llm/json-schema';
 import { completeStructuredWithUsage } from '~/lib/llm/structured-completion';
 import { logError } from '~/lib/observability/logger';
 import {
+  applyFloorSurfaceRoutingOverride,
   BRAND_FAMILIES,
   classifierPriorMessages,
   computeIntentClassifierCacheKey,
@@ -410,11 +411,18 @@ async function runAnalysis(
   const { parsed, usage } = await withRouterTimeout(timeoutMs, (signal) =>
     deps.runLlm(userMessage, priorMessages, signal),
   );
+  // B0-977 — same deterministic floor-substrate override the classifier path applies.
+  const override = applyFloorSurfaceRoutingOverride({
+    intent: parsed.intent,
+    surfaceType: parsed.surfaceType,
+  });
   const base = {
     ...parsed,
+    intent: override.intent,
     confidence: clamp01(parsed.confidence),
     source: 'llm' as const,
     fallbackReason: null,
+    routingOverrideReason: override.routingOverrideReason,
   };
   const enrichment = await enrichSignals(userMessage, base, deps);
 
@@ -513,6 +521,7 @@ export function toIntentClassification(signals: TurnSignals): IntentClassificati
     suggestedTool: signals.suggestedTool,
     source: signals.source,
     fallbackReason: signals.fallbackReason,
+    routingOverrideReason: signals.routingOverrideReason ?? null,
     usage: signals.usage,
     model: signals.model,
   };

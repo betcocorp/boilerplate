@@ -246,6 +246,11 @@ export type ProductKnowledgeRetrievalSummary = {
     retrievalStrategy: RagSearchResult['retrieval_strategy'];
     embeddingSource: RagSearchResult['embeddingSource'];
     timings: RagSearchResult['timings'];
+    /**
+     * B0-975 — RPC candidates the hybrid lexical leg returned WITHOUT an embedding (`similarity`
+     * NULL). They are excluded from ranking rather than scored 0; this is how many were dropped.
+     */
+    lexicalOnlyCandidateCount: number;
   };
   /**
    * B0-493 — the `selectCuratedMatches` options actually applied for this call, INCLUDING the
@@ -280,6 +285,7 @@ function buildSearchDetails(
     retrievalStrategy: result.retrieval_strategy,
     embeddingSource: result.embeddingSource,
     timings: result.timings,
+    lexicalOnlyCandidateCount: result.lexicalOnlyCandidateCount ?? 0,
   };
 }
 
@@ -332,6 +338,17 @@ function retrievalElapsedMs(startedAt: number): number {
  * misstatement, not a relevance miss, so they get a stricter rule than everything else.
  */
 const REGULATED_SAFETY_DOCUMENT_KINDS = new Set(['sds']);
+
+/**
+ * B0-958 — document kinds that hang off LINE-tier entities (`rag.entity.entity_type =
+ * 'product_line'`, whose `product_key` is NULL) rather than product-tier ones. Verified live: line
+ * `226` ("Concentrated Deodorizing Liquid") carries 10 current SDS titled `226`, `226 AC`, `226 DIL`…
+ * and one profile, all on the line entity; the product-tier "Best Scent Lemon Zest" entity carries
+ * only its label. The corpus RPC's `filter_product_key` predicate is an AND over `e.product_key =
+ * key OR variant match`, so a SKU-anchored search structurally cannot see these kinds — which is why
+ * the B0-556 `usedLineKindSupplement` merge exists (it was documented but never actually run).
+ */
+const LINE_TIER_DOCUMENT_KINDS = new Set(['sds', 'product_line_profile']);
 
 /**
  * B0-700 investigation note: widening this withholding to `label`-kind sources whenever a
@@ -465,6 +482,8 @@ type CurationOptions = {
   limit: number;
   requiredDocumentKinds?: string[];
   maxPerDocument?: number;
+  /** B0-974 — see `selectCuratedMatches`'s option of the same name (`./source-selection.ts`). */
+  productAnchored?: boolean;
 };
 
 /**
@@ -492,6 +511,7 @@ async function selectCuratedSourceMatches(
     limit: options.limit,
     maxPerDocument: options.maxPerDocument ?? 1,
     requiredDocumentKinds: options.requiredDocumentKinds,
+    productAnchored: options.productAnchored,
   });
 }
 
@@ -1021,7 +1041,7 @@ async function runProductKnowledgeQuery(input: {
     // section type; let curation/reranking do the narrowing instead.
     // B0-873 — the unlocked knowledge pass runs alongside the line-filtered search (it depends only
     // on the query), so a procedural question pays wall clock for one search, not two.
-    const [result, knowledgeResult] = await Promise.all([
+    const [result, knowledgeResult, lineTierResult] = await Promise.all([
       searchProductChunks({
         query: input.query,
         limit: SIMILARITY_CANDIDATE_FETCH_LIMIT,
@@ -1034,6 +1054,27 @@ async function runProductKnowledgeQuery(input: {
       }),
       knowledgeSupplementEligible
         ? searchKnowledgeSupplement(input.query, excludeKnowledgeCategories)
+        : Promise.resolve(null),
+      /**
+       * B0-958 — the same line, WITHOUT the product-key predicate. SDS and profiles hang off the
+       * line-tier entity (`LINE_TIER_DOCUMENT_KINDS`), so a SKU-anchored search can never return
+       * them: "Best Scent Lemon Zest" resolves to line `226` with `product_key 22604`, and that
+       * search sees only the product's own label while the line's ten SDS sit one predicate away.
+       * Run concurrently (it is needed on practically every SKU-anchored call, since `sds` is
+       * always a required kind) and reused by both the B0-250 empty-pool fallback below and the
+       * B0-556 kind supplement. Filtered by the SAME `explicitKey` in SQL, so it can never
+       * introduce another product line's document.
+       */
+      explicitProductKey
+        ? searchProductChunks({
+            query: input.query,
+            limit: SIMILARITY_CANDIDATE_FETCH_LIMIT,
+            productLineKey: explicitKey,
+            scope: 'all',
+            useHybrid: true,
+            useReranker: PRODUCT_SUPPORT_RERANK_ENABLED,
+            excludeKnowledgeCategories,
+          })
         : Promise.resolve(null),
     ]);
     const supplementMatches = knowledgeResult?.matches ?? [];
@@ -1051,34 +1092,55 @@ async function runProductKnowledgeQuery(input: {
     // rather than surfacing nothing (there is no product-tier chunked content yet, so this
     // mainly guards against a resolved product_key that doesn't validate as a variant).
     let usedProductKeyFallback = false;
+    let usedLineKindSupplement = false;
     // Every similarity search performed on this path, so `searchMs` below counts the B0-250
-    // fallback search too instead of silently under-reporting it.
+    // fallback / B0-958 line-tier search too instead of silently under-reporting it.
     let searchMsTotal =
-      result.timings.similaritySearchMs + (knowledgeResult?.timings.similaritySearchMs ?? 0);
+      result.timings.similaritySearchMs +
+      (knowledgeResult?.timings.similaritySearchMs ?? 0) +
+      (lineTierResult?.timings.similaritySearchMs ?? 0);
     // B0-490 — raw candidates behind the winning pass (starts as the explicit-key search's
-    // matches; replaced wholesale if the B0-250 product-key fallback below actually ran).
+    // matches; replaced wholesale if the B0-250 product-key fallback below actually ran, or
+    // widened by the B0-958 line-tier merge).
     let rawMatches = result.matches;
     // B0-493 — the winning `RagSearchResult`, same replacement rule as `rawMatches` above.
     let winningResult: RagSearchResult = result;
-    if (lineSelected.length === 0 && explicitProductKey) {
-      const lineResult = await searchProductChunks({
-        query: input.query,
-        limit: SIMILARITY_CANDIDATE_FETCH_LIMIT,
-        productLineKey: explicitKey,
-        scope: 'all',
-        useHybrid: true,
-        useReranker: PRODUCT_SUPPORT_RERANK_ENABLED,
-        excludeKnowledgeCategories,
-      });
-      searchMsTotal += lineResult.timings.similaritySearchMs;
-      rawMatches = lineResult.matches;
-      winningResult = lineResult;
-      lineSelected = await selectCuratedSourceMatches(lineResult.matches, {
+    if (lineSelected.length === 0 && lineTierResult) {
+      // B0-250 — the product-key pool curated to nothing; the line-scoped pass (already awaited
+      // above, and already counted in `searchMsTotal`) becomes the winning pass wholesale.
+      rawMatches = lineTierResult.matches;
+      winningResult = lineTierResult;
+      lineSelected = await selectCuratedSourceMatches(lineTierResult.matches, {
         limit,
         requiredDocumentKinds,
         maxPerDocument,
       });
       usedProductKeyFallback = true;
+    } else if (lineTierResult) {
+      /**
+       * B0-958 / B0-556 — the product-key pool answered, but is missing a required kind that only
+       * exists at the line tier (an SDS, a profile). Merge the line-scoped pool in and re-curate
+       * under the same limit / kinds / per-document cap, so the SDS earns its reserved slot on the
+       * merged ranking instead of being structurally absent. Only fires when the merge actually
+       * adds a candidate, so a SKU whose line has no SDS is unchanged.
+       */
+      const missingLineTierKinds = requiredDocumentKinds.filter(
+        (kind) =>
+          LINE_TIER_DOCUMENT_KINDS.has(kind) &&
+          !result.matches.some((m) => m.document_kind?.toLowerCase() === kind),
+      );
+      if (missingLineTierKinds.length > 0) {
+        const merged = mergeKnowledgeSupplement(result.matches, lineTierResult.matches);
+        if (merged.length > result.matches.length) {
+          rawMatches = merged;
+          lineSelected = await selectCuratedSourceMatches(merged, {
+            limit,
+            requiredDocumentKinds,
+            maxPerDocument,
+          });
+          usedLineKindSupplement = true;
+        }
+      }
     }
 
     // Without a supplement this is exactly the previous `curateUniqueDocumentSources` (select ->
@@ -1108,7 +1170,7 @@ async function runProductKnowledgeQuery(input: {
         anchoredSearchMs: result.timings.similaritySearchMs,
         usedBroadFallback: false,
         usedProductKeyFallback,
-        usedLineKindSupplement: false,
+        usedLineKindSupplement,
         usedKnowledgeSupplement: knowledgeResult !== null,
         knowledgeSupplementCuratedCount: countSupplementSources(
           curated,
@@ -1261,6 +1323,10 @@ async function runProductKnowledgeQuery(input: {
     // `limit` and none of the widened depth.
     maxPerDocument,
     requiredDocumentKinds: requiredDocumentKindsForQuery,
+    // B0-974 — nothing locked means this pass is genuinely unanchored: a profile slot must not
+    // displace a knowledge chunk that similarity ranked above it. With a lock, the broad pass is
+    // only the thin-evidence fallback and keeps the reservation exactly as before.
+    productAnchored: resolution.lockedProductLineKey != null,
   });
 
   if (resolution.lockedProductLineKey == null) {

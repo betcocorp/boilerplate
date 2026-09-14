@@ -28,9 +28,45 @@ export const REGULATED_CLAIM_CATEGORY_LABELS: Record<RegulatedClaimCategory, str
 /** B0-829 — the literal an ungrounded token-shaped value (EPA number, ratio, time) is blanked with. */
 export const REGULATED_CLAIM_UNVERIFIED_TOKEN_MARKER = '(unable to verify)';
 
-/** B0-871 — the literal marker one withheld sentence is replaced with. Never paraphrases the sentence. */
-export function regulatedClaimWithheldMarker(category: RegulatedClaimCategory): string {
-  return `[one ${REGULATED_CLAIM_CATEGORY_LABELS[category]} withheld — not verifiable against a retrieved label]`;
+const WITHHELD_COUNT_WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'];
+
+/**
+ * B0-871 — the literal marker one withheld sentence is replaced with. Never paraphrases the sentence.
+ * B0-971 — `count` > 1 renders the merged form for consecutive withheld sentences of the same
+ * category ("[two efficacy claims withheld — …]"); see `mergeRepeatedRegulatedClaimWithheldMarkers`.
+ */
+export function regulatedClaimWithheldMarker(category: RegulatedClaimCategory, count = 1): string {
+  const label = REGULATED_CLAIM_CATEGORY_LABELS[category];
+  if (count <= 1) return `[one ${label} withheld — not verifiable against a retrieved label]`;
+  const countWord = WITHHELD_COUNT_WORDS[count] ?? String(count);
+  return `[${countWord} ${label}s withheld — not verifiable against a retrieved label]`;
+}
+
+/** Any withheld marker, singular or merged/pluralised — the one shape both `strip*` helpers below remove. */
+const WITHHELD_MARKER_PATTERN =
+  /\[(?:one|two|three|four|five|six|seven|eight|nine|\d+) [^\]\n]*? withheld — not verifiable against a retrieved label\]/g;
+
+/** B0-971 — remove every withheld marker (either form), leaving a space so words on both sides stay apart. */
+export function stripRegulatedClaimWithheldMarkers(text: string): string {
+  return text.replace(WITHHELD_MARKER_PATTERN, ' ');
+}
+
+/**
+ * B0-971 — collapse a run of IDENTICAL single-sentence markers separated only by whitespace and an
+ * optional list bullet (two withheld bullets in a row) into one pluralised marker. Markers of
+ * different categories, or with any other text between them, are left exactly as they are.
+ */
+export function mergeRepeatedRegulatedClaimWithheldMarkers(text: string): string {
+  let merged = text;
+  for (const category of ALL_REGULATED_CLAIM_CATEGORIES) {
+    const single = escapeRegExp(regulatedClaimWithheldMarker(category));
+    const run = new RegExp(`${single}(?:[ \\t]*\\n?[ \\t]*(?:[-–—•*+]\\s+)?${single})+`, 'g');
+    merged = merged.replace(run, (match) => {
+      const count = match.split(regulatedClaimWithheldMarker(category)).length - 1;
+      return regulatedClaimWithheldMarker(category, count);
+    });
+  }
+  return merged;
 }
 
 /**
@@ -157,14 +193,11 @@ const CONSULT_LINE_PATTERN = new RegExp(`${escapeRegExp(REGULATED_CLAIM_CONSULT_
  * marker before the whole line is matched. Pure and allocation-cheap; safe on text with none of it.
  */
 export function stripRegulatedClaimRedactionArtifacts(text: string): string {
-  let stripped = text
+  const stripped = text
     .replace(REDACTION_FOOTER_LINE, '')
     .replace(CONSULT_LINE_PATTERN, '')
     .replaceAll(REGULATED_CLAIM_UNVERIFIED_TOKEN_MARKER, ' ');
 
-  for (const category of ALL_REGULATED_CLAIM_CATEGORIES) {
-    stripped = stripped.replaceAll(regulatedClaimWithheldMarker(category), ' ');
-  }
-
-  return stripped;
+  // B0-971 — the merged/pluralised marker form is stripped by the same pattern as the singular.
+  return stripRegulatedClaimWithheldMarkers(stripped);
 }

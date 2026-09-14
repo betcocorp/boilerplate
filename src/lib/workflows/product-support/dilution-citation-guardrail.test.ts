@@ -100,3 +100,120 @@ describe('evaluateVerifiedFactsDilutionCitation', () => {
     expect(result.grounded).toBe(true);
   });
 });
+
+/**
+ * B0-987 — a multi-product answer cites each product's OWN batch row (`[doc:verified-facts:<key>]`,
+ * B0-549) and, on a `skipped_ambiguous` turn, locks nothing. The pre-B0-987 check compared every
+ * figure against the LOCKED row only, so with no lock `groundedStrings` was empty and every batch
+ * citation was ungrounded by construction (39ef58b3, "What should I use for greasy kitchen
+ * floors?": `citedTokens ["2 oz/gal","1:16","1:64"]`, `lockedProductLineKey: null`, rejected).
+ * Each figure is now checked against the row of the citation it is attached to — inline on its
+ * line, or labelled with its bullet's product on the `Sources:` line — and only an unattached
+ * figure falls back to the locked line.
+ */
+describe('evaluateVerifiedFactsDilutionCitation — B0-987 per-citation rows', () => {
+  const CITRUS_KITCHEN = { dilutionDisplay: '1:16', dilutionOzPerGal: null };
+  const CITRUS_CHISEL = { dilutionDisplay: '1:64', dilutionOzPerGal: 2 };
+
+  it('two products, two inline citations, two different dilutions, no lock → passed', () => {
+    const result = evaluateVerifiedFactsDilutionCitation({
+      draftAnswer: [
+        '- **Citrus Kitchen Degreaser**: Dilution is 1:16 [doc:verified-facts:113104].',
+        '- **Citrus Chisel**: Dilution is 1:64 (2 oz/gal) [doc:verified-facts:16704].',
+      ].join('\n'),
+      lockedFacts: null,
+      citedFacts: new Map([
+        ['113104', CITRUS_KITCHEN],
+        ['16704', CITRUS_CHISEL],
+      ]),
+    });
+    expect(result.applicable).toBe(true);
+    expect(result.citedProductLineKeys).toEqual(['113104', '16704']);
+    expect(result.ungroundedTokens).toEqual([]);
+    expect(result.grounded).toBe(true);
+  });
+
+  it('grounds bullets whose citation sits on the trailing Sources: line, labelled with the bullet\'s product (39ef58b3 shape)', () => {
+    const result = evaluateVerifiedFactsDilutionCitation({
+      draftAnswer: [
+        'Here are the main Betco degreasers for greasy kitchen floors, with their verified dilution ratios and coverage from structured product facts:',
+        '',
+        '- **Kitchen Cleaner & Degreaser**: Coverage is 3,200 sq ft/gal. No verified dilution ratio is on file.',
+        '- **Citrus Kitchen Degreaser**: Dilution is 1:16. Coverage is 3,200 sq ft/gal.',
+        '- **Heavy Duty Cleaner/Degreaser (RTU)**: Ready to use (no dilution required). Coverage is 3,200 sq ft/gal.',
+        '- **Citrus Chisel**: Dilution is 1:64 (2 oz/gal). Coverage is 500 sq ft/gal.',
+        '',
+        'Sources: Verified Product Facts (structured) — Kitchen Cleaner & Degreaser [doc:verified-facts:4C89E0DF-C964-408C-9328-D1E7B2102A25]; Citrus Kitchen Degreaser [doc:verified-facts:113104]; Heavy Duty Cleaner/Degreaser [doc:verified-facts:0E3DC4A7-26D9-42A7-A5BC-D1B4026E7229]; Citrus Chisel [doc:verified-facts:16704].',
+      ].join('\n'),
+      lockedFacts: null,
+      citedFacts: new Map([
+        ['4C89E0DF-C964-408C-9328-D1E7B2102A25', { dilutionDisplay: null, dilutionOzPerGal: null }],
+        ['113104', CITRUS_KITCHEN],
+        ['0E3DC4A7-26D9-42A7-A5BC-D1B4026E7229', { dilutionDisplay: 'Ready to use', dilutionOzPerGal: null }],
+        ['16704', CITRUS_CHISEL],
+      ]),
+    });
+    expect(result.applicable).toBe(true);
+    expect(result.citedTokens).toEqual(['2 oz/gal', '1:16', '1:64']);
+    expect(result.grounded).toBe(true);
+  });
+
+  it('still rejects a figure that does not match the row of the citation it is attached to (the row is real, the product is wrong)', () => {
+    const result = evaluateVerifiedFactsDilutionCitation({
+      draftAnswer: [
+        '- **Citrus Kitchen Degreaser**: Dilution is 1:64 (2 oz/gal) [doc:verified-facts:113104].',
+        '- **Citrus Chisel**: Dilution is 1:64 (2 oz/gal) [doc:verified-facts:16704].',
+      ].join('\n'),
+      lockedFacts: null,
+      citedFacts: new Map([
+        ['113104', CITRUS_KITCHEN],
+        ['16704', CITRUS_CHISEL],
+      ]),
+    });
+    expect(result.grounded).toBe(false);
+    // Reported once each; the first bullet's figures are the ungrounded ones.
+    expect(result.ungroundedTokens).toEqual(['2 oz/gal', '1:64']);
+  });
+
+  it('a cited row with NO dilution on file grounds nothing for that bullet', () => {
+    const result = evaluateVerifiedFactsDilutionCitation({
+      draftAnswer: '- **Kitchen Cleaner & Degreaser**: Dilution is 1:16 [doc:verified-facts:4C89E0DF-C964-408C-9328-D1E7B2102A25].',
+      lockedFacts: { dilutionDisplay: '1:16', dilutionOzPerGal: null },
+      citedFacts: new Map([
+        ['4C89E0DF-C964-408C-9328-D1E7B2102A25', { dilutionDisplay: null, dilutionOzPerGal: null }],
+      ]),
+    });
+    expect(result.grounded).toBe(false);
+  });
+
+  it('a figure attached to no citation still falls back to the locked line (and is rejected with no lock)', () => {
+    const draftAnswer = 'Dilute at 1:256 for daily disinfection [doc:verified-facts]. Citrus Chisel is 1:64 [doc:verified-facts:16704].';
+    const citedFacts = new Map([['16704', CITRUS_CHISEL]]);
+    expect(
+      evaluateVerifiedFactsDilutionCitation({
+        draftAnswer,
+        lockedFacts: { dilutionDisplay: '1:256', dilutionOzPerGal: null },
+        citedFacts,
+      }).grounded,
+    ).toBe(true);
+    const noLock = evaluateVerifiedFactsDilutionCitation({ draftAnswer, lockedFacts: null, citedFacts });
+    expect(noLock.grounded).toBe(false);
+    expect(noLock.ungroundedTokens).toEqual(['1:256']);
+  });
+
+  it('single-product locked behaviour is unchanged: the B0-699 incident is still rejected and a matching locked figure still passes', () => {
+    const rejected = evaluateVerifiedFactsDilutionCitation({
+      draftAnswer: DAILY_DISINFECT_ANSWER,
+      lockedFacts: { dilutionDisplay: '1:20', dilutionOzPerGal: null },
+      citedFacts: new Map(),
+    });
+    expect(rejected.grounded).toBe(false);
+
+    const passed = evaluateVerifiedFactsDilutionCitation({
+      draftAnswer: 'Use a 1:64 dilution for this product [doc:verified-facts].',
+      lockedFacts: { dilutionDisplay: '1:64', dilutionOzPerGal: 2 },
+      citedFacts: new Map(),
+    });
+    expect(passed.grounded).toBe(true);
+  });
+});

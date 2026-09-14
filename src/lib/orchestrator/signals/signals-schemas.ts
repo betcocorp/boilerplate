@@ -40,7 +40,8 @@ import type { EARLY_DECLINE_REASONS } from '~/lib/workflows/product-support/run-
  * Bumped whenever this schema or the analyzer's prompt changes in a way that makes an older cached
  * result wrong. Folded into the cache key so a contract change can never serve a stale shape.
  */
-export const SIGNALS_CONTRACT_VERSION = 'v1';
+// v2 (B0-977): `routingOverrideReason` added and the floor-substrate override applied to `intent`.
+export const SIGNALS_CONTRACT_VERSION = 'v2';
 
 /**
  * B0-786 — the shape of the answer the user is asking for, replacing `PROCEDURAL_DEPTH_PATTERNS`
@@ -187,6 +188,12 @@ export const turnSignalsSchema = llmTurnSignalsSchema.extend({
   source: z.enum(['llm', 'keyword_fallback']),
   /** Non-null exactly when `source` is `keyword_fallback`: disabled flag, timeout, API or parse error. */
   fallbackReason: z.string().nullable(),
+  /**
+   * B0-977 — non-null when `applyFloorSurfaceRoutingOverride` re-routed the model's `intent`
+   * (`recommendations` for a named floor substrate → the owning floor specialist). NOT a
+   * degradation — `source` stays `llm`. Same field and semantics as `intentClassificationSchema`.
+   */
+  routingOverrideReason: z.string().nullable().optional(),
   /** Null on the fallback path and on a cache hit (no NEW model call was billed for this turn). */
   usage: llmTokenUsageSchema.nullable(),
   /** The resolved model id actually called; null alongside `usage`. */

@@ -17,10 +17,12 @@ import {
   buildRegulatedClaimSentenceRedactionFooter,
   buildRegulatedClaimTokenRedactionFooter,
   countSubstantiveContentChars,
+  mergeRepeatedRegulatedClaimWithheldMarkers,
   REGULATED_CLAIM_CATEGORY_LABELS,
   REGULATED_CLAIM_REDACTION_MIN_REMAINING_CHARS,
   REGULATED_CLAIM_UNVERIFIED_TOKEN_MARKER,
   regulatedClaimWithheldMarker,
+  stripRegulatedClaimWithheldMarkers,
 } from '~/lib/workflows/product-support/regulated-claim-redaction-copy';
 import {
   DEFAULT_BEX_CHAT_AGENT_MODE,
@@ -52,6 +54,7 @@ import {
   isFactToolEnforcementEnabled,
   requireFactToolForDraft,
 } from '~/lib/workflows/product-support/fact-tool-enforcement';
+import { requireFloorReopenTool } from '~/lib/workflows/product-support/floor-reopen-backstop';
 import { runAiSdkWithToolLoop } from '~/lib/bex/ai-sdk-runtime';
 import {
   hasDecisiveCrossReferenceSignal,
@@ -147,14 +150,23 @@ import {
   VALIDATOR_SYSTEM_PROMPT,
 } from '~/lib/workflows/product-support/product-support-prompts';
 import {
+  appendCategoryListEvidence,
+  buildCategoryListArgumentsJson,
+  buildCategoryListCallId,
   buildPreloadedEvidence,
   buildSpeculativeCallId,
+  CATEGORY_LIST_TOOL_NAME,
   classifySpeculativeRetrievalSkip,
   createSpeculativeReuseExecutor,
   looksLikeCategoryListOrSuperlativeAsk,
   looksLikeExactEfficacyQuestion,
   runSpeculativeRetrieval,
 } from '~/lib/workflows/product-support/speculative-retrieval';
+import { detectCategorySearchTerms } from '~/lib/tools/category-search-terms';
+import {
+  compareIdentityNameToTitle,
+  extractIdentityAskName,
+} from '~/lib/workflows/product-support/identity-title-match';
 import {
   buildComparisonPreloadedEvidence,
   resolveComparisonEntities,
@@ -205,15 +217,20 @@ import {
 import {
   evaluateRegulatedClaimGrounding,
   evaluateVerifiedFactsDilutionCitation,
+  extractVerifiedFactsCitationKeys,
   isOnlyRegulatedClaimIssues,
   isRevisionSkipForRegulatedClaimOnlyEnabled,
+  REGULATED_CLAIM_SENTENCE_BOUNDARY_SOURCE,
   resolveRevisionModel,
   resolveValidatorModel,
   REVISION_SYSTEM_PROMPT,
   runRevisionPass,
   runValidatorPass,
 } from '~/lib/workflows/product-support/validator';
-import { fetchProductLineFacts } from '~/lib/retrieval/product-facts';
+import {
+  fetchFactsForCitationKeys,
+  fetchFactsForProductLineKeys,
+} from '~/lib/retrieval/product-facts';
 
 import type { RunSource } from '~/types/observability';
 
@@ -1081,7 +1098,56 @@ export function isUnendorsedSpeculativeToolOutput(trace: ToolTraceEntry): boolea
 export type AliasFuzzyDisclosureMatch = {
   askedForName: string;
   resolvedTitle: string;
+  /**
+   * B0-979 — how the match was established. `alias_fuzzy` (the default when absent) is the B0-700
+   * verified-alias fuzzy hit; `title_near_match` is the identity-question backstop: no alias fired
+   * (`no_alias_match`) but the top retrieved title is within two edits of the typed name.
+   */
+  kind?: 'alias_fuzzy' | 'title_near_match';
 };
+
+/**
+ * B0-979 — the identity-question backstop. For "do you have a product called X?" turns where the
+ * alias resolver found nothing (`aliasResolution.outcome === 'no_alias_match'`), compare the typed
+ * name against the top `search_product_docs` source title (LAST such call first, same scan order as
+ * the alias scan). Fires only on `near` — an `exact` title (case / ®™ / transliterated "r"/"T"
+ * aside, or the same name with a pack-size suffix) leaves the turn untouched, and a `different`
+ * title (e.g. the line profile "Hard Film Floor Finish" ranking top) discloses nothing, because
+ * that is not a spelling correction. The title is returned verbatim.
+ */
+function findIdentityTitleNearMatch(
+  toolOutputs: RuntimeToolOutput[],
+  userMessage: string | undefined,
+): AliasFuzzyDisclosureMatch | null {
+  if (!userMessage) return null;
+  const typedName = extractIdentityAskName(userMessage);
+  if (!typedName) return null;
+
+  for (let i = toolOutputs.length - 1; i >= 0; i -= 1) {
+    const entry = toolOutputs[i];
+    if (!entry || !entry.ok || entry.toolName !== 'search_product_docs') continue;
+    if (entry.trace?.origin === 'workflow_injected' && entry.trace.speculative !== true) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(entry.output);
+    } catch {
+      continue;
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+    const payload = parsed as { aliasResolution?: { outcome?: unknown }; sources?: Array<{ title?: unknown }> };
+    if (payload.aliasResolution?.outcome !== 'no_alias_match') continue;
+    const topTitle = typeof payload.sources?.[0]?.title === 'string' ? payload.sources[0].title.trim() : '';
+    if (!topTitle) continue;
+    const comparison = compareIdentityNameToTitle(typedName, topTitle);
+    if (comparison === 'near') {
+      return { askedForName: typedName, resolvedTitle: topTitle, kind: 'title_near_match' };
+    }
+    // `exact` or `different`: the top retrieval for this identity question is not a spelling
+    // correction, and an older call in the trace must not overrule the one that fed the answer.
+    return null;
+  }
+  return null;
+}
 
 /**
  * Scans this turn's tool outputs, LAST call first, for the fuzzy-alias hit that grounded the final
@@ -1103,6 +1169,8 @@ export type AliasFuzzyDisclosureMatch = {
  */
 export function extractAliasFuzzyDisclosureFromToolOutputs(
   toolOutputs: RuntimeToolOutput[],
+  // B0-979 — `userMessage` enables the identity-question title backstop; omitted → alias-only.
+  options: { userMessage?: string } = {},
 ): AliasFuzzyDisclosureMatch | null {
   for (let i = toolOutputs.length - 1; i >= 0; i -= 1) {
     const entry = toolOutputs[i];
@@ -1167,9 +1235,10 @@ export function extractAliasFuzzyDisclosureFromToolOutputs(
       continue;
     }
 
-    return { askedForName, resolvedTitle };
+    return { askedForName, resolvedTitle, kind: 'alias_fuzzy' };
   }
-  return null;
+  // B0-979 — no fuzzy alias grounded the turn; try the identity-question title backstop.
+  return findIdentityTitleNearMatch(toolOutputs, options.userMessage);
 }
 
 /**
@@ -1194,8 +1263,19 @@ export function draftAlreadyDisclosesAliasCorrection(draftAnswer: string): boole
  * from `AliasFuzzyDisclosureMatch` — never reformatted.
  */
 export function buildAliasFuzzyDisclosureSentence(match: AliasFuzzyDisclosureMatch): string {
+  if (match.kind === 'title_near_match') {
+    // B0-979 — the identity-question wording the golden expects: closest match + spelling differs.
+    return `The closest catalog match to "${match.askedForName}" is ${match.resolvedTitle} — the spelling differs. Here is its information:\n\n`;
+  }
   return `I couldn't find an exact match for "${match.askedForName}", but found ${match.resolvedTitle} — here is its information:\n\n`;
 }
+
+/**
+ * B0-979 — closing line for the identity-question backstop: invites the exact label name or item
+ * number (the two things that resolve a product unambiguously), plain prose, no regulated token.
+ */
+export const IDENTITY_TITLE_CORRECTION_INVITE =
+  "\n\nIf that isn't the product you meant, reply with the exact name printed on the label or the item number and I'll look again.";
 
 /**
  * B0-700 follow-up — the deterministic backstop itself. `gpt-4.1-mini` was confirmed (live, twice)
@@ -1256,7 +1336,7 @@ export function rewriteAskedForNameToResolved(
   }
 
   // Protect quoted occurrences of the asked-for name with a sentinel, rewrite, then restore.
-  const QUOTED_SENTINEL = ' ALIAS_ASKED_FOR_QUOTED ';
+  const QUOTED_SENTINEL = '__ALIAS_ASKED_FOR_QUOTED__';
   const quotedPattern = new RegExp(`(["“'])${escapeRegExp(asked)}(["”'])`, 'gi');
   const protectedQuotes: string[] = [];
   let text = draftAnswer.replace(quotedPattern, (whole) => {
@@ -1296,11 +1376,13 @@ export function rewriteAskedForNameToResolved(
 export function maybeDiscloseAliasFuzzyMatch(
   draftAnswer: string,
   toolOutputs: RuntimeToolOutput[],
+  // B0-979 — see `extractAliasFuzzyDisclosureFromToolOutputs`.
+  options: { userMessage?: string } = {},
 ): string {
   if (isDeclineAnswer(draftAnswer)) {
     return draftAnswer;
   }
-  const match = extractAliasFuzzyDisclosureFromToolOutputs(toolOutputs);
+  const match = extractAliasFuzzyDisclosureFromToolOutputs(toolOutputs, options);
   if (!match) {
     return draftAnswer;
   }
@@ -1310,7 +1392,9 @@ export function maybeDiscloseAliasFuzzyMatch(
   if (draftAlreadyDisclosesAliasCorrection(draftAnswer)) {
     return rewritten;
   }
-  return buildAliasFuzzyDisclosureSentence(match) + rewritten + ALIAS_FUZZY_CORRECTION_INVITE;
+  const invite =
+    match.kind === 'title_near_match' ? IDENTITY_TITLE_CORRECTION_INVITE : ALIAS_FUZZY_CORRECTION_INVITE;
+  return buildAliasFuzzyDisclosureSentence(match) + rewritten + invite;
 }
 
 export function collectSourcesFromToolOutputs(toolOutputs: RuntimeToolOutput[]): SourceRef[] {
@@ -1778,16 +1862,18 @@ export function knowledgeKindSourcesDominate(
 /**
  * B0-871 — re-derive the WHOLE sentence a (possibly 240-char-truncated) snippet came from, so the
  * redaction removes the full sentence and never leaves its tail behind. Uses the same sentence
- * boundary `validator.ts`'s `splitIntoSentences` uses (`(?<=[.!?])\s+(?=[A-Z0-9])` or a newline).
- * The snippet is located as a LITERAL substring of the current text; `null` when it is not there
- * (the caller must then decline — a sentence that cannot be found verbatim cannot be removed
- * verbatim, and rephrasing is not an option).
+ * boundary `validator.ts`'s `splitIntoSentences` uses — B0-971: built from the shared
+ * `REGULATED_CLAIM_SENTENCE_BOUNDARY_SOURCE` (end punctuation + whitespace + capital/digit, with
+ * the `Reg.`/`No.`/`oz.`/… abbreviation guard) plus a newline, so the two can never disagree about
+ * where a sentence ends. The snippet is located as a LITERAL substring of `text`; `null` when it is
+ * not there (a sentence that cannot be found verbatim cannot be removed verbatim, and rephrasing is
+ * not an option — see `planRegulatedClaimRedaction` for what the caller does then).
  */
 export function expandRegulatedClaimSnippetToSentence(text: string, snippet: string): string | null {
   const start = text.indexOf(snippet);
   if (start < 0 || snippet.length === 0) return null;
   if (snippet.length < REGULATED_CLAIM_SENTENCE_SNIPPET_CAP) return snippet;
-  const boundary = /(?<=[.!?])\s+(?=[A-Z0-9])|\n/g;
+  const boundary = new RegExp(`${REGULATED_CLAIM_SENTENCE_BOUNDARY_SOURCE}|\\n`, 'g');
   boundary.lastIndex = start + snippet.length;
   const match = boundary.exec(text);
   const end = match ? match.index : text.length;
@@ -1810,6 +1896,12 @@ export type RegulatedClaimRedactionPlan =
       mode: 'token_redaction' | 'sentence_redaction';
       redactedText: string;
       withheldCategories: RegulatedClaimCategory[];
+      /**
+       * B0-985 — sentence-shaped snippets that could not be located verbatim in the draft and were
+       * therefore NOT withheld (token redaction still applied). Empty on every expected path; a
+       * non-empty list is a defect to investigate, surfaced on the gate record, never a decline.
+       */
+      unlocatedSnippets?: string[];
     };
 
 /**
@@ -1858,6 +1950,7 @@ export function planRegulatedClaimRedaction(input: {
 }): RegulatedClaimRedactionPlan {
   const { grounding } = input;
   const ungrounded = grounding.ungroundedCategories;
+  const orderedWithheldCategories = [...new Set(ungrounded)].sort();
 
   if (
     ungrounded.some(
@@ -1884,7 +1977,7 @@ export function planRegulatedClaimRedaction(input: {
         REGULATED_CLAIM_UNVERIFIED_TOKEN_MARKER,
       );
     }
-    return { mode: 'token_redaction', redactedText, withheldCategories: [...ungrounded] };
+    return { mode: 'token_redaction', redactedText, withheldCategories: orderedWithheldCategories };
   }
 
   // B0-871 — sentence redaction is for KNOWLEDGE answers only. A USAGE question about an
@@ -1908,39 +2001,65 @@ export function planRegulatedClaimRedaction(input: {
     return { mode: 'decline', reason: 'product_usage_specific_question' };
   }
 
+  /**
+   * B0-985 — sentence-shaped details FIRST, each located against the ORIGINAL draft, then the
+   * token-shaped details. The previous order blanked the tokens first, so a sentence that was both
+   * an ungrounded efficacy claim AND contained an ungrounded contact time ("… ranging from 60 to
+   * 600 seconds") could never be found again — its snippet still said "600 seconds", the text no
+   * longer did — and the whole answer hard-declined (`snippet_not_found_in_draft` on c175d99e, run
+   * 63d4dba3). A snippet that still cannot be located is logged and skipped, never escalated to a
+   * decline: the token redaction below still applies, and the miss is recorded on the plan.
+   */
   let redactedText = input.draftAnswer;
-  const markers: string[] = [];
   const removedSentences: string[] = [];
+  const unlocatedSnippets: string[] = [];
   for (const detail of grounding.ungroundedDetails) {
-    if (TOKEN_SHAPED_REGULATED_CATEGORIES.has(detail.category)) {
-      redactedText = redactedText.replaceAll(
-        detail.snippet,
-        REGULATED_CLAIM_UNVERIFIED_TOKEN_MARKER,
-      );
+    if (TOKEN_SHAPED_REGULATED_CATEGORIES.has(detail.category)) continue;
+    // One sentence can be reported under two categories (compatibility AND efficacy_claim on
+    // P#1); the first pass already withheld it, so a repeat is not a missing snippet.
+    if (removedSentences.some((removed) => removed.startsWith(detail.snippet))) continue;
+    const sentence = expandRegulatedClaimSnippetToSentence(input.draftAnswer, detail.snippet);
+    if (!sentence || !redactedText.includes(sentence)) {
+      unlocatedSnippets.push(detail.snippet);
       continue;
     }
-    const sentence = expandRegulatedClaimSnippetToSentence(redactedText, detail.snippet);
-    if (!sentence) {
-      // One sentence can be reported under two categories (compatibility AND efficacy_claim on
-      // P#1); the first pass already withheld it, so a repeat is not a missing snippet.
-      if (removedSentences.some((removed) => removed.startsWith(detail.snippet))) continue;
-      return { mode: 'decline', reason: 'snippet_not_found_in_draft' };
-    }
-    const marker = regulatedClaimWithheldMarker(detail.category);
-    markers.push(marker);
     removedSentences.push(sentence);
-    redactedText = redactedText.replaceAll(sentence, marker);
+    redactedText = redactedText.replaceAll(sentence, regulatedClaimWithheldMarker(detail.category));
+  }
+  for (const detail of grounding.ungroundedDetails) {
+    if (!TOKEN_SHAPED_REGULATED_CATEGORIES.has(detail.category)) continue;
+    redactedText = redactedText.replaceAll(detail.snippet, REGULATED_CLAIM_UNVERIFIED_TOKEN_MARKER);
+  }
+  if (redactedText === input.draftAnswer) {
+    // Nothing at all could be located, so nothing was redacted; serving the untouched draft under a
+    // "withheld" footer would misstate what was done. Not reachable when the details came from
+    // `evaluateRegulatedClaimGrounding` on this same draft.
+    return { mode: 'decline', reason: 'snippet_not_found_in_draft' };
+  }
+  if (unlocatedSnippets.length > 0) {
+    console.warn(
+      `[regulated-claim-guardrail] ${unlocatedSnippets.length} sentence snippet(s) not found verbatim in the draft; token redaction applied, sentence(s) left in place`,
+      { snippets: unlocatedSnippets },
+    );
   }
 
-  let remaining = redactedText.replaceAll(REGULATED_CLAIM_UNVERIFIED_TOKEN_MARKER, ' ');
-  for (const marker of markers) {
-    remaining = remaining.replaceAll(marker, ' ');
-  }
+  // B0-971 — two withheld bullets in a row read "[one efficacy claim withheld …]" twice; merged into
+  // one pluralised marker ("[two efficacy claims withheld …]").
+  redactedText = mergeRepeatedRegulatedClaimWithheldMarkers(redactedText);
+
+  const remaining = stripRegulatedClaimWithheldMarkers(
+    redactedText.replaceAll(REGULATED_CLAIM_UNVERIFIED_TOKEN_MARKER, ' '),
+  );
   if (countSubstantiveContentChars(remaining) < REGULATED_CLAIM_REDACTION_MIN_REMAINING_CHARS) {
     return { mode: 'decline', reason: 'nothing_substantive_remains' };
   }
 
-  return { mode: 'sentence_redaction', redactedText, withheldCategories: [...ungrounded] };
+  return {
+    mode: 'sentence_redaction',
+    redactedText,
+    withheldCategories: orderedWithheldCategories,
+    ...(unlocatedSnippets.length > 0 ? { unlocatedSnippets } : {}),
+  };
 }
 
 /**
@@ -2670,7 +2789,7 @@ export async function runProductSupportWorkflow(input: {
       ? semanticRoute && semanticRouteDecision
         ? semanticRouterRationale(semanticRouteDecision)
         : liveIntentClassification
-          ? `LLM intent classifier (${liveIntentClassification.source}, confidence ${liveIntentClassification.confidence}) routed to "${liveIntentClassification.intent}".`
+          ? `LLM intent classifier (${liveIntentClassification.source}, confidence ${liveIntentClassification.confidence}) routed to "${liveIntentClassification.intent}".${liveIntentClassification.routingOverrideReason ? ` ${liveIntentClassification.routingOverrideReason}.` : ''}`
           : route.rationale
       : `Forced direct routing to ${agentMode} specialist by admin selection.`;
   // B0-751 — the router's sentence still stands (it did decide); the override is appended so the
@@ -2796,6 +2915,8 @@ export async function runProductSupportWorkflow(input: {
           classifierConfidence: liveIntentClassification.confidence,
           classifierSource: liveIntentClassification.source,
           classifierFallbackReason: liveIntentClassification.fallbackReason,
+          // B0-977 — non-null when the deterministic floor-substrate override re-routed the verdict.
+          routingOverrideReason: liveIntentClassification.routingOverrideReason ?? null,
           classifierLatencyMs: liveClassifierLatencyMs,
           entities: liveIntentClassification.entities,
           suggestedTool: liveIntentClassification.suggestedTool,
@@ -2811,7 +2932,7 @@ export async function runProductSupportWorkflow(input: {
             : 'disagrees_with_keyword_router',
         effect:
           liveIntentClassification.source === 'llm'
-            ? `Routing cutover: the LLM classifier routed this turn to "${liveIntentClassification.intent}" (confidence ${liveIntentClassification.confidence}, ${liveClassifierLatencyMs}ms); the keyword router would have chosen "${route.agent ?? 'ambiguous'}".`
+            ? `Routing cutover: the LLM classifier routed this turn to "${liveIntentClassification.intent}" (confidence ${liveIntentClassification.confidence}, ${liveClassifierLatencyMs}ms); the keyword router would have chosen "${route.agent ?? 'ambiguous'}".${liveIntentClassification.routingOverrideReason ? ` Deterministic override applied (B0-977): ${liveIntentClassification.routingOverrideReason}.` : ''}`
             : `Routing cutover DEGRADED: the LLM call fell back to the keyword router (${liveIntentClassification.fallbackReason ?? 'unknown reason'}, ${liveClassifierLatencyMs}ms), so this turn was still routed to "${liveIntentClassification.intent}" by keyword scoring.`,
       }
     : null;
@@ -3446,7 +3567,17 @@ export async function runProductSupportWorkflow(input: {
                         productLineLockOverride !== undefined
                           ? (productLineLockOverride ?? undefined)
                           : (speculativeProductLineLock ?? undefined),
-                      queryRewrite: signalQueryRewrite,
+                      /**
+                       * B0-974 — the speculative pre-fetch embeds the user's message VERBATIM.
+                       * Appending the signals rewrite to it distorted the query vector: "how soon
+                       * can people walk on the VCT floor after the last coat?" became "… floor
+                       * finish vct time before walking on VCT floor after last coat"
+                       * (`rag.search_embedding` 16613), which pulled between-coats/mastic docs to
+                       * the top and pushed "VCT Reopening to Traffic" to rank 6; the verbatim
+                       * embedding (row 15965) puts it at rank 1. A MODEL-chosen search still gets
+                       * the rewrite (B0-738) — its own query terms are what can miss context.
+                       */
+                      queryRewrite: speculative ? null : signalQueryRewrite,
                     }
                   : turnToolOptions,
             }
@@ -3679,13 +3810,44 @@ export async function runProductSupportWorkflow(input: {
       !forceEfficacyLookup &&
       Boolean(usableSpeculation) &&
       looksLikeCategoryListOrSuperlativeAsk(input.userMessage) &&
-      routeTools.some((tool) => 'name' in tool && tool.name === 'get_products_in_category');
+      routeTools.some((tool) => 'name' in tool && tool.name === CATEGORY_LIST_TOOL_NAME);
+
+    /**
+     * B0-977 — a MULTI-category ask ("what stripping and finish products should I use for my VCT
+     * floor?") cannot be served by the single pinned call above: the model makes one
+     * `get_products_in_category` call whose `categoryName` normalises to its first token only
+     * ('stripper'), so the finishes were never listed and the answer collapsed to two products.
+     * When the message names two or more category tokens, run one category call PER token here —
+     * through the workflow's own `executeTool`, so each lands in `toolTrace`/`toolOutputLog` as a
+     * `workflow_injected` call like the speculative search — and hand every payload to round 1 as
+     * preloaded evidence. The `tool_choice` pin is then dropped to `auto` (the calls already ran).
+     * A single-category ask keeps the B0-889 pin exactly as before.
+     */
+    const multiCategoryTerms = forceCategoryList ? detectCategorySearchTerms(input.userMessage) : [];
+    const perCategoryListResults =
+      multiCategoryTerms.length >= 2
+        ? await Promise.all(
+            multiCategoryTerms.map(async (categoryTerm) => ({
+              categoryTerm,
+              result: await executeTool({
+                name: CATEGORY_LIST_TOOL_NAME,
+                argumentsJson: buildCategoryListArgumentsJson(categoryTerm),
+                callId: buildCategoryListCallId(run.id, categoryTerm),
+                speculative: true,
+              }),
+            })),
+          )
+        : [];
+    const usablePerCategoryListResults = perCategoryListResults.filter(
+      (entry) => entry.result.trace.ok,
+    );
+    const categoryListsPreloaded = usablePerCategoryListResults.length > 0;
 
     const toolChoice = forcedCrossReference
       ? ({ type: 'function', name: 'lookup_cross_reference' } as const)
       : forceEfficacyLookup
         ? ({ type: 'function', name: 'get_efficacy_data' } as const)
-        : forceCategoryList
+        : forceCategoryList && !categoryListsPreloaded
           ? ({ type: 'function', name: 'get_products_in_category' } as const)
           : usableSpeculation
             ? // Round 1 already holds retrieved evidence, so forcing another tool call would re-create
@@ -3695,7 +3857,7 @@ export async function runProductSupportWorkflow(input: {
 
     // B0-890 — a validated comparison gets the COMBINED two-product block (both labels) instead of
     // the single-search block, whenever at least one of the two scoped calls actually succeeded.
-    const preloadedEvidence =
+    const searchPreloadedEvidence =
       comparisonEntities && comparisonResults && usableSpeculation
         ? buildComparisonPreloadedEvidence({ entities: comparisonEntities, results: comparisonResults })
         : usableSpeculation
@@ -3706,6 +3868,17 @@ export async function runProductSupportWorkflow(input: {
               output: usableSpeculation.modelOutput ?? usableSpeculation.output,
             })
           : undefined;
+    // B0-977 — the per-category lists ride in the same round-1 evidence block, payloads verbatim.
+    const preloadedEvidence =
+      searchPreloadedEvidence && categoryListsPreloaded
+        ? appendCategoryListEvidence(
+            searchPreloadedEvidence,
+            usablePerCategoryListResults.map((entry) => ({
+              categoryTerm: entry.categoryTerm,
+              output: entry.result.modelOutput ?? entry.result.output,
+            })),
+          )
+        : searchPreloadedEvidence;
 
     // B0-439 — the speculative call's rows go out DURING the model call, not before it: nothing
     // between here and the first token waits on `audit_logs` any more.
@@ -3748,11 +3921,25 @@ export async function runProductSupportWorkflow(input: {
      * (`speculativeProductLineLock`), so a compatibility claim in a product-less answer is not
      * forced into a `list_allowed_surfaces` lookup of a non-product.
      */
+    // B0-976 — on the floor routes a reopening / walk-on question is checked FIRST: it is what the
+    // user asked, and the draft that withholds the schedule asserts no fact category for B0-948 to
+    // catch. Same flag, same one-forced-call-per-turn contract, same gate record.
     const factToolRequirementCheck = factToolEnforcementEnabled
       ? (check: { draftAnswer: string; toolNames: string[] }) =>
+          requireFloorReopenTool({
+            ...check,
+            userMessage: input.userMessage,
+            effectivePromptId,
+          }) ??
           requireFactToolForDraft({
             ...check,
-            context: { productResolved: speculativeProductLineLock !== null },
+            context: {
+              productResolved: speculativeProductLineLock !== null,
+              // B0-972 — lets the check recognise a list/superlative/organism-first ask and name
+              // the batch `get_efficacy_data({ category, organism })` form instead of the
+              // single-product form.
+              userMessage: input.userMessage,
+            },
           })
       : undefined;
 
@@ -4953,7 +5140,9 @@ export async function runProductSupportWorkflow(input: {
      * `alias_fuzzy` resolution the model didn't already disclose itself.
      */
     const preDisclosureDraftAnswer = draftAnswer;
-    draftAnswer = maybeDiscloseAliasFuzzyMatch(draftAnswer, toolOutputLog);
+    draftAnswer = maybeDiscloseAliasFuzzyMatch(draftAnswer, toolOutputLog, {
+      userMessage: input.userMessage,
+    });
     if (draftAnswer !== preDisclosureDraftAnswer) {
       // B0-391 — last writer that actually changed the text wins; a no-op prepend (nothing to
       // disclose, or the model already did) deliberately leaves provenance untouched.
@@ -4963,7 +5152,9 @@ export async function runProductSupportWorkflow(input: {
     // it is restored below it is byte-for-byte the text that would have shipped without the
     // revision pass, disclosure included — and it is swept through the guardrail the same way.
     if (preRevisionDraftAnswer !== null) {
-      preRevisionDraftAnswer = maybeDiscloseAliasFuzzyMatch(preRevisionDraftAnswer, toolOutputLog);
+      preRevisionDraftAnswer = maybeDiscloseAliasFuzzyMatch(preRevisionDraftAnswer, toolOutputLog, {
+        userMessage: input.userMessage,
+      });
     }
 
     // B0-257: regulated-claim guardrail -- evaluated unconditionally (independent of the
@@ -5171,6 +5362,12 @@ export async function runProductSupportWorkflow(input: {
             groundingMode:
               regulatedClaimGrounding.keyTermGroundedCategories.length > 0 ? 'key_term' : 'verbatim',
             ...(redactionDeclineReason ? { declineReason: redactionDeclineReason } : {}),
+            // B0-985 — sentence snippets the planner could not locate verbatim (left in place,
+            // token redaction still applied). Absent on every expected path.
+            ...(regulatedClaimRedactionPlan.mode !== 'decline' &&
+            regulatedClaimRedactionPlan.unlocatedSnippets?.length
+              ? { unlocatedSnippets: regulatedClaimRedactionPlan.unlocatedSnippets }
+              : {}),
           },
           thresholds: {
             note: 'hard verbatim-match requirement, not a numeric threshold',
@@ -5258,14 +5455,36 @@ export async function runProductSupportWorkflow(input: {
     // `BEX_DISABLE_CONFIDENCE_GATING` — see the function's own doc comment: that flag already
     // suppresses the verbatim guardrail's enforcement above, so wiring this one to the same switch
     // would leave today's production config with no working defense against this failure mode.
+    //
+    // B0-987 — a multi-product answer cites each product's OWN batch row as
+    // `[doc:verified-facts:<key>]` (B0-549), so every cited key is re-fetched too and each dilution
+    // figure is checked against the row it is attached to; the locked line is only the fallback for
+    // a figure attached to no citation. Before this, an unlocked turn (`skipped_ambiguous`) had
+    // nothing to compare against and every batch citation was "ungrounded" by construction
+    // (39ef58b3: "2 oz/gal", "1:16", "1:64" rejected, confidence 0.9 → 0.4). The locked line is now
+    // fetched by its `product_line_key` (`fetchFactsForProductLineKeys`): `lockedProductLineKey` is
+    // the legacy line key, which `fetchProductLineFacts` — an `entity_id` lookup — never matched, so
+    // `lockedFacts` was null on every locked turn as well.
     const dilutionLock = extractProductLineLockFromToolTrace(resolvedToolTrace);
-    const dilutionLockedFactsMap = dilutionLock?.lockedProductLineKey
-      ? await fetchProductLineFacts([dilutionLock.lockedProductLineKey])
-      : null;
+    const citedVerifiedFactsKeys = extractVerifiedFactsCitationKeys(draftAnswer);
+    const [dilutionLockedFactsMap, citedVerifiedFactsMap] = await Promise.all([
+      dilutionLock?.lockedProductLineKey
+        ? fetchFactsForProductLineKeys([dilutionLock.lockedProductLineKey])
+        : Promise.resolve(null),
+      citedVerifiedFactsKeys.length > 0
+        ? fetchFactsForCitationKeys(citedVerifiedFactsKeys)
+        : Promise.resolve(null),
+    ]);
     const dilutionLockedFacts =
       dilutionLock?.lockedProductLineKey && dilutionLockedFactsMap
         ? (dilutionLockedFactsMap.get(dilutionLock.lockedProductLineKey) ?? null)
         : null;
+    const citedDilutionFacts = new Map(
+      Array.from(citedVerifiedFactsMap?.entries() ?? [], ([key, facts]) => [
+        key,
+        facts ? { dilutionDisplay: facts.dilutionDisplay, dilutionOzPerGal: facts.dilutionOzPerGal } : null,
+      ]),
+    );
     const dilutionCitationGrounding = evaluateVerifiedFactsDilutionCitation({
       draftAnswer,
       lockedFacts: dilutionLockedFacts
@@ -5274,6 +5493,7 @@ export async function runProductSupportWorkflow(input: {
             dilutionOzPerGal: dilutionLockedFacts.dilutionOzPerGal,
           }
         : null,
+      citedFacts: citedDilutionFacts,
     });
 
     let dilutionCitationGuardrailActivation: GateActivationRecord = { state: 'ran' };
@@ -5299,6 +5519,7 @@ export async function runProductSupportWorkflow(input: {
           citedTokens: dilutionCitationGrounding.citedTokens,
           ungroundedTokens: dilutionCitationGrounding.ungroundedTokens,
           lockedProductLineKey: dilutionLock?.lockedProductLineKey ?? null,
+          citedProductLineKeys: dilutionCitationGrounding.citedProductLineKeys,
         },
         { ...wfCtx, stepId: validationStep.id },
       );
@@ -5308,12 +5529,14 @@ export async function runProductSupportWorkflow(input: {
           citedTokens: dilutionCitationGrounding.citedTokens,
           ungroundedTokens: dilutionCitationGrounding.ungroundedTokens,
           lockedProductLineKey: dilutionLock?.lockedProductLineKey ?? null,
+          // B0-987 — the batch rows each figure was checked against (its own citation's row).
+          citedProductLineKeys: dilutionCitationGrounding.citedProductLineKeys,
         },
         thresholds: {
-          note: "hard match against the locked product line's own fact row, not a numeric threshold",
+          note: "hard match against the cited product's own fact row (locked line for uncited figures), not a numeric threshold",
         },
         verdict: 'rejected',
-        effect: `Cited dilution figure(s) ${dilutionCitationGrounding.ungroundedTokens.join(', ')} for [doc:verified-facts] did not match the locked product line's own dilution fact: approved forced to false, confidence ${confidenceBeforeDilutionCap} → ${validation.confidence}, human review requested.`,
+        effect: `Cited dilution figure(s) ${dilutionCitationGrounding.ungroundedTokens.join(', ')} for [doc:verified-facts] did not match the cited/locked product line's own dilution fact: approved forced to false, confidence ${confidenceBeforeDilutionCap} → ${validation.confidence}, human review requested.`,
       });
       dilutionCitationGuardrailActivation = { state: 'ran', verdict: 'rejected' };
     } else {
@@ -5322,6 +5545,7 @@ export async function runProductSupportWorkflow(input: {
         inputs: {
           applicable: dilutionCitationGrounding.applicable,
           citedTokens: dilutionCitationGrounding.citedTokens,
+          citedProductLineKeys: dilutionCitationGrounding.citedProductLineKeys,
         },
         thresholds: {
           note: "hard match against the locked product line's own fact row, not a numeric threshold",

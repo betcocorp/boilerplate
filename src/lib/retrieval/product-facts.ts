@@ -486,6 +486,66 @@ export async function fetchFactsForProductBatch(
 }
 
 /**
+ * B0-987 — re-fetch the facts row behind each `[doc:verified-facts:<key>]` citation, keyed by the
+ * `<key>` exactly as the marker carries it. `executeBatchEfficacyData` (`~/lib/tools/product-tools.ts`)
+ * writes `productKey ?? productLineKey` into that marker, so a key is looked up as a product-tier
+ * `product_key` first and as a line-tier `product_line_key` otherwise, and the row is then built by
+ * the same `fetchFactsForProductBatch` merge the tool itself used — so the guardrail compares a cited
+ * figure against the very row the model was shown, never a sibling's. Keys that resolve to no entity
+ * or no scalar fact map to `null`. Degrades to an empty map on error, like every fetcher here.
+ */
+export async function fetchFactsForCitationKeys(
+  keys: string[],
+): Promise<Map<string, ProductLineFacts | null>> {
+  const result = new Map<string, ProductLineFacts | null>();
+  const uniqueKeys = [...new Set(keys.map((k) => k.trim()).filter(Boolean))];
+  if (uniqueKeys.length === 0) {
+    return result;
+  }
+
+  const rag = getSupabaseServiceRoleClient().schema('rag');
+  const [productRes, lineRes] = await Promise.all([
+    rag.from('entity').select('product_key, product_line_key').eq('entity_type', 'product').in('product_key', uniqueKeys),
+    rag.from('entity').select('product_line_key').eq('entity_type', 'product_line').in('product_line_key', uniqueKeys),
+  ]);
+  if (productRes.error || lineRes.error) {
+    return result;
+  }
+
+  const lineKeyByProductKey = new Map<string, string | null>();
+  for (const row of (productRes.data ?? []) as { product_key: string | null; product_line_key: string | null }[]) {
+    if (row.product_key && !lineKeyByProductKey.has(row.product_key)) {
+      lineKeyByProductKey.set(row.product_key, row.product_line_key);
+    }
+  }
+  const lineKeys = new Set(
+    ((lineRes.data ?? []) as { product_line_key: string | null }[])
+      .map((row) => row.product_line_key)
+      .filter((k): k is string => Boolean(k)),
+  );
+
+  const requests: Array<{ key: string; request: ProductFactsRequest }> = [];
+  for (const key of uniqueKeys) {
+    if (lineKeyByProductKey.has(key)) {
+      requests.push({ key, request: { productLineKey: lineKeyByProductKey.get(key) ?? '', productKey: key } });
+    } else if (lineKeys.has(key)) {
+      requests.push({ key, request: { productLineKey: key, productKey: null } });
+    } else {
+      result.set(key, null);
+    }
+  }
+  if (requests.length === 0) {
+    return result;
+  }
+
+  const facts = await fetchFactsForProductBatch(requests.map((r) => r.request));
+  requests.forEach(({ key }, index) => {
+    result.set(key, facts[index] ?? null);
+  });
+  return result;
+}
+
+/**
  * B0-792 — fact-only lookup PINNED to a specific resolved product (SKU), falling back to the
  * broader `fetchFactsForProductLineKey` line-wide merge only when no `productKey` was resolved.
  * See `fetchFactsForProductBatch` for the merge rule and why this matters.
@@ -640,7 +700,10 @@ function renderFacts(name: string, f: ProductLineFacts): string | null {
     lines.push(`- **Application:** ${f.productApplication}${confidenceNote}`);
   }
   if (f.epaRegistration) lines.push(`- **EPA reg:** ${f.epaRegistration}${lineConfidenceNote}`);
-  if (f.contactTimeSeconds != null) lines.push(`- **Contact time:** ${f.contactTimeSeconds}s${lineConfidenceNote}`);
+  // B0-986 — `contact_time_seconds` is stored in seconds and rendered in seconds ("60 sec"), never
+  // converted to minutes; "sec" replaces the bare "s" suffix so the model quotes a unit the
+  // regulated-claim guardrail's comparator and a human both read unambiguously.
+  if (f.contactTimeSeconds != null) lines.push(`- **Contact time:** ${f.contactTimeSeconds} sec${lineConfidenceNote}`);
 
   if (f.efficacy.length > 0) {
     lines.push('- **Efficacy (verified kill claims):**');
@@ -648,7 +711,7 @@ function renderFacts(name: string, f: ProductLineFacts): string | null {
       const parts = [
         e.claimType ? `claim: ${e.claimType}` : null,
         e.dilutionOzPerGal != null ? `${e.dilutionOzPerGal} oz/gal` : null,
-        e.contactTimeSeconds != null ? `${e.contactTimeSeconds}s contact` : null,
+        e.contactTimeSeconds != null ? `${e.contactTimeSeconds} sec contact` : null,
         e.epaRegistration ? `EPA ${e.epaRegistration}` : null,
       ].filter(Boolean);
       lines.push(

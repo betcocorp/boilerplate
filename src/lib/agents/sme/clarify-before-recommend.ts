@@ -34,5 +34,11 @@ export function clarifyBeforeRecommendClause(heading: '#' | '##' = '##'): string
     '- **The required organism coverage** for a disinfectant ask — not every disinfectant carries every kill claim; "I need a disinfectant for a school" does not say whether a specific organism (e.g. norovirus, influenza) must be covered, or whether general daily disinfection is the job.',
     '',
     'Nothing else triggers a clarifying question. Do not ask for surface, soil type, application method, or facility type when the product is identified; do not ask for a surface the user already named; answer, and put any remaining branch in the caveat line ("confirm the substrate is listed on the label").',
+    '',
+    // B0-976 — "how soon can people walk on the VCT floor after the last coat?" was answered with
+    // "I need the exact finish name before giving a walk-on time": the model read the product-identity
+    // trigger as covering dry/cure/reopen timing. That timing is a documented floor-care procedure,
+    // not a label-only regulated value, so the product's identity is never a precondition for it.
+    'A floor dry, cure, recoat, or reopen-to-traffic timing question ("when can we walk on it / reopen / put the carts back after the final coat") is NOT a regulated-value ask and does not need the product\'s identity: answer it from the floor-care knowledge document first, and offer — never require — a label-specific figure if the user names the finish.',
   ].join('\n');
 }

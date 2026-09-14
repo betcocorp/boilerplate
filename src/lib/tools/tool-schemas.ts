@@ -271,3 +271,52 @@ export const PRODUCT_TOOL_NAMES = [
 ] as const;
 
 export type ProductToolName = (typeof PRODUCT_TOOL_NAMES)[number];
+
+/**
+ * B0-972 — one product line's labeled dilution as the category tool returns it. Every value is the
+ * stored text, transcribed exactly (`dilution_oz_per_gal` is selected `::text` so "12.800" stays
+ * "12.800"); nothing here is rounded, converted or inferred. `null` means no labeled dilution is on
+ * file for that line in either fact source — an explicit answer, never an omission.
+ */
+export const labeledDilutionSchema = z
+  .object({
+    /** `rag.product_line_fact.dilution_display` ("1:256", "13 oz./gal.", "Ready to use"). */
+    display: z.string().nullable(),
+    /** `dilution_oz_per_gal` as stored text; null when the row carries none. */
+    ozPerGal: z.string().nullable(),
+    /** Which fact table supplied the value. */
+    source: z.enum(['product_line_fact', 'product_efficacy']),
+    /** Set when the source rows disagree and no single value can be reported without choosing. */
+    note: z.string().optional(),
+  })
+  .nullable();
+
+export type LabeledDilution = z.infer<typeof labeledDilutionSchema>;
+
+/** B0-972 — the `get_products_in_category` tool output. Zod-first so the implementation is checked against it. */
+export const getProductsInCategoryOutputSchema = z.object({
+  ok: z.literal(true),
+  adapter: z.string(),
+  categoryName: z.string(),
+  /** B0-977 — the taxonomy token(s) the request actually matched against (see `detectCategorySearchTerms`). */
+  categoriesSearched: z.array(z.string()),
+  totalFound: z.number().int(),
+  products: z.array(
+    z.object({
+      productLineId: z.string(),
+      productLineName: z.string(),
+      documentKey: z.string(),
+      prodTypes: z.array(z.string()),
+      subProdTypes: z.array(z.string()),
+      subChildProdTypes: z.array(z.string()),
+      prodClasses: z.array(z.string()),
+      /** B0-977 — which of `categoriesSearched` this line matched (a line can match several). */
+      matchedCategoryTerms: z.array(z.string()),
+      items: z.array(z.object({ sku: z.string(), title: z.string() })),
+      /** B0-972 — see `labeledDilutionSchema`; explicit `null` when none is on file. */
+      labeledDilution: labeledDilutionSchema,
+    }),
+  ),
+});
+
+export type GetProductsInCategoryOutput = z.infer<typeof getProductsInCategoryOutputSchema>;

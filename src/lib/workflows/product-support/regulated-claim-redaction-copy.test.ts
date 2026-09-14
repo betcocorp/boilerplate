@@ -4,10 +4,12 @@ import {
   buildRegulatedClaimDeclineCopy,
   buildRegulatedClaimSentenceRedactionFooter,
   buildRegulatedClaimTokenRedactionFooter,
+  mergeRepeatedRegulatedClaimWithheldMarkers,
   REGULATED_CLAIM_CONSULT_LINE,
   REGULATED_CLAIM_GOVERNING_RULES,
   regulatedClaimWithheldMarker,
   stripRegulatedClaimRedactionArtifacts,
+  stripRegulatedClaimWithheldMarkers,
 } from './regulated-claim-redaction-copy';
 
 describe('regulated-claim redaction copy (B0-928)', () => {
@@ -75,5 +77,38 @@ describe('regulated-claim redaction copy (B0-928)', () => {
         expect(rule).not.toMatch(/oz\/gal|ppm|1:\d|minutes?\b/i);
       }
     });
+  });
+});
+
+/**
+ * B0-971 — two withheld bullets in a row rendered the identical `[one efficacy claim withheld …]`
+ * marker twice. Consecutive identical markers are merged into one pluralised marker, and the
+ * grader's strip removes either form.
+ */
+describe('withheld markers (B0-971)', () => {
+  it('merges a run of identical markers (with or without list bullets between) into one pluralised marker', () => {
+    const one = regulatedClaimWithheldMarker('efficacy_claim');
+    expect(mergeRepeatedRegulatedClaimWithheldMarkers(`Intro line.\n${one}\n${one}\nOutro.`)).toBe(
+      `Intro line.\n[two efficacy claims withheld — not verifiable against a retrieved label]\nOutro.`,
+    );
+    expect(mergeRepeatedRegulatedClaimWithheldMarkers(`- ${one}\n- ${one}\n- ${one}`)).toBe(
+      '- [three efficacy claims withheld — not verifiable against a retrieved label]',
+    );
+  });
+
+  it('leaves markers of different categories, or separated by other text, untouched', () => {
+    const efficacy = regulatedClaimWithheldMarker('efficacy_claim');
+    const compat = regulatedClaimWithheldMarker('compatibility');
+    const mixed = `${efficacy}\n${compat}`;
+    expect(mergeRepeatedRegulatedClaimWithheldMarkers(mixed)).toBe(mixed);
+    const separated = `${efficacy}\nSome grounded sentence.\n${efficacy}`;
+    expect(mergeRepeatedRegulatedClaimWithheldMarkers(separated)).toBe(separated);
+  });
+
+  it('strips the pluralised marker exactly like the singular one', () => {
+    const text = `Kept sentence. ${regulatedClaimWithheldMarker('efficacy_claim', 2)} Another kept sentence.`;
+    expect(stripRegulatedClaimWithheldMarkers(text)).not.toContain('withheld');
+    expect(stripRegulatedClaimRedactionArtifacts(text)).not.toContain('withheld');
+    expect(stripRegulatedClaimRedactionArtifacts(text)).toContain('Kept sentence.');
   });
 });

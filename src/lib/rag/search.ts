@@ -5,6 +5,7 @@ import { resolveQueryRewriteModel } from '~/lib/rag/query-rewrite-model';
 import { getBooleanSetting } from '~/lib/settings/settings-service';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 import { fetchDocumentSourceRefs } from '~/lib/retrieval/document-assembly';
+import { haveIdenticalDomainTerms } from '~/lib/rag/query-domain-terms';
 const APPROX_QUERY_THRESHOLD_SHORT = 0.95;
 const APPROX_QUERY_THRESHOLD_LONG = 0.9;
 const APPROX_REWRITTEN_SIMILARITY_THRESHOLD = 0.88;
@@ -128,6 +129,14 @@ export type RagSearchResult = {
     rerankMs: number;
   };
   matches: RagSearchMatch[];
+  /**
+   * B0-975 — RPC rows the hybrid lexical (FTS) leg returned for a chunk with NO embedding, so
+   * `similarity` came back NULL. These are excluded from `matches` explicitly — never coerced to 0
+   * (which `Number(null)` silently did, so `selectCuratedMatches`' 0.2 floor dropped them with no
+   * trace). Always 0 on the vector-only strategies, and 0 today for the corpus (every current chunk
+   * is embedded); non-zero is the signal that un-embedded chunks are back in the index.
+   */
+  lexicalOnlyCandidateCount: number;
 };
 
 
@@ -733,7 +742,24 @@ async function getCachedOrNewEmbedding(
   ) as unknown as ApproximateSearchEmbeddingRow | null;
   const approximateEmbedding = parseVectorEmbedding(approximate?.embeddings_large ?? null);
 
-  if (approximate && approximateEmbedding) {
+  /**
+   * B0-975 — a trigram-similar cached row is reused ONLY when it names exactly the same domain
+   * terms (`haveIdenticalDomainTerms`: surfaces, floor types, product forms, SKU-like tokens,
+   * acronyms). `find_similar_search_embedding` matched "how soon can people walk on the VCT floor
+   * after the last coat?" to "…walk on the floor after the last coat?" at 0.9286 and silently
+   * dropped "VCT". A rejected hit falls through to the rewrite / new-embedding path below exactly
+   * as a miss would.
+   */
+  const approximateDomainTermsMatch =
+    approximate !== null &&
+    haveIdenticalDomainTerms(
+      normalizedQueryString,
+      (approximate.match_source === 'query_string'
+        ? approximate.query_string
+        : approximate.query_rewritten) ?? '',
+    );
+
+  if (approximate && approximateEmbedding && approximateDomainTermsMatch) {
     const persistStartedAt = nowMs();
     const { error: updateError } = await supabase
       .schema('rag')
@@ -929,10 +955,38 @@ type MatchRpcOpts = {
   surfaceType: string | null;
 };
 
+/** B0-975 — accumulates across every RPC call one `searchProductChunks` makes (multi-intent fans out). */
+type LexicalOnlyStats = { lexicalOnlyCount: number };
+
+/**
+ * B0-975 — split RPC rows into scored candidates and lexical-only ones (NULL/non-numeric
+ * `similarity`: the FTS leg matched a chunk that has no embedding). The RPC projects
+ * `1 - (embedding <=> query)` which is NULL for such a chunk; PostgREST hands that over as JSON
+ * null, and the old `Number(match.similarity)` turned it into a silent 0.
+ */
+function partitionLexicalOnlyMatches(rows: RagCorpusSearchMatch[]): {
+  scored: RagCorpusSearchMatch[];
+  lexicalOnlyCount: number;
+} {
+  const scored: RagCorpusSearchMatch[] = [];
+  let lexicalOnlyCount = 0;
+  for (const row of rows) {
+    const raw = (row as { similarity: unknown }).similarity;
+    const numeric = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN;
+    if (raw === null || raw === undefined || !Number.isFinite(numeric)) {
+      lexicalOnlyCount += 1;
+      continue;
+    }
+    scored.push(row);
+  }
+  return { scored, lexicalOnlyCount };
+}
+
 async function callMatchRpc(
   embedding: number[],
   hybridQueryText: string,
   opts: MatchRpcOpts,
+  stats: LexicalOnlyStats,
 ): Promise<RagCorpusSearchMatch[]> {
   const supabase = getSupabaseServiceRoleClient();
   const rag = supabase.schema('rag');
@@ -996,7 +1050,11 @@ async function callMatchRpc(
         );
 
   if (error) throw new Error(`Failed to run similarity search: ${error.message}`);
-  return (data ?? []) as RagCorpusSearchMatch[];
+  const { scored, lexicalOnlyCount } = partitionLexicalOnlyMatches(
+    (data ?? []) as RagCorpusSearchMatch[],
+  );
+  stats.lexicalOnlyCount += lexicalOnlyCount;
+  return scored;
 }
 
 /** Semantic search over `product_line_profile` chunks (one RAG document per legacy product line). */
@@ -1043,9 +1101,17 @@ export async function searchProductChunks(
     timings: embeddingTimings,
   } = await getCachedOrNewEmbedding(query, options.model);
 
-  // For hybrid search, prefer the rewritten query as BM25 text — it has
-  // cleaner lexemes than the raw user input.
-  const hybridQueryText = row?.query_rewritten ?? query;
+  /**
+   * B0-975 — the lexical (FTS) leg ranks on the RAW query, not the LLM rewrite. The rewrite
+   * appends boilerplate ("application surface", "maintenance guidance") and expands the acronyms
+   * the corpus actually uses ("VCT" → "vinyl composition tile"), and `websearch_to_tsquery` ANDs
+   * every lexeme — measured: 0 matching chunks corpus-wide for 10 of 12 golden query variants, so
+   * the leg was inert and ranking was ANN + rerank alone. The RPC now also relaxes to an OR query
+   * when the AND form matches nothing (see `match_corpus_chunks_hybrid`, migration
+   * `hybrid_fts_or_fallback_b0975`). The rewrite still drives the embedding cache lookup above.
+   */
+  const hybridQueryText = query;
+  const lexicalStats: LexicalOnlyStats = { lexicalOnlyCount: 0 };
 
   const rpcOpts: MatchRpcOpts = {
     scope,
@@ -1066,8 +1132,8 @@ export async function searchProductChunks(
       const subResults = await Promise.all(
         intents.map(async (subQuery) => {
           const subEmb = await getCachedOrNewEmbedding(subQuery, options.model);
-          const subHybridText = subEmb.row?.query_rewritten ?? subQuery;
-          return callMatchRpc(subEmb.embedding, subHybridText, rpcOpts);
+          // B0-975 — raw sub-query as lexical text, same reasoning as `hybridQueryText`.
+          return callMatchRpc(subEmb.embedding, subQuery, rpcOpts, lexicalStats);
         }),
       );
       // Merge: dedup by chunk_id keeping the highest similarity score across sub-queries
@@ -1084,10 +1150,10 @@ export async function searchProductChunks(
         .sort((a, b) => (b.similarity as number) - (a.similarity as number))
         .slice(0, rpcLimit);
     } else {
-      rawMatches = await callMatchRpc(embedding, hybridQueryText, rpcOpts);
+      rawMatches = await callMatchRpc(embedding, hybridQueryText, rpcOpts, lexicalStats);
     }
   } else {
-    rawMatches = await callMatchRpc(embedding, hybridQueryText, rpcOpts);
+    rawMatches = await callMatchRpc(embedding, hybridQueryText, rpcOpts, lexicalStats);
   }
 
   const similaritySearchMs = elapsedMs(similaritySearchStartedAt);
@@ -1196,6 +1262,7 @@ export async function searchProductChunks(
     embeddingSource: source,
     timings,
     matches: dedupedMatches,
+    lexicalOnlyCandidateCount: lexicalStats.lexicalOnlyCount,
   };
 }
 
