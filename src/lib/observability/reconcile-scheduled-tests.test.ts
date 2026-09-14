@@ -3,10 +3,13 @@ import { describe, expect, it } from 'vitest';
 import {
   SCHEDULED_ITEM_STALE_AFTER_MS,
   SCHEDULED_ITEM_TIMED_OUT_ERROR,
+  ORPHAN_BACKFILL_WINDOW_MS,
   buildScheduledRunPatch,
+  matchOrphanToSweepRun,
   reconcileScheduledTests,
   reconcileScheduledTestsResultSchema,
   resolveScheduledItemPatch,
+  type ReconcilerSweepRun,
   type ReconcilerTestRun,
   type ScheduledItemTally,
   type ScheduledTestReconcilerPort,
@@ -90,29 +93,50 @@ function testRun(overrides: Partial<ReconcilerTestRun> = {}): ReconcilerTestRun 
   };
 }
 
+function sweepRun(overrides: Partial<ReconcilerSweepRun> = {}): ReconcilerSweepRun {
+  return {
+    ...testRun(),
+    test_id: 'test-1',
+    created_at: isoAgo(10 * 60 * 1000 - 2_000),
+    ...overrides,
+  };
+}
+
 type Recorded = {
   itemUpdates: { id: string; patch: ScheduledTestItemPatch }[];
   runUpdates: { id: string; patch: ScheduledTestRunPatch }[];
+  backfillQueries: { testIds: string[]; sinceIso: string }[];
 };
 
 function stubPort(options: {
   items?: ScheduledTestItem[];
   runs?: ReconcilerTestRun[];
+  sweepRuns?: ReconcilerSweepRun[];
   tallies?: ScheduledItemTally[];
   parents?: ScheduledTestRun[];
   /** Children the parent rollup sees (defaults to `items` with the recorded patches applied). */
   siblings?: ScheduledTestItem[];
   failItemIds?: Set<string>;
 }): { port: ScheduledTestReconcilerPort; recorded: Recorded } {
-  const recorded: Recorded = { itemUpdates: [], runUpdates: [] };
+  const recorded: Recorded = { itemUpdates: [], runUpdates: [], backfillQueries: [] };
   const items = options.items ?? [];
 
   const port: ScheduledTestReconcilerPort = {
     async listNonTerminalItems() {
       return items;
     },
-    async listTestRuns() {
-      return options.runs ?? [];
+    async listTestRuns(testRunIds) {
+      // Backfilled ids are only known to the sweep-run list; serve those rows here too so a
+      // relinked child is folded exactly as the repository would.
+      const known = options.runs ?? [];
+      const fromSweep = (options.sweepRuns ?? []).filter(
+        (run) => testRunIds.includes(run.id) && !known.some((k) => k.id === run.id),
+      );
+      return [...known, ...fromSweep];
+    },
+    async listSweepTestRunsForTests(testIds, sinceIso) {
+      recorded.backfillQueries.push({ testIds, sinceIso });
+      return options.sweepRuns ?? [];
     },
     async listItemTallies() {
       return options.tallies ?? [];
@@ -354,7 +378,7 @@ describe('reconcileScheduledTests', () => {
     });
   });
 
-  it('skips a child with no `test_run_id` and never touches the parent', async () => {
+  it('skips a child with no `test_run_id` and no matching sweep run, never touching the parent', async () => {
     const { port, recorded } = stubPort({
       items: [item({ id: 'a', test_run_id: null, started_at: isoAgo(60_000) })],
     });
@@ -362,9 +386,103 @@ describe('reconcileScheduledTests', () => {
     const result = await reconcileScheduledTests(deps(port));
 
     expect(result.itemsPending).toBe(1);
+    expect(result.itemsBackfilled).toBe(0);
+    expect(recorded.backfillQueries).toHaveLength(1);
     expect(recorded.itemUpdates).toHaveLength(0);
     expect(recorded.runUpdates).toHaveLength(0);
     expect(result.runIds).toEqual([]);
+  });
+
+  // B0-989 — the 2026-09-14 sweep: four children never got a `test_run_id` because the sweep
+  // invocation was killed while the runs were still executing, and three of those runs completed.
+  it('backfills an orphaned child from the sweep run and closes it as completed', async () => {
+    const { port, recorded } = stubPort({
+      items: [item({ id: 'a', test_run_id: null })],
+      sweepRuns: [sweepRun({ id: 'run-created-by-sweep', status: 'completed_with_failures' })],
+      tallies: [
+        { test_run_id: 'run-created-by-sweep', items_total: 20, items_passed: 18, items_failed: 2 },
+      ],
+    });
+
+    const result = await reconcileScheduledTests(deps(port));
+
+    expect(result.itemsBackfilled).toBe(1);
+    expect(result.itemsCompleted).toBe(1);
+    expect(recorded.itemUpdates[0]?.patch).toMatchObject({
+      test_run_id: 'run-created-by-sweep',
+      status: 'completed',
+      items_passed: 18,
+    });
+    expect(result.runsCompleted).toBe(1);
+  });
+
+  it('links an orphaned child to a still-running sweep run without closing it', async () => {
+    const { port, recorded } = stubPort({
+      items: [item({ id: 'a', test_run_id: null })],
+      sweepRuns: [sweepRun({ id: 'run-still-going', status: 'running', completed_at: null })],
+    });
+
+    const result = await reconcileScheduledTests(deps(port));
+
+    expect(result.itemsBackfilled).toBe(1);
+    expect(result.itemsPending).toBe(1);
+    expect(recorded.itemUpdates).toEqual([
+      { id: 'a', patch: { test_run_id: 'run-still-going' } },
+    ]);
+    // A link-only write changes nothing the parent aggregates read.
+    expect(recorded.runUpdates).toHaveLength(0);
+  });
+
+  it('does not write the backfilled link on a dry run', async () => {
+    const { port, recorded } = stubPort({
+      items: [item({ id: 'a', test_run_id: null })],
+      sweepRuns: [sweepRun({ id: 'run-still-going', status: 'running', completed_at: null })],
+    });
+
+    const result = await reconcileScheduledTests(deps(port), { dryRun: true });
+
+    expect(result.itemsBackfilled).toBe(1);
+    expect(recorded.itemUpdates).toHaveLength(0);
+  });
+});
+
+describe('matchOrphanToSweepRun (B0-989)', () => {
+  const orphan = item({ test_run_id: null, started_at: isoAgo(10 * 60 * 1000) });
+
+  it('picks the earliest run for the same test created just after the child started', () => {
+    const later = sweepRun({ id: 'later', created_at: isoAgo(10 * 60 * 1000 - 30_000) });
+    const earlier = sweepRun({ id: 'earlier', created_at: isoAgo(10 * 60 * 1000 - 2_000) });
+
+    expect(matchOrphanToSweepRun(orphan, [later, earlier])?.id).toBe('earlier');
+  });
+
+  it('ignores runs for another test, runs created before the child, and runs outside the window', () => {
+    expect(
+      matchOrphanToSweepRun(orphan, [
+        sweepRun({ id: 'other-test', test_id: 'test-2' }),
+        sweepRun({ id: 'too-early', created_at: isoAgo(12 * 60 * 1000) }),
+        sweepRun({
+          id: 'too-late',
+          created_at: isoAgo(10 * 60 * 1000 - ORPHAN_BACKFILL_WINDOW_MS - 1_000),
+        }),
+      ]),
+    ).toBeNull();
+  });
+
+  it('tolerates clock skew: a run stamped a few seconds before the child still matches', () => {
+    expect(
+      matchOrphanToSweepRun(orphan, [
+        sweepRun({ id: 'skewed', created_at: isoAgo(10 * 60 * 1000 + 13_500) }),
+      ])?.id,
+    ).toBe('skewed');
+  });
+
+  it('never hands one run to two children', () => {
+    const consumed = new Set<string>();
+    const runs = [sweepRun({ id: 'only' })];
+
+    expect(matchOrphanToSweepRun(orphan, runs, consumed)?.id).toBe('only');
+    expect(matchOrphanToSweepRun(item({ id: 'b', test_run_id: null }), runs, consumed)).toBeNull();
   });
 
   it('counts a write failure and leaves the child for the next run', async () => {

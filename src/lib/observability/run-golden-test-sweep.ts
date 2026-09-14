@@ -17,6 +17,19 @@ import type { ScheduledTestItem } from '~/lib/observability/scheduled-test-types
 
 const ADMIN_RUNS_PATH = '/api/admin/tests/runs';
 
+/**
+ * B0-989 — how long the sweep waits on `POST /api/admin/tests/runs/[runId]` before giving up on
+ * hearing back. That route awaits the WHOLE run (up to its own 300s `maxDuration`), while this
+ * sweep's route is budgeted at 280s — so on the 2026-09-14 sweep four of five runs were still
+ * executing when the sweep invocation was killed, and their ledger rows never got a `test_run_id`.
+ * The run itself is unaffected by the wait ending: the request has already been delivered and the
+ * callee keeps executing in its own invocation. The reconciler closes the child from `test_results`.
+ */
+export const SWEEP_EXECUTE_WAIT_MS = 240_000;
+
+/** `state` reported when the execute call was still in flight at {@link SWEEP_EXECUTE_WAIT_MS}. */
+export const DISPATCHED_PENDING_STATE = 'dispatched_pending';
+
 /* -------------------------------------------------------------------------- *
  * Contracts (Zod first, per AGENTS.md)
  * -------------------------------------------------------------------------- */
@@ -34,7 +47,11 @@ export const goldenTestSweepOutcomeSchema = z.object({
   testName: z.string(),
   ok: z.boolean(),
   runId: z.string().nullable(),
-  /** `POST /api/admin/tests/runs/[runId]`'s own `state` field (`started`, `already_running`, …). */
+  /**
+   * `POST /api/admin/tests/runs/[runId]`'s own `state` field (`started`, `already_running`, …), or
+   * {@link DISPATCHED_PENDING_STATE} when the run was created and execution requested but had not
+   * reported back within {@link SWEEP_EXECUTE_WAIT_MS}.
+   */
   state: z.string().nullable(),
   /** Which of the two HTTP calls failed, when `ok` is false. */
   step: z.enum(['create', 'execute']).nullable(),
@@ -56,12 +73,49 @@ export const runGoldenTestSweepResultSchema = z.object({
 });
 export type RunGoldenTestSweepResult = z.infer<typeof runGoldenTestSweepResultSchema>;
 
+/** Injectable seams so the dispatch choreography is unit-testable without a network or a clock. */
+export type GoldenTestSweepDeps = {
+  fetchImpl?: typeof fetch;
+  /** Overrides {@link SWEEP_EXECUTE_WAIT_MS}. */
+  executeWaitMs?: number;
+};
+
+const WAIT_ELAPSED = Symbol('execute_wait_elapsed');
+
+/**
+ * Resolves to the response, or to {@link WAIT_ELAPSED} once `waitMs` has passed. The fetch itself is
+ * NOT aborted: the callee is already executing the run in its own invocation, and an abort would at
+ * best be ignored and at worst be read as a cancellation. Only this sweep stops listening.
+ */
+function awaitWithDeadline(
+  pending: Promise<Response>,
+  waitMs: number,
+): Promise<Response | typeof WAIT_ELAPSED> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const elapsed = new Promise<typeof WAIT_ELAPSED>((resolve) => {
+    timer = setTimeout(() => resolve(WAIT_ELAPSED), waitMs);
+  });
+  return Promise.race([pending, elapsed]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
 async function queueAndRunGoldenTest(
   origin: string,
   authorization: string,
   test: { id: string; name: string },
+  hooks: {
+    /**
+     * B0-989 — fired the moment the create call returns a run id, BEFORE execution is awaited, so
+     * the ledger links to the run even if this invocation never hears how the run ended.
+     */
+    onRunCreated: (runId: string) => Promise<void>;
+  },
+  deps: GoldenTestSweepDeps = {},
 ): Promise<GoldenTestSweepOutcome> {
   const base = { testId: test.id, testName: test.name };
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  const executeWaitMs = deps.executeWaitMs ?? SWEEP_EXECUTE_WAIT_MS;
 
   // B0-966 — this is a self-call into our own deployment, so it has to clear Vercel Deployment
   // Protection on its own: the cron's signed inbound request confers nothing on an outbound fetch.
@@ -69,7 +123,7 @@ async function queueAndRunGoldenTest(
 
   let createResponse: Response;
   try {
-    createResponse = await fetch(`${origin}${ADMIN_RUNS_PATH}`, {
+    createResponse = await fetchImpl(`${origin}${ADMIN_RUNS_PATH}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -107,13 +161,28 @@ async function queueAndRunGoldenTest(
   }
 
   const runId = createBody.runId;
+  await hooks.onRunCreated(runId);
 
   let executeResponse: Response;
   try {
-    executeResponse = await fetch(`${origin}${ADMIN_RUNS_PATH}/${runId}`, {
-      method: 'POST',
-      headers: { Authorization: authorization, ...bypass.headers },
-    });
+    const settled = await awaitWithDeadline(
+      fetchImpl(`${origin}${ADMIN_RUNS_PATH}/${runId}`, {
+        method: 'POST',
+        headers: { Authorization: authorization, ...bypass.headers },
+      }),
+      executeWaitMs,
+    );
+    if (settled === WAIT_ELAPSED) {
+      return {
+        ...base,
+        ok: true,
+        runId,
+        state: DISPATCHED_PENDING_STATE,
+        step: null,
+        error: null,
+      };
+    }
+    executeResponse = settled;
   } catch (error) {
     return {
       ...base,
@@ -202,6 +271,34 @@ async function openSweepLedger(
 }
 
 /**
+ * B0-989 — links the child to its run the moment the run exists. Written before execution is
+ * awaited so a sweep invocation that dies (or stops listening) mid-run still leaves the join the
+ * reconciler needs; without it the child can only ever be closed by the stale guard, as
+ * `timed_out`, for a run that in fact completed.
+ */
+async function recordRunCreated(
+  ledger: SweepLedger | null,
+  testId: string,
+  runId: string,
+): Promise<void> {
+  const item = ledger?.itemsByTestId.get(testId);
+  if (!ledger || !item) {
+    return;
+  }
+
+  try {
+    await updateScheduledTestItem(item.id, { test_run_id: runId });
+    ledger.itemsByTestId.set(testId, { ...item, test_run_id: runId });
+  } catch (error) {
+    logWarn('scheduled_test_item_write_failed', {
+      scheduled_test_item_id: item.id,
+      test_id: testId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/**
  * Folds one dispatch outcome onto its child row.
  *
  * A successful dispatch only records `test_run_id` and stays `running` — the run is still
@@ -284,14 +381,17 @@ async function closeSweepLedger(ledger: SweepLedger | null): Promise<void> {
  * Every golden test's create+execute pair runs CONCURRENTLY (`Promise.all`), not sequentially —
  * `POST .../[runId]` awaits the run's full execution before responding (bounded by its own 300s
  * `maxDuration`), so running N golden tests one after another could take up to N times that;
- * concurrently, the whole sweep is bounded by the slowest single test instead. A test whose
- * execution invocation is killed mid-run by that budget is left `running` and picked up by the
- * existing hourly `/api/v1/observability/sweep-stalled-runs` cron, exactly as it would be if a
- * human's browser tab had closed mid-run.
+ * concurrently, the whole sweep is bounded by the slowest single test instead. B0-989: that wait is
+ * itself capped at {@link SWEEP_EXECUTE_WAIT_MS} so the sweep always finishes its own bookkeeping
+ * inside its route budget; a run still executing past that is reported `dispatched_pending` and
+ * closed later by the reconciler. A run whose execution invocation is killed mid-run is left
+ * `running` and recovered by `/api/v1/observability/sweep-stalled-test-runs` (B0-990), exactly as
+ * it would be if a human's browser tab had closed mid-run.
  */
 export async function runGoldenTestSweep(
   options: RunGoldenTestSweepOptions,
   context: { origin: string; authorization: string },
+  deps: GoldenTestSweepDeps = {},
 ): Promise<RunGoldenTestSweepResult> {
   // B0-942 — archived golden sets are excluded: the sweep must not burn a run (and the LLM spend
   // behind it) on a set nobody maintains any more. Matches what B0-883's "Run Golden" trigger does.
@@ -323,10 +423,13 @@ export async function runGoldenTestSweep(
 
   const outcomes = await Promise.all(
     goldenTests.map(async (test) => {
-      const outcome = await queueAndRunGoldenTest(context.origin, context.authorization, {
-        id: test.id,
-        name: test.name,
-      });
+      const outcome = await queueAndRunGoldenTest(
+        context.origin,
+        context.authorization,
+        { id: test.id, name: test.name },
+        { onRunCreated: (runId) => recordRunCreated(ledger, test.id, runId) },
+        deps,
+      );
       await recordDispatchOutcome(ledger, outcome);
       return outcome;
     }),

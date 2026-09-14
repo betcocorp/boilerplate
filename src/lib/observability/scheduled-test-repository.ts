@@ -20,6 +20,7 @@ import {
   reconcileScheduledTests,
   type ReconcileScheduledTestsInput,
   type ReconcileScheduledTestsResult,
+  type ReconcilerSweepRun,
   type ReconcilerTestRun,
   type ScheduledItemTally,
   type ScheduledTestReconcilerPort,
@@ -231,6 +232,36 @@ export async function listTestRunsForReconciliation(
 }
 
 /**
+ * B0-989 — runs the sweep created for these tests at/after `sinceIso`, oldest first. Restricted to
+ * `triggered_by = 'api-client'`: that is the label `POST /api/admin/tests/runs` stamps on a run
+ * created with a registry token (B0-687), which is what the sweep uses; a human's run started in
+ * the same window is never a candidate.
+ */
+export async function listSweepTestRunsForTests(
+  testIds: string[],
+  sinceIso: string,
+): Promise<ReconcilerSweepRun[]> {
+  if (testIds.length === 0) {
+    return [];
+  }
+
+  const supabase = getSupabaseServiceRoleClient();
+  const { data, error } = await supabase
+    .from('test_results')
+    .select('id,test_id,status,started_at,completed_at,elapsed_ms,created_at')
+    .in('test_id', testIds)
+    .eq('triggered_by', 'api-client')
+    .gte('created_at', sinceIso)
+    .order('created_at', { ascending: true });
+
+  if (error) {
+    throw new Error(`select test_results (sweep backfill): ${error.message}`);
+  }
+
+  return data ?? [];
+}
+
+/**
  * Per-run pass/fail counts.
  *
  * Counted with `head: true` count queries rather than by selecting the rows: a golden run can
@@ -287,6 +318,7 @@ export function createSupabaseScheduledTestReconcilerPort(): ScheduledTestReconc
   return {
     listNonTerminalItems: listNonTerminalScheduledTestItems,
     listTestRuns: listTestRunsForReconciliation,
+    listSweepTestRunsForTests,
     listItemTallies: listScheduledItemTallies,
     updateItem: updateScheduledTestItem,
     listItemsForScheduledRuns: listScheduledTestItemsForRuns,
