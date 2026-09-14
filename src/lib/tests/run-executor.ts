@@ -32,6 +32,7 @@ import { mandatoryConceptPhrases } from './grading';
 import { scheduleReportGeneration } from './report/schedule-report-generation';
 import { parseTestRunConfig } from './run-config';
 import { runSingleTestItem } from './runner';
+import { canScheduleRunContinuation } from './schedule-run-continuation';
 import { generateAndSaveRunInsights } from './run-insights';
 import { runRunComparisonAnalysis, startRunComparison } from './run-comparison';
 import {
@@ -228,11 +229,48 @@ function asSummaryObject(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-export async function executeTestRun(testResultId: string) {
+/**
+ * B0-990 — how long one invocation of {@link executeTestRun} may keep starting new items. The route
+ * that hosts it has `maxDuration = 300`; the gap is headroom for the item in flight to finish and
+ * for the yield checkpoint to be written. Items average 15–18 s but the slow tail is real, so the
+ * headroom is a whole minute rather than the 40 s the report orchestrator keeps.
+ */
+export const RUN_WALL_CLOCK_BUDGET_MS = 240_000;
+
+/** `summary.runner_state` written when the executor stopped itself to be continued in a new hop. */
+export const RUNNER_STATE_YIELDED = 'yielded';
+
+/**
+ * How {@link executeTestRun} returned.
+ * - `completed` — every item ran; the run is terminal.
+ * - `yielded`   — B0-990: the wall-clock budget ran out with items left; the run is back to `queued`
+ *                 with `runner_state: 'yielded'` and the caller must schedule a continuation hop.
+ * - `paused` / `cancelled` — a control action stopped the loop.
+ * - `skipped`   — nothing to do (already terminal or paused on entry).
+ */
+export type ExecuteTestRunOutcome = 'completed' | 'yielded' | 'paused' | 'cancelled' | 'skipped';
+
+export type ExecuteTestRunOptions = {
+  /** Wall-clock budget for THIS invocation. Defaults to {@link RUN_WALL_CLOCK_BUDGET_MS}. */
+  budgetMs?: number;
+  /**
+   * Whether the executor may yield at all. Defaults to `canScheduleRunContinuation()`: a run that
+   * nobody can pick up again must never be left `queued`, so without a service token the loop runs
+   * to completion exactly as it did before B0-990 (local dev has no function ceiling anyway).
+   */
+  canYield?: boolean;
+};
+
+export async function executeTestRun(
+  testResultId: string,
+  options: ExecuteTestRunOptions = {},
+): Promise<ExecuteTestRunOutcome> {
+  const deadline = Date.now() + (options.budgetMs ?? RUN_WALL_CLOCK_BUDGET_MS);
+  const canYield = options.canYield ?? canScheduleRunContinuation();
   const testResult = await getTestResultById(testResultId);
 
   if (isTerminalRunStatus(testResult.status) || testResult.status === 'paused') {
-    return;
+    return 'skipped';
   }
 
   const items = await getTestItemsByTestId(testResult.test_id);
@@ -350,7 +388,7 @@ export async function executeTestRun(testResultId: string) {
       await updateTestRecord(testResult.test_id, {
         status: 'ready',
       });
-      return;
+      return 'paused';
     }
 
     if (controlRun.status === 'cancelled') {
@@ -369,14 +407,41 @@ export async function executeTestRun(testResultId: string) {
       await updateTestRecord(testResult.test_id, {
         status: 'ready',
       });
-      return;
+      return 'cancelled';
     }
 
     if (isTerminalRunStatus(controlRun.status)) {
       await updateTestRecord(testResult.test_id, {
         status: 'ready',
       });
-      return;
+      return 'skipped';
+    }
+
+    /**
+     * B0-990 — yield before the platform kills us. Every finished item is already its own
+     * `test_result_items` row and the loop above skips rows that exist, so the checkpoint is simply
+     * "hand the run back as `queued`": the continuation hop claims it (`queued` → `running`, the
+     * same compare-and-set every start uses) and resumes from the first unfinished item. The
+     * `tests.status` stays `running` — the run has not stopped, only this invocation has.
+     */
+    if (canYield && Date.now() >= deadline) {
+      const controlSummary = asSummaryObject(controlRun.summary);
+      itemElapsedSumMs = await sumResultItemsElapsedMsByResultId(testResult.id);
+      const priorHops =
+        typeof controlSummary.continuation_hops === 'number' ? controlSummary.continuation_hops : 0;
+      await updateTestResult(testResult.id, {
+        status: 'queued',
+        elapsed_ms: itemElapsedSumMs,
+        summary: {
+          ...controlSummary,
+          runner_state: RUNNER_STATE_YIELDED,
+          running_since: null,
+          yielded_at: new Date().toISOString(),
+          continuation_hops: priorHops + 1,
+          elapsed_accumulated_ms: itemElapsedSumMs,
+        },
+      });
+      return 'yielded';
     }
 
     const itemResult = await runSingleTestItem(testResult.id, item, {
@@ -549,4 +614,6 @@ export async function executeTestRun(testResultId: string) {
       message: error instanceof Error ? error.message : String(error),
     });
   }
+
+  return 'completed';
 }

@@ -1,3 +1,4 @@
+import { resolveDeploymentProtectionBypass } from '~/lib/api/deployment-protection-bypass';
 import { logWarn } from '~/lib/observability/logger';
 
 /**
@@ -46,9 +47,10 @@ export type ScheduleReportGenerationResult = {
 /**
  * Same origin-resolution idiom as `resolveServerEventsLogUrl` in `~/lib/event-logging/log-event`:
  * prefer the forwarded host of the request we are already serving, fall back to configured origins,
- * and finally to loopback. Kept local on purpose — `log-event.ts` is not ours to widen.
+ * and finally to loopback. Kept here on purpose — `log-event.ts` is not ours to widen. Exported for
+ * `~/lib/tests/schedule-run-continuation` (B0-990), which hops the same way.
  */
-async function resolveSelfOrigin(): Promise<string> {
+export async function resolveSelfOrigin(): Promise<string> {
   try {
     const { headers } = await import('next/headers');
     const h = await headers();
@@ -101,6 +103,10 @@ export async function scheduleReportGeneration({
 
   try {
     const origin = await resolveSelfOrigin();
+    // B0-966/B0-990 — a self-call into our own deployment has to clear Vercel Deployment
+    // Protection on its own; the cron sweeps already did, this direct hop did not, so on a
+    // protected deployment the first hop 401'd and only the 10-minute sweep ever re-armed it.
+    const bypass = resolveDeploymentProtectionBypass(origin);
     const response = await fetch(
       `${origin}/api/admin/tests/runs/${testResultId}/report`,
       {
@@ -109,6 +115,7 @@ export async function scheduleReportGeneration({
           Authorization: `Bearer ${token}`,
           'x-bex-report-mode': 'background',
           'x-bex-report-hop': String(hop),
+          ...bypass.headers,
         },
       },
     );
