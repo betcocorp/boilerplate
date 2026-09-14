@@ -352,11 +352,9 @@ export async function generateReport(
     state = fresh();
   }
   // B0-991 — a report that failed only because its host had no provider credentials is resumed,
-  // not restarted: passes the grader really judged are kept, passes that are UTE because the call
-  // itself failed are dropped and re-owed, and the failure is cleared so the loop below runs.
+  // not restarted: the failure is cleared so the loop below runs, and the strip just after
+  // `hydrateLegacyPassScores` re-owes every pass whose grading call never happened.
   if (isResumableFailure(state)) {
-    hydrateLegacyPassScores(state);
-    stripFailedGradingPasses(state);
     state.error = null;
     state.failureClass = null;
   }
@@ -383,6 +381,15 @@ export async function generateReport(
   }
 
   hydrateLegacyPassScores(state);
+  /**
+   * B0-991 — on EVERY entry, not only after a classed failure. A pass that is Unable to Evaluate
+   * because the grading call threw is not a verdict, and a report resumed on top of such passes
+   * skips straight to synthesis: run 77905ba4 was graded 60× "ANTHROPIC_API_KEY is not configured"
+   * on the deploy, then "Retry" on a host WITH the key found every case complete, synthesised the
+   * 20 UTEs, and produced a `completed` report asserting the agent "produced no answers". Dropping
+   * those passes here makes Retry, the hop chain and the sweep all re-grade what was never graded.
+   */
+  stripFailedGradingPasses(state);
   state.status = 'scoring';
   state.updatedAt = new Date().toISOString();
   takeLease(state, workerId);
