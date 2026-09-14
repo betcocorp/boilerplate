@@ -662,7 +662,9 @@ const SENTENCE_INITIAL_NON_PRODUCT_WORDS = new Set([
   'no', 'products', 'product', 'chemicals', 'disinfectants', 'sanitizers', 'cleaners', 'quats',
   'disinfection', 'sanitization', 'sterilization',
 ]);
-const MID_SENTENCE_CAPITALISED_WORD_PATTERN = /(?<=\s)[A-Z][a-z][\w'-]*/g;
+// B0-984 — a capitalised word right after a colon or dash ("General guidance: Use only…",
+// "Step 1 — Apply…") is the start of a clause, not a mid-sentence product name.
+const MID_SENTENCE_CAPITALISED_WORD_PATTERN = /(?<=\s)(?<![:\-–—]\s)[A-Z][a-z][\w'-]*/g;
 const BRAND_ONLY_TOKENS = new Set(['betco', 'envirozyme']);
 
 /**
@@ -673,7 +675,8 @@ const BRAND_ONLY_TOKENS = new Set(['betco', 'envirozyme']);
  * same word is already excluded (the pattern requires a PRECEDING whitespace); a label prefix is
  * the only thing that artificially creates one. Stripped before every `hasProductSubject` check.
  */
-const LABEL_PREFIX_PATTERN = /^(?:caveat|note|important|tip)\s*:\s*/i;
+const LABEL_PREFIX_PATTERN =
+  /^(?:caveat|note|important|tip|general guidance|guidance|recommendation|best practice|rule of thumb)\s*:\s*/i;
 /**
  * B0-888 — imperative openers that read as generic advice/disclaimers, not a claim about a named
  * product, when they are the sentence's true first word (post label-prefix stripping). Reuses the
@@ -682,6 +685,8 @@ const LABEL_PREFIX_PATTERN = /^(?:caveat|note|important|tip)\s*:\s*/i;
  */
 const IMPERATIVE_OPENER_WORDS = new Set([
   'always', 'never', 'confirm', 'ensure', 'test', 'verify', 'check', 'avoid', 'consult', 'review',
+  // B0-984 — "General guidance: Use only low tack painter's tape…" read as a claim about "Use".
+  'use', 'apply', 'keep', 'remove', 'follow', 'start', 'do', 'clean', 'wipe', 'rinse',
 ]);
 
 /** Case-preserving twin of the `base` prep in `isNonClaimScaffolding` (emphasis, bullets, headings). */

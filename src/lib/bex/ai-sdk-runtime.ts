@@ -734,6 +734,8 @@ export async function runAiSdkWithToolLoop(opts: AiSdkRuntimeOptions): Promise<A
           enforced: Boolean(forcedTrace),
           ...(forcedTrace ? {} : { reason: 'model_declined_call' as const }),
           toolSucceeded: forcedTrace ? forcedTrace.ok : null,
+          // B0-984 — `assistantText` is still the first draft here; it is replaced just below.
+          preEnforcementDraft: assistantText,
         });
         // A forced call that returned nothing (or a re-draft that produced no text) leaves the
         // original draft standing — the turn is never blocked on enforcement.

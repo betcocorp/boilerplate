@@ -48,7 +48,10 @@ import type {
   FactToolEnforcementOutcome,
   LlmTokenUsage,
 } from '~/lib/openai/responses-runtime';
-import { requireFactToolForDraft } from '~/lib/workflows/product-support/fact-tool-enforcement';
+import {
+  isFactToolEnforcementEnabled,
+  requireFactToolForDraft,
+} from '~/lib/workflows/product-support/fact-tool-enforcement';
 import { runAiSdkWithToolLoop } from '~/lib/bex/ai-sdk-runtime';
 import {
   hasDecisiveCrossReferenceSignal,
@@ -2635,10 +2638,13 @@ export async function runProductSupportWorkflow(input: {
    * values, not env-var names: `rerankerActive` in particular depends on `isRerankerConfigured()`
    * (COHERE_API_KEY presence), which can differ between otherwise-identical deploys.
    */
+  // B0-984 — read once per turn; the same value gates the runtimes below and is recorded here.
+  const factToolEnforcementEnabled = await isFactToolEnforcementEnabled();
   const runtimeConfig: RuntimeConfig = {
     useValidator,
     earlyDeclineGateEnabled,
     aiSdkGenerationEnabled: useAiSdkGeneration,
+    factToolEnforcementEnabled,
     rerankerActive: PRODUCT_SUPPORT_RERANK_ENABLED && isRerankerConfigured(),
     confidenceGatingDisabled: await isConfidenceGatingDisabled(),
     recommendationConfidenceGatingDisabled: await isRecommendationConfidenceGatingDisabled(),
@@ -3736,6 +3742,19 @@ export async function runProductSupportWorkflow(input: {
     const onFactToolEnforced = (outcome: FactToolEnforcementOutcome) => {
       factToolEnforcementSink.outcome = outcome;
     };
+    /**
+     * B0-984 — `undefined` when the flag is off, which makes both runtimes behave exactly as they
+     * did before B0-948. When on, the check also learns whether a Betco product resolved this turn
+     * (`speculativeProductLineLock`), so a compatibility claim in a product-less answer is not
+     * forced into a `list_allowed_surfaces` lookup of a non-product.
+     */
+    const factToolRequirementCheck = factToolEnforcementEnabled
+      ? (check: { draftAnswer: string; toolNames: string[] }) =>
+          requireFactToolForDraft({
+            ...check,
+            context: { productResolved: speculativeProductLineLock !== null },
+          })
+      : undefined;
 
     // Generation runtime: AI SDK (`streamText`) for every Anthropic model and for OpenAI models
     // when BEX_AI_SDK_GENERATION_ENABLED, else the OpenAI Responses tool loop (B0-908 — see
@@ -3755,7 +3774,7 @@ export async function runProductSupportWorkflow(input: {
           maxOutputTokens,
           onAssistantDelta: confidenceStreamFilter?.onDelta,
           observeAssistantDelta,
-          requireFactTool: requireFactToolForDraft,
+          requireFactTool: factToolRequirementCheck,
           onFactToolEnforced,
           executeTool: executeToolForGeneration,
         })
@@ -3777,7 +3796,7 @@ export async function runProductSupportWorkflow(input: {
           maxOutputTokens,
           onAssistantDelta: confidenceStreamFilter?.onDelta,
           observeAssistantDelta,
-          requireFactTool: requireFactToolForDraft,
+          requireFactTool: factToolRequirementCheck,
           onFactToolEnforced,
           executeTool: executeToolForGeneration,
         });
@@ -4438,8 +4457,10 @@ export async function runProductSupportWorkflow(input: {
      * enforcement from one where the requirement fired.
      */
     const factToolEnforcement = factToolEnforcementSink.outcome;
-    const factToolEnforcementActivation: GateActivationRecord = !factToolEnforcement
-      ? { state: 'not_applicable' }
+    const factToolEnforcementActivation: GateActivationRecord = !factToolEnforcementEnabled
+      ? { state: 'skipped', reason: 'disabled_by_flag' }
+      : !factToolEnforcement
+        ? { state: 'not_applicable' }
       : !factToolEnforcement.requiredTool
         ? { state: 'ran', verdict: 'passed' }
         : factToolEnforcement.enforced
@@ -4457,6 +4478,10 @@ export async function runProductSupportWorkflow(input: {
             toolNamesCalled: agentResult.toolTrace.map((entry) => entry.toolName),
             toolSucceeded: factToolEnforcement.toolSucceeded,
             ...(factToolEnforcement.reason ? { reason: factToolEnforcement.reason } : {}),
+            // B0-984 — the draft before the forced round, so a report can diff what changed.
+            ...(factToolEnforcement.preEnforcementDraft
+              ? { preEnforcementDraft: factToolEnforcement.preEnforcementDraft }
+              : {}),
           },
           thresholds: {
             note: 'category-driven, not count-driven: every fact category the draft asserts must have its owning tool in this turn\'s trace',

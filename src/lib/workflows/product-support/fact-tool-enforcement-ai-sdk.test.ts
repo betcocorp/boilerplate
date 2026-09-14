@@ -149,6 +149,8 @@ describe('runAiSdkWithToolLoop — fact-tool enforcement (B0-948)', () => {
       requiredTool: 'list_allowed_surfaces',
       enforced: true,
       toolSucceeded: true,
+      // B0-984 — the first draft travels with the outcome so the run report can diff it.
+      preEnforcementDraft: `Betco offers several strippers. ${COMPAT_SENTENCE}`,
     });
     // The first draft was already streamed to the caller and cannot be retracted, so the re-draft
     // is NOT appended to the visible stream — the returned text is the answer of record.

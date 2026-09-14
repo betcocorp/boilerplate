@@ -721,6 +721,39 @@ describe('evaluateRegulatedClaimGrounding — B0-888 label-prefixed imperatives 
     }
   });
 
+  // B0-984 — live sentence from SportsZone golden item 22b61cfb (game-line tape): read as a
+  // compatibility claim about a product called "Use", which forced `list_allowed_surfaces("3M Game
+  // Line Tape")` and then got redacted. A generic-guidance label plus an imperative is advice.
+  it('does not classify "General guidance: Use only low tack…" as a compatibility claim (B0-984)', () => {
+    const NOT_CLAIMS = [
+      "**General guidance:** Use only low tack painter's tape or tape labeled/approved for finished wood/gym floors, and remove it as soon as possible.",
+      'Recommendation: Apply only finishes labeled for wood gym floors.',
+      'Best practice: Keep mats compatible with wood floors under every entry.',
+    ];
+    for (const draftAnswer of NOT_CLAIMS) {
+      const result = evaluateRegulatedClaimGrounding({ draftAnswer, sources: [] });
+      expect(result.categoriesDetected, draftAnswer).not.toContain('compatibility');
+    }
+  });
+
+  // B0-984 — a capitalised word right after a colon or dash starts a clause; it is not a product.
+  it('does not treat the capitalised first word after a colon or dash as a product name (B0-984)', () => {
+    const NOT_CLAIMS = [
+      'Step 1 — Apply the finish only to surfaces approved for wood floors.',
+      'Before coating: Confirm the tape is approved for finished gym floors.',
+    ];
+    for (const draftAnswer of NOT_CLAIMS) {
+      const result = evaluateRegulatedClaimGrounding({ draftAnswer, sources: [] });
+      expect(result.categoriesDetected, draftAnswer).not.toContain('compatibility');
+    }
+    // …while a real mid-sentence product name still counts.
+    const claim = evaluateRegulatedClaimGrounding({
+      draftAnswer: 'For gym floors, GymShoe is approved for use on finished wood.',
+      sources: [],
+    });
+    expect(claim.categoriesDetected).toContain('compatibility');
+  });
+
   it('still classifies a compatibility claim when the label prefix is followed by a real product name, not an imperative', () => {
     const result = evaluateRegulatedClaimGrounding({
       draftAnswer: 'Note: Push is safe for use on stainless steel.',

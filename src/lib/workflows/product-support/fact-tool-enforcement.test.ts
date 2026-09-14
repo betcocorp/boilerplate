@@ -115,6 +115,47 @@ describe('requireFactToolForDraft (B0-948)', () => {
     }
   });
 
+  // B0-984 — a compatibility claim in an answer where no Betco product resolved this turn has
+  // nothing for `list_allowed_surfaces` to look up (the forced call on "3M Game Line Tape" and
+  // "dilution control" returned unrelated product-line profiles and the re-draft opened with
+  // "not on file"), so the requirement is skipped. Other categories are unaffected.
+  it('skips the compatibility requirement when no product resolved this turn', () => {
+    expect(
+      requireFactToolForDraft({
+        draftAnswer: COMPAT_SENTENCE,
+        toolNames: ['search_product_docs'],
+        context: { productResolved: false },
+      }),
+    ).toBeNull();
+    expect(
+      requireFactToolForDraft({
+        draftAnswer: CONTACT_TIME_SENTENCE,
+        toolNames: ['search_product_docs'],
+        context: { productResolved: false },
+      })?.toolName,
+    ).toBe('get_efficacy_data');
+    expect(
+      requireFactToolForDraft({
+        draftAnswer: COMPAT_SENTENCE,
+        toolNames: ['search_product_docs'],
+        context: { productResolved: true },
+      })?.toolName,
+    ).toBe('list_allowed_surfaces');
+  });
+
+  // B0-984 — the forced round is additive: the instruction must tell the model to keep its draft
+  // and never to open with a non-finding.
+  it('instructs an additive edit, never a rewrite that leads with "not on file"', () => {
+    const instruction = buildFactToolEnforcementInstruction({
+      toolName: 'get_efficacy_data',
+      category: 'contact_time',
+    });
+    expect(instruction).toContain('return your draft answer again with these edits only');
+    expect(instruction).toContain('return the draft unchanged and append one closing sentence');
+    expect(instruction).toContain('do not lead with what is not on file');
+    expect(instruction).not.toContain('rewrite your answer');
+  });
+
   it('demands nothing for an empty or purely descriptive draft', () => {
     expect(requireFactToolForDraft({ draftAnswer: '   ', toolNames: [] })).toBeNull();
     expect(
@@ -222,6 +263,8 @@ describe('runResponsesWithToolLoop — fact-tool enforcement (B0-948)', () => {
       requiredTool: 'list_allowed_surfaces',
       enforced: true,
       toolSucceeded: true,
+      // B0-984 — the first draft travels with the outcome so the run report can diff it.
+      preEnforcementDraft: expect.any(String),
     });
   });
 
@@ -346,6 +389,8 @@ describe('runResponsesWithToolLoop — fact-tool enforcement (B0-948)', () => {
       requiredTool: 'list_allowed_surfaces',
       enforced: true,
       toolSucceeded: false,
+      // B0-984 — the first draft travels with the outcome so the run report can diff it.
+      preEnforcementDraft: expect.any(String),
     });
     expect(result.assistantText).toBe(
       'The approved-surface list is not on file for this product.',
