@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
@@ -114,10 +115,17 @@ import { shortHash } from '~/lib/workflows/product-support/prompt-version';
 
 import { deleteTestRunAction } from '../../../actions';
 
-export const metadata = {
-  title: 'Run Details | Betco BEX',
-  description: 'Inspect item-level outcomes for a specific test run.',
-};
+export async function generateMetadata({
+  params,
+}: Pick<PageProps, 'params'>): Promise<Metadata> {
+  const { testId } = await params;
+  const test = await getTestById(testId).catch(() => null);
+
+  return {
+    title: test ? `${test.name} | Betco BEX` : 'Run Details | Betco BEX',
+    description: 'Inspect item-level outcomes for a specific test run.',
+  };
+}
 
 /**
  * B0-933 — the importer splits phrase cells on `|`, so array-valued expectations are exported

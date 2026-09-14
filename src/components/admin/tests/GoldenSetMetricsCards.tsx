@@ -58,7 +58,7 @@ export function GoldenSetMetricsCards({ metrics }: GoldenSetMetricsCardsProps) {
         <p className="mt-1 text-xs text-slate-500">golden set average</p>
       </div>
 
-      {/* Card 3: Score change (avg of each golden set's latest run vs. its previous run) */}
+      {/* Card 3: Score change (sum of each golden set's "Last run" change from the Test sets table) */}
       <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <p className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">
           Score change
@@ -91,7 +91,7 @@ export function GoldenSetMetricsCards({ metrics }: GoldenSetMetricsCardsProps) {
           </p>
         )}
         <p className="mt-1 text-xs text-slate-500">
-          latest run avg vs. previous overall avg, across golden sets
+          sum of each golden set&apos;s last-run change
         </p>
       </div>
 

@@ -130,9 +130,11 @@ export const getProductsInCategoryInputSchema = z.object({
   maxResults: z.number().int().min(1).max(50).optional(),
 });
 
-export const getProductCategoryInputSchema = z.object({
-  productId: z.string().min(1).max(256),
-});
+/** B0-983: accepts the `productName` alias like every other per-product tool (B0-364). */
+export const getProductCategoryInputSchema = z
+  .object(productRefShape)
+  .refine(hasProductRef, productRefIssue())
+  .transform(normalizeProductRef);
 
 export const findProductsByCategoryInputSchema = z.object({
   query: z.string().min(1).max(256),

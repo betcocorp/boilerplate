@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { TrashIcon, TrendingDown, TrendingUp } from 'lucide-react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
@@ -75,10 +76,17 @@ import {
   runTestAction,
 } from '../actions';
 
-export const metadata = {
-  title: 'Test Details | Betco BEX',
-  description: 'Review test rows and historical run performance.',
-};
+export async function generateMetadata({
+  params,
+}: Pick<PageProps, 'params'>): Promise<Metadata> {
+  const { testId } = await params;
+  const test = await getTestById(testId).catch(() => null);
+
+  return {
+    title: test ? `${test.name} | Betco BEX` : 'Test Details | Betco BEX',
+    description: 'Review test rows and historical run performance.',
+  };
+}
 
 /**
  * Compares a metric to the previous (older) run and renders a green up arrow +
