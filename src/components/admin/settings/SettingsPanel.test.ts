@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { groupSettings, HIDDEN_UI_GROUP } from './SettingsPanel';
-import type { SettingRecord } from './SettingRow';
+import { valuesEqual, type SettingRecord } from './SettingRow';
 
 const row = (key: string, ui_group: string | null, extra: Partial<SettingRecord> = {}): SettingRecord => ({
   key,
@@ -35,5 +35,14 @@ describe('groupSettings (B0-992)', () => {
   it('sorts rows inside a group by key', () => {
     const [[, rows]] = groupSettings([row('B', 'g'), row('A', 'g')]);
     expect(rows.map((r) => r.key)).toEqual(['A', 'B']);
+  });
+});
+
+describe('valuesEqual (B0-992)', () => {
+  it('compares numbers numerically and booleans case-insensitively', () => {
+    expect(valuesEqual('number', '0.60', '0.6')).toBe(true);
+    expect(valuesEqual('number', '20000', '20,000')).toBe(false);
+    expect(valuesEqual('boolean', 'TRUE', 'true')).toBe(true);
+    expect(valuesEqual('string', 'gpt-4.1', 'gpt-4.1-mini')).toBe(false);
   });
 });

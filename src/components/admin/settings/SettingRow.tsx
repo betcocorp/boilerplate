@@ -29,6 +29,21 @@ type Props = {
   isSaving: boolean;
 };
 
+/** Type-aware equality so "0.60" vs "0.6" or "TRUE" vs "true" does not offer a pointless reset. */
+export function valuesEqual(
+  valueType: SettingRecord['value_type'],
+  a: string,
+  b: string,
+): boolean {
+  if (valueType === 'number') {
+    const na = Number(a);
+    const nb = Number(b);
+    return Number.isFinite(na) && Number.isFinite(nb) ? na === nb : a === b;
+  }
+  if (valueType === 'boolean') return a.toLowerCase() === b.toLowerCase();
+  return a === b;
+}
+
 /**
  * B0-992 — one control per row, chosen from `value_type` (+ `allowed_values` for a select), so a
  * row inserted into `public.settings` renders with no code change. Shows the effective value
@@ -39,7 +54,10 @@ export function SettingRow({ setting, onUpdate, onReset, isSaving }: Props) {
   const effective = setting.value ?? setting.default_value ?? '';
 
   const hasDefault = setting.default_value !== null && setting.default_value !== undefined;
-  const isAtDefault = hasDefault && (setting.value === null || setting.value === setting.default_value);
+  const isAtDefault =
+    hasDefault &&
+    (setting.value === null ||
+      valuesEqual(setting.value_type, setting.value, setting.default_value as string));
   const hasAllowedValues = Boolean(setting.allowed_values && setting.allowed_values.length > 0);
 
   const control = (() => {
