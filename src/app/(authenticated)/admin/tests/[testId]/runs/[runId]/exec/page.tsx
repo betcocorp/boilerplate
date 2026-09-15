@@ -4,6 +4,7 @@ import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 
 import { DegradedRunBanner } from '~/components/admin/tests/DegradedRunBanner';
+import { ProviderFaultBanner } from '~/components/admin/tests/ProviderFaultBanner';
 import {
   ExecSummaryUnavailable,
   RunExecSummaryView,
@@ -18,6 +19,7 @@ import {
   listRoutingHealthRowsByResultId,
 } from '~/lib/tests/repository';
 import { computeRunRoutingHealth } from '~/lib/tests/run-health';
+import { computeRunProviderHealth } from '~/lib/tests/run-provider-health';
 import { isCompletedRunStatus } from '~/lib/tests/types';
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
@@ -55,7 +57,8 @@ export default async function AdminTestRunExecSummaryPage({ params }: PageProps)
   const [test, result, routingHealthRows] = await Promise.all([
     getTestById(testId).catch(() => null),
     getTestResultById(runId).catch(() => null),
-    // B0-911 — same narrow two-column read the detailed report does; a failure means "no verdict".
+    // B0-911 — same narrow read the detailed report does; a failure means "no verdict".
+    // B0-1014 — these rows also carry `provider_fault`, so one read feeds both banners.
     listRoutingHealthRowsByResultId(runId).catch(() => []),
   ]);
 
@@ -99,6 +102,8 @@ export default async function AdminTestRunExecSummaryPage({ params }: PageProps)
       <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 px-6 py-10 sm:px-8">
         {/* B0-834 — switch between the detailed report and this executive summary. */}
         <RunReportTabs runId={result.id} testId={test.id} />
+        {/* B0-1014 — a provider outage outranks every other caveat about this run's numbers. */}
+        <ProviderFaultBanner health={computeRunProviderHealth(routingHealthRows)} />
         {/* B0-911 — above the exec grade, for the same reason it sits above the detailed one. */}
         <DegradedRunBanner health={computeRunRoutingHealth(routingHealthRows)} />
         {body}

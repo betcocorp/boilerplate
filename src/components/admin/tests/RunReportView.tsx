@@ -15,6 +15,7 @@ import {
 
 import { version as appVersion } from '~/../package.json';
 import { DegradedRunBanner } from '~/components/admin/tests/DegradedRunBanner';
+import { ProviderFaultBanner } from '~/components/admin/tests/ProviderFaultBanner';
 import { ReportBreakdownCards } from '~/components/admin/tests/report/ReportBreakdownCards';
 import { ReportCaseLedger } from '~/components/admin/tests/report/ReportCaseLedger';
 import {
@@ -31,6 +32,7 @@ import type { ReportDataReady } from '~/lib/tests/report/data-schemas';
 import { isInvariantErrorMessage } from '~/lib/tests/report/invariants';
 import { caseAnchorId } from '~/lib/tests/report/render';
 import type { RunRoutingHealth } from '~/lib/tests/run-health';
+import type { RunProviderHealth } from '~/lib/tests/run-provider-health';
 import { cn } from '~/lib/utils';
 
 /** Matches a UUID anywhere in a case's heading blockquote text (`**question**` + `` `id` ``). */
@@ -245,6 +247,11 @@ type RunReportViewProps = {
    * verdict strip: a grade produced on a degraded run must not be readable without that context.
    */
   routingHealth?: RunRoutingHealth | null;
+  /**
+   * B0-1014 — this run's provider health. When invalid, the banner renders ABOVE the degraded one
+   * and above the verdict strip: a run the provider refused produced no answers to grade at all.
+   */
+  providerHealth?: RunProviderHealth | null;
 };
 
 export function RunReportView({
@@ -266,6 +273,7 @@ export function RunReportView({
   answeringProvider = null,
   answeringRuntime = null,
   routingHealth = null,
+  providerHealth = null,
 }: RunReportViewProps) {
   const [status, setStatus] = useState<ReportStatus>(initialStatus);
   const [totalCases, setTotalCases] = useState(initialTotalCases);
@@ -713,6 +721,9 @@ export function RunReportView({
             .report-pdf-capture [data-report-section] { break-before: page; page-break-before: always; }
             .report-pdf-capture [data-report-section]:first-of-type { break-before: auto; page-break-before: auto; }
           `}</style>
+
+          {/* B0-1014 — first of all: a refused run has nothing to grade, so it outranks B0-911. */}
+          <ProviderFaultBanner health={providerHealth} />
 
           {/* B0-911 — first, and above the grade, by design. */}
           <DegradedRunBanner health={routingHealth} />

@@ -6,6 +6,7 @@ import { connection } from 'next/server';
 import { AdminTestsActionToast } from '~/components/admin/tests/AdminTestsActionToast';
 import { AliasResolutionPanel } from '~/components/admin/tests/AliasResolutionPanel';
 import { DegradedRunBanner } from '~/components/admin/tests/DegradedRunBanner';
+import { ProviderFaultBanner } from '~/components/admin/tests/ProviderFaultBanner';
 import { AppVersionBadge } from '~/components/admin/tests/AppVersionBadge';
 import { MultiTurnRunPanel } from '~/components/admin/tests/MultiTurnRunPanel';
 import { PromptBundleVersionBadge } from '~/components/admin/tests/PromptBundleVersionBadge';
@@ -97,6 +98,7 @@ import {
 } from '~/lib/tests/routing-comparison';
 import { parseTestRunConfig } from '~/lib/tests/run-config';
 import { computeRunRoutingHealth } from '~/lib/tests/run-health';
+import { computeRunProviderHealth } from '~/lib/tests/run-provider-health';
 import {
   computeSignalAccuracyReport,
   extractExpectedGroundTruthString,
@@ -536,6 +538,13 @@ export default async function AdminTestRunDetailsPage({
     })),
   );
 
+  /**
+   * B0-1014 — provider-outage verdict, reduced from the same in-memory rows for the same reason.
+   */
+  const providerHealth = computeRunProviderHealth(
+    resultItems.map((row) => ({ providerFault: row.provider_fault })),
+  );
+
   const itemLevelCsvRows = chronologicalItems.map((row) => {
     const priority = priorityByItemId.get(row.test_item_id) ?? null;
     const expectations = conceptExpectationsByItemId.get(row.test_item_id);
@@ -648,6 +657,8 @@ export default async function AdminTestRunDetailsPage({
     <div className="flex flex-1 bg-slate-50">
       <AdminTestsActionToast error={error} success={success} />
       <main className="flex w-full flex-1 flex-col gap-8 px-6 py-10 sm:px-8">
+        {/* B0-1014 — ahead of B0-911: a run the provider refused produced no numbers at all. */}
+        <ProviderFaultBanner health={providerHealth} />
         {/* B0-911 — first thing on the page, before any number this run produced. */}
         <DegradedRunBanner health={routingHealth} />
         <TestRunNotesProvider

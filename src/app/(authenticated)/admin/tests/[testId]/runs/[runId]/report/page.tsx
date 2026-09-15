@@ -23,6 +23,7 @@ import {
   extractResolvedProviderFromSummary,
 } from '~/lib/tests/response-payload';
 import { computeRunRoutingHealth } from '~/lib/tests/run-health';
+import { computeRunProviderHealth } from '~/lib/tests/run-provider-health';
 import { isCompletedRunStatus } from '~/lib/tests/types';
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
@@ -48,8 +49,10 @@ export default async function AdminTestRunReportPage({ params }: PageProps) {
     getTestResultById(runId).catch(() => null),
     getCurrentUserPermissions().catch(() => [] as string[]),
     isPermissionsEnforced().catch(() => false),
-    // B0-911 — two scalars per item, not the full rows: this page otherwise loads no items at all.
-    // A read failure must not take the report down, so it degrades to "no verdict" (no banner).
+    // B0-911 — a few scalars per item, not the full rows: this page otherwise loads no items at
+    // all. A read failure must not take the report down, so it degrades to "no verdict" (no
+    // banner). B0-1014 — the same rows now carry `provider_fault`, so both verdicts come from
+    // this one read.
     listRoutingHealthRowsByResultId(runId).catch(() => []),
   ]);
 
@@ -107,6 +110,9 @@ export default async function AdminTestRunReportPage({ params }: PageProps) {
           answeringRuntime={answeringRuntime}
           // B0-911 — the degraded-pipeline banner renders ABOVE the grade inside this view.
           routingHealth={computeRunRoutingHealth(routingHealthRows)}
+          // B0-1014 — the provider-outage banner renders above both of them: on 2026-09-14 a
+          // credits outage turned every item into `passed: false` and the grade read as 0/106.
+          providerHealth={computeRunProviderHealth(routingHealthRows)}
           runId={result.id}
           testId={test.id}
           testName={test.name}
