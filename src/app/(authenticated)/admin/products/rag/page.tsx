@@ -6,6 +6,10 @@ import { RagSearchResultCard } from '~/components/admin/rag/RagSearchResultCard'
 import { RagSearchTimingPanel } from '~/components/admin/RagSearchTimingPanel';
 import { PERMISSIONS } from '~/lib/permissions/constants';
 import { requirePagePermission } from '~/lib/permissions/require-page-permission';
+import {
+  buildRagSearchReturnHref,
+  RAG_SEARCH_ROUTE,
+} from '~/lib/rag/document-detail-links';
 import type { RagIdLookupResult, RagIdLookupTarget } from '~/lib/rag/id-lookup';
 import {
   lookupRagChunksById,
@@ -21,7 +25,8 @@ export const metadata = {
   description: 'Semantic search across Betco RAG product and SDS content.',
 };
 
-const SEARCH_ROUTE = '/admin/products/rag';
+/** B0-1019 — single source of truth, shared with the document/chunk detail routes. */
+const SEARCH_ROUTE = RAG_SEARCH_ROUTE;
 
 type SearchPageProps = {
   searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
@@ -275,6 +280,8 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
   await connection();
 
   const resolvedSearchParams = await searchParams;
+  // B0-1019 — the URL a detail page links back to, carried on every result card.
+  const returnHref = buildRagSearchReturnHref(resolvedSearchParams);
   const query = readSearchParam(resolvedSearchParams.q);
   const productLineKey = readSearchParam(resolvedSearchParams.productLineKey);
   const scope = parseScope(resolvedSearchParams.scope);
@@ -463,6 +470,7 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
                   }
                   rank={index + 1}
                   resultCount={lookup.matches.length}
+                  returnHref={returnHref}
                   showSimilarity={false}
                 />
               ))}
@@ -582,6 +590,7 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
                   }
                   rank={index + 1}
                   resultCount={result.matches.length}
+                  returnHref={returnHref}
                 />
               ))}
             </section>

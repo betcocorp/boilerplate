@@ -1,89 +1,38 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { ArrowLeft, ExternalLink } from 'lucide-react';
+import { LegacyReferenceText } from '~/components/admin/rag/LegacyReferenceText';
+import { PERMISSIONS } from '~/lib/permissions/constants';
+import { requirePagePermission } from '~/lib/permissions/require-page-permission';
 import {
-  LEGACY_REF_PATTERN,
-  legacyReferenceHref,
-  resolveDocumentSourceLinks,
-} from '~/lib/rag/document-source-links';
+  ragChunkHref,
+  sanitizeRagReturnHref,
+} from '~/lib/rag/document-detail-links';
+import { resolveDocumentSourceLinks } from '~/lib/rag/document-source-links';
 import { SOURCE_FILE_URL_TTL_SECONDS } from '~/lib/rag/source-file-signing';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
 type PageProps = {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
 };
-
-/**
- * Linkify `legacy:<table>:<pk>` references, pointing each at the legacy source record the
- * key belongs to. The embedded GUID is a legacy primary key (e.g. `prod_line.ProdLineKey`),
- * so it must NOT be treated as a `rag.document.id` — doing so resolves back to the
- * product_line_profile document that owns the key, i.e. this same page.
- */
-function linkifyLegacyReferences(text: string) {
-  const parts: Array<{ type: 'text' | 'link'; value: string; table: string; pk: string }> = [];
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-
-  LEGACY_REF_PATTERN.lastIndex = 0;
-
-  while ((match = LEGACY_REF_PATTERN.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      parts.push({
-        type: 'text',
-        value: text.slice(lastIndex, match.index),
-        table: '',
-        pk: '',
-      });
-    }
-
-    parts.push({
-      type: 'link',
-      value: match[0],
-      table: match[1],
-      pk: match[2],
-    });
-
-    lastIndex = LEGACY_REF_PATTERN.lastIndex;
-  }
-
-  if (parts.length === 0) {
-    return text;
-  }
-
-  if (lastIndex < text.length) {
-    parts.push({ type: 'text', value: text.slice(lastIndex), table: '', pk: '' });
-  }
-
-  return parts.map((part, idx) => {
-    if (part.type === 'text') {
-      return part.value;
-    }
-
-    const href = legacyReferenceHref(part.table, part.pk);
-    if (!href) {
-      return part.value;
-    }
-
-    return (
-      <Link
-        key={idx}
-        href={href}
-        className="inline-flex items-center gap-1 font-mono text-sky-600 transition hover:text-sky-700 hover:underline"
-        title={`Open legacy ${part.table} record ${part.pk}`}
-      >
-        {part.value}
-        <ExternalLink className="size-3" />
-      </Link>
-    );
-  });
-}
 
 export const metadata = {
   title: 'Document Viewer | Betco BEX',
 };
 
-export default async function DocumentViewerPage({ params }: PageProps) {
+export default async function DocumentViewerPage({ params, searchParams }: PageProps) {
+  await requirePagePermission(
+    PERMISSIONS.NAVIGATION_SIDEBAR_TOOLS,
+    'GET /admin/products/rag/documents/[id]',
+  );
+
   const { id } = await params;
+  const resolvedSearchParams = await searchParams;
+  const rawFrom = resolvedSearchParams.from;
+  const returnHref = sanitizeRagReturnHref(
+    Array.isArray(rawFrom) ? rawFrom[0] : rawFrom,
+  );
   const supabase = getSupabaseServiceRoleClient();
 
   const { data: doc, error } = await (
@@ -126,6 +75,7 @@ export default async function DocumentViewerPage({ params }: PageProps) {
             opts: { ascending: boolean }
           ): Promise<{
             data: Array<{
+              id: string;
               chunk_index: number;
               heading: string | null;
               chunk_text: string;
@@ -137,7 +87,7 @@ export default async function DocumentViewerPage({ params }: PageProps) {
       };
     }
   )
-    .select('chunk_index, heading, chunk_text, token_count')
+    .select('id, chunk_index, heading, chunk_text, token_count')
     .eq('document_id', id)
     .order('chunk_index', { ascending: true });
 
@@ -195,13 +145,13 @@ export default async function DocumentViewerPage({ params }: PageProps) {
   return (
     <div className="flex flex-1 bg-slate-50">
       <main className="flex w-full flex-1 flex-col gap-6 px-6 py-10 sm:px-8">
-        {/* Back button */}
+        {/* Back button — prefer the search results this page was opened from (B0-1019). */}
         <Link
-          href="/admin/products/rag/chunking"
+          href={returnHref ?? '/admin/products/rag/chunking'}
           className="inline-flex w-fit items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-50"
         >
           <ArrowLeft className="size-4" />
-          Back to domain metadata
+          {returnHref ? 'Back to search results' : 'Back to domain metadata'}
         </Link>
 
         {/* Header */}
@@ -215,7 +165,7 @@ export default async function DocumentViewerPage({ params }: PageProps) {
                 {doc.title}
               </h1>
               <p className="mt-1 font-mono text-sm text-slate-500">
-                {linkifyLegacyReferences(doc.document_key)}
+                <LegacyReferenceText text={doc.document_key} />
               </p>
             </div>
 
@@ -283,7 +233,7 @@ export default async function DocumentViewerPage({ params }: PageProps) {
               <p className="text-sm text-slate-400">No chunks found.</p>
             ) : (
               chunkData.map((chunk) => (
-                <div key={chunk.chunk_index} className="rounded-2xl border border-slate-200 p-4">
+                <div key={chunk.id} className="rounded-2xl border border-slate-200 p-4">
                   <div className="flex items-baseline justify-between gap-2">
                     <div>
                       {chunk.heading && (
@@ -294,9 +244,15 @@ export default async function DocumentViewerPage({ params }: PageProps) {
                         {chunk.token_count && ` • ${chunk.token_count} tokens`}
                       </p>
                     </div>
+                    <Link
+                      href={ragChunkHref(doc.id, chunk.id, returnHref)}
+                      className="shrink-0 text-xs font-medium text-sky-600 transition hover:text-sky-700 hover:underline"
+                    >
+                      Open chunk
+                    </Link>
                   </div>
                   <div className="mt-3 overflow-auto rounded-lg bg-slate-50 p-3 text-xs leading-relaxed text-slate-700 max-h-64">
-                    {linkifyLegacyReferences(chunk.chunk_text)}
+                    <LegacyReferenceText text={chunk.chunk_text} />
                   </div>
                 </div>
               ))
