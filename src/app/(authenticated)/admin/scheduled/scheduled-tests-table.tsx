@@ -240,7 +240,14 @@ function ScheduledTestRunRow({
                         </TableCell>
                         <TableCell className="py-2 text-slate-600">
                           {item.error_code ? (
-                            <code className="rounded bg-red-50 px-2 py-1 text-xs font-mono text-red-900">
+                            // B0-1014 — the reconciler writes an actionable sentence alongside the
+                            // code (e.g. which provider fault, and how many items got no answer).
+                            // Surfaced on hover so the column stays narrow but the reason is not
+                            // write-only.
+                            <code
+                              className="rounded bg-red-50 px-2 py-1 text-xs font-mono text-red-900"
+                              title={item.error_message ?? undefined}
+                            >
                               {item.error_code}
                             </code>
                           ) : (
