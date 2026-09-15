@@ -51,6 +51,33 @@ const FLOOR_CONTEXT_PATTERN =
  */
 const TIMING_FIGURE_PATTERN =
   /\b\d+(?:\.\d+)?\s*(?:[-–—]|to)?\s*\d*(?:\.\d+)?\s*(?:minutes?|mins?|hours?|hrs?|days?|h)\b|\bovernight\b|\b(?:a|one|two|three|four|five|six|twelve|twenty-four|24|48|72)[\s-]+(?:hours?|days?)\b|\bnext\s+(?:day|morning)\b/i;
+/** Global twin of `TIMING_FIGURE_PATTERN`, used to walk every match with its position. */
+const TIMING_FIGURE_PATTERN_GLOBAL = new RegExp(TIMING_FIGURE_PATTERN.source, 'gi');
+
+/**
+ * B0-999 — words that put a timing figure on the WALK-ON / REOPEN-TO-TRAFFIC schedule this
+ * backstop exists to pin, as opposed to some other unrelated duration in the draft (a between-coat
+ * dry time, a dilution contact time, a shelf life). Mirrors the reopening vocabulary in
+ * `REOPEN_PATTERNS`/`buildFloorReopenInstruction`'s own tier list (dry to the touch, light/normal
+ * foot traffic, heavy or rolling loads, full cure, back in service).
+ */
+const REOPEN_TIMING_CONTEXT_PATTERN =
+  /\b(?:re-?open(?:ing|ed)?|walk(?:ing|ed)?[\s-]*on|dry to the touch|(?:light|normal|heavy)\s+(?:foot\s+)?traffic|foot traffic|rolling (?:traffic|loads?)|cart traffic|wheel(?:ed|chair)?\s+traffic|forklift|pallet[\s-]*jack|back in(?:to)?\s+service|return(?:ing)?\s+to\s+(?:traffic|service|use)|full cure|traffic[\s-]return)\b/i;
+/**
+ * B0-999 — the failure this exists to rule out: a between-coat / recoat-window duration
+ * ("allow 20-60 minutes to dry between coats before applying the next coat") reads as "the draft
+ * already has a timing figure" under the bare `TIMING_FIGURE_PATTERN` test, but it answers a
+ * different question than "when can the floor take traffic again" and must never satisfy this
+ * backstop. Checked ahead of the reopen-context match so a figure sitting in both a between-coat
+ * clause and a reopen clause (rare, but not impossible) still requires its OWN reopen wording.
+ */
+// "final coat" is deliberately absent — it is the standard way of naming the LAST coat in a
+// reopen/walk-on schedule itself (see `FLOOR_REOPEN_PROCEDURE_QUERY`, "reopening to traffic after
+// final coat"), not a between-coat duration.
+const BETWEEN_COAT_CONTEXT_PATTERN =
+  /\b(?:between coats?|before (?:applying|recoating)|recoat(?:ing)?(?:\s+(?:window|time))?|coat[\s-]to[\s-]coat|prior to (?:the\s+)?next coat|(?:second|next|subsequent)\s+coats?)\b/i;
+/** Characters of surrounding context checked on either side of a matched timing figure. */
+const TIMING_FIGURE_CONTEXT_WINDOW = 60;
 
 export function isFloorRouteId(effectivePromptId: string | null | undefined): boolean {
   return typeof effectivePromptId === 'string' && effectivePromptId.startsWith('floor');
@@ -64,9 +91,25 @@ export function isFloorReopenQuestion(userMessage: string): boolean {
   return REOPEN_PATTERNS.some((pattern) => pattern.test(text));
 }
 
-/** True when the draft already states at least one dry / cure / reopen timing figure. */
+/**
+ * True when the draft already states at least one WALK-ON / REOPEN-TO-TRAFFIC timing figure.
+ *
+ * B0-999 — previously any minutes/hours/days figure anywhere in the draft satisfied this, so a
+ * between-coat dry-time figure ("allow 20-60 minutes between coats") blocked the backstop from
+ * ever forcing `get_floor_asset` for the actual walk-on/reopen schedule the user asked about. Now
+ * each figure's own surrounding context must carry reopen/traffic-return wording, and a
+ * between-coat/recoat context never counts even if reopen wording also happens to be nearby.
+ */
 export function draftStatesTimingFigure(draftAnswer: string): boolean {
-  return TIMING_FIGURE_PATTERN.test(draftAnswer);
+  for (const match of draftAnswer.matchAll(TIMING_FIGURE_PATTERN_GLOBAL)) {
+    const start = match.index ?? 0;
+    const windowStart = Math.max(0, start - TIMING_FIGURE_CONTEXT_WINDOW);
+    const windowEnd = start + match[0].length + TIMING_FIGURE_CONTEXT_WINDOW;
+    const window = draftAnswer.slice(windowStart, windowEnd);
+    if (BETWEEN_COAT_CONTEXT_PATTERN.test(window)) continue;
+    if (REOPEN_TIMING_CONTEXT_PATTERN.test(window)) return true;
+  }
+  return false;
 }
 
 /** The B0-984-style additive instruction: keep the draft, add the schedule, never lead with a gap. */
