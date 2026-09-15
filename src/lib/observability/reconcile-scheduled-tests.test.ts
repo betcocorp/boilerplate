@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  SCHEDULED_ITEM_PROVIDER_FAULT_ERROR,
+  SCHEDULED_ITEM_PROVIDER_FAULT_RATE_THRESHOLD,
   SCHEDULED_ITEM_STALE_AFTER_MS,
   SCHEDULED_ITEM_TIMED_OUT_ERROR,
   ORPHAN_BACKFILL_WINDOW_MS,
   buildScheduledRunPatch,
+  describeProviderFault,
+  isProviderFaultedTally,
   matchOrphanToSweepRun,
   reconcileScheduledTests,
   reconcileScheduledTestsResultSchema,
@@ -102,6 +106,18 @@ function sweepRun(overrides: Partial<ReconcilerSweepRun> = {}): ReconcilerSweepR
   };
 }
 
+function tally(overrides: Partial<ScheduledItemTally> = {}): ScheduledItemTally {
+  return {
+    test_run_id: 'run-1',
+    items_total: 20,
+    items_passed: 15,
+    items_failed: 5,
+    items_provider_faulted: 0,
+    provider_fault_kind: null,
+    ...overrides,
+  };
+}
+
 type Recorded = {
   itemUpdates: { id: string; patch: ScheduledTestItemPatch }[];
   runUpdates: { id: string; patch: ScheduledTestRunPatch }[];
@@ -174,7 +190,7 @@ describe('resolveScheduledItemPatch', () => {
     const patch = resolveScheduledItemPatch({
       item: item(),
       run: testRun({ status: 'completed' }),
-      tally: { test_run_id: 'run-1', items_total: 20, items_passed: 15, items_failed: 5 },
+      tally: tally(),
       nowMs: NOW_MS,
       staleAfterMs: SCHEDULED_ITEM_STALE_AFTER_MS,
     });
@@ -273,6 +289,158 @@ describe('resolveScheduledItemPatch', () => {
   });
 });
 
+// B0-1014 — the 2026-09-15 00:00 UTC sweep: the OpenAI org had run out of credits the evening
+// before, so all five runs ended `completed` having answered nothing, every child closed
+// `completed` with a 0% pass rate, and the parent recorded `success_rate: 1`.
+describe('provider-faulted runs (B0-1014)', () => {
+  describe('isProviderFaultedTally', () => {
+    it('trips at the threshold, not above it', () => {
+      // 1/20 is exactly 0.05 — the same `>=` boundary as run-provider-health.ts, because a
+      // provider refusal is a hard zero for that item with no partial answer to grade.
+      expect(isProviderFaultedTally(tally({ items_total: 20, items_provider_faulted: 1 }))).toBe(
+        true,
+      );
+      expect(SCHEDULED_ITEM_PROVIDER_FAULT_RATE_THRESHOLD).toBe(0.05);
+    });
+
+    it('leaves a run below the threshold alone', () => {
+      // 1/21 ≈ 0.0476 — one transient blip on a long run is noise, not an outage.
+      expect(isProviderFaultedTally(tally({ items_total: 21, items_provider_faulted: 1 }))).toBe(
+        false,
+      );
+      expect(isProviderFaultedTally(tally({ items_total: 20, items_provider_faulted: 0 }))).toBe(
+        false,
+      );
+    });
+
+    it('never calls an empty run provider-faulted', () => {
+      expect(
+        isProviderFaultedTally(tally({ items_total: 0, items_passed: 0, items_provider_faulted: 0 })),
+      ).toBe(false);
+    });
+  });
+
+  describe('describeProviderFault', () => {
+    it('names the known kind in the operator wording and both counts', () => {
+      expect(
+        describeProviderFault(
+          tally({
+            items_total: 20,
+            items_provider_faulted: 18,
+            provider_fault_kind: 'insufficient_quota',
+          }),
+        ),
+      ).toBe(
+        '18 of 20 items got no answer: the model provider refused the request ' +
+          '(Out of credits / quota exhausted). This run measured nothing and must be re-run.',
+      );
+    });
+
+    it('quotes an unrecognized kind verbatim — the column is free text', () => {
+      expect(
+        describeProviderFault(
+          tally({ items_total: 20, items_provider_faulted: 20, provider_fault_kind: 'gremlins' }),
+        ),
+      ).toContain('(gremlins)');
+    });
+  });
+
+  it('closes a fully provider-faulted run as failed while still writing its counts', () => {
+    const patch = resolveScheduledItemPatch({
+      item: item(),
+      run: testRun({ status: 'completed' }),
+      tally: tally({
+        items_total: 20,
+        items_passed: 0,
+        items_failed: 20,
+        items_provider_faulted: 20,
+        provider_fault_kind: 'insufficient_quota',
+      }),
+      nowMs: NOW_MS,
+      staleAfterMs: SCHEDULED_ITEM_STALE_AFTER_MS,
+    });
+
+    expect(patch).toMatchObject({
+      status: 'failed',
+      error_code: SCHEDULED_ITEM_PROVIDER_FAULT_ERROR,
+      // The counts are not hidden — `status` and `error_code` tell the truth alongside them.
+      items_total: 20,
+      items_passed: 0,
+      items_failed: 20,
+      pass_rate: 0,
+    });
+    expect(patch?.error_message).toContain('20 of 20 items got no answer');
+  });
+
+  it('is byte-identical to today for a run with zero provider faults', () => {
+    const patch = resolveScheduledItemPatch({
+      item: item(),
+      run: testRun({ status: 'completed' }),
+      tally: tally({ items_total: 20, items_passed: 15, items_failed: 5 }),
+      nowMs: NOW_MS,
+      staleAfterMs: SCHEDULED_ITEM_STALE_AFTER_MS,
+    });
+
+    expect(patch).toEqual({
+      status: 'completed',
+      completed_at: isoAgo(4 * 60 * 1000),
+      elapsed_ms: 6 * 60 * 1000,
+      items_total: 20,
+      items_passed: 15,
+      items_failed: 5,
+      pass_rate: 0.75,
+    });
+  });
+
+  it('leaves an ordinarily failed run with its own error code', () => {
+    const patch = resolveScheduledItemPatch({
+      item: item(),
+      run: testRun({ status: 'failed' }),
+      tally: tally({ items_total: 20, items_provider_faulted: 20 }),
+      nowMs: NOW_MS,
+      staleAfterMs: SCHEDULED_ITEM_STALE_AFTER_MS,
+    });
+
+    expect(patch).toMatchObject({ status: 'failed', error_code: 'run_failed' });
+  });
+
+  it('stops the parent reporting success_rate 1 when a child measured nothing', async () => {
+    const { port, recorded } = stubPort({
+      items: [item({ id: 'a', test_run_id: 'run-1' }), item({ id: 'b', test_run_id: 'run-2' })],
+      runs: [
+        testRun({ id: 'run-1', status: 'completed' }),
+        testRun({ id: 'run-2', status: 'completed' }),
+      ],
+      tallies: [
+        tally({ test_run_id: 'run-1', items_total: 20, items_passed: 18, items_failed: 2 }),
+        tally({
+          test_run_id: 'run-2',
+          items_total: 20,
+          items_passed: 0,
+          items_failed: 20,
+          items_provider_faulted: 20,
+          provider_fault_kind: 'insufficient_quota',
+        }),
+      ],
+    });
+
+    const result = await reconcileScheduledTests(deps(port));
+
+    expect(result.itemsCompleted).toBe(1);
+    expect(result.itemsFailed).toBe(1);
+    expect(recorded.itemUpdates[1]?.patch).toMatchObject({
+      status: 'failed',
+      error_code: SCHEDULED_ITEM_PROVIDER_FAULT_ERROR,
+    });
+    expect(recorded.runUpdates[0]?.patch).toMatchObject({
+      status: 'completed',
+      successful_tests: 1,
+      failed_tests: 1,
+      success_rate: 0.5,
+    });
+  });
+});
+
 describe('buildScheduledRunPatch', () => {
   it('completes the parent once every child is terminal', () => {
     const { patch, completed } = buildScheduledRunPatch(
@@ -352,9 +520,7 @@ describe('reconcileScheduledTests', () => {
         testRun({ id: 'run-1', status: 'completed' }),
         testRun({ id: 'run-2', status: 'failed' }),
       ],
-      tallies: [
-        { test_run_id: 'run-1', items_total: 10, items_passed: 9, items_failed: 1 },
-      ],
+      tallies: [tally({ test_run_id: 'run-1', items_total: 10, items_passed: 9, items_failed: 1 })],
     });
 
     const result = await reconcileScheduledTests(deps(port));
@@ -400,7 +566,12 @@ describe('reconcileScheduledTests', () => {
       items: [item({ id: 'a', test_run_id: null })],
       sweepRuns: [sweepRun({ id: 'run-created-by-sweep', status: 'completed_with_failures' })],
       tallies: [
-        { test_run_id: 'run-created-by-sweep', items_total: 20, items_passed: 18, items_failed: 2 },
+        tally({
+          test_run_id: 'run-created-by-sweep',
+          items_total: 20,
+          items_passed: 18,
+          items_failed: 2,
+        }),
       ],
     });
 

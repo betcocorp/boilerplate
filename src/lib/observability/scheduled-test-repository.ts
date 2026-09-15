@@ -262,11 +262,42 @@ export async function listSweepTestRunsForTests(
 }
 
 /**
- * Per-run pass/fail counts.
+ * B0-1014 — how many faulted rows are read back to name the dominant `provider_fault` kind. The
+ * count itself is exact (PostgREST returns it in the range header regardless of the page size);
+ * only the kind is sampled, and a run does not need more than this to say WHICH refusal it hit.
+ * Well under `db-max-rows` (1000).
+ */
+const PROVIDER_FAULT_KIND_SAMPLE_LIMIT = 100;
+
+/** Most frequent value in the sample; ties broken alphabetically for a stable message. */
+function dominantProviderFault(
+  rows: readonly { provider_fault: string | null }[],
+): string | null {
+  const counts = new Map<string, number>();
+
+  for (const row of rows) {
+    const kind = row.provider_fault?.trim();
+    if (!kind) {
+      continue;
+    }
+    counts.set(kind, (counts.get(kind) ?? 0) + 1);
+  }
+
+  return (
+    [...counts.entries()].sort(
+      (a, b) => b[1] - a[1] || a[0].localeCompare(b[0]),
+    )[0]?.[0] ?? null
+  );
+}
+
+/**
+ * Per-run pass/fail counts, plus the B0-1014 provider-fault count.
  *
  * Counted with `head: true` count queries rather than by selecting the rows: a golden run can
  * hold several hundred `test_result_items` and PostgREST caps a response at `db-max-rows` (1000),
- * so fetching rows to tally them would silently truncate on a large sweep.
+ * so fetching rows to tally them would silently truncate on a large sweep. The provider-fault query
+ * is the one exception — it reads a bounded sample of the faulted rows so the reconciler can name
+ * the kind in `error_message` — and its `count` is still exact.
  */
 export async function listScheduledItemTallies(
   testRunIds: string[],
@@ -279,7 +310,7 @@ export async function listScheduledItemTallies(
 
   return Promise.all(
     testRunIds.map(async (testRunId): Promise<ScheduledItemTally> => {
-      const [total, passed] = await Promise.all([
+      const [total, passed, faulted] = await Promise.all([
         supabase
           .from('test_result_items')
           .select('id', { count: 'exact', head: true })
@@ -289,9 +320,15 @@ export async function listScheduledItemTallies(
           .select('id', { count: 'exact', head: true })
           .eq('test_result_id', testRunId)
           .eq('passed', true),
+        supabase
+          .from('test_result_items')
+          .select('provider_fault', { count: 'exact' })
+          .eq('test_result_id', testRunId)
+          .not('provider_fault', 'is', null)
+          .limit(PROVIDER_FAULT_KIND_SAMPLE_LIMIT),
       ]);
 
-      for (const result of [total, passed] as CountResult[]) {
+      for (const result of [total, passed, faulted] as CountResult[]) {
         if (result.error) {
           throw new Error(`count test_result_items: ${result.error.message}`);
         }
@@ -305,6 +342,8 @@ export async function listScheduledItemTallies(
         items_total: itemsTotal,
         items_passed: itemsPassed,
         items_failed: Math.max(0, itemsTotal - itemsPassed),
+        items_provider_faulted: faulted.count ?? 0,
+        provider_fault_kind: dominantProviderFault(faulted.data ?? []),
       };
     }),
   );

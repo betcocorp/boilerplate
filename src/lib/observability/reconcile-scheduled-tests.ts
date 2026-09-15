@@ -33,6 +33,10 @@ import {
   MIN_STALE_AFTER_MS,
   stalledForMs,
 } from '~/lib/observability/stalled-run-sweeper';
+import {
+  isProviderFaultKind,
+  PROVIDER_FAULT_LABEL,
+} from '~/lib/tests/provider-fault';
 import { isCompletedRunStatus, isTerminalRunStatus } from '~/lib/tests/types';
 
 import type {
@@ -53,6 +57,32 @@ export const SCHEDULED_ITEM_STALE_AFTER_MS = DEFAULT_STALE_AFTER_MS;
 
 /** Failure class written when the stale guard fires. */
 export const SCHEDULED_ITEM_TIMED_OUT_ERROR = 'timed_out';
+
+/**
+ * B0-1014 — failure class written when a run's items never reached the model provider.
+ *
+ * Distinct from `run_failed`: the run itself ended cleanly, it just measured nothing.
+ */
+export const SCHEDULED_ITEM_PROVIDER_FAULT_ERROR = 'provider_fault';
+
+/**
+ * B0-1014 — 5% or more of a run's items carrying a `provider_fault` → the child closes `failed`,
+ * not `completed`, however tidily the run itself ended.
+ *
+ * Deliberately the same number AND the same `>=` boundary as
+ * `PROVIDER_FAULT_INVALID_RATE_THRESHOLD` in `~/lib/tests/run-provider-health.ts`, which is in turn
+ * the same number as `DEGRADED_FALLBACK_RATE_THRESHOLD` in `~/lib/tests/run-health.ts`. The sweep
+ * ledger at `/admin/scheduled` and the run UI at `/admin/tests` must never disagree about whether a
+ * run is trustworthy: an operator who sees the banner "this run measured nothing" on a run must not
+ * then see the sweep that dispatched it reporting that test as a success.
+ *
+ * Why it exists at all: on 2026-09-15 00:00 UTC the nightly golden sweep dispatched five sets into
+ * an OpenAI organization that had run out of credits the previous evening. Every run ended
+ * `completed`, so all five children closed `completed` with `pass_rate: 0`, and the parent recorded
+ * `successful_tests: 5, failed_tests: 0, success_rate: 1`. The ledger said every test succeeded
+ * while zero prompts had been answered.
+ */
+export const SCHEDULED_ITEM_PROVIDER_FAULT_RATE_THRESHOLD = 0.05;
 
 export const DEFAULT_RECONCILE_LIMIT = 200;
 export const MAX_RECONCILE_LIMIT = 1000;
@@ -138,6 +168,18 @@ export type ScheduledItemTally = {
   items_total: number;
   items_passed: number;
   items_failed: number;
+  /**
+   * B0-1014 — items whose `test_result_items.provider_fault` is set, i.e. the model provider
+   * refused the request and there is no answer to grade. Always in the same denominator as
+   * `items_total`: a provider-faulted item is also counted as failed, because that is exactly how
+   * the harness stored it.
+   */
+  items_provider_faulted: number;
+  /**
+   * The most common `provider_fault` value on this run, or null when none is set. Free text at the
+   * database level, so this may be a value `PROVIDER_FAULT_KINDS` does not know.
+   */
+  provider_fault_kind: string | null;
 };
 
 export type ScheduledTestReconcilerPort = {
@@ -163,6 +205,42 @@ export type ReconcileScheduledTestsDeps = {
 /* -------------------------------------------------------------------------- *
  * Pure decisions
  * -------------------------------------------------------------------------- */
+
+/**
+ * B0-1014 — did enough of this run's items never reach the provider to invalidate its pass rate?
+ *
+ * A run with no items is NOT provider-faulted: there is nothing to say about a provider that was
+ * never called, and the stale guard already covers a child that produced nothing at all.
+ */
+export function isProviderFaultedTally(
+  tally: ScheduledItemTally,
+  threshold: number = SCHEDULED_ITEM_PROVIDER_FAULT_RATE_THRESHOLD,
+): boolean {
+  if (tally.items_total <= 0 || tally.items_provider_faulted <= 0) {
+    return false;
+  }
+  return tally.items_provider_faulted / tally.items_total >= threshold;
+}
+
+/**
+ * The `error_message` a person reading `/admin/scheduled` gets. Names the kind and both counts so
+ * the row is actionable without opening the run: "re-run this once credits are back", not "0%".
+ */
+export function describeProviderFault(tally: ScheduledItemTally): string {
+  const kind = tally.provider_fault_kind;
+  // The column is free text; an unrecognized value is still a refusal and is quoted verbatim.
+  const cause = kind
+    ? isProviderFaultKind(kind)
+      ? ` (${PROVIDER_FAULT_LABEL[kind]})`
+      : ` (${kind})`
+    : '';
+
+  return (
+    `${tally.items_provider_faulted} of ${tally.items_total} items got no answer: ` +
+    `the model provider refused the request${cause}. ` +
+    'This run measured nothing and must be re-run.'
+  );
+}
 
 /**
  * The patch a single child needs, or `null` when it should be left alone.
@@ -197,6 +275,20 @@ export function resolveScheduledItemPatch(input: {
       : {};
 
     if (isCompletedRunStatus(run.status)) {
+      // B0-1014 — a run that ended cleanly but never reached the provider is not a success. The
+      // counts are still written: hiding them would trade one lie for another. `status` and
+      // `error_code` are what stop the parent rolling this up as `successful_tests`.
+      if (tally && isProviderFaultedTally(tally)) {
+        return {
+          ...counts,
+          status: 'failed',
+          completed_at: completedAt,
+          elapsed_ms: measured ?? run.elapsed_ms,
+          error_code: SCHEDULED_ITEM_PROVIDER_FAULT_ERROR,
+          error_message: describeProviderFault(tally),
+        };
+      }
+
       return {
         ...counts,
         status: 'completed',
