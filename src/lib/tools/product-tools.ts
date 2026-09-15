@@ -65,6 +65,7 @@ import {
   type ProductToolName,
 } from '~/lib/tools/tool-schemas';
 import { lookupCrossReferenceDeduped } from '~/lib/recommendations/legacy-lookup-cache';
+import { detectCategorySearchTerms } from '~/lib/tools/category-search-terms';
 import { getProductCategory, getProductsInCategory } from '~/lib/tools/category-lookup';
 import { routeCategoryQuery } from '~/lib/category/category-router';
 import { runCrossReferenceRecommendation } from '~/lib/recommendations/persist-recommendation';
@@ -1042,6 +1043,33 @@ export async function executeProductTool(
 
       const { productLineKey, productKey, aliasResolution } =
         await resolveProductEntityWithAliasTelemetry(p.productId, name, auditCtx);
+
+      /**
+       * B0-1001 — an organism-first ask ("which products kill HIV-1?") names no real single
+       * product, but this tool's input schema (owned elsewhere; not changed here) still requires
+       * SOME `productId`/`productName` when `productIds`/`category` are absent, so the model sends
+       * a descriptive phrase ("products effective against HIV-1") in `productId` to satisfy it.
+       * That phrase never resolves to a `productLineKey`/`productKey`, and falling through to the
+       * single-product "not on file" note below is wrong: labeled products against this organism DO
+       * exist in the corpus, just not under this bogus "product". When resolution genuinely finds
+       * nothing AND an `organism` was given, redirect to the same batch path a real `category` call
+       * takes — defaulting to `disinfectant` (mirrors `classifyBatchFactAsk`'s default in
+       * `~/lib/workflows/product-support/fact-tool-enforcement.ts`) when the text names no other
+       * known category.
+       *
+       * Does not fire when resolution DID find a product (a genuine single-product + organism ask,
+       * e.g. "does Widget X kill HIV-1?", is unaffected and keeps the existing single-product flow
+       * below).
+       */
+      if (p.organism?.trim() && !productLineKey && !productKey) {
+        const inferredCategory = detectCategorySearchTerms(p.productId)[0] ?? 'disinfectant';
+        return executeBatchEfficacyData(
+          { category: inferredCategory, organism: p.organism },
+          name,
+          auditCtx,
+        );
+      }
+
       // B0-792 — pin to the specific resolved `productKey` when one was found, so a
       // product_line_key grouping that (incorrectly) buckets unrelated finished-goods products
       // together (e.g. the "Drain Maintainer" group) can't leak a sibling product's dilution/
