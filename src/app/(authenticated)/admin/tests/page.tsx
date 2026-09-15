@@ -6,6 +6,7 @@ import { AdminTestsActionToast } from '~/components/admin/tests/AdminTestsAction
 import { CreateOrUploadTestDatasetDialog } from '~/components/admin/tests/CreateOrUploadTestDatasetDialog';
 import { GoldenSetMetricsCards } from '~/components/admin/tests/GoldenSetMetricsCards';
 import { OnlyGoldenToggle } from '~/components/admin/tests/OnlyGoldenToggle';
+import { ReportFailTrendChart } from '~/components/admin/tests/ReportFailTrendChart';
 import { RunGoldenTestsDialog } from '~/components/admin/tests/RunGoldenTestsDialog';
 import { Button } from '~/components/ui/button';
 import {
@@ -21,8 +22,10 @@ import { PERMISSIONS } from '~/lib/permissions/constants';
 import { requirePagePermission } from '~/lib/permissions/require-page-permission';
 import { formatScoreDelta } from '~/lib/tests/format';
 import { calculateGoldenSetMetrics } from '~/lib/tests/golden-set-metrics';
+import { buildReportFailTrend } from '~/lib/tests/report-fail-trend';
 import { gradeFromScore } from '~/lib/tests/report/metrics';
 import { listArchivedTests, listTests } from '~/lib/tests/repository';
+import { listTestSetFailTrendRuns } from '~/lib/tests/test-set-fail-trend';
 
 import { Separator } from '~/components/ui/separator';
 import {
@@ -60,14 +63,18 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
   // B0-585 — the per-test latest-result and cross-run similarity roll-up that used to fan out
   // over 20 runs per test on every load is decommissioned: run-level figures live on
   // /admin/tests/[testId], golden-set health on /admin/bex/health.
-  const [allTests, archivedTests, goldenSetMetrics] = await Promise.all([
+  const [allTests, archivedTests, goldenSetMetrics, failTrendRuns] = await Promise.all([
     listTests(),
     listArchivedTests(),
     calculateGoldenSetMetrics(),
+    // B0-1015 — takes the same `onlyGolden` reading as the table, so the chart's series and the
+    // rows beneath it are always the same set of datasets.
+    listTestSetFailTrendRuns({ onlyGolden }),
   ]);
   const tests = onlyGolden
     ? allTests.filter((test) => test.is_golden)
     : allTests;
+  const failTrend = buildReportFailTrend(failTrendRuns);
 
   return (
     <div className="flex flex-1 bg-slate-50">
@@ -100,6 +107,15 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
         </section>
 
         <GoldenSetMetricsCards metrics={goldenSetMetrics} />
+
+        {/* B0-1015 — the "Fails" column shows only each dataset's latest run, which cannot
+            distinguish a real regression from one bad sweep (an OpenAI billing outage spiked every
+            golden set on 2026-09-14). This plots the same number over every completed-report run. */}
+        <ReportFailTrendChart
+          emptyMessage="No completed run has recorded a fail count yet, so there is nothing to plot."
+          title="Fails over time by test set"
+          trend={failTrend}
+        />
 
         <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <div className="mb-4 flex items-center justify-between">

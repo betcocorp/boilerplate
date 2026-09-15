@@ -1,12 +1,24 @@
 import type { ReportRunRow } from '~/lib/tests/repository';
 
 /**
- * Per-run fail-count trend for `/admin/tests/reports` — same fold as `report-metric-trend.ts`
+ * B0-1015 — the fold needs only these five fields, so it is typed on the structural minimum
+ * rather than on the whole `ReportRunRow`. `/admin/tests/reports` still passes full `ReportRunRow`s
+ * (assignable as-is); `/admin/tests` passes the lean rows its own reader produces, without having
+ * to fabricate the TTFT/elapsed/report-state fields that page never reads.
+ */
+export type FailTrendRunRow = Pick<
+  ReportRunRow,
+  'runId' | 'testId' | 'testName' | 'startedAt' | 'failCount'
+>;
+
+/**
+ * Per-run fail-count trend for `/admin/tests/reports` and the card above "Test sets" on
+ * `/admin/tests` (B0-1015) — same fold as `report-metric-trend.ts`
  * (one series per dataset, oldest→newest, run-over-run change against the previous run OF THE
  * SAME DATASET that recorded a fail count), but over a plain integer count rather than a
  * millisecond-valued metric, so values are never divided or scaled into seconds.
  *
- * `ReportRunRow.failCount` is `test_results.failed_items` — the same harness-computed count the
+ * `FailTrendRunRow.failCount` is `test_results.failed_items` — the same harness-computed count the
  * "Fails" column on `/admin/tests` shows for a test's latest run. A run that never recorded one
  * (`failCount === null`) is dropped from the series — neither a plotted point nor either side of
  * a comparison — same "no data, not zero" rule the score and metric trends use.
@@ -50,9 +62,9 @@ export type ReportFailTrend = {
   plottedRunCount: number;
 };
 
-type FailRow = { row: ReportRunRow; timestamp: number; value: number };
+type FailRow = { row: FailTrendRunRow; timestamp: number; value: number };
 
-export function buildReportFailTrend(rows: readonly ReportRunRow[]): ReportFailTrend {
+export function buildReportFailTrend(rows: readonly FailTrendRunRow[]): ReportFailTrend {
   const rowsByTestId = new Map<string, FailRow[]>();
   let missingRunCount = 0;
 
