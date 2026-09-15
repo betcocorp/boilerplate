@@ -17,6 +17,9 @@ export type RagSearchSettingsValues = {
   productLineKey: string;
   useReranker: boolean;
   useMultiIntent: boolean;
+  /** B0-1017 — `guid` reads the search box as a record id instead of running semantic search. */
+  mode: 'semantic' | 'guid';
+  guidTarget: 'chunk' | 'document';
 };
 
 export const RAG_SEARCH_DEFAULT_SETTINGS: RagSearchSettingsValues = {
@@ -28,6 +31,8 @@ export const RAG_SEARCH_DEFAULT_SETTINGS: RagSearchSettingsValues = {
   productLineKey: '',
   useReranker: false,
   useMultiIntent: false,
+  mode: 'semantic',
+  guidTarget: 'chunk',
 };
 
 /** B0-761 — stable analytics surface id for the RAG semantic-search page. */
@@ -59,6 +64,12 @@ function countChangedSettings(settings: RagSearchSettingsValues) {
   if (settings.productLineKey.trim() !== RAG_SEARCH_DEFAULT_SETTINGS.productLineKey) count += 1;
   if (settings.useReranker !== RAG_SEARCH_DEFAULT_SETTINGS.useReranker) count += 1;
   if (settings.useMultiIntent !== RAG_SEARCH_DEFAULT_SETTINGS.useMultiIntent) count += 1;
+  if (settings.mode !== RAG_SEARCH_DEFAULT_SETTINGS.mode) count += 1;
+  // B0-1017 — the ID target field only renders in GUID mode, so a value left over from a previous
+  // toggle must not inflate the badge once the switch is back off.
+  if (settings.mode === 'guid' && settings.guidTarget !== RAG_SEARCH_DEFAULT_SETTINGS.guidTarget) {
+    count += 1;
+  }
 
   return count;
 }

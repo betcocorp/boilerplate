@@ -6,6 +6,8 @@ import { RagSearchResultCard } from '~/components/admin/rag/RagSearchResultCard'
 import { RagSearchTimingPanel } from '~/components/admin/RagSearchTimingPanel';
 import { PERMISSIONS } from '~/lib/permissions/constants';
 import { requirePagePermission } from '~/lib/permissions/require-page-permission';
+import { lookupRagChunksById, ragIdLookupInputSchema } from '~/lib/rag/id-lookup';
+import type { RagIdLookupResult, RagIdLookupTarget } from '~/lib/rag/id-lookup';
 import { searchProductChunks } from '~/lib/rag/search';
 import type { SearchScope } from '~/lib/rag/search';
 import { formatDurationMs } from '~/lib/utils/time';
@@ -165,6 +167,20 @@ function parseSectionType(value: string | string[] | undefined): string | undefi
   return raw ? raw : undefined;
 }
 
+/**
+ * B0-1017 — strict GUID lookup mode. The drawer's switch is a form-participating checkbox, so an
+ * absent param means "off" exactly like `parseExplicitTrue`; `on` covers a plain checkbox fallback.
+ */
+function parseMode(value: string | string[] | undefined): 'guid' | 'semantic' {
+  const raw = readSearchParam(value).trim().toLowerCase();
+  return raw === 'guid' || raw === 'true' || raw === 'on' ? 'guid' : 'semantic';
+}
+
+/** B0-1017 — which table the GUID in the search box addresses. Defaults to chunk ids. */
+function parseGuidTarget(value: string | string[] | undefined): RagIdLookupTarget {
+  return readSearchParam(value).trim().toLowerCase() === 'document' ? 'document' : 'chunk';
+}
+
 /** GHS section types recognized by the corpus chunker (see `~/lib/rag/section-type-inference.ts`). */
 const SECTION_TYPE_OPTIONS = [
   'organism_contact_time',
@@ -252,6 +268,8 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
   const useReranker = parseExplicitTrue(resolvedSearchParams.useReranker);
   const useMultiIntent = parseExplicitTrue(resolvedSearchParams.useMultiIntent);
   const sectionType = parseSectionType(resolvedSearchParams.sectionType);
+  const mode = parseMode(resolvedSearchParams.mode);
+  const guidTarget = parseGuidTarget(resolvedSearchParams.guidTarget);
   const rawMinSimilarity = readSearchParam(resolvedSearchParams.minSimilarity);
   const minSimilarity = parseMinSimilarity(resolvedSearchParams.minSimilarity);
   // B0-619 — presence-only check (never the key itself) so the panel can tell "reranker toggled
@@ -270,8 +288,36 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
 
   let error: string | null = null;
   let result: Awaited<ReturnType<typeof searchProductChunks>> | null = null;
+  let lookup: RagIdLookupResult | null = null;
+  let guidPrompt = false;
 
-  if (query.trim()) {
+  // B0-1017 — GUID mode short-circuits retrieval entirely: the search box is read as a record id,
+  // with no embedding, no filters and no semantic search.
+  if (mode === 'guid') {
+    const candidate = query.trim();
+
+    if (!candidate) {
+      guidPrompt = true;
+    } else {
+      const parsedLookup = ragIdLookupInputSchema.safeParse({
+        id: candidate,
+        target: guidTarget,
+      });
+
+      if (!parsedLookup.success) {
+        error = `"${candidate}" is not a valid GUID.`;
+      } else {
+        try {
+          lookup = await lookupRagChunksById(parsedLookup.data);
+        } catch (lookupError) {
+          error =
+            lookupError instanceof Error
+              ? lookupError.message
+              : 'Unable to look up that record id.';
+        }
+      }
+    }
+  } else if (query.trim()) {
     try {
       result = await searchProductChunks({
         query,
@@ -308,6 +354,8 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
     productLineKey,
     useReranker: useReranker === true,
     useMultiIntent: useMultiIntent === true,
+    mode,
+    guidTarget,
   };
 
   return (
@@ -346,7 +394,70 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
           </section>
         ) : null}
 
-        {result ? (
+        {guidPrompt ? (
+          <section className="rounded-[2rem] border border-dashed border-border/60 bg-background p-8 text-sm leading-7 text-muted-foreground">
+            Strict GUID lookup is on. Paste a rag.document_chunk.id or rag.document.id into the
+            search box to pull that exact record up, or switch the mode off to run a semantic
+            search.
+          </section>
+        ) : lookup ? (
+          <>
+            <section className="flex flex-wrap items-center justify-between gap-3">
+              <div className="text-sm text-muted-foreground">
+                Direct ID lookup of{' '}
+                <code className="rounded bg-muted px-1">
+                  {lookup.target === 'document' ? 'rag.document' : 'rag.document_chunk'}
+                </code>{' '}
+                <code className="rounded bg-muted px-1">{lookup.id}</code>.{' '}
+                {lookup.found
+                  ? lookup.totalChunkCount > lookup.matches.length
+                    ? `Showing ${lookup.matches.length} of ${lookup.totalChunkCount} chunks.`
+                    : `Showing ${lookup.matches.length} ${
+                        lookup.matches.length === 1 ? 'chunk' : 'chunks'
+                      }.`
+                  : 'No matching record.'}
+              </div>
+            </section>
+
+            <section className="grid gap-4 sm:grid-cols-1 lg:grid-cols-2">
+              {!lookup.found ? (
+                <div className="rounded-2xl border border-dashed border-border/60 bg-background p-8 text-sm text-muted-foreground lg:col-span-2">
+                  No rag.document_chunk / rag.document row exists with that id.
+                </div>
+              ) : null}
+
+              {lookup.found && lookup.matches.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-border/60 bg-background p-8 text-sm text-muted-foreground lg:col-span-2">
+                  That document exists but has no chunks.
+                </div>
+              ) : null}
+
+              {lookup.matches.map((match, index) => (
+                <RagSearchResultCard
+                  key={match.chunk_id}
+                  match={match}
+                  productLineHref={
+                    match.document_kind === 'product_line_profile'
+                      ? buildProductLineDetailHref(
+                          match.product_line_key || match.source_pk,
+                          {
+                            query: '',
+                            productLineKey: '',
+                            limit,
+                            minSimilarity: '',
+                            scope: 'all',
+                          },
+                        )
+                      : null
+                  }
+                  rank={index + 1}
+                  resultCount={lookup.matches.length}
+                  showSimilarity={false}
+                />
+              ))}
+            </section>
+          </>
+        ) : result ? (
           <>
             <section className="flex flex-wrap items-center justify-between gap-3">
               <div className="text-sm text-muted-foreground">
@@ -464,7 +575,7 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
               ))}
             </section>
           </>
-        ) : (
+        ) : mode === 'guid' ? null : (
           <section className="rounded-[2rem] border border-dashed border-border/60 bg-background p-8 text-sm leading-7 text-muted-foreground">
             Enter a natural-language query to test vector similarity against
             product line chunks. Optional filters: product line key and minimum

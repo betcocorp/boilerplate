@@ -27,6 +27,8 @@ type RagSearchResultCardProps = {
   productLineHref: string | null;
   /** Total matches rendered for the current query (B0-761 analytics). */
   resultCount: number;
+  /** B0-1017 — false for a direct GUID lookup, where similarity is not a meaningful score. */
+  showSimilarity?: boolean;
 };
 
 /**
@@ -39,6 +41,7 @@ export function RagSearchResultCard({
   rank,
   productLineHref,
   resultCount,
+  showSimilarity = true,
 }: RagSearchResultCardProps) {
   const similarityPct = match.similarity * 100;
 
@@ -132,17 +135,19 @@ export function RagSearchResultCard({
         </div>
       </div>
 
-      <div className="flex items-center gap-3">
-        <span className="text-sm font-medium text-foreground">
-          {similarityPct.toFixed(1)}%
-        </span>
-        <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
-          <div
-            className="h-full rounded-full bg-primary"
-            style={{ width: `${Math.min(100, Math.max(0, similarityPct))}%` }}
-          />
+      {showSimilarity ? (
+        <div className="flex items-center gap-3">
+          <span className="text-sm font-medium text-foreground">
+            {similarityPct.toFixed(1)}%
+          </span>
+          <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+            <div
+              className="h-full rounded-full bg-primary"
+              style={{ width: `${Math.min(100, Math.max(0, similarityPct))}%` }}
+            />
+          </div>
         </div>
-      </div>
+      ) : null}
 
       <div className="flex flex-wrap gap-2">
         <Badge variant="outline">{match.document_kind}</Badge>

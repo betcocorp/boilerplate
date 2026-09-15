@@ -43,6 +43,9 @@ export function RagSearchToolbar({
   query,
   settings,
 }: RagSearchToolbarProps) {
+  // B0-1017 — in GUID mode the box holds a record id, so popular-query suggestions are noise.
+  const isGuidMode = settings.mode === 'guid';
+
   const chips: Array<{ label: string; value: string }> = [
     {
       label: 'Scope',
@@ -57,6 +60,12 @@ export function RagSearchToolbar({
     { label: 'Floor', value: settings.minSimilarity.trim() || 'none' },
     { label: 'Rerank', value: settings.useReranker ? 'forced on' : 'inherit' },
     { label: 'Fan-out', value: settings.useMultiIntent ? 'on' : 'off' },
+    {
+      label: 'Mode',
+      value: isGuidMode
+        ? `GUID (${settings.guidTarget === 'document' ? 'documents' : 'chunks'})`
+        : 'Semantic',
+    },
   ];
 
   return (
@@ -66,8 +75,12 @@ export function RagSearchToolbar({
           <RagQueryAutocomplete
             defaultValue={query}
             name="q"
-            options={popularQueries}
-            placeholder="Ask something like: peroxide bathroom disinfectant"
+            options={isGuidMode ? [] : popularQueries}
+            placeholder={
+              isGuidMode
+                ? 'Paste a chunk or document GUID'
+                : 'Ask something like: peroxide bathroom disinfectant'
+            }
           />
         </div>
         <div className="flex shrink-0 items-center gap-2">

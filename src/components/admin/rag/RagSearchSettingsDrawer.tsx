@@ -13,6 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '~/components/ui/select';
+import { Switch } from '~/components/ui/switch';
 
 import type { RagSearchSettingsValues } from '~/components/admin/rag/RagSearchControls';
 
@@ -151,6 +152,52 @@ export function RagSearchSettingsDrawer({
             value={settings.sectionType}
           />
         </div>
+
+        {/*
+          B0-1017 — Radix renders a form-participating hidden checkbox for a named Switch, so this
+          emits `mode=guid` only when on and nothing when off — the same "absent = default"
+          semantics `parseExplicitTrue` relies on for the other toggles.
+        */}
+        <div className="flex items-start gap-3 rounded-2xl border border-border/60 p-3">
+          <Switch
+            checked={settings.mode === 'guid'}
+            className="mt-0.5 shrink-0"
+            name="mode"
+            onCheckedChange={(checked) => onChange({ mode: checked ? 'guid' : 'semantic' })}
+            value="guid"
+          />
+          <span className="flex flex-col gap-0.5">
+            <span className="text-sm font-medium leading-none text-foreground">
+              Strict GUID lookup
+            </span>
+            <span className="text-xs text-muted-foreground">
+              Off runs a normal semantic RAG search; on reads the search box as a
+              rag.document_chunk.id / rag.document.id and ignores every other retrieval filter.
+            </span>
+          </span>
+        </div>
+
+        {/* B0-1017 — only meaningful while the GUID switch is on, so it is not rendered otherwise. */}
+        {settings.mode === 'guid' ? (
+          <div className="flex flex-col gap-2">
+            <Label>ID targets</Label>
+            <Select
+              name="guidTarget"
+              onValueChange={(value) =>
+                onChange({ guidTarget: value === 'document' ? 'document' : 'chunk' })
+              }
+              value={settings.guidTarget}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="chunk">Chunks (rag.document_chunk.id)</SelectItem>
+                <SelectItem value="document">Documents (rag.document.id)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        ) : null}
 
         <div className="flex flex-col gap-2">
           <Label>Product line key</Label>
