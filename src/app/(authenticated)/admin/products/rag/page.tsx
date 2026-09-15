@@ -1,15 +1,18 @@
 import { connection } from 'next/server';
 
-import { RagSearchControls } from '~/components/admin/rag/RagSearchControls';
 import type { RagSearchSettingsValues } from '~/components/admin/rag/RagSearchControls';
+import { RagSearchControls } from '~/components/admin/rag/RagSearchControls';
 import { RagSearchResultCard } from '~/components/admin/rag/RagSearchResultCard';
 import { RagSearchTimingPanel } from '~/components/admin/RagSearchTimingPanel';
 import { PERMISSIONS } from '~/lib/permissions/constants';
 import { requirePagePermission } from '~/lib/permissions/require-page-permission';
-import { lookupRagChunksById, ragIdLookupInputSchema } from '~/lib/rag/id-lookup';
 import type { RagIdLookupResult, RagIdLookupTarget } from '~/lib/rag/id-lookup';
-import { searchProductChunks } from '~/lib/rag/search';
+import {
+  lookupRagChunksById,
+  ragIdLookupInputSchema,
+} from '~/lib/rag/id-lookup';
 import type { SearchScope } from '~/lib/rag/search';
+import { searchProductChunks } from '~/lib/rag/search';
 import { formatDurationMs } from '~/lib/utils/time';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
@@ -157,12 +160,16 @@ function parseUseHybrid(value: string | string[] | undefined): boolean {
  * `searchProductChunks` keeps inheriting its own default (ENABLE_RERANKER via the settings
  * service). Only a checked box produces an explicit `true`.
  */
-function parseExplicitTrue(value: string | string[] | undefined): true | undefined {
+function parseExplicitTrue(
+  value: string | string[] | undefined,
+): true | undefined {
   const raw = readSearchParam(value).trim().toLowerCase();
   return raw === 'true' || raw === 'on' ? true : undefined;
 }
 
-function parseSectionType(value: string | string[] | undefined): string | undefined {
+function parseSectionType(
+  value: string | string[] | undefined,
+): string | undefined {
   const raw = readSearchParam(value).trim();
   return raw ? raw : undefined;
 }
@@ -177,8 +184,12 @@ function parseMode(value: string | string[] | undefined): 'guid' | 'semantic' {
 }
 
 /** B0-1017 — which table the GUID in the search box addresses. Defaults to chunk ids. */
-function parseGuidTarget(value: string | string[] | undefined): RagIdLookupTarget {
-  return readSearchParam(value).trim().toLowerCase() === 'document' ? 'document' : 'chunk';
+function parseGuidTarget(
+  value: string | string[] | undefined,
+): RagIdLookupTarget {
+  return readSearchParam(value).trim().toLowerCase() === 'document'
+    ? 'document'
+    : 'chunk';
 }
 
 /** GHS section types recognized by the corpus chunker (see `~/lib/rag/section-type-inference.ts`). */
@@ -256,7 +267,10 @@ function parseMinSimilarity(value: string | string[] | undefined) {
 }
 
 export default async function RagSearchPage({ searchParams }: SearchPageProps) {
-  await requirePagePermission(PERMISSIONS.NAVIGATION_SIDEBAR_TOOLS, 'GET /admin/products/rag');
+  await requirePagePermission(
+    PERMISSIONS.NAVIGATION_SIDEBAR_TOOLS,
+    'GET /admin/products/rag',
+  );
 
   await connection();
 
@@ -369,11 +383,6 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
             <h1 className="text-4xl font-semibold tracking-tight text-foreground">
               Search the RAG product line corpus semantically
             </h1>
-            <p className="max-w-3xl text-base leading-7 text-muted-foreground">
-              Retrieval is one document per legacy product line. Semantic search
-              is constrained to English (`EN`) documents only. Chunks include
-              rolled-up size variants; filters only target product line keys.
-            </p>
           </div>
 
           <div className="mt-8">
@@ -396,9 +405,9 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
 
         {guidPrompt ? (
           <section className="rounded-[2rem] border border-dashed border-border/60 bg-background p-8 text-sm leading-7 text-muted-foreground">
-            Strict GUID lookup is on. Paste a rag.document_chunk.id or rag.document.id into the
-            search box to pull that exact record up, or switch the mode off to run a semantic
-            search.
+            Strict GUID lookup is on. Paste a rag.document_chunk.id or
+            rag.document.id into the search box to pull that exact record up, or
+            switch the mode off to run a semantic search.
           </section>
         ) : lookup ? (
           <>
@@ -406,7 +415,9 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
               <div className="text-sm text-muted-foreground">
                 Direct ID lookup of{' '}
                 <code className="rounded bg-muted px-1">
-                  {lookup.target === 'document' ? 'rag.document' : 'rag.document_chunk'}
+                  {lookup.target === 'document'
+                    ? 'rag.document'
+                    : 'rag.document_chunk'}
                 </code>{' '}
                 <code className="rounded bg-muted px-1">{lookup.id}</code>.{' '}
                 {lookup.found
@@ -462,10 +473,7 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
             <section className="flex flex-wrap items-center justify-between gap-3">
               <div className="text-sm text-muted-foreground">
                 Showing {result.matches.length} line-level matches using{' '}
-                <code className="rounded bg-muted px-1">
-                  {result.model}
-                </code>
-                .
+                <code className="rounded bg-muted px-1">{result.model}</code>.
               </div>
               <div className="text-sm text-muted-foreground">
                 {result.scope === 'all'
@@ -517,7 +525,10 @@ export default async function RagSearchPage({ searchParams }: SearchPageProps) {
                     result.timings.rerankMs > 0
                       ? formatDurationMs(result.timings.rerankMs)
                       : 'Reranker off',
-                  ms: result.timings.rerankMs > 0 ? result.timings.rerankMs : undefined,
+                  ms:
+                    result.timings.rerankMs > 0
+                      ? result.timings.rerankMs
+                      : undefined,
                 },
                 {
                   label: 'Query rewrite',

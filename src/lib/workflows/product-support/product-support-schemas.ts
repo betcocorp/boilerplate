@@ -143,9 +143,9 @@ export const answerProvenanceSchema = z.enum([
    * `dilution_ratio`, `contact_time`, `cas_number` — an exact literal snippet, not reformatted
    * prose) and at least one OTHER detected category on the same draft WAS fully grounded. Instead
    * of the full-decline `validator_fallback` replacement, the run-product-support-workflow.ts
-   * caller surgically redacts only the ungrounded snippet(s) (each literal occurrence replaced with
-   * `(unable to verify)`) and keeps the rest of the draft — including the grounded regulated
-   * content — intact, appending a note naming what was withheld. Sentence-shaped categories
+   * caller withholds the WHOLE SENTENCE containing each ungrounded token (B0-1000 — never the
+   * number left printed beside a marker) and keeps the rest of the draft — including the grounded
+   * regulated content — intact, appending a note naming what was withheld. Sentence-shaped categories
    * `hazard` and `first_aid` never take this path: either being ungrounded still falls through to
    * `validator_fallback`'s full decline, as does every detected category being ungrounded.
    *

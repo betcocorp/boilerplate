@@ -293,6 +293,31 @@ export const labeledDilutionSchema = z
 
 export type LabeledDilution = z.infer<typeof labeledDilutionSchema>;
 
+/**
+ * B0-1003 — whether this product line's own LABEL text documents floor use, so a category list can
+ * be filtered/cited to floor-labeled products (e.g. "which degreasers are labeled for floors")
+ * without inventing a substrate claim. This is a keyword match against the retrieved label's
+ * "Surfaces & Use Sites" / "Directions for Use" sections (`document_kind: 'label'`), not a
+ * structured "approved substrate" column — no such column exists in the corpus today. It reports
+ * text PRESENCE ("does the label mention floors"), never approval or suitability, and never a
+ * dilution or other regulated value.
+ *
+ * `documented: true` — at least one of this line's labels mentions "floor" in a use/directions
+ * section; `labelDocumentKeys` names exactly those labels so the model can cite them individually.
+ * `documented: false` — labels were found for this line but none mention floor.
+ * `null` — no label document could be matched to this line at all (label ingestion is partial;
+ * see B0-264/B0-793), so floor use could not be checked either way — never inferred as "no".
+ */
+export const floorUseSchema = z
+  .object({
+    documented: z.boolean(),
+    /** Label document keys whose text mentioned floor use; empty when `documented` is false. */
+    labelDocumentKeys: z.array(z.string()),
+  })
+  .nullable();
+
+export type FloorUseInfo = z.infer<typeof floorUseSchema>;
+
 /** B0-972 — the `get_products_in_category` tool output. Zod-first so the implementation is checked against it. */
 export const getProductsInCategoryOutputSchema = z.object({
   ok: z.literal(true),
@@ -315,6 +340,8 @@ export const getProductsInCategoryOutputSchema = z.object({
       items: z.array(z.object({ sku: z.string(), title: z.string() })),
       /** B0-972 — see `labeledDilutionSchema`; explicit `null` when none is on file. */
       labeledDilution: labeledDilutionSchema,
+      /** B0-1003 — see `floorUseSchema`; explicit `null` when floor use could not be checked. */
+      floorUse: floorUseSchema,
     }),
   ),
 });
