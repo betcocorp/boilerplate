@@ -30,6 +30,7 @@ import {
   type MultiTurnResultPayload,
 } from './multi-turn-result';
 import { parseMultiTurnFromInputPayload, type MultiTurnScenario } from './multi-turn';
+import { classifyProviderFault, type ProviderFaultKind } from './provider-fault';
 import type { NewTestResultItemRecord, TestItemRecord } from './types';
 
 /**
@@ -52,6 +53,12 @@ export type { EvaluationOutcome, GradableExpectations };
 type RunSingleItemResult = {
   item: NewTestResultItemRecord;
   passed: boolean;
+  /**
+   * B0-1014 — non-null when the item never got an answer because the model provider refused the
+   * request (out of credits, bad key, rate limit, outage). Mirrors `item.provider_fault`, returned
+   * separately so `run-executor.ts` can count a fault streak without re-parsing the record.
+   */
+  providerFault?: ProviderFaultKind | null;
 };
 
 type RunItemOptions = {
@@ -91,6 +98,8 @@ export async function runSingleTestItem(
   if (parsed.kind === 'invalid') {
     return {
       passed: false,
+      // An authoring mistake, never an infrastructure fault — the provider was never called.
+      providerFault: null,
       item: {
         test_result_id: testResultId,
         test_item_id: testItem.id,
@@ -206,6 +215,8 @@ async function runSingleTurnTestItem(
 
     return {
       passed: outcome.passed,
+      // The provider answered, so whatever the verdict is, it is a real quality verdict.
+      providerFault: null,
       item: {
         test_result_id: testResultId,
         test_item_id: testItem.id,
@@ -226,9 +237,16 @@ async function runSingleTurnTestItem(
   } catch (error) {
     const elapsedMs = Math.max(0, Date.now() - startedAt);
     const message = error instanceof Error ? error.message : 'Unknown test item run failure.';
+    /**
+     * B0-1014 — additive ONLY. `passed`, `status` and `error_message` are deliberately unchanged:
+     * a provider refusal is still a failed item, it is just now labelled as an infrastructure
+     * fault rather than being indistinguishable from a wrong answer.
+     */
+    const providerFault = classifyProviderFault(error);
 
     return {
       passed: false,
+      providerFault,
       item: {
         test_result_id: testResultId,
         test_item_id: testItem.id,
@@ -238,6 +256,7 @@ async function runSingleTurnTestItem(
         status: 'failed',
         passed: false,
         error_message: message,
+        provider_fault: providerFault,
         response_text: null,
         response_payload: null,
         app_version: APP_VERSION,
@@ -271,6 +290,8 @@ async function runMultiTurnTestItem(
   let lastResult: Awaited<ReturnType<typeof runBexChatTurn>> | null = null;
   let firstTurnTtftMs: number | null = null;
   let fatalError: string | null = null;
+  /** B0-1014 — the fault kind of the turn that killed the replay, if the provider refused it. */
+  let fatalProviderFault: ProviderFaultKind | null = null;
 
   for (const [zeroBasedIndex, turn] of scenario.turns.entries()) {
     const turnIndex = zeroBasedIndex + 1;
@@ -339,6 +360,9 @@ async function runMultiTurnTestItem(
       const message =
         error instanceof Error ? error.message : 'Unknown multi-turn test item run failure.';
       fatalError = `Turn ${turnIndex} failed: ${message}`;
+      // B0-1014 — a refused turn stops the replay for an infrastructure reason, not a behavioural
+      // one; recorded so the scenario row reads as a provider fault rather than a failed scenario.
+      fatalProviderFault = classifyProviderFault(error);
       executedTurns.push({
         turnIndex,
         prompt: turn.prompt,
@@ -455,6 +479,7 @@ async function runMultiTurnTestItem(
 
   return {
     passed,
+    providerFault: fatalProviderFault,
     item: {
       test_result_id: testResultId,
       test_item_id: testItem.id,
@@ -467,6 +492,8 @@ async function runMultiTurnTestItem(
       status: fatalError ? 'failed' : 'completed',
       passed,
       error_message: passed ? null : failureReason,
+      // B0-1014 — additive: status/passed/error_message above are untouched.
+      provider_fault: fatalProviderFault,
       response_text: finalTurn?.responseText || executedTurns.at(-1)?.responseText || null,
       response_payload: responsePayload,
       // The FINAL turn's workflow run, matching which turn's result the rest of the payload holds.

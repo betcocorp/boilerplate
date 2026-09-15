@@ -6,7 +6,7 @@ import {
   selectGenerationRuntime,
 } from '~/lib/llm/generation-runtime';
 import { resolveModel } from '~/lib/llm/resolve-model';
-import { logWarn } from '~/lib/observability/logger';
+import { logError, logWarn } from '~/lib/observability/logger';
 import { classifyUserIntent, type IntentClassification } from '~/lib/orchestrator/intent-classifier';
 import {
   classifyUserIntentSemantic,
@@ -29,6 +29,11 @@ import {
 import type { CriteriaGradingOutcome } from './criteria-schemas';
 import { analyzeAndPersistFailureRootCause } from './failure-root-cause';
 import { mandatoryConceptPhrases } from './grading';
+import {
+  PROVIDER_FAULT_ABORT_STREAK,
+  PROVIDER_FAULT_LABEL,
+  type ProviderFaultKind,
+} from './provider-fault';
 import { scheduleReportGeneration } from './report/schedule-report-generation';
 import { parseTestRunConfig } from './run-config';
 import { runSingleTestItem } from './runner';
@@ -240,15 +245,45 @@ export const RUN_WALL_CLOCK_BUDGET_MS = 240_000;
 /** `summary.runner_state` written when the executor stopped itself to be continued in a new hop. */
 export const RUNNER_STATE_YIELDED = 'yielded';
 
+/** B0-1014 — `summary.runner_state` written when the provider-fault circuit breaker tripped. */
+export const RUNNER_STATE_ABORTED = 'aborted';
+
 /**
  * How {@link executeTestRun} returned.
  * - `completed` — every item ran; the run is terminal.
  * - `yielded`   — B0-990: the wall-clock budget ran out with items left; the run is back to `queued`
  *                 with `runner_state: 'yielded'` and the caller must schedule a continuation hop.
+ * - `aborted`   — B0-1014: {@link PROVIDER_FAULT_ABORT_STREAK} consecutive items were refused by the
+ *                 model provider; the run is terminal (`failed`) and must NOT be continued or graded.
  * - `paused` / `cancelled` — a control action stopped the loop.
  * - `skipped`   — nothing to do (already terminal or paused on entry).
  */
-export type ExecuteTestRunOutcome = 'completed' | 'yielded' | 'paused' | 'cancelled' | 'skipped';
+export type ExecuteTestRunOutcome =
+  | 'completed'
+  | 'yielded'
+  | 'aborted'
+  | 'paused'
+  | 'cancelled'
+  | 'skipped';
+
+/**
+ * B0-1014 — the line a human reads on `/admin/tests` and can act on immediately. Names the fault
+ * kind (which decides whether the fix is a billing top-up, a key rotation, or just waiting) and how
+ * much of the run actually executed, so nobody mistakes the abort for a quality result.
+ */
+export function describeProviderFaultAbort(input: {
+  faultKind: ProviderFaultKind;
+  streak: number;
+  completedItems: number;
+  totalItems: number;
+}): string {
+  return (
+    `Run aborted after ${input.streak} consecutive provider faults ` +
+    `(${input.faultKind} — ${PROVIDER_FAULT_LABEL[input.faultKind]}). ` +
+    'The model provider refused every request; this run measured nothing. ' +
+    `${input.completedItems} of ${input.totalItems} items ran before the run was stopped.`
+  );
+}
 
 export type ExecuteTestRunOptions = {
   /** Wall-clock budget for THIS invocation. Defaults to {@link RUN_WALL_CLOCK_BUDGET_MS}. */
@@ -302,6 +337,14 @@ export async function executeTestRun(
   const resumedProgressPercent =
     totalItems > 0 ? Number(((completedItems / totalItems) * 100).toFixed(2)) : 0;
   let itemElapsedSumMs = await sumResultItemsElapsedMsByResultId(testResult.id);
+  /**
+   * B0-1014 — consecutive items the model provider refused. Reset by ANY item that got an answer,
+   * so a lone transient 429 mid-run can never trip the breaker; only a sustained outage can.
+   * Deliberately NOT seeded from already-persisted rows on resume: a continuation hop starts a fresh
+   * provider connection, and a run that yielded an hour ago may well be answerable now.
+   */
+  let providerFaultStreak = 0;
+  let lastProviderFault: ProviderFaultKind | null = null;
 
   /**
    * B0-757 — the CONCRETE model id this run actually executes on, resolved once here (not
@@ -475,7 +518,10 @@ export async function executeTestRun(
      * turn already dominates per-item wall-clock, so one more model call here is a small
      * marginal cost for a queue entry with an actual cause instead of a guess.
      */
-    if (!itemResult.passed && insertedItem) {
+    // B0-1014 — a provider-faulted item is skipped: its cause is already recorded in
+    // `provider_fault`, and the root-cause grader is itself a model call that would hit the same
+    // dead provider and log a second failure for the same incident.
+    if (!itemResult.passed && !itemResult.providerFault && insertedItem) {
       const payload = insertedItem.response_payload as { criteriaGrading?: CriteriaGradingOutcome } | null;
       await analyzeAndPersistFailureRootCause({
         testResultItemId: insertedItem.id,
@@ -490,6 +536,15 @@ export async function executeTestRun(
     }
 
     itemElapsedSumMs += itemResult.item.elapsed_ms;
+
+    // B0-1014 — streak bookkeeping before the progress write, so the abort check below sees it.
+    if (itemResult.providerFault) {
+      providerFaultStreak += 1;
+      lastProviderFault = itemResult.providerFault;
+    } else {
+      providerFaultStreak = 0;
+      lastProviderFault = null;
+    }
 
     if (itemResult.passed) {
       passedItems += 1;
@@ -517,6 +572,62 @@ export async function executeTestRun(
         elapsed_accumulated_ms: itemElapsedSumMs,
       },
     });
+
+    /**
+     * B0-1014 — circuit breaker. On 2026-09-14 the OpenAI org ran out of credits and the
+     * 00:00 UTC golden sweep still spent six minutes per set producing 0/106 and a letter grade
+     * computed off it. Once the provider has refused {@link PROVIDER_FAULT_ABORT_STREAK} items in a
+     * row, the remaining items cannot produce a measurement, so the run stops and closes `failed`
+     * rather than `completed_with_failures` — a terminal, NON-completed status, so every
+     * completed-run aggregate (dataset averages, trends, the sweep ledger) excludes it by the rules
+     * it already has. No continuation is scheduled and no report is generated: there is nothing to
+     * grade, and a report would only launder the outage into a score.
+     */
+    if (lastProviderFault && providerFaultStreak >= PROVIDER_FAULT_ABORT_STREAK) {
+      const abortReason = describeProviderFaultAbort({
+        faultKind: lastProviderFault,
+        streak: providerFaultStreak,
+        completedItems,
+        totalItems: items.length,
+      });
+
+      logError('test_run_aborted_provider_fault', {
+        testResultId: testResult.id,
+        testId: testResult.test_id,
+        providerFault: lastProviderFault,
+        streak: providerFaultStreak,
+        completedItems,
+        totalItems: items.length,
+        resolvedModel,
+        resolvedProvider,
+      });
+
+      await updateTestResult(testResult.id, {
+        status: 'failed',
+        passed_items: passedItems,
+        failed_items: failedItems,
+        elapsed_ms: itemElapsedSumMs,
+        completed_at: new Date().toISOString(),
+        summary: {
+          ...currentSummary,
+          completed_items: completedItems,
+          total_items: items.length,
+          progress_percent: progressPercent,
+          runner_state: RUNNER_STATE_ABORTED,
+          running_since: null,
+          elapsed_accumulated_ms: itemElapsedSumMs,
+          abort_reason: abortReason,
+          provider_fault: lastProviderFault,
+          provider_fault_streak: providerFaultStreak,
+        },
+      });
+
+      await updateTestRecord(testResult.test_id, {
+        status: 'ready',
+      });
+
+      return 'aborted';
+    }
   }
 
   completedItems = existingItemIds.size;

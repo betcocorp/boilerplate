@@ -1245,6 +1245,7 @@ export type Database = {
           max_similarity: number | null
           passed: boolean
           prompt_version: string | null
+          provider_fault: string | null
           response_payload: Json | null
           response_text: string | null
           routing_agreement: string | null
@@ -1283,6 +1284,7 @@ export type Database = {
           max_similarity?: number | null
           passed?: boolean
           prompt_version?: string | null
+          provider_fault?: string | null
           response_payload?: Json | null
           response_text?: string | null
           routing_agreement?: string | null
@@ -1321,6 +1323,7 @@ export type Database = {
           max_similarity?: number | null
           passed?: boolean
           prompt_version?: string | null
+          provider_fault?: string | null
           response_payload?: Json | null
           response_text?: string | null
           routing_agreement?: string | null

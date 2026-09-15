@@ -1776,34 +1776,42 @@ export async function listRoutingComparisonRows(): Promise<RoutingComparisonAggr
 const ROUTING_HEALTH_PAGE_SIZE = 500;
 
 /**
- * B0-911 — the two columns `computeRunRoutingHealth` (`~/lib/tests/run-health.ts`) needs, for ONE
- * run. Deliberately its own narrow query rather than reusing `listAllResultItemsByResultId`
- * (`select('*')`, which pulls every `response_payload` blob): the report and executive-summary
- * pages need this verdict and otherwise load no items at all, and dragging a run's worth of
- * payloads into those pages to read two scalars would be a real regression. The run DETAIL page
- * already has every row in memory and reduces them directly instead of calling this.
+ * B0-911 / B0-1014 — the per-item run-health columns, for ONE run. Deliberately its own narrow
+ * query rather than reusing `listAllResultItemsByResultId` (`select('*')`, which pulls every
+ * `response_payload` blob): the report and executive-summary pages need this verdict and otherwise
+ * load no items at all, and dragging a run's worth of payloads into those pages to read three
+ * scalars would be a real regression. The run DETAIL page already has every row in memory and
+ * reduces them directly instead of calling this.
+ *
+ * It now feeds TWO reducers off the same single read: `computeRunRoutingHealth`
+ * (`~/lib/tests/run-health.ts`), which reads the two routing columns, and the B0-1014 provider-fault
+ * roll-up, which reads `provider_fault`. Widening this query rather than adding a second one keeps
+ * three admin pages at one item query each.
  *
  * Paged for the same reason every other item query here is: PostgREST's `db-max-rows` is 1000.
  */
 export async function listRoutingHealthRowsByResultId(
   testResultId: string,
-): Promise<RunRoutingHealthInput[]> {
+): Promise<Array<RunRoutingHealthInput & { providerFault: string | null }>> {
   const supabase = getSupabaseServiceRoleClient();
-  return fetchAllPages<RunRoutingHealthInput>(ROUTING_HEALTH_PAGE_SIZE, (from, to) =>
-    supabase
-      .from('test_result_items')
-      .select('routing_confidence, routing_fallback_reason')
-      .eq('test_result_id', testResultId)
-      .order('row_index', { ascending: true })
-      .range(from, to)
-      .then((result) => {
-        const rows = assertNoError(result) ?? [];
-        return rows.map(
-          (row): RunRoutingHealthInput => ({
-            routingConfidence: row.routing_confidence,
-            routingFallbackReason: row.routing_fallback_reason,
-          }),
-        );
-      }),
+  return fetchAllPages<RunRoutingHealthInput & { providerFault: string | null }>(
+    ROUTING_HEALTH_PAGE_SIZE,
+    (from, to) =>
+      supabase
+        .from('test_result_items')
+        .select('routing_confidence, routing_fallback_reason, provider_fault')
+        .eq('test_result_id', testResultId)
+        .order('row_index', { ascending: true })
+        .range(from, to)
+        .then((result) => {
+          const rows = assertNoError(result) ?? [];
+          return rows.map(
+            (row): RunRoutingHealthInput & { providerFault: string | null } => ({
+              routingConfidence: row.routing_confidence,
+              routingFallbackReason: row.routing_fallback_reason,
+              providerFault: row.provider_fault,
+            }),
+          );
+        }),
   );
 }
