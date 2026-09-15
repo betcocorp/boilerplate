@@ -254,7 +254,8 @@ export const RUNNER_STATE_ABORTED = 'aborted';
  * - `yielded`   — B0-990: the wall-clock budget ran out with items left; the run is back to `queued`
  *                 with `runner_state: 'yielded'` and the caller must schedule a continuation hop.
  * - `aborted`   — B0-1014: {@link PROVIDER_FAULT_ABORT_STREAK} consecutive items were refused by the
- *                 model provider; the run is terminal (`failed`) and must NOT be continued or graded.
+ *                 model provider; the run is terminal (`technical_error`) and must NOT be continued
+ *                 or graded.
  * - `paused` / `cancelled` — a control action stopped the loop.
  * - `skipped`   — nothing to do (already terminal or paused on entry).
  */
@@ -281,7 +282,8 @@ export function describeProviderFaultAbort(input: {
     `Run aborted after ${input.streak} consecutive provider faults ` +
     `(${input.faultKind} — ${PROVIDER_FAULT_LABEL[input.faultKind]}). ` +
     'The model provider refused every request; this run measured nothing. ' +
-    `${input.completedItems} of ${input.totalItems} items ran before the run was stopped.`
+    `${input.completedItems} of ${input.totalItems} items ran before the remaining ` +
+    `${input.totalItems - input.completedItems} were cancelled and the run was marked technical_error.`
   );
 }
 
@@ -577,11 +579,13 @@ export async function executeTestRun(
      * B0-1014 — circuit breaker. On 2026-09-14 the OpenAI org ran out of credits and the
      * 00:00 UTC golden sweep still spent six minutes per set producing 0/106 and a letter grade
      * computed off it. Once the provider has refused {@link PROVIDER_FAULT_ABORT_STREAK} items in a
-     * row, the remaining items cannot produce a measurement, so the run stops and closes `failed`
-     * rather than `completed_with_failures` — a terminal, NON-completed status, so every
-     * completed-run aggregate (dataset averages, trends, the sweep ledger) excludes it by the rules
-     * it already has. No continuation is scheduled and no report is generated: there is nothing to
-     * grade, and a report would only launder the outage into a score.
+     * row, the remaining items cannot produce a measurement, so the run stops immediately — the
+     * items after the streak are never attempted — and closes `technical_error` rather than `failed`
+     * or `completed_with_failures`: a terminal, NON-completed status kept distinct from a real
+     * grading failure so a provider outage can never be read as a quality result. Every
+     * completed-run aggregate (dataset averages, trends, the sweep ledger) excludes it by the same
+     * rules that already exclude `failed`. No continuation is scheduled and no report is generated:
+     * there is nothing to grade, and a report would only launder the outage into a score.
      */
     if (lastProviderFault && providerFaultStreak >= PROVIDER_FAULT_ABORT_STREAK) {
       const abortReason = describeProviderFaultAbort({
@@ -603,7 +607,7 @@ export async function executeTestRun(
       });
 
       await updateTestResult(testResult.id, {
-        status: 'failed',
+        status: 'technical_error',
         passed_items: passedItems,
         failed_items: failedItems,
         elapsed_ms: itemElapsedSumMs,

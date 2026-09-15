@@ -155,16 +155,16 @@ describe('executeTestRun — provider-fault circuit breaker (B0-1014)', () => {
     vi.clearAllMocks();
   });
 
-  it('stops dispatching and closes the run as failed after five consecutive provider faults', async () => {
+  it('stops dispatching and closes the run as technical_error after three consecutive provider faults', async () => {
     setUpRun(Array.from({ length: 20 }, () => 'faulted' as const));
 
     await expect(executeTestRun(RUN_ID)).resolves.toBe('aborted');
 
-    // Exactly the streak ran — the other 15 items were never dispatched.
+    // Exactly the streak ran — the remaining 17 items were never dispatched.
     expect(runSingleTestItem).toHaveBeenCalledTimes(PROVIDER_FAULT_ABORT_STREAK);
 
     const closing = lastRunUpdate();
-    expect(closing.status).toBe('failed');
+    expect(closing.status).toBe('technical_error');
     expect(closing.summary?.runner_state).toBe(RUNNER_STATE_ABORTED);
     expect(closing.summary?.provider_fault).toBe('insufficient_quota');
     expect(closing.summary?.provider_fault_streak).toBe(PROVIDER_FAULT_ABORT_STREAK);
@@ -200,21 +200,11 @@ describe('executeTestRun — provider-fault circuit breaker (B0-1014)', () => {
   });
 
   it('resets the streak on any answered item, so scattered faults never abort', async () => {
-    // 4 faults, one real answer, 4 more faults — never five in a row.
-    setUpRun([
-      'faulted',
-      'faulted',
-      'faulted',
-      'faulted',
-      'passed',
-      'faulted',
-      'faulted',
-      'faulted',
-      'faulted',
-    ]);
+    // 2 faults, one real answer, 2 more faults — never three in a row.
+    setUpRun(['faulted', 'faulted', 'passed', 'faulted', 'faulted']);
 
     await expect(executeTestRun(RUN_ID)).resolves.toBe('completed');
-    expect(runSingleTestItem).toHaveBeenCalledTimes(9);
+    expect(runSingleTestItem).toHaveBeenCalledTimes(5);
     expect(lastRunUpdate().status).toBe('completed_with_failures');
   });
 

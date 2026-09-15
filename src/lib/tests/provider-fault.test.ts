@@ -221,7 +221,7 @@ describe('provider-fault contract', () => {
     expect(isProviderFaultKind('nonsense')).toBe(false);
   });
 
-  it('aborts after five consecutive faults', () => {
-    expect(PROVIDER_FAULT_ABORT_STREAK).toBe(5);
+  it('aborts after three consecutive faults', () => {
+    expect(PROVIDER_FAULT_ABORT_STREAK).toBe(3);
   });
 });

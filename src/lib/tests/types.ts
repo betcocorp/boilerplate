@@ -5,6 +5,7 @@ export const TERMINAL_RUN_STATUSES = [
   'completed',
   'completed_with_failures',
   'failed',
+  'technical_error',
   'cancelled',
 ] as const;
 

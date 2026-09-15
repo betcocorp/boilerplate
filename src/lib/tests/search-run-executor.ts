@@ -1,8 +1,14 @@
 import { APP_VERSION } from '~/lib/app-version';
+import { logError } from '~/lib/observability/logger';
 import { searchProductChunks, type RagSearchMatch } from '~/lib/rag/search';
 
 import { analyzeAndPersistFailureRootCause } from './failure-root-cause';
 import { mandatoryConceptPhrases } from './grading';
+import {
+  classifyProviderFault,
+  PROVIDER_FAULT_ABORT_STREAK,
+  type ProviderFaultKind,
+} from './provider-fault';
 import {
   computeAvgSimilarityForResult,
   countPassedAndFailedByResultId,
@@ -15,6 +21,7 @@ import {
   updateTestRecord,
   updateTestResult,
 } from './repository';
+import { describeProviderFaultAbort, RUNNER_STATE_ABORTED } from './run-executor';
 import { isTerminalRunStatus, type TestItemRecord } from './types';
 
 /**
@@ -82,6 +89,8 @@ export async function executeSearchRun(testResultId: string) {
   const resumedProgressPercent =
     totalItems > 0 ? Number(((completedItems / totalItems) * 100).toFixed(2)) : 0;
   let itemElapsedSumMs = await sumResultItemsElapsedMsByResultId(testResult.id);
+  let providerFaultStreak = 0;
+  let lastProviderFault: ProviderFaultKind | null = null;
 
   await updateTestResult(testResult.id, {
     status: 'running',
@@ -157,6 +166,7 @@ export async function executeSearchRun(testResultId: string) {
     const startedAt = Date.now();
     let responsePayload: Record<string, unknown>;
     let passed = false;
+    let providerFault: ProviderFaultKind | null = null;
 
     try {
       const result = await searchProductChunks({
@@ -184,7 +194,10 @@ export async function executeSearchRun(testResultId: string) {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Search failed.';
       passed = false;
-      responsePayload = { error: message, matchCount: 0 };
+      // B0-1014-parity — tell an infrastructure refusal (out of credits, bad key, rate limit)
+      // apart from a real retrieval failure, same as the chat-eval runner does in `runner.ts`.
+      providerFault = classifyProviderFault(error);
+      responsePayload = { error: message, matchCount: 0, providerFault };
     }
 
     const elapsedMs = Math.max(0, Date.now() - startedAt);
@@ -198,6 +211,7 @@ export async function executeSearchRun(testResultId: string) {
         elapsed_ms: elapsedMs,
         status: 'completed',
         passed,
+        provider_fault: providerFault,
         error_message: null,
         response_text: null,
         response_payload: JSON.parse(JSON.stringify(responsePayload)),
@@ -205,9 +219,20 @@ export async function executeSearchRun(testResultId: string) {
       },
     ]);
 
+    // B0-1014-parity — streak bookkeeping before the progress write, so the abort check below sees it.
+    if (providerFault) {
+      providerFaultStreak += 1;
+      lastProviderFault = providerFault;
+    } else {
+      providerFaultStreak = 0;
+      lastProviderFault = null;
+    }
+
     // B0-617 — same auto root-cause call as the chat-eval runner (run-executor.ts), so
     // search/retrieval-eval failures land in the failure queue with a generated cause too.
-    if (!passed && insertedItem) {
+    // B0-1014-parity — skipped for a provider-faulted item: the cause is already `provider_fault`,
+    // and the root-cause grader is itself a model call that would hit the same dead provider.
+    if (!passed && !providerFault && insertedItem) {
       const matches = Array.isArray((responsePayload as { matches?: unknown }).matches)
         ? ((responsePayload as { matches: RagSearchMatch[] }).matches)
         : [];
@@ -248,6 +273,57 @@ export async function executeSearchRun(testResultId: string) {
         elapsed_accumulated_ms: itemElapsedSumMs,
       },
     });
+
+    // B0-1014-parity — circuit breaker: once the provider has refused
+    // PROVIDER_FAULT_ABORT_STREAK searches in a row, the remaining items cannot produce a
+    // measurement, so the run stops immediately (the items after the streak are never attempted)
+    // and closes `technical_error` rather than `completed`.
+    if (lastProviderFault && providerFaultStreak >= PROVIDER_FAULT_ABORT_STREAK) {
+      const abortReason = describeProviderFaultAbort({
+        faultKind: lastProviderFault,
+        streak: providerFaultStreak,
+        completedItems,
+        totalItems: items.length,
+      });
+
+      logError('test_run_aborted_provider_fault', {
+        testResultId: testResult.id,
+        testId: testResult.test_id,
+        providerFault: lastProviderFault,
+        streak: providerFaultStreak,
+        completedItems,
+        totalItems: items.length,
+        runMode: 'search',
+      });
+
+      const abortSummary = asSummaryObject((await getTestResultById(testResult.id)).summary);
+      const { passed: abortPassed, failed: abortFailed } = await countPassedAndFailedByResultId(
+        testResult.id,
+      );
+
+      await updateTestResult(testResult.id, {
+        status: 'technical_error',
+        passed_items: abortPassed,
+        failed_items: abortFailed,
+        elapsed_ms: itemElapsedSumMs,
+        completed_at: new Date().toISOString(),
+        summary: {
+          ...abortSummary,
+          completed_items: completedItems,
+          total_items: items.length,
+          progress_percent: progressPercent,
+          runner_state: RUNNER_STATE_ABORTED,
+          running_since: null,
+          elapsed_accumulated_ms: itemElapsedSumMs,
+          abort_reason: abortReason,
+          provider_fault: lastProviderFault,
+          provider_fault_streak: providerFaultStreak,
+        },
+      });
+
+      await updateTestRecord(testResult.test_id, { status: 'ready' });
+      return;
+    }
   }
 
   const finalRun = await getTestResultById(testResult.id);

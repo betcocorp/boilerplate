@@ -32,6 +32,7 @@ function isTerminalStatus(status: string) {
     status === 'completed' ||
     status === 'completed_with_failures' ||
     status === 'failed' ||
+    status === 'technical_error' ||
     status === 'cancelled'
   );
 }
