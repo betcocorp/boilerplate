@@ -1295,7 +1295,7 @@ describe('planRegulatedClaimRedaction — sentence details are located before to
     expect(tokenFirst).toEqual(sentenceFirst);
   });
 
-  it('still blanks the token where it appears OUTSIDE the withheld sentence', () => {
+  it('B0-1000 — withholds the WHOLE sentence carrying a token claim OUTSIDE the sentence-shaped claim too, never leaving the figure printed', () => {
     const draft = `${C175D99E_DRAFT}\n\nNote: the longest contact time listed is 600 seconds.`;
     const result = plan(draft, [
       { category: 'contact_time', snippet: '600 seconds' },
@@ -1303,17 +1303,25 @@ describe('planRegulatedClaimRedaction — sentence details are located before to
     ]);
     expect(result.mode).toBe('sentence_redaction');
     if (result.mode === 'decline') return;
-    expect(result.redactedText).toContain('the longest contact time listed is (unable to verify).');
+    expect(result.redactedText).not.toContain('600 seconds');
+    expect(result.redactedText).not.toContain('(unable to verify)');
+    expect(result.redactedText).toContain(
+      '[one contact/dwell time withheld — not verifiable against a retrieved label]',
+    );
   });
 
-  it('never declines for a sentence snippet it cannot locate: token redaction still applies and the miss is recorded', () => {
+  it('never declines for a sentence snippet it cannot locate: the token claim is still withheld and the miss is recorded', () => {
     const result = plan(C175D99E_DRAFT, [
       { category: 'contact_time', snippet: '600 seconds' },
       { category: 'efficacy_claim', snippet: 'This sentence is not in the draft at all.' },
     ]);
     expect(result.mode).toBe('sentence_redaction');
     if (result.mode === 'decline') return;
-    expect(result.redactedText).toContain('ranging from 60 to (unable to verify).');
+    expect(result.redactedText).not.toContain('600 seconds');
+    expect(result.redactedText).not.toContain('kill claims');
+    expect(result.redactedText).toContain(
+      '[one contact/dwell time withheld — not verifiable against a retrieved label]',
+    );
     expect(result.unlocatedSnippets).toEqual(['This sentence is not in the draft at all.']);
   });
 
@@ -1399,7 +1407,7 @@ describe('evaluateRegulatedClaimGrounding — contact-time unit equivalence is c
     expect(result.ungroundedCategories).not.toContain('contact_time');
   });
 
-  it('never rewrites the answer text: a grounded "60 seconds" is served byte-identical and an ungrounded token elsewhere is blanked, not converted', () => {
+  it('B0-1000 — a grounded "60 seconds" is served byte-identical and an ungrounded token elsewhere is withheld by sentence, never converted or left printed', () => {
     const draft =
       'GE Fight Bac RTU kills SARS-CoV-2 with a 60 seconds contact time. Some bacteria need a 45 seconds contact time. Source: GE Fight Bac RTU product label [doc:doc-label-minutes].';
     const grounding = evaluateRegulatedClaimGrounding({ draftAnswer: draft, sources: [LABEL_MINUTES, FACTS_BLOCK_CURRENT] });
@@ -1420,8 +1428,17 @@ describe('evaluateRegulatedClaimGrounding — contact-time unit equivalence is c
     });
     expect(plan.mode).toBe('token_redaction');
     if (plan.mode === 'decline') return;
-    expect(plan.redactedText).toBe(draft.replace('45 seconds', '(unable to verify)'));
+    // The whole sentence carrying the ungrounded figure is withheld -- never a marker printed
+    // beside the raw number, and never the number left in place alone.
+    expect(plan.redactedText).toBe(
+      draft.replace(
+        'Some bacteria need a 45 seconds contact time.',
+        '[one contact/dwell time withheld — not verifiable against a retrieved label]',
+      ),
+    );
     expect(plan.redactedText).toContain('60 seconds contact time');
+    expect(plan.redactedText).not.toContain('45 seconds');
+    expect(plan.redactedText).not.toContain('(unable to verify)');
     expect(plan.redactedText).not.toContain('1 minute');
   });
 });

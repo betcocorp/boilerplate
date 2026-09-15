@@ -82,8 +82,15 @@ export function countSubstantiveContentChars(text: string): number {
   return text.replace(/[^A-Za-z0-9]/g, '').length;
 }
 
-/** How the token-redaction footer describes what the reader will see in place of the value. */
-const TOKEN_REDACTION_MARKING = `"${REGULATED_CLAIM_UNVERIFIED_TOKEN_MARKER}"`;
+/**
+ * B0-1000 — both redaction footers now describe the SAME marking style: `planRegulatedClaimRedaction`
+ * withholds a token-shaped claim (EPA/DIN number, dilution ratio, contact time, CAS number) at
+ * sentence granularity exactly like a compatibility/efficacy sentence, never by splicing
+ * `REGULATED_CLAIM_UNVERIFIED_TOKEN_MARKER` in place of just the number — that literal marker string
+ * is kept only so `stripRegulatedClaimRedactionArtifacts` can still clean up historical answers that
+ * used it.
+ */
+const TOKEN_REDACTION_MARKING = '"withheld" in brackets';
 /** How the sentence-redaction footer describes it (B0-871 replaces a whole sentence, not a token). */
 const SENTENCE_REDACTION_MARKING = '"withheld" in brackets';
 
@@ -132,8 +139,10 @@ export const REGULATED_CLAIM_GOVERNING_RULES: Record<RegulatedClaimCategory, str
   // calls differently, and a hardcoded national hotline would be a region inference.
   first_aid:
     "First-aid direction comes from Section 4 of the product's own current SDS; for any exposure, contact your local poison control centre or emergency services immediately.",
+  // B0-1012 — states the guardrail explicitly both directions: a listed surface is approved, and
+  // (the mandatory caveat golden answers require) an unlisted one is never an approved use.
   compatibility:
-    "The approved surfaces are the ones listed on the product's own current label, and a surface that is not listed there is not an approved use.",
+    "The approved surfaces are the ones listed on the product's own current label; if a surface isn't listed there, it is not an approved use.",
   efficacy_claim:
     "A product carries only the organism claims printed on its own current EPA-registered label; claims never transfer between products, formulations, or name variants.",
 };

@@ -1505,9 +1505,13 @@ describe('regulated-claim guardrail partial redaction (B0-829)', () => {
     expect(out.answerProvenance).toBe('regulated_claim_partial_redaction');
     // The verified dilution content survives verbatim.
     expect(out.answerText).toContain('Dilute at 2 oz per gallon of water.');
-    // The ungrounded snippet is gone, replaced by the literal redaction marker.
+    // B0-1000 — the WHOLE sentence carrying the ungrounded figure is withheld; the number is never
+    // left printed, whether alone or next to a marker.
     expect(out.answerText).not.toContain('60 second contact time');
-    expect(out.answerText).toContain('(unable to verify)');
+    expect(out.answerText).not.toContain('(unable to verify)');
+    expect(out.answerText).toContain(
+      '[one contact/dwell time withheld — not verifiable against a retrieved label]',
+    );
     // Not the full-decline copy.
     expect(out.answerText).not.toContain("I can't verify the");
     expect(out.validation.approved).toBe(false);

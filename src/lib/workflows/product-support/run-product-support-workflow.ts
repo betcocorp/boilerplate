@@ -19,8 +19,8 @@ import {
   countSubstantiveContentChars,
   mergeRepeatedRegulatedClaimWithheldMarkers,
   REGULATED_CLAIM_CATEGORY_LABELS,
+  REGULATED_CLAIM_GOVERNING_RULES,
   REGULATED_CLAIM_REDACTION_MIN_REMAINING_CHARS,
-  REGULATED_CLAIM_UNVERIFIED_TOKEN_MARKER,
   regulatedClaimWithheldMarker,
   stripRegulatedClaimWithheldMarkers,
 } from '~/lib/workflows/product-support/regulated-claim-redaction-copy';
@@ -1860,24 +1860,46 @@ export function knowledgeKindSourcesDominate(
 }
 
 /**
- * B0-871 — re-derive the WHOLE sentence a (possibly 240-char-truncated) snippet came from, so the
- * redaction removes the full sentence and never leaves its tail behind. Uses the same sentence
- * boundary `validator.ts`'s `splitIntoSentences` uses — B0-971: built from the shared
+ * B0-871 — re-derive the WHOLE sentence a snippet came from, so the redaction removes the full
+ * sentence and never leaves its tail (or, for a TOKEN-shaped snippet, its head) behind. Uses the
+ * same sentence boundary `validator.ts`'s `splitIntoSentences` uses — B0-971: built from the shared
  * `REGULATED_CLAIM_SENTENCE_BOUNDARY_SOURCE` (end punctuation + whitespace + capital/digit, with
  * the `Reg.`/`No.`/`oz.`/… abbreviation guard) plus a newline, so the two can never disagree about
- * where a sentence ends. The snippet is located as a LITERAL substring of `text`; `null` when it is
- * not there (a sentence that cannot be found verbatim cannot be removed verbatim, and rephrasing is
- * not an option — see `planRegulatedClaimRedaction` for what the caller does then).
+ * where a sentence ends.
+ *
+ * B0-1000 — scans BACKWARD for the sentence start too, not just forward for its end. A
+ * sentence-shaped snippet (`s.slice(0, 240)`) already begins at its sentence's own start, so this
+ * is a no-op for it; a TOKEN-shaped snippet (an EPA number, dilution ratio, contact time, CAS
+ * number) sits somewhere INSIDE a sentence, and without the backward scan its containing sentence
+ * could never be located — the caller could only splice the number itself, leaving it printed right
+ * next to whatever replaced it.
+ *
+ * The snippet is located as a LITERAL substring of `text`, searched from `fromIndex` (so a caller
+ * can walk every occurrence when the same snippet text appears more than once); `null` when no
+ * further occurrence exists (a sentence that cannot be found verbatim cannot be removed verbatim,
+ * and rephrasing is not an option — see `planRegulatedClaimRedaction` for what the caller does then).
  */
-export function expandRegulatedClaimSnippetToSentence(text: string, snippet: string): string | null {
-  const start = text.indexOf(snippet);
+export function expandRegulatedClaimSnippetToSentence(
+  text: string,
+  snippet: string,
+  fromIndex = 0,
+): string | null {
+  const start = text.indexOf(snippet, fromIndex);
   if (start < 0 || snippet.length === 0) return null;
-  if (snippet.length < REGULATED_CLAIM_SENTENCE_SNIPPET_CAP) return snippet;
-  const boundary = new RegExp(`${REGULATED_CLAIM_SENTENCE_BOUNDARY_SOURCE}|\\n`, 'g');
-  boundary.lastIndex = start + snippet.length;
-  const match = boundary.exec(text);
-  const end = match ? match.index : text.length;
-  return text.slice(start, end).trimEnd();
+  const boundarySource = `${REGULATED_CLAIM_SENTENCE_BOUNDARY_SOURCE}|\\n`;
+  const backward = new RegExp(boundarySource, 'g');
+  let sentenceStart = 0;
+  let boundaryMatch: RegExpExecArray | null;
+  while ((boundaryMatch = backward.exec(text)) !== null) {
+    const boundaryEnd = boundaryMatch.index + boundaryMatch[0].length;
+    if (boundaryEnd > start) break;
+    sentenceStart = boundaryEnd;
+  }
+  const forward = new RegExp(boundarySource, 'g');
+  forward.lastIndex = start + snippet.length;
+  const endMatch = forward.exec(text);
+  const end = endMatch ? endMatch.index : text.length;
+  return text.slice(sentenceStart, end).trim();
 }
 
 export type RegulatedClaimRedactionPlan =
@@ -1912,13 +1934,15 @@ export type RegulatedClaimRedactionPlan =
  *
  * Policy, in evaluation order:
  * 1. Any ungrounded `hazard` or `first_aid` ⇒ decline. Always.
- * 2. Every ungrounded category token-shaped (B0-829) ⇒ blank each snippet with `(unable to verify)`,
- *    provided at least one OTHER detected category on the draft was grounded; otherwise decline.
+ * 2. Every ungrounded category token-shaped (B0-829) and nothing else on the draft grounded ⇒
+ *    decline (`nothing_grounded_to_keep`); otherwise withhold each token-shaped claim (mode
+ *    `token_redaction`) — see B0-1000 below for HOW.
  * 3. Otherwise (some ungrounded `compatibility` / `efficacy_claim`, B0-871) ⇒ withhold each such
- *    sentence, ONLY when the question is not product-usage-specific — AND substantive content
- *    remains afterwards (≥ `REGULATED_CLAIM_REDACTION_MIN_REMAINING_CHARS` letters/digits outside
- *    the markers). Token-shaped snippets ungrounded on the same draft are blanked as in (2). A
- *    snippet that is not a verbatim substring of the draft ⇒ decline (never rephrase).
+ *    sentence too (mode `sentence_redaction`), ONLY when the question is not product-usage-specific.
+ *    A snippet that is not a verbatim substring of the draft ⇒ decline (never rephrase); if NOTHING
+ *    could be redacted at all ⇒ decline (`snippet_not_found_in_draft`); if what remains after
+ *    redaction is too thin (< `REGULATED_CLAIM_REDACTION_MIN_REMAINING_CHARS` letters/digits) ⇒
+ *    decline (`nothing_substantive_remains`).
  *
  *    B0-947 — "product-usage-specific" needs ALL THREE of: a locked product line, retrieval that is
  *    NOT knowledge-kind dominated, and a message that actually READS like a usage/safety question
@@ -1929,8 +1953,25 @@ export type RegulatedClaimRedactionPlan =
  *    identity answer (golden run 61e80e45, row 2, scored 0.00). The question-shape term is what the
  *    B0-871 doc text always described and the implementation never checked.
  *
- * Every replacement is `replaceAll` of a LITERAL substring; nothing in the removed text is
- * paraphrased, rounded or re-stated in the output.
+ * B0-1000 — EVERY ungrounded detail, token-shaped or sentence-shaped, is withheld at SENTENCE
+ * granularity: the unverifiable figure is never printed, whether alone or "(marked …)" next to it —
+ * the whole sentence it appears in is replaced by a bracketed `[… withheld — not verifiable against
+ * a retrieved label]` marker (`regulatedClaimWithheldMarker`). Previously a token-shaped category
+ * (EPA/DIN number, dilution ratio, contact time, CAS number) spliced `(unable to verify)` in place
+ * of just the numeric snippet — leaving it printed next to a marker whenever a DIFFERENT, grounded
+ * occurrence of the same claim category survived elsewhere in the draft (confirmed live on golden
+ * items 220636ba/4291663f/866bcea6/6d2a7997: a verified "10 minutes" contact time stood right next
+ * to another sentence's "(unable to verify)" for the same category). Sentence-shaped and
+ * token-shaped details are processed in the SAME TWO PASSES as before — every
+ * `REDACTABLE_SENTENCE_REGULATED_CATEGORIES` detail first, then every `TOKEN_SHAPED_REGULATED_CATEGORIES`
+ * detail — so a sentence carrying both an ungrounded compatibility/efficacy claim AND an ungrounded
+ * token is withheld once, under the sentence-shaped category's marker (order-independent regardless
+ * of `grounding.ungroundedDetails`'s own order). A snippet whose containing sentence cannot be
+ * re-located verbatim (or that was already consumed by a wider removal) is simply left as an
+ * `unlocatedSnippets` entry — never invented, never left printed.
+ *
+ * Every replacement is a literal substring swap; nothing in the removed text is paraphrased,
+ * rounded or re-stated in the output.
  *
  * B0-888 — the "consult the label or SDS" disclaimer appended below at this function's call site
  * is safe to append UNCONDITIONALLY whenever this planner returns `token_redaction` or
@@ -1961,6 +2002,7 @@ export function planRegulatedClaimRedaction(input: {
   }
 
   const allUngroundedAreTokenShaped = ungrounded.every((c) => TOKEN_SHAPED_REGULATED_CATEGORIES.has(c));
+
   if (allUngroundedAreTokenShaped) {
     // B0-829 — something in the draft WAS grounded and is worth preserving; otherwise there is
     // nothing left to salvage and the full decline is the only sensible outcome.
@@ -1970,66 +2012,71 @@ export function planRegulatedClaimRedaction(input: {
     if (!hasGroundedCategoryWorthKeeping) {
       return { mode: 'decline', reason: 'nothing_grounded_to_keep' };
     }
-    let redactedText = input.draftAnswer;
-    for (const detail of grounding.ungroundedDetails) {
-      redactedText = redactedText.replaceAll(
-        detail.snippet,
-        REGULATED_CLAIM_UNVERIFIED_TOKEN_MARKER,
+  } else {
+    // B0-871 — sentence redaction is for KNOWLEDGE answers only. A USAGE question about an
+    // identified product whose retrieval is label/SDS-led keeps the full decline: there, a
+    // compatibility or efficacy sentence is a claim about that product's own label.
+    // B0-947 — the question-shape term; without it an identity/catalog question qualified too.
+    // `hasUsageSafetyQuestionShape` alone is too narrow here: it is B0-872's predicate, tuned for
+    // "how do I use / is it safe", and it does NOT match "is X compatible with bleach", "can I mix
+    // X with bleach", or "what surfaces is X approved for" — all of which ask about this product's
+    // own label claims and must keep the full decline, not lose one sentence to a redaction.
+    const asksAboutThisProductsLabelClaims = (userMessage: string) =>
+      /\b(compatible|compatibility|mix|mixed|mixing|approved for|approved surfaces|what surfaces|rated for|listed for)\b/.test(
+        userMessage.toLowerCase(),
       );
+    const productUsageSpecific =
+      Boolean(input.productLineLock?.lockedProductLineKey) &&
+      !knowledgeKindSourcesDominate(input.sources) &&
+      (hasUsageSafetyQuestionShape(input.userMessage) ||
+        asksAboutThisProductsLabelClaims(input.userMessage));
+    if (productUsageSpecific) {
+      return { mode: 'decline', reason: 'product_usage_specific_question' };
     }
-    return { mode: 'token_redaction', redactedText, withheldCategories: orderedWithheldCategories };
-  }
-
-  // B0-871 — sentence redaction is for KNOWLEDGE answers only. A USAGE question about an
-  // identified product whose retrieval is label/SDS-led keeps the full decline: there, a
-  // compatibility or efficacy sentence is a claim about that product's own label.
-  // B0-947 — the question-shape term; without it an identity/catalog question qualified too.
-  // `hasUsageSafetyQuestionShape` alone is too narrow here: it is B0-872's predicate, tuned for
-  // "how do I use / is it safe", and it does NOT match "is X compatible with bleach", "can I mix
-  // X with bleach", or "what surfaces is X approved for" — all of which ask about this product's
-  // own label claims and must keep the full decline, not lose one sentence to a redaction.
-  const asksAboutThisProductsLabelClaims = (userMessage: string) =>
-    /\b(compatible|compatibility|mix|mixed|mixing|approved for|approved surfaces|what surfaces|rated for|listed for)\b/.test(
-      userMessage.toLowerCase(),
-    );
-  const productUsageSpecific =
-    Boolean(input.productLineLock?.lockedProductLineKey) &&
-    !knowledgeKindSourcesDominate(input.sources) &&
-    (hasUsageSafetyQuestionShape(input.userMessage) ||
-      asksAboutThisProductsLabelClaims(input.userMessage));
-  if (productUsageSpecific) {
-    return { mode: 'decline', reason: 'product_usage_specific_question' };
   }
 
   /**
-   * B0-985 — sentence-shaped details FIRST, each located against the ORIGINAL draft, then the
-   * token-shaped details. The previous order blanked the tokens first, so a sentence that was both
-   * an ungrounded efficacy claim AND contained an ungrounded contact time ("… ranging from 60 to
-   * 600 seconds") could never be found again — its snippet still said "600 seconds", the text no
-   * longer did — and the whole answer hard-declined (`snippet_not_found_in_draft` on c175d99e, run
-   * 63d4dba3). A snippet that still cannot be located is logged and skipped, never escalated to a
-   * decline: the token redaction below still applies, and the miss is recorded on the plan.
+   * B0-985 / B0-1000 — sentence-shaped details FIRST, each located against the ORIGINAL draft, then
+   * token-shaped details, so a sentence carrying both never orphans one category's snippet after
+   * the other category already removed it. Each detail's snippet may occur more than once in the
+   * draft (`checkTokenCategory` in `validator.ts` dedupes identical literal token text into one
+   * detail even when it appears in several sentences), so every occurrence is walked and its own
+   * containing sentence withheld — not just the first. A sentence already withheld for one category
+   * (or one occurrence) is left alone the next time it is reached.
    */
   let redactedText = input.draftAnswer;
-  const removedSentences: string[] = [];
+  const removedSentences = new Set<string>();
   const unlocatedSnippets: string[] = [];
-  for (const detail of grounding.ungroundedDetails) {
-    if (TOKEN_SHAPED_REGULATED_CATEGORIES.has(detail.category)) continue;
-    // One sentence can be reported under two categories (compatibility AND efficacy_claim on
-    // P#1); the first pass already withheld it, so a repeat is not a missing snippet.
-    if (removedSentences.some((removed) => removed.startsWith(detail.snippet))) continue;
-    const sentence = expandRegulatedClaimSnippetToSentence(input.draftAnswer, detail.snippet);
-    if (!sentence || !redactedText.includes(sentence)) {
-      unlocatedSnippets.push(detail.snippet);
-      continue;
+
+  const withholdPass = (matchesCategory: (category: RegulatedClaimCategory) => boolean) => {
+    for (const detail of grounding.ungroundedDetails) {
+      if (!matchesCategory(detail.category)) continue;
+      let matchedAnyOccurrence = false;
+      let searchFrom = 0;
+      for (;;) {
+        const occurrenceIndex = input.draftAnswer.indexOf(detail.snippet, searchFrom);
+        if (occurrenceIndex < 0) break;
+        matchedAnyOccurrence = true;
+        searchFrom = occurrenceIndex + detail.snippet.length;
+        const sentence = expandRegulatedClaimSnippetToSentence(
+          input.draftAnswer,
+          detail.snippet,
+          occurrenceIndex,
+        );
+        if (!sentence || removedSentences.has(sentence) || !redactedText.includes(sentence)) {
+          continue;
+        }
+        removedSentences.add(sentence);
+        redactedText = redactedText.replaceAll(sentence, regulatedClaimWithheldMarker(detail.category));
+      }
+      if (!matchedAnyOccurrence) {
+        unlocatedSnippets.push(detail.snippet);
+      }
     }
-    removedSentences.push(sentence);
-    redactedText = redactedText.replaceAll(sentence, regulatedClaimWithheldMarker(detail.category));
-  }
-  for (const detail of grounding.ungroundedDetails) {
-    if (!TOKEN_SHAPED_REGULATED_CATEGORIES.has(detail.category)) continue;
-    redactedText = redactedText.replaceAll(detail.snippet, REGULATED_CLAIM_UNVERIFIED_TOKEN_MARKER);
-  }
+  };
+  withholdPass((category) => REDACTABLE_SENTENCE_REGULATED_CATEGORIES.has(category));
+  withholdPass((category) => TOKEN_SHAPED_REGULATED_CATEGORIES.has(category));
+
   if (redactedText === input.draftAnswer) {
     // Nothing at all could be located, so nothing was redacted; serving the untouched draft under a
     // "withheld" footer would misstate what was done. Not reachable when the details came from
@@ -2038,7 +2085,7 @@ export function planRegulatedClaimRedaction(input: {
   }
   if (unlocatedSnippets.length > 0) {
     console.warn(
-      `[regulated-claim-guardrail] ${unlocatedSnippets.length} sentence snippet(s) not found verbatim in the draft; token redaction applied, sentence(s) left in place`,
+      `[regulated-claim-guardrail] ${unlocatedSnippets.length} snippet(s) not found verbatim in the draft; other redaction(s) still applied`,
       { snippets: unlocatedSnippets },
     );
   }
@@ -2047,15 +2094,21 @@ export function planRegulatedClaimRedaction(input: {
   // one pluralised marker ("[two efficacy claims withheld …]").
   redactedText = mergeRepeatedRegulatedClaimWithheldMarkers(redactedText);
 
-  const remaining = stripRegulatedClaimWithheldMarkers(
-    redactedText.replaceAll(REGULATED_CLAIM_UNVERIFIED_TOKEN_MARKER, ' '),
-  );
-  if (countSubstantiveContentChars(remaining) < REGULATED_CLAIM_REDACTION_MIN_REMAINING_CHARS) {
-    return { mode: 'decline', reason: 'nothing_substantive_remains' };
+  // B0-1000 — the minimum-remaining-content bar applies to `sentence_redaction` only, unchanged
+  // from before. A PURE token-shaped case is already gated on `hasGroundedCategoryWorthKeeping`
+  // above (something else on the draft WAS grounded and is worth keeping); withholding just the
+  // one sentence that made an ungrounded numeric claim should not ALSO have to clear a character
+  // count, or a short-but-otherwise-fine answer (e.g. a two-sentence dilution + contact-time
+  // answer where only the contact time was unverifiable) would decline outright over one sentence.
+  if (!allUngroundedAreTokenShaped) {
+    const remaining = stripRegulatedClaimWithheldMarkers(redactedText);
+    if (countSubstantiveContentChars(remaining) < REGULATED_CLAIM_REDACTION_MIN_REMAINING_CHARS) {
+      return { mode: 'decline', reason: 'nothing_substantive_remains' };
+    }
   }
 
   return {
-    mode: 'sentence_redaction',
+    mode: allUngroundedAreTokenShaped ? 'token_redaction' : 'sentence_redaction',
     redactedText,
     withheldCategories: orderedWithheldCategories,
     ...(unlocatedSnippets.length > 0 ? { unlocatedSnippets } : {}),
@@ -5888,18 +5941,32 @@ export async function runProductSupportWorkflow(input: {
         // The plan was decided alongside the gate record above (same rejection, same turn); a
         // kill-switch bypass never reaches this branch because `validation.approved` stays true.
         const plan = regulatedClaimRedactionPlan;
+        /**
+         * B0-1012 — a partial redaction that withheld a `compatibility` sentence carries the same
+         * "unlisted surface = not an approved use" governing rule the full decline already states
+         * (`REGULATED_CLAIM_GOVERNING_RULES.compatibility`), so the caveat is not lost just because
+         * some other part of the answer was grounded and kept. This does not reach a COMPLETELY
+         * clean, non-redacted compatibility answer (nothing failed this guardrail to trigger a
+         * footer at all) — that surface always carrying the caveat is a system-prompt concern
+         * (`product-support-prompts.ts`), out of scope here; see the ticket write-up.
+         */
+        const compatibilityCaveat =
+          plan && plan.mode !== 'decline' && plan.withheldCategories.includes('compatibility')
+            ? REGULATED_CLAIM_GOVERNING_RULES.compatibility
+            : null;
 
         if (plan && plan.mode === 'token_redaction') {
           /**
-           * B0-829 — partial redaction: keep the grounded content (e.g. a fully-verified dilution
-           * answer) and surgically blank out only the ungrounded token(s), instead of discarding
-           * the whole draft. `detail.snippet` is a LITERAL substring of `draftAnswer` (never a
-           * regex), so every verbatim occurrence is replaced -- never reformatted or invented.
+           * B0-1000 — partial redaction: keep the grounded content (e.g. a fully-verified dilution
+           * answer) and withhold only the ungrounded token-shaped claim(s), at sentence granularity
+           * (see `planRegulatedClaimRedaction`), instead of discarding the whole draft. Nothing here
+           * reformats or invents; the withheld sentence(s) are removed verbatim.
            */
           finalText = [
             plan.redactedText,
             '',
             buildRegulatedClaimTokenRedactionFooter(flagged),
+            ...(compatibilityCaveat ? ['', compatibilityCaveat] : []),
           ].join('\n');
           answerProvenance = 'regulated_claim_partial_redaction';
         } else if (plan && plan.mode === 'sentence_redaction') {
@@ -5917,6 +5984,7 @@ export async function runProductSupportWorkflow(input: {
             plan.redactedText,
             '',
             buildRegulatedClaimSentenceRedactionFooter(flagged),
+            ...(compatibilityCaveat ? ['', compatibilityCaveat] : []),
           ].join('\n');
           answerProvenance = 'regulated_claim_partial_redaction';
         } else {
