@@ -1,3 +1,25 @@
+## [6.6.1](https://github.com/betcocorp/bex2.0/compare/v6.6.0...v6.6.1) (2026-09-15)
+
+
+### Bug Fixes
+
+* **B0-1000:** withhold whole sentences instead of marking unverifiable regulated numbers inline ([103a529](https://github.com/betcocorp/bex2.0/commit/103a529f2d539fbe891dd877a3f971b107834375))
+* **B0-1001:** run an organism-first efficacy lookup as a proper batch query ([9fe6348](https://github.com/betcocorp/bex2.0/commit/9fe63481b983d4672f137b920430eb68a4a5903c))
+* **B0-1002:** add a deterministic backstop for the disinfectant dwell rule on dilution-system answers ([ce4b79c](https://github.com/betcocorp/bex2.0/commit/ce4b79c83862e4de77d0aebf6b40502f2e156f86))
+* **B0-1003:** surface SKU and label-documented floor use on category product lists ([5f518c4](https://github.com/betcocorp/bex2.0/commit/5f518c470385210344a1887f0e4ed6b2adaf92d8))
+* **B0-1004:** require labeled dilution range when listing wood floor strippers ([c8e390b](https://github.com/betcocorp/bex2.0/commit/c8e390b0a7f688a108ecfccbf521a55ce839f616))
+* **B0-1005:** source VCT top-scrub/strip cadence from the knowledge document, not a generic rule ([aa01a4c](https://github.com/betcocorp/bex2.0/commit/aa01a4c139b45e13af2f11c90d809d85fd9d9e1d))
+* **B0-1006:** state the top-down drying rationale for the extra 15 minutes between VCT coats ([491e92b](https://github.com/betcocorp/bex2.0/commit/491e92b2f2f1b069f63b663a94c0cef257535622))
+* **B0-1007:** require an SDS retrieval check before claiming no storage guidance exists ([69cb1ed](https://github.com/betcocorp/bex2.0/commit/69cb1ed8b3d5aa6ac6a1e59cbee0886102a0f2e1))
+* **B0-1008:** lead state-registration answers with Betco's registration posture ([528434b](https://github.com/betcocorp/bex2.0/commit/528434bf5a187b4c322fcbdb1e32b90264b7eedc))
+* **B0-1009:** stop framing gym-floor recoat frequency as a fixed annual rule ([bb852a2](https://github.com/betcocorp/bex2.0/commit/bb852a276f59d141f7a183c6d55e019d9dcc6727))
+* **B0-1010:** require a do-not-switch-tools caution on T-bar vs. roller answers ([67783b2](https://github.com/betcocorp/bex2.0/commit/67783b2df94a3014f90ce10fc18030d68aee9e44))
+* **B0-1011:** require keeping chemically sensitive staff off restroom cleaning ([ec18a3f](https://github.com/betcocorp/bex2.0/commit/ec18a3ff25c03087fa0622ea32bb2ec9de2f5925))
+* **B0-996:** fix type error blocking next build on admin/tests page ([0520c46](https://github.com/betcocorp/bex2.0/commit/0520c46696e19d3aa67c65f1e2f87a03034f19c1))
+* **B0-997:** stop forcing verbatim label grounding on generic knowledge answers ([26b8ba2](https://github.com/betcocorp/bex2.0/commit/26b8ba28266858dabf3366c6bb532ebcce4a46b2))
+* **B0-998:** recognize water-vs-solvent cleaner comparisons as generic type-level statements ([743b532](https://github.com/betcocorp/bex2.0/commit/743b53200070229398ff59766da8eb2f1fea7a8b))
+* **B0-999:** stop a between-coat dry time from satisfying the walk-on reopen backstop ([e9eaa1c](https://github.com/betcocorp/bex2.0/commit/e9eaa1cc04dae1188c27d5d0ecf1cadfda9d4f8a))
+
 # [6.6.0](https://github.com/betcocorp/bex2.0/compare/v6.5.0...v6.6.0) (2026-09-15)
 
 
