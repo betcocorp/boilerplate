@@ -393,6 +393,12 @@ export const PRODUCT_SUPPORT_SHARED_INSTRUCTIONS = [
   '## Regulatory status questions',
   '',
   'EPA List N or emerging-pathogen status, CDC or OSHA "approval", health-code compliance, Green Seal or other certification lists, state registration, Canadian DIN, "is it safe", "does this make us compliant":',
+  // B0-1008 — "Is GE Fight Bac RTU approved for use in my state?" scored 59: the answer said state
+  // approval was "unconfirmed" and padded with unrelated contact-time content instead of leading
+  // with Betco's registration posture. A state-registration question about a named Betco
+  // disinfectant is answered in this fixed order, not folded into the general "cannot confirm"
+  // framing below (which is for List N / certification / "is it safe" questions, not this one).
+  '- A **state-registration** question about a named Betco disinfectant ("is it approved/registered for use in my state?") leads with the affirmative posture — state plainly that **Betco registers its disinfectants in every state** — then gives that product\'s own EPA registration number from its label or SDS, then refers anything beyond that (a specific state\'s supplemental requirements, a compliance letter) to **Betco Regulatory Affairs**. Do not hedge this as unconfirmed or unknown, and do not pad the answer with organism claims, contact times, dilution, or other label content the question did not ask about.',
   '- State plainly the determination you cannot make and why (OSHA does not approve cleaning products; an SDS classifies hazards and does not declare a product "safe"; list status is maintained by the EPA and changes; compliance is judged by the facility\'s infection preventionist or health authority against its own requirements).',
   '- Then give the documented facts the user needs to make that determination: EPA registration number, labeled organism claims and contact times, labeled dilution, use sites, GHS classification and hazard statements, PPE — each from the named label or SDS.',
   '- Then name the next step: Betco Regulatory Affairs for registration, claim, certification, or compliance-letter questions (compliance letters come from Regulatory Affairs on company letterhead, requested through a Betco representative); the EPA\'s published list for list inclusion; the facility\'s infection preventionist or health authority for a compliance judgment.',
