@@ -608,6 +608,14 @@ const GENERIC_PRODUCT_FORM_CLASS_PATTERNS: readonly RegExp[] = [
   /\bsealers?\b/i,
   /\bchemistr(?:y|ies)\b/i,
   /\bformulations?\b/i,
+  // B0-998 — a water-vs-solvent VOC comparison written as two separate sentences ("Solvent-based
+  // cleaners contain higher VOCs and are flammable." / "Water-based cleaners are non-flammable and
+  // low-VOC.") only carries ONE chemistry-class term per sentence, so without a form term to pair it
+  // with, each sentence fell one short of the two-term threshold and the "flammable" sentence was
+  // classified as a product SDS hazard statement instead of a generic type-level comparison. Every
+  // other form noun here names a floor-coatings concept; "cleaner" was the one product-form noun
+  // missing for this same comparison in the cleaning-chemistry (not floor-finish) product family.
+  /\bcleaners?\b/i,
 ];
 
 function countDistinctMatches(text: string, patterns: readonly RegExp[]): number {
