@@ -1,3 +1,20 @@
+# [6.6.0](https://github.com/betcocorp/bex2.0/compare/v6.5.0...v6.6.0) (2026-09-15)
+
+
+### Bug Fixes
+
+* **B0-1014:** stop the sweep ledger reporting a provider outage as a successful sweep ([2131b11](https://github.com/betcocorp/bex2.0/commit/2131b1113f612b5f424d6b3da373d933335fd8d1))
+* **B0-1014:** surface the sweep failure reason on /admin/scheduled ([9dc40c3](https://github.com/betcocorp/bex2.0/commit/9dc40c32a91fa04846c2aae4d9448a01d76402c9))
+
+
+### Features
+
+* **B0-1014:** classify provider faults on eval items and abort a run the provider refuses ([7caa316](https://github.com/betcocorp/bex2.0/commit/7caa316ab98886b50e5462d5d008712a67e1ad09))
+* **B0-1014:** warn above the grade when the provider refused a run ([5164bd8](https://github.com/betcocorp/bex2.0/commit/5164bd8cb6b6cdb7dd9e1379b29e9428cb65dd10))
+* **B0-1015:** add fails-over-time trend chart to /admin/tests ([4e11dac](https://github.com/betcocorp/bex2.0/commit/4e11dac0a3ac6b09c5b97c955a5be3839ffd2b22))
+* **B0-1016:** rearranged sidebar to support toggling between semantic and guid search and some of ui supporting those filters ([185a3ea](https://github.com/betcocorp/bex2.0/commit/185a3eafb1ce74dfb289797ef302bf028e5abc2e))
+* **B0-1017:** add strict GUID lookup mode to /admin/products/rag ([907a457](https://github.com/betcocorp/bex2.0/commit/907a457313b50ff33f696a8fa79cea1a07e9d8c4))
+
 # [6.5.0](https://github.com/betcocorp/bex2.0/compare/v6.4.0...v6.5.0) (2026-09-14)
 
 
