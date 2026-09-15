@@ -3,7 +3,11 @@
 import { useMemo, useState } from 'react';
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from 'recharts';
 
-import { ChartContainer, ChartTooltip, type ChartConfig } from '~/components/ui/chart';
+import {
+  ChartContainer,
+  ChartTooltip,
+  type ChartConfig,
+} from '~/components/ui/chart';
 import {
   formatFailChange,
   type ReportFailPoint,
@@ -96,7 +100,9 @@ function ReportFailTooltip({
                 <span className="inline-flex items-center gap-1.5 text-muted-foreground">
                   <span
                     className="inline-block h-2 w-2 rounded-full"
-                    style={{ backgroundColor: item.color || config[key]?.color }}
+                    style={{
+                      backgroundColor: item.color || config[key]?.color,
+                    }}
                   />
                   {name}
                 </span>
@@ -187,73 +193,87 @@ export function ReportFailTrendChart({
 
   return (
     <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-      <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
-      <p className="mt-1 text-xs text-slate-500">
-        {trend.series.length} dataset{trend.series.length === 1 ? '' : 's'} ·{' '}
-        {trend.plottedRunCount} run
-        {trend.plottedRunCount === 1 ? '' : 's'} plotted.
-        {trend.missingRunCount > 0
-          ? ` ${trend.missingRunCount} run${trend.missingRunCount === 1 ? '' : 's'} ${
-              trend.missingRunCount === 1 ? 'is' : 'are'
-            } not plotted because ${
-              trend.missingRunCount === 1 ? 'it has' : 'they have'
-            } no recorded fail count.`
-          : ''}
-      </p>
+      <div className="flex justify-between items-center">
+        <div>
+          <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
+          <p className="mt-1 text-xs text-slate-500">
+            {trend.series.length} dataset{trend.series.length === 1 ? '' : 's'}{' '}
+            · {trend.plottedRunCount} run
+            {trend.plottedRunCount === 1 ? '' : 's'} plotted.
+            {trend.missingRunCount > 0
+              ? ` ${trend.missingRunCount} run${trend.missingRunCount === 1 ? '' : 's'} ${
+                  trend.missingRunCount === 1 ? 'is' : 'are'
+                } not plotted because ${
+                  trend.missingRunCount === 1 ? 'it has' : 'they have'
+                } no recorded fail count.`
+              : ''}
+          </p>
+        </div>
 
-      <div className="mt-4 flex flex-wrap gap-2">
-        {trend.series.map((series, index) => {
-          const key = seriesKey(index);
-          const color = SERIES_COLORS[index % SERIES_COLORS.length];
-          const isHidden = hiddenKeys.has(key);
-          const change = series.latestChange;
+        <div className="mt-4 flex flex-wrap gap-2">
+          {trend.series.map((series, index) => {
+            const key = seriesKey(index);
+            const color = SERIES_COLORS[index % SERIES_COLORS.length];
+            const isHidden = hiddenKeys.has(key);
+            const change = series.latestChange;
 
-          return (
-            <button
-              aria-pressed={!isHidden}
-              className={cn(
-                'inline-flex max-w-full items-center gap-2 rounded-full border px-3 py-1.5 text-xs transition',
-                isHidden
-                  ? 'border-slate-200 bg-slate-50 text-slate-400'
-                  : 'border-slate-200 bg-white text-slate-700 shadow-sm hover:bg-slate-50',
-              )}
-              key={key}
-              onClick={() => toggleSeries(key)}
-              title={
-                isHidden
-                  ? `${series.testName} — hidden. Click to show on the chart.`
-                  : `${series.testName} — latest ${series.latestValue} fail${series.latestValue === 1 ? '' : 's'}. Click to hide.`
-              }
-              type="button"
-            >
-              <span
-                className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
-                style={{ backgroundColor: isHidden ? '#cbd5e1' : color }}
-              />
-              <span className="min-w-0 truncate font-medium">{series.testName}</span>
-              <span className="tabular-nums text-slate-500">{series.latestValue}</span>
-              <span
+            return (
+              <button
+                aria-pressed={!isHidden}
                 className={cn(
-                  'tabular-nums',
+                  'inline-flex max-w-full items-center gap-2 rounded-full border px-3 py-1.5 text-xs transition',
                   isHidden
-                    ? 'text-slate-400'
-                    : change === null
-                      ? 'text-slate-400'
-                      : change.delta > 0
-                        ? 'text-rose-600'
-                        : change.delta < 0
-                          ? 'text-emerald-600'
-                          : 'text-slate-500',
+                    ? 'border-slate-200 bg-slate-50 text-slate-400'
+                    : 'border-slate-200 bg-white text-slate-700 shadow-sm hover:bg-slate-50',
                 )}
+                key={key}
+                onClick={() => toggleSeries(key)}
+                title={
+                  isHidden
+                    ? `${series.testName} — hidden. Click to show on the chart.`
+                    : `${series.testName} — latest ${series.latestValue} fail${series.latestValue === 1 ? '' : 's'}. Click to hide.`
+                }
+                type="button"
               >
-                {change ? formatFailChange(change) : '—'}
-              </span>
-            </button>
-          );
-        })}
+                <span
+                  className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
+                  style={{ backgroundColor: isHidden ? '#cbd5e1' : color }}
+                />
+                <span
+                  className="min-w-0 truncate font-medium w-18 truncate"
+                  title={series.testName}
+                >
+                  {series.testName}
+                </span>
+                <span className="tabular-nums text-slate-500">
+                  {series.latestValue}
+                </span>
+                <span
+                  className={cn(
+                    'tabular-nums',
+                    isHidden
+                      ? 'text-slate-400'
+                      : change === null
+                        ? 'text-slate-400'
+                        : change.delta > 0
+                          ? 'text-rose-600'
+                          : change.delta < 0
+                            ? 'text-emerald-600'
+                            : 'text-slate-500',
+                  )}
+                >
+                  {change ? formatFailChange(change) : '—'}
+                </span>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
-      <ChartContainer className="mt-5 h-80 w-full min-w-0" config={chartConfig}>
+      <ChartContainer
+        className="mt-5 h-80 w-full min-w-0 max-h-[200px] overflow-y-auto"
+        config={chartConfig}
+      >
         <LineChart data={rows}>
           <CartesianGrid strokeDasharray="3 3" vertical={false} />
           <XAxis
@@ -262,7 +282,9 @@ export function ReportFailTrendChart({
             minTickGap={40}
             scale="time"
             tick={{ fontSize: 11 }}
-            tickFormatter={(value) => (typeof value === 'number' ? axisLabel(value) : '')}
+            tickFormatter={(value) =>
+              typeof value === 'number' ? axisLabel(value) : ''
+            }
             type="number"
           />
           <YAxis
@@ -271,7 +293,12 @@ export function ReportFailTrendChart({
             tick={{ fontSize: 11 }}
           />
           <ChartTooltip
-            content={<ReportFailTooltip config={chartConfig} pointLookup={pointLookup} />}
+            content={
+              <ReportFailTooltip
+                config={chartConfig}
+                pointLookup={pointLookup}
+              />
+            }
           />
           {trend.series.map((series, index) => {
             const key = seriesKey(index);

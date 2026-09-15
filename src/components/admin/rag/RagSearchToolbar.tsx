@@ -78,7 +78,7 @@ export function RagSearchToolbar({
             options={isGuidMode ? [] : popularQueries}
             placeholder={
               isGuidMode
-                ? 'Paste a chunk or document GUID'
+                ? `Paste a ${settings.guidTarget === 'chunk' ? 'chunk' : 'document'} GUID`
                 : 'Ask something like: peroxide bathroom disinfectant'
             }
           />
