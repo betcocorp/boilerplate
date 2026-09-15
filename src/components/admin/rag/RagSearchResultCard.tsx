@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useEffect, useState } from 'react';
 import { RagDocumentChunkInspectButtons } from '~/components/rag/RagDocumentChunkInspect';
 
 import { Badge } from '~/components/ui/badge';
@@ -75,7 +75,7 @@ export function RagSearchResultCard({
       setProductLineLoading(true);
       try {
         const response = await fetch(
-          `/api/admin/rag/document-lookup?productLineKey=${encodeURIComponent(lookupKey)}`
+          `/api/admin/rag/document-lookup?productLineKey=${encodeURIComponent(lookupKey)}`,
         );
         if (response.ok) {
           const data = await response.json();
@@ -104,7 +104,7 @@ export function RagSearchResultCard({
       setSkuLoading(true);
       try {
         const response = await fetch(
-          `/api/admin/rag/document-lookup?sku=${encodeURIComponent(sku)}`
+          `/api/admin/rag/document-lookup?sku=${encodeURIComponent(sku)}`,
         );
         if (response.ok) {
           const data = await response.json();
@@ -151,7 +151,7 @@ export function RagSearchResultCard({
 
       <div className="flex flex-wrap gap-2">
         <Badge variant="outline">{match.document_kind}</Badge>
-        {match.section_type ? (
+        {match.section_type && match.document_kind !== match.section_type ? (
           <Badge variant="outline">{match.section_type}</Badge>
         ) : null}
         <Badge variant="secondary">Chunk {match.chunk_index}</Badge>
