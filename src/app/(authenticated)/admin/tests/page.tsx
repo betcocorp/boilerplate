@@ -195,7 +195,7 @@ export default async function AdminTestsPage({ searchParams }: PageProps) {
                     </TableCell>
                     <TableCell
                       className="max-w-[125px] text-sm text-slate-600 truncate"
-                      title={test.intended_agent}
+                      title={test.intended_agent ?? undefined}
                     >
                       {test.intended_agent
                         ? (V1_AGENT_REGISTRY.find(
