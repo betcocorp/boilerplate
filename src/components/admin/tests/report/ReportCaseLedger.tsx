@@ -1,6 +1,7 @@
 'use client';
 
 import { Check, ChevronRight, ChevronsDownUp, ChevronsUpDown, X } from 'lucide-react';
+import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { type ReactNode, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 
@@ -9,6 +10,7 @@ import {
   CaseTraceDownloadButton,
   CaseTraceViewButton,
 } from '~/components/admin/tests/report/CaseTraceDownloadButton';
+import { isRagUuid, ragDocumentHref } from '~/lib/rag/document-detail-links';
 import {
   caseMarkers,
   conceptChecklist,
@@ -557,14 +559,27 @@ function ActualColumn({ c }: { c: ReportCase }) {
         <FieldLabel>Retrieved documents</FieldLabel>
         {c.retrievedDocumentIds.length > 0 ? (
           <ul className="mt-1.5 flex flex-wrap gap-1.5">
-            {c.retrievedDocumentIds.map((documentId) => (
-              <li
-                className="rounded-lg bg-slate-100 px-2 py-0.5 font-mono text-[11px] break-all text-slate-600"
-                key={documentId}
-              >
-                {documentId}
-              </li>
-            ))}
+            {c.retrievedDocumentIds.map((documentId) =>
+              // Synthetic sources (e.g. the structured "Verified Product Facts" source, B0-196)
+              // carry a placeholder id with no `rag.document` row to link to.
+              isRagUuid(documentId) ? (
+                <li key={documentId}>
+                  <Link
+                    className="rounded-lg bg-slate-100 px-2 py-0.5 font-mono text-[11px] break-all text-slate-600 transition-colors hover:bg-primary/10 hover:text-primary hover:underline"
+                    href={ragDocumentHref(documentId)}
+                  >
+                    {documentId}
+                  </Link>
+                </li>
+              ) : (
+                <li
+                  className="rounded-lg bg-slate-100 px-2 py-0.5 font-mono text-[11px] break-all text-slate-600"
+                  key={documentId}
+                >
+                  {documentId}
+                </li>
+              ),
+            )}
           </ul>
         ) : (
           <p className="mt-1 text-xs text-slate-400 italic">(none recorded)</p>
