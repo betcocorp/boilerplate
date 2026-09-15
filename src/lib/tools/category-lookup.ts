@@ -1,6 +1,14 @@
 import { detectCategorySearchTerms } from '~/lib/tools/category-search-terms';
-import type { GetProductsInCategoryOutput, LabeledDilution } from '~/lib/tools/tool-schemas';
+import type { FloorUseInfo, GetProductsInCategoryOutput, LabeledDilution } from '~/lib/tools/tool-schemas';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
+
+/**
+ * B0-1003 — label headings that actually state approved surfaces/use sites, so the floor-use check
+ * (below) does not false-positive on an incidental "floor" mention elsewhere on the label (e.g. a
+ * spill/slip-hazard caution in Hazards or Storage & Disposal). Matches the `label-to-markdown`
+ * heading convention (`~/lib/label/convert-label-to-markdown.ts`), e.g. "Surfaces & Use Sites".
+ */
+const FLOOR_USE_HEADING_PATTERN = /surfaces\s*&?\s*use\s*sites|directions\s*for\s*use/i;
 
 const CATEGORY_LOOKUP_ADAPTER_TAG = 'product_category_v1' as const;
 
@@ -51,7 +59,12 @@ type FactRow = { entity_id: string; dilution_display?: string | null; dilution_o
 type ProductLineExtras = {
   items: Array<{ sku: string; title: string }>;
   labeledDilution: LabeledDilution;
+  /** B0-1003 — see `floorUseSchema`; populated by `fetchFloorUseForProductLines`. */
+  floorUse: FloorUseInfo;
 };
+
+type LabelDocRow = { id: string; document_key: string; sku: string | null };
+type LabelChunkRow = { document_id: string; heading: string | null; chunk_text: string };
 
 /** PostgREST returns a `::text`-cast numeric as a string; a plain numeric would arrive as a number. Either way, no reformatting. */
 function factText(value: string | number | null | undefined): string | null {
@@ -81,7 +94,7 @@ async function fetchExtrasForProductLines(
   const extrasFor = (key: string): ProductLineExtras => {
     const existing = byLine.get(key);
     if (existing) return existing;
-    const created: ProductLineExtras = { items: [], labeledDilution: null };
+    const created: ProductLineExtras = { items: [], labeledDilution: null, floorUse: null };
     byLine.set(key, created);
     return created;
   };
@@ -107,6 +120,9 @@ async function fetchExtrasForProductLines(
 
   const lineEntityIds = new Map<string, string>();
   const productEntityIds = new Map<string, string>();
+  // B0-1003 — collected alongside `items` so the floor-use lookup below can join labels (keyed by
+  // SKU in their own metadata) back to a product line without a second entity query.
+  const skuToLineKey = new Map<string, string>();
   for (const row of data ?? []) {
     if (!row.product_line_key) continue;
     if (row.entity_type === 'product_line') {
@@ -117,6 +133,7 @@ async function fetchExtrasForProductLines(
     productEntityIds.set(row.id, row.product_line_key);
     if (!row.sku) continue;
     extrasFor(row.product_line_key).items.push({ sku: row.sku, title: row.title ?? '' });
+    skuToLineKey.set(row.sku, row.product_line_key);
   }
 
   const entityIds = [...lineEntityIds.keys(), ...productEntityIds.keys()];
@@ -231,7 +248,108 @@ async function fetchExtrasForProductLines(
           };
   }
 
+  // B0-1003 — additive, same as the dilution lookups above: a failure here must not fail the whole
+  // category tool call.
+  await applyFloorUseForProductLines(byLine, skuToLineKey);
+
   return byLine;
+}
+
+/**
+ * B0-1003 — populates `ProductLineExtras.floorUse` by joining each line's SKUs (already collected
+ * above) to `rag.document` label rows via the label's own `metadata->>sku` (the field every label
+ * carries; `product_entity_match` is only present on labels that have already been linked to an
+ * entity — see B0-264/B0-793 on partial label linkage), then checking whether any of those labels'
+ * "Surfaces & Use Sites" / "Directions for Use" chunks mention "floor". A line with no matched label
+ * at all is left `null` (unknown, never inferred as "not floor-labeled").
+ */
+async function applyFloorUseForProductLines(
+  byLine: Map<string, ProductLineExtras>,
+  skuToLineKey: Map<string, string>,
+): Promise<void> {
+  const skus = [...skuToLineKey.keys()];
+  if (skus.length === 0) return;
+
+  // Additive, same contract as the dilution lookups above: any failure — a Postgrest error field OR
+  // a thrown exception from the client — must leave `floorUse` at its default (`null`) rather than
+  // failing the whole category tool call.
+  try {
+    await applyFloorUseForProductLinesUnsafe(byLine, skuToLineKey, skus);
+  } catch (err) {
+    console.warn('[category-lookup] floor-use lookup failed; leaving floorUse null', {
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+async function applyFloorUseForProductLinesUnsafe(
+  byLine: Map<string, ProductLineExtras>,
+  skuToLineKey: Map<string, string>,
+  skus: readonly string[],
+): Promise<void> {
+  const supabase = getSupabaseServiceRoleClient();
+  const { data: labelDocs, error: labelError } = await supabase
+    .schema('rag')
+    .from('document')
+    .select('id, document_key, metadata->>sku')
+    .eq('document_kind', 'label')
+    .in('metadata->>sku' as 'document_key', skus) as unknown as {
+      data: LabelDocRow[] | null;
+      error: { message: string } | null;
+    };
+  if (labelError) {
+    console.warn('[category-lookup] floor-use label lookup failed; leaving floorUse null', {
+      message: labelError.message,
+    });
+    return;
+  }
+  const labels = labelDocs ?? [];
+  if (labels.length === 0) return;
+
+  const lineKeyForLabel = new Map<string, string>();
+  for (const doc of labels) {
+    const lineKey = doc.sku ? skuToLineKey.get(doc.sku) : undefined;
+    if (lineKey) lineKeyForLabel.set(doc.id, lineKey);
+  }
+  // Every line whose SKU resolved to at least one label starts at "checked, no floor mention" —
+  // overwritten to `documented: true` below when a matching chunk is found. A line with no label at
+  // all (never entered here) stays `null`.
+  for (const lineKey of new Set(lineKeyForLabel.values())) {
+    const extras = byLine.get(lineKey);
+    if (extras) extras.floorUse = { documented: false, labelDocumentKeys: [] };
+  }
+
+  const labelIds = [...lineKeyForLabel.keys()];
+  const { data: chunkRows, error: chunkError } = await supabase
+    .schema('rag')
+    .from('document_chunk')
+    .select('document_id, heading, chunk_text')
+    .in('document_id', labelIds)
+    .ilike('chunk_text', '%floor%') as unknown as {
+      data: LabelChunkRow[] | null;
+      error: { message: string } | null;
+    };
+  if (chunkError) {
+    console.warn('[category-lookup] floor-use chunk lookup failed; leaving floorUse as checked-only', {
+      message: chunkError.message,
+    });
+    return;
+  }
+
+  const documentKeyById = new Map(labels.map((doc) => [doc.id, doc.document_key]));
+  for (const chunk of chunkRows ?? []) {
+    if (!FLOOR_USE_HEADING_PATTERN.test(chunk.heading ?? '')) continue;
+    const lineKey = lineKeyForLabel.get(chunk.document_id);
+    const documentKey = documentKeyById.get(chunk.document_id);
+    if (!lineKey || !documentKey) continue;
+    const extras = byLine.get(lineKey);
+    if (!extras) continue;
+    if (!extras.floorUse) extras.floorUse = { documented: false, labelDocumentKeys: [] };
+    extras.floorUse.documented = true;
+    if (!extras.floorUse.labelDocumentKeys.includes(documentKey)) {
+      extras.floorUse.labelDocumentKeys.push(documentKey);
+    }
+  }
 }
 
 function matchesCategory(
@@ -333,6 +451,8 @@ export async function getProductsInCategory(input: {
       items: extrasByLine.get(m.productLineKey)?.items ?? [],
       // B0-972 — labeled dilution exactly as stored, or an explicit null when none is on file.
       labeledDilution: extrasByLine.get(m.productLineKey)?.labeledDilution ?? null,
+      // B0-1003 — whether this line's own label text documents floor use; null when unchecked.
+      floorUse: extrasByLine.get(m.productLineKey)?.floorUse ?? null,
     })),
   };
 }

@@ -432,6 +432,12 @@ export const PRODUCT_SUPPORT_SHARED_INSTRUCTIONS = [
   // not a single-pick recommendation (see also the recommendations specialist prompt, which is what
   // actually answers this shape when routed there).
   '- A task/problem description naming NO product and NO brand ("what should I use for greasy kitchen floors", "what do you recommend for a grease trap"): identify the implied category, call the category lookup tool for it, state there is no documented ranking among the matches, then list EVERY product returned — name, item number, and the labeled value the question implies (dilution range, approved substrates, or food-contact rinsing), transcribed exactly per label — then ask ONE narrowing question. Treat this the same as the superlative case above; do not lead with a single named pick.',
+  // B0-1003 — "what should I use for greasy kitchen floors" listed degreasers with no item number
+  // and no indication any of them are actually labeled for floor use. The category tool's `items`
+  // (SKU + title) and `floorUse` (does this line's own label mention floor use, with the specific
+  // label document(s)) fields exist for exactly this: a floor-specific list must be filtered and
+  // cited at the individual-product level, not answered from the category as a whole.
+  '- When the category tool result carries `items` and/or `floorUse` on a line, use them: give each listed product\'s item number/SKU from `items`. When the question names a floor/substrate use specifically, keep only the products whose `floorUse.documented` is `true`, and cite each one\'s own label individually (the document(s) in `floorUse.labelDocumentKeys`) rather than citing the category source alone. A product with `floorUse.documented: false` is not confirmed floor-labeled — leave it out rather than listing it with a hedge. If `floorUse` is `null` for a line, its label could not be checked for floor use — say that plainly rather than including or excluding it as if it had been confirmed either way. Never state or invent a dilution ratio for a product you are listing only for its floor-use status; give a dilution only when the tool returned one for that specific product.',
   // B0-957 — "the strongest wood floor stripper" listed five names lifted from the Betco Cleaning
   // Solutions Guide (a marketing document). None matches a product line in the catalog, so the user
   // cannot look any of them up against a label — and none is labeled for wood, which the answer
