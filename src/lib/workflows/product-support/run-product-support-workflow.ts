@@ -5199,9 +5199,15 @@ export async function runProductSupportWorkflow(input: {
       documentBody: fullDocumentBodies.get(s.documentId)?.body ?? s.documentBody,
       isLockedProductLineSource: lockedProductLineDocumentIds.has(s.documentId),
     }));
+    // B0-997 — same "did this turn resolve a named Betco product" signal `requireFactToolForDraft`
+    // already gates `compatibility` enforcement on (`speculativeProductLineLock !== null`), read here
+    // off the post-generation product-line lock so the guardrail's own `compatibility` detection
+    // agrees with it.
+    const regulatedClaimGroundingProductResolved = lockedProductLineKeyForGrounding !== null;
     const servedDraftRegulatedClaimGrounding = evaluateRegulatedClaimGrounding({
       draftAnswer,
       sources: regulatedClaimGroundingSources,
+      productResolved: regulatedClaimGroundingProductResolved,
     });
 
     /**
@@ -5239,6 +5245,7 @@ export async function runProductSupportWorkflow(input: {
       const preRevisionGrounding = evaluateRegulatedClaimGrounding({
         draftAnswer: preRevisionDraftAnswer,
         sources: regulatedClaimGroundingSources,
+        productResolved: regulatedClaimGroundingProductResolved,
       });
       if (preRevisionGrounding.ungroundedCategories.length === 0) {
         draftAnswer = preRevisionDraftAnswer;

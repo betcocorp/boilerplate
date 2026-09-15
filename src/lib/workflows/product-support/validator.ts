@@ -1208,7 +1208,20 @@ function isKeyTermGrounded(
 export function evaluateRegulatedClaimGrounding(input: {
   draftAnswer: string;
   sources: RegulatedClaimSource[];
+  /**
+   * B0-997 — mirrors the `productResolved` gate `fact-tool-enforcement.ts` already applies before
+   * forcing `list_allowed_surfaces`/`get_compatibility_rules`. Without it, `isCompatibilityClaimSentence`
+   * (gated only on the SENTENCE naming a product via `hasProductSubject` -- a self-reference like
+   * "this product" is enough) still classified a generic, no-named-product surface question as a
+   * `compatibility` claim requiring verbatim label grounding, so a correct knowledge-base answer with
+   * no source list to quote from was rewritten into "approved surfaces ... not on file" canned copy.
+   * Defaults to `true` (today's behaviour, and every existing call site/fixture that predates this
+   * turn's product-lock signal) -- callers pass `false` only when they positively know this turn
+   * never resolved a named Betco product.
+   */
+  productResolved?: boolean;
 }): RegulatedClaimGroundingResult {
+  const productResolved = input.productResolved !== false;
   // Same normalization is applied to the claim sentence and the source text, so the comparison
   // stays symmetric (B0-366).
   const normalizedSourceBodiesPlain = input.sources.map((s) =>
@@ -1326,7 +1339,12 @@ export function evaluateRegulatedClaimGrounding(input: {
   checkTokenCategory('cas_number', extractCasNumberTokens(input.draftAnswer));
   checkSentenceCategory('hazard', isHazardClaimSentence);
   checkSentenceCategory('first_aid', isFirstAidClaimSentence);
-  checkSentenceCategory('compatibility', isCompatibilityClaimSentence);
+  // B0-997 — only a claim worth verbatim-grounding when this turn actually resolved a named Betco
+  // product; otherwise there is no product-specific label to check against, and forcing one turns a
+  // correct generic-knowledge answer into an "approved surfaces ... not on file" decline.
+  if (productResolved) {
+    checkSentenceCategory('compatibility', isCompatibilityClaimSentence);
+  }
   checkSentenceCategory('efficacy_claim', isEfficacyClaimSentence);
 
   return {
