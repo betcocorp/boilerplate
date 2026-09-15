@@ -55,3 +55,7 @@ storybook-static
 
 # Efficacy PDF re-conversion scratch output (B0-797)
 .efficacy-convert-out/
+
+# Openai Agents and Codex settings (per-developer, not shared)
+.agents
+.codex
