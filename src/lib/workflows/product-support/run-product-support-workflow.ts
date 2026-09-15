@@ -55,6 +55,7 @@ import {
   requireFactToolForDraft,
 } from '~/lib/workflows/product-support/fact-tool-enforcement';
 import { requireFloorReopenTool } from '~/lib/workflows/product-support/floor-reopen-backstop';
+import { applyDilutionDwellBackstop } from '~/lib/workflows/product-support/dilution-dwell-backstop';
 import { runAiSdkWithToolLoop } from '~/lib/bex/ai-sdk-runtime';
 import {
   hasDecisiveCrossReferenceSignal,
@@ -6142,6 +6143,27 @@ export async function runProductSupportWorkflow(input: {
             answerProvenance === 'pre_revision_draft_restored',
         });
       }
+    }
+
+    /**
+     * B0-1002 — deterministic text-level patch, applied last, after every redaction/revision/decline
+     * branch above has settled on `finalText`. See `dilution-dwell-backstop.ts`: a no-op unless this
+     * turn is a dilution-system/employee-use how-to question whose served answer already discusses
+     * disinfectant dwell/contact time without stating the visibly-wet-for-the-full-labeled-time rule
+     * (so it never fires on decline/canned copy, which never mentions dwell at all). Appends the
+     * canonical B0-978 sentence verbatim; never rewrites or removes existing text.
+     */
+    const dilutionDwellBackstopResult = applyDilutionDwellBackstop({
+      userMessage: input.userMessage,
+      draftAnswer: finalText,
+    });
+    if (dilutionDwellBackstopResult.applied) {
+      finalText = dilutionDwellBackstopResult.answer;
+      audit.enqueue(
+        'dilution_dwell_backstop_applied',
+        { userMessage: input.userMessage },
+        wfCtx,
+      );
     }
 
     // B0-493 — run-level retrieval configuration rollup, computed from the FINAL resolved trace
