@@ -53,6 +53,7 @@ export default async function DocumentViewerPage({ params, searchParams }: PageP
               metadata: Record<string, unknown> | null;
               source_record_id: string | null;
               entity_id: string | null;
+              ingested_by: string | null;
             } | null;
             error: { message: string } | null;
           }>;
@@ -61,7 +62,7 @@ export default async function DocumentViewerPage({ params, searchParams }: PageP
     }
   )
     .select(
-      'id, document_key, title, document_kind, language_code, metadata, source_record_id, entity_id',
+      'id, document_key, title, document_kind, language_code, metadata, source_record_id, entity_id, ingested_by',
     )
     .eq('id', id)
     .single();
@@ -182,6 +183,7 @@ export default async function DocumentViewerPage({ params, searchParams }: PageP
                 { label: 'DIN', value: String(dinNo || '—') },
                 { label: 'Brand', value: String(brand || '—') },
                 { label: 'Chunks', value: chunkData.length.toString() },
+                { label: 'Ingested by', value: doc.ingested_by || '—' },
               ].map(({ label, value }) => (
                 <div key={label} className="rounded-2xl bg-slate-50 px-4 py-3">
                   <p className="text-xs text-slate-500">{label}</p>

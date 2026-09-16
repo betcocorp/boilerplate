@@ -298,6 +298,7 @@ async function upsertDocument(
   seed: KnowledgeSeedDocument,
   rawMarkdown: string,
   plainText: string,
+  ingestedBy: string | null,
 ) {
   const supabase = getSupabaseServiceRoleClient();
   const documentKey = toDocumentKey(seed);
@@ -330,6 +331,8 @@ async function upsertDocument(
     // for document_chunk.token_count in replaceDocumentChunks below.
     token_count: estimateTokens(plainText),
     metadata,
+    // B0-1021: stamp whoever most recently triggered this ingestion/re-ingestion run.
+    ingested_by: ingestedBy,
   };
 
   if (existing?.id) {
@@ -401,7 +404,7 @@ async function markSourceRecord(
   if (error) throw new Error(`Failed to update source status for ${seed.id}: ${error.message}`);
 }
 
-async function ingestSeedDocument(seed: KnowledgeSeedDocument) {
+async function ingestSeedDocument(seed: KnowledgeSeedDocument, ingestedBy: string | null) {
   const sourceRecordId = await ensureSeedSourceRecord(seed);
   try {
     const s3 = getS3Client();
@@ -412,7 +415,7 @@ async function ingestSeedDocument(seed: KnowledgeSeedDocument) {
     const { body, frontTitle } = stripFrontmatter(raw);
     const effectiveSeed = frontTitle ? { ...seed, title: frontTitle } : seed;
     const plain = markdownToPlainText(body);
-    const documentId = await upsertDocument(sourceRecordId, effectiveSeed, body, plain);
+    const documentId = await upsertDocument(sourceRecordId, effectiveSeed, body, plain, ingestedBy);
     const chunkCount = await replaceDocumentChunks(documentId, effectiveSeed, chunkMarkdown(body));
 
     await markSourceRecord(sourceRecordId, effectiveSeed, { status: 'ingested', chunkCount, lastError: null });
@@ -574,6 +577,7 @@ export async function getKnowledgeDashboardStatus(): Promise<KnowledgeDashboardS
 export async function runKnowledgeIngestion(
   mode: KnowledgeIngestionRunMode,
   batchSize?: number,
+  ingestedBy: string | null = null,
 ): Promise<KnowledgeIngestionRunResult> {
   const startedAt = nowIso();
   const errors: KnowledgeIngestionRunResult['errors'] = [];
@@ -622,7 +626,7 @@ export async function runKnowledgeIngestion(
       if (!seed) continue;
       processed += 1;
       try {
-        await ingestSeedDocument(seed);
+        await ingestSeedDocument(seed, ingestedBy);
         succeeded += 1;
       } catch (error) {
         failed += 1;

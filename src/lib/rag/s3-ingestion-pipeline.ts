@@ -314,6 +314,7 @@ export function createS3IngestionPipeline<TSeed extends S3IngestionSeedDocument>
     sourceRecordId: string,
     seed: TSeed,
     parsed: S3IngestionParsedFile,
+    ingestedBy: string | null,
   ) {
     const supabase = getSupabaseServiceRoleClient();
     const documentKey = toDocumentKey(seed);
@@ -354,6 +355,8 @@ export function createS3IngestionPipeline<TSeed extends S3IngestionSeedDocument>
           // used for document_chunk.token_count everywhere else in this codebase.
           token_count: estimateTokens(parsed.bodyText),
           metadata,
+          // B0-1021: reflects whoever most recently triggered ingestion (re-ingestion overwrites it).
+          ingested_by: ingestedBy,
         })
         .eq('id', existing.id)
         .select('id')
@@ -384,6 +387,8 @@ export function createS3IngestionPipeline<TSeed extends S3IngestionSeedDocument>
         token_count: estimateTokens(parsed.bodyText),
         metadata,
         document_key: documentKey,
+        // B0-1021: who (or what session) most recently triggered this document's ingestion.
+        ingested_by: ingestedBy,
       })
       .select('id')
       .single();
@@ -437,7 +442,7 @@ export function createS3IngestionPipeline<TSeed extends S3IngestionSeedDocument>
     }
   }
 
-  async function ingestSeedDocument(seed: TSeed) {
+  async function ingestSeedDocument(seed: TSeed, ingestedBy: string | null) {
     const sourceRecordId = await ensureSeedSourceRecord(seed);
 
     try {
@@ -455,7 +460,7 @@ export function createS3IngestionPipeline<TSeed extends S3IngestionSeedDocument>
       const fileBuffer = Buffer.from(bytes);
       const checksum = computeChecksum(fileBuffer);
       const parsed = await config.parseFile(fileBuffer, seed);
-      await upsertDocument(sourceRecordId, seed, parsed);
+      await upsertDocument(sourceRecordId, seed, parsed, ingestedBy);
 
       await markSourceRecord(sourceRecordId, seed, {
         status: 'ingested',
@@ -754,6 +759,7 @@ export function createS3IngestionPipeline<TSeed extends S3IngestionSeedDocument>
   async function runIngestion(
     mode: S3IngestionRunMode,
     batchSize?: number,
+    ingestedBy: string | null = null,
   ): Promise<S3IngestionRunResult> {
     const startedAt = nowIso();
     const errors: S3IngestionRunResult['errors'] = [];
@@ -828,7 +834,7 @@ export function createS3IngestionPipeline<TSeed extends S3IngestionSeedDocument>
 
         processed += 1;
         try {
-          await ingestSeedDocument(seed);
+          await ingestSeedDocument(seed, ingestedBy);
           succeeded += 1;
         } catch (error) {
           failed += 1;

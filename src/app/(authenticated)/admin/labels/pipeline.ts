@@ -385,6 +385,7 @@ async function upsertDocument(
   fm: LabelFrontmatter,
   rawMarkdown: string,
   bodyText: string,
+  ingestedBy: string | null,
 ) {
   const supabase = getSupabaseServiceRoleClient();
   const metadata: JsonObject = {
@@ -427,6 +428,8 @@ async function upsertDocument(
     // for document_chunk.token_count in replaceDocumentChunks below.
     token_count: estimateTokens(bodyText),
     metadata,
+    // B0-1021: stamp whoever most recently triggered this ingestion/re-ingestion run.
+    ingested_by: ingestedBy,
   };
 
   if (existing?.id) {
@@ -507,7 +510,7 @@ async function markSourceRecord(
   if (error) throw new Error(`Failed to update source status for ${seed.id}: ${error.message}`);
 }
 
-async function ingestSeedDocument(seed: LabelSeedDocument) {
+async function ingestSeedDocument(seed: LabelSeedDocument, ingestedBy: string | null) {
   const { id: sourceRecordId, sourceTable } = await ensureSeedSourceRecord(seed);
   try {
     const s3 = getS3Client();
@@ -525,7 +528,16 @@ async function ingestSeedDocument(seed: LabelSeedDocument) {
     const plainText = markdownToPlainText(bodyForChunking);
     const entityId = await findEntityId(seed.labelMdPath);
 
-    const documentId = await upsertDocument(sourceRecordId, entityId, documentKey, seed, fm, body, plainText);
+    const documentId = await upsertDocument(
+      sourceRecordId,
+      entityId,
+      documentKey,
+      seed,
+      fm,
+      body,
+      plainText,
+      ingestedBy,
+    );
     const chunkCount = await replaceDocumentChunks(documentId, documentKey, fm, seed, chunkMarkdown(bodyForChunking));
 
     await markSourceRecord(sourceRecordId, seed, { status: 'ingested', chunkCount, lastError: null });
@@ -746,6 +758,7 @@ export async function getLabelDashboardStatus(): Promise<LabelDashboardStatus> {
 export async function runLabelIngestion(
   mode: LabelIngestionRunMode,
   batchSize?: number,
+  ingestedBy: string | null = null,
 ): Promise<LabelIngestionRunResult> {
   const startedAt = nowIso();
   const errors: LabelIngestionRunResult['errors'] = [];
@@ -799,7 +812,7 @@ export async function runLabelIngestion(
       if (!seed) continue;
       processed += 1;
       try {
-        await ingestSeedDocument(seed);
+        await ingestSeedDocument(seed, ingestedBy);
         succeeded += 1;
       } catch (error) {
         failed += 1;

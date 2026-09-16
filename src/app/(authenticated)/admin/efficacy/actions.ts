@@ -1,6 +1,9 @@
 'use server';
 
+import { getServerSession } from 'next-auth';
 import { revalidatePath } from 'next/cache';
+
+import { authOptions } from '~/lib/auth';
 
 import {
   runEfficacyIngestion,
@@ -57,9 +60,11 @@ export async function runEfficacyAction(
 ): Promise<EfficacyActionState> {
   const mode = readFormValue(formData, 'mode') as EfficacyIngestionRunMode;
   const batchSize = readBatchSize(formData);
+  const session = await getServerSession(authOptions);
+  const ingestedBy = session?.user?.email ?? null;
 
   try {
-    const result = await runEfficacyIngestion(mode, batchSize);
+    const result = await runEfficacyIngestion(mode, batchSize, ingestedBy);
 
     revalidatePath('/admin/efficacy');
     revalidatePath('/admin');

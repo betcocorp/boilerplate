@@ -1,6 +1,9 @@
 'use server';
 
+import { getServerSession } from 'next-auth';
 import { revalidatePath } from 'next/cache';
+
+import { authOptions } from '~/lib/auth';
 
 import {
   runLabelIngestion,
@@ -59,9 +62,13 @@ export async function runLabelAction(
 ): Promise<LabelActionState> {
   const mode = readFormValue(formData, 'mode') as LabelIngestionRunMode;
   const batchSize = readBatchSize(formData);
+  // B0-1021: attribute this ingestion run to whoever triggered it. No fabricated
+  // fallback — an absent session leaves rag.document.ingested_by null.
+  const session = await getServerSession(authOptions);
+  const ingestedBy = session?.user?.email ?? null;
 
   try {
-    const result = await runLabelIngestion(mode, batchSize);
+    const result = await runLabelIngestion(mode, batchSize, ingestedBy);
     revalidatePath('/admin/labels');
     return {
       ok: true,
