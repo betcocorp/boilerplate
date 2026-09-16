@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   LEGACY_REF_PATTERN,
   legacyReferenceHref,
+  linkifyLegacyReferencesMarkdown,
   resolveDocumentSourceLinks,
 } from '~/lib/rag/document-source-links';
 
@@ -41,6 +42,31 @@ describe('legacyReferenceHref', () => {
 
   it('returns null for a legacy table with no in-app page', () => {
     expect(legacyReferenceHref('prod_images', PRODUCT_LINE_KEY)).toBeNull();
+  });
+});
+
+describe('linkifyLegacyReferencesMarkdown', () => {
+  it('rewrites a resolvable reference into a markdown link, leaving trailing text (e.g. a locale suffix) alone', () => {
+    const text = `See legacy:product_line:${PRODUCT_LINE_KEY}:en for details.`;
+
+    expect(linkifyLegacyReferencesMarkdown(text)).toBe(
+      `See [legacy:product_line:${PRODUCT_LINE_KEY}](/admin/products/legacy/line/${PRODUCT_LINE_KEY}):en for details.`,
+    );
+  });
+
+  it('leaves an unresolvable reference as plain text, same as LegacyReferenceText', () => {
+    const text = `Ref legacy:prod_images:${PRODUCT_LINE_KEY} unresolved.`;
+
+    expect(linkifyLegacyReferencesMarkdown(text)).toBe(text);
+  });
+
+  it('handles multiple references and text with no references at all', () => {
+    const text = `legacy:product_line:${PRODUCT_LINE_KEY}:en and legacy:prod_line:${PRODUCT_KEY}:en`;
+
+    expect(linkifyLegacyReferencesMarkdown(text)).toBe(
+      `[legacy:product_line:${PRODUCT_LINE_KEY}](/admin/products/legacy/line/${PRODUCT_LINE_KEY}):en and [legacy:prod_line:${PRODUCT_KEY}](/admin/products/legacy/line/${PRODUCT_KEY}):en`,
+    );
+    expect(linkifyLegacyReferencesMarkdown('no refs here')).toBe('no refs here');
   });
 });
 

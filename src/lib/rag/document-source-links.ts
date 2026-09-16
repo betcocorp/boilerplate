@@ -35,6 +35,20 @@ export function legacyReferenceHref(table: string, pk: string): string | null {
   return LEGACY_TABLE_ROUTES[table.toLowerCase()]?.(pk) ?? null;
 }
 
+/**
+ * Rewrites every resolvable `legacy:<table>:<pk>` reference in `text` into a markdown link, for
+ * a markdown renderer (`BexStreamdown`) that takes a string rather than React children — the
+ * markdown-string counterpart to `LegacyReferenceText`'s inline-link rendering. An unresolvable
+ * match (no route for that table) is left as plain text, same fallback as the component.
+ */
+export function linkifyLegacyReferencesMarkdown(text: string): string {
+  const pattern = new RegExp(LEGACY_REF_PATTERN.source, LEGACY_REF_PATTERN.flags);
+  return text.replace(pattern, (match, table: string, pk: string) => {
+    const href = legacyReferenceHref(table, pk);
+    return href ? `[${match}](${href})` : match;
+  });
+}
+
 export type DocumentSourceLink = {
   /** Row label, e.g. "Legacy product line". */
   label: string;

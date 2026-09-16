@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { ArrowLeft, ExternalLink } from 'lucide-react';
+import { BexStreamdown } from '~/components/bex/BexStreamdown';
 import { LegacyReferenceText } from '~/components/admin/rag/LegacyReferenceText';
 import { PERMISSIONS } from '~/lib/permissions/constants';
 import { requirePagePermission } from '~/lib/permissions/require-page-permission';
@@ -8,7 +9,10 @@ import {
   ragChunkHref,
   sanitizeRagReturnHref,
 } from '~/lib/rag/document-detail-links';
-import { resolveDocumentSourceLinks } from '~/lib/rag/document-source-links';
+import {
+  linkifyLegacyReferencesMarkdown,
+  resolveDocumentSourceLinks,
+} from '~/lib/rag/document-source-links';
 import { SOURCE_FILE_URL_TTL_SECONDS } from '~/lib/rag/source-file-signing';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
@@ -252,7 +256,12 @@ export default async function DocumentViewerPage({ params, searchParams }: PageP
                     </Link>
                   </div>
                   <div className="mt-3 overflow-auto rounded-lg bg-slate-50 p-3 text-xs leading-relaxed text-slate-700 max-h-64">
-                    <LegacyReferenceText text={chunk.chunk_text} />
+                    <BexStreamdown
+                      className="mt-0"
+                      content={linkifyLegacyReferencesMarkdown(chunk.chunk_text)}
+                      isStreaming={false}
+                      isUser={false}
+                    />
                   </div>
                 </div>
               ))
