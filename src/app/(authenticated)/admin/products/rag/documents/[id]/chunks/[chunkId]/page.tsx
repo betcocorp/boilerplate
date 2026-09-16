@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { ArrowLeft, ChevronLeft, ChevronRight, FileText } from 'lucide-react';
 
+import { BexStreamdown } from '~/components/bex/BexStreamdown';
 import { LegacyReferenceText } from '~/components/admin/rag/LegacyReferenceText';
 import { PERMISSIONS } from '~/lib/permissions/constants';
 import { requirePagePermission } from '~/lib/permissions/require-page-permission';
@@ -11,6 +12,7 @@ import {
   ragDocumentHref,
   sanitizeRagReturnHref,
 } from '~/lib/rag/document-detail-links';
+import { linkifyLegacyReferencesMarkdown } from '~/lib/rag/document-source-links';
 import { formatEasternTimestamp } from '~/lib/utils/time';
 import { getSupabaseServiceRoleClient } from '~/supabase/clients/service-role';
 
@@ -286,14 +288,19 @@ export default async function ChunkViewerPage({ params, searchParams }: PageProp
           </dl>
         </section>
 
-        {/* Chunk text — exactly what was embedded, whitespace preserved. */}
+        {/* Chunk text — rendered as markdown, matching the Chunks section on the document page (B0-1022). */}
         <section className="rounded-3xl border border-border bg-card p-8 shadow-sm">
           <h2 className="text-lg font-semibold text-foreground">Chunk text</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            The verbatim text that was embedded for this chunk.
+            The text that was embedded for this chunk, rendered as markdown.
           </p>
-          <div className="mt-6 max-h-[32rem] overflow-auto whitespace-pre-wrap break-words rounded-2xl bg-muted p-4 font-mono text-xs leading-relaxed text-foreground">
-            <LegacyReferenceText text={chunk.chunk_text} />
+          <div className="mt-6 max-h-[32rem] overflow-auto break-words rounded-2xl bg-muted p-4 text-xs leading-relaxed text-foreground">
+            <BexStreamdown
+              className="mt-0"
+              content={linkifyLegacyReferencesMarkdown(chunk.chunk_text)}
+              isStreaming={false}
+              isUser={false}
+            />
           </div>
         </section>
 
