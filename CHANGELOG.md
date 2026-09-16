@@ -1,3 +1,23 @@
+# [6.7.0](https://github.com/betcocorp/bex2.0/compare/v6.6.1...v6.7.0) (2026-09-16)
+
+
+### Bug Fixes
+
+* **B0-1018:** lower provider-fault abort streak to 3, add technical_error status ([78f0670](https://github.com/betcocorp/bex2.0/commit/78f067026acd8cc578453477a87848c071d9b823))
+* **B0-1020:** commit document-detail-links helper dependency ([665e265](https://github.com/betcocorp/bex2.0/commit/665e265efeb817723cb9cf5e2b388c1956501a62))
+* **B0-1024:** redact instead of decline when a pure token-shaped regulated claim has no other grounded category ([2c4c1b6](https://github.com/betcocorp/bex2.0/commit/2c4c1b6b37aa47061d977c562606b67c61b1006a))
+* **B0-1025:** add a canonical daily/periodic/deep-clean tier rule to both bathroom prompts ([514e665](https://github.com/betcocorp/bex2.0/commit/514e6652f00332590a044bd83ae4c0032c260178))
+* **B0-1026:** remove contradictory mandatory concept from SportsZone golden item ([60dc65f](https://github.com/betcocorp/bex2.0/commit/60dc65f1cace34ea19f6590ba374c50e2db65532))
+
+
+### Features
+
+* **B0-1019:** deep-linkable document and chunk pages from RAG search ([996671c](https://github.com/betcocorp/bex2.0/commit/996671cc480ce0b4980585310a3e0e9d3ab4f98f))
+* **B0-1020:** link retrieved-document GUIDs in test report to RAG document pages ([b76aa8e](https://github.com/betcocorp/bex2.0/commit/b76aa8ee01d1690aef6c2ca65fbef3025162dd6c))
+* **B0-1021:** track who ingested each rag.document row ([67f7068](https://github.com/betcocorp/bex2.0/commit/67f70686dee939c3b18f6ea768f5073769a31bff))
+* **B0-1022:** render chunk text as markdown in the RAG document viewer ([a02b28a](https://github.com/betcocorp/bex2.0/commit/a02b28a17298099068abd7b81c6e06dbe0816260))
+* **B0-1023:** render chunk text as markdown on the single-chunk viewer ([86a7dcb](https://github.com/betcocorp/bex2.0/commit/86a7dcb8bb394c0e6e8b6fb6d58c18758b5a8ba3))
+
 ## [6.6.1](https://github.com/betcocorp/bex2.0/compare/v6.6.0...v6.6.1) (2026-09-15)
 
 
