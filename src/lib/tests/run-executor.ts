@@ -16,6 +16,7 @@ import { routeUserMessageToSme, type SmeRouteDecision } from '~/lib/orchestrator
 import { getBooleanSetting } from '~/lib/settings/settings-service';
 
 import {
+  countPassedAndFailedByResultId,
   getExistingResultItemIds,
   getTestById,
   getTestItemsByTestId,
@@ -606,10 +607,14 @@ export async function executeTestRun(
         resolvedProvider,
       });
 
+      // B0-1028 — recount from test_result_items rather than trusting the local incrementing
+      // counters at this terminal write, so a persisted aggregate can self-correct any drift.
+      const abortCounts = await countPassedAndFailedByResultId(testResult.id);
+
       await updateTestResult(testResult.id, {
         status: 'technical_error',
-        passed_items: passedItems,
-        failed_items: failedItems,
+        passed_items: abortCounts.passed,
+        failed_items: abortCounts.failed,
         elapsed_ms: itemElapsedSumMs,
         completed_at: new Date().toISOString(),
         summary: {
@@ -639,10 +644,14 @@ export async function executeTestRun(
   const finalSummary = asSummaryObject(finalRun.summary);
   itemElapsedSumMs = await sumResultItemsElapsedMsByResultId(testResult.id);
 
+  // B0-1028 — recount from test_result_items rather than trusting the local incrementing
+  // counters at this terminal write, so a persisted aggregate can self-correct any drift.
+  const finalCounts = await countPassedAndFailedByResultId(testResult.id);
+
   await updateTestResult(testResult.id, {
-    status: failedItems > 0 ? 'completed_with_failures' : 'completed',
-    passed_items: passedItems,
-    failed_items: failedItems,
+    status: finalCounts.failed > 0 ? 'completed_with_failures' : 'completed',
+    passed_items: finalCounts.passed,
+    failed_items: finalCounts.failed,
     elapsed_ms: itemElapsedSumMs,
     completed_at: new Date().toISOString(),
     summary: {
@@ -650,7 +659,7 @@ export async function executeTestRun(
       completed_items: completedItems,
       total_items: items.length,
       progress_percent: 100,
-      pass_rate: items.length > 0 ? passedItems / items.length : 0,
+      pass_rate: items.length > 0 ? finalCounts.passed / items.length : 0,
       runner_state: 'completed',
       running_since: null,
       elapsed_accumulated_ms: itemElapsedSumMs,

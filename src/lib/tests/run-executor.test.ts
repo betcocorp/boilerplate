@@ -35,6 +35,7 @@ vi.mock('~/lib/orchestrator/sme-routing', () => ({
 vi.mock('~/lib/settings/settings-service', () => ({ getBooleanSetting: async () => false }));
 
 vi.mock('./repository', () => ({
+  countPassedAndFailedByResultId: vi.fn(),
   getExistingResultItemIds: vi.fn(),
   getTestById: vi.fn(),
   getTestItemsByTestId: vi.fn(),
@@ -59,6 +60,7 @@ import { after } from 'next/server';
 import { logError } from '~/lib/observability/logger';
 
 import {
+  countPassedAndFailedByResultId,
   getExistingResultItemIds,
   getTestById,
   getTestItemsByTestId,
@@ -83,7 +85,16 @@ const CREDIT_ERROR =
 
 type ItemScript = 'faulted' | 'passed' | 'quality_failure';
 
+/**
+ * B0-1028 — rows handed to `insertTestResultItems` across the run, standing in for the real
+ * `test_result_items` table so the `countPassedAndFailedByResultId` mock below can recount from
+ * persisted rows the same way the executor now does at both terminal writes, instead of trusting
+ * a duplicate local tally.
+ */
+let insertedRows: Array<{ passed?: boolean }> = [];
+
 function setUpRun(script: ItemScript[]) {
+  insertedRows = [];
   const items = script.map((_, index) => ({
     id: `item-${index}`,
     row_index: index,
@@ -108,8 +119,16 @@ function setUpRun(script: ItemScript[]) {
   vi.mocked(getTestItemsByTestId).mockResolvedValue(items as never);
   vi.mocked(getExistingResultItemIds).mockResolvedValue(new Set<string>() as never);
   vi.mocked(sumResultItemsElapsedMsByResultId).mockResolvedValue(0 as never);
-  vi.mocked(insertTestResultItems).mockImplementation(
-    async (rows) => rows.map((row, i) => ({ ...row, id: `result-${i}` })) as never,
+  vi.mocked(insertTestResultItems).mockImplementation(async (rows) => {
+    insertedRows.push(...(rows as Array<{ passed?: boolean }>));
+    return rows.map((row, i) => ({ ...row, id: `result-${i}` })) as never;
+  });
+  vi.mocked(countPassedAndFailedByResultId).mockImplementation(
+    async () =>
+      ({
+        passed: insertedRows.filter((row) => row.passed === true).length,
+        failed: insertedRows.filter((row) => row.passed === false).length,
+      }) as never,
   );
   vi.mocked(updateTestResult).mockResolvedValue(undefined as never);
   vi.mocked(updateTestRecord).mockResolvedValue(undefined as never);
@@ -128,13 +147,14 @@ function setUpRun(script: ItemScript[]) {
           elapsed_ms: 10,
           error_message: CREDIT_ERROR,
           provider_fault: 'insufficient_quota',
+          passed: false,
         },
       } as never;
     }
     return {
       passed: kind === 'passed',
       providerFault: null,
-      item: { elapsed_ms: 10, error_message: null, provider_fault: null },
+      item: { elapsed_ms: 10, error_message: null, provider_fault: null, passed: kind === 'passed' },
     } as never;
   });
 
