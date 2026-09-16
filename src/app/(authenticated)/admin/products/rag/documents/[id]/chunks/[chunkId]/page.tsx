@@ -1,9 +1,9 @@
+import { ArrowLeft, ChevronLeft, ChevronRight, FileText } from 'lucide-react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { ArrowLeft, ChevronLeft, ChevronRight, FileText } from 'lucide-react';
 
-import { BexStreamdown } from '~/components/bex/BexStreamdown';
 import { LegacyReferenceText } from '~/components/admin/rag/LegacyReferenceText';
+import { BexStreamdown } from '~/components/bex/BexStreamdown';
 import { PERMISSIONS } from '~/lib/permissions/constants';
 import { requirePagePermission } from '~/lib/permissions/require-page-permission';
 import {
@@ -73,7 +73,10 @@ type MaybeSingleSelect<T> = {
       col: string,
       val: string,
     ): {
-      maybeSingle(): Promise<{ data: T | null; error: { message: string } | null }>;
+      maybeSingle(): Promise<{
+        data: T | null;
+        error: { message: string } | null;
+      }>;
     };
   };
 };
@@ -106,7 +109,10 @@ function metadataEntries(metadata: Record<string, unknown> | null) {
   return metadata && Object.keys(metadata).length > 0 ? metadata : null;
 }
 
-export default async function ChunkViewerPage({ params, searchParams }: PageProps) {
+export default async function ChunkViewerPage({
+  params,
+  searchParams,
+}: PageProps) {
   await requirePagePermission(
     PERMISSIONS.NAVIGATION_SIDEBAR_TOOLS,
     'GET /admin/products/rag/documents/[id]/chunks/[chunkId]',
@@ -128,7 +134,9 @@ export default async function ChunkViewerPage({ params, searchParams }: PageProp
   const supabase = getSupabaseServiceRoleClient();
 
   const { data: chunk, error: chunkError } = await (
-    supabase.schema('rag').from('document_chunk') as unknown as MaybeSingleSelect<ChunkRow>
+    supabase
+      .schema('rag')
+      .from('document_chunk') as unknown as MaybeSingleSelect<ChunkRow>
   )
     .select(CHUNK_COLUMNS)
     .eq('id', chunkId)
@@ -139,7 +147,9 @@ export default async function ChunkViewerPage({ params, searchParams }: PageProp
   }
 
   const { data: doc, error: docError } = await (
-    supabase.schema('rag').from('document') as unknown as MaybeSingleSelect<DocumentRow>
+    supabase
+      .schema('rag')
+      .from('document') as unknown as MaybeSingleSelect<DocumentRow>
   )
     .select(DOCUMENT_COLUMNS)
     .eq('id', id)
@@ -225,7 +235,9 @@ export default async function ChunkViewerPage({ params, searchParams }: PageProp
             ].map(({ label, value }) => (
               <div key={label} className="rounded-2xl bg-muted px-4 py-3">
                 <p className="text-xs text-muted-foreground">{label}</p>
-                <p className="mt-1 text-sm font-medium text-foreground">{value}</p>
+                <p className="mt-1 text-sm font-medium text-foreground">
+                  {value}
+                </p>
               </div>
             ))}
           </div>
@@ -247,7 +259,9 @@ export default async function ChunkViewerPage({ params, searchParams }: PageProp
             {facts.map(({ label, value }) => (
               <div key={label} className="rounded-2xl bg-muted px-4 py-3">
                 <p className="text-xs text-muted-foreground">{label}</p>
-                <p className="mt-1 text-sm font-medium text-foreground">{value}</p>
+                <p className="mt-1 text-sm font-medium text-foreground">
+                  {value}
+                </p>
               </div>
             ))}
           </div>
@@ -306,13 +320,17 @@ export default async function ChunkViewerPage({ params, searchParams }: PageProp
 
         {/* Chunk metadata */}
         <section className="rounded-3xl border border-border bg-card p-8 shadow-sm">
-          <h2 className="text-lg font-semibold text-foreground">Chunk metadata</h2>
+          <h2 className="text-lg font-semibold text-foreground">
+            Chunk metadata
+          </h2>
           {chunkMetadata ? (
             <pre className="mt-6 max-h-96 overflow-auto rounded-2xl bg-muted p-4 font-mono text-xs leading-relaxed text-foreground">
               {JSON.stringify(chunkMetadata, null, 2)}
             </pre>
           ) : (
-            <p className="mt-6 text-sm text-muted-foreground">No metadata on file.</p>
+            <p className="mt-6 text-sm text-muted-foreground">
+              No metadata on file.
+            </p>
           )}
         </section>
 
