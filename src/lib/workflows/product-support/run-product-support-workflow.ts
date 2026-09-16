@@ -2003,17 +2003,16 @@ export function planRegulatedClaimRedaction(input: {
   }
 
   const allUngroundedAreTokenShaped = ungrounded.every((c) => TOKEN_SHAPED_REGULATED_CATEGORIES.has(c));
+  // B0-829 — was some OTHER regulated-claim category (EPA reg, contact time, hazard, etc.) grounded
+  // elsewhere in the draft? When true, a pure token-shaped rejection keeps its historical exemption
+  // from the substantive-remaining-content bar below (a short-but-complete answer, e.g. a
+  // two-sentence dilution + contact-time answer where only the contact time was unverifiable, should
+  // not have to clear a character count).
+  const hasGroundedCategoryWorthKeeping = grounding.categoriesDetected.some(
+    (c) => !ungrounded.includes(c),
+  );
 
-  if (allUngroundedAreTokenShaped) {
-    // B0-829 — something in the draft WAS grounded and is worth preserving; otherwise there is
-    // nothing left to salvage and the full decline is the only sensible outcome.
-    const hasGroundedCategoryWorthKeeping = grounding.categoriesDetected.some(
-      (c) => !ungrounded.includes(c),
-    );
-    if (!hasGroundedCategoryWorthKeeping) {
-      return { mode: 'decline', reason: 'nothing_grounded_to_keep' };
-    }
-  } else {
+  if (!allUngroundedAreTokenShaped) {
     // B0-871 — sentence redaction is for KNOWLEDGE answers only. A USAGE question about an
     // identified product whose retrieval is label/SDS-led keeps the full decline: there, a
     // compatibility or efficacy sentence is a claim about that product's own label.
@@ -2095,16 +2094,25 @@ export function planRegulatedClaimRedaction(input: {
   // one pluralised marker ("[two efficacy claims withheld …]").
   redactedText = mergeRepeatedRegulatedClaimWithheldMarkers(redactedText);
 
-  // B0-1000 — the minimum-remaining-content bar applies to `sentence_redaction` only, unchanged
-  // from before. A PURE token-shaped case is already gated on `hasGroundedCategoryWorthKeeping`
-  // above (something else on the draft WAS grounded and is worth keeping); withholding just the
-  // one sentence that made an ungrounded numeric claim should not ALSO have to clear a character
-  // count, or a short-but-otherwise-fine answer (e.g. a two-sentence dilution + contact-time
-  // answer where only the contact time was unverifiable) would decline outright over one sentence.
-  if (!allUngroundedAreTokenShaped) {
+  // B0-1000 — the minimum-remaining-content bar is skipped only for a PURE token-shaped case where
+  // `hasGroundedCategoryWorthKeeping` is true (something else on the draft WAS grounded and is
+  // worth keeping): withholding just the one sentence that made an ungrounded numeric claim should
+  // not ALSO have to clear a character count, or a short-but-otherwise-fine answer (e.g. a
+  // two-sentence dilution + contact-time answer where only the contact time was unverifiable) would
+  // decline outright over one sentence.
+  //
+  // B0-1024 — a PURE token-shaped case with NO other grounded category previously declined before
+  // ever attempting redaction (see the removed early return above), discarding substantial
+  // non-regulated-claim content (e.g. a full product-recommendation list) that has nothing to do
+  // with the flagged claim. It now reaches this same bar instead: redact, then decline only if what
+  // remains is too thin to be a real answer.
+  if (!allUngroundedAreTokenShaped || !hasGroundedCategoryWorthKeeping) {
     const remaining = stripRegulatedClaimWithheldMarkers(redactedText);
     if (countSubstantiveContentChars(remaining) < REGULATED_CLAIM_REDACTION_MIN_REMAINING_CHARS) {
-      return { mode: 'decline', reason: 'nothing_substantive_remains' };
+      return {
+        mode: 'decline',
+        reason: allUngroundedAreTokenShaped ? 'nothing_grounded_to_keep' : 'nothing_substantive_remains',
+      };
     }
   }
 

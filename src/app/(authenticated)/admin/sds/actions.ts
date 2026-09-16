@@ -1,6 +1,9 @@
 'use server';
 
+import { getServerSession } from 'next-auth';
 import { revalidatePath } from 'next/cache';
+
+import { authOptions } from '~/lib/auth';
 
 import {
   runSdsIngestion,
@@ -65,9 +68,11 @@ export async function runSdsAction(
 ): Promise<SdsActionState> {
   const mode = readFormValue(formData, 'mode') as SdsIngestionRunMode;
   const batchSize = readBatchSize(formData);
+  const session = await getServerSession(authOptions);
+  const ingestedBy = session?.user?.email ?? null;
 
   try {
-    const result = await runSdsIngestion(mode, batchSize);
+    const result = await runSdsIngestion(mode, batchSize, ingestedBy);
 
     revalidatePath('/admin/sds');
     revalidatePath('/admin');

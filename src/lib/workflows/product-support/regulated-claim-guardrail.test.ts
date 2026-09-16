@@ -1223,6 +1223,86 @@ describe('planRegulatedClaimRedaction — product-usage-specific requires a usag
 });
 
 /**
+ * B0-1024 — a PURE token-shaped rejection (every ungrounded category is EPA/DIN/dilution/contact
+ * time/CAS) with no OTHER regulated category grounded elsewhere used to decline the whole draft
+ * (`nothing_grounded_to_keep`) BEFORE ever attempting redaction, discarding substantial
+ * non-regulated-claim content that had nothing to do with the flagged claim. Fixture mirrors the
+ * live golden-run failure (Product Golden Dataset row 3, "What is the best glass cleaner?",
+ * `test_result_items` `a74a27e0`): the model's real draft was a correct multi-product
+ * recommendation list with one product's dilution figure unverifiable.
+ */
+describe('planRegulatedClaimRedaction — pure token-shaped rejection redacts instead of declining when non-claim content survives (B0-1024)', () => {
+  const RECOMMENDATION_DRAFT = [
+    'There is no documented basis to rank one product as best. Here are the options:',
+    'Product A is a ready-to-use glass cleaner for everyday use.',
+    'Product B is a concentrate diluted at 2 oz/gal for heavy soil.',
+    'Product C is a ready-to-use aerosol cleaner with a streak-free finish.',
+  ].join(' ');
+
+  it('redacts only the ungrounded dilution sentence and keeps the rest of the product list', () => {
+    const plan = planRegulatedClaimRedaction({
+      draftAnswer: RECOMMENDATION_DRAFT,
+      userMessage: 'What is the best glass cleaner?',
+      grounding: {
+        categoriesDetected: ['dilution_ratio'],
+        ungroundedCategories: ['dilution_ratio'],
+        ungroundedDetails: [{ category: 'dilution_ratio', snippet: '2 oz/gal' }],
+        keyTermGroundedCategories: [],
+      },
+      productLineLock: null,
+      sources: [],
+    });
+    expect(plan.mode).toBe('token_redaction');
+    if (plan.mode !== 'token_redaction') return;
+    expect(plan.redactedText).toContain('Product A is a ready-to-use glass cleaner for everyday use.');
+    expect(plan.redactedText).toContain(
+      'Product C is a ready-to-use aerosol cleaner with a streak-free finish.',
+    );
+    expect(plan.redactedText).not.toContain('2 oz/gal');
+    expect(plan.redactedText).toContain(
+      '[one dilution ratio withheld — not verifiable against a retrieved label]',
+    );
+    expect(plan.withheldCategories).toEqual(['dilution_ratio']);
+  });
+
+  it('still declines when the entire draft IS the ungroundable claim, nothing left to salvage', () => {
+    const plan = planRegulatedClaimRedaction({
+      draftAnswer: 'Dilute at 2 oz/gal for general use.',
+      userMessage: 'What is the dilution rate?',
+      grounding: {
+        categoriesDetected: ['dilution_ratio'],
+        ungroundedCategories: ['dilution_ratio'],
+        ungroundedDetails: [{ category: 'dilution_ratio', snippet: '2 oz/gal' }],
+        keyTermGroundedCategories: [],
+      },
+      productLineLock: null,
+      sources: [],
+    });
+    expect(plan.mode).toBe('decline');
+    if (plan.mode !== 'decline') return;
+    expect(plan.reason).toBe('nothing_grounded_to_keep');
+  });
+
+  it('keeps the historical short-answer exemption when another category IS grounded, however little remains', () => {
+    const plan = planRegulatedClaimRedaction({
+      draftAnswer: 'EPA Reg. No. 1677-129. Dilute at 2 oz/gal.',
+      userMessage: 'What is the EPA registration and dilution rate?',
+      grounding: {
+        categoriesDetected: ['epa_registration', 'dilution_ratio'],
+        ungroundedCategories: ['dilution_ratio'],
+        ungroundedDetails: [{ category: 'dilution_ratio', snippet: '2 oz/gal' }],
+        keyTermGroundedCategories: [],
+      },
+      productLineLock: null,
+      sources: [],
+    });
+    expect(plan.mode).toBe('token_redaction');
+    if (plan.mode !== 'token_redaction') return;
+    expect(plan.redactedText).toContain('EPA Reg. No. 1677-129.');
+  });
+});
+
+/**
  * B0-985 — the redaction planner blanked ungrounded TOKENS before locating ungrounded SENTENCES,
  * so a sentence that was both an ungrounded efficacy claim and contained an ungrounded contact
  * time could never be found again and the whole answer hard-declined

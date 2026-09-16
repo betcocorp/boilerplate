@@ -55,7 +55,7 @@ describe('executeQueuedTestRun (B0-883)', () => {
     expect(executeSearchRun).not.toHaveBeenCalled();
   });
 
-  it.each(['completed', 'completed_with_failures', 'failed', 'cancelled'])(
+  it.each(['completed', 'completed_with_failures', 'failed', 'technical_error', 'cancelled'])(
     'returns already_finished for a terminal run (%s) with no execute call',
     async (status) => {
       vi.mocked(getTestResultById).mockResolvedValue(run({ status }));

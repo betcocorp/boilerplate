@@ -43,11 +43,12 @@ export const PROVIDER_FAULT_LABEL: Record<ProviderFaultKind, string> = {
 };
 
 /**
- * How many CONSECUTIVE provider-faulted items end a run. Five is well past any single transient
+ * How many CONSECUTIVE provider-faulted items end a run. Three is well past any single transient
  * blip (the retry policy in `~/lib/openai/transport-retry` has already burned its attempts on each
- * one) but still costs under two minutes of a run that is going to measure nothing anyway.
+ * one) and stops the remaining items from being attempted — and billed — once the provider has
+ * shown it will refuse every request in the run.
  */
-export const PROVIDER_FAULT_ABORT_STREAK = 5;
+export const PROVIDER_FAULT_ABORT_STREAK = 3;
 
 /**
  * Structural quota signals, checked BEFORE any wording. Probed live from the still-active outage on

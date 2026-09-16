@@ -126,6 +126,7 @@ export type Database = {
           epa_registrant_role: string | null
           epa_registration: string | null
           id: string
+          ingested_by: string | null
           is_current: boolean
           language_code: string
           lifecycle_status: string
@@ -157,6 +158,7 @@ export type Database = {
           epa_registrant_role?: string | null
           epa_registration?: string | null
           id?: string
+          ingested_by?: string | null
           is_current?: boolean
           language_code?: string
           lifecycle_status?: string
@@ -188,6 +190,7 @@ export type Database = {
           epa_registrant_role?: string | null
           epa_registration?: string | null
           id?: string
+          ingested_by?: string | null
           is_current?: boolean
           language_code?: string
           lifecycle_status?: string

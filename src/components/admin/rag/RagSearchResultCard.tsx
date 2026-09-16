@@ -1,11 +1,16 @@
 'use client';
 
+import { ArrowUpRight, FileText } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { RagDocumentChunkInspectButtons } from '~/components/rag/RagDocumentChunkInspect';
 
 import { Badge } from '~/components/ui/badge';
 import { logSearchResultClick } from '~/lib/event-logging/search-events';
+import {
+  ragChunkHref,
+  ragDocumentHref,
+} from '~/lib/rag/document-detail-links';
 import type { RagSearchMatch } from '~/lib/rag/search';
 
 /** B0-761 — stable analytics surface id for the RAG semantic-search page. */
@@ -27,6 +32,8 @@ type RagSearchResultCardProps = {
   productLineHref: string | null;
   /** Total matches rendered for the current query (B0-761 analytics). */
   resultCount: number;
+  /** B0-1019 — the search URL this card was rendered from, round-tripped as `?from=`. */
+  returnHref?: string | null;
   /** B0-1017 — false for a direct GUID lookup, where similarity is not a meaningful score. */
   showSimilarity?: boolean;
 };
@@ -35,12 +42,15 @@ type RagSearchResultCardProps = {
  * B0-621 — one result card in the two-column grid. Pure presentation over an existing
  * `RagSearchMatch`; no retrieval logic lives here.
  * B0-684 — "Product line:" and "SKU:" are now clickable links to documents.
+ * B0-1019 — the title and the two footer affordances deep-link to the full chunk/document pages;
+ * the inspect modal stays as the quicker in-place peek (and is shared with Bex chat sources).
  */
 export function RagSearchResultCard({
   match,
   rank,
   productLineHref,
   resultCount,
+  returnHref,
   showSimilarity = true,
 }: RagSearchResultCardProps) {
   const similarityPct = match.similarity * 100;
@@ -55,6 +65,26 @@ export function RagSearchResultCard({
       surface: RAG_SEARCH_SURFACE,
     });
   };
+
+  // B0-1019 — the document link opens a different grain than the card's chunk, so it is
+  // tagged as such rather than reusing the chunk-scoped `logResultClick`.
+  const logDocumentClick = () => {
+    logSearchResultClick({
+      entityType: 'document',
+      rank,
+      resultId: match.document_id,
+      resultCount,
+      surface: RAG_SEARCH_SURFACE,
+    });
+  };
+
+  // B0-1019 — deep links to the full-page views of this result.
+  const chunkDetailHref = ragChunkHref(
+    match.document_id,
+    match.chunk_id,
+    returnHref,
+  );
+  const documentDetailHref = ragDocumentHref(match.document_id, returnHref);
 
   // B0-684: State for clickable product line field
   const [productLineDocId, setProductLineDocId] = useState<string | null>(null);
@@ -130,7 +160,13 @@ export function RagSearchResultCard({
             {String(rank).padStart(2, '0')}
           </span>
           <h2 className="text-lg font-semibold text-foreground">
-            {match.document_title}
+            <Link
+              className="rounded-sm transition-colors hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+              href={chunkDetailHref}
+              onClick={logResultClick}
+            >
+              {match.document_title}
+            </Link>
           </h2>
         </div>
       </div>
@@ -227,15 +263,36 @@ export function RagSearchResultCard({
         {truncateText(match.chunk_text)}
       </p>
 
-      {productLineHref ? (
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        {productLineHref ? (
+          <Link
+            className="inline-flex w-fit rounded-full bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition hover:bg-primary/80"
+            href={productLineHref}
+            onClick={logResultClick}
+          >
+            View RAG product line
+          </Link>
+        ) : null}
+
+        {/* B0-1019 — discoverable, shareable alternative to the inspect modal. */}
         <Link
-          className="inline-flex w-fit rounded-full bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition hover:bg-primary/80"
-          href={productLineHref}
+          className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline"
+          href={chunkDetailHref}
           onClick={logResultClick}
         >
-          View RAG product line
+          Open full view
+          <ArrowUpRight aria-hidden="true" className="size-4" />
         </Link>
-      ) : null}
+
+        <Link
+          className="inline-flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-primary hover:underline"
+          href={documentDetailHref}
+          onClick={logDocumentClick}
+        >
+          <FileText aria-hidden="true" className="size-4" />
+          Document
+        </Link>
+      </div>
 
       <div className="mt-auto flex flex-wrap gap-x-4 gap-y-1 border-t border-border/60 pt-3 font-mono text-[11px] text-muted-foreground">
         <RagDocumentChunkInspectButtons
