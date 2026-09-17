@@ -178,10 +178,11 @@ describe('B0-647 example corpus', () => {
     expect(Object.keys(SEMANTIC_ROUTER_EXAMPLES).sort()).toEqual([...SME_AGENT_IDS].sort());
   });
 
-  it('defines ~80 examples in total, with no duplicate utterance across the whole corpus', () => {
+  it('defines ~82 examples in total, with no duplicate utterance across the whole corpus', () => {
     // B0-746 — 4 routes (product, bathroom, dilution, cross_reference) x 10 + 5 routes
     // (recommendations, floor_wood_sport, floor_concrete, floor_stg, floor_vct) x 8 = 80.
-    expect(SEMANTIC_ROUTER_EXAMPLE_COUNT).toBe(80);
+    // B0-1034 — +2 product-selection utterances on `floor_vct` (now 10) = 82.
+    expect(SEMANTIC_ROUTER_EXAMPLE_COUNT).toBe(82);
     const all = SME_AGENT_IDS.flatMap((route) => [...SEMANTIC_ROUTER_EXAMPLES[route]]);
     expect(new Set(all).size).toBe(all.length);
   });

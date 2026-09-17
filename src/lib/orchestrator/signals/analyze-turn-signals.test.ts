@@ -476,3 +476,65 @@ describe('prompt', () => {
     expect(prompt).toContain('declineClass');
   });
 });
+
+/**
+ * B0-1034 — the consolidated signals call applies the SAME deterministic floor-substrate override
+ * as the classifier path (`applyFloorSurfaceRoutingOverride`, B0-977). Both paths are pinned so the
+ * guardrail cannot be removed from one while the other still looks correct — the exact failure mode
+ * AGENTS.md documents for the duplicated bathroom prompt. `BEX_SIGNALS_ANALYSIS_ENABLED` defaults
+ * false, so `classifyUserIntent` is the production decider today and this is the forward guard for
+ * when the flag flips.
+ */
+describe('analyzeTurnSignals — B0-1034 floor-substrate routing override', () => {
+  it('re-routes a `recommendations` verdict that named a resilient substrate to floor_vct', async () => {
+    const d = deps({
+      runLlm: vi.fn().mockResolvedValue({
+        parsed: {
+          ...LLM_SIGNALS,
+          intent: 'recommendations',
+          confidence: 0.85,
+          surfaceType: 'vct',
+          taskDescription: 'choose stripper and finish for a VCT floor',
+          answerShape: 'enumeration',
+        },
+        usage: USAGE,
+      }),
+    });
+
+    const out = await analyzeTurnSignals(
+      'What stripping and finish products should I use for my VCT floor?',
+      [],
+      d,
+    );
+
+    expect(out.intent).toBe('floor_vct');
+    expect(out.source).toBe('llm');
+    expect(out.fallbackReason).toBeNull();
+    expect(out.routingOverrideReason).toContain('floor_vct');
+    expect(turnSignalsSchema.parse(out)).toBeTruthy();
+  });
+
+  it('leaves a substrate-free `recommendations` verdict alone', async () => {
+    const d = deps({
+      runLlm: vi.fn().mockResolvedValue({
+        parsed: {
+          ...LLM_SIGNALS,
+          intent: 'recommendations',
+          confidence: 0.85,
+          surfaceType: null,
+          taskDescription: 'degrease a commercial kitchen floor',
+        },
+        usage: USAGE,
+      }),
+    });
+
+    const out = await analyzeTurnSignals(
+      'What should I use to get grease off a kitchen floor?',
+      [],
+      d,
+    );
+
+    expect(out.intent).toBe('recommendations');
+    expect(out.routingOverrideReason).toBeNull();
+  });
+});
