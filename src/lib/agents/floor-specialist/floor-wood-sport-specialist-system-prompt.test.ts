@@ -70,4 +70,16 @@ describe('FLOOR_WOOD_SPORT_SPECIALIST_SYSTEM_PROMPT — golden-run concept gaps'
       'Never recommend abrasive pads, abrasive screens, solvents, wax, or household cleaners to remove a mark from a finished wood gym floor',
     );
   });
+
+  it('B0-1040: identifies the failed interface and refuses "just add another coat"', () => {
+    expect(recurringSection).toContain('"What causes peeling or poor adhesion?"');
+    expect(recurringSection).toContain('identify WHICH INTERFACE failed');
+    expect(recurringSection).toContain('wood-to-sealer, sealer-to-paint (game lines), paint-to-finish, or old-finish-to-new-finish');
+    expect(recurringSection).toContain('adding more clear coats over a failed bond does not fix it');
+
+    expect(recurringSection).toContain('"Players say the wood gym floor feels slippery"');
+    expect(recurringSection).toContain('Do not assume the floor needs another coat');
+    expect(recurringSection).toContain('clean, appropriate athletic footwear');
+    expect(recurringSection).toContain('whether the floor is fully dry before play after any cleaning');
+  });
 });
