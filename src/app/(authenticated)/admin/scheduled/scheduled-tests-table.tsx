@@ -312,8 +312,15 @@ export function ScheduledTestsTable({
             <TableHead className="h-10 text-center font-semibold text-slate-900">
               Total tests
             </TableHead>
-            <TableHead className="h-10 text-center font-semibold text-slate-900">
-              Passed / Failed / Timed out
+            <TableHead
+              className="h-10 text-center font-semibold text-slate-900"
+              title="Completed / Error / Timeout"
+            >
+              <span className="text-emerald-600">C</span>
+              <span className="text-slate-400">/</span>
+              <span className="text-red-600">E</span>
+              <span className="text-slate-400">/</span>
+              <span className="text-slate-400">TO</span>
             </TableHead>
             <TableHead className="h-10 text-center font-semibold text-slate-900">
               Success rate
