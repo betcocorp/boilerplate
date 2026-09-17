@@ -7,6 +7,8 @@ import yaml from 'js-yaml';
 import { basename, extname } from 'node:path';
 
 import { syncDocumentChunkEmbeddings } from '~/lib/rag/embeddings';
+import { captureIndexTableAliasCandidates } from '~/lib/rag/index-table-alias-capture';
+import { partitionIndexTableChunks } from '~/lib/rag/index-table-chunks';
 import {
   chunkMarkdown,
   estimateTokens,
@@ -538,7 +540,24 @@ async function ingestSeedDocument(seed: LabelSeedDocument, ingestedBy: string | 
       plainText,
       ingestedBy,
     );
-    const chunkCount = await replaceDocumentChunks(documentId, documentKey, fm, seed, chunkMarkdown(bodyForChunking));
+
+    // B0-1048: index/TOC-shaped sections (e.g. "Product Index") have no retrieval value as
+    // prose and compete for top-K slots against chunks that actually answer the question —
+    // keep them out of rag.document_chunk and capture their name/description pairs into the
+    // alias/entity resolution path instead of discarding them. This is purely a chunk-boundary
+    // concern (see B0-1047's note above) — no dilution/EPA/regulated value is touched here.
+    const { retrievable, indexEntries } = partitionIndexTableChunks(chunkMarkdown(bodyForChunking));
+    if (indexEntries.length > 0) {
+      try {
+        await captureIndexTableAliasCandidates(indexEntries);
+      } catch (err) {
+        console.error(
+          `Failed to capture index-table alias candidates for ${seed.id}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+    const chunkCount = await replaceDocumentChunks(documentId, documentKey, fm, seed, retrievable);
 
     await markSourceRecord(sourceRecordId, seed, { status: 'ingested', chunkCount, lastError: null });
   } catch (error) {

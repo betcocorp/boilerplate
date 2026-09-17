@@ -7,6 +7,8 @@ import { createHash } from 'node:crypto';
 import { basename, extname } from 'node:path';
 
 import { syncDocumentChunkEmbeddings } from '~/lib/rag/embeddings';
+import { captureIndexTableAliasCandidates } from '~/lib/rag/index-table-alias-capture';
+import { partitionIndexTableChunks } from '~/lib/rag/index-table-chunks';
 import {
   chunkMarkdown,
   estimateTokens,
@@ -416,7 +418,23 @@ async function ingestSeedDocument(seed: KnowledgeSeedDocument, ingestedBy: strin
     const effectiveSeed = frontTitle ? { ...seed, title: frontTitle } : seed;
     const plain = markdownToPlainText(body);
     const documentId = await upsertDocument(sourceRecordId, effectiveSeed, body, plain, ingestedBy);
-    const chunkCount = await replaceDocumentChunks(documentId, effectiveSeed, chunkMarkdown(body));
+
+    // B0-1048: index/TOC-shaped sections (e.g. "Product Index") have no retrieval value as
+    // prose and compete for top-K slots against chunks that actually answer the question —
+    // keep them out of rag.document_chunk and capture their name/description pairs into the
+    // alias/entity resolution path instead of discarding them.
+    const { retrievable, indexEntries } = partitionIndexTableChunks(chunkMarkdown(body));
+    if (indexEntries.length > 0) {
+      try {
+        await captureIndexTableAliasCandidates(indexEntries);
+      } catch (err) {
+        console.error(
+          `Failed to capture index-table alias candidates for ${seed.id}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+    const chunkCount = await replaceDocumentChunks(documentId, effectiveSeed, retrievable);
 
     await markSourceRecord(sourceRecordId, effectiveSeed, { status: 'ingested', chunkCount, lastError: null });
   } catch (error) {
