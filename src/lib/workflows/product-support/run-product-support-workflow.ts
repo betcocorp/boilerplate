@@ -54,7 +54,7 @@ import {
   isFactToolEnforcementEnabled,
   requireFactToolForDraft,
 } from '~/lib/workflows/product-support/fact-tool-enforcement';
-import { requireFloorReopenTool } from '~/lib/workflows/product-support/floor-reopen-backstop';
+import { requireFloorProcedureTool } from '~/lib/workflows/product-support/floor-procedure-backstop';
 import { applyDilutionDwellBackstop } from '~/lib/workflows/product-support/dilution-dwell-backstop';
 import { runAiSdkWithToolLoop } from '~/lib/bex/ai-sdk-runtime';
 import {
@@ -3986,9 +3986,13 @@ export async function runProductSupportWorkflow(input: {
     // B0-976 — on the floor routes a reopening / walk-on question is checked FIRST: it is what the
     // user asked, and the draft that withholds the schedule asserts no fact category for B0-948 to
     // catch. Same flag, same one-forced-call-per-turn contract, same gate record.
+    // B0-1031 — that check is now the first entry of a TABLE of floor question types with a
+    // documented knowledge-corpus answer (stripper dwell, stripping failure, finish appearance
+    // problem, maintenance cadence, dry-between-coats); `requireFloorProcedureTool` consults the
+    // reopen check unchanged, then the table. Same contract, same gate.
     const factToolRequirementCheck = factToolEnforcementEnabled
       ? (check: { draftAnswer: string; toolNames: string[] }) =>
-          requireFloorReopenTool({
+          requireFloorProcedureTool({
             ...check,
             userMessage: input.userMessage,
             effectivePromptId,
