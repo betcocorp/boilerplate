@@ -1109,6 +1109,91 @@ describe('evaluateRegulatedClaimGrounding — B0-928 real hazard statements are 
 });
 
 /**
+ * B0-1052 — fourth variant of the B0-870/B0-915/B0-928/B0-998 hazard false-positive family, this
+ * one specific to markdown bullet-list formatting. Live failure: the SportsZone Specialist item
+ * "When to choose water vs solvent based for a wooden gym floor?" (test item
+ * 31024c03-c995-4daa-a102-71417cb7cf5c). The model's draft put the chemistry-class term in a bold
+ * bullet HEADER and "flammable" in the sub-bullet BODY on the next line:
+ *
+ *   **Solvent-based (oil-modified) finishes:**
+ *   - Higher VOCs and stronger odor; some are flammable, requiring special handling and ventilation.
+ *
+ * `splitIntoSentences` treats the newline as a sentence boundary, so by the time
+ * `isGenericMaterialClassComparison` (B0-928/B0-998) ran on the sub-bullet alone it saw zero
+ * chemistry-class terms (the header carries "solvent-based", not the body) and never excused it --
+ * the whole correct, well-cited answer was replaced with generic hazard decline copy, discarding the
+ * must-have "water-based contains lower VOCs" concept along with it.
+ */
+describe('evaluateRegulatedClaimGrounding — B0-1052 bullet-header / sub-bullet chemistry context', () => {
+  it('does not flag a sub-bullet "flammable" mention whose chemistry-class term lives in the bullet header above it', () => {
+    const draftAnswer = [
+      'For a wooden gym floor, the choice depends on the finish chemistry:',
+      '',
+      '**Solvent-based (oil-modified) finishes:**',
+      '- Higher VOCs and stronger odor; some are flammable, requiring special handling and ventilation.',
+      '',
+      '**Water-based finishes:**',
+      '- Water-based finishes contain lower VOCs than solvent-based options, dry faster, and clean up with water.',
+    ].join('\n');
+
+    const result = evaluateRegulatedClaimGrounding({ draftAnswer, sources: [] });
+    expect(result.categoriesDetected).not.toContain('hazard');
+    expect(result.ungroundedCategories).not.toContain('hazard');
+  });
+
+  it('does not require the header to be the literal first line of the answer', () => {
+    // Same shape, reordered so the water-based bullet (no hazard trigger) comes first -- pins that
+    // the exclusion looks at the sub-bullet's OWN immediately preceding line, not the answer start.
+    const draftAnswer = [
+      '**Water-based finishes:**',
+      '- Contain lower VOCs than solvent-based options and clean up with water.',
+      '',
+      '**Solvent-based (oil-modified) finishes:**',
+      '- Higher VOCs; some are flammable and require special handling and ventilation.',
+    ].join('\n');
+
+    const result = evaluateRegulatedClaimGrounding({ draftAnswer, sources: [] });
+    expect(result.categoriesDetected).not.toContain('hazard');
+  });
+
+  it('still declines a genuine product-specific hazard claim in a sub-bullet with no chemistry-class header above it', () => {
+    const draftAnswer = [
+      '**Push (floor stripper) precautions:**',
+      '- This product is corrosive and causes severe skin burns; wear gloves and eye protection.',
+    ].join('\n');
+
+    const result = evaluateRegulatedClaimGrounding({ draftAnswer, sources: [] });
+    expect(result.categoriesDetected).toContain('hazard');
+    expect(result.ungroundedCategories).toContain('hazard');
+  });
+
+  it('still declines a bare "flammable" sub-bullet when the preceding line is not a chemistry-class header', () => {
+    const draftAnswer = [
+      '**General safety notes:**',
+      '- Some finishes are flammable and require special handling and ventilation.',
+    ].join('\n');
+
+    const result = evaluateRegulatedClaimGrounding({ draftAnswer, sources: [] });
+    expect(result.categoriesDetected).toContain('hazard');
+    expect(result.ungroundedCategories).toContain('hazard');
+  });
+
+  it('still declines a hazard statement carrying a real GHS value token even under a chemistry header', () => {
+    // Hard-gated the same way B0-928's exclusion is: a value-bearing GHS token anywhere in the
+    // combined header+body text means this is a real transcribed label statement, not a generic
+    // class comparison, regardless of the header's chemistry-class wording.
+    const draftAnswer = [
+      '**Solvent-based (oil-modified) finishes:**',
+      '- Signal word: DANGER. This product is flammable.',
+    ].join('\n');
+
+    const result = evaluateRegulatedClaimGrounding({ draftAnswer, sources: [] });
+    expect(result.categoriesDetected).toContain('hazard');
+    expect(result.ungroundedCategories).toContain('hazard');
+  });
+});
+
+/**
  * B0-947 — `planRegulatedClaimRedaction`'s product-usage-specific test. Before this ticket the
  * test was a two-term proxy (locked product line AND label-led retrieval) with no question-shape
  * term at all, so a catalog-identity question — which resolves a product line by construction and

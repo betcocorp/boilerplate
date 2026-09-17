@@ -82,6 +82,22 @@ export function chunkMarkdown(
     const paras = text.split(/\n{2,}/);
     let buf = '';
     for (const para of paras) {
+      // B0-1047: a markdown table has no blank lines between rows, so it survives the
+      // paragraph split above as a single "paragraph" no matter how many rows it has. The
+      // generic size guard below only ever fires *between* paragraphs (buf starts empty), so
+      // an oversized table was previously emitted whole. Detect that shape here and split it
+      // by row-groups instead, repeating the header/separator row on every split-off piece so
+      // each chunk stays a syntactically valid, self-contained table.
+      if (para.length > charBudget && isMarkdownTableParagraph(para)) {
+        if (buf.trim()) {
+          chunks.push({ index: index++, heading, sectionPath: section.path, text: buf.trim() });
+          buf = '';
+        }
+        for (const tablePiece of splitMarkdownTableParagraph(para, charBudget)) {
+          chunks.push({ index: index++, heading, sectionPath: section.path, text: tablePiece });
+        }
+        continue;
+      }
       if (buf && buf.length + para.length + 2 > charBudget) {
         chunks.push({ index: index++, heading, sectionPath: section.path, text: buf.trim() });
         buf = '';
@@ -93,6 +109,79 @@ export function chunkMarkdown(
     }
   }
   return chunks;
+}
+
+/** A GFM table separator cell: optional leading/trailing `:` (alignment) around one or more `-`. */
+const TABLE_SEPARATOR_CELL_RE = /^:?-{1,}:?$/;
+
+function isTableSeparatorRow(line: string): boolean {
+  const trimmed = line.trim().replace(/^\|/, '').replace(/\|$/, '');
+  if (!trimmed) return false;
+  const cells = trimmed.split('|').map((c) => c.trim());
+  return cells.length > 0 && cells.every((c) => TABLE_SEPARATOR_CELL_RE.test(c));
+}
+
+/**
+ * B0-1047: true when `text` is (or begins with) a markdown table — a `|...|` header row
+ * immediately followed by a `|---|---|`-style separator row. Only the first two non-blank
+ * lines are inspected, matching how `chunkMarkdown` already isolates paragraphs on blank lines.
+ */
+export function isMarkdownTableParagraph(text: string): boolean {
+  const lines = text.split('\n');
+  const nonBlank = lines.filter((l) => l.trim().length > 0);
+  if (nonBlank.length < 2) return false;
+  const [headerLine, separatorLine] = nonBlank;
+  return headerLine.includes('|') && isTableSeparatorRow(separatorLine);
+}
+
+/**
+ * B0-1047: split an oversized markdown table into <= `budget`-char chunks by row-groups,
+ * repeating the header row and separator row at the top of every split-off chunk so each piece
+ * stays a syntactically valid, self-contained table. Never splits *within* a row — a single row
+ * (e.g. a very wide table row) is emitted whole even if it alone exceeds budget, since splitting
+ * mid-cell could truncate a dilution ratio, EPA registration number, or other regulated value.
+ */
+export function splitMarkdownTableParagraph(text: string, budget: number): string[] {
+  const lines = text.split('\n');
+  const nonBlankIdx = lines.findIndex((l) => l.trim().length > 0);
+  if (nonBlankIdx === -1) return [text];
+
+  // Locate header + separator among the first two non-blank lines, preserving original spacing.
+  let headerLine: string | null = null;
+  let separatorLine: string | null = null;
+  let bodyStart = -1;
+  for (let i = nonBlankIdx; i < lines.length; i++) {
+    if (lines[i].trim().length === 0) continue;
+    if (headerLine === null) {
+      headerLine = lines[i];
+      continue;
+    }
+    if (separatorLine === null) {
+      separatorLine = lines[i];
+      bodyStart = i + 1;
+      break;
+    }
+  }
+  if (headerLine === null || separatorLine === null) return [text];
+
+  const prefix = `${headerLine}\n${separatorLine}`;
+  const bodyRows = lines.slice(bodyStart).filter((l) => l.trim().length > 0);
+
+  const pieces: string[] = [];
+  let buf = '';
+  for (const row of bodyRows) {
+    const candidate = buf ? `${buf}\n${row}` : row;
+    if (buf && `${prefix}\n${candidate}`.length > budget) {
+      pieces.push(`${prefix}\n${buf}`);
+      buf = row;
+    } else {
+      buf = candidate;
+    }
+  }
+  if (buf) {
+    pieces.push(`${prefix}\n${buf}`);
+  }
+  return pieces.length > 0 ? pieces : [text];
 }
 
 export function markdownToPlainText(md: string) {

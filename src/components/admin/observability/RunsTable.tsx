@@ -117,6 +117,10 @@ function statusBadgeClassName(status: string): string {
   }
 }
 
+function truncateChars(text: string, maxChars: number): string {
+  return text.length > maxChars ? `${text.slice(0, maxChars)}…` : text;
+}
+
 function confidenceLabel(confidence: number | null): string {
   return typeof confidence === 'number' ? `${(confidence * 100).toFixed(0)}%` : '—';
 }
@@ -210,7 +214,7 @@ export function RunsTable({ route, rows, hasMore, page, filters, testOptions }: 
                       })()}
                     </TableCell>
                     <TableCell className="relative z-10 max-w-[16rem] align-top text-sm">
-                      <RunAttributionBadge attribution={run.attribution} />
+                      <RunAttributionBadge attribution={run.attribution} maxChars={15} />
                     </TableCell>
                     <TableCell className="align-top">
                       {run.routingDecision ? (
@@ -242,7 +246,9 @@ export function RunsTable({ route, rows, hasMore, page, filters, testOptions }: 
                       {formatDurationSeconds(run.durationMs)}
                     </TableCell>
                     <TableCell className="max-w-md align-top text-slate-800">
-                      <span className="line-clamp-2">{run.userMessagePreview ?? '—'}</span>
+                      <span title={run.userMessagePreview ?? undefined}>
+                        {run.userMessagePreview ? truncateChars(run.userMessagePreview, 35) : '—'}
+                      </span>
                     </TableCell>
                     <TableCell className="relative z-10 text-right align-top">
                       <Link

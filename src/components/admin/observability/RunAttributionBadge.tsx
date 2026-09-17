@@ -15,17 +15,28 @@ import type { RunAttribution } from '~/types/observability';
 const API_CLIENT_BADGE_CLASSNAME = 'border-cyan-600/45 bg-cyan-600/12 text-cyan-900';
 const UNKNOWN_BADGE_CLASSNAME = 'border-slate-300 bg-slate-100 text-slate-500';
 
-export function RunAttributionBadge({ attribution }: { attribution: RunAttribution }) {
+function truncate(text: string, maxChars: number | undefined): string {
+  if (!maxChars || text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars)}…`;
+}
+
+export function RunAttributionBadge({
+  attribution,
+  maxChars,
+}: {
+  attribution: RunAttribution;
+  /** Truncate the displayed name/label to this many characters (full value stays in `title`). */
+  maxChars?: number;
+}) {
   switch (attribution.kind) {
-    case 'user':
+    case 'user': {
+      const label = attribution.displayName ?? attribution.email ?? attribution.userId;
       return (
-        <span
-          className="text-slate-800"
-          title={attribution.email ?? undefined}
-        >
-          {attribution.displayName ?? attribution.email ?? attribution.userId}
+        <span className="text-slate-800" title={attribution.email ?? label}>
+          {truncate(label, maxChars)}
         </span>
       );
+    }
 
     case 'test':
       return (
@@ -34,7 +45,7 @@ export function RunAttributionBadge({ attribution }: { attribution: RunAttributi
           href={`/admin/tests/${attribution.testId}/runs/${attribution.testResultId}`}
           title="Open this test's run page"
         >
-          {attribution.testName}
+          {truncate(attribution.testName, maxChars)}
         </Link>
       );
 

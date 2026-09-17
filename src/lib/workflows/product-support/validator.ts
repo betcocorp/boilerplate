@@ -633,6 +633,53 @@ function isGenericMaterialClassComparison(sentence: string): boolean {
   return chemistryClasses + countDistinctMatches(text, GENERIC_PRODUCT_FORM_CLASS_PATTERNS) >= 2;
 }
 
+/** A markdown list-item body line: "- ...", "* ...", "• ...", or a numbered sub-item ("1. ..."). */
+const BULLET_ITEM_PREFIX_PATTERN = /^\s*(?:[-*•]\s+|\d{1,2}[.)]\s+)/;
+
+function isBulletSubItem(sentence: string): boolean {
+  return BULLET_ITEM_PREFIX_PATTERN.test(sentence);
+}
+
+/** A bullet HEADER line: markdown emphasis/heading markers stripped, text ends in a colon. */
+function isBulletHeaderLine(sentence: string): boolean {
+  return /:\s*$/.test(stripSentenceMarkup(sentence));
+}
+
+/**
+ * B0-1052 — a markdown sub-bullet inherits its immediately preceding bullet-header's chemistry-class
+ * context for the purposes of `isGenericMaterialClassComparison`. `splitIntoSentences` treats the
+ * newline between a bold bullet header ("**Solvent-based (oil-modified) finishes:**") and its body
+ * ("- Higher VOCs and stronger odor; some are flammable, requiring special handling and
+ * ventilation.") as a sentence boundary, so the chemistry-class term that would make this a generic
+ * class comparison (not a product-specific SDS statement) sits one "sentence" away from the hazard
+ * trigger, and `isGenericMaterialClassComparison(sentence)` alone never sees it.
+ *
+ * Deliberately narrow so this cannot widen the exclusion to ordinary multi-sentence paragraphs:
+ *  - only applies when the flagged sentence is itself a list sub-item (a hazard sentence that
+ *    follows unrelated prose, not a bullet body, is untouched);
+ *  - only applies when the sentence carries ZERO chemistry-class terms of its own -- if it already
+ *    had one, `isGenericMaterialClassComparison(sentence)` would already have excluded it, so this
+ *    path only ever ADDS context, it never overrides a decision the base function already made;
+ *  - only applies when the preceding line reads as a header (ends in a colon) that itself names a
+ *    chemistry class.
+ * The combined text is still run through the SAME hard gates as `isGenericMaterialClassComparison`
+ * (GHS value tokens, product-specific imperative + named object, first-aid/treatment content), so a
+ * genuine product-specific hazard or first-aid statement in a sub-bullet is never excused just
+ * because some earlier header happens to name a chemistry class.
+ */
+function isSubBulletOfChemistryHeader(sentence: string, precedingSentence: string | undefined): boolean {
+  if (!precedingSentence) return false;
+  if (!isBulletSubItem(sentence)) return false;
+  if (countDistinctMatches(stripSentenceMarkup(sentence), GENERIC_CHEMISTRY_CLASS_PATTERNS) > 0) {
+    return false;
+  }
+  if (!isBulletHeaderLine(precedingSentence)) return false;
+  if (countDistinctMatches(stripSentenceMarkup(precedingSentence), GENERIC_CHEMISTRY_CLASS_PATTERNS) === 0) {
+    return false;
+  }
+  return isGenericMaterialClassComparison(`${precedingSentence} ${sentence}`);
+}
+
 /**
  * B0-756 — a surface/material compatibility claim ("safe on stainless steel", "will not etch
  * marble") is exactly as regulated as a hazard or first-aid statement: it comes off the product's
@@ -932,11 +979,14 @@ function extractContactTimeTokens(text: string): string[] {
   return extractRegexTokens(text, CONTACT_TIME_TOKEN_PATTERN);
 }
 
-function isHazardClaimSentence(sentence: string): boolean {
+function isHazardClaimSentence(sentence: string, precedingSentence?: string): boolean {
   // B0-915: an offer/pointer/generic-safety sentence is not a transcribed hazard statement.
   if (isMetaOrPointerSafetySentence(sentence)) return false;
   // B0-928: a contrast between two generic chemistry classes is not a transcribed hazard statement.
   if (isGenericMaterialClassComparison(sentence)) return false;
+  // B0-1052: a bullet sub-item with no chemistry-class term of its own borrows the chemistry-class
+  // context from its immediately preceding bullet-header line before this is judged a hazard claim.
+  if (isSubBulletOfChemistryHeader(sentence, precedingSentence)) return false;
   // B0-870: "Non Corrosive" (a product name) / "non-flammable" are not hazard statements.
   const text = sentence.replace(HAZARD_NEGATED_TRIGGER_PATTERN, ' ');
   if (HAZARD_SENTENCE_PATTERN.test(text)) return true;
@@ -1269,12 +1319,18 @@ export function evaluateRegulatedClaimGrounding(input: {
    */
   const checkSentenceCategory = (
     category: RegulatedClaimCategory,
-    isClaimTrigger: (sentence: string) => boolean,
+    // B0-1052: `precedingSentence` is optional and only consulted by `isHazardClaimSentence` (the
+    // sub-bullet/header-context exclusion); every other trigger ignores the extra argument.
+    isClaimTrigger: (sentence: string, precedingSentence?: string) => boolean,
   ) => {
     const allSentences = splitIntoSentences(input.draftAnswer);
     const claimIndices: number[] = [];
     for (let i = 0; i < allSentences.length; i += 1) {
-      if (isClaimTrigger(allSentences[i]) && !isNonClaimScaffolding(allSentences[i])) {
+      const precedingSentence = i > 0 ? allSentences[i - 1] : undefined;
+      if (
+        isClaimTrigger(allSentences[i], precedingSentence) &&
+        !isNonClaimScaffolding(allSentences[i])
+      ) {
         claimIndices.push(i);
       }
     }
