@@ -44,4 +44,19 @@ describe('FLOOR_WOOD_SPORT_SPECIALIST_SYSTEM_PROMPT — golden-run concept gaps'
     expect(recurringSection).toContain('confirm the product-specific range on that coating\'s current TDS');
     expect(recurringSection).toContain('never give one from training knowledge');
   });
+
+  it('B0-1038: gives the water-vs-solvent decision framework and closes on water-based', () => {
+    expect(recurringSection).toContain('"Water-based or solvent-based — which type of finish do we want?"');
+    expect(recurringSection).toContain('VOC and safety');
+    expect(recurringSection).toContain('ambering/color change');
+    expect(recurringSection).toContain('upfront cost versus long-term value across the recoat cycle');
+    expect(recurringSection).toContain(
+      'Betco and Basic Coatings offer and recommend water-based finishes for wood and sport floors',
+    );
+    expect(recurringSection).toContain('RETRIEVAL RETURNED');
+    // B0-746 brand caution: no unverified sport-line product names may be hardcoded.
+    for (const name of ['SportZone', 'SportsZone', 'Emulsion Pro', "Player's Choice", 'GymShoe', 'StreetShoe']) {
+      expect(prompt).not.toContain(name);
+    }
+  });
 });
