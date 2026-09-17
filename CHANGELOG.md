@@ -1,3 +1,20 @@
+# [6.9.0](https://github.com/betcocorp/bex2.0/compare/v6.8.0...v6.9.0) (2026-09-17)
+
+
+### Bug Fixes
+
+* **B0-1045:** reseed manual product_alias rows lost by the B0-878 truncation ([3a27b0a](https://github.com/betcocorp/bex2.0/commit/3a27b0adb03b75f565534528efa708a63312b8cc))
+* **B0-1047:** split oversized markdown tables into row-group chunks ([47225b1](https://github.com/betcocorp/bex2.0/commit/47225b123ee0129b1ecf8e2180eed5bb7864d510))
+* **B0-1049:** stop sync_sds_chunks from corrupting heading with page-spanning boilerplate ([d9f4857](https://github.com/betcocorp/bex2.0/commit/d9f4857a842f6f368e64de26b619350d2f5061eb))
+* **B0-1052:** scope hazard guardrail exclusion to bullet sub-items with header context ([ffdaa23](https://github.com/betcocorp/bex2.0/commit/ffdaa23eccc86c1b3cf1dcd442f9377dc52edeb9))
+* **B0-1053:** add VCT approved-products catalog chunk to close retrieval gap ([a4b3f9f](https://github.com/betcocorp/bex2.0/commit/a4b3f9fa2ae62302e7d525e29c3952c9c45e9141)), closes [#27](https://github.com/betcocorp/bex2.0/issues/27) [#1](https://github.com/betcocorp/bex2.0/issues/1)
+
+
+### Features
+
+* **B0-1048:** exclude index/TOC tables from retrieval, capture aliases instead ([6d1dc23](https://github.com/betcocorp/bex2.0/commit/6d1dc23b3f9b4b4a0351e957f8f325a6d3bdb33a))
+* **B0-1054:** truncate Asked-by and Prompt columns in observability runs table ([e1fbf0f](https://github.com/betcocorp/bex2.0/commit/e1fbf0f5ffe13db28655b23b14cb984bb07ffc39))
+
 # [6.8.0](https://github.com/betcocorp/bex2.0/compare/v6.7.0...v6.8.0) (2026-09-17)
 
 
