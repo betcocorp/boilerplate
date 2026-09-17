@@ -242,6 +242,90 @@ describe('retrieveKnowledgeAssets (B0-529)', () => {
     expect(source.sourceUri).toBe('s3://b/knowledge/floor.md');
   });
 
+  /**
+   * B0-1032 — a substrate-agnostic document with the best similarity must not take the slot from a
+   * document tagged (by title) to the requested surface.
+   */
+  describe('substrate ranking preference (B0-1032)', () => {
+    const CANDIDATES = [
+      match({
+        chunk_id: 'generic',
+        document_id: 'generic-doc',
+        document_title: 'floor maintenance frequency guide',
+        similarity: 0.6978,
+      }),
+      match({
+        chunk_id: 'vct-green',
+        document_id: 'vct-green-doc',
+        document_title: 'VCT Green Certified',
+        similarity: 0.6773,
+      }),
+      match({
+        chunk_id: 'vct-frequency',
+        document_id: 'vct-frequency-doc',
+        document_title: 'vct floor maintenance frequency betco standard',
+        similarity: 0.6334,
+      }),
+    ];
+
+    beforeEach(() => {
+      vi.mocked(searchProductChunks).mockResolvedValue(
+        searchResult(CANDIDATES) as unknown as Awaited<ReturnType<typeof searchProductChunks>>,
+      );
+      vi.mocked(assembleDocumentBodies).mockResolvedValue(new Map());
+    });
+
+    it('ranks the substrate-and-topic document ahead of the generic one', async () => {
+      const result = await retrieveKnowledgeAssets({
+        query: 'VCT top scrub and stripping frequency',
+        limit: 3,
+        substrate: { surfaceType: 'VCT', topic: 'top scrub and stripping frequency' },
+      });
+
+      const ids = result.sources.map((s) => s.documentId);
+      expect(ids.indexOf('vct-frequency-doc')).toBeLessThan(ids.indexOf('generic-doc'));
+      expect(ids[0]).toBe('vct-frequency-doc');
+      expect(result.retrieval.selection.substratePreference?.boostedDocuments).toBe(2);
+    });
+
+    it('reorders only — the similarity it reports is the one retrieval produced', async () => {
+      const result = await retrieveKnowledgeAssets({
+        query: 'q',
+        limit: 3,
+        substrate: { surfaceType: 'VCT', topic: 'top scrub and stripping frequency' },
+      });
+
+      const byId = new Map(result.sources.map((s) => [s.documentId, s.similarity]));
+      expect(byId.get('vct-frequency-doc')).toBe(0.6334);
+      expect(byId.get('generic-doc')).toBe(0.6978);
+      // Never a filter: every candidate document is still returned.
+      expect(result.sources).toHaveLength(3);
+    });
+
+    it('asks for a deeper candidate pool only when a preference resolved', async () => {
+      await retrieveKnowledgeAssets({ query: 'q', limit: 3 });
+      expect(vi.mocked(searchProductChunks).mock.calls[0][0].limit).toBe(12);
+
+      await retrieveKnowledgeAssets({ query: 'q', limit: 3, substrate: { surfaceType: 'VCT' } });
+      expect(vi.mocked(searchProductChunks).mock.calls[1][0].limit).toBe(20);
+    });
+
+    it('is a no-op when the caller named no surface', async () => {
+      const result = await retrieveKnowledgeAssets({
+        query: 'q',
+        limit: 3,
+        substrate: { topic: 'top scrub frequency' },
+      });
+
+      expect(result.sources.map((s) => s.documentId)).toEqual([
+        'generic-doc',
+        'vct-green-doc',
+        'vct-frequency-doc',
+      ]);
+      expect(result.retrieval.selection.substratePreference).toBeNull();
+    });
+  });
+
   it('rejects an empty query rather than searching the whole corpus', async () => {
     await expect(retrieveKnowledgeAssets({ query: '   ' })).rejects.toThrow(/query is required/);
     expect(searchProductChunks).not.toHaveBeenCalled();

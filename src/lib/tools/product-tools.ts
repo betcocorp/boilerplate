@@ -1224,6 +1224,16 @@ export async function executeProductTool(
         query: q,
         limit: p.maxResults,
         excludeKnowledgeCategories: resolveKnowledgeCategoryExclusions(auditCtx?.specialistId, q),
+        // B0-1032 — the structured arguments are passed on as an ORDER-ONLY ranking preference, so a
+        // document tagged to the requested substrate outranks a substrate-agnostic one with better
+        // lexical/embedding overlap. Deliberately NOT built from `q`: the static boilerplate above
+        // ("coats coverage yield ... procedure") is appended to every call and would make every
+        // floor document look on-topic. Measured live, dropping that boilerplate from `q` does not
+        // fix the ranking on its own, so it is left exactly as-is.
+        substrate: {
+          surfaceType: p.surfaceType,
+          topic: buildKnowledgeAssetQuery([p.procedure, p.productName]),
+        },
       });
       return {
         ok: true,
