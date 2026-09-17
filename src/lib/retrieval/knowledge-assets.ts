@@ -1,3 +1,9 @@
+import {
+  rankBySubstratePreference,
+  resolveSubstratePreference,
+  type ResolvedSubstratePreference,
+  type SubstrateRankingInput,
+} from '~/lib/rag/knowledge-substrate-ranking';
 import { searchProductChunks, type RagSearchMatch, type RagSearchResult } from '~/lib/rag/search';
 import {
   assembleDocumentBodies,
@@ -49,6 +55,20 @@ const KNOWLEDGE_ASSET_DOCUMENT_MAX_CHARS = 24_000;
  */
 const CANDIDATE_CHUNKS_PER_DOCUMENT = 4;
 
+/**
+ * B0-1032 — candidate chunk floor used when the caller expresses a substrate preference.
+ *
+ * A preference can only reorder documents that are IN the candidate set, and at the default
+ * over-fetch (3 documents x 4 chunks = 12) the substrate-specific document this ticket is about was
+ * not in it: measured live, `vct floor maintenance frequency betco standard` first appears once the
+ * candidate request reaches 20 chunks. 20 is also what `clampLimit` (`~/lib/rag/search.ts`) allows
+ * at most, and it is what lifts the knowledge over-fetch in `resolveRerankPlan` to the full 200-row
+ * RPC pool — so this is "ask for as deep a pool as the search layer will give", not a magic number.
+ * Applied ONLY when a preference resolved, so every other knowledge-asset call keeps its existing
+ * candidate set exactly.
+ */
+const SUBSTRATE_PREFERENCE_CANDIDATE_CHUNKS = 20;
+
 const SNIPPET_MAX_CHARS = 900;
 
 export type KnowledgeAssetSource = {
@@ -93,6 +113,16 @@ export type KnowledgeAssetRetrievalSummary = {
     requiredDocumentKinds: string[];
     candidateMatches: number;
     uniqueDocuments: number;
+    /** B0-1032 — distinct documents the candidate chunks covered, before the `limit` cap. */
+    candidateDocuments: number;
+    /** B0-1032 — the order-only substrate preference applied, or `null` when none resolved. */
+    substratePreference: {
+      surfaceType: string;
+      surfaceTerms: string[];
+      topicTerms: string[];
+      /** Candidate documents whose title named the substrate (score > 0). */
+      boostedDocuments: number;
+    } | null;
   };
 };
 
@@ -113,8 +143,8 @@ export function buildKnowledgeAssetQuery(parts: Array<string | null | undefined>
     .trim();
 }
 
-/** Best-scoring match per document, in descending similarity order, capped at `limit`. */
-function topMatchPerDocument(matches: RagSearchMatch[], limit: number): RagSearchMatch[] {
+/** Best-scoring match per document, in descending similarity order (not yet capped). */
+function bestMatchPerDocument(matches: RagSearchMatch[]): RagSearchMatch[] {
   const best = new Map<string, RagSearchMatch>();
   for (const match of matches) {
     const existing = best.get(match.document_id);
@@ -122,7 +152,29 @@ function topMatchPerDocument(matches: RagSearchMatch[], limit: number): RagSearc
       best.set(match.document_id, match);
     }
   }
-  return [...best.values()].sort((a, b) => b.similarity - a.similarity).slice(0, limit);
+  return [...best.values()].sort((a, b) => b.similarity - a.similarity);
+}
+
+/**
+ * B0-1032 — best match per document, substrate-preferred, capped at `limit`.
+ *
+ * The preference is applied to the WHOLE per-document candidate list before the cap, because the cap
+ * is what drops the substrate-specific document today. Order-only: `similarity` is never rewritten,
+ * and with no preference (or none that any candidate matches) this is the previous behaviour exactly
+ * — descending similarity, sliced.
+ */
+function topMatchPerDocument(
+  matches: RagSearchMatch[],
+  limit: number,
+  preference: ResolvedSubstratePreference | null,
+): { selected: RagSearchMatch[]; candidateDocuments: number; boostedDocuments: number } {
+  const perDocument = bestMatchPerDocument(matches);
+  const { ranked, boostedCount } = rankBySubstratePreference(perDocument, preference);
+  return {
+    selected: ranked.slice(0, limit),
+    candidateDocuments: perDocument.length,
+    boostedDocuments: boostedCount,
+  };
 }
 
 function toSource(
@@ -165,6 +217,12 @@ export async function retrieveKnowledgeAssets(input: {
   limit?: number;
   /** B0-780: see `runProductKnowledgeQuery` (`~/lib/retrieval/product-knowledge.ts`). */
   excludeKnowledgeCategories?: string[];
+  /**
+   * B0-1032 — the caller's substrate/topic wording (`get_floor_asset`'s `surfaceType` +
+   * `procedure`/`productName`), used as an ORDER-ONLY ranking preference over the candidate
+   * documents. Never a filter: see `~/lib/rag/knowledge-substrate-ranking.ts`.
+   */
+  substrate?: SubstrateRankingInput;
 }): Promise<KnowledgeAssetResult> {
   const query = input.query.trim();
   if (!query) {
@@ -176,15 +234,24 @@ export async function retrieveKnowledgeAssets(input: {
     MAX_KNOWLEDGE_ASSET_RESULTS,
   );
 
+  const preference = resolveSubstratePreference(input.substrate);
+  const candidateChunkLimit = preference
+    ? Math.max(limit * CANDIDATE_CHUNKS_PER_DOCUMENT, SUBSTRATE_PREFERENCE_CANDIDATE_CHUNKS)
+    : limit * CANDIDATE_CHUNKS_PER_DOCUMENT;
+
   const result = await searchProductChunks({
     query,
-    limit: limit * CANDIDATE_CHUNKS_PER_DOCUMENT,
+    limit: candidateChunkLimit,
     scope: 'knowledge',
     useHybrid: true,
     excludeKnowledgeCategories: input.excludeKnowledgeCategories,
   });
 
-  const selected = topMatchPerDocument(result.matches, limit);
+  const { selected, candidateDocuments, boostedDocuments } = topMatchPerDocument(
+    result.matches,
+    limit,
+    preference,
+  );
   const documentIds = selected.map((match) => match.document_id);
 
   const [bodies, sourceRefs] = await Promise.all([
@@ -220,6 +287,15 @@ export async function retrieveKnowledgeAssets(input: {
         requiredDocumentKinds: ['knowledge'],
         candidateMatches: result.matches.length,
         uniqueDocuments: selected.length,
+        candidateDocuments,
+        substratePreference: preference
+          ? {
+              surfaceType: preference.surfaceType,
+              surfaceTerms: preference.surfaceTerms,
+              topicTerms: preference.topicTerms,
+              boostedDocuments,
+            }
+          : null,
       },
     },
   };
