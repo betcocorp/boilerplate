@@ -1,3 +1,24 @@
+# [6.8.0](https://github.com/betcocorp/bex2.0/compare/v6.7.0...v6.8.0) (2026-09-17)
+
+
+### Bug Fixes
+
+* **B0-1028:** dedupe test_result_items and stop passed_items/failed_items from drifting ([1bd953b](https://github.com/betcocorp/bex2.0/commit/1bd953b27c7c3966f88e0bec1ae26b404c0620ff))
+* **B0-1031:** require get_floor_asset for floor procedure and benchmark questions ([3977133](https://github.com/betcocorp/bex2.0/commit/39771337f1e0f95244b059954f1b2d1c937e571f))
+* **B0-1032:** rank substrate-specific floor knowledge docs above generic ones ([716e94f](https://github.com/betcocorp/bex2.0/commit/716e94f426eebb403b935a78c6b38b40e7840fb6))
+* **B0-1033:** restore the "dries top-down" rationale on floor recoat-timing answers ([f00646c](https://github.com/betcocorp/bex2.0/commit/f00646ca2e09bc0b8a1dd3640ef5cd45daeacbd8))
+* **B0-1036:** require the three-part recoat-timing check on wood/sport floors ([28e2f1f](https://github.com/betcocorp/bex2.0/commit/28e2f1fba8da477ba5de5c7ccb2e0299f2282ef9))
+* **B0-1037:** require measuring gym temperature and humidity with instruments ([73ab242](https://github.com/betcocorp/bex2.0/commit/73ab242d525909bb57050810756c2d66908cb268))
+* **B0-1038:** add the water-vs-solvent decision framework to the wood/sport prompt ([1140079](https://github.com/betcocorp/bex2.0/commit/11400797e0b0f0818e7296015a439e3efea39ad0))
+* **B0-1039:** sequence scuff removal least-aggressive-first on wood gym floors ([53cc3a8](https://github.com/betcocorp/bex2.0/commit/53cc3a8e8c4b8ffa12bed51c93195098d2ecb2ae))
+* **B0-1040:** diagnose before recoating on wood floor peeling and slipperiness ([934ea15](https://github.com/betcocorp/bex2.0/commit/934ea1529061ae6bbdfc95264593aafd47dc5582))
+* **B0-1041:** promote the applicator-switch caution to a required answer-shape line ([f3b955b](https://github.com/betcocorp/bex2.0/commit/f3b955b1e022a420cf2fa5f745f441002a6143a6))
+
+
+### Features
+
+* **scripts:** add local Supabase dump, restore, and bootstrap ([71e9dae](https://github.com/betcocorp/bex2.0/commit/71e9dae0f40ad0f02430a4ab72377dd4eadf2f45))
+
 # [6.7.0](https://github.com/betcocorp/bex2.0/compare/v6.6.1...v6.7.0) (2026-09-16)
 
 
