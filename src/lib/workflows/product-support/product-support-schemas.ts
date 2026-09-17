@@ -127,6 +127,16 @@ export const answerProvenanceSchema = z.enum([
    */
   'alias_fuzzy_disclosure_prepended',
   /**
+   * B0-1033 — `applyFloorRecoatRationaleBackstop`
+   * (`~/lib/workflows/product-support/floor-recoat-rationale-backstop.ts`) deterministically
+   * appended the documented "finish dries top-down, so moisture can be trapped underneath"
+   * rationale to a floor-route dry-between-coats answer that gave the timing and dropped the WHY
+   * the VCT prompt mandates. Additive text only — the model's own answer and every figure in it are
+   * untouched — and, like `alias_fuzzy_disclosure_prepended`, only set when the append actually
+   * changed the text (a draft that already carried the rationale leaves the prior value alone).
+   */
+  'floor_recoat_rationale_appended',
+  /**
    * B0-875 — the competitor self-reference check (`classifyCompetitorSelfReference`) found that
    * what the user offered in place of a competitor product was a chemistry-class description
    * ("Diversey quat disinfectant", "peroxide cleaner"), so the cross-reference path was withdrawn
