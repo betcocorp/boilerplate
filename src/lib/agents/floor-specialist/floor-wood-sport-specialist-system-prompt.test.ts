@@ -59,4 +59,15 @@ describe('FLOOR_WOOD_SPORT_SPECIALIST_SYSTEM_PROMPT — golden-run concept gaps'
       expect(prompt).not.toContain(name);
     }
   });
+
+  it('B0-1039: sequences scuff/ball-mark removal least-aggressive first and bans abrasives', () => {
+    expect(recurringSection).toContain('"How do I get shoe scuffs, ball marks, or spots off the wood gym floor?"');
+    expect(recurringSection).toContain('Sequence least-aggressive first');
+    expect(recurringSection).toContain('changing to a clean cleaning surface often');
+    expect(recurringSection).toContain('ONLY for ground-in marks the routine cleaner does not lift');
+    expect(recurringSection).toContain("Remove spills as soon as they happen so liquid does not work into the floor's joints");
+    expect(recurringSection).toContain(
+      'Never recommend abrasive pads, abrasive screens, solvents, wax, or household cleaners to remove a mark from a finished wood gym floor',
+    );
+  });
 });
