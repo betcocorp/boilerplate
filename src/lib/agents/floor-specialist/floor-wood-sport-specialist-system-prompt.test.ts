@@ -82,4 +82,37 @@ describe('FLOOR_WOOD_SPORT_SPECIALIST_SYSTEM_PROMPT — golden-run concept gaps'
     expect(recurringSection).toContain('clean, appropriate athletic footwear');
     expect(recurringSection).toContain('whether the floor is fully dry before play after any cleaning');
   });
+
+  it('B0-1041: promotes the applicator-switch caution to a required answer-shape line', () => {
+    const caution =
+      "don't switch applicator type (T-bar vs. roller) or pad/roller nap partway through the same area without first testing an inconspicuous spot";
+    expect(answerShapeSection).toContain(
+      '**The applicator-switch caution is a required line in any answer that covers applicator method, pad, or roller nap**',
+    );
+    expect(answerShapeSection).toContain(caution);
+    expect(answerShapeSection).toContain('Finish an area with the tool it was started with.');
+    // The caution now lives in exactly one place; the T-bar bullet points at it instead of repeating it.
+    expect(recurringSection).not.toContain(caution);
+    expect(recurringSection).toContain('The applicator-switch caution in **Answer shape (required)** is mandatory in this answer');
+  });
+
+  it('carries no regulated figure in any of the added instructions', () => {
+    const addedShapes = [
+      '"How long before I can put a second coat on / recoat over the last coat?"',
+      '"What temperature and humidity should the gym be at to coat the floor?"',
+      '"Water-based or solvent-based — which type of finish do we want?"',
+      '"How do I get shoe scuffs, ball marks, or spots off the wood gym floor?"',
+      '"What causes peeling or poor adhesion?"',
+      '"Players say the wood gym floor feels slippery"',
+    ];
+    for (const shape of addedShapes) {
+      const start = recurringSection.indexOf(shape);
+      expect(start, `${shape} is present`).toBeGreaterThan(-1);
+      const bullet = recurringSection.slice(start, recurringSection.indexOf('\n', start));
+      expect(
+        bullet,
+        `${shape} must not hardcode a regulated value`,
+      ).not.toMatch(/\d+\s*(?:°|degrees?|%|oz|ml|ppm|minutes?|hours?|days?)/i);
+    }
+  });
 });
