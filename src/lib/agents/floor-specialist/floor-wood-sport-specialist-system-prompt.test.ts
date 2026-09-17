@@ -35,4 +35,13 @@ describe('FLOOR_WOOD_SPORT_SPECIALIST_SYSTEM_PROMPT — golden-run concept gaps'
     expect(recurringSection).toContain('not the recoat FREQUENCY question above');
     expect(recurringSection).toContain('"How often should we recoat a gym/sport floor?"');
   });
+
+  it('B0-1037: requires measuring temperature and humidity with instruments, not by feel', () => {
+    expect(recurringSection).toContain('"What temperature and humidity should the gym be at to coat the floor?"');
+    expect(recurringSection).toContain(
+      'MEASURE both with a calibrated thermometer and hygrometer in the space rather than judging conditions by feel',
+    );
+    expect(recurringSection).toContain('confirm the product-specific range on that coating\'s current TDS');
+    expect(recurringSection).toContain('never give one from training knowledge');
+  });
 });
