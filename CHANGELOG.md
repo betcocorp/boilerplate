@@ -1,3 +1,18 @@
+# [6.10.0](https://github.com/betcocorp/bex2.0/compare/v6.9.0...v6.10.0) (2026-09-18)
+
+
+### Bug Fixes
+
+* **B0-1055:** dedupe cross-reference recommendation rows and prevent future duplicates ([f877313](https://github.com/betcocorp/bex2.0/commit/f877313ebb5ceb03c3ac546f9e0fa27bd162420a))
+* **B0-1056:** guard non-competitor/self-reference identities, link trace to observability directly ([a669dd2](https://github.com/betcocorp/bex2.0/commit/a669dd2c4aeb2eeb09b902a278e38fe58e66b3c9))
+* **B0-1057:** catch imperative/generic non-product text and unbranded Betco lines ([45ec86b](https://github.com/betcocorp/bex2.0/commit/45ec86bd03795b57305e642f7382c83ef1b14df3))
+
+
+### Features
+
+* **B0-1055:** add per-row evidence trace page to recommendation queue ([f584f1d](https://github.com/betcocorp/bex2.0/commit/f584f1dfff21ca37c4518630811aa13472a85ace))
+* **B0-1055:** ground competitor brand identification in web search evidence ([e4bbf99](https://github.com/betcocorp/bex2.0/commit/e4bbf99283c2f03aad74f38f5e824ccc2ccf24b1))
+
 # [6.9.0](https://github.com/betcocorp/bex2.0/compare/v6.8.0...v6.9.0) (2026-09-17)
 
 
