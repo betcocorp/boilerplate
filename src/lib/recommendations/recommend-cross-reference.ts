@@ -279,6 +279,29 @@ export type RecommendCrossReferenceInput = {
   competitorBrand?: string | null;
 };
 
+/**
+ * B0-779 / B0-1056 — the shared decline for an unresolved (or, at the `recommend_cross_reference`
+ * tool-call site, implausible) competitor identity: no engine run, no persisted row
+ * (`recommendationId: null`). Originally local to `run-sme-agent.ts`'s `runCrossReferenceSmeAgentAnswer`
+ * (B0-779); reused by `product-tools.ts`'s tool-call case (B0-1056) so both places that must not
+ * call the engine on a non-identity share one shape instead of drifting.
+ */
+export async function buildUnresolvedCompetitorDecline(): Promise<
+  RecommendCrossReferenceResult & { recommendationId: string | null }
+> {
+  return {
+    source: 'web',
+    answered: false,
+    status: 'declined',
+    overallConfidence: 0,
+    thresholdUsed: await resolveXrefThreshold(),
+    candidates: [],
+    evidence: { source: 'web', reason: 'competitor_identity_unresolved' },
+    declineReason: XREF_DECLINE_COPY,
+    recommendationId: null,
+  };
+}
+
 type LegacyLookupResult = Awaited<ReturnType<typeof lookupCrossReference>>;
 
 export type RecommendCrossReferenceDeps = {

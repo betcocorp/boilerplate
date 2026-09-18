@@ -195,7 +195,13 @@ export function isConversionListAsk(userMessage: string): boolean {
   return CONVERSION_LIST_PATTERNS.some((pattern) => pattern.test(userMessage));
 }
 
-function isBetcoBrand(brand: string | null): boolean {
+/**
+ * B0-1056 — exported so `product-tools.ts`'s `recommend_cross_reference` tool case (which has no
+ * user message or `resolveBetcoEntity` in scope to run the full `classifyCompetitorSelfReference`
+ * pipeline, only the model's own `competitorBrand` tool-call argument) can still catch the cheap,
+ * unambiguous case: the model naming Betco/Basic Coatings/EnviroZyme itself as the "competitor".
+ */
+export function isBetcoBrand(brand: string | null): boolean {
   return BETCO_BRANDS.has(normalizeProductText(brand));
 }
 

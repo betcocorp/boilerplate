@@ -200,3 +200,29 @@ export function isCompetitorIdentityUnresolved(
 ): boolean {
   return !competitor.brand && !competitor.resolved;
 }
+
+/**
+ * B0-1056 — the one call site with no extraction step to check `isCompetitorIdentityUnresolved`
+ * against: `product-tools.ts`'s `recommend_cross_reference` case takes `competitorProduct`
+ * straight from the model's own tool-call arguments, with nothing to stop the model — under
+ * pressure from a specialist prompt that expects it to always attempt a competitor lookup — from
+ * passing the raw, non-competitor user message as the "product" (e.g. "Why does the grout stay
+ * dirty even after we mop it?"). A real product name is short and declarative; these observed
+ * failures are long, interrogative, or first-person. Deliberately conservative (false positives
+ * cost nothing but a decline; false negatives cost a garbage row in the review queue), so this
+ * only rejects the unambiguous shapes: a literal question mark, or an opening word/phrase no
+ * product name would ever start with.
+ */
+const IMPLAUSIBLE_PRODUCT_OPENERS =
+  /^(which|what|why|when|where|who|how|is|are|can|could|would|should|do|does|did|i need|i have|our|we|a customer|a customer's)\b/i;
+
+/** A product name this short-and-declarative check would reject as too long to be a product name. */
+const IMPLAUSIBLE_PRODUCT_MAX_LENGTH = 80;
+
+export function isImplausibleCompetitorProductText(product: string): boolean {
+  const trimmed = product.trim();
+  if (!trimmed) return true;
+  if (trimmed.includes('?')) return true;
+  if (trimmed.length > IMPLAUSIBLE_PRODUCT_MAX_LENGTH) return true;
+  return IMPLAUSIBLE_PRODUCT_OPENERS.test(trimmed);
+}

@@ -5,6 +5,16 @@ vi.mock('~/lib/auth', () => ({ authOptions: {} }));
 vi.mock('~/lib/recommendations/persist-recommendation', () => ({
   runCrossReferenceRecommendation: vi.fn(),
 }));
+// B0-1056 — the route now records a real conversation + workflow_runs row so its trace links to
+// /admin/observability/[runId]; these tests exercise the route's auth/validation/response shape,
+// not persistence, so the DB-touching repositories are stubbed.
+vi.mock('~/lib/conversations/conversation-repository', () => ({
+  createConversation: vi.fn().mockResolvedValue({ id: 'conversation-1' }),
+}));
+vi.mock('~/lib/conversations/workflow-repository', () => ({
+  insertWorkflowRun: vi.fn().mockResolvedValue({ id: 'run-1' }),
+  updateWorkflowRun: vi.fn().mockResolvedValue(undefined),
+}));
 
 import { getServerSession } from 'next-auth';
 

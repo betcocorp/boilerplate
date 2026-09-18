@@ -69,6 +69,9 @@ import { detectCategorySearchTerms } from '~/lib/tools/category-search-terms';
 import { getProductCategory, getProductsInCategory } from '~/lib/tools/category-lookup';
 import { routeCategoryQuery } from '~/lib/category/category-router';
 import { runCrossReferenceRecommendation } from '~/lib/recommendations/persist-recommendation';
+import { isImplausibleCompetitorProductText } from '~/lib/recommendations/extract-competitor-product';
+import { isBetcoBrand } from '~/lib/recommendations/competitor-self-reference';
+import { buildUnresolvedCompetitorDecline } from '~/lib/recommendations/recommend-cross-reference';
 
 const ADAPTER_TAG = 'rag_corpus_full_document' as const;
 
@@ -983,10 +986,30 @@ export async function executeProductTool(
     }
     case 'recommend_cross_reference': {
       const p = recommendCrossReferenceInputSchema.parse(args);
-      const result = await runCrossReferenceRecommendation({
-        competitorProduct: p.competitorProduct,
-        competitorBrand: p.competitorBrand ?? null,
-      });
+      /**
+       * B0-1056 — nothing upstream of this tool case validates that the model's own
+       * `competitorProduct`/`competitorBrand` arguments actually name a competitor at all, rather
+       * than the raw user message (a specialist prompt that expects a competitor lookup can
+       * pressure the model into calling this tool even on an unrelated question) or one of Betco's
+       * own brands (this table is competitors of Betco/Basic Coatings/EnviroZyme only —
+       * `classifyCompetitorSelfReference` catches this upstream in the chat workflow, but that
+       * pipeline needs the raw user message and a DB resolver, neither in scope here). Declines
+       * without ever calling the engine or persisting a row, same as the other unresolved-identity
+       * paths.
+       */
+      const result = isBetcoBrand(p.competitorBrand ?? null) || isImplausibleCompetitorProductText(p.competitorProduct)
+        ? await buildUnresolvedCompetitorDecline()
+        : await runCrossReferenceRecommendation(
+            {
+              competitorProduct: p.competitorProduct,
+              competitorBrand: p.competitorBrand ?? null,
+            },
+            // B0-1056 — reuse this turn's real workflow_runs row instead of a disconnected
+            // correlation id, so the persisted recommendation's evidence.traceId links to a real
+            // trace at /admin/observability/[runId]. Falls back to a fresh id (persistRecommendation's
+            // default) for the rare caller with no auditCtx, e.g. unit tests.
+            auditCtx?.workflowRunId ? { traceId: auditCtx.workflowRunId } : undefined,
+          );
       return {
         ok: true,
         adapter: 'cross_reference_recommendation_v1',

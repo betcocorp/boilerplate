@@ -373,7 +373,17 @@ export function RecommendationRowPanel({
       budgetExceeded?: boolean;
     } | null;
     spec?: Record<string, unknown> | null;
+    traceId?: string | null;
   };
+  /**
+   * B0-1056 — links straight to the existing `/admin/observability/[runId]` trace page rather than
+   * a page of our own. `traceId` is `workflow_runs.id` for every call path fixed under B0-1056
+   * (product-tools.ts's tool call, the cross_reference SME agent, the admin tester route); a row
+   * from before that fix still carries a bare correlation id with no matching run, so this link
+   * can still 404 for historical rows — that gap was a deliberate tradeoff, not an oversight.
+   */
+  const normalizedInput = recommendation.normalizedInput as { traceId?: string | null } | null;
+  const traceId = evidence?.traceId ?? normalizedInput?.traceId ?? null;
 
   return (
     <Collapsible onOpenChange={setOpen} open={open}>
@@ -408,15 +418,18 @@ export function RecommendationRowPanel({
               </div>
             </button>
           </CollapsibleTrigger>
-          {/* B0-1055 — separate from the collapsible trigger button: a <Link> nested in a <button> is invalid HTML. */}
-          <Link
-            className="flex shrink-0 items-center gap-1 rounded-2xl px-3 text-xs text-muted-foreground hover:bg-muted/40 hover:text-foreground"
-            href={`/admin/tools/cross-reference/recommendations/${recommendation.id}`}
-            title="View full evidence trace"
-          >
-            <Search className="size-3.5" />
-            Trace
-          </Link>
+          {/* B0-1055/B0-1056 — separate from the collapsible trigger button: a <Link> nested in a
+              <button> is invalid HTML. Links to the run's actual trace when one was recorded. */}
+          {traceId ? (
+            <Link
+              className="flex shrink-0 items-center gap-1 rounded-2xl px-3 text-xs text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+              href={`/admin/observability/${traceId}`}
+              title="View workflow run trace"
+            >
+              <Search className="size-3.5" />
+              Trace
+            </Link>
+          ) : null}
         </div>
 
         <CollapsibleContent>

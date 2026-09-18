@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   classifyCompetitorSelfReference,
   findBetcoSelfReferenceWebResult,
+  isBetcoBrand,
   isBetcoHost,
   isConversionListAsk,
   isGenericChemistryDescription,
@@ -428,5 +429,20 @@ describe('betco.com self-reference in web results (B0-876)', () => {
     expect(findBetcoSelfReferenceWebResult([betco, other])).toBe(betco);
     expect(findBetcoSelfReferenceWebResult([other, betco])).toBeNull();
     expect(findBetcoSelfReferenceWebResult([])).toBeNull();
+  });
+});
+
+describe('isBetcoBrand (B0-1056)', () => {
+  it('recognises Betco and its sub-brands, case/whitespace-insensitively', () => {
+    expect(isBetcoBrand('Betco')).toBe(true);
+    expect(isBetcoBrand('  betco  ')).toBe(true);
+    expect(isBetcoBrand('Basic Coatings')).toBe(true);
+    expect(isBetcoBrand('EnviroZyme')).toBe(true);
+    expect(isBetcoBrand('1950')).toBe(true);
+  });
+
+  it('does not flag a real competitor or null', () => {
+    expect(isBetcoBrand('Spartan')).toBe(false);
+    expect(isBetcoBrand(null)).toBe(false);
   });
 });

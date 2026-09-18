@@ -25,6 +25,7 @@ vi.mock('~/lib/workflows/product-support/max-output-tokens', () => ({
 import {
   extractCompetitorProduct,
   isCompetitorIdentityUnresolved,
+  isImplausibleCompetitorProductText,
 } from '~/lib/recommendations/extract-competitor-product';
 
 const USAGE = { promptTokens: 120, completionTokens: 18, totalTokens: 138, cachedPromptTokens: 0 };
@@ -285,5 +286,33 @@ describe('isCompetitorIdentityUnresolved (B0-779)', () => {
 
   it('is false when both a brand and a resolved product are present', () => {
     expect(isCompetitorIdentityUnresolved({ brand: 'Spartan', resolved: true })).toBe(false);
+  });
+});
+
+describe('isImplausibleCompetitorProductText (B0-1056)', () => {
+  it('rejects real user questions with no competitor product identity', () => {
+    expect(
+      isImplausibleCompetitorProductText('Why does the grout stay dirty even after we mop it?'),
+    ).toBe(true);
+    expect(
+      isImplausibleCompetitorProductText(
+        "I found a spec sheet online for a competitor's disinfectant. Can you find the Betco match?",
+      ),
+    ).toBe(true);
+    expect(
+      isImplausibleCompetitorProductText(
+        "Which Betco product is identical to the competitor product we're using now?",
+      ),
+    ).toBe(true);
+  });
+
+  it('rejects empty text', () => {
+    expect(isImplausibleCompetitorProductText('   ')).toBe(true);
+  });
+
+  it('accepts real, short, declarative competitor product names', () => {
+    expect(isImplausibleCompetitorProductText('BNC-15')).toBe(false);
+    expect(isImplausibleCompetitorProductText('Xtreme Blue Triple Foam Polish')).toBe(false);
+    expect(isImplausibleCompetitorProductText('CDC-10')).toBe(false);
   });
 });
