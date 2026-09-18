@@ -88,6 +88,136 @@ function ragCountTable(table: string) {
   return sb.schema('rag').from(table).select('id', { count: 'exact', head: true });
 }
 
+type LooseErr = { message: string; code?: string };
+
+type LooseIdentityChain = {
+  eq: (c: string, v: unknown) => LooseIdentityChain;
+  not: (c: string, op: string, v: unknown) => LooseIdentityChain;
+  order: (c: string, o: { ascending: boolean }) => LooseIdentityChain;
+  limit: (n: number) => {
+    maybeSingle: () => Promise<{ data: LooseRow | null; error: LooseErr | null }>;
+  };
+};
+
+/**
+ * B0-1055 — loose accessor for the competitor-identity dedupe queries below (lookup/update/delete).
+ * The generated `competitor_brand_norm` / `competitor_product_norm` columns (migration
+ * `cross_reference_recommendations_dedupe`) aren't in the generated Supabase types yet — regenerating
+ * needs CLI auth not available here (see AGENTS.md "Supabase types") — and these queries need
+ * multi-column `.eq()` + `.not('status', 'in', …)` filtering and `.delete()`, which `ragTable()` above
+ * doesn't expose. Same pattern as `ragTable`/`ragCountTable`, just shaped for these calls; the Zod
+ * mappers still provide the real type safety on the way out.
+ */
+function ragIdentityTable(table: string) {
+  const sb = getSupabaseServiceRoleClient() as unknown as {
+    schema: (s: string) => {
+      from: (t: string) => {
+        select: (cols?: string) => LooseIdentityChain;
+        update: (row: LooseRow) => {
+          eq: (c: string, v: unknown) => {
+            select: (cols?: string) => {
+              single: () => Promise<{ data: LooseRow | null; error: LooseErr | null }>;
+            };
+          };
+        };
+        delete: () => {
+          eq: (c: string, v: unknown) => Promise<{ error: LooseErr | null }>;
+        };
+      };
+    };
+  };
+  return sb.schema('rag').from(table);
+}
+
+/** B0-1055 — mirrors the SQL generated columns exactly: lower(trim(coalesce(value, ''))). */
+function normalizeIdentityPart(value: string | null | undefined): string {
+  return (value ?? '').trim().toLowerCase();
+}
+
+/** Statuses `cross_reference_recommendations_identity_unreviewed_uq` excludes — permanent human decisions. */
+const REVIEWED_STATUSES: RecommendationStatus[] = ['verified', 'rejected'];
+
+/**
+ * B0-1055 — find an existing not-yet-reviewed row with the same normalized competitor identity, so
+ * `createRecommendation` can upsert instead of always inserting. The nightly scheduled-test sweep
+ * re-runs the same golden-set prompts (e.g. "Betco's version of BNC-15…") every night, and without
+ * this check each run added a brand-new row for the same real-world competitor product. Mirrors the
+ * partial unique index `cross_reference_recommendations_identity_unreviewed_uq`
+ * (competitor_brand_norm, competitor_product_norm) WHERE status NOT IN ('verified', 'rejected').
+ */
+async function findExistingUnreviewedRecommendationId(
+  brandNorm: string,
+  productNorm: string,
+): Promise<string | null> {
+  const res = await ragIdentityTable('cross_reference_recommendations')
+    .select('id')
+    .eq('competitor_brand_norm', brandNorm)
+    .eq('competitor_product_norm', productNorm)
+    .not('status', 'in', `(${REVIEWED_STATUSES.join(',')})`)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (res.error) {
+    throw new Error(`createRecommendation identity lookup failed: ${res.error.message}`);
+  }
+  const id = res.data?.id;
+  return typeof id === 'string' ? id : null;
+}
+
+/**
+ * B0-1055 — update path for a repeat competitor identity: refreshes the recommendation's engine
+ * output and bumps `created_at` (so it keeps sorting first under the review queue's existing
+ * `ORDER BY created_at DESC`), then replaces its candidates wholesale — matching what a fresh insert
+ * would have produced, rather than merging with the stale set from the prior run.
+ */
+async function updateExistingRecommendation(
+  id: string,
+  input: CreateRecommendationInput,
+): Promise<RecommendationWithCandidates> {
+  const now = new Date().toISOString();
+  const recRes = await ragIdentityTable('cross_reference_recommendations')
+    .update({
+      status: input.status,
+      overall_confidence: input.overallConfidence ?? null,
+      threshold_used: input.thresholdUsed ?? null,
+      answer_given: input.answerGiven,
+      decline_reason: input.declineReason ?? null,
+      evidence: input.evidence ?? {},
+      normalized_input: input.normalizedInput ?? {},
+      updated_at: now,
+      created_at: now,
+    })
+    .eq('id', id)
+    .select('*')
+    .single();
+  if (recRes.error || !recRes.data) {
+    throw new Error(`createRecommendation update failed: ${recRes.error?.message ?? 'no row returned'}`);
+  }
+  const recommendation = fromRecommendationRow(recRes.data);
+
+  const delRes = await ragIdentityTable('cross_reference_recommendation_candidates')
+    .delete()
+    .eq('recommendation_id', id);
+  if (delRes.error) {
+    throw new Error(`createRecommendation candidate replace failed: ${delRes.error.message}`);
+  }
+
+  let candidates: RecommendationCandidate[] = [];
+  if (input.candidates.length > 0) {
+    const candRes = await ragTable('cross_reference_recommendation_candidates')
+      .insert(toCandidateInsertRows(recommendation.id, input.candidates))
+      .select('*');
+    if (candRes.error) {
+      throw new Error(`createRecommendation candidates failed: ${candRes.error.message}`);
+    }
+    candidates = (candRes.data ?? [])
+      .map(fromCandidateRow)
+      .sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0));
+  }
+
+  return recommendationWithCandidatesSchema.parse({ ...recommendation, candidates });
+}
+
 const round3 = (n: number): number => Math.round(n * 1000) / 1000;
 
 function asJson(value: unknown): Json {
@@ -170,11 +300,31 @@ export async function createRecommendation(
 ): Promise<RecommendationWithCandidates> {
   const input = createRecommendationInputSchema.parse(rawInput);
 
+  // B0-1055 — dedupe by real-world competitor identity: the nightly scheduled-test sweep re-runs the
+  // same golden-set prompts, so update the existing not-yet-reviewed row for this identity instead of
+  // inserting a duplicate. A verified/rejected row is a permanent human decision and never matches
+  // here, so it always falls through to a fresh insert below.
+  const brandNorm = normalizeIdentityPart(input.competitorBrand);
+  const productNorm = normalizeIdentityPart(input.competitorProduct);
+  const existingId = await findExistingUnreviewedRecommendationId(brandNorm, productNorm);
+  if (existingId) {
+    return updateExistingRecommendation(existingId, input);
+  }
+
   const recRes = await ragTable('cross_reference_recommendations')
     .insert(toRecommendationInsertRow(input))
     .select('*')
     .single();
   if (recRes.error || !recRes.data) {
+    // Safety net for a concurrent race: two callers both miss the identity lookup above, then both
+    // try to insert; the partial unique index (cross_reference_recommendations_dedupe_index) lets
+    // exactly one insert win, and the loser hits 23505 here instead of surfacing a raw DB error.
+    if ((recRes.error as unknown as LooseErr | null)?.code === '23505') {
+      const raceId = await findExistingUnreviewedRecommendationId(brandNorm, productNorm);
+      if (raceId) {
+        return updateExistingRecommendation(raceId, input);
+      }
+    }
     throw new Error(`createRecommendation failed: ${recRes.error?.message ?? 'no row returned'}`);
   }
   const recommendation = fromRecommendationRow(recRes.data);
