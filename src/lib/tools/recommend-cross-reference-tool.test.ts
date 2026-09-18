@@ -149,4 +149,34 @@ describe('recommend_cross_reference tool (B0-93)', () => {
     expect(buildUnresolvedCompetitorDeclineMock).toHaveBeenCalledTimes(1);
     expect(out.answered).toBe(false);
   });
+
+  it('B0-1057: declines a Betco product-line name with no "Betco" brand present', async () => {
+    const out = await executeProductTool('recommend_cross_reference', {
+      competitorProduct: 'Triforce',
+    });
+
+    expect(runCrossReferenceRecommendation).not.toHaveBeenCalled();
+    expect(buildUnresolvedCompetitorDeclineMock).toHaveBeenCalledTimes(1);
+    expect(out.answered).toBe(false);
+  });
+
+  it('B0-1057: declines "BestScent Lemon Zest" (a Betco line, not a competitor)', async () => {
+    await executeProductTool('recommend_cross_reference', {
+      competitorProduct: 'BestScent Lemon Zest',
+    });
+
+    expect(runCrossReferenceRecommendation).not.toHaveBeenCalled();
+    expect(buildUnresolvedCompetitorDeclineMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('B0-1057: declines when brand and product are the identical string', async () => {
+    const out = await executeProductTool('recommend_cross_reference', {
+      competitorProduct: 'Hard As Nails',
+      competitorBrand: 'Hard As Nails',
+    });
+
+    expect(runCrossReferenceRecommendation).not.toHaveBeenCalled();
+    expect(buildUnresolvedCompetitorDeclineMock).toHaveBeenCalledTimes(1);
+    expect(out.answered).toBe(false);
+  });
 });

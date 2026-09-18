@@ -4,6 +4,7 @@ import { isBexModelTag } from '~/lib/constants/models';
 import { resolveModel } from '~/lib/llm/resolve-model';
 import { completeStructuredWithUsage } from '~/lib/llm/structured-completion';
 import type { LlmTokenUsage } from '~/lib/openai/responses-runtime';
+import { hasDistinctiveToken } from '~/lib/recommendations/competitor-self-reference';
 import { getStringSetting } from '~/lib/settings/settings-service';
 import { resolveMaxOutputTokens } from '~/lib/workflows/product-support/max-output-tokens';
 
@@ -214,15 +215,22 @@ export function isCompetitorIdentityUnresolved(
  * product name would ever start with.
  */
 const IMPLAUSIBLE_PRODUCT_OPENERS =
-  /^(which|what|why|when|where|who|how|is|are|can|could|would|should|do|does|did|i need|i have|our|we|a customer|a customer's)\b/i;
+  /^(which|what|why|when|where|who|how|is|are|can|could|would|should|do|does|did|i need|i have|i found|our|we|a customer|a customer's|just|tell|give|show|name|list|recommend)\b/i;
 
 /** A product name this short-and-declarative check would reject as too long to be a product name. */
 const IMPLAUSIBLE_PRODUCT_MAX_LENGTH = 80;
 
+/**
+ * B0-1057 — a name built entirely from category/facility words ("floor finish", "healthcare
+ * cleaner") identifies nothing, exactly the shape `hasDistinctiveToken`
+ * (`competitor-self-reference.ts`) already exists to catch for the chat-workflow self-reference
+ * check. Reused here rather than a second, drifting word list.
+ */
 export function isImplausibleCompetitorProductText(product: string): boolean {
   const trimmed = product.trim();
   if (!trimmed) return true;
   if (trimmed.includes('?')) return true;
   if (trimmed.length > IMPLAUSIBLE_PRODUCT_MAX_LENGTH) return true;
-  return IMPLAUSIBLE_PRODUCT_OPENERS.test(trimmed);
+  if (IMPLAUSIBLE_PRODUCT_OPENERS.test(trimmed)) return true;
+  return !hasDistinctiveToken(trimmed.toLowerCase());
 }

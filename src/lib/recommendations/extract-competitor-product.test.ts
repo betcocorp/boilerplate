@@ -315,4 +315,18 @@ describe('isImplausibleCompetitorProductText (B0-1056)', () => {
     expect(isImplausibleCompetitorProductText('Xtreme Blue Triple Foam Polish')).toBe(false);
     expect(isImplausibleCompetitorProductText('CDC-10')).toBe(false);
   });
+
+  it('B0-1057: rejects imperative phrasing with no question mark', () => {
+    expect(
+      isImplausibleCompetitorProductText(
+        'Just tell me the one product that will handle everything in my building.',
+      ),
+    ).toBe(true);
+  });
+
+  it('B0-1057: rejects category/facility-only descriptions with no distinctive identity', () => {
+    expect(isImplausibleCompetitorProductText('Floor finish')).toBe(true);
+    expect(isImplausibleCompetitorProductText('Healthcare cleaner')).toBe(true);
+    expect(isImplausibleCompetitorProductText('hospital disinfectant')).toBe(true);
+  });
 });

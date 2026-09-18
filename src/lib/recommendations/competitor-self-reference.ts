@@ -74,8 +74,14 @@ const BETCO_BRANDS = new Set(['betco', 'basic coatings', 'envirozyme', '1950']);
  * OR as the leading word(s) of the product string; the prefix alone is a catalog-class signal
  * because the alias table cannot be relied on to carry the rest of the name (post-B0-878 it holds
  * 66 corpus-mined rows, none verified).
+ *
+ * B0-1057 — added 'greenearth' (the no-space variant seen live: "GreenEarth floor finish"),
+ * 'triforce', and 'bestscent': three more real Betco product-line names that reached the
+ * `recommend_cross_reference` tool-call path (which has no `resolveBetcoEntity` DB check in scope
+ * to catch these the way the chat-workflow self-reference pipeline can) and got persisted as
+ * "competitor" products — "BestScent Lemon Zest", "Triforce", "Green Earth Floor Finish".
  */
-const BETCO_LINE_PREFIXES = ['green earth', 'ge'] as const;
+const BETCO_LINE_PREFIXES = ['green earth', 'greenearth', 'ge', 'triforce', 'bestscent'] as const;
 
 /**
  * Bare chemistry names a user may name in place of a competitor product. Matched against the WHOLE
@@ -134,6 +140,11 @@ const GENERIC_PRODUCT_WORDS = new Set([
   'multi', 'surface', 'general', 'purpose', 'all', 'low', 'odor', 'free', 'heavy', 'duty',
   'concentrate', 'concentrated', 'rtu', 'ready', 'to', 'use', 'neutral', 'acid', 'foam', 'foaming',
   'product', 'products', 'solution', 'chemical', 'spray', 'wipe', 'liquid', 'and', 'the', 'a', 'an',
+  // B0-1057 — facility/setting words: "hospital disinfectant", "healthcare cleaner" name a KIND of
+  // customer/setting, not a product, exactly like the category words above.
+  'hospital', 'hospitals', 'healthcare', 'medical', 'clinic', 'clinics', 'school', 'schools',
+  'daycare', 'gym', 'gyms', 'athletic', 'kitchen', 'kitchens', 'office', 'offices', 'industrial',
+  'commercial', 'institutional', 'nursing', 'facility', 'facilities', 'building', 'buildings',
 ]);
 
 /**
@@ -148,8 +159,16 @@ const PRODUCT_CLASS_WORDS = new Set([
   'hand', 'wipes', 'some', 'any', 'kind', 'of', 'or', 'brand',
 ]);
 
-/** True when the name carries at least one token that identifies rather than describes. */
-function hasDistinctiveToken(product: string): boolean {
+/**
+ * True when the name carries at least one token that identifies rather than describes.
+ *
+ * B0-1057 — exported so `extract-competitor-product.ts`'s `isImplausibleCompetitorProductText`
+ * (the guard for `product-tools.ts`'s tool-call case, which has no `resolveBetcoEntity` DB check
+ * in scope) can reuse this same "is there any actual identity here" test rather than a second,
+ * drifting copy. `product` must already be lowercased/trimmed by the caller (mirrors every other
+ * function in this file).
+ */
+export function hasDistinctiveToken(product: string): boolean {
   return product
     .split(/[^a-z0-9]+/)
     .some((token) => token.length >= 3 && !GENERIC_PRODUCT_WORDS.has(token));
@@ -228,6 +247,11 @@ export function splitBetcoLinePrefix(
   }
   if (brand) return null;
   for (const prefix of BETCO_LINE_PREFIXES) {
+    // B0-1057 — a bare line name with nothing after it ("Triforce" on its own, no brand slot) is
+    // still the line itself, not a competitor product; there's just no further name to resolve.
+    if (product === prefix) {
+      return { prefix, name: '', full: product };
+    }
     if (product.startsWith(`${prefix} `)) {
       return { prefix, name: product.slice(prefix.length + 1).trim(), full: product };
     }

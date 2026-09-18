@@ -70,7 +70,7 @@ import { getProductCategory, getProductsInCategory } from '~/lib/tools/category-
 import { routeCategoryQuery } from '~/lib/category/category-router';
 import { runCrossReferenceRecommendation } from '~/lib/recommendations/persist-recommendation';
 import { isImplausibleCompetitorProductText } from '~/lib/recommendations/extract-competitor-product';
-import { isBetcoBrand } from '~/lib/recommendations/competitor-self-reference';
+import { isBetcoBrand, splitBetcoLinePrefix } from '~/lib/recommendations/competitor-self-reference';
 import { buildUnresolvedCompetitorDecline } from '~/lib/recommendations/recommend-cross-reference';
 
 const ADAPTER_TAG = 'rag_corpus_full_document' as const;
@@ -987,17 +987,27 @@ export async function executeProductTool(
     case 'recommend_cross_reference': {
       const p = recommendCrossReferenceInputSchema.parse(args);
       /**
-       * B0-1056 — nothing upstream of this tool case validates that the model's own
+       * B0-1056/B0-1057 — nothing upstream of this tool case validates that the model's own
        * `competitorProduct`/`competitorBrand` arguments actually name a competitor at all, rather
        * than the raw user message (a specialist prompt that expects a competitor lookup can
        * pressure the model into calling this tool even on an unrelated question) or one of Betco's
-       * own brands (this table is competitors of Betco/Basic Coatings/EnviroZyme only —
-       * `classifyCompetitorSelfReference` catches this upstream in the chat workflow, but that
-       * pipeline needs the raw user message and a DB resolver, neither in scope here). Declines
-       * without ever calling the engine or persisting a row, same as the other unresolved-identity
-       * paths.
+       * own brands/product lines (this table is competitors of Betco/Basic Coatings/EnviroZyme
+       * only — `classifyCompetitorSelfReference` catches this upstream in the chat workflow, but
+       * that pipeline needs the raw user message and a DB resolver, neither in scope here).
+       * `splitBetcoLinePrefix` catches named Betco product lines (Green Earth, Triforce,
+       * BestScent) even when the model didn't put "Betco" itself in the brand slot; a normalized
+       * brand identical to the product ("Hard As Nails" / "Hard As Nails") is never a real
+       * competitor entry either. Declines without ever calling the engine or persisting a row,
+       * same as the other unresolved-identity paths.
        */
-      const result = isBetcoBrand(p.competitorBrand ?? null) || isImplausibleCompetitorProductText(p.competitorProduct)
+      const normalizedBrand = (p.competitorBrand ?? '').trim().toLowerCase();
+      const normalizedProduct = p.competitorProduct.trim().toLowerCase();
+      const isSelfReferentialOrImplausible =
+        isBetcoBrand(p.competitorBrand ?? null) ||
+        isImplausibleCompetitorProductText(p.competitorProduct) ||
+        splitBetcoLinePrefix(normalizedBrand, normalizedProduct) !== null ||
+        (normalizedBrand.length > 0 && normalizedBrand === normalizedProduct);
+      const result = isSelfReferentialOrImplausible
         ? await buildUnresolvedCompetitorDecline()
         : await runCrossReferenceRecommendation(
             {
