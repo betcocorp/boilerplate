@@ -28,11 +28,16 @@ export function mapResultToRecommendationInput(
   result: RecommendCrossReferenceResult,
   ctx: { traceId: string; createdBy: string | null },
 ): CreateRecommendationInput {
+  // B0-1055 — prefer the grounded brand correction (`enrichCompetitorSpec`'s `manufacturer`, set on
+  // `result.resolvedBrand` when it fills a gap in or disagrees with the upfront guess) over the
+  // upfront `extractCompetitorProduct` guess, which is inferred from the raw message before any web
+  // search runs and can be wrong (or absent) for an unbranded prompt.
+  const competitorBrand = result.resolvedBrand ?? input.competitorBrand ?? null;
   return {
-    competitorBrand: input.competitorBrand ?? null,
+    competitorBrand,
     competitorProduct: input.competitorProduct,
     normalizedInput: {
-      brand: input.competitorBrand ?? null,
+      brand: competitorBrand,
       productName: input.competitorProduct,
       traceId: ctx.traceId,
     },

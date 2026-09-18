@@ -29,6 +29,7 @@ const noProv = {
   primaryUse: null,
   formFactor: null,
   keyClaims: null,
+  manufacturer: null,
 };
 
 const fullSpec: EnrichedCompetitorSpec = {
@@ -40,6 +41,7 @@ const fullSpec: EnrichedCompetitorSpec = {
   primaryUse: 'surface disinfection',
   formFactor: 'RTU',
   keyClaims: ['kills 99.9%'],
+  manufacturer: null,
   provenance: noProv,
 };
 

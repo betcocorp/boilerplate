@@ -261,6 +261,17 @@ export type RecommendCrossReferenceResult = {
   candidates: RecommendationCandidateOut[];
   evidence: Record<string, unknown>;
   declineReason: string | null;
+  /**
+   * B0-1055 — a grounded correction to the upfront (pre-web-search) brand guess. `extractCompetitorProduct`
+   * reads only the raw user message before any web search runs, so an unbranded message ("Betco's
+   * version of BNC-15...") can guess wrong (or guess nothing). Once `enrichCompetitorSpec` runs against
+   * the actual web-search evidence, its `manufacturer` field is a better signal — present here only
+   * when enrichment found a manufacturer AND it fills a gap in (or meaningfully differs from) the
+   * upfront guess. `null`/absent means "no correction, keep the upfront brand". Consumed by
+   * `mapResultToRecommendationInput` in `persist-recommendation.ts`, which prefers it over
+   * `input.competitorBrand` when writing `competitor_brand`.
+   */
+  resolvedBrand?: string | null;
 };
 
 export type RecommendCrossReferenceInput = {
@@ -561,6 +572,7 @@ async function runWebGroundedPath(ctx: WebGroundedPathContext): Promise<Recommen
   const sources = web.results.map((r) => ({ url: r.url, title: r.title }));
 
   const spec = await guard('enrich', policy.enrichBudgetMs, () => deps.enrich({ text, sources }));
+  const resolvedBrand = resolveCorrectedBrand(brand, spec.manufacturer);
   const retrieved = await guard('retrieve', policy.retrieveBudgetMs, () => deps.retrieve({ spec }));
 
   // B0-91 grounding enforcement: keep only candidates that resolve to a real legacy product row, so
@@ -633,7 +645,29 @@ async function runWebGroundedPath(ctx: WebGroundedPathContext): Promise<Recommen
       timingBreakdown: buildTiming(timer, webSearch, legacyCacheHit),
     },
     declineReason,
+    resolvedBrand,
   };
+}
+
+/**
+ * B0-1055 — decide whether the grounded `manufacturer` (from `enrichCompetitorSpec`, extracted from
+ * the actual web-search evidence) should override the upfront brand guess (`extractCompetitorProduct`,
+ * which reads only the raw user message before any web search runs). Returns `null` when there is
+ * nothing to correct: no manufacturer found, or it agrees with the upfront guess.
+ *
+ * Precedence: the grounded value wins whenever it fills a gap or disagrees with the upfront guess.
+ * This looks backwards at first (why trust a later guess over an earlier one supposedly "from the
+ * user"?) but the upfront guess is itself just an LLM inference over an unbranded message — it is not
+ * something the user actually typed. The competitor self-reference guardrails upstream
+ * (`competitor-self-reference.ts`) already gate what reaches this engine to confirmed-competitor
+ * products, so there is no risk of the grounded value overriding a real Betco self-reference here.
+ */
+function resolveCorrectedBrand(upfrontBrand: string, manufacturer: string | null): string | null {
+  const grounded = manufacturer?.trim();
+  if (!grounded) return null;
+  const upfront = upfrontBrand.trim();
+  if (upfront.length > 0 && upfront.toLowerCase() === grounded.toLowerCase()) return null;
+  return grounded;
 }
 
 /**
