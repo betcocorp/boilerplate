@@ -537,12 +537,24 @@ export default async function AdminTestDetailsPage({
                     const previousMetrics = previousResult
                       ? metricsByRunId.get(previousResult.id)
                       : undefined;
-                    const failedItems = Math.max(
-                      0,
-                      typeof result.failed_items === 'number'
-                        ? result.failed_items
-                        : result.total_items - result.passed_items,
-                    );
+                    // B0-1055 — derived from the actual persisted result items for this run
+                    // (already loaded above for the prompt-bundle/score columns) rather than the
+                    // cached `test_results.failed_items` counter, which can drift from the real
+                    // per-item `passed` values (e.g. after a retry deletes and re-inserts rows).
+                    const runResultItems = resultItemsByRunId.get(result.id) ?? [];
+                    const passedItems =
+                      runResultItems.length > 0
+                        ? runResultItems.filter((item) => item.passed).length
+                        : result.passed_items;
+                    const failedItems =
+                      runResultItems.length > 0
+                        ? runResultItems.filter((item) => !item.passed).length
+                        : Math.max(
+                            0,
+                            typeof result.failed_items === 'number'
+                              ? result.failed_items
+                              : result.total_items - result.passed_items,
+                          );
                     const reportState = parseReportState(result.report_state);
                     const overall =
                       reportState?.status === 'completed'
@@ -593,7 +605,7 @@ export default async function AdminTestDetailsPage({
                           </span>
                         </TableCell>
                         <TableCell>
-                          {result.passed_items}/{failedItems}
+                          {passedItems}/{failedItems}
                         </TableCell>
                         <TableCell className="whitespace-nowrap tabular-nums text-slate-700">
                           <span className="inline-flex items-center gap-2">
