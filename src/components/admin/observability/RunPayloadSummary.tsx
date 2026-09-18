@@ -9,14 +9,15 @@
  */
 
 import { Badge } from '~/components/ui/badge';
-import { formatSimilarityValue } from '~/lib/tests/format';
 
+import { WorkflowRunTrace } from '~/lib/observability/prompt-insights';
 import type { RunPayloadView } from '~/lib/observability/run-payload';
 import type {
   ActiveGates,
   GateActivationRecord,
   ValidatorMode,
 } from '~/lib/workflows/product-support/product-support-schemas';
+import BasicDetailsPanel from './BasicDetailsPanel';
 
 const NA = 'n/a';
 
@@ -30,8 +31,14 @@ const GUARDRAIL_LABELS: Array<{ key: keyof ActiveGates; label: string }> = [
   { key: 'usageSafetyCoverage', label: 'usage/safety coverage' },
   { key: 'regulatedClaimGuardrail', label: 'regulated-claim grounding' },
   { key: 'recommendationConfidence', label: 'recommendation confidence' },
-  { key: 'recommendationEngineVerdict', label: 'recommendation engine verdict' },
-  { key: 'crossReferenceSelfReference', label: 'cross-reference self-reference' },
+  {
+    key: 'recommendationEngineVerdict',
+    label: 'recommendation engine verdict',
+  },
+  {
+    key: 'crossReferenceSelfReference',
+    label: 'cross-reference self-reference',
+  },
 ];
 
 /**
@@ -44,7 +51,9 @@ function guardrailBadgeClassName(record: GateActivationRecord): string {
     return 'border-destructive/45 bg-destructive/10 text-destructive';
   }
   if (record.state === 'ran') {
-    return record.verdict && record.verdict !== 'passed' && record.verdict !== 'approved'
+    return record.verdict &&
+      record.verdict !== 'passed' &&
+      record.verdict !== 'approved'
       ? 'border-amber-600/45 bg-amber-600/12 text-amber-900'
       : 'border-emerald-600/45 bg-emerald-600/12 text-emerald-900';
   }
@@ -93,17 +102,7 @@ function ValidatorModeBadge({ mode }: { mode: ValidatorMode | null }) {
   );
 }
 
-function formatCount(value: number): string {
-  return value.toLocaleString('en-US');
-}
-
-function formatSearchMs(value: number | null): string {
-  return typeof value === 'number' && Number.isFinite(value)
-    ? `${value.toFixed(1)} ms`
-    : NA;
-}
-
-function Field({
+export function Field({
   hint,
   label,
   value,
@@ -115,7 +114,9 @@ function Field({
   const isEmpty = value === NA;
   return (
     <div className="flex flex-col gap-0.5">
-      <dt className="text-xs uppercase tracking-wide text-slate-500">{label}</dt>
+      <dt className="text-xs uppercase tracking-wide text-slate-500">
+        {label}
+      </dt>
       <dd
         className={
           isEmpty
@@ -130,52 +131,21 @@ function Field({
   );
 }
 
-export function RunPayloadSummary({ payload }: { payload: RunPayloadView }) {
-  const { activeGates, modelTag, similarity, timing, usage, validation, validatorMode } =
-    payload;
+export function RunPayloadSummary({
+  payload,
+  run,
+  trace,
+}: {
+  payload: RunPayloadView;
+  run: WorkflowRunTrace['run'];
+  trace: WorkflowRunTrace | null;
+}) {
+  const { activeGates, validation, validatorMode } = payload;
 
   return (
-    <div className="mt-6 space-y-4">
-      <dl className="grid gap-3 text-sm sm:grid-cols-3">
-        <Field label="Model" value={modelTag ?? NA} />
-        <Field
-          hint={similarity ? 'across all retrieved sources' : null}
-          label="Similarity min / avg / max"
-          value={
-            similarity
-              ? `${formatSimilarityValue(similarity.min)} / ${formatSimilarityValue(
-                  similarity.avg,
-                )} / ${formatSimilarityValue(similarity.max)}`
-              : NA
-          }
-        />
-        <Field
-          label="Tool rounds"
-          value={timing ? formatCount(timing.toolRounds) : NA}
-        />
-        <Field label="Cache source" value={timing?.cacheSource ?? NA} />
-        <Field
-          label="RAG search"
-          value={timing ? formatSearchMs(timing.searchMs) : NA}
-        />
-        <Field
-          hint={
-            usage
-              ? `${formatCount(usage.promptTokens)} prompt · ${formatCount(
-                  usage.completionTokens,
-                )} completion · ${
-                  typeof usage.cachedPromptTokens === 'number'
-                    ? `${formatCount(usage.cachedPromptTokens)} cached`
-                    : 'cached n/a'
-                }`
-              : null
-          }
-          label="Token usage"
-          value={usage ? `${formatCount(usage.totalTokens)} total` : NA}
-        />
-      </dl>
-
-      <div className="rounded-2xl border border-slate-100 bg-slate-50/70 p-4">
+    <div>
+      <BasicDetailsPanel trace={trace} run={run} payload={payload} />
+      <div className="mt-8 rounded-2xl border border-slate-100 bg-slate-50/70 p-4 space-y-2">
         <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
           Verification
         </p>

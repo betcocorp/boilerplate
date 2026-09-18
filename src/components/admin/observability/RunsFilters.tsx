@@ -10,7 +10,7 @@
  * show/hide affordance around it.
  */
 
-import { ChevronDownIcon, ChevronUpIcon } from 'lucide-react';
+import { ChevronDownIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useState } from 'react';
 
@@ -64,16 +64,15 @@ export function RunsFilters({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <button
           aria-expanded={showFilters}
-          className="w-full inline-flex items-center justify-between gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium text-slate-600"
+          className="w-full inline-flex items-center justify-between gap-1.5 rounded-full py-1.5 text-xs font-medium text-slate-600"
           onClick={() => setShowFilters((open) => !open)}
           type="button"
         >
           <h2 className="text-lg font-semibold text-slate-900">Filters</h2>
-          {showFilters ? (
-            <ChevronUpIcon aria-hidden className="size-4 shrink-0" />
-          ) : (
-            <ChevronDownIcon aria-hidden className="size-4 shrink-0" />
-          )}
+          <ChevronDownIcon
+            aria-hidden
+            className={`size-4 shrink-0 transition-transform duration-300 ${showFilters ? 'rotate-180' : ''}`}
+          />
         </button>
       </div>
 
@@ -146,7 +145,10 @@ export function RunsFilters({
                 name="status"
                 options={[
                   { value: '', label: 'All statuses' },
-                  ...RUN_STATUSES.map((status) => ({ value: status, label: status })),
+                  ...RUN_STATUSES.map((status) => ({
+                    value: status,
+                    label: status,
+                  })),
                 ]}
               />
             </div>
@@ -164,7 +166,10 @@ export function RunsFilters({
                 name="agent"
                 options={[
                   { value: '', label: 'All agents' },
-                  ...ROUTING_FILTER_OPTIONS.map((agent) => ({ value: agent, label: agent })),
+                  ...ROUTING_FILTER_OPTIONS.map((agent) => ({
+                    value: agent,
+                    label: agent,
+                  })),
                 ]}
               />
             </div>
@@ -257,7 +262,10 @@ export function RunsFilters({
                 name="testId"
                 options={[
                   { value: '', label: 'All tests' },
-                  ...testOptions.map((test) => ({ value: test.id, label: test.name })),
+                  ...testOptions.map((test) => ({
+                    value: test.id,
+                    label: test.name,
+                  })),
                 ]}
               />
             </div>
@@ -275,7 +283,10 @@ export function RunsFilters({
                 name="tool"
                 options={[
                   { value: '', label: 'All tools' },
-                  ...PRODUCT_TOOL_NAMES.map((tool) => ({ value: tool, label: tool })),
+                  ...PRODUCT_TOOL_NAMES.map((tool) => ({
+                    value: tool,
+                    label: tool,
+                  })),
                 ]}
               />
             </div>
