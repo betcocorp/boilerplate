@@ -60,7 +60,7 @@ export function RunsFilters({
   const [showFilters, setShowFilters] = useState(false);
 
   return (
-    <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
+    <section className="rounded-3xl border border-slate-200 bg-white py-4 px-8 shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <button
           aria-expanded={showFilters}
