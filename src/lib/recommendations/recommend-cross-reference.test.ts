@@ -37,9 +37,10 @@ const SPEC: EnrichedCompetitorSpec = {
   primaryUse: 'surface disinfection',
   formFactor: 'RTU',
   keyClaims: ['kills 99.9%'],
+  manufacturer: null,
   provenance: {
     chemistryClass: null, epaRegistration: null, contactTimeSeconds: null, dilutionOzPerGal: null,
-    productCategory: null, primaryUse: null, formFactor: null, keyClaims: null,
+    productCategory: null, primaryUse: null, formFactor: null, keyClaims: null, manufacturer: null,
   },
 };
 
@@ -432,6 +433,56 @@ describe('recommendCrossReference (B0-85)', () => {
     expect(result.status).toBe('declined');
     expect(result.candidates).toEqual([]);
     expect((result.evidence.webSearch as { budgetExceeded: boolean }).budgetExceeded).toBe(true);
+  });
+});
+
+describe('B0-1055: grounded manufacturer corrects the upfront brand guess', () => {
+  it('fills resolvedBrand when the upfront brand is empty and enrichment finds a manufacturer', async () => {
+    const result = await recommendCrossReference(
+      { competitorProduct: 'BNC-15' }, // no upfront brand — the unbranded-prompt failure mode
+      {
+        lookupInternal: async () => legacyMiss,
+        ...webVia([candidate(0.95, 'A')]),
+        enrich: async () => ({ ...SPEC, manufacturer: 'Spartan Chemical' }),
+      },
+    );
+    expect(result.resolvedBrand).toBe('Spartan Chemical');
+  });
+
+  it('fills resolvedBrand when the upfront brand disagrees with the grounded manufacturer', async () => {
+    const result = await recommendCrossReference(
+      { competitorProduct: 'BNC-15', competitorBrand: 'Stearns' }, // wrong upfront guess
+      {
+        lookupInternal: async () => legacyMiss,
+        ...webVia([candidate(0.95, 'A')]),
+        enrich: async () => ({ ...SPEC, manufacturer: 'Spartan Chemical' }),
+      },
+    );
+    expect(result.resolvedBrand).toBe('Spartan Chemical');
+  });
+
+  it('leaves resolvedBrand unset when the grounded spec has no manufacturer', async () => {
+    const result = await recommendCrossReference(
+      { competitorProduct: 'BNC-15', competitorBrand: 'Stearns' },
+      {
+        lookupInternal: async () => legacyMiss,
+        ...webVia([candidate(0.95, 'A')]),
+        enrich: async () => SPEC, // manufacturer: null
+      },
+    );
+    expect(result.resolvedBrand).toBeNull();
+  });
+
+  it('leaves resolvedBrand unset when the grounded manufacturer agrees with the upfront brand (case/whitespace-insensitive)', async () => {
+    const result = await recommendCrossReference(
+      { competitorProduct: 'BNC-15', competitorBrand: '  spartan chemical  ' },
+      {
+        lookupInternal: async () => legacyMiss,
+        ...webVia([candidate(0.95, 'A')]),
+        enrich: async () => ({ ...SPEC, manufacturer: 'Spartan Chemical' }),
+      },
+    );
+    expect(result.resolvedBrand).toBeNull();
   });
 });
 

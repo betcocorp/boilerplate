@@ -1,3 +1,4 @@
+import { ChevronDownIcon } from 'lucide-react';
 import { Badge } from '~/components/ui/badge';
 import {
   TableBody,
@@ -49,7 +50,15 @@ function AgentBadge({ label }: { label: string }) {
   );
 }
 
-function AccuracyBadge({ label, accuracy, count }: { label: string; accuracy: number | null; count: number }) {
+function AccuracyBadge({
+  label,
+  accuracy,
+  count,
+}: {
+  label: string;
+  accuracy: number | null;
+  count: number;
+}) {
   if (accuracy === null) {
     return <Badge variant="secondary">{label}: n/a (no ground truth)</Badge>;
   }
@@ -69,26 +78,40 @@ function AccuracyBadge({ label, accuracy, count }: { label: string; accuracy: nu
   );
 }
 
-function LatencyStatBadge({ label, stats }: { label: string; stats: RouterLatencyStats }) {
+function LatencyStatBadge({
+  label,
+  stats,
+}: {
+  label: string;
+  stats: RouterLatencyStats;
+}) {
   if (stats.sampleCount === 0) {
     return <Badge variant="secondary">{label}: n/a (no samples)</Badge>;
   }
   return (
     <Badge variant="outline">
-      {label}: {stats.medianMs}ms median / {stats.p95Ms}ms p95 ({stats.sampleCount} sample
+      {label}: {stats.medianMs}ms median / {stats.p95Ms}ms p95 (
+      {stats.sampleCount} sample
       {stats.sampleCount === 1 ? '' : 's'})
     </Badge>
   );
 }
 
-function LatencyDistributionBadge({ label, distribution }: { label: string; distribution: LatencyDistribution }) {
+function LatencyDistributionBadge({
+  label,
+  distribution,
+}: {
+  label: string;
+  distribution: LatencyDistribution;
+}) {
   if (distribution.sampleCount === 0) {
     return <Badge variant="secondary">{label}: n/a (no samples)</Badge>;
   }
   return (
     <Badge variant="outline">
-      {label}: {distribution.p50Ms}ms p50 / {distribution.p95Ms}ms p95 / {distribution.p99Ms}ms p99 (
-      {distribution.sampleCount} sample{distribution.sampleCount === 1 ? '' : 's'})
+      {label}: {distribution.p50Ms}ms p50 / {distribution.p95Ms}ms p95 /{' '}
+      {distribution.p99Ms}ms p99 ({distribution.sampleCount} sample
+      {distribution.sampleCount === 1 ? '' : 's'})
     </Badge>
   );
 }
@@ -147,7 +170,11 @@ function DisagreementMatrixTable({
                           : 'font-semibold text-red-700'
                     }`}
                     key={columnLabel}
-                    title={comparableCount > 0 ? `${count} of ${comparableCount} comparable items` : undefined}
+                    title={
+                      comparableCount > 0
+                        ? `${count} of ${comparableCount} comparable items`
+                        : undefined
+                    }
                   >
                     {count === 0 ? '—' : count}
                   </TableCell>
@@ -191,12 +218,20 @@ export function RoutingComparisonDashboard({
   if (totalItemCount === 0) {
     return (
       <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-        <h2 className="text-lg font-semibold text-slate-900">Routing comparison</h2>
+        <h2 className="text-lg font-semibold text-slate-900">
+          Routing comparison
+        </h2>
         <p className="mt-3 text-sm text-slate-500">
           No dual-router instrumentation recorded anywhere yet (
-          <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">keyword_route</code> is null on every{' '}
-          <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">test_result_items</code> row). Run an eval
-          suite through the current harness (B0-500/501) to populate this dashboard.
+          <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">
+            keyword_route
+          </code>{' '}
+          is null on every{' '}
+          <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">
+            test_result_items
+          </code>{' '}
+          row). Run an eval suite through the current harness (B0-500/501) to
+          populate this dashboard.
         </p>
       </section>
     );
@@ -205,50 +240,20 @@ export function RoutingComparisonDashboard({
   return (
     <div className="flex flex-col gap-8">
       <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-        <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-lg font-semibold text-slate-900">Routing comparison</h2>
-            <p className="mt-1 max-w-3xl text-sm text-slate-600">
-              LLM classifier vs. semantic router, aggregated across every run with routing
-              instrumentation (B0-500/501, B0-652) — {totalItemCount} item{totalItemCount === 1 ? '' : 's'} across{' '}
-              {totalRunCount} run{totalRunCount === 1 ? '' : 's'}.
-            </p>
-          </div>
-        </div>
-      </section>
-
-      {/* ---------------------------------------------------------------------------------- */}
-      {/* Primary: LLM vs. semantic (B0-668)                                                  */}
-      {/* ---------------------------------------------------------------------------------- */}
-
-      <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-        <h3 className="mb-1 text-base font-semibold text-slate-900">Accuracy comparison</h3>
+        <h3 className="mb-1 text-base font-semibold text-slate-900">
+          Disagreement matrix — LLM vs. semantic
+        </h3>
         <p className="mb-4 max-w-2xl text-sm text-slate-600">
-          Each router&apos;s own accuracy against ground truth (<code>intended_agent_label</code>), over its own
-          scored-item denominator — the semantic router is often instrumented on fewer items than the LLM
-          classifier, so the counts below can differ even when both are 100% healthy.
-        </p>
-        <div className="flex flex-wrap gap-3">
-          <AccuracyBadge
-            accuracy={cutoverReport.llmAccuracy}
-            count={cutoverReport.scoredItemCount}
-            label="LLM accuracy vs. ground truth"
-          />
-          <AccuracyBadge
-            accuracy={cutoverReport.semanticAccuracy}
-            count={cutoverReport.semanticScoredItemCount}
-            label="Semantic accuracy vs. ground truth"
-          />
-        </div>
-      </section>
-
-      <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-        <h3 className="mb-1 text-base font-semibold text-slate-900">Disagreement matrix — LLM vs. semantic</h3>
-        <p className="mb-4 max-w-2xl text-sm text-slate-600">
-          <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">semantic_route</code> (rows) vs.{' '}
-          <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">llm_route</code> (columns), independent of
-          ground truth. Diagonal cells are agreement; off-diagonal cells are disagreement, broken down by what
-          each router proposed instead.
+          <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">
+            semantic_route
+          </code>{' '}
+          (rows) vs.{' '}
+          <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">
+            llm_route
+          </code>{' '}
+          (columns), independent of ground truth. Diagonal cells are agreement;
+          off-diagonal cells are disagreement, broken down by what each router
+          proposed instead.
         </p>
         {semanticDisagreementMatrix.comparableCount === 0 ? (
           <p className="text-sm text-slate-500">
@@ -258,7 +263,9 @@ export function RoutingComparisonDashboard({
           <>
             <p className="mb-4 text-sm text-slate-600">
               Disagreed on{' '}
-              <span className="font-semibold text-slate-900">{semanticDisagreementMatrix.disagreementCount}</span>{' '}
+              <span className="font-semibold text-slate-900">
+                {semanticDisagreementMatrix.disagreementCount}
+              </span>{' '}
               of {semanticDisagreementMatrix.comparableCount} comparable items (
               {semanticDisagreementMatrix.disagreementRate !== null
                 ? formatPercent(semanticDisagreementMatrix.disagreementRate)
@@ -277,135 +284,49 @@ export function RoutingComparisonDashboard({
         )}
       </section>
 
-      <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-        <h3 className="mb-1 text-base font-semibold text-slate-900">Latency profiling — LLM vs. semantic</h3>
-        <p className="mb-4 max-w-2xl text-sm text-slate-600">
-          Wall-clock time for each router&apos;s call in{' '}
-          <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">run-executor.ts</code> (B0-524/B0-652) —
-          measured independently of the real chat-turn answer&apos;s own latency.
-        </p>
-        {semanticLatencyProfile.semantic.sampleCount === 0 && semanticLatencyProfile.llm.sampleCount === 0 ? (
-          <p className="text-sm text-slate-500">
-            No rows carry latency data yet — every item predates the latency columns. Run an eval suite through
-            the current harness to populate this section.
-          </p>
-        ) : (
-          <div className="flex flex-wrap gap-3">
-            <LatencyStatBadge label="Semantic router" stats={semanticLatencyProfile.semantic} />
-            <LatencyStatBadge label="LLM classifier" stats={semanticLatencyProfile.llm} />
-          </div>
-        )}
-      </section>
-
-      <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-        <h3 className="mb-1 text-base font-semibold text-slate-900">Semantic router — own report</h3>
-        <p className="mb-4 max-w-2xl text-sm text-slate-600">
-          B0-652 measurement set: accuracy (strict vs. lenient/plausible-agent grading, where available),
-          false-positive rate (confident and wrong), fallback rate (declined to route), and a latency split
-          between the embedding round-trip and the (much cheaper) cosine-scoring step.
-        </p>
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-wrap gap-3">
-            <AccuracyBadge
-              accuracy={semanticRoutingReport.accuracy.strictAccuracy}
-              count={semanticRoutingReport.accuracy.scoredItemCount}
-              label="Strict accuracy"
-            />
-            <AccuracyBadge
-              accuracy={semanticRoutingReport.accuracy.lenientAccuracy}
-              count={semanticRoutingReport.accuracy.scoredItemCount}
-              label="Lenient accuracy"
-            />
-          </div>
-          <div className="flex flex-wrap gap-3">
-            {semanticRoutingReport.falsePositives.falsePositiveRate !== null ? (
-              <Badge variant="outline">
-                False-positive rate: {formatPercent(semanticRoutingReport.falsePositives.falsePositiveRate)} (
-                {semanticRoutingReport.falsePositives.falsePositiveCount} of{' '}
-                {semanticRoutingReport.falsePositives.confidentItemCount} confident)
-              </Badge>
-            ) : (
-              <Badge variant="secondary">False-positive rate: n/a (no confident routes)</Badge>
-            )}
-            {semanticRoutingReport.fallback.fallbackRate !== null ? (
-              <Badge variant="outline">
-                Fallback rate: {formatPercent(semanticRoutingReport.fallback.fallbackRate)} (
-                {semanticRoutingReport.fallback.fallbackCount} of{' '}
-                {semanticRoutingReport.fallback.pathPresentCount})
-              </Badge>
-            ) : (
-              <Badge variant="secondary">Fallback rate: n/a (router never reported a path)</Badge>
-            )}
-          </div>
-          <div className="flex flex-wrap gap-3">
-            <LatencyDistributionBadge distribution={semanticRoutingReport.latency.total} label="Total latency" />
-            <LatencyDistributionBadge
-              distribution={semanticRoutingReport.latency.embedding}
-              label="Embedding round-trip"
-            />
-            <LatencyDistributionBadge distribution={semanticRoutingReport.latency.scoring} label="Cosine scoring" />
-          </div>
-        </div>
-      </section>
-
-      <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-        <h3 className="mb-1 text-base font-semibold text-slate-900">Three-way agreement</h3>
-        <p className="mb-4 max-w-2xl text-sm text-slate-600">
-          Which pair of routers agreed, across every item where at least two of keyword/LLM/semantic reported a
-          route — informative during a cutover: semantic tracking the LLM classifier is a very different story
-          from semantic tracking the (legacy) keyword router the LLM disagrees with.
-        </p>
-        {threeWayAgreement.comparableCount === 0 ? (
-          <p className="text-sm text-slate-500">No items had at least two routers report a route.</p>
-        ) : (
-          <>
-            <p className="mb-4 text-sm text-slate-600">
-              All three agreed on{' '}
-              <span className="font-semibold text-slate-900">{threeWayAgreement.counts.all_agree}</span> of{' '}
-              {threeWayAgreement.comparableCount} comparable items (
-              {threeWayAgreement.allAgreeRate !== null ? formatPercent(threeWayAgreement.allAgreeRate) : 'n/a'}
-              ).
-            </p>
-            <div className="flex flex-wrap gap-3">
-              {(Object.entries(threeWayAgreement.counts) as Array<[RoutingAgreement, number]>).map(
-                ([agreement, count]) => (
-                  <Badge key={agreement} variant="outline">
-                    {THREE_WAY_AGREEMENT_LABELS[agreement]}: {count}
-                  </Badge>
-                ),
-              )}
-            </div>
-          </>
-        )}
-      </section>
-
       {/* ---------------------------------------------------------------------------------- */}
       {/* Secondary/legacy: keyword vs. LLM, collapsed by default (B0-668)                    */}
       {/* ---------------------------------------------------------------------------------- */}
 
       <details className="group overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
         <summary className="flex cursor-pointer list-none flex-wrap items-center gap-3 px-8 py-6 hover:bg-slate-50">
-          <h3 className="text-base font-semibold text-slate-900">Legacy: keyword vs. LLM router</h3>
-          <Badge variant="secondary">Keyword is a legacy fallback, not a production candidate</Badge>
-          <span className="ml-auto text-xs text-slate-500 group-open:hidden">Show</span>
-          <span className="ml-auto hidden text-xs text-slate-500 group-open:inline">Hide</span>
+          <h3 className="text-base font-semibold text-slate-900">
+            Legacy: keyword vs. LLM router
+          </h3>
+          <Badge variant="secondary">
+            Keyword is a legacy fallback, not a production candidate
+          </Badge>
+          <span className="ml-auto text-xs text-slate-500 transform transition-transform duration-300 group-open:rotate-180">
+            <ChevronDownIcon className="h-4 w-4" />
+          </span>
         </summary>
         <div className="flex flex-col gap-8 border-t border-slate-100 px-8 py-6">
           <div>
-            <h4 className="mb-1 text-sm font-semibold text-slate-800">Disagreement matrix</h4>
+            <h4 className="mb-1 text-sm font-semibold text-slate-800">
+              Disagreement matrix
+            </h4>
             <p className="mb-4 max-w-2xl text-sm text-slate-600">
-              <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">keyword_route</code> (rows) vs.{' '}
-              <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">llm_route</code> (columns), independent
-              of ground truth.
+              <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">
+                keyword_route
+              </code>{' '}
+              (rows) vs.{' '}
+              <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">
+                llm_route
+              </code>{' '}
+              (columns), independent of ground truth.
             </p>
             {disagreementMatrix.comparableCount === 0 ? (
-              <p className="text-sm text-slate-500">No items had both routes recorded.</p>
+              <p className="text-sm text-slate-500">
+                No items had both routes recorded.
+              </p>
             ) : (
               <>
                 <p className="mb-4 text-sm text-slate-600">
                   Disagreed on{' '}
-                  <span className="font-semibold text-slate-900">{disagreementMatrix.disagreementCount}</span> of{' '}
-                  {disagreementMatrix.comparableCount} comparable items (
+                  <span className="font-semibold text-slate-900">
+                    {disagreementMatrix.disagreementCount}
+                  </span>{' '}
+                  of {disagreementMatrix.comparableCount} comparable items (
                   {disagreementMatrix.disagreementRate !== null
                     ? formatPercent(disagreementMatrix.disagreementRate)
                     : 'n/a'}{' '}
@@ -424,36 +345,54 @@ export function RoutingComparisonDashboard({
           </div>
 
           <div>
-            <h4 className="mb-1 text-sm font-semibold text-slate-800">Latency profiling</h4>
+            <h4 className="mb-1 text-sm font-semibold text-slate-800">
+              Latency profiling
+            </h4>
             <p className="mb-4 max-w-2xl text-sm text-slate-600">
               Wall-clock time for each router&apos;s call in{' '}
-              <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">run-executor.ts</code> (B0-524).
+              <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">
+                run-executor.ts
+              </code>{' '}
+              (B0-524).
             </p>
-            {latencyProfile.keyword.sampleCount === 0 && latencyProfile.llm.sampleCount === 0 ? (
+            {latencyProfile.keyword.sampleCount === 0 &&
+            latencyProfile.llm.sampleCount === 0 ? (
               <p className="text-sm text-slate-500">
-                No rows carry latency data yet — every item predates the B0-524 columns.
+                No rows carry latency data yet — every item predates the B0-524
+                columns.
               </p>
             ) : (
               <div className="flex flex-wrap gap-3">
-                <LatencyStatBadge label="Keyword router" stats={latencyProfile.keyword} />
-                <LatencyStatBadge label="LLM classifier" stats={latencyProfile.llm} />
+                <LatencyStatBadge
+                  label="Keyword router"
+                  stats={latencyProfile.keyword}
+                />
+                <LatencyStatBadge
+                  label="LLM classifier"
+                  stats={latencyProfile.llm}
+                />
               </div>
             )}
           </div>
 
           <div>
-            <h4 className="mb-1 text-sm font-semibold text-slate-800">Cutover-readiness signals</h4>
+            <h4 className="mb-1 text-sm font-semibold text-slate-800">
+              Cutover-readiness signals
+            </h4>
             <p className="mb-4 max-w-2xl text-sm text-slate-600">
               Plain accuracy/agreement stats, not a fabricated composite score.
             </p>
             <div className="flex flex-wrap gap-3">
               {cutoverReport.agreementRate !== null ? (
                 <Badge variant="outline">
-                  Agreement rate: {formatPercent(cutoverReport.agreementRate)} ({cutoverReport.agreementCount} of{' '}
+                  Agreement rate: {formatPercent(cutoverReport.agreementRate)} (
+                  {cutoverReport.agreementCount} of{' '}
                   {cutoverReport.comparableCount} comparable)
                 </Badge>
               ) : (
-                <Badge variant="secondary">Agreement rate: n/a (no comparable items)</Badge>
+                <Badge variant="secondary">
+                  Agreement rate: n/a (no comparable items)
+                </Badge>
               )}
               <AccuracyBadge
                 accuracy={cutoverReport.llmAccuracy}
@@ -469,6 +408,200 @@ export function RoutingComparisonDashboard({
           </div>
         </div>
       </details>
+
+      <div className="grid grid-cols-3 gap-4">
+        <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900">
+                Routing comparison
+              </h2>
+              <p className="mt-1 max-w-3xl text-sm text-slate-600">
+                LLM classifier vs. semantic router, aggregated across every run
+                with routing instrumentation (B0-500/501, B0-652) —{' '}
+                {totalItemCount} item{totalItemCount === 1 ? '' : 's'} across{' '}
+                {totalRunCount} run{totalRunCount === 1 ? '' : 's'}.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        {/* ---------------------------------------------------------------------------------- */}
+        {/* Primary: LLM vs. semantic (B0-668)                                                  */}
+        {/* ---------------------------------------------------------------------------------- */}
+
+        <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
+          <h3 className="mb-1 text-base font-semibold text-slate-900">
+            Accuracy comparison
+          </h3>
+          <p className="mb-4 max-w-2xl text-sm text-slate-600">
+            Each router&apos;s own accuracy against ground truth (
+            <code>intended_agent_label</code>), over its own scored-item
+            denominator — the semantic router is often instrumented on fewer
+            items than the LLM classifier, so the counts below can differ even
+            when both are 100% healthy.
+          </p>
+          <div className="flex flex-wrap gap-3">
+            <AccuracyBadge
+              accuracy={cutoverReport.llmAccuracy}
+              count={cutoverReport.scoredItemCount}
+              label="LLM accuracy vs. ground truth"
+            />
+            <AccuracyBadge
+              accuracy={cutoverReport.semanticAccuracy}
+              count={cutoverReport.semanticScoredItemCount}
+              label="Semantic accuracy vs. ground truth"
+            />
+          </div>
+        </section>
+
+        <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
+          <h3 className="mb-1 text-base font-semibold text-slate-900">
+            Latency profiling — LLM vs. semantic
+          </h3>
+          <p className="mb-4 max-w-2xl text-sm text-slate-600">
+            Wall-clock time for each router&apos;s call in{' '}
+            <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">
+              run-executor.ts
+            </code>{' '}
+            (B0-524/B0-652) — measured independently of the real chat-turn
+            answer&apos;s own latency.
+          </p>
+          {semanticLatencyProfile.semantic.sampleCount === 0 &&
+          semanticLatencyProfile.llm.sampleCount === 0 ? (
+            <p className="text-sm text-slate-500">
+              No rows carry latency data yet — every item predates the latency
+              columns. Run an eval suite through the current harness to populate
+              this section.
+            </p>
+          ) : (
+            <div className="flex flex-wrap gap-3">
+              <LatencyStatBadge
+                label="Semantic router"
+                stats={semanticLatencyProfile.semantic}
+              />
+              <LatencyStatBadge
+                label="LLM classifier"
+                stats={semanticLatencyProfile.llm}
+              />
+            </div>
+          )}
+        </section>
+
+        <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
+          <h3 className="mb-1 text-base font-semibold text-slate-900">
+            Semantic router — own report
+          </h3>
+          <p className="mb-4 max-w-2xl text-sm text-slate-600">
+            B0-652 measurement set: accuracy (strict vs. lenient/plausible-agent
+            grading, where available), false-positive rate (confident and
+            wrong), fallback rate (declined to route), and a latency split
+            between the embedding round-trip and the (much cheaper)
+            cosine-scoring step.
+          </p>
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap gap-3">
+              <AccuracyBadge
+                accuracy={semanticRoutingReport.accuracy.strictAccuracy}
+                count={semanticRoutingReport.accuracy.scoredItemCount}
+                label="Strict accuracy"
+              />
+              <AccuracyBadge
+                accuracy={semanticRoutingReport.accuracy.lenientAccuracy}
+                count={semanticRoutingReport.accuracy.scoredItemCount}
+                label="Lenient accuracy"
+              />
+            </div>
+            <div className="flex flex-wrap gap-3">
+              {semanticRoutingReport.falsePositives.falsePositiveRate !==
+              null ? (
+                <Badge variant="outline">
+                  False-positive rate:{' '}
+                  {formatPercent(
+                    semanticRoutingReport.falsePositives.falsePositiveRate,
+                  )}{' '}
+                  ({semanticRoutingReport.falsePositives.falsePositiveCount} of{' '}
+                  {semanticRoutingReport.falsePositives.confidentItemCount}{' '}
+                  confident)
+                </Badge>
+              ) : (
+                <Badge variant="secondary">
+                  False-positive rate: n/a (no confident routes)
+                </Badge>
+              )}
+              {semanticRoutingReport.fallback.fallbackRate !== null ? (
+                <Badge variant="outline">
+                  Fallback rate:{' '}
+                  {formatPercent(semanticRoutingReport.fallback.fallbackRate)} (
+                  {semanticRoutingReport.fallback.fallbackCount} of{' '}
+                  {semanticRoutingReport.fallback.pathPresentCount})
+                </Badge>
+              ) : (
+                <Badge variant="secondary">
+                  Fallback rate: n/a (router never reported a path)
+                </Badge>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-3">
+              <LatencyDistributionBadge
+                distribution={semanticRoutingReport.latency.total}
+                label="Total latency"
+              />
+              <LatencyDistributionBadge
+                distribution={semanticRoutingReport.latency.embedding}
+                label="Embedding round-trip"
+              />
+              <LatencyDistributionBadge
+                distribution={semanticRoutingReport.latency.scoring}
+                label="Cosine scoring"
+              />
+            </div>
+          </div>
+        </section>
+
+        <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
+          <h3 className="mb-1 text-base font-semibold text-slate-900">
+            Three-way agreement
+          </h3>
+          <p className="mb-4 max-w-2xl text-sm text-slate-600">
+            Which pair of routers agreed, across every item where at least two
+            of keyword/LLM/semantic reported a route — informative during a
+            cutover: semantic tracking the LLM classifier is a very different
+            story from semantic tracking the (legacy) keyword router the LLM
+            disagrees with.
+          </p>
+          {threeWayAgreement.comparableCount === 0 ? (
+            <p className="text-sm text-slate-500">
+              No items had at least two routers report a route.
+            </p>
+          ) : (
+            <>
+              <p className="mb-4 text-sm text-slate-600">
+                All three agreed on{' '}
+                <span className="font-semibold text-slate-900">
+                  {threeWayAgreement.counts.all_agree}
+                </span>{' '}
+                of {threeWayAgreement.comparableCount} comparable items (
+                {threeWayAgreement.allAgreeRate !== null
+                  ? formatPercent(threeWayAgreement.allAgreeRate)
+                  : 'n/a'}
+                ).
+              </p>
+              <div className="flex flex-wrap gap-3">
+                {(
+                  Object.entries(threeWayAgreement.counts) as Array<
+                    [RoutingAgreement, number]
+                  >
+                ).map(([agreement, count]) => (
+                  <Badge key={agreement} variant="outline">
+                    {THREE_WAY_AGREEMENT_LABELS[agreement]}: {count}
+                  </Badge>
+                ))}
+              </div>
+            </>
+          )}
+        </section>
+      </div>
     </div>
   );
 }

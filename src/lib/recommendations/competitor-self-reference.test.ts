@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   classifyCompetitorSelfReference,
   findBetcoSelfReferenceWebResult,
+  hasDistinctiveToken,
+  isBetcoBrand,
   isBetcoHost,
   isConversionListAsk,
   isGenericChemistryDescription,
@@ -343,6 +345,37 @@ describe('Betco line prefix (B0-876)', () => {
     expect(splitBetcoLinePrefix('', 'gentle cleaner')).toBeNull();
   });
 
+  it('B0-1057: matches a bare line name with nothing after it', () => {
+    expect(splitBetcoLinePrefix('', 'triforce')).toEqual({
+      prefix: 'triforce',
+      name: '',
+      full: 'triforce',
+    });
+    expect(splitBetcoLinePrefix('', 'green earth')).toEqual({
+      prefix: 'green earth',
+      name: '',
+      full: 'green earth',
+    });
+  });
+
+  it('B0-1057: matches the no-space "greenearth" and "bestscent" variants seen live', () => {
+    expect(splitBetcoLinePrefix('', 'greenearth floor finish')).toEqual({
+      prefix: 'greenearth',
+      name: 'floor finish',
+      full: 'greenearth floor finish',
+    });
+    expect(splitBetcoLinePrefix('bestscent', 'lemon zest')).toEqual({
+      prefix: 'bestscent',
+      name: 'lemon zest',
+      full: 'bestscent lemon zest',
+    });
+    expect(splitBetcoLinePrefix('', 'bestscent lemon zest')).toEqual({
+      prefix: 'bestscent',
+      name: 'lemon zest',
+      full: 'bestscent lemon zest',
+    });
+  });
+
   it('suppresses "GE" + "Fight Bac RTU" via the catalog when the rest of the name resolves', async () => {
     const resolver = resolverReturning({ catalogMatch: true, catalogProductLineKey: null });
     const verdict = await classify({
@@ -428,5 +461,33 @@ describe('betco.com self-reference in web results (B0-876)', () => {
     expect(findBetcoSelfReferenceWebResult([betco, other])).toBe(betco);
     expect(findBetcoSelfReferenceWebResult([other, betco])).toBeNull();
     expect(findBetcoSelfReferenceWebResult([])).toBeNull();
+  });
+});
+
+describe('isBetcoBrand (B0-1056)', () => {
+  it('recognises Betco and its sub-brands, case/whitespace-insensitively', () => {
+    expect(isBetcoBrand('Betco')).toBe(true);
+    expect(isBetcoBrand('  betco  ')).toBe(true);
+    expect(isBetcoBrand('Basic Coatings')).toBe(true);
+    expect(isBetcoBrand('EnviroZyme')).toBe(true);
+    expect(isBetcoBrand('1950')).toBe(true);
+  });
+
+  it('does not flag a real competitor or null', () => {
+    expect(isBetcoBrand('Spartan')).toBe(false);
+    expect(isBetcoBrand(null)).toBe(false);
+  });
+});
+
+describe('hasDistinctiveToken (B0-1057)', () => {
+  it('rejects category-only and facility-only text', () => {
+    expect(hasDistinctiveToken('floor finish')).toBe(false);
+    expect(hasDistinctiveToken('healthcare cleaner')).toBe(false);
+    expect(hasDistinctiveToken('hospital disinfectant')).toBe(false);
+  });
+
+  it('accepts real, distinctive product names', () => {
+    expect(hasDistinctiveToken('bnc-15')).toBe(true);
+    expect(hasDistinctiveToken('xtreme blue triple foam polish')).toBe(true);
   });
 });

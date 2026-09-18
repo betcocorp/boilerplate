@@ -1,6 +1,7 @@
 'use client';
 
-import { ChevronDown, Loader2, Plus } from 'lucide-react';
+import { ChevronDown, Loader2, Plus, Search } from 'lucide-react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 import { toast } from 'sonner';
@@ -372,40 +373,64 @@ export function RecommendationRowPanel({
       budgetExceeded?: boolean;
     } | null;
     spec?: Record<string, unknown> | null;
+    traceId?: string | null;
   };
+  /**
+   * B0-1056 — links straight to the existing `/admin/observability/[runId]` trace page rather than
+   * a page of our own. `traceId` is `workflow_runs.id` for every call path fixed under B0-1056
+   * (product-tools.ts's tool call, the cross_reference SME agent, the admin tester route); a row
+   * from before that fix still carries a bare correlation id with no matching run, so this link
+   * can still 404 for historical rows — that gap was a deliberate tradeoff, not an oversight.
+   */
+  const normalizedInput = recommendation.normalizedInput as { traceId?: string | null } | null;
+  const traceId = evidence?.traceId ?? normalizedInput?.traceId ?? null;
 
   return (
     <Collapsible onOpenChange={setOpen} open={open}>
       <div className="rounded-2xl border border-border/60">
-        <CollapsibleTrigger asChild>
-          <button
-            className="flex w-full flex-wrap items-center justify-between gap-3 rounded-2xl px-4 py-3 text-left hover:bg-muted/40"
-            type="button"
-          >
-            <div className="min-w-0">
-              <p className="truncate font-medium text-foreground">
-                {recommendation.competitorBrand ? `${recommendation.competitorBrand} — ` : ''}
-                {recommendation.competitorProduct}
-              </p>
-              <p className="text-xs text-muted-foreground">
-                {formatDate(recommendation.createdAt)} · {recommendation.candidates.length} candidate
-                {recommendation.candidates.length === 1 ? '' : 's'}
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <Badge variant={STATUS_BADGE_VARIANT[recommendation.status]}>
-                {recommendation.status}
-              </Badge>
-              <span className="text-xs text-muted-foreground">
-                {formatPercent(recommendation.overallConfidence)} conf. · threshold{' '}
-                {formatPercent(recommendation.thresholdUsed)}
-              </span>
-              <ChevronDown
-                className={`size-4 shrink-0 text-muted-foreground transition-transform ${open ? 'rotate-180' : ''}`}
-              />
-            </div>
-          </button>
-        </CollapsibleTrigger>
+        <div className="flex items-stretch">
+          <CollapsibleTrigger asChild>
+            <button
+              className="flex w-full flex-wrap items-center justify-between gap-3 rounded-2xl px-4 py-3 text-left hover:bg-muted/40"
+              type="button"
+            >
+              <div className="min-w-0">
+                <p className="truncate font-medium text-foreground">
+                  {recommendation.competitorBrand ? `${recommendation.competitorBrand} — ` : ''}
+                  {recommendation.competitorProduct}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {formatDate(recommendation.createdAt)} · {recommendation.candidates.length} candidate
+                  {recommendation.candidates.length === 1 ? '' : 's'}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Badge variant={STATUS_BADGE_VARIANT[recommendation.status]}>
+                  {recommendation.status}
+                </Badge>
+                <span className="text-xs text-muted-foreground">
+                  {formatPercent(recommendation.overallConfidence)} conf. · threshold{' '}
+                  {formatPercent(recommendation.thresholdUsed)}
+                </span>
+                <ChevronDown
+                  className={`size-4 shrink-0 text-muted-foreground transition-transform ${open ? 'rotate-180' : ''}`}
+                />
+              </div>
+            </button>
+          </CollapsibleTrigger>
+          {/* B0-1055/B0-1056 — separate from the collapsible trigger button: a <Link> nested in a
+              <button> is invalid HTML. Links to the run's actual trace when one was recorded. */}
+          {traceId ? (
+            <Link
+              className="flex shrink-0 items-center gap-1 rounded-2xl px-3 text-xs text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+              href={`/admin/observability/${traceId}`}
+              title="View workflow run trace"
+            >
+              <Search className="size-3.5" />
+              Trace
+            </Link>
+          ) : null}
+        </div>
 
         <CollapsibleContent>
           <div className="space-y-4 border-t border-border/60 p-4">
