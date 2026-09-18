@@ -17,15 +17,16 @@ import {
 import type { EditProductAliasInput } from '~/lib/rag/product-alias-review-schemas';
 
 /**
- * B0-487 — reviewer actions for the alias review queue (`/admin/tools/cross-reference/aliases`).
- * Every action writes an audit-log entry (`public.audit_logs` via `writeAuditLog`, same convention
- * as `~/lib/recommendations/review-actions.ts`) and calls `revalidatePath` on this route so the
+ * B0-487 — reviewer actions for the alias review queue (`/admin/tools/aliases`, split out of the
+ * Cross-reference tabs into its own standalone page by B0-1058). Every action writes an audit-log
+ * entry (`public.audit_logs` via `writeAuditLog`, same convention as
+ * `~/lib/recommendations/review-actions.ts`) and calls `revalidatePath` on this route so the
  * approve/edit/reject is reflected on next render — `rag.product_alias` has no caching layer of its
  * own (see `resolveProductLineKeyByName` in `~/lib/rag/entity-context.ts`), so the write is already
  * live for that resolver; this only refreshes the admin page itself.
  */
 
-const ALIAS_REVIEW_QUEUE_PATH = '/admin/tools/cross-reference/aliases';
+const ALIAS_REVIEW_QUEUE_PATH = '/admin/tools/aliases';
 
 /** Throws if there's no NextAuth session — every mutation below requires an authenticated reviewer. */
 async function requireReviewer(): Promise<string> {
