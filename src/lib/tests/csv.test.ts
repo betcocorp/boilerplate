@@ -64,6 +64,33 @@ describe('decodeCsvBytes — B0-833 Windows-1252 import fallback', () => {
 });
 
 describe('parseTestCsvContent — golden test set format', () => {
+  it('accepts display-style aliases and JSON-array cells from the VCT dataset format', () => {
+    const csv = [
+      'ID,Question,Question_Source,Category,Ideal Response,Expected References/Sources,Expected_Key_Concepts,Minimal_Excepted_Concepts,Should Cite (In Response),Question Priority,Top_25_Flag,Previously SME Approved,expected_tools,expected_canonical_products',
+      'VCT-001,"How do I strip and re-finish a VCT floor?",SME,VCT,"Follow the label.","[""91fb6641-402a-4723-8bbd-f2cda0d370fb""]","[""concept one"", ""concept two""]","[""mandatory concept""]",Yes,1,Yes,Yes,"[""search_product_docs""]","[""Product A"", ""Product B""]"',
+    ].join('\n');
+
+    const [row] = parseTestCsvContent(csv);
+
+    expect(row.prompt).toBe('How do I strip and re-finish a VCT floor?');
+    expect(row.source).toBe('SME');
+    expect(row.inputPayload).toEqual({ question_category: 'VCT' });
+    expect(row.idealResponse).toBe('Follow the label.');
+    expect(row.expectedSources).toEqual(['91fb6641-402a-4723-8bbd-f2cda0d370fb']);
+    expect(row.expectedConcepts).toEqual(['concept one', 'concept two']);
+    expect(row.minimumConcepts).toEqual(['mandatory concept']);
+    expect(row.shouldCite).toBe(true);
+    expect(row.priority).toBe(1);
+    expect(row.expectedTool).toBe('search_product_docs');
+    expect(row.expectedCanonicalProducts).toEqual(['Product A', 'Product B']);
+    expect(row.metadata).toEqual({
+      ID: 'VCT-001',
+      Top_25_Flag: 'Yes',
+      'Previously SME Approved': 'Yes',
+    });
+    expect(row.warnings).toEqual([]);
+  });
+
   it('reads the concept, source, and citation columns into typed array fields', () => {
     const csv = [
       'question,canonical_product,reason_code,priority,ideal_response,product_mention,question_category,source_style,expected_concepts,minimum_concepts,expected_sources,should_cite',

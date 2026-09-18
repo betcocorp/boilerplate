@@ -11,6 +11,57 @@ function asTrimmedString(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+/** Known display/export headers accepted in addition to the canonical template headers. */
+const CSV_HEADER_ALIASES: Readonly<Record<string, string>> = {
+  question_source: 'source',
+  category: 'question_category',
+  expected_references_sources: 'expected_sources',
+  expected_key_concepts: 'expected_concepts',
+  minimal_excepted_concepts: 'minimum_concepts',
+  should_cite_in_response: 'should_cite',
+  question_priority: 'priority',
+  expected_tools: 'expected_tool',
+  expected_canonical_products: 'canonical_products',
+};
+
+/** Canonicalizes known headers while leaving genuinely unknown metadata headers intact. */
+function normalizeCsvHeader(header: string): string {
+  const trimmed = header.trim();
+  const normalized = trimmed
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+
+  if (CSV_HEADER_ALIASES[normalized]) {
+    return CSV_HEADER_ALIASES[normalized];
+  }
+
+  const knownColumns = new Set([
+    ...TYPED_CSV_COLUMNS,
+    ...LEGACY_IGNORED_CSV_COLUMNS,
+    ...INPUT_PAYLOAD_CSV_COLUMNS,
+  ]);
+  return knownColumns.has(normalized) ? normalized : trimmed;
+}
+
+/** Returns a JSON string-array when the whole cell is one; otherwise leaves legacy parsing alone. */
+function parseJsonStringArrayCell(value: string): string[] | null {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('[')) {
+    return null;
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === 'string')) {
+      return null;
+    }
+    return parsed.map((item) => item.trim()).filter(Boolean);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * B0-833 — decodes uploaded CSV/dataset bytes as text, tolerating non-UTF-8 exports. Excel's
  * "CSV" export on Windows is frequently Windows-1252 (cp1252), not UTF-8: a Windows-1252 en dash
@@ -158,6 +209,11 @@ export function splitPhraseCell(cell: string | null | undefined): string[] {
     return [];
   }
 
+  const jsonPhrases = parseJsonStringArrayCell(text);
+  if (jsonPhrases) {
+    return jsonPhrases;
+  }
+
   let parts: string[] = [];
   for (const line of text.split('\n')) {
     parts.push(...(line.includes('|') ? line.split('|') : [line]));
@@ -230,7 +286,8 @@ export function parseExpectedSourcesCell(cell: string | null | undefined): Parse
     return { documentIds, invalidTokens };
   }
 
-  for (const token of text.split(/[,|\n]/)) {
+  const tokens = parseJsonStringArrayCell(text) ?? text.split(/[,|\n]/);
+  for (const token of tokens) {
     const trimmed = token.trim();
     if (!trimmed) {
       continue;
@@ -337,7 +394,7 @@ export function parseMultiTurnJsonFromForm(
 
 export function parseTestCsvContent(content: string): ParsedCsvRow[] {
   const records = parse(content, {
-    columns: true,
+    columns: (headers: string[]) => headers.map(normalizeCsvHeader),
     skip_empty_lines: true,
     relax_column_count: true,
     trim: true,
@@ -373,20 +430,30 @@ export function parseTestCsvContent(content: string): ParsedCsvRow[] {
         asTrimmedString(record.expected_sources),
       );
       const expectedSources = parsedExpectedSources.documentIds;
-      const warnings: string[] =
-        parsedExpectedSources.invalidTokens.length > 0
-          ? [
-              `expected_sources: ${parsedExpectedSources.invalidTokens
-                .map((token) => `"${token}"`)
-                .join(', ')} ${
-                parsedExpectedSources.invalidTokens.length === 1 ? 'is not a' : 'are not'
-              } document id${
-                parsedExpectedSources.invalidTokens.length === 1 ? '' : 's'
-              } (rag.document.id uuid) and could not be imported.`,
-            ]
-          : [];
+      const warnings: string[] = [];
+      if (parsedExpectedSources.invalidTokens.length > 0) {
+        warnings.push(
+          `expected_sources: ${parsedExpectedSources.invalidTokens
+            .map((token) => `"${token}"`)
+            .join(', ')} ${
+            parsedExpectedSources.invalidTokens.length === 1 ? 'is not a' : 'are not'
+          } document id${
+            parsedExpectedSources.invalidTokens.length === 1 ? '' : 's'
+          } (rag.document.id uuid) and could not be imported.`,
+        );
+      }
       const shouldCite = parseBooleanCell(asTrimmedString(record.should_cite));
-      const expectedTool = asTrimmedString(record.expected_tool) || null;
+      const expectedToolCell = asTrimmedString(record.expected_tool);
+      const expectedToolArray = parseJsonStringArrayCell(expectedToolCell);
+      const expectedTool = expectedToolArray
+        ? expectedToolArray[0] ?? null
+        : expectedToolCell || null;
+      if (expectedToolArray && expectedToolArray.length > 1) {
+        const ignoredCount = expectedToolArray.length - 1;
+        warnings.push(
+          `expected_tool: only one tool is supported; imported "${expectedToolArray[0]}" and ignored ${ignoredCount} additional value${ignoredCount === 1 ? '' : 's'}.`,
+        );
+      }
       // B0-790 — ground truth for the signals-accuracy harness; validated only in app code
       // (~/lib/tests/signal-accuracy.ts), same as expected_tool above.
       const expectedSurfaceType = asTrimmedString(record.expected_surface_type) || null;
